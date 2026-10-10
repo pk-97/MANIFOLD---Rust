@@ -184,14 +184,14 @@ the next scene-wide scalar pays a 16 B uniform growth.
 | I1 — Every GPU projection path agrees with `Camera::project_to_pixel` within 1.0 px | `gpu_proofs::camera_conformance` (P1): render_scene rasterized probe + flatten_3d camera-mode readback vs oracle, asserted per-vertex |
 | I2 — `LensParams::PINHOLE` cameras render byte-identically to pre-lens builds | P2 gate: existing `render_scene` gpu_tests + fog/shadow proofs pass unmodified (they construct cameras via builders, which default to PINHOLE) |
 | I3 — flatten_3d unwired-camera output is bit-identical to today | existing `project_3d.rs::gpu_tests::generated_project3d_matches_hand_kernel_both_modes` passes with `shaders/project_3d.wgsl` and all its assertions unmodified; the test's `gen_bytes` packing updates mechanically to the new `Params` layout (PARAMS words → one zero word per derived word, `use_camera` inert → `dispatch_count` → pad) — amended 2026-07-12 after the packing/derived-uniforms conflict below was found |
-| I4 — No new bespoke projection math in any primitive | negative gate, landing: `rg -n 'proj_dist|proj_scale' crates/manifold-node-engine/src/{primitives,water/primitives}/ crates/manifold-nodes-{image,scene}/src/node_graph/primitives/ crates/manifold-renderer/src/node_graph/primitives/ -g '*.rs'` hit-count == pre-phase count (re-derive at execution; new hits must be in flatten_3d only) |
+| I4 — No new bespoke projection math in any primitive | negative gate, landing: `rg -n 'proj_dist|proj_scale' crates/manifold-node-engine/src/{primitives,water/primitives}/ crates/manifold-nodes-{image,scene}/src/node_graph/primitives/ crates/manifold-nodes/src/node_graph/primitives/ -g '*.rs'` hit-count == pre-phase count (re-derive at execution; new hits must be in flatten_3d only) |
 | I5 — ev=0 byte-identity | P2 gate: `gpu_proofs::render_scene_fog` density-0 byte-identity test extended with `ev=0` assertion |
 
 ## 4. Phasing
 
 ### P1 — flatten_3d camera mode + the conformance oracle (one session)
 
-**Entry state:** tip ≥ `9e537b16`; `cargo nextest run -p manifold-renderer --lib` green.
+**Entry state:** tip ≥ `9e537b16`; `cargo nextest run -p manifold-nodes --lib` green.
 Re-verify anchors: `camera.rs:42` struct shape; `render_lines.wgsl:63` `curve_to_screen`
 unchanged; `project_3d.rs:43` port list.
 **Read-back:** this doc section 2 D1–D3 whole; `docs/ADDING_PRIMITIVES.md` section codegen-path;
@@ -216,12 +216,12 @@ Restate: the forbidden moves, the S-sign procedure, why unwired must be bit-iden
   arithmetic, not eyeballing.
 - `scatter_particles_camera` projection-math conformance note (VERIFY-AT-IMPL
   from section 1) appended to this doc's audit table.
-**Gate:** `cargo test -p manifold-renderer --features gpu-proofs camera_conformance`
+**Gate:** `cargo test -p manifold-nodes --features gpu-proofs camera_conformance`
 green; I3's existing parity test green — `git diff` on `shaders/project_3d.wgsl`
 = 0 lines and the test's assertion block (lines ~284-327 pre-phase) unchanged;
 only the `gen_bytes` packing (the hand-constructed generated-layout bytes) may
 differ, per the amended I3 machine-check above. Focused
-`cargo nextest run -p manifold-renderer --lib`; clippy `-p manifold-renderer`.
+`cargo nextest run -p manifold-nodes --lib`; clippy `-p manifold-nodes`.
 
 **Amendment 2026-07-12:** D3's derived-uniforms
 extension and I3's original "0-line diff on the test file" gate are mutually
@@ -270,7 +270,7 @@ fields; port-shadow precedence); gpu_proofs: unlit white quad at `ev = 1.0`
 reads back 2.0× the `ev = 0.0` value within f16 tolerance, and `ev = 0`
 byte-identical to a build-of-record readback (I5).
 **Gate:** focused nextest + the render_scene gpu_proofs modules green;
-clippy; negative: `rg 'exposure' crates/manifold-renderer/src -g '*.wgsl'`
+clippy; negative: `rg 'exposure' crates/manifold-nodes/src -g '*.wgsl'`
 hits only `render_scene.wgsl`.
 **Demo:** none — L1 (cluster-wide no-PNG rule, header note).
 **Performer gesture:** `exposure_ev` on a fader — whole scene dips to black

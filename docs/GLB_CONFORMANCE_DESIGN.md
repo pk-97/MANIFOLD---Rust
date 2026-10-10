@@ -46,9 +46,9 @@ Every row below was verified by running code this same day, not recalled.
 | Extension parse state | loader `gltf_load.rs:574-586` parses emissive factor/texture/strength; `KHR_materials_emissive_strength` folds into `emission_intensity` (`gltf_import.rs:659-663`); clearcoat/texture_transform/specular/ior parse via the gltf crate but map to **report lines only** (D9 doctrine) | Report-line doctrine works — nothing silently dropped — but nothing renders either |
 | Emissive term | whole path verified value-level 2026-07-15: map correct on the wire (max 0.502 vs expected 0.5), uniform `[1,1,1]` at draw, add-path proven by unwired-glow probe | **NOT broken.** Was visually drowned pre-F-P6 by strip specular ~10× brighter. No code change needed; G-P1 pins it with a conformance case |
 | Sampler | `GpuSamplerDesc` — `crates/manifold-gpu/src/types.rs:144-154`: min/mag/mip filters, address modes, compare. **No anisotropy field.** Material maps sample via the dedicated REPEAT `material_sampler` (binding 22, landed `85b5bb9d` same day — the striped-helmet root cause was the shared clamp-V envmap sampler pinning out-of-range V, e.g. DamagedHelmet's V∈[1,2], to the texture edge row) | Wrap is FIXED; what remains for G-P3 is genuine anisotropy: glancing-angle minification still over-blurs. Metal supports `maxAnisotropy`; field is genuinely new |
-| EXR decode | `image = { version = "0.25", default-features = false, features = ["png","jpeg","webp","bmp","gif"] }` — `crates/manifold-renderer/Cargo.toml:26` | `exr` feature exists in image 0.25 but is not enabled; no HDR file source primitive exists (verified: `rg -l "exr" crates/` → no runtime hits) |
-| Headless import-render harness | **Scratchpad only** — the 2026-07-15 probe (`envprobe`, session scratch): renders `assemble_import_graph` output through `PresetRuntime::from_def_with_device`, convergence-polls background decodes, writes PNG | Proven diagnostic value (found/killed 6 hypotheses in one session) but **dies with the session**. Port target precedent: `crates/manifold-renderer/src/bin/render_generator_preset.rs` |
-| Display transform | The probe used Reinhard-without-sRGB-encode and rendered systematically darker than the app; `crates/manifold-renderer/src/bin/generate_preset_thumbnails.rs` has the in-repo readback/encode precedent | ⚠ the harness must NOT invent its own transform (D2) |
+| EXR decode | `image = { version = "0.25", default-features = false, features = ["png","jpeg","webp","bmp","gif"] }` — `crates/manifold-nodes/Cargo.toml:26` | `exr` feature exists in image 0.25 but is not enabled; no HDR file source primitive exists (verified: `rg -l "exr" crates/` → no runtime hits) |
+| Headless import-render harness | **Scratchpad only** — the 2026-07-15 probe (`envprobe`, session scratch): renders `assemble_import_graph` output through `PresetRuntime::from_def_with_device`, convergence-polls background decodes, writes PNG | Proven diagnostic value (found/killed 6 hypotheses in one session) but **dies with the session**. Port target precedent: `crates/manifold-nodes/src/bin/render_generator_preset.rs` |
+| Display transform | The probe used Reinhard-without-sRGB-encode and rendered systematically darker than the app; `crates/manifold-nodes/src/bin/generate_preset_thumbnails.rs` has the in-repo readback/encode precedent | ⚠ the harness must NOT invent its own transform (D2) |
 | Khronos sample assets | Not in repo. `tests/fixtures/gltf/README.md` (tier 1) and `IMPORT_DESIGN.md` section 8 already call for them; never fetched | Fetch script is genuinely new |
 | Committed fixtures | `tests/fixtures/gltf/DamagedHelmet.glb` (CC-BY, committed) + blossom/azalea photoscans | Usable as-is |
 | Untracked local fixtures | `mercedes-amg_gt3__www.vecarz.com.glb` (licensing unverified — **never commit**), `kloppenheim_07_puresky_4k.exr` (Poly Haven CC0, 4096×2048 equirect — keep untracked for repo size; fetchable by script) | Held-out + HDRI demo material |
@@ -71,10 +71,10 @@ manifest format.
   (CI and worktrees must stay offline-green).
 - **D2 — The harness is the production path plus the app's own output transform,
   shared by construction.** One binary, `render_import`
-  (`crates/manifold-renderer/src/bin/render_import.rs`), shaped like
+  (`crates/manifold-nodes/src/bin/render_import.rs`), shaped like
   `render_generator_preset.rs`: `assemble_import_graph` → `PresetRuntime` →
   converged readback → PNG. The tonemap/encode used for readback is extracted into
-  ONE shared function (new module `crates/manifold-renderer/src/headless_readback.rs`)
+  ONE shared function (new module `crates/manifold-nodes/src/headless_readback.rs`)
   that `render_import`, `generate_preset_thumbnails`, and the conformance tests all
   call. **Rejected: a harness-local tonemap** — the 2026-07-15 probe had one and its
   renders diverged from the app all session (DESIGN_AUTHORING section 4's
@@ -152,7 +152,7 @@ pub struct GpuSamplerDesc {
     pub max_anisotropy: u32,
 }
 
-// crates/manifold-renderer/src/headless_readback.rs — the ONE shared transform (D2)
+// crates/manifold-nodes/src/headless_readback.rs — the ONE shared transform (D2)
 /// Read back an Rgba16Float target and encode to 8-bit sRGB PNG bytes exactly
 /// the way the app presents HDR output. THE only tonemap in headless tooling —
 /// render_import, generate_preset_thumbnails, and conformance tests all call this.
@@ -163,7 +163,7 @@ pub fn readback_to_srgb_png(
     height: u32,
 ) -> Vec<u8>;
 
-// crates/manifold-renderer/src/bin/render_import.rs — CLI (D2)
+// crates/manifold-nodes/src/bin/render_import.rs — CLI (D2)
 // usage: render-import <file.glb> [--size WxH] [--out PATH] [--param id=value ...]
 //        [--orbit R] [--tilt R] [--frames-max N]
 // exit 0 = PNG written after convergence; exit 2 = never converged (prints last
@@ -190,7 +190,7 @@ EXR is linear — upload `Rgba16Float` directly, no color_space param at all.
 |---|---|
 | Nothing in a glb is silently dropped: every unmapped feature/material/texture is a report line | existing importer unit test extended in G-P2: synthetic 100-material fixture → `report_lines` + object count asserts (`gltf_import::tests::over_cap_asset_imports_one_to_one`) |
 | Import is 1:1 — object count == material count with geometry, no truncation | same test; plus negative gate `rg -n "dropped_over_cap" crates/` → **zero hits** after G-P2 |
-| One display transform for all headless tooling | negative gate in G-P1: `rg -n "fn tonemap|/ \(1\.0 \+" crates/manifold-renderer/src/bin/` → zero hits outside `headless_readback.rs`; thumbnails + render_import both call `readback_to_srgb_png` (compile-time: the fn is the only pub readback) |
+| One display transform for all headless tooling | negative gate in G-P1: `rg -n "fn tonemap|/ \(1\.0 \+" crates/manifold-nodes/src/bin/` → zero hits outside `headless_readback.rs`; thumbnails + render_import both call `readback_to_srgb_png` (compile-time: the fn is the only pub readback) |
 | `max_anisotropy: 1` is byte-identical to pre-field behavior | G-P3 gpu proof `sampler_aniso_one_is_byte_identical` (render same scene with explicit 1 vs a build prior — implemented as: field default renders byte-equal to a desc built without touching the field) |
 | Emissive stays working (D8) | conformance case `EmissiveStrengthTest` `lights_off_nonblack_min` runs in every conformance sweep |
 | Conformance goldens change only deliberately | golden update requires `UPDATE_CONFORMANCE_GOLDENS=1`; the test fails (not regenerates) on mismatch otherwise |
@@ -207,7 +207,7 @@ Every phase report carries `Shortcuts taken:` and `Demo artifact:` per standard 
 ### G-P1 — the conformance harness (vertical slice) — SHIPPED 2026-07-15
 
 - **Entry state:** `git log --oneline -1` contains `44b921cf` in ancestry
-  (`git merge-base --is-ancestor 44b921cf HEAD`); `cargo run -p manifold-renderer
+  (`git merge-base --is-ancestor 44b921cf HEAD`); `cargo run -p manifold-nodes
   --bin render_generator_preset -- --help` exits 0 (precedent binary alive);
   `tests/fixtures/gltf/DamagedHelmet.glb` exists.
 - **Read-back:** this doc section 1–section 4 whole; `render_generator_preset.rs` end-to-end;
@@ -250,19 +250,19 @@ Every phase report carries `Shortcuts taken:` and `Demo artifact:` per standard 
   session: every material map shares one hardcoded REPEAT sampler) — no
   future phase in this doc currently owns that fix, so it is `xfail:BUG-164`
   pending a phase assignment.
-  Conformance test module `crates/manifold-renderer/tests/glb_conformance.rs`
+  Conformance test module `crates/manifold-nodes/tests/glb_conformance.rs`
   (skip-if-absent, table-driven from the manifest); goldens for the
   `expect_pass` set.
 - **Gate (positive):** `bash scripts/fetch-gltf-conformance.sh && cargo test -p
-  manifold-renderer --features gpu-proofs --test glb_conformance --
+  manifold-nodes --features gpu-proofs --test gpu_proofs glb_conformance:: --
   --test-threads=1` → every `expect_pass` green, every `xfail` reported as
-  xfail (not silently skipped); `cargo run -p manifold-renderer --bin
+  xfail (not silently skipped); `cargo run -p manifold-nodes --bin
   render_import -- tests/fixtures/gltf/DamagedHelmet.glb --out /tmp/helmet.png`
   exits 0. **Held-out input:** the orchestrator (not the worker) additionally runs
   `render_import` on ONE Khronos asset absent from the manifest and confirms exit
   0 or a clean exit-3 report — never a panic.
 - **Gate (negative):** the display-transform rg gate (section 4); `rg -n "reinhard|/ \(1\.0
-  \+ v\)" crates/manifold-renderer/src/bin/ crates/manifold-renderer/tests/` →
+  \+ v\)" crates/manifold-nodes/src/bin/ crates/manifold-nodes/tests/` →
   zero hits.
 - **Acceptance demo (L2):** `/tmp/helmet.png` + the conformance run's summary table
   pasted in the report. The orchestrator LOOKS at the helmet PNG.
@@ -271,13 +271,13 @@ Every phase report carries `Shortcuts taken:` and `Demo artifact:` per standard 
   into git (D1); marking a failing `expect_pass` as `xfail` to get green — a
   failing expect_pass is an escalation with the diff attached; touching
   `render_scene`/importer code (this phase builds the oracle, not the fixes).
-- **Test scope:** focused (`-p manifold-renderer`); gpu-proofs for the conformance
+- **Test scope:** focused (`-p manifold-nodes`); gpu-proofs for the conformance
   binary only.
 
 ### G-P2 — 1:1 import (the cap dies) — SHIPPED 2026-07-15
 
-- **Entry state:** G-P1 landed (`cargo test ... --test glb_conformance` runs);
-  re-verify anchors: `rg -n "OBJECT_SLIDER_MAX" crates/manifold-renderer/src/` —
+- **Entry state:** G-P1 landed (`cargo test ... --test gpu_proofs glb_conformance::` runs);
+  re-verify anchors: `rg -n "OBJECT_SLIDER_MAX" crates/manifold-nodes/src/` —
   if the constant moved since 2026-07-15, stop and re-derive.
 - **Read-back:** D4 verbatim; BUG-163 in `docs/BUG_BACKLOG.md`; `gltf_import.rs:338-380`
   (triage-and-drop being deleted); `render_scene.rs:97,546`. Restate the seam:
@@ -398,7 +398,7 @@ Every phase report carries `Shortcuts taken:` and `Demo artifact:` per standard 
   color_space param; output mipmapped.
 - **Deliverables:** `image` dep gains `exr` feature (one Cargo.toml line — this is
   the approved dependency change, no other); `primitives/hdri_source.rs` per section 3;
-  registry entry + catalog regen (`cargo run -p manifold-renderer --bin
+  registry entry + catalog regen (`cargo run -p manifold-nodes --bin
   gen_node_catalog`); importer `env_mode` enum param + `hdri_file` string binding
   + card wiring (Environment section); prefilter cost measurement at 4096×2048
   reported as a number (the F-P1 gate pattern) — if the first-frame convolution
@@ -447,7 +447,7 @@ Every phase report carries `Shortcuts taken:` and `Demo artifact:` per standard 
   state**; a `docs/GLB_CONFORMANCE_STATUS.md` generated table (asset × status ×
   gap) committed as the certification record; BUG_BACKLOG sweep: BUG-163 status
   → FIXED (G-P2 reference).
-- **Gate:** `cargo test ... --test glb_conformance` green across the full
+- **Gate:** `cargo test ... --test gpu_proofs glb_conformance::` green across the full
   manifest; the status doc's xfail count is REPORTED as a number in the landing
   report; zero assets in "unclassified".
 - **Acceptance demo (L2):** the status table itself + three PNGs chosen by the

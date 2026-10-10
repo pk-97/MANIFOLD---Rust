@@ -239,9 +239,26 @@ def command_spec(repo, label, cmd):
         if label == 'design-status':
             normalized[-2:] = [git(repo, 'rev-parse', f'{ref}^{{tree}}') for ref in cmd[-2:]]
         else:
+            if (len(cmd) != 4 or cmd[:3] != ['python3', 'scripts/run_ui_flows.py', '--touched']
+                    or not cmd[-1] or cmd[-1].count('...') != 1):
+                raise ValueError('flow-gate has an unsupported --touched invocation')
             left, right = cmd[-1].split('...')
-            base = git(repo, 'merge-base', left, right)
-            normalized[-1] = [git(repo, 'rev-parse', f'{ref}^{{tree}}') for ref in (base, right)]
+            if not left or not right:
+                raise ValueError('flow-gate has an incomplete --touched range')
+            try:
+                import diff_scope
+                import run_ui_flows
+                base = diff_scope.git(repo, 'merge-base', left, right).strip()
+                paths, _ = diff_scope.effective_paths(repo, base, right)
+                manifest_path = repo / 'scripts/ui-flows/manifest.json'
+                manifest = json.loads(manifest_path.read_text())
+                if not isinstance(manifest, dict):
+                    raise ValueError('flow-gate manifest must be an object')
+                filters, _ = run_ui_flows.filters_for_paths(paths, manifest)
+            except (OSError, ValueError, KeyError, TypeError, AttributeError,
+                    RuntimeError, subprocess.SubprocessError) as error:
+                raise ValueError(f'cannot resolve flow-gate scope: {error}') from error
+            normalized[-1] = ['flow-filters', filters]
         return ['crates', 'docs', 'scripts', '.claude/hooks', 'tests', 'assets', 'tools',
                 'Cargo.toml', 'Cargo.lock', '.cargo', '.config'], normalized, label == 'flow-gate'
     # Tooling and ratchet checks can inspect any tracked source. Whole-tree
@@ -289,8 +306,12 @@ class Pass:
     def fingerprint(self):
         paths, identity, cargo = self.spec()
         paths = sorted(set(paths + ['scripts/gate_passes.py', 'scripts/landing_gate.py']))
+        entries = (SNAPSHOT.get() or Snapshot()).selected(self.repo, paths)
+        if self.label == 'gpu-proofs':
+            # Timing allowances are policy. Selection changes still change identity.
+            entries.pop('scripts/gpu_test_times.json', None)
         return digest({'schema': SCHEMA, 'identity': identity,
-                       'paths': paths, 'entries': (SNAPSHOT.get() or Snapshot()).selected(self.repo, paths),
+                       'paths': paths, 'entries': entries,
                        'implementation': {
                            name: hashlib.sha256((Path(__file__).parent / name).read_bytes()).hexdigest()
                            for name in ('gate_passes.py', 'landing_gate.py', 'gpu_proofs_gate.py',
@@ -318,7 +339,7 @@ class Pass:
             return True
         return False
 
-    def save(self, code, seconds=0):
+    def save(self, code, seconds=0, *, timings=None):
         """Return False only for unstable inputs, independently of cache writes."""
         if not self.key:
             return
@@ -343,6 +364,8 @@ class Pass:
             record = {'schema': SCHEMA, 'key': self.key, 'pass': True,
                       'commit': git(self.repo, 'rev-parse', 'HEAD'),
                       'time': datetime.now(timezone.utc).isoformat(), 'seconds': seconds}
+            if timings is not None:
+                record['timings'] = timings
             fd, temporary = tempfile.mkstemp(dir=self.directory, prefix='.pass-')
             with os.fdopen(fd, 'w') as stream:
                 json.dump(record, stream)
@@ -379,8 +402,20 @@ def proof_pass(repo, run):
                                   else ([] if run['lib'] else ['gpu_proofs'])), 'lib': run['lib'],
                 'filters': sorted(run['filters']), 'skips': sorted(run['skips']),
                 'test-threads': 1}
-    return Pass(repo, 'gpu-proofs', lambda: (rust_paths(Path(repo).resolve(), [package]),
-                                           identity, True))
+    passed = Pass(repo, 'gpu-proofs', lambda: (rust_paths(Path(repo).resolve(), [package]),
+                                             identity, True))
+    if passed.record:
+        from gate_policy import GPU_FILTER_TARGETS
+        required = [name for name in run['filters'] if name in GPU_FILTER_TARGETS
+                    and GPU_FILTER_TARGETS[name][0] == package
+                    and (GPU_FILTER_TARGETS[name][1] in (run['targets'] or [])
+                         or (GPU_FILTER_TARGETS[name][1] == 'lib' and run['lib']))]
+        names = [row.get('test', '') for row in passed.record.get('timings', [])
+                 if isinstance(row, dict) and row.get('status') == 'ok']
+        if any(not any(name in test for test in names) for name in required):
+            passed.record = None
+            print('[NO REUSE] gpu-proofs: receipt lacks passing tests for owned filters', flush=True)
+    return passed
 
 
 def queued_proof(command, repo):

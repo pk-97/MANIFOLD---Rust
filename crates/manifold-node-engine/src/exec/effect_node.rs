@@ -3,6 +3,7 @@
 
 use ahash::AHashMap;
 use manifold_core::{Beats, Seconds};
+use std::sync::{Mutex, OnceLock};
 
 use crate::runtime::layer_skin::LayerSkinRegistry;
 
@@ -64,7 +65,7 @@ pub struct FrameTime {
 }
 
 /// Resolved per-frame RT quality values — samples per pixel for each
-/// RT term plus ray-tracing dispatch resolution. Lives in manifold-renderer
+/// RT term plus ray-tracing dispatch resolution. Lives in manifold-nodes
 /// (next to FrameTime) and is set per-frame by the compositor via
 /// Executor::set_rt_quality.
 ///
@@ -126,49 +127,29 @@ impl RtQuality {
 /// hot path. Lookups take `&str` via `Borrow`, so callers are unaffected.
 pub type ParamValues = AHashMap<std::borrow::Cow<'static, str>, ParamValue>;
 
-/// Bridge a (possibly-owned) port/param name to a `&'static str`.
-///
-/// `NodePort`/`ParamDef` names are `Cow<'static, str>` so variadic nodes can
-/// format per-instance names (`mesh_37`) with no object cap. But the execution
-/// plan, the freeze compiler, and the wire graph key everything by
-/// `&'static str` — and the per-frame executor reads those names, so keeping
-/// them `&'static` avoids any hot-path allocation. This bridges the two: a `Borrowed` name (every fixed port —
-/// the overwhelming majority) returns its `&'static str` for free; an `Owned`
-/// name (a variadic node's formatted port) is interned once into a
-/// process-lifetime set and reused thereafter.
-///
-/// The intern set is the bounded-leak pattern already used for wire handles in
-/// `graph_loader` (which leaks JSON-derived `&'static` names): dynamic names
-/// are few, short, and repetitive (`mesh_0..N`, `pos_x_0..N`), so the set
-/// saturates almost immediately and never grows on the per-frame path — every
-/// call here is at plan-build / graph-edit time, never inside `evaluate`.
-/// Deduped, so re-interning the same name returns the same pointer and the
-/// leak stays bounded across repeated plan rebuilds.
-// The `&Cow` argument is load-bearing, NOT the `ptr_arg` anti-pattern clippy
-// flags: this function branches on `Borrowed` vs `Owned` to return a fixed
-// port's `&'static str` for free (zero leak) and only intern genuinely owned
-// (variadic) names. A `&str` arg would erase that distinction and force every
-// name — including the static majority — through the intern/leak path. Remove
-// this allow only if `intern_name` stops needing the borrowed/owned split.
+static INTERN: OnceLock<Mutex<ahash::AHashSet<&'static str>>> = OnceLock::new();
+
+/// Intern a dynamic identifier for the process lifetime, allocating once per
+/// distinct name. Callers are graph-edit and execution-plan build paths.
+pub(crate) fn intern_dynamic_name(name: &str) -> &'static str {
+    let set = INTERN.get_or_init(|| Mutex::new(ahash::AHashSet::new()));
+    let mut guard = set.lock().expect("name intern set poisoned");
+    if let Some(&existing) = guard.get(name) {
+        return existing;
+    }
+    let leaked: &'static str = Box::leak(name.to_owned().into_boxed_str());
+    guard.insert(leaked);
+    leaked
+}
+
+/// Bridge a `Cow<'static, str>` name to a static identifier. Borrowed names
+/// remain allocation-free; owned names use the process-lifetime interner.
+// Keep the `&Cow` shape so borrowed static names avoid interning.
 #[allow(clippy::ptr_arg)]
 pub fn intern_name(name: &std::borrow::Cow<'static, str>) -> &'static str {
-    use ahash::AHashSet;
-    use std::sync::{Mutex, OnceLock};
     match name {
-        // Fixed ports: already `'static`, no leak, no lock.
         std::borrow::Cow::Borrowed(s) => s,
-        // Variadic ports: intern once, reuse forever.
-        std::borrow::Cow::Owned(s) => {
-            static INTERN: OnceLock<Mutex<AHashSet<&'static str>>> = OnceLock::new();
-            let set = INTERN.get_or_init(|| Mutex::new(AHashSet::new()));
-            let mut guard = set.lock().expect("name intern set poisoned");
-            if let Some(&existing) = guard.get(s.as_str()) {
-                return existing;
-            }
-            let leaked: &'static str = Box::leak(s.clone().into_boxed_str());
-            guard.insert(leaked);
-            leaked
-        }
+        std::borrow::Cow::Owned(s) => intern_dynamic_name(s),
     }
 }
 
@@ -463,11 +444,13 @@ impl<'ctx, 'gpu> EffectNodeContext<'ctx, 'gpu> {
         self.output_storage_retained
     }
 
+manifold_core::testkit_visible! {
     /// Executor-only builder for the output-storage retention proof.
-    pub fn with_outputs_retained(mut self, retained: bool) -> Self {
+    pub(crate) fn with_outputs_retained(mut self, retained: bool) -> Self {
         self.output_storage_retained = retained;
         self
     }
+}
 
     /// Declare that this node's outputs this frame are allocated but not
     /// yet valid — async content is still in flight (e.g.
@@ -1603,7 +1586,7 @@ pub trait EffectNode: Send + AsAny {
     /// (single-source). `None` (default) = the primitive's own kernel is
     /// authoritative. Set via the macro's `wgsl_body:` field; forwards
     /// `P::WGSL_BODY`.
-    fn wgsl_body(&self) -> Option<&'static str> {
+    fn wgsl_body(&self) -> Option<&str> {
         None
     }
 
@@ -1613,7 +1596,7 @@ pub trait EffectNode: Send + AsAny {
     /// texture input is [`InputAccess::Coincident`] (resolution-robust sampler
     /// read). Set via the macro's `input_access:` field; forwards
     /// `P::INPUT_ACCESS`.
-    fn input_access(&self) -> &'static [crate::freeze::classify::InputAccess] {
+    fn input_access(&self) -> &[crate::freeze::classify::InputAccess] {
         &[]
     }
 
@@ -1632,7 +1615,7 @@ pub trait EffectNode: Send + AsAny {
     /// the doc comment on
     /// [`PrimitiveSpec::PRECISION_CRITICAL_INPUTS`](crate::node_graph::primitive::PrimitiveSpec::PRECISION_CRITICAL_INPUTS).
     /// Default empty; the macro forwards `P::PRECISION_CRITICAL_INPUTS`.
-    fn precision_critical_inputs(&self) -> &'static [&'static str] {
+    fn precision_critical_inputs(&self) -> &[&str] {
         &[]
     }
 

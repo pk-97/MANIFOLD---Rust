@@ -845,3 +845,69 @@ fn blend_snapshot_elision_is_bit_exact() {
         }
     }
 }
+
+fn scaled_authored_glass_scene(instance_scale: f32, object_scale: f32, thickness: f32) -> String {
+    use serde_json::json;
+    let mut graph: serde_json::Value = serde_json::from_str(&transmission_scene(0.0, 1.0, false)).unwrap();
+    let nodes = graph["nodes"].as_array_mut().unwrap();
+    let transform = nodes.iter_mut().find(|n| n["id"] == 202).unwrap();
+    for axis in ["scale_x", "scale_y", "scale_z"] {
+        transform["params"][axis] = json!({"type":"Float","value":object_scale});
+    }
+    let glass = nodes.iter_mut().find(|n| n["id"] == 203).unwrap();
+    for (key, value) in [
+        ("ior", 1.5), ("roughness", 0.0), ("volume_thickness", thickness),
+        ("volume_attenuation_distance", 1.0),
+        ("volume_attenuation_color_r", 0.2),
+        ("volume_attenuation_color_g", 0.5),
+        ("volume_attenuation_color_b", 0.8),
+    ] {
+        glass["params"][key] = json!({"type":"Float","value":value});
+    }
+    nodes.push(json!({"id":400,"nodeId":"scaled_glass_instance","typeId":"node.arrange_copies",
+        "params":{
+            "max_capacity":{"type":"Int","value":1},"active_count":{"type":"Int","value":1},
+            "layout":{"type":"Enum","value":1},
+            "extent_x":{"type":"Float","value":0.0},"extent_y":{"type":"Float","value":0.0},
+            "extent_z":{"type":"Float","value":0.0},"base_scale":{"type":"Float","value":instance_scale}
+        }}));
+    graph["wires"].as_array_mut().unwrap().push(json!({
+        "fromNode":400,"fromPort":"instances","toNode":20,"toPort":"instances_1"
+    }));
+    graph.to_string()
+}
+
+#[test]
+fn authored_glass_thickness_matches_equivalent_object_and_instance_scale() {
+    let (object, w, h) = render_readback(&scaled_authored_glass_scene(1.0, 2.0, 0.5));
+    let (instance, _, _) = render_readback(&scaled_authored_glass_scene(2.0, 1.0, 0.5));
+    let (thin_control, _, _) = render_readback(&scaled_authored_glass_scene(2.0, 1.0, 0.25));
+    let object_rgb = center_rgb(&object, w, h);
+    let instance_rgb = center_rgb(&instance, w, h);
+    let thin_rgb = center_rgb(&thin_control, w, h);
+    assert_rgb_close(instance_rgb, object_rgb, 0.002, "equivalent world optical distance");
+    assert!(instance_rgb[0] < thin_rgb[0] * 0.7,
+        "doubled path must increase Beer-Lambert absorption: thick={instance_rgb:?}, thin={thin_rgb:?}");
+    // Compare the entire image, including refracted background boundaries,
+    // so matching absorption alone cannot hide a refraction-distance mismatch.
+    for (actual, expected) in instance.chunks_exact(2).zip(object.chunks_exact(2)) {
+        let actual = f16::from_le_bytes([actual[0], actual[1]]).to_f32();
+        let expected = f16::from_le_bytes([expected[0], expected[1]]).to_f32();
+        assert!((actual - expected).abs() <= 0.002, "equivalent-scale pixel: {actual} vs {expected}");
+    }
+    if let Some(dir) = std::env::var_os("MANIFOLD_MATERIAL_PROOF_DIR") {
+        let dir = std::path::PathBuf::from(dir);
+        std::fs::create_dir_all(&dir).expect("create glass proof directory");
+        for (name, bytes) in [("glass-object-scale", object), ("glass-instance-scale", instance), ("glass-half-thickness", thin_control)] {
+            let rgba: Vec<u8> = bytes.chunks_exact(8).flat_map(|pixel| {
+                let channel = |i| {
+                    let linear = f16::from_le_bytes([pixel[i], pixel[i + 1]]).to_f32();
+                    manifold_node_engine::testkit::gpu::linear_to_srgb8(linear)
+                };
+                [channel(0), channel(2), channel(4), 255]
+            }).collect();
+            let png = manifold_node_engine::testkit::gpu::encode_rgba8_png(&rgba, w, h);
+            std::fs::write(dir.join(format!("{name}.png")), png).expect("write glass proof image");
+        }
+    }
+}

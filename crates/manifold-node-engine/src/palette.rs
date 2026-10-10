@@ -144,7 +144,7 @@ pub fn friendly_label_for(type_id: &str) -> Option<&'static str> {
 /// effect types that aren't registered at all (unknown ids from
 /// future-version save files).
 pub fn catalog_graph_def_for(effect_type: &PresetTypeId) -> Option<EffectGraphDef> {
-    bundled_preset_def(effect_type).cloned()
+    bundled_preset_def(effect_type).map(|def| def.as_ref().clone())
 }
 
 #[cfg(test)]

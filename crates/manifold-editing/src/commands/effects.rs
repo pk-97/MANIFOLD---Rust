@@ -1687,7 +1687,7 @@ mod tests {
     /// [`seed_def_with_param`]'s `ParamSpecDef` — mirrors what
     /// `build_param_manifest` does for a REAL registered preset at
     /// instantiation. `manifold-editing` doesn't depend on
-    /// `manifold-renderer` (no registry to consult in this crate's tests),
+    /// `manifold-nodes` (no registry to consult in this crate's tests),
     /// so `EditParamMappingCommand`'s manifest-first guard needs the entry
     /// seeded by hand here.
     fn seed_manifest_param(inst: &mut manifold_core::effects::PresetInstance, param_id: &str) {

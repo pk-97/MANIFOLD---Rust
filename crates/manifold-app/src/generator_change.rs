@@ -65,10 +65,10 @@ pub(crate) fn build_change(
         } else {
             Some(
                 crate::graph_target::resolve(&candidate, &target)
+                    .map(|graph| (*graph).clone())
                     .ok_or_else(|| {
                         "Destination generator graph is no longer available".to_string()
-                    })?
-                    .clone(),
+                    })?,
             )
         };
         let candidate_host = candidate

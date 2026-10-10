@@ -302,15 +302,17 @@ fn migrate_def_type_ids(def: &EffectGraphDef, registry: &PrimitiveRegistry) -> O
     changed.then_some(owned)
 }
 
+manifold_core::testkit_visible! {
 /// Whether any node, at any group depth or in any scene modifier, has a type
 /// listed in [`manifold_core::type_id_migration::RETIRED_PARAMS`]. Lets the
 /// common load borrow the document instead of cloning it.
-pub fn has_retired_params(def: &EffectGraphDef) -> bool {
+pub(crate) fn has_retired_params(def: &EffectGraphDef) -> bool {
     fn any(nodes: &[EffectGraphNode]) -> bool {
         nodes.iter().any(|node| manifold_core::type_id_migration::retires_params(&node.type_id)
             || node.group.as_ref().is_some_and(|group| any(&group.nodes)))
     }
     any(&def.nodes) || def.scene_modifiers.iter().any(|modifier| has_retired_params(&modifier.graph))
+}
 }
 
 /// Strip every [`manifold_core::type_id_migration::RETIRED_PARAMS`] entry
@@ -640,14 +642,7 @@ pub fn instantiate_def(
         let runtime_id = match handle_scope {
             HandleScope::Global => {
                 if let Some(handle) = node_doc.handle.as_deref() {
-                    // `add_node_named` requires `&'static str`. We leak
-                    // the handle string — bounded leak (one per inner
-                    // node per preset load, ~30 per preset), amortized
-                    // over the process lifetime. Same pattern persistence
-                    // used pre-unification.
-                    let static_handle: &'static str =
-                        Box::leak(handle.to_string().into_boxed_str());
-                    graph.add_node_named(static_handle, boxed)
+                    graph.add_node_named(handle.to_owned(), boxed)
                 } else {
                     graph.add_node(boxed)
                 }
@@ -1549,7 +1544,7 @@ fn pre_allocate_texture_3d_volumes(
     device: &GpuDevice,
     backend: &mut MetalBackend,
 ) -> Result<(), PreAllocationError> {
-    let handle_by_node: AHashMap<NodeInstanceId, &'static str> =
+    let handle_by_node: AHashMap<NodeInstanceId, &str> =
         graph.handles().map(|(h, id)| (id, h)).collect();
 
     let mut input_dims: Vec<(&str, (u32, u32, u32))> = Vec::with_capacity(4);
@@ -1598,7 +1593,6 @@ fn pre_allocate_texture_3d_volumes(
                 .output_format(port_name)
                 .unwrap_or(GpuTextureFormat::Rgba16Float);
             let label = format!("graph_loader 3d volume: {node_type}.{port_name}");
-            let label_static: &'static str = Box::leak(label.into_boxed_str());
             let texture = device
                 .try_create_texture(&GpuTextureDesc {
                 width: w,
@@ -1607,7 +1601,7 @@ fn pre_allocate_texture_3d_volumes(
                 format,
                 dimension: GpuTextureDimension::D3,
                 usage: GpuTextureUsage::RENDER_TARGET_FULL,
-                label: label_static,
+                label: &label,
                 mip_levels: 1,
             })
             .map_err(PreAllocationError::AllocationFailed)?;
@@ -1622,7 +1616,7 @@ fn audit_array_resource_bindings(
     plan: &ExecutionPlan,
     backend: &MetalBackend,
 ) -> Result<(), PreAllocationError> {
-    let handle_by_node: AHashMap<NodeInstanceId, &'static str> =
+    let handle_by_node: AHashMap<NodeInstanceId, &str> =
         graph.handles().map(|(h, id)| (id, h)).collect();
 
     let total = plan.resource_count();
@@ -2218,8 +2212,8 @@ mod tests {
             "version": 1,
             "name": "test",
             "nodes": [
-                { "id": 0, "typeId": "system.source", "handle": "source" },
-                { "id": 1, "typeId": "system.final_output", "handle": "final" }
+                { "id": 0, "nodeId": "source-stable", "typeId": "system.source", "handle": "source" },
+                { "id": 1, "nodeId": "output-stable", "typeId": "system.final_output", "handle": "final" }
             ],
             "wires": [
                 { "fromNode": 0, "fromPort": "out", "toNode": 1, "toPort": "in" }
@@ -2233,8 +2227,24 @@ mod tests {
             &registry(),
             HandleScope::Global,
             BoundaryHandling::Standalone,
-        &crate::scene::mesh_change::PreparedMeshRules::default())
+            &crate::scene::mesh_change::PreparedMeshRules::default(),
+        )
         .expect("system.* boundary ids are unaffected by migration and always construct");
+        drop(def);
+        let source = graph.node_id_by_handle("source").expect("owned source handle");
+        assert_eq!(
+            graph.get_node(source).unwrap().node_id.as_str(),
+            "source-stable"
+        );
+        let saved = <EffectGraphDef as crate::persistence::EffectGraphDefExt>::from_graph(&graph);
+        drop(graph);
+        let source = saved.nodes.iter()
+            .find(|node| node.node_id.as_str() == "source-stable").unwrap();
+        let output = saved.nodes.iter()
+            .find(|node| node.node_id.as_str() == "output-stable").unwrap();
+        assert_eq!(source.handle.as_deref(), Some("source"));
+        assert_eq!(output.handle.as_deref(), Some("final"));
+        assert_eq!(saved.wires.len(), 1);
     }
 
 }

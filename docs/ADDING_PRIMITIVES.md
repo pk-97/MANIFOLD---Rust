@@ -8,7 +8,7 @@ Primitives auto-register via `inventory::submit!` from inside the macro — add 
 
 Before authoring any new primitive, complete the read-only audit per [DECOMPOSING_GENERATORS.md section 2.5 (Precondition: audit by analogy before workflow step 1)](DECOMPOSING_GENERATORS.md):
 
-1. **Survey existing primitives** — `rg 'purpose: "' crates/manifold-node-engine/src/{primitives,water/primitives}/ crates/manifold-nodes-{image,scene}/src/node_graph/primitives/ crates/manifold-renderer/src/node_graph/primitives/ -g '*.rs'`. One line per node telling you what it does.
+1. **Survey existing primitives** — `rg 'purpose: "' crates/manifold-node-engine/src/{primitives,water/primitives}/ crates/manifold-nodes-{image,scene}/src/node_graph/primitives/ -g '*.rs'`. One line per node telling you what it does.
 2. **Check the registered-but-unused atoms** — `mip_chain`, `uv_displace_by_flow`, `centered_uv`, `polar_field`, `distance_to_point`, `noise`, `depth_estimate_midas`, `blob_detect_ffi`, `blob_overlay_render`, `optical_flow_estimate`, `envelope_follower_ar`, `peak`, `render_3d_mesh`, `render_instanced_3d_mesh`, `generate_cube_mesh`, `generate_platonic_solid`, `generate_instance_transforms`, `integrate_particles`, and the unused noise/coordinate atoms. Many of these *exactly* cover what a new primitive proposal is reaching for; activate them by wiring them into your graph rather than building a new one. (Photoreal PBR is *not* an atom to wire up — it lives inside `node.render_3d_mesh`'s `node.pbr_material`; the standalone `cook_torrance_specular` / `equirect_envmap_sample` were removed 2026-05-30.)
 3. **Read the nearest reference preset end-to-end** ([NODE_CATALOG.md section 5 (Effect presets) / section 6.1 (JSON-defined)](NODE_CATALOG.md), [DECOMPOSING_GENERATORS.md section 2.5](DECOMPOSING_GENERATORS.md)).
 4. **Reconcile your sketch** — state explicitly which existing primitives you'll reuse, which you'll extend, and which are genuinely new. State the audit findings in the PR description before any new-primitive code.
@@ -51,7 +51,7 @@ What's **fine** when it's the right granularity:
 | `<family-root>/<name>.rs` | The `primitive!` declaration + `Primitive::run` body |
 | `<family-root>/shaders/<name>.wgsl` | Compute shader (only if your primitive runs GPU work — control-rate primitives like `value`/`math`/`lfo` don't need shaders) |
 | `<family-root>/mod.rs` | `pub mod <name>;` to include the file |
-| `crates/manifold-renderer/tests/parity_<effect>.rs` | Parity test vs the legacy effect this replaces (only when replacing a legacy fused shader) |
+| `crates/manifold-nodes/tests/gpu_proofs/` | Cross-family parity proofs, mounted by `main.rs` (required when replacing a legacy fused shader) |
 
 That's it. The macro generates the `EffectNode` impl, type-id constants, `PrimitiveSpec` metadata, the AI-surface `PrimitiveDescription`, and the `inventory::submit!` registration for the auto-populated palette.
 
@@ -206,9 +206,10 @@ For `EffectNode` hand-written nodes (not using `primitive!`), add a
 `prewarm_pipelines(&device)` static method and register it in the generator
 registry's startup prewarm list.
 
-The gpu-proofs suite enforces this: `compile_contract_p2.rs` constructs each
-data-skip primitive with empty data and asserts no new `PipelineCompile` cold
-touch on first run.
+The former `compile_contract_p2.rs` source was unmounted and did not enforce
+this contract. BUG-zmpf9 (restore compile-contract P2 proofs) tracks restoring
+the four image-node proofs from git history: construct each data-skip primitive
+with empty data and assert no new `PipelineCompile` cold touch on first run.
 
 ## Skeleton
 
@@ -398,36 +399,7 @@ Stateful primitives must also wire up `clear_state` so seek / layer-idle resets 
 
 ## Parity test (only if you're replacing a legacy effect)
 
-`crates/manifold-renderer/tests/parity_invert.rs`:
-
-```rust
-mod parity;
-
-use manifold_core::EffectTypeId;
-use parity::{
-    assert_bytewise_equal, default_ctx, make_default_effect, Fixture, ParityHarness,
-};
-
-#[test]
-fn invert_decomposes_pixel_exactly_across_all_fixtures() {
-    let mut h = ParityHarness::new();
-    let fx = make_default_effect(EffectTypeId::INVERT_COLORS);
-    let ctx = default_ctx(h.width, h.height);
-
-    for &fixture in Fixture::all() {
-        let input = fixture.build(&h);
-        let legacy = h.run_legacy(&fx, &input, &ctx);
-        let decomposed = h.run_primitive_graph::<Invert>(&fx, &input, &ctx);
-        assert_bytewise_equal(
-            &format!("invert/{:?} legacy vs primitive", fixture),
-            &legacy,
-            &decomposed,
-        );
-    }
-}
-```
-
-(`run_primitive_graph` will be added to the harness when the first migration lands.)
+Use `crates/manifold-nodes/tests/gpu_proofs/render_legacy_parity.rs` as a reference for rendering equivalent graphs and comparing their output. Add the proof to the owning crate's GPU test module; cross-family proofs belong in the catalog's `tests/gpu_proofs/main.rs`. Compare the replacement with the legacy output across the effect's fixtures and parameter settings. Require byte equality when the contract is bit-exact.
 
 ## What NOT to do
 

@@ -32,7 +32,7 @@
 //! `LEGACY_PARAM_ORDER` and `LEGACY_PARAM_ALIASES` are literal data,
 //! generated ONCE (2026-07-05) from the live `preset_definition_registry`
 //! by a throwaway tool
-//! (`crates/manifold-renderer/src/bin/gen_legacy_param_order.rs`, deleted
+//! (`crates/manifold-nodes/src/bin/gen_legacy_param_order.rs`, deleted
 //! after use — see git history for `cb65d698`'s child commit) and pasted in
 //! as source. **Never re-run that generation against a later registry
 //! state** — the whole point is that this migration stays correct for OLD

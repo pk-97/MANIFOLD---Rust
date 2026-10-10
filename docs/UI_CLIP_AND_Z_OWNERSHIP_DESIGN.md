@@ -32,7 +32,7 @@ input-side sibling: same single-owner principle applied to pointer events),
 
 | Piece | Where | State |
 |---|---|---|
-| `CLIPS_CHILDREN` flag | `manifold-ui/src/node.rs:381` | Complete mechanism, **opt-in**: tree traversal tracks active clip ancestors (`tree.rs:723–821`), renderer batches rects by scissor (`manifold-renderer/src/ui_renderer.rs:248`) |
+| `CLIPS_CHILDREN` flag | `manifold-ui/src/node.rs:381` | Complete mechanism, **opt-in**: tree traversal tracks active clip ancestors (`tree.rs:723–821`), renderer batches rects by scissor (`manifold-nodes/src/ui_renderer.rs:248`) |
 | Chrome API clip | `manifold-ui/src/chrome/view.rs:389`, `chrome/diff.rs:69,141` | `.clip()` sets the flag declaratively — for chrome-built subtrees only |
 | ScrollContainer | `manifold-ui/src/scroll_container.rs:86` | Sets `VISIBLE \| CLIPS_CHILDREN` on its viewport node — the in-repo precedent for "a container that owns its clip" |
 | Panels that opt in today | `viewport.rs:1470`, `layer_header.rs:1532`, `param_slider_shared.rs:2013`, `param_card.rs:1834` | Correct but scattered; the inspector's only `CLIPS_CHILDREN` is in a test (`inspector.rs:2711` comment) — BUG-060's root |
@@ -41,7 +41,7 @@ input-side sibling: same single-owner principle applied to pointer events),
 | Panel build contract | `ui_root.rs:632–633` (`self.footer.build(&mut self.tree, &self.layout)`) | Panels self-root at tree root and read their rect from `ScreenLayout` — nothing intercepts the rect |
 | Main-window layout | `manifold-ui/src/layout.rs:12` (`ScreenLayout`) | Computes region rects (`transport_bar()`, `content_area()`, `timeline_area()`, …); hands them out, enforces nothing |
 | Editor-window layout | `manifold-ui/src/dock.rs:79,136` (`Dock::rects(area) -> DockRects`) | Same pattern, second window |
-| Timeline lane scissor | `manifold-renderer/src/ui_renderer.rs:390,731–740` (`lane_content_scissor`, RAII) | Bespoke local containment for lane content — proof of need, deeper than region level; **stays** |
+| Timeline lane scissor | `manifold-nodes/src/ui_renderer.rs:390,731–740` (`lane_content_scissor`, RAII) | Bespoke local containment for lane content — proof of need, deeper than region level; **stays** |
 | Headless verification | `ui-snapshot` feature, `scripts/ui-flows/` (L3 driver) | Both windows renderable headless; flows can click/drag/assert |
 
 Bug family this touches (from `docs/BUG_BACKLOG.md`): BUG-060 (inspector over

@@ -997,7 +997,7 @@ impl ContentThread {
             });
         }
         if let Some(message) = self.engine.project()
-            .and_then(manifold_playback::modulation::audio_control_capture_error)
+            .and_then(manifold_playback::modulation::control_capture_error)
         {
             return Some(ExportFrameFailure { message, gpu: false });
         }

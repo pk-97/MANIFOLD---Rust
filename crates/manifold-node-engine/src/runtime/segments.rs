@@ -2,6 +2,8 @@
 //! prewarm shared between the chain build and load-time warmup. Extracted
 //! from preset_runtime.rs (Wave 3 P3-R, design D3).
 
+use std::sync::Arc;
+
 use super::*;
 
 /// Build the `(def, view)` slice for a fused segment, augmenting relight-on
@@ -11,40 +13,46 @@ pub(super) fn build_segment_cards(
     fuse_idxs: &[usize],
     active_effects: &[(usize, &PresetInstance)],
     primitives: &PrimitiveRegistry,
-) -> Vec<(EffectGraphDef, &'static LoadedPresetView)> {
+) -> Vec<(EffectGraphDef, Arc<LoadedPresetView>)> {
     let mut cards = Vec::with_capacity(fuse_idxs.len());
     for &k in fuse_idxs {
         let fx = active_effects[k].1;
         let view = loaded_preset_view_by_id(fx.effect_type()).expect("eligibility implies view");
         let def = if fx.relight_active() {
             crate::load::augmentation::relight_augment(
-                fx.graph.as_ref().unwrap_or(&view.canonical_def),
+                fx.graph.as_ref().unwrap_or(view.canonical_def.as_ref()),
                 primitives,
                 &RelightParams::default(),
             )
         } else {
-            fx.graph.as_ref().unwrap_or(&view.canonical_def).clone()
+            fx.graph
+                .as_ref()
+                .unwrap_or(view.canonical_def.as_ref())
+                .clone()
         };
         cards.push((def, view));
     }
     cards
 }
 
+manifold_core::testkit_visible! {
 /// Chain-fusion segment eligibility for one card (docs/CHAIN_FUSION_DESIGN.md).
 /// Shared between the chain build and the project-load prewarm so the two can
 /// never disagree about what forms a segment.
 #[derive(Clone, Copy, PartialEq, Debug)]
 #[doc(hidden)]
-pub enum SegmentMember {
+pub(crate) enum SegmentMember {
     /// Never joins or spans a segment (watched / grouped / stateful /
     /// string-bound / no view).
     Boundary,
     /// Fusable segment member.
     Fuse,
 }
+}
 
+manifold_core::testkit_visible! {
 #[doc(hidden)]
-pub fn classify_segment_member(
+pub(crate) fn classify_segment_member(
     fx: &PresetInstance,
     preview_effect: Option<&EffectId>,
     primitives: &PrimitiveRegistry,
@@ -63,25 +71,28 @@ pub fn classify_segment_member(
     {
         return SegmentMember::Boundary;
     }
-    let effective = fx.graph.as_ref().unwrap_or(&view.canonical_def);
+    let effective = fx.graph.as_ref().unwrap_or(view.canonical_def.as_ref());
     if crate::freeze::segment::def_is_segment_stateless(effective, primitives) {
         SegmentMember::Fuse
     } else {
         SegmentMember::Boundary
     }
 }
+}
 
+manifold_core::testkit_visible! {
 /// Scan one maximal segment run starting at `i` (caller guarantees
 /// `members[i] == Fuse`): returns `(j, fuse_idxs)` — the exclusive end
 /// and the fusable indices within `[i, j)`.
 #[doc(hidden)]
-pub fn segment_run(members: &[SegmentMember], i: usize) -> (usize, Vec<usize>) {
+pub(crate) fn segment_run(members: &[SegmentMember], i: usize) -> (usize, Vec<usize>) {
     let mut j = i;
     while j < members.len() && members[j] != SegmentMember::Boundary {
         j += 1;
     }
     let fuse_idxs = (i..j).filter(|&k| members[k] == SegmentMember::Fuse).collect();
     (j, fuse_idxs)
+}
 }
 
 /// Project-load PREWARM (chain fusion): walk one chain's effect list with the

@@ -19,7 +19,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 import numpy as np  # noqa: E402
 
-from tools.audio_analysis.eval.kick_goal_eval import GOAL, SUFFIX, TRUTH, Goal, add_whole_song_truth, counts, score  # noqa: E402
+from tools.audio_analysis.eval.kick_goal_eval import GOAL, SUFFIX, TRUTH, Goal, add_whole_song_truth, fast_counts  # noqa: E402
 from tools.audio_analysis.eval.kick_goal_featsets import build  # noqa: E402
 from tools.audio_analysis.eval.run_kick_goal_data import ALL, gbt  # noqa: E402
 from tools.audio_analysis.eval.run_kick_goal_frontier import frontier, pooled  # noqa: E402
@@ -31,7 +31,7 @@ def coarse_sweep(g, t, p):
     ths = np.unique(np.quantile(p, np.concatenate([np.linspace(0, .9, 31), np.linspace(.9, 1, 121)])))
     rows = []
     for th in ths:
-        m, e, n = counts(score(g, t, p, th)[1])
+        m, e, n = fast_counts(g, t, p, th)
         rows.append((float(th), m, e))
     return rows, n
 

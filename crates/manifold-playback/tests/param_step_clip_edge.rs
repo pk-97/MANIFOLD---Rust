@@ -1,8 +1,8 @@
 //! PARAM_STEP_ACTIONS P2/P3 — engine-side clip-edge envelope tests.
 //!
 //! Exercises the real `PlaybackEngine` so the production path —
-//! `sync_clips_to_time`'s per-layer `last_active_clip_id` tracking feeding
-//! `evaluate_all_envelopes`'s rising-edge gate — is what's under test. The
+//! `sync_clips_to_time`'s stable source membership feeding the shared
+//! clip-control frame — is what's under test. The
 //! Step/Random audio-mod clip-edge behavior moved onto `ParamEnvelope` in D8;
 //! these scenarios now live on the envelope path.
 //!
@@ -117,6 +117,366 @@ fn envelope_step_value_of(engine: &PlaybackEngine, layer_index: usize) -> Option
 }
 
 const DT: f64 = 1.0 / 60.0;
+
+fn child_source(owner: &Layer) -> Layer {
+    let mut source = Layer::new_trigger("Source".into(), owner.layer_id.clone(), 1);
+    source.clips.push(TimelineClip::new_trigger(Beats(4.0), Beats(4.0)));
+    source
+}
+
+#[test]
+fn reparenting_rechecks_group_source_scope_without_changing_saved_assignment() {
+    use manifold_core::params::ClipTriggerSource;
+    use manifold_core::types::LayerType;
+    let mut project = two_layer_project(clip_edge_step_envelope(1.0, WrapMode::Clamp));
+    project.timeline.layers.truncate(1);
+    let group = Layer::new("Group".into(), LayerType::Group, 1);
+    let group_id = group.layer_id.clone();
+    let mut source = child_source(&group);
+    source.clips = [0.0, 1.0, 2.0].into_iter()
+        .map(|beat| TimelineClip::new_trigger(Beats(beat), Beats(0.25))).collect();
+    let selection = ClipTriggerSource::Lane { layer_id: source.layer_id.clone() };
+    let owner_id = project.timeline.layers[0].layer_id.clone();
+    project.timeline.layers[0].parent_layer_id = Some(group_id.clone());
+    project.timeline.layers[0].gen_params_mut().unwrap().params.get_mut("level").unwrap()
+        .clip_trigger_source = selection.clone();
+    project.timeline.layers.extend([group, source]);
+    let mut engine = PlaybackEngine::new(Vec::new());
+    engine.initialize(project);
+    let owner_index = engine.project().unwrap().timeline.layer_index_for_id(&owner_id).unwrap();
+    engine.set_state(PlaybackState::Playing);
+    tick_n(&mut engine, 1, 0.1);
+    assert_eq!(envelope_step_value_of(&engine, owner_index), Some(1.0));
+
+    // Mutate only hierarchy here: this isolates playback scope validation
+    // from the separately tested editing command and undo machinery.
+    engine.project_mut().unwrap().timeline.layers[owner_index].parent_layer_id = None;
+    tick_n(&mut engine, 1, 0.5);
+    assert_eq!(envelope_step_value_of(&engine, owner_index), Some(1.0));
+    engine.project_mut().unwrap().timeline.layers[owner_index].parent_layer_id = Some(group_id);
+    tick_n(&mut engine, 1, 0.5);
+    assert_eq!(envelope_step_value_of(&engine, owner_index), Some(2.0));
+    assert_eq!(engine.project().unwrap().timeline.layers[owner_index].gen_params().unwrap()
+        .params.get("level").unwrap().clip_trigger_source, selection);
+}
+
+#[test]
+fn child_patterns_keep_step_responses_isolated_without_audio_or_renderer() {
+    use manifold_core::audio_mod::{AudioFeature, ParameterAudioMod};
+    use manifold_core::audio_trigger::TriggerFireMode;
+    use manifold_core::params::ClipTriggerSource;
+    let build = || {
+        let mut project = two_layer_project(clip_edge_step_envelope(1.0, WrapMode::Clamp));
+        project.timeline.layers.truncate(1);
+        let owner = &mut project.timeline.layers[0];
+        owner.clips.clear();
+        owner.is_muted = true;
+        let mut first = Layer::new_trigger("First".into(), owner.layer_id.clone(), 1);
+        first.clips = [0.0, 0.2, 0.4].into_iter()
+            .map(|beat| TimelineClip::new_trigger(Beats(beat), Beats(0.05))).collect();
+        let mut second = Layer::new_trigger("Second".into(), owner.layer_id.clone(), 2);
+        second.clips = [0.1, 0.3].into_iter()
+            .map(|beat| TimelineClip::new_trigger(Beats(beat), Beats(0.05))).collect();
+        let gp = owner.gen_params_mut().unwrap();
+        gp.envelopes = None;
+        add_whole_number_param(gp, "other", 8.0);
+        for (param, source) in [("level", first.layer_id.clone()), ("other", second.layer_id.clone())] {
+            gp.params.get_mut(param).unwrap().clip_trigger_source = ClipTriggerSource::Lane { layer_id: source };
+            let mut m = ParameterAudioMod::new(param.into(), manifold_core::AudioSendId::new("missing"), AudioFeature::default());
+            m.action = TriggerAction::Step { amount: 1.0, wrap: WrapMode::Clamp };
+            m.trigger_mode = Some(TriggerFireMode::ClipEdge);
+            gp.audio_mods_mut().push(m);
+        }
+        project.timeline.layers.extend([first, second]);
+        let mut engine = PlaybackEngine::new(Vec::new());
+        engine.initialize(project);
+        engine.set_state(PlaybackState::Playing);
+        engine
+    };
+    let assert_values = |engine: &PlaybackEngine| {
+        let gp = engine.project().unwrap().timeline.layers[0].gen_params().unwrap();
+        assert_eq!(gp.params.get("level").unwrap().value, 3.0);
+        assert_eq!(gp.params.get("other").unwrap().value, 2.0);
+    };
+    let mut coarse = build();
+    tick_n(&mut coarse, 1, 0.25);
+    let gp = coarse.project().unwrap().timeline.layers[0].gen_params().unwrap();
+    for (m, expected) in gp.audio_mods.as_ref().unwrap().iter().zip([vec![0.0, 0.1, 0.2], vec![0.05, 0.15]]) {
+        assert_eq!(m.hop_timeline.values.iter().map(|point| point.time.0).collect::<Vec<_>>(), expected);
+    }
+    tick_n(&mut coarse, 1, 0.0);
+    assert_values(&coarse);
+    let mut fine = build();
+    tick_n(&mut fine, 50, 0.005);
+    assert_values(&fine);
+    let mut export = build();
+    export.set_export_mode(true);
+    export.set_export_origin(Seconds::ZERO);
+    for frame_count in 0..3 {
+        let result = export.tick(TickContext { frame_count, export_fixed_dt: Seconds(0.25), ..Default::default() });
+        export.reclaim_tick_result(result);
+    }
+    assert_values(&export);
+}
+
+#[test]
+fn selected_source_fires_without_a_renderer_or_unmuted_owner() {
+    let mut project = two_layer_project(clip_edge_step_envelope(1.0, WrapMode::Clamp));
+    project.timeline.layers[1] = child_source(&project.timeline.layers[0]);
+    let source_id = project.timeline.layers[1].layer_id.clone();
+    project.timeline.layers[0].is_muted = true;
+    project.timeline.layers[0].gen_params_mut().unwrap().params.get_mut("level").unwrap()
+        .clip_trigger_source = manifold_core::params::ClipTriggerSource::Lane { layer_id: source_id };
+    let mut engine = PlaybackEngine::new(Vec::new());
+    engine.initialize(project);
+    engine.set_time(Seconds(0.5));
+    tick_n(&mut engine, 1, DT);
+    assert_eq!(envelope_step_value_of(&engine, 0), None, "own clip is not the selected source");
+    engine.set_time(Seconds(2.25));
+    tick_n(&mut engine, 1, DT);
+    assert_eq!(envelope_step_value_of(&engine, 0), Some(1.0));
+    tick_n(&mut engine, 2, DT);
+    assert_eq!(envelope_step_value_of(&engine, 0), Some(1.0), "renderer retries are not new source starts");
+}
+
+#[test]
+fn adjacent_clips_at_equal_elapsed_times_are_distinct_starts() {
+    let mut project = two_layer_project(clip_edge_step_envelope(1.0, WrapMode::Clamp));
+    project.timeline.layers[0].clips[1].start_beat = Beats(4.0);
+    let mut engine = create_engine();
+    engine.initialize(project);
+    engine.set_time(Seconds(0.25));
+    tick_n(&mut engine, 1, DT);
+    engine.set_time(Seconds(2.25));
+    tick_n(&mut engine, 1, DT);
+    assert_eq!(envelope_step_value_of(&engine, 0), Some(2.0));
+}
+
+#[test]
+fn muted_main_clip_does_not_advance_an_envelope() {
+    let mut project = two_layer_project(clip_edge_step_envelope(1.0, WrapMode::Clamp));
+    project.timeline.layers[0].clips[0].is_muted = true;
+    let mut engine = create_engine();
+    engine.initialize(project);
+    tick_n(&mut engine, 1, DT);
+    assert_eq!(envelope_step_value_of(&engine, 0), None);
+}
+
+#[test]
+fn deleting_a_source_cancels_its_unconsumed_start() {
+    let mut project = two_layer_project(clip_edge_step_envelope(1.0, WrapMode::Clamp));
+    project.timeline.layers[1] = child_source(&project.timeline.layers[0]);
+    let source_id = project.timeline.layers[1].layer_id.clone();
+    project.timeline.layers[0].gen_params_mut().unwrap().params.get_mut("level").unwrap()
+        .clip_trigger_source = manifold_core::params::ClipTriggerSource::Lane { layer_id: source_id };
+    let mut engine = create_engine();
+    engine.initialize(project);
+    engine.set_time(Seconds(2.25));
+    engine.sync_clips_to_time();
+    engine.project_mut().unwrap().timeline.remove_layer(1);
+    tick_n(&mut engine, 1, DT);
+    assert_eq!(envelope_step_value_of(&engine, 0), None);
+}
+
+#[test]
+fn seeking_cancels_starts_queued_before_the_new_playhead() {
+    let mut engine = create_engine();
+    engine.initialize(two_layer_project(clip_edge_step_envelope(1.0, WrapMode::Clamp)));
+    engine.sync_clips_to_time();
+    // Seek to the gap before modulation could consume the first clip start.
+    engine.seek_to(Seconds(3.0));
+    tick_n(&mut engine, 1, DT);
+    assert_eq!(envelope_step_value_of(&engine, 0), None);
+}
+
+#[test]
+fn session_launch_and_loop_advance_the_same_envelope_source() {
+    use manifold_core::session::{ClipSequence, Scene, SessionSlot};
+    let mut project = two_layer_project(clip_edge_step_envelope(1.0, WrapMode::Clamp));
+    project.timeline.layers[0].clips.clear();
+    let layer_id = project.timeline.layers[0].layer_id.clone();
+    let scene_id = manifold_core::SceneId::new("source-scene");
+    project.session.scenes.push(Scene { id: scene_id.clone(), name: "Source".into(), color: None });
+    project.session.slots.push(SessionSlot {
+        layer_id: layer_id.clone(), scene_id: scene_id.clone(), name: "Pattern".into(), color: None,
+        sequence: ClipSequence {
+            length_beats: Beats(4.0),
+            clips: vec![TimelineClip::new_generator(Beats::ZERO, Beats(4.0))],
+        },
+    });
+    let mut engine = PlaybackEngine::new(Vec::new());
+    engine.initialize(project);
+    engine.session_launch_slot(layer_id, scene_id);
+    tick_n(&mut engine, 2, DT);
+    assert_eq!(envelope_step_value_of(&engine, 0), Some(1.0));
+    engine.set_time(Seconds(2.1));
+    tick_n(&mut engine, 1, DT);
+    assert_eq!(envelope_step_value_of(&engine, 0), Some(2.0));
+}
+
+fn short_session_engine() -> PlaybackEngine {
+    use manifold_core::session::{ClipSequence, Scene, SessionSlot};
+    let mut project = two_layer_project(clip_edge_step_envelope(1.0, WrapMode::Clamp));
+    project.timeline.layers[0].clips.clear();
+    let layer_id = project.timeline.layers[0].layer_id.clone();
+    let scene_id = manifold_core::SceneId::new("short-session");
+    project.session.scenes.push(Scene { id: scene_id.clone(), name: "Short".into(), color: None });
+    project.session.slots.push(SessionSlot {
+        layer_id: layer_id.clone(), scene_id: scene_id.clone(), name: "Pattern".into(), color: None,
+        sequence: ClipSequence {
+            length_beats: Beats(0.2),
+            clips: [0.0, 0.1].into_iter()
+                .map(|start| TimelineClip::new_generator(Beats(start), Beats(0.05))).collect(),
+        },
+    });
+    let mut engine = PlaybackEngine::new(Vec::new());
+    engine.initialize(project);
+    engine.session_launch_slot(layer_id, scene_id);
+    engine
+}
+
+#[test]
+fn session_launch_from_stopped_does_not_fire_the_overridden_arrangement() {
+    let mut engine = short_session_engine();
+    let mut project = engine.project().unwrap().clone();
+    let layer = project.timeline.layers[0].layer_id.clone();
+    project.timeline.layers[0].clips.push(TimelineClip::new_generator(Beats::ZERO, Beats(4.0)));
+    engine.initialize(project);
+    engine.session_launch_slot(layer, manifold_core::SceneId::new("short-session"));
+    tick_n(&mut engine, 1, 0.01);
+    assert_eq!(envelope_step_value_of(&engine, 0), Some(1.0));
+}
+
+#[test]
+fn quantized_session_launch_preserves_only_arrangement_starts_before_the_boundary() {
+    let mut engine = short_session_engine();
+    let mut project = engine.project().unwrap().clone();
+    let layer = project.timeline.layers[0].layer_id.clone();
+    project.timeline.layers[0].clips = vec![
+        TimelineClip::new_generator(Beats::ZERO, Beats(0.05)),
+        TimelineClip::new_generator(Beats(0.08), Beats(0.2)),
+        TimelineClip::new_generator(Beats(0.3), Beats(0.05)),
+    ];
+    engine.initialize(project);
+    engine.play();
+    tick_n(&mut engine, 1, 0.03);
+    engine.session_set_quantize(Beats(0.2));
+    engine.session_launch_slot(layer.clone(), manifold_core::SceneId::new("short-session"));
+    engine.set_time(Seconds(0.12));
+    engine.sync_clips_to_time();
+    engine.set_time(Seconds(0.195));
+    engine.sync_clips_to_time();
+    tick_n(&mut engine, 1, 0.0);
+    assert_eq!(envelope_step_value_of(&engine, 0), Some(4.0));
+    let source = manifold_core::params::ClipTriggerSource::OwnLayer;
+    let before = engine.clip_controls().elapsed(&source, Some(&layer), Beats(0.18)).unwrap();
+    assert!((before.0 - 0.1).abs() < 1e-9, "old arrangement phase survives repeated syncs");
+    assert_eq!(engine.clip_controls().elapsed(&source, Some(&layer), Beats(0.27)), None,
+        "arrangement ends at the launch even though its authored clip continues");
+}
+
+#[test]
+fn short_session_loops_are_independent_of_frame_partition_and_repeated_sync() {
+    let mut fine = short_session_engine();
+    tick_n(&mut fine, 59, 0.005);
+    assert_eq!(envelope_step_value_of(&fine, 0), Some(6.0));
+    let mut coarse = short_session_engine();
+    tick_n(&mut coarse, 1, 0.295);
+    assert_eq!(envelope_step_value_of(&coarse, 0), Some(6.0));
+    let owner = &coarse.project().unwrap().timeline.layers[0].layer_id;
+    let elapsed = coarse.clip_controls().elapsed(
+        &manifold_core::params::ClipTriggerSource::OwnLayer, Some(owner), Beats(0.12),
+    ).unwrap();
+    assert!((elapsed.0 - 0.02).abs() < 1e-9);
+
+    let mut repeated = short_session_engine();
+    repeated.set_time(Seconds(0.17));
+    repeated.sync_clips_to_time();
+    repeated.sync_clips_to_time();
+    repeated.set_time(Seconds(0.295));
+    tick_n(&mut repeated, 1, 0.0);
+    assert_eq!(envelope_step_value_of(&repeated, 0), Some(6.0));
+}
+
+#[test]
+fn session_interval_overflow_stops_delivery_instead_of_publishing_a_partial_stream() {
+    let mut engine = short_session_engine();
+    tick_n(&mut engine, 1, 0.005);
+    let before = envelope_step_value_of(&engine, 0);
+    tick_n(&mut engine, 1, 1000.0);
+    assert_eq!(engine.trigger_delivery_failure().unwrap().kind,
+        manifold_playback::engine::trigger_delivery::TriggerDeliveryError::CapacityOverflow);
+    assert!(engine.with_trigger_pulses(|_, _, _| ()).is_none());
+    assert_eq!(envelope_step_value_of(&engine, 0), before);
+    tick_n(&mut engine, 1, 0.1);
+    assert_eq!(envelope_step_value_of(&engine, 0), before);
+    engine.seek_to(Seconds::ZERO);
+    assert!(engine.trigger_delivery_failure().is_none());
+    let owner = &engine.project().unwrap().timeline.layers[0].layer_id;
+    assert!(!engine.clip_controls().starts(&manifold_core::params::ClipTriggerSource::OwnLayer, Some(owner)).is_empty());
+}
+
+fn short_pattern_engine() -> PlaybackEngine {
+    let mut project = two_layer_project(clip_edge_step_envelope(1.0, WrapMode::Clamp));
+    project.timeline.layers[0].clips = [0.0, 0.2, 0.4].into_iter()
+        .map(|start| TimelineClip::new_generator(Beats(start), Beats(0.05)))
+        .collect();
+    let mut engine = PlaybackEngine::new(Vec::new());
+    engine.initialize(project);
+    engine.set_state(PlaybackState::Playing);
+    engine
+}
+
+#[test]
+fn short_pattern_is_independent_of_frame_partition_and_repeated_sync() {
+    let mut fine = short_pattern_engine();
+    tick_n(&mut fine, 50, 0.005);
+    assert_eq!(envelope_step_value_of(&fine, 0), Some(3.0));
+
+    let mut coarse = short_pattern_engine();
+    tick_n(&mut coarse, 1, 0.25);
+    assert_eq!(envelope_step_value_of(&coarse, 0), Some(3.0));
+    // The completed clip's phase remains available to retained samples.
+    let owner = &coarse.project().unwrap().timeline.layers[0].layer_id;
+    let elapsed = coarse.clip_controls().elapsed(
+        &manifold_core::params::ClipTriggerSource::OwnLayer, Some(owner), Beats(0.22),
+    ).unwrap();
+    assert!((elapsed.0 - 0.02).abs() < 1e-9);
+
+    let mut repeated = short_pattern_engine();
+    repeated.sync_clips_to_time();
+    repeated.set_time(Seconds(0.15));
+    repeated.sync_clips_to_time();
+    repeated.sync_clips_to_time();
+    repeated.set_time(Seconds(0.25));
+    repeated.sync_clips_to_time();
+    tick_n(&mut repeated, 1, 0.0);
+    assert_eq!(envelope_step_value_of(&repeated, 0), Some(3.0));
+    tick_n(&mut repeated, 1, 0.0);
+    assert_eq!(envelope_step_value_of(&repeated, 0), Some(3.0));
+
+    let mut export = short_pattern_engine();
+    export.set_export_mode(true);
+    export.set_export_origin(Seconds::ZERO);
+    for frame_count in 0..2 {
+        let result = export.tick(TickContext {
+            frame_count,
+            export_fixed_dt: Seconds(0.25),
+            ..Default::default()
+        });
+        export.reclaim_tick_result(result);
+    }
+    assert_eq!(envelope_step_value_of(&export, 0), Some(3.0));
+}
+
+#[test]
+fn seek_skips_short_pattern_instead_of_replaying_the_interval() {
+    let mut engine = short_pattern_engine();
+    engine.sync_clips_to_time();
+    engine.seek_to(Seconds(0.25));
+    tick_n(&mut engine, 1, 0.0);
+    assert_eq!(envelope_step_value_of(&engine, 0), None);
+}
 
 #[test]
 fn timeline_clip_start_fires_step_envelope() {
@@ -237,10 +597,7 @@ fn second_timeline_clip_start_refires_step_envelope() {
     );
 }
 
-/// A layer index that never appears in the project must never spuriously
-/// gate a step — guards against an off-by-one or stale-index bug in the
-/// `clip_edge_layers` → `evaluate_all_envelopes` wiring surfacing as a
-/// false fire on an unrelated layer.
+/// Reordering rows must not turn another source's start into an own-layer event.
 #[test]
 fn unrelated_layer_edge_after_reorder_does_not_confuse_the_gate() {
     // Two clip starts on DIFFERENT layers at the same beat: only layer 0's

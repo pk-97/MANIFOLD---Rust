@@ -43,7 +43,8 @@
     "Assert": {
       "selector": {
         "Query": {
-          "text": "Cast Shadows"
+          "name": "param_row.7_cast_shadows",
+          "under_name": "scene_setup"
         }
       },
       "check": "Exists"
@@ -53,6 +54,8 @@
     "Assert": {
       "selector": {
         "Query": {
+          "name": "param_row.7_cast_shadows.value",
+          "under_name": "scene_setup",
           "text": "On"
         }
       },
@@ -60,24 +63,15 @@
     }
   },
   {
+    "ScrollTo": {
+      "target": { "Query": { "name": "param_row.7_cast_shadows.value", "under_name": "scene_setup" } }
+    }
+  },
+  {
     "Pointer": {
-      "target": {
-        "Query": {
-          "under_text": "Cast Shadows",
-          "type": "Button",
-          "nth": 1
-        }
-      },
+      "target": { "Query": { "name": "param_row.7_cast_shadows.value", "under_name": "scene_setup" } },
       "gesture": {
-        "Drag": {
-          "to": {
-            "Point": {
-              "x": 664.0,
-              "y": 804.0
-            }
-          },
-          "steps": 8
-        }
+        "Click": { "modifiers": {} }
       }
     }
   },
@@ -86,6 +80,8 @@
     "Assert": {
       "selector": {
         "Query": {
+          "name": "param_row.7_cast_shadows.value",
+          "under_name": "scene_setup",
           "text": "Off"
         }
       },

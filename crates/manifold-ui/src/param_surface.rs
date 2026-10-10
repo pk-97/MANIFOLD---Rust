@@ -156,7 +156,8 @@ pub struct RowSpec {
     /// Named value labels for discrete params; shown instead of the number.
     pub value_labels: Option<Vec<String>>,
     /// Card-bundling section name; contiguous `Some(name)` runs share one
-    /// collapsible header. Straight off the manifest spec.
+    /// collapsible header. Usually from the manifest; scene performance
+    /// projection uses stable role-based categories without changing IDs.
     pub section: Option<String>,
     /// `None` = the row is interactive. `Some(reason)` = the row renders
     /// greyed with the reason appended to its label (the modifier-picker
@@ -284,6 +285,13 @@ pub struct ModifierPickerEntry {
     pub disabled: Option<String>,
 }
 
+/// Stable parameter owner and current clip source label for the shared drawer.
+#[derive(Debug, Clone)]
+pub struct ClipTriggerRow {
+    pub target: crate::view::UiGraphTarget,
+    pub source_label: String,
+}
+
 /// One card row: identity + descriptor + state. THE unit of the layer —
 /// `id` is the WidgetId salt (P2), the wire identity
 /// (`PanelAction`s carry it), and the test address.
@@ -294,6 +302,8 @@ pub struct ParamRow {
     pub value: RowValue,
     /// Audio modulation facts owned by this row.
     pub audio: AudioRowState,
+    /// Clip timing selector for compatible layer-owned parameters.
+    pub clip_trigger: Option<ClipTriggerRow>,
     /// Driver/envelope/automation facts.
     pub modulation: RowMod,
     pub mapping: RowMapping,

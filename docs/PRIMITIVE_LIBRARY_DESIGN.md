@@ -210,7 +210,7 @@ Generators are mostly monolithic per design principle #3. Shared 3D infra (camer
 ### 5.1 Test harness
 
 ```rust
-// crates/manifold-renderer/tests/parity/mod.rs
+// crates/manifold-nodes/tests/parity/mod.rs
 fn assert_pixel_exact_parity(
     effect_type: EffectTypeId,
     test_input: TestInput,         // fixed input texture(s) + params + frame_time
@@ -226,7 +226,7 @@ fn assert_pixel_exact_parity(
 
 ### 5.2 Test inputs
 
-Fixed test fixtures live in `crates/manifold-renderer/tests/parity/fixtures/`:
+Fixed test fixtures live in `crates/manifold-nodes/tests/parity/fixtures/`:
 
 - `noise_512.bin` — deterministic Rgba16Float noise, 512×512.
 - `gradient_256.bin` — RGB gradient + alpha sweep.
@@ -320,12 +320,12 @@ All three ship as fused composite primitives (same pattern as Glitch, Strobe, Ed
 
 **Strategy decision (2026-05-11): cut over effects first, defer generator decomposition to a separate pass.** Effects sit downstream of generators (texture → chain), so the chain side can be swapped without touching generator code. Smaller cutover batch, real-usage feedback informs the harder generator work that follows.
 
-26. **[shipped]** Graph-JSON preset schema + loader. Bundled presets ship in `crates/manifold-renderer/assets/effect-presets/*.json` (embedded via `include_str!`); user-authored graphs save into the project file (`.manifold` archive) with an optional export-to-standalone-JSON path. One schema, one loader, one validator — built-in vs user graphs differ only in storage location. Drift detection + regenerator live in `tests/bundled_presets_drift.rs`.
+26. **[shipped]** Graph-JSON preset schema + loader. Bundled presets ship in `crates/manifold-nodes/assets/effect-presets/*.json` (embedded via `include_str!`); user-authored graphs save into the project file (`.manifold` archive) with an optional export-to-standalone-JSON path. One schema, one loader, one validator — built-in vs user graphs differ only in storage location. Drift detection + regenerator live in `tests/bundled_presets_drift.rs`.
 27. **[shipped]** Effect save-file refactor: `EffectInstance` already carries `graph: Option<EffectGraphDef>` (`None` = use bundled preset, `Some` = per-card override) and `graph_version: u32` for cache invalidation. Catalog defaults now source from the bundled-preset registry, so per-card divergence is available on every effect (not just Mirror + SoftFocus). Edit commands (`AddGraphNode`, `RemoveGraphNode`, `ConnectPorts`, `DisconnectPorts`, `MoveGraphNode`, `SetGraphNodeParam`) all lift `None → Some(catalog_default)` on first edit. No project-version bump — `graph` is `skip_serializing_if = "Option::is_none"`, so unedited fixtures round-trip byte-identically.
 28. **[shipped]** `EffectChain::apply_chain` is a thin wrapper over `ChainGraph::try_build` + `ChainGraph::run` — the graph-runtime path is the only path. Wet/dry sub-graphs via `OpenGroup` + multi-segment `Mix` ship. The `enabled` toggle is the only structural skip; `amount` is a live uniform. **Dynamic bypass: explicitly not planned (2026-05-17).** A per-frame `bypass_predicate` on `ExecutionStep` would preserve primitive state (Bloom mip pyramids, Watercolor feedback, Stylized Feedback trails) across `amount=0` crossings without a topology rebuild — but the current behavior (the effect renders at `amount=0`) is acceptable for the show. Filed here as a future revisit if a live-perf use case (ducking-as-transition without losing trails) becomes load-bearing. The `EffectChain` shim itself disappears in #31.
 29. **[shipped]** `GraphCanvas` editing affordances. Add (palette click → `AddGraphNode`), wire (drag output port → input port → `ConnectPorts`), disconnect (click connected input port → `DisconnectPorts` — gap closed in this commit), delete (Delete key on selected node → `RemoveGraphNode`), move (drag node header → `MoveGraphNode`), parameter set (right-sidebar inspector → `SetGraphNodeParam`). All flow through `manifold_editing::commands::graph::*` → undo stack → `Project` mutation; save-on-change is implicit because the Project is the live model and the standard save path serializes it.
 30. **[shipped — minimum viable]** "Reset to Default" affordance in the graph editor header surfaces when the watched effect is diverged from its bundled preset (`instance.graph.is_some()`). One click emits `PanelAction::RevertEffectGraph` → `RevertEffectGraphCommand` (clears the override, undoable). The header label flips to "Live Graph — MODIFIED" so the diverged state is visible alongside the existing pink "MOD" badge on the effect card. The fuller "library browser" with named user-saved presets is deferred — bundled presets are the only library today, and the picker for that library is the implicit "Add Effect" catalog. User-saved named-preset support would add a `Project.preset_library` field + UI; not gated by section 6.6.
-31. **[shipped — EffectChain deletion]** `crates/manifold-renderer/src/effect_chain.rs` deleted. The shim was a single-field wrapper around `Option<ChainGraph>` with three thin methods (`apply_chain`, `clear_graph_runner_state`, `resize`). Replaced by a free-function module `chain_dispatch.rs` (`dispatch_chain`, `clear_chain_state`, counters + `take_chain_dispatch_stats`). `LayerCompositor` now stores `Option<ChainGraph>` directly in its per-layer / per-group / per-LED maps. Parity tests (29 effects, bit-exact) confirm the dispatch path is byte-identical. The "per-effect `EffectInstance.effect_type` enum surface" part stays as-is: `EffectTypeId` is not an actual enum — it's a `Cow<'static, str>` newtype used as the catalog key for bundled-preset lookup, `EffectMetadata` (OSC prefix, display name), and `ChainSpec` bindings/skip metadata. Its role as a sealed dispatch discriminant was already gone after the graph-runtime cutover.
+31. **[shipped — EffectChain deletion]** `crates/manifold-nodes/src/effect_chain.rs` deleted. The shim was a single-field wrapper around `Option<ChainGraph>` with three thin methods (`apply_chain`, `clear_graph_runner_state`, `resize`). Replaced by a free-function module `chain_dispatch.rs` (`dispatch_chain`, `clear_chain_state`, counters + `take_chain_dispatch_stats`). `LayerCompositor` now stores `Option<ChainGraph>` directly in its per-layer / per-group / per-LED maps. Parity tests (29 effects, bit-exact) confirm the dispatch path is byte-identical. The "per-effect `EffectInstance.effect_type` enum surface" part stays as-is: `EffectTypeId` is not an actual enum — it's a `Cow<'static, str>` newtype used as the catalog key for bundled-preset lookup, `EffectMetadata` (OSC prefix, display name), and `ChainSpec` bindings/skip metadata. Its role as a sealed dispatch discriminant was already gone after the graph-runtime cutover.
 
 `GraphSnapshot` and `GraphEditorPanel` already exist; this phase mostly wires them into editing flows and lays down the persistence path.
 
@@ -978,7 +978,7 @@ Plus a **legacy fourth** registry (`effect_category_registry.rs`) — hand-maint
 
 ### 11.2 The per-effect Rust audit — what migrates cleanly, what doesn't
 
-Audit of all 25 effect files in `crates/manifold-renderer/src/effects/`:
+Audit of all 25 effect files in `crates/manifold-nodes/src/effects/`:
 
 **20 of 25 migrate cleanly to JSON-authoritative:**
 
@@ -1071,9 +1071,9 @@ This is a happy finding — the load-bearing addressing infrastructure (`id_to_i
 
 ### 11.8 Build.rs precedent
 
-The workspace already uses build.rs in `manifold-media` and `manifold-recording`. Adding one to `manifold-renderer` (or `manifold-core`, depending on where the codegen target lives) is precedented. The build.rs will:
+The workspace already uses build.rs in `manifold-media` and `manifold-recording`. Adding one to `manifold-nodes` (or `manifold-core`, depending on where the codegen target lives) is precedented. The build.rs will:
 
-1. Scan `crates/manifold-renderer/assets/effect-presets/*.json`
+1. Scan `crates/manifold-nodes/assets/effect-presets/*.json`
 2. For each, parse into `EffectGraphDef` and validate
 3. Validate that every `typeId` referenced in `nodes` corresponds to a registered primitive (via inventory iteration at build time — but build.rs runs *before* the crate compiles, so this check happens at runtime startup instead; build.rs only does schema-shape validation)
 4. Emit `target/<crate>/generated/effect_type_constants.rs` with `pub const FOO: EffectTypeId = EffectTypeId::new("Foo");` for each preset

@@ -168,7 +168,7 @@ measured 256 copies at mean 0.052 ms, p95 0.064 ms; 4,000 copies at mean
 left no lag at 256 and 0.650 seconds at 4,000; physics CPU for the catch-up
 call was 2.968 ms and 17.392 ms respectively. This is a synthetic solver
 benchmark, excluding graph evaluation, GPU rendering, and other project work.
-Repeat with `cargo run --release -p manifold-renderer --example physics_benchmark`.
+Repeat with `cargo run --release -p manifold-nodes --example physics_benchmark`.
 Native solver allocations, multi-world contention and full show throughput
 remain unqualified. Do not infer a 16K-body capability from these demos.
 
@@ -286,7 +286,7 @@ new**; everything else is **wiring into shipped surfaces**.
   headers** with a const size/align assert per struct (`mesh_common.rs:98` pattern).
   A safe wrapper (`PhysicsWorld`) is the only thing the rest of the workspace sees —
   no `b3*` type crosses the crate boundary. Crate depends on nothing internal (like
-  `core`/`gpu`); `manifold-renderer` gains the dependency.
+  `core`/`gpu`); `manifold-nodes` gains the dependency.
   Rejected: **rapier3d** (pure Rust, no FFI) — Peter's call on Catto's pedigree and
   the data-oriented perf profile; recorded so nobody re-proposes it as a "safer"
   swap mid-build. Rejected: **runtime dylib bundle** (the DepthEstimator pattern) —
@@ -375,7 +375,7 @@ impl PhysicsWorld {
     pub fn poses_into(&self, set: SetHandle, out: &mut Vec<BodyPose>); // no alloc after warm-up
 }
 
-// manifold-renderer/src/node_graph/physics.rs — CPU port structs
+// manifold-nodes/src/node_graph/physics.rs — CPU port structs
 // (plumbing pattern-copy of material.rs M1; PortType::BodySet, PortType::ColliderSet)
 pub struct BodySet {
     pub shape: BodyShape,            // Sphere | Box | Capsule (+ half_extents / radius)
@@ -442,7 +442,7 @@ anywhere · new modulation machinery (D6).
   step-ms). Performer-gesture gate (BUG-039 (saw-rotation-wrap) lesson): a full-range LFO on gravity_y
   and a saw beat_ramp on time_scale both behave (no clamp surprises); demo flow —
   a trigger-driven impulse preset, PNG pair before/after the hit (L2). Focused
-  tests (`-p manifold-renderer --lib` + `-p manifold-physics`).
+  tests (`-p manifold-nodes --lib` + `-p manifold-physics`).
 - **P3 — Colliders + multiple body sets.** `node.collider_set` (plane/box/sphere,
   port-shadowed TRS → kinematic movement: a sweeping bar that bats bodies away),
   `PortType::ColliderSet`, `body_sets` dynamic groups per `reconfigure`, caps as

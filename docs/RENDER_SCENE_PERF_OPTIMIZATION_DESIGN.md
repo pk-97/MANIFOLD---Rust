@@ -228,7 +228,7 @@ Extend, don't redesign: every fix below is an existing in-repo pattern (`brdf_lu
 - **I5 — Perf claims come from unprofiled runs; profiled runs never produce a phase's headline
   number.** Enforcement: D8; phase gates name the unprofiled command explicitly.
 - **I6 — No new `Arc<Mutex>`/shared state.** Generations live in the `Executor`, single-threaded
-  with the graph walk. Enforcement: review + `rg -n 'Arc<(Mutex|RwLock)' crates/manifold-renderer/src/node_graph/` unchanged.
+  with the graph walk. Enforcement: review + `rg -n 'Arc<(Mutex|RwLock)' crates/manifold-nodes/src/node_graph/` unchanged.
 
 ## . Phasing
 
@@ -284,13 +284,13 @@ change on mesh source) produces output equal to a fresh executor's; on a skinned
 an animated frame differs from frame 1 exactly as it does pre-change) — this is D9's "prove it,
 don't trust the sentence" test; unprofiled perf-soak before/after on the AMG recorded in the
 commit message (expected: small GPU delta, nonzero — blit/copy cost — plus reduced blit rows in a
-profiled sanity run); negative: `rg -n 'mark_outputs_unchanged' crates/manifold-renderer/` shows
+profiled sanity run); negative: `rg -n 'mark_outputs_unchanged' crates/manifold-nodes/` shows
 calls ONLY in the gated sources' skip paths and the executor storage — no consumer yet.
 Demo: before/after perf-soak JSON — L2. Forbidden moves: gating on pointer identity of the OUTPUT
 without also keying content (pool recycling hands back different physical textures — the
 `last_mip_identity` precedent exists precisely for this); declaring unchanged anywhere except the
 exact skip path (I3); touching `render_scene.rs` (that's P2/P3); a generation counter (P2 owns it).
-Test scope: `cargo test -p manifold-renderer --features gpu-proofs <touched_module>::gpu_tests`
+Test scope: `cargo test -p manifold-nodes --features gpu-proofs <touched_module>::gpu_tests`
 per source + default sweep (`cargo nextest run --workspace`) before commit. Dependencies (D9):
 none external; requires P0's numbers only as the before-anchor.
 
@@ -318,7 +318,7 @@ render_scene GPU time — ~0.5 ms @4K, inside unprofiled run-to-run noise, so an
 delta cannot gate this phase; D4b licenses pass-level ms/rank for exactly this): steady-state
 profiled runs show the `node.render_scene` row's `shadow` pass at <0.1 ms and <1% share (P0
 measured ~4%); unprofiled perf-soak before/after on the AMG @4K is still run and recorded in the
-commit message as direction sanity, NOT a pass/fail threshold; negative: `rg -n 'Arc<(Mutex|RwLock)' crates/manifold-renderer/src/node_graph/`
+commit message as direction sanity, NOT a pass/fail threshold; negative: `rg -n 'Arc<(Mutex|RwLock)' crates/manifold-nodes/src/node_graph/`
 unchanged (I6); the cache key function provably includes the rebuild epoch
 (`rg -n 'epoch' crates/manifold-nodes-scene/src/node_graph/primitives/render_scene.rs`).
 Demo: before/after unprofiled JSON + the three mutation tests green — L2. Forbidden moves:
@@ -327,7 +327,7 @@ skipping the epoch/rebuild-invalidation term; content-hashing vertex buffers (D6
 bumping generations anywhere except the committed-output choke point (scattered bump sites = a
 missed one = staleness); making `--profile` numbers the phase's headline (I5); gating anything in
 render_scene other than the shadow pass (IBL is P3's, with its producer-first ordering).
-Test scope: `cargo test -p manifold-renderer --features gpu-proofs` (render_scene gpu_tests +
+Test scope: `cargo test -p manifold-nodes --features gpu-proofs` (render_scene gpu_tests +
 the new tests) + default workspace sweep; this touches the graph runtime, so the GPU feature run
 is mandatory, on `cargo test`, never nextest. Dependencies (D9): P1 only. Fully independent of
 A4/SCENE_SETUP_PANEL.
@@ -422,7 +422,7 @@ the `data_skip` alias path (empty-propagation chains keep the conservative bump)
 point); identity-only keys (P1's documented trap — the generation term is the point); removing
 the mux's `is_pure`/`skip_passthrough` declarations (they're orthogonal optimizations, not
 casualties).
-Test scope: `cargo test -p manifold-renderer --features gpu-proofs` (mux gpu_tests + render_scene
+Test scope: `cargo test -p manifold-nodes --features gpu-proofs` (mux gpu_tests + render_scene
 suite + the new full-chain tests) + default workspace sweep; graph runtime touched → GPU feature
 run mandatory, on `cargo test`, never nextest. Dependencies (D9): P3 only. P4 remains
 data-independent (its entry clause is unchanged); D10 serial ordering in the same worktree still
@@ -456,7 +456,7 @@ semantics (this is a lookup-mechanics change only); "fixing" BUG-190 beyond what
 delivers (D3 — if BrainStem is still slow after, the backlog entry says so with numbers); static
 name tables (object count is unbounded — the ~2266 comment already rejects them; tables are built
 per-rebuild, sized to the instance).
-Test scope: default sweep + `cargo test -p manifold-renderer --features gpu-proofs` (render_scene
+Test scope: default sweep + `cargo test -p manifold-nodes --features gpu-proofs` (render_scene
 suite — its callers changed). Dependencies (D9): P1's landing only (file adjacency in
 render_scene.rs makes serial ordering mandatory per D10, but there is no data dependency on P2/P3).
 

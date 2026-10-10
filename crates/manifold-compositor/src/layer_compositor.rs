@@ -306,7 +306,7 @@ manifold_core::testkit_visible! {
 /// chain topologies, deduped by the production topology hash (WARMUP_DESIGN
 /// P7 D17). Bounded by unique topology, not clip count — the design's point:
 /// a show with a thousand clips carries a handful of distinct chains. Group
-/// and audio layers are skipped (group chains warm via
+/// and non-visual lanes are skipped (group chains warm via
 /// `prewarm_group_chains`, audio layers never enter the compositor).
 pub(crate) fn unique_clip_chain_topologies(
     layers: &[manifold_core::layer::Layer],
@@ -316,7 +316,7 @@ pub(crate) fn unique_clip_chain_topologies(
     let mut seen: ahash::AHashSet<u64> = ahash::AHashSet::default();
     let mut out = Vec::new();
     for layer in layers {
-        if layer.is_group() || layer.is_audio() {
+        if !layer.layer_type.supports_clip_playback() || layer.is_audio() {
             continue;
         }
         let layer_effects = layer.effects();
@@ -391,6 +391,7 @@ impl LedRoute {
     fn from_layer(layer_type: manifold_core::LayerType, blit_to_led: bool) -> Self {
         match layer_type {
             manifold_core::LayerType::Dmx => Self::Direct,
+            manifold_core::LayerType::Trigger => Self::None,
             _ if blit_to_led => Self::Mirror,
             _ => Self::None,
         }
@@ -3717,7 +3718,7 @@ impl Compositor for LayerCompositor {
         type_id: &manifold_core::PresetTypeId,
     ) -> Option<manifold_node_engine::snapshot::GraphSnapshot> {
         let view = manifold_node_engine::load::loaded_preset_view::loaded_preset_view_by_id(type_id)?;
-        manifold_node_engine::load::loaded_preset_view::snapshot_for_view(view)
+        manifold_node_engine::load::loaded_preset_view::snapshot_for_view(&view)
     }
 
     fn outer_routings_for(
@@ -3727,7 +3728,7 @@ impl Compositor for LayerCompositor {
         let Some(view) = manifold_node_engine::load::loaded_preset_view::loaded_preset_view_by_id(type_id) else {
             return Vec::new();
         };
-        manifold_node_engine::load::loaded_preset_view::outer_routings_from_view(view)
+        manifold_node_engine::load::loaded_preset_view::outer_routings_from_view(&view)
     }
 
     fn layer_skin_registry(&self) -> Option<&manifold_node_engine::runtime::layer_skin::LayerSkinRegistry> {

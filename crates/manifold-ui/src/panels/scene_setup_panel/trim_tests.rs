@@ -39,18 +39,18 @@ fn rebuild(panel: &mut ScenePanel) -> UITree {
 #[test]
 fn filtered_scene_config_keeps_audio_with_reordered_visible_rows() {
     let (mut vm, mut surface) = tests::world_transform_vm();
-    vm.world_sections = vec!["Transform".into()];
+    vm.world_sections = vec!["Environment".into()];
     let mut hidden = surface.rows[0].clone();
     hidden.id = manifold_foundation::ParamId::from("hidden");
     hidden.spec.section = Some("Hidden".into());
     hidden.audio = AudioRowState { active: true, send_id: Some(manifold_foundation::AudioSendId::new("hidden-send")), ..Default::default() };
     let mut first = surface.rows[0].clone();
     first.id = manifold_foundation::ParamId::from("first");
-    first.spec.section = Some("Transform".into());
+    first.spec.section = Some("Environment".into());
     first.audio = AudioRowState { active: true, send_id: Some(manifold_foundation::AudioSendId::new("first-send")), ..Default::default() };
     let mut second = surface.rows[0].clone();
     second.id = manifold_foundation::ParamId::from("second");
-    second.spec.section = Some("Transform".into());
+    second.spec.section = Some("Environment".into());
     second.audio = AudioRowState { active: true, send_id: Some(manifold_foundation::AudioSendId::new("second-send")), ..Default::default() };
     surface.rows = vec![hidden, second, first];
     surface.audio_sends = vec![

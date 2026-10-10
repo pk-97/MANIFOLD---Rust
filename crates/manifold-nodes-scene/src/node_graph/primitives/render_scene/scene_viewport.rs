@@ -1,68 +1,36 @@
 //! Render-only viewport pass owned by the scene renderer.
 
-use manifold_gpu::{GpuTexture, GpuTextureFormat};
+use manifold_gpu::GpuTexture;
+#[cfg(test)]
+use manifold_gpu::GpuTextureFormat;
+use manifold_node_engine::scene::viewport_outputs::ViewportOutputs;
 use manifold_node_engine::runtime::frame_status::{FrameRenderFailure, FrameRenderStatus};
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
-use manifold_node_engine::exec::backend::Backend;
-use manifold_node_engine::bindings::{NodeOutputs, Slot};
-use manifold_node_engine::exec::effect_node::{EffectNode, EffectNodeContext, ParamValues};
-use manifold_node_engine::exec::execution_plan::ResourceId;
-use manifold_node_engine::exec::metal_backend::MetalBackend;
+use manifold_node_engine::exec::effect_node::{EffectNode, EffectNodeContext};
 use manifold_node_engine::scene::scene_viewport::{SceneViewportConfig, SceneViewportError, ViewportPass};
-use manifold_node_engine::gpu::render_target::RenderTarget;
 use super::RenderScene;
 #[cfg(test)]
+use manifold_node_engine::exec::effect_node::ParamValues;
+#[cfg(test)]
 use manifold_node_engine::scene::viewport_camera::ViewportCamera;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct OutputLayout {
-    port: &'static str,
-    width: u32,
-    height: u32,
-    format: GpuTextureFormat,
-}
 
 /// A persistent, render-only `node.render_scene` pass.
 pub(crate) struct SceneViewportPass {
     renderer: RenderScene,
-    output_backend: Option<MetalBackend>,
-    output_bindings: Vec<(&'static str, Slot)>,
-    output_layout: Vec<OutputLayout>,
-    required_outputs: Vec<&'static str>,
-    color_slot: Option<Slot>,
+    outputs: ViewportOutputs,
     errors: Vec<String>,
     status: FrameRenderStatus,
     last_attempt_valid: bool,
-    pending_scalar_writes: Vec<(Slot, manifold_node_engine::parameters::ParamValue)>,
-    pending_camera_writes: Vec<(Slot, manifold_node_engine::scene::camera::Camera)>,
-    pending_light_writes: Vec<(Slot, manifold_node_engine::scene::light::Light)>,
-    pending_material_writes: Vec<(Slot, manifold_node_engine::scene::material::Material)>,
-    pending_transform_writes: Vec<(Slot, manifold_node_engine::scene::transform::Transform)>,
-    pending_atmosphere_writes: Vec<(Slot, manifold_node_engine::scene::atmosphere::Atmosphere)>,
-    pending_render_mode_writes: Vec<(Slot, manifold_node_engine::scene::render_mode::RenderMode)>,
-    pending_object_writes: Vec<(Slot, manifold_node_engine::scene::scene_object::SceneObject)>,
 }
 
 impl SceneViewportPass {
     pub(crate) fn new() -> Self {
         Self {
             renderer: RenderScene::new(),
-            output_backend: None,
-            output_bindings: Vec::new(),
-            output_layout: Vec::new(),
-            required_outputs: Vec::new(),
-            color_slot: None,
+            outputs: ViewportOutputs::default(),
             errors: Vec::new(),
             status: FrameRenderStatus::Complete,
             last_attempt_valid: false,
-            pending_scalar_writes: Vec::new(),
-            pending_camera_writes: Vec::new(),
-            pending_light_writes: Vec::new(),
-            pending_material_writes: Vec::new(),
-            pending_transform_writes: Vec::new(),
-            pending_atmosphere_writes: Vec::new(),
-            pending_render_mode_writes: Vec::new(),
-            pending_object_writes: Vec::new(),
         }
     }
 
@@ -102,7 +70,7 @@ impl SceneViewportPass {
         };
 
         let device = parent_gpu.device;
-        if let Err(error) = self.ensure_outputs(device, config, source_params) {
+        if let Err(error) = self.outputs.ensure(device, config, source_params, &self.renderer) {
             self.errors.push(error);
             self.status = FrameRenderStatus::Failed(FrameRenderFailure::SurfaceAllocation);
             return;
@@ -115,25 +83,12 @@ impl SceneViewportPass {
         viewport_gpu.preparing = parent_gpu.preparing;
         viewport_gpu.audio_visuals = parent_gpu.audio_visuals;
 
-        let Some(output_backend) = self.output_backend.as_ref() else {
-            self.errors
-                .push("viewport output storage is unavailable".to_string());
+        let Some(outputs) = self.outputs.outputs() else {
+            self.errors.push("viewport output storage is unavailable".to_string());
             self.status = FrameRenderStatus::Failed(FrameRenderFailure::SurfaceAllocation);
             return;
         };
         let inputs = source_inputs.with_camera_override("camera", config.camera.to_camera());
-        let outputs = NodeOutputs::new(
-            &self.output_bindings,
-            output_backend,
-            &mut self.pending_scalar_writes,
-            &mut self.pending_camera_writes,
-            &mut self.pending_light_writes,
-            &mut self.pending_material_writes,
-            &mut self.pending_transform_writes,
-            &mut self.pending_atmosphere_writes,
-            &mut self.pending_render_mode_writes,
-            &mut self.pending_object_writes,
-        );
         let pending = {
             let mut viewport_ctx = EffectNodeContext::with_state(
                 source_time,
@@ -171,8 +126,7 @@ impl SceneViewportPass {
         if !self.last_attempt_valid {
             return None;
         }
-        let backend = self.output_backend.as_ref()?;
-        backend.texture_2d(self.color_slot?)
+        self.outputs.texture()
     }
 
     pub(crate) fn status(&self) -> FrameRenderStatus {
@@ -190,101 +144,10 @@ impl SceneViewportPass {
         self.last_attempt_valid = false;
     }
 
-    fn ensure_outputs(
-        &mut self,
-        device: &manifold_gpu::GpuDevice,
-        config: SceneViewportConfig,
-        params: &ParamValues,
-    ) -> Result<(), String> {
-        self.required_outputs.clear();
-        self.required_outputs.push("color");
-        for &port in self.renderer.force_consumed_outputs(params) {
-            if !self.required_outputs.contains(&port) {
-                self.required_outputs.push(port);
-            }
-        }
-
-        let mut changed = self.output_backend.is_none()
-            || self.output_layout.len() != self.required_outputs.len();
-        if !changed {
-            for (index, &port) in self.required_outputs.iter().enumerate() {
-                let (width, height, format) = self.output_shape(config, params, port);
-                let old = self.output_layout[index];
-                if old
-                    != (OutputLayout {
-                        port,
-                        width,
-                        height,
-                        format,
-                    })
-                {
-                    changed = true;
-                    break;
-                }
-            }
-        }
-        if !changed {
-            return Ok(());
-        }
-
-        let mut backend = MetalBackend::without_device(
-            config.width,
-            config.height,
-            GpuTextureFormat::Rgba16Float,
-        );
-        // Allocation may fail partway through a resized layout. Do not reuse
-        // its partial bindings against the previous backend on the next try.
-        self.output_backend = None;
-        self.output_bindings.clear();
-        self.output_layout.clear();
-        self.color_slot = None;
-        for (index, &port) in self.required_outputs.iter().enumerate() {
-            let (width, height, format) = self.output_shape(config, params, port);
-            let target =
-                RenderTarget::try_new(device, width, height, format, "scene viewport output")?;
-            let slot = backend.pre_bind_texture_2d(ResourceId(index as u32), target);
-            self.output_bindings.push((port, slot));
-            self.output_layout.push(OutputLayout {
-                port,
-                width,
-                height,
-                format,
-            });
-            if port == "color" {
-                self.color_slot = Some(slot);
-            }
-        }
-        self.output_backend = Some(backend);
-        Ok(())
+    #[cfg(test)]
+    fn output_shape(&self, config: SceneViewportConfig, params: &ParamValues, port: &'static str) -> (u32, u32, GpuTextureFormat) {
+        ViewportOutputs::output_shape(&self.renderer, config, params, port)
     }
-
-    fn output_shape(
-        &self,
-        config: SceneViewportConfig,
-        params: &ParamValues,
-        port: &'static str,
-    ) -> (u32, u32, GpuTextureFormat) {
-        let (num, den) = self
-            .renderer
-            .output_canvas_scale(port, params)
-            .unwrap_or((1, 1));
-        let width = scaled_dimension(config.width, num, den);
-        let height = scaled_dimension(config.height, num, den);
-        let format = self
-            .renderer
-            .output_format(port)
-            .unwrap_or(GpuTextureFormat::Rgba16Float);
-        (width, height, format)
-    }
-}
-
-fn scaled_dimension(value: u32, numerator: u32, denominator: u32) -> u32 {
-    if numerator == 0 || denominator == 0 {
-        return 1;
-    }
-    // Match execution::resolve_dims and RenderScene's render-scale policy.
-    let scaled = u64::from(value) * u64::from(numerator) / u64::from(denominator);
-    scaled.clamp(1, u64::from(u32::MAX)) as u32
 }
 
 impl ViewportPass for SceneViewportPass {

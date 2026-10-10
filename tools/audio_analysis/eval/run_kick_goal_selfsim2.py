@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """H-R2: widen the song-relative stage. Strict v2, same stacked nested protocol as H-R.
 
-Usage: run_kick_goal_selfsim2.py BASE [CONFIG ...]   (default Q1 Q2 Q3)
+Usage: run_kick_goal_selfsim2.py BASE [CONFIG ...]   (default Q1 Q2 Q3; KICK_GOAL_JOBS=n runs outer songs on n
+worker processes; KICK_GOAL_OUT=dir writes there instead of GOAL)
 
 Writes nested_{BASE}_{config}.npz in the nested_{BASE}.npz layout, so a
 config can be stacked again by passing BASE_config.
@@ -31,7 +32,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 import numpy as np  # noqa: E402
 
 from tools.audio_analysis.eval.kick_goal_eval import (  # noqa: E402
-    GOAL, MORE_SONGS, NEW_SONGS, TRACKS, TRUTH, Goal, add_whole_song_truth, choose, score, summarise)
+    GOAL, MORE_SONGS, NEW_SONGS, OUT, TRACKS, TRUTH, Goal, add_whole_song_truth, choose, run_tasks, score, summarise)
 from tools.audio_analysis.eval.kick_goal_featsets import lowbank_cache, profile_cache  # noqa: E402
 from tools.audio_analysis.eval.kick_goal_selfsim import relative_levels, self_features  # noqa: E402
 from tools.audio_analysis.eval.run_kick_goal_data import ALL, line  # noqa: E402
@@ -43,36 +44,55 @@ CONFIGS = (('Q1_rel15', SELF20 + REL20), ('Q2_fast4', SELF20 + REL20 + SELF4), (
            ('R3_self8', SELF8), ('Q4_8and20', SELF8 + SELF20[1:]))
 
 
+STATE = {}
+
+
+def setup(base):
+    g = Goal(mode=TRUTH)
+    add_whole_song_truth(g)
+    STATE.update(g=g, nested=np.load(GOAL / f'nested_{base}.npz'), cache={},
+                 shape={t: np.hstack([profile_cache(g, t), lowbank_cache(g, t)]) for t in g.records})
+
+
+def matrix(t, key):
+    cache, shape = STATE['cache'], STATE['shape']
+    if key not in cache:
+        r = STATE['g'].records[t]
+        p, f, em = STATE['nested'][key], r['features'], r['emit_s']
+        cache[key] = np.hstack([self_features(p, shape[t], f[:, 0], em, 20.0), relative_levels(p, f, em, 20.0),
+                                self_features(p, shape[t], f[:, 0], em, 4.0)[:, 1:], f,
+                                self_features(p, shape[t], f[:, 0], em, 8.0)])
+    return cache[key]
+
+
+def outer(task):
+    """One config's outer song o: inner predictions, inner cutoff, outer predictions."""
+    name, cols, o = task
+    g, saved = STATE['g'], {}
+    train = {u: matrix(u, f'{o}|{u}') for u in ALL if u != o}
+    inner = {}
+    for v in train:
+        m = fit2(g, train, [u for u in train if u != v], cols)
+        inner[v] = m.predict_proba(train[v][:, cols])[:, 1]
+        saved[f'{name}|{o}|{v}'] = inner[v]
+    th, _ = choose(g, inner)
+    m = fit2(g, train, list(train), cols)
+    saved[f'{name}|{o}'] = m.predict_proba(matrix(o, o)[:, cols])[:, 1]
+    return saved, th
+
+
 def main():
     base = sys.argv[1]
     configs = [c for c in CONFIGS if c[0] in sys.argv[2:]] or CONFIGS[:3]
-    g = Goal(mode=TRUTH)
-    add_whole_song_truth(g)
-    nested = np.load(GOAL / f'nested_{base}.npz')
-    shape = {t: np.hstack([profile_cache(g, t), lowbank_cache(g, t)]) for t in g.records}
-    cache = {}
-
-    def matrix(t, key):
-        if key not in cache:
-            r = g.records[t]
-            p, f, em = nested[key], r['features'], r['emit_s']
-            cache[key] = np.hstack([self_features(p, shape[t], f[:, 0], em, 20.0), relative_levels(p, f, em, 20.0),
-                                    self_features(p, shape[t], f[:, 0], em, 4.0)[:, 1:], f,
-                                    self_features(p, shape[t], f[:, 0], em, 8.0)])
-        return cache[key]
+    setup(base)
+    g = STATE['g']
+    results = run_tasks(outer, [(name, cols, o) for name, cols in configs for o in ALL], setup, (base,))
     out, saved = {}, {}
-    for name, cols in configs:
+    for name, _ in configs:
         outcome, cuts = {}, {}
         for o in ALL:
-            train = {u: matrix(u, f'{o}|{u}') for u in ALL if u != o}
-            inner = {}
-            for v in train:
-                m = fit2(g, train, [u for u in train if u != v], cols)
-                inner[v] = m.predict_proba(train[v][:, cols])[:, 1]
-                saved[f'{name}|{o}|{v}'] = inner[v]
-            th, _ = choose(g, inner)
-            m = fit2(g, train, list(train), cols)
-            saved[f'{name}|{o}'] = m.predict_proba(matrix(o, o)[:, cols])[:, 1]
+            s, th = next(results)
+            saved.update(s)
             outcome[o] = score(g, o, saved[f'{name}|{o}'], th)
             cuts[o] = th
             print(name, 'outer', o, flush=True)
@@ -87,9 +107,9 @@ def main():
             print(line(f'{name} {k}', out[name][k]), flush=True)
         print('   per track', [f"{k[:8]} {v['matched']}/{v['labels']}+{v['extra']}" for k, v in s['per_track'].items()], flush=True)
     tag = '_'.join(c[0] for c in configs)
-    (GOAL / f'results_selfsim2_{base}_{tag}.json').write_text(json.dumps(out, indent=1, default=float))
+    (OUT / f'results_selfsim2_{base}_{tag}.json').write_text(json.dumps(out, indent=1, default=float))
     for name, _ in configs:
-        np.savez(GOAL / f'nested_{base}_{name}.npz', **{k[len(name) + 1:]: v for k, v in saved.items() if k.startswith(name + '|')})
+        np.savez(OUT / f'nested_{base}_{name}.npz', **{k[len(name) + 1:]: v for k, v in saved.items() if k.startswith(name + '|')})
 
 
 if __name__ == '__main__':

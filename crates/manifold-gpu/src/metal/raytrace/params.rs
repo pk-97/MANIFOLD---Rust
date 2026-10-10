@@ -500,7 +500,7 @@ pub struct RtNormalSource {
     /// RT_INSTANCING_DESIGN.md D3: bindless address of THIS slot's
     /// `InstanceTransform` (the renderer's 32-byte layout,
     /// mesh_common.rs:96 — mirrored manually in the MSL; manifold-gpu
-    /// cannot depend on manifold-renderer), or 0 when unwired. When
+    /// cannot depend on manifold-nodes), or 0 when unwired. When
     /// nonzero, `fetch_world_normal` applies the D3 fold
     /// (`rot · (n · msign)`) to the local normal BEFORE the row's
     /// `normal_matrix`, bit-parity with render_scene.wgsl's `vs_main`.
@@ -596,7 +596,7 @@ const _: () = assert!(std::mem::offset_of!(RtNormalSource, model_handedness) == 
 /// RT_INSTANCING_DESIGN.md D1/P0: manual mirror of the renderer's
 /// `mesh::InstanceTransform` (32 bytes,
 /// `pos_scale` xyz position + w uniform scale, `rot_pad` xyz XYZ Euler +
-/// w mirror marker) — manifold-gpu cannot depend on manifold-renderer, so
+/// w mirror marker) — manifold-gpu cannot depend on manifold-nodes, so
 /// the layout is mirrored by hand and tied to the MSL `RtInstanceTransform`
 /// below by the same manual-sync discipline as every other CPU/GPU mirror
 /// in this file. Only the SIZE is machine-checked (the renderer asserts

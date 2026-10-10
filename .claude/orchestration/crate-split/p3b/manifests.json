@@ -1,0 +1,7 @@
+[
+  {
+    "path": "crates/manifold-ui-paint/Cargo.toml",
+    "before": "[package]\nname = \"manifold-ui-paint\"\nversion = \"0.1.0\"\nedition = \"2024\"\npublish = false\n\n[features]\ngpu-proofs = [\"manifold-gpu/gpu-proofs\"]\n\n[dependencies]\nmanifold-foundation = { path = \"../manifold-foundation\" }\nmanifold-gpu = { path = \"../manifold-gpu\" }\nmanifold-ui = { path = \"../manifold-ui\" }\nahash = { workspace = true }\nbytemuck = { version = \"1\", features = [\"derive\"] }\nlog = { workspace = true }\n\n[target.'cfg(target_os = \"macos\")'.dependencies]\ncore-text = \"20\"\ncore-graphics = \"0.23\"\ncore-foundation = \"0.9\"\n\n[dev-dependencies]\nhalf = \"2\"\n\n[lints]\nworkspace = true\n",
+    "after": "[package]\nname = \"manifold-ui-paint\"\nversion = \"0.1.0\"\nedition = \"2024\"\npublish = false\nautotests = false\n\n[features]\ngpu-proofs = [\"manifold-gpu/gpu-proofs\"]\n\n[dependencies]\nmanifold-foundation = { path = \"../manifold-foundation\" }\nmanifold-gpu = { path = \"../manifold-gpu\" }\nmanifold-ui = { path = \"../manifold-ui\" }\nahash = { workspace = true }\nbytemuck = { version = \"1\", features = [\"derive\"] }\nlog = { workspace = true }\n\n[target.'cfg(target_os = \"macos\")'.dependencies]\ncore-text = \"20\"\ncore-graphics = \"0.23\"\ncore-foundation = \"0.9\"\n\n[dev-dependencies]\nhalf = \"2\"\n\n[lints]\nworkspace = true\n\n[[test]]\nname = \"main\"\npath = \"tests/main.rs\"\n"
+  }
+]

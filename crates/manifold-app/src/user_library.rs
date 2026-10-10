@@ -2,7 +2,7 @@
 //! (`docs/PRESET_LIBRARY_DESIGN.md` section 4/section 6 D4, phase P3).
 //!
 //! Writes/renames/duplicates/deletes standalone preset JSON files under the
-//! SAME user preset root `manifold_renderer::preset_loader` already resolves
+//! SAME user preset root `manifold_nodes::preset_loader` already resolves
 //! read-only (`~/Library/Application Support/MANIFOLD/presets/{effects,
 //! generators,scene-modifiers}`), so a save here is picked up by the existing hot-reload
 //! watcher with no separate wiring — no new storage tier, just a writer for
@@ -10,7 +10,7 @@
 //!
 //! App-side (not `manifold-ui`/`manifold-core`, per the repo hard rule):
 //! file IO for the user preset dir already lives app/renderer-side, and this
-//! service needs `manifold_renderer::preset_loader`'s live catalog to check
+//! service needs `manifold_nodes::preset_loader`'s live catalog to check
 //! id collisions — core has no renderer dependency.
 //!
 //! The struct is a thin `{ root: PathBuf }` (section 4) deliberately — every
@@ -65,7 +65,7 @@ impl From<PresetFileError> for LibError {
 /// The user preset library: reads/writes standalone `.json` preset files
 /// under `root`. `root` is the presets directory itself (parent of
 /// `effects`/`generators`), matching
-/// `manifold_renderer::preset_loader::resolve_user_root`'s base — [`Self::new`]
+/// `manifold_nodes::preset_loader::resolve_user_root`'s base — [`Self::new`]
 /// resolves the SAME path (it just doesn't require the directory to already
 /// exist, since `save` creates it on demand; the read-only loader resolution
 /// treats an absent directory as "no user presets").

@@ -222,6 +222,82 @@ class Guards(unittest.TestCase):
         self.assertEqual(["focused"], list(guard.expensive_checks(
             "cargo build -p manifold-app --features perf-soak")))
 
+    def test_script_tests_and_lane_drafts_need_no_permit(self):
+        commands = (
+            "python3 -B scripts/test_gpu_proofs_gate.py",
+            "python3 -B scripts/test_landing_gate.py",
+            "python3 -B scripts/test_gpu_proofs_gate.py && "
+            "python3 -B scripts/test_landing_gate.py && python3 -B scripts/test_dev.py",
+            "python3 crate-move-drafts/snapshot_stage.py",
+            "env FOO=bar python3 -B crate-move-drafts/snapshot_stage.py",
+            "python3 scripts/test_future_render_snapshot.py",
+        )
+        for command in commands:
+            with self.subTest(command=command):
+                self.assertIsNone(self.shell_call(command, worker=True, cwd=self.slot))
+                self.assertEqual([], list(guard.expensive_checks(command, self.slot)))
+        self.assertFalse((self.root / "permits.json").exists())
+
+    def test_declared_broad_scripts_and_commands_need_permits(self):
+        commands = (
+            "python3 scripts/trunk_health.py",
+            "python3 scripts/feature_matrix.py",
+            "cargo test --workspace",
+            "python3 scripts/launch_live_ui.py",
+            "python3 scripts/rt_toggle_matrix.py",
+            "python3 scripts/rt_quality_matrix.py",
+            "python3 scripts/rt_a3_term_cost.py",
+            "python3 scripts/ui_flows_batch_proof.py",
+            "python3 scripts/gpu_proofs_gate.py --all",
+            "python3 scripts/dev.py trunk-health",
+            "python3 scripts/dev.py gpu-proofs --all",
+            "python3 scripts/dev.py render-generator fixture.json",
+            "python3 scripts/dev.py capture /tmp/frames",
+            "python3 scripts/gpu_queue.py -- cargo test --workspace",
+            "cargo run -p manifold-renderer --bin=render-import -- fixture.glb",
+            "cargo xtask perf-soak",
+            "python3 crate-move-drafts/snapshot_stage.py && cargo test --workspace",
+            "python3 scripts/test_gpu_proofs_gate.py && python3 scripts/rt_toggle_matrix.py",
+        )
+        for command in commands:
+            with self.subTest(command=command):
+                # Exercise budget independently of machine storage admission.
+                self.assertIn("Execution budget", guard.check_budget(
+                    self.event("Bash", {"command": command}, worker=True, cwd=self.slot),
+                    command, str(self.slot)))
+
+    def test_unregistered_repository_script_fails_closed(self):
+        for command, cwd in (
+                ("python3 scripts/new_check.py", self.slot),
+                ("bash scripts/new_check.sh", self.slot),
+                ("python3 new_check.py", self.slot / "scripts"),
+                (f"python3 {self.slot}/scripts/new_check.py", self.root)):
+            with self.subTest(command=command, cwd=cwd):
+                self.assertIn("Execution budget", guard.check_budget(
+                    self.event("Bash", {"command": command}, worker=True, cwd=cwd),
+                    command, str(cwd)))
+        # A registered target missing its cost is an inventory error and broad.
+        with patch.dict(guard.tool_inventory.COST_CLASSES, clear=True):
+            self.assertEqual(["broad"], list(guard.expensive_checks(
+                "python3 scripts/landing_gate.py", self.slot)))
+
+    def test_cost_registry_and_front_door_share_classification(self):
+        for direct, verb in (
+                ("scripts/gpu_proofs_gate.py", "gpu-proofs"),
+                ("scripts/landing_gate.py", "gate"),
+                ("scripts/trunk_health.py", "trunk-health"),
+                ("scripts/rt_toggle_matrix.py", "rt-toggle-matrix")):
+            with self.subTest(verb=verb):
+                self.assertEqual(list(guard.expensive_checks("python3 " + direct)),
+                                 list(guard.expensive_checks("python3 scripts/dev.py " + verb)))
+        with patch.dict(guard.tool_inventory.COST_CLASSES, {"gpu_scope.py": "broad"}):
+            self.assertEqual(["broad"], list(guard.expensive_checks("python3 scripts/gpu_scope.py")))
+            self.assertEqual(["broad"], list(guard.expensive_checks("python3 scripts/dev.py gpu-scope")))
+        self.assertEqual(["focused"], list(guard.expensive_checks("python3 scripts/test_census.py")))
+        for command in ("python3 scripts/dev.py --help", "cat scripts/rt_toggle_matrix.py",
+                        "python3 scripts/test_dev.py --fixture scripts/trunk_health.py"):
+            self.assertEqual([], list(guard.expensive_checks(command)))
+
     def test_required_gpu_proof_gate_has_no_attempt_cap(self):
         command = "python3 -B scripts/gpu_proofs_gate.py"
         for _ in range(4):

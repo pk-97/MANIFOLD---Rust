@@ -405,30 +405,41 @@ impl ParamCardPanel {
         }
     }
 
+    /// Navigate to a routed parameter without changing its authored response.
+    pub fn reveal_clip_response(&mut self, target: &crate::view::UiGraphTarget, param: &manifold_foundation::ParamId) -> bool {
+        let Some(i) = self.rows.iter().position(|row| row.id == *param
+            && row.clip_trigger.as_ref().is_some_and(|source| source.target == *target))
+        else { return false; };
+        if let Some(section) = &self.rows[i].spec.section {
+            self.section_folded.insert(section.clone(), false);
+        }
+        let active = active_mod_tabs(&self.state.mod_state, &self.rows[i], i);
+        if let Some(tab) = [ModTab::Envelope, ModTab::Audio].into_iter().find(|tab| active.contains(tab)) {
+            self.mod_active_tab[i] = tab;
+        }
+        self.compact = false;
+        self.set_collapsed(false);
+        true
+    }
+
+    /// Bounds of the parameter and its active response drawer for navigation.
+    pub fn clip_response_rect(&self, tree: &UITree, param_id: &str) -> Option<Rect> {
+        let index = self.rows.iter().position(|row| row.id == param_id)?;
+        let mut rect = self.param_row_rect(tree, param_id)?;
+        rect.height += self.row_drawer_height(index);
+        Some(rect)
+    }
+
     /// Height contributed by the modulation config drawer for one slider param.
     /// Mirrors `build_param_row` exactly: 0 configs → 0; 1 → that config's
     /// height; ≥2 → the tab strip plus the single shown config (they no longer
     /// stack). Track overlays (trim bars, envelope target) add no height.
     /// Compact mode hides every drawer, so the contribution is 0.
     pub(crate) fn row_drawer_height(&self, i: usize) -> f32 {
-        if self.compact {
-            return 0.0;
-        }
         let Some(info) = self.rows.get(i) else {
             return 0.0;
         };
-        let active = active_mod_tabs(&self.state.mod_state, info, i);
-        let h = match active.len() {
-            0 => return 0.0,
-            1 => mod_config_height(active[0], info, &self.state.mod_state, i),
-            _ => {
-                let stored = self.mod_active_tab.get(i).copied().unwrap_or(ModTab::Driver);
-                let shown = resolve_active_tab(&active, stored).unwrap_or(active[0]);
-                MOD_TAB_STRIP_H + mod_config_height(shown, info, &self.state.mod_state, i)
-            }
-        };
-        // Match the build's post-drawer break (see `build_param_row`).
-        h + DRAWER_BOTTOM_GAP
+        row_drawer_height(self.compact, &self.state.mod_state, &self.mod_active_tab, info, i)
     }
 
     /// Reserved drawer height for row `i`, following the P1 open/close tween while

@@ -31,7 +31,7 @@ Phase 4 as originally written (wrap each remaining effect in a `LegacyPostProces
 
 MANIFOLD currently has **two parallel runtimes** for effect work:
 
-1. **Linear chain runtime** ([`EffectChain::apply_chain`](../crates/manifold-renderer/src/effect_chain.rs)) — hand-rolled imperative loop with ping-pong buffers, group wet/dry blending, `should_skip` checks. Used by every layer / master / clip effect chain today.
+1. **Linear chain runtime** ([`EffectChain::apply_chain`](../crates/manifold-nodes/src/effect_chain.rs)) — hand-rolled imperative loop with ping-pong buffers, group wet/dry blending, `should_skip` checks. Used by every layer / master / clip effect chain today.
 2. **Graph runtime** ([`Executor`](../crates/manifold-node-engine/src/exec/execution.rs) + [`MetalBackend`](../crates/manifold-node-engine/src/exec/metal_backend.rs)) — topological execution of an `ExecutionPlan` over a `Backend` trait. Used by graph-backed effects (`Mirror`, `SoftFocus`) which run a sub-graph *inside* their `apply()` call, nested within the chain runtime.
 
 The chain runtime cannot host:
@@ -134,7 +134,7 @@ The graph runtime infrastructure is **substantially built**:
 - [`Executor`](../crates/manifold-node-engine/src/exec/execution.rs) — per-frame iteration over plan steps with slot acquire/release. Already uses pre-allocated scratch buffers (CLAUDE.md compliant). ~440 LOC.
 - [`Backend` trait](../crates/manifold-node-engine/src/exec/backend.rs) — platform-agnostic abstraction over slot allocation. `MetalBackend` is one impl; a `VulkanBackend` would slot in cleanly.
 - [`MetalBackend`](../crates/manifold-node-engine/src/exec/metal_backend.rs) — slot recycling identical to chain's ping-pong. Pre-binding via `pre_bind_texture_2d` solves first-effect-input optimization. ~285 LOC.
-- [`LegacyPostProcessNode`](../crates/manifold-renderer/src/node_graph/legacy_adapter.rs) — wraps any `Box<dyn PostProcessEffect>` as an `EffectNode`. 1-input/1-output. Synthesizes `ParamDef` list from `EffectMetadata`. ~335 LOC.
+- [`LegacyPostProcessNode`](../crates/manifold-nodes/src/node_graph/legacy_adapter.rs) — wraps any `Box<dyn PostProcessEffect>` as an `EffectNode`. 1-input/1-output. Synthesizes `ParamDef` list from `EffectMetadata`. ~335 LOC.
 - 9 primitives: `Source`, `FinalOutput`, `Mix`, `UVTransform`, `Blur`, `Threshold` (stub), `MipChain` (stub), `Sample` (stub), `Blend` (stub). ~600 LOC across `primitives/`.
 - 5 composite presets: `Mirror`, `Bloom`, `Halation`, `Infrared`, `SoftFocus`. ~400 LOC across `composites/`.
 - 2 production graph-backed effects: `MirrorFX`, `SoftFocusGraphFX`. ~500 LOC.
@@ -797,7 +797,7 @@ Complete. Findings synthesized here. Gates:
 This is the largest and most invasive phase. It touches data model, serialization, UI, every effect, every generator, every command. Ordering is critical so each commit individually compiles and tests pass.
 
 5. **`ParamBinding` / `ParamTarget` / `ParamConvert` types** in `manifold-core`. Pure data types + tests. No callers yet.
-6. **Add `id: Cow<'static, str>` to `ParamSpec`/`ParamDef`.** Mechanical: every `inventory::submit!` call across `manifold-renderer/src/effects/` and `manifold-renderer/src/generators/` gains an explicit `id` field per param. ~33 effect/generator entries, ~120 param entries.
+6. **Add `id: Cow<'static, str>` to `ParamSpec`/`ParamDef`.** Mechanical: every `inventory::submit!` call across `manifold-nodes/src/effects/` and `manifold-nodes/src/generators/` gains an explicit `id` field per param. ~33 effect/generator entries, ~120 param entries.
 7. **Registry: `param_id_to_index(effect_type, id) → Option<usize>`.** Used by every addressing site to translate IDs to internal storage indices. Cached `AHashMap` per effect type, built lazily.
 8. **Migrate `ParameterDriver`: `param_index: i32` → `param_id: ParamId`.** Custom Deserialize accepts both old and new shapes. Tests against a synthesized old-format JSON.
 9. **Migrate `ParamEnvelope`: same pattern.**
@@ -808,7 +808,7 @@ This is the largest and most invasive phase. It touches data model, serializatio
 14. **Bump `projectVersion` and add `migrate_v110_to_v120`** in `manifold-io/src/migrate.rs`. Pre-deserialization JSON normalization.
 15. **Replace hardcoded `align_to_definition` per-effect remaps** with declarative `legacy_param_aliases: &[(old_id, new_id)]` per effect. WireframeDepth's 14→12 becomes data, not code.
 16. **Migrate UI command structs**: `ChangeEffectParamCommand`, `PanelAction::Effect*`, `EffectCardConfig::params`. The UI carries `ParamId` from the click site to the content thread.
-17. **Generic `apply_param_bindings` shim** in `manifold-renderer`. Migrated effects use it. Retrofit `MirrorFX`, `SoftFocusGraphFX`, `StylizedFeedbackFX` to use it instead of their hand-rolled routing.
+17. **Generic `apply_param_bindings` shim** in `manifold-nodes`. Migrated effects use it. Retrofit `MirrorFX`, `SoftFocusGraphFX`, `StylizedFeedbackFX` to use it instead of their hand-rolled routing.
 
 **Gates to Phase 3:**
 - Both project file fixtures (`Burn V5`, `Burn V4`) round-trip cleanly under new format.

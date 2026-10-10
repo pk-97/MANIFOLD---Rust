@@ -42,7 +42,7 @@ transmission/diffuse-transmission/volume/attenuation ≈ 16 · sheen ≈ 5 · ir
 - **E5 — Anisotropy.** Tangent-space GGX stretch. **Tangent question RESOLVED (2026-07-16 pre-execution audit):** imported meshes carry NO tangent attribute — `MeshVertex` (`generators/mesh_common.rs`) is a fixed 48-byte position/normal/uv layout with a size assert and a `MESH_VERTEX_SPECS` channel signature; normal mapping instead reconstructs a cotangent frame in-shader from screen-space derivatives (`render_scene.wgsl`, D3/F-P2). **Decision: E5 reuses that cotangent frame as the anisotropy tangent basis**, rotated by `anisotropyRotation` + the anisotropy texture per spec. Do NOT import glTF `TANGENT` attributes or grow `MeshVertex` in this phase — that is a vertex-layout project rippling through every mesh atom, the channel system, and codegen (section 5 Deferred). If the numeric gate fails specifically from tangent-frame mismatch (UV seams / degenerate UVs on a Compare asset), write the finding into the Status line and stop — do not improvise a layout change overnight. Gate: `CompareAnisotropy`, `AnisotropyStrengthTest`/`RotationTest`; held-out `AnisotropyBarnLamp`. **Superseded 2026-08-01 (BUG-wfxe — gltf-tangent-import):** the vertex-layout project landed — `MeshVertex` is 64 bytes with authored `TANGENT` imported end-to-end; anisotropy and normal mapping now use the authored frame when present, the cotangent frame as fallback.
 - **E6 — Dispersion + texture-completion sweep + certification.** Per-channel IOR on E2's pass (dispersion defines no texture in the spec). Then the **texture-completion sweep** (D1 revised): audit every already-shipped family for factor-only gaps and close them — known candidates at authoring time: `clearcoatTexture`/`clearcoatRoughnessTexture`/`clearcoatNormalTexture` (G-P5 landed factors-only), `specularTexture`/`specularColorTexture`, `transmissionTexture` if E2 landed factor-only, volume `thicknessTexture`; re-derive the actual list by diffing `gltf_load.rs`'s `has_*_texture` detection flags against what the shader samples. Then the multi-extension showcases (`ToyCar`, `ABeautifulGame`, `SunglassesKhronos`, …) certified, manifest re-classified, `scripts/gen_glb_conformance_status.py` regenerated, and the final pass/xfail arithmetic written into the status doc. Any showcase still failing gets a named xfail reason or a BUG entry — zero unclassified, same bar as G-P7.
 
-Each phase: clippy scoped per CLAUDE.md; GPU suite (`cargo test -p manifold-renderer --features gpu-proofs`, render_scene-scoped) because every one touches the shader; landing batches 2–3 phases per GIT_TREE_DISCIPLINE section 2c; every landing reruns the status generator and updates this doc's Status line.
+Each phase: clippy scoped per CLAUDE.md; GPU suite (`cargo test -p manifold-nodes --features gpu-proofs`, render_scene-scoped) because every one touches the shader; landing batches 2–3 phases per GIT_TREE_DISCIPLINE section 2c; every landing reruns the status generator and updates this doc's Status line.
 
 ## 4. Decided — do not reopen
 1. One shader, additive zero-default lobes; no advanced-PBR fork (D1).
@@ -96,12 +96,25 @@ dated E1–E6 record above describes the original implementation.
   min/mag filters and explicit no-mip/nearest-mip/linear-mip choices travel with
   each texture family. Extension maps use manual sampling to stay within Metal's
   sampler limit. Sets above UV1 produce an import warning and use UV0.
+- Base and clearcoat roughness are bounded after texture multiplication. GGX
+  evaluation preserves the finite narrow lobe at minimum supported roughness;
+  anisotropic normalization has no absolute denominator floor that flattens
+  valid sharp highlights. Inactive clearcoat does not evaluate its direct lobe.
+- Texture sources decode only their selected image on two reusable CPU workers.
+  Identical live decodes share immutable pixels after resolving and hashing the
+  source bytes; each new request observes edited or missing dependencies.
+  Queue saturation remains pending without blocking the content thread.
+  Import dimensions and runtime pixels use the same WebP source selection.
+  Grayscale-alpha images preserve luminance in RGB and the authored alpha.
 - Specular weight controls F0 and F90. The diffuse energy split uses the largest
   Fresnel component. Clearcoat applies its Fresnel once and uses the geometric
   normal unless a coat map is present. Iridescence uses each direct light's V·H;
   its view reflectance is converted to the equivalent input for split-sum IBL.
 - Anisotropy uses `alphaT = mix(roughness², 1, strength²)` and
-  `alphaB = roughness²`. Its tangent frame follows the authored mesh tangent,
+  `alphaB = roughness²`. Base direct lighting uses height-correlated Smith
+  visibility in both the isotropic and anisotropic cases, preserving continuity
+  at zero strength. Clearcoat retains its separate geometry approximation.
+  The anisotropy tangent frame follows the authored mesh tangent,
   with the normal texture's coordinates used for derivative reconstruction
   when authored tangents are absent. Environment anisotropy remains a bent-normal
   approximation.
@@ -114,13 +127,17 @@ dated E1–E6 record above describes the original implementation.
   already drawn behind it. Opaque-depth RT lighting never substitutes into a
   transparent surface at a different depth. Refraction still uses screen-space
   projection and object-level sorting; this does not provide arbitrary nested
-  dielectric transport.
+  dielectric transport. Authored volume thickness includes both object scale
+  and the absolute per-instance scale for refraction and absorption.
+  Geometry-derived thickness is already in world units and is not scaled again.
 - Raster and RT transform normals by the inverse transpose; tangents use the
   model's linear transform and determinant handedness. RT base colour and MR
   samples multiply factors; secondary hits use normal mapping, specular weight
   and colour maps, and the material's dielectric F0/F90. Metals suppress diffuse
   energy; unlit hits terminate with their colour and emission. Primary reflection
   rays use anisotropic GGX with the actual hit instance's tangent frame.
+  A clearcoat-only normal map reconstructs its frame from that map's selected
+  UV set and transform when mesh tangents are absent.
 - `MeshVertex` is now 80 bytes: position/normal, UV0/UV1, tangent and RGBA
   `COLOR_0`. Missing colours are white. Interpolation and deformation preserve
   colour; base colour and cutout alpha multiply it. Mesh decode caches use a new

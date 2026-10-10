@@ -382,7 +382,7 @@ mod tests {
     /// Two sub-regions built inside one `begin_region`/`end_region` bracket (the
     /// only sanctioned way to mint root-parented nodes — `UI_CLIP_AND_Z_OWNERSHIP_DESIGN.md`
     /// D1/D4, enforced by `UITree::mint`'s debug assertion for any non-`manifold-ui`
-    /// dependent, which `manifold-renderer`'s own test binary is). Returns the tree,
+    /// dependent, which `manifold-nodes`'s own test binary is). Returns the tree,
     /// the sub-region partition, and the panel's own `node_start` (the index right
     /// after the region's container node) — subs and node indices are computed
     /// relative to it so they stay correct regardless of the region root's index.

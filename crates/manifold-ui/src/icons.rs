@@ -13,7 +13,7 @@ const PUA_BASE: u32 = 0xE000;
 
 /// One glyph in the renderer's icon atlas. The discriminant is the atlas id and
 /// the PUA offset; declaration order is the atlas injection order in
-/// `manifold-renderer`'s `native_text::generate_atlas_icons`.
+/// `manifold-nodes`'s `native_text::generate_atlas_icons`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 #[repr(u8)]
 pub enum Icon {
@@ -106,6 +106,7 @@ pub fn layer_badge(layer_type: crate::types::LayerType) -> Icon {
         LayerType::Group => Icon::LayerGroup,
         LayerType::Audio => Icon::LayerAudio,
         LayerType::Dmx => Icon::LayerLed,
+        LayerType::Trigger => Icon::WaveSquare,
     }
 }
 

@@ -212,10 +212,10 @@ lazy-output shape; `encoder.rs:721-804` end-to-end.
   `ensure_msaa_targets` ONLY when the output is wired this frame.
 - `shared/depth.wgsl` linearize helper + Rust twin + I3 unit test.
 - `gpu_proofs::gbuffer_depth_conformance` (I2) + I1 descriptor test.
-**Gate:** `cargo test -p manifold-renderer --features gpu-proofs
+**Gate:** `cargo test -p manifold-nodes --features gpu-proofs
 gbuffer_depth` green; full render_scene gpu_proofs suite green UNMODIFIED;
-`cargo nextest run -p manifold-renderer --lib` + `-p manifold-gpu`; clippy
-`-p manifold-gpu -p manifold-renderer`. Negative: I4 rg gate.
+`cargo nextest run -p manifold-nodes --lib` + `-p manifold-gpu`; clippy
+`-p manifold-gpu -p manifold-nodes`. Negative: I4 rg gate.
 **Demo:** none — L1 (Peter, 2026-07-12: no PNG artifacts anywhere in this
 cluster; the I2 conformance readback is the acceptance).
 **Performer gesture:** none this phase (infrastructure) — the gesture ships

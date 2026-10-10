@@ -137,10 +137,10 @@ impl ActiveTimelineClipWindow {
             self.indexed_layer_clip_counts.push(layer.clips.len());
         }
 
-        // Collect all clips from non-group layers, stamping layer_id for sort
+        // Collect media clips only, stamping the container layer_id for sort.
         self.clips_by_start.clear();
         for layer in layers {
-            if layer.is_group() {
+            if !layer.layer_type.supports_clip_playback() {
                 continue;
             }
             for clip in &layer.clips {
@@ -288,7 +288,7 @@ impl ActiveTimelineClipWindow {
         }
 
         // Check if any layer is solo'd
-        let any_solo = layers.iter().any(|l| l.is_solo);
+        let any_solo = layers.iter().any(|l| !l.is_trigger() && l.is_solo);
 
         // Build id → index map
         self.layer_id_to_index.clear();
@@ -300,7 +300,7 @@ impl ActiveTimelineClipWindow {
 
         for i in 0..layer_count {
             let layer = &layers[i];
-            let mut visible = !layer.is_group() && !layer.is_muted;
+            let mut visible = layer.layer_type.supports_clip_playback() && !layer.is_muted;
 
             if visible {
                 if let Some(parent_id) = &layer.parent_layer_id {
@@ -480,6 +480,20 @@ mod tests {
     }
 
     // ── Tests ─────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn trigger_lane_is_not_media_and_its_solo_does_not_hide_media() {
+        let video = make_video_layer(0, vec![make_clip("video", 0, 0.0, 4.0)]);
+        let mut trigger = Layer::new_trigger("Hits".into(), video.layer_id.clone(), 1);
+        trigger.is_solo = true;
+        trigger.clips.push(make_clip("trigger", 1, 0.0, 4.0));
+        let project = make_project(vec![video, trigger]);
+        let mut window = ActiveTimelineClipWindow::new();
+        let mut results = Vec::new();
+        window.get_active_clips(&project, Beats(1.0), &mut results);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].id.as_str(), "video");
+    }
 
     #[test]
     fn test_basic_forward_advance() {

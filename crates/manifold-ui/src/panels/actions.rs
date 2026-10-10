@@ -247,6 +247,8 @@ pub enum ProjectAction {
     /// generator-assignment path the picker's `SetGenType` already uses
     /// (section 1 VERIFY marker, resolved: `PanelAction::SetGenType`).
     SceneSetupNewScene(LayerId),
+    /// Restore standard camera dependencies through one undoable content edit.
+    SceneSetupPrepareCamera(LayerId),
     /// P2 "+ Object" button: `(layer_id, render_scene_node_doc_id,
     /// next_index)`. Dispatches the EXISTING `AddSceneObjectCommand`
     /// (SCENE_BUILD P5) — no new mutation path.
@@ -682,6 +684,15 @@ pub enum ParamsAction {
     /// Open the searchable automation parameter chooser. `None` means the
     /// current inspector layer; `Some` is a layer-context invocation.
     OpenAutomationChooser(Option<LayerId>),
+    /// Both trigger assignment surfaces carry stable addresses captured at open.
+    OpenClipTriggerSource(crate::view::UiGraphTarget, ParamId),
+    OpenTriggerTargets(LayerId),
+    ShowClipTriggerResponse(crate::view::UiGraphTarget, ParamId),
+    AssignClipTriggerSource(crate::view::UiGraphTarget, ParamId, crate::view::UiClipTriggerSource),
+    CreateTriggerLane {
+        owner: LayerId,
+        assignment: Option<(crate::view::UiGraphTarget, ParamId)>,
+    },
     /// Remove all arrangement automation for this parameter, with undo.
     ClearAutomation(GraphParamTarget, ParamId),
     MacroReset(usize), // macro_idx — reset to 0 from context menu

@@ -246,10 +246,10 @@ impl Command for SaveToProjectCommand {
 /// clearing it — reverting to nothing (a card with no params, D9's
 /// "not-representable state") is worse than staying diverged. The
 /// resolution check itself happens OUTSIDE this crate: `manifold-editing`
-/// cannot depend on `manifold-renderer` (the JSON catalog's home) without
+/// cannot depend on `manifold-nodes` (the JSON catalog's home) without
 /// creating a dependency cycle — `manifold-playback` already depends on
-/// `manifold-editing`, and `manifold-renderer` depends on
-/// `manifold-playback`, so `manifold-editing -> manifold-renderer` would
+/// `manifold-editing`, and `manifold-nodes` depends on
+/// `manifold-playback`, so `manifold-editing -> manifold-nodes` would
 /// close the loop. The caller (the UI/app layer, which has renderer access)
 /// resolves "does this id still exist" once, at the moment the user clicks
 /// Revert, and bakes the answer into `resolves_in_catalog` — exactly the

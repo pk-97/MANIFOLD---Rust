@@ -1983,11 +1983,10 @@ mod automation_clipboard_host_tests {
         );
         let layer_id = h.project.timeline.layers[index].layer_id.clone();
         h.project.timeline.layers[index].gen_params_or_init();
-        let default = manifold_renderer::node_graph::bundled_preset_def(
+        let default = manifold_nodes::bundled_presets::bundled_preset_def(
             &PresetTypeId::new("WaterDamBreakGpuFlip"),
         )
-        .expect("Water preset")
-        .clone();
+        .expect("Water preset").as_ref().clone();
         h.selection.select_layer(layer_id.clone());
         h.ui_root.scene_setup_panel.open();
         crate::ui_bridge::sync_inspector_data(
@@ -2197,9 +2196,8 @@ mod automation_clipboard_host_tests {
         let mut layer = Layer::new_generator("Scene".into(), PresetTypeId::new("Scene"), 0);
         let layer_id = LayerId::new("modifier-shortcut-layer");
         layer.layer_id = layer_id.clone();
-        let graph = manifold_renderer::node_graph::bundled_preset_def(&PresetTypeId::new("Scene"))
-            .expect("Scene fixture")
-            .clone();
+        let graph = manifold_nodes::bundled_presets::bundled_preset_def(&PresetTypeId::new("Scene"))
+            .expect("Scene fixture").as_ref().clone();
         layer.gen_params_or_init().graph = Some(graph);
         layer.gen_params_or_init().refresh_manifest_from_graph();
         h.project.timeline.layers.push(layer);
@@ -2219,11 +2217,10 @@ mod automation_clipboard_host_tests {
         );
         let destination_id = LayerId::new("modifier-shortcut-destination");
         destination.layer_id = destination_id.clone();
-        let destination_graph = manifold_renderer::node_graph::bundled_preset_def(
+        let destination_graph = manifold_nodes::bundled_presets::bundled_preset_def(
             &PresetTypeId::new("Scene"),
         )
-        .expect("Scene destination fixture")
-        .clone();
+        .expect("Scene destination fixture").as_ref().clone();
         destination.gen_params_or_init().graph = Some(destination_graph);
         destination.gen_params_or_init().refresh_manifest_from_graph();
         h.project.timeline.layers.push(destination);
@@ -2292,8 +2289,8 @@ mod automation_clipboard_host_tests {
         let mut layer = Layer::new_generator("Scene".into(), PresetTypeId::new("Scene"), 0);
         let layer_id = LayerId::new("modifier-cut-layer");
         layer.layer_id = layer_id.clone();
-        let graph = manifold_renderer::node_graph::bundled_preset_def(&PresetTypeId::new("Scene"))
-            .expect("Scene fixture").clone();
+        let graph = manifold_nodes::bundled_presets::bundled_preset_def(&PresetTypeId::new("Scene"))
+            .expect("Scene fixture").as_ref().clone();
         layer.gen_params_or_init().graph = Some(graph);
         layer.gen_params_or_init().refresh_manifest_from_graph();
         h.project.timeline.layers.push(layer);
@@ -2385,9 +2382,8 @@ mod automation_clipboard_host_tests {
         );
         let gen_layer_id = LayerId::new("supersede-gen");
         gen_layer.layer_id = gen_layer_id.clone();
-        let graph = manifold_renderer::node_graph::bundled_preset_def(&PresetTypeId::new("Scene"))
-            .expect("Scene fixture")
-            .clone();
+        let graph = manifold_nodes::bundled_presets::bundled_preset_def(&PresetTypeId::new("Scene"))
+            .expect("Scene fixture").as_ref().clone();
         gen_layer.gen_params_or_init().graph = Some(graph);
         gen_layer.gen_params_or_init().refresh_manifest_from_graph();
         h.project.timeline.layers.push(gen_layer);
@@ -2630,7 +2626,7 @@ mod automation_clipboard_host_tests {
         let mut h = Harness::new();
         let mut layer = Layer::new_generator("Scene".into(), PresetTypeId::new("Scene"), 0);
         let layer_id = layer.layer_id.clone();
-        layer.gen_params_or_init().graph = Some(manifold_renderer::node_graph::bundled_preset_def(&PresetTypeId::new("Scene")).unwrap().clone());
+        layer.gen_params_or_init().graph = Some(manifold_nodes::bundled_presets::bundled_preset_def(&PresetTypeId::new("Scene")).unwrap().as_ref().clone());
         layer.gen_params_or_init().refresh_manifest_from_graph();
         h.project.timeline.layers.push(layer);
         h.selection.select_layer(layer_id.clone());

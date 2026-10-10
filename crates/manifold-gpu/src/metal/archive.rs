@@ -83,11 +83,6 @@ impl GpuPipelineArchive {
         self.added_hashes.contains(&hash)
     }
 
-    /// Whether the archive was modified and needs saving.
-    pub fn is_dirty(&self) -> bool {
-        self.dirty
-    }
-
     /// Serialize the archive to disk (if loaded and modified).
     pub fn save(&mut self) {
         if !self.dirty {

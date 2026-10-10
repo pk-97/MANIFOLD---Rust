@@ -1,5 +1,5 @@
 pub mod backend;
-pub mod bound_graph;
+manifold_core::testkit_visible! { pub(crate) mod bound_graph; }
 pub mod effect_node;
 pub mod execution;
 pub mod execution_plan;

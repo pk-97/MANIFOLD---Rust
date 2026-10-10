@@ -1156,16 +1156,16 @@ impl<P: Primitive + 'static> EffectNode for P {
     fn carries_resources(&self) -> bool {
         Primitive::carries_resources(self)
     }
-    fn wgsl_body(&self) -> Option<&'static str> {
+    fn wgsl_body(&self) -> Option<&str> {
         P::WGSL_BODY
     }
-    fn input_access(&self) -> &'static [crate::freeze::classify::InputAccess] {
+    fn input_access(&self) -> &[crate::freeze::classify::InputAccess] {
         P::INPUT_ACCESS
     }
     fn fused_output_capacity(&self) -> crate::freeze::classify::FusedOutputCapacity {
         P::FUSED_OUTPUT_CAPACITY
     }
-    fn precision_critical_inputs(&self) -> &'static [&'static str] {
+    fn precision_critical_inputs(&self) -> &[&str] {
         P::PRECISION_CRITICAL_INPUTS
     }
     fn stencil_fetch(&self) -> bool {

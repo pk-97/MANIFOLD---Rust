@@ -5,6 +5,7 @@ Cargo, renderer execution and GPU holds are mocked. No simulated pass is ever
 written in the real repository's common directory.
 """
 import contextlib
+import hashlib
 import importlib.util
 import io
 import json
@@ -26,11 +27,76 @@ import landing_gate as landing
 import land_branch
 
 
+class FixtureQueries:
+    """Memoize Git/metadata queries over byte-identical disposable fixtures.
+
+    Production snapshots and every validation boundary still execute. Rescan
+    bytes (not mtimes) and modes on every query, including ignored fixtures and
+    shared refs/indexes, so mid-run edits and worktree changes remain observable.
+    Only Git's immutable objects, reflogs, receipts and ignored gate output are
+    omitted. This cache never escapes one test or handles a Git mutation.
+    """
+    def __init__(self, common, execute):
+        self.common, self.execute = common, execute
+        self.results = {}
+        self.execute_run = subprocess.run
+        self.metadata = {}
+
+    @staticmethod
+    def tree(root, excluded):
+        digest = hashlib.sha256()
+        def scan(directory, prefix=''):
+            with os.scandir(directory) as entries:
+                entries = sorted(entries, key=lambda entry: entry.name)
+            for entry in entries:
+                rel = prefix + entry.name
+                if rel in excluded:
+                    continue
+                if entry.is_dir(follow_symlinks=False):
+                    scan(entry.path, rel + '/')
+                    continue
+                mode = entry.stat(follow_symlinks=False).st_mode
+                if entry.is_symlink():
+                    content = os.readlink(entry.path).encode()
+                else:
+                    with open(entry.path, 'rb') as stream:
+                        content = stream.read()
+                digest.update(repr((rel, mode, len(content))).encode())
+                digest.update(content)
+        scan(root)
+        return digest.digest()
+
+    def __call__(self, repo, *args):
+        if args[0] not in {'rev-parse', 'ls-tree', 'ls-files', 'diff', 'merge-base'}:
+            raise AssertionError(f'fixture cache cannot run mutations: {args}')
+        working_tree = (self.tree(repo, {'.git', 'target', '.claude/orchestration'})
+                        if args[0] == 'diff' or '--others' in args else None)
+        key = (str(repo), args, working_tree,
+               self.tree(self.common, {'objects', 'logs', 'gate-passes-v1'}))
+        if key not in self.results:
+            self.results[key] = self.execute(repo, *args)
+        return self.results[key]
+
+    def run(self, command, *args, **kwargs):
+        if command[:2] != ['cargo', 'metadata']:
+            return self.execute_run(command, *args, **kwargs)
+        repo = Path(command[command.index('--manifest-path') + 1]).parent
+        key = (tuple(command),
+               self.tree(repo, {'.git', 'target', '.claude/orchestration'}),
+               tuple(sorted(kwargs.get('env', os.environ).items())))
+        if key not in self.metadata:
+            self.metadata[key] = self.execute_run(command, *args, **kwargs)
+        return self.metadata[key]
+
+
 class CacheTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.repo = Path(self.temp.name).resolve()
+        # This disposable workspace tests cache behavior, with its own smoke
+        # selection; real repository proof ownership is covered by gpu_scope.
+        self.enterContext(patch.object(gpu_scope, 'SMOKE_FILTERS', ['fixture_smoke::']))
         self.enterContext(patch.object(gpu_scope, 'learned_times_path',
                                        return_value=self.repo / '.git/gpu-test-times.json'))
         self.git('init', '-b', 'main')
@@ -38,19 +104,24 @@ class CacheTests(unittest.TestCase):
         self.git('config', 'user.name', 'Cache test')
         self.write('Cargo.toml', '[workspace]\nmembers = ["crates/*"]\n')
         self.write('Cargo.lock', 'version = 4\n')
-        self.write('.gitignore', 'target/\n.claude/orchestration/\ntests/fixtures/ignored.bin\n')
+        self.write('deny.toml', '[bans]\ndeny = [\n'
+                   '  { name = "manifold-nodes", wrappers = ["manifold-nodes"] },\n'
+                   '  { name = "manifold-node-engine", wrappers = ["manifold-nodes"] },\n'
+                   '  { name = "manifold-ui-paint", wrappers = ["manifold-ui-paint"] },\n'
+                   ']\n')
+        self.write('.gitignore', 'target/\n__pycache__/\n.claude/orchestration/\ntests/fixtures/ignored.bin\n')
         self.write('scripts/ui-flows/manifest.json', '{"flows": {}, "path_triggers": {}}')
         self.write('scripts/codex_regressions.json', '{}\n')
         packages = [('base', ''), ('a', '[dependencies]\nbase = {path="../base"}\n'),
-                    ('b', ''), ('manifold-renderer', '[dependencies]\nbase = {path="../base"}\n'
+                    ('b', ''), ('manifold-nodes', '[dependencies]\nbase = {path="../base"}\n'
                      'manifold-node-engine = {path="../manifold-node-engine"}\n'),
                     ('manifold-node-engine', '[dependencies]\nbase = {path="../base"}\n'),
                     ('manifold-ui-paint', '[dependencies]\na = {path="../a"}\n')]
-        gpu_packages = {'manifold-renderer', 'manifold-node-engine', 'manifold-ui-paint'}
+        gpu_packages = {'manifold-nodes', 'manifold-node-engine', 'manifold-ui-paint'}
         for name, deps in packages:
             features = '[features]\ngpu-proofs = []\n' if name in gpu_packages else ''
             targets = ''
-            if name == 'manifold-renderer':
+            if name == 'manifold-nodes':
                 targets = ('\n[[test]]\nname = "gpu_proofs"\npath = "tests/gpu_proofs.rs"\n'
                            'required-features = ["gpu-proofs"]\n'
                            '\n[[test]]\nname = "glb_conformance"\npath = "tests/glb_conformance.rs"\n'
@@ -60,7 +131,7 @@ class CacheTests(unittest.TestCase):
             self.write(f'crates/{name}/Cargo.toml',
                        f'[package]\nname = "{name}"\nversion = "0.1.0"\n{deps}{features}{targets}')
             self.write(f'crates/{name}/src/lib.rs', 'pub fn original() {}\n')
-            if name == 'manifold-renderer':
+            if name == 'manifold-nodes':
                 self.write(f'crates/{name}/tests/gpu_proofs.rs', '')
                 self.write(f'crates/{name}/tests/glb_conformance.rs', '')
                 self.write(f'crates/{name}/tests/uniform_layout_proof.rs', '')
@@ -70,8 +141,12 @@ class CacheTests(unittest.TestCase):
         self.git('checkout', '-b', 'work')
         self.write('crates/a/src/lib.rs', 'pub fn changed() {}\n')
         self.write('crates/b/src/lib.rs', 'pub fn changed() {}\n')
-        self.write('crates/manifold-renderer/src/node_graph/primitives/invert.rs', 'pub fn invert() {}\n')
+        self.write('crates/manifold-nodes/src/registry.rs', 'pub fn invert() {}\n')
         self.commit('BUG-cache branch change')
+        self.real_cache_git = cache.git
+        self.fixture_git = FixtureQueries(self.repo / '.git', cache.git)
+        self.enterContext(patch.object(cache, 'git', self.fixture_git))
+        self.enterContext(patch.object(subprocess, 'run', self.fixture_git.run))
         self.real_host_inputs = cache.host_inputs
         self.host = patch.object(cache, 'host_inputs', return_value={'host': 'cpu-test'})
         self.host.start()
@@ -99,14 +174,45 @@ class CacheTests(unittest.TestCase):
         return cache.command_pass(self.repo, 'clippy/' + name,
                                   ['cargo', 'clippy', '-p', name, '--tests', '--', '-D', 'warnings'])
 
+    def test_fixture_git_cache_observes_bytes_modes_refs_and_ignored_files(self):
+        commands = [('ls-tree', '-r', '-z', 'HEAD'),
+                    ('diff', '--name-only', '-z', 'HEAD'),
+                    ('ls-files', '--others', '--exclude-standard', '-z'),
+                    ('ls-files', '--others', '--ignored', '--exclude-standard', '-z', '--', 'tests'),
+                    ('rev-parse', 'origin/main^{tree}')]
+
+        def compare():
+            for args in commands:
+                self.assertEqual(cache.git(self.repo, *args), self.real_cache_git(self.repo, *args))
+
+        with patch.object(self.fixture_git, 'execute', wraps=self.real_cache_git) as execute:
+            compare()
+            execute.reset_mock()
+            compare()
+            execute.assert_not_called()
+            source = self.repo / 'crates/a/src/lib.rs'
+            stat = source.stat()
+            source.write_bytes(source.read_bytes().replace(b'changed', b'altered'))
+            os.utime(source, ns=(stat.st_atime_ns, stat.st_mtime_ns))
+            compare()
+            self.assertTrue(execute.called, 'equal-sized edits with restored mtimes must invalidate')
+            source.chmod(0o755)
+            self.write('tests/fixtures/ignored.bin', 'ignored input')
+            compare()
+            self.commit('new fixture tree')
+            self.git('branch', '-f', 'origin/main', 'HEAD')
+            compare()
+            source.unlink()
+            compare()
+
     def run_spec(self):
         runs = self.scoped_runs()
-        return next(run for run in runs if run['package'] == 'manifold-renderer')
+        return next(run for run in runs if run['package'] == 'manifold-nodes')
 
     def scoped_runs(self):
         workspace = cache.Workspace(self.repo)
         plan = gpu_scope.plan_for_paths(
-            ['crates/manifold-renderer/src/node_graph/primitives/invert.rs'], self.repo,
+            ['crates/manifold-nodes/src/registry.rs'], self.repo,
             workspace=workspace)
         return proofs.normalize_runs(workspace, [dict(run, full=False) for run in plan.runs()])
 
@@ -167,6 +273,181 @@ class CacheTests(unittest.TestCase):
                                        self.repo, 30)
         self.assertEqual(result[0], proofs.INPUTS_CHANGED)
         self.assertFalse(landing.RAN_EVERY_CHECK.get())
+
+    def test_moving_main_during_design_check_keeps_pinned_diff_identity(self):
+        original = cache.command_pass
+        seen = []
+
+        def moving_main(repo, label, cmd):
+            passed = original(repo, label, cmd)
+            if label == 'design-status':
+                seen.append(cmd[-2])
+                # Only the remote-tracking ref changes, not branch inputs.
+                self.git('branch', '-f', 'origin/main', 'HEAD')
+                self.assertTrue(passed.unchanged())
+            return passed
+
+        base = self.git('merge-base', 'origin/main', 'HEAD')
+        with patch.object(cache, 'command_pass', side_effect=moving_main):
+            self.assertEqual(self.run_landing()[0], 0)
+        self.assertEqual(seen, [base])
+
+    def test_pinned_flow_merge_base_ignores_remote_ref_movement(self):
+        base = self.git('merge-base', 'origin/main', 'HEAD')
+        cmd = ['python3', 'scripts/run_ui_flows.py', '--touched', f'{base}...HEAD']
+        passed = cache.command_pass(self.repo, 'flow-gate', cmd)
+        self.git('branch', '-f', 'origin/main', 'HEAD')
+        self.assertIsNot(passed.save(0), False)
+        self.assertTrue(cache.command_pass(self.repo, 'flow-gate', cmd).reused())
+
+    def test_flow_receipt_reuses_across_metadata_only_main_merge(self):
+        self.write('scripts/ui-flows/manifest.json',
+                   '{"flows":{"a-flow":"scene"},'
+                   '"path_triggers":{"crates/a/":["a-flow"]}}')
+        self.write('scripts/ui-flows/a-flow.json', '[]')
+        self.commit('flow fixture')
+        base = self.git('merge-base', 'origin/main', 'HEAD')
+        cmd = ['python3', 'scripts/run_ui_flows.py', '--touched', f'{base}...HEAD']
+        passed = cache.command_pass(self.repo, 'flow-gate', cmd)
+        passed.save(0)
+
+        self.git('checkout', 'main')
+        self.write('.beads/metadata.json', '{"updated":true}\n')
+        self.commit('metadata only main merge')
+        self.git('branch', '-f', 'origin/main', 'main')
+        self.git('checkout', 'work')
+        self.git('merge', 'origin/main', '--no-edit')
+
+        merged_base = self.git('merge-base', 'origin/main', 'HEAD')
+        merged = ['python3', 'scripts/run_ui_flows.py', '--touched',
+                  f'{merged_base}...HEAD']
+        self.assertTrue(cache.command_pass(self.repo, 'flow-gate', merged).reused())
+
+    def test_flow_receipt_invalidates_selected_content_and_filter_selection(self):
+        self.write('scripts/ui-flows/manifest.json',
+                   '{"flows":{"a-flow":"scene"},'
+                   '"path_triggers":{"crates/a/":["a-flow"]}}')
+        self.write('scripts/ui-flows/a-flow.json', '[]')
+        self.commit('flow fixture')
+        base = self.git('merge-base', 'origin/main', 'HEAD')
+        cmd = ['python3', 'scripts/run_ui_flows.py', '--touched', f'{base}...HEAD']
+
+        cache.command_pass(self.repo, 'flow-gate', cmd).save(0)
+        self.write('scripts/ui-flows/a-flow.json', '[{"action":"changed"}]')
+        self.assertIsNone(cache.command_pass(self.repo, 'flow-gate', cmd).record)
+
+        cache.command_pass(self.repo, 'flow-gate', cmd).save(0)
+        self.write('crates/a/src/lib.rs', 'pub fn flow_source_changed() {}\n')
+        self.assertIsNone(cache.command_pass(self.repo, 'flow-gate', cmd).record)
+
+        cache.command_pass(self.repo, 'flow-gate', cmd).save(0)
+        self.write('tests/fixtures/ignored.bin', 'flow fixture changed')
+        self.assertIsNone(cache.command_pass(self.repo, 'flow-gate', cmd).record)
+
+        cache.command_pass(self.repo, 'flow-gate', cmd).save(0)
+        original_filters_key = cache.command_pass(self.repo, 'flow-gate', cmd).key
+        # Same source and manifest, different selection: the empty range must
+        # not reuse the a-flow receipt simply because file contents match.
+        changed_filters = cache.command_pass(
+            self.repo, 'flow-gate', [*cmd[:-1], 'HEAD...HEAD'])
+        self.assertNotEqual(changed_filters.key, original_filters_key)
+        self.assertIsNone(changed_filters.record)
+
+    def test_malformed_flow_scope_disables_reuse(self):
+        for scope in ('', 'origin/main..HEAD', 'origin/main...'):
+            with self.subTest(scope=scope):
+                passed = cache.command_pass(
+                    self.repo, 'flow-gate',
+                    ['python3', 'scripts/run_ui_flows.py', '--touched', scope])
+                self.assertIsNone(passed.key)
+
+    def test_policy_red_retains_timings_and_rechecks_without_execution(self):
+        argv = ['gpu_proofs_gate.py', '--manifest-path', str(self.repo / 'Cargo.toml'),
+                '--package', 'manifold-nodes', '--test', 'gpu_proofs', '--budget', '1']
+        table = self.repo / 'scripts/gpu_test_times.json'
+        self.write('scripts/gpu_test_times.json', '{"tests": {}}')
+
+        def measured(manifest, filters, skips, targets, full, lib, timings, *rest):
+            timings.append(('slow', 80, 'gpu_proofs', 'ok'))
+            return 0, ''
+
+        run_spec = dict(package='manifold-nodes', targets=['gpu_proofs'], lib=False,
+                        filters=[], skips=[], budgeted=True)
+        with patch.object(sys, 'argv', argv), \
+                patch.object(gpu_scope, 'TIMES_PATH', table), \
+                patch.object(proofs, 'build_tests', return_value=0) as build, \
+                patch.object(proofs, 'run_gate', side_effect=measured) as run, \
+                patch.object(gpu_queue, 'hold', side_effect=lambda *a, **k: contextlib.nullcontext()) as hold:
+            self.assertEqual(proofs.main(), 5)
+            saved = cache.proof_pass(self.repo, run_spec)
+            self.assertIsNotNone(saved.record)
+            self.assertEqual(saved.record['timings'][0]['test'], 'slow')
+            for mock in (build, run, hold):
+                mock.reset_mock()
+            self.assertEqual(proofs.main(), 5, 'reuse must not hide the policy red')
+            self.write('scripts/gpu_test_times.json',
+                       '{"tests": {"manifold-nodes/gpu_proofs/slow": 80}}')
+            self.assertEqual(proofs.main(), 0)
+            for mock in (build, run, hold):
+                mock.assert_not_called()
+            self.assertEqual(saved.key, cache.proof_pass(self.repo, run_spec).key)
+            self.write('crates/manifold-nodes/src/lib.rs', 'pub fn changed_input() {}')
+            self.assertIsNone(cache.proof_pass(self.repo, run_spec).record)
+
+    def test_failed_run_keeps_earlier_pass_and_retries_only_failure(self):
+        runs = self.scoped_runs()
+        argv = ['gpu_proofs_gate.py', '--manifest-path', str(self.repo / 'Cargo.toml'),
+                '--path', 'crates/manifold-nodes/src/registry.rs']
+        count = 0
+
+        def execute(*args):
+            nonlocal count
+            count += 1
+            if count == 2:
+                self.assertIsNotNone(cache.proof_pass(self.repo, runs[0]).record,
+                                     'first pass must be published before second run')
+                return 1, 'test result: FAILED. 0 passed; 1 failed;\n'
+            return 0, ''
+
+        with patch.object(sys, 'argv', argv), \
+                patch.object(proofs, 'build_tests', return_value=0), \
+                patch.object(proofs, 'run_gate', side_effect=execute) as run, \
+                patch.object(gpu_queue, 'hold', side_effect=lambda *a, **k: contextlib.nullcontext()):
+            self.assertNotEqual(proofs.main(), 0)
+            run.reset_mock()
+            self.assertEqual(proofs.main(), 0)
+            self.assertEqual(run.call_count, 1)
+            self.assertEqual(run.call_args.args[-4], runs[1]['package'])
+
+    def test_owned_filter_receipts_require_passing_test_evidence(self):
+        name = 'alpha_contract::effects_preserve_transparency'
+        run = dict(self.run_spec(), package='manifold-nodes', target='gpu_proofs',
+                   targets=['gpu_proofs'], lib=False, filters=[name])
+        passed = cache.proof_pass(self.repo, run)
+        for timings in (None, [], [proofs.timing_entry(
+                'manifold-nodes', 'gpu_proofs', 'unrelated', 0, 'ok', True)]):
+            passed.save(0, timings=timings)
+            self.assertIsNone(cache.proof_pass(self.repo, run).record)
+        passed.save(0, timings=[proofs.timing_entry(
+            'manifold-nodes', 'gpu_proofs', name, 0, 'ok', True)])
+        self.assertIsNotNone(cache.proof_pass(self.repo, run).record)
+
+    def test_landing_reused_proofs_still_enforce_timing_policy(self):
+        self.assertEqual(self.run_landing()[0], 0)
+        run = self.run_spec()
+        passed = cache.proof_pass(self.repo, run)
+        passed.save(0, 80)
+        record = json.loads(passed.path.read_text())
+        record['timings'] = [proofs.timing_entry(
+            run['package'], run['target'], 'missing_allowance', 80, 'ok', True)]
+        passed.path.write_text(json.dumps(record))
+        code, calls, holds, executed = self.run_landing()
+        self.assertNotEqual(code, 0)
+        self.assertEqual((calls, holds, executed), ([], 0, 0))
+        self.assertIsNotNone(cache.proof_pass(self.repo, run).record)
+        transcripts = list((self.repo / 'target/landing-logs').glob('gpu-proofs-*.log'))
+        self.assertTrue(any('GPU-PROOFS TIMING: FAIL' in log.read_text()
+                            for log in transcripts))
 
     def test_failed_execution_with_changed_inputs_is_a_gate_refusal(self):
         self.write('tests/fixtures/ignored.bin', 'before')
@@ -292,14 +573,14 @@ class CacheTests(unittest.TestCase):
             self.assertEqual(scans(), 3)
 
     def test_changed_crate_invalidates_only_its_dependency_closure(self):
-        for name in ('a', 'b', 'manifold-renderer'):
+        for name in ('a', 'b', 'manifold-nodes'):
             self.clippy(name).save(0)
         self.write('crates/a/src/lib.rs', 'pub fn newer() {}\n')
         self.assertIsNone(self.clippy('a').record)
         self.assertIsNotNone(self.clippy('b').record)
-        self.assertIsNotNone(self.clippy('manifold-renderer').record)
+        self.assertIsNotNone(self.clippy('manifold-nodes').record)
         self.write('crates/base/src/lib.rs', 'pub fn newer() {}\n')
-        self.assertIsNone(self.clippy('manifold-renderer').record)
+        self.assertIsNone(self.clippy('manifold-nodes').record)
         self.assertIsNotNone(self.clippy('b').record)
 
     def test_dependency_modes_aliases_and_target_specific_edges(self):
@@ -308,7 +589,7 @@ class CacheTests(unittest.TestCase):
         self.assertEqual(cache.dependency_paths(self.repo, ['b']), ['crates/a', 'crates/b', 'crates/base'])
 
     def test_metadata_added_and_removed_gpu_crate_updates_scope_and_cache(self):
-        renderer_path = 'crates/manifold-renderer/src/node_graph/primitives/invert.rs'
+        renderer_path = 'crates/manifold-nodes/src/registry.rs'
         initial = self.run_spec()
         cache.proof_pass(self.repo, initial).save(0)
 
@@ -317,8 +598,8 @@ class CacheTests(unittest.TestCase):
         self.write('crates/gpu-leaf/Cargo.toml', leaf_manifest)
         self.write('crates/gpu-leaf/src/lib.rs', 'pub fn leaf() {}\n')
         self.write('crates/gpu-leaf/tests/gpu_proofs.rs', '#[test]\nfn leaf_gpu() {}\n')
-        renderer_manifest = (self.repo / 'crates/manifold-renderer/Cargo.toml').read_text()
-        self.write('crates/manifold-renderer/Cargo.toml',
+        renderer_manifest = (self.repo / 'crates/manifold-nodes/Cargo.toml').read_text()
+        self.write('crates/manifold-nodes/Cargo.toml',
                    renderer_manifest.replace(
                        'manifold-node-engine = {path="../manifold-node-engine"}\n',
                        'manifold-node-engine = {path="../manifold-node-engine"}\n'
@@ -337,14 +618,14 @@ class CacheTests(unittest.TestCase):
                           'adding a local dependency must invalidate the existing proof')
 
         refreshed = next(run for run in self.scoped_runs()
-                         if run['package'] == 'manifold-renderer')
+                         if run['package'] == 'manifold-nodes')
         cache.proof_pass(self.repo, refreshed).save(0)
         self.write('crates/gpu-leaf/src/lib.rs', 'pub fn revised_leaf() {}\n')
         self.assertIsNone(cache.proof_pass(self.repo, refreshed).record,
                           'a changed dependency must invalidate its dependent proof')
 
-        renderer_manifest = (self.repo / 'crates/manifold-renderer/Cargo.toml').read_text()
-        self.write('crates/manifold-renderer/Cargo.toml',
+        renderer_manifest = (self.repo / 'crates/manifold-nodes/Cargo.toml').read_text()
+        self.write('crates/manifold-nodes/Cargo.toml',
                    renderer_manifest.replace('gpu-leaf = {path="../gpu-leaf"}\n', ''))
         shutil.rmtree(self.repo / 'crates/gpu-leaf')
         workspace = cache.Workspace(self.repo)
@@ -420,11 +701,11 @@ class CacheTests(unittest.TestCase):
 
     def test_queue_and_gate_share_exact_proof_key(self):
         for run in gpu_scope.plan_for_paths(
-                ['crates/manifold-renderer/src/node_graph/primitives/invert.rs'], self.repo).runs():
-            with self.subTest(package=run.get('package', 'manifold-renderer')):
+                ['crates/manifold-nodes/src/registry.rs'], self.repo).runs():
+            with self.subTest(package=run.get('package', 'manifold-nodes')):
                 command = proofs.cargo_test_cmd(
                     self.repo / 'Cargo.toml', run['targets'], lib=run['lib'],
-                    package=run.get('package', 'manifold-renderer'))
+                    package=run.get('package', 'manifold-nodes'))
                 command += ['--', '--test-threads=1', *run['filters']]
                 command += [a for skip in run['skips'] for a in ('--skip', skip)]
                 before = cache.queued_proof(command, self.repo)
@@ -481,7 +762,7 @@ class CacheTests(unittest.TestCase):
     def test_actual_standalone_wrapper_and_queue_save_for_landing(self):
         run = self.run_spec()
         argv = ['gpu_proofs_gate.py', '--manifest-path', str(self.repo / 'Cargo.toml'),
-                '--path', 'crates/manifold-renderer/src/node_graph/primitives/invert.rs']
+                '--path', 'crates/manifold-nodes/src/registry.rs']
         with patch.object(sys, 'argv', argv), \
                 patch.object(proofs, 'build_tests', return_value=0), \
                 patch.object(proofs, 'run_gate', return_value=(0, '')) as executed, \
@@ -515,7 +796,7 @@ class CacheTests(unittest.TestCase):
         self.assertTrue(cache.proof_pass(self.repo, run).reused())
 
     def test_two_package_standalone_reuse_and_input_invalidation(self):
-        path = 'crates/manifold-renderer/src/node_graph/primitives/invert.rs'
+        path = 'crates/manifold-nodes/src/registry.rs'
         runs = self.scoped_runs()
         argv = ['gpu_proofs_gate.py', '--manifest-path', str(self.repo / 'Cargo.toml'),
                 '--path', path]
@@ -542,7 +823,7 @@ class CacheTests(unittest.TestCase):
 
             # Renderer-only edits keep the engine pass. Engine edits also
             # invalidate renderer, which depends on the engine in production.
-            renderer_only = ['manifold-renderer']
+            renderer_only = ['manifold-nodes']
             engine_owners = {'manifold-node-engine',
                              *cache.Workspace(self.repo).reverse_dependencies(
                                  ['manifold-node-engine'])}
@@ -551,13 +832,13 @@ class CacheTests(unittest.TestCase):
                                       ('crates/manifold-node-engine/src/lib.rs', engine_change)]:
                 with self.subTest(changed=changed):
                     self.write(changed, 'pub fn revised() {}\n')
-                    stale = sorted({run.get('package', 'manifold-renderer') for run in runs
+                    stale = sorted({run.get('package', 'manifold-nodes') for run in runs
                                     if not cache.proof_pass(self.repo, run).record})
                     self.assertEqual(stale, expected)
                     self.assertEqual(proofs.main(), 0)
                     self.assertEqual(self.call_packages(executed.call_args_list), expected)
                     built = build.call_args.args[1]
-                    self.assertEqual(sorted({r.get('package', 'manifold-renderer') for r in built}), expected)
+                    self.assertEqual(sorted({r.get('package', 'manifold-nodes') for r in built}), expected)
                     hold.assert_called_once()
                     for mock in (build, executed, hold):
                         mock.reset_mock()
@@ -633,7 +914,7 @@ class CacheTests(unittest.TestCase):
 
     def test_budget_warning_reuses_pass_and_nightly_ignores_existing_pass(self):
         argv = ['gpu_proofs_gate.py', '--manifest-path', str(self.repo / 'Cargo.toml'),
-                '--path', 'crates/manifold-renderer/src/node_graph/primitives/invert.rs',
+                '--path', 'crates/manifold-nodes/src/registry.rs',
                 '--budget', '360']
 
         def too_slow(manifest, filters, skips, targets, full, lib, timings, *rest):
@@ -677,14 +958,14 @@ class CacheTests(unittest.TestCase):
             if command[:3] == ['cargo', 'nextest', 'list']:
                 package = command[command.index('-p') + 1]
                 suites = {'fixture': {'binary-name': 'fixture', 'testcases': ['tests::fixture']}}
-                if package == 'manifold-renderer':
+                if package == 'manifold-nodes':
                     suites.update({
                         'uniform_layout_proof': {'binary-name': 'uniform_layout_proof',
-                                                 'testcases': ['fixture::test']},
+                                                 'testcases': ['uniform_layout_proof::fixture::test']},
                         'uniform_layout_extended': {'binary-name': 'uniform_layout_extended',
-                                                    'testcases': ['fixture::test']},
-                        'lib': {'binary-name': 'manifold_renderer',
-                                'testcases': ['node_graph::primitives::invert::fixture',
+                                                    'testcases': ['uniform_layout_extended::fixture::test']},
+                        'lib': {'binary-name': 'manifold_nodes',
+                                'testcases': ['registry::fixture',
                                               'regenerates_in_sync']},
                     })
                 return 0, json.dumps({'rust-suites': suites}), '', 0.01
@@ -715,7 +996,7 @@ class CacheTests(unittest.TestCase):
         elapsed = time.monotonic() - started
         self.assertEqual((code, calls, holds, proofs_run), (0, [], 0, 0))
         for label in ('design-status', 'deny', 'ignored-tests', 'clippy/a', 'clippy/b',
-                      'flow-gate', 'tests/a', 'tests/b', 'tests/manifold-renderer',
+                      'flow-gate', 'tests/a', 'tests/b', 'tests/manifold-nodes',
                       'gpu-proofs'):
             self.assertIn('[REUSED] ' + label, self.output.getvalue())
         print(f'unchanged simulated gate: {elapsed:.3f}s', file=sys.stderr)

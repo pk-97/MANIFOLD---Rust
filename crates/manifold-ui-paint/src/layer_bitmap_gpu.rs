@@ -321,7 +321,7 @@ impl LayerBitmapGpu {
         if cap_hit && !self.cap_overflow_logged {
             self.cap_overflow_logged = true;
             eprintln!(
-                "[manifold-renderer] layer preview quads overflowed MAX_LAYER_QUADS \
+                "[manifold-nodes] layer preview quads overflowed MAX_LAYER_QUADS \
                  ({MAX_LAYER_QUADS}) — layers past the cap are missing from grid/overview \
                  previews this frame (BUG-q7zv). Raise the constant if a real project hits this."
             );

@@ -19,12 +19,16 @@ use crate::water::physics::pose_from_transform;
 use crate::ports::{ChannelElementType, ChannelSpec, KnownItem};
 use crate::scene::transform::Transform;
 
+manifold_core::testkit_visible! {
 /// Body poses on the GPU: rotation, the constant-angular-velocity turn,
 /// material velocity at a point. Matches [`body_pose_at`].
-pub const LIQUID_POSE: &str = include_str!("../primitives/shaders/liquid_pose.wgsl");
+pub(crate) const LIQUID_POSE: &str = include_str!("../primitives/shaders/liquid_pose.wgsl");
+}
+manifold_core::testkit_visible! {
 /// Collider lattice sampling; needs [`LIQUID_POSE`] and the including body's
 /// `liquid_atlas_half`.
-pub const LIQUID_COLLIDER: &str = include_str!("../primitives/shaders/liquid_collider.wgsl");
+pub(crate) const LIQUID_COLLIDER: &str = include_str!("../primitives/shaders/liquid_collider.wgsl");
+}
 
 /// A collider, source, drain or coupled body during one tick. 128 bytes.
 /// The domain uploads one per body per tick of the frame, holding the tick's

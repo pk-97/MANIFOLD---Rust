@@ -205,13 +205,28 @@ pub struct ActionListOptions {
     pub label_in_own_font: bool,
     /// Index into the request's `items`.
     pub current: Option<usize>,
+    /// Optional secondary action for each item. An entry with an action gets
+    /// a compact Edit button at the right side of its row.
+    pub secondary_actions: Vec<Option<PanelAction>>,
+    /// Keep the Actions picker open after a primary selection.
+    pub keep_open: bool,
 }
 
 impl Default for ActionListOptions {
     fn default() -> Self {
-        Self { empty_label: "No matches", label_in_own_font: false, current: None }
+        Self {
+            empty_label: "No matches",
+            label_in_own_font: false,
+            current: None,
+            secondary_actions: Vec::new(),
+            keep_open: false,
+        }
     }
 }
+
+/// Compact right-side action button width in an Actions row.
+const ACTION_EDIT_W: f32 = 52.0;
+const ACTION_EDIT_GAP: f32 = 6.0;
 
 /// Row font for `label_in_own_font` lists: large enough to judge a face.
 const FONT_PREVIEW_SIZE: u16 = color::FONT_HEADING;
@@ -255,6 +270,8 @@ struct BrowserLayout {
     /// `SOURCE_CHIPS[i]`.
     source_chip_ids: Vec<NodeId>,
     cell_ids: Vec<(NodeId, CellMeta)>,
+    /// Parallel to action rows that have a secondary action.
+    secondary_ids: Vec<(NodeId, usize)>,
     paste_id: Option<NodeId>,
     first_node: usize,
     node_count: usize,
@@ -278,6 +295,7 @@ impl BrowserLayout {
             source_all_id: None,
             source_chip_ids: Vec::new(),
             cell_ids: Vec::new(),
+            secondary_ids: Vec::new(),
             paste_id: None,
             first_node: 0,
             node_count: 0,
@@ -362,6 +380,16 @@ impl BrowserPopupPanel {
         self.session.as_ref().map(|s| &s.picker)
     }
 
+    /// The owning layer of the currently open persistent Actions picker.
+    pub fn persistent_actions_layer(&self) -> Option<&LayerId> {
+        self.session
+            .as_ref()
+            .filter(|session| {
+                session.mode == BrowserPopupMode::Actions && session.list.keep_open
+            })
+            .and_then(|session| session.layer_id.as_ref())
+    }
+
     /// Every open item's thumbnail path (PRESET_LIBRARY_DESIGN P6, D7),
     /// regardless of the current filter/category/source — the app decodes +
     /// registers each one, once per distinct path, so the picture is ready
@@ -389,6 +417,7 @@ impl BrowserPopupPanel {
     ) {
         debug_assert_eq!(req.mode, BrowserPopupMode::Actions);
         debug_assert_eq!(req.items.len(), actions.len());
+        debug_assert!(list.secondary_actions.is_empty() || list.secondary_actions.len() == req.items.len());
         self.open_with_actions(req, Some(actions), list);
     }
 
@@ -423,6 +452,42 @@ impl BrowserPopupPanel {
 
     pub fn close(&mut self) {
         self.session = None;
+    }
+
+    /// Refresh the currently open Actions session without resetting its
+    /// search, category, cursor, or scroll state. Returns `true` only when an
+    /// Actions session was refreshed; the caller owns the repaint request.
+    pub fn refresh_actions(
+        &mut self,
+        items: Vec<PickerItem>,
+        category_names: Vec<String>,
+        actions: Vec<PanelAction>,
+        secondary_actions: Vec<Option<PanelAction>>,
+    ) -> bool {
+        let Some(session) = self.session.as_mut() else {
+            return false;
+        };
+        if session.mode != BrowserPopupMode::Actions {
+            return false;
+        }
+        debug_assert_eq!(items.len(), actions.len());
+        debug_assert!(secondary_actions.is_empty() || secondary_actions.len() == items.len());
+
+        let current_type_id = session
+            .list
+            .current
+            .and_then(|index| session.picker.item(index))
+            .map(|item| item.type_id.clone());
+        session.picker.replace_items(items, category_names);
+        session.actions = Some(actions);
+        session.list.secondary_actions = secondary_actions;
+        session.list.current = current_type_id.and_then(|type_id| {
+            session
+                .picker
+                .all_items()
+                .position(|item| item.type_id == type_id)
+        });
+        true
     }
 
     /// Drain the open-time search-focus request (once per open, non-Node
@@ -472,6 +537,7 @@ impl BrowserPopupPanel {
 
         session.layout.first_node = tree.count();
         session.layout.cell_ids.clear();
+        session.layout.secondary_ids.clear();
         session.layout.chip_ids.clear();
         session.layout.source_chip_ids.clear();
 
@@ -814,11 +880,23 @@ impl BrowserPopupPanel {
             // The current value reads like a dropdown's checked row.
             let is_current = session.list.current == Some(item_index);
             let own_font = session.list.label_in_own_font;
+            let has_secondary = mode == BrowserPopupMode::Actions
+                && session
+                    .list
+                    .secondary_actions
+                    .get(item_index)
+                    .and_then(Option::as_ref)
+                    .is_some();
+            let primary_w = if has_secondary {
+                (cell_w - ACTION_EDIT_W - ACTION_EDIT_GAP).max(1.0)
+            } else {
+                cell_w
+            };
             let id = tree.add_button(
                 clip_parent,
                 cell_x,
                 cell_y,
-                cell_w,
+                primary_w,
                 cell_h,
                 UIStyle {
                     bg_color: if has_image {
@@ -842,6 +920,27 @@ impl BrowserPopupPanel {
             );
             if own_font {
                 tree.set_font_family(id, &item.label);
+            }
+
+            if has_secondary {
+                let edit_id = tree.add_button(
+                    clip_parent,
+                    cell_x + cell_w - ACTION_EDIT_W,
+                    cell_y,
+                    ACTION_EDIT_W,
+                    cell_h,
+                    UIStyle {
+                        bg_color: CELL_NORMAL,
+                        hover_bg_color: CELL_HOVER,
+                        pressed_bg_color: CELL_PRESSED,
+                        corner_radius: CELL_RADIUS,
+                        font_size: CELL_FONT,
+                        text_color: TEXT_PRIMARY,
+                        ..UIStyle::default()
+                    },
+                    "Edit",
+                );
+                session.layout.secondary_ids.push((edit_id, item_index));
             }
 
             session.layout.cell_ids.push((
@@ -900,6 +999,7 @@ impl BrowserPopupPanel {
             SourceAll,
             Source(usize),
             Cell(usize),
+            Secondary(usize),
             Paste,
         }
         let hit = {
@@ -920,6 +1020,8 @@ impl BrowserPopupPanel {
                 Hit::Source(i)
             } else if let Some(i) = layout.cell_ids.iter().position(|(id, _)| *id == node_id) {
                 Hit::Cell(i)
+            } else if let Some((_, item_index)) = layout.secondary_ids.iter().find(|(id, _)| *id == node_id) {
+                Hit::Secondary(*item_index)
             } else if layout.paste_id == Some(node_id) {
                 Hit::Paste
             } else {
@@ -960,30 +1062,46 @@ impl BrowserPopupPanel {
                 None // Needs rebuild
             }
             Hit::Cell(i) => {
-                let action = {
+                let (action, keep_open) = {
                     let session = self.session.as_ref()?;
                     let (_, meta) = &session.layout.cell_ids[i];
                     if session.mode == BrowserPopupMode::Actions {
-                        session
+                        let action = session
                             .actions
                             .as_ref()
                             .and_then(|actions| actions.get(meta.item_index))
                             .cloned()
-                            .map(BrowserPopupAction::ActionSelected)?
+                            .map(BrowserPopupAction::ActionSelected)?;
+                        (action, session.list.keep_open)
                     } else if session.mode == BrowserPopupMode::Node {
-                        BrowserPopupAction::NodeSelected {
+                        (BrowserPopupAction::NodeSelected {
                             type_id: meta.type_id.clone(),
                             graph_pos: session.pending_spawn_graph_pos.unwrap_or((0.0, 0.0)),
-                        }
+                        }, false)
                     } else {
-                        BrowserPopupAction::Selected {
+                        (BrowserPopupAction::Selected {
                             type_id: meta.type_id.clone(),
                             mode: session.mode,
                             tab: session.tab,
                             layer_id: session.layer_id.clone(),
-                        }
+                        }, false)
                     }
                 };
+                if !keep_open {
+                    self.close();
+                }
+                Some(action)
+            }
+            Hit::Secondary(item_index) => {
+                let action = self
+                    .session
+                    .as_ref()?
+                    .list
+                    .secondary_actions
+                    .get(item_index)
+                    .and_then(Option::as_ref)
+                    .cloned()
+                    .map(BrowserPopupAction::ActionSelected)?;
                 self.close();
                 Some(action)
             }
@@ -1046,6 +1164,7 @@ impl BrowserPopupPanel {
     pub fn handle_key_nav(&mut self, key: Key) -> Option<BrowserPopupAction> {
         let session = self.session.as_mut()?;
         let mode = session.mode;
+        let keep_open = session.list.keep_open;
         let cell_h = session.layout.cell_h;
         let tab = session.tab;
         let layer_id = session.layer_id.clone();
@@ -1090,7 +1209,9 @@ impl BrowserPopupPanel {
                         .and_then(|actions| actions.get(idx))
                         .cloned()
                         .map(BrowserPopupAction::ActionSelected);
-                    self.close();
+                    if !keep_open {
+                        self.close();
+                    }
                     return action;
                 }
                 let type_id = picked_type_id.unwrap_or_default();
@@ -1536,6 +1657,112 @@ mod tests {
         assert!(!popup.is_open());
     }
 
+    fn actions_request(labels: &[&str]) -> BrowserPopupRequest {
+        BrowserPopupRequest {
+            mode: BrowserPopupMode::Actions,
+            tab: InspectorTab::Layer,
+            layer_id: None,
+            items: labels
+                .iter()
+                .map(|label| PickerItem {
+                    label: (*label).to_string(),
+                    type_id: (*label).to_string(),
+                    category: Some("Checks".to_string()),
+                    search_text: None,
+                    source: None,
+                    thumbnail: None,
+                })
+                .collect(),
+            category_names: vec!["Checks".to_string()],
+            spawn_graph_pos: None,
+            paste_count: 0,
+            screen_anchor: Vec2::ZERO,
+        }
+    }
+
+    #[test]
+    fn actions_primary_enter_can_keep_picker_open() {
+        let mut popup = BrowserPopupPanel::new();
+        popup.open_actions(
+            actions_request(&["Check"]),
+            vec![PanelAction::Params(ParamsAction::PasteEffects)],
+            ActionListOptions {
+                keep_open: true,
+                ..ActionListOptions::default()
+            },
+        );
+
+        popup.handle_key_nav(Key::Down);
+        assert!(matches!(
+            popup.handle_key_nav(Key::Enter),
+            Some(BrowserPopupAction::ActionSelected(PanelAction::Params(
+                ParamsAction::PasteEffects
+            )))
+        ));
+        assert!(popup.is_open());
+    }
+
+    #[test]
+    fn actions_edit_button_returns_secondary_action_and_closes() {
+        let mut popup = BrowserPopupPanel::new();
+        popup.open_actions(
+            actions_request(&["Check"]),
+            vec![PanelAction::Params(ParamsAction::PasteEffects)],
+            ActionListOptions {
+                secondary_actions: vec![Some(PanelAction::Params(ParamsAction::BrowserSearchClicked))],
+                ..ActionListOptions::default()
+            },
+        );
+        let mut tree = UITree::new();
+        popup.build(&mut tree);
+        let edit_id = popup.session.as_ref().unwrap().layout.secondary_ids[0].0;
+        assert!(matches!(
+            popup.handle_click(edit_id),
+            Some(BrowserPopupAction::ActionSelected(PanelAction::Params(
+                ParamsAction::BrowserSearchClicked
+            )))
+        ));
+        assert!(!popup.is_open());
+    }
+
+    #[test]
+    fn refresh_actions_preserves_search_category_cursor_scroll_and_current() {
+        let mut popup = BrowserPopupPanel::new();
+        popup.open_actions(
+            actions_request(&["A", "B"]),
+            vec![
+                PanelAction::Params(ParamsAction::PasteEffects),
+                PanelAction::Params(ParamsAction::BrowserSearchClicked),
+            ],
+            ActionListOptions {
+                current: Some(0),
+                ..ActionListOptions::default()
+            },
+        );
+        popup.set_filter("".to_string());
+        popup.set_category(Some("Checks".to_string()));
+        popup.handle_key_nav(Key::Down);
+        popup.session.as_mut().unwrap().picker.scroll.set_content_height(100.0);
+        popup.session.as_mut().unwrap().picker.scroll.set_scroll_offset(12.0);
+
+        assert!(popup.refresh_actions(
+            actions_request(&["B", "A", "C"]).items,
+            vec!["Checks".to_string()],
+            vec![
+                PanelAction::Params(ParamsAction::BrowserSearchClicked),
+                PanelAction::Params(ParamsAction::PasteEffects),
+                PanelAction::Params(ParamsAction::PasteEffects),
+            ],
+            vec![None, None, None],
+        ));
+        let session = popup.session.as_ref().unwrap();
+        assert_eq!(session.picker.filter(), "");
+        assert_eq!(session.picker.active_category(), Some("Checks"));
+        assert_eq!(session.picker.cursor(), Some(1));
+        assert_eq!(session.picker.scroll.scroll_offset(), 12.0);
+        assert_eq!(session.list.current, Some(1));
+    }
+
     fn font_list(count: usize, current: usize) -> BrowserPopupPanel {
         let labels: Vec<String> = (0..count).map(|i| format!("Font {i:03}")).collect();
         let items = labels
@@ -1567,7 +1794,12 @@ mod tests {
                 screen_anchor: Vec2::new(100.0, 100.0),
             },
             actions,
-            ActionListOptions { empty_label: "No fonts match", label_in_own_font: true, current: Some(current) },
+            ActionListOptions {
+                empty_label: "No fonts match",
+                label_in_own_font: true,
+                current: Some(current),
+                ..ActionListOptions::default()
+            },
         );
         popup
     }

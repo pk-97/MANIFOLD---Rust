@@ -94,7 +94,7 @@ Live registries beat hand-maintained tables — the inventory channels populate 
 - **Primitives** — shipping in `crates/manifold-nodes-image/src/node_graph/primitives/` and `crates/manifold-nodes-scene/src/node_graph/primitives/`, with engine built-ins and water under `crates/manifold-node-engine/src/`. See [NODE_CATALOG.md](NODE_CATALOG.md) for the curated naming + categorisation spec, [PRIMITIVE_LIBRARY_DESIGN.md](PRIMITIVE_LIBRARY_DESIGN.md) for the design rationale and decomposition recipes.
 - **Atomic complex primitives** — `crates/manifold-node-engine/src/atomic/` holds the three irreducible kernels (Plasma, FluidSim2D, Glitch); FluidSim3D lives alongside the primitives. These don't decompose to atoms without losing what they are.
 - **Composite Rust builders** — `crates/manifold-nodes-image/src/node_graph/composites/` (Bloom, Halation, Infrared, Mirror, SoftFocus, StrobeOpacity). Dev fixtures for parity tests; new composites ship as JSON.
-- **Shipping presets** — `crates/manifold-renderer/assets/effect-presets/` (29 as of 2026-05-19). Each is one JSON file; the build script codegens the bundled table.
+- **Shipping presets** — `crates/manifold-nodes/assets/effect-presets/` (29 as of 2026-05-19). Each is one JSON file; the build script codegens the bundled table.
 
 ---
 
@@ -187,7 +187,7 @@ The mid-show editing safety question (section 12.9 of PRIMITIVE_LIBRARY_DESIGN) 
 
 ## 13. Save Format
 
-Preset JSON schema lives in [`crates/manifold-core/src/effect_definition_registry.rs`](../crates/manifold-core/src/effect_definition_registry.rs) and the structures it points at. Key invariants:
+Preset JSON schema lives in [`crates/manifold-core/src/preset_definition_registry.rs`](../crates/manifold-core/src/preset_definition_registry.rs) and the structures it points at. Key invariants:
 
 - `version: 2` is the current schema.
 - `nodes` carry stable `typeId` (`"node.gain"`, `"node.feedback"`, …) — treated as public API.
@@ -220,5 +220,5 @@ Real ones, parked. Not the "(none yet)" placeholder from V0.
 - [BINDINGS_UNIFICATION_PLAN.md](BINDINGS_UNIFICATION_PLAN.md) — historical record of Phases 1–5
 - [EFFECT_CHAIN_LIFECYCLE.md](EFFECT_CHAIN_LIFECYCLE.md) — chain pool, state-cache eviction, feedback bleed-through
 - [MANIFOLD_GPU_ARCHITECTURE.md](MANIFOLD_GPU_ARCHITECTURE.md) — Metal backend, texture formats, uniform layout
-- `crates/manifold-renderer/src/node_graph/` — module structure for the runtime
-- `crates/manifold-renderer/assets/effect-presets/` — shipping presets
+- `crates/manifold-node-engine/src/` — module structure for the runtime
+- `crates/manifold-nodes/assets/effect-presets/` — shipping presets

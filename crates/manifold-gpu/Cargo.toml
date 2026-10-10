@@ -16,7 +16,7 @@ vulkan = ["dep:ash"]
 testkit = []
 # GPU-backed proofs (requires an Apple Silicon device). Off by default — run with
 # `cargo test -p manifold-gpu --features gpu-proofs -- --test-threads=1`.
-# Also compiles the frame clock's wait counter, which manifold-renderer's
+# Also compiles the frame clock's wait counter, which manifold-nodes's
 # GPU proofs read.
 gpu-proofs = ["testkit", "dep:parking_lot"]
 
@@ -119,41 +119,26 @@ objc2-metal-fx = { version = "0.3", features = [
     "MTL4FXTemporalScaler",
     "MTL4FXTemporalDenoisedScaler",
 ] }
-objc2-metal-performance-shaders = { version = "0.3", features = [
-    "MPSKernel",
+objc2-metal-performance-shaders = { version = "0.3", default-features = false, features = [
+    "std",
+    "MPSCommandBuffer",
     "MPSCore",
     "MPSCoreTypes",
-    "MPSImage",
-    "MPSImageKernel",
-    "MPSImageConvolution",
-    "MPSImageResampling",
-    "MPSImageMorphology",
-    "MPSImageReduce",
-    "MPSImageHistogram",
-    "MPSImageThreshold",
-    "MPSImageMedian",
-    "MPSImageIntegral",
-    "MPSImageTranspose",
-    "MPSImageCopy",
-    "MPSImageStatistics",
-    "MPSImageMath",
-    "MPSImageConversion",
-    "MPSImageKeypoint",
-    "MPSMatrix",
-    "MPSMatrixRandom",
-    "MPSMatrixTypes",
 ] }
 # MPSGraph — Apple's graph-compiled compute ops. We use it only for the
 # FFT primitive (`GpuFft`); everything else goes through our own compute
 # kernels. Minimal feature set: Core + Memory (placeholder tensors) +
 # FourierTransformOps + executable compile/encode + device + tensor data.
-objc2-metal-performance-shaders-graph = { version = "0.3", features = [
+objc2-metal-performance-shaders-graph = { version = "0.3", default-features = false, features = [
+    "std",
+    "objc2-metal-performance-shaders",
     "MPSGraph",
     "MPSGraphCore",
     "MPSGraphDevice",
     "MPSGraphExecutable",
     "MPSGraphFourierTransformOps",
     "MPSGraphMemoryOps",
+    "MPSGraphOperation",
     "MPSGraphTensor",
     "MPSGraphTensorData",
 ] }

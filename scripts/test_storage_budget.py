@@ -152,40 +152,61 @@ def test_manifest_dry_run_apply_and_identity():
         (target / "debug" / "incremental" / "crate-abcdef" / "s-hgw9xb7-2p31hz8-0dnkx7m").mkdir(parents=True)
         (target / "debug" / "incremental" / "crate-abcdef" / "s-hgw9xb7-2p31hz8-0dnkx7m" / "query-cache.bin").write_bytes(b"generated")
         (target / "debug" / ".fingerprint" / "crate-abcdef").mkdir(parents=True)
-        (target / "debug" / ".fingerprint" / "crate-abcdef" / "dep-lib-crate").write_bytes(b"generated")
+        fingerprint = target / "debug" / ".fingerprint" / "crate-abcdef"
+        fingerprint_files = {
+            fingerprint / "lib-crate": b"fingerprint hash",
+            fingerprint / "lib-crate.json": b"fingerprint json",
+            fingerprint / "dep-lib-crate": b"fingerprint dep-info",
+        }
+        for path, contents in fingerprint_files.items():
+            path.write_bytes(contents)
         (target / "debug" / "build" / "crate-abcdef").mkdir(parents=True)
-        (target / "debug" / "build" / "crate-abcdef" / "output").write_bytes(b"generated")
-        (target / "debug" / "examples" / "example-demo-abcdef").write_bytes(b"generated")
+        build_metadata = {
+            target / "debug" / "build" / "crate-abcdef" / "output": b"build output",
+            target / "debug" / "build" / "crate-abcdef" / "root-output": b"build root output",
+        }
+        for path, contents in build_metadata.items():
+            path.write_bytes(contents)
+        artifact = target / "debug" / "examples" / "example-demo-abcdef"
+        artifact.write_bytes(b"compiled artifact")
         (target / "debug" / "build" / "crate-abcdef" / "build-script-build").write_bytes(b"binary")
         plan = sb.plan_cache_cleanup(target)
         check("manifest excludes unknown files", not any(e.path.name == "proof.png" for e in plan.entries), str(plan.entries))
         check("manifest contains recognized Cargo files", generated in [e.path for e in plan.entries], str(plan.entries))
         check("manifest preserves arbitrary build binary", not any(e.path.name == "build-script-build" for e in plan.entries), str(plan.entries))
-        before = generated.read_bytes()
+        preserved = {path: path.read_bytes() for path in (*fingerprint_files, *build_metadata, artifact)}
+        incremental = [entry for entry in plan.entries
+                       if entry.path.relative_to(target).parts[1] == "incremental"]
         dry = sb.apply_cache_cleanup(plan, dry_run=True, process_check=lambda _: False)
-        check("dry run reports without mutation", dry[1] == len(plan.entries) and generated.read_bytes() == before, str(dry))
+        check("dry run reports only incremental reclamation", dry[1] == len(incremental), str(dry))
+        check("dry run preserves Cargo metadata and artifacts",
+              all(path.read_bytes() == contents for path, contents in preserved.items()), str(dry))
         applied = sb.apply_cache_cleanup(plan, dry_run=False, process_check=lambda _: False)
-        check("apply removes generated file", applied[1] == len(plan.entries) and not generated.exists(), str(applied))
+        check("apply reclaims incremental session", applied[1] == len(incremental)
+              and not (target / "debug" / "incremental" / "crate-abcdef"
+                       / "s-hgw9xb7-2p31hz8-0dnkx7m" / "query-cache.bin").exists(), str(applied))
+        check("apply preserves Cargo metadata and compiled artifacts",
+              all(path.read_bytes() == contents for path, contents in preserved.items()), str(applied))
         check("unknown files remain", binary.exists() and unknown.exists() and
               all((target / "debug" / subtree / filename).exists()
                   for subtree in ("incremental", ".fingerprint", "build", "examples")
                   for filename in ("proof.png", "notes.txt")), "unknown path removed")
         check("cache directories remain", cache.is_dir(), "cache directory removed")
 
-        generated.write_bytes(b"new contents")
+        _, changed_cache = stale_session(target, "s-race-eee-fff")
         changed = sb.plan_cache_cleanup(target)
-        generated.write_bytes(b"changed after plan")
+        changed_cache.write_bytes(b"changed after plan")
         result = sb.apply_cache_cleanup(changed, dry_run=False, process_check=lambda _: False)
-        check("changed identity is preserved", generated.exists() and result[2], str(result))
+        check("changed identity is preserved", changed_cache.exists() and result[2], str(result))
 
 
 def test_live_and_uninspectable_refused():
     with fixture_directory() as raw:
         target = Path(raw).resolve() / "target"
         marker(target)
-        cache = target / "release" / "build" / "crate-abcdef"
+        cache = target / "release" / "incremental" / "crate-abcdef" / "s-aaa-bbb-ccc"
         cache.mkdir(parents=True)
-        file = cache / "output"
+        file = cache / "query-cache.bin"
         file.write_bytes(b"build")
         plan = sb.plan_cache_cleanup(target)
         live = sb.apply_cache_cleanup(plan, dry_run=False, process_check=lambda _: True)
@@ -214,6 +235,21 @@ def test_lsof_and_cargo_lock_safety():
         lsof = "p123\nfcwd\nn" + str(root / "outside") + "\n"
         with patch.object(sb.subprocess, "run", return_value=lsof_result(lsof)):
             check("unrelated process is idle", sb.target_live_status(target) is False)
+
+        semaphore = "p123\nf3\ntPSXSEM\nn/ableton.live.omessage-factory\n"
+        with patch.object(sb.subprocess, "run", return_value=lsof_result(semaphore)):
+            check("missing POSIX semaphore does not disable snapshot",
+                  sb.target_live_status(target) is False)
+        semaphore_and_file = semaphore + f"f4\nn{file}\n"
+        with patch.object(sb.subprocess, "run", return_value=lsof_result(semaphore_and_file)):
+            check("live cache remains a veto beside POSIX semaphore",
+                  sb.target_live_status(target) is True)
+        for missing in ("p123\nf3\ntREG\nn/missing-cache-file\n",
+                        "p123\nf3\nn/missing-cache-file\n"):
+            with patch.object(sb.subprocess, "run", return_value=SimpleNamespace(
+                    returncode=0, stdout=missing, stderr="")):
+                check("missing filesystem path disables snapshot",
+                      sb.target_live_status(target) is None)
 
         cargo_lock = target / "debug" / ".cargo-lock"
         cargo_lock.write_bytes(b"lock")
@@ -341,6 +377,15 @@ def test_bounded_reclaim_order_and_preservation():
         for path in protected:
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text("keep")
+        retained_metadata = {
+            target / "debug" / ".fingerprint" / "crate-abcdef" / "lib-crate.json": b"fingerprint",
+            target / "debug" / "build" / "crate-abcdef" / "output": b"build metadata",
+        }
+        metadata_old = time.time() - 7200
+        for path, contents in retained_metadata.items():
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(contents)
+            os.utime(path, (metadata_old, metadata_old))
         deps = target / "debug" / "deps" / "libold-abcdef.rlib"
         deps.parent.mkdir()
         deps.write_bytes(b"artifact")
@@ -351,6 +396,8 @@ def test_bounded_reclaim_order_and_preservation():
         check("oldest incremental session reclaimed before older deps", not old.exists() and deps.exists(), result)
         check("reserve stops reclamation", newer.exists() and fresh.exists(), result)
         check("fixtures logs reports and build outputs preserved", all(p.exists() for p in protected), result)
+        check("Cargo metadata survives pressure cleanup",
+              all(path.read_bytes() == contents for path, contents in retained_metadata.items()), result)
         check("unknown session contents protect entire directory", mixed_file.exists(), result)
         # Cap maintenance runs even with ample disk space and stops before deps.
         size = sb.target_size(target)
@@ -362,6 +409,8 @@ def test_bounded_reclaim_order_and_preservation():
         check("fresh sessions survive cap pressure", fresh_file.exists(), result)
         result = sb.maintain_caches([target], root, process_check=lambda *a, **k: False,
                                    free_check=lambda _: 0)
+        check("pressure cleanup reaches stale metadata without deleting it",
+              all(path.read_bytes() == contents for path, contents in retained_metadata.items()), result)
         check("deps retained even under exhausted reserve", deps.exists() and result[2], result)
         check("protected files survive exhausted reserve", fresh_file.exists() and mixed_file.exists()
               and all(p.exists() for p in protected), result)
@@ -559,6 +608,13 @@ def test_busy_profile_does_not_block_other_profiles():
         root = Path(raw)
         target = root / "target"
         _, busy = stale_session(target)
+        release_session = target / "release" / "incremental" / "crate-abcdef" / "s-release-aaa-bbb"
+        release_session.mkdir(parents=True)
+        release_cache = release_session / "query-cache.bin"
+        release_cache.write_bytes(b"release cache")
+        old = time.time() - 7200
+        os.utime(release_cache, (old, old))
+        os.utime(release_session, (old, old))
         metadata = target / "release" / "build" / "crate-abcdef" / "output"
         metadata.parent.mkdir(parents=True)
         metadata.write_text("metadata")
@@ -571,7 +627,8 @@ def test_busy_profile_does_not_block_other_profiles():
                                            free_check=lambda _: 0)
             check("busy profile excluded before inventory", inventory.call_args.args[1] == [target / "release"])
             check("busy profile preserved while unlocked profile reclaimed",
-                  busy.exists() and not metadata.exists() and "Cargo lock" in str(result[2]), result)
+                  busy.exists() and not release_cache.exists() and metadata.exists()
+                  and "Cargo lock" in str(result[2]), result)
 
 
 def test_binary_opened_after_enumeration():

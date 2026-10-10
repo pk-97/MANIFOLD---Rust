@@ -1,5 +1,5 @@
 use manifold_core::types::PlaybackState;
-use manifold_core::{Beats, Seconds};
+use manifold_core::{Beats, Bpm, Seconds};
 use manifold_playback::engine::{PlaybackEngine, TickContext};
 use manifold_playback::renderer::StubRenderer;
 
@@ -100,6 +100,13 @@ fn stub_gen(engine: &PlaybackEngine) -> &StubRenderer {
         .expect("renderer 0 is the generator stub")
 }
 
+fn stub_video(engine: &PlaybackEngine) -> &StubRenderer {
+    engine.renderers()[1]
+        .as_any()
+        .downcast_ref::<StubRenderer>()
+        .expect("renderer 1 is the video stub")
+}
+
 fn tick_once(engine: &mut PlaybackEngine, realtime: f64, frame: u64) {
     let ctx = TickContext {
         dt_seconds: Seconds(1.0 / 60.0),
@@ -137,11 +144,11 @@ fn drag_active_clip_across_layers_rebinds() {
         "the heal start carries fire_clip_edge=false — a drag is not a trigger"
     );
     assert!(
-        engine.pending_clip_edge_layers().is_empty(),
+        engine.clip_controls().view(&engine.project().unwrap().timeline.layers[1].layer_id).unwrap().starts.is_empty(),
         "heals emit no clip-edge for modulation"
     );
     assert_eq!(
-        engine.last_active_clip_id_for(1).cloned().as_deref(),
+        engine.clip_controls().view(&engine.project().unwrap().timeline.layers[1].layer_id).unwrap().spans.last().map(|span| span.clip_id.as_str()),
         Some(clip_id.as_str()),
         "the destination layer's edge-diff state updates silently"
     );
@@ -337,6 +344,79 @@ fn stopped_engine_activates_clip_under_playhead() {
         !result.ready_clips.is_empty() || engine.active_clip_count() > 0,
         "A stopped engine must reconcile every tick: the clip under the playhead should become active"
     );
+}
+
+/// Trigger lanes are timeline children, but their clips never enter renderer
+/// admission. The clip deliberately carries its owner's id to prove admission
+/// uses the containing layer index rather than trusting stale clip ownership.
+#[test]
+fn trigger_child_is_excluded_from_renderer_admission_for_every_owner_kind() {
+    use manifold_core::layer::Layer;
+    use manifold_core::types::LayerType;
+
+    for owner_kind in [
+        LayerType::Video,
+        LayerType::Generator,
+        LayerType::Audio,
+        LayerType::Dmx,
+        LayerType::Group,
+    ] {
+        let mut project = manifold_core::project::Project::default();
+        project.settings.bpm = Bpm(120.0);
+        let owner = if owner_kind == LayerType::Audio {
+            Layer::new_audio("Owner".into(), 0)
+        } else {
+            Layer::new("Owner".into(), owner_kind, 0)
+        };
+
+        let mut trigger = Layer::new_trigger("Trigger".into(), owner.layer_id.clone(), 1);
+        let mut clip = manifold_core::clip::TimelineClip::new_trigger(
+            Beats::ZERO,
+            Beats(4.0),
+        );
+        clip.layer_id = owner.layer_id.clone();
+        clip.video_clip_id = "misleading-trigger-media-id".to_string();
+        let clip_id = clip.id.clone();
+        let trigger_end = clip.end_beat();
+        trigger.clips.push(clip);
+        project.timeline.layers.push(owner);
+        project.timeline.layers.push(trigger);
+
+        let mut engine = create_engine();
+        engine.initialize(project);
+        engine.play();
+        for frame in 0..3 {
+            tick_once(&mut engine, frame as f64 / 60.0, frame);
+            let _ = engine.sync_clips_to_time();
+        }
+
+        let trigger_end_time = engine.beat_to_timeline_time_immut(trigger_end);
+        engine.seek_to(Seconds(trigger_end_time.0 + 1.0 / 60.0));
+        engine.stop();
+        engine.play();
+        engine.seek_to(Seconds(trigger_end_time.0 + 1.0 / 60.0));
+
+        assert_eq!(
+            stub_gen(&engine).start_count_for(&clip_id),
+            0,
+            "trigger child under {owner_kind:?} must never start a renderer"
+        );
+        assert_eq!(
+            stub_gen(&engine).stop_count_for(&clip_id),
+            0,
+            "trigger child under {owner_kind:?} must never stop a generator renderer"
+        );
+        assert_eq!(
+            stub_video(&engine).start_count_for(&clip_id),
+            0,
+            "trigger child under {owner_kind:?} must never start a video renderer"
+        );
+        assert_eq!(
+            stub_video(&engine).stop_count_for(&clip_id),
+            0,
+            "trigger child under {owner_kind:?} must never stop a video renderer"
+        );
+    }
 }
 
 #[test]

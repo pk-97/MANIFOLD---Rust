@@ -225,7 +225,7 @@ pub enum ParamSnapshotKind {
     Bool,
     Enum,
     /// Momentary "fire once" button. See [`ParamType::Trigger`] in
-    /// `manifold-renderer/.../parameters.rs` for the storage / cold-start
+    /// `manifold-nodes/.../parameters.rs` for the storage / cold-start
     /// contract; the outer-card click handler increments by one per press.
     Trigger,
     /// RGBA colour. Editable via a swatch + R/G/B/A channel sliders; its live
@@ -551,7 +551,7 @@ impl GraphSnapshot {
             Ok(g) => g,
             Err(e) => {
                 eprintln!(
-                    "[manifold-renderer] GraphSnapshot::from_def: \
+                    "[manifold-nodes] GraphSnapshot::from_def: \
                      failed to materialize per-instance graph: {e}. \
                      Editor canvas will treat this as empty."
                 );
@@ -928,6 +928,7 @@ fn param_vec_value(value: &ParamValue) -> Option<[f32; 4]> {
     }
 }
 
+manifold_core::testkit_visible! {
 /// Flatten a [`ParamValue`] into an `f32` for the slider UI. Bool
 /// becomes 0.0/1.0, Int/Enum cast to f32, multi-component types
 /// collapse to 0.0 (their snapshot kind is `Other` and they're not
@@ -936,7 +937,7 @@ fn param_vec_value(value: &ParamValue) -> Option<[f32; 4]> {
 /// `pub(crate)` so the live-value tap ([`crate::preset_runtime::PresetRuntime::live_node_params`])
 /// can reuse the exact same flattening the structural snapshot uses, keeping the
 /// editor canvas's frozen and live values byte-identical in formatting.
-pub fn param_default_to_f32(value: &ParamValue) -> f32 {
+pub(crate) fn param_default_to_f32(value: &ParamValue) -> f32 {
     match value {
         ParamValue::Float(f) => *f,
         ParamValue::Bool(b) => {
@@ -954,6 +955,7 @@ pub fn param_default_to_f32(value: &ParamValue) -> f32 {
         | ParamValue::Table(_)
         | ParamValue::String(_) => 0.0,
     }
+}
 }
 
 #[cfg(test)]
@@ -1204,7 +1206,7 @@ mod tests {
             outputs: vec![output("out")],
         }));
         let _named = g.add_node_named(
-            "uv_transform",
+            String::from("uv_transform"),
             Box::new(ParamfulNode {
                 type_id: EffectNodeType::new("node.transform"),
                 outputs: vec![output("out")],
@@ -1230,6 +1232,7 @@ mod tests {
         );
 
         let snap = GraphSnapshot::from_graph(&g);
+        drop(g);
         let anon = snap.nodes.iter().find(|n| n.title == "Source").unwrap();
         assert_eq!(anon.node_handle, None);
         assert!(anon.parameters.is_empty());

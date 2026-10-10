@@ -1,6 +1,6 @@
 # Node Catalog
 
-**Source of truth for what nodes exist.** Regenerate this file by walking the [image](../crates/manifold-nodes-image/src/node_graph/primitives/), [scene](../crates/manifold-nodes-scene/src/node_graph/primitives/), [engine](../crates/manifold-node-engine/src/primitives/) and [water](../crates/manifold-node-engine/src/water/primitives/) roots (one `type_id` per primitive — `pub const *_TYPE_ID` for the composite-effect primitives, `type_id: "node.…"` for the macro-defined atoms) and the two preset directories ([`effect-presets/`](../crates/manifold-renderer/assets/effect-presets/), [`generator-presets/`](../crates/manifold-renderer/assets/generator-presets/)). If you add a primitive or a preset and don't update this catalog, the catalog is stale — fix it.
+**Source of truth for what nodes exist.** Regenerate this file by walking the [image](../crates/manifold-nodes-image/src/node_graph/primitives/), [scene](../crates/manifold-nodes-scene/src/node_graph/primitives/), [engine](../crates/manifold-node-engine/src/primitives/) and [water](../crates/manifold-node-engine/src/water/primitives/) roots (one `type_id` per primitive — `pub const *_TYPE_ID` for the composite-effect primitives, `type_id: "node.…"` for the macro-defined atoms) and the two preset directories ([`effect-presets/`](../crates/manifold-nodes/assets/effect-presets/), [`generator-presets/`](../crates/manifold-nodes/assets/generator-presets/)). If you add a primitive or a preset and don't update this catalog, the catalog is stale — fix it.
 
 For *how* to compose these into a generator decomposition, see [DECOMPOSING_GENERATORS.md](DECOMPOSING_GENERATORS.md). For the design rationale behind the primitive shape, see [PRIMITIVE_LIBRARY_DESIGN.md](PRIMITIVE_LIBRARY_DESIGN.md).
 
@@ -34,9 +34,9 @@ Channels signatures reference `crate::node_graph::channel_names::well_known::*` 
 
 ## Registered node index (generated — authoritative)
 
-This block is **generated from the node registry** by `gen_node_catalog` (`cargo run -p manifold-renderer --bin gen_node_catalog`) and is the drift-guarded source of truth for *what exists* — a registry change that isn't reflected here fails `cargo test`. The hand-curated "Atoms by intent" grouping below (section 3) adds human structure and prose; once `category` / `role` are filled across the library, that grouping regenerates from those fields too. The full machine artifact — ports, params, complete descriptions, for the AI composition surface — is [`node_catalog.json`](node_catalog.json).
+This block is **generated from the node registry** by `gen_node_catalog` (`cargo run -p manifold-nodes --bin gen_node_catalog`) and is the drift-guarded source of truth for *what exists* — a registry change that isn't reflected here fails `cargo test`. The hand-curated "Atoms by intent" grouping below (section 3) adds human structure and prose; once `category` / `role` are filled across the library, that grouping regenerates from those fields too. The full machine artifact — ports, params, complete descriptions, for the AI composition surface — is [`node_catalog.json`](node_catalog.json).
 
-<!-- BEGIN GENERATED: registered-node-index — do not edit; run `cargo run -p manifold-renderer --bin gen_node_catalog` -->
+<!-- BEGIN GENERATED: registered-node-index — do not edit; run `cargo run -p manifold-nodes --bin gen_node_catalog` -->
 
 _Generated from the node registry. Do not hand-edit. 388 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
 
@@ -572,7 +572,7 @@ _Generated from the node registry. Do not hand-edit. 388 nodes registered, group
 | `LED Strobe` | LED Strobe | generator | LED | 6 |
 | `LED Studio Light` | LED Studio Light | generator | LED | 3 |
 | `LED Studio Mask` | LED Studio Mask | generator | LED | 8 |
-| `Lantern` | Lantern | generator | Geometry | 369 |
+| `Lantern` | Lantern | generator | Geometry | 374 |
 | `Lightning` | Lightning | generator | Pattern | 7 |
 | `Lissajous` | Lissajous | generator | Geometry | 11 |
 | `MaskBlob` | Mask Blob Detector | effect | Spatial | 16 |
@@ -588,16 +588,16 @@ _Generated from the node registry. Do not hand-edit. 388 nodes registered, group
 | `MotionMosh` | Motion Mosh | effect | Stylize | 7 |
 | `MriVolume` | MRI Volume | generator | Text & Media | 8 |
 | `NestedCubes` | Nested Cubes | generator | Geometry | 6 |
-| `Ocean` | Ocean | generator | Sim | 361 |
-| `OceanCliff` | Ocean Cliff | generator | Sim | 2350 |
+| `Ocean` | Ocean | generator | Sim | 363 |
+| `OceanCliff` | Ocean Cliff | generator | Sim | 2352 |
 | `OilyFluid` | Oily Fluid | generator | Sim | 14 |
 | `Oscilloscope` | Oscilloscope | generator | Audio | 11 |
 | `ParticleText` | Particle Text | generator | Text & Media | 15 |
-| `PhysicsBoxes` | Physics Boxes | generator | Geometry | 1329 |
-| `PhysicsSolids` | Physics Solids | generator | Geometry | 1994 |
+| `PhysicsBoxes` | Physics Boxes | generator | Geometry | 1338 |
+| `PhysicsSolids` | Physics Solids | generator | Geometry | 2003 |
 | `Plasma` | Plasma | generator | Pattern | 6 |
 | `QuadMirror` | Quad Mirror | effect | Spatial | 1 |
-| `Scene` | Scene | generator | Geometry | 363 |
+| `Scene` | Scene | generator | Geometry | 372 |
 | `SoftFocus` | Soft Focus | effect | Filmic | 2 |
 | `Spectrogram` | Spectrogram | generator | Audio | 6 |
 | `StarField` | Star Field | generator | Pattern | 8 |
@@ -608,12 +608,12 @@ _Generated from the node registry. Do not hand-edit. 388 nodes registered, group
 | `Text` | Text | generator | Text & Media | 9 |
 | `Transform` | Transform | effect | Spatial | 4 |
 | `VoronoiPrism` | Voronoi Prism | effect | Spatial | 3 |
-| `WaterDamBreakGpuFlip` | Water — Dam Break (GPU FLIP) | generator | Sim | 2005 |
-| `WaterDamBreakMatter` | Water — Dam Break (Live GPU) | generator | Sim | 1397 |
-| `WaterDamBreakParticles` | Water — Dam Break (Particle View) | generator | Sim | 1998 |
-| `WaterFloatingBoxMatter` | Water — Floating Box (Live GPU) | generator | Sim | 1390 |
-| `WaterSeaWallGpuFlip` | Water — Sea Wall (GPU FLIP) | generator | Sim | 2333 |
-| `WaterStillPoolMatter` | Water — Still Pool (Live GPU) | generator | Sim | 1065 |
+| `WaterDamBreakGpuFlip` | Water — Dam Break (GPU FLIP) | generator | Sim | 2014 |
+| `WaterDamBreakMatter` | Water — Dam Break (Live GPU) | generator | Sim | 1406 |
+| `WaterDamBreakParticles` | Water — Dam Break (Particle View) | generator | Sim | 2007 |
+| `WaterFloatingBoxMatter` | Water — Floating Box (Live GPU) | generator | Sim | 1399 |
+| `WaterSeaWallGpuFlip` | Water — Sea Wall (GPU FLIP) | generator | Sim | 2335 |
+| `WaterStillPoolMatter` | Water — Still Pool (Live GPU) | generator | Sim | 1074 |
 | `Watercolor` | Watercolor | effect | Stylize | 4 |
 | `Wireframe` | Wireframe | generator | Geometry | 9 |
 | `WireframeDepth` | Wireframe Depth | effect | Stylize | 8 |
@@ -965,7 +965,7 @@ The effect presets are listed in section 5.
 
 ## 5. Effect presets
 
-26 JSON files at [`assets/effect-presets/`](../crates/manifold-renderer/assets/effect-presets/). Each is a decomposed atom graph (drillable in the editor); the atom composition is noted. The only thin-wrap-of-a-legacy-node is `WireframeDepth` (wraps `node.wireframe_depth`); `WireframeDepthGraph` is its in-flight atom-graph replacement.
+26 JSON files at [`assets/effect-presets/`](../crates/manifold-nodes/assets/effect-presets/). Each is a decomposed atom graph (drillable in the editor); the atom composition is noted. The only thin-wrap-of-a-legacy-node is `WireframeDepth` (wraps `node.wireframe_depth`); `WireframeDepthGraph` is its in-flight atom-graph replacement.
 
 | Preset | Atom shape |
 |---|---|
@@ -1001,7 +1001,7 @@ The effect presets are listed in section 5.
 
 ## 6. Generators
 
-All shipping generators are JSON-defined sub-graphs at [`assets/generator-presets/`](../crates/manifold-renderer/assets/generator-presets/), running from `system.generator_input` to `system.final_output`. Zero `inventory::submit!` generators remain; [`crates/manifold-renderer/src/generators/`](../crates/manifold-renderer/src/generators/) is now runtime infrastructure only (loader, registry, mesh/line pipelines, math, stateful base).
+All shipping generators are JSON-defined sub-graphs at [`assets/generator-presets/`](../crates/manifold-nodes/assets/generator-presets/), running from `system.generator_input` to `system.final_output`. The [catalog registry](../crates/manifold-nodes/src/registry.rs) owns generator lookup. Shared mesh, line and state helpers live in [`manifold-node-engine`](../crates/manifold-node-engine/src/).
 
 ### 6.1 JSON-defined
 
@@ -1039,4 +1039,4 @@ Empty. The migration completed in May 2026 — see [GENERATOR_DECOMPOSITION_PLAN
 - After adding a new primitive: add a row to section 3 under the right family and bump nothing else; the AI agent reads section 3 to know what's available.
 - After adding a new preset: add a row to section 5 or section 6.1 with the topology shape; downstream readers learn the analogue from this entry.
 - After deleting a primitive: remove the row; don't leave it as "deprecated."
-- Validate by running `cargo run -p manifold-renderer --bin check-presets` (loads + compiles every preset, sub-second, no GPU); a green run means every primitive referenced by every preset is registered.
+- Validate by running `cargo run -p manifold-nodes --bin check-presets` (loads + compiles every preset, sub-second, no GPU); a green run means every primitive referenced by every preset is registered.

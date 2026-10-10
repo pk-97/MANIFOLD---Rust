@@ -303,7 +303,15 @@ impl LoudnessSnapshot {
     };
 }
 
+/// A closed block belongs to exactly one measurement, including across resets.
+#[derive(Clone, Copy, Debug)]
+pub struct LoudnessBlock {
+    pub generation: u32,
+    pub mean_square: f32,
+}
+
 pub struct LoudnessMeter {
+    generation: u32,
     sample_rate: f32,
     samples_per_block: usize,
 
@@ -321,12 +329,25 @@ pub struct LoudnessMeter {
     sm_lr_mean: f32,       // 1-pole smoothed L·R (correlation numerator)
     sm_coef: f32,          // 1 − (1-pole decay factor per sample)
     raw_peak_abs_max: f32, // monotonic max of |L|, |R| raw samples
-    rms_max_linear: f32,   // monotonic max of sqrt(sm_mean_sq) for display
+    rms_max_mean_sq: f32,   // monotonic max of smoothed stereo power
 
     // 100 ms accumulator, per channel, sum of squares.
     block_sum_sq_l: f64,
     block_sum_sq_r: f64,
     block_count: usize,
+
+    // Exact sample-based rolling K-weighted power windows. The ring is
+    // sized for the 3 s window; both live windows use the same samples so
+    // their result does not depend on process() block boundaries.
+    momentary_window_samples: usize,
+    short_term_window_samples: usize,
+    sample_power_ring: Vec<f32>,
+    sample_ring_write: usize,
+    sample_count: usize,
+    momentary_sum_power: f64,
+    short_term_sum_power: f64,
+    momentary_max_mean_sq: f32,
+    short_term_max_mean_sq: f32,
 
     // Closed 100 ms bins, channel-weighted mean-square (L² + R²) / N
     // where N is samples_per_block. Stored indefinitely so gated
@@ -342,13 +363,15 @@ pub struct LoudnessMeter {
     scratch_block_means: Vec<f32>,
     scratch_lra_loudness: Vec<f32>,
     scratch_kept: Vec<f32>,
+    scratch_prefix_sums: Vec<f64>,
 
     // Optional sink for closed-block z values. When present (plugin
     // runtime path), the meter stops running integrated / LRA gating
     // in-line; a worker thread pops z's from this queue and does the
     // O(N) recompute off-thread. Absent in CLI / unit tests so the
     // standalone `snapshot()` keeps working.
-    block_sink: Option<Arc<ArrayQueue<f32>>>,
+    block_sink: Option<Arc<ArrayQueue<LoudnessBlock>>>,
+    deferred_aggregation: bool,
 
     // Most recent readouts.
     snapshot: LoudnessSnapshot,
@@ -361,6 +384,8 @@ pub struct LoudnessMeter {
 impl LoudnessMeter {
     pub fn new(sample_rate: f32) -> Self {
         let samples_per_block = ((sample_rate * BLOCK_MS / 1000.0).round() as usize).max(1);
+        let momentary_window_samples = ((sample_rate * 0.4).round() as usize).max(1);
+        let short_term_window_samples = ((sample_rate * 3.0).round() as usize).max(1);
         // Pre-size block storage + scratch for ~30 min sessions so the
         // audio-thread push never allocates in the common case. Beyond
         // that, Vec amortised growth kicks in (still bounded memcpy).
@@ -370,6 +395,7 @@ impl LoudnessMeter {
         const READOUT_TC_S: f32 = 0.3;
         let sm_coef = (-1.0 / (sample_rate * READOUT_TC_S).max(1.0)).exp();
         Self {
+            generation: 0,
             sample_rate,
             samples_per_block,
             k_l: ChannelKFilter::new(sample_rate),
@@ -382,15 +408,26 @@ impl LoudnessMeter {
             sm_lr_mean: 0.0,
             sm_coef,
             raw_peak_abs_max: 0.0,
-            rms_max_linear: 0.0,
+            rms_max_mean_sq: 0.0,
             block_sum_sq_l: 0.0,
             block_sum_sq_r: 0.0,
             block_count: 0,
+            momentary_window_samples,
+            short_term_window_samples,
+            sample_power_ring: vec![0.0; short_term_window_samples],
+            sample_ring_write: 0,
+            sample_count: 0,
+            momentary_sum_power: 0.0,
+            short_term_sum_power: 0.0,
+            momentary_max_mean_sq: 0.0,
+            short_term_max_mean_sq: 0.0,
             block_msq: Vec::with_capacity(PRESIZE_BINS),
             scratch_block_means: Vec::with_capacity(PRESIZE_BINS),
             scratch_lra_loudness: Vec::with_capacity(PRESIZE_BINS),
             scratch_kept: Vec::with_capacity(PRESIZE_BINS),
+            scratch_prefix_sums: Vec::with_capacity(PRESIZE_BINS + 1),
             block_sink: None,
+            deferred_aggregation: false,
             snapshot: LoudnessSnapshot::EMPTY,
             bins_since_reset: 0,
         }
@@ -414,9 +451,33 @@ impl LoudnessMeter {
     /// the queue capacity, the oldest pending block is dropped. For a
     /// reasonable queue size (256 = 25.6 s) this never happens in
     /// practice, but it guarantees the audio thread never blocks.
-    pub fn attach_block_sink(&mut self, sink: Arc<ArrayQueue<f32>>) {
+    pub fn attach_block_sink(&mut self, sink: Arc<ArrayQueue<LoudnessBlock>>) {
         self.block_sink = Some(sink);
     }
+
+    /// Defer integrated/LRA gating until `finalize_aggregation` is called.
+    /// This is useful for offline callers that can aggregate once after all
+    /// blocks have arrived instead of repeating the full history scan on
+    /// every 100 ms tick.
+    pub fn set_deferred_aggregation(&mut self, deferred: bool) {
+        self.deferred_aggregation = deferred;
+    }
+
+    /// Run the deferred integrated/LRA aggregation and publish the results.
+    /// Returns the values that were available after applying the gates.
+    pub fn finalize_aggregation(&mut self) -> (Option<f32>, Option<f32>) {
+        let result = compute_integrated_and_lra_in_place(
+            &self.block_msq,
+            &mut self.scratch_block_means,
+            &mut self.scratch_lra_loudness,
+            &mut self.scratch_kept,
+            &mut self.scratch_prefix_sums,
+        );
+        self.apply_aggregation_result(result);
+        result
+    }
+
+    pub fn set_generation(&mut self, generation: u32) { self.generation = generation; }
 
     pub fn sample_rate(&self) -> f32 {
         self.sample_rate
@@ -435,14 +496,22 @@ impl LoudnessMeter {
         self.sm_r_mean_sq = 0.0;
         self.sm_lr_mean = 0.0;
         self.raw_peak_abs_max = 0.0;
-        self.rms_max_linear = 0.0;
+        self.rms_max_mean_sq = 0.0;
         self.block_sum_sq_l = 0.0;
         self.block_sum_sq_r = 0.0;
         self.block_count = 0;
+        self.sample_power_ring.fill(0.0);
+        self.sample_ring_write = 0;
+        self.sample_count = 0;
+        self.momentary_sum_power = 0.0;
+        self.short_term_sum_power = 0.0;
+        self.momentary_max_mean_sq = 0.0;
+        self.short_term_max_mean_sq = 0.0;
         self.block_msq.clear();
         self.scratch_block_means.clear();
         self.scratch_lra_loudness.clear();
         self.scratch_kept.clear();
+        self.scratch_prefix_sums.clear();
         self.snapshot = LoudnessSnapshot::EMPTY;
         self.bins_since_reset = 0;
     }
@@ -464,6 +533,7 @@ impl LoudnessMeter {
             self.block_sum_sq_l += (kl * kl) as f64;
             self.block_sum_sq_r += (kr * kr) as f64;
             self.block_count += 1;
+            self.push_sample_power(kl * kl + kr * kr);
             if self.block_count >= self.samples_per_block {
                 self.close_block();
             }
@@ -487,10 +557,9 @@ impl LoudnessMeter {
             self.sm_l_mean_sq = sm_coef * self.sm_l_mean_sq + one_minus * (xl * xl);
             self.sm_r_mean_sq = sm_coef * self.sm_r_mean_sq + one_minus * (xr * xr);
             self.sm_lr_mean = sm_coef * self.sm_lr_mean + one_minus * (xl * xr);
+            self.rms_max_mean_sq = self.rms_max_mean_sq.max(0.5 * (self.sm_l_mean_sq + self.sm_r_mean_sq));
         }
-        // Refresh running readouts (M, ST, max, TP) even if no bin
-        // closed this call — M/ST don't change within a 100 ms bin,
-        // but TP does.
+        // Publish sample-accurate windows and maxima at each callback boundary.
         self.update_running_readouts();
     }
 
@@ -512,50 +581,32 @@ impl LoudnessMeter {
             // thread. Integrated / LRA will land on the atomics a few
             // hops later; consumers already treat those readouts as
             // slow-moving.
-            let _ = sink.force_push(z);
-            // Also stash z in a small rolling window so the in-line
-            // momentary / short-term readouts have real history — the
-            // worker owns the unbounded log for integrated / LRA, not
-            // these fast-path readouts. Without this the partial is
-            // the ONLY contributor and ST flickers around a 100 ms
-            // window.
-            self.block_msq.push(z);
-            const ROLLING_CAP: usize = SHORT_TERM_BLOCKS + 2;
-            if self.block_msq.len() > ROLLING_CAP {
-                let drop = self.block_msq.len() - ROLLING_CAP;
-                self.block_msq.drain(..drop);
-            }
+            let _ = sink.force_push(LoudnessBlock { generation: self.generation, mean_square: z });
         } else {
             // In-line path (CLI, unit tests): keep full history +
             // recompute integrated / LRA in-line on every tick.
             self.block_msq.push(z);
-            self.recompute_on_tick();
+            if !self.deferred_aggregation {
+                self.recompute_on_tick();
+            }
         }
     }
 
     fn update_running_readouts(&mut self) {
-        // Momentary/short-term include the in-progress 100 ms bin as
-        // a partial contribution (time-weighted by its sample count).
-        // Without this the readouts step at 10 Hz, which looks like
-        // stuttering on a 60 fps meter — including the partial makes
-        // the column update every audio block instead.
+        // Exact rolling sample windows, independent of callback partitioning.
         let m_opt = self.windowed_mean_sq_with_partial(MOMENTARY_BLOCKS);
         let s_opt = self.windowed_mean_sq_with_partial(SHORT_TERM_BLOCKS);
         if let Some(m_mean) = m_opt {
             let m = loudness_from_mean_sq(m_mean);
             self.snapshot.momentary_lufs = m;
-            if m > self.snapshot.momentary_max_lufs {
-                self.snapshot.momentary_max_lufs = m;
-            }
+            self.snapshot.momentary_max_lufs = loudness_from_mean_sq(self.momentary_max_mean_sq);
         } else {
             self.snapshot.momentary_lufs = MIN_LUFS;
         }
         if let Some(s_mean) = s_opt {
             let s = loudness_from_mean_sq(s_mean);
             self.snapshot.short_term_lufs = s;
-            if s > self.snapshot.short_term_max_lufs {
-                self.snapshot.short_term_max_lufs = s;
-            }
+            self.snapshot.short_term_max_lufs = loudness_from_mean_sq(self.short_term_max_mean_sq);
         } else {
             self.snapshot.short_term_lufs = MIN_LUFS;
         }
@@ -589,11 +640,8 @@ impl LoudnessMeter {
         // Stereo RMS: power-average the two smoothed mean-squares.
         let rms_ms = 0.5 * (self.sm_l_mean_sq + self.sm_r_mean_sq);
         let rms_linear = rms_ms.max(0.0).sqrt();
-        if rms_linear > self.rms_max_linear {
-            self.rms_max_linear = rms_linear;
-        }
         self.snapshot.rms_db = amp_to_db(rms_linear);
-        self.snapshot.rms_max_db = amp_to_db(self.rms_max_linear);
+        self.snapshot.rms_max_db = amp_to_db(self.rms_max_mean_sq.max(0.0).sqrt());
 
         // Elapsed time since last reset. Closed-block count gives us
         // 100 ms granularity; fold in the in-progress partial bin for
@@ -613,117 +661,78 @@ impl LoudnessMeter {
         };
     }
 
-    fn recompute_on_tick(&mut self) {
-        // Integrated loudness: two-pass gate over all 400 ms blocks
-        // (100 ms stride). A 400 ms block is the mean of 4
-        // consecutive 100 ms bins; we iterate by starting bin.
-        let n_bins = self.block_msq.len();
-        if n_bins < MOMENTARY_BLOCKS {
-            return;
+    fn push_sample_power(&mut self, power: f32) {
+        let ring_len = self.sample_power_ring.len();
+        let write = self.sample_ring_write;
+
+        if self.sample_count >= self.momentary_window_samples {
+            let remove = (write + ring_len - self.momentary_window_samples) % ring_len;
+            self.momentary_sum_power -= self.sample_power_ring[remove] as f64;
         }
-        let stride = 1; // 75 % overlap = one bin step
-        let window = MOMENTARY_BLOCKS;
-        let mut ungated_sum = 0.0_f64;
-        let mut ungated_count = 0_usize;
-        let end = n_bins - window + 1;
-        self.scratch_block_means.clear();
-        for start in (0..end).step_by(stride) {
-            let m = mean_slice(&self.block_msq[start..start + window]);
-            self.scratch_block_means.push(m);
-            if loudness_from_mean_sq(m) >= ABSOLUTE_GATE_LUFS {
-                ungated_sum += m as f64;
-                ungated_count += 1;
-            }
-        }
-        if ungated_count == 0 {
-            return;
-        }
-        let ungated_mean = (ungated_sum / ungated_count as f64) as f32;
-        let rel_threshold = loudness_from_mean_sq(ungated_mean) - RELATIVE_GATE_LU;
-        let mut gated_sum = 0.0_f64;
-        let mut gated_count = 0_usize;
-        for &m in &self.scratch_block_means {
-            let lufs = loudness_from_mean_sq(m);
-            if lufs >= ABSOLUTE_GATE_LUFS && lufs >= rel_threshold {
-                gated_sum += m as f64;
-                gated_count += 1;
-            }
-        }
-        if gated_count > 0 {
-            let gated_mean = (gated_sum / gated_count as f64) as f32;
-            self.snapshot.integrated_lufs = loudness_from_mean_sq(gated_mean);
+        if self.sample_count >= self.short_term_window_samples {
+            self.short_term_sum_power -= self.sample_power_ring[write] as f64;
         }
 
-        // LRA: same gating but on 3 s short-term blocks (30 bins).
-        // Gate: absolute −70 LUFS + relative −20 LU. Range = 95th −
-        // 10th percentile of the surviving loudness values.
-        if n_bins >= LRA_BLOCKS_PER_UPDATE {
-            let lra_window = LRA_BLOCKS_PER_UPDATE;
-            let lra_end = n_bins - lra_window + 1;
-            self.scratch_lra_loudness.clear();
-            let mut lra_ungated_sum = 0.0_f64;
-            let mut lra_ungated_count = 0_usize;
-            for start in (0..lra_end).step_by(stride) {
-                let m = mean_slice(&self.block_msq[start..start + lra_window]);
-                let lufs = loudness_from_mean_sq(m);
-                if lufs >= ABSOLUTE_GATE_LUFS {
-                    lra_ungated_sum += m as f64;
-                    lra_ungated_count += 1;
-                    self.scratch_lra_loudness.push(lufs);
-                }
-            }
-            if lra_ungated_count > 0 {
-                let lra_ungated_mean = (lra_ungated_sum / lra_ungated_count as f64) as f32;
-                let lra_rel = loudness_from_mean_sq(lra_ungated_mean) - LRA_RELATIVE_GATE_LU;
-                self.scratch_kept.clear();
-                self.scratch_kept
-                    .extend(self.scratch_lra_loudness.iter().copied().filter(|&v| v >= lra_rel));
-                if self.scratch_kept.len() >= 2 {
-                    // total_cmp avoids panics on hypothetical NaN inputs;
-                    // partial_cmp().unwrap() would tear down the audio
-                    // thread on an unexpected value.
-                    self.scratch_kept.sort_by(|a, b| a.total_cmp(b));
-                    let p10 = percentile(&self.scratch_kept, 0.10);
-                    let p95 = percentile(&self.scratch_kept, 0.95);
-                    self.snapshot.lra_lu = (p95 - p10).max(0.0);
-                }
-            }
+        self.sample_power_ring[write] = power;
+        self.momentary_sum_power += power as f64;
+        self.short_term_sum_power += power as f64;
+        self.sample_ring_write = (write + 1) % ring_len;
+        self.sample_count = self.sample_count.saturating_add(1);
+
+        // The measurement window starts at reset, so samples before the
+        // first callback are implicit silence. Keep the denominator fixed
+        // while the rings warm up; shortening it would make startup samples
+        // look louder than the same samples in a steady-state window.
+        let momentary_mean =
+            (self.momentary_sum_power / self.momentary_window_samples as f64) as f32;
+        let short_term_mean =
+            (self.short_term_sum_power / self.short_term_window_samples as f64) as f32;
+        if momentary_mean > self.momentary_max_mean_sq {
+            self.momentary_max_mean_sq = momentary_mean;
+        }
+        if short_term_mean > self.short_term_max_mean_sq {
+            self.short_term_max_mean_sq = short_term_mean;
+        }
+    }
+
+    fn recompute_on_tick(&mut self) {
+        let result = compute_integrated_and_lra_in_place(
+            &self.block_msq,
+            &mut self.scratch_block_means,
+            &mut self.scratch_lra_loudness,
+            &mut self.scratch_kept,
+            &mut self.scratch_prefix_sums,
+        );
+        self.apply_aggregation_result(result);
+    }
+
+    fn apply_aggregation_result(&mut self, result: (Option<f32>, Option<f32>)) {
+        if let Some(integrated) = result.0 {
+            self.snapshot.integrated_lufs = integrated;
+        }
+        if let Some(lra) = result.1 {
+            self.snapshot.lra_lu = lra;
         }
     }
 }
 
 impl LoudnessMeter {
-    /// Weighted mean-square over the trailing `blocks` of 100 ms
-    /// bins, including the in-progress 100 ms partial. Weights are
-    /// the actual sample counts so the partial contributes
-    /// proportionally to how far through the 100 ms bin we are.
-    /// Returns `None` if there's no history at all.
+    /// Exact sample-based mean-square over the trailing 400 ms or 3 s
+    /// window. The ring contains the K-weighted per-sample power. Before a
+    /// ring fills, its zeroed slots represent the implicit leading silence
+    /// from reset, so the requested window's denominator stays fixed.
     fn windowed_mean_sq_with_partial(&self, blocks: usize) -> Option<f32> {
-        let closed = self.block_msq.len();
-        let have_partial = self.block_count > 0;
-        if closed == 0 && !have_partial {
+        if self.sample_count == 0 {
             return None;
         }
-        let spb = self.samples_per_block as f64;
-        // Reserve the last slot for the partial when it exists so
-        // the total window stays at `blocks * samples_per_block`.
-        let take_closed = closed.min(blocks.saturating_sub(if have_partial { 1 } else { 0 }));
-        let start = closed - take_closed;
-        let mut total_sq = 0.0_f64;
-        let mut total_n = 0.0_f64;
-        for &msq in &self.block_msq[start..closed] {
-            total_sq += msq as f64 * spb;
-            total_n += spb;
-        }
-        if have_partial {
-            total_sq += self.block_sum_sq_l + self.block_sum_sq_r;
-            total_n += self.block_count as f64;
-        }
-        if total_n <= 0.0 {
-            None
+        let (sum, window) = if blocks == MOMENTARY_BLOCKS {
+            (self.momentary_sum_power, self.momentary_window_samples)
+        } else if blocks == SHORT_TERM_BLOCKS {
+            (self.short_term_sum_power, self.short_term_window_samples)
         } else {
-            Some((total_sq / total_n) as f32)
-        }
+            return None;
+        };
+        Some((sum / window as f64) as f32)
     }
 }
 
@@ -735,6 +744,7 @@ pub struct IntegratedScratch {
     block_means: Vec<f32>,
     lra_loudness: Vec<f32>,
     kept: Vec<f32>,
+    prefix_sums: Vec<f64>,
 }
 
 /// Compute BS.1770-4 gated integrated loudness and EBU Tech 3342 LRA from a
@@ -751,88 +761,104 @@ pub fn compute_integrated_and_lra(
     block_msq: &[f32],
     scratch: &mut IntegratedScratch,
 ) -> (Option<f32>, Option<f32>) {
-    let mut integrated_out = None;
-    let mut lra_out = None;
+    compute_integrated_and_lra_in_place(
+        block_msq,
+        &mut scratch.block_means,
+        &mut scratch.lra_loudness,
+        &mut scratch.kept,
+        &mut scratch.prefix_sums,
+    )
+}
+
+fn compute_integrated_and_lra_in_place(
+    block_msq: &[f32],
+    block_means: &mut Vec<f32>,
+    lra_loudness: &mut Vec<f32>,
+    kept: &mut Vec<f32>,
+    prefix_sums: &mut Vec<f64>,
+) -> (Option<f32>, Option<f32>) {
     let n_bins = block_msq.len();
     if n_bins < MOMENTARY_BLOCKS {
-        return (integrated_out, lra_out);
+        return (None, None);
     }
 
-    let stride = 1;
+    prefix_sums.clear();
+    prefix_sums.push(0.0);
+    for &value in block_msq {
+        let next = prefix_sums.last().copied().unwrap_or(0.0) + value as f64;
+        prefix_sums.push(next);
+    }
+
     let window = MOMENTARY_BLOCKS;
     let end = n_bins - window + 1;
-    scratch.block_means.clear();
+    block_means.clear();
     let mut ungated_sum = 0.0_f64;
     let mut ungated_count = 0_usize;
-    for start in (0..end).step_by(stride) {
-        let m = mean_slice(&block_msq[start..start + window]);
-        scratch.block_means.push(m);
+    for start in 0..end {
+        let m = ((prefix_sums[start + window] - prefix_sums[start]) / window as f64) as f32;
+        block_means.push(m);
         if loudness_from_mean_sq(m) >= ABSOLUTE_GATE_LUFS {
             ungated_sum += m as f64;
             ungated_count += 1;
         }
     }
-    if ungated_count > 0 {
+    let integrated_out = if ungated_count == 0 {
+        None
+    } else {
         let ungated_mean = (ungated_sum / ungated_count as f64) as f32;
         let rel_threshold = loudness_from_mean_sq(ungated_mean) - RELATIVE_GATE_LU;
         let mut gated_sum = 0.0_f64;
         let mut gated_count = 0_usize;
-        for &m in &scratch.block_means {
+        for &m in block_means.iter() {
             let lufs = loudness_from_mean_sq(m);
             if lufs >= ABSOLUTE_GATE_LUFS && lufs >= rel_threshold {
                 gated_sum += m as f64;
                 gated_count += 1;
             }
         }
-        if gated_count > 0 {
-            let gated_mean = (gated_sum / gated_count as f64) as f32;
-            integrated_out = Some(loudness_from_mean_sq(gated_mean));
+        if gated_count == 0 {
+            None
+        } else {
+            Some(loudness_from_mean_sq((gated_sum / gated_count as f64) as f32))
         }
-    }
+    };
 
-    if n_bins >= LRA_BLOCKS_PER_UPDATE {
+    let lra_out = if n_bins < LRA_BLOCKS_PER_UPDATE {
+        None
+    } else {
         let lra_window = LRA_BLOCKS_PER_UPDATE;
         let lra_end = n_bins - lra_window + 1;
-        scratch.lra_loudness.clear();
+        lra_loudness.clear();
         let mut lra_ungated_sum = 0.0_f64;
         let mut lra_ungated_count = 0_usize;
-        for start in (0..lra_end).step_by(stride) {
-            let m = mean_slice(&block_msq[start..start + lra_window]);
+        for start in 0..lra_end {
+            let m = ((prefix_sums[start + lra_window] - prefix_sums[start])
+                / lra_window as f64) as f32;
             let lufs = loudness_from_mean_sq(m);
             if lufs >= ABSOLUTE_GATE_LUFS {
                 lra_ungated_sum += m as f64;
                 lra_ungated_count += 1;
-                scratch.lra_loudness.push(lufs);
+                lra_loudness.push(lufs);
             }
         }
-        if lra_ungated_count > 0 {
+        if lra_ungated_count == 0 {
+            None
+        } else {
             let lra_ungated_mean = (lra_ungated_sum / lra_ungated_count as f64) as f32;
             let lra_rel = loudness_from_mean_sq(lra_ungated_mean) - LRA_RELATIVE_GATE_LU;
-            scratch.kept.clear();
-            scratch
-                .kept
-                .extend(scratch.lra_loudness.iter().copied().filter(|&v| v >= lra_rel));
-            if scratch.kept.len() >= 2 {
-                scratch.kept.sort_by(|a, b| a.total_cmp(b));
-                let p10 = percentile(&scratch.kept, 0.10);
-                let p95 = percentile(&scratch.kept, 0.95);
-                lra_out = Some((p95 - p10).max(0.0));
+            kept.clear();
+            kept.extend(lra_loudness.iter().copied().filter(|&v| v >= lra_rel));
+            if kept.len() < 2 {
+                None
+            } else {
+                let p10 = percentile_select(kept, 0.10);
+                let p95 = percentile_select(kept, 0.95);
+                Some((p95 - p10).max(0.0))
             }
         }
-    }
+    };
 
     (integrated_out, lra_out)
-}
-
-fn mean_slice(xs: &[f32]) -> f32 {
-    if xs.is_empty() {
-        return 0.0;
-    }
-    let mut s = 0.0_f64;
-    for &v in xs {
-        s += v as f64;
-    }
-    (s / xs.len() as f64) as f32
 }
 
 fn loudness_from_mean_sq(m: f32) -> f32 {
@@ -843,8 +869,8 @@ fn loudness_from_mean_sq(m: f32) -> f32 {
     }
 }
 
-fn percentile(sorted: &[f32], p: f32) -> f32 {
-    let n = sorted.len();
+fn percentile_select(values: &mut [f32], p: f32) -> f32 {
+    let n = values.len();
     if n == 0 {
         return 0.0;
     }
@@ -852,7 +878,16 @@ fn percentile(sorted: &[f32], p: f32) -> f32 {
     let lo = pos.floor() as usize;
     let hi = (lo + 1).min(n - 1);
     let frac = pos - lo as f32;
-    sorted[lo] + (sorted[hi] - sorted[lo]) * frac
+    let lo_value = *values
+        .select_nth_unstable_by(lo, |a, b| a.total_cmp(b))
+        .1;
+    if hi == lo {
+        return lo_value;
+    }
+    let hi_value = *values
+        .select_nth_unstable_by(hi, |a, b| a.total_cmp(b))
+        .1;
+    lo_value + (hi_value - lo_value) * frac
 }
 
 #[cfg(test)]
@@ -863,6 +898,55 @@ mod tests {
         (0..n)
             .map(|i| amp * (2.0 * std::f32::consts::PI * freq * i as f32 / sr).sin())
             .collect()
+    }
+
+    fn process_in_chunks(meter: &mut LoudnessMeter, left: &[f32], right: &[f32]) {
+        for (left_chunk, right_chunk) in left.chunks(256).zip(right.chunks(256)) {
+            meter.process(left_chunk, right_chunk);
+        }
+    }
+
+    fn tapered_sine(freq: f32, amp: f32, phase: f32, sr: f32, seconds: f32) -> Vec<f32> {
+        let n = (sr * seconds) as usize;
+        let fade = (sr * 0.01) as usize;
+        (0..n)
+            .map(|i| {
+                let fade_in = if i < fade {
+                    i as f32 / fade as f32
+                } else {
+                    1.0
+                };
+                let fade_out = if i >= n - fade {
+                    (n - i - 1) as f32 / fade as f32
+                } else {
+                    1.0
+                };
+                let envelope = fade_in.min(fade_out).clamp(0.0, 1.0);
+                envelope
+                    * amp
+                    * (2.0 * std::f32::consts::PI * freq * i as f32 / sr + phase).sin()
+            })
+            .collect()
+    }
+
+    fn ebu_step_signal(sr: f32, repetitions: usize, high_secs: f32, low_secs: f32) -> Vec<f32> {
+        let high = (sr * high_secs) as usize;
+        let low = (sr * low_secs) as usize;
+        let mut signal = Vec::with_capacity((high + low) * repetitions);
+        let mut sample = 0_usize;
+        for _ in 0..repetitions {
+            for (count, amp) in [(high, 10.0_f32.powf(-20.0 / 20.0)),
+                (low, 10.0_f32.powf(-30.0 / 20.0))]
+            {
+                for _ in 0..count {
+                    signal.push(
+                        amp * (2.0 * std::f32::consts::PI * 1000.0 * sample as f32 / sr).sin(),
+                    );
+                    sample += 1;
+                }
+            }
+        }
+        signal
     }
 
     #[test]
@@ -926,5 +1010,206 @@ mod tests {
         meter.reset();
         assert_eq!(meter.snapshot().momentary_max_lufs, MIN_LUFS);
         assert_eq!(meter.snapshot().true_peak_max_dbtp, MIN_LUFS);
+    }
+
+    #[test]
+    fn startup_maxima_use_full_windows_for_zero_and_cosine_phase() {
+        let sr = 48_000.0;
+        let n = sr as usize * 5;
+        let signals = [
+            gen_sine(1000.0, 1.0, sr, n),
+            (0..n)
+                .map(|i| {
+                    (2.0 * std::f32::consts::PI * 1000.0 * i as f32 / sr).cos()
+                })
+                .collect::<Vec<_>>(),
+        ];
+
+        for signal in signals {
+            let mut meter = LoudnessMeter::new(sr);
+            process_in_chunks(&mut meter, &signal, &signal);
+            let snapshot = meter.snapshot();
+            assert!(
+                snapshot.momentary_max_lufs <= snapshot.momentary_lufs + 0.1,
+                "startup M max {} exceeded settled M {}",
+                snapshot.momentary_max_lufs,
+                snapshot.momentary_lufs
+            );
+            assert!(
+                snapshot.short_term_max_lufs <= snapshot.short_term_lufs + 0.1,
+                "startup S max {} exceeded settled S {}",
+                snapshot.short_term_max_lufs,
+                snapshot.short_term_lufs
+            );
+        }
+    }
+
+    #[test]
+    fn reset_restarts_startup_window_denominator() {
+        let sr = 48_000.0;
+        let signal = (0..(sr as usize / 2))
+            .map(|i| (2.0 * std::f32::consts::PI * 1000.0 * i as f32 / sr).cos())
+            .collect::<Vec<_>>();
+
+        let mut reset_meter = LoudnessMeter::new(sr);
+        reset_meter.process(&signal, &signal);
+        reset_meter.reset();
+        reset_meter.process(&signal, &signal);
+
+        let mut fresh_meter = LoudnessMeter::new(sr);
+        fresh_meter.process(&signal, &signal);
+
+        let reset_snapshot = reset_meter.snapshot();
+        let fresh_snapshot = fresh_meter.snapshot();
+        assert_eq!(reset_snapshot.momentary_lufs, fresh_snapshot.momentary_lufs);
+        assert_eq!(
+            reset_snapshot.momentary_max_lufs,
+            fresh_snapshot.momentary_max_lufs
+        );
+        assert_eq!(reset_snapshot.short_term_lufs, fresh_snapshot.short_term_lufs);
+        assert_eq!(
+            reset_snapshot.short_term_max_lufs,
+            fresh_snapshot.short_term_max_lufs
+        );
+    }
+
+    #[test]
+    fn startup_window_maxima_are_partition_invariant() {
+        let sr = 8_000.0;
+        let n = sr as usize * 4;
+        let signal = (0..n)
+            .map(|i| (2.0 * std::f32::consts::PI * 733.0 * i as f32 / sr).cos())
+            .collect::<Vec<_>>();
+
+        let mut whole = LoudnessMeter::new(sr);
+        whole.process(&signal, &signal);
+
+        let mut partitioned = LoudnessMeter::new(sr);
+        let mut start = 0;
+        for size in [1, 17, 113, 7, 251, 509, 71, 193] {
+            let end = (start + size).min(n);
+            partitioned.process(&signal[start..end], &signal[start..end]);
+            start = end;
+            if start == n {
+                break;
+            }
+        }
+        if start < n {
+            partitioned.process(&signal[start..], &signal[start..]);
+        }
+
+        let expected = whole.snapshot();
+        let actual = partitioned.snapshot();
+        assert!((actual.momentary_lufs - expected.momentary_lufs).abs() < 1e-5);
+        assert!((actual.short_term_lufs - expected.short_term_lufs).abs() < 1e-5);
+        assert!((actual.momentary_max_lufs - expected.momentary_max_lufs).abs() < 1e-5);
+        assert!((actual.short_term_max_lufs - expected.short_term_max_lufs).abs() < 1e-5);
+    }
+
+    #[test]
+    fn window_metrics_are_partition_invariant() {
+        let sr = 8_000.0;
+        let n = sr as usize * 4;
+        let left = (0..n)
+            .map(|i| {
+                let t = i as f32 / sr;
+                0.5 * (2.0 * std::f32::consts::PI * 233.0 * t).sin()
+            })
+            .collect::<Vec<_>>();
+        let right = left.clone();
+
+        let mut whole = LoudnessMeter::new(sr);
+        whole.process(&left, &right);
+
+        let mut partitioned = LoudnessMeter::new(sr);
+        let mut start = 0;
+        for size in [37, 113, 251, 509, 71, 193] {
+            let end = (start + size).min(n);
+            partitioned.process(&left[start..end], &right[start..end]);
+            start = end;
+            if start == n {
+                break;
+            }
+        }
+        if start < n {
+            partitioned.process(&left[start..], &right[start..]);
+        }
+
+        let expected = whole.snapshot();
+        let actual = partitioned.snapshot();
+        assert!((actual.momentary_lufs - expected.momentary_lufs).abs() < 1e-5);
+        assert!((actual.short_term_lufs - expected.short_term_lufs).abs() < 1e-5);
+        assert!((actual.momentary_max_lufs - expected.momentary_max_lufs).abs() < 1e-5);
+        assert!((actual.short_term_max_lufs - expected.short_term_max_lufs).abs() < 1e-5);
+    }
+
+    #[test]
+    fn rms_max_is_independent_of_callback_boundaries() {
+        let mut signal = vec![0.5; 24000];
+        signal.resize(48000, 0.0);
+        let mut whole = LoudnessMeter::new(48000.0);
+        whole.process(&signal, &signal);
+        let mut blocks = LoudnessMeter::new(48000.0);
+        for block in signal.chunks(137) { blocks.process(block, block); }
+        assert!((whole.snapshot().rms_max_db - blocks.snapshot().rms_max_db).abs() < 1e-5);
+        assert!(whole.snapshot().rms_max_db > whole.snapshot().rms_db + 6.0);
+    }
+
+    #[test]
+    fn ebu_case_9_short_term_settles_to_minus_23() {
+        let sr = 48_000.0;
+        let signal = ebu_step_signal(sr, 5, 1.34, 1.66);
+        let mut meter = LoudnessMeter::new(sr);
+        process_in_chunks(&mut meter, &signal, &signal);
+        let short_term = meter.snapshot().short_term_lufs;
+        assert!((short_term + 23.0).abs() <= 0.1, "case 9 S was {short_term}");
+    }
+
+    #[test]
+    fn ebu_case_12_momentary_settles_to_minus_23() {
+        let sr = 48_000.0;
+        let signal = ebu_step_signal(sr, 25, 0.18, 0.22);
+        let mut meter = LoudnessMeter::new(sr);
+        process_in_chunks(&mut meter, &signal, &signal);
+        let momentary = meter.snapshot().momentary_lufs;
+        assert!((momentary + 23.0).abs() <= 0.1, "case 12 M was {momentary}");
+    }
+
+    #[test]
+    fn ebu_true_peak_phase_fixtures_are_within_tolerance() {
+        let sr = 48_000.0;
+        for (freq, phase) in [
+            (sr / 4.0, 45.0_f32.to_radians()),
+            (sr / 6.0, 60.0_f32.to_radians()),
+        ] {
+            let signal = tapered_sine(freq, 0.5, phase, sr, 0.1);
+            let mut meter = LoudnessMeter::new(sr);
+            process_in_chunks(&mut meter, &signal, &signal);
+            let true_peak = meter.snapshot().true_peak_max_dbtp;
+            assert!(
+                (-6.4..=-5.8).contains(&true_peak),
+                "true peak for {freq} Hz / {phase} rad was {true_peak} dBTP"
+            );
+        }
+    }
+
+    #[test]
+    fn deferred_aggregation_matches_repeated_inline_aggregation() {
+        let sr = 48_000.0;
+        let signal = ebu_step_signal(sr, 25, 0.18, 0.22);
+        let mut inline = LoudnessMeter::new(sr);
+        process_in_chunks(&mut inline, &signal, &signal);
+
+        let mut deferred = LoudnessMeter::new(sr);
+        deferred.set_deferred_aggregation(true);
+        process_in_chunks(&mut deferred, &signal, &signal);
+        let finalized = deferred.finalize_aggregation();
+
+        let inline_snapshot = inline.snapshot();
+        let deferred_snapshot = deferred.snapshot();
+        assert_eq!(finalized.0, Some(deferred_snapshot.integrated_lufs));
+        assert_eq!(finalized.1, Some(deferred_snapshot.lra_lu));
+        assert!((deferred_snapshot.integrated_lufs - inline_snapshot.integrated_lufs).abs() < 1e-5);
+        assert!((deferred_snapshot.lra_lu - inline_snapshot.lra_lu).abs() < 1e-5);
     }
 }

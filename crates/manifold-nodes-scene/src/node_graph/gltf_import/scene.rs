@@ -665,7 +665,7 @@ pub(super) fn build_import_graph(
     // and the P1+P2 range stamp below reuses the same `SceneScale` (the
     // slider-width multiplier). Same bbox math, both consumers.
     let scene_scale = super::scene_scale::SceneScale::from_bbox(summary.bbox_min, summary.bbox_max);
-    let tail = super::cinematic_tail::build_cinematic_tail(&mut fresh_id, scene_scale.radius);
+    let tail = crate::node_graph::cinematic_tail::build_cinematic_tail(&mut fresh_id, scene_scale.radius, true);
     let dof_group_id = tail.dof_group_id;
     let motion_blur_id = tail.motion_blur_id;
     let bokeh_id = tail.bokeh_id;
@@ -673,7 +673,7 @@ pub(super) fn build_import_graph(
     nodes.extend(tail.nodes);
     // P4: motion_blur's max_blur_px + enabled and bokeh's enabled surface
     // on the Camera card (implementation in cinematic_tail.rs — ceiling).
-    super::cinematic_tail::stamp_tail_camera_sections(
+    crate::node_graph::cinematic_tail::stamp_tail_camera_sections(
         &mut card_params,
         &mut card_bindings,
         motion_blur_id,

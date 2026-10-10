@@ -1,21 +1,25 @@
 //! Shared read-side graph selection for editor, export and preset commands.
+
+use std::sync::Arc;
+
 use manifold_core::{GraphTarget, effect_graph_def::EffectGraphDef, project::Project};
 
 /// The public macro owned by this local editor. Preparation controls have no
 /// live mapping even if a malformed external file supplies a host binding.
-pub(crate) fn modifier_host_binding<'a>(
-    project: &'a Project,
+pub(crate) fn modifier_host_binding<R>(
+    project: &Project,
     target: &GraphTarget,
     macro_id: &str,
-) -> Option<&'a manifold_core::effect_graph_def::BindingDef> {
+    read: impl FnOnce(&manifold_core::effect_graph_def::BindingDef) -> R,
+) -> Option<R> {
     use manifold_core::effect_graph_def::BindingTarget;
     let GraphTarget::SceneModifier { modifier_id, .. } = target else {
         return None;
     };
-    let local = resolve(project, target)?.preset_metadata.as_ref()?;
-    let host = resolve(project, target.host_target()?)?
-        .preset_metadata
-        .as_ref()?;
+    let local_graph = resolve(project, target)?;
+    let local = local_graph.preset_metadata.as_ref()?;
+    let host_graph = resolve(project, target.host_target()?)?;
+    let host = host_graph.preset_metadata.as_ref()?;
     let mut matches = host.bindings.iter().filter(|binding| binding.id == macro_id
         && matches!(&binding.target, BindingTarget::SceneModifier { modifier_id: mid, param_id }
             if mid == modifier_id
@@ -26,18 +30,42 @@ pub(crate) fn modifier_host_binding<'a>(
         return None;
     }
     project.graph_target_owner(target)?.params.get(macro_id)?;
-    Some(binding)
+    Some(read(binding))
 }
 
-/// Borrow the authored graph, preserving an instance's local modifier snapshot.
-/// Catalog defaults are resolved for the owner before selecting the local graph.
+/// A graph borrowed from the project or retained through a catalog snapshot.
+/// Catalog selection is validated once; the immutable snapshot keeps it valid.
+pub(crate) enum ResolvedGraph<'a> {
+    Project(&'a EffectGraphDef),
+    Catalog(Arc<EffectGraphDef>, &'a GraphTarget),
+}
+
+impl std::ops::Deref for ResolvedGraph<'_> {
+    type Target = EffectGraphDef;
+
+    fn deref(&self) -> &Self::Target {
+        match self {
+            Self::Project(graph) => graph,
+            Self::Catalog(graph, target) => target.graph_in(graph).expect("validated catalog target"),
+        }
+    }
+}
+
+/// Resolve authored content, then the catalog, then embedded project content.
+/// Keeping the result alive keeps any catalog borrow valid across reloads.
 pub(crate) fn resolve<'a>(
     project: &'a Project,
-    target: &GraphTarget,
-) -> Option<&'a EffectGraphDef> {
+    target: &'a GraphTarget,
+) -> Option<ResolvedGraph<'a>> {
     let owner = project.graph_target_owner(target)?;
-    let default = manifold_renderer::node_graph::bundled_preset_def(owner.effect_type());
-    project.graph_for_target(target, default)
+    if let Some(graph) = owner.graph.as_ref() {
+        return target.graph_in(graph).map(ResolvedGraph::Project);
+    }
+    if let Some(default) = manifold_nodes::bundled_presets::bundled_preset_def(owner.effect_type()) {
+        target.graph_in(&default)?;
+        return Some(ResolvedGraph::Catalog(default, target));
+    }
+    project.graph_for_target(target, None).map(ResolvedGraph::Project)
 }
 
 /// Derived editor routes keep the authored local nodes while addressing the
@@ -50,10 +78,10 @@ pub(crate) fn modifier_bindings(
     let GraphTarget::SceneModifier { modifier_id, .. } = target else {
         return None;
     };
-    let local = resolve(project, target)?.preset_metadata.as_ref()?;
-    let owner = resolve(project, target.host_target()?)?
-        .preset_metadata
-        .as_ref()?;
+    let local_graph = resolve(project, target)?;
+    let local = local_graph.preset_metadata.as_ref()?;
+    let owner_graph = resolve(project, target.host_target()?)?;
+    let owner = owner_graph.preset_metadata.as_ref()?;
     let mut bindings = Vec::new();
     for outer in &owner.bindings {
         let BindingTarget::SceneModifier {
@@ -89,7 +117,7 @@ pub(crate) fn owner_default(project: &Project, target: &GraphTarget) -> Option<E
     if let Some(graph) = owner.graph.as_ref() {
         return Some(graph.clone());
     }
-    resolve(project, target.host_target()?).cloned()
+    resolve(project, target.host_target()?).map(|graph| (*graph).clone())
 }
 
 /// Catalog comparison snapshot in host coordinates. Commands still receive a
@@ -98,7 +126,7 @@ pub(crate) fn catalog_default(project: &Project, target: &GraphTarget) -> Option
     if matches!(target, GraphTarget::SceneModifier { .. }) {
         let mut owner = resolve(project, target.host_target()?)?.clone();
         let local = resolve(project, target)?;
-        let baseline = match crate::modifier_preset::library_baseline(&owner, local) {
+        let baseline = match crate::modifier_preset::library_baseline(&owner, &local) {
             Ok(baseline) => baseline?,
             Err(error) => {
                 log::error!("[preset] editor baseline unavailable: {error}");
@@ -109,6 +137,6 @@ pub(crate) fn catalog_default(project: &Project, target: &GraphTarget) -> Option
         Some(owner)
     } else {
         let owner = project.graph_target_owner(target)?;
-        manifold_renderer::node_graph::bundled_preset_def(owner.effect_type()).cloned()
+        manifold_nodes::bundled_presets::bundled_preset_def(owner.effect_type()).map(|def| (*def).clone())
     }
 }

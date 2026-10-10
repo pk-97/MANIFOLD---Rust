@@ -944,7 +944,7 @@ way I can self-verify visual/interaction changes without a running window.
 The app is **event-driven**: input → state change → tree rebuild → render. Both ends are reachable
 without a window:
 - The UI rasters into a **CPU pixel buffer** (`bitmap_renderer.rs`: `pixel_buffer: Vec<Color32>`).
-- Text goes through the **real** rasterizer (`ui.draw_text` → `manifold_renderer::text_rasterizer::TextRasterizer`,
+- Text goes through the **real** rasterizer (`ui.draw_text` → `manifold_nodes::text_rasterizer::TextRasterizer`,
   CoreText). The harness reuses it, so fonts / metrics / AA **match the live app by construction** — we
   reimplement nothing.
 - Input is a state machine (`input.rs::UIInputSystem`, `UIEvent`); clicks resolve via
@@ -989,7 +989,7 @@ Multi-step (drag a slider) = a list of `(event, pos, time)` steps, snapshot at t
   replace Peter's eye for **taste** (does the colour feel pro, section 8/section 9 hierarchy) — only for correctness
   (aligned, no overlap, rendered, drawer opened).
 - **Scope:** the UI chrome (panels, inspector, popups, timeline). The **video viewport** is GPU/Metal
-  (manifold-renderer, IOSurface) — a different offscreen path, not covered by this harness.
+  (manifold-nodes, IOSurface) — a different offscreen path, not covered by this harness.
 
 ### 23.6 Payoff against the 11 phases
 - Visual phases (section 14 grid, section 17 elevation, section 18 kit) flip from "Peter-gated each iteration" → "I
@@ -1003,10 +1003,10 @@ Peter's instinct was right: the GPU/node side already solved the hard half. Phas
 
 **Reuse (already exists):**
 - **Headless Metal device** — `GpuDevice::new()` runs windowless in `cargo test`
-  ([`tests/parity/harness.rs`](../crates/manifold-renderer/tests/parity/harness.rs)). The whole
+  ([`tests/parity/harness.rs`](../crates/manifold-nodes/tests/parity/harness.rs)). The whole
   "can we even render with no window" question is already answered yes.
 - **Texture → CPU readback** — two impls: the harness `readback()` and
-  [`gpu_readback.rs`](../crates/manifold-renderer/src/gpu_readback.rs) (`ReadbackRequest::submit/try_read`).
+  [`gpu_readback.rs`](../crates/manifold-nodes/src/gpu_readback.rs) (`ReadbackRequest::submit/try_read`).
 - **PNG encode** — `image` 0.25 (png feature) in `manifold-media`; `RgbaImage::save()` already
   round-trips PNGs in `image_renderer.rs` tests. (`png 0.18` also in `manifold-app`.)
 - **Golden compare** — `assert_bytewise_equal` + the deterministic-fixture / fixed-`ctx` pattern.
@@ -1023,8 +1023,8 @@ side. The bones are current; the legacy effect path is not.
 
 ### 23.8 Spike result — proven ✅
 All three seams confirmed by a working test:
-[`crates/manifold-renderer/tests/headless_ui_spike.rs`](../crates/manifold-renderer/tests/headless_ui_spike.rs)
-(`cargo test -p manifold-renderer --test headless_ui_spike`). Compiled first try, runs in ~2.5s.
+[`crates/manifold-nodes/tests/headless_ui_spike.rs`](../crates/manifold-nodes/tests/headless_ui_spike.rs)
+(`cargo test -p manifold-nodes --test headless_ui_spike`). Compiled first try, runs in ~2.5s.
 
 What it does, fully headless (no winit Window):
 1. `GpuDevice::new()` + `UIRenderer::new(&device, Rgba8Unorm)`.
@@ -1044,7 +1044,7 @@ input injection, and the build→click→re-render loop all work with zero windo
 - `ParamCardPanel::chevron_node_id() -> Option<NodeId>` — a public accessor for the keyed chevron
   (mirrors the already-public `mapping_chevron_rect`), so a harness can target it without guessing
   pixels.
-- `manifold-foundation` as a **dev-dependency** of `manifold-renderer` (the card config needs an
+- `manifold-foundation` as a **dev-dependency** of `manifold-nodes` (the card config needs an
   `EffectId`).
 
 **Remaining to turn the spike into the harness:** generalize beyond one card (arbitrary panels /

@@ -143,7 +143,7 @@ pub enum MaterialParamRole {
 // New field on SceneParamMetadata and ParamSpecDef:
 pub material_role: Option<MaterialParamRole>,
 
-// manifold-renderer::node_graph::material_inspector
+// manifold-nodes::node_graph::material_inspector
 pub fn material_param_role(type_id: &str, param_name: &str)
     -> Option<manifold_core::material_inspector::MaterialParamRole>;
 ```
@@ -169,7 +169,7 @@ The mode-parameter count becomes 96. Colours, texture slots, port names and the 
 Extend renderer `scene_vm::MaterialColorRow` with `pub texture_slots: Vec<MaterialTextureSlot>` and `pub shared_object_count: Option<usize>`. The existing selected object identifies the target map owner; each record's port is its existing graph input name, not a new asset ID.
 
 ```rust
-// manifold-renderer::node_graph::scene_vm
+// manifold-nodes::node_graph::scene_vm
 pub struct MaterialTextureSlot {
     pub port: String,
     pub source: MaterialTextureSource,
@@ -188,6 +188,10 @@ Add UI `MaterialTextureInfo { port: String, label: String, source_label: String,
 Material presentation helpers live in `panels/scene_setup_panel/material_inspector.rs`; the parent scene panel retains its state and shared row rendering. This extraction keeps the existing 4300-line scene-panel ceiling unchanged. Structural grouping joins real row IDs to these facts once per relevant metadata/topology/base-state change. Per-frame effective value updates retain `sync_scene_row_values` and its ParamId join. Inactive text based on effective feature modes may update without reconstructing rows. Preserve scroll, focus and drawers by material scope/node/ParamId, not current section position.
 
 ### 4.4 Compound edits and command ownership
+
+Emissive Skin binding snapshots and neutralizes the emission colour/intensity
+for PBR, Unlit and Cel materials. Switching away from the emissive target or
+removing the Skin restores the authored values; undo/redo preserves both states.
 
 RGB grouping adds `RowRole::ColourSwatch(MaterialColour)` and feature headers add `RowRole::MaterialFeatureToggle(MaterialFeature)` to shared row construction/routing. These variants follow the widget-tree five-step affordance recipe, including dispatch tests. The feature action emits a discrete MaterialParamsSet for Enum Off=1/On=2; it must not reuse boolean 0/1 toggle arithmetic. Add Feature uses the same action with eligible seed writes. Add `ParamRow.rgb_members: Option<[ParamId; 3]>`, populated by the app projection for the canonical R row after grouping by resolved material identity and colour role; G/B rows remain the same scalar identities in the Advanced drawer. Missing/ambiguous members leave the ordinary scalar rows visible. The descriptor supplies the three member ParamIds; the widget never manufactures a new parameter. Add these variants in `panels/scrub.rs`:
 

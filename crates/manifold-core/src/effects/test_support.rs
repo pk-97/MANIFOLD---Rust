@@ -26,7 +26,7 @@ inventory::submit! {
 
 // Registered via `inventory::submit!` at module scope (mirrors
 // `manifold-playback`'s `modulation::tests` fixture pattern) — the
-// registry is normally populated by manifold-renderer's effect
+// registry is normally populated by manifold-nodes's effect
 // implementations, which manifold-core's own test binary doesn't link.
 inventory::submit! {
     crate::effect_registration::EffectMetadata {

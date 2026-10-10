@@ -8,10 +8,12 @@ when it is an ancestor of origin/main.
 
 The JUDGMENT stays with the lead: the review, the named-red call (pass
 --named-red BUG-id --reason "..."), the design-doc status edits. This
-script is the fixed git+gate sequence only — every step exits on failure
+script is the fixed git+gate sequence only — required steps exit on failure
 with the step named, and push happens only after a green gate (or an
 explicit named red over a gate that ran every check). --named-red requests
 the complete gate run; ordinary landings stop before expensive legs on cheap reds.
+After verified landing, slot detachment, release and branch deletion are cleanup:
+failures are notes, not landing failures. Unlanded branches are never deleted.
 
 Usage:
   scripts/land_branch.py <branch> --worktree <path> --message '<merge msg>' \
@@ -36,14 +38,24 @@ from landing_gate import (CHECKS_RED, record_incomplete,
 MAIN = Path("/Users/peterkiemann/MANIFOLD - Rust")
 
 
-def step(name, cmd, cwd, check=True):
+def step(name, cmd, cwd, check=True, cleanup=False):
     print(f"[land] {name}: {' '.join(cmd)}", flush=True)
-    live = landing_log_path(cwd, 'land-' + name.replace(' ', '-').replace('/', '-'))
-    print(f"[RUN] land/{name} (live transcript: {live})", flush=True)
-    code, out, err, _ = run_cmd(cmd, cwd, timeout=3600, live_log=live)
+    try:
+        live = landing_log_path(cwd, 'land-' + name.replace(' ', '-').replace('/', '-'))
+        print(f"[RUN] land/{name} (live transcript: {live})", flush=True)
+        code, out, err, _ = run_cmd(cmd, cwd, timeout=3600, live_log=live)
+    except (OSError, subprocess.SubprocessError) as error:
+        if not cleanup:
+            raise
+        code, out, err = 1, '', str(error)
     r = subprocess.CompletedProcess(cmd, code, out, err)
-    print(f"[{'PASS' if code == 0 else 'FAIL'}] land/{name}", flush=True)
-    if r.returncode != 0 and check:
+    status = 'PASS' if code == 0 else ('NOTE' if cleanup else 'FAIL')
+    print(f"[{status}] land/{name}", flush=True)
+    if r.returncode != 0 and cleanup:
+        print(f"[land] NOTE: {name} incomplete; landing is already pushed.", flush=True)
+        for line in (out + '\n' + err).strip().splitlines():
+            print(f"    {line}", flush=True)
+    elif r.returncode != 0 and check:
         print(f"[land] FAILED at {name}:\n{r.stdout}\n{r.stderr}", file=sys.stderr)
         sys.exit(1)
     return r
@@ -182,19 +194,17 @@ def _main():
         step("push beads", ["git", "push", "origin", "main"], MAIN)
 
     anc = step("verify landed ancestry", ["git", "merge-base", "--is-ancestor", a.branch, "origin/main"],
-               MAIN, check=False).returncode == 0
+               MAIN, check=False, cleanup=True).returncode == 0
     if anc:
         if wt.resolve().parent == (MAIN / ".claude/worktrees").resolve():
-            step("release landed slot", [sys.executable, str(MAIN / "scripts/agent-worktree.py"),
-                                         "release", wt.name], MAIN)
-        r = step("delete branch", ["git", "branch", "-d", a.branch], MAIN, check=False)
-        if r.returncode != 0:
-            # The common cause: the acquiring worktree still has the branch
-            # checked out (git refuses). A silent survivals means the next
-            # session commits onto a "landed" branch and needs a second
-            # landing (self-observed 2026-08-01).
-            print(f"[land] NOTE: branch delete failed ({r.stderr.strip()[:200]}) — "
-                  f"{a.branch} is fully landed; delete it after its worktree moves off.")
+            # Detach before releasing ownership: acquire may immediately reuse
+            # the slot once the lease is gone. Never detach an unlanded tip.
+            detached = step("detach landed slot", ["git", "switch", "--detach"], wt,
+                            cleanup=True)
+            if detached.returncode == 0:
+                step("release landed slot", [sys.executable, str(MAIN / "scripts/agent-worktree.py"),
+                                             "release", wt.name], MAIN, cleanup=True)
+        step("delete branch", ["git", "branch", "-d", a.branch], MAIN, cleanup=True)
     else:
         print(f"[land] NOTE: {a.branch} tip is not an ancestor of origin/main — left undeleted.")
 

@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 use manifold_core::project::Project;
 use manifold_core::{Beats, GraphTarget, LayerId, NodeId, PresetTypeId};
-use manifold_renderer::node_graph::bundled_preset_def;
+use manifold_nodes::bundled_presets::bundled_preset_def;
 
 use super::{
     capture_output, generator_graph, host_binding, math_view_project, set_generator_param,
@@ -35,8 +35,7 @@ fn consolidated_modifier_native_toggle_journey() {
         let owner = project.graph_target_owner_mut(&target).unwrap();
         let graph = owner.graph.as_mut().unwrap();
         *graph.scene_modifiers[0].graph = bundled_preset_def(&PresetTypeId::new(recipe))
-            .unwrap()
-            .clone();
+            .unwrap().as_ref().clone();
         *graph = manifold_core::scene_modifier_edit::reconcile_scene_modifier_parameters(
             graph, &modifier,
         )

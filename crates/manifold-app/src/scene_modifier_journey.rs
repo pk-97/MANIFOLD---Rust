@@ -44,10 +44,7 @@ const STATIC_FIXTURE: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../tests/fixtures/gltf/cc0__japanese_thistle_cirsium_japonicum.glb"
 );
-const NESTED_MULTIMATERIAL_V2: &str = include_str!(concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../manifold-renderer/tests/fixtures/scene-modifiers/nested_multimaterial_v2.json"
-));
+const NESTED_MULTIMATERIAL_V2: &str = manifold_nodes::testkit::assets::TESTS_FIXTURES_SCENE_MODIFIERS_NESTED_MULTIMATERIAL_V2_JSON;
 
 fn imported_layer(name: &str, layer_id: &str, index: i32, path: &Path) -> Layer {
     let (graph, report) = assemble_import_graph(path)
@@ -100,15 +97,9 @@ fn math_view_project() -> Project {
     }
     bake_left_material(&mut graph.nodes);
     graph.version = 3;
-    let recipe: EffectGraphDef = serde_json::from_str(include_str!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../manifold-renderer/assets/scene-modifier-presets/VortexFragments.json"
-    )))
+    let recipe: EffectGraphDef = serde_json::from_str(manifold_nodes::testkit::assets::ASSETS_SCENE_MODIFIER_PRESETS_VORTEXFRAGMENTS_JSON)
     .expect("Vortex Fragments recipe parses");
-    let view_recipe: EffectGraphDef = serde_json::from_str(include_str!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../manifold-renderer/assets/scene-modifier-presets/MathView.json"
-    )))
+    let view_recipe: EffectGraphDef = serde_json::from_str(manifold_nodes::testkit::assets::ASSETS_SCENE_MODIFIER_PRESETS_MATHVIEW_JSON)
     .expect("Math View recipe parses");
     let mut frames = Vec::new();
     for container in &graph.nodes {
@@ -799,10 +790,7 @@ fn math_view_grid_app_control_journey() {
 /// including the retired Scope control. Detection and migration both run
 /// against this on load.
 fn legacy_vortex_carrier_graph() -> EffectGraphDef {
-    let mut carrier = serde_json::from_str::<serde_json::Value>(include_str!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../manifold-renderer/assets/scene-modifier-presets/VortexFragments.json"
-    )))
+    let mut carrier = serde_json::from_str::<serde_json::Value>(manifold_nodes::testkit::assets::ASSETS_SCENE_MODIFIER_PRESETS_VORTEXFRAGMENTS_JSON)
     .expect("Vortex recipe parses");
     let mut next_node_id = 100u32;
     let mut controls: Vec<(String, f64, f64, f64)> =
@@ -1425,18 +1413,12 @@ fn push_modifier(
 }
 
 fn math_view_recipe() -> EffectGraphDef {
-    serde_json::from_str(include_str!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../manifold-renderer/assets/scene-modifier-presets/MathView.json"
-    )))
+    serde_json::from_str(manifold_nodes::testkit::assets::ASSETS_SCENE_MODIFIER_PRESETS_MATHVIEW_JSON)
     .expect("Math View recipe parses")
 }
 
 fn vortex_recipe() -> EffectGraphDef {
-    serde_json::from_str(include_str!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../manifold-renderer/assets/scene-modifier-presets/VortexFragments.json"
-    )))
+    serde_json::from_str(manifold_nodes::testkit::assets::ASSETS_SCENE_MODIFIER_PRESETS_VORTEXFRAGMENTS_JSON)
     .expect("Vortex Fragments recipe parses")
 }
 

@@ -95,9 +95,8 @@ fn scene_modifier_ids(
     project: &manifold_core::project::Project,
     layer_id: &LayerId,
 ) -> Option<Vec<NodeId>> {
-    crate::graph_target::resolve(
-        project, &manifold_core::GraphTarget::Generator(layer_id.clone()),
-    )
+    let target = manifold_core::GraphTarget::Generator(layer_id.clone());
+    crate::graph_target::resolve(project, &target)
         .map(|graph| {
             graph
                 .scene_modifiers
@@ -848,7 +847,7 @@ impl ContentThread {
                 self.content_pipeline.set_node_atlas_visible(nodes);
             }
             ContentCommand::SetClipAtlasVisible(clips) => {
-                self.content_pipeline.set_clip_atlas_visible(clips);
+                self.content_pipeline.set_clip_atlas_visible(clips, self.engine.project());
             }
             ContentCommand::DumpGraphOutputs => {
                 if let Some(manifold_core::GraphTarget::Effect(effect_id)) =
@@ -1057,6 +1056,14 @@ impl ContentThread {
                         }
                     }
                     Err(message) => self.report_graph_edit_rejection(message),
+                }
+            }
+            ContentCommand::SceneCameraSetup(layer_id) => {
+                let result = self.engine.project().ok_or_else(|| "Project is no longer available".to_string())
+                    .and_then(|project| crate::scene_camera_edit::build_action(project, layer_id));
+                match result {
+                    Ok(command) => { self.handle_command(ContentCommand::ExecuteOnContent(command)); }
+                    Err(reason) => self.report_graph_edit_rejection(reason),
                 }
             }
             ContentCommand::SceneItem(action) => {
@@ -2197,6 +2204,7 @@ impl ContentThread {
             self.engine.reconcile_tempo_edit(&map, bpm);
         }
         self.commit_automation_recording(false);
+        self.engine.reconcile_clip_control_bindings();
         false
     }
 }

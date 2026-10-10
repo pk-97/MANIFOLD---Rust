@@ -71,8 +71,9 @@ use manifold_node_engine::primitives::standalone_pipeline::{dispatch_standalone_
 /// Generated-codegen uniform layout: the `max_blur_px` param (f32, PARAMS
 /// order), the `enabled` param (Bool → u32), then the one DERIVED field
 /// (`shutter_angle`), padded to a 16-byte (4-word) multiple (3 real words
-/// plus 1 pad). `enabled` is host-only: the shader never reads it, but the
-/// codegen path lays every param into the uniform struct. Mirrors
+/// plus 1 pad). The shader also reads `enabled` so a fused WgslCompute kernel
+/// preserves the host skip passthrough when the original node is folded into a
+/// region. Mirrors
 /// `coc_from_depth.rs`/`ssao_from_depth.rs`'s layout-note convention.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -203,8 +204,9 @@ impl Primitive for MotionBlur {
         let uniforms = MotionBlurUniforms {
             max_blur_px,
             // run() only executes when the node is enabled (skip_passthrough
-            // aliases `in` → `out` when `enabled = false`), so the codegen-ABI
-            // `enabled` uniform is always 1 here; the shader never reads it.
+            // aliases `in` → `out` when `enabled = false`), so the standalone
+            // codegen ABI receives 1 here. Fused WgslCompute kernels receive
+            // the live Bool field and the body handles the disabled path.
             enabled: 1,
             shutter_angle,
             _pad0: 0.0,
@@ -615,6 +617,42 @@ mod gpu_tests {
                 assert!(
                     (e[c] - g[c]).abs() < 1e-3,
                     "texel {i} channel {c}: shutter=0 must pass through bit-clean, expected={} got={}",
+                    e[c],
+                    g[c]
+                );
+            }
+        }
+    }
+
+    /// A fused kernel retains the host node's disabled passthrough even though
+    /// `skip_passthrough` is only available before the graph is fused.
+    #[test]
+    fn disabled_bool_is_shader_passthrough() {
+        let device = manifold_gpu::testkit::test_device();
+        let (w, h) = (16u32, 16u32);
+        let velocity = velocity_ramp(w, h);
+        let velocity_tex = upload_velocity(&device, w, h, &velocity);
+        let (color_tex, _color_rgba) = color_gradient(&device, w, h);
+
+        let mut uniforms = mb_uniforms(32.0, 180.0);
+        uniforms.enabled = 0;
+        let bytes = bytemuck::bytes_of(&uniforms);
+        let sampler = device.create_sampler(&GpuSamplerDesc::default());
+        let gen_wgsl = manifold_node_engine::freeze::codegen::standalone_for_spec::<MotionBlur>()
+            .expect("node.motion_blur standalone codegen");
+        let pipeline = device.create_compute_pipeline(
+            &gen_wgsl,
+            manifold_node_engine::freeze::codegen::ENTRY,
+            "motion-blur-disabled",
+        );
+        let got = dispatch(&device, &pipeline, &sampler, &color_tex, &velocity_tex, w, h, bytes);
+        let expected = readback_rgba(&device, &color_tex, w, h);
+
+        for (i, (e, g)) in expected.iter().zip(got.iter()).enumerate() {
+            for c in 0..4 {
+                assert!(
+                    (e[c] - g[c]).abs() < 1e-3,
+                    "texel {i} channel {c}: disabled motion blur must pass through, expected={} got={}",
                     e[c],
                     g[c]
                 );

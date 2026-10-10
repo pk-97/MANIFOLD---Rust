@@ -185,7 +185,7 @@ Entry: `rg 'is_file_path' crates/manifold-core` zero hits today; P1 adds the fla
 Deliverables: `manifold-io/src/collect.rs` with `collect_asset_paths` + tests for each
 family (video, audio, mesh, hdri).
 Gate: `cargo test -p manifold-io collect` passes; `rg 'is_file_path' crates/manifold-core`
-returns hits; `rg '"file_path": true' crates/manifold-renderer/assets` returns hits for
+returns hits; `rg '"file_path": true' crates/manifold-nodes/assets` returns hits for
 model_file / hdri_file / path (three JSON presets).
 
 **P2 — PathResolver extension (E7 closure).** Audio clips, `model_file`, `hdri_file`, Skin `"path"` re-link
@@ -240,7 +240,7 @@ a path/folder/cache_path string param has an entry in the core table (a new file
 without an entry is a red test, not a silent skip); an io test source-scans
 `manifold-core` model files for `pub …path…: String` fields and asserts each is
 inventory-covered. Gates: `cargo nextest run -p manifold-io -p manifold-core -p
-manifold-renderer`; a synthetic embedded-preset-without-flag test proves the V5 case.
+manifold-nodes`; a synthetic embedded-preset-without-flag test proves the V5 case.
 
 ## 5. Invariants & enforcement
 

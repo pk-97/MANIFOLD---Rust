@@ -62,7 +62,7 @@ Re-derive before editing. These are source findings, not runtime observations.
 | Grouping | `manifold-core/src/effect_graph_def.rs`: `GroupDef`; `manifold-core/src/flatten.rs`: `flatten_groups` | Reuse for visual organisation only. Groups flatten; they are not runtime loops. No new group serialization required by this design. |
 | Typed GPU channels | `node_graph/ports.rs`: `KnownItem`, `ArrayType`; `generators/compute_common.rs`: `Particle`, `PARTICLE_SPECS` | Reuse mechanism; add water records. Existing Particle is 64 bytes and has no affine matrix. Do not repurpose its colour/padding. |
 | Atomic scatter | `node_graph/primitive.rs`: `atomic_outputs`; `freeze/codegen/standalone.rs`: atomic bindings; `primitives/scatter_particles.rs` | Reuse signed integer atomic support and generated dispatch infrastructure. Existing energy scale 4096 is a precedent, not a universally safe water scale. |
-| GPU submission | `manifold-gpu/src/metal/encoder.rs`: `dispatch_compute`; `manifold-renderer/src/gpu_encoder.rs` | Reuse `manifold-gpu`, one encoder and preallocated uniforms. No WebGPU runtime, raw Metal bypass, new queue, thread or mutex. |
+| GPU submission | `manifold-gpu/src/metal/encoder.rs`: `dispatch_compute`; `manifold-nodes/src/gpu_encoder.rs` | Reuse `manifold-gpu`, one encoder and preallocated uniforms. No WebGPU runtime, raw Metal bypass, new queue, thread or mutex. |
 | Scene surface | `primitives/render_scene.rs`: `RenderScene`, `evaluate`, `force_consumed_outputs`; `shaders/render_scene.wgsl`: `sample_transmission` | Extend. Shared depth, opaque colour snapshot and a transmissive pass already exist. Water must explicitly request snapshots even with no glass objects. |
 | Camera and depth | `node_graph/camera.rs`: `Camera::proj`, `view_proj`; `generators/shaders/depth_common.wgsl` | Reuse right-handed camera, Metal clip depth [0,1], UV Y flip and reconstruction conventions. |
 | Surface filter | `primitives/bilateral_blur.rs`: `BilateralBlur` | Reuse algorithm/codegen helpers; extend coverage handling. Existing filter does not know an empty liquid pixel from far-plane depth. |
@@ -71,7 +71,7 @@ Re-derive before editing. These are source findings, not runtime observations.
 | Transport | `manifold-playback/src/engine.rs`: `seek_to`, `stop`, `set_time`, `advance_time`; `manifold-app/src/content_pipeline.rs`: `render_all` call | Add explicit simulation-frame context. Generic wall-clock dt and trigger counts do not reliably describe pause, seek and export. |
 
 Paths abbreviated after their first occurrence above are relative to
-`crates/manifold-renderer/src/`. The effect-chain grace eviction policy is NOT the
+`crates/manifold-nodes/src/`. The effect-chain grace eviction policy is NOT the
 generator lifetime policy: do not invent a water cache to work around that unrelated
 cache. The per-layer generator already provides the intended home.
 
@@ -132,7 +132,7 @@ headline. No calendar promise, FPS claim or “SOTA” label before that checkpo
 
 ## 3. Data and ownership contracts
 
-New module: `manifold-renderer/src/node_graph/water.rs`. Runtime records are not
+New module: `manifold-nodes/src/node_graph/water.rs`. Runtime records are not
 serialized. Use `KnownItem` channel specs with the following exact field order and
 std430 layout (all six fields Vec4F, 96-byte stride):
 

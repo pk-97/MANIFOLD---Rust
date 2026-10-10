@@ -187,8 +187,8 @@ pub(crate) struct NodeView {
     /// `true` when `type_id == "node.render_scene"` — drives the "+ Object" /
     /// "+ Light" gesture-button rows spliced onto this node's face
     /// (`docs/SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md` section 2 D7/D7a). The literal
-    /// mirrors `manifold_renderer::node_graph::primitives::render_scene::RENDER_SCENE_TYPE_ID`
-    /// — `manifold-ui` doesn't depend on `manifold-renderer`, so this is a
+    /// mirrors `manifold_nodes::node_graph::primitives::render_scene::RENDER_SCENE_TYPE_ID`
+    /// — `manifold-ui` doesn't depend on `manifold-nodes`, so this is a
     /// same-string re-derivation, not a shared constant. Resolved once on the
     /// topology rebuild — it never changes for a given node id.
     pub(crate) is_render_scene: bool,

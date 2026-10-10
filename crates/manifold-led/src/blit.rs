@@ -1,5 +1,5 @@
 //! Native Metal compute pipeline for the LED edge-extend shader.
-//! Self-contained — does not depend on manifold-renderer.
+//! Self-contained — does not depend on manifold-nodes.
 //! Creates a tiny Rgba8Unorm output texture (strip_count × leds_per_strip)
 //! and a compute pipeline with the edge-extend shader.
 

@@ -51,7 +51,7 @@ make that impossible; the invariant list (section 9) is what a review must attac
 
 ## 2. File map
 
-Engine paths below are relative to `crates/manifold-node-engine/src/`. The legacy generator registry remains at `crates/manifold-renderer/src/generators/registry.rs`.
+Engine paths below are relative to `crates/manifold-node-engine/src/`. The legacy generator registry remains at `crates/manifold-nodes/src/registry.rs`.
 
 | File | Role | Size |
 |---|---|---|
@@ -62,15 +62,15 @@ Engine paths below are relative to `crates/manifold-node-engine/src/`. The legac
 | `freeze/install.rs` | The rewrite: def surgery (delete members, insert fused `node.wgsl_compute` nodes, rewire), binding retarget, control-wire re-anchor, derived-uniform wiring, in-place-loop detection, build check, all caches, the chain-fusion worker, `should_render_fused`. | 2333 |
 | `freeze/segment.rs` | Cross-card concat: N adjacent cards → one namespaced def (`c{i}.` prefixes), seam boundaries stitched out. + `def_is_segment_stateless` eligibility. | 296 |
 | `freeze/diff.rs` | GPU texture-diff reducer (max-abs + over-count verdicts) — the oracle's measuring device. | 305 |
-| `freeze/proof.rs` | The oracle suite (test-only): ~40 render-two-ways proofs, per-feature. See section 10. | 3864 |
+| `crates/manifold-nodes/tests/contracts/freeze/proof.rs` | The oracle suite (test-only): render-two-ways proofs, per-feature. See section 10. | — |
 | `freeze/reference.rs` | Frozen golden hand-kernels for codegen-drift checks. | 101 |
 | `primitives/wgsl_compute.rs` | The host primitive every fused kernel becomes. Ports/params/bindings derived from the WGSL by naga introspection; parses all freeze markers. Params are always uniforms — `@static_param` value-baking is deleted (COMPILE_CONTRACT_DESIGN D2). | 3440 |
 | `exec/execution_plan.rs` | `compile(graph)`: topo + liveness filter + resource dims/canvas-scale propagation + lifetimes (`free_after`) + persistent resources + late-capture steps + hoistable classification. | 1411 |
 | `exec/execution.rs` | The executor: per-frame liveness (mux short-circuit), memoized-dataflow skip (`is_pure`), empty-output skip, preview capture, dump/thumbnail pinning, the aliased-output stale guard, end-of-frame feedback texture swap. | 2923 |
 | `load/graph_loader.rs` | `instantiate_def`: flatten groups → construct + configure primitives → wires; array output pre-allocation (`array_output_capacity`). | 1838 |
 | `runtime/` (was preset_runtime.rs — Wave 3 P3-R split, 2026-07-22; core.rs holds the chain build) | Effect-chain build: segmentation pass → per-card `fused_view_for` → splice. The live entry point for effect fusion. `groups.rs` owns membership validation/filtering and wet/dry/mask Mix assembly. | — |
-| `crates/manifold-renderer/src/generators/registry.rs` | Generator entry point: `should_render_fused` → `fused_generator_def_for` → `from_def`. | — |
-| `chain_dispatch.rs` | Calls `pump_segment_results()` each dispatch (drains the chain-fusion worker). | — |
+| `crates/manifold-nodes/src/registry.rs` | Generator entry point: `should_render_fused` → `fused_generator_def_for` → `from_def`. | — |
+| `runtime/chain_dispatch.rs` | Calls `pump_segment_results()` each dispatch (drains the chain-fusion worker). | — |
 
 ## 3. The pipeline, end to end
 
@@ -310,6 +310,7 @@ should diff both ends.
 | `// @fused_output` on a `var<storage, read_write>` array | fused buffer codegen (fresh-dst model) | Output-ONLY port: no input port, no aliased pair — keeps read-only inputs forward deps (the fix for the buffer ordering bug where an aliased output read as a feedback back-edge). |
 | `// @dispatch_count_param: n{i}_<p>` | fused buffer codegen (in-place loop regions where all members agree on one `active_count` producer) | Cap the 1D grid at the named uniform's live value instead of buffer capacity (the FluidSim "fused slower" fix — kernel carries the matching guard). |
 | `// @sampler_address_mode: repeat\|mirror` on `samp` | fused texture codegen | Create the shared gather sampler at this mode (WGSL can't express address modes). `clamp` emits no marker — byte-identical legacy text. |
+| `// @bool_uniform: <field>` | fused texture/buffer codegen | Retains Bool parameter metadata when WGSL stores it as `u32`. Seeded values stay Bool; live `BoolThreshold` bindings pack true only above 0.5. |
 | `// @reset_gated` | seed-pattern kernels | Node grows a synthetic optional `reset_trigger` input; dispatches only on integer edges. On skip of an *aliased* kernel it calls `mark_gpu_accessed()` — the executor stale-guard's documented escape hatch. |
 | ~~`// @static_param: <field>`~~ | deleted (COMPILE_CONTRACT_DESIGN D2 — P3) | Params are always uniforms; value-keyed kernel specialization is forbidden by the compile contract. |
 | `// @pure` | hand-authored kernels (BlackHole bake) | Author asserts output = f(params, inputs) → memoizer may hold it. |
@@ -387,13 +388,18 @@ see that design doc for the deletion decision and its measured cost.
   Per-process seed — fine, all caches are in-memory. Exposed params live in
   `param_values`, NOT the def ⇒ instances differing only in live modulation
   share one kernel, and exposed params are never baked.
-- **Caches** (all thread-local to the content thread, all `Box::leak`'d
-  `&'static`, all capped at `FUSED_CACHE_CAP=512`, all negative-caching):
-  `FUSED_EFFECT_CACHE` (key → `Option<&LoadedPresetView>`),
-  `FUSED_GENERATOR_CACHE` (key → `Option<&EffectGraphDef>`),
+- **Fusion caches** (thread-local to the content thread, capped at
+  `FUSED_CACHE_CAP=512`, with LRU eviction and negative caching):
+  `FUSED_EFFECT_CACHE` (key → `Option<Arc<LoadedPresetView>>`),
+  `FUSED_GENERATOR_CACHE` (key → `Option<Arc<FusedGeneratorView>>`),
   `SEGMENT_CACHE` (positional hash of member content keys →
-  `Option<&SegmentView>`). Past the cap: recompute-on-miss, never evict
-  (values are leaked statics).
+  `Option<Arc<SegmentView>>`). Readers retain evicted values only while needed.
+- **Catalog definitions and canonical views** use generation-stamped `ArcSwap`
+  snapshots and return `Arc` values. Reload replaces the cache; old readers and
+  queued segment jobs retain their generation until they finish. Binding labels
+  are owned through `Cow`. Steady-state lookups clone handles without allocating
+  or locking. `project_preset_overlay::project_generator_preset_resolves_via_overlay_then_clears`
+  checks that old definitions/views survive reload and are freed after readers drop.
 - **Segments** compile on the `chain-fusion-worker` thread; lookups return
   Ready/Pending/Refused; `pump_segment_results()` (chain dispatch entry)
   drains results and bumps `SEGMENT_GENERATION` so pending runtimes rebuild.
@@ -516,9 +522,7 @@ invariant a fused def must respect:
   hazard, not an accepted fact of life.
 - **Known pre-existing failures** (not fusion's): DepthOfField prewarm,
   and the Liveschool FluidSimulation Ableton param-id fixture.
-- Scope: freeze suite = `cargo test -p manifold-renderer --lib
-  node_graph::freeze`. After ANY codegen/macro change run the full
-  `-p manifold-renderer --lib` — focused runs miss cross-atom staleness.
+- Scope: engine freeze tests = `cargo test -p manifold-node-engine --features gpu-proofs --lib freeze::`; catalog proofs = `cargo test -p manifold-nodes --features gpu-proofs --test main freeze::`. Codegen and macro changes also need the owning families' focused GPU proofs; use `scripts/gpu_proofs_gate.py` for scope selection.
 
 ## 11. Honest edges (the bug hunt starts here)
 

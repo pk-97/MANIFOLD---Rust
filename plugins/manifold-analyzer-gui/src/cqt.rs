@@ -31,8 +31,8 @@
 //!    `VQT[k] = Σ Y[m] · K_k[m]` over the sparse support. `|VQT[k]|²`
 //!    is the power at `f_k`.
 //!
-//! Per-column cost is dominated by one shared FFT plus a handful of
-//! complex mul-adds per bin — typically ~0.5 ms total on Apple Silicon.
+//! Short kernels use the equivalent time-domain dot product when that has fewer
+//! terms than their spectral support. Both paths reuse preallocated storage.
 
 use manifold_analyzer_dsp::blackman_harris_window;
 use rustfft::{Fft, FftPlanner, num_complex::Complex};
@@ -44,29 +44,22 @@ pub use rustfft::num_complex::Complex as CqtComplex;
 /// stream — feed it one N_fft-sample segment at a time.
 pub struct CqtTransform {
     n_fft: usize,
-    // `fft` is used at construction to FFT each time-domain kernel into
-    // its spectral form. The per-hop forward transform now runs on the
-    // GPU via `GpuFft` + `gpu_cqt::GpuCqt`; this field plus the two
-    // scratch buffers stay live so the CPU-side `process_complex` path
-    // (exercised by unit tests and available as an offline fallback)
-    // keeps working.
-    #[allow(dead_code)]
+    // FFT plan and scratch storage are reused for every worker hop.
     fft: Arc<dyn Fft<f32>>,
-    #[allow(dead_code)]
     fft_scratch: Vec<Complex<f32>>,
-    #[allow(dead_code)]
     fft_buffer: Vec<Complex<f32>>,
     // CSR-style sparse kernel matrix. Row k spans indices
     // `[row_ptr[k], row_ptr[k+1])` of `col_idx` and `coef`. `row_ptr`
-    // is stored as u32 (not usize) so the GPU compute shader can read
-    // the buffer as-is without a conversion pass; the ceiling is
-    // num_bins × n_fft ≈ 17M nonzeros, well under u32::MAX.
+    // uses compact u32 offsets: num_bins × n_fft is well under u32::MAX.
     row_ptr: Vec<u32>,
     col_idx: Vec<u32>,
     coef: Vec<Complex<f32>>,
+    direct_offsets: Vec<usize>,
+    direct_coef: Vec<Complex<f32>>,
     num_bins: usize,
     center_freqs: Vec<f32>,
     bandwidths_hz: Vec<f32>,
+    display_power_gains: Vec<f32>,
 }
 
 impl CqtTransform {
@@ -83,11 +76,6 @@ impl CqtTransform {
     ///   sines) while the normal γ above the knee keeps mid-and-above
     ///   kernels short enough for crisp transients. Pass
     ///   `gamma_lo_hz == gamma_hi_hz` for a constant floor.
-    /// * `min_kernel_len` — per-bin kernel floor in samples. Prevents HF
-    ///   kernels from shrinking below this, which keeps bandwidth narrow
-    ///   enough to resolve closely-spaced partials and guarantees enough
-    ///   overlap between consecutive hops for synchrosqueezing's phase
-    ///   measurement to stay coherent. Set to `4 · hop` or so.
     /// * `causal_window` — if true, use the left half of a symmetric
     ///   length-(2·n_k − 1) Blackman-Harris as the per-bin window. The
     ///   window then peaks at the **newest** sample and tapers back to
@@ -106,7 +94,6 @@ impl CqtTransform {
         gamma_lo_hz: f32,
         gamma_hi_hz: f32,
         gamma_transition_hz: f32,
-        min_kernel_len: usize,
         causal_window: bool,
         threshold_rel: f32,
     ) -> Self {
@@ -141,12 +128,9 @@ impl CqtTransform {
         for k in 0..num_bins {
             let f_k = fmin * 2.0_f32.powf(k as f32 / bpo as f32);
             center_freqs.push(f_k);
-            // Effective bandwidth accounts for the kernel floor: when
-            // `min_kernel_len` clamps n_k, the actual analysis bandwidth
-            // shrinks to `sr / n_k`.
             let ideal = alpha * f_k + gamma_at(f_k);
             let ideal_n_k = (sample_rate / ideal).ceil() as usize;
-            let n_k = ideal_n_k.min(n_fft).max(min_kernel_len).max(4);
+            let n_k = ideal_n_k.min(n_fft).max(4);
             let effective_bw = bw_multiplier * sample_rate / n_k as f32;
             bandwidths_hz.push(effective_bw);
         }
@@ -161,9 +145,12 @@ impl CqtTransform {
         row_ptr.push(0);
         let mut col_idx: Vec<u32> = Vec::new();
         let mut coef: Vec<Complex<f32>> = Vec::new();
+        let mut display_power_gains = Vec::with_capacity(num_bins);
+        let mut direct_offsets = vec![0];
+        let mut direct_coef = Vec::new();
 
         let n_fft_inv = 1.0 / n_fft as f32;
-        let two_pi = 2.0 * std::f32::consts::PI;
+        let two_pi = std::f64::consts::TAU;
 
         for &f_k in &center_freqs {
             // Variable-Q bandwidth. At high freq `α·f_k` dominates
@@ -172,7 +159,7 @@ impl CqtTransform {
             // cycles (kills the 2f AM ripple of a sub-bass sine).
             let bandwidth = alpha * f_k + gamma_at(f_k);
             let n_k_ideal = (sample_rate / bandwidth).ceil() as usize;
-            let n_k = n_k_ideal.min(n_fft).max(min_kernel_len).max(4);
+            let n_k = n_k_ideal.min(n_fft).max(4);
 
             // Symmetric: standard length-n_k BH, peaks in the middle.
             // Causal: left half of a length-(2n_k−1) symmetric BH —
@@ -190,6 +177,13 @@ impl CqtTransform {
             // |CQT[k]| = 1. Derivation: for x[n] = cos(2π f_k n / sr),
             // <x, g_k> ≈ 0.5 · Σ w[n], so we scale by 2/Σw.
             let scale = 2.0 / w_sum;
+            // A coherent tone scale alone makes broadband energy brighter as
+            // windows shorten. Display a fixed 100 Hz equivalent bandwidth:
+            // ENBW = sample_rate * sum(w²) / sum(w)². Keep the transform itself
+            // tone-calibrated for phase estimation and numerical consumers.
+            let sum_sq: f64 = w.iter().map(|&v| (v as f64).powi(2)).sum();
+            let enbw = sample_rate as f64 * sum_sq / (w_sum as f64).powi(2);
+            display_power_gains.push((100.0 / enbw) as f32);
 
             // Time-domain kernel: g_k[n] = w[n] · exp(+i 2π f_k n / sr),
             // **right-aligned** in the n_fft-length FFT buffer. Because
@@ -209,11 +203,15 @@ impl CqtTransform {
             }
             let start = n_fft - n_k;
             for n in 0..n_k {
-                let phase = two_pi * f_k * n as f32 / sample_rate;
+                let phase = two_pi * f_k as f64 * n as f64 / sample_rate as f64;
                 let (s, c) = phase.sin_cos();
                 let wn = w[n] * scale;
-                kernel_buf[start + n] = Complex::new(wn * c, wn * s);
+                kernel_buf[start + n] = Complex::new(wn * c as f32, wn * s as f32);
             }
+
+            let direct_start = direct_coef.len();
+            direct_coef.extend(kernel_buf[start..].iter().map(|c| c.conj()));
+            let sparse_start = coef.len();
 
             // FFT gives G_k. Spectral kernel K_k[m] = conj(G_k[m]) / n_fft
             // (from Parseval: <a, b> = (1/N) Σ A[m] · conj(B[m])).
@@ -234,6 +232,15 @@ impl CqtTransform {
                     coef.push(entry);
                 }
             }
+            // A short time-domain dot product avoids the wide spectral support
+            // of a short window. Keep whichever representation has fewer terms.
+            if n_k <= coef.len() - sparse_start {
+                coef.truncate(sparse_start);
+                col_idx.truncate(sparse_start);
+            } else {
+                direct_coef.truncate(direct_start);
+            }
+            direct_offsets.push(direct_coef.len());
             row_ptr.push(col_idx.len() as u32);
         }
 
@@ -245,9 +252,12 @@ impl CqtTransform {
             row_ptr,
             col_idx,
             coef,
+            direct_offsets,
+            direct_coef,
             num_bins,
             center_freqs,
             bandwidths_hz,
+            display_power_gains,
         }
     }
 
@@ -256,6 +266,12 @@ impl CqtTransform {
     /// outside the bin's legitimate response region.
     pub fn bandwidths_hz(&self) -> &[f32] {
         &self.bandwidths_hz
+    }
+
+    /// Power multipliers for a 100 Hz equivalent-bandwidth display.
+    /// This is a spectral-density view, not a sinusoid peak-amplitude meter.
+    pub fn display_power_gains(&self) -> &[f32] {
+        &self.display_power_gains
     }
 
     pub fn num_bins(&self) -> usize {
@@ -279,24 +295,12 @@ impl CqtTransform {
         stored / dense
     }
 
-    /// Raw CSR sparse-kernel storage — `(row_ptr, col_idx, coef)`. The
-    /// GPU CQT pipeline uploads these to immutable storage buffers once
-    /// at worker spawn and reuses them across hops. CPU-side
-    /// `process_complex` still reads them in-place.
-    pub fn csr_raw(&self) -> (&[u32], &[u32], &[Complex<f32>]) {
-        (&self.row_ptr, &self.col_idx, &self.coef)
-    }
-
     /// Transform one N_fft-sample audio segment into complex VQT values
     /// per bin. Callers that only want magnitude take `.norm_sqr()`;
     /// callers that want synchrosqueezing need the phase too, hence
     /// we expose complex output directly.
     ///
-    /// Per-hop runtime callers use the GPU pipeline in `gpu_cqt::GpuCqt`
-    /// instead — this function is retained for unit tests that validate
-    /// kernel construction and as a fallback if a future platform
-    /// without MPSGraph ever needs it.
-    #[allow(dead_code)]
+    /// Reuses all FFT and sparse multiplication storage across hops.
     pub fn process_complex(&mut self, audio: &[f32], output: &mut [Complex<f32>]) {
         assert_eq!(audio.len(), self.n_fft);
         assert_eq!(output.len(), self.num_bins);
@@ -309,12 +313,23 @@ impl CqtTransform {
             .process_with_scratch(&mut self.fft_buffer, &mut self.fft_scratch);
 
         for (k, out) in output.iter_mut().enumerate().take(self.num_bins) {
+            let direct = &self.direct_coef[self.direct_offsets[k]..self.direct_offsets[k+1]];
+            if !direct.is_empty() {
+                let samples = &audio[audio.len()-direct.len()..];
+                let mut re = 0.0;
+                let mut im = 0.0;
+                for (&sample, coefficient) in samples.iter().zip(direct) {
+                    re += sample * coefficient.re;
+                    im += sample * coefficient.im;
+                }
+                *out = Complex::new(re, im);
+                continue;
+            }
             let lo = self.row_ptr[k] as usize;
             let hi = self.row_ptr[k + 1] as usize;
             let mut acc = Complex::new(0.0f32, 0.0f32);
-            for idx in lo..hi {
-                let m = self.col_idx[idx] as usize;
-                acc += self.fft_buffer[m] * self.coef[idx];
+            for (&index, &coefficient) in self.col_idx[lo..hi].iter().zip(&self.coef[lo..hi]) {
+                acc += self.fft_buffer[index as usize] * coefficient;
             }
             *out = acc;
         }
@@ -341,7 +356,7 @@ mod tests {
         let fmin = 100.0;
         let fmax = 8000.0;
         let bpo = 24;
-        let mut cqt = CqtTransform::new(sr, n_fft, fmin, fmax, bpo, 0.0, 0.0, 1.0, 4, false, 0.005);
+        let mut cqt = CqtTransform::new(sr, n_fft, fmin, fmax, bpo, 0.0, 0.0, 1.0, false, 0.005);
 
         let target_freq = 1000.0;
         let audio: Vec<f32> = (0..n_fft)
@@ -370,7 +385,7 @@ mod tests {
     #[test]
     fn silence_reads_floor() {
         let sr = 48000.0;
-        let mut cqt = CqtTransform::new(sr, 8192, 100.0, 4000.0, 12, 0.0, 0.0, 1.0, 4, false, 0.005);
+        let mut cqt = CqtTransform::new(sr, 8192, 100.0, 4000.0, 12, 0.0, 0.0, 1.0, false, 0.005);
         let audio = vec![0.0; cqt.n_fft()];
         let out = powers_db(&mut cqt, &audio);
         for db in &out {
@@ -385,7 +400,7 @@ mod tests {
         // bandwidth so the low bins stay valid in a modest N_fft.
         let sr = 48000.0;
         let n_fft = 8192;
-        let mut cqt = CqtTransform::new(sr, n_fft, 20.0, 1000.0, 12, 20.0, 20.0, 1.0, 4, false, 0.005);
+        let mut cqt = CqtTransform::new(sr, n_fft, 20.0, 1000.0, 12, 20.0, 20.0, 1.0, false, 0.005);
         let target = 50.0_f32;
         let audio: Vec<f32> = (0..n_fft)
             .map(|n| (2.0 * std::f32::consts::PI * target * n as f32 / sr).cos())
@@ -394,4 +409,85 @@ mod tests {
         let peak_db = out.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
         assert!(peak_db > -3.0, "VQT peak {peak_db} dB, expected near 0");
     }
+
+    #[test]
+    fn default_vqt_keeps_high_frequency_midband_within_scalloping_budget() {
+        for sr in [44_100.0, 48_000.0, 96_000.0] {
+            let fmin = 10.0;
+            let fmax = 22_000.0_f32.min(sr * 0.5);
+            let bpo = 24;
+            let gamma_lo = 10.0;
+            let gamma_hi = 20.0;
+            let gamma_transition = 200.0;
+            let alpha = 2.0_f32.powf(1.0 / bpo as f32) - 1.0;
+            let gamma_at = |frequency: f32| {
+                let t = (frequency / gamma_transition).clamp(0.0, 1.0);
+                gamma_lo + (gamma_hi - gamma_lo) * t
+            };
+            let longest = (sr / (alpha * fmin + gamma_at(fmin))).ceil() as usize;
+            let n_fft = longest.max(4).next_power_of_two();
+            let mut cqt = CqtTransform::new(
+                sr,
+                n_fft,
+                fmin,
+                fmax,
+                bpo,
+                gamma_lo,
+                gamma_hi,
+                gamma_transition,
+                false,
+                1e-6,
+            );
+            let center = cqt
+                .center_freqs()
+                .iter()
+                .copied()
+                .min_by(|a, b| (a - 18_000.0).abs().total_cmp(&(b - 18_000.0).abs()))
+                .unwrap();
+            let target = center * 2.0_f32.powf(0.5 / bpo as f32);
+            let audio: Vec<f32> = (0..n_fft)
+                .map(|n| (std::f32::consts::TAU * target * n as f32 / sr).cos())
+                .collect();
+            let peak_db = powers_db(&mut cqt, &audio)
+                .into_iter()
+                .fold(f32::NEG_INFINITY, f32::max);
+            assert!(
+                peak_db > -1.1,
+                "{sr} Hz VQT peak {peak_db} dB at {target} Hz (center {center} Hz)"
+            );
+        }
+    }
+    #[test]
+    fn hybrid_transform_matches_independent_time_domain_convolution() {
+        for rate in [44100.0, 48000.0, 96000.0] {
+            let params = crate::spectrum_gpu::cqt_build_params(rate);
+            let mut cqt = CqtTransform::new(rate,params.n_fft,params.fmin,params.fmax,
+                params.bpo,params.gamma_lo,params.gamma_hi,params.gamma_transition,
+                params.causal,params.threshold_rel);
+            assert!(!cqt.direct_coef.is_empty() && !cqt.coef.is_empty());
+            let audio: Vec<f32> = (0..params.n_fft).map(|i| {
+                [50.0,1000.0,18000.0].iter().map(|f|
+                    0.08*(std::f64::consts::TAU*f*i as f64/rate as f64).cos()).sum::<f64>() as f32
+            }).collect();
+            let mut output = vec![Complex::new(0.0,0.0);cqt.num_bins()];
+            cqt.process_complex(&audio,&mut output);
+            for (&frequency,actual) in cqt.center_freqs().iter().zip(output) {
+                let f=frequency as f64;
+                let bandwidth=(2.0_f64.powf(1.0/24.0)-1.0)*f+10.0+10.0*(f/200.0).min(1.0);
+                let n=(rate as f64/bandwidth).ceil() as usize;
+                let mut real=0.0;let mut imag=0.0;let mut weight=0.0;
+                for (i,&sample) in audio[audio.len()-n..].iter().enumerate() {
+                    let phase=std::f64::consts::TAU*i as f64/(n-1) as f64;
+                    let w=0.35875-0.48829*phase.cos()+0.14128*(2.0*phase).cos()-0.01168*(3.0*phase).cos();
+                    let angle=std::f64::consts::TAU*f*i as f64/rate as f64;
+                    real+=sample as f64*w*angle.cos();
+                    imag-=sample as f64*w*angle.sin();weight+=w;
+                }
+                let error=((actual.re as f64-real*2.0/weight).powi(2)
+                    +(actual.im as f64-imag*2.0/weight).powi(2)).sqrt();
+                assert!(error<3e-6,"{rate}Hz, {frequency}Hz: complex error {error}");
+            }
+        }
+    }
+
 }

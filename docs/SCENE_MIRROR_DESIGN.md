@@ -17,9 +17,9 @@ Instruction to every phase: **extend, don't redesign.**
 
 | Piece | Where | State |
 |---|---|---|
-| Modifier descriptor + registry (inventory, zero central edit per kind) | `crates/manifold-renderer/src/node_graph/scene_modifier.rs:32` `SceneModifierDescriptor`, `:162` registry, `:169-174` submits | SHIPPED (2 kinds registered). Picker + cards consume `descriptors()` — `crates/manifold-app/src/ui_bridge/projection/cards.rs:476` |
+| Modifier descriptor + registry (inventory, zero central edit per kind) | `crates/manifold-nodes/src/node_graph/scene_modifier.rs:32` `SceneModifierDescriptor`, `:162` registry, `:169-174` submits | SHIPPED (2 kinds registered). Picker + cards consume `descriptors()` — `crates/manifold-app/src/ui_bridge/projection/cards.rs:476` |
 | Generic apply/remove commands (plan-driven, per-kind-free) | `crates/manifold-editing/src/commands/graph/scene_modifier.rs:200` (repoints), `:224` (splices) | SHIPPED. Fog proved a kind ships with zero framework change |
-| Kind #2 template (gate bypass, whitelist rows, trace) | `crates/manifold-renderer/src/node_graph/scene_modifier.rs:809` `scene_modifier_fog` | SHIPPED — the mirror kind copies this shape |
+| Kind #2 template (gate bypass, whitelist rows, trace) | `crates/manifold-nodes/src/node_graph/scene_modifier.rs:809` `scene_modifier_fog` | SHIPPED — the mirror kind copies this shape |
 | Instance transform type (pos+uniform scale, XYZ Euler, 32 B) | `crates/manifold-node-engine/src/mesh.rs:96` `InstanceTransform` | SHIPPED. `rot_pad.w` is documented padding — always 0 today |
 | Loop instance atom (capacity≠count lesson, zero-mask surplus) | `crates/manifold-nodes-scene/src/node_graph/primitives/scene_array.rs:1` | SHIPPED on freeze codegen path; BUG-757c (scene-loop-copies-param-inert) fixed the size-by-capacity rule the mirror copies |
 | Group splice (interface input + top-level wire per object group) | `crates/manifold-core/src/scene_modifier.rs:31` `GroupSplice`; apply at editing `:224` | SHIPPED — **with the gap P0 closes: wire-add is skipped when the interface input already exists** (editing `:233-235`), so a second kind cannot re-wire an already-spliced port |
@@ -29,7 +29,7 @@ Instruction to every phase: **extend, don't redesign.**
 | Mesh vertex shader Euler application | ⚠ VERIFY-AT-IMPL: read the scene mesh vertex WGSL for the exact `rot_pad` application order before deriving the conjugated-angle formulas — `mesh_common.rs:92` documents "XYZ order" but the shader's multiplication order is the authority |
 | Planar-reflection render pass, per-object fold splice | — | Do not exist. Rejected in D1/D2 |
 
-Section 2.5 audit statement (DECOMPOSING_GENERATORS.md): the reflection family was surveyed — `node.fold_mesh` mirrors ONE mesh across a plane through the origin along one axis (exists, rejected D2); no atom transforms an `Array<InstanceTransform>` by reflection (camera-family and array-family primitives surveyed via `rg 'purpose: "' crates/manifold-node-engine/src/{primitives,water/primitives}/ crates/manifold-nodes-{image,scene}/src/node_graph/primitives/ crates/manifold-renderer/src/node_graph/primitives/`). Verdict: **genuinely new** — one new atom, one new kind.
+Section 2.5 audit statement (DECOMPOSING_GENERATORS.md): the reflection family was surveyed — `node.fold_mesh` mirrors ONE mesh across a plane through the origin along one axis (exists, rejected D2); no atom transforms an `Array<InstanceTransform>` by reflection (camera-family and array-family primitives surveyed via `rg 'purpose: "' crates/manifold-node-engine/src/{primitives,water/primitives}/ crates/manifold-nodes-{image,scene}/src/node_graph/primitives/ crates/manifold-nodes/src/node_graph/primitives/`). Verdict: **genuinely new** — one new atom, one new kind.
 
 ## 2. Decisions
 
@@ -78,7 +78,7 @@ The mirror cannot see scene_array's `count` param (separate nodes, separate unif
 
 ### 3.4 The kind (`scene_mirror`)
 
-`crates/manifold-renderer/src/node_graph/scene_modifier.rs` gains `mod scene_modifier_mirror` (fog-shaped):
+`crates/manifold-nodes/src/node_graph/scene_modifier.rs` gains `mod scene_modifier_mirror` (fog-shaped):
 
 - `SCENE_MIRROR_DESCRIPTOR`: `kind_id "scene_mirror"`, `display_name "Scene Mirror"`, `slot_group SlotGroup::Objects`, gate enable (D9), trace = every minted node (fog precedent: all minted nodes are traced), row whitelist: Enabled (toggle-curated like fog), Axis, Plane Offset.
 - `build_scene_mirror_plan(def, render_scene_node_id)`:
@@ -113,7 +113,7 @@ The mirror cannot see scene_array's `count` param (separate nodes, separate unif
 - **Entry:** wave/scene-mirror at the design commit. Re-verify anchors: `GroupSplice` at core `scene_modifier.rs:31`; splice apply at editing `scene_modifier.rs:224-260`; loop splice construction at renderer `scene_modifier.rs:571`.
 - **Read-back:** decisions D6, section 3.5; forbidden: changing loop apply behaviour on the happy path (its `replace_existing: true` must be behaviour-identical to today), any retention of the silent skip.
 - **Deliverables:** `replace_existing` field (core); apply split (a)/(b) + fail-loud build check (editing); loop descriptor sets `true`; editing tests: replace arm, fail-loud arm, loop gates untouched.
-- **Gate (positive):** `cargo nextest run -p manifold-editing -p manifold-renderer scene_modifier` green; loop round-trip + inv gates green unchanged. **Gate (negative):** `rg -n "continue;$" crates/manifold-editing/src/commands/graph/scene_modifier.rs` in the splice loop — the silent-skip pattern is gone.
+- **Gate (positive):** `cargo nextest run -p manifold-editing -p manifold-nodes scene_modifier` green; loop round-trip + inv gates green unchanged. **Gate (negative):** `rg -n "continue;$" crates/manifold-editing/src/commands/graph/scene_modifier.rs` in the splice loop — the silent-skip pattern is gone.
 - **Demo:** none — L1 (no user surface).
 
 ### P1 — `node.reflect_array` + vertex-shader marker
@@ -121,7 +121,7 @@ The mirror cannot see scene_array's `count` param (separate nodes, separate unif
 - **Entry:** P0 merged. Re-verify: no-cull anchor (section 1), scene_array capacity pattern (`scene_array.rs:13-21`), Euler-order ⚠ anchor — READ the scene mesh vertex WGSL FIRST, derive the conjugated-angle closed form against it, restate the formula in a comment + test.
 - **Read-back:** D3, D4, D5, section 3.1–3.3; forbidden: touching the RT path, per-draw uniforms, or any producer other than the new atom writing markers; no new `Arc<Mutex>`; no `create_compute_pipeline(include_str!)` runtime kernel — freeze codegen only.
 - **Deliverables:** `reflect_array.rs` (primitive + `wgsl_body` + gpu_tests INV-MR1/2/3/4/5); vertex-shader marker flip (one conditional); freeze/fusion proofs (standalone AND fused, per ADDING_PRIMITIVES); Euler derivation test (all 6 axes, nonzero offset, CPU expected).
-- **Gate (positive):** `scripts/gpu_proofs_gate.py` green (touched primitive kernel — mandatory); value-level proofs vs CPU-computed expected. **Gate (negative):** `rg -n "rot_pad\[3\]" crates/manifold-node-engine/src/{primitives,water/primitives}/ crates/manifold-nodes-{image,scene}/src/node_graph/primitives/ crates/manifold-renderer/src/node_graph/primitives/` — zero hits outside `reflect_array.rs`; `rg -n "create_compute_pipeline" crates/manifold-nodes-scene/src/node_graph/primitives/reflect_array.rs` — zero hits.
+- **Gate (positive):** `scripts/gpu_proofs_gate.py` green (touched primitive kernel — mandatory); value-level proofs vs CPU-computed expected. **Gate (negative):** `rg -n "rot_pad\[3\]" crates/manifold-node-engine/src/{primitives,water/primitives}/ crates/manifold-nodes-{image,scene}/src/node_graph/primitives/ crates/manifold-nodes/src/node_graph/primitives/` — zero hits outside `reflect_array.rs`; `rg -n "create_compute_pipeline" crates/manifold-nodes-scene/src/node_graph/primitives/reflect_array.rs` — zero hits.
 - **Demo:** headless render of a lit sphere + floor-plane mirror to PNG (artifact for the record only; acceptance is the computed region-mean luminance probe — mirrored hemisphere lit. No agent judges an image; Peter looks live in the app).
 
 ### P2 — `scene_mirror` kind

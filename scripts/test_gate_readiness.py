@@ -84,17 +84,20 @@ class P1PlannerTests(unittest.TestCase):
         expected = {(row['package'], row['target'])
                     for row in self.snapshot['feature_targets']
                     if any(path.endswith(f"tests/{row['target']}.rs")
-                           or f"tests/{row['target']}/" in path for path in self.paths)}
+                           or f"tests/{row['target']}/" in path for path in self.paths)
+                    and any(Path(target['src_path']).is_file()
+                            for target in self.workspace.targets(row['package'], 'test')
+                            if target['name'] == row['target'])}
         self.assertTrue(expected, 'feature-transfer assertions must exercise real targets')
         self.assertEqual(plan.gpu_binaries, expected)
-        gpu = gpu_scope.Plan(paths=['fixture'], workspace=self.workspace,
+        gpu = gpu_scope.Plan(paths=['fixture'], workspace=Workspace(ROOT),
                              required_binaries=plan.gpu_binaries, glb=True)
         required_runs = {(run['package'], target): run for run in gpu.runs()
-                         for target in run['targets']}
+                         for target in run['targets'] if run['budgeted']}
         for _, target in expected:
-            expression = f"(package(=manifold-renderer) & binary(={target}))"
+            expression = f"(package(=manifold-nodes) & binary(={target}))"
             self.assertNotIn(expression, plan.filters)
-            self.assertEqual(required_runs[('manifold-renderer', target)]['filters'], [])
+            self.assertEqual(required_runs[('manifold-nodes', target)]['filters'], [])
 
     def test_scoped_empty_mapping_is_red_even_with_nonempty_union(self):
         listing = {"rust-suites": {
@@ -112,6 +115,30 @@ class P1PlannerTests(unittest.TestCase):
         whole.whole.add("fixture")
         self.assertEqual(cpu_scope.validate_inventory(whole, "fixture", listing),
                          {("smoke", "present::case")})
+
+    def test_self_contained_cli_without_tests_keeps_compile_checks_only(self):
+        path = "crates/manifold-nodes/src/bin/freeze_profile.rs"
+        plan = cpu_scope.plan_for_paths([path], ROOT, self.workspace)
+        self.assertEqual(plan.selections(), {})
+        self.assertIn("freeze-profile has no unit tests: compile/clippy only", plan.describe())
+
+    def test_testless_cli_detection_preserves_possible_test_sources(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "main.rs"
+            for text, testless in [
+                ('fn main() { println!("#[test]"); } // mod tests;\n', True),
+                ('mod helper { fn helper() {} } fn main() {}', True),
+                ('#[test] fn check() {} fn main() {}', False),
+                ('mod tests { #[test] fn check() {} } fn main() {}', False),
+                ('mod helper; fn main() {}', False),
+                ('include!("generated.rs"); fn main() {}', False),
+                ('make_tests!(); fn main() {}', False),
+                ('#[custom_test] struct Case; fn main() {}', False),
+                ('testkit_visible! { testkit { #[test] fn check() {} } production {} }', False),
+            ]:
+                with self.subTest(text=text):
+                    source.write_text(text)
+                    self.assertEqual(cpu_scope.testless_binary_root(source), testless)
 
     def test_testless_path_module_widens_only_its_package(self):
         plan = cpu_scope.plan_for_paths([
@@ -221,6 +248,58 @@ class P1PlannerTests(unittest.TestCase):
                 problems = gate_readiness.executable_problems(repo, ['src/changed.rs'])
         self.assertIn('scripts/tool.py: shebang entrypoint is not executable', problems)
 
+    def test_analyzer_paths_select_nested_checks_with_long_build_timeout(self):
+        paths = ['plugins/manifold-analyzer-gui/shaders/spectrum_line.wgsl']
+        checks = gate_readiness.analyzer_tooling(ROOT, paths)
+        self.assertEqual(len(checks), 11)
+        self.assertTrue(all(check['timeout'] == 600 for check in checks))
+        self.assertTrue(any(
+            check['argv'][:2] == ['cargo', 'check']
+            and '--manifest-path' in check['argv']
+            and check['argv'][check['argv'].index('--manifest-path') + 1].endswith(
+                'plugins/Cargo.toml')
+            and check['argv'][-2:] == ['--features', 'gpu-proofs']
+            for check in checks))
+        filters = {check['argv'][-1] for check in checks if check['argv'][1] == 'test'}
+        self.assertEqual(filters, {
+            'reference::tests::', 'median::tests::',
+            'precision_tests::', 'spectrum_worker::',
+        })
+        proof = next(check for check in checks if check['name'] == 'analyzer-gpu-proof')
+        self.assertEqual(proof['argv'][-5:], [
+            'spectrum_gpu::spectrogram_gpu_tests::', '--budget', '120',
+            '--hang-allowance', '120'])
+        self.assertEqual(proof['phase'], 'gpu')
+        build = next(check for check in checks
+                     if check['name'] == 'analyzer-gpu-proof-build')
+        self.assertEqual(build['argv'], [*proof['argv'], '--build-only'])
+        self.assertEqual(build['phase'], 'build')
+
+    def test_analyzer_paths_are_removed_only_from_root_gpu_planning(self):
+        workspace = SimpleNamespace(
+            packages={}, roots={}, owner=lambda path: None,
+            reverse_dependencies=lambda packages: [],
+            targets=lambda package, kind=None: [],
+            validate_nextest=lambda: None,
+        )
+        cpu = cpu_scope.Plan()
+        gpu = gpu_scope.Plan(unmapped=[
+            ('crates/unknown/shader.wgsl', 'no GPU test mapping rule for this file type')])
+        paths = [
+            'plugins/manifold-analyzer-gui/shaders/spectrum_line.wgsl',
+            'crates/unknown/shader.wgsl',
+        ]
+        with tempfile.TemporaryDirectory() as directory, \
+                patch.object(gate_readiness, 'Workspace', return_value=workspace), \
+                patch.object(gate_readiness.cpu_scope, 'plan_for_paths', return_value=cpu), \
+                patch.object(gate_readiness.gpu_scope, 'plan_for_paths', return_value=gpu) as gpu_mock, \
+                patch('codex_regressions.inventory', return_value=[]):
+            result = gate_readiness.plan(Path(directory), paths, 'base')
+        self.assertEqual(gpu_mock.call_args.args[0], ['crates/unknown/shader.wgsl'])
+        self.assertTrue(any(label == 'gpu-ownership' for label, _ in result['errors']))
+        self.assertTrue(any(check['name'] == 'analyzer-gpu-proof'
+                            for check in result['tooling']))
+
     def test_invalid_flow_manifest_collects_shape_and_reference_errors(self):
         with tempfile.TemporaryDirectory() as directory:
             repo = Path(directory)
@@ -280,7 +359,9 @@ class P1PlannerTests(unittest.TestCase):
         self.assertFalse(gpu.filters)
         self.assertFalse(gpu.unmapped)
         self.assertEqual(gpu.runs(), [])
-        with patch.object(gate_readiness, "Workspace", return_value=self.workspace), \
+        # Readiness checks the live nextest policy, whose harnesses have moved
+        # since this historical P1 metadata snapshot was captured.
+        with patch.object(gate_readiness, "Workspace", return_value=Workspace(ROOT)), \
              patch.object(gate_readiness, "selected_tooling", wraps=gate_readiness.selected_tooling) as tooling:
             ready = gate_readiness.plan(ROOT, paths)
         tooling.assert_called_once_with(ROOT, [])
@@ -294,7 +375,7 @@ class P1PlannerTests(unittest.TestCase):
             ".claude/orchestration/crate-split-other/shaders/example.wgsl", self.workspace))
 
     def test_new_gpu_package_needs_explicit_default_test_group_ownership(self):
-        workspace = copy.deepcopy(self.workspace)
+        workspace = Workspace(ROOT)
         original = workspace.nextest_gpu_filter()
         workspace.packages['synthetic-leaf'] = {'features': {'gpu-proofs': []}, 'targets': []}
         with self.assertRaisesRegex(ValueError, 'ownership unresolved'):

@@ -31,11 +31,13 @@ pub fn array_scratch(type_id: &str) -> Option<fn(u64) -> Option<u64>> {
 }
 type ReusableBuckets = AHashMap<ReusableKey, Vec<ResourceId>>;
 
+manifold_core::testkit_visible! {
 /// Arrays whose size can change after planning because a provider hands in
 /// storage of its own size. Derived once during preparation. All of them
 /// keep dedicated storage so replacement cannot alter an unrelated array.
-pub fn growing_array_resources(graph: &Graph, plan: &ExecutionPlan) -> Vec<bool> {
+pub(crate) fn growing_array_resources(graph: &Graph, plan: &ExecutionPlan) -> Vec<bool> {
     capacity_lineage(graph, plan, |node, port| node.node.provides_array_output(port))
+}
 }
 
 /// The seeded arrays, plus every array whose declared capacity moves when a
@@ -241,7 +243,7 @@ pub fn plan_array_allocations(
     canvas: (u32, u32),
     prebound: &AHashMap<ResourceId, ArrayStorage>,
 ) -> Result<ArrayAllocationPlan, PreAllocationError> {
-    let handle_by_node: AHashMap<NodeInstanceId, &'static str> = graph
+    let handle_by_node: AHashMap<NodeInstanceId, &str> = graph
         .handles()
         .map(|(handle, node)| (node, handle))
         .collect();
@@ -575,7 +577,7 @@ pub fn plan_array_allocations(
 fn unbound_error(
     node_type: &str,
     port: &str,
-    handle_by_node: &AHashMap<NodeInstanceId, &'static str>,
+    handle_by_node: &AHashMap<NodeInstanceId, &str>,
     node: NodeInstanceId,
     cause: &'static str,
 ) -> PreAllocationError {

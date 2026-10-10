@@ -1,6 +1,8 @@
+use manifold_core::project::Project;
+use manifold_core::tempo::TempoMapConverter;
 use manifold_core::{Beats, Seconds};
 
-use crate::modulation::TriggerPulse;
+use crate::modulation::{TriggerPulse, TriggerSourceStamp};
 
 /// Maximum number of trigger pulses retained between renderer consumers.
 pub const DEFAULT_TRIGGER_DELIVERY_CAPACITY: usize = 4096;
@@ -13,6 +15,33 @@ pub struct CapturedTriggerPulse {
     pub sequence: u64,
     pub accepted_time: Seconds,
     pub accepted_beat: Beats,
+}
+
+impl CapturedTriggerPulse {
+    /// Resolve the event's source clock. Snapshot events preserve their
+    /// accepted display clock; audio events retain their accepted hop time and
+    /// resolve its beat against the current project tempo map.
+    pub fn source_clock(&self, project: &Project) -> (Seconds, Beats) {
+        match &self.pulse.source_stamp {
+            TriggerSourceStamp::Clip { beat, .. } => (
+                TempoMapConverter::beat_to_seconds_immut(
+                    &project.tempo_map,
+                    *beat,
+                    project.settings.bpm,
+                ),
+                *beat,
+            ),
+            TriggerSourceStamp::Audio { time, .. } => (
+                *time,
+                TempoMapConverter::seconds_to_beat_immut(
+                    &project.tempo_map,
+                    *time,
+                    project.settings.bpm,
+                ),
+            ),
+            TriggerSourceStamp::Snapshot => (self.accepted_time, self.accepted_beat),
+        }
+    }
 }
 
 /// The reason trigger delivery stopped accepting new pulses.
@@ -123,6 +152,18 @@ impl TriggerDeliveryQueue {
         if !accepted_time.0.is_finite() || !accepted_beat.0.is_finite() {
             return Err(self.latch(TriggerDeliveryError::InvalidClock));
         }
+        if pulses.iter().any(|pulse| {
+            matches!(
+                &pulse.source_stamp,
+                TriggerSourceStamp::Clip { beat, .. } if !beat.0.is_finite()
+            )
+            || matches!(
+                &pulse.source_stamp,
+                TriggerSourceStamp::Audio { time, .. } if !time.0.is_finite()
+            )
+        }) {
+            return Err(self.latch(TriggerDeliveryError::InvalidClock));
+        }
         if pulses.len() > self.capacity.saturating_sub(self.pulses.len()) {
             return Err(self.latch(TriggerDeliveryError::CapacityOverflow));
         }
@@ -175,6 +216,16 @@ impl TriggerDeliveryQueue {
         self.pulses.clear();
     }
 
+    /// Reassignment cancels clip impulses already captured for this target;
+    /// its independent audio impulses keep their place in the queue.
+    pub(crate) fn cancel_clip_parameter(&mut self, owner: &manifold_core::EffectId, param: u64) {
+        self.pulses.retain(|captured| {
+            let pulse = &captured.pulse;
+            pulse.owner_id != *owner || pulse.param_key != param
+                || !matches!(pulse.source_stamp, TriggerSourceStamp::Clip { .. })
+        });
+    }
+
     #[cfg(test)]
     fn capacity(&self) -> usize {
         self.pulses.capacity()
@@ -184,7 +235,9 @@ impl TriggerDeliveryQueue {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use manifold_core::id::{EffectId, LayerId};
+    use manifold_core::id::{ClipId, EffectId, LayerId};
+    use manifold_core::types::TempoPointSource;
+    use manifold_core::Bpm;
 
     fn pulse(sequence: u64) -> TriggerPulse {
         TriggerPulse {
@@ -192,8 +245,27 @@ mod tests {
             layer_id: Some(LayerId::new(format!("layer-{sequence}"))),
             owner_id: EffectId::new(format!("effect-{sequence}")),
             param_key: sequence,
-            audio_stamp: None,
+            source_stamp: crate::modulation::TriggerSourceStamp::Snapshot,
         }
+    }
+
+    #[test]
+    fn source_change_cancels_only_that_parameters_clip_pulses() {
+        let mut queue = TriggerDeliveryQueue::new();
+        let mut clip = pulse(1);
+        clip.kind = crate::modulation::TriggerPulseKind::Parameter;
+        clip.source_stamp = TriggerSourceStamp::Clip {
+            layer_id: LayerId::new("source"), clip_id: ClipId::new("clip"), beat: Beats::ZERO,
+        };
+        let mut audio = clip.clone();
+        audio.source_stamp = TriggerSourceStamp::Snapshot;
+        let mut other = clip.clone();
+        other.param_key = 2;
+        let mut pulses = vec![clip.clone(), audio.clone(), other.clone()];
+        queue.append_batch(&mut pulses, Seconds::ZERO, Beats::ZERO).unwrap();
+        queue.cancel_clip_parameter(&clip.owner_id, clip.param_key);
+        assert_eq!(queue.as_slice().iter().map(|capture| &capture.pulse).collect::<Vec<_>>(),
+            [&audio, &other]);
     }
 
     fn stamped_pulse(
@@ -202,13 +274,16 @@ mod tests {
         timeline_time: Option<Seconds>,
     ) -> TriggerPulse {
         let mut pulse = pulse(sequence);
-        pulse.audio_stamp = Some(manifold_core::audio_features::AudioHopStamp {
-            epoch: 17,
-            end_sample,
-            sample_rate: 48_000,
-            source_time: None,
-            timeline_time,
-        });
+        pulse.source_stamp = crate::modulation::TriggerSourceStamp::Audio {
+            stamp: manifold_core::audio_features::AudioHopStamp {
+                epoch: 17,
+                end_sample,
+                sample_rate: 48_000,
+                source_time: None,
+                timeline_time,
+            },
+            time: timeline_time.unwrap_or(Seconds::ZERO),
+        };
         pulse
     }
 
@@ -282,14 +357,16 @@ mod tests {
         let mut queue = TriggerDeliveryQueue::with_capacity(4);
         queue.reset().unwrap();
         let mut first = stamped_pulse(10, 2048, None);
-        first.audio_stamp.as_mut().unwrap().source_time = Some(std::time::Instant::now());
+        if let TriggerSourceStamp::Audio { stamp, .. } = &mut first.source_stamp {
+            stamp.source_time = Some(std::time::Instant::now());
+        }
         let second = stamped_pulse(11, 1024, Some(Seconds(8.0)));
         let mut pulses = vec![first.clone(), second.clone()];
         queue
             .append_batch(&mut pulses, Seconds(2.0), Beats(4.0))
             .unwrap();
-        assert_eq!(queue.as_slice()[0].pulse.audio_stamp, first.audio_stamp);
-        assert_eq!(queue.as_slice()[1].pulse.audio_stamp, second.audio_stamp);
+        assert_eq!(queue.as_slice()[0].pulse.audio_stamp(), first.audio_stamp());
+        assert_eq!(queue.as_slice()[1].pulse.audio_stamp(), second.audio_stamp());
         assert_eq!(queue.as_slice()[0].sequence, 0);
         assert_eq!(queue.as_slice()[1].sequence, 1);
     }
@@ -313,5 +390,120 @@ mod tests {
         assert_eq!(queue.reset(), Err(TriggerDeliveryError::EpochExhausted));
         assert_eq!(queue.as_slice().len(), 1);
         assert_eq!(queue.failure().unwrap().epoch, u64::MAX);
+    }
+
+    #[test]
+    fn clip_source_clock_preserves_each_source_and_destination_identity() {
+        let mut project = Project::default();
+        project
+            .tempo_map
+            .add_or_replace_point(Beats::ZERO, Bpm(120.0), TempoPointSource::Manual, 0.001);
+        project.tempo_map.add_or_replace_point(
+            Beats(4.0),
+            Bpm(60.0),
+            TempoPointSource::Manual,
+            0.001,
+        );
+        let mut first = pulse(1);
+        first.layer_id = Some(LayerId::new("destination-a"));
+        first.source_stamp = TriggerSourceStamp::Clip {
+            layer_id: LayerId::new("source-a"),
+            clip_id: ClipId::new("clip-a"),
+            beat: Beats(2.0),
+        };
+        let mut second = pulse(2);
+        second.layer_id = Some(LayerId::new("destination-b"));
+        second.source_stamp = TriggerSourceStamp::Clip {
+            layer_id: LayerId::new("source-b"),
+            clip_id: ClipId::new("clip-b"),
+            beat: Beats(6.0),
+        };
+        let mut queue = TriggerDeliveryQueue::with_capacity(2);
+        queue.reset().unwrap();
+        let mut pulses = vec![first.clone(), second.clone()];
+        queue.append_batch(&mut pulses, Seconds(99.0), Beats(99.0)).unwrap();
+
+        assert_eq!(queue.as_slice()[0].pulse.layer_id, first.layer_id);
+        assert_eq!(queue.as_slice()[1].pulse.layer_id, second.layer_id);
+        assert_eq!(queue.as_slice()[0].pulse.source_stamp, first.source_stamp);
+        assert_eq!(queue.as_slice()[1].pulse.source_stamp, second.source_stamp);
+        for (captured, seconds, beat) in [
+            (&queue.as_slice()[0], 1.0, Beats(2.0)),
+            (&queue.as_slice()[1], 4.0, Beats(6.0)),
+        ] {
+            let clock = captured.source_clock(&project);
+            assert!((clock.0.0 - seconds).abs() < 1e-6);
+            assert_eq!(clock.1, beat);
+        }
+    }
+
+    #[test]
+    fn clip_source_nan_is_rejected_before_drain() {
+        let mut queue = TriggerDeliveryQueue::with_capacity(1);
+        queue.reset().unwrap();
+        let mut pulse = pulse(1);
+        pulse.source_stamp = TriggerSourceStamp::Clip {
+            layer_id: LayerId::new("source"),
+            clip_id: ClipId::new("bad"),
+            beat: Beats(f64::NAN),
+        };
+        let mut pulses = vec![pulse];
+        assert_eq!(
+            queue.append_batch(&mut pulses, Seconds::ZERO, Beats::ZERO),
+            Err(TriggerDeliveryError::InvalidClock)
+        );
+        assert_eq!(pulses.len(), 1);
+        assert!(queue.as_slice().is_empty());
+    }
+
+    #[test]
+    fn audio_source_clock_preserves_export_time_and_resolves_current_tempo() {
+        let mut project = Project::default();
+        project
+            .tempo_map
+            .add_or_replace_point(Beats::ZERO, Bpm(120.0), TempoPointSource::Manual, 0.001);
+        let mut pulse = pulse(1);
+        pulse.source_stamp = TriggerSourceStamp::Audio {
+            stamp: manifold_core::audio_features::AudioHopStamp {
+                epoch: 1,
+                end_sample: 48_000,
+                sample_rate: 48_000,
+                source_time: None,
+                timeline_time: Some(Seconds(3.0)),
+            },
+            time: Seconds(3.0),
+        };
+        let mut queue = TriggerDeliveryQueue::with_capacity(1);
+        queue.reset().unwrap();
+        queue
+            .append_batch(&mut vec![pulse], Seconds(99.0), Beats(99.0))
+            .unwrap();
+        let (time, beat) = queue.as_slice()[0].source_clock(&project);
+        assert_eq!(time, Seconds(3.0));
+        assert_eq!(beat, Beats(6.0));
+    }
+
+    #[test]
+    fn audio_source_time_is_rejected_before_drain() {
+        let mut queue = TriggerDeliveryQueue::with_capacity(2);
+        queue.reset().unwrap();
+        let mut invalid = pulse(2);
+        invalid.source_stamp = TriggerSourceStamp::Audio {
+            stamp: manifold_core::audio_features::AudioHopStamp {
+                epoch: 1,
+                end_sample: 1,
+                sample_rate: 48_000,
+                source_time: None,
+                timeline_time: None,
+            },
+            time: Seconds(f64::NAN),
+        };
+        let mut pulses = vec![pulse(1), invalid];
+        assert_eq!(
+            queue.append_batch(&mut pulses, Seconds::ZERO, Beats::ZERO),
+            Err(TriggerDeliveryError::InvalidClock)
+        );
+        assert_eq!(pulses.len(), 2);
+        assert!(queue.as_slice().is_empty());
     }
 }

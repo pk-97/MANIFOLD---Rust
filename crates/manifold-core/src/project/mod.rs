@@ -20,6 +20,8 @@ pub use validate::{LoadReport, PurgeResult};
 mod queries;
 mod presets;
 mod load_migration;
+mod trigger_sources;
+pub use trigger_sources::{clip_trigger_pattern_digest, clip_trigger_source_is_eligible, ClipTriggerLayer};
 
 /// A project-scoped preset (a "fork"): a complete, self-contained preset
 /// (graph + exposed params + ranges, carried in [`EffectGraphDef`]) that lives

@@ -6,6 +6,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from gate_workspace import Workspace
+
 
 def _git(repo, *args):
     r = subprocess.run(["git", *args], cwd=repo, text=True,
@@ -67,6 +69,7 @@ def tooling_checks(repo, paths):
     for test in ('scripts/test_landing_gate.py', 'scripts/test_gpu_proofs_gate.py'):
         tooling[test].add('scripts/gate_cancellation.py')
     shared = {'scripts/gate_workspace.py', 'scripts/gate_policy.py'}
+    tooling['scripts/test_codex_checks.py'].update(shared | {'scripts/cpu_scope.py'})
     for test in ('scripts/test_gpu_scope.py', 'scripts/test_gate_passes.py',
                  'scripts/test_gpu_proofs_gate.py', 'scripts/test_landing_gate.py'):
         tooling[test].update(shared)
@@ -92,27 +95,40 @@ def build_plan(repo: Path, paths=None):
     if any(Path(p).is_absolute() or not (repo / p).resolve().is_relative_to(repo) for p in paths):
         raise RuntimeError("explicit paths must stay within --repo")
     paths = sorted({(repo / p).resolve().relative_to(repo).as_posix() for p in paths})
+    import cpu_scope
     import gpu_scope
-    from landing_gate import packages_for_paths
-    packages = packages_for_paths(repo, paths)
-    scope = gpu_scope.plan_for_paths(paths, repo)
+    workspace = Workspace(repo)
+    cpu_plan = cpu_scope.plan_for_paths(paths, repo, workspace=workspace)
+    packages = sorted({workspace.owner(path) for path in paths} - {None})
+    scope = gpu_scope.plan_for_paths(paths, repo, workspace=workspace, cpu_plan=cpu_plan)
     checks = tooling_checks(repo, paths)
     def check(name, argv):
+        if 'cargo' in argv or name in {'ui-flows', 'gpu-proofs'}:
+            argv = ['env', 'CARGO_BUILD_JOBS=4', *argv]
         checks.append({"name": name, "argv": argv, "cwd": str(repo)})
     flows = flow_filters_for_paths(repo, paths)
-    if flows:
-        check("ui-flows", ["python3", str(repo / "scripts/run_ui_flows.py"), *flows])
     if packages:
         manifest = str(repo / "Cargo.toml")
         args = [x for p in packages for x in ("-p", p)]
-        checks += [{"name": "clippy", "argv": ["cargo", "clippy", "--manifest-path", manifest, *args, "--tests", "--", "-D", "warnings"], "cwd": str(repo)},
-                   {"name": "tests", "argv": ["cargo", "nextest", "run", "--manifest-path", manifest, *args], "cwd": str(repo)}]
+        check("clippy", ["cargo", "clippy", "--manifest-path", manifest, *args, "--tests", "--", "-D", "warnings"])
+    for package, filterset in cpu_plan.selections().items():
+        if package in cpu_plan.whole or not filterset or filterset == "none()":
+            continue
+        common = ["--manifest-path", str(repo / "Cargo.toml"), "--no-fail-fast", "-p", package, "-E", filterset]
+        check(f"tests-build/{package}", ["cargo", "nextest", "run", "--no-run", *common])
+        check(f"tests/{package}", ["python3", str(repo / "scripts/gpu_queue.py"), "--",
+                                   "cargo", "nextest", "run", *common])
+    if flows:
+        check("ui-flows", ["python3", str(repo / "scripts/run_ui_flows.py"), *flows])
     if scope.active:
         argv = ["python3", str(repo / "scripts/gpu_proofs_gate.py"), "--manifest-path", str(repo / "Cargo.toml")]
         for p in paths:
             argv += ["--path", p]
-        checks.append({"name": "gpu-proofs", "argv": argv, "cwd": str(repo)})
+        check("gpu-proofs", argv)
     warnings = []
+    whole = sorted(cpu_plan.whole)
+    if whole:
+        warnings.append("whole-package CPU selections (" + ", ".join(whole) + ") omit manual worker tests; lead must choose focused validation and the landing gate handles broad scope")
     if packages or any(p in ("Cargo.toml", "Cargo.lock") for p in paths):
         warnings.append("direct reverse-dependency expansion and mandatory landing checks remain landing-gate responsibility; review broader impact explicitly")
     from codex_regressions import inventory

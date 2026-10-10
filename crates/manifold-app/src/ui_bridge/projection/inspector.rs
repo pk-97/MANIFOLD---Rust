@@ -16,7 +16,7 @@ use crate::app::SelectionState;
 use crate::ui_root::UIRoot;
 
 use super::cards::{
-    OscScope, SurfaceVisibility, attach_audio_sends, audio_send_choices, effects_to_surfaces,
+    OscScope, SurfaceVisibility, attach_project_sources, audio_send_choices, effects_to_surfaces,
     gen_params_to_surface, modifier_surfaces,
 };
 use super::scene::sections_for_nodes;
@@ -282,7 +282,7 @@ pub fn sync_inspector_data(
                     let def = l
                         .generator_graph()
                         .cloned()
-                        .or_else(|| manifold_renderer::node_graph::bundled_preset_def(&gen_type).cloned());
+                        .or_else(|| manifold_nodes::bundled_presets::bundled_preset_def(&gen_type).map(|def| (*def).clone()));
                     let layer_ids: Vec<manifold_core::LayerId> =
                         project.timeline.layers.iter().map(|l| l.layer_id.clone()).collect();
                     match def.as_ref().and_then(|d| SceneVm::from_def_with_layers(d, &layer_ids)) {
@@ -379,7 +379,7 @@ pub fn sync_inspector_data(
                             let (forces, force_picker) = if let (Some(gp), Some(def)) = (gen_inst, def.as_ref()) {
                                 let mut surfaces = modifier_surfaces(gp, def, &vm, layer_id.as_str(), automation_latched, driver_timing);
                                 surfaces.retain(|surface| super::cards::is_force_surface(surface, def));
-                                attach_audio_sends(&mut surfaces, &project.audio_setup);
+                                attach_project_sources(&mut surfaces, project);
                                 if let Some((target, param_id)) = selected_automation(&layer_id) {
                                     for surface in &mut surfaces {
                                         mark_selected_automation_row(surface, &layer_id, target, param_id);
@@ -707,7 +707,7 @@ pub fn sync_inspector_data(
                             // constants (`light.rs`) — this crate can't
                             // depend on them directly through the UI DTO
                             // boundary (`manifold-ui` doesn't depend on
-                            // `manifold-renderer`), same convention as
+                            // `manifold-nodes`), same convention as
                             // `EnvironmentRowVm::mode_is_hdri`.
                             const LIGHT_MODE_LABELS: &[&str] = &["Sun", "Point"];
                             const SHADOW_SOFTNESS_LABELS: &[&str] = &["Hard", "Soft", "VerySoft", "Contact"];
@@ -910,12 +910,11 @@ pub fn sync_inspector_data(
                             // so they show exactly the lens and tail's own
                             // controls.
                             let camera_sections = sections_for_nodes(def.as_ref(), &vm.camera_controls);
-                            let camera_parameter_ids = matches!(
-                                vm.camera,
-                                manifold_nodes_scene::node_graph::scene_vm::CameraVm::Custom { .. }
-                                    | manifold_nodes_scene::node_graph::scene_vm::CameraVm::Loop(_)
-                            )
-                            .then(|| super::scene::parameter_ids_for_nodes(def.as_ref(), &vm.camera_controls));
+                            let camera_parameter_ids = Some(super::scene::parameter_ids_for_nodes(
+                                def.as_ref(), &vm.camera_controls,
+                            ));
+                            let camera_setup_needed = def.as_ref().is_some_and(|graph|
+                                crate::scene_camera_edit::needs_setup(graph, vm.scene_root_node_id));
                             let world_sections = sections_for_nodes(def.as_ref(), &vm.world_controls);
                             let environment = match vm.environment {
                                 manifold_nodes_scene::node_graph::scene_vm::EnvironmentVm::Importer(e) => {
@@ -1047,7 +1046,7 @@ pub fn sync_inspector_data(
                                     SurfaceVisibility::All,
                                     driver_timing,
                                 );
-                                attach_audio_sends(std::slice::from_mut(&mut surface), &project.audio_setup);
+                                attach_project_sources(std::slice::from_mut(&mut surface), project);
                                 if let Some(d) = def.as_ref() { super::material::enrich_surface(&mut surface, gp, d); }
                                 surface
                             });
@@ -1069,6 +1068,7 @@ pub fn sync_inspector_data(
                                 camera,
                                 camera_sections,
                                 camera_parameter_ids,
+                                camera_setup_needed,
                                 world_sections,
                                 // SCENE_MODIFIER_FRAMEWORK P3 (D4): the Scene
                                 // Loop's panel surface is deleted — the loop
@@ -1151,7 +1151,7 @@ pub fn sync_inspector_data(
         automation_latched,
         driver_timing,
     );
-    attach_audio_sends(&mut master_configs, &project.audio_setup);
+    attach_project_sources(&mut master_configs, project);
     ui.inspector.configure_master_effects(&master_configs);
     ui.inspector.configure_rack_groups(
         manifold_ui::InspectorTab::Master,
@@ -1218,7 +1218,7 @@ pub fn sync_inspector_data(
             if let Some((target, param_id)) = selected_automation(&layer.layer_id) {
                 for surface in &mut layer_effects { mark_selected_automation_row(surface, &layer.layer_id, target, param_id); }
             }
-            attach_audio_sends(&mut layer_effects, &project.audio_setup);
+            attach_project_sources(&mut layer_effects, project);
             ui.inspector
                 .configure_layer_effects(&layer_effects, Some(&layer.layer_id));
             ui.inspector.configure_rack_groups(
@@ -1252,7 +1252,7 @@ pub fn sync_inspector_data(
                 if let Some((target, param_id)) = selected_automation(&layer.layer_id) {
                     mark_selected_automation_row(c, &layer.layer_id, target, param_id);
                 }
-                attach_audio_sends(std::slice::from_mut(c), &project.audio_setup);
+                attach_project_sources(std::slice::from_mut(c), project);
             }
             let layer_id = layer.layer_id.clone();
             ui.inspector
@@ -1266,10 +1266,9 @@ pub fn sync_inspector_data(
                         .generator_graph()
                         .cloned()
                         .or_else(|| {
-                            manifold_renderer::node_graph::bundled_preset_def(
+                            manifold_nodes::bundled_presets::bundled_preset_def(
                                 &layer.generator_type().clone(),
-                            )
-                            .cloned()
+                            ).map(|def| (*def).clone())
                         })?;
                     let layer_ids: Vec<manifold_core::LayerId> = project
                         .timeline
@@ -1287,7 +1286,7 @@ pub fn sync_inspector_data(
                     let picker = super::cards::modifier_picker_entries(&def, &vm);
                     let mut surfaces = modifier_surfaces(gp, &def, &vm, lid, automation_latched, driver_timing);
                     surfaces.retain(|surface| !super::cards::is_force_surface(surface, &def));
-                    attach_audio_sends(&mut surfaces, &project.audio_setup);
+                    attach_project_sources(&mut surfaces, project);
                     if let Some((target, param_id)) = selected_automation(&layer.layer_id) {
                         for surface in &mut surfaces { mark_selected_automation_row(surface, &layer.layer_id, target, param_id); }
                     }
@@ -1409,6 +1408,11 @@ pub fn sync_inspector_data(
         ui.inspector
             .clip_chrome_mut()
             .set_mode(false, false, false, false, false);
+    }
+    if let Some((target, param)) = ui.pending_trigger_response_reveal.take()
+        && !ui.inspector.reveal_clip_response(&target, &param)
+    {
+        ui.scene_setup_panel.reveal_clip_response(&target, &param);
     }
 }
 
@@ -2226,7 +2230,8 @@ mod fire_meter_roundtrip_tests {
         let dt = Seconds(1.0 / 60.0);
         let mut fire_meters = FireMeterCapture::default();
         let mut pulses: Vec<TriggerPulse> = Vec::new();
-        evaluate_all_audio_mods(&mut project, &snapshot, dt, &mut pulses, &[], &mut fire_meters);
+        evaluate_all_audio_mods(&mut project, &snapshot, dt, Seconds::ZERO,
+            &manifold_playback::clip_controls::ClipControlFrame::default(), &mut pulses, &mut fire_meters);
         let mut live_trigger = LiveTriggerState::default();
         live_trigger.evaluate(&snapshot, &project.audio_setup, &project.timeline.layers, dt, &mut fire_meters);
 

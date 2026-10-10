@@ -15,16 +15,16 @@
 //! is now `Caustics` (`depth` / `scale` cards) — the mechanics under test
 //! are identical regardless of which primitive backs a card.
 //!
-//! `manifold_renderer::preset_loader::clear_project_presets()` still
+//! `manifold_nodes::preset_loader::clear_project_presets()` still
 //! triggers `apply_reload()` even with an empty overlay (see
 //! `preset_loader.rs`), which scans the STOCK `assets/generator-presets`
 //! dir (dev workspace root, baked via `CARGO_MANIFEST_DIR` at
-//! manifold-renderer's own compile time) and rebuilds
+//! manifold-nodes's own compile time) and rebuilds
 //! `manifold_core::preset_definition_registry` from it — that's what
 //! makes the stock preset resolvable as a template at all, mirroring what the
 //! app does once at startup before any project-local overlay exists.
 
-use manifold_renderer as _;
+use manifold_nodes as _;
 use manifold_core::effects::ParamId;
 use manifold_core::project::Project;
 use manifold_core::types::LayerType;

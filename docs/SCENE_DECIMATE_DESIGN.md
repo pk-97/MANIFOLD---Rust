@@ -257,7 +257,7 @@ readback, cache.
   machinery being mirrored); `taper_mesh.rs` whole (the atom family shape);
   ADDING_PRIMITIVES.md sections on CPU atoms.
 - **Deliverables:** `primitives/mesh_decimate.rs`; `meshopt = "0.6"` in
-  `manifold-renderer` (pre-authorized dependency, D2); render_scene's
+  `manifold-nodes` (pre-authorized dependency, D2); render_scene's
   optional `vertex_count` input + the four override sites (D9); atom tests
   for INV-D2/D3/D5; a raw-executor headless test (mesh_snapshot.rs pattern)
   rendering a decimated cube → PNG.
@@ -266,7 +266,7 @@ readback, cache.
   cross-instance cache (`Arc<Mutex>`) · resizing the output buffer below
   input capacity (D9 — capacity is compile-time, count is the wire) ·
   deriving draw count from anything but the wire when it is wired.
-- **Gate:** `cargo nextest run -p manifold-renderer mesh_decimate` green;
+- **Gate:** `cargo nextest run -p manifold-nodes mesh_decimate` green;
   `MANIFOLD_RENDER_TRACE=1` ratio scrub on a 1M-tri mesh — no frame >20ms
   (the async claim, measured); INV gates green.
 - **Round-trip gate:** none — no serialized surface in P1 (atom only).
@@ -274,7 +274,7 @@ readback, cache.
   Peter looks; agent gate is the test exit codes.
 - **Performer gesture:** ratio mapped to a fader, swept 1.0→0.05 while a
   clip plays (covered by the render-trace gate).
-- **Test scope:** `-p manifold-renderer`.
+- **Test scope:** `-p manifold-nodes`.
 
 ### P2 — Recipe, card, targeting
 
@@ -288,7 +288,7 @@ readback, cache.
 - **Forbidden moves:** Rust descriptor registration · gating `ratio` through
   the enable math (bypass handles it) · per-object ratio overrides outside
   Explicit targeting.
-- **Gate:** `cargo nextest run -p manifold-renderer scene_modifier` green;
+- **Gate:** `cargo nextest run -p manifold-nodes scene_modifier` green;
   graph-tool `validate Decimate.json --kind generator` clean; round-trip
   gate — apply → save → reload → card present, ratio binding still
   modulates after reload.
@@ -297,7 +297,7 @@ readback, cache.
   the object redraws smaller (vertex-count query or region-mean probe);
   PNG for Peter.
 - **Performer gesture:** apply mid-set from the picker on a playing scene.
-- **Test scope:** `-p manifold-renderer`.
+- **Test scope:** `-p manifold-nodes`.
 
 ### P3 — RT compatibility (static-vertices declaration)
 
@@ -311,7 +311,7 @@ readback, cache.
 - **Forbidden moves:** lifting the lock for all vertices modifiers ·
   per-frame BLAS refits (topology rebuild on land only) · a runtime
   auto-detect of "static" (the declaration is the mechanism).
-- **Gate:** `-p manifold-renderer` + `-p manifold-core` nextest green;
+- **Gate:** `-p manifold-nodes` + `-p manifold-core` nextest green;
   `scripts/gpu_proofs_gate.py` green (RT path touched).
 - **Acceptance demo (L2):** RT headless PNG of a decimated scan with
   correct shadows/reflections — Peter looks.
@@ -367,7 +367,7 @@ readback, cache.
 | 5. Renderer uses capacity-derived counts | Correct for the current `render_scene` mesh draws (`mesh_vertex_count` at `:1702`, RT count at `:5296`). The proposed single renderer input is the wrong ownership: one renderer consumes multiple `SceneObject`s. Count belongs to each object's mesh, then its `ObjectDraw`. |
 | 6. Skin/morph refusal already follows from source atoms | Separate atoms exist; Decimate refusal does not yet exist. A direct-producer check misses group boundaries, skin/morph operations and intervening modifiers. Existing `frames.rs:59–81,237–257` refusal is scoped to recipes needing a qualified coordinate frame, not generic Decimate validation. Refusal can be a conservative V1 policy, but justify it as unqualified lineage/deformation behavior. Simplifying a mesh *after* skinning does not inherently require rewriting the original joint data; applying the reduced stream before skinning would. |
 
-Paths without a crate prefix above are under `crates/manifold-nodes-scene/src/node_graph/`, with recipes under `crates/manifold-renderer/assets/scene-modifier-presets/`.
+Paths without a crate prefix above are under `crates/manifold-nodes-scene/src/node_graph/`, with recipes under `crates/manifold-nodes/assets/scene-modifier-presets/`.
 
 ### 8.2 Recommended cheaper shape: simplify a reference, publish a map
 

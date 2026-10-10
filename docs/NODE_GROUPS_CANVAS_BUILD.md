@@ -30,7 +30,7 @@ doc is the *build state + how to finish it debug-friendly*, not the design ratio
 | Loader integration | `graph_loader.rs` (`instantiate_def` hook) | e2e load test |
 | Collapse/ungroup logic | `manifold-core/group_edit.rs` | round-trip + flatten cross-check |
 | Group/Ungroup commands | `manifold-editing/commands/graph.rs` | real-Project tests |
-| **Snapshot preserves groups** | `manifold-renderer/snapshot.rs` `from_def` | `from_def_preserves_group_structure` |
+| **Snapshot preserves groups** | `manifold-nodes/snapshot.rs` `from_def` | `from_def_preserves_group_structure` |
 
 So: the data the canvas reads (`GraphSnapshot` with `NodeSnapshot.group: Option<Box<GroupSnapshot>>`)
 is correct and tested, and the commands the canvas will call (`GroupNodesCommand`,
@@ -129,7 +129,7 @@ ports/group, exposed-param-as-interface-param, colour/tint, auto-frame on enter,
 
 - Logic helpers (nav, marquee, hit-test): unit tests, CPU.
 - `group_edit` / commands / `from_def`: already tested — re-run `cargo test -p manifold-core --lib
-  group_edit`, `-p manifold-editing --lib`, `-p manifold-renderer --lib snapshot::` to confirm green
+  group_edit`, `-p manifold-editing --lib`, `-p manifold-nodes --lib snapshot::` to confirm green
   before/after.
 - Canvas rendering + interaction: **Peter's visual pass** (the editor is eyeball-verified per
   `feedback_graph_editor_is_authoring_not_perform`). The overlay + logs + fixture make that pass

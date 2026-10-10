@@ -162,11 +162,10 @@ mod tests {
         );
         let layer_id = project.timeline.layers[index].layer_id.clone();
         let target = manifold_core::GraphTarget::Generator(layer_id);
-        let mut def = manifold_renderer::node_graph::bundled_preset_def(
+        let mut def = manifold_nodes::bundled_presets::bundled_preset_def(
             project.preset_instance(&target).unwrap().effect_type(),
         )
-        .expect("PhysicsSolids is bundled")
-        .clone();
+        .expect("PhysicsSolids is bundled").as_ref().clone();
         manifold_nodes_scene::node_graph::scene_exposure::migrate_scene_exposures(&mut def);
         let (object, material) =
             material_object_refs(&def).expect("PhysicsSolids has a PBR object");

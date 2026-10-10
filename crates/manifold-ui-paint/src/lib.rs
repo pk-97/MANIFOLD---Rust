@@ -1,4 +1,7 @@
-//! GPU painting for the bitmap UI, text, clips, and automation lanes.
+//! GPU painting for the bitmap UI.
+//! Owns text, clip and automation drawing, bitmap caches and the UI renderer.
+//! Never depends on the node engine, node families, catalog, compositor,
+//! editing, IO or the app.
 
 pub mod automation_lane_draw;
 pub mod clip_content_gpu;

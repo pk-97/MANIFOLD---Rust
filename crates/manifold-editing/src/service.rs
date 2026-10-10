@@ -718,10 +718,11 @@ impl EditingService {
         if layer.is_group() {
             return None;
         }
-        let is_generator = layer.hosts_generator();
         let layer_id = layer.layer_id.clone();
 
-        let clip = if is_generator {
+        let clip = if layer.is_trigger() {
+            TimelineClip::new_trigger(beat, duration_beats)
+        } else if layer.hosts_generator() {
             TimelineClip::new_generator(beat, duration_beats)
         } else {
             TimelineClip {
@@ -1083,7 +1084,7 @@ impl EditingService {
     // ─── Move clip to layer ───
 
     /// Move a clip to a different layer.
-    /// Checks gen/video compatibility and adopts generator type.
+    /// Checks compatibility through the destination layer's clip kind.
     /// Matches Unity MoveClipToLayer.
     pub fn move_clip_to_layer(
         project: &Project,
@@ -1093,11 +1094,6 @@ impl EditingService {
         let target_idx = new_layer_index as usize;
         let target_layer = project.timeline.layers.get(target_idx)?;
 
-        // Block group layers
-        if target_layer.is_group() {
-            return None;
-        }
-
         let target_layer_id = target_layer.layer_id.clone();
 
         for layer in &project.timeline.layers {
@@ -1106,10 +1102,7 @@ impl EditingService {
                     return None;
                 }
 
-                // Gen/video type mismatch: block
-                let clip_is_gen = layer.layer_type == LayerType::Generator;
-                let target_is_gen = target_layer.layer_type == LayerType::Generator;
-                if clip_is_gen != target_is_gen {
+                if !target_layer.layer_type.accepts_clips_from(layer.layer_type) {
                     return None;
                 }
 
@@ -1129,8 +1122,8 @@ impl EditingService {
     /// Move a whole clip selection across layers by a fixed layer-index delta
     /// (keyboard Up/Down, B14 — `docs/TIMELINE_INTERACTION_P1_SPEC.md` section 5 P1.6).
     /// All-or-nothing: if ANY selected clip's destination would fall outside
-    /// the layer range, land on a group layer, or cross the gen/video type
-    /// boundary, the whole press is a no-op — mirrors the drag cross-layer
+    /// the layer range or reject its source layer kind, the whole press is a
+    /// no-op — mirrors the drag cross-layer
     /// block in `interaction_overlay.rs`'s `layer_delta` clamp (the nearest
     /// in-repo precedent for moving a multi-clip selection across layers;
     /// same-layer keyboard nudge's per-clip skip in `nudge_clips` does NOT
@@ -1170,13 +1163,8 @@ impl EditingService {
                 return Vec::new();
             }
             let dest_layer = &project.timeline.layers[dest as usize];
-            if dest_layer.is_group() {
-                return Vec::new();
-            }
-            let src_is_gen =
-                project.timeline.layers[*li as usize].layer_type == LayerType::Generator;
-            let dst_is_gen = dest_layer.layer_type == LayerType::Generator;
-            if src_is_gen != dst_is_gen {
+            let src_type = project.timeline.layers[*li as usize].layer_type;
+            if !dest_layer.layer_type.accepts_clips_from(src_type) {
                 return Vec::new();
             }
         }
@@ -1430,6 +1418,41 @@ impl EditingService {
         (commands, new_region)
     }
 
+    /// Prepare one undoable insertion, optionally assigning the new source to
+    /// a parameter. Assignment rejection rolls the insertion back as well.
+    pub fn create_trigger_lane(
+        project: &Project,
+        owner_id: &LayerId,
+        assignment: Option<(manifold_core::GraphTarget, manifold_core::effects::ParamId)>,
+    ) -> Option<Box<dyn Command>> {
+        let (index, owner) = project.timeline.find_layer_by_id(owner_id)?;
+        if owner.is_trigger() {
+            return None;
+        }
+        let mut number = 1;
+        let name = loop {
+            let candidate = format!("Trigger {number}");
+            if !project.timeline.layers.iter().any(|layer| {
+                layer.parent_layer_id.as_ref() == Some(owner_id) && layer.name == candidate
+            }) {
+                break candidate;
+            }
+            number += 1;
+        };
+        let layer = Layer::new_trigger(name, owner_id.clone(), (index + 1) as i32);
+        let source = manifold_core::params::ClipTriggerSource::Lane { layer_id: layer.layer_id.clone() };
+        let add = Box::new(crate::commands::layer::AddLayerCommand::from_layer(layer, index + 1));
+        if let Some((target, param_id)) = assignment {
+            Some(Box::new(CompositeCommand::new(vec![add, Box::new(
+                crate::commands::trigger_source::SetParamClipTriggerSourceCommand::for_assignment(
+                    target, param_id, source,
+                ),
+            )], "Add Trigger Lane".into())))
+        } else {
+            Some(add)
+        }
+    }
+
     /// Duplicate one or more layers (Ableton-style: deep copy inserted below the last selected).
     /// Groups are expanded to include all descendants; parent_layer_id refs are remapped.
     pub fn duplicate_layers(project: &Project, layer_ids: &[LayerId]) -> Option<Box<dyn Command>> {
@@ -1477,12 +1500,34 @@ impl EditingService {
             })
             .collect();
 
-        // 4. Remap parent_layer_id on cloned layers whose parent was also duplicated.
+        // 4. Remap ownership and source references within the copied subtree.
+        // References outside the copy stay explicit, including missing sources.
+        let remap_sources = |instance: &mut manifold_core::effects::PresetInstance| {
+            for param in instance.params.iter_mut() {
+                if let manifold_core::params::ClipTriggerSource::Lane { layer_id } =
+                    &mut param.clip_trigger_source
+                    && let Some(new_id) = id_map.get(layer_id)
+                {
+                    *layer_id = new_id.clone();
+                }
+            }
+        };
         for layer in &mut new_layers {
             if let Some(ref old_parent) = layer.parent_layer_id.clone()
                 && let Some(new_parent) = id_map.get(old_parent)
             {
                 layer.parent_layer_id = Some(new_parent.clone());
+            }
+            if let Some(generator) = layer.gen_params_mut() {
+                remap_sources(generator);
+            }
+            for effect in layer.effects.iter_mut().flatten() {
+                remap_sources(effect);
+            }
+            for clip in &mut layer.clips {
+                for effect in &mut clip.effects {
+                    remap_sources(effect);
+                }
             }
         }
 

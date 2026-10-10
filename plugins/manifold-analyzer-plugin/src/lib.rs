@@ -1,5 +1,5 @@
 use manifold_analyzer_dsp::{LoudnessMeter, StereoAnalyzer};
-use manifold_analyzer_gui::{AnalyzerGuiShared, AnalyzerParams, LoudnessWorker};
+use manifold_analyzer_gui::{AnalyzerGuiShared, AnalyzerParams, LoudnessWorker, StereoSample};
 use nih_plug::prelude::*;
 use std::num::NonZeroU32;
 use std::sync::Arc;
@@ -7,6 +7,7 @@ use std::sync::Arc;
 /// FFT size used before `initialize` runs and the param-driven size
 /// kicks in. Matches the default `FftSize::K4`.
 const DEFAULT_FFT_SIZE: usize = 4096;
+const FFT_SIZES: [usize; 5] = [2048, 4096, 8192, 16384, 32768];
 /// Overlap ratio for the StereoAnalyser's sliding window. 0.9 keeps the
 /// audio-publish rate at ~117 Hz for the default FFT=4096 @ 48 kHz — well
 /// above 60 Hz display refresh so the MS curve + L/R column update every
@@ -34,11 +35,8 @@ struct ManifoldAnalyzer {
     /// then feed Mid/Side/L/R dB curves and the per-bin correlation
     /// used by the centreline strip. Replaces the four mono analysers
     /// plus the standalone stereo cross analyser.
-    stereo: Option<StereoAnalyzer>,
-    /// FFT length the current `stereo` was built with. If the GUI's
-    /// `fft_size` param flips mid-session we rebuild once and resize
-    /// the shared mailboxes to match. Avoids re-creating the analyser
-    /// (and the ~100 ms rustfft plan bake) every process call.
+    stereo: Vec<StereoAnalyzer>,
+    /// Active analyzer, prepared during initialization.
     current_fft_size: usize,
     /// Raw L / R for the BS.1770 loudness meter (K-weighting wants the
     /// pre-M/S signals), the stereo analyser's two FFTs, and the
@@ -54,19 +52,16 @@ struct ManifoldAnalyzer {
     /// clone of `gui_shared`; the meter feeds it via the shared queue.
     loudness_worker: Option<LoudnessWorker>,
     gui_shared: Arc<AnalyzerGuiShared>,
-    /// Running total of audio samples successfully pushed into the
-    /// shared L/R sample rings since plugin instantiation. Published
-    /// alongside the host beat position so the spectrogram worker can
-    /// derive the host beat for any sample it later drains — the basis
-    /// for sample-accurate Beat-Sync placement.
+    /// Absolute input position, including frames omitted while closed or full.
     total_pushed_samples: u64,
+    visual_was_open: bool,
 }
 
 impl Default for ManifoldAnalyzer {
     fn default() -> Self {
         Self {
             params: Arc::new(AnalyzerParams::new()),
-            stereo: None,
+            stereo: Vec::new(),
             current_fft_size: DEFAULT_FFT_SIZE,
             left_scratch: Vec::new(),
             right_scratch: Vec::new(),
@@ -75,6 +70,7 @@ impl Default for ManifoldAnalyzer {
             loudness_worker: None,
             gui_shared: Arc::new(AnalyzerGuiShared::new(44100.0, DEFAULT_FFT_SIZE)),
             total_pushed_samples: 0,
+            visual_was_open: false,
         }
     }
 }
@@ -116,12 +112,14 @@ impl Plugin for ManifoldAnalyzer {
         let fft_size = self.params.fft_size.value().samples();
         self.current_fft_size = fft_size;
         self.gui_shared.resize_stereo_mailboxes(fft_size);
-        let mut stereo = StereoAnalyzer::new(buffer_config.sample_rate, fft_size);
-        stereo.set_overlap_ratio(OVERLAP_RATIO);
-        stereo.set_attack_release_ms(ATTACK_MS, RELEASE_MS);
-        stereo.set_correlation_smoothing_ms(STEREO_CORR_SMOOTH_MS);
-        stereo.set_balance_smoothing_ms(STEREO_BALANCE_SMOOTH_MS);
-        self.stereo = Some(stereo);
+        self.stereo = FFT_SIZES.iter().map(|&size| {
+            let mut stereo = StereoAnalyzer::new(buffer_config.sample_rate, size);
+            stereo.set_overlap_ratio(OVERLAP_RATIO);
+            stereo.set_attack_release_ms(ATTACK_MS, RELEASE_MS);
+            stereo.set_correlation_smoothing_ms(STEREO_CORR_SMOOTH_MS);
+            stereo.set_balance_smoothing_ms(STEREO_BALANCE_SMOOTH_MS);
+            stereo
+        }).collect();
         let max_block = buffer_config.max_buffer_size as usize;
         self.left_scratch = vec![0.0; max_block];
         self.right_scratch = vec![0.0; max_block];
@@ -133,7 +131,10 @@ impl Plugin for ManifoldAnalyzer {
         // instance and joins on plugin drop.
         meter.attach_block_sink(self.gui_shared.loudness_block_queue.clone());
         self.loudness = Some(meter);
+        self.gui_shared.request_loudness_reset();
         self.last_loudness_reset_epoch = self.gui_shared.loudness_reset_epoch();
+        self.loudness.as_mut().unwrap().set_generation(self.last_loudness_reset_epoch);
+        self.gui_shared.advance_audio_generation();
         if self.loudness_worker.is_none() {
             self.loudness_worker = Some(LoudnessWorker::spawn(self.gui_shared.clone()));
         }
@@ -144,11 +145,13 @@ impl Plugin for ManifoldAnalyzer {
     }
 
     fn reset(&mut self) {
-        if let Some(s) = self.stereo.as_mut() {
-            s.reset();
-        }
+        for s in &mut self.stereo { s.reset(); }
+        self.gui_shared.request_loudness_reset();
+        self.gui_shared.advance_audio_generation();
+        self.last_loudness_reset_epoch = self.gui_shared.loudness_reset_epoch();
         if let Some(m) = self.loudness.as_mut() {
             m.reset();
+            m.set_generation(self.last_loudness_reset_epoch);
             self.gui_shared.set_loudness(m.snapshot());
         }
     }
@@ -160,12 +163,7 @@ impl Plugin for ManifoldAnalyzer {
         context: &mut impl ProcessContext<Self>,
     ) -> ProcessStatus {
         let transport = context.transport();
-        // Publish (bpm, beat, pushed) BEFORE pushing this buffer's
-        // audio. The published `pushed` is the index in the worker's
-        // drain stream of the *first* sample we're about to enqueue —
-        // which is the sample that corresponds to `beat_pos`. The
-        // worker reads all three coherently and derives the host beat
-        // for any later sample it processes.
+        // UI transport. Queued samples carry their own anchor.
         self.gui_shared.set_transport(
             transport.tempo,
             transport.pos_beats(),
@@ -173,27 +171,23 @@ impl Plugin for ManifoldAnalyzer {
             self.total_pushed_samples,
         );
 
-        // Honour a user-driven FFT-size change. Rebuild once, resize
-        // the shared mailboxes, and carry on. Uses the current sample
-        // rate from `gui_shared` since `BufferConfig` isn't available
-        // here. Brief audio-thread glitch is acceptable — this fires
-        // only when the user changes the dropdown.
-        let desired_fft = self.params.fft_size.value().samples();
-        if desired_fft != self.current_fft_size {
-            let sr = self.gui_shared.sample_rate();
-            let mut stereo = StereoAnalyzer::new(sr, desired_fft);
-            stereo.set_overlap_ratio(OVERLAP_RATIO);
-            stereo.set_attack_release_ms(ATTACK_MS, RELEASE_MS);
-            stereo.set_correlation_smoothing_ms(STEREO_CORR_SMOOTH_MS);
-        stereo.set_balance_smoothing_ms(STEREO_BALANCE_SMOOTH_MS);
+        self.process_audio(buffer, self.params.fft_size.value().samples(),
+            self.params.editor_state.is_open(), transport.tempo, transport.pos_beats())
+    }
+}
+
+impl ManifoldAnalyzer {
+    /// The audio callback body, independent of host callbacks for headless proofs.
+    fn process_audio(&mut self, buffer: &mut Buffer, desired_fft: usize,
+        visual_open: bool, bpm: Option<f64>, beat: Option<f64>) -> ProcessStatus {
+        let index = FFT_SIZES.iter().position(|&size| size == desired_fft).unwrap_or(1);
+        let Some(stereo) = self.stereo.get_mut(index) else { return ProcessStatus::Normal; };
+        if desired_fft != self.current_fft_size || (visual_open && !self.visual_was_open) {
+            stereo.reset();
             self.gui_shared.resize_stereo_mailboxes(desired_fft);
-            self.stereo = Some(stereo);
             self.current_fft_size = desired_fft;
         }
-
-        let Some(stereo) = self.stereo.as_mut() else {
-            return ProcessStatus::Normal;
-        };
+        self.visual_was_open = visual_open;
 
         let num_samples = buffer.samples();
         if num_samples == 0 {
@@ -226,6 +220,7 @@ impl Plugin for ManifoldAnalyzer {
             let epoch = self.gui_shared.loudness_reset_epoch();
             if epoch != self.last_loudness_reset_epoch {
                 meter.reset();
+                meter.set_generation(epoch);
                 self.last_loudness_reset_epoch = epoch;
             }
             meter.set_external_integrated_lufs(self.gui_shared.integrated_lufs());
@@ -234,18 +229,15 @@ impl Plugin for ManifoldAnalyzer {
         }
 
         // Single stereo analyser: two FFTs per hop (L + R), then
-        // Mid/Side/L/R averaged magnitude curves plus per-bin
-        // correlation all derived in one pass. Publish all five mailboxes
+        // Mid/Side curves, streaming median plus per-bin
+        // correlation all derived in one pass. Publish the active mailboxes
         // on a completed frame.
-        if stereo.push_stereo(&self.left_scratch[..i], &self.right_scratch[..i]) {
+        if visual_open && stereo.push_stereo(&self.left_scratch[..i], &self.right_scratch[..i]) {
             self.gui_shared
                 .try_publish_mid_db(stereo.latest_mid_db());
             self.gui_shared
                 .try_publish_side_db(stereo.latest_side_db());
-            self.gui_shared
-                .try_publish_left_db(stereo.latest_left_db());
-            self.gui_shared
-                .try_publish_right_db(stereo.latest_right_db());
+            self.gui_shared.try_publish_median_db(stereo.latest_median_db());
             self.gui_shared
                 .try_publish_left_balance_db(stereo.latest_left_balance_db());
             self.gui_shared
@@ -254,22 +246,21 @@ impl Plugin for ManifoldAnalyzer {
                 .try_publish_correlation(stereo.latest_correlation());
         }
 
-        // Spectrogram: push raw L and R audio into the lock-free sample
-        // rings; the worker derives M/S (or runs both channels for L+R
-        // mode) and runs the CQT. No FFT work here for the spectrogram
-        // path. Both rings are pushed in lockstep so the worker can
-        // assume they always advance together. `total_pushed_samples`
-        // tracks what *actually* landed (the rings drop on overflow);
-        // the worker's drain counter stays aligned because dropped
-        // samples never enter the ring.
-        let pushed = self
-            .gui_shared
-            .left_sample_ring
-            .push(&self.left_scratch[..i]);
-        self.gui_shared
-            .right_sample_ring
-            .push(&self.right_scratch[..i]);
-        self.total_pushed_samples = self.total_pushed_samples.saturating_add(pushed as u64);
+        if visual_open {
+            let generation = self.gui_shared.audio_generation();
+            let sample_rate = self.gui_shared.sample_rate();
+            let bpm = bpm.unwrap_or(f64::NAN);
+            let beat = beat.unwrap_or(f64::NAN);
+            for k in 0..i {
+                if !self.gui_shared.sample_ring.push(StereoSample {
+                    left: self.left_scratch[k], right: self.right_scratch[k],
+                    index: self.total_pushed_samples + k as u64, generation, sample_rate,
+                    beat: beat + k as f64 * bpm / (60.0 * sample_rate as f64), bpm,
+                }) { break; }
+            }
+        }
+        // Advance across rejected/hidden samples too, exposing discontinuities.
+        self.total_pushed_samples = self.total_pushed_samples.saturating_add(i as u64);
 
         ProcessStatus::Normal
     }
@@ -282,3 +273,79 @@ impl Vst3Plugin for ManifoldAnalyzer {
 }
 
 nih_export_vst3!(ManifoldAnalyzer);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::alloc::{GlobalAlloc, Layout, System};
+    use std::cell::Cell;
+    thread_local! { static ALLOCATIONS: Cell<Option<usize>> = const { Cell::new(None) }; }
+    struct TrackedAllocator;
+    #[global_allocator] static ALLOCATOR: TrackedAllocator = TrackedAllocator;
+    fn record() { let _ = ALLOCATIONS.try_with(|cell| { if let Some(n) = cell.get() { cell.set(Some(n + 1)); } }); }
+    unsafe impl GlobalAlloc for TrackedAllocator {
+        unsafe fn alloc(&self, layout: Layout) -> *mut u8 { record(); unsafe { System.alloc(layout) } }
+        unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) { record(); unsafe { System.dealloc(ptr, layout) } }
+        unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, size: usize) -> *mut u8 { record(); unsafe { System.realloc(ptr, layout, size) } }
+    }
+    struct Init;
+    impl InitContext<ManifoldAnalyzer> for Init {
+        fn plugin_api(&self) -> PluginApi { PluginApi::Vst3 }
+        fn execute(&self, _: ()) {}
+        fn set_latency_samples(&self, _: u32) {}
+        fn set_current_voice_capacity(&self, _: u32) {}
+    }
+    fn initialize(plugin: &mut ManifoldAnalyzer, rate: f32) {
+        assert!(plugin.initialize(&ManifoldAnalyzer::AUDIO_IO_LAYOUTS[0], &BufferConfig {
+            sample_rate: rate, min_buffer_size: Some(32), max_buffer_size: 512,
+            process_mode: ProcessMode::Realtime,
+        }, &mut Init));
+    }
+    #[test]
+    fn callback_fft_switches_are_allocation_free_and_audio_is_unchanged() {
+        let mut plugin = ManifoldAnalyzer::default(); initialize(&mut plugin, 48000.0);
+        let left = [0.125;512]; let right = [-0.25;512];
+        for &fft in &FFT_SIZES {
+            let mut l=left; let mut r=right; let mut buffer=Buffer::default();
+            unsafe { buffer.set_slices(512, |v| { v.push(&mut l);v.push(&mut r); }); }
+            ALLOCATIONS.with(|a| a.set(Some(0)));
+            for _ in 0..8 { plugin.process_audio(&mut buffer, fft, true, Some(120.0), Some(0.0)); }
+            let count=ALLOCATIONS.with(|a| a.replace(None)).unwrap();
+            assert_eq!(count,0,"alloc/free during FFT switch {fft}");
+            drop(buffer); assert_eq!(l,left);assert_eq!(r,right);
+        }
+    }
+    #[test]
+    fn spectrum_mailbox_rejects_old_resolution_without_reallocating() {
+        let shared = AnalyzerGuiShared::new(48000.0, 2048);
+        let small = vec![-10.0; 1025];
+        let large = vec![-20.0; 16385];
+        let mut display = vec![0.0; 16385];
+        ALLOCATIONS.with(|a| a.set(Some(0)));
+        assert!(shared.try_publish_mid_db(&small));
+        assert!(!shared.try_read_mid_db(&mut display));
+        assert!(shared.try_publish_mid_db(&large));
+        let allocations = ALLOCATIONS.with(|a| a.replace(None)).unwrap();
+        assert_eq!(allocations, 0);
+        assert!(display.iter().all(|&v| v == -120.0));
+        assert!(shared.try_read_mid_db(&mut display));
+        assert_eq!(display, large);
+    }
+
+    #[test]
+    fn closed_editor_keeps_loudness_and_rate_reset_starts_new_generation() {
+        let mut plugin=ManifoldAnalyzer::default();initialize(&mut plugin,48000.0);
+        let mut l=[0.25;512];let mut r=l;let mut buffer=Buffer::default();
+        unsafe {buffer.set_slices(512,|v|{v.push(&mut l);v.push(&mut r);});}
+        plugin.process_audio(&mut buffer,4096,false,None,None);
+        assert!(plugin.gui_shared.loudness().elapsed_secs>0.0);
+        let mut samples=Vec::new();plugin.gui_shared.sample_ring.drain_into(&mut samples);assert!(samples.is_empty());
+        let old=plugin.gui_shared.loudness_reset_epoch();
+        plugin.reset();assert_ne!(old,plugin.gui_shared.loudness_reset_epoch());
+        assert_eq!(plugin.gui_shared.loudness().elapsed_secs,0.0);
+        initialize(&mut plugin,44100.0);
+        plugin.process_audio(&mut buffer,4096,true,Some(120.0),Some(4.0));
+        plugin.gui_shared.sample_ring.drain_into(&mut samples);
+        assert!(samples.iter().all(|s|s.sample_rate==44100.0&&s.generation==plugin.gui_shared.audio_generation()));
+    }
+}

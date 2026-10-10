@@ -1,0 +1,127 @@
+[package]
+name = "manifold-nodes"
+version = "0.1.0"
+edition = "2024"
+publish = false
+autotests = false
+
+[dependencies]
+manifold-nodes-scene = { path = "../manifold-nodes-scene" }
+manifold-nodes-image = { path = "../manifold-nodes-image" }
+manifold-node-engine = { path = "../manifold-node-engine" }
+manifold-core = { path = "../manifold-core" }
+manifold-gpu = { path = "../manifold-gpu" }
+log = { workspace = true }
+serde_json = { version = "1", features = ["float_roundtrip"] }
+ahash = { workspace = true }
+arc-swap = { workspace = true }
+inventory = "0.3"
+
+[dev-dependencies]
+manifold-nodes = { path = ".", features = ["testkit"] }
+manifold-nodes-scene = { path = "../manifold-nodes-scene", features = ["testkit"] }
+manifold-nodes-image = { path = "../manifold-nodes-image", features = ["testkit"] }
+manifold-gpu = { path = "../manifold-gpu", features = ["testkit"] }
+manifold-node-engine = { path = "../manifold-node-engine", features = ["testkit"] }
+manifold-physics = { path = "../manifold-physics" }
+manifold-fluids = { path = "../manifold-fluids" }
+manifold-foundation = { path = "../manifold-foundation" }
+manifold-playback = { path = "../manifold-playback" }
+bytemuck = { version = "1", features = ["derive", "min_const_generics"] }
+half = "2"
+serde = { workspace = true }
+# Still-image decoding used by node image tests and examples.
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "bmp", "gif", "exr"] }
+png = "0.18"
+naga = { version = "28", features = ["wgsl-in", "msl-out"] }
+# glTF/.glb parsing used by node tests and examples.
+gltf = { version = "1", features = [
+    "KHR_materials_emissive_strength",
+    "KHR_materials_transmission",
+    "extensions",
+    "KHR_lights_punctual",
+    "KHR_texture_transform",
+    "KHR_materials_specular",
+    "KHR_materials_ior",
+    "KHR_materials_pbrSpecularGlossiness",
+    "KHR_materials_volume",
+    "KHR_materials_unlit",
+    "allow_empty_texture",
+] }
+# Independent f64 FLIP surface reconstruction reference fixtures.
+glam = "0.29.3"
+syn = { version = "2", features = ["full", "visit"] }
+# Serializes GPU tests on the shared Metal device (see `test_device`). Reentrant
+# so a single test may acquire it more than once without deadlocking.
+parking_lot = { workspace = true }
+
+# The GPU FLIP render smoke drains Metal's autoreleased objects per frame, as the
+# content thread does (`content_thread.rs`), so host memory reads as the app's.
+# Already in the graph through manifold-gpu.
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+core-text = "20"
+core-graphics = "0.23"
+core-foundation = "0.9"
+objc2 = "0.6"
+
+[[bin]]
+name = "check-presets"
+path = "src/bin/check_presets.rs"
+
+[[bin]]
+name = "freeze-profile"
+path = "src/bin/freeze_profile.rs"
+
+
+
+[[bin]]
+name = "render-generator-preset"
+path = "src/bin/render_generator_preset.rs"
+
+
+# GPU-proof integration binary: the alpha-contract sweep + generator smoke.
+# Gated behind `gpu-proofs` (see [features]) so it's excluded from the
+# default `cargo test` / `cargo nextest` sweep — run it deliberately with
+# `cargo test -p manifold-nodes --features gpu-proofs`.
+[[test]]
+name = "gpu_proofs"
+path = "tests/gpu_proofs/main.rs"
+required-features = ["gpu-proofs"]
+
+# glTF conformance is a module of gpu_proofs; select glb_conformance::.
+
+[features]
+testkit = ["manifold-node-engine/testkit", "manifold-nodes-image/testkit", "manifold-nodes-scene/testkit"]
+# GPU-proof tests: slow, flaky, and need a real Metal device with synchronous
+# readback. Off by default so the workspace test sweep stays fast and
+# deterministic; opt in with `--features gpu-proofs`. Gates `test_device()`,
+# every `mod gpu_tests`, the `gpu_proofs` integration binary above, and the
+# counters and error tap the liquid conformance suite reads.
+gpu-proofs = ["testkit", "manifold-node-engine/gpu-proofs", "manifold-nodes-image/gpu-proofs", "manifold-nodes-scene/gpu-proofs", "manifold-gpu/gpu-proofs"]
+# Bounded dynamic-RT timing is opt-in, separate from correctness gates.
+rt-perf-proofs = ["manifold-nodes-scene/rt-perf-proofs", "manifold-node-engine/rt-perf-proofs", "gpu-proofs"]
+# GPU liquid-surface budget proof (GPU_FLUID_SURFACE_DESIGN.md D20), opt-in.
+fluid-perf-proofs = ["manifold-node-engine/fluid-perf-proofs", "gpu-proofs"]
+# GPU matter solver budget report (GPU_MPM_SOLVER_DESIGN.md P1b, D20), opt-in.
+matter-perf-proofs = ["manifold-node-engine/matter-perf-proofs", "gpu-proofs"]
+# Water race probes (GPU_FLIP_PRESSURE_SOLVE.md): minutes-long Dam Break
+# runs of GPU FLIP and the FLIP Fluids engine, opt-in. The frame probe reads
+# render_scene::water_perf.
+water-race-probes = ["manifold-node-engine/water-race-probes", "gpu-proofs", "fluid-perf-proofs"]
+# The whitewater fields against FLIP's own (GPU_WHITEWATER_DESIGN.md O1, O2),
+# opt-in: builds FLIP's oracle entries into manifold-fluids.
+whitewater-oracle = ["manifold-node-engine/whitewater-oracle", "gpu-proofs"]
+[lints]
+workspace = true
+
+[[example]]
+name = "fluid_capture"
+required-features = ["gpu-proofs"]
+
+[[bin]]
+name = "gen_node_catalog"
+path = "src/bin/gen_node_catalog.rs"
+
+[[test]]
+name = "main"
+path = "tests/main.rs"

@@ -109,7 +109,7 @@ pub(crate) fn snapshot_and_prune_embedded_presets(project: &mut Project) {
             // import entry — never shadowed by an auto-captured snapshot.
             continue;
         }
-        let Some(def) = manifold_renderer::node_graph::bundled_preset_def(id) else {
+        let Some(def) = manifold_nodes::bundled_presets::bundled_preset_def(id) else {
             // Resolves nowhere (not even the current overlay) — nothing to
             // snapshot. This is the orphan case D9 exists to prevent for new
             // instances; an existing project that somehow reached this state
@@ -118,7 +118,7 @@ pub(crate) fn snapshot_and_prune_embedded_presets(project: &mut Project) {
         };
         project.upsert_embedded_preset(EmbeddedPreset {
             kind: *kind,
-            def: def.clone(),
+            def: def.as_ref().clone(),
             origin: EmbeddedOrigin::Snapshot,
         });
     }
@@ -259,7 +259,7 @@ fn migrate_legacy_math_views(
         }
         (scenes, carriers, survey)
     };
-    let recipe = manifold_renderer::node_graph::bundled_preset_def(
+    let recipe = manifold_nodes::bundled_presets::bundled_preset_def(
         &manifold_core::PresetTypeId::new("MathView"),
     );
     // Host base values to seed after the caller refreshes the manifest:
@@ -351,7 +351,7 @@ fn migrate_legacy_math_views(
                     ));
                     None
                 } else {
-                    append_legacy_math_view(graph, &scene, carrier_id, recipe, notices)
+                    append_legacy_math_view(graph, &scene, carrier_id, recipe.as_deref(), notices)
                 }
             } else {
                 None
@@ -530,6 +530,11 @@ pub(crate) fn migrate_project_scene_graphs(project: &mut Project) -> Vec<String>
         {
             let graph = host.graph.as_mut().expect("graph checked above");
             manifold_core::scene_object_migration::migrate_scene_object_wires(graph);
+            match manifold_nodes_scene::node_graph::scene_camera::prepare_camera_effects(graph) {
+                Ok(true) => notices.push("Scene camera controls restored with depth of field and motion blur off.".into()),
+                Ok(false) => {}
+                Err(error) => notices.push(error),
+            }
             manifold_nodes_scene::node_graph::scene_exposure::migrate_scene_exposures(graph);
             let report = manifold_nodes_scene::node_graph::scene_modifier_legacy_migration::migrate_legacy_scene_modifiers(graph, &registry);
             notices.extend(report.diagnostics);
@@ -1697,7 +1702,7 @@ mod tests {
     //
     // These exercise the actual production seam (`snapshot_and_prune_
     // embedded_presets`) rather than just the catalog-merge rule (covered
-    // separately by `manifold-renderer/tests/project_preset_overlay.rs`,
+    // separately by `manifold-nodes/tests/project_preset_overlay.rs`,
     // which proves disk-wins-over-Snapshot / Snapshot-as-fallback at the
     // catalog level). A full save→delete-user-file→reload file-system test
     // isn't reachable from here: `manifold-app` is a bin-only crate (no
@@ -1722,7 +1727,7 @@ mod tests {
             .embedded_preset(&PresetTypeId::BLOOM)
             .expect("a tracking instance's library id must get a self-containment snapshot");
         assert_eq!(snapshot.origin, EmbeddedOrigin::Snapshot);
-        let expected = manifold_renderer::node_graph::bundled_preset_def(&PresetTypeId::BLOOM)
+        let expected = manifold_nodes::bundled_presets::bundled_preset_def(&PresetTypeId::BLOOM)
             .expect("Bloom must resolve in the live catalog");
         assert_eq!(
             snapshot.def.preset_metadata.as_ref().map(|m| &m.id),
@@ -1755,9 +1760,8 @@ mod tests {
         // A Saved entry under the same id as the tracking instance — Saved
         // is deliberate (Save to Project / fork / import) and must never be
         // downgraded or overwritten by the auto-captured snapshot pass.
-        let saved_def = manifold_renderer::node_graph::bundled_preset_def(&PresetTypeId::BLOOM)
-            .expect("Bloom resolves")
-            .clone();
+        let saved_def = manifold_nodes::bundled_presets::bundled_preset_def(&PresetTypeId::BLOOM)
+            .expect("Bloom resolves").as_ref().clone();
         project.upsert_embedded_preset(EmbeddedPreset {
             kind: PresetKind::Effect,
             def: saved_def,

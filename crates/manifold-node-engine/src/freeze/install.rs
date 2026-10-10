@@ -33,13 +33,13 @@
 //!    uniform struct, so drivers / Ableton / LFOs keep writing them every frame
 //!    (DD-A4: `var<uniform>`, never std430).
 //!
-//! The fused [`LoadedPresetView`] is cached `&'static` (built once per effect
-//! type, exactly like [`crate::node_graph::loaded_preset_view_by_id`]), so the
+//! The fused [`LoadedPresetView`] is cached behind `Arc` (built once per effect
+//! type, exactly like [`crate::load::loaded_preset_view::loaded_preset_view_by_id`]), so the
 //! per-frame chain rebuilds on resize don't leak.
 //!
 //! ## What it deliberately does NOT touch (DD-A6)
 //!
-//! - The **unfused** canonical view ([`crate::node_graph::loaded_preset_view_by_id`])
+//! - The **unfused** canonical view ([`crate::load::loaded_preset_view::loaded_preset_view_by_id`])
 //!   stays the authoring + fallback surface. The graph editor reads it, so
 //!   drilling into a fused effect still shows the original atoms. Only the chain
 //!   *render* path swaps in the fused view, and only for the un-edited canonical
@@ -119,7 +119,7 @@ pub fn should_render_fused(is_watched: bool) -> bool {
 /// entries; the live gate fills edited entries on demand.
 pub fn fused_view_by_id(id: &PresetTypeId) -> Option<Arc<LoadedPresetView>> {
     let base = crate::load::loaded_preset_view::loaded_preset_view_by_id(id)?;
-    fused_view_for(&base.canonical_def, base)
+    fused_view_for(base.canonical_def.as_ref(), base.as_ref())
 }
 
 /// Fuse an arbitrary `canonical_def` (shipped, edited, or created) carrying the
@@ -200,6 +200,7 @@ fn fuse_view_parts(
 /// empty maps everywhere; 2 = fusion composes member declarations.
 const MESH_RULE_SCHEMA: u32 = 2;
 
+manifold_core::testkit_visible! {
 /// Structural content key for a def: topology + node configs + baked (non-
 /// exposed) param values. Deterministic because every map in `EffectGraphDef` is
 /// a `BTreeMap` and every list a `Vec`, so `serde_json` is a stable total
@@ -210,7 +211,7 @@ const MESH_RULE_SCHEMA: u32 = 2;
 /// differ only in live modulation share one key, and the fused kernel keeps
 /// exposed params as uniforms (never baked). Computed on cache miss / chain
 /// rebuild, an editing-time event, never per frame.
-pub fn def_content_key(def: &EffectGraphDef) -> u64 {
+pub(crate) fn def_content_key(def: &EffectGraphDef) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut h = ahash::AHasher::default();
     MESH_RULE_SCHEMA.hash(&mut h);
@@ -229,6 +230,7 @@ pub fn def_content_key(def: &EffectGraphDef) -> u64 {
     }
     h.finish()
 }
+}
 
 /// Recursively clears `editor_pos` and `title` on every node, including nodes
 /// nested inside group bodies (`EffectGraphNode::group`), which are
@@ -244,6 +246,7 @@ fn clear_cosmetic_fields(nodes: &mut [EffectGraphNode]) {
     }
 }
 
+manifold_core::testkit_visible! {
 /// Effect-path content key that normalizes binding metadata away.
 /// Clears `label`, `default_value`, `scale`, `offset` from every binding in
 /// `preset_metadata.bindings` before hashing — these fields never reach
@@ -255,7 +258,7 @@ fn clear_cosmetic_fields(nodes: &mut [EffectGraphNode]) {
 /// `preset_metadata.bindings` directly from the cached fused def (registry.rs:253-268),
 /// so normalizing generator bindings would lose metadata at runtime. Effects don't read
 /// bindings from the cache — they flow through `ResolvedBinding::from_static` at slot-build time.
-pub fn effect_def_content_key(def: &EffectGraphDef) -> u64 {
+pub(crate) fn effect_def_content_key(def: &EffectGraphDef) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut h = ahash::AHasher::default();
     MESH_RULE_SCHEMA.hash(&mut h);
@@ -276,6 +279,7 @@ pub fn effect_def_content_key(def: &EffectGraphDef) -> u64 {
         Err(_) => return u64::MAX,
     }
     h.finish()
+}
 }
 
 /// Cap on each content cache (effect view / generator def / segment view). The
@@ -470,7 +474,8 @@ pub fn select_card_fused_view(
     // just the effective def to fuse. The fused view keeps the same outer-card
     // params + bindings, so the chain build's splice / outer_param_index /
     // bindings lines are shape-identical either way.
-    let effective_def: &EffectGraphDef = fx.graph.as_ref().unwrap_or(&base_view.canonical_def);
+    let effective_def: &EffectGraphDef =
+        fx.graph.as_ref().unwrap_or(base_view.canonical_def.as_ref());
     // D8/P7: relight fuses — augment with DEFAULT knob values before fusion so
     // the cache key (and generated WGSL) is knob-invariant; live values write
     // per-frame via `EffectSlot::relight_writes`. `height_from` changes
@@ -704,7 +709,7 @@ pub fn chain_fusion_enabled() -> bool {
 /// Segment identity: positional hash of the member cards' def content keys.
 /// Equivalent discriminative power to hashing the concatenated def (the
 /// namespacing is positional), without building the concat on every lookup.
-pub fn segment_key(cards: &[(&EffectGraphDef, &'static LoadedPresetView)]) -> u64 {
+pub fn segment_key(cards: &[(&EffectGraphDef, &LoadedPresetView)]) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut h = ahash::AHasher::default();
     MESH_RULE_SCHEMA.hash(&mut h);
@@ -764,7 +769,7 @@ struct SegmentJob {
     key: u64,
     /// Owned def clones — the live defs can mutate under editing while the
     /// worker runs.
-    cards: Vec<(EffectGraphDef, &'static LoadedPresetView)>,
+    cards: Vec<(EffectGraphDef, Arc<LoadedPresetView>)>,
 }
 
 /// Per-card fused-view compile job (BUG-j8gy). Owned clones of everything
@@ -883,8 +888,8 @@ fn segment_worker() -> &'static SegmentWorker {
                 while let Ok(job) = rx_job.recv() {
                     let result = match job {
                         FusionJob::Segment(job) => {
-                            let card_refs: Vec<(&EffectGraphDef, &'static LoadedPresetView)> =
-                                job.cards.iter().map(|(d, v)| (d, *v)).collect();
+                            let card_refs: Vec<(&EffectGraphDef, &LoadedPresetView)> =
+                                job.cards.iter().map(|(d, v)| (d, v.as_ref())).collect();
                             let view = compile_segment_view_panic_safe(&card_refs, &registry);
                             if let Some(v) = &view {
                                 prewarm_fused_pipelines(&v.def);
@@ -994,10 +999,10 @@ fn expire_stale_segment_pending(now: std::time::Instant) {
 /// members can be augmented before fusion while keeping the view references
 /// for bindings.
 pub fn fused_segment_view_for(
-    cards: &[(EffectGraphDef, &'static LoadedPresetView)],
+    cards: &[(EffectGraphDef, Arc<LoadedPresetView>)],
 ) -> SegmentLookup {
-    let card_refs: Vec<(&EffectGraphDef, &'static LoadedPresetView)> =
-        cards.iter().map(|(d, v)| (d, *v)).collect();
+    let card_refs: Vec<(&EffectGraphDef, &LoadedPresetView)> =
+        cards.iter().map(|(d, v)| (d, v.as_ref())).collect();
     let key = segment_key(&card_refs);
     if let Some(cached) = SEGMENT_CACHE.with(|c| c.borrow_mut().get(key)) {
         return match cached {
@@ -1024,7 +1029,7 @@ pub fn fused_segment_view_for(
         if newly_queued {
             let job = SegmentJob {
                 key,
-                cards: cards.iter().map(|(d, v)| (d.clone(), *v)).collect(),
+                cards: cards.iter().map(|(d, v)| (d.clone(), Arc::clone(v))).collect(),
             };
             if segment_worker().tx.send(FusionJob::Segment(job)).is_err() {
                 // Worker died (startup panic) — refuse rather than wedge Pending.
@@ -1064,7 +1069,7 @@ pub(crate) fn arm_segment_compile_panic_hook_for_test(armed: bool) {
 /// `pump_segment_results` handles that case.
 #[cfg(any(test, not(feature = "testkit")))]
 fn compile_segment_view_panic_safe(
-    cards: &[(&EffectGraphDef, &'static LoadedPresetView)],
+    cards: &[(&EffectGraphDef, &LoadedPresetView)],
     registry: &PrimitiveRegistry,
 ) -> Option<Arc<SegmentView>> {
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -1084,7 +1089,7 @@ fn compile_segment_view_panic_safe(
 /// the codegen worker in production and synchronously in tests.
 #[cfg(any(test, not(feature = "testkit"), feature = "gpu-proofs"))]
 pub(crate) fn compile_segment_view(
-    cards: &[(&EffectGraphDef, &'static LoadedPresetView)],
+    cards: &[(&EffectGraphDef, &LoadedPresetView)],
     registry: &PrimitiveRegistry,
 ) -> Option<Arc<SegmentView>> {
     #[cfg(test)]
@@ -1174,7 +1179,7 @@ pub(crate) fn compile_segment_view(
 /// the worker's asynchrony.
 #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
 pub fn seed_segment_cache_for_test(
-    cards: &[(&EffectGraphDef, &'static LoadedPresetView)],
+    cards: &[(&EffectGraphDef, &LoadedPresetView)],
     registry: &PrimitiveRegistry,
 ) -> Option<Arc<SegmentView>> {
     let view = compile_segment_view(cards, registry);
@@ -1345,12 +1350,13 @@ pub(crate) fn convert_for_fused_field(convert: ParamConvert) -> ParamConvert {
     }
 }
 
+manifold_core::testkit_visible! {
 /// A canonical def rewritten with one fused node per region, plus the routing the
 /// binding retarget needs. `pub(crate)` so the end-to-end oracle test can drive
 /// both the unfused and fused graphs from one fixture (set inner params by stable
 /// node id on the unfused side, by the `retarget`ed `(fused id, field)` on the
 /// fused side).
-pub struct FusedDef {
+pub(crate) struct FusedDef {
     pub def: EffectGraphDef,
     /// `(original stable node_id, original param) → (fused node id, fused uniform
     /// field)`. The field is `"n{idx}_{param}"` (`idx` = the member's topo index
@@ -1371,6 +1377,7 @@ pub struct FusedDef {
     /// lands in P2b. Not serialized — owned by the prepared views built from
     /// this def.
     pub mesh_rules: PreparedMeshRules,
+}
 }
 
 /// `node.array_feedback`'s stable type id — the head of a buffer in-place
@@ -1745,12 +1752,14 @@ fn compose_region_mesh_rules(
     rules
 }
 
+manifold_core::testkit_visible! {
 #[cfg_attr(not(test), allow(dead_code))]
-pub fn fuse_canonical_def(
+pub(crate) fn fuse_canonical_def(
     def: &EffectGraphDef,
     registry: &PrimitiveRegistry,
 ) -> Option<FusedDef> {
     fuse_canonical_def_masked(def, registry, None)
+}
 }
 
 /// How many fusable regions the canonical def partitions into (after the same
@@ -1879,7 +1888,7 @@ pub(crate) fn fuse_canonical_def_masked(
         // pass 2 (below, once `node_keepalive` has no more pushes coming)
         // builds `region_nodes` borrowing straight off it.
         struct BuiltMember {
-            body: std::borrow::Cow<'static, str>,
+            body: String,
             derived_camera_ext: Option<usize>,
             effective_derived: Vec<&'static str>,
             node_inputs: Vec<crate::ports::NodeInput>,
@@ -1892,21 +1901,19 @@ pub(crate) fn fuse_canonical_def_masked(
         for member in &all_members {
             let doc_node = def.nodes.iter().find(|n| n.id == member.doc_id)?;
             let node = crate::freeze::region::configured_construct(registry, doc_node)?;
-            // `substituted_body` already returns `Cow<'static, str>` (the
-            // `Borrowed` arm is a compile-time WGSL const; the `Owned` arm is
-            // a per-fuse-formatted `String`) — own it, no leak needed.
+            // Own the body before moving its node into the keepalive vector.
             let dense = super::region::dense_buffer_fusion(node.as_ref());
             let (body, derived, includes) = if let Some(dense) = dense {
                 // Join before namespacing: shared element helpers reference the
                 // member's gathered buffers, so they cannot be global includes.
                 (
-                    std::borrow::Cow::Owned(dense.body_fragments.join("\n")),
+                    dense.body_fragments.join("\n"),
                     &[][..],
                     &[][..],
                 )
             } else {
                 (
-                    super::region::substituted_body(node.as_ref(), doc_node)?,
+                    super::region::substituted_body(node.as_ref(), doc_node)?.into_owned(),
                     node.derived_uniforms(),
                     node.wgsl_includes(),
                 )
@@ -2175,8 +2182,13 @@ pub(crate) fn fuse_canonical_def_masked(
                     (stable.as_str().to_string(), p.name.to_string()),
                     (fused_id.clone(), field.clone()),
                 );
-                let value = effective_param_f32(doc_node.params.get(p.name.as_ref()), &p.default)?;
-                fused_params.insert(field.clone(), SerializedParamValue::Float { value });
+                if p.ty == ParamType::Bool {
+                    let value = effective_param_bool(doc_node.params.get(p.name.as_ref()), &p.default)?;
+                    fused_params.insert(field.clone(), SerializedParamValue::Bool { value });
+                } else {
+                    let value = effective_param_f32(doc_node.params.get(p.name.as_ref()), &p.default)?;
+                    fused_params.insert(field.clone(), SerializedParamValue::Float { value });
+                }
 
                 // A control wire driving this param (LFO → gain.gain) is re-anchored
                 // onto the fused node's port-shadow `n{idx}_<param>`, so the producer
@@ -2499,21 +2511,21 @@ fn fused_def_builds(
         .all(|(doc, port, want)| space_of(Some(&spaces), *doc, port) == *want)
 }
 
+manifold_core::testkit_visible! {
 /// A node's stable id defaults to its handle when the document carries none —
 /// the same convention `instantiate_def` / the preset stamp use.
-pub fn resolve_node_id(n: &EffectGraphNode) -> NodeId {
+pub(crate) fn resolve_node_id(n: &EffectGraphNode) -> NodeId {
     if n.node_id.is_empty() {
         n.handle.as_deref().map(NodeId::new).unwrap_or_default()
     } else {
         n.node_id.clone()
     }
 }
+}
 
 /// Effective scalar value for a region param: the def override if present, else
-/// the atom's declared default. Every fused uniform field is f32 / i32 / u32
-/// (the codegen maps Bool/Enum → u32 too), so all seed as a single f32 the
-/// `WgslCompute` casts at the uniform-write boundary. `None` for a non-scalar
-/// value (which the finder already rejected upstream — defensive).
+/// the atom's declared default. `None` for a non-scalar value (which the finder
+/// already rejected upstream — defensive).
 fn effective_param_f32(
     override_val: Option<&SerializedParamValue>,
     default: &ParamValue,
@@ -2522,6 +2534,30 @@ fn effective_param_f32(
         return serialized_to_f32(v);
     }
     param_value_to_f32(default)
+}
+
+/// Bool counterpart to [`effective_param_f32`]. Keep fused node params typed as
+/// Bool so graph validation and `BoolThreshold` bindings retain their authored
+/// contract after the WGSL field lowers to `u32`.
+fn effective_param_bool(
+    override_val: Option<&SerializedParamValue>,
+    default: &ParamValue,
+) -> Option<bool> {
+    if let Some(v) = override_val {
+        return match v {
+            SerializedParamValue::Bool { value } => Some(*value),
+            SerializedParamValue::Float { value } => Some(*value > 0.5),
+            SerializedParamValue::Int { value } => Some(*value as f32 > 0.5),
+            SerializedParamValue::Enum { value } => Some(*value as f32 > 0.5),
+            _ => None,
+        };
+    }
+    match default {
+        ParamValue::Bool(value) => Some(*value),
+        ParamValue::Float(value) => Some(*value > 0.5),
+        ParamValue::Enum(value) => Some(*value > 0),
+        _ => None,
+    }
 }
 
 fn serialized_to_f32(v: &SerializedParamValue) -> Option<f32> {
@@ -2534,10 +2570,13 @@ fn serialized_to_f32(v: &SerializedParamValue) -> Option<f32> {
     }
 }
 
-/// Live writes must use the same numeric storage as the compiler's uniform
-/// seeds. Enum and Bool remain typed on authored nodes, but fused fields store
-/// all scalars as Float and cast to the shader type when packing uniforms.
+/// Live writes must use the same storage as the compiler's uniform seeds. Bool
+/// stays typed so graph validation and BoolThreshold bindings remain intact;
+/// integer-like scalar fields continue to use Float storage and cast at pack.
 pub(crate) fn fused_param_value(value: &SerializedParamValue) -> ParamValue {
+    if let SerializedParamValue::Bool { value } = value {
+        return ParamValue::Bool(*value);
+    }
     serialized_to_f32(value)
         .map(ParamValue::Float)
         .unwrap_or_else(|| value.clone().into())
@@ -2596,6 +2635,24 @@ mod tests {
         let mut registry = PrimitiveRegistry::with_builtin();
         crate::testkit::fusion_fixtures::register_fusion_test_nodes(&mut registry);
         registry
+    }
+
+    #[test]
+    fn fused_bool_seed_and_live_value_stay_typed() {
+        let default = ParamValue::Bool(true);
+        assert_eq!(effective_param_bool(None, &default), Some(true));
+        assert_eq!(
+            effective_param_bool(
+                Some(&SerializedParamValue::Float { value: 0.5 }),
+                &default,
+            ),
+            Some(false),
+            "seeded numeric Bool values use strict BoolThreshold semantics"
+        );
+        assert_eq!(
+            fused_param_value(&SerializedParamValue::Bool { value: true }),
+            ParamValue::Bool(true)
+        );
     }
 
 
@@ -3039,7 +3096,7 @@ mod tests {
         use crate::param_binding::ParamId;
         let mk = |node: &str, param: &'static str| ParamBinding {
             id: ParamId::from("m"),
-            label: "Mode",
+            label: "Mode".into(),
             default_value: 0.0,
             target: ParamTarget::Node { node_id: NodeId::new(node), param: std::borrow::Cow::Borrowed(param) },
             convert: ParamConvert::EnumRound,

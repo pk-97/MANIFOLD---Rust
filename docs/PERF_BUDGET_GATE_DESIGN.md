@@ -246,7 +246,7 @@ profiled totals (D6); inventing a second label scheme beside the executor's step
 (scoping the existing tag is not a second scheme); leaving overflow OR untagged spans
 silent (no-silent-fallbacks); bracketing by span count instead of scoped tags (rejected
 above — hidden contiguity invariant, breaks on the parallel path). Test scope: focused
-(`-p` the harness crate + `-p manifold-renderer --lib` + `-p manifold-gpu --lib`); GPU
+(`-p` the harness crate + `-p manifold-nodes --lib` + `-p manifold-gpu --lib`); GPU
 feature run only if profiling.rs itself is touched.
 
 **P2b — bare-glb import-graph mode (half session, Sonnet, own executor).**

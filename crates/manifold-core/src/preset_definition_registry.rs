@@ -140,7 +140,7 @@ fn build_preset_definitions(
 fn build_effect_kind_map(json_presets: &[PresetMetadata]) -> PresetMap {
     let mut m: PresetMap = HashMap::new();
     // All effects are registered via inventory::submit! in their
-    // implementation files (manifold-renderer/src/effects/*.rs).
+    // implementation files (manifold-nodes/src/effects/*.rs).
     for meta in inventory::iter::<crate::effect_registration::EffectMetadata> {
         m.insert(meta.id.clone(), Arc::new(meta.to_effect_def()));
     }
@@ -197,7 +197,7 @@ fn build_generator_kind_map(json_presets: &[PresetMetadata]) -> PresetMap {
     );
 
     // All other generators are registered via inventory::submit! in their
-    // implementation files (manifold-renderer/src/generators/*.rs).
+    // implementation files (manifold-nodes/src/generators/*.rs).
     for meta in inventory::iter::<crate::generator_registration::GeneratorMetadata> {
         m.insert(meta.id.clone(), Arc::new(meta.to_generator_def()));
     }
@@ -676,7 +676,7 @@ mod tests {
     use crate::effect_registration::EffectMetadata;
     use crate::generator_registration::ParamSpec;
 
-    // Test-only inventory submissions — manifold-renderer isn't linked in
+    // Test-only inventory submissions — manifold-nodes isn't linked in
     // manifold-core unit tests, so we register minimal test fixtures here.
     inventory::submit! {
         EffectMetadata {
@@ -1061,7 +1061,7 @@ mod tests {
 
     #[test]
     fn loaded_preset_metadata_returns_empty_initially() {
-        // Block 2 ships with no JSON loader populated (manifold-renderer
+        // Block 2 ships with no JSON loader populated (manifold-nodes
         // isn't linked in core unit tests). Confirms the dual-source
         // registry doesn't accidentally start consuming something.
         assert!(super::effect::loaded_preset_metadata().is_empty());

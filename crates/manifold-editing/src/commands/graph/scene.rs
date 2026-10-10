@@ -103,7 +103,7 @@ pub struct AddSceneObjectCommand {
     centroid: (f32, f32),
     /// P1 (SCENE_PANEL_EXPOSURE_CONVERGENCE_DESIGN.md): the new material/
     /// transform/scene_object nodes' full param manifests, computed by the
-    /// app-side caller via `manifold_renderer::node_graph::scene_exposure::
+    /// app-side caller via `manifold_nodes::node_graph::scene_exposure::
     /// metadata_for_node_type` (this crate has no renderer dep) — `execute`
     /// stamps them into the def's top-level `preset_metadata` after minting
     /// the new nodes' ids.
@@ -338,7 +338,7 @@ struct AddedSceneObject {
 /// A distinct RGBA tint for object slot `k`, spread around the hue wheel by
 /// the golden ratio at high saturation — the SAME formula
 /// `gltf_import.rs::group_tint` uses for imported objects (that fn is private
-/// to `manifold-renderer`, unreachable from here, so this is a same-formula
+/// to `manifold-nodes`, unreachable from here, so this is a same-formula
 /// re-derivation, not a shared call — keep the two in sync if either changes).
 /// So an added cube reads as one more colour-coded box beside imported ones,
 /// never a jarring one-off.
@@ -739,7 +739,7 @@ pub struct AddSceneLightCommand {
     pos: (f32, f32),
     /// P1 (SCENE_PANEL_EXPOSURE_CONVERGENCE_DESIGN.md): the new light's full
     /// param manifest, computed by the app-side caller via
-    /// `manifold_renderer::node_graph::scene_exposure::metadata_for_node_type("node.light")`
+    /// `manifold_nodes::node_graph::scene_exposure::metadata_for_node_type("node.light")`
     /// (this crate has no renderer dep).
     light_metadata: Vec<SceneParamMetadata>,
     catalog_default: EffectGraphDef,
@@ -802,7 +802,7 @@ impl Command for AddSceneLightCommand {
                     );
 
                     // D7a defaults, transcribed from `node.light`'s own param defs
-                    // (`crates/manifold-renderer/src/node_graph/primitives/light.rs`):
+                    // (`crates/manifold-nodes/src/node_graph/primitives/light.rs`):
                     // mode=Sun / color white / intensity 1.0 / cast_shadows ON already
                     // match the primitive's own defaults — set explicitly anyway so
                     // the gesture's contract doesn't silently drift if those defaults
@@ -2191,7 +2191,7 @@ pub struct AddSceneEnvironmentCommand {
     pos: (f32, f32),
     /// P1/R1 (SCENE_PANEL_EXPOSURE_CONVERGENCE_DESIGN.md): the new
     /// environment node's full param manifest, computed by the app-side
-    /// caller via `manifold_renderer::node_graph::scene_exposure::
+    /// caller via `manifold_nodes::node_graph::scene_exposure::
     /// metadata_for_node_type("node.bake_environment")` (this crate has no
     /// renderer dep) — same convention `AddSceneLightCommand` uses.
     env_metadata: Vec<SceneParamMetadata>,
@@ -2350,7 +2350,7 @@ pub struct AddSceneFogCommand {
     pos: (f32, f32),
     /// P1/R1 (SCENE_PANEL_EXPOSURE_CONVERGENCE_DESIGN.md): the new fog
     /// (atmosphere) node's full param manifest, computed by the app-side
-    /// caller via `manifold_renderer::node_graph::scene_exposure::
+    /// caller via `manifold_nodes::node_graph::scene_exposure::
     /// metadata_for_node_type("node.atmosphere")` (this crate has no
     /// renderer dep) — same convention `AddSceneLightCommand` uses.
     fog_metadata: Vec<SceneParamMetadata>,
@@ -2656,7 +2656,7 @@ impl Command for AddObjectTransformCommand {
 // ---------------------------------------------------------------------------
 
 /// The plan's data (`new_nodes`/`new_wires`/`new_card_params`/…) is built by
-/// `manifold_renderer::node_graph::gltf_import::assemble_merge_plan` /
+/// `manifold_nodes::node_graph::gltf_import::assemble_merge_plan` /
 /// `MergePlan`, which `manifold-editing` cannot depend on (dependency
 /// direction — the same constraint `AddSceneObjectCommand`'s own doc
 /// comment names for `OBJECT_SAFETY_MAX`). The caller (`manifold-app`,
@@ -2848,7 +2848,7 @@ fn find_scene_object_scope(
 }
 
 /// Recognise the primary Water output, including Particle View's copies path.
-/// Keep aligned with manifold-renderer scene_vm::discover_water_families:
+/// Keep aligned with manifold-nodes scene_vm::discover_water_families:
 /// four distinct object outputs (water, foam, spray, bubbles), with water
 /// reaching the group's sole liquid domain. Editing cannot depend on renderer;
 /// app's water_family_recognizers_agree test checks both through real renames.

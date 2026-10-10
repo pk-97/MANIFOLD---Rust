@@ -297,7 +297,7 @@ port types beyond `Transform` · widening into REALTIME_3D P5/P6 viewport work.
 
 - **Entry state:** clean tree off current `origin/main`; `rg -n "Transform" crates/manifold-node-engine/src/ports.rs` → no variant; section 1 anchors re-run.
 - **Read-back:** this doc section 2 D1/D2, section 3; `ports.rs` whole; one Material-port plumbing
-  commit (`git log --oneline -S "PortType::Material" -- crates/manifold-renderer` →
+  commit (`git log --oneline -S "PortType::Material" -- crates/manifold-nodes` →
   read the M1 diff); `node.light`'s producer atom end-to-end;
   `project_control_wires_port_shadows_param` memory. Restate the section 2.5 audit verdict:
   port = one-wire-from-existing (fourth CPU-struct port), atom = genuinely new
@@ -306,12 +306,12 @@ port types beyond `Transform` · widening into REALTIME_3D P5/P6 viewport work.
   `set_transform`/`inputs.transform`, `node.transform_3d` (registered, descriptor,
   section 2.5-audited), unit tests: identity default; param→output; each scalar port
   overrides its same-named param (the port-shadows contract, one test per family).
-- **Gate.** Positive: `cargo test -p manifold-renderer --lib transform` green;
+- **Gate.** Positive: `cargo test -p manifold-nodes --lib transform` green;
   `check-presets` clean. Negative: `rg -n "Arc<Mutex|Arc<RwLock" crates/manifold-node-engine/src/scene/transform.rs primitives/transform_3d.rs` → 0.
   **Demo:** none — L1 (nothing consumes the port yet; P2 is the vertical slice).
 - **Forbidden:** consuming the port in any renderer this phase; inventing a matrix
   type on the wire (the wire carries TRS; matrices are composed by consumers).
-- **Test scope:** focused `-p manifold-renderer --lib`. No sweep, no gpu run.
+- **Test scope:** focused `-p manifold-nodes --lib`. No sweep, no gpu run.
 
 ### P2 — the swap: `render_scene` ports, migration, importer (one strong session)
 
@@ -339,14 +339,14 @@ port types beyond `Transform` · widening into REALTIME_3D P5/P6 viewport work.
   re-points; a malformed-value case); importer per D9 (transform node in group, 4th
   interface port, cap fix, recenter moved); both importer tests updated; the
   group-placement rule for synthesized nodes.
-- **Gate.** Positive: `cargo test -p manifold-renderer --lib` + `-p manifold-io --lib
+- **Gate.** Positive: `cargo test -p manifold-nodes --lib` + `-p manifold-io --lib
   migrations::` + the importer tests green; **round-trip gate**:
   `meshImportTests.manifold` loads through the migration → all params resolve, cam
   orbit driver still runs, save → reload → transforms intact (throwaway scratch test,
   deleted after, per the BUG-036 (param-manifest-construction-not-a-unified-safe-g…) session pattern); **held-out input**: one of the
   three CC0 scans in `tests/fixtures/gltf/` (VD-003 fixtures) imports and renders —
   not the azalea the code was developed against; focused GPU run:
-  `cargo test -p manifold-renderer --features gpu-proofs render_scene` (the gpu tests
+  `cargo test -p manifold-nodes --features gpu-proofs render_scene` (the gpu tests
   now wire transform nodes; the shader and uniforms are untouched — if any .wgsl diff
   appears in this phase, stop, something went wrong). Full workspace sweep + clippy
   (port type + migration = infra). Negative:

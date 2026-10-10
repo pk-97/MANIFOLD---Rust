@@ -1,7 +1,7 @@
 //! Still-frame export — encode a single composited frame to PNG or JPEG.
 //!
 //! The content thread reads back the final compositor output as tightly-packed
-//! RGBA8 (see `manifold-renderer`'s `gpu_readback`). This module turns those raw
+//! RGBA8 (see `manifold-nodes`'s `gpu_readback`). This module turns those raw
 //! pixels into an image file. PNG is lossless and keeps the alpha channel; JPEG
 //! is lossy and drops alpha to opaque RGB at a chosen quality (some platforms —
 //! Spotify / distributor cover-art upload — require JPEG).

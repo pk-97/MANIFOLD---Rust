@@ -85,7 +85,8 @@ pub struct NodeInputs<'a> {
 }
 
 impl<'a> NodeInputs<'a> {
-    pub fn new(
+    manifold_core::testkit_visible! {
+    pub(crate) fn new(
         bindings: &'a [(&'static str, Slot)],
         backend: &'a dyn Backend,
         generations: &'a [u64],
@@ -101,6 +102,7 @@ impl<'a> NodeInputs<'a> {
             array_layouts: &[],
         }
     }
+    }
 
     /// Thread each wired Array input's producer layout through.
     pub(crate) fn with_array_layouts(mut self, array_layouts: &'a [(&'static str, ArrayType)]) -> Self {
@@ -114,13 +116,15 @@ impl<'a> NodeInputs<'a> {
         self.array_layouts.iter().find(|(name, _)| *name == port).map(|&(_, layout)| layout)
     }
 
+    manifold_core::testkit_visible! {
     /// Executor-only: thread the content-availability flags through.
     /// Separate from [`Self::new`] so the many test constructions keep
     /// their three-argument shape (same pattern as
     /// [`EffectNodeContext::with_errors`](crate::node_graph::EffectNodeContext::with_errors)).
-    pub fn with_pending(mut self, pending: &'a [bool]) -> Self {
+    pub(crate) fn with_pending(mut self, pending: &'a [bool]) -> Self {
         self.pending = pending;
         self
+    }
     }
 
     /// Executor-only: thread the mesh revision snapshots through
@@ -134,13 +138,15 @@ impl<'a> NodeInputs<'a> {
         self
     }
 
+    manifold_core::testkit_visible! {
     /// Executor-only: thread the per-slot logical content snapshots through.
-    pub fn with_content_versions(
+    pub(crate) fn with_content_versions(
         mut self,
         content_versions: &'a [Option<ContentVersion>],
     ) -> Self {
         self.content_versions = content_versions;
         self
+    }
     }
 
     /// View the same bindings with one camera port replaced for a render-only
@@ -503,8 +509,9 @@ pub struct NodeOutputs<'a> {
 }
 
 impl<'a> NodeOutputs<'a> {
+    manifold_core::testkit_visible! {
     #[allow(clippy::too_many_arguments)]
-    pub fn new(
+    pub(crate) fn new(
         bindings: &'a [(&'static str, Slot)],
         backend: &'a dyn Backend,
         pending_scalar_writes: &'a mut Vec<(Slot, ParamValue)>,
@@ -534,10 +541,13 @@ impl<'a> NodeOutputs<'a> {
             pending_object_writes,
         }
     }
+    }
 
-    pub fn with_rigid_body_writes(mut self, writes: &'a mut Vec<(Slot, RigidBody)>) -> Self {
+    manifold_core::testkit_visible! {
+    pub(crate) fn with_rigid_body_writes(mut self, writes: &'a mut Vec<(Slot, RigidBody)>) -> Self {
         self.pending_rigid_body_writes = Some(writes);
         self
+    }
     }
 
     pub fn set_rigid_body(&mut self, port: &str, value: RigidBody) {
@@ -547,12 +557,14 @@ impl<'a> NodeOutputs<'a> {
         }
     }
 
-    pub fn with_fluid_role_writes(
+    manifold_core::testkit_visible! {
+    pub(crate) fn with_fluid_role_writes(
         mut self,
         writes: &'a mut Vec<(Slot, FluidRole)>,
     ) -> Self {
         self.pending_fluid_role_writes = Some(writes);
         self
+    }
     }
 
     /// Queue a [`FluidRole`] write to the named output port. Drained by the
@@ -566,12 +578,14 @@ impl<'a> NodeOutputs<'a> {
         }
     }
 
-    pub fn with_mesh_source_writes(
+    manifold_core::testkit_visible! {
+    pub(crate) fn with_mesh_source_writes(
         mut self,
         writes: &'a mut Vec<(Slot, MeshSource)>,
     ) -> Self {
         self.pending_mesh_source_writes = Some(writes);
         self
+    }
     }
 
     /// Queue a [`MeshSource`] write to the named output port. Drained by the
@@ -604,12 +618,14 @@ impl<'a> NodeOutputs<'a> {
         }
     }
 
-    pub fn with_vector_field_writes(
+    manifold_core::testkit_visible! {
+    pub(crate) fn with_vector_field_writes(
         mut self,
         writes: &'a mut Vec<(Slot, FieldValue)>,
     ) -> Self {
         self.pending_vector_field_writes = Some(writes);
         self
+    }
     }
 
     /// Queue a [`FieldValue`] write to the named output port. Drained by the

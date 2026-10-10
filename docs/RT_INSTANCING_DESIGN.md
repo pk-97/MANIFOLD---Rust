@@ -75,7 +75,7 @@ Section 2.5 audit statement (DECOMPOSING_GENERATORS.md): no new render primitive
 
 ### P1 — render_scene wiring + keys
 - **Scope:** `render_scene.rs`. Populate `instances_addr`/`instance_slots` from `d.instances`/`d.instance_count` (buffer GPU address — the same bindless-address mechanism `vertex_base_addr` uses; verify GpuBuffer exposes it at :5492's construction site). Topo key += per-object slots; accel key += `d.instances_generation` (D9). Remove the KNOWN LIMITATION comment (:5482-5489) — replaced by a pointer to this doc. GiMaterials build stays per-object (expansion inside manifold-gpu, D3).
-- **Gates:** clippy + nextest `-p manifold-renderer`; `scripts/gpu_proofs_gate.py`.
+- **Gates:** clippy + nextest `-p manifold-nodes`; `scripts/gpu_proofs_gate.py`.
 
 ### P2 — proofs + noise gate
 - **Scope:** `crates/manifold-nodes-scene/tests/gpu_proofs/rt_instancing.rs` (new, registered like its siblings): (a) INV-RTI1 loop proof; (b) INV-RTI2 mirror proof (position + normal); (c) dead-slot miss; (d) capacity-vs-count (count=3 of capacity 8: exactly 3 copies traced); (e) INV-RTI4 probe assertion (no dispatch logged across 3 static frames). All synthetic — build tiny vertex/instance buffers in-test, CPU computes expectations. Run `scripts/gpu_proofs_gate.py` and `scripts/rt_noise_gate.py` (record NOTHING unless drift is real; drift with zero golden change = BUG-cam (gpu-proofs-firmware-fault-class) environment class — document, don't re-baseline).

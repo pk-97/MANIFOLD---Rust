@@ -1657,6 +1657,7 @@ impl Application {
                             empty_label: "No fonts match",
                             label_in_own_font: true,
                             current: families.iter().position(|f| *f == current),
+                            ..Default::default()
                         };
                         let trigger = manifold_ui::node::Rect::new(r.x, r.y, r.width, r.height);
                         self.ws.ui_root.open_action_list(families, actions, list, trigger);
@@ -2087,11 +2088,11 @@ impl Application {
                             );
                         if matches!(eid, manifold_core::GraphTarget::SceneModifier { .. }) {
                             let Some(id) = self.local_project.instance_preset_id(eid) else { continue; };
-                            let Some(def) = manifold_renderer::node_graph::bundled_preset_def(&id) else {
+                            let Some(def) = manifold_nodes::bundled_presets::bundled_preset_def(&id) else {
                                 log::error!("[preset] local modifier preset {id} is unavailable for revert");
                                 continue;
                             };
-                            cmd = cmd.with_resolved_def(def.clone());
+                            cmd = cmd.with_resolved_def(def.as_ref().clone());
                         }
                         self.send_content_cmd(ContentCommand::Execute(Box::new(cmd)));
                     }

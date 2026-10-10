@@ -5,7 +5,7 @@ use manifold_core::layer::Layer;
 use manifold_core::math::BeatQuantizer;
 use manifold_core::project::Project;
 use manifold_core::tempo::TempoMapConverter;
-use manifold_core::types::{LayerType, PlaybackState, TempoPointSource};
+use manifold_core::types::{PlaybackState, TempoPointSource};
 use manifold_core::{Beats, Bpm, GraphTarget, LayerId, SceneId, Seconds};
 
 use crate::live_clip_manager::LiveClipManager;
@@ -190,16 +190,19 @@ pub struct PlaybackEngine {
     stopped_this_tick: Vec<ClipId>,
     ready_clips_list: Vec<ActiveClipRef>,
     timeline_active_scratch: Vec<ActiveClipRef>,
-    /// Pre-allocated scratch for timeline active clip indices from get_active_clips_at_beat.
+    timeline_control_scratch: Vec<ActiveClipRef>,
+    /// Pre-allocated scratch for the shared timeline beat-window query.
     active_indices_scratch: Vec<(usize, usize)>,
     /// Pre-allocated scratch for per-layer active clip indices passed to
-    /// `get_active_clips_at_beat_ref`.
+    /// `get_clips_in_beat_window_ref`.
     active_layer_indices_scratch: Vec<usize>,
     /// Pre-allocated scratch for live slot refs (avoids per-frame Vec allocation).
     live_slot_refs_scratch: Vec<ActiveClipRef>,
     /// Pre-allocated scratch for session-slot refs — the third `sync_clips_to_time`
     /// input, alongside `timeline_active_scratch` / `live_slot_refs_scratch`.
     session_refs_scratch: Vec<ActiveClipRef>,
+    /// Session and interrupted arrangement spans retained until modulation consumes them.
+    completed_control_scratch: Vec<ActiveClipRef>,
     /// Pre-allocated scratch: clip ids to force-evict this tick because a
     /// session loop wrap kept the same inner clip active across the boundary
     /// (section 4 wrap-restart rule) — `compute_sync` diffs by clip_id and wouldn't
@@ -210,35 +213,19 @@ pub struct PlaybackEngine {
     sync_start_scratch: Vec<ActiveClipRef>,
     /// Scratch for layer-mismatch heals in `sync_clips_to_time` (P3).
     sync_heal_scratch: Vec<ActiveClipRef>,
-    /// Pre-allocated scratch for modulation active clip timing.
-    modulation_timing_scratch: Vec<(Beats, Beats)>,
+    /// Shared source timing and pending starts, produced only by clip sync.
+    clip_controls: crate::clip_controls::ClipControlFrame,
+    clip_bindings_dirty: bool,
+    /// Last reconciled beat: controls cover each forward interval once.
+    clip_control_cursor: Option<Beats>,
+    /// Keep phase coverage back to the last evaluation across out-of-tick syncs.
+    clip_control_sample_start: Option<Beats>,
     /// section 8 param triggers: reusable scratch for the most recent
     /// `evaluate_modulation` call. Captured pulses move into
     /// `trigger_delivery` immediately after evaluation and remain there until
     /// the renderer consumes them.
     modulation_trigger_scratch: crate::modulation::TriggerPulseBuffer,
     trigger_delivery: TriggerDeliveryQueue,
-    /// PARAM_STEP_ACTIONS D5: last clip identity started on each layer
-    /// (`timeline.layers` index → `ClipId`), the engine-side mirror of what
-    /// `GeneratorRenderer::acquire_clip` tracks downstream per `LayerId`
-    /// (`generator_renderer.rs:350-360`) — computed at the sole-authority
-    /// level (`sync_clips_to_time`) instead of derived from renderer
-    /// readiness. Never removed on stop (a "last" record, not "currently");
-    /// only ever overwritten by a fresh `to_start`, so a stop-then-restart of
-    /// the very same clip id is still detected as a change because
-    /// `compute_sync`'s own diff (against `active_clip_ids`) already
-    /// guarantees `to_start` only reports genuinely-new-to-the-layer starts.
-    last_active_clip_id: AHashMap<i32, ClipId>,
-    /// Layer indices with a clip-start edge accumulated since the last
-    /// `evaluate_modulation` call — may span more than one `sync_clips_to_time`
-    /// call (e.g. `play()`'s direct sync followed by the next tick's own sync)
-    /// because it is only drained (never cleared) at tick's end, mirroring
-    /// the modulation scratch's drain-queue shape so
-    /// an edge produced by an out-of-tick sync is never silently lost before
-    /// modulation gets to see it. Zero per-frame allocation: capacity
-    /// survives the clear-and-reassign at the end of `tick_playing`/
-    /// `tick_non_playing`.
-    clip_edge_layers: Vec<i32>,
     /// Latest per-send audio features, refreshed each tick by the content
     /// thread (which owns the capture/analysis worker) via
     /// [`Self::set_audio_snapshot`]. Empty when audio modulation is inactive, in
@@ -344,20 +331,23 @@ impl PlaybackEngine {
             stopped_this_tick: Vec::with_capacity(16),
             ready_clips_list: Vec::with_capacity(32),
             timeline_active_scratch: Vec::with_capacity(32),
+            timeline_control_scratch: Vec::with_capacity(32),
             active_indices_scratch: Vec::with_capacity(32),
             active_layer_indices_scratch: Vec::with_capacity(8),
             live_slot_refs_scratch: Vec::with_capacity(8),
             session_refs_scratch: Vec::with_capacity(8),
+            completed_control_scratch: Vec::with_capacity(8),
             session_wrap_restart_scratch: Vec::with_capacity(4),
             sync_start_scratch: Vec::with_capacity(4),
             sync_heal_scratch: Vec::with_capacity(2),
-            modulation_timing_scratch: Vec::with_capacity(64),
+            clip_controls: crate::clip_controls::ClipControlFrame::default(),
+            clip_bindings_dirty: true,
+            clip_control_cursor: None,
+            clip_control_sample_start: None,
             modulation_trigger_scratch: crate::modulation::TriggerPulseBuffer::with_capacity(
                 trigger_delivery::DEFAULT_TRIGGER_DELIVERY_CAPACITY,
             ),
             trigger_delivery: TriggerDeliveryQueue::new(),
-            last_active_clip_id: AHashMap::with_capacity(32),
-            clip_edge_layers: Vec::with_capacity(8),
             audio_snapshot: manifold_core::audio_features::AudioFeatureSnapshot::default(),
             automation_latches: crate::automation::AutomationLatches::default(),
             automation_armed: false,
@@ -470,6 +460,7 @@ impl PlaybackEngine {
         self.project.as_ref()
     }
     pub fn project_mut(&mut self) -> Option<&mut Project> {
+        self.clip_bindings_dirty = true;
         self.project.as_mut()
     }
     pub fn live_clip_manager(&self) -> Option<&LiveClipManager> {
@@ -494,17 +485,24 @@ impl PlaybackEngine {
     pub fn recently_started_time(&self, clip_id: &str) -> Option<f64> {
         self.recently_started_times.get(clip_id).copied()
     }
-    /// Test instrumentation (P3): the clip-edge pushes not yet consumed by a
-    /// tick's modulation step. Read after a direct `sync_clips_to_time` call.
-    #[doc(hidden)]
-    pub fn pending_clip_edge_layers(&self) -> &[i32] {
-        &self.clip_edge_layers
+    /// Source timing and events awaiting the next modulation evaluation.
+    pub fn clip_controls(&self) -> &crate::clip_controls::ClipControlFrame {
+        &self.clip_controls
     }
-    /// Test instrumentation (P3): the last clip the engine believes was
-    /// started on a layer (the edge-diff state, including silent heal updates).
-    #[doc(hidden)]
-    pub fn last_active_clip_id_for(&self, layer_index: i32) -> Option<&ClipId> {
-        self.last_active_clip_id.get(&layer_index)
+    /// Observe source assignments at the content edit boundary. This does not
+    /// schedule clips or advance responses; it only rejects pre-edit events.
+    pub fn reconcile_clip_control_bindings(&mut self) {
+        if !self.clip_bindings_dirty {
+            return;
+        }
+        if let Some(project) = &mut self.project {
+            let delivery = &mut self.trigger_delivery;
+            self.clip_controls.reconcile_bindings(project, Beats(self.current_beat), |owner, param| {
+                delivery.cancel_clip_parameter(owner,
+                    manifold_core::audio_trigger::fire_meter_key_for_param("", param));
+            });
+        }
+        self.clip_bindings_dirty = false;
     }
     /// Read access to the renderers (tests downcast to `StubRenderer`).
     #[doc(hidden)]
@@ -533,6 +531,7 @@ impl PlaybackEngine {
     pub fn split_renderer_project_mut(
         &mut self,
     ) -> (&mut Vec<Box<dyn ClipRenderer>>, Option<&mut Project>) {
+        self.clip_bindings_dirty = true;
         (&mut self.renderers, self.project.as_mut())
     }
 
@@ -585,6 +584,8 @@ impl PlaybackEngine {
         self.last_realtime_now = 0.0;
         self.last_frame_count = 0;
         self.timeline_query_frame = u64::MAX;
+
+        self.reconcile_clip_control_bindings();
 
         // Notify all renderers of the new project (GAP-PLAY-5).
         // Port of C# PlaybackController.LoadProject → renderer.OnProjectLoaded().
@@ -689,12 +690,14 @@ impl PlaybackEngine {
     }
 
     pub fn set_time(&mut self, time_double: Seconds) {
+        self.reconcile_clip_control_bindings();
         self.current_time_double = time_double.0;
         self.current_time = time_double;
         self.update_beat_from_time();
     }
 
     pub fn set_beat(&mut self, beat: Beats) {
+        self.reconcile_clip_control_bindings();
         self.current_beat = beat.0;
     }
 
@@ -868,6 +871,7 @@ impl PlaybackEngine {
             return TickResult::default();
         }
         self.is_ticking = true;
+        self.reconcile_clip_control_bindings();
         self.stopped_this_tick.clear();
 
         if self.project.is_none() {
@@ -914,10 +918,16 @@ impl PlaybackEngine {
     }
 
     fn reset_trigger_delivery(&mut self) {
+        self.reconcile_clip_control_bindings();
         // A lifecycle boundary cancels pulses accepted under the old project /
         // playhead. Epoch exhaustion is latched and surfaced to the caller;
         // there is no wrapping reset that could make old captures ambiguous.
         let _ = self.trigger_delivery.reset();
+        self.clip_controls.clear_starts();
+        self.clip_controls.clear_binding_cutoffs();
+        self.clip_control_cursor = None;
+        self.clip_control_sample_start = None;
+        self.completed_control_scratch.clear();
     }
 
     fn capture_trigger_pulses(&mut self, pulses: &mut crate::modulation::TriggerPulseBuffer) {
@@ -948,6 +958,7 @@ impl PlaybackEngine {
             Option<&Project>,
         ) -> R,
     ) -> Option<R> {
+        self.reconcile_clip_control_bindings();
         if self.trigger_delivery.failure().is_some() {
             return None;
         }
@@ -979,6 +990,11 @@ impl PlaybackEngine {
 
     /// Playing-state tick. Matches C# PlaybackController.Update lines 1135-1218.
     fn tick_playing(&mut self, ctx: TickContext) -> TickResult {
+        // Direct state transitions (including export) need the same initial
+        // membership as play(), before advancing past a short first clip.
+        if self.clip_control_cursor.is_none() {
+            self.sync_clips_to_time();
+        }
         // 1. Advance time (unless external sync source is the clock authority).
         //    Port of C# lines 1141-1150.
         if !self.external_time_sync {
@@ -1069,15 +1085,9 @@ impl PlaybackEngine {
 
         // 7. Evaluate modulation pipeline (LFO drivers + ADSR envelopes).
         //    Port of C# DriverController.Update() [ExecutionOrder 50, after PlaybackController].
-        let mut timing = std::mem::take(&mut self.modulation_timing_scratch);
         let mut pulses = std::mem::take(&mut self.modulation_trigger_scratch);
         pulses.clear();
-        // PARAM_STEP_ACTIONS D5: drain (not clear-at-top) the clip-edge queue
-        // accumulated by every `sync_clips_to_time` call since the last time
-        // modulation consumed it — this tick's own step 4 sync, plus any
-        // out-of-tick sync (`play()`/`seek_to()`) that ran since. Cleared only
-        // after this call so an edge from an out-of-tick sync is never lost.
-        let mut clip_edges = std::mem::take(&mut self.clip_edge_layers);
+        self.clip_controls.finish();
         let audio = &self.audio_snapshot;
         // D6 fire meter: this tick's single reset lives at the top of
         // `tick()`, before step 3b's clip-trigger push (BUG-109) — nothing
@@ -1089,19 +1099,18 @@ impl PlaybackEngine {
                 Seconds(self.current_time_double),
                 ctx.dt_seconds,
                 audio,
-                &mut timing,
+                &self.clip_controls,
                 &mut pulses,
-                &clip_edges,
                 &mut self.fire_meters,
             )
         } else {
             false
         };
-        self.modulation_timing_scratch = timing;
         self.capture_trigger_pulses(&mut pulses);
         self.modulation_trigger_scratch = pulses;
-        clip_edges.clear();
-        self.clip_edge_layers = clip_edges;
+        self.clip_controls.clear_starts();
+        self.clip_control_sample_start = Some(Beats(self.current_beat));
+        self.completed_control_scratch.clear();
         // Automation folds into the same compositor-dirty path modulation
         // uses — a lane write is just as much a reason to re-send the UI
         // snapshot as a driver/envelope write.
@@ -1213,13 +1222,9 @@ impl PlaybackEngine {
 
         // 3. Evaluate modulation pipeline even when stopped (for scrub preview / inspector).
         //    Port of C# DriverController — runs in all states.
-        let mut timing = std::mem::take(&mut self.modulation_timing_scratch);
         let mut pulses = std::mem::take(&mut self.modulation_trigger_scratch);
         pulses.clear();
-        // PARAM_STEP_ACTIONS D5: see the matching comment in `tick_playing` —
-        // same drain-queue shape, so a scrub-while-stopped's own sync (step 1
-        // above, when dirty) still reaches modulation this tick.
-        let mut clip_edges = std::mem::take(&mut self.clip_edge_layers);
+        self.clip_controls.finish();
         // D6 fire meter: this tick's single reset lives at the top of
         // `tick()` — nothing to reset here. Step 2b above already pushed
         // clip-trigger levels; this evaluate_modulation call pushes param
@@ -1233,9 +1238,8 @@ impl PlaybackEngine {
                     Seconds(self.current_time_double),
                     ctx.dt_seconds,
                     audio,
-                    &mut timing,
+                    &self.clip_controls,
                     &mut pulses,
-                    &clip_edges,
                     &mut self.fire_meters,
                 )
             } else {
@@ -1246,11 +1250,11 @@ impl PlaybackEngine {
         if modulation_dirty {
             self.mark_compositor_dirty(ctx.realtime_now);
         }
-        self.modulation_timing_scratch = timing;
         self.capture_trigger_pulses(&mut pulses);
         self.modulation_trigger_scratch = pulses;
-        clip_edges.clear();
-        self.clip_edge_layers = clip_edges;
+        self.clip_controls.clear_starts();
+        self.clip_control_sample_start = Some(Beats(self.current_beat));
+        self.completed_control_scratch.clear();
 
         // 4. Filter ready clips for compositor.
         //    Port of C# UpdateCompositor (lines 1126-1132).
@@ -1295,6 +1299,10 @@ impl PlaybackEngine {
     /// Uses split borrows to avoid cloning the project.
     /// Stamps `timeline_query_frame` so callers later in the same frame can skip re-query.
     fn query_active_timeline_clips(&mut self) {
+        self.query_timeline_clips(Beats(self.current_beat));
+    }
+
+    fn query_timeline_clips(&mut self, from: Beats) {
         // Step 1: ensure layer sort caches are up-to-date (needs &mut project)
         if let Some(p) = &mut self.project {
             p.timeline.ensure_layers_sorted();
@@ -1303,9 +1311,11 @@ impl PlaybackEngine {
         // Step 2: query active clips and build lightweight refs
         // (split borrow: project.timeline vs self.timeline_active_scratch/active_indices_scratch/active_layer_indices_scratch)
         self.timeline_active_scratch.clear();
+        self.timeline_control_scratch.clear();
         if let Some(project) = &mut self.project {
             let beat = Beats(self.current_beat);
-            project.timeline.get_active_clips_at_beat_ref(
+            project.timeline.get_clips_in_beat_window_ref(
+                from,
                 beat,
                 &mut self.active_indices_scratch,
                 &mut self.active_layer_indices_scratch,
@@ -1326,17 +1336,31 @@ impl PlaybackEngine {
                     continue;
                 }
                 if let Some(clip) = layer.clips.get(*ci) {
-                    self.timeline_active_scratch.push(ActiveClipRef {
+                    let cutoff = self.session_runtime.pending_arrangement_end(
+                        &layer.layer_id, Beats(self.current_beat),
+                    );
+                    let end = cutoff.map_or(clip.end_beat(), |beat| clip.end_beat().min(beat));
+                    let control_from = self.session_runtime.arrangement_control_from(&layer.layer_id)
+                        .map_or(clip.start_beat, |beat| clip.start_beat.max(beat));
+                    if end <= control_from || end <= from {
+                        continue;
+                    }
+                    let entry = ActiveClipRef {
                         clip_id: clip.id.clone(),
                         layer_index: *li as i32,
                         clip_index: *ci as u32,
                         start_beat: clip.start_beat,
-                        duration_beats: clip.duration_beats,
+                        control_from,
+                        duration_beats: end - clip.start_beat,
                         is_looping: clip.is_looping,
                         is_video: !clip.video_clip_id.is_empty(),
                         is_muted: clip.is_muted,
                         layer_id: layer.layer_id.clone(),
-                    });
+                    };
+                    if cutoff.is_none() && clip.is_active_at_beat(Beats(self.current_beat)) {
+                        self.timeline_active_scratch.push(entry.clone());
+                    }
+                    self.timeline_control_scratch.push(entry);
                 }
             }
         }
@@ -1359,11 +1383,11 @@ impl PlaybackEngine {
         layer_index: i32,
         fire_clip_edge: bool,
     ) {
-        // Fix 6: Never start clips on group layers
+        // The container owns clip kind, including after a drag with a stale layer_id.
+        // Timing-only membership never acquires a renderer.
         if let Some(project) = &self.project
-            && let Some(li) = project.timeline.layer_index_for_id(&clip.layer_id)
-            && let Some(layer) = project.timeline.layers.get(li)
-            && layer.layer_type == LayerType::Group
+            && let Some(layer) = project.timeline.layers.get(layer_index as usize)
+            && !layer.layer_type.supports_clip_playback()
         {
             return;
         }
@@ -1430,6 +1454,12 @@ impl PlaybackEngine {
     }
 
     pub fn stop_all_clips(&mut self) {
+        self.scheduler.reset_controls();
+        self.clip_controls.reset();
+        self.clip_bindings_dirty = true;
+        self.clip_control_cursor = None;
+        self.clip_control_sample_start = None;
+        self.completed_control_scratch.clear();
         self.stop_buffer.clear();
         self.stop_buffer
             .extend(self.active_clip_ids.iter().cloned());
@@ -1597,7 +1627,29 @@ impl PlaybackEngine {
             return false;
         }
 
-        self.query_active_timeline_clips();
+        self.reconcile_clip_control_bindings();
+
+        let current_beat = Beats(self.current_beat);
+        if self
+            .clip_control_cursor
+            .is_some_and(|previous| current_beat < previous)
+        {
+            // External clocks can move backwards without going through the
+            // explicit seek path. Treat that correction as a control-history
+            // boundary so starts, pulses, and source cutoffs from the later
+            // position cannot leak into the earlier interval.
+            self.reset_trigger_delivery();
+        }
+        let from = self.clip_control_cursor.filter(|previous| {
+            self.is_playing() && *previous <= current_beat
+        });
+        let sample_from = from.map_or(current_beat, |previous| {
+            self.clip_control_sample_start.unwrap_or(previous).min(previous)
+        });
+        if from.is_none() {
+            self.clip_control_sample_start = Some(current_beat);
+        }
+        self.query_timeline_clips(sample_from);
 
         let bpm = self
             .project
@@ -1619,15 +1671,27 @@ impl PlaybackEngine {
         };
 
         self.live_slot_refs_scratch.clear();
-        if let Some(mgr) = &self.live_clip_manager {
+        if let Some(mgr) = &mut self.live_clip_manager {
             mgr.fill_live_slot_refs(&mut self.live_slot_refs_scratch);
+            mgr.drain_completed_controls(&mut self.completed_control_scratch);
         }
 
         // Third reference source (section 4/section 9): an input to this sole authority,
         // never a parallel path. May evict a clip via `stop_clip` (the same
         // primitive this function's own to_stop loop uses) to force a
         // same-clip loop-wrap restart before the diff below runs.
-        let mut membership_changed = self.resolve_session_refs();
+        let mut membership_changed = self.resolve_session_refs(from);
+        // Keep arrangement spans closed by this launch until modulation has
+        // sampled the interval; subsequent syncs now suppress that arrangement.
+        self.timeline_control_scratch.retain(|entry| {
+            if self.session_runtime.is_overridden(&entry.layer_id) {
+                self.completed_control_scratch.push(entry.clone());
+                false
+            } else {
+                true
+            }
+        });
+        self.timeline_control_scratch.extend(self.completed_control_scratch.iter().cloned());
 
         let sync_result = self.scheduler.compute_sync(
             self.current_time,
@@ -1639,6 +1703,41 @@ impl PlaybackEngine {
             &self.looping_clip_ids,
             Beats::from_f32(min_remaining_beats),
         );
+
+        self.clip_controls.clear_spans();
+        self.scheduler.record_controls(
+            &sync_result,
+            &self.timeline_control_scratch,
+            from,
+            current_beat,
+            &mut self.clip_controls,
+        );
+        if self.trigger_delivery.failure().is_some() {
+            // An incomplete interval cannot advance Step/Random while Fire
+            // delivery is stopped. Seek/stop clears the existing failure latch.
+            self.clip_controls.clear_spans();
+            self.clip_controls.clear_starts();
+        }
+        if let Some(project) = &self.project {
+            for layer in &project.timeline.layers {
+                // Trigger output has its own mute policy. Parent visibility
+                // and legacy main-clip edge responses do not participate.
+                if layer.is_trigger() && layer.is_muted {
+                    self.clip_controls.suppress_source(&layer.layer_id);
+                }
+            }
+            for entry in sync_result.should_be_active.iter()
+                .chain(&self.timeline_control_scratch)
+                .filter(|entry| entry.is_muted)
+            {
+                if project.timeline.layer_index_for_id(&entry.layer_id)
+                    .is_some_and(|index| project.timeline.layers[index].is_trigger())
+                {
+                    self.clip_controls.suppress_clip(&entry.layer_id, &entry.clip_id);
+                }
+            }
+        }
+        self.clip_control_cursor = Some(current_beat);
 
         for clip_id in &sync_result.to_stop {
             self.stop_clip(clip_id);
@@ -1693,28 +1792,11 @@ impl PlaybackEngine {
         for entry in &starts {
             // A heal is not a trigger (D5): no edge push, no param-step
             // actions, no generator clip_count bump — but the destination
-            // layer's `last_active_clip_id` still updates silently so a later
-            // real edge on that layer diffs correctly.
+            // source membership is reconciled silently by the scheduler.
             let is_heal = self
                 .sync_heal_scratch
                 .iter()
                 .any(|h| h.clip_id == entry.clip_id);
-            // PARAM_STEP_ACTIONS D5: record the clip-edge at scheduler-decision
-            // time — the engine's own notion of "this layer just started a
-            // clip" — never gated on whether a renderer later accepts it
-            // (that's the acquire_clip-level readiness divergence D5 accepts
-            // by design). `to_start` already guarantees this clip_id was not
-            // in `active_clip_ids` a moment ago, so the identity comparison
-            // below is almost always true; it's kept explicit (rather than
-            // pushing unconditionally) so `last_active_clip_id` is a genuine
-            // before/after diff, not just a to_start mirror.
-            if !is_heal && self.last_active_clip_id.get(&entry.layer_index) != Some(&entry.clip_id)
-            {
-                self.clip_edge_layers.push(entry.layer_index);
-            }
-            self.last_active_clip_id
-                .insert(entry.layer_index, entry.clip_id.clone());
-
             let clip = if entry.is_live_slot() {
                 self.live_clip_manager
                     .as_ref()
@@ -1769,18 +1851,25 @@ impl PlaybackEngine {
     /// in `sync_clips_to_time` already uses. This keeps `sync_clips_to_time`
     /// the sole authority: the eviction only pre-empties the very next
     /// `compute_sync` diff, it never bypasses it.
-    fn resolve_session_refs(&mut self) -> bool {
+    fn resolve_session_refs(&mut self, from: Option<Beats>) -> bool {
         self.session_refs_scratch.clear();
         self.session_wrap_restart_scratch.clear();
         let current_beat = self.current_beat;
         if let Some(project) = &self.project {
-            self.session_runtime.resolve_refs(
-                current_beat,
+            let complete = self.session_runtime.resolve_refs_with_controls(
+                Beats(current_beat),
                 &project.session,
                 &project.timeline,
                 &mut self.session_refs_scratch,
                 &mut self.session_wrap_restart_scratch,
+                from.map(|beat| (beat, &mut self.completed_control_scratch)),
             );
+            if !complete && self.trigger_delivery.failure().is_none() {
+                let error = self.trigger_delivery.reject_input_overflow();
+                if let Some(log_error) = &self.log_error {
+                    log_error(&format!("[PlaybackEngine] session control interval stopped: {error}"));
+                }
+            }
         }
         if !self.session_wrap_restart_scratch.is_empty() {
             let ids = std::mem::take(&mut self.session_wrap_restart_scratch);
@@ -1821,15 +1910,15 @@ impl PlaybackEngine {
             .as_ref()
             .is_some_and(|p| p.session.get_slot(&layer_id, &scene_id).is_some());
         let immediate = !self.is_playing();
-        if immediate {
-            self.play();
-        }
         let current_beat = self.current_beat;
         if has_slot {
             self.session_runtime
                 .launch_slot(layer_id, scene_id, current_beat, immediate);
         } else {
             self.session_runtime.stop_slot(layer_id, current_beat, immediate);
+        }
+        if immediate {
+            self.play();
         }
         // Direct re-sync, matching `play`/`seek_to`: this is a dedicated
         // playback-affecting API call, not a generic project edit — a quantized
@@ -1853,13 +1942,13 @@ impl PlaybackEngine {
     /// same as `session_launch_slot`.
     pub fn session_launch_scene(&mut self, scene_id: SceneId) {
         let immediate = !self.is_playing();
-        if immediate {
-            self.play();
-        }
         let current_beat = self.current_beat;
         if let Some(project) = &self.project {
             self.session_runtime
                 .launch_scene(&scene_id, &project.session, current_beat, immediate);
+        }
+        if immediate {
+            self.play();
         }
         self.sync_clips_to_time();
     }
@@ -1878,7 +1967,9 @@ impl PlaybackEngine {
     /// resume via the normal `sync_clips_to_time` call this method itself
     /// makes — not deferred to the next tick.
     pub fn session_back_to_arrangement(&mut self, layer_id: Option<LayerId>) {
-        self.session_runtime.back_to_arrangement(layer_id.as_ref());
+        // Retain the final session interval before clearing its authority.
+        self.sync_clips_to_time();
+        self.session_runtime.back_to_arrangement(layer_id.as_ref(), Beats(self.current_beat));
         self.sync_clips_to_time();
     }
 
@@ -2973,6 +3064,9 @@ impl PlaybackEngine {
             let any_solo_video = manifold_core::layer::Layer::any_solo_video(layers);
 
             for (li, layer) in layers.iter().enumerate() {
+                if !layer.layer_type.supports_clip_playback() {
+                    continue;
+                }
                 let parent = manifold_core::layer::Layer::find_parent_layer(layers, li)
                     .map(|(_, p)| p);
                 let hidden = layer.is_hidden(parent, any_solo_video);
@@ -3257,6 +3351,105 @@ mod tests {
     use manifold_core::project::Project;
     use manifold_core::{Beats, PresetTypeId};
 
+    fn trigger_source_engine(owner_type: manifold_core::types::LayerType) -> (PlaybackEngine, LayerId) {
+        let mut project = Project::default();
+        let mut group = Layer::new("Group".into(), manifold_core::types::LayerType::Group, 0);
+        group.is_muted = true;
+        let mut owner = Layer::new("Owner".into(), owner_type, 1);
+        owner.parent_layer_id = Some(group.layer_id.clone());
+        owner.is_muted = true;
+        let mut source = Layer::new_trigger("Pattern".into(), owner.layer_id.clone(), 2);
+        let source_id = source.layer_id.clone();
+        source.clips.push(TimelineClip::new_trigger(Beats::ZERO, Beats(4.0)));
+        source.clips.push(TimelineClip::new_trigger(Beats(4.0), Beats(4.0)));
+        project.timeline.layers = vec![group, owner, source];
+        let mut engine = PlaybackEngine::new(Vec::new());
+        engine.initialize(project);
+        engine.set_state(PlaybackState::Playing);
+        engine.current_beat = 1.0;
+        (engine, source_id)
+    }
+
+    #[test]
+    fn trigger_source_ignores_parent_and_group_mute_for_every_owner_kind() {
+        use manifold_core::types::LayerType;
+        for owner_type in [LayerType::Video, LayerType::Generator, LayerType::Audio, LayerType::Dmx, LayerType::Group] {
+            let (mut engine, source) = trigger_source_engine(owner_type);
+            engine.sync_clips_to_time();
+            let view = engine.clip_controls().view(&source).unwrap();
+            assert_eq!(view.spans.len(), 1, "owner {owner_type:?}");
+            assert_eq!(view.starts.len(), 1, "owner {owner_type:?}");
+            assert_eq!(view.spans[0].start_beat, Beats::ZERO);
+            assert!(engine.active_clip_ids.is_empty(), "trigger acquired a renderer");
+        }
+    }
+
+    #[test]
+    fn trigger_source_mute_cancels_pending_output_and_unmute_resumes_without_replay() {
+        use manifold_core::params::ClipTriggerSource;
+        for mute_clip in [false, true] {
+            let (mut engine, source) = trigger_source_engine(manifold_core::types::LayerType::Generator);
+            engine.sync_clips_to_time();
+            let layer = &mut engine.project_mut().unwrap().timeline.layers[2];
+            if mute_clip { layer.clips[0].is_muted = true; } else { layer.is_muted = true; }
+            engine.sync_clips_to_time();
+            let view = engine.clip_controls().view(&source).unwrap();
+            assert!(view.starts.is_empty());
+            assert!(view.spans.is_empty());
+
+            let layer = &mut engine.project_mut().unwrap().timeline.layers[2];
+            layer.clips[0].is_muted = false;
+            layer.is_muted = false;
+            engine.current_beat = 2.0;
+            engine.sync_clips_to_time();
+            assert!(engine.clip_controls().view(&source).unwrap().starts.is_empty());
+            assert_eq!(engine.clip_controls().elapsed(&ClipTriggerSource::OwnLayer, Some(&source), Beats(2.0)), Some(Beats(2.0)));
+            engine.current_beat = 4.0;
+            engine.sync_clips_to_time();
+            assert_eq!(engine.clip_controls().view(&source).unwrap().starts.len(), 1);
+        }
+    }
+
+    #[test]
+    fn completed_live_note_survives_between_engine_syncs() {
+        use manifold_core::params::ClipTriggerSource;
+        let mut project = Project::default();
+        project.settings.quantize_mode = manifold_core::types::QuantizeMode::Off;
+        project.timeline.layers.push(Layer::new_video("Live".into(), 0));
+        let owner = project.timeline.layers[0].layer_id.clone();
+        let mut engine = PlaybackEngine::new(Vec::new());
+        engine.initialize(project);
+        engine.set_state(PlaybackState::Playing);
+        engine.current_beat = 1.0;
+        engine.sync_clips_to_time();
+
+        let mut project = engine.project.take().unwrap();
+        let mut manager = LiveClipManager::new();
+        let clip = manager.trigger_live_clip(
+            &mut project, &engine, "test-video".into(), 0, 2.0, 0.0,
+            None, 24, false, 0.0, 60,
+        ).unwrap();
+        manager.commit_live_clip(
+            &mut project, &mut engine, 0, Some(clip.id.as_str()),
+            None, 30, 0.125, 60,
+        );
+        engine.project = Some(project);
+        engine.set_live_clip_manager(manager);
+        engine.current_beat = 1.5;
+        for _ in 0..2 {
+            engine.sync_clips_to_time();
+            let controls = engine.clip_controls();
+            let starts = controls.starts(&ClipTriggerSource::OwnLayer, Some(&owner));
+            assert_eq!(starts.len(), 1);
+            assert_eq!(starts[0].clip_id, clip.id);
+            assert_eq!(starts[0].beat, Beats(1.0));
+            assert_eq!(controls.elapsed(&ClipTriggerSource::OwnLayer, Some(&owner), Beats(1.125)), Some(Beats(0.125)));
+            assert_eq!(controls.elapsed(&ClipTriggerSource::OwnLayer, Some(&owner), Beats(1.25)), None);
+        }
+        engine.seek_to(Seconds::ZERO);
+        assert!(engine.clip_controls().starts(&ClipTriggerSource::OwnLayer, Some(&owner)).is_empty());
+    }
+
     fn trigger_delivery_tick(engine: &mut PlaybackEngine) {
         let result = engine.tick(TickContext::default());
         engine.reclaim_tick_result(result);
@@ -3363,7 +3556,7 @@ mod tests {
                         .collect::<Vec<_>>(),
                     pulses
                         .iter()
-                        .map(|pulse| pulse.pulse.audio_stamp)
+                        .map(|pulse| pulse.pulse.audio_stamp())
                         .collect::<Vec<_>>(),
                 )
             })
@@ -3406,7 +3599,7 @@ mod tests {
                 assert_eq!(pulse.pulse.kind, crate::modulation::TriggerPulseKind::Parameter);
                 assert_eq!(pulse.pulse.owner_id, owner);
                 assert_eq!(pulse.pulse.layer_id, None);
-                assert_eq!(pulse.pulse.audio_stamp.unwrap().end_sample, sample);
+                assert_eq!(pulse.pulse.audio_stamp().unwrap().end_sample, sample);
             }
         }).unwrap();
         trigger_delivery_tick(&mut engine);

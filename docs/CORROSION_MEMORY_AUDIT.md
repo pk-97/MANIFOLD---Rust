@@ -711,7 +711,7 @@ Commands, project snapshot, binary hashes, retained current executable, full log
 
 ## Source anchors
 
-Paths below are under `crates/manifold-renderer/src/` unless prefixed with `crates/`:
+Paths below are under `crates/manifold-nodes/src/` unless prefixed with `crates/`:
 
 - `generators/mesh_common.rs`: `MeshVertex` stride.
 - `node_graph/primitives/mesh_cut_map.rs`: `map_capacity`, `scratch_bytes`.

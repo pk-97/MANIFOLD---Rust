@@ -12,7 +12,7 @@ binary, NOT product code, NOT a workspace member. One commit, then stop for revi
   membership: add `[workspace]` empty table). Build:
   `cargo build --release --manifest-path "tools/rt_prototype/Cargo.toml"`
 - No edits anywhere outside `tools/rt_prototype/`.
-- Forbidden (design doc): integrating into manifold-renderer; building a denoiser;
+- Forbidden (design doc): integrating into manifold-nodes; building a denoiser;
   any material-system work.
 
 ## The binary
@@ -59,7 +59,7 @@ smallest triangle count to emissive (6,2,1)×20 so D4 gets exercised. Log which.
    upsample_lighting → shade_combine. Threadgroups 8x8.
 5. **MetalFX spatial** (mode C): amendment (review) — DEPEND on manifold-gpu (path dep;
    the prototype stays a standalone binary, own `[workspace]` table, no
-   manifold-renderer dependency) and reuse `manifold_gpu::GpuDevice` for device/queue
+   manifold-nodes dependency) and reuse `manifold_gpu::GpuDevice` for device/queue
    setup plus `manifold_gpu::metalfx::MetalFxSpatialScaler` directly, rather than
    reimplementing either. Raw MSL raytracing compile and the acceleration-structure
    API have no manifold-gpu equivalent, so those stay hand-rolled via objc2-metal
@@ -76,7 +76,7 @@ smallest triangle count to emissive (6,2,1)×20 so D4 gets exercised. Log which.
 7. **PNG writer**: `png` crate; on CPU from an rgba16f readback, apply the app's
    actual tonemap curve — amendment (review): do NOT invent an ACES-approx curve,
    replicate `aces_narkowicz_raw`/`tonemap_sdr`'s default branch from
-   `crates/manifold-renderer/src/effects/shaders/aces_tonemap_compute.wgsl` (cited
+   `crates/manifold-nodes/src/effects/shaders/aces_tonemap_compute.wgsl` (cited
    in `src/tonemap.rs`), then standard sRGB OETF (the app's own sRGB step happens
    implicitly via an `_sRGB`-tagged swapchain texture, which this offline PNG
    writer has no equivalent of — see `src/tonemap.rs` module doc for detail).

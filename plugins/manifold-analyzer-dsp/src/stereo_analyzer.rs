@@ -17,7 +17,7 @@
 //! display path. Correlation gets its own symmetric smoother because
 //! it wants a longer/steadier time constant than the peak-style curves.
 
-use crate::{MIN_DB, blackman_harris_window, ms_to_alpha};
+use crate::{MIN_DB, P2Quantile, blackman_harris_window, ms_to_alpha};
 use realfft::{RealFftPlanner, RealToComplex};
 use rustfft::num_complex::Complex;
 use std::sync::Arc;
@@ -49,8 +49,6 @@ pub struct StereoAnalyzer {
     // attacks register instantly while releases decay on a slower alpha.
     power_avg_mid: Vec<f32>,
     power_avg_side: Vec<f32>,
-    power_avg_l: Vec<f32>,
-    power_avg_r: Vec<f32>,
     attack_alpha: f32,
     release_alpha: f32,
     attack_ms: f32,
@@ -76,9 +74,9 @@ pub struct StereoAnalyzer {
     balance_smooth_ms: f32,
 
     mid_db: Vec<f32>,
+    median_db: Vec<f32>,
+    medians: Vec<P2Quantile>,
     side_db: Vec<f32>,
-    left_db: Vec<f32>,
-    right_db: Vec<f32>,
     left_balance_db: Vec<f32>,
     right_balance_db: Vec<f32>,
     correlation: Vec<f32>,
@@ -121,8 +119,6 @@ impl StereoAnalyzer {
             fft_out_r: vec![Complex::new(0.0, 0.0); out_len],
             power_avg_mid: vec![0.0; num_bins],
             power_avg_side: vec![0.0; num_bins],
-            power_avg_l: vec![0.0; num_bins],
-            power_avg_r: vec![0.0; num_bins],
             attack_alpha: 1.0,
             release_alpha: 1.0,
             attack_ms: 0.0,
@@ -137,9 +133,9 @@ impl StereoAnalyzer {
             balance_alpha: 1.0,
             balance_smooth_ms: 0.0,
             mid_db: vec![MIN_DB; num_bins],
+            median_db: vec![MIN_DB; num_bins],
+            medians: vec![P2Quantile::new(0.5); num_bins],
             side_db: vec![MIN_DB; num_bins],
-            left_db: vec![MIN_DB; num_bins],
-            right_db: vec![MIN_DB; num_bins],
             left_balance_db: vec![MIN_DB; num_bins],
             right_balance_db: vec![MIN_DB; num_bins],
             correlation: vec![0.0; num_bins],
@@ -190,13 +186,7 @@ impl StereoAnalyzer {
         &self.side_db
     }
 
-    pub fn latest_left_db(&self) -> &[f32] {
-        &self.left_db
-    }
-
-    pub fn latest_right_db(&self) -> &[f32] {
-        &self.right_db
-    }
+    pub fn latest_median_db(&self) -> &[f32] { &self.median_db }
 
     /// Symmetric-EMA smoothed L magnitude — no peak hold, tracks the
     /// current signal. Used by the L/R balance column so the displayed
@@ -221,17 +211,15 @@ impl StereoAnalyzer {
         self.samples_since_last_fft = 0;
         self.power_avg_mid.fill(0.0);
         self.power_avg_side.fill(0.0);
-        self.power_avg_l.fill(0.0);
-        self.power_avg_r.fill(0.0);
         self.corr_power_l.fill(0.0);
         self.corr_power_r.fill(0.0);
         self.corr_re_lr.fill(0.0);
         self.balance_power_l.fill(0.0);
         self.balance_power_r.fill(0.0);
         self.mid_db.fill(MIN_DB);
+        self.median_db.fill(MIN_DB);
+        self.medians.fill(P2Quantile::new(0.5));
         self.side_db.fill(MIN_DB);
-        self.left_db.fill(MIN_DB);
-        self.right_db.fill(MIN_DB);
         self.left_balance_db.fill(MIN_DB);
         self.right_balance_db.fill(MIN_DB);
         self.correlation.fill(0.0);
@@ -316,25 +304,16 @@ impl StereoAnalyzer {
             let re_lr = (l.re * r.re + l.im * r.im) * bin_norm_sq;
 
             // Asymmetric EMA for the four dB curves.
-            let (prev_m, prev_s, prev_l, prev_r) = (
-                self.power_avg_mid[bin],
-                self.power_avg_side[bin],
-                self.power_avg_l[bin],
-                self.power_avg_r[bin],
-            );
+            let prev_m = self.power_avg_mid[bin];
+            let prev_s = self.power_avg_side[bin];
             let a_m = if p_m > prev_m { attack_alpha } else { release_alpha };
             let a_s = if p_s > prev_s { attack_alpha } else { release_alpha };
-            let a_l = if p_l > prev_l { attack_alpha } else { release_alpha };
-            let a_r = if p_r > prev_r { attack_alpha } else { release_alpha };
             self.power_avg_mid[bin] = a_m * p_m + (1.0 - a_m) * prev_m;
             self.power_avg_side[bin] = a_s * p_s + (1.0 - a_s) * prev_s;
-            self.power_avg_l[bin] = a_l * p_l + (1.0 - a_l) * prev_l;
-            self.power_avg_r[bin] = a_r * p_r + (1.0 - a_r) * prev_r;
-
             self.mid_db[bin] = 10.0 * (self.power_avg_mid[bin] + 1e-24).log10();
             self.side_db[bin] = 10.0 * (self.power_avg_side[bin] + 1e-24).log10();
-            self.left_db[bin] = 10.0 * (self.power_avg_l[bin] + 1e-24).log10();
-            self.right_db[bin] = 10.0 * (self.power_avg_r[bin] + 1e-24).log10();
+            self.medians[bin].add(self.mid_db[bin]);
+            self.median_db[bin] = self.medians[bin].estimate().unwrap_or(MIN_DB);
 
             // Symmetric smoother for the correlation numerator +
             // denominator. Using a separate EMA from the curves lets
@@ -369,6 +348,35 @@ impl StereoAnalyzer {
             } else {
                 (self.corr_re_lr[bin] / denom_sq.sqrt()).clamp(-1.0, 1.0)
             };
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::Analyzer;
+    #[test]
+    fn live_and_reference_spectra_match_on_identical_transients() {
+        for rate in [44100.0, 48000.0] {
+            let size=2048;let hop=205;
+            let mut stereo=StereoAnalyzer::new(rate,size);
+            stereo.set_overlap_ratio(0.9);stereo.set_attack_release_ms(0.0,200.0);
+            let mut reference=Analyzer::new(rate,size);
+            reference.set_overlap_ratio(0.9);reference.set_attack_release_ms(0.0,200.0);
+            let mut expected=vec![MIN_DB;size/2+1];
+            for block in 0..48 {
+                let audio:Vec<_>=(0..hop).map(|i| {
+                    let t=(block*hop+i) as f32/rate;
+                    let amp=if block%7<2 {0.8}else{0.03};
+                    amp*(std::f32::consts::TAU*997.0*t).sin()
+                }).collect();
+                assert!(stereo.push_stereo(&audio,&audio));
+                reference.process_mono(&audio,|db|expected.copy_from_slice(db));
+                for (&live,&offline) in stereo.latest_mid_db().iter().zip(&expected) {
+                    if live > -90.0 || offline > -90.0 {assert!((live-offline).abs()<0.025,"{live} vs {offline}");}
+                }
+            }
         }
     }
 }

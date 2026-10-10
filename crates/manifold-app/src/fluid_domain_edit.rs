@@ -32,7 +32,8 @@ struct DomainBinding {
 /// owner's base value. Only editor geometry uses this projection; the viewport
 /// runtime receives the original graph and the owner's effective manifest.
 pub(crate) fn authored_def(project: &Project, target: &GraphTarget) -> Option<EffectGraphDef> {
-    let mut def = crate::graph_target::resolve(project, target)?.clone();
+    let resolved = crate::graph_target::resolve(project, target)?;
+    let mut def = (*resolved).clone();
     project_authored_params(&mut def, project, target)?;
     Some(def)
 }
@@ -620,7 +621,7 @@ mod tests {
     use manifold_editing::commands::graph::{ExposureSet, TemplateExposure};
 
     const GPU_FLIP_WATER: &str =
-        include_str!("../../manifold-renderer/assets/generator-presets/WaterDamBreakGpuFlip.json");
+        manifold_nodes::testkit::assets::ASSETS_GENERATOR_PRESETS_WATERDAMBREAKGPUFLIP_JSON;
 
     #[test]
     fn runtime_domain_bounds_hide_unaccepted_layouts_and_lock_driven_edits() {
@@ -856,8 +857,8 @@ mod tests {
         .with_world_metadata(metadata_for_node_type("node.physics_world"));
         command.execute(&mut project);
         assert!(command.was_applied(), "{:?}", command.rejection_reason());
-        let scene =
-            SceneVm::from_def(crate::graph_target::resolve(&project, &target).unwrap()).unwrap();
+        let resolved = crate::graph_target::resolve(&project, &target).unwrap();
+        let scene = SceneVm::from_def(&resolved).unwrap();
         let object_id = scene
             .objects
             .iter()
@@ -939,10 +940,9 @@ mod tests {
                 .get_base_param(&outer_id),
             3.0
         );
+        let resolved = crate::graph_target::resolve(&project, &target).unwrap();
         let node = node_at_scope(
-            &crate::graph_target::resolve(&project, &target)
-                .unwrap()
-                .nodes,
+            &resolved.nodes,
             &addr.scope_path,
             addr.node_doc_id,
         )
@@ -1000,8 +1000,8 @@ mod tests {
             .bindings
             .retain(|binding| binding.id != outer_id);
         let before = crate::graph_target::resolve(&project, &target)
-            .unwrap()
-            .clone();
+            .map(|graph| (*graph).clone())
+            .unwrap();
         let mut drag = FluidDomainDrag::begin(
             &project,
             layer_id.clone(),
@@ -1023,7 +1023,7 @@ mod tests {
         );
         command.undo(&mut project);
         assert_eq!(
-            crate::graph_target::resolve(&project, &target).unwrap(),
+            &*crate::graph_target::resolve(&project, &target).unwrap(),
             &before
         );
     }
@@ -1033,8 +1033,8 @@ mod tests {
         let (project, layer_id, object_id) = fluid_project(true);
         let target = GraphTarget::Generator(layer_id);
         let before = crate::graph_target::resolve(&project, &target)
-            .unwrap()
-            .clone();
+            .map(|graph| (*graph).clone())
+            .unwrap();
         let mut projected = authored_def(&project, &target).unwrap();
         let domain = find_node_by_stable_id_mut(
             &mut projected.nodes,
@@ -1057,7 +1057,7 @@ mod tests {
             1.5
         );
         assert_eq!(
-            crate::graph_target::resolve(&project, &target).unwrap(),
+            &*crate::graph_target::resolve(&project, &target).unwrap(),
             &before
         );
         assert!(gizmo_target_for(&SceneVm::from_def(&projected).unwrap(), object_id).is_some());

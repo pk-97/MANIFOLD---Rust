@@ -625,7 +625,7 @@ def process_snapshot():
     """
     try:
         result = subprocess.run(
-            ["lsof", "-n", "-P", "-FpcfnDi"],
+            ["lsof", "-n", "-P", "-FpcfnDit"],
             capture_output=True, text=True, timeout=20, check=False,
         )
     except (OSError, subprocess.TimeoutExpired):
@@ -645,7 +645,13 @@ def process_snapshot():
             return
         occupied.update((opened, *opened.parents))
         if "D" in record and "i" in record:
-            identities.add((int(record["D"], 16), int(record["i"])))
+            if record.get("t") != "PSXSEM":
+                identities.add((int(record["D"], 16), int(record["i"])))
+        elif record.get("t") == "PSXSEM":
+            # POSIX semaphore names are reported as absolute paths, but are
+            # kernel objects rather than filesystem paths.  Keep their path
+            # occupancy veto above while avoiding a filesystem identity lookup.
+            return
         else:
             # Some lsof file kinds omit inode fields. Resolve their pathname
             # when possible; missing local filesystem identity fails closed.
@@ -661,7 +667,7 @@ def process_snapshot():
                 record = {}
             if line[0] == "p":
                 pid = line[1:]
-            elif line[0] in ("f", "n", "D", "i"):
+            elif line[0] in ("f", "n", "D", "i", "t"):
                 record[line[0]] = line[1:]
         flush()
     except (OSError, RuntimeError, ValueError):
@@ -756,9 +762,9 @@ def _execute_cleanup(targets, repo, *, disk_path=None, reserve_bytes=0,
                      free_check=None, manifest=None, dry_run=False):
     """The sole deletion executor: registry, reservation, Cargo locks, then scan.
 
-    Direct app/test launches do not participate in Cargo's lock. Keep deps and
-    examples even in apparently idle slots: a process snapshot cannot exclude
-    a future open. Only rustc-owned metadata is eligible under the Cargo lock.
+    Direct app/test launches do not participate in Cargo's lock. Keep compiled
+    artifacts and the Cargo metadata needed to reuse them. Only known
+    incremental sessions are eligible under the Cargo lock.
     """
     roots = registered_worktrees(repo)
     if not roots:
@@ -808,8 +814,12 @@ def _execute_cleanup(targets, repo, *, disk_path=None, reserve_bytes=0,
             for kind, _mtime, path, entries, target in sorted(units):
                 if disk_path is not None and available >= reserve_bytes and sizes[target] <= cap_bytes:
                     continue
-                if path.relative_to(target).parts[1] in ("deps", "examples"):
-                    message = f"KEEP deps/examples in {target}: direct launches have no exclusion lock"
+                subtree = path.relative_to(target).parts[1]
+                if subtree != "incremental":
+                    if subtree in ("deps", "examples"):
+                        message = f"KEEP deps/examples in {target}: direct launches have no exclusion lock"
+                    else:
+                        message = f"KEEP Cargo metadata in {target}: only incremental sessions are reclaimable"
                     if message not in reported:
                         failures.append(message)
                         reported.add(message)

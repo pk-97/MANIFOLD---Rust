@@ -56,7 +56,11 @@ material effects.
 - **D5 — Reconstruct scattered radiance.** Independent transport samples feed
   dedicated raw-radiance history, capped at 64 frames while the scene is still.
   Camera, geometry, instances, material, lighting and environment changes reset
-  that history; disabling scattering resets it too. Two bounded spatial passes
+  that history; disabling scattering resets it too. Temporal-upscaling jitter
+  does not change the semantic camera identity. History is reprojected between
+  the current and previous jittered sample grids and point-loaded only after
+  screen bounds, exact instance/object identity, normal and surface-position
+  checks pass. Two bounded spatial passes
   use exact instance identity, depth and geometric normals to reduce residual noise.
   They never filter surface reflections or feed filtered radiance back into
   history. This supersedes the raw-per-frame presentation rejected by Peter on
@@ -138,6 +142,11 @@ scattering, −1 means invalid geometry or exhausted work. Raster reads only the
 matching object row and substitutes `weight * (1-metallic)`, with Fresnel energy
 reduction. Transparent/point draws cannot use this opaque depth result.
 
+The private reconstruction parameters are 224 bytes: current inverse projection,
+previous jittered projection and inverse projection, then size/reset/filter controls.
+History ping-pongs radiance, sample counts, exact normal/instance guides and depth
+together. Rejected history restarts at the current sample.
+
 Transport coefficients per channel, with colour `a`, phase `g`, radius `r`:
 `sigma_t = 1 / (r * (1 - a*g))`, `sigma_s = a*sigma_t`,
 `sigma_a = (1-a)*sigma_t`. The random walk chooses RGB hero channels uniformly
@@ -161,9 +170,9 @@ past each committed hit; rebasing on a rounded surface position can repeatedly
 hit the same triangle. Its finite support and diffusion approximation are intentional;
 thin features and low-albedo media should use RandomWalk.
 
-Cost: five full-resolution RGBA16F radiance textures, one RGBA32F
-normal/instance guide and two R16F history-count textures (60 bytes per pixel,
-about 119 MiB at 1080p), a 48-byte table row per opaque object, existing
+Cost: five full-resolution RGBA16F radiance textures, two RGBA32F
+normal/instance guides, two R32F depth histories and two R16F history-count
+textures (84 bytes per pixel, about 166 MiB at 1080p), a 48-byte table row per opaque object, existing
 acceleration maintenance, and
 per-pixel queries proportional to samples and scattering events. Diffusion
 still has a geometry-query cost; it is not free. Zero weight avoids the SSS

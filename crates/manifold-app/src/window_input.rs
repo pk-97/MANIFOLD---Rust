@@ -744,15 +744,18 @@ impl Application {
     }
 
     /// `MouseWheel` in the timeline/inspector window: perform-mode handoff, open-
-    /// dropdown scroll, then timeline zoom / pan / vertical scroll.
+    /// overlay scroll, then timeline zoom / pan / vertical scroll.
     pub(crate) fn primary_mouse_wheel(&mut self, is_primary: bool, delta: MouseScrollDelta) {
         if is_primary && self.perform_handle_mouse_wheel() {
             return;
         }
         if is_primary {
-            // When the dropdown is open, route scroll to the UIEvent
-            // pipeline so the dropdown can handle it.
-            if self.ws.ui_root.dropdown.is_open() {
+            // Modal pickers must receive the wheel before background scrolling
+            // is blocked. The overlay driver handles their viewport hit-test
+            // and schedules a redraw, just as it does for the dropdown.
+            if self.ws.ui_root.dropdown.is_open()
+                || self.ws.ui_root.background_input_blocked()
+            {
                 let (dx, dy) = normalize_scroll_delta(delta);
                 self.ws
                     .ui_root
@@ -791,13 +794,6 @@ impl Application {
                     .input
                     .process_scroll(self.cursor_pos, Vec2::new(dx, dy));
                 self.needs_rebuild = true;
-                return;
-            }
-
-            // A modal popup blocks direct viewport/inspector scrolling.
-            // Dropdown and dock scrolling are handled via the queued UIEvent
-            // pipeline above, which the overlay driver already gates.
-            if self.ws.ui_root.background_input_blocked() {
                 return;
             }
 
@@ -2903,6 +2899,51 @@ impl Application {
 mod tests {
     use super::*;
     use winit::dpi::PhysicalPosition;
+
+    #[test]
+    fn font_picker_receives_native_wheel_and_trackpad_scroll() {
+        use manifold_ui::node::Rect;
+        use manifold_ui::panels::browser_popup::ActionListOptions;
+
+        let mut app = Application::new();
+        let labels: Vec<String> = (0..100).map(|i| format!("Font {i:03}")).collect();
+        let actions = labels.iter().map(|label| {
+            manifold_ui::PanelAction::Params(ParamsAction::GenStringParamSelected(0, label.clone()))
+        }).collect();
+        app.ws.ui_root.open_action_list(
+            labels,
+            actions,
+            ActionListOptions {
+                empty_label: "No fonts match",
+                label_in_own_font: true,
+                current: Some(0),
+                ..Default::default()
+            },
+            Rect::new(100.0, 100.0, 100.0, 30.0),
+        );
+        app.ws.ui_root.build_overlays_for_screen(1280.0, 800.0);
+        let viewport = app.ws.ui_root.browser_popup.picker().unwrap().scroll.viewport();
+        app.cursor_pos = Vec2::new(viewport.x + 20.0, viewport.y + 20.0);
+        let timeline_y = app.ws.ui_root.viewport.scroll_y_px();
+        for delta in [
+            MouseScrollDelta::LineDelta(0.0, -3.0),
+            MouseScrollDelta::PixelDelta(PhysicalPosition::new(0.0, -45.0)),
+        ] {
+            let before = app.ws.ui_root.browser_popup.picker().unwrap().scroll.scroll_offset();
+            app.ws.ui_root.overlay_dirty = false;
+            app.primary_mouse_wheel(true, delta);
+            let events = app.ws.ui_root.input.drain_events();
+            assert_eq!(events.len(), 1, "native scrolling must reach the popup");
+            let mut actions = Vec::new();
+            assert!(app.ws.ui_root.route_overlay_event(&events[0], &mut actions));
+            assert!(actions.is_empty());
+            assert!(app.ws.ui_root.overlay_dirty, "scrolling must schedule a repaint");
+            app.ws.ui_root.tree.clear();
+            app.ws.ui_root.build_overlays_for_screen(1280.0, 800.0);
+            assert!(app.ws.ui_root.browser_popup.picker().unwrap().scroll.scroll_offset() > before);
+            assert_eq!(app.ws.ui_root.viewport.scroll_y_px(), timeline_y);
+        }
+    }
 
     // Pins the scroll-normalization rule the three former call sites (primary
     // scroll, open-dropdown scroll, editor zoom) now share. A regression here

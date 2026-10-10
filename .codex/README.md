@@ -67,13 +67,27 @@ file-scope checked. Keep task ownership and review responsibilities in briefs.
 
 ## Execution budget
 
-Recognized direct Cargo checks and the required `gpu_proofs_gate.py` remain
-available as focused checks without a per-command attempt cap. Retries still
-need changed code, new evidence, or explicit user direction. Broad Cargo
-checks, nightly/feature sweeps, perf soaks and other recognized visual/GPU probe
-scripts need a bounded exception. Common env/build-lock wrappers are
-recognized. Required checks run inside `land_branch.py` and `landing_gate.py`
-remain unchanged.
+Script costs come from `scripts/dev.py`'s `COST_CLASSES` table, checked by
+`scripts/test_dev.py` and displayed in `scripts/TOOLS.md`. `unit` means cheap
+local work; `focused` covers bounded checks and required landing orchestration;
+`broad` requires a bounded exception. Filenames containing render, snapshot or
+gpu_proofs do not determine cost. Python `test_*.py` scripts default to unit;
+explicit entries take precedence (`test_census.py` runs Cargo and is focused).
+
+Unknown scripts under a `scripts/` directory fail closed as broad until their
+cost is declared. Unknown scripts outside it, including lane drafts such as
+`crate-move-drafts/snapshot_stage.py`, default to unit. Known script names retain
+their declared cost wherever invoked. The hook does not inspect arbitrary
+script bodies or observe their subprocesses: drafts that invoke Cargo or probes
+must still obey the budget. Visible shell chains and supported env/build-lock,
+`dev.py` and `gpu_queue.py --` wrappers preserve the inner command's cost.
+
+Focused Cargo checks and scoped `gpu_proofs_gate.py` runs remain available
+without an attempt cap; `gpu_proofs_gate.py --all` is broad. Workspace-wide or
+unscoped Cargo checks, nightly/feature sweeps, perf soaks, app renders and
+declared GPU/visual probes need a bounded exception. Retries still need changed
+code, new evidence, or explicit user direction. Required checks run inside
+`land_branch.py` and `landing_gate.py` remain unchanged.
 
 The lead can register an exact broad or visual command for 1–3 attempts (default
 one), expiring after 30 minutes. Permits are project-scoped so the desktop hook
@@ -101,14 +115,13 @@ definition with `/hooks`.
 Supported Cargo build-driving commands and the repository's build gate scripts
 perform an admission check before they execute. The check accepts only the
 `target` directory of a registered Git worktree and keeps a 50 GiB free-space
-reserve. Below the reserve, admission first reclaims stale regenerable caches
-(incremental sessions oldest first, then other recognized cache directories)
-that no running process holds; it never touches fixtures, logs or reports under
+reserve. Below the reserve, admission reclaims stale known incremental sessions
+that no running process holds, oldest first; it never touches fixtures, logs or reports under
 `target/`. Cleanup validates registered worktree targets under the pool reservation
 and holds Cargo's profile `.cargo-lock` from inventory through deletion. Busy
-profiles are skipped. `deps/` and `examples/` artifacts are preserved: direct
-app/test launches do not share an exclusion lock, so an idle process snapshot
-cannot make their deletion safe. If the reserve still cannot be met, the build
+profiles are skipped. Compiled artifacts stay protected because direct app/test
+launches have no exclusion lock. Their Cargo fingerprint/build metadata stays
+with them so Cargo can reuse them. If the reserve still cannot be met, the build
 is refused. Each slot also has a soft cache target
 (`MANIFOLD_SLOT_TARGET_CAP_GIB`, default 160 GiB); reclamation runs only under
 reserve or cap pressure, and protected contents may exceed the cap. Admission

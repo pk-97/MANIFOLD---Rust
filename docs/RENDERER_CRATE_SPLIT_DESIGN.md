@@ -1,6 +1,6 @@
 # Renderer Crate Split — one engine crate, node families as leaves
 
-**Status:** IN PROGRESS · P0, P1a, P1 and P2 landed · P3–P4 owed · P5 awaits Peter. Section 5 (Phasing).
+**Status:** IN PROGRESS · Tier 1 and post-T1 production cleanup shipped · P1 boundary landed; baseline measured · P5 authorized and pending. Section 5 (Phasing).
 **Prerequisites:** none.
 **Work items:** epic BUG-hkbdp (renderer crate split epic); phases BUG-jo1qt (P0 census and seams), BUG-k452g (P1a ui-paint), BUG-9hndn (P1 carve manifold-node-engine), BUG-vnbdt (P2 leaves), BUG-uones (P3 catalog), BUG-l6ltu (P4 review and measurement), BUG-t2jwg (P5 water seam). Status is recorded only above.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs) before any phase. Lead: Opus 5.5. Lanes: Astra (Codex) for every mechanical phase (Peter, 2026-10-07: *"please use Astra agents for this work"*); this overrides `feedback_astra_review_only` for this campaign only. Lanes make one commit then stop; the lead lands.
@@ -24,11 +24,11 @@ Companion docs: `PHYSICS_ENGINE_BOUNDARY_DESIGN.md` (owns the physics graph-adap
 | Piece | Where | State |
 |---|---|---|
 | Crate size | `crates/manifold-renderer`: 487,842 lines of Rust, 53% of the workspace (next: app 120,894). `node_graph/` 361k; `node_graph/primitives/` 199k in 455 flat files; `preset_runtime/` 25k; root files 36k. 3,406 `#[test]` in `src/`; 45 integration test binaries (67k lines) in `tests/` | SPLIT |
-| Rebuild cost after touching one primitive (`primitives/vignette.rs`, warm target, `CARGO_BUILD_JOBS=4`, measured this session) | lib 5.1s · lib test binary 57.7s (255 CPU-s) · app 38.1s | The test binary is the cost. Baseline for P4's after-measurement |
+| Rebuild cost after touching one primitive (`primitives/vignette.rs`, warm target, `CARGO_BUILD_JOBS=4`, measured this session) | lib 5.1s · lib test binary 57.7s (255 CPU-s) · app 38.1s | Historical pre-T1 measurement. Peter skipped the P4 after-measurement; the later post-T1 baseline below records its own method and cache configuration |
 | Node registration | `node_graph/primitive.rs:1276` `macro_rules! primitive` — 91 `$crate::` paths, zero bare `crate::` inside the macro body; expands to `inventory::submit!` (`:1408`, `:1421`). `persistence.rs:216` `register_builtin` iterates `inventory::iter::<PrimitiveFactory>`; `descriptor.rs:206`, `param_doc.rs:33` collect the same way | EXISTS — cross-crate registration needs no engine change |
 | Other `inventory::iter` consumers | `catalog_gen.rs:181,755`, `validation.rs:2226`, `palette.rs:99,131`, `ports.rs:754` | Work unchanged as long as the family crates are linked (D6) |
 | Engine core → primitives, non-test | `rg 'primitives::' node_graph/{execution,graph_loader,validation,effect_node}.rs node_graph/freeze` outside tests: `wgsl_compute` (freeze/install.rs:854), `render_scene::rt_proof::RtProbeScene` (effect_node.rs:1386, `cfg(feature="gpu-proofs")`), `liquid_frame::{WHITEWATER_INPUTS,WHITEWATER_OUTPUTS}` (graph_loader.rs:805), `liquid_stats`/`gpu_flip_preset` re-exports (node_graph/mod.rs:102–103) | The cheap seams — P0 cuts them |
-| Engine front door → families, non-test (`scripts/crate_closure.py seams`, landed with this doc; its family table encodes D2 and D11) | 230 sites / 109 edges. By target: `scene_modifier_expand` 61, `physics` 19, `scene_viewport` 18, `fluid` 12, `physics_events` 9, `liquid` 7, `fluid_role` 7, `generators` 7, `render_scene` 4, primitive items (`Gain`, `Mix`, `Blur`, …) 12. By source: `preset_runtime` 66, `metal_backend` 36, `primitive.rs` 25, `execution` 22, `graph_loader` 19. Counted separately because D2 keeps them in the hub: scene **vocabulary** reaches (`depth_rule` 17, `live_extent` 11, `material` 11, `camera` 8, `light`/`transform`/`mesh_source`/`scene_object` 7 each) and `layer_skin` 9 | physics/fluid/liquid adapters and the viewport session are the P5 seam (D9); the rest are P0's cheap cuts (D10) |
+| Engine front door → families, non-test (pre-split seam census, retired after Tier 1; its family table encoded D2 and D11) | 230 sites / 109 edges. By target: `scene_modifier_expand` 61, `physics` 19, `scene_viewport` 18, `fluid` 12, `physics_events` 9, `liquid` 7, `fluid_role` 7, `generators` 7, `render_scene` 4, primitive items (`Gain`, `Mix`, `Blur`, …) 12. By source: `preset_runtime` 66, `metal_backend` 36, `primitive.rs` 25, `execution` 22, `graph_loader` 19. Counted separately because D2 keeps them in the hub: scene **vocabulary** reaches (`depth_rule` 17, `live_extent` 11, `material` 11, `camera` 8, `light`/`transform`/`mesh_source`/`scene_object` 7 each) and `layer_skin` 9 | physics/fluid/liquid adapters and the viewport session are the P5 seam (D9); the rest are P0's cheap cuts (D10) |
 | Transitive closure of the engine core (session prototype `closure.py`, same re-derivation) | 177 units, 253k lines including tests: core 60k + scene vocabulary + `scene_modifier_expand` 13.7k + `fluid`/`liquid`/`physics`/`matter` 32k + every water primitive (pulled by `node_graph/liquid/`, 46 `primitives::` refs) + `render_scene` 13.5k (pulled by `gltf_import`, family→family) + `generators/` shared helpers 2.8k. Outside the closure: 371 primitive files 135k, 16 node_graph units 9k, 24 root units 15k | The closure IS the v1 hub minus the cheap cuts; the outside IS the v1 leaves |
 | Load-time family migrations in the engine | `graph_loader.rs`: `migrate_gltf_anim_v2` :330, `migrate_gltf_ao_mask` :693, `wire_liquid_intervals` :702, `wire_liquid_frame_cursor` :775, `wire_retained_whitewater` :804, `wire_gpu_flip_grid` :846, `wire_blob_bounds` :1000, `retire_params` :1065 | Eight family passes in the hub — D5 |
 | Runtime family glue | `preset_runtime/`: `physics_*` 13 production modules + 10 test modules, `gpu_flip_surface.rs`, `scene_impulses.rs`, `scene_viewport.rs` (89), `math_view.rs` (562) + `math_view_events.rs` (282), `modifier_preview.rs`, `modifier_runtime.rs`. `physics_*` names no primitive (`rg 'primitives::' preset_runtime/physics*` → 0); it depends on `manifold-physics`/`manifold-fluids` types and `node_graph::{physics,fluid}` adapters | Hub-resident in v1 by D2; P5 decides what leaves |
@@ -45,6 +45,28 @@ Companion docs: `PHYSICS_ENGINE_BOUNDARY_DESIGN.md` (owns the physics graph-adap
 | Path-keyed tooling | `scripts/*.py` 20 files name `manifold-renderer` (test_landing_gate 34, feature_matrix 8, dev.py 8, landing_gate 6, cpu_scope 6, gpu_scope 4, gpu_proofs_gate 2…); `.config/nextest.toml` 16; `docs/*.md` 101 files name `crates/manifold-renderer/src`; memory 5 files | The sweep inventory, re-derived per phase: `rg -l 'manifold[-_]renderer' scripts .config .claude docs` |
 | Concurrent work (2026-10-07 11:00 AEDT) | slot-7 `feat/godfile-trim`: uncommitted edits in `freeze/codegen/{entry_points,mod,types}.rs`, `preset_runtime/mod.rs`, `preset_runtime/tests/`. slot-8 `feat/nightly-gate`: scripts only. `feat/test-warmup`: landed. Nobody in `primitives/` | P1 waits for slot-7; P1a and P0 do not |
 | Precedents | `manifold-physics`, `manifold-fluids`: engine crates already extracted, renderer depends on them (the direction this design extends); `manifold-foundation` (UI-reachable shared types); Wave 1–3 pure-move landings | Shape every new crate like these |
+
+Post-T1 baseline (2026-10-09, `b3e492e63`): a warm local-variable rename in
+`crates/manifold-nodes-image/src/node_graph/primitives/vignette.rs` took **3.6s**
+to rebuild the image library, **13.2s** to build its library test binary, and
+**9.3s** to rebuild the app. Each configuration was warmed first; the commands
+ran serially with `CARGO_BUILD_JOBS=4`, `CARGO_INCREMENTAL=0`, configured sccache,
+and default features. In order: `cargo build -p manifold-nodes-image --lib`,
+`cargo test -p manifold-nodes-image --lib vignette --no-run`, and
+`cargo build -p manifold-app --bin manifold`. The test command only compiled.
+The source was restored byte-for-byte afterward. Initial warmups took
+59.5s / 45.0s / 51.0s and are excluded from the edit timings. These shared-Mac
+measurements establish a current baseline, not an isolated speedup against the
+historical touch-only measurement. The local record and full command arguments
+are in `~/.cache/manifold/post-t1-baseline/warm-edit.json`.
+
+The same cleanup's landing passed all 48 checks in about **39 minutes**, with
+**zero GPU queue wait**. Test builds took 243s and proof builds 214.5s; selected
+default tests took 23.2s. GPU proof execution took 1467.8s, including 30 liquid
+proofs at 992.4s. The required broad selection followed shared engine and Metal
+backend changes; this is not the expected cost of an ordinary leaf-node edit.
+The existing landing timing log records the individual legs under
+`codex/wgsl-metadata-ownership` at `2026-10-09T12:17:32Z`.
 
 Classification: **exists** — registration, census oracles, move gate, byte snapshot, device lock, crate precedents. **One wire away** — the testkit feature, the catalog crate's link lines, the layering test. **Genuinely new** — zero runtime systems. D5's migration registry reuses the `inventory` pattern that already serves four registries; it is a fifth row, not a new mechanism. Zero-new-systems test: passes.
 
@@ -165,7 +187,7 @@ Common to every phase: one Astra lane per phase or sub-phase in its own slot wor
 
 - **Entry:** main at or after `7c3de26c5`. `slot-7` state irrelevant (P0 touches none of its files except `graph_loader.rs`, which it does not hold).
 - **Read-back:** sections 1, 2 (D5, D10, D11), 4. Restate the D10 list and the three census oracles.
-- **Deliverables:** `scripts/crate_closure.py` with `closure` and `seams` modes (promote this session's prototypes; `dev.py` verb `crate-closure`, `TOOLS.md` regenerated) and `scripts/test_census.py` (verb `test-census`); `move_identity_check.py` allowlist extension + self-test cases; `GraphMigration` (D5) with its order test; the D10 cuts (a)–(h), each its own commit with the tests the touched module already has; `builtins.rs` (D11); the findings file `.claude/orchestration/crate-split-seams.md` (D10 outcomes, D11 verification, P5 items). The compiler-derived inventory comes from P1's first stage, not a throwaway carve: doing the carve twice buys nothing.
+- **Deliverables:** the pre-split closure/seam census (retired after Tier 1; implementation preserved in git) and `scripts/test_census.py` (verb `test-census`); `move_identity_check.py` allowlist extension + self-test cases; `GraphMigration` (D5) with its order test; the D10 cuts (a)–(h), each its own commit with the tests the touched module already has; `builtins.rs` (D11); the findings file `.claude/orchestration/crate-split-seams.md` (D10 outcomes, D11 verification, P5 items). The compiler-derived inventory comes from P1's first stage, not a throwaway carve: doing the carve twice buys nothing.
 - **Gate:** `cargo nextest run -p manifold-renderer -E 'test(graph_loader) | test(migration) | test(builtins) | test(freeze::markers)'` green; INV-3, INV-4, INV-5 baselines recorded in the findings file (counts and the exact commands); `scripts/test_dev.py` green (new verbs registered); LiveSchool round-trip green in the main checkout.
 - **Demo:** none — L1.
 - **Forbidden:** creating the real `manifold-node-engine` crate; moving any file; "while I'm here" edits in `graph_loader.rs` beyond the eight call replacements; widening any visibility.
@@ -201,8 +223,8 @@ Common to every phase: one Astra lane per phase or sub-phase in its own slot wor
 ### P3 — The catalog, and `manifold-renderer` is gone
 
 - **Entry:** P2a–c landed. `manifold-renderer` now holds: bins, `assets/`, `bundled_presets`, `generators/registry.rs` + `bundled_generator_presets.rs`, cross-family tests. (The water primitives and adapters are in `manifold-node-engine` after P1 per D9, not here.) ⚠ VERIFY-AT-IMPL: `fd -e rs . crates/manifold-renderer/src | wc -l` and list; anything not in this sentence is an escalation.
-- **Deliverables:** `crates/manifold-nodes` per D1 and D6; `assets/` moved; the `PresetAssetsRoot` registration moves from `manifold-renderer` to `manifold-nodes` with the assets; bins moved; cross-family tests folded; `crates/manifold-renderer` deleted; workspace members updated; every remaining `manifold-renderer`/`manifold_renderer` string in `scripts/`, `.config/`, `.claude/`, `docs/` resolved (re-derive: `rg -l 'manifold[-_]renderer' scripts .config .claude docs crates`) — zero hits is the deletion gate; BUG-yd6b (fold per-file test binaries into one per crate) closed.
-- **Gate:** INV-1 through INV-7; full `scripts/landing_gate.py`; `scripts/feature_matrix.py` (every moved feature builds); `rg -l 'manifold[-_]renderer' …` → 0 outside `docs/archive/` and git history.
+- **Deliverables:** `crates/manifold-nodes` per D1 and D6; `assets/` moved; the `PresetAssetsRoot` registration moves from `manifold-renderer` to `manifold-nodes` with the assets; bins moved; cross-family tests folded; `crates/manifold-renderer` deleted; workspace members updated; every remaining live `manifold-renderer`/`manifold_renderer` reference in `scripts/`, `.config/`, `.claude/`, `docs/` resolved (re-derive: `rg -l 'manifold[-_]renderer' scripts .config .claude docs crates`) — zero live references is the deletion gate; BUG-yd6b (fold per-file test binaries into one per crate) closed.
+- **Gate:** INV-1 through INV-7; full `scripts/landing_gate.py`; `scripts/feature_matrix.py` (every moved feature builds); `rg -l 'manifold[-_]renderer' …` → 0 live references; historical descriptions (including this design and its generated index entry), archived docs, committed replay plans and git history retain the source crate name.
 - **Demo:** L3 — full flow suite, count match; plus the two P1 preset renders at threshold 0.
 
 ### P4 — Surface review, measurement, docs
@@ -213,6 +235,8 @@ Common to every phase: one Astra lane per phase or sub-phase in its own slot wor
 - **Demo:** none — L1. The measurement is the artifact.
 
 ### P5 — The water seam (Tier 2; Opus lead with the consult seat; brief authored from P0's findings)
+
+The P0 closure/seam census assumed the monolithic renderer layout and was retired after Tier 1. Re-derive the current reaches from `manifold-node-engine::{runtime,exec,load,water}`; the historical findings are context, not a current dependency inventory.
 
 - **Entry:** P4 landed; `PHYSICS_ENGINE_BOUNDARY` P1 landed (its transaction and deny rows); the findings file's P5 section (every hub→{liquid, fluid, physics, matter, whitewater, gpu_flip_*} site by file:line, from the compiler).
 - **What it decides (not decided here, by design):** the `PresetRuntime` extension seam for physics sources, the `substeps`↔`liquid` clock contract (owned by the live sim clock design — coordinate, don't amend), whether `scene_modifier_expand` follows. Mechanism constraint already fixed: registration through `inventory`, like D5; no new shared state; no trait object constructed per frame. The phase ends with `manifold-nodes-water` existing per D1, the hub free of `physics`/`fluids` dependencies (layering row flips), and INV-9's trace clean.

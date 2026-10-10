@@ -163,8 +163,9 @@ chain-fusion worker and sent to the content thread). Inside the views, today's l
 the chain state-cache eviction, `EFFECT_CHAIN_LIFECYCLE.md`). Fix the at-cap refresh nit
 (`install.rs:258,291,462`) in the same phase: `m.len() < CAP || m.contains_key(&key)`.
 Migration is compiler-driven: change the cache value type and the struct fields, follow the
-errors; the canonical bundled-preset views (loaded once, genuinely session-lived) may stay
-`&'static` — the seam is the FUSED artifacts only.
+errors. This phase left canonical bundled-preset views unchanged. Post-T1 cleanup
+extends `Arc` ownership to canonical views and parsed definitions because catalog
+reloads replace them; see `FREEZE_COMPILER_MAP.md` section 8.
 *Rejected: raising the cap — doesn't remove the class. Rejected: evicting leaked values — eviction
 can't reclaim a leak; ownership has to change first, which is the whole point.*
 Consequences, stated honestly: this touches the type that threads through chain building
@@ -178,7 +179,7 @@ is editing-time (cache hit at rebuild), never per-frame.
 
 | Invariant | Enforcement |
 |---|---|
-| Every marker byte on the wire is produced/consumed by `freeze/markers.rs` | Negative gate: `rg '"// @' crates/manifold-renderer/src --type rust` returns hits ONLY in `markers.rs` (test `marker_literals_live_in_one_module`, a `std::process`-free source scan like `every_boundary_atom_declares_its_reason`) |
+| Every marker byte on the wire is produced/consumed by `freeze/markers.rs` | Negative gate: `rg '"// @' crates/manifold-nodes/src --type rust` returns hits ONLY in `markers.rs` (test `marker_literals_live_in_one_module`, a `std::process`-free source scan like `every_boundary_atom_declares_its_reason`) |
 | `Marker::parse(m.emit()) == Some(m)` for every variant | Round-trip property test in `markers.rs` (`marker_roundtrip_every_variant`) |
 | Marker refactor changes zero emitted bytes | P1 gate: WGSL snapshot equality over every bundled preset's fused defs, before/after (`fused_wgsl_snapshot_unchanged`) |
 | A Pending segment key resolves within the deadline or negative-caches visibly | `segment_pending_expires_to_refused` (unit test on the expiry fn with an injected `now`) |
@@ -194,14 +195,14 @@ Forbidden across all phases: any change to the fuse DECISION model (structural, 
 settled) · any new thread/lock/`Arc<Mutex>` · fuse-for-parity (converting an atom by bundling
 neighbors) · silent fallback beyond the existing render-unfused contract · trusting `classify.rs`
 doc comments over code (known drift, map header) · landing with a red freeze suite.
-GPU-touching phases (P4–P6) run their gates via plain `cargo test -p manifold-renderer --features
+GPU-touching phases (P4–P6) run their gates via plain `cargo test -p manifold-nodes --features
 gpu-proofs <module>` (never nextest); every phase runs the freeze suite
-`cargo test -p manifold-renderer --lib node_graph::freeze` + scoped clippy; full sweep at landing
+`cargo test -p manifold-nodes --lib node_graph::freeze` + scoped clippy; full sweep at landing
 per GIT_TREE_DISCIPLINE.
 
 - **P1 — `freeze/markers.rs` (D1).** Deliverables: the module (enum + emit/parse + roundtrip
   test), all emit/parse sites rewritten through it (inventory in section 1 — re-derive with
-  `rg '"// @' crates/manifold-renderer/src` at execution; if counts differ from section 1, stop and list),
+  `rg '"// @' crates/manifold-nodes/src` at execution; if counts differ from section 1, stop and list),
   `marker_literals_live_in_one_module`, `fused_wgsl_snapshot_unchanged`. Gate: freeze suite green;
   snapshot test proves byte-identical emission; negative gate zero stray literals. Demo: none — L1
   (pure refactor proven by snapshot).
@@ -294,7 +295,7 @@ per GIT_TREE_DISCIPLINE.
   would collapse a gather pair's endpoints into one region) so the two components stay separate and
   connect via the SAME cross-region gather the multi-region model already relies on. Mirrored into
   the two other copies of the union loop (`explain_presets`, the `component_build_results` test
-  helper) so they don't drift from the real algorithm. Gate: `cargo test -p manifold-renderer
+  helper) so they don't drift from the real algorithm. Gate: `cargo test -p manifold-nodes
   --features gpu-proofs` (1559 passed, 8 pre-existing failures unchanged — 6 synthetic
   `codegen::gpu_tests` + 2 prewarm-cache, verified identical on the pre-P6 HEAD via `git stash`) +
   `--lib` (1221 passed) + scoped clippy clean; `refusal_census_matches_classify_node` lockstep
@@ -311,9 +312,9 @@ per GIT_TREE_DISCIPLINE.
 - **P7 — cache ownership (D5).** Deliverables: Arc-valued caches, owned view interiors, LRU
   eviction, the `freeze_has_no_leaks` negative gate, eviction unit test. Seam brief applies
   (standard section 6): re-derive the consumer inventory with
-  `rg "&'static LoadedPresetView|&'static SegmentView|&'static EffectGraphDef" crates/manifold-renderer/src`
+  `rg "&'static LoadedPresetView|&'static SegmentView|&'static EffectGraphDef" crates/manifold-nodes/src`
   at execution time; compiler-driven migration (change the type, follow the errors); misfit sites
-  escalate, never adapt. Gate: freeze suite + full `-p manifold-renderer --lib`; negative gate.
+  escalate, never adapt. Gate: freeze suite + full `-p manifold-nodes --lib`; negative gate.
   Demo: none — L1 (behavior-identical by construction; the observable is the negative gate).
 
 Phase-completeness: every section 2 decision lands in exactly one phase (D1→P1, D2→P2, D4→P3+P5+P6 with
@@ -329,7 +330,8 @@ this list.
 4. `BufferIndex` externals never union across domain (D3).
 5. Table/String params are boundary by nature, not debt (D4).
 6. `MAX_VIRTUAL_CHAIN=1` is correct — the 4^depth recompute cliff is real (D4).
-7. Canonical bundled-preset views stay `&'static`; only fused artifacts move to Arc (D5).
+7. D5 covered fused artifacts. Post-T1 cleanup also gives canonical catalog views
+   `Arc` ownership so obsolete reload generations can be freed.
 8. The companion Sonnet sweep's items are out of this doc's scope and vice versa.
 
 ## 6. Deferred

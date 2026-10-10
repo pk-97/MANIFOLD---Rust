@@ -1035,7 +1035,7 @@ impl TimelineViewportPanel {
 
     /// Screen-space geometry for every visible automation lane strip (P4,
     /// `docs/AUTOMATION_LANES_DESIGN.md` section 7): one [`AutomationLaneScreen`] per
-    /// lane, in the same "geometry here, GPU draw in manifold-renderer" split
+    /// lane, in the same "geometry here, GPU draw in manifold-nodes" split
     /// as [`Self::visible_clip_rects`] / [`Self::timeline_overlays`]. Empty
     /// whenever `set_automation_lanes` was last called with no data (i.e.
     /// automation mode is off — this panel never checks the flag itself).

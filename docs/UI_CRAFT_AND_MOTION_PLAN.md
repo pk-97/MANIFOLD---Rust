@@ -37,7 +37,7 @@ escalation, not a guess.
 | Duplicate scrollbar token families | `color.rs:209,239` vs `color.rs:749-751` | Two sets, different values |
 | Comment-synced text tokens | `color.rs:627,630` (`TEXT_PRIMARY_C32`, `TEXT_DIMMED_C32` — "section A: synced w/") | Drift waiting; alias instead |
 | Timeline scrollbar | `panels/viewport.rs` (draw side) | Square thumb; generic `scroll_container.rs:34` already supports `corner_radius` |
-| Clip rendering | `manifold-renderer/src/clip_draw.rs` (GPU SDF body) | Rounded top (CLIP_RADIUS 4), square-cornered name strip bottom; ring at body radius |
+| Clip rendering | `manifold-nodes/src/clip_draw.rs` (GPU SDF body) | Rounded top (CLIP_RADIUS 4), square-cornered name strip bottom; ring at body radius |
 | Layer seam composition | `color.rs:896` `CLIP_VERTICAL_PAD 6` + `:233` `TRACK_SEPARATOR_HEIGHT 2` | Visible inter-layer boundary = fuzzy multi-edge band; header column groove is crisp 2px |
 | Graph auto-layout (Sugiyama) | `crates/manifold-ui/src/graph_canvas/layout.rs:251` (`auto_layout`), `:234` (`request_relayout`, **Cmd+L**, undoable, persists `editor_pos`) | Built, correct, feedback-aware. Bundled presets ship pre-layout hand positions, so it never benefits them |
 | Wire drawing | `graph_canvas/render.rs:1155-1205` | Cubic bezier + `skip_bump` + feedback return arc; no under-node avoidance |
@@ -212,10 +212,10 @@ Peter eyeballs taste-tagged items.
 - **Gate (positive):** `anim.rs` unit tests (progress, retarget mid-flight, snap,
   transient lifecycle, flip offsets); Peter feels hover/drawer in the running app.
   **(negative):**
-  `rg -n "AnimF32" crates/manifold-renderer crates/manifold-app/src/content*` → 0 hits ·
+  `rg -n "AnimF32" crates/manifold-nodes crates/manifold-app/src/content*` → 0 hits ·
   `rg -n "Arc<Mutex|thread::spawn" crates/manifold-ui/src/anim.rs` → 0 hits.
 - **Forbidden:** timer threads; a global animation registry; animating anything in
-  manifold-renderer; easing library dependency; touching content-thread code at all.
+  manifold-nodes; easing library dependency; touching content-thread code at all.
 
 ### P2 — Motion patterns + snap + juice
 - **Entry:** P1 merged; ⚠ confirm final overshoot %/magnet radius with Peter
@@ -279,7 +279,7 @@ Peter eyeballs taste-tagged items.
   divergence (`ui-snap graph` borderless vs `editor` cyan-bordered — one is
   unintended; find the style fork, unify, report which).
 - **Gate (positive):** `ui-snap graph --preset <3 presets>` + `editor` before/after
-  PNGs; `cargo test -p manifold-renderer --lib bundled_presets` (preset JSONs
+  PNGs; `cargo test -p manifold-nodes --lib bundled_presets` (preset JSONs
   changed — required per repo rule). **(negative):** re-bake touches ONLY
   `editor_pos` fields: `git diff --stat` on preset JSONs shows no wire/param changes
   (`rg -n '"wires"|"params"' <(git diff)` → 0 hits).
@@ -319,7 +319,7 @@ Peter eyeballs taste-tagged items.
   one shadow scale proposal for Peter.
 - **Gate:** new scenes render in CI; ratchet catches a deliberately-broken token in
   a dry run (prove the trap springs). Single `cargo test -p manifold-ui -p
-  manifold-renderer --lib` sweep + `cargo clippy --workspace -- -D warnings`.
+  manifold-nodes --lib` sweep + `cargo clippy --workspace -- -D warnings`.
 - **Forbidden:** fixing audit findings in-phase (they're the next plan's input);
   golden images from a dirty tree.
 

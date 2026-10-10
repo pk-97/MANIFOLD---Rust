@@ -24,7 +24,7 @@ rules; `ADDING_PRIMITIVES.md` (codegen path, proofs); `MANIFOLD_GPU_ARCHITECTURE
 
 ## 1. Audit — what exists (verified 2026-10-06)
 
-Survey run: `rg 'purpose: "' crates/manifold-node-engine/src/{primitives,water/primitives}/ crates/manifold-nodes-{image,scene}/src/node_graph/primitives/ crates/manifold-renderer/src/node_graph/primitives/ -g "*.rs"`,
+Survey run: `rg 'purpose: "' crates/manifold-node-engine/src/{primitives,water/primitives}/ crates/manifold-nodes-{image,scene}/src/node_graph/primitives/ crates/manifold-nodes/src/node_graph/primitives/ -g "*.rs"`,
 plus `rg -il 'ocean|tessendorf|jonswap|phillips'` over code, presets and docs (zero hits:
 no ocean exists). Nearest reference preset read end to end: `MetallicGlass.json`
 (grid → push → make_triangles → render). Peter called that look dated; it is a wiring
@@ -167,7 +167,7 @@ Speed (time multiplier) and Foam (threshold) are preset parameter bindings, fann
 to the atoms.
 
 **D11 — Assets: Poly Haven CC0, one cliff scan, one ocean HDRI.** They live under the
-gitignored `crates/manifold-renderer/tests/fixtures/` (gltf/, hdri/), referenced by string
+gitignored `crates/manifold-nodes/tests/fixtures/` (gltf/, hdri/), referenced by string
 binding defaults. Each file's name, URL and size is logged in section 8. Shipped presets
 have no relative-path resolution for bundled assets. That is a `decision` bead for
 Peter (a bundled asset library), not a blocker tonight.
@@ -307,7 +307,7 @@ coc/bokeh → motion_blur → filmic, as on the Sea Wall cinematic pass.
    row's two side-edge vertices land within 1% of R, or the whole screen is water, or the
    grid collapses, as section 3.3 says.
 7. **The FFT stays behind manifold-gpu.** Enforcement: `rg 'MPSGraph|objc2_metal_performance'
-   crates/manifold-renderer` returns zero hits.
+   crates/manifold-nodes` returns zero hits.
 8. **The paddle is replayed per tick from its wire, never by Reset.** Enforcement:
    `preset_runtime::physics_sampling::tests::ocean_cliff_paddle_is_replayed_per_tick`
    loads OceanCliff.json and checks that the paddle's LFO, transform and collider role and

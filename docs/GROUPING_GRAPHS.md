@@ -266,9 +266,9 @@ function; a throwaway integration test that reads both JSON files, flattens, and
 sets is ~80 lines and runs in milliseconds (pure CPU, no GPU).
 
 **Then the runtime gates:**
-- `cargo run -p manifold-renderer --bin check-presets` — every preset loads, flattens, and
+- `cargo run -p manifold-nodes --bin check-presets` — every preset loads, flattens, and
   compiles. Sub-second.
-- `cargo test -p manifold-renderer --lib bundled_generator_presets` (or `bundled_presets` for
+- `cargo test -p manifold-nodes --lib bundled_generator_presets` (or `bundled_presets` for
   effects) — builds the chain, resolves bindings, and **executes one frame on the real Metal
   backend.** This is the only gate that catches WGSL/binding errors that surface only at first
   execute (`check-presets` does not run a frame).
@@ -291,7 +291,7 @@ structure. Author there; don't expect groups to survive a round trip through a l
 
 ## 9. Worked example — Fluid Sim 2D
 
-`crates/manifold-renderer/assets/generator-presets/FluidSimulation.json` — 57 flat nodes
+`crates/manifold-nodes/assets/generator-presets/FluidSimulation.json` — 57 flat nodes
 reorganized into ten top-level boxes:
 
 - Top level (the visible feedback loop): `Inputs → Spawn Particles → Particle State → Move
@@ -304,7 +304,7 @@ reorganized into ten top-level boxes:
 - 36 top-level wires. Verified flatten-equivalent to the pre-grouping graph; passes check-presets
   (46/46) and the generator one-frame-execute test.
 
-[Glitch.json](../crates/manifold-renderer/assets/effect-presets/Glitch.json) is the simpler
+[Glitch.json](../crates/manifold-nodes/assets/effect-presets/Glitch.json) is the simpler
 reference (three flat groups, no nesting).
 
 ---

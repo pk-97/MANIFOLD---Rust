@@ -62,6 +62,7 @@ type SpaceMap = Option<AHashMap<(u32, String), ElementSpace>>;
 /// arbiter of whether a given region pays; this only avoids emitting no-ops.
 const MIN_REGION_LEN: usize = 2;
 
+manifold_core::testkit_visible! {
 /// How a graph node participates in fusion, resolved once per node.
 ///
 /// `pub(crate)` (with [`classify_node`]) since GRAPH_TOOLING_DESIGN P3's
@@ -69,7 +70,7 @@ const MIN_REGION_LEN: usize = 2;
 /// exact same classification `partition_regions` grows regions from, never
 /// a second implementation.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum NodeClass {
+pub(crate) enum NodeClass {
     /// A same-element-space atom that folds into a fused kernel: a pointwise /
     /// coincident atom threading its input register(s), or a Source generator
     /// producing the region's head value from position. Writes one texture output.
@@ -79,6 +80,7 @@ pub enum NodeClass {
     /// resolution/scale override, a non-scalar param, or a control-wired param.
     /// Boundaries stay their own dispatch and bound the regions around them.
     Boundary,
+}
 }
 
 /// One member of a fusion region: its def node-id and each texture input
@@ -1017,6 +1019,7 @@ fn cycle_contains_array(start: u32, def: &EffectGraphDef, registry: &PrimitiveRe
     false
 }
 
+manifold_core::testkit_visible! {
 /// Construct a primitive for a def node and apply the node's CONFIGURED state —
 /// its `wgsl_source` (so a fragment-form `node.wgsl_compute` reparses its declared
 /// ports/params and reports its `fusion_kind()` / `wgsl_body()`) and its param
@@ -1025,7 +1028,7 @@ fn cycle_contains_array(start: u32, def: &EffectGraphDef, registry: &PrimitiveRe
 /// freeze classifier, finder, and codegen must see the SAME shape the live loader
 /// ([`instantiate_def`](crate::node_graph::graph_loader::instantiate_def)) builds —
 /// mirroring its `set_wgsl_source` then param-override + `reconfigure` order.
-pub fn configured_construct(
+pub(crate) fn configured_construct(
     registry: &PrimitiveRegistry,
     node: &EffectGraphNode,
 ) -> Option<Box<dyn crate::exec::effect_node::EffectNode>> {
@@ -1042,6 +1045,7 @@ pub fn configured_construct(
     let params = configured_params(boxed.as_ref(), node);
     boxed.reconfigure(&params);
     Some(boxed)
+}
 }
 
 /// A node's params as the runtime seeds them: every declared default,
@@ -1160,13 +1164,14 @@ fn cut_reference_cache_boundary(node: &EffectGraphNode, def: &EffectGraphDef) ->
     false
 }
 
+manifold_core::testkit_visible! {
 /// Classify one node. `Eligible` requires *every* gate to pass; any failure —
 /// including "the registry doesn't know this type" — is a `Boundary`.
 ///
 /// `pub(crate)`: `graph_tool fusion`'s report module calls this directly per
 /// node (GRAPH_TOOLING_DESIGN P3) to explain *why* a node sits outside every
 /// region — reusing this exact function rather than re-deriving the verdict.
-pub fn classify_node(
+pub(crate) fn classify_node(
     node: &EffectGraphNode,
     def: &EffectGraphDef,
     registry: &PrimitiveRegistry,
@@ -1488,6 +1493,7 @@ pub fn classify_node(
         _ => NodeClass::Boundary,
     }
 }
+}
 
 /// Validate the declared dense equivalent of an element schedule. Its omitted
 /// ports must be optional arrays that affect scheduling only, never values.
@@ -1513,10 +1519,10 @@ pub(crate) fn dense_buffer_fusion(
 /// atom has no body, or a token's param value isn't a scalar it can bake.
 /// Enum/Bool/Int params bake as `u32` literals (the token comparison form the
 /// specialized pipelines use); Float bakes as a decimal literal.
-pub(crate) fn substituted_body(
-    n: &dyn crate::exec::effect_node::EffectNode,
+pub(crate) fn substituted_body<'a>(
+    n: &'a dyn crate::exec::effect_node::EffectNode,
     node: &EffectGraphNode,
-) -> Option<std::borrow::Cow<'static, str>> {
+) -> Option<std::borrow::Cow<'a, str>> {
     use crate::parameters::ParamValue;
     use manifold_core::effect_graph_def::SerializedParamValue;
 
@@ -1697,13 +1703,14 @@ fn classify_buffer_node(
     NodeClass::Eligible
 }
 
+manifold_core::testkit_visible! {
 /// Assemble a [`Region`] from a connected component's node set, or `Err` naming
 /// the first v1 expressibility gate it failed (too short, multi-output, or an
 /// unresolvable input — all left unfused). The reason string feeds the
 /// refusal census: a component can union cleanly and STILL not fuse,
 /// and without the reason that reads as a convexity bug (Watercolor's tail did,
 /// 2026-06-11 — see the element-space gate below).
-pub fn build_region(
+pub(crate) fn build_region(
     def: &EffectGraphDef,
     registry: &PrimitiveRegistry,
     nodes: &[u32],
@@ -2420,6 +2427,7 @@ pub fn build_region(
         output_capacity,
     })
 }
+}
 
 /// The element space of `id`'s (single) texture output in the unfused plan —
 /// [`ElementSpace::Canvas`] when the node is unknown, has no texture output,
@@ -2544,11 +2552,12 @@ fn input_port_access(registry: &PrimitiveRegistry, node: &EffectGraphNode, port:
     }
 }
 
+manifold_core::testkit_visible! {
 /// Whether wire `w` is consumed COINCIDENTALLY by its target (a register-threaded
 /// read) rather than GATHERED (the target samples it at a coord it computes).
 /// Only coincident-consumed wires union two atoms into one region — see
 /// `partition_regions`.
-pub fn wire_coincident_consumed(
+pub(crate) fn wire_coincident_consumed(
     def: &EffectGraphDef,
     registry: &PrimitiveRegistry,
     w: &EffectGraphWire,
@@ -2558,7 +2567,9 @@ pub fn wire_coincident_consumed(
     };
     !input_port_access(registry, to, &w.to_port).is_gather()
 }
+}
 
+manifold_core::testkit_visible! {
 /// Nodes with a directed path to a `final_output` node, over ALL wires (texture
 /// and control alike). A region output's downstream consumer must be in this set:
 /// the executor only allocates an output texture some live node reads, and the
@@ -2571,7 +2582,7 @@ pub fn wire_coincident_consumed(
 /// (which also roots at `aliased_array_io` sims): a node we mark live here is
 /// always allocated, and an exotic live-but-not-final node only makes us skip the
 /// region (unfused), never miscompile.
-pub fn final_reachable_nodes(def: &EffectGraphDef) -> AHashSet<u32> {
+pub(crate) fn final_reachable_nodes(def: &EffectGraphDef) -> AHashSet<u32> {
     // Reverse adjacency (consumer → producers), so a backward BFS from every
     // final_output node visits exactly the nodes that can reach it.
     let mut rev: AHashMap<u32, Vec<u32>> = AHashMap::default();
@@ -2598,6 +2609,7 @@ pub fn final_reachable_nodes(def: &EffectGraphDef) -> AHashSet<u32> {
         }
     }
     live
+}
 }
 
 /// Whether wire `w` is a CONTROL wire — it drives a scalar param port of its

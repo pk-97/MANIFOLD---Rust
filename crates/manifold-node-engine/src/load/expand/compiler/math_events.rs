@@ -2,11 +2,13 @@
 use super::super::SceneModifierNodeRoute;
 use super::*;
 
-pub fn resource_node_id(modifier: &NodeId, target: &SceneNodeRef, role: &str) -> NodeId {
+manifold_core::testkit_visible! {
+pub(crate) fn resource_node_id(modifier: &NodeId, target: &SceneNodeRef, role: &str) -> NodeId {
     let mut parts = vec!["math_view", modifier.as_str(), role];
     parts.extend(target.scope.iter().map(NodeId::as_str));
     parts.push(target.node.as_str());
     namespace::namespace_node_id(&parts)
+}
 }
 pub(crate) fn sample_node_id(modifier: &NodeId, target: &SceneNodeRef) -> NodeId {
     let mut parts = vec!["math_view", modifier.as_str()];

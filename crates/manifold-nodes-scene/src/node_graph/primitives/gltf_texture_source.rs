@@ -3,9 +3,8 @@
 //! mesh's baked-in albedo/alpha map can feed `node.render_scene`'s
 //! `base_color_map_N`.
 //!
-//! File I/O + the channel repack (`gltf_load::load_gltf_texture`) happen
-//! on a background thread (`std::thread::spawn` + `mpsc::channel`), same
-//! pattern as `node.image_folder` / `node.gltf_mesh_source`, so the
+//! File I/O and image decoding/repacking happen
+//! on bounded reusable CPU workers with shared decode jobs, so the
 //! content thread never stalls on a multi-megabyte glTF parse. The last
 //! successfully decoded image stays resident on its own source texture;
 //! a stretch-blit compute kernel resamples it into the chain-allocated
@@ -20,12 +19,14 @@ use std::cell::RefCell;
 use std::sync::{mpsc, Arc, Weak};
 
 use ahash::AHashMap;
+#[cfg(all(test, feature = "gpu-proofs"))]
 use sha2::{Digest, Sha256};
 
 use manifold_gpu::{GpuBinding, GpuSamplerDesc};
 
 use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
-use crate::node_graph::gltf_load::load_gltf_texture;
+mod texture_jobs;
+use texture_jobs::{DecodedTexture, LoadReceiver};
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
 
@@ -165,13 +166,15 @@ manifold_node_engine::primitive! {
         // Dimensions of `source_texture`.
         src_w: u32 = 0,
         src_h: u32 = 0,
-        // Background loader channel. `Some` means a decode is in
-        // flight; we don't spawn another until it returns.
-        pending_load: Option<mpsc::Receiver<Result<(u32, u32, Vec<u8>, [u8; 32]), String>>> = None,
+        // A changed selection drops the old receiver, so only the current
+        // selection can publish a background result.
+        pending_load: Option<LoadReceiver> = None,
+        // Saturated queues retry without allocation and stay warmup-pending.
+        load_deferred: bool = false,
         // A decoded-but-not-yet-uploaded result, handed off from the
         // drain step to the upload step (texture creation needs the
         // GPU device, which only `run()`'s `ctx` has).
-        pending_upload: Option<(u32, u32, Vec<u8>, [u8; 32])> = None,
+        pending_upload: Option<Arc<DecodedTexture>> = None,
         // Whether `source_texture` currently reflects the last decode.
         uploaded: bool = false,
         // Identity of the `out` texture the level-0 blit + mip chain were
@@ -253,7 +256,7 @@ impl Primitive for GltfTextureSource {
         // gate-review fix): the same latent race exists here, masked only
         // by glb-embedded textures decoding faster than the 50ms-paced
         // stability window.
-        self.pending_load.is_some() || self.pending_upload.is_some()
+        self.load_deferred || self.pending_load.is_some() || self.pending_upload.is_some()
     }
 
     fn warmup_pending(&self) -> bool {
@@ -264,8 +267,8 @@ impl Primitive for GltfTextureSource {
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         // 1. Params.
         let path = match ctx.params.get("path") {
-            Some(ParamValue::String(s)) => s.as_str().to_owned(),
-            _ => String::new(),
+            Some(ParamValue::String(s)) => s.as_str(),
+            _ => "",
         };
         let texture_index = match ctx.params.get("texture_index") {
             Some(ParamValue::Float(n)) => n.round().max(0.0) as i32,
@@ -274,9 +277,10 @@ impl Primitive for GltfTextureSource {
 
         // 2. Re-trigger a background decode if the effective selection
         // changed since the last one we started.
-        let key = (path.clone(), texture_index);
-        if key != self.last_key && self.pending_load.is_none() {
-            self.last_key = key;
+        if path != self.last_key.0 || texture_index != self.last_key.1 {
+            self.last_key = (path.to_owned(), texture_index);
+            self.pending_load = None;
+            self.load_deferred = !path.is_empty();
             self.source_texture = None;
             self.source_content_key = None;
             self.src_w = 0;
@@ -287,27 +291,21 @@ impl Primitive for GltfTextureSource {
             self.converted_output = None;
             self.converted_key = None;
             self.awaiting_canonical = false;
-            if !path.is_empty() {
-                let path_buf = std::path::PathBuf::from(&path);
-                let (tx, rx) = mpsc::channel();
-                std::thread::spawn(move || {
-                    let decoded =
-                        load_gltf_texture(&path_buf, texture_index as u32).map(|(w, h, rgba)| {
-                            let rgba8_sha256: [u8; 32] = Sha256::digest(&rgba).into();
-                            (w, h, rgba, rgba8_sha256)
-                        });
-                    let _ = tx.send(decoded);
-                });
-                self.pending_load = Some(rx);
-            }
+        }
+        if self.load_deferred {
+            self.pending_load = texture_jobs::request(path, texture_index as u32);
+            self.load_deferred = self.pending_load.is_none();
         }
 
         // 3. Drain any completed background decode.
         if self.pending_load.is_some() {
             let rx = self.pending_load.take().unwrap();
             match rx.try_recv() {
-                Ok(Ok((w, h, rgba, rgba8_sha256))) => {
-                    self.pending_upload = Some((w, h, rgba, rgba8_sha256));
+                Ok(Ok(decoded)) => {
+                    if let Some(warning) = &decoded.warning {
+                        log::error!("node.gltf_texture_source: {warning}");
+                    }
+                    self.pending_upload = Some(decoded);
                     self.uploaded = false;
                 }
                 Ok(Err(e)) => {
@@ -327,7 +325,8 @@ impl Primitive for GltfTextureSource {
         // read here (rather than cached) so it always reflects the
         // param at the moment of upload.
         let mut fresh_upload = false;
-        if let Some((w, h, rgba, rgba8_sha256)) = self.pending_upload.take() {
+        if let Some(decoded) = self.pending_upload.take() {
+            let (w, h) = (decoded.width, decoded.height);
             let color_space = match ctx.params.get("color_space") {
                 Some(ParamValue::Enum(v)) => *v,
                 _ => 0,
@@ -337,7 +336,7 @@ impl Primitive for GltfTextureSource {
             } else {
                 manifold_gpu::GpuTextureFormat::Rgba8Unorm
             };
-            self.upload_source_texture(ctx, w, h, format, rgba8_sha256, &rgba);
+            self.upload_source_texture(ctx, w, h, format, decoded.rgba8_sha256, &decoded.rgba);
             self.src_w = w;
             self.src_h = h;
             self.uploaded = true;
@@ -761,7 +760,7 @@ mod tests {
 /// decodes in a live project hits `run()` step 7's
 /// `self.pipeline.get_or_insert_with(...)` as a cache hit rather than
 /// compiling the blit shader on the content thread. Run deliberately:
-/// `cargo test -p manifold-renderer --features gpu-proofs
+/// `cargo test -p manifold-nodes-scene --features gpu-proofs
 /// node_graph::primitives::gltf_texture_source::gpu_tests`.
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
@@ -1023,7 +1022,7 @@ mod gpu_tests {
         assert_eq!(rgba.len(), (w * h * 4) as usize);
         prim.last_key = (String::new(), 0);
         let rgba8_sha256: [u8; 32] = Sha256::digest(&rgba).into();
-        prim.pending_upload = Some((w, h, rgba, rgba8_sha256));
+        prim.pending_upload = Some(Arc::new(DecodedTexture { width: w, height: h, rgba, rgba8_sha256, warning: None }));
     }
 
     #[test]

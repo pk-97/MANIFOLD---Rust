@@ -20,7 +20,7 @@
 //! Validates the topology builds cleanly through `Graph::connect`'s
 //! port-type matching. Each wire crosses an Array(Particle) or
 //! Array(vec2<f32>) or Array(u32) or Texture2D boundary that the
-//! [`manifold_renderer::node_graph::ports::PortType::Array`] variant has to
+//! [`manifold_nodes::node_graph::ports::PortType::Array`] variant has to
 //! authorise — if anything in the macro / port-type / validation
 //! chain regresses, this test catches it.
 

@@ -62,8 +62,9 @@ pub(crate) struct BodyGate<'a> {
     pub live: u32,
 }
 
+manifold_core::testkit_visible! {
 /// The bodies a step couples into its solve, and what their passes read.
-pub struct Bodies<'a> {
+pub(crate) struct Bodies<'a> {
     pub lattice: [u32; 3],
     pub lattice_min: [f32; 3],
     pub cell_size: f32,
@@ -82,6 +83,7 @@ pub struct Bodies<'a> {
     /// impulse while it stays on its supports (D16), as `pose_bodies` writes
     /// it.
     pub mobility: &'a GpuBuffer,
+}
 }
 
 #[repr(C)]
@@ -111,13 +113,15 @@ struct Pipelines {
     poison: GpuComputePipeline,
 }
 
+manifold_core::testkit_visible! {
 /// The passes' pipelines and their partial sums and per-body sums.
 #[derive(Default)]
-pub struct BodyPasses {
+pub(crate) struct BodyPasses {
     pipelines: Option<Pipelines>,
     partials: Option<GpuBuffer>,
     sums: Option<GpuBuffer>,
     clock_plan: Option<GpuBuffer>,
+}
 }
 
 fn records(n: [u32; 3]) -> u64 {
@@ -169,8 +173,9 @@ impl BodyPasses {
         }
     }
 
+manifold_core::testkit_visible! {
     /// Build the passes' pipelines; the owning node calls this at install.
-    pub fn prepare_pipelines(&mut self, device: &GpuDevice) {
+    pub(crate) fn prepare_pipelines(&mut self, device: &GpuDevice) {
         if self.pipelines.is_none() {
             self.pipelines = Some(Self::pipelines(device));
         }
@@ -180,19 +185,23 @@ impl BodyPasses {
             self.clock_plan = Some(plan);
         }
     }
+}
 
-    pub fn set_clock_plan(&mut self, plan: &GpuBuffer) {
+manifold_core::testkit_visible! {
+    pub(crate) fn set_clock_plan(&mut self, plan: &GpuBuffer) {
         self.clock_plan = Some(plan.clone());
     }
+}
 
     fn clock_binding(&self) -> GpuBinding<'_> {
         buffer(15, self.clock_plan.as_ref().expect("body clock plan prepared"))
     }
 
+manifold_core::testkit_visible! {
     /// Allocate the sums once and the partials for `count` bodies on
     /// lattice `n`, growing them when a larger lattice or more bodies
     /// arrive. The pipelines come from `prepare_pipelines` at install.
-    pub fn prepare(&mut self, device: &GpuDevice, n: [u32; 3], count: u32) -> Result<(), String> {
+    pub(crate) fn prepare(&mut self, device: &GpuDevice, n: [u32; 3], count: u32) -> Result<(), String> {
         assert!(self.pipelines.is_some(), "body pipelines built by prepare_pipelines at install");
         let need = partial_bytes(n, count);
         if self.partials.as_ref().is_none_or(|p| p.size < need) {
@@ -204,6 +213,7 @@ impl BodyPasses {
         }
         Ok(())
     }
+}
 
     /// The last impulse's sums record per body, for the value proofs.
     #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
@@ -307,10 +317,11 @@ impl BodyPasses {
         Ok(())
     }
 
+manifold_core::testkit_visible! {
     /// Inside a conjugate gradient iteration: the bodies' share of the
     /// operator on the search direction `direction`, added to `s`, over the
     /// solver's fine active `tiles`.
-    pub fn apply<S: Sink>(
+    pub(crate) fn apply<S: Sink>(
         &self,
         enc: &mut S,
         bodies: &Bodies<'_>,
@@ -320,6 +331,7 @@ impl BodyPasses {
     ) -> Result<(), String> {
         self.apply_on(enc, bodies, tiles, direction, s, None)
     }
+}
 
     /// [`Self::apply`] on the solve's gate: a round the stop switched off,
     /// or an inactive clock slot, runs none of its three passes.
@@ -367,10 +379,11 @@ impl BodyPasses {
         Ok(())
     }
 
+manifold_core::testkit_visible! {
     /// After the projection, as the engine finishes its pressure stage: the
     /// pressure's impulse into `reaction` and its velocity change into the
     /// solid velocity (`solid_rw`, the same buffer as `bodies.solid`).
-    pub fn react(
+    pub(crate) fn react(
         &self,
         enc: &mut GpuEncoder,
         bodies: &Bodies<'_>,
@@ -395,6 +408,7 @@ impl BodyPasses {
         );
         Ok(())
     }
+}
 }
 
 /// Why a step's dynamic bodies are refused, or None: every body's owner code

@@ -6,6 +6,8 @@
 //! per-frame evaluation) lands in subsequent steps.
 
 use ahash::{AHashMap, AHashSet};
+use std::borrow::Cow;
+use std::collections::hash_map::Entry;
 
 use crate::exec::effect_node::{EffectNode, NodeInstanceId, NodeWire, ParamValues};
 use crate::parameters::ParamValue;
@@ -96,11 +98,12 @@ pub struct Graph {
     next_id: u32,
     /// Stable handle → node id map for V2 user-exposed parameters.
     /// Populated only by [`Graph::add_node_named`] — anonymous nodes
-    /// added via [`Graph::add_node`] don't appear here. Handles are
-    /// `&'static str` (set at effect construction); user bindings on
-    /// disk store the same string and look up the live id at apply
-    /// time. See `docs/EFFECT_RUNTIME_UNIFICATION.md` section 7.
-    handles: AHashMap<&'static str, NodeInstanceId>,
+    /// added via [`Graph::add_node`] don't appear here. Handles use borrowed
+    /// static strings for fixed effect construction and owned strings for
+    /// names loaded or generated at runtime. User bindings on disk store the
+    /// same string and look up the live id at apply time. See
+    /// `docs/EFFECT_RUNTIME_UNIFICATION.md` section 7.
+    handles: AHashMap<Cow<'static, str>, NodeInstanceId>,
     /// Bumped when a param write changes some node's
     /// [`EffectNode::force_consumed_outputs`] result (e.g. `render_scene`'s
     /// `rt_enabled`/`temporal_upscale` toggles). The compiled
@@ -142,13 +145,16 @@ impl Graph {
         self.modifier_buffer_budget = Some(budget);
     }
 
-    pub fn modifier_buffer_budget(&self) -> Option<&crate::load::expand::PreparedModifierBufferBudget> {
+manifold_core::testkit_visible! {
+    pub(crate) fn modifier_buffer_budget(&self) -> Option<&crate::load::expand::PreparedModifierBufferBudget> {
         self.modifier_buffer_budget.as_ref()
     }
+}
 
+manifold_core::testkit_visible! {
     /// Hold a source selector or admitted mode at its prepared value. This
     /// policy is installed only after construction defaults have been applied.
-    pub fn protect_prepared_param(&mut self, id: NodeInstanceId, name: &str) -> Result<(), GraphError> {
+    pub(crate) fn protect_prepared_param(&mut self, id: NodeInstanceId, name: &str) -> Result<(), GraphError> {
         let inst = self.nodes.get(&id).ok_or(GraphError::NodeNotFound(id))?;
         let expected = inst.params.get(name).ok_or_else(|| GraphError::ParamNotFound {
             node: id, param: name.into(),
@@ -159,6 +165,7 @@ impl Graph {
         }
         Ok(())
     }
+}
 
     fn prepared_param_allows(&mut self, id: NodeInstanceId, name: &str, value: &ParamValue) -> bool {
         let Some(guard) = self.prepared_params.get_mut(&id)
@@ -208,23 +215,28 @@ impl Graph {
     /// Naming convention is up to the effect author: `"uv_transform"`,
     /// `"feedback"`, `"mix"`, etc. Handles must be unique within the
     /// graph — passing a duplicate handle panics. This is a programming
-    /// error (the developer wrote the same literal twice), not user
-    /// error, so it's loud at construction time.
+    /// error (the graph contains the same handle twice), not user error, so
+    /// it's loud at construction time.
     ///
     /// Renames go through `EffectNodeAliasMetadata` in `manifold-core`;
     /// the resolver translates saved bindings on load.
     pub fn add_node_named(
         &mut self,
-        handle: &'static str,
+        handle: impl Into<Cow<'static, str>>,
         node: Box<dyn EffectNode>,
     ) -> NodeInstanceId {
         let id = self.add_node(node);
-        if let Some(prev) = self.handles.insert(handle, id) {
-            panic!(
-                "Graph::add_node_named: duplicate handle '{handle}' \
-                 (already mapped to {prev:?}, just tried to remap to {id:?}). \
-                 Handles must be unique within a graph."
-            );
+        match self.handles.entry(handle.into()) {
+            Entry::Vacant(entry) => {
+                entry.insert(id);
+            }
+            Entry::Occupied(entry) => panic!(
+                "Graph::add_node_named: duplicate handle '{}' \
+                 (already mapped to {:?}, just tried to remap to {id:?}). \
+                 Handles must be unique within a graph.",
+                entry.key(),
+                entry.get(),
+            ),
         }
         id
     }
@@ -263,10 +275,7 @@ impl Graph {
     }
 
     /// Look up a node id by its stable handle. Returns `None` if no
-    /// node was added with that handle (or if the handle has been
-    /// retired — handles are not removed when their node is, since
-    /// `remove_node` is rare and keeping the old mapping doesn't
-    /// break anything).
+    /// node was added with that handle or if its node was removed.
     pub fn node_id_by_handle(&self, handle: &str) -> Option<NodeInstanceId> {
         self.handles.get(handle).copied()
     }
@@ -294,9 +303,11 @@ impl Graph {
             .map(|inst| inst.id)
     }
 
-    pub fn coupled_scenes(&self) -> &[CoupledScene] {
+manifold_core::testkit_visible! {
+    pub(crate) fn coupled_scenes(&self) -> &[CoupledScene] {
         &self.coupled_scenes
     }
+}
 
     pub(crate) fn add_coupled_scene(
         &mut self,
@@ -354,26 +365,9 @@ impl Graph {
         Some((first?, second?))
     }
 
-    /// Register a handle for a node that was added via plain
-    /// [`add_node`]. Used by ChainSpec snapshot construction where the
-    /// splice function adds nodes anonymously and the handle map
-    /// (effect-local, returned in `SpliceResult`) needs to be projected
-    /// onto the snapshot graph so the editor inspector can match
-    /// outer-routing handle names against `NodeSnapshot.node_handle`.
-    ///
-    /// Panics on duplicate handle, same as [`add_node_named`].
-    pub fn register_handle(&mut self, handle: &'static str, node: NodeInstanceId) {
-        if let Some(prev) = self.handles.insert(handle, node) {
-            panic!(
-                "Graph::register_handle: duplicate handle '{handle}' \
-                 (already mapped to {prev:?}, just tried to remap to {node:?})."
-            );
-        }
-    }
-
     /// Iterate the (handle, node id) pairs registered on this graph.
-    pub fn handles(&self) -> impl Iterator<Item = (&'static str, NodeInstanceId)> + '_ {
-        self.handles.iter().map(|(k, v)| (*k, *v))
+    pub fn handles(&self) -> impl Iterator<Item = (&str, NodeInstanceId)> + '_ {
+        self.handles.iter().map(|(k, v)| (k.as_ref(), *v))
     }
 
     /// Remove a node and any wires that touch it. Returns the removed
@@ -892,11 +886,15 @@ mod tests {
     #[test]
     fn add_then_remove_node_clears_wires_touching_it() {
         let mut g = Graph::new();
-        let a = g.add_node(Box::new(TestNode::new(
-            "a",
-            vec![],
-            vec![output("out", PortType::Texture2D)],
-        )));
+        let a = g.add_node_named(
+            String::from("owned-source"),
+            Box::new(TestNode::new(
+                "a",
+                vec![],
+                vec![output("out", PortType::Texture2D)],
+            )),
+        );
+        assert_eq!(g.node_id_by_handle("owned-source"), Some(a));
         let b = g.add_node(Box::new(TestNode::new(
             "b",
             vec![input("in", PortType::Texture2D, true)],
@@ -907,7 +905,23 @@ mod tests {
 
         g.remove_node(a);
         assert!(g.get_node(a).is_none());
+        assert_eq!(g.node_id_by_handle("owned-source"), None);
+        assert!(!g.handles().any(|(handle, _)| handle == "owned-source"));
         assert_eq!(g.wires().len(), 0); // wire was cleaned up
+    }
+
+    #[test]
+    #[should_panic(expected = "duplicate handle 'same'")]
+    fn add_node_named_rejects_duplicate_borrowed_and_owned_handles() {
+        let mut g = Graph::new();
+        g.add_node_named(
+            "same",
+            Box::new(TestNode::new("first", vec![], vec![])),
+        );
+        g.add_node_named(
+            String::from("same"),
+            Box::new(TestNode::new("second", vec![], vec![])),
+        );
     }
 
     #[test]

@@ -25,11 +25,11 @@ pub(crate) fn library_baseline(
     let Some(metadata) = &local.preset_metadata else {
         return Ok(None);
     };
-    let Some(recipe) = manifold_renderer::node_graph::bundled_preset_def(&metadata.id) else {
+    let Some(recipe) = manifold_nodes::bundled_presets::bundled_preset_def(&metadata.id) else {
         return Ok(None);
     };
     manifold_nodes_scene::node_graph::scene_modifier_authoring::initialize_scene_modifier_graph(
-        owner, recipe,
+        owner, &recipe,
     )
     .map(Some)
     .map_err(|error| error.to_string())
@@ -43,9 +43,8 @@ pub(crate) fn export_def(project: &Project, target: &GraphTarget) -> Option<Effe
         return None;
     };
     let owner = project.graph_target_owner(target)?;
-    let outer = crate::graph_target::resolve(project, target.host_target()?)?
-        .preset_metadata
-        .as_ref()?;
+    let owner_graph = crate::graph_target::resolve(project, target.host_target()?)?;
+    let outer = owner_graph.preset_metadata.as_ref()?;
     let mut def = crate::graph_target::resolve(project, target)?.clone();
     let local = def.preset_metadata.as_mut()?;
     for spec in &mut local.params {
@@ -128,8 +127,8 @@ mod tests {
             "VortexFragments",
         ] {
             let recipe =
-                manifold_renderer::node_graph::bundled_preset_def(&PresetTypeId::new(id)).unwrap();
-            let local = manifold_nodes_scene::node_graph::scene_modifier_authoring::initialize_scene_modifier_graph(&owner, recipe).unwrap();
+                manifold_nodes::bundled_presets::bundled_preset_def(&PresetTypeId::new(id)).unwrap();
+            let local = manifold_nodes_scene::node_graph::scene_modifier_authoring::initialize_scene_modifier_graph(&owner, &recipe).unwrap();
             assert!(!has_graph_mod(&owner, &local), "fresh {id}");
             let mut edited = local.clone();
             edited.nodes[0].title = Some("Edited local graph".into());
@@ -148,11 +147,11 @@ mod tests {
         let host = project.graph_target_owner_mut(&target).unwrap();
         let graph = host.graph.as_mut().unwrap();
         let recipe =
-            manifold_renderer::node_graph::bundled_preset_def(&PresetTypeId::new("SurfacePeel"))
+            manifold_nodes::bundled_presets::bundled_preset_def(&PresetTypeId::new("SurfacePeel"))
                 .unwrap();
-        *graph.scene_modifiers[0].graph = recipe.clone();
+        *graph.scene_modifiers[0].graph = (*recipe).clone();
         let baseline = crate::graph_target::catalog_default(&project, &target).unwrap();
-        assert_eq!(target.graph_in(&baseline).unwrap(), recipe);
+        assert_eq!(target.graph_in(&baseline).unwrap(), recipe.as_ref());
         let host = project.graph_target_owner_mut(&target).unwrap();
         host.params.get_mut("outer_a").unwrap().base = 0.1;
         let graph = host.graph.as_mut().unwrap();

@@ -2,7 +2,7 @@
 //!
 //! These live in `manifold-core` so that any binary linking `manifold-core`
 //! (including test binaries) gets the metadata via `inventory`.
-//! The GPU-dependent `GeneratorFactory` submissions remain in `manifold-renderer`.
+//! The GPU-dependent `GeneratorFactory` submissions remain in `manifold-nodes`.
 
 use crate::generator_registration::{GeneratorAliasMetadata, GeneratorMetadata, ParamSpec};
 use crate::preset_type_id::PresetTypeId;
@@ -81,7 +81,7 @@ inventory::submit! {
 // param names, `legacyDiscriminant: 4`, and `paramAliases` for legacy
 // `xy/zw/xw/verts/v_size/anim` names). The JSON-loaded preset
 // overrides this inventory entry at runtime in any process that links
-// manifold-renderer; the inventory remains as a fallback so upstream
+// manifold-nodes; the inventory remains as a fallback so upstream
 // test binaries that don't link the renderer (e.g.,
 // manifold-editing's `command_roundtrips`) still resolve TESSERACT
 // through `crate::preset_definition_registry::get`. Same pattern as

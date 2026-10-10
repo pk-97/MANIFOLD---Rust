@@ -581,12 +581,12 @@ mod ownership_tests {
     #[test]
     fn every_bundled_scene_control_has_one_owner() {
         let mut scenes = Vec::new();
-        for preset in manifold_renderer::node_graph::bundled_preset_type_ids(
+        for preset in manifold_nodes::bundled_presets::bundled_preset_type_ids(
             manifold_core::preset_def::PresetKind::Generator,
         ) {
-            let def = manifold_renderer::node_graph::bundled_preset_def(&preset).unwrap();
-            if manifold_nodes_scene::node_graph::scene_vm::SceneVm::from_def(def).is_some() {
-                assert_one_owner(preset.as_str(), def);
+            let def = manifold_nodes::bundled_presets::bundled_preset_def(&preset).unwrap();
+            if manifold_nodes_scene::node_graph::scene_vm::SceneVm::from_def(def.as_ref()).is_some() {
+                assert_one_owner(preset.as_str(), def.as_ref());
                 scenes.push(preset.as_str().to_string());
             }
         }
@@ -686,15 +686,15 @@ mod ownership_tests {
     #[test]
     fn the_matter_water_shows_no_camera_control() {
         use manifold_nodes_scene::node_graph::scene_vm::{SceneObjectVm, SceneVm};
-        let def = manifold_renderer::node_graph::bundled_preset_def(&PresetTypeId::new("WaterDamBreakMatter")).unwrap();
-        let camera = assert_one_owner("WaterDamBreakMatter", def);
+        let def = manifold_nodes::bundled_presets::bundled_preset_def(&PresetTypeId::new("WaterDamBreakMatter")).unwrap();
+        let camera = assert_one_owner("WaterDamBreakMatter", def.as_ref());
         assert!(camera.iter().any(|id| id.ends_with("_distance")), "the orbit camera owns its dials: {camera:?}");
-        let vm = SceneVm::from_def(def).unwrap();
+        let vm = SceneVm::from_def(def.as_ref()).unwrap();
         let water = vm.objects.iter().find_map(|object| match object {
             SceneObjectVm::Known(row) if row.liquid_domain.is_some() => Some(row),
             _ => None,
         }).expect("the water is a scene object");
-        let sections = sections_for_nodes(Some(def), &object_controls(Some(def), water, &vm.objects));
+        let sections = sections_for_nodes(Some(def.as_ref()), &object_controls(Some(def.as_ref()), water, &vm.objects));
         assert!(sections.iter().any(|section| section.contains("Simulation")), "{sections:?}");
         assert!(sections.iter().all(|section| !section.contains("Camera")), "{sections:?}");
     }
@@ -706,15 +706,15 @@ mod ownership_tests {
     #[test]
     fn gpu_flip_water_is_a_liquid_object_without_physics() {
         use manifold_nodes_scene::node_graph::scene_vm::{SceneObjectVm, SceneVm};
-        let def = manifold_renderer::node_graph::bundled_preset_def(&PresetTypeId::new("WaterDamBreakGpuFlip")).unwrap();
-        let vm = SceneVm::from_def(def).expect("the GPU dam break is a scene");
+        let def = manifold_nodes::bundled_presets::bundled_preset_def(&PresetTypeId::new("WaterDamBreakGpuFlip")).unwrap();
+        let vm = SceneVm::from_def(def.as_ref()).expect("the GPU dam break is a scene");
         let water = vm.objects.iter().find_map(|object| match object {
             SceneObjectVm::Known(row) if row.liquid_domain.is_some() => Some(row),
             _ => None,
         }).expect("the GPU FLIP water is a Known scene object on a liquid domain");
         assert!(water.physics.is_none(), "water has no physics of its own: {}", water.name);
         let domain = water.liquid_domain.as_ref().unwrap();
-        let flat = manifold_core::flatten::flatten_groups(def)
+        let flat = manifold_core::flatten::flatten_groups(def.as_ref())
             .expect("the GPU dam break scene flattens");
         let domain_type = flat.nodes.iter()
             .find(|node| node.node_id == domain.node)
@@ -728,16 +728,14 @@ mod ownership_tests {
         use manifold_core::scene_modifier_preset::SceneTargetSelection;
         use manifold_nodes_scene::node_graph::{scene_modifier_authoring, scene_vm::SceneObjectVm, scene_vm::SceneVm};
         let mut def: manifold_core::effect_graph_def::EffectGraphDef = serde_json::from_str(
-            include_str!("../../../../manifold-renderer/assets/generator-presets/WaterDamBreakGpuFlip.json"),
+            manifold_nodes::testkit::assets::ASSETS_GENERATOR_PRESETS_WATERDAMBREAKGPUFLIP_JSON,
         ).unwrap();
         let scene = SceneNodeRef::locate(&def, &NodeId::new("scene")).unwrap();
         let water = SceneNodeRef::locate(&def, &NodeId::new("water_object")).unwrap();
         assert_eq!(water.scope.len(), 1);
         // The performer's modifier picker uses this same scoped object list.
         assert!(scene_modifier_authoring::scene_modifier_objects(&def, &scene).unwrap().contains(&water));
-        let recipe = serde_json::from_str(include_str!(
-            "../../../../manifold-renderer/assets/scene-modifier-presets/UniformForce.json",
-        )).unwrap();
+        let recipe = serde_json::from_str(manifold_nodes::testkit::assets::ASSETS_SCENE_MODIFIER_PRESETS_UNIFORMFORCE_JSON).unwrap();
         let instance = scene_modifier_authoring::prepare_new_scene_modifier(
             &def, &recipe, NodeId::new("force"), scene,
             SceneTargetSelection::Explicit { objects: vec![water] },
@@ -762,15 +760,15 @@ mod ownership_tests {
     #[test]
     fn gpu_flip_water_owns_its_whitewater_controls() {
         use manifold_nodes_scene::node_graph::scene_vm::{SceneObjectVm, SceneVm};
-        let def = manifold_renderer::node_graph::bundled_preset_def(&PresetTypeId::new("WaterDamBreakGpuFlip")).unwrap();
-        assert_one_owner("WaterDamBreakGpuFlip", def);
-        let vm = SceneVm::from_def(def).unwrap();
+        let def = manifold_nodes::bundled_presets::bundled_preset_def(&PresetTypeId::new("WaterDamBreakGpuFlip")).unwrap();
+        assert_one_owner("WaterDamBreakGpuFlip", def.as_ref());
+        let vm = SceneVm::from_def(def.as_ref()).unwrap();
         let water = vm.objects.iter().find_map(|object| match object {
             SceneObjectVm::Known(row) if row.liquid_domain.is_some() => Some(row),
             _ => None,
         }).expect("the water is a scene object");
-        let owned = object_controls(Some(def), water, &vm.objects);
-        let ids = parameter_ids_for_nodes(Some(def), &owned);
+        let owned = object_controls(Some(def.as_ref()), water, &vm.objects);
+        let ids = parameter_ids_for_nodes(Some(def.as_ref()), &owned);
         assert!(ids.iter().any(|id| id == "whitewater_capacity"), "missing whitewater budget");
         for param in ["enabled", "amount"] {
             let binding = def.preset_metadata.as_ref().unwrap().bindings.iter().find(|binding| {
@@ -780,7 +778,7 @@ mod ownership_tests {
             }).expect("the whitewater stage exposes its control");
             assert!(ids.contains(&binding.id), "missing whitewater control {} in {ids:?}", binding.id);
         }
-        let sections = sections_for_nodes(Some(def), &owned);
+        let sections = sections_for_nodes(Some(def.as_ref()), &owned);
         assert!(sections.iter().any(|section| section == "Whitewater"), "{sections:?}");
     }
 
@@ -790,9 +788,9 @@ mod ownership_tests {
         use manifold_nodes_scene::node_graph::scene_vm::{MaterialVm, SceneObjectVm, SceneVm};
 
         for preset in ["WaterDamBreakGpuFlip", "WaterDamBreakParticles"] {
-            let def = manifold_renderer::node_graph::bundled_preset_def(&PresetTypeId::new(preset))
+            let def = manifold_nodes::bundled_presets::bundled_preset_def(&PresetTypeId::new(preset))
                 .expect("water family preset");
-            let vm = SceneVm::from_def(def).expect("water family scene");
+            let vm = SceneVm::from_def(def.as_ref()).expect("water family scene");
             let water = vm.objects.iter().find_map(|object| match object {
                 SceneObjectVm::Known(row) if row.name == "Water" => Some(row),
                 _ => None,
@@ -801,11 +799,11 @@ mod ownership_tests {
 
             // Collapsing or expanding the family leaves the parent's own
             // simulation and shared gate controls intact.
-            let parent_owned = object_controls(Some(def), water, &vm.objects);
-            let mut parent_ids = parameter_ids_for_nodes(Some(def), &parent_owned);
-            filter_family_parameter_ids(Some(def), water, &mut parent_ids);
+            let parent_owned = object_controls(Some(def.as_ref()), water, &vm.objects);
+            let mut parent_ids = parameter_ids_for_nodes(Some(def.as_ref()), &parent_owned);
+            filter_family_parameter_ids(Some(def.as_ref()), water, &mut parent_ids);
             assert!(parent_ids.contains(&"parent_visible".to_string()), "{preset}: parent gate");
-            assert!(sections_for_nodes(Some(def), &parent_owned).iter().any(|section| section == "Whitewater"),
+            assert!(sections_for_nodes(Some(def.as_ref()), &parent_owned).iter().any(|section| section == "Whitewater"),
                 "{preset}: parent simulation controls");
 
             let children: Vec<_> = vm.objects.iter().filter_map(|object| match object {
@@ -819,15 +817,15 @@ mod ownership_tests {
                     MaterialVm::None => panic!("{preset}: {} has no material", child.name),
                 };
                 let mesh = child.look_mesh.clone().expect("look mesh");
-                let owned = object_controls(Some(def), child, &vm.objects);
+                let owned = object_controls(Some(def.as_ref()), child, &vm.objects);
                 assert!(owned.contains(&child.object));
                 assert!(owned.contains(&mesh));
                 assert!(owned.contains(&material));
                 assert!(child.transform.is_none() && child.transform_chain.is_empty());
                 assert!(child.modifier_chain.is_empty() && child.physics.is_none());
 
-                let mut ids = parameter_ids_for_nodes(Some(def), &owned);
-                filter_family_parameter_ids(Some(def), child, &mut ids);
+                let mut ids = parameter_ids_for_nodes(Some(def.as_ref()), &owned);
+                filter_family_parameter_ids(Some(def.as_ref()), child, &mut ids);
                 let metadata = def.preset_metadata.as_ref().unwrap();
                 let specs: Vec<_> = metadata.params.iter().filter(|spec| ids.contains(&spec.id)).collect();
                 assert!(specs.iter().any(|spec| spec.name == "Visible"), "{preset}: {} eye", child.name);
@@ -854,14 +852,14 @@ mod ownership_tests {
     fn gpu_flip_water_surface_shape_sliders_route_from_water_detail() {
         use manifold_core::effect_graph_def::BindingTarget;
         use manifold_nodes_scene::node_graph::scene_vm::{SceneObjectVm, SceneVm};
-        let def = manifold_renderer::node_graph::bundled_preset_def(&PresetTypeId::new("WaterDamBreakGpuFlip")).unwrap();
-        let vm = SceneVm::from_def(def).unwrap();
+        let def = manifold_nodes::bundled_presets::bundled_preset_def(&PresetTypeId::new("WaterDamBreakGpuFlip")).unwrap();
+        let vm = SceneVm::from_def(def.as_ref()).unwrap();
         let water = vm.objects.iter().find_map(|object| match object {
             SceneObjectVm::Known(row) if row.liquid_domain.is_some() => Some(row),
             _ => None,
         }).expect("water object");
-        let owned = object_controls(Some(def), water, &vm.objects);
-        let specs: Vec<_> = owned_specs(Some(def), &owned).collect();
+        let owned = object_controls(Some(def.as_ref()), water, &vm.objects);
+        let specs: Vec<_> = owned_specs(Some(def.as_ref()), &owned).collect();
         let meta = def.preset_metadata.as_ref().unwrap();
         let mut instance = manifold_core::effects::PresetInstance::new(PresetTypeId::new("WaterDamBreakGpuFlip"));
         instance.params = manifold_core::params::ParamManifest::from_params(

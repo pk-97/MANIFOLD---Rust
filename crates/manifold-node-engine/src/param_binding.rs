@@ -1,57 +1,14 @@
-//! Host-visible parameter bindings — the surface between an effect's
-//! UI sliders / OSC paths / Ableton macros and the inner graph nodes
-//! that actually consume the values.
+//! Parameter routing from host controls to graph nodes.
 //!
-//! See `docs/EFFECT_RUNTIME_UNIFICATION.md` section 7 and
-//! `docs/archive/BINDINGS_UNIFICATION_PLAN.md` for the full design.
+//! [`ParamBinding`] comes from preset metadata; per-instance user bindings live
+//! on `PresetInstance`. Both resolve to [`ResolvedBinding`] during chain builds
+//! and use the same [`apply_bindings`] loop. Effect slots keep one combined list.
 //!
-//! ## Two layers, one runtime
-//!
-//! Source declarations are still tiered — that's a load-bearing
-//! property of the editor (registry-exposed vs user-exposed sliders),
-//! the file format (`ChainSpec.bindings` vs
-//! `PresetInstance.user_param_bindings`), and external addressing
-//! semantics (`ParamId` namespace shared across both). What used to be
-//! tiered at *runtime* is now collapsed:
-//!
-//! - **Source side.** [`ParamBinding`] declared in `inventory::submit!`
-//!   blocks for compile-time spec bindings;
-//!   `manifold_core::effects::UserParamBinding` lives on
-//!   `PresetInstance` for per-instance user bindings.
-//! - **Runtime side.** One [`ResolvedBinding`] type — both flavours
-//!   flow through [`ResolvedBinding::from_static`] /
-//!   [`ResolvedBinding::from_user`] into the same resolved shape and
-//!   the same [`apply_bindings`] loop. Effect slots store a single
-//!   `Vec<ResolvedBinding>` of length `n_static + n_user`. Cache
-//!   entries, default-seed walks, and audit walks all see one list.
-//!
-//! The `[]` second-slice bug class — passing an empty slice for a tier
-//! that has live data — is unrepresentable after this collapse because
-//! there is no second slice.
-//!
-//! ## Three layers of identity
-//!
-//! 1. [`ParamId`] — stable string forever once shipped. External
-//!    mappings (OSC, Ableton, MIDI, modulation drivers) key on this.
-//!    Renaming the label or reorganising the underlying graph never
-//!    invalidates a `ParamId`. The id namespace is shared between
-//!    static and user bindings; lookup helpers walk both.
-//! 2. [`ResolvedBinding::label`] — display string on the slider. Free
-//!    to edit. Range, type flags, enum labels, and OSC suffix live on
-//!    the effect's `EffectMetadata.params` entry of the same id — the
-//!    binding deliberately doesn't duplicate them.
-//! 3. [`ResolvedBinding::target`] — runtime routing to a graph node
-//!    parameter. May change as the effect's internals are decomposed
-//!    or refactored. `HandleNode` is resolved away at chain-build
-//!    time; what's left is `Node` / `Composite` / `Custom`.
-//!
-//! ## Why `Cow<'static, str>`
-//!
-//! Static strings (V1: developer-defined effects compiled in) and
-//! owned strings (V2: user-exposed parameters generated at runtime)
-//! flow through the same code paths. `Cow::Borrowed` for compile-time
-//! IDs, `Cow::Owned` for user-generated. Same trick `PresetTypeId`
-//! uses.
+//! [`ParamId`] is the stable identity used by saved mappings and drivers. Labels
+//! are editable display text; targets describe the current graph routing.
+//! `Cow` retains borrowed built-in strings or owns catalog and user strings.
+//! Resolution and string allocation happen during chain builds, not parameter
+//! application.
 
 use std::borrow::Cow;
 
@@ -70,22 +27,17 @@ use crate::validation::GraphError;
 // same type. Re-exported here for renderer-internal call sites.
 pub use manifold_core::effects::ParamId;
 
-// ─── Source declaration (compile-time spec bindings) ─────────────────
+// ─── Preset bindings ────────────────────────────────────────────────
 
-/// Compile-time spec binding declared in an effect's `inventory::submit!`
-/// `ChainSpec.bindings` array.
-///
-/// Source-side type only — the runtime never iterates `ParamBinding`
-/// directly. At chain-build time each entry flows through
-/// [`ResolvedBinding::from_static`] into a [`ResolvedBinding`] in
-/// `EffectSlot.bindings[0..n_static]`.
+/// Preset binding prepared from catalog metadata. Chain construction resolves
+/// it through [`ResolvedBinding::from_static`] before runtime application.
 #[derive(Debug, Clone)]
 pub struct ParamBinding {
     /// Stable identity. Forever rule: never rename, never reuse.
     pub id: ParamId,
     /// Display label for the outer effect-card slider and for the
     /// editor's "Effect Parameters" read-only list. Free to edit.
-    pub label: &'static str,
+    pub label: Cow<'static, str>,
     /// Initial value the host slot lands on when the effect is
     /// instantiated. Planted onto the inner-node target at chain build
     /// time via [`apply_binding_defaults`] so the per-frame
@@ -279,6 +231,7 @@ pub struct ResolvedBinding {
     pub default_mirrors_node_param: bool,
 }
 
+manifold_core::testkit_visible! {
 /// Non-identity card mapping applied to a User binding's value at the write
 /// boundary in two stages. First the slider response: when `invert` or a
 /// non-Linear `curve` is set, normalize within `[min, max]`, invert, apply the
@@ -291,13 +244,14 @@ pub struct ResolvedBinding {
 /// curve != Linear, scale != 1, or offset != 0), so every existing show carries
 /// `None` and stays byte-identical with zero per-frame cost.
 #[derive(Debug, Clone, Copy)]
-pub struct Reshape {
+pub(crate) struct Reshape {
     min: f32,
     max: f32,
     invert: bool,
     curve: manifold_core::macro_bank::MacroCurve,
     scale: f32,
     offset: f32,
+}
 }
 
 impl Reshape {
@@ -394,7 +348,7 @@ impl ResolvedBinding {
             Reshape::from_preset_response(b.min, b.max, b.curve, b.invert, b.scale, b.offset);
         Some(Self::assemble(
             b.id.clone(),
-            Cow::Borrowed(b.label),
+            b.label.clone(),
             b.default_value,
             target,
             b.convert,
@@ -480,6 +434,7 @@ impl ResolvedBinding {
         ))
     }
 
+manifold_core::testkit_visible! {
     /// The single field-assembly point for a resolved binding. Every
     /// constructor — `from_static`, `from_user`, and the generator path in
     /// [`crate::generators::json_graph_generator`] — funnels through here, so
@@ -488,7 +443,7 @@ impl ResolvedBinding {
     /// over-drove a folded deg→rad affine 57×; this constructor is why that
     /// can't recur — there is no second literal to forget.)
     #[allow(clippy::too_many_arguments)]
-    pub fn assemble(
+    pub(crate) fn assemble(
         id: ParamId,
         label: Cow<'static, str>,
         default_value: f32,
@@ -513,6 +468,7 @@ impl ResolvedBinding {
             default_mirrors_node_param,
         }
     }
+}
 
     /// Re-bake the card reshape from the live manifest spec (min/max/curve/
     /// invert — the D4 authority) plus a scale/offset pair: the override
@@ -638,7 +594,7 @@ pub fn apply_bindings(
                 BindingSource::User => "UserParamBinding",
             };
             eprintln!(
-                "[manifold-renderer] {tag} apply failed: id={} value={} err={:?} — \
+                "[manifold-nodes] {tag} apply failed: id={} value={} err={:?} — \
                  skipping this binding for the current frame. The graph topology likely \
                  changed without rebuilding the bindings list.",
                 binding.id, value, err,
@@ -700,7 +656,7 @@ pub fn apply_binding_defaults(
                 BindingSource::User => "UserParamBinding",
             };
             eprintln!(
-                "[manifold-renderer] {tag} default-seed failed: id={} default={} \
+                "[manifold-nodes] {tag} default-seed failed: id={} default={} \
                  err={:?} — inner node will run at its primitive default until the outer \
                  slot is moved off `default_value`.",
                 binding.id, binding.default_value, err,
@@ -1078,7 +1034,7 @@ mod tests {
     fn static_amount_binding() -> ParamBinding {
         ParamBinding {
             id: Cow::Borrowed("amount"),
-            label: "Amount",
+            label: Cow::Borrowed("Amount"),
             default_value: 0.5,
             target: ParamTarget::Node {
                 node_id: NodeId::new("feedback"),
@@ -1133,8 +1089,12 @@ mod tests {
         let mut g = Graph::new();
         let _src = g.add_node(Box::new(Source::new()));
         let feedback = add_feedback_node(&mut g);
-        let rb = ResolvedBinding::from_static(&static_amount_binding(), &node_map_for(feedback))
+        let mut binding = static_amount_binding();
+        binding.label = Cow::Owned("Catalog amount".to_string());
+        let rb = ResolvedBinding::from_static(&binding, &node_map_for(feedback))
             .expect("node id present");
+        drop(binding);
+        assert_eq!(rb.label, "Catalog amount");
         match rb.target {
             ResolvedTarget::Node { node, param } => {
                 assert_eq!(node, feedback);

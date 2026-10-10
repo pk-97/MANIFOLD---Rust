@@ -33,25 +33,25 @@ in FOUNDATIONAL_GAPS/CORE_ENGINE_FINDINGS (candidate for section 5).
 | BUG-003 (duplicating-grouped-effect-leaves-group-id-point…) | manifold-core/effects.rs+layer.rs | identity-minting-on-duplicate | struct | none named | :2820 | A5 |
 | BUG-004 (effect-paste-carries-ableton-automation-bindings…) | manifold-editing/clipboard.rs | structural-design-flaw | patch | none named | :2834 | A4 |
 | BUG-005 (macro-targets-cant-disambiguate-two-same-type-ef…) | manifold-core/macro_bank.rs | missing-invariant-enforcement | struct | none named | :2851 | A5 |
-| BUG-006 | manifold-renderer/node_graph/bound_graph.rs | stale-state/projection | open | none | :953 | none |
-| BUG-007 (particle-loop-fusion-exclusion-blind-configured-…) | manifold-renderer/node_graph/freeze/region.rs | missing-invariant-enforcement | open | none | :975 | none |
-| BUG-008 (fused-buffer-region-mismatched-array-lengths-rea…) | manifold-renderer/node_graph/freeze/codegen.rs | missing-invariant-enforcement | open | none | :998 | none |
-| BUG-009 (segment-stateless-gate-misses-statestore-held-sc…) | manifold-renderer/node_graph/freeze/segment.rs | missing-invariant-enforcement | open | none | :1017 | none |
-| BUG-010 (wgsl-compute-silently-dispatches-first-multiple-…) | manifold-renderer/node_graph/primitives/wgsl_compute.rs | missing-invariant-enforcement | open | none | :1041 | none |
-| BUG-011 (fused-fused-output-buffer-sized-max-all-array) | manifold-renderer/node_graph/primitives/wgsl_compute.rs | missing-invariant-enforcement | open | none | :1060 | none |
-| BUG-012 (no-slug) | manifold-renderer/node_graph/primitives/wgsl_compute.rs | missing-invariant-enforcement | open | none | :1078 | none |
+| BUG-006 | manifold-nodes/node_graph/bound_graph.rs | stale-state/projection | open | none | :953 | none |
+| BUG-007 (particle-loop-fusion-exclusion-blind-configured-…) | manifold-nodes/node_graph/freeze/region.rs | missing-invariant-enforcement | open | none | :975 | none |
+| BUG-008 (fused-buffer-region-mismatched-array-lengths-rea…) | manifold-nodes/node_graph/freeze/codegen.rs | missing-invariant-enforcement | open | none | :998 | none |
+| BUG-009 (segment-stateless-gate-misses-statestore-held-sc…) | manifold-nodes/node_graph/freeze/segment.rs | missing-invariant-enforcement | open | none | :1017 | none |
+| BUG-010 (wgsl-compute-silently-dispatches-first-multiple-…) | manifold-nodes/node_graph/primitives/wgsl_compute.rs | missing-invariant-enforcement | open | none | :1041 | none |
+| BUG-011 (fused-fused-output-buffer-sized-max-all-array) | manifold-nodes/node_graph/primitives/wgsl_compute.rs | missing-invariant-enforcement | open | none | :1060 | none |
+| BUG-012 (no-slug) | manifold-nodes/node_graph/primitives/wgsl_compute.rs | missing-invariant-enforcement | open | none | :1078 | none |
 | BUG-013 (commit-wait-completed-never-checks-command-buffe…) | manifold-gpu/metal/encoder.rs | resource-lifecycle | struct | verify_completed gate | :2198 | none |
-| BUG-014 (parked) | manifold-renderer/node_graph/freeze/install.rs | convention-mismatch (serde) | open (parked) | none | :1093 | none |
-| BUG-015 (no-slug) | manifold-renderer/ui_cache_manager.rs + inspector.rs | stale-state/projection | open (partial) | 2 tests named | :1107 | A1 |
-| BUG-016 (imported-glb-layers-are-black-boxes-no-card) | manifold-renderer/gltf_import.rs + app_lifecycle.rs | structural-design-flaw | struct | none named | :2233 | none |
+| BUG-014 (parked) | manifold-nodes/node_graph/freeze/install.rs | convention-mismatch (serde) | open (parked) | none | :1093 | none |
+| BUG-015 (no-slug) | manifold-nodes/ui_cache_manager.rs + inspector.rs | stale-state/projection | open (partial) | 2 tests named | :1107 | A1 |
+| BUG-016 (imported-glb-layers-are-black-boxes-no-card) | manifold-nodes/gltf_import.rs + app_lifecycle.rs | structural-design-flaw | struct | none named | :2233 | none |
 | BUG-017 (docs-index-sync-docs-dir-red-main-two) | docs/tooling (docs_index_sync test) | process-failure | patch | docs_index_is_in_sync_with_docs_dir | :2265 | A7 (adjacent) |
-| BUG-018 (catalog-stale) | manifold-renderer/node_graph::catalog_gen | process-failure | open | catalog_gen::tests::regenerates_in_sync | :1476 | A7 (adjacent) |
+| BUG-018 (catalog-stale) | manifold-nodes/node_graph::catalog_gen | process-failure | open | catalog_gen::tests::regenerates_in_sync | :1476 | A7 (adjacent) |
 | BUG-019 (deferred) | manifold-ui (inspector, EffectGroup) | one-off | open (deferred) | none | :1494 | none |
 | BUG-020 (deferred) | manifold-ui/param_card.rs | structural-design-flaw | open (deferred) | none | :1511 | none |
 | BUG-021 (deferred) | manifold-app/ui_bridge/inspector.rs | structural-design-flaw | open (deferred) | none | :1522 | none |
 | BUG-022 (main-window-browser-popup-escape-while-search-fi…) | manifold-app/window_input.rs | missing-invariant-enforcement | patch | none named | :2287 | A3 |
 | BUG-023 (no-new-raw-color-literals-red-main-real) | manifold-ui/design_tokens.rs+browser_popup.rs | convention-mismatch (tokens) | patch | no_new_raw_color_literals | :2369 | none |
-| BUG-024 (generator-preset-thumbnails-render-white-backgro…) | manifold-renderer/preset_thumbnail.rs | convention-mismatch (alpha) | patch | none named | :2329 | none |
+| BUG-024 (generator-preset-thumbnails-render-white-backgro…) | manifold-nodes/preset_thumbnail.rs | convention-mismatch (alpha) | patch | none named | :2329 | none |
 | BUG-025 (no-slug) | manifold-ui timeline (clip/header scissor) | stale-state/projection | open (unreproduced) | none | :1533 | A2 |
 | BUG-026 (Batch-2 popups: entrance fade freezes at t=0…) | manifold-ui/browser_popup.rs+app_render.rs | stale-state/projection | open (fix landed, unverified) | none named (VD-006) | :1570 | A1 |
 | BUG-027 (graph-editor-node-previews-composite-wrong-z-lay…) | manifold-ui/manifold-app graph editor | structural-design-flaw | struct | node_previews_render_in_per_node_depth_bands | :2404 | A2 |
@@ -59,12 +59,12 @@ in FOUNDATIONAL_GAPS/CORE_ENGINE_FINDINGS (candidate for section 5).
 | BUG-029 (profiling-feature-doesnt-compile-rotted-against-…) | manifold-app/content_thread.rs+content_commands.rs | process-failure | patch | cargo check --features profiling gate | :2144 | A7 |
 | BUG-030 (Design-token ratchet red on trunk: raw…) | manifold-ui/design_tokens.rs | convention-mismatch (tokens) | open (parked) | design_tokens.rs ratchet | :924 | none |
 | BUG-031 (no-slug) | manifold-ui/layer_header.rs+app.rs | missing-invariant-enforcement | open | none | :1599 | A5 |
-| BUG-032 (gltf-import-model-2-materials-fails-load-unknown) | manifold-renderer/node_graph graph_loader | structural-design-flaw | struct | 2 tests named | :2496 | none |
+| BUG-032 (gltf-import-model-2-materials-fails-load-unknown) | manifold-nodes/node_graph graph_loader | structural-design-flaw | struct | 2 tests named | :2496 | none |
 | BUG-033 (the `ui-snapshot` harness doesn't compile on…) | manifold-app/ui_snapshot/interact.rs | process-failure | patch | none named (fixed incidentally) | :2174 | A7 |
 | BUG-034 (Headless preview verification doesn't cover the…) | manifold-app/app_render.rs (atlas UV) | process-failure | open (gated on BUG-033) | none | :908 | A7 (adjacent) |
 | BUG-035 (authoring-hitch) | manifold-app/content_pipeline.rs | structural-design-flaw (hot-path) | open (root cause found, no fix) | none | :780 | none |
 | BUG-036 (param-manifest-construction-not-a-unified-safe-g…) | manifold-io/loader.rs+manifold-core/effects.rs | structural-design-flaw | struct | project_local_preset_reload.rs | :2090 | A1 |
-| BUG-037 (glp-first-render-stall) | manifold-renderer generator pipeline warm-up | resource-lifecycle | open | none | :750 | none |
+| BUG-037 (glp-first-render-stall) | manifold-nodes generator pipeline warm-up | resource-lifecycle | open | none | :750 | none |
 | BUG-038 (ableton-log-spam) | manifold-playback/ableton_bridge.rs | missing-invariant-enforcement | open | none | :769 | F11 (loose) |
 | BUG-039 (saw-rotation-wrap) | manifold-core ParamSpecDef/modulation | convention-mismatch (units) | open (sequenced) | none (planned) | :723 | none |
 | BUG-040 (v13-import-migration-drop) | manifold-io/migrations/param_storage_v14.rs | structural-design-flaw | patch | 3 bug040_* tests | :2532 | B1 |
@@ -81,7 +81,7 @@ in FOUNDATIONAL_GAPS/CORE_ENGINE_FINDINGS (candidate for section 5).
 | BUG-051 (trigger-clear-unwired) | manifold-playback/live_trigger.rs+modulation.rs | missing-invariant-enforcement | struct | clear_all_trigger_edges_rearms_generator_edge | :2570 | none |
 | BUG-052 (sample-rate-dependent-detection) | manifold-audio/manifold-playback | convention-mismatch (units) | struct | time_grid_holds_hop_and_window_duration | :1925 | none |
 | BUG-053 (hdr-live-recording-structural) | manifold-media/recording (session.rs+native) | structural-design-flaw | open | hdr_blocked_by_bug_053 guard | :553 | none |
-| BUG-054 (renderer-device-ptr-dangles) | manifold-renderer/generator_renderer.rs | resource-lifecycle | open | none (workaround only) | :532 | A6 |
+| BUG-054 (renderer-device-ptr-dangles) | manifold-nodes/generator_renderer.rs | resource-lifecycle | open | none (workaround only) | :532 | A6 |
 | BUG-055 (eval-harness-stale-time-grid) | manifold-audio examples | convention-mismatch (units) | patch | debug_assert grid match | :2074 | none |
 | BUG-056 (audio-mixdown-clippy-debt) | manifold-playback/audio_mixdown.rs | process-failure | open | none | :493 | A7 |
 | BUG-057 (ui-snapshot-dead-blit-pipeline) | manifold-app/ui_snapshot/render.rs | process-failure | open | none | :513 | A7 |
@@ -93,7 +93,7 @@ in FOUNDATIONAL_GAPS/CORE_ENGINE_FINDINGS (candidate for section 5).
 | BUG-063 (silent-load-repairs) | manifold-io/loader.rs | missing-invariant-enforcement | open (P3 partial) | non-blocking toast only | :293 | B1 |
 | BUG-064 (save-rename-before-fsync) | manifold-io/archive.rs | resource-lifecycle | patch | 2 sync_all negative-gate | :1651 | B1 |
 | BUG-065 (save-dedup-history-identity-key-6-hex-chars) | manifold-io/archive.rs | structural-design-flaw | patch | none named | :1671 | B1 |
-| BUG-066 (fluid3d-corner-drift) | manifold-renderer node_graph FluidSim3D | one-off | open | fluid3d_bias.rs (deleted 2026-09-29; git history) | :182 | none |
+| BUG-066 (fluid3d-corner-drift) | manifold-nodes node_graph FluidSim3D | one-off | open | fluid3d_bias.rs (deleted 2026-09-29; git history) | :182 | none |
 | BUG-067 (ui-snapshot-dead-blit-pipeline) | manifold-app/ui_snapshot/render.rs | process-failure | open | none | :161 | A7 |
 | BUG-068 (inspector-scene-cliphit-overlap) | manifold-app ui_snapshot fixtures | one-off | open | none | :172 | none |
 | BUG-069 | licensing (deps: madmom/ADTOF, rusty_link, ffmpeg) | other: dependency-licensing | open | rg zero-hit gate (planned) | :115 | none |
@@ -104,8 +104,8 @@ in FOUNDATIONAL_GAPS/CORE_ENGINE_FINDINGS (candidate for section 5).
 | BUG-074 (a `TestDir` temp-path collision, not…) | manifold-playback/audio_mixdown.rs tests | resource-lifecycle | open (unknown root cause) | none | :376 | none |
 | BUG-075 (timeline-drag-end-never-finalizes) | manifold-app/ui_root.rs | missing-invariant-enforcement | patch | timeline_drag_end_reaches_viewport test | :1894 | A3 |
 | BUG-076 (inspector-scroll-underestimates-content-height) | manifold-ui/inspector.rs (ScrollContainer) | stale-state/projection | open (unconfirmed) | none (planned test) | :334 | none |
-| BUG-077 (test-fixtures-not-region-wrapped) | manifold-renderer+manifold-ui test fixtures | process-failure | patch | cargo test --workspace (0 hits) | :1799 | none |
-| BUG-078 (generator-runtime-reshapes-from-stale-meta-param…) | manifold-renderer/preset_runtime.rs | stale-state/projection | struct | generator_rebuild_reshape_honors_live_manifest | :1744 | none |
+| BUG-077 (test-fixtures-not-region-wrapped) | manifold-nodes+manifold-ui test fixtures | process-failure | patch | cargo test --workspace (0 hits) | :1799 | none |
+| BUG-078 (generator-runtime-reshapes-from-stale-meta-param…) | manifold-nodes/preset_runtime.rs | stale-state/projection | struct | generator_rebuild_reshape_honors_live_manifest | :1744 | none |
 | BUG-079 | manifold-core/effects.rs+preset_runtime.rs | missing-invariant-enforcement | open | none | :105 | none |
 | BUG-080 | manifold-core param manifest construction | structural-design-flaw | open (wants Opus design pass) | none | :100 | none |
 | BUG-081 (no-slug) | manifold-playback/audio_layer_playback.rs | one-off | open | none | :887 | none |
@@ -122,7 +122,7 @@ Fix-type totals: fixed-structural 20 · fixed-patch 14 · open 48 · checked-saf
 
 | Subsystem | n | Open | Class histogram (top) | Enforcement | Suggested verdict |
 |---|---|---|---|---|---|
-| manifold-renderer/node_graph/freeze (fusion compiler) | 8 (006–012,014) | 8/8 (100%) | missing-inv×6, stale-state×1, convention×1 | **none, on any of them** | **structurally-wrong** |
+| manifold-nodes/node_graph/freeze (fusion compiler) | 8 (006–012,014) | 8/8 (100%) | missing-inv×6, stale-state×1, convention×1 | **none, on any of them** | **structurally-wrong** |
 | manifold-playback | 8 (038,050,051,056,072,074,081,082) | 7/8 (88%) | structural×2, missing-inv×2, process×2 | mostly none; also owns all 17 F-findings (F1–F17, all OPEN) | **structurally-wrong** |
 | manifold-ui | 16 | 12/16 (75%), 1 reopened | stale-state×4, missing-inv×4, structural×3 | thin; concentrated on the 4 fixed-structural items | **structurally-wrong** (stale-state/projection slice) |
 | manifold-app | 14 | 8/14 (57%) | process×6 (feature-matrix rot), missing-inv×4 | scattered | sound-but-underspecified |

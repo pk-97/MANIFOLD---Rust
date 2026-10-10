@@ -990,7 +990,7 @@ fn rt_enabled_toggle_survives_editing_service_and_json_round_trip() {
     // Registry-less at this layer (per `SetGraphNodeParamCommand`'s
     // doc) — a plain fixture node with `node.render_scene`'s type_id
     // is enough to prove the generic param-set + serialize path; the
-    // real `ParamDef`/default (W0) lives in `manifold-renderer`, which
+    // real `ParamDef`/default (W0) lives in `manifold-nodes`, which
     // `manifold-editing` doesn't depend on.
     def.nodes.push(EffectGraphNode {
         id: 99,

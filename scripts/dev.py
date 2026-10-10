@@ -60,9 +60,6 @@ VERBS = [
     ("Landing and gates",
      "test-census", "test_census.py", "record and compare test identities across crate moves"),
     ("Landing and gates",
-     "crate-closure", "crate_closure.py",
-     "renderer crate-split census: `closure` sizes the engine hub, `seams` lists hub->family reaches"),
-    ("Landing and gates",
      "docs-index", "gen_docs_index.py", "regenerate docs/README.md after adding or renaming a doc"),
     ("Landing and gates",
      "glb-status", "gen_glb_conformance_status.py", "regenerate the glTF conformance status doc"),
@@ -82,28 +79,28 @@ VERBS = [
      "claude-pane", "claude-pane.sh", "launch a Claude Code session in a new tmux pane without stealing focus"),
 
     ("Render and measure",
-     "capture", GPU + ["cargo", "run", "-p", "manifold-renderer", "--features", "gpu-proofs", "--example", "fluid_capture", "--"],
+     "capture", GPU + ["cargo", "run", "-p", "manifold-nodes", "--features", "gpu-proofs", "--example", "fluid_capture", "--"],
      "render any preset to PNG frames: OUT_DIR --preset <json> [--frames N] (the visual oracle)"),
     ("Render and measure",
-     "render-generator", ["cargo", "run", "-p", "manifold-renderer", "--bin", "render-generator-preset", "--"],
+     "render-generator", ["cargo", "run", "-p", "manifold-nodes", "--bin", "render-generator-preset", "--"],
      "render one generator preset headless"),
     ("Render and measure",
-     "render-import", ["cargo", "run", "-p", "manifold-renderer", "--bin", "render-import", "--"],
+     "render-import", ["cargo", "run", "-p", "manifold-app", "--bin", "render-import", "--"],
      "render an imported glTF/GLB headless; --dump-def writes the importer's def JSON"),
     ("Render and measure",
-     "graph-tool", ["cargo", "run", "-p", "manifold-renderer", "--bin", "graph-tool", "--"],
+     "graph-tool", ["cargo", "run", "-p", "manifold-app", "--bin", "graph-tool", "--"],
      "validate <file.json> --kind effect|generator, fusion report; pre-flight for graph JSON"),
     ("Render and measure",
-     "check-presets", ["cargo", "run", "-p", "manifold-renderer", "--bin", "check-presets", "--"],
+     "check-presets", ["cargo", "run", "-p", "manifold-nodes", "--bin", "check-presets", "--"],
      "validate every bundled preset"),
     ("Render and measure",
-     "node-catalog", ["cargo", "run", "-p", "manifold-renderer", "--bin", "gen_node_catalog", "--"],
+     "node-catalog", ["cargo", "run", "-p", "manifold-nodes", "--bin", "gen_node_catalog", "--"],
      "regenerate docs/NODE_CATALOG.md from the primitive registry"),
     ("Render and measure",
-     "thumbnails", GPU + ["cargo", "run", "-p", "manifold-renderer", "--bin", "generate-preset-thumbnails", "--"],
+     "thumbnails", GPU + ["cargo", "run", "-p", "manifold-app", "--bin", "generate-preset-thumbnails", "--"],
      "regenerate preset picker thumbnails"),
     ("Render and measure",
-     "freeze-profile", GPU + ["cargo", "run", "-p", "manifold-renderer", "--bin", "freeze-profile", "--"],
+     "freeze-profile", GPU + ["cargo", "run", "-p", "manifold-nodes", "--bin", "freeze-profile", "--"],
      "profile the freeze compiler's fused kernels"),
     ("Render and measure",
      "project-tool", ["cargo", "run", "-p", "manifold-io", "--bin", "project_tool", "--"],
@@ -183,6 +180,123 @@ INTERNAL = {
 }
 
 
+# Execution cost is declared, never inferred from render/snapshot words.
+# unit: cheap local work; focused: bounded checks/required landing orchestration;
+# broad: sweeps, app renders and GPU probes requiring a bounded Codex permit.
+# Explicit entries override test_*.py (test_census builds). Compiled targets
+# share the table so dev verbs and direct cargo runs agree.
+COST_CLASSES = {
+    "agent-worktree.py": "unit",
+    "audit_rename.py": "unit",
+    "blob_v2_native_bench.py": "focused",
+    "bridge_probe_gate.py": "broad",
+    "claude-pane.sh": "unit",
+    "claude_usage_export.py": "unit",
+    "clay_region_probe.py": "unit",
+    "codex_brokers.py": "unit",
+    "codex_checks.py": "unit",
+    "codex_prepare.py": "unit",
+    "codex_regressions.py": "unit",
+    "codex_usage.py": "unit",
+    "cpu_scope.py": "unit",
+    "crate_move_replay.py": "unit",
+    "depth_relight_sweep.py": "unit",
+    "dev.py": "unit",
+    "diff_scope.py": "unit",
+    "feature_matrix.py": "broad",
+    "fetch-gltf-conformance.sh": "focused",
+    "fix_bare_ids.py": "unit",
+    "fleet_health.py": "unit",
+    "gate_cancellation.py": "unit",
+    "gate_passes.py": "unit",
+    "gate_policy.py": "unit",
+    "gate_readiness.py": "unit",
+    "gate_runner.py": "focused",
+    "gate_runner_selftest.sh": "unit",
+    "gate_workspace.py": "unit",
+    "gen_docs_index.py": "unit",
+    "gen_glb_conformance_status.py": "unit",
+    "gltf_def_capture.py": "focused",
+    "gpu_proofs_gate.py": "focused",
+    "gpu_queue.py": "unit",
+    "gpu_scope.py": "unit",
+    "hook_census.py": "unit",
+    "install-abletonosc-patch.sh": "unit",
+    "kick_label_extract.py": "focused",
+    "land_branch.py": "focused",
+    "land_wave.py": "focused",
+    "landing_gate.py": "focused",
+    "landing_metrics.py": "unit",
+    "launch_live_ui.py": "broad",
+    "lentine_reference.py": "unit",
+    "live_ui.py": "focused",
+    "live_ui_generator_demo.py": "broad",
+    "live_ui_safety_demo.py": "broad",
+    "mgpcg_reference.py": "unit",
+    "move_identity_check.py": "unit",
+    "narrow_band_grid_reference.py": "unit",
+    "narrow_band_reference.py": "unit",
+    "pick_probe_regions.py": "unit",
+    "points_pixel_probe.py": "unit",
+    "repair_audio_fixture.py": "focused",
+    "rt_a2_term_cost.py": "broad",
+    "rt_a3_term_cost.py": "broad",
+    "rt_dynamic_acceptance.py": "broad",
+    "rt_noise_gate.py": "broad",
+    "rt_quality_matrix.py": "broad",
+    "rt_region_probe.py": "unit",
+    "rt_toggle_matrix.py": "broad",
+    "run_ui_flows.py": "broad",
+    "stale_beads.py": "unit",
+    "storage_budget.py": "unit",
+    "test_census.py": "focused",
+    "token_report.py": "unit",
+    "trunk_health.py": "broad",
+    "ui_flows_batch_proof.py": "broad",
+    "uninstall-abletonosc-patch.sh": "unit",
+    "watch_land.py": "unit",
+    "fluid_capture": "broad",
+    "render-generator-preset": "broad",
+    "render-import": "broad",
+    "generate-preset-thumbnails": "broad",
+    "freeze-profile": "broad",
+    "graph-tool": "focused",
+    "check-presets": "focused",
+    "gen_node_catalog": "focused",
+    "project_tool": "focused",
+}
+
+
+def script_cost(path, args=()):
+    """Unknown repository scripts fail closed; outside drafts default to unit.
+
+    Known names retain their cost outside scripts/. This does not inspect
+    subprocesses. Pass a resolved path when the working directory is known.
+    """
+    path = Path(path)
+    name = path.name
+    if name == "gpu_proofs_gate.py" and "--all" in args:
+        return "broad"
+    if name in COST_CLASSES:
+        return COST_CLASSES[name]
+    if name.startswith("test_") and path.suffix == ".py":
+        return "unit"
+    return "broad" if "scripts" in path.parts or path.parent == Path(".") else "unit"
+
+
+def target_name(command):
+    """Compiled target of a cargo verb (possibly behind gpu_queue)."""
+    for flag in ("--bin", "--example"):
+        if flag in command:
+            return command[command.index(flag) + 1]
+    raise ValueError("cargo verb needs an explicit --bin or --example")
+
+
+def verb_cost(target):
+    return (script_cost(SCRIPTS / target) if isinstance(target, str)
+            else COST_CLASSES[target_name(target)])
+
+
 INDEX = SCRIPTS / "TOOLS.md"
 
 
@@ -194,6 +308,8 @@ def catalog():
              "",
              "Generated by `scripts/dev.py --write-index`; `scripts/dev.py --help` prints the same.",
              "`scripts/dev.py <verb> [args]` runs the command in brackets; `<verb> --help` is its usage.",
+             "Cost: unit = cheap local work; focused = bounded checks; broad = a bounded Codex permit is required.",
+             "Script self-tests (`test_*.py`) are unit unless explicitly declared otherwise; gpu-proofs --all is broad.",
              ""]
     group = None
     for g, verb, target, line in VERBS:
@@ -201,7 +317,7 @@ def catalog():
             group = g
             lines += ["", f"{g}:"]
         behind = f"scripts/{target}" if isinstance(target, str) else " ".join(target)
-        lines.append(f"  {verb:<{width}}  {line}  [{behind}]")
+        lines.append(f"  {verb:<{width}}  {line}  [{behind}]  (cost: {verb_cost(target)})")
     return "\n".join(lines) + "\n"
 
 

@@ -1,8 +1,8 @@
 # Physics engine boundary — concrete engines, shared authoring
 
-**Status:** APPROVED · 2026-10-06 · review amendments folded; implementation pending.
+**Status:** IN PROGRESS · 2026-10-09 · P1 landed in b3e492e63 after Tier 1; later phases pending.
 **Prerequisites:** none for P1 or G1a; later phase entries name their dependencies. Water F1b/F2 shipped.
-**Execution contract:** read [DESIGN_DOC_STANDARD.md](DESIGN_DOC_STANDARD.md) sections 5–6 before starting a phase. This task authorizes documentation only.
+**Execution contract:** read [DESIGN_DOC_STANDARD.md](DESIGN_DOC_STANDARD.md) sections 5–6 before starting a phase. P1 implementation is authorized by the post-T1 cleanup campaign; later phases retain their entry conditions.
 
 <!-- index: Engine, graph, and authoring boundaries for physics; Water is the first consumer, with shared insertion, controls, and lifecycle. -->
 
@@ -25,7 +25,7 @@ Companions:
 
 Verified 2026-10-06 against `c67c1e9ad84a51db2dc3f433247a1d6100cd5eb7`, branch `feat/physics-boundary-design`. HEAD and clean working state were checked before reading. This is a static source audit, not a runtime or visual verification. **Extend the listed infrastructure; do not redesign it.** Line numbers are snapshot anchors and must be re-resolved before implementation. Amendments, dependency metadata, and duplication were checked at `16dd977ab` (reviewed boundary-design commit), with a clean worktree before this edit.
 
-Path abbreviations below are exact repository-relative prefixes: `P = crates/manifold-physics/src/`, `F = crates/manifold-fluids/src/`, `R = crates/manifold-renderer/src/node_graph/`, `C = crates/manifold-core/src/`, `E = crates/manifold-editing/src/commands/graph/`, `A = crates/manifold-app/src/`, `U = crates/manifold-ui/src/`.
+Path abbreviations below are exact repository-relative prefixes: `P = crates/manifold-physics/src/`, `F = crates/manifold-fluids/src/`, `R = crates/manifold-nodes/src/node_graph/`, `C = crates/manifold-core/src/`, `E = crates/manifold-editing/src/commands/graph/`, `A = crates/manifold-app/src/`, `U = crates/manifold-ui/src/`.
 
 ### 1.1 Engine and host code
 
@@ -43,7 +43,7 @@ Path abbreviations below are exact repository-relative prefixes: `P = crates/man
 | Allocation dependency | `R/scene_modifier_expand/buffer_budget.rs:310`, `:343`; `primitives/gpu_flip_step.rs:601`; `gpu_flip_narrow_band.rs:208`; `gpu_flip_sheeting.rs:196`; `whitewater_step.rs:954` | Preserve admission while separating checked arithmetic from scene policy/errors. |
 | Shatter | `R/scene_modifier_authoring.rs:29`; `scene_modifier_expand/compiler/shatter.rs:156`, `:174`, `:233`; `C/scene_modifier_preset.rs:195` | A modifier recipe compiled into rigid participants, not a solver. |
 
-Cargo manifests and `cargo metadata --offline --format-version 1` were checked at the reviewed commit, including normal, build, dev, and target-conditioned workspace edges. Physics depends on foundation; fluids on foundation/physics; GPU and UI on foundation. None of these four has a host dependency. Renderer depends on physics, fluids, GPU, core, native, playback, and UI (`crates/manifold-renderer/Cargo.toml:8`–`:17`). The exact ban allowlists and the cargo-deny check are in section 3.2. No implementation dependency fix is needed today.
+Cargo manifests and `cargo metadata --offline --format-version 1` were checked at the reviewed commit, including normal, build, dev, and target-conditioned workspace edges. Physics depends on foundation; fluids on foundation/physics; GPU and UI on foundation. None of these four has a host dependency. Renderer depends on physics, fluids, GPU, core, native, playback, and UI (`crates/manifold-nodes/Cargo.toml:8`–`:17`). The exact ban allowlists and the cargo-deny check are in section 3.2. No implementation dependency fix is needed today.
 
 The production source import search `rg -n 'use .*manifold_(renderer|app|ui|core)|crate::(app|ui)' crates/manifold-{physics,fluids}/src` returned zero. GPU primitives and liquid/whitewater atoms still use graph contexts, descriptors, and freeze codegen; those are deferred separation work, not evidence of an independent GPU engine today. MPM keeps its concrete `matter_*` stages. Remove FLIP's `matter_domain::closed_faces` dependency (`gpu_flip_domain.rs:25`) during the numerical moves, without a universal solver trait.
 
@@ -201,35 +201,11 @@ Before: `Step::publish(enc, shape, index)` dereferences `self.outputs.slots[inde
 
 ### 3.2 Dependencies and allocation
 
-P1 adds the entries below to `[bans].deny` in deny.toml, beside the wgpu/metal precedent. Wrappers are legitimate direct parents, not exemptions for protected crates. The additional workspace targets close indirect routes and make UI's foundation-only rule enforceable.
+`deny.toml` is the authoritative allowed-parent list. P1 adds a ban for each of the 22 non-foundation MANIFOLD packages after Tier 1, beside the existing wgpu/Metal policy. Wrappers preserve declared normal, dev, build, optional, and platform-specific parents. Physics, GPU, and UI may depend only on foundation among workspace crates; fluids may also depend on physics. New workspace packages require an explicit policy entry.
 
-```toml
-deny = [
-    { name = "manifold-app", wrappers = ["manifold-app"] },
-    { name = "manifold-audio", wrappers = ["manifold-app", "manifold-recording"] },
-    { name = "manifold-core", wrappers = ["manifold-app", "manifold-audio", "manifold-editing", "manifold-io", "manifold-media", "manifold-playback", "manifold-renderer"] },
-    { name = "manifold-editing", wrappers = ["manifold-app", "manifold-playback", "manifold-renderer"] },
-    { name = "manifold-fluids", wrappers = ["manifold-renderer"] },
-    { name = "manifold-gpu", wrappers = ["manifold-app", "manifold-led", "manifold-media", "manifold-recording", "manifold-renderer", "manifold-spectral"] },
-    { name = "manifold-io", wrappers = ["manifold-app", "manifold-editing", "manifold-playback", "manifold-renderer"] },
-    { name = "manifold-led", wrappers = ["manifold-app"] },
-    { name = "manifold-media", wrappers = ["manifold-app"] },
-    { name = "manifold-native", wrappers = ["manifold-renderer"] },
-    { name = "manifold-physics", wrappers = ["manifold-fluids", "manifold-renderer"] },
-    { name = "manifold-playback", wrappers = ["manifold-app", "manifold-audio", "manifold-media", "manifold-renderer"] },
-    { name = "manifold-profiler", wrappers = ["manifold-profiler"] },
-    { name = "manifold-recording", wrappers = ["manifold-app"] },
-    { name = "manifold-renderer", wrappers = ["manifold-app"] },
-    { name = "manifold-spectral", wrappers = ["manifold-app", "manifold-audio"] },
-    { name = "manifold-ui", wrappers = ["manifold-app", "manifold-renderer"] },
-]
-```
+App uses a self-wrapper sentinel because empty wrappers also ban an unreferenced workspace root. Profiler now has an actual optional app parent. Unused-wrapper warnings remain visible, including parents inactive under the selected features/platform; they are not globally suppressed. The captured resolved graph passes `cargo deny check bans` without a source dependency refactor.
 
-These are additional entries, not a replacement config; each gains the reason "Physics and UI dependency boundaries". App and profiler deliberately use self-wrapper sentinels: empty wrappers ban even an unreferenced workspace root. A self dependency cannot form a valid Cargo graph, so these entries admit no real consumer. The installed cargo-deny emits two `unused-wrapper` warnings; explain those sentinels in comments without globally suppressing warnings. [Cargo-deny wrapper semantics](https://embarkstudios.github.io/cargo-deny/checks/bans/cfg.html#wrappers).
-
-**Existing edges that would trip the intended boundary: none.** The exact candidate allowlists passed `cargo deny check --disable-fetch --config <temporary-config> --metadata-path <captured-metadata> --hide-inclusion-graph bans` with exit 0, existing duplicate warnings, and the two explained sentinel warnings. The initial empty-wrapper candidate failed on app/profiler roots; the sentinels fix that config failure, not a source dependency. Legitimate edges that must remain wrapped include renderer → editing (dev), editing/playback/renderer → IO (dev), and audio → playback (dev). No implementation dependency refactor is required today.
-
-The existing landing leg runs `cargo deny check bans` (`scripts/landing_gate.py:487`–`:493`). P1 also adds `dependency_bans_cover_workspace` to its cheap preflight and tests it in `scripts/test_landing_gate.py`: parse workspace manifests and deny.toml; require every non-foundation MANIFOLD package to have a ban entry; reject protected crates in host-wrapper lists; reject UI in every non-foundation wrapper list. This is manifest/config validation, not lexical import policing. It prevents a new workspace package from silently bypassing the boundary. Test normal/dev/build/target examples with mocked manifest data, without invoking Cargo from a test. The actual cargo-deny leg validates resolved edges. G1b adds the new crate and its allowed lower dependencies to this policy.
+The existing landing deny leg validates resolved edges. `dependency_bans_cover_workspace` in `scripts/gate_readiness.py` checks metadata and configuration before builds: require one nonempty ban entry per non-foundation package, reject stale targets/parents, and enforce the protected lower-crate and UI boundaries. Its mocked fixtures in `scripts/test_landing_gate.py` cover dependency kinds and invalid policy entries without invoking Cargo. G1b must extend the policy when its new crate is added.
 
 The workspace dependencies of manifold-physics-gpu are foundation, gpu, physics, and fluids, plus the existing low-level dependencies used by the moved code. No core, editing, playback, UI, app, native Metal API, or renderer service may be imported by isolated numerical modules. `manifold-gpu` continues to own backend access. Native Metal remains the current backend; shader source names do not authorize a wgpu backend.
 
@@ -348,6 +324,8 @@ impl SceneGraphTransaction {
 ```
 
 Execution validates the expected owner/type/graph, commits the candidate and refreshed manifest once, and records one inverse. Rejection leaves graph, instance values, mappings, and undo stack unchanged. Redo reuses the prepared IDs; it must not regenerate them. Existing modifier command structs remain domain actions backed by this transaction. It is not a public second editing service.
+
+P1 reuses `commands::graph::InstanceLayerSnapshot` and moves the existing parameter-copy logic with the transaction. Transactions accept whole effect or generator owners; nested `SceneModifier` targets reject because their graph cannot replace the host graph. Modifier commands retain generator-only admission and typed domain errors. Their four execution rejection cases map to the existing public errors without duplicating transaction state.
 
 `C/scene_template.rs` adds the data-only template and pure insertion function:
 
@@ -540,7 +518,7 @@ P3 baseline field inventory: `rg -n '\.fluid_controls\b|pub fluid_controls:' cra
 
 ### P8 — Shatter presentation and ownership
 
-- **Entry/read-back:** P1/P3; read `scene_modifier_edit`, `scene_modifier_authoring`, shatter compiler admission, and modifier card host. Re-run `rg -n 'prepare_new_scene_modifier|shatter_targets' crates/manifold-app/src crates/manifold-renderer/src` and confirm P1 already owns commit.
+- **Entry/read-back:** P1/P3; read `scene_modifier_edit`, `scene_modifier_authoring`, shatter compiler admission, and modifier card host. Re-run `rg -n 'prepare_new_scene_modifier|shatter_targets' crates/manifold-app/src crates/manifold-nodes/src` and confirm P1 already owns commit.
 - **Deliverables:** Shatter action/selection uses common object references and capabilities; modifier parameters remain existing ParamSurface cards; rejected targets preserve owner state. Tests `physics_boundary_shatter_targets`, `physics_boundary_shatter_undo_reload`. No new simulation type or insertion command.
 - **Seam:** existing renderer preparation signature stays; app converts shared model selection to its existing scoped target list. Remove any duplicated eligibility computation superseded by the model, while renderer compiler validation remains authoritative for prepared geometry.
 - **Gate/scope:** focused modifier/renderer/app tests and mapped proof gate. Negative test rejects unsupported animated/deformed/second-active-shatter cases. Saved recipe and controls round-trip and modulate after reload. Use a held-out supported imported mesh.

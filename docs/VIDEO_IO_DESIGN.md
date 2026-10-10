@@ -60,7 +60,7 @@ Extend, don't redesign.
 | LED output samples the compositor output texture per frame | `crates/manifold-led/src/controller.rs:78` | Exists — precedent for "an output that samples the composition" |
 | Stage/venue model: `StageLayout`, venue file persistence | `crates/manifold-core/src/stage.rs:211`, `crates/manifold-io/src/venue_file.rs` | Shipped (multi-display P1) — the persistence home for sends |
 | Content-thread output surface (direct present path) | `crates/manifold-app/src/content_pipeline.rs:622` (`output_surface`) | Exists — the render-side seam where textures are real |
-| Source atom + generator-preset wrapping precedent | `crates/manifold-nodes-scene/src/node_graph/primitives/gltf_texture_source.rs`; `crates/manifold-renderer/assets/generator-presets/Text.json` wraps `node.render_text` | Exists — the input side copies this shape |
+| Source atom + generator-preset wrapping precedent | `crates/manifold-nodes-scene/src/node_graph/primitives/gltf_texture_source.rs`; `crates/manifold-nodes/assets/generator-presets/Text.json` wraps `node.render_text` | Exists — the input side copies this shape |
 | Background FFI worker handing the graph its latest result | `manifold-native` (`DepthEstimator`) | Exists — the async contract live inputs inherit |
 | `node.camera` (AVCapture source atom) | `ML_NODES_DESIGN.md` section 4 (Sources) | **Designed, not built.** NDI/Syphon-in were already named there as "same slot later" — this doc is that later |
 | Fixture source routing `Master \| layer/group` ("routing = bus") | `MULTI_DISPLAY_DESIGN.md` section 7.3 (Lighting: fixtures as placements, consoles as peers) | Designed, not built — D3 mirrors it. ⚠ VERIFY-AT-IMPL: if the fixture-routing enum has landed by execution time, reuse the type; command: `rg -n 'enum.*Source' crates/manifold-core/src/stage.rs` |
@@ -204,7 +204,7 @@ per-input receiver worker owning discovery + latest-frame slot.
 
 Test scope per phase: focused `-p` tests during the phase; one workspace sweep +
 clippy at each phase's end (these phases don't touch GPU-tested primitives' shaders,
-so no `gpu-proofs` run unless a blit kernel lands in manifold-renderer — then run
+so no `gpu-proofs` run unless a blit kernel lands in manifold-nodes — then run
 the focused gpu test for it). UI-flow (L3) doesn't cross process boundaries, so
 demos gate at L2 with an external receiver + screenshot, plus in-process loopback
 tests as the mechanical gate.

@@ -33,20 +33,28 @@ pub(crate) fn interior_cells(nodes: [u32; 3], values: u64) -> Option<[u32; 3]> {
 /// AABB::expand divides that by two on each side; epsilon is in metres.
 pub(crate) const FLIP_WALL_EPSILON: f32 = 5.0e-5;
 
+manifold_core::testkit_visible! {
 /// GPU FLIP's MAC grid, distinct from the authored-grid scalar wire contract.
 /// The native engine adds three cells and offsets its origin by 1.5h.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct FlipSolverGrid {
+pub(crate) struct FlipSolverGrid {
     surface: LiquidLattice,
+}
 }
 
 impl FlipSolverGrid {
-    pub fn from_lattice(authored: LiquidLattice) -> Self {
+manifold_core::testkit_visible! {
+    pub(crate) fn from_lattice(authored: LiquidLattice) -> Self {
         Self { surface: authored.surface() }
     }
+}
 
-    pub fn cells(self) -> [u32; 3] { self.surface.nodes().map(|n| n - 1) }
-    pub fn min(self) -> [f32; 3] { self.surface.min() }
+manifold_core::testkit_visible! {
+    pub(crate) fn cells(self) -> [u32; 3] { self.surface.nodes().map(|n| n - 1) }
+}
+manifold_core::testkit_visible! {
+    pub(crate) fn min(self) -> [f32; 3] { self.surface.min() }
+}
     pub(crate) fn nodes(self) -> [u32; 3] { self.surface.nodes() }
     pub(crate) fn bounds(self) -> Transform { self.surface.bounds() }
     pub(crate) fn wall_inset(self) -> f32 {
@@ -89,17 +97,19 @@ impl LiquidLattice {
         }
     }
 
+manifold_core::testkit_visible! {
     /// The lattice a domain published on its scalar wires (`lattice_min_x/y/z`,
     /// `cell_size`, `nodes_x/y/z`; generated uniforms pack scalars only, so
     /// the lattice travels that way). Defaults are the 4 m Dam Break lattice
     /// at resolution 64, matching each atom's param defaults. Wires no padded
     /// layout could have produced are reported as `node`'s error and give
     /// `None`.
-    pub fn from_wires(ctx: &mut EffectNodeContext<'_, '_>, node: &str) -> Option<Self> {
+    pub(crate) fn from_wires(ctx: &mut EffectNodeContext<'_, '_>, node: &str) -> Option<Self> {
         Self::from_scalars(|name, default| ctx.scalar_or_param(name, default))
             .map_err(|refusal| ctx.error(format!("{node}: {refusal}")))
             .ok()
     }
+}
 
     /// [`Self::from_wires`] over any `scalar_or_param` reader: the extent
     /// checker reads the same wires without a frame. Node counts must be

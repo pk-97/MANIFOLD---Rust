@@ -495,9 +495,8 @@ fn preparation_edit_rebuilds_one_local_snapshot_and_round_trips_with_undo() {
         .find(|node| node.type_id == "node.render_scene")
         .unwrap();
     let mut recipe =
-        manifold_renderer::node_graph::bundled_preset_def(&PresetTypeId::new("SurfacePeel"))
-            .unwrap()
-            .clone();
+        manifold_nodes::bundled_presets::bundled_preset_def(&PresetTypeId::new("SurfacePeel"))
+            .unwrap().as_ref().clone();
     recipe
         .preset_metadata
         .as_mut()

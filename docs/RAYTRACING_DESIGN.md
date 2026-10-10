@@ -40,7 +40,7 @@ Extend, don't redesign. Instruction to executor: RT is an **extension of the REA
 - **D14 — Stored G-buffer is per-scene, tied to the RT toggle.** RENDERING_INFRA_V2 section 2's open decision (always-store vs opt-in vs tier-gated) is answered narrowly for this wave: a scene with RT enabled stores depth + motion vectors to real textures; a non-RT scene keeps today's memoryless path and pays zero bandwidth. Widening to always-store (DoF/motion-blur/SSR for raster scenes) stays RENDERING_INFRA_V2's measured decision, untouched. Amendable by Peter without reopening this doc's phases. **As built (W0, `f76253f5`):** `EffectNode::force_consumed_outputs` default trait hook + one fold-in at `ExecutionPlan::compile`'s `consumed_outputs`; `render_scene` gained `rt_enabled: Bool` (default false, serialization lands in P1) — reuses GBUFFER_DESIGN's shipped lazy `depth`/`velocity` outputs, no new textures or formats. BUG-136 outcome: velocity math PROVED correct under a real orbit; live-app suspects remain open.
 - **D17 — Current-frame acceleration updates share the render encoder (scene-modifier RT, 2026-09-18).** Encode instance descriptors, selective BLAS build/refit, TLAS update, emissive preparation and trace after the same frame's mesh writes. Never privately submit or wait midway through the frame. Prepare retained resources during candidate warmup, including RT-off scenes, and admit the aggregate memory before publication. Required pending geometry rejects the frame; RT does not trace an old or partial scene. The old content-settle/defer/ready transition is superseded by [Scene modifier RT](SCENE_MODIFIER_RT_DESIGN.md), sections 4–5. Export uses the same ordering and its existing completion boundary.
 - **D16 — P1 integration: RT shadows ride the existing opaque depth prepass; forward stays forward (ruled mid-wave 2026-07-22 night, Fable; P1's escalation).** No deferred combine pass is built. `render_scene` already renders an opaque depth prepass (`opaque_depth_snapshot`) before its lighting pass — that is the mode-B slot. When `rt_enabled`: half-res shadow-ray dispatch after the prepass (origins from prepass depth + inverse view-proj; bias normals via screen-space reconstruction from depth — no normal G-buffer target in P1; P2 adds one only if bias artifacts or AO demand it), depth-aware upsample to native, and the forward lighting shader samples the mask as the light visibility factor in place of the shadow-map sample (one uniform-gated bool, not a pipeline permutation). Shadow maps stop rendering for RT scenes. **Seam note:** P2's soft shadows + AO join the SAME half-res dispatch and SAME upsample — this is the extension point, not a new pass.
-- **D15 — D3's cut-reset signal is NODE-LOCAL for v1 (ruled mid-wave 2026-07-22 night, Fable; P4's escalation).** No cut/trigger signal reaches node-graph evaluation today (audit: `FrameTime`/`EffectNodeContext` carry none; ContentPipeline has no clip-changed concept; the audio `"clip_trigger"` param is an unrelated envelope gate — repurposing it is FORBIDDEN). v1 shape: ONE shared runtime helper in `manifold-renderer`'s node_graph runtime (plain per-node state, no new shared state) that resets a node's temporal history when (a) its `owner_key` changes vs stored — covers live clip retriggers — or (b) frame time is discontinuous (>1.5× frame period, either direction) — covers seeks, loops, stutter retriggers, arrangement jumps. Strobes trip neither (same clip, continuous time), so D3's strobe rule holds by construction; demodulated accumulation (P2) handles in-clip light flips. P4 builds the helper; P2 MUST wire its accumulator to the SAME helper (P2's negative-`rg` no-second-reset-path gate enforces it). **Integration seam note for future work:** anything downstream needing "a cut happened" (frame interpolation P6, future temporal effects) wires to this helper, not a new detector — until the deferred engine-side signal (section 7) replaces it, at which point the helper becomes the single place to rewire.
+- **D15 — D3's cut-reset signal is NODE-LOCAL for v1 (ruled mid-wave 2026-07-22 night, Fable; P4's escalation).** No cut/trigger signal reaches node-graph evaluation today (audit: `FrameTime`/`EffectNodeContext` carry none; ContentPipeline has no clip-changed concept; the audio `"clip_trigger"` param is an unrelated envelope gate — repurposing it is FORBIDDEN). v1 shape: ONE shared runtime helper in `manifold-nodes`'s node_graph runtime (plain per-node state, no new shared state) that resets a node's temporal history when (a) its `owner_key` changes vs stored — covers live clip retriggers — or (b) frame time is discontinuous (>1.5× frame period, either direction) — covers seeks, loops, stutter retriggers, arrangement jumps. Strobes trip neither (same clip, continuous time), so D3's strobe rule holds by construction; demodulated accumulation (P2) handles in-clip light flips. P4 builds the helper; P2 MUST wire its accumulator to the SAME helper (P2's negative-`rg` no-second-reset-path gate enforces it). **Integration seam note for future work:** anything downstream needing "a cut happened" (frame interpolation P6, future temporal effects) wires to this helper, not a new detector — until the deferred engine-side signal (section 7) replaces it, at which point the helper becomes the single place to rewire.
 
 **Dynamic geometry contract:** [Scene modifier RT](SCENE_MODIFIER_RT_DESIGN.md) owns revision-driven geometry maintenance, conservative deformation-history resets and the current acceptance ledger. Position-only changes refit; connectivity or unknown writes rebuild.
 
@@ -63,7 +63,7 @@ Only **P0 is briefed now**; P1+ briefs are written *after* P0, to STANDARD, beca
 - **Entry:** any delit hero photoscan; M4 Max; current OS (no Tahoe needed).
 - **Deliverable:** a standalone Metal binary (scratch tree or `tools/`, NOT wired into the app): loads one scan, sun + env + one emissive, shadow+AO rays, MetalFX spatial upscale, fps counter. Modes A/B/C from D2 switchable.
 - **Gate (measured numbers, reported):** fps per mode at 4K output; BVH build time for the scan; refit time for a deforming mesh; visual side-by-side PNG per mode vs the current raster render of the same scene. No "works correctly" — numbers and images.
-- **Forbidden moves:** integrating into `manifold-renderer`; building a denoiser (P0 may be noisy — accumulation experiments only if time is free); any material system work.
+- **Forbidden moves:** integrating into `manifold-nodes`; building a denoiser (P0 may be noisy — accumulation experiments only if time is free); any material system work.
 - **Exit:** numbers pasted into this doc's section 6 (added then), winning mode chosen with Peter, P1+ briefed.
 
 ### 5.1 P0 results (2026-07-22 — the full 120-frame 4K run was WAIVED by Peter; these interim numbers + the visual gate decided mode B, D11)
@@ -470,7 +470,7 @@ wrong is wasted work, and the black-car defect is what makes reflections unusabl
   below a stated floor. (b) I-R1's empty-scene equality test. (c) round-trip: save → reload →
   probe still passes. (d) `MANIFOLD_RENDER_TRACE=1`, no frame > 20 ms, **report the measured
   `trace_ms` delta reflections on vs off** — a number in the phase report. (e) negative `rg`:
-  I-R2, I-R3, I-R4, I-R5. (f) `cargo test -p manifold-renderer --features gpu-proofs` (GPU path
+  I-R2, I-R3, I-R4, I-R5. (f) `cargo test -p manifold-nodes --features gpu-proofs` (GPU path
   touched — `cargo test`, never nextest).
 - *Performer gesture:* toggle `rt_reflections` on a playing scene mid-set — no frame > 20 ms
   across the toggle (pipeline already resident; nothing rebuilds).
@@ -482,7 +482,7 @@ wrong is wasted work, and the black-car defect is what makes reflections unusabl
 - *Demo (Peter only):* reflections-on vs off PNG pair on a mirror-plane scene and on a real hero
   scan — **L2. Peter's look also answers RD3's trigger question**, which is why the hero-scan frame
   is not optional.
-- *Test scope:* `-p manifold-renderer -p manifold-gpu` + the gpu-proofs run. Clippy `-p` both.
+- *Test scope:* `-p manifold-nodes -p manifold-gpu` + the gpu-proofs run. Clippy `-p` both.
 
 #### Raster-parity reflections — environment + textured material shading at the hit point
 
@@ -513,7 +513,7 @@ wrong is wasted work, and the black-car defect is what makes reflections unusabl
   passes. (c) held-out input: the AMG GT3 GLB
   (`tests/fixtures/gltf/mercedes-amg_gt3__www.vecarz.com.glb`) rendered headlessly via
   `render-import`, reflections on vs off PNG pair — **the parity verdict is Peter's look**
-  (D19/D20 standing lesson), never an agent's. (d) `cargo test -p manifold-renderer
+  (D19/D20 standing lesson), never an agent's. (d) `cargo test -p manifold-nodes
   --features gpu-proofs` (`cargo test`, never nextest).
 - *Performer gesture:* load any textured GLB, toggle `rt_reflections` mid-set — the model keeps
   its paint and textures; reflections add to the model's look, never replace it.
@@ -814,8 +814,8 @@ eye may not.
   existing sequences are preserved exactly); the gather as a bounce loop with throughput,
   `RT_GI_MAX_BOUNCES = 1`; `RT_GI_THROUGHPUT_FOLD` declared (unused at 1 bounce is fine —
   it ships with its consumer in MB-B if clippy objects).
-- *Gate:* (a) clippy `-p manifold-gpu -p manifold-renderer`; (b) the full `rt_` gpu-proofs
-  subset (`cargo test -p manifold-renderer --features gpu-proofs --test gpu_proofs rt_
+- *Gate:* (a) clippy `-p manifold-gpu -p manifold-nodes`; (b) the full `rt_` gpu-proofs
+  subset (`cargo test -p manifold-nodes --features gpu-proofs --test gpu_proofs rt_
   --no-fail-fast` — `cargo test`, never nextest); (c) I-MB1's byte diff; (d) I-MB3's `rg`.
 - *Forbidden moves:* changing any sampled sequence (seed offsets are load-bearing for
   I-MB1); touching the reflection block's shading beyond the helper call; touching
@@ -953,7 +953,7 @@ neighbours instead of growing a fake contact gradient.
 - *Deliverables:* `ao_mask` in `RENDER_SCENE_OUTPUTS`; R8Unorm MSAA target + resolve
   (velocity pattern); shader writes 1 / 0-for-unlit-kind / 0-everywhere under the AM2
   gate; clear 1. Gpu proof for the three mask states (lit=1, baked_look=0, RT⇒all 0).
-- *Gate:* clippy `-p manifold-renderer`; `scripts/gpu_proofs_gate.py`.
+- *Gate:* clippy `-p manifold-nodes`; `scripts/gpu_proofs_gate.py`.
 - *Forbidden:* touching the AO group or loader; any change to color/depth/velocity
   output behaviour when `ao_mask` is unwired (lazy rule — unwired must stay byte-inert).
 
@@ -962,7 +962,7 @@ neighbours instead of growing a fake contact gradient.
 - *Deliverables:* importer assembles the AM4 group shape and outer wire; AM5 loader
   migration; I-AM1..I-AM4 tests; `graph-tool validate` + `graph-tool fusion` pre-flight
   on the assembled import graph.
-- *Gate:* clippy; scoped nextest (`manifold-renderer` loader/import filters); gpu proofs
+- *Gate:* clippy; scoped nextest (`manifold-nodes` loader/import filters); gpu proofs
   (I-AM2/I-AM3).
 
 #### Phase records — AO handoff (LANDED 2026-07-30)
@@ -1235,7 +1235,7 @@ return L.
 
 - *Deliverables:* env-on-miss at all gather depths; ao to `.a` through accumulation
   (the three write sites); ED2's two consumer changes; ED4's constants; ED5's clamp.
-- *Gate:* clippy `-p manifold-gpu -p manifold-renderer`; `scripts/gpu_proofs_gate.py`
+- *Gate:* clippy `-p manifold-gpu -p manifold-nodes`; `scripts/gpu_proofs_gate.py`
   including the furnace oracle's I-ED1/I-ED4 legs; the RT suite otherwise green.
 - *Named deviation, gated by eye, not number:* GI/emissive/sun-bounce energy is now
   weighted by `kd_ibl` and baked occlusion like every other diffuse term — metals
@@ -1566,7 +1566,7 @@ range: assign at wave dispatch.
   indexing; the 6-caster value test — each caster independently occluded
   reads its own channel's visibility, CPU-computed expected, on the
   `rt_p1_region_probe` harness.
-- *Gate:* clippy `-p manifold-gpu -p manifold-renderer`; the new value
+- *Gate:* clippy `-p manifold-gpu -p manifold-nodes`; the new value
   test; `scripts/gpu_proofs_gate.py`; negative `rg`: `clamp(i32(slot_f + 0.5), 0, 3)`
   zero hits; `MANIFOLD_RENDER_TRACE=1`, no frame >20ms on an 8-caster
   fixture, `trace_ms` delta 4-vs-8 casters reported as a number.
@@ -1577,7 +1577,7 @@ range: assign at wave dispatch.
   deterministic rays; claiming channel-count agreement without I-RS6's rg.
 - *Demo:* none — L1 (no new visible surface beyond more-correct shadows;
   Peter sees it in RS-C's demo pair).
-- *Test scope:* `-p manifold-renderer -p manifold-gpu` + gpu-proofs.
+- *Test scope:* `-p manifold-nodes -p manifold-gpu` + gpu-proofs.
 
 #### RS-B — emissive light table + alias build
 
@@ -1596,13 +1596,13 @@ range: assign at wave dispatch.
   exact math; held-out input — a real GLB with an emissive map the lane
   did not develop against, table entry count and total power vs a
   CPU-computed census of the same asset.
-- *Gate:* clippy `-p manifold-gpu -p manifold-renderer`; both value
+- *Gate:* clippy `-p manifold-gpu -p manifold-nodes`; both value
   tests; `scripts/gpu_proofs_gate.py`; I-RS2's negative `rg`.
 - *Forbidden moves:* building the table mid-frame (D17); a new
   `Arc<Mutex>`; reading the emissive map per frame (the mean is a
   registration-time computation); per-object proxies "to simplify".
 - *Demo:* none — L1 (no pixels yet; RS-C is the vertical slice).
-- *Test scope:* `-p manifold-renderer -p manifold-gpu` + gpu-proofs.
+- *Test scope:* `-p manifold-nodes -p manifold-gpu` + gpu-proofs.
 
 #### RS-C — kernel sampling + substitution
 
@@ -1645,7 +1645,7 @@ range: assign at wave dispatch.
 - *Demo (Peter only):* PNG pair on an emissive-strip hero scene —
   gather-only vs sampled, converged stills — **L2; the stage verdict is
   Peter's look** (D19/D20 standing lesson).
-- *Test scope:* `-p manifold-renderer -p manifold-gpu` + gpu-proofs
+- *Test scope:* `-p manifold-nodes -p manifold-gpu` + gpu-proofs
   (`cargo test`, never nextest).
 
 **Phasing-completeness check:** every section-15.2 commitment lands in a
@@ -1971,7 +1971,7 @@ number or exit code; PNGs are Peter's morning look only.
   pre-term value; sun in FRONT reads no transmitted contribution. (b) I-TL1's
   byte diff. (c) round-trip: save → reload → probe passes. (d) importer unit
   test: a diffuse-transmission fixture parses factor → uniform. (e) clippy
-  `-p manifold-renderer`; `cargo test -p manifold-renderer --features
+  `-p manifold-nodes`; `cargo test -p manifold-nodes --features
   gpu-proofs` (`cargo test`, never nextest — the shader is touched).
 - *Performer gesture:* `translucency` on a card fader swept live — gate
   drives the param, asserts monotonic region-luminance response.

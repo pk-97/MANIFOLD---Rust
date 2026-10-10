@@ -81,7 +81,7 @@ impl ModifierClipboard {
         }
         Ok(Self {
             host: Box::new(host.clone()),
-            graph: Box::new(graph.clone()),
+            graph: Box::new((*graph).clone()),
             selected: selected.to_vec(),
         })
     }
@@ -107,7 +107,7 @@ pub(crate) fn build_paste(
         &clipboard.host,
         &clipboard.graph,
         &mut after,
-        graph,
+        &graph,
         &clipboard.selected,
         false,
     )?;
@@ -389,9 +389,8 @@ mod tests {
         let mut layer = Layer::new_generator("Source".into(), PresetTypeId::new("Scene"), 0);
         let id = layer.layer_id.clone();
         let graph =
-            manifold_renderer::node_graph::bundled_preset_def(&PresetTypeId::new("Scene"))
-                .unwrap()
-                .clone();
+            manifold_nodes::bundled_presets::bundled_preset_def(&PresetTypeId::new("Scene"))
+                .unwrap().as_ref().clone();
         layer.gen_params_or_init().graph = Some(graph);
         layer.gen_params_or_init().refresh_manifest_from_graph();
         project.timeline.layers.push(layer);
@@ -483,11 +482,11 @@ mod tests {
         let scene = available_scenes.into_iter().next().expect("imported scene");
 
         let mut source_graph = imported.clone();
-        let carrier_recipe = manifold_renderer::node_graph::bundled_preset_def(
+        let carrier_recipe = manifold_nodes::bundled_presets::bundled_preset_def(
             &PresetTypeId::new("VortexFragments"),
         )
         .unwrap();
-        let view_recipe = manifold_renderer::node_graph::bundled_preset_def(
+        let view_recipe = manifold_nodes::bundled_presets::bundled_preset_def(
             &PresetTypeId::new("MathView"),
         )
         .unwrap();
@@ -497,7 +496,7 @@ mod tests {
         let carrier = |id: NodeId, graph: &EffectGraphDef| {
             manifold_nodes_scene::node_graph::scene_modifier_authoring::prepare_new_scene_modifier(
                 graph,
-                carrier_recipe,
+                carrier_recipe.as_ref(),
                 id,
                 scene.clone(),
                 SceneTargetSelection::AllObjects,
@@ -523,7 +522,7 @@ mod tests {
         let mut view =
             manifold_nodes_scene::node_graph::scene_modifier_authoring::prepare_new_scene_modifier(
                 &source_graph,
-                view_recipe,
+                view_recipe.as_ref(),
                 view_id.clone(),
                 scene.clone(),
                 SceneTargetSelection::AllObjects,
@@ -621,7 +620,7 @@ mod tests {
         let host = project.graph_target_owner(&source_target).unwrap();
         let mut source_graph = host.graph.clone().unwrap();
         let mut destination = PresetInstance::new_generator(PresetTypeId::new("Plasma"));
-        let graph = manifold_renderer::node_graph::bundled_preset_def(&PresetTypeId::new("Plasma"))
+        let graph = manifold_nodes::bundled_presets::bundled_preset_def(&PresetTypeId::new("Plasma"))
             .unwrap();
         let before = serde_json::to_value(&destination).unwrap();
         assert!(
@@ -629,7 +628,7 @@ mod tests {
                 host,
                 &source_graph,
                 &mut destination,
-                graph,
+                graph.as_ref(),
                 std::slice::from_ref(&modifier),
                 false
             )
@@ -644,14 +643,14 @@ mod tests {
             }],
         };
         let graph =
-            manifold_renderer::node_graph::bundled_preset_def(&PresetTypeId::new("PhysicsBoxes"))
+            manifold_nodes::bundled_presets::bundled_preset_def(&PresetTypeId::new("PhysicsBoxes"))
                 .unwrap();
         assert!(
             transfer(
                 host,
                 &source_graph,
                 &mut destination,
-                graph,
+                graph.as_ref(),
                 &[modifier],
                 false
             )

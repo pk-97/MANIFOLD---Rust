@@ -50,7 +50,6 @@
 //! bitmap invalidation is a live-app-only Pass-4c mechanism this headless
 //! harness never renders, so it's a dead sink, same as it always was.
 
-use manifold_ui::{LayerAction};
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -436,18 +435,15 @@ struct Runner {
     // one on the readback COPY only.
     filmstrip: Vec<Vec<u8>>,
     last_gesture_points: Vec<Vec2>,
-    // BUG-234: persistent scratch for `evaluate_modulation`'s per-tick
-    // clip-timing/trigger-pulse buffers — reused across `Step` frames so the
-    // harness's modulation tick allocates nothing extra per frame, matching
-    // the content thread's own `PlaybackEngine` fields
-    // (`modulation_timing_scratch`/`pending_trigger_pulses`).
-    modulation_timing_scratch: Vec<(manifold_core::Beats, manifold_core::Beats)>,
-    modulation_pulses: Vec<manifold_playback::modulation::TriggerPulse>,
+    // Persistent headless engine: scripted controls use production clip sync.
+    modulation_engine: manifold_playback::engine::PlaybackEngine,
 }
 
 impl Runner {
     fn new() -> Self {
         let (content_tx, _content_rx) = crossbeam_channel::bounded(64);
+        let mut modulation_engine = manifold_playback::engine::PlaybackEngine::new(Vec::new());
+        modulation_engine.initialize(manifold_core::project::Project::default());
         Self {
             overlay: InteractionOverlay::new(manifold_ui::color::CLIP_VERTICAL_PAD),
             content_tx,
@@ -465,8 +461,7 @@ impl Runner {
             scrub: crate::ui_bridge::ScrubState::default(),
             filmstrip: Vec::new(),
             last_gesture_points: Vec::new(),
-            modulation_timing_scratch: Vec::new(),
-            modulation_pulses: Vec::new(),
+            modulation_engine,
         }
     }
 
@@ -494,41 +489,35 @@ impl Runner {
                     self.clock += DT;
                     std::thread::sleep(Duration::from_secs_f32(DT));
                     ui.update();
-                    if ui.inspector.drawer_anim_active() {
+                    if ui.inspector.drawer_anim_active() || ui.scene_setup_panel.object_cards_animating() {
                         self.needs_structural_sync = true;
                     }
-                    // BUG-234: the harness's frame-advance never ran the
-                    // modulation pipeline, so no flow could show a
-                    // driver/envelope-modulated value change (VD-031). Wire
-                    // the SAME public tick entry point the content thread's
-                    // `PlaybackEngine::tick_playing`/`tick_non_playing` call
-                    // (`engine.rs:911`/`:1020`) directly against the
-                    // fixture's `data.project` — no new wrapper, no
-                    // manifold-playback change. Audio is empty (headless has
-                    // no capture backend); clip-edge layers empty (no
-                    // sync_clips_to_time driver here to populate it — the
-                    // envelope path this proves runs off elapsed-since-start,
-                    // not the edge queue).
-                    let current_beat = manifold_core::tempo::TempoMapConverter::seconds_to_beat(
-                        &mut data.project.tempo_map,
-                        manifold_core::Seconds(self.clock as f64),
-                        data.project.settings.bpm,
-                    );
-                    let mut fire_meters = manifold_core::audio_trigger::FireMeterCapture::default();
-                    let modulation_dirty = manifold_playback::modulation::evaluate_modulation(
+                    // Editing owns the fixture between steps. Temporarily lend
+                    // that same project to the engine, preserving runtime state
+                    // and avoiding a second scheduler in the UI harness.
+                    std::mem::swap(
                         &mut data.project,
-                        current_beat,
-                        manifold_core::Seconds(self.clock as f64),
-                        manifold_core::Seconds(DT as f64),
-                        &manifold_core::audio_features::AudioFeatureSnapshot::default(),
-                        &mut self.modulation_timing_scratch,
-                        &mut self.modulation_pulses,
-                        &[],
-                        &mut fire_meters,
+                        self.modulation_engine.project_mut().expect("initialized engine"),
                     );
-                    if modulation_dirty {
+                    self.modulation_engine.set_time(manifold_core::Seconds(self.clock as f64));
+                    let result = self.modulation_engine.tick(manifold_playback::engine::TickContext {
+                        dt_seconds: manifold_core::Seconds(DT as f64),
+                        realtime_now: manifold_core::Seconds(self.clock as f64),
+                        pre_render_dt: manifold_core::Seconds(DT as f64),
+                        ..Default::default()
+                    });
+                    if result.modulation_active {
                         self.needs_structural_sync = true;
                     }
+                    self.modulation_engine.reclaim_tick_result(result);
+                    // This runner renders UI only and has no scene consumers.
+                    // Consume the frame so Fire controls cannot fill a retained
+                    // delivery queue that this harness never renders.
+                    self.modulation_engine.with_trigger_pulses(|_, _, _| ());
+                    std::mem::swap(
+                        &mut data.project,
+                        self.modulation_engine.project_mut().expect("initialized engine"),
+                    );
                     let mut signals = UiFrameSignals {
                         needs_structural_sync: self.needs_structural_sync,
                         scroll_dirty: self.scroll_dirty,
@@ -719,9 +708,8 @@ impl Runner {
         // act on. Every step drains unconditionally (most steps sent
         // nothing, so this is a no-op `try_recv` miss).
         if self.record_executed_commands(data) {
-            let mut active_layer = data.active.and_then(|index| data.project.timeline.layers.get(index)).map(|layer| layer.layer_id.clone());
-            crate::edit_selection::apply_update(ui, &data.project, data.content.edit_selection_update.as_deref(), &mut data.selection, &mut active_layer);
-            data.active = active_layer.as_ref().and_then(|id| data.project.timeline.find_layer_index_by_id(id));
+            crate::edit_selection::apply_update(ui, &data.project, data.content.edit_selection_update.as_deref(), &mut data.selection, &mut self.active_layer);
+            data.active = self.active_layer.as_ref().and_then(|id| data.project.timeline.find_layer_index_by_id(id));
             self.needs_structural_sync = true;
             self.advance_frame(ui, data, zoom_ppb, render, false);
         }
@@ -764,6 +752,12 @@ impl Runner {
                 }
                 ContentCommand::ObjectModifier(action) => {
                     match crate::object_modifier_transfer::build_action(&data.project, action) {
+                        Ok(command) => ContentCommand::ExecuteOnContent(command),
+                        Err(message) => ContentCommand::GraphEditRejected(message),
+                    }
+                }
+                ContentCommand::SceneCameraSetup(layer_id) => {
+                    match crate::scene_camera_edit::build_action(&data.project, layer_id) {
                         Ok(command) => ContentCommand::ExecuteOnContent(command),
                         Err(message) => ContentCommand::GraphEditRejected(message),
                     }
@@ -1051,7 +1045,7 @@ impl Runner {
             if container_is_inspector {
                 ui.layout.inspector()
             } else {
-                ui.layout.scene_setup()
+                ui.scene_setup_panel.content_viewport()
             }
         };
 
@@ -1374,12 +1368,8 @@ impl Runner {
             // The fixture's active-layer INDEX feeds `sync_build`'s inspector
             // sync; derive it from the id the real bridge maintains (the old
             // mirrored arm set it directly).
-            if let PanelAction::Layer(LayerAction::LayerClicked(..)) = action {
-                data.active = self
-                    .active_layer
-                    .as_ref()
-                    .and_then(|lid| data.project.timeline.find_layer_by_id(lid).map(|(i, _)| i));
-            }
+            data.active = self.active_layer.as_ref()
+                .and_then(|lid| data.project.timeline.find_layer_index_by_id(lid));
         }
     }
 
@@ -1471,7 +1461,8 @@ impl Runner {
         // decision below. Only forces a rebuild when something was actually
         // mid-flight, so a script with nothing armed keeps the same
         // cache-hit behavior it had before this fix.
-        let settled = ui.inspector.skip_to_settled(&mut ui.tree);
+        let settled = ui.inspector.skip_to_settled(&mut ui.tree)
+            | ui.scene_setup_panel.skip_cards_to_settled(&mut ui.tree);
         // Mirror app_render.rs's per-frame overlay translation: opening an
         // overlay (browser popup, dropdown) via `try_open_dropdown` consumes
         // the action and only sets `overlay_dirty` — no dispatched action

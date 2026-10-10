@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "source_crate": "crates/manifold-renderer",
+  "destination_crate": "crates/manifold-ui-paint",
+  "rewrite_roots": [
+    "crates"
+  ],
+  "aliases": {}
+}

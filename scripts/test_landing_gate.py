@@ -13,6 +13,7 @@ import tempfile
 import threading
 import time
 import unittest
+from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 import landing_gate
@@ -35,6 +36,8 @@ def synthetic_workspace(root, paths):
     """
     root = Path(root).resolve()
     packages = sorted({path.split("/")[1] for path in paths if path.startswith("crates/")})
+    if any(path.startswith(cpu_scope.CATALOG_PATHS) or path.endswith(".wgsl") for path in paths):
+        packages = sorted(set(packages) | {"manifold-nodes"})
     if not packages:
         packages = ["manifold-app"]
     metadata = {"workspace_members": [], "packages": []}
@@ -61,7 +64,7 @@ def synthetic_workspace(root, paths):
         glb = crate / "tests/glb_conformance.rs"
         glb.parent.mkdir(parents=True, exist_ok=True)
         glb.touch(exist_ok=True)
-        if package == "manifold-renderer":
+        if package == "manifold-nodes":
             targets.append({"name": "glb_conformance", "kind": ["test"],
                             "src_path": str(glb), "required-features": ["gpu-proofs"]})
             for binary in ("uniform_layout_proof", "uniform_layout_extended"):
@@ -82,6 +85,112 @@ def synthetic_workspace(root, paths):
     return Workspace(root, metadata=metadata)
 
 
+def add_test_target(root, workspace, package, name, relative):
+    """Add a conventional integration target to a synthetic Cargo inventory."""
+    root = Path(root).resolve()
+    source = root / workspace.roots[package] / relative
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.touch(exist_ok=True)
+    workspace.packages[package]["targets"].append({
+        "name": name,
+        "kind": ["test"],
+        "src_path": str(source),
+        "required-features": [],
+    })
+    return source
+
+
+def dependency_fixture(root, rows, dependencies=None, extra=()):
+    """Build the metadata/config seam without invoking Cargo."""
+    names = {'manifold-foundation', 'manifold-app', 'manifold-physics',
+             'manifold-fluids', 'manifold-gpu', 'manifold-core', 'manifold-ui',
+             *extra}
+    packages = {}
+    for name in names:
+        packages[name] = {'dependencies': []}
+    for name, edges in (dependencies or {}).items():
+        packages[name]['dependencies'] = [
+            {'name': child, 'path': f'crates/{child}', 'kind': kind, 'target': target}
+            for child, kind, target in edges]
+    config = ['[bans]', 'deny = [']
+    for name, wrappers in rows:
+        values = ', '.join(f'"{wrapper}"' for wrapper in wrappers)
+        config.append(f'    {{ name = "{name}", wrappers = [{values}] }},')
+    config.append(']')
+    (Path(root) / 'deny.toml').write_text('\n'.join(config) + '\n')
+    return SimpleNamespace(packages=packages)
+
+
+class DependencyBanTests(unittest.TestCase):
+    def rows(self):
+        return [('manifold-app', ['manifold-app']),
+                ('manifold-core', ['manifold-app']),
+                ('manifold-fluids', ['manifold-app']),
+                ('manifold-gpu', ['manifold-app']),
+                ('manifold-physics', ['manifold-fluids']),
+                ('manifold-ui', ['manifold-app'])]
+
+    def test_dependency_bans_cover_workspace_accepts_lower_edges_and_all_edge_kinds(self):
+        dependencies = {
+            'manifold-physics': [('manifold-foundation', None, None),
+                                 ('manifold-foundation', 'dev', None),
+                                 ('manifold-foundation', 'build', 'cfg(unix)')],
+            'manifold-fluids': [('manifold-foundation', None, None),
+                                ('manifold-physics', 'dev', 'cfg(test)')],
+            'manifold-gpu': [('manifold-foundation', None, 'cfg(target_os = "macos")')],
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = dependency_fixture(directory, self.rows(), dependencies)
+            self.assertEqual(gate_readiness.dependency_bans_cover_workspace(directory, workspace), [])
+
+    def test_dependency_bans_rejects_protected_to_host_and_ui_admissions(self):
+        for wrapper, phrase in [('manifold-physics', 'protected crate'),
+                                ('manifold-fluids', 'protected crate'),
+                                ('manifold-gpu', 'protected crate'),
+                                ('manifold-ui', 'manifold-ui cannot wrap')]:
+            with self.subTest(wrapper=wrapper), tempfile.TemporaryDirectory() as directory:
+                rows = [(name, [wrapper] if name == 'manifold-core' else values)
+                        for name, values in self.rows()]
+                workspace = dependency_fixture(directory, rows)
+                problems = gate_readiness.dependency_bans_cover_workspace(directory, workspace)
+                self.assertTrue(any(phrase in problem for problem in problems), problems)
+
+    def test_dependency_bans_rejects_protected_dependencies_of_every_kind(self):
+        for parent in ('manifold-physics', 'manifold-fluids', 'manifold-gpu'):
+            for kind, target in ((None, None), ('dev', None), ('build', None),
+                                 (None, 'cfg(target_os = "macos")')):
+                with self.subTest(parent=parent, kind=kind, target=target), tempfile.TemporaryDirectory() as directory:
+                    rows = self.rows() + [('manifold-new', ['manifold-app'])]
+                    dependencies = {parent: [('manifold-new', kind, target)]}
+                    workspace = dependency_fixture(directory, rows, dependencies, extra=('manifold-new',))
+                    problems = gate_readiness.dependency_bans_cover_workspace(directory, workspace)
+                    self.assertTrue(any('protected dependencies' in problem for problem in problems), problems)
+
+    def test_dependency_bans_require_exact_nonfoundation_entries(self):
+        with tempfile.TemporaryDirectory() as directory:
+            rows = self.rows() + [('manifold-core', ['manifold-app'])]
+            workspace = dependency_fixture(directory, rows, extra=('manifold-new',))
+            problems = gate_readiness.dependency_bans_cover_workspace(directory, workspace)
+            self.assertTrue(any('exactly one' in problem for problem in problems))
+            self.assertTrue(any('missing MANIFOLD ban entry for manifold-new' in problem
+                                for problem in problems))
+
+        with tempfile.TemporaryDirectory() as directory:
+            rows = [(name, [] if name == 'manifold-core' else values)
+                    for name, values in self.rows()]
+            workspace = dependency_fixture(directory, rows)
+            problems = gate_readiness.dependency_bans_cover_workspace(directory, workspace)
+            self.assertTrue(any('nonempty string wrappers' in problem for problem in problems))
+
+    def test_dependency_bans_reject_stale_manifold_wrapper(self):
+        with tempfile.TemporaryDirectory() as directory:
+            rows = [(name, ['manifold-removed'] if name == 'manifold-core' else values)
+                    for name, values in self.rows()]
+            workspace = dependency_fixture(directory, rows)
+            problems = gate_readiness.dependency_bans_cover_workspace(directory, workspace)
+            self.assertTrue(any('stale MANIFOLD wrappers' in problem for problem in problems))
+
+
 def process_alive(pid):
     """True while `pid` runs; a reaped or zombie process counts as gone."""
     try:
@@ -100,19 +209,19 @@ def process_alive(pid):
 class SlowTestParsingTests(unittest.TestCase):
     def test_status_lines_colours_counters_and_summary_duplicates(self):
         transcript = (
-            '    \x1b[33mSLOW\x1b[0m [>30.000s] manifold-renderer preset_runtime::tests::foo\n'
-            '    SLOW [>60.000s] manifold-renderer preset_runtime::tests::foo\n'
-            '    \x1b[32mPASS\x1b[0m [  62.345s] (1/3) \x1b[1mmanifold-renderer\x1b[0m preset_runtime::tests::foo\n'
+            '    \x1b[33mSLOW\x1b[0m [>30.000s] manifold-nodes preset_runtime::tests::foo\n'
+            '    SLOW [>60.000s] manifold-nodes preset_runtime::tests::foo\n'
+            '    \x1b[32mPASS\x1b[0m [  62.345s] (1/3) \x1b[1mmanifold-nodes\x1b[0m preset_runtime::tests::foo\n'
             '    PASS [  12.300s] manifold-core::integration binary::name\n'
             '    PASS [  10.000s] manifold-core boundary\n'
             '    PASS [   9.999s] manifold-core fast\n'
-            '    SLOW [>30.000s] manifold-renderer unfinished\n'
+            '    SLOW [>30.000s] manifold-nodes unfinished\n'
             '     Summary [  62.400s] 3 tests run\n'
-            '    SLOW [  62.345s] manifold-renderer preset_runtime::tests::foo\n'
+            '    SLOW [  62.345s] manifold-nodes preset_runtime::tests::foo\n'
         )
         self.assertEqual(landing_gate.parse_slow_tests(transcript), [
-            {'name': 'manifold-renderer preset_runtime::tests::foo', 's': 62.345},
-            {'name': 'manifold-renderer unfinished', 's': 30.0},
+            {'name': 'manifold-nodes preset_runtime::tests::foo', 's': 62.345},
+            {'name': 'manifold-nodes unfinished', 's': 30.0},
             {'name': 'manifold-core::integration binary::name', 's': 12.3},
             {'name': 'manifold-core boundary', 's': 10.0},
         ])
@@ -135,7 +244,12 @@ class SlowTestParsingTests(unittest.TestCase):
 
 class LandingTests(unittest.TestCase):
     def setUp(self):
+        self._gpu_queue_tmp = self.enterContext(tempfile.TemporaryDirectory())
+        self.enterContext(patch.dict(
+            os.environ, {"MANIFOLD_GPU_QUEUE_DIR": self._gpu_queue_tmp}))
         self.enterContext(patch.object(landing_gate.gpu_scope, "learned_times_path", return_value=None))
+        # The synthetic workspace exercises gate ordering, not shipped smoke ownership.
+        self.enterContext(patch.object(landing_gate.gpu_scope, "SMOKE_FILTERS", ['fixture_smoke::']))
 
     checks = ["tooling", "design-status", "ignored-tests", "deny",
               "clippy", "tests-build", "test-ownership/manifold-gpu",
@@ -143,7 +257,7 @@ class LandingTests(unittest.TestCase):
 
     def exercise(self, failed=None, extra=(), stale_docs=False, packages=True, head="head", paths=None,
                  comment=False, gpu_output=None, proof_cached=False, manifest=None,
-                 nextest_output=None, readiness_errors=(), failure_code=1, test_inventory=None):
+                 nextest_output=None, readiness_errors=(), failure_code=1, test_inventory=None, extra_tooling=()):
         called, commands = [], []
         self.events = events = []
         paths = paths or ["crates/manifold-gpu/src/metal/device.rs"]
@@ -186,7 +300,8 @@ class LandingTests(unittest.TestCase):
                 ownership_label = f"test-ownership/{cmd[cmd.index('-p') + 1]}"
                 called.append(ownership_label)
                 testcases = {"tests::test", "metal::device::test",
-                             "regenerates_in_sync"}
+                             "regenerates_in_sync", "uniform_layout_proof::test",
+                             "uniform_layout_extended::test", "wgsl_validation::test"}
                 for selected in paths:
                     if "/src/" in selected and selected.endswith(".rs"):
                         module = selected.split("/src/", 1)[1][:-3].replace("/", "::")
@@ -196,7 +311,7 @@ class LandingTests(unittest.TestCase):
                     elif "/tests/" in selected:
                         testcases.add("test")
                 suites = {name: {"binary-name": name, "testcases": sorted(testcases)}
-                          for name in ("synthetic", "gpu_proofs", "glb_conformance",
+                          for name in ("synthetic", "main", "gpu_proofs", "glb_conformance",
                                        "uniform_layout_proof", "uniform_layout_extended",
                                        "godfile_regrowth", "no_bespoke_row_infra",
                                        "file_loader_exhaustiveness")}
@@ -233,7 +348,7 @@ class LandingTests(unittest.TestCase):
             stack.enter_context(patch.object(landing_gate, "run_cmd", side_effect=run))
             def readiness(_repo, selected_paths, _base):
                 from codex_checks import tooling_checks
-                tooling = tooling_checks(root, selected_paths)
+                tooling = tooling_checks(root, selected_paths) + list(extra_tooling)
                 if not selected_paths:
                     return {"packages": [], "dependents": [], "cpu": cpu_scope.Plan(),
                             "gpu": gpu_scope.Plan(), "workspace": None, "errors": [], "flows": [], "tooling": tooling}
@@ -279,20 +394,35 @@ class LandingTests(unittest.TestCase):
             logs = [p.read_text() for p in (root / "target/landing-logs").glob("*.log")]
             return code, called, timings, commands, logs, output.getvalue(), deps.call_count
 
+    def test_nested_gpu_tooling_builds_before_hold_and_runs_after_cheap_checks(self):
+        tooling = [
+            {'name': 'nested-build', 'argv': ['python3', 'gpu_proofs_gate.py', '--build-only']},
+            {'name': 'nested-proof', 'argv': ['python3', 'gpu_proofs_gate.py'], 'phase': 'gpu'},
+        ]
+        code, called, *_ = self.exercise(paths=['scripts/gate_readiness.py'], extra_tooling=tooling)
+        self.assertEqual(code, 0)
+        hold = next(i for i, event in enumerate(self.events) if event.startswith('hold-enter:'))
+        self.assertLess(self.events.index('gpu-proofs-build'), hold)
+        self.assertGreater(self.events.index('gpu-proofs'), hold)
+        code, called, *_ = self.exercise(paths=['scripts/gate_readiness.py'], extra_tooling=tooling, failed='tooling')
+        self.assertNotEqual(code, 0)
+        self.assertNotIn('gpu-proofs', called)
+        self.assertFalse(any(event.startswith('hold-enter:') for event in self.events))
+
     def test_nextest_timings_keep_full_output_on_pass_and_failure(self):
-        stdout = 'PASS [12.3s] manifold-renderer stdout_test'
-        stderr = 'SLOW [>30s] manifold-renderer stderr_test\n' + 'noise\n' * 25
-        expected = [{'name': 'manifold-renderer stderr_test', 's': 30.0},
-                    {'name': 'manifold-renderer stdout_test', 's': 12.3}]
+        stdout = 'PASS [12.3s] manifold-nodes stdout_test'
+        stderr = 'SLOW [>30s] manifold-nodes stderr_test\n' + 'noise\n' * 25
+        expected = [{'name': 'manifold-nodes stderr_test', 's': 30.0},
+                    {'name': 'manifold-nodes stdout_test', 's': 12.3}]
         for failed in (None, 'tests'):
             with self.subTest(failed=failed):
                 _, _, timings, _, _, _, _ = self.exercise(
                     failed=failed, nextest_output=(stdout, stderr), gpu_output=stdout,
-                    paths=['crates/manifold-renderer/src/node_graph/primitives/camera_lens.rs'])
+                    paths=['crates/manifold-nodes-scene/src/node_graph/primitives/camera_lens.rs'])
                 for check in timings['checks']:
                     if check['label'].startswith('tests/'):
                         self.assertEqual(check['slow_tests'], expected)
-                    elif check['label'] == 'tests-build':
+                    elif check['label'] == 'tests-build' or check['label'].startswith('tests-build/'):
                         self.assertEqual(check['slow_tests'], [])
                     else:
                         self.assertNotIn('slow_tests', check)
@@ -544,12 +674,12 @@ class LandingTests(unittest.TestCase):
         # Compare entire argv: no feature, package or filter changes may leak
         # from proof selection into nextest (including build/catalog commands).
         for path in (
-            "crates/manifold-renderer/src/node_graph/primitives/invert.rs",
-            "crates/manifold-renderer/src/node_graph/primitives/mod.rs",
+            "crates/manifold-nodes-image/src/node_graph/primitives/invert.rs",
+            "crates/manifold-nodes-image/src/node_graph/primitives/mod.rs",
             "crates/manifold-node-engine/src/water/primitives/gpu_flip_scene_tests.rs",
-            "crates/manifold-renderer/src/node_graph/bundled_presets.rs",
-            "crates/manifold-renderer/tests/gpu_proofs/main.rs",
-            "crates/manifold-renderer/tests/glb_conformance.rs",
+            "crates/manifold-nodes/src/bundled_presets.rs",
+            "crates/manifold-nodes/tests/gpu_proofs/main.rs",
+            "crates/manifold-nodes/tests/gpu_proofs/glb_conformance.rs",
             "crates/manifold-gpu/src/metal/device.rs",
         ):
             with self.subTest(path=path):
@@ -587,7 +717,7 @@ class LandingTests(unittest.TestCase):
 
     def test_stale_docs_reported_but_stale_thumbnails_ignored(self):
         with tempfile.TemporaryDirectory() as d:
-            assets = Path(d) / "crates/manifold-renderer/assets"
+            assets = Path(d) / "crates/manifold-nodes/assets"
             for sub in ("effect-presets", "preset-thumbnails/effects"):
                 (assets / sub).mkdir(parents=True)
             (assets / "effect-presets/Bloom.json").write_text("{}")
@@ -629,13 +759,15 @@ class LandingTests(unittest.TestCase):
         self.assertEqual(self.events[-1], "hold-exit")
 
     def test_unmapped_gpu_path_fails_gate_naming_path(self):
+        # A non-Rust source file is GPU-scoped but owns no CPU test binary.
+        # Putting it under tests/ would make this harness select a CPU binary.
         code, called, _, _, _, output, _ = self.exercise(
-            paths=["crates/manifold-renderer/src/node_graph/orphan.bin"])
+            paths=["crates/manifold-node-engine/src/orphan.bin"])
         self.assertEqual(code, 1)
         self.assertNotIn("gpu-proofs", called)
         self.assertNotIn("gpu-proofs-build", called)
         self.assertNotIn("tests-build", called)
-        self.assertIn("node_graph/orphan.bin", output)
+        self.assertIn("src/orphan.bin", output)
         self.assertIn("Add a mapping rule", output)
 
     def test_named_red_collection_does_not_skip_remaining_checks(self):
@@ -692,6 +824,65 @@ class LandingTests(unittest.TestCase):
             while time.monotonic() < deadline and process_alive(grandchild):
                 time.sleep(0.1)
             self.assertFalse(process_alive(grandchild), "grandchild survived the timeout")
+
+    def test_timeout_report_precedes_sigterm_child_failure_and_keeps_raw_transcript(self):
+        # A nested gate may turn the deadline's SIGTERM into a test-looking
+        # assertion and exit 143.  The parent deadline remains authoritative.
+        with tempfile.TemporaryDirectory() as d, \
+                contextlib.redirect_stdout(io.StringIO()) as output:
+            script = (
+                "import signal, sys, time\n"
+                "def on_term(_signum, _frame):\n"
+                "    print('assertion failed: child exit 143', file=sys.stderr, flush=True)\n"
+                "    sys.exit(143)\n"
+                "signal.signal(signal.SIGTERM, on_term)\n"
+                "print('child started', flush=True)\n"
+                "time.sleep(120)\n"
+            )
+            script_path = Path(d) / "nested_gate.py"
+            script_path.write_text(script)
+            receipt = Mock()
+            receipt.unchanged.return_value = True
+            receipt.reused.return_value = False
+            receipt.save.side_effect = AssertionError('timeout must not publish a receipt')
+            exit_, out, err, duration = landing_gate.run_check(
+                "nested", [sys.executable, "-u", str(script_path)], Path(d), 1, passed=receipt)
+            tail = (out + err).rstrip().splitlines()[-20:]
+            landing_gate.print_result("nested", "FAIL", duration, tail)
+            report = output.getvalue()
+            self.assertEqual(exit_, -1)
+            self.assertGreaterEqual(report.count("[FAIL] nested timed out at configured 1 seconds"), 2)
+            self.assertIn("TIMEOUT: timed out at configured 1 seconds", report)
+            self.assertIn("rerun: ", report)
+            self.assertNotIn("assertion failed", report)
+            self.assertNotIn("[FAIL] nested (", report)
+            logs = list((Path(d) / "target/landing-logs").glob("*.log"))
+            self.assertEqual(len(logs), 1)
+            self.assertIn("assertion failed", logs[0].read_text())
+            self.assertNotIn("TIMEOUT:", logs[0].read_text())
+            receipt.save.assert_not_called()
+            self.assertLess(duration, 10)
+
+    def test_gpu_timeout_preserves_raw_transcript_and_timeout_only_tail(self):
+        raw = 'AssertionError: child caught SIGTERM and returned 143\n'
+
+        def timeout(cmd, cwd, seconds, live_log=None):
+            live_log.write_text(raw)
+            return -1, raw, '', seconds + 2
+
+        with tempfile.TemporaryDirectory() as d, \
+                patch.object(landing_gate, 'run_cmd', side_effect=timeout), \
+                contextlib.redirect_stdout(io.StringIO()):
+            code, out, err, _ = landing_gate.run_check(
+                'gpu-proofs', ['python3', 'scripts/gpu_proofs_gate.py'], Path(d), 120)
+            self.assertEqual(code, -1)
+            self.assertEqual(out, '')
+            self.assertNotIn('AssertionError', err)
+            self.assertIn('timed out at configured 120 seconds', err)
+            self.assertIn('rerun: ', err)
+            logs = list((Path(d) / 'target/landing-logs').glob('*.log'))
+            self.assertEqual(len(logs), 1)
+            self.assertEqual(logs[0].read_text(), raw)
 
     def test_live_log_holds_lines_before_the_command_exits(self):
         with tempfile.TemporaryDirectory() as d:
@@ -775,24 +966,51 @@ class LandingTests(unittest.TestCase):
         self.assertEqual(deps, 0)
 
     def test_one_primitive_selects_its_module_and_the_layout_proofs(self):
-        path = "crates/manifold-renderer/src/node_graph/primitives/camera_lens.rs"
+        path = "crates/manifold-nodes-scene/src/node_graph/primitives/camera_lens.rs"
         _, _, _, commands, _, output, _ = self.exercise(paths=[path])
         expected = sorted([
-            "(package(=manifold-renderer) & test(/^node_graph::primitives::camera_lens::/))",
-            "(package(=manifold-renderer) & binary(=uniform_layout_proof))",
-            "(package(=manifold-renderer) & binary(=uniform_layout_extended))",
-            "(package(=manifold-renderer) & test(regenerates_in_sync))",
+            "(package(=manifold-nodes-scene) & test(/^node_graph::primitives::camera_lens::/))",
+            "(package(=manifold-nodes) & test(/^uniform_layout_proof::/))",
+            "(package(=manifold-nodes) & test(/^uniform_layout_extended::/))",
+            "(package(=manifold-nodes) & test(regenerates_in_sync))",
         ])
         scoped = [c for c in commands if c[:2] == ["cargo", "nextest"] and c[2] == "run"
                   and "-E" in c]
         builds = [c[c.index("-E") + 1] for c in scoped if "--no-run" in c]
         runs = sorted(c[c.index("-E") + 1] for c in scoped if "--no-run" not in c)
-        self.assertEqual(builds, [" | ".join(expected)])
-        self.assertEqual(runs, [" | ".join(expected)])
+        selections = sorted([" | ".join(f for f in expected if "package(=manifold-nodes)" in f),
+                             " | ".join(f for f in expected if "package(=manifold-nodes-scene)" in f)])
+        self.assertEqual(sorted(builds), selections)
+        self.assertEqual(runs, selections)
         self.assertIn("[tests] filterset: " + " | ".join(expected), output)
 
 
 class NightlyQueueTests(unittest.TestCase):
+    def setUp(self):
+        self._gpu_queue_tmp = self.enterContext(tempfile.TemporaryDirectory())
+        self.enterContext(patch.dict(
+            os.environ, {"MANIFOLD_GPU_QUEUE_DIR": self._gpu_queue_tmp}))
+
+    def test_live_parent_reservation_is_outside_test_queue(self):
+        with tempfile.TemporaryDirectory() as directory:
+            live_queue = Path(directory)
+            trunk_health.gpu_queue.reserve(
+                "water-campaign", "GPU proof window", 60, directory=live_queue)
+            # Simulate the environment inherited from a live campaign, then
+            # enter each fixture exactly as unittest does before a test.
+            with patch.dict(os.environ, {"MANIFOLD_GPU_QUEUE_DIR": directory}):
+                for test_class in (LandingTests, NightlyQueueTests):
+                    fixture = test_class()
+                    try:
+                        fixture.setUp()
+                        self.assertNotEqual(trunk_health.gpu_queue.queue_dir(), live_queue)
+                        self.assertEqual(trunk_health.gpu_queue.reservation(), {})
+                    finally:
+                        fixture.doCleanups()
+            self.assertEqual(
+                trunk_health.gpu_queue.reservation(live_queue)["owner"],
+                "water-campaign")
+
     def test_gpu_legs_yield_between_checks_and_use_nightly_priority(self):
         held = False
         events = []
@@ -1001,7 +1219,7 @@ class DiffScopeTests(unittest.TestCase):
                 self.assertEqual(diff_scope.code_lines(source, '.rs'), expected)
 
     def test_changed_lines_drive_path_exclusion(self):
-        path = "crates/manifold-renderer/src/node_graph/primitives/blur.rs"
+        path = "crates/manifold-nodes-image/src/node_graph/primitives/bilateral_blur.rs"
         old_oid, new_oid = "a" * 40, "b" * 40
         raw = (f":100644 100644 {old_oid} {new_oid} M\0{path}\0\0"
                f"diff --git a/{path} b/{path}\n@@ -1 +1 @@\n-// old\n+// new\n")
@@ -1130,6 +1348,115 @@ class DiffScopeTests(unittest.TestCase):
             self.assertIn("test(/^water::fluid::checks::/)", plan.filterset)
             self.assertIn("binary(=gpu_proofs)", plan.filterset)
 
+    def test_private_folded_test_selects_every_actual_mount(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = "crates/manifold-nodes/tests/support/private_folded.rs"
+            workspace = synthetic_workspace(d, [path, "crates/manifold-nodes/tests/catalog.rs"])
+            catalog = add_test_target(d, workspace, "manifold-nodes", "catalog", "tests/catalog.rs")
+            catalog.write_text(
+                '#[path = "support/private_folded.rs"] mod first_mount;\n'
+                '#[path = "support/private_folded.rs"] mod second_mount;\n')
+            (Path(d) / path).write_text("#[test]\nfn folded_private_test() {}\n")
+            plan = cpu_scope.plan_for_paths([path], d, workspace=workspace)
+            self.assertEqual(plan.filters, {
+                "(package(=manifold-nodes) & binary(=catalog) & test(/^first_mount::/))",
+                "(package(=manifold-nodes) & binary(=catalog) & test(/^second_mount::/))",
+            })
+            self.assertNotIn("manifold-nodes", plan.whole)
+
+    def test_pub_super_folded_source_selects_parent_prefix(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = "crates/manifold-nodes/tests/parent/family.rs"
+            workspace = synthetic_workspace(d, [path, "crates/manifold-nodes/tests/catalog.rs"])
+            catalog = add_test_target(d, workspace, "manifold-nodes", "catalog", "tests/catalog.rs")
+            catalog.write_text(
+                'mod parent {\n'
+                '    #[path = "family.rs"]\n'
+                '    pub(super) mod family;\n'
+                '}\n')
+            (Path(d) / path).write_text(
+                "pub(super) mod tests { #[test] fn family_test() {} }\n")
+            plan = cpu_scope.plan_for_paths([path], d, workspace=workspace)
+            self.assertEqual(plan.filters, {
+                "(package(=manifold-nodes) & binary(=catalog) & test(/^parent::/))",
+            })
+
+    def test_exported_shared_and_root_sources_keep_whole_binary(self):
+        cases = [
+            ("fn helper() {}", "helper.rs"),
+            ("pub mod exported { #[test] fn exported_test() {} }", "exported.rs"),
+            ("pub(crate) mod exported { #[test] fn exported_test() {} }", "exported.rs"),
+            ("pub(in crate) mod exported { #[test] fn exported_test() {} }", "exported.rs"),
+            ("#[macro_export] macro_rules! exported { () => {}; } #[test] fn exported_test() {}",
+             "exported_macro.rs"),
+            ("macro_rules! helper { () => {}; } #[test] fn local_test() {}", "macro.rs"),
+            ("include!(\"included.rs\"); #[test] fn included_test() {}", "included.rs"),
+        ]
+        for source_text, relative in cases:
+            with self.subTest(source=source_text), tempfile.TemporaryDirectory() as d:
+                path = "crates/manifold-nodes/tests/support/" + relative
+                workspace = synthetic_workspace(d, [path, "crates/manifold-nodes/tests/catalog.rs"])
+                catalog = add_test_target(d, workspace, "manifold-nodes", "catalog", "tests/catalog.rs")
+                catalog.write_text(f'#[path = "support/{relative}"] mod private;\n')
+                (Path(d) / path).write_text(source_text)
+                plan = cpu_scope.plan_for_paths([path], d, workspace=workspace)
+                self.assertEqual(plan.filters, {
+                    "(package(=manifold-nodes) & binary(=catalog))",
+                })
+
+        with tempfile.TemporaryDirectory() as d:
+            path = "crates/manifold-nodes/tests/catalog.rs"
+            workspace = synthetic_workspace(d, [path])
+            catalog = add_test_target(d, workspace, "manifold-nodes", "catalog", "tests/catalog.rs")
+            catalog.write_text("#[test] fn root() {}\n")
+            plan = cpu_scope.plan_for_paths([path], d, workspace=workspace)
+            self.assertEqual(plan.filters, {
+                "(package(=manifold-nodes) & binary(=catalog))",
+            })
+
+    def test_gpu_only_source_forwards_module_without_whole_binary(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = "crates/manifold-nodes/tests/gpu_proofs/support/gpu_only.rs"
+            workspace = synthetic_workspace(d, [path])
+            (Path(d) / "crates/manifold-nodes/tests/gpu_proofs/main.rs").write_text(
+                '#[path = "support/gpu_only.rs"] mod gpu_only;\n')
+            (Path(d) / path).write_text(
+                '#[cfg(all(test, feature = "gpu-proofs"))]\n'
+                'mod tests { #[test] fn gpu_only() {} }\n')
+            plan = cpu_scope.plan_for_paths([path], d, workspace=workspace)
+            self.assertIn("gpu_only::", plan.gpu_filters)
+            self.assertFalse(plan.gpu_binaries)
+            self.assertNotIn("gpu_only::", plan.filterset)
+            with patch("gpu_scope.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "", "")):
+                gpu = gpu_scope.plan_for_paths([path], d, workspace=workspace, cpu_plan=plan)
+            self.assertIn("gpu_only::", gpu.filters)
+            self.assertFalse(gpu.required_binaries)
+
+            # A root edit still selects the entire feature-gated binary.
+            root_path = "crates/manifold-nodes/tests/gpu_proofs/main.rs"
+            root_plan = cpu_scope.plan_for_paths([root_path], d, workspace=workspace)
+            self.assertEqual(root_plan.gpu_binaries, {("manifold-nodes", "gpu_proofs")})
+            # Unresolved mounts keep the previous whole-target fallback.
+            (Path(d) / root_path).write_text("")
+            unresolved = cpu_scope.plan_for_paths([path], d, workspace=workspace)
+            self.assertEqual(unresolved.gpu_binaries, {("manifold-nodes", "gpu_proofs")})
+
+    def test_missing_folded_module_widens_owning_binary_only(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = "crates/manifold-nodes/tests/support/folded.rs"
+            workspace = synthetic_workspace(d, [path, "crates/manifold-nodes/tests/catalog.rs"])
+            catalog = add_test_target(d, workspace, "manifold-nodes", "catalog", "tests/catalog.rs")
+            catalog.write_text('#[path = "support/folded.rs"] mod folded;\n')
+            (Path(d) / path).write_text("#[test]\nfn folded_test() {}\n")
+            plan = cpu_scope.plan_for_paths([path], d, workspace=workspace)
+            listing = {"rust-suites": {
+                "catalog": {"binary-name": "catalog", "testcases": ["catalog::other_test"]},
+                "gpu_proofs": {"binary-name": "gpu_proofs", "testcases": ["gpu_proofs::other_test"]},
+            }}
+            cpu_scope.validate_inventory(plan, "manifold-nodes", listing)
+            self.assertNotIn("manifold-nodes", plan.whole)
+            self.assertIn("(package(=manifold-nodes) & binary(=catalog))", plan.filters)
+
     def test_gpu_proofs_only_module_gets_no_cpu_filter(self):
         with tempfile.TemporaryDirectory() as d:
             crate = Path(d) / "crates/manifold-ui-paint"
@@ -1137,7 +1464,7 @@ class DiffScopeTests(unittest.TestCase):
             src.mkdir(parents=True)
             (crate / "Cargo.toml").write_text('[package]\nname = "manifold-ui-paint"\n')
             (src / "ui_renderer.rs").write_text(
-                '#[cfg(all(test, feature = "gpu-proofs"))]\nmod tests {}\n')
+                '#[cfg(all(test, feature = "gpu-proofs"))]\nmod tests { #[test] fn pixel() {} }\n')
             (src / "native_text.rs").write_text('#[cfg(test)]\nmod tests {}\n')
             paths = ["crates/manifold-ui-paint/src/ui_renderer.rs",
                      "crates/manifold-ui-paint/src/native_text.rs"]
@@ -1146,96 +1473,120 @@ class DiffScopeTests(unittest.TestCase):
             self.assertNotIn("test(/^ui_renderer::/)", plan.filterset)
             self.assertIn("test(/^native_text::/)", plan.filterset)
 
+    def test_gpu_test_modules_ignore_cpu_helpers_but_keep_cpu_tests(self):
+        with tempfile.TemporaryDirectory() as d:
+            source = Path(d) / "source.rs"
+            gpu = '#[cfg(all(test, feature = "gpu-proofs"))] mod pixels { #[test] fn pixel() {} }\n'
+            source.write_text('#[cfg(test)] fn readback_helper() {}\n' + gpu)
+            self.assertTrue(cpu_scope.gpu_proofs_only(source))
+            for cpu in ('#[cfg(test)] mod tests { #[test] fn cpu() {} }',
+                        '#[test] fn cpu() {}', '#[cfg(test)] mod tests;',
+                        '#[cfg(test)] make_tests!();',
+                        '#[cfg(test)] // #[cfg(all(test, feature = "gpu-proofs"))]\nmod tests { #[test] fn cpu() {} }'):
+                with self.subTest(cpu=cpu):
+                    source.write_text(gpu + cpu)
+                    self.assertFalse(cpu_scope.gpu_proofs_only(source))
+
     def test_deleted_integration_test_selects_no_binary(self):
         with tempfile.TemporaryDirectory() as d:
-            crate = Path(d) / "crates/manifold-renderer"
+            crate = Path(d) / "crates/manifold-nodes"
             crate.mkdir(parents=True)
-            (crate / "Cargo.toml").write_text('[package]\nname = "manifold-renderer"\n')
-            workspace = synthetic_workspace(d, ["crates/manifold-renderer/tests/fluid_preset.rs"])
-            (Path(d) / "crates/manifold-renderer/tests/fluid_preset.rs").unlink()
+            (crate / "Cargo.toml").write_text('[package]\nname = "manifold-nodes"\n')
+            workspace = synthetic_workspace(d, ["crates/manifold-nodes/tests/fluid_preset.rs"])
+            (Path(d) / "crates/manifold-nodes/tests/fluid_preset.rs").unlink()
             plan = cpu_scope.plan_for_paths(
-                ["crates/manifold-renderer/tests/fluid_preset.rs"], d, workspace=workspace)
+                ["crates/manifold-nodes/tests/fluid_preset.rs"], d, workspace=workspace)
+            self.assertEqual(plan.filters, set())
+            self.assertEqual(plan.packages, set())
+
+    def test_deleted_bin_target_selects_no_binary(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = "crates/manifold-nodes/src/bin/graph_tool.rs"
+            workspace = synthetic_workspace(d, [path])
+            (Path(d) / path).unlink()
+            plan = cpu_scope.plan_for_paths([path], d, workspace=workspace)
             self.assertEqual(plan.filters, set())
             self.assertEqual(plan.packages, set())
 
     def test_renamed_integration_test_selects_only_new_binary(self):
         with tempfile.TemporaryDirectory() as d:
-            crate = Path(d) / "crates/manifold-renderer"
+            crate = Path(d) / "crates/manifold-nodes"
             tests = crate / "tests"
             tests.mkdir(parents=True)
-            (crate / "Cargo.toml").write_text('[package]\nname = "manifold-renderer"\n')
+            (crate / "Cargo.toml").write_text('[package]\nname = "manifold-nodes"\n')
             (tests / "new_preset.rs").write_text("#[test] fn preset() {}\n")
             # effective_paths uses --no-renames: both old and new paths arrive.
             workspace = synthetic_workspace(d, [
-                "crates/manifold-renderer/tests/old_preset.rs",
-                "crates/manifold-renderer/tests/new_preset.rs",
+                "crates/manifold-nodes/tests/old_preset.rs",
+                "crates/manifold-nodes/tests/new_preset.rs",
             ])
-            (Path(d) / "crates/manifold-renderer/tests/old_preset.rs").unlink()
+            (Path(d) / "crates/manifold-nodes/tests/old_preset.rs").unlink()
             plan = cpu_scope.plan_for_paths([
-                "crates/manifold-renderer/tests/old_preset.rs",
-                "crates/manifold-renderer/tests/new_preset.rs",
+                "crates/manifold-nodes/tests/old_preset.rs",
+                "crates/manifold-nodes/tests/new_preset.rs",
             ], d, workspace=workspace)
             self.assertEqual(plan.filters, {
-                "(package(=manifold-renderer) & binary(=new_preset))",
+                "(package(=manifold-nodes) & binary(=new_preset))",
             })
-            self.assertEqual(plan.packages, {"manifold-renderer"})
+            self.assertEqual(plan.packages, {"manifold-nodes"})
 
     def test_shared_test_code_selects_the_binaries_that_use_it(self):
         with tempfile.TemporaryDirectory() as d:
-            crate = Path(d) / "crates/manifold-renderer"
+            crate = Path(d) / "crates/manifold-nodes"
             tests = crate / "tests"
             (tests / "support").mkdir(parents=True)
             (tests / "proofs").mkdir()
-            (crate / "Cargo.toml").write_text('[package]\nname = "manifold-renderer"\n')
+            (crate / "Cargo.toml").write_text('[package]\nname = "manifold-nodes"\n')
             (tests / "abi.rs").write_text("mod support {\n    pub mod cases;\n}\n")
             (tests / "layout.rs").write_text('#[path = "support/cases.rs"]\nmod cases;\n')
             (tests / "other.rs").write_text("")
             (tests / "proofs/main.rs").write_text("")
             (tests / "support/cases.rs").write_text("")
             (tests / "proofs/water.rs").write_text("")
-            workspace = synthetic_workspace(d, ["crates/manifold-renderer/tests/support/cases.rs",
-                                                "crates/manifold-renderer/tests/proofs/water.rs"])
-            plan = cpu_scope.plan_for_paths(["crates/manifold-renderer/tests/support/cases.rs",
-                                             "crates/manifold-renderer/tests/proofs/water.rs"], d,
+            workspace = synthetic_workspace(d, ["crates/manifold-nodes/tests/support/cases.rs",
+                                                "crates/manifold-nodes/tests/proofs/water.rs"])
+            plan = cpu_scope.plan_for_paths(["crates/manifold-nodes/tests/support/cases.rs",
+                                             "crates/manifold-nodes/tests/proofs/water.rs"], d,
                                             workspace=workspace)
             self.assertEqual(plan.filters, {
-                "(package(=manifold-renderer) & binary(=abi))",
-                "(package(=manifold-renderer) & binary(=layout))",
-                "(package(=manifold-renderer) & binary(=proofs))",
+                "(package(=manifold-nodes) & binary(=abi))",
+                "(package(=manifold-nodes) & binary(=layout))",
+                "(package(=manifold-nodes) & binary(=proofs))",
             })
 
     def test_bundled_preset_json_selects_preset_contracts(self):
         with tempfile.TemporaryDirectory() as d:
-            workspace = synthetic_workspace(d, ["crates/manifold-renderer/assets/generator-presets/Water.json"])
-            plan = cpu_scope.plan_for_paths(["crates/manifold-renderer/assets/generator-presets/Water.json"], d,
+            workspace = synthetic_workspace(d, ["crates/manifold-nodes/assets/generator-presets/Water.json"])
+            plan = cpu_scope.plan_for_paths(["crates/manifold-nodes/assets/generator-presets/Water.json"], d,
                                             workspace=workspace)
-            self.assertEqual(plan.filterset, "(package(=manifold-renderer) & test(/^node_graph::bundled_presets::/))")
-            self.assertEqual(plan.packages, {"manifold-renderer"})
+            self.assertEqual(plan.filterset, "(package(=manifold-nodes) & test(/^bundled_presets::/))")
+            self.assertEqual(plan.packages, {"manifold-nodes"})
 
     def test_primitive_source_selects_the_uniform_layout_proofs(self):
         with tempfile.TemporaryDirectory() as d:
-            workspace = synthetic_workspace(d, ["crates/manifold-renderer/src/node_graph/primitives/blob_bounds.rs"])
+            workspace = synthetic_workspace(d, ["crates/manifold-node-engine/src/water/primitives/blob_bounds.rs"])
             plan = cpu_scope.plan_for_paths(
-                ["crates/manifold-renderer/src/node_graph/primitives/blob_bounds.rs"], d,
+                ["crates/manifold-node-engine/src/water/primitives/blob_bounds.rs"], d,
                 workspace=workspace)
-            self.assertIn("(package(=manifold-renderer) & binary(=uniform_layout_proof))", plan.filters)
-            self.assertIn("(package(=manifold-renderer) & binary(=uniform_layout_extended))", plan.filters)
-            self.assertNotIn("binary(=wgsl_validation)", plan.filterset)
+            self.assertIn("(package(=manifold-nodes) & test(/^uniform_layout_proof::/))", plan.filters)
+            self.assertIn("(package(=manifold-nodes) & test(/^uniform_layout_extended::/))", plan.filters)
+            self.assertNotIn("test(/^wgsl_validation::/)", plan.filterset)
 
     def test_shader_selects_wgsl_validation_and_hand_abi_proof(self):
         with tempfile.TemporaryDirectory() as d:
-            workspace = synthetic_workspace(d, ["crates/manifold-renderer/src/node_graph/primitives/shaders/blob_bounds.wgsl"])
+            workspace = synthetic_workspace(d, ["crates/manifold-node-engine/src/water/primitives/shaders/blob_bounds.wgsl"])
             plan = cpu_scope.plan_for_paths(
-                ["crates/manifold-renderer/src/node_graph/primitives/shaders/blob_bounds.wgsl"], d,
+                ["crates/manifold-node-engine/src/water/primitives/shaders/blob_bounds.wgsl"], d,
                 workspace=workspace)
             self.assertEqual(plan.filters, {
-                "(package(=manifold-renderer) & binary(=uniform_layout_extended))",
-                "(package(=manifold-renderer) & binary(=wgsl_validation))",
-                "(package(=manifold-renderer) & test(regenerates_in_sync))",
+                "(package(=manifold-nodes) & test(/^uniform_layout_proof::/))",
+                "(package(=manifold-nodes) & test(/^uniform_layout_extended::/))",
+                "(package(=manifold-nodes) & test(/^wgsl_validation::/))",
+                "(package(=manifold-nodes) & test(regenerates_in_sync))",
             })
-            effect = cpu_scope.plan_for_paths(["crates/manifold-renderer/src/effects/shaders/fx_bloom.wgsl"], d,
+            effect = cpu_scope.plan_for_paths(["crates/manifold-compositor/src/effects/shaders/presentation.wgsl"], d,
                                               workspace=workspace)
-            self.assertEqual(effect.filterset, "(package(=manifold-renderer) & binary(=wgsl_validation))")
+            self.assertEqual(effect.filterset, "(package(=manifold-nodes) & test(/^wgsl_validation::/))")
 
     def test_flow_scope_uses_only_effective_paths(self):
         import run_ui_flows
@@ -1405,6 +1756,75 @@ class CancellationTests(unittest.TestCase):
 
 
 class DeliveryTests(unittest.TestCase):
+    def test_verified_slot_cleanup_detaches_and_never_reports_a_landing_red(self):
+        import watch_land
+
+        for failure in (None, 'release', 'release-error', 'delete', 'detach', 'unlanded'):
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as d:
+                repo = Path(d).resolve()
+
+                def git(cwd, *args):
+                    return subprocess.run(['git', *args], cwd=cwd, check=True,
+                                          capture_output=True, text=True).stdout.strip()
+
+                git(repo, 'init', '-b', 'main')
+                git(repo, 'config', 'user.name', 'Test')
+                git(repo, 'config', 'user.email', 'test@example.invalid')
+                git(repo, '-c', 'commit.gpgsign=false', 'commit', '--allow-empty', '-m', 'base')
+                git(repo, 'update-ref', 'refs/remotes/origin/main', 'HEAD')
+                wt = repo / '.claude/worktrees/slot-0'
+                git(repo, 'worktree', 'add', '-b', 'lane/landed', str(wt))
+                if failure == 'unlanded':
+                    git(wt, '-c', 'commit.gpgsign=false', 'commit', '--allow-empty', '-m', 'unlanded')
+                commands = []
+                real_run = land_branch.run_cmd
+
+                def run(cmd, cwd, timeout, live_log=None):
+                    commands.append(cmd)
+                    if 'release' in cmd:
+                        self.assertEqual(git(wt, 'branch', '--show-current'), '')
+                        if failure == 'release-error':
+                            raise OSError('cleanup command unavailable')
+                        return (1, '', 'worktree pool is busy', 0) if failure == 'release' else (0, '', '', 0)
+                    if cmd[:3] == ['git', 'switch', '--detach'] and failure == 'detach':
+                        return 1, '', 'detach refused', 0
+                    if cmd[:3] == ['git', 'branch', '-d'] and failure == 'delete':
+                        return 1, '', 'cannot delete branch used by worktree', 0
+                    if cmd[0] == 'git' and cmd[1] in ('merge-base', 'switch', 'branch', 'rev-parse'):
+                        return real_run(cmd, cwd, timeout, live_log=live_log)
+                    return 0, '', '', 0
+
+                with patch.object(land_branch, 'MAIN', repo), \
+                        patch.object(land_branch, 'run_cmd', side_effect=run), \
+                        patch.object(land_branch, 'run_landing_gate', return_value=0), \
+                        patch.object(land_branch, 'merge_gated_tree'), \
+                        patch.object(sys, 'argv', ['land_branch.py', 'lane/landed',
+                            '--worktree', str(wt), '--message', 'test']), \
+                        contextlib.redirect_stdout(io.StringIO()) as output:
+                    self.assertIsNone(land_branch.main())
+                transcript = output.getvalue()
+                self.assertNotIn('[FAIL]', transcript)
+                self.assertIn('[land] DONE:', transcript)
+                if failure:
+                    self.assertIn('NOTE', transcript)
+                if failure == 'unlanded':
+                    self.assertFalse(any('switch' in cmd or 'release' in cmd or '-d' in cmd
+                                         for cmd in commands))
+                else:
+                    ancestry = commands.index(['git', 'merge-base', '--is-ancestor',
+                                               'lane/landed', 'origin/main'])
+                    detach = commands.index(['git', 'switch', '--detach'])
+                    self.assertLess(ancestry, detach)
+                branches = git(repo, 'branch', '--list', 'lane/landed')
+                self.assertEqual(bool(branches), failure in ('delete', 'detach', 'unlanded'))
+                if failure == 'detach':
+                    self.assertFalse(any('release' in cmd for cmd in commands))
+                outer = repo / 'outer.log'
+                outer.write_text(transcript)
+                with contextlib.redirect_stdout(io.StringIO()) as watched:
+                    code = watch_land.watch(123, outer, kind='land', alive=lambda _: False)
+                self.assertEqual(code, 0, watched.getvalue())
+
     def test_delivery_requests_complete_run_only_for_named_red(self):
         # Ordinary landings retain the cheap-first default. A named red asks
         # for complete coverage; missing reason/coverage still cannot land.

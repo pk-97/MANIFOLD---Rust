@@ -437,7 +437,7 @@ struct RtNormalSource {
 // RT_INSTANCING_DESIGN.md D3/D4: manual MSL mirror of the renderer's
 // `generators::mesh_common::InstanceTransform` (32 bytes: pos_scale =
 // xyz position + w uniform scale, rot_pad = xyz XYZ Euler + w mirror
-// marker) — manifold-gpu cannot import manifold-renderer types, so the
+// marker) — manifold-gpu cannot import manifold-nodes types, so the
 // layout is mirrored by hand, same manual-sync discipline as every other
 // CPU/GPU mirror in this file (the Rust side ties the size: the
 // descriptor-build kernel strides slots by RT_INSTANCE_TRANSFORM_BYTES=32
@@ -998,7 +998,7 @@ static float3 rt_perturb_frame(float3 n, float3 t, float3 b, float3 tn) {
 static bool tangent_frame_at_hit(
     device RtNormalSource& src,
     uint primitive_id, float2 bary, float3 n,
-    thread float3& out_t, thread float3& out_b)
+    thread float3& out_t, thread float3& out_b, uint frame_map = 1u)
 {
     // P4b: corners resolve through the shared index helper (0 = flat).
     uint3 c = rt_triangle_corners(src, primitive_id);
@@ -1022,7 +1022,7 @@ static bool tangent_frame_at_hit(
     // exactly when the row is unwired.
     float3 edge1 = model * rti_apply_instance_dir(src, float3(*p1_ptr) - float3(*p0_ptr));
     float3 edge2 = model * rti_apply_instance_dir(src, float3(*p2_ptr) - float3(*p0_ptr));
-    uint uv_set = src.material_attributes.sampling[1][0];
+    uint uv_set = src.material_attributes.sampling[frame_map][0];
     float2 uv0 = fetch_uv_set(src, v0, uv_set);
     float2 uv1 = fetch_uv_set(src, v1, uv_set);
     float2 uv2 = fetch_uv_set(src, v2, uv_set);
@@ -1040,9 +1040,11 @@ static bool tangent_frame_at_hit(
         t -= n * dot(n, t);
         b = cross(n, t) * handedness;
     } else {
-        uv0 = rt_apply_uv_transform(uv0, src.normal_uv_transform);
-        uv1 = rt_apply_uv_transform(uv1, src.normal_uv_transform);
-        uv2 = rt_apply_uv_transform(uv2, src.normal_uv_transform);
+        device const float* transform = frame_map == 1u ? src.normal_uv_transform
+            : src.material_attributes.extension_uv_transforms[frame_map - 5u];
+        uv0 = rt_apply_uv_transform(uv0, transform);
+        uv1 = rt_apply_uv_transform(uv1, transform);
+        uv2 = rt_apply_uv_transform(uv2, transform);
         float2 duv1 = uv1 - uv0;
         float2 duv2 = uv2 - uv0;
         float det = duv1.x * duv2.y - duv1.y * duv2.x;
@@ -1529,7 +1531,7 @@ static float3 ggx_reflection_dir(float3 n, float3 v, float roughness, float2 u) 
     float a = roughness * roughness;
     float a2 = a * a;
     float phi = 6.2831853 * u.x;
-    float cos_theta = sqrt((1.0 - u.y) / (1.0 + (a2 - 1.0) * u.y));
+    float cos_theta = sqrt((1.0 - u.y) / ((1.0 - u.y) + a2 * u.y));
     float sin_theta = sqrt(max(0.0, 1.0 - cos_theta * cos_theta));
     float3 t = ortho_basis_x(n), b = cross(n, t);
     float3 h = normalize(t * (sin_theta * cos(phi)) + b * (sin_theta * sin(phi)) + n * cos_theta);
@@ -1543,8 +1545,8 @@ static float3 anisotropic_ggx_reflection_dir(
     float roughness, float strength, float2 u)
 {
     float a2 = roughness * roughness;
-    float alpha_t = max(mix(a2, 1.0, strength * strength), 0.001);
-    float alpha_b = max(a2, 0.001);
+    float alpha_t = mix(a2, 1.0, strength * strength);
+    float alpha_b = a2;
     float phi = 6.2831853 * u.x;
     float radius = sqrt(u.y / max(1.0 - u.y, 1e-6));
     float3 h = normalize(
@@ -1652,7 +1654,10 @@ static RtSurface rt_surface(device GiMaterial& material,device RtNormalSource* s
     m.nc=ng;
     if(src.extra_tex_indices[9]<MAX_RT_MATERIAL_TEXTURES) {
         float3 t,b;
-        if(tangent_frame_at_hit(src,pid,bary,ng,t,b)) {
+        // Match raster: an existing base normal map owns the shared frame;
+        // otherwise a coat-only map derives it from its own UV set/transform.
+        uint frame_map = src.normal_tex_index < MAX_RT_MATERIAL_TEXTURES ? 1u : 14u;
+        if(tangent_frame_at_hit(src,pid,bary,ng,t,b,frame_map)) {
             float3 tn=rt_extension(src,textures,pid,bary,9u).rgb*2.0f-1.0f;
             tn.xy*=material.clearcoat.z; m.nc=rt_perturb_frame(ng,t,b,tn);
         }
@@ -1680,7 +1685,7 @@ static RtSurface rt_surface(device GiMaterial& material,device RtNormalSource* s
     m.f0=mix(m.f0,m.albedo,m.metallic);m.f90=mix(m.f90,1.0f,m.metallic);
     m.coat=material.clearcoat;
     m.coat.x*=rt_extension(src,textures,pid,bary,3u).r;
-    m.coat.y=max(0.01f,m.coat.y*rt_extension(src,textures,pid,bary,4u).g);
+    m.coat.y=clamp(m.coat.y*rt_extension(src,textures,pid,bary,4u).g,0.01f,1.0f);
     m.sheen=material.sheen;
     m.sheen.rgb*=rt_extension(src,textures,pid,bary,5u).rgb;
     m.sheen.a*=rt_extension(src,textures,pid,bary,6u).a;
@@ -1703,25 +1708,43 @@ static float3 rt_surface_fresnel(thread const RtSurface& m,float cosine) {
     if(m.film.x>0.0f)f=mix(f,rt_film(m.film.y,cosine,m.film.z,m.f0),m.film.x);
     return f;
 }
-static float rt_ggx(float rough,float nv,float nl,float nh) {
-    float a=rough*rough,a2=a*a,d=nh*nh*(a2-1.0f)+1.0f;
+static float rt_ggx_distribution(float rough,float nh) {
+    rough=clamp(rough,0.01f,1.0f);
+    float a=rough*rough,a2=a*a,nh2=clamp(nh*nh,0.0f,1.0f);
+    float d=(1.0f-nh2)+nh2*a2;
+    return a2/(RT_PI*d*d);
+}
+// The coat retains its independent Schlick geometry approximation.
+static float rt_coat_ggx(float rough,float nv,float nl,float nh) {
     float k=(rough+1.0f)*(rough+1.0f)/8.0f;
     float gv=nv/(nv*(1.0f-k)+k),gl=nl/(nl*(1.0f-k)+k);
-    return a2/(RT_PI*d*d)*gv*gl/(4.0f*nv*nl+0.0001f);
+    return rt_ggx_distribution(rough,nh)*gv*gl/(4.0f*nv*nl+0.0001f);
 }
 static float3 rt_direct_brdf(thread const RtSurface& m,float3 v,float3 l,float sheen_scale) {
-    float3 h=(v+l)/max(length(v+l),1e-6f);
+    float half_length=length(v+l);
+    float3 h=(v+l)/max(half_length,1e-6f);
     float nv=max(dot(m.n,v),0.001f),nl=max(dot(m.n,l),0.0f),nh=max(dot(m.n,h),0.0f),vh=max(dot(v,h),0.001f);
     float3 f=rt_surface_fresnel(m,vh);
     float kd=(1.0f-max(f.x,max(f.y,f.z)))*(1.0f-m.metallic);
-    float dv=rt_ggx(m.roughness,nv,nl,nh);
-    if(m.anisotropy>0.0f) {
-        float ab=m.roughness*m.roughness,at=mix(ab,1.0f,m.anisotropy*m.anisotropy),a2=at*ab;
-        float3 v3=float3(ab*dot(m.t,h),at*dot(m.b,h),a2*nh);
-        float w2=a2/max(dot(v3,v3),1e-7f);
-        float lv=nl*length(float3(at*dot(m.t,v),ab*dot(m.b,v),nv));
-        float ll=nv*length(float3(at*dot(m.t,l),ab*dot(m.b,l),nl));
-        dv=a2*w2*w2/RT_PI*0.5f/max(lv+ll,1e-7f);
+    float dv=0.0f;
+    // Do not evaluate a reflection distribution for an absent hemisphere or
+    // half-vector; thin transmission below still receives backlighting.
+    if(nl>0.0f && dot(m.n,v)>0.0f && half_length>1e-6f) {
+        // Same height-correlated Smith visibility on both sides of strength zero.
+        float a=m.roughness*m.roughness,a2=a*a;
+        float nv2=min(nv*nv,1.0f),nl2=min(nl*nl,1.0f);
+        float lv_iso=nl*sqrt(a2*(1.0f-nv2)+nv2);
+        float ll_iso=nv*sqrt(a2*(1.0f-nl2)+nl2);
+        dv=rt_ggx_distribution(m.roughness,nh)*0.5f/max(lv_iso+ll_iso,1e-7f);
+        if(m.anisotropy>0.0f) {
+            float ab=m.roughness*m.roughness,at=mix(ab,1.0f,m.anisotropy*m.anisotropy);
+            float3 scaled_h=float3(dot(m.t,h)/at,dot(m.b,h)/ab,nh);
+            float d_denom=dot(scaled_h,scaled_h);
+            float d=1.0f/(RT_PI*at*ab*d_denom*d_denom);
+            float lv=nl*length(float3(at*dot(m.t,v),ab*dot(m.b,v),nv));
+            float ll=nv*length(float3(at*dot(m.t,l),ab*dot(m.b,l),nl));
+            dv=d*0.5f/max(lv+ll,1e-7f);
+        }
     }
     float3 diffuse=kd*(m.albedo*(1.0f-m.translucency.x)*nl+m.translucency.yzw*m.translucency.x*max(dot(-m.n,l),0.0f))/RT_PI;
     float inv_a=1.0f/max(m.sheen.a*m.sheen.a,0.0001f);
@@ -1729,7 +1752,8 @@ static float3 rt_direct_brdf(thread const RtSurface& m,float3 v,float3 l,float s
     float vs=1.0f/max(4.0f*(nl+nv-nl*nv),0.0001f);
     float cnv=max(dot(m.nc,v),0.001f),cnl=max(dot(m.nc,l),0.0f),cnh=max(dot(m.nc,h),0.0f);
     float coat_f=0.04f+0.96f*pow(1.0f-cnv,5.0f);
-    float coat_d=rt_ggx(m.coat.y,cnv,cnl,cnh)*(0.04f+0.96f*pow(1.0f-vh,5.0f))*cnl;
+    float coat_d=0.0f;
+    if(m.coat.x>0.0f && cnl>0.0f && dot(m.nc,v)>0.0f && half_length>1e-6f) coat_d=rt_coat_ggx(m.coat.y,cnv,cnl,cnh)*(0.04f+0.96f*pow(1.0f-vh,5.0f))*cnl;
     return ((diffuse*(1.0f-m.transmission.x)+dv*f*nl)*sheen_scale+m.sheen.rgb*ds*vs*nl)*(1.0f-m.coat.x*coat_f)+m.coat.x*coat_d;
 }
 static float3 rt_direct_lights(instance_acceleration_structure accel,device RtNormalSource* sources,

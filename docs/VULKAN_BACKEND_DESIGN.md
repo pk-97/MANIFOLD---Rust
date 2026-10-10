@@ -28,10 +28,10 @@ The port is further along than "add a Vulkan backend" suggests. Already true on 
 
 **What remains is exactly three files of real work** — `vulkan/device.rs`, `vulkan/encoder.rs`, `vulkan/types.rs` — plus presentation (Phase 3, mostly `manifold-app`) and the platform-services inventory (section 8, separate designs).
 
-**Not ported, ever** (zero consumers outside the crate, verified by sweep):
-- `metal/mps.rs` (7 MPS kernels) — dead API, kept Metal-side for future use
-- `metal/fft.rs` (`GpuFft`, MPSGraph) — no consumers yet; when FFT primitives land they need a portable story (VkFFT-style compute or a Rust FFT upload), design then
-- `metal/metalfx.rs` — `manifold-renderer/src/fsr1.rs` is the portable upscaler; MetalFX stays a macOS bonus
+**Platform-specific services** (post-T1 API audit, 2026-10-09):
+- The unused `metal/mps.rs` helper bank was removed. No primitive depended on it.
+- `metal/fft.rs` (`GpuFft`, MPSGraph) is live: `manifold-nodes-image` uses it in `node.inverse_fft_2d` for spectral ocean fields. Its eventual Vulkan implementation needs a separate design; the current backend remains Metal.
+- `metal/metalfx.rs` — `manifold-nodes/src/fsr1.rs` is the portable upscaler; MetalFX stays a macOS bonus
 - `GpuHeap` — no external consumers; heap sub-allocation was a deferred Metal optimization. Skip. If it lands later, the Vulkan twin is a `gpu-allocator` pool
 - Xcode capture scopes (`install_device_capture_scope` etc.) — no-ops on Vulkan; RenderDoc attaches externally
 
@@ -144,7 +144,7 @@ Mechanics:
 ## 6. Phasing (each phase compiles, tests green, commits)
 
 **P1 — headless compute core.** `vulkan/{device,encoder,types}.rs`: device bring-up, allocator, buffers/textures/samplers, compute pipelines + caches, dispatch + copies + clears + upload, hazard tracker, timeline events + waiter thread, `TexturePool` port.
-*Oracle:* per-primitive gpu_tests + compute-path parity tests, `cargo test -p manifold-renderer --features manifold-gpu/vulkan` under MoltenVK on the dev box. Every parity failure is a Vulkan-backend bug until proven otherwise — never adjust tolerances or shared WGSL to pass (per `shared-shader-topology`, `value-level-parity`).
+*Oracle:* per-primitive gpu_tests + compute-path parity tests, `cargo test -p manifold-nodes --features manifold-gpu/vulkan` under MoltenVK on the dev box. Every parity failure is a Vulkan-backend bug until proven otherwise — never adjust tolerances or shared WGSL to pass (per `shared-shader-topology`, `value-level-parity`).
 *Mandatory from P1 on:* the parity suite must also run with the **Khronos synchronization validation layer** enabled (`VK_LAYER_KHRONOS_validation` + sync-val setting), zero errors. MoltenVK sits on Metal, whose implicit ordering can visually mask a missing barrier that would corrupt frames on NVIDIA/AMD — sync-val catches those at the API level regardless of the hardware underneath. A green parity run without sync-val proves nothing about the hazard tracker.
 
 **P2 — render + profiling.** Graphics pipelines (dynamic rendering), the `draw_*` family, depth/MSAA/mipmaps/scissor, negative-viewport Y-flip, timestamp profiling.
@@ -184,7 +184,7 @@ Each row is a separate future design; none block P1–P3.
 |---|---|---|---|
 | Video decode | AVFoundation/VideoToolbox (`manifold-media/src/decoder*.rs`, `decode_scheduler.rs`) | FFmpeg/libavcodec with hwaccel (D3D11VA on Windows, VAAPI on Linux, NVDEC where present) behind the existing decoder seam. Keep VideoToolbox on macOS — it's zero-copy into Metal and works | Large — own design doc |
 | Encode / export / recording | VideoToolbox (`manifold-media/src/metal_encoder.rs`, `manifold-recording`) | FFmpeg encode: NVENC/AMF/QSV hardware paths, x264 fallback | Large — same design doc as decode |
-| Text rendering | CoreText (`manifold-renderer/src/text_rasterizer.rs`, `native_text.rs`, `render_text` primitive; `manifold-ui/src/text.rs`) | **cosmic-text** (fontdb + rustybuzz + swash) — pure Rust, shaping + fallback + rasterization, the current SOTA Rust text stack | Medium |
+| Text rendering | CoreText (`manifold-nodes/src/text_rasterizer.rs`, `native_text.rs`, `render_text` primitive; `manifold-ui/src/text.rs`) | **cosmic-text** (fontdb + rustybuzz + swash) — pure Rust, shaping + fallback + rasterization, the current SOTA Rust text stack | Medium |
 | Audio capture | cpal input devices (portable already) + CoreAudio process/system taps (`manifold-audio`, macOS 14.4+) | Taps: WASAPI loopback (Windows — easier than the macOS version was), PipeWire monitor sources (Linux). cpal input path needs nothing | Medium |
 | Frame pacing / display link | `mach_wait_until`, CVDisplayLink (`manifold-app/src/display_link.rs`, `frame_timer.rs`) | section 6 P3 | In P3 |
 | Screen capture source | ScreenCaptureKit (tv-led-mirror path) | Windows.Graphics.Capture / PipeWire screencast | Small-medium |

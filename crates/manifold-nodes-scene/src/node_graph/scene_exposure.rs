@@ -5,7 +5,7 @@
 //! - `migrate_scene_exposures` is the load-time idempotent migration that stamps
 //!   exposures onto every scene-vocabulary node in an existing graph.
 //! - `PrimitiveRegistrySceneExposureProvider` implements the core trait for
-//!   creation-site commands that cannot depend on `manifold_renderer` directly.
+//!   creation-site commands that cannot depend on `manifold_nodes` directly.
 
 use manifold_core::effect_graph_def::EffectGraphDef;
 mod compound;
@@ -48,6 +48,7 @@ const SCENE_VOCABULARY_TYPE_IDS: &[&str] = &[
     "node.look_at_camera",
     "node.camera_lens",
     "node.bokeh_gather",
+    "node.motion_blur",
     "node.atmosphere",
     "node.bake_environment",
     "node.scene_object",
@@ -68,6 +69,12 @@ const SCENE_VOCABULARY_TYPE_IDS: &[&str] = &[
     // or hand-curated.
     "node.whitewater_step",
 ];
+
+/// Whether Scene Setup automatically exposes this node's detailed controls.
+/// Performance projection uses the same vocabulary to avoid leaking them.
+pub fn is_scene_setup_node(type_id: &str) -> bool {
+    SCENE_VOCABULARY.contains(&type_id)
+}
 
 /// The curated `node.render_scene` auto-stamp subset (see the vocabulary
 /// entry above): the per-scene RT toggle (D14), the MetalFX temporal
@@ -430,6 +437,7 @@ fn section_name_for_node(node: &manifold_core::effect_graph_def::EffectGraphNode
         | "node.free_camera"
         | "node.look_at_camera"
         | "node.camera_lens"
+        | "node.motion_blur"
         | "node.bokeh_gather" => {
             "Camera".to_string()
         }
