@@ -22,7 +22,9 @@ def write(path, entries):
     """entries: {name: array}; arrays keep their dtype, which must be one of DTYPES."""
     out = bytearray(MAGIC + struct.pack('<I', len(entries)))
     for name, a in entries.items():
-        a = np.ascontiguousarray(a)
+        # ascontiguousarray alone turns a scalar into shape (1,); the format's scalar is ndim 0.
+        a = np.asarray(a)
+        a = np.ascontiguousarray(a).reshape(a.shape)
         if a.dtype not in CODES:
             raise TypeError(f'{name}: dtype {a.dtype} is not in the container')
         n = name.encode()
