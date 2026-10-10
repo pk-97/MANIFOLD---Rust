@@ -96,16 +96,16 @@ Paths abbreviated after first use: `R/` = `crates/manifold-nodes/src/node_graph/
 |---|---|---|
 | Particle-frame seam | GPU_FLUID_SURFACE_DESIGN.md section 3 (The particle-frame contract) | PROPOSED, not built. `FluidParticle` (32 B: `position_radius`, `velocity`, `id`) and the `particles_a/b`, `blend`, `span`, `solid_a/b`, lattice outputs are defined there. This design writes them. |
 | Surface atoms | GPU_FLUID_SURFACE_DESIGN.md section 4 (The atom chain) | PROPOSED, not built: interpolate, push-out, sort into cells, blobs, level set, marching cubes, `particles_to_copies`, the "Liquid Surface" group. |
-| FLIP domain node | `R/primitives/fluid_surface.rs:35` (`node.fluid_surface`), `:38-101` (`role_0..role_63: FluidRole`), `:102` (`acceleration_field: VectorField`), `:103` (`domain`, legacy `initial_volume` Transforms), `:115-121` (outputs), `:123-145` (params: seed, resolution, grid budget, six closed faces, fill height, density, gravity XYZ, speed, reset, …) | Exists. Its scene-facing ports and params are the contract `node.matter_domain` mirrors (D17). |
+| FLIP domain node | (retired with CPU FLIP; in git history) (`node.fluid_surface`), `:38-101` (`role_0..role_63: FluidRole`), `:102` (`acceleration_field: VectorField`), `:103` (`domain`, legacy `initial_volume` Transforms), `:115-121` (outputs), `:123-145` (params: seed, resolution, grid budget, six closed faces, fill height, density, gravity XYZ, speed, reset, …) | Exists. Its scene-facing ports and params are the contract `node.matter_domain` mirrors (D17). |
 | Scene layer keyed on the FLIP type id | `rg -n '"node\.fluid_surface"' crates -g '*.rs'` → 94 hits in 46 files at `c8961489d`; 53 in 25 non-test files, about 40 of them outside inline test modules, across `manifold-core` (scene-object migration, exposure tables, file loader), `manifold-editing` (Add Fluid, role commands), `manifold-app` (domain gizmo, scene projection), `manifold-nodes` (physics sampling, sources, carry, impulses, scene exposure, scene VM, force recipients, graph loader) | Exists. Every site tests a string literal; there is no liquid-domain predicate. P3a's seam (D17). |
 | Role wire | `R/fluid_role.rs:20-25` (`FluidRoleKind`: InitialFill, Inflow, Outflow, Collider), `:36-44` (payload: `Arc<PreparedFluidGeometry { meshes: Vec<TriangleMesh> }>`, transform, enabled, velocity, inherit_motion, friction) | Exists, solver-agnostic. Consumed unchanged. |
 | Add Fluid and role authoring | `crates/manifold-editing/src/commands/graph/scene/fluid.rs:40` (`AddSceneFluidCommand`), `…/scene/fluid/roles.rs:24`; param surfaces `crates/manifold-ui/src/param_surface.rs` | Exists. P4b extends the command; role commands ride the predicate. |
 | Force recipients | `R/scene_modifier_expand/acceleration.rs:110` (a fluid is found as the producer of a scene object's `vertices`), `:267` (`ImpulseTarget::Fluid`) | Exists. Assumes the domain node itself feeds the object's mesh — false once a surface group sits in between (for FLIP too, after surface P7). P3a fixes the walk. |
-| Domain layout oracle | `R/fluid/domain.rs:15` (`domain_layout`) | Exists. The matter lattice uses it, so both solvers share cell size in the side-by-side. |
+| Domain layout oracle | (retired with CPU FLIP; in git history) (`domain_layout`) | Exists. The matter lattice uses it, so both solvers share cell size in the side-by-side. |
 | Shared physics vocabulary | `P/input.rs` (`InputHistory`, `EventQueue`), `P/interaction.rs:5` (`VectorField`), `:11` (`FieldInput`), `:21` (`TickStamp`), `:238` (`SampledField`); `P/mesh.rs:9` (`TriangleMesh`), `:53` (`hull_meshes`); `P/lib.rs:958` (`dynamics`), `:1053` (`apply_impulses`) | Exists. Reused for pose history, events, fields, geometry and reactions. |
-| Impulse owners | `R/fluid/impulses.rs:60`, `R/physics/impulses.rs:130` (`enqueue_impulse`) | Exists. `node.matter_domain` implements the same hooks. |
+| Impulse owners | (retired with CPU FLIP; in git history), `R/physics/impulses.rs:130` (`enqueue_impulse`) | Exists. `node.matter_domain` implements the same hooks. |
 | Rigid tick owner | `R/physics.rs:355` (`RigidSimulation`), `:609` (`advance_with_coupling`), `:136-140` (`AdvancementPolicy::Worker { max_ticks }`); `P/stepping.rs:14` (`StepCoupling`), `:30` (`SubstepExchange`) | Exists. The coupling implements `StepCoupling` (D12). |
-| Coupled-scene pairing | `R/scene_modifier_expand/coupling.rs:29` (`prepare_coupled_scenes`); `R/effect_node.rs:1143-1194` (coupling hooks); `R/physics/worker.rs:51` (`RigidSceneObservation`); `R/fluid/coupled.rs:50` (`CoupledRigidFrame`); `R/primitives/physics_world.rs:372-374`, `:556` | Exists for FLIP. `node.matter_domain` implements the same hooks. |
+| Coupled-scene pairing | `R/scene_modifier_expand/coupling.rs:29` (`prepare_coupled_scenes`); `R/effect_node.rs:1143-1194` (coupling hooks); `R/physics/worker.rs:51` (`RigidSceneObservation`); (retired with CPU FLIP; in git history) (`CoupledRigidFrame`); `R/primitives/physics_world.rs:372-374`, `:556` | Exists for FLIP. `node.matter_domain` implements the same hooks. |
 | Atomic scatter atom | `R/primitives/scatter_particles_3d.rs:95-98` (`fusion_kind: Boundary`, `boundary_reason: Blocked`, `atomic_outputs`), `:147` (`standalone_pipeline`) | Precedent for the scatter atoms. |
 | Boundary codegen, reasons | `R/freeze/codegen/entry_points.rs:81` (`standalone_for_boundary_spec`); `R/primitives/standalone_pipeline.rs:18`; `R/freeze/classify.rs:305-341` | Exists. |
 | Aliased, captured and provided arrays | `R/effect_node.rs:802` (`aliased_array_io`), `:909` (`state_capture_input_ports`), `:920` (`persistent_output_ports`), `:1054` (`provides_array_output`); `R/execution/array_growth.rs` | Exists — the same machinery `node.array_feedback` uses. Point state and lattice arrays ride it. |
@@ -266,7 +266,7 @@ value into both kernels. P2G's two scales are powers of two times one reciprocal
 resolution and substep count (`matter_momentum_unit_round_trips`). Rounding up keeps the
 headroom bound (section 4.3). Both kernels refuse a U that is not a power of two at or
 above dx/dt. The free blob now drifts 4.9e-6. The arrays are provided outputs of `node.matter_state` that grow on setup changes
-(surface design precedent, `R/primitives/fluid_surface.rs:202-206`), written in place
+(surface design precedent, (retired with CPU FLIP; in git history)), written in place
 through `aliased_array_io`. Rejected: `Texture3D` (surface D8; no float atomics on storage
 textures in WGSL). Rejected: a float compare-exchange loop (slower in the prototype,
 order-dependent). Rejected: Metal float atomics (not portable).
@@ -410,7 +410,7 @@ computed from parameters, Box3D at one worker. Cross-GPU identity is not claimed
 **D16 — Everything runs on the content thread.** Atoms encode into the normal command
 buffer. CPU work per frame: clock, pose table (≤ 64 bodies), field lattice (4,913
 samples), material entry, coupling readback. Distance lattices build where role geometry
-is prepared today (⚠ VERIFY-AT-IMPL in P2a: read `R/fluid/roles.rs` and
+is prepared today (⚠ VERIFY-AT-IMPL in P2a: read (retired with CPU FLIP; in git history) and
 `R/physics_mesh.rs`; if that is the content thread, stop and escalate — a 32³ ×
 1,000-triangle lattice is ~0.2 s). No new thread, channel, `Arc<Mutex>` or `Arc<RwLock>`.
 
@@ -1212,7 +1212,7 @@ quiet exemption.
 | State across frames | the state-capture and persistent-resource machinery `node.array_feedback` uses | a new persistence mechanism |
 | Cell sort | the surface design's `sort_particles_into_cells` | a matter sort |
 | Clock, ticks, transport | `TickStamp`, the integration plan's timing table | a second transport policy |
-| Bake | `fluid_cache.rs` writer and the take journal | a second cache format |
+| Bake | (retired with CPU FLIP; in git history) writer and the take journal | a second cache format |
 
 **Forbidden moves, by the temptation you will feel:**
 - "If the GPU solver is unavailable or slow, fall back to FLIP." No availability branch
@@ -1267,7 +1267,7 @@ FLIP-only.
 | Mass is exact; grid mass matches particle mass | `matter_grid_mass_matches_particle_mass` (relative 1e-5 per substep) |
 | Momentum in free flight | `matter_momentum_conserved_free_blob` (zero gravity, no walls touched, relative change ≤ 1e-4 over 60 ticks; the fixed-point bound derived for this setup is about 5e-5; measured 4.9e-6 with D5's momentum unit) |
 | Dam-break energy never grows | `matter_dam_break_energy_bounded` (kinetic + potential + elastic ≤ 1.01 × initial at every tick) |
-| Look artefacts A1, A3 | `matter_look_lattice_alignment`, `matter_look_volume_drift` (section 7 (Look — artefacts, metrics and dials); A5 and the other look gates are withdrawn) |
+| Look artefacts A1, A3 | `matter_look_lattice_alignment` (at 1.5 s), `matter_look_volume_drift` (nightly only) (section 7 (Look — artefacts, metrics and dials); A5 and the other look gates are withdrawn) |
 | Determinism | `matter_deterministic_under_seed` (two runs, 120 ticks, bit-identical points); `matter_seed_changes_jitter`; `matter_block_p2g_bit_identical` (P1b) |
 | Fixed-point headroom | `matter_fixed_point_headroom` (Dam Break, max accumulator magnitude < 2^30) |
 | A non-finite tick is never published | `liquid_nonfinite_tick_not_published` (LIQUID_SOLVER_SEAM_DESIGN.md section 4 (Invariants & enforcement), every liquid row) |
@@ -1276,13 +1276,13 @@ FLIP-only.
 | Frames id-sorted, ids unique in an epoch | `matter_frame_ids_strictly_increasing` through fill, emit, drain, compaction; `matter_identity_epoch_renumbers_near_limit` |
 | Collider penetration bounded | `matter_collider_penetration_bounded` (rotating box: particle φ ≥ −0.5·dx) |
 | Coupling | the liquid conformance suite, run for every coupled liquid: `liquid_hydrostatic_lift` (within 5%), `liquid_floating_draft` (density 0.5 settles at the waterline ± 0.5·dx), `liquid_coupling_collision` (ratios 0.1/1/10 over up to 30 ticks, ending where the scene loses liquid or the box and never under 8: body energy, and body plus liquid energy, never above 1.01 × initial total; body plus liquid momentum less gravity within 1% of the momentum exchanged), `liquid_free_flight`, `liquid_coupled_world_steps_once_per_tick`; MPM's own: `matter_push_out_reaction_matches_removed_momentum` (D30), `matter_coupling_presentation_shares_display_time` |
-| Coupled live ticks exchange in order, bounded by the live clock | `liquid_coupled_three_tick_reactions_are_ordered_and_required`; `substeps_host_sync_runs_live_between_iterations`; GPU: `liquid_coupled_live_frame_rate` |
+| Coupled live ticks exchange in order, bounded by the live clock | `liquid_coupled_three_tick_reactions_are_ordered_and_required`; `substeps_host_sync_runs_live_between_iterations`; CPU: `liquid_clock_live_accepts_at_most_two_intervals_per_frame`; GPU: `liquid_live_flip_force_and_coupling_match_accepted_progress` |
 | Forces and impulses | `matter_impulse_once_per_tick_across_substeps`; `matter_force_lattice_matches_field`; `matter_input_stream_24_30_60` |
-| One liquid-domain predicate | negative gate: `rg -n '"node\.fluid_surface"' crates -g '*.rs'` returns hits only in `manifold-core/src/liquid_domain.rs`, `R/primitives/fluid_surface.rs` and test code |
+| One liquid-domain predicate | negative gate: `rg -n '"node\.fluid_surface"' crates -g '*.rs'` returns hits only in `manifold-core/src/liquid_domain.rs`, (retired with CPU FLIP; in git history) and test code |
 | No FLIP fallback | negative gate: `rg -n -i 'fallback\|fall back' crates/manifold-nodes-water/src/primitives/matter_*.rs` returns nothing |
 | Every barrier-free atom on codegen | the existing classify source scans plus each atom's value test; `graph-tool fusion` output recorded per phase |
 | No new shared locks | negative gate: `git diff origin/main -- crates \| rg '^\+.*Arc<(Mutex\|RwLock)'` returns nothing |
-| Solver budget | `matter_solver_perf` (P1b, P4), p95 against 6 ms |
+| Solver budget | Measured at landing (P1b, P4), p95 against 6 ms; the `matter_solver_perf` probe left with BUG-hkbdp.6.11 (water test cut) and lives in git history |
 | Material maths never reads the grid (D33) | negative gate: `rg -n '@group\|@binding\|var<storage\|var<workgroup' crates/manifold-nodes/src/node_graph/primitives/shaders/matter_material.wgsl` returns nothing; negative gate: constitutive maths outside the include, `rg -n 'j \* \(j - 1\.0\)\|\(j - 1\.0\) \* \(j - 1\.0\)' crates/manifold-nodes/src/node_graph/primitives/shaders -g 'matter_*.wgsl' -g 'grid_to_matter*.wgsl'` returns hits only in `matter_material.wgsl` |
 | Stress splits cleanly (D33) | `matter_material_stress_splits` (every model, seeded random F and J: `deviatoric` trace below 1e-5 of its norm; `volumetric` unchanged when F̂ changes at fixed J; sum equals the f64 reference) ; `matter_material_rotation_is_stress_free` (every model with F, `s.j = 1`, zero `grad_v`: a pure rotation gives zero stress) |
 | Deformation follows its point (D34) | `matter_compaction_carries_deformation` (P3b: drain half a Goo blob; every surviving point keeps its F row bit for bit) |
@@ -1663,7 +1663,7 @@ Superseded by LIQUID_SOLVER_SEAM_DESIGN.md P2a (One list) and P2b (One walk and 
   switch to `FLIP_DOMAIN_TYPE_ID`, and where a table is per-type the matter row is added
   to the same table. `metadata_for_node_type("node.fluid_surface")` calls in
   `manifold-app` read the found node's own type instead. Worked example:
-  `R/preset_runtime/physics_sources.rs:65` `.any(|node| node.type_id == "node.fluid_surface")`
+  (retired with CPU FLIP; in git history) `.any(|node| node.type_id == "node.fluid_surface")`
   → `.any(|node| is_liquid_domain(&node.type_id))`.
 - **Deliverables:** the predicate module, the walk, the rewrites; matter domains appear in
   the Scene Panel's domain lists, role targets, force targets, World sharing and the
@@ -1683,7 +1683,7 @@ Superseded by LIQUID_SOLVER_SEAM_DESIGN.md P2a (One list) and P2b (One walk and 
 ### P3b — Sources, drains and fills on scene objects
 
 - **Entry state:** P3a merged.
-- **Read-back:** D9, D11; section 4.2; FLUID_ENGINE_INTEGRATION_PLAN.md section 4 (Scene Panel and creative workflow). ⚠ VERIFY-AT-IMPL how `R/fluid/roles.rs` samples role motion history; share it, extracting in place if it is FLIP-coupled.
+- **Read-back:** D9, D11; section 4.2; FLUID_ENGINE_INTEGRATION_PLAN.md section 4 (Scene Panel and creative workflow). ⚠ VERIFY-AT-IMPL how (retired with CPU FLIP; in git history) samples role motion history; share it, extracting in place if it is FLIP-coupled.
 - **Deliverables:** mesh fills in `matter_fill`; `matter_emit` (inflow velocity, inherit
   motion, per-tick rate); `matter_drain`; `matter_compact`; epoch renumbering. Matter
   versions of `WaterBasin.json` (pour) and the Dam Break with every role kind. Tests:
@@ -1701,7 +1701,7 @@ Superseded by LIQUID_SOLVER_SEAM_DESIGN.md P2a (One list) and P2b (One walk and 
 
 Superseded by LIQUID_SOLVER_SEAM_DESIGN.md P8 (Forces and impulses for GPU liquids).
 
-- **Entry state:** P3b merged. Anchors: `rg -n 'pub fn enqueue_impulse' crates/manifold-nodes-water/src/fluid/impulses.rs` (`:60` at `c8961489d`), `rg -n 'acceleration_field' crates/manifold-nodes-water/src/primitives/fluid_surface.rs`.
+- **Entry state:** P3b merged. Anchors: (retired with CPU FLIP; in git history) (`:60` at `c8961489d`), (retired with CPU FLIP; in git history).
 - **Read-back:** D13; section 6; FLUID_ENGINE_INTEGRATION_PLAN.md section 5 (Timing, events and lifecycle).
 - **Deliverables:** field sampling and the impulse hooks on `node.matter_domain` over the
   shared `EventQueue`; force and impulse lattices in `matter_grid_update`. Tests:
@@ -1883,7 +1883,7 @@ Superseded by BUG-imy3 (GPU whitewater, solver-agnostic), designed in [GPU_WHITE
 
 Keys on `is_liquid_domain` (LIQUID_SOLVER_SEAM_DESIGN.md section 3.5 (Scene recognition)), never on `MATTER_DOMAIN_TYPE_ID`.
 
-- **Entry state:** P5a merged. ⚠ VERIFY-AT-IMPL the `fluid_cache.rs` writer and the take journal (`R/fluid/take.rs`) before pinning the payload.
+- **Entry state:** P5a merged. ⚠ VERIFY-AT-IMPL the (retired with CPU FLIP; in git history) writer and the take journal ((retired with CPU FLIP; in git history)) before pinning the payload.
 - **Read-back:** D24; the surface design's D12.
 - **Deliverables:** Record and Playback for matter graphs: per-tick `FluidParticle` frames
   (and whitewater frames) through the existing atomic per-tick file writer as a new

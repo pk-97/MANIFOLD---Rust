@@ -22,11 +22,11 @@ use manifold_physics::{BodyHandle, BodyImpulse, PhysicsWorld, Seconds, TickStamp
 
 use super::bodies::{pack_supports, unpack_supports, BodySupports, LiquidBody};
 #[cfg(test)]
-use crate::fluid::TICK;
-use manifold_node_engine::scene::fluid_domain::FluidDomainLayout;
-use crate::fluid::{CoupledRigidFrame, CoupledRigidLayout};
+use manifold_physics::clock::TICK;
+use manifold_core::fluid_domain::FluidDomainLayout;
+use crate::coupled_frame::{CoupledRigidFrame, CoupledRigidLayout};
 use crate::fluid_role::PreparedFluidGeometry;
-use manifold_node_engine::scene::impulse::RigidImpulseTargets;
+use manifold_core::scene_impulse::RigidImpulseTargets;
 use crate::physics::{RigidBody, RigidSceneInputs, RigidSimulation};
 use manifold_node_engine::scene::transform::Transform;
 
@@ -305,6 +305,11 @@ impl LiquidRigidOwner {
     }
 
     pub fn completed_time(&self) -> Seconds { self.completed_time }
+
+    /// The step the rigid worker runs under; the domain sets it each frame.
+    pub fn set_step(&mut self, step: crate::physics::SimStep) {
+        self.rigid.set_step(step);
+    }
 
     pub fn epoch(&self) -> u64 {
         self.epoch
@@ -729,7 +734,7 @@ mod tests {
         scene.bodies[0] = Some(RigidBody {
             transform: Transform { pos: [0.0, 1.0, 0.0], scale: [0.4; 3], ..Transform::default() },
             // 32 kg: the cube's edge is its scale times CUBE_EDGE_PER_SCALE.
-            density: 32.0 / (0.4 * crate::liquid::conformance::CUBE_EDGE_PER_SCALE).powi(3),
+            density: 32.0 / (0.4 * crate::testkit::conformance::CUBE_EDGE_PER_SCALE).powi(3),
             bounce: 0.0,
             ..RigidBody::default()
         });
@@ -742,13 +747,13 @@ mod tests {
 
     #[test]
     fn liquid_coupled_reanchor_moves_only_authored_poses_without_an_extra_step() {
-        let _live = crate::physics::PhysicsStepScope::for_render(false);
         let mut inputs = scene();
         inputs.bodies[1] = inputs.bodies[0].clone();
         inputs.bodies[1].as_mut().unwrap().transform.pos[0] = 10.0;
         inputs.bodies[0].as_mut().unwrap().kind = 2;
         let colliders = RigidImpulseTargets { bodies: 3, copies: false };
         let mut owner = LiquidRigidOwner::new(&inputs, OPEN, colliders, 1, None).unwrap();
+        owner.set_step(crate::physics::SimStep::live(Seconds(TICK)));
         // More than one live frame's budget has already completed before
         // an overloaded frame reanchors the authored scene.
         for tick in 0..6 {

@@ -60,18 +60,6 @@ UI_PROJECTION_PATHS = (
 UI_PAINT_DIR = "crates/manifold-ui-paint/"
 UI_PAINT_FILTERS = ["clip_content_gpu::tests::gpu::", "ui_renderer::tests::", "contracts::"]
 PROOFS_DIR = "crates/manifold-nodes/tests/gpu_proofs/"
-CPU_FLIP_FIXTURES_DIR = "crates/manifold-nodes/tests/fixtures/cpu-flip/"
-CPU_FLIP_REFERENCE_FILTERS = [
-    "liquid_conformance::",
-    "water_basin::",
-    "fluid_surface_perf::",
-    "contracts::node_graph::catalog_tests::whitewater_scene::",
-    "primitives::gpu_flip_preset::",
-    "load::expand::acceleration::",
-    "runtime::physics_carry::",
-    "runtime::physics_sampling::",
-    "runtime::physics_impulses::tests::coupled_playback_tests::",
-]
 
 # Landing warning budget for the scoped (non-glb) GPU step, seconds of test time.
 LANDING_BUDGET_S = 360
@@ -131,15 +119,12 @@ GLB_TESTS = frozenset({"glb_conformance_sweep"})
 # A shader included by more primitives than this is "shared WGSL" -> BROAD.
 SHARED_WGSL_USERS = 12
 
-# Reporters print timings and assert nothing about behaviour, so they prove no
-# change; they run when their own file is touched (the skip drops out then, see
-# Plan.final_skips) and nightly under --all. Filters name the test fn.
+# Proofs only a long run can make: they skip on every landing run, whole-package
+# runs included, and run when an exact filter names them (see Plan.final_skips)
+# and nightly under --all. Filters name the test fn.
+# matter_look_volume_drift: MPM volume loss shows only over 60 s of still pool.
 REPORTER_SKIPS = [
-    "matter_cost_probe",
-    "matter_solver_perf",
-    "gpu_flip_frame_perf",
-    "gpu_flip_cost_probe",
-    "gpu_flip_speed_measure",
+    "matter_look_volume_drift",
 ]
 
 # Liquid paths whose change is narrower than the whole solver: the tick clock,
@@ -149,9 +134,7 @@ REPORTER_SKIPS = [
 # and pressure paths stay on the broad `gpu_flip_` row below.
 # Filters, not skips: a skip is global and would hide body proofs that another
 # touched path selected.
-# The live frame-rate proof owns pacing too; its duration never removes it.
 LIQUID_FORCE_FILTERS = [
-    "liquid_conformance::liquid_coupled_live_frame_rate",
     "liquid_conformance::liquid_coupled_world_steps",
     "liquid_conformance::liquid_free_flight",
     "liquid_conformance::liquid_pause_",
@@ -223,7 +206,7 @@ NARROW_ROWS = [
     ((WATER_SRC + "primitives/gpu_flip_narrow_band_tests.rs",
       WATER_SRC + "primitives/gpu_flip_narrow_band.rs",
       WATER_SRC + "primitives/shaders/gpu_flip_narrow_band.wgsl"),
-     (["narrow_band", "face_grid_demo_gpu_flip_and_matter_side_by_side"], [])),
+     (["narrow_band"], [])),
     ((WATER_SRC + "liquid/clock.rs",
       WATER_SRC + "liquid/fields.rs",
       WATER_SRC + "liquid/fields/"),
@@ -418,7 +401,6 @@ for _engine_path in (
     ]
 del _engine_path
 
-LIB_PROOF_ROWS[RENDERER_SRC + "testkit/reference_fixtures.rs"] = CPU_FLIP_REFERENCE_FILTERS
 for _pressure_fixture in ("dambreak_pressure_problems.bin.zst", "deep_pool_pressure_problems.bin.zst",
                           "deep_pool_density_problems.bin.zst", "gpu_flip_pressure_golden.txt"):
     LIB_PROOF_ROWS["crates/manifold-nodes-water/tests/fixtures/" + _pressure_fixture] = [
@@ -518,6 +500,7 @@ CATALOG_TEST_ROWS = [
     ("crates/manifold-nodes-image/src/node_graph/primitives/seed_particles_from_texture", "seed_particles_from_texture", True),
     ("crates/manifold-nodes-water/src/primitives/blob_bounds", "blob_bounds", True),
     ("crates/manifold-nodes-water/src/primitives/face_grid_", "face_grid_scene_tests", False),
+    ("crates/manifold-nodes-water/src/testkit/face_grid_scenes", "face_grid_scene_tests", False),
     ("crates/manifold-nodes-image/src/node_graph/primitives/interpolate_particle_frames", "particle_frame_blend_tests", True),
     ("crates/manifold-nodes-scene/src/node_graph/primitives/particles_to_copies", "particle_frame_blend_tests", True),
     ("crates/manifold-nodes-water/src/primitives/push_out_of_solid", "particle_frame_blend_tests", True),

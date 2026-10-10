@@ -8,7 +8,6 @@
 
 // The GPU proofs (`whitewater_particle_tests`, feature gpu-proofs) call every
 // item here; a default test build compiles only the extent proof's face index.
-#![cfg_attr(not(feature = "gpu-proofs"), allow(dead_code))]
 
 #[cfg(test)]
 use manifold_node_engine::particles::FluidParticle;

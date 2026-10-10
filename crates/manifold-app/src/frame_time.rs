@@ -38,9 +38,9 @@ use std::time::{Duration, Instant};
 
 use manifold_gpu::{GpuFrameProfile, GpuWorkKind, ProfileGranularity};
 use manifold_node_engine::exec::execution::StepProfile;
-use manifold_nodes_water::physics_metrics::ClockMetrics;
+use manifold_node_engine::exec::sim_metrics::ClockMetrics;
 #[cfg(test)]
-use manifold_nodes_water::physics_metrics::{ClockRecord, MAX_CLOCK_RECORDS};
+use manifold_node_engine::exec::sim_metrics::{ClockRecord, MAX_CLOCK_RECORDS};
 
 use crate::content_command::ContentCommand;
 use crate::perf_soak::{prepare_project_edited, PreparedProject};
@@ -705,8 +705,7 @@ fn set_profiling(ct: &mut crate::content_thread::ContentThread, on: bool) {
     }
 }
 
-/// Join the frame's GPU spans back to their nodes, the way the frame probe
-/// in `gpu_flip_frame_perf.rs` does.
+/// Join the frame's GPU spans back to their nodes.
 fn split(ct: &mut crate::content_thread::ContentThread, granularity: ProfileGranularity) -> Split {
     let gpu_profiles = ct.content_pipeline.take_gpu_profiles();
     let mut steps = ct.content_pipeline.take_step_profiles();

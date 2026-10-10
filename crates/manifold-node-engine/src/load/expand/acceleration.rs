@@ -8,7 +8,7 @@ use manifold_core::scene_index::FlatSceneIndex;
 use manifold_core::scene_modifier_preset::{SceneNodeRef, SceneTargetSelection};
 
 use crate::persistence::PrimitiveRegistry;
-use crate::scene::impulse::RigidImpulseTargets;
+use manifold_core::scene_impulse::RigidImpulseTargets;
 
 use super::SceneModifierExpandError;
 
@@ -254,7 +254,7 @@ pub fn impulse_recipients(
 ) -> Result<
     Vec<(
         manifold_core::NodeId,
-        crate::scene::impulse::ImpulseTarget,
+        manifold_core::scene_impulse::ImpulseTarget,
     )>,
     SceneModifierExpandError,
 > {
@@ -262,7 +262,7 @@ pub fn impulse_recipients(
     impulse_recipients_with_index(&index, scene, selection, registry)
 }
 
-pub(super) fn impulse_recipients_with_index(
+pub fn impulse_recipients_with_index(
     index: &FlatSceneIndex,
     scene: &SceneNodeRef,
     selection: &SceneTargetSelection,
@@ -270,11 +270,11 @@ pub(super) fn impulse_recipients_with_index(
 ) -> Result<
     Vec<(
         manifold_core::NodeId,
-        crate::scene::impulse::ImpulseTarget,
+        manifold_core::scene_impulse::ImpulseTarget,
     )>,
     SceneModifierExpandError,
 > {
-    use crate::scene::impulse::{ImpulseTarget, RigidImpulseTargets};
+    use manifold_core::scene_impulse::{ImpulseTarget, RigidImpulseTargets};
     let mut worlds = std::collections::BTreeMap::new();
     for object in selected(index, selection, scene, registry)? {
         let Some(recipient) = resolve(index, &object, registry)? else {

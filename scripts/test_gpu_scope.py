@@ -135,6 +135,15 @@ class ScopeTests(unittest.TestCase):
         run = next(run for run in result.runs() if run["package"] == "manifold-compositor")
         self.assertEqual(run["filters"], [])
 
+    def test_whole_package_runs_still_skip_reporter_skips(self):
+        workspace = fixture_workspace(Path("/nonexistent"))
+        result = g.Plan(paths=["synthetic"], workspace=workspace,
+                        filters=set(g.SMOKE_FILTERS), whole_packages={"manifold-compositor"})
+        run = next(run for run in result.runs() if run["package"] == "manifold-compositor")
+        self.assertEqual(run["filters"], [])
+        for name in g.REPORTER_SKIPS:
+            self.assertIn(name, run["skips"])
+
     def test_missing_audited_owner_fails_before_pruning(self):
         workspace = fixture_workspace(Path("/nonexistent"))
         workspace.packages["manifold-nodes-scene"]["targets"] = [
@@ -253,6 +262,20 @@ class ScopeTests(unittest.TestCase):
 
     def test_retired_crate_proof_requires_confirmed_git_deletion(self):
         path = "crates/retired-catalog/tests/gpu_proofs/proof.rs"
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            (repo / '.git').touch()
+            workspace = fixture_workspace(repo)
+            for output, expected in [(path + '\n', []), ('', [path])]:
+                with self.subTest(deleted=bool(output)), mock.patch.object(
+                    g.subprocess, 'run', return_value=mock.Mock(returncode=0, stdout=output, stderr='')
+                ):
+                    result = g.plan_for_paths([path], repo, shader_users=lambda _: [], workspace=workspace,
+                                              cpu_plan=None)
+                    self.assertEqual([item[0] for item in result.unmapped], expected)
+
+    def test_deleted_contract_test_requires_confirmed_git_deletion(self):
+        path = "crates/manifold-nodes/tests/contracts/water/race_probe.rs"
         with tempfile.TemporaryDirectory() as directory:
             repo = Path(directory)
             (repo / '.git').touch()
@@ -532,27 +555,6 @@ class ScopeTests(unittest.TestCase):
         result = plan([path], repo=self._repo_with(path))
         self.assertEqual([row[0] for row in result.unmapped], [path])
 
-    def test_cpu_flip_reference_inputs_select_consuming_proofs(self):
-        required = {
-            "liquid_conformance::", "water_basin::", "fluid_surface_perf::",
-            "contracts::node_graph::catalog_tests::whitewater_scene::",
-
-            "primitives::gpu_flip_preset::",
-            "load::expand::acceleration::",
-            "runtime::physics_carry::", "runtime::physics_sampling::",
-            "runtime::physics_impulses::tests::coupled_playback_tests::",
-        }
-        for path in (R + "testkit/reference_fixtures.rs", *(
-                g.CPU_FLIP_FIXTURES_DIR + name for name in (
-                    "WaterBasin.json", "WaterDamBreak.json", "WaterDamBreakGpu.json"))):
-            with self.subTest(path=path):
-                result = plan([path])
-                self.assertEqual(result.paths, [path])
-                self.assertEqual(result.filters, required)
-                self.assertFalse(result.unmapped)
-                self.assertFalse(result.broad)
-                self.assertTrue(set(g.SMOKE_FILTERS) <= set(result.final_filters()))
-
     def test_ui_paint_selects_own_lib_proofs_and_renderer_smoke(self):
         result = plan(["crates/manifold-ui-paint/src/native_text.rs"])
         self.assertFalse(result.unmapped)
@@ -643,7 +645,7 @@ class ScopeTests(unittest.TestCase):
                      W + 'shaders/gpu_flip_narrow_band.wgsl'):
             result = plan([path], users=lambda _: [W + 'gpu_flip_narrow_band_tests.rs'],
                           repo=self._repo_with(path))
-            self.assertTrue(set(g.SMOKE_FILTERS + ["narrow_band", "face_grid_demo_gpu_flip_and_matter_side_by_side"]) <= set(result.final_filters()))
+            self.assertTrue(set(g.SMOKE_FILTERS + ["narrow_band"]) <= set(result.final_filters()))
             self.assertNotIn("gpu_flip_", result.filters)
             self.assertFalse(result.broad)
             self.assertFalse(result.unmapped)
@@ -770,17 +772,6 @@ class ScopeTests(unittest.TestCase):
         p = plan([W + 'matter_fill.rs'])
         self.assertTrue({"matter_", "substeps_"} <= p.filters)
 
-    def test_batch_two_paths_select_face_grid_demo(self):
-        name = "node_graph::primitives::face_grid_scene_tests::face_grid_demo_gpu_flip_and_matter_side_by_side"
-        for path in (W + 'gpu_flip_step.rs', W + 'shaders/gpu_flip_step.wgsl',
-                     W + 'gpu_flip_pressure.rs', W + 'shaders/gpu_flip_pressure.wgsl',
-                     W + 'gpu_flip_lentine.rs', W + 'shaders/gpu_flip_lentine.wgsl',
-                     W + 'gpu_flip_narrow_band.rs', W + 'shaders/gpu_flip_narrow_band.wgsl'):
-            result = plan([path], users=lambda _: [W + 'gpu_flip_step.rs'],
-                          repo=self._repo_with(path))
-            self.assertTrue(any(f in name for f in result.final_filters()), path)
-            self.assertFalse(any(s in name for s in result.final_skips()), path)
-
     def test_gpu_flip_row_reaches_the_scene_proofs(self):
         for path in (W + 'gpu_flip_step.rs', W + 'liquid_state.rs', T + 'liquid/extent.rs'):
             self.assertTrue({"gpu_flip_", "face_grid_tests::"} <= plan([path]).filters, path)
@@ -836,12 +827,13 @@ class ScopeTests(unittest.TestCase):
         p = plan([T + 'liquid/clock.rs', W + 'gpu_flip_step.rs'])
         self.assertIn("gpu_flip_", p.filters)
 
-    def test_reporters_skip_unless_their_own_file_is_touched(self):
+    def test_long_proofs_skip_unless_their_own_test_is_named(self):
         for name in g.REPORTER_SKIPS:
             self.assertIn(name, plan([W + 'gpu_flip_step.rs']).final_skips() +
                           plan([W + 'matter_fill.rs']).final_skips())
-        own = plan(["crates/manifold-nodes/tests/gpu_proofs/matter_cost_probe.rs"])
-        self.assertNotIn("matter_cost_probe", own.final_skips())
+        own = plan([W + 'matter_fill.rs'])
+        own.filters.add("matter_look::matter_look_volume_drift")
+        self.assertNotIn("matter_look_volume_drift", own.final_skips())
 
     def with_times(self, times):
         d = tempfile.mkdtemp()
@@ -884,7 +876,7 @@ class ScopeTests(unittest.TestCase):
                 self.assertLessEqual(g.read_times(g.TIMES_PATH).get(name, 0), g.SLOW_THRESHOLD_S, name)
 
     def test_slow_exact_filter_runs(self):
-        name = "liquid_conformance::liquid_coupled_live_frame_rate"
+        name = "liquid_conformance::liquid_floating_rest"
         self.with_times({name: 222})
         p = plan([T + 'liquid/clock.rs'])
         p.filters.add(name)

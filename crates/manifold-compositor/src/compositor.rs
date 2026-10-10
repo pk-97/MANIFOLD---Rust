@@ -214,7 +214,7 @@ pub trait Compositor: Send {
         &self,
         _output: &mut Vec<(
             NodeId,
-            manifold_node_engine::scene::fluid_domain::FluidDomainSnapshot,
+            manifold_core::fluid_domain::FluidDomainSnapshot,
         )>,
     ) {
     }
@@ -336,6 +336,15 @@ pub trait Compositor: Send {
     /// RT_QUALITY_SETTINGS_DESIGN.md D5 — set per-frame RT quality values.
     /// Default no-op for compositors without RT chains.
     fn set_rt_quality(&mut self, _q: manifold_node_engine::exec::effect_node::RtQuality) {}
+
+    /// This frame's simulation step for every effect chain. Default no-op.
+    fn set_sim_step(&mut self, _step: manifold_node_engine::exec::effect_node::SimStep) {}
+
+    /// The simulation metrics every effect chain recorded since the last
+    /// call; clears them. Default: none.
+    fn take_sim_metrics(&mut self) -> manifold_node_engine::exec::sim_metrics::SimMetrics {
+        Default::default()
+    }
 
     /// SCENE_FX P4a — the compositor's layer-skin registry: previous-frame
     /// composited output per layer, published at end of frame. The host

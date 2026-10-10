@@ -12,10 +12,10 @@
 
 use manifold_gpu::{GpuBuffer, GpuDevice};
 
-use super::gpu_flip_step::face_bytes;
+use crate::liquid::grid::face_bytes;
 use super::particle_identity::{ParticleIdentity, IDENTITY_BYTES};
 use super::liquid_stats::{LIQUID_STATS_WORDS, LiquidTickStats};
-use super::whitewater_step::{DEFAULT_CAPACITY as WHITEWATER_DEFAULT_CAPACITY, MAX_CAPACITY as WHITEWATER_MAX_CAPACITY};
+use crate::whitewater::{DEFAULT_CAPACITY as WHITEWATER_DEFAULT_CAPACITY, MAX_CAPACITY as WHITEWATER_MAX_CAPACITY};
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
 use manifold_node_engine::particles::FluidParticle;
 use crate::fluid_particles::FaceSample;
@@ -531,9 +531,9 @@ impl Primitive for LiquidState {
         if interior_grid == Some(0) {
             refused = Some("Liquid State: interior distance has zero cells".to_string());
         }
+        let live_recovery = target_time.is_some() && !ctx.sim_step.offline();
         let gpu = ctx.gpu_encoder();
         let clock = gpu.device.frame_clock();
-        let live_recovery = target_time.is_some() && !crate::physics::offline_simulation();
         let recover = self.poll_readbacks(clock.as_ref(), live_recovery);
         if self.identity_reset && self.epoch == Some(epoch) {
             // The executor restarts the domain clock (and coupled rigid state).
@@ -665,13 +665,15 @@ impl Primitive for LiquidState {
         }
         self.identity_reset = false;
         if let Some(target) = target_time {
-            self.dropped_time.record(
+            let dropped_time = &mut self.dropped_time;
+            ctx.sim_metrics.record(|metrics| dropped_time.record(
+                metrics,
                 target,
                 self.completed_time,
                 dropped_seconds,
                 self.cap_hit,
                 self.faulted || self.clock_nonfinite,
-            );
+            ));
         }
 
         self.pending = if refused.is_some() || self.capacity_faulted || (self.faulted && !live_recovery) { 0 } else { ticks };

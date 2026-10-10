@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 
 use manifold_core::Seconds;
 use manifold_core::effect_graph_def::{EffectGraphDef, EffectGraphNode, SerializedParamValue};
-use manifold_nodes_water::physics::{MAX_BODIES, PhysicsStepScope, RigidBody, RigidSimulation};
+use manifold_nodes_water::physics::{MAX_BODIES, RigidBody, RigidSimulation, SimStep};
 use manifold_node_engine::scene::transform::Transform;
 
 const JSON: &str = include_str!("../assets/generator-presets/PhysicsBoxes.json");
@@ -106,8 +106,7 @@ fn print_stats(count: usize, values: &[f32]) {
 
 fn steady_samples(count: usize) {
     let (bodies, prototype, spacing, columns, layout, gravity_y) = scene_inputs();
-    let mut sim = RigidSimulation::default();
-    let _scope = PhysicsStepScope::with_preview_budget(true, std::time::Duration::ZERO);
+    let mut sim = RigidSimulation::default().with_step(SimStep::export(manifold_core::Seconds(FRAME)));
     advance(
         &mut sim,
         bodies.clone(),
@@ -155,8 +154,7 @@ fn steady_samples(count: usize) {
 
 fn hitch_lag(count: usize) {
     let (bodies, prototype, spacing, columns, layout, gravity_y) = scene_inputs();
-    let mut sim = RigidSimulation::default();
-    let _scope = PhysicsStepScope::for_render(false);
+    let mut sim = RigidSimulation::default().with_step(SimStep::live(manifold_core::Seconds(FRAME)));
     advance(
         &mut sim,
         bodies.clone(),

@@ -6,7 +6,7 @@ use manifold_core::params::ParamManifest;
 use manifold_gpu::GpuTextureFormat;
 use serde_json::{Value, json};
 
-use crate::primitives::gpu_flip_preset::{WaterScene, render_def};
+use crate::presets::gpu_flip::{WaterScene, render_def};
 use manifold_node_engine::runtime::frame_status::FrameRenderStatus;
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
 use manifold_node_engine::testkit::gpu::readback_srgb_rgba8;
@@ -54,7 +54,7 @@ fn renumber_scope_ids(value: &mut Value, next: &mut u64) {
     }
 }
 
-use crate::liquid::conformance::json_node_mut;
+use crate::testkit::conformance::json_node_mut;
 
 pub fn node_scope_wires<'a>(
     nodes: &'a [EffectGraphNode],
@@ -357,7 +357,7 @@ impl Show {
     }
 
     pub fn new_with_emitter_oracle(def: EffectGraphDef, size: (u32, u32), frozen: bool, held: &[String], reference: Option<bool>) -> Self {
-        let mut registry = PrimitiveRegistry::with_cpu_flip_reference();
+        let mut registry = PrimitiveRegistry::with_builtin();
         if let Some(reference) = reference {
             registry.register("node.whitewater_step", if reference {
                 crate::primitives::whitewater_step::reference_proof_node
@@ -368,7 +368,7 @@ impl Show {
         register_substep_test_nodes(&mut registry);
         registry.register(PROBE, || Box::new(Probe::new()));
         registry.register(COUNTS_PROBE, || Box::new(Probe::whitewater_counts()));
-        let (def, retarget) = match frozen.then(|| crate::primitives::gpu_flip_preset::testkit::fused_as_rendered(&def, &registry)).flatten() {
+        let (def, retarget) = match frozen.then(|| crate::presets::gpu_flip::testkit::fused_as_rendered(&def, &registry)).flatten() {
             Some(view) => ((*view.def).clone(), view.node_retarget.clone()),
             None => (def, Default::default()),
         };
@@ -470,6 +470,12 @@ impl Show {
         }
         self.runtime.set_profiling(false);
         Frame { gpu_ms: result.total_ms, cpu_ms, whitewater_ms, untimed: result.overflow + result.invalid }
+    }
+
+    /// The simulation step every following frame runs under. Set it before
+    /// `restart` so warm-up and the restart frames run under it too.
+    pub fn set_sim_step(&mut self, step: crate::physics::SimStep) {
+        self.runtime.set_sim_step(step);
     }
 
     /// The first frame, warm-up, then a trigger restart from the fill, as

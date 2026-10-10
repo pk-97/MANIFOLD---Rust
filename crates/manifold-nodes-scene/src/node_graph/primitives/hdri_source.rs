@@ -285,7 +285,11 @@ impl Primitive for HdriSource {
         // 4. Upload a freshly decoded image to the GPU. Always
         // Rgba16Float — EXR is linear, there is no color_space branch.
         let mut fresh_upload = false;
-        if let Some((w, h, rgba16f)) = self.pending_upload.take() {
+        // The decoded image waits for a GPU-bound frame; a CPU-only frame never
+        // reaches the encoder, whatever the decode thread timing.
+        if ctx.gpu.is_some()
+            && let Some((w, h, rgba16f)) = self.pending_upload.take()
+        {
             self.ensure_texture(ctx, w, h);
             if let Some(tex) = &self.source_texture {
                 ctx.gpu_encoder()

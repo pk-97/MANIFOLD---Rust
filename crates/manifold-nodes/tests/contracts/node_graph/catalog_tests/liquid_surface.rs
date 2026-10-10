@@ -1,4 +1,6 @@
-use manifold_nodes_water::primitives::testkit as water_nodes;
+use manifold_nodes_water::primitives::testkit::gpu_flip as gpu_flip_nodes;
+use manifold_nodes_water::primitives::testkit::liquid as liquid_nodes;
+use manifold_nodes_water::primitives::testkit::surface as surface_nodes;
 use std::borrow::Cow;
 
 
@@ -52,7 +54,7 @@ fn fluid_liquid_surface_keeps_padding_and_border_air_at_extreme_dials() {
 
     const OPEN_TOP: u32 = 63 & !(1 << 3);
     let mut harness = Harness::new();
-    let layout = manifold_node_engine::scene::fluid_domain::domain_layout(None, 1.0, 8).expect("layout");
+    let layout = manifold_core::fluid_domain::domain_layout(None, 1.0, 8).expect("layout");
     let domain = LiquidLattice::from_layout(&layout);
     let (cell, solid_nodes, cells) = (domain.cell_size(), domain.nodes(), domain.cells());
     let bounds = domain.bounds();
@@ -117,14 +119,14 @@ fn fluid_liquid_surface_keeps_padding_and_border_air_at_extreme_dials() {
             ("passes", 3.0),
             ("axis", axis as f32),
         ];
-        let (_, errors) = harness.run(&mut water_nodes::smooth_lattice(None), &[("levelset", source)], &[("smoothed", stage)], &params(&smoothing));
+        let (_, errors) = harness.run(&mut liquid_nodes::smooth_lattice(None), &[("levelset", source)], &[("smoothed", stage)], &params(&smoothing));
         assert!(errors.is_empty(), "{errors:?}");
         source = stage;
         smoothed = Some(buffer);
     }
     let (clamped_slot, clamped_buf) = harness.array::<f32>(&[], capacity);
     let (_, errors) = harness.run(
-        &mut water_nodes::clamp_liquid_to_solids(None),
+        &mut gpu_flip_nodes::clamp_liquid_to_solids(None),
         &[("levelset", source), ("solid", solid_slot)],
         &[("clamped", clamped_slot)],
         &clamp_params(lattice.center, lattice.size, nodes, solid_nodes, cell),
@@ -165,7 +167,7 @@ fn fluid_liquid_surface_keeps_padding_and_border_air_at_extreme_dials() {
 
 #[test]
 fn fluid_mesh_grid_native_particle_field_matches_reference() {
-    let layout = manifold_node_engine::scene::fluid_domain::domain_layout(None, 2.0, 8).unwrap();
+    let layout = manifold_core::fluid_domain::domain_layout(None, 2.0, 8).unwrap();
     let mesh = manifold_nodes_water::liquid::lattice::LiquidLattice::from_layout(&layout).surface();
     // Odd cell count, even node count and native half-cell origin, including
     // sparse blob bounds and the expanded closing band at subdivision two.
@@ -259,10 +261,10 @@ fn fluid_relax_surface_mesh_stays_standalone_in_the_fused_view() {
     ))
     .expect("Dam Break bundled");
     let mut preset: Value = serde_json::from_str(&json).expect("Dam Break parses");
-    let surface = manifold_nodes_water::liquid::conformance::json_node_mut(&mut preset, "surface")
+    let surface = manifold_nodes_water::testkit::conformance::json_node_mut(&mut preset, "surface")
         .expect("the Liquid Surface group");
     let group = &mut surface["group"];
-    let last = manifold_nodes_water::liquid::conformance::json_node_mut(group, "liquid_normals")
+    let last = manifold_nodes_water::testkit::conformance::json_node_mut(group, "liquid_normals")
         .expect("surface normals")["id"].clone();
     let out = group["nodes"].as_array().expect("group nodes").iter()
         .find(|node| node["typeId"] == "system.group_output")
@@ -309,7 +311,7 @@ fn fluid_searchers_refuse_bins_past_their_ranges() {
     let shape = |harness: &mut Harness, ranges: Slot, extra_inputs: &[(&'static str, Slot)], params: &ParamValues| {
         let mut inputs = vec![("sorted", sorted), ("cell_ranges", ranges)];
         inputs.extend_from_slice(extra_inputs);
-        harness.run(&mut water_nodes::shape_particle_blobs(), &inputs, &[("blobs", blobs)], params).1
+        harness.run(&mut surface_nodes::shape_particle_blobs(), &inputs, &[("blobs", blobs)], params).1
     };
 
     let errors = shape(&mut harness, short, &[], &lattice.params(&[]));

@@ -4,7 +4,7 @@ use std::mem::size_of;
 use crate::matter::MatterGridNode;
 use crate::matter::STATS_WORDS;
 use manifold_node_engine::exec::extent::{AtomExtent, ExtentRule, Verdict};
-use crate::liquid::extent::node_extent;
+use crate::matter::node_extent;
 
 fn matter_stats(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     let lattice = liquid_lattice(x)?;

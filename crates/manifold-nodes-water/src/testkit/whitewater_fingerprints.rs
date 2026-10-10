@@ -1,6 +1,6 @@
 use crate::testkit::whitewater_scene::Show;
 use manifold_core::effect_graph_def::EffectGraphDef;
-use crate::fluid::TICK;
+use manifold_physics::clock::TICK;
 pub const WHITEWATER: &str = "whitewater";
 /// The liquid boundary that captures each tick's whitewater results.
 const BOUNDARY: &str = "state";

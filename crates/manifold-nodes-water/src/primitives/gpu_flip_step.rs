@@ -33,6 +33,7 @@
 //! (Copyright (c) 2020 Andreas Reich, github.com/Wumpf/blub,
 //! `density_projection_gather_error.comp`; see THIRD_PARTY_NOTICES.md).
 
+use crate::liquid::grid::face_bytes;
 use crate::primitives::prefix_scan::PrefixScan;
 use std::borrow::Cow;
 
@@ -52,7 +53,7 @@ use super::sort_particles_into_cells::{LIQUID_PARTICLE_READ, ParticleSorter, Sor
 use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
 use manifold_node_engine::particles::FluidParticle;
 use crate::fluid_particles::FaceSample;
-use manifold_node_engine::scene::fluid_domain::MAX_FLUID_ROLES;
+use manifold_core::fluid_domain::MAX_FLUID_ROLES;
 use manifold_node_engine::ports::EXACT_F32_COUNT;
 use crate::liquid::WATER_DENSITY;
 use crate::liquid::bodies::{LIQUID_COLLIDER, LIQUID_POSE, LiquidBody, LiquidShape, MOBILITY_BYTES};
@@ -94,13 +95,6 @@ manifold_core::testkit_visible! {
 /// FLIP Fluids _extrapolateFluidVelocities: configured CFL, never travel.
 pub(crate) fn band_layers(cfl: u32) -> u32 {
     (3f64.sqrt() * f64::from(cfl)).ceil() as u32 + 3
-}
-}
-
-manifold_core::testkit_visible! {
-/// Bytes of the step's face grid at `cells`: one record per padded cell.
-pub(crate) fn face_bytes(cells: [u32; 3]) -> u64 {
-    cells.iter().map(|&n| u64::from(n) + 1).product::<u64>() * size_of::<FaceSample>() as u64
 }
 }
 
@@ -2449,7 +2443,7 @@ impl Primitive for GpuFlipStep {
         // A graph saved without the domain's interval wire runs on the project's Sim Rate.
         let interval_duration = f64::from(ctx.scalar_or_param(
             "interval_duration",
-            crate::physics::simulation_interval() as f32,
+            ctx.sim_step.interval.0 as f32,
         ));
         let step_dt = (interval_duration/ f64::from(steps)) as f32;
         // 0 (export, or a graph without the wire) measures the whole frame.
@@ -2537,7 +2531,7 @@ impl Primitive for GpuFlipStep {
             .max(0.0)
             .min(
                 (clock_obstacles.size
-                    / size_of::<super::gpu_flip_clock::GpuFlipBodyVertex>() as u64)
+                    / size_of::<crate::liquid::bodies::GpuFlipBodyVertex>() as u64)
                     as f32,
             ) as u32;
         let source_count = ctx
@@ -2545,7 +2539,7 @@ impl Primitive for GpuFlipStep {
             .round()
             .max(0.0)
             .min(
-                (clock_sources.size / size_of::<super::gpu_flip_clock::GpuFlipBodyVertex>() as u64)
+                (clock_sources.size / size_of::<crate::liquid::bodies::GpuFlipBodyVertex>() as u64)
                     as f32,
             ) as u32;
         let live_hits = ctx.inputs.array("live_hits").unwrap_or(&zeros);

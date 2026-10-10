@@ -6,7 +6,7 @@
 **Prerequisites:** none — the seam's P1 and GPU FLIP's full step are on main. This design's P1 is the seam's P10 (Grid outputs).
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.
 
-**Reference boundary:** `WaterDamBreakGpu.json` below is the proof-only CPU fixture in `crates/manifold-nodes/tests/fixtures/cpu-flip/`; product water uses `WaterDamBreakGpuFlip`.
+**Reference boundary:** `WaterDamBreakGpu.json` below is the proof-only CPU fixture in (retired with CPU FLIP; in git history); product water uses `WaterDamBreakGpuFlip`.
 
 Peter, 2026-09-30, on BUG-imy3 (GPU whitewater, solver-agnostic): "move the spawn search to the GPU and reuse FLIP's own foam and bubble code."
 
@@ -37,12 +37,12 @@ Extend, don't redesign. `F/` is `crates/manifold-fluids/native/flip_engine/`, `R
 | Marker radius | `F/fluidsimulation.cpp:4517`: cbrt(3h³/(32π)) ≈ 0.31h | the emitter cylinder is 8× this |
 | Engine arrays | `F/macvelocityfield.h:92` (`getRawArrayU/V/W`), `F/particlelevelset.h:71` (`getPhiGrid`), `F/meshlevelset.h:101` (`constructMinimalLevelSet`), `:156` (`getPhiArray3d`), `F/array3d.h:391` (`getRawArray`) | whole-array copy targets (D6) |
 | Load path | `F/diffuseparticlesimulation.cpp:1480` (`loadDiffuseParticles`) never refreshes the cached size (`F/particlesystem.h:72`); `update` returns early on size 0 (`:95`) | trap: the glue calls `getDiffuseParticles()->update()` after every load |
-| FLIP-native path | `crates/manifold-fluids/native/bridge.cpp:1367` (options), `:665` (refresh); `R/primitives/fluid_surface.rs:123` (foam, bubbles, spray, counts) | the reference, unchanged |
-| Fade rule | `R/fluid.rs:319` (`WhitewaterFrame::fill`: scale √clamp(lifetime/0.2)) | one shared function (D7) |
+| FLIP-native path | `crates/manifold-fluids/native/bridge.cpp:1367` (options), `:665` (refresh); (retired with CPU FLIP; in git history) (foam, bubbles, spray, counts) | the reference, unchanged |
+| Fade rule | (retired with CPU FLIP; in git history) (`WhitewaterFrame::fill`: scale √clamp(lifetime/0.2)) | one shared function (D7) |
 | Output shape plan | GPU_FLUID_SURFACE_DESIGN.md P8 (Whitewater at 60 fps): `FluidParticle` per population, id 0, radius = fade | adopted (D7) |
 | Copies | `R/primitives/particles_to_copies.rs:26` (`live_count` holes) | exists |
 | Particle frame | `R/primitives/matter_frame.rs:80` (outputs), `R/liquid/frame_ring.rs:12` (3 slots) | read |
-| Clock | `R/liquid/clock.rs:10` (`ClockFrame { ticks, epoch }`); `R/primitives/matter_domain.rs:167-169` (`ticks`, `epoch` outputs); `R/fluid.rs:48` (`TICK` = 1/60) | read (D12) |
+| Clock | `R/liquid/clock.rs:10` (`ClockFrame { ticks, epoch }`); `R/primitives/matter_domain.rs:167-169` (`ticks`, `epoch` outputs); (retired with CPU FLIP; in git history) (`TICK` = 1/60) | read (D12) |
 | Level set | `R/primitives/particle_volume.rs:54`: nearest-blob distance, capped at 0.1 bin outside, bounded near −a inside | not a distance past the cap (D4) |
 | Surface group | `WaterDamBreakGpu.json` group `liquid_surface`: particle_volume → 3 × smooth_lattice → mesh | exports `level_set` in P1 |
 | Face contract | LIQUID_SOLVER_SEAM_DESIGN.md section 3.2 (Grid outputs), P10 (Grid outputs) | built here as P1 |
@@ -51,7 +51,7 @@ Extend, don't redesign. `F/` is `crates/manifold-fluids/native/flip_engine/`, `R
 | Scan | `R/primitives/running_total.rs:31` | exists |
 | Gather by running total | `R/primitives/select_flagged.rs:36` (binary search) | precedent for spawn |
 | GPU→CPU ring | `R/primitives/matter_state.rs:49` (`ReadbackSlot`), `:118` (poll), `:311` (capture; skip when all in flight) | precedent (D6) |
-| CPU→GPU ring | `R/fluid/particle_ring.rs:1` (read stamps, admission, growth) | precedent (D7) |
+| CPU→GPU ring | (retired with CPU FLIP; in git history) (read stamps, admission, growth) | precedent (D7) |
 | Frame clock | `crates/manifold-gpu/src/metal/retire.rs:159` (`stamp` `:176`, `is_complete` `:181`, `wait` `:189`) | used |
 | Instance upload | `R/instance_upload.rs:30` (64 instances per dispatch) | not used (D7) |
 | Record types | `R/fluid_particles.rs:126` (`FaceSample`, `KnownItem` `:141`) | precedent for `WhitewaterSpawn` |

@@ -6,8 +6,8 @@ scripts/landing_gate.py and scripts/codex_checks.py. Rules:
 
 - Every touched GPU path maps to test filters, plus the fixed SMOKE set.
 - A path maps to the proofs of the thing it changes: NARROW_ROWS (clock, fields,
-  domain nodes) beat the broad solver rows, and timing reporters (REPORTER_SKIPS)
-  run only when their own file is touched or nightly.
+  domain nodes) beat the broad solver rows, and long proofs (REPORTER_SKIPS)
+  run only when a changed test body names them, or nightly.
 - A GPU path with no mapping is a hard failure naming the path; the author adds
   a rule here. There is no run-everything fallback. Everything runs only with
   `gpu_proofs_gate.py --all` (nightly trunk_health.py).
@@ -33,7 +33,7 @@ from pathlib import Path
 
 from gate_policy import (
     RENDERER_SRC, ENGINE_SRC, WATER_SRC, CONTRACT_TESTS_DIR, UI_PAINT_DIR, UI_PAINT_FILTERS,
-    PROOFS_DIR, CPU_FLIP_FIXTURES_DIR, CPU_FLIP_REFERENCE_FILTERS, LANDING_BUDGET_S,
+    PROOFS_DIR, LANDING_BUDGET_S,
     SMOKE_FILTERS, RUNTIME_FILTERS, BROAD_FILTERS, SLOW_THRESHOLD_S, TIMES_PATH,
     GLB_TESTS, SHARED_WGSL_USERS, REPORTER_SKIPS, LIQUID_FORCE_FILTERS,
     LIQUID_DOMAIN_FILTERS, MATTER_DOMAIN_FILTERS, NARROW_ROWS, EXPLICIT_ROWS,
@@ -142,7 +142,7 @@ def is_gpu_path(path, workspace=None):
         return True
     if "shaders/" in path or "gpu::gpu_encoder" in path:
         return True
-    if path.startswith((PRESET_RUNTIME_DIR, CPU_FLIP_FIXTURES_DIR)) or path in LIB_PROOF_ROWS:
+    if path.startswith(PRESET_RUNTIME_DIR) or path in LIB_PROOF_ROWS:
         return True
     return "tests/gpu_proofs/" in path or is_gltf_path(path)
 
@@ -236,10 +236,13 @@ class Plan:
             if has_lib:
                 runs.append({'package': package, 'targets': [], 'lib': True, 'target': 'lib',
                              'filters': [] if package in self.whole_packages else filters,
-                             'skips': self.final_skips(), 'budgeted': True})
+                             'skips': (sorted(s for s in REPORTER_SKIPS if not any(s in f for f in self.filters))
+                                       if package in self.whole_packages else self.final_skips()),
+                             'budgeted': True})
             for target in targets:
                 whole = package in self.whole_packages or (package, target) in self.required_binaries
-                skips = [] if whole else self.final_skips()
+                skips = self.final_skips() if not whole else sorted(
+                    s for s in REPORTER_SKIPS if not any(s in f for f in self.filters))
                 if route and route[:2] == (package, target) and route[2]:
                     # The folded sweep retains its separate, unbudgeted run.
                     skips = sorted(set(skips) | {route[2]})
@@ -464,9 +467,10 @@ def plan_for_paths(paths, repo, shader_users=None, base="origin/main", workspace
     if shader_users is None:
         shader_users = shader_index(repo, workspace) if any(p.endswith('.wgsl') for p in paths) else lambda p: []
     plan = Plan(workspace=workspace)
-    # Retired crates have no runnable target. Only skip paths Git confirms
-    # were deleted; moved destinations are independently scoped from the diff.
-    unowned_missing = [p for p in paths if workspace.owner(p) is None
+    # Retired crates and deleted test files have nothing left to run. Only skip
+    # paths Git confirms were deleted; moved destinations are scoped from the diff,
+    # and the parent that dropped the `mod` line maps its own binary.
+    unowned_missing = [p for p in paths if (workspace.owner(p) is None or '/tests/' in p)
                        and not (Path(repo) / p).exists()]
     retired = set()
     if unowned_missing and (Path(repo) / '.git').exists():
@@ -573,9 +577,6 @@ def plan_for_paths(paths, repo, shader_users=None, base="origin/main", workspace
                         prefix = proof_module_prefix(path, repo, root)
                         plan.filters.add(prefix.split("::")[0] + "::")
                 continue
-        if path.startswith(CPU_FLIP_FIXTURES_DIR):
-            plan.filters.update(CPU_FLIP_REFERENCE_FILTERS)
-            continue
         if path.startswith(SOURCE_ROOTS) and path.endswith(".rs"):
             plan.filters.update(path_attr_filters(path, repo) or module_filters(path))
             continue

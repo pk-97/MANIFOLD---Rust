@@ -40,13 +40,12 @@
 
     /// Every bundled Liquid Surface meshes on the lattice a solver's frame
     /// node published: its solid, node counts and box are wired straight from
-    /// one node.fluid_surface, node.matter_frame or node.liquid_frame, never
+    /// one node.matter_frame or node.liquid_frame, never
     /// a hand-made transform or value that could drop the padding. A
     /// display-time solid is a node.mix_arrays of that frame's two solids.
     #[test]
     fn liquid_surface_lattice_comes_from_the_frame() {
-        const FRAMES: [&str; 3] =
-            [manifold_core::liquid_domain::FLIP_DOMAIN_TYPE_ID, "node.matter_frame", "node.liquid_frame"];
+        const FRAMES: [&str; 2] = ["node.matter_frame", "node.liquid_frame"];
         let mut checked = Vec::new();
         for (type_id, flat) in flat_bundled_hosts() {
             let source = |id: u32, port: &str| source(&type_id, &flat, id, port);

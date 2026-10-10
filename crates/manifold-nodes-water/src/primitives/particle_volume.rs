@@ -344,7 +344,7 @@ mod cpu_tests {
 
     #[test]
     fn native_mesh_interior_samples_simulation_cell_centres() {
-        let layout = manifold_node_engine::scene::fluid_domain::domain_layout(None, 2.0, 8).unwrap();
+        let layout = manifold_core::fluid_domain::domain_layout(None, 2.0, 8).unwrap();
         let mesh = crate::liquid::lattice::LiquidLattice::from_layout(&layout).surface();
         let field: Vec<f32> = (0..8u32.pow(3)).map(|i| (i % 8) as f32 + 0.5).collect();
         for i in 0..8 {
@@ -449,6 +449,8 @@ mod cpu_tests {
         let array_len = |port: &str| (port == "interior").then_some(7);
         let ctx = manifold_node_engine::freeze::derived_uniform_registry::DerivedUniformContext {
             frame: &frame,
+            sim_step: Default::default(),
+            sim_metrics: Default::default(),
             camera: None,
             array_len: &array_len,
         };

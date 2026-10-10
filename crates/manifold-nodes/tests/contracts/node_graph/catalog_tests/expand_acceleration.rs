@@ -1,6 +1,4 @@
 use manifold_core::NodeId;
-#[cfg(feature = "gpu-proofs")]
-use manifold_node_engine::load::expand::testkit::authoring_objects;
 
     use manifold_node_engine::load::expand::testkit::{recipient_key, impulse_recipients_with_index};
 use manifold_core::effect_graph_def::EffectGraphDef;
@@ -8,7 +6,7 @@ use manifold_core::liquid_domain::liquid_domain_of;
 use manifold_core::scene_index::FlatSceneIndex;
 use manifold_core::scene_modifier_preset::{SceneNodeRef, SceneTargetSelection};
 use manifold_node_engine::persistence::PrimitiveRegistry;
-    use manifold_node_engine::scene::impulse::ImpulseTarget;
+    use manifold_core::scene_impulse::ImpulseTarget;
 
     fn preset(json: &str) -> EffectGraphDef {
         serde_json::from_str(json).expect("preset parses")
@@ -16,35 +14,6 @@ use manifold_node_engine::persistence::PrimitiveRegistry;
 
     fn top(node: &str) -> SceneNodeRef {
         SceneNodeRef { scope: Vec::new(), node: NodeId::new(node) }
-    }
-
-    /// BUG-4lfm (GPU-surface water not recognised as water): the water object
-    /// is fed by particles_b → sort → blobs → volume → marching cubes, never
-    /// by fluid_surface.vertices, and must still reach its domain.
-    #[cfg(feature = "gpu-proofs")]
-    #[test]
-    fn gpu_surface_water_resolves_to_its_flip_domain() {
-        let def = preset(manifold_nodes::testkit::reference_fixtures::cpu_flip_preset_json("WaterDamBreakGpu.json"));
-        let registry = PrimitiveRegistry::with_cpu_flip_reference();
-        let index = FlatSceneIndex::build(&def).unwrap();
-        let water = top("water_object");
-        assert_eq!(liquid_domain_of(&index, &water).unwrap(), Some(top("fluid_surface")));
-        assert_eq!(
-            recipient_key(&index, &water, &registry).unwrap(),
-            Some((top("fluid_surface"), "acceleration_field".to_string()))
-        );
-        assert!(authoring_objects(&def, &top("scene"), &registry).unwrap().contains(&water));
-        let recipients = impulse_recipients_with_index(
-            &index,
-            &top("scene"),
-            &SceneTargetSelection::Explicit { objects: vec![water] },
-            &registry,
-        )
-        .unwrap();
-        assert_eq!(recipients, vec![(NodeId::new("fluid_surface"), ImpulseTarget::Fluid)]);
-        for rigid in ["floor_object", "obstacle_object"] {
-            assert_eq!(liquid_domain_of(&index, &top(rigid)).unwrap(), None, "{rigid}");
-        }
     }
 
     /// A matter domain is found by the same walk, through its group, and

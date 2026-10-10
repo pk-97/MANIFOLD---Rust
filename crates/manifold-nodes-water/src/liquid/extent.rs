@@ -1,102 +1,15 @@
-//! Native liquid extent rules and the liquid-preset harness.
+//! Native liquid extent rules.
 //!
 //! The generic checker and its shared rules live in the exec extent module;
 //! this module supplies liquid-specific storage, lattice, and whitewater rules.
 
 use std::mem::size_of;
-use manifold_core::effect_graph_def::EffectGraphDef;
-use manifold_core::liquid_domain::is_liquid_domain;
 use crate::fluid_particles::{bin_counts, searched_bins, CellRange};
 use manifold_node_engine::particles::FluidParticle;
 use crate::liquid::grid::{face_len, FACE_GRID_PORTS, FACE_INPUT_PORTS};
 use crate::liquid::lattice::LiquidLattice;
-use crate::matter::{lattice_nodes, ACCUM_WORDS_PER_NODE};
-use manifold_node_engine::parameters::ParamValue;
 use crate::whitewater::{cell_total, face_offset, grid_cells, KnownValue};
-use manifold_node_engine::persistence::{EffectGraphDefExt, PrimitiveRegistry};
-use manifold_node_engine::exec::execution_plan::{compile, ExecutionPlan};
-use manifold_node_engine::exec::extent::{check_graph, AtomExtent, ExtentError, ExtentReport, ExtentRule, Verdict, EXTENT_RULES};
-use manifold_node_engine::graph::Graph;
-
-/// Build a preset at one resolution of its liquid domain and walk it.
-pub fn check_preset_extents(def: &EffectGraphDef, resolution: u32) -> Result<ExtentReport, ExtentError> {
-    let mut preset = LiquidPreset::build(def)?;
-    preset.check(resolution)
-}
-
-/// A liquid preset built once, checked at any resolution of its domain.
-pub struct LiquidPreset {
-    graph: Graph,
-    plan: ExecutionPlan,
-    domains: Vec<manifold_node_engine::exec::effect_node::NodeInstanceId>,
-}
-
-impl LiquidPreset {
-    pub fn build(def: &EffectGraphDef) -> Result<Self, ExtentError> {
-        let registry = PrimitiveRegistry::with_builtin();
-        Self::build_with_registry(def, &registry)
-    }
-
-    /// Build with an explicitly selected primitive registry. Product callers
-    /// use [`Self::build`], while reference proofs opt into the retired CPU
-    /// FLIP node through `PrimitiveRegistry::with_cpu_flip_reference`.
-    pub fn build_with_registry(def: &EffectGraphDef, registry: &PrimitiveRegistry) -> Result<Self, ExtentError> {
-        let build = |error: String| ExtentError::Build(error);
-        let expanded = manifold_node_engine::load::expand::expand_scene_modifiers(def, registry)
-            .map_err(|error| build(error.to_string()))?;
-        let flat = manifold_core::flatten::flatten_groups(&expanded).map_err(|error| build(error.to_string()))?;
-        let graph = flat.into_graph(registry, &Default::default()).map_err(|error| build(format!("{error:?}")))?;
-        let plan = compile(&graph).map_err(|error| build(format!("{error:?}")))?;
-        let domains: Vec<_> = graph.nodes().filter(|node| is_liquid_domain(node.node.type_id().as_str())).map(|node| node.id).collect();
-        if domains.is_empty() {
-            return Err(build("no liquid domain".into()));
-        }
-        for step in plan.steps() {
-            if domains.contains(&step.node) && step.inputs.iter().any(|(port, _)| *port == "resolution") {
-                return Err(build("a liquid domain's resolution is wired; the walk sets the param".into()));
-            }
-        }
-        Ok(Self { graph, plan, domains })
-    }
-
-    /// Every resolution the domains' Resolution control admits.
-    pub fn resolutions(&self) -> std::ops::RangeInclusive<u32> {
-        let range = |id| {
-            let node = self.graph.get_node(id).expect("domain");
-            let def = node.node.parameters().iter().find(|p| p.name == "resolution").expect("a Resolution control");
-            let (low, high) = def.range.expect("Resolution has a range");
-            (low as u32, high as u32)
-        };
-        let (low, high) = self.domains.iter().map(|&id| range(id)).fold((0, u32::MAX), |(a, b), (c, d)| (a.max(c), b.min(d)));
-        low..=high
-    }
-
-    pub fn check(&mut self, resolution: u32) -> Result<ExtentReport, ExtentError> {
-        for &id in &self.domains {
-            self.graph
-                .set_param(id, "resolution", ParamValue::Float(resolution as f32))
-                .map_err(|error| ExtentError::Build(format!("{error:?}")))?;
-        }
-        self.check_authored()
-    }
-
-    /// The graph as its def and card set it.
-    pub fn check_authored(&mut self) -> Result<ExtentReport, ExtentError> {
-        check_graph(&mut self.graph, &self.plan, &EXTENT_RULES)
-    }
-
-    /// The type ids and Resolution of the domains, as built.
-    pub fn domains(&self) -> Vec<(&str, u32)> {
-        self.domains
-            .iter()
-            .map(|&id| {
-                let node = self.graph.get_node(id).expect("domain");
-                let resolution = node.params.get("resolution").and_then(ParamValue::as_scalar).unwrap_or(0.0);
-                (node.node.type_id().as_str(), resolution.round() as u32)
-            })
-            .collect()
-    }
-}
+use manifold_node_engine::exec::extent::{AtomExtent, Verdict};
 
 // ── Rules ──────────────────────────────────────────────────────────────────
 
@@ -105,7 +18,7 @@ pub(crate) fn nodes_total(nodes: [f32; 3]) -> u64 {
 }
 
 pub(crate) fn lattice_total(nodes: [u32; 3]) -> u64 {
-    lattice_nodes(nodes)
+    nodes.iter().map(|&n| u64::from(n)).product()
 }
 
 pub(crate) fn whole(x: &AtomExtent<'_>, name: &str, default: f32) -> u32 {
@@ -124,16 +37,6 @@ pub(crate) fn field_reads(x: &AtomExtent<'_>) -> Result<(), Verdict> {
     let bytes = nodes.iter().map(|&n| u64::from(n)).product::<u64>() * 16;
     x.covers_if_bound("forces", u64::from(whole(x, "force_lattices", 0.0)) * bytes)?;
     x.covers_if_bound("impulses", bytes)
-}
-
-/// Lattice-wide node kernels read the accumulator and grid through the node
-/// count; P2G's word index is an i32 node index times four.
-pub fn node_extent(x: &AtomExtent<'_>, lattice: &LiquidLattice) -> Result<u64, Verdict> {
-    let nodes = lattice_total(lattice.nodes());
-    if nodes > i32::MAX as u64 || nodes * u64::from(ACCUM_WORDS_PER_NODE) > u64::from(u32::MAX) {
-        return Err(x.uncovered(format!("{nodes} nodes overflow the accumulator's 32-bit word index")));
-    }
-    Ok(nodes)
 }
 
 /// A frame's face grid storage: one array per wired axis over the domain's
@@ -284,8 +187,8 @@ pub(crate) fn particle_values(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
 mod tests {
     use super::*;
 
-    use manifold_node_engine::scene::fluid_domain::domain_layout;
-    use crate::matter::{block_sort_box, lattice_blocks};
+    use manifold_core::fluid_domain::domain_layout;
+    use crate::matter::{block_sort_box, lattice_blocks, lattice_nodes};
 
     use crate::primitives::matter_domain::admit_lattice;
 
@@ -316,7 +219,3 @@ mod tests {
     }
 }
 
-
-#[cfg(any(test, feature = "testkit"))]
-#[doc(hidden)]
-pub mod testkit;

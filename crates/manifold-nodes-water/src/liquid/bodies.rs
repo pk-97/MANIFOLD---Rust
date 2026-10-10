@@ -11,14 +11,33 @@ use std::sync::Arc;
 use manifold_physics::coupled_motion::{SupportPoint, MAX_SUPPORT_POINTS};
 
 use manifold_node_engine::channel_names::well_known;
-use crate::fluid::TICK;
+use manifold_physics::clock::TICK;
 use crate::liquid::clock::{ClockFrame, LiquidClock};
 use crate::liquid::tick_samples::TickSamples;
-use manifold_node_engine::scene::fluid_domain::MAX_FLUID_ROLES;
+use manifold_core::fluid_domain::MAX_FLUID_ROLES;
 use crate::fluid_role::{DistanceState, FluidRole, FluidRoleKind, PreparedFluidGeometry};
 use crate::physics::pose_from_transform;
 use manifold_node_engine::ports::{ChannelElementType, ChannelSpec, KnownItem};
 use manifold_node_engine::scene::transform::Transform;
+
+/// A body vertex used by both obstacle and initial-source prediction.
+/// `velocity` is the current linear velocity (for a source it already
+/// includes the source's fluid velocity). `velocity.w` is zero for prescribed
+/// geometry and is a coupled body-row index plus one for dynamic hulls.
+/// `position.w` is an eligibility bit; noncoupled vertices outside the liquid
+/// domain have zero there. Coupled hull vertices stay eligible even when
+/// outside, as in the reference engine. Layout mirrors `BodyVertex` in
+/// shaders/gpu_flip_clock.wgsl.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct GpuFlipBodyVertex {
+    pub position: [f32; 4],
+    pub velocity: [f32; 4],
+    pub acceleration: [f32; 4],
+    pub angular_velocity: [f32; 4],
+    pub angular_acceleration: [f32; 4],
+    pub centroid: [f32; 4],
+}
 
 manifold_core::testkit_visible! {
 /// Body poses on the GPU: rotation, the constant-angular-velocity turn,
@@ -266,8 +285,8 @@ pub struct LiquidBodies {
     /// yet run.
     samples: TickSamples<Poses>,
     frame: Option<ClockFrame>,
-    clock_obstacles: Vec<crate::primitives::gpu_flip_clock::GpuFlipBodyVertex>,
-    clock_sources: Vec<crate::primitives::gpu_flip_clock::GpuFlipBodyVertex>,
+    clock_obstacles: Vec<GpuFlipBodyVertex>,
+    clock_sources: Vec<GpuFlipBodyVertex>,
     shapes: Vec<LiquidShape>,
     atlas: Vec<u32>,
     /// Bumped whenever `shapes` or `atlas` is rebuilt.
@@ -285,8 +304,8 @@ pub struct LiquidBodies {
 }
 
 impl LiquidBodies {
-    pub fn clock_obstacles(&self) -> &[crate::primitives::gpu_flip_clock::GpuFlipBodyVertex] { &self.clock_obstacles }
-    pub fn clock_sources(&self) -> &[crate::primitives::gpu_flip_clock::GpuFlipBodyVertex] { &self.clock_sources }
+    pub fn clock_obstacles(&self) -> &[GpuFlipBodyVertex] { &self.clock_obstacles }
+    pub fn clock_sources(&self) -> &[GpuFlipBodyVertex] { &self.clock_sources }
 
     /// Conservative initial obstacle speed for the first accepted interval.
     /// This uses its prepared body rows with zero initial reaction, and is
@@ -341,7 +360,6 @@ impl LiquidBodies {
     /// always feed the first-substep prediction.
     /// `tick` selects the accepted tick's rows within this display frame.
     pub fn prepare_clock_vertices(&mut self, min: [f32; 3], size: [f32; 3], tick: usize) {
-        use crate::primitives::gpu_flip_clock::GpuFlipBodyVertex;
         self.clock_obstacles.clear();
         self.clock_sources.clear();
         let coupling = !self.coupled.is_empty();
@@ -796,9 +814,11 @@ mod tests {
     }
 
     fn ready_coupled(bodies: &mut LiquidBodies, roles: &[Option<FluidRole>], coupled: &[Arc<PreparedFluidGeometry>]) {
-        let start = std::time::Instant::now();
+        // A poll count, not a wall-clock budget, so a loaded machine cannot fail it.
+        let mut polls = 0u32;
         while bodies.prepare(roles, coupled, 0.0625, false).expect("colliders") == BodiesStatus::Pending {
-            assert!(start.elapsed().as_secs() < 30, "the lattice never arrived");
+            polls += 1;
+            assert!(polls < 6000, "the lattice never arrived");
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
     }
@@ -1251,12 +1271,12 @@ mod tests {
         assert!(grouped.clock_sources().iter().all(|vertex| vertex.velocity[3] == 0.0));
     }
 
-    fn initial_obstacle(vertex: crate::primitives::gpu_flip_clock::GpuFlipBodyVertex) -> LiquidBodies {
+    fn initial_obstacle(vertex: GpuFlipBodyVertex) -> LiquidBodies {
         LiquidBodies { clock_obstacles: vec![vertex], ..LiquidBodies::default() }
     }
 
-    fn eligible_vertex() -> crate::primitives::gpu_flip_clock::GpuFlipBodyVertex {
-        crate::primitives::gpu_flip_clock::GpuFlipBodyVertex {
+    fn eligible_vertex() -> GpuFlipBodyVertex {
+        GpuFlipBodyVertex {
             position: [0.0, 0.0, 0.0, 1.0],
             ..Default::default()
         }

@@ -39,8 +39,6 @@ mod render_scene_material_upgrade;
 mod render_legacy_parity;
 mod render_scene_map_set;
 mod physics_boxes;
-mod physics_takes;
-mod fluid_array_growth;
 mod render_scene_ao_mask;
 mod render_scene_shadow_cache;
 mod rt_object_motion_shadow;
@@ -61,12 +59,6 @@ mod rt_gesture_response;
 mod rt_dynamic_geometry;
 mod rt_dynamic_current_frame;
 mod rt_dynamic_refit;
-#[cfg(feature = "fluid-perf-proofs")]
-mod fluid_surface_perf;
-#[cfg(feature = "water-race-probes")]
-mod gpu_flip_frame_perf;
-#[cfg(feature = "matter-perf-proofs")]
-mod matter_solver_perf;
 mod rt_dynamic_shading;
 #[path = "catalog/rt_normal_tangent_mirror.rs"]
 mod rt_normal_tangent_mirror;
@@ -77,7 +69,6 @@ mod rt_r3_heldout_gltf;
 mod rt_t38_multibounce;
 mod rt_w0_gbuffer;
 mod scene_object_migration_round_trip;
-mod matter_cost_probe;
 mod matter_look;
 mod matter_scene;
 mod matter_transfer;

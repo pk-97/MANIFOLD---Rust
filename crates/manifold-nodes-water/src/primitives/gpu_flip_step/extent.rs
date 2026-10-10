@@ -2,7 +2,7 @@
 use crate::liquid::extent::liquid_lattice;
 use std::mem::size_of;
 use crate::fluid_particles::bin_total;
-use manifold_node_engine::scene::fluid_domain::MAX_FLUID_ROLES;
+use manifold_core::fluid_domain::MAX_FLUID_ROLES;
 use crate::liquid::bodies::LiquidBody;
 use crate::liquid::grid::face_len;
 use crate::liquid::lattice::FlipSolverGrid;
@@ -15,7 +15,7 @@ use crate::primitives::gpu_flip_pressure::scratch_bytes as pressure_scratch_byte
 use crate::primitives::gpu_flip_step::ENGINE_CFL;
 use crate::primitives::gpu_flip_step::FACE_VALID_LAYERS;
 use crate::primitives::gpu_flip_step::band_layers;
-use crate::primitives::gpu_flip_step::face_bytes;
+use crate::liquid::grid::face_bytes;
 use crate::primitives::gpu_flip_step::ring_max;
 use crate::primitives::gpu_flip_step::scratch_bytes as step_scratch_bytes;
 use crate::whitewater::cell_total;

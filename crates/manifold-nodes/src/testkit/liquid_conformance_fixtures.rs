@@ -1,27 +1,22 @@
 //! Authored preset fixtures for the liquid conformance suite.
-use manifold_nodes_water::liquid::conformance::testkit::{G, liquid_totals, matter_totals, matter_faces, set_source_param};
+use manifold_nodes_water::testkit::conformance::testkit::{G, liquid_totals, matter_totals, matter_faces, set_source_param};
 use manifold_core::PresetTypeId;
 use manifold_core::effect_graph_def::{
     BindingDef, BindingTarget, EffectGraphDef, EffectGraphNode, EffectGraphWire, SerializedParamValue,
 };
 use manifold_core::id::NodeId;
-use manifold_core::liquid_domain::{FLIP_DOMAIN_TYPE_ID, MATTER_DOMAIN_TYPE_ID, GPU_FLIP_DOMAIN_TYPE_ID};
+use manifold_core::liquid_domain::{MATTER_DOMAIN_TYPE_ID, GPU_FLIP_DOMAIN_TYPE_ID};
 
 use crate::bundled_presets::bundled_preset_def;
 use manifold_node_engine::particles::FluidParticle;
 use manifold_nodes_water::matter::{MatterPoint, STATS_WORDS};
-use manifold_nodes_water::primitives::face_grid_scenes::matter_dam_break_faces;
+use manifold_nodes_water::testkit::face_grid_scenes::matter_dam_break_faces;
 use manifold_nodes_water::primitives::liquid_stats::LIQUID_STATS_WORDS;
 use manifold_nodes_water::primitives::matter_face_component::MATTER_FACE_VALID_LAYERS;
-use manifold_nodes_water::primitives::gpu_flip_preset::{SHIPPED_PRESET, WaterScene, render_def};
+use manifold_nodes_water::presets::gpu_flip::{SHIPPED_PRESET, WaterScene, render_def};
 use manifold_nodes_water::primitives::whitewater_step::WHITEWATER_STEP_SHADER;
-use crate::testkit::reference_fixtures::cpu_flip_preset_json;
 
-use manifold_nodes_water::liquid::conformance::*;
-
-const FLIP_COUPLES_NATIVELY: &str = "synchronous coupling (D3): FLIP steps its bodies inside its native solve and \
-     takes them from the scene layer's roles, so it has no rigid owner to count, no host sync between coupled \
-     ticks, and no box scene a preset can carry";
+use manifold_nodes_water::testkit::conformance::*;
 
 const MPM_MOVES_ITS_OWN_BODIES: &str = "MPM moves its bodies by its own per-substep law (D7), which tracks when \
      its reaction lands; it shares the force handoff (D17) but the coupled motion law is not its prediction, so \
@@ -126,74 +121,6 @@ pub const LIQUID_SOLVERS: &[LiquidSolverRow] = &[
         ],
     },
     LiquidSolverRow {
-        type_id: FLIP_DOMAIN_TYPE_ID,
-        fixture: flip_fixture,
-        gpu: false,
-        coupled: true,
-        atomic_free: &[],
-        atomic_free_shaders: &[],
-        refusals: &[
-            RefusalCase {
-                what: "Resolution 256 on Dam Break at the default Grid Budget",
-                fixture: Fixture::DamBreak,
-                edit: |def| set_type_param(def, FLIP_DOMAIN_TYPE_ID, "resolution", SerializedParamValue::Int { value: 256 }),
-                names: &["grid_budget_mcells", "resolution"],
-            },
-            RefusalCase {
-                what: "Dam Break's initial volume turned 0.3 rad",
-                fixture: Fixture::DamBreak,
-                edit: |def| set_source_param(def, FLIP_DOMAIN_TYPE_ID, "initial_volume", "rot_y", 0.3),
-                names: &["initial_volume"],
-            },
-            RefusalCase {
-                what: "Dam Break's initial volume moved out of the domain",
-                fixture: Fixture::DamBreak,
-                edit: |def| set_source_param(def, FLIP_DOMAIN_TYPE_ID, "initial_volume", "pos_x", 10.0),
-                names: &["initial_volume"],
-            },
-        ],
-        totals: None,
-        state: None,
-        overflow: None,
-        faces: None,
-        exempt: &[
-            (Check::CoupledWorldStepsOnce, FLIP_COUPLES_NATIVELY),
-            (Check::CollisionMomentum, FLIP_COUPLES_NATIVELY),
-            (Check::CollisionEnergy, FLIP_COUPLES_NATIVELY),
-            (Check::FloatingRest, FLIP_COUPLES_NATIVELY),
-            (Check::RestingContact, FLIP_COUPLES_NATIVELY),
-            (Check::LiftOff, FLIP_COUPLES_NATIVELY),
-            (Check::SubmergedStack, FLIP_COUPLES_NATIVELY),
-            (Check::HandoverAgreement, FLIP_COUPLES_NATIVELY),
-            (Check::FloatingDraft, FLIP_COUPLES_NATIVELY),
-            (Check::HydrostaticLift, FLIP_COUPLES_NATIVELY),
-            (Check::FreeFlight, FLIP_COUPLES_NATIVELY),
-            (Check::ExportFrameRateIndependent, FLIP_COUPLES_NATIVELY),
-            (Check::CoupledLiveFrameRate, FLIP_COUPLES_NATIVELY),
-            (
-                Check::LiveFramesNeverWait,
-                "live debt policy (D3): FLIP's HeldClock keeps live debt on its worker, not on the liquid clock \
-                 the wait counter sits on",
-            ),
-            (
-                Check::PauseDiscardsImpulses,
-                "BUG-xt71 (MIDI impulse during pause lands on resume): FLIP is frozen (D3)",
-            ),
-            (
-                Check::NonfiniteTickNotPublished,
-                "FLIP conforms as built (D3): its state lives in the native engine on its worker, which no check \
-                 can reach to corrupt a tick",
-            ),
-            (
-                Check::OverflowReported,
-                "FLIP conforms as built (D3): it grows its mesh and particle storage to fit, so its only run-time \
-                 limit is device memory, which it refuses by name",
-            ),
-            (Check::FaceGridPublished, "FLIP conforms as built and publishes no grid (D3)"),
-        ],
-        known_red: &[],
-    },
-    LiquidSolverRow {
         type_id: GPU_FLIP_DOMAIN_TYPE_ID,
         fixture: gpu_flip_fixture,
         gpu: true,
@@ -291,13 +218,10 @@ fn gpu_flip_fixture(fixture: Fixture) -> Option<EffectGraphDef> {
     }
 }
 
-fn reference_fixture(name: &'static str) -> EffectGraphDef {
-    serde_json::from_str(cpu_flip_preset_json(name)).unwrap_or_else(|error| panic!("invalid CPU FLIP reference fixture {name}: {error}"))
-}
 /// The FLIP Fluids engine's own coupled tank (its gravity tests: 2.4 m at
 /// 48 cells, water to 1.5 m) with a density-neutral cube at its body's
-/// height, on GPU FLIP. The side by side against the engine runs here
-/// because that is where the engine is proven a valid reference.
+/// height, on GPU FLIP. Hydrostatic lift runs here because the engine is a
+/// proven reference in this tank.
 pub fn gpu_flip_engine_tank() -> (EffectGraphDef, BoxScene) {
     gpu_flip_engine_tank_moved(0.0)
 }
@@ -408,23 +332,6 @@ fn matter_fixture(fixture: Fixture) -> Option<EffectGraphDef> {
         None => bundled("WaterDamBreakMatter"),
     })
 }
-fn flip_fixture(fixture: Fixture) -> Option<EffectGraphDef> {
-    match fixture {
-        Fixture::StillPool => {
-            let mut def = reference_fixture("WaterBasin.json");
-            set_type_param(&mut def, FLIP_DOMAIN_TYPE_ID, "emission", SerializedParamValue::Float { value: 0.0 });
-            Some(def)
-        }
-        Fixture::DamBreak => Some(reference_fixture("WaterDamBreak.json")),
-        Fixture::Collision { .. }
-        | Fixture::FloatingBox
-        | Fixture::SubmergedBox
-        | Fixture::FloatingAt { .. }
-        | Fixture::Resting { .. }
-        | Fixture::Stack
-        | Fixture::FaceGrid => None,
-    }
-}
 fn bundled(id: &'static str) -> EffectGraphDef {
     bundled_preset_def(&PresetTypeId::new(id))
         .unwrap_or_else(|| panic!("no bundled preset {id}"))
@@ -441,7 +348,7 @@ mod tests {
 
     use super::*;
     use manifold_node_engine::exec::extent::{ExtentError};
-use manifold_nodes_water::liquid::extent::LiquidPreset;
+use manifold_nodes_water::testkit::preset_extents::LiquidPreset;
     use manifold_node_engine::persistence::PrimitiveRegistry;
     use manifold_core::liquid_domain::{LIQUID_DOMAIN_TYPE_IDS, is_liquid_domain};
 
@@ -452,34 +359,23 @@ use manifold_nodes_water::liquid::extent::LiquidPreset;
 
 
     fn build(row: &LiquidSolverRow, fixture: Fixture, def: &EffectGraphDef) -> LiquidPreset {
-        #[cfg(feature = "gpu-proofs")]
-        let result = LiquidPreset::build_with_registry(def, &PrimitiveRegistry::with_cpu_flip_reference());
-        #[cfg(not(feature = "gpu-proofs"))]
-        let result = LiquidPreset::build(def);
-        result.unwrap_or_else(|error| panic!("{} {fixture:?}: {error}", row.type_id))
+        LiquidPreset::build(def).unwrap_or_else(|error| panic!("{} {fixture:?}: {error}", row.type_id))
     }
 
     fn conformance_registry() -> PrimitiveRegistry {
-        #[cfg(feature = "gpu-proofs")]
-        {
-            PrimitiveRegistry::with_cpu_flip_reference()
-        }
-        #[cfg(not(feature = "gpu-proofs"))]
-        {
-            PrimitiveRegistry::with_builtin()
-        }
+        PrimitiveRegistry::with_builtin()
     }
 
-    /// I2: every liquid domain type has one row; every check a row does not
+    /// I2: every registered liquid domain type has one row; every check a row does not
     /// name as exempt has its scenes, each holding the row's domain and
     /// passing the extent check as authored.
     #[test]
     fn liquid_conformance_covers_every_domain() {
-        for &type_id in LIQUID_DOMAIN_TYPE_IDS {
+        let registry = conformance_registry();
+        for &type_id in LIQUID_DOMAIN_TYPE_IDS.iter().filter(|id| registry.contains(id)) {
             let rows = LIQUID_SOLVERS.iter().filter(|row| row.type_id == type_id).count();
             assert_eq!(rows, 1, "{type_id} has {rows} conformance rows");
         }
-        let registry = conformance_registry();
         for row in LIQUID_SOLVERS {
             assert!(is_liquid_domain(row.type_id), "{} has a row but is not a liquid domain", row.type_id);
             for (i, (check, reason)) in row.exempt.iter().enumerate() {
@@ -508,14 +404,6 @@ use manifold_nodes_water::liquid::extent::LiquidPreset;
                 let code = wgsl.lines().map(|line| line.split("//").next().unwrap_or_default());
                 assert!(!code.clone().any(|line| line.contains("atomic")), "{}: {node}'s hand shader uses an atomic", row.type_id);
                 assert!(code.clone().any(|line| line.contains("@compute")), "{}: {node}'s hand shader has no entry point", row.type_id);
-            }
-            // The retired CPU FLIP node is available only to explicit proof
-            // builds. Keep the shared row metadata checks above in the
-            // default suite, while leaving its native runtime checks to the
-            // GPU-proof build that registers the reference node.
-            #[cfg(not(feature = "gpu-proofs"))]
-            if row.type_id == FLIP_DOMAIN_TYPE_ID {
-                continue;
             }
             let mut scenes: Vec<Fixture> = Vec::new();
             for check in Check::ALL {
@@ -589,10 +477,6 @@ use manifold_nodes_water::liquid::extent::LiquidPreset;
         let registry = conformance_registry();
         for row in LIQUID_SOLVERS {
             assert!(!row.refusals.is_empty(), "{} lists no refusals", row.type_id);
-            #[cfg(not(feature = "gpu-proofs"))]
-            if row.type_id == FLIP_DOMAIN_TYPE_ID {
-                continue;
-            }
             let domain = registry.construct(row.type_id).expect("registered domain");
             let words = |name: &str| -> String {
                 if let Some(param) = domain.parameters().iter().find(|param| param.name == name) {

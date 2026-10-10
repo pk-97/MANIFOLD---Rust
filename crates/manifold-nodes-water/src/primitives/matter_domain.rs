@@ -1,5 +1,5 @@
 //! `node.matter_domain` — the scene-facing CPU bridge of a matter domain
-//! (`docs/GPU_MPM_SOLVER_DESIGN.md` D17): it speaks `node.fluid_surface`'s
+//! (`docs/GPU_MPM_SOLVER_DESIGN.md` D17): it speaks the shared liquid
 //! scene contract (names, types, meanings) and turns it into the lattice,
 //! fill boxes, the fixed-tick clock (D8) and the per-tick substep count and
 //! material dials (D3, D4) the matter atoms read as wires. P1 carries the
@@ -18,12 +18,14 @@ use manifold_gpu::{FrameClock, GpuBuffer};
 use manifold_physics::FieldValue;
 
 use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
-use manifold_node_engine::scene::fluid_domain::{FluidDomainLayout, domain_layout};
-use crate::fluid::{CoupledRigidFrame, CoupledRigidInputs, TICK};
-use manifold_node_engine::scene::fluid_domain::MAX_FLUID_ROLES;
+use manifold_core::fluid_domain::{FluidDomainLayout, domain_layout};
+use manifold_physics::clock::TICK;
+use crate::coupled_frame::{CoupledRigidFrame, CoupledRigidInputs};
+use manifold_core::fluid_domain::MAX_FLUID_ROLES;
 use crate::fluid_role::FluidRole;
 use crate::liquid::bodies::{BodiesStatus, LiquidBodies, LiquidBody, LiquidShape};
 use crate::liquid::body_buffers::LiquidBodyBuffers;
+use crate::liquid::lattice::closed_faces;
 use crate::liquid::clock::LiquidClock;
 use crate::liquid::coupling::{DomainWalls, LiquidRigidOwner, PendingTick, takes_reaction};
 use {crate::liquid::fields, crate::liquid::fields::FieldLattice, crate::liquid::fields::LiquidFields, crate::liquid::fields::LiquidImpulses};
@@ -32,8 +34,8 @@ use crate::liquid::tick_samples::TickSamples;
 use crate::matter::coupling::{ReactionScale, decode, live_body_limit};
 use crate::matter::{MAX_SUBSTEPS, REACTION_WORDS, WATER_DENSITY, block_sort_box, free_fall_speed, lattice_blocks, lattice_nodes, momentum_unit, substeps_for_interval, substeps_per_tick, water_lambda, wave_speed};
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
-use manifold_node_engine::scene::impulse::RigidImpulseTargets;
-use crate::physics::{RigidSceneInputs, RigidSceneObservation, offline_simulation};
+use manifold_core::scene_impulse::RigidImpulseTargets;
+use crate::physics::{RigidSceneInputs, RigidSceneObservation};
 use crate::physics_events::ResolvedNodeImpulse;
 use crate::node::{PhysicsNode, PhysicsNodeRegistration};
 use manifold_node_engine::primitive::Primitive;
@@ -148,7 +150,7 @@ pub(crate) fn matter_geometry(
     initial_volume: Option<Transform>,
 ) -> Result<MatterGeometry, String> {
     let resolution = read("resolution", 64.0).round().max(0.0) as u32;
-    let layout = domain_layout(domain, read("domain_size", 4.0), resolution)?;
+    let layout = domain_layout(domain.map(Into::into), read("domain_size", 4.0), resolution)?;
     let lattice = LiquidLattice::from_layout(&layout);
     let budget = match params.get("grid_budget_mcells") {
         Some(ParamValue::Float(budget)) => *budget,
@@ -178,7 +180,7 @@ pub(crate) fn matter_geometry(
 manifold_node_engine::primitive! {
     name: MatterDomain,
     type_id: "node.matter_domain",
-    purpose: "Define a live GPU liquid domain with node.fluid_surface's scene contract: the axis-aligned domain box, resolution, six closed faces, initial fill height and box, gravity, simulation speed, reset and seed, plus the matter dials Points per Cell, Stiffness, Cohesion and Liveliness, and up to 64 Collider roles. Outputs the lattice, fill boxes, this frame's fixed 60 Hz ticks and substeps per tick, the epoch and the display clock for the Live Matter atoms, and the colliders as one body row per collider per tick of this frame (its pose at the tick's start and its motion over the tick), a shape per collider and their distance lattices packed in one half-precision atlas. Paired with a physics world in the same scene, it owns that world and couples its bodies both ways: they join the body rows, the liquid's push on them comes back through the reaction array, and the world steps once per fluid tick after the GPU has finished it.",
+    purpose: "Define a live GPU liquid domain with the shared liquid scene contract: the axis-aligned domain box, resolution, six closed faces, initial fill height and box, gravity, simulation speed, reset and seed, plus the matter dials Points per Cell, Stiffness, Cohesion and Liveliness, and up to 64 Collider roles. Outputs the lattice, fill boxes, this frame's fixed 60 Hz ticks and substeps per tick, the epoch and the display clock for the Live Matter atoms, and the colliders as one body row per collider per tick of this frame (its pose at the tick's start and its motion over the tick), a shape per collider and their distance lattices packed in one half-precision atlas. Paired with a physics world in the same scene, it owns that world and couples its bodies both ways: they join the body rows, the liquid's push on them comes back through the reaction array, and the world steps once per fluid tick after the GPU has finished it.",
     inputs: {
         domain: Transform optional,
         initial_volume: Transform optional,
@@ -362,6 +364,8 @@ pub struct Coupling {
     owner: Option<LiquidRigidOwner>,
     /// This frame's domain box and closed faces: the bodies' walls.
     walls: DomainWalls,
+    /// This frame's simulation step, handed to the rigid owner.
+    step: crate::physics::SimStep,
     /// How the owner's pending tick's reaction words decode.
     scale: Option<ReactionScale>,
     /// The owner was built since the clock last restarted: the next frame
@@ -473,16 +477,6 @@ impl Coupling {
     }
 }
 
-pub(crate) fn closed_faces(params: &ParamValues) -> u32 {
-    ["closed_neg_x", "closed_pos_x", "closed_neg_y", "closed_pos_y", "closed_neg_z", "closed_pos_z"]
-        .iter()
-        .enumerate()
-        .fold(0, |mask, (bit, name)| {
-            let closed = !matches!(params.get(*name), Some(ParamValue::Bool(false)));
-            mask | (u32::from(closed) << bit)
-        })
-}
-
 /// Every scalar output, in the order [`MatterDomain::compute`] fills them.
 const OUTPUTS: [&str; 55] = [
     "lattice_min_x", "lattice_min_y", "lattice_min_z", "cell_size", "nodes_x", "nodes_y",
@@ -497,7 +491,7 @@ const OUTPUTS: [&str; 55] = [
     "interval_duration",
     "target_time",
     "step_cap_hit"];
-/// Wired role ports, in slot order (node.fluid_surface's names).
+/// Wired role ports, in slot order (the shared liquid role names).
 const ROLE_PORTS: [&str; MAX_FLUID_ROLES] = [
     "role_0", "role_1", "role_2", "role_3", "role_4", "role_5", "role_6", "role_7", "role_8",
     "role_9", "role_10", "role_11", "role_12", "role_13", "role_14", "role_15", "role_16", "role_17",
@@ -583,11 +577,16 @@ impl Primitive for MatterDomain {
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
+        self.clock.set_live_load(crate::physics::live_load(ctx.sim_step));
+        self.coupled.step = ctx.sim_step;
+        if let Some(owner) = self.coupled.owner.as_mut() {
+            owner.set_step(ctx.sim_step);
+        }
         let mut roles: [Option<FluidRole>; MAX_FLUID_ROLES] = std::array::from_fn(|_| None);
         let role_pending = crate::liquid::read_roles(&ctx.inputs, &ROLE_PORTS, &mut roles);
         // A physics sample reads the force field and the roles at a tick's
         // start; it never advances time.
-        if crate::physics::authored_sample_only() {
+        if ctx.sim_step.authored_sample_only {
             self.clock.observe_speed(ctx.time.seconds.0, ctx.scalar_or_param("speed", 1.0));
             let field = ctx.inputs.cpu_value::<FieldValue>("acceleration_field");
             self.fields.observe_sample(ctx.time.seconds.0, field.as_ref());
@@ -641,7 +640,7 @@ impl Primitive for MatterDomain {
             ctx.outputs.set_scalar(name, ParamValue::Float(value));
         }
         self.upload_bodies(ctx, fresh && self.rows_fresh, values[TICKS] > 0.0);
-        let uploaded = match ctx.gpu.as_deref_mut().map(|gpu| self.fields.upload(gpu, offline_simulation())) {
+        let uploaded = match ctx.gpu.as_deref_mut().map(|gpu| self.fields.upload(gpu, ctx.sim_step.offline())) {
             Some(Ok(())) => true,
             Some(Err(error)) => {
                 ctx.error(error);
@@ -689,10 +688,11 @@ impl PhysicsNode for MatterDomain {
         observation: Option<&RigidSceneObservation>,
         colliders: RigidImpulseTargets,
         error: Option<&str>,
+        authored_sample_only: bool,
     ) {
         // A replay sample records the scene at a tick's start; a pending one
         // records nothing, and `run` closes the sample.
-        if crate::physics::authored_sample_only() {
+        if authored_sample_only {
             if let Some(observation) = observation.filter(|_| error.is_none()) {
                 self.coupled.scenes.observe(observation.transport.0, Some(&observation.inputs));
             }
@@ -723,12 +723,13 @@ impl PhysicsNode for MatterDomain {
         &self,
         transport: manifold_core::Seconds,
         sequence: u64,
+        step: crate::physics::SimStep,
     ) -> Result<manifold_physics::input::EventStamp, String> {
         if self.role_pending || self.coupled.failed {
             return Err("Matter impulses: cannot capture an impulse while the liquid is pending or failed".into());
         }
         let mut stamp = self.impulses.stamp(transport.0, sequence)?;
-        stamp.time = manifold_core::Seconds(self.clock.simulation_at(transport.0));
+        stamp.time = manifold_core::Seconds(self.clock.simulation_at(transport.0, crate::physics::live_load(step)));
         Ok(stamp)
     }
 
@@ -797,7 +798,7 @@ impl MatterDomain {
         if !speed.is_finite() || !(0.0..=4.0).contains(&speed) || live.iter().any(|v| !v.is_finite()) {
             return Err("Matter: Simulation Speed must be between 0 and 4, and gravity and the dials must be finite".into());
         }
-        let offline = offline_simulation();
+        let offline = ctx.sim_step.offline();
         if let Some(error) = self.coupled.host_error.take() {
             return Err(error);
         }
@@ -843,19 +844,22 @@ impl MatterDomain {
         self.setup = Some(setup);
         let frame = self.clock.advance(
             ctx.time.seconds.0,
-            crate::physics::simulation_interval(),
+            ctx.sim_step.interval.0,
             speed,
             ctx.scalar_or_param("reset", 0.0),
             restart,
             offline,
         );
         if frame.numerical_error {
-            crate::physics_metrics::record_simulation(0.0, 0.0, false, true);
+            ctx.sim_metrics.record_simulation(0.0, 0.0, false, true);
         }
         if frame.restarted && self.coupled.owner.is_some() && !self.coupled.owner_fresh {
             self.rebuild_owner()?;
         }
         self.coupled.owner_fresh = false;
+        if let Some(owner) = self.coupled.owner.as_mut() {
+            ctx.sim_metrics.merge(&owner.rigid_mut().take_metrics());
+        }
         if let Some(owner) = &self.coupled.owner {
             let scene = self.coupled.observation.as_ref().map(|observation| &observation.inputs);
             self.coupled.scenes.settle(&self.clock, &frame, scene);
@@ -903,7 +907,7 @@ impl MatterDomain {
         // A frame without ticks reports what one Sim Rate interval runs, so
         // the substep count and unit hold steady between ticks.
         let duration = if frame.ticks == 0 {
-            Some(crate::physics::simulation_interval())
+            Some(ctx.sim_step.interval.0)
                 .filter(|interval| interval.is_finite() && *interval > 0.0)
                 .unwrap_or(TICK)
         } else {
@@ -997,7 +1001,7 @@ impl MatterDomain {
     /// on its reset or a change of bodies. False while the world's inputs are
     /// still pending.
     fn observe_rigid(&mut self, transport: f64, speed: f32) -> Result<bool, String> {
-        let Coupling { observation, colliders, error, previous_reset, owner, owner_fresh, epochs, walls, .. } = &mut self.coupled;
+        let Coupling { observation, colliders, error, previous_reset, owner, owner_fresh, epochs, walls, step, .. } = &mut self.coupled;
         if let Some(error) = error {
             return Err(error.clone());
         }
@@ -1017,7 +1021,9 @@ impl MatterDomain {
         *previous_reset = Some(observation.reset);
         if reset_edge || owner.as_ref().is_none_or(|owner| !owner.matches(&observation.inputs, *walls, *colliders)) {
             *epochs += 1;
-            *owner = Some(LiquidRigidOwner::new(&observation.inputs, *walls, *colliders, *epochs, owner.as_ref())?);
+            let mut built = LiquidRigidOwner::new(&observation.inputs, *walls, *colliders, *epochs, owner.as_ref())?;
+            built.set_step(*step);
+            *owner = Some(built);
             *owner_fresh = true;
         }
         Ok(true)
@@ -1065,7 +1071,8 @@ impl MatterDomain {
     fn rebuild_owner(&mut self) -> Result<(), String> {
         let observation = self.coupled.observation.as_ref().ok_or("Matter coupling: the rigid observation is missing")?;
         self.coupled.epochs += 1;
-        let owner = LiquidRigidOwner::new(&observation.inputs, self.coupled.walls, self.coupled.colliders, self.coupled.epochs, self.coupled.owner.as_ref())?;
+        let mut owner = LiquidRigidOwner::new(&observation.inputs, self.coupled.walls, self.coupled.colliders, self.coupled.epochs, self.coupled.owner.as_ref())?;
+        owner.set_step(self.coupled.step);
         self.coupled.owner = Some(owner);
         Ok(())
     }

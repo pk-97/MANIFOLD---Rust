@@ -9,11 +9,8 @@ mod dust_potential;
 manifold_core::testkit_visible! { pub(crate) mod emission_count; }
 manifold_core::testkit_visible! { pub(crate) mod energy_potential; }
 mod extend_lattice;
-#[cfg(any(test, feature = "testkit", feature = "gpu-proofs"))]
-pub mod face_grid_scenes;
 manifold_core::testkit_visible! { pub(crate) mod face_sample_component; }
 #[cfg(feature = "gpu-proofs")]
-pub(crate) mod fluid_surface;
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_flip_atom_tests;
 manifold_core::testkit_visible! { pub(crate) mod gpu_flip_bodies; }
@@ -25,7 +22,6 @@ pub mod gpu_flip_lentine;
 pub(crate) mod gpu_flip_narrow_band;
 #[cfg(test)]
 mod gpu_flip_narrow_band_tests;
-pub mod gpu_flip_preset;
 manifold_core::testkit_visible! { pub(crate) mod gpu_flip_pressure; }
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_flip_pressure_tests;
@@ -41,8 +37,6 @@ mod gpu_flip_sheeting_tests;
 manifold_core::testkit_visible! { pub(crate) mod gpu_flip_step; }
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_flip_step_tests;
-#[cfg(all(any(test, feature = "testkit"), feature = "water-race-probes"))]
-pub mod gpu_flip_still;
 
 #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
 pub mod gpu_flip_volume;
@@ -132,7 +126,7 @@ mod whitewater_handoff_tests;
 mod whitewater_influence;
 pub(crate) mod whitewater_lifecycle;
 mod whitewater_obstacle_source;
-#[cfg(any(test, feature = "testkit"))]
+#[cfg(any(test, all(feature = "testkit", feature = "gpu-proofs")))]
 mod whitewater_particle_cpu;
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod whitewater_particle_tests;

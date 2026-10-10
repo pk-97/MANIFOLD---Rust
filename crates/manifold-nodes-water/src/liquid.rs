@@ -8,9 +8,6 @@
 pub mod bodies;
 pub mod body_buffers;
 pub mod clock;
-#[cfg(any(test, feature = "testkit", feature = "gpu-proofs"))]
-#[doc(hidden)]
-pub mod conformance;
 pub mod coupling;
 #[cfg(any(test, feature = "testkit", feature = "gpu-proofs"))]
 #[doc(hidden)]
@@ -26,7 +23,7 @@ mod scene_contract;
 pub mod tick_samples;
 
 use manifold_node_engine::bindings::NodeInputs;
-use manifold_node_engine::scene::fluid_domain::MAX_FLUID_ROLES;
+use manifold_core::fluid_domain::MAX_FLUID_ROLES;
 use crate::fluid_role::FluidRole;
 
 /// Read every wired role port into its slot; true when a wired role is not
@@ -46,7 +43,7 @@ pub fn read_roles(inputs: &NodeInputs<'_>, ports: &[&str], roles: &mut [Option<F
 /// Rest density of water, kg/m³: every liquid solver's water weighs this.
 pub const WATER_DENSITY: f32 = 1000.0;
 
-/// A liquid domain's role inputs, in slot order (node.fluid_surface's names).
+/// A liquid domain's role inputs, in slot order (the shared liquid role names).
 pub const ROLE_PORTS: [&str; MAX_FLUID_ROLES] = [
     "role_0", "role_1", "role_2", "role_3", "role_4", "role_5", "role_6", "role_7", "role_8",
     "role_9", "role_10", "role_11", "role_12", "role_13", "role_14", "role_15", "role_16", "role_17",
@@ -60,4 +57,3 @@ pub const ROLE_PORTS: [&str; MAX_FLUID_ROLES] = [
 
 pub(crate) mod substep_history;
 
-pub(crate) mod migration;

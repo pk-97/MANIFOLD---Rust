@@ -4,6 +4,23 @@ pub use manifold_physics::clock::{ClockFrame, SimulationClock as LiquidClock};
 /// Initial field-buffer reserve, not a time or quality cap.
 pub const FIELD_RESERVE_INTERVALS: u32 = 3;
 
+/// GPU_FLUID_SURFACE_DESIGN.md D10: the blend presenting display time `s`
+/// between frames at `t_a` and `t_b`, and their span. Display time never
+/// passes the newest frame; one frame (`t_a == t_b`) presents it fully.
+pub(crate) fn display_blend(s: f64, t_a: f64, t_b: f64) -> (f32, f32) {
+    let span = t_b - t_a;
+    if span <= 0.0 {
+        return (1.0, 0.0);
+    }
+    (((s - t_a) / span).clamp(0.0, 1.0) as f32, span as f32)
+}
+
+/// A whitewater particle's draw scale from its remaining lifetime: the last
+/// 0.2 seconds shrink instead of leaving a full-sized particle until removal.
+pub(crate) fn whitewater_fade(lifetime: f32) -> f32 {
+    (lifetime / 0.2).clamp(0.0, 1.0).sqrt()
+}
+
 manifold_core::testkit_visible! {
 /// Every node input that takes the accepted simulation interval in seconds,
 /// as (node type, input). Each is fed by its liquid domain's
@@ -200,6 +217,25 @@ mod tests {
             assert_eq!(clock.ticks_done(), expected_ticks, "{fps} fps");
             assert!((completed - expected_ticks as f64 * TICK).abs() < 1e-12);
             assert!((completed + dropped - 1.0).abs() < 1e-12, "{fps} fps");
+        }
+    }
+
+    /// Live pacing, frame by frame: every display frame accepts at most two
+    /// fixed 60 Hz intervals, so 20 and 24 fps run two a frame and drop the
+    /// rest, 30 fps runs two and 60 fps one, and each frame ends on the
+    /// boundary of the intervals it accepted.
+    #[test]
+    fn liquid_clock_live_accepts_at_most_two_intervals_per_frame() {
+        for fps in [20u32, 24, 30, 60] {
+            let mut clock = LiquidClock::default();
+            let ticks_per_frame = (60 / fps).min(2);
+            clock.advance(0.0, TICK, 1.0, 0.0, false, false);
+            for frame in 1..=fps {
+                let out = clock.advance(f64::from(frame) / f64::from(fps), TICK, 1.0, 0.0, false, false);
+                assert_eq!(out.ticks, ticks_per_frame, "{fps} fps frame {frame}: accepted interval count");
+                let boundary = f64::from(frame * ticks_per_frame) * TICK;
+                assert!((out.simulation_time - boundary).abs() < 1e-9, "{fps} fps frame {frame}: lost simulation time");
+            }
         }
     }
 

@@ -10,8 +10,6 @@ use manifold_core::PresetTypeId;
         assert!(!PrimitiveRegistry::with_builtin().contains(FLIP_DOMAIN_TYPE_ID));
         assert!(!manifold_node_engine::palette::palette_atoms().iter()
             .any(|atom| atom.type_id == FLIP_DOMAIN_TYPE_ID));
-        #[cfg(feature = "gpu-proofs")]
-        assert!(PrimitiveRegistry::with_cpu_flip_reference().contains(FLIP_DOMAIN_TYPE_ID));
     }
 
     #[test]

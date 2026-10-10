@@ -8,7 +8,7 @@
 use manifold_gpu::GpuBuffer;
 
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
-use manifold_node_engine::scene::fluid_domain::MAX_FLUID_ROLES;
+use manifold_core::fluid_domain::MAX_FLUID_ROLES;
 use crate::matter::{MatterGridNode, MatterPoint, MatterTickStats, REACTION_WORDS, STATS_WORDS, grid_accum_bytes, grid_bytes, substep_duration};
 use manifold_node_engine::parameters::ParamValue;
 use crate::physics_metrics::DroppedTimeTracker;
@@ -224,7 +224,7 @@ impl Primitive for MatterState {
             whole(ctx.scalar_or_param("nodes_y", 71.0)),
             whole(ctx.scalar_or_param("nodes_z", 71.0)),
         ];
-        let live_mode = !crate::physics::offline_simulation();
+        let live_mode = !ctx.sim_step.offline();
         self.submitted_time = f64::from(ctx.scalar_or_param("simulation_time", 0.0));
         let target = f64::from(ctx.scalar_or_param("target_time", self.submitted_time as f32));
         let dropped_seconds = f64::from(ctx.scalar_or_param("dropped_seconds", 0.0));
@@ -232,7 +232,7 @@ impl Primitive for MatterState {
         // A graph saved without the domain's interval wire runs on the project's Sim Rate.
         let interval_duration = ctx.scalar_or_param(
             "interval_duration",
-            crate::physics::simulation_interval() as f32,
+            ctx.sim_step.interval.0 as f32,
         );
         let ticks = whole(ctx.scalar_or_param("ticks", 0.0));
         let substeps = whole(ctx.scalar_or_param("substeps_per_tick", 1.0)).max(1);
@@ -300,13 +300,15 @@ impl Primitive for MatterState {
             gpu.native_enc
                 .copy_buffer_to_buffer(seed, out, seed.size.min(out.size));
         }
-        self.dropped_time.record(
+        let dropped_time = &mut self.dropped_time;
+        ctx.sim_metrics.record(|metrics| dropped_time.record(
+            metrics,
             target,
             self.completed_time,
             dropped_seconds,
             self.completed_cap,
             self.faulted,
-        );
+        ));
 
         self.substeps = substeps;
         self.step_dt = substep_duration(interval_duration, substeps);

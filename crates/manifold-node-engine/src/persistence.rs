@@ -172,18 +172,6 @@ impl PrimitiveRegistry {
         r
     }
 
-    /// The retired native solver is available only to explicit reference proofs.
-    #[cfg(feature = "gpu-proofs")]
-    pub fn with_cpu_flip_reference() -> Self {
-        let mut registry = Self::with_builtin();
-        for factory in inventory::iter::<PrimitiveFactory> {
-            if factory.type_id == manifold_core::liquid_domain::FLIP_DOMAIN_TYPE_ID {
-                registry.register(factory.type_id, factory.create);
-            }
-        }
-        registry
-    }
-
     /// Add (or replace) a constructor for one `type_id`. Returns `self`
     /// so the builder pattern flows.
     pub fn register(

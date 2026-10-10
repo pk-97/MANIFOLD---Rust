@@ -1,7 +1,7 @@
 //! Family-owned decoding and placement of source meshes.
 use std::path::Path;
 use crate::mesh::MeshVertex;
-use super::physics_mesh::MeshSelection;
+use super::mesh_selection::MeshSelection;
 
 pub struct MeshAssetSource {
     pub load: fn(&Path, &MeshSelection) -> Result<Vec<MeshVertex>, String>,

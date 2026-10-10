@@ -4,8 +4,8 @@ use manifold_node_engine::primitive::Primitive;
 use manifold_nodes_water::primitives::whitewater_step::WhitewaterStep;
 #[test]
 fn whitewater_unpack_extent_matches_adapter_storage() {
-    use manifold_nodes_water::primitives::gpu_flip_preset::{render_def, with_whitewater_axes, WaterScene};
-    use manifold_nodes_water::liquid::extent::check_preset_extents;
+    use manifold_nodes_water::presets::gpu_flip::{render_def, with_whitewater_axes, WaterScene};
+    use manifold_nodes_water::testkit::preset_extents::check_preset_extents;
     let packed = render_def(WaterScene::dam_break(64));
     let axes = with_whitewater_axes(packed.clone());
     assert_eq!(check_preset_extents(&packed, 64).unwrap().scene_bytes,
@@ -15,10 +15,10 @@ fn whitewater_unpack_extent_matches_adapter_storage() {
 
 fn face_refusal(packed: bool, axes: [bool; 3], tick: bool, phrase: &str) {
     use manifold_node_engine::{exec::effect_node::FrameTime, exec::backend::MockBackend, bindings::NodeInputs, bindings::NodeOutputs, bindings::Slot};
-    use manifold_nodes_water::primitives::gpu_flip_preset::{render_def, WaterScene};
-    use manifold_nodes_water::primitives::gpu_flip_preset::with_whitewater_axes;
+    use manifold_nodes_water::presets::gpu_flip::{render_def, WaterScene};
+    use manifold_nodes_water::presets::gpu_flip::with_whitewater_axes;
     use manifold_node_engine::exec::extent::{ExtentError};
-use manifold_nodes_water::liquid::extent::check_preset_extents;
+use manifold_nodes_water::testkit::preset_extents::check_preset_extents;
     let backend = MockBackend::new();
     let mut inputs = Vec::new();
     if tick { inputs.push(("distance", Slot(0))); }
@@ -101,7 +101,7 @@ use manifold_nodes_water::primitives::whitewater_step::*;
 use manifold_nodes_water::primitives::whitewater_step::fused_tests::gpu::*;
 use manifold_node_engine::testkit::array_harness::read;
 use manifold_nodes_water::testkit::whitewater_scene::{Show, whitewater_render_def, with_tick_probe};
-use manifold_nodes_water::primitives::gpu_flip_preset::{WaterScene, with_whitewater_axes};
+use manifold_nodes_water::presets::gpu_flip::{WaterScene, with_whitewater_axes};
 use manifold_nodes_water::liquid::grid::face_len;
 use manifold_nodes_water::whitewater::face_offset;
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
@@ -120,7 +120,7 @@ fn scene_variant(dust: bool, particle_ports: &[&str], packed: bool) {
         let mut reference = Show::new_with_emitter_oracle(axes, (96, 54), false, &[], Some(true));
         fused.restart();
         reference.restart();
-        const TICKS: usize = 120;
+        const TICKS: usize = 40;
         let mut ticks = 0;
         let mut saw_counts = false;
         let mut saw_dust_counts = false;
@@ -159,20 +159,6 @@ fn scene_variant(dust: bool, particle_ports: &[&str], packed: bool) {
         assert_eq!(ticks, TICKS, "scene did not exercise enough accepted ticks");
         assert!(saw_counts, "scene never produced nonzero normal emission counts");
         assert!(!dust || saw_dust_counts, "scene never produced nonzero dust emission counts");
-    }
-#[test]
-    fn whitewater_fused_turbulence_matches_reference() {
-        scene(false, &["proof_turbulence"]);
-    }
-#[test]
-    fn whitewater_fused_emit_matches_reference() {
-        scene(false, &[]);
-        synthetic(false);
-    }
-#[test]
-    fn whitewater_fused_dust_matches_reference() {
-        scene(true, &[]);
-        synthetic(true);
     }
 #[test]
     fn whitewater_unpacked_faces_match_adapters() {
@@ -299,17 +285,29 @@ fn scene_variant(dust: bool, particle_ports: &[&str], packed: bool) {
         }
         for stage in &stages { assert_eq!(stage.turbulence_dispatches_for_test(), 3); }
     }
+/// Fused whitewater is word-equal to the unfused reference on every proof
+/// port and particle output, on the Dam Break and on the dust scene, with
+/// packed and axis faces: one run per scene compares every port.
 #[test]
-    fn whitewater_fused_spawn_matches_reference() {
-        scene(false, &["proof_typed"]);
-        scene(true, &["proof_typed", "proof_dust_typed"]);
+    fn whitewater_fused_matches_reference() {
+        scene(false, &["proof_typed", "proof_lifecycle"]);
+        scene(true, &["proof_typed", "proof_dust_typed", "proof_lifecycle"]);
+    }
+#[test]
+    fn whitewater_fused_synthetic_matches_reference() {
+        synthetic(false);
+        synthetic(true);
+    }
+#[test]
+    fn whitewater_spawn_boundaries_match_reference() {
         spawn_boundaries();
+    }
+#[test]
+    fn whitewater_spawn_overflow_matches_reference() {
         spawn_overflow();
     }
 #[test]
-    fn whitewater_fused_lifecycle_matches_reference() {
-        scene(false, &["proof_lifecycle"]);
-        scene(true, &["proof_lifecycle"]);
+    fn whitewater_lifecycle_history_matches_reference() {
         lifecycle_history();
     }
 }

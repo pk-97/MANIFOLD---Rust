@@ -2,12 +2,11 @@
 //! side; [`LiquidLattice::surface`] derives the native FLIP mesh/solid grid
 //! with 1.5-cell padding. Both retain the authored box and uniform spacing.
 
-use manifold_node_engine::exec::effect_node::EffectNodeContext;
-use manifold_node_engine::scene::fluid_domain::FluidDomainLayout;
+use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
+use manifold_node_engine::parameters::ParamValue;
+use manifold_core::fluid_domain::FluidDomainLayout;
 #[cfg(test)]
-use manifold_node_engine::scene::fluid_domain::domain_layout;
-#[cfg(test)]
-use crate::fluid::FluidDomainNative;
+use manifold_core::fluid_domain::domain_layout;
 use manifold_node_engine::scene::transform::Transform;
 
 /// Nodes added outside the authored box on every side (taichi `padding = 3`).
@@ -19,6 +18,19 @@ pub const SURFACE_EXTRA_NODES: u32 = 4;
 
 /// Most nodes per axis a lattice wire may carry, as every lattice atom.
 pub const MAX_LATTICE_NODES: u32 = 1024;
+
+/// The six-bit closed-wall mask (bits −X +X −Y +Y −Z +Z) from a domain's
+/// `closed_*` toggles; a missing toggle is closed.
+pub(crate) fn closed_faces(params: &ParamValues) -> u32 {
+    ["closed_neg_x", "closed_pos_x", "closed_neg_y", "closed_pos_y", "closed_neg_z", "closed_pos_z"]
+        .iter()
+        .enumerate()
+        .fold(0, |mask, (bit, name)| {
+            let closed = !matches!(params.get(*name), Some(ParamValue::Bool(false)));
+            mask | (u32::from(closed) << bit)
+        })
+}
+
 
 /// The optional cell-centred interior field identifies its physical grid by
 /// exact length. Native FLIP fills all surface cells (nodes − 1); authored
@@ -248,7 +260,7 @@ mod tests {
             assert_eq!(solver.min(), layout.min.map(|x| x - 1.5 * layout.cell_size as f32));
             assert_eq!(solver.bounds(), authored.surface().bounds());
             assert_eq!(authored.surface().solid_bytes(), u64::from(resolution + 4).pow(3) * 4);
-            assert_eq!(crate::primitives::gpu_flip_step::face_bytes(solver.cells()),
+            assert_eq!(crate::liquid::grid::face_bytes(solver.cells()),
                 u64::from(resolution + 4).pow(3) * std::mem::size_of::<crate::fluid_particles::FaceSample>() as u64);
             assert_eq!(interior_cells(solver.nodes(), u64::from(resolution + 3).pow(3)), Some(solver.cells()));
             assert_eq!(crate::whitewater::face_offset(solver.nodes(), solver.cells()).unwrap(), [0; 3]);
@@ -277,6 +289,20 @@ mod tests {
         }
     }
 
+    /// The native engine's padded solid lattice: 1.5 cells outside each wall,
+    /// three extra cells per axis, one extra node past them.
+    fn native_solid_lattice(layout: &FluidDomainLayout) -> (Transform, [u32; 3]) {
+        let origin = layout.min.map(|value| value - (1.5 * layout.cell_size) as f32);
+        let size: [f32; 3] =
+            std::array::from_fn(|axis| (f64::from(layout.cells[axis] + 3) * layout.cell_size) as f32);
+        let bounds = Transform {
+            pos: std::array::from_fn(|axis| origin[axis] + size[axis] * 0.5),
+            scale: size,
+            ..Transform::default()
+        };
+        (bounds, layout.cells.map(|cells| cells + 4))
+    }
+
     #[test]
     fn surface_lattice_matches_native_engine_nodes_and_crossings() {
         // Independent native formula: config adds 3 cells, native_origin
@@ -285,7 +311,7 @@ mod tests {
         for (size, resolution) in [(4.0, 64), (1.0, 8), (6.0, 32)] {
             let layout = domain_layout(None, size, resolution).unwrap();
             let mesh = LiquidLattice::from_layout(&layout).surface();
-            let (native_bounds, native_nodes) = layout.solid_lattice();
+            let (native_bounds, native_nodes) = native_solid_lattice(&layout);
             assert_eq!(mesh.nodes(), native_nodes);
             assert_eq!(mesh.bounds(), native_bounds);
             assert_eq!(mesh.nodes(), [resolution + 4; 3]);

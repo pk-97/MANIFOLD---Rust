@@ -10,7 +10,7 @@ use manifold_physics::{FieldValue, TickStamp};
 
 use super::{WaterRuntime, WaterRuntimeRef};
 use manifold_node_engine::exec::effect_node::FrameTime;
-use manifold_node_engine::scene::impulse::ImpulseTarget;
+use manifold_core::scene_impulse::ImpulseTarget;
 use crate::physics_events::ResolvedNodeImpulse;
 use crate::node;
 use manifold_node_engine::{exec::effect_node::NodeInstanceId, parameters::ParamValue, exec::effect_node::ParamValues, ports::PortType, persistence::PrimitiveRegistry, exec::execution_plan::ResourceId};
@@ -117,6 +117,7 @@ impl WaterRuntime<'_> {
     ) -> Result<(), String> {
         self.validate_impulse_capture(binding, captured)?;
         self.observe_physics_at_source(source)?;
+        let step = self.executor.sim_step();
         self.capture_scene_impulse_with_stamp(
             binding,
             captured,
@@ -125,7 +126,7 @@ impl WaterRuntime<'_> {
             |_, effect_node, transport, sequence| {
                 let native = node::get(effect_node)
                     .ok_or_else(|| "node does not expose a native impulse clock".to_owned())?;
-                native.physics_impulse_stamp(transport, sequence)
+                native.physics_impulse_stamp(transport, sequence, step)
             },
         )
     }
@@ -361,6 +362,7 @@ impl WaterRuntime<'_> {
             source,
             &binding.steps,
             &binding.params,
+            crate::physics::SimStep::live(self.executor.sim_step().interval),
         );
         if self.executor.mesh_pending_of(binding.field) {
             return Err("Impulse: field inputs are pending or invalid".into());

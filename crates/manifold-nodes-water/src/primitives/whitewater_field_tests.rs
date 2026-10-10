@@ -10,7 +10,7 @@ use manifold_node_engine::testkit::array_harness::{Harness, params};
 use super::nearest_crossing::NearestCrossing;
 use super::surface_crossings::SurfaceCrossings;
 use super::whitewater_cpu::Grid;
-use manifold_node_engine::testkit::water_codegen::run;
+use crate::testkit::water_codegen::run;
 use manifold_node_engine::bindings::Slot;
 use manifold_node_engine::exec::effect_node::ParamValues;
 use crate::whitewater::{SPREAD_STEPS, SurfaceCrossing};

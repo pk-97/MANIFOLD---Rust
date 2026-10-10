@@ -3,7 +3,7 @@ use crate::liquid::extent::liquid_lattice;
 use crate::liquid::grid::face_len;
 use crate::liquid::lattice::FlipSolverGrid;
 use crate::primitives::face_sample_component::axis_param;
-use crate::primitives::gpu_flip_step::face_bytes;
+use crate::liquid::grid::face_bytes;
 use manifold_node_engine::exec::extent::{AtomExtent, ExtentRule, Verdict};
 
 fn face_sample_component(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {

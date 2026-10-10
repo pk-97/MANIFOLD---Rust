@@ -325,7 +325,11 @@ impl Primitive for GltfTextureSource {
         // read here (rather than cached) so it always reflects the
         // param at the moment of upload.
         let mut fresh_upload = false;
-        if let Some(decoded) = self.pending_upload.take() {
+        // The decoded image waits for a GPU-bound frame; a CPU-only frame never
+        // reaches the encoder, whatever the decode thread timing.
+        if ctx.gpu.is_some()
+            && let Some(decoded) = self.pending_upload.take()
+        {
             let (w, h) = (decoded.width, decoded.height);
             let color_space = match ctx.params.get("color_space") {
                 Some(ParamValue::Enum(v)) => *v,
