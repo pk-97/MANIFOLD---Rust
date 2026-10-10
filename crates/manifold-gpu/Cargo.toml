@@ -94,6 +94,9 @@ objc2-metal = { version = "0.3", features = [
     # pipeline permutation (RAYTRACING_DESIGN.md section 16.4).
     "MTLFunctionConstantValues",
     "MTLDataType",
+    # Debug-build pipeline reflection: texture write access for the
+    # shader-write usage check on hand-written MSL kernels.
+    "MTLArgument",
     "block2",
     # RAYTRACING_DESIGN.md section 17.7 DN-K (Metal 4 scaler migration):
     # MTL4Compiler — needed for MTL4FX scaler factory.

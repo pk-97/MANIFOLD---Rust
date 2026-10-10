@@ -177,6 +177,7 @@ fn build_slot_map(
                 Slot {
                     kind: SlotKind::Buffer,
                     metal_index: idx,
+                    writes: false,
                 },
             );
         } else if kind.is_sampler {
@@ -188,6 +189,7 @@ fn build_slot_map(
                 Slot {
                     kind: SlotKind::Sampler,
                     metal_index: idx,
+                    writes: false,
                 },
             );
         } else if kind.is_texture {
@@ -200,6 +202,7 @@ fn build_slot_map(
                 Slot {
                     kind: SlotKind::Texture,
                     metal_index: idx,
+                    writes: kind.is_writable,
                 },
             );
         }
@@ -216,6 +219,7 @@ fn build_slot_map(
             Slot {
                 kind: SlotKind::Buffer,
                 metal_index: next_buffer,
+                writes: false,
             },
         );
         next_buffer += 1;
@@ -324,6 +328,7 @@ fn build_slot_map_render(
                 Slot {
                     kind: SlotKind::Buffer,
                     metal_index: idx,
+                    writes: false,
                 },
             );
         } else if kind.is_sampler {
@@ -335,6 +340,7 @@ fn build_slot_map_render(
                 Slot {
                     kind: SlotKind::Sampler,
                     metal_index: idx,
+                    writes: false,
                 },
             );
         } else if kind.is_texture {
@@ -347,6 +353,7 @@ fn build_slot_map_render(
                 Slot {
                     kind: SlotKind::Texture,
                     metal_index: idx,
+                    writes: kind.is_writable,
                 },
             );
         }
@@ -376,6 +383,7 @@ fn build_slot_map_render(
             Slot {
                 kind: SlotKind::Buffer,
                 metal_index: sizes_idx,
+                writes: false,
             },
         );
         next_buffer += 1;

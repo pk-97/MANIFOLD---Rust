@@ -739,6 +739,7 @@ impl GpuEncoder {
                     let Some(slot) = pipeline.slot_map.get(*b) else {
                         continue;
                     };
+                    debug_check_write_usage(slot, texture, &pipeline.label);
                     let idx = slot.metal_index as usize;
                     let id = texture_identity(&texture.raw);
                     if idx >= CACHE_SLOTS || self.compute_cache.textures[idx] != id {
@@ -950,6 +951,7 @@ impl GpuEncoder {
                     let Some(slot) = pipeline.slot_map.get(*b) else {
                         continue;
                     };
+                    debug_check_write_usage(slot, texture, &pipeline.label);
                     unsafe {
                         enc.setTexture_atIndex(Some(&texture.raw), slot.metal_index as usize);
                     }
@@ -2101,6 +2103,7 @@ impl GpuEncoder {
                     let Some(slot) = pipeline.slot_map.get(*b) else {
                         continue;
                     };
+                    debug_check_write_usage(slot, texture, &pipeline.label);
                     let idx = slot.metal_index as usize;
                     let id = texture_identity(&texture.raw);
                     if idx >= CACHE_SLOTS || self.render_cache.frag_textures[idx] != id {
@@ -3466,6 +3469,7 @@ fn apply_bindings_draw_fullscreen(
                 let Some(slot) = pipeline.slot_map.get(*b) else {
                     continue;
                 };
+                debug_check_write_usage(slot, texture, &pipeline.label);
                 unsafe {
                     enc.setVertexTexture_atIndex(Some(&texture.raw), slot.metal_index as usize);
                     enc.setFragmentTexture_atIndex(Some(&texture.raw), slot.metal_index as usize);
@@ -3555,6 +3559,7 @@ fn apply_bindings_draw_both_stages(
                 let Some(slot) = pipeline.slot_map.get(*b) else {
                     continue;
                 };
+                debug_check_write_usage(slot, texture, &pipeline.label);
                 unsafe {
                     enc.setVertexTexture_atIndex(Some(&texture.raw), slot.metal_index as usize);
                     enc.setFragmentTexture_atIndex(Some(&texture.raw), slot.metal_index as usize);
@@ -3707,5 +3712,26 @@ fn bind_sizes_buffer_render(
                 enc.setFragmentBytes_length_atIndex(ptr, byte_len, slot_idx);
             }
         }
+    }
+}
+
+/// Debug builds: a texture bound where the shader writes must carry
+/// shader-write usage. Without it the write is undefined on Metal unless the
+/// debug layer is on (BUG-1bp58, RT soft AO history written read-only).
+#[inline]
+fn debug_check_write_usage(slot: &super::Slot, texture: &GpuTexture, pipeline: &str) {
+    if cfg!(debug_assertions) && slot.writes {
+        use objc2_metal::{MTLResource, MTLTexture};
+        let usage = texture.raw.usage();
+        debug_assert!(
+            usage.contains(objc2_metal::MTLTextureUsage::ShaderWrite),
+            "[GPU] pipeline '{pipeline}' writes texture '{}' ({}x{} {:?}) at binding slot {} but its usage {:#x} lacks shader write",
+            texture.raw.label().map_or_else(String::new, |l| l.to_string()),
+            texture.width,
+            texture.height,
+            texture.format,
+            slot.metal_index,
+            usage.0,
+        );
     }
 }
