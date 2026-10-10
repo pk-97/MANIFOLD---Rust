@@ -49,6 +49,8 @@ use crate::exec::effect_node::FrameTime;
 /// always be `Some` in practice for those members).
 pub struct DerivedUniformContext<'a> {
     pub frame: &'a FrameTime,
+    /// The frame's simulation step, for members derived from it.
+    pub sim_step: crate::exec::effect_node::SimStep,
     pub camera: Option<&'a Camera>,
     /// Live element count of the named array input port (`array<f32>`
     /// length in elements), when the member derives a uniform from a
@@ -137,6 +139,7 @@ mod tests {
         };
         let ctx = DerivedUniformContext {
             frame: &frame,
+            sim_step: Default::default(),
             camera: None,
             array_len: &|_| None,
         };

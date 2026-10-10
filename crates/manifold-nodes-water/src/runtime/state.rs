@@ -69,7 +69,9 @@ impl RuntimeExtension for WaterRuntimeState {
     }
 
     fn before_frame(&mut self, runtime: &mut RuntimeContext<'_>, time: FrameTime) {
-        super::WaterRuntime::borrow(self, runtime).sample_physics_history(time);
+        let mut water = super::WaterRuntime::borrow(self, runtime);
+        let step = water.executor.sim_step();
+        water.sample_physics_history(time, step);
     }
 
     fn after_frame(&mut self, graph: &Graph, time: FrameTime) {

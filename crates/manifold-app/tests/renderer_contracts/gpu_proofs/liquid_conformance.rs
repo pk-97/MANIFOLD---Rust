@@ -26,7 +26,7 @@ use manifold_nodes_water::liquid::bodies::LiquidBody;
 use manifold_nodes_water::liquid::coupling::HANDOVER_BOUND;
 use manifold_nodes_water::liquid::grid::{FACE_GRID_PORTS, face_len};
 use manifold_nodes_water::liquid::conformance::{BoxScene, Check, FIXTURE_DENSITY, Fixture, LiquidSolverRow, LiquidTotals, STACK_HEIGHT, set_type_param};
-use manifold_nodes_water::physics::{PhysicsStepScope, native_ticks_on_this_thread};
+use manifold_nodes_water::physics::{SimStep, native_ticks_on_this_thread};
 use manifold_node_engine::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType, ScalarType};
 use {manifold_node_engine::ports::ArrayType, manifold_node_engine::exec::effect_node::EffectNode, manifold_node_engine::exec::effect_node::EffectNodeContext, manifold_node_engine::exec::effect_node::EffectNodeType, manifold_node_engine::exec::effect_node::NodeErrorTap, manifold_node_engine::parameters::ParamDef, manifold_node_engine::persistence::PrimitiveRegistry, manifold_node_engine::scene::transform::Transform, manifold_nodes::bundled_presets::bundled_preset_def, manifold_nodes::bundled_presets::bundled_preset_type_ids};
 use manifold_node_engine::runtime::preset_context::PresetContext;
@@ -288,13 +288,13 @@ struct LiquidRun {
     /// Ticks per frame: 1 is 60 fps, 2 is 30 fps, 2.5 is 24 fps.
     stride: f64,
     live: bool,
-    project_fps: f64,
     /// The check provokes a node error, so a frame it fails is expected.
     errors_expected: bool,
     /// What the last warm-up frame published.
     start: Probe,
     clock: Option<Clocked>,
-    _scope: PhysicsStepScope,
+    /// The step every frame of this run passes the runtime.
+    step: SimStep,
 }
 
 /// A device with a frame clock, as the app runs: every frame signals the
@@ -359,9 +359,10 @@ impl LiquidRun {
         project_fps: f64,
     ) -> Self {
         let device = clock.as_ref().map_or_else(|| Arc::clone(&manifold_node_engine::testkit::gpu_harness::shared().device), |clock| Arc::clone(&clock.device));
-        let scope = PhysicsStepScope::for_settings(!live, manifold_physics::PhysicsSettings {
-            sim_rate: manifold_physics::SimRate::try_from(project_fps as u32).expect("authored rate"),
-        });
+        let interval = manifold_core::Seconds(
+            manifold_physics::SimRate::try_from(project_fps as u32).expect("authored rate").interval(),
+        );
+        let step = if live { SimStep::live(interval) } else { SimStep::export(interval) };
         let registry = registry();
         let Prepared { def, cards, publisher } = prepare(row, &def, &registry, dry);
         let manifest = ParamManifest::from_params(
@@ -378,6 +379,7 @@ impl LiquidRun {
         )
         .unwrap_or_else(|error| panic!("{} scene builds: {error}", row.type_id));
         runtime.set_dump_all(true);
+        runtime.set_sim_step(step);
         let target = RenderTarget::new(&device, SIZE, SIZE, GpuTextureFormat::Rgba16Float, "liquid-conformance");
         let mut run = Self {
             runtime,
@@ -391,11 +393,10 @@ impl LiquidRun {
             transport: 0.0,
             stride,
             live,
-            project_fps,
             errors_expected: false,
             start: Probe::EMPTY,
             clock,
-            _scope: scope,
+            step,
         };
         let started = Instant::now();
         loop {
@@ -411,9 +412,7 @@ impl LiquidRun {
     }
 
     fn render(&mut self, warming: bool) -> Probe {
-        let _scope = PhysicsStepScope::for_settings(!self.live, manifold_physics::PhysicsSettings {
-            sim_rate: manifold_physics::SimRate::try_from(self.project_fps as u32).expect("authored rate"),
-        });
+        self.runtime.set_sim_step(self.step);
         let time = self.transport * TICK;
         let ctx = PresetContext {
             time,

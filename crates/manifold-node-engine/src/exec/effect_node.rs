@@ -50,6 +50,102 @@ pub struct NodeWire {
     pub to: (NodeInstanceId, &'static str),
 }
 
+/// The previous live frame's measured load against the display frame budget.
+/// A live clock takes a second interval only after an on-time frame.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FrameLoad {
+    pub previous: Seconds,
+    pub budget: Seconds,
+}
+
+/// How every simulation node steps this frame. The host sets it once per
+/// frame on the executor; nodes read it from [`EffectNodeContext::sim_step`].
+/// A value carried with the call, never ambient thread state, so a test or
+/// proof thread can never disagree with the content thread.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SimStep {
+    /// Export runs every owed interval deterministically; live yields at
+    /// `preview_budget` and caps accepted intervals by `live_load`.
+    pub export: bool,
+    /// The project Sim Rate interval.
+    pub interval: Seconds,
+    /// Live only: wall-clock work allowed before a step yields. Yielding
+    /// never discards simulation time.
+    pub preview_budget: std::time::Duration,
+    /// Live only: the previous frame's load. `None` keeps the two-interval cap.
+    pub live_load: Option<FrameLoad>,
+    /// Evaluate historical physics inputs without publishing graph outputs.
+    pub authored_sample_only: bool,
+    /// Let a bounded historical input batch advance the native simulation.
+    /// Honoured only in export; live preview stays observe-only.
+    pub history_drain: bool,
+}
+
+impl SimStep {
+    /// What a host that never chose a step gets: export at 60 Hz.
+    pub const DEFAULT_INTERVAL: Seconds = Seconds(1.0 / 60.0);
+
+    pub fn export(interval: Seconds) -> Self {
+        Self {
+            export: true,
+            interval,
+            preview_budget: std::time::Duration::ZERO,
+            live_load: None,
+            authored_sample_only: false,
+            history_drain: false,
+        }
+    }
+
+    /// Live preview whose step budget is one Sim Rate interval.
+    pub fn live(interval: Seconds) -> Self {
+        Self {
+            export: false,
+            preview_budget: std::time::Duration::from_secs_f64(interval.0),
+            ..Self::export(interval)
+        }
+    }
+
+    pub fn with_preview_budget(self, budget: std::time::Duration) -> Self {
+        Self { preview_budget: budget, ..self }
+    }
+
+    pub fn with_live_load(self, load: Option<FrameLoad>) -> Self {
+        Self { live_load: load, ..self }
+    }
+
+    pub fn authored_sample(self) -> Self {
+        Self { authored_sample_only: true, ..self }
+    }
+
+    pub fn draining_history(self) -> Self {
+        Self { history_drain: true, ..self }
+    }
+
+    pub fn offline(self) -> bool {
+        self.export
+    }
+
+    /// The live step budget; `None` in export.
+    pub fn budget(self) -> Option<std::time::Duration> {
+        (!self.export).then_some(self.preview_budget)
+    }
+
+    /// The live frame load; `None` in export.
+    pub fn load(self) -> Option<FrameLoad> {
+        self.live_load.filter(|_| !self.export)
+    }
+
+    pub fn history_drain_active(self) -> bool {
+        self.history_drain && self.export
+    }
+}
+
+impl Default for SimStep {
+    fn default() -> Self {
+        Self::export(Self::DEFAULT_INTERVAL)
+    }
+}
+
 /// Per-frame timing supplied to every [`EffectNode::evaluate`] call.
 #[derive(Debug, Clone, Copy)]
 pub struct FrameTime {
@@ -321,6 +417,8 @@ pub struct EffectNodeContext<'ctx, 'gpu> {
     /// `node.layer_source` primitive emits the fallback when this is
     /// absent or when the requested layer id is missing.
     pub layer_skin_registry: Option<&'ctx LayerSkinRegistry>,
+    /// This frame's simulation step; the executor copies its own in.
+    pub sim_step: SimStep,
 }
 
 impl<'ctx, 'gpu> EffectNodeContext<'ctx, 'gpu> {
@@ -350,6 +448,7 @@ impl<'ctx, 'gpu> EffectNodeContext<'ctx, 'gpu> {
             rebuild_epoch: 0,
             rt_quality: RtQuality::default(),
             layer_skin_registry: None,
+            sim_step: SimStep::default(),
         }
     }
 
@@ -388,7 +487,13 @@ impl<'ctx, 'gpu> EffectNodeContext<'ctx, 'gpu> {
             rebuild_epoch,
             rt_quality,
             layer_skin_registry,
+            sim_step: SimStep::default(),
         }
+    }
+
+    pub fn with_sim_step(mut self, step: SimStep) -> Self {
+        self.sim_step = step;
+        self
     }
 
     /// Zero-copy feedback ping-pong (called from `late_capture` only):

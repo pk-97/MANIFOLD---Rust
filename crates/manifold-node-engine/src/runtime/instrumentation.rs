@@ -322,6 +322,16 @@ impl PresetRuntime {
         }
     }
 
+    /// This frame's simulation step, to the executor and every math view.
+    pub fn set_sim_step(&mut self, step: crate::exec::effect_node::SimStep) {
+        self.executor.set_sim_step(step);
+        for view in &mut self.math_views {
+            for variant in &mut view.variants {
+                variant.set_sim_step(step);
+            }
+        }
+    }
+
     /// Drain this chain's per-step CPU profiles recorded on the last profiled
     /// frame (each entry's `tag` is the scoped GPU-span join key).
     pub fn take_step_profiles(&mut self) -> Vec<crate::exec::execution::StepProfile> {

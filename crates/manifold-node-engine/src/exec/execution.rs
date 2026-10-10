@@ -218,6 +218,8 @@ pub struct Executor {
     /// so tests and non-RT graphs run unchanged. Set per frame via
     /// [`set_rt_quality`]; consumed by `render_scene` through the context.
     rt_quality: crate::exec::effect_node::RtQuality,
+    /// Set per frame via [`Self::set_sim_step`]; copied into every context.
+    sim_step: crate::exec::effect_node::SimStep,
     /// SCENE_FX P4a — borrowed pointer to the compositor's layer-skin registry,
     /// set each frame before the executor runs. A raw pointer is used because
     /// the executor's lifetime is independent of the registry; the content
@@ -591,6 +593,7 @@ impl Executor {
             scene_viewport: None,
             scene_viewport_captured: false,
             rt_quality: crate::exec::effect_node::RtQuality::default(),
+            sim_step: crate::exec::effect_node::SimStep::default(),
             preview_resource: None,
             preview_scalar_inputs: Vec::new(),
             preview_scalar_outputs: Vec::new(),
@@ -963,6 +966,15 @@ impl Executor {
     /// project column (realtime vs export). Cheap — stores by value, no allocation.
     pub fn set_rt_quality(&mut self, q: crate::exec::effect_node::RtQuality) {
         self.rt_quality = q;
+    }
+
+    /// This frame's simulation step. Call once per frame before `execute_frame_*`.
+    pub fn set_sim_step(&mut self, step: crate::exec::effect_node::SimStep) {
+        self.sim_step = step;
+    }
+
+    pub fn sim_step(&self) -> crate::exec::effect_node::SimStep {
+        self.sim_step
     }
 
     /// SCENE_FX P4a — set the borrowed layer-skin registry for the next frame.
@@ -2402,7 +2414,8 @@ impl Executor {
                             layer_skin_registry,
                         )
                         .with_errors(&mut self.error_scratch)
-                        .with_outputs_retained(outputs_retained);
+                        .with_outputs_retained(outputs_retained)
+                        .with_sim_step(self.sim_step);
                         let has_gpu_binding = ctx.gpu.is_some();
                         inst.node.evaluate(&mut ctx);
                         // Borrow the same resolved resources before their last
@@ -2846,7 +2859,8 @@ impl Executor {
                     layer_skin_registry,
                 )
                 .with_errors(&mut self.error_scratch)
-                .with_outputs_retained(capture_outputs_retained);
+                .with_outputs_retained(capture_outputs_retained)
+                .with_sim_step(self.sim_step);
                 inst.node.late_capture(&mut ctx);
                 let swap_request = ctx.texture_swap_request.take();
                 for (slot, value) in self.scalar_write_scratch.drain(..) {

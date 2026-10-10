@@ -475,6 +475,11 @@ impl Show {
     /// The first frame, warm-up, then a trigger restart from the fill, as
     /// the GPU FLIP smoke runs start: the next frame is the liquid's first and
     /// counts as frame 1.
+    /// The simulation step every following frame runs under.
+    pub fn set_sim_step(&mut self, step: crate::physics::SimStep) {
+        self.runtime.set_sim_step(step);
+    }
+
     pub fn restart(&mut self) {
         self.frame(false);
         let mut warmups = 0;

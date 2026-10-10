@@ -290,7 +290,7 @@ fn offline_history_drain_long_gap_matches_native_rigid_frame_sequence() {
 
 #[test]
 fn offline_history_drain_keeps_capped_preview_prefix_before_long_gap() {
-    use crate::physics::PhysicsStepScope;
+    use crate::physics::SimStep;
     let accepted_prefix = 2.0 / 60.0;
     let mut expected_runtime = runtime_with_field(50.0, false, true);
     frame(&mut expected_runtime, 0.0);
@@ -299,10 +299,12 @@ fn offline_history_drain_keeps_capped_preview_prefix_before_long_gap() {
 
     let mut jumped = runtime_with_field(50.0, false, true);
     {
-        let _preview = PhysicsStepScope::with_preview_budget(false, std::time::Duration::ZERO);
+        let tick = manifold_core::Seconds(manifold_physics::clock::TICK);
+        jumped.set_sim_step(SimStep::live(tick).with_preview_budget(std::time::Duration::ZERO));
         frame(&mut jumped, 0.0);
         let behind = frame(&mut jumped, 0.9);
         assert_eq!(behind, expected_prefix, "live accepts exactly two fixed intervals even at zero budget");
+        jumped.set_sim_step(SimStep::default());
     }
     let actual = frame(&mut jumped, 3.0);
     for axis in 0..3 {

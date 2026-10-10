@@ -361,6 +361,7 @@ impl WaterRuntime<'_> {
             source,
             &binding.steps,
             &binding.params,
+            crate::physics::SimStep::live(self.executor.sim_step().interval),
         );
         if self.executor.mesh_pending_of(binding.field) {
             return Err("Impulse: field inputs are pending or invalid".into());

@@ -124,6 +124,9 @@ pub struct GeneratorRenderer {
     /// `dispatch_chain`) so runtimes installed after the last push still
     /// render at the current quality.
     rt_quality: manifold_node_engine::exec::effect_node::RtQuality,
+    /// This frame's simulation step, set by the host before render_all and
+    /// applied to each generator's runtime at render time like rt_quality.
+    sim_step: manifold_node_engine::exec::effect_node::SimStep,
     /// SCENE_FX P4a — borrowed pointer to the compositor's layer-skin registry
     /// for this frame. Set by the host before `render_all`; a raw pointer is
     /// used because the renderer's lifetime is independent of the registry.
@@ -189,6 +192,7 @@ impl GeneratorRenderer {
             preview_layer: None,
             profiling_enabled: false,
             rt_quality: manifold_node_engine::exec::effect_node::RtQuality::default(),
+            sim_step: manifold_node_engine::exec::effect_node::SimStep::default(),
             layer_skin_registry: None,
             scene_viewport_request: None,
             scene_viewport_modifier: None,
@@ -392,6 +396,10 @@ impl GeneratorRenderer {
     /// SCENE_FX P4a — set the borrowed layer-skin registry for this frame.
     /// The registry must outlive `render_all` (content thread guarantee).
     /// `None` clears the pointer.
+    pub fn set_sim_step(&mut self, step: manifold_node_engine::exec::effect_node::SimStep) {
+        self.sim_step = step;
+    }
+
     pub fn set_layer_skin_registry(&mut self, registry: Option<&manifold_node_engine::runtime::layer_skin::LayerSkinRegistry>) {
         self.layer_skin_registry = registry.map(manifold_node_engine::runtime::layer_skin::LayerSkinPtr::new);
     }
@@ -987,6 +995,7 @@ impl GeneratorRenderer {
                     .generator
                     .set_relight_params(&relight_params);
                 layer_state.generator.set_rt_quality(self.rt_quality);
+                layer_state.generator.set_sim_step(self.sim_step);
                 layer_state
                     .generator
                     .set_layer_skin_registry(self.layer_skin_registry.map(|p| unsafe { p.get() }));
@@ -1659,6 +1668,7 @@ impl ClipRenderer for GeneratorRenderer {
                     ls.generator.set_string_params(Some(&ls.merged_string_params));
                     ls.generator.set_relight_params(&relight_params);
                     ls.generator.set_rt_quality(self.rt_quality);
+                    ls.generator.set_sim_step(self.sim_step);
                     ls.generator.set_project_tempo(None);
                     ls.generator.set_source_instance(layer.gen_params());
                     let ctx = PresetContext {

@@ -36,7 +36,7 @@ use manifold_core::params::{Param, ParamManifest};
 use manifold_gpu::{GpuDevice, GpuTextureFormat, GpuTimestampSampler};
 use manifold_node_engine::runtime::frame_status::FrameRenderStatus;
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
-use {manifold_node_engine::persistence::PrimitiveRegistry, manifold_nodes_water::physics::PhysicsStepScope};
+use manifold_node_engine::persistence::PrimitiveRegistry;
 use manifold_node_engine::runtime::preset_context::PresetContext;
 use manifold_node_engine::runtime::PresetRuntime;
 use manifold_node_engine::gpu::render_target::RenderTarget;
@@ -434,7 +434,6 @@ fn probe(variant: Variant) -> Vec<(usize, u64)> {
     let harness = manifold_node_engine::testkit::gpu_harness::shared();
     let device = &harness.device;
     let sampler = device.create_timestamp_sampler(16384).expect("GPU timestamp sampler");
-    let _offline = PhysicsStepScope::for_render(true);
     let target = RenderTarget::new(device, WIDTH, HEIGHT, GpuTextureFormat::Rgba16Float, "gpu-flip-frame-perf");
     let mut json: Value = serde_json::from_str(PRESET).expect("GPU FLIP dam break preset parses");
     if variant == Variant::Unindexed {

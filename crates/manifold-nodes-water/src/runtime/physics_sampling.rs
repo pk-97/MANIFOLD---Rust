@@ -11,7 +11,7 @@ use manifold_core::Beats;
 use manifold_core::Seconds;
 use manifold_node_engine::scene::boundary_nodes::GENERATOR_INPUT_TYPE_ID;
 use manifold_node_engine::exec::effect_node::ParamValues;
-use crate::physics::{PhysicsHistoryDrainScope, offline_simulation};
+use crate::physics::SimStep;
 use crate::node;
 use manifold_node_engine::runtime::preset_context::ProjectTempo;
 use manifold_core::audio_mod::HopValue;
@@ -26,7 +26,10 @@ mod input_tests;
 
 
 manifold_core::testkit_visible! {
-/// Observe retained inputs under the native authored-sample policy.
+/// Observe retained inputs under the native authored-sample policy. `step`
+/// is the step the sample belongs to; the executor's own frame step is
+/// restored afterwards, so a sample never changes the next frame.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn execute_physics_sample_frame(
     executor: &mut manifold_node_engine::exec::execution::Executor,
     graph: &mut Graph,
@@ -34,9 +37,12 @@ pub(crate) fn execute_physics_sample_frame(
     time: FrameTime,
     steps: &[bool],
     params: &[Option<ParamValues>],
+    step: SimStep,
 ) {
-    let _scope = crate::physics::PhysicsAuthoredSampleScope::new();
+    let frame_step = executor.sim_step();
+    executor.set_sim_step(step.authored_sample());
     executor.execute_cpu_sample_frame(graph, plan, time, steps, params);
+    executor.set_sim_step(frame_step);
 }
 }
 
@@ -363,9 +369,10 @@ impl super::WaterRuntime<'_> {
         if self.graph.prepared_param_violation().is_some() {
             return Err("Impulse: graph preparation is pending".into());
         }
-        // A producer callback must never inherit offline history draining.
-        let _scope = crate::physics::PhysicsStepScope::for_render(false);
-        self.sample_physics_history(source);
+        // A producer callback observes live at the project Sim Rate and never
+        // drains offline history.
+        let step = SimStep::live(self.executor.sim_step().interval);
+        self.sample_physics_history(source, step);
         // No ancestry means no solver here replays held-input history, so
         // there is no interval to close.
         let (Some(inputs), Some(steps)) = (
@@ -383,18 +390,19 @@ impl super::WaterRuntime<'_> {
             source,
             steps,
             &inputs.values,
+            step,
         );
         self.water.last_frame_time = Some(source);
         Ok(())
     }
 
-    pub(crate) fn sample_physics_history(&mut self, current: FrameTime) {
+    pub(crate) fn sample_physics_history(&mut self, current: FrameTime, step: SimStep) {
         let bindings = self
             .effect_nodes
             .first()
             .map_or(&[][..], |slot| slot.bindings);
         self.water.sample_physics_history(
-            self.graph, self.plan, self.executor, bindings, current,
+            self.graph, self.plan, self.executor, bindings, current, step,
         );
     }
 }
@@ -414,6 +422,7 @@ impl super::WaterRuntimeState {
         executor: &mut manifold_node_engine::exec::execution::Executor,
         bindings: &[ResolvedBinding],
         current: FrameTime,
+        step: SimStep,
     ) {
         let (Some(inputs), Some(steps)) = (
             self.input_snapshot.as_mut(),
@@ -431,12 +440,11 @@ impl super::WaterRuntimeState {
             return;
         }
         inputs.route_hops(bindings, plan);
-        let drain_offline = offline_simulation();
+        let drain_offline = step.offline();
         if drain_offline {
             // An offline render may inherit a preview backlog. Drain the
             // already-observed prefix before inserting another sample into a
             // nearly-full history; the current edit must not reach that prefix.
-            let _drain = PhysicsHistoryDrainScope::new();
             let sample = FrameTime {
                 delta: Seconds::ZERO,
                 ..previous
@@ -449,6 +457,7 @@ impl super::WaterRuntimeState {
                 sample,
                 steps,
                 &inputs.values,
+                step.draining_history(),
             );
         }
         const SAMPLE_RATE: f64 = 240.0;
@@ -542,7 +551,6 @@ impl super::WaterRuntimeState {
             inputs.apply_hops(bindings, time);
             samples_since_drain += 1;
             let drain = drain_offline && samples_since_drain == DRAIN_INTERVAL;
-            let _drain = drain.then(PhysicsHistoryDrainScope::new);
             execute_physics_sample_frame(
                 executor,
                 graph,
@@ -550,6 +558,7 @@ impl super::WaterRuntimeState {
                 sample,
                 steps,
                 &inputs.values,
+                if drain { step.draining_history() } else { step },
             );
             if drain {
                 samples_since_drain = 0;
@@ -584,7 +593,6 @@ impl super::WaterRuntimeState {
         };
         inputs.set_sample_time(closing);
         inputs.apply_hops(bindings, current.seconds.0);
-        let _drain = drain_offline.then(PhysicsHistoryDrainScope::new);
         execute_physics_sample_frame(
             executor,
             graph,
@@ -592,6 +600,7 @@ impl super::WaterRuntimeState {
             closing,
             steps,
             &inputs.values,
+            if drain_offline { step.draining_history() } else { step },
         );
         inputs.capture(graph, plan, &self.project_tempo);
     }

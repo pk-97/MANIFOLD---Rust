@@ -87,7 +87,7 @@ inventory::submit! {
     manifold_node_engine::freeze::derived_uniform_registry::DerivedUniformRecompute {
         type_id: "node.move_particles",
         array_ports: &[],
-        recompute: |ctx| Some(vec![crate::physics::particle_frame_duration(ctx.frame.delta)]),
+        recompute: |ctx| Some(vec![crate::physics::particle_frame_duration(ctx.frame.delta, ctx.sim_step)]),
     }
 }
 
@@ -121,7 +121,7 @@ impl Primitive for EulerStepParticles {
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         let active_count = ctx.scalar_or_param("active_count", 100_000.0).round().max(0.0) as u32;
         let speed = ctx.scalar_or_param("speed", 1.0);
-        let dt_scaled = crate::physics::particle_frame_duration(ctx.time.delta);
+        let dt_scaled = crate::physics::particle_frame_duration(ctx.time.delta, ctx.sim_step);
 
         let Some(particles) = ctx.inputs.array("in") else {
             return;

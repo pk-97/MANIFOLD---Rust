@@ -337,6 +337,9 @@ pub trait Compositor: Send {
     /// Default no-op for compositors without RT chains.
     fn set_rt_quality(&mut self, _q: manifold_node_engine::exec::effect_node::RtQuality) {}
 
+    /// This frame's simulation step for every effect chain. Default no-op.
+    fn set_sim_step(&mut self, _step: manifold_node_engine::exec::effect_node::SimStep) {}
+
     /// SCENE_FX P4a — the compositor's layer-skin registry: previous-frame
     /// composited output per layer, published at end of frame. The host
     /// hands this to the generator renderer so `node.layer_source` can

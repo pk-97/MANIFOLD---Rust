@@ -53,6 +53,7 @@ pub trait PhysicsNode: Send {
         _observation: Option<&crate::physics::RigidSceneObservation>,
         _colliders: manifold_core::scene_impulse::RigidImpulseTargets,
         _error: Option<&str>,
+        _authored_sample_only: bool,
     ) {
     }
 

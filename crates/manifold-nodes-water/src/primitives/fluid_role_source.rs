@@ -395,7 +395,7 @@ impl Primitive for FluidRoleSource {
 
         // Historical samples update live controls against the last prepared
         // source. Setup edits are discrete and must not recook past geometry.
-        if crate::physics::authored_sample_only() {
+        if ctx.sim_step.authored_sample_only {
             self.publish_role(
                 ctx,
                 role,
@@ -549,7 +549,7 @@ impl Primitive for FluidRoleSource {
         if let Some(rx) = &self.pending_geometry {
             // Offline waits for the preparation, so the liquid's first tick
             // never depends on how fast the worker ran.
-            let received = if crate::physics::offline_simulation() {
+            let received = if ctx.sim_step.offline() {
                 rx.recv().map_err(|_| mpsc::TryRecvError::Disconnected)
             } else {
                 rx.try_recv()
@@ -956,15 +956,15 @@ mod tests {
         );
         backend.set_mesh_source(mesh, MeshSource::Cube { size: 3.0 });
         {
-            let _sample = crate::physics::PhysicsAuthoredSampleScope::new();
             // Source slots may be unbound in the CPU-only historical pass.
             let historical = [("transform", transform), ("mesh_0", missing)];
-            assert!(!run_inputs(
+            assert!(!crate::testkit::fluid_role_source::run_inputs_under(
                 &mut primitive,
                 &mut backend,
                 &historical,
                 output,
-                &params
+                &params,
+                crate::physics::SimStep::default().authored_sample(),
             ));
             let sampled = backend.cpu_values().get::<FluidRole>(output).unwrap();
             assert!(Arc::ptr_eq(&sampled.geometry, &larger.geometry));

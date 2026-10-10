@@ -224,7 +224,7 @@ impl Primitive for MatterState {
             whole(ctx.scalar_or_param("nodes_y", 71.0)),
             whole(ctx.scalar_or_param("nodes_z", 71.0)),
         ];
-        let live_mode = !crate::physics::offline_simulation();
+        let live_mode = !ctx.sim_step.offline();
         self.submitted_time = f64::from(ctx.scalar_or_param("simulation_time", 0.0));
         let target = f64::from(ctx.scalar_or_param("target_time", self.submitted_time as f32));
         let dropped_seconds = f64::from(ctx.scalar_or_param("dropped_seconds", 0.0));
@@ -232,7 +232,7 @@ impl Primitive for MatterState {
         // A graph saved without the domain's interval wire runs on the project's Sim Rate.
         let interval_duration = ctx.scalar_or_param(
             "interval_duration",
-            crate::physics::simulation_interval() as f32,
+            ctx.sim_step.interval.0 as f32,
         );
         let ticks = whole(ctx.scalar_or_param("ticks", 0.0));
         let substeps = whole(ctx.scalar_or_param("substeps_per_tick", 1.0)).max(1);

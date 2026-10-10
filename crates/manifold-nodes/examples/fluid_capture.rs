@@ -49,7 +49,7 @@ use manifold_node_engine::gpu::headless_readback::{encode_rgba8_png, readback_sr
 use manifold_core::fluid_domain::domain_layout;
 use manifold_node_engine::particles::FluidParticle;
 use {manifold_nodes_water::matter, manifold_nodes_water::matter::look::Cells, manifold_nodes_water::matter::look::LookRecorder};
-use {manifold_node_engine::exec::effect_node::EffectNode, manifold_node_engine::parameters::ParamValue, manifold_node_engine::persistence::PrimitiveRegistry, manifold_nodes_water::physics::PhysicsStepScope};
+use {manifold_node_engine::exec::effect_node::EffectNode, manifold_node_engine::parameters::ParamValue, manifold_node_engine::persistence::PrimitiveRegistry, manifold_node_engine::exec::effect_node::SimStep};
 use manifold_node_engine::runtime::preset_context::PresetContext;
 use manifold_node_engine::runtime::PresetRuntime;
 use manifold_node_engine::gpu::render_target::RenderTarget;
@@ -1149,7 +1149,6 @@ fn run(options: &CaptureOptions) -> CaptureResult<()> {
         GpuTextureFormat::Rgba16Float,
         "fluid-capture-offline",
     );
-    let offline_scope = PhysicsStepScope::for_render(true);
     let (render_width, render_height) =
         render_dimensions(options.width, options.height, options.supersample);
     let mut offline_runtime =
@@ -1330,7 +1329,6 @@ fn run(options: &CaptureOptions) -> CaptureResult<()> {
     }
     drop(offline_target);
     drop(offline_runtime);
-    drop(offline_scope);
 
     let preview_metadata = if options.offline_only {
         None
@@ -1346,7 +1344,6 @@ fn run(options: &CaptureOptions) -> CaptureResult<()> {
             build_runtime(&instrumented_json, &device, render_width, render_height, &options.frame_node)?;
         let preview_initial_timings;
         {
-            let preview_warmup_scope = PhysicsStepScope::for_render(true);
             let (warmup_timings, warmup_fluid) = render_frame(
                 &mut preview_runtime,
                 &preview_target,
@@ -1377,10 +1374,9 @@ fn run(options: &CaptureOptions) -> CaptureResult<()> {
                 gpu_ms: warmup_timings.gpu_ms,
                 frame_ms: warmup_timings.frame_ms,
             };
-            drop(preview_warmup_scope);
         }
 
-        let preview_scope = PhysicsStepScope::for_render(false);
+        preview_runtime.set_sim_step(SimStep::live(manifold_core::Seconds(1.0 / 60.0)));
         let preview_started = Instant::now();
         let mut preview_rows = Vec::with_capacity(options.frames as usize);
         let mut next_deadline = 0.0f64;
@@ -1467,7 +1463,6 @@ fn run(options: &CaptureOptions) -> CaptureResult<()> {
             final_authored_time: preview_final.authored_time,
             final_lag_seconds: preview_final.fluid.lag_seconds,
         };
-        drop(preview_scope);
         drop(preview_target);
         drop(preview_runtime);
         ensure_wall_limit(overall_started, "capture", options.max_seconds)?;

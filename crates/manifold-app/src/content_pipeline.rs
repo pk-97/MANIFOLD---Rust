@@ -2101,6 +2101,22 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
         }
     }
 
+    /// Hand this frame's simulation step to every graph runtime: effect chains
+    /// through the compositor, generators through their renderer.
+    fn apply_sim_step(
+        &mut self,
+        engine: &mut PlaybackEngine,
+        step: manifold_node_engine::exec::effect_node::SimStep,
+    ) {
+        self.compositor.set_sim_step(step);
+        let (renderers, _) = engine.split_renderer_project();
+        for renderer in renderers.iter_mut() {
+            if let Some(generator) = renderer.as_any_mut().downcast_mut::<GeneratorRenderer>() {
+                generator.set_sim_step(step);
+            }
+        }
+    }
+
     /// Apply project quality before rendering, including load-time warmup.
     pub(crate) fn apply_rt_quality(&mut self, engine: &mut PlaybackEngine, export_mode: bool) {
         // RT_QUALITY_SETTINGS_DESIGN.md D2/D5: resolve the active quality
@@ -2151,13 +2167,17 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
         );
         // Whether the previous frame was late decides if live physics may run
         // a second interval this frame.
-        let load = manifold_nodes_water::physics::LiveLoad {
+        let load = manifold_node_engine::exec::effect_node::FrameLoad {
             previous: manifold_core::Seconds((self.last_render_work_ms + self.last_fence_wait_ms) / 1000.0),
             budget: manifold_core::Seconds(1.0 / f64::from(fps.max(1.0))),
         };
-        let _physics_scope = manifold_nodes_water::physics::PhysicsStepScope::for_frame(
-            export_mode, physics, Some(load),
-        );
+        let interval = manifold_core::Seconds(physics.sim_rate.interval());
+        let sim_step = if export_mode {
+            manifold_node_engine::exec::effect_node::SimStep::export(interval)
+        } else {
+            manifold_node_engine::exec::effect_node::SimStep::live(interval).with_live_load(Some(load))
+        };
+        self.apply_sim_step(engine, sim_step);
         let _t_frame = std::time::Instant::now();
 
         // §5.4: one reset per frame; the generator and compositor wrappers

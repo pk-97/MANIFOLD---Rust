@@ -27,21 +27,20 @@ pub use impulses::ResolvedRigidImpulse;
 use targeted_fields::{TargetedFieldHistory, TARGET_SLOTS};
 pub use worker::{RigidSceneInputs, RigidSceneObservation};
 
+pub use manifold_node_engine::exec::effect_node::SimStep;
+
 /// Shared particle duration with the same advisory HUD path as other live sims.
-pub fn particle_frame_duration(delta: Seconds) -> f32 {
-    let outcome = manifold_physics::particle_duration::scaled(delta, offline_simulation());
+pub fn particle_frame_duration(delta: Seconds, step: SimStep) -> f32 {
+    let outcome = manifold_physics::particle_duration::scaled(delta, step.offline());
     if outcome.diagnostic.is_some() {
         crate::physics_metrics::record_simulation(0.0, 0.0, false, true);
     }
     outcome.value
 }
 
-thread_local! {
-    // A preview budget only yields work; it never discards simulation time.
-    static PREVIEW_STEP_BUDGET: std::cell::Cell<Option<std::time::Duration>> = const { std::cell::Cell::new(None) };
-    static SIMULATION_INTERVAL: std::cell::Cell<f64> = const { std::cell::Cell::new(1.0 / 60.0) };
-    static SAMPLE_AUTHORED_ONLY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-    static HISTORY_DRAIN_REQUESTED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+/// The physics clock's view of this frame's live load; None in export.
+pub(crate) fn live_load(step: SimStep) -> Option<manifold_physics::clock::LiveLoad> {
+    step.load().map(|load| manifold_physics::clock::LiveLoad { previous: load.previous, budget: load.budget })
 }
 
 #[cfg(feature = "gpu-proofs")]
@@ -57,11 +56,6 @@ pub fn native_ticks_on_this_thread() -> u64 {
     NATIVE_TICKS.get()
 }
 
-manifold_core::testkit_visible! {
-pub(crate) fn authored_sample_only() -> bool {
-    SAMPLE_AUTHORED_ONLY.with(std::cell::Cell::get)
-}
-}
 
 /// Transport paused or simulation speed zero. A capped simulation timestamp
 /// can remain unchanged while transport advances, so it cannot diagnose pause.
@@ -73,8 +67,8 @@ pub(crate) struct HeldClock {
 }
 
 impl HeldClock {
-    pub(crate) fn observe(&mut self, transport: f64, speed: f32) {
-        if !authored_sample_only() {
+    pub(crate) fn observe(&mut self, transport: f64, speed: f32, authored_sample_only: bool) {
+        if !authored_sample_only {
             self.held = self.observed == Some(transport) || speed == 0.0;
             self.observed = Some(transport);
         }
@@ -82,131 +76,6 @@ impl HeldClock {
 
     pub(crate) fn is_held(self) -> bool {
         self.held
-    }
-}
-
-/// Fluid workers use the same preview/offline scope as rigid bodies.
-pub(crate) fn simulation_interval() -> f64 {
-    SIMULATION_INTERVAL.get()
-}
-
-manifold_core::testkit_visible! {
-pub(crate) fn offline_simulation() -> bool {
-    PREVIEW_STEP_BUDGET.with(|budget| budget.get().is_none())
-}
-}
-
-pub(crate) fn history_drain_requested() -> bool {
-    HISTORY_DRAIN_REQUESTED.with(std::cell::Cell::get) && offline_simulation()
-}
-
-/// Evaluate historical physics inputs without publishing graph outputs. Native
-/// state is retained unless an explicit offline history-drain scope is active.
-#[must_use]
-pub struct PhysicsAuthoredSampleScope {
-    previous: bool,
-    _thread_bound: std::marker::PhantomData<std::rc::Rc<()>>,
-}
-
-impl PhysicsAuthoredSampleScope {
-    pub fn new() -> Self {
-        let previous = SAMPLE_AUTHORED_ONLY.with(|current| current.replace(true));
-        Self {
-            previous,
-            _thread_bound: std::marker::PhantomData,
-        }
-    }
-}
-
-impl Default for PhysicsAuthoredSampleScope {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl Drop for PhysicsAuthoredSampleScope {
-    fn drop(&mut self) {
-        SAMPLE_AUTHORED_ONLY.with(|current| current.set(self.previous));
-    }
-}
-
-/// Allow a bounded historical input batch to advance the native simulation.
-/// Live preview remains observe-only even if a caller accidentally holds this
-/// scope, and the scope never changes graph output publication policy.
-#[must_use]
-pub(crate) struct PhysicsHistoryDrainScope {
-    previous: bool,
-    _thread_bound: std::marker::PhantomData<std::rc::Rc<()>>,
-}
-
-impl PhysicsHistoryDrainScope {
-    pub(crate) fn new() -> Self {
-        let previous = HISTORY_DRAIN_REQUESTED.with(|current| current.replace(true));
-        Self {
-            previous,
-            _thread_bound: std::marker::PhantomData,
-        }
-    }
-}
-
-impl Drop for PhysicsHistoryDrainScope {
-    fn drop(&mut self) {
-        HISTORY_DRAIN_REQUESTED.with(|current| current.set(self.previous));
-    }
-}
-
-pub use manifold_physics::clock::LiveLoad;
-
-/// Select live or deterministic export execution and retain the project cadence.
-#[must_use]
-pub struct PhysicsStepScope {
-    previous_interval: f64,
-    previous: Option<std::time::Duration>,
-    _live_load: manifold_physics::clock::LiveLoadScope,
-    _thread_bound: std::marker::PhantomData<std::rc::Rc<()>>,
-}
-
-impl PhysicsStepScope {
-    pub fn for_render(export_mode: bool) -> Self {
-        Self::with_preview_budget(export_mode, std::time::Duration::from_secs_f64(simulation_interval()))
-    }
-
-    /// Pass the shared project physics settings to every consumer.
-    pub fn for_settings(export_mode: bool, settings: manifold_physics::PhysicsSettings) -> Self {
-        Self::for_frame(export_mode, settings, None)
-    }
-
-    /// [`Self::for_settings`] plus the previous live frame's load for every
-    /// live clock; export ignores it.
-    pub fn for_frame(export_mode: bool, settings: manifold_physics::PhysicsSettings, load: Option<LiveLoad>) -> Self {
-        let interval = settings.sim_rate.interval();
-        let scope = Self::scoped(export_mode, std::time::Duration::from_secs_f64(interval), load);
-        SIMULATION_INTERVAL.set(interval);
-        scope
-    }
-
-    /// Retain the preview-scope API; live intervals always consume their full span.
-    pub fn with_preview_budget(export_mode: bool, budget: std::time::Duration) -> Self {
-        Self::scoped(export_mode, budget, None)
-    }
-
-    fn scoped(export_mode: bool, budget: std::time::Duration, load: Option<LiveLoad>) -> Self {
-        let previous_interval = SIMULATION_INTERVAL.get();
-        let previous =
-            PREVIEW_STEP_BUDGET.with(|current| current.replace((!export_mode).then_some(budget)));
-        Self {
-            previous,
-            previous_interval,
-            _live_load: manifold_physics::clock::live_load_scope(load.filter(|_| !export_mode)),
-            _thread_bound: std::marker::PhantomData,
-        }
-    }
-}
-
-impl Drop for PhysicsStepScope {
-    fn drop(&mut self) {
-        PREVIEW_STEP_BUDGET.with(|budget| budget.set(self.previous));
-        SIMULATION_INTERVAL.set(self.previous_interval);
     }
 }
 
@@ -533,6 +402,8 @@ pub struct RigidSimulation {
     dropped_time: super::physics_metrics::DroppedTimeTracker,
     worker_epoch: Option<u64>,
     advancement_policy: AdvancementPolicy,
+    /// The owner's simulation step for the next advance; see [`Self::set_step`].
+    step: SimStep,
 }
 
 impl Default for RigidSimulation {
@@ -583,11 +454,29 @@ impl Default for RigidSimulation {
             dropped_time: Default::default(),
             worker_epoch: None,
             advancement_policy: AdvancementPolicy::Preview,
+            step: SimStep::default(),
         }
     }
 }
 
 impl RigidSimulation {
+    /// The step every following advance runs under. The owner sets it from
+    /// its frame context before each advance, so no step outlives its frame.
+    pub fn set_step(&mut self, step: SimStep) {
+        self.step = step;
+        self.clock.set_live_load(live_load(step));
+    }
+
+    /// [`Self::set_step`] for chained construction in tests and tools.
+    pub fn with_step(mut self, step: SimStep) -> Self {
+        self.set_step(step);
+        self
+    }
+
+    pub fn step(&self) -> SimStep {
+        self.step
+    }
+
     /// Hold the transport clock while an upstream collider is still being
     /// prepared. The next ready frame starts from its current authored time
     /// instead of replaying time that elapsed with incomplete geometry.
@@ -836,7 +725,7 @@ impl RigidSimulation {
             || !reset_count.is_finite()
             || gravity.iter().any(|v| !v.is_finite())
         {
-            if !offline_simulation() {
+            if !self.step.offline() {
                 crate::physics_metrics::record_simulation(
                     self.authored_time, self.physics_time, false, true,
                 );
@@ -925,7 +814,7 @@ impl RigidSimulation {
         let prototype_activation_changed = prototype.as_ref().map(|body| body.enabled)
             != self.copy_description.as_ref().map(|body| body.enabled);
         let rebuild = self.world.is_none() || topology_changed || copy_topology_changed || reset
-            || (accepted_interval.is_none() && self.clock.rate_changed(simulation_interval()));
+            || (accepted_interval.is_none() && self.clock.rate_changed(self.step.interval.0));
         if !rebuild {
             if let Some(error) = &self.impulse_failure {
                 return Err(error.clone());
@@ -937,13 +826,13 @@ impl RigidSimulation {
                 );
             }
         }
-        if SAMPLE_AUTHORED_ONLY.with(std::cell::Cell::get) && !self.advancement_policy.is_worker() {
+        if self.step.authored_sample_only && !self.advancement_policy.is_worker() {
             // A topology edit or seek rebuilds at the next full graph frame;
             // old trajectories cannot safely be spliced into a new world.
             if self.world.is_none() || topology_changed || copy_topology_changed || reset {
                 return Ok(());
             }
-            if !history_drain_requested() {
+            if !self.step.history_drain_active() {
                 let authored_time = self.clock.observe_speed(now.0, speed);
                 let elapsed_simulation = authored_time - self.authored_time;
                 self.ensure_targeted_history(targeted_fields)?;
@@ -1115,8 +1004,8 @@ impl RigidSimulation {
         // Applying the display-frame cap again would truncate retained input
         // history, including a zero-step pose edit after coupled intervals.
         let clock_frame = if !self.advancement_policy.is_worker() {
-            Some(self.clock.advance(now.0, simulation_interval(), speed, reset_count, rebuild,
-                offline_simulation()))
+            Some(self.clock.advance(now.0, self.step.interval.0, speed, reset_count, rebuild,
+                self.step.offline()))
         } else {
             None
         };
@@ -1137,11 +1026,11 @@ impl RigidSimulation {
             targeted_fields,
         )?;
         self.authored_time = authored_time;
-        self.held.observe(now.0, speed);
+        self.held.observe(now.0, speed, self.step.authored_sample_only);
         let accumulated = self.accumulator + elapsed_simulation;
         const TICK: f64 = FIXED_TICK.0;
         let due_steps = ((accumulated + 1e-9) / TICK).floor() as usize;
-        let preview_budget = PREVIEW_STEP_BUDGET.with(std::cell::Cell::get);
+        let preview_budget = self.step.budget();
         // Live and export consume the same accepted rate intervals. Explicit
         // fixed workers remain the cache-recording compatibility path.
         let scheduled_frame = clock_frame.as_ref().filter(|_| matches!(self.advancement_policy, AdvancementPolicy::Preview));
@@ -1553,7 +1442,7 @@ impl RigidSimulation {
         }
         self.copy_description = prototype.clone();
         self.physics_ms = physics_start.elapsed().as_secs_f32() * 1000.0;
-        if !offline_simulation() {
+        if !self.step.offline() {
             if let Some(frame) = &clock_frame {
                 self.dropped_time.record(self.authored_time, self.physics_time,
                     frame.dropped_seconds, false, frame.numerical_error);
@@ -2615,6 +2504,11 @@ mod tests {
     const GRAVITY: [f32; 3] = [0.0, -9.8, 0.0];
     const FRAME: f64 = 1.0 / 60.0;
 
+    /// Live preview at 60 Hz, what a render frame passes the world.
+    pub(super) fn live_step() -> SimStep {
+        SimStep::live(FIXED_TICK)
+    }
+
     #[test]
     fn full_copy_grid_stays_over_floor_and_stacks_in_layers() {
         let first = copy_position([0.0, 4.0, 0.0], 0, MAX_COPIES, 16, 1.5);
@@ -2917,11 +2811,10 @@ mod tests {
 
     #[test]
     fn changed_field_applies_at_the_next_accepted_interval() {
-        let _live = PhysicsStepScope::for_render(false);
         let bodies = one_body([0.0, 8.0, 0.0]);
         let old_field = FieldValue::uniform([0.0, -4.0, 0.0]).unwrap();
         let new_field = FieldValue::uniform([0.0, 8.0, 0.0]).unwrap();
-        let mut simulation = RigidSimulation::default();
+        let mut simulation = RigidSimulation::default().with_step(live_step());
         simulation
             .advance_with_fields(
                 bodies.clone(), None, 0.0, 1.25, 16.0, 0.0, [0.0; 3],
@@ -3214,7 +3107,6 @@ mod tests {
 
     #[test]
     fn targeted_fields_preserve_first_connection_and_paused_edits() {
-        let _live = PhysicsStepScope::for_render(false);
         let bodies = one_body([0.0, 8.0, 0.0]);
         let empty: [Option<FieldValue>; TARGET_SLOTS] = std::array::from_fn(|_| None);
         let old = target_slots(0, FieldValue::uniform([2.0, 0.0, 0.0]).unwrap());
@@ -3223,16 +3115,15 @@ mod tests {
         // Compare the same accepted history without discarded wall time.
         // The old field already advanced two live intervals before the edit;
         // a paused edit must not replace that completed motion retroactively.
-        let mut expected = RigidSimulation::default();
+        let mut expected = RigidSimulation::default().with_step(SimStep::export(FIXED_TICK));
         {
-            let _offline = PhysicsStepScope::for_render(true);
             advance_targeted(&mut expected, bodies.clone(), None, 0.0, [0.0; 3], &empty);
             advance_targeted(&mut expected, bodies.clone(), None, 2.0 * FRAME, [0.0; 3], &old);
             advance_targeted(&mut expected, bodies.clone(), None, 2.0 * FRAME, [0.0; 3], &new);
             advance_targeted(&mut expected, bodies.clone(), None, 4.0 * FRAME, [0.0; 3], &new);
         }
 
-        let mut edited = RigidSimulation::default();
+        let mut edited = RigidSimulation::default().with_step(live_step());
         advance_targeted(&mut edited, bodies.clone(), None, 0.0, [0.0; 3], &empty);
         advance_targeted(&mut edited, bodies.clone(), None, 0.5, [0.0; 3], &old);
         let identity = edited.handles[0];
@@ -3276,7 +3167,8 @@ mod tests {
         for frame in 1..=fps {
             let end_sample = frame * samples_per_frame;
             {
-                let _authored = PhysicsAuthoredSampleScope::new();
+                let frame_step = simulation.step();
+                simulation.set_step(frame_step.authored_sample());
                 for sample in ((frame - 1) * samples_per_frame + 1)..=end_sample {
                     simulation
                         .advance(
@@ -3288,6 +3180,7 @@ mod tests {
                         )
                         .unwrap();
                 }
+                simulation.set_step(frame_step);
             }
             simulation
                 .advance(
@@ -3323,11 +3216,10 @@ mod tests {
 
     #[test]
     fn changed_gravity_applies_at_the_next_accepted_interval() {
-        let _live = PhysicsStepScope::for_render(false);
         let bodies = one_body([0.0, 4.0, 0.0]);
         let old_gravity = [0.0, -9.8, 0.0];
         let new_gravity = [0.0, 8.0, 0.0];
-        let mut simulation = RigidSimulation::default();
+        let mut simulation = RigidSimulation::default().with_step(live_step());
         simulation.advance(bodies.clone(), old_gravity, Seconds::ZERO, 1.0, 0.0).unwrap();
         simulation.advance(bodies.clone(), old_gravity, Seconds(0.5), 1.0, 0.0).unwrap();
         let pose_before_edit = simulation.poses[0];
@@ -3669,7 +3561,6 @@ mod tests {
 
     #[test]
     fn live_fragment_release_occurs_at_the_authored_boundary() {
-        let _live = PhysicsStepScope::for_render(false);
         let mut bodies = std::array::from_fn(|_| None);
         bodies[0] = Some(body([0.0, 4.0, 0.0]));
         bodies[1] = Some(RigidBody {
@@ -3679,7 +3570,7 @@ mod tests {
         });
         let mut released = bodies.clone();
         released[0].as_mut().unwrap().release_count = 1.0;
-        let mut simulation = RigidSimulation::default();
+        let mut simulation = RigidSimulation::default().with_step(live_step());
         simulation.advance(bodies.clone(), GRAVITY, Seconds::ZERO, 1.0, 0.0).unwrap();
         let boundary = 0.5;
         simulation
@@ -3981,9 +3872,8 @@ mod tests {
 
     #[test]
     fn live_accepts_two_fixed_intervals_then_reanchors_without_backlog() {
-        let _live = PhysicsStepScope::for_render(false);
         let bodies = one_body([0.0, 4.0, 0.0]);
-        let mut simulation = RigidSimulation::default();
+        let mut simulation = RigidSimulation::default().with_step(live_step());
         simulation.advance(bodies.clone(), GRAVITY, Seconds::ZERO, 1.0, 0.0).unwrap();
         // Discard the overload, including its fractional remainder.
         let now = Seconds(3.0 + FRAME / 2.0);
@@ -4007,7 +3897,6 @@ mod tests {
 
     #[test]
     fn animated_pose_timeline_covers_each_live_endpoint() {
-        let _live = PhysicsStepScope::for_render(false);
         let mut moving = std::array::from_fn(|_| None);
         moving[0] = Some(RigidBody {
             kind: 2,
@@ -4015,7 +3904,7 @@ mod tests {
             ..RigidBody::default()
         });
         moving[1] = Some(body([0.4, 0.0, 0.0]));
-        let mut simulation = RigidSimulation::default();
+        let mut simulation = RigidSimulation::default().with_step(live_step());
         simulation.advance(moving.clone(), [0.0; 3], Seconds::ZERO, 1.0, 0.0).unwrap();
         moving[0].as_mut().unwrap().transform.pos[0] = -0.55;
         simulation.advance(moving.clone(), [0.0; 3], Seconds(0.5), 1.0, 0.0).unwrap();
@@ -4033,7 +3922,7 @@ mod tests {
             ..RigidBody::default()
         });
         rotating[1] = Some(body([1.0, 0.0, -1.0]));
-        let mut rotation_simulation = RigidSimulation::default();
+        let mut rotation_simulation = RigidSimulation::default().with_step(live_step());
         rotation_simulation.advance(rotating.clone(), [0.0; 3], Seconds::ZERO, 1.0, 0.0).unwrap();
         rotating[0].as_mut().unwrap().transform.rot_euler[1] = std::f32::consts::FRAC_PI_4;
         rotation_simulation.advance(rotating.clone(), [0.0; 3], Seconds(0.5), 1.0, 0.0).unwrap();
@@ -4045,12 +3934,11 @@ mod tests {
 
     #[test]
     fn paused_authored_edit_is_visible_without_pending_backlog() {
-        let _live = PhysicsStepScope::for_render(false);
         let mut bodies = std::array::from_fn(|_| None);
         let mut animated = body([-2.0, 0.0, 0.0]);
         animated.kind = 2;
         bodies[0] = Some(animated);
-        let mut simulation = RigidSimulation::default();
+        let mut simulation = RigidSimulation::default().with_step(live_step());
         simulation.advance(bodies.clone(), [0.0; 3], Seconds::ZERO, 1.0, 0.0).unwrap();
         bodies[0].as_mut().unwrap().transform.pos[0] = -0.5;
         simulation.advance(bodies.clone(), [0.0; 3], Seconds(0.5), 1.0, 0.0).unwrap();
@@ -4130,13 +4018,12 @@ mod tests {
 
     #[test]
     fn paused_edit_stays_visible_without_sweeping_a_dynamic_body() {
-        let _live = PhysicsStepScope::for_render(false);
         let mut bodies = std::array::from_fn(|_| None);
         let mut animated = body([-2.0, 0.0, 0.0]);
         animated.kind = 2;
         bodies[0] = Some(animated);
         bodies[1] = Some(body([2.0, 0.0, 0.0]));
-        let mut simulation = RigidSimulation::default();
+        let mut simulation = RigidSimulation::default().with_step(live_step());
         simulation.advance(bodies.clone(), [0.0; 3], Seconds::ZERO, 1.0, 0.0).unwrap();
         bodies[0].as_mut().unwrap().transform.pos[0] = -1.0;
         simulation.advance(bodies.clone(), [0.0; 3], Seconds(0.5), 1.0, 0.0).unwrap();
@@ -4191,11 +4078,12 @@ mod tests {
             let t = FRAME * f64::from(quarter) / 4.0;
             bodies[0].as_mut().unwrap().transform.pos[0] =
                 -2.0 * (std::f32::consts::TAU * quarter as f32 / 4.0).cos();
-            let _sample = PhysicsAuthoredSampleScope::new();
+            simulation.set_step(SimStep::default().authored_sample());
             simulation
                 .advance(bodies.clone(), [0.0; 3], Seconds(t), 1.0, 0.0)
                 .unwrap();
         }
+        simulation.set_step(SimStep::default());
         bodies[0].as_mut().unwrap().transform.pos[0] = -2.0;
         assert!(simulation.animated_microsteps(&bodies, None, FRAME).0 > 1);
         simulation
@@ -4213,7 +4101,6 @@ mod tests {
 
     #[test]
     fn nonlinear_contacts_accept_regular_and_irregular_live_spans() {
-        let _live = PhysicsStepScope::for_render(false);
         fn trajectory(tick: usize) -> [Option<RigidBody>; MAX_BODIES] {
             let mut bodies = std::array::from_fn(|_| None);
             let mut animated = body([
@@ -4229,13 +4116,14 @@ mod tests {
         }
 
         fn run(irregular: bool) -> ([f32; 3], f64, Seconds) {
-            let mut simulation = RigidSimulation::default();
+            let mut simulation = RigidSimulation::default().with_step(live_step());
             simulation.advance(trajectory(0), [0.0; 3], Seconds::ZERO, 1.0, 0.0).unwrap();
             for sample in 1..=32 {
                 let time = Seconds(sample as f64 / 240.0);
                 if irregular && sample != 32 {
-                    let _authored = PhysicsAuthoredSampleScope::new();
+                    simulation.set_step(live_step().authored_sample());
                     simulation.advance(trajectory(sample), [0.0; 3], time, 1.0, 0.0).unwrap();
+                    simulation.set_step(live_step());
                 } else {
                     simulation.advance(trajectory(sample), [0.0; 3], time, 1.0, 0.0).unwrap();
                 }
@@ -4351,10 +4239,9 @@ mod tests {
 
     #[test]
     fn ordinary_live_caps_progress_at_two_intervals_per_display_frame() {
-        let _live = PhysicsStepScope::for_render(false);
         let bodies = one_body([0.0, 4.0, 0.0]);
         for fps in [20, 24, 30, 60] {
-            let mut simulation = RigidSimulation::default();
+            let mut simulation = RigidSimulation::default().with_step(live_step());
             simulation.advance(bodies.clone(), GRAVITY, Seconds::ZERO, 1.0, 0.0).unwrap();
             for frame in 1..=fps {
                 simulation
@@ -4378,8 +4265,9 @@ mod tests {
         for rate in manifold_physics::SimRate::ALL {
             let project_fps = rate.hz();
             let run = |fps, offline| {
-                let _scope = PhysicsStepScope::for_settings(offline, manifold_physics::PhysicsSettings { sim_rate: rate });
-                let mut simulation = RigidSimulation::default();
+                let interval = Seconds(rate.interval());
+                let step = if offline { SimStep::export(interval) } else { SimStep::live(interval) };
+                let mut simulation = RigidSimulation::default().with_step(step);
                 let bodies = one_body([0.0, 4.0, 0.0]);
                 for frame in 0..=fps {
                     simulation.advance(bodies.clone(), GRAVITY,
@@ -4396,9 +4284,8 @@ mod tests {
 
     #[test]
     fn live_endpoint_has_no_backlog_and_reset_clears_state() {
-        let _live = PhysicsStepScope::for_render(false);
         let bodies = one_body([0.0, 4.0, 0.0]);
-        let mut simulation = RigidSimulation::default();
+        let mut simulation = RigidSimulation::default().with_step(live_step());
         simulation.advance(bodies.clone(), GRAVITY, Seconds::ZERO, 1.0, 0.0).unwrap();
         simulation.advance(bodies.clone(), GRAVITY, Seconds(3.0), 1.0, 0.0).unwrap();
         assert_eq!(simulation.pending_time, Seconds::ZERO);
@@ -4416,35 +4303,19 @@ mod tests {
     }
 
     #[test]
-    fn render_scope_restores_live_and_export_policy() {
-        assert_eq!(PREVIEW_STEP_BUDGET.with(std::cell::Cell::get), None);
-        {
-            let budget = std::time::Duration::from_millis(33);
-            let _live = PhysicsStepScope::with_preview_budget(false, budget);
-            assert_eq!(PREVIEW_STEP_BUDGET.with(std::cell::Cell::get), Some(budget));
-            {
-                let _export = PhysicsStepScope::for_render(true);
-                long_catch_up_matches_regular_ticks_and_keeps_running();
-                assert_eq!(PREVIEW_STEP_BUDGET.with(std::cell::Cell::get), None);
-            }
-            assert_eq!(PREVIEW_STEP_BUDGET.with(std::cell::Cell::get), Some(budget));
-        }
-        assert_eq!(PREVIEW_STEP_BUDGET.with(std::cell::Cell::get), None);
+    fn step_budget_exists_only_live() {
+        let budget = std::time::Duration::from_millis(33);
+        let live = live_step().with_preview_budget(budget);
+        assert_eq!(live.budget(), Some(budget));
+        assert_eq!(SimStep::export(FIXED_TICK).with_preview_budget(budget).budget(), None);
+        assert_eq!(SimStep::default().budget(), None);
     }
 
     #[test]
-    fn offline_history_drain_scope_guards_live_preview_and_restores_state() {
-        assert!(!history_drain_requested());
-        {
-            let _drain = PhysicsHistoryDrainScope::new();
-            assert!(history_drain_requested());
-            {
-                let _live = PhysicsStepScope::with_preview_budget(false, std::time::Duration::ZERO);
-                assert!(!history_drain_requested());
-            }
-            assert!(history_drain_requested());
-        }
-        assert!(!history_drain_requested());
+    fn history_drain_is_honoured_only_in_export() {
+        assert!(!SimStep::export(FIXED_TICK).history_drain_active());
+        assert!(SimStep::export(FIXED_TICK).draining_history().history_drain_active());
+        assert!(!live_step().draining_history().history_drain_active());
     }
 
     #[test]
@@ -4455,11 +4326,12 @@ mod tests {
             .advance(bodies.clone(), GRAVITY, Seconds::ZERO, 1.0, 0.0)
             .unwrap();
 
+        let authored = SimStep::default().authored_sample();
         for sample in 1..=1024 {
-            let _authored = PhysicsAuthoredSampleScope::new();
+            simulation.set_step(authored);
             let time = Seconds(sample as f64 / 240.0);
             if sample % 64 == 0 {
-                let _drain = PhysicsHistoryDrainScope::new();
+                simulation.set_step(authored.draining_history());
                 simulation
                     .advance(bodies.clone(), GRAVITY, time, 1.0, 0.0)
                     .unwrap();
@@ -4748,7 +4620,6 @@ mod tests {
 
     #[test]
     fn bulk_fixed_ticks_match_across_frame_partitions() {
-        let _export = PhysicsStepScope::for_render(true);
         let mut full = RigidSimulation::default();
         let mut half = RigidSimulation::default();
         for (simulation, frames, dt) in [(&mut full, 60, FRAME), (&mut half, 120, FRAME / 2.0)] {

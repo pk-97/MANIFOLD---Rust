@@ -39,7 +39,7 @@ use manifold_node_engine::ports::EXACT_F32_COUNT;
 use crate::liquid::{ROLE_PORTS, WATER_DENSITY};
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_core::scene_impulse::RigidImpulseTargets;
-use crate::physics::{RigidSceneInputs, RigidSceneObservation, offline_simulation};
+use crate::physics::{RigidSceneInputs, RigidSceneObservation};
 use crate::physics_events::ResolvedNodeImpulse;
 use crate::node::{PhysicsNode, PhysicsNodeRegistration};
 use manifold_node_engine::primitive::Primitive;
@@ -238,6 +238,8 @@ pub struct Coupling {
     owner: Option<LiquidRigidOwner>,
     /// This frame's domain box and closed faces: the bodies' walls.
     walls: DomainWalls,
+    /// This frame's simulation step, handed to the rigid owner.
+    step: crate::physics::SimStep,
     /// Rows before the pending tick's first coupled body's (its Collider
     /// roles'), so its reaction decodes against the bodies it ran with.
     offset: Option<usize>,
@@ -551,11 +553,16 @@ impl Primitive for GpuFlipDomain {
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
+        self.clock.set_live_load(crate::physics::live_load(ctx.sim_step));
+        self.coupled.step = ctx.sim_step;
+        if let Some(owner) = self.coupled.owner.as_mut() {
+            owner.set_step(ctx.sim_step);
+        }
         let mut roles: [Option<FluidRole>; MAX_FLUID_ROLES] = std::array::from_fn(|_| None);
         let role_pending = crate::liquid::read_roles(&ctx.inputs, &ROLE_PORTS, &mut roles);
         // A physics sample reads the force field and the roles at a tick's
         // start; it never advances time.
-        if crate::physics::authored_sample_only() {
+        if ctx.sim_step.authored_sample_only {
             self.clock.observe_speed(ctx.time.seconds.0, ctx.scalar_or_param("speed", 1.0));
             let field = ctx.inputs.cpu_value::<FieldValue>("acceleration_field");
             self.fields.observe_sample(ctx.time.seconds.0, field.as_ref());
@@ -625,7 +632,7 @@ impl Primitive for GpuFlipDomain {
             }
             self.body_buffers.upload(gpu, &self.bodies, fresh && self.rows_fresh, "node.gpu_flip_domain.bodies");
         }
-        let uploaded = match ctx.gpu.as_deref_mut().map(|gpu| self.fields.upload(gpu, offline_simulation())) {
+        let uploaded = match ctx.gpu.as_deref_mut().map(|gpu| self.fields.upload(gpu, ctx.sim_step.offline())) {
             Some(Ok(())) => true,
             Some(Err(error)) => {
                 ctx.error(error);
@@ -665,10 +672,11 @@ impl PhysicsNode for GpuFlipDomain {
         observation: Option<&RigidSceneObservation>,
         colliders: RigidImpulseTargets,
         error: Option<&str>,
+        authored_sample_only: bool,
     ) {
         // A replay sample records the scene at a tick's start; a pending one
         // records nothing, and `run` closes the sample.
-        if crate::physics::authored_sample_only() {
+        if authored_sample_only {
             if let Some(observation) = observation.filter(|_| error.is_none()) {
                 self.coupled.scenes.observe(observation.transport.0, Some(&observation.inputs));
             }
@@ -751,7 +759,7 @@ impl GpuFlipDomain {
         if !speed.is_finite() || !(0.0..=4.0).contains(&speed) || gravity.iter().any(|g| !g.is_finite()) {
             return Err("GPU FLIP: Simulation Speed must be between 0 and 4, and gravity must be finite".into());
         }
-        let offline = offline_simulation();
+        let offline = ctx.sim_step.offline();
         if let Some(error) = self.coupled.host_error.take() {
             return Err(error);
         }
@@ -798,7 +806,7 @@ impl GpuFlipDomain {
         self.setup = Some(geometry.setup);
         let frame = self.clock.advance(
             ctx.time.seconds.0,
-            crate::physics::simulation_interval(),
+            ctx.sim_step.interval.0,
             speed,
             ctx.scalar_or_param("reset", 0.0),
             restart,
@@ -939,7 +947,7 @@ impl GpuFlipDomain {
     /// on its reset or a change of bodies. False while the world's inputs are
     /// still pending.
     fn observe_rigid(&mut self, transport: f64, speed: f32) -> Result<bool, String> {
-        let Coupling { observation, colliders, error, previous_reset, owner, owner_fresh, epochs, walls, .. } = &mut self.coupled;
+        let Coupling { observation, colliders, error, previous_reset, owner, owner_fresh, epochs, walls, step, .. } = &mut self.coupled;
         if let Some(error) = error {
             return Err(error.clone());
         }
@@ -959,7 +967,9 @@ impl GpuFlipDomain {
         *previous_reset = Some(observation.reset);
         if reset_edge || owner.as_ref().is_none_or(|owner| !owner.matches(&observation.inputs, *walls, *colliders)) {
             *epochs += 1;
-            *owner = Some(LiquidRigidOwner::new(&observation.inputs, *walls, *colliders, *epochs, owner.as_ref())?);
+            let mut built = LiquidRigidOwner::new(&observation.inputs, *walls, *colliders, *epochs, owner.as_ref())?;
+            built.set_step(*step);
+            *owner = Some(built);
             *owner_fresh = true;
         }
         Ok(true)
@@ -1023,7 +1033,8 @@ impl GpuFlipDomain {
     fn rebuild_owner(&mut self) -> Result<(), String> {
         let observation = self.coupled.observation.as_ref().ok_or("GPU FLIP coupling: the rigid observation is missing")?;
         self.coupled.epochs += 1;
-        let owner = LiquidRigidOwner::new(&observation.inputs, self.coupled.walls, self.coupled.colliders, self.coupled.epochs, self.coupled.owner.as_ref())?;
+        let mut owner = LiquidRigidOwner::new(&observation.inputs, self.coupled.walls, self.coupled.colliders, self.coupled.epochs, self.coupled.owner.as_ref())?;
+        owner.set_step(self.coupled.step);
         self.coupled.owner = Some(owner);
         Ok(())
     }

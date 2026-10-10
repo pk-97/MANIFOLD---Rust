@@ -135,7 +135,7 @@ inventory::submit! {
         array_ports: &[],
         recompute: |ctx| Some(vec![
             ctx.frame.seconds.0 as f32,
-            crate::physics::particle_frame_duration(ctx.frame.delta),
+            crate::physics::particle_frame_duration(ctx.frame.delta, ctx.sim_step),
         ]),
     }
 }
@@ -197,7 +197,7 @@ impl Primitive for ApplyRadialBurstToParticles {
         }
 
         let time_val = ctx.time.seconds.0 as f32;
-        let dt_scaled = crate::physics::particle_frame_duration(ctx.time.delta);
+        let dt_scaled = crate::physics::particle_frame_duration(ctx.time.delta, ctx.sim_step);
 
         let gpu = ctx.gpu_encoder();
         let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);

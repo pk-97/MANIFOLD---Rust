@@ -531,9 +531,9 @@ impl Primitive for LiquidState {
         if interior_grid == Some(0) {
             refused = Some("Liquid State: interior distance has zero cells".to_string());
         }
+        let live_recovery = target_time.is_some() && !ctx.sim_step.offline();
         let gpu = ctx.gpu_encoder();
         let clock = gpu.device.frame_clock();
-        let live_recovery = target_time.is_some() && !crate::physics::offline_simulation();
         let recover = self.poll_readbacks(clock.as_ref(), live_recovery);
         if self.identity_reset && self.epoch == Some(epoch) {
             // The executor restarts the domain clock (and coupled rigid state).

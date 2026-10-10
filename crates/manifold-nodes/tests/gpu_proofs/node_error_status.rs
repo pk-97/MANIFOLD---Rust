@@ -10,7 +10,6 @@ use manifold_gpu::GpuTextureFormat;
 use manifold_node_engine::runtime::frame_status::{FrameRenderFailure, FrameRenderStatus};
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
 use manifold_node_engine::persistence::PrimitiveRegistry;
-use manifold_nodes_water::physics::PhysicsStepScope;
 use manifold_node_engine::runtime::preset_context::PresetContext;
 use manifold_node_engine::runtime::PresetRuntime;
 use manifold_node_engine::gpu::render_target::RenderTarget;
@@ -48,7 +47,6 @@ fn node_error_fails_the_frame() {
     )
     .unwrap();
     let target = RenderTarget::new(&harness.device, WIDTH, HEIGHT, GpuTextureFormat::Rgba16Float, "node-error");
-    let _offline = PhysicsStepScope::for_render(true);
     let context = PresetContext {
         time: 0.0,
         beat: 0.0,

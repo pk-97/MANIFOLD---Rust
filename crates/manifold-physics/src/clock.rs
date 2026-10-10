@@ -22,26 +22,6 @@ pub struct LiveLoad {
     pub budget: Seconds,
 }
 
-thread_local! {
-    static LIVE_LOAD: std::cell::Cell<Option<LiveLoad>> = const { std::cell::Cell::new(None) };
-}
-
-/// Publish this frame's live load to every clock advanced on this thread until
-/// the guard drops. None (export, tests, previews) keeps the two-interval cap.
-pub fn live_load_scope(load: Option<LiveLoad>) -> LiveLoadScope {
-    LiveLoadScope { previous: LIVE_LOAD.replace(load), _thread_bound: std::marker::PhantomData }
-}
-
-pub struct LiveLoadScope {
-    previous: Option<LiveLoad>,
-    _thread_bound: std::marker::PhantomData<*const ()>,
-}
-
-impl Drop for LiveLoadScope {
-    fn drop(&mut self) {
-        LIVE_LOAD.set(self.previous);
-    }
-}
 
 /// Accepted frame intervals and transport/display endpoints.
 #[derive(Clone, Debug, PartialEq)]
@@ -117,6 +97,9 @@ pub struct SimulationClock {
     /// Retain the continuity anchor and all speed edits after accepted time.
     speed_history: Vec<SpeedAnchor>,
     history_snapshots: Vec<Arc<Vec<SpeedAnchor>>>,
+    /// This frame's live load, set by the owner before it observes or
+    /// advances. None (export, tests, previews) keeps the two-interval cap.
+    live_load: Option<LiveLoad>,
 }
 
 /// A clone advances on its own, so it never inherits the original's identity:
@@ -184,10 +167,16 @@ impl SimulationClock {
     /// Intervals this live frame may accept. The load is fixed for the whole
     /// frame, so observers and `advance` agree on the cap.
     fn live_cap(&self) -> u64 {
-        match LIVE_LOAD.get() {
+        match self.live_load {
             Some(load) if load.previous.0 > load.budget.0 => 1,
             _ => MAX_LIVE_INTERVALS,
         }
+    }
+
+    /// Set once per frame, before `simulation_at`, `tick_starts` or
+    /// `advance`, so observers and `advance` agree on the cap.
+    pub fn set_live_load(&mut self, load: Option<LiveLoad>) {
+        self.live_load = load;
     }
 
     pub fn rate_changed(&self, interval: f64) -> bool {
@@ -904,7 +893,7 @@ mod tests {
         let mut clock = SimulationClock::default();
         clock.advance(0.0, TICK, 1.0, 0.0, false, false);
         {
-            let _load = live_load_scope(Some(late));
+            clock.set_live_load(Some(late));
             let mut starts = Vec::new();
             clock.tick_starts(-1.0, 2.5 * TICK, |_, tick| starts.push(tick));
             assert_eq!(starts, [0, 1]);
@@ -914,16 +903,15 @@ mod tests {
             assert!(frame.reanchored);
         }
         {
-            let _load = live_load_scope(Some(on_time));
+            clock.set_live_load(Some(on_time));
             let frame = clock.advance(5.0 * TICK, TICK, 1.0, 0.0, false, false);
             assert_eq!(frame.ticks, 2);
             assert!(!frame.reanchored);
         }
-        assert_eq!(LIVE_LOAD.get(), None);
 
         let mut export = SimulationClock::default();
         export.advance(0.0, TICK, 1.0, 0.0, false, true);
-        let _load = live_load_scope(Some(late));
+        export.set_live_load(Some(late));
         assert_eq!(export.advance(5.5 * TICK, TICK, 1.0, 0.0, false, true).ticks, 5);
     }
 
@@ -971,7 +959,7 @@ mod tests {
         let mut previous_dropped = 0.0;
         for (step, (offset, load, due, cap, reanchored)) in sequence.into_iter().enumerate() {
             transport += offset;
-            let _load = live_load_scope(load);
+            clock.set_live_load(load);
             let frame = clock.advance(transport, interval, 1.0, 0.0, false, false);
             let at = format!("frame {step}");
             assert_eq!(frame.due, due, "{at}");

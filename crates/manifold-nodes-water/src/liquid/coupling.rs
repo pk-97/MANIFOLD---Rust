@@ -306,6 +306,11 @@ impl LiquidRigidOwner {
 
     pub fn completed_time(&self) -> Seconds { self.completed_time }
 
+    /// The step the rigid worker runs under; the domain sets it each frame.
+    pub fn set_step(&mut self, step: crate::physics::SimStep) {
+        self.rigid.set_step(step);
+    }
+
     pub fn epoch(&self) -> u64 {
         self.epoch
     }
@@ -742,13 +747,13 @@ mod tests {
 
     #[test]
     fn liquid_coupled_reanchor_moves_only_authored_poses_without_an_extra_step() {
-        let _live = crate::physics::PhysicsStepScope::for_render(false);
         let mut inputs = scene();
         inputs.bodies[1] = inputs.bodies[0].clone();
         inputs.bodies[1].as_mut().unwrap().transform.pos[0] = 10.0;
         inputs.bodies[0].as_mut().unwrap().kind = 2;
         let colliders = RigidImpulseTargets { bodies: 3, copies: false };
         let mut owner = LiquidRigidOwner::new(&inputs, OPEN, colliders, 1, None).unwrap();
+        owner.set_step(crate::physics::SimStep::live(Seconds(TICK)));
         // More than one live frame's budget has already completed before
         // an overloaded frame reanchors the authored scene.
         for tick in 0..6 {

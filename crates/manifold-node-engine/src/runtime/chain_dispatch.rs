@@ -158,6 +158,7 @@ pub fn dispatch_chain<'a>(
     scope: &str,
     profiling: bool,
     rt_quality: crate::exec::effect_node::RtQuality,
+    sim_step: crate::exec::effect_node::SimStep,
     layer_sources: &crate::runtime::layer_skin::LayerSkinRegistry,
     project_tempo: Option<&ProjectTempo>,
 ) -> Option<&'a GpuTexture> {
@@ -173,6 +174,7 @@ pub fn dispatch_chain<'a>(
         scope,
         profiling,
         rt_quality,
+        sim_step,
         layer_sources,
         None,
         &mut viewport_error,
@@ -196,6 +198,7 @@ pub fn dispatch_chain_with_scene_viewport<'a>(
     scope: &str,
     profiling: bool,
     rt_quality: crate::exec::effect_node::RtQuality,
+    sim_step: crate::exec::effect_node::SimStep,
     layer_sources: &crate::runtime::layer_skin::LayerSkinRegistry,
     scene_viewport: Option<(
         &EffectId,
@@ -289,6 +292,7 @@ pub fn dispatch_chain_with_scene_viewport<'a>(
     // rebuild swaps the executor, so per-call re-application keeps the value
     // from going stale.
     cg.set_rt_quality(rt_quality);
+    cg.set_sim_step(sim_step);
     cg.set_layer_skin_registry(Some(layer_sources));
     cg.set_project_tempo(project_tempo);
     if let Some((effect_id, node_id, config)) = scene_viewport {

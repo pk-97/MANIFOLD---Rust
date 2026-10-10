@@ -307,9 +307,9 @@ fn gpu_flip_whitewater_emits() {
 #[test]
 fn whitewater_live_scene_updates_on_the_lifecycle_thread() {
     let scene = WaterScene::dam_break(64);
-    let _live = manifold_nodes_water::physics::PhysicsStepScope::for_render(false);
     let mut show = Show::new(vendored_render_def(scene), (320, 180), true, &[]);
     show.restart();
+    show.set_sim_step(manifold_nodes_water::physics::SimStep::live(manifold_core::Seconds(1.0 / 60.0)));
     let (mut content, mut worker) = (Vec::new(), Vec::new());
     let mut last = [0.0; 8];
     for frame in 1..=180 {
@@ -1252,10 +1252,12 @@ fn liquid_frame_live_held_frame_matches_offline() {
             offline.readback(),
         ));
     }
-    let _live = manifold_nodes_water::physics::PhysicsStepScope::with_preview_budget(false, std::time::Duration::from_secs(1));
+    let live_step = manifold_nodes_water::physics::SimStep::live(manifold_core::Seconds(1.0 / 60.0))
+        .with_preview_budget(std::time::Duration::from_secs(1));
     // Live runs exact: the cursor presents behind the request by design.
     let mut live = Show::new(authored_cursor_history_def(0.0), (96, 54), false, &[]);
     live.restart();
+    live.set_sim_step(live_step);
     let mut holds = 0;
     for (k, (probes, particles_a, particles_b, pixels)) in expected.iter().enumerate() {
         live.frame(false);
@@ -1281,9 +1283,11 @@ fn liquid_frame_live_held_frame_matches_offline() {
 /// found by B's time, and at least one frame shows a B older than the state.
 #[test]
 fn liquid_frame_whitewater_reads_the_selected_slot() {
-    let _live = manifold_nodes_water::physics::PhysicsStepScope::with_preview_budget(false, std::time::Duration::from_secs(1));
+    let live_step = manifold_nodes_water::physics::SimStep::live(manifold_core::Seconds(1.0 / 60.0))
+        .with_preview_budget(std::time::Duration::from_secs(1));
     let mut show = Show::new(history_def(), (96, 54), false, &[]);
     show.restart();
+    show.set_sim_step(live_step);
     // Per frame: simulation time and the four classes the state then held.
     let mut published: Vec<(f32, [Vec<u8>; 4])> = Vec::new();
     let (mut behind, mut with_foam) = (0, 0);
@@ -1320,10 +1324,12 @@ fn liquid_frame_whitewater_reads_the_selected_slot() {
 /// scalars together, and names the error.
 #[test]
 fn liquid_frame_encode_failure_publishes_the_selected_outputs() {
-    let _live = manifold_nodes_water::physics::PhysicsStepScope::with_preview_budget(false, std::time::Duration::from_secs(1));
+    let live_step = manifold_nodes_water::physics::SimStep::live(manifold_core::Seconds(1.0 / 60.0))
+        .with_preview_budget(std::time::Duration::from_secs(1));
     let [mut clean, mut failing] = [(), ()].map(|()| {
         let mut show = Show::new(history_def(), (96, 54), false, &[]);
         show.restart();
+        show.set_sim_step(live_step);
         show
     });
     for frame in 0..30 {
