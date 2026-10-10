@@ -23,6 +23,29 @@ before the detector; the model exists at 48 kHz only. Hand-written Rust inferenc
 no ML library. The detector runs on its own worker thread per analysed send (CPU:
 about 38 candidates/s typical, 86 peak; one net ≈ 10 M multiply-adds each).
 
+## 1b. Threading (Peter, 2026-10-10) — obsolete when audio analysis leaves the content thread
+
+Trained detectors (kick now; snare, clap, hats and others later) run on a
+detector worker thread, one per analysed send, behind one interface: mono audio
+in, events stamped with their input sample index out. Today each send's audio is
+mixed on the content thread (capture mono plus audio-layer taps, summed) and
+analysed once per frame in `AudioModRuntime::update`, right before
+`engine.tick` reads the features. So, per frame:
+1. `update` hands every send's new mono samples to its worker (no allocation, no lock on the audio path);
+2. it waits for that worker's events with a hard cap of about 2 ms in total;
+3. the analyzer marks each event on the hop that contains its sample, or on the first hop after it if the event arrived late.
+
+Detector work is about 1 ms per frame, so fires normally land in the same frame. A
+late detector costs one frame (about 17 ms) and never stalls rendering past the
+cap. Offline paths (export, harnesses) run the same detectors inline, without
+the worker.
+
+This hand-off exists only because mixing happens on the content thread. If the
+audio path is re-architected so sends are mixed off the content thread, the
+workers should read that mix directly and publish events continuously; then
+the per-frame hand-off, the wait cap and the one-frame fallback all go away.
+Nothing else in the detectors depends on the frame.
+
 ## 2. The model file
 
 One file, `crates/manifold-audio/assets/kick_model.mkick`, built into the app with
