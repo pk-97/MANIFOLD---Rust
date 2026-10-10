@@ -561,7 +561,7 @@ PREFIX_ROWS += [(LIQUID_SRC, ext, package, modules, skips)
                 for (root, ext, package, modules, skips) in PREFIX_ROWS if root == RIGID_SRC and ext == ".rs"]
 PREFIX_ROWS += [
     (LIQUID_SRC, ".rs", "manifold-nodes-water", ["liquid::scene_contract"], []),
-    (LIQUID_SRC, ".rs", CATALOG_PACKAGE, ["contracts::water::"], []),
+    (LIQUID_SRC, ".rs", CATALOG_PACKAGE, ["contracts::water"], []),
 ]
 
 PREFIX_ROWS += [('crates/manifold-compositor/src/', ".wgsl", "manifold-nodes", ["wgsl_validation"], [])]
