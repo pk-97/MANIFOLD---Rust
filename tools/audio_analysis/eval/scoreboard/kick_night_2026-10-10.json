@@ -1,0 +1,4932 @@
+{
+ "status": "development research, no candidate promoted; reserved Waypoints / Know You're There untouched",
+ "date": "2026-10-10",
+ "source_commit": "6a3bb723f381414bc961f89b21166c34770d5c2b",
+ "labels": 381,
+ "tolerance_primary_ms": 70,
+ "reference": {
+  "baseline": [
+   223,
+   89
+  ],
+  "h16": [
+   285,
+   90,
+   "1 core fire"
+  ],
+  "h18": [
+   262,
+   89,
+   "loses Inhale 5.38/6.62"
+  ]
+ },
+ "reference_without_bad_guy": {
+  "baseline": [
+   208,
+   44
+  ],
+  "h16": [
+   270,
+   48
+  ],
+  "h18": [
+   247,
+   47
+  ]
+ },
+ "reserved_songs": "no audio for Waypoints or Know You're There exists in fixtures or caches; only reservation names",
+ "miss_causes_h18": {
+  "cutoff_transfer": 50,
+  "ranking": 64,
+  "refractory_or_matching": 3,
+  "no_timely_candidate": 2
+ },
+ "oracle_per_song_cutoff_diagnostic": {
+  "baseline": {
+   "matched": 274,
+   "extra": 43
+  },
+  "h16": {
+   "matched": 299,
+   "extra": 47
+  },
+  "h18": {
+   "matched": 289,
+   "extra": 38
+  }
+ },
+ "oracle_frontier": {
+  "baseline": {
+   "extras_for_90_per_track": {
+    "apricots_128bpm": 0,
+    "bad_guy_128bpm": 16,
+    "feel_the_vibration_174bpm": 0,
+    "inhale_exhale_145bpm": 3,
+    "tears_140bpm": 7,
+    "late_night": 17,
+    "midnight_patience": 654,
+    "miracle": 4,
+    "heavy_on_mind": 67
+   },
+   "pooled_with_track_floor": {
+    "feasible": false,
+    "labels": 381,
+    "best_balanced": {
+     "matched": 355,
+     "extra": 770,
+     "recall": 0.932,
+     "precision": 0.316
+    },
+    "best_matched_at_95_precision": 0,
+    "best_recall_at_95_precision": 0.0
+   },
+   "pooled_no_track_floor": {
+    "feasible": false,
+    "labels": 381,
+    "best_balanced": {
+     "matched": 302,
+     "extra": 80,
+     "recall": 0.793,
+     "precision": 0.791
+    },
+    "best_matched_at_95_precision": 213,
+    "best_recall_at_95_precision": 0.559
+   },
+   "pooled_without_bad_guy": {
+    "feasible": false,
+    "labels": 366,
+    "best_balanced": {
+     "matched": 291,
+     "extra": 74,
+     "recall": 0.795,
+     "precision": 0.797
+    },
+    "best_matched_at_95_precision": 213,
+    "best_recall_at_95_precision": 0.582
+   },
+   "pooled_without_bad_guy_with_track_floor": {
+    "feasible": false,
+    "labels": 366,
+    "best_balanced": {
+     "matched": 340,
+     "extra": 754,
+     "recall": 0.929,
+     "precision": 0.311
+    },
+    "best_matched_at_95_precision": 0,
+    "best_recall_at_95_precision": 0.0
+   }
+  },
+  "h16": {
+   "extras_for_90_per_track": {
+    "apricots_128bpm": 0,
+    "bad_guy_128bpm": 16,
+    "feel_the_vibration_174bpm": 0,
+    "inhale_exhale_145bpm": 10,
+    "tears_140bpm": 2,
+    "late_night": 1,
+    "midnight_patience": 212,
+    "miracle": 2,
+    "heavy_on_mind": 68
+   },
+   "pooled_with_track_floor": {
+    "feasible": false,
+    "labels": 381,
+    "best_balanced": {
+     "matched": 352,
+     "extra": 312,
+     "recall": 0.924,
+     "precision": 0.53
+    },
+    "best_matched_at_95_precision": 0,
+    "best_recall_at_95_precision": 0.0
+   },
+   "pooled_no_track_floor": {
+    "feasible": false,
+    "labels": 381,
+    "best_balanced": {
+     "matched": 315,
+     "extra": 67,
+     "recall": 0.827,
+     "precision": 0.825
+    },
+    "best_matched_at_95_precision": 258,
+    "best_recall_at_95_precision": 0.677
+   },
+   "pooled_without_bad_guy": {
+    "feasible": false,
+    "labels": 366,
+    "best_balanced": {
+     "matched": 304,
+     "extra": 60,
+     "recall": 0.831,
+     "precision": 0.835
+    },
+    "best_matched_at_95_precision": 256,
+    "best_recall_at_95_precision": 0.699
+   },
+   "pooled_without_bad_guy_with_track_floor": {
+    "feasible": false,
+    "labels": 366,
+    "best_balanced": {
+     "matched": 338,
+     "extra": 296,
+     "recall": 0.923,
+     "precision": 0.533
+    },
+    "best_matched_at_95_precision": 0,
+    "best_recall_at_95_precision": 0.0
+   }
+  },
+  "h18": {
+   "extras_for_90_per_track": {
+    "apricots_128bpm": 0,
+    "bad_guy_128bpm": 16,
+    "feel_the_vibration_174bpm": 0,
+    "inhale_exhale_145bpm": 6,
+    "tears_140bpm": 4,
+    "late_night": 2,
+    "midnight_patience": 575,
+    "miracle": 2,
+    "heavy_on_mind": 61
+   },
+   "pooled_with_track_floor": {
+    "feasible": false,
+    "labels": 381,
+    "best_balanced": {
+     "matched": 355,
+     "extra": 669,
+     "recall": 0.932,
+     "precision": 0.347
+    },
+    "best_matched_at_95_precision": 0,
+    "best_recall_at_95_precision": 0.0
+   },
+   "pooled_no_track_floor": {
+    "feasible": false,
+    "labels": 381,
+    "best_balanced": {
+     "matched": 311,
+     "extra": 71,
+     "recall": 0.816,
+     "precision": 0.814
+    },
+    "best_matched_at_95_precision": 255,
+    "best_recall_at_95_precision": 0.669
+   },
+   "pooled_without_bad_guy": {
+    "feasible": false,
+    "labels": 366,
+    "best_balanced": {
+     "matched": 300,
+     "extra": 66,
+     "recall": 0.82,
+     "precision": 0.82
+    },
+    "best_matched_at_95_precision": 254,
+    "best_recall_at_95_precision": 0.694
+   },
+   "pooled_without_bad_guy_with_track_floor": {
+    "feasible": false,
+    "labels": 366,
+    "best_balanced": {
+     "matched": 340,
+     "extra": 653,
+     "recall": 0.929,
+     "precision": 0.342
+    },
+    "best_matched_at_95_precision": 0,
+    "best_recall_at_95_precision": 0.0
+   }
+  },
+  "h21_h18_gated_linear": {
+   "extras_for_90_per_track": {
+    "apricots_128bpm": 0,
+    "bad_guy_128bpm": 16,
+    "feel_the_vibration_174bpm": 0,
+    "inhale_exhale_145bpm": 3,
+    "tears_140bpm": 7,
+    "late_night": 4,
+    "midnight_patience": 638,
+    "miracle": 2,
+    "heavy_on_mind": 58
+   },
+   "pooled_with_track_floor": {
+    "feasible": false,
+    "labels": 381,
+    "best_balanced": {
+     "matched": 357,
+     "extra": 735,
+     "recall": 0.937,
+     "precision": 0.327
+    },
+    "best_matched_at_95_precision": 0,
+    "best_recall_at_95_precision": 0.0
+   },
+   "pooled_no_track_floor": {
+    "feasible": false,
+    "labels": 381,
+    "best_balanced": {
+     "matched": 308,
+     "extra": 73,
+     "recall": 0.808,
+     "precision": 0.808
+    },
+    "best_matched_at_95_precision": 230,
+    "best_recall_at_95_precision": 0.604
+   },
+   "pooled_without_bad_guy": {
+    "feasible": false,
+    "labels": 366,
+    "best_balanced": {
+     "matched": 299,
+     "extra": 67,
+     "recall": 0.817,
+     "precision": 0.817
+    },
+    "best_matched_at_95_precision": 230,
+    "best_recall_at_95_precision": 0.628
+   },
+   "pooled_without_bad_guy_with_track_floor": {
+    "feasible": false,
+    "labels": 366,
+    "best_balanced": {
+     "matched": 342,
+     "extra": 719,
+     "recall": 0.934,
+     "precision": 0.322
+    },
+    "best_matched_at_95_precision": 0,
+    "best_recall_at_95_precision": 0.0
+   }
+  },
+  "h22_main": {
+   "extras_for_90_per_track": {
+    "apricots_128bpm": 0,
+    "bad_guy_128bpm": 16,
+    "feel_the_vibration_174bpm": 0,
+    "inhale_exhale_145bpm": 5,
+    "tears_140bpm": 4,
+    "late_night": 13,
+    "midnight_patience": 646,
+    "miracle": 3,
+    "heavy_on_mind": 47
+   },
+   "pooled_with_track_floor": {
+    "feasible": false,
+    "labels": 381,
+    "best_balanced": {
+     "matched": 357,
+     "extra": 741,
+     "recall": 0.937,
+     "precision": 0.325
+    },
+    "best_matched_at_95_precision": 0,
+    "best_recall_at_95_precision": 0.0
+   },
+   "pooled_no_track_floor": {
+    "feasible": false,
+    "labels": 381,
+    "best_balanced": {
+     "matched": 305,
+     "extra": 74,
+     "recall": 0.801,
+     "precision": 0.805
+    },
+    "best_matched_at_95_precision": 223,
+    "best_recall_at_95_precision": 0.585
+   },
+   "pooled_without_bad_guy": {
+    "feasible": false,
+    "labels": 366,
+    "best_balanced": {
+     "matched": 296,
+     "extra": 71,
+     "recall": 0.809,
+     "precision": 0.807
+    },
+    "best_matched_at_95_precision": 223,
+    "best_recall_at_95_precision": 0.609
+   },
+   "pooled_without_bad_guy_with_track_floor": {
+    "feasible": false,
+    "labels": 366,
+    "best_balanced": {
+     "matched": 342,
+     "extra": 725,
+     "recall": 0.934,
+     "precision": 0.321
+    },
+    "best_matched_at_95_precision": 0,
+    "best_recall_at_95_precision": 0.0
+   }
+  }
+ },
+ "oracle_blocking_cases_h22": {
+  "costly_label_classes": {
+   "visible_but_ranked_low": 41,
+   "masked_in_mix": 18,
+   "label_without_kick_stem_attack": 23
+  },
+  "extras_at_90_classes": {
+   "non_kick_drum_hit": 20,
+   "other_low_band_onset": 609,
+   "bass_line_onset": 76,
+   "kick_stem_attack_present": 29
+  },
+  "per_track": {
+   "apricots_128bpm": {
+    "oracle": [
+     14,
+     0
+    ],
+    "extras_at_90": 0,
+    "costly": {},
+    "extras": {}
+   },
+   "bad_guy_128bpm": {
+    "oracle": [
+     0,
+     0
+    ],
+    "extras_at_90": 16,
+    "costly": {
+     "visible_but_ranked_low": 12,
+     "masked_in_mix": 1
+    },
+    "extras": {
+     "non_kick_drum_hit": 16
+    }
+   },
+   "feel_the_vibration_174bpm": {
+    "oracle": [
+     15,
+     0
+    ],
+    "extras_at_90": 0,
+    "costly": {},
+    "extras": {}
+   },
+   "inhale_exhale_145bpm": {
+    "oracle": [
+     10,
+     2
+    ],
+    "extras_at_90": 5,
+    "costly": {
+     "visible_but_ranked_low": 1
+    },
+    "extras": {
+     "other_low_band_onset": 3,
+     "non_kick_drum_hit": 1,
+     "bass_line_onset": 1
+    }
+   },
+   "tears_140bpm": {
+    "oracle": [
+     6,
+     1
+    ],
+    "extras_at_90": 4,
+    "costly": {
+     "visible_but_ranked_low": 3,
+     "label_without_kick_stem_attack": 1
+    },
+    "extras": {
+     "non_kick_drum_hit": 3,
+     "other_low_band_onset": 1
+    }
+   },
+   "late_night": {
+    "oracle": [
+     65,
+     2
+    ],
+    "extras_at_90": 13,
+    "costly": {
+     "masked_in_mix": 2,
+     "label_without_kick_stem_attack": 1,
+     "visible_but_ranked_low": 1
+    },
+    "extras": {
+     "bass_line_onset": 9,
+     "other_low_band_onset": 3,
+     "kick_stem_attack_present": 1
+    }
+   },
+   "midnight_patience": {
+    "oracle": [
+     39,
+     7
+    ],
+    "extras_at_90": 646,
+    "costly": {
+     "label_without_kick_stem_attack": 21,
+     "visible_but_ranked_low": 11,
+     "masked_in_mix": 11
+    },
+    "extras": {
+     "other_low_band_onset": 579,
+     "kick_stem_attack_present": 26,
+     "bass_line_onset": 41
+    }
+   },
+   "miracle": {
+    "oracle": [
+     28,
+     1
+    ],
+    "extras_at_90": 3,
+    "costly": {},
+    "extras": {
+     "kick_stem_attack_present": 1,
+     "other_low_band_onset": 2
+    }
+   },
+   "heavy_on_mind": {
+    "oracle": [
+     89,
+     14
+    ],
+    "extras_at_90": 47,
+    "costly": {
+     "visible_but_ranked_low": 13,
+     "masked_in_mix": 4
+    },
+    "extras": {
+     "other_low_band_onset": 21,
+     "bass_line_onset": 25,
+     "kick_stem_attack_present": 1
+    }
+   }
+  }
+ },
+ "hypotheses": {
+  "h19": {
+   "rule": {
+    "hypothesis": "H19",
+    "l2": 0.01,
+    "features": [
+     "glide_slope",
+     "glide_drop",
+     "pre_jump"
+    ],
+    "configurations": [
+     "baseline_linear15+glide",
+     "h18_.25+glide",
+     "h16_kernel+glide"
+    ],
+    "acceptance": ">=223 with <=70 extras OR >=250 with <=89 at 70ms; zero nine cores; <=1 baseline label lost per track",
+    "expected_failure": "glide relation reverses across songs; transferred weight helps Bad Guy/Inhale, hurts Late Night/Feel"
+   },
+   "rule_sha256": "e2ac936c2ccd623d8e5f1b4bfffd370148391aafe0e9436efeb8920e0d12646a",
+   "configs": 3,
+   "cost": {
+    "cpu": "glide 0.34% of one core",
+    "state": "8 band-pass filter values + one evidence window of band-passed audio"
+   },
+   "variants": [
+    {
+     "name": "baseline_linear15+glide",
+     "fast_fires": null,
+     "without_bad_guy_70": [
+      172,
+      54
+     ],
+     "tol_ms": {
+      "35": [
+       68,
+       207
+      ],
+      "50": [
+       156,
+       119
+      ],
+      "70": [
+       187,
+       88
+      ]
+     },
+     "delay_ms": [
+      42.0,
+      53.333,
+      151.0
+     ],
+     "kick_free_core_fires": 10,
+     "acceptance": {
+      "counts_ok": false,
+      "cores_clear": false,
+      "retention_ok": false,
+      "worst_track_loss": 20,
+      "passes": false
+     },
+     "per_track": {
+      "apricots_128bpm": [
+       8,
+       0
+      ],
+      "bad_guy_128bpm": [
+       15,
+       34
+      ],
+      "feel_the_vibration_174bpm": [
+       15,
+       5
+      ],
+      "inhale_exhale_145bpm": [
+       10,
+       10
+      ],
+      "tears_140bpm": [
+       10,
+       8
+      ],
+      "late_night": [
+       42,
+       1
+      ],
+      "midnight_patience": [
+       39,
+       24
+      ],
+      "miracle": [
+       21,
+       0
+      ],
+      "heavy_on_mind": [
+       27,
+       6
+      ]
+     },
+     "lost_vs_baseline": {
+      "apricots_128bpm": [
+       [
+        "apricots_128bpm",
+        0.62
+       ],
+       [
+        "apricots_128bpm",
+        2.685
+       ],
+       [
+        "apricots_128bpm",
+        5.995
+       ]
+      ],
+      "inhale_exhale_145bpm": [
+       [
+        "inhale_exhale_145bpm",
+        5.38
+       ]
+      ],
+      "late_night": [
+       [
+        "expanded_late_night_s3",
+        103.615
+       ],
+       [
+        "expanded_late_night_s3",
+        104.45
+       ],
+       [
+        "expanded_late_night_s5",
+        181.115
+       ],
+       [
+        "expanded_late_night_s5",
+        182.305
+       ],
+       [
+        "expanded_late_night_s5",
+        183.615
+       ],
+       [
+        "expanded_late_night_s5",
+        185.84
+       ],
+       [
+        "expanded_late_night_s5",
+        186.255
+       ],
+       [
+        "expanded_late_night_s5",
+        188.48
+       ],
+       [
+        "late_night_kick_heavy",
+        199.17
+       ],
+       [
+        "late_night_kick_heavy",
+        201.395
+       ],
+       [
+        "late_night_kick_heavy",
+        205.56
+       ],
+       [
+        "late_night_kick_heavy",
+        207.78
+       ],
+       [
+        "late_night_kick_heavy",
+        209.59
+       ]
+      ],
+      "midnight_patience": [
+       [
+        "expanded_midnight_patience_s5",
+        191.615
+       ],
+       [
+        "expanded_midnight_patience_s6",
+        227.41
+       ],
+       [
+        "expanded_midnight_patience_s6",
+        229.235
+       ],
+       [
+        "midnight_patience_kick_heavy",
+        118.89
+       ],
+       [
+        "midnight_patience_kick_heavy",
+        127.41
+       ]
+      ],
+      "miracle": [
+       [
+        "expanded_miracle_s5",
+        183.2625
+       ]
+      ],
+      "heavy_on_mind": [
+       [
+        "expanded_heavy_on_mind_s2",
+        64.565
+       ],
+       [
+        "expanded_heavy_on_mind_s3",
+        101.02
+       ],
+       [
+        "expanded_heavy_on_mind_s4",
+        138.81
+       ],
+       [
+        "expanded_heavy_on_mind_s4",
+        140.515
+       ],
+       [
+        "expanded_heavy_on_mind_s4",
+        141.845
+       ],
+       [
+        "expanded_heavy_on_mind_s4",
+        143.5525
+       ],
+       [
+        "expanded_heavy_on_mind_s4",
+        144.885
+       ],
+       [
+        "expanded_heavy_on_mind_s4",
+        146.5925
+       ],
+       [
+        "expanded_heavy_on_mind_s5",
+        176.02
+       ],
+       [
+        "expanded_heavy_on_mind_s5",
+        183.615
+       ],
+       [
+        "expanded_heavy_on_mind_s5",
+        186.65
+       ],
+       [
+        "expanded_heavy_on_mind_s6",
+        214.565
+       ],
+       [
+        "expanded_heavy_on_mind_s6",
+        215.705
+       ],
+       [
+        "expanded_heavy_on_mind_s6",
+        216.845
+       ],
+       [
+        "expanded_heavy_on_mind_s6",
+        217.225
+       ],
+       [
+        "expanded_heavy_on_mind_s6",
+        217.985
+       ],
+       [
+        "heavy_on_mind_kick",
+        201.265
+       ],
+       [
+        "heavy_on_mind_kick",
+        205.825
+       ],
+       [
+        "heavy_on_mind_kick",
+        209.24
+       ],
+       [
+        "heavy_on_mind_kick",
+        210.38
+       ]
+      ]
+     }
+    },
+    {
+     "name": "h18_.25+glide",
+     "fast_fires": null,
+     "without_bad_guy_70": [
+      210,
+      58
+     ],
+     "tol_ms": {
+      "35": [
+       71,
+       244
+      ],
+      "50": [
+       179,
+       136
+      ],
+      "70": [
+       225,
+       90
+      ]
+     },
+     "delay_ms": [
+      42.415,
+      54.342,
+      167.333
+     ],
+     "kick_free_core_fires": 8,
+     "acceptance": {
+      "counts_ok": false,
+      "cores_clear": false,
+      "retention_ok": false,
+      "worst_track_loss": 11,
+      "passes": false
+     },
+     "per_track": {
+      "apricots_128bpm": [
+       10,
+       0
+      ],
+      "bad_guy_128bpm": [
+       15,
+       32
+      ],
+      "feel_the_vibration_174bpm": [
+       15,
+       5
+      ],
+      "inhale_exhale_145bpm": [
+       7,
+       8
+      ],
+      "tears_140bpm": [
+       10,
+       6
+      ],
+      "late_night": [
+       61,
+       2
+      ],
+      "midnight_patience": [
+       47,
+       27
+      ],
+      "miracle": [
+       22,
+       2
+      ],
+      "heavy_on_mind": [
+       38,
+       8
+      ]
+     },
+     "lost_vs_baseline": {
+      "apricots_128bpm": [
+       [
+        "apricots_128bpm",
+        2.685
+       ]
+      ],
+      "inhale_exhale_145bpm": [
+       [
+        "inhale_exhale_145bpm",
+        2.07
+       ],
+       [
+        "inhale_exhale_145bpm",
+        4.555
+       ],
+       [
+        "inhale_exhale_145bpm",
+        5.38
+       ],
+       [
+        "inhale_exhale_145bpm",
+        6.62
+       ]
+      ],
+      "midnight_patience": [
+       [
+        "midnight_patience_kick_heavy",
+        118.89
+       ]
+      ],
+      "heavy_on_mind": [
+       [
+        "expanded_heavy_on_mind_s2",
+        64.565
+       ],
+       [
+        "expanded_heavy_on_mind_s4",
+        138.81
+       ],
+       [
+        "expanded_heavy_on_mind_s4",
+        140.515
+       ],
+       [
+        "expanded_heavy_on_mind_s4",
+        141.845
+       ],
+       [
+        "expanded_heavy_on_mind_s4",
+        143.5525
+       ],
+       [
+        "expanded_heavy_on_mind_s4",
+        146.5925
+       ],
+       [
+        "expanded_heavy_on_mind_s5",
+        176.02
+       ],
+       [
+        "expanded_heavy_on_mind_s5",
+        186.65
+       ],
+       [
+        "expanded_heavy_on_mind_s6",
+        214.565
+       ],
+       [
+        "expanded_heavy_on_mind_s6",
+        217.225
+       ],
+       [
+        "heavy_on_mind_kick",
+        209.24
+       ]
+      ]
+     }
+    },
+    {
+     "name": "h16_kernel+glide",
+     "fast_fires": null,
+     "without_bad_guy_70": [
+      216,
+      65
+     ],
+     "tol_ms": {
+      "35": [
+       63,
+       259
+      ],
+      "50": [
+       182,
+       140
+      ],
+      "70": [
+       231,
+       91
+      ]
+     },
+     "delay_ms": [
+      43.333,
+      54.603,
+      167.333
+     ],
+     "kick_free_core_fires": 1,
+     "acceptance": {
+      "counts_ok": false,
+      "cores_clear": false,
+      "retention_ok": false,
+      "worst_track_loss": 11,
+      "passes": false
+     },
+     "per_track": {
+      "apricots_128bpm": [
+       11,
+       0
+      ],
+      "bad_guy_128bpm": [
+       15,
+       26
+      ],
+      "feel_the_vibration_174bpm": [
+       14,
+       10
+      ],
+      "inhale_exhale_145bpm": [
+       4,
+       8
+      ],
+      "tears_140bpm": [
+       8,
+       8
+      ],
+      "late_night": [
+       65,
+       5
+      ],
+      "midnight_patience": [
+       52,
+       30
+      ],
+      "miracle": [
+       21,
+       1
+      ],
+      "heavy_on_mind": [
+       41,
+       3
+      ]
+     },
+     "lost_vs_baseline": {
+      "feel_the_vibration_174bpm": [
+       [
+        "feel_the_vibration_174bpm",
+        8.275
+       ]
+      ],
+      "inhale_exhale_145bpm": [
+       [
+        "inhale_exhale_145bpm",
+        2.07
+       ],
+       [
+        "inhale_exhale_145bpm",
+        3.315
+       ],
+       [
+        "inhale_exhale_145bpm",
+        4.555
+       ],
+       [
+        "inhale_exhale_145bpm",
+        5.38
+       ],
+       [
+        "inhale_exhale_145bpm",
+        6.62
+       ],
+       [
+        "inhale_exhale_145bpm",
+        9.935
+       ],
+       [
+        "inhale_exhale_145bpm",
+        11.175
+       ]
+      ],
+      "tears_140bpm": [
+       [
+        "tears_140bpm",
+        0.005
+       ],
+       [
+        "tears_140bpm",
+        9.935
+       ]
+      ],
+      "midnight_patience": [
+       [
+        "midnight_patience_kick_heavy",
+        118.89
+       ]
+      ],
+      "miracle": [
+       [
+        "expanded_miracle_s5",
+        183.2625
+       ]
+      ],
+      "heavy_on_mind": [
+       [
+        "expanded_heavy_on_mind_s2",
+        64.565
+       ],
+       [
+        "expanded_heavy_on_mind_s4",
+        138.81
+       ],
+       [
+        "expanded_heavy_on_mind_s4",
+        140.515
+       ],
+       [
+        "expanded_heavy_on_mind_s4",
+        143.5525
+       ],
+       [
+        "expanded_heavy_on_mind_s4",
+        146.5925
+       ],
+       [
+        "expanded_heavy_on_mind_s5",
+        176.02
+       ],
+       [
+        "expanded_heavy_on_mind_s6",
+        214.565
+       ],
+       [
+        "expanded_heavy_on_mind_s6",
+        216.085
+       ],
+       [
+        "expanded_heavy_on_mind_s6",
+        217.225
+       ],
+       [
+        "heavy_on_mind_kick",
+        202.025
+       ],
+       [
+        "heavy_on_mind_kick",
+        209.24
+       ]
+      ]
+     }
+    }
+   ]
+  },
+  "h20": {
+   "rule": {
+    "hypothesis": "H20",
+    "base": "H18 .25",
+    "history_s": 8.0,
+    "warmup": 64,
+    "cap": 2.0,
+    "configurations": [
+     "p90",
+     "p99",
+     "block_max_median"
+    ],
+    "acceptance": "intermediate target as H19",
+    "expected_failure": "anchor tracks accompaniment; sags in kick-free cores"
+   },
+   "rule_sha256": "3e38949d1807ff399e0444bafe8d6b8332386a252ebfaf3def49aaef19894897",
+   "configs": 3,
+   "cost": {
+    "cpu": "no new audio processing",
+    "state": "last 8 s of candidate scores (~320 values)"
+   },
+   "variants": [
+    {
+     "name": "p90",
+     "fast_fires": null,
+     "without_bad_guy_70": [
+      143,
+      33
+     ],
+     "tol_ms": {
+      "35": [
+       22,
+       163
+      ],
+      "50": [
+       107,
+       78
+      ],
+      "70": [
+       146,
+       39
+      ]
+     },
+     "delay_ms": [
+      44.348,
+      56.199799999999996,
+      70.0
+     ],
+     "kick_free_core_fires": 14,
+     "acceptance": {
+      "counts_ok": false,
+      "cores_clear": false,
+      "retention_ok": false,
+      "worst_track_loss": 39,
+      "passes": false
+     },
+     "per_track": {
+      "apricots_128bpm": [
+       11,
+       0
+      ],
+      "bad_guy_128bpm": [
+       3,
+       6
+      ],
+      "feel_the_vibration_174bpm": [
+       15,
+       0
+      ],
+      "inhale_exhale_145bpm": [
+       9,
+       5
+      ],
+      "tears_140bpm": [
+       8,
+       1
+      ],
+      "late_night": [
+       14,
+       1
+      ],
+      "midnight_patience": [
+       16,
+       10
+      ],
+      "miracle": [
+       29,
+       12
+      ],
+      "heavy_on_mind": [
+       41,
+       4
+      ]
+     },
+     "lost_vs_baseline": {
+      "apricots_128bpm": [
+       [
+        "apricots_128bpm",
+        7.24
+       ]
+      ],
+      "bad_guy_128bpm": [
+       [
+        "bad_guy_128bpm",
+        1.875
+       ],
+       [
+        "bad_guy_128bpm",
+        3.75
+       ],
+       [
+        "bad_guy_128bpm",
+        4.685
+       ],
+       [
+        "bad_guy_128bpm",
+        5.625
+       ],
+       [
+        "bad_guy_128bpm",
+        6.56
+       ],
+       [
+        "bad_guy_128bpm",
+        7.5
+       ],
+       [
+        "bad_guy_128bpm",
+        8.435
+       ],
+       [
+        "bad_guy_128bpm",
+        9.375
+       ],
+       [
+        "bad_guy_128bpm",
+        10.315
+       ],
+       [
+        "bad_guy_128bpm",
+        11.25
+       ],
+       [
+        "bad_guy_128bpm",
+        12.185
+       ],
+       [
+        "bad_guy_128bpm",
+        13.125
+       ]
+      ],
+      "inhale_exhale_145bpm": [
+       [
+        "inhale_exhale_145bpm",
+        5.38
+       ],
+       [
+        "inhale_exhale_145bpm",
+        6.62
+       ]
+      ],
+      "tears_140bpm": [
+       [
+        "tears_140bpm",
+        2.07
+       ],
+       [
+        "tears_140bpm",
+        6.62
+       ]
+      ],
+      "late_night": [
+       [
+        "expanded_late_night_s3",
+        102.085
+       ],
+       [
+        "expanded_late_night_s3",
+        102.305
+       ],
+       [
+        "expanded_late_night_s3",
+        103.2
+       ],
+       [
+        "expanded_late_night_s3",
+        103.615
+       ],
+       [
+        "expanded_late_night_s3",
+        104.035
+       ],
+       [
+        "expanded_late_night_s3",
+        104.45
+       ],
+       [
+        "expanded_late_night_s5",
+        181.81
+       ],
+       [
+        "expanded_late_night_s5",
+        182.085
+       ],
+       [
+        "expanded_late_night_s5",
+        182.305
+       ],
+       [
+        "expanded_late_night_s5",
+        183.615
+       ],
+       [
+        "expanded_late_night_s5",
+        184.035
+       ],
+       [
+        "expanded_late_night_s5",
+        184.45
+       ],
+       [
+        "expanded_late_night_s5",
+        185.56
+       ],
+       [
+        "expanded_late_night_s5",
+        185.84
+       ],
+       [
+        "expanded_late_night_s5",
+        186.255
+       ],
+       [
+        "expanded_late_night_s5",
+        186.53
+       ],
+       [
+        "expanded_late_night_s5",
+        186.67
+       ],
+       [
+        "expanded_late_night_s5",
+        187.785
+       ],
+       [
+        "expanded_late_night_s5",
+        188.065
+       ],
+       [
+        "expanded_late_night_s5",
+        188.48
+       ],
+       [
+        "expanded_late_night_s5",
+        188.895
+       ],
+       [
+        "late_night_kick_heavy",
+        199.17
+       ],
+       [
+        "late_night_kick_heavy",
+        199.585
+       ],
+       [
+        "late_night_kick_heavy",
+        201.115
+       ],
+       [
+        "late_night_kick_heavy",
+        201.395
+       ],
+       [
+        "late_night_kick_heavy",
+        201.81
+       ],
+       [
+        "late_night_kick_heavy",
+        202.225
+       ],
+       [
+        "late_night_kick_heavy",
+        202.505
+       ],
+       [
+        "late_night_kick_heavy",
+        203.34
+       ],
+       [
+        "late_night_kick_heavy",
+        203.615
+       ],
+       [
+        "late_night_kick_heavy",
+        204.03
+       ],
+       [
+        "late_night_kick_heavy",
+        204.31
+       ],
+       [
+        "late_night_kick_heavy",
+        205.56
+       ],
+       [
+        "late_night_kick_heavy",
+        206.67
+       ],
+       [
+        "late_night_kick_heavy",
+        207.78
+       ],
+       [
+        "late_night_kick_heavy",
+        208.755
+       ],
+       [
+        "late_night_kick_heavy",
+        209.59
+       ],
+       [
+        "late_night_kick_heavy",
+        210.28
+       ],
+       [
+        "late_night_kick_heavy",
+        210.7
+       ]
+      ],
+      "midnight_patience": [
+       [
+        "expanded_midnight_patience_s5",
+        191.615
+       ],
+       [
+        "expanded_midnight_patience_s5",
+        192.635
+       ],
+       [
+        "expanded_midnight_patience_s5",
+        194.0
+       ],
+       [
+        "expanded_midnight_patience_s5",
+        196.5
+       ],
+       [
+        "expanded_midnight_patience_s6",
+        225.815
+       ],
+       [
+        "expanded_midnight_patience_s6",
+        226.725
+       ],
+       [
+        "expanded_midnight_patience_s6",
+        227.41
+       ],
+       [
+        "expanded_midnight_patience_s6",
+        228.55
+       ],
+       [
+        "expanded_midnight_patience_s6",
+        229.005
+       ],
+       [
+        "expanded_midnight_patience_s6",
+        229.235
+       ],
+       [
+        "expanded_midnight_patience_s6",
+        230.94
+       ],
+       [
+        "midnight_patience_kick_heavy",
+        116.27
+       ],
+       [
+        "midnight_patience_kick_heavy",
+        116.5
+       ],
+       [
+        "midnight_patience_kick_heavy",
+        116.725
+       ],
+       [
+        "midnight_patience_kick_heavy",
+        118.21
+       ],
+       [
+        "midnight_patience_kick_heavy",
+        118.32
+       ],
+       [
+        "midnight_patience_kick_heavy",
+        118.89
+       ],
+       [
+        "midnight_patience_kick_heavy",
+        120.14
+       ],
+       [
+        "midnight_patience_kick_heavy",
+        121.845
+       ],
+       [
+        "midnight_patience_kick_heavy",
+        121.96
+       ],
+       [
+        "midnight_patience_kick_heavy",
+        123.55
+       ],
+       [
+        "midnight_patience_kick_heavy",
+        123.775
+       ],
+       [
+        "midnight_patience_kick_heavy",
+        124.0
+       ],
+       [
+        "midnight_patience_kick_heavy",
+        124.91
+       ],
+       [
+        "midnight_patience_kick_heavy",
+        125.48
+       ],
+       [
+        "midnight_patience_kick_heavy",
+        126.73
+       ],
+       [
+        "midnight_patience_kick_heavy",
+        127.185
+       ],
+       [
+        "midnight_patience_kick_heavy",
+        127.41
+       ]
+      ],
+      "heavy_on_mind": [
+       [
+        "expanded_heavy_on_mind_s3",
+        109.09
+       ],
+       [
+        "expanded_heavy_on_mind_s5",
+        176.02
+       ],
+       [
+        "expanded_heavy_on_mind_s6",
+        214.565
+       ],
+       [
+        "expanded_heavy_on_mind_s6",
+        214.945
+       ],
+       [
+        "expanded_heavy_on_mind_s6",
+        215.705
+       ],
+       [
+        "expanded_heavy_on_mind_s6",
+        216.845
+       ],
+       [
+        "expanded_heavy_on_mind_s6",
+        217.225
+       ],
+       [
+        "expanded_heavy_on_mind_s6",
+        217.605
+       ],
+       [
+        "heavy_on_mind_kick",
+        202.025
+       ],
+       [
+        "heavy_on_mind_kick",
+        204.305
+       ],
+       [
+        "heavy_on_mind_kick",
+        205.825
+       ],
+       [
+        "heavy_on_mind_kick",
+        207.72
+       ],
+       [
+        "heavy_on_mind_kick",
+        209.24
+       ],
+       [
+        "heavy_on_mind_kick",
+        211.52
+       ],
+       [
+        "heavy_on_mind_kick",
+        211.9
+       ]
+      ]
+     }
+    },
+    {
+     "name": "p99",
+     "fast_fires": null,
+     "without_bad_guy_70": [
+      78,
+      30
+     ],
+     "tol_ms": {
+      "35": [
+       11,
+       123
+      ],
+      "50": [
+       64,
+       70
+      ],
+      "70": [
+       88,
+       46
+      ]
+     },
+     "delay_ms": [
+      44.348,
+      55.2132,
+      65.828
+     ],
+     "kick_free_core_fires": 20,
+     "acceptance": {
+      "counts_ok": false,
+      "cores_clear": false,
+      "retention_ok": false,
+      "worst_track_loss": 50,
+      "passes": false
+     },
+     "per_track": {
+      "apricots_128bpm": [
+       7,
+       0
+      ],
+      "bad_guy_128bpm": [
+       10,
+       16
+      ],
+      "feel_the_vibration_174bpm": [
+       6,
+       0
+      ],
+      "inhale_exhale_145bpm": [
+       4,
+       0
+      ],
+      "tears_140bpm": [
+       6,
+       0
+      ],
+      "late_night": [
+       3,
+       1
+      ],
+      "midnight_patience": [
+       12,
+       19
+      ],
+      "miracle": [
+       11,
+       6
+      ],
+      "heavy_on_mind": [
+       29,
+       4
+      ]
+     },
+     "lost_vs_baseline": {
+      "apricots_128bpm": [
+       [
+        "apricots_128bpm",
+        0.62
+       ],
+       [
+        "apricots_128bpm",
+        5.995
+       ],
+       [
+        "apricots_128bpm",
+        7.24
+       ]
+      ],
+      "bad_guy_128bpm": [
+       [
+        "bad_guy_128bpm",
+        1.875
+       ],
+       [
+        "bad_guy_128bpm",
+        6.56
+       ],
+       [
+        "bad_guy_128bpm",
+        8.435
+       ],
+       [
+        "bad_guy_128bpm",
+        10.315
+       ],
+       [
+        "bad_guy_128bpm",
+        13.125
+       ]
+      ],
+      "feel_the_vibration_174bpm": [
+       [
+        "feel_the_vibration_174bpm",
+        1.645
+       ],
+       [
+        "feel_the_vibration_174bpm",
+        2.685
+       ],
+       [
+        "feel_the_vibration_174bpm",
+        4.96
+       ],
+       [
+        "feel_the_vibration_174bpm",
+        5.995
+       ],
+       [
+        "feel_the_vibration_174bpm",
+        8.275
+       ],
+       [
+        "feel_the_vibration_174bpm",
+        9.305
+       ],
+       [
+        "feel_the_vibration_174bpm",
+        9.925
+       ],
+       [
+        "feel_the_vibration_174bpm",
+        10.965
+       ],
+       [
+        "feel_the_vibration_174bpm",
+        12.62
+       ]
+      ],
+      "inhale_exhale_145bpm": [
+       [
+        "inhale_exhale_145bpm",
+        2.07
+       ],
+       [
+        "inhale_exhale_145bpm",
+        4.555
+       ],
+       [
+        "inhale_exhale_145bpm",
+        5.38
+       ],
+       [
+        "inhale_exhale_145bpm",
+        6.62
+       ],
+       [
+        "inhale_exhale_145bpm",
+        11.175
+       ],
+       [
+        "inhale_exhale_145bpm",
+        12.62
+       ],
+       [
+        "inhale_exhale_145bpm",
+        12.825
+       ]
+      ],
+      "tears_140bpm": [
+       [
+        "tears_140bpm",
+        2.07
+       ],
+       [
+        "tears_140bpm",
+        6.62
+       ],
+       [
+        "tears_140bpm",
+        9.935
+       ],
+       [
+        "tears_140bpm",
+        12.83
+       ]
+      ],
+      "late_night": [
+       [
+        "expanded_late_night_s2",
+        72.225
+       ],
+       [
+        "expanded_late_night_s2",
+        72.505
+       ],
+       [
+        "expanded_late_night_s2",
+        72.92
+       ],
+       [
+        "expanded_late_night_s2",
+        73.337
+       ],
+       [
+        "expanded_late_night_s2",
+        73.615
+       ],
+       [
+        "expanded_late_night_s3",
+        102.085
+       ],
+       [
+        "expanded_late_night_s3",
+        102.305
+       ],
+       [
+        "expanded_late_night_s3",
+        103.2
+       ],
+       [
+        "expanded_late_night_s3",
+        103.615
+       ],
+       [
+        "expanded_late_night_s3",
+        104.035
+       ],
+       [
+        "expanded_late_night_s3",
+        104.45
+       ],
+       [
+        "expanded_late_night_s5",
+        179.175
+       ],
+       [
+        "expanded_late_night_s5",
+        179.59
+       ],
+       [
+        "expanded_late_night_s5",
+        180.005
+       ],
+       [
+        "expanded_late_night_s5",
+        180.285
+       ],
+       [
+        "expanded_late_night_s5",
+        181.115
+       ],
+       [
+        "expanded_late_night_s5",
+        181.395
+       ],
+       [
+        "expanded_late_night_s5",
+        181.81
+       ],
+       [
+        "expanded_late_night_s5",
+        182.085
+       ],
+       [
+        "expanded_late_night_s5",
+        182.305
+       ],
+       [
+        "expanded_late_night_s5",
+        183.615
+       ],
+       [
+        "expanded_late_night_s5",
+        184.035
+       ],
+       [
+        "expanded_late_night_s5",
+        184.45
+       ],
+       [
+        "expanded_late_night_s5",
+        185.56
+       ],
+       [
+        "expanded_late_night_s5",
+        185.84
+       ],
+       [
+        "expanded_late_night_s5",
+        186.255
+       ],
+       [
+        "expanded_late_night_s5",
+        186.53
+       ],
+       [
+        "expanded_late_night_s5",
+        186.67
+       ],
+       [
+        "expanded_late_night_s5",
+        187.785
+       ],
+       [
+        "expanded_late_night_s5",
+        188.065
+       ],
+       [
+        "expanded_late_night_s5",
+        188.48
+       ],
+       [
+        "expanded_late_night_s5",
+        188.895
+       ],
+       [
+        "late_night_kick_heavy",
+        199.17
+       ],
+       [
+        "late_night_kick_heavy",
+        199.585
+       ],
+       [
+        "late_night_kick_heavy",
+        201.115
+       ],
+       [
+        "late_night_kick_heavy",
+        201.395
+       ],
+       [
+        "late_night_kick_heavy",
+        201.81
+       ],
+       [
+        "late_night_kick_heavy",
+        202.225
+       ],
+       [
+        "late_night_kick_heavy",
+        202.505
+       ],
+       [
+        "late_night_kick_heavy",
+        203.34
+       ],
+       [
+        "late_night_kick_heavy",
+        203.615
+       ],
+       [
+        "late_night_kick_heavy",
+        204.03
+       ],
+       [
+        "late_night_kick_heavy",
+        204.31
+       ],
+       [
+        "late_night_kick_heavy",
+        205.56
+       ],
+       [
+        "late_night_kick_heavy",
+        206.67
+       ],
+       [
+        "late_night_kick_heavy",
+        207.78
+       ],
+       [
+        "late_night_kick_heavy",
+        208.755
+       ],
+       [
+        "late_night_kick_heavy",
+        209.59
+       ],
+       [
+        "late_night_kick_heavy",
+        210.28
+       ],
+       [
+        "late_night_kick_heavy",
+        210.7
+       ]
+      ],
+      "midnight_patience": [
+       [
+        "expanded_midnight_patience_s5",
+        191.05
+       ],
+       [
+        "expanded_midnight_patience_s5",
+        191.615
+       ],
+       [
+        "expanded_midnight_patience_s5",
+        192.635
+       ],
+       [
+        "expanded_midnight_patience_s5",
+        192.865
+       ],
+       [
+        "expanded_midnight_patience_s5",
+        194.0
+       ],
+       [
+        "expanded_midnight_patience_s5",
+        194.68
+       ],
+       [
+        "expanded_midnight_patience_s5",
+        196.275
+       ],
+       [
+        "expanded_midnight_patience_s5",
+        196.5
+       ],
+       [
+        "expanded_midnight_patience_s5",
+        196.73
+       ],
+       [
+        "expanded_midnight_patience_s6",
+        225.815
+       ],
+       [
+        "expanded_midnight_patience_s6",
+        226.725
+       ],
+       [
+        "expanded_midnight_patience_s6",
+        227.41
+       ],
+       [
+        "expanded_midnight_patience_s6",
+        228.55
+       ],
+       [
+        "expanded_midnight_patience_s6",
+        229.005
+       ],
+       [
+        "expanded_midnight_patience_s6",
+        229.235
+       ],
+       [
+        "expanded_midnight_patience_s6",
+        230.94
+       ],
+       [
+        "midnight_patience_kick_heavy",
+        116.27
+       ],
+       [
+        "midnight_patience_kick_heavy",
+        116.5
+       ],
+       [
+        "midnight_patience_kick_heavy",
+        116.725
+       ],
+       [
+        "midnight_patience_kick_heavy",
+        118.21
+       ],
+       [
+        "midnight_patience_kick_heavy",
+        118.32
+       ],
+       [
+        "midnight_patience_kick_heavy",
+        118.89
+       ],
+       [
+        "midnight_patience_kick_heavy",
+        120.14
+       ],
+       [
+        "midnight_patience_kick_heavy",
+        121.845
+       ],
+       [
+        "midnight_patience_kick_heavy",
+        121.96
+       ],
+       [
+        "midnight_patience_kick_heavy",
+        123.775
+       ],
+       [
+        "midnight_patience_kick_heavy",
+        124.0
+       ],
+       [
+        "midnight_patience_kick_heavy",
+        124.91
+       ],
+       [
+        "midnight_patience_kick_heavy",
+        125.48
+       ],
+       [
+        "midnight_patience_kick_heavy",
+        126.73
+       ],
+       [
+        "midnight_patience_kick_heavy",
+        127.185
+       ],
+       [
+        "midnight_patience_kick_heavy",
+        127.41
+       ]
+      ],
+      "miracle": [
+       [
+        "expanded_miracle_s2",
+        62.8575
+       ],
+       [
+        "expanded_miracle_s3",
+        101.7775
+       ],
+       [
+        "expanded_miracle_s5",
+        179.6125
+       ],
+       [
+        "expanded_miracle_s5",
+        183.2625
+       ],
+       [
+        "expanded_miracle_s5",
+        188.11
+       ],
+       [
+        "expanded_miracle_s5",
+        189.745
+       ],
+       [
+        "miracle_kick",
+        84.33
+       ],
+       [
+        "miracle_kick",
+        85.965
+       ],
+       [
+        "miracle_kick",
+        87.375
+       ],
+       [
+        "miracle_kick",
+        90.82
+       ]
+      ],
+      "heavy_on_mind": [
+       [
+        "expanded_heavy_on_mind_s3",
+        108.805
+       ],
+       [
+        "expanded_heavy_on_mind_s3",
+        109.09
+       ],
+       [
+        "expanded_heavy_on_mind_s4",
+        141.845
+       ],
+       [
+        "expanded_heavy_on_mind_s4",
+        143.5525
+       ],
+       [
+        "expanded_heavy_on_mind_s5",
+        176.02
+       ],
+       [
+        "expanded_heavy_on_mind_s5",
+        183.615
+       ],
+       [
+        "expanded_heavy_on_mind_s5",
+        186.65
+       ],
+       [
+        "expanded_heavy_on_mind_s6",
+        214.565
+       ],
+       [
+        "expanded_heavy_on_mind_s6",
+        215.705
+       ],
+       [
+        "expanded_heavy_on_mind_s6",
+        216.845
+       ],
+       [
+        "expanded_heavy_on_mind_s6",
+        217.225
+       ],
+       [
+        "expanded_heavy_on_mind_s6",
+        217.605
+       ],
+       [
+        "heavy_on_mind_kick",
+        202.025
+       ],
+       [
+        "heavy_on_mind_kick",
+        204.305
+       ],
+       [
+        "heavy_on_mind_kick",
+        205.825
+       ],
+       [
+        "heavy_on_mind_kick",
+        209.24
+       ],
+       [
+        "heavy_on_mind_kick",
+        211.9
+       ]
+      ]
+     }
+    },
+    {
+     "name": "block_max_median",
+     "fast_fires": null,
+     "without_bad_guy_70": [
+      174,
+      54
+     ],
+     "tol_ms": {
+      "35": [
+       43,
+       212
+      ],
+      "50": [
+       143,
+       112
+      ],
+      "70": [
+       184,
+       71
+      ]
+     },
+     "delay_ms": [
+      43.285,
+      55.2547,
+      70.0
+     ],
+     "kick_free_core_fires": 16,
+     "acceptance": {
+      "counts_ok": false,
+      "cores_clear": false,
+      "retention_ok": false,
+      "worst_track_loss": 33,
+      "passes": false
+     },
+     "per_track": {
+      "apricots_128bpm": [
+       14,
+       0
+      ],
+      "bad_guy_128bpm": [
+       10,
+       17
+      ],
+      "feel_the_vibration_174bpm": [
+       15,
+       0
+      ],
+      "inhale_exhale_145bpm": [
+       11,
+       8
+      ],
+      "tears_140bpm": [
+       8,
+       1
+      ],
+      "late_night": [
+       21,
+       5
+      ],
+      "midnight_patience": [
+       30,
+       21
+      ],
+      "miracle": [
+       30,
+       10
+      ],
+      "heavy_on_mind": [
+       45,
+       9
+      ]
+     },
+     "lost_vs_baseline": {
+      "bad_guy_128bpm": [
+       [
+        "bad_guy_128bpm",
+        6.56
+       ],
+       [
+        "bad_guy_128bpm",
+        8.435
+       ],
+       [
+        "bad_guy_128bpm",
+        10.315
+       ],
+       [
+        "bad_guy_128bpm",
+        11.25
+       ],
+       [
+        "bad_guy_128bpm",
+        13.125
+       ]
+      ],
+      "inhale_exhale_145bpm": [
+       [
+        "inhale_exhale_145bpm",
+        6.62
+       ]
+      ],
+      "tears_140bpm": [
+       [
+        "tears_140bpm",
+        2.07
+       ],
+       [
+        "tears_140bpm",
+        6.62
+       ]
+      ],
+      "late_night": [
+       [
+        "expanded_late_night_s3",
+        102.085
+       ],
+       [
+        "expanded_late_night_s3",
+        102.305
+       ],
+       [
+        "expanded_late_night_s3",
+        103.2
+       ],
+       [
+        "expanded_late_night_s3",
+        103.615
+       ],
+       [
+        "expanded_late_night_s3",
+        104.035
+       ],
+       [
+        "expanded_late_night_s3",
+        104.45
+       ],
+       [
+        "expanded_late_night_s5",
+        183.615
+       ],
+       [
+        "expanded_late_night_s5",
+        184.035
+       ],
+       [
+        "expanded_late_night_s5",
+        184.45
+       ],
+       [
+        "expanded_late_night_s5",
+        185.56
+       ],
+       [
+        "expanded_late_night_s5",
+        185.84
+       ],
+       [
+        "expanded_late_night_s5",
+        186.255
+       ],
+       [
+        "expanded_late_night_s5",
+        186.53
+       ],
+       [
+        "expanded_late_night_s5",
+        186.67
+       ],
+       [
+        "expanded_late_night_s5",
+        187.785
+       ],
+       [
+        "expanded_late_night_s5",
+        188.065
+       ],
+       [
+        "expanded_late_night_s5",
+        188.48
+       ],
+       [
+        "expanded_late_night_s5",
+        188.895
+       ],
+       [
+        "late_night_kick_heavy",
+        199.17
+       ],
+       [
+        "late_night_kick_heavy",
+        201.115
+       ],
+       [
+        "late_night_kick_heavy",
+        201.395
+       ],
+       [
+        "late_night_kick_heavy",
+        201.81
+       ],
+       [
+        "late_night_kick_heavy",
+        202.505
+       ],
+       [
+        "late_night_kick_heavy",
+        203.615
+       ],
+       [
+        "late_night_kick_heavy",
+        204.03
+       ],
+       [
+        "late_night_kick_heavy",
+        204.31
+       ],
+       [
+        "late_night_kick_heavy",
+        205.56
+       ],
+       [
+        "late_night_kick_heavy",
+        206.67
+       ],
+       [
+        "late_night_kick_heavy",
+        207.78
+       ],
+       [
+        "late_night_kick_heavy",
+        208.755
+       ],
+       [
+        "late_night_kick_heavy",
+        209.59
+       ],
+       [
+        "late_night_kick_heavy",
+        210.28
+       ],
+       [
+        "late_night_kick_heavy",
+        210.7
+       ]
+      ],
+      "midnight_patience": [
+       [
+        "expanded_midnight_patience_s5",
+        191.615
+       ],
+       [
+        "expanded_midnight_patience_s6",
+        225.815
+       ],
+       [
+        "expanded_midnight_patience_s6",
+        226.725
+       ],
+       [
+        "expanded_midnight_patience_s6",
+        227.41
+       ],
+       [
+        "expanded_midnight_patience_s6",
+        229.235
+       ],
+       [
+        "expanded_midnight_patience_s6",
+        230.94
+       ],
+       [
+        "midnight_patience_kick_heavy",
+        118.89
+       ],
+       [
+        "midnight_patience_kick_heavy",
+        120.14
+       ],
+       [
+        "midnight_patience_kick_heavy",
+        121.845
+       ],
+       [
+        "midnight_patience_kick_heavy",
+        121.96
+       ],
+       [
+        "midnight_patience_kick_heavy",
+        123.775
+       ],
+       [
+        "midnight_patience_kick_heavy",
+        124.0
+       ],
+       [
+        "midnight_patience_kick_heavy",
+        125.48
+       ],
+       [
+        "midnight_patience_kick_heavy",
+        127.41
+       ]
+      ],
+      "heavy_on_mind": [
+       [
+        "expanded_heavy_on_mind_s5",
+        176.02
+       ],
+       [
+        "expanded_heavy_on_mind_s6",
+        214.565
+       ],
+       [
+        "expanded_heavy_on_mind_s6",
+        214.945
+       ],
+       [
+        "expanded_heavy_on_mind_s6",
+        215.705
+       ],
+       [
+        "expanded_heavy_on_mind_s6",
+        216.085
+       ],
+       [
+        "expanded_heavy_on_mind_s6",
+        216.465
+       ],
+       [
+        "expanded_heavy_on_mind_s6",
+        216.845
+       ],
+       [
+        "expanded_heavy_on_mind_s6",
+        217.225
+       ],
+       [
+        "expanded_heavy_on_mind_s6",
+        217.605
+       ],
+       [
+        "expanded_heavy_on_mind_s6",
+        217.985
+       ],
+       [
+        "heavy_on_mind_kick",
+        201.265
+       ],
+       [
+        "heavy_on_mind_kick",
+        202.025
+       ],
+       [
+        "heavy_on_mind_kick",
+        204.305
+       ],
+       [
+        "heavy_on_mind_kick",
+        205.825
+       ],
+       [
+        "heavy_on_mind_kick",
+        209.24
+       ],
+       [
+        "heavy_on_mind_kick",
+        211.52
+       ],
+       [
+        "heavy_on_mind_kick",
+        211.9
+       ]
+      ]
+     }
+    }
+   ]
+  },
+  "h21": {
+   "rule": {
+    "hypothesis": "H21",
+    "kappa": 5.0,
+    "gate": "act/(act+kappa)",
+    "configurations": [
+     "h16_gated_linear",
+     "h18_gated_linear",
+     "h16_gated_h18"
+    ],
+    "acceptance": "intermediate target",
+    "expected_failure": "low-support extras re-admitted by linear fallback"
+   },
+   "rule_sha256": "21bd48738ff1f44a9703c825cb1ee19b0f6dcc99fa58c4433647f0a6e9424194",
+   "configs": 3,
+   "cost": {
+    "cpu": "one extra weighted sum over kernel values the kernel model already computes",
+    "state": "none new"
+   },
+   "variants": [
+    {
+     "name": "h16_gated_linear",
+     "fast_fires": null,
+     "without_bad_guy_70": [
+      224,
+      48
+     ],
+     "tol_ms": {
+      "35": [
+       38,
+       295
+      ],
+      "50": [
+       171,
+       162
+      ],
+      "70": [
+       239,
+       94
+      ]
+     },
+     "delay_ms": [
+      45.333,
+      55.0,
+      72.0
+     ],
+     "kick_free_core_fires": 0,
+     "acceptance": {
+      "counts_ok": false,
+      "cores_clear": true,
+      "retention_ok": false,
+      "worst_track_loss": 2,
+      "passes": false
+     },
+     "per_track": {
+      "apricots_128bpm": [
+       10,
+       0
+      ],
+      "bad_guy_128bpm": [
+       15,
+       46
+      ],
+      "feel_the_vibration_174bpm": [
+       15,
+       0
+      ],
+      "inhale_exhale_145bpm": [
+       12,
+       6
+      ],
+      "tears_140bpm": [
+       10,
+       10
+      ],
+      "late_night": [
+       57,
+       0
+      ],
+      "midnight_patience": [
+       50,
+       27
+      ],
+      "miracle": [
+       22,
+       0
+      ],
+      "heavy_on_mind": [
+       48,
+       5
+      ]
+     },
+     "lost_vs_baseline": {
+      "heavy_on_mind": [
+       [
+        "expanded_heavy_on_mind_s3",
+        109.09
+       ],
+       [
+        "expanded_heavy_on_mind_s5",
+        176.02
+       ]
+      ]
+     }
+    },
+    {
+     "name": "h18_gated_linear",
+     "fast_fires": null,
+     "without_bad_guy_70": [
+      225,
+      51
+     ],
+     "tol_ms": {
+      "35": [
+       39,
+       298
+      ],
+      "50": [
+       169,
+       168
+      ],
+      "70": [
+       240,
+       97
+      ]
+     },
+     "delay_ms": [
+      45.6965,
+      56.0333,
+      81.0
+     ],
+     "kick_free_core_fires": 0,
+     "acceptance": {
+      "counts_ok": false,
+      "cores_clear": true,
+      "retention_ok": true,
+      "worst_track_loss": 1,
+      "passes": false
+     },
+     "per_track": {
+      "apricots_128bpm": [
+       8,
+       0
+      ],
+      "bad_guy_128bpm": [
+       15,
+       46
+      ],
+      "feel_the_vibration_174bpm": [
+       15,
+       0
+      ],
+      "inhale_exhale_145bpm": [
+       11,
+       5
+      ],
+      "tears_140bpm": [
+       10,
+       12
+      ],
+      "late_night": [
+       60,
+       0
+      ],
+      "midnight_patience": [
+       47,
+       28
+      ],
+      "miracle": [
+       24,
+       0
+      ],
+      "heavy_on_mind": [
+       50,
+       6
+      ]
+     },
+     "lost_vs_baseline": {
+      "apricots_128bpm": [
+       [
+        "apricots_128bpm",
+        2.685
+       ]
+      ],
+      "heavy_on_mind": [
+       [
+        "expanded_heavy_on_mind_s5",
+        176.02
+       ]
+      ]
+     }
+    },
+    {
+     "name": "h16_gated_h18",
+     "fast_fires": null,
+     "without_bad_guy_70": [
+      243,
+      54
+     ],
+     "tol_ms": {
+      "35": [
+       40,
+       313
+      ],
+      "50": [
+       188,
+       165
+      ],
+      "70": [
+       258,
+       96
+      ]
+     },
+     "delay_ms": [
+      45.0,
+      56.0,
+      167.333
+     ],
+     "kick_free_core_fires": 1,
+     "acceptance": {
+      "counts_ok": false,
+      "cores_clear": false,
+      "retention_ok": false,
+      "worst_track_loss": 2,
+      "passes": false
+     },
+     "per_track": {
+      "apricots_128bpm": [
+       10,
+       0
+      ],
+      "bad_guy_128bpm": [
+       15,
+       42
+      ],
+      "feel_the_vibration_174bpm": [
+       15,
+       0
+      ],
+      "inhale_exhale_145bpm": [
+       9,
+       3
+      ],
+      "tears_140bpm": [
+       10,
+       11
+      ],
+      "late_night": [
+       67,
+       0
+      ],
+      "midnight_patience": [
+       54,
+       34
+      ],
+      "miracle": [
+       24,
+       2
+      ],
+      "heavy_on_mind": [
+       54,
+       4
+      ]
+     },
+     "lost_vs_baseline": {
+      "inhale_exhale_145bpm": [
+       [
+        "inhale_exhale_145bpm",
+        5.38
+       ],
+       [
+        "inhale_exhale_145bpm",
+        6.62
+       ]
+      ],
+      "heavy_on_mind": [
+       [
+        "expanded_heavy_on_mind_s5",
+        176.02
+       ]
+      ]
+     }
+    }
+   ]
+  },
+  "h22": {
+   "rule": {
+    "hypothesis": "H22",
+    "kappa": 5.0,
+    "low_support_act": 5.0,
+    "l2": 0.01,
+    "configurations": [
+     "h18_gate_glide_lowfit",
+     "h16_gate_glide_lowfit",
+     "h18_gate_glide_allfit_control"
+    ],
+    "acceptance": "intermediate target",
+    "expected_failure": "few low-support training candidates; noisy beta"
+   },
+   "rule_sha256": "aecd98fd3fb417af0caf6e046f2ead71610dfba9507a9dc295c609a276ce2819",
+   "configs": 3,
+   "cost": {
+    "cpu": "H21 + glide 0.34% of one core",
+    "state": "H19 state + 4 fallback weights"
+   },
+   "variants": [
+    {
+     "name": "h18_gate_glide_lowfit",
+     "fast_fires": null,
+     "without_bad_guy_70": [
+      241,
+      52
+     ],
+     "tol_ms": {
+      "35": [
+       40,
+       306
+      ],
+      "50": [
+       178,
+       168
+      ],
+      "70": [
+       256,
+       90
+      ]
+     },
+     "delay_ms": [
+      45.176,
+      56.7756,
+      183.333
+     ],
+     "kick_free_core_fires": 0,
+     "acceptance": {
+      "counts_ok": false,
+      "cores_clear": true,
+      "retention_ok": true,
+      "worst_track_loss": 1,
+      "passes": false
+     },
+     "per_track": {
+      "apricots_128bpm": [
+       9,
+       0
+      ],
+      "bad_guy_128bpm": [
+       15,
+       38
+      ],
+      "feel_the_vibration_174bpm": [
+       15,
+       2
+      ],
+      "inhale_exhale_145bpm": [
+       11,
+       6
+      ],
+      "tears_140bpm": [
+       10,
+       8
+      ],
+      "late_night": [
+       66,
+       4
+      ],
+      "midnight_patience": [
+       47,
+       28
+      ],
+      "miracle": [
+       26,
+       0
+      ],
+      "heavy_on_mind": [
+       57,
+       4
+      ]
+     },
+     "lost_vs_baseline": {
+      "apricots_128bpm": [
+       [
+        "apricots_128bpm",
+        2.685
+       ]
+      ],
+      "inhale_exhale_145bpm": [
+       [
+        "inhale_exhale_145bpm",
+        5.38
+       ]
+      ]
+     }
+    },
+    {
+     "name": "h16_gate_glide_lowfit",
+     "fast_fires": null,
+     "without_bad_guy_70": [
+      235,
+      48
+     ],
+     "tol_ms": {
+      "35": [
+       35,
+       301
+      ],
+      "50": [
+       174,
+       162
+      ],
+      "70": [
+       250,
+       86
+      ]
+     },
+     "delay_ms": [
+      45.333,
+      56.1665,
+      70.333
+     ],
+     "kick_free_core_fires": 1,
+     "acceptance": {
+      "counts_ok": true,
+      "cores_clear": false,
+      "retention_ok": false,
+      "worst_track_loss": 2,
+      "passes": false
+     },
+     "per_track": {
+      "apricots_128bpm": [
+       11,
+       0
+      ],
+      "bad_guy_128bpm": [
+       15,
+       38
+      ],
+      "feel_the_vibration_174bpm": [
+       15,
+       5
+      ],
+      "inhale_exhale_145bpm": [
+       11,
+       6
+      ],
+      "tears_140bpm": [
+       10,
+       8
+      ],
+      "late_night": [
+       67,
+       5
+      ],
+      "midnight_patience": [
+       46,
+       20
+      ],
+      "miracle": [
+       25,
+       1
+      ],
+      "heavy_on_mind": [
+       50,
+       3
+      ]
+     },
+     "lost_vs_baseline": {
+      "inhale_exhale_145bpm": [
+       [
+        "inhale_exhale_145bpm",
+        5.38
+       ]
+      ],
+      "midnight_patience": [
+       [
+        "midnight_patience_kick_heavy",
+        118.89
+       ]
+      ],
+      "heavy_on_mind": [
+       [
+        "expanded_heavy_on_mind_s3",
+        109.09
+       ],
+       [
+        "expanded_heavy_on_mind_s5",
+        176.02
+       ]
+      ]
+     }
+    },
+    {
+     "name": "h18_gate_glide_allfit_control",
+     "fast_fires": null,
+     "without_bad_guy_70": [
+      214,
+      44
+     ],
+     "tol_ms": {
+      "35": [
+       47,
+       268
+      ],
+      "50": [
+       170,
+       145
+      ],
+      "70": [
+       229,
+       86
+      ]
+     },
+     "delay_ms": [
+      44.333,
+      54.120000000000005,
+      70.333
+     ],
+     "kick_free_core_fires": 0,
+     "acceptance": {
+      "counts_ok": false,
+      "cores_clear": true,
+      "retention_ok": false,
+      "worst_track_loss": 3,
+      "passes": false
+     },
+     "per_track": {
+      "apricots_128bpm": [
+       9,
+       0
+      ],
+      "bad_guy_128bpm": [
+       15,
+       42
+      ],
+      "feel_the_vibration_174bpm": [
+       15,
+       1
+      ],
+      "inhale_exhale_145bpm": [
+       10,
+       10
+      ],
+      "tears_140bpm": [
+       10,
+       10
+      ],
+      "late_night": [
+       58,
+       0
+      ],
+      "midnight_patience": [
+       45,
+       18
+      ],
+      "miracle": [
+       22,
+       0
+      ],
+      "heavy_on_mind": [
+       45,
+       5
+      ]
+     },
+     "lost_vs_baseline": {
+      "apricots_128bpm": [
+       [
+        "apricots_128bpm",
+        2.685
+       ]
+      ],
+      "inhale_exhale_145bpm": [
+       [
+        "inhale_exhale_145bpm",
+        5.38
+       ]
+      ],
+      "midnight_patience": [
+       [
+        "midnight_patience_kick_heavy",
+        118.89
+       ]
+      ],
+      "heavy_on_mind": [
+       [
+        "expanded_heavy_on_mind_s4",
+        143.5525
+       ],
+       [
+        "expanded_heavy_on_mind_s5",
+        176.02
+       ],
+       [
+        "expanded_heavy_on_mind_s6",
+        214.565
+       ]
+      ]
+     }
+    }
+   ]
+  },
+  "h23": {
+   "rule": {
+    "hypothesis": "H23",
+    "l2": 0.01,
+    "evidence_s": [
+     0.015,
+     0.02,
+     0.025
+    ],
+    "selection": "T_fast maximises inner 35 ms matches with inner wide extras and kick-free fires <= H18 alone",
+    "acceptance": "70 ms within 2 matches and 0 extras of H18, cores clear, 50 ms +20 or median delay -10 ms",
+    "expected_failure": "weak fast scores; few kicks qualify without new extras"
+   },
+   "rule_sha256": "07cfd988130260a4e46191dfe79938e90d19b009ad97e53ce5c0a36458bd8740",
+   "configs": 3,
+   "cost": {
+    "cpu": "second feature pass 0.8% of one core",
+    "state": "frozen extractor buffers + 16 weights"
+   },
+   "variants": [
+    {
+     "name": "evidence_0.015s",
+     "fast_fires": {
+      "apricots_128bpm": [
+       0,
+       10
+      ],
+      "bad_guy_128bpm": [
+       2,
+       59
+      ],
+      "feel_the_vibration_174bpm": [
+       0,
+       16
+      ],
+      "inhale_exhale_145bpm": [
+       7,
+       15
+      ],
+      "tears_140bpm": [
+       2,
+       18
+      ],
+      "late_night": [
+       0,
+       190
+      ],
+      "midnight_patience": [
+       18,
+       350
+      ],
+      "miracle": [
+       0,
+       75
+      ],
+      "heavy_on_mind": [
+       1,
+       170
+      ]
+     },
+     "without_bad_guy_70": [
+      247,
+      47
+     ],
+     "tol_ms": {
+      "35": [
+       47,
+       303
+      ],
+      "50": [
+       186,
+       164
+      ],
+      "70": [
+       262,
+       89
+      ]
+     },
+     "delay_ms": [
+      45.333,
+      55.666000000000004,
+      81.0
+     ],
+     "kick_free_core_fires": 0,
+     "acceptance": {
+      "within_70": true,
+      "cores_clear": true,
+      "timing": false,
+      "passes": false
+     },
+     "per_track": {
+      "apricots_128bpm": [
+       10,
+       0
+      ],
+      "bad_guy_128bpm": [
+       15,
+       42
+      ],
+      "feel_the_vibration_174bpm": [
+       15,
+       0
+      ],
+      "inhale_exhale_145bpm": [
+       9,
+       4
+      ],
+      "tears_140bpm": [
+       10,
+       8
+      ],
+      "late_night": [
+       67,
+       0
+      ],
+      "midnight_patience": [
+       49,
+       29
+      ],
+      "miracle": [
+       26,
+       0
+      ],
+      "heavy_on_mind": [
+       61,
+       6
+      ]
+     },
+     "lost_vs_baseline": null
+    },
+    {
+     "name": "evidence_0.02s",
+     "fast_fires": {
+      "apricots_128bpm": [
+       0,
+       10
+      ],
+      "bad_guy_128bpm": [
+       17,
+       59
+      ],
+      "feel_the_vibration_174bpm": [
+       2,
+       16
+      ],
+      "inhale_exhale_145bpm": [
+       5,
+       15
+      ],
+      "tears_140bpm": [
+       7,
+       18
+      ],
+      "late_night": [
+       2,
+       190
+      ],
+      "midnight_patience": [
+       18,
+       350
+      ],
+      "miracle": [
+       3,
+       75
+      ],
+      "heavy_on_mind": [
+       7,
+       170
+      ]
+     },
+     "without_bad_guy_70": [
+      247,
+      47
+     ],
+     "tol_ms": {
+      "35": [
+       54,
+       296
+      ],
+      "50": [
+       187,
+       163
+      ],
+      "70": [
+       262,
+       89
+      ]
+     },
+     "delay_ms": [
+      45.088,
+      55.3303,
+      81.0
+     ],
+     "kick_free_core_fires": 0,
+     "acceptance": {
+      "within_70": true,
+      "cores_clear": true,
+      "timing": false,
+      "passes": false
+     },
+     "per_track": {
+      "apricots_128bpm": [
+       10,
+       0
+      ],
+      "bad_guy_128bpm": [
+       15,
+       42
+      ],
+      "feel_the_vibration_174bpm": [
+       15,
+       0
+      ],
+      "inhale_exhale_145bpm": [
+       9,
+       4
+      ],
+      "tears_140bpm": [
+       10,
+       8
+      ],
+      "late_night": [
+       67,
+       0
+      ],
+      "midnight_patience": [
+       49,
+       29
+      ],
+      "miracle": [
+       26,
+       0
+      ],
+      "heavy_on_mind": [
+       61,
+       6
+      ]
+     },
+     "lost_vs_baseline": null
+    },
+    {
+     "name": "evidence_0.025s",
+     "fast_fires": {
+      "apricots_128bpm": [
+       0,
+       10
+      ],
+      "bad_guy_128bpm": [
+       23,
+       59
+      ],
+      "feel_the_vibration_174bpm": [
+       6,
+       16
+      ],
+      "inhale_exhale_145bpm": [
+       7,
+       15
+      ],
+      "tears_140bpm": [
+       7,
+       18
+      ],
+      "late_night": [
+       2,
+       190
+      ],
+      "midnight_patience": [
+       61,
+       350
+      ],
+      "miracle": [
+       3,
+       75
+      ],
+      "heavy_on_mind": [
+       9,
+       170
+      ]
+     },
+     "without_bad_guy_70": [
+      247,
+      47
+     ],
+     "tol_ms": {
+      "35": [
+       65,
+       285
+      ],
+      "50": [
+       190,
+       160
+      ],
+      "70": [
+       262,
+       89
+      ]
+     },
+     "delay_ms": [
+      44.667,
+      55.2547,
+      81.0
+     ],
+     "kick_free_core_fires": 0,
+     "acceptance": {
+      "within_70": true,
+      "cores_clear": true,
+      "timing": false,
+      "passes": false
+     },
+     "per_track": {
+      "apricots_128bpm": [
+       10,
+       0
+      ],
+      "bad_guy_128bpm": [
+       15,
+       42
+      ],
+      "feel_the_vibration_174bpm": [
+       15,
+       0
+      ],
+      "inhale_exhale_145bpm": [
+       9,
+       4
+      ],
+      "tears_140bpm": [
+       10,
+       8
+      ],
+      "late_night": [
+       67,
+       0
+      ],
+      "midnight_patience": [
+       49,
+       29
+      ],
+      "miracle": [
+       26,
+       0
+      ],
+      "heavy_on_mind": [
+       61,
+       6
+      ]
+     },
+     "lost_vs_baseline": null
+    }
+   ]
+  }
+ },
+ "decisions_for_peter": [
+  "BUG-7rngq Midnight labels without kick-stem attack",
+  "BUG-sa3n3 Bad Guy bass-line fires"
+ ],
+ "h22_first_run_void": "in-place training-mask edit leaked across folds; archived under h22/void_mask_mutation_run",
+ "validation": {
+  "midpoint|baseline": {
+   "tol": {
+    "35": [
+     36,
+     276
+    ],
+    "50": [
+     155,
+     157
+    ],
+    "70": [
+     223,
+     89
+    ]
+   },
+   "cores": 0,
+   "delay": [
+    45.7,
+    56.3,
+    73.9,
+    1
+   ],
+   "groups": {
+    "original_174": [
+     121,
+     76,
+     174
+    ],
+    "added_207": [
+     102,
+     13,
+     207
+    ]
+   },
+   "oracle": [
+    274,
+    43
+   ],
+   "extra_kinds": {
+    "late_or_duplicate_near_label": 9,
+    "kick_free_core": 0,
+    "unrelated": 80
+   },
+   "per_track": {
+    "apricots_128bpm": [
+     9,
+     0
+    ],
+    "bad_guy_128bpm": [
+     15,
+     45
+    ],
+    "feel_the_vibration_174bpm": [
+     15,
+     0
+    ],
+    "inhale_exhale_145bpm": [
+     11,
+     6
+    ],
+    "tears_140bpm": [
+     10,
+     11
+    ],
+    "late_night": [
+     53,
+     0
+    ],
+    "midnight_patience": [
+     44,
+     20
+    ],
+    "miracle": [
+     21,
+     0
+    ],
+    "heavy_on_mind": [
+     45,
+     7
+    ]
+   }
+  },
+  "midpoint|h18": {
+   "tol": {
+    "35": [
+     42,
+     308
+    ],
+    "50": [
+     186,
+     164
+    ],
+    "70": [
+     262,
+     89
+    ]
+   },
+   "cores": 0,
+   "delay": [
+    45.3,
+    55.7,
+    81.0,
+    3
+   ],
+   "groups": {
+    "original_174": [
+     138,
+     68,
+     174
+    ],
+    "added_207": [
+     124,
+     21,
+     207
+    ]
+   },
+   "oracle": [
+    289,
+    38
+   ],
+   "extra_kinds": {
+    "late_or_duplicate_near_label": 16,
+    "kick_free_core": 0,
+    "unrelated": 73
+   },
+   "per_track": {
+    "apricots_128bpm": [
+     10,
+     0
+    ],
+    "bad_guy_128bpm": [
+     15,
+     42
+    ],
+    "feel_the_vibration_174bpm": [
+     15,
+     0
+    ],
+    "inhale_exhale_145bpm": [
+     9,
+     4
+    ],
+    "tears_140bpm": [
+     10,
+     8
+    ],
+    "late_night": [
+     67,
+     0
+    ],
+    "midnight_patience": [
+     49,
+     29
+    ],
+    "miracle": [
+     26,
+     0
+    ],
+    "heavy_on_mind": [
+     61,
+     6
+    ]
+   }
+  },
+  "midpoint|h22": {
+   "tol": {
+    "35": [
+     40,
+     306
+    ],
+    "50": [
+     178,
+     168
+    ],
+    "70": [
+     256,
+     90
+    ]
+   },
+   "cores": 0,
+   "delay": [
+    45.2,
+    56.8,
+    183.3,
+    4
+   ],
+   "groups": {
+    "original_174": [
+     135,
+     72,
+     174
+    ],
+    "added_207": [
+     121,
+     18,
+     207
+    ]
+   },
+   "oracle": [
+    271,
+    36
+   ],
+   "extra_kinds": {
+    "late_or_duplicate_near_label": 17,
+    "kick_free_core": 0,
+    "unrelated": 73
+   },
+   "per_track": {
+    "apricots_128bpm": [
+     9,
+     0
+    ],
+    "bad_guy_128bpm": [
+     15,
+     38
+    ],
+    "feel_the_vibration_174bpm": [
+     15,
+     2
+    ],
+    "inhale_exhale_145bpm": [
+     11,
+     6
+    ],
+    "tears_140bpm": [
+     10,
+     8
+    ],
+    "late_night": [
+     66,
+     4
+    ],
+    "midnight_patience": [
+     47,
+     28
+    ],
+    "miracle": [
+     26,
+     0
+    ],
+    "heavy_on_mind": [
+     57,
+     4
+    ]
+   }
+  },
+  "physical_s|baseline": {
+   "tol": {
+    "35": [
+     35,
+     277
+    ],
+    "50": [
+     147,
+     165
+    ],
+    "70": [
+     223,
+     89
+    ]
+   },
+   "cores": 0,
+   "delay": [
+    47.0,
+    57.5,
+    76.9,
+    1
+   ]
+  },
+  "physical_s|h18": {
+   "tol": {
+    "35": [
+     40,
+     310
+    ],
+    "50": [
+     172,
+     179
+    ],
+    "70": [
+     261,
+     90
+    ]
+   },
+   "cores": 0,
+   "delay": [
+    47.2,
+    57.9,
+    81.0,
+    4
+   ]
+  },
+  "physical_s|h22": {
+   "tol": {
+    "35": [
+     37,
+     309
+    ],
+    "50": [
+     163,
+     183
+    ],
+    "70": [
+     255,
+     91
+    ]
+   },
+   "cores": 0,
+   "delay": [
+    47.3,
+    58.7,
+    183.3,
+    5
+   ]
+  },
+  "attack_s|baseline": {
+   "tol": {
+    "35": [
+     39,
+     273
+    ],
+    "50": [
+     171,
+     141
+    ],
+    "70": [
+     223,
+     89
+    ]
+   },
+   "cores": 0,
+   "delay": [
+    45.3,
+    54.0,
+    71.9,
+    1
+   ]
+  },
+  "attack_s|h18": {
+   "tol": {
+    "35": [
+     48,
+     302
+    ],
+    "50": [
+     202,
+     149
+    ],
+    "70": [
+     263,
+     88
+    ]
+   },
+   "cores": 0,
+   "delay": [
+    45.0,
+    53.7,
+    81.0,
+    2
+   ]
+  },
+  "attack_s|h22": {
+   "tol": {
+    "35": [
+     44,
+     302
+    ],
+    "50": [
+     193,
+     153
+    ],
+    "70": [
+     257,
+     89
+    ]
+   },
+   "cores": 0,
+   "delay": [
+    45.0,
+    54.9,
+    183.3,
+    3
+   ]
+  }
+ },
+ "extra_passages": {
+  "D2|baseline": {
+   "labels": 32,
+   "matched70": 19,
+   "extra70": 0,
+   "matched50": 4,
+   "negative_core_fires": 0,
+   "per_track": {
+    "late_night": [
+     19,
+     0,
+     29
+    ],
+    "midnight_patience": [
+     0,
+     0,
+     1
+    ],
+    "miracle": [
+     0,
+     0,
+     1
+    ],
+    "heavy_on_mind": [
+     0,
+     0,
+     1
+    ]
+   }
+  },
+  "D2|h18": {
+   "labels": 32,
+   "matched70": 26,
+   "extra70": 0,
+   "matched50": 7,
+   "negative_core_fires": 0,
+   "per_track": {
+    "late_night": [
+     25,
+     0,
+     29
+    ],
+    "midnight_patience": [
+     0,
+     0,
+     1
+    ],
+    "miracle": [
+     1,
+     0,
+     1
+    ],
+    "heavy_on_mind": [
+     0,
+     0,
+     1
+    ]
+   }
+  },
+  "D2|h22": {
+   "labels": 32,
+   "matched70": 28,
+   "extra70": 2,
+   "matched50": 6,
+   "negative_core_fires": 1,
+   "per_track": {
+    "late_night": [
+     27,
+     2,
+     29
+    ],
+    "midnight_patience": [
+     0,
+     0,
+     1
+    ],
+    "miracle": [
+     1,
+     0,
+     1
+    ],
+    "heavy_on_mind": [
+     0,
+     0,
+     1
+    ]
+   }
+  },
+  "additional73|baseline": {
+   "labels": 73,
+   "matched70": 42,
+   "extra70": 18,
+   "matched50": 26,
+   "negative_core_fires": 6,
+   "per_track": {
+    "late_night": [
+     0,
+     0,
+     0
+    ],
+    "midnight_patience": [
+     23,
+     17,
+     43
+    ],
+    "miracle": [
+     8,
+     0,
+     10
+    ],
+    "heavy_on_mind": [
+     11,
+     1,
+     20
+    ]
+   }
+  },
+  "additional73|h18": {
+   "labels": 73,
+   "matched70": 47,
+   "extra70": 16,
+   "matched50": 28,
+   "negative_core_fires": 4,
+   "per_track": {
+    "late_night": [
+     0,
+     0,
+     0
+    ],
+    "midnight_patience": [
+     25,
+     15,
+     43
+    ],
+    "miracle": [
+     9,
+     0,
+     10
+    ],
+    "heavy_on_mind": [
+     13,
+     1,
+     20
+    ]
+   }
+  },
+  "additional73|h22": {
+   "labels": 73,
+   "matched70": 47,
+   "extra70": 19,
+   "matched50": 27,
+   "negative_core_fires": 4,
+   "per_track": {
+    "late_night": [
+     0,
+     0,
+     0
+    ],
+    "midnight_patience": [
+     25,
+     17,
+     43
+    ],
+    "miracle": [
+     9,
+     0,
+     10
+    ],
+    "heavy_on_mind": [
+     13,
+     2,
+     20
+    ]
+   }
+  }
+ },
+ "relabel": {
+  "midpoint|baseline": {
+   "labels": 381,
+   "tol": {
+    "35": {
+     "matched": 36,
+     "extra": 276
+    },
+    "50": {
+     "matched": 155,
+     "extra": 157
+    },
+    "70": {
+     "matched": 223,
+     "extra": 89
+    }
+   },
+   "wide_extras": 91,
+   "kick_free_extras": 0,
+   "per_track": {
+    "apricots_128bpm": [
+     9,
+     0,
+     14
+    ],
+    "bad_guy_128bpm": [
+     15,
+     45,
+     15
+    ],
+    "feel_the_vibration_174bpm": [
+     15,
+     0,
+     15
+    ],
+    "inhale_exhale_145bpm": [
+     11,
+     6,
+     12
+    ],
+    "tears_140bpm": [
+     10,
+     11,
+     10
+    ],
+    "late_night": [
+     53,
+     0,
+     77
+    ],
+    "midnight_patience": [
+     44,
+     20,
+     88
+    ],
+    "miracle": [
+     21,
+     0,
+     32
+    ],
+    "heavy_on_mind": [
+     45,
+     7,
+     118
+    ]
+   },
+   "delay_p50": 45.726,
+   "delay_p90": 56.333,
+   "delay_max": 73.9,
+   "late_over_70": 1,
+   "name": "baseline",
+   "cutoffs": {
+    "apricots_128bpm": 0.8274038461538461,
+    "bad_guy_128bpm": 0.85625,
+    "feel_the_vibration_174bpm": 0.8807692307692307,
+    "inhale_exhale_145bpm": 0.9019230769230769,
+    "tears_140bpm": 0.8389423076923077,
+    "late_night": 0.8653846153846154,
+    "midnight_patience": 0.7937500000000001,
+    "miracle": 0.8927884615384616,
+    "heavy_on_mind": 0.8144230769230769
+   }
+  },
+  "midpoint|h16": {
+   "labels": 381,
+   "tol": {
+    "35": {
+     "matched": 47,
+     "extra": 327
+    },
+    "50": {
+     "matched": 210,
+     "extra": 164
+    },
+    "70": {
+     "matched": 285,
+     "extra": 90
+    }
+   },
+   "wide_extras": 88,
+   "kick_free_extras": 1,
+   "per_track": {
+    "apricots_128bpm": [
+     13,
+     0,
+     14
+    ],
+    "bad_guy_128bpm": [
+     15,
+     42,
+     15
+    ],
+    "feel_the_vibration_174bpm": [
+     15,
+     0,
+     15
+    ],
+    "inhale_exhale_145bpm": [
+     9,
+     4,
+     12
+    ],
+    "tears_140bpm": [
+     9,
+     4,
+     10
+    ],
+    "late_night": [
+     71,
+     2,
+     77
+    ],
+    "midnight_patience": [
+     56,
+     34,
+     88
+    ],
+    "miracle": [
+     25,
+     2,
+     32
+    ],
+    "heavy_on_mind": [
+     72,
+     2,
+     118
+    ]
+   },
+   "delay_p50": 44.921,
+   "delay_p90": 55.82180000000001,
+   "delay_max": 167.333,
+   "late_over_70": 4,
+   "name": "h16",
+   "cutoffs": {
+    "apricots_128bpm": 0.6519230769230769,
+    "bad_guy_128bpm": 0.6557692307692308,
+    "feel_the_vibration_174bpm": 0.6528846153846154,
+    "inhale_exhale_145bpm": 0.6730769230769231,
+    "tears_140bpm": 0.6591346153846154,
+    "late_night": 0.6586538461538461,
+    "midnight_patience": 0.6173076923076923,
+    "miracle": 0.6572115384615385,
+    "heavy_on_mind": 0.6389423076923078
+   }
+  },
+  "midpoint|h18": {
+   "labels": 381,
+   "tol": {
+    "35": {
+     "matched": 42,
+     "extra": 308
+    },
+    "50": {
+     "matched": 186,
+     "extra": 164
+    },
+    "70": {
+     "matched": 262,
+     "extra": 89
+    }
+   },
+   "wide_extras": 89,
+   "kick_free_extras": 0,
+   "per_track": {
+    "apricots_128bpm": [
+     10,
+     0,
+     14
+    ],
+    "bad_guy_128bpm": [
+     15,
+     42,
+     15
+    ],
+    "feel_the_vibration_174bpm": [
+     15,
+     0,
+     15
+    ],
+    "inhale_exhale_145bpm": [
+     9,
+     4,
+     12
+    ],
+    "tears_140bpm": [
+     10,
+     8,
+     10
+    ],
+    "late_night": [
+     67,
+     0,
+     77
+    ],
+    "midnight_patience": [
+     49,
+     29,
+     88
+    ],
+    "miracle": [
+     26,
+     0,
+     32
+    ],
+    "heavy_on_mind": [
+     61,
+     6,
+     118
+    ]
+   },
+   "delay_p50": 45.333,
+   "delay_p90": 55.666000000000004,
+   "delay_max": 81.0,
+   "late_over_70": 3,
+   "name": "h18",
+   "cutoffs": {
+    "apricots_128bpm": 0.7552884615384615,
+    "bad_guy_128bpm": 0.7548076923076923,
+    "feel_the_vibration_174bpm": 0.7793269230769231,
+    "inhale_exhale_145bpm": 0.7971153846153847,
+    "tears_140bpm": 0.78125,
+    "late_night": 0.7673076923076924,
+    "midnight_patience": 0.7033653846153846,
+    "miracle": 0.7730769230769231,
+    "heavy_on_mind": 0.7326923076923076
+   }
+  },
+  "physical_s|baseline": {
+   "labels": 381,
+   "tol": {
+    "35": {
+     "matched": 35,
+     "extra": 277
+    },
+    "50": {
+     "matched": 147,
+     "extra": 165
+    },
+    "70": {
+     "matched": 223,
+     "extra": 89
+    }
+   },
+   "wide_extras": 91,
+   "kick_free_extras": 0,
+   "per_track": {
+    "apricots_128bpm": [
+     9,
+     0,
+     14
+    ],
+    "bad_guy_128bpm": [
+     15,
+     45,
+     15
+    ],
+    "feel_the_vibration_174bpm": [
+     15,
+     0,
+     15
+    ],
+    "inhale_exhale_145bpm": [
+     11,
+     6,
+     12
+    ],
+    "tears_140bpm": [
+     10,
+     11,
+     10
+    ],
+    "late_night": [
+     53,
+     0,
+     77
+    ],
+    "midnight_patience": [
+     44,
+     20,
+     88
+    ],
+    "miracle": [
+     21,
+     0,
+     32
+    ],
+    "heavy_on_mind": [
+     45,
+     7,
+     118
+    ]
+   },
+   "delay_p50": 47.0,
+   "delay_p90": 57.487,
+   "delay_max": 76.9,
+   "late_over_70": 1,
+   "name": "baseline",
+   "cutoffs": {
+    "apricots_128bpm": 0.8274038461538461,
+    "bad_guy_128bpm": 0.85625,
+    "feel_the_vibration_174bpm": 0.8807692307692307,
+    "inhale_exhale_145bpm": 0.9019230769230769,
+    "tears_140bpm": 0.8389423076923077,
+    "late_night": 0.8653846153846154,
+    "midnight_patience": 0.7937500000000001,
+    "miracle": 0.8927884615384616,
+    "heavy_on_mind": 0.8144230769230769
+   }
+  },
+  "physical_s|h16": {
+   "labels": 381,
+   "tol": {
+    "35": {
+     "matched": 47,
+     "extra": 327
+    },
+    "50": {
+     "matched": 190,
+     "extra": 185
+    },
+    "70": {
+     "matched": 284,
+     "extra": 91
+    }
+   },
+   "wide_extras": 88,
+   "kick_free_extras": 1,
+   "per_track": {
+    "apricots_128bpm": [
+     13,
+     0,
+     14
+    ],
+    "bad_guy_128bpm": [
+     15,
+     42,
+     15
+    ],
+    "feel_the_vibration_174bpm": [
+     15,
+     0,
+     15
+    ],
+    "inhale_exhale_145bpm": [
+     9,
+     4,
+     12
+    ],
+    "tears_140bpm": [
+     9,
+     4,
+     10
+    ],
+    "late_night": [
+     71,
+     2,
+     77
+    ],
+    "midnight_patience": [
+     56,
+     34,
+     88
+    ],
+    "miracle": [
+     25,
+     2,
+     32
+    ],
+    "heavy_on_mind": [
+     71,
+     3,
+     118
+    ]
+   },
+   "delay_p50": 46.896,
+   "delay_p90": 58.68600000000001,
+   "delay_max": 167.333,
+   "late_over_70": 5,
+   "name": "h16",
+   "cutoffs": {
+    "apricots_128bpm": 0.6519230769230769,
+    "bad_guy_128bpm": 0.6557692307692308,
+    "feel_the_vibration_174bpm": 0.6528846153846154,
+    "inhale_exhale_145bpm": 0.6730769230769231,
+    "tears_140bpm": 0.6591346153846154,
+    "late_night": 0.6586538461538461,
+    "midnight_patience": 0.6173076923076923,
+    "miracle": 0.6572115384615385,
+    "heavy_on_mind": 0.6389423076923078
+   }
+  },
+  "physical_s|h18": {
+   "labels": 381,
+   "tol": {
+    "35": {
+     "matched": 40,
+     "extra": 310
+    },
+    "50": {
+     "matched": 172,
+     "extra": 179
+    },
+    "70": {
+     "matched": 261,
+     "extra": 90
+    }
+   },
+   "wide_extras": 89,
+   "kick_free_extras": 0,
+   "per_track": {
+    "apricots_128bpm": [
+     10,
+     0,
+     14
+    ],
+    "bad_guy_128bpm": [
+     15,
+     42,
+     15
+    ],
+    "feel_the_vibration_174bpm": [
+     15,
+     0,
+     15
+    ],
+    "inhale_exhale_145bpm": [
+     9,
+     4,
+     12
+    ],
+    "tears_140bpm": [
+     10,
+     8,
+     10
+    ],
+    "late_night": [
+     67,
+     0,
+     77
+    ],
+    "midnight_patience": [
+     49,
+     29,
+     88
+    ],
+    "miracle": [
+     26,
+     0,
+     32
+    ],
+    "heavy_on_mind": [
+     60,
+     7,
+     118
+    ]
+   },
+   "delay_p50": 47.177499999999995,
+   "delay_p90": 57.8972,
+   "delay_max": 81.0,
+   "late_over_70": 4,
+   "name": "h18",
+   "cutoffs": {
+    "apricots_128bpm": 0.7552884615384615,
+    "bad_guy_128bpm": 0.7548076923076923,
+    "feel_the_vibration_174bpm": 0.7793269230769231,
+    "inhale_exhale_145bpm": 0.7971153846153847,
+    "tears_140bpm": 0.78125,
+    "late_night": 0.7673076923076924,
+    "midnight_patience": 0.7033653846153846,
+    "miracle": 0.7730769230769231,
+    "heavy_on_mind": 0.7326923076923076
+   }
+  },
+  "attack_s|baseline": {
+   "labels": 381,
+   "tol": {
+    "35": {
+     "matched": 39,
+     "extra": 273
+    },
+    "50": {
+     "matched": 171,
+     "extra": 141
+    },
+    "70": {
+     "matched": 223,
+     "extra": 89
+    }
+   },
+   "wide_extras": 91,
+   "kick_free_extras": 0,
+   "per_track": {
+    "apricots_128bpm": [
+     9,
+     0,
+     14
+    ],
+    "bad_guy_128bpm": [
+     15,
+     45,
+     15
+    ],
+    "feel_the_vibration_174bpm": [
+     15,
+     0,
+     15
+    ],
+    "inhale_exhale_145bpm": [
+     11,
+     6,
+     12
+    ],
+    "tears_140bpm": [
+     10,
+     11,
+     10
+    ],
+    "late_night": [
+     53,
+     0,
+     77
+    ],
+    "midnight_patience": [
+     44,
+     20,
+     88
+    ],
+    "miracle": [
+     21,
+     0,
+     32
+    ],
+    "heavy_on_mind": [
+     45,
+     7,
+     118
+    ]
+   },
+   "delay_p50": 45.333,
+   "delay_p90": 54.0,
+   "delay_max": 71.9,
+   "late_over_70": 1,
+   "name": "baseline",
+   "cutoffs": {
+    "apricots_128bpm": 0.8274038461538461,
+    "bad_guy_128bpm": 0.85625,
+    "feel_the_vibration_174bpm": 0.8807692307692307,
+    "inhale_exhale_145bpm": 0.9019230769230769,
+    "tears_140bpm": 0.8389423076923077,
+    "late_night": 0.8653846153846154,
+    "midnight_patience": 0.7937500000000001,
+    "miracle": 0.8927884615384616,
+    "heavy_on_mind": 0.8144230769230769
+   }
+  },
+  "attack_s|h16": {
+   "labels": 381,
+   "tol": {
+    "35": {
+     "matched": 57,
+     "extra": 317
+    },
+    "50": {
+     "matched": 223,
+     "extra": 152
+    },
+    "70": {
+     "matched": 286,
+     "extra": 89
+    }
+   },
+   "wide_extras": 88,
+   "kick_free_extras": 1,
+   "per_track": {
+    "apricots_128bpm": [
+     13,
+     0,
+     14
+    ],
+    "bad_guy_128bpm": [
+     15,
+     42,
+     15
+    ],
+    "feel_the_vibration_174bpm": [
+     15,
+     0,
+     15
+    ],
+    "inhale_exhale_145bpm": [
+     9,
+     4,
+     12
+    ],
+    "tears_140bpm": [
+     9,
+     4,
+     10
+    ],
+    "late_night": [
+     71,
+     2,
+     77
+    ],
+    "midnight_patience": [
+     57,
+     33,
+     88
+    ],
+    "miracle": [
+     25,
+     2,
+     32
+    ],
+    "heavy_on_mind": [
+     72,
+     2,
+     118
+    ]
+   },
+   "delay_p50": 44.333,
+   "delay_p90": 53.7154,
+   "delay_max": 167.333,
+   "late_over_70": 3,
+   "name": "h16",
+   "cutoffs": {
+    "apricots_128bpm": 0.6519230769230769,
+    "bad_guy_128bpm": 0.6557692307692308,
+    "feel_the_vibration_174bpm": 0.6528846153846154,
+    "inhale_exhale_145bpm": 0.6730769230769231,
+    "tears_140bpm": 0.6591346153846154,
+    "late_night": 0.6586538461538461,
+    "midnight_patience": 0.6173076923076923,
+    "miracle": 0.6572115384615385,
+    "heavy_on_mind": 0.6389423076923078
+   }
+  },
+  "attack_s|h18": {
+   "labels": 381,
+   "tol": {
+    "35": {
+     "matched": 48,
+     "extra": 302
+    },
+    "50": {
+     "matched": 202,
+     "extra": 149
+    },
+    "70": {
+     "matched": 263,
+     "extra": 88
+    }
+   },
+   "wide_extras": 89,
+   "kick_free_extras": 0,
+   "per_track": {
+    "apricots_128bpm": [
+     10,
+     0,
+     14
+    ],
+    "bad_guy_128bpm": [
+     15,
+     42,
+     15
+    ],
+    "feel_the_vibration_174bpm": [
+     15,
+     0,
+     15
+    ],
+    "inhale_exhale_145bpm": [
+     9,
+     4,
+     12
+    ],
+    "tears_140bpm": [
+     10,
+     8,
+     10
+    ],
+    "late_night": [
+     67,
+     0,
+     77
+    ],
+    "midnight_patience": [
+     50,
+     28,
+     88
+    ],
+    "miracle": [
+     26,
+     0,
+     32
+    ],
+    "heavy_on_mind": [
+     61,
+     6,
+     118
+    ]
+   },
+   "delay_p50": 45.0,
+   "delay_p90": 53.6621,
+   "delay_max": 81.0,
+   "late_over_70": 2,
+   "name": "h18",
+   "cutoffs": {
+    "apricots_128bpm": 0.7552884615384615,
+    "bad_guy_128bpm": 0.7548076923076923,
+    "feel_the_vibration_174bpm": 0.7793269230769231,
+    "inhale_exhale_145bpm": 0.7971153846153847,
+    "tears_140bpm": 0.7788461538461539,
+    "late_night": 0.7673076923076924,
+    "midnight_patience": 0.7033653846153846,
+    "miracle": 0.7730769230769231,
+    "heavy_on_mind": 0.7326923076923076
+   }
+  }
+ },
+ "glide_cpu": {
+  "source_sha256": "3c74593a7e9b3c8be35abd1866c44a63149a53eb5bc36110bb2f8cfa4fa7550b",
+  "cpu_s": {
+   "apricots_128bpm": 0.03756599999999999,
+   "bad_guy_128bpm": 0.02381499999999992,
+   "feel_the_vibration_174bpm": 0.030939999999999968,
+   "inhale_exhale_145bpm": 0.024910999999999905,
+   "tears_140bpm": 0.03698599999999996,
+   "late_night": 0.6670069999999999,
+   "midnight_patience": 1.0177579999999997,
+   "miracle": 1.039053,
+   "heavy_on_mind": 0.8135849999999998
+  },
+  "audio_s": {
+   "apricots_128bpm": 13.241395833333334,
+   "bad_guy_128bpm": 15.000022675736961,
+   "feel_the_vibration_174bpm": 13.241395833333334,
+   "inhale_exhale_145bpm": 13.241395833333334,
+   "tears_140bpm": 13.241395833333334,
+   "late_night": 251.3910625,
+   "midnight_patience": 261.9545625,
+   "miracle": 252.97299319727892,
+   "heavy_on_mind": 248.35444444444445
+  },
+  "data_sha256": "ea6ee408230fa8250518c712febd2f1bbbbfd646de4da4947deef8d686db8941"
+ },
+ "snapped_label_sha256": "c2570cf4d3d5395e826ffeb915924f2a296f58b6b0cdc8589cb9e71385c33fb1",
+ "cache": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-10-night"
+}

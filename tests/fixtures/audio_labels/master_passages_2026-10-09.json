@@ -1,0 +1,1003 @@
+{
+  "status": "Provisional source-assisted visual development review. Original grid-assisted timings revoked before positive-passage scoring. Revised intervals are not independent listening truth or precise latency ground truth.",
+  "tracks": [
+    {
+      "track": "late_night",
+      "bpm": 108,
+      "status": "detector-blind visual development annotations; not audible ground truth",
+      "source_registry": "/Users/peterkiemann/MANIFOLD - Rust/.claude/worktrees/slot-9/tools/audio_analysis/eval/additional_stem_sources.json",
+      "master_path": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/2024/Late Night - STEM MASTER Project/ALEX MASTERS/Latent Space - Late Night T2(mastered) 48k 24-bit.wav",
+      "master_sha256": "91ef876583d6404b417f1f92e88acb5aca75a207d1d107d77ee05e2846740108",
+      "method": "12-second windows selected from isolated-stem RMS only. Isolated kick attacks proposed review windows. Event presence was visually verified against actual mastered mono waveforms and 20-1500 Hz log-frequency STFT. Revised intervals bracket the plausible source/master attack transition in the existing numbered waveform panels. Stored times are 5 ms-rounded interval midpoints, not independently measured sample-accurate master onsets. No BPM/grid arithmetic, master detector output, global offset or stem-sum reconstruction was used for this timing revision.",
+      "timing_precision_s": 0.015,
+      "timing_precision_note": "Each accepted point represents a 30 ms-wide visual onset interval with midpoint rounded to 5 ms. These conservative brackets express annotation uncertainty, not statistical confidence. The 170.7 ms spectrogram window supports event identity; the waveform panels support timing.",
+      "review_margin_s": 0.25,
+      "passages": [
+        {
+          "id": "late_night_kick_heavy",
+          "start_s": 199.0,
+          "end_s": 211.0,
+          "review_start_s": 198.75,
+          "review_end_s": 211.25,
+          "kick_times_s": [
+            198.89,
+            199.17,
+            199.585,
+            199.865,
+            200.005,
+            200.28,
+            201.115,
+            201.395,
+            201.81,
+            202.225,
+            202.505,
+            203.34,
+            203.615,
+            204.03,
+            204.31,
+            204.45,
+            204.59,
+            204.725,
+            205.56,
+            205.84,
+            206.255,
+            206.67,
+            206.95,
+            207.78,
+            208.06,
+            208.475,
+            208.755,
+            208.895,
+            209.17,
+            209.59,
+            209.865,
+            210.145,
+            210.28,
+            210.7,
+            210.975,
+            211.115
+          ],
+          "uncertain_regions": [
+            {
+              "start_s": 200.055,
+              "end_s": 200.165,
+              "reason": "Two short waveform resets near 200.069 and 200.139 overlap a previous kick tail; their identity as additional master kicks cannot be resolved confidently by visual review. Surrounding strong attacks remain accepted."
+            },
+            {
+              "start_s": 208.94,
+              "end_s": 209.055,
+              "reason": "Two short waveform resets near 208.959 and 209.028 interrupt the kick decay. Additional master-kick identity is uncertain; surrounding strong attacks remain accepted."
+            },
+            {
+              "start_s": 209.985,
+              "end_s": 210.03,
+              "reason": "Weak stem restart near 210.000 is visible; its low-amplitude master counterpart is ambiguous against the previous decay and other transients. Later strong attacks remain accepted."
+            }
+          ],
+          "selection_reason": "Sustained kick-heavy section rather than the highest-ratio 208-second window, which approaches a section transition. Native stem RMS: kick 0.4692804; bass/sub 0.4365228; ratio 1.0750. Dense kick body/chirp structure verified in actual master.",
+          "evidence": [
+            "kick_heavy_overview.png",
+            "kick_details_1.png",
+            "kick_details_2.png",
+            "kick_details_3.png",
+            "uncertain_rolls.png"
+          ],
+          "notes": "34 accepted onsets inside the scoring window; one accepted onset in each review margin. Exclude all uncertain regions from both positive and negative scoring. Apply the scorer matching-tolerance boundary policy consistently.",
+          "kick_onset_intervals": [
+            {
+              "start_s": 198.875,
+              "end_s": 198.905,
+              "midpoint_s": 198.89,
+              "evidence_panel": "kick_details_1.png #01"
+            },
+            {
+              "start_s": 199.155,
+              "end_s": 199.185,
+              "midpoint_s": 199.17,
+              "evidence_panel": "kick_details_1.png #02"
+            },
+            {
+              "start_s": 199.57,
+              "end_s": 199.6,
+              "midpoint_s": 199.585,
+              "evidence_panel": "kick_details_1.png #03"
+            },
+            {
+              "start_s": 199.85,
+              "end_s": 199.88,
+              "midpoint_s": 199.865,
+              "evidence_panel": "kick_details_1.png #04"
+            },
+            {
+              "start_s": 199.99,
+              "end_s": 200.02,
+              "midpoint_s": 200.005,
+              "evidence_panel": "kick_details_1.png #05"
+            },
+            {
+              "start_s": 200.265,
+              "end_s": 200.295,
+              "midpoint_s": 200.28,
+              "evidence_panel": "kick_details_1.png #06"
+            },
+            {
+              "start_s": 201.1,
+              "end_s": 201.13,
+              "midpoint_s": 201.115,
+              "evidence_panel": "kick_details_1.png #07"
+            },
+            {
+              "start_s": 201.38,
+              "end_s": 201.41,
+              "midpoint_s": 201.395,
+              "evidence_panel": "kick_details_1.png #08"
+            },
+            {
+              "start_s": 201.795,
+              "end_s": 201.825,
+              "midpoint_s": 201.81,
+              "evidence_panel": "kick_details_1.png #09"
+            },
+            {
+              "start_s": 202.21,
+              "end_s": 202.24,
+              "midpoint_s": 202.225,
+              "evidence_panel": "kick_details_1.png #10"
+            },
+            {
+              "start_s": 202.49,
+              "end_s": 202.52,
+              "midpoint_s": 202.505,
+              "evidence_panel": "kick_details_1.png #11"
+            },
+            {
+              "start_s": 203.325,
+              "end_s": 203.355,
+              "midpoint_s": 203.34,
+              "evidence_panel": "kick_details_1.png #12"
+            },
+            {
+              "start_s": 203.6,
+              "end_s": 203.63,
+              "midpoint_s": 203.615,
+              "evidence_panel": "kick_details_2.png #13"
+            },
+            {
+              "start_s": 204.015,
+              "end_s": 204.045,
+              "midpoint_s": 204.03,
+              "evidence_panel": "kick_details_2.png #14"
+            },
+            {
+              "start_s": 204.295,
+              "end_s": 204.325,
+              "midpoint_s": 204.31,
+              "evidence_panel": "kick_details_2.png #15"
+            },
+            {
+              "start_s": 204.435,
+              "end_s": 204.465,
+              "midpoint_s": 204.45,
+              "evidence_panel": "kick_details_2.png #16"
+            },
+            {
+              "start_s": 204.575,
+              "end_s": 204.605,
+              "midpoint_s": 204.59,
+              "evidence_panel": "kick_details_2.png #17"
+            },
+            {
+              "start_s": 204.71,
+              "end_s": 204.74,
+              "midpoint_s": 204.725,
+              "evidence_panel": "kick_details_2.png #18"
+            },
+            {
+              "start_s": 205.545,
+              "end_s": 205.575,
+              "midpoint_s": 205.56,
+              "evidence_panel": "kick_details_2.png #19"
+            },
+            {
+              "start_s": 205.825,
+              "end_s": 205.855,
+              "midpoint_s": 205.84,
+              "evidence_panel": "kick_details_2.png #20"
+            },
+            {
+              "start_s": 206.24,
+              "end_s": 206.27,
+              "midpoint_s": 206.255,
+              "evidence_panel": "kick_details_2.png #21"
+            },
+            {
+              "start_s": 206.655,
+              "end_s": 206.685,
+              "midpoint_s": 206.67,
+              "evidence_panel": "kick_details_2.png #22"
+            },
+            {
+              "start_s": 206.935,
+              "end_s": 206.965,
+              "midpoint_s": 206.95,
+              "evidence_panel": "kick_details_2.png #23"
+            },
+            {
+              "start_s": 207.765,
+              "end_s": 207.795,
+              "midpoint_s": 207.78,
+              "evidence_panel": "kick_details_2.png #24"
+            },
+            {
+              "start_s": 208.045,
+              "end_s": 208.075,
+              "midpoint_s": 208.06,
+              "evidence_panel": "kick_details_3.png #25"
+            },
+            {
+              "start_s": 208.46,
+              "end_s": 208.49,
+              "midpoint_s": 208.475,
+              "evidence_panel": "kick_details_3.png #26"
+            },
+            {
+              "start_s": 208.74,
+              "end_s": 208.77,
+              "midpoint_s": 208.755,
+              "evidence_panel": "kick_details_3.png #27"
+            },
+            {
+              "start_s": 208.88,
+              "end_s": 208.91,
+              "midpoint_s": 208.895,
+              "evidence_panel": "kick_details_3.png #28"
+            },
+            {
+              "start_s": 209.155,
+              "end_s": 209.185,
+              "midpoint_s": 209.17,
+              "evidence_panel": "kick_details_3.png #29"
+            },
+            {
+              "start_s": 209.575,
+              "end_s": 209.605,
+              "midpoint_s": 209.59,
+              "evidence_panel": "kick_details_3.png #30"
+            },
+            {
+              "start_s": 209.85,
+              "end_s": 209.88,
+              "midpoint_s": 209.865,
+              "evidence_panel": "kick_details_3.png #31"
+            },
+            {
+              "start_s": 210.13,
+              "end_s": 210.16,
+              "midpoint_s": 210.145,
+              "evidence_panel": "kick_details_3.png #32"
+            },
+            {
+              "start_s": 210.265,
+              "end_s": 210.295,
+              "midpoint_s": 210.28,
+              "evidence_panel": "kick_details_3.png #33"
+            },
+            {
+              "start_s": 210.685,
+              "end_s": 210.715,
+              "midpoint_s": 210.7,
+              "evidence_panel": "kick_details_3.png #34"
+            },
+            {
+              "start_s": 210.96,
+              "end_s": 210.99,
+              "midpoint_s": 210.975,
+              "evidence_panel": "kick_details_3.png #35"
+            },
+            {
+              "start_s": 211.1,
+              "end_s": 211.13,
+              "midpoint_s": 211.115,
+              "evidence_panel": "kick_details_3.png #36"
+            }
+          ]
+        },
+        {
+          "id": "late_night_bass_heavy",
+          "start_s": 128.0,
+          "end_s": 140.0,
+          "review_start_s": 127.75,
+          "review_end_s": 140.25,
+          "kick_times_s": [],
+          "uncertain_regions": [],
+          "selection_reason": "Highest bass dominance among scanned integer-second 12-second windows with bass RMS >0.03. Kick RMS 0.00001916; bass/sub RMS 0.1893633; ratio 0.0001012. Master shows sustained low-frequency tonal bands, including pitch transitions, without the kick chirps/restarts seen in the positive passage.",
+          "evidence": [
+            "bass_heavy_overview.png"
+          ],
+          "notes": "Visually supported kick-negative passage. Absence of audible or deeply masked kicks is not independently established.",
+          "kick_onset_intervals": []
+        }
+      ],
+      "limitations": [
+        "No listening or independent human ground truth; suitable only for bounded visual development diagnosis.",
+        "Stereo sources viewed as mono average; stereo-only evidence was not reviewed.",
+        "Masters intentionally differ from stems. Stem timing merely proposes review regions.",
+        "Dense ambiguous fills explicitly excluded; this is not a full-track label set."
+      ],
+      "scripts": [
+        "review.py",
+        "plots.py",
+        "details.py",
+        "finalize.py"
+      ],
+      "annotation_correction": {
+        "supersedes_sha256": "9be4269dd787d256a21d2a152f4a4fd4b62fe10d2670f0b6e68e911d14978ba0",
+        "reason": "Previous timestamps were influenced by beat-grid-consistent rounding despite a claim of independent visual localization. Those point times and the \u00b110 ms precision claim are withdrawn. This revision retains visually supported event presence and uses explicit conservative waveform-review intervals and 5 ms-rounded midpoints. No detector scores were viewed before either pass."
+      },
+      "original_review_sha256": "e546787858c15ee169c7d5d01d00b9686a1752aedb0a0d41f3e190aaeb7e589e",
+      "review_evidence_directory": "/Users/peterkiemann/.cache/manifold/master-kick-comparison-2026-10-09/late_night",
+      "audio_sha256": "91ef876583d6404b417f1f92e88acb5aca75a207d1d107d77ee05e2846740108"
+    },
+    {
+      "track": "midnight_patience",
+      "split": "development",
+      "bpm": 132,
+      "label_status": "Detector-blind visual presence annotations with coarse source-supported master onset intervals; not auditory ground truth or independent latency reference.",
+      "master_path": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/EMERGENCE - ALBUM 2026/FINAL MASTERS/Latent Space - 04 - Midnight Patience T2 (mastered) 48k 24-bit.wav",
+      "master_sha256": "f985764125d53d9cc9379193af567f4022b05a657678e7c403bf187732bef6f2",
+      "source_offset_seconds": 0.136375,
+      "source_offset_meaning": "master_time = stem_time + 0.136375; source alignment only, never detector-latency calibration",
+      "method": "Passages selected by stem RMS. Full master passages and margins inspected visually. After lead audit revoked grid-influenced point times, reviewer re-opened all four existing detailed master plots and recorded pixel intervals bracketing visible onset transitions, supported by aligned kick waveforms. Pixel intervals map linearly through the plotted master-time axis; bounds round outward to 5ms, midpoint rounds to 5ms. No BPM computation is used in this revised localization. Reviewer had already seen prior timings, so this is a corrected review, not an independently blinded reannotation. No detector outputs accessed.",
+      "timing_note": "Per-event observed onset interval is authoritative. Midpoint is a coarse indexing/scoring representative, not independently measured onset ground truth. Intervals are approximately 20\u201340ms wide. Do not infer detector latency from these labels; auditory or independently localized onset verification remains absent.",
+      "limitations": [
+        "No auditory review was available.",
+        "Named stems and master intentionally differ; no mix reconstruction or alignment fitting was used.",
+        "A kick hidden completely by other instruments cannot be ruled out visually.",
+        "Original point timings were grid-influenced and are superseded, not validated.",
+        "Re-review was source-assisted and the same reviewer knew the original times; retained cognitive anchoring cannot be excluded.",
+        "5ms storage increments describe axis-reading granularity, not physical onset accuracy."
+      ],
+      "passages": [
+        {
+          "id": "midnight_patience_kick_heavy",
+          "start_s": 116.136375,
+          "end_s": 128.136375,
+          "review_start_s": 115.886375,
+          "review_end_s": 128.386375,
+          "stem_start_s": 116,
+          "stem_end_s": 128,
+          "stem_kick_rms": 0.36528870463371277,
+          "stem_bass_rms": 0.19093501567840576,
+          "stem_bass_over_kick_db": -5.635013219692,
+          "selection_reason": "Largest kick-over-bass RMS contrast among 12-second windows sampled at 2-second steps with active kick. Rich kick patterns include strong and soft attacks.",
+          "kick_times_s": [
+            116.05,
+            116.27,
+            116.5,
+            116.725,
+            116.96,
+            117.3,
+            117.64,
+            117.87,
+            118.21,
+            118.32,
+            118.55,
+            118.89,
+            119.455,
+            119.69,
+            119.91,
+            120.14,
+            120.37,
+            120.71,
+            121.275,
+            121.505,
+            121.845,
+            121.96,
+            122.19,
+            122.53,
+            123.095,
+            123.32,
+            123.55,
+            123.775,
+            124.0,
+            124.23,
+            124.57,
+            124.91,
+            125.14,
+            125.48,
+            125.595,
+            125.83,
+            126.17,
+            126.73,
+            126.96,
+            127.185,
+            127.41,
+            127.645,
+            127.99
+          ],
+          "uncertain_regions": [
+            {
+              "start_s": 117.03,
+              "end_s": 117.11,
+              "reason": "Overlapping soft retrigger is visible in source and plausible in master, but separate master onset is insufficiently localized. Exclude region from scoring."
+            },
+            {
+              "start_s": 120.44,
+              "end_s": 120.52,
+              "reason": "Overlapping soft retrigger is visible in source and plausible in master, but separate master onset is insufficiently localized. Exclude region from scoring."
+            },
+            {
+              "start_s": 124.3,
+              "end_s": 124.38,
+              "reason": "Overlapping soft retrigger is visible in source and plausible in master, but separate master onset is insufficiently localized. Exclude region from scoring."
+            },
+            {
+              "start_s": 127.71,
+              "end_s": 127.79,
+              "reason": "Overlapping soft retrigger is visible in source and plausible in master, but separate master onset is insufficiently localized. Exclude region from scoring."
+            }
+          ],
+          "observations": "43 source-supported master kick events observed over review context; 42 lie inside scoring bounds. Four additional overlapping soft retriggers remain uncertain. Onset intervals are read from master plots; midpoint values are coarse representatives only.",
+          "evidence_plots": [
+            "/tmp/manifold-midnight-labels/kick_detail_1.png",
+            "/tmp/manifold-midnight-labels/kick_detail_2.png",
+            "/tmp/manifold-midnight-labels/kick_detail_3.png",
+            "/tmp/manifold-midnight-labels/kick_detail_4.png"
+          ],
+          "kick_onset_intervals": [
+            {
+              "midpoint_s": 116.05,
+              "plot": "/tmp/manifold-midnight-labels/kick_detail_1.png",
+              "plot_row": 1,
+              "observed_master_pixel_interval": [
+                320,
+                353
+              ],
+              "basis": "Visible master waveform transition and low-frequency sweep, supported by aligned source waveform. Interval includes onset masking and display resolution.",
+              "start_s": 116.035,
+              "end_s": 116.065
+            },
+            {
+              "midpoint_s": 116.27,
+              "plot": "/tmp/manifold-midnight-labels/kick_detail_1.png",
+              "plot_row": 1,
+              "observed_master_pixel_interval": [
+                655,
+                682
+              ],
+              "basis": "Visible master waveform transition and low-frequency sweep, supported by aligned source waveform. Interval includes onset masking and display resolution.",
+              "start_s": 116.26,
+              "end_s": 116.285
+            },
+            {
+              "midpoint_s": 116.5,
+              "plot": "/tmp/manifold-midnight-labels/kick_detail_1.png",
+              "plot_row": 1,
+              "observed_master_pixel_interval": [
+                995,
+                1022
+              ],
+              "basis": "Visible master waveform transition and low-frequency sweep, supported by aligned source waveform. Interval includes onset masking and display resolution.",
+              "start_s": 116.49,
+              "end_s": 116.51
+            },
+            {
+              "midpoint_s": 116.725,
+              "plot": "/tmp/manifold-midnight-labels/kick_detail_1.png",
+              "plot_row": 1,
+              "observed_master_pixel_interval": [
+                1337,
+                1366
+              ],
+              "basis": "Visible master waveform transition and low-frequency sweep, supported by aligned source waveform. Interval includes onset masking and display resolution.",
+              "start_s": 116.715,
+              "end_s": 116.74
+            },
+            {
+              "midpoint_s": 116.96,
+              "plot": "/tmp/manifold-midnight-labels/kick_detail_1.png",
+              "plot_row": 2,
+              "observed_master_pixel_interval": [
+                118,
+                158
+              ],
+              "basis": "Visible master waveform transition and low-frequency sweep, supported by aligned source waveform. Interval includes onset masking and display resolution.",
+              "start_s": 116.945,
+              "end_s": 116.975
+            },
+            {
+              "midpoint_s": 117.3,
+              "plot": "/tmp/manifold-midnight-labels/kick_detail_1.png",
+              "plot_row": 2,
+              "observed_master_pixel_interval": [
+                625,
+                664
+              ],
+              "basis": "Visible master waveform transition and low-frequency sweep, supported by aligned source waveform. Interval includes onset masking and display resolution.",
+              "start_s": 117.285,
+              "end_s": 117.315
+            },
+            {
+              "midpoint_s": 117.64,
+              "plot": "/tmp/manifold-midnight-labels/kick_detail_1.png",
+              "plot_row": 2,
+              "observed_master_pixel_interval": [
+                1138,
+                1165
+              ],
+              "basis": "Visible master waveform transition and low-frequency sweep, supported by aligned source waveform. Interval includes onset masking and display resolution.",
+              "start_s": 117.625,
+              "end_s": 117.65
+            },
+            {
+              "midpoint_s": 117.87,
+              "plot": "/tmp/manifold-midnight-labels/kick_detail_1.png",
+              "plot_row": 2,
+              "observed_master_pixel_interval": [
+                1475,
+                1520
+              ],
+              "basis": "Visible master waveform transition and low-frequency sweep, supported by aligned source waveform. Interval includes onset masking and display resolution.",
+              "start_s": 117.85,
+              "end_s": 117.885
+            },
+            {
+              "midpoint_s": 118.21,
+              "plot": "/tmp/manifold-midnight-labels/kick_detail_1.png",
+              "plot_row": 3,
+              "observed_master_pixel_interval": [
+                430,
+                464
+              ],
+              "basis": "Visible master waveform transition and low-frequency sweep, supported by aligned source waveform. Interval includes onset masking and display resolution.",
+              "start_s": 118.195,
+              "end_s": 118.22
+            },
+            {
+              "midpoint_s": 118.32,
+              "plot": "/tmp/manifold-midnight-labels/kick_detail_1.png",
+              "plot_row": 3,
+              "observed_master_pixel_interval": [
+                601,
+                632
+              ],
+              "basis": "Visible master waveform transition and low-frequency sweep, supported by aligned source waveform. Interval includes onset masking and display resolution.",
+              "start_s": 118.31,
+              "end_s": 118.335
+            },
+            {
+              "midpoint_s": 118.55,
+              "plot": "/tmp/manifold-midnight-labels/kick_detail_1.png",
+              "plot_row": 3,
+              "observed_master_pixel_interval": [
+                945,
+                980
+              ],
+              "basis": "Visible master waveform transition and low-frequency sweep, supported by aligned source waveform. Interval includes onset masking and display resolution.",
+              "start_s": 118.54,
+              "end_s": 118.565
+            },
+            {
+              "midpoint_s": 118.89,
+              "plot": "/tmp/manifold-midnight-labels/kick_detail_1.png",
+              "plot_row": 3,
+              "observed_master_pixel_interval": [
+                1451,
+                1495
+              ],
+              "basis": "Visible master waveform transition and low-frequency sweep, supported by aligned source waveform. Interval includes onset masking and display resolution.",
+              "start_s": 118.875,
+              "end_s": 118.91
+            },
+            {
+              "midpoint_s": 119.455,
+              "plot": "/tmp/manifold-midnight-labels/kick_detail_2.png",
+              "plot_row": 1,
+              "observed_master_pixel_interval": [
+                740,
+                768
+              ],
+              "basis": "Visible master waveform transition and low-frequency sweep, supported by aligned source waveform. Interval includes onset masking and display resolution.",
+              "start_s": 119.445,
+              "end_s": 119.465
+            },
+            {
+              "midpoint_s": 119.69,
+              "plot": "/tmp/manifold-midnight-labels/kick_detail_2.png",
+              "plot_row": 1,
+              "observed_master_pixel_interval": [
+                1078,
+                1123
+              ],
+              "basis": "Visible master waveform transition and low-frequency sweep, supported by aligned source waveform. Interval includes onset masking and display resolution.",
+              "start_s": 119.67,
+              "end_s": 119.705
+            },
+            {
+              "midpoint_s": 119.91,
+              "plot": "/tmp/manifold-midnight-labels/kick_detail_2.png",
+              "plot_row": 1,
+              "observed_master_pixel_interval": [
+                1423,
+                1453
+              ],
+              "basis": "Visible master waveform transition and low-frequency sweep, supported by aligned source waveform. Interval includes onset masking and display resolution.",
+              "start_s": 119.9,
+              "end_s": 119.925
+            },
+            {
+              "midpoint_s": 120.14,
+              "plot": "/tmp/manifold-midnight-labels/kick_detail_2.png",
+              "plot_row": 2,
+              "observed_master_pixel_interval": [
+                206,
+                235
+              ],
+              "basis": "Visible master waveform transition and low-frequency sweep, supported by aligned source waveform. Interval includes onset masking and display resolution.",
+              "start_s": 120.13,
+              "end_s": 120.15
+            },
+            {
+              "midpoint_s": 120.37,
+              "plot": "/tmp/manifold-midnight-labels/kick_detail_2.png",
+              "plot_row": 2,
+              "observed_master_pixel_interval": [
+                544,
+                585
+              ],
+              "basis": "Visible master waveform transition and low-frequency sweep, supported by aligned source waveform. Interval includes onset masking and display resolution.",
+              "start_s": 120.355,
+              "end_s": 120.385
+            },
+            {
+              "midpoint_s": 120.71,
+              "plot": "/tmp/manifold-midnight-labels/kick_detail_2.png",
+              "plot_row": 2,
+              "observed_master_pixel_interval": [
+                1052,
+                1100
+              ],
+              "basis": "Visible master waveform transition and low-frequency sweep, supported by aligned source waveform. Interval includes onset masking and display resolution.",
+              "start_s": 120.695,
+              "end_s": 120.73
+            },
+            {
+              "midpoint_s": 121.275,
+              "plot": "/tmp/manifold-midnight-labels/kick_detail_2.png",
+              "plot_row": 3,
+              "observed_master_pixel_interval": [
+                342,
+                375
+              ],
+              "basis": "Visible master waveform transition and low-frequency sweep, supported by aligned source waveform. Interval includes onset masking and display resolution.",
+              "start_s": 121.26,
+              "end_s": 121.29
+            },
+            {
+              "midpoint_s": 121.505,
+              "plot": "/tmp/manifold-midnight-labels/kick_detail_2.png",
+              "plot_row": 3,
+              "observed_master_pixel_interval": [
+                684,
+                730
+              ],
+              "basis": "Visible master waveform transition and low-frequency sweep, supported by aligned source waveform. Interval includes onset masking and display resolution.",
+              "start_s": 121.49,
+              "end_s": 121.525
+            },
+            {
+              "midpoint_s": 121.845,
+              "plot": "/tmp/manifold-midnight-labels/kick_detail_2.png",
+              "plot_row": 3,
+              "observed_master_pixel_interval": [
+                1197,
+                1235
+              ],
+              "basis": "Visible master waveform transition and low-frequency sweep, supported by aligned source waveform. Interval includes onset masking and display resolution.",
+              "start_s": 121.83,
+              "end_s": 121.86
+            },
+            {
+              "midpoint_s": 121.96,
+              "plot": "/tmp/manifold-midnight-labels/kick_detail_2.png",
+              "plot_row": 3,
+              "observed_master_pixel_interval": [
+                1367,
+                1404
+              ],
+              "basis": "Visible master waveform transition and low-frequency sweep, supported by aligned source waveform. Interval includes onset masking and display resolution.",
+              "start_s": 121.945,
+              "end_s": 121.975
+            },
+            {
+              "midpoint_s": 122.19,
+              "plot": "/tmp/manifold-midnight-labels/kick_detail_3.png",
+              "plot_row": 1,
+              "observed_master_pixel_interval": [
+                153,
+                199
+              ],
+              "basis": "Visible master waveform transition and low-frequency sweep, supported by aligned source waveform. Interval includes onset masking and display resolution.",
+              "start_s": 122.175,
+              "end_s": 122.21
+            },
+            {
+              "midpoint_s": 122.53,
+              "plot": "/tmp/manifold-midnight-labels/kick_detail_3.png",
+              "plot_row": 1,
+              "observed_master_pixel_interval": [
+                655,
+                702
+              ],
+              "basis": "Visible master waveform transition and low-frequency sweep, supported by aligned source waveform. Interval includes onset masking and display resolution.",
+              "start_s": 122.51,
+              "end_s": 122.55
+            },
+            {
+              "midpoint_s": 123.095,
+              "plot": "/tmp/manifold-midnight-labels/kick_detail_3.png",
+              "plot_row": 1,
+              "observed_master_pixel_interval": [
+                1505,
+                1541
+              ],
+              "basis": "Visible master waveform transition and low-frequency sweep, supported by aligned source waveform. Interval includes onset masking and display resolution.",
+              "start_s": 123.08,
+              "end_s": 123.11
+            },
+            {
+              "midpoint_s": 123.32,
+              "plot": "/tmp/manifold-midnight-labels/kick_detail_3.png",
+              "plot_row": 2,
+              "observed_master_pixel_interval": [
+                287,
+                330
+              ],
+              "basis": "Visible master waveform transition and low-frequency sweep, supported by aligned source waveform. Interval includes onset masking and display resolution.",
+              "start_s": 123.305,
+              "end_s": 123.34
+            },
+            {
+              "midpoint_s": 123.55,
+              "plot": "/tmp/manifold-midnight-labels/kick_detail_3.png",
+              "plot_row": 2,
+              "observed_master_pixel_interval": [
+                628,
+                660
+              ],
+              "basis": "Visible master waveform transition and low-frequency sweep, supported by aligned source waveform. Interval includes onset masking and display resolution.",
+              "start_s": 123.535,
+              "end_s": 123.56
+            },
+            {
+              "midpoint_s": 123.775,
+              "plot": "/tmp/manifold-midnight-labels/kick_detail_3.png",
+              "plot_row": 2,
+              "observed_master_pixel_interval": [
+                968,
+                1002
+              ],
+              "basis": "Visible master waveform transition and low-frequency sweep, supported by aligned source waveform. Interval includes onset masking and display resolution.",
+              "start_s": 123.76,
+              "end_s": 123.79
+            },
+            {
+              "midpoint_s": 124.0,
+              "plot": "/tmp/manifold-midnight-labels/kick_detail_3.png",
+              "plot_row": 2,
+              "observed_master_pixel_interval": [
+                1308,
+                1342
+              ],
+              "basis": "Visible master waveform transition and low-frequency sweep, supported by aligned source waveform. Interval includes onset masking and display resolution.",
+              "start_s": 123.99,
+              "end_s": 124.015
+            },
+            {
+              "midpoint_s": 124.23,
+              "plot": "/tmp/manifold-midnight-labels/kick_detail_3.png",
+              "plot_row": 3,
+              "observed_master_pixel_interval": [
+                90,
+                125
+              ],
+              "basis": "Visible master waveform transition and low-frequency sweep, supported by aligned source waveform. Interval includes onset masking and display resolution.",
+              "start_s": 124.215,
+              "end_s": 124.245
+            },
+            {
+              "midpoint_s": 124.57,
+              "plot": "/tmp/manifold-midnight-labels/kick_detail_3.png",
+              "plot_row": 3,
+              "observed_master_pixel_interval": [
+                598,
+                641
+              ],
+              "basis": "Visible master waveform transition and low-frequency sweep, supported by aligned source waveform. Interval includes onset masking and display resolution.",
+              "start_s": 124.555,
+              "end_s": 124.59
+            },
+            {
+              "midpoint_s": 124.91,
+              "plot": "/tmp/manifold-midnight-labels/kick_detail_3.png",
+              "plot_row": 3,
+              "observed_master_pixel_interval": [
+                1110,
+                1143
+              ],
+              "basis": "Visible master waveform transition and low-frequency sweep, supported by aligned source waveform. Interval includes onset masking and display resolution.",
+              "start_s": 124.9,
+              "end_s": 124.925
+            },
+            {
+              "midpoint_s": 125.14,
+              "plot": "/tmp/manifold-midnight-labels/kick_detail_3.png",
+              "plot_row": 3,
+              "observed_master_pixel_interval": [
+                1450,
+                1494
+              ],
+              "basis": "Visible master waveform transition and low-frequency sweep, supported by aligned source waveform. Interval includes onset masking and display resolution.",
+              "start_s": 125.125,
+              "end_s": 125.16
+            },
+            {
+              "midpoint_s": 125.48,
+              "plot": "/tmp/manifold-midnight-labels/kick_detail_4.png",
+              "plot_row": 1,
+              "observed_master_pixel_interval": [
+                401,
+                442
+              ],
+              "basis": "Visible master waveform transition and low-frequency sweep, supported by aligned source waveform. Interval includes onset masking and display resolution.",
+              "start_s": 125.465,
+              "end_s": 125.5
+            },
+            {
+              "midpoint_s": 125.595,
+              "plot": "/tmp/manifold-midnight-labels/kick_detail_4.png",
+              "plot_row": 1,
+              "observed_master_pixel_interval": [
+                571,
+                606
+              ],
+              "basis": "Visible master waveform transition and low-frequency sweep, supported by aligned source waveform. Interval includes onset masking and display resolution.",
+              "start_s": 125.58,
+              "end_s": 125.61
+            },
+            {
+              "midpoint_s": 125.83,
+              "plot": "/tmp/manifold-midnight-labels/kick_detail_4.png",
+              "plot_row": 1,
+              "observed_master_pixel_interval": [
+                913,
+                965
+              ],
+              "basis": "Visible master waveform transition and low-frequency sweep, supported by aligned source waveform. Interval includes onset masking and display resolution.",
+              "start_s": 125.81,
+              "end_s": 125.85
+            },
+            {
+              "midpoint_s": 126.17,
+              "plot": "/tmp/manifold-midnight-labels/kick_detail_4.png",
+              "plot_row": 1,
+              "observed_master_pixel_interval": [
+                1422,
+                1467
+              ],
+              "basis": "Visible master waveform transition and low-frequency sweep, supported by aligned source waveform. Interval includes onset masking and display resolution.",
+              "start_s": 126.15,
+              "end_s": 126.185
+            },
+            {
+              "midpoint_s": 126.73,
+              "plot": "/tmp/manifold-midnight-labels/kick_detail_4.png",
+              "plot_row": 2,
+              "observed_master_pixel_interval": [
+                712,
+                748
+              ],
+              "basis": "Visible master waveform transition and low-frequency sweep, supported by aligned source waveform. Interval includes onset masking and display resolution.",
+              "start_s": 126.715,
+              "end_s": 126.745
+            },
+            {
+              "midpoint_s": 126.96,
+              "plot": "/tmp/manifold-midnight-labels/kick_detail_4.png",
+              "plot_row": 2,
+              "observed_master_pixel_interval": [
+                1050,
+                1100
+              ],
+              "basis": "Visible master waveform transition and low-frequency sweep, supported by aligned source waveform. Interval includes onset masking and display resolution.",
+              "start_s": 126.94,
+              "end_s": 126.98
+            },
+            {
+              "midpoint_s": 127.185,
+              "plot": "/tmp/manifold-midnight-labels/kick_detail_4.png",
+              "plot_row": 2,
+              "observed_master_pixel_interval": [
+                1394,
+                1426
+              ],
+              "basis": "Visible master waveform transition and low-frequency sweep, supported by aligned source waveform. Interval includes onset masking and display resolution.",
+              "start_s": 127.17,
+              "end_s": 127.2
+            },
+            {
+              "midpoint_s": 127.41,
+              "plot": "/tmp/manifold-midnight-labels/kick_detail_4.png",
+              "plot_row": 3,
+              "observed_master_pixel_interval": [
+                173,
+                210
+              ],
+              "basis": "Visible master waveform transition and low-frequency sweep, supported by aligned source waveform. Interval includes onset masking and display resolution.",
+              "start_s": 127.4,
+              "end_s": 127.425
+            },
+            {
+              "midpoint_s": 127.645,
+              "plot": "/tmp/manifold-midnight-labels/kick_detail_4.png",
+              "plot_row": 3,
+              "observed_master_pixel_interval": [
+                516,
+                564
+              ],
+              "basis": "Visible master waveform transition and low-frequency sweep, supported by aligned source waveform. Interval includes onset masking and display resolution.",
+              "start_s": 127.625,
+              "end_s": 127.665
+            },
+            {
+              "midpoint_s": 127.99,
+              "plot": "/tmp/manifold-midnight-labels/kick_detail_4.png",
+              "plot_row": 3,
+              "observed_master_pixel_interval": [
+                1027,
+                1073
+              ],
+              "basis": "Visible master waveform transition and low-frequency sweep, supported by aligned source waveform. Interval includes onset masking and display resolution.",
+              "start_s": 127.97,
+              "end_s": 128.005
+            }
+          ]
+        },
+        {
+          "id": "midnight_patience_bass_heavy",
+          "start_s": 28.136375,
+          "end_s": 40.136375,
+          "review_start_s": 27.886375,
+          "review_end_s": 40.386375,
+          "stem_start_s": 28,
+          "stem_end_s": 40,
+          "stem_kick_rms": 0.0,
+          "stem_bass_rms": 0.3564157783985138,
+          "stem_bass_over_kick_db": null,
+          "selection_reason": "Highest bass RMS among scanned windows with an exactly silent kick stem, giving an explicit bass-only contrast to dense kicks. Ratio is undefined because kick RMS is zero.",
+          "kick_times_s": [],
+          "uncertain_regions": [],
+          "observations": "Across all three master pages, bass shows continuous/pulsating harmonic ridges and musical pitch changes. No isolated kick-like downward low-frequency sweep with waveform attack is visible. Upper-band percussive stripes lack corresponding kick sweeps. Zero accepted kicks is a visual negative annotation, not an auditory guarantee.",
+          "evidence_plots": [
+            "/tmp/manifold-midnight-labels/bass_heavy_1.png",
+            "/tmp/manifold-midnight-labels/bass_heavy_2.png",
+            "/tmp/manifold-midnight-labels/bass_heavy_3.png"
+          ]
+        }
+      ],
+      "scripts": [
+        "/tmp/manifold-midnight-labels/stem_selection.py",
+        "/tmp/manifold-midnight-labels/render_evidence.py",
+        "/tmp/manifold-midnight-labels/detail_evidence.py",
+        "/tmp/manifold-midnight-labels/revise_labels.py"
+      ],
+      "evidence_review": "All four detailed kick sheets were re-opened for this correction. Bass-negative review is unchanged.",
+      "revision": 2,
+      "supersedes": "/tmp/manifold-midnight-labels/superseded_grid_labels.json",
+      "correction": "Original point timestamps were assigned with 132 BPM subdivision guidance. Their claim of independent master onset localization was inaccurate and is revoked. They must not be used for latency calibration. Event presence remains visually supported. This revision records visible master transition intervals from existing detailed plots and uses rounded midpoints only as scoring representatives.",
+      "original_review_sha256": "406991308c6e755e0f19455327272a7382c6bfdf55c0a6e8d4299fe363dde251",
+      "review_evidence_directory": "/Users/peterkiemann/.cache/manifold/master-kick-comparison-2026-10-09/midnight_patience",
+      "audio_sha256": "f985764125d53d9cc9379193af567f4022b05a657678e7c403bf187732bef6f2"
+    }
+  ]
+}

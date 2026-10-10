@@ -26,8 +26,8 @@ On stage this buys: per-drum triggers from the live feed (snare-only strobes,
 hat shimmer) and, offline, master-only import analysis with no demucs and no
 Python in the product. Companion docs: AUDIO_ANALYSIS_ACCURACY_DESIGN.md (the
 measurement campaign this closes), AUDIO_OBJECT_TRACKING_DESIGN.md (sustained
-material stays the tracker's job), KICK_SWEEP_EVENT_DESIGN.md (live ridge
-detector — future side-input, Deferred).
+material stays the tracker's job), KICK_REALTIME_DESIGN.md (the trained live kick detector and the detector worker
+this design's per-drum detectors plug into).
 
 ## 1. Audit — what exists (verified 2026-07-18, this session)
 

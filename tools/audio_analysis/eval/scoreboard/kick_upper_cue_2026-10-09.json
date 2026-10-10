@@ -1,0 +1,525 @@
+{
+  "date": "2026-10-09",
+  "decision": "Mixed diagnostic evidence; do not adopt the fixed cue as a kick decision. Upper/low timing and decay may be candidate confidence features, but standalone specificity fails on full kick-free passages and hats over bass. No fusion weights fitted or live detector changed.",
+  "method": "Diagnostic coverage of upper attacks linked to fresh low pulses, not a detector score.\n\nOne fixed cascade: upper onset, low onset within -10/+35ms, upper half-power\ndecay at 50ms. Query +/-50ms around reviewed kicks and original unmatched fires.\nThese label-centred queries are deliberately diagnostic; they do not establish\ncausal attribution or production precision/recall. Full kick-free cores expose\nunrelated upper attacks that would also pass the cue.\n",
+  "settings": "Butterworth2 bands45\u2013140,1\u20132k,2\u20134k,4\u20138kHz; 3/80ms power followers at native completed hops. Upper rising edge: at least2 upper fast/slow ratios>2 and summed fast>1e-6. Fresh low rising edge: fast>1e-6 and fast/slow>1.2 within -10/+35ms of upper edge. Upper power at50ms must be <=half its peak in first15ms. Only report after50ms deadline. No cooldown or deduplication: counts are cue edges, not detector fires.",
+  "totals": {
+    "positive": {
+      "anchors": 174,
+      "upper_present": 116,
+      "linked_present": 98,
+      "complete_present": 91
+    },
+    "missed": {
+      "anchors": 56,
+      "upper_present": 30,
+      "linked_present": 15,
+      "complete_present": 15
+    },
+    "unmatched": {
+      "anchors": 52,
+      "upper_present": 31,
+      "linked_present": 28,
+      "complete_present": 17
+    }
+  },
+  "tracks": [
+    {
+      "track": "apricots_128bpm",
+      "audio_sha256": "fde3593f372875579a15b95d80cb1d4408971ba62dd80b84110623eecbba28c4",
+      "sample_rate": 48000,
+      "hop": 256,
+      "positive_coverage": {
+        "anchors": 14,
+        "upper_present": 7,
+        "linked_present": 7,
+        "complete_present": 0
+      },
+      "missed_coverage": {
+        "anchors": 0,
+        "upper_present": 0,
+        "linked_present": 0,
+        "complete_present": 0
+      },
+      "unmatched_coverage": {
+        "anchors": 0,
+        "upper_present": 0,
+        "linked_present": 0,
+        "complete_present": 0
+      },
+      "bass_cores": []
+    },
+    {
+      "track": "bad_guy_128bpm",
+      "audio_sha256": "351ad2f07dc5778690b8f04c0af12c1acc8f83fdb3c253fc988e26a433cff7a8",
+      "sample_rate": 44100,
+      "hop": 235,
+      "positive_coverage": {
+        "anchors": 15,
+        "upper_present": 14,
+        "linked_present": 14,
+        "complete_present": 14
+      },
+      "missed_coverage": {
+        "anchors": 0,
+        "upper_present": 0,
+        "linked_present": 0,
+        "complete_present": 0
+      },
+      "unmatched_coverage": {
+        "anchors": 17,
+        "upper_present": 17,
+        "linked_present": 17,
+        "complete_present": 7
+      },
+      "bass_cores": []
+    },
+    {
+      "track": "feel_the_vibration_174bpm",
+      "audio_sha256": "57458b322198b9c12ac821180874466a6636c15dda56d33bc29d616f46f80533",
+      "sample_rate": 48000,
+      "hop": 256,
+      "positive_coverage": {
+        "anchors": 15,
+        "upper_present": 14,
+        "linked_present": 13,
+        "complete_present": 13
+      },
+      "missed_coverage": {
+        "anchors": 0,
+        "upper_present": 0,
+        "linked_present": 0,
+        "complete_present": 0
+      },
+      "unmatched_coverage": {
+        "anchors": 2,
+        "upper_present": 0,
+        "linked_present": 0,
+        "complete_present": 0
+      },
+      "bass_cores": []
+    },
+    {
+      "track": "inhale_exhale_145bpm",
+      "audio_sha256": "26163ae92e4b7aaf74cafc6a5fff3b6bad2a566a60474bb8b8b53386add18514",
+      "sample_rate": 48000,
+      "hop": 256,
+      "positive_coverage": {
+        "anchors": 12,
+        "upper_present": 10,
+        "linked_present": 10,
+        "complete_present": 10
+      },
+      "missed_coverage": {
+        "anchors": 1,
+        "upper_present": 0,
+        "linked_present": 0,
+        "complete_present": 0
+      },
+      "unmatched_coverage": {
+        "anchors": 14,
+        "upper_present": 8,
+        "linked_present": 6,
+        "complete_present": 6
+      },
+      "bass_cores": []
+    },
+    {
+      "track": "tears_140bpm",
+      "audio_sha256": "49c7c4ee799e93690e4023665b332c617f0fa170314a83d05c79a2c675d5b334",
+      "sample_rate": 48000,
+      "hop": 256,
+      "positive_coverage": {
+        "anchors": 10,
+        "upper_present": 5,
+        "linked_present": 5,
+        "complete_present": 5
+      },
+      "missed_coverage": {
+        "anchors": 0,
+        "upper_present": 0,
+        "linked_present": 0,
+        "complete_present": 0
+      },
+      "unmatched_coverage": {
+        "anchors": 7,
+        "upper_present": 6,
+        "linked_present": 5,
+        "complete_present": 4
+      },
+      "bass_cores": []
+    },
+    {
+      "track": "late_night",
+      "audio_sha256": "91ef876583d6404b417f1f92e88acb5aca75a207d1d107d77ee05e2846740108",
+      "sample_rate": 48000,
+      "hop": 256,
+      "positive_coverage": {
+        "anchors": 29,
+        "upper_present": 16,
+        "linked_present": 14,
+        "complete_present": 14
+      },
+      "missed_coverage": {
+        "anchors": 6,
+        "upper_present": 2,
+        "linked_present": 0,
+        "complete_present": 0
+      },
+      "unmatched_coverage": {
+        "anchors": 8,
+        "upper_present": 0,
+        "linked_present": 0,
+        "complete_present": 0
+      },
+      "bass_cores": [
+        {
+          "id": "late_night_bass_heavy",
+          "start_s": 128.0,
+          "end_s": 140.0,
+          "upper_edges": 20,
+          "linked_edges": 20,
+          "complete_edges": 9,
+          "complete_available_times_s": [
+            128.32533333333333,
+            130.62933333333334,
+            131.728,
+            131.76,
+            133.27466666666666,
+            134.93866666666668,
+            136.26666666666668,
+            137.72266666666667,
+            138.53333333333333
+          ]
+        }
+      ]
+    },
+    {
+      "track": "midnight_patience",
+      "audio_sha256": "f985764125d53d9cc9379193af567f4022b05a657678e7c403bf187732bef6f2",
+      "sample_rate": 48000,
+      "hop": 256,
+      "positive_coverage": {
+        "anchors": 35,
+        "upper_present": 30,
+        "linked_present": 17,
+        "complete_present": 17
+      },
+      "missed_coverage": {
+        "anchors": 18,
+        "upper_present": 13,
+        "linked_present": 1,
+        "complete_present": 1
+      },
+      "unmatched_coverage": {
+        "anchors": 0,
+        "upper_present": 0,
+        "linked_present": 0,
+        "complete_present": 0
+      },
+      "bass_cores": [
+        {
+          "id": "midnight_patience_bass_heavy",
+          "start_s": 28.136375,
+          "end_s": 40.136375,
+          "upper_edges": 68,
+          "linked_edges": 67,
+          "complete_edges": 31,
+          "complete_available_times_s": [
+            28.506666666666668,
+            28.709333333333333,
+            28.768,
+            28.896,
+            28.96,
+            29.04,
+            29.12,
+            29.221333333333334,
+            30.512,
+            31.568,
+            32.256,
+            32.346666666666664,
+            32.64533333333333,
+            32.768,
+            32.93333333333333,
+            33.48266666666667,
+            33.49333333333333,
+            33.856,
+            34.64533333333333,
+            36.346666666666664,
+            36.91733333333333,
+            37.50933333333333,
+            37.94133333333333,
+            38.17066666666667,
+            38.288,
+            38.624,
+            38.864,
+            39.184,
+            39.30133333333333,
+            39.536,
+            39.984
+          ]
+        }
+      ]
+    },
+    {
+      "track": "miracle",
+      "audio_sha256": "263c248ce6c2a5b16ad981f055afd0be278085f6468347e25d3e4565f5bf3e66",
+      "sample_rate": 44100,
+      "hop": 235,
+      "positive_coverage": {
+        "anchors": 12,
+        "upper_present": 3,
+        "linked_present": 2,
+        "complete_present": 2
+      },
+      "missed_coverage": {
+        "anchors": 3,
+        "upper_present": 0,
+        "linked_present": 0,
+        "complete_present": 0
+      },
+      "unmatched_coverage": {
+        "anchors": 4,
+        "upper_present": 0,
+        "linked_present": 0,
+        "complete_present": 0
+      },
+      "bass_cores": [
+        {
+          "id": "miracle_bass",
+          "start_s": 116,
+          "end_s": 128,
+          "upper_edges": 6,
+          "linked_edges": 6,
+          "complete_edges": 3,
+          "complete_available_times_s": [
+            116.2530612244898,
+            121.60317460317461,
+            121.63514739229025
+          ]
+        }
+      ]
+    },
+    {
+      "track": "heavy_on_mind",
+      "audio_sha256": "3f22cd0335db72972a177488cf28a7d4de94d66c74203d9dea5f79cda5ca5a36",
+      "sample_rate": 44100,
+      "hop": 235,
+      "positive_coverage": {
+        "anchors": 32,
+        "upper_present": 17,
+        "linked_present": 16,
+        "complete_present": 16
+      },
+      "missed_coverage": {
+        "anchors": 28,
+        "upper_present": 15,
+        "linked_present": 14,
+        "complete_present": 14
+      },
+      "unmatched_coverage": {
+        "anchors": 0,
+        "upper_present": 0,
+        "linked_present": 0,
+        "complete_present": 0
+      },
+      "bass_cores": [
+        {
+          "id": "heavy_on_mind_bass",
+          "start_s": 20,
+          "end_s": 32,
+          "upper_edges": 27,
+          "linked_edges": 27,
+          "complete_edges": 15,
+          "complete_available_times_s": [
+            20.48390022675737,
+            20.558503401360543,
+            21.022108843537413,
+            21.92800453514739,
+            21.943990929705215,
+            22.098526077097507,
+            22.18378684807256,
+            22.53548752834467,
+            26.025850340136053,
+            26.06315192743764,
+            26.286961451247166,
+            26.489455782312927,
+            28.828798185941043,
+            29.905215419501133,
+            29.915873015873014
+          ]
+        }
+      ]
+    }
+  ],
+  "controls": [
+    {
+      "name": "stationary_bass",
+      "sample_rate": 44100,
+      "contains_kicks": false,
+      "upper_edges": 0,
+      "linked_edges": 0,
+      "complete_edges": 0,
+      "onset_coverage": {
+        "anchors": 0,
+        "upper_present": 0,
+        "linked_present": 0,
+        "complete_present": 0
+      }
+    },
+    {
+      "name": "hats_only",
+      "sample_rate": 44100,
+      "contains_kicks": false,
+      "upper_edges": 4,
+      "linked_edges": 0,
+      "complete_edges": 0,
+      "onset_coverage": {
+        "anchors": 4,
+        "upper_present": 4,
+        "linked_present": 0,
+        "complete_present": 0
+      }
+    },
+    {
+      "name": "hats_over_stationary_bass",
+      "sample_rate": 44100,
+      "contains_kicks": false,
+      "upper_edges": 4,
+      "linked_edges": 4,
+      "complete_edges": 4,
+      "onset_coverage": {
+        "anchors": 4,
+        "upper_present": 4,
+        "linked_present": 4,
+        "complete_present": 4
+      }
+    },
+    {
+      "name": "hats_with_new_bass_notes",
+      "sample_rate": 44100,
+      "contains_kicks": false,
+      "upper_edges": 4,
+      "linked_edges": 4,
+      "complete_edges": 4,
+      "onset_coverage": {
+        "anchors": 4,
+        "upper_present": 4,
+        "linked_present": 4,
+        "complete_present": 4
+      }
+    },
+    {
+      "name": "low_frequency_kicks_over_bass",
+      "sample_rate": 44100,
+      "contains_kicks": true,
+      "upper_edges": 12,
+      "linked_edges": 11,
+      "complete_edges": 11,
+      "onset_coverage": {
+        "anchors": 4,
+        "upper_present": 4,
+        "linked_present": 4,
+        "complete_present": 4
+      }
+    },
+    {
+      "name": "stationary_bass",
+      "sample_rate": 48000,
+      "contains_kicks": false,
+      "upper_edges": 0,
+      "linked_edges": 0,
+      "complete_edges": 0,
+      "onset_coverage": {
+        "anchors": 0,
+        "upper_present": 0,
+        "linked_present": 0,
+        "complete_present": 0
+      }
+    },
+    {
+      "name": "hats_only",
+      "sample_rate": 48000,
+      "contains_kicks": false,
+      "upper_edges": 4,
+      "linked_edges": 0,
+      "complete_edges": 0,
+      "onset_coverage": {
+        "anchors": 4,
+        "upper_present": 4,
+        "linked_present": 0,
+        "complete_present": 0
+      }
+    },
+    {
+      "name": "hats_over_stationary_bass",
+      "sample_rate": 48000,
+      "contains_kicks": false,
+      "upper_edges": 4,
+      "linked_edges": 4,
+      "complete_edges": 4,
+      "onset_coverage": {
+        "anchors": 4,
+        "upper_present": 4,
+        "linked_present": 4,
+        "complete_present": 4
+      }
+    },
+    {
+      "name": "hats_with_new_bass_notes",
+      "sample_rate": 48000,
+      "contains_kicks": false,
+      "upper_edges": 4,
+      "linked_edges": 4,
+      "complete_edges": 4,
+      "onset_coverage": {
+        "anchors": 4,
+        "upper_present": 4,
+        "linked_present": 4,
+        "complete_present": 4
+      }
+    },
+    {
+      "name": "low_frequency_kicks_over_bass",
+      "sample_rate": 48000,
+      "contains_kicks": true,
+      "upper_edges": 12,
+      "linked_edges": 11,
+      "complete_edges": 11,
+      "onset_coverage": {
+        "anchors": 4,
+        "upper_present": 4,
+        "linked_present": 4,
+        "complete_present": 4
+      }
+    }
+  ],
+  "important_findings": [
+    "Heavy On Mind: complete cue within diagnostic window of14/28 v5-missed labels,16/32 total;15 complete cue edges elsewhere in its12s kick-free bass core.",
+    "No complete cue near the five reviewed Late Night bass false-fire timestamps, but9 complete cue edges occur elsewhere in the same12s core. This is not proof that the passage would remain quiet.",
+    "Synthetic hats alone produce no linked cue; hats over stationary bass and hats coinciding with new bass notes each pass4/4 at44.1/48k. Coincident band activity is not sufficient source attribution.",
+    "Across174 provisional labels,91 have the complete cue;17/52 original unmatched fires also have it. These are label-centred diagnostic coverage counts, not production precision/recall."
+  ],
+  "validation": "Seven focused tests pass: fixed timing stages, absent/late low pulse, already-active low envelope, failed upper decay, and prefix causality. All source/label hashes and aggregate counts checked.",
+  "source_sha256": {
+    "run_kick_upper_cue.py": "a5cdee5950e7476d20006aeab5488419a40aed4c19dc450733492c4be3b2fac8",
+    "kick_upper_cue.py": "3fa6c9e64ad8cc0a1a0dbe761a5ba6e5f59b4563c77882d3cbe1a0a77ac7830f",
+    "kick_hybrid_experiment.py": "9f16149655e367952cab586b2e89d900d5ca3bcb07e0cf5cbead4fa2ecd42aa8",
+    "run_kick_dsp_experiments.py": "932d6e2f65cba2e9b3ff00baea9d5a6ac4d60048f4e41e106415afb981068615"
+  },
+  "label_sha256": {
+    "inhale_exhale_145bpm.csv": "a29b9892456588294efbf6f506da912d4f2d996fc105f9551b1b9d6db4077f4e",
+    "bad_guy_128bpm.csv": "d657d298ad98bee09e048922b465de4b4a69386a1482d8327be3207a37444ef7",
+    "attack_review.csv": "b29e872c8a8ec9d05902c7f76bc68b5a16399fc9cf0fd1ef669c598c8711a9ae",
+    "heldout_passages_2026-10-09.json": "00a6865a1c60795bb7e74a4ffe9fe207bbe8d84d5ceb7b62aad9d4b64d627fab",
+    "feel_the_vibration_174bpm.csv": "922be87c9a6a9eb03002b68ce5f87915e1fec4652921795c20cf6975a2bc21e8",
+    "apricots_128bpm.csv": "fa38b535e88b55580df3f90956935420070d95fb89441b30e625b1cdce45b163",
+    "tears_140bpm.csv": "f3ce02e72f191bd53bc86c611fce2efe56a55db4cb19b6f1434bdba80ce28576",
+    "bad_guy_128bpm.repair.json": "0d9f007d02da46f93dff1168ff321379a57310ab97397626812080389d955f11",
+    "master_passages_2026-10-09.json": "94884ba781bb2d1062d143721376b8b177a51cf3d537d213abc3201a310f0b5c"
+  },
+  "limitations": "Diagnostic windows use existing provisional labels; coincidence with a kick is not source attribution. Original unmatched fires are not independently audited false positives except reviewed kick-free cores. All nine tracks are development material. No new reference templates, runtime calibration, threshold tuning, detector replacement or live changes.",
+  "raw_report": "/Users/peterkiemann/.cache/manifold/kick-upper-cue-2026-10-09/diagnostic.json",
+  "raw_report_sha256": "7d4897964d2e2ebfc7598f22d31d8b2ab7a15a4cbeb1157ca7a77de340e12b5a",
+  "reproduce": "PYTHONPATH=tools/audio_analysis python3 -m eval.run_kick_upper_cue --audio-root '/Users/peterkiemann/MANIFOLD - Rust/tests/fixtures/audio' --baseline /Users/peterkiemann/.cache/manifold/kick-balance-audit-2026-10-09/trial.json --out /tmp/kick-upper-cue.json"
+}

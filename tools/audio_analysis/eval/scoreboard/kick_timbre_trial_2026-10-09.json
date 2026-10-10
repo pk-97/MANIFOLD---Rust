@@ -1,0 +1,931 @@
+{
+  "date": "2026-10-09",
+  "status": "Rejected: fixed timbre-template veto loses 22 correct hits to remove eight strict extra triggers. No detector integration.",
+  "method": "Fixed leave-one-recording-out timbre matching; no app integration or tuning.\n\nReferences include reviewed mix windows and corresponding source stems. All\nversions/stems of the evaluated song are excluded together. Positive reference\nwindows end at label+10/25/40 ms. Negative references end at wider-unmatched v5\nfires or RMS-hybrid fires inside reviewed kick-free master passages. Comparison\nuses one fixed cosine-margin boundary (zero), without fitting thresholds.\n",
+  "settings": {
+    "reference_phases_s": [
+      0.01,
+      0.025,
+      0.04
+    ],
+    "reference_rms_floor": 0.0001,
+    "accept_margin": 0.0,
+    "fingerprint": "20 geometric bands 45-8000 Hz; fourth-root power; four consecutive trailing 2048-at-48k Hann spectra; whole-sequence L2 normalization."
+  },
+  "baseline_totals_50ms": {
+    "matched": 103,
+    "missed": 27,
+    "extra": 50
+  },
+  "trial_totals": {
+    "35": {
+      "matched": 68,
+      "missed": 62,
+      "extra": 55
+    },
+    "50": {
+      "matched": 81,
+      "missed": 49,
+      "extra": 42
+    },
+    "70": {
+      "matched": 83,
+      "missed": 47,
+      "extra": 40
+    }
+  },
+  "reference_bank": {
+    "total": 1090,
+    "positive": 780,
+    "negative": 310,
+    "skipped_low_energy": 11,
+    "whole_song_exclusion": true
+  },
+  "findings": [
+    "Cross-track fixed-margin results: 81/130 matched within 50 ms, 49 missed, 42 extras, versus 103/27/50 for unchanged v5. No threshold was tuned to repair the result.",
+    "The rejected correct kicks often match another song\u2019s bass-heavy mix slightly better than a kick reference. The dictionary and representation do not provide reliable class identity across these mixtures.",
+    "No global lower-margin rejection boundary can reject any wider-unmatched baseline event while preserving all 103 current tight matches in this development set. This optimistic label-informed bound is not a deployable threshold.",
+    "At label-guided +20/+35/+50 ms endpoints the same model accepts 114/128/117 of 130 kick labels. That is oracle classification, not detector recall or proof that 35 ms is an optimal delay.",
+    "Late Night accepts 45/53 negative events in its reviewed kick-free passage, including baseline and failed-hybrid event times; Midnight accepts 1/11. These secondary negative probes are distinct from headline baseline extras and must not be added to them.",
+    "Timing matters: Bad Guy accepts 12/15 labels at +20 ms, 15/15 at +35 ms, but only 7/15 at +50 ms. Waiting longer is not a demonstrated general solution for this fixed fingerprint.",
+    "This rejects the particular coarse whole-mixture spectral-template method and reference pack, not all non-neural timbre recognition. Source separation leakage, mixture context, reference diversity and event-age mismatch remain limitations."
+  ],
+  "tracks": [
+    {
+      "track": "apricots_128bpm",
+      "training_tracks": [
+        "bad_guy_128bpm",
+        "feel_the_vibration_174bpm",
+        "inhale_exhale_145bpm",
+        "late_night",
+        "midnight_patience",
+        "tears_140bpm"
+      ],
+      "training_positive": 696,
+      "training_negative": 310,
+      "excluded_same_track": 84,
+      "baseline_50ms": {
+        "matched": 14,
+        "missed": 0,
+        "extra": 0
+      },
+      "trial_50ms": {
+        "matched": 10,
+        "missed": 4,
+        "extra": 0
+      },
+      "oracle_label_acceptances": {
+        "20": 10,
+        "35": 14,
+        "50": 14
+      },
+      "oracle_missed_label_acceptances": {
+        "20": 0,
+        "35": 0,
+        "50": 0
+      },
+      "kick_free_probes": {
+        "count": 0,
+        "accepted": 0
+      },
+      "lost_correct_hits": [
+        {
+          "label_s": 1.65,
+          "fire_s": 1.6693333333333333,
+          "margin": -0.022945116656194253,
+          "positive_reference": {
+            "track": "midnight_patience",
+            "role": "mix",
+            "available_s": 123.55733333333333
+          },
+          "negative_reference": {
+            "track": "late_night",
+            "role": "mix",
+            "available_s": 129.488
+          }
+        },
+        {
+          "label_s": 3.105,
+          "fire_s": 3.12,
+          "margin": -0.0017752418741687759,
+          "positive_reference": {
+            "track": "midnight_patience",
+            "role": "mix",
+            "available_s": 125.52
+          },
+          "negative_reference": {
+            "track": "late_night",
+            "role": "mix",
+            "available_s": 129.27466666666666
+          }
+        },
+        {
+          "label_s": 7.24,
+          "fire_s": 7.248,
+          "margin": -0.002127424240325526,
+          "positive_reference": {
+            "track": "bad_guy_128bpm",
+            "role": "mix",
+            "available_s": 14.062698412698413
+          },
+          "negative_reference": {
+            "track": "late_night",
+            "role": "mix",
+            "available_s": 130.416
+          }
+        },
+        {
+          "label_s": 9.305,
+          "fire_s": 9.328,
+          "margin": -0.0037691924193906656,
+          "positive_reference": {
+            "track": "late_night",
+            "role": "mix",
+            "available_s": 210.304
+          },
+          "negative_reference": {
+            "track": "late_night",
+            "role": "mix",
+            "available_s": 129.27466666666666
+          }
+        }
+      ]
+    },
+    {
+      "track": "bad_guy_128bpm",
+      "training_tracks": [
+        "apricots_128bpm",
+        "feel_the_vibration_174bpm",
+        "inhale_exhale_145bpm",
+        "late_night",
+        "midnight_patience",
+        "tears_140bpm"
+      ],
+      "training_positive": 690,
+      "training_negative": 259,
+      "excluded_same_track": 141,
+      "baseline_50ms": {
+        "matched": 15,
+        "missed": 0,
+        "extra": 17
+      },
+      "trial_50ms": {
+        "matched": 5,
+        "missed": 10,
+        "extra": 10
+      },
+      "oracle_label_acceptances": {
+        "20": 12,
+        "35": 15,
+        "50": 7
+      },
+      "oracle_missed_label_acceptances": {
+        "20": 0,
+        "35": 0,
+        "50": 0
+      },
+      "kick_free_probes": {
+        "count": 0,
+        "accepted": 0
+      },
+      "lost_correct_hits": [
+        {
+          "label_s": 0.935,
+          "fire_s": 0.9485260770975057,
+          "margin": -0.0032766061959870196,
+          "positive_reference": {
+            "track": "apricots_128bpm",
+            "role": "mix",
+            "available_s": 8.298666666666668
+          },
+          "negative_reference": {
+            "track": "late_night",
+            "role": "mix",
+            "available_s": 135.21066666666667
+          }
+        },
+        {
+          "label_s": 1.875,
+          "fire_s": 1.8863945578231291,
+          "margin": -0.0005244178758084805,
+          "positive_reference": {
+            "track": "late_night",
+            "role": "mix",
+            "available_s": 199.20533333333333
+          },
+          "negative_reference": {
+            "track": "late_night",
+            "role": "mix",
+            "available_s": 135.21066666666667
+          }
+        },
+        {
+          "label_s": 3.75,
+          "fire_s": 3.756802721088435,
+          "margin": -0.005389817346203363,
+          "positive_reference": {
+            "track": "late_night",
+            "role": "mix",
+            "available_s": 209.888
+          },
+          "negative_reference": {
+            "track": "late_night",
+            "role": "mix",
+            "available_s": 135.21066666666667
+          }
+        },
+        {
+          "label_s": 4.685,
+          "fire_s": 4.694671201814059,
+          "margin": -0.01193549063206878,
+          "positive_reference": {
+            "track": "apricots_128bpm",
+            "role": "mix",
+            "available_s": 8.298666666666668
+          },
+          "negative_reference": {
+            "track": "late_night",
+            "role": "mix",
+            "available_s": 135.21066666666667
+          }
+        },
+        {
+          "label_s": 5.625,
+          "fire_s": 5.632539682539683,
+          "margin": -0.002130505748467293,
+          "positive_reference": {
+            "track": "late_night",
+            "role": "mix",
+            "available_s": 199.888
+          },
+          "negative_reference": {
+            "track": "late_night",
+            "role": "mix",
+            "available_s": 135.21066666666667
+          }
+        },
+        {
+          "label_s": 7.5,
+          "fire_s": 7.508276643990929,
+          "margin": -0.004641756125001173,
+          "positive_reference": {
+            "track": "late_night",
+            "role": "mix",
+            "available_s": 209.888
+          },
+          "negative_reference": {
+            "track": "feel_the_vibration_174bpm",
+            "role": "mix",
+            "available_s": 12.288
+          }
+        },
+        {
+          "label_s": 8.435,
+          "fire_s": 8.446145124716553,
+          "margin": -0.00880702061830052,
+          "positive_reference": {
+            "track": "late_night",
+            "role": "mix",
+            "available_s": 199.888
+          },
+          "negative_reference": {
+            "track": "late_night",
+            "role": "mix",
+            "available_s": 135.21066666666667
+          }
+        },
+        {
+          "label_s": 9.375,
+          "fire_s": 9.384013605442178,
+          "margin": -0.0032236912303744703,
+          "positive_reference": {
+            "track": "late_night",
+            "role": "mix",
+            "available_s": 199.20533333333333
+          },
+          "negative_reference": {
+            "track": "late_night",
+            "role": "mix",
+            "available_s": 135.21066666666667
+          }
+        },
+        {
+          "label_s": 11.25,
+          "fire_s": 11.259750566893423,
+          "margin": -0.008464088803937009,
+          "positive_reference": {
+            "track": "late_night",
+            "role": "mix",
+            "available_s": 209.888
+          },
+          "negative_reference": {
+            "track": "late_night",
+            "role": "mix",
+            "available_s": 135.21066666666667
+          }
+        },
+        {
+          "label_s": 12.185,
+          "fire_s": 12.192290249433107,
+          "margin": -0.010028635156811294,
+          "positive_reference": {
+            "track": "late_night",
+            "role": "mix",
+            "available_s": 209.888
+          },
+          "negative_reference": {
+            "track": "feel_the_vibration_174bpm",
+            "role": "mix",
+            "available_s": 12.288
+          }
+        }
+      ]
+    },
+    {
+      "track": "feel_the_vibration_174bpm",
+      "training_tracks": [
+        "apricots_128bpm",
+        "bad_guy_128bpm",
+        "inhale_exhale_145bpm",
+        "late_night",
+        "midnight_patience",
+        "tears_140bpm"
+      ],
+      "training_positive": 690,
+      "training_negative": 304,
+      "excluded_same_track": 96,
+      "baseline_50ms": {
+        "matched": 13,
+        "missed": 2,
+        "extra": 4
+      },
+      "trial_50ms": {
+        "matched": 13,
+        "missed": 2,
+        "extra": 4
+      },
+      "oracle_label_acceptances": {
+        "20": 13,
+        "35": 15,
+        "50": 15
+      },
+      "oracle_missed_label_acceptances": {
+        "20": 1,
+        "35": 2,
+        "50": 2
+      },
+      "kick_free_probes": {
+        "count": 0,
+        "accepted": 0
+      },
+      "lost_correct_hits": []
+    },
+    {
+      "track": "inhale_exhale_145bpm",
+      "training_tracks": [
+        "apricots_128bpm",
+        "bad_guy_128bpm",
+        "feel_the_vibration_174bpm",
+        "late_night",
+        "midnight_patience",
+        "tears_140bpm"
+      ],
+      "training_positive": 708,
+      "training_negative": 268,
+      "excluded_same_track": 114,
+      "baseline_50ms": {
+        "matched": 11,
+        "missed": 1,
+        "extra": 14
+      },
+      "trial_50ms": {
+        "matched": 6,
+        "missed": 6,
+        "extra": 13
+      },
+      "oracle_label_acceptances": {
+        "20": 11,
+        "35": 11,
+        "50": 12
+      },
+      "oracle_missed_label_acceptances": {
+        "20": 1,
+        "35": 0,
+        "50": 1
+      },
+      "kick_free_probes": {
+        "count": 0,
+        "accepted": 0
+      },
+      "lost_correct_hits": [
+        {
+          "label_s": 2.07,
+          "fire_s": 2.0853333333333333,
+          "margin": -0.00015583068216407092,
+          "positive_reference": {
+            "track": "midnight_patience",
+            "role": "kick",
+            "available_s": 125.73333333333333
+          },
+          "negative_reference": {
+            "track": "late_night",
+            "role": "bass",
+            "available_s": 206.15466666666666
+          }
+        },
+        {
+          "label_s": 5.38,
+          "fire_s": 5.386666666666667,
+          "margin": -0.0012572903447151118,
+          "positive_reference": {
+            "track": "midnight_patience",
+            "role": "kick",
+            "available_s": 118.192
+          },
+          "negative_reference": {
+            "track": "tears_140bpm",
+            "role": "bass",
+            "available_s": 0.6980725623582766
+          }
+        },
+        {
+          "label_s": 6.62,
+          "fire_s": 6.634666666666667,
+          "margin": -0.013300115879996133,
+          "positive_reference": {
+            "track": "midnight_patience",
+            "role": "kick",
+            "available_s": 117.52533333333334
+          },
+          "negative_reference": {
+            "track": "bad_guy_128bpm",
+            "role": "mixed_drums",
+            "available_s": 12.6718820861678
+          }
+        },
+        {
+          "label_s": 8.69,
+          "fire_s": 8.698666666666666,
+          "margin": -0.035741972203470196,
+          "positive_reference": {
+            "track": "late_night",
+            "role": "kick",
+            "available_s": 204.76266666666666
+          },
+          "negative_reference": {
+            "track": "late_night",
+            "role": "bass",
+            "available_s": 206.15466666666666
+          }
+        },
+        {
+          "label_s": 10.555,
+          "fire_s": 10.56,
+          "margin": -0.0032894785466,
+          "positive_reference": {
+            "track": "late_night",
+            "role": "mix",
+            "available_s": 208.76266666666666
+          },
+          "negative_reference": {
+            "track": "late_night",
+            "role": "bass",
+            "available_s": 136.62933333333334
+          }
+        }
+      ]
+    },
+    {
+      "track": "tears_140bpm",
+      "training_tracks": [
+        "apricots_128bpm",
+        "bad_guy_128bpm",
+        "feel_the_vibration_174bpm",
+        "inhale_exhale_145bpm",
+        "late_night",
+        "midnight_patience"
+      ],
+      "training_positive": 720,
+      "training_negative": 289,
+      "excluded_same_track": 81,
+      "baseline_50ms": {
+        "matched": 10,
+        "missed": 0,
+        "extra": 7
+      },
+      "trial_50ms": {
+        "matched": 10,
+        "missed": 0,
+        "extra": 7
+      },
+      "oracle_label_acceptances": {
+        "20": 7,
+        "35": 10,
+        "50": 10
+      },
+      "oracle_missed_label_acceptances": {
+        "20": 0,
+        "35": 0,
+        "50": 0
+      },
+      "kick_free_probes": {
+        "count": 0,
+        "accepted": 0
+      },
+      "lost_correct_hits": []
+    },
+    {
+      "track": "late_night",
+      "training_tracks": [
+        "apricots_128bpm",
+        "bad_guy_128bpm",
+        "feel_the_vibration_174bpm",
+        "inhale_exhale_145bpm",
+        "midnight_patience",
+        "tears_140bpm"
+      ],
+      "training_positive": 606,
+      "training_negative": 142,
+      "excluded_same_track": 342,
+      "baseline_50ms": {
+        "matched": 23,
+        "missed": 6,
+        "extra": 8
+      },
+      "trial_50ms": {
+        "matched": 23,
+        "missed": 6,
+        "extra": 8
+      },
+      "oracle_label_acceptances": {
+        "20": 28,
+        "35": 29,
+        "50": 29
+      },
+      "oracle_missed_label_acceptances": {
+        "20": 6,
+        "35": 6,
+        "50": 6
+      },
+      "kick_free_probes": {
+        "count": 53,
+        "accepted": 45
+      },
+      "lost_correct_hits": []
+    },
+    {
+      "track": "midnight_patience",
+      "training_tracks": [
+        "apricots_128bpm",
+        "bad_guy_128bpm",
+        "feel_the_vibration_174bpm",
+        "inhale_exhale_145bpm",
+        "late_night",
+        "tears_140bpm"
+      ],
+      "training_positive": 570,
+      "training_negative": 288,
+      "excluded_same_track": 232,
+      "baseline_50ms": {
+        "matched": 17,
+        "missed": 18,
+        "extra": 0
+      },
+      "trial_50ms": {
+        "matched": 14,
+        "missed": 21,
+        "extra": 0
+      },
+      "oracle_label_acceptances": {
+        "20": 33,
+        "35": 34,
+        "50": 30
+      },
+      "oracle_missed_label_acceptances": {
+        "20": 18,
+        "35": 17,
+        "50": 13
+      },
+      "kick_free_probes": {
+        "count": 11,
+        "accepted": 1
+      },
+      "lost_correct_hits": [
+        {
+          "label_s": 116.27,
+          "fire_s": 116.29866666666666,
+          "margin": -0.0036268587614202152,
+          "positive_reference": {
+            "track": "late_night",
+            "role": "mix",
+            "available_s": 201.136
+          },
+          "negative_reference": {
+            "track": "bad_guy_128bpm",
+            "role": "mix",
+            "available_s": 11.163832199546485
+          }
+        },
+        {
+          "label_s": 125.595,
+          "fire_s": 125.60533333333333,
+          "margin": -0.009007970144787492,
+          "positive_reference": {
+            "track": "late_night",
+            "role": "mix",
+            "available_s": 204.03733333333332
+          },
+          "negative_reference": {
+            "track": "late_night",
+            "role": "mix",
+            "available_s": 129.03466666666668
+          }
+        },
+        {
+          "label_s": 127.41,
+          "fire_s": 127.42933333333333,
+          "margin": -0.017746168543723795,
+          "positive_reference": {
+            "track": "late_night",
+            "role": "mix",
+            "available_s": 204.03733333333332
+          },
+          "negative_reference": {
+            "track": "late_night",
+            "role": "mix",
+            "available_s": 130.72
+          }
+        }
+      ]
+    }
+  ],
+  "reference_files": [
+    {
+      "track": "apricots_128bpm",
+      "path": "/Users/peterkiemann/MANIFOLD - Rust/tests/fixtures/audio/apricots_128bpm/mix.wav",
+      "role": "mix",
+      "sha256": "fde3593f372875579a15b95d80cb1d4408971ba62dd80b84110623eecbba28c4",
+      "sample_rate": 48000,
+      "master_minus_source_s": 0.0,
+      "checked_against_previous_hash": true
+    },
+    {
+      "track": "apricots_128bpm",
+      "path": "/Users/peterkiemann/MANIFOLD - Rust/tests/fixtures/audio/apricots_128bpm/drums.wav",
+      "role": "mixed_drums",
+      "sha256": "02d64fc822c55de2754ae12330f07521b382923c617d7e03560bd3e7230379bb",
+      "sample_rate": 44100,
+      "master_minus_source_s": 0.0,
+      "checked_against_previous_hash": false
+    },
+    {
+      "track": "apricots_128bpm",
+      "path": "/Users/peterkiemann/MANIFOLD - Rust/tests/fixtures/audio/apricots_128bpm/bass.wav",
+      "role": "bass",
+      "sha256": "a49b95a7aee846bf46ad5a53b691cd3036a3b56f6605e2daf4517684a169d10f",
+      "sample_rate": 44100,
+      "master_minus_source_s": 0.0,
+      "checked_against_previous_hash": false
+    },
+    {
+      "track": "bad_guy_128bpm",
+      "path": "/Users/peterkiemann/MANIFOLD - Rust/tests/fixtures/audio/bad_guy_128bpm/mix.wav",
+      "role": "mix",
+      "sha256": "351ad2f07dc5778690b8f04c0af12c1acc8f83fdb3c253fc988e26a433cff7a8",
+      "sample_rate": 44100,
+      "master_minus_source_s": 0.0,
+      "checked_against_previous_hash": true
+    },
+    {
+      "track": "bad_guy_128bpm",
+      "path": "/Users/peterkiemann/MANIFOLD - Rust/tests/fixtures/audio/bad_guy_128bpm/drums.wav",
+      "role": "mixed_drums",
+      "sha256": "a49757285e1b2e94ae92bd5bbcecf50c3f3fe914114a561c05a62ec02dba6dae",
+      "sample_rate": 44100,
+      "master_minus_source_s": 0.0,
+      "checked_against_previous_hash": false
+    },
+    {
+      "track": "bad_guy_128bpm",
+      "path": "/Users/peterkiemann/MANIFOLD - Rust/tests/fixtures/audio/bad_guy_128bpm/bass.wav",
+      "role": "bass",
+      "sha256": "40b011be4f20aeb2f10b00268cde062ecd224ee8b03f0256192f67777a8d10e5",
+      "sample_rate": 44100,
+      "master_minus_source_s": 0.0,
+      "checked_against_previous_hash": false
+    },
+    {
+      "track": "feel_the_vibration_174bpm",
+      "path": "/Users/peterkiemann/MANIFOLD - Rust/tests/fixtures/audio/feel_the_vibration_174bpm/mix.wav",
+      "role": "mix",
+      "sha256": "57458b322198b9c12ac821180874466a6636c15dda56d33bc29d616f46f80533",
+      "sample_rate": 48000,
+      "master_minus_source_s": 0.0,
+      "checked_against_previous_hash": true
+    },
+    {
+      "track": "feel_the_vibration_174bpm",
+      "path": "/Users/peterkiemann/MANIFOLD - Rust/tests/fixtures/audio/feel_the_vibration_174bpm/drums.wav",
+      "role": "mixed_drums",
+      "sha256": "a4a9999145004932f44020c43e91eee1a83e7b90dc74df3ab5dcd265c6bff6f6",
+      "sample_rate": 44100,
+      "master_minus_source_s": 0.0,
+      "checked_against_previous_hash": false
+    },
+    {
+      "track": "feel_the_vibration_174bpm",
+      "path": "/Users/peterkiemann/MANIFOLD - Rust/tests/fixtures/audio/feel_the_vibration_174bpm/bass.wav",
+      "role": "bass",
+      "sha256": "e83a0931cb01a97c22447340c55a86f92a82a53271b562d3b66c05c56cb84f48",
+      "sample_rate": 44100,
+      "master_minus_source_s": 0.0,
+      "checked_against_previous_hash": false
+    },
+    {
+      "track": "inhale_exhale_145bpm",
+      "path": "/Users/peterkiemann/MANIFOLD - Rust/tests/fixtures/audio/inhale_exhale_145bpm/mix.wav",
+      "role": "mix",
+      "sha256": "26163ae92e4b7aaf74cafc6a5fff3b6bad2a566a60474bb8b8b53386add18514",
+      "sample_rate": 48000,
+      "master_minus_source_s": 0.0,
+      "checked_against_previous_hash": true
+    },
+    {
+      "track": "inhale_exhale_145bpm",
+      "path": "/Users/peterkiemann/MANIFOLD - Rust/tests/fixtures/audio/inhale_exhale_145bpm/drums.wav",
+      "role": "mixed_drums",
+      "sha256": "c0b34bd127de7d334d14c28c4069eb90b3b68ee75a95c2c4452ce973c97e6597",
+      "sample_rate": 44100,
+      "master_minus_source_s": 0.0,
+      "checked_against_previous_hash": false
+    },
+    {
+      "track": "inhale_exhale_145bpm",
+      "path": "/Users/peterkiemann/MANIFOLD - Rust/tests/fixtures/audio/inhale_exhale_145bpm/bass.wav",
+      "role": "bass",
+      "sha256": "0fa7340c25cc367712b7ada6022054086b5e57becf2caccbfb934a07f3077dff",
+      "sample_rate": 44100,
+      "master_minus_source_s": 0.0,
+      "checked_against_previous_hash": false
+    },
+    {
+      "track": "tears_140bpm",
+      "path": "/Users/peterkiemann/MANIFOLD - Rust/tests/fixtures/audio/tears_140bpm/mix.wav",
+      "role": "mix",
+      "sha256": "49c7c4ee799e93690e4023665b332c617f0fa170314a83d05c79a2c675d5b334",
+      "sample_rate": 48000,
+      "master_minus_source_s": 0.0,
+      "checked_against_previous_hash": true
+    },
+    {
+      "track": "tears_140bpm",
+      "path": "/Users/peterkiemann/MANIFOLD - Rust/tests/fixtures/audio/tears_140bpm/drums.wav",
+      "role": "mixed_drums",
+      "sha256": "b1b3d5733601de9b05804775a2209bb1688f3cbac9ce58f6aa76234b554eac56",
+      "sample_rate": 44100,
+      "master_minus_source_s": 0.0,
+      "checked_against_previous_hash": false
+    },
+    {
+      "track": "tears_140bpm",
+      "path": "/Users/peterkiemann/MANIFOLD - Rust/tests/fixtures/audio/tears_140bpm/bass.wav",
+      "role": "bass",
+      "sha256": "0655f58e0bb1e83c46af934e50dcaed4011989db3183da0f3b11ba6e3117bb63",
+      "sample_rate": 44100,
+      "master_minus_source_s": 0.0,
+      "checked_against_previous_hash": false
+    },
+    {
+      "track": "late_night",
+      "path": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/2024/Late Night - STEM MASTER Project/ALEX MASTERS/Latent Space - Late Night T2(mastered) 48k 24-bit.wav",
+      "role": "mix",
+      "sha256": "91ef876583d6404b417f1f92e88acb5aca75a207d1d107d77ee05e2846740108",
+      "sample_rate": 48000,
+      "master_minus_source_s": 0.0,
+      "checked_against_previous_hash": true
+    },
+    {
+      "track": "late_night",
+      "path": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/STEMS/LATE NIGHT STEMS/Late Night - Kicks Stem.wav",
+      "role": "kick",
+      "sha256": "5419436412a01e12c10f7124eccdd83c904c49b7af6cecb36c4c398f933f1b7f",
+      "sample_rate": 48000,
+      "master_minus_source_s": 0.0,
+      "checked_against_previous_hash": true
+    },
+    {
+      "track": "late_night",
+      "path": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/STEMS/LATE NIGHT STEMS/Late Night - Bass and Sub Stem.wav",
+      "role": "bass",
+      "sha256": "500a924675caa3772faf062a489e4386e4d3e2705e6fbe299f46c52444d44581",
+      "sample_rate": 48000,
+      "master_minus_source_s": 0.0,
+      "checked_against_previous_hash": true
+    },
+    {
+      "track": "late_night",
+      "path": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/STEMS/LATE NIGHT STEMS/Late Night - Drums Stem.wav",
+      "role": "other_drums",
+      "sha256": "87862d852c65e37e9d094455980987313212a844cd3458196eb495be5a4c7647",
+      "sample_rate": 48000,
+      "master_minus_source_s": 0.0,
+      "checked_against_previous_hash": true
+    },
+    {
+      "track": "midnight_patience",
+      "path": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/EMERGENCE - ALBUM 2026/FINAL MASTERS/Latent Space - 04 - Midnight Patience T2 (mastered) 48k 24-bit.wav",
+      "role": "mix",
+      "sha256": "f985764125d53d9cc9379193af567f4022b05a657678e7c403bf187732bef6f2",
+      "sample_rate": 48000,
+      "master_minus_source_s": 0.0,
+      "checked_against_previous_hash": true
+    },
+    {
+      "track": "midnight_patience",
+      "path": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/STEMS/MIDNIGHT PATIENCE STEMS/Kick.wav",
+      "role": "kick",
+      "sha256": "2b5daae4c64e83b47f0587f71b5f2ab389e47f8db0ae1aac4d31a76e268208a2",
+      "sample_rate": 48000,
+      "master_minus_source_s": 0.136375,
+      "checked_against_previous_hash": true
+    },
+    {
+      "track": "midnight_patience",
+      "path": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/STEMS/MIDNIGHT PATIENCE STEMS/Bass and Sub.wav",
+      "role": "bass",
+      "sha256": "b7be349c13b56b28e8b76a01ecaefabbb5b81084664efcd5492ce443f0e4b5be",
+      "sample_rate": 48000,
+      "master_minus_source_s": 0.136375,
+      "checked_against_previous_hash": true
+    },
+    {
+      "track": "midnight_patience",
+      "path": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/STEMS/MIDNIGHT PATIENCE STEMS/Drums.wav",
+      "role": "other_drums",
+      "sha256": "c24183879416386bbfa81ff09a291fef52b7105a07566f1d47812507d85cd156",
+      "sample_rate": 48000,
+      "master_minus_source_s": 0.136375,
+      "checked_against_previous_hash": true
+    }
+  ],
+  "source_sha256": {
+    "run_kick_timbre_trial.py": "d097e06a3aeb13436ee462e1522ffd946073eb304e22511a6eca5637d9f83bbe",
+    "kick_timbre_features.py": "e9278333d65d99c05f17459fed3bb6bbf456108b3427d687da5b5211cc4dacdc",
+    "kick_tonal_experiment.py": "ae6a66426616273ed9f33a460d5e5b8407f91b82681133108e235b01967d76f7",
+    "run_kick_dsp_experiments.py": "932d6e2f65cba2e9b3ff00baea9d5a6ac4d60048f4e41e106415afb981068615",
+    "master_kick_comparison.py": "46a58e55b6e8a8c2d2e88a63c6bf87ef7d5c7691ee4ab71e3203b6fd887d0145",
+    "live_kick_baseline.py": "891b7f79df0dc3302e7011ee5440b6693ff30320e98eed5d0ad27c725aa970f2",
+    "kick_attack_rejection.py": "cb5e8ad261f64ae5b6e3bafce2f232e14ec99bb3fc54c0599f113dcfaed6a144"
+  },
+  "labels_sha256": {
+    "inhale_exhale_145bpm.csv": "a29b9892456588294efbf6f506da912d4f2d996fc105f9551b1b9d6db4077f4e",
+    "bad_guy_128bpm.csv": "d657d298ad98bee09e048922b465de4b4a69386a1482d8327be3207a37444ef7",
+    "attack_review.csv": "b29e872c8a8ec9d05902c7f76bc68b5a16399fc9cf0fd1ef669c598c8711a9ae",
+    "feel_the_vibration_174bpm.csv": "922be87c9a6a9eb03002b68ce5f87915e1fec4652921795c20cf6975a2bc21e8",
+    "apricots_128bpm.csv": "fa38b535e88b55580df3f90956935420070d95fb89441b30e625b1cdce45b163",
+    "tears_140bpm.csv": "f3ce02e72f191bd53bc86c611fce2efe56a55db4cb19b6f1434bdba80ce28576",
+    "bad_guy_128bpm.repair.json": "0d9f007d02da46f93dff1168ff321379a57310ab97397626812080389d955f11",
+    "master_passages_2026-10-09.json": "94884ba781bb2d1062d143721376b8b177a51cf3d537d213abc3201a310f0b5c"
+  },
+  "hybrid_report_sha256": "4c7d9b54e1595479e4d6e942d253ef8961402fee3ee912cf23185bcb7bbe4616",
+  "validation": {
+    "focused_tests": 9,
+    "whole_song_folds": 7,
+    "original_fire_classifications": 868,
+    "unchanged_classifier_replay_exact": true,
+    "checks": "Causal prefixes, batching, gain invariance, silence, tone discrimination, same-track distractor exclusion, absent classes/zero references, and completed-hop deadlines. All 868 original-fire decisions replay exactly after adding timing/negative diagnostics."
+  },
+  "limitations": [
+    "Leave-one-recording-out development comparison, not untouched validation. All same-song stems and versions excluded; Miracle and Heavy On Mind untouched.",
+    "Reference labels are provisional visual/source-assisted estimates. Original drum stems contain other drums; negative stem windows can include separation leakage or tails. No isolated-kick purity or new auditory validation claimed.",
+    "Master/source mappings use existing clock evidence; Late Night uses approximate shared origin and Midnight +0.136375 s. Masters differ from stems; no waveform reconstruction or new warp was performed.",
+    "Reference class sizes vary; nearest-template matching may favour densely represented classes. No class balancing or tuning was added after observing results.",
+    "Fingerprint spans about 59 ms of past audio; references sample three fixed event ages, while test fires use actual availability. No alignment search, future samples or extra waiting.",
+    "Only existing fires are filtered; there is no new candidate pathway. Missed-label probes are oracle classifications, not recovered trigger recall.",
+    "After the first fixed-rule outcome, the identical classifier was additionally sampled at all labelled onsets plus 20/35/50 ms and at secondary kick-free fires to diagnose timing and false acceptance. No features, references or decision boundary changed.",
+    "Baseline native event lists are reused from frozen reports; no claim of a new native runtime evaluation.",
+    "Batch Python timings and allocations are not native callback deadlines. No GPU, neural network or app integration."
+  ],
+  "raw_report": {
+    "path": "/Users/peterkiemann/.cache/manifold/kick-timbre-2026-10-09/trial.json",
+    "sha256": "39a597baadb92d06564e0262e00354a2216d1d65b27e684582d4db7c0150cb66"
+  },
+  "held_out_untouched": [
+    "Miracle",
+    "Heavy On Mind"
+  ],
+  "margin_diagnostic": {
+    "correct_hit_count": 103,
+    "wider_unmatched_count": 48,
+    "pooled_pairwise_auc": 0.3881472491909385,
+    "min_correct_hit_margin": -0.035741972203470196,
+    "unmatched_below_min_correct_hit_margin": 0,
+    "limit": "Post-result descriptive bound, no threshold selection or independent validation claim."
+  },
+  "runtime": {
+    "matching_cpu_ms_median": 0.15400000000020952,
+    "matching_cpu_ms_max": 0.37799999999954537,
+    "limit": "One Python CPU timing sample per query, including validation/normalization of the dictionary. Excludes feature extraction and is not native callback scheduling/latency proof; no GPU used."
+  },
+  "reproduce": "PYTHONPATH=tools/audio_analysis python3 -m eval.run_kick_timbre_trial --audio-root PATH --hybrid-report ~/.cache/manifold/kick-hybrid-2026-10-09/mixes-presence.json --out PATH. Requires the five original mixes/drum/bass stems and two development masters with named production stems. Feature dictionary and full provenance are saved beside raw output."
+}
