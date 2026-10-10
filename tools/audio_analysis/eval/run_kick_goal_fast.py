@@ -52,11 +52,9 @@ WORKERS = int(os.environ.get('KICK_GOAL_JOBS', '10'))
 FEATS = 'f69'
 # The stage's memory: 8 s (R3_self8). Longer memories are vetoed (decision log, Oct 2026).
 WINDOWS = [8.0]
-# KICK_GOAL_AHEAD_MS: every decision waits this much longer after the attack (all fires are timed later);
 # KICK_GOAL_NN_SEED shifts every net's seed. The net's input settings tag the output (kick_goal_nn.INPUT_TAG).
-AHEAD_MS = int(os.environ.get('KICK_GOAL_AHEAD_MS', '0'))
 SEED = int(os.environ.get('KICK_GOAL_NN_SEED', '0'))
-TAG = INPUT_TAG + (f'_a{AHEAD_MS}' if AHEAD_MS else '') + (f'_s{SEED}' if SEED else '')
+TAG = INPUT_TAG + (f'_s{SEED}' if SEED else '')
 # KICK_GOAL_NN_SYNTH=1: the nets also train on the kick-swap clips that involve no held-out song.
 SYNTH_ON = os.environ.get('KICK_GOAL_NN_SYNTH') == '1'
 TAG += '_syn' if SYNTH_ON else ''
@@ -86,8 +84,6 @@ def setup():
     add_whole_song_truth(g)
     if MELODIC_ON:
         add_melodic_negatives(g)
-    for r in g.records.values():
-        r['emit_s'] = r['emit_s'] + AHEAD_MS / 1000
     build(g, FEATS)
     STATE['g'] = g
     STATE['fit'], STATE['pred'] = gbt(g, True, FEATS)

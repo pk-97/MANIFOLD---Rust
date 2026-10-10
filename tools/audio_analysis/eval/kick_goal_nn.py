@@ -34,15 +34,18 @@ BANDS = int(os.environ.get('KICK_GOAL_NN_BANDS', '64'))
 PAST_MS = int(os.environ.get('KICK_GOAL_NN_PAST_MS', '150'))
 PERC_ON = os.environ.get('KICK_GOAL_NN_PERC') == '1'
 STEREO_ON = os.environ.get('KICK_GOAL_NN_STEREO') == '1'
+# The net's slice ends this much after the emission; the fire keeps the emission's time stamp, so the wait is
+# accepted output latency (Peter, Oct 2026: 20-40 ms is fine), not timing error eaten from the 70 ms tolerance.
+AHEAD_MS = int(os.environ.get('KICK_GOAL_NN_AHEAD_MS', '0'))
 CENTRES = np.geomspace(30.0, 16000.0, BANDS)
 HALF_BW = .1 * 64 / BANDS  # about one band spacing either side
 FRAME_S = .002
 SLICE = PAST_MS // 2  # frames ending at emission
 TBINS = 1 if SLICE <= 75 else 4
 CHANNELS = 2 + PERC_ON + STEREO_ON
-DEFAULT_INPUT = BANDS == 64 and PAST_MS == 150 and not PERC_ON and not STEREO_ON
+DEFAULT_INPUT = BANDS == 64 and PAST_MS == 150 and not PERC_ON and not STEREO_ON and not AHEAD_MS
 INPUT_TAG = '' if DEFAULT_INPUT else (f'_b{BANDS}' + (f'_h{PAST_MS}' if PAST_MS != 150 else '') + ('_perc' if PERC_ON else '')
-                                     + ('_st' if STEREO_ON else ''))
+                                     + ('_st' if STEREO_ON else '') + (f'_a{AHEAD_MS}' if AHEAD_MS else ''))
 SUSTAIN = 25  # frames: 50 ms
 NEIGHBOURS = 9
 PRE_S = .1
@@ -134,7 +137,7 @@ class Song:
         r = g.records[t]
         mask = r['train_mask'] & (r['train_y'] == 1) if r.get('positives_only') else r['train_mask']
         spec = spectrum_cache(g, t)
-        return cls(spec, r['onset_s'], r['emit_s'], mask, r['train_y'], t, r.get('hard_neg'), extra_caches(g, t, spec))
+        return cls(spec, r['onset_s'], r['emit_s'] + AHEAD_MS / 1000, mask, r['train_y'], t, r.get('hard_neg'), extra_caches(g, t, spec))
 
     @classmethod
     def synth(cls, path):
