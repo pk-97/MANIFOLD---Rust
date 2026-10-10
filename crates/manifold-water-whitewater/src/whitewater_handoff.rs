@@ -69,14 +69,16 @@ pub(crate) const OUTPUT_SLOTS: usize = 4;
 /// Output buffers grow in steps of this many records.
 const OUTPUT_ROUNDING: usize = 4096;
 
+manifold_core::testkit_visible! {
 /// What a snapshot slot is sized for.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct SnapshotShape {
+pub(crate) struct SnapshotShape {
     pub grid: WhitewaterGrid,
     pub face_cells: [u32; 3],
     pub face_offset: [u32; 3],
     /// Spawn records per frame: the lifecycle's capacity.
     pub capacity: u32,
+}
 }
 
 impl SnapshotShape {
