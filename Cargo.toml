@@ -19,6 +19,7 @@ members = [
     "crates/manifold-water-rigid",
     "crates/manifold-water-liquid",
     "crates/manifold-water-gpu-flip",
+    "crates/manifold-water-gpu-mpm",
     "crates/manifold-native",
     "crates/manifold-profiler",
     "crates/manifold-media",

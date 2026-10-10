@@ -232,7 +232,7 @@ fn fluid_sort_particles_into_cells_runs_with_sorted_unwired() {
 /// a named error, since it holds liquid particle records.
 #[test]
 fn fluid_sort_particles_into_cells_sorts_matter_points_in_place() {
-    use crate::matter::MatterPoint;
+    use manifold_water_gpu_mpm::matter::MatterPoint;
     let mut harness = Harness::new();
     let lattice = Lattice { center: [0.0; 3], size: [2.0; 3], cell: 0.25 };
     let bins = bin_counts(lattice.size, lattice.cell).iter().product::<u32>() as usize;

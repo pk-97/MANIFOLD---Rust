@@ -17,17 +17,6 @@ mod lattice_curvature;
 manifold_core::testkit_visible! { pub(crate) mod liquid_frame; }
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod liquid_surface_tests;
-mod matter_body_reaction;
-mod matter_common;
-pub(crate) mod matter_domain;
-manifold_core::testkit_visible! { pub(crate) mod matter_face_component; }
-pub(crate) mod matter_fill;
-mod matter_frame;
-mod matter_grid_update;
-mod matter_move_bodies;
-mod matter_state;
-mod matter_stats;
-mod matter_to_grid;
 mod nearest_crossing;
 mod pad_distance_lattice;
 manifold_core::testkit_visible! { pub(crate) mod particle_volume; }
@@ -88,7 +77,6 @@ manifold_core::testkit_visible! { pub(crate) mod blob_bounds; }
 mod face_grid_extent_tests;
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod face_grid_tests;
-mod grid_to_matter;
 
 #[cfg(any(test, feature = "testkit"))]
 pub mod smooth_surface_mesh;

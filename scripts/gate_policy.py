@@ -15,6 +15,7 @@ GPU_DEFAULT_CPU_ONLY = {
     "manifold-water-rigid": "Moved default water tests are CPU contracts; device proofs require gpu-proofs",
     "manifold-water-liquid": "Moved default water tests are CPU contracts; device proofs require gpu-proofs",
     "manifold-water-gpu-flip": "Moved default water tests are CPU contracts; device proofs require gpu-proofs",
+    "manifold-water-gpu-mpm": "Moved default water tests are CPU contracts; device proofs require gpu-proofs",
     "manifold-nodes-scene": "Device proofs require gpu-proofs; ungated imported-graph validation lives in the catalog",
     "manifold-compositor": "GPU device proofs require gpu-proofs; default tests are CPU contracts",
     "manifold-nodes-image": "GPU device proofs require gpu-proofs; default tests are CPU contracts",
@@ -42,7 +43,8 @@ PRIMITIVE_PATHS = ('crates/manifold-nodes-scene/src/node_graph/primitives/',
                    'crates/manifold-nodes-water/src/primitives/',
                    'crates/manifold-water-rigid/src/primitives/',
                    'crates/manifold-water-liquid/src/primitives/',
-                   'crates/manifold-water-gpu-flip/src/primitives/')
+                   'crates/manifold-water-gpu-flip/src/primitives/',
+                   'crates/manifold-water-gpu-mpm/src/primitives/')
 CATALOG_PATHS = (*PRIMITIVE_PATHS,
                  'crates/manifold-nodes/src/catalog_gen.rs',
                  'crates/manifold-node-engine/src/descriptor.rs',
@@ -54,8 +56,9 @@ ENGINE_SRC = "crates/manifold-node-engine/src/"
 RIGID_SRC = "crates/manifold-water-rigid/src/"
 LIQUID_SRC = "crates/manifold-water-liquid/src/"
 FLIP_SRC = "crates/manifold-water-gpu-flip/src/"
+MPM_SRC = "crates/manifold-water-gpu-mpm/src/"
 WATER_SRC = "crates/manifold-nodes-water/src/"
-WATER_SRCS = (RIGID_SRC, LIQUID_SRC, FLIP_SRC, WATER_SRC)
+WATER_SRCS = (RIGID_SRC, LIQUID_SRC, FLIP_SRC, MPM_SRC, WATER_SRC)
 # The seam files that lived under nodes-water liquid/ before the carve.
 LIQUID_SEAM_FILES = ("bodies.rs", "body_buffers.rs", "clock.rs", "coupling.rs", "display_cursor.rs",
                      "extent.rs", "fields.rs", "fields/", "frame_history.rs", "frame_ring.rs",
@@ -131,8 +134,13 @@ WATER_BROAD_FILTERS = [
 # gpu_flip_ rows stay path-keyed, so the narrow clock, band and domain rows hold.
 CS_GPU_FLIP_FILTERS = [
     "liquid_conformance::gpu_flip_", "liquid_conformance::liquid_live_flip",
-    "gpu_flip_scene_tests::", "catalog_tests::gpu_flip_body::",
+    "gpu_flip_scene_tests::", "gpu_flip_tile_tests::", "catalog_tests::gpu_flip_body::",
 ]
+# The GPU MPM (Matter) leaf's seam conformance (section 6.3 row), keyed by its crate
+# root. Every liquid_conformance check runs each LIQUID_SOLVERS row, Matter included,
+# so the whole suite is Matter's member list. Its matter_ and substeps_ rows stay
+# path-keyed, so the narrow domain row holds.
+CS_GPU_MPM_FILTERS = ["liquid_conformance::", "face_grid_tests::"]
 
 # Proofs over this duration require a reviewed measurement before landing.
 # The measurements live in scripts/gpu_test_times.json, written by
@@ -243,7 +251,7 @@ NARROW_ROWS = [
      (LIQUID_FORCE_FILTERS, REPORTER_SKIPS)),
     ((FLIP_SRC + "primitives/gpu_flip_domain.rs",),
      (LIQUID_DOMAIN_FILTERS + ["fluid_mesh_grid_native_"], REPORTER_SKIPS)),
-    ((WATER_SRC + "primitives/matter_domain.rs",),
+    ((MPM_SRC + "primitives/matter_domain.rs",),
      (MATTER_DOMAIN_FILTERS, REPORTER_SKIPS)),
 ]
 
@@ -280,15 +288,16 @@ EXPLICIT_ROWS = [
      (["rt_"], [])),
     ((ENGINE_SRC + "freeze/",), (["freeze::"], [])),
     # Live Matter (GPU_MPM_SOLVER_DESIGN.md) and the substep regions it runs in.
-    ((WATER_SRC + "matter.rs",
-      WATER_SRC + "matter/",
+    ((MPM_SRC + "matter.rs",
+      MPM_SRC + "matter/",
       ENGINE_SRC + "exec/substeps.rs",
       ENGINE_SRC + "exec/execution/substep_region.rs",
-      WATER_SRC + "primitives/matter_",
+      MPM_SRC + "primitives/matter_",
       RENDERER_SRC + "node_graph/primitives/grid_to_matter",
       "crates/manifold-nodes-image/src/node_graph/primitives/zero_array",
-      WATER_SRC + "primitives/shaders/matter_",
-      WATER_SRC + "primitives/shaders/grid_to_matter",
+      MPM_SRC + "primitives/grid_to_matter",
+      MPM_SRC + "primitives/shaders/matter_",
+      MPM_SRC + "primitives/shaders/grid_to_matter",
       "crates/manifold-nodes-image/src/node_graph/primitives/shaders/zero_array",
       PROOFS_DIR + "matter_",
       PROOFS_DIR + "substeps"),
@@ -360,6 +369,7 @@ CONTRACT_ROOT_ROWS = [
     (RIGID_SRC, CS_RIGID_GPU_FILTERS),
     (LIQUID_SRC, WATER_BROAD_FILTERS),
     (FLIP_SRC, CS_GPU_FLIP_FILTERS),
+    (MPM_SRC, CS_GPU_MPM_FILTERS),
 ]
 
 # Paths whose change affects every proof: BROAD.
@@ -414,6 +424,8 @@ LIB_PROOF_ROWS[LIQUID_SRC + "lib.rs"] = WATER_BROAD_FILTERS
 LIB_PROOF_ROWS[RIGID_SRC + "lib.rs"] = WATER_BROAD_FILTERS
 LIB_PROOF_ROWS[FLIP_SRC + "lib.rs"] = CS_GPU_FLIP_FILTERS
 LIB_PROOF_ROWS[FLIP_SRC + "primitives/mod.rs"] = CS_GPU_FLIP_FILTERS
+LIB_PROOF_ROWS[MPM_SRC + "lib.rs"] = CS_GPU_MPM_FILTERS
+LIB_PROOF_ROWS[MPM_SRC + "primitives/mod.rs"] = CS_GPU_MPM_FILTERS
 
 LIB_PROOF_ROWS[FLIP_SRC + "primitives/gpu_flip_step.rs"] = [
     "primitives::gpu_flip_step::",
@@ -471,7 +483,6 @@ INTEGRATION_ROWS = {
     "crates/manifold-nodes/tests/contracts/primitive_registry.rs": ("manifold-nodes", ["main"]),
     "crates/manifold-nodes-image/src/node_graph/primitives/mod.rs": ("manifold-nodes", ["main"]),
     "crates/manifold-nodes-scene/src/node_graph/primitives/mod.rs": ("manifold-nodes", ["main"]),
-    "crates/manifold-nodes-water/src/fluid.rs": ("manifold-nodes", ["gpu_proofs"]),
 }
 
 
@@ -521,18 +532,20 @@ PREFIX_ROWS += [(root, ".wgsl", "manifold-nodes", ["uniform_layout_extended", "w
 PREFIX_ROWS += [
     (RIGID_SRC, ".rs", "manifold-water-liquid", ["coupling"], []),
     (RIGID_SRC, ".rs", "manifold-nodes-water",
-     ["runtime::physics_carry", "runtime::physics_impulses",
-      "runtime::physics_sampling", "runtime::physics_source_runtime"], []),
+     ["runtime::physics_carry",
+      "runtime::physics_sampling"], []),
     (RIGID_SRC, ".rs", CATALOG_PACKAGE,
      ["contracts::node_graph::catalog_tests::physics_sampling",
       "contracts::node_graph::catalog_tests::physics_host_modulation", "physics_scene"], []),
 ]
 
-# The GPU FLIP leaf's CPU contract: the catalog tests that construct its nodes.
+# The GPU MPM leaf's CPU contract: the default-build tests that construct Matter nodes.
 PREFIX_ROWS += [
-    (FLIP_SRC, ".rs", CATALOG_PACKAGE,
-     ["contracts::node_graph::catalog_tests::gpu_flip_body", "contracts::water::primitives::gpu_flip_scene_tests",
-      "contracts::water::primitives::gpu_flip_tile_tests"], []),
+    (MPM_SRC, ".rs", "manifold-nodes-water", ["primitives::face_grid_extent_tests"], []),
+    (MPM_SRC, ".rs", CATALOG_PACKAGE,
+     ["contracts::water::primitives::face_grid_extent_tests",
+      "contracts::node_graph::catalog_tests::liquid_extent",
+      "contracts::node_graph::catalog_tests::liquid_lattice"], []),
 ]
 
 # CS-liquid CPU suite: the seam contract plus CS-rigid, whenever liquid changes.
@@ -540,7 +553,7 @@ PREFIX_ROWS += [(LIQUID_SRC, ext, package, modules, skips)
                 for (root, ext, package, modules, skips) in PREFIX_ROWS if root == RIGID_SRC and ext == ".rs"]
 PREFIX_ROWS += [
     (LIQUID_SRC, ".rs", "manifold-nodes-water", ["liquid::scene_contract"], []),
-    (LIQUID_SRC, ".rs", CATALOG_PACKAGE, ["contracts::water::"], []),
+    (LIQUID_SRC, ".rs", CATALOG_PACKAGE, ["contracts::water"], []),
 ]
 
 PREFIX_ROWS += [('crates/manifold-compositor/src/', ".wgsl", "manifold-nodes", ["wgsl_validation"], [])]

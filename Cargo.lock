@@ -2521,6 +2521,7 @@ dependencies = [
  "manifold-physics",
  "manifold-playback",
  "manifold-water-gpu-flip",
+ "manifold-water-gpu-mpm",
  "manifold-water-liquid",
  "manifold-water-rigid",
  "naga",
@@ -2602,6 +2603,7 @@ dependencies = [
  "manifold-physics",
  "manifold-playback",
  "manifold-water-gpu-flip",
+ "manifold-water-gpu-mpm",
  "manifold-water-liquid",
  "manifold-water-rigid",
  "naga",
@@ -2723,6 +2725,23 @@ dependencies = [
  "serde",
  "serde_json",
  "zstd",
+]
+
+[[package]]
+name = "manifold-water-gpu-mpm"
+version = "0.1.0"
+dependencies = [
+ "bytemuck",
+ "inventory",
+ "log",
+ "manifold-core",
+ "manifold-gpu",
+ "manifold-node-engine",
+ "manifold-physics",
+ "manifold-water-gpu-mpm",
+ "manifold-water-liquid",
+ "manifold-water-rigid",
+ "naga",
 ]
 
 [[package]]

@@ -16,7 +16,7 @@ use super::surface_crossings::SurfaceCrossings;
 use manifold_node_engine::exec::effect_node::ParamValues;
 use manifold_core::fluid_domain::domain_layout;
 use manifold_water_liquid::lattice::LiquidLattice;
-use crate::matter::lattice_nodes;
+use manifold_water_gpu_mpm::matter::lattice_nodes;
 use manifold_node_engine::parameters::ParamValue;
 use manifold_node_engine::primitive::Primitive;
 use manifold_water_liquid::whitewater::{KnownValue, MAX_REFINEMENT, SurfaceCrossing, cell_total, face_offset, grid_box, grid_cells, refinement};

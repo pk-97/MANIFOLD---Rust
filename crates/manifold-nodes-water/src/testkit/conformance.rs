@@ -18,7 +18,7 @@ use manifold_water_liquid::fluid_particles::FaceSample;
 use manifold_water_liquid::grid::{face_coords, face_len};
 use manifold_water_liquid::WATER_DENSITY;
 use manifold_water_liquid::lattice::PADDING_NODES;
-use crate::matter::{MatterGridNode, MatterTickStats};
+use manifold_water_gpu_mpm::matter::{MatterGridNode, MatterTickStats};
 use manifold_water_liquid::primitives::liquid_stats::LiquidTickStats;
 
 /// A scene the checks run on.

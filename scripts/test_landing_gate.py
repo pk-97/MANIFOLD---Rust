@@ -1347,7 +1347,7 @@ class DiffScopeTests(unittest.TestCase):
                     ([path], []),
                 )
 
-    def test_sibling_alias_and_integration_mapping(self):
+    def test_sibling_alias_mapping(self):
         with tempfile.TemporaryDirectory() as d:
             crate = Path(d) / "crates/manifold-nodes-water"
             src = crate / "src"
@@ -1359,7 +1359,6 @@ class DiffScopeTests(unittest.TestCase):
             plan = cpu_scope.plan_for_paths(["crates/manifold-nodes-water/src/fluid.rs"], d,
                                             workspace=workspace)
             self.assertIn("test(/^fluid::checks::/)", plan.filterset)
-            self.assertIn("binary(=gpu_proofs)", plan.filterset)
 
     def test_private_folded_test_selects_every_actual_mount(self):
         with tempfile.TemporaryDirectory() as d:
