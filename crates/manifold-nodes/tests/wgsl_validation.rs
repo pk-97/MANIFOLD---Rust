@@ -75,36 +75,35 @@ const PBR_BRDF: &str = include_str!("../../manifold-nodes-scene/src/node_graph/p
 const TONEMAP_COMMON: &str = include_str!("../../manifold-compositor/src/effects/shaders/tonemap_common.wgsl");
 const SAMPLE_FACE_COMMON: &str =
     include_str!("../../manifold-nodes-scene/src/node_graph/primitives/shaders/sample_face_common.wgsl");
-/// `node.gpu_flip_step`'s prelude: pose, collider sampling and the force
-/// field, in its `step_source` order.
-const GPU_FLIP_STEP_PRELUDE: &str = concat!(
-    include_str!("../../manifold-water-liquid/src/primitives/shaders/liquid_pose.wgsl"),
-    "\n",
-    include_str!("../../manifold-water-liquid/src/primitives/shaders/liquid_collider.wgsl"),
-    "\n",
-    include_str!("../../manifold-water-liquid/src/primitives/shaders/liquid_field.wgsl"),
-);
-
 /// Shaders whose pipeline prepends a shared helper file at creation time.
 /// Each validates in that composed form, the way production builds it.
-const COMPOSED_SHADERS: &[(&str, &str)] = &[
-    ("render_mesh_diagram.wgsl", SAMPLE_FACE_COMMON),
-    ("aces_tonemap_compute.wgsl", TONEMAP_COMMON),
-    ("presentation.wgsl", TONEMAP_COMMON),
-    ("simplex_per_instance.wgsl", NOISE_COMMON),
-    ("fbm_per_instance.wgsl", NOISE_COMMON),
-    ("instance_position_jitter.wgsl", NOISE_COMMON),
-    ("instance_rotation_jitter.wgsl", NOISE_COMMON),
-    ("ibl_prefilter_specular.wgsl", PBR_BRDF),
-    ("ibl_irradiance.wgsl", PBR_BRDF),
-    ("ibl_brdf_lut.wgsl", PBR_BRDF),
-    ("gpu_flip_step.wgsl", GPU_FLIP_STEP_PRELUDE),
-    ("whitewater_fused.wgsl", concat!(
-        include_str!("../../manifold-water-liquid/src/primitives/shaders/whitewater_common.wgsl"), "\n",
-        include_str!("../../manifold-water-liquid/src/primitives/shaders/liquid_faces.wgsl"), "\n",
-        include_str!("../../manifold-water-liquid/src/primitives/shaders/liquid_field.wgsl"),
-    )),
-];
+fn composed_shaders() -> Vec<(&'static str, String)> {
+    use manifold_water_liquid::{bodies, fields, grid, whitewater};
+    let mut composed: Vec<(&'static str, String)> = [
+        ("render_mesh_diagram.wgsl", SAMPLE_FACE_COMMON),
+        ("aces_tonemap_compute.wgsl", TONEMAP_COMMON),
+        ("presentation.wgsl", TONEMAP_COMMON),
+        ("simplex_per_instance.wgsl", NOISE_COMMON),
+        ("fbm_per_instance.wgsl", NOISE_COMMON),
+        ("instance_position_jitter.wgsl", NOISE_COMMON),
+        ("instance_rotation_jitter.wgsl", NOISE_COMMON),
+        ("ibl_prefilter_specular.wgsl", PBR_BRDF),
+        ("ibl_irradiance.wgsl", PBR_BRDF),
+        ("ibl_brdf_lut.wgsl", PBR_BRDF),
+    ]
+    .map(|(name, prefix)| (name, prefix.to_owned()))
+    .into();
+    // `node.gpu_flip_step`'s prelude, in its `step_source` order.
+    composed.push((
+        "gpu_flip_step.wgsl",
+        [bodies::LIQUID_POSE, bodies::LIQUID_COLLIDER, fields::LIQUID_FIELD].join("\n"),
+    ));
+    composed.push((
+        "whitewater_fused.wgsl",
+        [whitewater::WHITEWATER_COMMON, grid::LIQUID_FACES, fields::LIQUID_FIELD].join("\n"),
+    ));
+    composed
+}
 
 fn is_partial(path: &std::path::Path) -> bool {
     if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
@@ -122,6 +121,7 @@ fn is_partial(path: &std::path::Path) -> bool {
 
 #[test]
 fn all_wgsl_shaders_validate() {
+    let composed = composed_shaders();
     let mut files = find_wgsl_files(&shader_dir());
     let leaf_shaders = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../manifold-compositor/src");
@@ -156,10 +156,10 @@ fn all_wgsl_shaders_validate() {
 
         let source = std::fs::read_to_string(path)
             .unwrap_or_else(|e| panic!("Failed to read {}: {e}", path.display()));
-        let prefix = COMPOSED_SHADERS
+        let prefix = composed
             .iter()
             .find(|(name, _)| path.file_name().is_some_and(|n| n == *name))
-            .map(|(_, prefix)| *prefix);
+            .map(|(_, prefix)| prefix);
         let source = match prefix {
             Some(prefix) => format!("{prefix}\n{source}"),
             None => source,
