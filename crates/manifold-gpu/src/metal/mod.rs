@@ -75,6 +75,9 @@ pub struct SlotMap {
 pub struct Slot {
     pub kind: SlotKind,
     pub metal_index: u32,
+    /// The shader writes this texture (storage write or read_write access).
+    /// Debug builds check the bound texture carries shader-write usage.
+    pub writes: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

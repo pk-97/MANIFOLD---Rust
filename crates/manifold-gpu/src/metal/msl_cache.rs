@@ -215,6 +215,7 @@ fn write_slot_map(file: &mut std::fs::File, slot_map: &SlotMap) -> std::io::Resu
     for (binding, slot) in entries {
         let kind_char = match slot.kind {
             SlotKind::Buffer => 'B',
+            SlotKind::Texture if slot.writes => 'W',
             SlotKind::Texture => 'T',
             SlotKind::Sampler => 'S',
         };
@@ -238,12 +239,12 @@ fn read_slot_map(
         let binding: u32 = parts[0].parse().ok()?;
         let kind = match parts[1] {
             "B" => SlotKind::Buffer,
-            "T" => SlotKind::Texture,
+            "T" | "W" => SlotKind::Texture,
             "S" => SlotKind::Sampler,
             _ => return None,
         };
         let metal_index: u32 = parts[2].parse().ok()?;
-        slot_map.insert(binding, Slot { kind, metal_index });
+        slot_map.insert(binding, Slot { kind, metal_index, writes: parts[1] == "W" });
     }
     Some(slot_map)
 }
@@ -261,12 +262,12 @@ fn read_slot_map_from_str(section: &str) -> Option<SlotMap> {
         let binding: u32 = parts[0].parse().ok()?;
         let kind = match parts[1] {
             "B" => SlotKind::Buffer,
-            "T" => SlotKind::Texture,
+            "T" | "W" => SlotKind::Texture,
             "S" => SlotKind::Sampler,
             _ => return None,
         };
         let metal_index: u32 = parts[2].parse().ok()?;
-        slot_map.insert(binding, Slot { kind, metal_index });
+        slot_map.insert(binding, Slot { kind, metal_index, writes: parts[1] == "W" });
     }
     Some(slot_map)
 }
@@ -283,9 +284,9 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let mut cache = MslCache::new(dir.clone());
         let mut slots = SlotMap::new();
-        slots.insert(0, Slot { kind: SlotKind::Buffer, metal_index: 3 });
-        slots.insert(2, Slot { kind: SlotKind::Texture, metal_index: 5 });
-        slots.insert(SIZES_BUFFER_BINDING, Slot { kind: SlotKind::Buffer, metal_index: 7 });
+        slots.insert(0, Slot { kind: SlotKind::Buffer, metal_index: 3, writes: false });
+        slots.insert(2, Slot { kind: SlotKind::Texture, metal_index: 5, writes: true });
+        slots.insert(SIZES_BUFFER_BINDING, Slot { kind: SlotKind::Buffer, metal_index: 7, writes: false });
 
         cache.put_compute(1, &slots, "old compute", "main", [8, 4, 2]);
         let old_bytes = std::fs::read(cache.path_for(1)).unwrap();
@@ -298,6 +299,7 @@ mod tests {
         assert_eq!(compute.msl_source, "new compute");
         assert_eq!(compute.msl_entry_name, "next");
         assert_eq!(compute.workgroup_size, [16, 2, 1]);
+        assert!(compute.slot_map.get(2).unwrap().writes, "texture write access must survive the cache");
 
         cache.put_render(2, &slots, "old vertex", "old fragment");
         let old_bytes = std::fs::read(cache.path_for(2)).unwrap();

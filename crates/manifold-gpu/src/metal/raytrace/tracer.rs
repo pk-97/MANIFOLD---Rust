@@ -116,7 +116,7 @@ fn compile_pipeline_with_constants(
     device: &GpuDevice,
     library: &ProtocolObject<dyn MTLLibrary>,
     entry: &str,
-    slot_map: SlotMap,
+    mut slot_map: SlotMap,
     constants: Option<&MTLFunctionConstantValues>,
 ) -> GpuComputePipeline {
     // COMPILE_CONTRACT_DESIGN D1: the MSL path records cold touches too —
@@ -137,10 +137,14 @@ fn compile_pipeline_with_constants(
             .newFunctionWithName(&name)
             .unwrap_or_else(|| panic!("RT kernel entry point '{entry}' not found")),
     };
-    let state: Retained<ProtocolObject<dyn MTLComputePipelineState>> = device
-        .raw_device()
-        .newComputePipelineStateWithFunction_error(&func)
-        .unwrap_or_else(|e| panic!("{entry}: compute PSO error: {}", e.localizedDescription()));
+    let state = if cfg!(debug_assertions) {
+        compile_reflecting_writes(device, &func, entry, &mut slot_map)
+    } else {
+        device
+            .raw_device()
+            .newComputePipelineStateWithFunction_error(&func)
+            .unwrap_or_else(|e| panic!("{entry}: compute PSO error: {}", e.localizedDescription()))
+    };
     let workgroup_product = SHADOW_WORKGROUP[0] as usize * SHADOW_WORKGROUP[1] as usize * SHADOW_WORKGROUP[2] as usize;
     assert!(workgroup_product <= state.maxTotalThreadsPerThreadgroup(), "RT pipeline {entry} workgroup exceeds device limit");
     log::info!("[RT] pipeline {entry}: workgroup={SHADOW_WORKGROUP:?} max_threads={} execution_width={} static_threadgroup_memory={}", state.maxTotalThreadsPerThreadgroup(), state.threadExecutionWidth(), state.staticThreadgroupMemoryLength());
@@ -154,6 +158,41 @@ fn compile_pipeline_with_constants(
     }
 }
 
+/// Debug builds only: compile with binding reflection and mark every texture
+/// slot the hand-written MSL writes, so dispatch can check shader-write usage.
+fn compile_reflecting_writes(
+    device: &GpuDevice,
+    func: &ProtocolObject<dyn objc2_metal::MTLFunction>,
+    entry: &str,
+    slot_map: &mut SlotMap,
+) -> Retained<ProtocolObject<dyn MTLComputePipelineState>> {
+    use objc2_metal::{MTLBinding, MTLBindingAccess, MTLBindingType, MTLPipelineOption};
+    let mut reflection = None;
+    let state = unsafe {
+        device.raw_device().newComputePipelineStateWithFunction_options_reflection_error(
+            func,
+            MTLPipelineOption::BindingInfo,
+            Some(&mut reflection),
+        )
+    }
+    .unwrap_or_else(|e| panic!("{entry}: compute PSO error: {}", e.localizedDescription()));
+    if let Some(reflection) = reflection {
+        for binding in reflection.bindings().iter() {
+            if binding.r#type() != MTLBindingType::Texture || binding.access() == MTLBindingAccess::ReadOnly {
+                continue;
+            }
+            let index = binding.index() as u32;
+            if let Some(slot) = slot_map.get(index).copied()
+                && slot.kind == SlotKind::Texture
+                && slot.metal_index == index
+            {
+                slot_map.insert(index, Slot { writes: true, ..slot });
+            }
+        }
+    }
+    state
+}
+
 fn identity_slot_map(bindings: &[(u32, SlotKind)]) -> SlotMap {
     let mut map = SlotMap::new();
     for (binding, kind) in bindings {
@@ -162,6 +201,7 @@ fn identity_slot_map(bindings: &[(u32, SlotKind)]) -> SlotMap {
             Slot {
                 kind: *kind,
                 metal_index: *binding,
+                writes: false,
             },
         );
     }
