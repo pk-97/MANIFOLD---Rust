@@ -1,0 +1,763 @@
+{
+  "source_root": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/STEMS",
+  "date": "2026-10-09",
+  "bpm_source": "Peter, supplied in chat; not inferred from filenames",
+  "scope": "Metadata and complete-file read verification only. No held-out detector scoring or tuning. Original files unchanged. Equal duration alone is not alignment proof.",
+  "sets": [
+    {
+      "folder": "LATE NIGHT STEMS",
+      "bpm": 108,
+      "split": "development",
+      "files": [
+        {
+          "file": "LATE NIGHT STEMS/LATE NIGHT - NO VOX.wav",
+          "bytes": 72400082,
+          "audio": {
+            "codec_name": "pcm_s24le",
+            "sample_rate": "48000",
+            "channels": 2,
+            "time_base": "1/48000",
+            "duration_ts": 12066667,
+            "bits_per_raw_sample": "24"
+          },
+          "duration_s": 251.388896,
+          "sha256": "4f4422530255269c1674fc84c75978bbfd86e9f83a8b5df1d2bf3fb90c548211",
+          "online_only_after_read": false,
+          "status": "read_verified",
+          "role": "alternate_mix"
+        },
+        {
+          "file": "LATE NIGHT STEMS/Late Night - Bass and Sub Stem.wav",
+          "bytes": 72400082,
+          "audio": {
+            "codec_name": "pcm_s24le",
+            "sample_rate": "48000",
+            "channels": 2,
+            "time_base": "1/48000",
+            "duration_ts": 12066667,
+            "bits_per_raw_sample": "24"
+          },
+          "duration_s": 251.388896,
+          "sha256": "500a924675caa3772faf062a489e4386e4d3e2705e6fbe299f46c52444d44581",
+          "online_only_after_read": false,
+          "status": "read_verified",
+          "role": "named_stem"
+        },
+        {
+          "file": "LATE NIGHT STEMS/Late Night - Drums Stem.wav",
+          "bytes": 72400082,
+          "audio": {
+            "codec_name": "pcm_s24le",
+            "sample_rate": "48000",
+            "channels": 2,
+            "time_base": "1/48000",
+            "duration_ts": 12066667,
+            "bits_per_raw_sample": "24"
+          },
+          "duration_s": 251.388896,
+          "sha256": "87862d852c65e37e9d094455980987313212a844cd3458196eb495be5a4c7647",
+          "online_only_after_read": false,
+          "status": "read_verified",
+          "role": "named_stem"
+        },
+        {
+          "file": "LATE NIGHT STEMS/Late Night - FX Stem.wav",
+          "bytes": 72400082,
+          "audio": {
+            "codec_name": "pcm_s24le",
+            "sample_rate": "48000",
+            "channels": 2,
+            "time_base": "1/48000",
+            "duration_ts": 12066667,
+            "bits_per_raw_sample": "24"
+          },
+          "duration_s": 251.388896,
+          "sha256": "6c5e57d87d4db0c5ee9936bdba97f30bf42e63eede5e17f9100f2f13b54de844",
+          "online_only_after_read": false,
+          "status": "read_verified",
+          "role": "named_stem"
+        },
+        {
+          "file": "LATE NIGHT STEMS/Late Night - Kicks Stem.wav",
+          "bytes": 72400082,
+          "audio": {
+            "codec_name": "pcm_s24le",
+            "sample_rate": "48000",
+            "channels": 2,
+            "time_base": "1/48000",
+            "duration_ts": 12066667,
+            "bits_per_raw_sample": "24"
+          },
+          "duration_s": 251.388896,
+          "sha256": "5419436412a01e12c10f7124eccdd83c904c49b7af6cecb36c4c398f933f1b7f",
+          "online_only_after_read": false,
+          "status": "read_verified",
+          "role": "named_stem"
+        },
+        {
+          "file": "LATE NIGHT STEMS/Late Night - Leads Stem.wav",
+          "bytes": 72400082,
+          "audio": {
+            "codec_name": "pcm_s24le",
+            "sample_rate": "48000",
+            "channels": 2,
+            "time_base": "1/48000",
+            "duration_ts": 12066667,
+            "bits_per_raw_sample": "24"
+          },
+          "duration_s": 251.388896,
+          "sha256": "64fe3b165722b91ef110ce0f7900340f32c7d7ecf9382c0879a918d1a6e3d8fb",
+          "online_only_after_read": false,
+          "status": "read_verified",
+          "role": "named_stem"
+        },
+        {
+          "file": "LATE NIGHT STEMS/Late Night - Vocal Stem.wav",
+          "bytes": 72400082,
+          "audio": {
+            "codec_name": "pcm_s24le",
+            "sample_rate": "48000",
+            "channels": 2,
+            "time_base": "1/48000",
+            "duration_ts": 12066667,
+            "bits_per_raw_sample": "24"
+          },
+          "duration_s": 251.388896,
+          "sha256": "f8984361f57a864d350df45ba6b7f8aa69196f01ad173cf4b05f420dbbc707eb",
+          "online_only_after_read": false,
+          "status": "read_verified",
+          "role": "named_stem"
+        }
+      ],
+      "named_stem_count": 6,
+      "common_stem_frames": 12066667,
+      "master": {
+        "file": "Ableton Projects/2024/Late Night - STEM MASTER Project/ALEX MASTERS/Latent Space - Late Night T2(mastered) 48k 24-bit.wav",
+        "bytes": 72400706,
+        "audio": {
+          "codec_name": "pcm_s24le",
+          "sample_rate": "48000",
+          "channels": 2,
+          "time_base": "1/48000",
+          "duration_ts": 12066771,
+          "bits_per_raw_sample": "24"
+        },
+        "duration_s": 251.391063,
+        "sha256": "91ef876583d6404b417f1f92e88acb5aca75a207d1d107d77ee05e2846740108",
+        "online_only_after_read": false,
+        "status": "read_verified",
+        "path": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/2024/Late Night - STEM MASTER Project/ALEX MASTERS/Latent Space - Late Night T2(mastered) 48k 24-bit.wav"
+      },
+      "master_minus_stem_duration_ms": 2.166667,
+      "alignment": {
+        "status": "candidate events require master onset review; no fixed offset applied",
+        "no_vox_to_master": {
+          "method": "Three4s native stereo excerpts. Finishedmaster versus NO VOX alternate; native mono crosscorrelation search\u00b150ms, reportstereo correlation afterlag. Vocal differences may limit correlation.",
+          "rows": [
+            {
+              "start_s": 20,
+              "lag_samples": 0,
+              "lag_ms": 0.0,
+              "correlation": 0.9767410372853852
+            },
+            {
+              "start_s": 90,
+              "lag_samples": 0,
+              "lag_ms": 0.0,
+              "correlation": 0.9358572318938366
+            },
+            {
+              "start_s": 180,
+              "lag_samples": 0,
+              "lag_ms": 0.0,
+              "correlation": 0.9291729178250195
+            }
+          ]
+        },
+        "kick_envelope_comparison": {
+          "matched_candidates": 67,
+          "method": "Three 12-second passages; low-band envelope matching within50ms. Timing diagnosis, not reviewed labels or detector scoring.",
+          "median_correlation_by_passage": [
+            0.971,
+            0.971,
+            0.97
+          ],
+          "median_peak_lag_ms_by_passage": [
+            9,
+            8,
+            9
+          ],
+          "qualification": "Mastering can move envelope peaks. Do not apply peak lag as a universal onset offset."
+        }
+      }
+    },
+    {
+      "folder": "MIDNIGHT PATIENCE STEMS",
+      "bpm": 132,
+      "split": "development",
+      "files": [
+        {
+          "file": "MIDNIGHT PATIENCE STEMS/Bass and Sub.wav",
+          "bytes": 75403718,
+          "audio": {
+            "codec_name": "pcm_s24le",
+            "sample_rate": "48000",
+            "channels": 2,
+            "time_base": "1/48000",
+            "duration_ts": 12567273,
+            "bits_per_raw_sample": "24"
+          },
+          "duration_s": 261.818188,
+          "sha256": "b7be349c13b56b28e8b76a01ecaefabbb5b81084664efcd5492ce443f0e4b5be",
+          "online_only_after_read": false,
+          "status": "read_verified",
+          "role": "named_stem"
+        },
+        {
+          "file": "MIDNIGHT PATIENCE STEMS/Chords.wav",
+          "bytes": 75403718,
+          "audio": {
+            "codec_name": "pcm_s24le",
+            "sample_rate": "48000",
+            "channels": 2,
+            "time_base": "1/48000",
+            "duration_ts": 12567273,
+            "bits_per_raw_sample": "24"
+          },
+          "duration_s": 261.818188,
+          "sha256": "76791e203a34968008146323dc0e38e7f58e1603b37a6149ab6bb5422a076156",
+          "online_only_after_read": false,
+          "status": "read_verified",
+          "role": "named_stem"
+        },
+        {
+          "file": "MIDNIGHT PATIENCE STEMS/Drums.wav",
+          "bytes": 75403718,
+          "audio": {
+            "codec_name": "pcm_s24le",
+            "sample_rate": "48000",
+            "channels": 2,
+            "time_base": "1/48000",
+            "duration_ts": 12567273,
+            "bits_per_raw_sample": "24"
+          },
+          "duration_s": 261.818188,
+          "sha256": "c24183879416386bbfa81ff09a291fef52b7105a07566f1d47812507d85cd156",
+          "online_only_after_read": false,
+          "status": "read_verified",
+          "role": "named_stem"
+        },
+        {
+          "file": "MIDNIGHT PATIENCE STEMS/Fx.wav",
+          "bytes": 75403718,
+          "audio": {
+            "codec_name": "pcm_s24le",
+            "sample_rate": "48000",
+            "channels": 2,
+            "time_base": "1/48000",
+            "duration_ts": 12567273,
+            "bits_per_raw_sample": "24"
+          },
+          "duration_s": 261.818188,
+          "sha256": "472d68b4ebb7288d3239bedab10117b14f7fafbfc705fbdb545399275ebf6aa3",
+          "online_only_after_read": false,
+          "status": "read_verified",
+          "role": "named_stem"
+        },
+        {
+          "file": "MIDNIGHT PATIENCE STEMS/Kick.wav",
+          "bytes": 75403718,
+          "audio": {
+            "codec_name": "pcm_s24le",
+            "sample_rate": "48000",
+            "channels": 2,
+            "time_base": "1/48000",
+            "duration_ts": 12567273,
+            "bits_per_raw_sample": "24"
+          },
+          "duration_s": 261.818188,
+          "sha256": "2b5daae4c64e83b47f0587f71b5f2ab389e47f8db0ae1aac4d31a76e268208a2",
+          "online_only_after_read": false,
+          "status": "read_verified",
+          "role": "named_stem"
+        },
+        {
+          "file": "MIDNIGHT PATIENCE STEMS/Leads.wav",
+          "bytes": 75403718,
+          "audio": {
+            "codec_name": "pcm_s24le",
+            "sample_rate": "48000",
+            "channels": 2,
+            "time_base": "1/48000",
+            "duration_ts": 12567273,
+            "bits_per_raw_sample": "24"
+          },
+          "duration_s": 261.818188,
+          "sha256": "725cf27054e9efdb21ffdb7057f9b95b09741200ef170a0141d91c5e7fc8e654",
+          "online_only_after_read": false,
+          "status": "read_verified",
+          "role": "named_stem"
+        },
+        {
+          "file": "MIDNIGHT PATIENCE STEMS/Midnight Patience - Second Verse No Pianos.wav",
+          "bytes": 16756448,
+          "audio": {
+            "codec_name": "pcm_s24le",
+            "sample_rate": "48000",
+            "channels": 2,
+            "time_base": "1/48000",
+            "duration_ts": 2792728,
+            "bits_per_raw_sample": "24"
+          },
+          "duration_s": 58.181833,
+          "sha256": "c86009ee5389269ed643b7eb3c3fce4409de66b4382111587a06f05fe292e66e",
+          "online_only_after_read": false,
+          "status": "read_verified",
+          "role": "alternate_mix"
+        },
+        {
+          "file": "MIDNIGHT PATIENCE STEMS/Pianos.wav",
+          "bytes": 75403718,
+          "audio": {
+            "codec_name": "pcm_s24le",
+            "sample_rate": "48000",
+            "channels": 2,
+            "time_base": "1/48000",
+            "duration_ts": 12567273,
+            "bits_per_raw_sample": "24"
+          },
+          "duration_s": 261.818188,
+          "sha256": "848952d912f03350a3d56293dc53d96d2a051e310a97ce3f0054d10870b6be33",
+          "online_only_after_read": false,
+          "status": "read_verified",
+          "role": "named_stem"
+        },
+        {
+          "file": "MIDNIGHT PATIENCE STEMS/Vox.wav",
+          "bytes": 75403718,
+          "audio": {
+            "codec_name": "pcm_s24le",
+            "sample_rate": "48000",
+            "channels": 2,
+            "time_base": "1/48000",
+            "duration_ts": 12567273,
+            "bits_per_raw_sample": "24"
+          },
+          "duration_s": 261.818188,
+          "sha256": "6aee76162eb137af9d9be983c0e6a98baaf0c1ff4421e789a6ff1a2884352b34",
+          "online_only_after_read": false,
+          "status": "read_verified",
+          "role": "named_stem"
+        }
+      ],
+      "named_stem_count": 8,
+      "common_stem_frames": 12567273,
+      "master": {
+        "file": "EMERGENCE - ALBUM 2026/FINAL MASTERS/Latent Space - 04 - Midnight Patience T2 (mastered) 48k 24-bit.wav",
+        "bytes": 75442994,
+        "audio": {
+          "codec_name": "pcm_s24le",
+          "sample_rate": "48000",
+          "channels": 2,
+          "time_base": "1/48000",
+          "duration_ts": 12573819,
+          "bits_per_raw_sample": "24"
+        },
+        "duration_s": 261.954563,
+        "sha256": "f985764125d53d9cc9379193af567f4022b05a657678e7c403bf187732bef6f2",
+        "online_only_after_read": false,
+        "status": "read_verified",
+        "path": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/EMERGENCE - ALBUM 2026/FINAL MASTERS/Latent Space - 04 - Midnight Patience T2 (mastered) 48k 24-bit.wav"
+      },
+      "master_minus_stem_duration_ms": 136.375,
+      "alignment": {
+        "status": "fixed source offset supported by sampled alignment and exact leading silence",
+        "stem_to_master_seconds": 0.136375,
+        "stem_to_master_samples": 6546,
+        "sample_rate": 48000,
+        "evidence": {
+          "frames": 6546,
+          "max_abs_mono": 0.0,
+          "rms_mono": 0.0,
+          "both_channels_all_pcm_bytes_zero": true
+        },
+        "validation": "Five 16-second passages and twelve shorter native-rate lag refinements agree; no drift detected in sampled passages. Check each candidate against master before accepting a label."
+      }
+    },
+    {
+      "folder": "MIRACLE STEMS",
+      "bpm": 148,
+      "split": "held_out",
+      "files": [
+        {
+          "file": "MIRACLE STEMS/Chords.wav",
+          "bytes": 72856298,
+          "audio": {
+            "codec_name": "pcm_s24le",
+            "sample_rate": "48000",
+            "channels": 2,
+            "time_base": "1/48000",
+            "duration_ts": 12142703,
+            "bits_per_raw_sample": "24"
+          },
+          "duration_s": 252.972979,
+          "sha256": "babe389ebcca9c7a81c5b43447c84d0b6d5d6555b4f106ef93d68dc9c3751f57",
+          "online_only_after_read": false,
+          "status": "read_verified",
+          "role": "named_stem"
+        },
+        {
+          "file": "MIRACLE STEMS/Drums.wav",
+          "bytes": 72856298,
+          "audio": {
+            "codec_name": "pcm_s24le",
+            "sample_rate": "48000",
+            "channels": 2,
+            "time_base": "1/48000",
+            "duration_ts": 12142703,
+            "bits_per_raw_sample": "24"
+          },
+          "duration_s": 252.972979,
+          "sha256": "7b1101902b601b9fffcf2f610fe92090f9181e4a06c9111e56a3370f06fff768",
+          "online_only_after_read": false,
+          "status": "read_verified",
+          "role": "named_stem"
+        },
+        {
+          "file": "MIRACLE STEMS/FX.wav",
+          "bytes": 72856298,
+          "audio": {
+            "codec_name": "pcm_s24le",
+            "sample_rate": "48000",
+            "channels": 2,
+            "time_base": "1/48000",
+            "duration_ts": 12142703,
+            "bits_per_raw_sample": "24"
+          },
+          "duration_s": 252.972979,
+          "sha256": "0aa7d938753c57c1f780df3466320e411702d1a0b7010dff2a8a82899c395cff",
+          "online_only_after_read": false,
+          "status": "read_verified",
+          "role": "named_stem"
+        },
+        {
+          "file": "MIRACLE STEMS/Kick.wav",
+          "bytes": 72856298,
+          "audio": {
+            "codec_name": "pcm_s24le",
+            "sample_rate": "48000",
+            "channels": 2,
+            "time_base": "1/48000",
+            "duration_ts": 12142703,
+            "bits_per_raw_sample": "24"
+          },
+          "duration_s": 252.972979,
+          "sha256": "7ca8181a9967b5ace955ba9e31294f1587c14fc238332dc56efe5e9ad7b38778",
+          "online_only_after_read": false,
+          "status": "read_verified",
+          "role": "named_stem"
+        },
+        {
+          "file": "MIRACLE STEMS/Leads.wav",
+          "bytes": 72856298,
+          "audio": {
+            "codec_name": "pcm_s24le",
+            "sample_rate": "48000",
+            "channels": 2,
+            "time_base": "1/48000",
+            "duration_ts": 12142703,
+            "bits_per_raw_sample": "24"
+          },
+          "duration_s": 252.972979,
+          "sha256": "46fe70e24cc8e65e36d12be240a3ac4481c13f635dc04b712f76ee139c986503",
+          "online_only_after_read": false,
+          "status": "read_verified",
+          "role": "named_stem"
+        },
+        {
+          "file": "MIRACLE STEMS/Subs.wav",
+          "bytes": 72856298,
+          "audio": {
+            "codec_name": "pcm_s24le",
+            "sample_rate": "48000",
+            "channels": 2,
+            "time_base": "1/48000",
+            "duration_ts": 12142703,
+            "bits_per_raw_sample": "24"
+          },
+          "duration_s": 252.972979,
+          "sha256": "0fabe12d9cb1a0b7ae7dc1805d89a099b9089a9026d8d4c75bcbaa15bdb8af07",
+          "online_only_after_read": false,
+          "status": "read_verified",
+          "role": "named_stem"
+        },
+        {
+          "file": "MIRACLE STEMS/Vox.wav",
+          "bytes": 72856298,
+          "audio": {
+            "codec_name": "pcm_s24le",
+            "sample_rate": "48000",
+            "channels": 2,
+            "time_base": "1/48000",
+            "duration_ts": 12142703,
+            "bits_per_raw_sample": "24"
+          },
+          "duration_s": 252.972979,
+          "sha256": "7cf5462736a152ba7a599f65a455822104e42b2aa4f1f8f4c98685f7c989100b",
+          "online_only_after_read": false,
+          "status": "read_verified",
+          "role": "named_stem"
+        }
+      ],
+      "named_stem_count": 7,
+      "common_stem_frames": 12142703,
+      "master": {
+        "file": "Ableton Projects/2024/Streets Project/MASTERS/Miracle MSTR V1 APRS.wav",
+        "bytes": 66936734,
+        "audio": {
+          "codec_name": "pcm_s24le",
+          "sample_rate": "44100",
+          "channels": 2,
+          "time_base": "1/44100",
+          "duration_ts": 11156109,
+          "bits_per_raw_sample": "24"
+        },
+        "duration_s": 252.972993,
+        "sha256": "263c248ce6c2a5b16ad981f055afd0be278085f6468347e25d3e4565f5bf3e66",
+        "online_only_after_read": false,
+        "status": "read_verified",
+        "path": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/2024/Streets Project/MASTERS/Miracle MSTR V1 APRS.wav"
+      },
+      "master_minus_stem_duration_ms": 0.014031,
+      "alignment": {
+        "status": "metadata only; detector validation remains held out"
+      }
+    },
+    {
+      "folder": "HEAVY ON MIND STEMS",
+      "bpm": 158,
+      "split": "held_out",
+      "files": [
+        {
+          "file": "HEAVY ON MIND STEMS/BASS AND SUB.wav",
+          "bytes": 71526158,
+          "audio": {
+            "codec_name": "pcm_s24le",
+            "sample_rate": "48000",
+            "channels": 2,
+            "time_base": "1/48000",
+            "duration_ts": 11921013,
+            "bits_per_raw_sample": "24"
+          },
+          "duration_s": 248.354438,
+          "sha256": "687aadce6baa7042e51793c1d6969bb86a194ff7551e5a1c53f3c07f6a628124",
+          "online_only_after_read": false,
+          "status": "read_verified",
+          "role": "named_stem"
+        },
+        {
+          "file": "HEAVY ON MIND STEMS/BG VOX.wav",
+          "bytes": 71526158,
+          "audio": {
+            "codec_name": "pcm_s24le",
+            "sample_rate": "48000",
+            "channels": 2,
+            "time_base": "1/48000",
+            "duration_ts": 11921013,
+            "bits_per_raw_sample": "24"
+          },
+          "duration_s": 248.354438,
+          "sha256": "dd4017e2706231cbd6d6fe73ce8ab8c758f836f4ab63c6d18b75a6d2d228d4c6",
+          "online_only_after_read": false,
+          "status": "read_verified",
+          "role": "named_stem"
+        },
+        {
+          "file": "HEAVY ON MIND STEMS/CHORDS.wav",
+          "bytes": 71526158,
+          "audio": {
+            "codec_name": "pcm_s24le",
+            "sample_rate": "48000",
+            "channels": 2,
+            "time_base": "1/48000",
+            "duration_ts": 11921013,
+            "bits_per_raw_sample": "24"
+          },
+          "duration_s": 248.354438,
+          "sha256": "aaf9b18be0c92ad3446cae8af08ed3643ba76ecb6fbf9fd6a8ba22d11f7db06d",
+          "online_only_after_read": false,
+          "status": "read_verified",
+          "role": "named_stem"
+        },
+        {
+          "file": "HEAVY ON MIND STEMS/DRUMS.wav",
+          "bytes": 71526158,
+          "audio": {
+            "codec_name": "pcm_s24le",
+            "sample_rate": "48000",
+            "channels": 2,
+            "time_base": "1/48000",
+            "duration_ts": 11921013,
+            "bits_per_raw_sample": "24"
+          },
+          "duration_s": 248.354438,
+          "sha256": "1653b546e5dbed58cf3a335e7fe162d8436cad2ed074b6c8798bafbd4c9dcd38",
+          "online_only_after_read": false,
+          "status": "read_verified",
+          "role": "named_stem"
+        },
+        {
+          "file": "HEAVY ON MIND STEMS/FX.wav",
+          "bytes": 71526158,
+          "audio": {
+            "codec_name": "pcm_s24le",
+            "sample_rate": "48000",
+            "channels": 2,
+            "time_base": "1/48000",
+            "duration_ts": 11921013,
+            "bits_per_raw_sample": "24"
+          },
+          "duration_s": 248.354438,
+          "sha256": "5e26967cf1630d7b40bd143f1ab8107d8ae589ab0f7c38ca81ab48962a7f93e9",
+          "online_only_after_read": false,
+          "status": "read_verified",
+          "role": "named_stem"
+        },
+        {
+          "file": "HEAVY ON MIND STEMS/KICK.wav",
+          "bytes": 71526158,
+          "audio": {
+            "codec_name": "pcm_s24le",
+            "sample_rate": "48000",
+            "channels": 2,
+            "time_base": "1/48000",
+            "duration_ts": 11921013,
+            "bits_per_raw_sample": "24"
+          },
+          "duration_s": 248.354438,
+          "sha256": "87a3b45750e7c4da2343b78a54ee911a406dd597be43f02380ef3165c315d23a",
+          "online_only_after_read": false,
+          "status": "read_verified",
+          "role": "named_stem"
+        },
+        {
+          "file": "HEAVY ON MIND STEMS/LEADS.wav",
+          "bytes": 71526158,
+          "audio": {
+            "codec_name": "pcm_s24le",
+            "sample_rate": "48000",
+            "channels": 2,
+            "time_base": "1/48000",
+            "duration_ts": 11921013,
+            "bits_per_raw_sample": "24"
+          },
+          "duration_s": 248.354438,
+          "sha256": "91e759f69e434bde41ba58834e50c0371c44e9d6e4d9cc21c1b5812f7d17917c",
+          "online_only_after_read": false,
+          "status": "read_verified",
+          "role": "named_stem"
+        },
+        {
+          "file": "HEAVY ON MIND STEMS/Tayla Vox.wav",
+          "bytes": 71526158,
+          "audio": {
+            "codec_name": "pcm_s24le",
+            "sample_rate": "48000",
+            "channels": 2,
+            "time_base": "1/48000",
+            "duration_ts": 11921013,
+            "bits_per_raw_sample": "24"
+          },
+          "duration_s": 248.354438,
+          "sha256": "2c14557b1ee9c69905702b03942ffdc55e81bc431d517ee2820f33e40c511d0a",
+          "online_only_after_read": false,
+          "status": "read_verified",
+          "role": "named_stem"
+        }
+      ],
+      "named_stem_count": 8,
+      "common_stem_frames": 11921013,
+      "master": {
+        "file": "EMERGENCE - ALBUM 2026/FINAL MASTERS/Latent Space - 02 - Heavy on Mind MSTR V3 APRS.wav",
+        "bytes": 65714666,
+        "audio": {
+          "codec_name": "pcm_s24le",
+          "sample_rate": "44100",
+          "channels": 2,
+          "time_base": "1/44100",
+          "duration_ts": 10952431,
+          "bits_per_raw_sample": "24"
+        },
+        "duration_s": 248.354444,
+        "sha256": "3f22cd0335db72972a177488cf28a7d4de94d66c74203d9dea5f79cda5ca5a36",
+        "online_only_after_read": false,
+        "status": "read_verified",
+        "path": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/EMERGENCE - ALBUM 2026/FINAL MASTERS/Latent Space - 02 - Heavy on Mind MSTR V3 APRS.wav"
+      },
+      "master_minus_stem_duration_ms": 0.006944,
+      "alignment": {
+        "status": "metadata only; detector validation remains held out"
+      }
+    }
+  ],
+  "alignment_status": "Metadata and bounded development-track timing checks completed; not an assertion of all-event agreement. Peter confirms mixes/masters differ from stem sums. Exact reconstruction is not required. No original audio was edited or warped.",
+  "roles_status": "Roles below describe supplied filenames; isolated instrument contents are not yet verified.",
+  "reference_checks": [
+    {
+      "method": "Three 4-second native-rate stereo excerpts; no-vocal reference versus five non-vocal stem sum. This checks excerpt reconstruction, not all-song alignment or mastering equivalence. Lag search at 8kHz \u00b150ms.",
+      "rows": [
+        {
+          "start_s": 20,
+          "duration_s": 4,
+          "reference": "LATE NIGHT - NO VOX.wav",
+          "sum_of": [
+            "Bass and Sub",
+            "Drums",
+            "FX",
+            "Kicks",
+            "Leads"
+          ],
+          "best_lag_ms": 0.625,
+          "correlation_after_best_lag": 0.5470393058403852,
+          "fitted_gain": 0.22237264863606415,
+          "residual_rms_relative_to_reference_db": -1.5443795818955568
+        },
+        {
+          "start_s": 90,
+          "duration_s": 4,
+          "reference": "LATE NIGHT - NO VOX.wav",
+          "sum_of": [
+            "Bass and Sub",
+            "Drums",
+            "FX",
+            "Kicks",
+            "Leads"
+          ],
+          "best_lag_ms": 16.125,
+          "correlation_after_best_lag": 0.6564046815623026,
+          "fitted_gain": 0.21792408972388208,
+          "residual_rms_relative_to_reference_db": -2.4473146246381985
+        },
+        {
+          "start_s": 180,
+          "duration_s": 4,
+          "reference": "LATE NIGHT - NO VOX.wav",
+          "sum_of": [
+            "Bass and Sub",
+            "Drums",
+            "FX",
+            "Kicks",
+            "Leads"
+          ],
+          "best_lag_ms": 16.0,
+          "correlation_after_best_lag": 0.6618211218529411,
+          "fitted_gain": 0.21484361489678533,
+          "residual_rms_relative_to_reference_db": -2.5026303120494404
+        }
+      ]
+    }
+  ],
+  "held_out_policy": "Reserve Miracle and Heavy On Mind (including alternate versions of those songs) from development feature selection and tuning. Metadata/content-quality checks are allowed; detector evaluation is reserved for validation.",
+  "master_notes": "All four mastered references provided by Peter are fully read and hashed. Duration difference alone is not a timing offset; 44.1kHz Miracle/Heavy masters are compared on seconds, not raw sample indices. Held-out files have metadata/hash checks only.",
+  "label_policy": "Stems propose events; master audio verifies them. Source alignment offsets map timestamps only and are not detector-latency compensation. No new reviewed labels or detector scores yet."
+}

@@ -1145,7 +1145,9 @@ def _main() -> int:
                                                name, seconds, status, run["budgeted"]))
             # Publish each run before another run or whole-leg policy can fail.
             if passed and passed.save(code, sum(timing_fields(t)[3] for t in normalized),
-                                      timings=normalized) is False:
+                                      timings=normalized,
+                                      failed=[timing_fields(t)[2] for t in normalized
+                                              if timing_fields(t)[4] == "FAILED"] if code else None) is False:
                 print('GPU-PROOFS GATE: FAIL (inputs changed before receipt publication)')
                 return INPUTS_CHANGED
             all_timings += normalized

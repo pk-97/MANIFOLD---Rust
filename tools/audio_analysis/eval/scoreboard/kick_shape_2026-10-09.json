@@ -1,0 +1,5160 @@
+{
+  "date": "2026-10-09",
+  "status": "REJECTED_AS_UPGRADE_RESEARCH_STOP_CONDITION_REACHED",
+  "conclusion": "The third representation does not improve the best existing recall/error tradeoff sufficiently to replace it. Shape24 refined209/381+85extras is dominated by the predefined linear15 coarse211/381+84; linear15 refined reaches223/381+89. On the original pack shape115/174+74 is worse than v5 118/174+52. Expanded training helps the existing simple scorer, but no variant approaches the agreed targets. Stop further detector experiments after three materially different failed hypotheses; no fourth hypothesis or reserved validation run.",
+  "failure_count": {
+    "raw_temporal_linear39": "no improvement",
+    "class_rank2_svd39": "no improvement",
+    "normalised_shape24": "no improvement",
+    "training_exclusion_repair": "correctness fix, not a hypothesis"
+  },
+  "hypothesis": "Band-normalised temporal moments, directed time differences and pair concordance make attack relationships more transferable than raw trajectory coordinates.",
+  "changed": "Representation only: first15 frozen features plus9 fixed shape values; one configuration.",
+  "fixed": "Same candidates, completed-hop deadlines, observation horizon, refractory, regularised linear scorer, corrected training exclusions, song/class/event weights, and nested cutoff protocol. Both comparison representations use the same expanded training data; no target-song fitting.",
+  "acceptance": "Full target remains >=95% recall at70ms and >=95% precision, >=90% recall each track, zero fires in four original reviewed kick-free cores, >=166/174 and <=8 extras on the original pack. Expanded and untouched final validation are also required. Report improvements and regressions against both linear controls and the v5 prototype.",
+  "feature_names": [
+    "low_log_rise",
+    "body_log_rise",
+    "upper_log_rise",
+    "relative_flux",
+    "centroid_drop",
+    "upper_log_decay",
+    "body_low_log_balance",
+    "low_log_evolution",
+    "peak_lag",
+    "low_relative_flux",
+    "low_centroid_drop",
+    "body_relative_flux",
+    "body_centroid_drop",
+    "upper_relative_flux",
+    "upper_centroid_drop",
+    "low_after_body",
+    "low_after_upper",
+    "body_after_upper",
+    "low_body_shape_agreement",
+    "low_upper_shape_agreement",
+    "body_upper_shape_agreement",
+    "low_temporal_concentration",
+    "body_temporal_concentration",
+    "upper_temporal_concentration"
+  ],
+  "coverage": {
+    "fixed_cores": 20,
+    "retained_core_seconds": 240,
+    "reviewed_with_margins_seconds": 250,
+    "scorable_cores": 18,
+    "whole_core_unscorable": 2,
+    "scorable_seconds_after_existing_uncertainty_expansion": 188.2982893518519,
+    "proposed_core_onsets": 212,
+    "scored_added_labels": 207,
+    "original_labels_unchanged": 174,
+    "total_labels": 381,
+    "limitation": "Same nine development recordings, substantially more sections, not more independently held-out tracks. Two Late Night cores and explicit ambiguity intervals remain excluded. Visual provisional onset brackets25\u201350ms, not independent human listening truth. Reserved Waypoints and Know Youre There untouched."
+  },
+  "validation": "Seven shape tests and four expanded-runner tests pass, including hand-computed shape identities, band-level invariance, time reversal, preserved15 values, row independence, source/core guards and unchanged original prototype replay. All nine trajectory caches hit with decode/build functions forbidden. Frozen15 fixed/coarse output replays exactly. All27 outer/216 inner fits enforce song exclusion; refined output for all27folds independently replays from hashed caches/models. 74 cached annotation-evidence hashes checked; all20 fixed bounds preserved. No Rust/app build or runtime claim.",
+  "raw_report": {
+    "path": "/Users/peterkiemann/.cache/manifold/kick-shape-2026-10-09/trial.json",
+    "sha256": "f3301e3f9e5e8fe7dc963fb24a2d54eaab2e184ea1b2ee1682aee591a2d521ac"
+  },
+  "diagnosis": {
+    "path": "/Users/peterkiemann/.cache/manifold/kick-shape-2026-10-09/diagnosis.json",
+    "sha256": "cda1db8a1dfbdff388f2427453facd8cb4be4dbb607b2d94264b470637e84d42"
+  },
+  "expanded_labels": {
+    "path": "/Users/peterkiemann/MANIFOLD - Rust/.claude/worktrees/slot-9/tests/fixtures/audio_labels/expanded_passages_2026-10-09.json",
+    "sha256": "7fab75bc9b622c003d051a9a93d3dc689254081a1be343e56fc82a08803d392b"
+  },
+  "source_sha256": {
+    "kick_attack_rejection.py": "cb5e8ad261f64ae5b6e3bafce2f232e14ec99bb3fc54c0599f113dcfaed6a144",
+    "kick_fusion_bandwise.py": "d7ae7da4c039da7c86e3d1eb7ffd0c215d77d68e3f56eb8be5944dac8c3f29d8",
+    "kick_fusion_calibration.py": "b6c9db225f6629c0f12820763bd58269b23a5ecc645d2951c6dfe0088ac4abc6",
+    "kick_fusion_features.py": "52455fa1b27feff2ade4b71a7772fb3598638ba4cb723f396d72f78061fac736",
+    "kick_fusion_fine_calibration.py": "4e9a95ae0afd02c9bd70436a1f163fd8abbd2f39d567816bf541f5019b6c25bf",
+    "kick_shape_features.py": "f646f20cdc4fe8cd5740406696f5bb5ff331d6c1ae55f211751b1f835bec4601",
+    "kick_tonal_experiment.py": "ae6a66426616273ed9f33a460d5e5b8407f91b82681133108e235b01967d76f7",
+    "kick_trajectory_features.py": "0adf56e709cd696304288f2b1d9180d55c6a803c93912682628085b8a53d6804",
+    "kick_upper_cue.py": "3fa6c9e64ad8cc0a1a0dbe761a5ba6e5f59b4563c77882d3cbe1a0a77ac7830f",
+    "live_kick_baseline.py": "891b7f79df0dc3302e7011ee5440b6693ff30320e98eed5d0ad27c725aa970f2",
+    "master_kick_comparison.py": "46a58e55b6e8a8c2d2e88a63c6bf87ef7d5c7691ee4ab71e3203b6fd887d0145",
+    "run_kick_dsp_experiments.py": "932d6e2f65cba2e9b3ff00baea9d5a6ac4d60048f4e41e106415afb981068615",
+    "run_kick_fusion_calibration.py": "e2634d9ae28460fd2d6e9291d0e12a0250f2b01bc6069c13af5ce6216a1754bc",
+    "run_kick_fusion_trial.py": "cd104a5185c06e62c33aaaacbb5aaba8c646dcdea9442820b3831db7f6226712",
+    "run_kick_shape_trial.py": "706115e2699c7b283f29d1008e61699c5696ff21370b2c7d25beb6f2c9855aaf",
+    "run_kick_trajectory_trial.py": "19db0b7115baed354bb20e49c371f6f35a31943b9a39b1b2b47abbc3a3b9ef73"
+  },
+  "baseline_sha256": "e348ed170ce59bd7017185669609b871c772ef1a7b21bd3fce7105fb1b3b1028",
+  "reference_sha256": "ff6b10759f81c3ca8f7c84ce90258b09371a387773a17860e9a0b29f83ebeead",
+  "original_label_sha256": {
+    "inhale_exhale_145bpm.csv": "a29b9892456588294efbf6f506da912d4f2d996fc105f9551b1b9d6db4077f4e",
+    "bad_guy_128bpm.csv": "d657d298ad98bee09e048922b465de4b4a69386a1482d8327be3207a37444ef7",
+    "attack_review.csv": "b29e872c8a8ec9d05902c7f76bc68b5a16399fc9cf0fd1ef669c598c8711a9ae",
+    "heldout_passages_2026-10-09.json": "00a6865a1c60795bb7e74a4ffe9fe207bbe8d84d5ceb7b62aad9d4b64d627fab",
+    "feel_the_vibration_174bpm.csv": "922be87c9a6a9eb03002b68ce5f87915e1fec4652921795c20cf6975a2bc21e8",
+    "apricots_128bpm.csv": "fa38b535e88b55580df3f90956935420070d95fb89441b30e625b1cdce45b163",
+    "tears_140bpm.csv": "f3ce02e72f191bd53bc86c611fce2efe56a55db4cb19b6f1434bdba80ce28576",
+    "bad_guy_128bpm.repair.json": "0d9f007d02da46f93dff1168ff321379a57310ab97397626812080389d955f11",
+    "master_passages_2026-10-09.json": "94884ba781bb2d1062d143721376b8b177a51cf3d537d213abc3201a310f0b5c"
+  },
+  "variants": [
+    {
+      "variant": "linear_15",
+      "totals": {
+        "baseline": {
+          "labels": 381,
+          "tolerance_ms": {
+            "35": {
+              "matched": 176,
+              "missed": 205,
+              "extra": 105
+            },
+            "50": {
+              "matched": 192,
+              "missed": 189,
+              "extra": 89
+            },
+            "70": {
+              "matched": 195,
+              "missed": 186,
+              "extra": 86
+            }
+          },
+          "association": {
+            "matched": 195,
+            "missed": 186,
+            "extra": 86
+          },
+          "association_delay": {
+            "median_ms": 18.33,
+            "p90_ms": 34.33
+          }
+        },
+        "fixed_05": {
+          "labels": 381,
+          "tolerance_ms": {
+            "35": {
+              "matched": 135,
+              "missed": 246,
+              "extra": 651
+            },
+            "50": {
+              "matched": 282,
+              "missed": 99,
+              "extra": 504
+            },
+            "70": {
+              "matched": 336,
+              "missed": 45,
+              "extra": 451
+            }
+          },
+          "association": {
+            "matched": 339,
+            "missed": 42,
+            "extra": 448
+          },
+          "association_delay": {
+            "median_ms": 40.33,
+            "p90_ms": 55.38
+          }
+        },
+        "calibrated": {
+          "labels": 381,
+          "tolerance_ms": {
+            "35": {
+              "matched": 30,
+              "missed": 351,
+              "extra": 265
+            },
+            "50": {
+              "matched": 142,
+              "missed": 239,
+              "extra": 153
+            },
+            "70": {
+              "matched": 211,
+              "missed": 170,
+              "extra": 84
+            }
+          },
+          "association": {
+            "matched": 208,
+            "missed": 173,
+            "extra": 87
+          },
+          "association_delay": {
+            "median_ms": 46.44,
+            "p90_ms": 56.33
+          }
+        },
+        "refined": {
+          "labels": 381,
+          "tolerance_ms": {
+            "35": {
+              "matched": 36,
+              "missed": 345,
+              "extra": 276
+            },
+            "50": {
+              "matched": 155,
+              "missed": 226,
+              "extra": 157
+            },
+            "70": {
+              "matched": 223,
+              "missed": 158,
+              "extra": 89
+            }
+          },
+          "association": {
+            "matched": 221,
+            "missed": 160,
+            "extra": 91
+          },
+          "association_delay": {
+            "median_ms": 45.73,
+            "p90_ms": 56.33
+          }
+        }
+      },
+      "metrics_70ms": {
+        "matched": 223,
+        "missed": 158,
+        "extra": 89,
+        "recall": 0.5853018372703412,
+        "precision": 0.7147435897435898
+      },
+      "cohorts": {
+        "original": {
+          "baseline": {
+            "labels": 174,
+            "tolerance_ms": {
+              "35": {
+                "matched": 103,
+                "missed": 71,
+                "extra": 67
+              },
+              "50": {
+                "matched": 116,
+                "missed": 58,
+                "extra": 54
+              },
+              "70": {
+                "matched": 118,
+                "missed": 56,
+                "extra": 52
+              }
+            },
+            "association": {
+              "matched": 118,
+              "missed": 56,
+              "extra": 52
+            },
+            "association_delay": {
+              "median_ms": 18.84,
+              "p90_ms": 38.0
+            }
+          },
+          "refined": {
+            "labels": 174,
+            "tolerance_ms": {
+              "35": {
+                "matched": 25,
+                "missed": 149,
+                "extra": 172
+              },
+              "50": {
+                "matched": 81,
+                "missed": 93,
+                "extra": 116
+              },
+              "70": {
+                "matched": 121,
+                "missed": 53,
+                "extra": 76
+              }
+            },
+            "association": {
+              "matched": 121,
+              "missed": 53,
+              "extra": 76
+            },
+            "association_delay": {
+              "median_ms": 46.0,
+              "p90_ms": 56.0
+            }
+          }
+        },
+        "expanded": {
+          "baseline": {
+            "labels": 207,
+            "tolerance_ms": {
+              "35": {
+                "matched": 73,
+                "missed": 134,
+                "extra": 38
+              },
+              "50": {
+                "matched": 76,
+                "missed": 131,
+                "extra": 35
+              },
+              "70": {
+                "matched": 77,
+                "missed": 130,
+                "extra": 34
+              }
+            },
+            "association": {
+              "matched": 77,
+              "missed": 130,
+              "extra": 34
+            },
+            "association_delay": {
+              "median_ms": 17.7,
+              "p90_ms": 29.67
+            }
+          },
+          "refined": {
+            "labels": 207,
+            "tolerance_ms": {
+              "35": {
+                "matched": 11,
+                "missed": 196,
+                "extra": 104
+              },
+              "50": {
+                "matched": 74,
+                "missed": 133,
+                "extra": 41
+              },
+              "70": {
+                "matched": 102,
+                "missed": 105,
+                "extra": 13
+              }
+            },
+            "association": {
+              "matched": 100,
+              "missed": 107,
+              "extra": 15
+            },
+            "association_delay": {
+              "median_ms": 45.52,
+              "p90_ms": 56.67
+            }
+          }
+        }
+      },
+      "tracks": [
+        {
+          "track": "apricots_128bpm",
+          "labels": 14,
+          "tolerance_ms": {
+            "35": {
+              "matched": 2,
+              "missed": 12,
+              "extra": 7
+            },
+            "50": {
+              "matched": 7,
+              "missed": 7,
+              "extra": 2
+            },
+            "70": {
+              "matched": 9,
+              "missed": 5,
+              "extra": 0
+            }
+          },
+          "metrics_70ms": {
+            "matched": 9,
+            "missed": 5,
+            "extra": 0,
+            "recall": 0.6428571428571429,
+            "precision": 1.0
+          },
+          "threshold": 0.8274038461538461,
+          "cohorts": {
+            "original": {
+              "baseline": {
+                "labels": 14,
+                "tolerance_ms": {
+                  "35": {
+                    "matched": 13,
+                    "missed": 1,
+                    "extra": 1
+                  },
+                  "50": {
+                    "matched": 14,
+                    "missed": 0,
+                    "extra": 0
+                  },
+                  "70": {
+                    "matched": 14,
+                    "missed": 0,
+                    "extra": 0
+                  }
+                },
+                "association": {
+                  "matched": 14,
+                  "missed": 0,
+                  "extra": 0
+                },
+                "association_delay": {
+                  "median_ms": 21.17,
+                  "p90_ms": 30.67
+                }
+              },
+              "refined": {
+                "labels": 14,
+                "tolerance_ms": {
+                  "35": {
+                    "matched": 2,
+                    "missed": 12,
+                    "extra": 7
+                  },
+                  "50": {
+                    "matched": 7,
+                    "missed": 7,
+                    "extra": 2
+                  },
+                  "70": {
+                    "matched": 9,
+                    "missed": 5,
+                    "extra": 0
+                  }
+                },
+                "association": {
+                  "matched": 9,
+                  "missed": 5,
+                  "extra": 0
+                },
+                "association_delay": {
+                  "median_ms": 45.33,
+                  "p90_ms": 54.0
+                }
+              }
+            },
+            "expanded": {
+              "baseline": {
+                "labels": 0,
+                "tolerance_ms": {
+                  "35": {
+                    "matched": 0,
+                    "missed": 0,
+                    "extra": 0
+                  },
+                  "50": {
+                    "matched": 0,
+                    "missed": 0,
+                    "extra": 0
+                  },
+                  "70": {
+                    "matched": 0,
+                    "missed": 0,
+                    "extra": 0
+                  }
+                },
+                "association": {
+                  "matched": 0,
+                  "missed": 0,
+                  "extra": 0
+                },
+                "association_delay": {
+                  "median_ms": null,
+                  "p90_ms": null
+                }
+              },
+              "refined": {
+                "labels": 0,
+                "tolerance_ms": {
+                  "35": {
+                    "matched": 0,
+                    "missed": 0,
+                    "extra": 0
+                  },
+                  "50": {
+                    "matched": 0,
+                    "missed": 0,
+                    "extra": 0
+                  },
+                  "70": {
+                    "matched": 0,
+                    "missed": 0,
+                    "extra": 0
+                  }
+                },
+                "association": {
+                  "matched": 0,
+                  "missed": 0,
+                  "extra": 0
+                },
+                "association_delay": {
+                  "median_ms": null,
+                  "p90_ms": null
+                }
+              }
+            }
+          },
+          "diagnostics": {
+            "possible_duplicate_triggers": 0,
+            "p95_associated_delay_ms": 53.6,
+            "kick_free_minutes": 0.0,
+            "kick_free_extras": 0,
+            "kick_free_false_triggers_per_minute": null
+          }
+        },
+        {
+          "track": "bad_guy_128bpm",
+          "labels": 15,
+          "tolerance_ms": {
+            "35": {
+              "matched": 8,
+              "missed": 7,
+              "extra": 52
+            },
+            "50": {
+              "matched": 15,
+              "missed": 0,
+              "extra": 45
+            },
+            "70": {
+              "matched": 15,
+              "missed": 0,
+              "extra": 45
+            }
+          },
+          "metrics_70ms": {
+            "matched": 15,
+            "missed": 0,
+            "extra": 45,
+            "recall": 1.0,
+            "precision": 0.25
+          },
+          "threshold": 0.85625,
+          "cohorts": {
+            "original": {
+              "baseline": {
+                "labels": 15,
+                "tolerance_ms": {
+                  "35": {
+                    "matched": 15,
+                    "missed": 0,
+                    "extra": 17
+                  },
+                  "50": {
+                    "matched": 15,
+                    "missed": 0,
+                    "extra": 17
+                  },
+                  "70": {
+                    "matched": 15,
+                    "missed": 0,
+                    "extra": 17
+                  }
+                },
+                "association": {
+                  "matched": 15,
+                  "missed": 0,
+                  "extra": 17
+                },
+                "association_delay": {
+                  "median_ms": 9.67,
+                  "p90_ms": 13.53
+                }
+              },
+              "refined": {
+                "labels": 15,
+                "tolerance_ms": {
+                  "35": {
+                    "matched": 8,
+                    "missed": 7,
+                    "extra": 52
+                  },
+                  "50": {
+                    "matched": 15,
+                    "missed": 0,
+                    "extra": 45
+                  },
+                  "70": {
+                    "matched": 15,
+                    "missed": 0,
+                    "extra": 45
+                  }
+                },
+                "association": {
+                  "matched": 15,
+                  "missed": 0,
+                  "extra": 45
+                },
+                "association_delay": {
+                  "median_ms": 34.92,
+                  "p90_ms": 48.45
+                }
+              }
+            },
+            "expanded": {
+              "baseline": {
+                "labels": 0,
+                "tolerance_ms": {
+                  "35": {
+                    "matched": 0,
+                    "missed": 0,
+                    "extra": 0
+                  },
+                  "50": {
+                    "matched": 0,
+                    "missed": 0,
+                    "extra": 0
+                  },
+                  "70": {
+                    "matched": 0,
+                    "missed": 0,
+                    "extra": 0
+                  }
+                },
+                "association": {
+                  "matched": 0,
+                  "missed": 0,
+                  "extra": 0
+                },
+                "association_delay": {
+                  "median_ms": null,
+                  "p90_ms": null
+                }
+              },
+              "refined": {
+                "labels": 0,
+                "tolerance_ms": {
+                  "35": {
+                    "matched": 0,
+                    "missed": 0,
+                    "extra": 0
+                  },
+                  "50": {
+                    "matched": 0,
+                    "missed": 0,
+                    "extra": 0
+                  },
+                  "70": {
+                    "matched": 0,
+                    "missed": 0,
+                    "extra": 0
+                  }
+                },
+                "association": {
+                  "matched": 0,
+                  "missed": 0,
+                  "extra": 0
+                },
+                "association_delay": {
+                  "median_ms": null,
+                  "p90_ms": null
+                }
+              }
+            }
+          },
+          "diagnostics": {
+            "possible_duplicate_triggers": 0,
+            "p95_associated_delay_ms": 48.5217,
+            "kick_free_minutes": 0.0,
+            "kick_free_extras": 0,
+            "kick_free_false_triggers_per_minute": null
+          }
+        },
+        {
+          "track": "feel_the_vibration_174bpm",
+          "labels": 15,
+          "tolerance_ms": {
+            "35": {
+              "matched": 0,
+              "missed": 15,
+              "extra": 15
+            },
+            "50": {
+              "matched": 6,
+              "missed": 9,
+              "extra": 9
+            },
+            "70": {
+              "matched": 15,
+              "missed": 0,
+              "extra": 0
+            }
+          },
+          "metrics_70ms": {
+            "matched": 15,
+            "missed": 0,
+            "extra": 0,
+            "recall": 1.0,
+            "precision": 1.0
+          },
+          "threshold": 0.8807692307692307,
+          "cohorts": {
+            "original": {
+              "baseline": {
+                "labels": 15,
+                "tolerance_ms": {
+                  "35": {
+                    "matched": 3,
+                    "missed": 12,
+                    "extra": 14
+                  },
+                  "50": {
+                    "matched": 13,
+                    "missed": 2,
+                    "extra": 4
+                  },
+                  "70": {
+                    "matched": 15,
+                    "missed": 0,
+                    "extra": 2
+                  }
+                },
+                "association": {
+                  "matched": 15,
+                  "missed": 0,
+                  "extra": 2
+                },
+                "association_delay": {
+                  "median_ms": 40.67,
+                  "p90_ms": 53.33
+                }
+              },
+              "refined": {
+                "labels": 15,
+                "tolerance_ms": {
+                  "35": {
+                    "matched": 0,
+                    "missed": 15,
+                    "extra": 15
+                  },
+                  "50": {
+                    "matched": 6,
+                    "missed": 9,
+                    "extra": 9
+                  },
+                  "70": {
+                    "matched": 15,
+                    "missed": 0,
+                    "extra": 0
+                  }
+                },
+                "association": {
+                  "matched": 15,
+                  "missed": 0,
+                  "extra": 0
+                },
+                "association_delay": {
+                  "median_ms": 51.67,
+                  "p90_ms": 56.33
+                }
+              }
+            },
+            "expanded": {
+              "baseline": {
+                "labels": 0,
+                "tolerance_ms": {
+                  "35": {
+                    "matched": 0,
+                    "missed": 0,
+                    "extra": 0
+                  },
+                  "50": {
+                    "matched": 0,
+                    "missed": 0,
+                    "extra": 0
+                  },
+                  "70": {
+                    "matched": 0,
+                    "missed": 0,
+                    "extra": 0
+                  }
+                },
+                "association": {
+                  "matched": 0,
+                  "missed": 0,
+                  "extra": 0
+                },
+                "association_delay": {
+                  "median_ms": null,
+                  "p90_ms": null
+                }
+              },
+              "refined": {
+                "labels": 0,
+                "tolerance_ms": {
+                  "35": {
+                    "matched": 0,
+                    "missed": 0,
+                    "extra": 0
+                  },
+                  "50": {
+                    "matched": 0,
+                    "missed": 0,
+                    "extra": 0
+                  },
+                  "70": {
+                    "matched": 0,
+                    "missed": 0,
+                    "extra": 0
+                  }
+                },
+                "association": {
+                  "matched": 0,
+                  "missed": 0,
+                  "extra": 0
+                },
+                "association_delay": {
+                  "median_ms": null,
+                  "p90_ms": null
+                }
+              }
+            }
+          },
+          "diagnostics": {
+            "possible_duplicate_triggers": 0,
+            "p95_associated_delay_ms": 57.93319999999999,
+            "kick_free_minutes": 0.0,
+            "kick_free_extras": 0,
+            "kick_free_false_triggers_per_minute": null
+          }
+        },
+        {
+          "track": "inhale_exhale_145bpm",
+          "labels": 12,
+          "tolerance_ms": {
+            "35": {
+              "matched": 3,
+              "missed": 9,
+              "extra": 14
+            },
+            "50": {
+              "matched": 10,
+              "missed": 2,
+              "extra": 7
+            },
+            "70": {
+              "matched": 11,
+              "missed": 1,
+              "extra": 6
+            }
+          },
+          "metrics_70ms": {
+            "matched": 11,
+            "missed": 1,
+            "extra": 6,
+            "recall": 0.9166666666666666,
+            "precision": 0.6470588235294118
+          },
+          "threshold": 0.9019230769230769,
+          "cohorts": {
+            "original": {
+              "baseline": {
+                "labels": 12,
+                "tolerance_ms": {
+                  "35": {
+                    "matched": 11,
+                    "missed": 1,
+                    "extra": 14
+                  },
+                  "50": {
+                    "matched": 11,
+                    "missed": 1,
+                    "extra": 14
+                  },
+                  "70": {
+                    "matched": 11,
+                    "missed": 1,
+                    "extra": 14
+                  }
+                },
+                "association": {
+                  "matched": 11,
+                  "missed": 1,
+                  "extra": 14
+                },
+                "association_delay": {
+                  "median_ms": 13.0,
+                  "p90_ms": 15.67
+                }
+              },
+              "refined": {
+                "labels": 12,
+                "tolerance_ms": {
+                  "35": {
+                    "matched": 3,
+                    "missed": 9,
+                    "extra": 14
+                  },
+                  "50": {
+                    "matched": 10,
+                    "missed": 2,
+                    "extra": 7
+                  },
+                  "70": {
+                    "matched": 11,
+                    "missed": 1,
+                    "extra": 6
+                  }
+                },
+                "association": {
+                  "matched": 11,
+                  "missed": 1,
+                  "extra": 6
+                },
+                "association_delay": {
+                  "median_ms": 43.67,
+                  "p90_ms": 49.67
+                }
+              }
+            },
+            "expanded": {
+              "baseline": {
+                "labels": 0,
+                "tolerance_ms": {
+                  "35": {
+                    "matched": 0,
+                    "missed": 0,
+                    "extra": 0
+                  },
+                  "50": {
+                    "matched": 0,
+                    "missed": 0,
+                    "extra": 0
+                  },
+                  "70": {
+                    "matched": 0,
+                    "missed": 0,
+                    "extra": 0
+                  }
+                },
+                "association": {
+                  "matched": 0,
+                  "missed": 0,
+                  "extra": 0
+                },
+                "association_delay": {
+                  "median_ms": null,
+                  "p90_ms": null
+                }
+              },
+              "refined": {
+                "labels": 0,
+                "tolerance_ms": {
+                  "35": {
+                    "matched": 0,
+                    "missed": 0,
+                    "extra": 0
+                  },
+                  "50": {
+                    "matched": 0,
+                    "missed": 0,
+                    "extra": 0
+                  },
+                  "70": {
+                    "matched": 0,
+                    "missed": 0,
+                    "extra": 0
+                  }
+                },
+                "association": {
+                  "matched": 0,
+                  "missed": 0,
+                  "extra": 0
+                },
+                "association_delay": {
+                  "median_ms": null,
+                  "p90_ms": null
+                }
+              }
+            }
+          },
+          "diagnostics": {
+            "possible_duplicate_triggers": 0,
+            "p95_associated_delay_ms": 50.8335,
+            "kick_free_minutes": 0.0,
+            "kick_free_extras": 0,
+            "kick_free_false_triggers_per_minute": null
+          }
+        },
+        {
+          "track": "tears_140bpm",
+          "labels": 10,
+          "tolerance_ms": {
+            "35": {
+              "matched": 3,
+              "missed": 7,
+              "extra": 18
+            },
+            "50": {
+              "matched": 10,
+              "missed": 0,
+              "extra": 11
+            },
+            "70": {
+              "matched": 10,
+              "missed": 0,
+              "extra": 11
+            }
+          },
+          "metrics_70ms": {
+            "matched": 10,
+            "missed": 0,
+            "extra": 11,
+            "recall": 1.0,
+            "precision": 0.47619047619047616
+          },
+          "threshold": 0.8389423076923077,
+          "cohorts": {
+            "original": {
+              "baseline": {
+                "labels": 10,
+                "tolerance_ms": {
+                  "35": {
+                    "matched": 10,
+                    "missed": 0,
+                    "extra": 7
+                  },
+                  "50": {
+                    "matched": 10,
+                    "missed": 0,
+                    "extra": 7
+                  },
+                  "70": {
+                    "matched": 10,
+                    "missed": 0,
+                    "extra": 7
+                  }
+                },
+                "association": {
+                  "matched": 10,
+                  "missed": 0,
+                  "extra": 7
+                },
+                "association_delay": {
+                  "median_ms": 13.67,
+                  "p90_ms": 23.33
+                }
+              },
+              "refined": {
+                "labels": 10,
+                "tolerance_ms": {
+                  "35": {
+                    "matched": 3,
+                    "missed": 7,
+                    "extra": 18
+                  },
+                  "50": {
+                    "matched": 10,
+                    "missed": 0,
+                    "extra": 11
+                  },
+                  "70": {
+                    "matched": 10,
+                    "missed": 0,
+                    "extra": 11
+                  }
+                },
+                "association": {
+                  "matched": 10,
+                  "missed": 0,
+                  "extra": 11
+                },
+                "association_delay": {
+                  "median_ms": 40.67,
+                  "p90_ms": 43.67
+                }
+              }
+            },
+            "expanded": {
+              "baseline": {
+                "labels": 0,
+                "tolerance_ms": {
+                  "35": {
+                    "matched": 0,
+                    "missed": 0,
+                    "extra": 0
+                  },
+                  "50": {
+                    "matched": 0,
+                    "missed": 0,
+                    "extra": 0
+                  },
+                  "70": {
+                    "matched": 0,
+                    "missed": 0,
+                    "extra": 0
+                  }
+                },
+                "association": {
+                  "matched": 0,
+                  "missed": 0,
+                  "extra": 0
+                },
+                "association_delay": {
+                  "median_ms": null,
+                  "p90_ms": null
+                }
+              },
+              "refined": {
+                "labels": 0,
+                "tolerance_ms": {
+                  "35": {
+                    "matched": 0,
+                    "missed": 0,
+                    "extra": 0
+                  },
+                  "50": {
+                    "matched": 0,
+                    "missed": 0,
+                    "extra": 0
+                  },
+                  "70": {
+                    "matched": 0,
+                    "missed": 0,
+                    "extra": 0
+                  }
+                },
+                "association": {
+                  "matched": 0,
+                  "missed": 0,
+                  "extra": 0
+                },
+                "association_delay": {
+                  "median_ms": null,
+                  "p90_ms": null
+                }
+              }
+            }
+          },
+          "diagnostics": {
+            "possible_duplicate_triggers": 0,
+            "p95_associated_delay_ms": 44.40015,
+            "kick_free_minutes": 0.0,
+            "kick_free_extras": 0,
+            "kick_free_false_triggers_per_minute": null
+          }
+        },
+        {
+          "track": "late_night",
+          "labels": 77,
+          "tolerance_ms": {
+            "35": {
+              "matched": 2,
+              "missed": 75,
+              "extra": 51
+            },
+            "50": {
+              "matched": 28,
+              "missed": 49,
+              "extra": 25
+            },
+            "70": {
+              "matched": 53,
+              "missed": 24,
+              "extra": 0
+            }
+          },
+          "metrics_70ms": {
+            "matched": 53,
+            "missed": 24,
+            "extra": 0,
+            "recall": 0.6883116883116883,
+            "precision": 1.0
+          },
+          "threshold": 0.8653846153846154,
+          "cohorts": {
+            "original": {
+              "baseline": {
+                "labels": 29,
+                "tolerance_ms": {
+                  "35": {
+                    "matched": 22,
+                    "missed": 7,
+                    "extra": 9
+                  },
+                  "50": {
+                    "matched": 23,
+                    "missed": 6,
+                    "extra": 8
+                  },
+                  "70": {
+                    "matched": 23,
+                    "missed": 6,
+                    "extra": 8
+                  }
+                },
+                "association": {
+                  "matched": 23,
+                  "missed": 6,
+                  "extra": 8
+                },
+                "association_delay": {
+                  "median_ms": 19.33,
+                  "p90_ms": 26.0
+                }
+              },
+              "refined": {
+                "labels": 29,
+                "tolerance_ms": {
+                  "35": {
+                    "matched": 0,
+                    "missed": 29,
+                    "extra": 19
+                  },
+                  "50": {
+                    "matched": 9,
+                    "missed": 20,
+                    "extra": 10
+                  },
+                  "70": {
+                    "matched": 19,
+                    "missed": 10,
+                    "extra": 0
+                  }
+                },
+                "association": {
+                  "matched": 19,
+                  "missed": 10,
+                  "extra": 0
+                },
+                "association_delay": {
+                  "median_ms": 50.33,
+                  "p90_ms": 60.67
+                }
+              }
+            },
+            "expanded": {
+              "baseline": {
+                "labels": 48,
+                "tolerance_ms": {
+                  "35": {
+                    "matched": 31,
+                    "missed": 17,
+                    "extra": 1
+                  },
+                  "50": {
+                    "matched": 31,
+                    "missed": 17,
+                    "extra": 1
+                  },
+                  "70": {
+                    "matched": 31,
+                    "missed": 17,
+                    "extra": 1
+                  }
+                },
+                "association": {
+                  "matched": 31,
+                  "missed": 17,
+                  "extra": 1
+                },
+                "association_delay": {
+                  "median_ms": 18.33,
+                  "p90_ms": 24.0
+                }
+              },
+              "refined": {
+                "labels": 48,
+                "tolerance_ms": {
+                  "35": {
+                    "matched": 2,
+                    "missed": 46,
+                    "extra": 32
+                  },
+                  "50": {
+                    "matched": 19,
+                    "missed": 29,
+                    "extra": 15
+                  },
+                  "70": {
+                    "matched": 34,
+                    "missed": 14,
+                    "extra": 0
+                  }
+                },
+                "association": {
+                  "matched": 34,
+                  "missed": 14,
+                  "extra": 0
+                },
+                "association_delay": {
+                  "median_ms": 49.0,
+                  "p90_ms": 58.33
+                }
+              }
+            }
+          },
+          "diagnostics": {
+            "possible_duplicate_triggers": 0,
+            "p95_associated_delay_ms": 60.1332,
+            "kick_free_minutes": 0.2,
+            "kick_free_extras": 0,
+            "kick_free_false_triggers_per_minute": 0.0
+          }
+        },
+        {
+          "track": "midnight_patience",
+          "labels": 88,
+          "tolerance_ms": {
+            "35": {
+              "matched": 10,
+              "missed": 78,
+              "extra": 54
+            },
+            "50": {
+              "matched": 35,
+              "missed": 53,
+              "extra": 29
+            },
+            "70": {
+              "matched": 44,
+              "missed": 44,
+              "extra": 20
+            }
+          },
+          "metrics_70ms": {
+            "matched": 44,
+            "missed": 44,
+            "extra": 20,
+            "recall": 0.5,
+            "precision": 0.6875
+          },
+          "threshold": 0.7937500000000001,
+          "cohorts": {
+            "original": {
+              "baseline": {
+                "labels": 35,
+                "tolerance_ms": {
+                  "35": {
+                    "matched": 16,
+                    "missed": 19,
+                    "extra": 1
+                  },
+                  "50": {
+                    "matched": 17,
+                    "missed": 18,
+                    "extra": 0
+                  },
+                  "70": {
+                    "matched": 17,
+                    "missed": 18,
+                    "extra": 0
+                  }
+                },
+                "association": {
+                  "matched": 17,
+                  "missed": 18,
+                  "extra": 0
+                },
+                "association_delay": {
+                  "median_ms": 17.0,
+                  "p90_ms": 31.0
+                }
+              },
+              "refined": {
+                "labels": 35,
+                "tolerance_ms": {
+                  "35": {
+                    "matched": 6,
+                    "missed": 29,
+                    "extra": 28
+                  },
+                  "50": {
+                    "matched": 18,
+                    "missed": 17,
+                    "extra": 16
+                  },
+                  "70": {
+                    "matched": 22,
+                    "missed": 13,
+                    "extra": 12
+                  }
+                },
+                "association": {
+                  "matched": 21,
+                  "missed": 14,
+                  "extra": 13
+                },
+                "association_delay": {
+                  "median_ms": 44.0,
+                  "p90_ms": 56.67
+                }
+              }
+            },
+            "expanded": {
+              "baseline": {
+                "labels": 53,
+                "tolerance_ms": {
+                  "35": {
+                    "matched": 17,
+                    "missed": 36,
+                    "extra": 20
+                  },
+                  "50": {
+                    "matched": 18,
+                    "missed": 35,
+                    "extra": 19
+                  },
+                  "70": {
+                    "matched": 19,
+                    "missed": 34,
+                    "extra": 18
+                  }
+                },
+                "association": {
+                  "matched": 19,
+                  "missed": 34,
+                  "extra": 18
+                },
+                "association_delay": {
+                  "median_ms": 21.0,
+                  "p90_ms": 36.67
+                }
+              },
+              "refined": {
+                "labels": 53,
+                "tolerance_ms": {
+                  "35": {
+                    "matched": 4,
+                    "missed": 49,
+                    "extra": 26
+                  },
+                  "50": {
+                    "matched": 17,
+                    "missed": 36,
+                    "extra": 13
+                  },
+                  "70": {
+                    "matched": 22,
+                    "missed": 31,
+                    "extra": 8
+                  }
+                },
+                "association": {
+                  "matched": 20,
+                  "missed": 33,
+                  "extra": 10
+                },
+                "association_delay": {
+                  "median_ms": 43.5,
+                  "p90_ms": 51.67
+                }
+              }
+            }
+          },
+          "diagnostics": {
+            "possible_duplicate_triggers": 3,
+            "p95_associated_delay_ms": 57.333,
+            "kick_free_minutes": 0.6,
+            "kick_free_extras": 0,
+            "kick_free_false_triggers_per_minute": 0.0
+          }
+        },
+        {
+          "track": "miracle",
+          "labels": 32,
+          "tolerance_ms": {
+            "35": {
+              "matched": 7,
+              "missed": 25,
+              "extra": 14
+            },
+            "50": {
+              "matched": 16,
+              "missed": 16,
+              "extra": 5
+            },
+            "70": {
+              "matched": 21,
+              "missed": 11,
+              "extra": 0
+            }
+          },
+          "metrics_70ms": {
+            "matched": 21,
+            "missed": 11,
+            "extra": 0,
+            "recall": 0.65625,
+            "precision": 1.0
+          },
+          "threshold": 0.8927884615384616,
+          "cohorts": {
+            "original": {
+              "baseline": {
+                "labels": 12,
+                "tolerance_ms": {
+                  "35": {
+                    "matched": 9,
+                    "missed": 3,
+                    "extra": 4
+                  },
+                  "50": {
+                    "matched": 9,
+                    "missed": 3,
+                    "extra": 4
+                  },
+                  "70": {
+                    "matched": 9,
+                    "missed": 3,
+                    "extra": 4
+                  }
+                },
+                "association": {
+                  "matched": 9,
+                  "missed": 3,
+                  "extra": 4
+                },
+                "association_delay": {
+                  "median_ms": 22.62,
+                  "p90_ms": 25.35
+                }
+              },
+              "refined": {
+                "labels": 12,
+                "tolerance_ms": {
+                  "35": {
+                    "matched": 3,
+                    "missed": 9,
+                    "extra": 5
+                  },
+                  "50": {
+                    "matched": 5,
+                    "missed": 7,
+                    "extra": 3
+                  },
+                  "70": {
+                    "matched": 8,
+                    "missed": 4,
+                    "extra": 0
+                  }
+                },
+                "association": {
+                  "matched": 8,
+                  "missed": 4,
+                  "extra": 0
+                },
+                "association_delay": {
+                  "median_ms": 45.37,
+                  "p90_ms": 57.32
+                }
+              }
+            },
+            "expanded": {
+              "baseline": {
+                "labels": 20,
+                "tolerance_ms": {
+                  "35": {
+                    "matched": 10,
+                    "missed": 10,
+                    "extra": 12
+                  },
+                  "50": {
+                    "matched": 10,
+                    "missed": 10,
+                    "extra": 12
+                  },
+                  "70": {
+                    "matched": 10,
+                    "missed": 10,
+                    "extra": 12
+                  }
+                },
+                "association": {
+                  "matched": 10,
+                  "missed": 10,
+                  "extra": 12
+                },
+                "association_delay": {
+                  "median_ms": 20.08,
+                  "p90_ms": 23.86
+                }
+              },
+              "refined": {
+                "labels": 20,
+                "tolerance_ms": {
+                  "35": {
+                    "matched": 4,
+                    "missed": 16,
+                    "extra": 9
+                  },
+                  "50": {
+                    "matched": 11,
+                    "missed": 9,
+                    "extra": 2
+                  },
+                  "70": {
+                    "matched": 13,
+                    "missed": 7,
+                    "extra": 0
+                  }
+                },
+                "association": {
+                  "matched": 13,
+                  "missed": 7,
+                  "extra": 0
+                },
+                "association_delay": {
+                  "median_ms": 42.37,
+                  "p90_ms": 53.25
+                }
+              }
+            }
+          },
+          "diagnostics": {
+            "possible_duplicate_triggers": 0,
+            "p95_associated_delay_ms": 57.324,
+            "kick_free_minutes": 0.8,
+            "kick_free_extras": 0,
+            "kick_free_false_triggers_per_minute": 0.0
+          }
+        },
+        {
+          "track": "heavy_on_mind",
+          "labels": 118,
+          "tolerance_ms": {
+            "35": {
+              "matched": 1,
+              "missed": 117,
+              "extra": 51
+            },
+            "50": {
+              "matched": 28,
+              "missed": 90,
+              "extra": 24
+            },
+            "70": {
+              "matched": 45,
+              "missed": 73,
+              "extra": 7
+            }
+          },
+          "metrics_70ms": {
+            "matched": 45,
+            "missed": 73,
+            "extra": 7,
+            "recall": 0.3813559322033898,
+            "precision": 0.8653846153846154
+          },
+          "threshold": 0.8144230769230769,
+          "cohorts": {
+            "original": {
+              "baseline": {
+                "labels": 32,
+                "tolerance_ms": {
+                  "35": {
+                    "matched": 4,
+                    "missed": 28,
+                    "extra": 0
+                  },
+                  "50": {
+                    "matched": 4,
+                    "missed": 28,
+                    "extra": 0
+                  },
+                  "70": {
+                    "matched": 4,
+                    "missed": 28,
+                    "extra": 0
+                  }
+                },
+                "association": {
+                  "matched": 4,
+                  "missed": 28,
+                  "extra": 0
+                },
+                "association_delay": {
+                  "median_ms": 20.33,
+                  "p90_ms": 21.91
+                }
+              },
+              "refined": {
+                "labels": 32,
+                "tolerance_ms": {
+                  "35": {
+                    "matched": 0,
+                    "missed": 32,
+                    "extra": 14
+                  },
+                  "50": {
+                    "matched": 1,
+                    "missed": 31,
+                    "extra": 13
+                  },
+                  "70": {
+                    "matched": 12,
+                    "missed": 20,
+                    "extra": 2
+                  }
+                },
+                "association": {
+                  "matched": 13,
+                  "missed": 19,
+                  "extra": 1
+                },
+                "association_delay": {
+                  "median_ms": 53.69,
+                  "p90_ms": 65.83
+                }
+              }
+            },
+            "expanded": {
+              "baseline": {
+                "labels": 86,
+                "tolerance_ms": {
+                  "35": {
+                    "matched": 15,
+                    "missed": 71,
+                    "extra": 5
+                  },
+                  "50": {
+                    "matched": 17,
+                    "missed": 69,
+                    "extra": 3
+                  },
+                  "70": {
+                    "matched": 17,
+                    "missed": 69,
+                    "extra": 3
+                  }
+                },
+                "association": {
+                  "matched": 17,
+                  "missed": 69,
+                  "extra": 3
+                },
+                "association_delay": {
+                  "median_ms": 15.14,
+                  "p90_ms": 35.84
+                }
+              },
+              "refined": {
+                "labels": 86,
+                "tolerance_ms": {
+                  "35": {
+                    "matched": 1,
+                    "missed": 85,
+                    "extra": 37
+                  },
+                  "50": {
+                    "matched": 27,
+                    "missed": 59,
+                    "extra": 11
+                  },
+                  "70": {
+                    "matched": 33,
+                    "missed": 53,
+                    "extra": 5
+                  }
+                },
+                "association": {
+                  "matched": 33,
+                  "missed": 53,
+                  "extra": 5
+                },
+                "association_delay": {
+                  "median_ms": 45.73,
+                  "p90_ms": 52.71
+                }
+              }
+            }
+          },
+          "diagnostics": {
+            "possible_duplicate_triggers": 0,
+            "p95_associated_delay_ms": 59.27125,
+            "kick_free_minutes": 0.2,
+            "kick_free_extras": 0,
+            "kick_free_false_triggers_per_minute": 0.0
+          }
+        }
+      ],
+      "kick_free_minutes": 1.8,
+      "kick_free_extras": 0,
+      "kick_free_false_triggers_per_minute": 0.0,
+      "possible_duplicate_triggers": 3,
+      "miss_reasons": {
+        "score_rejection": 152,
+        "matching_competition": 2,
+        "uncertainty_exclusion": 1,
+        "refractory_suppression": 1,
+        "no_timely_raw_candidate": 2
+      },
+      "associated_delay_p95_ms": 59.0
+    },
+    {
+      "variant": "linear_39",
+      "totals": {
+        "baseline": {
+          "labels": 381,
+          "tolerance_ms": {
+            "35": {
+              "matched": 176,
+              "missed": 205,
+              "extra": 105
+            },
+            "50": {
+              "matched": 192,
+              "missed": 189,
+              "extra": 89
+            },
+            "70": {
+              "matched": 195,
+              "missed": 186,
+              "extra": 86
+            }
+          },
+          "association": {
+            "matched": 195,
+            "missed": 186,
+            "extra": 86
+          },
+          "association_delay": {
+            "median_ms": 18.33,
+            "p90_ms": 34.33
+          }
+        },
+        "fixed_05": {
+          "labels": 381,
+          "tolerance_ms": {
+            "35": {
+              "matched": 150,
+              "missed": 231,
+              "extra": 606
+            },
+            "50": {
+              "matched": 282,
+              "missed": 99,
+              "extra": 474
+            },
+            "70": {
+              "matched": 335,
+              "missed": 46,
+              "extra": 422
+            }
+          },
+          "association": {
+            "matched": 341,
+            "missed": 40,
+            "extra": 416
+          },
+          "association_delay": {
+            "median_ms": 39.33,
+            "p90_ms": 56.21
+          }
+        },
+        "calibrated": {
+          "labels": 381,
+          "tolerance_ms": {
+            "35": {
+              "matched": 38,
+              "missed": 343,
+              "extra": 209
+            },
+            "50": {
+              "matched": 104,
+              "missed": 277,
+              "extra": 143
+            },
+            "70": {
+              "matched": 168,
+              "missed": 213,
+              "extra": 79
+            }
+          },
+          "association": {
+            "matched": 166,
+            "missed": 215,
+            "extra": 81
+          },
+          "association_delay": {
+            "median_ms": 46.21,
+            "p90_ms": 59.77
+          }
+        },
+        "refined": {
+          "labels": 381,
+          "tolerance_ms": {
+            "35": {
+              "matched": 41,
+              "missed": 340,
+              "extra": 241
+            },
+            "50": {
+              "matched": 119,
+              "missed": 262,
+              "extra": 163
+            },
+            "70": {
+              "matched": 189,
+              "missed": 192,
+              "extra": 93
+            }
+          },
+          "association": {
+            "matched": 187,
+            "missed": 194,
+            "extra": 95
+          },
+          "association_delay": {
+            "median_ms": 46.0,
+            "p90_ms": 59.67
+          }
+        }
+      },
+      "metrics_70ms": {
+        "matched": 189,
+        "missed": 192,
+        "extra": 93,
+        "recall": 0.49606299212598426,
+        "precision": 0.6702127659574468
+      },
+      "cohorts": {
+        "original": {
+          "baseline": {
+            "labels": 174,
+            "tolerance_ms": {
+              "35": {
+                "matched": 103,
+                "missed": 71,
+                "extra": 67
+              },
+              "50": {
+                "matched": 116,
+                "missed": 58,
+                "extra": 54
+              },
+              "70": {
+                "matched": 118,
+                "missed": 56,
+                "extra": 52
+              }
+            },
+            "association": {
+              "matched": 118,
+              "missed": 56,
+              "extra": 52
+            },
+            "association_delay": {
+              "median_ms": 18.84,
+              "p90_ms": 38.0
+            }
+          },
+          "refined": {
+            "labels": 174,
+            "tolerance_ms": {
+              "35": {
+                "matched": 30,
+                "missed": 144,
+                "extra": 158
+              },
+              "50": {
+                "matched": 74,
+                "missed": 100,
+                "extra": 114
+              },
+              "70": {
+                "matched": 108,
+                "missed": 66,
+                "extra": 80
+              }
+            },
+            "association": {
+              "matched": 108,
+              "missed": 66,
+              "extra": 80
+            },
+            "association_delay": {
+              "median_ms": 44.09,
+              "p90_ms": 56.99
+            }
+          }
+        },
+        "expanded": {
+          "baseline": {
+            "labels": 207,
+            "tolerance_ms": {
+              "35": {
+                "matched": 73,
+                "missed": 134,
+                "extra": 38
+              },
+              "50": {
+                "matched": 76,
+                "missed": 131,
+                "extra": 35
+              },
+              "70": {
+                "matched": 77,
+                "missed": 130,
+                "extra": 34
+              }
+            },
+            "association": {
+              "matched": 77,
+              "missed": 130,
+              "extra": 34
+            },
+            "association_delay": {
+              "median_ms": 17.7,
+              "p90_ms": 29.67
+            }
+          },
+          "refined": {
+            "labels": 207,
+            "tolerance_ms": {
+              "35": {
+                "matched": 11,
+                "missed": 196,
+                "extra": 83
+              },
+              "50": {
+                "matched": 45,
+                "missed": 162,
+                "extra": 49
+              },
+              "70": {
+                "matched": 81,
+                "missed": 126,
+                "extra": 13
+              }
+            },
+            "association": {
+              "matched": 79,
+              "missed": 128,
+              "extra": 15
+            },
+            "association_delay": {
+              "median_ms": 47.82,
+              "p90_ms": 60.33
+            }
+          }
+        }
+      },
+      "tracks": [
+        {
+          "track": "apricots_128bpm",
+          "labels": 14,
+          "tolerance_ms": {
+            "35": {
+              "matched": 2,
+              "missed": 12,
+              "extra": 5
+            },
+            "50": {
+              "matched": 3,
+              "missed": 11,
+              "extra": 4
+            },
+            "70": {
+              "matched": 7,
+              "missed": 7,
+              "extra": 0
+            }
+          },
+          "metrics_70ms": {
+            "matched": 7,
+            "missed": 7,
+            "extra": 0,
+            "recall": 0.5,
+            "precision": 1.0
+          },
+          "threshold": 0.8716346153846154,
+          "cohorts": {
+            "original": {
+              "baseline": {
+                "labels": 14,
+                "tolerance_ms": {
+                  "35": {
+                    "matched": 13,
+                    "missed": 1,
+                    "extra": 1
+                  },
+                  "50": {
+                    "matched": 14,
+                    "missed": 0,
+                    "extra": 0
+                  },
+                  "70": {
+                    "matched": 14,
+                    "missed": 0,
+                    "extra": 0
+                  }
+                },
+                "association": {
+                  "matched": 14,
+                  "missed": 0,
+                  "extra": 0
+                },
+                "association_delay": {
+                  "median_ms": 21.17,
+                  "p90_ms": 30.67
+                }
+              },
+              "refined": {
+                "labels": 14,
+                "tolerance_ms": {
+                  "35": {
+                    "matched": 2,
+                    "missed": 12,
+                    "extra": 5
+                  },
+                  "50": {
+                    "matched": 3,
+                    "missed": 11,
+                    "extra": 4
+                  },
+                  "70": {
+                    "matched": 7,
+                    "missed": 7,
+                    "extra": 0
+                  }
+                },
+                "association": {
+                  "matched": 7,
+                  "missed": 7,
+                  "extra": 0
+                },
+                "association_delay": {
+                  "median_ms": 50.67,
+                  "p90_ms": 55.0
+                }
+              }
+            },
+            "expanded": {
+              "baseline": {
+                "labels": 0,
+                "tolerance_ms": {
+                  "35": {
+                    "matched": 0,
+                    "missed": 0,
+                    "extra": 0
+                  },
+                  "50": {
+                    "matched": 0,
+                    "missed": 0,
+                    "extra": 0
+                  },
+                  "70": {
+                    "matched": 0,
+                    "missed": 0,
+                    "extra": 0
+                  }
+                },
+                "association": {
+                  "matched": 0,
+                  "missed": 0,
+                  "extra": 0
+                },
+                "association_delay": {
+                  "median_ms": null,
+                  "p90_ms": null
+                }
+              },
+              "refined": {
+                "labels": 0,
+                "tolerance_ms": {
+                  "35": {
+                    "matched": 0,
+                    "missed": 0,
+                    "extra": 0
+                  },
+                  "50": {
+                    "matched": 0,
+                    "missed": 0,
+                    "extra": 0
+                  },
+                  "70": {
+                    "matched": 0,
+                    "missed": 0,
+                    "extra": 0
+                  }
+                },
+                "association": {
+                  "matched": 0,
+                  "missed": 0,
+                  "extra": 0
+                },
+                "association_delay": {
+                  "median_ms": null,
+                  "p90_ms": null
+                }
+              }
+            }
+          },
+          "diagnostics": {
+            "possible_duplicate_triggers": 0,
+            "p95_associated_delay_ms": 54.7,
+            "kick_free_minutes": 0.0,
+            "kick_free_extras": 0,
+            "kick_free_false_triggers_per_minute": null
+          }
+        },
+        {
+          "track": "bad_guy_128bpm",
+          "labels": 15,
+          "tolerance_ms": {
+            "35": {
+              "matched": 8,
+              "missed": 7,
+              "extra": 47
+            },
+            "50": {
+              "matched": 15,
+              "missed": 0,
+              "extra": 40
+            },
+            "70": {
+              "matched": 15,
+              "missed": 0,
+              "extra": 40
+            }
+          },
+          "metrics_70ms": {
+            "matched": 15,
+            "missed": 0,
+            "extra": 40,
+            "recall": 1.0,
+            "precision": 0.2727272727272727
+          },
+          "threshold": 0.8567307692307692,
+          "cohorts": {
+            "original": {
+              "baseline": {
+                "labels": 15,
+                "tolerance_ms": {
+                  "35": {
+                    "matched": 15,
+                    "missed": 0,
+                    "extra": 17
+                  },
+                  "50": {
+                    "matched": 15,
+                    "missed": 0,
+                    "extra": 17
+                  },
+                  "70": {
+                    "matched": 15,
+                    "missed": 0,
+                    "extra": 17
+                  }
+                },
+                "association": {
+                  "matched": 15,
+                  "missed": 0,
+                  "extra": 17
+                },
+                "association_delay": {
+                  "median_ms": 9.67,
+                  "p90_ms": 13.53
+                }
+              },
+              "refined": {
+                "labels": 15,
+                "tolerance_ms": {
+                  "35": {
+                    "matched": 8,
+                    "missed": 7,
+                    "extra": 47
+                  },
+                  "50": {
+                    "matched": 15,
+                    "missed": 0,
+                    "extra": 40
+                  },
+                  "70": {
+                    "matched": 15,
+                    "missed": 0,
+                    "extra": 40
+                  }
+                },
+                "association": {
+                  "matched": 15,
+                  "missed": 0,
+                  "extra": 40
+                },
+                "association_delay": {
+                  "median_ms": 34.92,
+                  "p90_ms": 48.45
+                }
+              }
+            },
+            "expanded": {
+              "baseline": {
+                "labels": 0,
+                "tolerance_ms": {
+                  "35": {
+                    "matched": 0,
+                    "missed": 0,
+                    "extra": 0
+                  },
+                  "50": {
+                    "matched": 0,
+                    "missed": 0,
+                    "extra": 0
+                  },
+                  "70": {
+                    "matched": 0,
+                    "missed": 0,
+                    "extra": 0
+                  }
+                },
+                "association": {
+                  "matched": 0,
+                  "missed": 0,
+                  "extra": 0
+                },
+                "association_delay": {
+                  "median_ms": null,
+                  "p90_ms": null
+                }
+              },
+              "refined": {
+                "labels": 0,
+                "tolerance_ms": {
+                  "35": {
+                    "matched": 0,
+                    "missed": 0,
+                    "extra": 0
+                  },
+                  "50": {
+                    "matched": 0,
+                    "missed": 0,
+                    "extra": 0
+                  },
+                  "70": {
+                    "matched": 0,
+                    "missed": 0,
+                    "extra": 0
+                  }
+                },
+                "association": {
+                  "matched": 0,
+                  "missed": 0,
+                  "extra": 0
+                },
+                "association_delay": {
+                  "median_ms": null,
+                  "p90_ms": null
+                }
+              }
+            }
+          },
+          "diagnostics": {
+            "possible_duplicate_triggers": 0,
+            "p95_associated_delay_ms": 48.5217,
+            "kick_free_minutes": 0.0,
+            "kick_free_extras": 0,
+            "kick_free_false_triggers_per_minute": null
+          }
+        },
+        {
+          "track": "feel_the_vibration_174bpm",
+          "labels": 15,
+          "tolerance_ms": {
+            "35": {
+              "matched": 1,
+              "missed": 14,
+              "extra": 14
+            },
+            "50": {
+              "matched": 7,
+              "missed": 8,
+              "extra": 8
+            },
+            "70": {
+              "matched": 15,
+              "missed": 0,
+              "extra": 0
+            }
+          },
+          "metrics_70ms": {
+            "matched": 15,
+            "missed": 0,
+            "extra": 0,
+            "recall": 1.0,
+            "precision": 1.0
+          },
+          "threshold": 0.8913461538461539,
+          "cohorts": {
+            "original": {
+              "baseline": {
+                "labels": 15,
+                "tolerance_ms": {
+                  "35": {
+                    "matched": 3,
+                    "missed": 12,
+                    "extra": 14
+                  },
+                  "50": {
+                    "matched": 13,
+                    "missed": 2,
+                    "extra": 4
+                  },
+                  "70": {
+                    "matched": 15,
+                    "missed": 0,
+                    "extra": 2
+                  }
+                },
+                "association": {
+                  "matched": 15,
+                  "missed": 0,
+                  "extra": 2
+                },
+                "association_delay": {
+                  "median_ms": 40.67,
+                  "p90_ms": 53.33
+                }
+              },
+              "refined": {
+                "labels": 15,
+                "tolerance_ms": {
+                  "35": {
+                    "matched": 1,
+                    "missed": 14,
+                    "extra": 14
+                  },
+                  "50": {
+                    "matched": 7,
+                    "missed": 8,
+                    "extra": 8
+                  },
+                  "70": {
+                    "matched": 15,
+                    "missed": 0,
+                    "extra": 0
+                  }
+                },
+                "association": {
+                  "matched": 15,
+                  "missed": 0,
+                  "extra": 0
+                },
+                "association_delay": {
+                  "median_ms": 50.33,
+                  "p90_ms": 56.33
+                }
+              }
+            },
+            "expanded": {
+              "baseline": {
+                "labels": 0,
+                "tolerance_ms": {
+                  "35": {
+                    "matched": 0,
+                    "missed": 0,
+                    "extra": 0
+                  },
+                  "50": {
+                    "matched": 0,
+                    "missed": 0,
+                    "extra": 0
+                  },
+                  "70": {
+                    "matched": 0,
+                    "missed": 0,
+                    "extra": 0
+                  }
+                },
+                "association": {
+                  "matched": 0,
+                  "missed": 0,
+                  "extra": 0
+                },
+                "association_delay": {
+                  "median_ms": null,
+                  "p90_ms": null
+                }
+              },
+              "refined": {
+                "labels": 0,
+                "tolerance_ms": {
+                  "35": {
+                    "matched": 0,
+                    "missed": 0,
+                    "extra": 0
+                  },
+                  "50": {
+                    "matched": 0,
+                    "missed": 0,
+                    "extra": 0
+                  },
+                  "70": {
+                    "matched": 0,
+                    "missed": 0,
+                    "extra": 0
+                  }
+                },
+                "association": {
+                  "matched": 0,
+                  "missed": 0,
+                  "extra": 0
+                },
+                "association_delay": {
+                  "median_ms": null,
+                  "p90_ms": null
+                }
+              }
+            }
+          },
+          "diagnostics": {
+            "possible_duplicate_triggers": 0,
+            "p95_associated_delay_ms": 57.93319999999999,
+            "kick_free_minutes": 0.0,
+            "kick_free_extras": 0,
+            "kick_free_false_triggers_per_minute": null
+          }
+        },
+        {
+          "track": "inhale_exhale_145bpm",
+          "labels": 12,
+          "tolerance_ms": {
+            "35": {
+              "matched": 4,
+              "missed": 8,
+              "extra": 15
+            },
+            "50": {
+              "matched": 10,
+              "missed": 2,
+              "extra": 9
+            },
+            "70": {
+              "matched": 11,
+              "missed": 1,
+              "extra": 8
+            }
+          },
+          "metrics_70ms": {
+            "matched": 11,
+            "missed": 1,
+            "extra": 8,
+            "recall": 0.9166666666666666,
+            "precision": 0.5789473684210527
+          },
+          "threshold": 0.93125,
+          "cohorts": {
+            "original": {
+              "baseline": {
+                "labels": 12,
+                "tolerance_ms": {
+                  "35": {
+                    "matched": 11,
+                    "missed": 1,
+                    "extra": 14
+                  },
+                  "50": {
+                    "matched": 11,
+                    "missed": 1,
+                    "extra": 14
+                  },
+                  "70": {
+                    "matched": 11,
+                    "missed": 1,
+                    "extra": 14
+                  }
+                },
+                "association": {
+                  "matched": 11,
+                  "missed": 1,
+                  "extra": 14
+                },
+                "association_delay": {
+                  "median_ms": 13.0,
+                  "p90_ms": 15.67
+                }
+              },
+              "refined": {
+                "labels": 12,
+                "tolerance_ms": {
+                  "35": {
+                    "matched": 4,
+                    "missed": 8,
+                    "extra": 15
+                  },
+                  "50": {
+                    "matched": 10,
+                    "missed": 2,
+                    "extra": 9
+                  },
+                  "70": {
+                    "matched": 11,
+                    "missed": 1,
+                    "extra": 8
+                  }
+                },
+                "association": {
+                  "matched": 11,
+                  "missed": 1,
+                  "extra": 8
+                },
+                "association_delay": {
+                  "median_ms": 42.33,
+                  "p90_ms": 49.33
+                }
+              }
+            },
+            "expanded": {
+              "baseline": {
+                "labels": 0,
+                "tolerance_ms": {
+                  "35": {
+                    "matched": 0,
+                    "missed": 0,
+                    "extra": 0
+                  },
+                  "50": {
+                    "matched": 0,
+                    "missed": 0,
+                    "extra": 0
+                  },
+                  "70": {
+                    "matched": 0,
+                    "missed": 0,
+                    "extra": 0
+                  }
+                },
+                "association": {
+                  "matched": 0,
+                  "missed": 0,
+                  "extra": 0
+                },
+                "association_delay": {
+                  "median_ms": null,
+                  "p90_ms": null
+                }
+              },
+              "refined": {
+                "labels": 0,
+                "tolerance_ms": {
+                  "35": {
+                    "matched": 0,
+                    "missed": 0,
+                    "extra": 0
+                  },
+                  "50": {
+                    "matched": 0,
+                    "missed": 0,
+                    "extra": 0
+                  },
+                  "70": {
+                    "matched": 0,
+                    "missed": 0,
+                    "extra": 0
+                  }
+                },
+                "association": {
+                  "matched": 0,
+                  "missed": 0,
+                  "extra": 0
+                },
+                "association_delay": {
+                  "median_ms": null,
+                  "p90_ms": null
+                }
+              }
+            }
+          },
+          "diagnostics": {
+            "possible_duplicate_triggers": 0,
+            "p95_associated_delay_ms": 50.6665,
+            "kick_free_minutes": 0.0,
+            "kick_free_extras": 0,
+            "kick_free_false_triggers_per_minute": null
+          }
+        },
+        {
+          "track": "tears_140bpm",
+          "labels": 10,
+          "tolerance_ms": {
+            "35": {
+              "matched": 5,
+              "missed": 5,
+              "extra": 29
+            },
+            "50": {
+              "matched": 10,
+              "missed": 0,
+              "extra": 24
+            },
+            "70": {
+              "matched": 10,
+              "missed": 0,
+              "extra": 24
+            }
+          },
+          "metrics_70ms": {
+            "matched": 10,
+            "missed": 0,
+            "extra": 24,
+            "recall": 1.0,
+            "precision": 0.29411764705882354
+          },
+          "threshold": 0.8918269230769231,
+          "cohorts": {
+            "original": {
+              "baseline": {
+                "labels": 10,
+                "tolerance_ms": {
+                  "35": {
+                    "matched": 10,
+                    "missed": 0,
+                    "extra": 7
+                  },
+                  "50": {
+                    "matched": 10,
+                    "missed": 0,
+                    "extra": 7
+                  },
+                  "70": {
+                    "matched": 10,
+                    "missed": 0,
+                    "extra": 7
+                  }
+                },
+                "association": {
+                  "matched": 10,
+                  "missed": 0,
+                  "extra": 7
+                },
+                "association_delay": {
+                  "median_ms": 13.67,
+                  "p90_ms": 23.33
+                }
+              },
+              "refined": {
+                "labels": 10,
+                "tolerance_ms": {
+                  "35": {
+                    "matched": 5,
+                    "missed": 5,
+                    "extra": 29
+                  },
+                  "50": {
+                    "matched": 10,
+                    "missed": 0,
+                    "extra": 24
+                  },
+                  "70": {
+                    "matched": 10,
+                    "missed": 0,
+                    "extra": 24
+                  }
+                },
+                "association": {
+                  "matched": 10,
+                  "missed": 0,
+                  "extra": 24
+                },
+                "association_delay": {
+                  "median_ms": 33.83,
+                  "p90_ms": 43.0
+                }
+              }
+            },
+            "expanded": {
+              "baseline": {
+                "labels": 0,
+                "tolerance_ms": {
+                  "35": {
+                    "matched": 0,
+                    "missed": 0,
+                    "extra": 0
+                  },
+                  "50": {
+                    "matched": 0,
+                    "missed": 0,
+                    "extra": 0
+                  },
+                  "70": {
+                    "matched": 0,
+                    "missed": 0,
+                    "extra": 0
+                  }
+                },
+                "association": {
+                  "matched": 0,
+                  "missed": 0,
+                  "extra": 0
+                },
+                "association_delay": {
+                  "median_ms": null,
+                  "p90_ms": null
+                }
+              },
+              "refined": {
+                "labels": 0,
+                "tolerance_ms": {
+                  "35": {
+                    "matched": 0,
+                    "missed": 0,
+                    "extra": 0
+                  },
+                  "50": {
+                    "matched": 0,
+                    "missed": 0,
+                    "extra": 0
+                  },
+                  "70": {
+                    "matched": 0,
+                    "missed": 0,
+                    "extra": 0
+                  }
+                },
+                "association": {
+                  "matched": 0,
+                  "missed": 0,
+                  "extra": 0
+                },
+                "association_delay": {
+                  "median_ms": null,
+                  "p90_ms": null
+                }
+              }
+            }
+          },
+          "diagnostics": {
+            "possible_duplicate_triggers": 0,
+            "p95_associated_delay_ms": 43.36685,
+            "kick_free_minutes": 0.0,
+            "kick_free_extras": 0,
+            "kick_free_false_triggers_per_minute": null
+          }
+        },
+        {
+          "track": "late_night",
+          "labels": 77,
+          "tolerance_ms": {
+            "35": {
+              "matched": 1,
+              "missed": 76,
+              "extra": 45
+            },
+            "50": {
+              "matched": 15,
+              "missed": 62,
+              "extra": 31
+            },
+            "70": {
+              "matched": 46,
+              "missed": 31,
+              "extra": 0
+            }
+          },
+          "metrics_70ms": {
+            "matched": 46,
+            "missed": 31,
+            "extra": 0,
+            "recall": 0.5974025974025974,
+            "precision": 1.0
+          },
+          "threshold": 0.8807692307692307,
+          "cohorts": {
+            "original": {
+              "baseline": {
+                "labels": 29,
+                "tolerance_ms": {
+                  "35": {
+                    "matched": 22,
+                    "missed": 7,
+                    "extra": 9
+                  },
+                  "50": {
+                    "matched": 23,
+                    "missed": 6,
+                    "extra": 8
+                  },
+                  "70": {
+                    "matched": 23,
+                    "missed": 6,
+                    "extra": 8
+                  }
+                },
+                "association": {
+                  "matched": 23,
+                  "missed": 6,
+                  "extra": 8
+                },
+                "association_delay": {
+                  "median_ms": 19.33,
+                  "p90_ms": 26.0
+                }
+              },
+              "refined": {
+                "labels": 29,
+                "tolerance_ms": {
+                  "35": {
+                    "matched": 0,
+                    "missed": 29,
+                    "extra": 15
+                  },
+                  "50": {
+                    "matched": 5,
+                    "missed": 24,
+                    "extra": 10
+                  },
+                  "70": {
+                    "matched": 15,
+                    "missed": 14,
+                    "extra": 0
+                  }
+                },
+                "association": {
+                  "matched": 15,
+                  "missed": 14,
+                  "extra": 0
+                },
+                "association_delay": {
+                  "median_ms": 52.0,
+                  "p90_ms": 62.0
+                }
+              }
+            },
+            "expanded": {
+              "baseline": {
+                "labels": 48,
+                "tolerance_ms": {
+                  "35": {
+                    "matched": 31,
+                    "missed": 17,
+                    "extra": 1
+                  },
+                  "50": {
+                    "matched": 31,
+                    "missed": 17,
+                    "extra": 1
+                  },
+                  "70": {
+                    "matched": 31,
+                    "missed": 17,
+                    "extra": 1
+                  }
+                },
+                "association": {
+                  "matched": 31,
+                  "missed": 17,
+                  "extra": 1
+                },
+                "association_delay": {
+                  "median_ms": 18.33,
+                  "p90_ms": 24.0
+                }
+              },
+              "refined": {
+                "labels": 48,
+                "tolerance_ms": {
+                  "35": {
+                    "matched": 1,
+                    "missed": 47,
+                    "extra": 30
+                  },
+                  "50": {
+                    "matched": 10,
+                    "missed": 38,
+                    "extra": 21
+                  },
+                  "70": {
+                    "matched": 31,
+                    "missed": 17,
+                    "extra": 0
+                  }
+                },
+                "association": {
+                  "matched": 31,
+                  "missed": 17,
+                  "extra": 0
+                },
+                "association_delay": {
+                  "median_ms": 53.67,
+                  "p90_ms": 61.0
+                }
+              }
+            }
+          },
+          "diagnostics": {
+            "possible_duplicate_triggers": 0,
+            "p95_associated_delay_ms": 62.0,
+            "kick_free_minutes": 0.2,
+            "kick_free_extras": 0,
+            "kick_free_false_triggers_per_minute": 0.0
+          }
+        },
+        {
+          "track": "midnight_patience",
+          "labels": 88,
+          "tolerance_ms": {
+            "35": {
+              "matched": 12,
+              "missed": 76,
+              "extra": 41
+            },
+            "50": {
+              "matched": 33,
+              "missed": 55,
+              "extra": 20
+            },
+            "70": {
+              "matched": 40,
+              "missed": 48,
+              "extra": 13
+            }
+          },
+          "metrics_70ms": {
+            "matched": 40,
+            "missed": 48,
+            "extra": 13,
+            "recall": 0.45454545454545453,
+            "precision": 0.7547169811320755
+          },
+          "threshold": 0.8322115384615384,
+          "cohorts": {
+            "original": {
+              "baseline": {
+                "labels": 35,
+                "tolerance_ms": {
+                  "35": {
+                    "matched": 16,
+                    "missed": 19,
+                    "extra": 1
+                  },
+                  "50": {
+                    "matched": 17,
+                    "missed": 18,
+                    "extra": 0
+                  },
+                  "70": {
+                    "matched": 17,
+                    "missed": 18,
+                    "extra": 0
+                  }
+                },
+                "association": {
+                  "matched": 17,
+                  "missed": 18,
+                  "extra": 0
+                },
+                "association_delay": {
+                  "median_ms": 17.0,
+                  "p90_ms": 31.0
+                }
+              },
+              "refined": {
+                "labels": 35,
+                "tolerance_ms": {
+                  "35": {
+                    "matched": 6,
+                    "missed": 29,
+                    "extra": 22
+                  },
+                  "50": {
+                    "matched": 17,
+                    "missed": 18,
+                    "extra": 11
+                  },
+                  "70": {
+                    "matched": 21,
+                    "missed": 14,
+                    "extra": 7
+                  }
+                },
+                "association": {
+                  "matched": 20,
+                  "missed": 15,
+                  "extra": 8
+                },
+                "association_delay": {
+                  "median_ms": 43.67,
+                  "p90_ms": 56.67
+                }
+              }
+            },
+            "expanded": {
+              "baseline": {
+                "labels": 53,
+                "tolerance_ms": {
+                  "35": {
+                    "matched": 17,
+                    "missed": 36,
+                    "extra": 20
+                  },
+                  "50": {
+                    "matched": 18,
+                    "missed": 35,
+                    "extra": 19
+                  },
+                  "70": {
+                    "matched": 19,
+                    "missed": 34,
+                    "extra": 18
+                  }
+                },
+                "association": {
+                  "matched": 19,
+                  "missed": 34,
+                  "extra": 18
+                },
+                "association_delay": {
+                  "median_ms": 21.0,
+                  "p90_ms": 36.67
+                }
+              },
+              "refined": {
+                "labels": 53,
+                "tolerance_ms": {
+                  "35": {
+                    "matched": 6,
+                    "missed": 47,
+                    "extra": 19
+                  },
+                  "50": {
+                    "matched": 16,
+                    "missed": 37,
+                    "extra": 9
+                  },
+                  "70": {
+                    "matched": 19,
+                    "missed": 34,
+                    "extra": 6
+                  }
+                },
+                "association": {
+                  "matched": 17,
+                  "missed": 36,
+                  "extra": 8
+                },
+                "association_delay": {
+                  "median_ms": 40.33,
+                  "p90_ms": 57.0
+                }
+              }
+            }
+          },
+          "diagnostics": {
+            "possible_duplicate_triggers": 2,
+            "p95_associated_delay_ms": 59.59999999999999,
+            "kick_free_minutes": 0.6,
+            "kick_free_extras": 0,
+            "kick_free_false_triggers_per_minute": 0.0
+          }
+        },
+        {
+          "track": "miracle",
+          "labels": 32,
+          "tolerance_ms": {
+            "35": {
+              "matched": 7,
+              "missed": 25,
+              "extra": 11
+            },
+            "50": {
+              "matched": 16,
+              "missed": 16,
+              "extra": 2
+            },
+            "70": {
+              "matched": 18,
+              "missed": 14,
+              "extra": 0
+            }
+          },
+          "metrics_70ms": {
+            "matched": 18,
+            "missed": 14,
+            "extra": 0,
+            "recall": 0.5625,
+            "precision": 1.0
+          },
+          "threshold": 0.9100961538461538,
+          "cohorts": {
+            "original": {
+              "baseline": {
+                "labels": 12,
+                "tolerance_ms": {
+                  "35": {
+                    "matched": 9,
+                    "missed": 3,
+                    "extra": 4
+                  },
+                  "50": {
+                    "matched": 9,
+                    "missed": 3,
+                    "extra": 4
+                  },
+                  "70": {
+                    "matched": 9,
+                    "missed": 3,
+                    "extra": 4
+                  }
+                },
+                "association": {
+                  "matched": 9,
+                  "missed": 3,
+                  "extra": 4
+                },
+                "association_delay": {
+                  "median_ms": 22.62,
+                  "p90_ms": 25.35
+                }
+              },
+              "refined": {
+                "labels": 12,
+                "tolerance_ms": {
+                  "35": {
+                    "matched": 4,
+                    "missed": 8,
+                    "extra": 2
+                  },
+                  "50": {
+                    "matched": 6,
+                    "missed": 6,
+                    "extra": 0
+                  },
+                  "70": {
+                    "matched": 6,
+                    "missed": 6,
+                    "extra": 0
+                  }
+                },
+                "association": {
+                  "matched": 6,
+                  "missed": 6,
+                  "extra": 0
+                },
+                "association_delay": {
+                  "median_ms": 32.21,
+                  "p90_ms": 47.05
+                }
+              }
+            },
+            "expanded": {
+              "baseline": {
+                "labels": 20,
+                "tolerance_ms": {
+                  "35": {
+                    "matched": 10,
+                    "missed": 10,
+                    "extra": 12
+                  },
+                  "50": {
+                    "matched": 10,
+                    "missed": 10,
+                    "extra": 12
+                  },
+                  "70": {
+                    "matched": 10,
+                    "missed": 10,
+                    "extra": 12
+                  }
+                },
+                "association": {
+                  "matched": 10,
+                  "missed": 10,
+                  "extra": 12
+                },
+                "association_delay": {
+                  "median_ms": 20.08,
+                  "p90_ms": 23.86
+                }
+              },
+              "refined": {
+                "labels": 20,
+                "tolerance_ms": {
+                  "35": {
+                    "matched": 3,
+                    "missed": 17,
+                    "extra": 9
+                  },
+                  "50": {
+                    "matched": 10,
+                    "missed": 10,
+                    "extra": 2
+                  },
+                  "70": {
+                    "matched": 12,
+                    "missed": 8,
+                    "extra": 0
+                  }
+                },
+                "association": {
+                  "matched": 12,
+                  "missed": 8,
+                  "extra": 0
+                },
+                "association_delay": {
+                  "median_ms": 42.41,
+                  "p90_ms": 53.25
+                }
+              }
+            }
+          },
+          "diagnostics": {
+            "possible_duplicate_triggers": 0,
+            "p95_associated_delay_ms": 54.33909999999999,
+            "kick_free_minutes": 0.8,
+            "kick_free_extras": 0,
+            "kick_free_false_triggers_per_minute": 0.0
+          }
+        },
+        {
+          "track": "heavy_on_mind",
+          "labels": 118,
+          "tolerance_ms": {
+            "35": {
+              "matched": 1,
+              "missed": 117,
+              "extra": 34
+            },
+            "50": {
+              "matched": 10,
+              "missed": 108,
+              "extra": 25
+            },
+            "70": {
+              "matched": 27,
+              "missed": 91,
+              "extra": 8
+            }
+          },
+          "metrics_70ms": {
+            "matched": 27,
+            "missed": 91,
+            "extra": 8,
+            "recall": 0.2288135593220339,
+            "precision": 0.7714285714285715
+          },
+          "threshold": 0.864423076923077,
+          "cohorts": {
+            "original": {
+              "baseline": {
+                "labels": 32,
+                "tolerance_ms": {
+                  "35": {
+                    "matched": 4,
+                    "missed": 28,
+                    "extra": 0
+                  },
+                  "50": {
+                    "matched": 4,
+                    "missed": 28,
+                    "extra": 0
+                  },
+                  "70": {
+                    "matched": 4,
+                    "missed": 28,
+                    "extra": 0
+                  }
+                },
+                "association": {
+                  "matched": 4,
+                  "missed": 28,
+                  "extra": 0
+                },
+                "association_delay": {
+                  "median_ms": 20.33,
+                  "p90_ms": 21.91
+                }
+              },
+              "refined": {
+                "labels": 32,
+                "tolerance_ms": {
+                  "35": {
+                    "matched": 0,
+                    "missed": 32,
+                    "extra": 9
+                  },
+                  "50": {
+                    "matched": 1,
+                    "missed": 31,
+                    "extra": 8
+                  },
+                  "70": {
+                    "matched": 8,
+                    "missed": 24,
+                    "extra": 1
+                  }
+                },
+                "association": {
+                  "matched": 9,
+                  "missed": 23,
+                  "extra": 0
+                },
+                "association_delay": {
+                  "median_ms": 55.53,
+                  "p90_ms": 73.9
+                }
+              }
+            },
+            "expanded": {
+              "baseline": {
+                "labels": 86,
+                "tolerance_ms": {
+                  "35": {
+                    "matched": 15,
+                    "missed": 71,
+                    "extra": 5
+                  },
+                  "50": {
+                    "matched": 17,
+                    "missed": 69,
+                    "extra": 3
+                  },
+                  "70": {
+                    "matched": 17,
+                    "missed": 69,
+                    "extra": 3
+                  }
+                },
+                "association": {
+                  "matched": 17,
+                  "missed": 69,
+                  "extra": 3
+                },
+                "association_delay": {
+                  "median_ms": 15.14,
+                  "p90_ms": 35.84
+                }
+              },
+              "refined": {
+                "labels": 86,
+                "tolerance_ms": {
+                  "35": {
+                    "matched": 1,
+                    "missed": 85,
+                    "extra": 25
+                  },
+                  "50": {
+                    "matched": 9,
+                    "missed": 77,
+                    "extra": 17
+                  },
+                  "70": {
+                    "matched": 19,
+                    "missed": 67,
+                    "extra": 7
+                  }
+                },
+                "association": {
+                  "matched": 19,
+                  "missed": 67,
+                  "extra": 7
+                },
+                "association_delay": {
+                  "median_ms": 50.69,
+                  "p90_ms": 59.77
+                }
+              }
+            }
+          },
+          "diagnostics": {
+            "possible_duplicate_triggers": 0,
+            "p95_associated_delay_ms": 65.37545,
+            "kick_free_minutes": 0.2,
+            "kick_free_extras": 0,
+            "kick_free_false_triggers_per_minute": 0.0
+          }
+        }
+      ],
+      "kick_free_minutes": 1.8,
+      "kick_free_extras": 0,
+      "kick_free_false_triggers_per_minute": 0.0,
+      "possible_duplicate_triggers": 2,
+      "miss_reasons": {
+        "score_rejection": 187,
+        "matching_competition": 1,
+        "uncertainty_exclusion": 1,
+        "refractory_suppression": 1,
+        "no_timely_raw_candidate": 2
+      },
+      "associated_delay_p95_ms": 61.56679999999999
+    },
+    {
+      "variant": "linear_shape_24",
+      "totals": {
+        "baseline": {
+          "labels": 381,
+          "tolerance_ms": {
+            "35": {
+              "matched": 176,
+              "missed": 205,
+              "extra": 105
+            },
+            "50": {
+              "matched": 192,
+              "missed": 189,
+              "extra": 89
+            },
+            "70": {
+              "matched": 195,
+              "missed": 186,
+              "extra": 86
+            }
+          },
+          "association": {
+            "matched": 195,
+            "missed": 186,
+            "extra": 86
+          },
+          "association_delay": {
+            "median_ms": 18.33,
+            "p90_ms": 34.33
+          }
+        },
+        "fixed_05": {
+          "labels": 381,
+          "tolerance_ms": {
+            "35": {
+              "matched": 160,
+              "missed": 221,
+              "extra": 588
+            },
+            "50": {
+              "matched": 280,
+              "missed": 101,
+              "extra": 468
+            },
+            "70": {
+              "matched": 326,
+              "missed": 55,
+              "extra": 423
+            }
+          },
+          "association": {
+            "matched": 332,
+            "missed": 49,
+            "extra": 417
+          },
+          "association_delay": {
+            "median_ms": 36.16,
+            "p90_ms": 55.28
+          }
+        },
+        "calibrated": {
+          "labels": 381,
+          "tolerance_ms": {
+            "35": {
+              "matched": 39,
+              "missed": 342,
+              "extra": 238
+            },
+            "50": {
+              "matched": 129,
+              "missed": 252,
+              "extra": 148
+            },
+            "70": {
+              "matched": 196,
+              "missed": 185,
+              "extra": 82
+            }
+          },
+          "association": {
+            "matched": 194,
+            "missed": 187,
+            "extra": 84
+          },
+          "association_delay": {
+            "median_ms": 46.27,
+            "p90_ms": 57.67
+          }
+        },
+        "refined": {
+          "labels": 381,
+          "tolerance_ms": {
+            "35": {
+              "matched": 42,
+              "missed": 339,
+              "extra": 251
+            },
+            "50": {
+              "matched": 138,
+              "missed": 243,
+              "extra": 155
+            },
+            "70": {
+              "matched": 209,
+              "missed": 172,
+              "extra": 85
+            }
+          },
+          "association": {
+            "matched": 207,
+            "missed": 174,
+            "extra": 87
+          },
+          "association_delay": {
+            "median_ms": 46.21,
+            "p90_ms": 57.33
+          }
+        }
+      },
+      "metrics_70ms": {
+        "matched": 209,
+        "missed": 172,
+        "extra": 85,
+        "recall": 0.5485564304461942,
+        "precision": 0.7108843537414966
+      },
+      "cohorts": {
+        "original": {
+          "baseline": {
+            "labels": 174,
+            "tolerance_ms": {
+              "35": {
+                "matched": 103,
+                "missed": 71,
+                "extra": 67
+              },
+              "50": {
+                "matched": 116,
+                "missed": 58,
+                "extra": 54
+              },
+              "70": {
+                "matched": 118,
+                "missed": 56,
+                "extra": 52
+              }
+            },
+            "association": {
+              "matched": 118,
+              "missed": 56,
+              "extra": 52
+            },
+            "association_delay": {
+              "median_ms": 18.84,
+              "p90_ms": 38.0
+            }
+          },
+          "refined": {
+            "labels": 174,
+            "tolerance_ms": {
+              "35": {
+                "matched": 30,
+                "missed": 144,
+                "extra": 158
+              },
+              "50": {
+                "matched": 74,
+                "missed": 100,
+                "extra": 114
+              },
+              "70": {
+                "matched": 115,
+                "missed": 59,
+                "extra": 74
+              }
+            },
+            "association": {
+              "matched": 114,
+              "missed": 60,
+              "extra": 75
+            },
+            "association_delay": {
+              "median_ms": 47.0,
+              "p90_ms": 56.67
+            }
+          }
+        },
+        "expanded": {
+          "baseline": {
+            "labels": 207,
+            "tolerance_ms": {
+              "35": {
+                "matched": 73,
+                "missed": 134,
+                "extra": 38
+              },
+              "50": {
+                "matched": 76,
+                "missed": 131,
+                "extra": 35
+              },
+              "70": {
+                "matched": 77,
+                "missed": 130,
+                "extra": 34
+              }
+            },
+            "association": {
+              "matched": 77,
+              "missed": 130,
+              "extra": 34
+            },
+            "association_delay": {
+              "median_ms": 17.7,
+              "p90_ms": 29.67
+            }
+          },
+          "refined": {
+            "labels": 207,
+            "tolerance_ms": {
+              "35": {
+                "matched": 12,
+                "missed": 195,
+                "extra": 93
+              },
+              "50": {
+                "matched": 64,
+                "missed": 143,
+                "extra": 41
+              },
+              "70": {
+                "matched": 94,
+                "missed": 113,
+                "extra": 11
+              }
+            },
+            "association": {
+              "matched": 93,
+              "missed": 114,
+              "extra": 12
+            },
+            "association_delay": {
+              "median_ms": 46.0,
+              "p90_ms": 58.67
+            }
+          }
+        }
+      },
+      "tracks": [
+        {
+          "track": "apricots_128bpm",
+          "labels": 14,
+          "tolerance_ms": {
+            "35": {
+              "matched": 1,
+              "missed": 13,
+              "extra": 3
+            },
+            "50": {
+              "matched": 3,
+              "missed": 11,
+              "extra": 1
+            },
+            "70": {
+              "matched": 4,
+              "missed": 10,
+              "extra": 0
+            }
+          },
+          "metrics_70ms": {
+            "matched": 4,
+            "missed": 10,
+            "extra": 0,
+            "recall": 0.2857142857142857,
+            "precision": 1.0
+          },
+          "threshold": 0.8995192307692308,
+          "cohorts": {
+            "original": {
+              "baseline": {
+                "labels": 14,
+                "tolerance_ms": {
+                  "35": {
+                    "matched": 13,
+                    "missed": 1,
+                    "extra": 1
+                  },
+                  "50": {
+                    "matched": 14,
+                    "missed": 0,
+                    "extra": 0
+                  },
+                  "70": {
+                    "matched": 14,
+                    "missed": 0,
+                    "extra": 0
+                  }
+                },
+                "association": {
+                  "matched": 14,
+                  "missed": 0,
+                  "extra": 0
+                },
+                "association_delay": {
+                  "median_ms": 21.17,
+                  "p90_ms": 30.67
+                }
+              },
+              "refined": {
+                "labels": 14,
+                "tolerance_ms": {
+                  "35": {
+                    "matched": 1,
+                    "missed": 13,
+                    "extra": 3
+                  },
+                  "50": {
+                    "matched": 3,
+                    "missed": 11,
+                    "extra": 1
+                  },
+                  "70": {
+                    "matched": 4,
+                    "missed": 10,
+                    "extra": 0
+                  }
+                },
+                "association": {
+                  "matched": 4,
+                  "missed": 10,
+                  "extra": 0
+                },
+                "association_delay": {
+                  "median_ms": 45.67,
+                  "p90_ms": 55.0
+                }
+              }
+            },
+            "expanded": {
+              "baseline": {
+                "labels": 0,
+                "tolerance_ms": {
+                  "35": {
+                    "matched": 0,
+                    "missed": 0,
+                    "extra": 0
+                  },
+                  "50": {
+                    "matched": 0,
+                    "missed": 0,
+                    "extra": 0
+                  },
+                  "70": {
+                    "matched": 0,
+                    "missed": 0,
+                    "extra": 0
+                  }
+                },
+                "association": {
+                  "matched": 0,
+                  "missed": 0,
+                  "extra": 0
+                },
+                "association_delay": {
+                  "median_ms": null,
+                  "p90_ms": null
+                }
+              },
+              "refined": {
+                "labels": 0,
+                "tolerance_ms": {
+                  "35": {
+                    "matched": 0,
+                    "missed": 0,
+                    "extra": 0
+                  },
+                  "50": {
+                    "matched": 0,
+                    "missed": 0,
+                    "extra": 0
+                  },
+                  "70": {
+                    "matched": 0,
+                    "missed": 0,
+                    "extra": 0
+                  }
+                },
+                "association": {
+                  "matched": 0,
+                  "missed": 0,
+                  "extra": 0
+                },
+                "association_delay": {
+                  "median_ms": null,
+                  "p90_ms": null
+                }
+              }
+            }
+          },
+          "diagnostics": {
+            "possible_duplicate_triggers": 0,
+            "p95_associated_delay_ms": 53.949999999999996,
+            "kick_free_minutes": 0.0,
+            "kick_free_extras": 0,
+            "kick_free_false_triggers_per_minute": null
+          }
+        },
+        {
+          "track": "bad_guy_128bpm",
+          "labels": 15,
+          "tolerance_ms": {
+            "35": {
+              "matched": 8,
+              "missed": 7,
+              "extra": 38
+            },
+            "50": {
+              "matched": 15,
+              "missed": 0,
+              "extra": 31
+            },
+            "70": {
+              "matched": 15,
+              "missed": 0,
+              "extra": 31
+            }
+          },
+          "metrics_70ms": {
+            "matched": 15,
+            "missed": 0,
+            "extra": 31,
+            "recall": 1.0,
+            "precision": 0.32608695652173914
+          },
+          "threshold": 0.8682692307692308,
+          "cohorts": {
+            "original": {
+              "baseline": {
+                "labels": 15,
+                "tolerance_ms": {
+                  "35": {
+                    "matched": 15,
+                    "missed": 0,
+                    "extra": 17
+                  },
+                  "50": {
+                    "matched": 15,
+                    "missed": 0,
+                    "extra": 17
+                  },
+                  "70": {
+                    "matched": 15,
+                    "missed": 0,
+                    "extra": 17
+                  }
+                },
+                "association": {
+                  "matched": 15,
+                  "missed": 0,
+                  "extra": 17
+                },
+                "association_delay": {
+                  "median_ms": 9.67,
+                  "p90_ms": 13.53
+                }
+              },
+              "refined": {
+                "labels": 15,
+                "tolerance_ms": {
+                  "35": {
+                    "matched": 8,
+                    "missed": 7,
+                    "extra": 38
+                  },
+                  "50": {
+                    "matched": 15,
+                    "missed": 0,
+                    "extra": 31
+                  },
+                  "70": {
+                    "matched": 15,
+                    "missed": 0,
+                    "extra": 31
+                  }
+                },
+                "association": {
+                  "matched": 15,
+                  "missed": 0,
+                  "extra": 31
+                },
+                "association_delay": {
+                  "median_ms": 34.92,
+                  "p90_ms": 48.45
+                }
+              }
+            },
+            "expanded": {
+              "baseline": {
+                "labels": 0,
+                "tolerance_ms": {
+                  "35": {
+                    "matched": 0,
+                    "missed": 0,
+                    "extra": 0
+                  },
+                  "50": {
+                    "matched": 0,
+                    "missed": 0,
+                    "extra": 0
+                  },
+                  "70": {
+                    "matched": 0,
+                    "missed": 0,
+                    "extra": 0
+                  }
+                },
+                "association": {
+                  "matched": 0,
+                  "missed": 0,
+                  "extra": 0
+                },
+                "association_delay": {
+                  "median_ms": null,
+                  "p90_ms": null
+                }
+              },
+              "refined": {
+                "labels": 0,
+                "tolerance_ms": {
+                  "35": {
+                    "matched": 0,
+                    "missed": 0,
+                    "extra": 0
+                  },
+                  "50": {
+                    "matched": 0,
+                    "missed": 0,
+                    "extra": 0
+                  },
+                  "70": {
+                    "matched": 0,
+                    "missed": 0,
+                    "extra": 0
+                  }
+                },
+                "association": {
+                  "matched": 0,
+                  "missed": 0,
+                  "extra": 0
+                },
+                "association_delay": {
+                  "median_ms": null,
+                  "p90_ms": null
+                }
+              }
+            }
+          },
+          "diagnostics": {
+            "possible_duplicate_triggers": 0,
+            "p95_associated_delay_ms": 48.5217,
+            "kick_free_minutes": 0.0,
+            "kick_free_extras": 0,
+            "kick_free_false_triggers_per_minute": null
+          }
+        },
+        {
+          "track": "feel_the_vibration_174bpm",
+          "labels": 15,
+          "tolerance_ms": {
+            "35": {
+              "matched": 3,
+              "missed": 12,
+              "extra": 14
+            },
+            "50": {
+              "matched": 6,
+              "missed": 9,
+              "extra": 11
+            },
+            "70": {
+              "matched": 15,
+              "missed": 0,
+              "extra": 2
+            }
+          },
+          "metrics_70ms": {
+            "matched": 15,
+            "missed": 0,
+            "extra": 2,
+            "recall": 1.0,
+            "precision": 0.8823529411764706
+          },
+          "threshold": 0.9086538461538461,
+          "cohorts": {
+            "original": {
+              "baseline": {
+                "labels": 15,
+                "tolerance_ms": {
+                  "35": {
+                    "matched": 3,
+                    "missed": 12,
+                    "extra": 14
+                  },
+                  "50": {
+                    "matched": 13,
+                    "missed": 2,
+                    "extra": 4
+                  },
+                  "70": {
+                    "matched": 15,
+                    "missed": 0,
+                    "extra": 2
+                  }
+                },
+                "association": {
+                  "matched": 15,
+                  "missed": 0,
+                  "extra": 2
+                },
+                "association_delay": {
+                  "median_ms": 40.67,
+                  "p90_ms": 53.33
+                }
+              },
+              "refined": {
+                "labels": 15,
+                "tolerance_ms": {
+                  "35": {
+                    "matched": 3,
+                    "missed": 12,
+                    "extra": 14
+                  },
+                  "50": {
+                    "matched": 6,
+                    "missed": 9,
+                    "extra": 11
+                  },
+                  "70": {
+                    "matched": 15,
+                    "missed": 0,
+                    "extra": 2
+                  }
+                },
+                "association": {
+                  "matched": 15,
+                  "missed": 0,
+                  "extra": 2
+                },
+                "association_delay": {
+                  "median_ms": 51.67,
+                  "p90_ms": 60.33
+                }
+              }
+            },
+            "expanded": {
+              "baseline": {
+                "labels": 0,
+                "tolerance_ms": {
+                  "35": {
+                    "matched": 0,
+                    "missed": 0,
+                    "extra": 0
+                  },
+                  "50": {
+                    "matched": 0,
+                    "missed": 0,
+                    "extra": 0
+                  },
+                  "70": {
+                    "matched": 0,
+                    "missed": 0,
+                    "extra": 0
+                  }
+                },
+                "association": {
+                  "matched": 0,
+                  "missed": 0,
+                  "extra": 0
+                },
+                "association_delay": {
+                  "median_ms": null,
+                  "p90_ms": null
+                }
+              },
+              "refined": {
+                "labels": 0,
+                "tolerance_ms": {
+                  "35": {
+                    "matched": 0,
+                    "missed": 0,
+                    "extra": 0
+                  },
+                  "50": {
+                    "matched": 0,
+                    "missed": 0,
+                    "extra": 0
+                  },
+                  "70": {
+                    "matched": 0,
+                    "missed": 0,
+                    "extra": 0
+                  }
+                },
+                "association": {
+                  "matched": 0,
+                  "missed": 0,
+                  "extra": 0
+                },
+                "association_delay": {
+                  "median_ms": null,
+                  "p90_ms": null
+                }
+              }
+            }
+          },
+          "diagnostics": {
+            "possible_duplicate_triggers": 1,
+            "p95_associated_delay_ms": 61.033199999999994,
+            "kick_free_minutes": 0.0,
+            "kick_free_extras": 0,
+            "kick_free_false_triggers_per_minute": null
+          }
+        },
+        {
+          "track": "inhale_exhale_145bpm",
+          "labels": 12,
+          "tolerance_ms": {
+            "35": {
+              "matched": 4,
+              "missed": 8,
+              "extra": 15
+            },
+            "50": {
+              "matched": 10,
+              "missed": 2,
+              "extra": 9
+            },
+            "70": {
+              "matched": 12,
+              "missed": 0,
+              "extra": 7
+            }
+          },
+          "metrics_70ms": {
+            "matched": 12,
+            "missed": 0,
+            "extra": 7,
+            "recall": 1.0,
+            "precision": 0.631578947368421
+          },
+          "threshold": 0.9562499999999999,
+          "cohorts": {
+            "original": {
+              "baseline": {
+                "labels": 12,
+                "tolerance_ms": {
+                  "35": {
+                    "matched": 11,
+                    "missed": 1,
+                    "extra": 14
+                  },
+                  "50": {
+                    "matched": 11,
+                    "missed": 1,
+                    "extra": 14
+                  },
+                  "70": {
+                    "matched": 11,
+                    "missed": 1,
+                    "extra": 14
+                  }
+                },
+                "association": {
+                  "matched": 11,
+                  "missed": 1,
+                  "extra": 14
+                },
+                "association_delay": {
+                  "median_ms": 13.0,
+                  "p90_ms": 15.67
+                }
+              },
+              "refined": {
+                "labels": 12,
+                "tolerance_ms": {
+                  "35": {
+                    "matched": 4,
+                    "missed": 8,
+                    "extra": 15
+                  },
+                  "50": {
+                    "matched": 10,
+                    "missed": 2,
+                    "extra": 9
+                  },
+                  "70": {
+                    "matched": 12,
+                    "missed": 0,
+                    "extra": 7
+                  }
+                },
+                "association": {
+                  "matched": 12,
+                  "missed": 0,
+                  "extra": 7
+                },
+                "association_delay": {
+                  "median_ms": 43.0,
+                  "p90_ms": 51.33
+                }
+              }
+            },
+            "expanded": {
+              "baseline": {
+                "labels": 0,
+                "tolerance_ms": {
+                  "35": {
+                    "matched": 0,
+                    "missed": 0,
+                    "extra": 0
+                  },
+                  "50": {
+                    "matched": 0,
+                    "missed": 0,
+                    "extra": 0
+                  },
+                  "70": {
+                    "matched": 0,
+                    "missed": 0,
+                    "extra": 0
+                  }
+                },
+                "association": {
+                  "matched": 0,
+                  "missed": 0,
+                  "extra": 0
+                },
+                "association_delay": {
+                  "median_ms": null,
+                  "p90_ms": null
+                }
+              },
+              "refined": {
+                "labels": 0,
+                "tolerance_ms": {
+                  "35": {
+                    "matched": 0,
+                    "missed": 0,
+                    "extra": 0
+                  },
+                  "50": {
+                    "matched": 0,
+                    "missed": 0,
+                    "extra": 0
+                  },
+                  "70": {
+                    "matched": 0,
+                    "missed": 0,
+                    "extra": 0
+                  }
+                },
+                "association": {
+                  "matched": 0,
+                  "missed": 0,
+                  "extra": 0
+                },
+                "association_delay": {
+                  "median_ms": null,
+                  "p90_ms": null
+                }
+              }
+            }
+          },
+          "diagnostics": {
+            "possible_duplicate_triggers": 0,
+            "p95_associated_delay_ms": 51.63315,
+            "kick_free_minutes": 0.0,
+            "kick_free_extras": 0,
+            "kick_free_false_triggers_per_minute": null
+          }
+        },
+        {
+          "track": "tears_140bpm",
+          "labels": 10,
+          "tolerance_ms": {
+            "35": {
+              "matched": 5,
+              "missed": 5,
+              "extra": 32
+            },
+            "50": {
+              "matched": 10,
+              "missed": 0,
+              "extra": 27
+            },
+            "70": {
+              "matched": 10,
+              "missed": 0,
+              "extra": 27
+            }
+          },
+          "metrics_70ms": {
+            "matched": 10,
+            "missed": 0,
+            "extra": 27,
+            "recall": 1.0,
+            "precision": 0.2702702702702703
+          },
+          "threshold": 0.9197115384615385,
+          "cohorts": {
+            "original": {
+              "baseline": {
+                "labels": 10,
+                "tolerance_ms": {
+                  "35": {
+                    "matched": 10,
+                    "missed": 0,
+                    "extra": 7
+                  },
+                  "50": {
+                    "matched": 10,
+                    "missed": 0,
+                    "extra": 7
+                  },
+                  "70": {
+                    "matched": 10,
+                    "missed": 0,
+                    "extra": 7
+                  }
+                },
+                "association": {
+                  "matched": 10,
+                  "missed": 0,
+                  "extra": 7
+                },
+                "association_delay": {
+                  "median_ms": 13.67,
+                  "p90_ms": 23.33
+                }
+              },
+              "refined": {
+                "labels": 10,
+                "tolerance_ms": {
+                  "35": {
+                    "matched": 5,
+                    "missed": 5,
+                    "extra": 32
+                  },
+                  "50": {
+                    "matched": 10,
+                    "missed": 0,
+                    "extra": 27
+                  },
+                  "70": {
+                    "matched": 10,
+                    "missed": 0,
+                    "extra": 27
+                  }
+                },
+                "association": {
+                  "matched": 10,
+                  "missed": 0,
+                  "extra": 27
+                },
+                "association_delay": {
+                  "median_ms": 33.83,
+                  "p90_ms": 43.0
+                }
+              }
+            },
+            "expanded": {
+              "baseline": {
+                "labels": 0,
+                "tolerance_ms": {
+                  "35": {
+                    "matched": 0,
+                    "missed": 0,
+                    "extra": 0
+                  },
+                  "50": {
+                    "matched": 0,
+                    "missed": 0,
+                    "extra": 0
+                  },
+                  "70": {
+                    "matched": 0,
+                    "missed": 0,
+                    "extra": 0
+                  }
+                },
+                "association": {
+                  "matched": 0,
+                  "missed": 0,
+                  "extra": 0
+                },
+                "association_delay": {
+                  "median_ms": null,
+                  "p90_ms": null
+                }
+              },
+              "refined": {
+                "labels": 0,
+                "tolerance_ms": {
+                  "35": {
+                    "matched": 0,
+                    "missed": 0,
+                    "extra": 0
+                  },
+                  "50": {
+                    "matched": 0,
+                    "missed": 0,
+                    "extra": 0
+                  },
+                  "70": {
+                    "matched": 0,
+                    "missed": 0,
+                    "extra": 0
+                  }
+                },
+                "association": {
+                  "matched": 0,
+                  "missed": 0,
+                  "extra": 0
+                },
+                "association_delay": {
+                  "median_ms": null,
+                  "p90_ms": null
+                }
+              }
+            }
+          },
+          "diagnostics": {
+            "possible_duplicate_triggers": 0,
+            "p95_associated_delay_ms": 43.36685,
+            "kick_free_minutes": 0.0,
+            "kick_free_extras": 0,
+            "kick_free_false_triggers_per_minute": null
+          }
+        },
+        {
+          "track": "late_night",
+          "labels": 77,
+          "tolerance_ms": {
+            "35": {
+              "matched": 4,
+              "missed": 73,
+              "extra": 48
+            },
+            "50": {
+              "matched": 20,
+              "missed": 57,
+              "extra": 32
+            },
+            "70": {
+              "matched": 52,
+              "missed": 25,
+              "extra": 1
+            }
+          },
+          "metrics_70ms": {
+            "matched": 52,
+            "missed": 25,
+            "extra": 1,
+            "recall": 0.6753246753246753,
+            "precision": 0.9811320754716981
+          },
+          "threshold": 0.9043269230769231,
+          "cohorts": {
+            "original": {
+              "baseline": {
+                "labels": 29,
+                "tolerance_ms": {
+                  "35": {
+                    "matched": 22,
+                    "missed": 7,
+                    "extra": 9
+                  },
+                  "50": {
+                    "matched": 23,
+                    "missed": 6,
+                    "extra": 8
+                  },
+                  "70": {
+                    "matched": 23,
+                    "missed": 6,
+                    "extra": 8
+                  }
+                },
+                "association": {
+                  "matched": 23,
+                  "missed": 6,
+                  "extra": 8
+                },
+                "association_delay": {
+                  "median_ms": 19.33,
+                  "p90_ms": 26.0
+                }
+              },
+              "refined": {
+                "labels": 29,
+                "tolerance_ms": {
+                  "35": {
+                    "matched": 0,
+                    "missed": 29,
+                    "extra": 18
+                  },
+                  "50": {
+                    "matched": 6,
+                    "missed": 23,
+                    "extra": 12
+                  },
+                  "70": {
+                    "matched": 19,
+                    "missed": 10,
+                    "extra": 0
+                  }
+                },
+                "association": {
+                  "matched": 19,
+                  "missed": 10,
+                  "extra": 0
+                },
+                "association_delay": {
+                  "median_ms": 51.33,
+                  "p90_ms": 60.0
+                }
+              }
+            },
+            "expanded": {
+              "baseline": {
+                "labels": 48,
+                "tolerance_ms": {
+                  "35": {
+                    "matched": 31,
+                    "missed": 17,
+                    "extra": 1
+                  },
+                  "50": {
+                    "matched": 31,
+                    "missed": 17,
+                    "extra": 1
+                  },
+                  "70": {
+                    "matched": 31,
+                    "missed": 17,
+                    "extra": 1
+                  }
+                },
+                "association": {
+                  "matched": 31,
+                  "missed": 17,
+                  "extra": 1
+                },
+                "association_delay": {
+                  "median_ms": 18.33,
+                  "p90_ms": 24.0
+                }
+              },
+              "refined": {
+                "labels": 48,
+                "tolerance_ms": {
+                  "35": {
+                    "matched": 4,
+                    "missed": 44,
+                    "extra": 30
+                  },
+                  "50": {
+                    "matched": 14,
+                    "missed": 34,
+                    "extra": 20
+                  },
+                  "70": {
+                    "matched": 33,
+                    "missed": 15,
+                    "extra": 1
+                  }
+                },
+                "association": {
+                  "matched": 33,
+                  "missed": 15,
+                  "extra": 1
+                },
+                "association_delay": {
+                  "median_ms": 51.33,
+                  "p90_ms": 59.67
+                }
+              }
+            }
+          },
+          "diagnostics": {
+            "possible_duplicate_triggers": 0,
+            "p95_associated_delay_ms": 61.682999999999986,
+            "kick_free_minutes": 0.2,
+            "kick_free_extras": 0,
+            "kick_free_false_triggers_per_minute": 0.0
+          }
+        },
+        {
+          "track": "midnight_patience",
+          "labels": 88,
+          "tolerance_ms": {
+            "35": {
+              "matched": 11,
+              "missed": 77,
+              "extra": 42
+            },
+            "50": {
+              "matched": 37,
+              "missed": 51,
+              "extra": 16
+            },
+            "70": {
+              "matched": 43,
+              "missed": 45,
+              "extra": 10
+            }
+          },
+          "metrics_70ms": {
+            "matched": 43,
+            "missed": 45,
+            "extra": 10,
+            "recall": 0.48863636363636365,
+            "precision": 0.8113207547169812
+          },
+          "threshold": 0.8745192307692308,
+          "cohorts": {
+            "original": {
+              "baseline": {
+                "labels": 35,
+                "tolerance_ms": {
+                  "35": {
+                    "matched": 16,
+                    "missed": 19,
+                    "extra": 1
+                  },
+                  "50": {
+                    "matched": 17,
+                    "missed": 18,
+                    "extra": 0
+                  },
+                  "70": {
+                    "matched": 17,
+                    "missed": 18,
+                    "extra": 0
+                  }
+                },
+                "association": {
+                  "matched": 17,
+                  "missed": 18,
+                  "extra": 0
+                },
+                "association_delay": {
+                  "median_ms": 17.0,
+                  "p90_ms": 31.0
+                }
+              },
+              "refined": {
+                "labels": 35,
+                "tolerance_ms": {
+                  "35": {
+                    "matched": 6,
+                    "missed": 29,
+                    "extra": 23
+                  },
+                  "50": {
+                    "matched": 18,
+                    "missed": 17,
+                    "extra": 11
+                  },
+                  "70": {
+                    "matched": 22,
+                    "missed": 13,
+                    "extra": 7
+                  }
+                },
+                "association": {
+                  "matched": 21,
+                  "missed": 14,
+                  "extra": 8
+                },
+                "association_delay": {
+                  "median_ms": 42.33,
+                  "p90_ms": 56.67
+                }
+              }
+            },
+            "expanded": {
+              "baseline": {
+                "labels": 53,
+                "tolerance_ms": {
+                  "35": {
+                    "matched": 17,
+                    "missed": 36,
+                    "extra": 20
+                  },
+                  "50": {
+                    "matched": 18,
+                    "missed": 35,
+                    "extra": 19
+                  },
+                  "70": {
+                    "matched": 19,
+                    "missed": 34,
+                    "extra": 18
+                  }
+                },
+                "association": {
+                  "matched": 19,
+                  "missed": 34,
+                  "extra": 18
+                },
+                "association_delay": {
+                  "median_ms": 21.0,
+                  "p90_ms": 36.67
+                }
+              },
+              "refined": {
+                "labels": 53,
+                "tolerance_ms": {
+                  "35": {
+                    "matched": 5,
+                    "missed": 48,
+                    "extra": 19
+                  },
+                  "50": {
+                    "matched": 19,
+                    "missed": 34,
+                    "extra": 5
+                  },
+                  "70": {
+                    "matched": 21,
+                    "missed": 32,
+                    "extra": 3
+                  }
+                },
+                "association": {
+                  "matched": 20,
+                  "missed": 33,
+                  "extra": 4
+                },
+                "association_delay": {
+                  "median_ms": 46.33,
+                  "p90_ms": 70.33
+                }
+              }
+            }
+          },
+          "diagnostics": {
+            "possible_duplicate_triggers": 4,
+            "p95_associated_delay_ms": 70.333,
+            "kick_free_minutes": 0.6,
+            "kick_free_extras": 0,
+            "kick_free_false_triggers_per_minute": 0.0
+          }
+        },
+        {
+          "track": "miracle",
+          "labels": 32,
+          "tolerance_ms": {
+            "35": {
+              "matched": 3,
+              "missed": 29,
+              "extra": 21
+            },
+            "50": {
+              "matched": 13,
+              "missed": 19,
+              "extra": 11
+            },
+            "70": {
+              "matched": 23,
+              "missed": 9,
+              "extra": 1
+            }
+          },
+          "metrics_70ms": {
+            "matched": 23,
+            "missed": 9,
+            "extra": 1,
+            "recall": 0.71875,
+            "precision": 0.9583333333333334
+          },
+          "threshold": 0.920673076923077,
+          "cohorts": {
+            "original": {
+              "baseline": {
+                "labels": 12,
+                "tolerance_ms": {
+                  "35": {
+                    "matched": 9,
+                    "missed": 3,
+                    "extra": 4
+                  },
+                  "50": {
+                    "matched": 9,
+                    "missed": 3,
+                    "extra": 4
+                  },
+                  "70": {
+                    "matched": 9,
+                    "missed": 3,
+                    "extra": 4
+                  }
+                },
+                "association": {
+                  "matched": 9,
+                  "missed": 3,
+                  "extra": 4
+                },
+                "association_delay": {
+                  "median_ms": 22.62,
+                  "p90_ms": 25.35
+                }
+              },
+              "refined": {
+                "labels": 12,
+                "tolerance_ms": {
+                  "35": {
+                    "matched": 2,
+                    "missed": 10,
+                    "extra": 5
+                  },
+                  "50": {
+                    "matched": 4,
+                    "missed": 8,
+                    "extra": 3
+                  },
+                  "70": {
+                    "matched": 7,
+                    "missed": 5,
+                    "extra": 0
+                  }
+                },
+                "association": {
+                  "matched": 7,
+                  "missed": 5,
+                  "extra": 0
+                },
+                "association_delay": {
+                  "median_ms": 47.05,
+                  "p90_ms": 57.79
+                }
+              }
+            },
+            "expanded": {
+              "baseline": {
+                "labels": 20,
+                "tolerance_ms": {
+                  "35": {
+                    "matched": 10,
+                    "missed": 10,
+                    "extra": 12
+                  },
+                  "50": {
+                    "matched": 10,
+                    "missed": 10,
+                    "extra": 12
+                  },
+                  "70": {
+                    "matched": 10,
+                    "missed": 10,
+                    "extra": 12
+                  }
+                },
+                "association": {
+                  "matched": 10,
+                  "missed": 10,
+                  "extra": 12
+                },
+                "association_delay": {
+                  "median_ms": 20.08,
+                  "p90_ms": 23.86
+                }
+              },
+              "refined": {
+                "labels": 20,
+                "tolerance_ms": {
+                  "35": {
+                    "matched": 1,
+                    "missed": 19,
+                    "extra": 16
+                  },
+                  "50": {
+                    "matched": 9,
+                    "missed": 11,
+                    "extra": 8
+                  },
+                  "70": {
+                    "matched": 16,
+                    "missed": 4,
+                    "extra": 1
+                  }
+                },
+                "association": {
+                  "matched": 16,
+                  "missed": 4,
+                  "extra": 1
+                },
+                "association_delay": {
+                  "median_ms": 46.96,
+                  "p90_ms": 56.13
+                }
+              }
+            }
+          },
+          "diagnostics": {
+            "possible_duplicate_triggers": 0,
+            "p95_associated_delay_ms": 57.7425,
+            "kick_free_minutes": 0.8,
+            "kick_free_extras": 0,
+            "kick_free_false_triggers_per_minute": 0.0
+          }
+        },
+        {
+          "track": "heavy_on_mind",
+          "labels": 118,
+          "tolerance_ms": {
+            "35": {
+              "matched": 3,
+              "missed": 115,
+              "extra": 38
+            },
+            "50": {
+              "matched": 24,
+              "missed": 94,
+              "extra": 17
+            },
+            "70": {
+              "matched": 35,
+              "missed": 83,
+              "extra": 6
+            }
+          },
+          "metrics_70ms": {
+            "matched": 35,
+            "missed": 83,
+            "extra": 6,
+            "recall": 0.2966101694915254,
+            "precision": 0.8536585365853658
+          },
+          "threshold": 0.8951923076923077,
+          "cohorts": {
+            "original": {
+              "baseline": {
+                "labels": 32,
+                "tolerance_ms": {
+                  "35": {
+                    "matched": 4,
+                    "missed": 28,
+                    "extra": 0
+                  },
+                  "50": {
+                    "matched": 4,
+                    "missed": 28,
+                    "extra": 0
+                  },
+                  "70": {
+                    "matched": 4,
+                    "missed": 28,
+                    "extra": 0
+                  }
+                },
+                "association": {
+                  "matched": 4,
+                  "missed": 28,
+                  "extra": 0
+                },
+                "association_delay": {
+                  "median_ms": 20.33,
+                  "p90_ms": 21.91
+                }
+              },
+              "refined": {
+                "labels": 32,
+                "tolerance_ms": {
+                  "35": {
+                    "matched": 1,
+                    "missed": 31,
+                    "extra": 10
+                  },
+                  "50": {
+                    "matched": 2,
+                    "missed": 30,
+                    "extra": 9
+                  },
+                  "70": {
+                    "matched": 11,
+                    "missed": 21,
+                    "extra": 0
+                  }
+                },
+                "association": {
+                  "matched": 11,
+                  "missed": 21,
+                  "extra": 0
+                },
+                "association_delay": {
+                  "median_ms": 54.41,
+                  "p90_ms": 58.08
+                }
+              }
+            },
+            "expanded": {
+              "baseline": {
+                "labels": 86,
+                "tolerance_ms": {
+                  "35": {
+                    "matched": 15,
+                    "missed": 71,
+                    "extra": 5
+                  },
+                  "50": {
+                    "matched": 17,
+                    "missed": 69,
+                    "extra": 3
+                  },
+                  "70": {
+                    "matched": 17,
+                    "missed": 69,
+                    "extra": 3
+                  }
+                },
+                "association": {
+                  "matched": 17,
+                  "missed": 69,
+                  "extra": 3
+                },
+                "association_delay": {
+                  "median_ms": 15.14,
+                  "p90_ms": 35.84
+                }
+              },
+              "refined": {
+                "labels": 86,
+                "tolerance_ms": {
+                  "35": {
+                    "matched": 2,
+                    "missed": 84,
+                    "extra": 28
+                  },
+                  "50": {
+                    "matched": 22,
+                    "missed": 64,
+                    "extra": 8
+                  },
+                  "70": {
+                    "matched": 24,
+                    "missed": 62,
+                    "extra": 6
+                  }
+                },
+                "association": {
+                  "matched": 24,
+                  "missed": 62,
+                  "extra": 6
+                },
+                "association_delay": {
+                  "median_ms": 44.38,
+                  "p90_ms": 49.77
+                }
+              }
+            }
+          },
+          "diagnostics": {
+            "possible_duplicate_triggers": 0,
+            "p95_associated_delay_ms": 57.32169999999999,
+            "kick_free_minutes": 0.2,
+            "kick_free_extras": 0,
+            "kick_free_false_triggers_per_minute": 0.0
+          }
+        }
+      ],
+      "kick_free_minutes": 1.8,
+      "kick_free_extras": 0,
+      "kick_free_false_triggers_per_minute": 0.0,
+      "possible_duplicate_triggers": 5,
+      "miss_reasons": {
+        "score_rejection": 166,
+        "matching_competition": 2,
+        "uncertainty_exclusion": 1,
+        "refractory_suppression": 1,
+        "no_timely_raw_candidate": 2
+      },
+      "associated_delay_p95_ms": 60.23309999999999
+    }
+  ],
+  "diagnosis_interpretation": "Shape misses:166 cutoff rejections,2 raw candidate gaps,2 matching competitions,1 refractory suppression,1 pre-existing uncertainty-boundary artifact. Temporal opportunity does not establish a kick-caused candidate. Heavy event-best/extra score order is only15.9%; Midnight35.6%, with extras outranking many kicks. This is evidence of poor source discrimination and song transfer, not a demonstrated information-theoretic DSP limit. More dimensions or SVD cannot restore discarded spectral/phase information; frequency descent visible in full raw spectrograms is a possible future measurement, not proven separable within the current causal deadline.",
+  "limitations": "Explored development songs with provisional visual source-assisted labels. Shape values do not reconstruct clipped information or identify sources by themselves. No added observation delay, reserved audio, native timing proof, or live integration."
+}

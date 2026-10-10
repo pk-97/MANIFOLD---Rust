@@ -119,6 +119,10 @@ pub struct GpuEncoder {
     /// never sent and whose flag is down was abandoned. Taken from the store's
     /// pool on the first template execute, so warm frames allocate nothing.
     pub(crate) template_token: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    /// Sample counts of the open render pass color and depth attachments
+    /// (0 = none), set only in debug builds so every pipeline bind can
+    /// debug-assert the pipeline was built for this pass.
+    pub(crate) pass_samples: (u32, u32),
 }
 
 unsafe impl Send for GpuEncoder {}
@@ -541,9 +545,40 @@ impl GpuEncoder {
                 att.setEndOfFragmentSampleIndex(end);
             }
         }
+        if cfg!(debug_assertions) {
+            let samples = |t: Option<Retained<ProtocolObject<dyn objc2_metal::MTLTexture>>>| {
+                t.map_or(0, |t| t.sampleCount() as u32)
+            };
+            self.pass_samples = unsafe {
+                (
+                    samples(desc.colorAttachments().objectAtIndexedSubscript(0).texture()),
+                    samples(desc.depthAttachment().texture()),
+                )
+            };
+        }
         self.cmd_buf
             .renderCommandEncoderWithDescriptor(desc)
             .expect("renderCommandEncoderWithDescriptor failed")
+    }
+
+    /// Bind a render pipeline. Debug builds assert it was built for the open
+    /// pass's sample count: a mismatch is undefined on Metal without the
+    /// debug layer (BUG-hkbdp.6.16, the multibounce GPU hang flake).
+    fn bind_render_pipeline(
+        &self,
+        enc: &ProtocolObject<dyn MTLRenderCommandEncoder>,
+        pipeline: &GpuRenderPipeline,
+    ) {
+        let (color, depth) = self.pass_samples;
+        debug_assert!(
+            (color == 0 || color == pipeline.sample_count) && (depth == 0 || depth == pipeline.sample_count),
+            "[GPU] pipeline '{}' built for {} samples bound in a pass with color {} / depth {} samples",
+            pipeline.label,
+            pipeline.sample_count,
+            color,
+            depth,
+        );
+        enc.setRenderPipelineState(&pipeline.state);
     }
 
     /// Create a blit encoder, attaching boundary timestamp samples when
@@ -1079,7 +1114,7 @@ impl GpuEncoder {
             let debug_label = NSString::from_str(label);
             enc.pushDebugGroup(&debug_label);
             enc.insertDebugSignpost(&debug_label);
-            enc.setRenderPipelineState(&pipeline.state);
+            self.bind_render_pipeline(&enc, pipeline);
         }
 
         apply_bindings_draw_fullscreen(&enc, pipeline, bindings);
@@ -1123,7 +1158,7 @@ impl GpuEncoder {
             let debug_label = NSString::from_str(label);
             enc.pushDebugGroup(&debug_label);
             enc.insertDebugSignpost(&debug_label);
-            enc.setRenderPipelineState(&pipeline.state);
+            self.bind_render_pipeline(&enc, pipeline);
         }
 
         let (x, y, w, h) = viewport;
@@ -1178,7 +1213,7 @@ impl GpuEncoder {
             let debug_label = NSString::from_str(label);
             enc.pushDebugGroup(&debug_label);
             enc.insertDebugSignpost(&debug_label);
-            enc.setRenderPipelineState(&pipeline.state);
+            self.bind_render_pipeline(&enc, pipeline);
         }
 
         apply_bindings_draw_both_stages(&enc, pipeline, bindings);
@@ -1228,7 +1263,7 @@ impl GpuEncoder {
             let debug_label = NSString::from_str(label);
             enc.pushDebugGroup(&debug_label);
             enc.insertDebugSignpost(&debug_label);
-            enc.setRenderPipelineState(&pipeline.state);
+            self.bind_render_pipeline(&enc, pipeline);
         }
 
         apply_bindings_draw_both_stages(&enc, pipeline, bindings);
@@ -1452,7 +1487,7 @@ impl GpuEncoder {
                 continue;
             }
             unsafe {
-                enc.setRenderPipelineState(&draw.pipeline.state);
+                self.bind_render_pipeline(&enc, draw.pipeline);
                 // SCENE_RENDER_MODE_DESIGN.md D6: per-draw fill mode (wireframe
                 // = Lines). Encoder state, not a pipeline variant.
                 enc.setTriangleFillMode(format::to_mtl_triangle_fill_mode(draw.fill_mode));
@@ -1478,7 +1513,7 @@ impl GpuEncoder {
                     continue;
                 }
                 unsafe {
-                    enc.setRenderPipelineState(&draw.pipeline.state);
+                    self.bind_render_pipeline(&enc, draw.pipeline);
                     enc.setTriangleFillMode(format::to_mtl_triangle_fill_mode(draw.fill_mode));
                 }
                 apply_bindings_draw_both_stages(&enc, draw.pipeline, draw.bindings);
@@ -1559,7 +1594,7 @@ impl GpuEncoder {
                 continue;
             }
             unsafe {
-                enc.setRenderPipelineState(&draw.pipeline.state);
+                self.bind_render_pipeline(&enc, draw.pipeline);
                 // SCENE_RENDER_MODE_DESIGN.md D6: per-draw fill mode (wireframe
                 // = Lines), same as the MSAA colour batch.
                 enc.setTriangleFillMode(format::to_mtl_triangle_fill_mode(draw.fill_mode));
@@ -1620,7 +1655,7 @@ impl GpuEncoder {
             let debug_label = NSString::from_str(label);
             enc.pushDebugGroup(&debug_label);
             enc.insertDebugSignpost(&debug_label);
-            enc.setRenderPipelineState(&pipeline.state);
+            self.bind_render_pipeline(&enc, pipeline);
             enc.setDepthStencilState(Some(&depth_stencil_state.raw));
             enc.setViewport(MTLViewport {
                 originX: 0.0,
@@ -1702,7 +1737,7 @@ impl GpuEncoder {
             let debug_label = NSString::from_str(label);
             enc.pushDebugGroup(&debug_label);
             enc.insertDebugSignpost(&debug_label);
-            enc.setRenderPipelineState(&pipeline.state);
+            self.bind_render_pipeline(&enc, pipeline);
             enc.setDepthStencilState(Some(&depth_stencil_state.raw));
             enc.setTriangleFillMode(format::to_mtl_triangle_fill_mode(fill_mode));
 
@@ -1807,7 +1842,7 @@ impl GpuEncoder {
                 continue;
             }
             unsafe {
-                enc.setRenderPipelineState(&draw.pipeline.state);
+                self.bind_render_pipeline(&enc, draw.pipeline);
                 // INV-R3 (SCENE_RENDER_MODE_DESIGN.md): shadow maps and depth
                 // prepasses ALWAYS fill AND always draw triangles — lines-only
                 // or point-only depth would break occlusion, shadows, and
@@ -1880,7 +1915,7 @@ impl GpuEncoder {
             let debug_label = NSString::from_str(label);
             enc.pushDebugGroup(&debug_label);
             enc.insertDebugSignpost(&debug_label);
-            enc.setRenderPipelineState(&pipeline.state);
+            self.bind_render_pipeline(&enc, pipeline);
 
             if let Some((x, y, w, h)) = viewport {
                 enc.setViewport(MTLViewport {
@@ -1990,7 +2025,7 @@ impl GpuEncoder {
             let debug_label = NSString::from_str(label);
             enc.pushDebugGroup(&debug_label);
             enc.insertDebugSignpost(&debug_label);
-            enc.setRenderPipelineState(&pipeline.state);
+            self.bind_render_pipeline(&enc, pipeline);
 
             if let Some((x, y, w, h)) = viewport {
                 enc.setViewport(MTLViewport {

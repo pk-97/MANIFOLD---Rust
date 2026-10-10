@@ -1,0 +1,1499 @@
+{
+  "status": "lead_reviewed_visual_provisional",
+  "purpose": "Additional Pattern development evaluation; no Pattern examples enter compared models.",
+  "selection_sha256": "c281721ae176e83487225fed5828c4d821f4a26a013bc13bc6c5ac6c6620ac2e",
+  "ground_truth": "Visual master-waveform/spectrogram provisional proposals, not independent human listening truth.",
+  "no_detector_outputs_used": true,
+  "no_fitting_or_scoring": true,
+  "review_method": "Native44.1kHz master excerpts. Exact waveform extrema and stereo power Hann2048/hop96 centred STFT; only raw waveforms determine onset brackets. All fixed cores retained. Named48kHz drums were hydrated under a60s bound but no reliable clock alignment was established; source values provide no label corroboration.",
+  "source_alignment": {
+    "status": "unverified_not_used",
+    "stem_to_master_seconds": null,
+    "probe_path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d3/alignment_probe.json",
+    "probe_sha256": "5909cb135735daa63693a1b2ec5a2365a1675b47be23426ea0083c9471e1bd12",
+    "limitation": "Opening drums are silent; middle correlation is weak; later periodic peaks have ambiguous competing lags. Master and named-drums recordings also differ in duration and musical content. No offset was accepted."
+  },
+  "timing": "Master seconds authoritative. Native source sample intervals and excerpt origins preserved; source onset coordinates null because no mapping was accepted. Midpoints represent manually read brackets, with explicit unknown regions kept separate.",
+  "unknown_policy": "Unknown physical intervals must be excluded using the existing annotation response-window rule after lead acceptance; no threshold-specific changes. Recording-start uncertainty is retained. Provisional negative claims use master evidence, not named-source silence.",
+  "tracks": [
+    {
+      "track": "pattern",
+      "master_path": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/EMERGENCE - ALBUM 2026/FINAL MASTERS/Latent Space - 03 - Pattern MSTR V3 APRS.wav",
+      "audio_sha256": "34864f9da39f84de1215285336d8aa49d3804b30bedabe84505693fe945a8755",
+      "sample_rate": 44100,
+      "frames": 10136515,
+      "source_role": "finished_master_by_local_inventory_filename",
+      "named_drums_path": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/STEMS/PATTERN STEMS/PATTERN - DRUMS.wav",
+      "named_drums_sha256": "a728e62a1f5c635423ed4b94c9c91f4a135c5a66a18ecffe805607193735219e",
+      "stem_to_master_seconds": null,
+      "cores": [
+        {
+          "id": "d3_pattern_000",
+          "start_s": 0,
+          "end_s": 12,
+          "review_start_s": 0,
+          "review_end_s": 12.25,
+          "scoring_ready": true,
+          "scoring_ready_status": "lead_reviewed_visual_provisional",
+          "kick_times_s": [],
+          "onset_intervals": [],
+          "uncertain_regions": [
+            {
+              "start_s": 0.0,
+              "end_s": 0.04,
+              "reason": "Recording begins inside an already sounding low-frequency carrier. A separate onset at the hard recording boundary cannot be identified independently."
+            }
+          ],
+          "review_findings": "Provisional negative outside the explicit opening unknown. Continuous low-frequency cycles and horizontal harmonics persist across all reviewed audio, with timbre changes near3.53/7.06/10.60s. These changes do not show the separate descending low-frequency packets present in the later active cores. Named-drums silence is not used as evidence of master kick absence.",
+          "raw_excerpt_coordinates": {
+            "master": {
+              "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d3/raw/d3_pattern_000_master.wav",
+              "sha256": "922b89c8d23f62b1074e6072bb2b4408f386098f0071981e0d237e4695f801bc",
+              "original_path": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/EMERGENCE - ALBUM 2026/FINAL MASTERS/Latent Space - 03 - Pattern MSTR V3 APRS.wav",
+              "original_sha256": "34864f9da39f84de1215285336d8aa49d3804b30bedabe84505693fe945a8755",
+              "sample_rate": 44100,
+              "source_sample_range": [
+                0,
+                540225
+              ],
+              "master_axis_origin_s": 0.0,
+              "frames": 540225,
+              "channels": 2,
+              "decoded_samples_exact": true,
+              "spectrogram_path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d3/raw/d3_pattern_000_master_spectrogram.npz",
+              "spectrogram_sha256": "c178efc21a7651e9995700f9a18f9b8a64293f244f85f83f4a33d1f07e0aa55e",
+              "clock_alignment_status": "native_master"
+            }
+          },
+          "named_drums_reference": {
+            "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d3/raw/d3_pattern_000_drums.wav",
+            "sha256": "a186102f92cf44cb50d1d886cbcf02b6bad9964328726856b95966bb041665b4",
+            "original_path": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/STEMS/PATTERN STEMS/PATTERN - DRUMS.wav",
+            "original_sha256": "a728e62a1f5c635423ed4b94c9c91f4a135c5a66a18ecffe805607193735219e",
+            "sample_rate": 48000,
+            "source_sample_range": [
+              0,
+              588000
+            ],
+            "master_axis_origin_s": 0.0,
+            "frames": 588000,
+            "channels": 2,
+            "decoded_samples_exact": true,
+            "spectrogram_path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d3/raw/d3_pattern_000_drums_spectrogram.npz",
+            "spectrogram_sha256": "16456ce7d5e43bc628b39173a1653d42d001be93144c0312dc825c16efa4cd02",
+            "clock_alignment_status": "unverified_zero_for_visual_comparison"
+          },
+          "source_role": "Unaligned named drums; excluded from annotation truth.",
+          "source_master_mapping": null,
+          "overview": {
+            "core": "d3_pattern_000",
+            "kind": "master_context",
+            "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d3/raw/d3_pattern_000_master_context.png",
+            "sha256": "05f02e6781049994d7e977f2050c3b253bbe2ce18d3690e41405ca602faeecf8"
+          },
+          "details": [
+            {
+              "core": "d3_pattern_000",
+              "windows": [
+                [
+                  0,
+                  0.35
+                ],
+                [
+                  3.4,
+                  3.8
+                ],
+                [
+                  6.85,
+                  7.25
+                ],
+                [
+                  10.4,
+                  10.8
+                ]
+              ],
+              "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d3/raw/d3_pattern_000_master_details_01.png",
+              "sha256": "8a6407f6652d81b95aa884e1bfe0cf62dcad0ab3a6c00f6819820e916265c1e1"
+            }
+          ],
+          "core_label_count": 0,
+          "review_label_count": 0
+        },
+        {
+          "id": "d3_pattern_076",
+          "start_s": 76,
+          "end_s": 88,
+          "review_start_s": 75.75,
+          "review_end_s": 88.25,
+          "scoring_ready": true,
+          "scoring_ready_status": "lead_reviewed_visual_provisional",
+          "kick_times_s": [
+            75.89,
+            76.5485,
+            76.99,
+            77.544,
+            78.756,
+            79.4175,
+            80.52,
+            81.181,
+            82.286,
+            82.947,
+            83.609,
+            84.05,
+            84.5975
+          ],
+          "onset_intervals": [
+            {
+              "interval_s": [
+                75.882,
+                75.898
+              ],
+              "midpoint_s": 75.89,
+              "proposal_id": 1,
+              "master_sample_interval": [
+                3346396,
+                3347102
+              ],
+              "named_drums_onset_s": null,
+              "evidence_sheet": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d3/raw/d3_pattern_076_master_details_01.png",
+              "panel": 1,
+              "panel_window_s": [
+                75.82,
+                76.08
+              ],
+              "rationale": "Raw master waveform changes from the existing carrier to a renewed oscillatory packet inside this bracket; a descending low-frequency trajectory independently supports kick-like identity. Bracket is the onset range, not the later amplitude maximum. No source-clock, detector or BPM-grid timing.",
+              "confidence": "provisional_master_only_visual"
+            },
+            {
+              "interval_s": [
+                76.541,
+                76.556
+              ],
+              "midpoint_s": 76.5485,
+              "proposal_id": 2,
+              "master_sample_interval": [
+                3375458,
+                3376120
+              ],
+              "named_drums_onset_s": null,
+              "evidence_sheet": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d3/raw/d3_pattern_076_master_details_01.png",
+              "panel": 2,
+              "panel_window_s": [
+                76.45,
+                76.68
+              ],
+              "rationale": "Raw master waveform changes from the existing carrier to a renewed oscillatory packet inside this bracket; a descending low-frequency trajectory independently supports kick-like identity. Bracket is the onset range, not the later amplitude maximum. No source-clock, detector or BPM-grid timing.",
+              "confidence": "provisional_master_only_visual"
+            },
+            {
+              "interval_s": [
+                76.982,
+                76.998
+              ],
+              "midpoint_s": 76.99,
+              "proposal_id": 3,
+              "master_sample_interval": [
+                3394906,
+                3395612
+              ],
+              "named_drums_onset_s": null,
+              "evidence_sheet": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d3/raw/d3_pattern_076_master_details_01.png",
+              "panel": 3,
+              "panel_window_s": [
+                76.9,
+                77.13
+              ],
+              "rationale": "Raw master waveform changes from the existing carrier to a renewed oscillatory packet inside this bracket; a descending low-frequency trajectory independently supports kick-like identity. Bracket is the onset range, not the later amplitude maximum. No source-clock, detector or BPM-grid timing.",
+              "confidence": "provisional_master_only_visual"
+            },
+            {
+              "interval_s": [
+                77.536,
+                77.552
+              ],
+              "midpoint_s": 77.544,
+              "proposal_id": 4,
+              "master_sample_interval": [
+                3419338,
+                3420043
+              ],
+              "named_drums_onset_s": null,
+              "evidence_sheet": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d3/raw/d3_pattern_076_master_details_01.png",
+              "panel": 4,
+              "panel_window_s": [
+                77.46,
+                77.74
+              ],
+              "rationale": "Raw master waveform changes from the existing carrier to a renewed oscillatory packet inside this bracket; a descending low-frequency trajectory independently supports kick-like identity. Bracket is the onset range, not the later amplitude maximum. No source-clock, detector or BPM-grid timing.",
+              "confidence": "provisional_master_only_visual"
+            },
+            {
+              "interval_s": [
+                78.747,
+                78.765
+              ],
+              "midpoint_s": 78.756,
+              "proposal_id": 5,
+              "master_sample_interval": [
+                3472743,
+                3473536
+              ],
+              "named_drums_onset_s": null,
+              "evidence_sheet": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d3/raw/d3_pattern_076_master_details_01.png",
+              "panel": 6,
+              "panel_window_s": [
+                78.62,
+                78.92
+              ],
+              "rationale": "Raw master waveform changes from the existing carrier to a renewed oscillatory packet inside this bracket; a descending low-frequency trajectory independently supports kick-like identity. Bracket is the onset range, not the later amplitude maximum. No source-clock, detector or BPM-grid timing.",
+              "confidence": "provisional_master_only_visual"
+            },
+            {
+              "interval_s": [
+                79.408,
+                79.427
+              ],
+              "midpoint_s": 79.4175,
+              "proposal_id": 6,
+              "master_sample_interval": [
+                3501893,
+                3502731
+              ],
+              "named_drums_onset_s": null,
+              "evidence_sheet": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d3/raw/d3_pattern_076_master_details_02.png",
+              "panel": 1,
+              "panel_window_s": [
+                79.26,
+                79.57
+              ],
+              "rationale": "Raw master waveform changes from the existing carrier to a renewed oscillatory packet inside this bracket; a descending low-frequency trajectory independently supports kick-like identity. Bracket is the onset range, not the later amplitude maximum. No source-clock, detector or BPM-grid timing.",
+              "confidence": "provisional_master_only_visual"
+            },
+            {
+              "interval_s": [
+                80.511,
+                80.529
+              ],
+              "midpoint_s": 80.52,
+              "proposal_id": 7,
+              "master_sample_interval": [
+                3550535,
+                3551329
+              ],
+              "named_drums_onset_s": null,
+              "evidence_sheet": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d3/raw/d3_pattern_076_master_details_02.png",
+              "panel": 2,
+              "panel_window_s": [
+                80.3,
+                80.65
+              ],
+              "rationale": "Raw master waveform changes from the existing carrier to a renewed oscillatory packet inside this bracket; a descending low-frequency trajectory independently supports kick-like identity. Bracket is the onset range, not the later amplitude maximum. No source-clock, detector or BPM-grid timing.",
+              "confidence": "provisional_master_only_visual"
+            },
+            {
+              "interval_s": [
+                81.172,
+                81.19
+              ],
+              "midpoint_s": 81.181,
+              "proposal_id": 8,
+              "master_sample_interval": [
+                3579685,
+                3580479
+              ],
+              "named_drums_onset_s": null,
+              "evidence_sheet": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d3/raw/d3_pattern_076_master_details_02.png",
+              "panel": 3,
+              "panel_window_s": [
+                80.94,
+                81.3
+              ],
+              "rationale": "Raw master waveform changes from the existing carrier to a renewed oscillatory packet inside this bracket; a descending low-frequency trajectory independently supports kick-like identity. Bracket is the onset range, not the later amplitude maximum. No source-clock, detector or BPM-grid timing.",
+              "confidence": "provisional_master_only_visual"
+            },
+            {
+              "interval_s": [
+                82.276,
+                82.296
+              ],
+              "midpoint_s": 82.286,
+              "proposal_id": 9,
+              "master_sample_interval": [
+                3628372,
+                3629254
+              ],
+              "named_drums_onset_s": null,
+              "evidence_sheet": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d3/raw/d3_pattern_076_master_details_02.png",
+              "panel": 5,
+              "panel_window_s": [
+                82.2,
+                82.55
+              ],
+              "rationale": "Raw master waveform changes from the existing carrier to a renewed oscillatory packet inside this bracket; a descending low-frequency trajectory independently supports kick-like identity. Bracket is the onset range, not the later amplitude maximum. No source-clock, detector or BPM-grid timing.",
+              "confidence": "provisional_master_only_visual"
+            },
+            {
+              "interval_s": [
+                82.937,
+                82.957
+              ],
+              "midpoint_s": 82.947,
+              "proposal_id": 10,
+              "master_sample_interval": [
+                3657522,
+                3658404
+              ],
+              "named_drums_onset_s": null,
+              "evidence_sheet": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d3/raw/d3_pattern_076_master_details_02.png",
+              "panel": 6,
+              "panel_window_s": [
+                82.85,
+                83.2
+              ],
+              "rationale": "Raw master waveform changes from the existing carrier to a renewed oscillatory packet inside this bracket; a descending low-frequency trajectory independently supports kick-like identity. Bracket is the onset range, not the later amplitude maximum. No source-clock, detector or BPM-grid timing.",
+              "confidence": "provisional_master_only_visual"
+            },
+            {
+              "interval_s": [
+                83.599,
+                83.619
+              ],
+              "midpoint_s": 83.609,
+              "proposal_id": 11,
+              "master_sample_interval": [
+                3686716,
+                3687598
+              ],
+              "named_drums_onset_s": null,
+              "evidence_sheet": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d3/raw/d3_pattern_076_master_details_03.png",
+              "panel": 1,
+              "panel_window_s": [
+                83.5,
+                83.85
+              ],
+              "rationale": "Raw master waveform changes from the existing carrier to a renewed oscillatory packet inside this bracket; a descending low-frequency trajectory independently supports kick-like identity. Bracket is the onset range, not the later amplitude maximum. No source-clock, detector or BPM-grid timing.",
+              "confidence": "provisional_master_only_visual"
+            },
+            {
+              "interval_s": [
+                84.04,
+                84.06
+              ],
+              "midpoint_s": 84.05,
+              "proposal_id": 12,
+              "master_sample_interval": [
+                3706164,
+                3707046
+              ],
+              "named_drums_onset_s": null,
+              "evidence_sheet": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d3/raw/d3_pattern_076_master_details_03.png",
+              "panel": 2,
+              "panel_window_s": [
+                83.99,
+                84.31
+              ],
+              "rationale": "Raw master waveform changes from the existing carrier to a renewed oscillatory packet inside this bracket; a descending low-frequency trajectory independently supports kick-like identity. Bracket is the onset range, not the later amplitude maximum. No source-clock, detector or BPM-grid timing.",
+              "confidence": "provisional_master_only_visual"
+            },
+            {
+              "interval_s": [
+                84.592,
+                84.603
+              ],
+              "midpoint_s": 84.5975,
+              "proposal_id": 13,
+              "master_sample_interval": [
+                3730507,
+                3730992
+              ],
+              "named_drums_onset_s": null,
+              "evidence_sheet": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d3/raw/d3_pattern_076_boundary_detail.png",
+              "panel": 1,
+              "panel_window_s": [
+                84.54,
+                84.7
+              ],
+              "rationale": "Raw master waveform changes from the existing carrier to a renewed oscillatory packet inside this bracket; a descending low-frequency trajectory independently supports kick-like identity. Bracket is the onset range, not the later amplitude maximum. No source-clock, detector or BPM-grid timing.",
+              "confidence": "provisional_master_only_visual"
+            }
+          ],
+          "uncertain_regions": [],
+          "review_findings": "Twelve proposed in-core master attacks plus one left-margin attack: short renewed oscillatory packets with descending low-frequency trajectories superposed on a sustained bass carrier. Upper-band hits without that low-frequency restart are not promoted to kicks. The last clear packet is near84.60s; the remaining core shows the sustained carrier and upper percussion without another visually clear kick packet. Dense mixing and clipping limit onset precision.",
+          "raw_excerpt_coordinates": {
+            "master": {
+              "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d3/raw/d3_pattern_076_master.wav",
+              "sha256": "d7df4e496b12e66a382f407030cd33304edaf7d4f86ecece661efee0bf74ae0d",
+              "original_path": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/EMERGENCE - ALBUM 2026/FINAL MASTERS/Latent Space - 03 - Pattern MSTR V3 APRS.wav",
+              "original_sha256": "34864f9da39f84de1215285336d8aa49d3804b30bedabe84505693fe945a8755",
+              "sample_rate": 44100,
+              "source_sample_range": [
+                3340575,
+                3891825
+              ],
+              "master_axis_origin_s": 75.75,
+              "frames": 551250,
+              "channels": 2,
+              "decoded_samples_exact": true,
+              "spectrogram_path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d3/raw/d3_pattern_076_master_spectrogram.npz",
+              "spectrogram_sha256": "547e7b1f84e7ea030db35720eea850aaed929ad7b9c4ef2f09426e0202b44f56",
+              "clock_alignment_status": "native_master"
+            }
+          },
+          "named_drums_reference": {
+            "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d3/raw/d3_pattern_076_drums.wav",
+            "sha256": "3cbbb095ae079d3eba1b6bc5ff0e0b73ab746db83afdd14562bd74ad4707bf5f",
+            "original_path": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/STEMS/PATTERN STEMS/PATTERN - DRUMS.wav",
+            "original_sha256": "a728e62a1f5c635423ed4b94c9c91f4a135c5a66a18ecffe805607193735219e",
+            "sample_rate": 48000,
+            "source_sample_range": [
+              3636000,
+              4236000
+            ],
+            "master_axis_origin_s": 75.75,
+            "frames": 600000,
+            "channels": 2,
+            "decoded_samples_exact": true,
+            "spectrogram_path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d3/raw/d3_pattern_076_drums_spectrogram.npz",
+            "spectrogram_sha256": "18e80796d1a0b3c7e3a9b89dd7e39aec934a029733a7b2e3066d089c6c9e0061",
+            "clock_alignment_status": "unverified_zero_for_visual_comparison"
+          },
+          "source_role": "Unaligned named drums; excluded from annotation truth.",
+          "source_master_mapping": null,
+          "overview": {
+            "core": "d3_pattern_076",
+            "kind": "master_context",
+            "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d3/raw/d3_pattern_076_master_context.png",
+            "sha256": "17210e627c62d88bbdd7313881ef081cb615d817806f7b7a6e2e54ae2da25e3d"
+          },
+          "details": [
+            {
+              "core": "d3_pattern_076",
+              "windows": [
+                [
+                  75.82,
+                  76.08
+                ],
+                [
+                  76.45,
+                  76.68
+                ],
+                [
+                  76.9,
+                  77.13
+                ],
+                [
+                  77.46,
+                  77.74
+                ],
+                [
+                  77.82,
+                  78.12
+                ],
+                [
+                  78.62,
+                  78.92
+                ]
+              ],
+              "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d3/raw/d3_pattern_076_master_details_01.png",
+              "sha256": "4ff29a02611b514cb4415c8230428c905374064ce8494ae560da051e082e9264"
+            },
+            {
+              "core": "d3_pattern_076",
+              "windows": [
+                [
+                  79.26,
+                  79.57
+                ],
+                [
+                  80.3,
+                  80.65
+                ],
+                [
+                  80.94,
+                  81.3
+                ],
+                [
+                  81.7,
+                  82.04
+                ],
+                [
+                  82.2,
+                  82.55
+                ],
+                [
+                  82.85,
+                  83.2
+                ]
+              ],
+              "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d3/raw/d3_pattern_076_master_details_02.png",
+              "sha256": "545a012a6d973982e232a5f58db0f93b010157392b78a34a1b70483d5085f3ba"
+            },
+            {
+              "core": "d3_pattern_076",
+              "windows": [
+                [
+                  83.5,
+                  83.85
+                ],
+                [
+                  83.99,
+                  84.31
+                ],
+                [
+                  84.6,
+                  85.0
+                ],
+                [
+                  85.15,
+                  85.8
+                ],
+                [
+                  86.2,
+                  86.8
+                ],
+                [
+                  87.4,
+                  88.15
+                ]
+              ],
+              "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d3/raw/d3_pattern_076_master_details_03.png",
+              "sha256": "99bfb86700e985a60b4ab527e33be2d50fa30cc3b2fa0a8f5f2909c73a447069"
+            },
+            {
+              "core": "d3_pattern_076",
+              "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d3/raw/d3_pattern_076_boundary_detail.png",
+              "sha256": "895410eadb84bc2a8046e5c4f5c8ff37e7e2c3207d49fd14b2ec357511eb7c05",
+              "windows": [
+                [
+                  84.54,
+                  84.7
+                ]
+              ]
+            }
+          ],
+          "continuous_context": [
+            {
+              "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d3/raw/d3_pattern_076_continuous_01.png",
+              "sha256": "3c2385e9ffda47ebb90796925bbf7779ce1a4e24443d63f5a8f69caea6c45538",
+              "windows": [
+                [
+                  75.75,
+                  76.85
+                ],
+                [
+                  76.8,
+                  77.9
+                ],
+                [
+                  77.85,
+                  78.95
+                ],
+                [
+                  78.9,
+                  80
+                ],
+                [
+                  79.95,
+                  81.05
+                ],
+                [
+                  81,
+                  82.1
+                ]
+              ]
+            },
+            {
+              "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d3/raw/d3_pattern_076_continuous_02.png",
+              "sha256": "c24ce5559166a7da823d7d232e6ac1276d39cdf08a406dcfa23542b9b867be6c",
+              "windows": [
+                [
+                  82.05,
+                  83.15
+                ],
+                [
+                  83.1,
+                  84.2
+                ],
+                [
+                  84.15,
+                  85.25
+                ],
+                [
+                  85.2,
+                  86.3
+                ],
+                [
+                  86.25,
+                  87.35
+                ],
+                [
+                  87.3,
+                  88.25
+                ]
+              ]
+            }
+          ],
+          "core_label_count": 12,
+          "review_label_count": 13
+        },
+        {
+          "id": "d3_pattern_153",
+          "start_s": 153,
+          "end_s": 165,
+          "review_start_s": 152.75,
+          "review_end_s": 165.25,
+          "scoring_ready": true,
+          "scoring_ready_status": "lead_reviewed_visual_provisional",
+          "kick_times_s": [
+            153.092,
+            153.536,
+            153.977,
+            154.4175,
+            154.8605,
+            155.3,
+            155.743,
+            156.1835,
+            156.625,
+            157.0665,
+            157.508,
+            157.9495,
+            158.391,
+            158.8325,
+            159.273,
+            159.7145,
+            160.1565,
+            160.5975,
+            161.0395,
+            161.48,
+            161.9225,
+            162.3645,
+            162.8055,
+            163.247,
+            163.689,
+            164.1305,
+            164.5735
+          ],
+          "onset_intervals": [
+            {
+              "interval_s": [
+                153.081,
+                153.103
+              ],
+              "midpoint_s": 153.092,
+              "proposal_id": 1,
+              "master_sample_interval": [
+                6750872,
+                6751842
+              ],
+              "named_drums_onset_s": null,
+              "evidence_sheet": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d3/raw/d3_pattern_153_master_details_01.png",
+              "panel": 1,
+              "panel_window_s": [
+                152.98,
+                153.27
+              ],
+              "rationale": "Raw master waveform changes from the existing carrier to a renewed oscillatory packet inside this bracket; a descending low-frequency trajectory independently supports kick-like identity. Bracket is the onset range, not the later amplitude maximum. No source-clock, detector or BPM-grid timing.",
+              "confidence": "provisional_master_only_visual"
+            },
+            {
+              "interval_s": [
+                153.526,
+                153.546
+              ],
+              "midpoint_s": 153.536,
+              "proposal_id": 2,
+              "master_sample_interval": [
+                6770497,
+                6771379
+              ],
+              "named_drums_onset_s": null,
+              "evidence_sheet": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d3/raw/d3_pattern_153_master_details_01.png",
+              "panel": 2,
+              "panel_window_s": [
+                153.4,
+                153.7
+              ],
+              "rationale": "Raw master waveform changes from the existing carrier to a renewed oscillatory packet inside this bracket; a descending low-frequency trajectory independently supports kick-like identity. Bracket is the onset range, not the later amplitude maximum. No source-clock, detector or BPM-grid timing.",
+              "confidence": "provisional_master_only_visual"
+            },
+            {
+              "interval_s": [
+                153.967,
+                153.987
+              ],
+              "midpoint_s": 153.977,
+              "proposal_id": 3,
+              "master_sample_interval": [
+                6789945,
+                6790827
+              ],
+              "named_drums_onset_s": null,
+              "evidence_sheet": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d3/raw/d3_pattern_153_master_details_01.png",
+              "panel": 3,
+              "panel_window_s": [
+                153.84,
+                154.14
+              ],
+              "rationale": "Raw master waveform changes from the existing carrier to a renewed oscillatory packet inside this bracket; a descending low-frequency trajectory independently supports kick-like identity. Bracket is the onset range, not the later amplitude maximum. No source-clock, detector or BPM-grid timing.",
+              "confidence": "provisional_master_only_visual"
+            },
+            {
+              "interval_s": [
+                154.407,
+                154.428
+              ],
+              "midpoint_s": 154.4175,
+              "proposal_id": 4,
+              "master_sample_interval": [
+                6809349,
+                6810275
+              ],
+              "named_drums_onset_s": null,
+              "evidence_sheet": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d3/raw/d3_pattern_153_master_details_01.png",
+              "panel": 4,
+              "panel_window_s": [
+                154.28,
+                154.58
+              ],
+              "rationale": "Raw master waveform changes from the existing carrier to a renewed oscillatory packet inside this bracket; a descending low-frequency trajectory independently supports kick-like identity. Bracket is the onset range, not the later amplitude maximum. No source-clock, detector or BPM-grid timing.",
+              "confidence": "provisional_master_only_visual"
+            },
+            {
+              "interval_s": [
+                154.85,
+                154.871
+              ],
+              "midpoint_s": 154.8605,
+              "proposal_id": 5,
+              "master_sample_interval": [
+                6828885,
+                6829811
+              ],
+              "named_drums_onset_s": null,
+              "evidence_sheet": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d3/raw/d3_pattern_153_master_details_01.png",
+              "panel": 5,
+              "panel_window_s": [
+                154.72,
+                155.02
+              ],
+              "rationale": "Raw master waveform changes from the existing carrier to a renewed oscillatory packet inside this bracket; a descending low-frequency trajectory independently supports kick-like identity. Bracket is the onset range, not the later amplitude maximum. No source-clock, detector or BPM-grid timing.",
+              "confidence": "provisional_master_only_visual"
+            },
+            {
+              "interval_s": [
+                155.289,
+                155.311
+              ],
+              "midpoint_s": 155.3,
+              "proposal_id": 6,
+              "master_sample_interval": [
+                6848245,
+                6849215
+              ],
+              "named_drums_onset_s": null,
+              "evidence_sheet": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d3/raw/d3_pattern_153_master_details_01.png",
+              "panel": 6,
+              "panel_window_s": [
+                155.16,
+                155.46
+              ],
+              "rationale": "Raw master waveform changes from the existing carrier to a renewed oscillatory packet inside this bracket; a descending low-frequency trajectory independently supports kick-like identity. Bracket is the onset range, not the later amplitude maximum. No source-clock, detector or BPM-grid timing.",
+              "confidence": "provisional_master_only_visual"
+            },
+            {
+              "interval_s": [
+                155.732,
+                155.754
+              ],
+              "midpoint_s": 155.743,
+              "proposal_id": 7,
+              "master_sample_interval": [
+                6867781,
+                6868751
+              ],
+              "named_drums_onset_s": null,
+              "evidence_sheet": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d3/raw/d3_pattern_153_master_details_02.png",
+              "panel": 1,
+              "panel_window_s": [
+                155.6,
+                155.9
+              ],
+              "rationale": "Raw master waveform changes from the existing carrier to a renewed oscillatory packet inside this bracket; a descending low-frequency trajectory independently supports kick-like identity. Bracket is the onset range, not the later amplitude maximum. No source-clock, detector or BPM-grid timing.",
+              "confidence": "provisional_master_only_visual"
+            },
+            {
+              "interval_s": [
+                156.172,
+                156.195
+              ],
+              "midpoint_s": 156.1835,
+              "proposal_id": 8,
+              "master_sample_interval": [
+                6887185,
+                6888200
+              ],
+              "named_drums_onset_s": null,
+              "evidence_sheet": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d3/raw/d3_pattern_153_master_details_02.png",
+              "panel": 2,
+              "panel_window_s": [
+                156.04,
+                156.34
+              ],
+              "rationale": "Raw master waveform changes from the existing carrier to a renewed oscillatory packet inside this bracket; a descending low-frequency trajectory independently supports kick-like identity. Bracket is the onset range, not the later amplitude maximum. No source-clock, detector or BPM-grid timing.",
+              "confidence": "provisional_master_only_visual"
+            },
+            {
+              "interval_s": [
+                156.613,
+                156.637
+              ],
+              "midpoint_s": 156.625,
+              "proposal_id": 9,
+              "master_sample_interval": [
+                6906633,
+                6907692
+              ],
+              "named_drums_onset_s": null,
+              "evidence_sheet": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d3/raw/d3_pattern_153_master_details_02.png",
+              "panel": 3,
+              "panel_window_s": [
+                156.48,
+                156.78
+              ],
+              "rationale": "Raw master waveform changes from the existing carrier to a renewed oscillatory packet inside this bracket; a descending low-frequency trajectory independently supports kick-like identity. Bracket is the onset range, not the later amplitude maximum. No source-clock, detector or BPM-grid timing.",
+              "confidence": "provisional_master_only_visual"
+            },
+            {
+              "interval_s": [
+                157.055,
+                157.078
+              ],
+              "midpoint_s": 157.0665,
+              "proposal_id": 10,
+              "master_sample_interval": [
+                6926126,
+                6927140
+              ],
+              "named_drums_onset_s": null,
+              "evidence_sheet": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d3/raw/d3_pattern_153_master_details_02.png",
+              "panel": 4,
+              "panel_window_s": [
+                156.92,
+                157.22
+              ],
+              "rationale": "Raw master waveform changes from the existing carrier to a renewed oscillatory packet inside this bracket; a descending low-frequency trajectory independently supports kick-like identity. Bracket is the onset range, not the later amplitude maximum. No source-clock, detector or BPM-grid timing.",
+              "confidence": "provisional_master_only_visual"
+            },
+            {
+              "interval_s": [
+                157.495,
+                157.521
+              ],
+              "midpoint_s": 157.508,
+              "proposal_id": 11,
+              "master_sample_interval": [
+                6945530,
+                6946676
+              ],
+              "named_drums_onset_s": null,
+              "evidence_sheet": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d3/raw/d3_pattern_153_master_details_02.png",
+              "panel": 5,
+              "panel_window_s": [
+                157.36,
+                157.66
+              ],
+              "rationale": "Raw master waveform changes from the existing carrier to a renewed oscillatory packet inside this bracket; a descending low-frequency trajectory independently supports kick-like identity. Bracket is the onset range, not the later amplitude maximum. No source-clock, detector or BPM-grid timing.",
+              "confidence": "provisional_master_only_visual"
+            },
+            {
+              "interval_s": [
+                157.938,
+                157.961
+              ],
+              "midpoint_s": 157.9495,
+              "proposal_id": 12,
+              "master_sample_interval": [
+                6965066,
+                6966080
+              ],
+              "named_drums_onset_s": null,
+              "evidence_sheet": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d3/raw/d3_pattern_153_master_details_02.png",
+              "panel": 6,
+              "panel_window_s": [
+                157.8,
+                158.1
+              ],
+              "rationale": "Raw master waveform changes from the existing carrier to a renewed oscillatory packet inside this bracket; a descending low-frequency trajectory independently supports kick-like identity. Bracket is the onset range, not the later amplitude maximum. No source-clock, detector or BPM-grid timing.",
+              "confidence": "provisional_master_only_visual"
+            },
+            {
+              "interval_s": [
+                158.379,
+                158.403
+              ],
+              "midpoint_s": 158.391,
+              "proposal_id": 13,
+              "master_sample_interval": [
+                6984514,
+                6985572
+              ],
+              "named_drums_onset_s": null,
+              "evidence_sheet": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d3/raw/d3_pattern_153_master_details_03.png",
+              "panel": 1,
+              "panel_window_s": [
+                158.24,
+                158.54
+              ],
+              "rationale": "Raw master waveform changes from the existing carrier to a renewed oscillatory packet inside this bracket; a descending low-frequency trajectory independently supports kick-like identity. Bracket is the onset range, not the later amplitude maximum. No source-clock, detector or BPM-grid timing.",
+              "confidence": "provisional_master_only_visual"
+            },
+            {
+              "interval_s": [
+                158.82,
+                158.845
+              ],
+              "midpoint_s": 158.8325,
+              "proposal_id": 14,
+              "master_sample_interval": [
+                7003962,
+                7005064
+              ],
+              "named_drums_onset_s": null,
+              "evidence_sheet": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d3/raw/d3_pattern_153_master_details_03.png",
+              "panel": 2,
+              "panel_window_s": [
+                158.68,
+                158.98
+              ],
+              "rationale": "Raw master waveform changes from the existing carrier to a renewed oscillatory packet inside this bracket; a descending low-frequency trajectory independently supports kick-like identity. Bracket is the onset range, not the later amplitude maximum. No source-clock, detector or BPM-grid timing.",
+              "confidence": "provisional_master_only_visual"
+            },
+            {
+              "interval_s": [
+                159.261,
+                159.285
+              ],
+              "midpoint_s": 159.273,
+              "proposal_id": 15,
+              "master_sample_interval": [
+                7023410,
+                7024468
+              ],
+              "named_drums_onset_s": null,
+              "evidence_sheet": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d3/raw/d3_pattern_153_master_details_03.png",
+              "panel": 3,
+              "panel_window_s": [
+                159.12,
+                159.42
+              ],
+              "rationale": "Raw master waveform changes from the existing carrier to a renewed oscillatory packet inside this bracket; a descending low-frequency trajectory independently supports kick-like identity. Bracket is the onset range, not the later amplitude maximum. No source-clock, detector or BPM-grid timing.",
+              "confidence": "provisional_master_only_visual"
+            },
+            {
+              "interval_s": [
+                159.702,
+                159.727
+              ],
+              "midpoint_s": 159.7145,
+              "proposal_id": 16,
+              "master_sample_interval": [
+                7042858,
+                7043961
+              ],
+              "named_drums_onset_s": null,
+              "evidence_sheet": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d3/raw/d3_pattern_153_master_details_03.png",
+              "panel": 4,
+              "panel_window_s": [
+                159.56,
+                159.86
+              ],
+              "rationale": "Raw master waveform changes from the existing carrier to a renewed oscillatory packet inside this bracket; a descending low-frequency trajectory independently supports kick-like identity. Bracket is the onset range, not the later amplitude maximum. No source-clock, detector or BPM-grid timing.",
+              "confidence": "provisional_master_only_visual"
+            },
+            {
+              "interval_s": [
+                160.144,
+                160.169
+              ],
+              "midpoint_s": 160.1565,
+              "proposal_id": 17,
+              "master_sample_interval": [
+                7062350,
+                7063453
+              ],
+              "named_drums_onset_s": null,
+              "evidence_sheet": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d3/raw/d3_pattern_153_master_details_03.png",
+              "panel": 5,
+              "panel_window_s": [
+                160,
+                160.3
+              ],
+              "rationale": "Raw master waveform changes from the existing carrier to a renewed oscillatory packet inside this bracket; a descending low-frequency trajectory independently supports kick-like identity. Bracket is the onset range, not the later amplitude maximum. No source-clock, detector or BPM-grid timing.",
+              "confidence": "provisional_master_only_visual"
+            },
+            {
+              "interval_s": [
+                160.585,
+                160.61
+              ],
+              "midpoint_s": 160.5975,
+              "proposal_id": 18,
+              "master_sample_interval": [
+                7081798,
+                7082901
+              ],
+              "named_drums_onset_s": null,
+              "evidence_sheet": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d3/raw/d3_pattern_153_master_details_03.png",
+              "panel": 6,
+              "panel_window_s": [
+                160.44,
+                160.74
+              ],
+              "rationale": "Raw master waveform changes from the existing carrier to a renewed oscillatory packet inside this bracket; a descending low-frequency trajectory independently supports kick-like identity. Bracket is the onset range, not the later amplitude maximum. No source-clock, detector or BPM-grid timing.",
+              "confidence": "provisional_master_only_visual"
+            },
+            {
+              "interval_s": [
+                161.027,
+                161.052
+              ],
+              "midpoint_s": 161.0395,
+              "proposal_id": 19,
+              "master_sample_interval": [
+                7101291,
+                7102393
+              ],
+              "named_drums_onset_s": null,
+              "evidence_sheet": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d3/raw/d3_pattern_153_master_details_04.png",
+              "panel": 1,
+              "panel_window_s": [
+                160.88,
+                161.18
+              ],
+              "rationale": "Raw master waveform changes from the existing carrier to a renewed oscillatory packet inside this bracket; a descending low-frequency trajectory independently supports kick-like identity. Bracket is the onset range, not the later amplitude maximum. No source-clock, detector or BPM-grid timing.",
+              "confidence": "provisional_master_only_visual"
+            },
+            {
+              "interval_s": [
+                161.467,
+                161.493
+              ],
+              "midpoint_s": 161.48,
+              "proposal_id": 20,
+              "master_sample_interval": [
+                7120695,
+                7121841
+              ],
+              "named_drums_onset_s": null,
+              "evidence_sheet": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d3/raw/d3_pattern_153_master_details_04.png",
+              "panel": 2,
+              "panel_window_s": [
+                161.32,
+                161.62
+              ],
+              "rationale": "Raw master waveform changes from the existing carrier to a renewed oscillatory packet inside this bracket; a descending low-frequency trajectory independently supports kick-like identity. Bracket is the onset range, not the later amplitude maximum. No source-clock, detector or BPM-grid timing.",
+              "confidence": "provisional_master_only_visual"
+            },
+            {
+              "interval_s": [
+                161.91,
+                161.935
+              ],
+              "midpoint_s": 161.9225,
+              "proposal_id": 21,
+              "master_sample_interval": [
+                7140231,
+                7141334
+              ],
+              "named_drums_onset_s": null,
+              "evidence_sheet": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d3/raw/d3_pattern_153_master_details_04.png",
+              "panel": 3,
+              "panel_window_s": [
+                161.76,
+                162.06
+              ],
+              "rationale": "Raw master waveform changes from the existing carrier to a renewed oscillatory packet inside this bracket; a descending low-frequency trajectory independently supports kick-like identity. Bracket is the onset range, not the later amplitude maximum. No source-clock, detector or BPM-grid timing.",
+              "confidence": "provisional_master_only_visual"
+            },
+            {
+              "interval_s": [
+                162.352,
+                162.377
+              ],
+              "midpoint_s": 162.3645,
+              "proposal_id": 22,
+              "master_sample_interval": [
+                7159723,
+                7160826
+              ],
+              "named_drums_onset_s": null,
+              "evidence_sheet": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d3/raw/d3_pattern_153_master_details_04.png",
+              "panel": 4,
+              "panel_window_s": [
+                162.2,
+                162.5
+              ],
+              "rationale": "Raw master waveform changes from the existing carrier to a renewed oscillatory packet inside this bracket; a descending low-frequency trajectory independently supports kick-like identity. Bracket is the onset range, not the later amplitude maximum. No source-clock, detector or BPM-grid timing.",
+              "confidence": "provisional_master_only_visual"
+            },
+            {
+              "interval_s": [
+                162.792,
+                162.819
+              ],
+              "midpoint_s": 162.8055,
+              "proposal_id": 23,
+              "master_sample_interval": [
+                7179127,
+                7180318
+              ],
+              "named_drums_onset_s": null,
+              "evidence_sheet": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d3/raw/d3_pattern_153_master_details_04.png",
+              "panel": 5,
+              "panel_window_s": [
+                162.64,
+                162.94
+              ],
+              "rationale": "Raw master waveform changes from the existing carrier to a renewed oscillatory packet inside this bracket; a descending low-frequency trajectory independently supports kick-like identity. Bracket is the onset range, not the later amplitude maximum. No source-clock, detector or BPM-grid timing.",
+              "confidence": "provisional_master_only_visual"
+            },
+            {
+              "interval_s": [
+                163.234,
+                163.26
+              ],
+              "midpoint_s": 163.247,
+              "proposal_id": 24,
+              "master_sample_interval": [
+                7198619,
+                7199766
+              ],
+              "named_drums_onset_s": null,
+              "evidence_sheet": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d3/raw/d3_pattern_153_master_details_04.png",
+              "panel": 6,
+              "panel_window_s": [
+                163.08,
+                163.38
+              ],
+              "rationale": "Raw master waveform changes from the existing carrier to a renewed oscillatory packet inside this bracket; a descending low-frequency trajectory independently supports kick-like identity. Bracket is the onset range, not the later amplitude maximum. No source-clock, detector or BPM-grid timing.",
+              "confidence": "provisional_master_only_visual"
+            },
+            {
+              "interval_s": [
+                163.674,
+                163.704
+              ],
+              "midpoint_s": 163.689,
+              "proposal_id": 25,
+              "master_sample_interval": [
+                7218023,
+                7219346
+              ],
+              "named_drums_onset_s": null,
+              "evidence_sheet": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d3/raw/d3_pattern_153_master_details_05.png",
+              "panel": 1,
+              "panel_window_s": [
+                163.52,
+                163.82
+              ],
+              "rationale": "Raw master waveform changes from the existing carrier to a renewed oscillatory packet inside this bracket; a descending low-frequency trajectory independently supports kick-like identity. Bracket is the onset range, not the later amplitude maximum. No source-clock, detector or BPM-grid timing.",
+              "confidence": "provisional_master_only_visual"
+            },
+            {
+              "interval_s": [
+                164.116,
+                164.145
+              ],
+              "midpoint_s": 164.1305,
+              "proposal_id": 26,
+              "master_sample_interval": [
+                7237516,
+                7238794
+              ],
+              "named_drums_onset_s": null,
+              "evidence_sheet": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d3/raw/d3_pattern_153_master_details_05.png",
+              "panel": 2,
+              "panel_window_s": [
+                163.96,
+                164.26
+              ],
+              "rationale": "Raw master waveform changes from the existing carrier to a renewed oscillatory packet inside this bracket; a descending low-frequency trajectory independently supports kick-like identity. Bracket is the onset range, not the later amplitude maximum. No source-clock, detector or BPM-grid timing.",
+              "confidence": "provisional_master_only_visual"
+            },
+            {
+              "interval_s": [
+                164.558,
+                164.589
+              ],
+              "midpoint_s": 164.5735,
+              "proposal_id": 27,
+              "master_sample_interval": [
+                7257008,
+                7258375
+              ],
+              "named_drums_onset_s": null,
+              "evidence_sheet": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d3/raw/d3_pattern_153_master_details_05.png",
+              "panel": 3,
+              "panel_window_s": [
+                164.4,
+                164.7
+              ],
+              "rationale": "Raw master waveform changes from the existing carrier to a renewed oscillatory packet inside this bracket; a descending low-frequency trajectory independently supports kick-like identity. Bracket is the onset range, not the later amplitude maximum. No source-clock, detector or BPM-grid timing.",
+              "confidence": "provisional_master_only_visual"
+            }
+          ],
+          "uncertain_regions": [
+            {
+              "start_s": 164.985,
+              "end_s": 165.035,
+              "reason": "Fading kick-like packet near the165s core boundary is partly obscured. Neither its earliest raw onset nor its core membership is sufficiently clear; no kick label is forced for it."
+            }
+          ],
+          "review_findings": "Twenty-seven proposed in-core master attacks: repeated renewed low-frequency oscillatory packets with descending trajectories over sustained upper harmonics. Every timing bracket was read on its own raw waveform panel; repetition was not used to generate onset times. Later packets fade into the mix and have wider brackets. The additional packet near165s remains unknown rather than being assigned to either side of the core boundary.",
+          "raw_excerpt_coordinates": {
+            "master": {
+              "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d3/raw/d3_pattern_153_master.wav",
+              "sha256": "ab91847e7ccf3b2af6345baa211a832628cfe744beed32ca5ceab274e671e799",
+              "original_path": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/EMERGENCE - ALBUM 2026/FINAL MASTERS/Latent Space - 03 - Pattern MSTR V3 APRS.wav",
+              "original_sha256": "34864f9da39f84de1215285336d8aa49d3804b30bedabe84505693fe945a8755",
+              "sample_rate": 44100,
+              "source_sample_range": [
+                6736275,
+                7287525
+              ],
+              "master_axis_origin_s": 152.75,
+              "frames": 551250,
+              "channels": 2,
+              "decoded_samples_exact": true,
+              "spectrogram_path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d3/raw/d3_pattern_153_master_spectrogram.npz",
+              "spectrogram_sha256": "6ba94c1cb2ca1e030262f52acc61e8c024c2155320a1fe28f332680fe26f8d72",
+              "clock_alignment_status": "native_master"
+            }
+          },
+          "named_drums_reference": {
+            "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d3/raw/d3_pattern_153_drums.wav",
+            "sha256": "bd1cdfec2a5254b2bcf1939c5bda22aec5ec3b58953adecfc027059aadbf5597",
+            "original_path": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/STEMS/PATTERN STEMS/PATTERN - DRUMS.wav",
+            "original_sha256": "a728e62a1f5c635423ed4b94c9c91f4a135c5a66a18ecffe805607193735219e",
+            "sample_rate": 48000,
+            "source_sample_range": [
+              7332000,
+              7932000
+            ],
+            "master_axis_origin_s": 152.75,
+            "frames": 600000,
+            "channels": 2,
+            "decoded_samples_exact": true,
+            "spectrogram_path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d3/raw/d3_pattern_153_drums_spectrogram.npz",
+            "spectrogram_sha256": "2feadb36184c8e2fe7f7dadf2d7542c6562742f95469dfbcb86f94b3413012b6",
+            "clock_alignment_status": "unverified_zero_for_visual_comparison"
+          },
+          "source_role": "Unaligned named drums; excluded from annotation truth.",
+          "source_master_mapping": null,
+          "overview": {
+            "core": "d3_pattern_153",
+            "kind": "master_context",
+            "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d3/raw/d3_pattern_153_master_context.png",
+            "sha256": "188208c94d9e345ef1b9cc5057c1b240643c137c85cabf9173774c7e452c2027"
+          },
+          "details": [
+            {
+              "core": "d3_pattern_153",
+              "windows": [
+                [
+                  152.98,
+                  153.27
+                ],
+                [
+                  153.4,
+                  153.7
+                ],
+                [
+                  153.84,
+                  154.14
+                ],
+                [
+                  154.28,
+                  154.58
+                ],
+                [
+                  154.72,
+                  155.02
+                ],
+                [
+                  155.16,
+                  155.46
+                ]
+              ],
+              "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d3/raw/d3_pattern_153_master_details_01.png",
+              "sha256": "1db3558650109538a4e7b535bbe5257a8f1c3155e1ea5c6afd9fdce6b58edbcf"
+            },
+            {
+              "core": "d3_pattern_153",
+              "windows": [
+                [
+                  155.6,
+                  155.9
+                ],
+                [
+                  156.04,
+                  156.34
+                ],
+                [
+                  156.48,
+                  156.78
+                ],
+                [
+                  156.92,
+                  157.22
+                ],
+                [
+                  157.36,
+                  157.66
+                ],
+                [
+                  157.8,
+                  158.1
+                ]
+              ],
+              "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d3/raw/d3_pattern_153_master_details_02.png",
+              "sha256": "116d3d18129884869c2d9633c35b480d7c2da487b6ba9f8a6556a28395675a6a"
+            },
+            {
+              "core": "d3_pattern_153",
+              "windows": [
+                [
+                  158.24,
+                  158.54
+                ],
+                [
+                  158.68,
+                  158.98
+                ],
+                [
+                  159.12,
+                  159.42
+                ],
+                [
+                  159.56,
+                  159.86
+                ],
+                [
+                  160,
+                  160.3
+                ],
+                [
+                  160.44,
+                  160.74
+                ]
+              ],
+              "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d3/raw/d3_pattern_153_master_details_03.png",
+              "sha256": "d0b7cc3c8d60650516bdecdeecbc6153cbdaf5b907f8e412c7958bf8699f7a79"
+            },
+            {
+              "core": "d3_pattern_153",
+              "windows": [
+                [
+                  160.88,
+                  161.18
+                ],
+                [
+                  161.32,
+                  161.62
+                ],
+                [
+                  161.76,
+                  162.06
+                ],
+                [
+                  162.2,
+                  162.5
+                ],
+                [
+                  162.64,
+                  162.94
+                ],
+                [
+                  163.08,
+                  163.38
+                ]
+              ],
+              "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d3/raw/d3_pattern_153_master_details_04.png",
+              "sha256": "2198b72b8c13118c3d5f9192239efeec6dd1521705c28b6beffd392cfadd217b"
+            },
+            {
+              "core": "d3_pattern_153",
+              "windows": [
+                [
+                  163.52,
+                  163.82
+                ],
+                [
+                  163.96,
+                  164.26
+                ],
+                [
+                  164.4,
+                  164.7
+                ],
+                [
+                  164.84,
+                  165.14
+                ]
+              ],
+              "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d3/raw/d3_pattern_153_master_details_05.png",
+              "sha256": "80bc89346cd342811e4b72c0edfb539ad6d69066caf3447a32f66aa1a13bab5e"
+            },
+            {
+              "core": "d3_pattern_153",
+              "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d3/raw/d3_pattern_153_boundary_detail.png",
+              "sha256": "8af412845dfacc7163ee9c52b2a431ba6255c056866730f6bc8ce96ad498510b",
+              "windows": [
+                [
+                  164.96,
+                  165.08
+                ]
+              ]
+            }
+          ],
+          "core_label_count": 27,
+          "review_label_count": 27
+        }
+      ]
+    }
+  ],
+  "counts": {
+    "cores": 3,
+    "core_seconds": 36,
+    "proposed_core_onsets": 39,
+    "proposed_review_onsets": 40,
+    "unknown_regions": 2,
+    "provisional_negative_cores": 1
+  },
+  "limitations": [
+    "Pattern is already a historical development family, not reserved confirmation. No old live-show clip positions were used.",
+    "The named drums are neither isolated kick nor verified as an aligned reconstruction of this final master.",
+    "All labels remain proposals awaiting independent lead review. Dense bass, limiting and the fading final packets permit timing and identity uncertainty."
+  ],
+  "provenance": {
+    "raw_evidence_index_sha256": "9681eeaae123e4e84a29f20b88e0cb1bc2e07197f79bbfbed0d13600ca15e1cc",
+    "sources_sha256": "b9e939c882453cea78bf744183930300871e8531c8e866bf8d2264419a882d5b",
+    "master_detail_index_sha256": "c6524538abaf7872bea87b9c74eeb6550245833e6040b484c96a8b2f871b13a0",
+    "middle_context_index_sha256": "5499b1c61b341bce7f67786ce6f8c896114889d90c9c3c1acf535d3a2637475f",
+    "boundary_detail_index_sha256": "480a009f8da60b11b30237fb6bfbf990cd0c6232049343e8bc9d27b4ce874daa",
+    "scripts": {
+      "clarify_unaligned_sheets.py": "957b91bf3001e86b0e7773747485481e6c86d0e2c778cb93625ecd31739e09f4",
+      "prepare_boundary_details.py": "3c4a61b4252865201e4d4fc513138ff9805f36312ef6b059cd4acfce68e22413",
+      "prepare_details.py": "1db772365c7b29ca663d03cea98d0e80a13c61aa87bf75669f2f57aa42d7fd87",
+      "prepare_evidence.py": "0423f1f954bc711224fcd362dc0e49a5705338780cf34b61296c589944ca7cd5",
+      "prepare_middle_context.py": "93c34562dd7d4ed4fbacdbd7a42c821054662056fc350583c1a1c6e581bf557c",
+      "prepare_sources.py": "5a2da3ca9203bd89f1782f722854e6ac1ffa319a85886786024c8e63fa7f02ae",
+      "verify_proposal.py": "c03a5735c1695b1c91fda481c8e54fa7f60093a68db616b7d1f0b7bd1acb899b",
+      "write_proposal.py": "6ab43af7c5609d31996d9c1c4e404b89db9d3cc589eb734f7c70421702afe399"
+    }
+  },
+  "lead_review": {
+    "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d3/lead_review.json",
+    "sha256": "7cf9853ebd21306912c7054b7db5e1201cc9507a01fc2135d61fb3792c7757d8"
+  }
+}

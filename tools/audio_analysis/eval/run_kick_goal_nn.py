@@ -1,0 +1,132 @@
+#!/usr/bin/env python3
+"""Hybrid kick network runner (kick_goal_nn).
+
+Usage: KICK_GOAL_MORE=1 KICK_GOAL_TRIGGER=1 KICK_GOAL_TRUTH=v3 run_kick_goal_nn.py prep|look|outer
+
+prep  builds every song's spectrum cache (KICK_GOAL_JOBS processes).
+look  renders labelled kicks and the stacked detector's extra fires on one song
+      (default corrosion) to GOAL/nn_look_{song}.png, top row kicks.
+outer fits one net per held-out song on the other songs and saves its
+      predictions for that song to nn_outer{SUFFIX}.npz, then prints each song's
+      best precision at 90% recall for the net alone and for bare f69.
+"""
+from __future__ import annotations
+
+import json
+import os
+import sys
+import time
+from concurrent.futures import ProcessPoolExecutor
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+
+import numpy as np  # noqa: E402
+
+from tools.audio_analysis.eval.kick_goal_eval import GOAL, OUT, SUFFIX, TRUTH, Goal, add_whole_song_truth, fast_counts, jobs, run_tasks, score  # noqa: E402
+from tools.audio_analysis.eval.kick_goal_nn import Song, device, extra_caches, predict, spectrum_cache, train  # noqa: E402
+from tools.audio_analysis.eval.run_kick_goal_data import ALL  # noqa: E402
+
+STATE = {}
+# KICK_GOAL_NN_SEED shifts every net's seed (run-to-run noise checks); a non-zero shift tags the output.
+SEED = int(os.environ.get('KICK_GOAL_NN_SEED', '0'))
+# KICK_GOAL_NN_SYNTH=1 adds the kick-swap clips (kick_goal_synth); KICK_GOAL_NN_ENSEMBLE=n averages n nets per song.
+SYNTH_ON = os.environ.get('KICK_GOAL_NN_SYNTH') == '1'
+ENSEMBLE = int(os.environ.get('KICK_GOAL_NN_ENSEMBLE', '1'))
+TAG = (f'_s{SEED}' if SEED else '') + ('_syn' if SYNTH_ON else '') + (f'_e{ENSEMBLE}' if ENSEMBLE > 1 else '')
+
+
+def _init():
+    STATE['g'] = Goal(mode=TRUTH)
+
+
+def _prep(t):
+    extra_caches(STATE['g'], t, spectrum_cache(STATE['g'], t))
+    return t
+
+
+def best_p(g, t, p, rmin=.9):
+    out = 0.0
+    for th in np.quantile(p, np.linspace(.5, .999, 300)):
+        m, e, n = fast_counts(g, t, p, th)
+        if n and m / n >= rmin:
+            out = max(out, m / max(1, m + e))
+    return out
+
+
+def look(g, t):
+    from PIL import Image
+    r = g.records[t]
+    song = Song.real(g, t)
+    z = np.load(GOAL / f'nested_f69{SUFFIX}_R3_self8.npz')
+    cut = json.loads((GOAL / f'results_selfsim2_f69{SUFFIX}_R3_self8.json').read_text())['R3_self8']['all']['cutoffs'][t]
+    idx, passages = score(g, t, z[t], cut)
+    extra = {round(x, 6) for p in passages for x in p['accuracy_by_tolerance_ms']['70']['extra_times_s']}
+    fired_extra = [i for i in idx if round(float(r['emit_s'][i]), 6) in extra]
+    kicks = np.flatnonzero(r['train_mask'] & (r['train_y'] == 1))
+    rng = np.random.default_rng(0)
+    rows = [rng.choice(kicks, 8, replace=False), rng.choice(fired_extra, 8, replace=False)]
+    tiles = []
+    for row in rows:
+        x = song.slices(np.asarray(row))[:, 0].numpy()  # shape channel, (8, 64, SLICE)
+        img = np.clip((x + 3.0) / 3.0, 0, 1)[:, ::-1, :]  # 60 dB range, low frequencies at the bottom
+        tiles.append(np.concatenate([np.pad(im, ((2, 2), (2, 2)), constant_values=1) for im in img], axis=1))
+    im = (255 * np.concatenate(tiles, axis=0)).astype(np.uint8)
+    path = GOAL / f'nn_look_{t}.png'
+    Image.fromarray(im).resize((im.shape[1] * 4, im.shape[0] * 4), Image.NEAREST).save(path)
+    print(path)
+
+
+def setup_outer():
+    g = Goal(mode=TRUTH)
+    add_whole_song_truth(g)
+    dev = device()
+    STATE.update(g=g, data={t: Song.real(g, t).to(dev) for t in ALL},
+                 clips=[Song.synth(p).to(dev) for p in sorted((GOAL / 'synth').glob('*.npz'))] if SYNTH_ON else [])
+
+
+def fold(task):
+    """Held-out song o: ENSEMBLE nets fitted without o, their mean prediction on o."""
+    k, o = task
+    t0 = time.time()
+    data, usable = STATE['data'], [c for c in STATE['clips'] if o not in c.sources]
+    p = np.mean([predict(train([data[u] for u in ALL if u != o], k + 1000 * SEED + 100000 * e, usable), data[o])
+                 for e in range(ENSEMBLE)], axis=0)
+    return p, time.time() - t0
+
+
+def outer():
+    """KICK_GOAL_JOBS folds train side by side (each process holds every song on the GPU)."""
+    setup_outer()
+    g = STATE['g']
+    base = np.load(GOAL / f'nested_f69{SUFFIX}.npz')
+    out, rows = {}, []
+    tasks = list(enumerate(ALL))
+    for (k, o), (p, secs) in zip(tasks, run_tasks(fold, tasks, setup_outer)):
+        out[o] = p
+        a, b = best_p(g, o, base[o]), best_p(g, o, p)
+        rows.append((a, b))
+        print(f'{o:28s} f69 {a:.2f}  net {b:.2f}  ({secs:.0f} s)', flush=True)
+    np.savez(OUT / f'nn_outer{SUFFIX}{TAG}.npz', **out)
+    a, b = np.mean(rows, axis=0)
+    print(f'mean best precision at 90% recall: f69 {a:.3f}  net {b:.3f}')
+
+
+def main():
+    cmd = sys.argv[1]
+    if cmd == 'prep':
+        _init()
+        with ProcessPoolExecutor(max(1, jobs()), initializer=_init) as ex:
+            for t in ex.map(_prep, ALL):
+                print('spectrum', t, flush=True)
+        return
+    g = Goal(mode=TRUTH)
+    add_whole_song_truth(g)
+    if cmd == 'look':
+        look(g, sys.argv[2] if len(sys.argv) > 2 else 'corrosion')
+    elif cmd == 'outer':
+        outer()
+
+
+if __name__ == '__main__':
+    main()

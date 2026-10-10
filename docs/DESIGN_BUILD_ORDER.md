@@ -63,7 +63,7 @@ prerequisites aren't shipped, stop.
 | RENDER_SCENE_UNBOUNDED_LIGHTS_DESIGN (✅ BUILT + LANDED 2026-07-10; single phase) | none — see the section 2 render_scene same-file note; anchors now MOVED, re-derive before SCENE_BUILD P2 / GAUSSIAN P4 | full |
 | AUDIO_OBJECT_TRACKING_DESIGN (P1–P4 ✅ 2026-07-06; **P5 scope overlay + BUG-045 (gap-ring-down-chase) remain**) | none; P5 re-derives scope anchors (ScopeColumn typed-overlay refactor landed 2026-07-07) | full |
 | AUDIO_OBJECT_INGEST_DESIGN | OBJECT_TRACKING P0–P2 ✅; P1 blocked on Peter (labeled clips) **and on the F10 reconciliation with ANALYSIS_ACCURACY's eval harness** | conformance |
-| KICK_SWEEP_EVENT_DESIGN (P1/P2/P4/P5 ✅) | P3 feel-pass = Peter-owned (L4, not agent-executable) | full |
+| KICK_REALTIME_DESIGN (✅ SHIPPED 2026-10-10; replaced the archived KICK_SWEEP_EVENT_DESIGN) | none | full |
 | CAMERA_AND_LENS_DESIGN (added 2026-07-12) | none (REALTIME_3D P1–P3 ✅); its P1 oracle gates GBUFFER P1's conformance test | full |
 | GBUFFER_DESIGN (added 2026-07-12; the RENDERING_INFRA_V2 section 2 keystone) | CAMERA_AND_LENS P1 (oracle) for its P1 gate; PERF_BUDGET_GATE measures its bandwidth line but does NOT block (lazy rule is the cost control until then) | full |
 | CINEMATIC_POST_DESIGN (added 2026-07-12) | P1/P2 need CAMERA_AND_LENS P1–P2 + GBUFFER P1; P3 needs GBUFFER P2 | full |

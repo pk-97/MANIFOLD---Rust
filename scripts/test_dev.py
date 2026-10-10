@@ -45,7 +45,9 @@ class InventoryTests(unittest.TestCase):
             if isinstance(target, str):
                 continue
             with self.subTest(verb=verb):
-                if "--example" in target:
+                if dev.repo_script(target):
+                    self.assertTrue((dev.ROOT / target[0]).is_file(), target[0])
+                elif "--example" in target:
                     self.assertIn(target[target.index("--example") + 1], examples)
                 else:
                     name = target[target.index("--bin") + 1]

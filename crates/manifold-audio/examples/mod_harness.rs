@@ -122,8 +122,7 @@ struct HopRecord {
     /// acquired at least once this clip (`pitch_confidence` still exactly 0 —
     /// see the module doc's CSV column note).
     tracked_f0_hz: f32,
-    /// Low-band Kick detector impulse (ridge-only). Its fire count over the
-    /// fixtures is the exact-match gate against `hpss_proto --ridge-only`.
+    /// Low-band kick impulse from the trained kick detector, run inline before the analyzer.
     kick: f32,
 }
 
@@ -314,8 +313,7 @@ fn analyze_and_render(
     // BUG-052 rate-scaled config, matching the analyzer's internal grid: the
     // unscaled default's hop (256) is 8.8% wrong at 44.1 kHz, which stretched
     // this harness's whole time base — CSV time_s, the PNG bar grid, and the
-    // printed hop line (surfaced 2026-07-07 chasing a phantom grid mismatch in
-    // the kick exact-match gate).
+    // printed hop line.
     let cfg = SpectrogramConfig::default().with_time_grid_for(sr as f32);
     let mut an = StreamingSendAnalyzer::new(sr, args.low_hz, args.mid_hz);
     let hop = an.hop().max(1);
@@ -343,8 +341,15 @@ fn analyze_and_render(
     let mut smooth_state = [[0.0f32; 4]; 7];
     let mut prev_raw = [[0.0f32; 4]; 7];
     let mut records: Vec<HopRecord> = Vec::with_capacity(mono.len() / hop + 1);
+    // The trained kick detector, inline as offline export runs it: its fires are queued
+    // before the analyzer sees the same samples, so each lands on the hop that contains it.
+    let mut kick = manifold_audio::kick::KickDetector::new(sr).expect("embedded kick model");
+    let mut kick_fires = Vec::new();
 
     for chunk in mono.chunks(hop) {
+        kick_fires.clear();
+        kick.push(chunk, &mut kick_fires);
+        an.queue_kick_fires(kick_fires.iter().map(|f| f.sample));
         an.push(chunk);
         let mut cols: Vec<Vec<f32>> = Vec::new();
         an.drain_scope_columns(|c| cols.push(c.to_vec()));
@@ -475,9 +480,8 @@ fn analyze_and_render(
         );
     }
 
-    // Fire counts (full/low/kick) — printed for every job so the kick count on a
-    // real fixture can be diffed against `hpss_proto --ridge-only` (exact-match
-    // gate); the guard thresholds in the line only apply to the synth scenarios.
+    // Fire counts (full/low/kick) — printed for every job; the guard thresholds in
+    // the line only apply to the synth scenarios.
     print_p3_fires(label, &records);
 
     // ── P2 gates (docs/AUDIO_OBJECT_TRACKING_DESIGN.md P2): the D5 tracker's
@@ -554,10 +558,7 @@ fn print_p3_fires(label: &str, records: &[HopRecord]) {
     println!(
         "P3 {label}: full_fires={full_fires} low_fires={low_fires} kick_fires={kick_fires} (gates: dive full 0, kicks low == 8, busymix low >= 7, densemix low >= 6, riser full 0, growl full 0)"
     );
-    // Kick fire HOP INDICES (all hops, absolute) — the exact-match gate's
-    // divergence instrument: diff this list against the prototype's per-hop
-    // dump (`hpss_proto --dump <clip>`, column l_fired) to see WHERE the two
-    // engines disagree, not just by how many.
+    // Kick fire hop indices (all hops, absolute), to line fires up against the picture.
     let kick_hops: Vec<usize> = records
         .iter()
         .enumerate()

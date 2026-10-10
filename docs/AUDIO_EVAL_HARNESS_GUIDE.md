@@ -6,36 +6,40 @@ tracker, presence, transients) must pass through before touching the live path.
 Design context: [AUDIO_OBJECT_TRACKING_DESIGN.md](AUDIO_OBJECT_TRACKING_DESIGN.md).
 Written so a session with NO prior context can run, read, and judge results.
 
-**2026-10-09 audit note:** the active pack now has 66 corrected visual kick
-estimates (14/15/15/12/10); `attack_review.csv` preserves the one duplicate,
-four clip-boundary events, and two ambiguous ending hits as provenance and
-excluded-event registry. Primary scoring must exclude [0, 0.250] seconds for
-`clip_boundary` and [estimated_attack_s - 0.100, EOF] for `needs_listening`,
-reporting those categories separately. `bad_guy` has a mix reconstructed from
-its unchanged stems and matching label timebases; all previous scores and
-per-track calibration are stale. No auditory validation is claimed. See
-`tests/fixtures/audio_labels/README.md` and BUG-qtd.
+## 0. Trained detectors — what holds
 
-Reproduce the corrected five-full-mix Kick baseline from a worktree:
+The kick detector is a trained model; its recipe, model file, parity tests and the
+retrain-to-ship path are in [KICK_REALTIME_DESIGN.md](KICK_REALTIME_DESIGN.md)
+(section 4, Retrain → ship). The research tools are
+`tools/audio_analysis/eval/kick_goal_*.py` and `run_kick_goal_*.py`. The pre-model DSP
+research log (attack probes, rejection trials, the H-series) lives in git history; its
+transferable rules are below. These rules apply to every trained detector (kick now,
+snare and clap next, under BUG-9ngk8 (trained audio detectors)).
 
-```sh
-CARGO_BUILD_JOBS=4 CARGO_INCREMENTAL=0 cargo build -p manifold-audio --example mod_harness
-python3 tools/audio_analysis/eval/live_kick_baseline.py \
-  --harness target/debug/examples/mod_harness \
-  --audio-root '/Users/peterkiemann/MANIFOLD - Rust/tests/fixtures/audio' \
-  --out-dir /tmp/live-kick-baseline \
-  --report /tmp/live-kick-baseline.json
-```
+- **Labels come from Peter's projects and stems, never public datasets** (commercial
+  licensing). Project notes are shifted by an export offset proven against a stem, and
+  clipped to the master's length — project data past the master's end does not exist
+  in the audio. Projects are read only through `als_extract.py` (read-only, hash-checked).
+- **Every new hit triggers, rolls included** (BUG-gh7sj (rolls over a ringing tail)).
+- **Scoring:** leave one song out; each song's cutoff is chosen on the other songs;
+  a fire matches a label within 70 ms; 60 ms refractory. Report recall and precision
+  over all songs, plus per song.
+- **Compare on at least three seeds.** Seed noise is 1–3 points; a single-seed gain
+  under that is not a result.
+- **Run the oracle frontier first** (per-song best cutoff, picked with the answers) on
+  any new feature family. If the ceiling does not move, the family cannot help.
+- **Never edit `kick_fusion_features.py` or `kick_fusion_bandwise.py`:** they key
+  the feature caches. Add a module instead.
+- **The song-relative stage** (8 s of the song's own recent candidates) fixes cutoff
+  transfer between songs, not ranking within a song.
+- **What moved the kick net:** a 40 ms look-ahead (about +2 recall, +4 precision).
+  A 500 ms history, 128 bands, a percussive channel and stereo were flat or worse;
+  three nets beat one by about one point, so one ships.
+- **Results so far:** trees alone 0.76/0.74 (recall/precision), trees + stage
+  0.79/0.74, trees + net 0.85/0.86, shipped (trees + net + stage) 0.889/0.894.
 
-This uses the unchanged live `StreamingSendAnalyzer`, default settings, and
-native-rate full mixes. It scores one-to-one matches at ±35/50/70 ms (50 ms
-primary) and records uncertain/boundary-region triggers separately. Raw
-availability is `(kick_hop + 1) * hop_samples / sample_rate`, not the old
-zero-based plot time and not a latency-corrected timestamp. The separate
--35/+200 ms association diagnostic measures late nearby triggers and possible
-duplicates without improving the tight accuracy score. It does not establish
-which sound caused a trigger or measure capture/UI/display delay. Results:
-`tools/audio_analysis/eval/scoreboard/live_kick_2026-10-09.json`.
+The mod_harness label pack and its scoring exclusions are documented in
+`tests/fixtures/audio_labels/README.md` (BUG-qtd (kick fixture timing bias)).
 
 ## 1. Running it
 
@@ -56,9 +60,9 @@ CSV filenames embed the input path — pre-create nested dirs when batch-running
 `write_csv`, mod_harness.rs) if it bites again.
 
 **Real fixtures:** `tests/fixtures/audio/<track>_<bpm>bpm/{mix,bass,drums,others,vocals}.wav`
-— 5 tracks, 8-bar grid-aligned loops, Ableton stem splits (gitignored, never commit
-audio). Rendered PNGs: `tests/fixtures/audio/renders/`. The clips are ON-GRID once
-BPM-warped: fire timing can be judged against the 8th/16th grid (±35 ms).
+— 5 tracks, Ableton stem splits (gitignored, never commit audio). Rendered PNGs:
+`tests/fixtures/audio/renders/`. Folder BPMs are historical and are not validated
+export tempos. Grade against the reviewed attacks, not an assumed beat grid.
 
 ## 2. Reading the PNG
 

@@ -1,0 +1,2791 @@
+{
+  "method": "Full-master native-rate stereo mean; fixed detector settings; no resets, calibration or backdating. Visual provisional labels, not audited listening truth. One-to-one matching uses reviewed margins; counts use core passage only. Uncertain audio excludes possible responses from -70ms to +200ms. Timing is sample availability, not app latency.",
+  "runs_sha256": "1b37ad4a5f9492c9fae515a16b42d0b4ef877506014181291d38fed298d9ae4a",
+  "labels_sha256": "94884ba781bb2d1062d143721376b8b177a51cf3d537d213abc3201a310f0b5c",
+  "totals": {
+    "mod_harness": {
+      "labels": 64,
+      "accuracy_by_tolerance_ms": {
+        "35": {
+          "matched": 9,
+          "missed": 55,
+          "extra": 104
+        },
+        "50": {
+          "matched": 37,
+          "missed": 27,
+          "extra": 77
+        },
+        "70": {
+          "matched": 64,
+          "missed": 0,
+          "extra": 50
+        }
+      },
+      "association_early_35_late_200_ms": {
+        "matched": 64,
+        "missed": 0,
+        "extra": 50
+      },
+      "association_delay": {
+        "median_ms": 49.83,
+        "p90_ms": 59.0
+      }
+    },
+    "kick_attack_probe": {
+      "labels": 64,
+      "accuracy_by_tolerance_ms": {
+        "35": {
+          "matched": 38,
+          "missed": 26,
+          "extra": 10
+        },
+        "50": {
+          "matched": 40,
+          "missed": 24,
+          "extra": 8
+        },
+        "70": {
+          "matched": 40,
+          "missed": 24,
+          "extra": 8
+        }
+      },
+      "association_early_35_late_200_ms": {
+        "matched": 40,
+        "missed": 24,
+        "extra": 8
+      },
+      "association_delay": {
+        "median_ms": 18.83,
+        "p90_ms": 28.67
+      }
+    }
+  },
+  "passages": [
+    {
+      "track": "late_night",
+      "detector": "kick_attack_probe",
+      "passage": "late_night_kick_heavy",
+      "start_s": 199.0,
+      "end_s": 211.0,
+      "labels": 29,
+      "excluded_regions": [
+        {
+          "start_s": 199.985,
+          "end_s": 200.36499999999998,
+          "reason": "Two short waveform resets near 200.069 and 200.139 overlap a previous kick tail; their identity as additional master kicks cannot be resolved confidently by visual review. Surrounding strong attacks remain accepted."
+        },
+        {
+          "start_s": 208.87,
+          "end_s": 209.255,
+          "reason": "Two short waveform resets near 208.959 and 209.028 interrupt the kick decay. Additional master-kick identity is uncertain; surrounding strong attacks remain accepted."
+        },
+        {
+          "start_s": 209.91500000000002,
+          "end_s": 210.23,
+          "reason": "Weak stem restart near 210.000 is visible; its low-amplitude master counterpart is ambiguous against the previous decay and other transients. Later strong attacks remain accepted."
+        }
+      ],
+      "excluded_label_times_s": [
+        200.005,
+        200.28,
+        208.895,
+        209.17,
+        210.145
+      ],
+      "accuracy_by_tolerance_ms": {
+        "35": {
+          "matched": 22,
+          "missed": 7,
+          "extra": 4,
+          "missed_times_s": [
+            204.31,
+            204.45,
+            204.59,
+            204.725,
+            207.78,
+            210.28,
+            210.975
+          ],
+          "extra_times_s": [
+            204.34666666666666,
+            206.15466666666666,
+            206.544,
+            209.80266666666665
+          ],
+          "pairs": [
+            {
+              "attack_s": 199.17,
+              "available_s": 199.18933333333334,
+              "delay_ms": 19.333
+            },
+            {
+              "attack_s": 199.585,
+              "available_s": 199.61066666666667,
+              "delay_ms": 25.667
+            },
+            {
+              "attack_s": 199.865,
+              "available_s": 199.888,
+              "delay_ms": 23.0
+            },
+            {
+              "attack_s": 201.115,
+              "available_s": 201.136,
+              "delay_ms": 21.0
+            },
+            {
+              "attack_s": 201.395,
+              "available_s": 201.41333333333333,
+              "delay_ms": 18.333
+            },
+            {
+              "attack_s": 201.81,
+              "available_s": 201.82933333333332,
+              "delay_ms": 19.333
+            },
+            {
+              "attack_s": 202.225,
+              "available_s": 202.25066666666666,
+              "delay_ms": 25.667
+            },
+            {
+              "attack_s": 202.505,
+              "available_s": 202.528,
+              "delay_ms": 23.0
+            },
+            {
+              "attack_s": 203.34,
+              "available_s": 203.35466666666667,
+              "delay_ms": 14.667
+            },
+            {
+              "attack_s": 203.615,
+              "available_s": 203.632,
+              "delay_ms": 17.0
+            },
+            {
+              "attack_s": 204.03,
+              "available_s": 204.05866666666665,
+              "delay_ms": 28.667
+            },
+            {
+              "attack_s": 205.56,
+              "available_s": 205.57333333333332,
+              "delay_ms": 13.333
+            },
+            {
+              "attack_s": 205.84,
+              "available_s": 205.85066666666665,
+              "delay_ms": 10.667
+            },
+            {
+              "attack_s": 206.255,
+              "available_s": 206.27733333333333,
+              "delay_ms": 22.333
+            },
+            {
+              "attack_s": 206.67,
+              "available_s": 206.688,
+              "delay_ms": 18.0
+            },
+            {
+              "attack_s": 206.95,
+              "available_s": 206.976,
+              "delay_ms": 26.0
+            },
+            {
+              "attack_s": 208.06,
+              "available_s": 208.07466666666667,
+              "delay_ms": 14.667
+            },
+            {
+              "attack_s": 208.475,
+              "available_s": 208.49066666666667,
+              "delay_ms": 15.667
+            },
+            {
+              "attack_s": 208.755,
+              "available_s": 208.768,
+              "delay_ms": 13.0
+            },
+            {
+              "attack_s": 209.59,
+              "available_s": 209.61066666666667,
+              "delay_ms": 20.667
+            },
+            {
+              "attack_s": 209.865,
+              "available_s": 209.88266666666667,
+              "delay_ms": 17.667
+            },
+            {
+              "attack_s": 210.7,
+              "available_s": 210.70933333333332,
+              "delay_ms": 9.333
+            }
+          ],
+          "median_ms": 18.83,
+          "p90_ms": 25.67
+        },
+        "50": {
+          "matched": 23,
+          "missed": 6,
+          "extra": 3,
+          "missed_times_s": [
+            204.45,
+            204.59,
+            204.725,
+            207.78,
+            210.28,
+            210.975
+          ],
+          "extra_times_s": [
+            206.15466666666666,
+            206.544,
+            209.80266666666665
+          ],
+          "pairs": [
+            {
+              "attack_s": 199.17,
+              "available_s": 199.18933333333334,
+              "delay_ms": 19.333
+            },
+            {
+              "attack_s": 199.585,
+              "available_s": 199.61066666666667,
+              "delay_ms": 25.667
+            },
+            {
+              "attack_s": 199.865,
+              "available_s": 199.888,
+              "delay_ms": 23.0
+            },
+            {
+              "attack_s": 201.115,
+              "available_s": 201.136,
+              "delay_ms": 21.0
+            },
+            {
+              "attack_s": 201.395,
+              "available_s": 201.41333333333333,
+              "delay_ms": 18.333
+            },
+            {
+              "attack_s": 201.81,
+              "available_s": 201.82933333333332,
+              "delay_ms": 19.333
+            },
+            {
+              "attack_s": 202.225,
+              "available_s": 202.25066666666666,
+              "delay_ms": 25.667
+            },
+            {
+              "attack_s": 202.505,
+              "available_s": 202.528,
+              "delay_ms": 23.0
+            },
+            {
+              "attack_s": 203.34,
+              "available_s": 203.35466666666667,
+              "delay_ms": 14.667
+            },
+            {
+              "attack_s": 203.615,
+              "available_s": 203.632,
+              "delay_ms": 17.0
+            },
+            {
+              "attack_s": 204.03,
+              "available_s": 204.05866666666665,
+              "delay_ms": 28.667
+            },
+            {
+              "attack_s": 204.31,
+              "available_s": 204.34666666666666,
+              "delay_ms": 36.667
+            },
+            {
+              "attack_s": 205.56,
+              "available_s": 205.57333333333332,
+              "delay_ms": 13.333
+            },
+            {
+              "attack_s": 205.84,
+              "available_s": 205.85066666666665,
+              "delay_ms": 10.667
+            },
+            {
+              "attack_s": 206.255,
+              "available_s": 206.27733333333333,
+              "delay_ms": 22.333
+            },
+            {
+              "attack_s": 206.67,
+              "available_s": 206.688,
+              "delay_ms": 18.0
+            },
+            {
+              "attack_s": 206.95,
+              "available_s": 206.976,
+              "delay_ms": 26.0
+            },
+            {
+              "attack_s": 208.06,
+              "available_s": 208.07466666666667,
+              "delay_ms": 14.667
+            },
+            {
+              "attack_s": 208.475,
+              "available_s": 208.49066666666667,
+              "delay_ms": 15.667
+            },
+            {
+              "attack_s": 208.755,
+              "available_s": 208.768,
+              "delay_ms": 13.0
+            },
+            {
+              "attack_s": 209.59,
+              "available_s": 209.61066666666667,
+              "delay_ms": 20.667
+            },
+            {
+              "attack_s": 209.865,
+              "available_s": 209.88266666666667,
+              "delay_ms": 17.667
+            },
+            {
+              "attack_s": 210.7,
+              "available_s": 210.70933333333332,
+              "delay_ms": 9.333
+            }
+          ],
+          "median_ms": 19.33,
+          "p90_ms": 26.0
+        },
+        "70": {
+          "matched": 23,
+          "missed": 6,
+          "extra": 3,
+          "missed_times_s": [
+            204.45,
+            204.59,
+            204.725,
+            207.78,
+            210.28,
+            210.975
+          ],
+          "extra_times_s": [
+            206.15466666666666,
+            206.544,
+            209.80266666666665
+          ],
+          "pairs": [
+            {
+              "attack_s": 199.17,
+              "available_s": 199.18933333333334,
+              "delay_ms": 19.333
+            },
+            {
+              "attack_s": 199.585,
+              "available_s": 199.61066666666667,
+              "delay_ms": 25.667
+            },
+            {
+              "attack_s": 199.865,
+              "available_s": 199.888,
+              "delay_ms": 23.0
+            },
+            {
+              "attack_s": 201.115,
+              "available_s": 201.136,
+              "delay_ms": 21.0
+            },
+            {
+              "attack_s": 201.395,
+              "available_s": 201.41333333333333,
+              "delay_ms": 18.333
+            },
+            {
+              "attack_s": 201.81,
+              "available_s": 201.82933333333332,
+              "delay_ms": 19.333
+            },
+            {
+              "attack_s": 202.225,
+              "available_s": 202.25066666666666,
+              "delay_ms": 25.667
+            },
+            {
+              "attack_s": 202.505,
+              "available_s": 202.528,
+              "delay_ms": 23.0
+            },
+            {
+              "attack_s": 203.34,
+              "available_s": 203.35466666666667,
+              "delay_ms": 14.667
+            },
+            {
+              "attack_s": 203.615,
+              "available_s": 203.632,
+              "delay_ms": 17.0
+            },
+            {
+              "attack_s": 204.03,
+              "available_s": 204.05866666666665,
+              "delay_ms": 28.667
+            },
+            {
+              "attack_s": 204.31,
+              "available_s": 204.34666666666666,
+              "delay_ms": 36.667
+            },
+            {
+              "attack_s": 205.56,
+              "available_s": 205.57333333333332,
+              "delay_ms": 13.333
+            },
+            {
+              "attack_s": 205.84,
+              "available_s": 205.85066666666665,
+              "delay_ms": 10.667
+            },
+            {
+              "attack_s": 206.255,
+              "available_s": 206.27733333333333,
+              "delay_ms": 22.333
+            },
+            {
+              "attack_s": 206.67,
+              "available_s": 206.688,
+              "delay_ms": 18.0
+            },
+            {
+              "attack_s": 206.95,
+              "available_s": 206.976,
+              "delay_ms": 26.0
+            },
+            {
+              "attack_s": 208.06,
+              "available_s": 208.07466666666667,
+              "delay_ms": 14.667
+            },
+            {
+              "attack_s": 208.475,
+              "available_s": 208.49066666666667,
+              "delay_ms": 15.667
+            },
+            {
+              "attack_s": 208.755,
+              "available_s": 208.768,
+              "delay_ms": 13.0
+            },
+            {
+              "attack_s": 209.59,
+              "available_s": 209.61066666666667,
+              "delay_ms": 20.667
+            },
+            {
+              "attack_s": 209.865,
+              "available_s": 209.88266666666667,
+              "delay_ms": 17.667
+            },
+            {
+              "attack_s": 210.7,
+              "available_s": 210.70933333333332,
+              "delay_ms": 9.333
+            }
+          ],
+          "median_ms": 19.33,
+          "p90_ms": 26.0
+        }
+      },
+      "association_early_35_late_200_ms": {
+        "matched": 23,
+        "missed": 6,
+        "extra": 3,
+        "missed_times_s": [
+          204.45,
+          204.59,
+          204.725,
+          207.78,
+          210.28,
+          210.975
+        ],
+        "extra_times_s": [
+          206.15466666666666,
+          206.544,
+          209.80266666666665
+        ],
+        "pairs": [
+          {
+            "attack_s": 199.17,
+            "available_s": 199.18933333333334,
+            "delay_ms": 19.333
+          },
+          {
+            "attack_s": 199.585,
+            "available_s": 199.61066666666667,
+            "delay_ms": 25.667
+          },
+          {
+            "attack_s": 199.865,
+            "available_s": 199.888,
+            "delay_ms": 23.0
+          },
+          {
+            "attack_s": 201.115,
+            "available_s": 201.136,
+            "delay_ms": 21.0
+          },
+          {
+            "attack_s": 201.395,
+            "available_s": 201.41333333333333,
+            "delay_ms": 18.333
+          },
+          {
+            "attack_s": 201.81,
+            "available_s": 201.82933333333332,
+            "delay_ms": 19.333
+          },
+          {
+            "attack_s": 202.225,
+            "available_s": 202.25066666666666,
+            "delay_ms": 25.667
+          },
+          {
+            "attack_s": 202.505,
+            "available_s": 202.528,
+            "delay_ms": 23.0
+          },
+          {
+            "attack_s": 203.34,
+            "available_s": 203.35466666666667,
+            "delay_ms": 14.667
+          },
+          {
+            "attack_s": 203.615,
+            "available_s": 203.632,
+            "delay_ms": 17.0
+          },
+          {
+            "attack_s": 204.03,
+            "available_s": 204.05866666666665,
+            "delay_ms": 28.667
+          },
+          {
+            "attack_s": 204.31,
+            "available_s": 204.34666666666666,
+            "delay_ms": 36.667
+          },
+          {
+            "attack_s": 205.56,
+            "available_s": 205.57333333333332,
+            "delay_ms": 13.333
+          },
+          {
+            "attack_s": 205.84,
+            "available_s": 205.85066666666665,
+            "delay_ms": 10.667
+          },
+          {
+            "attack_s": 206.255,
+            "available_s": 206.27733333333333,
+            "delay_ms": 22.333
+          },
+          {
+            "attack_s": 206.67,
+            "available_s": 206.688,
+            "delay_ms": 18.0
+          },
+          {
+            "attack_s": 206.95,
+            "available_s": 206.976,
+            "delay_ms": 26.0
+          },
+          {
+            "attack_s": 208.06,
+            "available_s": 208.07466666666667,
+            "delay_ms": 14.667
+          },
+          {
+            "attack_s": 208.475,
+            "available_s": 208.49066666666667,
+            "delay_ms": 15.667
+          },
+          {
+            "attack_s": 208.755,
+            "available_s": 208.768,
+            "delay_ms": 13.0
+          },
+          {
+            "attack_s": 209.59,
+            "available_s": 209.61066666666667,
+            "delay_ms": 20.667
+          },
+          {
+            "attack_s": 209.865,
+            "available_s": 209.88266666666667,
+            "delay_ms": 17.667
+          },
+          {
+            "attack_s": 210.7,
+            "available_s": 210.70933333333332,
+            "delay_ms": 9.333
+          }
+        ],
+        "median_ms": 19.33,
+        "p90_ms": 26.0
+      }
+    },
+    {
+      "track": "late_night",
+      "detector": "kick_attack_probe",
+      "passage": "late_night_bass_heavy",
+      "start_s": 128.0,
+      "end_s": 140.0,
+      "labels": 0,
+      "excluded_regions": [],
+      "excluded_label_times_s": [],
+      "accuracy_by_tolerance_ms": {
+        "35": {
+          "matched": 0,
+          "missed": 0,
+          "extra": 5,
+          "missed_times_s": [],
+          "extra_times_s": [
+            129.27466666666666,
+            130.37866666666667,
+            132.0,
+            135.21066666666667,
+            138.79466666666667
+          ],
+          "pairs": [],
+          "median_ms": null,
+          "p90_ms": null
+        },
+        "50": {
+          "matched": 0,
+          "missed": 0,
+          "extra": 5,
+          "missed_times_s": [],
+          "extra_times_s": [
+            129.27466666666666,
+            130.37866666666667,
+            132.0,
+            135.21066666666667,
+            138.79466666666667
+          ],
+          "pairs": [],
+          "median_ms": null,
+          "p90_ms": null
+        },
+        "70": {
+          "matched": 0,
+          "missed": 0,
+          "extra": 5,
+          "missed_times_s": [],
+          "extra_times_s": [
+            129.27466666666666,
+            130.37866666666667,
+            132.0,
+            135.21066666666667,
+            138.79466666666667
+          ],
+          "pairs": [],
+          "median_ms": null,
+          "p90_ms": null
+        }
+      },
+      "association_early_35_late_200_ms": {
+        "matched": 0,
+        "missed": 0,
+        "extra": 5,
+        "missed_times_s": [],
+        "extra_times_s": [
+          129.27466666666666,
+          130.37866666666667,
+          132.0,
+          135.21066666666667,
+          138.79466666666667
+        ],
+        "pairs": [],
+        "median_ms": null,
+        "p90_ms": null
+      }
+    },
+    {
+      "track": "late_night",
+      "detector": "mod_harness",
+      "passage": "late_night_kick_heavy",
+      "start_s": 199.0,
+      "end_s": 211.0,
+      "labels": 29,
+      "excluded_regions": [
+        {
+          "start_s": 199.985,
+          "end_s": 200.36499999999998,
+          "reason": "Two short waveform resets near 200.069 and 200.139 overlap a previous kick tail; their identity as additional master kicks cannot be resolved confidently by visual review. Surrounding strong attacks remain accepted."
+        },
+        {
+          "start_s": 208.87,
+          "end_s": 209.255,
+          "reason": "Two short waveform resets near 208.959 and 209.028 interrupt the kick decay. Additional master-kick identity is uncertain; surrounding strong attacks remain accepted."
+        },
+        {
+          "start_s": 209.91500000000002,
+          "end_s": 210.23,
+          "reason": "Weak stem restart near 210.000 is visible; its low-amplitude master counterpart is ambiguous against the previous decay and other transients. Later strong attacks remain accepted."
+        }
+      ],
+      "excluded_label_times_s": [
+        200.005,
+        200.28,
+        208.895,
+        209.17,
+        210.145
+      ],
+      "accuracy_by_tolerance_ms": {
+        "35": {
+          "matched": 1,
+          "missed": 28,
+          "extra": 27,
+          "missed_times_s": [
+            199.17,
+            199.585,
+            201.115,
+            201.395,
+            201.81,
+            202.225,
+            202.505,
+            203.34,
+            203.615,
+            204.03,
+            204.31,
+            204.45,
+            204.59,
+            204.725,
+            205.56,
+            205.84,
+            206.255,
+            206.67,
+            206.95,
+            207.78,
+            208.06,
+            208.475,
+            208.755,
+            209.59,
+            209.865,
+            210.28,
+            210.7,
+            210.975
+          ],
+          "extra_times_s": [
+            199.20533333333333,
+            199.648,
+            201.16266666666667,
+            201.44,
+            201.86666666666667,
+            202.27733333333333,
+            202.54933333333332,
+            203.38666666666666,
+            203.65866666666668,
+            204.07466666666667,
+            204.35733333333334,
+            204.496,
+            204.64533333333333,
+            204.77866666666668,
+            205.616,
+            205.89866666666666,
+            206.31466666666665,
+            206.736,
+            207.01333333333332,
+            207.824,
+            208.096,
+            208.53333333333333,
+            208.79466666666667,
+            209.648,
+            209.91466666666668,
+            210.33066666666667,
+            210.74666666666667
+          ],
+          "pairs": [
+            {
+              "attack_s": 199.865,
+              "available_s": 199.89866666666666,
+              "delay_ms": 33.667
+            }
+          ],
+          "median_ms": 33.67,
+          "p90_ms": 33.67
+        },
+        "50": {
+          "matched": 16,
+          "missed": 13,
+          "extra": 13,
+          "missed_times_s": [
+            199.585,
+            201.81,
+            202.225,
+            204.59,
+            204.725,
+            205.56,
+            205.84,
+            206.255,
+            206.67,
+            206.95,
+            208.475,
+            209.59,
+            210.28
+          ],
+          "extra_times_s": [
+            199.648,
+            201.86666666666667,
+            202.27733333333333,
+            204.64533333333333,
+            204.77866666666668,
+            205.616,
+            205.89866666666666,
+            206.31466666666665,
+            206.736,
+            207.01333333333332,
+            208.53333333333333,
+            209.648,
+            210.33066666666667
+          ],
+          "pairs": [
+            {
+              "attack_s": 199.17,
+              "available_s": 199.20533333333333,
+              "delay_ms": 35.333
+            },
+            {
+              "attack_s": 199.865,
+              "available_s": 199.89866666666666,
+              "delay_ms": 33.667
+            },
+            {
+              "attack_s": 201.115,
+              "available_s": 201.16266666666667,
+              "delay_ms": 47.667
+            },
+            {
+              "attack_s": 201.395,
+              "available_s": 201.44,
+              "delay_ms": 45.0
+            },
+            {
+              "attack_s": 202.505,
+              "available_s": 202.54933333333332,
+              "delay_ms": 44.333
+            },
+            {
+              "attack_s": 203.34,
+              "available_s": 203.38666666666666,
+              "delay_ms": 46.667
+            },
+            {
+              "attack_s": 203.615,
+              "available_s": 203.65866666666668,
+              "delay_ms": 43.667
+            },
+            {
+              "attack_s": 204.03,
+              "available_s": 204.07466666666667,
+              "delay_ms": 44.667
+            },
+            {
+              "attack_s": 204.31,
+              "available_s": 204.35733333333334,
+              "delay_ms": 47.333
+            },
+            {
+              "attack_s": 204.45,
+              "available_s": 204.496,
+              "delay_ms": 46.0
+            },
+            {
+              "attack_s": 207.78,
+              "available_s": 207.824,
+              "delay_ms": 44.0
+            },
+            {
+              "attack_s": 208.06,
+              "available_s": 208.096,
+              "delay_ms": 36.0
+            },
+            {
+              "attack_s": 208.755,
+              "available_s": 208.79466666666667,
+              "delay_ms": 39.667
+            },
+            {
+              "attack_s": 209.865,
+              "available_s": 209.91466666666668,
+              "delay_ms": 49.667
+            },
+            {
+              "attack_s": 210.7,
+              "available_s": 210.74666666666667,
+              "delay_ms": 46.667
+            },
+            {
+              "attack_s": 210.975,
+              "available_s": 211.01333333333332,
+              "delay_ms": 38.333
+            }
+          ],
+          "median_ms": 44.5,
+          "p90_ms": 47.67
+        },
+        "70": {
+          "matched": 29,
+          "missed": 0,
+          "extra": 0,
+          "missed_times_s": [],
+          "extra_times_s": [],
+          "pairs": [
+            {
+              "attack_s": 199.17,
+              "available_s": 199.20533333333333,
+              "delay_ms": 35.333
+            },
+            {
+              "attack_s": 199.585,
+              "available_s": 199.648,
+              "delay_ms": 63.0
+            },
+            {
+              "attack_s": 199.865,
+              "available_s": 199.89866666666666,
+              "delay_ms": 33.667
+            },
+            {
+              "attack_s": 201.115,
+              "available_s": 201.16266666666667,
+              "delay_ms": 47.667
+            },
+            {
+              "attack_s": 201.395,
+              "available_s": 201.44,
+              "delay_ms": 45.0
+            },
+            {
+              "attack_s": 201.81,
+              "available_s": 201.86666666666667,
+              "delay_ms": 56.667
+            },
+            {
+              "attack_s": 202.225,
+              "available_s": 202.27733333333333,
+              "delay_ms": 52.333
+            },
+            {
+              "attack_s": 202.505,
+              "available_s": 202.54933333333332,
+              "delay_ms": 44.333
+            },
+            {
+              "attack_s": 203.34,
+              "available_s": 203.38666666666666,
+              "delay_ms": 46.667
+            },
+            {
+              "attack_s": 203.615,
+              "available_s": 203.65866666666668,
+              "delay_ms": 43.667
+            },
+            {
+              "attack_s": 204.03,
+              "available_s": 204.07466666666667,
+              "delay_ms": 44.667
+            },
+            {
+              "attack_s": 204.31,
+              "available_s": 204.35733333333334,
+              "delay_ms": 47.333
+            },
+            {
+              "attack_s": 204.45,
+              "available_s": 204.496,
+              "delay_ms": 46.0
+            },
+            {
+              "attack_s": 204.59,
+              "available_s": 204.64533333333333,
+              "delay_ms": 55.333
+            },
+            {
+              "attack_s": 204.725,
+              "available_s": 204.77866666666668,
+              "delay_ms": 53.667
+            },
+            {
+              "attack_s": 205.56,
+              "available_s": 205.616,
+              "delay_ms": 56.0
+            },
+            {
+              "attack_s": 205.84,
+              "available_s": 205.89866666666666,
+              "delay_ms": 58.667
+            },
+            {
+              "attack_s": 206.255,
+              "available_s": 206.31466666666665,
+              "delay_ms": 59.667
+            },
+            {
+              "attack_s": 206.67,
+              "available_s": 206.736,
+              "delay_ms": 66.0
+            },
+            {
+              "attack_s": 206.95,
+              "available_s": 207.01333333333332,
+              "delay_ms": 63.333
+            },
+            {
+              "attack_s": 207.78,
+              "available_s": 207.824,
+              "delay_ms": 44.0
+            },
+            {
+              "attack_s": 208.06,
+              "available_s": 208.096,
+              "delay_ms": 36.0
+            },
+            {
+              "attack_s": 208.475,
+              "available_s": 208.53333333333333,
+              "delay_ms": 58.333
+            },
+            {
+              "attack_s": 208.755,
+              "available_s": 208.79466666666667,
+              "delay_ms": 39.667
+            },
+            {
+              "attack_s": 209.59,
+              "available_s": 209.648,
+              "delay_ms": 58.0
+            },
+            {
+              "attack_s": 209.865,
+              "available_s": 209.91466666666668,
+              "delay_ms": 49.667
+            },
+            {
+              "attack_s": 210.28,
+              "available_s": 210.33066666666667,
+              "delay_ms": 50.667
+            },
+            {
+              "attack_s": 210.7,
+              "available_s": 210.74666666666667,
+              "delay_ms": 46.667
+            },
+            {
+              "attack_s": 210.975,
+              "available_s": 211.01333333333332,
+              "delay_ms": 38.333
+            }
+          ],
+          "median_ms": 47.67,
+          "p90_ms": 63.0
+        }
+      },
+      "association_early_35_late_200_ms": {
+        "matched": 29,
+        "missed": 0,
+        "extra": 0,
+        "missed_times_s": [],
+        "extra_times_s": [],
+        "pairs": [
+          {
+            "attack_s": 199.17,
+            "available_s": 199.20533333333333,
+            "delay_ms": 35.333
+          },
+          {
+            "attack_s": 199.585,
+            "available_s": 199.648,
+            "delay_ms": 63.0
+          },
+          {
+            "attack_s": 199.865,
+            "available_s": 199.89866666666666,
+            "delay_ms": 33.667
+          },
+          {
+            "attack_s": 201.115,
+            "available_s": 201.16266666666667,
+            "delay_ms": 47.667
+          },
+          {
+            "attack_s": 201.395,
+            "available_s": 201.44,
+            "delay_ms": 45.0
+          },
+          {
+            "attack_s": 201.81,
+            "available_s": 201.86666666666667,
+            "delay_ms": 56.667
+          },
+          {
+            "attack_s": 202.225,
+            "available_s": 202.27733333333333,
+            "delay_ms": 52.333
+          },
+          {
+            "attack_s": 202.505,
+            "available_s": 202.54933333333332,
+            "delay_ms": 44.333
+          },
+          {
+            "attack_s": 203.34,
+            "available_s": 203.38666666666666,
+            "delay_ms": 46.667
+          },
+          {
+            "attack_s": 203.615,
+            "available_s": 203.65866666666668,
+            "delay_ms": 43.667
+          },
+          {
+            "attack_s": 204.03,
+            "available_s": 204.07466666666667,
+            "delay_ms": 44.667
+          },
+          {
+            "attack_s": 204.31,
+            "available_s": 204.35733333333334,
+            "delay_ms": 47.333
+          },
+          {
+            "attack_s": 204.45,
+            "available_s": 204.496,
+            "delay_ms": 46.0
+          },
+          {
+            "attack_s": 204.59,
+            "available_s": 204.64533333333333,
+            "delay_ms": 55.333
+          },
+          {
+            "attack_s": 204.725,
+            "available_s": 204.77866666666668,
+            "delay_ms": 53.667
+          },
+          {
+            "attack_s": 205.56,
+            "available_s": 205.616,
+            "delay_ms": 56.0
+          },
+          {
+            "attack_s": 205.84,
+            "available_s": 205.89866666666666,
+            "delay_ms": 58.667
+          },
+          {
+            "attack_s": 206.255,
+            "available_s": 206.31466666666665,
+            "delay_ms": 59.667
+          },
+          {
+            "attack_s": 206.67,
+            "available_s": 206.736,
+            "delay_ms": 66.0
+          },
+          {
+            "attack_s": 206.95,
+            "available_s": 207.01333333333332,
+            "delay_ms": 63.333
+          },
+          {
+            "attack_s": 207.78,
+            "available_s": 207.824,
+            "delay_ms": 44.0
+          },
+          {
+            "attack_s": 208.06,
+            "available_s": 208.096,
+            "delay_ms": 36.0
+          },
+          {
+            "attack_s": 208.475,
+            "available_s": 208.53333333333333,
+            "delay_ms": 58.333
+          },
+          {
+            "attack_s": 208.755,
+            "available_s": 208.79466666666667,
+            "delay_ms": 39.667
+          },
+          {
+            "attack_s": 209.59,
+            "available_s": 209.648,
+            "delay_ms": 58.0
+          },
+          {
+            "attack_s": 209.865,
+            "available_s": 209.91466666666668,
+            "delay_ms": 49.667
+          },
+          {
+            "attack_s": 210.28,
+            "available_s": 210.33066666666667,
+            "delay_ms": 50.667
+          },
+          {
+            "attack_s": 210.7,
+            "available_s": 210.74666666666667,
+            "delay_ms": 46.667
+          },
+          {
+            "attack_s": 210.975,
+            "available_s": 211.01333333333332,
+            "delay_ms": 38.333
+          }
+        ],
+        "median_ms": 47.67,
+        "p90_ms": 63.0
+      }
+    },
+    {
+      "track": "late_night",
+      "detector": "mod_harness",
+      "passage": "late_night_bass_heavy",
+      "start_s": 128.0,
+      "end_s": 140.0,
+      "labels": 0,
+      "excluded_regions": [],
+      "excluded_label_times_s": [],
+      "accuracy_by_tolerance_ms": {
+        "35": {
+          "matched": 0,
+          "missed": 0,
+          "extra": 16,
+          "missed_times_s": [],
+          "extra_times_s": [
+            129.344,
+            129.632,
+            129.81866666666667,
+            130.16533333333334,
+            130.44266666666667,
+            130.8,
+            131.504,
+            132.09066666666666,
+            132.304,
+            132.42666666666668,
+            132.48533333333333,
+            132.736,
+            133.056,
+            134.24533333333332,
+            135.79733333333334,
+            137.42933333333335
+          ],
+          "pairs": [],
+          "median_ms": null,
+          "p90_ms": null
+        },
+        "50": {
+          "matched": 0,
+          "missed": 0,
+          "extra": 16,
+          "missed_times_s": [],
+          "extra_times_s": [
+            129.344,
+            129.632,
+            129.81866666666667,
+            130.16533333333334,
+            130.44266666666667,
+            130.8,
+            131.504,
+            132.09066666666666,
+            132.304,
+            132.42666666666668,
+            132.48533333333333,
+            132.736,
+            133.056,
+            134.24533333333332,
+            135.79733333333334,
+            137.42933333333335
+          ],
+          "pairs": [],
+          "median_ms": null,
+          "p90_ms": null
+        },
+        "70": {
+          "matched": 0,
+          "missed": 0,
+          "extra": 16,
+          "missed_times_s": [],
+          "extra_times_s": [
+            129.344,
+            129.632,
+            129.81866666666667,
+            130.16533333333334,
+            130.44266666666667,
+            130.8,
+            131.504,
+            132.09066666666666,
+            132.304,
+            132.42666666666668,
+            132.48533333333333,
+            132.736,
+            133.056,
+            134.24533333333332,
+            135.79733333333334,
+            137.42933333333335
+          ],
+          "pairs": [],
+          "median_ms": null,
+          "p90_ms": null
+        }
+      },
+      "association_early_35_late_200_ms": {
+        "matched": 0,
+        "missed": 0,
+        "extra": 16,
+        "missed_times_s": [],
+        "extra_times_s": [
+          129.344,
+          129.632,
+          129.81866666666667,
+          130.16533333333334,
+          130.44266666666667,
+          130.8,
+          131.504,
+          132.09066666666666,
+          132.304,
+          132.42666666666668,
+          132.48533333333333,
+          132.736,
+          133.056,
+          134.24533333333332,
+          135.79733333333334,
+          137.42933333333335
+        ],
+        "pairs": [],
+        "median_ms": null,
+        "p90_ms": null
+      }
+    },
+    {
+      "track": "midnight_patience",
+      "detector": "kick_attack_probe",
+      "passage": "midnight_patience_kick_heavy",
+      "start_s": 116.136375,
+      "end_s": 128.136375,
+      "labels": 35,
+      "excluded_regions": [
+        {
+          "start_s": 116.96000000000001,
+          "end_s": 117.31,
+          "reason": "Overlapping soft retrigger is visible in source and plausible in master, but separate master onset is insufficiently localized. Exclude region from scoring."
+        },
+        {
+          "start_s": 120.37,
+          "end_s": 120.72,
+          "reason": "Overlapping soft retrigger is visible in source and plausible in master, but separate master onset is insufficiently localized. Exclude region from scoring."
+        },
+        {
+          "start_s": 124.23,
+          "end_s": 124.58,
+          "reason": "Overlapping soft retrigger is visible in source and plausible in master, but separate master onset is insufficiently localized. Exclude region from scoring."
+        },
+        {
+          "start_s": 127.64,
+          "end_s": 127.99000000000001,
+          "reason": "Overlapping soft retrigger is visible in source and plausible in master, but separate master onset is insufficiently localized. Exclude region from scoring."
+        }
+      ],
+      "excluded_label_times_s": [
+        117.3,
+        120.37,
+        120.71,
+        124.23,
+        124.57,
+        127.645,
+        127.99
+      ],
+      "accuracy_by_tolerance_ms": {
+        "35": {
+          "matched": 16,
+          "missed": 19,
+          "extra": 1,
+          "missed_times_s": [
+            116.96,
+            117.87,
+            118.21,
+            118.55,
+            118.89,
+            119.69,
+            121.505,
+            121.845,
+            122.19,
+            122.53,
+            123.32,
+            124.0,
+            124.91,
+            125.14,
+            125.48,
+            125.83,
+            126.17,
+            126.73,
+            126.96
+          ],
+          "extra_times_s": [
+            126.768
+          ],
+          "pairs": [
+            {
+              "attack_s": 116.27,
+              "available_s": 116.29866666666666,
+              "delay_ms": 28.667
+            },
+            {
+              "attack_s": 116.5,
+              "available_s": 116.52266666666667,
+              "delay_ms": 22.667
+            },
+            {
+              "attack_s": 116.725,
+              "available_s": 116.752,
+              "delay_ms": 27.0
+            },
+            {
+              "attack_s": 117.64,
+              "available_s": 117.65333333333334,
+              "delay_ms": 13.333
+            },
+            {
+              "attack_s": 118.32,
+              "available_s": 118.33066666666667,
+              "delay_ms": 10.667
+            },
+            {
+              "attack_s": 119.455,
+              "available_s": 119.472,
+              "delay_ms": 17.0
+            },
+            {
+              "attack_s": 119.91,
+              "available_s": 119.92533333333333,
+              "delay_ms": 15.333
+            },
+            {
+              "attack_s": 120.14,
+              "available_s": 120.14933333333333,
+              "delay_ms": 9.333
+            },
+            {
+              "attack_s": 121.275,
+              "available_s": 121.296,
+              "delay_ms": 21.0
+            },
+            {
+              "attack_s": 121.96,
+              "available_s": 121.968,
+              "delay_ms": 8.0
+            },
+            {
+              "attack_s": 123.095,
+              "available_s": 123.10933333333334,
+              "delay_ms": 14.333
+            },
+            {
+              "attack_s": 123.55,
+              "available_s": 123.56266666666667,
+              "delay_ms": 12.667
+            },
+            {
+              "attack_s": 123.775,
+              "available_s": 123.79733333333333,
+              "delay_ms": 22.333
+            },
+            {
+              "attack_s": 125.595,
+              "available_s": 125.60533333333333,
+              "delay_ms": 10.333
+            },
+            {
+              "attack_s": 127.185,
+              "available_s": 127.216,
+              "delay_ms": 31.0
+            },
+            {
+              "attack_s": 127.41,
+              "available_s": 127.42933333333333,
+              "delay_ms": 19.333
+            }
+          ],
+          "median_ms": 16.17,
+          "p90_ms": 28.67
+        },
+        "50": {
+          "matched": 17,
+          "missed": 18,
+          "extra": 0,
+          "missed_times_s": [
+            116.96,
+            117.87,
+            118.21,
+            118.55,
+            118.89,
+            119.69,
+            121.505,
+            121.845,
+            122.19,
+            122.53,
+            123.32,
+            124.0,
+            124.91,
+            125.14,
+            125.48,
+            125.83,
+            126.17,
+            126.96
+          ],
+          "extra_times_s": [],
+          "pairs": [
+            {
+              "attack_s": 116.27,
+              "available_s": 116.29866666666666,
+              "delay_ms": 28.667
+            },
+            {
+              "attack_s": 116.5,
+              "available_s": 116.52266666666667,
+              "delay_ms": 22.667
+            },
+            {
+              "attack_s": 116.725,
+              "available_s": 116.752,
+              "delay_ms": 27.0
+            },
+            {
+              "attack_s": 117.64,
+              "available_s": 117.65333333333334,
+              "delay_ms": 13.333
+            },
+            {
+              "attack_s": 118.32,
+              "available_s": 118.33066666666667,
+              "delay_ms": 10.667
+            },
+            {
+              "attack_s": 119.455,
+              "available_s": 119.472,
+              "delay_ms": 17.0
+            },
+            {
+              "attack_s": 119.91,
+              "available_s": 119.92533333333333,
+              "delay_ms": 15.333
+            },
+            {
+              "attack_s": 120.14,
+              "available_s": 120.14933333333333,
+              "delay_ms": 9.333
+            },
+            {
+              "attack_s": 121.275,
+              "available_s": 121.296,
+              "delay_ms": 21.0
+            },
+            {
+              "attack_s": 121.96,
+              "available_s": 121.968,
+              "delay_ms": 8.0
+            },
+            {
+              "attack_s": 123.095,
+              "available_s": 123.10933333333334,
+              "delay_ms": 14.333
+            },
+            {
+              "attack_s": 123.55,
+              "available_s": 123.56266666666667,
+              "delay_ms": 12.667
+            },
+            {
+              "attack_s": 123.775,
+              "available_s": 123.79733333333333,
+              "delay_ms": 22.333
+            },
+            {
+              "attack_s": 125.595,
+              "available_s": 125.60533333333333,
+              "delay_ms": 10.333
+            },
+            {
+              "attack_s": 126.73,
+              "available_s": 126.768,
+              "delay_ms": 38.0
+            },
+            {
+              "attack_s": 127.185,
+              "available_s": 127.216,
+              "delay_ms": 31.0
+            },
+            {
+              "attack_s": 127.41,
+              "available_s": 127.42933333333333,
+              "delay_ms": 19.333
+            }
+          ],
+          "median_ms": 17.0,
+          "p90_ms": 31.0
+        },
+        "70": {
+          "matched": 17,
+          "missed": 18,
+          "extra": 0,
+          "missed_times_s": [
+            116.96,
+            117.87,
+            118.21,
+            118.55,
+            118.89,
+            119.69,
+            121.505,
+            121.845,
+            122.19,
+            122.53,
+            123.32,
+            124.0,
+            124.91,
+            125.14,
+            125.48,
+            125.83,
+            126.17,
+            126.96
+          ],
+          "extra_times_s": [],
+          "pairs": [
+            {
+              "attack_s": 116.27,
+              "available_s": 116.29866666666666,
+              "delay_ms": 28.667
+            },
+            {
+              "attack_s": 116.5,
+              "available_s": 116.52266666666667,
+              "delay_ms": 22.667
+            },
+            {
+              "attack_s": 116.725,
+              "available_s": 116.752,
+              "delay_ms": 27.0
+            },
+            {
+              "attack_s": 117.64,
+              "available_s": 117.65333333333334,
+              "delay_ms": 13.333
+            },
+            {
+              "attack_s": 118.32,
+              "available_s": 118.33066666666667,
+              "delay_ms": 10.667
+            },
+            {
+              "attack_s": 119.455,
+              "available_s": 119.472,
+              "delay_ms": 17.0
+            },
+            {
+              "attack_s": 119.91,
+              "available_s": 119.92533333333333,
+              "delay_ms": 15.333
+            },
+            {
+              "attack_s": 120.14,
+              "available_s": 120.14933333333333,
+              "delay_ms": 9.333
+            },
+            {
+              "attack_s": 121.275,
+              "available_s": 121.296,
+              "delay_ms": 21.0
+            },
+            {
+              "attack_s": 121.96,
+              "available_s": 121.968,
+              "delay_ms": 8.0
+            },
+            {
+              "attack_s": 123.095,
+              "available_s": 123.10933333333334,
+              "delay_ms": 14.333
+            },
+            {
+              "attack_s": 123.55,
+              "available_s": 123.56266666666667,
+              "delay_ms": 12.667
+            },
+            {
+              "attack_s": 123.775,
+              "available_s": 123.79733333333333,
+              "delay_ms": 22.333
+            },
+            {
+              "attack_s": 125.595,
+              "available_s": 125.60533333333333,
+              "delay_ms": 10.333
+            },
+            {
+              "attack_s": 126.73,
+              "available_s": 126.768,
+              "delay_ms": 38.0
+            },
+            {
+              "attack_s": 127.185,
+              "available_s": 127.216,
+              "delay_ms": 31.0
+            },
+            {
+              "attack_s": 127.41,
+              "available_s": 127.42933333333333,
+              "delay_ms": 19.333
+            }
+          ],
+          "median_ms": 17.0,
+          "p90_ms": 31.0
+        }
+      },
+      "association_early_35_late_200_ms": {
+        "matched": 17,
+        "missed": 18,
+        "extra": 0,
+        "missed_times_s": [
+          116.96,
+          117.87,
+          118.21,
+          118.55,
+          118.89,
+          119.69,
+          121.505,
+          121.845,
+          122.19,
+          122.53,
+          123.32,
+          124.0,
+          124.91,
+          125.14,
+          125.48,
+          125.83,
+          126.17,
+          126.96
+        ],
+        "extra_times_s": [],
+        "pairs": [
+          {
+            "attack_s": 116.27,
+            "available_s": 116.29866666666666,
+            "delay_ms": 28.667
+          },
+          {
+            "attack_s": 116.5,
+            "available_s": 116.52266666666667,
+            "delay_ms": 22.667
+          },
+          {
+            "attack_s": 116.725,
+            "available_s": 116.752,
+            "delay_ms": 27.0
+          },
+          {
+            "attack_s": 117.64,
+            "available_s": 117.65333333333334,
+            "delay_ms": 13.333
+          },
+          {
+            "attack_s": 118.32,
+            "available_s": 118.33066666666667,
+            "delay_ms": 10.667
+          },
+          {
+            "attack_s": 119.455,
+            "available_s": 119.472,
+            "delay_ms": 17.0
+          },
+          {
+            "attack_s": 119.91,
+            "available_s": 119.92533333333333,
+            "delay_ms": 15.333
+          },
+          {
+            "attack_s": 120.14,
+            "available_s": 120.14933333333333,
+            "delay_ms": 9.333
+          },
+          {
+            "attack_s": 121.275,
+            "available_s": 121.296,
+            "delay_ms": 21.0
+          },
+          {
+            "attack_s": 121.96,
+            "available_s": 121.968,
+            "delay_ms": 8.0
+          },
+          {
+            "attack_s": 123.095,
+            "available_s": 123.10933333333334,
+            "delay_ms": 14.333
+          },
+          {
+            "attack_s": 123.55,
+            "available_s": 123.56266666666667,
+            "delay_ms": 12.667
+          },
+          {
+            "attack_s": 123.775,
+            "available_s": 123.79733333333333,
+            "delay_ms": 22.333
+          },
+          {
+            "attack_s": 125.595,
+            "available_s": 125.60533333333333,
+            "delay_ms": 10.333
+          },
+          {
+            "attack_s": 126.73,
+            "available_s": 126.768,
+            "delay_ms": 38.0
+          },
+          {
+            "attack_s": 127.185,
+            "available_s": 127.216,
+            "delay_ms": 31.0
+          },
+          {
+            "attack_s": 127.41,
+            "available_s": 127.42933333333333,
+            "delay_ms": 19.333
+          }
+        ],
+        "median_ms": 17.0,
+        "p90_ms": 31.0
+      }
+    },
+    {
+      "track": "midnight_patience",
+      "detector": "kick_attack_probe",
+      "passage": "midnight_patience_bass_heavy",
+      "start_s": 28.136375,
+      "end_s": 40.136375,
+      "labels": 0,
+      "excluded_regions": [],
+      "excluded_label_times_s": [],
+      "accuracy_by_tolerance_ms": {
+        "35": {
+          "matched": 0,
+          "missed": 0,
+          "extra": 0,
+          "missed_times_s": [],
+          "extra_times_s": [],
+          "pairs": [],
+          "median_ms": null,
+          "p90_ms": null
+        },
+        "50": {
+          "matched": 0,
+          "missed": 0,
+          "extra": 0,
+          "missed_times_s": [],
+          "extra_times_s": [],
+          "pairs": [],
+          "median_ms": null,
+          "p90_ms": null
+        },
+        "70": {
+          "matched": 0,
+          "missed": 0,
+          "extra": 0,
+          "missed_times_s": [],
+          "extra_times_s": [],
+          "pairs": [],
+          "median_ms": null,
+          "p90_ms": null
+        }
+      },
+      "association_early_35_late_200_ms": {
+        "matched": 0,
+        "missed": 0,
+        "extra": 0,
+        "missed_times_s": [],
+        "extra_times_s": [],
+        "pairs": [],
+        "median_ms": null,
+        "p90_ms": null
+      }
+    },
+    {
+      "track": "midnight_patience",
+      "detector": "mod_harness",
+      "passage": "midnight_patience_kick_heavy",
+      "start_s": 116.136375,
+      "end_s": 128.136375,
+      "labels": 35,
+      "excluded_regions": [
+        {
+          "start_s": 116.96000000000001,
+          "end_s": 117.31,
+          "reason": "Overlapping soft retrigger is visible in source and plausible in master, but separate master onset is insufficiently localized. Exclude region from scoring."
+        },
+        {
+          "start_s": 120.37,
+          "end_s": 120.72,
+          "reason": "Overlapping soft retrigger is visible in source and plausible in master, but separate master onset is insufficiently localized. Exclude region from scoring."
+        },
+        {
+          "start_s": 124.23,
+          "end_s": 124.58,
+          "reason": "Overlapping soft retrigger is visible in source and plausible in master, but separate master onset is insufficiently localized. Exclude region from scoring."
+        },
+        {
+          "start_s": 127.64,
+          "end_s": 127.99000000000001,
+          "reason": "Overlapping soft retrigger is visible in source and plausible in master, but separate master onset is insufficiently localized. Exclude region from scoring."
+        }
+      ],
+      "excluded_label_times_s": [
+        117.3,
+        120.37,
+        120.71,
+        124.23,
+        124.57,
+        127.645,
+        127.99
+      ],
+      "accuracy_by_tolerance_ms": {
+        "35": {
+          "matched": 8,
+          "missed": 27,
+          "extra": 49,
+          "missed_times_s": [
+            116.27,
+            116.5,
+            116.725,
+            117.64,
+            118.21,
+            118.32,
+            118.55,
+            119.69,
+            119.91,
+            120.14,
+            121.505,
+            121.845,
+            121.96,
+            122.53,
+            123.095,
+            123.55,
+            123.775,
+            124.0,
+            124.91,
+            125.14,
+            125.48,
+            125.595,
+            125.83,
+            126.17,
+            126.96,
+            127.185,
+            127.41
+          ],
+          "extra_times_s": [
+            116.32,
+            116.45866666666667,
+            116.56,
+            116.784,
+            117.33866666666667,
+            117.696,
+            117.93066666666667,
+            118.272,
+            118.37866666666666,
+            118.59733333333334,
+            118.68266666666666,
+            119.2,
+            119.51466666666667,
+            119.744,
+            119.968,
+            120.096,
+            120.19733333333333,
+            120.75733333333334,
+            120.928,
+            121.008,
+            121.33333333333333,
+            121.552,
+            121.80266666666667,
+            121.89333333333333,
+            122.016,
+            122.23466666666667,
+            122.304,
+            122.45333333333333,
+            122.576,
+            122.768,
+            122.83733333333333,
+            123.152,
+            123.37066666666666,
+            123.60533333333333,
+            123.73333333333333,
+            123.82933333333334,
+            124.05333333333333,
+            124.624,
+            124.96533333333333,
+            125.184,
+            125.536,
+            125.648,
+            125.872,
+            126.21333333333334,
+            126.77866666666667,
+            127.008,
+            127.23733333333334,
+            127.46133333333333,
+            128.032
+          ],
+          "pairs": [
+            {
+              "attack_s": 116.96,
+              "available_s": 116.928,
+              "delay_ms": -32.0
+            },
+            {
+              "attack_s": 117.87,
+              "available_s": 117.84,
+              "delay_ms": -30.0
+            },
+            {
+              "attack_s": 118.89,
+              "available_s": 118.91733333333333,
+              "delay_ms": 27.333
+            },
+            {
+              "attack_s": 119.455,
+              "available_s": 119.45066666666666,
+              "delay_ms": -4.333
+            },
+            {
+              "attack_s": 121.275,
+              "available_s": 121.24266666666666,
+              "delay_ms": -32.333
+            },
+            {
+              "attack_s": 122.19,
+              "available_s": 122.18133333333333,
+              "delay_ms": -8.667
+            },
+            {
+              "attack_s": 123.32,
+              "available_s": 123.30666666666667,
+              "delay_ms": -13.333
+            },
+            {
+              "attack_s": 126.73,
+              "available_s": 126.72533333333334,
+              "delay_ms": -4.667
+            }
+          ],
+          "median_ms": -11.0,
+          "p90_ms": 27.33
+        },
+        "50": {
+          "matched": 21,
+          "missed": 14,
+          "extra": 36,
+          "missed_times_s": [
+            116.725,
+            117.64,
+            118.21,
+            119.69,
+            119.91,
+            121.96,
+            123.095,
+            123.55,
+            124.0,
+            124.91,
+            125.48,
+            125.595,
+            127.185,
+            127.41
+          ],
+          "extra_times_s": [
+            116.56,
+            116.784,
+            117.33866666666667,
+            117.696,
+            117.93066666666667,
+            118.37866666666666,
+            118.68266666666666,
+            119.2,
+            119.51466666666667,
+            119.744,
+            119.968,
+            120.19733333333333,
+            120.75733333333334,
+            120.928,
+            121.008,
+            121.33333333333333,
+            121.89333333333333,
+            122.016,
+            122.23466666666667,
+            122.304,
+            122.45333333333333,
+            122.768,
+            122.83733333333333,
+            123.152,
+            123.37066666666666,
+            123.60533333333333,
+            123.82933333333334,
+            124.05333333333333,
+            124.624,
+            124.96533333333333,
+            125.536,
+            125.648,
+            126.77866666666667,
+            127.23733333333334,
+            127.46133333333333,
+            128.032
+          ],
+          "pairs": [
+            {
+              "attack_s": 116.27,
+              "available_s": 116.32,
+              "delay_ms": 50.0
+            },
+            {
+              "attack_s": 116.5,
+              "available_s": 116.45866666666667,
+              "delay_ms": -41.333
+            },
+            {
+              "attack_s": 116.96,
+              "available_s": 116.928,
+              "delay_ms": -32.0
+            },
+            {
+              "attack_s": 117.87,
+              "available_s": 117.84,
+              "delay_ms": -30.0
+            },
+            {
+              "attack_s": 118.32,
+              "available_s": 118.272,
+              "delay_ms": -48.0
+            },
+            {
+              "attack_s": 118.55,
+              "available_s": 118.59733333333334,
+              "delay_ms": 47.333
+            },
+            {
+              "attack_s": 118.89,
+              "available_s": 118.91733333333333,
+              "delay_ms": 27.333
+            },
+            {
+              "attack_s": 119.455,
+              "available_s": 119.45066666666666,
+              "delay_ms": -4.333
+            },
+            {
+              "attack_s": 120.14,
+              "available_s": 120.096,
+              "delay_ms": -44.0
+            },
+            {
+              "attack_s": 121.275,
+              "available_s": 121.24266666666666,
+              "delay_ms": -32.333
+            },
+            {
+              "attack_s": 121.505,
+              "available_s": 121.552,
+              "delay_ms": 47.0
+            },
+            {
+              "attack_s": 121.845,
+              "available_s": 121.80266666666667,
+              "delay_ms": -42.333
+            },
+            {
+              "attack_s": 122.19,
+              "available_s": 122.18133333333333,
+              "delay_ms": -8.667
+            },
+            {
+              "attack_s": 122.53,
+              "available_s": 122.576,
+              "delay_ms": 46.0
+            },
+            {
+              "attack_s": 123.32,
+              "available_s": 123.30666666666667,
+              "delay_ms": -13.333
+            },
+            {
+              "attack_s": 123.775,
+              "available_s": 123.73333333333333,
+              "delay_ms": -41.667
+            },
+            {
+              "attack_s": 125.14,
+              "available_s": 125.184,
+              "delay_ms": 44.0
+            },
+            {
+              "attack_s": 125.83,
+              "available_s": 125.872,
+              "delay_ms": 42.0
+            },
+            {
+              "attack_s": 126.17,
+              "available_s": 126.21333333333334,
+              "delay_ms": 43.333
+            },
+            {
+              "attack_s": 126.73,
+              "available_s": 126.72533333333334,
+              "delay_ms": -4.667
+            },
+            {
+              "attack_s": 126.96,
+              "available_s": 127.008,
+              "delay_ms": 48.0
+            }
+          ],
+          "median_ms": -4.67,
+          "p90_ms": 47.33
+        },
+        "70": {
+          "matched": 35,
+          "missed": 0,
+          "extra": 22,
+          "missed_times_s": [],
+          "extra_times_s": [
+            116.56,
+            117.33866666666667,
+            117.93066666666667,
+            118.68266666666666,
+            119.2,
+            119.51466666666667,
+            120.19733333333333,
+            120.75733333333334,
+            120.928,
+            121.008,
+            121.33333333333333,
+            121.89333333333333,
+            122.23466666666667,
+            122.304,
+            122.45333333333333,
+            122.768,
+            122.83733333333333,
+            123.37066666666666,
+            123.82933333333334,
+            124.624,
+            126.77866666666667,
+            128.032
+          ],
+          "pairs": [
+            {
+              "attack_s": 116.27,
+              "available_s": 116.32,
+              "delay_ms": 50.0
+            },
+            {
+              "attack_s": 116.5,
+              "available_s": 116.45866666666667,
+              "delay_ms": -41.333
+            },
+            {
+              "attack_s": 116.725,
+              "available_s": 116.784,
+              "delay_ms": 59.0
+            },
+            {
+              "attack_s": 116.96,
+              "available_s": 116.928,
+              "delay_ms": -32.0
+            },
+            {
+              "attack_s": 117.64,
+              "available_s": 117.696,
+              "delay_ms": 56.0
+            },
+            {
+              "attack_s": 117.87,
+              "available_s": 117.84,
+              "delay_ms": -30.0
+            },
+            {
+              "attack_s": 118.21,
+              "available_s": 118.272,
+              "delay_ms": 62.0
+            },
+            {
+              "attack_s": 118.32,
+              "available_s": 118.37866666666666,
+              "delay_ms": 58.667
+            },
+            {
+              "attack_s": 118.55,
+              "available_s": 118.59733333333334,
+              "delay_ms": 47.333
+            },
+            {
+              "attack_s": 118.89,
+              "available_s": 118.91733333333333,
+              "delay_ms": 27.333
+            },
+            {
+              "attack_s": 119.455,
+              "available_s": 119.45066666666666,
+              "delay_ms": -4.333
+            },
+            {
+              "attack_s": 119.69,
+              "available_s": 119.744,
+              "delay_ms": 54.0
+            },
+            {
+              "attack_s": 119.91,
+              "available_s": 119.968,
+              "delay_ms": 58.0
+            },
+            {
+              "attack_s": 120.14,
+              "available_s": 120.096,
+              "delay_ms": -44.0
+            },
+            {
+              "attack_s": 121.275,
+              "available_s": 121.24266666666666,
+              "delay_ms": -32.333
+            },
+            {
+              "attack_s": 121.505,
+              "available_s": 121.552,
+              "delay_ms": 47.0
+            },
+            {
+              "attack_s": 121.845,
+              "available_s": 121.80266666666667,
+              "delay_ms": -42.333
+            },
+            {
+              "attack_s": 121.96,
+              "available_s": 122.016,
+              "delay_ms": 56.0
+            },
+            {
+              "attack_s": 122.19,
+              "available_s": 122.18133333333333,
+              "delay_ms": -8.667
+            },
+            {
+              "attack_s": 122.53,
+              "available_s": 122.576,
+              "delay_ms": 46.0
+            },
+            {
+              "attack_s": 123.095,
+              "available_s": 123.152,
+              "delay_ms": 57.0
+            },
+            {
+              "attack_s": 123.32,
+              "available_s": 123.30666666666667,
+              "delay_ms": -13.333
+            },
+            {
+              "attack_s": 123.55,
+              "available_s": 123.60533333333333,
+              "delay_ms": 55.333
+            },
+            {
+              "attack_s": 123.775,
+              "available_s": 123.73333333333333,
+              "delay_ms": -41.667
+            },
+            {
+              "attack_s": 124.0,
+              "available_s": 124.05333333333333,
+              "delay_ms": 53.333
+            },
+            {
+              "attack_s": 124.91,
+              "available_s": 124.96533333333333,
+              "delay_ms": 55.333
+            },
+            {
+              "attack_s": 125.14,
+              "available_s": 125.184,
+              "delay_ms": 44.0
+            },
+            {
+              "attack_s": 125.48,
+              "available_s": 125.536,
+              "delay_ms": 56.0
+            },
+            {
+              "attack_s": 125.595,
+              "available_s": 125.648,
+              "delay_ms": 53.0
+            },
+            {
+              "attack_s": 125.83,
+              "available_s": 125.872,
+              "delay_ms": 42.0
+            },
+            {
+              "attack_s": 126.17,
+              "available_s": 126.21333333333334,
+              "delay_ms": 43.333
+            },
+            {
+              "attack_s": 126.73,
+              "available_s": 126.72533333333334,
+              "delay_ms": -4.667
+            },
+            {
+              "attack_s": 126.96,
+              "available_s": 127.008,
+              "delay_ms": 48.0
+            },
+            {
+              "attack_s": 127.185,
+              "available_s": 127.23733333333334,
+              "delay_ms": 52.333
+            },
+            {
+              "attack_s": 127.41,
+              "available_s": 127.46133333333333,
+              "delay_ms": 51.333
+            }
+          ],
+          "median_ms": 47.33,
+          "p90_ms": 58.0
+        }
+      },
+      "association_early_35_late_200_ms": {
+        "matched": 35,
+        "missed": 0,
+        "extra": 22,
+        "missed_times_s": [],
+        "extra_times_s": [
+          116.45866666666667,
+          117.33866666666667,
+          117.93066666666667,
+          118.68266666666666,
+          119.2,
+          119.51466666666667,
+          120.096,
+          120.75733333333334,
+          120.928,
+          121.008,
+          121.33333333333333,
+          121.80266666666667,
+          122.23466666666667,
+          122.304,
+          122.45333333333333,
+          122.768,
+          122.83733333333333,
+          123.37066666666666,
+          123.73333333333333,
+          124.624,
+          126.77866666666667,
+          128.032
+        ],
+        "pairs": [
+          {
+            "attack_s": 116.27,
+            "available_s": 116.32,
+            "delay_ms": 50.0
+          },
+          {
+            "attack_s": 116.5,
+            "available_s": 116.56,
+            "delay_ms": 60.0
+          },
+          {
+            "attack_s": 116.725,
+            "available_s": 116.784,
+            "delay_ms": 59.0
+          },
+          {
+            "attack_s": 116.96,
+            "available_s": 116.928,
+            "delay_ms": -32.0
+          },
+          {
+            "attack_s": 117.64,
+            "available_s": 117.696,
+            "delay_ms": 56.0
+          },
+          {
+            "attack_s": 117.87,
+            "available_s": 117.84,
+            "delay_ms": -30.0
+          },
+          {
+            "attack_s": 118.21,
+            "available_s": 118.272,
+            "delay_ms": 62.0
+          },
+          {
+            "attack_s": 118.32,
+            "available_s": 118.37866666666666,
+            "delay_ms": 58.667
+          },
+          {
+            "attack_s": 118.55,
+            "available_s": 118.59733333333334,
+            "delay_ms": 47.333
+          },
+          {
+            "attack_s": 118.89,
+            "available_s": 118.91733333333333,
+            "delay_ms": 27.333
+          },
+          {
+            "attack_s": 119.455,
+            "available_s": 119.45066666666666,
+            "delay_ms": -4.333
+          },
+          {
+            "attack_s": 119.69,
+            "available_s": 119.744,
+            "delay_ms": 54.0
+          },
+          {
+            "attack_s": 119.91,
+            "available_s": 119.968,
+            "delay_ms": 58.0
+          },
+          {
+            "attack_s": 120.14,
+            "available_s": 120.19733333333333,
+            "delay_ms": 57.333
+          },
+          {
+            "attack_s": 121.275,
+            "available_s": 121.24266666666666,
+            "delay_ms": -32.333
+          },
+          {
+            "attack_s": 121.505,
+            "available_s": 121.552,
+            "delay_ms": 47.0
+          },
+          {
+            "attack_s": 121.845,
+            "available_s": 121.89333333333333,
+            "delay_ms": 48.333
+          },
+          {
+            "attack_s": 121.96,
+            "available_s": 122.016,
+            "delay_ms": 56.0
+          },
+          {
+            "attack_s": 122.19,
+            "available_s": 122.18133333333333,
+            "delay_ms": -8.667
+          },
+          {
+            "attack_s": 122.53,
+            "available_s": 122.576,
+            "delay_ms": 46.0
+          },
+          {
+            "attack_s": 123.095,
+            "available_s": 123.152,
+            "delay_ms": 57.0
+          },
+          {
+            "attack_s": 123.32,
+            "available_s": 123.30666666666667,
+            "delay_ms": -13.333
+          },
+          {
+            "attack_s": 123.55,
+            "available_s": 123.60533333333333,
+            "delay_ms": 55.333
+          },
+          {
+            "attack_s": 123.775,
+            "available_s": 123.82933333333334,
+            "delay_ms": 54.333
+          },
+          {
+            "attack_s": 124.0,
+            "available_s": 124.05333333333333,
+            "delay_ms": 53.333
+          },
+          {
+            "attack_s": 124.91,
+            "available_s": 124.96533333333333,
+            "delay_ms": 55.333
+          },
+          {
+            "attack_s": 125.14,
+            "available_s": 125.184,
+            "delay_ms": 44.0
+          },
+          {
+            "attack_s": 125.48,
+            "available_s": 125.536,
+            "delay_ms": 56.0
+          },
+          {
+            "attack_s": 125.595,
+            "available_s": 125.648,
+            "delay_ms": 53.0
+          },
+          {
+            "attack_s": 125.83,
+            "available_s": 125.872,
+            "delay_ms": 42.0
+          },
+          {
+            "attack_s": 126.17,
+            "available_s": 126.21333333333334,
+            "delay_ms": 43.333
+          },
+          {
+            "attack_s": 126.73,
+            "available_s": 126.72533333333334,
+            "delay_ms": -4.667
+          },
+          {
+            "attack_s": 126.96,
+            "available_s": 127.008,
+            "delay_ms": 48.0
+          },
+          {
+            "attack_s": 127.185,
+            "available_s": 127.23733333333334,
+            "delay_ms": 52.333
+          },
+          {
+            "attack_s": 127.41,
+            "available_s": 127.46133333333333,
+            "delay_ms": 51.333
+          }
+        ],
+        "median_ms": 51.33,
+        "p90_ms": 58.67
+      }
+    },
+    {
+      "track": "midnight_patience",
+      "detector": "mod_harness",
+      "passage": "midnight_patience_bass_heavy",
+      "start_s": 28.136375,
+      "end_s": 40.136375,
+      "labels": 0,
+      "excluded_regions": [],
+      "excluded_label_times_s": [],
+      "accuracy_by_tolerance_ms": {
+        "35": {
+          "matched": 0,
+          "missed": 0,
+          "extra": 12,
+          "missed_times_s": [],
+          "extra_times_s": [
+            29.552,
+            30.192,
+            30.288,
+            31.216,
+            33.072,
+            33.25333333333333,
+            34.154666666666664,
+            35.328,
+            36.112,
+            36.624,
+            37.056,
+            38.81066666666667
+          ],
+          "pairs": [],
+          "median_ms": null,
+          "p90_ms": null
+        },
+        "50": {
+          "matched": 0,
+          "missed": 0,
+          "extra": 12,
+          "missed_times_s": [],
+          "extra_times_s": [
+            29.552,
+            30.192,
+            30.288,
+            31.216,
+            33.072,
+            33.25333333333333,
+            34.154666666666664,
+            35.328,
+            36.112,
+            36.624,
+            37.056,
+            38.81066666666667
+          ],
+          "pairs": [],
+          "median_ms": null,
+          "p90_ms": null
+        },
+        "70": {
+          "matched": 0,
+          "missed": 0,
+          "extra": 12,
+          "missed_times_s": [],
+          "extra_times_s": [
+            29.552,
+            30.192,
+            30.288,
+            31.216,
+            33.072,
+            33.25333333333333,
+            34.154666666666664,
+            35.328,
+            36.112,
+            36.624,
+            37.056,
+            38.81066666666667
+          ],
+          "pairs": [],
+          "median_ms": null,
+          "p90_ms": null
+        }
+      },
+      "association_early_35_late_200_ms": {
+        "matched": 0,
+        "missed": 0,
+        "extra": 12,
+        "missed_times_s": [],
+        "extra_times_s": [
+          29.552,
+          30.192,
+          30.288,
+          31.216,
+          33.072,
+          33.25333333333333,
+          34.154666666666664,
+          35.328,
+          36.112,
+          36.624,
+          37.056,
+          38.81066666666667
+        ],
+        "pairs": [],
+        "median_ms": null,
+        "p90_ms": null
+      }
+    }
+  ]
+}

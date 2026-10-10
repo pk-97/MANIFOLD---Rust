@@ -1,0 +1,2080 @@
+{
+  "status": "lead_reviewed_visual_provisional",
+  "purpose": "D2 detector-independent real-master coverage proposal; no accepted labels, training or detector scoring.",
+  "selection_sha256": "72ec3c814f9cb43c1f82537ad3457976989bb74bc1f8dd058f34089ff42c82d6",
+  "selection_rule_sha256": "9e98a2da6fa4b59f4facebe846390ee796531fdf0f29187007929699390ac6d8",
+  "ground_truth": false,
+  "accepted_labels_changed": "newD2only; prior381and73unchanged",
+  "no_detector_outputs_used": true,
+  "no_fitting_or_scoring": true,
+  "review_method": "Visual inspection of native stereo-derived master/source raw-waveform extrema and centred annotation-only spectrograms. All overview blocks and linked detail panels inspected. Source-only energy proposals are prompts, not labels. Full-master evidence is required for every proposed onset and negative core. No listening verdict is claimed.",
+  "timing": "Explicit manual onset brackets in master seconds; midpoint is only a proposed representative. Brackets describe visual localisation, not statistical confidence. Source mapping is +0.136375s for Midnight only; other offsets zero. Native44.1kHz master and48kHz source clocks remain separate where applicable. No beat grid or detector timing used.",
+  "unknown_policy": "Uncertain intervals are raw physical ambiguity intervals, not already expanded evaluation exclusions. Preserve them for the existing uncertainty-expansion rule if lead accepts the proposal. Clear onset proposals inside any eventual expanded exclusion remain documented, not silently deleted.",
+  "selection_limitations": "Earliest source-active selection is transition-heavy and yields only one core kick in three families. Selections are not replaced for label yield. Four source-quiet strata have independently inspected active masters. These existing development families do not establish reserved-song generalisation.",
+  "provenance": {
+    "raw_evidence_index_sha256": "130494efa3e0266e037391566c96ad1129f41b5c5d0f9d10a200059237e0f9e8",
+    "detail_index_sha256": "bb377b1f2fdc9780903cd51c12d5a64853f24a3b73c7bc0481fa65f87230ae6c",
+    "roll_detail_index_sha256": "c6a53f53b76602dbe2aba099fc46d13b18bf3a4644a0fbff1f7a064dc0d764c8",
+    "source_hash_verification": {
+      "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/EMERGENCE - ALBUM 2026/FINAL MASTERS/Latent Space - 02 - Heavy on Mind MSTR V3 APRS.wav": {
+        "registered_sha256": "3f22cd0335db72972a177488cf28a7d4de94d66c74203d9dea5f79cda5ca5a36",
+        "verified_sha256": "3f22cd0335db72972a177488cf28a7d4de94d66c74203d9dea5f79cda5ca5a36"
+      },
+      "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/STEMS/HEAVY ON MIND STEMS/KICK.wav": {
+        "registered_sha256": "87a3b45750e7c4da2343b78a54ee911a406dd597be43f02380ef3165c315d23a",
+        "verified_sha256": "87a3b45750e7c4da2343b78a54ee911a406dd597be43f02380ef3165c315d23a"
+      },
+      "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/2024/Late Night - STEM MASTER Project/ALEX MASTERS/Latent Space - Late Night T2(mastered) 48k 24-bit.wav": {
+        "registered_sha256": "91ef876583d6404b417f1f92e88acb5aca75a207d1d107d77ee05e2846740108",
+        "verified_sha256": "91ef876583d6404b417f1f92e88acb5aca75a207d1d107d77ee05e2846740108"
+      },
+      "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/STEMS/LATE NIGHT STEMS/Late Night - Kicks Stem.wav": {
+        "registered_sha256": "5419436412a01e12c10f7124eccdd83c904c49b7af6cecb36c4c398f933f1b7f",
+        "verified_sha256": "5419436412a01e12c10f7124eccdd83c904c49b7af6cecb36c4c398f933f1b7f"
+      },
+      "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/EMERGENCE - ALBUM 2026/FINAL MASTERS/Latent Space - 04 - Midnight Patience T2 (mastered) 48k 24-bit.wav": {
+        "registered_sha256": "f985764125d53d9cc9379193af567f4022b05a657678e7c403bf187732bef6f2",
+        "verified_sha256": "f985764125d53d9cc9379193af567f4022b05a657678e7c403bf187732bef6f2"
+      },
+      "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/STEMS/MIDNIGHT PATIENCE STEMS/Kick.wav": {
+        "registered_sha256": "2b5daae4c64e83b47f0587f71b5f2ab389e47f8db0ae1aac4d31a76e268208a2",
+        "verified_sha256": "2b5daae4c64e83b47f0587f71b5f2ab389e47f8db0ae1aac4d31a76e268208a2"
+      },
+      "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/2024/Streets Project/MASTERS/Miracle MSTR V1 APRS.wav": {
+        "registered_sha256": "263c248ce6c2a5b16ad981f055afd0be278085f6468347e25d3e4565f5bf3e66",
+        "verified_sha256": "263c248ce6c2a5b16ad981f055afd0be278085f6468347e25d3e4565f5bf3e66"
+      },
+      "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/STEMS/MIRACLE STEMS/Kick.wav": {
+        "registered_sha256": "7ca8181a9967b5ace955ba9e31294f1587c14fc238332dc56efe5e9ad7b38778",
+        "verified_sha256": "7ca8181a9967b5ace955ba9e31294f1587c14fc238332dc56efe5e9ad7b38778"
+      }
+    },
+    "review_infrastructure_sha256": "f7495a7281f5718f3eacbe02d5f52fe29ae61a1a2e91f8cf390f142956516933",
+    "proposal_writer_sha256": "f787aeabdf2bbbd6f13e533f47b0956add8f98585cb7b95ba9552f47b3ac2990"
+  },
+  "tracks": [
+    {
+      "track": "late_night",
+      "master_path": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/2024/Late Night - STEM MASTER Project/ALEX MASTERS/Latent Space - Late Night T2(mastered) 48k 24-bit.wav",
+      "audio_sha256": "91ef876583d6404b417f1f92e88acb5aca75a207d1d107d77ee05e2846740108",
+      "kick_path": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/STEMS/LATE NIGHT STEMS/Late Night - Kicks Stem.wav",
+      "kick_sha256": "5419436412a01e12c10f7124eccdd83c904c49b7af6cecb36c4c398f933f1b7f",
+      "stem_to_master_seconds": 0.0,
+      "cores": [
+        {
+          "id": "d2_late_night_0074p5",
+          "start_s": 74.5,
+          "end_s": 86.5,
+          "review_start_s": 74.25,
+          "review_end_s": 86.75,
+          "scoring_ready": true,
+          "scoring_ready_status": "lead_reviewed_visual_provisional",
+          "kick_times_s": [
+            74.445,
+            74.725,
+            75.14,
+            75.4175,
+            75.555,
+            75.835,
+            76.665,
+            76.945,
+            77.3625,
+            77.7775,
+            78.055,
+            78.89,
+            79.1675,
+            79.585,
+            79.8625,
+            80.0025,
+            80.14,
+            80.28,
+            81.1125,
+            81.39,
+            81.805,
+            82.2225,
+            82.5025,
+            83.335,
+            83.6125,
+            84.03,
+            84.305,
+            84.445,
+            84.7225,
+            85.555,
+            85.835,
+            86.25,
+            86.67
+          ],
+          "onset_intervals": [
+            {
+              "interval_s": [
+                74.435,
+                74.455
+              ],
+              "midpoint_s": 74.445,
+              "proposal_id": 1,
+              "evidence_sheet": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d2/raw/d2_late_night_0074p5_details_01.png",
+              "panel": 1,
+              "panel_window_s": [
+                74.383,
+                74.633
+              ],
+              "rationale": "Fresh raw master oscillatory packet and renewed low-frequency trajectory agree with an independently visible source restart inside this bracket; onset is not the later amplitude peak or an RMS tail recrossing."
+            },
+            {
+              "interval_s": [
+                74.715,
+                74.735
+              ],
+              "midpoint_s": 74.725,
+              "proposal_id": 2,
+              "evidence_sheet": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d2/raw/d2_late_night_0074p5_details_01.png",
+              "panel": 3,
+              "panel_window_s": [
+                74.661,
+                74.911
+              ],
+              "rationale": "Fresh raw master oscillatory packet and renewed low-frequency trajectory agree with an independently visible source restart inside this bracket; onset is not the later amplitude peak or an RMS tail recrossing."
+            },
+            {
+              "interval_s": [
+                75.13,
+                75.15
+              ],
+              "midpoint_s": 75.14,
+              "proposal_id": 3,
+              "evidence_sheet": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d2/raw/d2_late_night_0074p5_details_01.png",
+              "panel": 5,
+              "panel_window_s": [
+                75.078,
+                75.328
+              ],
+              "rationale": "Fresh raw master oscillatory packet and renewed low-frequency trajectory agree with an independently visible source restart inside this bracket; onset is not the later amplitude peak or an RMS tail recrossing."
+            },
+            {
+              "interval_s": [
+                75.405,
+                75.43
+              ],
+              "midpoint_s": 75.4175,
+              "proposal_id": 4,
+              "evidence_sheet": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d2/raw/d2_late_night_0074p5_details_01.png",
+              "panel": 7,
+              "panel_window_s": [
+                75.356,
+                75.606
+              ],
+              "rationale": "Fresh raw master oscillatory packet and renewed low-frequency trajectory agree with an independently visible source restart inside this bracket; onset is not the later amplitude peak or an RMS tail recrossing."
+            },
+            {
+              "interval_s": [
+                75.545,
+                75.565
+              ],
+              "midpoint_s": 75.555,
+              "proposal_id": 5,
+              "evidence_sheet": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d2/raw/d2_late_night_0074p5_rolls_01.png",
+              "panel": 1,
+              "panel_window_s": [
+                75.511,
+                75.67099999999999
+              ],
+              "rationale": "Fresh raw master oscillatory packet and renewed low-frequency trajectory agree with an independently visible source restart inside this bracket; onset is not the later amplitude peak or an RMS tail recrossing."
+            },
+            {
+              "interval_s": [
+                75.825,
+                75.845
+              ],
+              "midpoint_s": 75.835,
+              "proposal_id": 6,
+              "evidence_sheet": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d2/raw/d2_late_night_0074p5_rolls_01.png",
+              "panel": 3,
+              "panel_window_s": [
+                75.788,
+                75.948
+              ],
+              "rationale": "Fresh raw master oscillatory packet and renewed low-frequency trajectory agree with an independently visible source restart inside this bracket; onset is not the later amplitude peak or an RMS tail recrossing."
+            },
+            {
+              "interval_s": [
+                76.655,
+                76.675
+              ],
+              "midpoint_s": 76.665,
+              "proposal_id": 7,
+              "evidence_sheet": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d2/raw/d2_late_night_0074p5_details_02.png",
+              "panel": 1,
+              "panel_window_s": [
+                76.606,
+                76.856
+              ],
+              "rationale": "Fresh raw master oscillatory packet and renewed low-frequency trajectory agree with an independently visible source restart inside this bracket; onset is not the later amplitude peak or an RMS tail recrossing."
+            },
+            {
+              "interval_s": [
+                76.935,
+                76.955
+              ],
+              "midpoint_s": 76.945,
+              "proposal_id": 8,
+              "evidence_sheet": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d2/raw/d2_late_night_0074p5_details_02.png",
+              "panel": 3,
+              "panel_window_s": [
+                76.883,
+                77.133
+              ],
+              "rationale": "Fresh raw master oscillatory packet and renewed low-frequency trajectory agree with an independently visible source restart inside this bracket; onset is not the later amplitude peak or an RMS tail recrossing."
+            },
+            {
+              "interval_s": [
+                77.35,
+                77.375
+              ],
+              "midpoint_s": 77.3625,
+              "proposal_id": 9,
+              "evidence_sheet": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d2/raw/d2_late_night_0074p5_details_02.png",
+              "panel": 5,
+              "panel_window_s": [
+                77.3,
+                77.55
+              ],
+              "rationale": "Fresh raw master oscillatory packet and renewed low-frequency trajectory agree with an independently visible source restart inside this bracket; onset is not the later amplitude peak or an RMS tail recrossing."
+            },
+            {
+              "interval_s": [
+                77.765,
+                77.79
+              ],
+              "midpoint_s": 77.7775,
+              "proposal_id": 10,
+              "evidence_sheet": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d2/raw/d2_late_night_0074p5_details_02.png",
+              "panel": 7,
+              "panel_window_s": [
+                77.717,
+                77.967
+              ],
+              "rationale": "Fresh raw master oscillatory packet and renewed low-frequency trajectory agree with an independently visible source restart inside this bracket; onset is not the later amplitude peak or an RMS tail recrossing."
+            },
+            {
+              "interval_s": [
+                78.045,
+                78.065
+              ],
+              "midpoint_s": 78.055,
+              "proposal_id": 11,
+              "evidence_sheet": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d2/raw/d2_late_night_0074p5_details_03.png",
+              "panel": 1,
+              "panel_window_s": [
+                77.995,
+                78.245
+              ],
+              "rationale": "Fresh raw master oscillatory packet and renewed low-frequency trajectory agree with an independently visible source restart inside this bracket; onset is not the later amplitude peak or an RMS tail recrossing."
+            },
+            {
+              "interval_s": [
+                78.88,
+                78.9
+              ],
+              "midpoint_s": 78.89,
+              "proposal_id": 12,
+              "evidence_sheet": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d2/raw/d2_late_night_0074p5_details_03.png",
+              "panel": 3,
+              "panel_window_s": [
+                78.828,
+                79.078
+              ],
+              "rationale": "Fresh raw master oscillatory packet and renewed low-frequency trajectory agree with an independently visible source restart inside this bracket; onset is not the later amplitude peak or an RMS tail recrossing."
+            },
+            {
+              "interval_s": [
+                79.155,
+                79.18
+              ],
+              "midpoint_s": 79.1675,
+              "proposal_id": 13,
+              "evidence_sheet": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d2/raw/d2_late_night_0074p5_details_03.png",
+              "panel": 5,
+              "panel_window_s": [
+                79.106,
+                79.356
+              ],
+              "rationale": "Fresh raw master oscillatory packet and renewed low-frequency trajectory agree with an independently visible source restart inside this bracket; onset is not the later amplitude peak or an RMS tail recrossing."
+            },
+            {
+              "interval_s": [
+                79.575,
+                79.595
+              ],
+              "midpoint_s": 79.585,
+              "proposal_id": 14,
+              "evidence_sheet": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d2/raw/d2_late_night_0074p5_details_03.png",
+              "panel": 7,
+              "panel_window_s": [
+                79.52199999999999,
+                79.77199999999999
+              ],
+              "rationale": "Fresh raw master oscillatory packet and renewed low-frequency trajectory agree with an independently visible source restart inside this bracket; onset is not the later amplitude peak or an RMS tail recrossing."
+            },
+            {
+              "interval_s": [
+                79.85,
+                79.875
+              ],
+              "midpoint_s": 79.8625,
+              "proposal_id": 15,
+              "evidence_sheet": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d2/raw/d2_late_night_0074p5_details_04.png",
+              "panel": 1,
+              "panel_window_s": [
+                79.8,
+                80.05
+              ],
+              "rationale": "Fresh raw master oscillatory packet and renewed low-frequency trajectory agree with an independently visible source restart inside this bracket; onset is not the later amplitude peak or an RMS tail recrossing."
+            },
+            {
+              "interval_s": [
+                79.99,
+                80.015
+              ],
+              "midpoint_s": 80.0025,
+              "proposal_id": 16,
+              "evidence_sheet": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d2/raw/d2_late_night_0074p5_rolls_01.png",
+              "panel": 4,
+              "panel_window_s": [
+                79.955,
+                80.115
+              ],
+              "rationale": "Fresh raw master oscillatory packet and renewed low-frequency trajectory agree with an independently visible source restart inside this bracket; onset is not the later amplitude peak or an RMS tail recrossing."
+            },
+            {
+              "interval_s": [
+                80.13,
+                80.15
+              ],
+              "midpoint_s": 80.14,
+              "proposal_id": 17,
+              "evidence_sheet": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d2/raw/d2_late_night_0074p5_rolls_01.png",
+              "panel": 5,
+              "panel_window_s": [
+                80.094,
+                80.25399999999999
+              ],
+              "rationale": "Fresh raw master oscillatory packet and renewed low-frequency trajectory agree with an independently visible source restart inside this bracket; onset is not the later amplitude peak or an RMS tail recrossing."
+            },
+            {
+              "interval_s": [
+                80.27,
+                80.29
+              ],
+              "midpoint_s": 80.28,
+              "proposal_id": 18,
+              "evidence_sheet": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d2/raw/d2_late_night_0074p5_rolls_01.png",
+              "panel": 6,
+              "panel_window_s": [
+                80.233,
+                80.393
+              ],
+              "rationale": "Fresh raw master oscillatory packet and renewed low-frequency trajectory agree with an independently visible source restart inside this bracket; onset is not the later amplitude peak or an RMS tail recrossing."
+            },
+            {
+              "interval_s": [
+                81.1,
+                81.125
+              ],
+              "midpoint_s": 81.1125,
+              "proposal_id": 19,
+              "evidence_sheet": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d2/raw/d2_late_night_0074p5_details_04.png",
+              "panel": 3,
+              "panel_window_s": [
+                81.05,
+                81.3
+              ],
+              "rationale": "Fresh raw master oscillatory packet and renewed low-frequency trajectory agree with an independently visible source restart inside this bracket; onset is not the later amplitude peak or an RMS tail recrossing."
+            },
+            {
+              "interval_s": [
+                81.38,
+                81.4
+              ],
+              "midpoint_s": 81.39,
+              "proposal_id": 20,
+              "evidence_sheet": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d2/raw/d2_late_night_0074p5_details_04.png",
+              "panel": 5,
+              "panel_window_s": [
+                81.328,
+                81.578
+              ],
+              "rationale": "Fresh raw master oscillatory packet and renewed low-frequency trajectory agree with an independently visible source restart inside this bracket; onset is not the later amplitude peak or an RMS tail recrossing."
+            },
+            {
+              "interval_s": [
+                81.795,
+                81.815
+              ],
+              "midpoint_s": 81.805,
+              "proposal_id": 21,
+              "evidence_sheet": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d2/raw/d2_late_night_0074p5_details_04.png",
+              "panel": 7,
+              "panel_window_s": [
+                81.745,
+                81.995
+              ],
+              "rationale": "Fresh raw master oscillatory packet and renewed low-frequency trajectory agree with an independently visible source restart inside this bracket; onset is not the later amplitude peak or an RMS tail recrossing."
+            },
+            {
+              "interval_s": [
+                82.21,
+                82.235
+              ],
+              "midpoint_s": 82.2225,
+              "proposal_id": 22,
+              "evidence_sheet": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d2/raw/d2_late_night_0074p5_details_05.png",
+              "panel": 1,
+              "panel_window_s": [
+                82.16199999999999,
+                82.41199999999999
+              ],
+              "rationale": "Fresh raw master oscillatory packet and renewed low-frequency trajectory agree with an independently visible source restart inside this bracket; onset is not the later amplitude peak or an RMS tail recrossing."
+            },
+            {
+              "interval_s": [
+                82.49,
+                82.515
+              ],
+              "midpoint_s": 82.5025,
+              "proposal_id": 23,
+              "evidence_sheet": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d2/raw/d2_late_night_0074p5_details_05.png",
+              "panel": 3,
+              "panel_window_s": [
+                82.439,
+                82.689
+              ],
+              "rationale": "Fresh raw master oscillatory packet and renewed low-frequency trajectory agree with an independently visible source restart inside this bracket; onset is not the later amplitude peak or an RMS tail recrossing."
+            },
+            {
+              "interval_s": [
+                83.325,
+                83.345
+              ],
+              "midpoint_s": 83.335,
+              "proposal_id": 24,
+              "evidence_sheet": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d2/raw/d2_late_night_0074p5_details_05.png",
+              "panel": 5,
+              "panel_window_s": [
+                83.273,
+                83.523
+              ],
+              "rationale": "Fresh raw master oscillatory packet and renewed low-frequency trajectory agree with an independently visible source restart inside this bracket; onset is not the later amplitude peak or an RMS tail recrossing."
+            },
+            {
+              "interval_s": [
+                83.6,
+                83.625
+              ],
+              "midpoint_s": 83.6125,
+              "proposal_id": 25,
+              "evidence_sheet": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d2/raw/d2_late_night_0074p5_details_05.png",
+              "panel": 7,
+              "panel_window_s": [
+                83.55,
+                83.8
+              ],
+              "rationale": "Fresh raw master oscillatory packet and renewed low-frequency trajectory agree with an independently visible source restart inside this bracket; onset is not the later amplitude peak or an RMS tail recrossing."
+            },
+            {
+              "interval_s": [
+                84.02,
+                84.04
+              ],
+              "midpoint_s": 84.03,
+              "proposal_id": 26,
+              "evidence_sheet": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d2/raw/d2_late_night_0074p5_details_06.png",
+              "panel": 1,
+              "panel_window_s": [
+                83.967,
+                84.217
+              ],
+              "rationale": "Fresh raw master oscillatory packet and renewed low-frequency trajectory agree with an independently visible source restart inside this bracket; onset is not the later amplitude peak or an RMS tail recrossing."
+            },
+            {
+              "interval_s": [
+                84.295,
+                84.315
+              ],
+              "midpoint_s": 84.305,
+              "proposal_id": 27,
+              "evidence_sheet": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d2/raw/d2_late_night_0074p5_details_06.png",
+              "panel": 3,
+              "panel_window_s": [
+                84.245,
+                84.495
+              ],
+              "rationale": "Fresh raw master oscillatory packet and renewed low-frequency trajectory agree with an independently visible source restart inside this bracket; onset is not the later amplitude peak or an RMS tail recrossing."
+            },
+            {
+              "interval_s": [
+                84.435,
+                84.455
+              ],
+              "midpoint_s": 84.445,
+              "proposal_id": 28,
+              "evidence_sheet": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d2/raw/d2_late_night_0074p5_rolls_02.png",
+              "panel": 1,
+              "panel_window_s": [
+                84.399,
+                84.559
+              ],
+              "rationale": "Fresh raw master oscillatory packet and renewed low-frequency trajectory agree with an independently visible source restart inside this bracket; onset is not the later amplitude peak or an RMS tail recrossing."
+            },
+            {
+              "interval_s": [
+                84.71,
+                84.735
+              ],
+              "midpoint_s": 84.7225,
+              "proposal_id": 29,
+              "evidence_sheet": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d2/raw/d2_late_night_0074p5_rolls_02.png",
+              "panel": 3,
+              "panel_window_s": [
+                84.67699999999999,
+                84.83699999999999
+              ],
+              "rationale": "Fresh raw master oscillatory packet and renewed low-frequency trajectory agree with an independently visible source restart inside this bracket; onset is not the later amplitude peak or an RMS tail recrossing."
+            },
+            {
+              "interval_s": [
+                85.545,
+                85.565
+              ],
+              "midpoint_s": 85.555,
+              "proposal_id": 30,
+              "evidence_sheet": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d2/raw/d2_late_night_0074p5_details_06.png",
+              "panel": 5,
+              "panel_window_s": [
+                85.495,
+                85.745
+              ],
+              "rationale": "Fresh raw master oscillatory packet and renewed low-frequency trajectory agree with an independently visible source restart inside this bracket; onset is not the later amplitude peak or an RMS tail recrossing."
+            },
+            {
+              "interval_s": [
+                85.825,
+                85.845
+              ],
+              "midpoint_s": 85.835,
+              "proposal_id": 31,
+              "evidence_sheet": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d2/raw/d2_late_night_0074p5_details_06.png",
+              "panel": 7,
+              "panel_window_s": [
+                85.773,
+                86.023
+              ],
+              "rationale": "Fresh raw master oscillatory packet and renewed low-frequency trajectory agree with an independently visible source restart inside this bracket; onset is not the later amplitude peak or an RMS tail recrossing."
+            },
+            {
+              "interval_s": [
+                86.24,
+                86.26
+              ],
+              "midpoint_s": 86.25,
+              "proposal_id": 32,
+              "evidence_sheet": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d2/raw/d2_late_night_0074p5_details_07.png",
+              "panel": 1,
+              "panel_window_s": [
+                86.189,
+                86.439
+              ],
+              "rationale": "Fresh raw master oscillatory packet and renewed low-frequency trajectory agree with an independently visible source restart inside this bracket; onset is not the later amplitude peak or an RMS tail recrossing."
+            },
+            {
+              "interval_s": [
+                86.66,
+                86.68
+              ],
+              "midpoint_s": 86.67,
+              "proposal_id": 33,
+              "evidence_sheet": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d2/raw/d2_late_night_0074p5_details_07.png",
+              "panel": 3,
+              "panel_window_s": [
+                86.606,
+                86.75
+              ],
+              "rationale": "Fresh raw master oscillatory packet and renewed low-frequency trajectory agree with an independently visible source restart inside this bracket; onset is not the later amplitude peak or an RMS tail recrossing."
+            }
+          ],
+          "uncertain_regions": [
+            {
+              "start_s": 75.68,
+              "end_s": 75.715,
+              "reason": "Mid-roll source phase/envelope disturbance around75.694s has no clearly separable renewed master attack or high-to-low sweep; possible overlapping weak hit versus clipping/continuation remains unknown."
+            },
+            {
+              "start_s": 84.57,
+              "end_s": 84.605,
+              "reason": "Analogous mid-roll source disturbance around84.583s; master cycles continue and a distinct new attack cannot be established. Unknown, not a negative or an accepted kick."
+            }
+          ],
+          "review_findings": "Every proposed onset has a fresh raw master oscillatory packet with renewed shorter cycles/low sweep aligned with a distinct source reset, including seven clear roll attacks missed by the RMS helper. Two mid-roll disturbances remain unknown. The helper repeatedly recrosses its threshold on fading sinusoidal tails; those are rejected. Complete overview and extra master-only80.4..81.08/84.85..85.5s details show continuing bass/harmonic activity between packets, not additional identifiable kicks. Source waveform is heavily clipped, so amplitude peaks and RMS crossings are not onset truth.",
+          "overview": {
+            "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d2/raw/d2_late_night_0074p5_overview.png",
+            "sha256": "b4afaef17f560f3c928a71cd777715ca35950c6a9c0687f8b8db3c2943724ad9"
+          },
+          "details": [
+            {
+              "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d2/raw/d2_late_night_0074p5_details_01.png",
+              "sha256": "7f46ba5576d90ef1080a662a94cedaa6f1c351d78a2167a9c347dba275a70e3e",
+              "windows": [
+                [
+                  74.383,
+                  74.633
+                ],
+                [
+                  74.52799999999999,
+                  74.77799999999999
+                ],
+                [
+                  74.661,
+                  74.911
+                ],
+                [
+                  74.816,
+                  75.066
+                ],
+                [
+                  75.078,
+                  75.328
+                ],
+                [
+                  75.231,
+                  75.481
+                ],
+                [
+                  75.356,
+                  75.606
+                ],
+                [
+                  75.926,
+                  76.176
+                ]
+              ]
+            },
+            {
+              "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d2/raw/d2_late_night_0074p5_details_02.png",
+              "sha256": "3d48be77619e92bc0d18413d5dd7fbdb894932bf57705ea92ceede163a239662",
+              "windows": [
+                [
+                  76.606,
+                  76.856
+                ],
+                [
+                  76.75999999999999,
+                  77.00999999999999
+                ],
+                [
+                  76.883,
+                  77.133
+                ],
+                [
+                  77.038,
+                  77.288
+                ],
+                [
+                  77.3,
+                  77.55
+                ],
+                [
+                  77.454,
+                  77.704
+                ],
+                [
+                  77.717,
+                  77.967
+                ],
+                [
+                  77.871,
+                  78.121
+                ]
+              ]
+            },
+            {
+              "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d2/raw/d2_late_night_0074p5_details_03.png",
+              "sha256": "c3b3f4c04058cbbaeb2ee3610fa12b80d01c8522dbbfaddb8dcfdd6e8dba61ee",
+              "windows": [
+                [
+                  77.995,
+                  78.245
+                ],
+                [
+                  78.14999999999999,
+                  78.39999999999999
+                ],
+                [
+                  78.828,
+                  79.078
+                ],
+                [
+                  78.974,
+                  79.224
+                ],
+                [
+                  79.106,
+                  79.356
+                ],
+                [
+                  79.259,
+                  79.509
+                ],
+                [
+                  79.52199999999999,
+                  79.77199999999999
+                ],
+                [
+                  79.67699999999999,
+                  79.92699999999999
+                ]
+              ]
+            },
+            {
+              "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d2/raw/d2_late_night_0074p5_details_04.png",
+              "sha256": "8184a4fa70171406885e58b8e357926543cfd0897724d9cfbc27b3782ff55d55",
+              "windows": [
+                [
+                  79.8,
+                  80.05
+                ],
+                [
+                  80.371,
+                  80.621
+                ],
+                [
+                  81.05,
+                  81.3
+                ],
+                [
+                  81.205,
+                  81.455
+                ],
+                [
+                  81.328,
+                  81.578
+                ],
+                [
+                  81.483,
+                  81.733
+                ],
+                [
+                  81.745,
+                  81.995
+                ],
+                [
+                  81.89699999999999,
+                  82.14699999999999
+                ]
+              ]
+            },
+            {
+              "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d2/raw/d2_late_night_0074p5_details_05.png",
+              "sha256": "04c101b5c16fe33f746872a0300a17fbb7076ea0ee9f2d2e9632f95f6cf82590",
+              "windows": [
+                [
+                  82.16199999999999,
+                  82.41199999999999
+                ],
+                [
+                  82.317,
+                  82.567
+                ],
+                [
+                  82.439,
+                  82.689
+                ],
+                [
+                  82.592,
+                  82.842
+                ],
+                [
+                  83.273,
+                  83.523
+                ],
+                [
+                  83.416,
+                  83.666
+                ],
+                [
+                  83.55,
+                  83.8
+                ],
+                [
+                  83.704,
+                  83.954
+                ]
+              ]
+            },
+            {
+              "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d2/raw/d2_late_night_0074p5_details_06.png",
+              "sha256": "cef2d69f77e917b1ef7dc7b46a12f15a3327011de34ada6ae879ad8d6b4974eb",
+              "windows": [
+                [
+                  83.967,
+                  84.217
+                ],
+                [
+                  84.121,
+                  84.371
+                ],
+                [
+                  84.245,
+                  84.495
+                ],
+                [
+                  84.817,
+                  85.067
+                ],
+                [
+                  85.495,
+                  85.745
+                ],
+                [
+                  85.651,
+                  85.901
+                ],
+                [
+                  85.773,
+                  86.023
+                ],
+                [
+                  85.925,
+                  86.175
+                ]
+              ]
+            },
+            {
+              "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d2/raw/d2_late_night_0074p5_details_07.png",
+              "sha256": "c3f409abc0cfbe2dfd24f28d674575e09ac7e4d2d955cb6522e164c62cd23e08",
+              "windows": [
+                [
+                  86.189,
+                  86.439
+                ],
+                [
+                  86.343,
+                  86.593
+                ],
+                [
+                  86.606,
+                  86.75
+                ]
+              ]
+            },
+            {
+              "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d2/raw/d2_late_night_0074p5_rolls_01.png",
+              "sha256": "c3e9714ddac5eaae116bb8680f3466b1818f3a6e6a29508038f64b169ffaa55a",
+              "windows": [
+                [
+                  75.511,
+                  75.67099999999999
+                ],
+                [
+                  75.649,
+                  75.809
+                ],
+                [
+                  75.788,
+                  75.948
+                ],
+                [
+                  79.955,
+                  80.115
+                ],
+                [
+                  80.094,
+                  80.25399999999999
+                ],
+                [
+                  80.233,
+                  80.393
+                ]
+              ]
+            },
+            {
+              "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d2/raw/d2_late_night_0074p5_rolls_02.png",
+              "sha256": "0fbc08615bf5888f49204b87bd0fab30fa541381d2f29fc13b439e352006186e",
+              "windows": [
+                [
+                  84.399,
+                  84.559
+                ],
+                [
+                  84.538,
+                  84.698
+                ],
+                [
+                  84.67699999999999,
+                  84.83699999999999
+                ]
+              ]
+            },
+            {
+              "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d2/raw/d2_late_night_0074p5_master_only_context.png",
+              "sha256": "441a33cc5df5a70c5d316dff3fc932cf88860ceb422c16388ccbd76ab4ccd77e",
+              "windows": [
+                [
+                  80.4,
+                  81.08
+                ],
+                [
+                  84.85,
+                  85.5
+                ]
+              ]
+            }
+          ],
+          "raw_excerpt_coordinates": {
+            "master": {
+              "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d2/raw/d2_late_night_0074p5_master.wav",
+              "sha256": "0a30795daa9ad10985530072bb171a2a69e4e9f74fc1ad5237492e256dc2be85",
+              "original_path": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/2024/Late Night - STEM MASTER Project/ALEX MASTERS/Latent Space - Late Night T2(mastered) 48k 24-bit.wav",
+              "sample_rate": 48000,
+              "source_sample_range": [
+                3564000,
+                4164000
+              ],
+              "master_axis_origin_s": 74.25,
+              "frames": 600000,
+              "channels": 2,
+              "decoded_samples_exact": true,
+              "mono_peak": 0.9761356115341187,
+              "stereo_peak": 0.9763166904449463,
+              "spectrogram_path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d2/raw/d2_late_night_0074p5_master_spectrogram.npz",
+              "spectrogram_sha256": "4a3f407fb5eb8830b21cc5a9038ebd37d950c4ab689d8e5f6c71f76244baf8f7"
+            },
+            "kick": {
+              "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d2/raw/d2_late_night_0074p5_kick.wav",
+              "sha256": "162e90df05b05b667980d90ce0be753e819399f0eb5d4ca25fc5e0e42956239a",
+              "original_path": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/STEMS/LATE NIGHT STEMS/Late Night - Kicks Stem.wav",
+              "sample_rate": 48000,
+              "source_sample_range": [
+                3564000,
+                4164000
+              ],
+              "master_axis_origin_s": 74.25,
+              "frames": 600000,
+              "channels": 2,
+              "decoded_samples_exact": true,
+              "mono_peak": 1.0,
+              "stereo_peak": 1.0,
+              "spectrogram_path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d2/raw/d2_late_night_0074p5_kick_spectrogram.npz",
+              "spectrogram_sha256": "f1dd84ab3fc62534cd463d4ca4a603273467ec6717f13abdf246185a28fd4eb7"
+            }
+          },
+          "source_energy_stratum": "source_active",
+          "core_label_count": 31,
+          "review_label_count": 33,
+          "source_energy_helper_proposals_s": [
+            74.443,
+            74.588,
+            74.721,
+            74.876,
+            75.138,
+            75.291,
+            75.416,
+            75.986,
+            76.666,
+            76.82,
+            76.943,
+            77.098,
+            77.36,
+            77.514,
+            77.777,
+            77.931,
+            78.055,
+            78.21,
+            78.888,
+            79.034,
+            79.166,
+            79.319,
+            79.582,
+            79.737,
+            79.86,
+            80.431,
+            81.11,
+            81.265,
+            81.388,
+            81.543,
+            81.805,
+            81.957,
+            82.222,
+            82.377,
+            82.499,
+            82.652,
+            83.333,
+            83.476,
+            83.61,
+            83.764,
+            84.027,
+            84.181,
+            84.305,
+            84.877,
+            85.555,
+            85.711,
+            85.833,
+            85.985,
+            86.249,
+            86.403,
+            86.666
+          ],
+          "source_helper_disposition": [
+            {
+              "time_s": 74.443,
+              "status": "associated_with_reviewed_attack",
+              "note": "Disposition from raw master/source detail review, not automatic threshold acceptance."
+            },
+            {
+              "time_s": 74.588,
+              "status": "reviewed_tail_or_boundary_retrigger_not_accepted",
+              "note": "Disposition from raw master/source detail review, not automatic threshold acceptance."
+            },
+            {
+              "time_s": 74.721,
+              "status": "associated_with_reviewed_attack",
+              "note": "Disposition from raw master/source detail review, not automatic threshold acceptance."
+            },
+            {
+              "time_s": 74.876,
+              "status": "reviewed_tail_or_boundary_retrigger_not_accepted",
+              "note": "Disposition from raw master/source detail review, not automatic threshold acceptance."
+            },
+            {
+              "time_s": 75.138,
+              "status": "associated_with_reviewed_attack",
+              "note": "Disposition from raw master/source detail review, not automatic threshold acceptance."
+            },
+            {
+              "time_s": 75.291,
+              "status": "reviewed_tail_or_boundary_retrigger_not_accepted",
+              "note": "Disposition from raw master/source detail review, not automatic threshold acceptance."
+            },
+            {
+              "time_s": 75.416,
+              "status": "associated_with_reviewed_attack",
+              "note": "Disposition from raw master/source detail review, not automatic threshold acceptance."
+            },
+            {
+              "time_s": 75.986,
+              "status": "reviewed_tail_or_boundary_retrigger_not_accepted",
+              "note": "Disposition from raw master/source detail review, not automatic threshold acceptance."
+            },
+            {
+              "time_s": 76.666,
+              "status": "associated_with_reviewed_attack",
+              "note": "Disposition from raw master/source detail review, not automatic threshold acceptance."
+            },
+            {
+              "time_s": 76.82,
+              "status": "reviewed_tail_or_boundary_retrigger_not_accepted",
+              "note": "Disposition from raw master/source detail review, not automatic threshold acceptance."
+            },
+            {
+              "time_s": 76.943,
+              "status": "associated_with_reviewed_attack",
+              "note": "Disposition from raw master/source detail review, not automatic threshold acceptance."
+            },
+            {
+              "time_s": 77.098,
+              "status": "reviewed_tail_or_boundary_retrigger_not_accepted",
+              "note": "Disposition from raw master/source detail review, not automatic threshold acceptance."
+            },
+            {
+              "time_s": 77.36,
+              "status": "associated_with_reviewed_attack",
+              "note": "Disposition from raw master/source detail review, not automatic threshold acceptance."
+            },
+            {
+              "time_s": 77.514,
+              "status": "reviewed_tail_or_boundary_retrigger_not_accepted",
+              "note": "Disposition from raw master/source detail review, not automatic threshold acceptance."
+            },
+            {
+              "time_s": 77.777,
+              "status": "associated_with_reviewed_attack",
+              "note": "Disposition from raw master/source detail review, not automatic threshold acceptance."
+            },
+            {
+              "time_s": 77.931,
+              "status": "reviewed_tail_or_boundary_retrigger_not_accepted",
+              "note": "Disposition from raw master/source detail review, not automatic threshold acceptance."
+            },
+            {
+              "time_s": 78.055,
+              "status": "associated_with_reviewed_attack",
+              "note": "Disposition from raw master/source detail review, not automatic threshold acceptance."
+            },
+            {
+              "time_s": 78.21,
+              "status": "reviewed_tail_or_boundary_retrigger_not_accepted",
+              "note": "Disposition from raw master/source detail review, not automatic threshold acceptance."
+            },
+            {
+              "time_s": 78.888,
+              "status": "associated_with_reviewed_attack",
+              "note": "Disposition from raw master/source detail review, not automatic threshold acceptance."
+            },
+            {
+              "time_s": 79.034,
+              "status": "reviewed_tail_or_boundary_retrigger_not_accepted",
+              "note": "Disposition from raw master/source detail review, not automatic threshold acceptance."
+            },
+            {
+              "time_s": 79.166,
+              "status": "associated_with_reviewed_attack",
+              "note": "Disposition from raw master/source detail review, not automatic threshold acceptance."
+            },
+            {
+              "time_s": 79.319,
+              "status": "reviewed_tail_or_boundary_retrigger_not_accepted",
+              "note": "Disposition from raw master/source detail review, not automatic threshold acceptance."
+            },
+            {
+              "time_s": 79.582,
+              "status": "associated_with_reviewed_attack",
+              "note": "Disposition from raw master/source detail review, not automatic threshold acceptance."
+            },
+            {
+              "time_s": 79.737,
+              "status": "reviewed_tail_or_boundary_retrigger_not_accepted",
+              "note": "Disposition from raw master/source detail review, not automatic threshold acceptance."
+            },
+            {
+              "time_s": 79.86,
+              "status": "associated_with_reviewed_attack",
+              "note": "Disposition from raw master/source detail review, not automatic threshold acceptance."
+            },
+            {
+              "time_s": 80.431,
+              "status": "reviewed_tail_or_boundary_retrigger_not_accepted",
+              "note": "Disposition from raw master/source detail review, not automatic threshold acceptance."
+            },
+            {
+              "time_s": 81.11,
+              "status": "associated_with_reviewed_attack",
+              "note": "Disposition from raw master/source detail review, not automatic threshold acceptance."
+            },
+            {
+              "time_s": 81.265,
+              "status": "reviewed_tail_or_boundary_retrigger_not_accepted",
+              "note": "Disposition from raw master/source detail review, not automatic threshold acceptance."
+            },
+            {
+              "time_s": 81.388,
+              "status": "associated_with_reviewed_attack",
+              "note": "Disposition from raw master/source detail review, not automatic threshold acceptance."
+            },
+            {
+              "time_s": 81.543,
+              "status": "reviewed_tail_or_boundary_retrigger_not_accepted",
+              "note": "Disposition from raw master/source detail review, not automatic threshold acceptance."
+            },
+            {
+              "time_s": 81.805,
+              "status": "associated_with_reviewed_attack",
+              "note": "Disposition from raw master/source detail review, not automatic threshold acceptance."
+            },
+            {
+              "time_s": 81.957,
+              "status": "reviewed_tail_or_boundary_retrigger_not_accepted",
+              "note": "Disposition from raw master/source detail review, not automatic threshold acceptance."
+            },
+            {
+              "time_s": 82.222,
+              "status": "associated_with_reviewed_attack",
+              "note": "Disposition from raw master/source detail review, not automatic threshold acceptance."
+            },
+            {
+              "time_s": 82.377,
+              "status": "reviewed_tail_or_boundary_retrigger_not_accepted",
+              "note": "Disposition from raw master/source detail review, not automatic threshold acceptance."
+            },
+            {
+              "time_s": 82.499,
+              "status": "associated_with_reviewed_attack",
+              "note": "Disposition from raw master/source detail review, not automatic threshold acceptance."
+            },
+            {
+              "time_s": 82.652,
+              "status": "reviewed_tail_or_boundary_retrigger_not_accepted",
+              "note": "Disposition from raw master/source detail review, not automatic threshold acceptance."
+            },
+            {
+              "time_s": 83.333,
+              "status": "associated_with_reviewed_attack",
+              "note": "Disposition from raw master/source detail review, not automatic threshold acceptance."
+            },
+            {
+              "time_s": 83.476,
+              "status": "reviewed_tail_or_boundary_retrigger_not_accepted",
+              "note": "Disposition from raw master/source detail review, not automatic threshold acceptance."
+            },
+            {
+              "time_s": 83.61,
+              "status": "associated_with_reviewed_attack",
+              "note": "Disposition from raw master/source detail review, not automatic threshold acceptance."
+            },
+            {
+              "time_s": 83.764,
+              "status": "reviewed_tail_or_boundary_retrigger_not_accepted",
+              "note": "Disposition from raw master/source detail review, not automatic threshold acceptance."
+            },
+            {
+              "time_s": 84.027,
+              "status": "associated_with_reviewed_attack",
+              "note": "Disposition from raw master/source detail review, not automatic threshold acceptance."
+            },
+            {
+              "time_s": 84.181,
+              "status": "reviewed_tail_or_boundary_retrigger_not_accepted",
+              "note": "Disposition from raw master/source detail review, not automatic threshold acceptance."
+            },
+            {
+              "time_s": 84.305,
+              "status": "associated_with_reviewed_attack",
+              "note": "Disposition from raw master/source detail review, not automatic threshold acceptance."
+            },
+            {
+              "time_s": 84.877,
+              "status": "reviewed_tail_or_boundary_retrigger_not_accepted",
+              "note": "Disposition from raw master/source detail review, not automatic threshold acceptance."
+            },
+            {
+              "time_s": 85.555,
+              "status": "associated_with_reviewed_attack",
+              "note": "Disposition from raw master/source detail review, not automatic threshold acceptance."
+            },
+            {
+              "time_s": 85.711,
+              "status": "reviewed_tail_or_boundary_retrigger_not_accepted",
+              "note": "Disposition from raw master/source detail review, not automatic threshold acceptance."
+            },
+            {
+              "time_s": 85.833,
+              "status": "associated_with_reviewed_attack",
+              "note": "Disposition from raw master/source detail review, not automatic threshold acceptance."
+            },
+            {
+              "time_s": 85.985,
+              "status": "reviewed_tail_or_boundary_retrigger_not_accepted",
+              "note": "Disposition from raw master/source detail review, not automatic threshold acceptance."
+            },
+            {
+              "time_s": 86.249,
+              "status": "associated_with_reviewed_attack",
+              "note": "Disposition from raw master/source detail review, not automatic threshold acceptance."
+            },
+            {
+              "time_s": 86.403,
+              "status": "reviewed_tail_or_boundary_retrigger_not_accepted",
+              "note": "Disposition from raw master/source detail review, not automatic threshold acceptance."
+            },
+            {
+              "time_s": 86.666,
+              "status": "associated_with_reviewed_attack",
+              "note": "Disposition from raw master/source detail review, not automatic threshold acceptance."
+            }
+          ]
+        },
+        {
+          "id": "d2_late_night_0151p5",
+          "start_s": 151.5,
+          "end_s": 163.5,
+          "review_start_s": 151.25,
+          "review_end_s": 163.75,
+          "scoring_ready": true,
+          "scoring_ready_status": "lead_reviewed_visual_provisional",
+          "kick_times_s": [],
+          "onset_intervals": [],
+          "uncertain_regions": [],
+          "review_findings": "Master overview and151.25..151.65,155.95..156.35,159.90..160.30,163.25..163.75s details show continuous low carrier oscillation, sustained harmonics and note changes. Small upper transients do not establish renewed damped low packets. No identifiable kick attack is visible in this core. The source contains low-level broadband noise, not exact silence, and is not used to infer absence by itself.",
+          "overview": {
+            "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d2/raw/d2_late_night_0151p5_overview.png",
+            "sha256": "cb3ef25c90156e5d9e4745f08e05be4d9671f9ff6cae9e34f2d9380042fa13fa"
+          },
+          "details": [
+            {
+              "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d2/raw/d2_late_night_0151p5_details_01.png",
+              "sha256": "935b18ca1b0f2341ad867152adb5469a0ec02363ee0fab7a4d4cc3486792a391",
+              "windows": [
+                [
+                  151.25,
+                  151.65
+                ],
+                [
+                  155.95,
+                  156.35
+                ],
+                [
+                  159.9,
+                  160.3
+                ],
+                [
+                  163.25,
+                  163.75
+                ]
+              ]
+            }
+          ],
+          "raw_excerpt_coordinates": {
+            "master": {
+              "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d2/raw/d2_late_night_0151p5_master.wav",
+              "sha256": "c913143f909885dd182abb22bbca840552a6323b3a68c17513db8a2a2a06f58b",
+              "original_path": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/2024/Late Night - STEM MASTER Project/ALEX MASTERS/Latent Space - Late Night T2(mastered) 48k 24-bit.wav",
+              "sample_rate": 48000,
+              "source_sample_range": [
+                7260000,
+                7860000
+              ],
+              "master_axis_origin_s": 151.25,
+              "frames": 600000,
+              "channels": 2,
+              "decoded_samples_exact": true,
+              "mono_peak": 0.9753325581550598,
+              "stereo_peak": 0.9762989282608032,
+              "spectrogram_path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d2/raw/d2_late_night_0151p5_master_spectrogram.npz",
+              "spectrogram_sha256": "9161fe9a78caedc5a517a4aa32f029bc0b2bdd087273dc044d39246f6802fa34"
+            },
+            "kick": {
+              "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d2/raw/d2_late_night_0151p5_kick.wav",
+              "sha256": "ae3b496e2b31a95f708a1f132db94c34562d20aee348d7452fc7c1a6fa2e81f6",
+              "original_path": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/STEMS/LATE NIGHT STEMS/Late Night - Kicks Stem.wav",
+              "sample_rate": 48000,
+              "source_sample_range": [
+                7260000,
+                7860000
+              ],
+              "master_axis_origin_s": 151.25,
+              "frames": 600000,
+              "channels": 2,
+              "decoded_samples_exact": true,
+              "mono_peak": 0.0004898905754089355,
+              "stereo_peak": 0.0004900693893432617,
+              "spectrogram_path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d2/raw/d2_late_night_0151p5_kick_spectrogram.npz",
+              "spectrogram_sha256": "9c93a97b7fe5fa951a1a82584d249949a33b9ba7a4be41df858163e06b94234e"
+            }
+          },
+          "source_energy_stratum": "source_low_energy",
+          "core_label_count": 0,
+          "review_label_count": 0,
+          "source_energy_helper_proposals_s": [],
+          "source_helper_disposition": []
+        }
+      ]
+    },
+    {
+      "track": "midnight_patience",
+      "master_path": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/EMERGENCE - ALBUM 2026/FINAL MASTERS/Latent Space - 04 - Midnight Patience T2 (mastered) 48k 24-bit.wav",
+      "audio_sha256": "f985764125d53d9cc9379193af567f4022b05a657678e7c403bf187732bef6f2",
+      "kick_path": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/STEMS/MIDNIGHT PATIENCE STEMS/Kick.wav",
+      "kick_sha256": "2b5daae4c64e83b47f0587f71b5f2ab389e47f8db0ae1aac4d31a76e268208a2",
+      "stem_to_master_seconds": 0.136375,
+      "cores": [
+        {
+          "id": "d2_midnight_patience_0041p0",
+          "start_s": 41.0,
+          "end_s": 53.0,
+          "review_start_s": 40.75,
+          "review_end_s": 53.25,
+          "scoring_ready": true,
+          "scoring_ready_status": "lead_reviewed_visual_provisional",
+          "kick_times_s": [],
+          "onset_intervals": [],
+          "uncertain_regions": [],
+          "review_findings": "Master has sustained/repeating bass carrier cycles and continuous upper harmonic lines throughout the overview. Four detailed windows spanning the core show modulation/upper texture changes without an independently renewed decaying low packet. No identifiable kick attack is visible. Exact source silence corroborates this visual master review but does not define the negative label.",
+          "overview": {
+            "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d2/raw/d2_midnight_patience_0041p0_overview.png",
+            "sha256": "1ade203ccf8fed4c27fe6179c982b629dabb19e3f49d2750edb63dc32b2ca0b6"
+          },
+          "details": [
+            {
+              "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d2/raw/d2_midnight_patience_0041p0_details_01.png",
+              "sha256": "03393092284f0b08535be9ee20da9fc00452edd1eef8f36a091c707d146e9638",
+              "windows": [
+                [
+                  40.9,
+                  41.3
+                ],
+                [
+                  45.35,
+                  45.75
+                ],
+                [
+                  48.3,
+                  48.7
+                ],
+                [
+                  52.45,
+                  52.85
+                ]
+              ]
+            }
+          ],
+          "raw_excerpt_coordinates": {
+            "master": {
+              "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d2/raw/d2_midnight_patience_0041p0_master.wav",
+              "sha256": "583bb9343b9d8ca512c4888afbd0ce77385f949ef28da4709390bb5f05bd4e37",
+              "original_path": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/EMERGENCE - ALBUM 2026/FINAL MASTERS/Latent Space - 04 - Midnight Patience T2 (mastered) 48k 24-bit.wav",
+              "sample_rate": 48000,
+              "source_sample_range": [
+                1956000,
+                2556000
+              ],
+              "master_axis_origin_s": 40.75,
+              "frames": 600000,
+              "channels": 2,
+              "decoded_samples_exact": true,
+              "mono_peak": 0.9678981900215149,
+              "stereo_peak": 0.9763122797012329,
+              "spectrogram_path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d2/raw/d2_midnight_patience_0041p0_master_spectrogram.npz",
+              "spectrogram_sha256": "755731c66afadaa5f56239577cb4eee87a9570d5360e4d0e6f71a5f54ed33c59"
+            },
+            "kick": {
+              "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d2/raw/d2_midnight_patience_0041p0_kick.wav",
+              "sha256": "3711e1ac200adaa3b41297456c59ff9d6a2f6462122f264f1b4e9f77cc8a77a3",
+              "original_path": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/STEMS/MIDNIGHT PATIENCE STEMS/Kick.wav",
+              "sample_rate": 48000,
+              "source_sample_range": [
+                1949454,
+                2549454
+              ],
+              "master_axis_origin_s": 40.75,
+              "frames": 600000,
+              "channels": 2,
+              "decoded_samples_exact": true,
+              "mono_peak": 0.0,
+              "stereo_peak": 0.0,
+              "spectrogram_path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d2/raw/d2_midnight_patience_0041p0_kick_spectrogram.npz",
+              "spectrogram_sha256": "26f98fd7bd536e06901b6877ab510007a0245baa99c0e3c9ffc0d8f52ac43324"
+            }
+          },
+          "source_energy_stratum": "source_exact_silence",
+          "core_label_count": 0,
+          "review_label_count": 0,
+          "source_energy_helper_proposals_s": [],
+          "source_helper_disposition": []
+        },
+        {
+          "id": "d2_midnight_patience_0129p0",
+          "start_s": 129.0,
+          "end_s": 141.0,
+          "review_start_s": 128.75,
+          "review_end_s": 141.25,
+          "scoring_ready": true,
+          "scoring_ready_status": "lead_reviewed_visual_provisional",
+          "kick_times_s": [
+            128.775,
+            129.115
+          ],
+          "onset_intervals": [
+            {
+              "interval_s": [
+                128.765,
+                128.785
+              ],
+              "midpoint_s": 128.775,
+              "proposal_id": 1,
+              "evidence_sheet": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d2/raw/d2_midnight_patience_0129p0_details_01.png",
+              "panel": 1,
+              "panel_window_s": [
+                128.75,
+                128.942
+              ],
+              "rationale": "Fresh raw master oscillatory packet and renewed low-frequency trajectory agree with an independently visible source restart inside this bracket; onset is not the later amplitude peak or an RMS tail recrossing."
+            },
+            {
+              "interval_s": [
+                129.105,
+                129.125
+              ],
+              "midpoint_s": 129.115,
+              "proposal_id": 2,
+              "evidence_sheet": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d2/raw/d2_midnight_patience_0129p0_details_01.png",
+              "panel": 3,
+              "panel_window_s": [
+                129.053,
+                129.303
+              ],
+              "rationale": "Fresh raw master oscillatory packet and renewed low-frequency trajectory agree with an independently visible source restart inside this bracket; onset is not the later amplitude peak or an RMS tail recrossing."
+            }
+          ],
+          "uncertain_regions": [
+            {
+              "start_s": 129.215,
+              "end_s": 129.245,
+              "reason": "Short source discontinuity/click and mixed-master texture change on the kick tail; cannot establish or confidently reject a separate physical kick attack."
+            },
+            {
+              "start_s": 129.35,
+              "end_s": 131.15,
+              "reason": "Master has several low-frequency bursts/pitch sweeps through the breakdown while the isolated source decays to silence. Kick echoes/other bass or effects versus separate master kicks are not identifiable from this evidence. Entire interval remains unknown."
+            }
+          ],
+          "review_findings": "A margin attack near128.775s and a core attack near129.115s each have a fresh master packet and matching source restart on the +0.136375s mapped source clock. Tail recrossings at128.994 and129.332 are not onsets. Ambiguous breakdown activity is explicitly excluded. After131.15s the master shows continuous bass/harmonic activity without separately identifiable kicks.",
+          "overview": {
+            "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d2/raw/d2_midnight_patience_0129p0_overview.png",
+            "sha256": "29c5662d2e9771577f47dad0894ff67e44513941ff43a8df9624d0da4f67d097"
+          },
+          "details": [
+            {
+              "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d2/raw/d2_midnight_patience_0129p0_details_01.png",
+              "sha256": "11a6c17a0b12f0d68d1c279b818c4c3474db3ff722a8b0fc97203409430ee90e",
+              "windows": [
+                [
+                  128.75,
+                  128.942
+                ],
+                [
+                  128.934,
+                  129.184
+                ],
+                [
+                  129.053,
+                  129.303
+                ],
+                [
+                  129.272,
+                  129.522
+                ],
+                [
+                  129.35,
+                  129.8
+                ],
+                [
+                  129.8,
+                  130.25
+                ],
+                [
+                  130.25,
+                  130.7
+                ],
+                [
+                  130.7,
+                  131.25
+                ]
+              ]
+            }
+          ],
+          "raw_excerpt_coordinates": {
+            "master": {
+              "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d2/raw/d2_midnight_patience_0129p0_master.wav",
+              "sha256": "fae60707fcd1b8c2132392d5dab7f2bef5ecc01161ac0be49f1729f40becb19d",
+              "original_path": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/EMERGENCE - ALBUM 2026/FINAL MASTERS/Latent Space - 04 - Midnight Patience T2 (mastered) 48k 24-bit.wav",
+              "sample_rate": 48000,
+              "source_sample_range": [
+                6180000,
+                6780000
+              ],
+              "master_axis_origin_s": 128.75,
+              "frames": 600000,
+              "channels": 2,
+              "decoded_samples_exact": true,
+              "mono_peak": 0.9739466905593872,
+              "stereo_peak": 0.9763169288635254,
+              "spectrogram_path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d2/raw/d2_midnight_patience_0129p0_master_spectrogram.npz",
+              "spectrogram_sha256": "8f0b700ac2c96d298e5098097af0ee5571c343a969c23db4a100e5c98cc88b9a"
+            },
+            "kick": {
+              "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d2/raw/d2_midnight_patience_0129p0_kick.wav",
+              "sha256": "66b4f199122a10d5829e68213dd43ffca4cb8d96de298e7e27f2a6b6b85dd670",
+              "original_path": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/STEMS/MIDNIGHT PATIENCE STEMS/Kick.wav",
+              "sample_rate": 48000,
+              "source_sample_range": [
+                6173454,
+                6773454
+              ],
+              "master_axis_origin_s": 128.75,
+              "frames": 600000,
+              "channels": 2,
+              "decoded_samples_exact": true,
+              "mono_peak": 0.999884843826294,
+              "stereo_peak": 0.999884843826294,
+              "spectrogram_path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d2/raw/d2_midnight_patience_0129p0_kick_spectrogram.npz",
+              "spectrogram_sha256": "8688367582f31b612a6e08a5e7749636b91da84406c3b2edeea988b439032e01"
+            }
+          },
+          "source_energy_stratum": "source_active",
+          "core_label_count": 1,
+          "review_label_count": 2,
+          "source_energy_helper_proposals_s": [
+            128.752,
+            128.994,
+            129.113,
+            129.332
+          ],
+          "source_helper_disposition": [
+            {
+              "time_s": 128.752,
+              "status": "boundary_energy_not_an_onset",
+              "note": "Helper begins above threshold at the left excerpt boundary. The separate margin attack near128.775s was located from the subsequent raw waveform restart, not this128.752s helper time."
+            },
+            {
+              "time_s": 128.994,
+              "status": "reviewed_tail_or_boundary_retrigger_not_accepted",
+              "note": "Disposition from raw master/source detail review, not automatic threshold acceptance."
+            },
+            {
+              "time_s": 129.113,
+              "status": "associated_with_reviewed_attack",
+              "note": "Disposition from raw master/source detail review, not automatic threshold acceptance."
+            },
+            {
+              "time_s": 129.332,
+              "status": "reviewed_tail_or_boundary_retrigger_not_accepted",
+              "note": "Disposition from raw master/source detail review, not automatic threshold acceptance."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "track": "miracle",
+      "master_path": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/2024/Streets Project/MASTERS/Miracle MSTR V1 APRS.wav",
+      "audio_sha256": "263c248ce6c2a5b16ad981f055afd0be278085f6468347e25d3e4565f5bf3e66",
+      "kick_path": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/STEMS/MIRACLE STEMS/Kick.wav",
+      "kick_sha256": "7ca8181a9967b5ace955ba9e31294f1587c14fc238332dc56efe5e9ad7b38778",
+      "stem_to_master_seconds": 0.0,
+      "cores": [
+        {
+          "id": "d2_miracle_0040p0",
+          "start_s": 40.0,
+          "end_s": 52.0,
+          "review_start_s": 39.75,
+          "review_end_s": 52.25,
+          "scoring_ready": true,
+          "scoring_ready_status": "lead_reviewed_visual_provisional",
+          "kick_times_s": [
+            51.905
+          ],
+          "onset_intervals": [
+            {
+              "interval_s": [
+                51.895,
+                51.915
+              ],
+              "midpoint_s": 51.905,
+              "proposal_id": 1,
+              "evidence_sheet": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d2/raw/d2_miracle_0040p0_details_01.png",
+              "panel": 1,
+              "panel_window_s": [
+                51.840999999999994,
+                52.090999999999994
+              ],
+              "rationale": "Fresh raw master oscillatory packet and renewed low-frequency trajectory agree with an independently visible source restart inside this bracket; onset is not the later amplitude peak or an RMS tail recrossing."
+            }
+          ],
+          "uncertain_regions": [],
+          "review_findings": "Sustained low bass/harmonic activity precedes a clear new damped low packet near51.905s in both master and source. The source threshold recrossing52.103s is a fading tail. Master details at41.4/46.5s show continuous carrier cycles;48.4..48.9s shows the bass fading/changing beneath sustained upper texture, not a fresh damped kick.",
+          "overview": {
+            "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d2/raw/d2_miracle_0040p0_overview.png",
+            "sha256": "65440d254c52384fe88a4dabdecfb00ea4b687cc8e84d84903f2e2c24453e642"
+          },
+          "details": [
+            {
+              "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d2/raw/d2_miracle_0040p0_details_01.png",
+              "sha256": "a03500b17c3eaada0a317992064e43a7e22132db2beadda702ddff53edffb410",
+              "windows": [
+                [
+                  51.840999999999994,
+                  52.090999999999994
+                ],
+                [
+                  52.043,
+                  52.25
+                ],
+                [
+                  41.4,
+                  41.8
+                ],
+                [
+                  46.5,
+                  46.9
+                ],
+                [
+                  48.4,
+                  48.9
+                ],
+                [
+                  51.75,
+                  52.1
+                ]
+              ]
+            }
+          ],
+          "raw_excerpt_coordinates": {
+            "master": {
+              "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d2/raw/d2_miracle_0040p0_master.wav",
+              "sha256": "32ab1ec037d6e8a3ff75bd5d4fb0d59fcc562a8aae6a2b7e7de0a483e5d03962",
+              "original_path": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/2024/Streets Project/MASTERS/Miracle MSTR V1 APRS.wav",
+              "sample_rate": 44100,
+              "source_sample_range": [
+                1752975,
+                2304225
+              ],
+              "master_axis_origin_s": 39.75,
+              "frames": 551250,
+              "channels": 2,
+              "decoded_samples_exact": true,
+              "mono_peak": 1.0,
+              "stereo_peak": 1.0,
+              "spectrogram_path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d2/raw/d2_miracle_0040p0_master_spectrogram.npz",
+              "spectrogram_sha256": "15c005651772516f72098997f084d2b1309c34dbf51e873645773890ba45b92a"
+            },
+            "kick": {
+              "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d2/raw/d2_miracle_0040p0_kick.wav",
+              "sha256": "a120a6f3708dd56ff338b5a8e7f1f350094afda2947b789c2785ff6d4262452e",
+              "original_path": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/STEMS/MIRACLE STEMS/Kick.wav",
+              "sample_rate": 48000,
+              "source_sample_range": [
+                1908000,
+                2508000
+              ],
+              "master_axis_origin_s": 39.75,
+              "frames": 600000,
+              "channels": 2,
+              "decoded_samples_exact": true,
+              "mono_peak": 0.9999904036521912,
+              "stereo_peak": 0.9999904632568359,
+              "spectrogram_path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d2/raw/d2_miracle_0040p0_kick_spectrogram.npz",
+              "spectrogram_sha256": "603dd176f35a64231321de181cc23556a6831183300b02bbfff622b31f4d64f3"
+            }
+          },
+          "source_energy_stratum": "source_active",
+          "core_label_count": 1,
+          "review_label_count": 1,
+          "source_energy_helper_proposals_s": [
+            51.900999999999996,
+            52.103
+          ],
+          "source_helper_disposition": [
+            {
+              "time_s": 51.900999999999996,
+              "status": "associated_with_reviewed_attack",
+              "note": "Disposition from raw master/source detail review, not automatic threshold acceptance."
+            },
+            {
+              "time_s": 52.103,
+              "status": "reviewed_tail_or_boundary_retrigger_not_accepted",
+              "note": "Disposition from raw master/source detail review, not automatic threshold acceptance."
+            }
+          ]
+        },
+        {
+          "id": "d2_miracle_0230p5",
+          "start_s": 230.5,
+          "end_s": 242.5,
+          "review_start_s": 230.25,
+          "review_end_s": 242.75,
+          "scoring_ready": true,
+          "scoring_ready_status": "lead_reviewed_visual_provisional",
+          "kick_times_s": [],
+          "onset_intervals": [],
+          "uncertain_regions": [],
+          "review_findings": "Master sustains continuous low carrier and harmonic lines through all four overview blocks. Details near230.25,234.8,238.3 and242.3s show cycle/amplitude modulation without independent low attack-and-decay packets. No identifiable kick attack is visible. The isolated source is exactly zero; master evidence independently supports the provisional negative core.",
+          "overview": {
+            "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d2/raw/d2_miracle_0230p5_overview.png",
+            "sha256": "985dddd865f4aebea8a283b73ea15fd52e6ea8de5ef2d8f3a62a7ea41a89bdf9"
+          },
+          "details": [
+            {
+              "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d2/raw/d2_miracle_0230p5_details_01.png",
+              "sha256": "0d8c376100925f6d735d0e5012abdc3badc3ba1225952da718379818c71b139b",
+              "windows": [
+                [
+                  230.25,
+                  230.65
+                ],
+                [
+                  234.8,
+                  235.2
+                ],
+                [
+                  238.3,
+                  238.7
+                ],
+                [
+                  242.3,
+                  242.75
+                ]
+              ]
+            }
+          ],
+          "raw_excerpt_coordinates": {
+            "master": {
+              "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d2/raw/d2_miracle_0230p5_master.wav",
+              "sha256": "e1d7190db6309d6d8a7130de9906a8eda6900f68c3fc11df7d645d51d23ecdde",
+              "original_path": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/2024/Streets Project/MASTERS/Miracle MSTR V1 APRS.wav",
+              "sample_rate": 44100,
+              "source_sample_range": [
+                10154025,
+                10705275
+              ],
+              "master_axis_origin_s": 230.25,
+              "frames": 551250,
+              "channels": 2,
+              "decoded_samples_exact": true,
+              "mono_peak": 0.5846121311187744,
+              "stereo_peak": 0.6292662620544434,
+              "spectrogram_path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d2/raw/d2_miracle_0230p5_master_spectrogram.npz",
+              "spectrogram_sha256": "9011e85c2908a9c8f78de221be65f5b83bd5f6753a8e90704ce1f13a37f5b316"
+            },
+            "kick": {
+              "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d2/raw/d2_miracle_0230p5_kick.wav",
+              "sha256": "b8776979ebb5606c04504ad8756266dc0068078c4c74c61bd168c82dfa6d2818",
+              "original_path": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/STEMS/MIRACLE STEMS/Kick.wav",
+              "sample_rate": 48000,
+              "source_sample_range": [
+                11052000,
+                11652000
+              ],
+              "master_axis_origin_s": 230.25,
+              "frames": 600000,
+              "channels": 2,
+              "decoded_samples_exact": true,
+              "mono_peak": 0.0,
+              "stereo_peak": 0.0,
+              "spectrogram_path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d2/raw/d2_miracle_0230p5_kick_spectrogram.npz",
+              "spectrogram_sha256": "4da6bcb9440bfcd25d638b5dcf6c37fcf3853db3187b322458d626b6b98cca7f"
+            }
+          },
+          "source_energy_stratum": "source_exact_silence",
+          "core_label_count": 0,
+          "review_label_count": 0,
+          "source_energy_helper_proposals_s": [],
+          "source_helper_disposition": []
+        }
+      ]
+    },
+    {
+      "track": "heavy_on_mind",
+      "master_path": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/EMERGENCE - ALBUM 2026/FINAL MASTERS/Latent Space - 02 - Heavy on Mind MSTR V3 APRS.wav",
+      "audio_sha256": "3f22cd0335db72972a177488cf28a7d4de94d66c74203d9dea5f79cda5ca5a36",
+      "kick_path": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/STEMS/HEAVY ON MIND STEMS/KICK.wav",
+      "kick_sha256": "87a3b45750e7c4da2343b78a54ee911a406dd597be43f02380ef3165c315d23a",
+      "stem_to_master_seconds": 0.0,
+      "cores": [
+        {
+          "id": "d2_heavy_on_mind_0037p5",
+          "start_s": 37.5,
+          "end_s": 49.5,
+          "review_start_s": 37.25,
+          "review_end_s": 49.75,
+          "scoring_ready": true,
+          "scoring_ready_status": "lead_reviewed_visual_provisional",
+          "kick_times_s": [
+            49.37
+          ],
+          "onset_intervals": [
+            {
+              "interval_s": [
+                49.36,
+                49.38
+              ],
+              "midpoint_s": 49.37,
+              "proposal_id": 1,
+              "evidence_sheet": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d2/raw/d2_heavy_on_mind_0037p5_details_01.png",
+              "panel": 1,
+              "panel_window_s": [
+                49.312,
+                49.562
+              ],
+              "rationale": "Fresh raw master oscillatory packet and renewed low-frequency trajectory agree with an independently visible source restart inside this bracket; onset is not the later amplitude peak or an RMS tail recrossing."
+            }
+          ],
+          "uncertain_regions": [],
+          "review_findings": "Master contains continuous bass and upper activity before a distinct renewed low oscillatory packet near49.37s. This packet changes cycle length and decays, matching the separately visible source attack. The later49.509s source-energy recrossing is the same fading tail, not another attack. Overview plus38.05/43.20s details show persistent carrier cycles and upper transients before the kick, without separate damped low renewals.",
+          "overview": {
+            "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d2/raw/d2_heavy_on_mind_0037p5_overview.png",
+            "sha256": "d5644e89cd45867af93e73676edd7e998b64bd3aee54434e7d59dd8a834da179"
+          },
+          "details": [
+            {
+              "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d2/raw/d2_heavy_on_mind_0037p5_details_01.png",
+              "sha256": "2391ebf094e5280685a098f1b0932c17b0f58a64554ee3c36faa13922472bbaa",
+              "windows": [
+                [
+                  49.312,
+                  49.562
+                ],
+                [
+                  49.449,
+                  49.699
+                ],
+                [
+                  38.05,
+                  38.3
+                ],
+                [
+                  43.2,
+                  43.45
+                ],
+                [
+                  49.3,
+                  49.55
+                ]
+              ]
+            }
+          ],
+          "raw_excerpt_coordinates": {
+            "master": {
+              "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d2/raw/d2_heavy_on_mind_0037p5_master.wav",
+              "sha256": "8ae7cf1e55461bf97a537ddf8d1e71d979bdf3cdcb3f1f32fbd418731ff1d7bd",
+              "original_path": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/EMERGENCE - ALBUM 2026/FINAL MASTERS/Latent Space - 02 - Heavy on Mind MSTR V3 APRS.wav",
+              "sample_rate": 44100,
+              "source_sample_range": [
+                1642725,
+                2193975
+              ],
+              "master_axis_origin_s": 37.25,
+              "frames": 551250,
+              "channels": 2,
+              "decoded_samples_exact": true,
+              "mono_peak": 0.9997446537017822,
+              "stereo_peak": 1.0,
+              "spectrogram_path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d2/raw/d2_heavy_on_mind_0037p5_master_spectrogram.npz",
+              "spectrogram_sha256": "5eef5f31d2ba1e6c042d98bf31c08f10879873cc45c5cf1f626f8a3104931a5e"
+            },
+            "kick": {
+              "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d2/raw/d2_heavy_on_mind_0037p5_kick.wav",
+              "sha256": "4fa81b71ba06a3745970bbc4df624e83d428ff2cf4f323e3a47728ec0b5274ba",
+              "original_path": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/STEMS/HEAVY ON MIND STEMS/KICK.wav",
+              "sample_rate": 48000,
+              "source_sample_range": [
+                1788000,
+                2388000
+              ],
+              "master_axis_origin_s": 37.25,
+              "frames": 600000,
+              "channels": 2,
+              "decoded_samples_exact": true,
+              "mono_peak": 0.9712309837341309,
+              "stereo_peak": 0.9712311029434204,
+              "spectrogram_path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d2/raw/d2_heavy_on_mind_0037p5_kick_spectrogram.npz",
+              "spectrogram_sha256": "4a6ab6ebe77f72b758e189bdffd8bbc3f76a601ca9daf45b0c4dd6865ee70525"
+            }
+          },
+          "source_energy_stratum": "source_active",
+          "core_label_count": 1,
+          "review_label_count": 1,
+          "source_energy_helper_proposals_s": [
+            49.372,
+            49.509
+          ],
+          "source_helper_disposition": [
+            {
+              "time_s": 49.372,
+              "status": "associated_with_reviewed_attack",
+              "note": "Disposition from raw master/source detail review, not automatic threshold acceptance."
+            },
+            {
+              "time_s": 49.509,
+              "status": "reviewed_tail_or_boundary_retrigger_not_accepted",
+              "note": "Disposition from raw master/source detail review, not automatic threshold acceptance."
+            }
+          ]
+        },
+        {
+          "id": "d2_heavy_on_mind_0112p0",
+          "start_s": 112.0,
+          "end_s": 124.0,
+          "review_start_s": 111.75,
+          "review_end_s": 124.25,
+          "scoring_ready": true,
+          "scoring_ready_status": "lead_reviewed_visual_provisional",
+          "kick_times_s": [],
+          "onset_intervals": [],
+          "uncertain_regions": [],
+          "review_findings": "Across the master overview, the low component persists continuously with regular carrier cycles and slower note changes. Details at113.2,116.05,117.0 and121.75s distinguish a sustained bass-note transition and an upper transient near117.15s from a renewed damped low packet. No identifiable kick attack is visible. Source stereo is exactly zero, used only as corroboration; the master is strongly active.",
+          "overview": {
+            "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d2/raw/d2_heavy_on_mind_0112p0_overview.png",
+            "sha256": "4c27db3e23bc9e8364a694fc4b5a0e354a5169b9b3f0e55acc43373509f830f3"
+          },
+          "details": [
+            {
+              "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d2/raw/d2_heavy_on_mind_0112p0_details_01.png",
+              "sha256": "e8f4a9f6f02936f0338e1e873b566d2a145436f0e1b7e864ace6541ff14834d6",
+              "windows": [
+                [
+                  113.2,
+                  113.55
+                ],
+                [
+                  116.05,
+                  116.4
+                ],
+                [
+                  117.0,
+                  117.35
+                ],
+                [
+                  121.75,
+                  122.05
+                ]
+              ]
+            }
+          ],
+          "raw_excerpt_coordinates": {
+            "master": {
+              "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d2/raw/d2_heavy_on_mind_0112p0_master.wav",
+              "sha256": "0c69e1edf9d55cd381abda3ac748393dba1b41f93c01f7daaf695cd0a7ec2dc5",
+              "original_path": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/EMERGENCE - ALBUM 2026/FINAL MASTERS/Latent Space - 02 - Heavy on Mind MSTR V3 APRS.wav",
+              "sample_rate": 44100,
+              "source_sample_range": [
+                4928175,
+                5479425
+              ],
+              "master_axis_origin_s": 111.75,
+              "frames": 551250,
+              "channels": 2,
+              "decoded_samples_exact": true,
+              "mono_peak": 0.9933500289916992,
+              "stereo_peak": 1.0,
+              "spectrogram_path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d2/raw/d2_heavy_on_mind_0112p0_master_spectrogram.npz",
+              "spectrogram_sha256": "a4aa67c549d77324178f55d64f3e931061488fbc5b3406bb5f18e19d109fba91"
+            },
+            "kick": {
+              "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d2/raw/d2_heavy_on_mind_0112p0_kick.wav",
+              "sha256": "aa584ae1813a7f69c14c4eb8704f9b4ef08289c0c1f34978593b25b19553d870",
+              "original_path": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/STEMS/HEAVY ON MIND STEMS/KICK.wav",
+              "sample_rate": 48000,
+              "source_sample_range": [
+                5364000,
+                5964000
+              ],
+              "master_axis_origin_s": 111.75,
+              "frames": 600000,
+              "channels": 2,
+              "decoded_samples_exact": true,
+              "mono_peak": 0.0,
+              "stereo_peak": 0.0,
+              "spectrogram_path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d2/raw/d2_heavy_on_mind_0112p0_kick_spectrogram.npz",
+              "spectrogram_sha256": "4c2172da7fe499c931ea6bb735e293262ae0bc5ebb22e0f057cf2b01c12f4c13"
+            }
+          },
+          "source_energy_stratum": "source_exact_silence",
+          "core_label_count": 0,
+          "review_label_count": 0,
+          "source_energy_helper_proposals_s": [],
+          "source_helper_disposition": []
+        }
+      ]
+    }
+  ],
+  "counts": {
+    "cores": 8,
+    "core_seconds": 96.0,
+    "proposed_core_kicks": 34,
+    "proposed_review_kicks": 37,
+    "proposed_negative_cores": 4,
+    "uncertain_regions": 4,
+    "wholly_unscorable_cores": 0
+  },
+  "lead_review": {
+    "path": "/Users/peterkiemann/.cache/manifold/kick-research-2026-10-09-evening/d2/lead_review.json",
+    "sha256": "40e6d2caaec09b90e803bf17e68a4bb2dd9796e4afe346de1e32a919c3e76490"
+  }
+}

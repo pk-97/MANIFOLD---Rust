@@ -1,0 +1,740 @@
+{
+  "status": "frozen_before_first_detector_execution",
+  "protocol_sha256": "16a72c6810bd7062885aba3c3e08bc8a3d077b3365b409f4f74420d7c3eedca3",
+  "method": "Lead visual review of master/stem waveforms and spectrograms, independent of detector output. Provisional onset brackets with midpoint scoring; no listening audit, BPM-derived labels, master time shift, or warp. Positive and bass-only cores selected mechanically from stems. Uncertainty brackets describe onset timing, not exclusions.",
+  "tracks": [
+    {
+      "track": "miracle",
+      "master_path": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/2024/Streets Project/MASTERS/Miracle MSTR V1 APRS.wav",
+      "audio_sha256": "263c248ce6c2a5b16ad981f055afd0be278085f6468347e25d3e4565f5bf3e66",
+      "source_sha256": {
+        "master": "263c248ce6c2a5b16ad981f055afd0be278085f6468347e25d3e4565f5bf3e66",
+        "kick": "7ca8181a9967b5ace955ba9e31294f1587c14fc238332dc56efe5e9ad7b38778",
+        "bass_subs": "0fabe12d9cb1a0b7ae7dc1805d89a099b9089a9026d8d4c75bcbaa15bdb8af07"
+      },
+      "selection_evidence": "/Users/peterkiemann/.cache/manifold/kick-heldout-2026-10-09/miracle/selection.json",
+      "selection_evidence_sha256": "4d3ad669a000c6ca2de420d1d902e1748d69d6c5314aa0f3541435cf51fdd684",
+      "alignment_evidence": {
+        "method": "three distinct non-silent kick-bearing 12s cores, low-band envelope cross-correlation search \u00b150ms",
+        "excerpt_cores": [
+          {
+            "start_s": 84.0,
+            "end_s": 96.0,
+            "kick_rms": 0.22519109016865022,
+            "bass_rms": 0.2968853647998999,
+            "kick_exactly_silent": false,
+            "native_sample_spans": {
+              "master_44100": [
+                3704400,
+                4233600
+              ],
+              "kick_48000": [
+                4032000,
+                4608000
+              ],
+              "subs_48000": [
+                4032000,
+                4608000
+              ]
+            }
+          },
+          {
+            "start_s": 168.0,
+            "end_s": 180.0,
+            "kick_rms": 0.2250467891817823,
+            "bass_rms": 0.312641852474967,
+            "kick_exactly_silent": false,
+            "native_sample_spans": {
+              "master_44100": [
+                7408800,
+                7938000
+              ],
+              "kick_48000": [
+                8064000,
+                8640000
+              ],
+              "subs_48000": [
+                8064000,
+                8640000
+              ]
+            }
+          },
+          {
+            "start_s": 60.0,
+            "end_s": 72.0,
+            "kick_rms": 0.2250288635097397,
+            "bass_rms": 0.3036295381491701,
+            "kick_exactly_silent": false,
+            "native_sample_spans": {
+              "master_44100": [
+                2646000,
+                3175200
+              ],
+              "kick_48000": [
+                2880000,
+                3456000
+              ],
+              "subs_48000": [
+                2880000,
+                3456000
+              ]
+            }
+          }
+        ],
+        "rows": [
+          {
+            "start_s": 84.0,
+            "duration_s": 12.0,
+            "lag_ms": 0.0,
+            "correlation": 0.5665504785120596,
+            "search_ms": [
+              -50,
+              50
+            ],
+            "diagnostic_only": true
+          },
+          {
+            "start_s": 168.0,
+            "duration_s": 12.0,
+            "lag_ms": 0.0,
+            "correlation": 0.5054055626210033,
+            "search_ms": [
+              -50,
+              50
+            ],
+            "diagnostic_only": true
+          },
+          {
+            "start_s": 60.0,
+            "duration_s": 12.0,
+            "lag_ms": 0.0,
+            "correlation": 0.542385244801658,
+            "search_ms": [
+              -50,
+              50
+            ],
+            "diagnostic_only": true
+          }
+        ],
+        "interpretation": "rough consistency diagnostic only; no lag applied to master onset proposals; mastering can move envelope peaks",
+        "mismatch_ambiguities": [
+          "Master is 44.1 kHz and stems are 48 kHz; equal duration is not alignment proof.",
+          "Master onset may differ from source attack because mastering and mix content alter waveform/envelope peaks.",
+          "Candidate times are source-based proposals and remain unresolved until human visual/audio review."
+        ]
+      },
+      "passages": [
+        {
+          "id": "miracle_kick",
+          "kick_free": false,
+          "start_s": 84,
+          "end_s": 96,
+          "review_start_s": 83.75,
+          "review_end_s": 96.25,
+          "kick_times_s": [
+            84.13,
+            84.33,
+            85.965,
+            87.375,
+            87.58,
+            88.8,
+            90.62,
+            90.82,
+            92.45,
+            93.86,
+            94.06,
+            95.29
+          ],
+          "uncertain_regions": [],
+          "onset_review": [
+            {
+              "midpoint_s": 84.13,
+              "interval_s": [
+                84.115,
+                84.145
+              ],
+              "source_proposal_s": 84.129,
+              "sheet": "miracle_kick_core_detailed_01.png",
+              "row": 1
+            },
+            {
+              "midpoint_s": 84.33,
+              "interval_s": [
+                84.315,
+                84.345
+              ],
+              "source_proposal_s": 84.316,
+              "sheet": "miracle_kick_core_detailed_01.png",
+              "row": 2
+            },
+            {
+              "midpoint_s": 85.965,
+              "interval_s": [
+                85.95,
+                85.98
+              ],
+              "source_proposal_s": 85.962,
+              "sheet": "miracle_kick_core_detailed_01.png",
+              "row": 4
+            },
+            {
+              "midpoint_s": 87.375,
+              "interval_s": [
+                87.36,
+                87.39
+              ],
+              "source_proposal_s": 87.375,
+              "sheet": "miracle_kick_core_detailed_02.png",
+              "row": 1
+            },
+            {
+              "midpoint_s": 87.58,
+              "interval_s": [
+                87.565,
+                87.595
+              ],
+              "source_proposal_s": 87.56700000000001,
+              "sheet": "miracle_kick_core_detailed_02.png",
+              "row": 2
+            },
+            {
+              "midpoint_s": 88.8,
+              "interval_s": [
+                88.785,
+                88.815
+              ],
+              "source_proposal_s": 88.8,
+              "sheet": "miracle_kick_core_detailed_02.png",
+              "row": 4
+            },
+            {
+              "midpoint_s": 90.62,
+              "interval_s": [
+                90.605,
+                90.635
+              ],
+              "source_proposal_s": 90.618,
+              "sheet": "miracle_kick_core_detailed_03.png",
+              "row": 1
+            },
+            {
+              "midpoint_s": 90.82,
+              "interval_s": [
+                90.805,
+                90.835
+              ],
+              "source_proposal_s": 90.806,
+              "sheet": "miracle_kick_core_detailed_03.png",
+              "row": 2
+            },
+            {
+              "midpoint_s": 92.45,
+              "interval_s": [
+                92.435,
+                92.465
+              ],
+              "source_proposal_s": 92.44800000000001,
+              "sheet": "miracle_kick_core_detailed_03.png",
+              "row": 4
+            },
+            {
+              "midpoint_s": 93.86,
+              "interval_s": [
+                93.845,
+                93.875
+              ],
+              "source_proposal_s": 93.86,
+              "sheet": "miracle_kick_core_detailed_04.png",
+              "row": 1
+            },
+            {
+              "midpoint_s": 94.06,
+              "interval_s": [
+                94.045,
+                94.075
+              ],
+              "source_proposal_s": 94.057,
+              "sheet": "miracle_kick_core_detailed_04.png",
+              "row": 2
+            },
+            {
+              "midpoint_s": 95.29,
+              "interval_s": [
+                95.275,
+                95.305
+              ],
+              "source_proposal_s": 95.286,
+              "sheet": "miracle_kick_core_detailed_04.png",
+              "row": 4
+            }
+          ],
+          "review_note": "Twelve distinct kick attacks have matching master waveform renewal and source attack evidence. Eight later energy crossings are decay-tail proposals, not fresh attacks. Second-hit timing was read from renewed attack evidence, not copied from the rising energy threshold.",
+          "rejected_tail_proposals_s": [
+            84.518,
+            86.166,
+            87.757,
+            88.991,
+            91.008,
+            92.656,
+            94.26,
+            95.495
+          ]
+        },
+        {
+          "id": "miracle_bass",
+          "kick_free": true,
+          "start_s": 116,
+          "end_s": 128,
+          "review_start_s": 115.75,
+          "review_end_s": 128.25,
+          "kick_times_s": [],
+          "uncertain_regions": [],
+          "review_note": "Kick stem exactly silent; master overview shows sustained harmonic bass without corresponding kick attacks. Zero-energy proposal at 115.752 s rejected as a threshold artifact."
+        }
+      ]
+    },
+    {
+      "track": "heavy_on_mind",
+      "master_path": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/EMERGENCE - ALBUM 2026/FINAL MASTERS/Latent Space - 02 - Heavy on Mind MSTR V3 APRS.wav",
+      "audio_sha256": "3f22cd0335db72972a177488cf28a7d4de94d66c74203d9dea5f79cda5ca5a36",
+      "source_sha256": {
+        "master": "3f22cd0335db72972a177488cf28a7d4de94d66c74203d9dea5f79cda5ca5a36",
+        "kick": "87a3b45750e7c4da2343b78a54ee911a406dd597be43f02380ef3165c315d23a",
+        "bass": "687aadce6baa7042e51793c1d6969bb86a194ff7551e5a1c53f3c07f6a628124"
+      },
+      "selection_evidence": "/Users/peterkiemann/.cache/manifold/kick-heldout-2026-10-09/heavy_on_mind/selection.json",
+      "selection_evidence_sha256": "c8a7ef4e98485c27fd9e2d244daa312a3249b193114377c3bf9adb6fd477146f",
+      "alignment_evidence": {
+        "crosscorrelation_excerpts": [
+          {
+            "start_s": 90.0,
+            "duration_s": 4.0,
+            "search_ms": 50.0,
+            "lag_samples_at_8khz": 14,
+            "lag_ms": 1.75,
+            "correlation": 0.36901334754879644,
+            "at_search_edge": false,
+            "interpretation": "rough consistency evidence only; no lag applied to candidates"
+          },
+          {
+            "start_s": 180.0,
+            "duration_s": 4.0,
+            "search_ms": 50.0,
+            "lag_samples_at_8khz": -46,
+            "lag_ms": -5.75,
+            "correlation": 0.6176046782088351,
+            "at_search_edge": false,
+            "interpretation": "rough consistency evidence only; no lag applied to candidates"
+          },
+          {
+            "start_s": 200.0,
+            "duration_s": 4.0,
+            "search_ms": 50.0,
+            "lag_samples_at_8khz": 0,
+            "lag_ms": 0.0,
+            "correlation": 0.518477077324046,
+            "at_search_edge": false,
+            "interpretation": "rough consistency evidence only; no lag applied to candidates"
+          }
+        ],
+        "offset_applied_s": null,
+        "mismatches_and_ambiguities": [
+          "Master is 44.1 kHz and stems are 48 kHz; comparisons use seconds and resampled excerpts.",
+          "Master and stem durations differ by approximately 0.007 ms; common duration limits the search.",
+          "Crosscorrelation is rough timing evidence only; mastering and mixed content can shift or blur peaks.",
+          "Candidates are source-assisted, unreviewed proposals and are not ground truth or audible-listening results."
+        ]
+      },
+      "passages": [
+        {
+          "id": "heavy_on_mind_kick",
+          "kick_free": false,
+          "start_s": 200,
+          "end_s": 212,
+          "review_start_s": 199.75,
+          "review_end_s": 212.25,
+          "kick_times_s": [
+            199.75,
+            200.13,
+            200.51,
+            200.885,
+            201.265,
+            201.645,
+            202.025,
+            202.405,
+            202.785,
+            203.165,
+            203.545,
+            203.925,
+            204.305,
+            204.685,
+            205.065,
+            205.445,
+            205.825,
+            206.205,
+            206.585,
+            206.965,
+            207.345,
+            207.72,
+            208.105,
+            208.485,
+            208.86,
+            209.24,
+            209.62,
+            210.0,
+            210.38,
+            210.76,
+            211.14,
+            211.52,
+            211.9
+          ],
+          "uncertain_regions": [],
+          "onset_review": [
+            {
+              "midpoint_s": 199.75,
+              "interval_s": [
+                199.735,
+                199.765
+              ],
+              "source_proposal_s": 199.75,
+              "sheet": "details_kick_core_01.png",
+              "row": 1
+            },
+            {
+              "midpoint_s": 200.13,
+              "interval_s": [
+                200.115,
+                200.145
+              ],
+              "source_proposal_s": 200.12804166666666,
+              "sheet": "details_kick_core_01.png",
+              "row": 2
+            },
+            {
+              "midpoint_s": 200.51,
+              "interval_s": [
+                200.495,
+                200.525
+              ],
+              "source_proposal_s": 200.50791666666666,
+              "sheet": "details_kick_core_01.png",
+              "row": 3
+            },
+            {
+              "midpoint_s": 200.885,
+              "interval_s": [
+                200.87,
+                200.9
+              ],
+              "source_proposal_s": 200.88716666666667,
+              "sheet": "details_kick_core_01.png",
+              "row": 4
+            },
+            {
+              "midpoint_s": 201.265,
+              "interval_s": [
+                201.25,
+                201.28
+              ],
+              "source_proposal_s": 201.26695833333332,
+              "sheet": "details_kick_core_01.png",
+              "row": 5
+            },
+            {
+              "midpoint_s": 201.645,
+              "interval_s": [
+                201.63,
+                201.66
+              ],
+              "source_proposal_s": 201.64664583333334,
+              "sheet": "details_kick_core_01.png",
+              "row": 6
+            },
+            {
+              "midpoint_s": 202.025,
+              "interval_s": [
+                202.01,
+                202.04
+              ],
+              "source_proposal_s": 202.02639583333334,
+              "sheet": "details_kick_core_02.png",
+              "row": 1
+            },
+            {
+              "midpoint_s": 202.405,
+              "interval_s": [
+                202.39,
+                202.42
+              ],
+              "source_proposal_s": 202.406625,
+              "sheet": "details_kick_core_02.png",
+              "row": 2
+            },
+            {
+              "midpoint_s": 202.785,
+              "interval_s": [
+                202.77,
+                202.8
+              ],
+              "source_proposal_s": 202.78589583333334,
+              "sheet": "details_kick_core_02.png",
+              "row": 3
+            },
+            {
+              "midpoint_s": 203.165,
+              "interval_s": [
+                203.15,
+                203.18
+              ],
+              "source_proposal_s": 203.1656875,
+              "sheet": "details_kick_core_02.png",
+              "row": 4
+            },
+            {
+              "midpoint_s": 203.545,
+              "interval_s": [
+                203.53,
+                203.56
+              ],
+              "source_proposal_s": 203.54539583333334,
+              "sheet": "details_kick_core_02.png",
+              "row": 5
+            },
+            {
+              "midpoint_s": 203.925,
+              "interval_s": [
+                203.91,
+                203.94
+              ],
+              "source_proposal_s": 203.925125,
+              "sheet": "details_kick_core_02.png",
+              "row": 6
+            },
+            {
+              "midpoint_s": 204.305,
+              "interval_s": [
+                204.29,
+                204.32
+              ],
+              "source_proposal_s": 204.30533333333332,
+              "sheet": "details_kick_core_03.png",
+              "row": 1
+            },
+            {
+              "midpoint_s": 204.685,
+              "interval_s": [
+                204.67,
+                204.7
+              ],
+              "source_proposal_s": 204.6851875,
+              "sheet": "details_kick_core_03.png",
+              "row": 2
+            },
+            {
+              "midpoint_s": 205.065,
+              "interval_s": [
+                205.05,
+                205.08
+              ],
+              "source_proposal_s": 205.06439583333332,
+              "sheet": "details_kick_core_03.png",
+              "row": 3
+            },
+            {
+              "midpoint_s": 205.445,
+              "interval_s": [
+                205.43,
+                205.46
+              ],
+              "source_proposal_s": 205.44416666666666,
+              "sheet": "details_kick_core_03.png",
+              "row": 4
+            },
+            {
+              "midpoint_s": 205.825,
+              "interval_s": [
+                205.81,
+                205.84
+              ],
+              "source_proposal_s": 205.82385416666668,
+              "sheet": "details_kick_core_03.png",
+              "row": 5
+            },
+            {
+              "midpoint_s": 206.205,
+              "interval_s": [
+                206.19,
+                206.22
+              ],
+              "source_proposal_s": 206.20402083333335,
+              "sheet": "details_kick_core_03.png",
+              "row": 6
+            },
+            {
+              "midpoint_s": 206.585,
+              "interval_s": [
+                206.57,
+                206.6
+              ],
+              "source_proposal_s": 206.58389583333334,
+              "sheet": "details_kick_core_04.png",
+              "row": 1
+            },
+            {
+              "midpoint_s": 206.965,
+              "interval_s": [
+                206.95,
+                206.98
+              ],
+              "source_proposal_s": 206.963125,
+              "sheet": "details_kick_core_04.png",
+              "row": 2
+            },
+            {
+              "midpoint_s": 207.345,
+              "interval_s": [
+                207.33,
+                207.36
+              ],
+              "source_proposal_s": 207.34291666666667,
+              "sheet": "details_kick_core_04.png",
+              "row": 3
+            },
+            {
+              "midpoint_s": 207.72,
+              "interval_s": [
+                207.705,
+                207.735
+              ],
+              "source_proposal_s": 207.72239583333334,
+              "sheet": "details_kick_core_04.png",
+              "row": 4
+            },
+            {
+              "midpoint_s": 208.105,
+              "interval_s": [
+                208.09,
+                208.12
+              ],
+              "source_proposal_s": 208.10270833333334,
+              "sheet": "details_kick_core_04.png",
+              "row": 5
+            },
+            {
+              "midpoint_s": 208.485,
+              "interval_s": [
+                208.47,
+                208.5
+              ],
+              "source_proposal_s": 208.48260416666668,
+              "sheet": "details_kick_core_04.png",
+              "row": 6
+            },
+            {
+              "midpoint_s": 208.86,
+              "interval_s": [
+                208.845,
+                208.875
+              ],
+              "source_proposal_s": 208.8610625,
+              "sheet": "details_kick_core_05.png",
+              "row": 1
+            },
+            {
+              "midpoint_s": 209.24,
+              "interval_s": [
+                209.225,
+                209.255
+              ],
+              "source_proposal_s": 209.24164583333334,
+              "sheet": "details_kick_core_05.png",
+              "row": 2
+            },
+            {
+              "midpoint_s": 209.62,
+              "interval_s": [
+                209.605,
+                209.635
+              ],
+              "source_proposal_s": 209.62133333333333,
+              "sheet": "details_kick_core_05.png",
+              "row": 3
+            },
+            {
+              "midpoint_s": 210.0,
+              "interval_s": [
+                209.985,
+                210.015
+              ],
+              "source_proposal_s": 210.0010625,
+              "sheet": "details_kick_core_05.png",
+              "row": 4
+            },
+            {
+              "midpoint_s": 210.38,
+              "interval_s": [
+                210.365,
+                210.395
+              ],
+              "source_proposal_s": 210.38129166666667,
+              "sheet": "details_kick_core_05.png",
+              "row": 5
+            },
+            {
+              "midpoint_s": 210.76,
+              "interval_s": [
+                210.745,
+                210.775
+              ],
+              "source_proposal_s": 210.76114583333333,
+              "sheet": "details_kick_core_05.png",
+              "row": 6
+            },
+            {
+              "midpoint_s": 211.14,
+              "interval_s": [
+                211.125,
+                211.155
+              ],
+              "source_proposal_s": 211.13972916666665,
+              "sheet": "details_kick_core_06.png",
+              "row": 1
+            },
+            {
+              "midpoint_s": 211.52,
+              "interval_s": [
+                211.505,
+                211.535
+              ],
+              "source_proposal_s": 211.520125,
+              "sheet": "details_kick_core_06.png",
+              "row": 2
+            },
+            {
+              "midpoint_s": 211.9,
+              "interval_s": [
+                211.885,
+                211.915
+              ],
+              "source_proposal_s": 211.8998125,
+              "sheet": "details_kick_core_06.png",
+              "row": 3
+            }
+          ],
+          "review_note": "All 33 distinct source attacks visually checked against aligned master bursts and low oscillation; 32 lie in the scored core. Waveform-derived proposal times rounded to 5 ms after review, with provisional 30 ms brackets. Margin event at 199.750 s is shown with preceding context in detail sheet 01. No tempo-generated events. Repeated source proposals were deduplicated before review."
+        },
+        {
+          "id": "heavy_on_mind_bass",
+          "kick_free": true,
+          "start_s": 20,
+          "end_s": 32,
+          "review_start_s": 19.75,
+          "review_end_s": 32.25,
+          "kick_times_s": [],
+          "uncertain_regions": [],
+          "review_note": "Kick stem exactly silent; master overview shows continuous harmonic content without corresponding kick attacks."
+        }
+      ]
+    }
+  ]
+}
