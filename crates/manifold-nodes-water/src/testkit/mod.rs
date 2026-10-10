@@ -1,10 +1,5 @@
 //! Water-specific graph fixtures and proof helpers.
 
-#[cfg(any(test, feature = "testkit"))]
-pub mod particle_volume;
-
-pub mod fluid_role_source;
-
 pub mod conformance;
 
 pub mod face_grid_scenes;
@@ -25,7 +20,3 @@ pub mod whitewater_scene;
 #[cfg(feature = "gpu-proofs")]
 #[cfg(any(test, feature = "testkit"))]
 pub mod whitewater_fingerprints;
-
-#[cfg(feature = "gpu-proofs")]
-#[cfg(any(test, feature = "testkit"))]
-pub mod water_codegen;

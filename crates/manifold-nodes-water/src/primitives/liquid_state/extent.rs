@@ -1,13 +1,13 @@
 //! Buffer extent rule owned by this node.
-use crate::liquid::extent::liquid_lattice;
+use manifold_water_liquid::extent::liquid_lattice;
 use std::mem::size_of;
-use crate::liquid::lattice::FlipSolverGrid;
-use crate::primitives::liquid_stats::LIQUID_STATS_WORDS;
-use crate::liquid::grid::face_bytes;
-use crate::whitewater::DEFAULT_CAPACITY as STEP_CAPACITY;
-use crate::whitewater::MAX_CAPACITY as STEP_MAX_CAPACITY;
+use manifold_water_liquid::lattice::FlipSolverGrid;
+use manifold_water_liquid::primitives::liquid_stats::LIQUID_STATS_WORDS;
+use manifold_water_liquid::grid::face_bytes;
+use manifold_water_liquid::whitewater::DEFAULT_CAPACITY as STEP_CAPACITY;
+use manifold_water_liquid::whitewater::MAX_CAPACITY as STEP_MAX_CAPACITY;
 use manifold_node_engine::exec::extent::{AtomExtent, ExtentRule, Verdict};
-use crate::liquid::extent::PARTICLE;
+use manifold_water_liquid::extent::PARTICLE;
 
 fn liquid_state(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     x.provide("identity", 16);
@@ -18,7 +18,7 @@ fn liquid_state(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     if !(1..=STEP_MAX_CAPACITY).contains(&capacity) {
         return Err(Verdict::Refused(format!("whitewater capacity {capacity} is outside 1 to {STEP_MAX_CAPACITY}")));
     }
-    let pool = u64::from(capacity) * size_of::<crate::whitewater::WhitewaterParticle>() as u64;
+    let pool = u64::from(capacity) * size_of::<manifold_water_liquid::whitewater::WhitewaterParticle>() as u64;
     for (capture, output, bytes) in [
         ("whitewater_pool_in", "whitewater_pool", pool),
         ("whitewater_state_in", "whitewater_state", 32),
@@ -41,7 +41,7 @@ fn liquid_state(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
 
     let mut interior_check = Ok(());
     if x.wired("interior_in") {
-        let bytes = crate::liquid::grid::interior_bytes(FlipSolverGrid::from_lattice(liquid_lattice(x)?).cells());
+        let bytes = manifold_water_liquid::grid::interior_bytes(FlipSolverGrid::from_lattice(liquid_lattice(x)?).cells());
         x.provide("interior", bytes);
         x.hold(bytes);
         if x.bytes("interior_in") != Some(bytes) {

@@ -25,8 +25,8 @@ use crate::primitives::gpu_flip_step::FACE_VALID_LAYERS;
 use manifold_node_engine::load::catalog_source::preset_json as bundled_preset_json;
 #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
 use manifold_core::fluid_domain::{FluidDomainLayout, domain_layout};
-use crate::liquid::clock::INTERVAL_DURATION_INPUTS;
-use crate::liquid::grid::FACE_INPUT_PORTS;
+use manifold_water_liquid::clock::INTERVAL_DURATION_INPUTS;
+use manifold_water_liquid::grid::FACE_INPUT_PORTS;
 use manifold_node_engine::scene::transform::Transform;
 
 /// The FLIP Fluids engine's Dam Break tank side, the scenes' default Domain

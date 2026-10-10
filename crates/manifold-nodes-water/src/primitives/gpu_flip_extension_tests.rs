@@ -2,7 +2,7 @@
 //! FLIP Fluids GridUtils (MIT, Copyright (C) 2026 Ryan L. Guy & Dennis Fassbaender;
 //! see THIRD_PARTY_NOTICES.md), adapted to our box-face walls.
 
-use crate::fluid_particles::FaceSample;
+use manifold_water_liquid::fluid_particles::FaceSample;
 
 // Engine _removeMarkerParticles counts before testing speed: an extreme
 // marker still consumes one of the first 250 places in its cell.
@@ -262,13 +262,13 @@ fn gpu_flip_step_order_dispatch_extents() {
     let cell_count: u64 = cells.iter().product();
     let face_count: u64 = cells.map(|n| n + 1).iter().product();
     assert_eq!((cell_count, face_count), (120, 210));
-    assert_eq!(crate::liquid::grid::face_bytes([6, 5, 4]), face_count * 32);
+    assert_eq!(manifold_water_liquid::grid::face_bytes([6, 5, 4]), face_count * 32);
     assert_eq!(super::gpu_flip_step::emit_sites([6, 5, 4]), cell_count * 8);
     for threads in [cell_count, face_count, cell_count * 8, 300, 512] {
         assert!(threads.div_ceil(256) * 256 >= threads);
         assert!(threads.div_ceil(256) * 256 < threads + 256);
     }
-    assert!(super::prefix_scan::storage_words(960) >= 960);
+    assert!(manifold_water_liquid::primitives::prefix_scan::storage_words(960) >= 960);
     for count in [300u32, 512, 20_000] {
         let groups = u64::from(count.div_ceil(64));
         // Both vec4 reduction scratch buffers, three maxima, histogram,

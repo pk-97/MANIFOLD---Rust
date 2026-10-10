@@ -12,14 +12,14 @@
 
 use manifold_gpu::GpuBuffer;
 
-use super::liquid_stats::LIQUID_STATS_WORDS;
-use super::particle_publication::{ParticlePublication, Publication};
+use manifold_water_liquid::primitives::liquid_stats::LIQUID_STATS_WORDS;
+use manifold_water_liquid::primitives::particle_publication::{ParticlePublication, Publication};
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
 use manifold_node_engine::particles::FluidParticle;
-use crate::liquid::display_cursor::{CursorFrame, DisplayCursor};
-use crate::liquid::frame_history::{FIELD_FACES, FIELD_INTERIOR, FIELD_SOLID, FIELD_WHITEWATER, FIELDS, FrameHistory, Layout};
-use crate::liquid::grid::{interior_bytes, face_len, FACE_GRID_PORTS, FACE_INPUT_PORTS};
-use crate::liquid::lattice::{FlipSolverGrid, LiquidLattice};
+use manifold_water_liquid::display_cursor::{CursorFrame, DisplayCursor};
+use manifold_water_liquid::frame_history::{FIELD_FACES, FIELD_INTERIOR, FIELD_SOLID, FIELD_WHITEWATER, FIELDS, FrameHistory, Layout};
+use manifold_water_liquid::grid::{interior_bytes, face_len, FACE_GRID_PORTS, FACE_INPUT_PORTS};
+use manifold_water_liquid::lattice::{FlipSolverGrid, LiquidLattice};
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
 
@@ -428,7 +428,7 @@ mod tests {
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
     use super::{ParticlePublication, Publication, LIQUID_STATS_WORDS};
-    use super::super::liquid_stats::NARROW_BAND_SHORTAGE_WORD;
+    use manifold_water_liquid::primitives::liquid_stats::NARROW_BAND_SHORTAGE_WORD;
     use manifold_node_engine::particles::FluidParticle;
     use manifold_node_engine::testkit::array_harness::read;
     use manifold_gpu::GpuBuffer;

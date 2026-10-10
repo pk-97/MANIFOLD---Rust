@@ -1,6 +1,6 @@
 //! Buffer extent rule owned by this node.
 use std::mem::size_of;
-use crate::liquid::bodies::LiquidBody;
+use manifold_water_liquid::bodies::LiquidBody;
 use manifold_node_engine::exec::extent::{AtomExtent, ExtentRule, Verdict};
 
 fn matter_move_bodies(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {

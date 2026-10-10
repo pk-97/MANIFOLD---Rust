@@ -16,8 +16,8 @@ use std::borrow::Cow;
 use manifold_gpu::{GpuBinding, GpuBuffer};
 
 use super::count_surface_triangles::MARCHING_CUBES_COMMON;
-use super::liquid_bricks;
-use crate::float_param;
+use manifold_water_liquid::primitives::liquid_bricks;
+use manifold_water_liquid::float_param;
 use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 use manifold_node_engine::mesh::MeshVertex;
 use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
@@ -494,7 +494,7 @@ impl Primitive for VolumeSurfaceMesh {
                 pipeline,
                 &clear_bindings,
                 extent,
-                super::running_total::EXTENT_GRID_OFFSET,
+                manifold_water_liquid::primitives::running_total::EXTENT_GRID_OFFSET,
                 "node.volume_surface_mesh.clear_tail",
             );
         } else {

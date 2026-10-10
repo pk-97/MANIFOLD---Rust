@@ -22,15 +22,15 @@ use manifold_core::fluid_domain::{FluidDomainLayout, domain_layout};
 use manifold_physics::clock::TICK;
 use manifold_water_rigid::coupled_frame::{CoupledRigidFrame, CoupledRigidInputs};
 use manifold_core::fluid_domain::MAX_FLUID_ROLES;
-use crate::fluid_role::FluidRole;
-use crate::liquid::bodies::{BodiesStatus, LiquidBodies, LiquidBody, LiquidShape};
-use crate::liquid::body_buffers::LiquidBodyBuffers;
-use crate::liquid::lattice::closed_faces;
-use crate::liquid::clock::LiquidClock;
-use crate::liquid::coupling::{DomainWalls, LiquidRigidOwner, PendingTick, takes_reaction};
-use {crate::liquid::fields, crate::liquid::fields::FieldLattice, crate::liquid::fields::LiquidFields, crate::liquid::fields::LiquidImpulses};
-use crate::liquid::lattice::LiquidLattice;
-use crate::liquid::tick_samples::TickSamples;
+use manifold_water_liquid::fluid_role::FluidRole;
+use manifold_water_liquid::bodies::{BodiesStatus, LiquidBodies, LiquidBody, LiquidShape};
+use manifold_water_liquid::body_buffers::LiquidBodyBuffers;
+use manifold_water_liquid::lattice::closed_faces;
+use manifold_water_liquid::clock::LiquidClock;
+use manifold_water_liquid::coupling::{DomainWalls, LiquidRigidOwner, PendingTick, takes_reaction};
+use {manifold_water_liquid::fields, manifold_water_liquid::fields::FieldLattice, manifold_water_liquid::fields::LiquidFields, manifold_water_liquid::fields::LiquidImpulses};
+use manifold_water_liquid::lattice::LiquidLattice;
+use manifold_water_liquid::tick_samples::TickSamples;
 use crate::matter::coupling::{ReactionScale, decode, live_body_limit};
 use crate::matter::{MAX_SUBSTEPS, REACTION_WORDS, WATER_DENSITY, block_sort_box, free_fall_speed, lattice_blocks, lattice_nodes, momentum_unit, substeps_for_interval, substeps_per_tick, water_lambda, wave_speed};
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
@@ -583,7 +583,7 @@ impl Primitive for MatterDomain {
             owner.set_step(ctx.sim_step);
         }
         let mut roles: [Option<FluidRole>; MAX_FLUID_ROLES] = std::array::from_fn(|_| None);
-        let role_pending = crate::liquid::read_roles(&ctx.inputs, &ROLE_PORTS, &mut roles);
+        let role_pending = manifold_water_liquid::read_roles(&ctx.inputs, &ROLE_PORTS, &mut roles);
         // A physics sample reads the force field and the roles at a tick's
         // start; it never advances time.
         if ctx.sim_step.authored_sample_only {

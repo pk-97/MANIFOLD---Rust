@@ -15,10 +15,40 @@ use manifold_nodes::testkit::source_roots::WGSL_SRC_ROOTS;
 /// Source trees referenced by the extended ABI cases. These include the
 /// non-primitive engine helpers whose shader declarations are proved here.
 pub const ABI_SOURCE_ROOTS: &[&str] = &[
-    "../manifold-nodes-water/src/liquid",
     "../manifold-node-engine/src/exec",
     "../manifold-node-engine/src/testkit",
 ];
+
+/// The liquid seam's files (the old nodes-water `liquid/` tree). Named one by
+/// one: the crate root also holds the primitives root and seam vocabulary the
+/// census never walked.
+pub const ABI_SOURCE_FILES: &[&str] = &[
+    "../manifold-water-liquid/src/bodies.rs",
+    "../manifold-water-liquid/src/body_buffers.rs",
+    "../manifold-water-liquid/src/clock.rs",
+    "../manifold-water-liquid/src/coupling.rs",
+    "../manifold-water-liquid/src/display_cursor.rs",
+    "../manifold-water-liquid/src/extent.rs",
+    "../manifold-water-liquid/src/fields.rs",
+    "../manifold-water-liquid/src/fields/tests.rs",
+    "../manifold-water-liquid/src/frame_history.rs",
+    "../manifold-water-liquid/src/frame_ring.rs",
+    "../manifold-water-liquid/src/grid.rs",
+    "../manifold-water-liquid/src/lattice.rs",
+    "../manifold-water-liquid/src/substep_history.rs",
+    "../manifold-water-liquid/src/tick_samples.rs",
+];
+
+pub fn abi_source_files() -> Result<Vec<PathBuf>, String> {
+    let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
+    ABI_SOURCE_FILES
+        .iter()
+        .map(|relative| {
+            let path = manifest.join(relative);
+            path.canonicalize().map_err(|e| format!("missing ABI case source file {}: {e}", path.display()))
+        })
+        .collect()
+}
 
 pub fn abi_source_roots() -> Result<Vec<PathBuf>, String> {
     let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -45,6 +75,7 @@ pub fn resolve_source_path(source: &str) -> Result<PathBuf, String> {
     let mut candidates = Vec::with_capacity(roots.len() + 1);
     candidates.push(manifest.join("src/node_graph/primitives").join(source));
     candidates.extend(roots.into_iter().map(|root| root.join(source)));
+    candidates.extend(abi_source_files()?.into_iter().filter(|file| file.ends_with(source)));
     candidates
         .into_iter()
         .find(|path| path.is_file())

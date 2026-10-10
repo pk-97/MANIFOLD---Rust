@@ -13,7 +13,7 @@ pub(super) const MATTER_WALLS: &str = include_str!("shaders/matter_walls.wgsl");
 mod tests {
     const P2G: &str = include_str!("shaders/matter_to_grid.wgsl");
     const G2P: &str = include_str!("shaders/grid_to_matter_body.wgsl");
-    const SORT: &str = include_str!("shaders/sort_particles_into_cells.wgsl");
+    const SORT: &str = manifold_water_liquid::primitives::sort_particles_into_cells::SHADER;
 
     /// The text of `fn <prefix>_<name>` (or `fn <name>` for the hand kernel's
     /// own module) up to its closing brace, with the prefix removed.

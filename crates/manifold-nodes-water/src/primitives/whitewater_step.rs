@@ -8,7 +8,7 @@
 
 use std::borrow::Cow;
 
-use crate::fluid_particles::WhitewaterSpawn;
+use manifold_water_liquid::fluid_particles::WhitewaterSpawn;
 use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline, GpuDevice};
 
 use super::crossing_distance::CrossingDistance;
@@ -19,26 +19,26 @@ use super::energy_potential::{MAX_ENERGY, MIN_ENERGY};
 use super::extend_lattice::ExtendLattice;
 use super::keep_whitewater::KeepWhitewater;
 use super::lattice_curvature::LatticeCurvature;
-use super::liquid_cells::LiquidCells;
+use manifold_water_liquid::primitives::liquid_cells::LiquidCells;
 use super::nearest_crossing::NearestCrossing;
 use super::pad_distance_lattice::{encode_pad_distance_lattice, prepare_pad_distance_lattice};
-use super::prefix_scan::{PrefixScan, ScanLabels, storage_words};
+use manifold_water_liquid::primitives::prefix_scan::{PrefixScan, ScanLabels, storage_words};
 use super::preserve_foam::PreserveFoam;
-use super::sort_particles_into_cells::{ParticleSorter, SortJob, SortLabels, range_storage_bytes, whitewater_record_read};
+use manifold_water_liquid::primitives::sort_particles_into_cells::{ParticleSorter, SortJob, SortLabels, range_storage_bytes, whitewater_record_read};
 use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 use super::surface_crossings::SurfaceCrossings;
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
 use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
 use manifold_physics::clock::TICK;
 use manifold_node_engine::particles::FluidParticle;
-use crate::fluid_particles::{FaceSample, MAX_BINS, bin_counts, bin_total};
-use crate::liquid::grid::face_len;
-use crate::liquid::bodies::{LiquidBody, LiquidShape};
-use crate::liquid::fields::FieldBinding;
+use manifold_water_liquid::fluid_particles::{FaceSample, MAX_BINS, bin_counts, bin_total};
+use manifold_water_liquid::grid::face_len;
+use manifold_water_liquid::bodies::{LiquidBody, LiquidShape};
+use manifold_water_liquid::fields::FieldBinding;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
 use manifold_node_engine::scene::transform::Transform;
-use crate::whitewater::{DEFAULT_CAPACITY, MAX_CAPACITY, KnownValue, SPREAD_STEPS, SURFACE_CROSSING_BYTES, WhitewaterParticle, cell_total, face_offset, grid_box, grid_cells, refinement, require_extended_faces};
+use manifold_water_liquid::whitewater::{DEFAULT_CAPACITY, MAX_CAPACITY, KnownValue, SPREAD_STEPS, SURFACE_CROSSING_BYTES, WhitewaterParticle, cell_total, face_offset, grid_box, grid_cells, refinement, require_extended_faces};
 use crate::whitewater_handoff::{Fence, Retired};
 
 
@@ -67,8 +67,8 @@ impl Fused {
 }
 
 fn fused_source() -> String {
-    use crate::whitewater::WHITEWATER_COMMON;
-    use crate::liquid::{grid::LIQUID_FACES, fields::LIQUID_FIELD};
+    use manifold_water_liquid::whitewater::WHITEWATER_COMMON;
+    use manifold_water_liquid::{grid::LIQUID_FACES, fields::LIQUID_FIELD};
     format!("{WHITEWATER_COMMON}\n{LIQUID_FACES}\n{LIQUID_FIELD}\n{WHITEWATER_FUSED_SHADER}")
 }
 
@@ -584,7 +584,7 @@ impl StepShape {
         let scan = storage_words(self.slot_scan_values()) as u64 * 4 + STATE_WORDS * 4;
         let outputs = OUTPUT_SLOTS as u64 * (4 * self.population_bytes() + COUNT_WORDS as u64 * 4);
         grid + per_particle + pool + sort + scan + outputs + 6 * self.solid_bytes()
-            + super::whitewater_distance::scratch_bytes(self.face_cells)
+            + manifold_water_liquid::primitives::whitewater_distance::scratch_bytes(self.face_cells)
     }
 
     /// Three adapter-sized arrays, including their zero tails, for packed input.
@@ -713,7 +713,7 @@ fn require_inputs(shape: &StepShape, inputs: &StepInputs<'_>) -> Result<(), Stri
     }
     match inputs.faces {
         FaceSource::Packed(faces) => {
-            let bytes = crate::liquid::grid::face_bytes(shape.face_cells);
+            let bytes = manifold_water_liquid::grid::face_bytes(shape.face_cells);
             if inputs.distance.is_none() {
                 return Err("legacy level-set interface requires axis arrays".into());
             }
@@ -1140,7 +1140,7 @@ pub(crate) struct Step {
     #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
     reference: reference::Reference,
     pipelines: Pipelines,
-    surface_distance: super::whitewater_distance::SurfaceDistance,
+    surface_distance: manifold_water_liquid::primitives::whitewater_distance::SurfaceDistance,
     shape: Option<StepShape>,
     tick_mode: bool,
     epoch: Option<u32>,
@@ -1949,5 +1949,5 @@ mod extent;
 
 #[cfg(any(test, feature = "testkit"))]
 pub fn empty_slot() -> WhitewaterParticle {
-    WhitewaterParticle { kind: crate::whitewater::WHITEWATER_EMPTY, ..Default::default() }
+    WhitewaterParticle { kind: manifold_water_liquid::whitewater::WHITEWATER_EMPTY, ..Default::default() }
 }

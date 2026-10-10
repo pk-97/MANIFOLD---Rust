@@ -12,18 +12,18 @@ use manifold_nodes_water::presets::gpu_flip::{DAM_FILL_HEIGHT, REST_PER_CELL, DA
 #[cfg(test)]
 use manifold_nodes_water::primitives::gpu_flip_volume::VolumeDrift;
 #[cfg(test)]
-use manifold_nodes_water::primitives::liquid_stats::SOLVER_WORDS;
+use manifold_water_liquid::primitives::liquid_stats::SOLVER_WORDS;
 
 use manifold_nodes_water::presets::gpu_flip::{FACE_NODES, STEP_NODE, WaterScene, water_def};
-use manifold_nodes_water::liquid::grid::face_len;
+use manifold_water_liquid::grid::face_len;
 #[cfg(test)]
 use manifold_nodes_water::primitives::gpu_flip_volume::volume_and_area;
 #[cfg(test)]
-use manifold_nodes_water::primitives::liquid_stats::{LIQUID_STATS_WORDS, LiquidTickStats};
+use manifold_water_liquid::primitives::liquid_stats::{LIQUID_STATS_WORDS, LiquidTickStats};
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
 use manifold_node_engine::particles::FluidParticle;
 #[cfg(test)]
-use manifold_nodes_water::fluid_particles::FaceSample;
+use manifold_water_liquid::fluid_particles::FaceSample;
 use manifold_node_engine::testkit::substep_nodes::register_substep_test_nodes;
 use manifold_node_engine::{persistence::EffectGraphDefExt, exec::execution_plan::ExecutionPlan, exec::execution::Executor, exec::effect_node::FrameTime, graph::Graph, exec::metal_backend::MetalBackend, persistence::PrimitiveRegistry, state_store::StateStore, exec::execution_plan::compile, load::graph_loader::pre_allocate_resources};
 
@@ -244,9 +244,9 @@ impl Run {
         self.solver_grid().cells()[0] as usize
     }
 
-    fn solver_grid(&self) -> manifold_nodes_water::liquid::lattice::FlipSolverGrid {
-        manifold_nodes_water::liquid::lattice::FlipSolverGrid::from_lattice(
-            manifold_nodes_water::liquid::lattice::LiquidLattice::from_layout(&self.scene.layout()),
+    fn solver_grid(&self) -> manifold_water_liquid::lattice::FlipSolverGrid {
+        manifold_water_liquid::lattice::FlipSolverGrid::from_lattice(
+            manifold_water_liquid::lattice::LiquidLattice::from_layout(&self.scene.layout()),
         )
     }
 

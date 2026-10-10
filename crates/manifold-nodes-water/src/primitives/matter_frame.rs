@@ -10,9 +10,9 @@ use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline};
 
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
 use manifold_node_engine::particles::FluidParticle;
-use crate::liquid::frame_ring::{FrameRing, RING};
-use crate::liquid::grid::{FACE_INPUT_PORTS, PublishedFaces};
-use crate::liquid::lattice::LiquidLattice;
+use manifold_water_liquid::frame_ring::{FrameRing, RING};
+use manifold_water_liquid::grid::{FACE_INPUT_PORTS, PublishedFaces};
+use manifold_water_liquid::lattice::LiquidLattice;
 use crate::matter::{MatterPoint, solid_bytes};
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;

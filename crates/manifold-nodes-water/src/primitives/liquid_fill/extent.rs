@@ -1,11 +1,11 @@
 //! Buffer extent rule owned by this node.
-use crate::liquid::extent::liquid_lattice;
+use manifold_water_liquid::extent::liquid_lattice;
 use manifold_node_engine::ports::EXACT_F32_COUNT;
 use crate::primitives::liquid_fill::fill_of;
 use crate::primitives::liquid_fill::filled_sites;
 use crate::primitives::liquid_fill::pool_slots;
 use manifold_node_engine::exec::extent::{AtomExtent, ExtentRule, Verdict};
-use crate::liquid::extent::PARTICLE;
+use manifold_water_liquid::extent::PARTICLE;
 
 fn liquid_fill(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     let cells = liquid_lattice(x)?.cells();

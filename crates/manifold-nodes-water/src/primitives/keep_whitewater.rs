@@ -10,16 +10,16 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuBinding;
 
-use crate::float_param;
-use super::sort_particles_into_cells::{bin_param};
+use manifold_water_liquid::float_param;
+use manifold_water_liquid::primitives::sort_particles_into_cells::{bin_param};
 use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
-use crate::fluid_particles::{CellRange, bin_counts, searched_bins};
+use manifold_water_liquid::fluid_particles::{CellRange, bin_counts, searched_bins};
 use manifold_node_engine::freeze::classify::FusedOutputCapacity;
-use crate::liquid::bodies::{LiquidBody, LiquidShape, LIQUID_POSE, LIQUID_COLLIDER};
+use manifold_water_liquid::bodies::{LiquidBody, LiquidShape, LIQUID_POSE, LIQUID_COLLIDER};
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
-use crate::whitewater::{WHITEWATER_COMMON, WhitewaterParticle, cell_total, particle_grid};
+use manifold_water_liquid::whitewater::{WHITEWATER_COMMON, WhitewaterParticle, cell_total, particle_grid};
 
 /// FLIP's `_maxDiffuseParticlesPerCell`.
 pub(crate) const MAX_PER_CELL: f32 = 5000.0;

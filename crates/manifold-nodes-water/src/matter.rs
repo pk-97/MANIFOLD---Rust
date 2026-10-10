@@ -6,7 +6,7 @@
 
 use manifold_node_engine::channel_names::well_known;
 use manifold_physics::clock::TICK;
-use crate::liquid::lattice::LiquidLattice;
+use manifold_water_liquid::lattice::LiquidLattice;
 use manifold_node_engine::ports::{ChannelElementType, ChannelSpec, KnownItem};
 
 pub mod coupling;
@@ -214,7 +214,7 @@ pub fn j_max(cohesion: f32) -> f32 {
 }
 
 /// Rest density of water, kg/m³ (taichi_elements `p_rho`).
-pub use crate::liquid::WATER_DENSITY;
+pub use manifold_water_liquid::WATER_DENSITY;
 
 /// Mass unit of the accumulators: `1000 · dx³ / 8` kg (D5), so a full node of
 /// water sums to about 8 units.
@@ -513,7 +513,7 @@ mod tests {
                 let lattice = LiquidLattice::from_layout(&layout);
                 let (_, size, bin) = block_sort_box(&lattice);
                 assert_eq!(
-                    crate::fluid_particles::bin_counts(size, bin),
+                    manifold_water_liquid::fluid_particles::bin_counts(size, bin),
                     lattice_blocks(&lattice),
                     "domain {domain} resolution {resolution}"
                 );
@@ -538,3 +538,41 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod grid_budget_tests {
+    use manifold_water_liquid::fluid_particles::bin_counts;
+    use manifold_water_liquid::lattice::LiquidLattice;
+
+    use manifold_core::fluid_domain::domain_layout;
+    use super::{block_sort_box, lattice_blocks, lattice_nodes};
+
+    use crate::primitives::matter_domain::admit_lattice;
+
+    /// MPM's lattice arithmetic at every resolution the domain allows: Grid
+    /// Budget admits or names the refusal, the block sort's bins are P2G's
+    /// blocks, and the default budget stops at 193 (200³ nodes).
+    #[test]
+    fn matter_grid_budget_gates_every_resolution() {
+        let mut largest_default = 0;
+        for resolution in 8..=512 {
+            let layout = domain_layout(None, 4.0, resolution).expect("layout");
+            let lattice = LiquidLattice::from_layout(&layout);
+            let nodes = lattice_nodes(lattice.nodes());
+            for budget in [8.0f32, 512.0] {
+                let fits = nodes as f64 <= f64::from(budget) * 1e6;
+                match admit_lattice(&lattice, budget) {
+                    Ok(()) => assert!(fits, "res {resolution}"),
+                    Err(error) => assert!(!fits && error.contains("Grid Budget"), "res {resolution}: {error}"),
+                }
+            }
+            if admit_lattice(&lattice, 8.0).is_ok() {
+                largest_default = resolution;
+            }
+            let (_, size, bin) = block_sort_box(&lattice);
+            assert_eq!(bin_counts(size, bin), lattice_blocks(&lattice), "res {resolution}");
+        }
+        assert_eq!(largest_default, 193);
+    }
+}
+

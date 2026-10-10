@@ -808,9 +808,9 @@ mod tests {
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
     use super::*;
-    use crate::liquid::bodies::GpuFlipBodyVertex;
+    use manifold_water_liquid::bodies::GpuFlipBodyVertex;
     use manifold_node_engine::particles::FluidParticle;
-    use crate::liquid::bodies::LiquidBody;
+    use manifold_water_liquid::bodies::LiquidBody;
     use bytemuck::Zeroable;
     use manifold_physics::stepping::CflRestrictions;
     use std::mem::size_of;

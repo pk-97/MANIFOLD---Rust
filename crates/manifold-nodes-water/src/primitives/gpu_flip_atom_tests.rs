@@ -1,6 +1,6 @@
 use manifold_node_engine::testkit::atom::*;
 use manifold_node_engine::testkit::array_harness::params;
-use super::dot_products::DotProducts;
+use manifold_water_liquid::primitives::dot_products::DotProducts;
 #[test]
 fn gpu_flip_dot_products_match_cpu() {
     let (len, rows) = (3000usize, 5usize);

@@ -1,10 +1,10 @@
 //! Buffer extent rule owned by this node.
-use crate::liquid::extent::liquid_lattice;
+use manifold_water_liquid::extent::liquid_lattice;
 use std::mem::size_of;
 use crate::matter::MatterPoint;
 use crate::primitives::matter_fill::fill_count;
 use manifold_node_engine::exec::extent::{AtomExtent, ExtentRule, Verdict};
-use crate::liquid::extent::whole;
+use manifold_water_liquid::extent::whole;
 
 fn matter_fill(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     let lattice = liquid_lattice(x)?;

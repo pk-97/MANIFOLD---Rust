@@ -26,7 +26,8 @@ AREAS = [
     ("top", r"^(lib|graph_install|wire_values|physics_scene|live_sim_clock_reference|migration|presets)(\.rs|/)"
             r"|^runtime/|^primitives/(mod|testkit)\.rs$|^testkit/mod\.rs$"
             r"|^testkit/(conformance|preset_extents|face_grid_scenes|whitewater_scene|whitewater_fingerprints)(\.rs|/)"
-            r"|^liquid/scene_contract\.rs$|^primitives/face_grid_(tests|extent_tests)\.rs$"),
+            r"|^liquid/scene_contract\.rs$|^primitives/face_grid_(tests|extent_tests)\.rs$"
+            r"|^primitives/liquid_bricks_consumer_tests\.rs$|^primitives/sort_particles_into_cells/gpu_tests\.rs$"),
     ("rigid", r"^(node|coupled_frame|vector_field|physics|physics_mesh|physics_events|physics_metrics)(\.rs|/)"
               r"|^primitives/(physics_world|rigid_body|vector_fields)(\.rs|/)|^testkit/physics_fixtures\.rs$"),
     ("liquid", r"^(liquid|fluid_role|fluid_particles|whitewater)(\.rs|/)"

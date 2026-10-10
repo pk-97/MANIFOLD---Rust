@@ -1,26 +1,26 @@
 //! Buffer extent rule owned by this node.
-use crate::liquid::extent::liquid_lattice;
+use manifold_water_liquid::extent::liquid_lattice;
 use std::mem::size_of;
-use crate::fluid_particles::bin_total;
+use manifold_water_liquid::fluid_particles::bin_total;
 use manifold_core::fluid_domain::MAX_FLUID_ROLES;
-use crate::liquid::bodies::LiquidBody;
-use crate::liquid::grid::face_len;
-use crate::liquid::lattice::FlipSolverGrid;
-use crate::liquid::coupling::REACTION_FLOATS;
+use manifold_water_liquid::bodies::LiquidBody;
+use manifold_water_liquid::grid::face_len;
+use manifold_water_liquid::lattice::FlipSolverGrid;
+use manifold_water_liquid::coupling::REACTION_FLOATS;
 use crate::primitives::gpu_flip_bodies::held_bytes as body_pass_bytes;
-use crate::primitives::prefix_scan::storage_words;
-use crate::primitives::sort_particles_into_cells::range_storage_bytes;
+use manifold_water_liquid::primitives::prefix_scan::storage_words;
+use manifold_water_liquid::primitives::sort_particles_into_cells::range_storage_bytes;
 use crate::primitives::gpu_flip_pressure::lattice_refusal;
 use crate::primitives::gpu_flip_pressure::scratch_bytes as pressure_scratch_bytes;
 use crate::primitives::gpu_flip_step::ENGINE_CFL;
 use crate::primitives::gpu_flip_step::FACE_VALID_LAYERS;
 use crate::primitives::gpu_flip_step::band_layers;
-use crate::liquid::grid::face_bytes;
+use manifold_water_liquid::grid::face_bytes;
 use crate::primitives::gpu_flip_step::ring_max;
 use crate::primitives::gpu_flip_step::scratch_bytes as step_scratch_bytes;
-use crate::whitewater::cell_total;
+use manifold_water_liquid::whitewater::cell_total;
 use manifold_node_engine::exec::extent::{AtomExtent, ExtentRule, Verdict};
-use crate::liquid::extent::{PARTICLE, body_rows, field_reads, lattice_total, search_fits, whole};
+use manifold_water_liquid::extent::{PARTICLE, body_rows, field_reads, lattice_total, search_fits, whole};
 
 fn gpu_flip_step(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     x.covers("identity", 16)?;
@@ -38,7 +38,7 @@ fn gpu_flip_step(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
         x.provide(port,u64::from(history_slots)*face_len(cells,axis)*4);
     }
     x.publish("substep_count",history_slots as f32);
-    x.hold(crate::liquid::substep_history::history_bytes(cells,history_slots));
+    x.hold(manifold_water_liquid::substep_history::history_bytes(cells,history_slots));
     let lattice = FlipSolverGrid::from_lattice(liquid_lattice(x)?);
     x.publish_transform("grid_bounds", lattice.bounds());
     for (port, value) in ["grid_nodes_x", "grid_nodes_y", "grid_nodes_z"].into_iter().zip(lattice.nodes())
@@ -81,7 +81,7 @@ fn gpu_flip_step(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     // The posed rows and their mobilities, one per body of the tick.
     // `contacts` is read only within its length, so any size covers it.
     let posed = u64::from(whole(x, "body_count", 0.0)).max(1);
-    x.hold(posed * (size_of::<LiquidBody>() as u64 + crate::liquid::bodies::MOBILITY_BYTES));
+    x.hold(posed * (size_of::<LiquidBody>() as u64 + manifold_water_liquid::bodies::MOBILITY_BYTES));
     // A wired reaction holds every body of one tick, as the step clamps
     // body_count; the body passes' sums come with it.
     if x.bytes("reaction").is_some() {

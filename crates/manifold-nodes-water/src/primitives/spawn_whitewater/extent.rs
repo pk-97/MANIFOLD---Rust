@@ -1,10 +1,10 @@
 //! Buffer extent rule owned by this node.
 use std::mem::size_of;
 use crate::primitives::whitewater_lifecycle::DEFAULT_CAPACITY;
-use crate::whitewater::cell_total;
-use crate::fluid_particles::WhitewaterSpawn;
+use manifold_water_liquid::whitewater::cell_total;
+use manifold_water_liquid::fluid_particles::WhitewaterSpawn;
 use manifold_node_engine::exec::extent::{AtomExtent, ExtentRule, Verdict};
-use crate::liquid::extent::{PARTICLE, whitewater_faces, whitewater_lattice, whole};
+use manifold_water_liquid::extent::{PARTICLE, whitewater_faces, whitewater_lattice, whole};
 
 fn spawn_whitewater(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     let (nodes, _) = whitewater_lattice(x, ["nodes_x", "nodes_y", "nodes_z"])?;

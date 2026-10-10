@@ -13,7 +13,7 @@ use manifold_core::params::{Param, ParamManifest};
 use serde_json::{Value, json};
 
 use manifold_nodes_water::presets::gpu_flip::{WaterScene, render_def};
-use manifold_nodes_water::liquid::grid::face_bytes;
+use manifold_water_liquid::grid::face_bytes;
 use manifold_node_engine::parameters::ParamValue;
 use manifold_node_engine::testkit::substep_nodes::register_substep_test_nodes;
 use manifold_node_engine::persistence::PrimitiveRegistry;
@@ -399,9 +399,9 @@ mod emitter_oracle {
     use crate::contracts::node_graph::catalog_tests::whitewater_scene::*;
     use manifold_node_engine::bindings::Slot;
     use manifold_node_engine::particles::FluidParticle;
-    use manifold_nodes_water::liquid::grid::face_len;
+    use manifold_water_liquid::grid::face_len;
     use manifold_node_engine::primitive::Primitive;
-    use manifold_nodes_water::whitewater::KnownValue;
+    use manifold_water_liquid::whitewater::KnownValue;
 
     /// The whitewater grid: the surface's solid lattice, its cells and box, and
     /// the face grid centred in it.
@@ -419,7 +419,7 @@ mod emitter_oracle {
         /// grid.
         fn of(scene: WaterScene) -> Self {
             let n = scene.pressure.n;
-            let lattice = manifold_nodes_water::liquid::lattice::LiquidLattice::from_layout(&scene.layout()).surface();
+            let lattice = manifold_water_liquid::lattice::LiquidLattice::from_layout(&scene.layout()).surface();
             let bounds = lattice.bounds();
             let nodes = lattice.nodes();
             assert!(nodes.iter().all(|&v| v == nodes[0]), "a cubic lattice: {nodes:?}");

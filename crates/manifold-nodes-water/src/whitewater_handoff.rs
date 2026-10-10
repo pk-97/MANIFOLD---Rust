@@ -14,10 +14,10 @@ use manifold_fluids::{
 };
 use manifold_gpu::{FrameClock, GpuBuffer, GpuDevice};
 
-use crate::liquid::clock::whitewater_fade;
+use manifold_water_liquid::clock::whitewater_fade;
 use manifold_physics::clock::TICK;
 use manifold_node_engine::particles::FluidParticle;
-use crate::liquid::grid::face_len;
+use manifold_water_liquid::grid::face_len;
 
 /// The frame-completion clock the rings stamp and check.
 pub(crate) trait Fence {

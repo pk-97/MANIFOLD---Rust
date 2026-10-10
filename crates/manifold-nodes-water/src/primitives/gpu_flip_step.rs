@@ -33,8 +33,8 @@
 //! (Copyright (c) 2020 Andreas Reich, github.com/Wumpf/blub,
 //! `density_projection_gather_error.comp`; see THIRD_PARTY_NOTICES.md).
 
-use crate::liquid::grid::face_bytes;
-use crate::primitives::prefix_scan::PrefixScan;
+use manifold_water_liquid::grid::face_bytes;
+use manifold_water_liquid::primitives::prefix_scan::PrefixScan;
 use std::borrow::Cow;
 
 use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline, GpuDevice, GpuEncoder};
@@ -46,19 +46,19 @@ use super::gpu_flip_clock::{
 use super::gpu_flip_narrow_band::{BandPipelines, NarrowBand, NbParams};
 use super::gpu_flip_pressure::{MAX_ITERATIONS, PressureSolver, Solve, Stop, Water, lattice_refusal, level_lattices, level_refusal};
 use super::liquid_solid_distance::{SolidDistanceJob, encode_solid_distance};
-use super::liquid_stats::{SOLVER_WORDS, with_stats_layout};
-use super::prefix_scan::ScanLabels;
-use crate::float_param;
-use super::sort_particles_into_cells::{LIQUID_PARTICLE_READ, ParticleSorter, SortJob, SortLabels, int_param};
+use manifold_water_liquid::primitives::liquid_stats::{SOLVER_WORDS, with_stats_layout};
+use manifold_water_liquid::primitives::prefix_scan::ScanLabels;
+use manifold_water_liquid::float_param;
+use manifold_water_liquid::primitives::sort_particles_into_cells::{LIQUID_PARTICLE_READ, ParticleSorter, SortJob, SortLabels, int_param};
 use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
 use manifold_node_engine::particles::FluidParticle;
-use crate::fluid_particles::FaceSample;
+use manifold_water_liquid::fluid_particles::FaceSample;
 use manifold_core::fluid_domain::MAX_FLUID_ROLES;
 use manifold_node_engine::ports::EXACT_F32_COUNT;
-use crate::liquid::WATER_DENSITY;
-use crate::liquid::bodies::{LIQUID_COLLIDER, LIQUID_POSE, LiquidBody, LiquidShape, MOBILITY_BYTES};
-use crate::liquid::fields::{FieldBinding, LIQUID_FIELD};
-use crate::liquid::lattice::{FlipSolverGrid, LiquidLattice};
+use manifold_water_liquid::WATER_DENSITY;
+use manifold_water_liquid::bodies::{LIQUID_COLLIDER, LIQUID_POSE, LiquidBody, LiquidShape, MOBILITY_BYTES};
+use manifold_water_liquid::fields::{FieldBinding, LIQUID_FIELD};
+use manifold_water_liquid::lattice::{FlipSolverGrid, LiquidLattice};
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
 
@@ -679,7 +679,7 @@ struct NarrowHistory {
 manifold_core::testkit_visible! {
 #[derive(Default)]
 pub(crate) struct StepState {
-    identity_ops: super::particle_identity::ParticleIdentity,
+    identity_ops: manifold_water_liquid::primitives::particle_identity::ParticleIdentity,
     pipelines: Option<Pipelines>,
     mask_pipeline: Option<GpuComputePipeline>,
     sorter: ParticleSorter,
@@ -715,7 +715,7 @@ pub(crate) struct StepState {
     bodies: BodyPasses,
     clock: Option<GpuFlipClock>,
     clock_capacities: [u32; 3],
-    history: crate::liquid::substep_history::SubstepHistory,
+    history: manifold_water_liquid::substep_history::SubstepHistory,
     narrow: NarrowBand,
     narrow_history: Option<NarrowHistory>,
     narrow_reset_pending: bool,
@@ -723,7 +723,7 @@ pub(crate) struct StepState {
     interior: Option<GpuBuffer>,
     /// Sheet seeding (BUG-j9l9w): the surface distance it reads, the stage,
     /// and each sorted slot's input index. Reserved only when the rate is on.
-    surface: super::whitewater_distance::SurfaceDistance,
+    surface: manifold_water_liquid::primitives::whitewater_distance::SurfaceDistance,
     sheeting: super::gpu_flip_sheeting::GpuSheeting,
     sheet_order: Option<GpuBuffer>,
 }
@@ -1524,7 +1524,7 @@ impl StepState {
                 "gpu_flip.step.narrow.restore_latch",
             );
             enc.compute_memory_barrier_buffers();
-            self.identity_ops.reserve(enc, super::particle_identity::BirthReservation {
+            self.identity_ops.reserve(enc, manifold_water_liquid::primitives::particle_identity::BirthReservation {
                 particles: &nb.particles, identity: step.identity, ranges, scan: &scan, plan: step.clock_plan,
                 params: [capacity, cell_count as u32, scan_threads as u32, 2],
             });
@@ -1937,7 +1937,7 @@ impl StepState {
                 substep: p.step_in_tick.max(0) as u32,
             };
             self.sheeting.encode_draw(enc, &inputs, step.clock_plan, &births);
-            self.identity_ops.reserve(enc, super::particle_identity::BirthReservation {
+            self.identity_ops.reserve(enc, manifold_water_liquid::primitives::particle_identity::BirthReservation {
                 particles: sorted, identity: step.identity, ranges, scan: self.sheeting.winners(), plan: step.clock_plan,
                 params: [base.particles, cells.iter().product(), self.sheeting.ranks(), 1],
             });
@@ -2024,7 +2024,7 @@ impl StepState {
                 "gpu_flip.step.narrow.reseed_latch",
             );
             enc.compute_memory_barrier_buffers();
-            self.identity_ops.reserve(enc, super::particle_identity::BirthReservation {
+            self.identity_ops.reserve(enc, manifold_water_liquid::primitives::particle_identity::BirthReservation {
                 particles: &nb.particles, identity: step.identity, ranges, scan: &scan, plan: step.clock_plan,
                 params: [capacity, cell_count as u32, scan_threads as u32, 2],
             });
@@ -2096,7 +2096,7 @@ impl StepState {
             self.emit_scan.encode_labelled_gated(enc, sites as usize, ScanLabels {
                 blocks: "gpu_flip.step.emit_scan.blocks", add: "gpu_flip.step.emit_scan.add",
             }, gate_plan);
-            self.identity_ops.reserve(enc, super::particle_identity::BirthReservation {
+            self.identity_ops.reserve(enc, manifold_water_liquid::primitives::particle_identity::BirthReservation {
                 particles: step.out, identity: step.identity, ranges, scan: &scan, plan: step.clock_plan,
                 params: [emission.capacity, cells.iter().product(), sites as u32, 1],
             });
@@ -2531,7 +2531,7 @@ impl Primitive for GpuFlipStep {
             .max(0.0)
             .min(
                 (clock_obstacles.size
-                    / size_of::<crate::liquid::bodies::GpuFlipBodyVertex>() as u64)
+                    / size_of::<manifold_water_liquid::bodies::GpuFlipBodyVertex>() as u64)
                     as f32,
             ) as u32;
         let source_count = ctx
@@ -2539,7 +2539,7 @@ impl Primitive for GpuFlipStep {
             .round()
             .max(0.0)
             .min(
-                (clock_sources.size / size_of::<crate::liquid::bodies::GpuFlipBodyVertex>() as u64)
+                (clock_sources.size / size_of::<manifold_water_liquid::bodies::GpuFlipBodyVertex>() as u64)
                     as f32,
             ) as u32;
         let live_hits = ctx.inputs.array("live_hits").unwrap_or(&zeros);

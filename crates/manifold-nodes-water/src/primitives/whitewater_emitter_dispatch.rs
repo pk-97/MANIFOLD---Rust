@@ -40,12 +40,12 @@ pub(super) fn run<P: Primitive>(
         }
     }
     if P::TYPE_ID == "node.turbulence_emission_count" {
-        let nodes = crate::whitewater::grid_nodes(ctx);
-        if crate::whitewater::grid_cells(nodes).is_none()
+        let nodes = manifold_water_liquid::whitewater::grid_nodes(ctx);
+        if manifold_water_liquid::whitewater::grid_cells(nodes).is_none()
             || ctx
                 .inputs
                 .array("influence")
-                .is_none_or(|b| b.size / 4 < crate::whitewater::cell_total(nodes))
+                .is_none_or(|b| b.size / 4 < manifold_water_liquid::whitewater::cell_total(nodes))
         {
             ctx.error("Turbulence Emission Count: influence does not cover the lattice".to_owned());
             return;

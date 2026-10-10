@@ -1,14 +1,14 @@
 //! Buffer extent rule owned by this node.
 use std::mem::size_of;
-use crate::liquid::bodies::LiquidBody;
-use crate::liquid::bodies::LiquidShape;
-use crate::liquid::grid::face_bytes;
-use crate::whitewater::DEFAULT_CAPACITY as STEP_CAPACITY;
-use crate::whitewater::MAX_CAPACITY as STEP_MAX_CAPACITY;
+use manifold_water_liquid::bodies::LiquidBody;
+use manifold_water_liquid::bodies::LiquidShape;
+use manifold_water_liquid::grid::face_bytes;
+use manifold_water_liquid::whitewater::DEFAULT_CAPACITY as STEP_CAPACITY;
+use manifold_water_liquid::whitewater::MAX_CAPACITY as STEP_MAX_CAPACITY;
 use crate::primitives::whitewater_step::StepShape;
-use crate::whitewater::cell_total;
+use manifold_water_liquid::whitewater::cell_total;
 use manifold_node_engine::exec::extent::{AtomExtent, ExtentRule, Verdict};
-use crate::liquid::extent::{field_reads, whole};
+use manifold_water_liquid::extent::{field_reads, whole};
 
 fn whitewater_step(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     let packed = crate::primitives::whitewater_step::packed_face_source(

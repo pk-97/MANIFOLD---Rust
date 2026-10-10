@@ -1,13 +1,13 @@
 //! Buffer extent rule owned by this node.
-use crate::liquid::extent::liquid_lattice;
+use manifold_water_liquid::extent::liquid_lattice;
 use std::mem::size_of;
 use manifold_node_engine::particles::FluidParticle;
-use crate::liquid::frame_ring::RING;
+use manifold_water_liquid::frame_ring::RING;
 use crate::matter::MatterPoint;
 use crate::matter::STATS_WORDS;
 use crate::primitives::matter_face_component::MATTER_FACE_VALID_LAYERS;
 use manifold_node_engine::exec::extent::{AtomExtent, ExtentRule, Verdict};
-use crate::liquid::extent::{cover_frame_faces, provide_frame_faces};
+use manifold_water_liquid::extent::{cover_frame_faces, provide_frame_faces};
 
 fn matter_frame(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     let lattice = liquid_lattice(x)?;

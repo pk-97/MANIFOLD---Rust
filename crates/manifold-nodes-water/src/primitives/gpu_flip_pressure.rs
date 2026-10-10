@@ -28,7 +28,7 @@ use manifold_gpu::{
 };
 
 use super::gpu_flip_bodies::{Bodies, BodyGate, BodyPasses};
-use crate::fluid_particles::FaceSample;
+use manifold_water_liquid::fluid_particles::FaceSample;
 
 const SHADER: &str = include_str!("shaders/gpu_flip_pressure.wgsl");
 const INVERSE_SHADER: &str = include_str!("shaders/coarse_inverse.wgsl");
@@ -1698,5 +1698,14 @@ mod tests {
             assert!(entries.contains(&entry), "missing entry {entry}");
         }
         assert_eq!(size_of::<Params>(), 64, "sixteen words, the shader's Params");
+    }
+}
+
+#[cfg(test)]
+mod level_lattice_tests {
+    #[test]
+    fn pressure_levels_halve_the_solver_lattice() {
+        assert_eq!(super::level_lattices([67; 3]),
+            vec![[67; 3], [34; 3], [17; 3], [9; 3], [5; 3], [3; 3]]);
     }
 }

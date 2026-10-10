@@ -502,7 +502,7 @@ fn live_sim_clock_hits_land_inside_long_steps() {
 
 #[test]
 fn live_sim_clock_pause_seek_speed_reset_match_today() {
-    use crate::liquid::clock::LiquidClock;
+    use manifold_water_liquid::clock::LiquidClock;
     let mut current = LiquidClock::default();
     let mut reference = Clock::default();
     let controls = [

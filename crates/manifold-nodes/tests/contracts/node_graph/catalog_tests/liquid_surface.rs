@@ -1,5 +1,5 @@
 use manifold_nodes_water::primitives::testkit::gpu_flip as gpu_flip_nodes;
-use manifold_nodes_water::primitives::testkit::liquid as liquid_nodes;
+use manifold_water_liquid::primitives::testkit::liquid as liquid_nodes;
 use manifold_nodes_water::primitives::testkit::surface as surface_nodes;
 use std::borrow::Cow;
 
@@ -8,7 +8,7 @@ use manifold_nodes_water::primitives::particle_volume::ParticleVolume;
 use manifold_node_engine::bindings::Slot;
 use manifold_node_engine::exec::effect_node::ParamValues;
 use manifold_node_engine::particles::{FluidParticle};
-use manifold_nodes_water::fluid_particles::{CellRange, FluidBlob};
+use manifold_water_liquid::fluid_particles::{CellRange, FluidBlob};
 use manifold_node_engine::parameters::ParamValue;
 use manifold_node_engine::primitive::Primitive;
 
@@ -50,7 +50,7 @@ fn fluid_fill_pits_expanded_band_matches_all_blobs() {
 /// liquid into solid padding before the final clamp.
 #[test]
 fn fluid_liquid_surface_keeps_padding_and_border_air_at_extreme_dials() {
-    use manifold_nodes_water::liquid::lattice::{LiquidLattice, PADDING_NODES};
+    use manifold_water_liquid::lattice::{LiquidLattice, PADDING_NODES};
 
     const OPEN_TOP: u32 = 63 & !(1 << 3);
     let mut harness = Harness::new();
@@ -168,7 +168,7 @@ fn fluid_liquid_surface_keeps_padding_and_border_air_at_extreme_dials() {
 #[test]
 fn fluid_mesh_grid_native_particle_field_matches_reference() {
     let layout = manifold_core::fluid_domain::domain_layout(None, 2.0, 8).unwrap();
-    let mesh = manifold_nodes_water::liquid::lattice::LiquidLattice::from_layout(&layout).surface();
+    let mesh = manifold_water_liquid::lattice::LiquidLattice::from_layout(&layout).surface();
     // Odd cell count, even node count and native half-cell origin, including
     // sparse blob bounds and the expanded closing band at subdivision two.
     for band in [0.0, 0.5] {

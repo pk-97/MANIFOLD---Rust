@@ -11,14 +11,14 @@ use super::whitewater_cpu::Rng;
 use super::sample_faces_at_particles::SampleFacesAtParticles;
 use super::spawn_whitewater::SpawnWhitewater;
 use super::wavecrest_potential::WavecrestPotential;
-use crate::testkit::water_codegen::run;
+use manifold_water_liquid::testkit::codegen::run;
 use {crate::primitives::whitewater_particle_cpu as cpu, super::whitewater_particle_cpu::Box3, super::whitewater_particle_cpu::Crest, super::whitewater_particle_cpu::Emission};
 use super::whitewater_type::WhitewaterType;
-use crate::fluid_particles::WhitewaterSpawn;
+use manifold_water_liquid::fluid_particles::WhitewaterSpawn;
 use manifold_node_engine::exec::effect_node::ParamValues;
 use manifold_node_engine::particles::FluidParticle;
-use crate::liquid::grid::face_len;
-use crate::whitewater::KnownValue;
+use manifold_water_liquid::grid::face_len;
+use manifold_water_liquid::whitewater::KnownValue;
 
 /// Unequal sides, so a swapped axis shows; the face grid one cell in.
 const NODES: [u32; 3] = [11, 10, 9];

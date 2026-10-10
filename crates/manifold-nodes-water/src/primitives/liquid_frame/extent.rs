@@ -1,14 +1,14 @@
 //! Buffer extent rule owned by this node.
-use crate::liquid::extent::liquid_lattice;
-use crate::liquid::frame_history::H_MAX;
+use manifold_water_liquid::extent::liquid_lattice;
+use manifold_water_liquid::frame_history::H_MAX;
 use crate::primitives::liquid_frame::WHITEWATER_INPUTS;
 use crate::primitives::liquid_frame::WHITEWATER_OUTPUTS;
-use crate::liquid::grid::FACE_INPUT_PORTS;
-use crate::liquid::grid::face_len;
-use crate::liquid::lattice::FlipSolverGrid;
-use crate::primitives::liquid_stats::LIQUID_STATS_WORDS;
+use manifold_water_liquid::grid::FACE_INPUT_PORTS;
+use manifold_water_liquid::grid::face_len;
+use manifold_water_liquid::lattice::FlipSolverGrid;
+use manifold_water_liquid::primitives::liquid_stats::LIQUID_STATS_WORDS;
 use manifold_node_engine::exec::extent::{AtomExtent, ExtentRule, Verdict};
-use crate::liquid::extent::{PARTICLE, cover_frame_faces, provide_frame_faces};
+use manifold_water_liquid::extent::{PARTICLE, cover_frame_faces, provide_frame_faces};
 
 fn liquid_frame(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     // The retained history at its budget: every slot admitted whole.
@@ -22,7 +22,7 @@ fn liquid_frame(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     }
     let mut interior_check = Ok(());
     if x.wired("interior") {
-        let bytes = crate::liquid::grid::interior_bytes(solver.cells());
+        let bytes = manifold_water_liquid::grid::interior_bytes(solver.cells());
         if x.bytes("interior") != Some(bytes) {
             interior_check = Err(x.uncovered(format!("interior must hold exactly {bytes} bytes for the cell-centred lattice")));
         }
@@ -38,7 +38,7 @@ fn liquid_frame(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     let count = x.count("count", 0.0)?;
     let particles = u64::from(count.max(1)) * PARTICLE;
     let solid = surface.solid_bytes();
-    x.hold(crate::primitives::particle_publication::scratch_bytes(count) + SLOTS * 16);
+    x.hold(manifold_water_liquid::primitives::particle_publication::scratch_bytes(count) + SLOTS * 16);
     let wired = x.wired("solid");
     x.hold(if wired { SLOTS * solid } else { solid });
     x.provide("particles_a", particles);

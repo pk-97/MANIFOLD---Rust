@@ -15,14 +15,14 @@ use manifold_node_engine::testkit::atom::{FACE_FLOATS, assert_close, face_grid_l
 use super::gpu_flip_step::{POCKET_GATE_WORDS, StepParams, dispatch_pass, tile_total};
 use super::liquid_fill::LiquidFill;
 use manifold_node_engine::testkit::array_harness::{Harness, params, read};
-use super::liquid_stats::with_stats_layout;
+use manifold_water_liquid::primitives::liquid_stats::with_stats_layout;
 use manifold_node_engine::particles::FluidParticle;
-use crate::fluid_particles::{CellRange, FaceSample};
-use crate::liquid::bodies::{BodySupports, LIQUID_COLLIDER, LIQUID_POSE, LiquidBody, LiquidShape, SUPPORT_VEC4S, body_pose_at, pack_distance_atlas, pack_supports, unpack_supports};
-use crate::liquid::coupling::coupled_start;
+use manifold_water_liquid::fluid_particles::{CellRange, FaceSample};
+use manifold_water_liquid::bodies::{BodySupports, LIQUID_COLLIDER, LIQUID_POSE, LiquidBody, LiquidShape, SUPPORT_VEC4S, body_pose_at, pack_distance_atlas, pack_supports, unpack_supports};
+use manifold_water_liquid::coupling::coupled_start;
 use manifold_physics::coupled_motion::{Held, MAX_SUPPORT_POINTS, Mobility, SupportPoint, constrained_mobility, coupled_state_at};
-use crate::liquid::fields::{FieldLattice, LIQUID_FIELD};
-use crate::liquid::lattice::PADDING_NODES;
+use manifold_water_liquid::fields::{FieldLattice, LIQUID_FIELD};
+use manifold_water_liquid::lattice::PADDING_NODES;
 use manifold_node_engine::parameters::ParamValue;
 
 /// A lattice with unequal sides, so a swapped axis shows.
@@ -3018,8 +3018,8 @@ fn gpu_flip_step_order_extend_constraint_value_proof() {
 
 #[test]
 fn gpu_flip_step_order_cell_cap_compacts_preserving_ids() {
-    use super::sort_particles_into_cells::{ParticleSorter, SortJob, LIQUID_PARTICLE_READ, SortLabels};
-    use super::prefix_scan::ScanLabels;
+    use manifold_water_liquid::primitives::sort_particles_into_cells::{ParticleSorter, SortJob, LIQUID_PARTICLE_READ, SortLabels};
+    use manifold_water_liquid::primitives::prefix_scan::ScanLabels;
     let particles: Vec<_> = (0..300).map(|i| FluidParticle {
         position_radius: [MIN[0] + 2.25 * H, MIN[1] + 2.25 * H, MIN[2] + 2.25 * H, 0.05],
         velocity: [1.0, 0.0, 0.0], id: 1000 + i,
@@ -3073,7 +3073,7 @@ fn gpu_flip_step_order_inflow_waits_until_next_step() {
     let mut node = GpuFlipStep::new();
     node.prepare_pipelines(&h.device);
     let particles = h.array::<FluidParticle>(&[], capacity);
-    let capped = h.array::<u32>(&[], 2 * capacity + super::liquid_stats::SOLVER_WORDS as usize);
+    let capped = h.array::<u32>(&[], 2 * capacity + manifold_water_liquid::primitives::liquid_stats::SOLVER_WORDS as usize);
     // The step solves on the native grid: three more cells, its origin 1.5
     // cells outside the box.
     let solver = N.map(|n| n + 3);

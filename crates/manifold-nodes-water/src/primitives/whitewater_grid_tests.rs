@@ -6,13 +6,13 @@
 use super::crossing_distance::CrossingDistance;
 use super::extend_lattice::ExtendLattice;
 use super::lattice_curvature::LatticeCurvature;
-use super::liquid_cells::LiquidCells;
+use manifold_water_liquid::primitives::liquid_cells::LiquidCells;
 use manifold_node_engine::testkit::array_harness::{Harness, params, read};
 use super::nearest_crossing::NearestCrossing;
 use super::surface_crossings::SurfaceCrossings;
 use {crate::primitives::whitewater_cpu as cpu, super::whitewater_cpu::Grid, super::whitewater_cpu::Rng};
 use manifold_node_engine::exec::effect_node::ParamValues;
-use crate::whitewater::{KnownValue, NO_CROSSING, SurfaceCrossing};
+use manifold_water_liquid::whitewater::{KnownValue, NO_CROSSING, SurfaceCrossing};
 
 /// Unequal sides, so a swapped axis shows.
 const NODES: [u32; 3] = [9, 8, 7];
@@ -372,4 +372,4 @@ fn extend_lattice_matches_cpu() {
     assert!(known > inside / 2, "three passes fill {known} of the {inside} inner cells");
 }
 
-use crate::testkit::water_codegen::run;
+use manifold_water_liquid::testkit::codegen::run;
