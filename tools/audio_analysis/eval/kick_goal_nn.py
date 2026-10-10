@@ -12,6 +12,7 @@ feature. Every prediction for a song comes from a net that never trained on it.
 """
 from __future__ import annotations
 
+import os
 import numpy as np
 import torch
 from scipy.signal import butter, sosfilt
@@ -109,7 +110,9 @@ class Net(nn.Module):
 
 
 def device():
-    return torch.device('mps' if torch.backends.mps.is_available() else 'cpu')
+    """KICK_GOAL_NN_DEVICE=cpu|mps; default the GPU when there is one."""
+    want = os.environ.get('KICK_GOAL_NN_DEVICE')
+    return torch.device(want or ('mps' if torch.backends.mps.is_available() else 'cpu'))
 
 
 def train(songs, seed, synth=()):
