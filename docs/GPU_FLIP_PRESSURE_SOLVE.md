@@ -15,7 +15,7 @@ The [engine parity audit](GPU_FLUID_SURFACE_DESIGN.md#2026-10-03-engine-paramete
 
 ## 1. The step
 
-The builder is `crates/manifold-nodes-water/src/primitives/gpu_flip_preset.rs` (`water_step`); the shipped preset is its Dam Break at 64 (`WaterDamBreakGpuFlip.json`, "Water — Dam Break (GPU FLIP)"). `node.gpu_flip_domain` supplies accepted clock intervals (LIVE_SIM_CLOCK_DESIGN.md). `node.liquid_state` runs one `node.gpu_flip_step`, whose GPU clock chooses CFL substeps with Steps as the minimum, then `node.liquid_stats`. Each substep runs these passes (`shaders/gpu_flip_step.wgsl`, one entry point each; the solve is `gpu_flip_pressure.rs`):
+The builder is `crates/manifold-nodes-water/src/presets/gpu_flip.rs` (`water_step`); the shipped preset is its Dam Break at 64 (`WaterDamBreakGpuFlip.json`, "Water — Dam Break (GPU FLIP)"). `node.gpu_flip_domain` supplies accepted clock intervals (LIVE_SIM_CLOCK_DESIGN.md). `node.liquid_state` runs one `node.gpu_flip_step`, whose GPU clock chooses CFL substeps with Steps as the minimum, then `node.liquid_stats`. Each substep runs these passes (`shaders/gpu_flip_step.wgsl`, one entry point each; the solve is `gpu_flip_pressure.rs`):
 
 1. Sort particles into cells (the shared particle sorter of `node.sort_particles_into_cells`, bins = grid cells).
 2. The particles' signed distance φ at the cell centres (`particle_distance`, section 2, the free surface). Water is every cell with φ < 0 (`water_from_phi`, after the solids' `phi_into_solids` in step 4), the engine's liquid cells: a centre within √3·h/2 of a particle. Walls are the box faces.

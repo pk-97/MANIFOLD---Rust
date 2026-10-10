@@ -430,7 +430,7 @@ anywhere · new modulation machinery (D6).
   identical pose streams**; headless PNG at t=0 and t≈3 s shows bricks fallen and
   stacked (L2 demo, actually read). `MANIFOLD_RENDER_TRACE=1` run with 1024 bodies:
   no frame >20 ms, step time reported in the phase notes (BUG-035 (authoring-hitch) gate).
-  Gate (negative): `rg 'Arc<Mutex' crates/manifold-physics crates/manifold-nodes-water/src/physics*` → zero;
+  Gate (negative): `rg 'Arc<Mutex' crates/manifold-physics crates/manifold-water-rigid/src/physics*` → zero;
   `rg 'wgpu' crates/manifold-physics` → zero; vendor tree byte-identical to the
   pinned upstream commit (diff against the recorded SHA). Round-trip: save/reload
   the preset → bodies re-simulate from descriptions (sim state is intentionally
