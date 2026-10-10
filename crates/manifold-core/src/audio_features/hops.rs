@@ -256,6 +256,7 @@ fn features_are_finite(features: &SendFeatures) -> bool {
                 band.liveliness,
                 band.transients,
                 band.kick,
+                band.snare,
                 band.pitch,
                 band.presence,
             ]

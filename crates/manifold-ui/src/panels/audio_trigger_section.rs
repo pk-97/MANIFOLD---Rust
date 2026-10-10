@@ -837,6 +837,9 @@ mod tests {
         let chips = trigger_source_chips(AudioFeature::new(AudioFeatureKind::Kick, AudioBand::Full));
         assert_eq!(chips.len(), 5);
         assert!(chips.iter().any(|c| c.active && c.label == "Kick"));
+        let chips = trigger_source_chips(AudioFeature::new(AudioFeatureKind::Snare, AudioBand::Full));
+        assert_eq!(chips.len(), 5);
+        assert!(chips.iter().any(|c| c.active && c.label == "Snare"));
         // A non-curated cell (an older project's Flux×Mid) keeps a truthful
         // trailing chip naming what it actually listens to.
         let chips = trigger_source_chips(AudioFeature::new(AudioFeatureKind::Flux, AudioBand::Mid));

@@ -119,6 +119,9 @@ pub enum AudioFeatureKind {
     /// bass-occupied Low band, and which a bass note's fixed-pitch attack cannot
     /// fake. Always reads the Low band regardless of the selected `band`.
     Kick,
+    /// Snare trigger — the trained snare detector. Always reads the Mid band regardless of
+    /// the selected `band`.
+    Snare,
     /// Tracked pitch of the band's dominant object, normalized to the band's
     /// bin range (P4, docs/AUDIO_OBJECT_TRACKING_DESIGN.md). HOLDS on dropout
     /// — gate with `Presence`, never read a held value as "low pitch".
@@ -130,13 +133,14 @@ pub enum AudioFeatureKind {
 
 impl AudioFeatureKind {
     /// All kinds in drawer-button order.
-    pub const ALL: [AudioFeatureKind; 8] = [
+    pub const ALL: [AudioFeatureKind; 9] = [
         AudioFeatureKind::Amplitude,
         AudioFeatureKind::Centroid,
         AudioFeatureKind::Noisiness,
         AudioFeatureKind::Flux,
         AudioFeatureKind::Transients,
         AudioFeatureKind::Kick,
+        AudioFeatureKind::Snare,
         AudioFeatureKind::Pitch,
         AudioFeatureKind::Presence,
     ];
@@ -155,8 +159,19 @@ impl AudioFeatureKind {
             AudioFeatureKind::Flux => "Flux",
             AudioFeatureKind::Transients => "Transients",
             AudioFeatureKind::Kick => "Kick",
+            AudioFeatureKind::Snare => "Snare",
             AudioFeatureKind::Pitch => "Pitch",
             AudioFeatureKind::Presence => "Presence",
+        }
+    }
+
+    /// The band a trained detector always reads, whatever band is selected, so a Kick or
+    /// Snare saved on another band can't silently read zero. `None` for band-matrix kinds.
+    pub fn fixed_band(self) -> Option<AudioBand> {
+        match self {
+            AudioFeatureKind::Kick => Some(AudioBand::Low),
+            AudioFeatureKind::Snare => Some(AudioBand::Mid),
+            _ => None,
         }
     }
 }
@@ -179,19 +194,15 @@ impl AudioFeature {
 
     /// Pull this feature's scalar out of a send's per-band features.
     pub fn extract(self, f: &SendFeatures) -> f32 {
-        // Kick is a sub-bass-only detector; it always reads the Low band so a
-        // `Kick` selected on any other band can't silently read zero.
-        if let AudioFeatureKind::Kick = self.kind {
-            return f.bands[AudioBand::Low.index()].kick;
-        }
-        let b = &f.bands[self.band.index()];
+        let b = &f.bands[self.kind.fixed_band().unwrap_or(self.band).index()];
         match self.kind {
             AudioFeatureKind::Amplitude => b.amplitude,
             AudioFeatureKind::Centroid => b.brightness,
             AudioFeatureKind::Noisiness => b.noisiness,
             AudioFeatureKind::Flux => b.liveliness,
             AudioFeatureKind::Transients => b.transients,
-            AudioFeatureKind::Kick => b.kick, // unreachable (handled above), keeps match total
+            AudioFeatureKind::Kick => b.kick,
+            AudioFeatureKind::Snare => b.snare,
             AudioFeatureKind::Pitch => b.pitch,
             AudioFeatureKind::Presence => b.presence,
         }
@@ -717,7 +728,9 @@ mod tests {
         }
         assert!(
             serde_json::to_string(&AudioFeatureKind::Pitch).unwrap().contains("pitch")
-                && serde_json::to_string(&AudioFeatureKind::Presence).unwrap().contains("presence"),
+                && serde_json::to_string(&AudioFeatureKind::Presence).unwrap().contains("presence")
+                && serde_json::to_string(&AudioFeatureKind::Kick).unwrap() == "\"kick\""
+                && serde_json::to_string(&AudioFeatureKind::Snare).unwrap() == "\"snare\"",
             "serde names are the file-format contract"
         );
     }
