@@ -225,6 +225,8 @@ def model_entries(final):
         'net.sos': np.stack([butter(2, [fc * (1 - nnm.HALF_BW), fc * (1 + nnm.HALF_BW)], btype='bandpass', fs=SR, output='sos')
                              for fc in nnm.CENTRES]).astype(f64),
         'net.k': np.array([max(int(.002 * SR), int(2 * SR / fc)) for fc in nnm.CENTRES], i64),
+        'net.hop': np.array(HOP, i64),
+        'net.sample_rate': np.array(SR, i64),
         'net.frame_s': np.array(nnm.FRAME_S, f64),
         'net.frame_hop': np.array(frame_hop, i64),
         'net.slice': np.array(nnm.SLICE, i64),
