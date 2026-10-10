@@ -2806,13 +2806,13 @@ impl GpuEncoder {
                     }
                 };
                 if scopes.is_empty() {
-                    log::error!("[GPU] Command buffer '{label}' error (code={code}): {desc}");
+                    super::gpu_fault::emit_diagnostic(format_args!("[GPU] Command buffer '{label}' error (code={code}): {desc}"));
                 } else {
-                    log::error!(
+                    super::gpu_fault::emit_diagnostic(format_args!(
                         "[GPU] Command buffer '{label}' error (code={code}): {desc} \
                          — encoded scopes: {}",
                         scopes.join(" | ")
-                    );
+                    ));
                 }
                 super::gpu_fault::record_fault(&desc);
             }
