@@ -131,7 +131,7 @@ def labels(name, cfg):
                als=res['source'], kick_track=cfg['kick'], snare_tracks=list(cfg['snare']), kick_stem=None, kick_lag_ms=0.0,
                kick_lag_z=None, export_offset_s=round(off, 4), export_offset_beats=round(off * bpm / 60, 2),
                trigger_notes=int(inside.sum()), kicks_on_hit=len(kicks), dropped_notes=len(dropped), strong_low_hits=len(hits),
-               kick_shaped_hits=len(shaped), unmarked_kick_shaped=len(other), masked_share=round(masked / dur, 3), rejected=masked / dur > MASK_MAX,
+               kick_shaped_hits=len(shaped), unmarked_kick_shaped=len(other), masked_share=round(masked / dur, 3), rejected=bool(masked / dur > MASK_MAX),
                labels=[round(float(t), 4) for t in kicks], uncertain=[round(float(t), 4) for t in uncertain])
     print(f'{name}: offset {off:+.3f} s ({row["export_offset_beats"]:+.2f} beats); notes {row["trigger_notes"]} on a hit '
           f'{len(kicks)} dropped {len(dropped)}; kick-shaped drum hits {len(shaped)}, unmarked {len(other)}; '

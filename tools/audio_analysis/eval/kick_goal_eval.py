@@ -37,6 +37,7 @@ from tools.audio_analysis.eval.kick_attack_rejection import read_audio
 from tools.audio_analysis.eval.kick_fusion_bandwise import fusion_features
 from tools.audio_analysis.eval.kick_goal_labels import DEV_STEMS, GOAL, MORE, NEW, drum_kicks, fresh_onsets, kick_env_db, load
 from tools.audio_analysis.eval.kick_goal_rolls import kick_notes
+from tools.audio_analysis.eval.kick_goal_trigger_labels import TRIGGER
 from tools.audio_analysis.eval.kick_night_common import NIGHT, TRACKS, Data
 from tools.audio_analysis.eval.live_kick_baseline import match_events, score_events
 from tools.audio_analysis.eval.master_kick_comparison import score_passage
@@ -97,11 +98,14 @@ def stem_notes(track, kick_path, sr):
 REFRACTORY = .060
 TRUTH = os.environ.get('KICK_GOAL_TRUTH', 'strict')
 MORE_ON = os.environ.get('KICK_GOAL_MORE') == '1'
-SUFFIX = ('' if TRUTH == 'strict' else f'_{TRUTH}') + ('_more' if MORE_ON else '')
+TRIGGER_ON = os.environ.get('KICK_GOAL_TRIGGER') == '1'
+SUFFIX = ('' if TRUTH == 'strict' else f'_{TRUTH}') + ('_more' if MORE_ON else '') + ('_trig' if TRIGGER_ON else '')
 NEW_SONGS = ('pattern', 'back_to_you', 'burn_stems', 'cold_remix')
 # KICK_GOAL_MORE=1 adds the campaign 2 training songs (kick_goal_labels.MORE, labels_more.json).
 MORE_SONGS = tuple(MORE) if MORE_ON else ()
 STEM_CFG = {**NEW, **MORE}
+# KICK_GOAL_TRIGGER=1 adds the songs labelled from a kick trigger track (kick_goal_trigger_labels, labels_trigger.json).
+TRIGGER_SONGS = tuple(TRIGGER) if TRIGGER_ON else ()
 CORE_IDS = ('late_night_bass_heavy', 'midnight_patience_bass_heavy', 'expanded_midnight_patience_s2',
             'expanded_midnight_patience_s4', 'expanded_miracle_s1', 'miracle_bass', 'expanded_miracle_s4',
             'expanded_miracle_s6', 'heavy_on_mind_bass')
@@ -164,8 +168,10 @@ class Goal:
             self.records[t] = rec
         if MORE_SONGS:
             self.labels['new'].update(json.loads((GOAL / 'labels_more.json').read_text())['new'])
+        if TRIGGER_SONGS:
+            self.labels['new'].update(json.loads((GOAL / 'labels_trigger.json').read_text())['new'])
         if with_new:
-            for name in NEW_SONGS + MORE_SONGS:
+            for name in NEW_SONGS + MORE_SONGS + TRIGGER_SONGS:
                 self.records[name] = self._new(name)
 
     def _new(self, name):
@@ -181,14 +187,18 @@ class Goal:
             feats, dur = feats[:, :15], len(mix) / sr
             np.savez(cache, candidates=cand, available=avail, features=feats, hop=hop, duration=dur)
         shift = info['kick_lag_ms'] / 1000
-        if self.mode == 'v3':
+        trigger = info.get('kind') == 'trigger'
+        if trigger:
+            assert not info['rejected'], f'{name}: rejected by kick_goal_trigger_labels'
+            stem_kicks, labels = np.asarray(info['labels']), list(info['labels'])
+        elif self.mode == 'v3':
             stem_kicks = stem_notes(name, STEM_CFG[name]['kick'], sr) + shift
             labels = sorted([float(x) for x in stem_kicks if 1.0 <= x <= dur - 1.0] +
                             [x for x in info['labels'] if not np.any(np.abs(stem_kicks - x) <= .07)])
         else:
             stem_kicks = fresh_onsets(stem_derived(kick_env_db, STEM_CFG[name]['kick'], sr)) + shift
             labels = info['labels']
-        regions = [(0.0, 1.2), (dur - 1.0, dur + 1.0)]
+        regions = [(0.0, 1.2), (dur - 1.0, dur + 1.0)] + [(u - .07, u + .2) for u in info.get('uncertain', [])]
         for t in labels:
             if not np.any(np.abs(stem_kicks - t) <= .07):
                 regions.append((t - .07, t + .2))
@@ -204,10 +214,13 @@ class Goal:
                    regions=[dict(start_s=a, end_s=b, reason='uncertain') for a, b in merged])
         rec = dict(track=name, source=src, ref=None, sample_rate=sr, hop=hop, candidates=cand, available=avail, all_labels=labels,
                    features=feats, duration=dur, removed=[], lag=shift)
-        self._finish(rec, STEM_CFG[name]['kick'])
+        if trigger:
+            self._finish(rec, None, TRIGGER[name]['drums'])
+        else:
+            self._finish(rec, STEM_CFG[name]['kick'])
         return rec
 
-    def _finish(self, rec, kick_path):
+    def _finish(self, rec, kick_path, drums_path=None):
         sr, hop = rec['sample_rate'], rec['hop']
         dur = rec['duration'] or (rec['available'][-1] + 64) * hop / sr
         mask, y, _ = training_labels(rec['source'], rec['ref'], rec['candidates'], rec['available'], sr, hop, dur)
@@ -224,6 +237,12 @@ class Goal:
             rec['free_spans'] = self._free_spans(rec, silent) if rec['ref'] is None else []
         else:
             rec['stem_kicks'], rec['ringing'], rec['free_spans'] = None, None, []
+            if drums_path is not None:
+                # Trigger songs: the verified trigger kicks stand in for stem notes and kick-free
+                # spans need a silent drums premaster. No kick stem, so no tail-fire check.
+                e = stem_derived(kick_env_db, drums_path, sr)
+                rec['stem_kicks'] = np.asarray(rec['all_labels'])
+                rec['free_spans'] = self._free_spans(rec, e < np.percentile(e, 99.9) - 50)
 
     @staticmethod
     def _free_spans(rec, silent):

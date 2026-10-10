@@ -32,7 +32,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 import numpy as np  # noqa: E402
 
 from tools.audio_analysis.eval.kick_goal_eval import (  # noqa: E402
-    GOAL, MORE_SONGS, NEW_SONGS, OUT, TRACKS, TRUTH, Goal, add_whole_song_truth, choose, run_tasks, score, summarise)
+    GOAL, MORE_SONGS, NEW_SONGS, OUT, TRACKS, TRIGGER_SONGS, TRUTH, Goal, add_whole_song_truth, choose, run_tasks, score, summarise)
 from tools.audio_analysis.eval.kick_goal_featsets import lowbank_cache, profile_cache  # noqa: E402
 from tools.audio_analysis.eval.kick_goal_selfsim import relative_levels, self_features  # noqa: E402
 from tools.audio_analysis.eval.run_kick_goal_data import ALL, line  # noqa: E402
@@ -100,9 +100,12 @@ def main():
         s.update(name=name, cutoffs=cuts)
         out[name] = dict(all=s, dev=summarise(g, {t: outcome[t] for t in TRACKS}),
                          new=summarise(g, {t: outcome[t] for t in NEW_SONGS}))
-        if MORE_SONGS:
+        if MORE_SONGS or TRIGGER_SONGS:
             out[name]['orig13'] = summarise(g, {t: outcome[t] for t in TRACKS + NEW_SONGS})
+        if MORE_SONGS:
             out[name]['more'] = summarise(g, {t: outcome[t] for t in MORE_SONGS})
+        if TRIGGER_SONGS:
+            out[name]['trig'] = summarise(g, {t: outcome[t] for t in TRIGGER_SONGS})
         for k in out[name]:
             print(line(f'{name} {k}', out[name][k]), flush=True)
         print('   per track', [f"{k[:8]} {v['matched']}/{v['labels']}+{v['extra']}" for k, v in s['per_track'].items()], flush=True)
