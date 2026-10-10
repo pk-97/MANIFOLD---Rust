@@ -485,7 +485,7 @@ sandbox") and the wave still closed BUG-082 on a headless PNG. The PNG proved th
 1. **Kick lane: removed from the scope outright** — tick lane and legend chip both. Not
    conditional display ("confusing if it's sometimes there and sometimes not" — elements
    are always present or absent, never state-toggled). The kick *detector* and the
-   drawer's Kick feature button are untouched (KICK_SWEEP_EVENT stands).
+   drawer's Kick feature button are untouched (the detector is now KICK_REALTIME_DESIGN).
 2. **Delta (`rate_on`) leaves the UI everywhere** — both drawer targets, param mods and
    clip triggers ("not very useful and adds a lot of clutter"). Runtime field +
    conditioning arm stay dormant for a possible future re-wire; saved `rate_on` flags

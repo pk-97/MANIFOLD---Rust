@@ -2,7 +2,7 @@
 
 **Status:** IN PROGRESS — P1/P2/P3/P4 SHIPPED 2026-07-06 (all gates green; P4 landed
 `586d2bac` + fix `00e9fd19`). **Remaining: P5 (scope overlay — anchors stale, see F13
-note at P5 below) + BUG-045 (gap-ring-down-chase); P6 dead, superseded by KICK_SWEEP_EVENT.** Header
+note at P5 below) + BUG-045 (gap-ring-down-chase); P6 dead, superseded by the kick detector (now KICK_REALTIME_DESIGN).** Header
 truth-fixed 2026-07-10 (coherence audit F11) — was previously stated "APPROVED design,
 not built," which under-reported a mostly-shipped design and made the status board wrong.
 **Prerequisites:** none (the mod_harness eval loop shipped 2026-07-06 @ `ca9eb490`)
