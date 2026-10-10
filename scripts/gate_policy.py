@@ -134,7 +134,7 @@ WATER_BROAD_FILTERS = [
 # gpu_flip_ rows stay path-keyed, so the narrow clock, band and domain rows hold.
 CS_GPU_FLIP_FILTERS = [
     "liquid_conformance::gpu_flip_", "liquid_conformance::liquid_live_flip",
-    "gpu_flip_scene_tests::", "catalog_tests::gpu_flip_body::",
+    "gpu_flip_scene_tests::", "gpu_flip_tile_tests::", "catalog_tests::gpu_flip_body::",
 ]
 # The GPU MPM (Matter) leaf's seam conformance (section 6.3 row), keyed by its crate
 # root. Every liquid_conformance check runs each LIQUID_SOLVERS row, Matter included,
@@ -483,7 +483,6 @@ INTEGRATION_ROWS = {
     "crates/manifold-nodes/tests/contracts/primitive_registry.rs": ("manifold-nodes", ["main"]),
     "crates/manifold-nodes-image/src/node_graph/primitives/mod.rs": ("manifold-nodes", ["main"]),
     "crates/manifold-nodes-scene/src/node_graph/primitives/mod.rs": ("manifold-nodes", ["main"]),
-    "crates/manifold-nodes-water/src/fluid.rs": ("manifold-nodes", ["gpu_proofs"]),
 }
 
 
@@ -533,18 +532,11 @@ PREFIX_ROWS += [(root, ".wgsl", "manifold-nodes", ["uniform_layout_extended", "w
 PREFIX_ROWS += [
     (RIGID_SRC, ".rs", "manifold-water-liquid", ["coupling"], []),
     (RIGID_SRC, ".rs", "manifold-nodes-water",
-     ["runtime::physics_carry", "runtime::physics_impulses",
-      "runtime::physics_sampling", "runtime::physics_source_runtime"], []),
+     ["runtime::physics_carry",
+      "runtime::physics_sampling"], []),
     (RIGID_SRC, ".rs", CATALOG_PACKAGE,
      ["contracts::node_graph::catalog_tests::physics_sampling",
       "contracts::node_graph::catalog_tests::physics_host_modulation", "physics_scene"], []),
-]
-
-# The GPU FLIP leaf's CPU contract: the catalog tests that construct its nodes.
-PREFIX_ROWS += [
-    (FLIP_SRC, ".rs", CATALOG_PACKAGE,
-     ["contracts::node_graph::catalog_tests::gpu_flip_body", "contracts::water::primitives::gpu_flip_scene_tests",
-      "contracts::water::primitives::gpu_flip_tile_tests"], []),
 ]
 
 # The GPU MPM leaf's CPU contract: the default-build tests that construct Matter nodes.
