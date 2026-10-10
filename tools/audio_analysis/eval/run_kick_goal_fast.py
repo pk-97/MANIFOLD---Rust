@@ -191,7 +191,7 @@ def main():
     tree_out, tree_in = {}, {}  # tree_out[k][song]; tree_in[(k, j)][song]: song in group j, trees without k and j
     os.environ.update(OMP_NUM_THREADS='1', OPENBLAS_NUM_THREADS='1', VECLIB_MAXIMUM_THREADS='1', MKL_NUM_THREADS='1')
     # Trees depend only on the labels and their weights, not on the net's input or the decision delay: cached.
-    tree_path = OUT / f'fast_trees{SUFFIX}{"_mel" if MELODIC_ON else ""}.npz'
+    tree_path = OUT / f'fast_treecache{SUFFIX}{"_mel" if MELODIC_ON else ""}.npz'
     with ProcessPoolExecutor(WORKERS, mp_context=get_context('spawn'), initializer=setup) as ex:
         cached = tree_path.exists()
         futures = [] if cached else [ex.submit(tree_task, (tuple(u for f in out for u in f), scored)) for out, scored in tasks]
