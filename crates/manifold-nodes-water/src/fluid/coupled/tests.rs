@@ -6,11 +6,11 @@ use manifold_physics::input::EventStamp;
 use manifold_physics::{FieldValue, Seconds, TickStamp};
 
 use super::CoupledRigidInputs;
-use manifold_node_engine::scene::impulse::RigidImpulseTargets;
+use manifold_core::scene_impulse::RigidImpulseTargets;
 use crate::fluid::native::NativeSimulation;
 use crate::fluid::{FluidControls, FluidRuntime, FluidSettings, TICK, Worker};
 use crate::physics::{ColliderGeometry, RigidBody, RigidSceneInputs};
-use manifold_node_engine::scene::impulse::ImpulseTarget;
+use manifold_core::scene_impulse::ImpulseTarget;
 use crate::physics_events::ResolvedNodeImpulse;
 use manifold_node_engine::scene::transform::Transform;
 

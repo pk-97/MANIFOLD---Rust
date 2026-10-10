@@ -2,10 +2,10 @@
 
 use manifold_core::{NodeId, id::EffectId};
 
+use manifold_core::{fluid_domain::FluidDomainSnapshot, scene_impulse::SceneImpulseDiagnostics};
 use super::{ModifierPreviewContext, PresetRuntime};
 use crate::{
     exec::effect_node::FrameTime,
-    scene::{fluid_domain::FluidDomainSnapshot, impulse::SceneImpulseDiagnostics},
 };
 
 impl PresetRuntime {

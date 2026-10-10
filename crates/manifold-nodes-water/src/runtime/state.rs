@@ -27,7 +27,7 @@ impl RuntimeExtension for WaterRuntimeState {
         &self,
         graph: &Graph,
         slot: manifold_node_engine::runtime::extensions::RuntimeSlot<'_>,
-        output: &mut Vec<(manifold_core::NodeId, manifold_node_engine::scene::fluid_domain::FluidDomainSnapshot)>,
+        output: &mut Vec<(manifold_core::NodeId, manifold_core::fluid_domain::FluidDomainSnapshot)>,
     ) {
         for (node_id, instance) in slot.node_map {
             if let Some(snapshot) = graph
@@ -57,7 +57,7 @@ impl RuntimeExtension for WaterRuntimeState {
     fn drain_scene_impulse_diagnostics(
         &mut self,
         runtime: &mut RuntimeContext<'_>,
-        diagnostics: &mut manifold_node_engine::scene::impulse::SceneImpulseDiagnostics,
+        diagnostics: &mut manifold_core::scene_impulse::SceneImpulseDiagnostics,
     ) {
         let mut water = super::WaterRuntime::borrow(self, runtime);
         water.drain_scene_impulses(|_, event| {

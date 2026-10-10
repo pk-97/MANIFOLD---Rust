@@ -3,17 +3,17 @@
 #[cfg(feature = "gpu-proofs")]
 use manifold_fluids::{Bounds, Config};
 
-use manifold_node_engine::scene::fluid_domain::FluidDomainLayout;
+use manifold_core::fluid_domain::FluidDomainLayout;
 #[cfg(feature = "gpu-proofs")]
 use super::FluidSettings;
 #[cfg(feature = "gpu-proofs")]
-use manifold_node_engine::scene::fluid_domain::domain_layout;
+use manifold_core::fluid_domain::domain_layout;
 use manifold_node_engine::scene::transform::Transform;
 
 #[cfg(feature = "gpu-proofs")]
 impl FluidSettings {
     pub fn domain_layout(self) -> Result<FluidDomainLayout, String> {
-        domain_layout(self.domain, self.domain_size, self.resolution)
+        domain_layout(self.domain.map(Into::into), self.domain_size, self.resolution)
     }
 }
 

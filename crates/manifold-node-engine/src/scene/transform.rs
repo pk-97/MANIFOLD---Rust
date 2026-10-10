@@ -233,3 +233,15 @@ mod tests {
         assert_eq!(rot[2], 0.0, "roll must stay zero");
     }
 }
+
+impl From<Transform> for manifold_core::fluid_domain::DomainBox {
+    fn from(t: Transform) -> Self {
+        Self { pos: t.pos, rot_euler: t.rot_euler, scale: t.scale, billboard: t.billboard }
+    }
+}
+
+impl From<manifold_core::fluid_domain::DomainBox> for Transform {
+    fn from(b: manifold_core::fluid_domain::DomainBox) -> Self {
+        Self { pos: b.pos, rot_euler: b.rot_euler, scale: b.scale, billboard: b.billboard }
+    }
+}

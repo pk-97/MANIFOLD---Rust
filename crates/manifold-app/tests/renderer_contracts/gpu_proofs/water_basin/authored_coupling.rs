@@ -7,7 +7,7 @@ use manifold_core::scene_modifier_preset::{SceneNodeRef, SceneTargetSelection};
 use manifold_core::{project::Project, Beats, GraphTarget, NodeId, Seconds};
 use manifold_editing::command::Command;
 use manifold_editing::commands::graph::{InsertSceneModifierCommand, SetGraphNodeParamCommand};
-use manifold_node_engine::scene::impulse::ImpulseTarget;
+use manifold_core::scene_impulse::ImpulseTarget;
 use manifold_node_engine::exec::effect_node::FrameTime;
 use manifold_nodes_water::runtime::WaterRuntimeExt;
 

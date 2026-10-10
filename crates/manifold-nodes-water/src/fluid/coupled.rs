@@ -10,7 +10,7 @@ use manifold_physics::TickStamp;
 #[cfg(feature = "gpu-proofs")]
 use manifold_physics::Seconds;
 
-use manifold_node_engine::scene::impulse::RigidImpulseTargets;
+use manifold_core::scene_impulse::RigidImpulseTargets;
 use crate::physics::{MAX_BODIES, RigidSceneInputs};
 use manifold_node_engine::scene::transform::Transform;
 

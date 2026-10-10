@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use crate::mesh::{MeshVertex, PLATONIC_SHAPES};
 use crate::platonic::platonic_mesh;
-use crate::scene::physics_mesh::MeshSelection;
+use crate::scene::mesh_selection::MeshSelection;
 
 /// Authored source geometry description for mesh-producing nodes.
 #[derive(Clone, Debug, PartialEq)]

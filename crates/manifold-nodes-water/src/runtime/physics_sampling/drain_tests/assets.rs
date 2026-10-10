@@ -125,7 +125,7 @@ fn time(seconds: f64) -> FrameTime {
     }
 }
 
-fn state(runtime: &PresetRuntime) -> manifold_node_engine::scene::fluid_domain::FluidDomainState {
+fn state(runtime: &PresetRuntime) -> manifold_core::fluid_domain::FluidDomainState {
     let fluid = runtime
         .graph
         .instance_by_node_id(&NodeId::new("fluid"))
@@ -148,7 +148,7 @@ fn directory(label: &str) -> std::path::PathBuf {
 
 #[test]
 fn native_take_requires_loaded_asset_content_and_refreshes_after_rebuild() {
-    use manifold_node_engine::scene::fluid_domain::FluidDomainState;
+    use manifold_core::fluid_domain::FluidDomainState;
 
     for (label, status) in [("pending", PENDING), ("failed", FAILED)] {
         let directory = directory(label);

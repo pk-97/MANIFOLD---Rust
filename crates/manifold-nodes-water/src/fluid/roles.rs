@@ -7,9 +7,9 @@ use manifold_physics::input::{input_span, input_span_before};
 use manifold_physics::stepping::StepInterval;
 use manifold_physics::{BodyPose, Seconds, TriangleMesh};
 
-use manifold_node_engine::scene::fluid_domain::FluidDomainLayout;
+use manifold_core::fluid_domain::FluidDomainLayout;
 use crate::fluid::{FluidDomainNative, HISTORY_CAPACITY, Sample, TICK};
-use manifold_node_engine::scene::fluid_domain::MAX_FLUID_ROLES;
+use manifold_core::fluid_domain::MAX_FLUID_ROLES;
 use crate::fluid_role::{FluidRole, FluidRoleKind, PreparedFluidGeometry};
 use crate::physics::pose_from_transform;
 use manifold_node_engine::scene::transform::Transform;

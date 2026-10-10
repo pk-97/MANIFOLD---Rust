@@ -10,7 +10,7 @@ use manifold_physics::{FieldValue, TickStamp};
 
 use super::{WaterRuntime, WaterRuntimeRef};
 use manifold_node_engine::exec::effect_node::FrameTime;
-use manifold_node_engine::scene::impulse::ImpulseTarget;
+use manifold_core::scene_impulse::ImpulseTarget;
 use crate::physics_events::ResolvedNodeImpulse;
 use crate::node;
 use manifold_node_engine::{exec::effect_node::NodeInstanceId, parameters::ParamValue, exec::effect_node::ParamValues, ports::PortType, persistence::PrimitiveRegistry, exec::execution_plan::ResourceId};

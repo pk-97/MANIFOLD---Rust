@@ -42,7 +42,7 @@ use super::physics_events::ResolvedNodeImpulse;
 #[cfg(feature = "gpu-proofs")]
 use manifold_node_engine::scene::transform::Transform;
 #[cfg(feature = "gpu-proofs")]
-use manifold_node_engine::scene::fluid_domain::{FluidDomainLayout, FluidDomainSnapshot, FluidDomainState};
+use manifold_core::fluid_domain::{FluidDomainLayout, FluidDomainSnapshot, FluidDomainState};
 #[cfg(feature = "gpu-proofs")]
 use crate::vector_field::ContinuousField;
 #[cfg(feature = "gpu-proofs")]

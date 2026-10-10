@@ -1,6 +1,6 @@
-use crate::testkit::array_harness::{Harness, read};
-use crate::{exec::effect_node::NodeInstanceId, exec::effect_node::ParamValues, primitive::Primitive, primitive::PrimitiveSpec, parameters::ParamValue, ports::KnownItem};
-use crate::freeze::{classify::CapacityExpr, codegen::FusionRegion, codegen::InputSource, codegen::RegionNode, codegen::generate_fused};
+use manifold_node_engine::testkit::array_harness::{Harness, read};
+use manifold_node_engine::{exec::effect_node::NodeInstanceId, exec::effect_node::ParamValues, primitive::Primitive, primitive::PrimitiveSpec, parameters::ParamValue, ports::KnownItem};
+use manifold_node_engine::freeze::{classify::CapacityExpr, codegen::FusionRegion, codegen::InputSource, codegen::RegionNode, codegen::generate_fused};
 use manifold_gpu::{GpuBinding, GpuBuffer};
 pub fn member<P: PrimitiveSpec>(id: u32, inputs: Vec<InputSource>) -> RegionNode<'static> {
     RegionNode {
@@ -65,7 +65,7 @@ pub fn fused<T: bytemuck::Pod + KnownItem>(
                     _ => panic!("unexpected uniform {name}"),
                 });
             match param.ty {
-                crate::parameters::ParamType::Int => value as i32 as u32,
+                manifold_node_engine::parameters::ParamType::Int => value as i32 as u32,
                 _ => value.to_bits(),
             }
         })
@@ -74,7 +74,7 @@ pub fn fused<T: bytemuck::Pod + KnownItem>(
     let output = h.array::<T>(&[], count);
     let pipeline = h.device.create_compute_pipeline(
         &generated.wgsl,
-        crate::freeze::codegen::ENTRY,
+        manifold_node_engine::freeze::codegen::ENTRY,
         "whitewater-reference-fused",
     );
     let mut bindings = vec![GpuBinding::Bytes {
@@ -103,10 +103,10 @@ pub fn fused<T: bytemuck::Pod + KnownItem>(
     enc.commit_and_wait_completed();
     read(&output.1, count)
 }
-pub fn run<P: Primitive, T: bytemuck::Pod + crate::ports::KnownItem>(
+pub fn run<P: Primitive, T: bytemuck::Pod + manifold_node_engine::ports::KnownItem>(
     harness: &mut Harness,
     prim: &mut P,
-    inputs: &[(&'static str, crate::bindings::Slot)],
+    inputs: &[(&'static str, manifold_node_engine::bindings::Slot)],
     len: usize,
     step_params: &ParamValues,
 ) -> Vec<T> {

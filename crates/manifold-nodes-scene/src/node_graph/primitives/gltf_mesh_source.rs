@@ -20,7 +20,7 @@ use manifold_node_engine::exec::effect_node::EffectNodeContext;
 use crate::node_graph::gltf_load::{DEFAULT_MATERIAL_MESH_PARAM, GltfMeshSelector};
 use manifold_node_engine::scene::mesh_source::MeshSource;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
-use manifold_node_engine::scene::physics_mesh::MeshSelection;
+use manifold_node_engine::scene::mesh_selection::MeshSelection;
 use manifold_node_engine::primitive::Primitive;
 use manifold_node_engine::scene::source_asset::{mesh_identity, LoadedAsset, SourceAssetIdentity};
 
@@ -519,7 +519,7 @@ impl Primitive for GltfMeshSource {
                         .map(|verts| apply_mesh_fit(verts, fit_unit_box, recenter))
                         .map(|verts| apply_translate(verts, translate))
                         .and_then(|verts| {
-                            manifold_node_engine::scene::physics_mesh::select_fragment(
+                            manifold_node_engine::scene::mesh_selection::select_fragment(
                                 verts,
                                 fragment_count,
                                 fragment_index,
@@ -1461,7 +1461,7 @@ mod gpu_tests {
     }
 }
 
-fn load_physics_mesh_asset(path: &std::path::Path, selection: &manifold_node_engine::scene::physics_mesh::MeshSelection) -> Result<Vec<MeshVertex>, String> {
+fn load_physics_mesh_asset(path: &std::path::Path, selection: &manifold_node_engine::scene::mesh_selection::MeshSelection) -> Result<Vec<MeshVertex>, String> {
     use crate::node_graph::gltf_load::{DEFAULT_MATERIAL_MESH_PARAM, GltfMeshSelector};
     use crate::node_graph::decode_cache::cached_load_gltf_mesh;
         let selector = if selection.material == DEFAULT_MATERIAL_MESH_PARAM {
@@ -1514,7 +1514,7 @@ mod mesh_asset_source_tests {
         let path = dir.join("mesh.gltf");
         std::fs::write(&path, document.to_string()).unwrap();
         for (mesh, primitive) in [(-1, -1), (0, -1), (0, 0)] {
-            let selection = manifold_node_engine::scene::physics_mesh::MeshSelection {
+            let selection = manifold_node_engine::scene::mesh_selection::MeshSelection {
                 mesh, primitive, material: -1, fit: true, recenter: true,
                 translate: [2.0, 3.0, 4.0], fragment_count: 1, fragment_index: 0, collider_parts: 1,
             };

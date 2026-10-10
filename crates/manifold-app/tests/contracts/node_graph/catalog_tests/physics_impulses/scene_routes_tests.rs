@@ -145,7 +145,7 @@ fn scene_impulse_routes_acknowledged_receipts_allow_more_than_queue_capacity() {
     assert!(runtime.is_scene_impulse_param(&fire));
     assert!(!runtime.is_scene_impulse_param("ordinary-trigger"));
     let mut sequence = 0;
-    let mut diagnostics = manifold_node_engine::scene::impulse::SceneImpulseDiagnostics::default();
+    let mut diagnostics = manifold_core::scene_impulse::SceneImpulseDiagnostics::default();
     for frame in 0..300 {
         runtime
             .fire_scene_impulse(&fire, time(frame as f64 * DT), &mut sequence)

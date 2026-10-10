@@ -4,7 +4,7 @@ use manifold_physics::{
     FieldInput, FieldValue, TickStamp, VectorField,
 };
 
-use manifold_node_engine::scene::impulse::RigidImpulseTargets;
+use manifold_core::scene_impulse::RigidImpulseTargets;
 
 use super::{RigidSimulation, FIXED_TICK, IMPULSE_CAPACITY, MAX_BODIES, TARGET_SLOTS};
 

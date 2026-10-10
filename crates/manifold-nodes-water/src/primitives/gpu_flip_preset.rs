@@ -24,7 +24,7 @@ use super::gpu_flip_domain::{GpuFlipGeometry, gpu_flip_geometry};
 use super::gpu_flip_step::FACE_VALID_LAYERS;
 use manifold_node_engine::load::catalog_source::preset_json as bundled_preset_json;
 #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
-use manifold_node_engine::scene::fluid_domain::{FluidDomainLayout, domain_layout};
+use manifold_core::fluid_domain::{FluidDomainLayout, domain_layout};
 use crate::liquid::clock::INTERVAL_DURATION_INPUTS;
 use crate::liquid::grid::FACE_INPUT_PORTS;
 use manifold_node_engine::scene::transform::Transform;

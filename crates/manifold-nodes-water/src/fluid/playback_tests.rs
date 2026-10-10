@@ -532,7 +532,7 @@ fn fluid_source_preparation_error_survives_reset_and_recovers_explicitly() {
         .set_cache(CacheMode::Record, "unused-source-error-test")
         .unwrap();
     runtime.clear();
-    assert_eq!(runtime.domain_snapshot().state, manifold_node_engine::scene::fluid_domain::FluidDomainState::Failed);
+    assert_eq!(runtime.domain_snapshot().state, manifold_core::fluid_domain::FluidDomainState::Failed);
     assert!(
         runtime
             .advance(true)

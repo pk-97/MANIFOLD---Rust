@@ -24,7 +24,7 @@ use manifold_core::effect_graph_def::ParamSpecDef;
 use manifold_core::params::{Param, ParamManifest};
 use manifold_node_engine::gpu::headless_readback::encode_rgba8_png;
 use {manifold_node_engine::persistence::PrimitiveRegistry, manifold_node_engine::scene::transform::Transform, manifold_nodes_scene::node_graph::viewport_overlay::ViewportOverlayConfig, manifold_nodes_scene::node_graph::viewport_session::ViewportSession};
-use manifold_node_engine::scene::fluid_domain::{FluidDomainSnapshot, FluidDomainState};
+use manifold_core::fluid_domain::{FluidDomainSnapshot, FluidDomainState};
 use manifold_nodes_water::fluid::FluidSettings;
 use manifold_node_engine::runtime::preset_context::PresetContext;
 

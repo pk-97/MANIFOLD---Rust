@@ -293,7 +293,7 @@ use crate::contracts::node_graph::catalog_tests::liquid_surface::blob_bounds;
     #[test]
     fn fluid_mesh_grid_native_interior_matches_cell_centred_plane() {
         for resolution in [8, 16] {
-            let layout = manifold_node_engine::scene::fluid_domain::domain_layout(None, 2.0, resolution).unwrap();
+            let layout = manifold_core::fluid_domain::domain_layout(None, 2.0, resolution).unwrap();
             let mesh = manifold_nodes_water::liquid::lattice::LiquidLattice::from_layout(&layout).surface();
             let lattice = Lattice { center: mesh.bounds().pos, size: mesh.bounds().scale, cell: mesh.cell_size() };
             let field: Vec<f32> = (0..resolution.pow(3)).map(|i| {

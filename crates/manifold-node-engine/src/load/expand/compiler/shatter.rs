@@ -221,7 +221,7 @@ pub(super) fn prepare(
                     }
                 })
                 .collect();
-            let slots: Vec<_> = (0..crate::scene::impulse::RigidImpulseTargets::BODY_CAPACITY)
+            let slots: Vec<_> = (0..manifold_core::scene_impulse::RigidImpulseTargets::BODY_CAPACITY)
                 .filter(|slot| !used.contains(slot))
                 .take(count)
                 .collect();

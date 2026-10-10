@@ -43,7 +43,7 @@ manifold_core::testkit_visible! {
 /// and the initial volume, before roles or coupling.
 pub(super) fn seeded_world(
     settings: super::FluidSettings,
-    domain: manifold_node_engine::scene::fluid_domain::FluidDomainLayout,
+    domain: manifold_core::fluid_domain::FluidDomainLayout,
     surface_meshing: bool,
 ) -> Result<FluidWorld, String> {
     let mut new = FluidWorld::new_seeded(domain.config(settings), settings.seed)
@@ -102,7 +102,7 @@ impl NativeSimulation {
         &mut self,
         request: &Request,
         coupled: Option<&coupled::Request>,
-        domain: manifold_node_engine::scene::fluid_domain::FluidDomainLayout,
+        domain: manifold_core::fluid_domain::FluidDomainLayout,
     ) -> Result<(), String> {
         if self
             .world
@@ -134,7 +134,7 @@ impl NativeSimulation {
         native_roles: &roles::NativeRoles,
         native: &mut FluidWorld,
         request: &'request Request,
-        domain: manifold_node_engine::scene::fluid_domain::FluidDomainLayout,
+        domain: manifold_core::fluid_domain::FluidDomainLayout,
         tick: u64,
         sample_time: Seconds,
     ) -> Result<PreparedTick<'request>, String> {
@@ -204,7 +204,7 @@ impl NativeSimulation {
     fn step_plain_live_interval<'request>(
         native: &mut FluidWorld,
         request: &'request Request,
-        domain: manifold_node_engine::scene::fluid_domain::FluidDomainLayout,
+        domain: manifold_core::fluid_domain::FluidDomainLayout,
         interval: StepInterval,
         prepared: &PreparedTick<'request>,
     ) -> Result<FrameStats, String> {
@@ -284,7 +284,7 @@ impl NativeSimulation {
     fn capture_output(
         &mut self,
         request: &mut Request,
-        domain: manifold_node_engine::scene::fluid_domain::FluidDomainLayout,
+        domain: manifold_core::fluid_domain::FluidDomainLayout,
         tick: u64,
         pose: super::Transform,
         stats: FrameStats,

@@ -495,7 +495,7 @@ mod tests {
     fn matter_block_bins_are_base_node_blocks() {
         for domain in [0.5f32, 1.0, 4.0, 20.0] {
             for resolution in [8u32, 32, 63, 64, 100, 128, 512] {
-                let layout = manifold_node_engine::scene::fluid_domain::domain_layout(None, domain, resolution).unwrap();
+                let layout = manifold_core::fluid_domain::domain_layout(None, domain, resolution).unwrap();
                 let lattice = LiquidLattice::from_layout(&layout);
                 let (_, size, bin) = block_sort_box(&lattice);
                 assert_eq!(
@@ -505,7 +505,7 @@ mod tests {
                 );
             }
         }
-        let layout = manifold_node_engine::scene::fluid_domain::domain_layout(None, 4.0, 64).unwrap();
+        let layout = manifold_core::fluid_domain::domain_layout(None, 4.0, 64).unwrap();
         let lattice = LiquidLattice::from_layout(&layout);
         assert_eq!(lattice_blocks(&lattice), [18; 3]);
         let (centre, size, bin) = block_sort_box(&lattice);

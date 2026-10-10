@@ -372,4 +372,4 @@ fn extend_lattice_matches_cpu() {
     assert!(known > inside / 2, "three passes fill {known} of the {inside} inner cells");
 }
 
-use manifold_node_engine::testkit::water_codegen::run;
+use crate::testkit::water_codegen::run;

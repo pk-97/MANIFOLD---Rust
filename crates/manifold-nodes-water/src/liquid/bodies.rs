@@ -14,7 +14,7 @@ use manifold_node_engine::channel_names::well_known;
 use crate::fluid::TICK;
 use crate::liquid::clock::{ClockFrame, LiquidClock};
 use crate::liquid::tick_samples::TickSamples;
-use manifold_node_engine::scene::fluid_domain::MAX_FLUID_ROLES;
+use manifold_core::fluid_domain::MAX_FLUID_ROLES;
 use crate::fluid_role::{DistanceState, FluidRole, FluidRoleKind, PreparedFluidGeometry};
 use crate::physics::pose_from_transform;
 use manifold_node_engine::ports::{ChannelElementType, ChannelSpec, KnownItem};

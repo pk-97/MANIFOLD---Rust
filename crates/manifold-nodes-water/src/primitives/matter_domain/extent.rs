@@ -1,7 +1,7 @@
 //! Buffer extent rule owned by this node.
 use std::mem::size_of;
 use manifold_core::liquid_domain::MATTER_DOMAIN_TYPE_ID;
-use manifold_node_engine::scene::fluid_domain::MAX_FLUID_ROLES;
+use manifold_core::fluid_domain::MAX_FLUID_ROLES;
 use crate::liquid::bodies::LiquidBody;
 use crate::liquid::bodies::LiquidShape;
 use crate::liquid::clock::FIELD_RESERVE_INTERVALS;

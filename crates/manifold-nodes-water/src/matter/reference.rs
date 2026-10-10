@@ -256,7 +256,7 @@ mod tests {
     use super::*;
 
     fn lattice() -> LiquidLattice {
-        let layout = manifold_node_engine::scene::fluid_domain::domain_layout(None, 1.0, 16).unwrap();
+        let layout = manifold_core::fluid_domain::domain_layout(None, 1.0, 16).unwrap();
         LiquidLattice::from_layout(&layout)
     }
 

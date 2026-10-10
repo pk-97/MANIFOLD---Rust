@@ -2,7 +2,7 @@
 use crate::liquid::extent::liquid_lattice;
 use std::mem::size_of;
 use crate::fluid_particles::bin_total;
-use manifold_node_engine::scene::fluid_domain::MAX_FLUID_ROLES;
+use manifold_core::fluid_domain::MAX_FLUID_ROLES;
 use crate::liquid::bodies::LiquidBody;
 use crate::liquid::grid::face_len;
 use crate::liquid::lattice::FlipSolverGrid;

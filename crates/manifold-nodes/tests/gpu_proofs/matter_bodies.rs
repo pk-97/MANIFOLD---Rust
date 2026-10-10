@@ -6,7 +6,7 @@ use manifold_core::{Beats, Seconds};
 use manifold_gpu::GpuTextureFormat;
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
 use manifold_physics::sdf::signed_distance_lattice;
-use manifold_node_engine::scene::fluid_domain::{domain_layout};
+use manifold_core::fluid_domain::{domain_layout};
 use manifold_nodes_water::fluid::TICK;
 use manifold_nodes_water::liquid::bodies::{LiquidBody, LiquidShape, body_pose_at, pack_distance_atlas};
 use manifold_nodes_water::liquid::fields::FieldLattice;
