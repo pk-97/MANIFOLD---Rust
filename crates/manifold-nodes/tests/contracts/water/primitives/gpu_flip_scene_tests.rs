@@ -10,14 +10,14 @@ use manifold_gpu::GpuTextureFormat;
 #[cfg(test)]
 use manifold_nodes_water::presets::gpu_flip::{DAM_FILL_HEIGHT, REST_PER_CELL, DAM_OBSTACLE};
 #[cfg(test)]
-use manifold_nodes_water::primitives::gpu_flip_volume::VolumeDrift;
+use manifold_water_gpu_flip::primitives::gpu_flip_volume::VolumeDrift;
 #[cfg(test)]
 use manifold_water_liquid::primitives::liquid_stats::SOLVER_WORDS;
 
 use manifold_nodes_water::presets::gpu_flip::{FACE_NODES, STEP_NODE, WaterScene, water_def};
 use manifold_water_liquid::grid::face_len;
 #[cfg(test)]
-use manifold_nodes_water::primitives::gpu_flip_volume::volume_and_area;
+use manifold_water_gpu_flip::primitives::gpu_flip_volume::volume_and_area;
 #[cfg(test)]
 use manifold_water_liquid::primitives::liquid_stats::{LIQUID_STATS_WORDS, LiquidTickStats};
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
@@ -1371,11 +1371,11 @@ fn gpu_flip_no_body_solid_clear_matches_six_passes() {
     struct ForceSolidVelocity;
     impl Drop for ForceSolidVelocity {
         fn drop(&mut self) {
-            manifold_nodes_water::primitives::gpu_flip_step::set_force_solid_velocity(false);
+            manifold_water_gpu_flip::primitives::gpu_flip_step::set_force_solid_velocity(false);
         }
     }
     fn original_frame(run: &mut Run) -> (f64, f64) {
-        manifold_nodes_water::primitives::gpu_flip_step::set_force_solid_velocity(true);
+        manifold_water_gpu_flip::primitives::gpu_flip_step::set_force_solid_velocity(true);
         let _reset = ForceSolidVelocity;
         run.timed_frame()
     }
@@ -1383,7 +1383,7 @@ fn gpu_flip_no_body_solid_clear_matches_six_passes() {
         values.sort_by(f64::total_cmp);
         (values[values.len() / 2 - 1] + values[values.len() / 2]) * 0.5
     }
-    manifold_nodes_water::primitives::gpu_flip_step::set_force_solid_velocity(false);
+    manifold_water_gpu_flip::primitives::gpu_flip_step::set_force_solid_velocity(false);
     for (n, fresh) in [(16, true), (16, false), (64, true)] {
         let scene = WaterScene::still_pool(n).with_steps(1);
         let mut optimized = run_with_retired_speed(scene, fresh);
@@ -1471,11 +1471,11 @@ fn gpu_flip_pocket_segments_match_indirect_sweeps() {
     struct ForceIndirectPockets;
     impl Drop for ForceIndirectPockets {
         fn drop(&mut self) {
-            manifold_nodes_water::primitives::gpu_flip_step::set_force_indirect_pockets(false);
+            manifold_water_gpu_flip::primitives::gpu_flip_step::set_force_indirect_pockets(false);
         }
     }
     fn original_frame(run: &mut Run) {
-        manifold_nodes_water::primitives::gpu_flip_step::set_force_indirect_pockets(true);
+        manifold_water_gpu_flip::primitives::gpu_flip_step::set_force_indirect_pockets(true);
         let _reset = ForceIndirectPockets;
         run.frame();
     }
@@ -1509,7 +1509,7 @@ fn gpu_flip_pocket_segments_match_indirect_sweeps() {
             assert_eq!(segmented.read::<u32>(node, port, words), indirect.read::<u32>(node, port, words), "frame{frame}: {port}");
         }
     }
-    manifold_nodes_water::primitives::gpu_flip_step::set_force_indirect_pockets(false);
+    manifold_water_gpu_flip::primitives::gpu_flip_step::set_force_indirect_pockets(false);
     let scene = WaterScene::still_pool(16).with_steps(2);
     // Unwired retired speed keeps all six numerical slots: each interval
     // records active work, an inactive tail, then active work next interval.
@@ -1568,11 +1568,11 @@ fn gpu_flip_inactive_extension_dispatch_matches_dense() {
     struct ForceDenseExtend;
     impl Drop for ForceDenseExtend {
         fn drop(&mut self) {
-            manifold_nodes_water::primitives::gpu_flip_step::set_force_dense_extend(false);
+            manifold_water_gpu_flip::primitives::gpu_flip_step::set_force_dense_extend(false);
         }
     }
     fn original_frame(run: &mut Run) -> (f64, f64) {
-        manifold_nodes_water::primitives::gpu_flip_step::set_force_dense_extend(true);
+        manifold_water_gpu_flip::primitives::gpu_flip_step::set_force_dense_extend(true);
         let _reset = ForceDenseExtend;
         run.timed_frame()
     }
@@ -1615,7 +1615,7 @@ fn gpu_flip_inactive_extension_dispatch_matches_dense() {
         let b: Vec<u32> = original.read(STEP_NODE, "capped", capped_words);
         assert!(a == b, "{at}: full capped words differ");
     }
-    manifold_nodes_water::primitives::gpu_flip_step::set_force_dense_extend(false);
+    manifold_water_gpu_flip::primitives::gpu_flip_step::set_force_dense_extend(false);
     for (n, steps, fresh) in [(16, 1, true), (16, 2, false), (64, 1, false)] {
         let scene = WaterScene::still_pool(n).with_steps(steps);
         let mut optimized = run_with_retired_speed(scene, fresh);
@@ -1628,7 +1628,7 @@ fn gpu_flip_inactive_extension_dispatch_matches_dense() {
         let mut original_cpu = Vec::with_capacity(MEASURED);
         let mut warm_replay = [manifold_gpu::GpuReplayStats::default(); 2];
         for frame in 0..WARMUP + MEASURED {
-            manifold_nodes_water::primitives::gpu_flip_step::set_force_dense_extend(false);
+            manifold_water_gpu_flip::primitives::gpu_flip_step::set_force_dense_extend(false);
             let (optimized_time, original_time) = if frame % 2 == 0 {
                 (optimized.timed_frame(), original_frame(&mut original))
             } else {
@@ -1669,7 +1669,7 @@ fn gpu_flip_inactive_extension_dispatch_matches_dense() {
             optimized.set_encode_replay(false);
             original.set_encode_replay(false);
             let direct_before = [optimized.replay_stats(), original.replay_stats()];
-            manifold_nodes_water::primitives::gpu_flip_step::set_force_dense_extend(false);
+            manifold_water_gpu_flip::primitives::gpu_flip_step::set_force_dense_extend(false);
             optimized.timed_frame();
             original_frame(&mut original);
             compare(&optimized, &original, fresh, WARMUP + MEASURED);

@@ -13,9 +13,9 @@ use manifold_gpu::{GpuBuffer, GpuDevice, GpuReplayCache};
 use manifold_physics::coupled_motion::{Held, Mobility, SupportPoint, constrained_mobility, mobility_index};
 
 use manifold_node_engine::testkit::atom::{FACE_FLOATS, assert_close, face_grid_len, random_values, random_water};
-use manifold_nodes_water::primitives::gpu_flip_bodies::{BodyPasses, Bodies};
-use manifold_nodes_water::primitives::gpu_flip_pressure::{MAX_ITERATIONS, PROGRESS_FLOATS, PressureSolver, Solve, Stop, Water};
-use manifold_nodes_water::primitives::gpu_flip_step::{TILE, set_all_tiles, set_gate_off, set_poison};
+use manifold_water_gpu_flip::primitives::gpu_flip_bodies::{BodyPasses, Bodies};
+use manifold_water_gpu_flip::primitives::gpu_flip_pressure::{MAX_ITERATIONS, PROGRESS_FLOATS, PressureSolver, Solve, Stop, Water};
+use manifold_water_gpu_flip::primitives::gpu_flip_step::{TILE, set_all_tiles, set_gate_off, set_poison};
 use manifold_node_engine::testkit::array_harness::read;
 use manifold_water_liquid::bodies::LiquidBody;
 use manifold_water_liquid::coupling::coupled_start;
@@ -1228,9 +1228,9 @@ fn gpu_flip_body_golden_holds_profiled() {
 /// matches main bit for bit.
 #[test]
 fn gpu_flip_body_rounds_past_the_stop_write_nothing() {
-    manifold_nodes_water::primitives::gpu_flip_pressure::set_keep_ranges(true);
+    manifold_water_gpu_flip::primitives::gpu_flip_pressure::set_keep_ranges(true);
     let lines = body_golden_lines();
-    manifold_nodes_water::primitives::gpu_flip_pressure::set_keep_ranges(false);
+    manifold_water_gpu_flip::primitives::gpu_flip_pressure::set_keep_ranges(false);
     let golden = std::fs::read_to_string(format!("{}/tests/fixtures/{BODY_GOLDEN}", env!("CARGO_MANIFEST_DIR"))).expect("golden fixture reads");
     let expected: Vec<&str> = golden.lines().filter(|l| !l.starts_with('#')).collect();
     let moved: Vec<String> = expected.iter().zip(&lines).filter(|(e, l)| **e != l.as_str()).map(|(e, l)| format!("want {e}\n got {l}")).collect();
@@ -1244,7 +1244,7 @@ fn gpu_flip_body_chunk_sizes_match_main_golden() {
     let golden = std::fs::read_to_string(format!("{}/tests/fixtures/{BODY_GOLDEN}", env!("CARGO_MANIFEST_DIR"))).expect("golden fixture reads");
     let expected: Vec<&str> = golden.lines().filter(|l| !l.starts_with('#')).collect();
     for chunk in [1, 3, 32] {
-        let _chunk = manifold_nodes_water::primitives::gpu_flip_pressure::set_round_chunk(chunk);
+        let _chunk = manifold_water_gpu_flip::primitives::gpu_flip_pressure::set_round_chunk(chunk);
         let lines = body_golden_lines();
         let moved: Vec<String> = expected.iter().zip(&lines).filter(|(e, l)| **e != l.as_str()).map(|(e, l)| format!("want {e}\n got {l}")).collect();
         assert!(moved.is_empty(), "chunk {chunk}: {} body golden cases moved:\n{}", moved.len(), moved.join("\n"));

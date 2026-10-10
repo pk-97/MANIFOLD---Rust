@@ -1,0 +1,36 @@
+[package]
+name = "manifold-water-gpu-flip"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+manifold-core = { path = "../manifold-core" }
+manifold-gpu = { path = "../manifold-gpu" }
+manifold-node-engine = { path = "../manifold-node-engine" }
+manifold-physics = { path = "../manifold-physics" }
+manifold-water-rigid = { path = "../manifold-water-rigid" }
+manifold-water-liquid = { path = "../manifold-water-liquid" }
+arrayvec = "0.7"
+bytemuck = { version = "1", features = ["derive", "min_const_generics"] }
+inventory = "0.3"
+log = { workspace = true }
+
+[dev-dependencies]
+manifold-water-gpu-flip = { path = ".", features = ["testkit"] }
+manifold-node-engine = { path = "../manifold-node-engine", features = ["testkit"] }
+manifold-water-rigid = { path = "../manifold-water-rigid", features = ["testkit"] }
+manifold-water-liquid = { path = "../manifold-water-liquid", features = ["testkit"] }
+manifold-fluids = { path = "../manifold-fluids" }
+half = "2"
+naga = { version = "28", features = ["wgsl-in", "msl-out"] }
+serde = { workspace = true }
+serde_json = { version = "1", features = ["float_roundtrip"] }
+zstd = "0.13.3"
+
+[features]
+testkit = ["manifold-node-engine/testkit", "manifold-water-liquid/testkit"]
+gpu-proofs = ["testkit", "manifold-node-engine/gpu-proofs", "manifold-gpu/gpu-proofs", "manifold-water-liquid/gpu-proofs"]
+
+[lints]
+workspace = true

@@ -12,6 +12,7 @@ manifold-gpu = { path = "../manifold-gpu" }
 manifold-physics = { path = "../manifold-physics" }
 manifold-water-rigid = { path = "../manifold-water-rigid" }
 manifold-water-liquid = { path = "../manifold-water-liquid" }
+manifold-water-gpu-flip = { path = "../manifold-water-gpu-flip" }
 manifold-fluids = { path = "../manifold-fluids" }
 ahash = { workspace = true }
 arrayvec = "0.7"
@@ -34,6 +35,7 @@ manifold-node-engine = { path = "../manifold-node-engine", features = ["testkit"
 manifold-playback = { path = "../manifold-playback" }
 manifold-water-rigid = { path = "../manifold-water-rigid", features = ["testkit"] }
 manifold-water-liquid = { path = "../manifold-water-liquid", features = ["testkit"] }
+manifold-water-gpu-flip = { path = "../manifold-water-gpu-flip", features = ["testkit"] }
 sha2 = "0.10"
 zstd = "0.13.3"
 
@@ -44,8 +46,8 @@ objc2 = { version = "0.6", optional = true }
 objc2 = "0.6"
 
 [features]
-testkit = ["manifold-node-engine/testkit", "manifold-water-rigid/testkit", "manifold-water-liquid/testkit", "dep:glam", "dep:objc2"]
-gpu-proofs = ["testkit", "manifold-node-engine/gpu-proofs", "manifold-gpu/gpu-proofs", "manifold-water-rigid/gpu-proofs", "manifold-water-liquid/gpu-proofs"]
+testkit = ["manifold-node-engine/testkit", "manifold-water-rigid/testkit", "manifold-water-liquid/testkit", "manifold-water-gpu-flip/testkit", "dep:glam", "dep:objc2"]
+gpu-proofs = ["testkit", "manifold-node-engine/gpu-proofs", "manifold-gpu/gpu-proofs", "manifold-water-rigid/gpu-proofs", "manifold-water-liquid/gpu-proofs", "manifold-water-gpu-flip/gpu-proofs"]
 fluid-perf-proofs = ["gpu-proofs"]
 whitewater-oracle = ["gpu-proofs", "manifold-fluids/whitewater-oracle"]
 

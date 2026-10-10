@@ -16,7 +16,7 @@
 
 use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline, GpuDevice, GpuEncoder};
 
-const SHADER: &str = include_str!("shaders/gpu_flip_clock.wgsl");
+pub const SHADER: &str = include_str!("shaders/gpu_flip_clock.wgsl");
 const WORKGROUP: u32 = 64;
 /// The authored GPU FLIP parameter range has at most 64 frame steps; the
 /// histogram is exactly that existing range, not a population/quality cap.

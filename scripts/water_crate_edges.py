@@ -27,7 +27,8 @@ AREAS = [
             r"|^runtime/|^primitives/(mod|testkit)\.rs$|^testkit/mod\.rs$"
             r"|^testkit/(conformance|preset_extents|face_grid_scenes|whitewater_scene|whitewater_fingerprints)(\.rs|/)"
             r"|^liquid/scene_contract\.rs$|^primitives/face_grid_(tests|extent_tests)\.rs$"
-            r"|^primitives/liquid_bricks_consumer_tests\.rs$|^primitives/sort_particles_into_cells/gpu_tests\.rs$"),
+            r"|^primitives/liquid_bricks_consumer_tests\.rs$|^primitives/sort_particles_into_cells/gpu_tests\.rs$"
+            r"|^primitives/liquid_surface_tests\.rs$|^primitives/liquid_solid_distance/tests\.rs$"),
     ("rigid", r"^(node|coupled_frame|vector_field|physics|physics_mesh|physics_events|physics_metrics)(\.rs|/)"
               r"|^primitives/(physics_world|rigid_body|vector_fields)(\.rs|/)|^testkit/physics_fixtures\.rs$"),
     ("liquid", r"^(liquid|fluid_role|fluid_particles|whitewater)(\.rs|/)"
@@ -44,7 +45,7 @@ AREAS = [
                    r"|pad_distance_lattice)(\.rs|/)"),
     ("gpuflip", r"^primitives/testkit/gpu_flip\.rs$"
                 + "|" + P + r"(gpu_flip_\w+|liquid_state|liquid_fill|liquid_solid_distance|clamp_liquid_to_solids"
-                r"|push_out_of_solid|euler_step_particles(_3d)?|apply_radial_burst(_3d)?_to_particles|liquid_surface_tests)(\.rs|/)"),
+                r"|push_out_of_solid|euler_step_particles(_3d)?|apply_radial_burst(_3d)?_to_particles)(\.rs|/)"),
     ("surface", r"^primitives/testkit/surface\.rs$"
                 + "|" + P + r"(lattice_bricks|lattice_closing_tests|liquid_frame|particle_volume|volume_surface_mesh"
                 r"|count_surface_edges|count_surface_triangles|relax_surface_mesh|smooth_surface_mesh|surface_mesh_normals"

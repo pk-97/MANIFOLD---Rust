@@ -9,7 +9,7 @@ use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline, GpuDevice};
 
 use manifold_nodes_water::presets::gpu_flip::WaterScene;
 use crate::contracts::water::primitives::gpu_flip_scene_tests::Run;
-use manifold_nodes_water::primitives::gpu_flip_step::{CELL_REACH, ENGINE_CFL, FACE_VALID_LAYERS, StepParams, TILE, band_layers, dispatch_pass, ring_max, set_all_tiles, set_poison, tile_counts, tile_total};
+use manifold_water_gpu_flip::primitives::gpu_flip_step::{CELL_REACH, ENGINE_CFL, FACE_VALID_LAYERS, StepParams, TILE, band_layers, dispatch_pass, ring_max, set_all_tiles, set_poison, tile_counts, tile_total};
 use manifold_water_liquid::primitives::liquid_stats::with_stats_layout;
 use manifold_node_engine::testkit::array_harness::read;
 use manifold_node_engine::particles::{FluidParticle};
@@ -18,7 +18,7 @@ use manifold_water_liquid::bodies::{LIQUID_COLLIDER, LIQUID_POSE};
 use manifold_water_liquid::fields::LIQUID_FIELD;
 
 fn gather_sources() -> [String; 2] {
-    let source = include_str!("../../../../../manifold-nodes-water/src/primitives/shaders/gpu_flip_step.wgsl");
+    let source = manifold_water_gpu_flip::primitives::gpu_flip_step::STEP_SHADER;
     // Restore the original dynamic-axis gather only in the test oracle.
     // Keep its support decisions and floating-point accumulation verbatim.
     let inner = r#"                    for (var a = 0; a < 3; a = a + 1) {

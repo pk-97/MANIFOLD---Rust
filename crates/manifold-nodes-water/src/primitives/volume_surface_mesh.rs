@@ -173,7 +173,7 @@ manifold_node_engine::primitive! {
     wgsl_body: include_str!("shaders/volume_surface_mesh_body.wgsl"),
     input_access: [BufferGather, BufferGather, BufferGather, BufferGather, BufferGather, BufferGather],
     derived_uniforms: ["brick_pass:u32", "indexed:u32"],
-    wgsl_includes: [MARCHING_CUBES_COMMON, liquid_bricks::COMMON, include_str!("shaders/surface_edge_ownership.wgsl"), include_str!("shaders/surface_edge_index.wgsl"), include_str!("shaders/clamp_liquid_to_solids_element.wgsl")],
+    wgsl_includes: [MARCHING_CUBES_COMMON, liquid_bricks::COMMON, include_str!("shaders/surface_edge_ownership.wgsl"), include_str!("shaders/surface_edge_index.wgsl"), manifold_water_gpu_flip::primitives::clamp_liquid_to_solids::ELEMENT],
     owned_outputs: ["vertices", "indices"],
     buffer_index: "liquid_cell_brick_index",
     extra_fields: {

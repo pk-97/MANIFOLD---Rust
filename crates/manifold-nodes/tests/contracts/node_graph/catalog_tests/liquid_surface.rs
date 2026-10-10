@@ -1,4 +1,4 @@
-use manifold_nodes_water::primitives::testkit::gpu_flip as gpu_flip_nodes;
+use manifold_water_gpu_flip::primitives::testkit::gpu_flip as gpu_flip_nodes;
 use manifold_water_liquid::primitives::testkit::liquid as liquid_nodes;
 use manifold_nodes_water::primitives::testkit::surface as surface_nodes;
 use std::borrow::Cow;

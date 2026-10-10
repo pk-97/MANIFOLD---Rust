@@ -2,6 +2,7 @@
 //! Owns native simulation nodes and their graph runtime extensions.
 //! Depends on the engine and native solvers, never other node families or UI.
 
+use manifold_water_gpu_flip as _;
 use manifold_water_liquid as _;
 use manifold_water_rigid as _;
 
