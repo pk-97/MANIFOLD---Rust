@@ -8,7 +8,7 @@ use manifold_core::params::{Param, ParamManifest};
 use manifold_core::{Beats, Seconds};
 use manifold_gpu::{GpuReplayStats, GpuTextureFormat};
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
-use manifold_nodes_water::matter::MatterTickStats;
+use manifold_water_gpu_mpm::matter::MatterTickStats;
 use manifold_node_engine::{exec::backend::Backend, persistence::EffectGraphDefExt, exec::execution::Executor, exec::effect_node::FrameTime, graph::Graph, exec::metal_backend::MetalBackend, parameters::ParamValue, state_store::StateStore, exec::execution_plan::compile, load::graph_loader::pre_allocate_resources};
 use manifold_node_engine::runtime::preset_context::PresetContext;
 use manifold_node_engine::runtime::PresetRuntime;

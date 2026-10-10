@@ -6,17 +6,17 @@
 
 use serde_json::{Value, json};
 
-use super::crossing_distance::CrossingDistance;
-use super::extend_lattice::ExtendLattice;
-use super::lattice_curvature::LatticeCurvature;
+use manifold_water_whitewater::primitives::crossing_distance::CrossingDistance;
+use manifold_water_whitewater::primitives::extend_lattice::ExtendLattice;
+use manifold_water_whitewater::primitives::lattice_curvature::LatticeCurvature;
 use manifold_water_liquid::primitives::liquid_cells::LiquidCells;
-use super::nearest_crossing::NearestCrossing;
+use manifold_water_whitewater::primitives::nearest_crossing::NearestCrossing;
 use super::particle_volume::{ParticleVolume, refined_nodes};
-use super::surface_crossings::SurfaceCrossings;
+use manifold_water_whitewater::primitives::surface_crossings::SurfaceCrossings;
 use manifold_node_engine::exec::effect_node::ParamValues;
 use manifold_core::fluid_domain::domain_layout;
 use manifold_water_liquid::lattice::LiquidLattice;
-use crate::matter::lattice_nodes;
+use manifold_water_gpu_mpm::matter::lattice_nodes;
 use manifold_node_engine::parameters::ParamValue;
 use manifold_node_engine::primitive::Primitive;
 use manifold_water_liquid::whitewater::{KnownValue, MAX_REFINEMENT, SurfaceCrossing, cell_total, face_offset, grid_box, grid_cells, refinement};
@@ -100,7 +100,7 @@ fn whitewater_extents_at_64() {
 
     // The tick solver at res 64 uses 67 cells / 68 nodes (the legacy
     // matter lattice above has 70 / 71). Only its pad-zero mode aliases.
-    use super::whitewater_step::StepShape;
+    use manifold_water_whitewater::primitives::whitewater_step::StepShape;
     use manifold_water_liquid::whitewater::DEFAULT_CAPACITY;
     let tick = StepShape::new([68; 3], [68; 3], [67; 3], 1.0,
         Some(manifold_node_engine::scene::transform::Transform { scale: [4.1875; 3], ..Default::default() }),
@@ -160,21 +160,21 @@ fn whitewater_refuses_misplaced_face_grid() {
 /// 9.2 MB (D6), and the lifecycle's outputs plan at that capacity.
 #[test]
 fn whitewater_snapshot_holds_one_frame_at_64() {
-    use crate::whitewater_handoff::SnapshotShape;
+    use manifold_water_whitewater::whitewater_handoff::SnapshotShape;
     let lattice = lattice_at_64();
     let (origin, cell_size) = grid_box(lattice.bounds(), lattice.nodes()).expect("grid box");
     let shape = SnapshotShape {
         grid: manifold_fluids::WhitewaterGrid { cells: grid_cells(lattice.nodes()).expect("cells"), cell_size, origin },
         face_cells: [64; 3],
         face_offset: face_offset(lattice.nodes(), [64; 3]).expect("offset"),
-        capacity: super::whitewater_lifecycle::DEFAULT_CAPACITY,
+        capacity: manifold_water_whitewater::primitives::whitewater_lifecycle::DEFAULT_CAPACITY,
     };
     assert_eq!([0, 1, 2].map(|a| shape.face_bytes(a)), [266_240 * 4; 3]);
     assert_eq!(shape.level_bytes(), 343_000 * 4);
     assert_eq!(shape.solid_bytes(), 357_911 * 4);
     assert_eq!(shape.spawn_bytes(), 3_200_000);
     assert_eq!(shape.slot_bytes(), 9_198_528);
-    let capacity = super::whitewater_lifecycle::WhitewaterLifecycle::new()
+    let capacity = manifold_water_whitewater::primitives::whitewater_lifecycle::WhitewaterLifecycle::new()
         .array_output_capacity("foam_particles", &ParamValues::default(), &[])
         .expect("planned");
     assert_eq!(capacity, 100_000, "copies downstream hold FLIP's whole budget");
@@ -190,12 +190,12 @@ const PARTICLE_SLOTS: u32 = 8 * 64 * 64 * 64;
 /// array or reads FLIP's padding 0, never past the array.
 #[test]
 fn whitewater_particle_extents_at_64() {
-    use super::emission_count::EmissionCount;
-    use super::energy_potential::EnergyPotential;
-    use super::jitter_particles::JitterParticles;
-    use super::sample_faces_at_particles::SampleFacesAtParticles;
-    use super::wavecrest_potential::WavecrestPotential;
-    use super::whitewater_particle_cpu::face_index;
+    use manifold_water_whitewater::primitives::emission_count::EmissionCount;
+    use manifold_water_whitewater::primitives::energy_potential::EnergyPotential;
+    use manifold_water_whitewater::primitives::jitter_particles::JitterParticles;
+    use manifold_water_whitewater::primitives::sample_faces_at_particles::SampleFacesAtParticles;
+    use manifold_water_whitewater::primitives::wavecrest_potential::WavecrestPotential;
+    use manifold_water_whitewater::primitives::whitewater_particle_cpu::face_index;
     use manifold_water_liquid::grid::face_len;
 
     let nodes = lattice_at_64().nodes();
@@ -219,9 +219,9 @@ fn whitewater_particle_extents_at_64() {
     assert_eq!(PARTICLE_SLOTS.div_ceil(256), 8192, "workgroups per particle dispatch");
 
     // Spawn slots are the lifecycle's capacity, whatever the particles hold.
-    use super::spawn_whitewater::SpawnWhitewater;
-    use super::whitewater_lifecycle::{DEFAULT_CAPACITY, MAX_CAPACITY};
-    use super::whitewater_type::WhitewaterType;
+    use manifold_water_whitewater::primitives::spawn_whitewater::SpawnWhitewater;
+    use manifold_water_whitewater::primitives::whitewater_lifecycle::{DEFAULT_CAPACITY, MAX_CAPACITY};
+    use manifold_water_whitewater::primitives::whitewater_type::WhitewaterType;
     let spawn_inputs = [("offsets", PARTICLE_SLOTS), ("particles", PARTICLE_SLOTS), ("energy", PARTICLE_SLOTS), ("solid", 357_911)];
     let slots = SpawnWhitewater::new().array_output_capacity("out", &params, &spawn_inputs).expect("spawn slots");
     assert_eq!(slots, DEFAULT_CAPACITY);
@@ -554,7 +554,7 @@ fn whitewater_grid_chain_fuses_only_the_distance_pair() {
 #[test]
 fn whitewater_step_extents_at_64() {
     use manifold_water_liquid::whitewater::{DEFAULT_CAPACITY, MAX_CAPACITY};
-    use super::whitewater_step::{StepShape};
+    use manifold_water_whitewater::primitives::whitewater_step::{StepShape};
     use manifold_water_liquid::fluid_particles::{MAX_BINS, bin_total};
     let lattice = lattice_at_64();
     let nodes = lattice.nodes();

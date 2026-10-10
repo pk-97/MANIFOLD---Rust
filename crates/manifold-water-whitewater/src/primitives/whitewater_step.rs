@@ -76,7 +76,7 @@ fn fused_source() -> String {
 mod reference;
 
 #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
-pub(crate) fn reference_proof_node() -> Box<dyn manifold_node_engine::exec::effect_node::EffectNode> {
+pub fn reference_proof_node() -> Box<dyn manifold_node_engine::exec::effect_node::EffectNode> {
     let mut node = WhitewaterStep::new();
     node.step.reference.enabled = true;
     node.step.reference.capture = true;
@@ -84,7 +84,7 @@ pub(crate) fn reference_proof_node() -> Box<dyn manifold_node_engine::exec::effe
 }
 
 #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
-pub(crate) fn fused_proof_node() -> Box<dyn manifold_node_engine::exec::effect_node::EffectNode> {
+pub fn fused_proof_node() -> Box<dyn manifold_node_engine::exec::effect_node::EffectNode> {
     let mut node = WhitewaterStep::new();
     node.step.reference.capture = true;
     Box::new(node)

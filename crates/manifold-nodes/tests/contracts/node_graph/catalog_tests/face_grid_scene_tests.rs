@@ -9,11 +9,11 @@ use manifold_nodes_image::node_graph::primitives::divide_by_value::DivideByValue
 use manifold_water_liquid::primitives::dot_products::DotProducts;
 use manifold_nodes_water::testkit::face_grid_scenes::{DIVISOR_ROW, matter_dam_break_faces};
 use manifold_node_engine::testkit::array_harness::{Harness, params, read};
-use manifold_nodes_water::primitives::matter_face_component::MatterFaceComponent;
+use manifold_water_gpu_mpm::primitives::matter_face_component::MatterFaceComponent;
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
 use manifold_water_liquid::grid::face_len;
 use manifold_water_liquid::lattice::PADDING_NODES;
-use manifold_nodes_water::matter::MatterGridNode;
+use manifold_water_gpu_mpm::matter::MatterGridNode;
 use manifold_node_engine::parameters::ParamValue;
 use manifold_node_engine::{exec::effect_node::NodeInstanceId, persistence::PrimitiveRegistry, exec::execution_plan::ResourceId};
 use manifold_node_engine::runtime::preset_context::PresetContext;

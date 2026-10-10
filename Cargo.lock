@@ -2521,8 +2521,10 @@ dependencies = [
  "manifold-physics",
  "manifold-playback",
  "manifold-water-gpu-flip",
+ "manifold-water-gpu-mpm",
  "manifold-water-liquid",
  "manifold-water-rigid",
+ "manifold-water-whitewater",
  "naga",
  "objc2 0.6.4",
  "parking_lot",
@@ -2602,8 +2604,10 @@ dependencies = [
  "manifold-physics",
  "manifold-playback",
  "manifold-water-gpu-flip",
+ "manifold-water-gpu-mpm",
  "manifold-water-liquid",
  "manifold-water-rigid",
+ "manifold-water-whitewater",
  "naga",
  "objc2 0.6.4",
  "serde",
@@ -2726,6 +2730,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "manifold-water-gpu-mpm"
+version = "0.1.0"
+dependencies = [
+ "bytemuck",
+ "inventory",
+ "log",
+ "manifold-core",
+ "manifold-gpu",
+ "manifold-node-engine",
+ "manifold-physics",
+ "manifold-water-gpu-mpm",
+ "manifold-water-liquid",
+ "manifold-water-rigid",
+ "naga",
+]
+
+[[package]]
 name = "manifold-water-liquid"
 version = "0.1.0"
 dependencies = [
@@ -2761,6 +2782,25 @@ dependencies = [
  "manifold-physics",
  "manifold-water-rigid",
  "serde",
+]
+
+[[package]]
+name = "manifold-water-whitewater"
+version = "0.1.0"
+dependencies = [
+ "arrayvec",
+ "bytemuck",
+ "inventory",
+ "log",
+ "manifold-core",
+ "manifold-fluids",
+ "manifold-gpu",
+ "manifold-node-engine",
+ "manifold-physics",
+ "manifold-water-liquid",
+ "manifold-water-whitewater",
+ "naga",
+ "serde_json",
 ]
 
 [[package]]
