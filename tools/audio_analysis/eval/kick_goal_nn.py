@@ -61,6 +61,16 @@ class Song:
         self.end = np.clip((emit_s / FRAME_S).astype(int), SLICE + JITTER, n - 1 - JITTER)
         self.pre = np.clip(((onset_s - PRE_S) / FRAME_S).astype(int), 0, n - 2)
         self.on = np.clip((onset_s / FRAME_S).astype(int), self.pre + 1, n - 1)
+        span = int(PRE_S / FRAME_S)
+        # Each candidate's pre-onset baseline does not depend on the slice jitter: computed once.
+        self.base = torch.cat([self.spec[torch.from_numpy(np.clip(self.on[a:a + 4096][:, None] - np.arange(span)[None, :], 0, None))]
+                               .median(dim=1).values for a in range(0, len(self.on), 4096)]) if len(self.on) else torch.zeros(0, 64)
+        self.dev = torch.device('cpu')
+
+    def to(self, dev):
+        """Keeps the spectrum and baselines on dev, so slices are cut there."""
+        self.spec, self.base, self.dev = self.spec.to(dev), self.base.to(dev), dev
+        return self
 
     @classmethod
     def real(cls, g, t):
@@ -76,13 +86,10 @@ class Song:
 
     def slices(self, idx, shift=None):
         end = self.end[idx] + (shift if shift is not None else 0)
-        frames = torch.from_numpy(end[:, None] - np.arange(SLICE)[::-1][None, :].copy())
+        frames = torch.from_numpy(end[:, None] - np.arange(SLICE)[::-1][None, :].copy()).to(self.dev)
         x = self.spec[frames]  # (B, SLICE, 64)
-        span = int(PRE_S / FRAME_S)
-        pre_frames = torch.from_numpy(np.clip(self.on[idx][:, None] - np.arange(span)[None, :], 0, None))
-        base = self.spec[pre_frames].median(dim=1).values  # (B, 64)
         shape = x - x.amax(dim=(1, 2), keepdim=True)
-        new = x - base[:, None, :]
+        new = x - self.base[torch.from_numpy(np.asarray(idx)).to(self.dev)][:, None, :]
         return torch.stack([shape, new], 1).transpose(2, 3) / 20.0  # (B, 2, 64 bands, SLICE frames)
 
 
@@ -125,13 +132,13 @@ def train(songs, seed, synth=()):
                     continue
                 pick = rng.choice(idx, draws)
                 batch_x.append(song.slices(pick, rng.integers(-JITTER, JITTER + 1, len(pick))))
-                batch_y.append(torch.full((len(pick),), y))
-        x, y = torch.cat(batch_x), torch.cat(batch_y)
-        order = torch.from_numpy(rng.permutation(len(y)))
+                batch_y.append(torch.full((len(pick),), y, device=song.dev))
+        x, y = torch.cat([b.to(dev) for b in batch_x]), torch.cat([b.to(dev) for b in batch_y])
+        order = torch.from_numpy(rng.permutation(len(y))).to(dev)
         net.train()
         for s in range(0, len(y), BATCH):
             b = order[s:s + BATCH]
-            xb, yb = x[b].to(dev), y[b].to(dev)
+            xb, yb = x[b], y[b]
             loss = nn.functional.binary_cross_entropy_with_logits(net(xb), yb * (1 - SMOOTH) + SMOOTH / 2)
             opt.zero_grad()
             loss.backward()

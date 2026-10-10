@@ -23,8 +23,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 import numpy as np  # noqa: E402
 
-from tools.audio_analysis.eval.kick_goal_eval import GOAL, OUT, SUFFIX, TRUTH, Goal, add_whole_song_truth, fast_counts, jobs, score  # noqa: E402
-from tools.audio_analysis.eval.kick_goal_nn import Song, predict, spectrum_cache, train  # noqa: E402
+from tools.audio_analysis.eval.kick_goal_eval import GOAL, OUT, SUFFIX, TRUTH, Goal, add_whole_song_truth, fast_counts, jobs, run_tasks, score  # noqa: E402
+from tools.audio_analysis.eval.kick_goal_nn import Song, device, predict, spectrum_cache, train  # noqa: E402
 from tools.audio_analysis.eval.run_kick_goal_data import ALL  # noqa: E402
 
 STATE = {}
@@ -77,19 +77,36 @@ def look(g, t):
     print(path)
 
 
-def outer(g):
-    data = {t: Song.real(g, t) for t in ALL}
-    clips = [Song.synth(p) for p in sorted((GOAL / 'synth').glob('*.npz'))] if SYNTH_ON else []
+def setup_outer():
+    g = Goal(mode=TRUTH)
+    add_whole_song_truth(g)
+    dev = device()
+    STATE.update(g=g, data={t: Song.real(g, t).to(dev) for t in ALL},
+                 clips=[Song.synth(p).to(dev) for p in sorted((GOAL / 'synth').glob('*.npz'))] if SYNTH_ON else [])
+
+
+def fold(task):
+    """Held-out song o: ENSEMBLE nets fitted without o, their mean prediction on o."""
+    k, o = task
+    t0 = time.time()
+    data, usable = STATE['data'], [c for c in STATE['clips'] if o not in c.sources]
+    p = np.mean([predict(train([data[u] for u in ALL if u != o], k + 1000 * SEED + 100000 * e, usable), data[o])
+                 for e in range(ENSEMBLE)], axis=0)
+    return p, time.time() - t0
+
+
+def outer():
+    """KICK_GOAL_JOBS folds train side by side (each process holds every song on the GPU)."""
+    setup_outer()
+    g = STATE['g']
     base = np.load(GOAL / f'nested_f69{SUFFIX}.npz')
     out, rows = {}, []
-    for k, o in enumerate(ALL):
-        t0 = time.time()
-        usable = [c for c in clips if o not in c.sources]
-        out[o] = np.mean([predict(train([data[u] for u in ALL if u != o], k + 1000 * SEED + 100000 * e, usable), data[o])
-                          for e in range(ENSEMBLE)], axis=0)
-        a, b = best_p(g, o, base[o]), best_p(g, o, out[o])
+    tasks = list(enumerate(ALL))
+    for (k, o), (p, secs) in zip(tasks, run_tasks(fold, tasks, setup_outer)):
+        out[o] = p
+        a, b = best_p(g, o, base[o]), best_p(g, o, p)
         rows.append((a, b))
-        print(f'{o:28s} f69 {a:.2f}  net {b:.2f}  ({time.time() - t0:.0f} s)', flush=True)
+        print(f'{o:28s} f69 {a:.2f}  net {b:.2f}  ({secs:.0f} s)', flush=True)
     np.savez(OUT / f'nn_outer{SUFFIX}{TAG}.npz', **out)
     a, b = np.mean(rows, axis=0)
     print(f'mean best precision at 90% recall: f69 {a:.3f}  net {b:.3f}')
@@ -108,7 +125,7 @@ def main():
     if cmd == 'look':
         look(g, sys.argv[2] if len(sys.argv) > 2 else 'corrosion')
     elif cmd == 'outer':
-        outer(g)
+        outer()
 
 
 if __name__ == '__main__':

@@ -8,9 +8,12 @@ Peter, 2026-10-10: his kick trigger MIDI track ("DS Kick") marks the kicks. The
 - Strong low hit in the drums premaster: the 40-150 Hz level rises 12 dB within
   10 ms, within 30 dB of the file's loudest, one per 80 ms; time is the rise
   peak less 5 ms.
-- Export offset: premasters start at some arrangement beat. The offset is the
-  mode of every hit-minus-note difference (10 ms bins), refined by the median
-  of the differences within 30 ms of it.
+- Export offset: premasters start at some arrangement beat. Candidates are the
+  OFFSET_CANDIDATES most common hit-minus-note differences (10 ms bins), each
+  refined by the median of the differences within 30 ms of it; the winner puts
+  the most notes on a hit, then leaves the fewest hits unmarked. (The plain mode
+  put Corrosion one bar early: a repeating pattern fits at every bar, only the
+  section edges tell, 91% vs 100% of notes on a hit.)
 - A trigger note with a hit within HIT_MS is a kick. One without is dropped and
   its spot is not scored.
 - A kick-shaped drum hit (kick_goal_labels.drum_kicks: at least 25% of its
@@ -40,6 +43,7 @@ from tools.audio_analysis.eval.kick_goal_labels import ABL, GOAL, drum_kicks, lo
 SR = 48000
 HIT_MS = 20
 KICK_NEAR_MS = 70
+OFFSET_CANDIDATES = 40
 RISE_DB = 12
 RANGE_DB = 30
 GAP_MS = 80
@@ -96,9 +100,14 @@ def nearest(a, b):
 
 def export_offset(hits, notes):
     vals, cnt = np.unique(np.round((hits[:, None] - notes[None, :]).ravel(), 2), return_counts=True)
-    off = vals[np.argmax(cnt)]
-    d = hits - off - notes[np.argmin(np.abs(notes[None, :] + off - hits[:, None]), axis=1)]
-    return off + float(np.median(d[np.abs(d) < .03]))
+    best = None
+    for off in vals[np.argsort(-cnt)[:OFFSET_CANDIDATES]]:
+        d = hits - off - notes[np.argmin(np.abs(notes[None, :] + off - hits[:, None]), axis=1)]
+        off = off + float(np.median(d[np.abs(d) < .03])) if np.any(np.abs(d) < .03) else off
+        key = (int(np.sum(nearest(notes + off, hits) <= HIT_MS / 1000)), -int(np.sum(nearest(hits, notes + off) > HIT_MS / 1000)))
+        if best is None or key > best[0]:
+            best = (key, off)
+    return float(best[1])
 
 
 def labels(name, cfg):
