@@ -377,6 +377,9 @@ pub struct GpuRenderPipeline {
     /// Whether this pipeline needs a naga sizes buffer bound (fragment or
     /// vertex shader uses `arrayLength()` on a runtime-sized storage array).
     pub needs_sizes_buffer: bool,
+    /// Raster sample count the pipeline was built for; draw encode
+    /// debug-asserts it against the pass attachments.
+    pub sample_count: u32,
 }
 
 impl GpuRenderPipeline {
@@ -394,6 +397,7 @@ impl Clone for GpuRenderPipeline {
             slot_map: self.slot_map.clone(),
             label: self.label.clone(),
             needs_sizes_buffer: self.needs_sizes_buffer,
+            sample_count: self.sample_count,
         }
     }
 }

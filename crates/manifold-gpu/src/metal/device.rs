@@ -1134,6 +1134,7 @@ impl GpuDevice {
             slot_map,
             label: label.to_string(),
             needs_sizes_buffer,
+            sample_count: sample_count.max(1),
         };
         self.render_cache
             .lock()
@@ -1343,6 +1344,7 @@ impl GpuDevice {
             slot_map,
             label: label.to_string(),
             needs_sizes_buffer,
+            sample_count: 1,
         };
         self.render_cache
             .lock()
@@ -1440,6 +1442,7 @@ impl GpuDevice {
             compute_cache: super::encoder::ComputeBindCache::new(),
             render_cache: RenderBindCache::new(),
             clear_pipelines: self.clear_pipelines() as *const ClearPipelines,
+            pass_samples: (0, 0),
             profile: None,
             scopes: Vec::new(),
             replay: None,
@@ -1818,6 +1821,7 @@ impl GpuDevice {
             slot_map,
             label: label.to_string(),
             needs_sizes_buffer,
+            sample_count: sample_count.max(1),
         };
         self.render_cache
             .lock()
@@ -1976,6 +1980,7 @@ impl GpuDevice {
             slot_map,
             label: label.to_string(),
             needs_sizes_buffer,
+            sample_count: 1,
         };
         self.render_cache
             .lock()
