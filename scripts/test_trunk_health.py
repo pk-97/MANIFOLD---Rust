@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Fake-only tests for nightly reservation deferral."""
 
+import json
 import sys
 import tempfile
 import contextlib
@@ -72,6 +73,29 @@ class ReservationTests(unittest.TestCase):
                 self.assertEqual(runs.call_count, expected_runs)
                 hold.assert_not_called()
                 self.assertIn('deferred:', next(Path(d).glob('*.log')).read_text())
+
+    def test_flaky_records_file_one_bead_per_test_and_note_existing(self):
+        flaky = [("a t::x", "nextest/a", "k" * 32), ("a t::x", "nextest/b", "j" * 32),
+                 ("b t::y", "nextest/a", "k" * 32)]
+        existing = [{"id": "BUG-1", "title": "flaky test: b t::y", "notes": ""}]
+        calls = []
+
+        def fake_run(cmd, **kwargs):
+            calls.append(cmd)
+            if cmd[1] == "list":
+                return type("R", (), {"returncode": 0, "stdout": json.dumps(existing), "stderr": ""})()
+            return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+        with patch.object(trunk_health, "BD", "bd"), \
+                patch.object(trunk_health.gate_passes, "flaky_records", return_value=flaky), \
+                patch.object(trunk_health.subprocess, "run", side_effect=fake_run), \
+                contextlib.redirect_stdout(io.StringIO()):
+            trunk_health.file_flaky_beads("abc")
+        creates = [c for c in calls if c[1] == "create"]
+        updates = [c for c in calls if c[1] == "update"]
+        self.assertEqual([c[2] for c in creates], ["flaky test: a t::x"])
+        self.assertIn("nextest/b", creates[0][-1])
+        self.assertEqual([c[2] for c in updates], ["BUG-1"])
 
     def test_reservation_message_contains_owner_reason_and_expiry(self):
         info = {"owner": "owner", "reason": "reason", "end_epoch": 1_800_000_000}
