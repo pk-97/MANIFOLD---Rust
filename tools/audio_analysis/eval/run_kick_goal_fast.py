@@ -54,7 +54,7 @@ FEATS = 'f69'
 WINDOWS = [8.0]
 # KICK_GOAL_NN_SEED shifts every net's seed. The net's input settings tag the output (kick_goal_nn.INPUT_TAG).
 SEED = int(os.environ.get('KICK_GOAL_NN_SEED', '0'))
-TAG = INPUT_TAG + (f'_s{SEED}' if SEED else '')
+TAG = INPUT_TAG + (f'_s{SEED}' if SEED else '') + (f'_e{NETS}' if NETS > 1 else '')
 # KICK_GOAL_NN_SYNTH=1: the nets also train on the kick-swap clips that involve no held-out song.
 SYNTH_ON = os.environ.get('KICK_GOAL_NN_SYNTH') == '1'
 TAG += '_syn' if SYNTH_ON else ''
