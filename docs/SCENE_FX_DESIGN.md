@@ -320,7 +320,7 @@ presets, so warmup rides the existing preset-prewarm path.
 
 ### P3 — shake atom + scene-mod presets (one session)
 
-- **Entry state:** P1 landed (passthrough check exists); KICK_SWEEP_EVENT on main.
+- **Entry state:** P1 landed (passthrough check exists); the kick detector on main (now KICK_REALTIME_DESIGN).
 - **Read-back:** D4 + the parked craft notes (rotational > positional, amount²,
   stateless); `transform_3d.rs` + `ports.rs` Transform handling; whether
   `scene_vm.rs` walks Transform chains — if not, the section-3.2 walk addition is
