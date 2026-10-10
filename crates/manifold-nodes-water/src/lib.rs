@@ -6,6 +6,7 @@ use manifold_water_gpu_flip as _;
 use manifold_water_gpu_mpm as _;
 use manifold_water_liquid as _;
 use manifold_water_rigid as _;
+use manifold_water_surface as _;
 use manifold_water_whitewater as _;
 
 pub mod graph_install;

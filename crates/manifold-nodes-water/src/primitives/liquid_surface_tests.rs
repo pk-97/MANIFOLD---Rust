@@ -18,7 +18,7 @@ use manifold_water_liquid::fluid_particles::{CellRange, bin_counts};
 use manifold_node_engine::parameters::ParamValue;
 use manifold_node_engine::primitive::Primitive;
 
-use crate::testkit::liquid_surface::*;
+use manifold_water_surface::testkit::liquid_surface::*;
 use manifold_node_engine::testkit::array_harness::{Harness, params, read};
 
 
@@ -711,9 +711,9 @@ fn fluid_shape_particle_blobs_stretch_one_is_an_exact_sphere() {
 
 // --- P6: marching cubes ---------------------------------------------------
 
-use super::count_surface_edges::CountSurfaceEdges;
-use super::count_surface_triangles::CountSurfaceTriangles;
-use super::volume_surface_mesh::VolumeSurfaceMesh;
+use manifold_water_surface::primitives::count_surface_edges::CountSurfaceEdges;
+use manifold_water_surface::primitives::count_surface_triangles::CountSurfaceTriangles;
+use manifold_water_surface::primitives::volume_surface_mesh::VolumeSurfaceMesh;
 use manifold_node_engine::mesh::MeshVertex;
 
 /// Upstream's triangle table, parsed from the vendored source so the packed
@@ -1292,7 +1292,7 @@ fn fluid_mesh_grid_native_solid_and_clamp_match_engine() {
             ("nodes_x", simulation.nodes()[0] as f32), ("nodes_y", simulation.nodes()[1] as f32), ("nodes_z", simulation.nodes()[2] as f32),
             ("cell_size", simulation.cell_size()), ("count", 1.0), ("simulation_time", 1.0),
         ]);
-        let mut frame = super::liquid_frame::LiquidFrame::new();
+        let mut frame = manifold_water_surface::primitives::liquid_frame::LiquidFrame::new();
         frame.prepare_pipelines(&harness.device);
         let (scalars, errors) = harness.run(&mut frame,
             &[("particles", particles), ("stats", stats), ("identity", identity), ("solid", solid)],
@@ -1770,7 +1770,7 @@ fn fluid_clamp_liquid_to_solids_matches_reference_and_passes_through() {
 
 // --- Mesh relaxation (BUG-xwf1 (Liquid Surface mesh relaxation)) ----------
 
-use super::relax_surface_mesh::RelaxSurfaceMesh;
+use manifold_water_surface::primitives::relax_surface_mesh::RelaxSurfaceMesh;
 
 /// One relax pass of `mesh`'s last frame from `input` into `output`.
 fn relax_pass(

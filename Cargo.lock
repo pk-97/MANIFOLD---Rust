@@ -2524,6 +2524,7 @@ dependencies = [
  "manifold-water-gpu-mpm",
  "manifold-water-liquid",
  "manifold-water-rigid",
+ "manifold-water-surface",
  "manifold-water-whitewater",
  "naga",
  "objc2 0.6.4",
@@ -2607,6 +2608,7 @@ dependencies = [
  "manifold-water-gpu-mpm",
  "manifold-water-liquid",
  "manifold-water-rigid",
+ "manifold-water-surface",
  "manifold-water-whitewater",
  "naga",
  "objc2 0.6.4",
@@ -2782,6 +2784,23 @@ dependencies = [
  "manifold-physics",
  "manifold-water-rigid",
  "serde",
+]
+
+[[package]]
+name = "manifold-water-surface"
+version = "0.1.0"
+dependencies = [
+ "bytemuck",
+ "glam",
+ "inventory",
+ "log",
+ "manifold-core",
+ "manifold-gpu",
+ "manifold-node-engine",
+ "manifold-water-liquid",
+ "manifold-water-surface",
+ "naga",
+ "sha2",
 ]
 
 [[package]]

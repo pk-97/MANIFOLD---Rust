@@ -24,7 +24,7 @@ const LAYERS: &[Layer] = &[
     Layer {
         package: "manifold-nodes",
         normal_and_build: &["manifold-core", "manifold-gpu", "manifold-node-engine", "manifold-nodes-image", "manifold-nodes-scene", "manifold-nodes-water", "manifold-water-gpu-mpm", "manifold-water-liquid", "manifold-water-whitewater"],
-        dev: &["manifold-fluids", "manifold-foundation", "manifold-nodes", "manifold-gpu", "manifold-node-engine", "manifold-nodes-image", "manifold-nodes-scene", "manifold-nodes-water", "manifold-physics", "manifold-playback", "manifold-water-gpu-flip", "manifold-water-gpu-mpm", "manifold-water-liquid", "manifold-water-rigid", "manifold-water-whitewater"],
+        dev: &["manifold-fluids", "manifold-foundation", "manifold-nodes", "manifold-gpu", "manifold-node-engine", "manifold-nodes-image", "manifold-nodes-scene", "manifold-nodes-water", "manifold-physics", "manifold-playback", "manifold-water-gpu-flip", "manifold-water-gpu-mpm", "manifold-water-liquid", "manifold-water-rigid", "manifold-water-surface", "manifold-water-whitewater"],
     },
     Layer {
         package: "manifold-app",
@@ -54,8 +54,8 @@ const LAYERS: &[Layer] = &[
         package: "manifold-nodes-water",
         normal_and_build: &["manifold-core", "manifold-foundation", "manifold-gpu",
                             "manifold-node-engine", "manifold-physics", "manifold-fluids",
-                            "manifold-water-gpu-flip", "manifold-water-gpu-mpm", "manifold-water-liquid", "manifold-water-rigid", "manifold-water-whitewater"],
-        dev: &["manifold-node-engine", "manifold-playback", "manifold-water-gpu-flip", "manifold-water-gpu-mpm", "manifold-water-liquid", "manifold-water-rigid", "manifold-water-whitewater"],
+                            "manifold-water-gpu-flip", "manifold-water-gpu-mpm", "manifold-water-liquid", "manifold-water-rigid", "manifold-water-surface", "manifold-water-whitewater"],
+        dev: &["manifold-node-engine", "manifold-playback", "manifold-water-gpu-flip", "manifold-water-gpu-mpm", "manifold-water-liquid", "manifold-water-rigid", "manifold-water-surface", "manifold-water-whitewater"],
     },
     // D1: a leaf solver sits on the liquid seam and names no other solver.
     Layer {
@@ -75,6 +75,11 @@ const LAYERS: &[Layer] = &[
         normal_and_build: &["manifold-core", "manifold-fluids", "manifold-gpu", "manifold-node-engine",
                             "manifold-physics", "manifold-water-liquid"],
         dev: &["manifold-node-engine", "manifold-water-liquid", "manifold-water-whitewater"],
+    },
+    Layer {
+        package: "manifold-water-surface",
+        normal_and_build: &["manifold-core", "manifold-gpu", "manifold-node-engine", "manifold-water-liquid"],
+        dev: &["manifold-node-engine", "manifold-water-liquid", "manifold-water-surface"],
     },
     // D1: the liquid seam sits on rigid and under every solver. manifold-fluids is a
     // normal edge: fluid role geometry validates closed meshes through it (D1 amended).

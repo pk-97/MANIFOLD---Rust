@@ -15,6 +15,7 @@ manifold-water-liquid = { path = "../manifold-water-liquid" }
 manifold-water-gpu-flip = { path = "../manifold-water-gpu-flip" }
 manifold-water-gpu-mpm = { path = "../manifold-water-gpu-mpm" }
 manifold-water-whitewater = { path = "../manifold-water-whitewater" }
+manifold-water-surface = { path = "../manifold-water-surface" }
 manifold-fluids = { path = "../manifold-fluids" }
 ahash = { workspace = true }
 arrayvec = "0.7"
@@ -40,6 +41,7 @@ manifold-water-liquid = { path = "../manifold-water-liquid", features = ["testki
 manifold-water-gpu-flip = { path = "../manifold-water-gpu-flip", features = ["testkit"] }
 manifold-water-gpu-mpm = { path = "../manifold-water-gpu-mpm", features = ["testkit"] }
 manifold-water-whitewater = { path = "../manifold-water-whitewater", features = ["testkit"] }
+manifold-water-surface = { path = "../manifold-water-surface", features = ["testkit"] }
 sha2 = "0.10"
 zstd = "0.13.3"
 
@@ -50,8 +52,8 @@ objc2 = { version = "0.6", optional = true }
 objc2 = "0.6"
 
 [features]
-testkit = ["manifold-node-engine/testkit", "manifold-water-rigid/testkit", "manifold-water-liquid/testkit", "manifold-water-gpu-flip/testkit", "manifold-water-gpu-mpm/testkit", "manifold-water-whitewater/testkit", "dep:glam", "dep:objc2"]
-gpu-proofs = ["testkit", "manifold-node-engine/gpu-proofs", "manifold-gpu/gpu-proofs", "manifold-water-rigid/gpu-proofs", "manifold-water-liquid/gpu-proofs", "manifold-water-gpu-flip/gpu-proofs", "manifold-water-gpu-mpm/gpu-proofs", "manifold-water-whitewater/gpu-proofs"]
+testkit = ["manifold-node-engine/testkit", "manifold-water-rigid/testkit", "manifold-water-liquid/testkit", "manifold-water-gpu-flip/testkit", "manifold-water-gpu-mpm/testkit", "manifold-water-whitewater/testkit", "manifold-water-surface/testkit", "dep:glam", "dep:objc2"]
+gpu-proofs = ["testkit", "manifold-node-engine/gpu-proofs", "manifold-gpu/gpu-proofs", "manifold-water-rigid/gpu-proofs", "manifold-water-liquid/gpu-proofs", "manifold-water-gpu-flip/gpu-proofs", "manifold-water-gpu-mpm/gpu-proofs", "manifold-water-whitewater/gpu-proofs", "manifold-water-surface/gpu-proofs"]
 fluid-perf-proofs = ["gpu-proofs"]
 whitewater-oracle = ["gpu-proofs", "manifold-fluids/whitewater-oracle"]
 

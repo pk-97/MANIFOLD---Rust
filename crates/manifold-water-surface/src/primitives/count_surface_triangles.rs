@@ -158,3 +158,7 @@ impl Primitive for CountSurfaceTriangles {
 
 #[cfg(any(test, feature = "testkit", feature = "gpu-proofs"))]
 mod extent;
+
+/// The dense kernel the brick-fused form is proven against.
+#[cfg(any(test, feature = "testkit"))]
+pub const DENSE_REFERENCE: &str = include_str!("shaders/count_surface_triangles_dense_reference.wgsl");

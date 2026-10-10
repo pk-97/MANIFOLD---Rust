@@ -104,9 +104,9 @@ fn freeze_keeps_surface_stages_and_fuses_the_real_pointwise_tail() {
 mod gpu_tests {
     use manifold_node_engine::testkit::array_harness::{Harness, params, read};
     use manifold_nodes_scene::node_graph::primitives::rotate_3d::Rotate3D;
-    use manifold_nodes_water::primitives::smooth_surface_mesh::SmoothSurfaceMesh;
-    use manifold_nodes_water::primitives::surface_mesh_normals::SurfaceMeshNormals;
-    use manifold_nodes_water::primitives::surface_mesh_parity::{fixture, flip_normals, flip_smooth};
+    use manifold_water_surface::primitives::smooth_surface_mesh::SmoothSurfaceMesh;
+    use manifold_water_surface::primitives::surface_mesh_normals::SurfaceMeshNormals;
+    use manifold_water_surface::primitives::surface_mesh_parity::{fixture, flip_normals, flip_smooth};
     use manifold_node_engine::mesh::MeshVertex;
     use manifold_node_engine::exec::effect_node::NodeInstanceId;
     use manifold_node_engine::freeze::codegen::{ENTRY, FusionRegion, InputSource, RegionNode, generate_fused};
