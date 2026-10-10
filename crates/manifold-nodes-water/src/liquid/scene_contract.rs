@@ -12,7 +12,7 @@ use manifold_core::fluid_domain::MAX_FLUID_ROLES;
 use manifold_node_engine::parameters::ParamType;
 use manifold_node_engine::persistence::PrimitiveRegistry;
 use manifold_core::scene_impulse::ImpulseTarget;
-use crate::physics_events::ResolvedNodeImpulse;
+use manifold_water_rigid::physics_events::ResolvedNodeImpulse;
 use manifold_node_engine::ports::{PortKind, PortType};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -49,7 +49,7 @@ fn has_param(node: &dyn EffectNode, name: &str, ty: ParamType) -> bool {
 /// or answers with its default ("does not accept"). Any other answer, including "the
 /// clock has not started", means the hook routes them.
 fn routes_fluid_impulses(node: &mut dyn EffectNode) -> bool {
-    let Some(node) = crate::node::get_mut(node) else { return false; };
+    let Some(node) = manifold_water_rigid::node::get_mut(node) else { return false; };
     let stamp = EventStamp { epoch: 0, time: Seconds(0.0), sequence: 0 };
     let impulse = ResolvedNodeImpulse {
         field: FieldValue::uniform([1.0, 0.0, 0.0]).expect("uniform field"),

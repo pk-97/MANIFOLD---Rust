@@ -1,8 +1,5 @@
 //! Water-specific graph fixtures and proof helpers.
 
-#[cfg(test)]
-pub(crate) mod physics_fixtures;
-
 #[cfg(any(test, feature = "testkit"))]
 pub mod particle_volume;
 

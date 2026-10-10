@@ -474,7 +474,7 @@ impl Show {
 
     /// The simulation step every following frame runs under. Set it before
     /// `restart` so warm-up and the restart frames run under it too.
-    pub fn set_sim_step(&mut self, step: crate::physics::SimStep) {
+    pub fn set_sim_step(&mut self, step: manifold_water_rigid::physics::SimStep) {
         self.runtime.set_sim_step(step);
     }
 

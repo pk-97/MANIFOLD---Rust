@@ -22,7 +22,7 @@ use crate::fluid_particles::FaceSample;
 use crate::liquid::grid::{interior_bytes, InteriorOps};
 use crate::liquid::lattice::{FlipSolverGrid, LiquidLattice};
 use manifold_node_engine::parameters::ParamValue;
-use crate::physics_metrics::DroppedTimeTracker;
+use manifold_water_rigid::physics_metrics::DroppedTimeTracker;
 use manifold_node_engine::primitive::Primitive;
 use manifold_node_engine::exec::substeps::{SubstepBoundaryPorts, SubstepResultPorts};
 use crate::whitewater::{WHITEWATER_EMPTY, WhitewaterParticle};

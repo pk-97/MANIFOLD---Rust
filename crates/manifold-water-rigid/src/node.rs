@@ -152,7 +152,7 @@ static REGISTRATIONS: LazyLock<AHashMap<TypeId, &'static PhysicsNodeRegistration
     });
 
 /// Prepare the immutable index during graph construction, before live evaluation.
-pub(crate) fn initialize() {
+pub fn initialize() {
     LazyLock::force(&REGISTRATIONS);
 }
 

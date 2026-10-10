@@ -15,7 +15,7 @@ pub struct ResolvedNodeImpulse {
 }
 
 /// Convert a rigid-native receipt without allocating or dropping it.
-pub(crate) fn map_rigid_receipt(
+pub fn map_rigid_receipt(
     event: AppliedEvent<ResolvedRigidImpulse>,
     consume: &mut dyn FnMut(AppliedEvent<ResolvedNodeImpulse>),
 ) {

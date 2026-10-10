@@ -70,7 +70,7 @@ fn runtime_with_field(height: f32, fused: bool, field: bool) -> PresetRuntime {
 
 fn runtime_with_field_port(height: f32, fused: bool, field_port: Option<&str>) -> PresetRuntime {
     let mut registry = PrimitiveRegistry::with_builtin();
-    crate::testkit::physics_fixtures::register(&mut registry);
+    manifold_water_rigid::testkit::physics_fixtures::register(&mut registry);
     registry.register("test.pose", || {
         Box::new(PoseObserver(EffectNodeType::new("test.pose")))
     });
@@ -290,7 +290,7 @@ fn offline_history_drain_long_gap_matches_native_rigid_frame_sequence() {
 
 #[test]
 fn offline_history_drain_keeps_capped_preview_prefix_before_long_gap() {
-    use crate::physics::SimStep;
+    use manifold_water_rigid::physics::SimStep;
     let accepted_prefix = 2.0 / 60.0;
     let mut expected_runtime = runtime_with_field(50.0, false, true);
     frame(&mut expected_runtime, 0.0);

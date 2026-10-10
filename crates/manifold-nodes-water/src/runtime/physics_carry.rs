@@ -2,7 +2,7 @@
 #[cfg(test)]
 use manifold_node_engine::runtime::*;
 use manifold_node_engine::ports::PortType;
-use crate::physics::RigidBody;
+use manifold_water_rigid::physics::RigidBody;
 use crate::fluid_role::FluidRole;
 use manifold_physics::FieldValue;
 

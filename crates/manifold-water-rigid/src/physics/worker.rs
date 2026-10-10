@@ -62,7 +62,7 @@ impl RigidSceneInputs {
     ///
     /// Count, spacing, columns, and layout intentionally do not participate:
     /// those controls retain the existing reset-latched copy semantics.
-    pub(crate) fn same_topology(&self, other: &Self) -> bool {
+    pub fn same_topology(&self, other: &Self) -> bool {
         self.bodies
             .iter()
             .zip(other.bodies.iter())
@@ -86,7 +86,7 @@ fn same_topology_body(left: Option<&RigidBody>, right: Option<&RigidBody>) -> bo
 
 impl RigidSimulation {
     /// Create a rigid owner whose first native event clock uses `epoch` exactly.
-    pub(crate) fn with_worker_epoch(epoch: u64) -> Result<Self, String> {
+    pub fn with_worker_epoch(epoch: u64) -> Result<Self, String> {
         if epoch == 0 {
             return Err("Physics worker epoch must be non-zero".into());
         }
@@ -101,7 +101,7 @@ impl RigidSimulation {
     /// The existing rigid advancement path owns initialization, histories,
     /// events, coupling, and publication. This method only selects its bounded
     /// worker policy and supplies the retained scene inputs.
-    pub(crate) fn advance_worker<C: StepCoupling>(
+    pub fn advance_worker<C: StepCoupling>(
         &mut self,
         inputs: &RigidSceneInputs,
         now: Seconds,
@@ -185,7 +185,7 @@ impl RigidSimulation {
     /// accumulate a fixed-tick worker budget. Events are assigned to the
     /// interval by the shared clock and are applied at their source times,
     /// including boundaries inside a stretched interval.
-    pub(crate) fn advance_worker_interval<C: StepCoupling>(
+    pub fn advance_worker_interval<C: StepCoupling>(
         &mut self,
         inputs: &RigidSceneInputs,
         interval: StepInterval,
@@ -241,11 +241,11 @@ impl RigidSimulation {
         result
     }
 
-    pub(crate) fn native_world(&self) -> Option<&PhysicsWorld> {
+    pub fn native_world(&self) -> Option<&PhysicsWorld> {
         self.world.as_ref()
     }
 
-    pub(crate) fn native_handles(
+    pub fn native_handles(
         &self,
     ) -> (&[Option<BodyHandle>; MAX_BODIES], &[Option<BodyHandle>]) {
         (&self.handles, &self.copy_handles[..self.active_copy_count])

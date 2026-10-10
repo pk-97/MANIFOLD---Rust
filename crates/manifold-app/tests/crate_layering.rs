@@ -24,12 +24,12 @@ const LAYERS: &[Layer] = &[
     Layer {
         package: "manifold-nodes",
         normal_and_build: &["manifold-core", "manifold-gpu", "manifold-node-engine", "manifold-nodes-image", "manifold-nodes-scene", "manifold-nodes-water"],
-        dev: &["manifold-fluids", "manifold-foundation", "manifold-nodes", "manifold-gpu", "manifold-node-engine", "manifold-nodes-image", "manifold-nodes-scene", "manifold-nodes-water", "manifold-physics", "manifold-playback"],
+        dev: &["manifold-fluids", "manifold-foundation", "manifold-nodes", "manifold-gpu", "manifold-node-engine", "manifold-nodes-image", "manifold-nodes-scene", "manifold-nodes-water", "manifold-physics", "manifold-playback", "manifold-water-rigid"],
     },
     Layer {
         package: "manifold-app",
         normal_and_build: &["manifold-audio", "manifold-compositor", "manifold-core", "manifold-editing", "manifold-gpu", "manifold-io", "manifold-led", "manifold-media", "manifold-node-engine", "manifold-nodes-image", "manifold-nodes-scene", "manifold-nodes-water", "manifold-playback", "manifold-profiler", "manifold-recording", "manifold-nodes", "manifold-spectral", "manifold-ui", "manifold-ui-paint"],
-        dev: &["manifold-foundation", "manifold-physics", "manifold-fluids", "manifold-nodes", "manifold-compositor", "manifold-node-engine", "manifold-nodes-image", "manifold-nodes-scene", "manifold-nodes-water"],
+        dev: &["manifold-foundation", "manifold-physics", "manifold-fluids", "manifold-nodes", "manifold-compositor", "manifold-node-engine", "manifold-nodes-image", "manifold-nodes-scene", "manifold-nodes-water", "manifold-water-rigid"],
     },
 
     Layer {
@@ -53,8 +53,16 @@ const LAYERS: &[Layer] = &[
     Layer {
         package: "manifold-nodes-water",
         normal_and_build: &["manifold-core", "manifold-foundation", "manifold-gpu",
-                            "manifold-node-engine", "manifold-physics", "manifold-fluids"],
-        dev: &["manifold-node-engine", "manifold-playback"],
+                            "manifold-node-engine", "manifold-physics", "manifold-fluids",
+                            "manifold-water-rigid"],
+        dev: &["manifold-node-engine", "manifold-playback", "manifold-water-rigid"],
+    },
+    // WATER_CRATES_DESIGN.md D1: rigid sits below every liquid and names none of them.
+    Layer {
+        package: "manifold-water-rigid",
+        normal_and_build: &["manifold-core", "manifold-foundation", "manifold-gpu",
+                            "manifold-node-engine", "manifold-physics"],
+        dev: &["manifold-fluids", "manifold-node-engine", "manifold-water-rigid"],
     },
     Layer {
         package: "manifold-ui-paint",
@@ -164,4 +172,85 @@ fn engine_water_vocabulary_only_shrinks() {
         hits.len(), hits.join("\n"));
     assert!(hits.len() >= ENGINE_WATER_WORD_FILES,
         "engine water-word files fell to {}; lower ENGINE_WATER_WORD_FILES to match", hits.len());
+}
+
+/// INV-W2 (WATER_CRATES_DESIGN.md section 8): the rigid crate's code names no
+/// liquid solver. Comments are skipped; the allowlist is the pair contract
+/// (D2) and the coupled-step tests that use manifold-fluids as their oracle.
+const RIGID_LIQUID_WORD_EXEMPT: &[&str] = &["node.rs", "physics/coupling_tests.rs"];
+
+fn names_a_liquid(line: &str) -> bool {
+    let code = line.split("//").next().unwrap_or("").to_lowercase();
+    ["liquid", "whitewater", "gpu_flip"].iter().any(|word| code.contains(word))
+        || code.match_indices("matter").any(|(at, _)| {
+            !code[..at].chars().next_back().is_some_and(|c| c.is_ascii_alphabetic())
+        })
+}
+
+fn rigid_liquid_word_files(dir: &Path, root: &Path, hits: &mut Vec<String>) {
+    for entry in std::fs::read_dir(dir).unwrap() {
+        let path = entry.unwrap().path();
+        if path.is_dir() {
+            rigid_liquid_word_files(&path, root, hits);
+            continue;
+        }
+        let relative = path.strip_prefix(root).unwrap().to_string_lossy().into_owned();
+        if RIGID_LIQUID_WORD_EXEMPT.contains(&relative.as_str()) {
+            continue;
+        }
+        let text = std::fs::read_to_string(&path).unwrap();
+        for (index, line) in text.lines().enumerate() {
+            if names_a_liquid(line) {
+                hits.push(format!("{relative}:{}: {}", index + 1, line.trim()));
+            }
+        }
+    }
+}
+
+#[test]
+fn rigid_names_no_liquid() {
+    let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("../manifold-water-rigid/src");
+    let mut hits = Vec::new();
+    rigid_liquid_word_files(&src, &src, &mut hits);
+    hits.sort();
+    assert!(hits.is_empty(), "manifold-water-rigid names a liquid solver; the liquids depend on rigid, never the reverse:\n{}",
+        hits.join("\n"));
+}
+
+/// Extra feature flags that fold into testkit/gpu-proofs with BUG-hkbdp.6.9
+/// (proofs consolidation). The pin drops to exactly two when 6.9 closes.
+const WATER_EXTRA_FEATURES: &[(&str, &str)] = &[
+    ("manifold-nodes-water", "fluid-perf-proofs"),
+    ("manifold-nodes-water", "whitewater-oracle"),
+];
+
+/// INV-W3: every water crate declares exactly `testkit` and `gpu-proofs`.
+#[test]
+fn water_crates_declare_exactly_testkit_and_gpu_proofs() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap();
+    let output = Command::new(env!("CARGO"))
+        .args(["metadata", "--format-version", "1", "--no-deps", "--manifest-path"])
+        .arg(root.join("Cargo.toml"))
+        .output()
+        .expect("cargo metadata must run");
+    assert!(output.status.success(), "cargo metadata failed: {}",
+            String::from_utf8_lossy(&output.stderr));
+    let metadata: serde_json::Value = serde_json::from_slice(&output.stdout)
+        .expect("cargo metadata must return JSON");
+    let mut water = 0;
+    for package in metadata["packages"].as_array().unwrap() {
+        let name = package["name"].as_str().unwrap();
+        if !(name.starts_with("manifold-water-") || name == "manifold-nodes-water") {
+            continue;
+        }
+        water += 1;
+        let features: BTreeSet<&str> = package["features"].as_object().unwrap()
+            .keys().map(String::as_str).collect();
+        let expected: BTreeSet<&str> = ["testkit", "gpu-proofs"].into_iter()
+            .chain(WATER_EXTRA_FEATURES.iter().filter(|(crate_name, _)| *crate_name == name)
+                .map(|(_, feature)| *feature))
+            .collect();
+        assert_eq!(features, expected, "{name} features drifted from testkit + gpu-proofs");
+    }
+    assert!(water >= 2, "water crates missing from cargo metadata");
 }

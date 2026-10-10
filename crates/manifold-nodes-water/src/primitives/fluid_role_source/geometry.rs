@@ -13,10 +13,10 @@ use super::{CompoundPreparation, WiredPreparation};
 use manifold_node_engine::mesh::MeshVertex;
 use manifold_node_engine::platonic::{platonic_mesh, platonic_points};
 use manifold_node_engine::scene::mesh_selection::MeshSelection;
-use crate::physics_mesh::transform_vertices;
-use crate::physics_mesh::load_compound_materials;
+use manifold_water_rigid::physics_mesh::transform_vertices;
+use manifold_water_rigid::physics_mesh::load_compound_materials;
 use manifold_node_engine::scene::transform::Transform;
-use crate::physics_mesh::prepare_colliders;
+use manifold_water_rigid::physics_mesh::prepare_colliders;
 
 manifold_core::testkit_visible! {
 /// The two preparation modes exposed by the source node.

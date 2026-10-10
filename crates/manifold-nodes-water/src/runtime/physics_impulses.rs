@@ -11,8 +11,8 @@ use manifold_physics::{FieldValue, TickStamp};
 use super::{WaterRuntime, WaterRuntimeRef};
 use manifold_node_engine::exec::effect_node::FrameTime;
 use manifold_core::scene_impulse::ImpulseTarget;
-use crate::physics_events::ResolvedNodeImpulse;
-use crate::node;
+use manifold_water_rigid::physics_events::ResolvedNodeImpulse;
+use manifold_water_rigid::node;
 use manifold_node_engine::{exec::effect_node::NodeInstanceId, parameters::ParamValue, exec::effect_node::ParamValues, ports::PortType, persistence::PrimitiveRegistry, exec::execution_plan::ResourceId};
 
 struct Recipient {
@@ -362,7 +362,7 @@ impl WaterRuntime<'_> {
             source,
             &binding.steps,
             &binding.params,
-            crate::physics::SimStep::live(self.executor.sim_step().interval),
+            manifold_water_rigid::physics::SimStep::live(self.executor.sim_step().interval),
         );
         if self.executor.mesh_pending_of(binding.field) {
             return Err("Impulse: field inputs are pending or invalid".into());

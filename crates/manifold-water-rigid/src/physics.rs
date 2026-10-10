@@ -40,7 +40,7 @@ pub fn particle_frame_duration(delta: Seconds, step: SimStep, metrics: SimMetric
 }
 
 /// The physics clock's view of this frame's live load; None in export.
-pub(crate) fn live_load(step: SimStep) -> Option<manifold_physics::clock::LiveLoad> {
+pub fn live_load(step: SimStep) -> Option<manifold_physics::clock::LiveLoad> {
     step.load().map(|load| manifold_physics::clock::LiveLoad { previous: load.previous, budget: load.budget })
 }
 
@@ -82,7 +82,7 @@ impl HeldClock {
 
 pub const MAX_BODIES: usize = RigidImpulseTargets::BODY_CAPACITY;
 pub const MAX_COPIES: usize = 4_000;
-pub(crate) const AUTHORED_HISTORY_CAPACITY: usize = 256;
+pub const AUTHORED_HISTORY_CAPACITY: usize = 256;
 const IMPULSE_CAPACITY: usize = 256;
 const FIXED_TICK: Seconds = Seconds(1.0 / 60.0);
 
@@ -237,7 +237,7 @@ impl RigidBody {
 }
 
 /// Shared scene Rz * Ry * Rx convention, with quaternion stored xyzw.
-pub(crate) fn pose_from_transform(transform: Transform) -> manifold_physics::BodyPose {
+pub fn pose_from_transform(transform: Transform) -> manifold_physics::BodyPose {
     let [x, y, z] = transform.rot_euler;
     let (sx, cx) = (x * 0.5).sin_cos();
     let (sy, cy) = (y * 0.5).sin_cos();

@@ -378,7 +378,7 @@ fn trigger_lane_force_isolation() {
             .graph
             .instance_by_node_id(&NodeId::new("world"))
             .and_then(|instance| state.generator.graph.get_node(instance))
-            .and_then(|node| manifold_nodes_water::node::get(node.node.as_ref()))
+            .and_then(|node| manifold_water_rigid::node::get(node.node.as_ref()))
             .and_then(|node| node.physics_impulse_epoch());
         let epoch = epoch.expect("native physics world must expose a live epoch");
         assert!(epoch > 0, "native physics world must expose a live epoch");
