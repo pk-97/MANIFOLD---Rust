@@ -194,7 +194,7 @@ turned out to be the WRONG stress axis (see Deviation from D2 below).
 - Parity: `node_graph::primitives::skin_mesh::gpu_tests` (`--features gpu-proofs`) — 3/3
   green (single-joint full-weight, two-joint blend, out-of-range-index clamp), generated
   kernel vs. the independent Rust reference.
-- Hot-path: `node_graph::gltf_import::tests::skinned_import_hot_path_stays_under_20ms_per_frame`
+- Hot-path: `node_graph::gltf_import::tests::skinned_import_hot_path_does_no_cold_work`
   (`--features gpu-proofs`) — substitute for the `MANIFOLD_RENDER_TRACE`-driven
   `manifold-app` journey-proof harness (wiring a full content-thread project/layer/
   generator around an imported glTF asset is real additional infrastructure this phase
@@ -438,7 +438,7 @@ hard gate (A2 didn't repeat A1's LFO test either — precedent for reasonable sc
   becomes `raw = (beats - trigger_origin_beats) * rate / clip_beats`, so the
   clip restarts from 0 within one frame of the edge.
 - **MIDI-retrigger gate is a value-level graph test, not a full app harness.**
-  A2 already set the precedent (`skinned_import_hot_path_stays_under_20ms_per_frame`
+  A2 already set the precedent (`skinned_import_hot_path_does_no_cold_work`
   substituting for a full content-thread/MIDI harness "real additional
   infrastructure this phase didn't build"). MIDI NoteOn → phantom-clip →
   `trigger_count` is existing, already-shipped infra
