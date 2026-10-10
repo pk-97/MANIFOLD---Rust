@@ -265,6 +265,20 @@ class ScopeTests(unittest.TestCase):
                                               cpu_plan=None)
                     self.assertEqual([item[0] for item in result.unmapped], expected)
 
+    def test_deleted_contract_test_requires_confirmed_git_deletion(self):
+        path = "crates/manifold-nodes/tests/contracts/water/race_probe.rs"
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            (repo / '.git').touch()
+            workspace = fixture_workspace(repo)
+            for output, expected in [(path + '\n', []), ('', [path])]:
+                with self.subTest(deleted=bool(output)), mock.patch.object(
+                    g.subprocess, 'run', return_value=mock.Mock(returncode=0, stdout=output, stderr='')
+                ):
+                    result = g.plan_for_paths([path], repo, shader_users=lambda _: [], workspace=workspace,
+                                              cpu_plan=None)
+                    self.assertEqual([item[0] for item in result.unmapped], expected)
+
     def test_path_attr_filter_finds_testkit_visible_mount(self):
         with tempfile.TemporaryDirectory() as directory:
             repo = Path(directory)

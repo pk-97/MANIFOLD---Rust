@@ -464,9 +464,10 @@ def plan_for_paths(paths, repo, shader_users=None, base="origin/main", workspace
     if shader_users is None:
         shader_users = shader_index(repo, workspace) if any(p.endswith('.wgsl') for p in paths) else lambda p: []
     plan = Plan(workspace=workspace)
-    # Retired crates have no runnable target. Only skip paths Git confirms
-    # were deleted; moved destinations are independently scoped from the diff.
-    unowned_missing = [p for p in paths if workspace.owner(p) is None
+    # Retired crates and deleted test files have nothing left to run. Only skip
+    # paths Git confirms were deleted; moved destinations are scoped from the diff,
+    # and the parent that dropped the `mod` line maps its own binary.
+    unowned_missing = [p for p in paths if (workspace.owner(p) is None or '/tests/' in p)
                        and not (Path(repo) / p).exists()]
     retired = set()
     if unowned_missing and (Path(repo) / '.git').exists():
