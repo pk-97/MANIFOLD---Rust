@@ -2177,13 +2177,14 @@ fn rigid_multi_node_held_out_fixture_renders_four_distinct_poses() {
 /// (`bug035_verify.rs`/`bug037_verify.rs`'s pattern) — wiring a full
 /// content-thread project/layer/generator around an imported glTF
 /// asset is real additional infrastructure this phase doesn't build;
-/// this measures the actual GPU encode+submit wall-clock cost of the
+/// this drives the
 /// exact render path the gate cares about (per-frame CPU skeleton-pose
 /// sampling + the skin_mesh dispatch + render_scene), on a warm
 /// `PresetRuntime` built once, looped. `CesiumMan.glb` (14016
 /// vertices, one skin, 19 joints) is the largest single skinned mesh
-/// among the gate fixtures. Asserts no frame exceeds 20ms across a
-/// 30-frame warm loop for either asset.
+/// among the gate fixtures. After background work settles, asserts 30
+/// steady frames compile no pipeline and allocate no GPU resource; frame
+/// time is printed, not asserted (timing budgets are nightly measurements).
 ///
 /// Re-derived finding (this session, NOT part of this gate):
 /// `BrainStem.glb` — the design doc's named joint-count stress case —
@@ -2198,7 +2199,7 @@ fn rigid_multi_node_held_out_fixture_renders_four_distinct_poses() {
 /// against a fixture the doc never named as a mandatory gate.
 #[cfg(feature = "gpu-proofs")]
 #[test]
-fn skinned_import_hot_path_stays_under_20ms_per_frame() {
+fn skinned_import_hot_path_does_no_cold_work() {
     use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
     use manifold_node_engine::runtime::preset_context::PresetContext;
     use manifold_node_engine::gpu::render_target::RenderTarget;
@@ -2207,7 +2208,7 @@ fn skinned_import_hot_path_stays_under_20ms_per_frame() {
     for asset in ["CesiumMan.glb", "Fox.glb"] {
         let path = khronos_fixture_path(asset);
         if !path.exists() {
-            eprintln!("skinned_import_hot_path_stays_under_20ms_per_frame: fixture not found at {}, skipping {asset}", path.display());
+            eprintln!("skinned_import_hot_path_does_no_cold_work: fixture not found at {}, skipping {asset}", path.display());
             continue;
         }
         let (def, _report) = assemble_import_graph(&path).expect("assemble skinned import");
@@ -2221,11 +2222,22 @@ fn skinned_import_hot_path_stays_under_20ms_per_frame() {
                 .expect("skinned import graph must build");
         let target = RenderTarget::new(&device, w, h, format, "skinned-hot-path");
 
-        const WARMUP: u32 = 10;
+        // Warmup ends when background parse and warmup work have landed, not
+        // after a fixed frame count: under load that work can take longer.
+        const MIN_WARMUP: u32 = 10;
         const MEASURED: u32 = 30;
+        let wait = manifold_node_engine::testkit::gpu_harness::BackgroundWait::new(format!("skinned hot path {asset}"));
+        let mut warm_frames = 0u32;
+        let mut steady_start: Option<(u32, u64, [u64; 3])> = None;
         let mut max_ms = 0.0f64;
         let mut total_ms = 0.0f64;
-        for frame in 0..(WARMUP + MEASURED) {
+        let mut frame = 0u32;
+        loop {
+            if let Some((start, _, _)) = steady_start
+                && frame >= start + MEASURED
+            {
+                break;
+            }
             let beats = frame as f64 * 0.1;
             let ctx = PresetContext {
                 time: beats * 0.5,
@@ -2257,17 +2269,45 @@ fn skinned_import_hot_path_stays_under_20ms_per_frame() {
                 enc.commit_and_wait_completed();
             }
             let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
-            if frame >= WARMUP {
+            frame += 1;
+            if steady_start.is_some() {
+                assert!(
+                    !generator.io_pending() && !generator.warmup_pending(),
+                    "{asset}: steady frame {frame} re-entered background loading"
+                );
                 max_ms = max_ms.max(elapsed_ms);
                 total_ms += elapsed_ms;
+            } else if !wait.pending(&generator) {
+                warm_frames += 1;
+                if warm_frames >= MIN_WARMUP {
+                    steady_start = Some((
+                        frame,
+                        manifold_foundation::cold_touch::thread_cold_touch_count(
+                            manifold_foundation::cold_touch::ColdTouchKind::PipelineCompile,
+                        ),
+                        device.allocation_counts(),
+                    ));
+                }
             }
         }
-        let avg_ms = total_ms / MEASURED as f64;
-        println!("{asset}: skinned-import hot path — avg {avg_ms:.2}ms, max {max_ms:.2}ms over {MEASURED} frames");
-        assert!(
-            max_ms < 20.0,
-            "{asset}: a frame took {max_ms:.2}ms (> 20ms budget) — skinning dropped a frame"
+        let (_, compiles_before, allocs_before) = steady_start.expect("loop exits only after steady frames");
+        // Work, not wall-clock: a steady skinned frame compiles no pipeline
+        // and allocates no buffer, texture or acceleration structure. Frame
+        // time is printed for reading, never asserted (flakes under load).
+        assert_eq!(
+            manifold_foundation::cold_touch::thread_cold_touch_count(
+                manifold_foundation::cold_touch::ColdTouchKind::PipelineCompile,
+            ),
+            compiles_before,
+            "{asset}: steady skinned frames compiled pipelines"
         );
+        assert_eq!(
+            device.allocation_counts(),
+            allocs_before,
+            "{asset}: steady skinned frames allocated GPU resources [buffers, textures, accel]"
+        );
+        let avg_ms = total_ms / MEASURED as f64;
+        println!("{asset}: skinned-import hot path, avg {avg_ms:.2}ms, max {max_ms:.2}ms over {MEASURED} frames (report only)");
     }
 }
 

@@ -10,6 +10,7 @@
 //! and `manifold-core`/`manifold-app` (test assertions) can both reach it
 //! without introducing a crate-cycle.
 
+use std::cell::Cell;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 /// Initialization-cost category tracked by the cold-touch detector.
@@ -57,6 +58,12 @@ static COUNTERS: [AtomicU64; 5] = [
     AtomicU64::new(0),
 ];
 
+thread_local! {
+    // Touches recorded by this thread only. Tests read these so a sibling
+    // test or a detached loader thread in the same process cannot move them.
+    static THREAD_COUNTERS: [Cell<u64>; 5] = const { [const { Cell::new(0) }; 5] };
+}
+
 /// Best-effort transport flag. Set by the content thread each tick; worker
 /// threads read it when reporting cold touches so warnings only fire when the
 /// audience could actually see the hitch.
@@ -72,6 +79,7 @@ pub fn set_transport_playing(playing: bool) {
 /// counter and emits a loud warning if the transport is currently playing.
 pub fn record_cold_touch(kind: ColdTouchKind) {
     COUNTERS[kind.index()].fetch_add(1, Ordering::Relaxed);
+    THREAD_COUNTERS.with(|c| c[kind.index()].set(c[kind.index()].get() + 1));
     if TRANSPORT_PLAYING.load(Ordering::Relaxed) {
         log::warn!(
             "[cold-touch] {} while transport playing — warmup missed this",
@@ -83,6 +91,12 @@ pub fn record_cold_touch(kind: ColdTouchKind) {
 /// Read the counter for one kind.
 pub fn cold_touch_count(kind: ColdTouchKind) -> u64 {
     COUNTERS[kind.index()].load(Ordering::Relaxed)
+}
+
+/// Read the counter for one kind, counting only touches recorded on the
+/// calling thread. Never reset; compare a before and an after reading.
+pub fn thread_cold_touch_count(kind: ColdTouchKind) -> u64 {
+    THREAD_COUNTERS.with(|c| c[kind.index()].get())
 }
 
 /// Sum across all cold-touch kinds.
@@ -108,25 +122,23 @@ mod tests {
 
     #[test]
     fn counters_reset_and_sum() {
-        reset_cold_touch_counts();
-        assert_eq!(total_cold_touches(), 0);
-
-        for kind in [
+        let kinds = [
             ColdTouchKind::PipelineCompile,
             ColdTouchKind::GlbParse,
             ColdTouchKind::HdriDecode,
             ColdTouchKind::ModelLoad,
             ColdTouchKind::ChainConstruction,
-        ] {
+        ];
+        let before: Vec<u64> = kinds.iter().map(|&k| thread_cold_touch_count(k)).collect();
+        for kind in kinds {
             record_cold_touch(kind);
         }
 
-        assert_eq!(cold_touch_count(ColdTouchKind::PipelineCompile), 1);
-        assert_eq!(cold_touch_count(ColdTouchKind::GlbParse), 1);
-        assert_eq!(total_cold_touches(), 5);
-
-        reset_cold_touch_counts();
-        assert_eq!(total_cold_touches(), 0);
+        for (i, &kind) in kinds.iter().enumerate() {
+            assert_eq!(thread_cold_touch_count(kind), before[i] + 1);
+            assert!(cold_touch_count(kind) >= 1);
+        }
+        assert!(total_cold_touches() >= 5);
     }
 
     static WARN_COUNT: AtomicUsize = AtomicUsize::new(0);
@@ -186,11 +198,11 @@ mod tests {
     fn transport_flag_is_readable_and_writeable() {
         // The content thread sets this every tick; make sure the API does not
         // panic and that a flip followed by a touch still increments the counter.
-        reset_cold_touch_counts();
+        let before = thread_cold_touch_count(ColdTouchKind::ChainConstruction);
         set_transport_playing(false);
         set_transport_playing(true);
         record_cold_touch(ColdTouchKind::ChainConstruction);
-        assert_eq!(cold_touch_count(ColdTouchKind::ChainConstruction), 1);
+        assert_eq!(thread_cold_touch_count(ColdTouchKind::ChainConstruction), before + 1);
         set_transport_playing(false);
     }
 }
