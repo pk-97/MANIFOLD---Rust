@@ -1,4 +1,0 @@
-crates/manifold-node-engine/tests/fixtures/dambreak_pressure_problems.bin.zst	crates/manifold-nodes-water/tests/fixtures/dambreak_pressure_problems.bin.zst
-crates/manifold-node-engine/tests/fixtures/deep_pool_density_problems.bin.zst	crates/manifold-nodes-water/tests/fixtures/deep_pool_density_problems.bin.zst
-crates/manifold-node-engine/tests/fixtures/deep_pool_pressure_problems.bin.zst	crates/manifold-nodes-water/tests/fixtures/deep_pool_pressure_problems.bin.zst
-crates/manifold-node-engine/tests/fixtures/gpu_flip_pressure_golden.txt	crates/manifold-nodes-water/tests/fixtures/gpu_flip_pressure_golden.txt

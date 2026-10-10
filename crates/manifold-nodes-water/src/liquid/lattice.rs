@@ -3,9 +3,9 @@
 //! with 1.5-cell padding. Both retain the authored box and uniform spacing.
 
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
-use manifold_node_engine::scene::fluid_domain::FluidDomainLayout;
+use manifold_core::fluid_domain::FluidDomainLayout;
 #[cfg(test)]
-use manifold_node_engine::scene::fluid_domain::domain_layout;
+use manifold_core::fluid_domain::domain_layout;
 use manifold_node_engine::scene::transform::Transform;
 
 /// Nodes added outside the authored box on every side (taichi `padding = 3`).

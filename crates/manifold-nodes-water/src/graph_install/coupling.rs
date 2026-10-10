@@ -8,11 +8,11 @@ use manifold_core::liquid_domain::liquid_domain_of;
 use manifold_core::scene_index::FlatSceneIndex;
 use manifold_core::scene_modifier_preset::{SceneNodeRef, SceneTargetSelection};
 
-use crate::persistence::PrimitiveRegistry;
-use crate::scene::impulse::{ImpulseTarget, RigidImpulseTargets};
+use manifold_node_engine::persistence::PrimitiveRegistry;
+use manifold_core::scene_impulse::{ImpulseTarget, RigidImpulseTargets};
 
-use super::SceneModifierExpandError;
-use super::acceleration::impulse_recipients_with_index;
+use manifold_node_engine::load::expand::SceneModifierExpandError;
+use manifold_node_engine::load::expand::impulse_recipients_with_index;
 
 /// One physical fluid domain and the rigid recipients coupled to it.
 #[derive(Clone, Debug, PartialEq, Eq)]

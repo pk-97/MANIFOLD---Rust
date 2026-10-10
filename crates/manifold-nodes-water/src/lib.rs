@@ -4,7 +4,7 @@
 
 pub mod clock;
 pub mod rigid_coupling;
-mod graph_install;
+pub mod graph_install;
 pub mod fluid_particles;
 pub mod fluid_role;
 pub mod liquid;

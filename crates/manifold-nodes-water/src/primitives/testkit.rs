@@ -26,14 +26,14 @@ pub fn count_surface_triangles(pipeline: Option<GpuComputePipeline>) -> impl Pri
 pub fn relax_surface_mesh() -> impl Primitive { super::relax_surface_mesh::RelaxSurfaceMesh::new() }
 pub fn member(kind: &str, id: u32, inputs: Vec<InputSource>) -> RegionNode<'static> {
     match kind {
-        "energy_potential" => manifold_node_engine::testkit::water_codegen::member::<super::energy_potential::EnergyPotential>(id, inputs),
-        "turbulence_field" => manifold_node_engine::testkit::water_codegen::member::<super::turbulence_field::TurbulenceField>(id, inputs),
-        "whitewater_obstacle_source" => manifold_node_engine::testkit::water_codegen::member::<super::whitewater_obstacle_source::WhitewaterObstacleSource>(id, inputs),
-        "whitewater_influence" => manifold_node_engine::testkit::water_codegen::member::<super::whitewater_influence::WhitewaterInfluence>(id, inputs),
-        "dust_potential" => manifold_node_engine::testkit::water_codegen::member::<super::dust_potential::DustPotential>(id, inputs),
-        "whitewater_emitter_velocity" => manifold_node_engine::testkit::water_codegen::member::<super::whitewater_emitter_velocity::WhitewaterEmitterVelocity>(id, inputs),
-        "inside_turbulence_potential" => manifold_node_engine::testkit::water_codegen::member::<super::inside_turbulence_potential::InsideTurbulencePotential>(id, inputs),
-        "turbulence_emission_count" => manifold_node_engine::testkit::water_codegen::member::<super::turbulence_emission_count::TurbulenceEmissionCount>(id, inputs),
+        "energy_potential" => crate::testkit::water_codegen::member::<super::energy_potential::EnergyPotential>(id, inputs),
+        "turbulence_field" => crate::testkit::water_codegen::member::<super::turbulence_field::TurbulenceField>(id, inputs),
+        "whitewater_obstacle_source" => crate::testkit::water_codegen::member::<super::whitewater_obstacle_source::WhitewaterObstacleSource>(id, inputs),
+        "whitewater_influence" => crate::testkit::water_codegen::member::<super::whitewater_influence::WhitewaterInfluence>(id, inputs),
+        "dust_potential" => crate::testkit::water_codegen::member::<super::dust_potential::DustPotential>(id, inputs),
+        "whitewater_emitter_velocity" => crate::testkit::water_codegen::member::<super::whitewater_emitter_velocity::WhitewaterEmitterVelocity>(id, inputs),
+        "inside_turbulence_potential" => crate::testkit::water_codegen::member::<super::inside_turbulence_potential::InsideTurbulencePotential>(id, inputs),
+        "turbulence_emission_count" => crate::testkit::water_codegen::member::<super::turbulence_emission_count::TurbulenceEmissionCount>(id, inputs),
         _ => panic!("no water spec fixture for {kind}"),
     }
 }

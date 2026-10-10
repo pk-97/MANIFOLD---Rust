@@ -83,7 +83,7 @@ impl GeneratorRenderer {
             .fire_scene_impulse(param, source, &mut self.next_physics_event)
     }
 
-    pub fn scene_impulse_diagnostics(&self) -> manifold_node_engine::scene::impulse::SceneImpulseDiagnostics {
+    pub fn scene_impulse_diagnostics(&self) -> manifold_core::scene_impulse::SceneImpulseDiagnostics {
         self.scene_impulse_diagnostics
     }
 }

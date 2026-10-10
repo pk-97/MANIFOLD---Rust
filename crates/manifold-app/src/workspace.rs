@@ -89,7 +89,7 @@ pub struct Workspace {
     /// Reused by rendering and picking, never substituted from another solver.
     pub viewport_fluid_domains: Vec<(
         manifold_core::NodeId,
-        manifold_node_engine::scene::fluid_domain::FluidDomainSnapshot,
+        manifold_core::fluid_domain::FluidDomainSnapshot,
     )>,
     /// Request most recently sent to the content thread. The redraw path
     /// replaces this when the target or requested camera changes.

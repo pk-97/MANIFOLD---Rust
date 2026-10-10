@@ -4,7 +4,7 @@ pub(super) mod tests {
     use manifold_nodes_water::primitives::fluid_role_source::geometry::{GeometryMode, prepare_geometry, prepare_wired_geometry};
     use manifold_nodes_water::testkit::fluid_role_source::cube_triangle_list;
     use manifold_node_engine::scene::mesh_source::MeshSource;
-    use manifold_node_engine::scene::physics_mesh::MeshSelection;
+    use manifold_node_engine::scene::mesh_selection::MeshSelection;
     use manifold_node_engine::scene::transform::Transform;
 
     pub(crate) fn write_two_material_cube_fixture() -> (std::path::PathBuf, CompoundPreparation) {

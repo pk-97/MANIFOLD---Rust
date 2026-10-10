@@ -95,7 +95,7 @@ mod tests {
     use super::*;
     use crate::clock::TICK;
     use crate::liquid::coupling::PendingTick;
-    use manifold_node_engine::scene::impulse::RigidImpulseTargets;
+    use manifold_core::scene_impulse::RigidImpulseTargets;
     use crate::physics::{RigidBody, RigidSceneInputs};
     use manifold_node_engine::scene::transform::Transform;
 

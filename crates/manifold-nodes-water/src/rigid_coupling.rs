@@ -1,7 +1,7 @@
 //! Rigid bodies coupled to a liquid domain: resolved inputs, the visible
 //! rigid frame, and the body layout shared by every in-thread liquid.
 
-use manifold_node_engine::scene::impulse::RigidImpulseTargets;
+use manifold_core::scene_impulse::RigidImpulseTargets;
 use manifold_node_engine::scene::transform::{Transform, quat_to_render_scene_euler};
 use manifold_physics::{BodyHandle, PhysicsWorld, TickStamp};
 

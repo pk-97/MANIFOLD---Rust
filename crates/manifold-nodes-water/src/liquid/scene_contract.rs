@@ -8,10 +8,10 @@ use manifold_physics::input::EventStamp;
 use manifold_physics::{FieldValue, Seconds};
 
 use manifold_node_engine::exec::effect_node::EffectNode;
-use manifold_node_engine::scene::fluid_domain::MAX_FLUID_ROLES;
+use manifold_core::fluid_domain::MAX_FLUID_ROLES;
 use manifold_node_engine::parameters::ParamType;
 use manifold_node_engine::persistence::PrimitiveRegistry;
-use manifold_node_engine::scene::impulse::ImpulseTarget;
+use manifold_core::scene_impulse::ImpulseTarget;
 use crate::physics_events::ResolvedNodeImpulse;
 use manifold_node_engine::ports::{PortKind, PortType};
 

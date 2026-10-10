@@ -6,7 +6,7 @@ use manifold_core::liquid_domain::liquid_domain_of;
 use manifold_core::scene_index::FlatSceneIndex;
 use manifold_core::scene_modifier_preset::{SceneNodeRef, SceneTargetSelection};
 use manifold_node_engine::persistence::PrimitiveRegistry;
-    use manifold_node_engine::scene::impulse::ImpulseTarget;
+    use manifold_core::scene_impulse::ImpulseTarget;
 
     fn preset(json: &str) -> EffectGraphDef {
         serde_json::from_str(json).expect("preset parses")

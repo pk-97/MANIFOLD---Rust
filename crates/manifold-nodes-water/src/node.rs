@@ -11,7 +11,7 @@ pub trait PhysicsNode: Send {
     /// Current accepted setup state for native fluid-domain bounds. Nodes that
     /// expose fluid-domain observations return `Some`; all other nodes return
     /// `None`.
-    fn fluid_domain_snapshot(&self) -> Option<manifold_node_engine::scene::fluid_domain::FluidDomainSnapshot> {
+    fn fluid_domain_snapshot(&self) -> Option<manifold_core::fluid_domain::FluidDomainSnapshot> {
         None
     }
 
@@ -51,7 +51,7 @@ pub trait PhysicsNode: Send {
     fn set_coupled_rigid_inputs(
         &mut self,
         _observation: Option<&crate::physics::RigidSceneObservation>,
-        _colliders: manifold_node_engine::scene::impulse::RigidImpulseTargets,
+        _colliders: manifold_core::scene_impulse::RigidImpulseTargets,
         _error: Option<&str>,
     ) {
     }

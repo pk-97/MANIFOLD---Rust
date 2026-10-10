@@ -3,7 +3,7 @@
 use manifold_physics::FieldValue;
 use manifold_physics::input::AppliedEvent;
 
-use manifold_node_engine::scene::impulse::ImpulseTarget;
+use manifold_core::scene_impulse::ImpulseTarget;
 use crate::physics::ResolvedRigidImpulse;
 
 /// An owned, resolved impulse ready for native fixed-tick admission.

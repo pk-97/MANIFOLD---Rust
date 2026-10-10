@@ -23,10 +23,10 @@ use manifold_physics::{BodyHandle, BodyImpulse, PhysicsWorld, Seconds, TickStamp
 use super::bodies::{pack_supports, unpack_supports, BodySupports, LiquidBody};
 #[cfg(test)]
 use crate::clock::TICK;
-use manifold_node_engine::scene::fluid_domain::FluidDomainLayout;
+use manifold_core::fluid_domain::FluidDomainLayout;
 use crate::rigid_coupling::{CoupledRigidFrame, CoupledRigidLayout};
 use crate::fluid_role::PreparedFluidGeometry;
-use manifold_node_engine::scene::impulse::RigidImpulseTargets;
+use manifold_core::scene_impulse::RigidImpulseTargets;
 use crate::physics::{RigidBody, RigidSceneInputs, RigidSimulation};
 use manifold_node_engine::scene::transform::Transform;
 

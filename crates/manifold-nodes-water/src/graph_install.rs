@@ -9,6 +9,8 @@ use manifold_node_engine::load::graph_loader::GraphBuildError;
 use manifold_node_engine::load::instantiation::GraphInstantiationHook;
 use manifold_node_engine::persistence::PrimitiveRegistry;
 
+pub mod coupling;
+
 fn install_coupled_scenes(
     def: &EffectGraphDef,
     registry: &PrimitiveRegistry,
@@ -27,7 +29,7 @@ fn install_coupled_scenes(
         .iter()
         .any(|node| node.type_id == "node.physics_world");
     if has_fluid && has_rigid {
-        let bindings = manifold_node_engine::load::expand::prepare_coupled_scenes(def, registry)
+        let bindings = coupling::prepare_coupled_scenes(def, registry)
             .map_err(GraphBuildError::SceneModifier)?;
         for binding in bindings {
             let fluid_doc = def

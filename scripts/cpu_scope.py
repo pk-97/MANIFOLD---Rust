@@ -71,7 +71,7 @@ def gpu_proofs_only(source):
     text = source.read_text()
     if not GPU_PROOF_TESTS.search(text):
         return False
-    from crate_move_replay import code_mask, module_items
+    from gate_workspace import code_mask, module_items
     masked = code_mask(text)
     gates = [m.start() for m in GPU_PROOF_TESTS.finditer(text)
              if masked[m.start():].startswith('#[cfg')]
@@ -93,7 +93,7 @@ def gpu_proofs_only(source):
 
 def test_module_prefixes(source, prefixes):
     """Keep helper callers covered when narrowing a folded test target."""
-    from crate_move_replay import code_mask
+    from gate_workspace import code_mask
     text = code_mask(source.read_text())
     # Without tests of its own this can be shared setup. Public exports and
     # opaque inclusions can affect callers anywhere in the binary.
@@ -111,7 +111,7 @@ def testless_binary_root(source):
     External modules, macros and attributed items remain conservative:
     their compiled test inventory still has to validate the selection.
     """
-    from crate_move_replay import code_mask, module_items
+    from gate_workspace import code_mask, module_items
     text = source.read_text()
     masked = code_mask(text)
     # module_items expands this macro's production arm; its test arm may differ.
@@ -167,7 +167,7 @@ def plan_for_paths(paths, repo, workspace=None, base=None):
                 manifest[kind] = [{"name": t["name"], "path": Path(t["src_path"]).relative_to(crate).as_posix()}
                                   for t in workspace.targets(package, kind)]
             aliases = {}
-            from crate_move_replay import module_items
+            from gate_workspace import module_items
             for source in (crate / "src").rglob("*.rs"):
                 text = source.read_text()
                 for start, end, head, _scope in module_items(text):
@@ -215,7 +215,7 @@ def plan_for_paths(paths, repo, workspace=None, base=None):
             elif not explicit:
                 # Shared test code (tests/support/): no binary of its own, so
                 # every top-level test that declares or #[path]s the directory.
-                from crate_move_replay import production_text
+                from gate_workspace import production_text
                 uses = re.compile(rf'\bmod\s+{re.escape(parts[3])}\b|"{re.escape(parts[3])}/')
                 binaries.update(test.stem for test in (crate / "tests").glob("*.rs")
                                 if uses.search(production_text(test.read_text())))

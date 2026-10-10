@@ -283,7 +283,7 @@ pub(crate) fn particle_values(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
 mod tests {
     use super::*;
 
-    use manifold_node_engine::scene::fluid_domain::domain_layout;
+    use manifold_core::fluid_domain::domain_layout;
     use crate::matter::{block_sort_box, lattice_blocks};
 
     use crate::primitives::matter_domain::admit_lattice;

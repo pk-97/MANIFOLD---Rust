@@ -14,7 +14,7 @@ use super::nearest_crossing::NearestCrossing;
 use super::particle_volume::{ParticleVolume, refined_nodes};
 use super::surface_crossings::SurfaceCrossings;
 use manifold_node_engine::exec::effect_node::ParamValues;
-use manifold_node_engine::scene::fluid_domain::domain_layout;
+use manifold_core::fluid_domain::domain_layout;
 use crate::liquid::lattice::LiquidLattice;
 use crate::matter::lattice_nodes;
 use manifold_node_engine::parameters::ParamValue;

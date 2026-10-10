@@ -1,6 +1,14 @@
 //! Shared scene-space geometry and state for liquid domains.
 
-use super::transform::Transform;
+/// The authored pose of a liquid domain box. Engine scene transforms convert
+/// into it; core has no scene transform type of its own.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct DomainBox {
+    pub pos: [f32; 3],
+    pub rot_euler: [f32; 3],
+    pub scale: [f32; 3],
+    pub billboard: bool,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct FluidDomainLayout {
@@ -15,17 +23,18 @@ pub struct FluidDomainLayout {
 /// `domain` is the authored axis-aligned box (scale = full size); without
 /// one, a `domain_size` cube centred in X/Z with its floor at Y = 0.
 pub fn domain_layout(
-    domain: Option<Transform>,
+    domain: Option<DomainBox>,
     domain_size: f32,
     resolution: u32,
 ) -> Result<FluidDomainLayout, String> {
     if resolution < 8 {
         return Err("Fluid: resolution must be at least 8 cells".into());
     }
-    let pose = domain.unwrap_or(Transform {
+    let pose = domain.unwrap_or(DomainBox {
         pos: [0.0, domain_size * 0.5, 0.0],
         scale: [domain_size; 3],
-        ..Transform::default()
+        rot_euler: [0.0; 3],
+        billboard: false,
     });
     if pose.billboard
         || pose
@@ -81,11 +90,12 @@ pub fn domain_layout(
 }
 
 impl FluidDomainLayout {
-    pub fn transform(self) -> Transform {
-        Transform {
+    pub fn transform(self) -> DomainBox {
+        DomainBox {
             pos: std::array::from_fn(|i| self.min[i] + self.size[i] * 0.5),
             scale: self.size,
-            ..Transform::default()
+            rot_euler: [0.0; 3],
+            billboard: false,
         }
     }
 }

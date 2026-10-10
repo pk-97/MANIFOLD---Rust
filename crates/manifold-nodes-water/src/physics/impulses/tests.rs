@@ -1,7 +1,7 @@
 use manifold_core::Seconds;
 use manifold_physics::input::EventStamp;
 
-use manifold_node_engine::scene::impulse::RigidImpulseTargets;
+use manifold_core::scene_impulse::RigidImpulseTargets;
 use crate::physics::{PhysicsAuthoredSampleScope, ResolvedRigidImpulse, RigidBody, RigidSimulation, MAX_BODIES};
 use manifold_node_engine::scene::transform::Transform;
 

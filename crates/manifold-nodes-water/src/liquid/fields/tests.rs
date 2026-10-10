@@ -1,6 +1,6 @@
 use super::*;
 use crate::liquid::clock::LiquidClock;
-use manifold_node_engine::scene::impulse::{ImpulseTarget, RigidImpulseTargets};
+use manifold_core::scene_impulse::{ImpulseTarget, RigidImpulseTargets};
 use manifold_physics::input::EventStamp;
 
 fn fluid(field: FieldValue) -> ResolvedNodeImpulse {
