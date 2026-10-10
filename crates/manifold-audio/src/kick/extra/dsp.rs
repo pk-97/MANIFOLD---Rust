@@ -35,7 +35,7 @@ impl<T: Copy + Default> History<T> {
 }
 
 /// Second-order sections in scipy's `sosfilt` form, zero initial state.
-pub(super) struct Sos {
+pub(crate) struct Sos {
     coef: Vec<[f64; 6]>,
     z: Vec<[f64; 2]>,
 }
