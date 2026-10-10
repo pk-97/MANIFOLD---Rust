@@ -1,4 +1,3 @@
-pub(crate) mod gpu_flip_surface;
 mod physics_carry;
 manifold_core::testkit_visible! { pub(crate) mod physics_impulses; }
 manifold_core::testkit_visible! { pub(crate) mod physics_sampling; }

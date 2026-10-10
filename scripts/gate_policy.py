@@ -500,6 +500,7 @@ CATALOG_TEST_ROWS = [
     ("crates/manifold-nodes-image/src/node_graph/primitives/seed_particles_from_texture", "seed_particles_from_texture", True),
     ("crates/manifold-nodes-water/src/primitives/blob_bounds", "blob_bounds", True),
     ("crates/manifold-nodes-water/src/primitives/face_grid_", "face_grid_scene_tests", False),
+    ("crates/manifold-nodes-water/src/testkit/face_grid_scenes", "face_grid_scene_tests", False),
     ("crates/manifold-nodes-image/src/node_graph/primitives/interpolate_particle_frames", "particle_frame_blend_tests", True),
     ("crates/manifold-nodes-scene/src/node_graph/primitives/particles_to_copies", "particle_frame_blend_tests", True),
     ("crates/manifold-nodes-water/src/primitives/push_out_of_solid", "particle_frame_blend_tests", True),

@@ -19,12 +19,13 @@ use manifold_physics::FieldValue;
 
 use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
 use manifold_core::fluid_domain::{FluidDomainLayout, domain_layout};
-use crate::clock::TICK;
-use crate::rigid_coupling::{CoupledRigidFrame, CoupledRigidInputs};
+use manifold_physics::clock::TICK;
+use crate::coupled_frame::{CoupledRigidFrame, CoupledRigidInputs};
 use manifold_core::fluid_domain::MAX_FLUID_ROLES;
 use crate::fluid_role::FluidRole;
 use crate::liquid::bodies::{BodiesStatus, LiquidBodies, LiquidBody, LiquidShape};
 use crate::liquid::body_buffers::LiquidBodyBuffers;
+use crate::liquid::lattice::closed_faces;
 use crate::liquid::clock::LiquidClock;
 use crate::liquid::coupling::{DomainWalls, LiquidRigidOwner, PendingTick, takes_reaction};
 use {crate::liquid::fields, crate::liquid::fields::FieldLattice, crate::liquid::fields::LiquidFields, crate::liquid::fields::LiquidImpulses};
@@ -472,16 +473,6 @@ impl Coupling {
         let (mode, epochs) = (self.mode, self.epochs);
         *self = Self { mode, epochs, ..Self::default() };
     }
-}
-
-pub(crate) fn closed_faces(params: &ParamValues) -> u32 {
-    ["closed_neg_x", "closed_pos_x", "closed_neg_y", "closed_pos_y", "closed_neg_z", "closed_pos_z"]
-        .iter()
-        .enumerate()
-        .fold(0, |mask, (bit, name)| {
-            let closed = !matches!(params.get(*name), Some(ParamValue::Bool(false)));
-            mask | (u32::from(closed) << bit)
-        })
 }
 
 /// Every scalar output, in the order [`MatterDomain::compute`] fills them.

@@ -8,6 +8,7 @@
 //! follow the reseeding seam described by Ferstl et al. (2016).
 
 use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline};
+use crate::fluid_particles::FaceSample;
 
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
 use crate::primitives::liquid_stats::{with_stats_layout, LIQUID_STATS_WORDS, NARROW_BAND_SHORTAGE_WORD};
@@ -47,6 +48,13 @@ pub fn face_dims(cells: [u32; 3], axis: usize) -> [u32; 3] {
 /// Records in `axis`'s array, in u64 so no size wraps.
 pub fn face_len(cells: [u32; 3], axis: usize) -> u64 {
     face_dims(cells, axis).iter().map(|&n| u64::from(n)).product()
+}
+
+manifold_core::testkit_visible! {
+/// Bytes of a staggered face grid at `cells`: one record per padded cell.
+pub(crate) fn face_bytes(cells: [u32; 3]) -> u64 {
+    cells.iter().map(|&n| u64::from(n) + 1).product::<u64>() * size_of::<FaceSample>() as u64
+}
 }
 
 /// Number of cell-centred interior distance records. The field has one f32

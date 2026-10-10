@@ -7,7 +7,7 @@
 
 use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline, GpuDevice};
 
-use manifold_nodes_water::primitives::gpu_flip_preset::WaterScene;
+use manifold_nodes_water::presets::gpu_flip::WaterScene;
 use crate::contracts::water::primitives::gpu_flip_scene_tests::Run;
 use manifold_nodes_water::primitives::gpu_flip_step::{CELL_REACH, ENGINE_CFL, FACE_VALID_LAYERS, StepParams, TILE, band_layers, dispatch_pass, ring_max, set_all_tiles, set_poison, tile_counts, tile_total};
 use manifold_nodes_water::primitives::liquid_stats::with_stats_layout;

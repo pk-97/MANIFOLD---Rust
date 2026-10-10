@@ -12,8 +12,8 @@ use manifold_core::effect_graph_def::EffectGraphDef;
 use manifold_core::params::{Param, ParamManifest};
 use serde_json::{Value, json};
 
-use manifold_nodes_water::primitives::gpu_flip_preset::{WaterScene, render_def};
-use manifold_nodes_water::primitives::gpu_flip_step::face_bytes;
+use manifold_nodes_water::presets::gpu_flip::{WaterScene, render_def};
+use manifold_nodes_water::liquid::grid::face_bytes;
 use manifold_node_engine::parameters::ParamValue;
 use manifold_node_engine::testkit::substep_nodes::register_substep_test_nodes;
 use manifold_node_engine::persistence::PrimitiveRegistry;
@@ -214,7 +214,7 @@ fn gpu_flip_resolution_card_resizes_at_runtime() {
         live_in(frame.node.provided_array_output("particles_b").expect("published frame B"), show.provided_bytes("fill", "particles"))
     };
     show.restart();
-    let step = manifold_nodes_water::primitives::gpu_flip_preset::STEP_NODE;
+    let step = manifold_nodes_water::presets::gpu_flip::STEP_NODE;
     for n in [64u32, 32, 48] {
         let mut card = Param::bundled(spec.clone());
         card.value = n as f32;
@@ -380,8 +380,8 @@ fn percentile(values: &[f64], p: f64) -> f64 {
 /// O2 (section 3.7): the GPU emitter against FLIP's own on the same inputs.
 #[cfg(feature = "whitewater-oracle")]
 mod emitter_oracle {
-    use manifold_nodes_water::liquid::conformance::json_node_mut;
-    use manifold_nodes_water::primitives::testkit as water_nodes;
+    use manifold_nodes_water::testkit::conformance::json_node_mut;
+    use manifold_nodes_water::primitives::testkit::whitewater as whitewater_nodes;
     use manifold_fluids::{
         WhitewaterFields, WhitewaterGrid, WhitewaterKind, WhitewaterLifecycle as NativeLifecycle, WhitewaterParticle, WhitewaterSpawn,
         whitewater_oracle,
@@ -393,7 +393,7 @@ mod emitter_oracle {
     use manifold_node_engine::testkit::array_harness::{Harness, params, read};
     use manifold_nodes_water::primitives::sample_faces_at_particles::SampleFacesAtParticles;
     use manifold_nodes_water::primitives::spawn_whitewater::SpawnWhitewater;
-    use manifold_nodes_water::primitives::gpu_flip_preset::REST_PER_CELL;
+    use manifold_nodes_water::presets::gpu_flip::REST_PER_CELL;
     use manifold_nodes_water::primitives::wavecrest_potential::WavecrestPotential;
     use manifold_nodes_water::primitives::whitewater_type::WhitewaterType;
     use crate::contracts::node_graph::catalog_tests::whitewater_scene::*;
@@ -638,7 +638,7 @@ mod emitter_oracle {
             self.step(JitterParticles::new(), &[("particles", self.particles.0)], self.jittered.0, &[("cell_size", grid.h), ("seed", seed), ("epoch", 0.0)]);
             let sample = [&[("particles", self.jittered.0)][..], &faces[..]].concat();
             self.step(SampleFacesAtParticles::new(), &sample, self.sampled.0, &faced);
-            self.step(water_nodes::energy_potential(), &[("particles", self.sampled.0)], self.energy.0, &[]);
+            self.step(whitewater_nodes::energy_potential(), &[("particles", self.sampled.0)], self.energy.0, &[]);
             let crest = [("particles", self.sampled.0), ("distance", self.distance.0), ("curvature", self.curvature.0), ("cells", self.cells.0)];
             self.step(WavecrestPotential::new(), &crest, self.wavecrest.0, &boxed);
             let emit = [("particles", self.sampled.0), ("energy", self.energy.0), ("wavecrest", self.wavecrest.0)];

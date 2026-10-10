@@ -17,7 +17,7 @@ use manifold_core::params::ParamManifest;
 use manifold_gpu::{GpuDevice, GpuTextureFormat};
 use manifold_node_engine::runtime::frame_status::FrameRenderStatus;
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
-use manifold_nodes_water::clock::TICK;
+use manifold_physics::clock::TICK;
 use manifold_node_engine::particles::FluidParticle;
 use manifold_nodes_water::liquid::bodies::LiquidBody;
 use manifold_nodes_water::physics::PhysicsStepScope;

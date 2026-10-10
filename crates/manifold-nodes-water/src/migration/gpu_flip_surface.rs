@@ -8,7 +8,7 @@ use manifold_core::effect_graph_def::{
     BindingDef, BindingTarget, EffectGraphDef, EffectGraphNode, EffectGraphWire, GroupDef,
 };
 
-pub(super) const SHARED_INPUTS: &[&str] = &[
+pub(crate) const SHARED_INPUTS: &[&str] = &[
     "blobs", "cell_ranges", "solid", "bounds", "cell_size",
     "bins_x", "bins_y", "bins_z", "nodes_x", "nodes_y", "nodes_z",
     "center_x", "center_y", "center_z", "size_x", "size_y", "size_z", "band_extra",

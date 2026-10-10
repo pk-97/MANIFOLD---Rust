@@ -9,7 +9,7 @@
 
 use manifold_gpu::{GpuBuffer, GpuDevice};
 
-use crate::clock::display_blend;
+use crate::liquid::clock::display_blend;
 
 /// Slots a history may hold, each admitted against device memory.
 pub const H_MAX: usize = 16;

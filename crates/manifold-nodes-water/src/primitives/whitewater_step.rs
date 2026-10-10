@@ -29,7 +29,7 @@ use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 use super::surface_crossings::SurfaceCrossings;
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
 use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
-use crate::clock::TICK;
+use manifold_physics::clock::TICK;
 use manifold_node_engine::particles::FluidParticle;
 use crate::fluid_particles::{FaceSample, MAX_BINS, bin_counts, bin_total};
 use crate::liquid::grid::face_len;
@@ -39,12 +39,8 @@ use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use crate::physics::offline_simulation;
 use manifold_node_engine::primitive::Primitive;
 use manifold_node_engine::scene::transform::Transform;
-use crate::whitewater::{KnownValue, SPREAD_STEPS, SURFACE_CROSSING_BYTES, WhitewaterParticle, cell_total, face_offset, grid_box, grid_cells, refinement, require_extended_faces};
+use crate::whitewater::{DEFAULT_CAPACITY, MAX_CAPACITY, KnownValue, SPREAD_STEPS, SURFACE_CROSSING_BYTES, WhitewaterParticle, cell_total, face_offset, grid_box, grid_cells, refinement, require_extended_faces};
 use crate::whitewater_handoff::{Fence, Retired};
-
-/// FLIP's own default whitewater budget.
-pub const DEFAULT_CAPACITY: u32 = 100_000;
-pub const MAX_CAPACITY: u32 = 250_000;
 
 
 const WHITEWATER_FUSED_SHADER: &str = include_str!("shaders/whitewater_fused.wgsl");
@@ -718,7 +714,7 @@ fn require_inputs(shape: &StepShape, inputs: &StepInputs<'_>) -> Result<(), Stri
     }
     match inputs.faces {
         FaceSource::Packed(faces) => {
-            let bytes = super::gpu_flip_step::face_bytes(shape.face_cells);
+            let bytes = crate::liquid::grid::face_bytes(shape.face_cells);
             if inputs.distance.is_none() {
                 return Err("legacy level-set interface requires axis arrays".into());
             }

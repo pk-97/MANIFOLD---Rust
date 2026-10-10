@@ -77,24 +77,6 @@ impl GpuFlipClockParams {
     }
 }
 
-/// A body vertex used by both obstacle and initial-source prediction.
-/// `velocity` is the current linear velocity (for a source it already
-/// includes the source's fluid velocity). `velocity.w` is zero for prescribed
-/// geometry and is a coupled body-row index plus one for dynamic hulls.
-/// `position.w` is an eligibility bit; noncoupled vertices outside the liquid
-/// domain have zero there. Coupled hull vertices stay eligible even when
-/// outside, as in the reference engine.
-#[repr(C)]
-#[derive(Clone, Copy, Debug, Default, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
-pub struct GpuFlipBodyVertex {
-    pub position: [f32; 4],
-    pub velocity: [f32; 4],
-    pub acceleration: [f32; 4],
-    pub angular_velocity: [f32; 4],
-    pub angular_acceleration: [f32; 4],
-    pub centroid: [f32; 4],
-}
-
 /// Inputs to one scheduling dispatch.  Buffers are persistent solver-owned
 /// GPU buffers.  Counts may be any value that fits the corresponding buffer;
 /// there is no quality or population cap in this helper.
@@ -826,6 +808,7 @@ mod tests {
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
     use super::*;
+    use crate::liquid::bodies::GpuFlipBodyVertex;
     use manifold_node_engine::particles::FluidParticle;
     use crate::liquid::bodies::LiquidBody;
     use bytemuck::Zeroable;

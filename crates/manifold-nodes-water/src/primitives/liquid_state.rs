@@ -12,10 +12,10 @@
 
 use manifold_gpu::{GpuBuffer, GpuDevice};
 
-use super::gpu_flip_step::face_bytes;
+use crate::liquid::grid::face_bytes;
 use super::particle_identity::{ParticleIdentity, IDENTITY_BYTES};
 use super::liquid_stats::{LIQUID_STATS_WORDS, LiquidTickStats};
-use super::whitewater_step::{DEFAULT_CAPACITY as WHITEWATER_DEFAULT_CAPACITY, MAX_CAPACITY as WHITEWATER_MAX_CAPACITY};
+use crate::whitewater::{DEFAULT_CAPACITY as WHITEWATER_DEFAULT_CAPACITY, MAX_CAPACITY as WHITEWATER_MAX_CAPACITY};
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
 use manifold_node_engine::particles::FluidParticle;
 use crate::fluid_particles::FaceSample;

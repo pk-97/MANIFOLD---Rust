@@ -56,14 +56,14 @@ pub trait PhysicsNode: Send {
     ) {
     }
 
-    fn coupled_rigid_frame(&self) -> Option<&crate::rigid_coupling::CoupledRigidFrame> {
+    fn coupled_rigid_frame(&self) -> Option<&crate::coupled_frame::CoupledRigidFrame> {
         None
     }
 
     /// Latch the rigid result of the liquid step before any scene consumer runs.
     fn accept_coupled_rigid_frame(
         &mut self,
-        _frame: Option<&crate::rigid_coupling::CoupledRigidFrame>,
+        _frame: Option<&crate::coupled_frame::CoupledRigidFrame>,
     ) {
     }
 

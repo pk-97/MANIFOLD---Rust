@@ -262,7 +262,7 @@ fn gpu_flip_step_order_dispatch_extents() {
     let cell_count: u64 = cells.iter().product();
     let face_count: u64 = cells.map(|n| n + 1).iter().product();
     assert_eq!((cell_count, face_count), (120, 210));
-    assert_eq!(super::gpu_flip_step::face_bytes([6, 5, 4]), face_count * 32);
+    assert_eq!(crate::liquid::grid::face_bytes([6, 5, 4]), face_count * 32);
     assert_eq!(super::gpu_flip_step::emit_sites([6, 5, 4]), cell_count * 8);
     for threads in [cell_count, face_count, cell_count * 8, 300, 512] {
         assert!(threads.div_ceil(256) * 256 >= threads);

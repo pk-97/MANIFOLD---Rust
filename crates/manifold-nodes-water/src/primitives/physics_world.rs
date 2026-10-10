@@ -1,6 +1,6 @@
 use manifold_node_engine::mesh::InstanceTransform;
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
-use crate::rigid_coupling::CoupledRigidFrame;
+use crate::coupled_frame::CoupledRigidFrame;
 use manifold_node_engine::exec::instance_upload::InstanceSnapshotUpload;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use crate::physics::{BODY_PORTS, MAX_BODIES, MAX_COPIES, POSE_PORTS, ResolvedRigidImpulse, RigidBody, RigidSceneInputs, RigidSceneObservation, RigidSimulation};

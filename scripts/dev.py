@@ -58,6 +58,9 @@ VERBS = [
     ("Landing and gates",
      "glb-status", "gen_glb_conformance_status.py", "regenerate the glTF conformance status doc"),
     ("Landing and gates",
+     "water-edges", "water_crate_edges.py",
+     "water crate edge census: cross-area reaches inside manifold-nodes-water; --check fails on a CUT row"),
+    ("Landing and gates",
      "gate-runner", "gate_runner.py", "machine-written verdict trail for lane gates"),
 
     ("Machine: GPU, worktrees, disk",
@@ -238,6 +241,7 @@ COST_CLASSES = {
     "rt_quality_matrix.py": "broad",
     "rt_region_probe.py": "unit",
     "rt_toggle_matrix.py": "broad",
+    "water_crate_edges.py": "unit",
     "run_ui_flows.py": "broad",
     "stale_beads.py": "unit",
     "storage_budget.py": "unit",

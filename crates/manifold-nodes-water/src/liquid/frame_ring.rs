@@ -6,7 +6,7 @@
 
 use manifold_gpu::{GpuBuffer, GpuDevice};
 
-use crate::clock::display_blend;
+use crate::liquid::clock::display_blend;
 
 /// Frames in the ring: A, B and the one being written.
 pub const RING: usize = 3;

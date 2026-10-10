@@ -8,6 +8,12 @@ pub mod particle_volume;
 
 pub mod fluid_role_source;
 
+pub mod conformance;
+
+pub mod face_grid_scenes;
+
+pub mod preset_extents;
+
 #[cfg(any(test, feature = "testkit"))]
 pub mod liquid_extents;
 

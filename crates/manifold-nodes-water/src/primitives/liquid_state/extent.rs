@@ -3,9 +3,9 @@ use crate::liquid::extent::liquid_lattice;
 use std::mem::size_of;
 use crate::liquid::lattice::FlipSolverGrid;
 use crate::primitives::liquid_stats::LIQUID_STATS_WORDS;
-use crate::primitives::gpu_flip_step::face_bytes;
-use crate::primitives::whitewater_step::DEFAULT_CAPACITY as STEP_CAPACITY;
-use crate::primitives::whitewater_step::MAX_CAPACITY as STEP_MAX_CAPACITY;
+use crate::liquid::grid::face_bytes;
+use crate::whitewater::DEFAULT_CAPACITY as STEP_CAPACITY;
+use crate::whitewater::MAX_CAPACITY as STEP_MAX_CAPACITY;
 use manifold_node_engine::exec::extent::{AtomExtent, ExtentRule, Verdict};
 use crate::liquid::extent::PARTICLE;
 

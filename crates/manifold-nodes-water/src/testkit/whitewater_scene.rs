@@ -6,7 +6,7 @@ use manifold_core::params::ParamManifest;
 use manifold_gpu::GpuTextureFormat;
 use serde_json::{Value, json};
 
-use crate::primitives::gpu_flip_preset::{WaterScene, render_def};
+use crate::presets::gpu_flip::{WaterScene, render_def};
 use manifold_node_engine::runtime::frame_status::FrameRenderStatus;
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
 use manifold_node_engine::testkit::gpu::readback_srgb_rgba8;
@@ -54,7 +54,7 @@ fn renumber_scope_ids(value: &mut Value, next: &mut u64) {
     }
 }
 
-use crate::liquid::conformance::json_node_mut;
+use crate::testkit::conformance::json_node_mut;
 
 pub fn node_scope_wires<'a>(
     nodes: &'a [EffectGraphNode],
@@ -368,7 +368,7 @@ impl Show {
         register_substep_test_nodes(&mut registry);
         registry.register(PROBE, || Box::new(Probe::new()));
         registry.register(COUNTS_PROBE, || Box::new(Probe::whitewater_counts()));
-        let (def, retarget) = match frozen.then(|| crate::primitives::gpu_flip_preset::testkit::fused_as_rendered(&def, &registry)).flatten() {
+        let (def, retarget) = match frozen.then(|| crate::presets::gpu_flip::testkit::fused_as_rendered(&def, &registry)).flatten() {
             Some(view) => ((*view.def).clone(), view.node_retarget.clone()),
             None => (def, Default::default()),
         };
