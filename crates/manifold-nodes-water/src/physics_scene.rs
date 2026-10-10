@@ -23,10 +23,11 @@ impl NodePairBehavior for PhysicsPair {
         fluid: &mut dyn EffectNode,
         rigid: &mut dyn EffectNode,
         inputs: Option<&mut EffectNodeContext<'_, '_>>,
+        step: manifold_node_engine::exec::effect_node::SimStep,
     ) {
         let Some(ctx) = inputs else {
             if let Some(native) = node::get_mut(fluid) {
-                native.set_coupled_rigid_inputs(None, self.colliders, None);
+                native.set_coupled_rigid_inputs(None, self.colliders, None, step.authored_sample_only);
             }
             if let Some(native) = node::get_mut(rigid) {
                 native.accept_coupled_rigid_frame(None);
@@ -42,6 +43,7 @@ impl NodePairBehavior for PhysicsPair {
                 node::get(rigid).and_then(|rigid| rigid.rigid_scene_observation()),
                 self.colliders,
                 result.as_ref().err().map(String::as_str),
+                step.authored_sample_only,
             );
         }
     }

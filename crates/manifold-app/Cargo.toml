@@ -89,8 +89,6 @@ objc2-app-kit = { version = "0.3", features = [
 
 [features]
 whitewater-oracle = ["manifold-nodes/whitewater-oracle", "gpu-proofs"]
-water-race-probes = ["manifold-nodes/water-race-probes", "gpu-proofs"]
-matter-perf-proofs = ["manifold-nodes/matter-perf-proofs", "gpu-proofs"]
 fluid-perf-proofs = ["manifold-nodes/fluid-perf-proofs", "gpu-proofs"]
 rt-perf-proofs = ["manifold-nodes/rt-perf-proofs", "gpu-proofs"]
 gpu-proofs = ["manifold-editing/gpu-proofs", "manifold-compositor/gpu-proofs", "manifold-nodes-scene/gpu-proofs", "manifold-nodes-image/gpu-proofs", "manifold-nodes/gpu-proofs", "manifold-node-engine/gpu-proofs"]

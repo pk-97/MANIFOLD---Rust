@@ -77,24 +77,6 @@ impl GpuFlipClockParams {
     }
 }
 
-/// A body vertex used by both obstacle and initial-source prediction.
-/// `velocity` is the current linear velocity (for a source it already
-/// includes the source's fluid velocity). `velocity.w` is zero for prescribed
-/// geometry and is a coupled body-row index plus one for dynamic hulls.
-/// `position.w` is an eligibility bit; noncoupled vertices outside the liquid
-/// domain have zero there. Coupled hull vertices stay eligible even when
-/// outside, as in the reference engine.
-#[repr(C)]
-#[derive(Clone, Copy, Debug, Default, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
-pub struct GpuFlipBodyVertex {
-    pub position: [f32; 4],
-    pub velocity: [f32; 4],
-    pub acceleration: [f32; 4],
-    pub angular_velocity: [f32; 4],
-    pub angular_acceleration: [f32; 4],
-    pub centroid: [f32; 4],
-}
-
 /// Inputs to one scheduling dispatch.  Buffers are persistent solver-owned
 /// GPU buffers.  Counts may be any value that fits the corresponding buffer;
 /// there is no quality or population cap in this helper.
@@ -826,6 +808,7 @@ mod tests {
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
     use super::*;
+    use crate::liquid::bodies::GpuFlipBodyVertex;
     use manifold_node_engine::particles::FluidParticle;
     use crate::liquid::bodies::LiquidBody;
     use bytemuck::Zeroable;
@@ -1084,36 +1067,6 @@ fn classify_marker(@builtin(global_invocation_id) gid: vec3<u32>) {
                 }
                 assert_eq!(outputs[0], outputs[1], "{count} markers, {duration}s, {span}x span: particles/plan/histogram/outliers");
             }
-        }
-    }
-
-    #[test]
-    #[cfg(feature = "water-race-probes")]
-    fn gpu_flip_clock_workgroup_marker_classify_bounded_timing() {
-        let device = manifold_gpu::testkit::test_device();
-        let buffers = classify_buffers(&device);
-        let active = PlanValue { dt: 0.25, live_mode: 1, ..PlanValue::zeroed() };
-        let p = GpuFlipClockParams { max_frame_steps: 64, ..params() };
-        for count in [847_872u32, 6_832_128] {
-            let clocks = [original_marker_clock(&device, count), GpuFlipClock::new(&device, count, 1, 1)];
-            let markers = device.create_buffer_shared(u64::from(count) * 32);
-            let particles: Vec<_> = (0..count).map(|i| particle(if i % 16 == 0 { 31.75 } else { 0.25 })).collect();
-            unsafe { markers.write(0, bytemuck::cast_slice(&particles)); }
-            drop(particles);
-            let mut samples = [Vec::with_capacity(8), Vec::with_capacity(8)];
-            for sample in 0..12 {
-                let mut outputs = [Vec::new(), Vec::new()];
-                for i in if sample % 2 == 0 { [0, 1] } else { [1, 0] } {
-                    let (words, millis) = classify_probe(&device, &clocks[i], (&markers, count), &p, &active, None, &buffers);
-                    outputs[i] = words;
-                    if sample >= 4 { samples[i].push(millis); }
-                }
-                assert_eq!(outputs[0], outputs[1], "{count} markers, sample {sample}: exact histogram/outliers");
-            }
-            for times in &mut samples { times.sort_by(f64::total_cmp); }
-            let median = |times: &[f64]| (times[3] + times[4]) * 0.5;
-            eprintln!("MARKER_CLASSIFY count={count} warm=4 measured=8 old_median_ms={:.6} workgroup_median_ms={:.6} exact=true",
-                median(&samples[0]), median(&samples[1]));
         }
     }
 

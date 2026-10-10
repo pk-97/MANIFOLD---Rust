@@ -828,7 +828,7 @@ mod tests {
             fn set_enabled(&self, _: &mut dyn EffectNode, enabled: bool) {
                 if !enabled { self.0.fetch_add(1, Ordering::Relaxed); }
             }
-            fn before_first(&self, _: &mut dyn EffectNode, _: &mut dyn EffectNode, _: Option<&mut EffectNodeContext<'_, '_>>) {}
+            fn before_first(&self, _: &mut dyn EffectNode, _: &mut dyn EffectNode, _: Option<&mut EffectNodeContext<'_, '_>>, _: crate::exec::effect_node::SimStep) {}
             fn after_first(&self, _: &dyn EffectNode, _: &mut dyn EffectNode) {}
         }
         let mut graph = Graph::new();

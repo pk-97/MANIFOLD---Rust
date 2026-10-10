@@ -115,7 +115,7 @@ fn scene_impulse_source_maps_speed_edits_and_pause_without_stepping() {
     assert_eq!(
         node::get(runtime.graph.get_node(world).unwrap().node.as_ref())
             .expect("native world fixture")
-            .physics_impulse_stamp(Seconds(10.6), 5)
+            .physics_impulse_stamp(Seconds(10.6), 5, Default::default())
             .unwrap()
             .time
             .0,

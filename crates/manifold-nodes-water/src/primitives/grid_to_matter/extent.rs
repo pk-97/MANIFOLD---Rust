@@ -2,7 +2,7 @@
 use crate::liquid::extent::liquid_lattice;
 use crate::matter::grid_bytes;
 use manifold_node_engine::exec::extent::{AtomExtent, ExtentRule, Verdict};
-use crate::liquid::extent::node_extent;
+use crate::matter::node_extent;
 
 fn grid_to_matter(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     let lattice = liquid_lattice(x)?;

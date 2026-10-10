@@ -4,7 +4,7 @@ use manifold_node_engine::exec::effect_node::FrameTime;
 use manifold_node_engine::runtime::PresetRuntime;
 
 pub fn surface_inputs() -> &'static [&'static str] {
-    super::gpu_flip_surface::SHARED_INPUTS
+    crate::migration::gpu_flip_surface::SHARED_INPUTS
 }
 
 pub fn sampling_mask(runtime: &PresetRuntime) -> Option<&[bool]> {

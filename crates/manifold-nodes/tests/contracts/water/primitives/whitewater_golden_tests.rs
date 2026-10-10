@@ -11,12 +11,12 @@ use manifold_gpu::GpuBuffer;
 use serde_json::{Value, json};
 
 use manifold_nodes_water::primitives::energy_potential::{MAX_ENERGY, MIN_ENERGY};
-use manifold_nodes_water::primitives::gpu_flip_preset::WaterScene;
+use manifold_nodes_water::presets::gpu_flip::WaterScene;
 use manifold_node_engine::testkit::array_harness::{Harness, read};
 use manifold_nodes_water::testkit::whitewater_scene::{whitewater_render_def, with_tick_probe};
 use manifold_nodes_water::primitives::whitewater_step::{Step, StepFrame, StepInputs, StepShape};
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
-use manifold_nodes_water::clock::TICK;
+use manifold_physics::clock::TICK;
 use manifold_node_engine::particles::FluidParticle;
 use manifold_nodes_water::liquid::grid::face_len;
 use manifold_node_engine::scene::transform::Transform;
@@ -28,7 +28,7 @@ const GOLDEN: &str = "whitewater_tick_golden.txt";
 
 
 
-use manifold_nodes_water::liquid::conformance::json_node_mut;
+use manifold_nodes_water::testkit::conformance::json_node_mut;
 
 /// The shipped def with these whitewater params and, when given, this
 /// whitewater budget (the card's node, which sizes stage and boundary alike).
@@ -64,9 +64,11 @@ pub(super) fn all_emitters(budget: Option<f64>) -> EffectGraphDef {
 
 
 
+/// I1: the packed face grid and the axis adapters give the same tick
+/// fingerprints. 32 cells: packing works face by face, whatever the lattice.
 pub(super) fn packed_scene_fingerprints() {
-    use manifold_nodes_water::primitives::gpu_flip_preset::with_whitewater_axes;
-    let def = with_tick_probe(whitewater_render_def(WaterScene::dam_break(64)));
+    use manifold_nodes_water::presets::gpu_flip::with_whitewater_axes;
+    let def = with_tick_probe(whitewater_render_def(WaterScene::dam_break(32)));
     let mut packed = Vec::new();
     let mut axes = Vec::new();
     run("packed_faces", def.clone(), &mut packed);

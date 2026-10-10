@@ -53,17 +53,18 @@ pub trait PhysicsNode: Send {
         _observation: Option<&crate::physics::RigidSceneObservation>,
         _colliders: manifold_core::scene_impulse::RigidImpulseTargets,
         _error: Option<&str>,
+        _authored_sample_only: bool,
     ) {
     }
 
-    fn coupled_rigid_frame(&self) -> Option<&crate::rigid_coupling::CoupledRigidFrame> {
+    fn coupled_rigid_frame(&self) -> Option<&crate::coupled_frame::CoupledRigidFrame> {
         None
     }
 
     /// Latch the rigid result of the liquid step before any scene consumer runs.
     fn accept_coupled_rigid_frame(
         &mut self,
-        _frame: Option<&crate::rigid_coupling::CoupledRigidFrame>,
+        _frame: Option<&crate::coupled_frame::CoupledRigidFrame>,
     ) {
     }
 
@@ -73,11 +74,13 @@ pub trait PhysicsNode: Send {
     }
 
     /// Timestamp an impulse against the exact native observation accepted at
-    /// the supplied transport value, if this node owns such a clock.
+    /// the supplied transport value, if this node owns such a clock. `step`
+    /// is the frame's step, so the stamp never depends on node order.
     fn physics_impulse_stamp(
         &self,
         _transport: manifold_core::Seconds,
         _sequence: u64,
+        _step: crate::physics::SimStep,
     ) -> Result<manifold_physics::input::EventStamp, String> {
         Err("node does not expose a native impulse clock".into())
     }

@@ -6,8 +6,8 @@ scripts/landing_gate.py and scripts/codex_checks.py. Rules:
 
 - Every touched GPU path maps to test filters, plus the fixed SMOKE set.
 - A path maps to the proofs of the thing it changes: NARROW_ROWS (clock, fields,
-  domain nodes) beat the broad solver rows, and timing reporters (REPORTER_SKIPS)
-  run only when their own file is touched or nightly.
+  domain nodes) beat the broad solver rows, and long proofs (REPORTER_SKIPS)
+  run only when a changed test body names them, or nightly.
 - A GPU path with no mapping is a hard failure naming the path; the author adds
   a rule here. There is no run-everything fallback. Everything runs only with
   `gpu_proofs_gate.py --all` (nightly trunk_health.py).

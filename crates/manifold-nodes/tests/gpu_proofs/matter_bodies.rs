@@ -7,7 +7,7 @@ use manifold_gpu::GpuTextureFormat;
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
 use manifold_physics::sdf::signed_distance_lattice;
 use manifold_core::fluid_domain::{domain_layout};
-use manifold_nodes_water::clock::TICK;
+use manifold_physics::clock::TICK;
 use manifold_nodes_water::liquid::bodies::{LiquidBody, LiquidShape, body_pose_at, pack_distance_atlas};
 use manifold_nodes_water::liquid::fields::FieldLattice;
 use manifold_nodes_water::liquid::lattice::LiquidLattice;

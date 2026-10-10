@@ -281,7 +281,6 @@ fn scene_physics_coupling_failure_retains_published_pose_and_latches() {
 
 #[test]
 fn scene_physics_coupling_capture_publishes_accepted_span_and_paused_edit() {
-    let _live = PhysicsStepScope::for_render(false);
     let mut bodies = std::array::from_fn(|_| None);
     let animated = RigidBody {
         kind: 2,
@@ -291,7 +290,7 @@ fn scene_physics_coupling_capture_publishes_accepted_span_and_paused_edit() {
     bodies[0] = Some(animated.clone());
     let mut prototype = animated.clone();
 
-    let mut simulation = RigidSimulation::default();
+    let mut simulation = RigidSimulation::default().with_step(super::tests::live_step());
     let mut uncoupled = Uncoupled;
     advance_capture(
         &mut simulation,

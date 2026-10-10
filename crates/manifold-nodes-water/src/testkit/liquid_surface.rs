@@ -94,7 +94,7 @@ pub fn sort_and_shape(
     );
     assert!(errors.is_empty(), "{errors:?}");
     let (blobs_slot, blobs_buf) = harness.array::<FluidBlob>(&[], particles.len());
-    let mut shape_node = crate::primitives::testkit::shape_particle_blobs();
+    let mut shape_node = crate::primitives::testkit::surface::shape_particle_blobs();
     let (_, errors) = harness.run(
         &mut shape_node,
         &[("sorted", sorted_slot), ("cell_ranges", ranges_slot)],

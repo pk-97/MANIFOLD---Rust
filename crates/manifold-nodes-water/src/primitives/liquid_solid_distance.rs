@@ -10,7 +10,7 @@ use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline, GpuDevice, GpuEnco
 use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
-use crate::clock::TICK;
+use manifold_physics::clock::TICK;
 use manifold_core::fluid_domain::MAX_FLUID_ROLES;
 use crate::liquid::bodies::{LIQUID_COLLIDER, LIQUID_POSE, LiquidBody, LiquidShape};
 use crate::liquid::lattice::{LiquidLattice, PADDING_NODES};

@@ -72,8 +72,8 @@ impl EffectNode for ObservedPhysics {
             observations.push(Observation {
                 time: ctx.time,
                 values,
-                draining: crate::physics::history_drain_requested(),
-                authored_only: crate::physics::authored_sample_only(),
+                draining: ctx.sim_step.history_drain_active(),
+                authored_only: ctx.sim_step.authored_sample_only,
             })
         });
     }
@@ -163,7 +163,6 @@ fn physics_history_holds_external_edits_while_authored_motion_advances() {
     );
     let (current, historical) = observations.split_last().unwrap();
     assert!(!current.authored_only, "live observation must restore the native policy");
-    assert!(!crate::physics::authored_sample_only());
     for sample in historical {
         assert!(sample.authored_only, "historical observation must retain native sampling policy");
         assert_eq!(sample.values[0], 1.0);
@@ -315,7 +314,7 @@ fn source_observation_uses_project_tempo_and_closes_history_once() {
     assert_tempo_samples(&samples, &tempo);
     assert_eq!(samples.last().unwrap().time.seconds, source.seconds);
     assert!(samples.iter().all(|sample| !sample.draining));
-    let _preview = crate::physics::PhysicsStepScope::for_render(false);
+    runtime.set_sim_step(crate::physics::SimStep::live(manifold_core::Seconds(manifold_physics::clock::TICK)));
     let next = frame(&mut runtime, 1.0 / 30.0, 9.0, 1.0);
     assert_tempo_samples(&next, &tempo);
     assert!(
@@ -424,8 +423,8 @@ fn offline_history_drain_keeps_old_controls_and_bounds_input_batches() {
 
 #[test]
 fn offline_history_drain_is_never_requested_by_preview_sampling() {
-    let _preview = crate::physics::PhysicsStepScope::for_render(false);
     let mut runtime = runtime();
+    runtime.set_sim_step(crate::physics::SimStep::live(manifold_core::Seconds(manifold_physics::clock::TICK)));
     frame(&mut runtime, 0.0, 1.0, 0.0);
     let observations = frame(&mut runtime, 3.0, 9.0, 3.0);
     assert!(observations.iter().all(|sample| !sample.draining));

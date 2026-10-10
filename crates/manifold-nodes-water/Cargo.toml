@@ -43,8 +43,6 @@ objc2 = "0.6"
 testkit = ["manifold-node-engine/testkit", "dep:glam", "dep:objc2"]
 gpu-proofs = ["testkit", "manifold-node-engine/gpu-proofs", "manifold-gpu/gpu-proofs"]
 fluid-perf-proofs = ["gpu-proofs"]
-matter-perf-proofs = ["gpu-proofs"]
-water-race-probes = ["gpu-proofs", "fluid-perf-proofs", "manifold-fluids/face-oracle"]
 whitewater-oracle = ["gpu-proofs", "manifold-fluids/whitewater-oracle"]
 
 [lints]

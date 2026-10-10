@@ -100,7 +100,8 @@ fn whitewater_extents_at_64() {
 
     // The tick solver at res 64 uses 67 cells / 68 nodes (the legacy
     // matter lattice above has 70 / 71). Only its pad-zero mode aliases.
-    use super::whitewater_step::{DEFAULT_CAPACITY, StepShape};
+    use super::whitewater_step::StepShape;
+    use crate::whitewater::DEFAULT_CAPACITY;
     let tick = StepShape::new([68; 3], [68; 3], [67; 3], 1.0,
         Some(manifold_node_engine::scene::transform::Transform { scale: [4.1875; 3], ..Default::default() }),
         DEFAULT_CAPACITY).expect("tick grid");
@@ -552,7 +553,8 @@ fn whitewater_grid_chain_fuses_only_the_distance_pair() {
 /// the res-64 particle slots.
 #[test]
 fn whitewater_step_extents_at_64() {
-    use super::whitewater_step::{DEFAULT_CAPACITY, MAX_CAPACITY, StepShape};
+    use crate::whitewater::{DEFAULT_CAPACITY, MAX_CAPACITY};
+    use super::whitewater_step::{StepShape};
     use crate::fluid_particles::{MAX_BINS, bin_total};
     let lattice = lattice_at_64();
     let nodes = lattice.nodes();

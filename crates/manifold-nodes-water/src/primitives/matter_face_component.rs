@@ -23,7 +23,7 @@ use manifold_node_engine::primitive::Primitive;
 /// edge with them always read grid velocity. The face one cell out along
 /// its own axis reads it only when a point sits in the half of the cell
 /// next to it: 67.7% of those faces in Dam Break at 64 after 45 ticks
-/// (`face_grid_demo_gpu_flip_and_matter_side_by_side`). So no layer holds.
+/// (measured 2026-10 by a seam demo now in git history). So no layer holds.
 pub const MATTER_FACE_VALID_LAYERS: u32 = 0;
 
 /// Authored cells per axis of a matter lattice with `nodes` nodes.

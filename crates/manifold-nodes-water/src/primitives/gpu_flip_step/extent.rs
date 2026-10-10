@@ -15,7 +15,7 @@ use crate::primitives::gpu_flip_pressure::scratch_bytes as pressure_scratch_byte
 use crate::primitives::gpu_flip_step::ENGINE_CFL;
 use crate::primitives::gpu_flip_step::FACE_VALID_LAYERS;
 use crate::primitives::gpu_flip_step::band_layers;
-use crate::primitives::gpu_flip_step::face_bytes;
+use crate::liquid::grid::face_bytes;
 use crate::primitives::gpu_flip_step::ring_max;
 use crate::primitives::gpu_flip_step::scratch_bytes as step_scratch_bytes;
 use crate::whitewater::cell_total;

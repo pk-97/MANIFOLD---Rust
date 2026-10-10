@@ -17,7 +17,6 @@ use crate::fluid_particles::WhitewaterSpawn;
 use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
 use manifold_node_engine::particles::FluidParticle;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
-use crate::physics::offline_simulation;
 use manifold_node_engine::primitive::Primitive;
 use crate::whitewater::{face_offset, grid_box, grid_cells, require_extended_faces};
 use crate::whitewater_handoff::{CaptureInputs, Fence, OutputRing, Reply, Request, Reset, Retired, SNAPSHOT_SLOTS, Snapshot, SnapshotRing, SnapshotShape, Worker};
@@ -443,7 +442,7 @@ impl Primitive for WhitewaterLifecycle {
             level,
             solid,
         };
-        let offline = offline_simulation();
+        let offline = ctx.sim_step.offline();
         let gpu = ctx.gpu_encoder();
         let clock = gpu.device.frame_clock();
         let fence: &dyn Fence = match &clock {

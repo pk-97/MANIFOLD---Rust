@@ -367,7 +367,7 @@ impl RigidSimulation {
 mod tests {
     use super::*;
     use manifold_core::scene_impulse::RigidImpulseTargets;
-    use crate::physics::{PhysicsAuthoredSampleScope, PhysicsStepScope, ResolvedRigidImpulse};
+    use crate::physics::{ResolvedRigidImpulse, SimStep};
     use manifold_physics::input::{AppliedEvent, EventStamp};
     use manifold_physics::stepping::{FramePlan, Uncoupled};
     use manifold_physics::TickStamp;
@@ -662,8 +662,7 @@ mod tests {
 
         let mut worker = RigidSimulation::with_worker_epoch(ordinary_epoch).unwrap();
         let mut worker_coupling = Uncoupled;
-        let _preview = PhysicsStepScope::with_preview_budget(false, std::time::Duration::ZERO);
-        let _authored = PhysicsAuthoredSampleScope::new();
+        worker.set_step(SimStep::live(super::super::FIXED_TICK).with_preview_budget(std::time::Duration::ZERO).authored_sample());
         worker
             .advance_worker(&inputs, Seconds::ZERO, 0, &mut worker_coupling)
             .unwrap();
@@ -731,8 +730,7 @@ mod tests {
         let mut simulation = RigidSimulation::with_worker_epoch(epoch).unwrap();
         let mut coupling = Uncoupled;
         let inputs = scene();
-        let _preview = PhysicsStepScope::with_preview_budget(false, std::time::Duration::ZERO);
-        let _authored = PhysicsAuthoredSampleScope::new();
+        simulation.set_step(SimStep::live(super::super::FIXED_TICK).with_preview_budget(std::time::Duration::ZERO).authored_sample());
         simulation
             .advance_worker(&inputs, Seconds::ZERO, 0, &mut coupling)
             .unwrap();

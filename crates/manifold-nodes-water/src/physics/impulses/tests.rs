@@ -2,7 +2,7 @@ use manifold_core::Seconds;
 use manifold_physics::input::EventStamp;
 
 use manifold_core::scene_impulse::RigidImpulseTargets;
-use crate::physics::{PhysicsAuthoredSampleScope, ResolvedRigidImpulse, RigidBody, RigidSimulation, MAX_BODIES};
+use crate::physics::{ResolvedRigidImpulse, RigidBody, RigidSimulation, SimStep, MAX_BODIES};
 use manifold_node_engine::scene::transform::Transform;
 
 const DT: f64 = 1.0 / 60.0;
@@ -103,12 +103,11 @@ fn rigid_impulse_stamp_stays_invalid_for_authored_only_rebuild_and_pending() {
 
     let body = bodies[0].as_mut().unwrap();
     body.shape = (body.shape + 1) % 5;
-    {
-        let _scope = PhysicsAuthoredSampleScope::new();
-        simulation
-            .advance(bodies.clone(), [0.0; 3], Seconds(2.0), 1.0, 0.0)
-            .unwrap();
-    }
+    simulation.set_step(SimStep::default().authored_sample());
+    simulation
+        .advance(bodies.clone(), [0.0; 3], Seconds(2.0), 1.0, 0.0)
+        .unwrap();
+    simulation.set_step(SimStep::default());
     assert!(simulation.impulse_stamp(Seconds(2.0), 2).is_err());
 
     simulation

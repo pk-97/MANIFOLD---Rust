@@ -636,7 +636,7 @@ class ScopeTests(unittest.TestCase):
                      W + 'shaders/gpu_flip_narrow_band.wgsl'):
             result = plan([path], users=lambda _: [W + 'gpu_flip_narrow_band_tests.rs'],
                           repo=self._repo_with(path))
-            self.assertTrue(set(g.SMOKE_FILTERS + ["narrow_band", "face_grid_demo_gpu_flip_and_matter_side_by_side"]) <= set(result.final_filters()))
+            self.assertTrue(set(g.SMOKE_FILTERS + ["narrow_band"]) <= set(result.final_filters()))
             self.assertNotIn("gpu_flip_", result.filters)
             self.assertFalse(result.broad)
             self.assertFalse(result.unmapped)
@@ -763,17 +763,6 @@ class ScopeTests(unittest.TestCase):
         p = plan([W + 'matter_fill.rs'])
         self.assertTrue({"matter_", "substeps_"} <= p.filters)
 
-    def test_batch_two_paths_select_face_grid_demo(self):
-        name = "node_graph::primitives::face_grid_scene_tests::face_grid_demo_gpu_flip_and_matter_side_by_side"
-        for path in (W + 'gpu_flip_step.rs', W + 'shaders/gpu_flip_step.wgsl',
-                     W + 'gpu_flip_pressure.rs', W + 'shaders/gpu_flip_pressure.wgsl',
-                     W + 'gpu_flip_lentine.rs', W + 'shaders/gpu_flip_lentine.wgsl',
-                     W + 'gpu_flip_narrow_band.rs', W + 'shaders/gpu_flip_narrow_band.wgsl'):
-            result = plan([path], users=lambda _: [W + 'gpu_flip_step.rs'],
-                          repo=self._repo_with(path))
-            self.assertTrue(any(f in name for f in result.final_filters()), path)
-            self.assertFalse(any(s in name for s in result.final_skips()), path)
-
     def test_gpu_flip_row_reaches_the_scene_proofs(self):
         for path in (W + 'gpu_flip_step.rs', W + 'liquid_state.rs', T + 'liquid/extent.rs'):
             self.assertTrue({"gpu_flip_", "face_grid_tests::"} <= plan([path]).filters, path)
@@ -829,12 +818,13 @@ class ScopeTests(unittest.TestCase):
         p = plan([T + 'liquid/clock.rs', W + 'gpu_flip_step.rs'])
         self.assertIn("gpu_flip_", p.filters)
 
-    def test_reporters_skip_unless_their_own_file_is_touched(self):
+    def test_long_proofs_skip_unless_their_own_test_is_named(self):
         for name in g.REPORTER_SKIPS:
             self.assertIn(name, plan([W + 'gpu_flip_step.rs']).final_skips() +
                           plan([W + 'matter_fill.rs']).final_skips())
-        own = plan(["crates/manifold-nodes/tests/gpu_proofs/matter_cost_probe.rs"])
-        self.assertNotIn("matter_cost_probe", own.final_skips())
+        own = plan([W + 'matter_fill.rs'])
+        own.filters.add("matter_look::matter_look_volume_drift")
+        self.assertNotIn("matter_look_volume_drift", own.final_skips())
 
     def with_times(self, times):
         d = tempfile.mkdtemp()
@@ -877,7 +867,7 @@ class ScopeTests(unittest.TestCase):
                 self.assertLessEqual(g.read_times(g.TIMES_PATH).get(name, 0), g.SLOW_THRESHOLD_S, name)
 
     def test_slow_exact_filter_runs(self):
-        name = "liquid_conformance::liquid_coupled_live_frame_rate"
+        name = "liquid_conformance::liquid_floating_rest"
         self.with_times({name: 222})
         p = plan([T + 'liquid/clock.rs'])
         p.filters.add(name)

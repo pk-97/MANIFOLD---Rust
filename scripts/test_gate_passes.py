@@ -741,7 +741,7 @@ class CacheTests(unittest.TestCase):
         run = self.run_spec()
         command = proofs.cargo_test_cmd(self.repo / 'Cargo.toml', run['targets'],
                                         lib=run['lib'], package=run['package'],
-                                        features=['matter-perf-proofs'])
+                                        features=['unknown-proofs'])
         command += ['--', '--test-threads=1']
         self.assertIsNone(cache.queued_proof(command, self.repo))
 

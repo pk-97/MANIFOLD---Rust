@@ -59,7 +59,7 @@ impl EffectNode for TickedLiquid {
         &[]
     }
     fn evaluate(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        if !manifold_nodes_water::physics::authored_sample_only() {
+        if !ctx.sim_step.authored_sample_only {
             return;
         }
         let now = ctx.time.seconds.0;

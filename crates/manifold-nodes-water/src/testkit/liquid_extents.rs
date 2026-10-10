@@ -1,4 +1,4 @@
-    use crate::primitives::gpu_flip_preset::testkit::fused_as_rendered;
+    use crate::presets::gpu_flip::testkit::fused_as_rendered;
 use manifold_core::effect_graph_def::*;
     use manifold_node_engine::exec::extent::{AtomExtent, ExtentError, ExtentReport, ExtentRule, EXTENT_RULES, Verdict, check_graph};
     use manifold_node_engine::testkit::substep_nodes::register_substep_test_nodes;
