@@ -7,7 +7,7 @@ use manifold_core::{Beats, Seconds};
 use manifold_gpu::{GpuFrameProfile, GpuTextureFormat, GpuTimestampSampler};
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
 use manifold_node_engine::scene::fluid_domain::{domain_layout};
-use manifold_nodes_water::fluid::TICK;
+use manifold_nodes_water::clock::TICK;
 use manifold_node_engine::particles::{FluidParticle};
 use manifold_nodes_water::fluid_particles::CellRange;
 use manifold_nodes_water::liquid::lattice::LiquidLattice;

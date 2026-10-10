@@ -93,7 +93,7 @@ pub fn body_substep(cell_size: f32, wave: f32, mass: f32, area: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::fluid::TICK;
+    use crate::clock::TICK;
     use crate::liquid::coupling::PendingTick;
     use manifold_node_engine::scene::impulse::RigidImpulseTargets;
     use crate::physics::{RigidBody, RigidSceneInputs};

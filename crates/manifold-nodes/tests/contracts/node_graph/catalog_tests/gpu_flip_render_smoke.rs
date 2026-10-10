@@ -34,7 +34,6 @@ use manifold_node_engine::testkit::substep_nodes::register_substep_test_nodes;
 use manifold_node_engine::{exec::effect_node::NodeInstanceId, persistence::PrimitiveRegistry};
 use manifold_node_engine::runtime::preset_context::PresetContext;
 use manifold_node_engine::runtime::PresetRuntime;
-use manifold_nodes::testkit::reference_fixtures::cpu_flip_preset_json;
 use manifold_node_engine::gpu::render_target::RenderTarget;
 
 const WIDTH: u32 = 1920;
@@ -212,7 +211,7 @@ impl Smoke {
     /// The scene frozen, as the app renders a generator. The step is one
     /// barriered node and never fuses, so its dispatches keep their labels.
     fn new(scene: WaterScene) -> Self {
-        let mut registry = PrimitiveRegistry::with_cpu_flip_reference();
+        let mut registry = PrimitiveRegistry::with_builtin();
         register_substep_test_nodes(&mut registry);
         let def = render_def(scene);
         let Some(view) = manifold_nodes_water::primitives::gpu_flip_preset::testkit::fused_as_rendered(&def, &registry) else {
@@ -234,7 +233,7 @@ impl Smoke {
     }
 
     fn with_def(scene: WaterScene, def: EffectGraphDef) -> Self {
-        let mut registry = PrimitiveRegistry::with_cpu_flip_reference();
+        let mut registry = PrimitiveRegistry::with_builtin();
         register_substep_test_nodes(&mut registry);
         let device = manifold_gpu::testkit::test_device();
         let manifest = ParamManifest::from_params(
@@ -838,190 +837,6 @@ fn run_built(scene: WaterScene, label: &str, transport: bool, build: fn(WaterSce
     assert!(smoke.critical.is_empty(), "CRITICAL at {tag}: {:?}", smoke.critical);
 }
 
-const STUDIO_FLOOR: [&str; 4] = ["studio_floor", "studio_floor_mesh", "studio_floor_material", "studio_floor_transform"];
-
-fn preset_json(file: &str) -> Value {
-    let source = match file {
-        "WaterBasin.json" | "WaterDamBreak.json" | "WaterDamBreakGpu.json" => cpu_flip_preset_json(file),
-        _ => {
-            let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/generator-presets").join(file);
-            &std::fs::read_to_string(path).expect("preset reads")
-        }
-    };
-    serde_json::from_str(source).expect("preset parses")
-}
-
-/// `WaterDamBreakGpu.json` as shipped (FLIP engine and its GPU surface), with
-/// the studio floor left out as in Peter's exports and `overrides` applied.
-fn preset_def(overrides: &Value) -> EffectGraphDef {
-    preset_def_from("WaterDamBreakGpu.json", &STUDIO_FLOOR, overrides)
-}
-
-/// The generator preset `file` with the `left_out` nodes and their wires
-/// removed and `overrides` applied. A node param a card param owns is set
-/// through the card's default, since the card overwrites it at build.
-fn preset_def_from(file: &str, left_out: &[&str], overrides: &Value) -> EffectGraphDef {
-    let mut v = preset_json(file);
-    let id = |n: &Value| n["id"].as_u64().expect("numeric id");
-    let ids: Vec<u64> = v["nodes"].as_array().expect("nodes").iter().filter(|n| left_out.iter().any(|d| n["nodeId"] == *d)).map(id).collect();
-    v["nodes"].as_array_mut().expect("nodes").retain(|n| !ids.contains(&id(n)));
-    v["wires"].as_array_mut().expect("wires").retain(|w| !ids.contains(&w["fromNode"].as_u64().expect("from")) && !ids.contains(&w["toNode"].as_u64().expect("to")));
-    let mut card = serde_json::Map::new();
-    for binding in v["presetMetadata"]["bindings"].as_array().expect("bindings") {
-        let target = &binding["target"];
-        if let Some(value) = target["nodeId"].as_str().and_then(|node| overrides.get(node)).and_then(|n| n.get(target["param"].as_str().unwrap_or_default())) {
-            card.insert(binding["id"].as_str().expect("binding id").to_string(), value.clone());
-        }
-    }
-    for list in ["params", "bindings"] {
-        for p in v["presetMetadata"][list].as_array_mut().expect("card list") {
-            if let Some(value) = p["id"].as_str().and_then(|id| card.get(id)) {
-                p["defaultValue"] = value.clone();
-            }
-        }
-    }
-    with_params(serde_json::from_value(v).expect("preset def"), overrides)
-}
-
-/// Stills of the shipped preset's own water at `stills`, as `preset_<name>_frameNNNN.png`.
-fn render_preset(name: &str, overrides: &Value, stills: &[usize], dir: &Path) {
-    let registry = PrimitiveRegistry::with_cpu_flip_reference();
-    let device = manifold_gpu::testkit::test_device();
-    let mut runtime = PresetRuntime::from_def_with_device(preset_def(overrides), &registry, device.arc(), WIDTH, HEIGHT, GpuTextureFormat::Rgba16Float, None)
-        .expect("preset builds on the device");
-    let target = RenderTarget::new(&device, WIDTH, HEIGHT, GpuTextureFormat::Rgba16Float, "preset-look");
-    for frame in 1..=*stills.iter().max().expect("a still") {
-        render_preset_frame(&mut runtime, &target, frame);
-        if stills.contains(&frame) {
-            let rgba = objc2::rc::autoreleasepool(|_| readback_srgb_rgba8(&device, &target.texture, WIDTH, HEIGHT));
-            std::fs::write(dir.join(format!("preset_{name}_frame{frame:04}.png")), encode_rgba8_png(&rgba, WIDTH, HEIGHT)).expect("still written");
-        }
-    }
-}
-
-/// One 60 fps frame of a preset, `frame` counted from 1.
-fn render_preset_frame(runtime: &mut PresetRuntime, target: &RenderTarget, frame: usize) {
-    let device = manifold_gpu::testkit::test_device();
-    objc2::rc::autoreleasepool(|_| {
-        let time = frame as f64 / 60.0;
-        let ctx = PresetContext {
-            time,
-            beat: time * 2.0,
-            dt: 1.0 / 60.0,
-            width: WIDTH,
-            height: HEIGHT,
-            output_width: WIDTH,
-            output_height: HEIGHT,
-            aspect: WIDTH as f32 / HEIGHT as f32,
-            owner_key: 0,
-            is_clip_level: false,
-            frame_count: frame as i64,
-            anim_progress: 0.0,
-            trigger_count: 0,
-        };
-        let mut enc = device.create_encoder("preset-look");
-        {
-            let mut gpu = GpuEncoder::new(&mut enc, &device);
-            runtime.render(&mut gpu, &target.texture, &ctx, &ParamManifest::default());
-        }
-        enc.commit_and_wait_profiled(&device);
-    });
-}
-
-/// An H.264 file fed raw RGBA frames at 60 fps.
-fn encoder(path: &Path, crf: u32) -> std::process::Child {
-    std::process::Command::new("ffmpeg")
-        .args(["-y", "-loglevel", "error", "-f", "rawvideo", "-pix_fmt", "rgba", "-s", &format!("{WIDTH}x{HEIGHT}"), "-r", "60", "-i", "-"])
-        .args(["-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", &crf.to_string()])
-        .arg(path)
-        .stdin(std::process::Stdio::piped())
-        .spawn()
-        .expect("ffmpeg starts")
-}
-
-fn finish(mut encoder: std::process::Child) {
-    drop(encoder.stdin.take());
-    let status = encoder.wait().expect("ffmpeg ran");
-    assert!(status.success(), "ffmpeg: {status}");
-}
-
-fn write_frame(encoder: &mut std::process::Child, rgba: &[u8]) {
-    encoder.stdin.as_mut().expect("ffmpeg input").write_all(rgba).expect("clip frame written");
-}
-
-/// A preset's first `frames` frames as `{name}.mp4`, with stills: one column
-/// of the race clip.
-fn record_preset(def: EffectGraphDef, name: &str, frames: usize, stills: &[usize], dir: &Path) -> PathBuf {
-    let registry = PrimitiveRegistry::with_cpu_flip_reference();
-    let device = manifold_gpu::testkit::test_device();
-    let mut runtime = PresetRuntime::from_def_with_device(def, &registry, device.arc(), WIDTH, HEIGHT, GpuTextureFormat::Rgba16Float, None)
-        .expect("preset builds on the device");
-    let target = RenderTarget::new(&device, WIDTH, HEIGHT, GpuTextureFormat::Rgba16Float, "race-clip");
-    let clip = dir.join(format!("{name}.mp4"));
-    let mut ffmpeg = encoder(&clip, 16);
-    let wall = Instant::now();
-    for frame in 1..=frames {
-        render_preset_frame(&mut runtime, &target, frame);
-        let rgba = objc2::rc::autoreleasepool(|_| readback_srgb_rgba8(&device, &target.texture, WIDTH, HEIGHT));
-        if stills.contains(&frame) {
-            std::fs::write(dir.join(format!("{name}_frame{frame:04}.png")), encode_rgba8_png(&rgba, WIDTH, HEIGHT)).expect("still written");
-        }
-        write_frame(&mut ffmpeg, &rgba);
-    }
-    finish(ffmpeg);
-    println!("RACE CLIP {name}: {frames} frames in {:.1} s", wall.elapsed().as_secs_f64());
-    clip
-}
-
-/// GPU FLIP's first `frames` frames through `render_def` as `{name}.mp4`, with
-/// stills, started as `run` starts it: the first frame, warm-up, then Reset.
-fn record_gpu_flip(scene: WaterScene, name: &str, frames: usize, stills: &[usize], dir: &Path) -> PathBuf {
-    let dt = 1.0 / 60.0;
-    let mut smoke = Smoke::with_def(scene, render_def(scene));
-    smoke.frame(dt, false);
-    let mut warmups = 0;
-    while smoke.runtime.warmup_pending() && warmups < 600 {
-        smoke.frame(dt, false);
-        warmups += 1;
-    }
-    smoke.reset();
-    smoke.frame(dt, false);
-    let clip = dir.join(format!("{name}.mp4"));
-    let mut ffmpeg = encoder(&clip, 16);
-    let wall = Instant::now();
-    for frame in 1..=frames {
-        smoke.frame(dt, false);
-        let rgba = smoke.readback();
-        if stills.contains(&frame) {
-            std::fs::write(dir.join(format!("{name}_frame{frame:04}.png")), encode_rgba8_png(&rgba, WIDTH, HEIGHT)).expect("still written");
-        }
-        write_frame(&mut ffmpeg, &rgba);
-    }
-    finish(ffmpeg);
-    assert!(smoke.critical.is_empty(), "CRITICAL in {name}: {:?}", smoke.critical);
-    println!("RACE CLIP {name}: {frames} frames in {:.1} s", wall.elapsed().as_secs_f64());
-    clip
-}
-
-/// Clips side by side in the given order, each cropped to the tank and its
-/// splash as `contact_sheet` crops.
-fn side_by_side(columns: &[PathBuf], out: &Path) {
-    let mut cmd = std::process::Command::new("ffmpeg");
-    cmd.args(["-y", "-loglevel", "error"]);
-    for column in columns {
-        cmd.arg("-i").arg(column);
-    }
-    let mut filter: String = (0..columns.len()).map(|i| format!("[{i}:v]crop=1200:1080:360:0[c{i}];")).collect();
-    filter += &(0..columns.len()).map(|i| format!("[c{i}]")).collect::<String>();
-    filter += &format!("hstack=inputs={}[out]", columns.len());
-    let status = cmd
-        .args(["-filter_complex", &filter, "-map", "[out]", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "18", "-movflags", "+faststart"])
-        .arg(out)
-        .status()
-        .expect("ffmpeg runs");
-    assert!(status.success(), "side by side: {status}");
-}
-
 /// A contact sheet of stills in reading order, `cols` wide: each cropped to
 /// the tank and its splash, then scaled by `scale`.
 fn contact_sheet(stills: &[PathBuf], cols: usize, scale: f64, out: &Path) {
@@ -1060,10 +875,8 @@ fn with_params(def: EffectGraphDef, overrides: &Value) -> EffectGraphDef {
 /// Look development on the Dam Break at 64: for each variant in the JSON file
 /// `GPU_FLIP_LOOK` names (`{"variant": {"node": {"param": value}}}`, `{}` for the
 /// preset as shipped, in name order), stills at `GPU_FLIP_LOOK_STILLS` (frames,
-/// default "90,240") and one contact sheet per still frame. With
-/// `GPU_FLIP_LOOK_SOURCE=preset` the water is the shipped preset's own (FLIP
-/// engine and its GPU surface); otherwise GPU FLIP through `render_def`, and
-/// `GPU_FLIP_LOOK_CLIP` "first-last" also records those frames as a clip with a
+/// default "90,240") and one contact sheet per still frame, GPU FLIP through
+/// `render_def`; `GPU_FLIP_LOOK_CLIP` "first-last" also records those frames as a clip with a
 /// phone copy. Output under `GPU_FLIP_SMOKE_DIR`. No-op unset.
 #[test]
 fn gpu_flip_look_variants_64() {
@@ -1084,16 +897,10 @@ fn gpu_flip_look_variants_64() {
     let dir = out_dir();
     let scene = WaterScene::dam_break(64);
     let dt = 1.0 / 60.0;
-    let preset = std::env::var("GPU_FLIP_LOOK_SOURCE").is_ok_and(|s| s == "preset");
-    let prefix = if preset { "preset" } else { "look" };
+    let prefix = "look";
     let variants = variants.as_object().expect("variants by name");
     for (name, overrides) in variants {
         let wall = Instant::now();
-        if preset {
-            render_preset(name, overrides, &stills, &dir);
-            println!("LOOK preset {name}: {:.1} s", wall.elapsed().as_secs_f64());
-            continue;
-        }
         let mut smoke = Smoke::with_def(scene, with_params(render_def(scene), overrides));
         // As `run`: the first frame, warm-up, then Reset.
         smoke.frame(dt, false);
@@ -1146,53 +953,6 @@ fn gpu_flip_look_variants_64() {
     if (2..=4).contains(&variants.len()) {
         let paths: Vec<PathBuf> = stills.iter().flat_map(|frame| variants.keys().map(move |name| (name, frame))).map(|(name, frame)| still(name, frame)).collect();
         contact_sheet(&paths, variants.len(), 0.75, &dir.join(format!("{prefix}_grid.png")));
-    }
-}
-
-/// The race clips (docs/GPU_FLIP_PRESSURE_SOLVE.md section 6 (measures)):
-/// the Dam Break at 64³ for 300 frames, left to right GPU FLIP, the FLIP
-/// Fluids engine (whitewater as shipped) and MPM, through one camera, tank,
-/// light rig, water material and tone map. The studio floor is left out as in
-/// Peter's exports, and the obstacle too, as the engine race runs. Writes each column, the
-/// side-by-side clip with a phone copy, and a still row at frames 90 and 240
-/// under `GPU_FLIP_SMOKE_DIR`.
-#[test]
-fn gpu_flip_race_clips_64() {
-    const OBSTACLE: [&str; 5] = ["obstacle_transform", "obstacle_collider", "obstacle_mesh", "obstacle_material", "obstacle_object"];
-    let dir = out_dir();
-    let (frames, stills) = (300, [90, 240]);
-    let left_out: Vec<&str> = STUDIO_FLOOR.iter().chain(&OBSTACLE).copied().collect();
-    // MPM's preset keeps the older water material: give it the engine's.
-    let water = |file: &str| {
-        let preset = preset_json(file);
-        let nodes = preset["nodes"].as_array().expect("nodes");
-        nodes.iter().find(|n| n["nodeId"] == "water_material").expect("water material")["params"].clone()
-    };
-    let (engine_water, mpm_water) = (water("WaterDamBreakGpu.json"), water("WaterDamBreakMatter.json"));
-    let mut material = serde_json::Map::new();
-    for (param, value) in engine_water.as_object().expect("material params") {
-        if mpm_water.get(param).is_some_and(|mpm| mpm != value) {
-            material.insert(param.clone(), value["value"].clone());
-        }
-    }
-    println!("RACE CLIP MPM water material from the engine preset: {material:?}");
-    let columns = [
-        record_gpu_flip(WaterScene::race_dam_break(64), "race_gpu_flip_64", frames, &stills, &dir),
-        record_preset(preset_def_from("WaterDamBreakGpu.json", &left_out, &json!({})), "race_engine_64", frames, &stills, &dir),
-        record_preset(
-            preset_def_from("WaterDamBreakMatter.json", &left_out, &json!({ "water_material": material })),
-            "race_mpm_64",
-            frames,
-            &stills,
-            &dir,
-        ),
-    ];
-    let clip = dir.join("race_64_gpu_flip_engine_mpm.mp4");
-    side_by_side(&columns, &clip);
-    phone_copy(&clip, &dir.join("race_64_gpu_flip_engine_mpm_phone.mp4"));
-    for frame in stills {
-        let row: Vec<PathBuf> = ["gpu_flip", "engine", "mpm"].iter().map(|c| dir.join(format!("race_{c}_64_frame{frame:04}.png"))).collect();
-        contact_sheet(&row, 3, 0.5, &dir.join(format!("race_64_frame{frame:04}.png")));
     }
 }
 

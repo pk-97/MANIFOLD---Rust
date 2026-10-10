@@ -320,9 +320,6 @@ use manifold_node_engine::freeze::classify::FusionKind;
         use manifold_node_engine::persistence::PrimitiveRegistry;
         use std::fs::{read_dir, read_to_string};
 
-        #[cfg(feature = "gpu-proofs")]
-        let registry = PrimitiveRegistry::with_cpu_flip_reference();
-        #[cfg(not(feature = "gpu-proofs"))]
         let registry = PrimitiveRegistry::with_builtin();
         let mut violations: Vec<String> = Vec::new();
         manifold_nodes::testkit::source_roots::verify_wgsl_roots().expect("WGSL crate inventory");
@@ -336,10 +333,7 @@ use manifold_node_engine::freeze::classify::FusionKind;
             let Some(type_id) = extract_primitive_type_id(&source) else {
                 continue;
             };
-            if type_id.starts_with("node.__")
-                || (!cfg!(feature = "gpu-proofs")
-                    && type_id == manifold_core::liquid_domain::FLIP_DOMAIN_TYPE_ID)
-            {
+            if type_id.starts_with("node.__") {
                 continue;
             }
             let Some(run_start) = source.find("fn run(&mut self") else {

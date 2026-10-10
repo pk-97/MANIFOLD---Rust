@@ -60,18 +60,6 @@ UI_PROJECTION_PATHS = (
 UI_PAINT_DIR = "crates/manifold-ui-paint/"
 UI_PAINT_FILTERS = ["clip_content_gpu::tests::gpu::", "ui_renderer::tests::", "contracts::"]
 PROOFS_DIR = "crates/manifold-nodes/tests/gpu_proofs/"
-CPU_FLIP_FIXTURES_DIR = "crates/manifold-nodes/tests/fixtures/cpu-flip/"
-CPU_FLIP_REFERENCE_FILTERS = [
-    "liquid_conformance::",
-    "water_basin::",
-    "fluid_surface_perf::",
-    "contracts::node_graph::catalog_tests::whitewater_scene::",
-    "primitives::gpu_flip_preset::",
-    "load::expand::acceleration::",
-    "runtime::physics_carry::",
-    "runtime::physics_sampling::",
-    "runtime::physics_impulses::tests::coupled_playback_tests::",
-]
 
 # Landing warning budget for the scoped (non-glb) GPU step, seconds of test time.
 LANDING_BUDGET_S = 360
@@ -418,7 +406,6 @@ for _engine_path in (
     ]
 del _engine_path
 
-LIB_PROOF_ROWS[RENDERER_SRC + "testkit/reference_fixtures.rs"] = CPU_FLIP_REFERENCE_FILTERS
 for _pressure_fixture in ("dambreak_pressure_problems.bin.zst", "deep_pool_pressure_problems.bin.zst",
                           "deep_pool_density_problems.bin.zst", "gpu_flip_pressure_golden.txt"):
     LIB_PROOF_ROWS["crates/manifold-nodes-water/tests/fixtures/" + _pressure_fixture] = [

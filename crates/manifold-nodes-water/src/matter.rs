@@ -5,7 +5,7 @@
 //! GPU liquid's: `liquid`.
 
 use manifold_node_engine::channel_names::well_known;
-use crate::fluid::TICK;
+use crate::clock::TICK;
 use crate::liquid::lattice::LiquidLattice;
 use manifold_node_engine::ports::{ChannelElementType, ChannelSpec, KnownItem};
 
@@ -462,7 +462,7 @@ mod tests {
     /// round-trip exactly in f32 for every resolution and substep count.
     #[test]
     fn matter_momentum_unit_round_trips() {
-        let tick = crate::fluid::TICK;
+        let tick = crate::clock::TICK;
         assert_eq!(momentum_unit(0.0625, tick / 34.0), 128.0);
         assert_eq!(momentum_unit(1.0, 1.0 / 64.0), 64.0);
         assert!(momentum_unit_fits(128.0, 0.0625, (tick / 34.0) as f32));

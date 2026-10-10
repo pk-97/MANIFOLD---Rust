@@ -33,7 +33,7 @@ from pathlib import Path
 
 from gate_policy import (
     RENDERER_SRC, ENGINE_SRC, WATER_SRC, CONTRACT_TESTS_DIR, UI_PAINT_DIR, UI_PAINT_FILTERS,
-    PROOFS_DIR, CPU_FLIP_FIXTURES_DIR, CPU_FLIP_REFERENCE_FILTERS, LANDING_BUDGET_S,
+    PROOFS_DIR, LANDING_BUDGET_S,
     SMOKE_FILTERS, RUNTIME_FILTERS, BROAD_FILTERS, SLOW_THRESHOLD_S, TIMES_PATH,
     GLB_TESTS, SHARED_WGSL_USERS, REPORTER_SKIPS, LIQUID_FORCE_FILTERS,
     LIQUID_DOMAIN_FILTERS, MATTER_DOMAIN_FILTERS, NARROW_ROWS, EXPLICIT_ROWS,
@@ -142,7 +142,7 @@ def is_gpu_path(path, workspace=None):
         return True
     if "shaders/" in path or "gpu::gpu_encoder" in path:
         return True
-    if path.startswith((PRESET_RUNTIME_DIR, CPU_FLIP_FIXTURES_DIR)) or path in LIB_PROOF_ROWS:
+    if path.startswith(PRESET_RUNTIME_DIR) or path in LIB_PROOF_ROWS:
         return True
     return "tests/gpu_proofs/" in path or is_gltf_path(path)
 
@@ -573,9 +573,6 @@ def plan_for_paths(paths, repo, shader_users=None, base="origin/main", workspace
                         prefix = proof_module_prefix(path, repo, root)
                         plan.filters.add(prefix.split("::")[0] + "::")
                 continue
-        if path.startswith(CPU_FLIP_FIXTURES_DIR):
-            plan.filters.update(CPU_FLIP_REFERENCE_FILTERS)
-            continue
         if path.startswith(SOURCE_ROOTS) and path.endswith(".rs"):
             plan.filters.update(path_attr_filters(path, repo) or module_filters(path))
             continue

@@ -6,8 +6,6 @@ use manifold_node_engine::exec::effect_node::EffectNodeContext;
 use manifold_node_engine::scene::fluid_domain::FluidDomainLayout;
 #[cfg(test)]
 use manifold_node_engine::scene::fluid_domain::domain_layout;
-#[cfg(test)]
-use crate::fluid::FluidDomainNative;
 use manifold_node_engine::scene::transform::Transform;
 
 /// Nodes added outside the authored box on every side (taichi `padding = 3`).
@@ -277,6 +275,20 @@ mod tests {
         }
     }
 
+    /// The native engine's padded solid lattice: 1.5 cells outside each wall,
+    /// three extra cells per axis, one extra node past them.
+    fn native_solid_lattice(layout: &FluidDomainLayout) -> (Transform, [u32; 3]) {
+        let origin = layout.min.map(|value| value - (1.5 * layout.cell_size) as f32);
+        let size: [f32; 3] =
+            std::array::from_fn(|axis| (f64::from(layout.cells[axis] + 3) * layout.cell_size) as f32);
+        let bounds = Transform {
+            pos: std::array::from_fn(|axis| origin[axis] + size[axis] * 0.5),
+            scale: size,
+            ..Transform::default()
+        };
+        (bounds, layout.cells.map(|cells| cells + 4))
+    }
+
     #[test]
     fn surface_lattice_matches_native_engine_nodes_and_crossings() {
         // Independent native formula: config adds 3 cells, native_origin
@@ -285,7 +297,7 @@ mod tests {
         for (size, resolution) in [(4.0, 64), (1.0, 8), (6.0, 32)] {
             let layout = domain_layout(None, size, resolution).unwrap();
             let mesh = LiquidLattice::from_layout(&layout).surface();
-            let (native_bounds, native_nodes) = layout.solid_lattice();
+            let (native_bounds, native_nodes) = native_solid_lattice(&layout);
             assert_eq!(mesh.nodes(), native_nodes);
             assert_eq!(mesh.bounds(), native_bounds);
             assert_eq!(mesh.nodes(), [resolution + 4; 3]);

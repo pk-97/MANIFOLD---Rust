@@ -17,15 +17,13 @@ use manifold_node_engine::runtime::preset_context::ProjectTempo;
 use manifold_core::audio_mod::HopValue;
 use manifold_core::effects::PresetInstance;
 use manifold_foundation::ParamId;
-use manifold_core::liquid_domain::{FLIP_DOMAIN_TYPE_ID, GPU_FLIP_DOMAIN_TYPE_ID, MATTER_DOMAIN_TYPE_ID};
+use manifold_core::liquid_domain::{GPU_FLIP_DOMAIN_TYPE_ID, MATTER_DOMAIN_TYPE_ID};
 use manifold_core::tempo::TempoMapConverter;
 
 #[cfg(test)]
 mod input_tests;
 
 
-#[cfg(all(test, feature = "gpu-proofs"))]
-mod drain_tests;
 
 manifold_core::testkit_visible! {
 /// Observe retained inputs under the native authored-sample policy.
@@ -53,8 +51,6 @@ fn setup_input(kind: &str, port: &str) -> bool {
     }
     match kind {
         "node.rigid_body" => matches!(port, "release_count" | "source"),
-        #[cfg(feature = "gpu-proofs")]
-        FLIP_DOMAIN_TYPE_ID => port == "domain",
         "node.fluid_role_source" => !matches!(
             port,
             "transform"
@@ -255,7 +251,6 @@ pub(crate) fn physics_sample_steps(
 
     let replays_history = |type_id: &str| {
         type_id == "node.physics_world" || gpu_liquid(type_id)
-            || (cfg!(feature = "gpu-proofs") && type_id == FLIP_DOMAIN_TYPE_ID)
     };
     // A GPU liquid replays its force field, roles and paired world at each
     // tick's start; its paired world's scene is captured for it there.
@@ -303,7 +298,7 @@ pub(crate) fn physics_sample_steps(
                 | "node.value"
                 | "node.math"
                 | "node.affine_scalar"
-        ) || (cfg!(feature = "gpu-proofs") && type_id == FLIP_DOMAIN_TYPE_ID) || node.node.is_pure();
+        ) || node.node.is_pure();
         // A GPU liquid's sample run only records its field; it never encodes.
         if gpu_liquid(type_id) {
             continue;
@@ -394,8 +389,6 @@ impl super::WaterRuntime<'_> {
     }
 
     pub(crate) fn sample_physics_history(&mut self, current: FrameTime) {
-        #[cfg(feature = "gpu-proofs")]
-        self.observe_physics_source_assets();
         let bindings = self
             .effect_nodes
             .first()

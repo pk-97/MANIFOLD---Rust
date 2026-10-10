@@ -14,7 +14,7 @@ use manifold_fluids::{
 };
 use manifold_gpu::{FrameClock, GpuBuffer, GpuDevice};
 
-use crate::fluid::{TICK, whitewater_fade};
+use crate::clock::{TICK, whitewater_fade};
 use manifold_node_engine::particles::FluidParticle;
 use crate::liquid::grid::face_len;
 

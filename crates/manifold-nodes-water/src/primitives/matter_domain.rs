@@ -1,5 +1,5 @@
 //! `node.matter_domain` — the scene-facing CPU bridge of a matter domain
-//! (`docs/GPU_MPM_SOLVER_DESIGN.md` D17): it speaks `node.fluid_surface`'s
+//! (`docs/GPU_MPM_SOLVER_DESIGN.md` D17): it speaks the shared liquid
 //! scene contract (names, types, meanings) and turns it into the lattice,
 //! fill boxes, the fixed-tick clock (D8) and the per-tick substep count and
 //! material dials (D3, D4) the matter atoms read as wires. P1 carries the
@@ -19,7 +19,8 @@ use manifold_physics::FieldValue;
 
 use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
 use manifold_node_engine::scene::fluid_domain::{FluidDomainLayout, domain_layout};
-use crate::fluid::{CoupledRigidFrame, CoupledRigidInputs, TICK};
+use crate::clock::TICK;
+use crate::rigid_coupling::{CoupledRigidFrame, CoupledRigidInputs};
 use manifold_node_engine::scene::fluid_domain::MAX_FLUID_ROLES;
 use crate::fluid_role::FluidRole;
 use crate::liquid::bodies::{BodiesStatus, LiquidBodies, LiquidBody, LiquidShape};
@@ -497,7 +498,7 @@ const OUTPUTS: [&str; 55] = [
     "interval_duration",
     "target_time",
     "step_cap_hit"];
-/// Wired role ports, in slot order (node.fluid_surface's names).
+/// Wired role ports, in slot order (the shared liquid role names).
 const ROLE_PORTS: [&str; MAX_FLUID_ROLES] = [
     "role_0", "role_1", "role_2", "role_3", "role_4", "role_5", "role_6", "role_7", "role_8",
     "role_9", "role_10", "role_11", "role_12", "role_13", "role_14", "role_15", "role_16", "role_17",

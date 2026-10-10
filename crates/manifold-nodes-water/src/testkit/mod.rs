@@ -1,8 +1,5 @@
 //! Water-specific graph fixtures and proof helpers.
 
-#[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
-pub mod physics_history;
-
 #[cfg(test)]
 pub(crate) mod physics_fixtures;
 

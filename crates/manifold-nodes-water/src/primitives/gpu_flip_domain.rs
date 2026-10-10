@@ -1,6 +1,6 @@
 //! `node.gpu_flip_domain` — the scene-facing CPU bridge of a GPU FLIP liquid
 //! (`docs/LIQUID_SOLVER_SEAM_DESIGN.md` P7a, `docs/GPU_FLIP_PRESSURE_SOLVE.md`):
-//! it speaks `node.fluid_surface`'s scene contract (names, types, meanings)
+//! it speaks the shared liquid scene contract (names, types, meanings)
 //! and turns it into the fixed-tick clock, the fill's sites, gravity, the
 //! Collider roles as body rows, shapes and a distance atlas, and the padded
 //! authored lattice descriptor. Separate mesh_min/mesh_nodes outputs carry the native
@@ -25,7 +25,7 @@ use super::liquid_fill::{SITES_PER_CELL, filled_sites, site_range};
 use super::matter_domain::closed_faces;
 use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
 use manifold_node_engine::scene::fluid_domain::{FluidDomainLayout, domain_layout};
-use crate::fluid::{CoupledRigidFrame, CoupledRigidInputs};
+use crate::rigid_coupling::{CoupledRigidFrame, CoupledRigidInputs};
 use manifold_node_engine::scene::fluid_domain::MAX_FLUID_ROLES;
 use crate::fluid_role::FluidRole;
 use crate::liquid::bodies::{BodiesStatus, LiquidBodies, LiquidBody, LiquidShape};

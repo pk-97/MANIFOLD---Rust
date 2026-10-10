@@ -11,7 +11,7 @@ use std::sync::Arc;
 use manifold_physics::coupled_motion::{SupportPoint, MAX_SUPPORT_POINTS};
 
 use manifold_node_engine::channel_names::well_known;
-use crate::fluid::TICK;
+use crate::clock::TICK;
 use crate::liquid::clock::{ClockFrame, LiquidClock};
 use crate::liquid::tick_samples::TickSamples;
 use manifold_node_engine::scene::fluid_domain::MAX_FLUID_ROLES;

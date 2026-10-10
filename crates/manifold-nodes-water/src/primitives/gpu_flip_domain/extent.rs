@@ -9,7 +9,7 @@ use crate::liquid::fields::FieldFrame;
 use crate::liquid::fields::STAGING_SLOTS as FIELD_STAGING_SLOTS;
 use crate::liquid::coupling::REACTION_FLOATS;
 use crate::primitives::gpu_flip_domain::gpu_flip_geometry;
-use crate::fluid::TICK;
+use crate::clock::TICK;
 use manifold_node_engine::exec::extent::{AtomExtent, ExtentRule, Verdict};
 
 fn gpu_flip_domain(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {

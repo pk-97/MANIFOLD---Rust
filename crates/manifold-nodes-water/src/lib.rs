@@ -2,12 +2,9 @@
 //! Owns native simulation nodes and their graph runtime extensions.
 //! Depends on the engine and native solvers, never other node families or UI.
 
-pub mod fluid;
+pub mod clock;
+pub mod rigid_coupling;
 mod graph_install;
-#[cfg(feature = "gpu-proofs")]
-pub(crate) mod fluid_cache;
-#[cfg(feature = "gpu-proofs")]
-pub mod fluid_mesh_upload;
 pub mod fluid_particles;
 pub mod fluid_role;
 pub mod liquid;

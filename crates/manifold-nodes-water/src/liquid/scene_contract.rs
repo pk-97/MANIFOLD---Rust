@@ -3,7 +3,7 @@
 //! when `LIQUID_SCENE_OWED` names the phase that closes it; the list only
 //! shrinks, so an owed item that is already met fails too.
 
-use manifold_core::liquid_domain::{FLIP_DOMAIN_TYPE_ID, LIQUID_DOMAIN_TYPE_IDS, liquid_dial_params};
+use manifold_core::liquid_domain::{LIQUID_DOMAIN_TYPE_IDS, liquid_dial_params};
 use manifold_physics::input::EventStamp;
 use manifold_physics::{FieldValue, Seconds};
 
@@ -81,8 +81,9 @@ fn liquid_domain_scene_contract() {
     let registry = PrimitiveRegistry::with_builtin();
     let mut failures = Vec::new();
     for &type_id in LIQUID_DOMAIN_TYPE_IDS {
-        if type_id == FLIP_DOMAIN_TYPE_ID {
-            assert!(!registry.contains(type_id), "CPU FLIP must remain reference-only");
+        // A retired domain type stays a liquid domain for saved graphs, but
+        // has no constructor and so no scene contract.
+        if !registry.contains(type_id) {
             continue;
         }
         let mut node = registry.construct(type_id).unwrap_or_else(|| panic!("{type_id} is not registered"));
@@ -98,7 +99,7 @@ fn liquid_domain_scene_contract() {
         }
     }
     for (owner, item, phase) in LIQUID_SCENE_OWED {
-        assert!(LIQUID_DOMAIN_TYPE_IDS.contains(owner) && *owner != FLIP_DOMAIN_TYPE_ID, "{owner} owes {item:?} to {phase} but is not a product liquid domain");
+        assert!(LIQUID_DOMAIN_TYPE_IDS.contains(owner) && registry.contains(owner), "{owner} owes {item:?} to {phase} but is not a product liquid domain");
     }
     assert!(failures.is_empty(), "liquid scene contract:\n{}", failures.join("\n"));
 }

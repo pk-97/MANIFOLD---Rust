@@ -57,12 +57,9 @@ mod physics_sampling;
 
 mod gpu_flip_surface;
 
-#[cfg(feature = "gpu-proofs")]
-mod physics_sources;
 
 mod physics_host_modulation;
 
-mod physics_carry;
 
 mod expand_shatter;
 

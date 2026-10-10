@@ -39,8 +39,6 @@ mod render_scene_material_upgrade;
 mod render_legacy_parity;
 mod render_scene_map_set;
 mod physics_boxes;
-mod physics_takes;
-mod fluid_array_growth;
 mod render_scene_ao_mask;
 mod render_scene_shadow_cache;
 mod rt_object_motion_shadow;
@@ -61,8 +59,6 @@ mod rt_gesture_response;
 mod rt_dynamic_geometry;
 mod rt_dynamic_current_frame;
 mod rt_dynamic_refit;
-#[cfg(feature = "fluid-perf-proofs")]
-mod fluid_surface_perf;
 #[cfg(feature = "water-race-probes")]
 mod gpu_flip_frame_perf;
 #[cfg(feature = "matter-perf-proofs")]

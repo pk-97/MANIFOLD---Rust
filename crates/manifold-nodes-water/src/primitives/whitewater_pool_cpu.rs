@@ -9,7 +9,6 @@
 // The GPU proofs (`whitewater_pool_tests`, `whitewater_step_tests`, feature
 // gpu-proofs) call every item here; a default test build compiles only the
 // near-solid proof.
-#![cfg_attr(not(feature = "gpu-proofs"), allow(dead_code))]
 
 use super::whitewater_particle_cpu::{Box3, face_index};
 use crate::whitewater::{WHITEWATER_ID_LIMIT, WhitewaterParticle};

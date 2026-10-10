@@ -294,8 +294,6 @@ fn extent_rule_inventory_preserves_the_rule_table() {
         "node.push_out_of_solid",
         "node.mix_arrays",
         manifold_core::liquid_domain::MATTER_DOMAIN_TYPE_ID,
-        #[cfg(feature = "gpu-proofs")]
-        manifold_core::liquid_domain::FLIP_DOMAIN_TYPE_ID,
         "node.matter_fill",
         "node.matter_state",
         "node.zero_array",

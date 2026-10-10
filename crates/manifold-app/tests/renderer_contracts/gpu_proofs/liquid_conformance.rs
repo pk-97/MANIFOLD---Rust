@@ -20,7 +20,7 @@ use manifold_core::preset_def::PresetKind;
 use manifold_gpu::{FrameClock, GpuDevice, GpuEvent, GpuTextureFormat, RetireMark, RetireQueue};
 use manifold_node_engine::runtime::frame_status::{FrameRenderFailure, FrameRenderStatus};
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
-use manifold_nodes_water::fluid::TICK;
+use manifold_nodes_water::clock::TICK;
 use manifold_node_engine::particles::FluidParticle;
 use manifold_nodes_water::liquid::bodies::LiquidBody;
 use manifold_nodes_water::liquid::coupling::HANDOVER_BOUND;
@@ -147,7 +147,7 @@ impl EffectNode for LiquidProbe {
 }
 
 fn registry() -> PrimitiveRegistry {
-    let mut registry = PrimitiveRegistry::with_cpu_flip_reference();
+    let mut registry = PrimitiveRegistry::with_builtin();
     registry.register(PROBE_TYPE, || Box::new(LiquidProbe::new()));
     registry
 }

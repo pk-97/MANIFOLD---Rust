@@ -22,5 +22,4 @@ pub const ASSETS_SCENE_MODIFIER_PRESETS_UNIFORMFORCE_JSON: &str = include_str!("
 pub const ASSETS_SCENE_MODIFIER_PRESETS_VORTEXFORCE_JSON: &str = include_str!("../../assets/scene-modifier-presets/VortexForce.json");
 pub const ASSETS_SCENE_MODIFIER_PRESETS_VORTEXFRAGMENTS_JSON: &str = include_str!("../../assets/scene-modifier-presets/VortexFragments.json");
 pub const ASSETS_SCENE_MODIFIER_PRESETS_WAVESECHOES_JSON: &str = include_str!("../../assets/scene-modifier-presets/WavesEchoes.json");
-pub const TESTS_FIXTURES_CPU_FLIP_WATERBASIN_JSON: &str = include_str!("../../tests/fixtures/cpu-flip/WaterBasin.json");
 pub const TESTS_FIXTURES_SCENE_MODIFIERS_NESTED_MULTIMATERIAL_V2_JSON: &str = include_str!("../../tests/fixtures/scene-modifiers/nested_multimaterial_v2.json");

@@ -16,7 +16,7 @@ use manifold_node_engine::testkit::array_harness::{Harness, read};
 use manifold_nodes_water::testkit::whitewater_scene::{whitewater_render_def, with_tick_probe};
 use manifold_nodes_water::primitives::whitewater_step::{Step, StepFrame, StepInputs, StepShape};
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
-use manifold_nodes_water::fluid::TICK;
+use manifold_nodes_water::clock::TICK;
 use manifold_node_engine::particles::FluidParticle;
 use manifold_nodes_water::liquid::grid::face_len;
 use manifold_node_engine::scene::transform::Transform;
