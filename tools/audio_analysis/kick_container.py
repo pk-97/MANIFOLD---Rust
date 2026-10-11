@@ -1,6 +1,6 @@
 """The kick model container: named little-endian arrays (docs/KICK_REALTIME_DESIGN.md section 2).
 
-Rust reader: crates/manifold-audio/src/kick/container.rs. Both sides must agree byte for byte.
+Rust reader: crates/manifold-audio/src/trained/container.rs. Both sides must agree byte for byte.
 """
 from __future__ import annotations
 

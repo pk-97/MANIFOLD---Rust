@@ -1798,16 +1798,66 @@ pub struct StreamingSendAnalyzer {
     /// contrast), and is clamped to `db_min` so it can't black out content the
     /// detector still sees. `FLOOR_DB_OFF` resolves to `db_min` (no cut).
     floor_db: f32,
-    /// Kick fires from the trained detector (docs/KICK_REALTIME_DESIGN.md), as input sample
-    /// counts, waiting for the hop that covers them.
-    kick_fires: [u64; KICK_FIRE_QUEUE],
-    kick_fire_len: usize,
-    kick_fires_dropped: u64,
+    /// Kick fires from the trained detector (docs/KICK_REALTIME_DESIGN.md).
+    kick_fires: FireQueue,
+    /// Snare fires from the trained snare detector, stamped at their emission.
+    snare_fires: FireQueue,
 }
 
-/// Pending kick fires an analyzer holds. Fires are at least 60 ms apart and normally land
-/// within a frame, so this only fills if nothing pushes audio for seconds.
-const KICK_FIRE_QUEUE: usize = 32;
+/// Pending fires per detector an analyzer holds. Fires are at least 60 ms apart and normally
+/// land within a frame, so this only fills if nothing pushes audio for seconds.
+const FIRE_QUEUE: usize = 32;
+
+/// One trained detector's fires, as input sample counts, waiting for the hop that covers them.
+struct FireQueue {
+    name: &'static str,
+    fires: [u64; FIRE_QUEUE],
+    len: usize,
+    dropped: u64,
+}
+
+impl FireQueue {
+    const fn new(name: &'static str) -> Self {
+        Self { name, fires: [0; FIRE_QUEUE], len: 0, dropped: 0 }
+    }
+
+    fn queue(&mut self, fires: impl IntoIterator<Item = u64>) {
+        for sample in fires {
+            if self.len == FIRE_QUEUE {
+                self.dropped += 1;
+                if self.dropped.is_power_of_two() {
+                    log::warn!("[Audio] {} fire queue full: {} fires dropped", self.name, self.dropped);
+                }
+                continue;
+            }
+            self.fires[self.len] = sample;
+            self.len += 1;
+        }
+    }
+
+    /// Removes every fire at or before `sample_count`; true when any was removed.
+    fn take_through(&mut self, sample_count: u64) -> bool {
+        let before = self.len;
+        let mut kept = 0;
+        for i in 0..before {
+            if self.fires[i] > sample_count {
+                self.fires[kept] = self.fires[i];
+                kept += 1;
+            }
+        }
+        self.len = kept;
+        kept < before
+    }
+
+    /// The per-hop trigger value: 1.0 on a hop a fire reaches, decaying after.
+    fn trigger(&mut self, sample_count: u64, value: &mut f32) {
+        if self.take_through(sample_count) {
+            *value = 1.0;
+        } else {
+            *value *= ONSET_DECAY;
+        }
+    }
+}
 
 impl StreamingSendAnalyzer {
     /// Build for `sample_rate` (the rate samples are pushed at — the mixer's
@@ -1850,9 +1900,8 @@ impl StreamingSendAnalyzer {
             scope_scalars: Vec::new(),
             pitch_tracking: false,
             floor_db: manifold_core::audio_setup::FLOOR_DB_OFF,
-            kick_fires: [0; KICK_FIRE_QUEUE],
-            kick_fire_len: 0,
-            kick_fires_dropped: 0,
+            kick_fires: FireQueue::new("kick"),
+            snare_fires: FireQueue::new("snare"),
         }
     }
 
@@ -1947,17 +1996,20 @@ impl StreamingSendAnalyzer {
     /// it, or the next hop analysed when the fire arrived after its hop. A full queue drops
     /// the fire, counted and logged.
     pub fn queue_kick_fires(&mut self, fires: impl IntoIterator<Item = u64>) {
-        for sample in fires {
-            if self.kick_fire_len == KICK_FIRE_QUEUE {
-                self.kick_fires_dropped += 1;
-                if self.kick_fires_dropped.is_power_of_two() {
-                    log::warn!("[Audio] kick fire queue full: {} fires dropped", self.kick_fires_dropped);
-                }
-                continue;
-            }
-            self.kick_fires[self.kick_fire_len] = sample;
-            self.kick_fire_len += 1;
-        }
+        self.kick_fires.queue(fires);
+    }
+
+    /// Queue snare fires; they land on the Mid band's `snare` value exactly as kick fires
+    /// land on the Low band's `kick` (see [`Self::queue_kick_fires`]).
+    pub fn queue_snare_fires(&mut self, fires: impl IntoIterator<Item = u64>) {
+        self.snare_fires.queue(fires);
+    }
+
+    /// Routes trained-detector events to their queues: kicks to the Low band, snares to Mid.
+    pub fn queue_detector_events(&mut self, events: &[crate::detectors::DetectorEvent]) {
+        use crate::detectors::EventKind;
+        self.queue_kick_fires(events.iter().filter(|e| e.kind == EventKind::Kick).map(|e| e.sample));
+        self.queue_snare_fires(events.iter().filter(|e| e.kind == EventKind::Snare).map(|e| e.sample));
     }
 
     /// Push freshly produced mono samples and run every completed VQT hop,
@@ -2003,7 +2055,7 @@ impl StreamingSendAnalyzer {
             scope_cols,
             scope_scalars,
             kick_fires,
-            kick_fire_len,
+            snare_fires,
             ..
         } = self;
         let (n_fft, hop, nb) = (*n_fft, *hop, *num_bins);
@@ -2073,22 +2125,9 @@ impl StreamingSendAnalyzer {
                 }
             }
             reduce_send(state, nb, *low_bin, *mid_bin, db_min, db_max);
-            // Kick (Low band): 1.0 on the hop a queued fire reaches, decaying after.
-            let before = *kick_fire_len;
-            let mut kept = 0;
-            for i in 0..before {
-                if kick_fires[i] > *sample_count {
-                    kick_fires[kept] = kick_fires[i];
-                    kept += 1;
-                }
-            }
-            *kick_fire_len = kept;
-            let low = &mut state.features.bands[1];
-            if kept < before {
-                low.kick = 1.0;
-            } else {
-                low.kick *= ONSET_DECAY;
-            }
+            // Kick (Low band) and snare (Mid band): 1.0 on the hop a queued fire reaches, decaying after.
+            kick_fires.trigger(*sample_count, &mut state.features.bands[1].kick);
+            snare_fires.trigger(*sample_count, &mut state.features.bands[2].snare);
             // Same guard `reduce_send` used internally for flux/transients
             // (captured before the has_prev update just below) — the D5
             // tracker's warm-up gate (D4: "so the zero-padded fade-in never
@@ -3234,6 +3273,20 @@ mod tests {
         a.push_with_hops(&vec![0.0; hop as usize], |h, _| kicks.push((h.end_sample, h.features.bands[1].kick)));
         assert_eq!(kicks, [(hop * 7, 1.0)]);
         assert!(a.latest().bands.iter().enumerate().all(|(b, f)| b == 1 || f.kick == 0.0));
+    }
+
+    #[test]
+    fn queued_snare_fires_land_on_the_mid_band_only() {
+        let mut a = StreamingSendAnalyzer::new(SR, 250.0, 2000.0);
+        let hop = a.hop() as u64;
+        let mut snares = Vec::new();
+        a.queue_snare_fires([hop * 3 + 10]);
+        a.push_with_hops(&vec![0.0; hop as usize * 6], |h, _| snares.push((h.end_sample, h.features.bands[2].snare)));
+        assert_eq!(snares[2], (hop * 3, 0.0));
+        assert_eq!(snares[3], (hop * 4, 1.0));
+        assert_eq!(snares[4], (hop * 5, ONSET_DECAY));
+        assert!(a.latest().bands.iter().all(|f| f.kick == 0.0));
+        assert!(a.latest().bands.iter().enumerate().all(|(b, f)| b == 2 || f.snare == 0.0));
     }
 
     // ── Salience (D1) — synthetic columns, no FFT ────────────────────────

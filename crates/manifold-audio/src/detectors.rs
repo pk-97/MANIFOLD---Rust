@@ -1,8 +1,8 @@
-//! Trained event detectors (kick now; snare, clap, hats later) behind one interface, and the
+//! Trained event detectors (kick and snare now; clap, hats later) behind one interface, and the
 //! worker thread that runs one analysed send's detectors off the content thread
 //! (docs/KICK_REALTIME_DESIGN.md section 1b). Offline paths run the same detectors inline.
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
@@ -10,11 +10,29 @@ use std::time::{Duration, Instant};
 use ringbuf::traits::{Consumer, Observer, Producer, Split};
 use ringbuf::{HeapCons, HeapProd, HeapRb};
 
-use crate::kick::KickDetector;
+use crate::trained::container::{Container, ContainerError};
+use crate::trained::{DetectorError, SpecError, TrainedDetector};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EventKind {
     Kick,
+    Snare,
+}
+
+impl EventKind {
+    pub const ALL: [EventKind; 2] = [Self::Kick, Self::Snare];
+
+    /// A model file's `family` text (D12).
+    pub fn parse(family: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|k| k.name() == family)
+    }
+
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Kick => "kick",
+            Self::Snare => "snare",
+        }
+    }
 }
 
 /// One detected event, stamped with the input sample count at which it was decided.
@@ -33,30 +51,67 @@ pub trait EventDetector: Send {
     fn max_events(&self, samples: usize) -> usize;
 }
 
-impl EventDetector for KickDetector {
-    fn push(&mut self, samples: &[f32], events: &mut Vec<DetectorEvent>) {
-        self.push_with(samples, |f| events.push(DetectorEvent { kind: EventKind::Kick, sample: f.sample }));
-    }
+/// The shipped models, one per family, built into the app (docs/DETECTOR_RUNTIME_DESIGN.md section 5.2). Each
+/// file's `family` must equal its slot; `tests/fixtures/detectors/<family>/model.mkick` is the same bytes.
+pub(crate) const EMBEDDED: [(EventKind, &[u8]); 2] = [
+    (EventKind::Kick, include_bytes!("../assets/kick_model.mkick")),
+    (EventKind::Snare, include_bytes!("../assets/snare_model.mkick")),
+];
 
-    fn max_events(&self, samples: usize) -> usize {
-        self.max_fires(samples)
+/// Each embedded file parsed once per process.
+static MODELS: [OnceLock<Result<Container, ContainerError>>; 2] = [OnceLock::new(), OnceLock::new()];
+/// Per family: a refusal or a load was logged.
+static LOGGED: [AtomicBool; 2] = [AtomicBool::new(false), AtomicBool::new(false)];
+
+/// `kind`'s index in [`EMBEDDED`]. Exhaustive, so a new kind does not compile until it has a slot.
+const fn slot(kind: EventKind) -> usize {
+    match kind {
+        EventKind::Kick => 0,
+        EventKind::Snare => 1,
     }
 }
 
-static KICK_REFUSED: AtomicBool = AtomicBool::new(false);
+/// The detector for `kind` on mono input at `rate`, from its embedded model. A refused model gives `Err`; the
+/// family is then not built and its feature stays 0 (D8).
+pub fn build_detector(kind: EventKind, rate: u32) -> Result<TrainedDetector, DetectorError> {
+    let i = slot(kind);
+    let model = MODELS[i].get_or_init(|| Container::parse(EMBEDDED[i].1)).as_ref().map_err(|e| DetectorError::from(e.clone()))?;
+    let det = TrainedDetector::from_container(model, rate)?;
+    if det.kind() != kind {
+        return Err(DetectorError::Spec(SpecError::Mismatch {
+            what: "family",
+            detail: format!("the {} slot holds a {} model", kind.name(), det.kind().name()),
+        }));
+    }
+    Ok(det)
+}
 
-/// The kick detector for mono input at `rate`, or `None` (logged once per process) when the
-/// embedded model is refused. Without it the kick feature stays 0.
-pub fn kick_detector(rate: u32) -> Option<KickDetector> {
-    match KickDetector::new(rate) {
-        Ok(d) => Some(d),
-        Err(e) => {
-            if !KICK_REFUSED.swap(true, Ordering::Relaxed) {
-                log::error!("[Audio] kick detector disabled: {e}");
-            }
-            None
+/// [`build_detector`], or `None` with the refusal logged once per process. The first load logs the model and
+/// its decision lag once.
+pub fn detector(kind: EventKind, rate: u32) -> Option<TrainedDetector> {
+    let built = build_detector(kind, rate);
+    if !LOGGED[slot(kind)].swap(true, Ordering::Relaxed) {
+        match &built {
+            Ok(d) => log::info!(
+                "[Audio] {} detector {}: decides {:.0} ms after emission",
+                kind.name(),
+                d.train_id(),
+                d.decision_lag_s() * 1e3
+            ),
+            Err(e) => log::error!("[Audio] {} detector disabled: {e}", kind.name()),
         }
     }
+    built.ok()
+}
+
+/// Every trained detector one analysed send runs, for mono input at `rate`: one per embedded model that loads.
+/// The live worker and the offline renderer both build theirs here.
+pub fn send_detectors(rate: u32) -> Vec<Box<dyn EventDetector>> {
+    EMBEDDED
+        .iter()
+        .filter_map(|(kind, _)| detector(*kind, rate))
+        .map(|d| Box::new(d) as Box<dyn EventDetector>)
+        .collect()
 }
 
 /// Input samples the worker's ring holds (about 2.7 s at 48 kHz).
@@ -112,13 +167,15 @@ impl DetectorWorker {
                     std::thread::park_timeout(Duration::from_millis(5));
                     continue;
                 }
-                scratch.clear();
+                // Each detector's events go out as soon as it has run, so a slow later detector (the
+                // snare's net) never holds an earlier one's fires (the kick's) past the content
+                // thread's wait.
                 for d in detectors.iter_mut() {
                     d.push(&buf[..n], &mut scratch);
-                }
-                for e in scratch.drain(..) {
-                    if event_prod.try_push(e).is_err() {
-                        worker.event_overflow.fetch_add(1, Ordering::Relaxed);
+                    for e in scratch.drain(..) {
+                        if event_prod.try_push(e).is_err() {
+                            worker.event_overflow.fetch_add(1, Ordering::Relaxed);
+                        }
                     }
                 }
                 worker.processed.fetch_add(n as u64, Ordering::Release);
@@ -262,6 +319,17 @@ mod tests {
 
         fn max_events(&self, samples: usize) -> usize {
             samples / self.every as usize + 1
+        }
+    }
+
+    #[test]
+    fn every_event_kind_has_an_embedded_model() {
+        assert_eq!(EventKind::ALL.len(), EMBEDDED.len());
+        for kind in EventKind::ALL {
+            assert_eq!(EMBEDDED[slot(kind)].0, kind);
+            let det = build_detector(kind, 48_000).unwrap_or_else(|e| panic!("{}: {e}", kind.name()));
+            assert_eq!(det.kind(), kind);
+            assert_eq!(EventKind::parse(kind.name()), Some(kind));
         }
     }
 

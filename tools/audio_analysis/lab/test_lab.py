@@ -286,36 +286,28 @@ def builder(x):
         built = _json.loads(_json.dumps(kick_labels.build(write=False)))
         self.assertEqual(built, _json.loads((GOAL / 'kick_labels.json').read_text()))
 
-    def test_kick_parts_match_release(self):
-        """The lab's kick finder and measures equal kick_release.features() byte for byte, and the finder equals the
-        kick goal records' candidates (one 44.1 kHz song, two 48 kHz)."""
-        # kick_release refuses net env it does not own; this process already read its own, so set it aside to
-        # import the release's feature function, then put everything back.
-        saved = dict(os.environ)
-        try:
-            for k in ('KICK_GOAL_NN_PAST_MS', 'KICK_GOAL_NN_PERC', 'KICK_GOAL_NN_FLAT', 'KICK_GOAL_NN_AHEAD_MS'):
-                os.environ.pop(k, None)
-            from tools.audio_analysis import kick_release
-        finally:
-            os.environ.clear()
-            os.environ.update(saved)
-        from tools.audio_analysis.eval.kick_goal_eval import GOAL, Goal
+    def test_kick_parts_on_audio_match_training(self):
+        """The release reference's kick finder and measures (components on the song's audio, as release.py runs them on
+        a clip) equal the cached ones every run trains on, byte for byte, and the finder equals the kick goal records'
+        candidates (one 44.1 kHz song, two 48 kHz)."""
+        from tools.audio_analysis.eval.kick_goal_eval import Goal
         from tools.audio_analysis.lab import components
         from tools.audio_analysis.lab.registry import mix
         songs = load()
         g = Goal(mode='v3')
-        templates = np.load(GOAL / 'templates_from_dev.npy')
         for t in ('bad_guy_128bpm', 'apricots_128bpm', 'tears_140bpm'):
             song = songs[t]
-            ref = kick_release.features(mix(song), templates, song.sample_rate)
+            x = mix(song)
+            ref = components.audio_candidates('kick', 'kick', x, song.sample_rate)
             c = components.candidates(song, 'kick', 'kick')
-            np.testing.assert_array_equal(c.cand, ref['cand_hop'], err_msg=t)
-            np.testing.assert_array_equal(c.avail, ref['avail_hop'], err_msg=t)
-            self.assertEqual(c.hop, ref['hop'], t)
+            np.testing.assert_array_equal(c.cand, ref.cand, err_msg=t)
+            np.testing.assert_array_equal(c.avail, ref.avail, err_msg=t)
+            self.assertEqual(c.hop, ref.hop, t)
             np.testing.assert_array_equal(c.cand, g.records[t]['candidates'], err_msg=t)
             np.testing.assert_array_equal(c.avail, g.records[t]['available'], err_msg=t)
             for m in ('f15', 'tail3', 'prof32', 'low16'):
-                np.testing.assert_array_equal(components.measure(song, 'kick', 'kick', m), ref[m], err_msg=f'{t} {m}')
+                np.testing.assert_array_equal(components.measure(song, 'kick', 'kick', m),
+                                              components.MEASURES[m](x, song.sample_rate, ref), err_msg=f'{t} {m}')
 
     def test_layers_shared_across_configs(self):
         """A model trained for one config is reused by another that trains the same model, and only by it: kick_net
@@ -417,7 +409,7 @@ def builder(x):
     def test_held_out_disjoint(self):
         songs = load()
         lab, _ = run.labels('snare')
-        for name in ('snare_base', 'snare_generated', 'snare_release'):
+        for name in ('snare_base', 'snare_generated', 'snare_v1'):
             cfg = config.load(name)
             grps, trainings, untrained = models.plan(cfg, lab, songs)
             models.check_disjoint(trainings)
@@ -572,8 +564,9 @@ def builder(x):
                 config.build('bad', bad)
 
     def test_stage_inputs_match_release(self):
-        """The kick stage's inputs are the shipped kick's (kick_release: self_features over prof32 and low16, level
-        f15 column 0, 8 s), from the lab's candidates and measures; without a level the level column is left out."""
+        """The kick stage's inputs are the shipped kick's (self_features over prof32 and low16, level f15 column 0, 8 s;
+        the v1 kick stage shape), from the lab's candidates and measures; without a level the level column is left
+        out."""
         from tools.audio_analysis.eval.kick_goal_eval import Goal
         from tools.audio_analysis.eval.kick_goal_selfsim import self_features
         from tools.audio_analysis.lab import components, stage
@@ -747,6 +740,296 @@ def builder(x):
         base, t8, t16 = (keys(config.load(c)) for c in ('kick_gen50_gated', 'kick_gen50_gated_t8', 'kick_gen50_gated_t16'))
         self.assertEqual(base['net'], t8['net'])
         self.assertEqual(len({base['trees'], t8['trees'], t16['trees']}), 3)
+
+
+REPO = Path(__file__).resolve().parents[3]
+RELEASE = Path(__file__).with_name('release.py')
+SET_NAMES = ('kick', 'snare', 'cover_kick', 'cover_snare')
+
+
+def run_release(*args):
+    """release.py in its own process, free of this process's net env (it pins the record's)."""
+    env = {k: v for k, v in os.environ.items() if not k.startswith('KICK_GOAL_NN_')}
+    r = __import__('subprocess').run([str(RELEASE), *args], capture_output=True, text=True, env=env)
+    if r.returncode:
+        raise AssertionError(f'release.py {" ".join(args)} failed:\n{r.stdout}\n{r.stderr}')
+    return r.stdout
+
+
+def exact(test, got, want, what):
+    """Max abs diff 0 and equal shapes: any nonzero difference fails."""
+    got, want = np.asarray(got), np.asarray(want)
+    test.assertEqual(got.shape, want.shape, what)
+    if got.dtype.kind in 'fiu' and got.size:
+        test.assertEqual(float(np.max(np.abs(got.astype(np.float64) - want.astype(np.float64)))), 0.0, what)
+    np.testing.assert_array_equal(got, want, err_msg=what)
+
+
+class ReleaseTests(unittest.TestCase):
+    """lab/release.py and the model file contract v2 (docs/DETECTOR_RUNTIME_DESIGN.md P1)."""
+
+    @classmethod
+    def setUpClass(cls):
+        from tools.audio_analysis.lab import release
+        cls.ids = {f: release.asset_train_id(f) for f in ('kick', 'snare')}
+
+    def test_shipped_sets_are_their_release(self):
+        """A fresh export of each shipped release equals its committed set and asset byte for byte."""
+        from tools.audio_analysis.lab import release
+        with tempfile.TemporaryDirectory() as d:
+            for family in ('kick', 'snare'):
+                run_release('export', self.ids[family], '--set', family, '--ship', '--out', d)
+                fresh = Path(d) / release.SETS / family
+                committed = REPO / release.SETS / family
+                self.assertEqual(sorted(p.name for p in fresh.iterdir()), sorted(p.name for p in committed.iterdir()))
+                for p in fresh.iterdir():
+                    self.assertEqual(p.read_bytes(), (committed / p.name).read_bytes(), f'{family} {p.name}')
+                asset = f'{family}_model.mkick'
+                self.assertEqual((Path(d) / release.ASSETS / asset).read_bytes(), (REPO / release.ASSETS / asset).read_bytes())
+
+    def test_contract_round_trip(self):
+        """A record's entries pass the checker, survive the container byte for byte and are the committed model; every
+        committed set's model passes and its clips name its train_id."""
+        from tools.audio_analysis import kick_container as kc
+        from tools.audio_analysis.lab import contract, release
+        rec = release.load(self.ids['kick'])
+        e = contract.entries(rec)
+        contract.check(e, release.parts())
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / 'model.mkick'
+            kc.write(path, e)
+            back = kc.read(path)
+            self.assertEqual(list(back), list(e))
+            for k, v in e.items():
+                self.assertEqual(back[k].dtype, np.asarray(v).dtype, k)
+                np.testing.assert_array_equal(back[k], v, err_msg=k)
+            contract.check(back, release.parts())
+            self.assertEqual(path.read_bytes(), (REPO / release.SETS / 'kick' / 'model.mkick').read_bytes())
+        # unit/ holds the Rust part fixtures, not release sets.
+        sets = sorted(p.name for p in (REPO / release.SETS).iterdir() if p.is_dir() and p.name != 'unit')
+        self.assertEqual(sets, sorted(SET_NAMES))
+        for name in SET_NAMES:
+            model = kc.read(REPO / release.SETS / name / 'model.mkick')
+            contract.check(model, release.parts())
+            clips = sorted((REPO / release.SETS / name).glob('clip_*.mkick'))
+            self.assertTrue(clips, name)
+            for c in clips:
+                self.assertEqual(bytes(kc.read(c)['train_id']), bytes(model['train_id']), c.name)
+
+    def test_contract_refuses_bad_entries(self):
+        """One mutated container per refusal in section 4, each refused under its own name."""
+        from tools.audio_analysis import kick_container as kc
+        from tools.audio_analysis.lab import contract, release
+        pts = release.parts()
+        base = {n: kc.read(REPO / release.SETS / n / 'model.mkick') for n in SET_NAMES}
+        text = kc.text
+
+        def without(e, *names):
+            return {k: v for k, v in e.items() if k not in names}
+
+        ck, cs, kick, snare = base['cover_kick'], base['cover_snare'], base['kick'], base['snare']
+        no_stage = dict({k: v for k, v in snare.items() if not k.startswith('stage.')}, stage=np.array(0, np.int32))
+        cases = [
+            ('contract', without(ck, 'contract')),
+            ('contract', dict(ck, contract=np.array(3, np.int32))),
+            ('contract', dict(ck, contract=np.array(2, np.int64))),
+            ('missing', without(ck, 'cutoff')),
+            ('missing', without(ck, 'trees.offsets')),
+            ('family', dict(ck, family=text('hat'))),
+            ('finder', dict(ck, finder=text('rise:6'))),
+            ('finder', dict(snare, finder=text('snare:loud'))),
+            ('rise-db', dict(snare, **{'cand.rise_db': np.array(6.0)})),
+            ('measure', dict(ck, **{'trees.measures': text('f15,tail3,prof32,fall16,res16')})),
+            ('measure', dict(ck, **{'res.window': np.array(400, np.int64)})),
+            ('measure', dict(ck, **{'stage.shape': text('prof32,glide3')})),
+            ('channel', dict(cs, **{'net.extra': text('perc')})),
+            ('combine', dict(ck, combine=text('max'))),
+            ('combine-models', dict(ck, combine=text('net'))),
+            ('models', dict(ck, models=text('trees,net'))),
+            ('f15-finder', dict(cs, **{'trees.measures': text('f15,prof32,fall16,low16')})),
+            ('width', dict(ck, **{'trees.widths': np.array([15, 3, 32, 16, 15], np.int64)})),
+            ('n-features', dict(ck, **{'trees.n_features': np.array(83, np.int64)})),
+            ('n-features', dict(ck, **{'stage.n_features': np.array(8, np.int64)})),
+            ('grid', dict(ck, rate=np.array(44100, np.int64))),
+            ('grid', dict(ck, **{'net.hop': np.array(512, np.int64)})),
+            ('grid', dict(kick, **{'base.sample_rate': np.array(44100, np.int64)})),
+            ('windows', dict(ck, **{'stage.windows_s': np.array([1.0, 2, 3, 4, 5])})),
+            ('windows', dict(ck, **{'stage.windows_s': np.zeros(0)})),
+            ('level-column', dict(ck, **{'stage.level': text('f15:15')})),
+            ('gate-cuts', without(ck, 'stage.cut_stage')),
+            ('gate-cuts', dict(kick, **{'stage.gate': np.array(0.0)})),
+            ('fitted', dict(kick, **{'stage.shape': text('prof32,low16,tmpl3')})),
+            ('unknown-entry', dict(kick, **{'fit.tmpl3.extra': np.zeros(1)})),
+            ('net-extra', dict(cs, **{'net.channels': np.array(2, np.int64)})),
+            ('net-count', dict(ck, **{'net.count': np.array(0, np.int64)})),
+            ('net-weights', dict(ck, **{'net.count': np.array(1, np.int64)})),
+            ('net-weights', without(ck, 'net.1.head.2.bias')),
+            ('net-shapes', dict(ck, **{'net.1.head.2.bias': np.zeros(2, np.float32)})),
+            ('unknown-entry', dict(ck, **{'extra.nope': np.zeros(1)})),
+            ('unknown-entry', dict(ck, whatever=np.zeros(1))),
+            ('unknown-entry', dict(snare, **{'base.hop': np.array(256, np.int64)})),
+            ('unknown-entry', dict(no_stage, **{'stage.gate': np.array(0.0)})),
+        ]
+        for case, e in cases:
+            with self.assertRaises(contract.ContractError, msg=case) as cm:
+                contract.check(e, pts)
+            self.assertEqual(cm.exception.case, case, str(cm.exception))
+        for n, e in base.items():
+            contract.check(e, pts)
+
+    def test_release_cutoffs_from_outer(self):
+        """A release's cutoffs come from each song's outer prediction (models that never saw its group): a synthetic
+        run whose outer, pair and in-sample predictions differ picks the outer ones, and the stage's cutoffs come from
+        its ungated outer probabilities, gated with the detector's and the stage's own cuts."""
+        from scipy.special import logit
+
+        from tools.audio_analysis.lab import release, stage
+        cfg = config.load('kick_gen50_gated')
+        lab = {t: {} for t in 'abcdefgh'}
+        songs = {t: type('S', (), dict(kind='project'))() for t in lab}
+        grps, trainings, _ = models.plan(cfg, lab, songs)
+        meta = dict(groups=grps, trainings=trainings)
+        rng = np.random.default_rng(7)
+        metas, good, insample, inputs, raw = {}, {}, {}, {}, {}
+        n = 300
+        for t in lab:
+            avail = np.sort(rng.choice(np.arange(100, 11000), n, replace=False))
+            emit = (avail + 1) * 256 / 48000
+            y = rng.uniform(size=n) < .3
+            s = dict(positives=list(emit[y]), hard_neg=[], unscored=[], loop_spans=[], duration_s=60.0, positives_only=False)
+            metas[t] = (s, emit, avail, 48000, 256)
+            good[t] = np.clip(.35 + .4 * y + rng.normal(0, .2, n), .001, .999)
+            insample[t] = good[t] ** .3
+            raw[t] = np.clip(.2 + .5 * y + rng.normal(0, .25, n), .001, .999)
+            inputs[t] = np.column_stack([logit(good[t]), np.zeros((n, 3)), np.log1p(rng.uniform(0, 2, n))])
+        z = {}
+        for i, tr in enumerate(trainings):
+            for t, pre in models.save_keys(grps, tr).items():
+                z[f'{pre}__combined__{t}' if pre else f'combined__{t}'] = good[t] if not pre else rng.uniform(size=n)
+        outer = release.outer_of(meta, release.run_layers(cfg, meta, [z]))
+        self.assertEqual(sorted(outer), sorted(lab))
+        for t in lab:
+            self.assertIs(outer[t], good[t])
+        st = dict(cfg.stage)
+        cutoff, cuts = release.release_cutoffs(st, metas, outer, inputs, raw)
+        want = (models.cutoff(metas, good), models.cutoff(metas, raw))
+        self.assertEqual(cuts, want)
+        self.assertEqual(cutoff, models.cutoff(metas, {t: stage.gated(st, inputs[t], raw[t], want) for t in lab}))
+        self.assertEqual(release.release_cutoffs(None, metas, outer), (want[0], None))
+        # The test can fail: in-sample predictions choose another cutoff.
+        self.assertNotEqual(models.cutoff(metas, insample), want[0])
+        # Gate off: the cuts are unused and the cutoff is the stage's own.
+        self.assertEqual(release.release_cutoffs(dict(st, gate=0), metas, outer, inputs, raw), (want[1], None))
+
+    def test_release_averages_like_runtime(self):
+        """Several nets average one way everywhere (D17): the release's outer layer from saved seeds, the reference's
+        p.net in the coverage goldens (two nets each) and the combine on top, all expit of the mean clipped logit of
+        each net's f32 sigmoid. One net passes through untouched."""
+        import torch
+        from scipy.special import expit, logit
+
+        from tools.audio_analysis import kick_container as kc
+        from tools.audio_analysis.lab import release
+
+        def lg(p):
+            return logit(np.clip(p, 1e-6, 1 - 1e-6))
+        cfg = config.load('cover_kick')
+        lab = {t: {} for t in 'abcdef'}
+        songs = {t: type('S', (), dict(kind='project'))() for t in lab}
+        grps, trainings, _ = models.plan(cfg, lab, songs)
+        meta = dict(groups=grps, trainings=trainings)
+        rng = np.random.default_rng(5)
+        zs = [{}, {}]
+        for tr in trainings:
+            for t, pre in models.save_keys(grps, tr).items():
+                for z in zs:
+                    for layer in ('net', 'trees', 'combined'):
+                        z[f'{pre}__{layer}__{t}' if pre else f'{layer}__{t}'] = rng.uniform(0, 1, 40)
+        two = release.run_layers(cfg, meta, zs)
+        one = release.run_layers(cfg, meta, zs[:1])
+        for i, tr in enumerate(trainings):
+            for t, pre in models.save_keys(grps, tr).items():
+                key = (lambda m: f'{pre}__{m}__{t}' if pre else f'{m}__{t}')
+                net = expit((lg(zs[0][key('net')]) + lg(zs[1][key('net')])) / 2)
+                np.testing.assert_allclose(two[i][t], expit((lg(net) + lg(zs[0][key('trees')])) / 2), rtol=0, atol=1e-14)
+                self.assertIs(one[i][t], zs[0][key('combined')])
+        for name in ('cover_kick', 'cover_snare'):
+            g = kc.read(REPO / release.SETS / name / 'clip_dense.mkick')
+            self.assertEqual(g['net.logit'].shape[1], 2, name)
+            ps = [torch.sigmoid(torch.from_numpy(np.ascontiguousarray(g['net.logit'][:, j]))).numpy().astype(np.float64)
+                  for j in range(2)]
+            np.testing.assert_allclose(g['p.net'], expit((lg(ps[0]) + lg(ps[1])) / 2), rtol=0, atol=1e-14, err_msg=name)
+            np.testing.assert_allclose(g['p.combined'], expit((lg(g['p.net']) + lg(g['p.trees'])) / 2), rtol=0, atol=1e-14,
+                                       err_msg=name)
+        p = rng.uniform(size=9)
+        self.assertIs(models.mean_logit_of([p]), p)
+
+    def test_release_refuses_undeclared_part(self):
+        """A config using a part the app does not run stops the release before anything trains; the chosen recipes
+        and the coverage configs pass."""
+        from unittest import mock
+
+        from tools.audio_analysis.lab import release
+        for name in ('kick_gen50_gated', 'snare_gen50_hybrid_low16', 'cover_kick', 'cover_snare'):
+            release.refuse_undeclared(config.load(name))
+        s = config.load('snare_gen50_hybrid_low16')
+
+        def edit(cfg, **kw):
+            return config.Experiment(**{**cfg.__dict__, **kw})
+        trees = s.models['trees']
+        bad = [edit(s, models=dict(s.models, trees=dict(trees, measures=['prof32', 'res16']))),
+               edit(s, models=dict(s.models, trees=dict(trees, measures=['glide3']))),
+               edit(s, models=dict(s.models, trees=dict(trees, measures=['f15', 'prof32']))),
+               edit(s, models=dict(s.models, net=dict(s.models['net'], channels=['perc']))),
+               edit(s, stage=dict(s.stage, windows_s=[1.0, 2.0, 3.0, 4.0, 5.0])),
+               edit(s, stage=dict(s.stage, shape=['res16'])),
+               edit(s, candidates='rise:6'),
+               config.load('kick_gen50_gated_t8')]
+        for cfg in bad:
+            with self.assertRaises(SystemExit, msg=cfg):
+                release.refuse_undeclared(cfg)
+        with mock.patch.object(release, 'train_final', side_effect=AssertionError('trained')), \
+                mock.patch.object(release, 'train_provisional', side_effect=AssertionError('trained')):
+            with self.assertRaises(SystemExit):
+                release.train('kick_gen50_gated_t8', 0, 1, False)
+
+    def test_coverage_sets_fire_and_gate(self):
+        """The coverage goldens exercise the fire rule and the gate: every clip fires, the detector's and the stage's
+        cuts differ, p.final is the gate of p.stage under those cuts, and swapping the cuts changes it, so a runtime
+        that mixes them up fails parity."""
+        from tools.audio_analysis import kick_container as kc
+        from tools.audio_analysis.lab import release, stage
+        for name in ('cover_kick', 'cover_snare'):
+            model = kc.read(REPO / release.SETS / name / 'model.mkick')
+            gate = float(model['stage.gate'])
+            cuts = (float(model['stage.cut_detector']), float(model['stage.cut_stage']))
+            self.assertGreater(gate, 0, name)
+            self.assertNotEqual(cuts[0], cuts[1], name)
+            st = dict(gate=gate, level=bool(len(model['stage.level'])))
+            clips = sorted((REPO / release.SETS / name).glob('clip_*.mkick'))
+            self.assertTrue(clips, name)
+            for c in clips:
+                g = kc.read(c)
+                self.assertGreater(len(g['fires']), 0, f'{name} {c.name}')
+                np.testing.assert_allclose(stage.gated(st, g['stage.x'], g['p.stage'], cuts), g['p.final'], rtol=0, atol=1e-15,
+                                           err_msg=f'{name} {c.name}')
+                self.assertFalse(np.allclose(stage.gated(st, g['stage.x'], g['p.stage'], cuts[::-1]), g['p.final'],
+                                             rtol=0, atol=1e-6), f'{name} {c.name}: swapped cuts give the same p.final')
+
+    def test_runtime_parts_exist_in_the_lab(self):
+        """runtime_parts.json declares the doc's parts, each exists in the lab registries with its declared width, and
+        a wrong width, an unknown measure or channel is caught."""
+        from tools.audio_analysis.lab import release
+        pts = release.parts()
+        self.assertEqual(pts['finders'], ['kick', 'snare'])
+        self.assertEqual(pts['measures'], dict(f15=15, tail3=3, tmpl3=3, prof32=32, fall16=16, low16=16))
+        self.assertEqual((pts['channels'], pts['combines']), (['flat'], ['net', 'trees', 'mean_logit']))
+        self.assertEqual(release.check_parts(pts), [])
+        for bad in (dict(pts, measures=dict(pts['measures'], prof32=31)), dict(pts, measures=dict(pts['measures'], nope=3)),
+                    dict(pts, channels=['flat', 'perc']), dict(pts, finders=['kick', 'rise']),
+                    dict(pts, stage=dict(pts['stage'], max_windows=5))):
+            self.assertTrue(release.check_parts(bad), bad)
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -9,11 +9,12 @@ from tools.audio_analysis.lab.config import COMBINES
 TREE_THREADS = 4
 
 
-def plan(cfg, lab, songs):
+def plan(cfg, lab, songs, final=False):
     """(groups, trainings, untrained songs). A training holds out whole groups (`held`), trains on every other
     trained song and the clips outside them. Training k holds out group k and predicts it. With groups, pair
     training (k, j) holds out both: its predictions choose group k's cutoff on group j and group j's on group k,
-    so no cutoff comes from a model that saw the song it scores."""
+    so no cutoff comes from a model that saw the song it scores. final: the one training that holds nothing out,
+    the release's final models (lab/release.py)."""
     from tools.audio_analysis.eval.detector_net import net_groups
     gen = [t for t in lab if songs[t].kind == 'generated']
     untrained = set(gen) if cfg.train == ('project',) or cfg.generated_as_clips() else set()
@@ -24,6 +25,8 @@ def plan(cfg, lab, songs):
         held = [t for k in without for t in grps[k]]
         return dict(without=list(without), held=held, trained=[u for u in lab if u not in held and u not in untrained],
                     clips=[c for c in clips if c not in held])
+    if final:
+        return grps, [training(())], untrained
     out = [training((k,)) for k in range(len(grps))]
     if cfg.folds:
         out += [training((k, j)) for k in range(len(grps)) for j in range(k + 1, len(grps))]
@@ -76,11 +79,20 @@ def fit_trees(p, rows, random_state, share=None):
 
 
 def combine(how, layers):
-    """The combined probability from the model layers {name: probabilities}; mean_logit is kick_release's blend."""
+    """The combined probability from the model layers {name: probabilities}; mean_logit is the shipped kick's blend."""
     from scipy.special import expit, logit
     if how != 'mean_logit':
         return layers[how]
     return expit(np.mean([logit(np.clip(layers[m], 1e-6, 1 - 1e-6)) for m in COMBINES[how]], axis=0))
+
+
+def mean_logit_of(ps, clip=1e-6):
+    """Several nets' probabilities as one (docs/DETECTOR_RUNTIME_DESIGN.md D17): expit of the mean clipped logit;
+    one net's probabilities pass through untouched."""
+    from scipy.special import expit, logit
+    if len(ps) == 1:
+        return ps[0]
+    return expit(np.mean([logit(np.clip(p, clip, 1 - clip)) for p in ps], axis=0))
 
 
 def final_layer(cfg):

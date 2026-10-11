@@ -129,6 +129,9 @@ def train(cfg, grps, trainings, final, parts, seed, generated=(), log=print):
         for u, (j, q) in pool.items():
             out[f'pair{k}__staged__{u}'] = gated(st, stage_x(k, j, u), q, cuts)
         for t in g:
-            out[f'staged__{t}'] = gated(st, stage_x(k, k, t), outer.predict_proba(stage_x(k, k, t))[:, 1], cuts)
+            q = outer.predict_proba(stage_x(k, k, t))[:, 1]
+            out[f'staged__{t}'] = gated(st, stage_x(k, k, t), q, cuts)
+            # Ungated, so a release chooses the stage's own cutoff on it (docs/DETECTOR_RUNTIME_DESIGN.md D5).
+            out[f'stageraw__{t}'] = q
     log(f'stage: {len(grps) ** 2} fits in {time.time() - t0:.1f} s')
     return out

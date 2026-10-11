@@ -127,6 +127,7 @@ pub fn audio_feature_kind_to_core(v: UiAudioFeatureKind) -> AudioFeatureKind {
         UiAudioFeatureKind::Flux => AudioFeatureKind::Flux,
         UiAudioFeatureKind::Transients => AudioFeatureKind::Transients,
         UiAudioFeatureKind::Kick => AudioFeatureKind::Kick,
+        UiAudioFeatureKind::Snare => AudioFeatureKind::Snare,
         UiAudioFeatureKind::Pitch => AudioFeatureKind::Pitch,
         UiAudioFeatureKind::Presence => AudioFeatureKind::Presence,
     }

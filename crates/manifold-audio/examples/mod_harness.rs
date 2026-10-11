@@ -343,12 +343,13 @@ fn analyze_and_render(
     let mut records: Vec<HopRecord> = Vec::with_capacity(mono.len() / hop + 1);
     // The trained kick detector, inline as offline export runs it: its fires are queued
     // before the analyzer sees the same samples, so each lands on the hop that contains it.
-    let mut kick = manifold_audio::kick::KickDetector::new(sr).expect("embedded kick model");
+    let mut kick =
+        manifold_audio::detectors::detector(manifold_audio::detectors::EventKind::Kick, sr).expect("embedded kick model");
     let mut kick_fires = Vec::new();
 
     for chunk in mono.chunks(hop) {
         kick_fires.clear();
-        kick.push(chunk, &mut kick_fires);
+        kick.push_with(chunk, |f| kick_fires.push(f));
         an.queue_kick_fires(kick_fires.iter().map(|f| f.sample));
         an.push(chunk);
         let mut cols: Vec<Vec<f32>> = Vec::new();

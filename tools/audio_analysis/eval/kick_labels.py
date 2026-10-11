@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Kick labels in the lab format (docs/DETECTOR_LAB_DESIGN.md P6): GOAL/kick_labels.json for the kick goal set, the
-songs kick_release trains on. The truth is the kick goal records' own, never re-derived: Goal(mode='v3') after
+songs the shipped v1 kick trained on. The truth is the kick goal records' own, never re-derived: Goal(mode='v3') after
 add_whole_song_truth (the whole-song kick-stem truth where a song has its own stem, else the reviewed passages, the
 trigger kicks or the project sections). Per song:
 
