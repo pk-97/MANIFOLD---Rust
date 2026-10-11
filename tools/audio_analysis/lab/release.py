@@ -625,6 +625,8 @@ def train_final(cfg, n_nets, seed):
     if gid.endswith('-dirty'):
         sys.exit('tools/audio_analysis has uncommitted changes: a release train_id must name the code that made it')
     lab, songs, meta = run.setup(cfg)
+    # The run id hashes the lab modules loaded in its process; this one also loads the release modules.
+    meta['run_id'] = run.run_id_of(cfg.name)
     d = run.RUNS / meta['run_id']
     paths = [d / f's{s}.npz' for s in range(seed, seed + n_nets)]
     missing = [p.name for p in paths if not p.exists()]
