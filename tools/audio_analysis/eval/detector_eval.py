@@ -131,13 +131,13 @@ def choose(items, min_precision=None):
 
 def held_out(lab, meta, held, min_precision=None, log=print, cutoffs=None, per_song=None, ahead=0.0):
     """Score every song with a cutoff chosen on the others. meta[t] = (labels, emit, avail, sr); held[t] = held-out
-    probabilities. Recall-only songs never choose a cutoff. Returns (caught, positives, false); fills cutoffs[t]
+    probabilities. Recall-only and generated songs never choose a cutoff: cutoffs are set on real music. Returns (caught, positives, false); fills cutoffs[t]
     and per_song[t] (song_result, decisions at stamp + ahead; ahead a number or one per song) when given."""
     tm = tn = tf = 0
     songs = list(held)
     for t in songs:
         th = choose([(meta[u][0], meta[u][1], held[u], meta[u][2], meta[u][3]) for u in songs
-                     if u != t and not lab[u]['positives_only']], min_precision)
+                     if u != t and not lab[u]['positives_only'] and lab[u].get('kind') != 'generated'], min_precision)
         if cutoffs is not None:
             cutoffs[t] = th
         s, emit, avail, sr = meta[t]

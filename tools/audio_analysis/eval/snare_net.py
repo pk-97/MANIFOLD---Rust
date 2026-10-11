@@ -8,7 +8,8 @@ Each song is scored by a net that never saw it; its cutoff is chosen on the othe
 (pooled F1). Scoring at +-70 ms: a fire is false only outside unscored windows and, inside loop spans, only when it
 sits on a vouched non-snare. With --mix, the snare-mix clips (snare_mix.py) join training: a clip trains the net for held-out song t only when
 it was not cut from t and t's project does not use its sample; together the clips get as many draws as the real songs.
-Usage: snare_net.py [SEED] [--mix]"""
+With --rescore, the saved held-out probabilities of the same settings are scored again instead of training.
+Usage: snare_net.py [SEED] [--mix] [--rescore]"""
 import json
 import os
 import sys
@@ -42,7 +43,7 @@ def main():
     from tools.audio_analysis.eval.kick_goal_nn import Song, device
     from tools.audio_analysis.eval.detector_channels import flat_cache
     from tools.audio_analysis.eval.detector_songs import audio, rate, spec
-    args = [a for a in sys.argv[1:] if a != '--mix']
+    args = [a for a in sys.argv[1:] if not a.startswith('--')]
     seed = int(args[0]) if args else 0
     mix = '--mix' in sys.argv
     g = Goal(mode='v3')
@@ -69,15 +70,19 @@ def main():
                 c.blocked = {str(z['song'])} | set(json.loads(str(z['users'])))
             clips.append(c)
         print(f'{len(clips)} mix clips, {sum(int(c.y[c.mask].sum()) for c in clips)} pasted or own snares', flush=True)
-    held = held_out_nets(lab, data, seed, clips, log=lambda m: print(m, flush=True), folds=FOLDS,
-                         untrained=set(gen) if GEN == 'eval' else ())
+    name = f'snare_net_s{seed}{"_mix" if mix else ""}{TAG}'
+    if '--rescore' in sys.argv:
+        with np.load(GOAL / f'{name}.npz') as z:
+            held = {t: z[t] for t in lab}
+    else:
+        held = held_out_nets(lab, data, seed, clips, log=lambda m: print(m, flush=True), folds=FOLDS,
+                             untrained=set(gen) if GEN == 'eval' else ())
+        np.savez(GOAL / f'{name}.npz', **held)
     cut, per_song = {}, {}
     tot_m, tot_n, tot_f = held_out(lab, meta, held, log=lambda m: print(m, flush=True), cutoffs=cut, per_song=per_song, ahead=AHEAD)
     print(f'net only, held out: R {tot_m / tot_n:.3f} P {tot_m / max(1, tot_m + tot_f):.3f} ({tot_m}/{tot_n}, {tot_f} false)')
     dm, dn = dense_recall(lab, meta, held, cut)
     print(f'fast runs (unscored above): {dm}/{dn} prominent snares caught')
-    name = f'snare_net_s{seed}{"_mix" if mix else ""}{TAG}'
-    np.savez(GOAL / f'{name}.npz', **held)
     write_results(GOAL / f'{name}.json', per_song)
 
 
