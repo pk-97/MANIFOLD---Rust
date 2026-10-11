@@ -16,11 +16,16 @@ research log (attack probes, rejection trials, the H-series) lives in git histor
 transferable rules are below. These rules apply to every trained detector (kick now,
 snare and clap next, under BUG-9ngk8 (trained audio detectors)).
 
+Snare training and every A/B run through the Detector Lab: `tools/audio_analysis/lab/README.md` for the steps,
+[DETECTOR_LAB_DESIGN.md](DETECTOR_LAB_DESIGN.md) for the rules. Bass, synth and kick move there next.
+
 - **Labels come from Peter's projects and stems, never public datasets** (commercial
   licensing). Project notes are shifted by an export offset proven against a stem, and
   clipped to the master's length — project data past the master's end does not exist
   in the audio. Projects are read only through `als_extract.py` (read-only, hash-checked).
-- **Every new hit triggers, rolls included** (BUG-gh7sj (rolls over a ringing tail)).
+- **Rolls are left out of training and scoring** (Peter, 2026-10-11: basics first; a roll detector may come later).
+  Snare labels apply it (`detector_labels.dense_spans`, `roll_spans`). The kick's legacy truth still counts rolls
+  as hits (BUG-gh7sj (rolls over a ringing tail)) until the kick moves to the Detector Lab.
 - **Scoring:** leave one song out; each song's cutoff is chosen on the other songs;
   a fire matches a label within 70 ms; 60 ms refractory. Report recall and precision
   over all songs, plus per song.

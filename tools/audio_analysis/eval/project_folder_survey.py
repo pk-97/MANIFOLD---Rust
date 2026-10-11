@@ -35,7 +35,7 @@ def one(proj):
     if als:
         try:
             res = extract(str(als[-1]))
-            snare, rim, spans, clips = project_parts(res, FAMILY)
+            snare, rim, _, spans, clips = project_parts(res, FAMILY)
             row.update(snare_notes=len(snare), rim_notes=len(rim), loop_s=round(sum(b - a for a, b in spans), 1),
                        snare_clips=sum(len(v) for k, v in clips.items() if k != '_neg'),
                        span_s=[round(float(min(snare)), 1), round(float(max(snare)), 1)] if len(snare) else None)

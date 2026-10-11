@@ -2,7 +2,7 @@
 """Snare model release: fit the final net, then export the model file and the Rust parity goldens.
 
 Usage:
-  snare_release.py train                 the final net on every labelled song; cutoff from the held-out run
+  snare_release.py train                 the final net on every exam song; cutoff from the lab's held-out run
   snare_release.py export --out DIR      DIR/assets/snare_model.mkick and DIR/tests/fixtures/snare/clip_<name>.mkick
 
 The recipe (BUG-9ngk8.2 (Snare+clap), 2026-10-10): snare_cands candidates (1-8 kHz rise >= 4.5 dB), one CNN on
@@ -10,40 +10,30 @@ the kick net's 64-band spectrum with a 190 ms slice ending 40 ms after emission 
 input channel of per-band noisiness (detector_channels.flatness), cutoff by pooled F1 over the held-out run,
 60 ms refractory. No trees, no stage: on this net they added nothing.
 
-The held-out score comes from the leave-one-song-out run that must exist first:
-  SNARE_FLAT=1 SNARE_PAST_MS=190 eval/snare_net.py 0      (GOAL/snare_net_s0_snare_past_ms190_snare_flat1.npz)
+The recipe is the lab experiment lab/experiments/snare_release.json. Its leave-one-song-out run must exist first,
+for the same code and labels: lab/run.py snare_release --seeds 0
 Goldens are the Python reference run on each clip alone, the stream starting at the clip's first sample; every
 clip starts with silence, so no candidate's slice or baseline reaches before the start.
 """
 from __future__ import annotations
 
-import os
 import sys
-
-# Net input shape: 190 ms slice (95 frames, four time segments), third channel slot carries noisiness.
-RECIPE_ENV = dict(KICK_GOAL_NN_PAST_MS='190', KICK_GOAL_NN_PERC='1', KICK_GOAL_NN_AHEAD_MS='0', SNARE_FLAT='1',
-                  SNARE_PAST_MS='190', KICK_GOAL_TRUTH='v3', KICK_GOAL_MORE='1', KICK_GOAL_TRIGGER='1',
-                  KICK_GOAL_WIP='1', KICK_GOAL_PROJECT='1', KICK_GOAL_RECALL='1')
-for _k, _v in RECIPE_ENV.items():
-    if os.environ.get(_k, _v) != _v:
-        sys.exit(f'{_k}={os.environ[_k]} is not the release recipe ({_v})')
-    os.environ[_k] = _v
-for _k in ('KICK_GOAL_NN_BANDS', 'KICK_GOAL_NN_STEREO', 'SNARE_AHEAD_MS'):
-    if os.environ.get(_k):
-        sys.exit(f'{_k} is set; the release recipe uses the defaults')
-for _k in ('OMP_NUM_THREADS', 'OPENBLAS_NUM_THREADS', 'VECLIB_MAXIMUM_THREADS', 'MKL_NUM_THREADS'):
-    os.environ.setdefault(_k, '1')
-
-import argparse  # noqa: E402
-import datetime  # noqa: E402
-import json  # noqa: E402
-import pickle  # noqa: E402
-import subprocess  # noqa: E402
-import time  # noqa: E402
-from pathlib import Path  # noqa: E402
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
+
+from tools.audio_analysis.lab import config, recipe  # noqa: E402
+
+CFG = config.load('snare_release')
+recipe.apply(CFG.net_env())
+
+import argparse  # noqa: E402
+import datetime  # noqa: E402
+import os  # noqa: E402
+import pickle  # noqa: E402
+import subprocess  # noqa: E402
+import time  # noqa: E402
 
 import numpy as np  # noqa: E402
 from scipy.signal import butter  # noqa: E402
@@ -55,10 +45,9 @@ from tools.audio_analysis.eval.kick_attack_rejection import read_audio  # noqa: 
 from tools.audio_analysis.eval.kick_goal_eval import GOAL  # noqa: E402
 from tools.audio_analysis.eval.snare_cands import DEADLINE, HOP, LOOKBACK, REFRACTORY, candidates  # noqa: E402
 from tools.audio_analysis.eval.detector_eval import REFR, choose, fires  # noqa: E402
-from tools.audio_analysis.eval.snare_net import AHEAD  # noqa: E402
 
+AHEAD = CFG.net['ahead_ms'] / 1000
 FINAL = GOAL / 'snare_final' / 'final.pkl'
-HELD = GOAL / 'snare_net_s0_snare_past_ms190_snare_flat1.npz'
 RECIPE_VERSION = 1
 SR = 48000
 RISE_DB = 4.5
@@ -84,42 +73,35 @@ def git_id():
 
 # ---------------------------------------------------------------- train
 
-def labelled_songs(g, dev):
-    """(Song per labelled song, per-song scoring metadata) built exactly as snare_net builds them."""
-    from tools.audio_analysis.eval.detector_channels import flat_cache
-    from tools.audio_analysis.eval.detector_songs import audio, rate, spec
-    from tools.audio_analysis.eval.detector_eval import rows
-    lab = json.loads((GOAL / 'snare_labels.json').read_text())
-    data, meta = {}, {}
-    for t, s in lab.items():
-        sr = rate(g, t)
-        cand, avail = candidates(audio(g, t), sr, RISE_DB)
-        onset, emit = (cand + 1) * HOP / sr, (avail + 1) * HOP / sr
-        mask, y, hard = rows(s, onset)
-        data[t] = nnm.Song(spec(g, t), onset, emit + AHEAD, mask, y, t, hard, (flat_cache(g, t),)).to(dev)
-        meta[t] = (s, emit, avail, sr)
-    return lab, data, meta
-
-
 def train():
-    from tools.audio_analysis.eval.kick_goal_eval import Goal
+    from tools.audio_analysis.lab import cache, run
     t0 = time.time()
-    g = Goal(mode='v3')
-    dev = nnm.device()
-    lab, data, meta = labelled_songs(g, dev)
-    held = dict(np.load(HELD))
-    if set(held) != set(lab):
-        raise SystemExit(f'{HELD.name} covers other songs than snare_labels.json; rerun snare_net.py first')
-    cutoff = choose([(meta[u][0], meta[u][1], held[u], meta[u][2], meta[u][3]) for u in lab if not lab[u]['positives_only']])
-    net = nnm.train([data[t] for t in lab], 0)
+    lab, songs, meta = run.setup(CFG)
+    run_id = run.run_id_of('snare_release')
+    held_path = run.RUNS / run_id / 's0.npz'
+    if not held_path.exists():
+        raise SystemExit(f'no held-out run for this code and labels; run lab/run.py snare_release --seeds 0 first')
+    exam = meta['exam']
+    held = dict(np.load(held_path))
+    if not set(exam) <= set(held):
+        raise SystemExit(f'{held_path} lacks exam songs {sorted(set(exam) - set(held))}')
+    items = []
+    for u in exam:
+        if not lab[u]['positives_only']:
+            sr = songs[u].sample_rate
+            _, avail = cache.candidates(songs[u], CFG.candidates, build=False)
+            items.append((lab[u], (avail + 1) * HOP / sr, held[u], avail, sr))
+    cutoff = choose(items)
+    data = run.build(CFG, {t: lab[t] for t in exam}, songs, nnm.device(), log=lambda m: None)
+    net = nnm.train([data[t] for t in exam], 0, epochs=CFG.net['epochs'])
     train_id = f'snare-{datetime.date.today().isoformat()}-{git_id()}'
-    final = dict(train_id=train_id, cutoff=float(cutoff), refractory_s=REFR, songs=sorted(lab),
+    final = dict(train_id=train_id, cutoff=float(cutoff), refractory_s=REFR, songs=sorted(exam), held_out_run=run_id,
                  net=dict(state_dict={k: v.detach().cpu().numpy().astype(np.float32) for k, v in net.state_dict().items()},
                           bands=nnm.BANDS, past_ms=nnm.PAST_MS, ahead_ms=round(AHEAD * 1000), channels=nnm.CHANNELS))
     FINAL.parent.mkdir(parents=True, exist_ok=True)
     with open(FINAL, 'wb') as fh:
         pickle.dump(final, fh)
-    print(f'wrote {FINAL}: train_id {train_id}, {len(lab)} songs, cutoff {cutoff:.4f}, {time.time() - t0:.0f} s', flush=True)
+    print(f'wrote {FINAL}: train_id {train_id}, {len(exam)} songs, cutoff {cutoff:.4f}, {time.time() - t0:.0f} s', flush=True)
 
 
 # ---------------------------------------------------------------- reference

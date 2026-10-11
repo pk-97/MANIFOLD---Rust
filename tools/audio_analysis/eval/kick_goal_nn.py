@@ -39,6 +39,8 @@ FLAT_ON = os.environ.get('KICK_GOAL_NN_FLAT') == '1'
 # The net's slice ends this much after the emission; the fire keeps the emission's time stamp, so the wait is
 # accepted output latency (Peter, Oct 2026: 20-40 ms is fine), not timing error eaten from the 70 ms tolerance.
 AHEAD_MS = int(os.environ.get('KICK_GOAL_NN_AHEAD_MS', '0'))
+# KICK_GOAL_NN_DRAW_CAP: at most this many draws per song and class each epoch (0: the median positives per song).
+DRAW_CAP = int(os.environ.get('KICK_GOAL_NN_DRAW_CAP', '0'))
 CENTRES = np.geomspace(30.0, 16000.0, BANDS)
 HALF_BW = .1 * 64 / BANDS  # about one band spacing either side
 FRAME_S = .002
@@ -188,9 +190,9 @@ def device():
     return torch.device(want or ('mps' if torch.backends.mps.is_available() else 'cpu'))
 
 
-def train(songs, seed, synth=()):
+def train(songs, seed, synth=(), epochs=EPOCHS, synth_share=0.5):
     """A net fitted on the songs' training rows: song-equal, class-balanced sampling.
-    Kick-swap clips (synth) together get as many draws as the real songs, spread evenly."""
+    Clips (synth) together get synth_share of all draws (0.5: as many as the real songs), spread evenly."""
     rng = np.random.default_rng(seed)
     torch.manual_seed(seed)
     dev = device()
@@ -198,8 +200,9 @@ def train(songs, seed, synth=()):
     opt = torch.optim.AdamW(net.parameters(), lr=LR, weight_decay=1e-4)
     rows = [(s, np.flatnonzero(s.mask & (s.y == 1)), np.flatnonzero(s.mask & (s.y == 0))) for s in list(songs) + list(synth)]
     per_song = max(1, int(np.median([len(p) for _, p, _ in rows[:len(songs)]])))
-    per_clip = max(1, per_song * len(songs) // max(1, len(synth)))
-    for _ in range(EPOCHS):
+    per_song = min(per_song, DRAW_CAP) if DRAW_CAP else per_song
+    per_clip = max(1, int(round(per_song * len(songs) * synth_share / (1 - synth_share))) // max(1, len(synth)))
+    for _ in range(epochs):
         batch_x, batch_y = [], []
         for k, (song, pos, neg) in enumerate(rows):
             draws = per_song if k < len(songs) else per_clip

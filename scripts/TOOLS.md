@@ -54,6 +54,13 @@ Render and measure:
   kick-labels             ground-truth kick times from drum stems  [scripts/kick_label_extract.py]  (cost: focused)
   kick-release            kick model release: train [--provisional] the final model; export --hooks DIR --out DIR writes the model file and parity goldens  [tools/audio_analysis/kick_release.py]  (cost: broad)
   snare-release           snare model release: train the final net (cutoff from the held-out run); export --out DIR writes the model file and parity goldens  [tools/audio_analysis/snare_release.py]  (cost: broad)
+  lab-songs               detector lab song list: build | show [SONG] | verify (audio and hashes match the legacy loader)  [tools/audio_analysis/lab/registry.py]  (cost: focused)
+  lab-audit               detector lab label audit for a family: offset proofs, kept known times, generated labels vs project notes  [tools/audio_analysis/lab/audit.py]  (cost: focused)
+  lab-offsets             detector lab export-offset proof for project songs (kick and snare grid fit on the song's own mix)  [tools/audio_analysis/lab/offsets.py]  (cost: focused)
+  lab-test                detector lab invariant tests  [tools/audio_analysis/lab/test_lab.py]  (cost: focused)
+  lab-run                 detector lab: train an experiment config's missing seeds, one process each, saving held-out predictions (--plan, --warm)  [tools/audio_analysis/lab/run.py]  (cost: broad)
+  lab-score               detector lab: score a run from its saves in seconds (exam and generated songs apart); --legacy NPZ for parity  [tools/audio_analysis/lab/score.py]  (cost: focused)
+  lab-compare             detector lab A/B of two experiment configs: trains missing seeds interleaved, refuses unfair pairs, prints the comparison  [tools/audio_analysis/lab/compare.py]  (cost: broad)
   repair-audio-fixture    rebuild a fixture mix from aligned stems, preserving the original; dry-run unless --apply  [scripts/repair_audio_fixture.py]  (cost: focused)
 
 CPU reference oracles (f64, seconds, no GPU):
