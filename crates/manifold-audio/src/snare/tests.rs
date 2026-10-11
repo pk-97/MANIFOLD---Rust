@@ -1,118 +1,103 @@
-//! Parity of the candidate finder and the flatness frames against the goldens
-//! written by `tools/audio_analysis/snare_release.py`.
+//! The shipped snare end to end against its v1 goldens (`tests/fixtures/snare/`, written by
+//! `tools/audio_analysis/snare_release.py`), through the generic runtime.
 
-use super::cands::SnareCands;
-use super::flat::{Flatness, BANDS};
-use super::golden;
-use crate::kick::container::Container;
+use super::*;
+use crate::trained::golden::{self, Chunks};
+use crate::trained::net::Net;
 
-fn model() -> Container {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/snare_model.mkick");
-    let bytes = std::fs::read(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
-    Container::parse(&bytes).unwrap()
-}
-
-fn golden_names() -> Vec<String> {
-    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/snare");
-    let mut names: Vec<String> = std::fs::read_dir(&dir)
-        .unwrap_or_else(|e| panic!("{}: {e}", dir.display()))
-        .filter_map(|e| e.ok()?.file_name().into_string().ok())
-        .filter(|n| n.starts_with("clip_") && n.ends_with(".mkick"))
-        .collect();
-    names.sort();
-    assert!(!names.is_empty(), "no goldens in {}", dir.display());
-    names
-}
-
-/// Seeded chunk sizes in 256..=1024 (xorshift; the crate has no rand dependency).
-struct Chunks(u64);
-
-impl Chunks {
-    fn next(&mut self) -> usize {
-        self.0 ^= self.0 << 13;
-        self.0 ^= self.0 >> 7;
-        self.0 ^= self.0 << 17;
-        256 + (self.0 % 769) as usize
+fn run(det: &mut SnareDetector, audio: &[f32], seed: u64) -> Vec<SnareFire> {
+    let mut fires = Vec::new();
+    let mut chunks = Chunks(seed);
+    let mut at = 0;
+    while at < audio.len() {
+        let n = chunks.next().min(audio.len() - at);
+        fires.reserve(det.max_fires(n));
+        let cap = fires.capacity();
+        det.push(&audio[at..at + n], &mut fires);
+        assert_eq!(fires.capacity(), cap, "push grew the output");
+        at += n;
     }
+    fires
 }
 
 #[test]
-fn parity_every_golden_clip() {
-    let model = model();
-    let train_id = model.text("train_id").unwrap().to_owned();
-    for (ci, name) in golden_names().iter().enumerate() {
-        let g = golden::load(name);
-        assert_eq!(g.text("train_id").unwrap(), train_id, "{name}: golden from another model");
-        let n = g.shape("audio_i16").unwrap()[0];
-        let audio: Vec<f64> = g.i16s("audio_i16", &[n]).unwrap().iter().map(|&s| s as f64 / 32768.0).collect();
-        let hops = g.shape("cand_db").unwrap()[0];
-        let want_db = g.f64s("cand_db", &[hops]).unwrap();
-        let k = g.shape("cand_hop").unwrap()[0];
-        let want_cand = g.i64s("cand_hop", &[k]).unwrap();
-        let want_avail = g.i64s("avail_hop", &[k]).unwrap();
-        let frames = g.shape("flat").unwrap()[0];
-        let want_flat = g.f32s("flat", &[frames, BANDS]).unwrap();
+fn embedded_model_matches_the_goldens() {
+    let m = model().unwrap();
+    for name in golden::clips("snare") {
+        assert_eq!(golden::load("snare", &name).text("train_id").unwrap(), m.text("train_id").unwrap(), "{name}");
+    }
+}
 
-        let mut cands = SnareCands::new(&model).unwrap();
-        let mut flat = Flatness::new(&model).unwrap();
-        let mut got: Vec<(u64, u64)> = Vec::with_capacity(k + 8);
-        let (mut db_err, mut flat_err) = (0.0f64, 0.0f64);
-        let mut chunks = Chunks(0x9E37_79B9_7F4A_7C15 ^ ci as u64);
-        let mut at = 0;
-        while at < n {
-            let len = chunks.next().min(n - at);
-            let before = (cands.hops(), flat.frames());
-            cands.push(&audio[at..at + len], &mut got);
-            flat.push(&audio[at..at + len]);
-            at += len;
-            for h in before.0..cands.hops() {
-                if (h as usize) < hops {
-                    db_err = db_err.max((cands.db(h).unwrap() - want_db[h as usize]).abs());
-                }
-            }
-            for f in before.1..flat.frames() {
-                if (f as usize) < frames {
-                    let row = &want_flat[f as usize * BANDS..][..BANDS];
-                    for (a, b) in flat.frame(f).unwrap().iter().zip(row) {
-                        flat_err = flat_err.max((a - b).abs() as f64);
-                    }
-                }
+/// Fire emissions from audio alone, fed in random chunks, against the golden fires (`(avail_hop + 1) * hop`).
+/// Golden fires whose candidate is still waiting at the clip end have no decision yet and are left out.
+#[test]
+fn fires_match_every_golden_clip_end_to_end() {
+    let net = Net::new(&golden::snare_v2(), 1).unwrap();
+    for (ci, name) in golden::clips("snare").iter().enumerate() {
+        let g = golden::load("snare", name);
+        let hop = g.i64s("hop", &[]).unwrap()[0] as u64;
+        let nf = g.shape("fires").unwrap()[0];
+        let golden_fires = g.i64s("fires", &[nf]).unwrap();
+        let pcm = golden::audio_f32(&g);
+        let mut det = SnareDetector::new(48_000).unwrap();
+        let fires = run(&mut det, &pcm, 0x9E37_79B9_7F4A_7C15 ^ (ci as u64 + 1));
+        let want: Vec<u64> = golden_fires
+            .iter()
+            .map(|&a| a as u64)
+            .filter(|&a| net.ready_sample(a) <= pcm.len() as u64)
+            .map(|a| (a + 1) * hop)
+            .collect();
+        let got: Vec<u64> = fires.iter().map(|f| f.emission).collect();
+        let lag_s = det.0.decision_lag_s();
+        let lag_ms: Vec<f64> = fires.iter().map(|f| (f.sample - f.emission) as f64 / 48.0).collect();
+        let (lo, hi) = lag_ms.iter().fold((f64::INFINITY, 0.0f64), |(a, b), &v| (a.min(v), b.max(v)));
+        println!(
+            "{name}: {} decided, fires {}/{} (golden total {nf}), decision lag after emission {lo:.1}..{hi:.1} ms (bound {:.1} ms)",
+            det.decided(),
+            got.len(),
+            want.len(),
+            lag_s * 1e3
+        );
+        assert_eq!(det.dropped(), 0, "{name}: pending queue overflowed");
+        assert_eq!(got, want, "{name}: fire samples");
+        for f in &fires {
+            assert!(f.sample >= f.emission, "{name}: fire stamped before its emission");
+            // The bound holds once the net has a full slice of stream behind it (v1 clips start on music).
+            if f.emission >= 24_000 {
+                assert!((f.sample - f.emission) as f64 <= lag_s * 48_000.0, "{name}: fire later than decision_lag_s");
             }
         }
-        assert!(cands.hops() as usize >= hops && flat.frames() as usize >= frames, "{name}: stream ended short");
-        let want: Vec<(u64, u64)> = want_cand.iter().zip(want_avail).map(|(&c, &a)| (c as u64, a as u64)).collect();
-        let mismatches = got.iter().zip(&want).filter(|(a, b)| a != b).count() + got.len().abs_diff(want.len());
-        println!("{name}: {hops} hops cand_db max abs {db_err:.3e}; {k} candidates, {mismatches} mismatches; {frames} frames flat max abs {flat_err:.3e}");
-        assert!(db_err <= 1e-6, "{name}: cand_db error {db_err}");
-        assert_eq!(got, want, "{name}: candidates differ");
-        assert!(flat_err <= 1e-3, "{name}: flat error {flat_err}");
     }
 }
 
 #[test]
-fn push_cost_per_audio_second() {
-    let model = model();
-    let mut cands = SnareCands::new(&model).unwrap();
-    let mut flat = Flatness::new(&model).unwrap();
-    let mut seed = 0x1234_5678_9abc_def0u64;
-    let audio: Vec<f64> = (0..48_000 * 5)
-        .map(|_| {
-            seed ^= seed << 13;
-            seed ^= seed >> 7;
-            seed ^= seed << 17;
-            (seed % 20_000) as f64 / 20_000.0 - 0.5
-        })
-        .collect();
-    let mut got: Vec<(u64, u64)> = Vec::with_capacity(4096);
-    let t = std::time::Instant::now();
-    for c in audio.chunks(512) {
-        cands.push(c, &mut got);
+fn refuses_another_recipe() {
+    let mut c = golden::asset("snare");
+    c.insert("recipe_version", crate::trained::container::Array::i32_scalar(2));
+    assert_eq!(SnareDetector::from_container(&c, 48_000).err(), Some(SnareError::V1(V1Error::Recipe(2))));
+}
+
+/// CPU per second of dense audio. Only a release run means anything:
+/// `cargo test --release -p manifold-audio snare_detector_cost -- --nocapture`.
+#[test]
+fn snare_detector_cost() {
+    let name = &golden::clips("snare")[0];
+    let pcm = golden::audio_f32(&golden::load("snare", name));
+    let mut det = SnareDetector::new(48_000).unwrap();
+    let mut fires = Vec::with_capacity(1024);
+    let reps = 3;
+    let t0 = std::time::Instant::now();
+    for _ in 0..reps {
+        for chunk in pcm.chunks(800) {
+            det.push(chunk, &mut fires);
+        }
     }
-    let tc = t.elapsed().as_secs_f64();
-    let t = std::time::Instant::now();
-    for c in audio.chunks(512) {
-        flat.push(c);
-    }
-    let tf = t.elapsed().as_secs_f64();
-    println!("cands {:.2} ms/audio-s, flat {:.2} ms/audio-s", tc * 200.0, tf * 200.0);
+    let secs = reps as f64 * pcm.len() as f64 / 48_000.0;
+    let per_s = t0.elapsed().as_secs_f64() / secs;
+    println!(
+        "snare detector: {:.2} ms CPU per second of audio ({:.1} candidates/s, {} fires) on {name}",
+        per_s * 1e3,
+        det.decided() as f64 / secs,
+        fires.len(),
+    );
 }

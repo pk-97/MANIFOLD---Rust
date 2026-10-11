@@ -19,6 +19,22 @@ pub enum EventKind {
     Snare,
 }
 
+impl EventKind {
+    pub const ALL: [EventKind; 2] = [Self::Kick, Self::Snare];
+
+    /// A model file's `family` text (D12).
+    pub fn parse(family: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|k| k.name() == family)
+    }
+
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Kick => "kick",
+            Self::Snare => "snare",
+        }
+    }
+}
+
 /// One detected event, stamped with the input sample count at which it was decided.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DetectorEvent {
