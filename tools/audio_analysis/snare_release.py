@@ -74,7 +74,7 @@ def git_id():
 # ---------------------------------------------------------------- train
 
 def train():
-    from tools.audio_analysis.lab import cache, run
+    from tools.audio_analysis.lab import components, run
     t0 = time.time()
     lab, songs, meta = run.setup(CFG)
     run_id = run.run_id_of('snare_release')
@@ -88,9 +88,8 @@ def train():
     items = []
     for u in exam:
         if not lab[u]['positives_only']:
-            sr = songs[u].sample_rate
-            _, avail = cache.candidates(songs[u], CFG.candidates, CFG.family, build=False)
-            items.append((lab[u], (avail + 1) * HOP / sr, held[u], avail, sr))
+            c = components.candidates(songs[u], CFG.candidates, CFG.family, build=False)
+            items.append((lab[u], c.emit_s, held[u], c.avail, c.sr))
     cutoff = choose(items)
     data = run.build(CFG, {t: lab[t] for t in exam}, songs, nnm.device(), log=lambda m: None)
     net = nnm.train([data[t] for t in exam], 0, epochs=CFG.net['epochs'])

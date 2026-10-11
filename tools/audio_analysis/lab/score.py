@@ -25,16 +25,15 @@ from tools.audio_analysis.lab.run import RUNS, labels  # noqa: E402
 def score(cfg, lab, songs, held):
     """{song: song_result} for every song in held, each at its held-out cutoff. A family with a tight hit window
     (labels' tol_s or window_s) is judged at the candidate, and its fixed wait to emission counts as lateness."""
-    from tools.audio_analysis.eval.detector_eval import HOP, held_out
-    from tools.audio_analysis.eval.detector_net import DEADLINE
-    from tools.audio_analysis.lab import cache
+    from tools.audio_analysis.eval.detector_eval import held_out
+    from tools.audio_analysis.lab import components
     meta, wait = {}, {}
     for t in held:
-        sr = songs[t].sample_rate
-        cand, avail = cache.candidates(songs[t], cfg.candidates, cfg.family, build=False)
+        c = components.candidates(songs[t], cfg.candidates, cfg.family, build=False)
         tight = 'tol_s' in lab[t] or 'window_s' in lab[t]
-        meta[t] = (lab[t], ((cand if tight else avail) + 1) * HOP / sr, avail, sr)
-        wait[t] = cfg.net['ahead_ms'] / 1000 + (DEADLINE * HOP / sr if tight else 0.0)
+        meta[t] = (lab[t], c.onset_s if tight else c.emit_s, c.avail, c.sr, c.hop)
+        # The fixed wait from candidate to emission counts as lateness for families judged at the candidate.
+        wait[t] = cfg.net['ahead_ms'] / 1000 + (float(np.median(c.emit_s - c.onset_s)) if tight and len(c.cand) else 0.0)
     per_song = {}
     held_out({t: lab[t] for t in held}, meta, held, log=None, per_song=per_song, ahead=wait)
     return per_song

@@ -33,6 +33,7 @@ def imports():
     import tools.audio_analysis.eval.kick_goal_nn  # noqa: F401
     import tools.audio_analysis.eval.snare_cands  # noqa: F401
     import tools.audio_analysis.lab.cache  # noqa: F401
+    import tools.audio_analysis.lab.components  # noqa: F401
     import tools.audio_analysis.lab.registry  # noqa: F401
 
 
@@ -130,15 +131,15 @@ def setup(cfg):
 
 def build(cfg, lab, songs, dev, log=print):
     """{song: kick_goal_nn.Song} from the cache: the retired snare runner's inputs, byte for byte (test_input_parity)."""
-    from tools.audio_analysis.eval.detector_eval import HOP, rows
+    from tools.audio_analysis.eval.detector_eval import rows
     from tools.audio_analysis.eval.kick_goal_nn import Song
-    from tools.audio_analysis.lab import cache
+    from tools.audio_analysis.lab import cache, components
     ahead = cfg.net['ahead_ms'] / 1000
     data = {}
     for t, s in lab.items():
         song = songs[t]
-        cand, avail = cache.candidates(song, cfg.candidates, cfg.family)
-        onset, emit = (cand + 1) * HOP / song.sample_rate, (avail + 1) * HOP / song.sample_rate
+        c = components.candidates(song, cfg.candidates, cfg.family)
+        cand, onset, emit = c.cand, c.onset_s, c.emit_s
         mask, y, hard = rows(s, onset)
         extra = (cache.flatness(song),) if cfg.net['flat'] else ()
         data[t] = Song(cache.spectrum(song), onset, emit + ahead, mask, y, t, hard, extra).to(dev)
@@ -186,11 +187,11 @@ def child(cfg, seed, run_id):
 
 def warm(cfg):
     """Builds every cached input a seed reads (candidates, spectra, noisiness), so seed timings are warm."""
-    from tools.audio_analysis.lab import cache
+    from tools.audio_analysis.lab import cache, components
     lab, songs, _ = setup(cfg)
     for t in lab:
         t0 = time.time()
-        cache.candidates(songs[t], cfg.candidates, cfg.family)
+        components.candidates(songs[t], cfg.candidates, cfg.family)
         cache.spectrum(songs[t])
         if cfg.net['flat']:
             cache.flatness(songs[t])
