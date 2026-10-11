@@ -335,6 +335,31 @@ parity, not score parity: the lab's kick candidates and measures equal `kick_rel
 three songs, and the lab's trees on those rows equal a direct sklearn fit. The shipped kick model is untouched
 until Peter's yes on a lab-trained one (P7).
 
+**Fable review, 2026-10-11, all taken.**
+- *Kick labels* come from the `Goal(mode='v3')` records after `add_whole_song_truth`, never re-derived: WIP section
+  songs, drum-bus and other-stem doubt, reviewed passages, song lag and one-per-refractory all ride along. Gate: per
+  song, `detector_eval.rows(labels, legacy candidates)` equals the record's `(train_mask, train_y)` before rolls are
+  subtracted. Vouched negatives are melodic notes more than 105 ms from any kick (the legacy rule's 70 ms kick
+  distance plus the 35 ms row window), so `rows` needs no kick rule.
+- *Proof kind `stem`:* positives measured on an isolated stem need no project offset; the audit accepts it.
+- *Cutoffs from models that never saw the group:* every lab run with groups also trains the pair models (without
+  groups k and j) and chooses group k's cutoff on their predictions for the other groups. A one-net-per-song run
+  cannot, so `compare.py` refuses it; its score is labelled optimistic.
+- *Folds:* the kick stage runs on 8 groups, so stage training models see 6/8 of the songs and applied ones 7/8.
+- *Cache keys* cover a builder's closure: its source, the constants it reads and the helpers it calls in
+  `tools/audio_analysis`.
+- *Two measure kinds:* `frame` measures (T, k on the finder's hop grid; `flat`, later envelopes) feed the net as
+  channels; `event` measures (n, k at candidates) feed trees. Hop and the candidate-to-emission wait are finder
+  properties. `kick_goal_nn.Net` takes its channel count (named edit).
+- *Comparisons* headline a paired bootstrap over songs (90% interval of the pooled F1 difference); seed spread is
+  the second line.
+- *Kick scorer semantics:* the shared scorer counts a label caught by any fire within the window; the legacy kick
+  matcher paired fires and labels one to one. Stated next to the 0.889 / 0.894 caveat.
+- *Saves:* npz keys `layer__song`; `meta.json` carries a schema version and old metas migrate on read; a song in two
+  labels files of one family is an error.
+- *Scope:* first pass is finder, `f15` `tail3` `prof32` `low16` `flat`, trees, net, combine and the pair cutoffs.
+  The stage comes once `kick_blend` matches a direct fit; `fall16`, `res16`, `glide3` and the templates after.
+
 - **Entry state:** P5 committed.
 - **Deliverables:** `lab/components.py` (finders, measures, models, combine, stage registries); config schema v2
   and migrated configs; layered saves and `score.py --layer`; `eval/kick_labels.py` and its audit; configs
