@@ -358,7 +358,7 @@ def add_whole_song_truth(g):
         truth = [float(k) for k in kicks if 1.2 < k < dur - 1.2 and not any(a <= k <= b for a, b in merged)]
         src = dict(track=t, group='original_five', truth=truth, regions=[dict(start_s=a, end_s=b) for a, b in merged])
         m, y, _ = training_labels(src, None, r['candidates'], r['available'], sr, hop, dur)
-        r['train_mask'], r['train_y'] = m, y
+        r['train_mask'], r['train_y'], r['train_source'] = m, y, src
     for t, r in g.records.items():
         if 'train_mask' not in r:
             r['train_mask'], r['train_y'] = r['training_mask'], r['labels']

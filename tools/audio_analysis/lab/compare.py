@@ -2,9 +2,10 @@
 """The A/B of two experiments (docs/DETECTOR_LAB_DESIGN.md D6, D8): trains whatever seeds are missing, A and B
 interleaved so a slow machine hour hurts both alike, scores both from their saves, refuses to compare runs whose exam
 songs or labels differ, and prints the exam A/B (detector_compare), then the generated songs on their own. The text
-is also written to the lab cache's compare/ folder.
+is also written to the lab cache's compare/ folder. Configs with one net per song are refused: they cannot choose a
+song's cutoff on models that never saw it.
 
-Usage: compare.py CONFIG_A CONFIG_B [--seeds 0,1,2]"""
+Usage: compare.py CONFIG_A CONFIG_B [--seeds 0,1,2] [--layer net|trees|combined]   (layer: default each final)"""
 import sys
 import time
 from pathlib import Path
@@ -33,6 +34,10 @@ def main():
     if len(a) < 2:
         sys.exit(__doc__)
     cfgs = [load(a[0]), load(a[1])]
+    for c in cfgs:
+        if not c.folds:
+            sys.exit(f'{c.name}: folds 0 (one net per song) has optimistic cutoffs; compare runs with song groups')
+    layer = a[a.index('--layer') + 1] if '--layer' in a else None
     seeds = [int(s) for s in a[a.index('--seeds') + 1].split(',')] if '--seeds' in a else sorted(set(cfgs[0].seeds) & set(cfgs[1].seeds))
     ids = [run_id_of(a[0]), run_id_of(a[1])]
     todo = [(k, s) for s in seeds for k in (0, 1) if not (RUNS / ids[k] / f's{s}.npz').exists()]
@@ -43,7 +48,7 @@ def main():
         if left:
             per = (time.time() - t0) / (n + 1)
             print(f'{left} runs left, finish about {time.strftime("%H:%M", time.localtime(time.time() + left * per))}', flush=True)
-    reps = [score_run(i, log=lambda m: None) for i in ids]
+    reps = [score_run(i, layer, log=lambda m: None) for i in ids]
     for k in (0, 1):
         missing = set(seeds) - set(reps[k])
         if missing:
@@ -56,7 +61,7 @@ def main():
         print(m)
     for k, c in enumerate(cfgs):
         r = reps[k][seeds[0]]
-        out(f'{"AB"[k]}: {c.name} (run {ids[k]}) sampling {r["sampling"]}, train {list(c.train)}, '
+        out(f'{"AB"[k]}: {c.name} (run {ids[k]}, layer {r["layer"]}) sampling {r["sampling"]}, train {list(c.train)}, '
             f'train {sum(reps[k][s]["timings"]["train_s"] for s in seeds) / 60:.1f} min over {len(seeds)} seeds')
     first = reps[0][seeds[0]]
     out(f'exam: {len(first["exam"])} project songs, seeds {seeds}, excluded by audit {first["excluded"]}')

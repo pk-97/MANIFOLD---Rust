@@ -8,22 +8,41 @@ Rules every family shares:
 - Training rows: candidates within LAB_TOL of a positive are y = 1; rows inside unscored windows are dropped; inside
   loop spans only positives and vouched negatives train; recall-only songs train only on positives.
 - Fires: probability >= cutoff, at least REFR after the previous fire's emission.
-- Scoring at TOL (or the labels' tol_s): a positive is caught by any fire within it; a fire is false only outside unscored windows and, in
-  loop spans, only when it sits on a vouched negative.
+- Scoring at TOL (or the labels' tol_s, or their one-sided window_s [lo, hi]: fire minus label): a positive is caught
+  by any fire within it; a fire is false only outside unscored windows and, in loop spans, only when it sits on a
+  vouched negative. Labels with window_s also train their positives from candidates inside that window.
 - The cutoff for a held-out song is chosen on the other songs' held-out predictions; never on the song itself.
 """
 import numpy as np
 
 HOP, TOL, LAB_TOL, REFR = 256, .070, .035, .060
+EDGE = 1e-12  # a candidate exactly LAB_TOL from a label is inside the window, whatever the float rounding
+GAP_S = 2.0   # a positive with no known hit this long before it opens a passage (after_gap)
 THRESHOLDS = np.linspace(.05, .99, 95)
 
 
 def inside(t, spans):
-    t = np.asarray(t)
-    out = np.zeros(len(t), bool)
-    for a, b in spans:
-        out |= (t >= a) & (t <= b)
-    return out
+    """Whether each t lies in any closed span [a, b]. Spans may overlap: t is inside when the latest end among
+    spans starting at or before t reaches it."""
+    t = np.asarray(t, float)
+    if not len(spans) or not len(t):
+        return np.zeros(len(t), bool)
+    sp = np.asarray(spans, float)
+    sp = sp[np.argsort(sp[:, 0], kind='stable')]
+    reach = np.maximum.accumulate(sp[:, 1])
+    j = np.searchsorted(sp[:, 0], t, side='right') - 1
+    return (j >= 0) & (t <= reach[np.maximum(j, 0)])
+
+
+def covered(spans, lo, hi):
+    """Seconds of [lo, hi] inside any span, overlaps counted once."""
+    total, end = 0.0, lo
+    for a, b in sorted(spans):
+        a, b = max(a, end), min(b, hi)
+        if b > a:
+            total += b - a
+            end = b
+    return total
 
 
 def nearest(a, b):
@@ -35,17 +54,31 @@ def nearest(a, b):
     return np.minimum(np.abs(a - b[j - 1]), np.abs(a - b[np.minimum(j, len(b) - 1)]))
 
 
+def within(a, b, lo, hi):
+    """For each a, whether some b lies in [a + lo, a + hi]."""
+    b = np.sort(np.asarray(b, float))
+    a = np.asarray(a, float)
+    if not len(b):
+        return np.zeros(len(a), bool)
+    j = np.searchsorted(b, a + lo, 'left')
+    return (j < len(b)) & (b[np.minimum(j, len(b) - 1)] <= a + hi)
+
+
 def rows(s, onset, dense=False):
     """(training mask, y, vouched-negative flag) per candidate onset (s) for one song's labels s. With dense, the
     prominent events inside fast runs (s['dense_pos']) also train as positives; nothing else in a run trains."""
     pos, hard = np.array(s['positives']), np.array(s['hard_neg'])
-    y = (nearest(onset, pos) <= LAB_TOL).astype(float)
-    hard_near = nearest(onset, hard) <= LAB_TOL
+    if 'window_s' in s:
+        lo, hi = s['window_s']
+        y = within(onset, pos, -hi, -lo).astype(float)
+    else:
+        y = (nearest(onset, pos) <= LAB_TOL + EDGE).astype(float)
+    hard_near = nearest(onset, hard) <= LAB_TOL + EDGE
     mask = ~inside(onset, s['unscored'])
     in_loop = inside(onset, s['loop_spans'])
     mask &= ~in_loop | (y == 1) | hard_near
     if dense and s.get('dense_pos'):
-        run = nearest(onset, np.array(s['dense_pos'])) <= LAB_TOL
+        run = nearest(onset, np.array(s['dense_pos'])) <= LAB_TOL + EDGE
         y[run] = 1.0
         mask |= run
     if s['positives_only']:
@@ -53,11 +86,11 @@ def rows(s, onset, dense=False):
     return mask, y, hard_near & (y == 0)
 
 
-def fires(p, avail, th, sr, refr=REFR):
-    """Indices of firing candidates: p >= th, emissions at least refr apart."""
+def fires(p, avail, th, sr, refr=REFR, hop=HOP):
+    """Indices of firing candidates: p >= th, emissions at least refr apart (avail in hops of hop samples)."""
     out, last = [], -1e9
     for i in np.flatnonzero(p >= th):
-        if (avail[i] - last) * HOP / sr >= refr - 1e-12:
+        if (avail[i] - last) * hop / sr >= refr - 1e-12:
             out.append(i)
             last = avail[i]
     return np.array(out, int)
@@ -68,40 +101,78 @@ def tol(s):
     return s.get('tol_s', TOL)
 
 
-def judged(s, stamp, p, avail, th, sr):
+def judged(s, stamp, p, avail, th, sr, hop=HOP):
     """(caught, positives, false fire times, fire times) for one song at cutoff th; fires at stamp."""
-    f = stamp[fires(p, avail, th, sr)]
+    f = stamp[fires(p, avail, th, sr, hop=hop)]
     pos = np.array(s['positives'])
-    w = tol(s)
-    matched = int(np.sum(nearest(pos, f) <= w)) if len(f) else 0
+    if 'window_s' in s:
+        lo, hi = s['window_s']
+        matched = int(np.sum(within(pos, f, lo, hi))) if len(f) else 0
+        false = f[~within(f, pos, -hi, -lo)]
+    else:
+        w = tol(s)
+        matched = int(np.sum(nearest(pos, f) <= w)) if len(f) else 0
+        false = f[nearest(f, pos) > w] if len(pos) else f
     if s['positives_only']:
         return matched, len(pos), f[:0], f
-    false = f[nearest(f, pos) > w] if len(pos) else f
     false = false[~inside(false, s['unscored'])]
     false = false[~inside(false, s['loop_spans']) | (nearest(false, s['hard_neg']) <= LAB_TOL)]
     return matched, len(pos), false, f
 
 
-def score(s, emit, p, avail, th, sr):
+def score(s, emit, p, avail, th, sr, hop=HOP):
     """(caught, positives, false fires) for one song at cutoff th."""
-    m, n, false, _ = judged(s, emit, p, avail, th, sr)
+    m, n, false, _ = judged(s, emit, p, avail, th, sr, hop)
     return m, n, len(false)
 
 
-def song_result(s, emit, p, avail, th, sr, ahead=0.0):
+def song_result(s, emit, p, avail, th, sr, ahead=0.0, hop=HOP):
     """One song's scored result for comparisons (detector_compare): caught, positives, false fires (and their times),
     cutoff, scored minutes (duration less unscored windows) and the lateness of each caught event's trigger in ms
     (the decision, stamp + ahead, minus the label)."""
-    m, n, false, fired = judged(s, emit, p, avail, th, sr)
+    m, n, false, fired = judged(s, emit, p, avail, th, sr, hop)
     late = []
     for t in s['positives']:
-        if len(fired):
-            e = fired[np.argmin(np.abs(fired - t))]
-            if abs(e - t) <= tol(s):
-                late.append(round(1000 * (e + ahead - t), 1))
-    gone = sum(b - a for a, b in s['unscored'])
+        if not len(fired):
+            continue
+        if 'window_s' in s:
+            lo, hi = s['window_s']
+            near = fired[(fired - t >= lo) & (fired - t <= hi)]
+            if len(near):
+                late.append(round(1000 * (near[0] + ahead - t), 1))
+            continue
+        e = fired[np.argmin(np.abs(fired - t))]
+        if abs(e - t) <= tol(s):
+            late.append(round(1000 * (e + ahead - t), 1))
+    gone = covered(s['unscored'], 0.0, s['duration_s'])
+    pos = np.array(s['positives'])
+    first = after_gap(s)
+    if not len(first) or not len(fired):
+        caught = np.zeros(len(first), bool)
+    elif 'window_s' in s:
+        caught = within(pos[first], fired, *s['window_s'])
+    else:
+        caught = nearest(pos[first], fired) <= tol(s)
     return dict(matched=m, labels=n, extra=len(false), cutoff=float(th), minutes=max(0.0, s['duration_s'] - gone) / 60,
-                late_ms=late, false_s=[round(float(v), 3) for v in false])
+                late_ms=late, false_s=[round(float(v), 3) for v in false], gap_labels=int(len(first)),
+                gap_matched=int(caught.sum()))
+
+
+def after_gap(s, gap=GAP_S):
+    """Indices of positives that open a passage: no known hit (positives, roll hits left out, run events) in the gap
+    before them, and that gap fully known (inside the song, clear of unscored windows). A drop's first kick is one;
+    history stages must not quietly lose them."""
+    pos = np.array(s['positives'])
+    known = np.sort(np.concatenate([pos, np.array(s.get('dropped') or []), np.array(s.get('dense_pos') or [])]))
+    out = []
+    for i, t in enumerate(pos):
+        a = t - gap
+        if a < 0 or np.any((known > a) & (known < t - 1e-9)):
+            continue
+        if any(u < t and v > a for u, v in s['unscored']):
+            continue
+        out.append(i)
+    return np.array(out, int)
 
 
 def pooled(items, th):
@@ -134,24 +205,40 @@ def choose_from(sums, min_precision=None):
     return best[1]
 
 
-def held_out(lab, meta, held, min_precision=None, log=print, cutoffs=None, per_song=None, ahead=0.0):
-    """Score every song with a cutoff chosen on the others. meta[t] = (labels, emit, avail, sr); held[t] = held-out
-    probabilities. Recall-only and generated songs never choose a cutoff: cutoffs are set on real music. Returns (caught, positives, false); fills cutoffs[t]
-    and per_song[t] (song_result, decisions at stamp + ahead; ahead a number or one per song) when given."""
+def held_out(lab, meta, held, min_precision=None, log=print, cutoffs=None, per_song=None, ahead=0.0, pool=None):
+    """Score every song with a cutoff chosen on the others. meta[t] = (labels, emit, avail, sr[, hop]); held[t] = held-out
+    probabilities. Recall-only and generated songs never choose a cutoff: cutoffs are set on real music. pool[t], when
+    given, holds the other songs' probabilities to choose t's cutoff on (from models that never saw t); one dict
+    object per song group. Returns (caught, positives, false); fills cutoffs[t] and per_song[t] (song_result,
+    decisions at stamp + ahead; ahead a number or one per song) when given."""
     tm = tn = tf = 0
     songs = list(held)
-    # Each eligible song's score at every threshold, once: a cutoff is then a sum over the other songs.
-    table = {u: np.array([score(meta[u][0], meta[u][1], held[u], meta[u][2], th, meta[u][3]) for th in THRESHOLDS])
-             for u in songs if not lab[u]['positives_only'] and lab[u].get('kind') != 'generated'}
-    total = sum(table.values(), np.zeros((len(THRESHOLDS), 3), int))
+    hop = {u: meta[u][4] if len(meta[u]) > 4 else HOP for u in songs}
+    eligible = [u for u in songs if not lab[u]['positives_only'] and lab[u].get('kind') != 'generated']
+
+    def table(probs, users):
+        return {u: np.array([score(meta[u][0], meta[u][1], probs[u], meta[u][2], th, meta[u][3], hop[u]) for th in THRESHOLDS])
+                for u in users}
+    # Without a pool each eligible song is scored once per threshold and a cutoff is a sum over the other songs.
+    own = table(held, eligible) if pool is None else None
+    total = sum(own.values(), np.zeros((len(THRESHOLDS), 3), int)) if own is not None else None
+    pooled_sums = {}
     for t in songs:
-        th = choose_from([tuple(int(v) for v in row) for row in total - table.get(t, 0)], min_precision)
+        if pool is None:
+            sums = total - own.get(t, 0)
+        else:
+            key = id(pool[t])
+            if key not in pooled_sums:
+                pooled_sums[key] = sum(table(pool[t], [u for u in eligible if u in pool[t]]).values(),
+                                       np.zeros((len(THRESHOLDS), 3), int))
+            sums = pooled_sums[key]
+        th = choose_from([tuple(int(v) for v in row) for row in sums], min_precision)
         if cutoffs is not None:
             cutoffs[t] = th
-        s, emit, avail, sr = meta[t]
-        m, n, f = score(s, emit, held[t], avail, th, sr)
+        s, emit, avail, sr = meta[t][:4]
+        m, n, f = score(s, emit, held[t], avail, th, sr, hop[t])
         if per_song is not None:
-            per_song[t] = song_result(s, emit, held[t], avail, th, sr, ahead[t] if isinstance(ahead, dict) else ahead)
+            per_song[t] = song_result(s, emit, held[t], avail, th, sr, ahead[t] if isinstance(ahead, dict) else ahead, hop[t])
         tm, tn, tf = tm + m, tn + n, tf + f
         if log:
             log(f'  {t:14s} cutoff {th:.2f}: {m}/{n} caught, {f} false fires')
@@ -165,9 +252,12 @@ def dense_recall(lab, meta, held, cutoffs, key='dense_pos'):
         d = np.array(lab[t].get(key) or [])
         if not len(d):
             continue
-        s, emit, avail, sr = meta[t]
-        f = emit[fires(held[t], avail, cutoffs[t], sr)]
-        m += int(np.sum(nearest(d, f) <= tol(s))) if len(f) else 0
+        s, emit, avail, sr = meta[t][:4]
+        f = emit[fires(held[t], avail, cutoffs[t], sr, hop=meta[t][4] if len(meta[t]) > 4 else HOP)]
+        if 'window_s' in s:
+            m += int(np.sum(within(d, f, *s['window_s'])))
+        else:
+            m += int(np.sum(nearest(d, f) <= tol(s))) if len(f) else 0
         n += len(d)
     return m, n
 

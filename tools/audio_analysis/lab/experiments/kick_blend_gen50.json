@@ -1,0 +1,47 @@
+{
+  "family": "kick",
+  "candidates": "kick",
+  "models": {
+    "net": {
+      "past_ms": 150,
+      "ahead_ms": 40,
+      "channels": [],
+      "epochs": 12,
+      "swa_epochs": 0,
+      "batch": 256,
+      "lr": 0.002,
+      "precision": "float32"
+    },
+    "trees": {
+      "measures": [
+        "f15",
+        "tail3",
+        "prof32",
+        "low16"
+      ],
+      "max_iter": 200,
+      "learning_rate": 0.05,
+      "max_leaf_nodes": 15,
+      "min_samples_leaf": 40,
+      "l2": 1.0
+    }
+  },
+  "combine": "mean_logit",
+  "stage": null,
+  "sampling": {
+    "per_song": "median",
+    "generated": 0.5
+  },
+  "train": [
+    "project",
+    "generated"
+  ],
+  "seeds": [
+    0,
+    1,
+    2,
+    3,
+    4
+  ],
+  "folds": 4
+}

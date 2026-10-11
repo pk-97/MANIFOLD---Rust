@@ -8,6 +8,7 @@ Usage: registry.py build | show [SONG] | verify [SONG...]"""
 import functools
 import hashlib
 import json
+import os
 import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -21,8 +22,12 @@ recipe.apply()
 import numpy as np  # noqa: E402
 
 SONGS = Path(__file__).with_name('songs.json')
+HASHES = Path.home() / '.cache/manifold/detector-lab/source_hashes.json'   # path -> [size, mtime_ns, sha256]
 # Family -> its labels files under GOAL (project songs, then generated).
-FAMILIES = {'snare': ('snare_labels.json', 'snare_labels_generated.json')}
+FAMILIES = {'snare': ('snare_labels.json', 'snare_labels_generated.json'),
+            'bass': ('bass_labels.json', 'bass_labels_generated.json'),
+            'synth': ('synth_labels.json', 'synth_labels_generated.json'),
+            'kick': ('kick_labels.json', 'kick_labels_generated.json')}
 GEN_SR = 48000
 
 
@@ -52,6 +57,29 @@ def sha256_file(path):
         for chunk in iter(lambda: f.read(1 << 20), b''):
             h.update(chunk)
     return h.hexdigest()
+
+
+def check_sources(songs):
+    """Exits unless every song's source files still hash to what songs.json recorded. A file is re-hashed only when
+    its size or modified time moved, so the check costs a stat per file on a quiet day."""
+    memo = json.loads(HASHES.read_text()) if HASHES.exists() else {}
+    bad, dirty = [], False
+    for s in songs:
+        for path, want in zip(s.source['paths'], s.source_sha256):
+            st = os.stat(path)
+            stamp = [st.st_size, st.st_mtime_ns]
+            if memo.get(path, [None, None])[:2] != stamp:
+                memo[path], dirty = stamp + [sha256_file(path)], True
+            if memo[path][2] != want:
+                bad.append(f'{s.id}: {path}')
+    if dirty:
+        HASHES.parent.mkdir(parents=True, exist_ok=True)
+        tmp = HASHES.with_suffix('.tmp')
+        tmp.write_text(json.dumps(memo))
+        tmp.replace(HASHES)
+    if bad:
+        sys.exit('source audio changed since the song list was built; run lab/registry.py build, then audit:\n'
+                 + '\n'.join(sorted(set(bad))))
 
 
 def load():
@@ -110,6 +138,8 @@ def build():
             for t, s in json.loads((GOAL / f).read_text()).items():
                 fams.setdefault(t, []).append(fam)
                 if t in rows:
+                    if s.get('kind') == 'generated' and rows[t]['source'].get('paths') != [s['export']]:
+                        sys.exit(f'{t}: two families label different audio under one song id')
                     continue
                 if s.get('kind') == 'generated':
                     src = dict(how='section', paths=[s['export']], start_s=s['section'][0], end_s=s['section'][1])
