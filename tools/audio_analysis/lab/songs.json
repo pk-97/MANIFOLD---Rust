@@ -2502,7 +2502,7 @@
    "synth",
    "kick"
   ],
-  "audit_override": null
+  "audit_override": "Peter, 2026-10-11: 100% usable. Kick labels sit on the mix kick attacks (isolated labels: median -6 ms, p10-p90 -7 to -4); the kick pattern picks the labels bar (r 0.72 vs 0.67)."
  },
  {
   "id": "renew",
@@ -2524,7 +2524,7 @@
    "synth",
    "kick"
   ],
-  "audit_override": null
+  "audit_override": "Peter, 2026-10-11: 100% usable. Kick labels sit on the mix kick attacks (median 0 ms, p10-p90 -1 to +8); the kick pattern picks the labels bar (r 0.89 vs 0.72)."
  },
  {
   "id": "overwhelming_force",
@@ -2546,7 +2546,7 @@
    "synth",
    "kick"
   ],
-  "audit_override": null
+  "audit_override": "Peter, 2026-10-11: 100% usable. Kick labels sit on the mix kick attacks (median -2 ms, p10-p90 -4 to +4); the kick pattern and the other instruments both pick the labels bar."
  },
  {
   "id": "apricots_128bpm",
