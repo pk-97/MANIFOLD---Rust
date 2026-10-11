@@ -41,7 +41,7 @@ def sections(res, how, start):
 
 def main():
     from tools.audio_analysis.eval.als_extract import extract
-    from tools.audio_analysis.eval.detector_labels import read_any
+    from tools.audio_analysis.eval.detector_labels import builder_id, read_any
     from tools.audio_analysis.eval.kick_goal_eval import GOAL, load
     from tools.audio_analysis.eval.note_clean import PROJECT
     from tools.audio_analysis.eval.snare_labels import FAMILY
@@ -63,7 +63,9 @@ def main():
             keep = (pos > .1) & (pos < dur - .1)
             out[name] = dict(kind='generated', duration_s=float(dur), positives=sorted(map(float, pos[keep])), unscored=[], loop_spans=[],
                              hard_neg=sorted(map(float, np.unique(np.round(neg, 4)))), positives_only=False, dense_pos=[], dropped=[],
-                             dense=[], timing_shift_ms=0.0, offset_s=float(a))
+                             dense=[], timing_shift_ms=0.0, offset_s=float(a), section=[float(a), float(b)],
+                             export=str(PROJECT / 'Exports' / f'Labels and Timings - {export}.wav'),
+                             sources=dict(generated=int(len(pos))), builder=builder_id(__file__))
             print(f'{name:14s} {dur:6.1f} s: {int(keep.sum()):4d} snares and claps, {len(neg):5d} vouched negatives')
     (GOAL / 'snare_labels_generated.json').write_text(json.dumps(out))
     print(f"total {sum(len(s['positives']) for s in out.values())} snares in {len(out)} songs, {sum(s['duration_s'] for s in out.values()) / 60:.1f} min")

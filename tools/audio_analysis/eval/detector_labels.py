@@ -56,6 +56,13 @@ class Family:
     kick_clash_s: float = 0.0   # events this close to a kick are unscored: the mix cannot tell them apart
 
 
+def builder_id(module_file):
+    """A labels builder's identity for the labels file: module name and the sha256 of its source."""
+    import hashlib
+    p = Path(module_file)
+    return f'{p.stem}@{hashlib.sha256(p.read_bytes()).hexdigest()[:12]}'
+
+
 def env_db(x, sr, lo, hi):
     """1 ms grid log energy of one band over the last 5 ms."""
     y = sosfilt(butter(4, (lo, hi), btype='band', fs=sr, output='sos'), x) ** 2
@@ -391,7 +398,8 @@ def song(g, t, fam):
                 loop_spans=[list(map(float, u)) for u in loops], hard_neg=sorted(map(float, np.unique(np.round(neg, 4)))),
                 positives_only=t in fam.recall_only, dropped=sorted(map(float, dropped)), dense=dense,
                 dense_pos=sorted(map(float, dense_pos)), dense_all=sorted(map(float, dense_all)),
-                timing_shift_ms=round(1000 * shift, 1), offset_s=float(off), unmuted=sorted(unmute))
+                timing_shift_ms=round(1000 * shift, 1), offset_s=float(off), unmuted=sorted(unmute),
+                sources=dict(midi=len(notes), clip_start=len(placed)), builder=builder_id(__file__))
 
 
 def vouched(g, t, W, src, res):

@@ -17,22 +17,18 @@ clip starts with silence, so no candidate's slice or baseline reaches before the
 """
 from __future__ import annotations
 
-import os
 import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT))
+
+from tools.audio_analysis.lab import recipe  # noqa: E402
 
 # Net input shape: 190 ms slice (95 frames, four time segments), third channel slot carries noisiness.
-RECIPE_ENV = dict(KICK_GOAL_NN_PAST_MS='190', KICK_GOAL_NN_PERC='1', KICK_GOAL_NN_AHEAD_MS='0', SNARE_FLAT='1',
-                  SNARE_PAST_MS='190', KICK_GOAL_TRUTH='v3', KICK_GOAL_MORE='1', KICK_GOAL_TRIGGER='1',
-                  KICK_GOAL_WIP='1', KICK_GOAL_PROJECT='1', KICK_GOAL_RECALL='1')
-for _k, _v in RECIPE_ENV.items():
-    if os.environ.get(_k, _v) != _v:
-        sys.exit(f'{_k}={os.environ[_k]} is not the release recipe ({_v})')
-    os.environ[_k] = _v
-for _k in ('KICK_GOAL_NN_BANDS', 'KICK_GOAL_NN_STEREO', 'SNARE_AHEAD_MS'):
-    if os.environ.get(_k):
-        sys.exit(f'{_k} is set; the release recipe uses the defaults')
-for _k in ('OMP_NUM_THREADS', 'OPENBLAS_NUM_THREADS', 'VECLIB_MAXIMUM_THREADS', 'MKL_NUM_THREADS'):
-    os.environ.setdefault(_k, '1')
+NET_ENV = dict(KICK_GOAL_NN_PAST_MS='190', KICK_GOAL_NN_PERC='1', KICK_GOAL_NN_AHEAD_MS='0', SNARE_FLAT='1',
+               SNARE_PAST_MS='190')
+recipe.apply(NET_ENV)
 
 import argparse  # noqa: E402
 import datetime  # noqa: E402
@@ -40,10 +36,6 @@ import json  # noqa: E402
 import pickle  # noqa: E402
 import subprocess  # noqa: E402
 import time  # noqa: E402
-from pathlib import Path  # noqa: E402
-
-ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(ROOT))
 
 import numpy as np  # noqa: E402
 from scipy.signal import butter  # noqa: E402

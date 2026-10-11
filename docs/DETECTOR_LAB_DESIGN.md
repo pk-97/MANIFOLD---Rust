@@ -1,6 +1,6 @@
 # Detector Lab — one place to label, train and judge MANIFOLD's audio detectors
 
-**Status:** IN PROGRESS · 2026-10-11 · P1 building · Opus 5.5 lead; revised after an Opus adversarial review
+**Status:** IN PROGRESS · 2026-10-11 · P1 built, its audit table awaits Peter (D5 trigger) · Opus 5.5 lead; revised after an Opus adversarial review
 **Prerequisites:** none
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (phase briefs) and section 6 (seam briefs) before starting any phase.
 
@@ -180,7 +180,7 @@ class Experiment:
 Report JSON: the `write_results` layout (`results.net.per_song`) plus `exam`, `generated`, `excluded`, `recall_only`,
 `sampling`, `timings`, `run_id`. `detector_compare` reads `recall_only` from it.
 
-Commands (one `scripts/dev.py` verb, `detector-lab`):
+Commands (`scripts/dev.py` verbs `lab-songs`, `lab-audit`, `lab-test`; later phases add `lab-run`, `lab-score`, `lab-compare`):
 
 ```
 lab/registry.py build | show [SONG] | verify
@@ -199,7 +199,7 @@ lab/test_lab.py                         # the lab's tests (unittest, run directl
 | The exam holds only project, audit-passing songs | `run.py` asserts before training; `test_lab.py::test_exam_rejects_generated` |
 | No net predicts a song it trained on | `run.py` asserts train ∩ group = ∅ per net, recorded in `meta.json`; `test_lab.py::test_held_out_disjoint` |
 | A/B compares the same exam songs and labels sha | `compare.py` refuses otherwise; `test_lab.py::test_compare_refuses_mismatch` |
-| Caches key on content, never names | `test_lab.py::test_renamed_song_misses_cache`; gate `rg "spectrum_cache\|extra_caches\|flat_cache\|pitch_cache\|detector_songs.spec\|snare_wip/" tools/audio_analysis/lab` → 0 |
+| Caches key on content, never names | `test_lab.py::test_recycled_name_misses_cache`; gate `rg "spectrum_cache\|extra_caches\|flat_cache\|pitch_cache\|detector_songs.spec\|snare_wip/" tools/audio_analysis/lab` → 0 |
 | The lab scores like the legacy runner | `test_lab.py::test_scorer_parity` (legacy npz → identical per-song results) |
 | The lab feeds training what the legacy runner did | `test_lab.py::test_input_parity` (song order, groups, seeds, tensor bytes) |
 | The recipe env is pinned | `recipe.apply` exits on conflict; `test_lab.py::test_recipe_conflict_exits` |
@@ -225,9 +225,9 @@ lab/test_lab.py                         # the lab's tests (unittest, run directl
   lines 100–220; `eval/detector_songs.py`; `eval/detector_labels.py (song)`; `eval/snare_generated.py`. Restate D2–D5
   and the forbidden moves.
 - **Deliverables:** `lab/__init__.py`, `lab/recipe.py` (and `snare_release.py` importing it), `lab/registry.py`,
-  `lab/cache.py`, `lab/audit.py`, `lab/songs.json`, `lab/test_lab.py` with `test_renamed_song_misses_cache`,
+  `lab/cache.py`, `lab/audit.py`, `lab/songs.json`, `lab/test_lab.py` with `test_recycled_name_misses_cache`,
   `test_recipe_conflict_exits`, `test_audit_keeps_labels_sha`; `detector_labels.song`, `snare_generated` write
-  `sources` and `builder`; `dev.py` verb `detector-lab`; `scripts/TOOLS.md` regenerated.
+  `sources` and `builder`; `dev.py` verbs `lab-songs`, `lab-audit`, `lab-test`; `scripts/TOOLS.md` regenerated.
 - **Gate:** `registry.py build` lists 24 project and 20 generated snare songs; `registry.py verify` prints, per song,
   max abs diff 0 between `registry.mix` and the legacy loader under the recipe env; `audit.py snare` prints the table;
   `test_lab.py` passes; the section-4 cache rg gate → 0.
