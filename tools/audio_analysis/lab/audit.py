@@ -3,9 +3,10 @@
 <labels>.audit.json next to each labels file, keyed by the labels file's sha256 (the labels file is never touched),
 and prints the table and the failures.
 
-Project song fails when: its export offset has no proof against a stem, trigger track or the WIP kick-and-snare
-agreement; or fewer than a quarter of its known times survive the prominence filter (with more than 20 known times);
-or its fitted timing shift sits at the edge of the +-30 ms search. Generated song fails when a label is not a snare or
+Project song fails when its export offset has no proof (a kick stem, a trigger track, or the kick-and-snare grid fit
+of detector_wip or lab/offsets.py) or its fitted timing shift sits at the edge of the +-30 ms search. The share of
+known times kept is reported, never failed: quiet fills and rolls are dropped by design (Peter, 2026-10-11: "we should
+focus on the snares on the main off beats, not all of the little fills and percusions"). Generated song fails when a label is not a snare or
 clap note of its section, or a snare or clap note of its section has no label. A failing song is excluded from every
 run until Peter sets audit_override in songs.json. If more than MAX_FAILS project songs fail, stop: the table goes to
 Peter before anything is excluded.
@@ -24,8 +25,8 @@ recipe.apply()
 
 import numpy as np  # noqa: E402
 
-PROVEN = ('wip:proven', 'goal:trigger', 'goal:kick stem', 'generated')
-MIN_KEPT, MIN_KNOWN, SHIFT_EDGE_MS, MAX_FAILS = .25, 20, 30.0, 3
+PROVEN = ('wip:proven', 'lab:proven', 'goal:trigger', 'goal:kick stem', 'generated')
+SHIFT_EDGE_MS, MAX_FAILS = 30.0, 3
 
 
 def project_check(s, song):
@@ -34,8 +35,6 @@ def project_check(s, song):
     why = []
     if not song.proof.startswith(PROVEN):
         why.append(f'offset proof: {song.proof}')
-    if known > MIN_KNOWN and kept / known < MIN_KEPT:
-        why.append(f'{kept} of {known} known times kept')
     if abs(s.get('timing_shift_ms', 0.0)) >= SHIFT_EDGE_MS:
         why.append(f"timing shift {s['timing_shift_ms']} ms at the search edge")
     return dict(known=known, kept=kept, shift_ms=s.get('timing_shift_ms', 0.0), proof=song.proof, why=why)

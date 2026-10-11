@@ -1,6 +1,6 @@
 # Detector Lab — one place to label, train and judge MANIFOLD's audio detectors
 
-**Status:** IN PROGRESS · 2026-10-11 · P1 built, its audit table awaits Peter (D5 trigger) · Opus 5.5 lead; revised after an Opus adversarial review
+**Status:** IN PROGRESS · 2026-10-11 · P1 shipped on the branch, P2 next · Opus 5.5 lead; revised after an Opus adversarial review
 **Prerequisites:** none
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (phase briefs) and section 6 (seam briefs) before starting any phase.
 
@@ -88,17 +88,19 @@ source: `midi`, `clip_start`, `generated`) and `builder` (module and content has
 labels file: they live in a sidecar `<labels>.audit.json` keyed by the labels file's sha (D5), so auditing never
 changes the labels sha.
 
-**D5. The audit checks raw known times, not loudness.** Per project song, before any filtering, it records: known
-times found, positives kept, positives dropped as not prominent, the fitted timing shift, and the offset proof. The
-proof is `wip:<detector_wip proof string>` for WIP songs, `goal:<lag source>` for kick-goal songs (the lag file it came
-from), or `none`. A song **fails** when: proof is `none`; or kept / (kept + dropped) is under 0.25 with more than 20
-known times (openings 0 of 1781, midnight_patience 42 of 180); or the timing shift sits at the ±30 ms search edge.
-Generated songs are exempt from the kept-share and shift checks; their audit asserts every MIDI note in the section is
-a label or a vouched negative, counts matching `als_extract`. Failing songs are excluded and listed in every report
-until Peter sets `audit_override`. **Default with trigger:** if more than 3 real snare songs fail on the first run,
-stop and show Peter the table before excluding any. Rejected: an attack-alignment test, because snare positives
-already passed a 9 dB attack test (`prominent`) and would pass by construction, while certain quiet MIDI notes (DnB
-ghost snares) would fail it.
+**D5. The audit checks offsets and note truth, not loudness.** Per project song it records known times found,
+kept, dropped as not prominent, the fitted timing shift, and the offset proof: `wip:<status>` (detector_wip),
+`lab:<status>` (`lab/offsets.py`, the same kick-and-snare grid fit run on a goal song's own mix, counted only when it
+lands within 1 ms of the offset the labels use), `goal:trigger ...`, `goal:kick stem ...`, or `none`. A project song
+**fails** when its proof is not proven or its timing shift sits at the ±30 ms search edge. The kept share is reported,
+never failed: quiet fills and rolls are dropped by design. Peter, 2026-10-11: "we should focus on the snares on the
+main off beats, not all of the little fills and percusions." A generated song fails when a label is not a snare or
+clap note of its section, or such a note has no label. Failing songs are excluded and listed in every report until
+Peter sets `audit_override`. **Default with trigger:** if more than 3 project songs fail, stop and show Peter the
+table before excluding any. (First run, 2026-10-11: the trigger fired on four songs whose offsets had never been
+recorded as proven; `lab/offsets.py` proved all four at their existing offsets.) Rejected: an attack-alignment test,
+because snare positives already passed a 9 dB attack test (`prominent`) and would pass by construction, while certain
+quiet MIDI notes (DnB ghost snares) would fail it.
 
 **D6. An experiment is a JSON config file; A/B is two configs.** `lab/experiments/<name>.json`: `family`, `labels`,
 `candidates` (`snare:4.5` or a `detector_net.family_candidates` rule), `net` (`past_ms`, `ahead_ms`, `flat`,
@@ -180,7 +182,7 @@ class Experiment:
 Report JSON: the `write_results` layout (`results.net.per_song`) plus `exam`, `generated`, `excluded`, `recall_only`,
 `sampling`, `timings`, `run_id`. `detector_compare` reads `recall_only` from it.
 
-Commands (`scripts/dev.py` verbs `lab-songs`, `lab-audit`, `lab-test`; later phases add `lab-run`, `lab-score`, `lab-compare`):
+Commands (`scripts/dev.py` verbs `lab-songs`, `lab-audit`, `lab-offsets`, `lab-test`; later phases add `lab-run`, `lab-score`, `lab-compare`):
 
 ```
 lab/registry.py build | show [SONG] | verify
@@ -227,7 +229,7 @@ lab/test_lab.py                         # the lab's tests (unittest, run directl
 - **Deliverables:** `lab/__init__.py`, `lab/recipe.py` (and `snare_release.py` importing it), `lab/registry.py`,
   `lab/cache.py`, `lab/audit.py`, `lab/songs.json`, `lab/test_lab.py` with `test_recycled_name_misses_cache`,
   `test_recipe_conflict_exits`, `test_audit_keeps_labels_sha`; `detector_labels.song`, `snare_generated` write
-  `sources` and `builder`; `dev.py` verbs `lab-songs`, `lab-audit`, `lab-test`; `scripts/TOOLS.md` regenerated.
+  `sources` and `builder`; `lab/offsets.py`, `lab/offset_proofs.json`; `dev.py` verbs `lab-songs`, `lab-audit`, `lab-offsets`, `lab-test`; `scripts/TOOLS.md` regenerated.
 - **Gate:** `registry.py build` lists 24 project and 20 generated snare songs; `registry.py verify` prints, per song,
   max abs diff 0 between `registry.mix` and the legacy loader under the recipe env; `audit.py snare` prints the table;
   `test_lab.py` passes; the section-4 cache rg gate → 0.

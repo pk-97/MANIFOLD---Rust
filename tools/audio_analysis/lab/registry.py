@@ -82,8 +82,12 @@ def mix(song):
 
 def _proof(t, W):
     from tools.audio_analysis.eval.kick_goal_melodic import PROJECT, SURVEY, TRIGGER
+    from tools.audio_analysis.lab.offsets import PROOFS
     if t in W:
         return f"wip:{W[t]['status']}"
+    lab = json.loads(PROOFS.read_text()).get(t) if PROOFS.exists() else None
+    if lab and lab['status'].startswith('proven'):
+        return f"lab:{lab['status']}"
     if t in TRIGGER:
         return 'goal:trigger track export offset (labels_trigger.json)'
     if (SURVEY / f'{t}.json').exists():

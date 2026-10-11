@@ -56,6 +56,7 @@ Render and measure:
   snare-release           snare model release: train the final net (cutoff from the held-out run); export --out DIR writes the model file and parity goldens  [tools/audio_analysis/snare_release.py]  (cost: broad)
   lab-songs               detector lab song list: build | show [SONG] | verify (audio and hashes match the legacy loader)  [tools/audio_analysis/lab/registry.py]  (cost: focused)
   lab-audit               detector lab label audit for a family: offset proofs, kept known times, generated labels vs project notes  [tools/audio_analysis/lab/audit.py]  (cost: focused)
+  lab-offsets             detector lab export-offset proof for project songs (kick and snare grid fit on the song's own mix)  [tools/audio_analysis/lab/offsets.py]  (cost: focused)
   lab-test                detector lab invariant tests  [tools/audio_analysis/lab/test_lab.py]  (cost: focused)
   repair-audio-fixture    rebuild a fixture mix from aligned stems, preserving the original; dry-run unless --apply  [scripts/repair_audio_fixture.py]  (cost: focused)
 

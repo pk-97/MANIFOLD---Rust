@@ -13,7 +13,7 @@
   ],
   "sample_rate": 48000,
   "offset_s": -30.9163,
-  "proof": "goal:wip survey offset (unproven against a stem)",
+  "proof": "lab:proven (kick and snare agree)",
   "families": [
    "snare"
   ],
@@ -33,7 +33,7 @@
   ],
   "sample_rate": 48000,
   "offset_s": -26.6123,
-  "proof": "goal:wip survey offset (unproven against a stem)",
+  "proof": "lab:proven (kick and snare agree)",
   "families": [
    "snare"
   ],
@@ -93,7 +93,7 @@
   ],
   "sample_rate": 48000,
   "offset_s": -28.6043,
-  "proof": "goal:wip survey offset (unproven against a stem)",
+  "proof": "lab:proven (kick and snare agree)",
   "families": [
    "snare"
   ],
@@ -193,7 +193,7 @@
   ],
   "sample_rate": 48000,
   "offset_s": -25.5486,
-  "proof": "goal:wip survey offset (unproven against a stem)",
+  "proof": "lab:proven (one pattern, clear win)",
   "families": [
    "snare"
   ],
