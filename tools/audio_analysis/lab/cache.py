@@ -136,6 +136,14 @@ def flatness(song):
     return a.astype(np.float32)
 
 
+def percussive(song):
+    """Per-band percussive share (kick_goal_nn.percussive) of the net's own spectrum."""
+    from tools.audio_analysis.eval import kick_goal_nn as nn
+    a = artifact(song, 'percussive', dict(code=code_id(nn.percussive), spec=code_id(nn.spectrum)),
+                 lambda: nn.percussive(spectrum(song)).astype(np.float16))
+    return a.astype(np.float32)
+
+
 def module_id(*mods):
     """The source of whole modules: a change to any helper the builder calls is a miss."""
     h = hashlib.sha256()

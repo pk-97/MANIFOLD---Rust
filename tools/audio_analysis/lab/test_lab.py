@@ -842,7 +842,7 @@ class ReleaseTests(unittest.TestCase):
             ('measure', dict(ck, **{'trees.measures': text('f15,tail3,prof32,fall16,res16')})),
             ('measure', dict(ck, **{'res.window': np.array(400, np.int64)})),
             ('measure', dict(ck, **{'stage.shape': text('prof32,glide3')})),
-            ('channel', dict(cs, **{'net.extra': text('perc')})),
+            ('channel', dict(cs, **{'net.extra': text('side')})),
             ('combine', dict(ck, combine=text('max'))),
             ('combine-models', dict(ck, combine=text('net'))),
             ('models', dict(ck, models=text('trees,net'))),
@@ -970,7 +970,7 @@ class ReleaseTests(unittest.TestCase):
         from unittest import mock
 
         from tools.audio_analysis.lab import release
-        for name in ('kick_gen50_gated', 'snare_gen50_hybrid_low16', 'cover_kick', 'cover_snare'):
+        for name in ('kick_gen50_gated', 'snare_gen50_hybrid_low16', 'kick_v2_final', 'snare_v2_mid', 'cover_kick', 'cover_snare'):
             release.refuse_undeclared(config.load(name))
         s = config.load('snare_gen50_hybrid_low16')
 
@@ -980,7 +980,7 @@ class ReleaseTests(unittest.TestCase):
         bad = [edit(s, models=dict(s.models, trees=dict(trees, measures=['prof32', 'res16']))),
                edit(s, models=dict(s.models, trees=dict(trees, measures=['glide3']))),
                edit(s, models=dict(s.models, trees=dict(trees, measures=['f15', 'prof32']))),
-               edit(s, models=dict(s.models, net=dict(s.models['net'], channels=['perc']))),
+               edit(s, models=dict(s.models, trees=dict(trees, measures=['pitch6']))),
                edit(s, stage=dict(s.stage, windows_s=[1.0, 2.0, 3.0, 4.0, 5.0])),
                edit(s, stage=dict(s.stage, shape=['res16'])),
                edit(s, candidates='rise:6'),
@@ -1022,11 +1022,12 @@ class ReleaseTests(unittest.TestCase):
         from tools.audio_analysis.lab import release
         pts = release.parts()
         self.assertEqual(pts['finders'], ['kick', 'snare'])
-        self.assertEqual(pts['measures'], dict(f15=15, tail3=3, tmpl3=3, prof32=32, fall16=16, low16=16))
-        self.assertEqual((pts['channels'], pts['combines']), (['flat'], ['net', 'trees', 'mean_logit']))
+        self.assertEqual(pts['measures'], dict(f15=15, tail3=3, tmpl3=3, prof32=32, fall16=16, low16=16, cdom4=4,
+                                               note13=13, kick2=2))
+        self.assertEqual((pts['channels'], pts['combines']), (['flat', 'perc'], ['net', 'trees', 'mean_logit']))
         self.assertEqual(release.check_parts(pts), [])
         for bad in (dict(pts, measures=dict(pts['measures'], prof32=31)), dict(pts, measures=dict(pts['measures'], nope=3)),
-                    dict(pts, channels=['flat', 'perc']), dict(pts, finders=['kick', 'rise']),
+                    dict(pts, channels=['flat', 'side']), dict(pts, finders=['kick', 'rise']),
                     dict(pts, stage=dict(pts['stage'], max_windows=5))):
             self.assertTrue(release.check_parts(bad), bad)
 

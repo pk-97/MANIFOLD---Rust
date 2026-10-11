@@ -18,7 +18,7 @@ TOP = frozenset({'contract', 'family', 'train_id', 'config', 'run_id', 'rate', '
                  'combine.clip', 'cutoff', 'refractory_s', 'stage'})
 FAMILIES = ('kick', 'snare')
 MODELS = {'net': ('net',), 'trees': ('trees',), 'net,trees': ('net', 'trees')}
-PART_PREFIXES = ('base.', 'cand.', 'extra.', 'fit.', 'flat.', 'net.', 'trees.', 'stage.')
+PART_PREFIXES = ('base.', 'cand.', 'extra.', 'fit.', 'flat.', 'perc.', 'kick2.', 'net.', 'trees.', 'stage.')
 RESERVED = ('res.', 'glide.')  # res16 and glide3: Deferred
 
 
@@ -40,7 +40,8 @@ def names_of(s):
 
 def entries(record):
     """Every entry of the record's model file: the top-level ones, then each part's hook (lab/export/)."""
-    from tools.audio_analysis.lab.export import finder_kick, finder_snare, frames, measures, net, stage, trees
+    from tools.audio_analysis.lab.export import finder_kick, finder_snare, frames, kick2, measures, net, perc, stage, trees
+    from tools.audio_analysis.lab.release import measures_of
     i64, f64 = np.int64, np.float64
     out = {
         'contract': np.array(CONTRACT, np.int32),
@@ -60,7 +61,10 @@ def entries(record):
     }
     hooks = [finder_kick if record['finder'] == 'kick' else finder_snare, measures]
     if record['net']:
-        hooks += [net] + ([frames] if 'flat' in record['net']['channels'] else [])
+        hooks += [net] + ([frames] if 'flat' in record['net']['channels'] else []) \
+            + ([perc] if 'perc' in record['net']['channels'] else [])
+    if 'kick2' in measures_of(record):
+        hooks.append(kick2)
     if record['trees']:
         hooks.append(trees)
     if record['stage']:
@@ -111,7 +115,7 @@ def _measure(name, parts, finder):
 def check(e, parts):
     """Raises ContractError for any entry set the runtime would refuse (section 4 (The model file contract v2))."""
     from tools.audio_analysis.lab.components import FITTED
-    from tools.audio_analysis.lab.export import finder_kick, finder_snare, frames, measures, net, stage, trees
+    from tools.audio_analysis.lab.export import finder_kick, finder_snare, frames, kick2, measures, net, perc, stage, trees
     if 'contract' not in e or np.asarray(e['contract']).dtype != np.int32 or _scalar(e, 'contract') != CONTRACT:
         raise ContractError('contract', f'contract must be the i32 scalar {CONTRACT}')
     for name in sorted(TOP):
@@ -195,9 +199,11 @@ def check(e, parts):
                     raise ContractError('net-shapes', f'net.{k}.{w} has another shape than net.0.{w}')
         _exact(e, 'net.', net.names(count), 'net')
         _exact(e, 'flat.', frames.NAMES if 'flat' in extra else frozenset(), 'flat channel')
+        _exact(e, 'perc.', perc.NAMES if 'perc' in extra else frozenset(), 'perc channel')
     else:
         _exact(e, 'net.', frozenset(), 'net (models has none)')
         _exact(e, 'flat.', frozenset(), 'flat channel (no net)')
+        _exact(e, 'perc.', frozenset(), 'perc channel (no net)')
 
     st = _scalar(e, 'stage')
     if st not in (0, 1) or np.asarray(e['stage']).dtype != np.int32:
@@ -228,7 +234,8 @@ def check(e, parts):
     else:
         _exact(e, 'stage.', frozenset(), 'stage (stage is 0)')
 
-    _exact(e, 'extra.', measures.NAMES if set(used) & measures.USES_EXTRA else frozenset(), 'measure constants')
+    _exact(e, 'extra.', measures.names_for(used), 'measure constants')
+    _exact(e, 'kick2.', kick2.NAMES if 'kick2' in used else frozenset(), 'kick verdict')
     want_fit = frozenset().union(*(measures.FIT_NAMES[m] for m in set(used) if m in FITTED))
     have_fit = {n for n in e if n.startswith('fit.')}
     if want_fit - have_fit:

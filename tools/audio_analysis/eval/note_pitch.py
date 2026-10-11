@@ -10,7 +10,7 @@ Windows: before = [onset - 70 ms, onset - 10 ms]; after = the 40 ms ending at em
   share of strong spectral peaks after (500-6000 Hz) that were not there before.
 """
 import numpy as np
-from scipy.signal import butter, resample_poly, sosfilt
+from scipy.signal import butter, sosfilt
 
 NAMES = ('f0_before', 'f0_after', 'f0_change_st', 'yin_before', 'yin_after', 'low_before_db', 'low_after_db', 'low_change_db',
          'chroma_distance', 'chroma_rise', 'chroma_entropy', 'mid_change_db', 'new_peaks')
@@ -45,7 +45,10 @@ def chroma(mag, freqs):
 
 def pitch_features(x, sr, onset, emit):
     x = np.asarray(x, float)
-    low = resample_poly(sosfilt(butter(6, 500, btype='low', fs=sr, output='sos'), x), LOW_SR, sr)
+    # Causal 4 kHz series: the 500 Hz low-pass, read at the last sample at or before each 4 kHz tick (a centred
+    # resampler would read ahead of the emission).
+    lp = sosfilt(butter(6, 500, btype='low', fs=sr, output='sos'), x)
+    low = lp[(np.arange(int(len(x) * LOW_SR / sr)) * sr) // LOW_SR]
     n = 2048
     win = np.hanning(n)
     freqs = np.fft.rfftfreq(n, 1 / sr)
@@ -56,7 +59,7 @@ def pitch_features(x, sr, onset, emit):
         return low[max(0, int(a * LOW_SR)):max(0, int(b * LOW_SR))]
 
     def spectrum_ending(t):
-        e = int(t * sr)
+        e = max(0, int(t * sr))
         seg = x[max(0, e - n):e]
         seg = np.concatenate([np.zeros(n - len(seg)), seg]) * win
         return np.abs(np.fft.rfft(seg))

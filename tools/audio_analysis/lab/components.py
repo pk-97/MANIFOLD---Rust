@@ -134,9 +134,55 @@ def _glide3(x, sr, c):
     return glide_features(x, sr, c.hop, c.cand, c.avail)
 
 
+def _pitch6(x, sr, c):
+    """Pitch stability (detector_channels) in 300-1k, 1-3k and 3-8 kHz, mean and max from onset to emission: a held
+    pitch (piano, synth, voice) sits near 1, a noise hit near 0."""
+    from tools.audio_analysis.eval.detector_channels import pitch_measures, pitch_stability
+    return pitch_measures(pitch_stability(x, sr), c.cand, c.avail, sr, c.hop)
+
+
+def _note13(x, sr, c):
+    """note_pitch's tonal-onset set: low f0 before and after and its change, YIN dips, low levels, chroma change and
+    entropy, mid-band level change and the share of new spectral peaks."""
+    from tools.audio_analysis.eval.note_pitch import pitch_features
+    return pitch_features(x, sr, c.onset_s, c.emit_s)
+
+
+CDOM_PRE_HOPS = 10     # hops before the onset the pre-onset means read
+CDOM_RAW_EPS = 1e-9    # log10(raw + eps)
+
+
+def _cdom4(x, sr, c):
+    """Complex-domain prediction error (45-2000 Hz; kick_complex_onset): max of the normalised and the log raw error
+    from onset to emission, and their means over the 10 hops before the onset. A steady tone is predictable (low),
+    a noise burst is not."""
+    from tools.audio_analysis.eval.kick_complex_onset import complex_features
+    f = complex_features(x, sr, c.hop)
+    nrm, raw = f['normalized'], np.log10(f['raw'] + CDOM_RAW_EPS)
+    out = np.zeros((len(c.cand), 4))
+    last = len(nrm) - 1
+    for n, (i, j) in enumerate(zip(np.clip(c.cand, 0, last), np.clip(c.avail, 0, last))):
+        lo = max(0, i - CDOM_PRE_HOPS)
+        out[n] = (nrm[i:j + 1].max(), raw[i:j + 1].max(), nrm[lo:i].mean() if i > lo else 0.0,
+                  raw[lo:i].mean() if i > lo else raw[i])
+    return out
+
+
 # Event measures: (n candidates, k) numbers at each candidate, for trees.
 MEASURES = {'f15': _f15, 'tail3': _tail3, 'prof32': _prof32, 'fall16': _fall16, 'low16': _low16, 'res16': _res16,
-            'glide3': _glide3}
+            'glide3': _glide3, 'pitch6': _pitch6, 'note13': _note13, 'cdom4': _cdom4}
+
+
+def _kick2(song, c):
+    from tools.audio_analysis.lab import kick_verdict
+    return kick_verdict.features(song, c)
+
+
+# Event measures that read another detector's stored verdict for the song (lab/kick_verdict.py), not the audio:
+# measure() builds them from the song; a bare clip has no verdict, so a release cannot use them until the app runs
+# the kick before the snare.
+SONG_MEASURES = {'kick2': _kick2}
+MEASURES['kick2'] = _kick2
 
 
 def _flat(song):
@@ -144,8 +190,13 @@ def _flat(song):
     return flatness(song)
 
 
+def _perc(song):
+    from tools.audio_analysis.lab.cache import percussive
+    return percussive(song)
+
+
 # Frame measures: (frames, bands) on the net's 2 ms grid, added to the net as input channels.
-FRAME_MEASURES = {'flat': _flat}
+FRAME_MEASURES = {'flat': _flat, 'perc': _perc}
 
 
 def _flat_audio(x, sr):
@@ -155,7 +206,12 @@ def _flat_audio(x, sr):
 
 # The pure builders FRAME_MEASURES cache (lab/cache.py stores their float16 output): f(audio, sr) -> (frames, bands)
 # float32, for a bare clip.
-FRAME_BUILDERS = {'flat': _flat_audio}
+def _perc_audio(x, sr):
+    from tools.audio_analysis.eval.kick_goal_nn import percussive, spectrum
+    return percussive(spectrum(x, sr)).astype(np.float32)
+
+
+FRAME_BUILDERS = {'flat': _flat_audio, 'perc': _perc_audio}
 
 
 def _tmpl3_fit(inputs, clips, k, random_state, share=None):
@@ -179,13 +235,19 @@ def measure(song, rule, family, name, build=True):
     if name not in MEASURES:
         raise ValueError(f'unknown measure {name}; known: {sorted(MEASURES)}')
     fn = MEASURES[name]
+    extra = {}
+    if name in SONG_MEASURES:
+        from tools.audio_analysis.lab import kick_verdict
+        extra = dict(verdict=kick_verdict.kick_release())
 
     def make():
         if not build:
             raise SystemExit(f'{song.id}: no cached {name} measure; run the experiment first')
         c = candidates(song, rule, family)
+        if name in SONG_MEASURES:
+            return np.asarray(fn(song, c), np.float64)
         return np.asarray(fn(mix(song), song.sample_rate, c), np.float64)
-    return artifact(song, f'measure-{name}', dict(finder=finder_id(song, rule, family), code=code_id(fn)), make)
+    return artifact(song, f'measure-{name}', dict(finder=finder_id(song, rule, family), code=code_id(fn), **extra), make)
 
 
 def frame(song, name):

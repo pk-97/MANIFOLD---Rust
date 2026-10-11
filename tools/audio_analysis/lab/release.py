@@ -194,6 +194,13 @@ def check_parts(pts=None):
             span = deadline('kick') + 1
             params = dict(templates=np.random.default_rng(1).uniform(0, 1, (2, span, 32)))
             got = components.FITTED[m]['apply'](params, x, RATE, c)
+        elif m in components.SONG_MEASURES:
+            from tools.audio_analysis.lab import kick_verdict
+            k = cands['kick']
+            got = kick_verdict.features_from(k.onset_s, k.emit_s, np.linspace(0, 1, len(k.cand)), cands.get('snare', c))
+            if np.shape(got) != (len(cands.get('snare', c).cand), width):
+                out.append(f'measure {m}: shape {np.shape(got)}, declared width {width}')
+            continue
         elif m in components.MEASURES:
             got = components.MEASURES[m](x, RATE, c)
         else:
@@ -241,8 +248,20 @@ def net_logits(net, song):
         return torch.cat(out).numpy() if out else np.zeros(0, np.float32)
 
 
-def measure(rec, name, x, sr, c):
+def kick_reference(rec, x, sr):
+    """The kick verdict a kick2 model reads on audio x: its kick release run on the same audio. The kick's net
+    shape must be this process's (use() exits otherwise)."""
+    kr = load(rec['kick_train_id'])
+    use(kr['config'], rec['kick_train_id'])
+    r = reference(kr, x, sr=sr)
+    return r['c'].onset_s, r['c'].emit_s, r['p_final']
+
+
+def measure(rec, name, x, sr, c, kick=None):
     from tools.audio_analysis.lab import components
+    if name == 'kick2':
+        from tools.audio_analysis.lab import kick_verdict
+        return np.asarray(kick_verdict.features_from(*(kick or kick_reference(rec, x, sr)), c), np.float64)
     if name in components.FITTED:
         return np.asarray(components.FITTED[name]['apply'](rec['fitted'][name], x, sr, c), np.float64)
     return np.asarray(components.MEASURES[name](x, sr, c), np.float64)
@@ -258,7 +277,8 @@ def reference(rec, x, nets=None, sr=RATE):
     os.environ['KICK_GOAL_NN_DEVICE'] = 'cpu'
     c = components.audio_candidates(rec['finder'], rec['family'], x, sr)
     k = len(c.cand)
-    r = dict(c=c, m={n: measure(rec, n, x, sr, c) for n in measures_of(rec)})
+    kick = kick_reference(rec, x, sr) if 'kick2' in measures_of(rec) else None
+    r = dict(c=c, m={n: measure(rec, n, x, sr, c, kick) for n in measures_of(rec)})
     layers = {}
     if rec['trees']:
         r['p_trees'] = layers['trees'] = rec['trees']['model'].predict_proba(
@@ -654,6 +674,9 @@ def train_final(cfg, n_nets, seed):
         stage_model = models.fit_trees(st, rows, seed, share)
     train_id = f'{cfg.family}-{datetime.date.today().isoformat()}-{gid}'
     rec = final_record(cfg, train_id, meta['run_id'], seed, nets, trees, stage_model, cuts, cutoff, trained, score, 'v2')
+    if 'kick2' in measures_of(rec):
+        from tools.audio_analysis.lab import kick_verdict
+        rec['kick_train_id'] = kick_verdict.kick_release()
     print(f'{train_id}: final models in {time.time() - t0:.0f} s', flush=True)
     save(rec)
     return rec
