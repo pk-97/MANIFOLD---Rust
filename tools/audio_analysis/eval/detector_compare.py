@@ -1,0 +1,148 @@
+#!/usr/bin/env python3
+"""Compare two detector configurations, each run over several seeds on fixed song groups, paired song by song.
+
+Reads per-song results JSONs: the kick fast loop's (run_kick_goal_fast.py, key 'blend' by default; 'blend+stage' only
+to confirm, it doubles the seed noise) or a family's (detector_eval.write_results, key 'net'). Only songs both sides
+scored count. Prints:
+- the headline: the pooled F1 difference with a 90% interval from a paired bootstrap over songs (songs are the
+  sample that decides whether a change holds on new music);
+- pooled F1 per seed, each side's mean, and the difference with its standard error (seeds are independent draws);
+- per song, the hits and false fires each side averages over seeds; a sign test over songs on per-song F1;
+- songs losing at least LOSS_HITS hits on average among songs with at least LOSS_LABELS labels (the per-song bar;
+  points on a 14-label song are 3 kicks of noise);
+- when the results carry them, false fires per scored minute and trigger lateness (median and 90th percentile),
+  and the recall of hits that open a passage after a gap (detector_eval.after_gap: drop kicks).
+Recall-only songs count toward recall only.
+Usage: detector_compare.py A1.json[,A2.json...] B1.json[,B2.json...] [--key KEY]"""
+import json
+import math
+import sys
+from pathlib import Path
+
+# The kick fast loop's recall-only songs; a lab report carries its own (its 'recall_only' key).
+RECALL_ONLY = ('default_haze', 'lowkey', 'overwhelming_force')
+LOSS_HITS, LOSS_LABELS = 5, 30
+DRAWS = 4000
+
+
+def per_song(path, key):
+    res = json.loads(Path(path).read_text())['results']
+    return res[key or ('blend' if 'blend' in res else 'net')]['per_song']
+
+
+def recall_only_of(path):
+    d = json.loads(Path(path).read_text())
+    return tuple(d['recall_only']) if 'recall_only' in d else RECALL_ONLY
+
+
+def pooled(ps, songs, recall_only=RECALL_ONLY):
+    m = sum(ps[t]['matched'] for t in songs)
+    n = sum(ps[t]['labels'] for t in songs)
+    f = sum(ps[t]['extra'] for t in songs if t not in recall_only)
+    r, p = m / max(1, n), m / max(1, m + f)
+    return r, p, 2 * r * p / max(1e-9, r + p)
+
+
+def mean_se(v):
+    m = sum(v) / len(v)
+    var = sum((x - m) ** 2 for x in v) / max(1, len(v) - 1)
+    return m, math.sqrt(var / len(v))
+
+
+def song_f1(side, t, recall_only=RECALL_ONLY):
+    m = sum(ps[t]['matched'] for ps in side) / len(side)
+    n = side[0][t]['labels']
+    f = 0 if t in recall_only else sum(ps[t]['extra'] for ps in side) / len(side)
+    r, p = m / max(1, n), m / max(1e-9, m + f)
+    return m, f, 2 * r * p / max(1e-9, r + p)
+
+
+def sign_p(up, down):
+    """Two-sided sign test: chance of a split at least this uneven when neither side is better."""
+    n, k = up + down, min(up, down)
+    return min(1.0, 2 * sum(math.comb(n, i) for i in range(k + 1)) / 2 ** n) if n else 1.0
+
+
+def timing(side, songs, recall_only=RECALL_ONLY):
+    # False fires are counted on scored songs only, so their minutes are the denominator.
+    mins = sum(ps[t].get('minutes', 0) for ps in side for t in songs if t not in recall_only)
+    if not mins:
+        return ''
+    false = sum(ps[t]['extra'] for ps in side for t in songs if t not in recall_only)
+    late = sorted(x for ps in side for t in songs for x in ps[t].get('late_ms', []))
+    q = (lambda a: late[min(len(late) - 1, int(a * len(late)))]) if late else (lambda a: float('nan'))
+    return f' | {false / mins:.2f} false per minute | late median {q(.5):.0f} ms, p90 {q(.9):.0f} ms'
+
+
+def gap_recall(side, songs):
+    """'' or the recall of hits that open a passage (detector_eval.after_gap), averaged over seeds."""
+    if not all('gap_labels' in ps[t] for ps in side for t in songs):
+        return ''
+    m = sum(ps[t]['gap_matched'] for ps in side for t in songs) / len(side)
+    n = sum(side[0][t]['gap_labels'] for t in songs)
+    return f' | first hits after a gap {m / max(1, n):.3f} ({m:.1f} of {n})'
+
+
+def song_bootstrap(sides, songs, recall_only=RECALL_ONLY, draws=DRAWS):
+    """(pooled F1 difference B - A, 5th and 95th percentile) over songs drawn with replacement, both sides on the
+    same draw; per-song hits and false fires are averaged over seeds first."""
+    import numpy as np
+    n = np.array([sides[0][0][t]['labels'] for t in songs], float)
+    m = [np.array([sum(ps[t]['matched'] for ps in side) / len(side) for t in songs]) for side in sides]
+    f = [np.array([0.0 if t in recall_only else sum(ps[t]['extra'] for ps in side) / len(side) for t in songs])
+         for side in sides]
+    pick = np.random.default_rng(0).integers(0, len(songs), (draws, len(songs)))
+    w = np.stack([np.bincount(row, minlength=len(songs)) for row in pick]).astype(float)
+
+    def f1(mm, ff, ww):
+        hit, lab, false = ww @ mm, ww @ n, ww @ ff
+        r, p = hit / np.maximum(1, lab), hit / np.maximum(1e-9, hit + false)
+        return 2 * r * p / np.maximum(1e-9, r + p)
+    one = np.ones(len(songs))
+    d = f1(m[1], f[1], w) - f1(m[0], f[0], w)
+    return float(f1(m[1], f[1], one) - f1(m[0], f[0], one)), float(np.percentile(d, 5)), float(np.percentile(d, 95))
+
+
+def compare(sides, recall_only=RECALL_ONLY, out=print):
+    """The A/B over sides = [A per-song dicts by seed, B per-song dicts by seed], on the songs every run scored.
+    Returns the numbers it prints."""
+    songs = sorted(set.intersection(*[set(ps) for side in sides for ps in side]))
+    boot = song_bootstrap(sides, songs, recall_only)
+    out(f'B - A over songs (hits and false fires averaged over seeds first): {100 * boot[0]:+.2f} F1 points, '
+        f'90% interval {100 * boot[1]:+.2f} to {100 * boot[2]:+.2f}')
+    stats = []
+    for name, side in zip('AB', sides):
+        f1 = [pooled(ps, songs, recall_only)[2] for ps in side]
+        stats.append(mean_se(f1))
+        out(f'{name}: F1 ' + ' '.join(f'{v:.4f}' for v in f1) + f' | mean {stats[-1][0]:.4f} ± {stats[-1][1]:.4f}'
+            + timing(side, songs, recall_only) + gap_recall(side, songs) + f' | {len(songs)} songs')
+    diff, se = stats[1][0] - stats[0][0], math.hypot(stats[0][1], stats[1][1])
+    out(f'B - A over seeds (mean of each seed\'s pooled F1): {100 * diff:+.2f} ± {100 * se:.2f} F1 points')
+    rows = []
+    for t in songs:
+        ma, fa, f1a = song_f1(sides[0], t, recall_only)
+        mb, fb, f1b = song_f1(sides[1], t, recall_only)
+        rows.append((mb - ma, fb - fa, f1b - f1a, t, sides[0][0][t]['labels']))
+    up = sum(r[2] > 1e-9 for r in rows)
+    down = sum(r[2] < -1e-9 for r in rows)
+    out(f'songs better / worse on F1: {up} / {down} (sign test p = {sign_p(up, down):.2f})')
+    rows.sort()
+    out('hits change per song (B - A, mean over seeds), worst first: '
+        + ', '.join(f'{t} {dm:+.1f} hits {df:+.1f} false ({n})' for dm, df, _, t, n in rows[:8]))
+    lost = [t for dm, _, _, t, n in rows if dm <= -LOSS_HITS and n >= LOSS_LABELS]
+    out(f'songs losing {LOSS_HITS}+ hits (of {LOSS_LABELS}+ labels): {lost}')
+    return dict(songs=songs, a=stats[0], b=stats[1], diff=diff, se=se, interval=boot[1:], better=up, worse=down,
+                lost=lost)
+
+
+def main():
+    args = [a for a in sys.argv[1:] if not a.startswith('--')]
+    key = sys.argv[sys.argv.index('--key') + 1] if '--key' in sys.argv else None
+    args = [a for a in args if a != key]
+    files = [a.split(',') for a in args[:2]]
+    sides = [[per_song(p, key) for p in f] for f in files]
+    compare(sides, recall_only_of(files[0][0]))
+
+
+if __name__ == '__main__':
+    main()

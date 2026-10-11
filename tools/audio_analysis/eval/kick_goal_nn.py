@@ -133,11 +133,13 @@ class Song:
         # Each candidate's pre-onset baseline does not depend on the slice jitter: computed once.
         self.base = torch.cat([self.spec[torch.from_numpy(np.clip(self.on[a:a + 4096][:, None] - np.arange(span)[None, :], 0, None))]
                                .median(dim=1).values for a in range(0, len(self.on), 4096)]) if len(self.on) else torch.zeros(0, BANDS)
+        self.end_t, self.back = torch.from_numpy(self.end), torch.arange(SLICE - 1, -1, -1)
         self.dev = torch.device('cpu')
 
     def to(self, dev):
-        """Keeps the spectrum, extra channels and baselines on dev, so slices are cut there."""
+        """Keeps the spectrum, extra channels, baselines and slice anchors on dev, so slices are cut there."""
         self.spec, self.base, self.dev = self.spec.to(dev), self.base.to(dev), dev
+        self.end_t, self.back = self.end_t.to(dev), self.back.to(dev)
         self.extra = [e.to(dev) for e in self.extra]
         return self
 
@@ -157,11 +159,15 @@ class Song:
         return song
 
     def slices(self, idx, shift=None):
-        end = self.end[idx] + (shift if shift is not None else 0)
-        frames = torch.from_numpy(end[:, None] - np.arange(SLICE)[::-1][None, :].copy()).to(self.dev)
+        """Candidates idx (array or tensor), each slice moved shift frames; cut on the song's device."""
+        idx = torch.as_tensor(idx, device=self.dev)
+        end = self.end_t[idx]
+        if shift is not None:
+            end = end + torch.as_tensor(shift, device=self.dev)
+        frames = end[:, None] - self.back[None, :]
         x = self.spec[frames]  # (B, SLICE, BANDS)
         shape = x - x.amax(dim=(1, 2), keepdim=True)
-        new = x - self.base[torch.from_numpy(np.asarray(idx)).to(self.dev)][:, None, :]
+        new = x - self.base[idx][:, None, :]
         chans = [shape, new] + [e[frames] for e in self.extra]
         return torch.stack(chans, 1).transpose(2, 3) / 20.0  # (B, CHANNELS, BANDS, SLICE frames)
 
@@ -169,9 +175,9 @@ class Song:
 class Net(nn.Module):
     """Three 3x3 conv layers; time is max-pooled into TBINS bins at the end, frequency position is kept."""
 
-    def __init__(self):
+    def __init__(self, channels=CHANNELS):
         super().__init__()
-        self.conv = nn.Sequential(nn.Conv2d(CHANNELS, 16, 3, padding=1), nn.ReLU(), nn.MaxPool2d(2),
+        self.conv = nn.Sequential(nn.Conv2d(channels, 16, 3, padding=1), nn.ReLU(), nn.MaxPool2d(2),
                                   nn.Conv2d(16, 32, 3, padding=1), nn.ReLU(), nn.MaxPool2d(2),
                                   nn.Conv2d(32, 32, 3, padding=1), nn.ReLU())
         self.pool = nn.AdaptiveMaxPool2d((BANDS // 4, TBINS))
@@ -188,39 +194,66 @@ def device():
     return torch.device(want or ('mps' if torch.backends.mps.is_available() else 'cpu'))
 
 
-def train(songs, seed, synth=()):
+def train(songs, seed, synth=(), epochs=EPOCHS, synth_share=0.5, swa_epochs=0, batch=BATCH, lr=LR, precision='float32'):
     """A net fitted on the songs' training rows: song-equal, class-balanced sampling.
-    Kick-swap clips (synth) together get as many draws as the real songs, spread evenly."""
+    Clips (synth) together get synth_share of all draws (0.5: as many as the real songs), spread evenly.
+    swa_epochs > 0 returns the equal-weight average of the weights at the end of each of the last swa_epochs epochs.
+    precision 'mixed' runs forward and loss in float16 (autocast) with float32 weights and a loss scaler."""
     rng = np.random.default_rng(seed)
     torch.manual_seed(seed)
     dev = device()
-    net = Net().to(dev)
-    opt = torch.optim.AdamW(net.parameters(), lr=LR, weight_decay=1e-4)
+    net = Net(2 + len(songs[0].extra)).to(dev)
+    # Averaged weights are only valid as they stand without batch statistics to recompute.
+    assert not any(isinstance(m, nn.modules.batchnorm._BatchNorm) for m in net.modules())
+    assert precision in ('float32', 'mixed') and 0 <= swa_epochs <= epochs
+    opt = torch.optim.AdamW(net.parameters(), lr=lr, weight_decay=1e-4)
+    mixed = precision == 'mixed'
+    scaler = torch.amp.GradScaler(dev.type) if mixed else None
+    avg = None
     rows = [(s, np.flatnonzero(s.mask & (s.y == 1)), np.flatnonzero(s.mask & (s.y == 0))) for s in list(songs) + list(synth)]
     per_song = max(1, int(np.median([len(p) for _, p, _ in rows[:len(songs)]])))
-    per_clip = max(1, per_song * len(songs) // max(1, len(synth)))
-    for _ in range(EPOCHS):
-        batch_x, batch_y = [], []
+    per_clip = max(1, int(round(per_song * len(songs) * synth_share / (1 - synth_share))) // max(1, len(synth)))
+    for e in range(epochs):
+        drawn, ys = [], []
         for k, (song, pos, neg) in enumerate(rows):
             draws = per_song if k < len(songs) else per_clip
+            picks = []
             for idx, y in ((pos, 1.0), (neg, 0.0)):
                 if not len(idx):
                     continue
                 # Project-vouched non-kicks (kick_goal_melodic) are drawn HARD_W times as often.
                 w = np.where(song.hard[idx], HARD_W, 1.0) if y == 0.0 else np.ones(len(idx))
                 pick = rng.choice(idx, draws, p=w / w.sum())
-                batch_x.append(song.slices(pick, rng.integers(-JITTER, JITTER + 1, len(pick))))
-                batch_y.append(torch.full((len(pick),), y, device=song.dev))
-        x, y = torch.cat([b.to(dev) for b in batch_x]), torch.cat([b.to(dev) for b in batch_y])
+                picks.append(np.stack([pick, rng.integers(-JITTER, JITTER + 1, len(pick))]))
+                ys.append(np.full(len(pick), y, np.float32))
+            if picks:
+                drawn.append((song, np.concatenate(picks, axis=1)))
+        # One copy per epoch carries every draw and jitter to the songs' device; each song's slices are cut there.
+        at = torch.from_numpy(np.concatenate([d for _, d in drawn], axis=1)).to(drawn[0][0].dev)
+        parts = at.split([d.shape[1] for _, d in drawn], dim=1)
+        x = torch.cat([song.slices(p[0], p[1]).to(dev) for (song, _), p in zip(drawn, parts)])
+        y = torch.from_numpy(np.concatenate(ys)).to(dev)
         order = torch.from_numpy(rng.permutation(len(y))).to(dev)
         net.train()
-        for s in range(0, len(y), BATCH):
-            b = order[s:s + BATCH]
+        for s in range(0, len(y), batch):
+            b = order[s:s + batch]
             xb, yb = x[b], y[b]
-            loss = nn.functional.binary_cross_entropy_with_logits(net(xb), yb * (1 - SMOOTH) + SMOOTH / 2)
             opt.zero_grad()
-            loss.backward()
-            opt.step()
+            if mixed:
+                with torch.autocast(dev.type, dtype=torch.float16):
+                    loss = nn.functional.binary_cross_entropy_with_logits(net(xb), yb * (1 - SMOOTH) + SMOOTH / 2)
+                scaler.scale(loss).backward()
+                scaler.step(opt)
+                scaler.update()
+            else:
+                loss = nn.functional.binary_cross_entropy_with_logits(net(xb), yb * (1 - SMOOTH) + SMOOTH / 2)
+                loss.backward()
+                opt.step()
+        if e >= epochs - swa_epochs:
+            now = {k: v.detach().clone() for k, v in net.state_dict().items()}
+            avg = now if avg is None else {k: avg[k] + now[k] for k in avg}
+    if avg is not None:
+        net.load_state_dict({k: v / swa_epochs for k, v in avg.items()})
     return net.eval()
 
 
@@ -230,5 +263,5 @@ def predict(net, song):
     out = []
     n = len(song.end)
     for s in range(0, n, 2048):
-        out.append(torch.sigmoid(net(song.slices(np.arange(s, min(n, s + 2048))).to(dev))).cpu())
+        out.append(torch.sigmoid(net(song.slices(torch.arange(s, min(n, s + 2048), device=song.dev)).to(dev))).cpu())
     return torch.cat(out).numpy().astype(np.float64)

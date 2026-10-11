@@ -1,0 +1,49 @@
+{
+  "family": "snare",
+  "candidates": "snare:4.5",
+  "models": {
+    "net": {
+      "past_ms": 150,
+      "ahead_ms": 40,
+      "channels": [],
+      "epochs": 12,
+      "swa_epochs": 0,
+      "batch": 256,
+      "lr": 0.002,
+      "precision": "float32"
+    }
+  },
+  "combine": "net",
+  "stage": {
+    "windows_s": [
+      8.0
+    ],
+    "shape": [
+      "prof32"
+    ],
+    "level": null,
+    "max_iter": 150,
+    "learning_rate": 0.05,
+    "max_leaf_nodes": 7,
+    "min_samples_leaf": 80,
+    "l2": 1.0,
+    "learn": "all",
+    "gate": 1.0
+  },
+  "sampling": {
+    "per_song": "median",
+    "generated": 0.5
+  },
+  "train": [
+    "project",
+    "generated"
+  ],
+  "seeds": [
+    0,
+    1,
+    2,
+    3,
+    4
+  ],
+  "folds": 4
+}

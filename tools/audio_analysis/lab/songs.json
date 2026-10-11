@@ -1,0 +1,2771 @@
+[
+ {
+  "id": "flight",
+  "kind": "project",
+  "source": {
+   "how": "goal",
+   "paths": [
+    "/Users/peterkiemann/.cache/manifold/kick-goal-2026-10-10/flight_mix.npy"
+   ]
+  },
+  "source_sha256": [
+   "dfe560da8d5551f1436154a40768417f023aa2b299a3fec1f0fd23d9c98ea4a7"
+  ],
+  "sample_rate": 48000,
+  "offset_s": -30.9163,
+  "proof": "lab:proven (kick and snare agree)",
+  "families": [
+   "snare",
+   "bass",
+   "synth",
+   "kick"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "48_hours",
+  "kind": "project",
+  "source": {
+   "how": "goal",
+   "paths": [
+    "/Users/peterkiemann/.cache/manifold/kick-goal-2026-10-10/48_hours_mix.npy"
+   ]
+  },
+  "source_sha256": [
+   "89404ceec61ca514d763d102b6643ff3372f1940a56817b0dcfe15a217225e76"
+  ],
+  "sample_rate": 48000,
+  "offset_s": -26.6123,
+  "proof": "lab:proven (kick and snare agree)",
+  "families": [
+   "snare",
+   "bass",
+   "synth",
+   "kick"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "pattern",
+  "kind": "project",
+  "source": {
+   "how": "goal",
+   "paths": [
+    "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/2025/Pattern Project/MASTERS/32Bit/Pattern - Master (Premaster Fix) - V1.wav"
+   ]
+  },
+  "source_sha256": [
+   "06aac341e742ffb0db97ea81ab1cfb768bdca93ed7b41117fa8dfb05809219c2"
+  ],
+  "sample_rate": 48000,
+  "offset_s": -28.23629999999999,
+  "proof": "goal:kick stem against project kick notes",
+  "families": [
+   "snare",
+   "bass",
+   "synth",
+   "kick"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "back_to_you",
+  "kind": "project",
+  "source": {
+   "how": "goal",
+   "paths": [
+    "/Users/peterkiemann/.cache/manifold/kick-goal-2026-10-10/back_to_you_mix.npy"
+   ]
+  },
+  "source_sha256": [
+   "ba5b0da5fb840be1b205b1799dfea634fd90e4d8172071176b332efd5edfc19b"
+  ],
+  "sample_rate": 48000,
+  "offset_s": -41.741099999999996,
+  "proof": "goal:kick stem against project kick notes",
+  "families": [
+   "snare",
+   "bass",
+   "synth",
+   "kick"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "lowkey",
+  "kind": "project",
+  "source": {
+   "how": "goal",
+   "paths": [
+    "/Users/peterkiemann/.cache/manifold/kick-goal-2026-10-10/lowkey_mix.npy"
+   ]
+  },
+  "source_sha256": [
+   "394a953b0d087c569c2f5a18428b1f1b6f13a1b878319f94e4ebd546de43cffe"
+  ],
+  "sample_rate": 48000,
+  "offset_s": -28.6043,
+  "proof": "lab:proven (kick and snare agree)",
+  "families": [
+   "snare",
+   "bass",
+   "synth",
+   "kick"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "corrosion",
+  "kind": "project",
+  "source": {
+   "how": "goal",
+   "paths": [
+    "/Users/peterkiemann/.cache/manifold/kick-goal-2026-10-10/corrosion_mix.npy"
+   ]
+  },
+  "source_sha256": [
+   "cab8bd7063c0ba1eb474d04032f8f7b01643eaa78b43196b1215c4f3508887fa"
+  ],
+  "sample_rate": 48000,
+  "offset_s": -23.4164,
+  "proof": "goal:trigger track export offset (labels_trigger.json)",
+  "families": [
+   "snare",
+   "bass",
+   "synth",
+   "kick"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "burn_stems",
+  "kind": "project",
+  "source": {
+   "how": "goal",
+   "paths": [
+    "/Users/peterkiemann/.cache/manifold/kick-goal-2026-10-10/burn_stems_mix.npy"
+   ]
+  },
+  "source_sha256": [
+   "30807fcc0c30a177f5dab35668feb8bc22a7ccb19f95b727d2015517bf31add7"
+  ],
+  "sample_rate": 48000,
+  "offset_s": -27.8253,
+  "proof": "goal:kick stem against project kick notes",
+  "families": [
+   "snare",
+   "bass",
+   "synth",
+   "kick"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "midnight_patience",
+  "kind": "project",
+  "source": {
+   "how": "goal",
+   "paths": [
+    "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/EMERGENCE - ALBUM 2026/FINAL MASTERS/Latent Space - 04 - Midnight Patience T2 (mastered) 48k 24-bit.wav"
+   ]
+  },
+  "source_sha256": [
+   "f985764125d53d9cc9379193af567f4022b05a657678e7c403bf187732bef6f2"
+  ],
+  "sample_rate": 48000,
+  "offset_s": -29.088749999999994,
+  "proof": "goal:kick stem against project kick notes",
+  "families": [
+   "snare",
+   "bass",
+   "synth",
+   "kick"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "murmur",
+  "kind": "project",
+  "source": {
+   "how": "goal",
+   "paths": [
+    "/Users/peterkiemann/.cache/manifold/kick-goal-2026-10-10/murmur_mix.npy"
+   ]
+  },
+  "source_sha256": [
+   "59122ee0f785521a1ba8c2136658c1edfb0e8f1edf5d2193c2f92d3d7e0ff872"
+  ],
+  "sample_rate": 48000,
+  "offset_s": -28.6568,
+  "proof": "goal:trigger track export offset (labels_trigger.json)",
+  "families": [
+   "snare",
+   "bass",
+   "synth",
+   "kick"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "default_haze",
+  "kind": "project",
+  "source": {
+   "how": "goal",
+   "paths": [
+    "/Users/peterkiemann/.cache/manifold/kick-goal-2026-10-10/default_haze_mix.npy"
+   ]
+  },
+  "source_sha256": [
+   "8898bab02e3cf22d0ca06dcdc21344cf6129617895d793672b122027f2836ac4"
+  ],
+  "sample_rate": 48000,
+  "offset_s": -25.5486,
+  "proof": "lab:proven (one pattern, clear win)",
+  "families": [
+   "snare",
+   "bass",
+   "synth",
+   "kick"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "late_night",
+  "kind": "project",
+  "source": {
+   "how": "goal",
+   "paths": [
+    "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/2024/Late Night - STEM MASTER Project/ALEX MASTERS/Latent Space - Late Night T2(mastered) 48k 24-bit.wav"
+   ]
+  },
+  "source_sha256": [
+   "91ef876583d6404b417f1f92e88acb5aca75a207d1d107d77ee05e2846740108"
+  ],
+  "sample_rate": 48000,
+  "offset_s": -35.279300000000006,
+  "proof": "goal:kick stem against project kick notes",
+  "families": [
+   "snare",
+   "bass",
+   "synth",
+   "kick"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "crush",
+  "kind": "project",
+  "source": {
+   "how": "wip",
+   "paths": [
+    "/Users/peterkiemann/.cache/manifold/kick-goal-2026-10-10/snare_wip/crush.npy"
+   ]
+  },
+  "source_sha256": [
+   "fffe480895b2fbd922537ca915129962c676195a7334d5701537012f4cb81364"
+  ],
+  "sample_rate": 48000,
+  "offset_s": -28.5883,
+  "proof": "wip:proven (kick and snare agree)",
+  "families": [
+   "snare",
+   "bass",
+   "synth"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "dusk",
+  "kind": "project",
+  "source": {
+   "how": "wip",
+   "paths": [
+    "/Users/peterkiemann/.cache/manifold/kick-goal-2026-10-10/snare_wip/dusk.npy"
+   ]
+  },
+  "source_sha256": [
+   "5ccf4af2d96d5f1edae708dca0c116690d7b1e3cda33016959d6b4e95872be4c"
+  ],
+  "sample_rate": 48000,
+  "offset_s": -75.7271,
+  "proof": "wip:proven (kick and snare agree)",
+  "families": [
+   "snare",
+   "bass",
+   "synth"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "imitation",
+  "kind": "project",
+  "source": {
+   "how": "wip",
+   "paths": [
+    "/Users/peterkiemann/.cache/manifold/kick-goal-2026-10-10/snare_wip/imitation.npy"
+   ]
+  },
+  "source_sha256": [
+   "784b11dfcefb9b3de1bda832f11ecb1ca5ce73e0f3a95de56e641f1c4e675224"
+  ],
+  "sample_rate": 48000,
+  "offset_s": -52.5493,
+  "proof": "wip:proven (kick and snare agree)",
+  "families": [
+   "snare",
+   "bass",
+   "synth"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "set_me_free",
+  "kind": "project",
+  "source": {
+   "how": "wip",
+   "paths": [
+    "/Users/peterkiemann/.cache/manifold/kick-goal-2026-10-10/snare_wip/set_me_free.npy"
+   ]
+  },
+  "source_sha256": [
+   "391409b4b6234d2b6f2737bcc61300d238ae42aafbbfded8e612d68a3a987bb8"
+  ],
+  "sample_rate": 48000,
+  "offset_s": -46.7739,
+  "proof": "wip:proven (kick and snare agree)",
+  "families": [
+   "snare",
+   "bass",
+   "synth"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "openings",
+  "kind": "project",
+  "source": {
+   "how": "wip",
+   "paths": [
+    "/Users/peterkiemann/.cache/manifold/kick-goal-2026-10-10/snare_wip/openings.npy"
+   ]
+  },
+  "source_sha256": [
+   "bc0c74ed499c2fbd50d7fc7c712d8cf3351c07d9edbaa08a4a4ccba6e29b6ab7"
+  ],
+  "sample_rate": 48000,
+  "offset_s": -33.047,
+  "proof": "wip:proven (kick and snare agree)",
+  "families": [
+   "snare",
+   "bass",
+   "synth"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "staged",
+  "kind": "project",
+  "source": {
+   "how": "wip",
+   "paths": [
+    "/Users/peterkiemann/.cache/manifold/kick-goal-2026-10-10/snare_wip/staged.npy"
+   ]
+  },
+  "source_sha256": [
+   "a66d5fab7d60bbe54804ab0d3160fda3262f7888a36a0d701f999ee428c4f60f"
+  ],
+  "sample_rate": 48000,
+  "offset_s": -29.0385,
+  "proof": "wip:proven (kick and snare agree)",
+  "families": [
+   "snare",
+   "bass",
+   "synth"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "just_the_way",
+  "kind": "project",
+  "source": {
+   "how": "wip",
+   "paths": [
+    "/Users/peterkiemann/.cache/manifold/kick-goal-2026-10-10/snare_wip/just_the_way.npy"
+   ]
+  },
+  "source_sha256": [
+   "a72f0b4af1d47c897f3e383e45d97e29ba9e9de0f60f0562de0901888018e64d"
+  ],
+  "sample_rate": 48000,
+  "offset_s": -41.6817,
+  "proof": "wip:proven (kick and snare agree)",
+  "families": [
+   "snare",
+   "bass",
+   "synth"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "water_shimmer",
+  "kind": "project",
+  "source": {
+   "how": "wip",
+   "paths": [
+    "/Users/peterkiemann/.cache/manifold/kick-goal-2026-10-10/snare_wip/water_shimmer.npy"
+   ]
+  },
+  "source_sha256": [
+   "04b99230b3561e140a38100f6a81c53b2977fd2284304f9c986f7084656a4add"
+  ],
+  "sample_rate": 48000,
+  "offset_s": -30.4188,
+  "proof": "wip:proven (kick and snare agree)",
+  "families": [
+   "snare",
+   "bass",
+   "synth"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "basalt",
+  "kind": "project",
+  "source": {
+   "how": "wip",
+   "paths": [
+    "/Users/peterkiemann/.cache/manifold/kick-goal-2026-10-10/snare_wip/basalt.npy"
+   ]
+  },
+  "source_sha256": [
+   "ba0995464ebcd05fe0ca08878541d9c9167b2bcbd18fb3b19485332adccd42b1"
+  ],
+  "sample_rate": 48000,
+  "offset_s": -74.8038,
+  "proof": "wip:proven (kick and snare agree)",
+  "families": [
+   "snare",
+   "bass",
+   "synth"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "cadence",
+  "kind": "project",
+  "source": {
+   "how": "wip",
+   "paths": [
+    "/Users/peterkiemann/.cache/manifold/kick-goal-2026-10-10/snare_wip/cadence.npy"
+   ]
+  },
+  "source_sha256": [
+   "ce6946f2f444b7bb2c72bb95a16bd7ab8a8957cf160fa6b4ed20411e00e86735"
+  ],
+  "sample_rate": 48000,
+  "offset_s": -29.0325,
+  "proof": "wip:proven (kick and snare agree)",
+  "families": [
+   "snare",
+   "bass",
+   "synth"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "push",
+  "kind": "project",
+  "source": {
+   "how": "wip",
+   "paths": [
+    "/Users/peterkiemann/.cache/manifold/kick-goal-2026-10-10/snare_wip/push.npy"
+   ]
+  },
+  "source_sha256": [
+   "62f3029263fed70a0c86e39b8e38ce4ae9dd762759299555d428fd513aaec089"
+  ],
+  "sample_rate": 48000,
+  "offset_s": -26.9879,
+  "proof": "wip:proven (kick and snare agree)",
+  "families": [
+   "snare",
+   "bass",
+   "synth"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "stagnate",
+  "kind": "project",
+  "source": {
+   "how": "wip",
+   "paths": [
+    "/Users/peterkiemann/.cache/manifold/kick-goal-2026-10-10/snare_wip/stagnate.npy"
+   ]
+  },
+  "source_sha256": [
+   "ee09c0032ce723f0f284b3bb99b97d037649c76896403f5f180191591fe0784f"
+  ],
+  "sample_rate": 48000,
+  "offset_s": -51.1486,
+  "proof": "wip:proven (kick and snare agree)",
+  "families": [
+   "snare",
+   "bass",
+   "synth"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "weight",
+  "kind": "project",
+  "source": {
+   "how": "wip",
+   "paths": [
+    "/Users/peterkiemann/.cache/manifold/kick-goal-2026-10-10/snare_wip/weight.npy"
+   ]
+  },
+  "source_sha256": [
+   "3a0f172a221934e0a86b136f09e691c4bea79bcbecb64e30b2158404d58d327b"
+  ],
+  "sample_rate": 48000,
+  "offset_s": -32.486,
+  "proof": "wip:proven (kick and snare agree)",
+  "families": [
+   "snare",
+   "bass",
+   "synth"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "linn_1",
+  "kind": "generated",
+  "source": {
+   "how": "section",
+   "paths": [
+    "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/Other And Backups/Labels and Timings Project/Exports/Labels and Timings - V1 FULL MIX.wav"
+   ],
+   "start_s": 0.0,
+   "end_s": 54.85714285714286
+  },
+  "source_sha256": [
+   "0145f4873a02b808efbda4224f37e408775b29c8794a8e66939e8b42ae00a9c0"
+  ],
+  "sample_rate": 48000,
+  "offset_s": 0.0,
+  "proof": "generated",
+  "families": [
+   "snare",
+   "bass",
+   "synth",
+   "kick"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "linn_2",
+  "kind": "generated",
+  "source": {
+   "how": "section",
+   "paths": [
+    "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/Other And Backups/Labels and Timings Project/Exports/Labels and Timings - V1 FULL MIX.wav"
+   ],
+   "start_s": 54.85714285714286,
+   "end_s": 109.71428571428571
+  },
+  "source_sha256": [
+   "0145f4873a02b808efbda4224f37e408775b29c8794a8e66939e8b42ae00a9c0"
+  ],
+  "sample_rate": 48000,
+  "offset_s": 54.85714285714286,
+  "proof": "generated",
+  "families": [
+   "snare",
+   "bass",
+   "synth",
+   "kick"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "linn_3",
+  "kind": "generated",
+  "source": {
+   "how": "section",
+   "paths": [
+    "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/Other And Backups/Labels and Timings Project/Exports/Labels and Timings - V1 FULL MIX.wav"
+   ],
+   "start_s": 109.71428571428571,
+   "end_s": 164.57142857142858
+  },
+  "source_sha256": [
+   "0145f4873a02b808efbda4224f37e408775b29c8794a8e66939e8b42ae00a9c0"
+  ],
+  "sample_rate": 48000,
+  "offset_s": 109.71428571428571,
+  "proof": "generated",
+  "families": [
+   "snare",
+   "bass",
+   "synth",
+   "kick"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "linn_4",
+  "kind": "generated",
+  "source": {
+   "how": "section",
+   "paths": [
+    "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/Other And Backups/Labels and Timings Project/Exports/Labels and Timings - V1 FULL MIX.wav"
+   ],
+   "start_s": 164.57142857142858,
+   "end_s": 219.42857142857144
+  },
+  "source_sha256": [
+   "0145f4873a02b808efbda4224f37e408775b29c8794a8e66939e8b42ae00a9c0"
+  ],
+  "sample_rate": 48000,
+  "offset_s": 164.57142857142858,
+  "proof": "generated",
+  "families": [
+   "snare",
+   "bass",
+   "synth",
+   "kick"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "rolls_var01",
+  "kind": "generated",
+  "source": {
+   "how": "section",
+   "paths": [
+    "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/Other And Backups/Labels and Timings Project/Exports/Labels and Timings - Rolls FULL MIX.wav"
+   ],
+   "start_s": 0.0,
+   "end_s": 150.85714285714286
+  },
+  "source_sha256": [
+   "142be91eb9e4309f0e5d6036580a8808eac274ff6c87d8f2047042fa09e41ce4"
+  ],
+  "sample_rate": 48000,
+  "offset_s": 0.0,
+  "proof": "generated",
+  "families": [
+   "snare",
+   "bass",
+   "synth",
+   "kick"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "rolls_var02",
+  "kind": "generated",
+  "source": {
+   "how": "section",
+   "paths": [
+    "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/Other And Backups/Labels and Timings Project/Exports/Labels and Timings - Rolls FULL MIX.wav"
+   ],
+   "start_s": 150.85714285714286,
+   "end_s": 301.7142857142857
+  },
+  "source_sha256": [
+   "142be91eb9e4309f0e5d6036580a8808eac274ff6c87d8f2047042fa09e41ce4"
+  ],
+  "sample_rate": 48000,
+  "offset_s": 150.85714285714286,
+  "proof": "generated",
+  "families": [
+   "snare",
+   "bass",
+   "synth",
+   "kick"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "rolls_var03",
+  "kind": "generated",
+  "source": {
+   "how": "section",
+   "paths": [
+    "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/Other And Backups/Labels and Timings Project/Exports/Labels and Timings - Rolls FULL MIX.wav"
+   ],
+   "start_s": 301.7142857142857,
+   "end_s": 452.57142857142856
+  },
+  "source_sha256": [
+   "142be91eb9e4309f0e5d6036580a8808eac274ff6c87d8f2047042fa09e41ce4"
+  ],
+  "sample_rate": 48000,
+  "offset_s": 301.7142857142857,
+  "proof": "generated",
+  "families": [
+   "snare",
+   "bass",
+   "synth",
+   "kick"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "rolls_var04",
+  "kind": "generated",
+  "source": {
+   "how": "section",
+   "paths": [
+    "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/Other And Backups/Labels and Timings Project/Exports/Labels and Timings - Rolls FULL MIX.wav"
+   ],
+   "start_s": 452.57142857142856,
+   "end_s": 603.4285714285714
+  },
+  "source_sha256": [
+   "142be91eb9e4309f0e5d6036580a8808eac274ff6c87d8f2047042fa09e41ce4"
+  ],
+  "sample_rate": 48000,
+  "offset_s": 452.57142857142856,
+  "proof": "generated",
+  "families": [
+   "snare",
+   "bass",
+   "synth",
+   "kick"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "rolls_music01",
+  "kind": "generated",
+  "source": {
+   "how": "section",
+   "paths": [
+    "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/Other And Backups/Labels and Timings Project/Exports/Labels and Timings - Rolls FULL MIX.wav"
+   ],
+   "start_s": 603.4285714285714,
+   "end_s": 644.5714285714286
+  },
+  "source_sha256": [
+   "142be91eb9e4309f0e5d6036580a8808eac274ff6c87d8f2047042fa09e41ce4"
+  ],
+  "sample_rate": 48000,
+  "offset_s": 603.4285714285714,
+  "proof": "generated",
+  "families": [
+   "snare",
+   "bass",
+   "synth",
+   "kick"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "rolls_music02",
+  "kind": "generated",
+  "source": {
+   "how": "section",
+   "paths": [
+    "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/Other And Backups/Labels and Timings Project/Exports/Labels and Timings - Rolls FULL MIX.wav"
+   ],
+   "start_s": 644.5714285714286,
+   "end_s": 685.7142857142857
+  },
+  "source_sha256": [
+   "142be91eb9e4309f0e5d6036580a8808eac274ff6c87d8f2047042fa09e41ce4"
+  ],
+  "sample_rate": 48000,
+  "offset_s": 644.5714285714286,
+  "proof": "generated",
+  "families": [
+   "snare",
+   "bass",
+   "synth",
+   "kick"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "rolls_music03",
+  "kind": "generated",
+  "source": {
+   "how": "section",
+   "paths": [
+    "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/Other And Backups/Labels and Timings Project/Exports/Labels and Timings - Rolls FULL MIX.wav"
+   ],
+   "start_s": 685.7142857142857,
+   "end_s": 726.8571428571429
+  },
+  "source_sha256": [
+   "142be91eb9e4309f0e5d6036580a8808eac274ff6c87d8f2047042fa09e41ce4"
+  ],
+  "sample_rate": 48000,
+  "offset_s": 685.7142857142857,
+  "proof": "generated",
+  "families": [
+   "snare",
+   "bass",
+   "synth",
+   "kick"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "rolls_music04",
+  "kind": "generated",
+  "source": {
+   "how": "section",
+   "paths": [
+    "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/Other And Backups/Labels and Timings Project/Exports/Labels and Timings - Rolls FULL MIX.wav"
+   ],
+   "start_s": 726.8571428571429,
+   "end_s": 768.0000265317852
+  },
+  "source_sha256": [
+   "142be91eb9e4309f0e5d6036580a8808eac274ff6c87d8f2047042fa09e41ce4"
+  ],
+  "sample_rate": 48000,
+  "offset_s": 726.8571428571429,
+  "proof": "generated",
+  "families": [
+   "snare",
+   "bass",
+   "synth",
+   "kick"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "rolls_music05",
+  "kind": "generated",
+  "source": {
+   "how": "section",
+   "paths": [
+    "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/Other And Backups/Labels and Timings Project/Exports/Labels and Timings - Rolls FULL MIX.wav"
+   ],
+   "start_s": 768.0000265317852,
+   "end_s": 814.4516280928918
+  },
+  "source_sha256": [
+   "142be91eb9e4309f0e5d6036580a8808eac274ff6c87d8f2047042fa09e41ce4"
+  ],
+  "sample_rate": 48000,
+  "offset_s": 768.0000265317852,
+  "proof": "generated",
+  "families": [
+   "snare",
+   "bass",
+   "synth",
+   "kick"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "rolls_music06",
+  "kind": "generated",
+  "source": {
+   "how": "section",
+   "paths": [
+    "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/Other And Backups/Labels and Timings Project/Exports/Labels and Timings - Rolls FULL MIX.wav"
+   ],
+   "start_s": 814.4516280928918,
+   "end_s": 858.7592563905527
+  },
+  "source_sha256": [
+   "142be91eb9e4309f0e5d6036580a8808eac274ff6c87d8f2047042fa09e41ce4"
+  ],
+  "sample_rate": 48000,
+  "offset_s": 814.4516280928918,
+  "proof": "generated",
+  "families": [
+   "snare",
+   "bass",
+   "synth",
+   "kick"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "rolls_music07",
+  "kind": "generated",
+  "source": {
+   "how": "section",
+   "paths": [
+    "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/Other And Backups/Labels and Timings Project/Exports/Labels and Timings - Rolls FULL MIX.wav"
+   ],
+   "start_s": 858.7592563905527,
+   "end_s": 891.8628307285634
+  },
+  "source_sha256": [
+   "142be91eb9e4309f0e5d6036580a8808eac274ff6c87d8f2047042fa09e41ce4"
+  ],
+  "sample_rate": 48000,
+  "offset_s": 858.7592563905527,
+  "proof": "generated",
+  "families": [
+   "snare",
+   "bass",
+   "synth",
+   "kick"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "rolls_music08",
+  "kind": "generated",
+  "source": {
+   "how": "section",
+   "paths": [
+    "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/Other And Backups/Labels and Timings Project/Exports/Labels and Timings - Rolls FULL MIX.wav"
+   ],
+   "start_s": 891.8628307285634,
+   "end_s": 955.8626748875205
+  },
+  "source_sha256": [
+   "142be91eb9e4309f0e5d6036580a8808eac274ff6c87d8f2047042fa09e41ce4"
+  ],
+  "sample_rate": 48000,
+  "offset_s": 891.8628307285634,
+  "proof": "generated",
+  "families": [
+   "snare",
+   "bass",
+   "synth",
+   "kick"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "rolls_music09",
+  "kind": "generated",
+  "source": {
+   "how": "section",
+   "paths": [
+    "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/Other And Backups/Labels and Timings Project/Exports/Labels and Timings - Rolls FULL MIX.wav"
+   ],
+   "start_s": 955.8626748875205,
+   "end_s": 994.2627176323406
+  },
+  "source_sha256": [
+   "142be91eb9e4309f0e5d6036580a8808eac274ff6c87d8f2047042fa09e41ce4"
+  ],
+  "sample_rate": 48000,
+  "offset_s": 955.8626748875205,
+  "proof": "generated",
+  "families": [
+   "snare",
+   "bass",
+   "synth",
+   "kick"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "rolls_music10",
+  "kind": "generated",
+  "source": {
+   "how": "section",
+   "paths": [
+    "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/Other And Backups/Labels and Timings Project/Exports/Labels and Timings - Rolls FULL MIX.wav"
+   ],
+   "start_s": 994.2627176323406,
+   "end_s": 1041.475858286555
+  },
+  "source_sha256": [
+   "142be91eb9e4309f0e5d6036580a8808eac274ff6c87d8f2047042fa09e41ce4"
+  ],
+  "sample_rate": 48000,
+  "offset_s": 994.2627176323406,
+  "proof": "generated",
+  "families": [
+   "snare",
+   "bass",
+   "synth",
+   "kick"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "rolls_music11",
+  "kind": "generated",
+  "source": {
+   "how": "section",
+   "paths": [
+    "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/Other And Backups/Labels and Timings Project/Exports/Labels and Timings - Rolls FULL MIX.wav"
+   ],
+   "start_s": 1041.475858286555,
+   "end_s": 1093.8395326192501
+  },
+  "source_sha256": [
+   "142be91eb9e4309f0e5d6036580a8808eac274ff6c87d8f2047042fa09e41ce4"
+  ],
+  "sample_rate": 48000,
+  "offset_s": 1041.475858286555,
+  "proof": "generated",
+  "families": [
+   "snare",
+   "bass",
+   "synth",
+   "kick"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "rolls_music12",
+  "kind": "generated",
+  "source": {
+   "how": "section",
+   "paths": [
+    "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/Other And Backups/Labels and Timings Project/Exports/Labels and Timings - Rolls FULL MIX.wav"
+   ],
+   "start_s": 1093.8395326192501,
+   "end_s": 1153.8395326192501
+  },
+  "source_sha256": [
+   "142be91eb9e4309f0e5d6036580a8808eac274ff6c87d8f2047042fa09e41ce4"
+  ],
+  "sample_rate": 48000,
+  "offset_s": 1093.8395326192501,
+  "proof": "generated",
+  "families": [
+   "snare",
+   "bass",
+   "synth",
+   "kick"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "mod_01",
+  "kind": "generated",
+  "source": {
+   "how": "section",
+   "paths": [
+    "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/Other And Backups/Labels and Timings Project/Exports/Claude Album 2026 - Modulations/Labels and Timings - Modulations - Full Mix.wav"
+   ],
+   "start_s": 0.0,
+   "end_s": 13.714285714285719
+  },
+  "source_sha256": [
+   "8cf4dfa85bd373da34e3e68636b23054796501a396731912323bdb48b9dcd7a0"
+  ],
+  "sample_rate": 48000,
+  "offset_s": 0.0,
+  "proof": "generated",
+  "families": [
+   "snare",
+   "kick"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "mod_02",
+  "kind": "generated",
+  "source": {
+   "how": "section",
+   "paths": [
+    "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/Other And Backups/Labels and Timings Project/Exports/Claude Album 2026 - Modulations/Labels and Timings - Modulations - Full Mix.wav"
+   ],
+   "start_s": 13.714285714285719,
+   "end_s": 20.571428571428573
+  },
+  "source_sha256": [
+   "8cf4dfa85bd373da34e3e68636b23054796501a396731912323bdb48b9dcd7a0"
+  ],
+  "sample_rate": 48000,
+  "offset_s": 13.714285714285719,
+  "proof": "generated",
+  "families": [
+   "snare",
+   "kick"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "mod_03",
+  "kind": "generated",
+  "source": {
+   "how": "section",
+   "paths": [
+    "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/Other And Backups/Labels and Timings Project/Exports/Claude Album 2026 - Modulations/Labels and Timings - Modulations - Full Mix.wav"
+   ],
+   "start_s": 20.571428571428573,
+   "end_s": 34.28571428571429
+  },
+  "source_sha256": [
+   "8cf4dfa85bd373da34e3e68636b23054796501a396731912323bdb48b9dcd7a0"
+  ],
+  "sample_rate": 48000,
+  "offset_s": 20.571428571428573,
+  "proof": "generated",
+  "families": [
+   "snare",
+   "kick"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "mod_04",
+  "kind": "generated",
+  "source": {
+   "how": "section",
+   "paths": [
+    "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/Other And Backups/Labels and Timings Project/Exports/Claude Album 2026 - Modulations/Labels and Timings - Modulations - Full Mix.wav"
+   ],
+   "start_s": 34.28571428571429,
+   "end_s": 48.0
+  },
+  "source_sha256": [
+   "8cf4dfa85bd373da34e3e68636b23054796501a396731912323bdb48b9dcd7a0"
+  ],
+  "sample_rate": 48000,
+  "offset_s": 34.28571428571429,
+  "proof": "generated",
+  "families": [
+   "snare",
+   "kick"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "mod_05",
+  "kind": "generated",
+  "source": {
+   "how": "section",
+   "paths": [
+    "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/Other And Backups/Labels and Timings Project/Exports/Claude Album 2026 - Modulations/Labels and Timings - Modulations - Full Mix.wav"
+   ],
+   "start_s": 48.0,
+   "end_s": 54.85714285714286
+  },
+  "source_sha256": [
+   "8cf4dfa85bd373da34e3e68636b23054796501a396731912323bdb48b9dcd7a0"
+  ],
+  "sample_rate": 48000,
+  "offset_s": 48.0,
+  "proof": "generated",
+  "families": [
+   "snare",
+   "kick"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "mod_06",
+  "kind": "generated",
+  "source": {
+   "how": "section",
+   "paths": [
+    "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/Other And Backups/Labels and Timings Project/Exports/Claude Album 2026 - Modulations/Labels and Timings - Modulations - Full Mix.wav"
+   ],
+   "start_s": 54.85714285714286,
+   "end_s": 61.71428571428571
+  },
+  "source_sha256": [
+   "8cf4dfa85bd373da34e3e68636b23054796501a396731912323bdb48b9dcd7a0"
+  ],
+  "sample_rate": 48000,
+  "offset_s": 54.85714285714286,
+  "proof": "generated",
+  "families": [
+   "snare",
+   "kick"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "mod_07",
+  "kind": "generated",
+  "source": {
+   "how": "section",
+   "paths": [
+    "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/Other And Backups/Labels and Timings Project/Exports/Claude Album 2026 - Modulations/Labels and Timings - Modulations - Full Mix.wav"
+   ],
+   "start_s": 61.71428571428571,
+   "end_s": 89.14281224121082
+  },
+  "source_sha256": [
+   "8cf4dfa85bd373da34e3e68636b23054796501a396731912323bdb48b9dcd7a0"
+  ],
+  "sample_rate": 48000,
+  "offset_s": 61.71428571428571,
+  "proof": "generated",
+  "families": [
+   "snare",
+   "kick"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "mod_08",
+  "kind": "generated",
+  "source": {
+   "how": "section",
+   "paths": [
+    "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/Other And Backups/Labels and Timings Project/Exports/Claude Album 2026 - Modulations/Labels and Timings - Modulations - Full Mix.wav"
+   ],
+   "start_s": 89.14281224121082,
+   "end_s": 100.17729499983152
+  },
+  "source_sha256": [
+   "8cf4dfa85bd373da34e3e68636b23054796501a396731912323bdb48b9dcd7a0"
+  ],
+  "sample_rate": 48000,
+  "offset_s": 89.14281224121082,
+  "proof": "generated",
+  "families": [
+   "snare",
+   "kick"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "mod_09",
+  "kind": "generated",
+  "source": {
+   "how": "section",
+   "paths": [
+    "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/Other And Backups/Labels and Timings Project/Exports/Claude Album 2026 - Modulations/Labels and Timings - Modulations - Full Mix.wav"
+   ],
+   "start_s": 100.17729499983152,
+   "end_s": 122.24626051707288
+  },
+  "source_sha256": [
+   "8cf4dfa85bd373da34e3e68636b23054796501a396731912323bdb48b9dcd7a0"
+  ],
+  "sample_rate": 48000,
+  "offset_s": 100.17729499983152,
+  "proof": "generated",
+  "families": [
+   "snare",
+   "kick"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "mod_10",
+  "kind": "generated",
+  "source": {
+   "how": "section",
+   "paths": [
+    "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/Other And Backups/Labels and Timings Project/Exports/Claude Album 2026 - Modulations/Labels and Timings - Modulations - Full Mix.wav"
+   ],
+   "start_s": 122.24626051707288,
+   "end_s": 133.28082701953593
+  },
+  "source_sha256": [
+   "8cf4dfa85bd373da34e3e68636b23054796501a396731912323bdb48b9dcd7a0"
+  ],
+  "sample_rate": 48000,
+  "offset_s": 122.24626051707288,
+  "proof": "generated",
+  "families": [
+   "snare",
+   "kick"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "mod_11",
+  "kind": "generated",
+  "source": {
+   "how": "section",
+   "paths": [
+    "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/Other And Backups/Labels and Timings Project/Exports/Claude Album 2026 - Modulations/Labels and Timings - Modulations - Full Mix.wav"
+   ],
+   "start_s": 133.28082701953593,
+   "end_s": 139.28082701953593
+  },
+  "source_sha256": [
+   "8cf4dfa85bd373da34e3e68636b23054796501a396731912323bdb48b9dcd7a0"
+  ],
+  "sample_rate": 48000,
+  "offset_s": 133.28082701953593,
+  "proof": "generated",
+  "families": [
+   "snare",
+   "kick"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "mod_12",
+  "kind": "generated",
+  "source": {
+   "how": "section",
+   "paths": [
+    "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/Other And Backups/Labels and Timings Project/Exports/Claude Album 2026 - Modulations/Labels and Timings - Modulations - Full Mix.wav"
+   ],
+   "start_s": 139.28082701953593,
+   "end_s": 151.28082701953593
+  },
+  "source_sha256": [
+   "8cf4dfa85bd373da34e3e68636b23054796501a396731912323bdb48b9dcd7a0"
+  ],
+  "sample_rate": 48000,
+  "offset_s": 139.28082701953593,
+  "proof": "generated",
+  "families": [
+   "snare",
+   "kick"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "mod_13",
+  "kind": "generated",
+  "source": {
+   "how": "section",
+   "paths": [
+    "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/Other And Backups/Labels and Timings Project/Exports/Claude Album 2026 - Modulations/Labels and Timings - Modulations - Full Mix.wav"
+   ],
+   "start_s": 151.28082701953593,
+   "end_s": 157.28082701953593
+  },
+  "source_sha256": [
+   "8cf4dfa85bd373da34e3e68636b23054796501a396731912323bdb48b9dcd7a0"
+  ],
+  "sample_rate": 48000,
+  "offset_s": 151.28082701953593,
+  "proof": "generated",
+  "families": [
+   "snare",
+   "kick"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "mod_14",
+  "kind": "generated",
+  "source": {
+   "how": "section",
+   "paths": [
+    "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/Other And Backups/Labels and Timings Project/Exports/Claude Album 2026 - Modulations/Labels and Timings - Modulations - Full Mix.wav"
+   ],
+   "start_s": 157.28082701953593,
+   "end_s": 169.28082701953593
+  },
+  "source_sha256": [
+   "8cf4dfa85bd373da34e3e68636b23054796501a396731912323bdb48b9dcd7a0"
+  ],
+  "sample_rate": 48000,
+  "offset_s": 157.28082701953593,
+  "proof": "generated",
+  "families": [
+   "snare",
+   "kick"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "mod_15",
+  "kind": "generated",
+  "source": {
+   "how": "section",
+   "paths": [
+    "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/Other And Backups/Labels and Timings Project/Exports/Claude Album 2026 - Modulations/Labels and Timings - Modulations - Full Mix.wav"
+   ],
+   "start_s": 169.28082701953593,
+   "end_s": 175.2808805909645
+  },
+  "source_sha256": [
+   "8cf4dfa85bd373da34e3e68636b23054796501a396731912323bdb48b9dcd7a0"
+  ],
+  "sample_rate": 48000,
+  "offset_s": 169.28082701953593,
+  "proof": "generated",
+  "families": [
+   "snare",
+   "kick"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "mod_16",
+  "kind": "generated",
+  "source": {
+   "how": "section",
+   "paths": [
+    "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/Other And Backups/Labels and Timings Project/Exports/Claude Album 2026 - Modulations/Labels and Timings - Modulations - Full Mix.wav"
+   ],
+   "start_s": 175.2808805909645,
+   "end_s": 186.3153633495852
+  },
+  "source_sha256": [
+   "8cf4dfa85bd373da34e3e68636b23054796501a396731912323bdb48b9dcd7a0"
+  ],
+  "sample_rate": 48000,
+  "offset_s": 175.2808805909645,
+  "proof": "generated",
+  "families": [
+   "snare",
+   "kick"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "mod_17",
+  "kind": "generated",
+  "source": {
+   "how": "section",
+   "paths": [
+    "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/Other And Backups/Labels and Timings Project/Exports/Claude Album 2026 - Modulations/Labels and Timings - Modulations - Full Mix.wav"
+   ],
+   "start_s": 186.3153633495852,
+   "end_s": 208.38432886682656
+  },
+  "source_sha256": [
+   "8cf4dfa85bd373da34e3e68636b23054796501a396731912323bdb48b9dcd7a0"
+  ],
+  "sample_rate": 48000,
+  "offset_s": 186.3153633495852,
+  "proof": "generated",
+  "families": [
+   "snare",
+   "kick"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "mod_18",
+  "kind": "generated",
+  "source": {
+   "how": "section",
+   "paths": [
+    "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/Other And Backups/Labels and Timings Project/Exports/Claude Album 2026 - Modulations/Labels and Timings - Modulations - Full Mix.wav"
+   ],
+   "start_s": 208.38432886682656,
+   "end_s": 219.4188953692896
+  },
+  "source_sha256": [
+   "8cf4dfa85bd373da34e3e68636b23054796501a396731912323bdb48b9dcd7a0"
+  ],
+  "sample_rate": 48000,
+  "offset_s": 208.38432886682656,
+  "proof": "generated",
+  "families": [
+   "snare",
+   "kick"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "mod_19",
+  "kind": "generated",
+  "source": {
+   "how": "section",
+   "paths": [
+    "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/Other And Backups/Labels and Timings Project/Exports/Claude Album 2026 - Modulations/Labels and Timings - Modulations - Full Mix.wav"
+   ],
+   "start_s": 219.4188953692896,
+   "end_s": 226.63694048207157
+  },
+  "source_sha256": [
+   "8cf4dfa85bd373da34e3e68636b23054796501a396731912323bdb48b9dcd7a0"
+  ],
+  "sample_rate": 48000,
+  "offset_s": 219.4188953692896,
+  "proof": "generated",
+  "families": [
+   "snare",
+   "kick"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "mod_20",
+  "kind": "generated",
+  "source": {
+   "how": "section",
+   "paths": [
+    "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/Other And Backups/Labels and Timings Project/Exports/Claude Album 2026 - Modulations/Labels and Timings - Modulations - Full Mix.wav"
+   ],
+   "start_s": 226.63694048207157,
+   "end_s": 255.5091209331994
+  },
+  "source_sha256": [
+   "8cf4dfa85bd373da34e3e68636b23054796501a396731912323bdb48b9dcd7a0"
+  ],
+  "sample_rate": 48000,
+  "offset_s": 226.63694048207157,
+  "proof": "generated",
+  "families": [
+   "snare",
+   "kick"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "mod_21",
+  "kind": "generated",
+  "source": {
+   "how": "section",
+   "paths": [
+    "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/Other And Backups/Labels and Timings Project/Exports/Claude Album 2026 - Modulations/Labels and Timings - Modulations - Full Mix.wav"
+   ],
+   "start_s": 255.5091209331994,
+   "end_s": 262.7271660459813
+  },
+  "source_sha256": [
+   "8cf4dfa85bd373da34e3e68636b23054796501a396731912323bdb48b9dcd7a0"
+  ],
+  "sample_rate": 48000,
+  "offset_s": 255.5091209331994,
+  "proof": "generated",
+  "families": [
+   "snare",
+   "kick"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "mod_22",
+  "kind": "generated",
+  "source": {
+   "how": "section",
+   "paths": [
+    "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/Other And Backups/Labels and Timings Project/Exports/Claude Album 2026 - Modulations/Labels and Timings - Modulations - Full Mix.wav"
+   ],
+   "start_s": 262.7271660459813,
+   "end_s": 277.16323371515426
+  },
+  "source_sha256": [
+   "8cf4dfa85bd373da34e3e68636b23054796501a396731912323bdb48b9dcd7a0"
+  ],
+  "sample_rate": 48000,
+  "offset_s": 262.7271660459813,
+  "proof": "generated",
+  "families": [
+   "snare",
+   "kick"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "mod_23",
+  "kind": "generated",
+  "source": {
+   "how": "section",
+   "paths": [
+    "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/Other And Backups/Labels and Timings Project/Exports/Claude Album 2026 - Modulations/Labels and Timings - Modulations - Full Mix.wav"
+   ],
+   "start_s": 277.16323371515426,
+   "end_s": 291.3854559373765
+  },
+  "source_sha256": [
+   "8cf4dfa85bd373da34e3e68636b23054796501a396731912323bdb48b9dcd7a0"
+  ],
+  "sample_rate": 48000,
+  "offset_s": 277.16323371515426,
+  "proof": "generated",
+  "families": [
+   "snare",
+   "kick"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "mod_24",
+  "kind": "generated",
+  "source": {
+   "how": "section",
+   "paths": [
+    "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/Other And Backups/Labels and Timings Project/Exports/Claude Album 2026 - Modulations/Labels and Timings - Modulations - Full Mix.wav"
+   ],
+   "start_s": 291.3854559373765,
+   "end_s": 312.7187892707098
+  },
+  "source_sha256": [
+   "8cf4dfa85bd373da34e3e68636b23054796501a396731912323bdb48b9dcd7a0"
+  ],
+  "sample_rate": 48000,
+  "offset_s": 291.3854559373765,
+  "proof": "generated",
+  "families": [
+   "snare",
+   "kick"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "mod_25",
+  "kind": "generated",
+  "source": {
+   "how": "section",
+   "paths": [
+    "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/Other And Backups/Labels and Timings Project/Exports/Claude Album 2026 - Modulations/Labels and Timings - Modulations - Full Mix.wav"
+   ],
+   "start_s": 312.7187892707098,
+   "end_s": 319.82990038182095
+  },
+  "source_sha256": [
+   "8cf4dfa85bd373da34e3e68636b23054796501a396731912323bdb48b9dcd7a0"
+  ],
+  "sample_rate": 48000,
+  "offset_s": 312.7187892707098,
+  "proof": "generated",
+  "families": [
+   "snare",
+   "kick"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "mod_26",
+  "kind": "generated",
+  "source": {
+   "how": "section",
+   "paths": [
+    "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/Other And Backups/Labels and Timings Project/Exports/Claude Album 2026 - Modulations/Labels and Timings - Modulations - Full Mix.wav"
+   ],
+   "start_s": 319.82990038182095,
+   "end_s": 334.0521067310273
+  },
+  "source_sha256": [
+   "8cf4dfa85bd373da34e3e68636b23054796501a396731912323bdb48b9dcd7a0"
+  ],
+  "sample_rate": 48000,
+  "offset_s": 319.82990038182095,
+  "proof": "generated",
+  "families": [
+   "snare",
+   "kick"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "mod_27",
+  "kind": "generated",
+  "source": {
+   "how": "section",
+   "paths": [
+    "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/Other And Backups/Labels and Timings Project/Exports/Claude Album 2026 - Modulations/Labels and Timings - Modulations - Full Mix.wav"
+   ],
+   "start_s": 334.0521067310273,
+   "end_s": 341.92095919004373
+  },
+  "source_sha256": [
+   "8cf4dfa85bd373da34e3e68636b23054796501a396731912323bdb48b9dcd7a0"
+  ],
+  "sample_rate": 48000,
+  "offset_s": 334.0521067310273,
+  "proof": "generated",
+  "families": [
+   "snare",
+   "kick"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "mod_28",
+  "kind": "generated",
+  "source": {
+   "how": "section",
+   "paths": [
+    "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/Other And Backups/Labels and Timings Project/Exports/Claude Album 2026 - Modulations/Labels and Timings - Modulations - Full Mix.wav"
+   ],
+   "start_s": 341.92095919004373,
+   "end_s": 357.6586641080765
+  },
+  "source_sha256": [
+   "8cf4dfa85bd373da34e3e68636b23054796501a396731912323bdb48b9dcd7a0"
+  ],
+  "sample_rate": 48000,
+  "offset_s": 341.92095919004373,
+  "proof": "generated",
+  "families": [
+   "snare",
+   "kick"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "mod_29",
+  "kind": "generated",
+  "source": {
+   "how": "section",
+   "paths": [
+    "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/Other And Backups/Labels and Timings Project/Exports/Claude Album 2026 - Modulations/Labels and Timings - Modulations - Full Mix.wav"
+   ],
+   "start_s": 357.6586641080765,
+   "end_s": 365.5275165670929
+  },
+  "source_sha256": [
+   "8cf4dfa85bd373da34e3e68636b23054796501a396731912323bdb48b9dcd7a0"
+  ],
+  "sample_rate": 48000,
+  "offset_s": 357.6586641080765,
+  "proof": "generated",
+  "families": [
+   "snare",
+   "kick"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "mod_30",
+  "kind": "generated",
+  "source": {
+   "how": "section",
+   "paths": [
+    "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/Other And Backups/Labels and Timings Project/Exports/Claude Album 2026 - Modulations/Labels and Timings - Modulations - Full Mix.wav"
+   ],
+   "start_s": 365.5275165670929,
+   "end_s": 381.2652060323899
+  },
+  "source_sha256": [
+   "8cf4dfa85bd373da34e3e68636b23054796501a396731912323bdb48b9dcd7a0"
+  ],
+  "sample_rate": 48000,
+  "offset_s": 365.5275165670929,
+  "proof": "generated",
+  "families": [
+   "snare",
+   "kick"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "mod_31",
+  "kind": "generated",
+  "source": {
+   "how": "section",
+   "paths": [
+    "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/Other And Backups/Labels and Timings Project/Exports/Claude Album 2026 - Modulations/Labels and Timings - Modulations - Full Mix.wav"
+   ],
+   "start_s": 381.2652060323899,
+   "end_s": 388.6498214170053
+  },
+  "source_sha256": [
+   "8cf4dfa85bd373da34e3e68636b23054796501a396731912323bdb48b9dcd7a0"
+  ],
+  "sample_rate": 48000,
+  "offset_s": 381.2652060323899,
+  "proof": "generated",
+  "families": [
+   "snare",
+   "kick"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "mod_32",
+  "kind": "generated",
+  "source": {
+   "how": "section",
+   "paths": [
+    "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/Other And Backups/Labels and Timings Project/Exports/Claude Album 2026 - Modulations/Labels and Timings - Modulations - Full Mix.wav"
+   ],
+   "start_s": 388.6498214170053,
+   "end_s": 403.41905218623606
+  },
+  "source_sha256": [
+   "8cf4dfa85bd373da34e3e68636b23054796501a396731912323bdb48b9dcd7a0"
+  ],
+  "sample_rate": 48000,
+  "offset_s": 388.6498214170053,
+  "proof": "generated",
+  "families": [
+   "snare",
+   "kick"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "mod_33",
+  "kind": "generated",
+  "source": {
+   "how": "section",
+   "paths": [
+    "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/Other And Backups/Labels and Timings Project/Exports/Claude Album 2026 - Modulations/Labels and Timings - Modulations - Full Mix.wav"
+   ],
+   "start_s": 403.41905218623606,
+   "end_s": 410.8036675708515
+  },
+  "source_sha256": [
+   "8cf4dfa85bd373da34e3e68636b23054796501a396731912323bdb48b9dcd7a0"
+  ],
+  "sample_rate": 48000,
+  "offset_s": 403.41905218623606,
+  "proof": "generated",
+  "families": [
+   "snare",
+   "kick"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "mod_34",
+  "kind": "generated",
+  "source": {
+   "how": "section",
+   "paths": [
+    "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/Other And Backups/Labels and Timings Project/Exports/Claude Album 2026 - Modulations/Labels and Timings - Modulations - Full Mix.wav"
+   ],
+   "start_s": 410.8036675708515,
+   "end_s": 425.57288144945363
+  },
+  "source_sha256": [
+   "8cf4dfa85bd373da34e3e68636b23054796501a396731912323bdb48b9dcd7a0"
+  ],
+  "sample_rate": 48000,
+  "offset_s": 410.8036675708515,
+  "proof": "generated",
+  "families": [
+   "snare",
+   "kick"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "mod_35",
+  "kind": "generated",
+  "source": {
+   "how": "section",
+   "paths": [
+    "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/Other And Backups/Labels and Timings Project/Exports/Claude Album 2026 - Modulations/Labels and Timings - Modulations - Full Mix.wav"
+   ],
+   "start_s": 425.57288144945363,
+   "end_s": 432.43002430659647
+  },
+  "source_sha256": [
+   "8cf4dfa85bd373da34e3e68636b23054796501a396731912323bdb48b9dcd7a0"
+  ],
+  "sample_rate": 48000,
+  "offset_s": 425.57288144945363,
+  "proof": "generated",
+  "families": [
+   "snare",
+   "kick"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "mod_36",
+  "kind": "generated",
+  "source": {
+   "how": "section",
+   "paths": [
+    "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/Other And Backups/Labels and Timings Project/Exports/Claude Album 2026 - Modulations/Labels and Timings - Modulations - Full Mix.wav"
+   ],
+   "start_s": 432.43002430659647,
+   "end_s": 446.1443100208822
+  },
+  "source_sha256": [
+   "8cf4dfa85bd373da34e3e68636b23054796501a396731912323bdb48b9dcd7a0"
+  ],
+  "sample_rate": 48000,
+  "offset_s": 432.43002430659647,
+  "proof": "generated",
+  "families": [
+   "snare",
+   "kick"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "mod_37",
+  "kind": "generated",
+  "source": {
+   "how": "section",
+   "paths": [
+    "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/Other And Backups/Labels and Timings Project/Exports/Claude Album 2026 - Modulations/Labels and Timings - Modulations - Full Mix.wav"
+   ],
+   "start_s": 446.1443100208822,
+   "end_s": 453.0014528780251
+  },
+  "source_sha256": [
+   "8cf4dfa85bd373da34e3e68636b23054796501a396731912323bdb48b9dcd7a0"
+  ],
+  "sample_rate": 48000,
+  "offset_s": 446.1443100208822,
+  "proof": "generated",
+  "families": [
+   "snare",
+   "kick"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "mod_38",
+  "kind": "generated",
+  "source": {
+   "how": "section",
+   "paths": [
+    "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/Other And Backups/Labels and Timings Project/Exports/Claude Album 2026 - Modulations/Labels and Timings - Modulations - Full Mix.wav"
+   ],
+   "start_s": 453.0014528780251,
+   "end_s": 466.71584022018493
+  },
+  "source_sha256": [
+   "8cf4dfa85bd373da34e3e68636b23054796501a396731912323bdb48b9dcd7a0"
+  ],
+  "sample_rate": 48000,
+  "offset_s": 453.0014528780251,
+  "proof": "generated",
+  "families": [
+   "snare",
+   "kick"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "mod_39",
+  "kind": "generated",
+  "source": {
+   "how": "section",
+   "paths": [
+    "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/Other And Backups/Labels and Timings Project/Exports/Claude Album 2026 - Modulations/Labels and Timings - Modulations - Full Mix.wav"
+   ],
+   "start_s": 466.71584022018493,
+   "end_s": 477.3825068868516
+  },
+  "source_sha256": [
+   "8cf4dfa85bd373da34e3e68636b23054796501a396731912323bdb48b9dcd7a0"
+  ],
+  "sample_rate": 48000,
+  "offset_s": 466.71584022018493,
+  "proof": "generated",
+  "families": [
+   "snare",
+   "kick"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "mod_40",
+  "kind": "generated",
+  "source": {
+   "how": "section",
+   "paths": [
+    "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/Other And Backups/Labels and Timings Project/Exports/Claude Album 2026 - Modulations/Labels and Timings - Modulations - Full Mix.wav"
+   ],
+   "start_s": 477.3825068868516,
+   "end_s": 498.715840220185
+  },
+  "source_sha256": [
+   "8cf4dfa85bd373da34e3e68636b23054796501a396731912323bdb48b9dcd7a0"
+  ],
+  "sample_rate": 48000,
+  "offset_s": 477.3825068868516,
+  "proof": "generated",
+  "families": [
+   "snare",
+   "kick"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "mod_41",
+  "kind": "generated",
+  "source": {
+   "how": "section",
+   "paths": [
+    "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/Other And Backups/Labels and Timings Project/Exports/Claude Album 2026 - Modulations/Labels and Timings - Modulations - Full Mix.wav"
+   ],
+   "start_s": 498.715840220185,
+   "end_s": 509.3825068868516
+  },
+  "source_sha256": [
+   "8cf4dfa85bd373da34e3e68636b23054796501a396731912323bdb48b9dcd7a0"
+  ],
+  "sample_rate": 48000,
+  "offset_s": 498.715840220185,
+  "proof": "generated",
+  "families": [
+   "snare",
+   "kick"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "mod_42",
+  "kind": "generated",
+  "source": {
+   "how": "section",
+   "paths": [
+    "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/Other And Backups/Labels and Timings Project/Exports/Claude Album 2026 - Modulations/Labels and Timings - Modulations - Full Mix.wav"
+   ],
+   "start_s": 509.3825068868516,
+   "end_s": 530.7157489176632
+  },
+  "source_sha256": [
+   "8cf4dfa85bd373da34e3e68636b23054796501a396731912323bdb48b9dcd7a0"
+  ],
+  "sample_rate": 48000,
+  "offset_s": 509.3825068868516,
+  "proof": "generated",
+  "families": [
+   "snare",
+   "kick"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "mod_43",
+  "kind": "generated",
+  "source": {
+   "how": "section",
+   "paths": [
+    "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/Other And Backups/Labels and Timings Project/Exports/Claude Album 2026 - Modulations/Labels and Timings - Modulations - Full Mix.wav"
+   ],
+   "start_s": 530.7157489176632,
+   "end_s": 538.7157489176632
+  },
+  "source_sha256": [
+   "8cf4dfa85bd373da34e3e68636b23054796501a396731912323bdb48b9dcd7a0"
+  ],
+  "sample_rate": 48000,
+  "offset_s": 530.7157489176632,
+  "proof": "generated",
+  "families": [
+   "snare",
+   "kick"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "mod_44",
+  "kind": "generated",
+  "source": {
+   "how": "section",
+   "paths": [
+    "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/Other And Backups/Labels and Timings Project/Exports/Claude Album 2026 - Modulations/Labels and Timings - Modulations - Full Mix.wav"
+   ],
+   "start_s": 538.7157489176632,
+   "end_s": 554.7157489176632
+  },
+  "source_sha256": [
+   "8cf4dfa85bd373da34e3e68636b23054796501a396731912323bdb48b9dcd7a0"
+  ],
+  "sample_rate": 48000,
+  "offset_s": 538.7157489176632,
+  "proof": "generated",
+  "families": [
+   "snare",
+   "kick"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "mod_45",
+  "kind": "generated",
+  "source": {
+   "how": "section",
+   "paths": [
+    "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/Other And Backups/Labels and Timings Project/Exports/Claude Album 2026 - Modulations/Labels and Timings - Modulations - Full Mix.wav"
+   ],
+   "start_s": 554.7157489176632,
+   "end_s": 562.7157489176632
+  },
+  "source_sha256": [
+   "8cf4dfa85bd373da34e3e68636b23054796501a396731912323bdb48b9dcd7a0"
+  ],
+  "sample_rate": 48000,
+  "offset_s": 554.7157489176632,
+  "proof": "generated",
+  "families": [
+   "snare",
+   "kick"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "mod_46",
+  "kind": "generated",
+  "source": {
+   "how": "section",
+   "paths": [
+    "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/Other And Backups/Labels and Timings Project/Exports/Claude Album 2026 - Modulations/Labels and Timings - Modulations - Full Mix.wav"
+   ],
+   "start_s": 562.7157489176632,
+   "end_s": 578.7157958823335
+  },
+  "source_sha256": [
+   "8cf4dfa85bd373da34e3e68636b23054796501a396731912323bdb48b9dcd7a0"
+  ],
+  "sample_rate": 48000,
+  "offset_s": 562.7157489176632,
+  "proof": "generated",
+  "families": [
+   "snare",
+   "kick"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "mod_47",
+  "kind": "generated",
+  "source": {
+   "how": "section",
+   "paths": [
+    "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/Other And Backups/Labels and Timings Project/Exports/Claude Album 2026 - Modulations/Labels and Timings - Modulations - Full Mix.wav"
+   ],
+   "start_s": 578.7157958823335,
+   "end_s": 588.3157958823335
+  },
+  "source_sha256": [
+   "8cf4dfa85bd373da34e3e68636b23054796501a396731912323bdb48b9dcd7a0"
+  ],
+  "sample_rate": 48000,
+  "offset_s": 578.7157958823335,
+  "proof": "generated",
+  "families": [
+   "snare",
+   "kick"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "mod_48",
+  "kind": "generated",
+  "source": {
+   "how": "section",
+   "paths": [
+    "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/Other And Backups/Labels and Timings Project/Exports/Claude Album 2026 - Modulations/Labels and Timings - Modulations - Full Mix.wav"
+   ],
+   "start_s": 588.3157958823335,
+   "end_s": 607.5157958823335
+  },
+  "source_sha256": [
+   "8cf4dfa85bd373da34e3e68636b23054796501a396731912323bdb48b9dcd7a0"
+  ],
+  "sample_rate": 48000,
+  "offset_s": 588.3157958823335,
+  "proof": "generated",
+  "families": [
+   "snare",
+   "kick"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "mod_49",
+  "kind": "generated",
+  "source": {
+   "how": "section",
+   "paths": [
+    "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/Other And Backups/Labels and Timings Project/Exports/Claude Album 2026 - Modulations/Labels and Timings - Modulations - Full Mix.wav"
+   ],
+   "start_s": 607.5157958823335,
+   "end_s": 617.1157958823335
+  },
+  "source_sha256": [
+   "8cf4dfa85bd373da34e3e68636b23054796501a396731912323bdb48b9dcd7a0"
+  ],
+  "sample_rate": 48000,
+  "offset_s": 607.5157958823335,
+  "proof": "generated",
+  "families": [
+   "snare",
+   "kick"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "mod_50",
+  "kind": "generated",
+  "source": {
+   "how": "section",
+   "paths": [
+    "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/Other And Backups/Labels and Timings Project/Exports/Claude Album 2026 - Modulations/Labels and Timings - Modulations - Full Mix.wav"
+   ],
+   "start_s": 617.1157958823335,
+   "end_s": 636.3156478192426
+  },
+  "source_sha256": [
+   "8cf4dfa85bd373da34e3e68636b23054796501a396731912323bdb48b9dcd7a0"
+  ],
+  "sample_rate": 48000,
+  "offset_s": 617.1157958823335,
+  "proof": "generated",
+  "families": [
+   "snare",
+   "kick"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "mod_51",
+  "kind": "generated",
+  "source": {
+   "how": "section",
+   "paths": [
+    "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/Other And Backups/Labels and Timings Project/Exports/Claude Album 2026 - Modulations/Labels and Timings - Modulations - Full Mix.wav"
+   ],
+   "start_s": 636.3156478192426,
+   "end_s": 641.8970431680798
+  },
+  "source_sha256": [
+   "8cf4dfa85bd373da34e3e68636b23054796501a396731912323bdb48b9dcd7a0"
+  ],
+  "sample_rate": 48000,
+  "offset_s": 636.3156478192426,
+  "proof": "generated",
+  "families": [
+   "snare",
+   "kick"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "mod_52",
+  "kind": "generated",
+  "source": {
+   "how": "section",
+   "paths": [
+    "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/Other And Backups/Labels and Timings Project/Exports/Claude Album 2026 - Modulations/Labels and Timings - Modulations - Full Mix.wav"
+   ],
+   "start_s": 641.8970431680798,
+   "end_s": 653.0598338657543
+  },
+  "source_sha256": [
+   "8cf4dfa85bd373da34e3e68636b23054796501a396731912323bdb48b9dcd7a0"
+  ],
+  "sample_rate": 48000,
+  "offset_s": 641.8970431680798,
+  "proof": "generated",
+  "families": [
+   "snare",
+   "kick"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "mod_53",
+  "kind": "generated",
+  "source": {
+   "how": "section",
+   "paths": [
+    "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/Other And Backups/Labels and Timings Project/Exports/Claude Album 2026 - Modulations/Labels and Timings - Modulations - Full Mix.wav"
+   ],
+   "start_s": 653.0598338657543,
+   "end_s": 658.6412292145915
+  },
+  "source_sha256": [
+   "8cf4dfa85bd373da34e3e68636b23054796501a396731912323bdb48b9dcd7a0"
+  ],
+  "sample_rate": 48000,
+  "offset_s": 653.0598338657543,
+  "proof": "generated",
+  "families": [
+   "snare",
+   "kick"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "mod_54",
+  "kind": "generated",
+  "source": {
+   "how": "section",
+   "paths": [
+    "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/Other And Backups/Labels and Timings Project/Exports/Claude Album 2026 - Modulations/Labels and Timings - Modulations - Full Mix.wav"
+   ],
+   "start_s": 658.6412292145915,
+   "end_s": 669.804083243175
+  },
+  "source_sha256": [
+   "8cf4dfa85bd373da34e3e68636b23054796501a396731912323bdb48b9dcd7a0"
+  ],
+  "sample_rate": 48000,
+  "offset_s": 658.6412292145915,
+  "proof": "generated",
+  "families": [
+   "snare",
+   "kick"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "mod_55",
+  "kind": "generated",
+  "source": {
+   "how": "section",
+   "paths": [
+    "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/Other And Backups/Labels and Timings Project/Exports/Claude Album 2026 - Modulations/Labels and Timings - Modulations - Full Mix.wav"
+   ],
+   "start_s": 669.804083243175,
+   "end_s": 677.6729357021914
+  },
+  "source_sha256": [
+   "8cf4dfa85bd373da34e3e68636b23054796501a396731912323bdb48b9dcd7a0"
+  ],
+  "sample_rate": 48000,
+  "offset_s": 669.804083243175,
+  "proof": "generated",
+  "families": [
+   "snare",
+   "kick"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "mod_56",
+  "kind": "generated",
+  "source": {
+   "how": "section",
+   "paths": [
+    "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/Other And Backups/Labels and Timings Project/Exports/Claude Album 2026 - Modulations/Labels and Timings - Modulations - Full Mix.wav"
+   ],
+   "start_s": 677.6729357021914,
+   "end_s": 693.4106406202242
+  },
+  "source_sha256": [
+   "8cf4dfa85bd373da34e3e68636b23054796501a396731912323bdb48b9dcd7a0"
+  ],
+  "sample_rate": 48000,
+  "offset_s": 677.6729357021914,
+  "proof": "generated",
+  "families": [
+   "snare",
+   "kick"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "mod_57",
+  "kind": "generated",
+  "source": {
+   "how": "section",
+   "paths": [
+    "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/Other And Backups/Labels and Timings Project/Exports/Claude Album 2026 - Modulations/Labels and Timings - Modulations - Full Mix.wav"
+   ],
+   "start_s": 693.4106406202242,
+   "end_s": 701.2794930792405
+  },
+  "source_sha256": [
+   "8cf4dfa85bd373da34e3e68636b23054796501a396731912323bdb48b9dcd7a0"
+  ],
+  "sample_rate": 48000,
+  "offset_s": 693.4106406202242,
+  "proof": "generated",
+  "families": [
+   "snare",
+   "kick"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "mod_58",
+  "kind": "generated",
+  "source": {
+   "how": "section",
+   "paths": [
+    "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/Other And Backups/Labels and Timings Project/Exports/Claude Album 2026 - Modulations/Labels and Timings - Modulations - Full Mix.wav"
+   ],
+   "start_s": 701.2794930792405,
+   "end_s": 717.0171649319209
+  },
+  "source_sha256": [
+   "8cf4dfa85bd373da34e3e68636b23054796501a396731912323bdb48b9dcd7a0"
+  ],
+  "sample_rate": 48000,
+  "offset_s": 701.2794930792405,
+  "proof": "generated",
+  "families": [
+   "snare",
+   "kick"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "miracle",
+  "kind": "project",
+  "source": {
+   "how": "goal",
+   "paths": [
+    "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/2024/Streets Project/MASTERS/Miracle MSTR V1 APRS.wav"
+   ]
+  },
+  "source_sha256": [
+   "263c248ce6c2a5b16ad981f055afd0be278085f6468347e25d3e4565f5bf3e66"
+  ],
+  "sample_rate": 44100,
+  "offset_s": -77.835,
+  "proof": "goal:kick stem against project kick notes",
+  "families": [
+   "bass",
+   "synth",
+   "kick"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "heavy_on_mind",
+  "kind": "project",
+  "source": {
+   "how": "goal",
+   "paths": [
+    "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/EMERGENCE - ALBUM 2026/FINAL MASTERS/Latent Space - 02 - Heavy on Mind MSTR V3 APRS.wav"
+   ]
+  },
+  "source_sha256": [
+   "3f22cd0335db72972a177488cf28a7d4de94d66c74203d9dea5f79cda5ca5a36"
+  ],
+  "sample_rate": 44100,
+  "offset_s": -23.54589999999998,
+  "proof": "goal:kick stem against project kick notes",
+  "families": [
+   "bass",
+   "synth",
+   "kick"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "hung_up",
+  "kind": "project",
+  "source": {
+   "how": "goal",
+   "paths": [
+    "/Users/peterkiemann/.cache/manifold/kick-goal-2026-10-10/hung_up_mix.npy"
+   ]
+  },
+  "source_sha256": [
+   "15c4018f94a0ba80ba32148b974b7db1e0a56e574abe764e805b02474ea0f54f"
+  ],
+  "sample_rate": 48000,
+  "offset_s": -43.6357,
+  "proof": "goal:trigger track export offset (labels_trigger.json)",
+  "families": [
+   "bass",
+   "synth",
+   "kick"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "right_where",
+  "kind": "project",
+  "source": {
+   "how": "goal",
+   "paths": [
+    "/Users/peterkiemann/.cache/manifold/kick-goal-2026-10-10/right_where_mix.npy"
+   ]
+  },
+  "source_sha256": [
+   "6fd9bac05b48eea6501df7fd7521a90646786978b85c854b4a17f212e595ce2c"
+  ],
+  "sample_rate": 48000,
+  "offset_s": -48.8113,
+  "proof": "goal:trigger track export offset (labels_trigger.json)",
+  "families": [
+   "bass",
+   "synth",
+   "kick"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "facade",
+  "kind": "project",
+  "source": {
+   "how": "goal",
+   "paths": [
+    "/Users/peterkiemann/.cache/manifold/kick-goal-2026-10-10/facade_mix.npy"
+   ]
+  },
+  "source_sha256": [
+   "a67c2f2411c05deb935b7318c8e9eb93100cbd171f2376045042401c44b96f9f"
+  ],
+  "sample_rate": 48000,
+  "offset_s": -26.6183,
+  "proof": "lab:proven (one pattern, clear win)",
+  "families": [
+   "bass",
+   "synth",
+   "kick"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "got_it",
+  "kind": "project",
+  "source": {
+   "how": "goal",
+   "paths": [
+    "/Users/peterkiemann/.cache/manifold/kick-goal-2026-10-10/got_it_mix.npy"
+   ]
+  },
+  "source_sha256": [
+   "7d16cfd1696a13b45558df8c5cc8ae6932dd0a553c2e6e14c39c6c04a209bb52"
+  ],
+  "sample_rate": 48000,
+  "offset_s": -51.8385,
+  "proof": "goal:wip survey offset (unproven against a stem)",
+  "families": [
+   "bass",
+   "synth",
+   "kick"
+  ],
+  "audit_override": "Peter, 2026-10-11: 100% usable. Kick labels sit on the mix kick attacks (isolated labels: median -6 ms, p10-p90 -7 to -4); the kick pattern picks the labels bar (r 0.72 vs 0.67)."
+ },
+ {
+  "id": "renew",
+  "kind": "project",
+  "source": {
+   "how": "goal",
+   "paths": [
+    "/Users/peterkiemann/.cache/manifold/kick-goal-2026-10-10/renew_mix.npy"
+   ]
+  },
+  "source_sha256": [
+   "b27ba38f0246f629a7229628689fd1c2654c45b1c09d5668c6e89675ef218901"
+  ],
+  "sample_rate": 48000,
+  "offset_s": -57.264,
+  "proof": "goal:wip survey offset (unproven against a stem)",
+  "families": [
+   "bass",
+   "synth",
+   "kick"
+  ],
+  "audit_override": "Peter, 2026-10-11: 100% usable. Kick labels sit on the mix kick attacks (median 0 ms, p10-p90 -1 to +8); the kick pattern picks the labels bar (r 0.89 vs 0.72)."
+ },
+ {
+  "id": "overwhelming_force",
+  "kind": "project",
+  "source": {
+   "how": "goal",
+   "paths": [
+    "/Users/peterkiemann/.cache/manifold/kick-goal-2026-10-10/overwhelming_force_mix.npy"
+   ]
+  },
+  "source_sha256": [
+   "b0d48bf996720d762a36fd7e8e843217478ddb1c370ffe499c1176ec9eba3e25"
+  ],
+  "sample_rate": 48000,
+  "offset_s": -25.8955,
+  "proof": "goal:wip survey offset (unproven against a stem)",
+  "families": [
+   "bass",
+   "synth",
+   "kick"
+  ],
+  "audit_override": "Peter, 2026-10-11: 100% usable. Kick labels sit on the mix kick attacks (median -2 ms, p10-p90 -4 to +4); the kick pattern and the other instruments both pick the labels bar."
+ },
+ {
+  "id": "apricots_128bpm",
+  "kind": "project",
+  "source": {
+   "how": "goal",
+   "paths": [
+    "/Users/peterkiemann/MANIFOLD - Rust/tests/fixtures/audio/apricots_128bpm/mix.wav"
+   ]
+  },
+  "source_sha256": [
+   "fde3593f372875579a15b95d80cb1d4408971ba62dd80b84110623eecbba28c4"
+  ],
+  "sample_rate": 48000,
+  "offset_s": null,
+  "proof": "none",
+  "families": [
+   "kick"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "bad_guy_128bpm",
+  "kind": "project",
+  "source": {
+   "how": "goal",
+   "paths": [
+    "/Users/peterkiemann/MANIFOLD - Rust/tests/fixtures/audio/bad_guy_128bpm/mix.wav"
+   ]
+  },
+  "source_sha256": [
+   "351ad2f07dc5778690b8f04c0af12c1acc8f83fdb3c253fc988e26a433cff7a8"
+  ],
+  "sample_rate": 44100,
+  "offset_s": null,
+  "proof": "none",
+  "families": [
+   "kick"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "feel_the_vibration_174bpm",
+  "kind": "project",
+  "source": {
+   "how": "goal",
+   "paths": [
+    "/Users/peterkiemann/MANIFOLD - Rust/tests/fixtures/audio/feel_the_vibration_174bpm/mix.wav"
+   ]
+  },
+  "source_sha256": [
+   "57458b322198b9c12ac821180874466a6636c15dda56d33bc29d616f46f80533"
+  ],
+  "sample_rate": 48000,
+  "offset_s": null,
+  "proof": "none",
+  "families": [
+   "kick"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "inhale_exhale_145bpm",
+  "kind": "project",
+  "source": {
+   "how": "goal",
+   "paths": [
+    "/Users/peterkiemann/MANIFOLD - Rust/tests/fixtures/audio/inhale_exhale_145bpm/mix.wav"
+   ]
+  },
+  "source_sha256": [
+   "26163ae92e4b7aaf74cafc6a5fff3b6bad2a566a60474bb8b8b53386add18514"
+  ],
+  "sample_rate": 48000,
+  "offset_s": null,
+  "proof": "none",
+  "families": [
+   "kick"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "tears_140bpm",
+  "kind": "project",
+  "source": {
+   "how": "goal",
+   "paths": [
+    "/Users/peterkiemann/MANIFOLD - Rust/tests/fixtures/audio/tears_140bpm/mix.wav"
+   ]
+  },
+  "source_sha256": [
+   "49c7c4ee799e93690e4023665b332c617f0fa170314a83d05c79a2c675d5b334"
+  ],
+  "sample_rate": 48000,
+  "offset_s": null,
+  "proof": "none",
+  "families": [
+   "kick"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "cold_remix",
+  "kind": "project",
+  "source": {
+   "how": "goal",
+   "paths": [
+    "/Users/peterkiemann/.cache/manifold/kick-goal-2026-10-10/cold_remix_mix.npy"
+   ]
+  },
+  "source_sha256": [
+   "db36d5ff24be4e2d0f32018b8b07c8597f4fdbf5561124aa450d6be0026416b4"
+  ],
+  "sample_rate": 48000,
+  "offset_s": null,
+  "proof": "none",
+  "families": [
+   "kick"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "gerrit",
+  "kind": "project",
+  "source": {
+   "how": "goal",
+   "paths": [
+    "/Users/peterkiemann/.cache/manifold/kick-goal-2026-10-10/gerrit_mix.npy"
+   ]
+  },
+  "source_sha256": [
+   "8d880464c6fbf77899d71b5760ad231442863244948282c0cced1d059aef2ce5"
+  ],
+  "sample_rate": 48000,
+  "offset_s": null,
+  "proof": "none",
+  "families": [
+   "kick"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "lh",
+  "kind": "project",
+  "source": {
+   "how": "goal",
+   "paths": [
+    "/Users/peterkiemann/.cache/manifold/kick-goal-2026-10-10/lh_mix.npy"
+   ]
+  },
+  "source_sha256": [
+   "ae9cfb4ffa4a8c3489542ecc8ecdf2e86282ed038cd4e925d1e278c0186cbbb2"
+  ],
+  "sample_rate": 48000,
+  "offset_s": null,
+  "proof": "none",
+  "families": [
+   "kick"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "eat_sleep",
+  "kind": "project",
+  "source": {
+   "how": "goal",
+   "paths": [
+    "/Users/peterkiemann/.cache/manifold/kick-goal-2026-10-10/eat_sleep_mix.npy"
+   ]
+  },
+  "source_sha256": [
+   "7a4cf141bfd0cd7b18ad2c96d93983c61d41298723c8d6c0963137263b541dd1"
+  ],
+  "sample_rate": 48000,
+  "offset_s": null,
+  "proof": "none",
+  "families": [
+   "kick"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "business",
+  "kind": "project",
+  "source": {
+   "how": "goal",
+   "paths": [
+    "/Users/peterkiemann/.cache/manifold/kick-goal-2026-10-10/business_mix.npy"
+   ]
+  },
+  "source_sha256": [
+   "d8ca8ab772d1af9e0036c8f4383ba587671a936773af17ad22f49dfa270a62e2"
+  ],
+  "sample_rate": 48000,
+  "offset_s": null,
+  "proof": "none",
+  "families": [
+   "kick"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "worship",
+  "kind": "project",
+  "source": {
+   "how": "goal",
+   "paths": [
+    "/Users/peterkiemann/.cache/manifold/kick-goal-2026-10-10/worship_mix.npy"
+   ]
+  },
+  "source_sha256": [
+   "27fac00e81c858bfd5ade158e12d3edabc2950c35a401b46470586df935a90ae"
+  ],
+  "sample_rate": 48000,
+  "offset_s": null,
+  "proof": "none",
+  "families": [
+   "kick"
+  ],
+  "audit_override": null
+ }
+]

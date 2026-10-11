@@ -1,0 +1,30 @@
+[package]
+name = "manifold-water-surface"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+manifold-core = { path = "../manifold-core" }
+manifold-gpu = { path = "../manifold-gpu" }
+manifold-node-engine = { path = "../manifold-node-engine" }
+manifold-water-liquid = { path = "../manifold-water-liquid" }
+bytemuck = { version = "1", features = ["derive", "min_const_generics"] }
+inventory = "0.3"
+log = { workspace = true }
+# The CPU mesh-parity fixture (surface_mesh_parity), testkit only.
+glam = { version = "0.29.3", optional = true }
+
+[dev-dependencies]
+manifold-water-surface = { path = ".", features = ["testkit"] }
+manifold-node-engine = { path = "../manifold-node-engine", features = ["testkit"] }
+manifold-water-liquid = { path = "../manifold-water-liquid", features = ["testkit"] }
+naga = { version = "28", features = ["wgsl-in", "msl-out"] }
+sha2 = "0.10"
+
+[features]
+testkit = ["manifold-node-engine/testkit", "manifold-water-liquid/testkit", "dep:glam"]
+gpu-proofs = ["testkit", "manifold-node-engine/gpu-proofs", "manifold-gpu/gpu-proofs", "manifold-water-liquid/gpu-proofs"]
+
+[lints]
+workspace = true

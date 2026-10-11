@@ -9,7 +9,7 @@ use manifold_gpu::{GpuBuffer, GpuDevice};
 use manifold_node_engine::ports::ArrayType;
 use manifold_water_liquid::fluid_particles::{CellRange, bin_total};
 use manifold_water_liquid::primitives::prefix_scan::ScanLabels;
-use crate::matter::MatterPoint;
+use manifold_water_gpu_mpm::matter::MatterPoint;
 
 const LABELS: SortLabels = SortLabels {
     clear: "sort proof clear",

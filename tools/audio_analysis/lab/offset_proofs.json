@@ -1,0 +1,110 @@
+{
+ "48_hours": {
+  "als": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/2026/48 Hours Project/48 Hours V3.als",
+  "kick": {
+   "k": 16,
+   "lag": 0.061,
+   "margin_sd": 1.95,
+   "r": 0.844
+  },
+  "offset_s": -26.6123,
+  "snare": {
+   "k": 16,
+   "lag": 0.055,
+   "margin_sd": 0.1,
+   "r": 0.543
+  },
+  "status": "proven (kick and snare agree)"
+ },
+ "default_haze": {
+  "als": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/2026/Default Haze Project/Default Haze.als",
+  "kick": {
+   "k": 16,
+   "lag": 0.058,
+   "margin_sd": 1.23,
+   "r": 0.544
+  },
+  "offset_s": -25.5486,
+  "snare": null,
+  "status": "proven (one pattern, clear win)"
+ },
+ "facade": {
+  "als": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/2026/Facade Project/Facade.als",
+  "kick": {
+   "k": 16,
+   "lag": 0.055,
+   "margin_sd": 2.17,
+   "r": 0.528
+  },
+  "offset_s": -26.6183,
+  "snare": null,
+  "status": "proven (one pattern, clear win)"
+ },
+ "flight": {
+  "als": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/2026/Flight - 2026 Edits Project/Flight - WIP 7 -  2026 Mix.als",
+  "kick": {
+   "k": 16,
+   "lag": 0.058,
+   "margin_sd": 0.64,
+   "r": 0.819
+  },
+  "offset_s": -30.9163,
+  "snare": {
+   "k": 16,
+   "lag": 0.049,
+   "margin_sd": 0.15,
+   "r": 0.808
+  },
+  "status": "proven (kick and snare agree)"
+ },
+ "got_it": {
+  "als": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/2026/MudPie Project/Got It Wip 5.als",
+  "kick": {
+   "k": 16,
+   "lag": 0.06,
+   "margin_sd": 0.22,
+   "r": 0.719
+  },
+  "snare": null,
+  "status": "not proven"
+ },
+ "lowkey": {
+  "als": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/2026/I Guess It's Just This Project/Lowkey V2 - Mix WIP 1.als",
+  "kick": {
+   "k": 16,
+   "lag": 0.059,
+   "margin_sd": 1.11,
+   "r": 0.53
+  },
+  "offset_s": -28.6043,
+  "snare": {
+   "k": 16,
+   "lag": 0.05,
+   "margin_sd": 0.51,
+   "r": 0.735
+  },
+  "status": "proven (kick and snare agree)"
+ },
+ "overwhelming_force": {
+  "als": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/2026/Overwhelming Force Project/Overwhelming Force v2.als",
+  "kick": {
+   "k": 16,
+   "lag": 0.057,
+   "margin_sd": 0.32,
+   "r": 0.224
+  },
+  "snare": null,
+  "status": "not proven"
+ },
+ "renew": {
+  "als": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/2026/Renew Project/Renew.als",
+  "kick": {
+   "k": 32,
+   "lag": 0.056,
+   "margin_sd": 0.78,
+   "r": 0.892
+  },
+  "snare": null,
+  "status": "not proven"
+ }
+}

@@ -11,10 +11,6 @@ pub mod liquid_extents;
 
 #[cfg(feature = "gpu-proofs")]
 #[cfg(any(test, feature = "testkit"))]
-pub mod liquid_surface;
-
-#[cfg(feature = "gpu-proofs")]
-#[cfg(any(test, feature = "testkit"))]
 pub mod whitewater_scene;
 
 #[cfg(feature = "gpu-proofs")]

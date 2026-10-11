@@ -1,5 +1,8 @@
-//! Box3D rigid-body graph adapter and the native pair contract that coupled
-//! simulations implement. Never names a liquid solver; the liquids depend on it.
+//! Box3D rigid bodies as graph nodes: the physics world, rigid body and vector
+//! field nodes, the coupled frame, metrics and events, and the native pair
+//! contract (`node::PhysicsNode`) a coupled liquid implements. The bottom of
+//! the water stack: it never depends on manifold-fluids or any other water
+//! crate, and its code names no liquid solver.
 
 pub mod coupled_frame;
 pub mod node;

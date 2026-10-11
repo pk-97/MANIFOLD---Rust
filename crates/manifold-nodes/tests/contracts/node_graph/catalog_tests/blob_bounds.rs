@@ -1,7 +1,7 @@
 #[cfg(test)]
 mod migration_tests {
     use manifold_core::effect_graph_def::EffectGraphDef;
-    use manifold_nodes_water::primitives::blob_bounds::wire_blob_bounds;
+    use manifold_water_surface::primitives::blob_bounds::wire_blob_bounds;
     use manifold_node_engine::graph::Graph;
     use manifold_node_engine::load::graph_loader::{instantiate_def, HandleScope, BoundaryHandling};
     use manifold_node_engine::persistence::PrimitiveRegistry;

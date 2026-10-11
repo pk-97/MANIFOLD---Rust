@@ -1,0 +1,31 @@
+[package]
+name = "manifold-water-whitewater"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+manifold-core = { path = "../manifold-core" }
+manifold-gpu = { path = "../manifold-gpu" }
+manifold-node-engine = { path = "../manifold-node-engine" }
+manifold-physics = { path = "../manifold-physics" }
+manifold-water-liquid = { path = "../manifold-water-liquid" }
+manifold-fluids = { path = "../manifold-fluids" }
+arrayvec = "0.7"
+bytemuck = { version = "1", features = ["derive", "min_const_generics"] }
+inventory = "0.3"
+log = { workspace = true }
+
+[dev-dependencies]
+manifold-water-whitewater = { path = ".", features = ["testkit"] }
+manifold-node-engine = { path = "../manifold-node-engine", features = ["testkit"] }
+manifold-water-liquid = { path = "../manifold-water-liquid", features = ["testkit"] }
+naga = { version = "28", features = ["wgsl-in", "msl-out"] }
+serde_json = { version = "1", features = ["float_roundtrip"] }
+
+[features]
+testkit = ["manifold-node-engine/testkit", "manifold-water-liquid/testkit"]
+gpu-proofs = ["testkit", "manifold-node-engine/gpu-proofs", "manifold-gpu/gpu-proofs", "manifold-water-liquid/gpu-proofs"]
+
+[lints]
+workspace = true

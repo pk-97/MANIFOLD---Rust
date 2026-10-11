@@ -16,8 +16,7 @@ use manifold_node_engine::freeze::classify::FusedOutputCapacity;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
 
-/// The FLIP solid clip every liquid surface shares; the mesher includes it too.
-pub const ELEMENT: &str = include_str!("shaders/clamp_liquid_to_solids_element.wgsl");
+use manifold_water_liquid::primitives::liquid_bricks::CLAMP_TO_SOLIDS_ELEMENT as ELEMENT;
 
 /// The dense gather the brick-fused clamp is proven against.
 #[cfg(any(test, feature = "testkit"))]

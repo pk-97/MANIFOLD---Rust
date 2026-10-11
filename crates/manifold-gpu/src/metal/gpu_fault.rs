@@ -32,7 +32,7 @@ pub(crate) fn log_error_diagnostics(err: &NSError, buffer: &str) {
 }
 
 /// Headless proof binaries may not install a logger; don't discard their fault evidence.
-fn emit_diagnostic(args: std::fmt::Arguments<'_>) {
+pub(crate) fn emit_diagnostic(args: std::fmt::Arguments<'_>) {
     if log::log_enabled!(log::Level::Error) {
         log::error!("{args}");
     } else {

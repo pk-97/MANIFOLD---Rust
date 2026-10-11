@@ -6,12 +6,12 @@
 
 use manifold_water_liquid::primitives::face_sample_component::FaceSampleComponent;
 use manifold_node_engine::testkit::array_harness::{Harness, params, read};
-use crate::primitives::matter_face_component::MatterFaceComponent;
+use manifold_water_gpu_mpm::primitives::matter_face_component::MatterFaceComponent;
 use manifold_node_engine::exec::effect_node::ParamValues;
 use manifold_water_liquid::fluid_particles::FaceSample;
 use manifold_water_liquid::grid::{face_coords, face_len, face_position};
 use manifold_water_liquid::lattice::PADDING_NODES;
-use crate::matter::MatterGridNode;
+use manifold_water_gpu_mpm::matter::MatterGridNode;
 use manifold_node_engine::parameters::ParamValue;
 use manifold_node_engine::primitive::Primitive;
 

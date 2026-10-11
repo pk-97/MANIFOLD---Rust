@@ -385,7 +385,7 @@ WGSL twin (D15): `liquid_pose.wgsl` gains `liquid_body_state(...) -> LiquidBodyS
 | I11 | Overflow is counted and reported | `liquid_overflow_is_reported` |
 | I12 | No atomics where a solver forbids them | `liquid_atomic_free_atoms` (scans each listed atom's WGSL for `atomic`) |
 | I13 | Uncoupled live frames never wait; coupled live frames use bounded per-tick exchanges | `liquid_live_frames_never_wait` (uncoupled); `liquid_clock_live_accepts_at_most_two_intervals_per_frame` (CPU, ticks per frame at 20, 24, 30 and 60 fps); `liquid_live_flip_force_and_coupling_match_accepted_progress` (coupled body rows per accepted tick at 20 fps) |
-| I14 | No new locks | `rg -n 'Arc<(Mutex\|RwLock)' crates/manifold-nodes-water/src/liquid crates/manifold-nodes/src/node_graph/primitives -g '{matter,gpu_flip,liquid}_*.rs'` → zero |
+| I14 | No new locks | `rg -n 'Arc<(Mutex\|RwLock)' crates/manifold-water-liquid/src crates/manifold-nodes/src/node_graph/primitives -g '{matter,gpu_flip,liquid}_*.rs'` → zero |
 | I15 | Fusion never crosses a region border; regions never nest | `substeps_freeze_never_fuses_across_border`, `substeps_region_nested_boundary_rejected` |
 | I16 | Grid outputs share one layout | `liquid_face_grid_layout` (a rigid-rotation field through each solver's resample matches CPU-expected at every face) |
 | I17 | The motion law matches Box3D | `coupled_motion_matches_box3d` (manifold-physics, CPU): a free body under gravity and a steady force in a real Box3D world at 15, 30 and 60 Hz; end position and velocity within 1e-5 relative; the angular case under its stated bound |
@@ -401,7 +401,7 @@ Order: P1 → P2a → P2b and P1 → P3 → P4 on main; P5 → P6 on main, in pa
 
 ### P1 — The shared liquid module, out of MPM (seam brief)
 
-- **Entry state:** Peter's go on section 8, call 1. `rg -n 'pub struct MatterClock' crates/manifold-nodes-water/src/matter.rs` and `rg -n 'pub struct RigidOwner' crates/manifold-nodes-water/src/matter/coupling.rs` match. Record the numbers the MPM coupling, scene and bodies proofs print, before touching anything.
+- **Entry state:** Peter's go on section 8, call 1. `rg -n 'pub struct MatterClock' crates/manifold-water-gpu-mpm/src/matter.rs` and `rg -n 'pub struct RigidOwner' crates/manifold-water-gpu-mpm/src/matter/coupling.rs` match. Record the numbers the MPM coupling, scene and bodies proofs print, before touching anything.
 - **Read-back:** section 3.3 (Two-way Box3D coupling), section 3.4 (Clock, pause, speed, reset, export), section 3.8 (Committed signatures); GPU_MPM_SOLVER_DESIGN.md section 5 (Coupling protocol) and section 10 (Reuse contract and forbidden moves); `R/matter.rs:397-600`, `R/matter/bodies.rs`, `R/matter/coupling.rs`, `R/primitives/matter_frame.rs` whole.
 - **Old → new:**
 
@@ -423,7 +423,7 @@ Order: P1 → P2a → P2b and P1 → P3 → P4 on main; P5 → P6 on main, in pa
   All sites are mechanical renames except `settle`'s callers in `matter_domain.rs` (`:655-692`, `:854`), which pass the decode closure. Worked example: `owner.settle(&observation.inputs, |_| true, || reaction_words(Some(reaction)))` → `owner.settle(&observation.inputs, |_| true, |pending, rows, impulses| decode(pending, scale, rows, reaction_words(Some(reaction)), impulses))`.
 - **Migration:** compiler-driven: delete the old names first. The two MPM preset JSONs take the new type id; saved projects load through the migration row. The clock tests move with the clock as `liquid_clock_*`.
 - **Deliverables:** `R/liquid.rs`, `R/liquid/{clock,bodies,coupling,frame_ring}.rs`, the renamed shaders and node, the migration row; pointer lines in GPU_MPM_SOLVER_DESIGN.md section 13 (Phasing): P3a → this doc's P2a/P2b, P3c → P8, P4b → P9, P6 → BUG-imy3 plus P10, P7 → keys on the predicate, not `MATTER_DOMAIN_TYPE_ID`.
-- **Gate:** positive: `cargo nextest run -p manifold-nodes liquid matter`; `cargo nextest run -p manifold-core type_id_migration`; `scripts/gpu_proofs_gate.py` green with the recorded MPM proof numbers unchanged; `cargo run -p manifold-app --bin graph-tool -- validate <preset> --kind generator` on both MPM water presets. Negative: the inventory pattern returns zero outside `core/type_id_migration.rs`; `rg -n 'pub use .*[Mm]atter' crates/manifold-nodes-water/src/liquid.rs crates/manifold-nodes-water/src/liquid` returns zero.
+- **Gate:** positive: `cargo nextest run -p manifold-nodes liquid matter`; `cargo nextest run -p manifold-core type_id_migration`; `scripts/gpu_proofs_gate.py` green with the recorded MPM proof numbers unchanged; `cargo run -p manifold-app --bin graph-tool -- validate <preset> --kind generator` on both MPM water presets. Negative: the inventory pattern returns zero outside `core/type_id_migration.rs`; `rg -n 'pub use .*[Mm]atter' crates/manifold-water-liquid/src/lib.rs crates/manifold-water-liquid/src` returns zero.
 - **Demo:** none — L1. Nothing changes on stage.
 - **Forbidden:** `pub use` aliases; any changed number (a move that changes behaviour is a broken move); moving MPM's decode, `body_limit` or `body_substep` into the shared module; touching `feat/fft-water`.
 - **Test scope:** focused renderer and core; GPU proofs (shaders moved).
@@ -517,7 +517,7 @@ Order: P1 → P2a → P2b and P1 → P3 → P4 on main; P5 → P6 on main, in pa
 
 **As built (2026-10-01, by GPU_FLIP_PRESSURE_SOLVE.md section 1.1 (stage design)).** The step and its solver read the lattice at run time, so Resolution applies on change at any side from 1 to 1024 with no graph rebuild. The V-cycle depth follows the lattice down to 4³ and solves that level exactly, which supersedes the fixed five levels and the multiple-of-16 refusal below. Proof: `gpu_flip_resolution_card_resizes_at_runtime` (64 → 32 → 100, a step and whitewater frame at each).
 
-- **Entry state:** P7a built. `rg -n 'its lattice cannot change yet' crates/manifold-nodes-water/src/primitives/gpu_flip_domain.rs` matches.
+- **Entry state:** P7a built. `rg -n 'its lattice cannot change yet' crates/manifold-water-gpu-flip/src/primitives/gpu_flip_domain.rs` matches.
 - **Read-back:** `gpu_flip_preset.rs` whole (`water_def`, `render_def`, `Builder::lattice`, `lattice_box`, the V-cycle builders); `gpu_flip_domain.rs` (`MULTIGRID_LEVELS`, `multigrid_refusal`); (retired with CPU FLIP; in git history); `R/array_growth.rs`; the GPU FLIP extent rules in `R/liquid/extent.rs`.
 - **Decided (Peter, 2026-10-01; supersedes BUG-86kv (GPU FLIP Resolution knob) option (c) and closes BUG-znja (where the water graph is rebuilt)):** Resolution is a plain param that applies on change, with no graph rebuild and no new mechanism. The V-cycle has a fixed 5 levels at every lattice (`MULTIGRID_LEVELS`), so a lattice side must be a multiple of 16, refused by name otherwise. The coarsest level is 2³ at 32, 4³ at 64 and 8³ at 128; it is smoothed by 16 red-black rounds each way (`COARSE_SWEEPS`) instead of solved exactly. Measured with `scripts/mgpcg_reference.py --depth 5 --coarse-sweeps 16`, the conjugate gradient iterations to a 1e-5 residual match the exact coarse solve at every size: Dam Break 7–8 at 32, 64 and 128; deep pool 6 at 32 and 64, 7 at 128. Fewer rounds cost the deep pool one more iteration (2 rounds at 64, 4 or 8 at 128). So the fixed depth does not cap Resolution across 32–128.
 - **What still fixes the graph to one lattice:** every lattice atom holds `nodes_x/y/z`, `cell_size` and `lattice_min_*` as build params, the vector atoms hold `row_length`, and array capacities are planned from those params; `array_growth` regrows only CPU-origin arrays. The face extension band is lattice-dependent too: `band_layers` is 3 at 32, 4 at 64 and 6 at 128 `node.extend_faces` copies. Until these are lifted, `built_resolution` and its refusal stay.
@@ -530,7 +530,7 @@ Order: P1 → P2a → P2b and P1 → P3 → P4 on main; P5 → P6 on main, in pa
 
 ### P8 — Forces and impulses for GPU liquids (supersedes MPM P3c)
 
-- **Entry state:** P2b and P4 on main. `rg -n 'impulses on the live liquid itself are not supported yet' crates/manifold-nodes-water/src/primitives/matter_domain.rs` matches.
+- **Entry state:** P2b and P4 on main. `rg -n 'impulses on the live liquid itself are not supported yet' crates/manifold-water-gpu-mpm/src/primitives/matter_domain.rs` matches.
 - **Read-back:** MPM P3c; FLUID_ENGINE_INTEGRATION_PLAN.md section 5 (Timing, events and lifecycle); `acceleration.rs:37`; the impulse hooks at `R/primitive.rs:400-470`.
 - **Deliverables:** `R/liquid/fields.rs`: per-tick force and impulse lattices from the scene's field and the shared event queue, used by every GPU domain. `acceleration_field` and the impulse hooks on `node.matter_domain` (and `node.swash_domain` on the branch). `ClockFrame.held`. An impulse lands on the first tick due after it fires, once, across substeps; a held clock discards it with a receipt. The `matter_domain.rs:501` refusal and MPM's owed entries are deleted. Tests: `liquid_impulse_once_per_tick_across_substeps`, `liquid_force_lattice_matches_field` (CPU-expected), `liquid_pause_discards_impulses` un-owed for MPM.
 - **Gate:** the tests; `scene-forces-controls` passes; new flow `scripts/ui-flows/scene-liquid-forces.json`: bind a radial impulse to a clip edge on the Dam Break Matter scene, rebind it to a MIDI-mapped Fire, save, reload, fire (one receipt per fire), pause and fire (a discard receipt, no splash on resume). L3.
@@ -585,7 +585,7 @@ Measured as a bit-exact in-step block skip and dropped; see section 3.10 (block 
 
 ### P13 — Body handoff tests first (`feat/liquid-body-handoff`)
 
-- **Entry state:** section 2.1 (Body handoff amendment) approved. `rg -n 'GPU_FLIP_WALLS_IN_SOLVE\)' crates/manifold-nodes-water/src/liquid/conformance.rs` matches a whole-check `Check::Collision` exemption.
+- **Entry state:** section 2.1 (Body handoff amendment) approved. `rg -n 'GPU_FLIP_WALLS_IN_SOLVE\)' crates/manifold-nodes-water/src/testkit/conformance.rs` matches a whole-check `Check::Collision` exemption.
 - **Read-back:** section 2.1; section 3.3 (Two-way Box3D coupling); `tests/gpu_proofs/liquid_conformance.rs` (`liquid_floating_draft`, `liquid_coupling_collision`).
 - **Deliverables:** the body handoff proofs in section 3.3 on the GPU FLIP and MPM rows, with a several-box scene for the stack; the D20 split.
 - **Gate:** one recorded run, expected red: floating rest fails at 15 and 30 Hz on GPU FLIP with rest motion near g·dt·(N−1)/(2N); resting contact loses water. Red never lands; each proof lands with the phase that turns it green.

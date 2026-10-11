@@ -10,11 +10,11 @@ use manifold_core::effect_graph_def::EffectGraphDef;
 use manifold_gpu::GpuBuffer;
 use serde_json::{Value, json};
 
-use manifold_nodes_water::primitives::energy_potential::{MAX_ENERGY, MIN_ENERGY};
+use manifold_water_whitewater::primitives::energy_potential::{MAX_ENERGY, MIN_ENERGY};
 use manifold_nodes_water::presets::gpu_flip::WaterScene;
 use manifold_node_engine::testkit::array_harness::{Harness, read};
 use manifold_nodes_water::testkit::whitewater_scene::{whitewater_render_def, with_tick_probe};
-use manifold_nodes_water::primitives::whitewater_step::{Step, StepFrame, StepInputs, StepShape};
+use manifold_water_whitewater::primitives::whitewater_step::{Step, StepFrame, StepInputs, StepShape};
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
 use manifold_physics::clock::TICK;
 use manifold_node_engine::particles::FluidParticle;
@@ -120,7 +120,7 @@ fn compaction_moves_a_survivor() -> (usize, u32) {
         obstacle_source: None,
         particles: &particles,
         solid: &solid,
-        faces: manifold_nodes_water::primitives::whitewater_step::FaceSource::Axes([&faces[0], &faces[1], &faces[2]]),
+        faces: manifold_water_whitewater::primitives::whitewater_step::FaceSource::Axes([&faces[0], &faces[1], &faces[2]]),
         level_set: &distance,
         distance: Some(&distance),
     };

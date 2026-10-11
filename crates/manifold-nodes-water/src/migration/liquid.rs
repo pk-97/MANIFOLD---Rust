@@ -108,7 +108,7 @@ pub(crate) fn wire_liquid_frame_cursor(def: &mut EffectGraphDef) -> bool {
 /// which leaves the interpolator untouched; every other input is kept. A
 /// migrated graph no longer matches, so the pass is idempotent.
 pub(crate) fn wire_retained_whitewater(def: &mut EffectGraphDef) -> bool {
-    use crate::primitives::liquid_frame::{WHITEWATER_INPUTS, WHITEWATER_OUTPUTS};
+    use manifold_water_surface::primitives::liquid_frame::{WHITEWATER_INPUTS, WHITEWATER_OUTPUTS};
     use manifold_core::effect_graph_def::EffectGraphWire;
     const CLASSES: [&str; 4] = ["foam_particles", "bubble_particles", "spray_particles", "dust_particles"];
     let type_of = |def: &EffectGraphDef, id: u32| def.nodes.iter().find(|n| n.id == id).map(|n| n.type_id.clone());

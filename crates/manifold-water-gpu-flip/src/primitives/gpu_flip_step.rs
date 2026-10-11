@@ -62,7 +62,7 @@ use manifold_water_liquid::lattice::{FlipSolverGrid, LiquidLattice};
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
 
-pub const STEP_SHADER: &str = include_str!("shaders/gpu_flip_step.wgsl");
+manifold_core::testkit_visible! { pub(crate) const STEP_SHADER: &str = include_str!("shaders/gpu_flip_step.wgsl"); }
 const MASK_SHADER: &str = include_str!("shaders/gpu_flip_commit_mask.wgsl");
 const NAME: &str = "GPU FLIP Step";
 

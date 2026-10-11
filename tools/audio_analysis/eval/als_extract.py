@@ -18,6 +18,7 @@ Emits:
   warp), the file's BPM and the file second of clip beat 0. Warp markers sit
   a few ms off the true attack (Pattern -8 ms, Midnight Patience ~-20 ms
   against their kick stems); measure a per-song nudge from audio before use.
+- locators: the arrangement locators (name, beat, seconds), in time order.
 - tracks: every track with its mute (speaker), solo, track delay, freeze,
   device tree (plugins, samples, rack and drum-rack branches with their MIDI
   keys), MIDI effects, arrangement MIDI clips with every played note unrolled
@@ -275,6 +276,11 @@ def grids(clips):
     return out
 
 
+def locators(live_set, pts):
+    out = [dict(name=val(loc, 'Name', default=''), beat=val(loc, 'Time', float)) for loc in live_set.findall('Locators/Locators/Locator')]
+    return sorted((dict(d, s=beat_seconds(pts, d['beat'])) for d in out), key=lambda d: d['beat'])
+
+
 def extract(als_path):
     als_path = Path(als_path)
     before = sha256(als_path)
@@ -283,11 +289,12 @@ def extract(als_path):
     pts = tempo_points(live_set)
     clips = audio_clips(live_set, als_path.parent, pts)
     trs = tracks(live_set, als_path.parent, pts)
+    locs = locators(live_set, pts)
     if sha256(als_path) != before:
         raise RuntimeError(f'{als_path} changed during the read; nothing written')
     return dict(source=dict(path=str(als_path), sha256=before),
                 tempo_points=[dict(beat=b, bpm=v, recorded_at_seconds=beat_seconds(pts, b), source=SOURCE_ALS) for b, v in pts],
-                audio_clips=clips, grids=grids(clips), tracks=trs)
+                audio_clips=clips, grids=grids(clips), locators=locs, tracks=trs)
 
 
 def main():

@@ -48,7 +48,7 @@ use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
 use manifold_node_engine::gpu::headless_readback::{encode_rgba8_png, readback_srgb_rgba8, readback_tonemapped_rgba8};
 use manifold_core::fluid_domain::domain_layout;
 use manifold_node_engine::particles::FluidParticle;
-use {manifold_nodes_water::matter, manifold_nodes_water::matter::look::Cells, manifold_nodes_water::matter::look::LookRecorder};
+use {manifold_water_gpu_mpm::matter, manifold_water_gpu_mpm::matter::look::Cells, manifold_water_gpu_mpm::matter::look::LookRecorder};
 use {manifold_node_engine::exec::effect_node::EffectNode, manifold_node_engine::parameters::ParamValue, manifold_node_engine::persistence::PrimitiveRegistry, manifold_node_engine::exec::effect_node::SimStep};
 use manifold_node_engine::runtime::preset_context::PresetContext;
 use manifold_node_engine::runtime::PresetRuntime;

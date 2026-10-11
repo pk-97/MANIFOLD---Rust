@@ -1,11 +1,11 @@
-use manifold_nodes_water::primitives::testkit::whitewater as whitewater_nodes;
+use manifold_water_whitewater::primitives::testkit::whitewater as whitewater_nodes;
 use manifold_node_engine::testkit::array_harness::{Harness, params};
 use manifold_node_engine::exec::effect_node::NodeInstanceId;
 use manifold_node_engine::freeze::{classify::CapacityExpr, codegen::FusionRegion, codegen::InputSource, codegen::generate_fused};
 use manifold_water_liquid::testkit::codegen::{member, fused, run};
 use manifold_nodes_image::node_graph::primitives::divide_by_value::DivideByValue;
 
-use manifold_nodes_water::primitives::testkit::whitewater::GridBox as Box3;
+use manifold_water_whitewater::primitives::testkit::whitewater::GridBox as Box3;
 fn values(extra: &[(&'static str, f32)]) -> Vec<(&'static str, f32)> {
     let mut v = vec![
         ("center_x", 4.0),
