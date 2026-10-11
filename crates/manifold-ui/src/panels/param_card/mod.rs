@@ -2735,14 +2735,14 @@ pub(super) mod tests {
             "configure must not wipe the session-only matrix flag"
         );
         // ...and the rebuilt drawer carries the Feature/Band matrix rows:
-        // 8 kind buttons + 4 band buttons more than the closed drawer.
+        // One button per Feature and per Band more than the closed drawer.
         let mut tree2 = UITree::new();
         panel.build(&mut tree2, Rect::new(0.0, 0.0, 280.0, 400.0));
         let open_count = panel.row_host.audio_configs[0].as_ref().unwrap().0.button_count();
         assert_eq!(
             open_count,
-            closed_count + 12,
-            "open matrix adds the 8 Feature + 4 Band buttons"
+            closed_count + crate::types::AudioFeatureKind::ALL.len() + crate::types::AudioBand::ALL.len(),
+            "open matrix adds one button per Feature and per Band"
         );
     }
 
