@@ -1,6 +1,6 @@
 # Detector Lab — one place to label, train and judge MANIFOLD's audio detectors
 
-**Status:** IN PROGRESS · 2026-10-11 · P1–P5 shipped (bass and synth parked by Peter), P6 components next · Opus 5.5 lead; revised after an Opus adversarial review
+**Status:** IN PROGRESS · 2026-10-11 · P1–P5 shipped (bass and synth parked by Peter); P6 first pass built on feat/detector-lab-general, stage and Fable review owed · see P6 "As built"
 **Prerequisites:** none
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (phase briefs) and section 6 (seam briefs) before starting any phase.
 
@@ -66,7 +66,13 @@ output (`detector_eval.held_out` scores each song once per threshold, then sums:
 `epochs=EPOCHS` and `synth_share=0.5` parameters (D9); `detector_net.held_out_nets` passes `train_kw` to `train`,
 records what each net trained on (`record`), and with one net per song gives the untrained songs one shared net
 (`net_groups`); `detector_compare` reads recall-only songs from the report instead of `RECALL_ONLY` and exposes the
-A/B as `compare()`. Nothing else in `eval/` changes. Rejected: re-implementing `train`, `held_out_nets` or the
+A/B as `compare()`. P6 adds, each named: `held_out` takes a cutoff `pool` (the pair models' predictions);
+`inside` sorts spans once (identical output); `rows` counts a candidate exactly at the 35 ms edge as inside (`EDGE`,
+1e-12, the legacy kick rule; a behaviour change at that float edge only); `detector_compare.compare` headlines a
+paired song bootstrap; `kick_goal_eval.add_whole_song_truth` keeps its truth on the record (`train_source`);
+`kick_goal_nn.Net` takes its channel count. `held_out_nets` is retired: it could hold out one group with nets only,
+and the lab's loop over the plan (`lab/run.py train_model`) calls `train` and `predict` for every model and pair
+training. Nothing else in `eval/` changes. Rejected: re-implementing `train`, `held_out_nets` or the
 scorer inside the lab, because a copy is a second truth that drifts. Rejected: a Rust harness, because the research
 loop is torch and numpy.
 
@@ -221,7 +227,8 @@ lab/test_lab.py                         # the lab's tests (unittest, run directl
 - **"Store spectra as float32 in the new cache."** No. Net inputs would change; keep today's dtypes.
 - **"Check labels by attack strength."** No. That measures loudness; snare positives pass by construction (D5).
 - **"Lower the audit threshold so a song passes."** No. `audit_override` with Peter's reason.
-- **"Re-implement `train` or `held_out_nets` in the lab."** No. Call them; D1's two named edits are the only ones.
+- **"Re-implement `train` or the scorer in the lab."** No. Call them; D1's named edits are the only ones. The loop
+  over trainings is the lab's since P6 (D1).
 - **"Write the audit into the labels file."** No. Sidecar (D4).
 
 ## 6. Phasing
@@ -370,6 +377,19 @@ until Peter's yes on a lab-trained one (P7).
   strong foundation").
 - **Forbidden:** fitted measures outside the fold; a second scorer for the kick; touching the shipped kick model.
 
+**As built (first pass, 2026-10-11).** Finder, measures `f15` `tail3` `prof32` `low16` (event) and `flat` (frame),
+net, trees, `mean_logit`, pair cutoffs, layered saves, kick labels. Owed: the stage, `fall16` `res16` `glide3` and
+the templates, the Fable review.
+- Kick labels: 30 songs, 4733 kicks, 129 in rolls left out; rows() equals the records on every song. got_it, renew
+  and overwhelming_force fail the audit (unproven project offsets) and stay out, as Peter ruled for bass and synth.
+- A trained model's predictions are stored under a key of everything that decides them (`run.py model_key`), so a
+  config that needs the same model reuses it: an A/B that changes only the trees retrains no nets.
+- Cost per kick seed on 8 groups (36 trainings): nets 7 min, trees 50 s on 4 threads, scoring 3 s. Snare seed on
+  4 groups (10 nets): 20 s; scoring 2 s.
+- Training i of the plan uses random state 1000 i + seed (outer nets keep the retired runner's seeds).
+- On a snare save the pair cutoffs and the old leave-one-out cutoffs scored 0.806 and 0.802: the rule is sound and
+  costs nothing measurable.
+
 ### P7 — Releases from component configs
 
 `snare_release.py` and `kick_release.py` fit their final parts from one lab config each and take the cutoff from
@@ -377,7 +397,7 @@ that config's run. Ships only with Peter's yes.
 
 ## 7. Decided — do not reopen
 
-1. `lab/` calls `eval/`; the named edits in D1, nothing else.
+1. `lab/` calls `eval/`; the named edits in D1 (P1–P6), nothing else.
 2. The recipe env is pinned in one module; the song list records resolved sources and their hashes.
 3. Caches key on source bytes plus a stamp (`bundles.py` keying), today's dtypes.
 4. The labels dict is the schema; `kind` stays `project` | `generated`; audit goes in a sidecar.
