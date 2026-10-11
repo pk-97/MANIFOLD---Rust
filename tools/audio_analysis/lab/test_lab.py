@@ -119,7 +119,10 @@ class LabTests(unittest.TestCase):
 
     def test_scorer_parity(self):
         """The lab scorer on a save of the retired snare runner reproduces the legacy results file exactly."""
-        got = json.loads(json.dumps(score.legacy(GOLDEN.with_suffix('.npz')), default=float))
+        import gzip
+        with gzip.open(GOLDEN.with_suffix('.labels.json.gz'), 'rt') as f:
+            lab = json.load(f)  # the labels the legacy run was scored with (rolls still in)
+        got = json.loads(json.dumps(score.legacy(GOLDEN.with_suffix('.npz'), lab=lab), default=float))
         want = json.loads(GOLDEN.with_suffix('.json').read_text())['results']['net']['per_song']
         self.assertEqual(sorted(got), sorted(want))
         for t in want:

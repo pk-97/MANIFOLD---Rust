@@ -7,7 +7,7 @@ Project song fails when its export offset has no proof (a kick stem, a trigger t
 of detector_wip or lab/offsets.py) or its fitted timing shift sits at the edge of the +-30 ms search. The share of
 known times kept is reported, never failed: quiet fills and rolls are dropped by design (Peter, 2026-10-11: "we should
 focus on the snares on the main off beats, not all of the little fills and percusions"). Generated song fails when a label is not a snare or
-clap note of its section, or a snare or clap note of its section has no label. A failing song is excluded from every
+clap note of its section, or a snare or clap note of its section outside its rolls has no label. A failing song is excluded from every
 run until Peter sets audit_override in songs.json. If more than MAX_FAILS project songs fail, stop: the table goes to
 Peter before anything is excluded.
 
@@ -44,7 +44,8 @@ def generated_check(s, notes):
     """notes: the section's snare and clap note times (s, section time), layers merged as the builder does."""
     pos = np.array(s['positives'])
     dur = s['section'][1] - s['section'][0]
-    inner = notes[(notes > .1) & (notes < dur - .1)]
+    from tools.audio_analysis.eval.detector_eval import inside
+    inner = notes[(notes > .1) & (notes < dur - .1) & ~inside(notes, s['unscored'])]
     stray = int(np.sum(np.min(np.abs(pos[:, None] - notes[None, :]), axis=1) > .001)) if len(pos) and len(notes) else len(pos)
     unlabelled = int(np.sum(np.min(np.abs(inner[:, None] - pos[None, :]), axis=1) > .001)) if len(inner) and len(pos) else len(inner)
     why = ([f'{stray} labels on no snare note'] if stray else []) + ([f'{unlabelled} snare notes unlabelled'] if unlabelled else [])

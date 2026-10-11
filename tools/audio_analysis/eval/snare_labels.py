@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-"""Snare + clap labels for the snare detector (one class: the backbeat snare/clap; rolls count; rimshots and
-cross-sticks do not — Peter, 2026-10-10). Writes GOAL/snare_labels.json through detector_labels (the label rules).
+"""Snare + clap labels for the snare detector (one class: the backbeat snare/clap; rimshots and
+cross-sticks do not — Peter, 2026-10-10; snare and kick rolls are unscored and untrained — Peter, 2026-10-11).
+Writes GOAL/snare_labels.json through detector_labels (the label rules).
 
 Snare specifics: snare/clap tracks and pads; rimshots and cross-sticks are vouched non-snares, and so are hats, rides
 and percussion (Peter, 2026-10-10); prominence is judged on the mix's 1-8 kHz band (Peter: as loud as the song's main
@@ -22,6 +23,7 @@ FAMILY = Family(
     other_parts=re.compile(r'drum|break|_top|top_?loop|perc|groove|fill|hat|ride|cymbal|shaker|tamb', re.I),
     not_other_parts=re.compile(r'kick|vocal|vox|synth|bass|string|pad|chord', re.I),
     band=(1000, 8000),
+    drop_kick_rolls=True,
     midi_songs=('flight', '48_hours', 'pattern', 'back_to_you', 'lowkey', 'corrosion', 'burn_stems', 'midnight_patience'),
     # Project songs whose snares live (also) in audio clips on snare/clap tracks: one-shots, freezes, consolidations.
     clip_songs=('murmur', 'default_haze', 'late_night'),

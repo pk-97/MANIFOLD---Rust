@@ -66,12 +66,13 @@ def score_run(run_id, log=print):
     return reports
 
 
-def legacy(npz, config='snare_base'):
-    """{song: song_result} for a save of the retired snare runner; the scorer-parity oracle (test_scorer_parity)."""
+def legacy(npz, config='snare_base', lab=None):
+    """{song: song_result} for a save of the retired snare runner, on lab (the labels it was scored with; default
+    today's); the scorer-parity oracle (test_scorer_parity)."""
     from tools.audio_analysis.lab.config import load as load_cfg
     from tools.audio_analysis.lab.registry import load
     cfg = load_cfg(config)
-    lab, _ = labels(cfg.family)
+    lab = lab or labels(cfg.family)[0]
     with np.load(npz) as z:
         held = {t: z[t] for t in z.files}
     return score(cfg, lab, load(), held)

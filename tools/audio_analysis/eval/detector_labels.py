@@ -54,6 +54,7 @@ class Family:
     stem_band: tuple = (150, 10000)
     clip_onset_s: float = .030  # a clip start is a known hit when its sound begins within this
     kick_clash_s: float = 0.0   # events this close to a kick are unscored: the mix cannot tell them apart
+    drop_kick_rolls: bool = False  # kick rolls (roll_spans on the song's kicks) are unscored and untrained
 
 
 def builder_id(module_file):
@@ -333,6 +334,20 @@ def dense_spans(hits, fam):
     return spans
 
 
+def roll_spans(hits, gap_s=.200, min_hits=4, pad=.250):
+    """Rolls: runs of at least min_hits hits, each under gap_s after the last, padded by pad. Unscored and untrained
+    (Peter, 2026-10-11: "remove the rolls ... get the basics and foundations correct first"); a double or triple hit
+    stays a hit."""
+    h = np.sort(np.asarray(hits, float))
+    spans, start = [], 0
+    for i in range(1, len(h) + 1):
+        if i == len(h) or h[i] - h[i - 1] >= gap_s:
+            if i - start >= min_hits:
+                spans.append([h[start] - pad, h[i - 1] + pad])
+            start = i
+    return spans
+
+
 def cover(spans):
     tot, end = 0.0, -1e9
     for a, b in sorted(spans):
@@ -381,6 +396,8 @@ def song(g, t, fam):
         unscored += [(u + h0, u + h1) for u in pos[clash]]
         pos = pos[~clash]
     dense = dense_spans(np.concatenate([pos, dropped]), fam)
+    if fam.drop_kick_rolls and len(kicks):
+        dense = sorted(dense + roll_spans(kicks))
     # Events inside fast runs are not scored, but they are real: kept for training on runs (BUG-9ngk8.2.1).
     every = np.sort(np.concatenate([pos, dropped]))
     dense_all = every[inside(every, dense) & (every > .1) & (every < dur - .1)]
