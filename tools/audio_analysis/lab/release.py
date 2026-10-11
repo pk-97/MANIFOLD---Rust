@@ -658,7 +658,8 @@ def train_final(cfg, n_nets, seed):
     else:
         inputs = raw = None
     cutoff, cuts = release_cutoffs(st, metas, outer, inputs, raw)
-    score = {models.final_layer(cfg): pooled_score(metas, {t: outer[t] for t in exam}, models.cutoff(metas, outer))}
+    judged = {t: outer[t] for t in exam}
+    score = {models.final_layer(cfg): pooled_score(metas, judged, models.cutoff(metas, judged))}
     if st:
         cut_pair = cuts or (.5, .5)
         score['release'] = pooled_score(metas, {t: stage.gated(st, inputs[t], raw[t], cut_pair) for t in exam}, cutoff)
