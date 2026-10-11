@@ -27,11 +27,15 @@ import numpy as np  # noqa: E402
 CLIPS, CLIP_S, HOP = 3, 60.0, 256
 STATE = {}
 
+# Snare and clap stems of songs without project MIDI: their loud hits join the sample pool.
+STEMS = {'cold_remix': ('_ SNARE.wav',), 'gerrit': ('Drums snare 1.wav', 'Drums snare 2 (popcorn).wav'), 'business': ('@Claps.wav',),
+         'worship': ('Worship Stems - MM_clap_smacc_dry-24b.wav', 'Worship Stems - MM_crisp_ass_trap_snare-24b.wav',
+                     'Worship Stems - MM_jungleclap-24b.wav')}
+
 
 def pool(g):
     from tools.audio_analysis.eval.kick_goal_eval import GOAL
     from tools.audio_analysis.eval.detector_labels import merge_layers, stem_hits
-    from tools.audio_analysis.eval.snare_labels import FAMILY
     from tools.audio_analysis.eval.kick_goal_eval import STEM_CFG, load
     out = []
     for name, e in json.loads((GOAL / 'snare_samples.json').read_text()).items():
@@ -39,7 +43,7 @@ def pool(g):
             # The 808 kit is AIFF-C compressed (unreadable here, even by afconvert): skipped.
             if not name.lower().endswith(('.aif', '.aiff')):
                 out.append(dict(name=name, audio=load(e['path'], 48000), users=e['users']))
-    for t, stems in FAMILY.stem_songs.items():
+    for t, stems in STEMS.items():
         info = g.labels['new'].get(t) or {}
         dirs = {Path(p).parent for p in info.get('mix_parts') or []}
         if t in STEM_CFG:

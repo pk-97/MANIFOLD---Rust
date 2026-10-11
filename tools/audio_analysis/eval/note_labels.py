@@ -52,10 +52,11 @@ class NoteFamily:
                                     # 70 ms window would count firing anywhere as right
 
 
-def silent(res):
+def silent(res, unmute=()):
     """Names of tracks that make no sound: their own speaker is off, or that of any group they sit in (a muted
-    reference group silences its full-length reference clips)."""
-    muted_groups = {tr['name'] for tr in res['tracks'] if tr['kind'] == 'GroupTrack' and not tr.get('speaker_on', True)}
+    reference group silences its full-length reference clips). Groups in unmute count as playing: muted only for a
+    stem export (detector_labels.export_groups)."""
+    muted_groups = {tr['name'] for tr in res['tracks'] if tr['kind'] == 'GroupTrack' and not tr.get('speaker_on', True)} - set(unmute)
     return {tr['name'] for tr in res['tracks'] if not tr.get('speaker_on', True) or muted_groups & set(tr.get('groups') or ())}
 
 
@@ -82,9 +83,9 @@ def project_notes(res):
     return sorted(out)
 
 
-def playing_clips(res):
+def playing_clips(res, unmute=()):
     """Audio clips that sound: not muted, on a track that is not silent."""
-    quiet = silent(res)
+    quiet = silent(res, unmute)
     return [c for c in res['audio_clips'] if not c['disabled'] and c.get('track') not in quiet]
 
 
@@ -129,7 +130,7 @@ def kinds(beats, durs, secs):
 def song(g, t, fam):
     """One song's labels dict, or None when the project has no notes or clips on the family's part."""
     from tools.audio_analysis.eval.als_extract import extract
-    from tools.audio_analysis.eval.detector_labels import clip_hits, env_db, vouched
+    from tools.audio_analysis.eval.detector_labels import clip_starts, env_db, vouched
     from tools.audio_analysis.eval.detector_songs import audio, rate, wip
     from tools.audio_analysis.eval.kick_goal_melodic import _source
     W = wip()
@@ -167,9 +168,7 @@ def song(g, t, fam):
     points = [(q['beat'], q['bpm']) for q in res['tempo_points']]
     # Known times only (Peter, 2026-10-11): a clip's start counts when a loud hit begins there (a placed one-shot or
     # sample); hits found further inside a clip are guesses, left to the loop spans.
-    c_loud, _ = clip_hits(clips, Path(src[0]).parent, sr, fam.stem_band, points)
-    starts = np.array(sorted({c['start_s'] for c in clips}))
-    placed = starts[[bool(np.any((c_loud >= s0 - .005) & (c_loud <= s0 + fam.clip_onset_s))) for s0 in starts]] if len(c_loud) else starts[:0]
+    placed = clip_starts(clips, Path(src[0]).parent, sr, fam.stem_band, points, fam.clip_onset_s)
     pos = np.concatenate([pos, placed + off])
     kind = np.array(kind + ['clip'] * len(placed))
     order = np.argsort(pos, kind='stable')

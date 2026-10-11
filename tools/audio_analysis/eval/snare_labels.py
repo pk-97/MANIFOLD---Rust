@@ -25,14 +25,6 @@ FAMILY = Family(
     midi_songs=('flight', '48_hours', 'pattern', 'back_to_you', 'lowkey', 'corrosion', 'burn_stems', 'midnight_patience'),
     # Project songs whose snares live (also) in audio clips on snare/clap tracks: one-shots, freezes, consolidations.
     clip_songs=('murmur', 'default_haze', 'late_night'),
-    stem_songs={'cold_remix': ('_ SNARE.wav',), 'gerrit': ('Drums snare 1.wav', 'Drums snare 2 (popcorn).wav'), 'business': ('@Claps.wav',),
-                'worship': ('Worship Stems - MM_clap_smacc_dry-24b.wav', 'Worship Stems - MM_crisp_ass_trap_snare-24b.wav',
-                            'Worship Stems - MM_jungleclap-24b.wav')},
-    # Stems whose hits are vouched non-snares (finger snaps: Peter, 2026-10-10), and stems that may hold extra snares
-    # (drum buses, fills, percussion) whose hits are left unscored.
-    stem_neg={'worship': ('Worship Stems - KSHMR Snap 01-24b.wav', 'Worship Stems - KSHMR Snap 05-24b.wav', 'Worship Stems - MM_2099_snap_01-24b.wav')},
-    stem_doubt={'worship': ('Worship Stems - Bus 1-24b.wav', 'Worship Stems - Bus 2-24b.wav', 'Worship Stems - KSHMR Acoustic Fill 128BPM 03-24b.wav',
-                            'Worship Stems - MM_percussion_billow-24b.wav')},
     recall_only=('lowkey',),
 )
 
