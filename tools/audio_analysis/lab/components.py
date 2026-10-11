@@ -69,6 +69,23 @@ def candidates(song, rule, family, build=True):
     return Candidates(a[0], a[1], hop(song.sample_rate), song.sample_rate)
 
 
+# Finders that read only the audio, so they run on a bare clip (lab/release.py goldens).
+AUDIO_FINDERS = ('kick', 'snare')
+
+
+def audio_candidates(rule, family, x, sr):
+    """Candidates of an audio-only finder rule on audio x at sr, the stream starting at x[0]: the registry's own
+    finder closure, so the release reference and training share one finder. The training cache (candidates()) keeps
+    calling the closure directly, so its code key, and every trained layer keyed on it, is unchanged."""
+    import types
+    kind = rule.split(':')[0]
+    if kind not in AUDIO_FINDERS:
+        raise ValueError(f'finder {rule} reads more than the audio; audio-only finders: {AUDIO_FINDERS}')
+    _, hop, fn = FINDERS[kind](rule, types.SimpleNamespace(sample_rate=sr), family)
+    cand, avail = (np.asarray(a, np.int64) for a in fn(x))
+    return Candidates(cand, avail, hop(sr), sr)
+
+
 def finder_id(song, rule, family):
     """What decides a song's candidates: measures computed on them key on it."""
     settings = FINDERS[rule.split(':')[0]](rule, song, family)[0]
@@ -129,6 +146,31 @@ def _flat(song):
 
 # Frame measures: (frames, bands) on the net's 2 ms grid, added to the net as input channels.
 FRAME_MEASURES = {'flat': _flat}
+
+
+def _flat_audio(x, sr):
+    from tools.audio_analysis.eval.detector_channels import flatness
+    return flatness(x, sr)
+
+
+# The pure builders FRAME_MEASURES cache (lab/cache.py stores their float16 output): f(audio, sr) -> (frames, bands)
+# float32, for a bare clip.
+FRAME_BUILDERS = {'flat': _flat_audio}
+
+
+def _tmpl3_fit(inputs, clips, k, random_state, share=None):
+    from tools.audio_analysis.lab import templates
+    return dict(templates=templates.fit(inputs, clips, k, random_state, share))
+
+
+def _tmpl3_apply(params, x, sr, c):
+    from tools.audio_analysis.lab import templates
+    return templates.features(templates._build(x, sr, c), params['templates'])
+
+
+# Fitted event measures (docs/DETECTOR_RUNTIME_DESIGN.md D11): fit(train inputs) -> {key: array} at release, then
+# apply(params, audio, sr, Candidates) -> (n, k). Their params ship in the model file as fit.<measure>.<key>.
+FITTED = {'tmpl3': dict(fit=_tmpl3_fit, apply=_tmpl3_apply)}
 
 
 def measure(song, rule, family, name, build=True):

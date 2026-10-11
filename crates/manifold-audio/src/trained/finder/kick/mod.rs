@@ -1,6 +1,6 @@
 //! Candidates and the 15 base features, streaming (reference:
 //! `tools/audio_analysis/eval/kick_fusion_bandwise.py` `fusion_features` over `kick_fusion_features.py`).
-//! Every constant comes from the `base.*` model entries (`tools/audio_analysis/kick_export/base.py`).
+//! Every constant comes from the `base.*` model entries (`tools/audio_analysis/lab/export/finder_kick.py`).
 
 mod envelopes;
 mod spectrum;

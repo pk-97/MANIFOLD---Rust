@@ -1,4 +1,4 @@
-//! The kick v1 net against its goldens (`tools/audio_analysis/kick_release.py`).
+//! The kick v1 net against its goldens (written by the retired kick release script).
 
 use super::*;
 use crate::trained::golden::{self, Chunks};

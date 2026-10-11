@@ -96,7 +96,7 @@ fn expect_i64(c: &Container, name: &'static str, want: i64) -> Result<(), V1Erro
     Ok(())
 }
 
-/// The shipped kick (`kick_release.py` recipe 1): kick finder, trees on f69 = f15 tail3 tmpl3 prof32 low16, a
+/// The shipped kick (recipe 1): kick finder, trees on f69 = f15 tail3 tmpl3 prof32 low16, a
 /// 150 ms net, mean-logit blend, the 8 s stage on hstack(prof32, low16) with level f15[0], no gate.
 pub fn kick(v1: &Container) -> Result<Container, V1Error> {
     recipe(v1)?;
@@ -136,7 +136,7 @@ pub fn kick(v1: &Container) -> Result<Container, V1Error> {
     Ok(c)
 }
 
-/// The shipped snare (`snare_release.py`): snare finder, a 190 ms net on shape, new and flat, no trees, no stage.
+/// The shipped snare: snare finder, a 190 ms net on shape, new and flat, no trees, no stage.
 pub fn snare(v1: &Container) -> Result<Container, V1Error> {
     recipe(v1)?;
     let mut c = v1.clone();

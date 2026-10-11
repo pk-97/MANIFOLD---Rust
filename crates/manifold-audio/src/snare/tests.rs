@@ -1,5 +1,5 @@
 //! The shipped snare end to end against its v1 goldens (`tests/fixtures/snare/`, written by
-//! `tools/audio_analysis/snare_release.py`), through the generic runtime.
+//! the retired snare release script), through the generic runtime.
 
 use super::*;
 use crate::trained::golden::{self, Chunks};

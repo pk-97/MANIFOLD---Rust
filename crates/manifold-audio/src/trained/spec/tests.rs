@@ -171,18 +171,18 @@ fn i32_entry(c: &mut Container, name: &str) {
     c.insert(name, Array::i32_scalar(1));
 }
 
-/// `runtime_parts.json` written from this build's registry, byte for byte as Python's `json.dumps(indent=2)`
-/// writes it (the file both sides check, D6).
+/// `runtime_parts.json` written from this build's registry, byte for byte in the file's layout (one part kind
+/// per line; the file both sides check, D6).
 fn runtime_parts() -> String {
     let list = |items: Vec<&str>| {
-        let rows: Vec<String> = items.iter().map(|s| format!("    \"{s}\"")).collect();
-        format!("[\n{}\n  ]", rows.join(",\n"))
+        let quoted: Vec<String> = items.iter().map(|s| format!("\"{s}\"")).collect();
+        format!("[{}]", quoted.join(", "))
     };
-    let measures: Vec<String> = Measure::ALL.iter().map(|m| format!("    \"{}\": {}", m.name(), m.width())).collect();
+    let measures: Vec<String> = Measure::ALL.iter().map(|m| format!("\"{}\": {}", m.name(), m.width())).collect();
     format!(
-        "{{\n  \"finders\": {},\n  \"measures\": {{\n{}\n  }},\n  \"channels\": {},\n  \"combines\": {},\n  \"nets\": {{\n    \"min_count\": {MIN_NETS}\n  }},\n  \"stage\": {{\n    \"max_windows\": {MAX_WINDOWS},\n    \"level\": true,\n    \"gate\": true\n  }}\n}}\n",
+        "{{\n  \"finders\": {},\n  \"measures\": {{{}}},\n  \"channels\": {},\n  \"combines\": {},\n  \"nets\": {{\"min_count\": {MIN_NETS}}},\n  \"stage\": {{\"max_windows\": {MAX_WINDOWS}, \"level\": true, \"gate\": true}}\n}}\n",
         list(FinderKind::ALL.iter().map(|f| f.name()).collect()),
-        measures.join(",\n"),
+        measures.join(", "),
         list(Channel::ALL.iter().map(|c| c.name()).collect()),
         list(Combine::ALL.iter().map(|c| c.name()).collect()),
     )

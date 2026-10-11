@@ -1,5 +1,5 @@
 //! The shipped kick end to end against its v1 goldens (`tests/fixtures/kick/`, written by
-//! `tools/audio_analysis/kick_release.py`), through the generic runtime.
+//! the retired kick release script), through the generic runtime.
 
 use super::*;
 use crate::analysis::LinearResampler;

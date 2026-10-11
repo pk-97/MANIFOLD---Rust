@@ -1,5 +1,5 @@
 //! Parity of the snare finder and the flatness frames against the snare v1 goldens
-//! written by `tools/audio_analysis/snare_release.py`.
+//! (written by the retired snare release script).
 
 use super::flat::{Flatness, BANDS};
 use crate::trained::container::Container;

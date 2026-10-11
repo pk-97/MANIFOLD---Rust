@@ -173,7 +173,7 @@ fn v1_kick_stage_matches_every_clip_golden() {
 /// `make_unit.py` (kept outside the repo; P2 lane, 2026-10-11) from the lab's own functions: net
 /// probabilities `torch.sigmoid` of f32 logits widened, D17 as `expit(np.mean([logit(clip(p_k))]))`,
 /// `models.combine`-style mean logit, `lab/stage.py` `inputs` and `gated`, a sklearn
-/// HistGradientBoostingClassifier as the stage forest (`kick_export/stage.py forest`), and
+/// HistGradientBoostingClassifier as the stage forest (`lab/export/trees.py forest`), and
 /// `detector_eval.fires`; numpy 2.4.2, scipy 1.17.1, sklearn 1.8.0, torch 2.14.1.
 fn unit_history(file: &str, shape: Vec<Measure>, level: Option<(Measure, usize)>) {
     let g = golden::unit(file);

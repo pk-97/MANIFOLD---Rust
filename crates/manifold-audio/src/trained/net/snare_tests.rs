@@ -1,4 +1,4 @@
-//! The snare v1 net against its goldens (`tools/audio_analysis/snare_release.py`). Upstream inputs
+//! The snare v1 net against its goldens (written by the retired snare release script). Upstream inputs
 //! (candidates, noisiness frames) come from the golden, never from another Rust piece.
 
 use super::*;
