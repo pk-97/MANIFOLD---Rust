@@ -198,20 +198,5 @@ impl Net {
     }
 }
 
-/// No extra channels.
-#[cfg(test)]
-pub struct NoFrames;
-
-#[cfg(test)]
-impl FrameSource for NoFrames {
-    fn channels(&self) -> usize {
-        0
-    }
-
-    fn frame(&self, _: usize, _: u64) -> Option<&[f32]> {
-        None
-    }
-}
-
 #[cfg(test)]
 mod tests;

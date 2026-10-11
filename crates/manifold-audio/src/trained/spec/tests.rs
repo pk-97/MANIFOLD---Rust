@@ -6,11 +6,12 @@ use crate::trained::golden;
 fn reads_both_shipped_models() {
     let kick = Spec::parse(&golden::model("kick")).unwrap();
     assert_eq!((kick.family, kick.finder, kick.combine), (EventKind::Kick, FinderKind::Kick, Combine::MeanLogit));
-    assert_eq!(kick.trees.as_deref(), Some(&[Measure::F15, Measure::Tail3, Measure::Prof32, Measure::Low16][..]));
-    assert_eq!(kick.net, Some(NetSpec { count: 1, channels: vec![] }));
-    assert_eq!(kick.measures(), [Measure::F15, Measure::Tail3, Measure::Prof32, Measure::Low16]);
+    let trees = [Measure::F15, Measure::Tail3, Measure::Prof32, Measure::Fall16, Measure::Low16, Measure::Note13, Measure::Cdom4];
+    assert_eq!(kick.trees.as_deref(), Some(&trees[..]));
+    assert_eq!(kick.net, Some(NetSpec { count: 1, channels: vec![Channel::Flat, Channel::Perc] }));
+    assert_eq!(kick.measures(), trees);
     let st = kick.stage.as_ref().unwrap();
-    assert_eq!((st.inputs(), st.evidence0(), st.gate, st.cuts), (5, 4, 1.0, Some((0.77, 0.9600000000000001))));
+    assert_eq!((st.inputs(), st.evidence0(), st.gate, st.cuts), (5, 4, 1.0, Some((0.7100000000000001, 0.93))));
     let snare = Spec::parse(&golden::model("snare")).unwrap();
     assert_eq!((snare.family, snare.finder, snare.combine), (EventKind::Snare, FinderKind::Snare, Combine::MeanLogit));
     assert_eq!(snare.trees.as_deref(), Some(&[Measure::Prof32, Measure::Fall16, Measure::Low16][..]));
@@ -32,7 +33,7 @@ fn kick_tmpl3() -> Container {
     c
 }
 
-/// The flat coverage snare: the only model with an extra net channel.
+/// The coverage snare: its net reads the flat channel only.
 fn cover_snare() -> Container {
     golden::model("cover_snare")
 }
@@ -83,6 +84,7 @@ fn refuses_each_bad_entry() {
     let kick: fn() -> Container = || golden::model("kick");
     let snare: fn() -> Container = || golden::model("snare");
     let flat: fn() -> Container = cover_snare;
+    let cover_kick: fn() -> Container = || golden::model("cover_kick");
     let tmpl3: fn() -> Container = kick_tmpl3;
     let cases: Vec<Case> = vec![
         ("contract missing", kick, Box::new(|c| drop(c.remove("contract"))), Box::new(|e| *e == SpecError::Contract(None))),
@@ -105,7 +107,7 @@ fn refuses_each_bad_entry() {
             Box::new(is_mismatch("f15")),
         ),
         ("combine disagrees with models", kick, Box::new(|c| text(c, "combine", "net")), Box::new(is_mismatch("combine"))),
-        ("measure width", kick, Box::new(|c| set(c, "trees.widths", Array::i64s(&[4], vec![15, 3, 32, 8]))), Box::new(is_mismatch("measure width"))),
+        ("measure width", kick, Box::new(|c| set(c, "trees.widths", Array::i64s(&[7], vec![15, 3, 32, 16, 16, 13, 3]))), Box::new(is_mismatch("measure width"))),
         ("trees n_features", kick, Box::new(|c| i64_scalar(c, "trees.n_features", 67)), Box::new(is_mismatch("forest width"))),
         ("stage n_features", kick, Box::new(|c| i64_scalar(c, "stage.n_features", 4)), Box::new(is_mismatch("forest width"))),
         ("rate 44100", kick, Box::new(|c| i64_scalar(c, "rate", 44_100)), Box::new(is_mismatch("model grid"))),
@@ -162,7 +164,7 @@ fn refuses_each_bad_entry() {
         ("an unknown top-level entry", kick, Box::new(|c| i32_entry(c, "seed")), Box::new(is_unknown("entry"))),
         ("a reserved part", kick, Box::new(|c| f64_scalar(c, "res.window_s", 0.4)), Box::new(is_unknown("entry"))),
         ("an unused part's entries", snare, Box::new(|c| f64_scalar(c, "base.eps", 1e-12)), Box::new(is_mismatch("entry"))),
-        ("a flat entry without the flat channel", kick, Box::new(|c| i64_scalar(c, "flat.n_fft", 2048)), Box::new(is_mismatch("entry"))),
+        ("a flat entry without the flat channel", cover_kick, Box::new(|c| i64_scalar(c, "flat.n_fft", 2048)), Box::new(is_mismatch("entry"))),
         ("stage neither 0 nor 1", kick, Box::new(|c| set(c, "stage", Array::i32_scalar(2))), Box::new(is_mismatch("stage"))),
         ("a duplicate measure", kick, Box::new(|c| text(c, "stage.shape", "prof32,prof32")), Box::new(is_mismatch("measure list"))),
         ("family missing", kick, Box::new(|c| drop(c.remove("family"))), Box::new(is_missing("family"))),
