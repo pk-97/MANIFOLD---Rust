@@ -12,6 +12,10 @@ pub const HISTORY: usize = 2048;
 /// Streaming `spectrum()`: per band an order-4 Butterworth band-pass (scipy `sosfilt`,
 /// direct form II transposed), rectified, averaged over the last `k` samples ending at
 /// the grid sample itself, then `20 log10(mean + 1e-9)`.
+///
+/// Cache-line aligned: the per-sample filter loop streams the coefficient and state arrays with vector
+/// loads, and an arbitrary 8-byte placement inside a larger struct cost the whole detector 12% (P2 A/B).
+#[repr(align(64))]
 pub struct Spectrum {
     // Structure of arrays over bands so the per-sample filter loop runs across bands.
     b: [[[f64; BANDS]; 3]; SECTIONS],

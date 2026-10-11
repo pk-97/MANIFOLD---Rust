@@ -16,7 +16,8 @@ const MAX_SPAN: usize = 128;
 
 /// Push audio, then score each candidate once `ready_sample(emit_hop)` samples have arrived.
 pub struct Net {
-    spec: Spectrum,
+    /// Boxed so its alignment holds wherever the detector lives.
+    spec: Box<Spectrum>,
     cnns: Vec<Cnn>,
     channels: usize,
     hop: i64,
@@ -73,7 +74,7 @@ impl Net {
         let cnns = (0..count).map(|k| Cnn::new(c, &format!("net.{k}."), slice)).collect::<Result<Vec<_>, _>>()?;
         let channels = cnns.first().map_or(0, Cnn::channels);
         Ok(Self {
-            spec: Spectrum::new(c)?,
+            spec: Box::new(Spectrum::new(c)?),
             cnns,
             channels,
             hop: scalar_i("net.hop")?,
