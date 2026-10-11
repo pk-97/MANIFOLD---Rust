@@ -104,14 +104,73 @@ pub fn detector(kind: EventKind, rate: u32) -> Option<TrainedDetector> {
     built.ok()
 }
 
+/// A model that reads the kick's verdicts runs right after the kick on the same samples: the kick's decisions
+/// (fired or not) are handed over in emission order, then the model runs. One thread, no shared state.
+pub struct KickFed {
+    kick: TrainedDetector,
+    reader: TrainedDetector,
+}
+
+impl KickFed {
+    /// `reader` must want exactly `kick`'s model.
+    pub fn new(kick: TrainedDetector, mut reader: TrainedDetector) -> Result<Self, DetectorError> {
+        reader.link_kick(&kick)?;
+        Ok(Self { kick, reader })
+    }
+}
+
+impl EventDetector for KickFed {
+    fn push(&mut self, samples: &[f32], events: &mut Vec<DetectorEvent>) {
+        let (kick_kind, reader_kind) = (self.kick.kind(), self.reader.kind());
+        let reader = &mut self.reader;
+        self.kick.push_traced(samples, |d, fire| {
+            reader.kick_verdict(d.cand_hop, d.avail_hop, d.p_final);
+            if let Some(f) = fire {
+                events.push(DetectorEvent { kind: kick_kind, sample: f.sample });
+            }
+        });
+        self.reader.kick_settled(self.kick.settled_avail());
+        self.reader.push_with(samples, |f| events.push(DetectorEvent { kind: reader_kind, sample: f.sample }));
+    }
+
+    fn max_events(&self, samples: usize) -> usize {
+        self.kick.max_fires(samples) + self.reader.max_fires(samples)
+    }
+}
+
 /// Every trained detector one analysed send runs, for mono input at `rate`: one per embedded model that loads.
-/// The live worker and the offline renderer both build theirs here.
+/// A model reading kick verdicts runs fed by the kick ([`KickFed`]); without a matching kick it is refused
+/// (logged once) and the kick runs alone. The live worker and the offline renderer both build theirs here.
 pub fn send_detectors(rate: u32) -> Vec<Box<dyn EventDetector>> {
-    EMBEDDED
-        .iter()
-        .filter_map(|(kind, _)| detector(*kind, rate))
-        .map(|d| Box::new(d) as Box<dyn EventDetector>)
-        .collect()
+    let mut kick = detector(EventKind::Kick, rate);
+    let mut out: Vec<Box<dyn EventDetector>> = Vec::new();
+    let mut readers = Vec::new();
+    for (kind, _) in EMBEDDED.iter().filter(|(k, _)| *k != EventKind::Kick) {
+        let Some(d) = detector(*kind, rate) else { continue };
+        if d.wants_kick().is_some() {
+            readers.push(d);
+        } else {
+            out.push(Box::new(d));
+        }
+    }
+    for reader in readers {
+        let kind = reader.kind();
+        let Some(k) = kick.take() else {
+            log::error!("[Audio] {} detector disabled: it reads the kick's verdicts and the kick did not load", kind.name());
+            continue;
+        };
+        match KickFed::new(k, reader) {
+            Ok(pair) => out.push(Box::new(pair)),
+            Err(e) => {
+                log::error!("[Audio] {} detector disabled: {e}", kind.name());
+                kick = detector(EventKind::Kick, rate);
+            }
+        }
+    }
+    if let Some(k) = kick {
+        out.insert(0, Box::new(k));
+    }
+    out
 }
 
 /// Input samples the worker's ring holds (about 2.7 s at 48 kHz).

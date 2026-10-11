@@ -2,18 +2,22 @@
 //! the net after its shape and new channels.
 
 pub mod flat;
+pub mod perc;
 
 use super::container::Container;
+use super::net::Spectrum;
 use super::spec::{Channel, SpecError};
 
 enum Frames {
-    Flat(flat::Flatness),
+    Flat(Box<flat::Flatness>),
+    Perc(perc::Percussive),
 }
 
 impl Frames {
     fn frame(&self, f: u64) -> Option<&[f32]> {
         match self {
             Self::Flat(s) => s.frame(f),
+            Self::Perc(s) => s.frame(f),
         }
     }
 }
@@ -35,16 +39,20 @@ impl FrameBank {
         let mut out = Vec::with_capacity(channels.len());
         for ch in channels {
             out.push(match ch {
-                Channel::Flat => Frames::Flat(flat::Flatness::new(c)?),
+                Channel::Flat => Frames::Flat(Box::new(flat::Flatness::new(c)?)),
+                Channel::Perc => Frames::Perc(perc::Percussive::new(c)?),
             });
         }
         Ok(Self { channels: out })
     }
 
-    pub fn push(&mut self, samples: &[f64]) {
+    /// Audio for the channels that read it, then the frames the net's spectrum has added for those that
+    /// read the spectrum. Call after the net's own push.
+    pub fn push(&mut self, samples: &[f64], spec: Option<&Spectrum>) {
         for ch in &mut self.channels {
             match ch {
                 Frames::Flat(s) => s.push(samples),
+                Frames::Perc(s) => s.update(spec.expect("perc is a net channel, so the net runs")),
             }
         }
     }

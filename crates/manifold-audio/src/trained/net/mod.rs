@@ -127,7 +127,6 @@ impl Net {
         self.anchors(0, emit_hop).end * self.spec.frame_hop() + 1
     }
 
-    #[cfg(test)]
     /// The net's own band envelopes.
     pub(crate) fn spectrum(&self) -> &Spectrum {
         &self.spec

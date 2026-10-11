@@ -94,7 +94,7 @@ fn refuses_each_bad_entry() {
         ("snare finder level disagrees", snare, Box::new(|c| text(c, "finder", "snare:6")), Box::new(is_mismatch("finder"))),
         ("unknown measure", kick, Box::new(|c| text(c, "trees.measures", "f15,tail3,tmpl3,res16,low16")), Box::new(is_unknown("measure"))),
         ("unknown stage measure", kick, Box::new(|c| text(c, "stage.shape", "prof32,glide3")), Box::new(is_unknown("measure"))),
-        ("unknown channel", flat, Box::new(|c| text(c, "net.extra", "perc")), Box::new(is_unknown("channel"))),
+        ("unknown channel", flat, Box::new(|c| text(c, "net.extra", "side")), Box::new(is_unknown("channel"))),
         ("unknown combine", kick, Box::new(|c| text(c, "combine", "max")), Box::new(is_unknown("combine"))),
         ("unknown models", kick, Box::new(|c| text(c, "models", "net,trees,svm")), Box::new(is_unknown("models"))),
         (

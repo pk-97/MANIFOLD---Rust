@@ -37,10 +37,24 @@ pub enum Measure {
     Prof32,
     Fall16,
     Low16,
+    Cdom4,
+    Note13,
+    /// The kick detector's verdict: read from the kick's decisions, not the audio.
+    Kick2,
 }
 
 impl Measure {
-    pub const ALL: [Measure; 6] = [Self::F15, Self::Tail3, Self::Tmpl3, Self::Prof32, Self::Fall16, Self::Low16];
+    pub const ALL: [Measure; 9] = [
+        Self::F15,
+        Self::Tail3,
+        Self::Tmpl3,
+        Self::Prof32,
+        Self::Fall16,
+        Self::Low16,
+        Self::Cdom4,
+        Self::Note13,
+        Self::Kick2,
+    ];
 
     /// The lab's names (`lab/components.py` `MEASURES`).
     pub const fn name(self) -> &'static str {
@@ -51,7 +65,15 @@ impl Measure {
             Self::Prof32 => "prof32",
             Self::Fall16 => "fall16",
             Self::Low16 => "low16",
+            Self::Cdom4 => "cdom4",
+            Self::Note13 => "note13",
+            Self::Kick2 => "kick2",
         }
+    }
+
+    /// Whether the measure reads the `extra.*` constants (f15 is the kick finder's, kick2 the kick's).
+    pub const fn uses_extra(self) -> bool {
+        !matches!(self, Self::F15 | Self::Kick2)
     }
 
     pub const fn width(self) -> usize {
@@ -60,6 +82,9 @@ impl Measure {
             Self::Tail3 | Self::Tmpl3 => 3,
             Self::Prof32 => 32,
             Self::Fall16 | Self::Low16 => 16,
+            Self::Cdom4 => 4,
+            Self::Note13 => 13,
+            Self::Kick2 => 2,
         }
     }
 
@@ -72,14 +97,16 @@ impl Measure {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Channel {
     Flat,
+    Perc,
 }
 
 impl Channel {
-    pub const ALL: [Channel; 1] = [Self::Flat];
+    pub const ALL: [Channel; 2] = [Self::Flat, Self::Perc];
 
     pub const fn name(self) -> &'static str {
         match self {
             Self::Flat => "flat",
+            Self::Perc => "perc",
         }
     }
 
@@ -262,9 +289,20 @@ const BASE: [&str; 19] = [
     "upper_ratio",
 ];
 const CAND: [&str; 7] = ["deadline", "hop", "lookback", "refractory", "rise_db", "sos", "window"];
-const EXTRA: [&str; 17] = [
+const EXTRA: [&str; 28] = [
     "band_high",
     "band_low",
+    "cdom_bin_lo",
+    "cdom_bin_n",
+    "cdom_floor",
+    "cdom_raw_eps",
+    "cdom_window",
+    "note_chroma_bins",
+    "note_chroma_class",
+    "note_low_rate",
+    "note_lp_sos",
+    "note_mid_bins",
+    "note_window",
     "hop",
     "low_floor",
     "low_ma_len",
@@ -299,6 +337,8 @@ const NET: [&str; 14] = [
     "count",
 ];
 const FLAT: [&str; 5] = ["n_fft", "window", "band_lo", "band_n", "clip_db"];
+const PERC: [&str; 2] = ["sustain", "neighbours"];
+const KICK2: [&str; 3] = ["window_s", "none_dt_ms", "kick_train_id"];
 const STAGE: [&str; 9] = ["windows_s", "shape", "level", "gate", "cut_detector", "cut_stage", "power", "lp_clip", "q_clip"];
 /// Each part's own grid entries; all must be the model grid (D13).
 const GRIDS: [(&str, u64); 7] = [
@@ -466,8 +506,9 @@ impl Spec {
     /// unknown one, since the release wrote something the runtime would ignore.
     fn check_names(&self, c: &Container) -> Result<(), SpecError> {
         let used = self.measures();
-        let extra = used.iter().any(|&m| m != Measure::F15);
+        let extra = used.iter().any(|&m| m.uses_extra());
         let flat = self.net.as_ref().is_some_and(|n| n.channels.contains(&Channel::Flat));
+        let perc = self.net.as_ref().is_some_and(|n| n.channels.contains(&Channel::Perc));
         for name in c.names() {
             let (prefix, rest) = name.split_once('.').unwrap_or((name, ""));
             let (part, known, active) = match prefix {
@@ -478,6 +519,8 @@ impl Spec {
                 "fit" => ("a fitted measure", rest.strip_prefix("tmpl3.").is_some_and(|k| FIT_TMPL3.contains(&k)), used.contains(&Measure::Tmpl3)),
                 "net" => ("a net", NET.contains(&rest) || net_weight(rest).is_some(), self.net.is_some()),
                 "flat" => ("the flat channel", FLAT.contains(&rest), flat),
+                "perc" => ("the perc channel", PERC.contains(&rest), perc),
+                "kick2" => ("the kick verdict", KICK2.contains(&rest), used.contains(&Measure::Kick2)),
                 "trees" => ("trees", rest == "measures" || rest == "widths" || FOREST.contains(&rest), self.trees.is_some()),
                 "stage" => ("a history stage", STAGE.contains(&rest) || FOREST.contains(&rest), self.stage.is_some()),
                 _ => ("", false, false),
