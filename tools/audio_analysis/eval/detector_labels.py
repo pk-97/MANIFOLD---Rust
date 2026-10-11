@@ -405,8 +405,10 @@ def song(g, t, fam):
     pos = pos[~inside(pos, dense)]
     unscored += dense
     pos = pos[(pos > .1) & (pos < dur - .1)]
-    neg = np.concatenate([kicks, mel, neg_own])
-    neg = neg[~inside(neg, loops)] if loops else neg
+    # Proven kicks are not the family's sound even inside unknown audio (Peter, 2026-10-11); other negatives inside
+    # unknown audio stay unknown.
+    neg = np.concatenate([mel, neg_own])
+    neg = np.concatenate([kicks, neg[~inside(neg, loops)] if loops else neg])
     if len(pos):
         j = np.clip(np.searchsorted(pos, neg), 1, len(pos) - 1) if len(pos) > 1 else np.zeros(len(neg), int)
         near = np.minimum(np.abs(neg - pos[np.clip(j - 1, 0, len(pos) - 1)]), np.abs(neg - pos[j]))

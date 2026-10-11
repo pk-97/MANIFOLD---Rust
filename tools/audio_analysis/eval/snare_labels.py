@@ -3,7 +3,7 @@
 cross-sticks do not — Peter, 2026-10-10; snare and kick rolls are unscored and untrained — Peter, 2026-10-11).
 Writes GOAL/snare_labels.json through detector_labels (the label rules).
 
-Snare specifics: snare/clap tracks and pads; rimshots and cross-sticks are vouched non-snares, and so are hats, rides
+Snare specifics: snare/clap tracks and pads; rimshots and cross-sticks are vouched non-snares, and so are kicks, hats, rides
 and percussion (Peter, 2026-10-10); prominence is judged on the mix's 1-8 kHz band (Peter: as loud as the song's main
 snares, like a drum and bass snare); Lowkey is recall-only (its WIP offset is the survey's, not proven against a stem).
 """
@@ -19,7 +19,7 @@ FAMILY = Family(
     name='snare',
     voice=SNARE,
     exclude=NOT_SNARE,
-    other_voice=re.compile(r'hat|\bhh|ride|cymbal|crash|perc|shaker|shkr|tamb|tom|conga|bongo|cowbell|clave|wood|block|triangle|guiro|cabasa', re.I),
+    other_voice=re.compile(r'kick|kik\b|\bbd\b|bass ?drum|hat|\bhh|ride|cymbal|crash|perc|shaker|shkr|tamb|tom|conga|bongo|cowbell|clave|wood|block|triangle|guiro|cabasa', re.I),
     other_parts=re.compile(r'drum|break|_top|top_?loop|perc|groove|fill|hat|ride|cymbal|shaker|tamb', re.I),
     not_other_parts=re.compile(r'kick|vocal|vox|synth|bass|string|pad|chord', re.I),
     band=(1000, 8000),
