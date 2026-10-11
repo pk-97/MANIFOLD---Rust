@@ -666,5 +666,87 @@ def builder(x):
         self.assertEqual(list(after_gap(dict(s, dense_pos=[8.0]))), [1])
 
 
+    def test_template_features_match_kick(self):
+        """Given fixed templates, the lab's template features are kick_goal_templates' on the shipped kick's patches
+        (band_spec of the mix at the finder's hop, candidate to emission), and with the template set the shipped
+        kick used for the song they equal its tmpl3 cache."""
+        from tools.audio_analysis.eval import kick_goal_templates as kt
+        from tools.audio_analysis.eval.kick_goal_eval import GOAL
+        from tools.audio_analysis.lab import components, templates
+        from tools.audio_analysis.lab.registry import mix
+        t = 'bad_guy_128bpm'
+        song = load()[t]
+        c = components.candidates(song, 'kick', 'kick', build=False)
+        p = templates.patches(song, 'kick', 'kick')
+        np.testing.assert_array_equal(p, kt.patches(kt.band_spec(mix(song), song.sample_rate, c.hop), c.cand, c.avail))
+        dev = np.load(GOAL / 'templates_from_dev.npy')
+        np.testing.assert_array_equal(templates.features(p, dev), kt.template_features(p, dev))
+        np.testing.assert_array_equal(templates.features(p, np.load(GOAL / 'templates_from_new.npy')),
+                                      np.load(GOAL / f'tmpl_{t}.npy'))
+
+    def test_templates_never_see_held_song(self):
+        """Each training's templates come from the positive training rows of its own trained songs and clips only:
+        never a held song, a negative or an unscored row."""
+        from unittest import mock
+
+        from tools.audio_analysis.lab import templates
+        cfg = config.load('kick_gen50_gated_t8')
+        cfg = config.Experiment(**{**cfg.__dict__, 'models': dict(cfg.models, trees=dict(cfg.models['trees'],
+                                                                                          templates=dict(k=2)))})
+        lab = {t: {} for t in 'abcdefghyz'}
+        songs = {t: type('S', (), dict(kind='generated' if t in 'yz' else 'project'))() for t in lab}
+        grps, trainings, _ = models.plan(cfg, lab, songs)
+        self.assertTrue(any(n['clips'] for n in trainings))
+        code = {t: i for i, t in enumerate(lab)}
+        n = 6
+        y = np.array([1, 1, 0, 0, 1, 1.0])
+        mask = np.array([True, True, True, True, True, False])
+        tmpl = {}
+        for t, i in code.items():
+            yt = y * 0 if t == 'z' else y  # a clip without hits gives no patches
+            p = np.zeros((n, 2, 32))
+            p[yt == 1, 0, i] = 1      # positives mark the song at band i
+            p[yt == 0, 0, i + 16] = 1  # negatives at band i + 16
+            p[~mask, :, :] = 0
+            p[~mask, 1, i] = 1        # the unscored positive in frame 1
+            tmpl[t] = (p, (mask, yt, np.zeros(n, bool)))
+        trees = {t: (np.full((n, 1), float(code[t])), None) for t in lab}
+        seen = []
+
+        def kmeans(x, w, k, rs):
+            marks = {(int(r.argmax()) // 32, int(r.argmax()) % 32) for r in x}
+            seen.append(marks)
+            return x[:k]
+
+        class Fit:
+            def predict_proba(self, x):
+                return np.column_stack([1 - x[:, 0] / 100, x[:, 0] / 100])
+        with mock.patch.object(templates, '_kmeans', kmeans), \
+                mock.patch.object(models, 'fit_trees', lambda p, rows, rs, share: Fit()):
+            out, _ = run.train_templated(cfg, trainings, 0, trees, tmpl, log=lambda m: None)
+        self.assertEqual(len(seen), len(trainings))
+        for marks, tr, got in zip(seen, trainings, out):
+            self.assertEqual(marks, {(0, code[u]) for u in tr['trained'] + tr['clips'] if u != 'z'}, tr['without'])
+            self.assertFalse({code[u] for u in tr['held']} & {b for _, b in marks}, tr['without'])
+            self.assertEqual(set(got), set(tr['held']))
+
+    def test_templates_config(self):
+        """templates is null or {"k": K >= 2}; a trees config without it reads null; the trees' key covers it and the
+        net's does not."""
+        d = json.loads((config.EXPERIMENTS / 'kick_gen50_gated_t8.json').read_text())
+        trees = d['models']['trees']
+        for bad in ({'k': 1}, {'k': 8.0}, {'k': True}, {'k': '8'}, {'k': 8, 'cap': 100}, {'n': 8}, {}, 8, 'on'):
+            with self.assertRaises(ValueError, msg=bad):
+                config.build('bad', dict(d, models=dict(d['models'], trees=dict(trees, templates=bad))))
+        old = dict(d, models=dict(d['models'], trees={k: v for k, v in trees.items() if k != 'templates'}))
+        self.assertIsNone(config.build('old', old).models['trees']['templates'])
+
+        def keys(cfg):
+            meta = run.setup(cfg)[2]
+            return {m: run.model_key(cfg, m, meta) for m in cfg.models}
+        base, t8, t16 = (keys(config.load(c)) for c in ('kick_gen50_gated', 'kick_gen50_gated_t8', 'kick_gen50_gated_t16'))
+        self.assertEqual(base['net'], t8['net'])
+        self.assertEqual(len({base['trees'], t8['trees'], t16['trees']}), 3)
+
 if __name__ == '__main__':
     unittest.main()

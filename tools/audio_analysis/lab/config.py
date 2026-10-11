@@ -2,7 +2,8 @@
 an A/B is two configs. A config builds a detector from parts (lab/components.py): a candidate finder, models (net,
 trees or both), how they combine, and optionally the song-history stage (lab/stage.py). Every key is required and
 no other key is allowed, so a typo is an error, not a silent default. Schema 1 configs (one net, a 'flat' switch) migrate on read,
-and a schema 2 net without the training options reads them as NET_DEFAULTS (today's training)."""
+and a schema 2 net without the training options reads them as NET_DEFAULTS (today's training); trees without
+'templates' read it as null (no sound templates: today's trees)."""
 import json
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -14,7 +15,9 @@ KEYS = {'family', 'candidates', 'models', 'combine', 'stage', 'sampling', 'train
 NET_DEFAULTS = dict(swa_epochs=0, batch=256, lr=0.002, precision='float32')
 NET_KEYS = {'past_ms', 'ahead_ms', 'channels', 'epochs', *NET_DEFAULTS}
 PRECISIONS = ('float32', 'mixed')
-TREE_KEYS = {'measures', 'max_iter', 'learning_rate', 'max_leaf_nodes', 'min_samples_leaf', 'l2'}
+# templates: null, or {'k': K} sound templates fitted per training (lab/templates.py), three tree inputs.
+TREE_DEFAULTS = dict(templates=None)
+TREE_KEYS = {'measures', 'max_iter', 'learning_rate', 'max_leaf_nodes', 'min_samples_leaf', 'l2', *TREE_DEFAULTS}
 COMBINES = {'net': ('net',), 'trees': ('trees',), 'mean_logit': ('net', 'trees')}
 
 
@@ -57,7 +60,7 @@ class Experiment:
 
 def migrate(d):
     """A schema 1 config dict (one net with a 'flat' switch) as schema 2; a net without the training options gets
-    NET_DEFAULTS."""
+    NET_DEFAULTS, trees without templates TREE_DEFAULTS."""
     d = dict(d)
     if 'net' in d:
         net = d.pop('net')
@@ -66,6 +69,8 @@ def migrate(d):
         d['combine'], d['stage'] = 'net', None
     if 'net' in d.get('models', {}):
         d['models'] = dict(d['models'], net=NET_DEFAULTS | d['models']['net'])
+    if 'trees' in d.get('models', {}):
+        d['models'] = dict(d['models'], trees=TREE_DEFAULTS | d['models']['trees'])
     return d
 
 
@@ -86,6 +91,9 @@ def check(d, where=''):
     if 'trees' in m and (set(m['trees']) != TREE_KEYS or not m['trees']['measures']
                          or set(m['trees']['measures']) - set(MEASURES)):
         raise ValueError(f'{where}: trees keys are {sorted(TREE_KEYS)}, measures from {sorted(MEASURES)}')
+    tm = m.get('trees', {}).get('templates')
+    if tm is not None and not (isinstance(tm, dict) and set(tm) == {'k'} and type(tm['k']) is int and tm['k'] >= 2):
+        raise ValueError(f'{where}: trees templates is null or {{"k": K}} with an integer K >= 2')
     if COMBINES.get(d['combine']) != tuple(sorted(m)):
         raise ValueError(f'{where}: combine {d["combine"]!r} does not match models {sorted(m)}')
     if d['stage'] is not None:

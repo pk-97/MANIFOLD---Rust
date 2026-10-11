@@ -41,6 +41,7 @@ def imports():
     import tools.audio_analysis.lab.models  # noqa: F401
     import tools.audio_analysis.lab.registry  # noqa: F401
     import tools.audio_analysis.lab.stage  # noqa: F401
+    import tools.audio_analysis.lab.templates  # noqa: F401
 
 
 def parts(cfg):
@@ -186,10 +187,17 @@ def tree_rows(cfg, lab, songs):
     return out
 
 
-def model_code(model):
-    """The code that trains a model and builds its inputs, closure included (cache.code_id)."""
+def model_code(model, with_templates=False):
+    """The code that trains a model and builds its inputs, closure included (cache.code_id); trees with sound
+    templates add the templates' training and patch code."""
+    from tools.audio_analysis.lab import templates
     from tools.audio_analysis.lab.cache import code_id
-    return code_id(train_model) + code_id(build if model == 'net' else tree_rows)
+    code = code_id(train_model) + code_id(build if model == 'net' else tree_rows)
+    return code + code_id(train_templated) + code_id(templates.song_inputs) if with_templates else code
+
+
+def templated(cfg):
+    return 'trees' in cfg.models and cfg.models['trees']['templates'] is not None
 
 
 def model_key(cfg, model, meta):
@@ -201,8 +209,9 @@ def model_key(cfg, model, meta):
     reads = dict(net='frames', trees='measures')[model]
     used = {k: v for k, v in meta['parts'].items() if k in ('finder', reads)}
     taught = sorted({u for n in meta['trainings'] for u in n['trained'] + n['clips']})
-    key = json.dumps(dict(model=sub, labels={u: meta['label_ids'][u] for u in taught}, code=model_code(model),
-                          parts=used, content=meta['content'], trainings=meta['trainings']), sort_keys=True)
+    code = model_code(model, model == 'trees' and templated(cfg))
+    key = json.dumps(dict(model=sub, labels={u: meta['label_ids'][u] for u in taught}, code=code, parts=used,
+                          content=meta['content'], trainings=meta['trainings']), sort_keys=True)
     return f'{model}-{hashlib.sha256(key.encode()).hexdigest()[:12]}'
 
 
@@ -229,7 +238,34 @@ def train_model(cfg, model, trainings, seed, data, trees, log):
     return out, secs
 
 
-def layer(cfg, model, meta, seed, data, trees, log):
+def train_templated(cfg, trainings, seed, trees, tmpl, log):
+    """train_model's trees with sound templates (lab/templates.py) appended to every song's measures: each training
+    fits its own templates on its trained songs and clips (never its held songs), random state 1000 i + seed for the
+    templates and the trees alike."""
+    import numpy as np
+
+    from tools.audio_analysis.lab import templates
+    share = cfg.sampling['generated'] if cfg.generated_as_clips() else None
+    templates.span(tmpl)
+    out, secs = [], []
+    for i, n in enumerate(trainings):
+        t0 = time.time()
+        rs = 1000 * i + seed
+        fitted = templates.fit({u: tmpl[u] for u in n['trained'] + n['clips']}, set(n['clips']),
+                               cfg.models['trees']['templates']['k'], rs, share)
+        rows = {}
+        for u in n['trained'] + n['clips'] + n['held']:
+            x = np.hstack([trees[u][0], templates.features(tmpl[u][0], fitted)])
+            mask, y, hard = tmpl[u][1]
+            rows[u] = (x, (x[mask], y[mask], hard[mask]))
+        took = time.time() - t0
+        got, s = train_model(cfg, 'trees', [n], rs, None, rows, log)
+        out += got
+        secs.append(round(s[0] + took, 1))
+    return out, secs
+
+
+def layer(cfg, model, meta, seed, data, trees, log, tmpl=None):
     """One model's predictions per training and their training seconds: from LAYERS when another config already
     trained the same model, else trained and stored there. Cached seconds are 0."""
     import numpy as np
@@ -240,7 +276,10 @@ def layer(cfg, model, meta, seed, data, trees, log):
             out = [{t: z[f'{i}__{t}'] for t in n['held']} for i, n in enumerate(meta['trainings'])]
         log(f'{model}: reused {d.name}')
         return out, [0.0] * len(out)
-    out, secs = train_model(cfg, model, meta['trainings'], seed, data, trees, log)
+    if model == 'trees' and templated(cfg):
+        out, secs = train_templated(cfg, meta['trainings'], seed, trees, tmpl, log)
+    else:
+        out, secs = train_model(cfg, model, meta['trainings'], seed, data, trees, log)
     d.mkdir(parents=True, exist_ok=True)
     tmp = d / f's{seed}.tmp.npz'
     np.savez(tmp, **{f'{i}__{t}': p for i, per in enumerate(out) for t, p in per.items()})
@@ -248,15 +287,15 @@ def layer(cfg, model, meta, seed, data, trees, log):
     return out, secs
 
 
-def train_layers(cfg, meta, seed, data, trees, log=print, stage_parts=None):
+def train_layers(cfg, meta, seed, data, trees, log=print, stage_parts=None, tmpl=None):
     """({save key: probabilities}, record): each model's layer, then the combined one, saved per song as layer__song
     (outer models) and pair{k}__layer__song (the predictions that choose group k's cutoff); with a stage, its
-    staged layer on top (lab/stage.py, from stage_parts)."""
+    staged layer on top (lab/stage.py, from stage_parts). tmpl: the trees' sound-template inputs, when templated."""
     from tools.audio_analysis.lab import models
     trainings, grps = meta['trainings'], meta['groups']
     lay, secs = {}, {}
     for m in sorted(cfg.models):
-        lay[m], secs[m] = layer(cfg, m, meta, seed, data, trees, log)
+        lay[m], secs[m] = layer(cfg, m, meta, seed, data, trees, log, tmpl)
     if models.final_layer(cfg) == 'combined':
         lay['combined'] = [{t: models.combine(cfg.combine, {m: lay[m][i][t] for m in cfg.models}) for t in n['held']}
                            for i, n in enumerate(trainings)]
@@ -293,6 +332,11 @@ def child(cfg, seed, run_id):
     todo = [m for m in cfg.models if not (LAYERS / model_key(cfg, m, meta) / f's{seed}.npz').exists()]
     data = build(cfg, lab, songs, dev, log=lambda m: None) if 'net' in todo else None
     trees = tree_rows(cfg, lab, songs) if 'trees' in todo else None
+    if 'trees' in todo and templated(cfg):
+        from tools.audio_analysis.lab import templates
+        tmpl = templates.song_inputs(cfg, lab, songs)
+    else:
+        tmpl = None
     if cfg.stage:
         from tools.audio_analysis.lab.stage import song_parts
         stage_parts = {t: song_parts(cfg, songs[t], lab[t]) for t in lab}
@@ -301,7 +345,7 @@ def child(cfg, seed, run_id):
     built = time.time()
     with gpu_queue.hold('detector-lab') if 'net' in todo else contextlib.nullcontext():
         held, record = train_layers(cfg, meta, seed, data, trees, log=lambda m: print(m, flush=True),
-                                    stage_parts=stage_parts)
+                                    stage_parts=stage_parts, tmpl=tmpl)
     keys = ('without', 'held', 'trained', 'clips')
     if [{k: r[k] for k in keys} for r in record] != [{k: n[k] for k in keys} for n in meta['trainings']]:
         sys.exit('the models trained differ from the plan; nothing saved')
@@ -329,6 +373,9 @@ def warm(cfg):
                 components.frame(songs[t], m)
         for m in cfg.models.get('trees', {}).get('measures', ()):
             components.measure(songs[t], cfg.candidates, cfg.family, m)
+        if templated(cfg):
+            from tools.audio_analysis.lab import templates
+            templates.patches(songs[t], cfg.candidates, cfg.family)
         if cfg.stage:
             from tools.audio_analysis.lab.stage import measures_of
             for m in measures_of(cfg.stage):
