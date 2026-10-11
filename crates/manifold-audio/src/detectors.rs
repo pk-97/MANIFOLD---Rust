@@ -1,4 +1,4 @@
-//! Trained event detectors (kick now; snare, clap, hats later) behind one interface, and the
+//! Trained event detectors (kick and snare now; clap, hats later) behind one interface, and the
 //! worker thread that runs one analysed send's detectors off the content thread
 //! (docs/KICK_REALTIME_DESIGN.md section 1b). Offline paths run the same detectors inline.
 
@@ -11,10 +11,12 @@ use ringbuf::traits::{Consumer, Observer, Producer, Split};
 use ringbuf::{HeapCons, HeapProd, HeapRb};
 
 use crate::kick::KickDetector;
+use crate::snare::SnareDetector;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EventKind {
     Kick,
+    Snare,
 }
 
 /// One detected event, stamped with the input sample count at which it was decided.
@@ -43,20 +45,53 @@ impl EventDetector for KickDetector {
     }
 }
 
+impl EventDetector for SnareDetector {
+    fn push(&mut self, samples: &[f32], events: &mut Vec<DetectorEvent>) {
+        self.push_with(samples, |f| events.push(DetectorEvent { kind: EventKind::Snare, sample: f.sample }));
+    }
+
+    fn max_events(&self, samples: usize) -> usize {
+        self.max_fires(samples)
+    }
+}
+
 static KICK_REFUSED: AtomicBool = AtomicBool::new(false);
+static SNARE_REFUSED: AtomicBool = AtomicBool::new(false);
+
+/// `Some` on success; a refusal is logged once per process.
+fn or_log<D, E: std::fmt::Display>(built: Result<D, E>, refused: &AtomicBool, name: &str) -> Option<D> {
+    built
+        .inspect_err(|e| {
+            if !refused.swap(true, Ordering::Relaxed) {
+                log::error!("[Audio] {name} detector disabled: {e}");
+            }
+        })
+        .ok()
+}
 
 /// The kick detector for mono input at `rate`, or `None` (logged once per process) when the
 /// embedded model is refused. Without it the kick feature stays 0.
 pub fn kick_detector(rate: u32) -> Option<KickDetector> {
-    match KickDetector::new(rate) {
-        Ok(d) => Some(d),
-        Err(e) => {
-            if !KICK_REFUSED.swap(true, Ordering::Relaxed) {
-                log::error!("[Audio] kick detector disabled: {e}");
-            }
-            None
-        }
+    or_log(KickDetector::new(rate), &KICK_REFUSED, "kick")
+}
+
+/// The snare detector for mono input at `rate`, or `None` (logged once per process) when the
+/// embedded model is refused. Without it the snare feature stays 0.
+pub fn snare_detector(rate: u32) -> Option<SnareDetector> {
+    or_log(SnareDetector::new(rate), &SNARE_REFUSED, "snare")
+}
+
+/// Every trained detector one analysed send runs, for mono input at `rate`; refused models are
+/// left out. The live worker and the offline renderer both build theirs here.
+pub fn send_detectors(rate: u32) -> Vec<Box<dyn EventDetector>> {
+    let mut out: Vec<Box<dyn EventDetector>> = Vec::with_capacity(2);
+    if let Some(d) = kick_detector(rate) {
+        out.push(Box::new(d));
     }
+    if let Some(d) = snare_detector(rate) {
+        out.push(Box::new(d));
+    }
+    out
 }
 
 /// Input samples the worker's ring holds (about 2.7 s at 48 kHz).
@@ -112,13 +147,15 @@ impl DetectorWorker {
                     std::thread::park_timeout(Duration::from_millis(5));
                     continue;
                 }
-                scratch.clear();
+                // Each detector's events go out as soon as it has run, so a slow later detector (the
+                // snare's net) never holds an earlier one's fires (the kick's) past the content
+                // thread's wait.
                 for d in detectors.iter_mut() {
                     d.push(&buf[..n], &mut scratch);
-                }
-                for e in scratch.drain(..) {
-                    if event_prod.try_push(e).is_err() {
-                        worker.event_overflow.fetch_add(1, Ordering::Relaxed);
+                    for e in scratch.drain(..) {
+                        if event_prod.try_push(e).is_err() {
+                            worker.event_overflow.fetch_add(1, Ordering::Relaxed);
+                        }
                     }
                 }
                 worker.processed.fetch_add(n as u64, Ordering::Release);

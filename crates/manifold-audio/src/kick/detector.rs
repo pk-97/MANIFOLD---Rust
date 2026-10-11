@@ -82,15 +82,7 @@ pub struct KickDetector {
     trees: Forest,
     net: KickNet,
     stage: Stage,
-    /// `None` at 48 kHz. Linear interpolation without an anti-alias filter: downsampling folds
-    /// content above 24 kHz back into the band, which reaches only the upper-band features and
-    /// is small next to music's level up there. Upsampling adds no content above the source's
-    /// Nyquist, so the model sees a band-limited 48 kHz stream.
-    resampler: Option<LinearResampler>,
-    /// Input samples per model sample.
-    step: f64,
-    resampled: Vec<f32>,
-    block: Vec<f64>,
+    input: ModelInput,
     cands: Vec<Candidate>,
     pending: [Option<Pending>; PENDING],
     head: usize,
@@ -100,6 +92,72 @@ pub struct KickDetector {
     dropped: u64,
     f69: [f64; F69],
     extra54: [f64; EXTRA_DIMS],
+}
+
+/// Input of any rate in, 48 kHz model blocks out, plus the map from model sample counts back to
+/// the input clock. Shared by every trained detector.
+pub(crate) struct ModelInput {
+    /// `None` at 48 kHz. Linear interpolation without an anti-alias filter: downsampling folds
+    /// content above 24 kHz back into the band, which reaches only the upper-band features and
+    /// is small next to music's level up there. Upsampling adds no content above the source's
+    /// Nyquist, so the model sees a band-limited 48 kHz stream.
+    resampler: Option<LinearResampler>,
+    /// Input samples per model sample.
+    step: f64,
+    resampled: Vec<f32>,
+    /// The latest model block; valid after [`Self::feed`].
+    pub(crate) block: Vec<f64>,
+}
+
+impl ModelInput {
+    /// Input samples handled per [`Self::feed`]; bounds every scratch buffer.
+    pub(crate) const STEP: usize = IN_STEP;
+
+    /// `None` for a zero rate.
+    pub(crate) fn new(input_rate: u32) -> Option<Self> {
+        if input_rate == 0 {
+            return None;
+        }
+        let max = Self::max_model(input_rate);
+        Some(Self {
+            resampler: (input_rate != MODEL_RATE).then(|| LinearResampler::new(input_rate, MODEL_RATE)),
+            step: input_rate as f64 / MODEL_RATE as f64,
+            resampled: Vec::with_capacity(max),
+            block: Vec::with_capacity(max),
+        })
+    }
+
+    /// Model samples one [`Self::STEP`] of input can produce, plus the resampler's carried edge.
+    pub(crate) fn max_model(input_rate: u32) -> usize {
+        (IN_STEP as u64 * MODEL_RATE as u64).div_ceil(input_rate as u64) as usize + 2
+    }
+
+    /// Model samples a push of `samples` input samples can produce.
+    pub(crate) fn model_samples(&self, samples: usize) -> usize {
+        (samples as f64 / self.step).ceil() as usize + 2
+    }
+
+    /// Fills [`Self::block`] from at most [`Self::STEP`] input samples.
+    pub(crate) fn feed(&mut self, chunk: &[f32]) {
+        self.block.clear();
+        match self.resampler.as_mut() {
+            Some(r) => {
+                self.resampled.clear();
+                r.process(chunk, &mut self.resampled);
+                self.block.extend(self.resampled.iter().map(|&x| x as f64));
+            }
+            None => self.block.extend(chunk.iter().map(|&x| x as f64)),
+        }
+    }
+
+    /// The input sample count by which `model_count` model samples exist. The resampler emits
+    /// model sample `j` once input index `floor(j * step)` has arrived.
+    pub(crate) fn input_count(&self, model_count: u64) -> u64 {
+        if self.resampler.is_none() {
+            return model_count;
+        }
+        ((model_count.saturating_sub(1)) as f64 * self.step).floor() as u64 + 1
+    }
 }
 
 impl KickDetector {
@@ -113,28 +171,20 @@ impl KickDetector {
         if version != RECIPE_VERSION {
             return Err(KickError::Recipe(version));
         }
-        if input_rate == 0 {
-            return Err(KickError::BadRate(input_rate));
-        }
+        let input = ModelInput::new(input_rate).ok_or(KickError::BadRate(input_rate))?;
         let trees = Forest::from_container(c, "trees.")?;
         if trees.n_features() != F69 {
             return Err(ContainerError::WrongShape { name: "trees.n_features".into(), want: vec![F69], got: vec![trees.n_features()] }.into());
         }
         let base = BaseDetector::new(c)?;
-        let resampler = (input_rate != MODEL_RATE).then(|| LinearResampler::new(input_rate, MODEL_RATE));
-        // Model samples one input step can produce, plus the resampler's carried edge.
-        let max48 = (IN_STEP as u64 * MODEL_RATE as u64).div_ceil(input_rate as u64) as usize + 2;
         Ok(Self {
-            cands: Vec::with_capacity(base.max_candidates(max48)),
+            cands: Vec::with_capacity(base.max_candidates(ModelInput::max_model(input_rate))),
             base,
             extra: ExtraFeatures::new(c)?,
             trees,
             net: KickNet::new(c)?,
             stage: Stage::new(c)?,
-            resampler,
-            step: input_rate as f64 / MODEL_RATE as f64,
-            resampled: Vec::with_capacity(max48),
-            block: Vec::with_capacity(max48),
+            input,
             pending: [None; PENDING],
             head: 0,
             len: 0,
@@ -149,8 +199,7 @@ impl KickDetector {
     /// The most fires one `push` of `samples` input samples can append: one per base candidate
     /// emitted in it, plus every candidate already waiting.
     pub fn max_fires(&self, samples: usize) -> usize {
-        let model = (samples as f64 / self.step).ceil() as usize + 2;
-        self.base.max_candidates(model) + PENDING
+        self.base.max_candidates(self.input.model_samples(samples)) + PENDING
     }
 
     /// Candidates decided so far (fired or not).
@@ -171,26 +220,19 @@ impl KickDetector {
 
     /// Feeds mono input samples; hands each fire to `on_fire` as it is decided.
     pub fn push_with(&mut self, samples: &[f32], mut on_fire: impl FnMut(KickFire)) {
-        for chunk in samples.chunks(IN_STEP) {
-            self.block.clear();
-            match self.resampler.as_mut() {
-                Some(r) => {
-                    self.resampled.clear();
-                    r.process(chunk, &mut self.resampled);
-                    self.block.extend(self.resampled.iter().map(|&x| x as f64));
-                }
-                None => self.block.extend(chunk.iter().map(|&x| x as f64)),
-            }
+        for chunk in samples.chunks(ModelInput::STEP) {
+            self.input.feed(chunk);
             self.step_block(&mut on_fire);
         }
     }
 
     fn step_block(&mut self, on_fire: &mut impl FnMut(KickFire)) {
         self.cands.clear();
-        self.base.push(&self.block, &mut self.cands);
-        self.extra.push(&self.block);
-        self.net.push(&self.block);
-        self.samples48 += self.block.len() as u64;
+        let block = &self.input.block;
+        self.base.push(block, &mut self.cands);
+        self.extra.push(block);
+        self.net.push(block);
+        self.samples48 += block.len() as u64;
         for i in 0..self.cands.len() {
             let cand = self.cands[i];
             let ready = self
@@ -210,7 +252,7 @@ impl KickDetector {
             self.head = (self.head + 1) % PENDING;
             self.len -= 1;
             if self.decide(&p.cand) {
-                on_fire(KickFire { sample: self.input_count(p.ready), cand_hop: p.cand.cand_hop, avail_hop: p.cand.avail_hop });
+                on_fire(KickFire { sample: self.input.input_count(p.ready), cand_hop: p.cand.cand_hop, avail_hop: p.cand.avail_hop });
             }
         }
     }
@@ -226,15 +268,6 @@ impl KickDetector {
         // hstack(prof32, low16): the extra features' last 48 columns.
         descriptor.copy_from_slice(&self.extra54[EXTRA_DIMS - DESCRIPTOR_LEN..]);
         self.stage.decide(tree_p, net_p, &descriptor, c.features[0], c.avail_hop + 1, c.avail_hop).fire
-    }
-
-    /// The input sample count by which `model_count` model samples exist. The resampler emits
-    /// model sample `j` once input index `floor(j * step)` has arrived.
-    fn input_count(&self, model_count: u64) -> u64 {
-        if self.resampler.is_none() {
-            return model_count;
-        }
-        ((model_count.saturating_sub(1)) as f64 * self.step).floor() as u64 + 1
     }
 }
 

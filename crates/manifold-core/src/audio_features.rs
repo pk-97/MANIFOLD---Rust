@@ -38,6 +38,9 @@ pub struct BandFeatures {
     /// `transients` so binding one never blocks the other. See
     /// `docs/KICK_REALTIME_DESIGN.md`.
     pub kick: f32,
+    /// Snare trigger — 1.0 on the hop a snare fires, decaying after. Mid band only, from the
+    /// trained snare detector, stamped at the hit's emission.
+    pub snare: f32,
     /// Tracked dominant-object log-frequency position within this band's bin
     /// window, 0..1 (same mapping as `brightness`). HOLDS its last value on
     /// dropout — gate with `presence`, never read 0 as "low pitch". Filled by

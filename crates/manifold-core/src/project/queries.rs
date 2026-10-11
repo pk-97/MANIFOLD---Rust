@@ -383,6 +383,7 @@ impl Project {
                         feature.band.label().to_string()
                     }
                     crate::audio_mod::AudioFeatureKind::Kick => "Kick".to_string(),
+                    crate::audio_mod::AudioFeatureKind::Snare => "Snare".to_string(),
                     kind => format!("{} {}", kind.label(), feature.band.label()),
                 };
                 out.push((

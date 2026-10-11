@@ -940,7 +940,7 @@ fn process_audio_sample(
     let impulse_action = !info.is_trigger
         && !info.is_trigger_gate
         && matches!(m.action, TriggerAction::Step { .. } | TriggerAction::Random)
-        && matches!(m.source.feature.kind, AudioFeatureKind::Kick | AudioFeatureKind::Transients);
+        && matches!(m.source.feature.kind, AudioFeatureKind::Kick | AudioFeatureKind::Snare | AudioFeatureKind::Transients);
     let action_conditioned = if impulse_action {
         let mut action_shape = m.shape;
         action_shape.attack_ms = 0.0;
@@ -3140,11 +3140,12 @@ mod tests {
 
     fn snapshot_feature(kind: AudioFeatureKind, band: AudioBand, level: f32) -> AudioFeatureSnapshot {
         let mut s = AudioFeatureSnapshot { sends: vec![SendFeatures::default()], ..Default::default() };
-        let feature_band = if kind == AudioFeatureKind::Kick { AudioBand::Low } else { band };
+        let feature_band = kind.fixed_band().unwrap_or(band);
         let band_features = &mut s.sends[0].bands[feature_band.index()];
         match kind {
             AudioFeatureKind::Transients => band_features.transients = level,
-            AudioFeatureKind::Kick => s.sends[0].bands[AudioBand::Low.index()].kick = level,
+            AudioFeatureKind::Kick => band_features.kick = level,
+            AudioFeatureKind::Snare => band_features.snare = level,
             AudioFeatureKind::Amplitude => band_features.amplitude = level,
             _ => panic!("test snapshot helper only supports impulse and amplitude features"),
         }
@@ -3381,7 +3382,7 @@ mod tests {
         let mut m = ParameterAudioMod::new(
             param_id.into(),
             send_id.clone(),
-            AudioFeature::new(kind, if kind == AudioFeatureKind::Kick { AudioBand::Low } else { AudioBand::Full }),
+            AudioFeature::new(kind, kind.fixed_band().unwrap_or(AudioBand::Full)),
         );
         m.shape = AudioModShape { attack_ms: 0.0, release_ms: 0.0, ..Default::default() };
         m.action = action;
@@ -3392,7 +3393,7 @@ mod tests {
 
     #[test]
     fn impulse_actions_bypass_attack_release_and_keep_held_signals_single_shot() {
-        for kind in [AudioFeatureKind::Kick, AudioFeatureKind::Transients] {
+        for kind in [AudioFeatureKind::Kick, AudioFeatureKind::Snare, AudioFeatureKind::Transients] {
             for action in [
                 TriggerAction::Step { amount: 0.1, wrap: WrapMode::Clamp },
                 TriggerAction::Random,
@@ -3432,7 +3433,7 @@ mod tests {
     #[test]
     fn impulse_actions_follow_default_detector_decay_between_realistic_pulses() {
         let decay_per_tick = 0.85_f32.powi(3);
-        for kind in [AudioFeatureKind::Kick, AudioFeatureKind::Transients] {
+        for kind in [AudioFeatureKind::Kick, AudioFeatureKind::Snare, AudioFeatureKind::Transients] {
             for action in [
                 TriggerAction::Step { amount: 0.1, wrap: WrapMode::Clamp },
                 TriggerAction::Random,
