@@ -8,7 +8,11 @@
    "channels": [
     "flat"
    ],
-   "epochs": 12
+   "epochs": 12,
+   "swa_epochs": 0,
+   "batch": 256,
+   "lr": 0.002,
+   "precision": "float32"
   }
  },
  "combine": "net",

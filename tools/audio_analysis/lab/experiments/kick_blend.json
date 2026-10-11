@@ -6,7 +6,11 @@
    "past_ms": 150,
    "ahead_ms": 40,
    "channels": [],
-   "epochs": 12
+   "epochs": 12,
+   "swa_epochs": 0,
+   "batch": 256,
+   "lr": 0.002,
+   "precision": "float32"
   },
   "trees": {
    "measures": [
@@ -37,5 +41,5 @@
   3,
   4
  ],
- "folds": 8
+ "folds": 4
 }

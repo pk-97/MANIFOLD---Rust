@@ -96,7 +96,9 @@ def train():
             items.append((lab[u], c.emit_s, held[u], c.avail, c.sr))
     cutoff = choose(items)
     data = run.build(CFG, {t: lab[t] for t in exam}, songs, nnm.device(), log=lambda m: None)
-    net = nnm.train([data[t] for t in exam], 0, epochs=CFG.models['net']['epochs'])
+    p = CFG.models['net']
+    net = nnm.train([data[t] for t in exam], 0, epochs=p['epochs'], swa_epochs=p['swa_epochs'], batch=p['batch'],
+                    lr=p['lr'], precision=p['precision'])
     train_id = f'snare-{datetime.date.today().isoformat()}-{git_id()}'
     final = dict(train_id=train_id, cutoff=float(cutoff), refractory_s=REFR, songs=sorted(exam), held_out_run=run_id,
                  net=dict(state_dict={k: v.detach().cpu().numpy().astype(np.float32) for k, v in net.state_dict().items()},
