@@ -15,7 +15,7 @@ class Experiment:
     family: str
     candidates: str    # 'snare:DB'
     net: dict          # past_ms (slice), ahead_ms (look past emission), flat (noisiness channel), epochs
-    sampling: dict     # per_song 'median'; generated 'songs' (ordinary songs, legacy SNARE_GEN=train) or a share
+    sampling: dict     # per_song 'median'; generated 'songs' (ordinary songs) or a share
     train: tuple       # ('project',) or ('project', 'generated')
     seeds: tuple
     folds: int         # 0: one net per song; N: N fixed song groups

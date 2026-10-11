@@ -129,7 +129,7 @@ def setup(cfg):
 
 
 def build(cfg, lab, songs, dev, log=print):
-    """{song: kick_goal_nn.Song} from the cache: the legacy snare_net inputs, byte for byte (test_input_parity)."""
+    """{song: kick_goal_nn.Song} from the cache: the retired snare runner's inputs, byte for byte (test_input_parity)."""
     from tools.audio_analysis.eval.detector_eval import HOP, rows
     from tools.audio_analysis.eval.kick_goal_nn import Song
     from tools.audio_analysis.lab import cache

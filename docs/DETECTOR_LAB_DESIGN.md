@@ -1,6 +1,6 @@
 # Detector Lab — one place to label, train and judge MANIFOLD's audio detectors
 
-**Status:** IN PROGRESS · 2026-10-11 · P1 and P2 shipped on the branch, P3 next · Opus 5.5 lead; revised after an Opus adversarial review
+**Status:** IN PROGRESS · 2026-10-11 · P1–P4 shipped on the branch (P3 reports in the lab cache), P5 next · Opus 5.5 lead; revised after an Opus adversarial review
 **Prerequisites:** none
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (phase briefs) and section 6 (seam briefs) before starting any phase.
 

@@ -7,8 +7,8 @@ every note probability 1, so every note is a certain label. Train only; the held
 Positives: snare and clap pads (keys 38, 39), layers within layer_s one event. Every other note (other pads, bass,
 leads) more than far_s from a snare is a vouched negative. Nothing is unscored: rolls are labelled note by note, and
 echoes and tails are deliberately unlabelled, so they train as non-snares.
-Writes GOAL/snare_wip/{song}.npy (48 kHz full mix) and GOAL/snare_labels_generated.json; snare_net reads them with
-SNARE_GEN=train|eval.
+Writes GOAL/snare_wip/{song}.npy (48 kHz full mix) and GOAL/snare_labels_generated.json; the lab reads them
+(lab/registry.py, lab/run.py).
 Usage: snare_generated.py"""
 import json
 import re

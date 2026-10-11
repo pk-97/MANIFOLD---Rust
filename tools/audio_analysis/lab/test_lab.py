@@ -19,7 +19,7 @@ import numpy as np  # noqa: E402
 from tools.audio_analysis.lab import audit, cache, compare, run, score  # noqa: E402
 from tools.audio_analysis.lab.registry import Song, load, sha256_file  # noqa: E402
 
-GOLDEN = Path(__file__).with_name('tests') / 'golden' / 'snare_net_s0_snare_geneval_snare_folds4'
+GOLDEN = Path(__file__).with_name('tests') / 'golden' / 'legacy_snare_folds4_s0'
 
 
 def song(id_, path):
@@ -118,7 +118,7 @@ class LabTests(unittest.TestCase):
                 compare.check(a, dict(a, run_id='b', **{k: v}))
 
     def test_scorer_parity(self):
-        """The lab scorer on a legacy snare_net save reproduces the legacy results file exactly."""
+        """The lab scorer on a save of the retired snare runner reproduces the legacy results file exactly."""
         got = json.loads(json.dumps(score.legacy(GOLDEN.with_suffix('.npz')), default=float))
         want = json.loads(GOLDEN.with_suffix('.json').read_text())['results']['net']['per_song']
         self.assertEqual(sorted(got), sorted(want))
@@ -126,7 +126,7 @@ class LabTests(unittest.TestCase):
             self.assertEqual(got[t], want[t], t)
 
     def test_input_parity(self):
-        """The lab hands held_out_nets what legacy snare_net did: song order, groups, untrained songs, and
+        """The lab hands held_out_nets what the retired snare runner did: song order, groups, untrained songs, and
         byte-identical Song inputs (one song per audio source kind)."""
         from tools.audio_analysis.eval.detector_eval import HOP, rows
         from tools.audio_analysis.eval.detector_net import groups

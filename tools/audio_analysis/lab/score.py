@@ -5,7 +5,7 @@ project songs, never on generated or recall-only songs. Writes report_s<seed>.js
 results.net.per_song (detector_compare's layout), generated songs in their own section.
 
 Usage: score.py RUN_ID
-       score.py --legacy NPZ [CONFIG]   (a legacy snare_net save, scored by these rules; CONFIG default snare_base)"""
+       score.py --legacy NPZ [CONFIG]   (a save of the retired snare runner, scored by these rules; CONFIG default snare_base)"""
 import json
 import sys
 import time
@@ -67,7 +67,7 @@ def score_run(run_id, log=print):
 
 
 def legacy(npz, config='snare_base'):
-    """{song: song_result} for a legacy snare_net save; the scorer-parity oracle (test_scorer_parity)."""
+    """{song: song_result} for a save of the retired snare runner; the scorer-parity oracle (test_scorer_parity)."""
     from tools.audio_analysis.lab.config import load as load_cfg
     from tools.audio_analysis.lab.registry import load
     cfg = load_cfg(config)

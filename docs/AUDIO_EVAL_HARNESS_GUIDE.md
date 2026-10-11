@@ -16,6 +16,9 @@ research log (attack probes, rejection trials, the H-series) lives in git histor
 transferable rules are below. These rules apply to every trained detector (kick now,
 snare and clap next, under BUG-9ngk8 (trained audio detectors)).
 
+Snare training and every A/B run through the Detector Lab: `tools/audio_analysis/lab/README.md` for the steps,
+[DETECTOR_LAB_DESIGN.md](DETECTOR_LAB_DESIGN.md) for the rules. Bass, synth and kick move there next.
+
 - **Labels come from Peter's projects and stems, never public datasets** (commercial
   licensing). Project notes are shifted by an export offset proven against a stem, and
   clipped to the master's length — project data past the master's end does not exist
