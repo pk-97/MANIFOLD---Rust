@@ -432,8 +432,9 @@ def builder(x):
             self.assertEqual(sorted(got), sorted(want), golden)
             from tools.audio_analysis.eval.detector_eval import covered
             for t in want:
-                # Scored minutes count overlapping unscored spans once since the P6 review; all else is unchanged.
-                self.assertEqual({k: v for k, v in got[t].items() if k != 'minutes'},
+                # Scored minutes count overlapping unscored spans once since the P6 review; all else is unchanged
+                # (the gap recall keys are new).
+                self.assertEqual({k: got[t][k] for k in want[t] if k != 'minutes'},
                                  {k: v for k, v in want[t].items() if k != 'minutes'}, f'{golden} {t}')
                 self.assertAlmostEqual(got[t]['minutes'],
                                        max(0.0, lab[t]['duration_s'] - covered(lab[t]['unscored'], 0.0, lab[t]['duration_s'])) / 60,
@@ -537,6 +538,87 @@ def builder(x):
                               (song.slices(torch.from_numpy(idx), torch.from_numpy(shift)), old_slices(song, idx, shift))):
                 self.assertEqual(got.dtype, want.dtype)
                 self.assertTrue(torch.equal(got, want))
+
+    def test_stage_config(self):
+        """A stage config is checked: it needs song groups, known measures and a [measure, column] level or none."""
+        d = json.loads((config.EXPERIMENTS / 'kick_gen50_staged.json').read_text())
+        config.build('ok', d)
+        st = d['stage']
+        for bad in (dict(d, folds=0), dict(d, stage=dict(st, shape=['nope'])), dict(d, stage=dict(st, level=['f15'])),
+                    dict(d, stage=dict(st, windows_s=[])), dict(d, stage=dict(st, extra=1))):
+            with self.assertRaises(ValueError):
+                config.build('bad', bad)
+
+    def test_stage_inputs_match_release(self):
+        """The kick stage's inputs are the shipped kick's (kick_release: self_features over prof32 and low16, level
+        f15 column 0, 8 s), from the lab's candidates and measures; without a level the level column is left out."""
+        from tools.audio_analysis.eval.kick_goal_eval import Goal
+        from tools.audio_analysis.eval.kick_goal_selfsim import self_features
+        from tools.audio_analysis.lab import components, stage
+        cfg = config.load('kick_gen50_staged')
+        lab = run.labels('kick')[0]
+        g = Goal(mode='v3')
+        t = 'bad_guy_128bpm'
+        song = load()[t]
+        part = stage.song_parts(cfg, song, lab[t], build=False)
+        np.testing.assert_array_equal(part[2], g.records[t]['emit_s'])
+        p = np.random.default_rng(0).uniform(0, 1, len(part[2]))
+        m = {k: components.measure(song, 'kick', 'kick', k, build=False) for k in ('f15', 'prof32', 'low16')}
+        want = self_features(p, np.hstack([m['prof32'], m['low16']]), m['f15'][:, 0], part[2], 8.0)
+        np.testing.assert_array_equal(stage.inputs(cfg.stage, part, p), want)
+        no_level = stage.inputs(dict(cfg.stage, level=None, windows_s=[8.0, 4.0]), part, p)
+        self.assertEqual(no_level.shape[1], 1 + 3 + 3)
+        np.testing.assert_array_equal(no_level[:, :4], want[:, [0, 1, 2, 4]])
+
+    def test_stage_never_sees_judged_song(self):
+        """No staged prediction comes from a stage that learnt on the song, and the song's own inputs come from models
+        that never trained on it: outer stages judge on the outer models, pair stages on the pair models. The outer
+        stage also learns only from models that never saw the group it judges."""
+        from unittest import mock
+
+        from tools.audio_analysis.lab import stage
+        cfg = config.build('x', json.loads((config.EXPERIMENTS / 'snare_gen50_staged.json').read_text()))
+        cfg = config.Experiment(**{**cfg.__dict__, 'train': ('project',), 'sampling': dict(per_song='median')})
+        lab = {t: {} for t in 'abcdefgh'}
+        songs = {t: type('S', (), dict(kind='project'))() for t in lab}
+        grps, trainings, _ = models.plan(cfg, lab, songs)
+        code = {t: i for i, t in enumerate(lab)}
+        name = {i: t for t, i in code.items()}
+        n = 6
+        parts = {t: (np.full((n, 1), code[t]), None, np.arange(n) * .5,
+                     (np.ones(n, bool), np.arange(n) % 2.0, np.zeros(n, bool))) for t in lab}
+        final = [{t: np.full(n, float(i)) for t in tr['held']} for i, tr in enumerate(trainings)]
+
+        class Fit:
+            def __init__(self, rows):
+                self.seen = {(int(x[0, 0]), name[int(x[0, 1])]) for x, *_ in rows}
+
+            def predict_proba(self, x):
+                i, t = int(x[0, 0]), name[int(x[0, 1])]
+                assert t not in {u for _, u in self.seen}, t
+                assert t not in trainings[i]['trained'], t
+                if len(trainings[i]['without']) == 1:
+                    assert all(t not in trainings[j]['trained'] for j, _ in self.seen), t
+                return np.column_stack([1 - x[:, 0] / 100, x[:, 0] / 100])
+        with mock.patch.object(stage, 'inputs', lambda st, part, p: np.column_stack([p, part[0][:, 0]])), \
+                mock.patch.object(models, 'fit_trees', lambda st, rows, rs, share: Fit(rows)):
+            out = stage.train(cfg, grps, trainings, final, parts, 0, log=lambda m: None)
+        at = {tuple(sorted(tr['without'])): i for i, tr in enumerate(trainings)}
+        for k, g in enumerate(grps):
+            for t in g:
+                self.assertEqual(out[f'staged__{t}'][0] * 100, at[(k,)])
+            for j, h in enumerate(grps):
+                if j != k:
+                    for u in h:
+                        self.assertAlmostEqual(out[f'pair{k}__staged__{u}'][0] * 100, at[tuple(sorted((k, j)))])
+
+    def test_after_gap(self):
+        """A positive opens a passage only after a fully known gap with no positive, roll hit or run event in it."""
+        from tools.audio_analysis.eval.detector_eval import after_gap
+        s = dict(positives=[.5, 3.0, 3.4, 6.0, 9.0], dropped=[5.0], unscored=[[0, .1]])
+        self.assertEqual(list(after_gap(s)), [1, 4])
+        self.assertEqual(list(after_gap(dict(s, unscored=[[0, .1], [1.5, 1.6]]))), [4])
+        self.assertEqual(list(after_gap(dict(s, dense_pos=[8.0]))), [1])
 
 
 if __name__ == '__main__':

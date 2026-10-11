@@ -17,6 +17,7 @@ import numpy as np
 
 HOP, TOL, LAB_TOL, REFR = 256, .070, .035, .060
 EDGE = 1e-12  # a candidate exactly LAB_TOL from a label is inside the window, whatever the float rounding
+GAP_S = 2.0   # a positive with no known hit this long before it opens a passage (after_gap)
 THRESHOLDS = np.linspace(.05, .99, 95)
 
 
@@ -144,8 +145,34 @@ def song_result(s, emit, p, avail, th, sr, ahead=0.0, hop=HOP):
         if abs(e - t) <= tol(s):
             late.append(round(1000 * (e + ahead - t), 1))
     gone = covered(s['unscored'], 0.0, s['duration_s'])
+    pos = np.array(s['positives'])
+    first = after_gap(s)
+    if not len(first) or not len(fired):
+        caught = np.zeros(len(first), bool)
+    elif 'window_s' in s:
+        caught = within(pos[first], fired, *s['window_s'])
+    else:
+        caught = nearest(pos[first], fired) <= tol(s)
     return dict(matched=m, labels=n, extra=len(false), cutoff=float(th), minutes=max(0.0, s['duration_s'] - gone) / 60,
-                late_ms=late, false_s=[round(float(v), 3) for v in false])
+                late_ms=late, false_s=[round(float(v), 3) for v in false], gap_labels=int(len(first)),
+                gap_matched=int(caught.sum()))
+
+
+def after_gap(s, gap=GAP_S):
+    """Indices of positives that open a passage: no known hit (positives, roll hits left out, run events) in the gap
+    before them, and that gap fully known (inside the song, clear of unscored windows). A drop's first kick is one;
+    history stages must not quietly lose them."""
+    pos = np.array(s['positives'])
+    known = np.sort(np.concatenate([pos, np.array(s.get('dropped') or []), np.array(s.get('dense_pos') or [])]))
+    out = []
+    for i, t in enumerate(pos):
+        a = t - gap
+        if a < 0 or np.any((known > a) & (known < t - 1e-9)):
+            continue
+        if any(u < t and v > a for u, v in s['unscored']):
+            continue
+        out.append(i)
+    return np.array(out, int)
 
 
 def pooled(items, th):

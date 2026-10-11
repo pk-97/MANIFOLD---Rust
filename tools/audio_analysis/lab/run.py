@@ -34,11 +34,13 @@ def imports():
     import tools.audio_analysis.eval.kick_attack_rejection  # noqa: F401
     import tools.audio_analysis.eval.kick_goal_eval  # noqa: F401
     import tools.audio_analysis.eval.kick_goal_nn  # noqa: F401
+    import tools.audio_analysis.eval.kick_goal_selfsim  # noqa: F401
     import tools.audio_analysis.eval.snare_cands  # noqa: F401
     import tools.audio_analysis.lab.cache  # noqa: F401
     import tools.audio_analysis.lab.components  # noqa: F401
     import tools.audio_analysis.lab.models  # noqa: F401
     import tools.audio_analysis.lab.registry  # noqa: F401
+    import tools.audio_analysis.lab.stage  # noqa: F401
 
 
 def parts(cfg):
@@ -52,6 +54,9 @@ def parts(cfg):
         out['frames'] = {m: code_id(components.FRAME_MEASURES[m]) for m in cfg.net['channels']}
     if 'trees' in cfg.models:
         out['measures'] = {m: code_id(components.MEASURES[m]) for m in cfg.models['trees']['measures']}
+    if cfg.stage:
+        from tools.audio_analysis.lab.stage import measures_of
+        out['stage'] = {m: code_id(components.MEASURES[m]) for m in measures_of(cfg.stage)}
     return out
 
 
@@ -138,8 +143,10 @@ def setup(cfg):
     meta = dict(schema=META_SCHEMA, run_id=run_id, config=cfg.key(), names=[cfg.name], labels_sha256=sha,
                 songs=list(lab), exam=exam, generated=[t for t in lab if t not in exam], excluded=failed,
                 recall_only=[t for t in exam if lab[t]['positives_only']], groups=grps, trainings=trainings,
-                layers=[*sorted(cfg.models), *(['combined'] if models.final_layer(cfg) == 'combined' else [])],
-                final=models.final_layer(cfg), modules=mods, parts=used, content=content, label_ids=label_ids)
+                layers=[*sorted(cfg.models), *(['combined'] if models.final_layer(cfg) == 'combined' else []),
+                        *(['staged'] if cfg.stage else [])],
+                final='staged' if cfg.stage else models.final_layer(cfg), modules=mods, parts=used, content=content,
+                label_ids=label_ids)
     return lab, songs, meta
 
 
@@ -241,9 +248,10 @@ def layer(cfg, model, meta, seed, data, trees, log):
     return out, secs
 
 
-def train_layers(cfg, meta, seed, data, trees, log=print):
+def train_layers(cfg, meta, seed, data, trees, log=print, stage_parts=None):
     """({save key: probabilities}, record): each model's layer, then the combined one, saved per song as layer__song
-    (outer models) and pair{k}__layer__song (the predictions that choose group k's cutoff)."""
+    (outer models) and pair{k}__layer__song (the predictions that choose group k's cutoff); with a stage, its
+    staged layer on top (lab/stage.py, from stage_parts)."""
     from tools.audio_analysis.lab import models
     trainings, grps = meta['trainings'], meta['groups']
     lay, secs = {}, {}
@@ -258,6 +266,12 @@ def train_layers(cfg, meta, seed, data, trees, log=print):
         for t, prefix in models.save_keys(grps, n).items():
             for name in lay:
                 held[f'{prefix}__{name}__{t}' if prefix else f'{name}__{t}'] = lay[name][i][t]
+    if cfg.stage:
+        from tools.audio_analysis.lab import stage
+        t0 = time.time()
+        held.update(stage.train(cfg, grps, trainings, lay[models.final_layer(cfg)], stage_parts, seed, log))
+        record = [dict(r, seconds=dict(r['seconds'], stage=round(time.time() - t0, 1) if i == 0 else 0.0))
+                  for i, r in enumerate(record)]
     return held, record
 
 
@@ -278,9 +292,15 @@ def child(cfg, seed, run_id):
     todo = [m for m in cfg.models if not (LAYERS / model_key(cfg, m, meta) / f's{seed}.npz').exists()]
     data = build(cfg, lab, songs, dev, log=lambda m: None) if 'net' in todo else None
     trees = tree_rows(cfg, lab, songs) if 'trees' in todo else None
+    if cfg.stage:
+        from tools.audio_analysis.lab.stage import song_parts
+        stage_parts = {t: song_parts(cfg, songs[t], lab[t]) for t in lab}
+    else:
+        stage_parts = None
     built = time.time()
     with gpu_queue.hold('detector-lab') if 'net' in todo else contextlib.nullcontext():
-        held, record = train_layers(cfg, meta, seed, data, trees, log=lambda m: print(m, flush=True))
+        held, record = train_layers(cfg, meta, seed, data, trees, log=lambda m: print(m, flush=True),
+                                    stage_parts=stage_parts)
     keys = ('without', 'held', 'trained', 'clips')
     if [{k: r[k] for k in keys} for r in record] != [{k: n[k] for k in keys} for n in meta['trainings']]:
         sys.exit('the models trained differ from the plan; nothing saved')
@@ -308,6 +328,10 @@ def warm(cfg):
                 components.frame(songs[t], m)
         for m in cfg.models.get('trees', {}).get('measures', ()):
             components.measure(songs[t], cfg.candidates, cfg.family, m)
+        if cfg.stage:
+            from tools.audio_analysis.lab.stage import measures_of
+            for m in measures_of(cfg.stage):
+                components.measure(songs[t], cfg.candidates, cfg.family, m)
         print(f'{t}: {time.time() - t0:.1f} s', flush=True)
 
 

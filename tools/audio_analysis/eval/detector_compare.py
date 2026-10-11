@@ -10,7 +10,8 @@ scored count. Prints:
 - per song, the hits and false fires each side averages over seeds; a sign test over songs on per-song F1;
 - songs losing at least LOSS_HITS hits on average among songs with at least LOSS_LABELS labels (the per-song bar;
   points on a 14-label song are 3 kicks of noise);
-- when the results carry them, false fires per scored minute and trigger lateness (median and 90th percentile).
+- when the results carry them, false fires per scored minute and trigger lateness (median and 90th percentile),
+  and the recall of hits that open a passage after a gap (detector_eval.after_gap: drop kicks).
 Recall-only songs count toward recall only.
 Usage: detector_compare.py A1.json[,A2.json...] B1.json[,B2.json...] [--key KEY]"""
 import json
@@ -73,6 +74,15 @@ def timing(side, songs, recall_only=RECALL_ONLY):
     return f' | {false / mins:.2f} false per minute | late median {q(.5):.0f} ms, p90 {q(.9):.0f} ms'
 
 
+def gap_recall(side, songs):
+    """'' or the recall of hits that open a passage (detector_eval.after_gap), averaged over seeds."""
+    if not all('gap_labels' in ps[t] for ps in side for t in songs):
+        return ''
+    m = sum(ps[t]['gap_matched'] for ps in side for t in songs) / len(side)
+    n = sum(side[0][t]['gap_labels'] for t in songs)
+    return f' | first hits after a gap {m / max(1, n):.3f} ({m:.1f} of {n})'
+
+
 def song_bootstrap(sides, songs, recall_only=RECALL_ONLY, draws=DRAWS):
     """(pooled F1 difference B - A, 5th and 95th percentile) over songs drawn with replacement, both sides on the
     same draw; per-song hits and false fires are averaged over seeds first."""
@@ -105,7 +115,7 @@ def compare(sides, recall_only=RECALL_ONLY, out=print):
         f1 = [pooled(ps, songs, recall_only)[2] for ps in side]
         stats.append(mean_se(f1))
         out(f'{name}: F1 ' + ' '.join(f'{v:.4f}' for v in f1) + f' | mean {stats[-1][0]:.4f} ± {stats[-1][1]:.4f}'
-            + timing(side, songs, recall_only) + f' | {len(songs)} songs')
+            + timing(side, songs, recall_only) + gap_recall(side, songs) + f' | {len(songs)} songs')
     diff, se = stats[1][0] - stats[0][0], math.hypot(stats[0][1], stats[1][1])
     out(f'B - A over seeds (mean of each seed\'s pooled F1): {100 * diff:+.2f} ± {100 * se:.2f} F1 points')
     rows = []

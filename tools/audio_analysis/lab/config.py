@@ -1,7 +1,7 @@
 """Experiment configs (docs/DETECTOR_LAB_DESIGN.md D6, D9, P6): one JSON file per experiment in lab/experiments/;
 an A/B is two configs. A config builds a detector from parts (lab/components.py): a candidate finder, models (net,
-trees or both), how they combine, and later the song-memory stage. Every key is required and no other key is
-allowed, so a typo is an error, not a silent default. Schema 1 configs (one net, a 'flat' switch) migrate on read,
+trees or both), how they combine, and optionally the song-history stage (lab/stage.py). Every key is required and
+no other key is allowed, so a typo is an error, not a silent default. Schema 1 configs (one net, a 'flat' switch) migrate on read,
 and a schema 2 net without the training options reads them as NET_DEFAULTS (today's training)."""
 import json
 from dataclasses import asdict, dataclass
@@ -25,7 +25,7 @@ class Experiment:
     candidates: str    # a finder rule (components.FINDERS)
     models: dict       # {'net': {past_ms, ahead_ms, channels, epochs, NET_DEFAULTS keys}, 'trees': {...}}: one or both
     combine: str       # 'net' | 'trees' | 'mean_logit' (both)
-    stage: dict | None  # the song-memory stage (P6 second pass)
+    stage: dict | None  # the song-history stage (lab/stage.py STAGE_KEYS) or None
     sampling: dict     # per_song 'median'; generated 'songs' (ordinary songs) or a share
     train: tuple       # ('project',) or ('project', 'generated')
     seeds: tuple
@@ -89,7 +89,8 @@ def check(d, where=''):
     if COMBINES.get(d['combine']) != tuple(sorted(m)):
         raise ValueError(f'{where}: combine {d["combine"]!r} does not match models {sorted(m)}')
     if d['stage'] is not None:
-        raise ValueError(f'{where}: the stage arrives in the P6 second pass')
+        from tools.audio_analysis.lab.stage import check as check_stage
+        check_stage(d['stage'], int(d['folds']), MEASURES, where)
     train = tuple(d['train'])
     if train not in (('project',), ('project', 'generated')):
         raise ValueError(f'{where}: train is ["project"] or ["project", "generated"]')
