@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """BUG-qy8q7 (drop kicks missed after a high-passed build-up roll): reproduce it on simulated build-ups and find
-which part of the released kick pipeline (kick_release.reference: trees + net blend, then the 8 s song-relative
-stage) loses the kicks.
+which part of the shipped kick pipeline (lab/release.py reference on the shipped model's release record: trees +
+net blend, then the 8 s song-relative stage) loses the kicks.
 
 Each clip: 8 bars of build-up then 8 bars of drop at TEMPO bpm over a kick-free music bed. Build: a kick roll on
 quarters (bars 1-4), eighths (5-6) and sixteenths (7-8), each hit high-passed (4th-order Butterworth) at a cutoff
@@ -17,7 +17,10 @@ import os
 import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
-from tools.audio_analysis import kick_release as K  # noqa: E402  (sets the recipe env before the research modules)
+from tools.audio_analysis.lab import release  # noqa: E402
+
+# The shipped kick's record (release.py convert-v1 kick), its net env pinned before the research modules.
+REC = release.open_release(release.asset_train_id('kick'))
 import numpy as np  # noqa: E402
 from scipy.signal import butter, sosfilt  # noqa: E402
 
@@ -81,20 +84,21 @@ def caught(times, fire_s):
 
 
 def main():
+    from tools.audio_analysis.eval.detector_eval import fires
     from tools.audio_analysis.eval.kick_goal_labels import load
     os.environ['KICK_GOAL_NN_DEVICE'] = 'cpu'
-    final = K.load_final()
-    net = K.net_module(final)
+    nets = release.net_modules(REC)
     for song, (kick_path, bed_path) in SOURCES.items():
         stem = load(str(ABL / kick_path), SR)
         bed = load(str(ABL / bed_path), SR)[int(BED_START_S * SR):]
         for j, shot in enumerate(one_shot(stem)):
             for mode in MODES:
                 x, times, sec = clip(shot, bed, mode)
-                r = K.reference(x, final, net)
-                shipped = r['emit_s'][r['fires']]
-                blend = r['emit_s'][K.fires(r['blend_p'], r['avail_hop'], SR, r['hop'], final['cutoff'])]
-                hit_s, hit_b, hit_c = caught(times, shipped), caught(times, blend), caught(times, r['onset_s'])
+                r = release.reference(REC, x, nets)
+                c = r['c']
+                shipped = c.emit_s[r['fires']]
+                blend = c.emit_s[fires(r['p_combined'], c.avail, REC['cutoff'], SR, REC['refractory_s'], c.hop)]
+                hit_s, hit_b, hit_c = caught(times, shipped), caught(times, blend), caught(times, c.onset_s)
                 rows = []
                 for s in dict.fromkeys(sec):
                     m = sec == s

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""BUG-9ngk8.2.1 (fast breakbeats and rolls): where does the released snare pipeline (snare_release.reference:
-candidates, then the net at its cutoff with a 60 ms refractory) lose fast snares?
+"""BUG-9ngk8.2.1 (fast breakbeats and rolls): where does the shipped snare pipeline (lab/release.py reference on
+the shipped model's release record: candidates, then the net at its cutoff with a 60 ms refractory) lose fast snares?
 
 Each clip puts snare one-shots (the loudest isolated hits of a snare stem) on a music bed at TEMPO bpm, 4 bars per
 pattern: backbeat (2 and 4, the control), eighths, sixteenths, a sixteenth roll that rises 12 dB, and a break
@@ -11,7 +11,10 @@ Usage: snare_roll_sim.py"""
 import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
-from tools.audio_analysis import snare_release as R  # noqa: E402  (sets the recipe env before the research modules)
+from tools.audio_analysis.lab import release  # noqa: E402
+
+# The shipped snare's record (release.py convert-v1 snare), its net env pinned before the research modules.
+REC = release.open_release(release.asset_train_id('snare'))
 import numpy as np  # noqa: E402
 
 SR = 48000
@@ -53,12 +56,9 @@ def patterns():
 
 
 def main():
-    import pickle
     from tools.audio_analysis.eval.detector_eval import nearest
     from tools.audio_analysis.eval.kick_goal_labels import load
-    with open(R.FINAL, 'rb') as fh:
-        final = pickle.load(fh)
-    net = R.net_module(final)
+    nets = release.net_modules(REC)
     bed = load(str(BED), SR)[int(BED_START_S * SR):]
     beat = 60 / TEMPO
     tot = {}
@@ -70,9 +70,10 @@ def main():
                 i = int(round(t * SR)) - int(.003 * SR)
                 x[i:i + len(shot)] += shot * 10 ** (gain / 20)
             x = x / max(1.0, np.abs(x).max() / .98)
-            r = R.reference(x, final, net)
-            fired = r['emit_s'][np.searchsorted(r['avail_hop'], r['fires'])] if len(r['fires']) else np.zeros(0)
-            cand = int(np.sum(nearest(times, r['onset_s']) <= .035)) if len(r['onset_s']) else 0
+            r = release.reference(REC, x, nets)
+            c = r['c']
+            fired = c.emit_s[r['fires']]
+            cand = int(np.sum(nearest(times, c.onset_s) <= .035)) if len(c.onset_s) else 0
             hit = int(np.sum(nearest(times, fired) <= .07)) if len(fired) else 0
             a = tot.setdefault(name, [0, 0, 0])
             a[0], a[1], a[2] = a[0] + len(times), a[1] + cand, a[2] + hit

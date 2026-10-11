@@ -1,36 +1,34 @@
-"""Kick model export hook for the base piece: candidates and the 15 base features.
+"""Model file part `base.*`: the kick finder and its 15 features (docs/DETECTOR_RUNTIME_DESIGN.md section 4).
 
-Rust reader: crates/manifold-audio/src/kick/base/. Reference: tools/audio_analysis/eval/kick_fusion_bandwise.py
-over kick_fusion_features.py, kick_attack_rejection.causal_features and kick_upper_cue.upper_features. Every
-value is computed by the reference's own constants and calls.
+Reference: eval/kick_fusion_bandwise.py over kick_fusion_features.py, kick_attack_rejection.causal_features and
+kick_upper_cue.upper_features. Every value is computed from the reference's own constants and calls.
 """
 from __future__ import annotations
 
 import math
-import sys
-from pathlib import Path
 
 import numpy as np
 from scipy.signal import butter
 
-_ROOT = Path(__file__).resolve().parents[3]
-if str(_ROOT) not in sys.path:
-    sys.path.append(str(_ROOT))
+from tools.audio_analysis.eval import kick_attack_rejection as attack
+from tools.audio_analysis.eval import kick_fusion_bandwise as bandwise
+from tools.audio_analysis.eval import kick_fusion_features as base
+from tools.audio_analysis.eval import kick_upper_cue as upper
 
-from tools.audio_analysis.eval import kick_attack_rejection as attack  # noqa: E402
-from tools.audio_analysis.eval import kick_fusion_bandwise as bandwise  # noqa: E402
-from tools.audio_analysis.eval import kick_fusion_features as base  # noqa: E402
-from tools.audio_analysis.eval import kick_upper_cue as upper  # noqa: E402
-
+PREFIX = 'base.'
 SR = 48000
+NAMES = frozenset(PREFIX + n for n in (
+    'sample_rate', 'hop', 'band_sos', 'env_alpha', 'env_gain', 'fft_window', 'fft_bins', 'log2_freq', 'band_splits',
+    'span', 'deadline', 'eps', 'active_floor', 'low_ratio', 'body_ratio', 'upper_ratio', 'upper_count', 'log_clip',
+    'lag_norm_s'))
 
 
 def _sos(low, high):
     return butter(2, [low, high], btype='bandpass', fs=SR, output='sos')
 
 
-def model_entries(final: dict) -> dict[str, np.ndarray]:
-    del final  # the base piece has no learned numbers
+def entries(record: dict) -> dict[str, np.ndarray]:
+    del record  # the finder has no learned numbers
     hop = max(1, round(SR * 256 / 48_000))
     # fusion_features reads envelopes band 0 (low) and 1 (body) and upper bands 1..3; the low band is the same
     # filter in both helpers and causal band 2 is never read.

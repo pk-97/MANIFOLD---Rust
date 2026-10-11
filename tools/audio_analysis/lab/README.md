@@ -29,8 +29,13 @@ already trained is reused, so changing only the trees retrains no nets. `--warm`
 apart, on the generated songs. The headline is the 90% interval over songs; seed spread is the second line. It
 refuses a pair whose exam songs or labels differ, and one-net-per-song configs.
 
-**Ship the snare.** `lab/run.py snare_release --seeds 0`, then `snare_release.py train` and
-`snare_release.py export --out DIR`.
+**Ship a detector.** `lab/release.py` (`scripts/dev.py detector-release`; rules in
+`docs/DETECTOR_RUNTIME_DESIGN.md`). Save the config's run seeds (`lab/run.py CONFIG --seeds S[,S+1..]`), then
+`release.py train CONFIG --seed S [--nets N]` (final models on every trained song, cutoffs from the run's outer
+predictions) and `release.py export TRAIN_ID --set FAMILY --ship` (the model file, contract v2, and the Rust parity
+goldens). A config using a part the app does not run (`runtime_parts.json`) is refused before anything trains.
+`release.py train CONFIG --provisional` makes a throwaway release in minutes on the CPU, for building Rust against it.
 
 **Test.** `lab/test_lab.py` (scorer and input parity against saves of the retired runners, kick labels and parts
-against the kick records and `kick_release`, plus the guards; about 10 s).
+against the kick records, the release tool against the shipped v1 goldens and the model file contract, plus the
+guards; about 25 s).
