@@ -135,8 +135,8 @@ goes when bass and synth move (P5).
 **D10. Every run states its finish time from a warm seed.** The runner times the first seed after caches are warm and
 prints the projected finish; the report records actual times. Training holds `gpu_queue.hold('detector-lab')`.
 
-**D11. Migration is proven by input parity and scorer parity, not training parity.** MPS training is not bit
-reproducible, and legacy runs differ between invocations. So: (a) **scorer parity** — `lab/score.py` on a legacy
+**D11. Migration is proven by input parity and scorer parity, not training parity.** MPS kernels promise no
+bit reproducibility (though seed 0 of `snare_base` did reproduce the legacy save byte for byte on 2026-10-11). So: (a) **scorer parity** — `lab/score.py` on a legacy
 `snare_net_s*.npz` reproduces the legacy results JSON exactly (deterministic, CPU); (b) **input parity** — for the same
 config the lab builds `held_out_nets` arguments equal to the legacy runner's: same song order, same groups (generated
 songs included where legacy includes them), same seeds, byte-identical `Song` tensors. Equal inputs into the same
