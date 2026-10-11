@@ -11,7 +11,7 @@ use super::net::average;
 use super::spec::{MODEL_HOP, MODEL_RATE, Measure, Spec};
 use super::trees::{Forest, expit};
 use super::*;
-use crate::detectors::KickFed;
+use crate::detectors::{KickFed, Side};
 
 /// Every golden set on disk: a count match, so no set is silently skipped.
 const SETS: [&str; 4] = ["cover_kick", "cover_snare", "kick", "snare"];
@@ -140,18 +140,21 @@ impl Run {
         Self::Fed(Box::new(KickFed::new(kick, det).expect("the kick set is the kick this model reads")), Vec::new())
     }
 
-    fn det(&mut self) -> &mut TrainedDetector {
+    fn det(&self) -> &TrainedDetector {
         match self {
             Self::Alone(d) => d,
-            Self::Fed(f, _) => f.reader_mut(),
+            Self::Fed(f, _) => f.reader(),
         }
     }
 
-    fn push_traced(&mut self, samples: &[f32], on_decision: impl FnMut(&Decision<'_>, Option<Fire>)) {
-        if let Self::Fed(f, emits) = self {
-            f.feed_kick(samples, |d, _| emits.push(((d.avail_hop + 1) * MODEL_HOP) as f64 / MODEL_RATE as f64));
+    fn push_traced(&mut self, samples: &[f32], mut on_decision: impl FnMut(&Decision<'_>, Option<Fire>)) {
+        match self {
+            Self::Alone(d) => d.push_traced(samples, on_decision),
+            Self::Fed(f, emits) => f.push_traced(samples, |side, d, fire| match side {
+                Side::Kick => emits.push(((d.avail_hop + 1) * MODEL_HOP) as f64 / MODEL_RATE as f64),
+                Side::Reader => on_decision(d, fire),
+            }),
         }
-        self.det().push_traced(samples, on_decision);
     }
 }
 

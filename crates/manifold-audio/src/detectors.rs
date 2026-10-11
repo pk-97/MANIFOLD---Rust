@@ -111,34 +111,50 @@ pub struct KickFed {
     reader: TrainedDetector,
 }
 
+/// Which detector of a [`KickFed`] made a decision.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Side {
+    Kick,
+    Reader,
+}
+
 impl KickFed {
+    /// Input samples the kick runs ahead of the reader at most, whatever the push size: a handful of kick
+    /// decisions, far inside the verdicts the reader keeps.
+    const STEP: usize = 512;
+
     /// `reader` must want exactly `kick`'s model.
     pub fn new(kick: TrainedDetector, mut reader: TrainedDetector) -> Result<Self, DetectorError> {
         reader.link_kick(&kick)?;
         Ok(Self { kick, reader })
     }
 
-    /// Runs the kick on `samples` and hands the reader its decisions (each also to `on_kick`); the reader
-    /// then runs on the same samples (through [`Self::reader_mut`]).
-    pub fn feed_kick(&mut self, samples: &[f32], mut on_kick: impl FnMut(&Decision<'_>, Option<Fire>)) {
-        let reader = &mut self.reader;
-        self.kick.push_traced(samples, |d, fire| {
-            reader.kick_verdict(d.cand_hop, d.avail_hop, d.p_final);
-            on_kick(d, fire);
-        });
-        self.reader.kick_settled(self.kick.settled_avail());
+    /// Runs the pair on `samples` step by step: the kick, its decisions handed to the reader in emission
+    /// order, then the reader on the same step. Every decision of both goes to `on_decision`.
+    pub fn push_traced(&mut self, samples: &[f32], mut on_decision: impl FnMut(Side, &Decision<'_>, Option<Fire>)) {
+        for step in samples.chunks(Self::STEP) {
+            let reader = &mut self.reader;
+            self.kick.push_traced(step, |d, fire| {
+                reader.kick_verdict(d.cand_hop, d.avail_hop, d.p_final);
+                on_decision(Side::Kick, d, fire);
+            });
+            self.reader.kick_settled(self.kick.settled_avail());
+            self.reader.push_traced(step, |d, fire| on_decision(Side::Reader, d, fire));
+        }
     }
 
-    pub fn reader_mut(&mut self) -> &mut TrainedDetector {
-        &mut self.reader
+    pub fn reader(&self) -> &TrainedDetector {
+        &self.reader
     }
 }
 
 impl EventDetector for KickFed {
     fn push(&mut self, samples: &[f32], events: &mut Vec<DetectorEvent>) {
         let (kick_kind, reader_kind) = (self.kick.kind(), self.reader.kind());
-        self.feed_kick(samples, |_, fire| events.extend(fire.map(|f| DetectorEvent { kind: kick_kind, sample: f.sample })));
-        self.reader.push_with(samples, |f| events.push(DetectorEvent { kind: reader_kind, sample: f.sample }));
+        self.push_traced(samples, |side, _, fire| {
+            let kind = if side == Side::Kick { kick_kind } else { reader_kind };
+            events.extend(fire.map(|f| DetectorEvent { kind, sample: f.sample }));
+        });
     }
 
     fn max_events(&self, samples: usize) -> usize {
@@ -398,6 +414,28 @@ mod tests {
             assert_eq!(det.kind(), kind);
             assert_eq!(EventKind::parse(kind.name()), Some(kind));
         }
+    }
+
+    /// The kick and the snare reading it fire the same whatever the push size: one whole clip, or small blocks.
+    #[test]
+    fn kick_fed_pair_ignores_push_size() {
+        use crate::trained::golden;
+        let audio = golden::audio_f32(&golden::load("detectors/snare", "clip_dense.mkick"));
+        let fires = |block: usize| {
+            let mut dets = send_detectors(48_000);
+            let mut events = Vec::new();
+            for chunk in audio.chunks(block) {
+                for d in &mut dets {
+                    d.push(chunk, &mut events);
+                }
+            }
+            let mut out: Vec<(&str, u64)> = events.iter().map(|e| (e.kind.name(), e.sample)).collect();
+            out.sort_unstable();
+            out
+        };
+        let whole = fires(audio.len());
+        assert!(whole.iter().any(|e| e.0 == "snare"));
+        assert_eq!(whole, fires(300));
     }
 
     #[test]

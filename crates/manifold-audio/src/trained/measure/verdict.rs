@@ -36,6 +36,8 @@ impl KickVerdicts {
     pub fn features(&self, on: f64, em: f64, out: &mut [f64]) {
         let (lo, hi) = (on - self.before_s, on + self.after_s);
         let first = self.ring.len().saturating_sub(VERDICTS as u64);
+        // KickFed keeps the kick a step ahead, so no verdict in the window has been evicted.
+        debug_assert!(self.ring.len() <= VERDICTS as u64 || self.ring.get(first)[0] < lo, "kick verdicts evicted before they were read");
         let mut best: Option<[f64; 3]> = None;
         for i in first..self.ring.len() {
             let v = *self.ring.get(i);

@@ -1132,11 +1132,11 @@ mod hop_tests {
         assert_eq!(fired, want);
     }
 
-    /// Snares ride the same worker: every inline snare fire reaches the Mid band's snare value
-    /// as one 1.0 hop, the hop containing its decision, exactly as kicks do.
+    /// Snares ride the same worker, fed by the kick: every inline snare fire reaches the Mid band's
+    /// snare value as one 1.0 hop, the hop containing its decision, exactly as kicks do.
     #[test]
     fn worker_snare_fires_land_on_the_mid_band() {
-        use manifold_audio::detectors::{EventKind, detector};
+        use manifold_audio::detectors::EventKind;
         use manifold_audio::trained::container::Container;
         use std::time::{Duration, Instant};
 
@@ -1145,8 +1145,11 @@ mod hop_tests {
         let n = golden.shape("audio_i16").unwrap()[0];
         let input: Vec<f32> = golden.i16s("audio_i16", &[n]).unwrap().iter().map(|&v| v as f32 / 32768.0).collect();
         let mut inline = Vec::new();
-        detector(EventKind::Snare, 48_000).unwrap().push_with(&input, |f| inline.push(f));
-        assert!(inline.len() > 5);
+        for d in &mut send_detectors(48_000) {
+            d.push(&input, &mut inline);
+        }
+        inline.retain(|e: &DetectorEvent| e.kind == EventKind::Snare);
+        assert!(inline.len() >= 5);
 
         let send = AudioSend::new("Snare");
         let mut analyzer = SendAnalyzer::new(48_000, 250.0, 2500.0, &send, None);

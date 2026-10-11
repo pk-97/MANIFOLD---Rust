@@ -125,10 +125,11 @@ struct Pending {
 }
 
 /// A model that reads the kick's verdicts (kick2): the kick it was trained with, how far after an emission
-/// the kick decides at most, and the latest emission hop through which every kick candidate is decided.
+/// the kick decides at most (`None` until linked), and the latest emission hop through which every kick
+/// candidate is decided.
 struct KickLink {
     train_id: String,
-    lag: u64,
+    lag: Option<u64>,
     settled: Option<u64>,
 }
 
@@ -207,7 +208,7 @@ impl TrainedDetector {
         };
         let shape_width = spec.stage.as_ref().map_or(0, |s| s.shape_width());
         let kick = if used.contains(&Measure::Kick2) {
-            Some(KickLink { train_id: c.text("kick2.kick_train_id")?.to_owned(), lag: 0, settled: None })
+            Some(KickLink { train_id: c.text("kick2.kick_train_id")?.to_owned(), lag: None, settled: None })
         } else {
             None
         };
@@ -270,7 +271,7 @@ impl TrainedDetector {
             ready = ready.max(n.ready_sample(cand.avail_hop));
         }
         if let Some(k) = &self.kick {
-            ready = ready.max(self.finder.ready_sample(cand.avail_hop) + k.lag);
+            ready = ready.max(self.finder.ready_sample(cand.avail_hop) + k.lag.unwrap_or(0));
         }
         ready
     }
@@ -287,7 +288,7 @@ impl TrainedDetector {
         if link.train_id != kick.train_id() {
             return Err(DetectorError::KickMismatch { want: link.train_id.clone(), got: kick.train_id().to_owned() });
         }
-        link.lag = lag;
+        link.lag = Some(lag);
         Ok(())
     }
 
@@ -360,6 +361,8 @@ impl TrainedDetector {
 
     /// Feeds mono input samples; hands every decision (fired or not) to `on_decision` as it is made.
     pub fn push_traced(&mut self, samples: &[f32], mut on_decision: impl FnMut(&Decision<'_>, Option<Fire>)) {
+        // Unlinked, a kick2 model would wait for kick verdicts forever and never fire.
+        debug_assert!(self.kick.as_ref().is_none_or(|k| k.lag.is_some()), "a kick2 model runs only fed by its kick (KickFed)");
         for chunk in samples.chunks(ModelInput::STEP) {
             self.input.feed(chunk);
             self.step_block(&mut on_decision);
