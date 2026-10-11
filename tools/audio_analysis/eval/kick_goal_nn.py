@@ -88,7 +88,7 @@ def percussive(spec):
     lin = 10 ** (spec.astype(np.float32) / 20)
     sus = median_filter(lin, size=(SUSTAIN, 1), origin=((SUSTAIN - 1) // 2, 0), mode='nearest')
     per = median_filter(lin, size=(1, NEIGHBOURS), mode='nearest')
-    return (10 * np.log10(per ** 2 / (per ** 2 + sus ** 2 + 1e-18) + 1e-6)).astype(np.float16)
+    return (10 * np.log10(per ** 2 / (per ** 2 + sus ** 2 + 1e-18) + 1e-6)).astype(np.float32)
 
 
 def extra_caches(g, t, spec):
@@ -97,7 +97,7 @@ def extra_caches(g, t, spec):
     if PERC_ON:
         path = GOAL / f'nnperc{_band_tag()}_{t}.npy'
         if not path.exists():
-            np.save(path, percussive(spec))
+            np.save(path, percussive(spec).astype(np.float16))
         out.append(np.load(path).astype(np.float32))
     if STEREO_ON:
         path = GOAL / f'nnside{_band_tag()}_{t}.npy'

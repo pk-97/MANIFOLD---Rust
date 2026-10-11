@@ -1,6 +1,6 @@
 # Detector Lab — one place to label, train and judge MANIFOLD's audio detectors
 
-**Status:** IN PROGRESS · 2026-10-11 · P1–P5 shipped (bass and synth parked by Peter); P6 built on feat/detector-lab-general (stage, gate, templates, snare hybrid); P7 release owed (docs/DETECTOR_RUNTIME_DESIGN.md, in design) · see P6 "As built"
+**Status:** SHIPPED · P1–P7 shipped (bass and synth parked by Peter); v2 kick and snare released 2026-10-12 (docs/DETECTOR_RUNTIME_DESIGN.md) · owed: Peter's live test
 **Prerequisites:** none
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (phase briefs) and section 6 (seam briefs) before starting any phase.
 
@@ -428,6 +428,9 @@ Fable review.
 - Recipes chosen for release (P7): kick `kick_gen50_gated` (net, trees, history learnt on real songs), snare
   `snare_gen50_hybrid_low16` (net, trees, history learnt on all songs). got_it, renew and overwhelming_force joined
   the kick exam on Peter's ruling (songs.json audit_override, with the label timing evidence): 30 kick songs.
+  Superseded 2026-10-12 by `kick_v2_final` and `snare_v2_mid` (docs/DETECTOR_RUNTIME_DESIGN.md section 5.5 and its
+  recipe table): kick +1.97 F1 points over `kick_v2_base` (90% +1.01 to +3.14), snare +9.35 over `snare_v2_base`
+  (+5.75 to +12.76) on the 37-song whole-song exam.
 
 ### P7 — Releases from component configs
 

@@ -184,6 +184,167 @@
   "audit_override": null
  },
  {
+  "id": "heavy_on_mind",
+  "kind": "project",
+  "source": {
+   "how": "goal",
+   "paths": [
+    "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/EMERGENCE - ALBUM 2026/FINAL MASTERS/Latent Space - 02 - Heavy on Mind MSTR V3 APRS.wav"
+   ]
+  },
+  "source_sha256": [
+   "3f22cd0335db72972a177488cf28a7d4de94d66c74203d9dea5f79cda5ca5a36"
+  ],
+  "sample_rate": 44100,
+  "offset_s": -23.54589999999998,
+  "proof": "goal:kick stem against project kick notes",
+  "families": [
+   "snare",
+   "bass",
+   "synth",
+   "kick"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "miracle",
+  "kind": "project",
+  "source": {
+   "how": "goal",
+   "paths": [
+    "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/2024/Streets Project/MASTERS/Miracle MSTR V1 APRS.wav"
+   ]
+  },
+  "source_sha256": [
+   "263c248ce6c2a5b16ad981f055afd0be278085f6468347e25d3e4565f5bf3e66"
+  ],
+  "sample_rate": 44100,
+  "offset_s": -77.835,
+  "proof": "goal:kick stem against project kick notes",
+  "families": [
+   "snare",
+   "bass",
+   "synth",
+   "kick"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "right_where",
+  "kind": "project",
+  "source": {
+   "how": "goal",
+   "paths": [
+    "/Users/peterkiemann/.cache/manifold/kick-goal-2026-10-10/right_where_mix.npy"
+   ]
+  },
+  "source_sha256": [
+   "6fd9bac05b48eea6501df7fd7521a90646786978b85c854b4a17f212e595ce2c"
+  ],
+  "sample_rate": 48000,
+  "offset_s": -48.8113,
+  "proof": "goal:trigger track export offset (labels_trigger.json)",
+  "families": [
+   "snare",
+   "bass",
+   "synth",
+   "kick"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "hung_up",
+  "kind": "project",
+  "source": {
+   "how": "goal",
+   "paths": [
+    "/Users/peterkiemann/.cache/manifold/kick-goal-2026-10-10/hung_up_mix.npy"
+   ]
+  },
+  "source_sha256": [
+   "15c4018f94a0ba80ba32148b974b7db1e0a56e574abe764e805b02474ea0f54f"
+  ],
+  "sample_rate": 48000,
+  "offset_s": -43.6357,
+  "proof": "goal:trigger track export offset (labels_trigger.json)",
+  "families": [
+   "snare",
+   "bass",
+   "synth",
+   "kick"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "got_it",
+  "kind": "project",
+  "source": {
+   "how": "goal",
+   "paths": [
+    "/Users/peterkiemann/.cache/manifold/kick-goal-2026-10-10/got_it_mix.npy"
+   ]
+  },
+  "source_sha256": [
+   "7d16cfd1696a13b45558df8c5cc8ae6932dd0a553c2e6e14c39c6c04a209bb52"
+  ],
+  "sample_rate": 48000,
+  "offset_s": -51.8385,
+  "proof": "goal:wip survey offset (unproven against a stem)",
+  "families": [
+   "snare",
+   "bass",
+   "synth",
+   "kick"
+  ],
+  "audit_override": "Peter, 2026-10-11: 100% usable. Kick labels sit on the mix kick attacks (isolated labels: median -6 ms, p10-p90 -7 to -4); the kick pattern picks the labels bar (r 0.72 vs 0.67)."
+ },
+ {
+  "id": "renew",
+  "kind": "project",
+  "source": {
+   "how": "goal",
+   "paths": [
+    "/Users/peterkiemann/.cache/manifold/kick-goal-2026-10-10/renew_mix.npy"
+   ]
+  },
+  "source_sha256": [
+   "b27ba38f0246f629a7229628689fd1c2654c45b1c09d5668c6e89675ef218901"
+  ],
+  "sample_rate": 48000,
+  "offset_s": -57.264,
+  "proof": "goal:wip survey offset (unproven against a stem)",
+  "families": [
+   "snare",
+   "bass",
+   "synth",
+   "kick"
+  ],
+  "audit_override": "Peter, 2026-10-11: 100% usable. Kick labels sit on the mix kick attacks (median 0 ms, p10-p90 -1 to +8); the kick pattern picks the labels bar (r 0.89 vs 0.72)."
+ },
+ {
+  "id": "overwhelming_force",
+  "kind": "project",
+  "source": {
+   "how": "goal",
+   "paths": [
+    "/Users/peterkiemann/.cache/manifold/kick-goal-2026-10-10/overwhelming_force_mix.npy"
+   ]
+  },
+  "source_sha256": [
+   "b0d48bf996720d762a36fd7e8e843217478ddb1c370ffe499c1176ec9eba3e25"
+  ],
+  "sample_rate": 48000,
+  "offset_s": -25.8955,
+  "proof": "goal:wip survey offset (unproven against a stem)",
+  "families": [
+   "snare",
+   "bass",
+   "synth",
+   "kick"
+  ],
+  "audit_override": "Peter, 2026-10-11: 100% usable. Kick labels sit on the mix kick attacks (median -2 ms, p10-p90 -4 to +4); the kick pattern and the other instruments both pick the labels bar."
+ },
+ {
   "id": "murmur",
   "kind": "project",
   "source": {
@@ -535,6 +696,132 @@
    "snare",
    "bass",
    "synth"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "cold_remix",
+  "kind": "project",
+  "source": {
+   "how": "goal",
+   "paths": [
+    "/Users/peterkiemann/.cache/manifold/kick-goal-2026-10-10/cold_remix_mix.npy"
+   ]
+  },
+  "source_sha256": [
+   "db36d5ff24be4e2d0f32018b8b07c8597f4fdbf5561124aa450d6be0026416b4"
+  ],
+  "sample_rate": 48000,
+  "offset_s": null,
+  "proof": "none",
+  "families": [
+   "snare",
+   "kick"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "worship",
+  "kind": "project",
+  "source": {
+   "how": "goal",
+   "paths": [
+    "/Users/peterkiemann/.cache/manifold/kick-goal-2026-10-10/worship_mix.npy"
+   ]
+  },
+  "source_sha256": [
+   "27fac00e81c858bfd5ade158e12d3edabc2950c35a401b46470586df935a90ae"
+  ],
+  "sample_rate": 48000,
+  "offset_s": null,
+  "proof": "none",
+  "families": [
+   "snare",
+   "kick"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "business",
+  "kind": "project",
+  "source": {
+   "how": "goal",
+   "paths": [
+    "/Users/peterkiemann/.cache/manifold/kick-goal-2026-10-10/business_mix.npy"
+   ]
+  },
+  "source_sha256": [
+   "d8ca8ab772d1af9e0036c8f4383ba587671a936773af17ad22f49dfa270a62e2"
+  ],
+  "sample_rate": 48000,
+  "offset_s": null,
+  "proof": "none",
+  "families": [
+   "snare",
+   "kick"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "eat_sleep",
+  "kind": "project",
+  "source": {
+   "how": "goal",
+   "paths": [
+    "/Users/peterkiemann/.cache/manifold/kick-goal-2026-10-10/eat_sleep_mix.npy"
+   ]
+  },
+  "source_sha256": [
+   "7a4cf141bfd0cd7b18ad2c96d93983c61d41298723c8d6c0963137263b541dd1"
+  ],
+  "sample_rate": 48000,
+  "offset_s": null,
+  "proof": "none",
+  "families": [
+   "snare",
+   "kick"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "lh",
+  "kind": "project",
+  "source": {
+   "how": "goal",
+   "paths": [
+    "/Users/peterkiemann/.cache/manifold/kick-goal-2026-10-10/lh_mix.npy"
+   ]
+  },
+  "source_sha256": [
+   "ae9cfb4ffa4a8c3489542ecc8ecdf2e86282ed038cd4e925d1e278c0186cbbb2"
+  ],
+  "sample_rate": 48000,
+  "offset_s": null,
+  "proof": "none",
+  "families": [
+   "snare",
+   "kick"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "gerrit",
+  "kind": "project",
+  "source": {
+   "how": "goal",
+   "paths": [
+    "/Users/peterkiemann/.cache/manifold/kick-goal-2026-10-10/gerrit_mix.npy"
+   ]
+  },
+  "source_sha256": [
+   "8d880464c6fbf77899d71b5760ad231442863244948282c0cced1d059aef2ce5"
+  ],
+  "sample_rate": 48000,
+  "offset_s": null,
+  "proof": "none",
+  "families": [
+   "snare",
+   "kick"
   ],
   "audit_override": null
  },
@@ -2373,94 +2660,6 @@
   "audit_override": null
  },
  {
-  "id": "miracle",
-  "kind": "project",
-  "source": {
-   "how": "goal",
-   "paths": [
-    "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/2024/Streets Project/MASTERS/Miracle MSTR V1 APRS.wav"
-   ]
-  },
-  "source_sha256": [
-   "263c248ce6c2a5b16ad981f055afd0be278085f6468347e25d3e4565f5bf3e66"
-  ],
-  "sample_rate": 44100,
-  "offset_s": -77.835,
-  "proof": "goal:kick stem against project kick notes",
-  "families": [
-   "bass",
-   "synth",
-   "kick"
-  ],
-  "audit_override": null
- },
- {
-  "id": "heavy_on_mind",
-  "kind": "project",
-  "source": {
-   "how": "goal",
-   "paths": [
-    "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/EMERGENCE - ALBUM 2026/FINAL MASTERS/Latent Space - 02 - Heavy on Mind MSTR V3 APRS.wav"
-   ]
-  },
-  "source_sha256": [
-   "3f22cd0335db72972a177488cf28a7d4de94d66c74203d9dea5f79cda5ca5a36"
-  ],
-  "sample_rate": 44100,
-  "offset_s": -23.54589999999998,
-  "proof": "goal:kick stem against project kick notes",
-  "families": [
-   "bass",
-   "synth",
-   "kick"
-  ],
-  "audit_override": null
- },
- {
-  "id": "hung_up",
-  "kind": "project",
-  "source": {
-   "how": "goal",
-   "paths": [
-    "/Users/peterkiemann/.cache/manifold/kick-goal-2026-10-10/hung_up_mix.npy"
-   ]
-  },
-  "source_sha256": [
-   "15c4018f94a0ba80ba32148b974b7db1e0a56e574abe764e805b02474ea0f54f"
-  ],
-  "sample_rate": 48000,
-  "offset_s": -43.6357,
-  "proof": "goal:trigger track export offset (labels_trigger.json)",
-  "families": [
-   "bass",
-   "synth",
-   "kick"
-  ],
-  "audit_override": null
- },
- {
-  "id": "right_where",
-  "kind": "project",
-  "source": {
-   "how": "goal",
-   "paths": [
-    "/Users/peterkiemann/.cache/manifold/kick-goal-2026-10-10/right_where_mix.npy"
-   ]
-  },
-  "source_sha256": [
-   "6fd9bac05b48eea6501df7fd7521a90646786978b85c854b4a17f212e595ce2c"
-  ],
-  "sample_rate": 48000,
-  "offset_s": -48.8113,
-  "proof": "goal:trigger track export offset (labels_trigger.json)",
-  "families": [
-   "bass",
-   "synth",
-   "kick"
-  ],
-  "audit_override": null
- },
- {
   "id": "facade",
   "kind": "project",
   "source": {
@@ -2481,72 +2680,6 @@
    "kick"
   ],
   "audit_override": null
- },
- {
-  "id": "got_it",
-  "kind": "project",
-  "source": {
-   "how": "goal",
-   "paths": [
-    "/Users/peterkiemann/.cache/manifold/kick-goal-2026-10-10/got_it_mix.npy"
-   ]
-  },
-  "source_sha256": [
-   "7d16cfd1696a13b45558df8c5cc8ae6932dd0a553c2e6e14c39c6c04a209bb52"
-  ],
-  "sample_rate": 48000,
-  "offset_s": -51.8385,
-  "proof": "goal:wip survey offset (unproven against a stem)",
-  "families": [
-   "bass",
-   "synth",
-   "kick"
-  ],
-  "audit_override": "Peter, 2026-10-11: 100% usable. Kick labels sit on the mix kick attacks (isolated labels: median -6 ms, p10-p90 -7 to -4); the kick pattern picks the labels bar (r 0.72 vs 0.67)."
- },
- {
-  "id": "renew",
-  "kind": "project",
-  "source": {
-   "how": "goal",
-   "paths": [
-    "/Users/peterkiemann/.cache/manifold/kick-goal-2026-10-10/renew_mix.npy"
-   ]
-  },
-  "source_sha256": [
-   "b27ba38f0246f629a7229628689fd1c2654c45b1c09d5668c6e89675ef218901"
-  ],
-  "sample_rate": 48000,
-  "offset_s": -57.264,
-  "proof": "goal:wip survey offset (unproven against a stem)",
-  "families": [
-   "bass",
-   "synth",
-   "kick"
-  ],
-  "audit_override": "Peter, 2026-10-11: 100% usable. Kick labels sit on the mix kick attacks (median 0 ms, p10-p90 -1 to +8); the kick pattern picks the labels bar (r 0.89 vs 0.72)."
- },
- {
-  "id": "overwhelming_force",
-  "kind": "project",
-  "source": {
-   "how": "goal",
-   "paths": [
-    "/Users/peterkiemann/.cache/manifold/kick-goal-2026-10-10/overwhelming_force_mix.npy"
-   ]
-  },
-  "source_sha256": [
-   "b0d48bf996720d762a36fd7e8e843217478ddb1c370ffe499c1176ec9eba3e25"
-  ],
-  "sample_rate": 48000,
-  "offset_s": -25.8955,
-  "proof": "goal:wip survey offset (unproven against a stem)",
-  "families": [
-   "bass",
-   "synth",
-   "kick"
-  ],
-  "audit_override": "Peter, 2026-10-11: 100% usable. Kick labels sit on the mix kick attacks (median -2 ms, p10-p90 -4 to +4); the kick pattern and the other instruments both pick the labels bar."
  },
  {
   "id": "apricots_128bpm",
@@ -2639,126 +2772,6 @@
   },
   "source_sha256": [
    "49c7c4ee799e93690e4023665b332c617f0fa170314a83d05c79a2c675d5b334"
-  ],
-  "sample_rate": 48000,
-  "offset_s": null,
-  "proof": "none",
-  "families": [
-   "kick"
-  ],
-  "audit_override": null
- },
- {
-  "id": "cold_remix",
-  "kind": "project",
-  "source": {
-   "how": "goal",
-   "paths": [
-    "/Users/peterkiemann/.cache/manifold/kick-goal-2026-10-10/cold_remix_mix.npy"
-   ]
-  },
-  "source_sha256": [
-   "db36d5ff24be4e2d0f32018b8b07c8597f4fdbf5561124aa450d6be0026416b4"
-  ],
-  "sample_rate": 48000,
-  "offset_s": null,
-  "proof": "none",
-  "families": [
-   "kick"
-  ],
-  "audit_override": null
- },
- {
-  "id": "gerrit",
-  "kind": "project",
-  "source": {
-   "how": "goal",
-   "paths": [
-    "/Users/peterkiemann/.cache/manifold/kick-goal-2026-10-10/gerrit_mix.npy"
-   ]
-  },
-  "source_sha256": [
-   "8d880464c6fbf77899d71b5760ad231442863244948282c0cced1d059aef2ce5"
-  ],
-  "sample_rate": 48000,
-  "offset_s": null,
-  "proof": "none",
-  "families": [
-   "kick"
-  ],
-  "audit_override": null
- },
- {
-  "id": "lh",
-  "kind": "project",
-  "source": {
-   "how": "goal",
-   "paths": [
-    "/Users/peterkiemann/.cache/manifold/kick-goal-2026-10-10/lh_mix.npy"
-   ]
-  },
-  "source_sha256": [
-   "ae9cfb4ffa4a8c3489542ecc8ecdf2e86282ed038cd4e925d1e278c0186cbbb2"
-  ],
-  "sample_rate": 48000,
-  "offset_s": null,
-  "proof": "none",
-  "families": [
-   "kick"
-  ],
-  "audit_override": null
- },
- {
-  "id": "eat_sleep",
-  "kind": "project",
-  "source": {
-   "how": "goal",
-   "paths": [
-    "/Users/peterkiemann/.cache/manifold/kick-goal-2026-10-10/eat_sleep_mix.npy"
-   ]
-  },
-  "source_sha256": [
-   "7a4cf141bfd0cd7b18ad2c96d93983c61d41298723c8d6c0963137263b541dd1"
-  ],
-  "sample_rate": 48000,
-  "offset_s": null,
-  "proof": "none",
-  "families": [
-   "kick"
-  ],
-  "audit_override": null
- },
- {
-  "id": "business",
-  "kind": "project",
-  "source": {
-   "how": "goal",
-   "paths": [
-    "/Users/peterkiemann/.cache/manifold/kick-goal-2026-10-10/business_mix.npy"
-   ]
-  },
-  "source_sha256": [
-   "d8ca8ab772d1af9e0036c8f4383ba587671a936773af17ad22f49dfa270a62e2"
-  ],
-  "sample_rate": 48000,
-  "offset_s": null,
-  "proof": "none",
-  "families": [
-   "kick"
-  ],
-  "audit_override": null
- },
- {
-  "id": "worship",
-  "kind": "project",
-  "source": {
-   "how": "goal",
-   "paths": [
-    "/Users/peterkiemann/.cache/manifold/kick-goal-2026-10-10/worship_mix.npy"
-   ]
-  },
-  "source_sha256": [
-   "27fac00e81c858bfd5ade158e12d3edabc2950c35a401b46470586df935a90ae"
   ],
   "sample_rate": 48000,
   "offset_s": null,

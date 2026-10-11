@@ -1,7 +1,7 @@
 {
   "finders": ["kick", "snare"],
-  "measures": {"f15": 15, "tail3": 3, "tmpl3": 3, "prof32": 32, "fall16": 16, "low16": 16},
-  "channels": ["flat"],
+  "measures": {"f15": 15, "tail3": 3, "tmpl3": 3, "prof32": 32, "fall16": 16, "low16": 16, "cdom4": 4, "note13": 13, "kick2": 2},
+  "channels": ["flat", "perc"],
   "combines": ["net", "trees", "mean_logit"],
   "nets": {"min_count": 1},
   "stage": {"max_windows": 4, "level": true, "gate": true}

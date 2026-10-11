@@ -127,7 +127,6 @@ impl Net {
         self.anchors(0, emit_hop).end * self.spec.frame_hop() + 1
     }
 
-    #[cfg(test)]
     /// The net's own band envelopes.
     pub(crate) fn spectrum(&self) -> &Spectrum {
         &self.spec
@@ -196,21 +195,6 @@ impl Net {
             }
         }
         true
-    }
-}
-
-/// No extra channels.
-#[cfg(test)]
-pub struct NoFrames;
-
-#[cfg(test)]
-impl FrameSource for NoFrames {
-    fn channels(&self) -> usize {
-        0
-    }
-
-    fn frame(&self, _: usize, _: u64) -> Option<&[f32]> {
-        None
     }
 }
 

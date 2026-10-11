@@ -1,6 +1,6 @@
 # Detector Runtime — one app runtime that runs any lab-built detector from its model file
 
-**Status:** BUILT 2026-10-11 on `feat/detector-runtime-rust`, unlanded: P1–P4 land as one change, shipping kick-2026-10-11-a384db47b and snare-2026-10-11-a384db47b · owed: Peter's live test (section 9, P4 demo)
+**Status:** SHIPPED · kick-2026-10-12-60984540f and snare-2026-10-12-b5ccd28c9 (the snare reads the kick, section 5.5) · owed: Peter's live test of the v2 pair
 **Prerequisites:** Detector Lab P6 (landed on main, `5461d2fee`); the snare port (`feat/snare-port`) merged into this work's branch (section 9, P0).
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (phase briefs) and section 6 (seam briefs) before starting any phase.
 
@@ -22,6 +22,14 @@ The first two releases are already chosen (DETECTOR_LAB_DESIGN.md P6, "Recipes c
 |---|---|---|---|---|---|
 | kick `kick_gen50_gated` | `kick` | 150 ms, no extra channels | f15 tail3 prof32 low16 | mean_logit | 8 s; shape prof32 low16; level f15 column 0; learn project; gate 1 |
 | snare `snare_gen50_hybrid_low16` | `snare:4.5` | 150 ms, no extra channels | prof32 fall16 low16 | mean_logit | 8 s; shape prof32; no level; learn all; gate 1 |
+
+Superseded 2026-10-12 by the v2 recipes, chosen by drop-one ablation (each kept input earns its place in F1 or
+false fires):
+
+| | finder | net | trees | combine | history stage |
+|---|---|---|---|---|---|
+| kick `kick_v2_final` | `kick` | 150 ms, flat and perc, 1 net | f15 tail3 prof32 fall16 low16 note13 cdom4 | mean_logit | as kick_gen50_gated |
+| snare `snare_v2_mid` | `snare:4.5` | 150 ms, flat and perc, 3 nets | prof32 fall16 low16 note13 cdom4 kick2 | mean_logit | 8 s; shape prof32 low16; level prof32 column 29; learn all; gate 1 |
 
 Neither uses templates. Seed averaging (several nets, mean of their logits) gained about one F1 point on the snare,
 so the file carries a net count (default 1).
@@ -281,13 +289,15 @@ runtime does not know under a known prefix is an error (no silent ignores).
 | `cutoff`, `refractory_s` | f64 | the fire rule |
 | `base.*` | — | kick finder constants (v1 names, `kick_export/base.py`) |
 | `cand.*` | — | snare finder constants (v1 names, `snare_release.py:201–207`) |
-| `extra.*` | — | tail, band spectrum, low bank and template constants (v1 names, minus `extra.templates_*`) |
+| `extra.*` | — | tail, band spectrum, low bank and template constants (v1 names, minus `extra.templates_*`); `extra.cdom_*` only with cdom4 and `extra.note_*` only with note13 (`lab/export/measures.py` `names_for`) |
 | `res.*`, `glide.*` | — | reserved for res16 and glide3 (Deferred) |
+| `kick2.*` | — | `window_s` [before, after], `none_dt_ms`, `kick_train_id` (text): the kick verdict and the kick model it was trained against (section 5.5) |
 | `fit.<measure>.<key>` | — | fitted measure params; `fit.tmpl3.all`, `.low`, `.high` (pre-normalised, as v1), `fit.tmpl3.span` |
 | `net.count` | i64 scalar | N ≥ 1 nets averaged by D17 (required when `models` has `net`) |
-| `net.*` input entries | — | v1 names (`net.sos`, `net.k`, `net.frame_s`, `net.frame_hop`, `net.slice`, `net.pre_s`, `net.span`, `net.ahead_s`, `net.hop`, `net.sample_rate`) plus `net.channels` (count), `net.tbins` (fsp names); `net.extra` text = frame channels in order (`flat` or empty); shared by all N nets |
+| `net.*` input entries | — | v1 names (`net.sos`, `net.k`, `net.frame_s`, `net.frame_hop`, `net.slice`, `net.pre_s`, `net.span`, `net.ahead_s`, `net.hop`, `net.sample_rate`) plus `net.channels` (count), `net.tbins` (fsp names); `net.extra` text = frame channels in order (`flat`, `perc`, or empty); shared by all N nets |
 | `net.<k>.<param>` | f32 | net k's weights, k = 0..N-1, PyTorch names (`net.0.conv.0.weight` ... `net.0.head.2.bias`); every net has the same shapes |
 | `flat.*` | — | flat frame constants (fsp names) |
+| `perc.*` | i64 | `sustain`, `neighbours`: the percussive-share channel's median windows (`eval/kick_goal_nn.py` `percussive`) |
 | `trees.measures` | text | event measures in column order |
 | `trees.widths` | i64[n] | their widths (cross-check with `runtime_parts.json`) |
 | `trees.*` | — | forest arrays (`kick_export/stage.py:32` layout), `n_features` = sum of widths |
@@ -324,12 +334,13 @@ New module `crates/manifold-audio/src/trained/`; `kick/` and `snare/` are folded
 | `trained/input.rs` | `fsp:kick/detector.rs:99` | `ModelInput` |
 | `trained/finder/{mod.rs, kick/, snare.rs}` | `kick/base/`, `fsp:snare/cands.rs` | `Finder` enum |
 | `trained/measure/{mod.rs, dsp.rs, spec.rs, tail.rs, templates.rs, profile.rs, lowbank.rs}` | `kick/extra/*` | `MeasureBank`; profile gains fall16 |
-| `trained/frames/{mod.rs, flat.rs}` | `fsp:snare/flat.rs` | `FrameBank` (net extra channels) |
+| `trained/measure/{cdom.rs, note.rs, verdict.rs}` | new | cdom4 (`eval/kick_complex_onset.py`), note13 (`eval/note_pitch.py`), kick2 (`lab/kick_verdict.py`) |
+| `trained/frames/{mod.rs, flat.rs, perc.rs}` | `fsp:snare/flat.rs`; perc new | `FrameBank` (net extra channels) |
 | `trained/net/{mod.rs, cnn.rs, spectrum.rs}` | `fsp:kick/net*` | `Net`: one `Spectrum`, one input window, `Vec<Cnn>` of N nets (D17) |
 | `trained/trees.rs` | `kick/trees.rs` | `Forest` |
 | `trained/history.rs` | `kick/stage.rs` | generalised stage |
 | `trained/detector.rs` | `kick/detector.rs` + `fsp:snare/detector.rs` | `TrainedDetector` |
-| `detectors.rs` | fsp | `EventKind`, worker, `send_detectors` from the embedded list |
+| `detectors.rs` | fsp | `EventKind`, worker, `send_detectors` from the embedded list, `KickFed` (section 5.5) |
 
 Dependency direction unchanged: `trained` depends on nothing outside `manifold-audio` except `log`.
 
@@ -346,16 +357,16 @@ pub const MAX_WINDOWS: usize = 4;
 pub enum FinderKind { Kick, Snare }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum Measure { F15, Tail3, Tmpl3, Prof32, Fall16, Low16 }   // res16, glide3: Deferred
+pub enum Measure { F15, Tail3, Tmpl3, Prof32, Fall16, Low16, Cdom4, Note13, Kick2 }   // res16, glide3, pitch6: Deferred
 impl Measure {
-    pub const ALL: [Measure; 6];
+    pub const ALL: [Measure; 9];
     pub const fn name(self) -> &'static str;   // the lab's names: "f15", "tail3", ...
-    pub const fn width(self) -> usize;         // 15, 3, 3, 32, 16, 16
+    pub const fn width(self) -> usize;         // 15, 3, 3, 32, 16, 16, 4, 13, 2
     pub fn parse(s: &str) -> Option<Self>;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Channel { Flat }
+pub enum Channel { Flat, Perc }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Combine { Net, Trees, MeanLogit }
@@ -498,8 +509,27 @@ History ring capacity = `ceil(max window × 192) + 1` entries (`kick/stage.rs:14
 The snare follows the same path from `fsp`'s snare v1.
 
 As built: P3 and P4 land as one change on Peter's yes to the lab-trained detectors, so the converted v1 files never
-reach main. Release-build cost on the shipped sets' dense clips: kick 24.5–24.7 and snare 18.6–19.0 ms CPU per audio
-second (D16 ceiling 100 for all detectors together).
+reach main. Release-build cost on the shipped sets' dense clips: kick 39–42 ms CPU per audio second, and the snare
+with the kick it reads 70 (D16 ceiling 100 for all detectors together; the kick runs once, inside the pair).
+
+### 5.5 Models that read the kick (kick2)
+
+A snare fires on bright kicks, so the snare reads the kick detector's verdict: at each snare candidate, the most
+confident kick decision whose onset is within 40 ms before to 20 ms after the snare's onset and that is out by the
+snare's emission, and that kick's onset offset in ms (60 with none). A kick and snare together still count as a snare:
+the snare keeps its own upper-band evidence.
+
+- Training: `lab/kick_verdict.py build` stores the shipped kick's final probability per song (held out on the kick's
+  own training songs, the release itself elsewhere); the measure reads that store. The release records
+  `kick_train_id`; a kick2 model is trained against exactly one kick.
+- Runtime: `send_detectors` pairs each kick2 model with the kick in a `KickFed`: the kick runs on the block, hands
+  every decision (fired or not) to the reader in emission order, then the reader runs on the same block, in
+  512-sample steps whatever the push size (the reader keeps the last 256 kick decisions). One thread, no shared
+  state. The reader refuses any kick but its `kick_train_id` (`DetectorError::KickMismatch`, logged, the
+  reader disabled, the kick still runs). The reader waits for the kick's own decision lag on top of its finder.
+- Goldens: the release reference runs the kick release on each clip; the kick's net shape must be the reader's
+  (`release.use` exits otherwise). Parity compares kick2 at 1e-4 (the kick's own p.final tolerance) and leaves out
+  candidates whose kick window opens inside the kick's stream-start edge.
 
 ## 6. Parity
 
@@ -697,9 +727,9 @@ and other families: Deferred.
 | What | Revive when |
 |---|---|
 | Loading model files from disk at runtime (live A/B without rebuild) | Peter asks to audition candidates live |
-| Frame channels other than flat (perc, side) | a release config names one |
+| Frame channels other than flat and perc (side) | a release config names one |
 | Families beyond kick and snare | the lab releases one (adds an `EventKind` variant and its routing) |
-| res16 and glide3 in Rust (`measure/residual.rs`: per band a fixed-capacity sorted window over the last 400 ms of the f32-rounded 1 ms envelope, the order statistic at `size // 2` ⚠ VERIFY-AT-IMPL in scipy `_rank_filter`; `measure/glide.rs`) | a release config names either; until then `release.py` refuses it |
+| res16, glide3 and pitch6 in Rust (none earned its place in the 2026-10-12 drop-one ablations; `measure/residual.rs`: per band a fixed-capacity sorted window over the last 400 ms of the f32-rounded 1 ms envelope, the order statistic at `size // 2` ⚠ VERIFY-AT-IMPL in scipy `_rank_filter`; `measure/glide.rs`) | a release config names either; until then `release.py` refuses it |
 | Lab-fitted templates at release (`trees.templates` `{"k": K}`: fit with `lab/templates.py` on the release's training songs, export `fit.tmpl3.*`, Rust `tmpl3` exists) | a release config sets `trees.templates` |
 | Model rates other than 48 kHz | a part's reference changes rate |
 

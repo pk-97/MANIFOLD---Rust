@@ -107,38 +107,4 @@ impl TrailingSpectrum {
     }
 }
 
-/// `np.sum` of a contiguous f64 slice: numpy's pairwise summation (`loops_utils.h.src`
-/// `pairwise_sum`), added to the reduction identity 0.0. Kept so sums match numpy's rounding.
-pub(super) fn np_sum(a: &[f64]) -> f64 {
-    0.0 + pairwise(a)
-}
-
-fn pairwise(a: &[f64]) -> f64 {
-    let n = a.len();
-    if n < 8 {
-        let mut res = -0.0;
-        for &v in a {
-            res += v;
-        }
-        res
-    } else if n <= 128 {
-        let mut r = [0.0; 8];
-        r.copy_from_slice(&a[..8]);
-        let mut i = 8;
-        while i < n - n % 8 {
-            for j in 0..8 {
-                r[j] += a[i + j];
-            }
-            i += 8;
-        }
-        let mut res = ((r[0] + r[1]) + (r[2] + r[3])) + ((r[4] + r[5]) + (r[6] + r[7]));
-        for &v in &a[i..] {
-            res += v;
-        }
-        res
-    } else {
-        let mut n2 = n / 2;
-        n2 -= n2 % 8;
-        pairwise(&a[..n2]) + pairwise(&a[n2..])
-    }
-}
+pub(super) use crate::trained::measure::dsp::np_sum;

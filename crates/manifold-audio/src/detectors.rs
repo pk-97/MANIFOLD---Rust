@@ -11,7 +11,7 @@ use ringbuf::traits::{Consumer, Observer, Producer, Split};
 use ringbuf::{HeapCons, HeapProd, HeapRb};
 
 use crate::trained::container::{Container, ContainerError};
-use crate::trained::{DetectorError, SpecError, TrainedDetector};
+use crate::trained::{Decision, DetectorError, Fire, SpecError, TrainedDetector};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EventKind {
@@ -104,14 +104,97 @@ pub fn detector(kind: EventKind, rate: u32) -> Option<TrainedDetector> {
     built.ok()
 }
 
+/// A model that reads the kick's verdicts runs right after the kick on the same samples: the kick's decisions
+/// (fired or not) are handed over in emission order, then the model runs. One thread, no shared state.
+pub struct KickFed {
+    kick: TrainedDetector,
+    reader: TrainedDetector,
+}
+
+/// Which detector of a [`KickFed`] made a decision.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Side {
+    Kick,
+    Reader,
+}
+
+impl KickFed {
+    /// Input samples the kick runs ahead of the reader at most, whatever the push size: a handful of kick
+    /// decisions, far inside the verdicts the reader keeps.
+    const STEP: usize = 512;
+
+    /// `reader` must want exactly `kick`'s model.
+    pub fn new(kick: TrainedDetector, mut reader: TrainedDetector) -> Result<Self, DetectorError> {
+        reader.link_kick(&kick)?;
+        Ok(Self { kick, reader })
+    }
+
+    /// Runs the pair on `samples` step by step: the kick, its decisions handed to the reader in emission
+    /// order, then the reader on the same step. Every decision of both goes to `on_decision`.
+    pub fn push_traced(&mut self, samples: &[f32], mut on_decision: impl FnMut(Side, &Decision<'_>, Option<Fire>)) {
+        for step in samples.chunks(Self::STEP) {
+            let reader = &mut self.reader;
+            self.kick.push_traced(step, |d, fire| {
+                reader.kick_verdict(d.cand_hop, d.avail_hop, d.p_final);
+                on_decision(Side::Kick, d, fire);
+            });
+            self.reader.kick_settled(self.kick.settled_avail());
+            self.reader.push_traced(step, |d, fire| on_decision(Side::Reader, d, fire));
+        }
+    }
+
+    pub fn reader(&self) -> &TrainedDetector {
+        &self.reader
+    }
+}
+
+impl EventDetector for KickFed {
+    fn push(&mut self, samples: &[f32], events: &mut Vec<DetectorEvent>) {
+        let (kick_kind, reader_kind) = (self.kick.kind(), self.reader.kind());
+        self.push_traced(samples, |side, _, fire| {
+            let kind = if side == Side::Kick { kick_kind } else { reader_kind };
+            events.extend(fire.map(|f| DetectorEvent { kind, sample: f.sample }));
+        });
+    }
+
+    fn max_events(&self, samples: usize) -> usize {
+        self.kick.max_fires(samples) + self.reader.max_fires(samples)
+    }
+}
+
 /// Every trained detector one analysed send runs, for mono input at `rate`: one per embedded model that loads.
-/// The live worker and the offline renderer both build theirs here.
+/// A model reading kick verdicts runs fed by the kick ([`KickFed`]); without a matching kick it is refused
+/// (logged once) and the kick runs alone. The live worker and the offline renderer both build theirs here.
 pub fn send_detectors(rate: u32) -> Vec<Box<dyn EventDetector>> {
-    EMBEDDED
-        .iter()
-        .filter_map(|(kind, _)| detector(*kind, rate))
-        .map(|d| Box::new(d) as Box<dyn EventDetector>)
-        .collect()
+    let mut kick = detector(EventKind::Kick, rate);
+    let mut out: Vec<Box<dyn EventDetector>> = Vec::new();
+    let mut readers = Vec::new();
+    for (kind, _) in EMBEDDED.iter().filter(|(k, _)| *k != EventKind::Kick) {
+        let Some(d) = detector(*kind, rate) else { continue };
+        if d.wants_kick().is_some() {
+            readers.push(d);
+        } else {
+            out.push(Box::new(d));
+        }
+    }
+    for reader in readers {
+        let kind = reader.kind();
+        let Some(k) = kick.take() else {
+            log::error!("[Audio] {} detector disabled: it reads the kick's verdicts and the kick did not load", kind.name());
+            continue;
+        };
+        match KickFed::new(k, reader) {
+            Ok(pair) => out.push(Box::new(pair)),
+            Err(e) => {
+                log::error!("[Audio] {} detector disabled: {e}", kind.name());
+                kick = detector(EventKind::Kick, rate);
+            }
+        }
+    }
+    if let Some(k) = kick {
+        out.insert(0, Box::new(k));
+    }
+    out
 }
 
 /// Input samples the worker's ring holds (about 2.7 s at 48 kHz).
@@ -331,6 +414,28 @@ mod tests {
             assert_eq!(det.kind(), kind);
             assert_eq!(EventKind::parse(kind.name()), Some(kind));
         }
+    }
+
+    /// The kick and the snare reading it fire the same whatever the push size: one whole clip, or small blocks.
+    #[test]
+    fn kick_fed_pair_ignores_push_size() {
+        use crate::trained::golden;
+        let audio = golden::audio_f32(&golden::load("detectors/snare", "clip_dense.mkick"));
+        let fires = |block: usize| {
+            let mut dets = send_detectors(48_000);
+            let mut events = Vec::new();
+            for chunk in audio.chunks(block) {
+                for d in &mut dets {
+                    d.push(chunk, &mut events);
+                }
+            }
+            let mut out: Vec<(&str, u64)> = events.iter().map(|e| (e.kind.name(), e.sample)).collect();
+            out.sort_unstable();
+            out
+        };
+        let whole = fires(audio.len());
+        assert!(whole.iter().any(|e| e.0 == "snare"));
+        assert_eq!(whole, fires(300));
     }
 
     #[test]

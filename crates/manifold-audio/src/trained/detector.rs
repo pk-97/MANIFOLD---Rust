@@ -51,6 +51,8 @@ pub struct Decision<'a> {
 pub enum DetectorError {
     Spec(SpecError),
     BadRate(u32),
+    /// The model reads a kick verdict, and the kick it runs with is not the one it was trained with.
+    KickMismatch { want: String, got: String },
 }
 
 impl std::fmt::Display for DetectorError {
@@ -58,6 +60,7 @@ impl std::fmt::Display for DetectorError {
         match self {
             Self::Spec(e) => write!(f, "{e}"),
             Self::BadRate(r) => write!(f, "detector: input rate {r} Hz"),
+            Self::KickMismatch { want, got } => write!(f, "detector: reads the kick {want}'s verdicts, the kick here is {got}"),
         }
     }
 }
@@ -121,6 +124,15 @@ struct Pending {
     ready: u64,
 }
 
+/// A model that reads the kick's verdicts (kick2): the kick it was trained with, how far after an emission
+/// the kick decides at most (`None` until linked), and the latest emission hop through which every kick
+/// candidate is decided.
+struct KickLink {
+    train_id: String,
+    lag: Option<u64>,
+    settled: Option<u64>,
+}
+
 /// Where each measure sits in the decision row.
 #[derive(Clone, Copy)]
 struct Column {
@@ -144,6 +156,7 @@ pub struct TrainedDetector {
     shape_cols: Vec<Column>,
     level_col: Option<usize>,
     rule: FireRule,
+    kick: Option<KickLink>,
     cands: Vec<Candidate>,
     pending: [Option<Pending>; PENDING],
     head: usize,
@@ -194,11 +207,17 @@ impl TrainedDetector {
             None => (None, Vec::new(), None),
         };
         let shape_width = spec.stage.as_ref().map_or(0, |s| s.shape_width());
+        let kick = if used.contains(&Measure::Kick2) {
+            Some(KickLink { train_id: c.text("kick2.kick_train_id")?.to_owned(), lag: None, settled: None })
+        } else {
+            None
+        };
         let count = spec.net.as_ref().map_or(0, |n| n.count);
         Ok(Self {
             measures: MeasureBank::new(c, &used)?,
             cands: Vec::with_capacity(finder.max_candidates(ModelInput::max_model(input_rate))),
             rule: FireRule::new(spec.cutoff, spec.refractory_s),
+            kick,
             finder,
             columns,
             trees,
@@ -244,13 +263,55 @@ impl TrainedDetector {
         &self.frames
     }
 
-    /// The first 48 kHz sample count at which every part can decide this candidate.
+    /// The first 48 kHz sample count at which every part can decide this candidate. A model reading kick
+    /// verdicts also waits out the kick's own decision lag.
     fn ready(&self, cand: &Candidate) -> u64 {
         let mut ready = self.finder.ready_sample(cand.avail_hop).max(self.measures.ready_sample(cand));
         if let Some(n) = &self.net {
             ready = ready.max(n.ready_sample(cand.avail_hop));
         }
+        if let Some(k) = &self.kick {
+            ready = ready.max(self.finder.ready_sample(cand.avail_hop) + k.lag.unwrap_or(0));
+        }
         ready
+    }
+
+    /// The kick model this one reads verdicts from, if any.
+    pub fn wants_kick(&self) -> Option<&str> {
+        self.kick.as_ref().map(|k| k.train_id.as_str())
+    }
+
+    /// Pairs this model with the kick detector that will feed it, refusing any kick but the trained one.
+    pub fn link_kick(&mut self, kick: &TrainedDetector) -> Result<(), DetectorError> {
+        let lag = kick.decision_lag_samples();
+        let link = self.kick.as_mut().expect("link_kick on a model without kick2");
+        if link.train_id != kick.train_id() {
+            return Err(DetectorError::KickMismatch { want: link.train_id.clone(), got: kick.train_id().to_owned() });
+        }
+        link.lag = Some(lag);
+        Ok(())
+    }
+
+    /// One kick decision, in the kick's emission order.
+    pub fn kick_verdict(&mut self, cand_hop: u64, avail_hop: u64, p_final: f64) {
+        self.measures.push_verdict(cand_hop, avail_hop, p_final);
+    }
+
+    /// Every kick candidate with emission hop at or before `through` is decided and fed.
+    pub fn kick_settled(&mut self, through: Option<u64>) {
+        if let Some(k) = &mut self.kick {
+            k.settled = through;
+        }
+    }
+
+    /// The latest emission hop through which every candidate of this detector is decided: candidates are
+    /// found at the end of their emission hop, and decided in emission order.
+    pub fn settled_avail(&self) -> Option<u64> {
+        let found = (self.samples48 / MODEL_HOP).checked_sub(1)?;
+        match self.pending[self.head].filter(|_| self.len > 0) {
+            Some(p) => p.cand.avail_hop.checked_sub(1).map(|a| a.min(found)),
+            None => Some(found),
+        }
     }
 
     /// Seconds from a candidate's emission to its decision, from the parts' ready rules: the most over every
@@ -266,6 +327,11 @@ impl TrainedDetector {
             .max()
             .unwrap_or(0);
         lag as f64 / MODEL_RATE as f64
+    }
+
+    /// [`Self::decision_lag_s`] in model samples.
+    pub fn decision_lag_samples(&self) -> u64 {
+        (self.decision_lag_s() * MODEL_RATE as f64).round() as u64
     }
 
     /// The most fires one push of `samples` input samples can append: one per candidate found in it, plus
@@ -295,6 +361,8 @@ impl TrainedDetector {
 
     /// Feeds mono input samples; hands every decision (fired or not) to `on_decision` as it is made.
     pub fn push_traced(&mut self, samples: &[f32], mut on_decision: impl FnMut(&Decision<'_>, Option<Fire>)) {
+        // Unlinked, a kick2 model would wait for kick verdicts forever and never fire.
+        debug_assert!(self.kick.as_ref().is_none_or(|k| k.lag.is_some()), "a kick2 model runs only fed by its kick (KickFed)");
         for chunk in samples.chunks(ModelInput::STEP) {
             self.input.feed(chunk);
             self.step_block(&mut on_decision);
@@ -309,7 +377,7 @@ impl TrainedDetector {
         if let Some(n) = &mut self.net {
             n.push(block);
         }
-        self.frames.push(block);
+        self.frames.push(block, self.net.as_ref().map(Net::spectrum));
         self.samples48 += block.len() as u64;
         for i in 0..self.cands.len() {
             let cand = self.cands[i];
@@ -322,7 +390,8 @@ impl TrainedDetector {
             self.len += 1;
         }
         while self.len > 0 {
-            let Some(p) = self.pending[self.head].filter(|p| p.ready <= self.samples48) else { break };
+            let kick_ok = |p: &Pending| self.kick.as_ref().is_none_or(|k| k.settled.is_some_and(|s| s >= p.cand.avail_hop));
+            let Some(p) = self.pending[self.head].filter(|p| p.ready <= self.samples48 && kick_ok(p)) else { break };
             self.head = (self.head + 1) % PENDING;
             self.len -= 1;
             self.decide(&p, on_decision);

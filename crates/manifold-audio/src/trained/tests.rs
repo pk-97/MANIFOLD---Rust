@@ -11,6 +11,7 @@ use super::net::average;
 use super::spec::{MODEL_HOP, MODEL_RATE, Measure, Spec};
 use super::trees::{Forest, expit};
 use super::*;
+use crate::detectors::{KickFed, Side};
 
 /// Every golden set on disk: a count match, so no set is silently skipped.
 const SETS: [&str; 4] = ["cover_kick", "cover_snare", "kick", "snare"];
@@ -122,6 +123,66 @@ fn part_parity(set: &str, m: &Container, spec: &Spec, name: &str, g: &Container)
     println!("{set}/{name} part: {k} candidates, {}; fires {nf} exact", report.join(", "));
 }
 
+/// The model alone, or fed by the kick set's model when it reads kick verdicts: the production pairing, with
+/// the emission time of every kick decision.
+enum Run {
+    Alone(Box<TrainedDetector>),
+    Fed(Box<KickFed>, Vec<f64>),
+}
+
+impl Run {
+    fn new(m: &Container) -> Self {
+        let det = TrainedDetector::from_container(m, 48_000).unwrap();
+        if det.wants_kick().is_none() {
+            return Self::Alone(Box::new(det));
+        }
+        let kick = TrainedDetector::from_container(&model("kick"), 48_000).unwrap();
+        Self::Fed(Box::new(KickFed::new(kick, det).expect("the kick set is the kick this model reads")), Vec::new())
+    }
+
+    fn det(&self) -> &TrainedDetector {
+        match self {
+            Self::Alone(d) => d,
+            Self::Fed(f, _) => f.reader(),
+        }
+    }
+
+    fn push_traced(&mut self, samples: &[f32], mut on_decision: impl FnMut(&Decision<'_>, Option<Fire>)) {
+        match self {
+            Self::Alone(d) => d.push_traced(samples, on_decision),
+            Self::Fed(f, emits) => f.push_traced(samples, |side, d, fire| match side {
+                Side::Kick => emits.push(((d.avail_hop + 1) * MODEL_HOP) as f64 / MODEL_RATE as f64),
+                Side::Reader => on_decision(d, fire),
+            }),
+        }
+    }
+}
+
+/// A model's stream-start edge (see `end_to_end`): which emissions have a net slice that would start before the
+/// clip, and the longest stage window, over which such a decision taints later stage inputs.
+struct NetEdge {
+    ahead: f64,
+    frame_s: f64,
+    slice: i64,
+    max_w: f64,
+}
+
+impl NetEdge {
+    fn of(m: &Container, spec: &Spec) -> Option<Self> {
+        spec.net.as_ref()?;
+        Some(Self {
+            ahead: m.f64s("net.ahead_s", &[]).unwrap()[0],
+            frame_s: m.f64s("net.frame_s", &[]).unwrap()[0],
+            slice: m.i64s("net.slice", &[]).unwrap()[0],
+            max_w: spec.stage.as_ref().map_or(0.0, |s| s.windows_s.iter().copied().fold(0.0, f64::max)),
+        })
+    }
+
+    fn clipped(&self, emit_s: f64) -> bool {
+        (((emit_s + self.ahead) / self.frame_s) as i64) < self.slice + 1
+    }
+}
+
 #[derive(Default)]
 struct Got {
     cand: u64,
@@ -143,20 +204,29 @@ fn end_to_end(set: &str, m: &Container, spec: &Spec, name: &str, g: &Container, 
     let (cand, avail) = (g.i64s("cand_hop", &[k]).unwrap(), g.i64s("avail_hop", &[k]).unwrap());
     let onset_s = g.f64s("onset_s", &[k]).unwrap();
     let audio = golden::audio_f32(g);
-    let mut det = TrainedDetector::from_container(m, 48_000).unwrap();
-    let lag = det.decision_lag_s();
+    let mut run = Run::new(m);
+    let lag = run.det().decision_lag_s();
     let mut got: Vec<Got> = Vec::with_capacity(k + 64);
     let mut fires: Vec<Fire> = Vec::new();
     let mut chunks = Chunks(seed);
-    let (mut at, mut spec_f, mut flat_f) = (0, 0u64, 0u64);
-    let (mut spec_err, mut flat_err) = (0.0f64, 0.0f64);
+    let (mut at, mut spec_f, mut spec_err) = (0, 0u64, 0.0f64);
     let gspec = g.contains("frames.spec").then(|| (g.shape("frames.spec").unwrap()[0], g.f32s("frames.spec", &[g.shape("frames.spec").unwrap()[0], 64]).unwrap()));
-    let gflat = g.contains("frames.flat").then(|| (g.shape("frames.flat").unwrap()[0], g.f32s("frames.flat", &[g.shape("frames.flat").unwrap()[0], 64]).unwrap()));
+    // Each extra channel in the net's order: (name, golden frames, values, frames compared, max error).
+    let mut gch: Vec<(&str, usize, &[f32], u64, f64)> = spec.net.as_ref().map_or(Vec::new(), |n| {
+        n.channels
+            .iter()
+            .map(|ch| {
+                let key = format!("frames.{}", ch.name());
+                let t = g.shape(&key).unwrap()[0];
+                (ch.name(), t, g.f32s(&key, &[t, 64]).unwrap(), 0, 0.0)
+            })
+            .collect()
+    });
     while at < audio.len() {
         let n = chunks.next().min(audio.len() - at);
-        fires.reserve(det.max_fires(n));
+        fires.reserve(run.det().max_fires(n));
         let cap = fires.capacity();
-        det.push_traced(&audio[at..at + n], |d, f| {
+        run.push_traced(&audio[at..at + n], |d, f| {
             got.push(Got {
                 cand: d.cand_hop,
                 avail: d.avail_hop,
@@ -174,20 +244,21 @@ fn end_to_end(set: &str, m: &Container, spec: &Spec, name: &str, g: &Container, 
         });
         assert_eq!(fires.capacity(), cap, "{set}/{name}: push grew the output");
         at += n;
+        let det = run.det();
         if let (Some(net), Some((t, want))) = (det.net(), &gspec) {
             while (spec_f as usize) < *t && let Some(row) = net.spectrum().frame(spec_f) {
                 spec_err = spec_err.max(max_err(row.iter().map(|&v| v as f64), want[spec_f as usize * 64..][..64].iter().map(|&v| v as f64)));
                 spec_f += 1;
             }
         }
-        if let Some((t, want)) = &gflat {
-            while (flat_f as usize) < *t && let Some(row) = det.frames().frame(0, flat_f) {
-                flat_err = flat_err.max(max_err(row.iter().map(|&v| v as f64), want[flat_f as usize * 64..][..64].iter().map(|&v| v as f64)));
-                flat_f += 1;
+        for (i, (_, t, want, f, err)) in gch.iter_mut().enumerate() {
+            while (*f as usize) < *t && let Some(row) = det.frames().frame(i, *f) {
+                *err = err.max(max_err(row.iter().map(|&v| v as f64), want[*f as usize * 64..][..64].iter().map(|&v| v as f64)));
+                *f += 1;
             }
         }
     }
-    assert_eq!(det.dropped(), 0, "{set}/{name}: dropped candidates");
+    assert_eq!(run.det().dropped(), 0, "{set}/{name}: dropped candidates");
     let d = got.len();
     assert!(d <= k && k - d <= 64, "{set}/{name}: {d} of {k} decided");
     for (i, x) in got.iter().enumerate() {
@@ -196,14 +267,28 @@ fn end_to_end(set: &str, m: &Container, spec: &Spec, name: &str, g: &Container, 
     if let Some((t, _)) = &gspec {
         assert!(spec_f as usize + 64 >= *t, "{set}/{name}: only {spec_f} of {t} spectrum frames compared");
     }
-    assert!(spec_err <= 1e-3 && flat_err <= 1e-3, "{set}/{name}: frames spec {spec_err} flat {flat_err} dB");
+    let frames = gch.iter().map(|(n, t, _, f, e)| format!(" {n} {e:.1e} ({f} of {t})")).collect::<String>();
+    assert!(spec_err <= 1e-3 && gch.iter().all(|c| c.4 <= 1e-3), "{set}/{name}: frames spec {spec_err}{frames} dB");
 
-    // Measures, abs 1e-6.
+    // Measures, abs 1e-6; the kick verdict (kick2) carries the kick's probability, abs 1e-4 like the kick's own
+    // p.final, and is not comparable where the kick's window opens inside the kick's stream-start edge.
     let used = spec.measures();
     let want_m = rows(g, &used, k);
     let width: usize = used.iter().map(|m| m.width()).sum();
-    let tail_col = used.iter().position(|&m| m == Measure::Tail3).map(|p| used[..p].iter().map(|m| m.width()).sum::<usize>() + 1);
-    let (mut m_err, mut tail_skipped) = (0.0f64, 0);
+    let col_of = |want: Measure| used.iter().position(|&m| m == want).map(|p| used[..p].iter().map(|m| m.width()).sum::<usize>());
+    let tail_col = col_of(Measure::Tail3).map(|c| c + 1);
+    let kick_cols = col_of(Measure::Kick2).map(|c| c..c + Measure::Kick2.width());
+    // The last clipped kick decision taints the kick's p.final over its longest stage window.
+    let kick_edge_s = match (&run, &kick_cols) {
+        (Run::Fed(_, emits), Some(_)) => {
+            let km = model("kick");
+            let edge = NetEdge::of(&km, &Spec::parse(&km).unwrap());
+            edge.and_then(|e| emits.iter().rev().find(|&&t| e.clipped(t)).map(|t| t + e.max_w + m.f64s("kick2.window_s", &[2]).unwrap()[0]))
+        }
+        _ => None,
+    };
+    let kick_edge = |i: usize| kick_edge_s.is_some_and(|e| onset_s[i] <= e);
+    let (mut m_err, mut k_err, mut tail_skipped) = (0.0f64, 0.0f64, 0);
     for (i, x) in got.iter().enumerate() {
         let onset_ms = (onset_s[i] / 0.001).round_ties_even() as i64;
         for c in 0..width {
@@ -211,7 +296,11 @@ fn end_to_end(set: &str, m: &Container, spec: &Spec, name: &str, g: &Container, 
                 tail_skipped += 1;
                 continue;
             }
-            m_err = m_err.max(max_err([x.measures[c]], [want_m[i * width + c]]));
+            let e = max_err([x.measures[c]], [want_m[i * width + c]]);
+            match &kick_cols {
+                Some(r) if r.contains(&c) => k_err = if kick_edge(i) { k_err } else { k_err.max(e) },
+                _ => m_err = m_err.max(e),
+            }
         }
     }
     // Net logits 1e-3, every probability 1e-4. `Song.__init__` clips a slice that would start before the clip
@@ -219,14 +308,9 @@ fn end_to_end(set: &str, m: &Container, spec: &Spec, name: &str, g: &Container, 
     // outputs are not comparable, nor is any stage input whose memory window holds one. Only clips that start on
     // music have any (D10).
     let emit_s = g.f64s("emit_s", &[k]).unwrap();
-    let clipped: Vec<bool> = match spec.net {
-        Some(_) => {
-            let (ahead, frame_s) = (m.f64s("net.ahead_s", &[]).unwrap()[0], m.f64s("net.frame_s", &[]).unwrap()[0]);
-            let slice = m.i64s("net.slice", &[]).unwrap()[0];
-            (0..d).map(|i| (((emit_s[i] + ahead) / frame_s) as i64) < slice + 1).collect()
-        }
-        None => vec![false; d],
-    };
+    // A kick2 reader's candidates in the kick's edge are left out with them.
+    let edge = NetEdge::of(m, spec);
+    let clipped: Vec<bool> = (0..d).map(|i| edge.as_ref().is_some_and(|e| e.clipped(emit_s[i])) || kick_edge(i)).collect();
     let max_w = spec.stage.as_ref().map_or(0.0, |s| s.windows_s.iter().copied().fold(0.0, f64::max));
     let last_clipped = (0..d).rev().find(|&i| clipped[i]);
     let tainted: Vec<bool> = (0..d).map(|i| clipped[i] || last_clipped.is_some_and(|c| c <= i && emit_s[i] - emit_s[c] <= max_w)).collect();
@@ -270,8 +354,8 @@ fn end_to_end(set: &str, m: &Container, spec: &Spec, name: &str, g: &Container, 
         (a.min(e), b.max(e))
     });
     println!(
-        "{set}/{name} e2e: {d} of {k} decided; frames spec {spec_err:.1e} flat {flat_err:.1e} dB; measures {m_err:.1e} ({tail_skipped} early pre_rel_db not compared); \
-         net.logit {z_err:.1e}; {}; stage.x {x_err:.1e} (stream-start edge: {} net, {} stage candidates not compared); fires {}/{} mismatched {mismatched:?}; lag {lo:.1}..{hi:.1} ms (bound {:.1})",
+        "{set}/{name} e2e: {d} of {k} decided; frames spec {spec_err:.1e}{frames} dB; measures {m_err:.1e} ({tail_skipped} early pre_rel_db not compared); \
+         kick2 {k_err:.1e}; net.logit {z_err:.1e}; {}; stage.x {x_err:.1e} (stream-start edge: {} net, {} stage candidates not compared); fires {}/{} mismatched {mismatched:?}; lag {lo:.1}..{hi:.1} ms (bound {:.1})",
         errs.iter().map(|(n, e)| format!("{n} {e:.1e}")).collect::<Vec<_>>().join(" "),
         edge.0,
         edge.1,
@@ -280,6 +364,7 @@ fn end_to_end(set: &str, m: &Container, spec: &Spec, name: &str, g: &Container, 
         lag * 1e3
     );
     assert!(m_err <= 1e-6, "{set}/{name}: measures {m_err}");
+    assert!(k_err <= 1e-4, "{set}/{name}: kick2 {k_err}");
     assert!(z_err <= 1e-3, "{set}/{name}: net.logit {z_err}");
     for (n, e) in errs {
         assert!(e <= 1e-4, "{set}/{name}: {n} {e}");
@@ -373,18 +458,20 @@ fn detector_cost() {
         let m = model(set);
         let name = &clips(set)[0];
         let pcm = golden::audio_f32(&golden::load(&dir(set), name));
-        let mut det = TrainedDetector::from_container(&m, 48_000).unwrap();
+        let mut run = Run::new(&m);
         let mut fires = Vec::with_capacity(4096);
         let t0 = std::time::Instant::now();
         for chunk in pcm.chunks(800) {
-            det.push_with(chunk, |f| fires.push(f));
+            run.push_traced(chunk, |_, f| fires.extend(f));
         }
+        let det = run.det();
         let secs = pcm.len() as f64 / 48_000.0;
         println!(
-            "{set}: {:.2} ms CPU per second of audio ({:.1} candidates/s, {} nets) on {name}",
+            "{set}: {:.2} ms CPU per second of audio ({:.1} candidates/s, {} nets{}) on {name}",
             t0.elapsed().as_secs_f64() / secs * 1e3,
             det.decided() as f64 / secs,
-            det.spec().net.as_ref().map_or(0, |n| n.count)
+            det.spec().net.as_ref().map_or(0, |n| n.count),
+            if det.wants_kick().is_some() { ", the kick it reads included" } else { "" }
         );
     }
 }
