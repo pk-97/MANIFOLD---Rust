@@ -748,5 +748,68 @@ def builder(x):
         self.assertEqual(base['net'], t8['net'])
         self.assertEqual(len({base['trees'], t8['trees'], t16['trees']}), 3)
 
+
+def _drum_song(seed, tempo_points, bars, start_bar, shuffle=False):
+    """A synthetic set and its export: kick and snare beats with bar-level structure (dropped bars, extra 16ths),
+    rendered from start_bar on the tempo map at 48 kHz. shuffle renders the hits on random 16ths instead."""
+    from tools.audio_analysis.lab.offsets import beat_clock
+    rng = np.random.default_rng(seed)
+    kick, snare = [], []
+    for b in range(bars):
+        if rng.random() < .75:
+            kick += [4 * b + q for q in range(4)] + [4 * b + rng.integers(0, 16) / 4 for _ in range(rng.integers(0, 3))]
+        if rng.random() < .6:
+            snare += [4 * b + 1, 4 * b + 3]
+    kick, snare = np.unique(kick).astype(float), np.unique(snare).astype(float)
+    clock = beat_clock(tempo_points)
+    start = float(clock(np.array([4.0 * start_bar]))[0])
+    dur = float(clock(np.array([4.0 * bars]))[0]) - start + 1
+    x = .02 * rng.standard_normal(int(dur * 48000))
+    n = np.arange(int(.25 * 48000))
+    thump = np.sin(2 * np.pi * 55 * n / 48000) * np.exp(-n / 2400)
+    crack = rng.standard_normal(len(n)) * np.exp(-n / 1500)
+    for beats, sound in ((kick, thump), (snare, .5 * crack)):
+        hits = beats if not shuffle else rng.choice(np.arange(4 * bars * 4) / 4, len(beats), replace=False)
+        for t in clock(hits) - start:
+            i = int(round(t * 48000))
+            if 0 <= i < len(x) - len(n):
+                x[i:i + len(n)] += sound
+    return kick, snare, x, start
+
+
+class OffsetProofTests(unittest.TestCase):
+    RAMP = [dict(beat=0.0, bpm=110.0), dict(beat=96.0, bpm=150.0)]
+
+    def test_seconds_proof_on_tempo_ramp(self):
+        """A set whose tempo ramps 110 to 150 bpm proves at its true export start, kick and snare agreeing, with the
+        kick attacks on time (and off 30 ms early); the same notes against hits on random 16ths never prove."""
+        from tools.audio_analysis.lab.offsets import attacks_at, prove_seconds
+        res = dict(tempo_points=self.RAMP)
+        kick, snare, x, start = _drum_song(1, self.RAMP, 40, 3)
+        got = prove_seconds(res, x, kick, snare)
+        self.assertTrue(got['status'].startswith('proven (kick and snare agree'), got)
+        self.assertEqual(got['kick']['k'], 3)
+        self.assertLess(abs(got['offset_s'] + start), .005, got)
+        self.assertEqual(got['attack']['verdict'], 'on time', got['attack'])
+        self.assertEqual(attacks_at(x, res, kick, got['offset_s'] - .03)['verdict'], 'off')
+        for seed in (1, 2, 3):
+            kick, snare, x, _ = _drum_song(seed, self.RAMP, 40, 3, shuffle=True)
+            got = prove_seconds(dict(tempo_points=self.RAMP), x, kick, snare)
+            self.assertTrue(got['status'].startswith('not proven'), (seed, got))
+
+    def test_seconds_fit_equals_wip_fit_on_one_tempo(self):
+        """On one tempo the map fit is detector_wip's fit, number for number."""
+        from scipy.ndimage import maximum_filter1d
+        from tools.audio_analysis.eval.detector_wip import prove
+        from tools.audio_analysis.eval.kick_goal_wip_sections import band_amp_rise, onset_env
+        from tools.audio_analysis.lab.offsets import beat_clock, fit_map
+        tp = [dict(beat=0.0, bpm=134.0)]
+        kick, snare, x, _ = _drum_song(4, tp, 32, 2)
+        dur, spb = len(x) / 48000, 60 / 134.0
+        for env, beats in ((onset_env(x), kick), (100 * maximum_filter1d(band_amp_rise(x, 1000, 8000), 7), snare)):
+            old, new = prove(env, beats, dur, spb), fit_map(env, beats, dur, beat_clock(tp))
+            self.assertEqual(old, {k: v for k, v in new.items() if k != 'start_s'})
+            self.assertEqual(new['start_s'], round(4 * old['k'] * spb, 4))
+
 if __name__ == '__main__':
     unittest.main()
