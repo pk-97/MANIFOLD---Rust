@@ -352,7 +352,8 @@ until Peter's yes on a lab-trained one (P7).
 - *Cutoffs from models that never saw the group:* every lab run with groups also trains the pair models (without
   groups k and j) and chooses group k's cutoff on their predictions for the other groups. A one-net-per-song run
   cannot, so `compare.py` refuses it; its score is labelled optimistic.
-- *Folds:* the kick stage runs on 8 groups, so stage training models see 6/8 of the songs and applied ones 7/8.
+- *Folds:* kick A/Bs without a stage run on 4 groups. The stage chooses its own folds when it is built; on 8
+  groups its training models would see 6/8 of the songs and applied ones 7/8.
 - *Cache keys* cover a builder's closure: its source, the constants it reads and the helpers it calls in
   `tools/audio_analysis`.
 - *Two measure kinds:* `frame` measures (T, k on the finder's hop grid; `flat`, later envelopes) feed the net as
@@ -384,8 +385,15 @@ the templates, the Fable review.
   and overwhelming_force fail the audit (unproven project offsets) and stay out, as Peter ruled for bass and synth.
 - A trained model's predictions are stored under a key of everything that decides them (`run.py model_key`), so a
   config that needs the same model reuses it: an A/B that changes only the trees retrains no nets.
-- Cost per kick seed on 8 groups (36 trainings): nets 7 min, trees 50 s on 4 threads, scoring 3 s. Snare seed on
-  4 groups (10 nets): 20 s; scoring 2 s.
+- Cost per kick seed on 4 groups (10 trainings): an outer net trains in 10 s, so nets take under 2 min; trees
+  were 50 s for 36 fits on 4 threads; scoring 3 s. Snare seed on 4 groups (10 nets): 20 s; scoring 2 s.
+- Net training options, each a config key with today's training as the default (a schema 2 net without them
+  migrates to the defaults): `swa_epochs` (equal-weight average of the last N epochs' weights; the net has no
+  BatchNorm, so nothing to recompute), `batch` (256), `lr` (0.002), `precision` (`float32` or `mixed`: float16
+  autocast with a loss scaler). Slices are cut on the device holding the song; the trained net is bit-identical.
+  Against `snare_gen_share50` over seeds 0-4: `snare_gen50_swa` +0.16 F1 points (90% -0.54 to +0.90);
+  `snare_gen50_fast` (batch 1024, lr 0.004, mixed) +0.01 (-2.34 to +2.23) on real songs but -12 on generated ones
+  and only 10% faster. Neither is adopted.
 - Training i of the plan uses random state 1000 i + seed (outer nets keep the retired runner's seeds).
 - On a snare save the pair cutoffs and the old leave-one-out cutoffs scored 0.806 and 0.802: the rule is sound and
   costs nothing measurable.

@@ -1,7 +1,8 @@
 """Experiment configs (docs/DETECTOR_LAB_DESIGN.md D6, D9, P6): one JSON file per experiment in lab/experiments/;
 an A/B is two configs. A config builds a detector from parts (lab/components.py): a candidate finder, models (net,
 trees or both), how they combine, and later the song-memory stage. Every key is required and no other key is
-allowed, so a typo is an error, not a silent default. Schema 1 configs (one net, a 'flat' switch) migrate on read."""
+allowed, so a typo is an error, not a silent default. Schema 1 configs (one net, a 'flat' switch) migrate on read,
+and a schema 2 net without the training options reads them as NET_DEFAULTS (today's training)."""
 import json
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -9,7 +10,10 @@ from pathlib import Path
 EXPERIMENTS = Path(__file__).with_name('experiments')
 SCHEMA = 2
 KEYS = {'family', 'candidates', 'models', 'combine', 'stage', 'sampling', 'train', 'seeds', 'folds'}
-NET_KEYS = {'past_ms', 'ahead_ms', 'channels', 'epochs'}
+# swa_epochs: average the weights of the last N epochs (0 off); precision: 'float32' or 'mixed' (float16 autocast).
+NET_DEFAULTS = dict(swa_epochs=0, batch=256, lr=0.002, precision='float32')
+NET_KEYS = {'past_ms', 'ahead_ms', 'channels', 'epochs', *NET_DEFAULTS}
+PRECISIONS = ('float32', 'mixed')
 TREE_KEYS = {'measures', 'max_iter', 'learning_rate', 'max_leaf_nodes', 'min_samples_leaf', 'l2'}
 COMBINES = {'net': ('net',), 'trees': ('trees',), 'mean_logit': ('net', 'trees')}
 
@@ -19,7 +23,7 @@ class Experiment:
     name: str
     family: str
     candidates: str    # a finder rule (components.FINDERS)
-    models: dict       # {'net': {past_ms, ahead_ms, channels, epochs}, 'trees': {measures, ...}}: one or both
+    models: dict       # {'net': {past_ms, ahead_ms, channels, epochs, NET_DEFAULTS keys}, 'trees': {...}}: one or both
     combine: str       # 'net' | 'trees' | 'mean_logit' (both)
     stage: dict | None  # the song-memory stage (P6 second pass)
     sampling: dict     # per_song 'median'; generated 'songs' (ordinary songs) or a share
@@ -52,14 +56,16 @@ class Experiment:
 
 
 def migrate(d):
-    """A schema 1 config dict (one net with a 'flat' switch) as schema 2."""
-    if 'net' not in d:
-        return d
+    """A schema 1 config dict (one net with a 'flat' switch) as schema 2; a net without the training options gets
+    NET_DEFAULTS."""
     d = dict(d)
-    net = d.pop('net')
-    d['models'] = dict(net=dict(past_ms=net['past_ms'], ahead_ms=net['ahead_ms'],
-                                channels=['flat'] if net.get('flat') else [], epochs=net['epochs']))
-    d['combine'], d['stage'] = 'net', None
+    if 'net' in d:
+        net = d.pop('net')
+        d['models'] = dict(net=dict(past_ms=net['past_ms'], ahead_ms=net['ahead_ms'],
+                                    channels=['flat'] if net.get('flat') else [], epochs=net['epochs']))
+        d['combine'], d['stage'] = 'net', None
+    if 'net' in d.get('models', {}):
+        d['models'] = dict(d['models'], net=NET_DEFAULTS | d['models']['net'])
     return d
 
 
@@ -72,6 +78,11 @@ def check(d, where=''):
         raise ValueError(f'{where}: models holds "net", "trees" or both')
     if 'net' in m and (set(m['net']) != NET_KEYS or set(m['net']['channels']) - set(FRAME_MEASURES)):
         raise ValueError(f'{where}: net keys are {sorted(NET_KEYS)}, channels from {sorted(FRAME_MEASURES)}')
+    if 'net' in m:
+        n = m['net']
+        if not (isinstance(n['swa_epochs'], int) and 0 <= n['swa_epochs'] <= n['epochs'] and isinstance(n['batch'], int)
+                and n['batch'] > 0 and n['lr'] > 0 and n['precision'] in PRECISIONS):
+            raise ValueError(f'{where}: net swa_epochs in 0..epochs, batch > 0, lr > 0, precision in {PRECISIONS}')
     if 'trees' in m and (set(m['trees']) != TREE_KEYS or not m['trees']['measures']
                          or set(m['trees']['measures']) - set(MEASURES)):
         raise ValueError(f'{where}: trees keys are {sorted(TREE_KEYS)}, measures from {sorted(MEASURES)}')

@@ -209,7 +209,8 @@ def train_model(cfg, model, trainings, seed, data, trees, log):
         t0 = time.time()
         if model == 'net':
             from tools.audio_analysis.eval.kick_goal_nn import predict, train
-            kw = dict(epochs=cfg.net['epochs'], **({'synth_share': share} if share is not None else {}))
+            kw = dict(epochs=cfg.net['epochs'], swa_epochs=cfg.net['swa_epochs'], batch=cfg.net['batch'], lr=cfg.net['lr'],
+                      precision=cfg.net['precision'], **({'synth_share': share} if share is not None else {}))
             net = train([data[u] for u in n['trained']], 1000 * i + seed, [data[c] for c in n['clips']], **kw)
             out.append({t: predict(net, data[t]) for t in n['held']})
         else:

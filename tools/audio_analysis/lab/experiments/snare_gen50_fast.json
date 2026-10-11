@@ -1,0 +1,34 @@
+{
+ "family": "snare",
+ "candidates": "snare:4.5",
+ "models": {
+  "net": {
+   "past_ms": 150,
+   "ahead_ms": 40,
+   "channels": [],
+   "epochs": 12,
+   "swa_epochs": 0,
+   "batch": 1024,
+   "lr": 0.004,
+   "precision": "mixed"
+  }
+ },
+ "combine": "net",
+ "stage": null,
+ "sampling": {
+  "per_song": "median",
+  "generated": 0.5
+ },
+ "train": [
+  "project",
+  "generated"
+ ],
+ "seeds": [
+  0,
+  1,
+  2,
+  3,
+  4
+ ],
+ "folds": 4
+}

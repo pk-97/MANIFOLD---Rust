@@ -140,15 +140,26 @@ class LabTests(unittest.TestCase):
         old = dict(family='snare', candidates='snare:4.5', net=dict(past_ms=190, ahead_ms=40, flat=True, epochs=12),
                    sampling=dict(per_song='median'), train=['project'], seeds=[0], folds=4)
         cfg = config.build('old', old)
-        self.assertEqual(cfg.models, dict(net=dict(past_ms=190, ahead_ms=40, channels=['flat'], epochs=12)))
+        self.assertEqual(cfg.models, dict(net=dict(past_ms=190, ahead_ms=40, channels=['flat'], epochs=12,
+                                                   swa_epochs=0, batch=256, lr=.002, precision='float32')))
         self.assertEqual((cfg.combine, cfg.stage, cfg.ahead_s), ('net', None, .04))
         good = config.migrate(old)
+        # A schema 2 net written before the training options reads them as today's training.
+        before = dict(good, models=dict(net={k: good['models']['net'][k] for k in ('past_ms', 'ahead_ms', 'channels', 'epochs')}))
+        self.assertEqual(config.build('before', before).models, cfg.models)
+        from tools.audio_analysis.eval import kick_goal_nn as nn
+        self.assertEqual((nn.BATCH, nn.LR), (config.NET_DEFAULTS['batch'], config.NET_DEFAULTS['lr']))
+        for f in config.EXPERIMENTS.glob('*.json'):
+            raw = json.loads(f.read_text())['models']
+            self.assertTrue('net' not in raw or set(raw['net']) == config.NET_KEYS, f.name)
         trees = dict(measures=['tail3'], max_iter=10, learning_rate=.1, max_leaf_nodes=7, min_samples_leaf=5, l2=1.0)
         config.build('both', dict(good, models=dict(good['models'], trees=trees), combine='mean_logit'))
         for bad in (dict(good, extra=1), dict(good, combine='trees'),
                     dict(good, models=dict(good['models'], trees=trees)),
                     dict(good, models=dict(trees=dict(trees, measures=['nope'])), combine='trees'),
                     dict(good, models=dict(net=dict(good['models']['net'], channels=['nope']))),
+                    dict(good, models=dict(net=dict(good['models']['net'], swa_epochs=13))),
+                    dict(good, models=dict(net=dict(good['models']['net'], precision='half'))),
                     dict(good, stage=dict(window_s=8))):
             with self.assertRaises(ValueError):
                 config.build('bad', bad)
@@ -298,7 +309,7 @@ def builder(x):
         k = keys(other)
         self.assertEqual(k['net'], net['net'])
         self.assertNotEqual(k['trees'], trees['trees'])
-        folds = config.Experiment(**{**d.__dict__, 'folds': 4})
+        folds = config.Experiment(**{**d.__dict__, 'folds': 8 if d.folds != 8 else 4})
         self.assertNotEqual(keys(folds)['net'], net['net'])
 
     def test_changed_source_refuses_to_run(self):
@@ -495,6 +506,37 @@ def builder(x):
             self.assertTrue(bool((old.extra[0] == new.extra[0]).all()), (t, 'flat'))
             for k in ('end', 'pre', 'on', 'mask', 'y', 'hard'):
                 np.testing.assert_array_equal(getattr(old, k), getattr(new, k), err_msg=f'{t} {k}')
+
+    def test_slices_on_device(self):
+        """Net slices cut from the song's tensors equal the old CPU cut (numpy frame indices) bit for bit, with and
+        without the training jitter, from array or tensor indices, with an extra channel."""
+        import torch
+        from tools.audio_analysis.eval import kick_goal_nn as nn
+        from tools.audio_analysis.eval.kick_goal_nn import Song as NetSong
+
+        def old_slices(song, idx, shift=None):
+            end = song.end[idx] + (shift if shift is not None else 0)
+            frames = torch.from_numpy(end[:, None] - np.arange(nn.SLICE)[::-1][None, :].copy())
+            x = song.spec[frames]
+            shape = x - x.amax(dim=(1, 2), keepdim=True)
+            new = x - song.base[torch.from_numpy(np.asarray(idx))][:, None, :]
+            chans = [shape, new] + [e[frames] for e in song.extra]
+            return torch.stack(chans, 1).transpose(2, 3) / 20.0
+
+        rng = np.random.default_rng(3)
+        n = 4000
+        spec = rng.normal(-40, 20, (n, nn.BANDS)).astype(np.float32)
+        onset = np.sort(rng.uniform(0, n * nn.FRAME_S, 300))
+        song = NetSong(spec, onset, onset + .01, np.ones(300, bool), np.zeros(300), 't',
+                       extra=(rng.normal(0, 1, (n, nn.BANDS)).astype(np.float32),))
+        for _ in range(5):
+            idx = rng.choice(300, 500)
+            shift = rng.integers(-nn.JITTER, nn.JITTER + 1, 500)
+            for got, want in ((song.slices(idx), old_slices(song, idx)),
+                              (song.slices(idx, shift), old_slices(song, idx, shift)),
+                              (song.slices(torch.from_numpy(idx), torch.from_numpy(shift)), old_slices(song, idx, shift))):
+                self.assertEqual(got.dtype, want.dtype)
+                self.assertTrue(torch.equal(got, want))
 
 
 if __name__ == '__main__':
