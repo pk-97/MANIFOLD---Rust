@@ -20,11 +20,16 @@ THRESHOLDS = np.linspace(.05, .99, 95)
 
 
 def inside(t, spans):
-    t = np.asarray(t)
-    out = np.zeros(len(t), bool)
-    for a, b in spans:
-        out |= (t >= a) & (t <= b)
-    return out
+    """Whether each t lies in any closed span [a, b]. Spans may overlap: t is inside when the latest end among
+    spans starting at or before t reaches it."""
+    t = np.asarray(t, float)
+    if not len(spans) or not len(t):
+        return np.zeros(len(t), bool)
+    sp = np.asarray(spans, float)
+    sp = sp[np.argsort(sp[:, 0], kind='stable')]
+    reach = np.maximum.accumulate(sp[:, 1])
+    j = np.searchsorted(sp[:, 0], t, side='right') - 1
+    return (j >= 0) & (t <= reach[np.maximum(j, 0)])
 
 
 def nearest(a, b):

@@ -112,7 +112,7 @@ def setup(cfg):
     lab, sha = labels(cfg.family)
     songs = load()
     failed = excluded(cfg.family)
-    lab = {t: s for t, s in lab.items() if t not in failed and s['positives']}
+    lab = {t: s for t, s in lab.items() if t not in failed}
     for t, s in lab.items():
         if (s.get('kind') == 'generated') != (songs[t].kind == 'generated'):
             sys.exit(f'{t}: labels and song list disagree on its kind; rebuild with lab/registry.py build')
@@ -205,7 +205,7 @@ def train_layers(cfg, lab, songs, seed, data, trees, log=print):
     for n, lay in zip(trainings, layers):
         for t, prefix in models.save_keys(grps, n).items():
             for name, probs in lay.items():
-                held[f'{prefix}__{name}__{t}' if prefix else f'{name}__{t}'] = probs
+                held[f'{prefix}__{name}__{t}' if prefix else f'{name}__{t}'] = probs[t]
     return held, record
 
 
