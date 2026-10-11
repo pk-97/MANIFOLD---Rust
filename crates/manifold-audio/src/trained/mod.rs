@@ -19,6 +19,9 @@ pub use detector::{Decision, DetectorError, Fire, TrainedDetector};
 pub use spec::{Spec, SpecError};
 
 #[cfg(test)]
+mod tests;
+
+#[cfg(test)]
 pub(crate) mod golden {
     use super::container::Container;
 

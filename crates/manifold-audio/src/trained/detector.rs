@@ -234,6 +234,16 @@ impl TrainedDetector {
         &self.spec
     }
 
+    #[cfg(test)]
+    pub(crate) fn net(&self) -> Option<&Net> {
+        self.net.as_ref()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn frames(&self) -> &FrameBank {
+        &self.frames
+    }
+
     /// The first 48 kHz sample count at which every part can decide this candidate.
     fn ready(&self, cand: &Candidate) -> u64 {
         let mut ready = self.finder.ready_sample(cand.avail_hop).max(self.measures.ready_sample(cand));
