@@ -15,7 +15,7 @@ pub use detector::{KickDetector, KickError, KickFire};
 pub(crate) mod golden {
     use super::container::Container;
 
-    /// A parity golden from `tests/fixtures/kick/` (written by `tools/audio_analysis/kick_release.py`).
+    /// A parity golden from `tests/fixtures/kick/` (v1; the release tool is now `tools/audio_analysis/lab/release.py`).
     pub fn load(name: &str) -> Container {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/kick").join(name);
         let bytes = std::fs::read(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));

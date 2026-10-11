@@ -1,6 +1,6 @@
 # Detector Runtime — one app runtime that runs any lab-built detector from its model file
 
-**Status:** PROPOSED · 2026-10-11 · Opus 5.5 · owed: Peter's answers to section 12 (open decisions)
+**Status:** IN PROGRESS · 2026-10-11 · P1 built on `feat/detector-runtime`, unlanded (lands with P2–P3) · owed: P2–P4; open decision 1 (section 12)
 **Prerequisites:** Detector Lab P6 (landed on main, `5461d2fee`); the snare port (`feat/snare-port`) merged into this work's branch (section 9, P0).
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (phase briefs) and section 6 (seam briefs) before starting any phase.
 
@@ -242,7 +242,7 @@ dict(
     cutoff=float, refractory_s=float,
     songs=list[str],                            # what the final models trained on
     score=dict,                                 # pooled P / R / F1 at the cutoff on the outer predictions, per layer
-    clips=str,                                  # 'v2' | 'kick-v1' | 'snare-v1': which clip specs export cuts
+    clips=str,                                  # 'v2' | 'kick-v1' | 'snare-v1' | 'cover' (provisional: dense at 12 s only)
 )
 ```
 
@@ -586,8 +586,9 @@ into `feat/detector-runtime`, and P3's landing is **blocked** on his yes (open d
   Restate D3–D6, D9–D11, D15, D17 and the forbidden moves.
 - **Seam brief (Python):** old → new: `kick_release.features/reference` and `snare_release.reference` →
   `release.reference(record, x)`; `kick_export/<piece>.model_entries(final)` → `lab/export/<part>.entries(record)`;
-  `components._snare/_kick` closures → `components.find(rule, family, x, sr) -> Candidates` (used by `candidates()`);
-  `FRAME_MEASURES['flat']` gains a pure builder the cache wraps; `stage.train` additionally saves `stageraw__<song>`.
+  `components._snare/_kick` closures → `components.audio_candidates(rule, family, x, sr) -> Candidates` over the same
+  `FINDERS` closures (built: `candidates()` keeps calling them, so no trained layer's code key moves); `FRAME_MEASURES['flat']`
+  gains a pure builder (`components.FRAME_BUILDERS`, the function the cache wraps); `stage.train` additionally saves `stageraw__<song>`.
   Call sites (re-run `rg -n "kick_release|snare_release|kick_export" tools scripts docs crates`; stop if the list
   differs from section 1's dependants row): `eval/kick_buildup_sim.py` and `eval/snare_roll_sim.py` call
   `release.reference` (or are deleted, named in the commit); `test_lab.py:268–288` and `:553` compare against the
@@ -595,8 +596,8 @@ into `feat/detector-runtime`, and P3's landing is **blocked** on his yes (open d
   the deleted scripts point here (comment-only).
 - **Deliverables:** `lab/release.py`, `lab/contract.py` (entry writer and validator, section 4 rules),
   `lab/export/*`, the named edits above, a fitted-measure registry holding `tmpl3` for the converted kick (apply =
-  `lab/templates.py features`; ⚠ VERIFY-AT-IMPL: it equals `kick_goal_templates.template_features` on the v1
-  templates — the P1 v1 proof fails otherwise), `runtime_parts.json` (finders kick and snare; measures f15 tail3
+  `lab/templates.py features`; verified 2026-10-11: it calls `kick_goal_templates.template_features`, and the v1
+  `tmpl3` goldens reproduce with no difference), `runtime_parts.json` (finders kick and snare; measures f15 tail3
   tmpl3 prof32 fall16 low16; channel flat; three combines; nets N ≥ 1; stage W ≤ 4, level optional, gate), configs
   `lab/experiments/cover_kick.json` (`kick_gen50_gated` with fall16 added to its trees and stage windows [2, 4]) and
   `cover_snare.json` (`snare_gen50_hybrid_low16` with a 190 ms net on the flat channel and tail3 added to its trees,
@@ -704,9 +705,9 @@ and other families: Deferred.
 1. **Land the snare port on its own first?** Recommendation: yes, after your live test (BUG-nss46 (snare ship
    decision)); the runtime then replaces it with the same numbers. If you'd rather wait, the snare goes live with the
    P3 landing and P3 waits for your yes.
-2. **Retire `kick_release.py`.** The shipped kick keeps running (converted, identical fires), but its old recipe can no
+2. **Retire `kick_release.py`.** Answered 2026-10-11: yes (done in P1). The shipped kick keeps running (converted, identical fires), but its old recipe can no
    longer be retrained; every future kick comes from a lab config. Recommendation: yes — the lab's kick configs
    already reproduce its parts, and two release paths would drift. P4 replaces the converted kick anyway.
-3. **How many snare nets?** Three averaged nets gained about one F1 point; each costs one more forward pass (snare
+3. **How many snare nets?** Answered 2026-10-11: N = 3 for the snare, N = 1 for the kick. Three averaged nets gained about one F1 point; each costs one more forward pass (snare
    detector roughly 18 → 40 ms CPU per audio second, all detectors still under the 100 ms ceiling) and needs three
    saved run seeds. Recommendation: N = 3 for the snare, N = 1 for the kick until a kick averaging A/B says otherwise.

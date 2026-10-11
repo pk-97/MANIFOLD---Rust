@@ -1,6 +1,6 @@
 //! The 54 extra tree features, in the order of `kick_goal_featsets.py` `build(g, "f69")`:
 //! tail (3), templates (3), rise profile (32), low filter bank (16). Every coefficient
-//! comes from the `extra.*` entries written by `tools/audio_analysis/kick_export/extra.py`.
+//! comes from the `extra.*` entries written by `tools/audio_analysis/lab/export/measures.py`.
 
 mod dsp;
 mod lowbank;

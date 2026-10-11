@@ -1,4 +1,4 @@
-//! Parity against the exporter's goldens (`tools/audio_analysis/kick_release.py`).
+//! Parity against the exporter's goldens (`tools/audio_analysis/lab/release.py`).
 
 use super::*;
 use crate::kick::golden;

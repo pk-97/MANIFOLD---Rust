@@ -77,10 +77,9 @@ features abs 1e-6, tree logit 1e-6, net probability 1e-4, stage probability
 
 ## 4. Retrain → ship
 
-`tools/audio_analysis/kick_release.py` (dev.py verb): regenerate features from
-audio, grouped run for the stage's training rows and the cutoff, fit final trees,
-net and stage on every song, export the model and goldens, run
-`cargo nextest run -p manifold-audio kick`.
+Superseded: kicks ship from lab configs through `tools/audio_analysis/lab/release.py`
+(dev.py verb `detector-release`); the shipped model is converted to it unchanged. Rules:
+DETECTOR_RUNTIME_DESIGN.md section 3 (The release path).
 
 ## 5. Build order
 

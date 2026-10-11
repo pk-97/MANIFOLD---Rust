@@ -1,6 +1,6 @@
 //! The blend, the 8 s song-relative stage, cutoff and refractory. References:
 //! `run_kick_goal_fast.py` (`lg`, the 'blend' base, `stage_matrix`), `kick_goal_selfsim.py` (`self_features`),
-//! `kick_goal_eval.py` (`fires`). Constants come from `tools/audio_analysis/kick_export/stage.py`.
+//! `kick_goal_eval.py` (`fires`). Constants come from `tools/audio_analysis/lab/export/stage.py`.
 
 use super::container::{Container, ContainerError};
 use super::trees::{Forest, expit, logit};

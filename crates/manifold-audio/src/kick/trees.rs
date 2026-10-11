@@ -1,6 +1,6 @@
 //! HistGradientBoosting inference for the base trees and the stage (reference: sklearn
 //! `HistGradientBoostingClassifier.predict_proba`, `_predictor.pyx` `_predict_one_from_raw_data`).
-//! Export layout: `tools/audio_analysis/kick_export/stage.py` `forest`.
+//! Export layout: `tools/audio_analysis/lab/export/trees.py` `forest`.
 
 use super::container::{Container, ContainerError};
 
