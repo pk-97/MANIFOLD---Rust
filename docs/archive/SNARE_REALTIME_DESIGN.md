@@ -1,7 +1,6 @@
 # Realtime Snare Detector — the trained snare model on the detector worker
 
-**Status:** BUILT on feat/snare-port, awaiting Peter's live test · owed: fast breakbeats and rolls, task 2.1 of BUG-9ngk8 (snare and clap epic) · pointer: docs/KICK_REALTIME_DESIGN.md (shared container, threading, parity rules)
-Lifecycle: contract — the snare model's container, parity rules and retrain-to-ship steps; `snare/mod.rs` cites it.
+**Status:** SUPERSEDED 2026-10-11 by docs/DETECTOR_RUNTIME_DESIGN.md: the snare ships as a lab release on the generic runtime · owed: fast breakbeats and rolls, task 2.1 of BUG-9ngk8 (snare and clap epic)
 
 ## 1. What ships
 

@@ -24,7 +24,7 @@ without a release step.
 
 Companion docs:
 - [AUDIO_EVAL_HARNESS_GUIDE.md](AUDIO_EVAL_HARNESS_GUIDE.md) section 0 (trained detectors) — the rules every trained detector follows; the lab enforces them.
-- [KICK_REALTIME_DESIGN.md](KICK_REALTIME_DESIGN.md) section 4 (retrain to ship) — the lab feeds the release path, never replaces it.
+- [DETECTOR_RUNTIME_DESIGN.md](DETECTOR_RUNTIME_DESIGN.md) section 3 (The release path) — the lab feeds the release path, never replaces it.
 
 ## 1. Audit — what exists (verified 2026-10-11, branch feat/detector-labels-v2 at e775c7068)
 

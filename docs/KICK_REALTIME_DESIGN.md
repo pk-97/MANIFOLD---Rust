@@ -1,10 +1,13 @@
 # Realtime Kick Detector — the trained kick model as the app's only kick detector
 
-**Status:** SHIPPED 2026-10-10 (Peter live-tested) · owed: BUG-qy8q7 (drop kicks missed after a high-passed build-up roll) · Opus 5.5 lead, Fable review
+**Status:** SHIPPED 2026-10-10 (Peter live-tested) · owed: BUG-qy8q7 (drop kicks missed after a high-passed build-up roll) · pointer: the model file, parity and retrain (sections 2–4) are superseded by docs/DETECTOR_RUNTIME_DESIGN.md
 **Prerequisites:** the research recipe (`tools/audio_analysis/eval/`, `docs/AUDIO_EVAL_HARNESS_GUIDE.md`).
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs) before starting a phase.
 
 ## 1. What ships
+
+The model below is the first kick; the shipped kick is now a lab release run by the generic runtime
+(DETECTOR_RUNTIME_DESIGN.md). The consumer contract and threading still hold.
 
 The trained kick model replaces the old kick detector (`KickTrack`/`KickRidges` in
 `crates/manifold-audio/src/analysis.rs`), which is deleted. Consumers keep their
@@ -56,29 +59,18 @@ Container (little-endian), shared with the parity goldens:
 - magic `MKICK001` (8 bytes), then `u32` entry count;
 - per entry: `u16` name length, UTF-8 name, `u8` dtype (0 f64, 1 f32, 2 i32, 3 i16, 4 i64, 5 u8), `u8` ndim, `u64` per dim, then the raw data.
 
-Readers: `tools/audio_analysis/kick_container.py`, `crates/manifold-audio/src/kick/container.rs`.
+Readers: `tools/audio_analysis/kick_container.py`, `crates/manifold-audio/src/trained/container.rs`.
 
-Required entries: `recipe_version` (i32 scalar), `train_id` (u8 text). The
-recipe version names the pipeline shape (feature list, band count, slice
-length, stage inputs). A retrain with the same recipe keeps the version and only
-changes numbers: swap the file, run the parity test, ship. A recipe change bumps
-the version and needs Rust work. Rust refuses a file whose version or shapes it
-does not know; then the kick stays 0 and an error is logged.
+Superseded: the entries are contract v2, DETECTOR_RUNTIME_DESIGN.md section 4 (The model file contract v2).
 
 ## 3. Parity
 
-The exporter writes goldens (`crates/manifold-audio/tests/fixtures/kick/*.mkick`)
-for short clips cut from `tests/fixtures/audio`, audio stored as i16 so both
-sides see identical samples. Each golden holds the audio, each stage's inputs
-and outputs, and the model's `train_id`; a test with a different `train_id`
-fails. Rust feeds the audio in random 256–1024-sample chunks. Tolerances:
-features abs 1e-6, tree logit 1e-6, net probability 1e-4, stage probability
-1e-4, fires exact (one mismatch allowed only within 1e-3 of the cutoff).
+Superseded: DETECTOR_RUNTIME_DESIGN.md section 6 (Parity).
 
 ## 4. Retrain → ship
 
 Superseded: kicks ship from lab configs through `tools/audio_analysis/lab/release.py`
-(dev.py verb `detector-release`); the shipped model is converted to it unchanged. Rules:
+(dev.py verb `detector-release`). Rules:
 DETECTOR_RUNTIME_DESIGN.md section 3 (The release path).
 
 ## 5. Build order

@@ -1,6 +1,6 @@
 # Detector Runtime — one app runtime that runs any lab-built detector from its model file
 
-**Status:** IN PROGRESS · 2026-10-11 · P1 built on `feat/detector-runtime`, unlanded (lands with P2–P3) · owed: P2–P4; open decision 1 (section 12)
+**Status:** BUILT 2026-10-11 on `feat/detector-runtime-rust`, unlanded: P1–P4 land as one change, shipping kick-2026-10-11-a384db47b and snare-2026-10-11-a384db47b · owed: Peter's live test (section 9, P4 demo)
 **Prerequisites:** Detector Lab P6 (landed on main, `5461d2fee`); the snare port (`feat/snare-port`) merged into this work's branch (section 9, P0).
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (phase briefs) and section 6 (seam briefs) before starting any phase.
 
@@ -37,8 +37,8 @@ or the project file.
 
 Companion docs:
 - [DETECTOR_LAB_DESIGN.md](DETECTOR_LAB_DESIGN.md) — the parts, configs and runs; its P7 (releases from component configs) is built here.
-- [KICK_REALTIME_DESIGN.md](KICK_REALTIME_DESIGN.md) — the shipped kick, the container format, threading; sections 2–4 are superseded at P3.
-- `docs/SNARE_REALTIME_DESIGN.md` on `feat/snare-port` — the snare v1 port; superseded at P3.
+- [KICK_REALTIME_DESIGN.md](KICK_REALTIME_DESIGN.md) — the kick's consumer contract, the container format, threading; its sections 2–4 are superseded here.
+- `docs/archive/SNARE_REALTIME_DESIGN.md` — the snare v1 port, superseded here. Its consumer contract still holds: `SendFeatures.bands[Mid].snare` is 1.0 on the fire hop and decays like the kick; the trigger drawer's Snare chip reads it.
 
 ## 1. Audit — what exists (verified 2026-10-11)
 
@@ -498,6 +498,10 @@ History ring capacity = `ceil(max window × 192) + 1` entries (`kick/stage.rs:14
 
 The snare follows the same path from `fsp`'s snare v1.
 
+As built: P3 and P4 land as one change on Peter's yes to the lab-trained detectors, so the converted v1 files never
+reach main. Release-build cost on the shipped sets' dense clips: kick 24.5–24.7 and snare 18.6–19.0 ms CPU per audio
+second (D16 ceiling 100 for all detectors together).
+
 ## 6. Parity
 
 Two levels, every golden set, no GPU (all tests are CPU `cargo nextest`):
@@ -702,7 +706,7 @@ and other families: Deferred.
 
 ## 12. Open decisions (Peter)
 
-1. **Land the snare port on its own first?** Recommendation: yes, after your live test (BUG-nss46 (snare ship
+1. **Land the snare port on its own first?** Answered 2026-10-11: no; the snare goes live with the runtime landing (Peter's yes to the lab-trained detectors). Recommendation was: yes, after your live test (BUG-nss46 (snare ship
    decision)); the runtime then replaces it with the same numbers. If you'd rather wait, the snare goes live with the
    P3 landing and P3 waits for your yes.
 2. **Retire `kick_release.py`.** Answered 2026-10-11: yes (done in P1). The shipped kick keeps running (converted, identical fires), but its old recipe can no

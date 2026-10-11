@@ -8,9 +8,9 @@ Written so a session with NO prior context can run, read, and judge results.
 
 ## 0. Trained detectors — what holds
 
-The kick detector is a trained model; its recipe, model file, parity tests and the
-retrain-to-ship path are in [KICK_REALTIME_DESIGN.md](KICK_REALTIME_DESIGN.md)
-(section 4, Retrain → ship). The research tools are
+The kick and snare detectors are trained models; their model file, parity tests and the
+release path are in [DETECTOR_RUNTIME_DESIGN.md](DETECTOR_RUNTIME_DESIGN.md)
+(section 3, The release path). The research tools are
 `tools/audio_analysis/eval/kick_goal_*.py` and `run_kick_goal_*.py`. The pre-model DSP
 research log (attack probes, rejection trials, the H-series) lives in git history; its
 transferable rules are below. These rules apply to every trained detector (kick now,
