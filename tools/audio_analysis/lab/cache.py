@@ -45,3 +45,28 @@ def flatness(song):
     a = artifact(song, 'flatness', dict(code=code_id(dc.flatness)),
                  lambda: dc.flatness(mix(song), song.sample_rate).astype(np.float16))
     return a.astype(np.float32)
+
+
+def module_id(*mods):
+    """The source of whole modules: a change to any helper the builder calls is a miss."""
+    h = hashlib.sha256()
+    for m in mods:
+        h.update(Path(m.__file__).read_bytes())
+    return h.hexdigest()[:12]
+
+
+def candidates(song, rule, build=True):
+    """(candidate hops, emission hops) for a candidate rule ('snare:DB': snare_cands at DB). build=False: a miss is
+    an error, so scoring never reads audio."""
+    from tools.audio_analysis.eval import detector_cands, snare_cands
+    from tools.audio_analysis.lab.registry import mix
+    kind, db = rule.split(':')
+    if kind != 'snare':
+        raise ValueError(f'candidate rule {rule}: only snare:DB until the bass and synth families move (P5)')
+
+    def make():
+        if not build:
+            raise SystemExit(f'{song.id}: no cached {rule} candidates; run the experiment first')
+        return np.stack(snare_cands.candidates(mix(song), song.sample_rate, float(db))).astype(np.int64)
+    a = artifact(song, 'candidates', dict(rule=rule, code=module_id(snare_cands, detector_cands)), make)
+    return a[0], a[1]

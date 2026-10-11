@@ -16,6 +16,7 @@ import math
 import sys
 from pathlib import Path
 
+# The kick fast loop's recall-only songs; a lab report carries its own (its 'recall_only' key).
 RECALL_ONLY = ('default_haze', 'lowkey', 'overwhelming_force')
 LOSS_HITS, LOSS_LABELS = 5, 30
 
@@ -25,10 +26,15 @@ def per_song(path, key):
     return res[key or ('blend' if 'blend' in res else 'net')]['per_song']
 
 
-def pooled(ps, songs):
+def recall_only_of(path):
+    d = json.loads(Path(path).read_text())
+    return tuple(d['recall_only']) if 'recall_only' in d else RECALL_ONLY
+
+
+def pooled(ps, songs, recall_only=RECALL_ONLY):
     m = sum(ps[t]['matched'] for t in songs)
     n = sum(ps[t]['labels'] for t in songs)
-    f = sum(ps[t]['extra'] for t in songs if t not in RECALL_ONLY)
+    f = sum(ps[t]['extra'] for t in songs if t not in recall_only)
     r, p = m / max(1, n), m / max(1, m + f)
     return r, p, 2 * r * p / max(1e-9, r + p)
 
@@ -39,10 +45,10 @@ def mean_se(v):
     return m, math.sqrt(var / len(v))
 
 
-def song_f1(side, t):
+def song_f1(side, t, recall_only=RECALL_ONLY):
     m = sum(ps[t]['matched'] for ps in side) / len(side)
     n = side[0][t]['labels']
-    f = 0 if t in RECALL_ONLY else sum(ps[t]['extra'] for ps in side) / len(side)
+    f = 0 if t in recall_only else sum(ps[t]['extra'] for ps in side) / len(side)
     r, p = m / max(1, n), m / max(1e-9, m + f)
     return m, f, 2 * r * p / max(1e-9, r + p)
 
@@ -53,44 +59,51 @@ def sign_p(up, down):
     return min(1.0, 2 * sum(math.comb(n, i) for i in range(k + 1)) / 2 ** n) if n else 1.0
 
 
-def timing(side, songs):
+def timing(side, songs, recall_only=RECALL_ONLY):
     mins = sum(ps[t].get('minutes', 0) for ps in side for t in songs)
     if not mins:
         return ''
-    false = sum(ps[t]['extra'] for ps in side for t in songs if t not in RECALL_ONLY)
+    false = sum(ps[t]['extra'] for ps in side for t in songs if t not in recall_only)
     late = sorted(x for ps in side for t in songs for x in ps[t].get('late_ms', []))
     q = (lambda a: late[min(len(late) - 1, int(a * len(late)))]) if late else (lambda a: float('nan'))
     return f' | {false / mins:.2f} false per minute | late median {q(.5):.0f} ms, p90 {q(.9):.0f} ms'
+
+
+def compare(sides, recall_only=RECALL_ONLY, out=print):
+    """The A/B over sides = [A per-song dicts by seed, B per-song dicts by seed], on the songs every run scored.
+    Returns the numbers it prints."""
+    songs = sorted(set.intersection(*[set(ps) for side in sides for ps in side]))
+    stats = []
+    for name, side in zip('AB', sides):
+        f1 = [pooled(ps, songs, recall_only)[2] for ps in side]
+        stats.append(mean_se(f1))
+        out(f'{name}: F1 ' + ' '.join(f'{v:.4f}' for v in f1) + f' | mean {stats[-1][0]:.4f} ± {stats[-1][1]:.4f}'
+            + timing(side, songs, recall_only) + f' | {len(songs)} songs')
+    diff, se = stats[1][0] - stats[0][0], math.hypot(stats[0][1], stats[1][1])
+    out(f'B - A: {100 * diff:+.2f} ± {100 * se:.2f} F1 points')
+    rows = []
+    for t in songs:
+        ma, fa, f1a = song_f1(sides[0], t, recall_only)
+        mb, fb, f1b = song_f1(sides[1], t, recall_only)
+        rows.append((mb - ma, fb - fa, f1b - f1a, t, sides[0][0][t]['labels']))
+    up = sum(r[2] > 1e-9 for r in rows)
+    down = sum(r[2] < -1e-9 for r in rows)
+    out(f'songs better / worse on F1: {up} / {down} (sign test p = {sign_p(up, down):.2f})')
+    rows.sort()
+    out('hits change per song (B - A, mean over seeds), worst first: '
+        + ', '.join(f'{t} {dm:+.1f} hits {df:+.1f} false ({n})' for dm, df, _, t, n in rows[:8]))
+    lost = [t for dm, _, _, t, n in rows if dm <= -LOSS_HITS and n >= LOSS_LABELS]
+    out(f'songs losing {LOSS_HITS}+ hits (of {LOSS_LABELS}+ labels): {lost}')
+    return dict(songs=songs, a=stats[0], b=stats[1], diff=diff, se=se, better=up, worse=down, lost=lost)
 
 
 def main():
     args = [a for a in sys.argv[1:] if not a.startswith('--')]
     key = sys.argv[sys.argv.index('--key') + 1] if '--key' in sys.argv else None
     args = [a for a in args if a != key]
-    sides = [[per_song(p, key) for p in a.split(',')] for a in args[:2]]
-    songs = sorted(set.intersection(*[set(ps) for side in sides for ps in side]))
-    stats = []
-    for name, side in zip('AB', sides):
-        f1 = [pooled(ps, songs)[2] for ps in side]
-        stats.append(mean_se(f1))
-        print(f'{name}: F1 ' + ' '.join(f'{v:.4f}' for v in f1) + f' | mean {stats[-1][0]:.4f} ± {stats[-1][1]:.4f}'
-              + timing(side, songs) + f' | {len(songs)} songs')
-    diff, se = stats[1][0] - stats[0][0], math.hypot(stats[0][1], stats[1][1])
-    print(f'B - A: {100 * diff:+.2f} ± {100 * se:.2f} F1 points')
-
-    rows = []
-    for t in songs:
-        ma, fa, f1a = song_f1(sides[0], t)
-        mb, fb, f1b = song_f1(sides[1], t)
-        rows.append((mb - ma, fb - fa, f1b - f1a, t, sides[0][0][t]['labels']))
-    up = sum(r[2] > 1e-9 for r in rows)
-    down = sum(r[2] < -1e-9 for r in rows)
-    print(f'songs better / worse on F1: {up} / {down} (sign test p = {sign_p(up, down):.2f})')
-    rows.sort()
-    print('hits change per song (B - A, mean over seeds), worst first: '
-          + ', '.join(f'{t} {dm:+.1f} hits {df:+.1f} false ({n})' for dm, df, _, t, n in rows[:8]))
-    lost = [t for dm, _, _, t, n in rows if dm <= -LOSS_HITS and n >= LOSS_LABELS]
-    print(f'songs losing {LOSS_HITS}+ hits (of {LOSS_LABELS}+ labels): {lost}')
+    files = [a.split(',') for a in args[:2]]
+    sides = [[per_song(p, key) for p in f] for f in files]
+    compare(sides, recall_only_of(files[0][0]))
 
 
 if __name__ == '__main__':

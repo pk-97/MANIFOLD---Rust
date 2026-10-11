@@ -121,11 +121,16 @@ def prf(m, n, f):
 def choose(items, min_precision=None):
     """Cutoff over (labels, emit, p, avail, sr) items: the best pooled F1, or with min_precision the lowest cutoff
     whose pooled precision reaches it (the most recall at that precision; .99 when none does)."""
+    return choose_from([pooled(items, th) for th in THRESHOLDS], min_precision)
+
+
+def choose_from(sums, min_precision=None):
+    """choose() over pooled (caught, positives, false) sums, one per THRESHOLDS entry."""
     if min_precision is not None:
-        return next((th for th in THRESHOLDS if prf(*pooled(items, th))[1] >= min_precision), .99)
+        return next((th for th, mnf in zip(THRESHOLDS, sums) if prf(*mnf)[1] >= min_precision), .99)
     best = (-1, .5)
-    for th in THRESHOLDS:
-        best = max(best, (prf(*pooled(items, th))[2], th))
+    for th, mnf in zip(THRESHOLDS, sums):
+        best = max(best, (prf(*mnf)[2], th))
     return best[1]
 
 
@@ -135,9 +140,12 @@ def held_out(lab, meta, held, min_precision=None, log=print, cutoffs=None, per_s
     and per_song[t] (song_result, decisions at stamp + ahead; ahead a number or one per song) when given."""
     tm = tn = tf = 0
     songs = list(held)
+    # Each eligible song's score at every threshold, once: a cutoff is then a sum over the other songs.
+    table = {u: np.array([score(meta[u][0], meta[u][1], held[u], meta[u][2], th, meta[u][3]) for th in THRESHOLDS])
+             for u in songs if not lab[u]['positives_only'] and lab[u].get('kind') != 'generated'}
+    total = sum(table.values(), np.zeros((len(THRESHOLDS), 3), int))
     for t in songs:
-        th = choose([(meta[u][0], meta[u][1], held[u], meta[u][2], meta[u][3]) for u in songs
-                     if u != t and not lab[u]['positives_only'] and lab[u].get('kind') != 'generated'], min_precision)
+        th = choose_from([tuple(int(v) for v in row) for row in total - table.get(t, 0)], min_precision)
         if cutoffs is not None:
             cutoffs[t] = th
         s, emit, avail, sr = meta[t]

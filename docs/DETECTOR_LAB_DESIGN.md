@@ -1,6 +1,6 @@
 # Detector Lab — one place to label, train and judge MANIFOLD's audio detectors
 
-**Status:** IN PROGRESS · 2026-10-11 · P1 shipped on the branch, P2 next · Opus 5.5 lead; revised after an Opus adversarial review
+**Status:** IN PROGRESS · 2026-10-11 · P1 and P2 shipped on the branch, P3 next · Opus 5.5 lead; revised after an Opus adversarial review
 **Prerequisites:** none
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (phase briefs) and section 6 (seam briefs) before starting any phase.
 
@@ -59,10 +59,14 @@ candidates, the guards. Everything else is called.
 
 ## 2. Decisions
 
-**D1. The lab is a Python package, `tools/audio_analysis/lab/`, that calls `eval/` modules.** Two named edits to
-`eval/` are approved, each keeping today's behaviour bit-identical by default: `kick_goal_nn.train` gains
-`epochs=EPOCHS` and `synth_share=0.5` parameters (D9); `detector_compare` reads recall-only songs from the report
-instead of `RECALL_ONLY`. Nothing else in `eval/` changes. Rejected: re-implementing `train`, `held_out_nets` or the
+**D1. The lab is a Python package, `tools/audio_analysis/lab/`, that calls `eval/` modules.** Three named edits to
+`eval/` are approved, each keeping today's behaviour bit-identical by default, plus one speed-up with identical
+output (`detector_eval.held_out` scores each song once per threshold, then sums: 124 s to 4 s on 44 songs, proven by
+`test_scorer_parity`): `kick_goal_nn.train` gains
+`epochs=EPOCHS` and `synth_share=0.5` parameters (D9); `detector_net.held_out_nets` passes `train_kw` to `train`,
+records what each net trained on (`record`), and with one net per song gives the untrained songs one shared net
+(`net_groups`); `detector_compare` reads recall-only songs from the report instead of `RECALL_ONLY` and exposes the
+A/B as `compare()`. Nothing else in `eval/` changes. Rejected: re-implementing `train`, `held_out_nets` or the
 scorer inside the lab, because a copy is a second truth that drifts. Rejected: a Rust harness, because the research
 loop is torch and numpy.
 
@@ -102,8 +106,8 @@ recorded as proven; `lab/offsets.py` proved all four at their existing offsets.)
 because snare positives already passed a 9 dB attack test (`prominent`) and would pass by construction, while certain
 quiet MIDI notes (DnB ghost snares) would fail it.
 
-**D6. An experiment is a JSON config file; A/B is two configs.** `lab/experiments/<name>.json`: `family`, `labels`,
-`candidates` (`snare:4.5` or a `detector_net.family_candidates` rule), `net` (`past_ms`, `ahead_ms`, `flat`,
+**D6. An experiment is a JSON config file; A/B is two configs.** `lab/experiments/<name>.json`: `family` (its labels
+files are `registry.FAMILIES[family]`), `candidates` (`snare:4.5` or a `detector_net.family_candidates` rule), `net` (`past_ms`, `ahead_ms`, `flat`,
 `epochs`), `sampling` (D9), `train` (`["project"]` or `["project", "generated"]`), `seeds`, `folds` (0 = one net per
 song). Each (config, seed) trains in its own subprocess: `lab/run.py` sets the `KICK_GOAL_NN_*` env from the config,
 imports `eval/`, and asserts the module constants equal the config before training. The run id hashes the config, the
@@ -121,9 +125,10 @@ held-out song on the other exam songs (`detector_eval.held_out`, line 140). Gene
 reported in a separate section. Peter, 2026-10-11, on the generated sets: "Train only. The held-out exam stays on real
 songs."
 
-**D9. Sampling is explicit.** `"sampling": {"per_song": "median", "generated_share": 0.5}` reproduces today:
-generated songs are passed to `train` as `synth=` clips, which together get as many draws as the project songs. Other
-shares set `synth_share` (D1's named edit). `per_song` stays `median` in v1; label-proportional draws are the
+**D9. Sampling is explicit.** `"sampling": {"per_song": "median", "generated": "songs"}` reproduces the legacy
+`SNARE_GEN=train` runs: generated songs train as ordinary songs, each drawing the median like a project song.
+`"generated": 0.35` passes them to `train` as `synth=` clips that together get that share of all draws (0.5: as many
+as the project songs; D1's named edit). `generated` is set exactly when `train` holds `"generated"`. `per_song` stays `median` in v1; label-proportional draws are the
 label-rich sampling bead's job (`bd show BUG-9ngk8.5`). The policy is printed in every report. `DETECTOR_DRAW_CAP`
 goes when bass and synth move (P5).
 
@@ -175,19 +180,20 @@ def artifact(song: Song, stamp: dict, build: Callable[[], np.ndarray]) -> np.nda
 # lab/config.py
 @dataclass(frozen=True)
 class Experiment:
-    name: str; family: str; labels: str; candidates: str
+    name: str; family: str; candidates: str
     net: dict; sampling: dict; train: tuple[str, ...]; seeds: tuple[int, ...]; folds: int
 ```
 
 Report JSON: the `write_results` layout (`results.net.per_song`) plus `exam`, `generated`, `excluded`, `recall_only`,
-`sampling`, `timings`, `run_id`. `detector_compare` reads `recall_only` from it.
+`sampling`, `timings`, `run_id`, one file per seed (`report_s<seed>.json`). Exam songs sit under `results.net.per_song`;
+generated songs under `generated`. `detector_compare` reads `recall_only` from it.
 
-Commands (`scripts/dev.py` verbs `lab-songs`, `lab-audit`, `lab-offsets`, `lab-test`; later phases add `lab-run`, `lab-score`, `lab-compare`):
+Commands (`scripts/dev.py` verbs `lab-songs`, `lab-audit`, `lab-offsets`, `lab-test`, `lab-run`, `lab-score`, `lab-compare`):
 
 ```
 lab/registry.py build | show [SONG] | verify
 lab/audit.py FAMILY                     # writes <labels>.audit.json, prints the table and failures
-lab/run.py CONFIG.json [--seeds 0,1]    # one subprocess per seed; saves predictions and candidates; prints ETA
+lab/run.py CONFIG [--seeds 0,1]         # one subprocess per seed; saves predictions; prints ETA (--plan, --warm)
 lab/score.py RUN_ID | --legacy NPZ      # seconds; writes report.json
 lab/compare.py CONFIG_A CONFIG_B        # runs what is missing (interleaved seeds), scores both, prints the A/B
 lab/test_lab.py                         # the lab's tests (unittest, run directly)
@@ -256,7 +262,7 @@ lab/test_lab.py                         # the lab's tests (unittest, run directl
 
 - **Entry state:** P2 committed.
 - **Deliverables:** `compare.py snare_base snare_generated` over seeds 0–4; three sampling variants of
-  `snare_generated` (`generated_share` 0.2, 0.5, and 0.35) compared against `snare_base`; the report files.
+  `snare_generated` (`sampling.generated` 0.2, 0.35 and 0.5) compared against `snare_base`; the report files.
 - **Gate:** the reports exist; ETA within 20% of actual for warm seeds.
 - **Demo:** the reports, read by Peter, L2.
 

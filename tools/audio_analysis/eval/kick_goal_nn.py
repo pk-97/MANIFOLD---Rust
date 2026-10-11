@@ -190,9 +190,9 @@ def device():
     return torch.device(want or ('mps' if torch.backends.mps.is_available() else 'cpu'))
 
 
-def train(songs, seed, synth=()):
+def train(songs, seed, synth=(), epochs=EPOCHS, synth_share=0.5):
     """A net fitted on the songs' training rows: song-equal, class-balanced sampling.
-    Kick-swap clips (synth) together get as many draws as the real songs, spread evenly."""
+    Clips (synth) together get synth_share of all draws (0.5: as many as the real songs), spread evenly."""
     rng = np.random.default_rng(seed)
     torch.manual_seed(seed)
     dev = device()
@@ -201,8 +201,8 @@ def train(songs, seed, synth=()):
     rows = [(s, np.flatnonzero(s.mask & (s.y == 1)), np.flatnonzero(s.mask & (s.y == 0))) for s in list(songs) + list(synth)]
     per_song = max(1, int(np.median([len(p) for _, p, _ in rows[:len(songs)]])))
     per_song = min(per_song, DRAW_CAP) if DRAW_CAP else per_song
-    per_clip = max(1, per_song * len(songs) // max(1, len(synth)))
-    for _ in range(EPOCHS):
+    per_clip = max(1, int(round(per_song * len(songs) * synth_share / (1 - synth_share))) // max(1, len(synth)))
+    for _ in range(epochs):
         batch_x, batch_y = [], []
         for k, (song, pos, neg) in enumerate(rows):
             draws = per_song if k < len(songs) else per_clip
