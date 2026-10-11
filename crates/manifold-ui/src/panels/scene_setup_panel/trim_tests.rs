@@ -327,5 +327,6 @@ fn custom_matrix_click_survives_per_frame_rebuild() {
     }
     assert!(panel.properties_card.mod_state.audio_matrix_open[0], "Custom must stay open across rebuilds");
     let open_count = panel.properties_card.row_host.audio_configs[0].as_ref().unwrap().0.button_count();
-    assert_eq!(open_count, closed_count + 12, "open matrix adds the 8 Feature + 4 Band buttons");
+    let added = crate::types::AudioFeatureKind::ALL.len() + crate::types::AudioBand::ALL.len();
+    assert_eq!(open_count, closed_count + added, "open matrix adds one button per Feature and per Band");
 }
