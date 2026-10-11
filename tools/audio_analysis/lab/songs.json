@@ -15,7 +15,9 @@
   "offset_s": -30.9163,
   "proof": "lab:proven (kick and snare agree)",
   "families": [
-   "snare"
+   "snare",
+   "bass",
+   "synth"
   ],
   "audit_override": null
  },
@@ -35,7 +37,9 @@
   "offset_s": -26.6123,
   "proof": "lab:proven (kick and snare agree)",
   "families": [
-   "snare"
+   "snare",
+   "bass",
+   "synth"
   ],
   "audit_override": null
  },
@@ -55,7 +59,9 @@
   "offset_s": -28.23629999999999,
   "proof": "goal:kick stem against project kick notes",
   "families": [
-   "snare"
+   "snare",
+   "bass",
+   "synth"
   ],
   "audit_override": null
  },
@@ -75,7 +81,9 @@
   "offset_s": -41.741099999999996,
   "proof": "goal:kick stem against project kick notes",
   "families": [
-   "snare"
+   "snare",
+   "bass",
+   "synth"
   ],
   "audit_override": null
  },
@@ -95,7 +103,9 @@
   "offset_s": -28.6043,
   "proof": "lab:proven (kick and snare agree)",
   "families": [
-   "snare"
+   "snare",
+   "bass",
+   "synth"
   ],
   "audit_override": null
  },
@@ -115,7 +125,9 @@
   "offset_s": -23.4164,
   "proof": "goal:trigger track export offset (labels_trigger.json)",
   "families": [
-   "snare"
+   "snare",
+   "bass",
+   "synth"
   ],
   "audit_override": null
  },
@@ -135,7 +147,9 @@
   "offset_s": -27.8253,
   "proof": "goal:kick stem against project kick notes",
   "families": [
-   "snare"
+   "snare",
+   "bass",
+   "synth"
   ],
   "audit_override": null
  },
@@ -155,7 +169,9 @@
   "offset_s": -29.088749999999994,
   "proof": "goal:kick stem against project kick notes",
   "families": [
-   "snare"
+   "snare",
+   "bass",
+   "synth"
   ],
   "audit_override": null
  },
@@ -175,7 +191,9 @@
   "offset_s": -28.6568,
   "proof": "goal:trigger track export offset (labels_trigger.json)",
   "families": [
-   "snare"
+   "snare",
+   "bass",
+   "synth"
   ],
   "audit_override": null
  },
@@ -195,7 +213,9 @@
   "offset_s": -25.5486,
   "proof": "lab:proven (one pattern, clear win)",
   "families": [
-   "snare"
+   "snare",
+   "bass",
+   "synth"
   ],
   "audit_override": null
  },
@@ -215,7 +235,9 @@
   "offset_s": -35.279300000000006,
   "proof": "goal:kick stem against project kick notes",
   "families": [
-   "snare"
+   "snare",
+   "bass",
+   "synth"
   ],
   "audit_override": null
  },
@@ -235,7 +257,9 @@
   "offset_s": -28.5883,
   "proof": "wip:proven (kick and snare agree)",
   "families": [
-   "snare"
+   "snare",
+   "bass",
+   "synth"
   ],
   "audit_override": null
  },
@@ -255,7 +279,9 @@
   "offset_s": -75.7271,
   "proof": "wip:proven (kick and snare agree)",
   "families": [
-   "snare"
+   "snare",
+   "bass",
+   "synth"
   ],
   "audit_override": null
  },
@@ -275,7 +301,9 @@
   "offset_s": -52.5493,
   "proof": "wip:proven (kick and snare agree)",
   "families": [
-   "snare"
+   "snare",
+   "bass",
+   "synth"
   ],
   "audit_override": null
  },
@@ -295,7 +323,9 @@
   "offset_s": -46.7739,
   "proof": "wip:proven (kick and snare agree)",
   "families": [
-   "snare"
+   "snare",
+   "bass",
+   "synth"
   ],
   "audit_override": null
  },
@@ -315,7 +345,9 @@
   "offset_s": -33.047,
   "proof": "wip:proven (kick and snare agree)",
   "families": [
-   "snare"
+   "snare",
+   "bass",
+   "synth"
   ],
   "audit_override": null
  },
@@ -335,7 +367,9 @@
   "offset_s": -29.0385,
   "proof": "wip:proven (kick and snare agree)",
   "families": [
-   "snare"
+   "snare",
+   "bass",
+   "synth"
   ],
   "audit_override": null
  },
@@ -355,7 +389,9 @@
   "offset_s": -41.6817,
   "proof": "wip:proven (kick and snare agree)",
   "families": [
-   "snare"
+   "snare",
+   "bass",
+   "synth"
   ],
   "audit_override": null
  },
@@ -375,7 +411,9 @@
   "offset_s": -30.4188,
   "proof": "wip:proven (kick and snare agree)",
   "families": [
-   "snare"
+   "snare",
+   "bass",
+   "synth"
   ],
   "audit_override": null
  },
@@ -395,7 +433,9 @@
   "offset_s": -74.8038,
   "proof": "wip:proven (kick and snare agree)",
   "families": [
-   "snare"
+   "snare",
+   "bass",
+   "synth"
   ],
   "audit_override": null
  },
@@ -415,7 +455,9 @@
   "offset_s": -29.0325,
   "proof": "wip:proven (kick and snare agree)",
   "families": [
-   "snare"
+   "snare",
+   "bass",
+   "synth"
   ],
   "audit_override": null
  },
@@ -435,7 +477,9 @@
   "offset_s": -26.9879,
   "proof": "wip:proven (kick and snare agree)",
   "families": [
-   "snare"
+   "snare",
+   "bass",
+   "synth"
   ],
   "audit_override": null
  },
@@ -455,7 +499,9 @@
   "offset_s": -51.1486,
   "proof": "wip:proven (kick and snare agree)",
   "families": [
-   "snare"
+   "snare",
+   "bass",
+   "synth"
   ],
   "audit_override": null
  },
@@ -475,7 +521,9 @@
   "offset_s": -32.486,
   "proof": "wip:proven (kick and snare agree)",
   "families": [
-   "snare"
+   "snare",
+   "bass",
+   "synth"
   ],
   "audit_override": null
  },
@@ -497,7 +545,9 @@
   "offset_s": 0.0,
   "proof": "generated",
   "families": [
-   "snare"
+   "snare",
+   "bass",
+   "synth"
   ],
   "audit_override": null
  },
@@ -519,7 +569,9 @@
   "offset_s": 54.85714285714286,
   "proof": "generated",
   "families": [
-   "snare"
+   "snare",
+   "bass",
+   "synth"
   ],
   "audit_override": null
  },
@@ -541,7 +593,9 @@
   "offset_s": 109.71428571428571,
   "proof": "generated",
   "families": [
-   "snare"
+   "snare",
+   "bass",
+   "synth"
   ],
   "audit_override": null
  },
@@ -563,7 +617,9 @@
   "offset_s": 164.57142857142858,
   "proof": "generated",
   "families": [
-   "snare"
+   "snare",
+   "bass",
+   "synth"
   ],
   "audit_override": null
  },
@@ -585,7 +641,9 @@
   "offset_s": 0.0,
   "proof": "generated",
   "families": [
-   "snare"
+   "snare",
+   "bass",
+   "synth"
   ],
   "audit_override": null
  },
@@ -607,7 +665,9 @@
   "offset_s": 150.85714285714286,
   "proof": "generated",
   "families": [
-   "snare"
+   "snare",
+   "bass",
+   "synth"
   ],
   "audit_override": null
  },
@@ -629,7 +689,9 @@
   "offset_s": 301.7142857142857,
   "proof": "generated",
   "families": [
-   "snare"
+   "snare",
+   "bass",
+   "synth"
   ],
   "audit_override": null
  },
@@ -651,7 +713,9 @@
   "offset_s": 452.57142857142856,
   "proof": "generated",
   "families": [
-   "snare"
+   "snare",
+   "bass",
+   "synth"
   ],
   "audit_override": null
  },
@@ -673,7 +737,9 @@
   "offset_s": 603.4285714285714,
   "proof": "generated",
   "families": [
-   "snare"
+   "snare",
+   "bass",
+   "synth"
   ],
   "audit_override": null
  },
@@ -695,7 +761,9 @@
   "offset_s": 644.5714285714286,
   "proof": "generated",
   "families": [
-   "snare"
+   "snare",
+   "bass",
+   "synth"
   ],
   "audit_override": null
  },
@@ -717,7 +785,9 @@
   "offset_s": 685.7142857142857,
   "proof": "generated",
   "families": [
-   "snare"
+   "snare",
+   "bass",
+   "synth"
   ],
   "audit_override": null
  },
@@ -739,7 +809,9 @@
   "offset_s": 726.8571428571429,
   "proof": "generated",
   "families": [
-   "snare"
+   "snare",
+   "bass",
+   "synth"
   ],
   "audit_override": null
  },
@@ -761,7 +833,9 @@
   "offset_s": 768.0000265317852,
   "proof": "generated",
   "families": [
-   "snare"
+   "snare",
+   "bass",
+   "synth"
   ],
   "audit_override": null
  },
@@ -783,7 +857,9 @@
   "offset_s": 814.4516280928918,
   "proof": "generated",
   "families": [
-   "snare"
+   "snare",
+   "bass",
+   "synth"
   ],
   "audit_override": null
  },
@@ -805,7 +881,9 @@
   "offset_s": 858.7592563905527,
   "proof": "generated",
   "families": [
-   "snare"
+   "snare",
+   "bass",
+   "synth"
   ],
   "audit_override": null
  },
@@ -827,7 +905,9 @@
   "offset_s": 891.8628307285634,
   "proof": "generated",
   "families": [
-   "snare"
+   "snare",
+   "bass",
+   "synth"
   ],
   "audit_override": null
  },
@@ -849,7 +929,9 @@
   "offset_s": 955.8626748875205,
   "proof": "generated",
   "families": [
-   "snare"
+   "snare",
+   "bass",
+   "synth"
   ],
   "audit_override": null
  },
@@ -871,7 +953,9 @@
   "offset_s": 994.2627176323406,
   "proof": "generated",
   "families": [
-   "snare"
+   "snare",
+   "bass",
+   "synth"
   ],
   "audit_override": null
  },
@@ -893,7 +977,9 @@
   "offset_s": 1041.475858286555,
   "proof": "generated",
   "families": [
-   "snare"
+   "snare",
+   "bass",
+   "synth"
   ],
   "audit_override": null
  },
@@ -915,7 +1001,177 @@
   "offset_s": 1093.8395326192501,
   "proof": "generated",
   "families": [
-   "snare"
+   "snare",
+   "bass",
+   "synth"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "miracle",
+  "kind": "project",
+  "source": {
+   "how": "goal",
+   "paths": [
+    "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/2024/Streets Project/MASTERS/Miracle MSTR V1 APRS.wav"
+   ]
+  },
+  "source_sha256": [
+   "263c248ce6c2a5b16ad981f055afd0be278085f6468347e25d3e4565f5bf3e66"
+  ],
+  "sample_rate": 44100,
+  "offset_s": -77.835,
+  "proof": "goal:kick stem against project kick notes",
+  "families": [
+   "bass",
+   "synth"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "heavy_on_mind",
+  "kind": "project",
+  "source": {
+   "how": "goal",
+   "paths": [
+    "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/EMERGENCE - ALBUM 2026/FINAL MASTERS/Latent Space - 02 - Heavy on Mind MSTR V3 APRS.wav"
+   ]
+  },
+  "source_sha256": [
+   "3f22cd0335db72972a177488cf28a7d4de94d66c74203d9dea5f79cda5ca5a36"
+  ],
+  "sample_rate": 44100,
+  "offset_s": -23.54589999999998,
+  "proof": "goal:kick stem against project kick notes",
+  "families": [
+   "bass",
+   "synth"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "hung_up",
+  "kind": "project",
+  "source": {
+   "how": "goal",
+   "paths": [
+    "/Users/peterkiemann/.cache/manifold/kick-goal-2026-10-10/hung_up_mix.npy"
+   ]
+  },
+  "source_sha256": [
+   "15c4018f94a0ba80ba32148b974b7db1e0a56e574abe764e805b02474ea0f54f"
+  ],
+  "sample_rate": 48000,
+  "offset_s": -43.6357,
+  "proof": "goal:trigger track export offset (labels_trigger.json)",
+  "families": [
+   "bass",
+   "synth"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "right_where",
+  "kind": "project",
+  "source": {
+   "how": "goal",
+   "paths": [
+    "/Users/peterkiemann/.cache/manifold/kick-goal-2026-10-10/right_where_mix.npy"
+   ]
+  },
+  "source_sha256": [
+   "6fd9bac05b48eea6501df7fd7521a90646786978b85c854b4a17f212e595ce2c"
+  ],
+  "sample_rate": 48000,
+  "offset_s": -48.8113,
+  "proof": "goal:trigger track export offset (labels_trigger.json)",
+  "families": [
+   "bass",
+   "synth"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "facade",
+  "kind": "project",
+  "source": {
+   "how": "goal",
+   "paths": [
+    "/Users/peterkiemann/.cache/manifold/kick-goal-2026-10-10/facade_mix.npy"
+   ]
+  },
+  "source_sha256": [
+   "a67c2f2411c05deb935b7318c8e9eb93100cbd171f2376045042401c44b96f9f"
+  ],
+  "sample_rate": 48000,
+  "offset_s": -26.6183,
+  "proof": "lab:proven (one pattern, clear win)",
+  "families": [
+   "bass",
+   "synth"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "got_it",
+  "kind": "project",
+  "source": {
+   "how": "goal",
+   "paths": [
+    "/Users/peterkiemann/.cache/manifold/kick-goal-2026-10-10/got_it_mix.npy"
+   ]
+  },
+  "source_sha256": [
+   "7d16cfd1696a13b45558df8c5cc8ae6932dd0a553c2e6e14c39c6c04a209bb52"
+  ],
+  "sample_rate": 48000,
+  "offset_s": -51.8385,
+  "proof": "goal:wip survey offset (unproven against a stem)",
+  "families": [
+   "bass",
+   "synth"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "renew",
+  "kind": "project",
+  "source": {
+   "how": "goal",
+   "paths": [
+    "/Users/peterkiemann/.cache/manifold/kick-goal-2026-10-10/renew_mix.npy"
+   ]
+  },
+  "source_sha256": [
+   "b27ba38f0246f629a7229628689fd1c2654c45b1c09d5668c6e89675ef218901"
+  ],
+  "sample_rate": 48000,
+  "offset_s": -57.264,
+  "proof": "goal:wip survey offset (unproven against a stem)",
+  "families": [
+   "bass",
+   "synth"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "overwhelming_force",
+  "kind": "project",
+  "source": {
+   "how": "goal",
+   "paths": [
+    "/Users/peterkiemann/.cache/manifold/kick-goal-2026-10-10/overwhelming_force_mix.npy"
+   ]
+  },
+  "source_sha256": [
+   "b0d48bf996720d762a36fd7e8e843217478ddb1c370ffe499c1176ec9eba3e25"
+  ],
+  "sample_rate": 48000,
+  "offset_s": -25.8955,
+  "proof": "goal:wip survey offset (unproven against a stem)",
+  "families": [
+   "bass",
+   "synth"
   ],
   "audit_override": null
  }

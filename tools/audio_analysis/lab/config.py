@@ -23,8 +23,7 @@ class Experiment:
     def net_env(self):
         """The kick net's input env; kick_goal_nn reads it at import."""
         return dict(KICK_GOAL_NN_PAST_MS=str(self.net['past_ms']), KICK_GOAL_NN_AHEAD_MS='0',
-                    KICK_GOAL_NN_PERC='1' if self.net['flat'] else '0', KICK_GOAL_NN_FLAT='0',
-                    KICK_GOAL_NN_DRAW_CAP='0')
+                    KICK_GOAL_NN_PERC='1' if self.net['flat'] else '0', KICK_GOAL_NN_FLAT='0')
 
     def generated_as_clips(self):
         return 'generated' in self.train and self.sampling['generated'] != 'songs'

@@ -22,7 +22,9 @@ import numpy as np  # noqa: E402
 
 SONGS = Path(__file__).with_name('songs.json')
 # Family -> its labels files under GOAL (project songs, then generated).
-FAMILIES = {'snare': ('snare_labels.json', 'snare_labels_generated.json')}
+FAMILIES = {'snare': ('snare_labels.json', 'snare_labels_generated.json'),
+            'bass': ('bass_labels.json', 'bass_labels_generated.json'),
+            'synth': ('synth_labels.json', 'synth_labels_generated.json')}
 GEN_SR = 48000
 
 

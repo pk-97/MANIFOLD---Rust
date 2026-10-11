@@ -58,7 +58,7 @@ def main():
             got = nearest(pos, on) <= LAB_TOL if len(on) else np.zeros(len(pos), bool)
             a = rows.setdefault(k, [0, 0, 0])
             a[0], a[1], a[2] = a[0] + int(got.sum()), a[1] + len(pos), a[2] + len(cand)
-            m, _, f = score(s, on if 'tol_s' in s else (cand + 9) * HOP / sr, np.ones(len(cand)), cand + 8, .5, sr)
+            m, _, f = score(s, on if 'tol_s' in s or 'window_s' in s else (cand + 9) * HOP / sr, np.ones(len(cand)), cand + 8, .5, sr)
             z = everything.setdefault(k, [0, 0])
             z[0], z[1] = z[0] + m, z[1] + f
             for kk in np.unique(kind):

@@ -89,7 +89,7 @@ def train():
     for u in exam:
         if not lab[u]['positives_only']:
             sr = songs[u].sample_rate
-            _, avail = cache.candidates(songs[u], CFG.candidates, build=False)
+            _, avail = cache.candidates(songs[u], CFG.candidates, CFG.family, build=False)
             items.append((lab[u], (avail + 1) * HOP / sr, held[u], avail, sr))
     cutoff = choose(items)
     data = run.build(CFG, {t: lab[t] for t in exam}, songs, nnm.device(), log=lambda m: None)

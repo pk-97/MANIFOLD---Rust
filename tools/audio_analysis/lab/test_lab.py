@@ -118,15 +118,18 @@ class LabTests(unittest.TestCase):
                 compare.check(a, dict(a, run_id='b', **{k: v}))
 
     def test_scorer_parity(self):
-        """The lab scorer on a save of the retired snare runner reproduces the legacy results file exactly."""
+        """The lab scorer on saves of the retired runners reproduces their results files exactly, each on the labels
+        it was scored with (snare: rolls still in; bass: the old 30 ms window and fitted shift)."""
         import gzip
-        with gzip.open(GOLDEN.with_suffix('.labels.json.gz'), 'rt') as f:
-            lab = json.load(f)  # the labels the legacy run was scored with (rolls still in)
-        got = json.loads(json.dumps(score.legacy(GOLDEN.with_suffix('.npz'), lab=lab), default=float))
-        want = json.loads(GOLDEN.with_suffix('.json').read_text())['results']['net']['per_song']
-        self.assertEqual(sorted(got), sorted(want))
-        for t in want:
-            self.assertEqual(got[t], want[t], t)
+        for golden, cfg in (('legacy_snare_folds4_s0', 'snare_base'), ('legacy_bass_folds4_s0', 'bass_base')):
+            g = GOLDEN.with_name(golden)
+            with gzip.open(g.with_suffix('.labels.json.gz'), 'rt') as f:
+                lab = json.load(f)
+            got = json.loads(json.dumps(score.legacy(g.with_suffix('.npz'), cfg, lab=lab), default=float))
+            want = json.loads(g.with_suffix('.json').read_text())['results']['net']['per_song']
+            self.assertEqual(sorted(got), sorted(want), golden)
+            for t in want:
+                self.assertEqual(got[t], want[t], f'{golden} {t}')
 
     def test_input_parity(self):
         """The lab hands held_out_nets what the retired snare runner did: song order, groups, untrained songs, and
@@ -160,6 +163,38 @@ class LabTests(unittest.TestCase):
             new = mine[t]
             for k in ('spec', 'base'):
                 self.assertTrue(bool((getattr(old, k) == getattr(new, k)).all()), (t, k))
+            for k in ('end', 'pre', 'on', 'mask', 'y', 'hard'):
+                np.testing.assert_array_equal(getattr(old, k), getattr(new, k), err_msg=f'{t} {k}')
+
+    def test_input_parity_note_family(self):
+        """Bass through the lab gets the retired family runner's inputs: its candidates in the bass band, rows and
+        noisiness channel, byte for byte."""
+        from tools.audio_analysis.eval import bass_labels
+        from tools.audio_analysis.eval.detector_cands import HOP
+        from tools.audio_analysis.eval.detector_channels import flat_cache
+        from tools.audio_analysis.eval.detector_eval import rows
+        from tools.audio_analysis.eval.detector_net import family_candidates
+        from tools.audio_analysis.eval.detector_songs import audio, rate, spec
+        from tools.audio_analysis.eval.kick_goal_eval import Goal
+        from tools.audio_analysis.eval.kick_goal_nn import Song as NetSong
+        cfg = config.load('bass_base')
+        songs = load()
+        lab, _ = run.labels('bass')
+        g = Goal(mode='v3')
+        picks = [next(t for t in lab if songs[t].source['how'] == how) for how in ('goal', 'wip')]
+        cpu = __import__('torch').device('cpu')
+        mine = run.build(cfg, {t: lab[t] for t in picks}, songs, cpu, log=lambda m: None)
+        cands = family_candidates(cfg.candidates, bass_labels.FAMILY)
+        for t in picks:
+            sr, sp = rate(g, t), spec(g, t)
+            cand, avail = cands(audio(g, t), sr, sp)
+            onset, emit = (cand + 1) * HOP / sr, (avail + 1) * HOP / sr
+            mask, y, hard = rows(lab[t], onset)
+            old = NetSong(sp, onset, emit + .04, mask, y, t, hard, (flat_cache(g, t),))
+            new = mine[t]
+            for k in ('spec', 'base'):
+                self.assertTrue(bool((getattr(old, k) == getattr(new, k)).all()), (t, k))
+            self.assertTrue(bool((old.extra[0] == new.extra[0]).all()), (t, 'flat'))
             for k in ('end', 'pre', 'on', 'mask', 'y', 'hard'):
                 np.testing.assert_array_equal(getattr(old, k), getattr(new, k), err_msg=f'{t} {k}')
 

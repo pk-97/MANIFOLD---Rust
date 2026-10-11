@@ -1,0 +1,2 @@
+{"family": "synth", "candidates": "union:3:1.5", "net": {"past_ms": 190, "ahead_ms": 40, "flat": true, "epochs": 12},
+ "sampling": {"per_song": "median", "generated": "songs"}, "train": ["project", "generated"], "seeds": [0, 1, 2, 3, 4], "folds": 4}

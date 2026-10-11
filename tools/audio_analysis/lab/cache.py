@@ -55,18 +55,26 @@ def module_id(*mods):
     return h.hexdigest()[:12]
 
 
-def candidates(song, rule, build=True):
-    """(candidate hops, emission hops) for a candidate rule ('snare:DB': snare_cands at DB). build=False: a miss is
-    an error, so scoring never reads audio."""
-    from tools.audio_analysis.eval import detector_cands, snare_cands
+def candidates(song, rule, family, build=True):
+    """(candidate hops, emission hops) for a candidate rule: 'snare:DB' (snare_cands at DB) or a
+    detector_net.family_candidates rule in the family's band ('rise:DB', 'change:DB', 'union:RISE:CHANGE').
+    build=False: a miss is an error, so scoring never reads audio."""
+    import importlib
+    from tools.audio_analysis.eval import detector_cands, detector_net, snare_cands
     from tools.audio_analysis.lab.registry import mix
-    kind, db = rule.split(':')
-    if kind != 'snare':
-        raise ValueError(f'candidate rule {rule}: only snare:DB until the bass and synth families move (P5)')
+    kind, *args = rule.split(':')
+    if kind == 'snare':
+        code, band = module_id(snare_cands, detector_cands), None
+        find = lambda x: snare_cands.candidates(x, song.sample_rate, float(args[0]))  # noqa: E731
+    else:
+        fam = importlib.import_module(f'tools.audio_analysis.eval.{family}_labels').FAMILY
+        # The finder's own source, DEADLINE and its helpers' module: edits elsewhere in detector_net are no miss.
+        code, band = module_id(detector_cands) + code_id(detector_net.family_candidates) + str(detector_net.DEADLINE), fam.band
+        find = lambda x: detector_net.family_candidates(rule, fam)(x, song.sample_rate, spectrum(song))  # noqa: E731
 
     def make():
         if not build:
             raise SystemExit(f'{song.id}: no cached {rule} candidates; run the experiment first')
-        return np.stack(snare_cands.candidates(mix(song), song.sample_rate, float(db))).astype(np.int64)
-    a = artifact(song, 'candidates', dict(rule=rule, code=module_id(snare_cands, detector_cands)), make)
+        return np.stack(find(mix(song))).astype(np.int64)
+    a = artifact(song, 'candidates', dict(rule=rule, code=code, **({'band': band} if band else {})), make)
     return a[0], a[1]

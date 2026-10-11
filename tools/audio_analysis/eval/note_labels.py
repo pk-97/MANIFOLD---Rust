@@ -1,7 +1,8 @@
 """Every-note labels for the melodic families (Peter, 2026-10-11: reliable triggering on every audible bass or synth
 note first; standout notes later). Same file layout as detector_labels, so detector_eval and detector_net score it.
 
-Per song, from the project (read only through als_extract) shifted by the song's proven export offset:
+Per song, from the project (read only through als_extract) shifted by the song's proven export offset, nothing
+fitted on top:
 - Events: every note on the family's part (part_classes: track name, then groups innermost outward; drum-rack pads by
   their own name) and every audio-clip start on the part whose sound begins there (a placed one-shot or sample).
   Only known times count (Peter, 2026-10-11): nothing is found by analysing inside a clip. Layers and chords within
@@ -48,8 +49,10 @@ class NoteFamily:
     present_db: float = 3.0
     half: tuple = (-.07, .07)
     clip_onset_s: float = .030     # a clip start is a known hit when its sound begins within this
-    tol_s: float = .030             # hit window, matched at the candidate: notes come ~3 a second, so the shared
-                                    # 70 ms window would count firing anywhere as right
+    # Hit window, fire minus note start, matched at the candidate: from one 5 ms analysis step before the note start
+    # to 50 ms after (Peter, 2026-10-11: labels at the note start; the sound swells 30-40 ms after it). Notes come
+    # ~3 a second, so the shared 70 ms window either side would count firing anywhere as right.
+    window_s: tuple = (-.005, .050)
 
 
 def silent(res, unmute=()):
@@ -60,10 +63,11 @@ def silent(res, unmute=()):
     return {tr['name'] for tr in res['tracks'] if not tr.get('speaker_on', True) or muted_groups & set(tr.get('groups') or ())}
 
 
-def project_notes(res):
-    """[(seconds, beat, duration in beats, part, probability)] for every played note, parts by part_classes."""
+def project_notes(res, quiet=None):
+    """[(seconds, beat, duration in beats, part, probability)] for every played note, parts by part_classes. quiet:
+    the tracks to skip (default the silent ones)."""
     out = []
-    quiet = silent(res)
+    quiet = silent(res) if quiet is None else quiet
     for tr in res['tracks']:
         notes = [n for c in tr['midi_clips'] for n in c['notes']]
         if not notes or tr['name'] in quiet:
@@ -87,16 +91,6 @@ def playing_clips(res, unmute=()):
     """Audio clips that sound: not muted, on a track that is not silent."""
     quiet = silent(res, unmute)
     return [c for c in res['audio_clips'] if not c['disabled'] and c.get('track') not in quiet]
-
-
-def rise(env, t):
-    """Band rise (dB) at each time: the -10..+30 ms peak over the -60..-20 ms median, env on the 1 ms grid."""
-    out = np.full(len(t), -np.inf)
-    for k, s in enumerate(t):
-        j = int(round(s / 1e-3))
-        if 60 <= j < len(env) - 30:
-            out[k] = env[j - 10:j + 30].max() - np.median(env[j - 60:j - 20])
-    return out
 
 
 def presence(env, t):
@@ -140,15 +134,32 @@ def song(g, t, fam):
     res = extract(src[0])
     off = src[1]
     notes = project_notes(res)
+    # Muted is unknown, not silent (a set may be saved muted after its mix was rendered): muted notes of the family's
+    # part and of unknown parts are unscored windows, never negatives.
+    muted = sorted(set(project_notes(res, quiet=set())) - set(notes))
     playing = playing_clips(res)
     clips = [c for c in playing if classify(c.get('track') or '', c.get('groups') or (), c.get('file') or '') == fam.part]
-    mine = [n for n in notes if n[3] == fam.part]
-    if not mine and not clips:
+    if not any(n[3] == fam.part for n in notes) and not clips:
         return None
     sr = rate(g, t)
     x = audio(g, t)
-    dur = len(x) / sr
-    env = env_db(x, sr, *fam.band)
+    points = [(q['beat'], q['bpm']) for q in res['tempo_points']]
+    # Known times only (Peter, 2026-10-11): a clip's start counts when a loud hit begins there (a placed one-shot or
+    # sample); hits found further inside a clip are guesses, left to the loop spans.
+    placed = clip_starts(clips, Path(src[0]).parent, sr, fam.stem_band, points, fam.clip_onset_s)
+    kicks, _ = vouched(g, t, W, src, res if t in W else None)
+    loops = [(c['start_s'] + off, c['end_s'] + off) for c in playing
+             if classify(c.get('track') or '', c.get('groups') or (), c.get('file') or '') in ('?', fam.part)]
+    return dict(kind='project', **events(fam, notes, muted, placed, kicks, loops, env_db(x, sr, *fam.band), len(x) / sr, off))
+
+
+def events(fam, notes, muted, placed, kicks, loops, env, dur, off, check_audible=True):
+    """One song's or section's labels (everything but its kind). notes and muted: project_notes rows, project seconds;
+    placed: known clip starts, project seconds; off maps project seconds to audio time. kicks and loops: audio time.
+    env: the family band's level in the audio on the 1 ms grid (detector_labels.env_db). check_audible=False: every
+    note sounds for certain (no mutes or automation), so the level test is skipped; it measures against the quietest
+    moments, and a part that plays throughout has none."""
+    mine = [n for n in notes if n[3] == fam.part]
     h0, h1 = fam.half
     unscored, count = [], {}
 
@@ -164,12 +175,7 @@ def song(g, t, fam):
         beats.append(b)
         durs.append(d)
     kind = kinds(beats, durs, secs)
-    pos = np.array(secs) + off
-    points = [(q['beat'], q['bpm']) for q in res['tempo_points']]
-    # Known times only (Peter, 2026-10-11): a clip's start counts when a loud hit begins there (a placed one-shot or
-    # sample); hits found further inside a clip are guesses, left to the loop spans.
-    placed = clip_starts(clips, Path(src[0]).parent, sr, fam.stem_band, points, fam.clip_onset_s)
-    pos = np.concatenate([pos, placed + off])
+    pos = np.concatenate([np.array(secs, float), np.asarray(placed, float)]) + off
     kind = np.array(kind + ['clip'] * len(placed))
     order = np.argsort(pos, kind='stable')
     pos, kind = pos[order], kind[order]
@@ -179,19 +185,18 @@ def song(g, t, fam):
     pos, kind = pos[inside_song], kind[inside_song]
     count['events'] = len(pos)
 
-    # Project offsets can sit ~20 ms off: the shift in -30..+30 ms giving the most clear attacks, if it beats 0 by 10%.
-    shifts = {s: int(np.sum(rise(env, pos + s / 1000) >= 6)) for s in range(-30, 31, 2)}
-    best = max(shifts, key=lambda s: (shifts[s], -abs(s)))
-    shift = best / 1000 if shifts[best] - shifts[0] > .1 * max(1, len(pos)) else 0.0
-    pos = pos + shift
+    # Labels sit at the note start plus the proven offset: no fitted shift (Peter, 2026-10-11). A fit to the mix's
+    # attacks lands 30-40 ms late on every song, because bass and synth sounds swell after the note starts.
+    unscored += [(n[0] + off + h0, n[0] + off + h1) for n in muted if n[3] in (fam.part, *fam.unscored_parts)]
+    count['muted'] = sum(n[3] == fam.part for n in muted)
 
-    heard = presence(env, pos) >= fam.present_db
+    heard = presence(env, pos) >= fam.present_db if check_audible else np.ones(len(pos), bool)
     count['inaudible'] = int((~heard).sum())
     count['inaudible_kinds'] = {k: int(np.sum(~heard & (kind == k))) for k in np.unique(kind[~heard])}
     unscored += [(u + h0, u + h1) for u in pos[~heard]]
     pos, kind = pos[heard], kind[heard]
 
-    kicks, _ = vouched(g, t, W, src, res if t in W else None)
+    kicks = np.asarray(kicks, float)
     if fam.on_kick == 'negative' and len(pos) and len(kicks):
         on = nearest(pos, kicks) <= fam.kick_s
         count['on_kick'] = int(on.sum())
@@ -206,17 +211,15 @@ def song(g, t, fam):
     unscored += runs
     pos, kind = pos[~dense], kind[~dense]
 
-    every = np.array([n[0] for n in mine]) + off + shift
-    unscored += [(n[0] + off + shift + h0, n[0] + off + shift + h1) for n in notes if n[3] in fam.unscored_parts]
-    others = np.array([n[0] for n in notes if n[3] not in (fam.part, 'control', *fam.unscored_parts)]) + off + shift
+    every = np.array([n[0] for n in mine]) + off
+    unscored += [(n[0] + off + h0, n[0] + off + h1) for n in notes if n[3] in fam.unscored_parts]
+    others = np.array([n[0] for n in notes if n[3] not in (fam.part, 'control', *fam.unscored_parts)]) + off
     neg = np.concatenate([kicks, others])
     neg = neg[nearest(neg, every) > fam.far_s] if len(every) else neg
-    loops = [(c['start_s'] + off, c['end_s'] + off) for c in playing
-             if classify(c.get('track') or '', c.get('groups') or (), c.get('file') or '') in ('?', fam.part)]
-    return dict(kind='project', duration_s=dur, positives=list(map(float, pos)), kinds=list(map(str, kind)),
+    return dict(duration_s=dur, positives=list(map(float, pos)), kinds=list(map(str, kind)),
                 unscored=[list(map(float, u)) for u in unscored], loop_spans=[list(map(float, u)) for u in loops],
-                hard_neg=sorted(map(float, np.unique(np.round(neg, 4)))), positives_only=False, counts=count, tol_s=fam.tol_s,
-                timing_shift_ms=round(1000 * shift, 1), offset_s=float(off))
+                hard_neg=sorted(map(float, np.unique(np.round(neg, 4)))), positives_only=False, counts=count,
+                window_s=list(fam.window_s), timing_shift_ms=0.0, offset_s=float(off))
 
 
 def write(fam, path, log=print):

@@ -40,8 +40,8 @@ def check_net(cfg):
     """The net module read the config's env (it reads env once, at import)."""
     from tools.audio_analysis.eval import kick_goal_nn as nn
     got = dict(past_ms=nn.PAST_MS, perc=nn.PERC_ON, bands=nn.BANDS, stereo=nn.STEREO_ON, flat=nn.FLAT_ON,
-               ahead=nn.AHEAD_MS, cap=nn.DRAW_CAP)
-    want = dict(past_ms=cfg.net['past_ms'], perc=bool(cfg.net['flat']), bands=64, stereo=False, flat=False, ahead=0, cap=0)
+               ahead=nn.AHEAD_MS)
+    want = dict(past_ms=cfg.net['past_ms'], perc=bool(cfg.net['flat']), bands=64, stereo=False, flat=False, ahead=0)
     if got != want:
         sys.exit(f'kick_goal_nn read {got}, the config wants {want}: was it imported before the recipe applied?')
 
@@ -109,7 +109,7 @@ def setup(cfg):
     lab, sha = labels(cfg.family)
     songs = load()
     failed = excluded(cfg.family)
-    lab = {t: s for t, s in lab.items() if t not in failed}
+    lab = {t: s for t, s in lab.items() if t not in failed and s['positives']}
     for t, s in lab.items():
         if (s.get('kind') == 'generated') != (songs[t].kind == 'generated'):
             sys.exit(f'{t}: labels and song list disagree on its kind; rebuild with lab/registry.py build')
@@ -137,7 +137,7 @@ def build(cfg, lab, songs, dev, log=print):
     data = {}
     for t, s in lab.items():
         song = songs[t]
-        cand, avail = cache.candidates(song, cfg.candidates)
+        cand, avail = cache.candidates(song, cfg.candidates, cfg.family)
         onset, emit = (cand + 1) * HOP / song.sample_rate, (avail + 1) * HOP / song.sample_rate
         mask, y, hard = rows(s, onset)
         extra = (cache.flatness(song),) if cfg.net['flat'] else ()
@@ -190,7 +190,7 @@ def warm(cfg):
     lab, songs, _ = setup(cfg)
     for t in lab:
         t0 = time.time()
-        cache.candidates(songs[t], cfg.candidates)
+        cache.candidates(songs[t], cfg.candidates, cfg.family)
         cache.spectrum(songs[t])
         if cfg.net['flat']:
             cache.flatness(songs[t])

@@ -5,7 +5,7 @@ project songs, never on generated or recall-only songs. Writes report_s<seed>.js
 results.net.per_song (detector_compare's layout), generated songs in their own section.
 
 Usage: score.py RUN_ID
-       score.py --legacy NPZ [CONFIG]   (a save of the retired snare runner, scored by these rules; CONFIG default snare_base)"""
+       score.py --legacy NPZ CONFIG   (a save of a retired runner, scored by these rules under CONFIG)"""
 import json
 import sys
 import time
@@ -23,16 +23,20 @@ from tools.audio_analysis.lab.run import RUNS, labels  # noqa: E402
 
 
 def score(cfg, lab, songs, held):
-    """{song: song_result} for every song in held, each at its held-out cutoff."""
+    """{song: song_result} for every song in held, each at its held-out cutoff. A family with a tight hit window
+    (labels' tol_s or window_s) is judged at the candidate, and its fixed wait to emission counts as lateness."""
     from tools.audio_analysis.eval.detector_eval import HOP, held_out
+    from tools.audio_analysis.eval.detector_net import DEADLINE
     from tools.audio_analysis.lab import cache
-    meta = {}
+    meta, wait = {}, {}
     for t in held:
         sr = songs[t].sample_rate
-        _, avail = cache.candidates(songs[t], cfg.candidates, build=False)
-        meta[t] = (lab[t], (avail + 1) * HOP / sr, avail, sr)
+        cand, avail = cache.candidates(songs[t], cfg.candidates, cfg.family, build=False)
+        tight = 'tol_s' in lab[t] or 'window_s' in lab[t]
+        meta[t] = (lab[t], ((cand if tight else avail) + 1) * HOP / sr, avail, sr)
+        wait[t] = cfg.net['ahead_ms'] / 1000 + (DEADLINE * HOP / sr if tight else 0.0)
     per_song = {}
-    held_out({t: lab[t] for t in held}, meta, held, log=None, per_song=per_song, ahead=cfg.net['ahead_ms'] / 1000)
+    held_out({t: lab[t] for t in held}, meta, held, log=None, per_song=per_song, ahead=wait)
     return per_song
 
 
@@ -66,7 +70,7 @@ def score_run(run_id, log=print):
     return reports
 
 
-def legacy(npz, config='snare_base', lab=None):
+def legacy(npz, config, lab=None):
     """{song: song_result} for a save of the retired snare runner, on lab (the labels it was scored with; default
     today's); the scorer-parity oracle (test_scorer_parity)."""
     from tools.audio_analysis.lab.config import load as load_cfg
@@ -83,7 +87,7 @@ def main():
     if a[:1] == ['--legacy']:
         t0 = time.time()
         out = Path(a[1]).with_suffix('.lab.json')
-        out.write_text(json.dumps(dict(results=dict(net=dict(per_song=legacy(a[1], *a[2:])))), indent=1, default=float))
+        out.write_text(json.dumps(dict(results=dict(net=dict(per_song=legacy(a[1], a[2])))), indent=1, default=float))
         print(f'-> {out} ({time.time() - t0:.1f} s)')
     elif a:
         score_run(a[0])

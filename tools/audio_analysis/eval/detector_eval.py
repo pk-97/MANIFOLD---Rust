@@ -8,8 +8,9 @@ Rules every family shares:
 - Training rows: candidates within LAB_TOL of a positive are y = 1; rows inside unscored windows are dropped; inside
   loop spans only positives and vouched negatives train; recall-only songs train only on positives.
 - Fires: probability >= cutoff, at least REFR after the previous fire's emission.
-- Scoring at TOL (or the labels' tol_s): a positive is caught by any fire within it; a fire is false only outside unscored windows and, in
-  loop spans, only when it sits on a vouched negative.
+- Scoring at TOL (or the labels' tol_s, or their one-sided window_s [lo, hi]: fire minus label): a positive is caught
+  by any fire within it; a fire is false only outside unscored windows and, in loop spans, only when it sits on a
+  vouched negative. Labels with window_s also train their positives from candidates inside that window.
 - The cutoff for a held-out song is chosen on the other songs' held-out predictions; never on the song itself.
 """
 import numpy as np
@@ -35,11 +36,25 @@ def nearest(a, b):
     return np.minimum(np.abs(a - b[j - 1]), np.abs(a - b[np.minimum(j, len(b) - 1)]))
 
 
+def within(a, b, lo, hi):
+    """For each a, whether some b lies in [a + lo, a + hi]."""
+    b = np.sort(np.asarray(b, float))
+    a = np.asarray(a, float)
+    if not len(b):
+        return np.zeros(len(a), bool)
+    j = np.searchsorted(b, a + lo, 'left')
+    return (j < len(b)) & (b[np.minimum(j, len(b) - 1)] <= a + hi)
+
+
 def rows(s, onset, dense=False):
     """(training mask, y, vouched-negative flag) per candidate onset (s) for one song's labels s. With dense, the
     prominent events inside fast runs (s['dense_pos']) also train as positives; nothing else in a run trains."""
     pos, hard = np.array(s['positives']), np.array(s['hard_neg'])
-    y = (nearest(onset, pos) <= LAB_TOL).astype(float)
+    if 'window_s' in s:
+        lo, hi = s['window_s']
+        y = within(onset, pos, -hi, -lo).astype(float)
+    else:
+        y = (nearest(onset, pos) <= LAB_TOL).astype(float)
     hard_near = nearest(onset, hard) <= LAB_TOL
     mask = ~inside(onset, s['unscored'])
     in_loop = inside(onset, s['loop_spans'])
@@ -72,11 +87,16 @@ def judged(s, stamp, p, avail, th, sr):
     """(caught, positives, false fire times, fire times) for one song at cutoff th; fires at stamp."""
     f = stamp[fires(p, avail, th, sr)]
     pos = np.array(s['positives'])
-    w = tol(s)
-    matched = int(np.sum(nearest(pos, f) <= w)) if len(f) else 0
+    if 'window_s' in s:
+        lo, hi = s['window_s']
+        matched = int(np.sum(within(pos, f, lo, hi))) if len(f) else 0
+        false = f[~within(f, pos, -hi, -lo)]
+    else:
+        w = tol(s)
+        matched = int(np.sum(nearest(pos, f) <= w)) if len(f) else 0
+        false = f[nearest(f, pos) > w] if len(pos) else f
     if s['positives_only']:
         return matched, len(pos), f[:0], f
-    false = f[nearest(f, pos) > w] if len(pos) else f
     false = false[~inside(false, s['unscored'])]
     false = false[~inside(false, s['loop_spans']) | (nearest(false, s['hard_neg']) <= LAB_TOL)]
     return matched, len(pos), false, f
@@ -95,10 +115,17 @@ def song_result(s, emit, p, avail, th, sr, ahead=0.0):
     m, n, false, fired = judged(s, emit, p, avail, th, sr)
     late = []
     for t in s['positives']:
-        if len(fired):
-            e = fired[np.argmin(np.abs(fired - t))]
-            if abs(e - t) <= tol(s):
-                late.append(round(1000 * (e + ahead - t), 1))
+        if not len(fired):
+            continue
+        if 'window_s' in s:
+            lo, hi = s['window_s']
+            near = fired[(fired - t >= lo) & (fired - t <= hi)]
+            if len(near):
+                late.append(round(1000 * (near[0] + ahead - t), 1))
+            continue
+        e = fired[np.argmin(np.abs(fired - t))]
+        if abs(e - t) <= tol(s):
+            late.append(round(1000 * (e + ahead - t), 1))
     gone = sum(b - a for a, b in s['unscored'])
     return dict(matched=m, labels=n, extra=len(false), cutoff=float(th), minutes=max(0.0, s['duration_s'] - gone) / 60,
                 late_ms=late, false_s=[round(float(v), 3) for v in false])
@@ -167,7 +194,10 @@ def dense_recall(lab, meta, held, cutoffs, key='dense_pos'):
             continue
         s, emit, avail, sr = meta[t]
         f = emit[fires(held[t], avail, cutoffs[t], sr)]
-        m += int(np.sum(nearest(d, f) <= tol(s))) if len(f) else 0
+        if 'window_s' in s:
+            m += int(np.sum(within(d, f, *s['window_s'])))
+        else:
+            m += int(np.sum(nearest(d, f) <= tol(s))) if len(f) else 0
         n += len(d)
     return m, n
 
