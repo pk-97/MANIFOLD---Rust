@@ -612,6 +612,24 @@ def builder(x):
                     for u in h:
                         self.assertAlmostEqual(out[f'pair{k}__staged__{u}'][0] * 100, at[tuple(sorted((k, j)))])
 
+    def test_stage_gate(self):
+        """With an empty memory the gated score is the detector's own; with gate or more evidence it is the stage's;
+        in between the change in logit scales with the evidence."""
+        from scipy.special import expit, logit
+
+        from tools.audio_analysis.lab import stage
+        st = dict(level=None, gate=1.0)
+        p = np.array([.3, .3, .3, .8])
+        x = np.zeros((4, 4))
+        x[:, 0] = logit(p)
+        x[:, 3] = np.log1p([0.0, 0.5, 2.0, 0.0])
+        q = np.array([.05, .05, .05, .05])
+        got = stage.gated(st, x, q)
+        np.testing.assert_allclose(got[[0, 3]], p[[0, 3]])
+        np.testing.assert_allclose(got[1], expit(logit(.3) + .5 * (logit(.05) - logit(.3))))
+        np.testing.assert_allclose(got[2], .05)
+        np.testing.assert_array_equal(stage.gated(dict(st, gate=0), x, q), q)
+
     def test_after_gap(self):
         """A positive opens a passage only after a fully known gap with no positive, roll hit or run event in it."""
         from tools.audio_analysis.eval.detector_eval import after_gap

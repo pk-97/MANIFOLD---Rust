@@ -70,7 +70,10 @@ A/B as `compare()`. P6 adds, each named: `held_out` takes a cutoff `pool` (the p
 `inside` sorts spans once (identical output); `rows` counts a candidate exactly at the 35 ms edge as inside (`EDGE`,
 1e-12, the legacy kick rule; a behaviour change at that float edge only); `detector_compare.compare` headlines a
 paired song bootstrap; `kick_goal_eval.add_whole_song_truth` keeps its truth on the record (`train_source`);
-`kick_goal_nn.Net` takes its channel count. `held_out_nets` is retired: it could hold out one group with nets only,
+`kick_goal_nn.Net` takes its channel count; `kick_goal_nn.train` takes `swa_epochs`, `batch`, `lr` and `precision`
+(defaults reproduce today's training) and cuts slices on the song's device (bit-identical);
+`detector_eval.song_result` adds the recall of hits after a gap (`after_gap`) and `detector_compare` prints it.
+`held_out_nets` is retired: it could hold out one group with nets only,
 and the lab's loop over the plan (`lab/run.py train_model`) calls `train` and `predict` for every model and pair
 training. Nothing else in `eval/` changes. Rejected: re-implementing `train`, `held_out_nets` or the
 scorer inside the lab, because a copy is a second truth that drifts. Rejected: a Rust harness, because the research
@@ -311,8 +314,9 @@ times ("the data for kicks is good and it works well in app already").
 3. *Models* — `net` (kick_goal_nn's CNN on the spectrum, measure channels added) and `trees` (HistGradientBoosting
    on a list of measures, the kick fast loop's settings, `random_state` = seed). One or both.
 4. *Combine* — the one model, or `mean_logit` over both (the kick's blend).
-5. *Stage* (optional) — the song-memory stage: `kick_goal_selfsim` features of the combined probability over the
-   song's last `window_s` (shape measures and a level column named in the config), then trees.
+5. *Stage* (optional) — the song-history stage (`lab/stage.py`), any family: `kick_goal_selfsim` features of the
+   combined probability over each of the song's last `windows_s` (shape measures and an optional level column named
+   in the config), then trees. It holds no timing: nothing predicts when the next hit is due.
 6. *Decision* — cutoff chosen on held-out exam songs, 60 ms refractory. Rules, not config (D8).
 
 Configs: `net` moves under `models`; `combine` and `stage` are new keys. The three snare configs and the bass and
@@ -320,10 +324,12 @@ synth configs migrate mechanically (`combine: "net"`, `stage: null`).
 
 **Training, per seed.** Song groups as now. For group k every model trains on the other groups and predicts k.
 The stage of group k trains on combined predictions of each other group j from models that saw neither k nor j
-(4 groups: 4 + 6 trainings per model, seconds each). A stage needs `folds` >= 2; with one net per song the pairs run
-to hundreds, so the config is refused. This is stricter than the legacy fast loop, whose nets had seen the scored
-song when they built its stage inputs. Trees train on the net's rows (`detector_eval.rows`) with the kick's
-weighting: song-equal, class-balanced, vouched negatives `HARD_W` times as likely.
+(4 groups: 4 + 6 trainings per model, seconds each). Group k's cutoff comes from stages learnt without groups k and
+j, each judging group j on its pair (k, j) inputs (`pair{k}__staged`). A stage needs `folds` >= 2; with one net per
+song the pairs run to hundreds, so the config is refused. This is stricter than the legacy fast loop, whose nets had
+seen the scored song when they built its stage inputs. Trees and the stage train on the net's rows
+(`detector_eval.rows`) with the kick's weighting: song-equal, class-balanced, vouched negatives `HARD_W` times as
+likely (the shipped kick's stage fit had no vouched-negative weighting).
 
 **Saves.** `s<seed>.npz` keys are `<layer>/<song>`: each model, `combined`, `staged`. `score.py` scores the last
 layer by default and any layer by name, so "what did the stage add" needs no retraining. `meta.json` records every

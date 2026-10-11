@@ -12,8 +12,9 @@ project songs, `eval/snare_generated.py` for Peter's generated sets), then `lab/
 
 **Build a detector.** A config in `lab/experiments/` names its parts (every key required): a candidate finder
 (`kick`, `snare:DB`, a band rule), models (`net` with frame measures as extra channels, `trees` on event measures,
-or both) and how they combine (`net`, `trees`, `mean_logit`). Parts live in `lab/components.py`; any family may use
-any measure. A new measure is one function there, cached by song audio, finder and the function's code.
+or both), how they combine (`net`, `trees`, `mean_logit`) and an optional song-history `stage` (`lab/stage.py`: the
+song's recent confident hits re-score each candidate; needs song groups). Parts live in `lab/components.py`; any
+family may use any measure. A new measure is one function there, cached by song audio, finder and the function's code.
 
 **Run an experiment.** `lab/run.py CONFIG` trains the missing seeds, one process each, and saves held-out
 predictions per layer under a run id that changes whenever the config, the labels or the code changes. With song

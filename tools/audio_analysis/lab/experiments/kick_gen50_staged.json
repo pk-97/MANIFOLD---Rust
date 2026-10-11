@@ -43,7 +43,9 @@
     "learning_rate": 0.05,
     "max_leaf_nodes": 7,
     "min_samples_leaf": 80,
-    "l2": 1.0
+    "l2": 1.0,
+    "learn": "all",
+    "gate": 0
   },
   "sampling": {
     "per_song": "median",

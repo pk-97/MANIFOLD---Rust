@@ -269,7 +269,8 @@ def train_layers(cfg, meta, seed, data, trees, log=print, stage_parts=None):
     if cfg.stage:
         from tools.audio_analysis.lab import stage
         t0 = time.time()
-        held.update(stage.train(cfg, grps, trainings, lay[models.final_layer(cfg)], stage_parts, seed, log))
+        held.update(stage.train(cfg, grps, trainings, lay[models.final_layer(cfg)], stage_parts, seed,
+                                generated=meta['generated'], log=log))
         record = [dict(r, seconds=dict(r['seconds'], stage=round(time.time() - t0, 1) if i == 0 else 0.0))
                   for i, r in enumerate(record)]
     return held, record
