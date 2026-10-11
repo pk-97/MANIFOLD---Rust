@@ -107,7 +107,7 @@ into two files.
 `contract` = 2 and no `recipe_version`. Rejected: a new container format, because both readers already agree byte for
 byte and nothing in the format is missing.
 
-**D3. The shipped v1 models are converted, not kept.** `release.py convert-v1` builds a v2 release record from each
+**D3. The shipped v1 models are converted, not kept** (done; the converter retired at P3 with the v1 files). `release.py convert-v1` builds a v2 release record from each
 shipped `final.pkl` (same `train_id`, same numbers). The generic runtime must reproduce the v1 goldens' fires exactly;
 then `KickDetector`, `SnareDetector` and both `RECIPE_VERSION`s are deleted in the same landing. Rejected: dispatching
 v1 files to the old detectors, because that keeps two runtimes alive forever.
@@ -217,7 +217,6 @@ logits, because the lab's saves hold probabilities and the cutoff could not be c
 ```
 lab/release.py train CONFIG [--seed S] [--nets N]   # run seeds S..S+N-1 must be saved; writes a release record
 lab/release.py train CONFIG --provisional [--nets N] # CPU, 1 epoch, 3 songs, trees max_iter 5, cuts and cutoff from quantiles of its coverage clips (fires on every clip, unequal cuts); numbers throwaway
-lab/release.py convert-v1 kick|snare          # the shipped model as a release record: same train_id, same numbers
 lab/release.py export TRAIN_ID --set NAME [--ship]
         # writes crates/manifold-audio/tests/fixtures/detectors/NAME/{model,clip_*}.mkick;
         # --ship also writes crates/manifold-audio/assets/<family>_model.mkick (byte-identical to the set's model)
@@ -242,7 +241,7 @@ dict(
     cutoff=float, refractory_s=float,
     songs=list[str],                            # what the final models trained on
     score=dict,                                 # pooled P / R / F1 at the cutoff on the outer predictions, per layer
-    clips=str,                                  # 'v2' | 'kick-v1' | 'snare-v1' | 'cover' (provisional: dense at 12 s only)
+    clips=str,                                  # 'v2' | 'cover' (provisional: dense at 12 s only)
 )
 ```
 
@@ -548,7 +547,7 @@ A new release's goldens are held-out input for the Rust code: no Rust phase deve
 | Rust's parts equal the declared parts; the lab has them with the same widths | `trained::spec::tests::registry_matches_runtime_parts`; `test_lab.py::test_runtime_parts_exist_in_the_lab` |
 | A release uses only parts the app runs | `release.py train` refuses; `test_lab.py::test_release_refuses_undeclared_part` |
 | Release cutoffs never come from in-sample predictions | `test_lab.py::test_release_cutoffs_from_outer` (synthetic run: in-sample predictions would choose a different cutoff) |
-| The release reference is the lab's own functions | `test_lab.py::test_reference_reproduces_v1_goldens`; gate `rg "kick_fusion_bandwise|kick_goal_profile|kick_goal_lowbank|kick_goal_tail|snare_cands|detector_channels" tools/audio_analysis/lab/release.py` → 0 |
+| The release reference is the lab's own functions | `test_lab.py::test_shipped_sets_are_their_release` (a fresh export is the committed set; the v1 reproduction test retired with the v1 files at P3); gate `rg "kick_fusion_bandwise|kick_goal_profile|kick_goal_lowbank|kick_goal_tail|snare_cands|detector_channels" tools/audio_analysis/lab/release.py` → 0 |
 | Push never allocates | capacity assertion in every end-to-end parity test |
 | One runtime | after P3: `rg "KickDetector|SnareDetector|RECIPE_VERSION|recipe_version" crates/manifold-audio crates/manifold-app` → 0 |
 | Decisions run in emission order | `debug_assert!` in `TrainedDetector` on `avail_hop` |

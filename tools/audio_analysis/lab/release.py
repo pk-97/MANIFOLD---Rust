@@ -4,7 +4,6 @@
 Usage:
   release.py train CONFIG [--seed S] [--nets N]      final models from a saved lab run (seeds S..S+N-1); a release record
   release.py train CONFIG --provisional [--nets N]   CPU, 1 epoch, 3 songs, trees max_iter 5, cuts and cutoff from its coverage clips: throwaway
-  release.py convert-v1 kick|snare                   the shipped v1 model as a release record: same train_id, same numbers
   release.py export TRAIN_ID --set NAME [--ship] [--out ROOT]
         writes crates/manifold-audio/tests/fixtures/detectors/NAME/{model,clip_*}.mkick under ROOT (default this
         checkout); --ship also writes crates/manifold-audio/assets/<family>_model.mkick, byte-identical to the model
@@ -44,11 +43,6 @@ PARTS = ROOT / SETS / 'runtime_parts.json'
 CONTRACT = 2
 RATE, HOP = 48000, 256
 CLIP = 1e-6  # every logit clip (models.combine, the D17 net average)
-GOAL = Path.home() / '.cache/manifold/kick-goal-2026-10-10'
-# The shipped v1 models and the lab config each was built as (provenance only).
-V1 = {'kick': (GOAL / 'final' / 'final.pkl', 'kick_shipped_recipe'),
-      'snare': (GOAL / 'snare_final' / 'final.pkl', 'snare_v1')}
-V1_KICK_TREES = ['f15', 'tail3', 'tmpl3', 'prof32', 'low16']
 # The fixture audio is not in git: the main checkout's path.
 FIXTURES = Path('/Users/peterkiemann/MANIFOLD - Rust/tests/fixtures/audio')
 LEAD_SILENCE_S = .5
@@ -326,12 +320,10 @@ def golden(rec, a16, r):
 
 def clip_specs(rec):
     """{clip: spec} by the record's clip kind. Parts are (fixture, start s, fade-in s) or ('silence', s); the end
-    lands in the first candidate-free gap at or after target_s. v1 kinds rebuild the v1 clips exactly."""
+    lands in the first candidate-free gap at or after target_s."""
     lead = ('silence', LEAD_SILENCE_S)
     windows = rec['stage']['windows_s'] if rec['stage'] else []
     return {
-        'kick-v1': dict(dense=dict(parts=[TEARS, APRICOTS], target_s=20.0), quiet_start=dict(parts=QUIET, target_s=12.0)),
-        'snare-v1': dict(dense=dict(parts=[lead, TEARS, APRICOTS], target_s=18.0), quiet_start=dict(parts=QUIET, target_s=12.0)),
         'v2': dict(dense=dict(parts=[lead, TEARS, APRICOTS], target_s=max(20.0, 2.5 * max(windows, default=0.0))),
                    quiet_start=dict(parts=QUIET, target_s=12.0)),
         'cover': dict(dense=dict(parts=[lead, TEARS, APRICOTS], target_s=12.0)),
@@ -428,12 +420,13 @@ def export(train_id, set_name, ship=False, out=None):
     print(f'model: {len(model)} entries -> {path} ({path.stat().st_size} bytes)', flush=True)
     if ship:
         asset = root / ASSETS / f'{rec["family"]}_model.mkick'
+        asset.parent.mkdir(parents=True, exist_ok=True)
         asset.write_bytes(path.read_bytes())
         print(f'shipped -> {asset}', flush=True)
     print(f'export done in {time.time() - t0:.0f} s', flush=True)
 
 
-# ---------------------------------------------------------------- convert v1
+# ---------------------------------------------------------------- shipped assets
 
 def asset_train_id(family):
     return contract_text(kick_container.read(ROOT / ASSETS / f'{family}_model.mkick')['train_id'])
@@ -441,36 +434,6 @@ def asset_train_id(family):
 
 def contract_text(a):
     return bytes(np.asarray(a, np.uint8)).decode()
-
-
-def convert_v1(family):
-    """The shipped v1 model as a release record: its final.pkl numbers under the v2 parts, the same train_id."""
-    path, cfg_name = V1[family]
-    raw = json.loads((config.EXPERIMENTS / f'{cfg_name}.json').read_text())
-    use(raw, cfg_name)
-    from tools.audio_analysis.eval.kick_goal_selfsim import POWER
-    with open(path, 'rb') as fh:
-        final = pickle.load(fh)
-    if final['train_id'] != asset_train_id(family):
-        sys.exit(f'{path}: train_id {final["train_id"]} is not the shipped asset\'s {asset_train_id(family)}')
-    n = final['net']
-    rec = dict(contract=CONTRACT, family=family, train_id=final['train_id'], config=raw, run_id='v1', seed=0,
-               fitted={}, cutoff=float(final['cutoff']), refractory_s=float(final['refractory_s']), score={},
-               clips=f'{family}-v1')
-    if family == 'kick':
-        assert (n['bands'], n['past_ms'], n['ahead_ms']) == (64, 150, 40), n
-        rec.update(finder='kick', combine='mean_logit', songs=[],
-                   net=dict(state_dicts=[n['state_dict']], past_ms=n['past_ms'], ahead_ms=n['ahead_ms'], channels=[]),
-                   trees=dict(model=final['trees'], measures=list(V1_KICK_TREES)),
-                   fitted={'tmpl3': dict(templates=np.asarray(final['templates'], np.float64))},
-                   stage=dict(model=final['stage'], windows_s=[float(final['window_s'])], shape=['prof32', 'low16'],
-                              level=('f15', 0), gate=0.0, power=POWER, cuts=None))
-    else:
-        assert (n['bands'], n['past_ms'], n['ahead_ms'], n['channels']) == (64, 190, 40, 3), n
-        rec.update(finder='snare:4.5', combine='net', songs=list(final['songs']), trees=None, stage=None,
-                   net=dict(state_dicts=[n['state_dict']], past_ms=n['past_ms'], ahead_ms=n['ahead_ms'], channels=['flat']))
-    save(rec)
-    return rec
 
 
 # ---------------------------------------------------------------- train
@@ -715,8 +678,6 @@ def main():
     t.add_argument('--seed', type=int, default=0)
     t.add_argument('--nets', type=int, default=1)
     t.add_argument('--provisional', action='store_true')
-    c = sub.add_parser('convert-v1')
-    c.add_argument('family', choices=sorted(V1))
     e = sub.add_parser('export')
     e.add_argument('train_id')
     e.add_argument('--set', required=True, dest='set_name')
@@ -726,8 +687,6 @@ def main():
     a = ap.parse_args()
     if a.cmd == 'train':
         train(a.config, a.seed, a.nets, a.provisional)
-    elif a.cmd == 'convert-v1':
-        convert_v1(a.family)
     elif a.cmd == 'export':
         export(a.train_id, a.set_name, a.ship, a.out)
     else:

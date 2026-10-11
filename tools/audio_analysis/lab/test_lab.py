@@ -565,7 +565,7 @@ def builder(x):
 
     def test_stage_inputs_match_release(self):
         """The kick stage's inputs are the shipped kick's (self_features over prof32 and low16, level f15 column 0, 8 s;
-        release.py convert-v1 kick), from the lab's candidates and measures; without a level the level column is left
+        the v1 kick stage shape), from the lab's candidates and measures; without a level the level column is left
         out."""
         from tools.audio_analysis.eval.kick_goal_eval import Goal
         from tools.audio_analysis.eval.kick_goal_selfsim import self_features
@@ -744,22 +744,7 @@ def builder(x):
 
 REPO = Path(__file__).resolve().parents[3]
 RELEASE = Path(__file__).with_name('release.py')
-V1_GOLDENS = REPO / 'crates/manifold-audio/tests/fixtures'
 SET_NAMES = ('kick', 'snare', 'cover_kick', 'cover_snare')
-# v1 golden name -> v2 golden name, where the numbers are the same quantity (docs/DETECTOR_RUNTIME_DESIGN.md section 6).
-V1_GOLDEN_KICK = {'train_id': 'train_id', 'sample_rate': 'rate', 'hop': 'hop', 'audio_i16': 'audio_i16',
-                  'cand_hop': 'cand_hop', 'avail_hop': 'avail_hop', 'onset_s': 'onset_s', 'emit_s': 'emit_s',
-                  'f15': 'm.f15', 'tail3': 'm.tail3', 'tmpl3': 'm.tmpl3', 'prof32': 'm.prof32', 'low16': 'm.low16',
-                  'net_spec': 'frames.spec', 'net_p': 'p.net', 'tree_p': 'p.trees', 'blend_p': 'p.combined',
-                  'stage_x': 'stage.x', 'stage_p': 'p.stage', 'fires': 'fires'}
-V1_GOLDEN_SNARE = {'train_id': 'train_id', 'sample_rate': 'rate', 'hop': 'hop', 'audio_i16': 'audio_i16',
-                   'cand_hop': 'cand_hop', 'avail_hop': 'avail_hop', 'onset_s': 'onset_s', 'emit_s': 'emit_s',
-                   'net_spec': 'frames.spec', 'flat': 'frames.flat'}
-# v1 model entry -> v2 entry holding the same numbers; the rest of v1 is dropped by the contract.
-V1_MODEL_RENAMES = {'sample_rate': 'rate', 'stage.cutoff': 'cutoff', 'stage.refractory_s': 'refractory_s',
-                    'stage.blend_clip': 'combine.clip', 'extra.templates_all': 'fit.tmpl3.all',
-                    'extra.templates_low': 'fit.tmpl3.low', 'extra.templates_high': 'fit.tmpl3.high'}
-V1_MODEL_DROPPED = {'recipe_version', 'stage.blend_weights', 'stage.sample_rate', 'stage.hop', 'stage.window_s'}
 
 
 def run_release(*args):
@@ -786,57 +771,21 @@ class ReleaseTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         from tools.audio_analysis.lab import release
-        for family in ('kick', 'snare'):
-            run_release('convert-v1', family)
         cls.ids = {f: release.asset_train_id(f) for f in ('kick', 'snare')}
 
-    def test_reference_reproduces_v1_goldens(self):
-        """The generic reference, built only from the lab's parts, reproduces both shipped v1 goldens: the kick with no
-        difference at all on every shared array, the snare exactly except each net probability (sigmoid in f32 now,
-        f64 in v1, within 1e-7). The model files hold v1's numbers under the v2 names. A fresh export equals the
-        committed sets byte for byte."""
-        from tools.audio_analysis import kick_container as kc
+    def test_shipped_sets_are_their_release(self):
+        """A fresh export of each shipped release equals its committed set and asset byte for byte."""
         from tools.audio_analysis.lab import release
-        from tools.audio_analysis.lab.export.net import WEIGHTS
         with tempfile.TemporaryDirectory() as d:
             for family in ('kick', 'snare'):
-                run_release('export', self.ids[family], '--set', family, '--out', d)
+                run_release('export', self.ids[family], '--set', family, '--ship', '--out', d)
                 fresh = Path(d) / release.SETS / family
                 committed = REPO / release.SETS / family
                 self.assertEqual(sorted(p.name for p in fresh.iterdir()), sorted(p.name for p in committed.iterdir()))
                 for p in fresh.iterdir():
                     self.assertEqual(p.read_bytes(), (committed / p.name).read_bytes(), f'{family} {p.name}')
-                for clip in ('dense', 'quiet_start'):
-                    v1 = kc.read(V1_GOLDENS / family / f'clip_{clip}.mkick')
-                    v2 = kc.read(fresh / f'clip_{clip}.mkick')
-                    what = f'{family} {clip}'
-                    names = V1_GOLDEN_KICK if family == 'kick' else V1_GOLDEN_SNARE
-                    for old, new in names.items():
-                        exact(self, v2[new], v1[old], f'{what} {old}')
-                    if family == 'kick':
-                        exact(self, np.hstack([v2[f'm.{m}'] for m in release.V1_KICK_TREES]), v1['f69'], f'{what} f69')
-                        exact(self, v2['p.final'], v1['stage_p'], f'{what} p.final (gate off)')
-                        self.assertEqual(set(v1), set(names) | {'f69'}, what)
-                    else:
-                        exact(self, v2['net.logit'][:, 0].astype(np.float64), v1['net_logit'], f'{what} net_logit')
-                        self.assertLessEqual(float(np.max(np.abs(v2['p.net'] - v1['net_p']))), 1e-7, what)
-                        exact(self, v2['avail_hop'][v2['fires']], v1['fires'], f'{what} fires')
-                        exact(self, v2['p.final'], v2['p.net'], what)
-                        # cand_db is the snare finder's internal energy track: not part of the v2 golden schema.
-                        self.assertEqual(set(v1), set(names) | {'net_logit', 'net_p', 'fires', 'cand_db'}, what)
-                v1 = kc.read(REPO / release.ASSETS / f'{family}_model.mkick')
-                v2 = kc.read(fresh / 'model.mkick')
-                for name, a in v1.items():
-                    if name in V1_MODEL_DROPPED:
-                        continue
-                    new = V1_MODEL_RENAMES.get(name) or (
-                        f'net.0.{name[4:]}' if name.startswith('net.') and name[4:] in WEIGHTS else name)
-                    exact(self, v2[new], a, f'{family} model {name} -> {new}')
-                    self.assertEqual(v2[new].dtype, a.dtype, f'{family} model {name}')
-                if family == 'kick':
-                    exact(self, v2['stage.windows_s'], [v1['stage.window_s']], 'kick window')
-                    exact(self, v1['stage.blend_weights'], [.5, .5], 'v1 blend is the mean logit')
-                    self.assertEqual(bytes(v2['combine']).decode(), 'mean_logit')
+                asset = f'{family}_model.mkick'
+                self.assertEqual((Path(d) / release.ASSETS / asset).read_bytes(), (REPO / release.ASSETS / asset).read_bytes())
 
     def test_contract_round_trip(self):
         """A record's entries pass the checker, survive the container byte for byte and are the committed model; every
@@ -856,7 +805,8 @@ class ReleaseTests(unittest.TestCase):
                 np.testing.assert_array_equal(back[k], v, err_msg=k)
             contract.check(back, release.parts())
             self.assertEqual(path.read_bytes(), (REPO / release.SETS / 'kick' / 'model.mkick').read_bytes())
-        sets = sorted(p.name for p in (REPO / release.SETS).iterdir() if p.is_dir())
+        # unit/ holds the Rust part fixtures, not release sets.
+        sets = sorted(p.name for p in (REPO / release.SETS).iterdir() if p.is_dir() and p.name != 'unit')
         self.assertEqual(sets, sorted(SET_NAMES))
         for name in SET_NAMES:
             model = kc.read(REPO / release.SETS / name / 'model.mkick')
@@ -878,6 +828,7 @@ class ReleaseTests(unittest.TestCase):
             return {k: v for k, v in e.items() if k not in names}
 
         ck, cs, kick, snare = base['cover_kick'], base['cover_snare'], base['kick'], base['snare']
+        no_stage = dict({k: v for k, v in snare.items() if not k.startswith('stage.')}, stage=np.array(0, np.int32))
         cases = [
             ('contract', without(ck, 'contract')),
             ('contract', dict(ck, contract=np.array(3, np.int32))),
@@ -906,8 +857,8 @@ class ReleaseTests(unittest.TestCase):
             ('windows', dict(ck, **{'stage.windows_s': np.zeros(0)})),
             ('level-column', dict(ck, **{'stage.level': text('f15:15')})),
             ('gate-cuts', without(ck, 'stage.cut_stage')),
-            ('gate-cuts', dict(kick, **{'stage.cut_detector': np.array(.5), 'stage.cut_stage': np.array(.5)})),
-            ('fitted', without(kick, 'fit.tmpl3.low')),
+            ('gate-cuts', dict(kick, **{'stage.gate': np.array(0.0)})),
+            ('fitted', dict(kick, **{'stage.shape': text('prof32,low16,tmpl3')})),
             ('unknown-entry', dict(kick, **{'fit.tmpl3.extra': np.zeros(1)})),
             ('net-extra', dict(cs, **{'net.channels': np.array(2, np.int64)})),
             ('net-count', dict(ck, **{'net.count': np.array(0, np.int64)})),
@@ -917,7 +868,7 @@ class ReleaseTests(unittest.TestCase):
             ('unknown-entry', dict(ck, **{'extra.nope': np.zeros(1)})),
             ('unknown-entry', dict(ck, whatever=np.zeros(1))),
             ('unknown-entry', dict(snare, **{'base.hop': np.array(256, np.int64)})),
-            ('unknown-entry', dict(snare, **{'stage.gate': np.array(0.0)})),
+            ('unknown-entry', dict(no_stage, **{'stage.gate': np.array(0.0)})),
         ]
         for case, e in cases:
             with self.assertRaises(contract.ContractError, msg=case) as cm:

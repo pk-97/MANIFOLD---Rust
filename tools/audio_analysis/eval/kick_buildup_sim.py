@@ -19,7 +19,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 from tools.audio_analysis.lab import release  # noqa: E402
 
-# The shipped kick's record (release.py convert-v1 kick), its net env pinned before the research modules.
+# The shipped kick's record (the shipped release), its net env pinned before the research modules.
 REC = release.open_release(release.asset_train_id('kick'))
 import numpy as np  # noqa: E402
 from scipy.signal import butter, sosfilt  # noqa: E402

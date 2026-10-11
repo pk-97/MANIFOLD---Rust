@@ -123,7 +123,7 @@ VERBS = [
      "kick-labels", "kick_label_extract.py", "ground-truth kick times from drum stems"),
     ("Render and measure",
      "detector-release", ["tools/audio_analysis/lab/release.py"],
-     "any lab detector's release: train CONFIG [--provisional] [--nets N], convert-v1, export ID --set NAME [--ship] (model file v2 and parity goldens), parts"),
+     "any lab detector's release: train CONFIG [--provisional] [--nets N], export ID --set NAME [--ship] (model file v2 and parity goldens), parts"),
     ("Render and measure",
      "lab-songs", ["tools/audio_analysis/lab/registry.py"],
      "detector lab song list: build | show [SONG] | verify (audio and hashes match the legacy loader)"),
