@@ -190,10 +190,19 @@ fn end_to_end(set: &str, m: &Container, spec: &Spec, name: &str, g: &Container, 
     let mut got: Vec<Got> = Vec::with_capacity(k + 64);
     let mut fires: Vec<Fire> = Vec::new();
     let mut chunks = Chunks(seed);
-    let (mut at, mut spec_f, mut flat_f) = (0, 0u64, 0u64);
-    let (mut spec_err, mut flat_err) = (0.0f64, 0.0f64);
+    let (mut at, mut spec_f, mut spec_err) = (0, 0u64, 0.0f64);
     let gspec = g.contains("frames.spec").then(|| (g.shape("frames.spec").unwrap()[0], g.f32s("frames.spec", &[g.shape("frames.spec").unwrap()[0], 64]).unwrap()));
-    let gflat = g.contains("frames.flat").then(|| (g.shape("frames.flat").unwrap()[0], g.f32s("frames.flat", &[g.shape("frames.flat").unwrap()[0], 64]).unwrap()));
+    // Each extra channel in the net's order: (name, golden frames, values, frames compared, max error).
+    let mut gch: Vec<(&str, usize, &[f32], u64, f64)> = spec.net.as_ref().map_or(Vec::new(), |n| {
+        n.channels
+            .iter()
+            .map(|ch| {
+                let key = format!("frames.{}", ch.name());
+                let t = g.shape(&key).unwrap()[0];
+                (ch.name(), t, g.f32s(&key, &[t, 64]).unwrap(), 0, 0.0)
+            })
+            .collect()
+    });
     while at < audio.len() {
         let n = chunks.next().min(audio.len() - at);
         fires.reserve(run.det().max_fires(n));
@@ -223,10 +232,10 @@ fn end_to_end(set: &str, m: &Container, spec: &Spec, name: &str, g: &Container, 
                 spec_f += 1;
             }
         }
-        if let Some((t, want)) = &gflat {
-            while (flat_f as usize) < *t && let Some(row) = det.frames().frame(0, flat_f) {
-                flat_err = flat_err.max(max_err(row.iter().map(|&v| v as f64), want[flat_f as usize * 64..][..64].iter().map(|&v| v as f64)));
-                flat_f += 1;
+        for (i, (_, t, want, f, err)) in gch.iter_mut().enumerate() {
+            while (*f as usize) < *t && let Some(row) = det.frames().frame(i, *f) {
+                *err = err.max(max_err(row.iter().map(|&v| v as f64), want[*f as usize * 64..][..64].iter().map(|&v| v as f64)));
+                *f += 1;
             }
         }
     }
@@ -239,7 +248,8 @@ fn end_to_end(set: &str, m: &Container, spec: &Spec, name: &str, g: &Container, 
     if let Some((t, _)) = &gspec {
         assert!(spec_f as usize + 64 >= *t, "{set}/{name}: only {spec_f} of {t} spectrum frames compared");
     }
-    assert!(spec_err <= 1e-3 && flat_err <= 1e-3, "{set}/{name}: frames spec {spec_err} flat {flat_err} dB");
+    let frames = gch.iter().map(|(n, t, _, f, e)| format!(" {n} {e:.1e} ({f} of {t})")).collect::<String>();
+    assert!(spec_err <= 1e-3 && gch.iter().all(|c| c.4 <= 1e-3), "{set}/{name}: frames spec {spec_err}{frames} dB");
 
     // Measures, abs 1e-6; the kick verdict (kick2) carries the kick's probability, abs 1e-4 like the kick's own
     // p.final, and is not comparable where the kick's window opens inside the kick's stream-start edge.
@@ -327,7 +337,7 @@ fn end_to_end(set: &str, m: &Container, spec: &Spec, name: &str, g: &Container, 
         (a.min(e), b.max(e))
     });
     println!(
-        "{set}/{name} e2e: {d} of {k} decided; frames spec {spec_err:.1e} flat {flat_err:.1e} dB; measures {m_err:.1e} ({tail_skipped} early pre_rel_db not compared); \
+        "{set}/{name} e2e: {d} of {k} decided; frames spec {spec_err:.1e}{frames} dB; measures {m_err:.1e} ({tail_skipped} early pre_rel_db not compared); \
          kick2 {k_err:.1e}; net.logit {z_err:.1e}; {}; stage.x {x_err:.1e} (stream-start edge: {} net, {} stage candidates not compared); fires {}/{} mismatched {mismatched:?}; lag {lo:.1}..{hi:.1} ms (bound {:.1})",
         errs.iter().map(|(n, e)| format!("{n} {e:.1e}")).collect::<Vec<_>>().join(" "),
         edge.0,
