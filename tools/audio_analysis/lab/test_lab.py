@@ -158,12 +158,19 @@ class LabTests(unittest.TestCase):
         with unrelated code in the same module."""
         import importlib.util
         import linecache
-        src = """C = {c}
+        src = """import functools
+C = {c}
 OTHER = {o}
+TABLE = {{'a': {{1, 2}}, 'b': [3]}}
+
+
+@functools.lru_cache(maxsize=None)
+def cached(x):
+    return x + {w}
 
 
 def helper(x):
-    return x + C
+    return x + C + len(TABLE['a']) + cached(x)
 
 
 def unrelated():
@@ -175,10 +182,11 @@ def builder(x):
 """
         name = 'tools.audio_analysis.lab._closure_probe'
 
-        def ident(c, o, k):
+        def ident(c, o, k, table=None, w=1):
             with tempfile.TemporaryDirectory() as d:
                 f = Path(d) / '_closure_probe.py'
-                f.write_text(src.format(c=c, o=o, k=k))
+                text = src.format(c=c, o=o, k=k, w=w)
+                f.write_text(text if table is None else text.replace("TABLE = {'a': {1, 2}, 'b': [3]}", table))
                 linecache.clearcache()
                 spec = importlib.util.spec_from_file_location(name, f)
                 mod = importlib.util.module_from_spec(spec)
@@ -192,6 +200,9 @@ def builder(x):
         self.assertEqual(base, ident(1, 5, 2))
         self.assertNotEqual(base, ident(2, 1, 2))
         self.assertNotEqual(base, ident(1, 1, 3))
+        self.assertEqual(base, ident(1, 1, 2, table="TABLE = {'b': [3], 'a': {2, 1}}"))
+        self.assertNotEqual(base, ident(1, 1, 2, table="TABLE = {'a': {1, 2, 4}, 'b': [3]}"))
+        self.assertNotEqual(base, ident(1, 1, 2, w=2))
 
     def test_tree_weights_and_fit_match_kick_loop(self):
         """The trees part weighs rows as the kick fast loop's training_set and fits the same model: equal
@@ -290,6 +301,67 @@ def builder(x):
         folds = config.Experiment(**{**d.__dict__, 'folds': 4})
         self.assertNotEqual(keys(folds)['net'], net['net'])
 
+    def test_changed_source_refuses_to_run(self):
+        """A source file whose bytes moved since the song list was built stops the run before anything trains."""
+        from tools.audio_analysis.lab import registry
+        with tempfile.TemporaryDirectory() as d:
+            f = Path(d) / 'a.npy'
+            np.save(f, np.zeros(10, np.float32))
+            s = song('x', f)
+            old = registry.HASHES
+            registry.HASHES = Path(d) / 'hashes.json'
+            try:
+                registry.check_sources([s])
+                np.save(f, np.ones(10, np.float32))
+                with self.assertRaises(SystemExit):
+                    registry.check_sources([s])
+            finally:
+                registry.HASHES = old
+
+    def test_model_key_follows_what_trains(self):
+        """A model's key moves with the labels of songs it trains on and with any song's audio, never with the labels
+        of a song it only predicts."""
+        cfg = config.load('kick_trees')
+        trainings = [dict(without=[0], held=['a'], trained=['b', 'c'], clips=[]),
+                     dict(without=[1], held=['b'], trained=['a', 'c'], clips=[])]
+        meta = dict(parts=dict(finder='f', measures='m'), trainings=trainings, label_ids=dict(a='1', b='2', c='3', z='9'),
+                    content=dict(a='A', b='B', c='C'))
+        base = run.model_key(cfg, 'trees', meta)
+        self.assertEqual(base, run.model_key(cfg, 'trees', dict(meta, label_ids=dict(meta['label_ids'], z='8'))))
+        self.assertNotEqual(base, run.model_key(cfg, 'trees', dict(meta, label_ids=dict(meta['label_ids'], c='4'))))
+        self.assertNotEqual(base, run.model_key(cfg, 'trees', dict(meta, content=dict(meta['content'], a='A2'))))
+
+    def test_inside_and_covered(self):
+        """inside() equals the plain loop over closed spans; covered() counts overlaps once."""
+        from tools.audio_analysis.eval.detector_eval import covered, inside
+        rng = np.random.default_rng(4)
+        for _ in range(500):
+            spans = [(float(a), float(a + rng.uniform(-.2, 2))) for a in rng.uniform(0, 10, rng.integers(0, 20))]
+            t = np.concatenate([rng.uniform(-1, 12, 40), [x for sp in spans for x in sp]])
+            want = np.zeros(len(t), bool)
+            for a, b in spans:
+                want |= (t >= a) & (t <= b)
+            np.testing.assert_array_equal(inside(t, spans), want)
+            grid = np.linspace(0, 10, 200001)
+            self.assertAlmostEqual(covered(spans, 0.0, 10.0), inside(grid, spans).mean() * 10, delta=.002 * (1 + len(spans)))
+
+    def test_false_per_minute_skips_recall_only(self):
+        from tools.audio_analysis.eval.detector_compare import timing
+        side = [dict(a=dict(minutes=2.0, extra=4, late_ms=[]), r=dict(minutes=8.0, extra=0, late_ms=[]))]
+        self.assertIn('2.00 false per minute', timing(side, ['a', 'r'], recall_only=('r',)))
+
+    def test_score_refuses_mismatched_save(self):
+        """Saved probabilities that do not line up with the cached candidates are an error, never a silent pairing."""
+        import gzip
+        g = GOLDEN.with_name('legacy_snare_folds4_s0')
+        with gzip.open(g.with_suffix('.labels.json.gz'), 'rt') as f:
+            lab = json.load(f)
+        with np.load(g.with_suffix('.npz')) as z:
+            t = z.files[0]
+            held = {t: z[t][:-1]}
+        with self.assertRaises(ValueError):
+            score.score(BASE, lab, load(), held)
+
     def test_exam_rejects_generated(self):
         songs = load()
         gen = next(t for t, s in songs.items() if s.kind == 'generated')
@@ -338,8 +410,14 @@ def builder(x):
             got = json.loads(json.dumps(score.legacy(g.with_suffix('.npz'), cfg, lab=lab), default=float))
             want = json.loads(g.with_suffix('.json').read_text())['results']['net']['per_song']
             self.assertEqual(sorted(got), sorted(want), golden)
+            from tools.audio_analysis.eval.detector_eval import covered
             for t in want:
-                self.assertEqual(got[t], want[t], f'{golden} {t}')
+                # Scored minutes count overlapping unscored spans once since the P6 review; all else is unchanged.
+                self.assertEqual({k: v for k, v in got[t].items() if k != 'minutes'},
+                                 {k: v for k, v in want[t].items() if k != 'minutes'}, f'{golden} {t}')
+                self.assertAlmostEqual(got[t]['minutes'],
+                                       max(0.0, lab[t]['duration_s'] - covered(lab[t]['unscored'], 0.0, lab[t]['duration_s'])) / 60,
+                                       places=12)
 
     def test_input_parity(self):
         """The lab hands the net trainer what the retired snare runner did: song order, groups, untrained songs, and

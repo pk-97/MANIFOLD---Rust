@@ -33,6 +33,17 @@ def inside(t, spans):
     return (j >= 0) & (t <= reach[np.maximum(j, 0)])
 
 
+def covered(spans, lo, hi):
+    """Seconds of [lo, hi] inside any span, overlaps counted once."""
+    total, end = 0.0, lo
+    for a, b in sorted(spans):
+        a, b = max(a, end), min(b, hi)
+        if b > a:
+            total += b - a
+            end = b
+    return total
+
+
 def nearest(a, b):
     """For each a, distance to the nearest b."""
     b = np.sort(np.asarray(b))
@@ -132,7 +143,7 @@ def song_result(s, emit, p, avail, th, sr, ahead=0.0, hop=HOP):
         e = fired[np.argmin(np.abs(fired - t))]
         if abs(e - t) <= tol(s):
             late.append(round(1000 * (e + ahead - t), 1))
-    gone = sum(b - a for a, b in s['unscored'])
+    gone = covered(s['unscored'], 0.0, s['duration_s'])
     return dict(matched=m, labels=n, extra=len(false), cutoff=float(th), minutes=max(0.0, s['duration_s'] - gone) / 60,
                 late_ms=late, false_s=[round(float(v), 3) for v in false])
 

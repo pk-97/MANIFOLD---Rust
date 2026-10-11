@@ -32,6 +32,9 @@ def score(cfg, lab, songs, held, pool=None):
     meta, wait = {}, {}
     for t in held:
         c = components.candidates(songs[t], cfg.candidates, cfg.family, build=False)
+        if len(held[t]) != len(c.cand):
+            raise ValueError(f'{t}: {len(held[t])} saved probabilities for {len(c.cand)} candidates; the save and the '
+                             f'cache disagree (audio or finder changed since the run)')
         tight = 'tol_s' in lab[t] or 'window_s' in lab[t]
         meta[t] = (lab[t], c.onset_s if tight else c.emit_s, c.avail, c.sr, c.hop)
         # The fixed wait from candidate to emission counts as lateness for families judged at the candidate.

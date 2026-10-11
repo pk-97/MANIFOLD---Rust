@@ -63,7 +63,8 @@ def sign_p(up, down):
 
 
 def timing(side, songs, recall_only=RECALL_ONLY):
-    mins = sum(ps[t].get('minutes', 0) for ps in side for t in songs)
+    # False fires are counted on scored songs only, so their minutes are the denominator.
+    mins = sum(ps[t].get('minutes', 0) for ps in side for t in songs if t not in recall_only)
     if not mins:
         return ''
     false = sum(ps[t]['extra'] for ps in side for t in songs if t not in recall_only)
@@ -97,7 +98,8 @@ def compare(sides, recall_only=RECALL_ONLY, out=print):
     Returns the numbers it prints."""
     songs = sorted(set.intersection(*[set(ps) for side in sides for ps in side]))
     boot = song_bootstrap(sides, songs, recall_only)
-    out(f'B - A over songs: {100 * boot[0]:+.2f} F1 points, 90% interval {100 * boot[1]:+.2f} to {100 * boot[2]:+.2f}')
+    out(f'B - A over songs (hits and false fires averaged over seeds first): {100 * boot[0]:+.2f} F1 points, '
+        f'90% interval {100 * boot[1]:+.2f} to {100 * boot[2]:+.2f}')
     stats = []
     for name, side in zip('AB', sides):
         f1 = [pooled(ps, songs, recall_only)[2] for ps in side]
@@ -105,7 +107,7 @@ def compare(sides, recall_only=RECALL_ONLY, out=print):
         out(f'{name}: F1 ' + ' '.join(f'{v:.4f}' for v in f1) + f' | mean {stats[-1][0]:.4f} ± {stats[-1][1]:.4f}'
             + timing(side, songs, recall_only) + f' | {len(songs)} songs')
     diff, se = stats[1][0] - stats[0][0], math.hypot(stats[0][1], stats[1][1])
-    out(f'B - A over seeds: {100 * diff:+.2f} ± {100 * se:.2f} F1 points')
+    out(f'B - A over seeds (mean of each seed\'s pooled F1): {100 * diff:+.2f} ± {100 * se:.2f} F1 points')
     rows = []
     for t in songs:
         ma, fa, f1a = song_f1(sides[0], t, recall_only)

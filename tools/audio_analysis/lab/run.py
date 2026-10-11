@@ -116,10 +116,14 @@ def setup(cfg):
     imports()
     check_net(cfg)
     from tools.audio_analysis.lab.registry import load
+    from tools.audio_analysis.lab.registry import check_sources
     lab, sha = labels(cfg.family)
     songs = load()
     failed = excluded(cfg.family)
     lab = {t: s for t, s in lab.items() if t not in failed}
+    check_sources([songs[t] for t in lab])
+    content = {t: songs[t].content_id for t in lab}
+    label_ids = {t: hashlib.sha256(json.dumps(s, sort_keys=True).encode()).hexdigest()[:16] for t, s in lab.items()}
     for t, s in lab.items():
         if (s.get('kind') == 'generated') != (songs[t].kind == 'generated'):
             sys.exit(f'{t}: labels and song list disagree on its kind; rebuild with lab/registry.py build')
@@ -127,17 +131,15 @@ def setup(cfg):
     check_exam(exam, songs, failed)
     grps, trainings, _ = models.plan(cfg, lab, songs)
     models.check_disjoint(trainings)
-    # Every config loads these; the parts below add their own modules, whose code the parts' ids already cover.
-    shared = module_hashes()
     used = parts(cfg)
     mods = module_hashes()
-    key = json.dumps(dict(config=cfg.key(), labels=sha, modules=mods, parts=used), sort_keys=True)
+    key = json.dumps(dict(config=cfg.key(), labels=sha, modules=mods, parts=used, content=content), sort_keys=True)
     run_id = f'{cfg.family}-{hashlib.sha256(key.encode()).hexdigest()[:12]}'
     meta = dict(schema=META_SCHEMA, run_id=run_id, config=cfg.key(), names=[cfg.name], labels_sha256=sha,
                 songs=list(lab), exam=exam, generated=[t for t in lab if t not in exam], excluded=failed,
                 recall_only=[t for t in exam if lab[t]['positives_only']], groups=grps, trainings=trainings,
                 layers=[*sorted(cfg.models), *(['combined'] if models.final_layer(cfg) == 'combined' else [])],
-                final=models.final_layer(cfg), modules=mods, shared_modules=shared, parts=used)
+                final=models.final_layer(cfg), modules=mods, parts=used, content=content, label_ids=label_ids)
     return lab, songs, meta
 
 
@@ -156,8 +158,6 @@ def build(cfg, lab, songs, dev, log=print):
         mask, y, hard = rows(s, onset)
         extra = tuple(components.frame(song, m) for m in cfg.net['channels'])
         data[t] = Song(cache.spectrum(song), onset, emit + ahead, mask, y, t, hard, extra).to(dev)
-        if song.kind == 'generated':
-            data[t].blocked = {t}
         log(f'{t}: {len(cand)} candidates, {int(mask.sum())} training rows')
     return data
 
@@ -179,15 +179,23 @@ def tree_rows(cfg, lab, songs):
     return out
 
 
+def model_code(model):
+    """The code that trains a model and builds its inputs, closure included (cache.code_id)."""
+    from tools.audio_analysis.lab.cache import code_id
+    return code_id(train_model) + code_id(build if model == 'net' else tree_rows)
+
+
 def model_key(cfg, model, meta):
-    """What decides one model's predictions in a run: its own settings, the finder, sampling, training songs and plan,
-    the labels, the code, and the parts it reads. Configs that share it share the trained layer (LAYERS)."""
+    """What decides one model's predictions in a run: its own settings, the finder, sampling and plan, the labels of
+    the songs it trains on (never the held songs'), every song's audio, the training code, and the parts it reads.
+    Configs that share it share the trained layer (LAYERS); relabelling a song nobody trains on retrains nothing."""
     sub = {k: v for k, v in cfg.key().items() if k not in ('models', 'combine', 'stage')}
     sub['models'] = {model: cfg.models[model]}
     reads = dict(net='frames', trees='measures')[model]
     used = {k: v for k, v in meta['parts'].items() if k in ('finder', reads)}
-    key = json.dumps(dict(model=sub, labels=meta['labels_sha256'], modules=meta['shared_modules'], parts=used,
-                          songs=meta['songs'], trainings=meta['trainings']), sort_keys=True)
+    taught = sorted({u for n in meta['trainings'] for u in n['trained'] + n['clips']})
+    key = json.dumps(dict(model=sub, labels={u: meta['label_ids'][u] for u in taught}, code=model_code(model),
+                          parts=used, content=meta['content'], trainings=meta['trainings']), sort_keys=True)
     return f'{model}-{hashlib.sha256(key.encode()).hexdigest()[:12]}'
 
 
