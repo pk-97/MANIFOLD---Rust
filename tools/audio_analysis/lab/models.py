@@ -85,3 +85,20 @@ def combine(how, layers):
 
 def final_layer(cfg):
     return 'combined' if len(COMBINES[cfg.combine]) > 1 else cfg.combine
+
+
+def song_meta(s, c):
+    """(labels, stamp, avail, sr, hop) the scorer judges one song by: a family with a tight hit window (labels' tol_s
+    or window_s) is judged at the candidate, every other at its emission."""
+    tight = 'tol_s' in s or 'window_s' in s
+    return s, c.onset_s if tight else c.emit_s, c.avail, c.sr, c.hop
+
+
+def cutoff(metas, probs):
+    """The cutoff detector_eval.held_out would choose on these songs' probabilities: best pooled F1, never on
+    recall-only or generated songs."""
+    from tools.audio_analysis.eval.detector_eval import THRESHOLDS, choose_from, score
+    use = [u for u in probs if not metas[u][0]['positives_only'] and metas[u][0].get('kind') != 'generated']
+    sums = sum((np.array([score(*metas[u][:2], probs[u], metas[u][2], th, *metas[u][3:5]) for th in THRESHOLDS])
+                for u in use), np.zeros((len(THRESHOLDS), 3), int))
+    return choose_from([tuple(int(v) for v in row) for row in sums])

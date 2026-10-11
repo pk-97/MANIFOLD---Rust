@@ -29,14 +29,15 @@ def score(cfg, lab, songs, held, pool=None):
     emission counts as lateness."""
     from tools.audio_analysis.eval.detector_eval import held_out
     from tools.audio_analysis.lab import components
+    from tools.audio_analysis.lab.models import song_meta
     meta, wait = {}, {}
     for t in held:
         c = components.candidates(songs[t], cfg.candidates, cfg.family, build=False)
         if len(held[t]) != len(c.cand):
             raise ValueError(f'{t}: {len(held[t])} saved probabilities for {len(c.cand)} candidates; the save and the '
                              f'cache disagree (audio or finder changed since the run)')
+        meta[t] = song_meta(lab[t], c)
         tight = 'tol_s' in lab[t] or 'window_s' in lab[t]
-        meta[t] = (lab[t], c.onset_s if tight else c.emit_s, c.avail, c.sr, c.hop)
         # The fixed wait from candidate to emission counts as lateness for families judged at the candidate.
         wait[t] = cfg.ahead_s + (float(np.median(c.emit_s - c.onset_s)) if tight and len(c.cand) else 0.0)
     per_song = {}

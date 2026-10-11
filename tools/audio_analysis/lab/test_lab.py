@@ -629,6 +629,11 @@ def builder(x):
         np.testing.assert_allclose(got[1], expit(logit(.3) + .5 * (logit(.05) - logit(.3))))
         np.testing.assert_allclose(got[2], .05)
         np.testing.assert_array_equal(stage.gated(dict(st, gate=0), x, q), q)
+        # Against its own cutoffs: an empty memory keeps the detector's score, full evidence moves it as far past the
+        # detector's cutoff as the stage's score sits past its own.
+        cut = stage.gated(st, x, q, (.7, .95))
+        np.testing.assert_allclose(cut[[0, 3]], p[[0, 3]])
+        np.testing.assert_allclose(logit(cut[2]) - logit(.7), logit(.05) - logit(.95))
 
     def test_after_gap(self):
         """A positive opens a passage only after a fully known gap with no positive, roll hit or run event in it."""

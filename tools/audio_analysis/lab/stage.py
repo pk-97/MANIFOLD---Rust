@@ -36,15 +36,19 @@ def check(st, folds, measures, where=''):
         raise ValueError(f'{where}: stage learn is "all" or "project", gate >= 0 (0: off)')
 
 
-def gated(st, x, q):
-    """Stage probabilities q on inputs x with the gate: the detector's logit (column 0) plus history's change, scaled
-    by the first window's evidence over st['gate']."""
+def gated(st, x, q, cuts=(.5, .5)):
+    """Stage probabilities q on inputs x with the gate. Scores are measured against their own cutoffs (cuts: the
+    detector's, the stage's), since history moves confident hits far up and its cutoff with them: the detector's
+    distance from its cutoff plus history's change in that distance, scaled by the first window's evidence over
+    st['gate'], put back on the detector's scale. With an empty memory a hit fires exactly when the detector's would."""
     from scipy.special import expit, logit
     if not st['gate']:
         return q
     evidence = np.expm1(x[:, 4 if st['level'] else 3])
     g = np.minimum(1.0, evidence / st['gate'])
-    return expit(x[:, 0] + g * (logit(np.clip(q, 1e-6, 1 - 1e-6)) - x[:, 0]))
+    det = x[:, 0] - logit(cuts[0])
+    stg = logit(np.clip(q, 1e-6, 1 - 1e-6)) - logit(cuts[1])
+    return expit(logit(cuts[0]) + det + g * (stg - det))
 
 
 def measures_of(st):
@@ -52,15 +56,17 @@ def measures_of(st):
 
 
 def song_parts(cfg, song, lab, build=True):
-    """(shape (n, k), level (n,) or None, emit_s, training rows (mask, y, hard)) for one song's candidates."""
+    """(shape (n, k), level (n,) or None, emit_s, training rows (mask, y, hard), scorer meta (models.song_meta)) for
+    one song's candidates."""
     from tools.audio_analysis.eval.detector_eval import rows
     from tools.audio_analysis.lab import components
+    from tools.audio_analysis.lab.models import song_meta
     st = cfg.stage
     c = components.candidates(song, cfg.candidates, cfg.family, build)
     got = {m: components.measure(song, cfg.candidates, cfg.family, m, build) for m in measures_of(st)}
     shape = np.hstack([got[m] for m in st['shape']])
     level = got[st['level'][0]][:, st['level'][1]] if st['level'] else None
-    return shape, level, c.emit_s, rows(lab, c.onset_s)
+    return shape, level, c.emit_s, rows(lab, c.onset_s), song_meta(lab, c)
 
 
 def inputs(st, part, p):
@@ -104,17 +110,25 @@ def train(cfg, grps, trainings, final, parts, seed, generated=(), log=print):
                     rows.append((stage_x(k, i, u)[mask], y[mask], hard[mask], u in clips))
         return models.fit_trees(st, rows, random_state, share)
 
-    def judge(m, k, j, u):
-        xs = stage_x(k, j, u)
-        return gated(st, xs, m.predict_proba(xs)[:, 1])
     out = {}
     t0 = time.time()
     for k, g in enumerate(grps):
         others = [j for j in range(len(grps)) if j != k]
-        m = fit(k, others, 1000 * k + seed)
-        out.update({f'staged__{t}': judge(m, k, k, t) for t in g})
+        outer = fit(k, others, 1000 * k + seed)
+        # Group k's pool: the other groups judged by stages and detectors that saw neither them nor k. The gate's
+        # cutoffs come from it too, so nothing of group k sets them.
+        pool = {}
         for j in others:
             m = fit(k, [i for i in others if i != j], 1000 * k + 100 * (j + 1) + seed)
-            out.update({f'pair{k}__staged__{u}': judge(m, k, j, u) for u in grps[j]})
+            pool.update({u: (j, m.predict_proba(stage_x(k, j, u))[:, 1]) for u in grps[j]})
+        cuts = None
+        if st['gate']:
+            metas = {u: parts[u][4] for u in pool}
+            cuts = (models.cutoff(metas, {u: final[at[tuple(sorted((k, j)))]][u] for u, (j, _) in pool.items()}),
+                    models.cutoff(metas, {u: q for u, (_, q) in pool.items()}))
+        for u, (j, q) in pool.items():
+            out[f'pair{k}__staged__{u}'] = gated(st, stage_x(k, j, u), q, cuts)
+        for t in g:
+            out[f'staged__{t}'] = gated(st, stage_x(k, k, t), outer.predict_proba(stage_x(k, k, t))[:, 1], cuts)
     log(f'stage: {len(grps) ** 2} fits in {time.time() - t0:.1f} s')
     return out
