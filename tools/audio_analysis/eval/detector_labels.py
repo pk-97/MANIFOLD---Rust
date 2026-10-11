@@ -13,7 +13,8 @@ labels file holds (detector_eval scores against it):
   no voice names; fast runs under dense_s apart, padded).
 - loop_spans: the family's own audio clips (hits past a clip's start are not known times), audio clips that may
   hold the family's events baked in (drum or unclassed parts, part_classes), and muted drum clips; inside them only
-  positives count.
+  positives count. A song with an every-drum stem (Family.drum_stems) replaces them with the stem's unexplained loud
+  moments (drum_stem_blind), and its unknown notes stay unscored only there.
 - hard_neg: vouched non-events: kicks, melodic note starts and excluded or other voices more than far_s from any
   positive, outside loop spans (a melodic note in a drum loop may sit on a baked-in snare).
 - positives_only: recall-only songs.
@@ -55,6 +56,7 @@ class Family:
     clip_onset_s: float = .030  # a clip start is a known hit when its sound begins within this
     kick_clash_s: float = 0.0   # events this close to a kick are unscored: the mix cannot tell them apart
     drop_kick_rolls: bool = False  # kick rolls (roll_spans on the song's kicks) are unscored and untrained
+    drum_stems: tuple = ()      # (song, stem path or paths): the song's every-drum stem (drum_stem_blind)
 
 
 def builder_id(module_file):
@@ -348,6 +350,55 @@ def roll_spans(hits, gap_s=.200, min_hits=4, pad=.250):
     return spans
 
 
+def stem_lag(stem, x, sr, band, search_s=20.0):
+    """(L, z): a stem event at t sits at t + L in the mix, from the cross-correlation of the two signals' attacks
+    (rises of env_db in band) within +-search_s; z is the peak's height over the other lags."""
+    def attacks(y):
+        e = env_db(y, sr, *band)
+        return np.maximum(np.diff(e, prepend=e[0]), 0.0)
+    s, m = attacks(stem), attacks(x)
+    n = 1 << int(np.ceil(np.log2(len(s) + len(m))))
+    c = np.fft.irfft(np.fft.rfft(m, n) * np.conj(np.fft.rfft(s, n)), n)
+    k = int(search_s * 1e3)
+    lags = np.r_[np.arange(0, k), np.arange(-k, 0)]
+    vals = np.r_[c[:k], c[-k:]]
+    i = int(np.argmax(vals))
+    return lags[i] * 1e-3, float((vals[i] - vals.mean()) / (vals.std() + 1e-12))
+
+
+def drum_stem_blind(fam, t, x, sr, pos, explained, proven_lag=None):
+    """Spans (mix s) where the song's drum stem may hold an unlabelled family event, or None without a stem.
+
+    The drum stem is every drum and nothing else (Peter, 2026-10-11): where its family band stays more than
+    prominent_db under the labelled events' level, no prominent family event plays, so the moment is known. Loud
+    frames not within -10..+60 ms of an explained time (positives, dropped events, kicks) stay unknown, padded by
+    the half window. Exits when the stem does not line up with the mix: z under LAG_Z_MIN, unless its lag is the
+    song's proven stem lag (the kick stem from the same export) within 5 ms."""
+    import sys
+
+    from tools.audio_analysis.eval.kick_goal_labels import LAG_Z_MIN, load
+    paths = dict(fam.drum_stems).get(t)
+    if not paths or not len(pos):
+        return None
+    stem = load(paths, sr)
+    L, z = stem_lag(stem, x, sr, fam.band)
+    if z < LAG_Z_MIN and not (proven_lag is not None and abs(L - proven_lag) <= .005):
+        sys.exit(f'{t}: drum stem does not line up with the mix (lag {L:.3f} s, z {z:.1f})')
+    e = env_db(stem, sr, *fam.band)
+    ms = lambda s: np.clip(np.round((np.asarray(s, float) - L) * 1e3).astype(int), 0, len(e) - 1)  # noqa: E731
+    main = np.median([e[ms(p - .01):ms(p + .03) + 1].max() for p in pos])
+    loud = e >= main - fam.prominent_db
+    for u in ms(np.asarray(explained, float)):
+        loud[max(0, u - 10):u + 60] = False
+    i = np.flatnonzero(loud)
+    if not len(i):
+        return []
+    cuts = np.flatnonzero(np.diff(i) > 30)
+    starts, ends = i[np.r_[0, cuts + 1]], i[np.r_[cuts, len(i) - 1]]
+    h0, h1 = fam.half
+    return [(s * 1e-3 + L + h0, e_ * 1e-3 + L + h1) for s, e_ in zip(starts, ends)]
+
+
 def cover(spans):
     tot, end = 0.0, -1e9
     for a, b in sorted(spans):
@@ -378,7 +429,7 @@ def song(g, t, fam):
     loops = [(a + off, b + off) for a, b in spans + [(c['start_s'], c['end_s']) for c in own]]
     neg_clips = list(clips.get('_neg', []))
     neg_own = np.concatenate([neg_notes, neg_clips]) + off if len(neg_notes) or neg_clips else np.zeros(0)
-    unscored += [(u + off + h0, u + off + h1) for u in unknown]
+    unknown_w = [(u + off + h0, u + off + h1) for u in unknown]
     points = [(q['beat'], q['bpm']) for q in res['tempo_points']]
     placed = clip_starts(own, Path(src[0]).parent, sr, fam.stem_band, points, fam.clip_onset_s)
     pos = merge_layers(np.concatenate([notes, placed]) + off, fam.layer_s)
@@ -395,6 +446,13 @@ def song(g, t, fam):
         clash = nearest(pos, kicks) <= fam.kick_clash_s
         unscored += [(u + h0, u + h1) for u in pos[clash]]
         pos = pos[~clash]
+    blind = drum_stem_blind(fam, t, x, sr, pos, np.concatenate([pos, dropped, kicks]),
+                           g.records.get(t, {}).get('lag'))
+    if blind is not None:
+        # The drum stem shows every drum: only its unexplained loud moments stay unknown.
+        loops = blind
+        unknown_w = [w for w in unknown_w if inside(np.array([(w[0] + w[1]) / 2]), blind)[0]] if blind else []
+    unscored += unknown_w
     dense = dense_spans(np.concatenate([pos, dropped]), fam)
     if fam.drop_kick_rolls and len(kicks):
         dense = sorted(dense + roll_spans(kicks))
@@ -417,7 +475,7 @@ def song(g, t, fam):
                 loop_spans=[list(map(float, u)) for u in loops], hard_neg=sorted(map(float, np.unique(np.round(neg, 4)))),
                 positives_only=t in fam.recall_only, dropped=sorted(map(float, dropped)), dense=dense,
                 dense_pos=sorted(map(float, dense_pos)), dense_all=sorted(map(float, dense_all)),
-                timing_shift_ms=round(1000 * shift, 1), offset_s=float(off), unmuted=sorted(unmute),
+                timing_shift_ms=round(1000 * shift, 1), offset_s=float(off), unmuted=sorted(unmute), drum_stem=blind is not None,
                 sources=dict(midi=len(notes), clip_start=len(placed)), builder=builder_id(__file__))
 
 

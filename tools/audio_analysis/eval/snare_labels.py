@@ -12,6 +12,7 @@ import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 from tools.audio_analysis.eval.detector_labels import Family  # noqa: E402
+from tools.audio_analysis.eval.kick_goal_labels import ABL, DROP, STEMS  # noqa: E402
 
 SNARE = re.compile(r'snare|snr|clap|clp', re.I)
 NOT_SNARE = re.compile(r'rim|xstick|x-stick|cross', re.I)
@@ -28,6 +29,16 @@ FAMILY = Family(
     # Project songs whose snares live (also) in audio clips on snare/clap tracks: one-shots, freezes, consolidations.
     clip_songs=('murmur', 'default_haze', 'late_night'),
     recall_only=('lowkey',),
+    # Every-drum stems (local files): the whole song is known except their unexplained loud moments.
+    drum_stems=(
+        ('late_night', STEMS / 'LATE NIGHT STEMS/Late Night - Drums Stem.wav'),
+        ('midnight_patience', STEMS / 'MIDNIGHT PATIENCE STEMS/Drums.wav'),
+        ('back_to_you', ABL / '2024/States Project/STEMS/PRE MASTER/ALL DRUMS.wav'),
+        ('burn_stems', ABL / '2025/Fifty Project/STEMS 3-08-25/DRUMS.wav'),
+        ('pattern', ABL / '2025/Pattern Project/PATTERN STEMS/PATTERN - DRUMS.wav'),
+        ('corrosion', ABL / '2026/Katsu Don Project/FINALS/PREMASTERS T2/Corrosion - PREMASTER - DRUMS.wav'),
+        ('murmur', DROP / 'Interim - LS X EE - EP/PREMASTERS T2/04 - Murmur - PREMASTER - DRUMS.wav'),
+    ),
 )
 
 
