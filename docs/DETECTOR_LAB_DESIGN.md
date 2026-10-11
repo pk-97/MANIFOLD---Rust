@@ -1,6 +1,6 @@
 # Detector Lab — one place to label, train and judge MANIFOLD's audio detectors
 
-**Status:** IN PROGRESS · 2026-10-11 · P1–P5 shipped (bass and synth parked by Peter); P6 first pass built on feat/detector-lab-general, stage and Fable review owed · see P6 "As built"
+**Status:** IN PROGRESS · 2026-10-11 · P1–P5 shipped (bass and synth parked by Peter); P6 first pass and the Fable review fixes built on feat/detector-lab-general; stage owed (`bd show BUG-9ngk8.7`) · see P6 "As built"
 **Prerequisites:** none
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (phase briefs) and section 6 (seam briefs) before starting any phase.
 
@@ -389,6 +389,14 @@ the templates, the Fable review.
 - Training i of the plan uses random state 1000 i + seed (outer nets keep the retired runner's seeds).
 - On a snare save the pair cutoffs and the old leave-one-out cutoffs scored 0.806 and 0.802: the rule is sound and
   costs nothing measurable.
+- Fable review (2026-10-11), taken: sources re-hashed at setup and audio content in run ids and model keys; a model
+  keyed on the labels of the songs it trains on and on its training code's closure; code_id follows container
+  constants and cache-wrapped helpers, artifacts carry the loader's code; scored minutes merge spans and false fires
+  per minute leave recall-only songs out; scoring refuses saves that do not line up with the candidates.
+- Generated sets are descriptors (`eval/generated_sets.py`): project, full-mix and Drums exports, explicit start,
+  sections. Each set's timing is proven on its Drums stem before labels are written (isolated drum hits: V1 0 ms,
+  Rolls 0 ms, Modulations +1 ms median). Hits cut by a section's edge are unscored. `eval/kick_generated.py` labels
+  generated kicks; the Modulations set adds 58 sections (kick and snare).
 
 ### P7 — Releases from component configs
 
