@@ -1,6 +1,6 @@
 # Detector Lab — one place to label, train and judge MANIFOLD's audio detectors
 
-**Status:** IN PROGRESS · 2026-10-11 · P1–P4 shipped on the branch (P3 reports in the lab cache), P5 next · Opus 5.5 lead; revised after an Opus adversarial review
+**Status:** IN PROGRESS · 2026-10-11 · P1–P5 shipped (bass and synth parked by Peter), P6 components next · Opus 5.5 lead; revised after an Opus adversarial review
 **Prerequisites:** none
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (phase briefs) and section 6 (seam briefs) before starting any phase.
 
@@ -285,15 +285,74 @@ lab/test_lab.py                         # the lab's tests (unittest, run directl
   `lab/experiments/{bass,synth}_base.json` and `_generated.json`.
 - **Gate:** `rg "DETECTOR_DRAW_CAP" tools/audio_analysis` → 0; bass and synth A/B over seeds 0–4 reported.
 
-### P6 — Kick (blocked)
+### P6 — Components: any detector built from parts, the kick first
 
-- **Blocking question for Peter:** kick labels are kick-stem attacks found by analysis (`eval/kick_goal_labels.py`),
-  not project notes. Do solo kick-stem attacks count as known times under the label-truth rule? No P6 brief until
-  answered.
+Peter, 2026-10-11: detectors are built "with component style designs and architectures", "a tree, or nn, or both",
+"with all of the DSP measurements too as components ... for any general detector". Kick-stem attacks count as known
+times ("the data for kicks is good and it works well in app already").
+
+**Parts.** A config names one part per slot; every part is a registered function in `lab/components.py`.
+
+1. *Candidate finder* — where a hit might be. `kick` (`kick_fusion_bandwise.fusion_features`, its own hop),
+   `snare:DB`, `rise:DB` / `change:DB` / `union:R:C` in the family band. Gives candidate hops, emission hops and the
+   hop size; the scorer stamps with that hop, never a hard-coded 256.
+2. *Measures* — numbers per candidate from the audio and the candidates only, causal (audio up to the emission plus
+   the net's look-ahead), never fitted: `f15` (the kick finder's 15 columns), `tail3`, `prof32`, `low16`, `fall16`,
+   `res16`, `glide3`, and per-frame `flat` (noisiness, a net channel). Each is `f(audio, sr, candidates) -> (n, k)`,
+   cached by song content, finder and the measure's code. Any family may use any measure. A measure that needs
+   fitting is a model: the kick templates (`tmpl3`) wait until they are fitted inside the fold (section 8).
+3. *Models* — `net` (kick_goal_nn's CNN on the spectrum, measure channels added) and `trees` (HistGradientBoosting
+   on a list of measures, the kick fast loop's settings, `random_state` = seed). One or both.
+4. *Combine* — the one model, or `mean_logit` over both (the kick's blend).
+5. *Stage* (optional) — the song-memory stage: `kick_goal_selfsim` features of the combined probability over the
+   song's last `window_s` (shape measures and a level column named in the config), then trees.
+6. *Decision* — cutoff chosen on held-out exam songs, 60 ms refractory. Rules, not config (D8).
+
+Configs: `net` moves under `models`; `combine` and `stage` are new keys. The three snare configs and the bass and
+synth configs migrate mechanically (`combine: "net"`, `stage: null`).
+
+**Training, per seed.** Song groups as now. For group k every model trains on the other groups and predicts k.
+The stage of group k trains on combined predictions of each other group j from models that saw neither k nor j
+(4 groups: 4 + 6 trainings per model, seconds each). A stage needs `folds` >= 2; with one net per song the pairs run
+to hundreds, so the config is refused. This is stricter than the legacy fast loop, whose nets had seen the scored
+song when they built its stage inputs. Trees train on the net's rows (`detector_eval.rows`) with the kick's
+weighting: song-equal, class-balanced, vouched negatives `HARD_W` times as likely.
+
+**Saves.** `s<seed>.npz` keys are `<layer>/<song>`: each model, `combined`, `staged`. `score.py` scores the last
+layer by default and any layer by name, so "what did the stage add" needs no retraining. `meta.json` records every
+training's songs, and `run.py` refuses a plan where any layer of a song came from a model that saw it.
+
+**Kick labels in the lab format.** `eval/kick_labels.py` writes `GOAL/kick_labels.json` for the kick goal set (the
+songs `kick_release` trains on): positives are the song's whole kick truth (kick-stem notes, fresh attacks and
+pitch restarts; trigger kicks; reviewed labels where there is no stem); unscored are the first and last second, the
+uncertain and doubtful spans, and kick rolls (`detector_labels.roll_spans`, Peter's rolls ruling); vouched
+negatives are melodic note starts far from kicks (`kick_goal_melodic`); recall songs are positives-only. One truth
+per song for training and scoring: the legacy loop scored dev songs on reviewed passages but trained on whole songs.
+
+**Consequence, stated plainly.** Lab kick numbers use a different truth (whole songs, rolls out) and the shared
+scorer (detector_eval), so they are not comparable with the shipped 0.889 / 0.894. Proof of the move is part
+parity, not score parity: the lab's kick candidates and measures equal `kick_release.features()` byte for byte on
+three songs, and the lab's trees on those rows equal a direct sklearn fit. The shipped kick model is untouched
+until Peter's yes on a lab-trained one (P7).
+
+- **Entry state:** P5 committed.
+- **Deliverables:** `lab/components.py` (finders, measures, models, combine, stage registries); config schema v2
+  and migrated configs; layered saves and `score.py --layer`; `eval/kick_labels.py` and its audit; configs
+  `kick_net`, `kick_trees`, `kick_blend` (trees + net) and `kick_staged` (+ stage); tests for measure parity, tree
+  parity, nesting refusal, layer scoring and config migration.
+- **Gate:** `test_lab.py` green; `compare.py kick_blend kick_staged` over seeds 0–4 reported; a Fable review of the
+  whole lab before Peter's next data set lands (Peter, 2026-10-11: "have Fable review it so we're working from a
+  strong foundation").
+- **Forbidden:** fitted measures outside the fold; a second scorer for the kick; touching the shipped kick model.
+
+### P7 — Releases from component configs
+
+`snare_release.py` and `kick_release.py` fit their final parts from one lab config each and take the cutoff from
+that config's run. Ships only with Peter's yes.
 
 ## 7. Decided — do not reopen
 
-1. `lab/` calls `eval/`; two named edits to `eval/`, nothing else.
+1. `lab/` calls `eval/`; the named edits in D1, nothing else.
 2. The recipe env is pinned in one module; the song list records resolved sources and their hashes.
 3. Caches key on source bytes plus a stamp (`bundles.py` keying), today's dtypes.
 4. The labels dict is the schema; `kind` stays `project` | `generated`; audit goes in a sidecar.
@@ -308,6 +367,6 @@ lab/test_lab.py                         # the lab's tests (unittest, run directl
 |---|---|
 | Curves (modulation, envelopes) as labels and a curve scorer | `als_extract` reads automation, or Peter asks for an envelope detector |
 | Label-proportional draws (`per_song: "labels"`) | the label-rich sampling bead (`bd show BUG-9ngk8.5`) is picked up |
-| Trees, the blend and the 8 s stage inside the lab | the P6 (kick) brief |
+| Kick templates (`tmpl3`) fitted inside the fold | the kick A/B asks what the templates add |
 | Running `eval/tests/` in a gate | a lab test or eval test breaks unnoticed |
-| Retiring the 7.8 GB legacy cache | P6 committed |
+| Retiring the 7.8 GB legacy cache | P7 committed |
