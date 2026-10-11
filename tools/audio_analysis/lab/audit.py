@@ -32,6 +32,7 @@ PROVEN = ('wip:proven', 'lab:proven', 'goal:trigger', 'goal:kick stem', 'generat
 # reviewed passages. 'project' (project MIDI) falls back to the song's offset proof.
 LABEL_PROOFS = ('stem', 'trigger', 'reviewed')
 SHIFT_EDGE_MS, MAX_FAILS = 30.0, 3
+LAYER_S = .030   # drum hits this close are one event (detector_labels.Family.layer_s)
 
 
 def project_check(s, song):
@@ -67,25 +68,28 @@ def generated_notes(lab, family):
     import importlib
     from tools.audio_analysis.eval import generated_sets as gs
     from tools.audio_analysis.eval.note_labels import NoteFamily, project_notes
-    fam = importlib.import_module(f'tools.audio_analysis.eval.{family}_labels').FAMILY
-    note_family = isinstance(fam, NoteFamily)
+    if family == 'kick':
+        fam, keys = None, gs.KICK_KEYS
+    else:
+        fam = importlib.import_module(f'tools.audio_analysis.eval.{family}_labels').FAMILY
+        keys = None if isinstance(fam, NoteFamily) else importlib.import_module(
+            'tools.audio_analysis.eval.snare_generated').SNARE_KEYS
+    layer_s = fam.layer_s if fam is not None else LAYER_S
     out = {}
-    for als, export, _ in gs.SETS:
-        res, start, _ = gs.load(als, export)
-        if note_family:
+    for gset in gs.SETS:
+        res, start = gs.load(gset)[:2]
+        if keys is None:
             times = np.sort([n[0] - start for n in project_notes(res) if n[3] == fam.part and n[4] >= 1])
         else:
-            from tools.audio_analysis.eval.snare_generated import SNARE_KEYS
-            times = np.sort([n['s'] - start for tr in res['tracks'] if 'LinnDrum' in tr['name']
-                             for c in tr['midi_clips'] for n in c['notes'] if n['key'] in SNARE_KEYS])
+            times = np.sort([t for t, key in gs.drum_notes(res, start) if key in keys])
         kicks = gs.kicks(res, start)
         for t, s in lab.items():
-            if s.get('kind') == 'generated' and s.get('export') == gs.export_path(export):
+            if s.get('kind') == 'generated' and s.get('export') == gset.path:
                 a, b = s['section']
                 sec = times[(times >= a) & (times < b)] - a
-                sec = sec[np.concatenate([[True], np.diff(sec) > fam.layer_s])] if len(sec) else sec
+                sec = sec[np.concatenate([[True], np.diff(sec) > layer_s])] if len(sec) else sec
                 k = kicks[(kicks >= a) & (kicks < b)] - a
-                on_kick = note_family and fam.on_kick == 'negative'
+                on_kick = keys is None and fam.on_kick == 'negative'
                 out[t] = (sec, k, fam.kick_s if on_kick else 0.0)
     return out
 

@@ -362,6 +362,15 @@ def builder(x):
         with self.assertRaises(ValueError):
             score.score(BASE, lab, load(), held)
 
+    def test_generated_audit_catches_mislabels(self):
+        """The generated audit fails a label on no note and a note left unlabelled outside the unscored spans, and
+        passes a note inside them."""
+        notes = np.array([1.0, 2.0, 3.0, 4.0])
+        s = dict(positives=[1.0, 2.0, 3.0], unscored=[[3.9, 4.1]], section=[0.0, 10.0])
+        self.assertEqual(audit.generated_check(s, notes)['why'], [])
+        self.assertTrue(audit.generated_check(dict(s, positives=[1.0, 2.0, 3.0, 5.0]), notes)['why'])
+        self.assertTrue(audit.generated_check(dict(s, unscored=[]), notes)['why'])
+
     def test_exam_rejects_generated(self):
         songs = load()
         gen = next(t for t, s in songs.items() if s.kind == 'generated')

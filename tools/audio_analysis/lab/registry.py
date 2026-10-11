@@ -27,7 +27,7 @@ HASHES = Path.home() / '.cache/manifold/detector-lab/source_hashes.json'   # pat
 FAMILIES = {'snare': ('snare_labels.json', 'snare_labels_generated.json'),
             'bass': ('bass_labels.json', 'bass_labels_generated.json'),
             'synth': ('synth_labels.json', 'synth_labels_generated.json'),
-            'kick': ('kick_labels.json',)}
+            'kick': ('kick_labels.json', 'kick_labels_generated.json')}
 GEN_SR = 48000
 
 

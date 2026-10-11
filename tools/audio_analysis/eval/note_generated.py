@@ -20,18 +20,18 @@ def main():
     family = sys.argv[1] if len(sys.argv) > 1 else sys.exit(__doc__)
     fam = importlib.import_module(f'tools.audio_analysis.eval.{family}_labels').FAMILY
     out = {}
-    for als, export, how in gs.SETS:
-        res, start, x = gs.load(als, export)
+    for gset in gs.SETS:
+        res, start, x = gs.load(gset)
         notes = project_notes(res)
         kicks = gs.kicks(res, start)
-        for name, a, b in gs.sections(res, how, start):
+        for name, a, b in gs.sections(res, gset, start):
             sec = [n for n in notes if a <= n[0] - start < b]
             if not any(n[3] == fam.part for n in sec):
                 continue
             y = x[int(a * gs.SR):int(b * gs.SR)].astype(float)
             k = kicks[(kicks >= a) & (kicks < b)] - a
             s = events(fam, sec, [], [], k, [], env_db(y, gs.SR, *fam.band), (b - a), -(start + a), check_audible=False)
-            s.update(kind='generated', section=[float(a), float(b)], export=gs.export_path(export), offset_s=float(a),
+            s.update(kind='generated', section=[float(a), float(b)], export=gset.path, offset_s=float(a),
                      sources=dict(generated=len(s['positives'])), builder=builder_id(__file__))
             out[name] = s
             c = s['counts']
