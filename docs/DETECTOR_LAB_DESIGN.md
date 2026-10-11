@@ -310,7 +310,8 @@ times ("the data for kicks is good and it works well in app already").
    the net's look-ahead), never fitted: `f15` (the kick finder's 15 columns), `tail3`, `prof32`, `low16`, `fall16`,
    `res16`, `glide3`, and per-frame `flat` (noisiness, a net channel). Each is `f(audio, sr, candidates) -> (n, k)`,
    cached by song content, finder and the measure's code. Any family may use any measure. A measure that needs
-   fitting is a model: the kick templates (`tmpl3`) wait until they are fitted inside the fold (section 8).
+   fitting is a model: the kick's sound templates (`tmpl3`) are a trees option fitted inside each training
+   (`lab/templates.py`).
 3. *Models* — `net` (kick_goal_nn's CNN on the spectrum, measure channels added) and `trees` (HistGradientBoosting
    on a list of measures, the kick fast loop's settings, `random_state` = seed). One or both.
 4. *Combine* — the one model, or `mean_logit` over both (the kick's blend).
@@ -385,8 +386,8 @@ until Peter's yes on a lab-trained one (P7).
 - **Forbidden:** fitted measures outside the fold; a second scorer for the kick; touching the shipped kick model.
 
 **As built (first pass, 2026-10-11).** Finder, measures `f15` `tail3` `prof32` `low16` (event) and `flat` (frame),
-net, trees, `mean_logit`, pair cutoffs, layered saves, kick labels. Owed: the stage, `fall16` `res16` `glide3` and
-the templates, the Fable review.
+net, trees, `mean_logit`, pair cutoffs, layered saves, kick labels. Owed: the stage, `fall16` `res16` `glide3`, the
+Fable review.
 - Kick labels: 30 songs, 4733 kicks, 129 in rolls left out; rows() equals the records on every song. got_it, renew
   and overwhelming_force fail the audit (unproven project offsets) and stay out, as Peter ruled for bass and synth.
 - A trained model's predictions are stored under a key of everything that decides them (`run.py model_key`), so a
@@ -411,6 +412,11 @@ the templates, the Fable review.
   sections. Each set's timing is proven on its Drums stem before labels are written (isolated drum hits: V1 0 ms,
   Rolls 0 ms, Modulations +1 ms median). Hits cut by a section's edge are unscored. `eval/kick_generated.py` labels
   generated kicks; the Modulations set adds 58 sections (kick and snare).
+- Sound templates (`trees.templates`: null or `{"k": K}`, `lab/templates.py`), any family: each training fits K
+  k-means templates on mix onset patches at its own trained songs' and clips' hits (200 per song at most, songs
+  weighed like tree rows), then the shipped kick's three similarities join the trees' inputs. Null reproduced
+  `kick_gen50_gated`'s saves byte for byte over seeds 0-4. Against it, real songs: K 8 -0.11 F1 points (90% -0.47
+  to +0.18), K 16 -0.61 (-0.93 to -0.25), K 32 -0.18 (-0.34 to -0.03). Not adopted.
 
 ### P7 — Releases from component configs
 
@@ -434,6 +440,5 @@ that config's run. Ships only with Peter's yes.
 |---|---|
 | Curves (modulation, envelopes) as labels and a curve scorer | `als_extract` reads automation, or Peter asks for an envelope detector |
 | Label-proportional draws (`per_song: "labels"`) | the label-rich sampling bead (`bd show BUG-9ngk8.5`) is picked up |
-| Kick templates (`tmpl3`) fitted inside the fold | the kick A/B asks what the templates add |
 | Running `eval/tests/` in a gate | a lab test or eval test breaks unnoticed |
 | Retiring the 7.8 GB legacy cache | P7 committed |

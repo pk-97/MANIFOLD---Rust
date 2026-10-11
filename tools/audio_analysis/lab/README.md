@@ -15,6 +15,8 @@ project songs, `eval/snare_generated.py` for Peter's generated sets), then `lab/
 or both), how they combine (`net`, `trees`, `mean_logit`) and an optional song-history `stage` (`lab/stage.py`: the
 song's recent confident hits re-score each candidate; needs song groups). Parts live in `lab/components.py`; any
 family may use any measure. A new measure is one function there, cached by song audio, finder and the function's code.
+Trees may add sound templates (`"templates": {"k": K}`, `lab/templates.py`): fitted inside each training on its own
+songs' hits, never on the songs it predicts.
 
 **Run an experiment.** `lab/run.py CONFIG` trains the missing seeds, one process each, and saves held-out
 predictions per layer under a run id that changes whenever the config, the labels or the code changes. With song
