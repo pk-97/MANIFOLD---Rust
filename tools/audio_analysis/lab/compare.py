@@ -26,6 +26,26 @@ def check(a, b):
             raise ValueError(f'{k} differs between {a["run_id"]} and {b["run_id"]}: not a fair A/B')
 
 
+def robustness(reps, recall_only, out):
+    """Level robustness (sampling.gain_probes): pooled F1 and false fires a minute over the exam, seeds averaged, at
+    each probed gain and at the song's own level (0 dB), every song at the cutoff it gets at its own level."""
+    from tools.audio_analysis.eval.detector_compare import pooled
+    exam = reps[0]['exam']
+    gains = sorted(reps[0]['probes'], key=float)
+    out('level robustness (exam songs scaled by the gain, cutoff from the song at its own level):')
+    out(f'  {"gain dB":>8s} {"F1":>6s} {"recall":>7s} {"precision":>9s} {"false/min":>9s}')
+    for g in sorted(gains + ['0'], key=float):
+        rows = []
+        for r in reps:
+            ps = r['results']['net']['per_song'] if g == '0' else r['probes'][g]
+            rec, prec, f1 = pooled(ps, exam, tuple(recall_only))
+            f = sum(ps[t]['extra'] for t in exam if t not in recall_only)
+            mins = sum(ps[t]['minutes'] for t in exam if t not in recall_only)
+            rows.append((f1, rec, prec, f / mins))
+        m = [sum(v) / len(rows) for v in zip(*rows)]
+        out(f'  {float(g):>+8.1f} {m[0]:6.3f} {m[1]:7.3f} {m[2]:9.3f} {m[3]:9.2f}')
+
+
 def main():
     from tools.audio_analysis.eval.detector_compare import compare
     from tools.audio_analysis.lab.config import load
@@ -69,6 +89,10 @@ def main():
     if first['generated']:
         out('generated songs (never set a cutoff; trained on only where the config trains them):')
         compare([[reps[k][s]['generated'] for s in seeds] for k in (0, 1)], (), out)
+    for k, c in enumerate(cfgs):
+        if reps[k][seeds[0]].get('probes'):
+            out(f'{"AB"[k]}: {c.name}')
+            robustness([reps[k][s] for s in seeds], first['recall_only'], out)
     d = RUNS.parent / 'compare'
     d.mkdir(parents=True, exist_ok=True)
     path = d / f'{cfgs[0].name}_vs_{cfgs[1].name}.txt'

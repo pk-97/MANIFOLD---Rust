@@ -135,14 +135,29 @@ def setup(cfg):
             sys.exit(f'{t}: labels and song list disagree on its kind; rebuild with lab/registry.py build')
     exam = [t for t in lab if songs[t].kind == 'project']
     check_exam(exam, songs, failed)
+    copies, probes = [], {}
+    if cfg.gain_variants or cfg.gain_probes:
+        from tools.audio_analysis.lab.registry import gain_copies, gain_copy
+        gv = cfg.gain_variants
+        for t in exam:
+            made = (gain_copies(songs[t], gv['count'], *gv['db']) if gv else []) \
+                + [gain_copy(songs[t], g, probe=True) for g in cfg.gain_probes or ()]
+            for c in made:
+                songs[c.id], lab[c.id] = c, lab[t]
+                copies.append(c.id)
+                if c.probe:
+                    probes[c.id] = dict(parent=t, gain_db=c.gain_db)
+                content[c.id] = c.content_id
+                label_ids[c.id] = label_ids[t]
     grps, trainings, _ = models.plan(cfg, lab, songs)
-    models.check_disjoint(trainings)
+    models.check_disjoint(trainings, {c: songs[c].parent for c in copies})
     used = parts(cfg)
     mods = module_hashes()
     key = json.dumps(dict(config=cfg.key(), labels=sha, modules=mods, parts=used, content=content), sort_keys=True)
     run_id = f'{cfg.family}-{hashlib.sha256(key.encode()).hexdigest()[:12]}'
     meta = dict(schema=META_SCHEMA, run_id=run_id, config=cfg.key(), names=[cfg.name], labels_sha256=sha,
-                songs=list(lab), exam=exam, generated=[t for t in lab if t not in exam], excluded=failed,
+                songs=[t for t in lab if t not in copies], exam=exam,
+                generated=[t for t in lab if t not in exam and t not in copies], copies=copies, probes=probes, excluded=failed,
                 recall_only=[t for t in exam if lab[t]['positives_only']], groups=grps, trainings=trainings,
                 layers=[*sorted(cfg.models), *(['combined'] if models.final_layer(cfg) == 'combined' else []),
                         *(['staged'] if cfg.stage else [])],
@@ -165,7 +180,9 @@ def build(cfg, lab, songs, dev, log=print):
         cand, onset, emit = c.cand, c.onset_s, c.emit_s
         mask, y, hard = rows(s, onset)
         extra = tuple(components.frame(song, m) for m in cfg.net['channels'])
-        data[t] = Song(cache.spectrum(song), onset, emit + ahead, mask, y, t, hard, extra).to(dev)
+        data[t] = Song(cache.spectrum(song), onset, emit + ahead, mask, y, t, hard, extra)
+        # Gain copies and probes stay on the CPU and are cut there: the kick set with copies does not fit the GPU.
+        data[t] = data[t] if song.gain_db is not None else data[t].to(dev)
         log(f'{t}: {len(cand)} candidates, {int(mask.sum())} training rows')
     return data
 
@@ -309,7 +326,7 @@ def train_layers(cfg, meta, seed, data, trees, log=print, stage_parts=None, tmpl
         from tools.audio_analysis.lab import stage
         t0 = time.time()
         held.update(stage.train(cfg, grps, trainings, lay[models.final_layer(cfg)], stage_parts, seed,
-                                generated=meta['generated'], log=log))
+                                generated=meta['generated'], probes=meta.get('probes'), log=log))
         record = [dict(r, seconds=dict(r['seconds'], stage=round(time.time() - t0, 1) if i == 0 else 0.0))
                   for i, r in enumerate(record)]
     return held, record
@@ -339,7 +356,8 @@ def child(cfg, seed, run_id):
         tmpl = None
     if cfg.stage:
         from tools.audio_analysis.lab.stage import song_parts
-        stage_parts = {t: song_parts(cfg, songs[t], lab[t]) for t in lab}
+        stage_parts = {t: song_parts(cfg, songs[t], lab[t]) for t in lab
+                       if songs[t].gain_db is None or songs[t].probe}
     else:
         stage_parts = None
     built = time.time()

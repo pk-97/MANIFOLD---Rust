@@ -91,6 +91,16 @@ def score_run(run_id, layer=None, log=print):
         seed = int(npz.stem[1:])
         with np.load(npz) as z:
             held, pool = layer_of(dict(meta, schema=raw.get('schema', 1)), z, layer)
+            probes = meta.get('probes') or {}
+            if probes and pool is not None:
+                # A probe is the song at another gain, held out with it and judged at the cutoff the song gets at its
+                # own level (its group's pool), so a level change that moves probabilities costs what it would live.
+                from tools.audio_analysis.lab.registry import gain_copy
+                for p, v in probes.items():
+                    songs = dict(songs, **{p: gain_copy(songs[v['parent']], v['gain_db'], probe=True)})
+                    lab = dict(lab, **{p: lab[v['parent']]})
+                    held[p] = z[f'{layer}__{p}']
+                    pool[p] = pool[v['parent']]
         ps = score(cfg, lab, songs, held, pool)
         timing = json.loads((d / f's{seed}.json').read_text())
         rep = dict(run_id=run_id, names=meta['names'], seed=seed, layer=layer, honest_cutoffs=pool is not None,
@@ -98,6 +108,8 @@ def score_run(run_id, layer=None, log=print):
                    sampling=meta['config']['sampling'], exam=meta['exam'], excluded=meta['excluded'],
                    recall_only=meta['recall_only'], results=dict(net=dict(per_song={t: ps[t] for t in meta['exam']})),
                    generated={t: ps[t] for t in meta['generated']},
+                   probes={str(g): {v['parent']: ps[p] for p, v in probes.items() if v['gain_db'] == g}
+                           for g in sorted({v['gain_db'] for v in probes.values()})},
                    timings=dict(build_s=timing['build_s'], train_s=timing['train_s'], score_s=round(time.time() - t0, 1)))
         name = f'report_s{seed}.json' if layer == meta['final'] else f'report_{layer}_s{seed}.json'
         (d / name).write_text(json.dumps(rep, indent=1, default=float))

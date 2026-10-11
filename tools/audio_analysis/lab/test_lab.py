@@ -139,7 +139,7 @@ class LabTests(unittest.TestCase):
             measures=['tail3'], max_iter=10, learning_rate=.1, max_leaf_nodes=7, min_samples_leaf=5, l2=1.0)),
             combine='trees', stage=None, sampling=dict(per_song='median'), train=['project'], seeds=[0], folds=3))
         lab = {t: {} for t in 'abcdef'}
-        songs = {t: type('S', (), dict(kind='project'))() for t in lab}
+        songs = {t: type('S', (), dict(kind='project', gain_db=None, parent=None, probe=False))() for t in lab}
         grps, trainings, _ = models.plan(cfg, lab, songs)
         z = {}
         for i, n in enumerate(trainings):
@@ -426,6 +426,58 @@ def builder(x):
         with self.assertRaises(ValueError):
             models.check_disjoint(trainings)
 
+    def test_gain_variants(self):
+        """Gain copies train with their song's group and are never held out; null changes nothing; a copy's audio is
+        the song's, scaled, under its own content id; probes are held out with their song and never trained."""
+        from tools.audio_analysis.lab.registry import gain_copies, gain_copy, gain_gains, mix
+        base = config.load('snare_v2_mid')
+        raw = json.loads((config.EXPERIMENTS / 'snare_v2_mid.json').read_text())
+        for sampling in (dict(raw['sampling'], gain_variants=None), dict(raw['sampling'], gain_probes=None)):
+            self.assertEqual(config.build('x', dict(raw, sampling=sampling)).key(), base.key())
+        gv = config.load('snare_v2_gain')
+        self.assertEqual(gv.gain_variants, dict(count=3, db=[-12, 6]))
+        self.assertEqual({k: v for k, v in gv.sampling.items() if k != 'gain_variants'}, base.sampling)
+        with self.assertRaises(ValueError):
+            config.build('x', dict(raw, sampling=dict(raw['sampling'], gain_variants=dict(count=0, db=[-1, 1]))))
+        songs = load()
+        lab, _ = run.labels('snare')
+        exam = [t for t in lab if songs[t].kind == 'project']
+        plain = models.plan(base, lab, songs)
+        for t in exam:
+            for c in gain_copies(songs[t], 3, -12, 6) + [gain_copy(songs[t], -6, probe=True)]:
+                songs[c.id], lab[c.id] = c, lab[t]
+        grps, trainings, untrained = models.plan(base, lab, songs)
+        self.assertEqual((grps, untrained), plain[:1] + plain[2:])
+        copy = {t: [c for c in lab if songs[c].parent == t and not songs[c].probe] for t in exam}
+        probe = {t: [c for c in lab if songs[c].parent == t and songs[c].probe] for t in exam}
+        self.assertTrue(all(len(v) == 3 for v in copy.values()) and all(len(v) == 1 for v in probe.values()))
+        models.check_disjoint(trainings, {c: songs[c].parent for c in lab if songs[c].parent})
+        for n, old in zip(trainings, plain[1]):
+            held = {t for t in old['held']}
+            self.assertEqual([t for t in n['held'] if t in held], old['held'])
+            if len(n['without']) == 1:
+                self.assertEqual(sorted(set(n['held']) - held), sorted(c for t in held for c in probe.get(t, [])))
+            else:
+                self.assertEqual(set(n['held']), held)
+            # Each held song's copies stay out of the training; every other song's copies are in it, probes never.
+            self.assertFalse(any(c in n['trained'] for t in held for c in copy.get(t, []) + probe.get(t, [])))
+            self.assertTrue(all(c in n['trained'] for t in exam if t not in held for c in copy[t]))
+            self.assertFalse(any(songs[u].probe for u in n['trained']))
+            self.assertEqual([u for u in n['trained'] if songs[u].gain_db is None], old['trained'])
+        t = exam[0]
+        self.assertEqual(gain_gains(t, 3, -12, 6), gain_gains(t, 3, -12, 6))
+        self.assertNotEqual(gain_gains(t, 3, -12, 6), gain_gains(exam[1], 3, -12, 6))
+        with tempfile.TemporaryDirectory() as d:
+            a = Path(d) / 'a.npy'
+            np.save(a, np.linspace(-.5, .5, 100))
+            s = song('s', a)
+            c = gain_copy(s, -6.0)
+            np.testing.assert_allclose(mix(c), mix(s) * 10 ** (-6 / 20))
+            self.assertEqual(mix(s).tolist(), np.load(a).tolist())
+            self.assertNotEqual(c.content_id, s.content_id)
+            self.assertNotEqual(c.content_id, gain_copy(s, -5.0).content_id)
+        self.assertEqual(cache.code_id(mix), cache.code_id(mix.__wrapped__))
+
     def test_compare_refuses_mismatch(self):
         a = dict(run_id='a', labels_sha256='x', exam=['s1', 's2'], recall_only=[])
         compare.check(a, dict(a, run_id='b'))
@@ -595,7 +647,7 @@ def builder(x):
         cfg = config.build('x', json.loads((config.EXPERIMENTS / 'snare_gen50_staged.json').read_text()))
         cfg = config.Experiment(**{**cfg.__dict__, 'train': ('project',), 'sampling': dict(per_song='median')})
         lab = {t: {} for t in 'abcdefgh'}
-        songs = {t: type('S', (), dict(kind='project'))() for t in lab}
+        songs = {t: type('S', (), dict(kind='project', gain_db=None, parent=None, probe=False))() for t in lab}
         grps, trainings, _ = models.plan(cfg, lab, songs)
         code = {t: i for i, t in enumerate(lab)}
         name = {i: t for t, i in code.items()}
@@ -687,7 +739,7 @@ def builder(x):
         cfg = config.Experiment(**{**cfg.__dict__, 'models': dict(cfg.models, trees=dict(cfg.models['trees'],
                                                                                           templates=dict(k=2)))})
         lab = {t: {} for t in 'abcdefghyz'}
-        songs = {t: type('S', (), dict(kind='generated' if t in 'yz' else 'project'))() for t in lab}
+        songs = {t: type('S', (), dict(kind='generated' if t in 'yz' else 'project', gain_db=None, parent=None, probe=False))() for t in lab}
         grps, trainings, _ = models.plan(cfg, lab, songs)
         self.assertTrue(any(n['clips'] for n in trainings))
         code = {t: i for i, t in enumerate(lab)}
@@ -886,7 +938,7 @@ class ReleaseTests(unittest.TestCase):
         from tools.audio_analysis.lab import release, stage
         cfg = config.load('kick_gen50_gated')
         lab = {t: {} for t in 'abcdefgh'}
-        songs = {t: type('S', (), dict(kind='project'))() for t in lab}
+        songs = {t: type('S', (), dict(kind='project', gain_db=None, parent=None, probe=False))() for t in lab}
         grps, trainings, _ = models.plan(cfg, lab, songs)
         meta = dict(groups=grps, trainings=trainings)
         rng = np.random.default_rng(7)
@@ -935,7 +987,7 @@ class ReleaseTests(unittest.TestCase):
             return logit(np.clip(p, 1e-6, 1 - 1e-6))
         cfg = config.load('cover_kick')
         lab = {t: {} for t in 'abcdef'}
-        songs = {t: type('S', (), dict(kind='project'))() for t in lab}
+        songs = {t: type('S', (), dict(kind='project', gain_db=None, parent=None, probe=False))() for t in lab}
         grps, trainings, _ = models.plan(cfg, lab, songs)
         meta = dict(groups=grps, trainings=trainings)
         rng = np.random.default_rng(5)
