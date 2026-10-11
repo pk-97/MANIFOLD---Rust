@@ -57,6 +57,8 @@ class Family:
     kick_clash_s: float = 0.0   # events this close to a kick are unscored: the mix cannot tell them apart
     drop_kick_rolls: bool = False  # kick rolls (roll_spans on the song's kicks) are unscored and untrained
     drum_stems: tuple = ()      # (song, stem path or paths): the song's every-drum stem (drum_stem_blind)
+    # (goal song, unknown-stem regex): goal songs whose mix is the sum of their stems (multitrack_song).
+    multitracks: tuple = ()
 
 
 def builder_id(module_file):
@@ -372,13 +374,15 @@ def drum_stem_blind(fam, t, x, sr, pos, explained, proven_lag=None):
     The drum stem is every drum and nothing else (Peter, 2026-10-11): where its family band stays more than
     prominent_db under the labelled events' level, no prominent family event plays, so the moment is known. Loud
     frames not within -10..+60 ms of an explained time (positives, dropped events, kicks) stay unknown, padded by
-    the half window. Exits when the stem does not line up with the mix: z under LAG_Z_MIN, unless its lag is the
-    song's proven stem lag (the kick stem from the same export) within 5 ms."""
+    the half window. A song with no labelled events (its snares play inside breaks and loops) takes the median of the
+    stem's own loud attacks as that level, so only moments with no loud drum at all become known. Exits when the stem
+    does not line up with the mix: z under LAG_Z_MIN, unless its lag is the song's proven stem lag (the kick stem from
+    the same export) within 5 ms."""
     import sys
 
     from tools.audio_analysis.eval.kick_goal_labels import LAG_Z_MIN, load
     paths = dict(fam.drum_stems).get(t)
-    if not paths or not len(pos):
+    if not paths:
         return None
     stem = load(paths, sr)
     L, z = stem_lag(stem, x, sr, fam.band)
@@ -386,7 +390,13 @@ def drum_stem_blind(fam, t, x, sr, pos, explained, proven_lag=None):
         sys.exit(f'{t}: drum stem does not line up with the mix (lag {L:.3f} s, z {z:.1f})')
     e = env_db(stem, sr, *fam.band)
     ms = lambda s: np.clip(np.round((np.asarray(s, float) - L) * 1e3).astype(int), 0, len(e) - 1)  # noqa: E731
-    main = np.median([e[ms(p - .01):ms(p + .03) + 1].max() for p in pos])
+    if len(pos):
+        main = np.median([e[ms(p - .01):ms(p + .03) + 1].max() for p in pos])
+    else:
+        loud_hits = stem_hits(stem, sr, fam.band)[0]
+        if not len(loud_hits):
+            return None
+        main = np.median(e[np.clip(np.round(loud_hits * 1e3).astype(int), 0, len(e) - 1)])
     loud = e >= main - fam.prominent_db
     for u in ms(np.asarray(explained, float)):
         loud[max(0, u - 10):u + 60] = False
@@ -479,6 +489,82 @@ def song(g, t, fam):
                 sources=dict(midi=len(notes), clip_start=len(placed)), builder=builder_id(__file__))
 
 
+def multitrack_song(g, t, fam, unknown):
+    """One labels dict for a goal song whose mix is the sum of its stems (kick_goal_labels.stem_sum): every part is
+    known by its stem. Positives are the attacks of the family's stems (voice-named, not excluded), kept when
+    prominent in the mix as for project songs. Attacks of other-voice stems (hats, rides) and the song's proven kicks
+    are vouched negatives. Stems matching unknown may hold the family's sound (snaps, beatbox, fills, percussion, drum
+    loops): where one sits within prominent_db of the positives' stem level (without positives, of its own loud
+    attacks), the moment is unknown. Every other moment is known, so whatever sounds there is not the family's."""
+    from tools.audio_analysis.eval.detector_songs import audio, rate
+    from tools.audio_analysis.eval.kick_goal_labels import load
+    sr = rate(g, t)
+    x = audio(g, t)
+    stems = [Path(q) for q in g.labels['new'][t]['mix_parts']]
+    xs = [load(str(q), sr) for q in stems]
+    total = np.zeros(len(x))
+    for y in xs:
+        total[:len(y)] += y[:len(x)]
+    if np.max(np.abs(total - x)) > 1e-4:
+        raise SystemExit(f'{t}: the goal mix is not the sum of its stems')
+    dur = len(x) / sr
+    env = env_db(x, sr, *fam.band)
+    h0, h1 = fam.half
+    role = {}
+    for q in stems:
+        n = q.stem
+        role[q] = ('unknown' if unknown.search(n) else 'voice' if fam.voice.search(n) and not fam.exclude.search(n)
+                   else 'other' if fam.other_voice.search(n) else 'music')
+    hits = {q: np.concatenate(stem_hits(y, sr, fam.band)) for q, y in zip(stems, xs) if role[q] != 'music'}
+    voice = [i for i, q in enumerate(stems) if role[q] == 'voice']
+    pos = merge_layers(np.concatenate([hits[stems[i]] for i in voice]) if voice else np.zeros(0), fam.layer_s)
+    pos = pos[(pos > .1) & (pos < dur - .1)]
+    shift = timing_shift(env, pos, fam)
+    pos = pos + shift
+    ok = prominent(env, pos, fam)
+    dropped = pos[~ok]
+    unscored = [(u + h0, u + h1) for u in dropped]
+    pos = pos[ok]
+    main = None
+    if len(pos):
+        vsum = np.zeros(max(len(xs[i]) for i in voice))
+        for i in voice:
+            vsum[:len(xs[i])] += xs[i]
+        ve = env_db(vsum, sr, *fam.band)
+        at = np.round((pos - shift) * 1e3).astype(int)
+        main = np.median([ve[j - 10:j + 30].max() for j in at])
+    elif any(r == 'unknown' for r in role.values()):
+        lv = [env_db(y, sr, *fam.band)[np.round(stem_hits(y, sr, fam.band)[0] * 1e3).astype(int)]
+              for q, y in zip(stems, xs) if role[q] == 'unknown']
+        main = np.median(np.concatenate(lv)) if sum(map(len, lv)) else None
+    loops = []
+    for q, y in zip(stems, xs):
+        if role[q] == 'unknown' and main is not None:
+            i = np.flatnonzero(env_db(y, sr, *fam.band) >= main - fam.prominent_db)
+            if len(i):
+                cuts = np.flatnonzero(np.diff(i) > 30)
+                loops += [(a * 1e-3 + h0, b * 1e-3 + h1) for a, b in zip(i[np.r_[0, cuts + 1]], i[np.r_[cuts, len(i) - 1]])]
+    kicks, _ = vouched(g, t, {}, None, None)
+    dense = dense_spans(np.concatenate([pos, dropped]), fam)
+    if fam.drop_kick_rolls and len(kicks):
+        dense = sorted(dense + roll_spans(kicks))
+    every = np.sort(np.concatenate([pos, dropped]))
+    dense_all = every[inside(every, dense)]
+    dense_pos = pos[inside(pos, dense)]
+    pos = pos[~inside(pos, dense)]
+    unscored += dense
+    neg = np.sort(np.concatenate([hits[q] for q in stems if role[q] == 'other'] + [np.zeros(0)]))
+    neg = np.concatenate([kicks, neg[~inside(neg, loops)] if loops else neg])
+    if len(pos) and len(neg):
+        neg = neg[np.min(np.abs(neg[:, None] - pos[None, :]), axis=1) > fam.far_s]
+    return dict(kind='project', duration_s=dur, positives=sorted(map(float, pos)), unscored=[list(map(float, u)) for u in unscored],
+                loop_spans=[list(map(float, u)) for u in loops], hard_neg=sorted(map(float, np.unique(np.round(neg, 4)))),
+                positives_only=t in fam.recall_only, dropped=sorted(map(float, dropped)), dense=dense,
+                dense_pos=sorted(map(float, dense_pos)), dense_all=sorted(map(float, dense_all)),
+                timing_shift_ms=round(1000 * shift, 1), offset_s=0.0, unmuted=[], drum_stem=True, proof='stem',
+                sources=dict(stems={q.name: role[q] for q in stems}), builder=builder_id(__file__))
+
+
 def vouched(g, t, W, src, res):
     """(kick times, melodic note starts) in mix time: WIP songs straight from the project, shifted by the proven
     offset; goal songs from the kick labels and kick_goal_melodic."""
@@ -498,7 +584,8 @@ def vouched(g, t, W, src, res):
 def songs(fam):
     """Every song the family labels, in file order."""
     from tools.audio_analysis.eval.detector_songs import wip
-    listed = fam.midi_songs + fam.clip_songs + (tuple(wip()) if fam.wip and fam.add_wip else ())
+    listed = fam.midi_songs + fam.clip_songs + (tuple(wip()) if fam.wip and fam.add_wip else ()) + \
+        tuple(m[0] for m in fam.multitracks)
     return tuple(dict.fromkeys(listed))
 
 
@@ -508,8 +595,9 @@ def write(fam, path, log=print):
     from tools.audio_analysis.eval.kick_goal_eval import Goal
     g = Goal(mode='v3')
     out = {}
+    multi = dict(fam.multitracks)
     for t in songs(fam):
-        out[t] = s = song(g, t, fam)
+        out[t] = s = multitrack_song(g, t, fam, multi[t]) if t in multi else song(g, t, fam)
         log(f"{t:14s} {s['kind']:5s} {len(s['positives']):4d} events, {len(s['unscored']):4d} unscored windows "
             f"(loops cover {cover(s['loop_spans']):5.1f} of {s['duration_s']:.0f} s), {len(s['hard_neg']):5d} vouched negatives"
             f"{' (recall only)' if s['positives_only'] else ''}{' playing: ' + ', '.join(s['unmuted']) if s['unmuted'] else ''}")

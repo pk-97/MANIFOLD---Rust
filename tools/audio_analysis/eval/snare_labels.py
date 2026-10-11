@@ -25,7 +25,8 @@ FAMILY = Family(
     not_other_parts=re.compile(r'kick|vocal|vox|synth|bass|string|pad|chord', re.I),
     band=(1000, 8000),
     drop_kick_rolls=True,
-    midi_songs=('flight', '48_hours', 'pattern', 'back_to_you', 'lowkey', 'corrosion', 'burn_stems', 'midnight_patience'),
+    midi_songs=('flight', '48_hours', 'pattern', 'back_to_you', 'lowkey', 'corrosion', 'burn_stems', 'midnight_patience',
+                'heavy_on_mind', 'miracle', 'right_where', 'hung_up', 'got_it', 'renew', 'overwhelming_force'),
     # Project songs whose snares live (also) in audio clips on snare/clap tracks: one-shots, freezes, consolidations.
     clip_songs=('murmur', 'default_haze', 'late_night'),
     recall_only=('lowkey',),
@@ -38,6 +39,23 @@ FAMILY = Family(
         ('pattern', ABL / '2025/Pattern Project/PATTERN STEMS/PATTERN - DRUMS.wav'),
         ('corrosion', ABL / '2026/Katsu Don Project/FINALS/PREMASTERS T2/Corrosion - PREMASTER - DRUMS.wav'),
         ('murmur', DROP / 'Interim - LS X EE - EP/PREMASTERS T2/04 - Murmur - PREMASTER - DRUMS.wav'),
+        ('weight', STEMS / 'WEIGHT STEMS/Weight - Drum Stem.wav'),
+        ('staged', ABL / '2024/Staged Project/WIP 2 Stems/Staged - Drums.wav'),
+        ('basalt', ABL / '2025/Basalt Project/STEMS/Basalt WIP 4 - DRUMS.wav'),
+        ('heavy_on_mind', STEMS / 'HEAVY ON MIND STEMS/DRUMS.wav'),
+        ('miracle', STEMS / 'MIRACLE STEMS/Drums.wav'),
+        ('right_where', DROP / 'Interim - LS X EE - EP/PREMASTERS T2/01 - Right Where I Need You - PREMASTER - DRUMS.wav'),
+        ('hung_up', DROP / 'Interim - LS X EE - EP/PREMASTERS T2/03 - Hung Up - PREMASTER - DRUMS.wav'),
+    ),
+    # Goal songs whose mix is the sum of their stems: the snare and clap stems are the truth. Stems that may hold a
+    # snare (snaps, beatbox, fills, percussion, drum loops, overhead and room mics) stay unknown where loud.
+    multitracks=(
+        ('cold_remix', re.compile(r'perc', re.I)),
+        ('worship', re.compile(r'snap|beatbox|fill|perc', re.I)),
+        ('business', re.compile(r'perc', re.I)),
+        ('eat_sleep', re.compile(r'drums top|perc|conga', re.I)),
+        ('lh', re.compile(r'^drums$', re.I)),
+        ('gerrit', re.compile(r'overhead|room', re.I)),
     ),
 )
 
