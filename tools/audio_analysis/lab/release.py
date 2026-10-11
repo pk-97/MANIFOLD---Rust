@@ -3,7 +3,7 @@
 
 Usage:
   release.py train CONFIG [--seed S] [--nets N]      final models from a saved lab run (seeds S..S+N-1); a release record
-  release.py train CONFIG --provisional [--nets N]   CPU, 1 epoch, 3 songs, trees max_iter 5, cutoffs 0.5: numbers throwaway
+  release.py train CONFIG --provisional [--nets N]   CPU, 1 epoch, 3 songs, trees max_iter 5, cuts and cutoff from its coverage clips: throwaway
   release.py convert-v1 kick|snare                   the shipped v1 model as a release record: same train_id, same numbers
   release.py export TRAIN_ID --set NAME [--ship] [--out ROOT]
         writes crates/manifold-audio/tests/fixtures/detectors/NAME/{model,clip_*}.mkick under ROOT (default this
@@ -556,8 +556,8 @@ REFRACTORY_S = .060  # detector_eval.REFR
 
 def train_provisional(cfg, n_nets, seed):
     """Structurally complete in minutes on the CPU, for building the runtime before the final training (D15):
-    PROVISIONAL_SONGS exam songs, one epoch per net, trees and stage max_iter 5, stage on in-sample inputs, cutoffs
-    0.5. Numbers are throwaway."""
+    PROVISIONAL_SONGS exam songs, one epoch per net, trees and stage max_iter 5, stage on in-sample inputs, cuts and
+    cutoff from its own coverage clips (provisional_cuts). Numbers are throwaway."""
     from tools.audio_analysis.eval import kick_goal_nn as nnm
     from tools.audio_analysis.lab import models, run, stage
     os.environ['KICK_GOAL_NN_DEVICE'] = 'cpu'
@@ -582,9 +582,37 @@ def train_provisional(cfg, n_nets, seed):
             (xs[t][part[t][3][0]], part[t][3][1][part[t][3][0]], part[t][3][2][part[t][3][0]], False) for t in picks], seed)
     train_id = f'provisional-{cfg.name}-{datetime.datetime.now().strftime("%Y%m%d-%H%M%S")}'
     rec = final_record(cfg, train_id, 'provisional', seed, nets, trees, stage_model, (.5, .5), .5, picks, {}, 'cover')
-    print(f'{train_id}: {len(picks)} songs, {n_nets} nets, {time.time() - t0:.0f} s', flush=True)
+    provisional_cuts(rec)
+    print(f'{train_id}: {len(picks)} songs, {n_nets} nets, cutoff {rec["cutoff"]:.4f}, '
+          f'cuts {rec["stage"]["cuts"] if rec["stage"] else None}, {time.time() - t0:.0f} s', flush=True)
     save(rec)
     return rec
+
+
+# Provisional cuts and cutoff: quantiles of the record's own scores on its coverage clips, so the goldens exercise
+# the gate (two different cuts) and the fire rule (fires on every clip). Throwaway numbers, never a release rule.
+Q_DETECTOR, Q_STAGE, Q_CUTOFF = .75, .40, .90
+
+
+def provisional_cuts(rec):
+    """Sets rec's stage cuts (gate on) and cutoff from quantiles of p.combined, the ungated p.stage and the gated
+    p.final over the coverage clips, then checks every clip fires and the cuts differ."""
+    from tools.audio_analysis.lab import stage
+    nets = net_modules(rec) if rec['net'] else None
+    runs = [reference(rec, build_clip(rec, spec)[0] / 32768.0, nets) for spec in clip_specs(rec).values()]
+    st = rec['stage']
+    if st and st['gate']:
+        st['cuts'] = (float(np.quantile(np.concatenate([r['p_combined'] for r in runs]), Q_DETECTOR)),
+                      float(np.quantile(np.concatenate([r['p_stage'] for r in runs]), Q_STAGE)))
+        if st['cuts'][0] == st['cuts'][1]:
+            raise SystemExit(f'provisional cuts are equal ({st["cuts"]}): the goldens would not tell them apart')
+        final = [stage.gated(st, r['stage_x'], r['p_stage'], st['cuts']) for r in runs]
+    else:
+        final = [r['p_final'] for r in runs]
+    rec['cutoff'] = float(np.quantile(np.concatenate(final), Q_CUTOFF))
+    for name, spec in clip_specs(rec).items():
+        if not len(reference(rec, build_clip(rec, spec)[0] / 32768.0, nets)['fires']):
+            raise SystemExit(f'provisional clip {name} has no fires at cutoff {rec["cutoff"]}')
 
 
 def train_final(cfg, n_nets, seed):

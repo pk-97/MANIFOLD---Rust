@@ -1042,6 +1042,29 @@ class ReleaseTests(unittest.TestCase):
             with self.assertRaises(SystemExit):
                 release.train('kick_gen50_gated_t8', 0, 1, False)
 
+    def test_coverage_sets_fire_and_gate(self):
+        """The coverage goldens exercise the fire rule and the gate: every clip fires, the detector's and the stage's
+        cuts differ, p.final is the gate of p.stage under those cuts, and swapping the cuts changes it, so a runtime
+        that mixes them up fails parity."""
+        from tools.audio_analysis import kick_container as kc
+        from tools.audio_analysis.lab import release, stage
+        for name in ('cover_kick', 'cover_snare'):
+            model = kc.read(REPO / release.SETS / name / 'model.mkick')
+            gate = float(model['stage.gate'])
+            cuts = (float(model['stage.cut_detector']), float(model['stage.cut_stage']))
+            self.assertGreater(gate, 0, name)
+            self.assertNotEqual(cuts[0], cuts[1], name)
+            st = dict(gate=gate, level=bool(len(model['stage.level'])))
+            clips = sorted((REPO / release.SETS / name).glob('clip_*.mkick'))
+            self.assertTrue(clips, name)
+            for c in clips:
+                g = kc.read(c)
+                self.assertGreater(len(g['fires']), 0, f'{name} {c.name}')
+                np.testing.assert_allclose(stage.gated(st, g['stage.x'], g['p.stage'], cuts), g['p.final'], rtol=0, atol=1e-15,
+                                           err_msg=f'{name} {c.name}')
+                self.assertFalse(np.allclose(stage.gated(st, g['stage.x'], g['p.stage'], cuts[::-1]), g['p.final'],
+                                             rtol=0, atol=1e-6), f'{name} {c.name}: swapped cuts give the same p.final')
+
     def test_runtime_parts_exist_in_the_lab(self):
         """runtime_parts.json declares the doc's parts, each exists in the lab registries with its declared width, and
         a wrong width, an unknown measure or channel is caught."""

@@ -216,7 +216,7 @@ logits, because the lab's saves hold probabilities and the cutoff could not be c
 
 ```
 lab/release.py train CONFIG [--seed S] [--nets N]   # run seeds S..S+N-1 must be saved; writes a release record
-lab/release.py train CONFIG --provisional [--nets N] # CPU, 1 epoch, 3 songs, trees max_iter 5, cutoffs 0.5; numbers throwaway
+lab/release.py train CONFIG --provisional [--nets N] # CPU, 1 epoch, 3 songs, trees max_iter 5, cuts and cutoff from quantiles of its coverage clips (fires on every clip, unequal cuts); numbers throwaway
 lab/release.py convert-v1 kick|snare          # the shipped model as a release record: same train_id, same numbers
 lab/release.py export TRAIN_ID --set NAME [--ship]
         # writes crates/manifold-audio/tests/fixtures/detectors/NAME/{model,clip_*}.mkick;
