@@ -232,6 +232,64 @@ def builder(x):
         want = expit((logit(np.clip(a, 1e-6, 1 - 1e-6)) + logit(np.clip(b, 1e-6, 1 - 1e-6))) / 2)
         np.testing.assert_allclose(models.combine('mean_logit', dict(net=a, trees=b)), want, rtol=0, atol=1e-15)
 
+    def test_kick_labels_fresh(self):
+        """kick_labels.json is what the builder makes now, and the builder's gate held: on every song, rows() over the
+        labels before rolls equals the kick goal record's training mask and y."""
+        import json as _json
+
+        from tools.audio_analysis.eval import kick_labels
+        from tools.audio_analysis.eval.kick_goal_eval import GOAL
+        built = _json.loads(_json.dumps(kick_labels.build(write=False)))
+        self.assertEqual(built, _json.loads((GOAL / 'kick_labels.json').read_text()))
+
+    def test_kick_parts_match_release(self):
+        """The lab's kick finder and measures equal kick_release.features() byte for byte, and the finder equals the
+        kick goal records' candidates (one 44.1 kHz song, two 48 kHz)."""
+        # kick_release refuses net env it does not own; this process already read its own, so set it aside to
+        # import the release's feature function, then put everything back.
+        saved = dict(os.environ)
+        try:
+            for k in ('KICK_GOAL_NN_PAST_MS', 'KICK_GOAL_NN_PERC', 'KICK_GOAL_NN_FLAT', 'KICK_GOAL_NN_AHEAD_MS'):
+                os.environ.pop(k, None)
+            from tools.audio_analysis import kick_release
+        finally:
+            os.environ.clear()
+            os.environ.update(saved)
+        from tools.audio_analysis.eval.kick_goal_eval import GOAL, Goal
+        from tools.audio_analysis.lab import components
+        from tools.audio_analysis.lab.registry import mix
+        songs = load()
+        g = Goal(mode='v3')
+        templates = np.load(GOAL / 'templates_from_dev.npy')
+        for t in ('bad_guy_128bpm', 'apricots_128bpm', 'tears_140bpm'):
+            song = songs[t]
+            ref = kick_release.features(mix(song), templates, song.sample_rate)
+            c = components.candidates(song, 'kick', 'kick')
+            np.testing.assert_array_equal(c.cand, ref['cand_hop'], err_msg=t)
+            np.testing.assert_array_equal(c.avail, ref['avail_hop'], err_msg=t)
+            self.assertEqual(c.hop, ref['hop'], t)
+            np.testing.assert_array_equal(c.cand, g.records[t]['candidates'], err_msg=t)
+            np.testing.assert_array_equal(c.avail, g.records[t]['available'], err_msg=t)
+            for m in ('f15', 'tail3', 'prof32', 'low16'):
+                np.testing.assert_array_equal(components.measure(song, 'kick', 'kick', m), ref[m], err_msg=f'{t} {m}')
+
+    def test_layers_shared_across_configs(self):
+        """A model trained for one config is reused by another that trains the same model, and only by it: kick_net
+        and kick_blend share nets, kick_trees and kick_blend share trees, and a change to the trees' settings or
+        the sampling makes new keys."""
+        def keys(cfg):
+            meta = run.setup(cfg)[2]
+            return {m: run.model_key(cfg, m, meta) for m in cfg.models}
+        net, trees, blend = (keys(config.load(c)) for c in ('kick_net', 'kick_trees', 'kick_blend'))
+        self.assertEqual(blend, dict(net=net['net'], trees=trees['trees']))
+        d = config.load('kick_blend')
+        other = config.Experiment(**{**d.__dict__, 'models': dict(d.models, trees=dict(d.models['trees'], max_iter=50))})
+        k = keys(other)
+        self.assertEqual(k['net'], net['net'])
+        self.assertNotEqual(k['trees'], trees['trees'])
+        folds = config.Experiment(**{**d.__dict__, 'folds': 4})
+        self.assertNotEqual(keys(folds)['net'], net['net'])
+
     def test_exam_rejects_generated(self):
         songs = load()
         gen = next(t for t, s in songs.items() if s.kind == 'generated')

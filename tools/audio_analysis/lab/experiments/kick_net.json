@@ -1,0 +1,28 @@
+{
+ "family": "kick",
+ "candidates": "kick",
+ "models": {
+  "net": {
+   "past_ms": 150,
+   "ahead_ms": 40,
+   "channels": [],
+   "epochs": 12
+  }
+ },
+ "combine": "net",
+ "stage": null,
+ "sampling": {
+  "per_song": "median"
+ },
+ "train": [
+  "project"
+ ],
+ "seeds": [
+  0,
+  1,
+  2,
+  3,
+  4
+ ],
+ "folds": 8
+}

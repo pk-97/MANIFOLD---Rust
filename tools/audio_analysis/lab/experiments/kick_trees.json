@@ -1,0 +1,35 @@
+{
+ "family": "kick",
+ "candidates": "kick",
+ "models": {
+  "trees": {
+   "measures": [
+    "f15",
+    "tail3",
+    "prof32",
+    "low16"
+   ],
+   "max_iter": 200,
+   "learning_rate": 0.05,
+   "max_leaf_nodes": 15,
+   "min_samples_leaf": 40,
+   "l2": 1.0
+  }
+ },
+ "combine": "trees",
+ "stage": null,
+ "sampling": {
+  "per_song": "median"
+ },
+ "train": [
+  "project"
+ ],
+ "seeds": [
+  0,
+  1,
+  2,
+  3,
+  4
+ ],
+ "folds": 8
+}

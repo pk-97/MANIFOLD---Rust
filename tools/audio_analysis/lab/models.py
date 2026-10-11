@@ -4,6 +4,10 @@ import numpy as np
 
 from tools.audio_analysis.lab.config import COMBINES
 
+# Tree fits run on this many threads (the recipe pins numeric libraries to one for the nets): 3x faster on the kick
+# set, the same predictions, and fixed so a fit never depends on the machine.
+TREE_THREADS = 4
+
 
 def plan(cfg, lab, songs):
     """(groups, trainings, untrained songs). A training holds out whole groups (`held`), trains on every other
@@ -61,12 +65,14 @@ def weights(ys, hards, clip, share=None):
 def fit_trees(p, rows, random_state, share=None):
     """HistGradientBoosting on rows [(x, y, hard, is_clip)], the config's settings."""
     from sklearn.ensemble import HistGradientBoostingClassifier
+    from threadpoolctl import threadpool_limits
     w = weights([r[1] for r in rows], [r[2] for r in rows], [r[3] for r in rows], share)
     x, y, w = np.concatenate([r[0] for r in rows]), np.concatenate([r[1] for r in rows]), np.concatenate(w)
-    return HistGradientBoostingClassifier(
-        max_iter=p['max_iter'], learning_rate=p['learning_rate'], max_leaf_nodes=p['max_leaf_nodes'],
-        min_samples_leaf=p['min_samples_leaf'], l2_regularization=p['l2'],
-        random_state=random_state).fit(x, y, sample_weight=w * len(y))
+    with threadpool_limits(TREE_THREADS, user_api='openmp'):
+        return HistGradientBoostingClassifier(
+            max_iter=p['max_iter'], learning_rate=p['learning_rate'], max_leaf_nodes=p['max_leaf_nodes'],
+            min_samples_leaf=p['min_samples_leaf'], l2_regularization=p['l2'],
+            random_state=random_state).fit(x, y, sample_weight=w * len(y))
 
 
 def combine(how, layers):

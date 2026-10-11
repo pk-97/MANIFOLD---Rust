@@ -16,6 +16,7 @@ Rules every family shares:
 import numpy as np
 
 HOP, TOL, LAB_TOL, REFR = 256, .070, .035, .060
+EDGE = 1e-12  # a candidate exactly LAB_TOL from a label is inside the window, whatever the float rounding
 THRESHOLDS = np.linspace(.05, .99, 95)
 
 
@@ -59,13 +60,13 @@ def rows(s, onset, dense=False):
         lo, hi = s['window_s']
         y = within(onset, pos, -hi, -lo).astype(float)
     else:
-        y = (nearest(onset, pos) <= LAB_TOL).astype(float)
-    hard_near = nearest(onset, hard) <= LAB_TOL
+        y = (nearest(onset, pos) <= LAB_TOL + EDGE).astype(float)
+    hard_near = nearest(onset, hard) <= LAB_TOL + EDGE
     mask = ~inside(onset, s['unscored'])
     in_loop = inside(onset, s['loop_spans'])
     mask &= ~in_loop | (y == 1) | hard_near
     if dense and s.get('dense_pos'):
-        run = nearest(onset, np.array(s['dense_pos'])) <= LAB_TOL
+        run = nearest(onset, np.array(s['dense_pos'])) <= LAB_TOL + EDGE
         y[run] = 1.0
         mask |= run
     if s['positives_only']:

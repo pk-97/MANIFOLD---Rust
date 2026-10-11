@@ -24,7 +24,8 @@ SONGS = Path(__file__).with_name('songs.json')
 # Family -> its labels files under GOAL (project songs, then generated).
 FAMILIES = {'snare': ('snare_labels.json', 'snare_labels_generated.json'),
             'bass': ('bass_labels.json', 'bass_labels_generated.json'),
-            'synth': ('synth_labels.json', 'synth_labels_generated.json')}
+            'synth': ('synth_labels.json', 'synth_labels_generated.json'),
+            'kick': ('kick_labels.json',)}
 GEN_SR = 48000
 
 

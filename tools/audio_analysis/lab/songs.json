@@ -17,7 +17,8 @@
   "families": [
    "snare",
    "bass",
-   "synth"
+   "synth",
+   "kick"
   ],
   "audit_override": null
  },
@@ -39,7 +40,8 @@
   "families": [
    "snare",
    "bass",
-   "synth"
+   "synth",
+   "kick"
   ],
   "audit_override": null
  },
@@ -61,7 +63,8 @@
   "families": [
    "snare",
    "bass",
-   "synth"
+   "synth",
+   "kick"
   ],
   "audit_override": null
  },
@@ -83,7 +86,8 @@
   "families": [
    "snare",
    "bass",
-   "synth"
+   "synth",
+   "kick"
   ],
   "audit_override": null
  },
@@ -105,7 +109,8 @@
   "families": [
    "snare",
    "bass",
-   "synth"
+   "synth",
+   "kick"
   ],
   "audit_override": null
  },
@@ -127,7 +132,8 @@
   "families": [
    "snare",
    "bass",
-   "synth"
+   "synth",
+   "kick"
   ],
   "audit_override": null
  },
@@ -149,7 +155,8 @@
   "families": [
    "snare",
    "bass",
-   "synth"
+   "synth",
+   "kick"
   ],
   "audit_override": null
  },
@@ -171,7 +178,8 @@
   "families": [
    "snare",
    "bass",
-   "synth"
+   "synth",
+   "kick"
   ],
   "audit_override": null
  },
@@ -193,7 +201,8 @@
   "families": [
    "snare",
    "bass",
-   "synth"
+   "synth",
+   "kick"
   ],
   "audit_override": null
  },
@@ -215,7 +224,8 @@
   "families": [
    "snare",
    "bass",
-   "synth"
+   "synth",
+   "kick"
   ],
   "audit_override": null
  },
@@ -237,7 +247,8 @@
   "families": [
    "snare",
    "bass",
-   "synth"
+   "synth",
+   "kick"
   ],
   "audit_override": null
  },
@@ -1024,7 +1035,8 @@
   "proof": "goal:kick stem against project kick notes",
   "families": [
    "bass",
-   "synth"
+   "synth",
+   "kick"
   ],
   "audit_override": null
  },
@@ -1045,7 +1057,8 @@
   "proof": "goal:kick stem against project kick notes",
   "families": [
    "bass",
-   "synth"
+   "synth",
+   "kick"
   ],
   "audit_override": null
  },
@@ -1066,7 +1079,8 @@
   "proof": "goal:trigger track export offset (labels_trigger.json)",
   "families": [
    "bass",
-   "synth"
+   "synth",
+   "kick"
   ],
   "audit_override": null
  },
@@ -1087,7 +1101,8 @@
   "proof": "goal:trigger track export offset (labels_trigger.json)",
   "families": [
    "bass",
-   "synth"
+   "synth",
+   "kick"
   ],
   "audit_override": null
  },
@@ -1108,7 +1123,8 @@
   "proof": "lab:proven (one pattern, clear win)",
   "families": [
    "bass",
-   "synth"
+   "synth",
+   "kick"
   ],
   "audit_override": null
  },
@@ -1129,7 +1145,8 @@
   "proof": "goal:wip survey offset (unproven against a stem)",
   "families": [
    "bass",
-   "synth"
+   "synth",
+   "kick"
   ],
   "audit_override": null
  },
@@ -1150,7 +1167,8 @@
   "proof": "goal:wip survey offset (unproven against a stem)",
   "families": [
    "bass",
-   "synth"
+   "synth",
+   "kick"
   ],
   "audit_override": null
  },
@@ -1171,7 +1189,228 @@
   "proof": "goal:wip survey offset (unproven against a stem)",
   "families": [
    "bass",
-   "synth"
+   "synth",
+   "kick"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "apricots_128bpm",
+  "kind": "project",
+  "source": {
+   "how": "goal",
+   "paths": [
+    "/Users/peterkiemann/MANIFOLD - Rust/tests/fixtures/audio/apricots_128bpm/mix.wav"
+   ]
+  },
+  "source_sha256": [
+   "fde3593f372875579a15b95d80cb1d4408971ba62dd80b84110623eecbba28c4"
+  ],
+  "sample_rate": 48000,
+  "offset_s": null,
+  "proof": "none",
+  "families": [
+   "kick"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "bad_guy_128bpm",
+  "kind": "project",
+  "source": {
+   "how": "goal",
+   "paths": [
+    "/Users/peterkiemann/MANIFOLD - Rust/tests/fixtures/audio/bad_guy_128bpm/mix.wav"
+   ]
+  },
+  "source_sha256": [
+   "351ad2f07dc5778690b8f04c0af12c1acc8f83fdb3c253fc988e26a433cff7a8"
+  ],
+  "sample_rate": 44100,
+  "offset_s": null,
+  "proof": "none",
+  "families": [
+   "kick"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "feel_the_vibration_174bpm",
+  "kind": "project",
+  "source": {
+   "how": "goal",
+   "paths": [
+    "/Users/peterkiemann/MANIFOLD - Rust/tests/fixtures/audio/feel_the_vibration_174bpm/mix.wav"
+   ]
+  },
+  "source_sha256": [
+   "57458b322198b9c12ac821180874466a6636c15dda56d33bc29d616f46f80533"
+  ],
+  "sample_rate": 48000,
+  "offset_s": null,
+  "proof": "none",
+  "families": [
+   "kick"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "inhale_exhale_145bpm",
+  "kind": "project",
+  "source": {
+   "how": "goal",
+   "paths": [
+    "/Users/peterkiemann/MANIFOLD - Rust/tests/fixtures/audio/inhale_exhale_145bpm/mix.wav"
+   ]
+  },
+  "source_sha256": [
+   "26163ae92e4b7aaf74cafc6a5fff3b6bad2a566a60474bb8b8b53386add18514"
+  ],
+  "sample_rate": 48000,
+  "offset_s": null,
+  "proof": "none",
+  "families": [
+   "kick"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "tears_140bpm",
+  "kind": "project",
+  "source": {
+   "how": "goal",
+   "paths": [
+    "/Users/peterkiemann/MANIFOLD - Rust/tests/fixtures/audio/tears_140bpm/mix.wav"
+   ]
+  },
+  "source_sha256": [
+   "49c7c4ee799e93690e4023665b332c617f0fa170314a83d05c79a2c675d5b334"
+  ],
+  "sample_rate": 48000,
+  "offset_s": null,
+  "proof": "none",
+  "families": [
+   "kick"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "cold_remix",
+  "kind": "project",
+  "source": {
+   "how": "goal",
+   "paths": [
+    "/Users/peterkiemann/.cache/manifold/kick-goal-2026-10-10/cold_remix_mix.npy"
+   ]
+  },
+  "source_sha256": [
+   "db36d5ff24be4e2d0f32018b8b07c8597f4fdbf5561124aa450d6be0026416b4"
+  ],
+  "sample_rate": 48000,
+  "offset_s": null,
+  "proof": "none",
+  "families": [
+   "kick"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "gerrit",
+  "kind": "project",
+  "source": {
+   "how": "goal",
+   "paths": [
+    "/Users/peterkiemann/.cache/manifold/kick-goal-2026-10-10/gerrit_mix.npy"
+   ]
+  },
+  "source_sha256": [
+   "8d880464c6fbf77899d71b5760ad231442863244948282c0cced1d059aef2ce5"
+  ],
+  "sample_rate": 48000,
+  "offset_s": null,
+  "proof": "none",
+  "families": [
+   "kick"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "lh",
+  "kind": "project",
+  "source": {
+   "how": "goal",
+   "paths": [
+    "/Users/peterkiemann/.cache/manifold/kick-goal-2026-10-10/lh_mix.npy"
+   ]
+  },
+  "source_sha256": [
+   "ae9cfb4ffa4a8c3489542ecc8ecdf2e86282ed038cd4e925d1e278c0186cbbb2"
+  ],
+  "sample_rate": 48000,
+  "offset_s": null,
+  "proof": "none",
+  "families": [
+   "kick"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "eat_sleep",
+  "kind": "project",
+  "source": {
+   "how": "goal",
+   "paths": [
+    "/Users/peterkiemann/.cache/manifold/kick-goal-2026-10-10/eat_sleep_mix.npy"
+   ]
+  },
+  "source_sha256": [
+   "7a4cf141bfd0cd7b18ad2c96d93983c61d41298723c8d6c0963137263b541dd1"
+  ],
+  "sample_rate": 48000,
+  "offset_s": null,
+  "proof": "none",
+  "families": [
+   "kick"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "business",
+  "kind": "project",
+  "source": {
+   "how": "goal",
+   "paths": [
+    "/Users/peterkiemann/.cache/manifold/kick-goal-2026-10-10/business_mix.npy"
+   ]
+  },
+  "source_sha256": [
+   "d8ca8ab772d1af9e0036c8f4383ba587671a936773af17ad22f49dfa270a62e2"
+  ],
+  "sample_rate": 48000,
+  "offset_s": null,
+  "proof": "none",
+  "families": [
+   "kick"
+  ],
+  "audit_override": null
+ },
+ {
+  "id": "worship",
+  "kind": "project",
+  "source": {
+   "how": "goal",
+   "paths": [
+    "/Users/peterkiemann/.cache/manifold/kick-goal-2026-10-10/worship_mix.npy"
+   ]
+  },
+  "source_sha256": [
+   "27fac00e81c858bfd5ade158e12d3edabc2950c35a401b46470586df935a90ae"
+  ],
+  "sample_rate": 48000,
+  "offset_s": null,
+  "proof": "none",
+  "families": [
+   "kick"
   ],
   "audit_override": null
  }

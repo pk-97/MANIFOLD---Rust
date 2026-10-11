@@ -27,6 +27,10 @@ recipe.apply()
 import numpy as np  # noqa: E402
 
 PROVEN = ('wip:proven', 'lab:proven', 'goal:trigger', 'goal:kick stem', 'generated')
+# Label-level proofs (a labels entry's 'proof'): the times were measured where no project offset enters. 'stem': on
+# the song's own kick stem, rendered with the mix; 'trigger': the trigger track's verified kicks; 'reviewed': Peter's
+# reviewed passages. 'project' (project MIDI) falls back to the song's offset proof.
+LABEL_PROOFS = ('stem', 'trigger', 'reviewed')
 SHIFT_EDGE_MS, MAX_FAILS = 30.0, 3
 
 
@@ -34,11 +38,12 @@ def project_check(s, song):
     kept = len(s['positives']) + len(s.get('dense_pos', []))
     known = kept + len(s.get('dropped', []))
     why = []
-    if not song.proof.startswith(PROVEN):
-        why.append(f'offset proof: {song.proof}')
+    proof = s['proof'] if s.get('proof') in LABEL_PROOFS else song.proof
+    if proof not in LABEL_PROOFS and not proof.startswith(PROVEN):
+        why.append(f'offset proof: {proof}')
     if abs(s.get('timing_shift_ms', 0.0)) >= SHIFT_EDGE_MS:
         why.append(f"timing shift {s['timing_shift_ms']} ms at the search edge")
-    return dict(known=known, kept=kept, shift_ms=s.get('timing_shift_ms', 0.0), proof=song.proof, why=why)
+    return dict(known=known, kept=kept, shift_ms=s.get('timing_shift_ms', 0.0), proof=proof, why=why)
 
 
 def generated_check(s, notes, kicks=(), kick_s=0.0):

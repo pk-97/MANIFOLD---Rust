@@ -19,6 +19,7 @@ ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT))
 TOOLS = ROOT / 'tools' / 'audio_analysis'
 RUNS = Path.home() / '.cache/manifold/detector-lab/runs'
+LAYERS = RUNS.parent / 'layers'   # one trained model's predictions, shared by every config that trains it
 META_SCHEMA = 2
 
 
@@ -102,6 +103,12 @@ def check_exam(exam, songs, failed=()):
         raise ValueError(f'not exam songs (generated or audit-failing): {bad}')
 
 
+def module_hashes():
+    return sorted((m.__name__, hashlib.sha256(Path(m.__file__).read_bytes()).hexdigest())
+                  for m in list(sys.modules.values())
+                  if getattr(m, '__file__', None) and Path(m.__file__).resolve().is_relative_to(TOOLS))
+
+
 def setup(cfg):
     """The run's labels, songs and plan under the pinned recipe; returns everything the run id and the child need."""
     from tools.audio_analysis.lab import models, recipe
@@ -120,17 +127,17 @@ def setup(cfg):
     check_exam(exam, songs, failed)
     grps, trainings, _ = models.plan(cfg, lab, songs)
     models.check_disjoint(trainings)
+    # Every config loads these; the parts below add their own modules, whose code the parts' ids already cover.
+    shared = module_hashes()
     used = parts(cfg)
-    mods = sorted((m.__name__, hashlib.sha256(Path(m.__file__).read_bytes()).hexdigest())
-                  for m in list(sys.modules.values())
-                  if getattr(m, '__file__', None) and Path(m.__file__).resolve().is_relative_to(TOOLS))
+    mods = module_hashes()
     key = json.dumps(dict(config=cfg.key(), labels=sha, modules=mods, parts=used), sort_keys=True)
     run_id = f'{cfg.family}-{hashlib.sha256(key.encode()).hexdigest()[:12]}'
     meta = dict(schema=META_SCHEMA, run_id=run_id, config=cfg.key(), names=[cfg.name], labels_sha256=sha,
                 songs=list(lab), exam=exam, generated=[t for t in lab if t not in exam], excluded=failed,
                 recall_only=[t for t in exam if lab[t]['positives_only']], groups=grps, trainings=trainings,
                 layers=[*sorted(cfg.models), *(['combined'] if models.final_layer(cfg) == 'combined' else [])],
-                final=models.final_layer(cfg), modules=mods, parts=used)
+                final=models.final_layer(cfg), modules=mods, shared_modules=shared, parts=used)
     return lab, songs, meta
 
 
@@ -172,40 +179,76 @@ def tree_rows(cfg, lab, songs):
     return out
 
 
-def train_layers(cfg, lab, songs, seed, data, trees, log=print):
-    """({save key: probabilities}, record). Training i of the plan uses random state 1000 * i + seed, so the outer
-    nets match the retired runner's."""
-    from tools.audio_analysis.eval.kick_goal_nn import predict, train
+def model_key(cfg, model, meta):
+    """What decides one model's predictions in a run: its own settings, the finder, sampling, training songs and plan,
+    the labels, the code, and the parts it reads. Configs that share it share the trained layer (LAYERS)."""
+    sub = {k: v for k, v in cfg.key().items() if k not in ('models', 'combine', 'stage')}
+    sub['models'] = {model: cfg.models[model]}
+    reads = dict(net='frames', trees='measures')[model]
+    used = {k: v for k, v in meta['parts'].items() if k in ('finder', reads)}
+    key = json.dumps(dict(model=sub, labels=meta['labels_sha256'], modules=meta['shared_modules'], parts=used,
+                          songs=meta['songs'], trainings=meta['trainings']), sort_keys=True)
+    return f'{model}-{hashlib.sha256(key.encode()).hexdigest()[:12]}'
+
+
+def train_model(cfg, model, trainings, seed, data, trees, log):
+    """[{held song: probabilities} per training], [seconds per training] for one model. Training i uses random state
+    1000 * i + seed, so the outer nets match the retired runner's."""
     from tools.audio_analysis.lab import models
-    grps, trainings, _ = models.plan(cfg, lab, songs)
     share = cfg.sampling['generated'] if cfg.generated_as_clips() else None
-    kw = dict(epochs=cfg.net['epochs']) if cfg.net else {}
-    if share is not None:
-        kw['synth_share'] = share
-    layers, record = [{} for _ in trainings], []
+    out, secs = [], []
     for i, n in enumerate(trainings):
-        rec = dict(n, seconds={})
-        if cfg.net:
-            t0 = time.time()
+        t0 = time.time()
+        if model == 'net':
+            from tools.audio_analysis.eval.kick_goal_nn import predict, train
+            kw = dict(epochs=cfg.net['epochs'], **({'synth_share': share} if share is not None else {}))
             net = train([data[u] for u in n['trained']], 1000 * i + seed, [data[c] for c in n['clips']], **kw)
-            layers[i]['net'] = {t: predict(net, data[t]) for t in n['held']}
-            rec['seconds']['net'] = round(time.time() - t0, 1)
-        if trees is not None:
-            t0 = time.time()
+            out.append({t: predict(net, data[t]) for t in n['held']})
+        else:
             fit = models.fit_trees(cfg.models['trees'], [(*trees[u][1], u in n['clips']) for u in n['trained'] + n['clips']],
                                    1000 * i + seed, share)
-            layers[i]['trees'] = {t: fit.predict_proba(trees[t][0])[:, 1] for t in n['held']}
-            rec['seconds']['trees'] = round(time.time() - t0, 1)
-        if models.final_layer(cfg) == 'combined':
-            layers[i]['combined'] = {t: models.combine(cfg.combine, {m: layers[i][m][t] for m in cfg.models})
-                                     for t in n['held']}
-        record.append(rec)
-        log(f'without groups {n["without"]}: {rec["seconds"]}')
+            out.append({t: fit.predict_proba(trees[t][0])[:, 1] for t in n['held']})
+        secs.append(round(time.time() - t0, 1))
+        log(f'{model} without groups {n["without"]}: {secs[-1]} s')
+    return out, secs
+
+
+def layer(cfg, model, meta, seed, data, trees, log):
+    """One model's predictions per training and their training seconds: from LAYERS when another config already
+    trained the same model, else trained and stored there. Cached seconds are 0."""
+    import numpy as np
+    d = LAYERS / model_key(cfg, model, meta)
+    path = d / f's{seed}.npz'
+    if path.exists():
+        with np.load(path) as z:
+            out = [{t: z[f'{i}__{t}'] for t in n['held']} for i, n in enumerate(meta['trainings'])]
+        log(f'{model}: reused {d.name}')
+        return out, [0.0] * len(out)
+    out, secs = train_model(cfg, model, meta['trainings'], seed, data, trees, log)
+    d.mkdir(parents=True, exist_ok=True)
+    tmp = d / f's{seed}.tmp.npz'
+    np.savez(tmp, **{f'{i}__{t}': p for i, per in enumerate(out) for t, p in per.items()})
+    tmp.rename(path)
+    return out, secs
+
+
+def train_layers(cfg, meta, seed, data, trees, log=print):
+    """({save key: probabilities}, record): each model's layer, then the combined one, saved per song as layer__song
+    (outer models) and pair{k}__layer__song (the predictions that choose group k's cutoff)."""
+    from tools.audio_analysis.lab import models
+    trainings, grps = meta['trainings'], meta['groups']
+    lay, secs = {}, {}
+    for m in sorted(cfg.models):
+        lay[m], secs[m] = layer(cfg, m, meta, seed, data, trees, log)
+    if models.final_layer(cfg) == 'combined':
+        lay['combined'] = [{t: models.combine(cfg.combine, {m: lay[m][i][t] for m in cfg.models}) for t in n['held']}
+                           for i, n in enumerate(trainings)]
+    record = [dict(n, seconds={m: secs[m][i] for m in secs}) for i, n in enumerate(trainings)]
     held = {}
-    for n, lay in zip(trainings, layers):
+    for i, n in enumerate(trainings):
         for t, prefix in models.save_keys(grps, n).items():
-            for name, probs in lay.items():
-                held[f'{prefix}__{name}__{t}' if prefix else f'{name}__{t}'] = probs[t]
+            for name in lay:
+                held[f'{prefix}__{name}__{t}' if prefix else f'{name}__{t}'] = lay[name][i][t]
     return held, record
 
 
@@ -223,11 +266,12 @@ def child(cfg, seed, run_id):
     out.mkdir(parents=True, exist_ok=True)
     t0 = time.time()
     dev = device()
-    data = build(cfg, lab, songs, dev, log=lambda m: None) if cfg.net else None
-    trees = tree_rows(cfg, lab, songs) if 'trees' in cfg.models else None
+    todo = [m for m in cfg.models if not (LAYERS / model_key(cfg, m, meta) / f's{seed}.npz').exists()]
+    data = build(cfg, lab, songs, dev, log=lambda m: None) if 'net' in todo else None
+    trees = tree_rows(cfg, lab, songs) if 'trees' in todo else None
     built = time.time()
-    with gpu_queue.hold('detector-lab') if cfg.net else contextlib.nullcontext():
-        held, record = train_layers(cfg, lab, songs, seed, data, trees, log=lambda m: print(m, flush=True))
+    with gpu_queue.hold('detector-lab') if 'net' in todo else contextlib.nullcontext():
+        held, record = train_layers(cfg, meta, seed, data, trees, log=lambda m: print(m, flush=True))
     keys = ('without', 'held', 'trained', 'clips')
     if [{k: r[k] for k in keys} for r in record] != [{k: n[k] for k in keys} for n in meta['trainings']]:
         sys.exit('the models trained differ from the plan; nothing saved')
