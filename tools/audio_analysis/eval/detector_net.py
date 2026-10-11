@@ -93,14 +93,14 @@ def groups(songs, folds):
     return [names[k::folds] for k in range(folds)]
 
 
-def held_out_nets(lab, data, seed, clips=(), log=print, folds=0):
+def held_out_nets(lab, data, seed, clips=(), log=print, folds=0, untrained=()):
     """{song: held-out probabilities}: per song group (groups), a net trained on every other song (and the clips not
-    blocked for any song in the group)."""
+    blocked for any song in the group). Songs in untrained are scored but never trained on."""
     from tools.audio_analysis.eval.kick_goal_nn import predict, train
     held = {}
     for k, grp in enumerate(groups(list(lab), folds)):
         t0 = time.time()
-        net = train([data[u] for u in lab if u not in grp], 1000 * k + seed, [c for c in clips if not set(grp) & c.blocked])
+        net = train([data[u] for u in lab if u not in grp and u not in untrained], 1000 * k + seed, [c for c in clips if not set(grp) & c.blocked])
         for t in grp:
             held[t] = predict(net, data[t])
         log(f'net without {", ".join(grp)}: {time.time() - t0:.0f} s')

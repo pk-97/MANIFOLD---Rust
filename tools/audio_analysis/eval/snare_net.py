@@ -24,7 +24,12 @@ AHEAD = float(os.environ.get('SNARE_AHEAD_MS', '40')) / 1000
 FLAT = os.environ.get('SNARE_FLAT') == '1'
 # SNARE_DENSE=1: the prominent snares inside fast runs train as positives (BUG-9ngk8.2.1); scoring is unchanged.
 DENSE = os.environ.get('SNARE_DENSE') == '1'
-TAG = ''.join(f'_{k.lower()}{os.environ[k]}' for k in ('SNARE_AHEAD_MS', 'SNARE_PAST_MS', 'SNARE_FLAT', 'SNARE_DENSE') if k in os.environ)
+# SNARE_LINN=eval: the four LinnDrum kits of Peter's labels project (linn_snare) are scored, never trained on; =train:
+# they train too. SNARE_FOLDS=N: N fixed song groups instead of one net per song (detector_net.groups).
+LINN = os.environ.get('SNARE_LINN', '')
+FOLDS = int(os.environ.get('SNARE_FOLDS', '0'))
+TAG = ''.join(f'_{k.lower()}{os.environ[k]}' for k in ('SNARE_AHEAD_MS', 'SNARE_PAST_MS', 'SNARE_FLAT', 'SNARE_DENSE', 'SNARE_LINN', 'SNARE_FOLDS')
+              if k in os.environ)
 os.environ['KICK_GOAL_NN_PAST_MS'] = os.environ.get('SNARE_PAST_MS', '150')
 if FLAT:
     os.environ['KICK_GOAL_NN_PERC'] = '1'  # the net's third channel slot carries noisiness instead
@@ -43,6 +48,8 @@ def main():
     mix = '--mix' in sys.argv
     g = Goal(mode='v3')
     lab = json.loads((GOAL / 'snare_labels.json').read_text())
+    linn = json.loads((GOAL / 'snare_labels_linn.json').read_text()) if LINN else {}
+    lab.update(linn)
     dev = device()
     data, meta = {}, {}
     for t, s in lab.items():
@@ -63,7 +70,8 @@ def main():
                 c.blocked = {str(z['song'])} | set(json.loads(str(z['users'])))
             clips.append(c)
         print(f'{len(clips)} mix clips, {sum(int(c.y[c.mask].sum()) for c in clips)} pasted or own snares', flush=True)
-    held = held_out_nets(lab, data, seed, clips, log=lambda m: print(m, flush=True))
+    held = held_out_nets(lab, data, seed, clips, log=lambda m: print(m, flush=True), folds=FOLDS,
+                         untrained=set(linn) if LINN == 'eval' else ())
     cut, per_song = {}, {}
     tot_m, tot_n, tot_f = held_out(lab, meta, held, log=lambda m: print(m, flush=True), cutoffs=cut, per_song=per_song, ahead=AHEAD)
     print(f'net only, held out: R {tot_m / tot_n:.3f} P {tot_m / max(1, tot_m + tot_f):.3f} ({tot_m}/{tot_n}, {tot_f} false)')

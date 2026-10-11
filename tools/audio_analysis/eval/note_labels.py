@@ -3,8 +3,9 @@ note first; standout notes later). Same file layout as detector_labels, so detec
 
 Per song, from the project (read only through als_extract) shifted by the song's proven export offset:
 - Events: every note on the family's part (part_classes: track name, then groups innermost outward; drum-rack pads by
-  their own name) and every sharp hit inside the family's audio clips (detector_labels.stem_hits). Layers and chords
-  within layer_s are one event.
+  their own name) and every audio-clip start on the part whose sound begins there (a placed one-shot or sample).
+  Only known times count (Peter, 2026-10-11): nothing is found by analysing inside a clip. Layers and chords within
+  layer_s are one event.
 - Audible: the part is sounding: the family band's mean level 10-100 ms after the note sits present_db over the
   song's quiet floor (5th percentile). Otherwise (muted, automated down) unscored, never negative. The bar only
   rejects silence: audible notes in a dense low end sit 6-10 dB over the floor, silenced ones under 0 (renew). An attack test
@@ -20,7 +21,7 @@ Per song, from the project (read only through als_extract) shifted by the song's
   wobbles as notes (set_me_free: a start every 70 ms), so smooth notes there stay unlabelled and fires count as false
   only on vouched negatives (2026-10-11).
 Each positive carries a kind for per-kind readouts: 'overlap' (starts while the previous note sounds: a held chord, or a glide on a mono synth), 'fast' (under
-200 ms after the previous event), 'short' (under a 16th), 'held' (a beat or more), else 'mid'; clip hits are 'clip'.
+200 ms after the previous event), 'short' (under a 16th), 'held' (a beat or more), else 'mid'; clip starts are 'clip'.
 """
 import json
 from dataclasses import dataclass
@@ -46,6 +47,7 @@ class NoteFamily:
     far_s: float = .070
     present_db: float = 3.0
     half: tuple = (-.07, .07)
+    clip_onset_s: float = .030     # a clip start is a known hit when its sound begins within this
     tol_s: float = .030             # hit window, matched at the candidate: notes come ~3 a second, so the shared
                                     # 70 ms window would count firing anywhere as right
 
@@ -163,10 +165,13 @@ def song(g, t, fam):
     kind = kinds(beats, durs, secs)
     pos = np.array(secs) + off
     points = [(q['beat'], q['bpm']) for q in res['tempo_points']]
-    c_loud, c_quiet = clip_hits(clips, Path(src[0]).parent, sr, fam.stem_band, points)
-    unscored += [(u + off + h0, u + off + h1) for u in c_quiet]
-    pos = np.concatenate([pos, np.asarray(c_loud) + off])
-    kind = np.array(kind + ['clip'] * len(c_loud))
+    # Known times only (Peter, 2026-10-11): a clip's start counts when a loud hit begins there (a placed one-shot or
+    # sample); hits found further inside a clip are guesses, left to the loop spans.
+    c_loud, _ = clip_hits(clips, Path(src[0]).parent, sr, fam.stem_band, points)
+    starts = np.array(sorted({c['start_s'] for c in clips}))
+    placed = starts[[bool(np.any((c_loud >= s0 - .005) & (c_loud <= s0 + fam.clip_onset_s))) for s0 in starts]] if len(c_loud) else starts[:0]
+    pos = np.concatenate([pos, placed + off])
+    kind = np.array(kind + ['clip'] * len(placed))
     order = np.argsort(pos, kind='stable')
     pos, kind = pos[order], kind[order]
     keep = np.concatenate([[True], np.diff(pos) > fam.layer_s]) if len(pos) else np.zeros(0, bool)
