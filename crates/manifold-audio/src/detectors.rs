@@ -11,7 +11,7 @@ use ringbuf::traits::{Consumer, Observer, Producer, Split};
 use ringbuf::{HeapCons, HeapProd, HeapRb};
 
 use crate::trained::container::{Container, ContainerError};
-use crate::trained::{DetectorError, Fire, SpecError, TrainedDetector};
+use crate::trained::{Decision, DetectorError, Fire, SpecError, TrainedDetector};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EventKind {
@@ -118,15 +118,13 @@ impl KickFed {
         Ok(Self { kick, reader })
     }
 
-    /// Runs the kick on `samples` and hands the reader its decisions; the reader then runs on the same
-    /// samples (through [`Self::reader_mut`]).
-    pub fn feed_kick(&mut self, samples: &[f32], mut on_kick: impl FnMut(Fire)) {
+    /// Runs the kick on `samples` and hands the reader its decisions (each also to `on_kick`); the reader
+    /// then runs on the same samples (through [`Self::reader_mut`]).
+    pub fn feed_kick(&mut self, samples: &[f32], mut on_kick: impl FnMut(&Decision<'_>, Option<Fire>)) {
         let reader = &mut self.reader;
         self.kick.push_traced(samples, |d, fire| {
             reader.kick_verdict(d.cand_hop, d.avail_hop, d.p_final);
-            if let Some(f) = fire {
-                on_kick(f);
-            }
+            on_kick(d, fire);
         });
         self.reader.kick_settled(self.kick.settled_avail());
     }
@@ -139,7 +137,7 @@ impl KickFed {
 impl EventDetector for KickFed {
     fn push(&mut self, samples: &[f32], events: &mut Vec<DetectorEvent>) {
         let (kick_kind, reader_kind) = (self.kick.kind(), self.reader.kind());
-        self.feed_kick(samples, |f| events.push(DetectorEvent { kind: kick_kind, sample: f.sample }));
+        self.feed_kick(samples, |_, fire| events.extend(fire.map(|f| DetectorEvent { kind: kick_kind, sample: f.sample })));
         self.reader.push_with(samples, |f| events.push(DetectorEvent { kind: reader_kind, sample: f.sample }));
     }
 

@@ -123,10 +123,11 @@ fn part_parity(set: &str, m: &Container, spec: &Spec, name: &str, g: &Container)
     println!("{set}/{name} part: {k} candidates, {}; fires {nf} exact", report.join(", "));
 }
 
-/// The model alone, or fed by the kick set's model when it reads kick verdicts: the production pairing.
+/// The model alone, or fed by the kick set's model when it reads kick verdicts: the production pairing, with
+/// the emission time of every kick decision.
 enum Run {
     Alone(Box<TrainedDetector>),
-    Fed(Box<KickFed>),
+    Fed(Box<KickFed>, Vec<f64>),
 }
 
 impl Run {
@@ -136,32 +137,47 @@ impl Run {
             return Self::Alone(Box::new(det));
         }
         let kick = TrainedDetector::from_container(&model("kick"), 48_000).unwrap();
-        Self::Fed(Box::new(KickFed::new(kick, det).expect("the kick set is the kick this model reads")))
+        Self::Fed(Box::new(KickFed::new(kick, det).expect("the kick set is the kick this model reads")), Vec::new())
     }
 
     fn det(&mut self) -> &mut TrainedDetector {
         match self {
             Self::Alone(d) => d,
-            Self::Fed(f) => f.reader_mut(),
+            Self::Fed(f, _) => f.reader_mut(),
         }
     }
 
     fn push_traced(&mut self, samples: &[f32], on_decision: impl FnMut(&Decision<'_>, Option<Fire>)) {
-        if let Self::Fed(f) = self {
-            f.feed_kick(samples, |_| {});
+        if let Self::Fed(f, emits) = self {
+            f.feed_kick(samples, |d, _| emits.push(((d.avail_hop + 1) * MODEL_HOP) as f64 / MODEL_RATE as f64));
         }
         self.det().push_traced(samples, on_decision);
     }
 }
 
-/// The emission time before which a candidate's net slice would start before the clip (see `end_to_end`), and
-/// that plus the longest stage window: decisions before it are not comparable. `None` without a net.
-fn stream_edge_s(m: &Container, spec: &Spec) -> Option<(f64, f64)> {
-    spec.net.as_ref()?;
-    let (ahead, frame_s) = (m.f64s("net.ahead_s", &[]).unwrap()[0], m.f64s("net.frame_s", &[]).unwrap()[0]);
-    let clipped = (m.i64s("net.slice", &[]).unwrap()[0] + 1) as f64 * frame_s - ahead;
-    let max_w = spec.stage.as_ref().map_or(0.0, |s| s.windows_s.iter().copied().fold(0.0, f64::max));
-    Some((clipped, clipped + max_w))
+/// A model's stream-start edge (see `end_to_end`): which emissions have a net slice that would start before the
+/// clip, and the longest stage window, over which such a decision taints later stage inputs.
+struct NetEdge {
+    ahead: f64,
+    frame_s: f64,
+    slice: i64,
+    max_w: f64,
+}
+
+impl NetEdge {
+    fn of(m: &Container, spec: &Spec) -> Option<Self> {
+        spec.net.as_ref()?;
+        Some(Self {
+            ahead: m.f64s("net.ahead_s", &[]).unwrap()[0],
+            frame_s: m.f64s("net.frame_s", &[]).unwrap()[0],
+            slice: m.i64s("net.slice", &[]).unwrap()[0],
+            max_w: spec.stage.as_ref().map_or(0.0, |s| s.windows_s.iter().copied().fold(0.0, f64::max)),
+        })
+    }
+
+    fn clipped(&self, emit_s: f64) -> bool {
+        (((emit_s + self.ahead) / self.frame_s) as i64) < self.slice + 1
+    }
 }
 
 #[derive(Default)]
@@ -259,11 +275,15 @@ fn end_to_end(set: &str, m: &Container, spec: &Spec, name: &str, g: &Container, 
     let col_of = |want: Measure| used.iter().position(|&m| m == want).map(|p| used[..p].iter().map(|m| m.width()).sum::<usize>());
     let tail_col = col_of(Measure::Tail3).map(|c| c + 1);
     let kick_cols = col_of(Measure::Kick2).map(|c| c..c + Measure::Kick2.width());
-    let kick_edge_s = kick_cols.as_ref().and_then(|_| {
-        let km = model("kick");
-        let (_, edge) = stream_edge_s(&km, &Spec::parse(&km).unwrap())?;
-        Some(edge + m.f64s("kick2.window_s", &[2]).unwrap()[0])
-    });
+    // The last clipped kick decision taints the kick's p.final over its longest stage window.
+    let kick_edge_s = match (&run, &kick_cols) {
+        (Run::Fed(_, emits), Some(_)) => {
+            let km = model("kick");
+            let edge = NetEdge::of(&km, &Spec::parse(&km).unwrap());
+            edge.and_then(|e| emits.iter().rev().find(|&&t| e.clipped(t)).map(|t| t + e.max_w + m.f64s("kick2.window_s", &[2]).unwrap()[0]))
+        }
+        _ => None,
+    };
     let kick_edge = |i: usize| kick_edge_s.is_some_and(|e| onset_s[i] <= e);
     let (mut m_err, mut k_err, mut tail_skipped) = (0.0f64, 0.0f64, 0);
     for (i, x) in got.iter().enumerate() {
@@ -286,14 +306,8 @@ fn end_to_end(set: &str, m: &Container, spec: &Spec, name: &str, g: &Container, 
     // music have any (D10).
     let emit_s = g.f64s("emit_s", &[k]).unwrap();
     // A kick2 reader's candidates in the kick's edge are left out with them.
-    let clipped: Vec<bool> = match spec.net {
-        Some(_) => {
-            let (ahead, frame_s) = (m.f64s("net.ahead_s", &[]).unwrap()[0], m.f64s("net.frame_s", &[]).unwrap()[0]);
-            let slice = m.i64s("net.slice", &[]).unwrap()[0];
-            (0..d).map(|i| (((emit_s[i] + ahead) / frame_s) as i64) < slice + 1 || kick_edge(i)).collect()
-        }
-        None => (0..d).map(kick_edge).collect(),
-    };
+    let edge = NetEdge::of(m, spec);
+    let clipped: Vec<bool> = (0..d).map(|i| edge.as_ref().is_some_and(|e| e.clipped(emit_s[i])) || kick_edge(i)).collect();
     let max_w = spec.stage.as_ref().map_or(0.0, |s| s.windows_s.iter().copied().fold(0.0, f64::max));
     let last_clipped = (0..d).rev().find(|&i| clipped[i]);
     let tainted: Vec<bool> = (0..d).map(|i| clipped[i] || last_clipped.is_some_and(|c| c <= i && emit_s[i] - emit_s[c] <= max_w)).collect();

@@ -14,10 +14,11 @@ fn reads_both_shipped_models() {
     assert_eq!((st.inputs(), st.evidence0(), st.gate, st.cuts), (5, 4, 1.0, Some((0.7100000000000001, 0.93))));
     let snare = Spec::parse(&golden::model("snare")).unwrap();
     assert_eq!((snare.family, snare.finder, snare.combine), (EventKind::Snare, FinderKind::Snare, Combine::MeanLogit));
-    assert_eq!(snare.trees.as_deref(), Some(&[Measure::Prof32, Measure::Fall16, Measure::Low16][..]));
-    assert_eq!(snare.net, Some(NetSpec { count: 3, channels: vec![] }));
+    let trees = [Measure::Prof32, Measure::Fall16, Measure::Low16, Measure::Note13, Measure::Cdom4, Measure::Kick2];
+    assert_eq!(snare.trees.as_deref(), Some(&trees[..]));
+    assert_eq!(snare.net, Some(NetSpec { count: 3, channels: vec![Channel::Flat, Channel::Perc] }));
     let st = snare.stage.as_ref().unwrap();
-    assert_eq!((st.inputs(), st.evidence0(), st.level, st.gate), (4, 3, None, 1.0));
+    assert_eq!((st.inputs(), st.evidence0(), st.level, st.gate), (5, 4, Some((Measure::Prof32, 29)), 1.0));
 }
 
 /// The shipped kick with tmpl3 in its trees (no shipped model uses it): templates from the tmpl3 unit fixture.
