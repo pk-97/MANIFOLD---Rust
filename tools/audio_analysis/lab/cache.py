@@ -22,6 +22,7 @@ VERSION = 'detector-lab-1'
 
 PACKAGE = 'tools.audio_analysis'
 TOOLS = Path(__file__).resolve().parents[1]
+REPO = TOOLS.parents[1]
 
 
 def code_id(fn):
@@ -60,7 +61,9 @@ def code_id(fn):
         if hasattr(v, '__dataclass_fields__'):
             return f'{type(v).__qualname__}(' + ','.join(f'{k}={canon(getattr(v, k))}' for k in v.__dataclass_fields__) + ')'
         if isinstance(v, Path):
-            return f'path[{v}]'
+            # Paths inside the checkout are named from its root, so every worktree shares one key.
+            p = v.resolve()
+            return f'path[{p.relative_to(REPO) if p.is_relative_to(REPO) else v}]'
         return f'<{type(v).__module__}.{type(v).__qualname__}>'
 
     def value(v):

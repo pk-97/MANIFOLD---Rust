@@ -27,7 +27,29 @@ def song(id_, path):
                 sample_rate=48000, offset_s=0.0, proof='wip:proven', families=('snare',))
 
 
+_PATH = None
+
+
+def _reads_path():
+    return _PATH
+
+
 class LabTests(unittest.TestCase):
+    def test_code_id_same_in_every_worktree(self):
+        """A builder reading a path inside the checkout gets one key wherever the checkout lives, so trained models
+        are shared across worktrees."""
+        global _PATH
+        old = cache.REPO
+        keys = []
+        try:
+            for root in (old, Path('/elsewhere/slot-9')):
+                cache.REPO = root
+                _PATH = root / 'tools' / 'x.json'
+                keys.append(cache.code_id(_reads_path))
+        finally:
+            cache.REPO = old
+        self.assertEqual(keys[0], keys[1])
+
     def test_recycled_name_misses_cache(self):
         """The same song id over different audio must rebuild, never reuse (the linn_* trap)."""
         with tempfile.TemporaryDirectory() as d:
