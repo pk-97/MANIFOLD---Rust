@@ -1,0 +1,305 @@
+# Detector Lab — one place to label, train and judge MANIFOLD's audio detectors
+
+**Status:** IN PROGRESS · 2026-10-11 · P1 building · Opus 5.5 lead; revised after an Opus adversarial review
+**Prerequisites:** none
+**Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (phase briefs) and section 6 (seam briefs) before starting any phase.
+
+The live rig fires visuals from detectors trained offline: kick today, snare next, then bass, synth, and later
+modulation and envelope followers. Every one is judged the same way: held-out songs, a firing cutoff chosen on other
+songs, A against B over several seeds. That loop is the instrument's quality gate, and today it is rebuilt per
+detector out of environment switches and scratch scripts. On 2026-10-11 alone it produced a cutoff picked on generated
+songs, a 25-minute re-score that rebuilt every song's audio and candidates, stale caches reused under a recycled song
+name, and run-time estimates off by 70%. Peter: "we need a generalised system that you use that is as fast, accurate,
+stable, and reliable. We will use this a lot for training our detectors for onsets, triggers, modulation, envelopes,
+etc."
+
+**The governing insight: the lab is mostly wiring.** Labels, candidates, the net, the scoring rules, the A/B yardstick
+and even a content-addressed cache already exist (section 1 below). What is missing is one owner for four things:
+which songs exist and where their audio comes from, whether their labels are true, what an experiment is, and how a
+result is scored. The lab owns those four and calls everything else.
+
+The binding constraint is **label truth**. Peter, 2026-10-11: "we can't claim anything about results unless we are
+100% confident in our base data and labels." None of the runtime constraints bind: nothing here reaches the show
+without a release step.
+
+Companion docs:
+- [AUDIO_EVAL_HARNESS_GUIDE.md](AUDIO_EVAL_HARNESS_GUIDE.md) section 0 (trained detectors) — the rules every trained detector follows; the lab enforces them.
+- [KICK_REALTIME_DESIGN.md](KICK_REALTIME_DESIGN.md) section 4 (retrain to ship) — the lab feeds the release path, never replaces it.
+
+## 1. Audit — what exists (verified 2026-10-11, branch feat/detector-labels-v2 at e775c7068)
+
+Extend, don't redesign. Paths are under `tools/audio_analysis/`.
+
+| Piece | Where | State |
+|---|---|---|
+| Project reader, read-only, hash-checked; tempo map, clips, notes, locators | `eval/als_extract.py (extract)` | exists |
+| Content-addressed cache: key = sha256 of source audio bytes + stage stamps; a stamp mismatch is a miss | `eval/bundles.py (content_hash_for_audio line 103, BundleStamp line 37, load_bundle line 120)` | exists; **the lab's cache precedent** |
+| Snare label rules, known times only (MIDI on playing tracks, clip starts, stem-export mutes tested) | `eval/detector_labels.py (song, project_parts, export_groups)` | exists; `kind` is `'project'` (line 390) |
+| Bass and synth note labels | `eval/note_labels.py (song)` | exists; never calls `export_groups`; `kind` `'project'` (line 216) |
+| Generated label sets (V1, Rolls) | `eval/snare_generated.py` | exists, snare only, `kind` `'generated'`, no prominence filter (lines 63–66) |
+| Labels schema (positives, unscored, loop_spans, hard_neg, positives_only, dense_pos, dropped, kind, timing_shift_ms) | `eval/detector_eval.py` module doc, `rows` (line 38) | exists; the lab's schema |
+| Song set and audio for real songs | `eval/kick_goal_eval.py (Goal, line 156)` — which songs exist depends on `KICK_GOAL_MORE/TRIGGER/WIP/RECALL` (lines 118–135, 210–213); `eval/detector_songs.py (audio, spec)` | exists; **song identity hides in env vars** |
+| The pinned recipe env | `snare_release.py (RECIPE_ENV, lines 24–26)` | exists; the only place the env is pinned |
+| Name-keyed caches | `kick_goal_nn.spectrum_cache` (`nnspec_{t}`, line 80), `extra_caches` (`nnperc_`, `nnside_`, lines 96–120), `detector_songs.spec` (`nnspec_wip_`), `detector_channels.flat_cache` (`snare_flat_`, float16), `snare_wip/{t}.npy`, `kick_goal_eval` `features_{name}.npz` (line 217) | exist; all keyed by song name, spectra and flatness stored float16 |
+| Candidates | `eval/detector_cands.py`, `eval/snare_cands.py`, `eval/detector_net.py (family_candidates, line 41)` | exist; recomputed every run |
+| Net | `eval/kick_goal_nn.py (train line 193, predict line 231)`; settings read from env at import (lines 33–56; `EPOCHS` fixed at line 56) | exists; draws per song = median positives; synthetic clips (`synth=`) together get as many draws as the real songs |
+| Held-out nets | `eval/detector_net.py (groups line 87, held_out_nets line 96)`: groups deal all sorted names round-robin; net k seeds `1000*k+seed` | exists |
+| Scoring | `eval/detector_eval.py (fires, choose, held_out line 132, song_result)`; cutoffs skip generated and recall-only songs (line 140) | exists |
+| A/B yardstick | `eval/detector_compare.py` | exists; hardcodes `RECALL_ONLY` (line 19) instead of reading labels |
+| Runners | `eval/snare_net.py` (saves predictions; `--rescore` rebuilds audio and candidates, lines 55–63), `eval/detector_net.py (main)`, `eval/run_kick_goal_fast.py`, `eval/note_clean.py` | four runners, env switches, env-var-tag file names |
+| snare_net dependants | `snare_release.py` (imports `snare_net.AHEAD`, reads `snare_net_s0_snare_past_ms190_snare_flat1.npz`, lines 58–61), `eval/snare_combo.py` (27, 32), `eval/snare_stack.py` (68–70) | exist |
+| Tests | `eval/tests/` (unittest, imports as `eval.*` from `tools/audio_analysis`), e.g. `test_detector_eval.py`, `test_bundles.py` | exist; not run by any gate |
+| GPU lock | `scripts/gpu_queue.py (hold)` | exists |
+
+Not ours: `eval/fixtures.toml` and `additional_stem_sources.json` belong to the MIR fixture harness; the lab neither
+reads nor replaces them.
+
+Genuinely new: the song list with resolved sources, a raw-truth audit, experiment configs, a run store with cached
+candidates, the guards. Everything else is called.
+
+## 2. Decisions
+
+**D1. The lab is a Python package, `tools/audio_analysis/lab/`, that calls `eval/` modules.** Two named edits to
+`eval/` are approved, each keeping today's behaviour bit-identical by default: `kick_goal_nn.train` gains
+`epochs=EPOCHS` and `synth_share=0.5` parameters (D9); `detector_compare` reads recall-only songs from the report
+instead of `RECALL_ONLY`. Nothing else in `eval/` changes. Rejected: re-implementing `train`, `held_out_nets` or the
+scorer inside the lab, because a copy is a second truth that drifts. Rejected: a Rust harness, because the research
+loop is torch and numpy.
+
+**D2. The recipe env is pinned, and the song list records what it resolved to.** `lab/recipe.py` holds `RECIPE_ENV`
+(moved from `snare_release.py`, which imports it) and applies it before any `eval/` import, exiting on a conflicting
+value, exactly as `snare_release.py` does today. `lab/registry.py build` writes `lab/songs.json`: per song `id`,
+`kind` (`project` | `generated`), `source` (resolved audio path or paths, how they combine, section bounds for
+generated songs), `source_sha256` (of each source file's bytes), `offset` and `proof` (D5), and `audit_override`
+(preserved across rebuilds, set only by Peter). `lab/registry.py verify` asserts each song still resolves to the
+recorded paths and hashes. Rejected: no registry at all, because song identity would stay hidden in five env vars.
+
+**D3. Caches extend `eval/bundles.py`'s keying: source-file sha256 plus a stamp.** The stamp names the loader
+version and every setting that changes the artifact (spectrum bands, candidate rule and dB, channels). Artifacts are
+stored as today's dtypes (spectra and flatness float16), so net inputs are byte-identical to the legacy path.
+Generated songs key on the export's sha plus section bounds. Hashing reads source bytes once per run (seconds), never
+the decoded mix. The lab never calls the name-keyed helpers (`spectrum_cache`, `extra_caches`, `detector_songs.spec`,
+`flat_cache`, `pitch_cache`); it calls the pure builders (`spectrum`, `flatness`) through its own cache. Rejected:
+hashing the decoded mix, because it forces a full decode every run.
+
+**D4. The labels schema stays the existing dict; `kind` keeps its values.** `kind` is `project` or `generated`
+(today's values); the exam is `kind == 'project'` and not `positives_only`. Builders add `sources` (positives per
+source: `midi`, `clip_start`, `generated`) and `builder` (module and content hash). Audit results never go into the
+labels file: they live in a sidecar `<labels>.audit.json` keyed by the labels file's sha (D5), so auditing never
+changes the labels sha.
+
+**D5. The audit checks raw known times, not loudness.** Per project song, before any filtering, it records: known
+times found, positives kept, positives dropped as not prominent, the fitted timing shift, and the offset proof. The
+proof is `wip:<detector_wip proof string>` for WIP songs, `goal:<lag source>` for kick-goal songs (the lag file it came
+from), or `none`. A song **fails** when: proof is `none`; or kept / (kept + dropped) is under 0.25 with more than 20
+known times (openings 0 of 1781, midnight_patience 42 of 180); or the timing shift sits at the ±30 ms search edge.
+Generated songs are exempt from the kept-share and shift checks; their audit asserts every MIDI note in the section is
+a label or a vouched negative, counts matching `als_extract`. Failing songs are excluded and listed in every report
+until Peter sets `audit_override`. **Default with trigger:** if more than 3 real snare songs fail on the first run,
+stop and show Peter the table before excluding any. Rejected: an attack-alignment test, because snare positives
+already passed a 9 dB attack test (`prominent`) and would pass by construction, while certain quiet MIDI notes (DnB
+ghost snares) would fail it.
+
+**D6. An experiment is a JSON config file; A/B is two configs.** `lab/experiments/<name>.json`: `family`, `labels`,
+`candidates` (`snare:4.5` or a `detector_net.family_candidates` rule), `net` (`past_ms`, `ahead_ms`, `flat`,
+`epochs`), `sampling` (D9), `train` (`["project"]` or `["project", "generated"]`), `seeds`, `folds` (0 = one net per
+song). Each (config, seed) trains in its own subprocess: `lab/run.py` sets the `KICK_GOAL_NN_*` env from the config,
+imports `eval/`, and asserts the module constants equal the config before training. The run id hashes the config, the
+labels sha, and the contents of every `tools/audio_analysis` module the subprocess imported (from `sys.modules`).
+Uncommitted edits change it. Edits to modules it never imports don't.
+
+**D7. Runs save predictions and candidates; scoring reads only saves.** A run writes
+`~/.cache/manifold/detector-lab/runs/<run_id>/` with `s<seed>.npz` (held-out probabilities per song), `meta.json`
+(config, song order, groups, the songs each net trained on, timings), and per-song candidate arrays (onset, emit,
+avail) in the D3 cache. `lab/score.py RUN_ID` and `lab/compare.py` read only those plus the labels: seconds, no audio,
+no GPU. The legacy 25-minute re-score rebuilt audio and candidates; cached candidates remove exactly that.
+
+**D8. Scoring rules are code, not config.** Exam = `kind == 'project'`, audit-passing songs. Cutoffs are chosen per
+held-out song on the other exam songs (`detector_eval.held_out`, line 140). Generated songs train only and are
+reported in a separate section. Peter, 2026-10-11, on the generated sets: "Train only. The held-out exam stays on real
+songs."
+
+**D9. Sampling is explicit.** `"sampling": {"per_song": "median", "generated_share": 0.5}` reproduces today:
+generated songs are passed to `train` as `synth=` clips, which together get as many draws as the project songs. Other
+shares set `synth_share` (D1's named edit). `per_song` stays `median` in v1; label-proportional draws are the
+label-rich sampling bead's job (`bd show BUG-9ngk8.5`). The policy is printed in every report. `DETECTOR_DRAW_CAP`
+goes when bass and synth move (P5).
+
+**D10. Every run states its finish time from a warm seed.** The runner times the first seed after caches are warm and
+prints the projected finish; the report records actual times. Training holds `gpu_queue.hold('detector-lab')`.
+
+**D11. Migration is proven by input parity and scorer parity, not training parity.** MPS training is not bit
+reproducible, and legacy runs differ between invocations. So: (a) **scorer parity** — `lab/score.py` on a legacy
+`snare_net_s*.npz` reproduces the legacy results JSON exactly (deterministic, CPU); (b) **input parity** — for the same
+config the lab builds `held_out_nets` arguments equal to the legacy runner's: same song order, same groups (generated
+songs included where legacy includes them), same seeds, byte-identical `Song` tensors. Equal inputs into the same
+function is the proof. Training-level agreement is reported, not gated.
+
+**D12. v1 is event detectors.** Curves (modulation depth, envelopes) need Ableton automation, which `als_extract` does
+not read. Deferred with a trigger (section 8 below).
+
+### Consequences, stated honestly
+
+The song list pins absolute Dropbox paths: it is Peter's machine's list. The lab's cache duplicates part of the 7.8 GB
+legacy cache until the kick migrates. The audit's thresholds (0.25 kept share, shift at the search edge) are first
+guesses; the trigger in D5 makes the first run a review with Peter, not a silent exclusion. Kick-goal songs keep their
+legacy audio loader (master or stem sum) behind the recipe env; the lab proves it reads the same bytes, it does not
+re-derive them.
+
+## 3. Data model
+
+```python
+# lab/recipe.py
+RECIPE_ENV: dict[str, str]          # moved from snare_release.py; applied before eval/ imports
+def apply() -> None: ...            # sets env, exits on a conflicting value
+
+# lab/registry.py
+@dataclass(frozen=True)
+class Song:
+    id: str
+    kind: str                        # 'project' | 'generated'
+    source: dict                     # {'paths': [...], 'how': 'goal'|'wip'|'section', 'start_s'?, 'end_s'?}
+    source_sha256: tuple[str, ...]
+    offset_s: float | None
+    proof: str                       # 'wip:...' | 'goal:...' | 'generated' | 'none'
+    audit_override: str | None = None
+
+def load() -> dict[str, Song]: ...
+def mix(song: Song) -> np.ndarray: ...   # the legacy loader's output for 'goal'/'wip'; a section cut for 'generated'
+
+# lab/cache.py  (keying shaped like eval/bundles.py)
+def artifact(song: Song, stamp: dict, build: Callable[[], np.ndarray]) -> np.ndarray: ...
+
+# lab/config.py
+@dataclass(frozen=True)
+class Experiment:
+    name: str; family: str; labels: str; candidates: str
+    net: dict; sampling: dict; train: tuple[str, ...]; seeds: tuple[int, ...]; folds: int
+```
+
+Report JSON: the `write_results` layout (`results.net.per_song`) plus `exam`, `generated`, `excluded`, `recall_only`,
+`sampling`, `timings`, `run_id`. `detector_compare` reads `recall_only` from it.
+
+Commands (one `scripts/dev.py` verb, `detector-lab`):
+
+```
+lab/registry.py build | show [SONG] | verify
+lab/audit.py FAMILY                     # writes <labels>.audit.json, prints the table and failures
+lab/run.py CONFIG.json [--seeds 0,1]    # one subprocess per seed; saves predictions and candidates; prints ETA
+lab/score.py RUN_ID | --legacy NPZ      # seconds; writes report.json
+lab/compare.py CONFIG_A CONFIG_B        # runs what is missing (interleaved seeds), scores both, prints the A/B
+lab/test_lab.py                         # the lab's tests (unittest, run directly)
+```
+
+## 4. Invariants & enforcement
+
+| Invariant | Enforcement |
+|---|---|
+| Cutoffs are chosen only on exam songs | `test_lab.py::test_cutoff_ignores_generated_and_recall_only` |
+| The exam holds only project, audit-passing songs | `run.py` asserts before training; `test_lab.py::test_exam_rejects_generated` |
+| No net predicts a song it trained on | `run.py` asserts train ∩ group = ∅ per net, recorded in `meta.json`; `test_lab.py::test_held_out_disjoint` |
+| A/B compares the same exam songs and labels sha | `compare.py` refuses otherwise; `test_lab.py::test_compare_refuses_mismatch` |
+| Caches key on content, never names | `test_lab.py::test_renamed_song_misses_cache`; gate `rg "spectrum_cache\|extra_caches\|flat_cache\|pitch_cache\|detector_songs.spec\|snare_wip/" tools/audio_analysis/lab` → 0 |
+| The lab scores like the legacy runner | `test_lab.py::test_scorer_parity` (legacy npz → identical per-song results) |
+| The lab feeds training what the legacy runner did | `test_lab.py::test_input_parity` (song order, groups, seeds, tensor bytes) |
+| The recipe env is pinned | `recipe.apply` exits on conflict; `test_lab.py::test_recipe_conflict_exits` |
+| Auditing never changes the labels sha | sidecar file; `test_lab.py::test_audit_keeps_labels_sha` |
+
+## 5. The plausible-wrong turns, by name
+
+- **"Add one more env var to `snare_net.py`."** No. Config fields; the legacy runner is deleted in P4.
+- **"Gate on training parity."** No. MPS is not reproducible; gate on inputs and on the scorer (D11).
+- **"Call `spectrum_cache` or `flat_cache`, they already cache."** By name. Call the builders through the lab cache.
+- **"Store spectra as float32 in the new cache."** No. Net inputs would change; keep today's dtypes.
+- **"Check labels by attack strength."** No. That measures loudness; snare positives pass by construction (D5).
+- **"Lower the audit threshold so a song passes."** No. `audit_override` with Peter's reason.
+- **"Re-implement `train` or `held_out_nets` in the lab."** No. Call them; D1's two named edits are the only ones.
+- **"Write the audit into the labels file."** No. Sidecar (D4).
+
+## 6. Phasing
+
+### P1 — Recipe, song list, content cache, audit (one session)
+
+- **Entry state:** `git -C <slot> log --oneline | rg e775c7068` hits; `rg "def locators" tools/audio_analysis/eval/als_extract.py` hits; `rg "kind'\) != 'generated'" tools/audio_analysis/eval/detector_eval.py` hits.
+- **Read-back:** this doc sections 2–5; `eval/bundles.py`; `snare_release.py` lines 1–40; `eval/kick_goal_eval.py`
+  lines 100–220; `eval/detector_songs.py`; `eval/detector_labels.py (song)`; `eval/snare_generated.py`. Restate D2–D5
+  and the forbidden moves.
+- **Deliverables:** `lab/__init__.py`, `lab/recipe.py` (and `snare_release.py` importing it), `lab/registry.py`,
+  `lab/cache.py`, `lab/audit.py`, `lab/songs.json`, `lab/test_lab.py` with `test_renamed_song_misses_cache`,
+  `test_recipe_conflict_exits`, `test_audit_keeps_labels_sha`; `detector_labels.song`, `snare_generated` write
+  `sources` and `builder`; `dev.py` verb `detector-lab`; `scripts/TOOLS.md` regenerated.
+- **Gate:** `registry.py build` lists 24 project and 20 generated snare songs; `registry.py verify` prints, per song,
+  max abs diff 0 between `registry.mix` and the legacy loader under the recipe env; `audit.py snare` prints the table;
+  `test_lab.py` passes; the section-4 cache rg gate → 0.
+- **Demo:** the audit table, L1. If the D5 trigger fires, the phase ends with the table sent to Peter.
+- **Forbidden:** name-keyed caches; float32 artifacts; editing `kick_fusion_*`; touching kick labels.
+
+### P2 — Run store, scorer, guards, parity (one session)
+
+- **Entry state:** P1 committed; `lab/test_lab.py` green.
+- **Read-back:** `eval/snare_net.py`, `eval/detector_net.py (groups, held_out_nets)`, `eval/kick_goal_nn.py (train,
+  predict)`, `eval/detector_eval.py`, `eval/detector_compare.py`. Restate D6–D11.
+- **Deliverables:** `lab/config.py`, `lab/run.py`, `lab/score.py`, `lab/compare.py`; D1's two named edits;
+  `lab/experiments/snare_base.json` (`snare:4.5`, past 150, ahead 40, flat off, folds 4, median, train project),
+  `snare_generated.json` (same, train project and generated), `snare_release.json` (past 190, flat on, folds 0: the
+  shipped recipe); tests `test_cutoff_ignores_generated_and_recall_only`, `test_exam_rejects_generated`,
+  `test_held_out_disjoint`, `test_compare_refuses_mismatch`, `test_scorer_parity`, `test_input_parity`.
+- **Gate:** `test_lab.py` passes (parity tests run on CPU against the committed legacy files
+  `snare_net_s0_snare_gen*_snare_folds4.npz` copied into `lab/tests/golden/`); one seed of `snare_base` runs end to
+  end and `score.py` on it prints its time, under 30 s.
+- **Demo:** none — L1.
+- **Forbidden:** scoring during training; training-parity gates; adapters around `snare_net.py`.
+
+### P3 — The generated-data A/B on the lab (one session, GPU)
+
+- **Entry state:** P2 committed.
+- **Deliverables:** `compare.py snare_base snare_generated` over seeds 0–4; three sampling variants of
+  `snare_generated` (`generated_share` 0.2, 0.5, and 0.35) compared against `snare_base`; the report files.
+- **Gate:** the reports exist; ETA within 20% of actual for warm seeds.
+- **Demo:** the reports, read by Peter, L2.
+
+### P4 — Snare legacy deleted, how-to (one session)
+
+- **Entry state:** P3 committed.
+- **Deliverables:** `snare_release.py` trains from `snare_release.json` through the lab and reads its cutoff from the
+  lab run; `eval/snare_combo.py` and `eval/snare_stack.py` read lab runs or are deleted (each named in the commit);
+  `eval/snare_net.py` deleted; AUDIO_EVAL_HARNESS_GUIDE.md section 0 (trained detectors) points to the lab;
+  `lab/README.md` (add a song, build labels, audit, run, compare).
+- **Gate:** `rg "snare_net|SNARE_GEN|SNARE_FOLDS" tools/ scripts/` → 0; `snare_release.py train --help` runs.
+- **Demo:** none — L1.
+
+### P5 — Bass and synth (`bd show BUG-ymy4z.1`: drop the 300 cap, train on generated sets)
+
+- **Entry state:** P4 committed.
+- **Deliverables:** generated bass and synth labels from V1 and Rolls (tracks 11–18 bass, 2–9 synth);
+  `note_labels.song` calls `export_groups` like the snare; the D5 audit for note families (kept share uses
+  `note_labels`' presence filter, not attacks); `detector_net.py main` and `DETECTOR_DRAW_CAP` deleted;
+  `lab/experiments/{bass,synth}_base.json` and `_generated.json`.
+- **Gate:** `rg "DETECTOR_DRAW_CAP" tools/audio_analysis` → 0; bass and synth A/B over seeds 0–4 reported.
+
+### P6 — Kick (blocked)
+
+- **Blocking question for Peter:** kick labels are kick-stem attacks found by analysis (`eval/kick_goal_labels.py`),
+  not project notes. Do solo kick-stem attacks count as known times under the label-truth rule? No P6 brief until
+  answered.
+
+## 7. Decided — do not reopen
+
+1. `lab/` calls `eval/`; two named edits to `eval/`, nothing else.
+2. The recipe env is pinned in one module; the song list records resolved sources and their hashes.
+3. Caches key on source bytes plus a stamp (`bundles.py` keying), today's dtypes.
+4. The labels dict is the schema; `kind` stays `project` | `generated`; audit goes in a sidecar.
+5. The audit checks raw known times, kept share, shift and proof; overrides are Peter's.
+6. Experiments are config files; each seed trains in its own subprocess; scoring reads saves.
+7. Exam = project, audit-passing songs; cutoffs on exam songs; generated data trains only.
+8. Parity = inputs and scorer, never training.
+
+## 8. Deferred
+
+| What | Revive when |
+|---|---|
+| Curves (modulation, envelopes) as labels and a curve scorer | `als_extract` reads automation, or Peter asks for an envelope detector |
+| Label-proportional draws (`per_song: "labels"`) | the label-rich sampling bead (`bd show BUG-9ngk8.5`) is picked up |
+| Trees, the blend and the 8 s stage inside the lab | the P6 (kick) brief |
+| Running `eval/tests/` in a gate | a lab test or eval test breaks unnoticed |
+| Retiring the 7.8 GB legacy cache | P6 committed |
