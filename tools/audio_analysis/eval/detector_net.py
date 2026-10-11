@@ -3,7 +3,6 @@ melodic families, and the song groups and held-out training loop around kick_goa
 
 Candidates: 'rise:DB' (the family band's energy rises DB over the last 4 hops' minimum) or 'change:DB' (net bands in
 the family range rise DB over their own last-20 ms mean; detector_cands.spectral_rise), or 'union:RISE:CHANGE'."""
-import time
 
 import numpy as np
 
@@ -49,22 +48,3 @@ def net_groups(songs, folds, untrained=()):
     if folds or not untrained:
         return groups(songs, folds)
     return groups([t for t in songs if t not in untrained], 0) + [[t for t in songs if t in untrained]]
-
-
-def held_out_nets(lab, data, seed, clips=(), log=print, folds=0, untrained=(), train_kw=None, record=None):
-    """{song: held-out probabilities}: per song group (net_groups), a net trained on every other song (and the clips
-    not blocked for any song in the group). Songs in untrained are scored but never trained on. train_kw goes to
-    kick_goal_nn.train; record, when given, gets each net's group, trained songs and clips."""
-    from tools.audio_analysis.eval.kick_goal_nn import predict, train
-    held = {}
-    for k, grp in enumerate(net_groups(list(lab), folds, untrained)):
-        t0 = time.time()
-        songs = [u for u in lab if u not in grp and u not in untrained]
-        used = [c for c in clips if not set(grp) & c.blocked]
-        net = train([data[u] for u in songs], 1000 * k + seed, used, **(train_kw or {}))
-        for t in grp:
-            held[t] = predict(net, data[t])
-        if record is not None:
-            record.append(dict(group=grp, trained=songs, clips=[c.name for c in used], seconds=round(time.time() - t0, 1)))
-        log(f'net without {", ".join(grp)}: {time.time() - t0:.0f} s')
-    return held

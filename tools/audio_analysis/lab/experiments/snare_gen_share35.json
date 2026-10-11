@@ -1,2 +1,30 @@
-{"family": "snare", "candidates": "snare:4.5", "net": {"past_ms": 150, "ahead_ms": 40, "flat": false, "epochs": 12},
- "sampling": {"per_song": "median", "generated": 0.35}, "train": ["project", "generated"], "seeds": [0, 1, 2, 3, 4], "folds": 4}
+{
+ "family": "snare",
+ "candidates": "snare:4.5",
+ "models": {
+  "net": {
+   "past_ms": 150,
+   "ahead_ms": 40,
+   "channels": [],
+   "epochs": 12
+  }
+ },
+ "combine": "net",
+ "stage": null,
+ "sampling": {
+  "per_song": "median",
+  "generated": 0.35
+ },
+ "train": [
+  "project",
+  "generated"
+ ],
+ "seeds": [
+  0,
+  1,
+  2,
+  3,
+  4
+ ],
+ "folds": 4
+}

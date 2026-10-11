@@ -169,9 +169,9 @@ class Song:
 class Net(nn.Module):
     """Three 3x3 conv layers; time is max-pooled into TBINS bins at the end, frequency position is kept."""
 
-    def __init__(self):
+    def __init__(self, channels=CHANNELS):
         super().__init__()
-        self.conv = nn.Sequential(nn.Conv2d(CHANNELS, 16, 3, padding=1), nn.ReLU(), nn.MaxPool2d(2),
+        self.conv = nn.Sequential(nn.Conv2d(channels, 16, 3, padding=1), nn.ReLU(), nn.MaxPool2d(2),
                                   nn.Conv2d(16, 32, 3, padding=1), nn.ReLU(), nn.MaxPool2d(2),
                                   nn.Conv2d(32, 32, 3, padding=1), nn.ReLU())
         self.pool = nn.AdaptiveMaxPool2d((BANDS // 4, TBINS))
@@ -194,7 +194,7 @@ def train(songs, seed, synth=(), epochs=EPOCHS, synth_share=0.5):
     rng = np.random.default_rng(seed)
     torch.manual_seed(seed)
     dev = device()
-    net = Net().to(dev)
+    net = Net(2 + len(songs[0].extra)).to(dev)
     opt = torch.optim.AdamW(net.parameters(), lr=LR, weight_decay=1e-4)
     rows = [(s, np.flatnonzero(s.mask & (s.y == 1)), np.flatnonzero(s.mask & (s.y == 0))) for s in list(songs) + list(synth)]
     per_song = max(1, int(np.median([len(p) for _, p, _ in rows[:len(songs)]])))

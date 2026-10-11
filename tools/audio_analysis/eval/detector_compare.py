@@ -4,6 +4,8 @@
 Reads per-song results JSONs: the kick fast loop's (run_kick_goal_fast.py, key 'blend' by default; 'blend+stage' only
 to confirm, it doubles the seed noise) or a family's (detector_eval.write_results, key 'net'). Only songs both sides
 scored count. Prints:
+- the headline: the pooled F1 difference with a 90% interval from a paired bootstrap over songs (songs are the
+  sample that decides whether a change holds on new music);
 - pooled F1 per seed, each side's mean, and the difference with its standard error (seeds are independent draws);
 - per song, the hits and false fires each side averages over seeds; a sign test over songs on per-song F1;
 - songs losing at least LOSS_HITS hits on average among songs with at least LOSS_LABELS labels (the per-song bar;
@@ -19,6 +21,7 @@ from pathlib import Path
 # The kick fast loop's recall-only songs; a lab report carries its own (its 'recall_only' key).
 RECALL_ONLY = ('default_haze', 'lowkey', 'overwhelming_force')
 LOSS_HITS, LOSS_LABELS = 5, 30
+DRAWS = 4000
 
 
 def per_song(path, key):
@@ -69,10 +72,32 @@ def timing(side, songs, recall_only=RECALL_ONLY):
     return f' | {false / mins:.2f} false per minute | late median {q(.5):.0f} ms, p90 {q(.9):.0f} ms'
 
 
+def song_bootstrap(sides, songs, recall_only=RECALL_ONLY, draws=DRAWS):
+    """(pooled F1 difference B - A, 5th and 95th percentile) over songs drawn with replacement, both sides on the
+    same draw; per-song hits and false fires are averaged over seeds first."""
+    import numpy as np
+    n = np.array([sides[0][0][t]['labels'] for t in songs], float)
+    m = [np.array([sum(ps[t]['matched'] for ps in side) / len(side) for t in songs]) for side in sides]
+    f = [np.array([0.0 if t in recall_only else sum(ps[t]['extra'] for ps in side) / len(side) for t in songs])
+         for side in sides]
+    pick = np.random.default_rng(0).integers(0, len(songs), (draws, len(songs)))
+    w = np.stack([np.bincount(row, minlength=len(songs)) for row in pick]).astype(float)
+
+    def f1(mm, ff, ww):
+        hit, lab, false = ww @ mm, ww @ n, ww @ ff
+        r, p = hit / np.maximum(1, lab), hit / np.maximum(1e-9, hit + false)
+        return 2 * r * p / np.maximum(1e-9, r + p)
+    one = np.ones(len(songs))
+    d = f1(m[1], f[1], w) - f1(m[0], f[0], w)
+    return float(f1(m[1], f[1], one) - f1(m[0], f[0], one)), float(np.percentile(d, 5)), float(np.percentile(d, 95))
+
+
 def compare(sides, recall_only=RECALL_ONLY, out=print):
     """The A/B over sides = [A per-song dicts by seed, B per-song dicts by seed], on the songs every run scored.
     Returns the numbers it prints."""
     songs = sorted(set.intersection(*[set(ps) for side in sides for ps in side]))
+    boot = song_bootstrap(sides, songs, recall_only)
+    out(f'B - A over songs: {100 * boot[0]:+.2f} F1 points, 90% interval {100 * boot[1]:+.2f} to {100 * boot[2]:+.2f}')
     stats = []
     for name, side in zip('AB', sides):
         f1 = [pooled(ps, songs, recall_only)[2] for ps in side]
@@ -80,7 +105,7 @@ def compare(sides, recall_only=RECALL_ONLY, out=print):
         out(f'{name}: F1 ' + ' '.join(f'{v:.4f}' for v in f1) + f' | mean {stats[-1][0]:.4f} ± {stats[-1][1]:.4f}'
             + timing(side, songs, recall_only) + f' | {len(songs)} songs')
     diff, se = stats[1][0] - stats[0][0], math.hypot(stats[0][1], stats[1][1])
-    out(f'B - A: {100 * diff:+.2f} ± {100 * se:.2f} F1 points')
+    out(f'B - A over seeds: {100 * diff:+.2f} ± {100 * se:.2f} F1 points')
     rows = []
     for t in songs:
         ma, fa, f1a = song_f1(sides[0], t, recall_only)
@@ -94,7 +119,8 @@ def compare(sides, recall_only=RECALL_ONLY, out=print):
         + ', '.join(f'{t} {dm:+.1f} hits {df:+.1f} false ({n})' for dm, df, _, t, n in rows[:8]))
     lost = [t for dm, _, _, t, n in rows if dm <= -LOSS_HITS and n >= LOSS_LABELS]
     out(f'songs losing {LOSS_HITS}+ hits (of {LOSS_LABELS}+ labels): {lost}')
-    return dict(songs=songs, a=stats[0], b=stats[1], diff=diff, se=se, better=up, worse=down, lost=lost)
+    return dict(songs=songs, a=stats[0], b=stats[1], diff=diff, se=se, interval=boot[1:], better=up, worse=down,
+                lost=lost)
 
 
 def main():

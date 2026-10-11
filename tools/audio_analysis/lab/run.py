@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-"""Runs an experiment (docs/DETECTOR_LAB_DESIGN.md D6, D7, D10): each seed trains in its own process under the
-config's net env, saves held-out probabilities per song, and never scores. The run id hashes the config, the labels
+"""Runs an experiment (docs/DETECTOR_LAB_DESIGN.md D6, D7, D10, P6): each seed trains in its own process under the
+config's net env, saves held-out probabilities per song and layer (each model, then the combined), and never scores.
+With song groups it also trains the pair models that choose each group's cutoff (lab/models.py plan). The run id hashes the config, the labels
 and every tools/audio_analysis module the process imported, so an edit to the code that ran is a new run. Seeds
 already saved are skipped. Prints the finish time after each seed.
 
@@ -18,6 +19,7 @@ ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT))
 TOOLS = ROOT / 'tools' / 'audio_analysis'
 RUNS = Path.home() / '.cache/manifold/detector-lab/runs'
+META_SCHEMA = 2
 
 
 def imports():
@@ -34,7 +36,22 @@ def imports():
     import tools.audio_analysis.eval.snare_cands  # noqa: F401
     import tools.audio_analysis.lab.cache  # noqa: F401
     import tools.audio_analysis.lab.components  # noqa: F401
+    import tools.audio_analysis.lab.models  # noqa: F401
     import tools.audio_analysis.lab.registry  # noqa: F401
+
+
+def parts(cfg):
+    """The code of every part the config names: the finder, each measure's closure. Computing it imports the parts'
+    modules, so a run's module list is the same whether or not the cache is warm."""
+    from tools.audio_analysis.lab import components
+    from tools.audio_analysis.lab.cache import code_id
+    finder = components.FINDERS[cfg.candidates.split(':')[0]](cfg.candidates, None, cfg.family)[0]
+    out = dict(finder=finder)
+    if cfg.net:
+        out['frames'] = {m: code_id(components.FRAME_MEASURES[m]) for m in cfg.net['channels']}
+    if 'trees' in cfg.models:
+        out['measures'] = {m: code_id(components.MEASURES[m]) for m in cfg.models['trees']['measures']}
+    return out
 
 
 def check_net(cfg):
@@ -42,20 +59,25 @@ def check_net(cfg):
     from tools.audio_analysis.eval import kick_goal_nn as nn
     got = dict(past_ms=nn.PAST_MS, perc=nn.PERC_ON, bands=nn.BANDS, stereo=nn.STEREO_ON, flat=nn.FLAT_ON,
                ahead=nn.AHEAD_MS)
-    want = dict(past_ms=cfg.net['past_ms'], perc=bool(cfg.net['flat']), bands=64, stereo=False, flat=False, ahead=0)
+    want = dict(past_ms=cfg.net['past_ms'] if cfg.net else 150, perc=False, bands=64, stereo=False, flat=False, ahead=0)
     if got != want:
         sys.exit(f'kick_goal_nn read {got}, the config wants {want}: was it imported before the recipe applied?')
 
 
 def labels(family):
-    """(labels in the legacy order: project files, then generated; sha256 over the files)."""
+    """(labels in the legacy order: project files, then generated; sha256 over the files). A song in two files is
+    an error."""
     from tools.audio_analysis.eval.kick_goal_eval import GOAL
     from tools.audio_analysis.lab.registry import FAMILIES
     lab, h = {}, hashlib.sha256()
     for f in FAMILIES[family]:
         b = (GOAL / f).read_bytes()
         h.update(b)
-        lab.update(json.loads(b))
+        d = json.loads(b)
+        twice = sorted(set(d) & set(lab))
+        if twice:
+            raise ValueError(f'{family}: songs in two labels files: {twice}')
+        lab.update(d)
     return lab, h.hexdigest()
 
 
@@ -80,29 +102,9 @@ def check_exam(exam, songs, failed=()):
         raise ValueError(f'not exam songs (generated or audit-failing): {bad}')
 
 
-def plan(cfg, lab, songs):
-    """(nets: each its held-out group, trained songs and clips; untrained songs). Mirrors detector_net.held_out_nets,
-    which records what it really did; the child compares the two."""
-    from tools.audio_analysis.eval.detector_net import net_groups
-    gen = [t for t in lab if songs[t].kind == 'generated']
-    untrained = set(gen) if cfg.train == ('project',) or cfg.generated_as_clips() else set()
-    clips = gen if cfg.generated_as_clips() else []
-    nets = [dict(group=g, trained=[u for u in lab if u not in g and u not in untrained],
-                 clips=[c for c in clips if c not in g]) for g in net_groups(list(lab), cfg.folds, untrained)]
-    return nets, untrained
-
-
-def check_disjoint(nets):
-    """No net predicts a song it trained on."""
-    for n in nets:
-        seen = set(n['group']) & (set(n['trained']) | set(n['clips']))
-        if seen:
-            raise ValueError(f'net holding out {n["group"]} trained on {sorted(seen)}')
-
-
 def setup(cfg):
     """The run's labels, songs and plan under the pinned recipe; returns everything the run id and the child need."""
-    from tools.audio_analysis.lab import recipe
+    from tools.audio_analysis.lab import models, recipe
     recipe.apply(cfg.net_env())
     imports()
     check_net(cfg)
@@ -116,32 +118,36 @@ def setup(cfg):
             sys.exit(f'{t}: labels and song list disagree on its kind; rebuild with lab/registry.py build')
     exam = [t for t in lab if songs[t].kind == 'project']
     check_exam(exam, songs, failed)
-    nets, untrained = plan(cfg, lab, songs)
-    check_disjoint(nets)
+    grps, trainings, _ = models.plan(cfg, lab, songs)
+    models.check_disjoint(trainings)
+    used = parts(cfg)
     mods = sorted((m.__name__, hashlib.sha256(Path(m.__file__).read_bytes()).hexdigest())
                   for m in list(sys.modules.values())
                   if getattr(m, '__file__', None) and Path(m.__file__).resolve().is_relative_to(TOOLS))
-    key = json.dumps(dict(config=cfg.key(), labels=sha, modules=mods), sort_keys=True)
+    key = json.dumps(dict(config=cfg.key(), labels=sha, modules=mods, parts=used), sort_keys=True)
     run_id = f'{cfg.family}-{hashlib.sha256(key.encode()).hexdigest()[:12]}'
-    meta = dict(run_id=run_id, config=cfg.key(), names=[cfg.name], labels_sha256=sha, songs=list(lab), exam=exam,
-                generated=[t for t in lab if t not in exam], excluded=failed,
-                recall_only=[t for t in exam if lab[t]['positives_only']], nets=nets, modules=mods)
+    meta = dict(schema=META_SCHEMA, run_id=run_id, config=cfg.key(), names=[cfg.name], labels_sha256=sha,
+                songs=list(lab), exam=exam, generated=[t for t in lab if t not in exam], excluded=failed,
+                recall_only=[t for t in exam if lab[t]['positives_only']], groups=grps, trainings=trainings,
+                layers=[*sorted(cfg.models), *(['combined'] if models.final_layer(cfg) == 'combined' else [])],
+                final=models.final_layer(cfg), modules=mods, parts=used)
     return lab, songs, meta
 
 
 def build(cfg, lab, songs, dev, log=print):
-    """{song: kick_goal_nn.Song} from the cache: the retired snare runner's inputs, byte for byte (test_input_parity)."""
+    """{song: kick_goal_nn.Song} for the net from the cache: the retired snare runner's inputs, byte for byte
+    (test_input_parity). Frame measures are extra channels."""
     from tools.audio_analysis.eval.detector_eval import rows
     from tools.audio_analysis.eval.kick_goal_nn import Song
     from tools.audio_analysis.lab import cache, components
-    ahead = cfg.net['ahead_ms'] / 1000
+    ahead = cfg.ahead_s
     data = {}
     for t, s in lab.items():
         song = songs[t]
         c = components.candidates(song, cfg.candidates, cfg.family)
         cand, onset, emit = c.cand, c.onset_s, c.emit_s
         mask, y, hard = rows(s, onset)
-        extra = (cache.flatness(song),) if cfg.net['flat'] else ()
+        extra = tuple(components.frame(song, m) for m in cfg.net['channels'])
         data[t] = Song(cache.spectrum(song), onset, emit + ahead, mask, y, t, hard, extra).to(dev)
         if song.kind == 'generated':
             data[t].blocked = {t}
@@ -149,35 +155,85 @@ def build(cfg, lab, songs, dev, log=print):
     return data
 
 
+def tree_rows(cfg, lab, songs):
+    """{song: (all measures (n, k), training rows (x, y, hard))} for the trees, from the cache."""
+    import numpy as np
+    from tools.audio_analysis.eval.detector_eval import rows
+    from tools.audio_analysis.lab import components
+    out = {}
+    for t, s in lab.items():
+        song = songs[t]
+        c = components.candidates(song, cfg.candidates, cfg.family)
+        x = np.hstack([components.measure(song, cfg.candidates, cfg.family, m) for m in cfg.models['trees']['measures']])
+        if len(x) != len(c.cand):
+            raise ValueError(f'{t}: measures have {len(x)} rows for {len(c.cand)} candidates')
+        mask, y, hard = rows(s, c.onset_s)
+        out[t] = (x, (x[mask], y[mask], hard[mask]))
+    return out
+
+
+def train_layers(cfg, lab, songs, seed, data, trees, log=print):
+    """({save key: probabilities}, record). Training i of the plan uses random state 1000 * i + seed, so the outer
+    nets match the retired runner's."""
+    from tools.audio_analysis.eval.kick_goal_nn import predict, train
+    from tools.audio_analysis.lab import models
+    grps, trainings, _ = models.plan(cfg, lab, songs)
+    share = cfg.sampling['generated'] if cfg.generated_as_clips() else None
+    kw = dict(epochs=cfg.net['epochs']) if cfg.net else {}
+    if share is not None:
+        kw['synth_share'] = share
+    layers, record = [{} for _ in trainings], []
+    for i, n in enumerate(trainings):
+        rec = dict(n, seconds={})
+        if cfg.net:
+            t0 = time.time()
+            net = train([data[u] for u in n['trained']], 1000 * i + seed, [data[c] for c in n['clips']], **kw)
+            layers[i]['net'] = {t: predict(net, data[t]) for t in n['held']}
+            rec['seconds']['net'] = round(time.time() - t0, 1)
+        if trees is not None:
+            t0 = time.time()
+            fit = models.fit_trees(cfg.models['trees'], [(*trees[u][1], u in n['clips']) for u in n['trained'] + n['clips']],
+                                   1000 * i + seed, share)
+            layers[i]['trees'] = {t: fit.predict_proba(trees[t][0])[:, 1] for t in n['held']}
+            rec['seconds']['trees'] = round(time.time() - t0, 1)
+        if models.final_layer(cfg) == 'combined':
+            layers[i]['combined'] = {t: models.combine(cfg.combine, {m: layers[i][m][t] for m in cfg.models})
+                                     for t in n['held']}
+        record.append(rec)
+        log(f'without groups {n["without"]}: {rec["seconds"]}')
+    held = {}
+    for n, lay in zip(trainings, layers):
+        for t, prefix in models.save_keys(grps, n).items():
+            for name, probs in lay.items():
+                held[f'{prefix}__{name}__{t}' if prefix else f'{name}__{t}'] = probs
+    return held, record
+
+
 def child(cfg, seed, run_id):
     lab, songs, meta = setup(cfg)
     if meta['run_id'] != run_id:
         sys.exit(f'run id {meta["run_id"]} is not the planned {run_id}: code or labels changed mid-run')
     sys.path.insert(0, str(ROOT / 'scripts'))
+    import contextlib
+
     import gpu_queue
-    from tools.audio_analysis.eval.detector_net import held_out_nets
+    import numpy as np
     from tools.audio_analysis.eval.kick_goal_nn import device
     out = RUNS / run_id
     out.mkdir(parents=True, exist_ok=True)
     t0 = time.time()
     dev = device()
-    data = build(cfg, lab, songs, dev, log=lambda m: None)
-    import numpy as np
-    nets, untrained = plan(cfg, lab, songs)
-    clips = [data[t] for t in meta['generated']] if cfg.generated_as_clips() else []
-    kw = dict(epochs=cfg.net['epochs'])
-    if cfg.generated_as_clips():
-        kw['synth_share'] = cfg.sampling['generated']
+    data = build(cfg, lab, songs, dev, log=lambda m: None) if cfg.net else None
+    trees = tree_rows(cfg, lab, songs) if 'trees' in cfg.models else None
     built = time.time()
-    record = []
-    with gpu_queue.hold('detector-lab'):
-        held = held_out_nets(lab, data, seed, clips, log=lambda m: print(m, flush=True), folds=cfg.folds,
-                             untrained=untrained, train_kw=kw, record=record)
-    if [(r['group'], r['trained'], r['clips']) for r in record] != [(n['group'], n['trained'], n['clips']) for n in nets]:
-        sys.exit('the nets trained differ from the plan; nothing saved')
+    with gpu_queue.hold('detector-lab') if cfg.net else contextlib.nullcontext():
+        held, record = train_layers(cfg, lab, songs, seed, data, trees, log=lambda m: print(m, flush=True))
+    keys = ('without', 'held', 'trained', 'clips')
+    if [{k: r[k] for k in keys} for r in record] != [{k: n[k] for k in keys} for n in meta['trainings']]:
+        sys.exit('the models trained differ from the plan; nothing saved')
     np.savez(out / f's{seed}.npz', **held)
     (out / f's{seed}.json').write_text(json.dumps(dict(seed=seed, device=str(dev), build_s=round(built - t0, 1),
-                                                       train_s=round(time.time() - built, 1), nets=record), indent=1))
+                                                       train_s=round(time.time() - built, 1), trainings=record), indent=1))
     meta_path = out / 'meta.json'
     if meta_path.exists():
         old = json.loads(meta_path.read_text())
@@ -186,15 +242,19 @@ def child(cfg, seed, run_id):
 
 
 def warm(cfg):
-    """Builds every cached input a seed reads (candidates, spectra, noisiness), so seed timings are warm."""
+    """Builds every cached input a seed reads (candidates, spectra, frame and event measures), so seed timings are
+    warm."""
     from tools.audio_analysis.lab import cache, components
     lab, songs, _ = setup(cfg)
     for t in lab:
         t0 = time.time()
         components.candidates(songs[t], cfg.candidates, cfg.family)
-        cache.spectrum(songs[t])
-        if cfg.net['flat']:
-            cache.flatness(songs[t])
+        if cfg.net:
+            cache.spectrum(songs[t])
+            for m in cfg.net['channels']:
+                components.frame(songs[t], m)
+        for m in cfg.models.get('trees', {}).get('measures', ()):
+            components.measure(songs[t], cfg.candidates, cfg.family, m)
         print(f'{t}: {time.time() - t0:.1f} s', flush=True)
 
 

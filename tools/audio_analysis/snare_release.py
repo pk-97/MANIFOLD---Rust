@@ -46,7 +46,10 @@ from tools.audio_analysis.eval.kick_goal_eval import GOAL  # noqa: E402
 from tools.audio_analysis.eval.snare_cands import DEADLINE, HOP, LOOKBACK, REFRACTORY, candidates  # noqa: E402
 from tools.audio_analysis.eval.detector_eval import REFR, choose, fires  # noqa: E402
 
-AHEAD = CFG.net['ahead_ms'] / 1000
+if set(CFG.models) != {'net'} or CFG.models['net']['channels'] != ['flat']:
+    sys.exit("the app's snare detector runs one net with the 'flat' channel; snare_release must configure exactly that")
+AHEAD = CFG.models['net']['ahead_ms'] / 1000
+CHANNELS = 2 + len(CFG.models['net']['channels'])  # spectrum shape and novelty, then the frame measures
 FINAL = GOAL / 'snare_final' / 'final.pkl'
 RECIPE_VERSION = 1
 SR = 48000
@@ -82,7 +85,8 @@ def train():
     if not held_path.exists():
         raise SystemExit(f'no held-out run for this code and labels; run lab/run.py snare_release --seeds 0 first')
     exam = meta['exam']
-    held = dict(np.load(held_path))
+    with np.load(held_path) as z:
+        held = {t: z[f'net__{t}'] for t in exam if f'net__{t}' in z.files}
     if not set(exam) <= set(held):
         raise SystemExit(f'{held_path} lacks exam songs {sorted(set(exam) - set(held))}')
     items = []
@@ -92,11 +96,11 @@ def train():
             items.append((lab[u], c.emit_s, held[u], c.avail, c.sr))
     cutoff = choose(items)
     data = run.build(CFG, {t: lab[t] for t in exam}, songs, nnm.device(), log=lambda m: None)
-    net = nnm.train([data[t] for t in exam], 0, epochs=CFG.net['epochs'])
+    net = nnm.train([data[t] for t in exam], 0, epochs=CFG.models['net']['epochs'])
     train_id = f'snare-{datetime.date.today().isoformat()}-{git_id()}'
     final = dict(train_id=train_id, cutoff=float(cutoff), refractory_s=REFR, songs=sorted(exam), held_out_run=run_id,
                  net=dict(state_dict={k: v.detach().cpu().numpy().astype(np.float32) for k, v in net.state_dict().items()},
-                          bands=nnm.BANDS, past_ms=nnm.PAST_MS, ahead_ms=round(AHEAD * 1000), channels=nnm.CHANNELS))
+                          bands=nnm.BANDS, past_ms=nnm.PAST_MS, ahead_ms=round(AHEAD * 1000), channels=CHANNELS))
     FINAL.parent.mkdir(parents=True, exist_ok=True)
     with open(FINAL, 'wb') as fh:
         pickle.dump(final, fh)
@@ -108,8 +112,8 @@ def train():
 def net_module(final):
     import torch
     n = final['net']
-    assert (n['bands'], n['past_ms'], n['channels']) == (nnm.BANDS, nnm.PAST_MS, nnm.CHANNELS), 'net input settings differ'
-    net = nnm.Net()
+    assert (n['bands'], n['past_ms'], n['channels']) == (nnm.BANDS, nnm.PAST_MS, CHANNELS), 'net input settings differ'
+    net = nnm.Net(CHANNELS)
     net.load_state_dict({k: torch.from_numpy(np.asarray(v, np.float32)) for k, v in n['state_dict'].items()})
     return net.eval()
 
@@ -213,7 +217,7 @@ def model_entries(final):
         'net.frame_hop': np.array(frame_hop, i64),
         'net.slice': np.array(nnm.SLICE, i64),
         'net.tbins': np.array(nnm.TBINS, i64),
-        'net.channels': np.array(nnm.CHANNELS, i64),
+        'net.channels': np.array(CHANNELS, i64),
         'net.pre_s': np.array(nnm.PRE_S, f64),
         'net.span': np.array(int(nnm.PRE_S / nnm.FRAME_S), i64),
         'net.ahead_s': np.array(AHEAD, f64),

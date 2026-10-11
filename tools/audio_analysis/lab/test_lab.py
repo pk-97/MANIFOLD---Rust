@@ -16,7 +16,7 @@ recipe.apply(BASE.net_env())
 
 import numpy as np  # noqa: E402
 
-from tools.audio_analysis.lab import audit, cache, compare, run, score  # noqa: E402
+from tools.audio_analysis.lab import audit, cache, compare, models, run, score  # noqa: E402
 from tools.audio_analysis.lab.registry import Song, load, sha256_file  # noqa: E402
 
 GOLDEN = Path(__file__).with_name('tests') / 'golden' / 'legacy_snare_folds4_s0'
@@ -88,6 +88,150 @@ class LabTests(unittest.TestCase):
         # The same change to an exam song does move them: the test can fail.
         self.assertNotEqual(before, cutoffs({**held, 'c': rng.uniform(0, 1, 300) ** 4}))
 
+    def test_pool_matches_leave_one_out(self):
+        """A pool holding every other song's own prediction picks the cutoffs the plain leave-one-out rule does, and a
+        pool that differs moves them: the pool path is the rule, not a copy of it."""
+        from tools.audio_analysis.eval.detector_eval import held_out
+        rng = np.random.default_rng(1)
+        lab, meta, held = {}, {}, {}
+        for t in 'abcde':
+            pos = np.sort(rng.uniform(1, 59, 40))
+            avail = np.sort(rng.integers(100, 11000, 300))
+            lab[t] = dict(positives=list(pos), hard_neg=[], unscored=[], loop_spans=[], duration_s=60.0,
+                          positives_only=False)
+            meta[t] = (lab[t], (avail + 1) * 256 / 48000, avail, 48000)
+            held[t] = rng.uniform(0, 1, 300)
+
+        def cutoffs(pool):
+            cut = {}
+            held_out(lab, meta, held, log=None, cutoffs=cut, pool=pool)
+            return cut
+        loo = {t: {u: held[u] for u in held if u != t} for t in held}
+        self.assertEqual(cutoffs(None), cutoffs(loo))
+        skew = {t: {u: p ** 4 for u, p in d.items()} for t, d in loo.items()}
+        self.assertNotEqual(cutoffs(None), cutoffs(skew))
+
+    def test_layer_saves_and_pools(self):
+        """Saves read back per layer; group k's pool is the pair predictions made without k, one per other song."""
+        cfg = config.build('x', dict(family='snare', candidates='snare:4.5', models=dict(trees=dict(
+            measures=['tail3'], max_iter=10, learning_rate=.1, max_leaf_nodes=7, min_samples_leaf=5, l2=1.0)),
+            combine='trees', stage=None, sampling=dict(per_song='median'), train=['project'], seeds=[0], folds=3))
+        lab = {t: {} for t in 'abcdef'}
+        songs = {t: type('S', (), dict(kind='project'))() for t in lab}
+        grps, trainings, _ = models.plan(cfg, lab, songs)
+        z = {}
+        for i, n in enumerate(trainings):
+            for t, pre in models.save_keys(grps, n).items():
+                z[f'{pre}__trees__{t}' if pre else f'trees__{t}'] = np.array([float(i)])
+        meta = dict(schema=2, songs=list(lab), groups=grps, trainings=trainings)
+        held, pool = score.layer_of(meta, z, 'trees')
+        for k, g in enumerate(grps):
+            for t in g:
+                self.assertEqual(float(held[t][0]), float(k))
+                self.assertEqual(sorted(pool[t]), sorted(u for u in lab if u not in g))
+                for u, v in pool[t].items():
+                    n = trainings[int(v[0])]
+                    self.assertEqual(sorted(n['without']), sorted({k, next(j for j, h in enumerate(grps) if u in h)}))
+            self.assertTrue(all(pool[t] is pool[g[0]] for t in g))
+
+    def test_config_schema(self):
+        """Schema 1 configs migrate; typos, a combine that does not match the models, unknown parts and a stage are
+        refused."""
+        old = dict(family='snare', candidates='snare:4.5', net=dict(past_ms=190, ahead_ms=40, flat=True, epochs=12),
+                   sampling=dict(per_song='median'), train=['project'], seeds=[0], folds=4)
+        cfg = config.build('old', old)
+        self.assertEqual(cfg.models, dict(net=dict(past_ms=190, ahead_ms=40, channels=['flat'], epochs=12)))
+        self.assertEqual((cfg.combine, cfg.stage, cfg.ahead_s), ('net', None, .04))
+        good = config.migrate(old)
+        trees = dict(measures=['tail3'], max_iter=10, learning_rate=.1, max_leaf_nodes=7, min_samples_leaf=5, l2=1.0)
+        config.build('both', dict(good, models=dict(good['models'], trees=trees), combine='mean_logit'))
+        for bad in (dict(good, extra=1), dict(good, combine='trees'),
+                    dict(good, models=dict(good['models'], trees=trees)),
+                    dict(good, models=dict(trees=dict(trees, measures=['nope'])), combine='trees'),
+                    dict(good, models=dict(net=dict(good['models']['net'], channels=['nope']))),
+                    dict(good, stage=dict(window_s=8))):
+            with self.assertRaises(ValueError):
+                config.build('bad', bad)
+
+    def test_code_id_follows_closure(self):
+        """A builder's cache key changes with its source, the constants it reads and the helpers it calls, and not
+        with unrelated code in the same module."""
+        import importlib.util
+        import linecache
+        src = """C = {c}
+OTHER = {o}
+
+
+def helper(x):
+    return x + C
+
+
+def unrelated():
+    return OTHER
+
+
+def builder(x):
+    return helper(x) * {k}
+"""
+        name = 'tools.audio_analysis.lab._closure_probe'
+
+        def ident(c, o, k):
+            with tempfile.TemporaryDirectory() as d:
+                f = Path(d) / '_closure_probe.py'
+                f.write_text(src.format(c=c, o=o, k=k))
+                linecache.clearcache()
+                spec = importlib.util.spec_from_file_location(name, f)
+                mod = importlib.util.module_from_spec(spec)
+                sys.modules[name] = mod
+                try:
+                    spec.loader.exec_module(mod)
+                    return cache.code_id(mod.builder)
+                finally:
+                    del sys.modules[name]
+        base = ident(1, 1, 2)
+        self.assertEqual(base, ident(1, 5, 2))
+        self.assertNotEqual(base, ident(2, 1, 2))
+        self.assertNotEqual(base, ident(1, 1, 3))
+
+    def test_tree_weights_and_fit_match_kick_loop(self):
+        """The trees part weighs rows as the kick fast loop's training_set and fits the same model: equal
+        predictions on the same rows."""
+        from sklearn.ensemble import HistGradientBoostingClassifier
+
+        from tools.audio_analysis.eval.kick_goal_eval import training_set
+        rng = np.random.default_rng(2)
+        records, rows_ = {}, []
+        for k in range(5):
+            n = 400
+            x = rng.normal(size=(n, 6))
+            y = (x[:, 0] + rng.normal(size=n) > 1).astype(float)
+            hard = (y == 0) & (rng.uniform(size=n) < .1)
+            mask = rng.uniform(size=n) < .9
+            only = k == 4
+            records[f's{k}'] = dict(training_mask=mask, labels=y, hard_neg=hard, features=x, positives_only=only)
+            m = mask & (y == 1) if only else mask
+            rows_.append((x[m], y[m], hard[m], False))
+        p = dict(max_iter=50, learning_rate=.05, max_leaf_nodes=15, min_samples_leaf=40, l2=1.0)
+        mine = models.fit_trees(p, rows_, 7)
+        g = type('G', (), dict(records=records))()
+        x, y, w = training_set(g, list(records))
+        theirs = HistGradientBoostingClassifier(max_iter=50, learning_rate=.05, max_leaf_nodes=15, min_samples_leaf=40,
+                                                l2_regularization=1.0, random_state=7).fit(x, y, sample_weight=w * len(y))
+        probe = rng.normal(size=(200, 6))
+        np.testing.assert_array_equal(mine.predict_proba(probe), theirs.predict_proba(probe))
+        # A share makes clip songs together weigh share of everything.
+        ws = models.weights([r[1] for r in rows_], [r[2] for r in rows_], [False, False, False, True, True], .25)
+        clip = ws[3].sum() + ws[4].sum()
+        self.assertAlmostEqual(clip / (clip + sum(v.sum() for v in ws[:3])), .25)
+
+    def test_mean_logit_is_kick_blend(self):
+        from scipy.special import expit, logit
+        rng = np.random.default_rng(3)
+        a, b = rng.uniform(size=50), rng.uniform(size=50)
+        a[0], b[1] = 0.0, 1.0
+        want = expit((logit(np.clip(a, 1e-6, 1 - 1e-6)) + logit(np.clip(b, 1e-6, 1 - 1e-6))) / 2)
+        np.testing.assert_allclose(models.combine('mean_logit', dict(net=a, trees=b)), want, rtol=0, atol=1e-15)
+
     def test_exam_rejects_generated(self):
         songs = load()
         gen = next(t for t, s in songs.items() if s.kind == 'generated')
@@ -103,12 +247,20 @@ class LabTests(unittest.TestCase):
         lab, _ = run.labels('snare')
         for name in ('snare_base', 'snare_generated', 'snare_release'):
             cfg = config.load(name)
-            nets, untrained = run.plan(cfg, lab, songs)
-            run.check_disjoint(nets)
-            self.assertEqual(sorted(t for n in nets for t in n['group']), sorted(lab))
-        nets[0]['trained'].append(nets[0]['group'][0])
+            grps, trainings, untrained = models.plan(cfg, lab, songs)
+            models.check_disjoint(trainings)
+            self.assertEqual(sorted(t for g in grps for t in g), sorted(lab))
+            outer = [n for n in trainings if len(n['without']) == 1]
+            self.assertEqual(sorted(t for n in outer for t in n['held']), sorted(lab))
+            pairs = [n for n in trainings if len(n['without']) == 2]
+            self.assertEqual(len(pairs), len(grps) * (len(grps) - 1) // 2 if cfg.folds else 0)
+            # Every song outside group k has exactly one prediction for k's cutoff, from a model without k or it.
+            for k, g in enumerate(grps if cfg.folds else ()):
+                keys = [t for n in pairs for t, pre in models.save_keys(grps, n).items() if pre == f'pair{k}']
+                self.assertEqual(sorted(keys), sorted(t for j, h in enumerate(grps) if j != k for t in h))
+        trainings[0]['trained'].append(trainings[0]['held'][0])
         with self.assertRaises(ValueError):
-            run.check_disjoint(nets)
+            models.check_disjoint(trainings)
 
     def test_compare_refuses_mismatch(self):
         a = dict(run_id='a', labels_sha256='x', exam=['s1', 's2'], recall_only=[])
@@ -132,7 +284,7 @@ class LabTests(unittest.TestCase):
                 self.assertEqual(got[t], want[t], f'{golden} {t}')
 
     def test_input_parity(self):
-        """The lab hands held_out_nets what the retired snare runner did: song order, groups, untrained songs, and
+        """The lab hands the net trainer what the retired snare runner did: song order, groups, untrained songs, and
         byte-identical Song inputs (one song per audio source kind)."""
         from tools.audio_analysis.eval.detector_eval import HOP, rows
         from tools.audio_analysis.eval.detector_net import groups
@@ -146,10 +298,11 @@ class LabTests(unittest.TestCase):
         gen = json.loads((GOAL / 'snare_labels_generated.json').read_text())
         legacy.update(gen)
         self.assertEqual(list(lab), list(legacy))
-        nets, untrained = run.plan(BASE, lab, songs)
+        grps, trainings, untrained = models.plan(BASE, lab, songs)
         self.assertEqual(untrained, set(gen))
-        self.assertEqual([n['group'] for n in nets], groups(list(legacy), 4))
-        self.assertEqual(run.plan(config.load('snare_generated'), lab, songs)[1], set())
+        self.assertEqual(grps, groups(list(legacy), 4))
+        self.assertEqual([n['held'] for n in trainings[:4]], grps)
+        self.assertEqual(models.plan(config.load('snare_generated'), lab, songs)[2], set())
         g = Goal(mode='v3')
         picks = [next(t for t in lab if songs[t].source['how'] == how) for how in ('goal', 'wip', 'section')]
         cpu = __import__('torch').device('cpu')

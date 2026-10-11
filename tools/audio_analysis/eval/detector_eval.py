@@ -161,19 +161,34 @@ def choose_from(sums, min_precision=None):
     return best[1]
 
 
-def held_out(lab, meta, held, min_precision=None, log=print, cutoffs=None, per_song=None, ahead=0.0):
+def held_out(lab, meta, held, min_precision=None, log=print, cutoffs=None, per_song=None, ahead=0.0, pool=None):
     """Score every song with a cutoff chosen on the others. meta[t] = (labels, emit, avail, sr[, hop]); held[t] = held-out
-    probabilities. Recall-only and generated songs never choose a cutoff: cutoffs are set on real music. Returns (caught, positives, false); fills cutoffs[t]
-    and per_song[t] (song_result, decisions at stamp + ahead; ahead a number or one per song) when given."""
+    probabilities. Recall-only and generated songs never choose a cutoff: cutoffs are set on real music. pool[t], when
+    given, holds the other songs' probabilities to choose t's cutoff on (from models that never saw t); one dict
+    object per song group. Returns (caught, positives, false); fills cutoffs[t] and per_song[t] (song_result,
+    decisions at stamp + ahead; ahead a number or one per song) when given."""
     tm = tn = tf = 0
     songs = list(held)
-    # Each eligible song's score at every threshold, once: a cutoff is then a sum over the other songs.
     hop = {u: meta[u][4] if len(meta[u]) > 4 else HOP for u in songs}
-    table = {u: np.array([score(meta[u][0], meta[u][1], held[u], meta[u][2], th, meta[u][3], hop[u]) for th in THRESHOLDS])
-             for u in songs if not lab[u]['positives_only'] and lab[u].get('kind') != 'generated'}
-    total = sum(table.values(), np.zeros((len(THRESHOLDS), 3), int))
+    eligible = [u for u in songs if not lab[u]['positives_only'] and lab[u].get('kind') != 'generated']
+
+    def table(probs, users):
+        return {u: np.array([score(meta[u][0], meta[u][1], probs[u], meta[u][2], th, meta[u][3], hop[u]) for th in THRESHOLDS])
+                for u in users}
+    # Without a pool each eligible song is scored once per threshold and a cutoff is a sum over the other songs.
+    own = table(held, eligible) if pool is None else None
+    total = sum(own.values(), np.zeros((len(THRESHOLDS), 3), int)) if own is not None else None
+    pooled_sums = {}
     for t in songs:
-        th = choose_from([tuple(int(v) for v in row) for row in total - table.get(t, 0)], min_precision)
+        if pool is None:
+            sums = total - own.get(t, 0)
+        else:
+            key = id(pool[t])
+            if key not in pooled_sums:
+                pooled_sums[key] = sum(table(pool[t], [u for u in eligible if u in pool[t]]).values(),
+                                       np.zeros((len(THRESHOLDS), 3), int))
+            sums = pooled_sums[key]
+        th = choose_from([tuple(int(v) for v in row) for row in sums], min_precision)
         if cutoffs is not None:
             cutoffs[t] = th
         s, emit, avail, sr = meta[t][:4]

@@ -75,7 +75,7 @@ def finder_id(song, rule, family):
     return '|'.join(f'{k}={v}' for k, v in sorted(settings.items()))
 
 
-# Measures: name -> (module, function name, f(x, sr, c) on audio and Candidates). Each is causal and never fitted.
+# Event measure builders, f(audio, sr, Candidates) -> (n, k). Each is causal and never fitted.
 def _f15(x, sr, c):
     from tools.audio_analysis.eval.kick_fusion_bandwise import fusion_features
     cand, avail, f, hop = fusion_features(x, sr)
@@ -117,28 +117,35 @@ def _glide3(x, sr, c):
     return glide_features(x, sr, c.hop, c.cand, c.avail)
 
 
-MEASURES = {
-    'f15': (('kick_fusion_bandwise', 'kick_fusion_features'), _f15),
-    'tail3': (('kick_goal_tail_features',), _tail3),
-    'prof32': (('kick_goal_profile', 'kick_goal_templates'), _prof32),
-    'fall16': (('kick_goal_profile', 'kick_goal_templates'), _fall16),
-    'low16': (('kick_goal_lowbank',), _low16),
-    'res16': (('kick_goal_lowbank', 'kick_goal_residual'), _res16),
-    'glide3': (('kick_glide_features',), _glide3),
-}
+# Event measures: (n candidates, k) numbers at each candidate, for trees.
+MEASURES = {'f15': _f15, 'tail3': _tail3, 'prof32': _prof32, 'fall16': _fall16, 'low16': _low16, 'res16': _res16,
+            'glide3': _glide3}
+
+
+def _flat(song):
+    from tools.audio_analysis.lab.cache import flatness
+    return flatness(song)
+
+
+# Frame measures: (frames, bands) on the net's 2 ms grid, added to the net as input channels.
+FRAME_MEASURES = {'flat': _flat}
 
 
 def measure(song, rule, family, name, build=True):
-    """(n candidates, k) measure for a song's candidates under a finder rule."""
+    """(n candidates, k) event measure for a song's candidates under a finder rule."""
     from tools.audio_analysis.lab.registry import mix
     if name not in MEASURES:
         raise ValueError(f'unknown measure {name}; known: {sorted(MEASURES)}')
-    mods, fn = MEASURES[name]
-    code = module_id(*[importlib.import_module(f'tools.audio_analysis.eval.{m}') for m in mods]) + code_id(fn)
+    fn = MEASURES[name]
 
     def make():
         if not build:
             raise SystemExit(f'{song.id}: no cached {name} measure; run the experiment first')
         c = candidates(song, rule, family)
         return np.asarray(fn(mix(song), song.sample_rate, c), np.float64)
-    return artifact(song, f'measure-{name}', dict(finder=finder_id(song, rule, family), code=code), make)
+    return artifact(song, f'measure-{name}', dict(finder=finder_id(song, rule, family), code=code_id(fn)), make)
+
+
+def frame(song, name):
+    """(frames, bands) frame measure for the net."""
+    return FRAME_MEASURES[name](song)
