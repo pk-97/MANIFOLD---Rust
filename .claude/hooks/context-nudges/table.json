@@ -28,7 +28,7 @@
     },
     {
       "topic": "tool-inventory",
-      "globs": ["*/scripts/*.py", "*/scripts/*.sh"],
+      "globs": ["*/scripts/*.py", "*/scripts/*.sh", "*/tools/*.py", "*/scratchpad/*.py", "*/scratchpad/*.sh"],
       "snippet": "tool-inventory.md"
     },
     {

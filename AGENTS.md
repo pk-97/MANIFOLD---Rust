@@ -20,7 +20,7 @@ CC and `k3m` are separate setups. Do not change `CLAUDE.md`, `.claude/`, Claude 
 - Preserve write-time non-overlap, undo/redo, serialization compatibility, and MIDI phantom ordering/channel guards.
 - No per-frame allocations on hot paths. Reuse scratch buffers, use `AHashMap` for hot ID lookups, and dirty-check UI updates.
 - GPU access goes through `manifold-gpu`. Native Metal is the current backend; do not introduce wgpu. Verify backend details against code and focused docs.
-- Reuse existing infrastructure. Fix the cause; name any intentional stopgap. No silent fallbacks, unexplained dead-code suppressions, or ignored tests.
+- Reuse existing infrastructure. Before writing any new script, probe, function or tool, check `scripts/TOOLS.md` and `rg` the concept across `scripts/`, `tools/` and `crates/`. Report what you found, and whether you reused it or why not. Fix the cause; name any intentional stopgap. No silent fallbacks, unexplained dead-code suppressions, or ignored tests.
 - Keep serialized fields camelCase, typed IDs transparent, and runtime fields skipped. Follow local Rust conventions; never blanket-format the repository.
 
 ## Read on demand
