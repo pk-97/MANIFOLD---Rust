@@ -284,11 +284,6 @@ impl TrainedDetector {
         self.dropped + self.history.as_ref().map_or(0, History::dropped)
     }
 
-    /// The map from model sample counts to the input clock fires are stamped on.
-    pub(crate) fn input_clock(&self) -> super::input::InputClock {
-        self.input.clock()
-    }
-
     /// Feeds mono input samples; hands each fire to `on_fire` as it is decided.
     pub fn push_with(&mut self, samples: &[f32], mut on_fire: impl FnMut(Fire)) {
         self.push_traced(samples, |_, fire| {

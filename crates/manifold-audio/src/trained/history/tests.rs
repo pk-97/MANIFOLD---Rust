@@ -1,7 +1,7 @@
 use super::*;
 use crate::trained::detector::{FireRule, combine};
 use crate::trained::golden;
-use crate::trained::spec::{Combine, Measure, Spec};
+use crate::trained::spec::{Combine, Measure};
 use crate::trained::trees::tests::{container, f64e, i32e, i64e};
 
 /// Stage forest: one tree splitting lp at 1.0 into -2 / +3.
@@ -95,77 +95,6 @@ fn a_full_history_drops_its_oldest() {
         assert_eq!(s.len, cap.min(k as usize + 1));
     }
     assert_eq!(s.dropped(), 3);
-}
-
-/// Trees, blend, stage inputs, stage probability and fires against every kick v1 clip golden, upstream inputs
-/// (f69, net_p, prof32, low16, f15[:, 0], avail_hop) taken from the golden.
-#[test]
-fn v1_kick_stage_matches_every_clip_golden() {
-    let m = golden::kick_v2();
-    let spec = Spec::parse(&m).unwrap();
-    let st = spec.stage.clone().unwrap();
-    assert_eq!(st, kick_stage());
-    let trees = Forest::from_container(&m, "trees.").unwrap();
-    for name in golden::clips("kick") {
-        let g = golden::load("kick", &name);
-        assert_eq!(g.text("train_id").unwrap(), m.text("train_id").unwrap(), "{name}: train_id");
-        let k = g.shape("tree_p").unwrap()[0];
-        let f69 = g.f64s("f69", &[k, 69]).unwrap();
-        let f15 = g.f64s("f15", &[k, 15]).unwrap();
-        let prof = g.f64s("prof32", &[k, 32]).unwrap();
-        let low = g.f64s("low16", &[k, 16]).unwrap();
-        let net_p = g.f64s("net_p", &[k]).unwrap();
-        let avail = g.i64s("avail_hop", &[k]).unwrap();
-        let emit_s = g.f64s("emit_s", &[k]).unwrap();
-        let (tree_p, blend_p) = (g.f64s("tree_p", &[k]).unwrap(), g.f64s("blend_p", &[k]).unwrap());
-        let (stage_x, stage_p) = (g.f64s("stage_x", &[k, 5]).unwrap(), g.f64s("stage_p", &[k]).unwrap());
-        let m_fires = g.shape("fires").unwrap()[0];
-        let want_fires = g.i64s("fires", &[m_fires]).unwrap();
-        assert!(avail.windows(2).all(|w| w[1] >= w[0]), "{name}: emission order is index order");
-
-        let mut stage = History::new(&m, &st, 256, 48_000).unwrap();
-        let mut rule = FireRule::new(spec.cutoff, spec.refractory_s);
-        let mut err = [0.0f64; 4];
-        let mut fires = vec![];
-        for i in 0..k {
-            let tp = trees.predict_proba(&f69[i * 69..(i + 1) * 69]);
-            err[0] = err[0].max((tp - tree_p[i]).abs());
-            let mut desc = [0.0; 48];
-            desc[..32].copy_from_slice(&prof[i * 32..(i + 1) * 32]);
-            desc[32..].copy_from_slice(&low[i * 16..(i + 1) * 16]);
-            let a = avail[i] as u64;
-            assert_eq!(((a + 1) * 256) as f64 / 48_000.0, emit_s[i], "{name}: emit_s {i}");
-            // Fed the golden tree_p: each comparison isolates one stage of the chain.
-            let bp = combine(spec.combine, net_p[i], tree_p[i], spec.combine_clip);
-            err[1] = err[1].max((bp - blend_p[i]).abs());
-            let (x, p_stage, p_final) = stage.decide(bp, &desc, f15[i * 15], a + 1);
-            for c in 0..5 {
-                err[2] = err[2].max((x[c] - stage_x[i * 5 + c]).abs());
-            }
-            err[3] = err[3].max((p_stage - stage_p[i]).abs());
-            if rule.decide(p_final, a) {
-                fires.push(i as i64);
-            }
-        }
-        let near = |i: i64| (stage_p[i as usize] - spec.cutoff).abs() < 1e-3;
-        let mismatched: Vec<i64> = fires
-            .iter()
-            .filter(|i| !want_fires.contains(i))
-            .chain(want_fires.iter().filter(|i| !fires.contains(i)))
-            .copied()
-            .collect();
-        println!(
-            "{name}: k {k} tree_p {:.2e} blend_p {:.2e} stage_x {:.2e} stage_p {:.2e} fires {}/{} mismatched {mismatched:?}",
-            err[0],
-            err[1],
-            err[2],
-            err[3],
-            fires.len(),
-            want_fires.len()
-        );
-        assert!(err[0] <= 1e-6 && err[1] <= 1e-6 && err[2] <= 1e-6 && err[3] <= 1e-4, "{name}: {err:?}");
-        assert!(mismatched.is_empty() || (mismatched.len() == 1 && near(mismatched[0])), "{name}: fire mismatches {mismatched:?}");
-    }
 }
 
 /// One unit fixture through D17 averaging, the mean-logit combine, the history stage, the gate and the fire

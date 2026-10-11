@@ -235,11 +235,11 @@ mod tests {
         b.extend(3u32.to_le_bytes());
         let w: Vec<u8> = [1.5f64, -2.0].iter().flat_map(|v| v.to_le_bytes()).collect();
         entry(&mut b, "w", 0, &[2], &w);
-        entry(&mut b, "recipe_version", 2, &[], &7i32.to_le_bytes());
+        entry(&mut b, "seed", 2, &[], &7i32.to_le_bytes());
         entry(&mut b, "train_id", 5, &[3], b"abc");
         let c = Container::parse(&b).unwrap();
         assert_eq!(c.f64s("w", &[2]).unwrap(), &[1.5, -2.0]);
-        assert_eq!(c.i32s("recipe_version", &[]).unwrap(), &[7]);
+        assert_eq!(c.i32s("seed", &[]).unwrap(), &[7]);
         assert_eq!(c.text("train_id").unwrap(), "abc");
         assert!(matches!(c.f64s("w", &[3]), Err(ContainerError::WrongShape { .. })));
         assert!(matches!(c.f32s("w", &[2]), Err(ContainerError::WrongType { .. })));

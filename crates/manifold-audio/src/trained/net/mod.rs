@@ -215,6 +215,4 @@ impl FrameSource for NoFrames {
 }
 
 #[cfg(test)]
-mod snare_tests;
-#[cfg(test)]
 mod tests;

@@ -1101,15 +1101,16 @@ mod hop_tests {
     /// kick at 1.0 on the hop covering each fire the inline detector stamps.
     #[test]
     fn worker_kick_fires_land_on_their_hops() {
-        use manifold_audio::kick::{KickDetector, container::Container};
+        use manifold_audio::detectors::{EventKind, detector};
+        use manifold_audio::trained::container::Container;
         use std::time::{Duration, Instant};
 
-        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../manifold-audio/tests/fixtures/kick/clip_dense.mkick");
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../manifold-audio/tests/fixtures/detectors/kick/clip_dense.mkick");
         let golden = Container::parse(&std::fs::read(path).unwrap()).unwrap();
         let n = golden.shape("audio_i16").unwrap()[0];
         let input: Vec<f32> = golden.i16s("audio_i16", &[n]).unwrap().iter().map(|&v| v as f32 / 32768.0).collect();
         let mut inline = Vec::new();
-        KickDetector::new(48_000).unwrap().push(&input, &mut inline);
+        detector(EventKind::Kick, 48_000).unwrap().push_with(&input, |f| inline.push(f));
         assert!(inline.len() > 10);
 
         let send = AudioSend::new("Kick");
@@ -1135,16 +1136,16 @@ mod hop_tests {
     /// as one 1.0 hop, the hop containing its decision, exactly as kicks do.
     #[test]
     fn worker_snare_fires_land_on_the_mid_band() {
-        use manifold_audio::kick::container::Container;
-        use manifold_audio::snare::SnareDetector;
+        use manifold_audio::detectors::{EventKind, detector};
+        use manifold_audio::trained::container::Container;
         use std::time::{Duration, Instant};
 
-        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../manifold-audio/tests/fixtures/snare/clip_dense.mkick");
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../manifold-audio/tests/fixtures/detectors/snare/clip_dense.mkick");
         let golden = Container::parse(&std::fs::read(path).unwrap()).unwrap();
         let n = golden.shape("audio_i16").unwrap()[0];
         let input: Vec<f32> = golden.i16s("audio_i16", &[n]).unwrap().iter().map(|&v| v as f32 / 32768.0).collect();
         let mut inline = Vec::new();
-        SnareDetector::new(48_000).unwrap().push(&input, &mut inline);
+        detector(EventKind::Snare, 48_000).unwrap().push_with(&input, |f| inline.push(f));
         assert!(inline.len() > 5);
 
         let send = AudioSend::new("Snare");

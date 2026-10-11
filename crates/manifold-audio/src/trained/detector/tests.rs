@@ -24,8 +24,8 @@ fn trace(det: &mut TrainedDetector, audio: &[f32], seed: u64) -> (Trace, Vec<Fir
 
 #[test]
 fn traced_decisions_run_in_emission_order_and_carry_every_layer() {
-    let m = golden::kick_v2();
-    let g = golden::load("kick", &golden::clips("kick")[0]);
+    let m = golden::model("kick");
+    let g = golden::load("detectors/kick", &golden::clips("detectors/kick")[0]);
     let audio = golden::audio_f32(&g);
     let mut det = TrainedDetector::from_container(&m, 48_000).unwrap();
     assert_eq!((det.kind(), det.train_id()), (EventKind::Kick, m.text("train_id").unwrap()));
@@ -45,14 +45,14 @@ fn traced_decisions_run_in_emission_order_and_carry_every_layer() {
 /// detector's decisions match the single-net model's.
 #[test]
 fn several_nets_share_one_window() {
-    let one = golden::kick_v2();
+    let one = golden::model("kick");
     let mut two = one.clone();
     two.insert("net.count", crate::trained::container::Array::i64s(&[], vec![2]));
     for p in crate::trained::spec::NET_PARAMS {
         let a = two.get(&format!("net.0.{p}")).unwrap().clone();
         two.insert(&format!("net.1.{p}"), a);
     }
-    let g = golden::load("kick", &golden::clips("kick")[0]);
+    let g = golden::load("detectors/kick", &golden::clips("detectors/kick")[0]);
     let audio = golden::audio_f32(&g);
     let (a, _) = trace(&mut TrainedDetector::from_container(&one, 48_000).unwrap(), &audio, 5);
     let (b, _) = trace(&mut TrainedDetector::from_container(&two, 48_000).unwrap(), &audio, 5);
@@ -69,19 +69,22 @@ fn several_nets_share_one_window() {
 
 #[test]
 fn refuses_a_zero_input_rate() {
-    assert_eq!(TrainedDetector::from_container(&golden::kick_v2(), 0).err(), Some(DetectorError::BadRate(0)));
+    assert_eq!(TrainedDetector::from_container(&golden::model("kick"), 0).err(), Some(DetectorError::BadRate(0)));
 }
 
+/// A v1 file has no `contract` entry.
 #[test]
 fn refuses_a_v1_file() {
-    let err = TrainedDetector::from_container(&golden::asset("kick"), 48_000).err();
+    let mut v1 = golden::model("kick");
+    v1.remove("contract");
+    let err = TrainedDetector::from_container(&v1, 48_000).err();
     assert_eq!(err, Some(DetectorError::Spec(SpecError::Contract(None))));
 }
 
 #[test]
 fn decision_lag_covers_the_net_look_ahead() {
-    let kick = TrainedDetector::from_container(&golden::kick_v2(), 48_000).unwrap();
-    let snare = TrainedDetector::from_container(&golden::snare_v2(), 48_000).unwrap();
+    let kick = TrainedDetector::from_container(&golden::model("kick"), 48_000).unwrap();
+    let snare = TrainedDetector::from_container(&golden::model("snare"), 48_000).unwrap();
     // Both nets look 40 ms past the emission, plus at most one 2 ms frame.
     for (name, d) in [("kick", &kick), ("snare", &snare)] {
         let lag = d.decision_lag_s();

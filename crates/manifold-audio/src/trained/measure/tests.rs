@@ -63,26 +63,36 @@ fn compare(got: &[Vec<f64>], want: &[(Measure, &[f64])], onset_s: &[f64]) -> Vec
     out
 }
 
-/// The kick v1 goldens' tail3, tmpl3, prof32 and low16 from audio, on the kick finder's candidates.
+/// tmpl3 on hand-placed candidates against the lab: no shipped model uses it, so this unit fixture is its only
+/// parity. Fixture `tests/fixtures/detectors/unit/tmpl3.mkick`, written by the scratch script `make_unit.py`
+/// (kept outside the repo; P3 lane, 2026-10-11): templates fitted by `kick_goal_templates.fit_templates` (seed 0)
+/// on the clip, exported by `lab.export.measures.tmpl3_entries` as `fit.tmpl3.*`; `m.tmpl3` from
+/// `lab.templates.features`; numpy 2.4.2, scipy 1.17.1.
 #[test]
-fn v1_kick_measures_match_every_golden_clip() {
-    let model = golden::kick_v2();
-    let measures = [Measure::Tail3, Measure::Tmpl3, Measure::Prof32, Measure::Low16];
-    for name in golden::clips("kick") {
-        let g = golden::load("kick", &name);
-        let audio = golden::audio_f64(&g);
-        let k = g.shape("cand_hop").unwrap()[0];
-        let (cand, avail) = (g.i64s("cand_hop", &[k]).unwrap(), g.i64s("avail_hop", &[k]).unwrap());
-        let cands: Vec<Candidate> =
-            (0..k).map(|i| Candidate { cand_hop: cand[i] as u64, avail_hop: avail[i] as u64, f15: [0.0; 15] }).collect();
-        let mut bank = MeasureBank::new(&model, &measures).unwrap();
-        let got = run(&mut bank, &audio, &cands, &measures, 0x9E37_79B9_7F4A_7C15 ^ name.len() as u64);
-        let want: Vec<(Measure, &[f64])> = measures.iter().map(|&m| (m, g.f64s(m.name(), &[k, m.width()]).unwrap())).collect();
-        for (m, err, bad) in compare(&got, &want, g.f64s("onset_s", &[k]).unwrap()) {
-            println!("{name} {}: max abs err {err:.3e}, {bad} over 1e-6", m.name());
-            assert_eq!(bad, 0, "{name} {}: {bad} values over 1e-6", m.name());
-        }
+fn tmpl3_matches_the_lab_on_any_candidates() {
+    let g = golden::unit("tmpl3.mkick");
+    let mut model = golden::model("kick");
+    for name in ["fit.tmpl3.all", "fit.tmpl3.low", "fit.tmpl3.high", "fit.tmpl3.span"] {
+        model.insert(name, g.get(name).unwrap().clone());
     }
+    let measures = [Measure::Tmpl3];
+    let audio = golden::audio_f64(&g);
+    let k = g.shape("cand_hop").unwrap()[0];
+    let (cand, avail) = (g.i64s("cand_hop", &[k]).unwrap(), g.i64s("avail_hop", &[k]).unwrap());
+    let cands: Vec<Candidate> =
+        (0..k).map(|i| Candidate { cand_hop: cand[i] as u64, avail_hop: avail[i] as u64, f15: [0.0; 15] }).collect();
+    let mut bank = MeasureBank::new(&model, &measures).unwrap();
+    let got = run(&mut bank, &audio, &cands, &measures, 5);
+    let compared = got.iter().filter(|r| !r[0].is_nan()).count();
+    assert!(compared + 2 >= k, "only {compared} of {k} candidates compared");
+    let want = g.f64s("m.tmpl3", &[k, 3]).unwrap();
+    for (m, err, bad) in compare(&got, &[(Measure::Tmpl3, want)], g.f64s("onset_s", &[k]).unwrap()) {
+        println!("unit {}: {compared} of {k} candidates, max abs err {err:.3e}, {bad} over 1e-6", m.name());
+        assert_eq!(bad, 0, "{}: {bad} values over 1e-6", m.name());
+    }
+    // Similarities spread: the comparison means something.
+    let (lo, hi) = want.iter().fold((f64::MAX, f64::MIN), |(a, b), &v| (a.min(v), b.max(v)));
+    assert!(hi - lo > 0.1, "tmpl3 fixture is degenerate ({lo}..{hi})");
 }
 
 /// tail3, prof32, fall16 and low16 on hand-placed candidates (any finder) of a synthetic clip, against the
@@ -91,7 +101,7 @@ fn v1_kick_measures_match_every_golden_clip() {
 /// components.Candidates(cand, avail, 256, 48000))` on `x = audio_i16 / 32768`; numpy 2.4.2, scipy 1.17.1.
 #[test]
 fn measures_match_the_lab_on_any_candidates() {
-    let model = golden::kick_v2();
+    let model = golden::model("kick");
     let g = golden::unit("measures.mkick");
     let measures = [Measure::Tail3, Measure::Prof32, Measure::Fall16, Measure::Low16];
     let audio = golden::audio_f64(&g);
@@ -117,7 +127,7 @@ fn measures_match_the_lab_on_any_candidates() {
 
 #[test]
 fn builds_only_the_streams_its_measures_read() {
-    let model = golden::kick_v2();
+    let model = golden::model("kick");
     let bank = MeasureBank::new(&model, &[Measure::F15]).unwrap();
     assert!(bank.k.is_none() && bank.spec.is_none() && bank.tail.is_none() && bank.low.is_none());
     let bank = MeasureBank::new(&model, &[Measure::Fall16]).unwrap();

@@ -71,12 +71,6 @@ impl Spectrum {
         Ok(s)
     }
 
-    #[cfg(test)]
-    /// Frames computed so far; frame `f` exists once sample `f * frame_hop` has been pushed.
-    pub fn frames(&self) -> u64 {
-        self.frames
-    }
-
     pub fn frame_hop(&self) -> u64 {
         self.frame_hop
     }

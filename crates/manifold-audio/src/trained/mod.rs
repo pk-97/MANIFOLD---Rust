@@ -13,7 +13,6 @@ pub mod measure;
 pub mod net;
 pub mod spec;
 pub mod trees;
-pub mod v1;
 
 pub use detector::{Decision, DetectorError, Fire, TrainedDetector};
 pub use spec::{Spec, SpecError};
@@ -54,19 +53,9 @@ pub(crate) mod golden {
         read(&format!("tests/fixtures/detectors/unit/{name}"))
     }
 
-    /// The shipped v1 model file of a family, as embedded.
-    pub fn asset(family: &str) -> Container {
-        read(&format!("assets/{family}_model.mkick"))
-    }
-
-    /// The shipped kick read as contract v2.
-    pub fn kick_v2() -> Container {
-        super::v1::kick(&asset("kick")).unwrap()
-    }
-
-    /// The shipped snare read as contract v2.
-    pub fn snare_v2() -> Container {
-        super::v1::snare(&asset("snare")).unwrap()
+    /// The model file of a golden set (`kick` and `snare` are the shipped ones).
+    pub fn model(set: &str) -> Container {
+        read(&format!("tests/fixtures/detectors/{set}/model.mkick"))
     }
 
     /// A golden's audio as the stream sees it after `ModelInput` (f32 widened).

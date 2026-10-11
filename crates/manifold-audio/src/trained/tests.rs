@@ -15,7 +15,7 @@ use super::*;
 /// Every golden set on disk: a count match, so no set is silently skipped.
 const SETS: [&str; 4] = ["cover_kick", "cover_snare", "kick", "snare"];
 /// The tail reference's past-4 s max reflects at the clip start, reading ahead for 1 ms grid indices under
-/// this; the causal port is compared on pre_rel_db from here on only (as the v1 kick parity).
+/// this; the causal port is compared on pre_rel_db from here on only.
 const TAIL_CAUSAL_FROM_MS: i64 = 1999 + 5;
 
 fn dir(set: &str) -> String {
@@ -216,8 +216,8 @@ fn end_to_end(set: &str, m: &Container, spec: &Spec, name: &str, g: &Container, 
     }
     // Net logits 1e-3, every probability 1e-4. `Song.__init__` clips a slice that would start before the clip
     // (with the training jitter, even at predict time); a stream has no such clip, so those candidates' net
-    // outputs are not comparable, nor is any stage input whose memory window holds one. Only the converted
-    // v1 sets, whose clips start on music, have any (D10).
+    // outputs are not comparable, nor is any stage input whose memory window holds one. Only clips that start on
+    // music have any (D10).
     let emit_s = g.f64s("emit_s", &[k]).unwrap();
     let clipped: Vec<bool> = match spec.net {
         Some(_) => {
@@ -354,20 +354,14 @@ fn goldens_match_their_model() {
     }
 }
 
-/// The two converted sets hold the shipped numbers: the release tool's v2 files equal the v1 assets read as
-/// v2 here, entry for entry (only the provenance text differs).
+/// The app runs the tested models: each embedded file is its family's golden set model, byte for byte.
 #[test]
-fn converted_sets_equal_the_shipped_models() {
-    for (set, ours) in [("kick", golden::kick_v2()), ("snare", golden::snare_v2())] {
-        let theirs = model(set);
-        let mut names: Vec<&str> = theirs.names().filter(|&n| n != "config").collect();
-        names.sort();
-        let mut mine: Vec<&str> = ours.names().filter(|&n| n != "config").collect();
-        mine.sort();
-        assert_eq!(names, mine, "{set}: entry names");
-        for n in names {
-            assert_eq!(theirs.get(n).unwrap(), ours.get(n).unwrap(), "{set}: {n}");
-        }
+fn embedded_assets_are_the_shipped_sets() {
+    for (kind, bytes) in crate::detectors::EMBEDDED {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("tests/fixtures/{}/model.mkick", dir(kind.name())));
+        let set = std::fs::read(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+        assert!(bytes == set.as_slice(), "assets/{}_model.mkick differs from {}", kind.name(), path.display());
+        assert_eq!(Container::parse(bytes).unwrap().text("family").unwrap(), kind.name());
     }
 }
 

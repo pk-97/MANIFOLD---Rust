@@ -2,8 +2,6 @@
 //! the net after its shape and new channels.
 
 pub mod flat;
-#[cfg(test)]
-mod snare_tests;
 
 use super::container::Container;
 use super::spec::{Channel, SpecError};
