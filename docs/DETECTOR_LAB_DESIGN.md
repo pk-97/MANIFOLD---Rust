@@ -1,6 +1,6 @@
 # Detector Lab — one place to label, train and judge MANIFOLD's audio detectors
 
-**Status:** IN PROGRESS · 2026-10-11 · P1–P5 shipped (bass and synth parked by Peter); P6 first pass and the Fable review fixes built on feat/detector-lab-general; stage owed (`bd show BUG-9ngk8.7`) · see P6 "As built"
+**Status:** IN PROGRESS · 2026-10-11 · P1–P5 shipped (bass and synth parked by Peter); P6 built on feat/detector-lab-general (stage, gate, templates, snare hybrid); P7 release owed (docs/DETECTOR_RUNTIME_DESIGN.md, in design) · see P6 "As built"
 **Prerequisites:** none
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (phase briefs) and section 6 (seam briefs) before starting any phase.
 
@@ -416,7 +416,18 @@ Fable review.
   k-means templates on mix onset patches at its own trained songs' and clips' hits (200 per song at most, songs
   weighed like tree rows), then the shipped kick's three similarities join the trees' inputs. Null reproduced
   `kick_gen50_gated`'s saves byte for byte over seeds 0-4. Against it, real songs: K 8 -0.11 F1 points (90% -0.47
-  to +0.18), K 16 -0.61 (-0.93 to -0.25), K 32 -0.18 (-0.34 to -0.03). Not adopted.
+  to +0.18), K 16 -0.61 (-0.93 to -0.25), K 32 -0.18 (-0.34 to -0.03). On the snare hybrid: K 8 -0.68 (-1.42 to
+  +0.23), K 16 -0.41 (-1.31 to +0.47), both with more false fires. Not adopted: the net already hears the sound.
+- Song-history stage (`lab/stage.py`), any family, with the gate (history's change measured against the detector's
+  and the stage's own cutoffs, scaled by memory evidence). Ungated, history cost drop kicks (first kicks after a
+  2 s gap 94 to 89 percent) because the staged cutoff sat far above an untouched kick's score. Gated, against no
+  history: kick +0.80 F1 points (90% +0.18 to +1.52, learning on real songs only; first hits after a gap 93 vs 94
+  percent), snare +1.32 (+0.46 to +2.35, learning on all songs).
+- Snare hybrid (`snare_gen50_hybrid_low16`: trees on prof32 fall16 low16, mean logit, history): +2.45 F1 points
+  over the net with history (+0.20 to +5.23), recall 0.84 to 0.90; history on the hybrid +0.45 (0.00 to +0.94).
+- Recipes chosen for release (P7): kick `kick_gen50_gated` (net, trees, history learnt on real songs), snare
+  `snare_gen50_hybrid_low16` (net, trees, history learnt on all songs). got_it, renew and overwhelming_force joined
+  the kick exam on Peter's ruling (songs.json audit_override, with the label timing evidence): 30 kick songs.
 
 ### P7 — Releases from component configs
 
