@@ -1,0 +1,8 @@
+{"name": "night-2026-10-12", "steps": [
+  {"run": "kick_v2_final"},
+  {"run": "snare_v2_mid"},
+  {"compare": ["kick_v2_final", "kick_v2_mix"], "args": ["--exam-of", "kick-04f861efae29"]},
+  {"compare": ["snare_v2_mid", "snare_v2_mix"], "args": ["--exam-of", "snare-994ddd8d5571"]},
+  {"compare": ["snare_v2_mid", "snare_v2_hardneg"], "args": ["--exam-of", "snare-994ddd8d5571"]},
+  {"compare": ["snare_v2_mid", "snare_v2_coincident"], "args": ["--exam-of", "snare-994ddd8d5571"]}
+]}
