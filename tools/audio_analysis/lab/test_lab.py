@@ -478,6 +478,98 @@ def builder(x):
             self.assertNotEqual(c.content_id, gain_copy(s, -5.0).content_id)
         self.assertEqual(cache.code_id(mix), cache.code_id(mix.__wrapped__))
 
+    def test_row_weight_options(self):
+        """sampling.hard_negatives and sampling.coincident_weight: null reads as absent (the key and run ids stay as
+        before), bad values are refused, and each rides the per-model key through the sampling dict."""
+        base = config.load('snare_v2_mid')
+        raw = json.loads((config.EXPERIMENTS / 'snare_v2_mid.json').read_text())
+
+        def with_sampling(**kw):
+            return dict(raw, sampling=dict(raw['sampling'], **kw))
+        for off in (dict(hard_negatives=None), dict(coincident_weight=None)):
+            self.assertEqual(config.build('x', with_sampling(**off)).key(), base.key())
+        hard, co = config.load('snare_v2_hardneg'), config.load('snare_v2_coincident')
+        self.assertEqual(hard.hard_negatives, dict(by='onset', power=0.5))
+        self.assertEqual(co.coincident_weight, 3.0)
+        self.assertEqual({k: v for k, v in hard.sampling.items() if k != 'hard_negatives'}, base.sampling)
+        self.assertEqual({k: v for k, v in co.sampling.items() if k != 'coincident_weight'}, base.sampling)
+        for f in ('snare_v2_hardneg', 'snare_v2_coincident'):   # the shipped recipe plus the one option, nothing else
+            a, b = json.loads((config.EXPERIMENTS / f'{f}.json').read_text()), dict(raw)
+            self.assertEqual({k: v for k, v in a.items() if k != 'sampling'}, {k: v for k, v in b.items() if k != 'sampling'})
+        for bad in (dict(hard_negatives=dict(by='onset')), dict(hard_negatives=dict(by='level', power=1.0)),
+                    dict(hard_negatives=dict(by='onset', power=0)), dict(hard_negatives=dict(by='onset', power=True)),
+                    dict(hard_negatives=dict(by='onset', power=1.0, extra=1)), dict(hard_negatives=2.0),
+                    dict(coincident_weight=0), dict(coincident_weight=-1.0), dict(coincident_weight=True),
+                    dict(coincident_weight='3')):
+            with self.assertRaises(ValueError, msg=str(bad)):
+                config.build('bad', with_sampling(**bad))
+        trees_only = dict(raw, models=dict(trees=raw['models']['trees']), combine='trees', stage=None)
+        for opt in (dict(hard_negatives=dict(by='onset', power=1.0)), dict(coincident_weight=2.0)):
+            with self.assertRaises(ValueError, msg='a trees-only config would ignore it'):
+                config.build('bad', dict(trees_only, sampling=dict(raw['sampling'], **opt)))
+        with self.assertRaises(ValueError):
+            config.build('bad', dict(with_sampling(coincident_weight=2.0), family='bass'))
+        self.assertEqual(config.COINCIDENT_FAMILIES, tuple(score.PARTNER))
+        # The per-model key moves with each option, and with the partner labels the draws read.
+        trainings = [dict(without=[0], held=['a'], trained=['b', 'c'], clips=[]),
+                     dict(without=[1], held=['b'], trained=['a', 'c'], clips=[])]
+        meta = dict(parts=dict(finder='f', frames='fm', measures='m'), trainings=trainings,
+                    label_ids=dict(a='1', b='2', c='3'), content=dict(a='A', b='B', c='C'))
+        keys = {c.name: run.model_key(c, 'net', meta) for c in (base, hard, co)}
+        self.assertEqual(len(set(keys.values())), 3)
+        self.assertNotEqual(run.model_key(co, 'net', meta),
+                            run.model_key(co, 'net', dict(meta, label_ids=dict(meta['label_ids'], b='9'))))
+        self.assertNotEqual(keys['snare_v2_hardneg'], run.model_key(hard, 'net', dict(meta, parts=dict(meta['parts'], onset='o'))))
+
+    def test_row_weights_follow_the_spec(self):
+        """hard_negatives: a candidate's weight is its onset strength (the largest early rise of the cached profile, at
+        least one dB) to the power. coincident_weight: W on positive rows whose nearest label sits within 20 ms of a
+        partner-family label, 1 on every other row, negatives included."""
+        pairs = 16
+        profile = np.zeros((4, 2 * pairs))
+        profile[0, 3], profile[1, 15], profile[2, pairs + 5], profile[3, 0] = 6.0, 12.0, 40.0, .2
+        strength = models.onset_strength(profile)
+        np.testing.assert_array_equal(strength, [6.0, 12.0, models.HARD_FLOOR_DB, models.HARD_FLOOR_DB])
+        np.testing.assert_allclose(models.hard_negative_weights(strength, 1.0), [6.0, 12.0, 1.0, 1.0])
+        np.testing.assert_allclose(models.hard_negative_weights(strength, 2.0), [36.0, 144.0, 1.0, 1.0])
+        # Snare labels at 1, 2, 3; kicks at 1.010 (together), 2.025 (not), 3.020 (exactly 20 ms: together).
+        onset = np.array([.5, 1.002, 1.5, 2.001, 2.9, 3.001, 4.0])
+        y = np.array([0., 1., 0., 1., 0., 1., 0.])
+        w = models.coincident_row_weights(onset, y, [3.0, 1.0, 2.0], [1.010, 2.025, 3.020], 3.0)
+        np.testing.assert_array_equal(w, [1, 3, 1, 1, 1, 3, 1])
+        # The partner mirror: a kick row beside a snare label.
+        w = models.coincident_row_weights(np.array([1.011, 2.024]), np.array([1., 1.]), [1.010, 2.025], [1.0, 2.0], 2.0)
+        np.testing.assert_array_equal(w, [2, 1])
+        np.testing.assert_array_equal(models.coincident_row_weights(onset, y, [], [1.0], 3.0), np.ones(len(onset)))
+        np.testing.assert_array_equal(models.coincident_row_weights(onset, y, [1.0], [], 3.0), np.ones(len(onset)))
+        # run.row_weights wires them: a gain copy reads its parent's partner labels, an unlabelled song draws evenly,
+        # and a config without the options hands the net nothing.
+        import types
+
+        from tools.audio_analysis.lab import components
+        mine, copy = dict(positives=[3.0, 1.0, 2.0]), types.SimpleNamespace(id='a_g-6', parent='a', source=dict(how='goal'))
+        partner = dict(a=dict(positives=[1.010, 2.025, 3.020]))
+        neg_w, pos_w = run.row_weights(config.load('snare_v2_coincident'), copy, mine, onset, y, partner)
+        self.assertIsNone(neg_w)
+        np.testing.assert_array_equal(pos_w, [1, 3, 1, 1, 1, 3, 1])
+        # A mix variant's labels are its song's moved by the proven shift, so the partner labels move with them.
+        variant = types.SimpleNamespace(id='a_mix', parent='a', source=dict(how='variant'), offset_s=.5)
+        moved = dict(positives=[3.5, 1.5, 2.5])
+        _, pos_w = run.row_weights(config.load('snare_v2_coincident'), variant, moved, onset + .5, y, partner,
+                                   types.SimpleNamespace(offset_s=0.0))
+        np.testing.assert_array_equal(pos_w, [1, 3, 1, 1, 1, 3, 1])
+        other = types.SimpleNamespace(id='b', parent=None, source=dict(how='goal'))
+        self.assertEqual(run.row_weights(config.load('snare_v2_coincident'), other, mine, onset, y, partner), (None, None))
+        self.assertEqual(run.row_weights(config.load('snare_v2_mid'), copy, mine, onset, y, None), (None, None))
+        real = components.measure
+        components.measure = lambda song, rule, family, name: profile
+        try:
+            neg_w, pos_w = run.row_weights(config.load('snare_v2_hardneg'), copy, mine, onset[:4], y[:4], None)
+        finally:
+            components.measure = real
+        np.testing.assert_allclose(neg_w, [6.0 ** .5, 12.0 ** .5, 1.0, 1.0])
+        self.assertIsNone(pos_w)
+
     def test_mix_variants(self):
         """sampling.mix_variants is validated like gain_variants and false or null leave the key; a variant's labels
         are its song's with every time moved (a field of unknown meaning is refused); variants train with their song's
@@ -722,6 +814,7 @@ def builder(x):
                 self.assertTrue(bool((getattr(old, k) == getattr(new, k)).all()), (t, k))
             for k in ('end', 'pre', 'on', 'mask', 'y', 'hard'):
                 np.testing.assert_array_equal(getattr(old, k), getattr(new, k), err_msg=f'{t} {k}')
+            self.assertEqual((new.neg_w, new.pos_w), (None, None), 'a config without the options draws as before')
 
     def test_input_parity_note_family(self):
         """Bass through the lab gets the retired family runner's inputs: its candidates in the bass band, rows and
@@ -1456,6 +1549,46 @@ class TrainMathBatteryTests(unittest.TestCase):
         _, now_draws = self._train_once(self._nn(), self._tiny_songs(), 5)
         self.assertTrue(head_draws, 'the sampling must have drawn')
         self.assertEqual(head_draws, now_draws)
+
+    def test_unit_row_weights_leave_the_stream_alone(self):
+        """sampling.hard_negatives / coincident_weight off is the HEAD stream (the test above); weights of all ones
+        are the same draws, so the option only moves the rows it reweights."""
+        _, head_draws = self._train_once(self._head_nn(), self._tiny_songs(), 5)
+        songs = self._tiny_songs()
+        for s in songs:
+            s.neg_w, s.pos_w = np.ones(len(s.y)), np.ones(len(s.y))
+        _, ones_draws = self._train_once(self._nn(), songs, 5)
+        self.assertEqual(head_draws, ones_draws)
+        songs = self._tiny_songs()
+        songs[0].neg_w = np.where(np.arange(60) % 2 == 0, 5.0, 1.0)
+        _, moved = self._train_once(self._nn(), songs, 5)
+        self.assertNotEqual(head_draws, moved)
+
+    def test_row_weights_set_the_draw_probabilities(self):
+        """draw_weights: the vouched-negative weight times neg_w for negatives, pos_w for positives, each untouched by
+        the other; and train() draws only the candidates a weight leaves alive."""
+        nn = self._nn()
+        song = self._tiny_songs()[0]
+        idx = np.arange(60)
+        hard = np.where(song.hard[idx], nn.HARD_W, 1.0)
+        np.testing.assert_array_equal(nn.draw_weights(song, idx, 0.0), hard)
+        np.testing.assert_array_equal(nn.draw_weights(song, idx, 1.0), np.ones(60))
+        song.neg_w = np.linspace(1.0, 7.0, 60)
+        np.testing.assert_array_equal(nn.draw_weights(song, idx, 0.0), hard * song.neg_w)
+        np.testing.assert_array_equal(nn.draw_weights(song, idx, 1.0), np.ones(60))
+        song.pos_w = np.linspace(2.0, 3.0, 60)
+        np.testing.assert_array_equal(nn.draw_weights(song, idx, 1.0), song.pos_w)
+        np.testing.assert_array_equal(nn.draw_weights(song, idx, 0.0), hard * song.neg_w)
+        # In train(): only one negative and one positive of song t0 stay alive, so every draw of that class is it.
+        songs = self._tiny_songs()
+        pos, neg = np.flatnonzero(songs[0].mask & (songs[0].y == 1)), np.flatnonzero(songs[0].mask & (songs[0].y == 0))
+        songs[0].neg_w, songs[0].pos_w = np.zeros(60), np.zeros(60)
+        songs[0].neg_w[neg[3]], songs[0].pos_w[pos[2]] = 1.0, 1.0
+        _, calls = self._train_once(self._nn(), songs, 5)
+        picks = [c[1] for c in calls if c[0] == 'choice']   # song t0: positives, negatives; then song t1's
+        self.assertEqual(set(picks[0]), {int(pos[2])})
+        self.assertEqual(set(picks[1]), {int(neg[3])})
+        self.assertGreater(len(set(picks[2])), 1)
 
     def test_train_one_step_matches_head(self):
         """One forward/backward on a tiny batch, weights fixed by the seed: the trained state is byte-identical to
