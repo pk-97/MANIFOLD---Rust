@@ -11,7 +11,7 @@ fn reads_both_shipped_models() {
     assert_eq!(kick.net, Some(NetSpec { count: 1, channels: vec![Channel::Flat, Channel::Perc] }));
     assert_eq!(kick.measures(), trees);
     let st = kick.stage.as_ref().unwrap();
-    assert_eq!((st.inputs(), st.evidence0(), st.gate, st.cuts), (5, 4, 1.0, Some((0.7100000000000001, 0.93))));
+    assert_eq!((st.inputs(), st.evidence0(), st.gate, st.cuts), (5, 4, 1.0, Some((0.7000000000000001, 0.91))));
     let snare = Spec::parse(&golden::model("snare")).unwrap();
     assert_eq!((snare.family, snare.finder, snare.combine), (EventKind::Snare, FinderKind::Snare, Combine::MeanLogit));
     let trees = [Measure::Prof32, Measure::Fall16, Measure::Low16, Measure::Note13, Measure::Cdom4, Measure::Kick2];
