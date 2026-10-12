@@ -20,7 +20,9 @@ must be resolved first. Failed uploads preserve source and a local archive.
 Unique ignored assets remain local: preserve these before removing a checkout.
 Public remotes expose archive contents. Archives are not verified app landings.
 
-Acquire and release scrub inactive caches toward 40 GiB. Build admission also
+Acquire and release scrub inactive caches toward 40 GiB and prune idle slots'
+incremental sessions (the only reclaimable cache; artifacts and metadata stay
+warm). Build admission also
 maintains the admitting slot between builds. MANIFOLD_SLOT_TARGET_CAP_GIB sets
 the per-slot budget (default 25 GiB); stale means untouched for 60 minutes.
 Open target files and unknown process state protect caches. Protected data may
@@ -52,10 +54,11 @@ from pathlib import Path
 # make the sibling safety module importable there as well as when run directly.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from storage_budget import (MAINTENANCE_GOAL_BYTES, admission_pool_lock,
-                            apply_cache_cleanup, disk_free, incremental_size,
-                            maintain_caches, plan_cache_cleanup,
-                            registered_worktrees, slot_cap_bytes,
-                            STALE_CACHE_SECONDS, target_live_status, target_size)
+                            apply_cache_cleanup, CleanupPlan, disk_free,
+                            incremental_size, maintain_caches,
+                            plan_cache_cleanup, registered_worktrees,
+                            slot_cap_bytes, STALE_CACHE_SECONDS,
+                            target_live_status, target_size)
 from codex_brokers import stop_idle as stop_idle_codex_brokers
 
 def _main_checkout():
@@ -286,7 +289,8 @@ def _cleanup_target(wt, label):
 
 def copy_missing_fixtures(wt):
     """Copy GITIGNORED files under any tests/fixtures dir that the checkout
-    didn't bring (.manifold projects, downloaded assets). Ignored files only:
+    didn't bring (.manifold projects, downloaded assets) — cloned block-shared
+    with the main checkout where the filesystem allows (see copy_dedup). Ignored files only:
     copying an untracked-but-not-ignored file makes `git status` dirty
     forever, which is exactly the bug that poisoned the old pool. Only adds;
     never overwrites."""
@@ -315,9 +319,28 @@ def copy_missing_fixtures(wt):
             continue
         dst = wt / rel
         dst.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(src, dst)
+        copy_dedup(src, dst)
         copied += 1
     return copied
+
+
+def copy_dedup(src, dst):
+    """Clone the fixture into the slot with APFS copy-on-write (cp -c).
+
+    The pool's gitignored fixtures (~2.6G per slot) were full copies, so ten
+    slots duplicated ~26G of identical blocks. A clone shares blocks with the
+    main checkout until the slot's copy diverges, so a test that mutates a
+    fixture in place still cannot affect any other copy — the safety a
+    hardlink would lose. Any clonefile refusal (non-APFS or foreign volume)
+    falls back to a real copy; a failed attempt never leaves a partial
+    destination behind."""
+    result = subprocess.run(["cp", "-c", str(src), str(dst)],
+                            capture_output=True, text=True)
+    if result.returncode == 0:
+        return
+    if dst.exists():
+        dst.unlink()
+    shutil.copy2(src, dst)
 
 
 def verify_and_report(wt):
@@ -533,6 +556,43 @@ def build_recency(wt):
     return max(times)
 
 
+def prune_idle_incremental(wt):
+    """Drop an idle slot's incremental sessions on every scrub.
+
+    Since bd91b025d (2026-10-09) incremental state is the only reclaimable
+    cache — deps, executables and build metadata stay warm — but the 160G cap
+    and the 40G pool budget rarely fire, so idle slots carried gigabytes of
+    dead sessions between acquires. An idle slot is clean, landed, lease-free
+    and process-free, and the executor holds each profile's Cargo lock across
+    deletion, so nothing can be compiling against these sessions; a staleness
+    cutoff would add no safety. Every file identity is revalidated by the
+    executor before unlinking."""
+    plan = plan_cache_cleanup(wt / "target")
+    if not plan.entries:
+        return
+    entries = tuple(entry for entry in plan.entries
+                    if entry.path.relative_to(plan.target).parts[1] == "incremental")
+    if not entries:
+        return
+    incremental = CleanupPlan(plan.target, entries,
+                              sum(entry.size_bytes for entry in entries),
+                              plan.refusals)
+
+    def process_check(target):
+        if slot_has_live_session(wt):
+            return True
+        return target_live_status(target)
+
+    removed, files, failures = apply_cache_cleanup(
+        incremental, dry_run=False, process_check=process_check, repo=REPO)
+    if failures:
+        print(f"INCREMENTAL {wt.name}: removed {files} files "
+              f"({removed / 2**30:.1f}G); refused: " + "; ".join(failures))
+    elif files:
+        print(f"INCREMENTAL {wt.name}: removed {files} files "
+              f"({removed / 2**30:.1f}G)")
+
+
 def cmd_scrub(_args):
     slots = pool_slots()
     holders = branch_holders()
@@ -566,6 +626,7 @@ def cmd_scrub(_args):
                   f"work untouched (pinned: {reason})")
     for wt in idle:
         enforce_target_cap(wt)
+        prune_idle_incremental(wt)
 
     def pool_gb():
         out = subprocess.run(["du", "-sk", str(POOL)],
