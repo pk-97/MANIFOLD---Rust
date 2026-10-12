@@ -30,6 +30,10 @@ FAMILY = Family(
     # Project songs whose snares live (also) in audio clips on snare/clap tracks: one-shots, freezes, consolidations.
     clip_songs=('murmur', 'default_haze', 'late_night'),
     recall_only=('lowkey',),
+    # Know You're There's live-edit set mutes its ALL DRUMS group (the QFF snares) and the KSHMR snare track; its
+    # premaster set, saved with the bounce, plays both. export_groups misses the group (attack share 0.21 against
+    # 0.06 at random times, under its 0.5 bar), so the song's snares are not known: kick only.
+    skip=('know_youre_there',),
     # Every-drum stems (local files): the whole song is known except their unexplained loud moments.
     drum_stems=(
         ('late_night', STEMS / 'LATE NIGHT STEMS/Late Night - Drums Stem.wav'),
