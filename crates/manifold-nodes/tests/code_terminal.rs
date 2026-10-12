@@ -1201,8 +1201,8 @@ mod gpu {
             "intermediate amount keeps both source and terminal regions: {mid_changed:.3}"
         );
 
-        // Mid Amount layers the reveal: characters glow on top of the live
-        // image first, and only later cells fade the image to the terminal.
+        // Mid Amount digitises cell by cell: live image, then a solid block in
+        // the cell's terminal colour, then the block carved to its letter.
         let source_pixels = f32_pixels(&source_raw);
         let mid_pixels = f32_pixels(&mid);
         let difference = |p: &[f32; 4], q: &[f32; 4]| {
@@ -1214,13 +1214,11 @@ mod gpu {
             .zip(&source_pixels)
             .filter(|(m, s)| difference(m, s) < 0.002)
             .count();
-        let text_over_image = mid_pixels
+        let blocks = mid_pixels
             .iter()
             .zip(&source_pixels)
             .zip(&full_pixels)
-            .filter(|((m, s), f)| {
-                s[1] > 0.02 && m[1] > s[1] + 0.02 && difference(m, f) > 0.002
-            })
+            .filter(|((m, s), f)| difference(m, s) > 0.02 && difference(m, f) > 0.02)
             .count();
         let faded = mid_pixels
             .iter()
@@ -1229,10 +1227,7 @@ mod gpu {
             .filter(|((m, s), f)| difference(m, f) < 0.002 && difference(m, s) > 0.02)
             .count();
         assert!(fraction(untouched) > 0.1, "mid amount keeps live image");
-        assert!(
-            fraction(text_over_image) > 0.002,
-            "mid amount lays glowing text over the live image"
-        );
+        assert!(fraction(blocks) > 0.01, "mid amount shows solid digital blocks");
         assert!(fraction(faded) > 0.01, "mid amount fades some cells to terminal");
 
         let frozen_a = unfused.render(

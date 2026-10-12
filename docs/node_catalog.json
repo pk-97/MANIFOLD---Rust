@@ -20816,7 +20816,6 @@
         "BlobTrackingV2Motion",
         "BlossomWire",
         "ChromaticAberration",
-        "CodeTerminal",
         "ColorCompass",
         "ConcentricTunnel",
         "DataMosh",
@@ -35371,7 +35370,6 @@
       ],
       "category": "Distort & Warp",
       "examples": [
-        "CodeTerminal",
         "DataMosh",
         "DigitalDrift",
         "EdgeStretch",
@@ -39638,7 +39636,6 @@
       ],
       "category": "Fields & Coordinates",
       "examples": [
-        "CodeTerminal",
         "DigitalDrift",
         "Glitch"
       ],

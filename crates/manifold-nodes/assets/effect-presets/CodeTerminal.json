@@ -1,7 +1,7 @@
 {
   "version": 2,
   "name": "CodeTerminal",
-  "description": "The source image is drawn with terminal glyphs. Source colour and brightness are sampled once per character cell, keeping whole glyphs at image contours. Brightness controls character illumination and stroke weight; gaps and spaces never fill. Amount brings the terminal in over the image: characters glow on top of the picture first, then the picture under each character fades to black, with cells flickering at the arrival edge and rows tearing sideways while the reveal is in motion. At full Amount the image is entirely terminal. Fresh Text keeps retyping groups of lines with new shell, code, log and memory passages; at zero, still content settles. Source changes trigger local typing and data-character edits. Layout selects Single or tmux-style panes; Activity zero holds the characters.",
+  "description": "The source image is drawn with terminal glyphs. Source colour and brightness are sampled once per character cell, keeping whole glyphs at image contours. Brightness controls character illumination and stroke weight; gaps and spaces never fill. Amount turns the image into code cell by cell: each character cell first becomes a solid block of its own terminal colour, then the block is carved down to its letter, with cells flickering between stages at the arrival edge. Every stage comes from the cell's own colour, so empty black stays black. At full Amount the image is entirely terminal. Fresh Text keeps retyping groups of lines with new shell, code, log and memory passages; at zero, still content settles. Source changes trigger local typing and data-character edits. Layout selects Single or tmux-style panes; Activity zero holds the characters.",
   "presetMetadata": {
     "id": "CodeTerminal",
     "displayName": "Code Terminal",
@@ -465,7 +465,7 @@
       "nodeId": "arrive_low",
       "typeId": "node.scale_offset_value",
       "handle": "arrive_low",
-      "title": "Text Arrives",
+      "title": "Cells Go Digital",
       "params": {
         "a": {
           "type": "Float",
@@ -486,7 +486,7 @@
       "nodeId": "arrive_high",
       "typeId": "node.scale_offset_value",
       "handle": "arrive_high",
-      "title": "Text Arrival Edge",
+      "title": "Cells Go Digital Edge",
       "params": {
         "scale": {
           "type": "Float",
@@ -503,14 +503,14 @@
       "nodeId": "arrive_mask",
       "typeId": "node.smoothstep",
       "handle": "arrive_mask",
-      "title": "Text Arrival"
+      "title": "Digital Blocks"
     },
     {
       "id": 19,
       "nodeId": "reveal",
       "typeId": "node.masked_mix",
       "handle": "reveal",
-      "title": "Image Fades To Terminal",
+      "title": "Blocks To Letters",
       "params": {
         "amount": {
           "type": "Float",
@@ -664,7 +664,7 @@
       "nodeId": "dark_low",
       "typeId": "node.scale_offset_value",
       "handle": "dark_low",
-      "title": "Image Fades",
+      "title": "Blocks Become Letters",
       "params": {
         "a": {
           "type": "Float",
@@ -685,7 +685,7 @@
       "nodeId": "dark_high",
       "typeId": "node.scale_offset_value",
       "handle": "dark_high",
-      "title": "Image Fade Edge",
+      "title": "Blocks Become Letters Edge",
       "params": {
         "scale": {
           "type": "Float",
@@ -702,103 +702,18 @@
       "nodeId": "dark_mask",
       "typeId": "node.smoothstep",
       "handle": "dark_mask",
-      "title": "Image Fade"
-    },
-    {
-      "id": 34,
-      "nodeId": "text_over_image",
-      "typeId": "node.mix",
-      "handle": "text_over_image",
-      "title": "Text Over Image",
-      "params": {
-        "amount": {
-          "type": "Float",
-          "value": 1.0
-        },
-        "mode": {
-          "type": "Enum",
-          "value": 1
-        }
-      }
+      "title": "Letter Carve"
     },
     {
       "id": 35,
       "nodeId": "arrive",
       "typeId": "node.masked_mix",
       "handle": "arrive",
-      "title": "Text Arrives Over Image",
+      "title": "Image To Blocks",
       "params": {
         "amount": {
           "type": "Float",
           "value": 1.0
-        }
-      }
-    },
-    {
-      "id": 36,
-      "nodeId": "reveal_motion",
-      "typeId": "node.scale_offset_value",
-      "handle": "reveal_motion",
-      "title": "Reveal In Motion",
-      "params": {
-        "scale": {
-          "type": "Float",
-          "value": -4
-        },
-        "offset": {
-          "type": "Float",
-          "value": 4.0
-        }
-      }
-    },
-    {
-      "id": 37,
-      "nodeId": "tear_amount",
-      "typeId": "node.math",
-      "handle": "tear_amount",
-      "title": "Tear Strength",
-      "params": {
-        "op": {
-          "type": "Enum",
-          "value": 2
-        }
-      }
-    },
-    {
-      "id": 38,
-      "nodeId": "tears",
-      "typeId": "node.scanline_jitter_field",
-      "handle": "tears",
-      "title": "Row Tears",
-      "params": {
-        "amount": {
-          "type": "Float",
-          "value": 0.0
-        },
-        "scanline": {
-          "type": "Float",
-          "value": 0.6
-        },
-        "speed": {
-          "type": "Float",
-          "value": 4.0
-        }
-      }
-    },
-    {
-      "id": 39,
-      "nodeId": "torn_ink",
-      "typeId": "node.remap",
-      "handle": "torn_ink",
-      "title": "Torn Text",
-      "params": {
-        "wrap": {
-          "type": "Enum",
-          "value": 0
-        },
-        "mode": {
-          "type": "Enum",
-          "value": 1
         }
       }
     },
@@ -1161,61 +1076,13 @@
       "toPort": "high"
     },
     {
-      "fromNode": 30,
-      "fromPort": "out",
-      "toNode": 36,
-      "toPort": "a"
-    },
-    {
-      "fromNode": 30,
-      "fromPort": "out",
-      "toNode": 37,
-      "toPort": "a"
-    },
-    {
-      "fromNode": 36,
-      "fromPort": "out",
-      "toNode": 37,
-      "toPort": "b"
-    },
-    {
-      "fromNode": 37,
-      "fromPort": "out",
-      "toNode": 38,
-      "toPort": "amount"
-    },
-    {
-      "fromNode": 7,
-      "fromPort": "out",
-      "toNode": 39,
-      "toPort": "source"
-    },
-    {
-      "fromNode": 38,
-      "fromPort": "offset",
-      "toNode": 39,
-      "toPort": "uv_field"
-    },
-    {
-      "fromNode": 0,
-      "fromPort": "out",
-      "toNode": 34,
-      "toPort": "a"
-    },
-    {
-      "fromNode": 39,
-      "fromPort": "out",
-      "toNode": 34,
-      "toPort": "b"
-    },
-    {
       "fromNode": 0,
       "fromPort": "out",
       "toNode": 35,
       "toPort": "a"
     },
     {
-      "fromNode": 34,
+      "fromNode": 6,
       "fromPort": "out",
       "toNode": 35,
       "toPort": "b"
@@ -1233,7 +1100,7 @@
       "toPort": "a"
     },
     {
-      "fromNode": 39,
+      "fromNode": 7,
       "fromPort": "out",
       "toNode": 19,
       "toPort": "b"
