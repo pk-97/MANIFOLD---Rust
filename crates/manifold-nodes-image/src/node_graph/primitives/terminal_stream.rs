@@ -1,9 +1,10 @@
 //! `node.terminal_stream` — a bounded, beat-driven CPU terminal source.
 //!
 //! With a reaction image wired, local image measurements drive independent
-//! edits to long terminal lines. Completed lines hold still; unwired reaction
-//! supplies a neutral stationary terminal. Layout selects a single cell or tmux
-//! panes. Fixed storage and a fenced analysis ring keep the frame path bounded.
+//! edits to long terminal lines. Fresh Text retypes 8-row groups with new
+//! passages on a beat clock; at zero, completed lines hold until the image
+//! changes. Layout selects a single cell or tmux panes. Fixed storage and a
+//! fenced analysis ring keep the frame path bounded.
 
 use manifold_core::Beats;
 use std::borrow::Cow;
@@ -20,6 +21,7 @@ const MAX_CELLS: usize = 640 * 135;
 const MAX_COLS: u32 = 640;
 const MAX_ROWS: u32 = 135;
 const DEFAULT_TEXT_SIZE: f32 = 18.0;
+const DEFAULT_TURNOVER: f32 = 0.5;
 
 /// The output buffer always has this capacity. `run` writes only
 /// `columns * rows` cells, so downstream consumers can use the scalar outputs
@@ -53,7 +55,7 @@ fn grid_dimensions(width: u32, height: u32, text_size: f32) -> GridDimensions {
 manifold_node_engine::primitive! {
     name: TerminalStream,
     type_id: "node.terminal_stream",
-    purpose: "Emit long source-driven terminal lines in a single terminal or bordered tmux layouts. Image structure changes statement content; shell, code, log and inspection passages have distinct edit rhythms, with at most three edits active. Detail Reactivity selectively cycles data characters on fine image changes, then settles. Zero detail bypasses these edits; still input produces still text; unwired reaction holds a neutral terminal. Activity controls edit speed and zero freezes cells; Text Size controls the 1080p-reference grid.",
+    purpose: "Emit long source-driven terminal lines in a single terminal or bordered tmux layouts. Image structure changes statement content; shell, code, log and inspection passages have distinct edit rhythms, with at most three edits active. Fresh Text keeps retyping 8-row groups with new passages from a large shell, code, log and memory-view library; at zero, still input produces still text. Detail Reactivity selectively cycles data characters on fine image changes, then settles. Activity controls edit speed and zero freezes cells; Text Size controls the 1080p-reference grid.",
     inputs: {
         canvas: Texture2D required,
         reaction: Texture2D optional,
@@ -61,6 +63,7 @@ manifold_node_engine::primitive! {
         activity: ScalarF32 optional,
         layout: ScalarF32 optional,
         detail_reactivity: ScalarF32 optional,
+        turnover: ScalarF32 optional,
     },
     outputs: {
         cells: Channels[VALUE: U32],
@@ -100,9 +103,17 @@ manifold_node_engine::primitive! {
             range: Some((0.0, 3.0)),
             enum_values: &["Single", "Vertical Split", "Horizontal Split", "Four Panes"],
         },
+        ParamDef {
+            name: Cow::Borrowed("turnover"),
+            label: "Fresh Text",
+            ty: ParamType::Float,
+            default: ParamValue::Float(DEFAULT_TURNOVER),
+            range: Some((0.0, 1.0)),
+            enum_values: &[],
+        },
     ],
     depth_rule: Terminal,
-    composition_notes: "canvas supplies dimensions; optional reaction supplies the image. Layout selects Single (0), Vertical Split (1), Horizontal Split (2), or Four Panes (3). Single alternates eight-row vocabulary blocks; panes use shell, code, logs and inspection roles. Continuous statements span each row so downstream code dithering retains image coverage. Bright and dark structure changes the statement data. Completed lines hold until their source profile changes; only changed spans are typed, prioritized by image change and bounded to three concurrent edits. No independent clock animation. A single analysis dispatch produces 64×36 line measurements and 256×144 fine measurements, read only after its GPU fence completes, normally one frame later. Detail Reactivity (0..1, default 0.55) controls character density and change sensitivity. Digits, hex payloads and numeric punctuation cycle for at most 0.45 active beats after a local change, with a noise deadband; words, whitespace and pane borders remain intact. Activity zero freezes both layers. Reuse bounded storage and hold the last completed analysis if all readback slots are busy. Cells stay printable ASCII plus cursor 127, with fixed 86400-u32 capacity; columns/rows describe the active grid. Palette, glyph rendering and erosion remain downstream graph operations. This CPU readback/upload is an IoBridge fusion boundary.",
+    composition_notes: "canvas supplies dimensions; optional reaction supplies the image. Layout selects Single (0), Vertical Split (1), Horizontal Split (2), or Four Panes (3). Single alternates eight-row role groups; panes use shell, code, logs and inspection roles. Each 8-row group shows one passage top to bottom (a command and its output, a function, a log burst, a memory view); later passages along a row follow their own streams. Continuous statements span each row so downstream code dithering retains image coverage. Bright and dark structure changes the statement data. Fresh Text (0..1, default 0.5) hands groups a new passage at up to 0.75 groups per beat, scaled by Activity; their lines are retyped top to bottom after any image-driven edits. At zero, completed lines hold until their source profile changes. Only changed spans are typed, prioritized by image change and bounded to three concurrent edits. A single analysis dispatch produces 64×36 line measurements and 256×144 fine measurements, read only after its GPU fence completes, normally one frame later. Detail Reactivity (0..1, default 0.55) controls character density and change sensitivity. Digits, hex payloads and numeric punctuation cycle for at most 0.45 active beats after a local change, with a noise deadband; words, whitespace and pane borders remain intact. Activity zero freezes both layers. Reuse bounded storage and hold the last completed analysis if all readback slots are busy. Cells stay printable ASCII plus cursor 127, with fixed 86400-u32 capacity; columns/rows describe the active grid. Palette, glyph rendering and erosion remain downstream graph operations. This CPU readback/upload is an IoBridge fusion boundary.",
     examples: [],
     picker: { label: "Terminal Stream", category: Atom },
     summary: "Image-reactive shell, code and logs with source-driven typing and optional tmux panes.",
@@ -137,6 +148,7 @@ impl Primitive for TerminalStream {
         let text_size = ctx.scalar_or_param("text_size", DEFAULT_TEXT_SIZE);
         let activity = ctx.scalar_or_param("activity", 1.0);
         let detail_reactivity = ctx.scalar_or_param("detail_reactivity", 0.55);
+        let turnover = ctx.scalar_or_param("turnover", DEFAULT_TURNOVER);
         let layout_default = match ctx.params.get("layout") {
             Some(ParamValue::Enum(value)) => *value as f32,
             _ => 0.0,
@@ -174,6 +186,7 @@ impl Primitive for TerminalStream {
                 layout,
                 beat,
                 activity,
+                turnover,
                 self.analysis.latest_samples(),
             );
         } else {
@@ -183,6 +196,7 @@ impl Primitive for TerminalStream {
                 layout,
                 beat,
                 activity,
+                turnover,
                 &super::terminal_reaction::EMPTY_SAMPLES,
             );
         }

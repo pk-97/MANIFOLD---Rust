@@ -533,7 +533,7 @@ _Generated from the node registry. Do not hand-edit. 388 nodes registered, group
 | `BlossomWire` | Blossom Wire | generator | Geometry | 13 |
 | `Caustics` | Caustics | generator | Pattern | 4 |
 | `ChromaticAberration` | Chromatic Aberration | effect | Filmic | 5 |
-| `CodeTerminal` | Code Terminal | effect | Stylize | 7 |
+| `CodeTerminal` | Code Terminal | effect | Stylize | 8 |
 | `ColorCompass` | Color Compass | effect | Spatial | 2 |
 | `ColorGrade` | Color Grade | effect | Color | 9 |
 | `ConcentricTunnel` | Concentric Tunnel | generator | Pattern | 6 |

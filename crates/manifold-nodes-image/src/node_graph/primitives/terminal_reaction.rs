@@ -1,8 +1,10 @@
-//! Source-driven terminal lines. Completed text is stationary; a bounded
-//! scheduler types only changed spans when the image's spatial profile changes.
+//! Source-driven terminal lines. A bounded scheduler types only changed
+//! spans: when the image's spatial profile under a line changes, and when the
+//! turnover clock hands an 8-row group a new passage so the screen keeps
+//! writing fresh text. Turnover zero restores fully stationary text.
 use manifold_core::Beats;
 
-use super::terminal_vocabulary::{Context, Role, write_line};
+use super::terminal_vocabulary::{Context, Role, hash, hash3, write_line};
 
 pub(super) const SAMPLE_COLS: usize = 64;
 pub(super) const SAMPLE_ROWS: usize = 36;
@@ -13,6 +15,12 @@ const MAX_ROWS: usize = 135;
 const MAX_LINES: usize = MAX_ROWS * 2;
 const MAX_ACTIVE: usize = 3;
 const CHANGE_THRESHOLD: f32 = 0.025;
+/// Rows that share one passage. Single layout alternates roles at this size.
+const GROUP_ROWS: usize = 8;
+const GROUPS_PER_PANE: usize = MAX_ROWS.div_ceil(GROUP_ROWS);
+const MAX_GROUPS: usize = GROUPS_PER_PANE * 4;
+/// Groups handed a new passage per beat at turnover 1 and activity 1.
+const TURNOVER_GROUPS_PER_BEAT: f64 = 0.75;
 type Profile = [[f32; 4]; SAMPLE_COLS];
 
 #[derive(Clone, Copy, Default)]
@@ -22,6 +30,7 @@ struct Region {
     width: usize,
     pane: usize,
     row: usize,
+    group: usize,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -48,6 +57,8 @@ struct Line {
     phase: f64,
     eligible_at: f64,
     changed_at: f64,
+    /// Turnover ticket waiting to retype this line; zero means none.
+    pending: u32,
 }
 
 impl Line {
@@ -66,6 +77,7 @@ impl Line {
             phase: 0.0,
             eligible_at: 0.0,
             changed_at: 0.0,
+            pending: 0,
         }
     }
 }
@@ -76,6 +88,9 @@ pub(super) struct ReactiveTerminal {
     cells: Box<[u32]>,
     lines: Box<[Line]>,
     line_count: usize,
+    streams: [u32; MAX_GROUPS],
+    turnovers: u32,
+    turnover_progress: f64,
     columns: usize,
     rows: usize,
     layout: u8,
@@ -90,6 +105,9 @@ impl ReactiveTerminal {
             cells: vec![u32::from(b' '); MAX_COLS * MAX_ROWS].into_boxed_slice(),
             lines: vec![Line::new(); MAX_LINES].into_boxed_slice(),
             line_count: 0,
+            streams: [0; MAX_GROUPS],
+            turnovers: 0,
+            turnover_progress: 0.0,
             columns: 0,
             rows: 0,
             layout: 0,
@@ -104,6 +122,8 @@ impl ReactiveTerminal {
         self.line_count = 0;
         self.clock = 0.0;
         self.next_start = 0.0;
+        self.turnovers = 0;
+        self.turnover_progress = 0.0;
     }
 
     pub(super) fn update(
@@ -113,6 +133,7 @@ impl ReactiveTerminal {
         layout: u8,
         beat: Beats,
         activity: f32,
+        turnover: f32,
         samples: &[[f32; 4]; SAMPLE_COUNT],
     ) {
         let columns = (columns as usize).clamp(1, MAX_COLS);
@@ -141,6 +162,7 @@ impl ReactiveTerminal {
                     line.region,
                     line.features,
                     role_for(self.layout, line.region),
+                    self.streams[line.region.group],
                 );
             }
             self.render();
@@ -180,23 +202,37 @@ impl ReactiveTerminal {
                 }
             }
         }
+        let turnover = if turnover.is_finite() {
+            f64::from(turnover.clamp(0.0, 1.0))
+        } else {
+            0.0
+        };
+        self.turnover_progress += delta * activity * turnover * TURNOVER_GROUPS_PER_BEAT;
+        if self.turnover_progress >= 1.0 {
+            self.turnover_progress = (self.turnover_progress - 1.0).min(1.0);
+            self.turn_over_group();
+        }
         // Source salience wins; aging prevents a quieter changed line from
-        // starving behind a continuously moving foreground. No idle jobs.
+        // starving behind a continuously moving foreground. Turnover lines
+        // fill the remaining slots oldest group first, top row first.
         if active < MAX_ACTIVE && self.clock >= self.next_start {
             // Skip changed measurements whose visible statement is unchanged,
             // so static commands/braces cannot stall useful queued edits.
             for _ in 0..self.line_count {
+                let clock = self.clock;
+                let source_ready =
+                    |line: &Line| line.score >= CHANGE_THRESHOLD && clock >= line.eligible_at;
                 let candidate = self.lines[..self.line_count]
                     .iter()
                     .enumerate()
-                    .filter(|(_, line)| {
-                        !line.active
-                            && line.score >= CHANGE_THRESHOLD
-                            && self.clock >= line.eligible_at
-                    })
+                    .filter(|(_, line)| !line.active && (source_ready(line) || line.pending != 0))
                     .max_by(|(_, a), (_, b)| {
                         let priority = |line: &Line| {
-                            line.score + ((self.clock - line.changed_at) * 0.002) as f32
+                            if source_ready(line) {
+                                1.0e9 + f64::from(line.score) + (clock - line.changed_at) * 0.002
+                            } else {
+                                -(f64::from(line.pending) * 1000.0 + line.region.row as f64)
+                            }
                         };
                         priority(a).total_cmp(&priority(b))
                     })
@@ -210,11 +246,13 @@ impl ReactiveTerminal {
                     line.region,
                     line.features,
                     role_for(self.layout, line.region),
+                    self.streams[line.region.group],
                 );
                 let width = line.region.width;
                 let first = (0..width).find(|&x| line.shown[x] != line.target[x]);
                 line.reference = line.latest;
                 line.score = 0.0;
+                line.pending = 0;
                 if let Some(first) = first {
                     line.cursor = first;
                     line.end = (first..width)
@@ -229,6 +267,32 @@ impl ReactiveTerminal {
             }
         }
         self.render();
+    }
+
+    /// Hand one group a new passage and queue its lines for retyping. Groups
+    /// still waiting on an earlier turnover are skipped.
+    fn turn_over_group(&mut self) {
+        self.turnovers = self.turnovers.wrapping_add(1).max(1);
+        let ticket = self.turnovers;
+        let lines = &mut self.lines[..self.line_count];
+        if lines.is_empty() {
+            return;
+        }
+        let start = hash(ticket) as usize % lines.len();
+        let Some(group) = (0..lines.len())
+            .map(|i| lines[(start + i) % lines.len()].region.group)
+            .find(|&group| {
+                lines
+                    .iter()
+                    .all(|line| line.region.group != group || line.pending == 0)
+            })
+        else {
+            return;
+        };
+        self.streams[group] = hash3(self.streams[group], ticket, 0x5bd1_e995);
+        for line in lines.iter_mut().filter(|line| line.region.group == group) {
+            line.pending = ticket;
+        }
     }
 
     pub(super) fn cells(&self) -> &[u32] {
@@ -259,6 +323,7 @@ impl ReactiveTerminal {
                 width: text_width,
                 pane,
                 row,
+                group: pane * GROUPS_PER_PANE + row / GROUP_ROWS,
             };
             self.line_count += 1;
         }
@@ -289,6 +354,9 @@ impl ReactiveTerminal {
                 self.add_pane(mx, my, w - mx, h - my, 3, true);
             }
             _ => self.add_pane(0, 0, w, h, 0, false),
+        }
+        for (group, stream) in self.streams.iter_mut().enumerate() {
+            *stream = hash3(group as u32, u32::from(layout), 0x2545_f491);
         }
     }
 
@@ -464,19 +532,32 @@ fn rhythm(role: Role) -> (f64, f64) {
     }
 }
 
-fn make_line(dst: &mut [u8; MAX_COLS], region: Region, features: Features, role: Role) {
+fn make_line(
+    dst: &mut [u8; MAX_COLS],
+    region: Region,
+    features: Features,
+    role: Role,
+    stream: u32,
+) {
     dst.fill(b' ');
     let mut scratch = [b' '; MAX_COLS];
     let mut offset = 0;
-    let mut passage = 0;
+    let mut passage = 0_u32;
     // Continuous code supplies a dither texture across the entire image.
     // Source structure changes the statements, not a silhouette-shaped margin.
+    // Later passages on a row follow their own streams, so a row never repeats
+    // the text that starts the rows around it.
     while offset < region.width {
         let length = write_line(
             &mut scratch,
             role,
             Context {
-                row: region.row + passage,
+                stream: if passage == 0 {
+                    stream
+                } else {
+                    hash3(stream, passage, 0x68e3_1da4)
+                },
+                line: region.row % GROUP_ROWS,
                 left: features.left,
                 right: features.right,
                 light: features.light,
@@ -512,6 +593,15 @@ mod tests {
         samples: &[[f32; 4]; SAMPLE_COUNT],
         start: f64,
     ) {
+        run(terminal, layout, samples, start, 0.0);
+    }
+    fn run(
+        terminal: &mut ReactiveTerminal,
+        layout: u8,
+        samples: &[[f32; 4]; SAMPLE_COUNT],
+        start: f64,
+        turnover: f32,
+    ) {
         for frame in 1..=160 {
             terminal.update(
                 128,
@@ -519,6 +609,7 @@ mod tests {
                 layout,
                 Beats(start + f64::from(frame) * 0.125),
                 1.0,
+                turnover,
                 samples,
             );
         }
@@ -583,11 +674,100 @@ mod tests {
         assert!(rhythm(Role::Code).0 > rhythm(Role::Shell).0);
     }
 
+    /// Rows whose words changed, not just their digits and hex payloads.
+    fn rows_with_new_words(a: &[u32], b: &[u32]) -> usize {
+        let word = |c: u32| {
+            let c = c as u8;
+            if c.is_ascii_hexdigit() { b'#' } else { c }
+        };
+        a.chunks(128)
+            .zip(b.chunks(128))
+            .filter(|(a, b)| {
+                a.iter()
+                    .zip(b.iter())
+                    .filter(|&(&x, &y)| word(x) != word(y))
+                    .count()
+                    >= 10
+            })
+            .count()
+    }
+
     #[test]
-    fn stationary_source_has_no_idle_animation() {
+    fn turnover_retypes_a_still_source_with_new_passages() {
         let samples = source(8);
         let mut terminal = ReactiveTerminal::new();
-        terminal.update(128, 36, 0, Beats(0.0), 1.0, &samples);
+        terminal.update(128, 36, 0, Beats(0.0), 1.0, 1.0, &samples);
+        let initial = terminal.cells().to_vec();
+        let mut prior = initial.clone();
+        for frame in 1..=320 {
+            terminal.update(
+                128,
+                36,
+                0,
+                Beats(f64::from(frame) * 0.125),
+                1.0,
+                1.0,
+                &samples,
+            );
+            let changed = terminal
+                .cells()
+                .chunks(128)
+                .zip(prior.chunks(128))
+                .filter(|(a, b)| a != b)
+                .count();
+            assert!(changed <= MAX_ACTIVE + 1, "typing stays sparse");
+            prior.copy_from_slice(terminal.cells());
+        }
+        assert!(terminal.cells().iter().all(|&c| (32..=127).contains(&c)));
+        let fresh = rows_with_new_words(&initial, terminal.cells());
+        assert!(fresh >= 12, "only {fresh} rows show new text after 40 beats");
+    }
+
+    #[test]
+    fn source_edits_start_before_turnover() {
+        let mut terminal = ReactiveTerminal::new();
+        terminal.update(128, 36, 0, Beats(0.0), 1.0, 1.0, &source(4));
+        let initial = terminal.cells().to_vec();
+        for frame in 1..=8 {
+            terminal.update(
+                128,
+                36,
+                0,
+                Beats(f64::from(frame) * 0.125),
+                1.0,
+                1.0,
+                &source(44),
+            );
+        }
+        let changed: Vec<_> = (0..36)
+            .filter(|&row| initial[row * 128..(row + 1) * 128] != terminal.cells()[row * 128..(row + 1) * 128])
+            .collect();
+        assert!(!changed.is_empty());
+        assert!(changed.iter().all(|row| (12..20).contains(row)), "{changed:?}");
+    }
+
+    #[test]
+    fn turnover_is_deterministic() {
+        let samples = source(8);
+        let mut a = ReactiveTerminal::new();
+        let mut b = ReactiveTerminal::new();
+        for terminal in [&mut a, &mut b] {
+            terminal.update(128, 36, 3, Beats(0.0), 1.0, 0.7, &samples);
+            run(terminal, 3, &samples, 0.0, 0.7);
+        }
+        assert_eq!(a.cells(), b.cells());
+        // Rewinding rebuilds the same starting screen.
+        let mut fresh = ReactiveTerminal::new();
+        fresh.update(128, 36, 3, Beats(0.0), 1.0, 0.7, &samples);
+        a.update(128, 36, 3, Beats(0.0), 1.0, 0.7, &samples);
+        assert_eq!(a.cells(), fresh.cells());
+    }
+
+    #[test]
+    fn turnover_zero_holds_a_stationary_source() {
+        let samples = source(8);
+        let mut terminal = ReactiveTerminal::new();
+        terminal.update(128, 36, 0, Beats(0.0), 1.0, 0.0, &samples);
         let before = terminal.cells().to_vec();
         settle(&mut terminal, 0, &samples, 0.0);
         assert_eq!(before, terminal.cells());
@@ -609,7 +789,7 @@ mod tests {
     #[test]
     fn spatial_change_updates_local_rows_and_then_stops() {
         let mut terminal = ReactiveTerminal::new();
-        terminal.update(128, 36, 0, Beats(0.0), 1.0, &source(4));
+        terminal.update(128, 36, 0, Beats(0.0), 1.0, 0.0, &source(4));
         let initial = terminal.cells().to_vec();
         settle(&mut terminal, 0, &source(44), 0.0);
         let final_cells = terminal.cells().to_vec();
@@ -628,11 +808,11 @@ mod tests {
     #[test]
     fn edits_are_sparse_and_preserve_unchanged_text() {
         let mut terminal = ReactiveTerminal::new();
-        terminal.update(128, 36, 0, Beats(0.0), 1.0, &source(4));
+        terminal.update(128, 36, 0, Beats(0.0), 1.0, 0.0, &source(4));
         let mut prior = terminal.cells().to_vec();
         let mut saw_cursor = false;
         for frame in 1..120 {
-            terminal.update(128, 36, 0, Beats(f64::from(frame) / 32.0), 1.0, &source(44));
+            terminal.update(128, 36, 0, Beats(f64::from(frame) / 32.0), 1.0, 0.0, &source(44));
             let cursors = terminal.cells().iter().filter(|&&c| c == 127).count();
             assert!(cursors <= MAX_ACTIVE);
             saw_cursor |= cursors != 0;
@@ -651,7 +831,7 @@ mod tests {
     fn layouts_have_real_borders_and_single_has_no_subcolumns() {
         let mut terminal = ReactiveTerminal::new();
         for layout in 0..4 {
-            terminal.update(128, 36, layout, Beats(0.0), 1.0, &source(4));
+            terminal.update(128, 36, layout, Beats(0.0), 1.0, 0.0, &source(4));
             assert!(terminal.cells().iter().all(|&c| (32..=127).contains(&c)));
             if layout == 0 {
                 assert!(
@@ -672,22 +852,22 @@ mod tests {
     fn freeze_same_beat_resize_and_rewind_are_deterministic() {
         let samples = source(4);
         let mut terminal = ReactiveTerminal::new();
-        terminal.update(128, 36, 0, Beats(0.0), 1.0, &samples);
+        terminal.update(128, 36, 0, Beats(0.0), 1.0, 0.0, &samples);
         let initial = terminal.cells().to_vec();
-        terminal.update(128, 36, 0, Beats(1.0), 0.0, &source(44));
+        terminal.update(128, 36, 0, Beats(1.0), 0.0, 1.0, &source(44));
         assert_eq!(initial, terminal.cells());
-        terminal.update(128, 36, 0, Beats(1.0), 4.0, &source(44));
+        terminal.update(128, 36, 0, Beats(1.0), 4.0, 0.0, &source(44));
         assert_eq!(initial, terminal.cells());
-        terminal.update(64, 20, 3, Beats(1.0), 1.0, &samples);
+        terminal.update(64, 20, 3, Beats(1.0), 1.0, 0.0, &samples);
         assert_eq!(terminal.cells().len(), 64 * 20);
-        terminal.update(128, 36, 0, Beats(0.0), 1.0, &samples);
+        terminal.update(128, 36, 0, Beats(0.0), 1.0, 0.0, &samples);
         assert_eq!(initial, terminal.cells());
     }
     #[test]
     fn noise_below_threshold_does_not_trigger_typing() {
         let samples = source(4);
         let mut terminal = ReactiveTerminal::new();
-        terminal.update(128, 36, 0, Beats(0.0), 1.0, &samples);
+        terminal.update(128, 36, 0, Beats(0.0), 1.0, 0.0, &samples);
         let initial = terminal.cells().to_vec();
         let mut jitter = samples;
         for sample in &mut jitter {
@@ -708,10 +888,11 @@ mod tests {
             3,
             Beats(f64::NAN),
             f32::INFINITY,
+            f32::NAN,
             &samples,
         );
         assert_eq!(terminal.cells().len(), MAX_COLS * MAX_ROWS);
-        terminal.update(1, 1, 3, Beats(1.0), 1.0, &samples);
+        terminal.update(1, 1, 3, Beats(1.0), 1.0, 0.0, &samples);
         assert_eq!(terminal.cells().len(), 1);
     }
 }
