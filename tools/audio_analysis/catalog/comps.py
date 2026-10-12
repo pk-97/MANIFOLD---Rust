@@ -46,7 +46,7 @@ SCOPED = {('growth', 'Ableton Projects/Ableton 11/'): 'growth_2023', ('renew', '
           ('openings', 'Ableton Projects/Ableton 11/'): 'openings_2023', ('dusk2026', ''): 'dusk2026'}
 INFRA = re.compile(r'live show|osc |^osc|resolume|video|blender|xone|live template|live setup|default template|midi mess|tidal|'
                    r'premaster checks|mix testing|^media$|stem split|labels and timings|linndrum|bedroom set|^project$|'
-                   r'^album mix$|josh quick|^general$|^home$|^launch$|^continue$|^noise$|^one$|^rest$|^time$', re.I)
+                   r'^album mix$|^osc only$|josh quick|^general$|^home$|^launch$|^continue$|^noise$|^one$|^rest$|^time$', re.I)
 INFRA_PATH = re.compile(r'Blender Tests|Live Show|LIve Show|SMPTE|Resolume|Video Sequences|Labels and Timings|LinnDrum|Bedroom Set', re.I)
 REMIX_WORD =re.compile(r'remix|\bedit\b|dnb edit|\bk ?i ?e\b', re.I)
 STEM_LIKE = re.compile(r'stem|groups|tayla vox|dry|wet|export test|video stems|blender stems', re.I)
@@ -206,6 +206,8 @@ def infer(con, music=None):
         title, aliases = names.main_title(os.path.basename(pth))
         if not title or names.generic(title):
             title = names.main_title(re.sub(r' Project$', '', os.path.basename(pdir)))[0]
+        if not title:                      # a set named only with stop words (Album Mix, OSC Only): its own name
+            title = re.sub(r'\.als$', '', os.path.basename(pth), flags=re.I)
         cid = res.canon(title, r)
         res.note(cid, 'set name', title)
         for a in aliases:
