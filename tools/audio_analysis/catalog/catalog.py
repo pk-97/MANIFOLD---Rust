@@ -599,12 +599,15 @@ def generated_info(s, ctx):
                 als=als_files([proj]))
 
 
-LICENCES = ('own', 'own_remix_private', 'generated', 'cc0', 'cc_by', 'unknown')
+LICENCES = ('own', 'own_remix_private', 'own_collab', 'own_mix_job', 'commercial_excerpt', 'generated', 'cc0', 'cc_by', 'unknown')
 # Peter's calls, seeded into the manual columns where they are still empty; a later edit by Peter is never overwritten.
 SEED_MANUAL = {t: dict(licence_override='own_remix_private', notes='Peter 2026-10-12: private remix stems, kept in training')
                for t in ('cold_remix', 'worship', 'business', 'eat_sleep', 'lh')}
-SEED_MANUAL['gerrit'] = dict(notes='Catalogue 2026-10-12: Gerrit Mixdown Project is a mix job for the song "What Have I Done" '
-                             '(Peter\'s files: "PK Mix 1-4", "PK FINAL"); the recordings are the other artist\'s. Licence stays unknown.')
+for _t in ('corrosion', 'right_where', 'hung_up', 'murmur', 'midnight_patience', 'heavy_on_mind', 'late_night', 'miracle'):
+    SEED_MANUAL[_t] = dict(licence_override='own_collab', notes='Peter 2026-10-12: collaborations with Peter, fine to train')
+SEED_MANUAL['gerrit'] = dict(licence_override='own_mix_job', notes='Peter 2026-10-12: fine to train')
+for _t in ('apricots_128bpm', 'bad_guy_128bpm', 'feel_the_vibration_174bpm', 'inhale_exhale_145bpm', 'tears_140bpm'):
+    SEED_MANUAL[_t] = dict(licence_override='commercial_excerpt', notes='Peter 2026-10-12: train on all for now')
 
 
 def seed_manual(con, seeds=None):
