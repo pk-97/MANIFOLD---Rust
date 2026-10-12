@@ -417,6 +417,22 @@ def test_fixture_pruning_and_process_failure(repo):
     aw.copy_missing_fixtures(wt)
     check("nested fixture copied", (wt / "tests/fixtures/nested/keep.manifold").exists())
     check("quarantine fixture excluded", not (wt / hidden.relative_to(repo)).exists())
+    # Clone-first fixture copies: APFS clonefile shares blocks with the main
+    # checkout (~2.6G of fixtures were full per-slot copies); any clonefile
+    # refusal falls back to a real copy so acquire never fails on a volume
+    # that cannot clone.
+    clone_src = repo / "tests/fixtures/nested/clone-me.manifold"
+    clone_src.write_text("clone payload")
+    clone_dst = wt / "tests/fixtures/nested/clone-me.manifold"
+    aw.copy_dedup(clone_src, clone_dst)
+    check("fixture clone lands with identical content",
+          clone_dst.exists() and clone_dst.read_text() == "clone payload")
+    clone_dst.unlink()
+    with patch.object(aw.subprocess, "run", return_value=SimpleNamespace(
+            returncode=1, stdout="", stderr="cp -c: clonefile failed")):
+        aw.copy_dedup(clone_src, clone_dst)
+    check("clone refusal falls back to a plain copy",
+          clone_dst.exists() and clone_dst.read_text() == "clone payload")
     with patch.object(aw.subprocess, "run", return_value=SimpleNamespace(returncode=1, stdout="")):
         check("process scan error fails closed", aw.slot_has_live_session(wt))
     try:
@@ -620,26 +636,74 @@ def fake_target(wt, name="gen_node_catalog-0f1c97c31eb2a77a", size=2 * 2**20):
     return exe
 
 
+def fake_incremental(wt, age=7200, crate="manifold_app"):
+    """A Cargo-tagged incremental session: <crate>-<hash>/s-<h>-<h>-<h>/ with
+    rustc's three known session files. The session directory itself is aged
+    too — stale_cache_units treats a freshly touched directory as live."""
+    session = (wt / "target" / "debug" / "incremental" / f"{crate}-1a2b3c4d"
+               / "s-0123456789abcdef-fedcba9876543210-0123456789abcdef")
+    session.mkdir(parents=True)
+    (wt / "target" / ".rustc_info.json").write_text("{}\n")
+    files = [session / name for name in
+             ("dep-graph.bin", "query-cache.bin", "work-products.bin")]
+    old = time.time() - age
+    for path in files:
+        path.write_bytes(b"\0" * 65536)
+        os.utime(path, (old, old))
+    os.utime(session, (old, old))
+    os.utime(session.parent, (old, old))
+    return session, files
+
+
 def test_scrub_frees_an_idle_slot_over_its_cap(repo):
-    """Over-cap cleanup frees metadata but preserves directly runnable files."""
+    """Since bd91b025d only incremental sessions are reclaimable: an over-cap
+    idle slot loses its incremental cache while runnable artifacts and warm
+    metadata survive (direct launches hold no Cargo lock to exclude them)."""
     wt = add_slot(repo, "slot-0", "lane/landed")
     exe = fake_target(wt)
+    _session, inc_files = fake_incremental(wt)
     with patch.object(aw, "slot_cap_bytes", return_value=1), \
             patch.object(aw, "slot_has_live_session", return_value=False), \
             patch.object(aw, "target_live_status", return_value=False), \
             redirect_stdout(io.StringIO()) as out:
         aw.cmd_scrub(SimpleNamespace())
     check("over-cap idle slot preserves linked executables", exe.exists(), out.getvalue())
-    check("over-cap idle slot loses fingerprint metadata",
-          not (wt / "target" / "debug" / ".fingerprint" / "gen_node_catalog-abcdef" / "invoked.timestamp").exists(),
+    check("over-cap idle slot preserves fingerprint metadata",
+          (wt / "target" / "debug" / ".fingerprint" / "gen_node_catalog-abcdef" / "invoked.timestamp").exists(),
           out.getvalue())
-    check("scrub reports the removed file", "removed 1 files" in out.getvalue(), out.getvalue())
+    check("over-cap idle slot loses its incremental session",
+          not any(path.exists() for path in inc_files), out.getvalue())
+    check("scrub reports the removed files", "removed 3 files" in out.getvalue(), out.getvalue())
     check("checkout untouched", (wt / "f.txt").read_text() == "base\n")
+
+
+def test_scrub_prunes_idle_incremental_without_pressure(repo):
+    """The 160G cap almost never fires, so idle slots carried dead incremental
+    sessions between acquires. Scrub prunes them unconditionally — staleness
+    adds no safety in a lease-free, process-free slot — while a leased slot
+    keeps its compile state for the lane still working there."""
+    idle_wt = add_slot(repo, "slot-0", "lane/idle-inc")
+    _session, fresh_files = fake_incremental(idle_wt, age=60)
+    leased = add_slot(repo, "slot-1", "lane/leased-inc")
+    write_lease(leased, holder_pid=os.getpid(), age_h=0.5)
+    _leased_session, leased_files = fake_incremental(leased, age=7200)
+    with patch.object(aw, "slot_has_live_session", return_value=False), \
+            patch.object(aw, "target_live_status", return_value=False), \
+            redirect_stdout(io.StringIO()) as out:
+        aw.cmd_scrub(SimpleNamespace())
+    check("idle slot loses even fresh incremental",
+          not any(path.exists() for path in fresh_files), out.getvalue())
+    check("prune is reported per slot",
+          "INCREMENTAL slot-0: removed 3 files" in out.getvalue(), out.getvalue())
+    check("leased slot keeps its incremental",
+          all(path.exists() for path in leased_files), out.getvalue())
+    check("leased slot is named as kept", "KEEP slot-1: leased" in out.getvalue(), out.getvalue())
 
 
 def test_reclaim_touches_only_landed_clean_idle_slots(repo):
     landed = add_slot(repo, "slot-0", "lane/landed")
     landed_exe = fake_target(landed)
+    _, landed_inc = fake_incremental(landed)
     landed_cache = landed / "target" / "debug" / ".fingerprint" / "gen_node_catalog-abcdef" / "invoked.timestamp"
     dirty = add_slot(repo, "slot-1", "lane/dirty")
     (dirty / "f.txt").write_text("uncommitted\n")
@@ -660,7 +724,10 @@ def test_reclaim_touches_only_landed_clean_idle_slots(repo):
         os.utime(path, (old, old))
 
     def free_space(_path):
-        return 10**15 if not landed_cache.exists() else 0
+        # Reclaim can only free the incremental session now (bd91b025d keeps
+        # artifacts and metadata warm), so the reserve is met exactly when the
+        # session's first file is gone.
+        return 10**15 if not landed_inc[0].exists() else 0
 
     with patch.object(aw, "disk_free", side_effect=free_space), \
             patch.object(aw, "slot_has_live_session", return_value=False), \
@@ -668,14 +735,15 @@ def test_reclaim_touches_only_landed_clean_idle_slots(repo):
             redirect_stdout(io.StringIO()) as out:
         aw.cmd_reclaim(SimpleNamespace(free_bytes=100 * 2**30))
     text = out.getvalue()
-    check("landed idle slot cache reclaimed", not landed_cache.exists(), text)
+    check("landed idle slot incremental reclaimed", not landed_inc[0].exists(), text)
+    check("landed idle slot keeps fingerprint metadata", landed_cache.exists(), text)
     check("landed linked executable preserved", landed_exe.exists(), text)
     check("reclaim stops once the reserve is met", spare_exe.exists(), text)
     check("dirty slot untouched", dirty_exe.exists() and (dirty / "f.txt").read_text() == "uncommitted\n", text)
     check("unlanded slot untouched", unlanded_exe.exists(), text)
     check("leased slot untouched", leased_exe.exists(), text)
     check("reclaim names what it kept", "KEEP slot-1: dirty" in text and "KEEP slot-2: unlanded" in text, text)
-    check("reclaim reports the freed slot", "RECLAIMED: removed 1" in text, text)
+    check("reclaim reports the freed slot", "RECLAIMED: removed 3" in text, text)
 
     with patch.object(aw, "disk_free", return_value=0), \
             patch.object(aw, "slot_has_live_session", return_value=False), \
@@ -693,6 +761,7 @@ def test_reclaim_touches_only_landed_clean_idle_slots(repo):
 def test_reclaim_refuses_a_live_process(repo):
     wt = add_slot(repo, "slot-0", "lane/live")
     exe = fake_target(wt)
+    _session, inc_files = fake_incremental(wt)
     with patch.object(aw, "disk_free", return_value=0), \
             patch.object(aw, "slot_has_live_session", return_value=False), \
             patch.object(aw, "target_live_status", return_value=True), \
@@ -702,9 +771,8 @@ def test_reclaim_refuses_a_live_process(repo):
         except SystemExit:
             pass
     check("live target keeps its executable", exe.exists(), out.getvalue())
-    check("live target keeps its fingerprint metadata",
-          (wt / "target" / "debug" / ".fingerprint" / "gen_node_catalog-abcdef" / "invoked.timestamp").exists(),
-          out.getvalue())
+    check("live target keeps its incremental cache",
+          all(path.exists() for path in inc_files), out.getvalue())
     check("live refusal is reported", "live process" in out.getvalue(), out.getvalue())
 
 
@@ -719,13 +787,17 @@ def test_scrub_continues_past_a_victim_that_frees_nothing(repo):
         os.utime(path, (old, old))
     warm = add_slot(repo, "slot-1", "lane/warm")
     exe = fake_target(warm)
+    _session, warm_inc = fake_incremental(warm)
     with patch.object(aw, "SCRUB_TO_GB", 0), \
             patch.object(aw, "slot_has_live_session", return_value=False), \
             patch.object(aw, "target_live_status", return_value=False), \
             redirect_stdout(io.StringIO()) as out:
         aw.cmd_scrub(SimpleNamespace())
     check("scrub reaches the cache behind a no-op victim",
-          not (warm / "target" / "debug" / ".fingerprint" / "gen_node_catalog-abcdef" / "invoked.timestamp").exists(),
+          not warm_inc[0].exists() and "SCRUBBED slot-1" in out.getvalue(),
+          out.getvalue())
+    check("warm artifacts and metadata survive the pass", exe.exists() and
+          (warm / "target" / "debug" / ".fingerprint" / "gen_node_catalog-abcdef" / "invoked.timestamp").exists(),
           out.getvalue())
 
 
@@ -739,6 +811,7 @@ def test_pool_ignores_unregistered_cargo_slot(repo):
 
 
 TESTS += [test_scrub_frees_an_idle_slot_over_its_cap,
+          test_scrub_prunes_idle_incremental_without_pressure,
           test_reclaim_touches_only_landed_clean_idle_slots,
           test_reclaim_refuses_a_live_process,
           test_scrub_continues_past_a_victim_that_frees_nothing,
@@ -1115,7 +1188,7 @@ def main():
         with tempfile.TemporaryDirectory() as tmp:  # one clean pool per test
             try:
                 fn(build_pool(Path(tmp)))
-            except Exception as e:  # a crashing test is a failing test
+            except (Exception, SystemExit) as e:  # a crashing or exiting test is a failing test
                 FAIL.append((fn.__name__, f"raised {e!r}"))
 
     for name in PASS:
