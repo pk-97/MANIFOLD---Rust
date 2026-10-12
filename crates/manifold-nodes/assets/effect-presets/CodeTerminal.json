@@ -1,7 +1,7 @@
 {
   "version": 2,
   "name": "CodeTerminal",
-  "description": "The source image is drawn with terminal glyphs. Source colour and brightness are sampled once per character cell, keeping whole glyphs at image contours. Brightness controls character illumination and stroke weight; gaps and spaces never fill. Amount turns the image into code cell by cell: each character cell first becomes a solid block of its own terminal colour, then the block is carved down to its letter, with cells flickering between stages at the arrival edge. Every stage comes from the cell's own colour, so empty black stays black. At full Amount the image is entirely terminal. Fresh Text keeps retyping groups of lines with new shell, code, log and memory passages; at zero, still content settles. Source changes trigger local typing and data-character edits. Layout selects Single or tmux-style panes; Activity zero holds the characters.",
+  "description": "The source image is drawn with terminal glyphs. Source colour and brightness are sampled once per character cell, keeping whole glyphs at image contours. Brightness controls character illumination and stroke weight; gaps and spaces never fill. Amount dissolves the image into code pixel by pixel: in each character cell the pixels on the letter's strokes turn first, so the letter forms inside the image, then the pixels around it crumble to black in a blue-noise order, with cells flickering at the arrival edge. At full Amount the image is entirely terminal. Fresh Text keeps retyping groups of lines with new shell, code, log and memory passages; at zero, still content settles. Source changes trigger local typing and data-character edits. Layout selects Single or tmux-style panes; Activity zero holds the characters.",
   "presetMetadata": {
     "id": "CodeTerminal",
     "displayName": "Code Terminal",
@@ -465,7 +465,7 @@
       "nodeId": "arrive_low",
       "typeId": "node.scale_offset_value",
       "handle": "arrive_low",
-      "title": "Cells Go Digital",
+      "title": "Dissolve",
       "params": {
         "a": {
           "type": "Float",
@@ -473,11 +473,11 @@
         },
         "scale": {
           "type": "Float",
-          "value": -1.602
+          "value": -1.352
         },
         "offset": {
           "type": "Float",
-          "value": 1.001
+          "value": 1.351
         }
       }
     },
@@ -486,7 +486,7 @@
       "nodeId": "arrive_high",
       "typeId": "node.scale_offset_value",
       "handle": "arrive_high",
-      "title": "Cells Go Digital Edge",
+      "title": "Dissolve Edge",
       "params": {
         "scale": {
           "type": "Float",
@@ -503,14 +503,14 @@
       "nodeId": "arrive_mask",
       "typeId": "node.smoothstep",
       "handle": "arrive_mask",
-      "title": "Digital Blocks"
+      "title": "Pixels Turned To Code"
     },
     {
       "id": 19,
       "nodeId": "reveal",
       "typeId": "node.masked_mix",
       "handle": "reveal",
-      "title": "Blocks To Letters",
+      "title": "Image Dissolves Into Text",
       "params": {
         "amount": {
           "type": "Float",
@@ -660,64 +660,6 @@
       }
     },
     {
-      "id": 31,
-      "nodeId": "dark_low",
-      "typeId": "node.scale_offset_value",
-      "handle": "dark_low",
-      "title": "Blocks Become Letters",
-      "params": {
-        "a": {
-          "type": "Float",
-          "value": 1.0
-        },
-        "scale": {
-          "type": "Float",
-          "value": -1.602
-        },
-        "offset": {
-          "type": "Float",
-          "value": 1.601
-        }
-      }
-    },
-    {
-      "id": 32,
-      "nodeId": "dark_high",
-      "typeId": "node.scale_offset_value",
-      "handle": "dark_high",
-      "title": "Blocks Become Letters Edge",
-      "params": {
-        "scale": {
-          "type": "Float",
-          "value": 1.0
-        },
-        "offset": {
-          "type": "Float",
-          "value": 0.001
-        }
-      }
-    },
-    {
-      "id": 33,
-      "nodeId": "dark_mask",
-      "typeId": "node.smoothstep",
-      "handle": "dark_mask",
-      "title": "Letter Carve"
-    },
-    {
-      "id": 35,
-      "nodeId": "arrive",
-      "typeId": "node.masked_mix",
-      "handle": "arrive",
-      "title": "Image To Blocks",
-      "params": {
-        "amount": {
-          "type": "Float",
-          "value": 1.0
-        }
-      }
-    },
-    {
       "id": 40,
       "nodeId": "flicker",
       "typeId": "node.block_displace_field",
@@ -752,6 +694,40 @@
         "mode": {
           "type": "Enum",
           "value": 0
+        }
+      }
+    },
+    {
+      "id": 42,
+      "nodeId": "pixel_order",
+      "typeId": "node.mix",
+      "handle": "pixel_order",
+      "title": "Pixel Order In Cell",
+      "params": {
+        "amount": {
+          "type": "Float",
+          "value": 0.3
+        },
+        "mode": {
+          "type": "Enum",
+          "value": 0
+        }
+      }
+    },
+    {
+      "id": 43,
+      "nodeId": "strokes_first",
+      "typeId": "node.mix",
+      "handle": "strokes_first",
+      "title": "Letter Strokes First",
+      "params": {
+        "amount": {
+          "type": "Float",
+          "value": 0.35
+        },
+        "mode": {
+          "type": "Enum",
+          "value": 2
         }
       }
     }
@@ -887,12 +863,6 @@
       "fromNode": 14,
       "fromPort": "out",
       "toNode": 15,
-      "toPort": "in"
-    },
-    {
-      "fromNode": 21,
-      "fromPort": "out",
-      "toNode": 18,
       "toPort": "in"
     },
     {
@@ -1046,55 +1016,37 @@
       "toPort": "a"
     },
     {
-      "fromNode": 30,
-      "fromPort": "out",
-      "toNode": 31,
-      "toPort": "a"
-    },
-    {
-      "fromNode": 31,
-      "fromPort": "out",
-      "toNode": 32,
-      "toPort": "a"
-    },
-    {
       "fromNode": 21,
       "fromPort": "out",
-      "toNode": 33,
-      "toPort": "in"
-    },
-    {
-      "fromNode": 31,
-      "fromPort": "out",
-      "toNode": 33,
-      "toPort": "low"
-    },
-    {
-      "fromNode": 32,
-      "fromPort": "out",
-      "toNode": 33,
-      "toPort": "high"
-    },
-    {
-      "fromNode": 0,
-      "fromPort": "out",
-      "toNode": 35,
+      "toNode": 42,
       "toPort": "a"
     },
     {
-      "fromNode": 6,
+      "fromNode": 13,
       "fromPort": "out",
-      "toNode": 35,
+      "toNode": 42,
       "toPort": "b"
     },
     {
-      "fromNode": 18,
+      "fromNode": 42,
       "fromPort": "out",
-      "toNode": 35,
-      "toPort": "mask"
+      "toNode": 43,
+      "toPort": "a"
     },
     {
-      "fromNode": 35,
+      "fromNode": 3,
+      "fromPort": "out",
+      "toNode": 43,
+      "toPort": "b"
+    },
+    {
+      "fromNode": 43,
+      "fromPort": "out",
+      "toNode": 18,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 0,
       "fromPort": "out",
       "toNode": 19,
       "toPort": "a"
@@ -1106,7 +1058,7 @@
       "toPort": "b"
     },
     {
-      "fromNode": 33,
+      "fromNode": 18,
       "fromPort": "out",
       "toNode": 19,
       "toPort": "mask"

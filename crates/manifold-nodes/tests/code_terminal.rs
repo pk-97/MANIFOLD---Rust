@@ -1201,8 +1201,8 @@ mod gpu {
             "intermediate amount keeps both source and terminal regions: {mid_changed:.3}"
         );
 
-        // Mid Amount digitises cell by cell: live image, then a solid block in
-        // the cell's terminal colour, then the block carved to its letter.
+        // Mid Amount dissolves pixel by pixel: letter strokes turn first, so
+        // letters form inside the image before the gaps around them go black.
         let source_pixels = f32_pixels(&source_raw);
         let mid_pixels = f32_pixels(&mid);
         let difference = |p: &[f32; 4], q: &[f32; 4]| {
@@ -1214,12 +1214,17 @@ mod gpu {
             .zip(&source_pixels)
             .filter(|(m, s)| difference(m, s) < 0.002)
             .count();
-        let blocks = mid_pixels
-            .iter()
-            .zip(&source_pixels)
-            .zip(&full_pixels)
-            .filter(|((m, s), f)| difference(m, s) > 0.02 && difference(m, f) > 0.02)
-            .count();
+        let turned_share = |stroke: bool| {
+            let (mut turned, mut total) = (0usize, 0usize);
+            for ((m, s), f) in mid_pixels.iter().zip(&source_pixels).zip(&full_pixels) {
+                if difference(s, f) < 0.05 || (f[1] > 0.08) != stroke {
+                    continue;
+                }
+                total += 1;
+                turned += usize::from(difference(m, f) < 0.002);
+            }
+            turned as f32 / total.max(1) as f32
+        };
         let faded = mid_pixels
             .iter()
             .zip(&source_pixels)
@@ -1227,7 +1232,11 @@ mod gpu {
             .filter(|((m, s), f)| difference(m, f) < 0.002 && difference(m, s) > 0.02)
             .count();
         assert!(fraction(untouched) > 0.1, "mid amount keeps live image");
-        assert!(fraction(blocks) > 0.01, "mid amount shows solid digital blocks");
+        let (strokes, gaps) = (turned_share(true), turned_share(false));
+        assert!(
+            strokes > gaps + 0.1,
+            "letter strokes turn before gaps: strokes={strokes:.3} gaps={gaps:.3}"
+        );
         assert!(fraction(faded) > 0.01, "mid amount fades some cells to terminal");
 
         let frozen_a = unfused.render(
