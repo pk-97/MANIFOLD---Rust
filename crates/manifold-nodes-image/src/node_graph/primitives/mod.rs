@@ -133,6 +133,8 @@ mod zero_array;
 pub mod multi_blend;
 mod motion_blur;
 mod mux_array;
+mod switch_indices;
+mod switch_mesh;
 mod mux_scalar;
 manifold_core::testkit_visible! { mod neighbor_smooth; }
 mod normalize_vec2;
