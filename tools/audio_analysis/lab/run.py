@@ -54,6 +54,8 @@ def parts(cfg):
     out = dict(finder=finder)
     if cfg.net:
         out['frames'] = {m: code_id(components.FRAME_MEASURES[m]) for m in cfg.net['channels']}
+    if cfg.hard_negatives:
+        out['onset'] = code_id(components.MEASURES['prof32'])
     if 'trees' in cfg.models:
         out['measures'] = {m: code_id(components.MEASURES[m]) for m in cfg.models['trees']['measures']}
     if cfg.stage:
@@ -131,6 +133,10 @@ def setup(cfg):
     check_sources([songs[t] for t in lab])
     content = {t: songs[t].content_id for t in lab}
     label_ids = {t: hashlib.sha256(json.dumps(s, sort_keys=True).encode()).hexdigest()[:16] for t, s in lab.items()}
+    partner = partner_of(cfg)
+    for t in lab if partner else ():
+        if t in partner:   # the net's draws read the partner labels, so they belong to the song's label id
+            label_ids[t] = hashlib.sha256((label_ids[t] + json.dumps(partner[t]['positives'])).encode()).hexdigest()[:16]
     for t, s in lab.items():
         if (s.get('kind') == 'generated') != (songs[t].kind == 'generated'):
             sys.exit(f'{t}: labels and song list disagree on its kind; rebuild with lab/registry.py build')
@@ -167,6 +173,33 @@ def setup(cfg):
     return lab, songs, meta
 
 
+def partner_of(cfg):
+    """The partner family's labels for sampling.coincident_weight (None when the option is off); exits when the
+    partner has no label files."""
+    if not cfg.coincident_weight:
+        return None
+    from tools.audio_analysis.lab import score
+    partner = score.partner_labels(cfg.family)
+    if partner is None:
+        sys.exit(f'{cfg.name}: sampling.coincident_weight needs the partner family labels of {cfg.family}')
+    return partner
+
+
+def row_weights(cfg, song, s, onset, y, partner):
+    """(neg_w, pos_w) per candidate for the net's draws (kick_goal_nn.draw_weights); None where the option is off.
+    hard_negatives: the cached rise profile (components prof32), no audio recomputed. coincident_weight: the
+    partner labels of the song a gain copy was made from; a song the partner does not label draws evenly."""
+    from tools.audio_analysis.lab import components, models
+    neg_w = pos_w = None
+    if cfg.hard_negatives:
+        profile = components.measure(song, cfg.candidates, cfg.family, 'prof32')
+        neg_w = models.hard_negative_weights(models.onset_strength(profile), cfg.hard_negatives['power'])
+    if partner is not None and (song.parent or song.id) in partner:
+        pos_w = models.coincident_row_weights(onset, y, s['positives'], partner[song.parent or song.id]['positives'],
+                                              cfg.coincident_weight)
+    return neg_w, pos_w
+
+
 def build(cfg, lab, songs, dev, log=print):
     """{song: kick_goal_nn.Song} for the net from the cache: the retired snare runner's inputs, byte for byte
     (test_input_parity). Frame measures are extra channels."""
@@ -174,6 +207,7 @@ def build(cfg, lab, songs, dev, log=print):
     from tools.audio_analysis.eval.kick_goal_nn import Song
     from tools.audio_analysis.lab import cache, components
     ahead = cfg.ahead_s
+    partner = partner_of(cfg)
     data = {}
     for t, s in lab.items():
         song = songs[t]
@@ -181,7 +215,8 @@ def build(cfg, lab, songs, dev, log=print):
         cand, onset, emit = c.cand, c.onset_s, c.emit_s
         mask, y, hard = rows(s, onset)
         extra = tuple(components.frame(song, m) for m in cfg.net['channels'])
-        data[t] = Song(cache.spectrum(song), onset, emit + ahead, mask, y, t, hard, extra)
+        neg_w, pos_w = row_weights(cfg, song, s, onset, y, partner)
+        data[t] = Song(cache.spectrum(song), onset, emit + ahead, mask, y, t, hard, extra, neg_w, pos_w)
         # Every song stays on the CPU: slices() cuts bit-identically there, so no Song holds MPS pool memory and
         # train() moves only the per-batch tensors to the net's device. Gain copies and probes were already cut here.
         log(f'{t}: {len(cand)} candidates, {int(mask.sum())} training rows')
@@ -231,8 +266,8 @@ def model_key(cfg, model, meta):
     # copies themselves ride the plan (`trainings`) and the layer rows as held songs.
     sub['sampling'] = {k: v for k, v in sub['sampling'].items() if k != 'gain_probes'}
     sub['models'] = {model: cfg.models[model]}
-    reads = dict(net='frames', trees='measures')[model]
-    used = {k: v for k, v in meta['parts'].items() if k in ('finder', reads)}
+    reads = dict(net=('frames', 'onset'), trees=('measures',))[model]
+    used = {k: v for k, v in meta['parts'].items() if k == 'finder' or k in reads}
     taught = sorted({u for n in meta['trainings'] for u in n['trained'] + n['clips']})
     layer_songs = sorted({u for n in meta['trainings'] for u in n['trained'] + n['clips'] + n['held']})
     code = model_code(model, model == 'trees' and templated(cfg))
