@@ -46,6 +46,43 @@ def robustness(reps, recall_only, out):
         out(f'  {float(g):>+8.1f} {m[0]:6.3f} {m[1]:7.3f} {m[2]:9.3f} {m[3]:9.2f}')
 
 
+def coincident_lines(sides, family):
+    """The coincident-hit A/B as text lines. sides = [A's reports by seed, B's reports by seed]; per song and
+    pooled recall on the family's labels within the report's window of a partner-family label, hits averaged over
+    seeds, overall recall beside it. [] when a report predates the score or the family has no partner."""
+    blocks = [[r.get('coincident') for r in side] for side in sides]
+    if not all(b and b.get('pooled') for side in blocks for b in side):
+        return []
+    first = blocks[0][0]
+    songs = set.intersection(*[set(b['per_song']) for side in blocks for b in side])
+    exam = [t for t in sides[0][0]['exam'] if t in songs]
+
+    def mean(side, t, k):
+        return sum(b['per_song'][t][k] for b in side) / len(side)
+    out = [f'coincident hits ({family} labels within {first["window_ms"]} ms of a {first["partner"]} label), '
+           f'recall, hits averaged over seeds, overall recall beside it:']
+    for name, side in zip('AB', blocks):
+        ch = sum(mean(side, t, 'coincident_matched') for t in exam)
+        cn = sum(side[0]['per_song'][t]['coincident_labels'] for t in exam)
+        oh = sum(mean(side, t, 'matched') for t in exam)
+        on = sum(side[0]['per_song'][t]['labels'] for t in exam)
+        out.append(f'  {name}: coincident {ch / max(1, cn):.3f} ({ch:.1f} of {cn}) | overall {oh / max(1, on):.3f} '
+                   f'({oh:.1f} of {on}) | {len(exam)} songs')
+    rows = []
+    for t in exam:
+        n = blocks[0][0]['per_song'][t]['coincident_labels']
+        if n:
+            rows.append((t, n, blocks[0][0]['per_song'][t]['labels'],
+                         [mean(side, t, 'coincident_matched') for side in blocks],
+                         [mean(side, t, 'matched') for side in blocks]))
+    if rows:
+        out.append('  per song, coincident hits A / B (of n) | overall recall A / B:')
+        for t, n, labels_n, c, o in rows:
+            out.append(f'    {t:18s} {c[0]:5.1f} / {c[1]:5.1f} (of {n:3d}) | {o[0] / max(1, labels_n):.3f} / '
+                       f'{o[1] / max(1, labels_n):.3f}')
+    return out
+
+
 def main():
     from tools.audio_analysis.eval.detector_compare import compare
     from tools.audio_analysis.lab.config import load
@@ -86,6 +123,8 @@ def main():
     first = reps[0][seeds[0]]
     out(f'exam: {len(first["exam"])} project songs, seeds {seeds}, excluded by audit {first["excluded"]}')
     compare([[reps[k][s]['results']['net']['per_song'] for s in seeds] for k in (0, 1)], tuple(first['recall_only']), out)
+    for m in coincident_lines([[reps[k][s] for s in seeds] for k in (0, 1)], cfgs[0].family):
+        out(m)
     if first['generated']:
         out('generated songs (never set a cutoff; trained on only where the config trains them):')
         compare([[reps[k][s]['generated'] for s in seeds] for k in (0, 1)], (), out)
