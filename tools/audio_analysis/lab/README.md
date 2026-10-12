@@ -27,7 +27,12 @@ already trained is reused, so changing only the trees retrains no nets. `--warm`
 **Score and compare.** `lab/score.py RUN_ID [--layer net|trees|combined]` scores in seconds from the saves.
 `lab/compare.py A B` trains whatever is missing, A and B interleaved, then prints the A/B on the real songs and,
 apart, on the generated songs. The headline is the 90% interval over songs; seed spread is the second line. It
-refuses a pair whose exam songs or labels differ, and one-net-per-song configs.
+refuses a pair whose exam songs or labels differ, and one-net-per-song configs. Snare and kick reports also carry
+`coincident`: recall on the labels within 20 ms of a label of the other family (snare against kick, kick against
+snare), per song and pooled, beside overall recall; `compare.py` prints it under the exam A/B.
+
+**Overnight.** `lab/overnight.py PLAN.json [--dry-run]` (`scripts/dev.py lab-queue`) runs a JSON list of run and
+compare steps one at a time under the GPU lock, writes a log per step and a summary, and stops at the first failure.
 
 **Ship a detector.** `lab/release.py` (`scripts/dev.py detector-release`; rules in
 `docs/DETECTOR_RUNTIME_DESIGN.md`). Save the config's run seeds (`lab/run.py CONFIG --seeds S[,S+1..]`), then
