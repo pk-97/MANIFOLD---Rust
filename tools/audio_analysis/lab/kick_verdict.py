@@ -9,6 +9,7 @@ net env) into one store per kick release; the snare measure only reads the store
 
 Usage: kick_verdict.py build"""
 import dataclasses
+import json
 import sys
 from pathlib import Path
 
@@ -48,10 +49,13 @@ def build():
                     held[t] = z[k]
     from tools.audio_analysis.lab.registry import mix
     out = {}
+    # Held-out probabilities exist only for the songs the release's own run trained on; a kick-labelled song that
+    # joined the lab after that run was never seen by the release, so the release itself is its held-out verdict.
+    trained = set(json.loads((run.RUNS / rec['run_id'] / 'meta.json').read_text())['songs'])
     for t, song in songs.items():
         if 'snare' not in song.families:
             continue
-        if t in klab:
+        if t in klab and t in trained:
             if t not in held:
                 sys.exit(f'{t}: the kick run {rec["run_id"]} saved no held-out probability')
             c = components.candidates(song, kcfg.candidates, kcfg.family, build=False)
