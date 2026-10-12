@@ -7,9 +7,12 @@ use (within 1 ms). Writes lab/offset_proofs.json; registry.py reads it.
 
 --variants proves the mix and master variants the catalogue judged same_arrangement against a song's lab mix
 (catalog.py variants): each by the same fit on the variant's own audio, against the offset its labels would use (the
-song's offset less the catalogue's lag); failing that, relatively: every pattern fitted on both the song's mix and the
-variant moves by exactly the catalogue's lag (1 ms), so the song's proven offset carries over. Identical audio, non-wav
-files and a second copy of one audio are listed, not proven. Writes lab/variant_proofs.json, which sampling.mix_variants reads (registry.variants_of).
+song's offset less the catalogue's lag); failing that, relatively: one pattern fitted on both the song's mix and the
+variant moves by the catalogue's lag within VARIANT_TOL_S, so the song's proven offset carries over. Variants train and
+are never scored, and the catalogue's whole-file lag is the alignment; the pattern only confirms it, and mastering
+moves a fitted attack by a few ms. Any audio the catalogue reads (mp3, aiff, flac) is proven. Identical audio and
+byte-identical copies of the lab mix or of another variant are listed, not proven. Writes lab/variant_proofs.json, which
+sampling.mix_variants reads (registry.variants_of).
 
 Usage: offsets.py SONG...
        offsets.py --variants [SONG...]"""
@@ -27,6 +30,7 @@ import numpy as np  # noqa: E402
 
 PROOFS = Path(__file__).with_name('offset_proofs.json')
 CLEAR_R, CLEAR_SD = .3, 1.0
+VARIANT_TOL_S = .005   # how far a mastering chain moves a fitted attack; variants only, never the exam's 1 ms
 
 
 def fits(song, als):
@@ -85,17 +89,22 @@ def catalogue_variants(con, song_id):
     return [(p, sha, lag, bool(_json.loads(d or '{}').get('identical'))) for p, sha, lag, d in rows]
 
 
-def relative(parent_fits, variant_fits, lag_s):
-    """The relative proof: every pattern fitted on both the song's mix and the variant moves by the catalogue's lag
-    (within 1 ms). The fit's bias on a mix is the song's, so it cancels; the song's own offset is proven apart (its
-    audit). Returns the agreeing patterns, or None."""
+def moves(parent_fits, variant_fits, lag_s):
+    """{pattern: seconds its fit misses moving by the catalogue's lag} for every pattern fitted on both the song's mix
+    and the variant. The fit's bias on a mix is the song's, so it cancels."""
     if parent_fits is None or variant_fits is None:
-        return None
+        return {}
     a, b = fit_offsets(*parent_fits), fit_offsets(*variant_fits)
-    both = sorted(set(a) & set(b))
-    if not both or any(abs((b[k] - a[k]) + lag_s) > .001 for k in both):
+    return {k: (b[k] - a[k]) + lag_s for k in sorted(set(a) & set(b))}
+
+
+def relative(moved):
+    """The relative proof from moves(): (pattern, residual s) of the pattern nearest the lag when it is within
+    VARIANT_TOL_S, else None. The song's own offset is proven apart (its audit)."""
+    if not moved:
         return None
-    return both
+    k = min(moved, key=lambda p: (abs(moved[p]), p))
+    return (k, moved[k]) if abs(moved[k]) <= VARIANT_TOL_S else None
 
 
 def prove_variant(song, path, sha, lag_s, als, seen, parent_fits=None):
@@ -106,8 +115,8 @@ def prove_variant(song, path, sha, lag_s, als, seen, parent_fits=None):
     from tools.audio_analysis.lab.registry import mix, sha256_file, variant_copy, variant_id
     vid = variant_id(song.id, sha)
     row = dict(parent=song.id, path=path, sha256=sha, lag_s=lag_s, als=str(als) if als else None)
-    if not path.lower().endswith('.wav'):
-        return vid, dict(row, status='excluded (not a wav file: the lab loader reads wav)')
+    if sha in song.source_sha256:
+        return vid, dict(row, status='excluded (a byte-identical copy of the lab mix)')
     if song.offset_s is None or als is None:
         return vid, dict(row, status='not proven (the song has no export offset or Ableton set)')
     from tools.audio_analysis.catalog.catalog import is_dataless
@@ -120,19 +129,22 @@ def prove_variant(song, path, sha, lag_s, als, seen, parent_fits=None):
     try:
         got = fits(v, als)
         res = prove(v, als, used, got)
-        if not res['status'].startswith('proven'):
-            moved = relative(parent_fits, got, lag_s)
-            if moved:
-                res = dict(res, status=f'proven (relative: the {" and ".join(moved)} fit moves with the catalogue lag)')
+        moved = moves(parent_fits, got, lag_s)
+        rel = None if res['status'].startswith('proven') else relative(moved)
+        if rel:
+            res = dict(res, status=f'proven (relative: the {rel[0]} fit moves with the catalogue lag, '
+                                   f'{1e3 * rel[1]:+.2f} ms)')
         x = mix(v)
     except Exception as e:  # an unreadable variant is listed, never fatal
         return vid, dict(row, status=f'not proven (unreadable: {type(e).__name__}: {e})'[:200])
     audio = hashlib.sha256(np.ascontiguousarray(x).tobytes()).hexdigest()
-    row = dict(row, audio_sha256=audio, duration_s=round(len(x) / v.sample_rate, 4),
-               fit=res.get('offset_s'), status=res['status'])
+    row = dict(row, audio_sha256=audio, duration_s=round(len(x) / v.sample_rate, 4), fit=res.get('offset_s'),
+               moves_ms={k: round(1e3 * r, 3) for k, r in moved.items()}, status=res['status'])
     if audio in seen:
         return vid, dict(row, status=f'excluded (same audio as {seen[audio]})')
     seen[audio] = vid
+    if rel:
+        row['relative'] = dict(pattern=rel[0], residual_ms=round(1e3 * rel[1], 3))
     return vid, dict(row, offset_s=used) if res['status'].startswith('proven') else row
 
 

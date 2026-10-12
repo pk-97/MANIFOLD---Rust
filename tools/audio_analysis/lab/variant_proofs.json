@@ -12,11 +12,18 @@
   "duration_s": 188.0488,
   "fit": null,
   "lag_s": 0.0,
+  "moves_ms": {
+   "snare": 0.0
+  },
   "offset_s": -23.4164,
   "parent": "corrosion",
   "path": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/2026/Katsu Don Project/FINALS/Corrosion - FINAL 01.wav",
+  "relative": {
+   "pattern": "snare",
+   "residual_ms": 0.0
+  },
   "sha256": "1b486e6400943f55dc8b1e6a695ffb13a2370abb95ecee4d9dc27bf9e1d7db5e",
-  "status": "proven (relative: the snare fit moves with the catalogue lag)"
+  "status": "proven (relative: the snare fit moves with the catalogue lag, +0.00 ms)"
  },
  "corrosion@mix-4348d20bf4": {
   "als": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/2026/Katsu Don Project/Katsu Don - V4.als",
@@ -24,19 +31,37 @@
   "duration_s": 188.0488,
   "fit": null,
   "lag_s": 0.0,
+  "moves_ms": {
+   "snare": 0.0
+  },
   "offset_s": -23.4164,
   "parent": "corrosion",
   "path": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/2026/Katsu Don Project/FINALS/Corrosion - PREMASTER 01.wav",
+  "relative": {
+   "pattern": "snare",
+   "residual_ms": 0.0
+  },
   "sha256": "4348d20bf4b7b35a8389df8779e24d17426d17f50512df259730d8d840d1019f",
-  "status": "proven (relative: the snare fit moves with the catalogue lag)"
+  "status": "proven (relative: the snare fit moves with the catalogue lag, +0.00 ms)"
  },
  "corrosion@mix-65646a2ef1": {
   "als": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/2026/Katsu Don Project/Katsu Don - V4.als",
+  "audio_sha256": "e4ff300f125463b194173858d0b4103fbdfcf71b613715430d151bf875c3cd2c",
+  "duration_s": 193.176,
+  "fit": null,
   "lag_s": -0.04827083333333333,
+  "moves_ms": {
+   "snare": -1.271
+  },
+  "offset_s": -23.368129166666666,
   "parent": "corrosion",
   "path": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/2026/Katsu Don Project/Katsu Don - WIP 3.mp3",
+  "relative": {
+   "pattern": "snare",
+   "residual_ms": -1.271
+  },
   "sha256": "65646a2ef1239c661991e90af0970b8ea3311c113510394fc1155da053ae1372",
-  "status": "excluded (not a wav file: the lab loader reads wav)"
+  "status": "proven (relative: the snare fit moves with the catalogue lag, -1.27 ms)"
  },
  "corrosion@mix-9c9e905bee": {
   "als": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/2026/Katsu Don Project/Katsu Don - V4.als",
@@ -44,11 +69,18 @@
   "duration_s": 188.001,
   "fit": null,
   "lag_s": 0.0009583333333333333,
+  "moves_ms": {
+   "snare": 0.958
+  },
   "offset_s": -23.417358333333333,
   "parent": "corrosion",
   "path": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Interim - LS X EE - EP/FINAL RELEASE/06 - LS x EE - Corrosion T2 (mastered) 48K 24-bit [START TRIM].wav",
+  "relative": {
+   "pattern": "snare",
+   "residual_ms": 0.958
+  },
   "sha256": "9c9e905bee482f3b82e98f18f08d5a078e5aedff097ee9e22e9a6c1fc7d19933",
-  "status": "proven (relative: the snare fit moves with the catalogue lag)"
+  "status": "proven (relative: the snare fit moves with the catalogue lag, +0.96 ms)"
  },
  "corrosion@mix-cdd26979e5": {
   "als": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/2026/Katsu Don Project/Katsu Don - V4.als",
@@ -56,11 +88,18 @@
   "duration_s": 187.75,
   "fit": null,
   "lag_s": -0.001,
+  "moves_ms": {
+   "snare": -1.0
+  },
   "offset_s": -23.415399999999998,
   "parent": "corrosion",
   "path": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Interim - LS X EE - EP/LS X EE - Interim EP T1/06 - LS x EE - Corrosion T1 (mastered) 48k 24-bit.wav",
+  "relative": {
+   "pattern": "snare",
+   "residual_ms": -1.0
+  },
   "sha256": "cdd26979e5e472e1985e067c268453a1977b13365ad395a3ac7c2c0afd16606c",
-  "status": "proven (relative: the snare fit moves with the catalogue lag)"
+  "status": "proven (relative: the snare fit moves with the catalogue lag, -1.00 ms)"
  },
  "corrosion@mix-d87e8fae1b": {
   "als": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/2026/Katsu Don Project/Katsu Don - V4.als",
@@ -68,10 +107,18 @@
   "duration_s": 188.0312,
   "fit": null,
   "lag_s": -0.029125,
+  "moves_ms": {
+   "snare": 1.875
+  },
+  "offset_s": -23.387275,
   "parent": "corrosion",
   "path": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Interim - LS X EE - EP/LS X EE - Interim T2 (masters)/06 - LS x EE - Corrosion T2 (mastered) 48k 24-bit.wav",
+  "relative": {
+   "pattern": "snare",
+   "residual_ms": 1.875
+  },
   "sha256": "d87e8fae1ba6392baa7b434acd71a3bf615963f12cc1ab402da2fed3a6511e10",
-  "status": "not proven"
+  "status": "proven (relative: the snare fit moves with the catalogue lag, +1.87 ms)"
  },
  "default_haze@mix-8b8ec2f538": {
   "lag_s": 0.0,
@@ -89,11 +136,19 @@
  },
  "flight@mix-61c36dd09b": {
   "als": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/2026/Flight - 2026 Edits Project/Flight - WIP 7 -  2026 Mix.als",
+  "audio_sha256": "0107a1ece25446879030de717de916fc8612e2fa0709211220f053f80b4d31e1",
+  "duration_s": 247.752,
+  "fit": -30.9163,
   "lag_s": 0.0,
+  "moves_ms": {
+   "kick": 0.0,
+   "snare": 0.0
+  },
+  "offset_s": -30.9163,
   "parent": "flight",
   "path": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/2026/Flight - 2026 Edits Project/Flight - WIP 7 - 2026 Greedy Edit.mp3",
   "sha256": "61c36dd09b755b77467137b465a49cc9c7f5dfb50499a608d9244535db8c3102",
-  "status": "excluded (not a wav file: the lab loader reads wav)"
+  "status": "proven (kick and snare agree)"
  },
  "heavy_on_mind@mix-027f3eab72": {
   "als": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/2024/Texture Project/Texture - APR Feedback - DESS - EXPORTS.als",
@@ -101,11 +156,18 @@
   "duration_s": 248.3544,
   "fit": null,
   "lag_s": -0.0017687074829931973,
+  "moves_ms": {
+   "kick": -0.769
+  },
   "offset_s": -23.544131292516987,
   "parent": "heavy_on_mind",
   "path": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/2024/Texture Project/MASTERS/Heavy on Mind (feat. Tayla) - FINAL - 4 - PREMASTER.wav",
+  "relative": {
+   "pattern": "kick",
+   "residual_ms": -0.769
+  },
   "sha256": "027f3eab72b65a7106106254aa0c40d4124f8c9193051ffe362f02f399fd011c",
-  "status": "proven (relative: the kick fit moves with the catalogue lag)"
+  "status": "proven (relative: the kick fit moves with the catalogue lag, -0.77 ms)"
  },
  "heavy_on_mind@mix-1c1c212ea7": {
   "lag_s": 0.0,
@@ -127,6 +189,9 @@
   "duration_s": 218.5,
   "fit": null,
   "lag_s": 2.0833333333333333e-05,
+  "moves_ms": {
+   "kick": 8.021
+  },
   "parent": "hung_up",
   "path": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Interim - LS X EE - EP/FINAL RELEASE/03 - LS x EE - Hung Up T3 (mastered) 48k 24-bit.wav",
   "sha256": "925bf0cbca66f537cc4d847631099729e8e936f649709f6f73cb2045bd7324d2",
@@ -138,10 +203,18 @@
   "duration_s": 218.5625,
   "fit": null,
   "lag_s": -0.06247916666666667,
+  "moves_ms": {
+   "kick": 4.521
+  },
+  "offset_s": -43.57322083333333,
   "parent": "hung_up",
   "path": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Interim - LS X EE - EP/LS X EE - Interim T2 (masters)/03 - LS x EE - Hung Up T2 (mastered) 48k 24-bit.wav",
+  "relative": {
+   "pattern": "kick",
+   "residual_ms": 4.521
+  },
   "sha256": "cd3b0c4ada3e17584555ed089ac030ee41fe4e7c90271398ee5d1a1a58e3c0ca",
-  "status": "not proven"
+  "status": "proven (relative: the kick fit moves with the catalogue lag, +4.52 ms)"
  },
  "late_night@mix-0311a7571e": {
   "als": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/2024/Late Night - STEM MASTER Project/L12 Meld + Roar (Late Night) - Master FLAT Final.als",
@@ -149,11 +222,18 @@
   "duration_s": 251.3889,
   "fit": null,
   "lag_s": 0.0,
+  "moves_ms": {
+   "kick": 0.0
+  },
   "offset_s": -35.279300000000006,
   "parent": "late_night",
   "path": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/2024/Late Night - STEM MASTER Project/ALEX MASTERS/Latent Space - Late Night T1 (mastered) 48k 24-bit.wav",
+  "relative": {
+   "pattern": "kick",
+   "residual_ms": 0.0
+  },
   "sha256": "0311a7571eae88e2e9ddd8f944e3184d500924101fb2bdf9def5e0efee7fa732",
-  "status": "proven (relative: the kick fit moves with the catalogue lag)"
+  "status": "proven (relative: the kick fit moves with the catalogue lag, +0.00 ms)"
  },
  "late_night@mix-4f44225302": {
   "als": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/2024/Late Night - STEM MASTER Project/L12 Meld + Roar (Late Night) - Master FLAT Final.als",
@@ -161,10 +241,18 @@
   "duration_s": 251.3889,
   "fit": null,
   "lag_s": 0.0,
+  "moves_ms": {
+   "kick": 4.0
+  },
+  "offset_s": -35.279300000000006,
   "parent": "late_night",
   "path": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/STEMS/LATE NIGHT STEMS/LATE NIGHT - NO VOX.wav",
+  "relative": {
+   "pattern": "kick",
+   "residual_ms": 4.0
+  },
   "sha256": "4f4422530255269c1674fc84c75978bbfd86e9f83a8b5df1d2bf3fb90c548211",
-  "status": "not proven"
+  "status": "proven (relative: the kick fit moves with the catalogue lag, +4.00 ms)"
  },
  "late_night@mix-657905d803": {
   "als": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/2024/Late Night - STEM MASTER Project/L12 Meld + Roar (Late Night) - Master FLAT Final.als",
@@ -172,6 +260,9 @@
   "duration_s": 251.3889,
   "fit": null,
   "lag_s": 0.0,
+  "moves_ms": {
+   "kick": 139.0
+  },
   "parent": "late_night",
   "path": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/2024/Late Night - STEM MASTER Project/FINALS/Late Night - STEM MASTER FINAL 14.wav",
   "sha256": "657905d80353add83bfe3e96114a46ce66a9b4ca24f4cfe79e0307d3d6982ce9",
@@ -183,6 +274,9 @@
   "duration_s": 251.3911,
   "fit": null,
   "lag_s": 0.0014375,
+  "moves_ms": {
+   "kick": 8.437
+  },
   "parent": "late_night",
   "path": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/Other And Backups/LATENT SPACE - LIve Show Project/ALEX MASTERS/LATE NIGHT - ALEX REMASTER V2.wav",
   "sha256": "912ad9f09abcdeb45d28d3491c0dc2fce39e3ee0cf9ff3e6a583e93d63f6e6ac",
@@ -194,6 +288,9 @@
   "duration_s": 251.3889,
   "fit": null,
   "lag_s": 0.0,
+  "moves_ms": {
+   "kick": 139.0
+  },
   "parent": "late_night",
   "path": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/2024/Late Night - STEM MASTER Project/FINALS/02 - LATENT SPACE - Late Night - PRE MASTER V2.wav",
   "sha256": "b74327249a3bbd7ec075bad9470ca320f8149012f05c69c5e8b7cc329559e515",
@@ -205,6 +302,9 @@
   "duration_s": 251.3911,
   "fit": null,
   "lag_s": 0.0014375,
+  "moves_ms": {
+   "kick": 8.437
+  },
   "parent": "late_night",
   "path": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/2024/Late Night - STEM MASTER Project/ALEX MASTERS/LATE NIGHT - ALEX REMASTER V1.wav",
   "sha256": "ccee7f3c8c36132ab41b39c48c31fc4c185b3a185c2d10c274ac835e887c0f7b",
@@ -216,6 +316,9 @@
   "duration_s": 251.3889,
   "fit": null,
   "lag_s": 0.0,
+  "moves_ms": {
+   "kick": 139.0
+  },
   "parent": "late_night",
   "path": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/2024/Late Night - STEM MASTER Project/FINALS/01 - LATENT SPACE - Late Night - PRE MASTER.wav",
   "sha256": "ea8ef92c12e5fbd1ac6ecc2a2a2e406c9a763f2e6b299ef75ec91d97561f2194",
@@ -234,6 +337,10 @@
   "duration_s": 261.8182,
   "fit": null,
   "lag_s": 0.136375,
+  "moves_ms": {
+   "kick": 171.375,
+   "snare": 222.375
+  },
   "parent": "midnight_patience",
   "path": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/2024/Bettys Project/MASTERS/LATENT SPACE x East Esplanade - Midnight Patience - PRE MASTER.wav",
   "sha256": "13e67493c0097e8075febcf504c4c1bfb42782409327c9e1c3b7d2a162815d95",
@@ -252,11 +359,19 @@
   "duration_s": 261.9546,
   "fit": null,
   "lag_s": 0.0,
+  "moves_ms": {
+   "kick": 0.0,
+   "snare": 0.0
+  },
   "offset_s": -29.088749999999994,
   "parent": "midnight_patience",
   "path": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/2024/Bettys Project/MASTERS/Latent Space X East Esplanade - Midnight Patience T1 (mastered) 48k 24-bit.wav",
+  "relative": {
+   "pattern": "kick",
+   "residual_ms": 0.0
+  },
   "sha256": "6081739f803deddd383c37006e218fa61f6d19b776335cc005d223128a10ff16",
-  "status": "proven (relative: the kick and snare fit moves with the catalogue lag)"
+  "status": "proven (relative: the kick fit moves with the catalogue lag, +0.00 ms)"
  },
  "midnight_patience@mix-d6db551e50": {
   "als": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/2024/Bettys Project/Bettys (Midnight Patience) - Export.als",
@@ -264,6 +379,10 @@
   "duration_s": 261.8182,
   "fit": null,
   "lag_s": 0.13635416666666667,
+  "moves_ms": {
+   "kick": 171.354,
+   "snare": 222.354
+  },
   "parent": "midnight_patience",
   "path": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/2024/Bettys Project/FINALS/LATENT SPACE x Binding - Midnight Patience - FINAL NEW STUDIO - WIP 1.wav",
   "sha256": "d6db551e50060eede39c66efd97e6ba3454adab4b0b3f67c0767e06784838d9b",
@@ -275,6 +394,10 @@
   "duration_s": 261.8182,
   "fit": null,
   "lag_s": 0.13635416666666667,
+  "moves_ms": {
+   "kick": 171.354,
+   "snare": 222.354
+  },
   "parent": "midnight_patience",
   "path": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/2024/Bettys Project/FINALS/LATENT SPACE x Binding - Midnight Patience - FINAL V3.wav",
   "sha256": "dd51fefda5fb9dc34a3d062539b685165cf698fec4d15f22dc45cd9b1742fe4f",
@@ -293,6 +416,10 @@
   "duration_s": 261.8182,
   "fit": null,
   "lag_s": 0.136375,
+  "moves_ms": {
+   "kick": 167.375,
+   "snare": 222.375
+  },
   "parent": "midnight_patience",
   "path": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/Other And Backups/LATENT SPACE - LIve Show Project/FINALS/LATENT SPACE x Binding - Midnight Patience - FINAL V2.wav",
   "sha256": "fb7415703600ec7a070094308e74d1d58a825476d04ee5e9f69ed6b6a1efef91",
@@ -304,10 +431,18 @@
   "duration_s": 252.973,
   "fit": null,
   "lag_s": -0.000997732426303855,
+  "moves_ms": {
+   "kick": -2.998
+  },
+  "offset_s": -77.8340022675737,
   "parent": "miracle",
   "path": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/2024/Streets Project/MASTERS/Miracle (feat. Tayla) - FINAL - 3 - PREMASTER.wav",
+  "relative": {
+   "pattern": "kick",
+   "residual_ms": -2.998
+  },
   "sha256": "5ddb5c4a65f0a9721488c3fd3ef765f74e39b4461d99ce2f0ebb8cccdc840c62",
-  "status": "not proven"
+  "status": "proven (relative: the kick fit moves with the catalogue lag, -3.00 ms)"
  },
  "miracle@mix-63d55bb860": {
   "als": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/2024/Streets Project/Streets - FINALS.als",
@@ -315,10 +450,18 @@
   "duration_s": 252.973,
   "fit": null,
   "lag_s": 0.000997732426303855,
+  "moves_ms": {
+   "kick": -1.002
+  },
+  "offset_s": -77.83599773242629,
   "parent": "miracle",
   "path": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/2024/Streets Project/MASTERS/Miracle (feat. Tayla) - FINAL - 2 - PREMASTER.wav",
+  "relative": {
+   "pattern": "kick",
+   "residual_ms": -1.002
+  },
   "sha256": "63d55bb8607689698194c56e67e78b2ea881d1da92054ec90affda47dc571b6f",
-  "status": "not proven"
+  "status": "proven (relative: the kick fit moves with the catalogue lag, -1.00 ms)"
  },
  "miracle@mix-68715c29a9": {
   "als": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/2024/Streets Project/Streets - FINALS.als",
@@ -326,11 +469,18 @@
   "duration_s": 252.973,
   "fit": null,
   "lag_s": 0.000997732426303855,
+  "moves_ms": {
+   "kick": -0.002
+  },
   "offset_s": -77.83599773242629,
   "parent": "miracle",
   "path": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/2024/Streets Project/MASTERS/Miracle (feat. Tayla) - FINAL - 2.wav",
+  "relative": {
+   "pattern": "kick",
+   "residual_ms": -0.002
+  },
   "sha256": "68715c29a95431aec76f416ea3bef48f938e4a3e068ff8390debee2a383b4b98",
-  "status": "proven (relative: the kick fit moves with the catalogue lag)"
+  "status": "proven (relative: the kick fit moves with the catalogue lag, -0.00 ms)"
  },
  "miracle@mix-88b1db1aca": {
   "als": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/2024/Streets Project/Streets - FINALS.als",
@@ -338,10 +488,18 @@
   "duration_s": 252.973,
   "fit": null,
   "lag_s": 0.000997732426303855,
+  "moves_ms": {
+   "kick": -2.002
+  },
+  "offset_s": -77.83599773242629,
   "parent": "miracle",
   "path": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/2024/Streets Project/MASTERS/Miracle (feat. Tayla) - FINAL - 1 - PREMASTER.wav",
+  "relative": {
+   "pattern": "kick",
+   "residual_ms": -2.002
+  },
   "sha256": "88b1db1aca3ec7e01c5968abac14eb2e00e96aab514da4565f2240a317ff247c",
-  "status": "not proven"
+  "status": "proven (relative: the kick fit moves with the catalogue lag, -2.00 ms)"
  },
  "miracle@mix-dd9c3980e6": {
   "als": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/2024/Streets Project/Streets - FINALS.als",
@@ -349,10 +507,18 @@
   "duration_s": 252.973,
   "fit": null,
   "lag_s": 0.000997732426303855,
+  "moves_ms": {
+   "kick": -1.002
+  },
+  "offset_s": -77.83599773242629,
   "parent": "miracle",
   "path": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/2024/Streets Project/MASTERS/Miracle (feat. Tayla) - FINAL - 1.wav",
+  "relative": {
+   "pattern": "kick",
+   "residual_ms": -1.002
+  },
   "sha256": "dd9c3980e6d45d1817f092a0c4575d7e5c8a38cd85970b9941817d88217172dc",
-  "status": "not proven"
+  "status": "proven (relative: the kick fit moves with the catalogue lag, -1.00 ms)"
  },
  "miracle@mix-f3a20079d0": {
   "als": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/2024/Streets Project/Streets - FINALS.als",
@@ -360,10 +526,18 @@
   "duration_s": 252.973,
   "fit": null,
   "lag_s": 0.000997732426303855,
+  "moves_ms": {
+   "kick": -1.002
+  },
+  "offset_s": -77.83599773242629,
   "parent": "miracle",
   "path": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/2024/Streets Project/MASTERS/Miracle (feat. Tayla) - FINAL - 3.wav",
+  "relative": {
+   "pattern": "kick",
+   "residual_ms": -1.002
+  },
   "sha256": "f3a20079d0856af3dfa3690cf1f7a7ef94f8f6c2841a56cb16309ceeec39f750",
-  "status": "not proven"
+  "status": "proven (relative: the kick fit moves with the catalogue lag, -1.00 ms)"
  },
  "murmur@mix-0025a85b89": {
   "als": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/2025/snackpack Project/snackpack (Murmur) - EE & PK - MASTER V3.als",
@@ -371,6 +545,7 @@
   "duration_s": 229.2537,
   "fit": null,
   "lag_s": 0.0,
+  "moves_ms": {},
   "parent": "murmur",
   "path": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/2025/snackpack Project/FINALS/Murmur - FINAL 01.wav",
   "sha256": "0025a85b8990d215f57c0cddc97142b9dcd3b2f78d01ad47e617ebdc90e933ce",
@@ -382,6 +557,7 @@
   "duration_s": 229.3163,
   "fit": null,
   "lag_s": -0.0625,
+  "moves_ms": {},
   "parent": "murmur",
   "path": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Interim - LS X EE - EP/LS X EE - Interim EP T1/04 - LS x EE - Murmur T1 (mastered) 48k 24-bit.wav",
   "sha256": "0865c10d64c772351c02a070b2c0c93c094f0754779583bdad83d6958ea3c503",
@@ -393,6 +569,7 @@
   "duration_s": 229.3788,
   "fit": null,
   "lag_s": -0.12508333333333332,
+  "moves_ms": {},
   "parent": "murmur",
   "path": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Interim - LS X EE - EP/FINAL RELEASE/04 - LS x EE - Murmur T2 (mastered) 48k 24-bit.wav",
   "sha256": "a49f45a6f505f6e8db48ce0a5087cd9b19aab4aee8819bbd6c14cebd2d586e02",
@@ -404,6 +581,7 @@
   "duration_s": 229.2537,
   "fit": null,
   "lag_s": 0.0,
+  "moves_ms": {},
   "parent": "murmur",
   "path": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/2025/snackpack Project/FINALS/Murmur - PREMASTER 01.wav",
   "sha256": "d75679e760c56ccbabc073750c7a6295b1bb359b8bd677d7478c62c80244dea4",
@@ -422,10 +600,19 @@
   "duration_s": 229.853,
   "fit": null,
   "lag_s": 0.0,
+  "moves_ms": {
+   "kick": -10.0,
+   "snare": 0.0
+  },
+  "offset_s": -28.23629999999999,
   "parent": "pattern",
   "path": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/2025/Pattern Project/MASTERS/Pattern MSTR V2 APRS.wav",
+  "relative": {
+   "pattern": "snare",
+   "residual_ms": 0.0
+  },
   "sha256": "1d364089d4147e8f3a0a00affe5b98854ddb11e6a208c16a8824269297580b6e",
-  "status": "not proven (fit -28.2279 s, labels use -28.2363 s)"
+  "status": "proven (relative: the snare fit moves with the catalogue lag, +0.00 ms)"
  },
  "pattern@mix-34864f9da3": {
   "als": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/2025/Pattern Project/Pattern - Master (Premaster Fix).als",
@@ -433,10 +620,19 @@
   "duration_s": 229.853,
   "fit": null,
   "lag_s": 0.0,
+  "moves_ms": {
+   "kick": -10.0,
+   "snare": 0.0
+  },
+  "offset_s": -28.23629999999999,
   "parent": "pattern",
   "path": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/2025/Pattern Project/MASTERS/Pattern MSTR V3 APRS.wav",
+  "relative": {
+   "pattern": "snare",
+   "residual_ms": 0.0
+  },
   "sha256": "34864f9da39f84de1215285336d8aa49d3804b30bedabe84505693fe945a8755",
-  "status": "not proven (fit -28.2279 s, labels use -28.2363 s)"
+  "status": "proven (relative: the snare fit moves with the catalogue lag, +0.00 ms)"
  },
  "pattern@mix-60d7298eb0": {
   "als": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/2025/Pattern Project/Pattern - Master (Premaster Fix).als",
@@ -444,6 +640,10 @@
   "duration_s": 229.853,
   "fit": null,
   "lag_s": 0.0,
+  "moves_ms": {
+   "kick": -10.0,
+   "snare": 0.0
+  },
   "parent": "pattern",
   "path": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/EMERGENCE - ALBUM 2026/ALEX T1/Latent Space - 03 - Pattern MSTR V3 APRS.wav",
   "sha256": "60d7298eb0b4bb2c9fd13816caefe0f85673a5675964ba790c9a6a47a3e204dc",
@@ -451,11 +651,23 @@
  },
  "pattern@mix-66a69c8246": {
   "als": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/2025/Pattern Project/Pattern - Master (Premaster Fix).als",
+  "audio_sha256": "67b653c17293a2120a94bbd9f278edd1ee5879d59e8bc0aed57302f3cbfb71f2",
+  "duration_s": 229.416,
+  "fit": null,
   "lag_s": -0.04702083333333333,
+  "moves_ms": {
+   "kick": 1.979,
+   "snare": -0.021
+  },
+  "offset_s": -28.189279166666655,
   "parent": "pattern",
   "path": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/2025/Pattern Project/FINALS/Pattern - FINAL V3.mp3",
+  "relative": {
+   "pattern": "snare",
+   "residual_ms": -0.021
+  },
   "sha256": "66a69c8246fb397a559615a7b6fc2b3232f64f4563e6137ca2106ba28cdcefdc",
-  "status": "excluded (not a wav file: the lab loader reads wav)"
+  "status": "proven (relative: the snare fit moves with the catalogue lag, -0.02 ms)"
  },
  "pattern@mix-8c138452eb": {
   "als": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/2025/Pattern Project/Pattern - Master (Premaster Fix).als",
@@ -463,11 +675,19 @@
   "duration_s": 229.4118,
   "fit": null,
   "lag_s": 0.0,
+  "moves_ms": {
+   "kick": 0.0,
+   "snare": 0.0
+  },
   "offset_s": -28.23629999999999,
   "parent": "pattern",
   "path": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/2025/Pattern Project/MASTERS/Pattern - PREMASTER.wav",
+  "relative": {
+   "pattern": "kick",
+   "residual_ms": 0.0
+  },
   "sha256": "8c138452eb56db6c62090eca8353f248bc5409fde49cf3091ac85baa4a99ced0",
-  "status": "proven (relative: the kick and snare fit moves with the catalogue lag)"
+  "status": "proven (relative: the kick fit moves with the catalogue lag, +0.00 ms)"
  },
  "pattern@mix-9416f854bf": {
   "als": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/2025/Pattern Project/Pattern - Master (Premaster Fix).als",
@@ -475,10 +695,19 @@
   "duration_s": 229.4118,
   "fit": null,
   "lag_s": 0.0,
+  "moves_ms": {
+   "kick": 2.0,
+   "snare": 0.0
+  },
+  "offset_s": -28.23629999999999,
   "parent": "pattern",
   "path": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/2025/Pattern Project/MASTERS/32Bit/Pattern - PREMASTER - 32Bit.wav",
+  "relative": {
+   "pattern": "snare",
+   "residual_ms": 0.0
+  },
   "sha256": "9416f854bf94781fcb64363a10ab07a70d48472d9d940281a96b2a5c880f0bf1",
-  "status": "not proven (fit -28.2159 s, labels use -28.2363 s)"
+  "status": "proven (relative: the snare fit moves with the catalogue lag, +0.00 ms)"
  },
  "pattern@mix-e26c39f4f6": {
   "als": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/2025/Pattern Project/Pattern - Master (Premaster Fix).als",
@@ -486,10 +715,19 @@
   "duration_s": 229.4118,
   "fit": null,
   "lag_s": 0.0,
+  "moves_ms": {
+   "kick": 3.0,
+   "snare": 0.0
+  },
+  "offset_s": -28.23629999999999,
   "parent": "pattern",
   "path": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/2025/Pattern Project/MASTERS/LATENT SPACE - Pattern - PK MASTER.wav",
+  "relative": {
+   "pattern": "snare",
+   "residual_ms": 0.0
+  },
   "sha256": "e26c39f4f602af1d631bbc5103c4c650eeeca20627d9664ad45be40dd388c988",
-  "status": "not proven (fit -28.2149 s, labels use -28.2363 s)"
+  "status": "proven (relative: the snare fit moves with the catalogue lag, +0.00 ms)"
  },
  "pattern@mix-f152abdf10": {
   "als": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/2025/Pattern Project/Pattern - Master (Premaster Fix).als",
@@ -497,10 +735,19 @@
   "duration_s": 229.853,
   "fit": null,
   "lag_s": 0.0,
+  "moves_ms": {
+   "kick": -11.0,
+   "snare": 0.0
+  },
+  "offset_s": -28.23629999999999,
   "parent": "pattern",
   "path": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/2025/Pattern Project/MASTERS/Pattern MSTR V2 APRS - PK EQ.wav",
+  "relative": {
+   "pattern": "snare",
+   "residual_ms": 0.0
+  },
   "sha256": "f152abdf1032db1d7b03470bd2a35d7ff17c5887ab730a3fab6ba6fc7b705d61",
-  "status": "not proven (fit -28.2289 s, labels use -28.2363 s)"
+  "status": "proven (relative: the snare fit moves with the catalogue lag, +0.00 ms)"
  },
  "renew@mix-f7b91fdde3": {
   "lag_s": 0.0,
@@ -515,6 +762,9 @@
   "duration_s": 212.0,
   "fit": null,
   "lag_s": 0.0,
+  "moves_ms": {
+   "kick": -2032.898
+  },
   "parent": "right_where",
   "path": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Interim - LS X EE - EP/LS X EE - Interim EP T1/01 - LS x EE - Steady (Right Where I Need You) T1 (mastered) 48k 24-bit.wav",
   "sha256": "2539c4e4089ccc55b238ee85c5679e41dc1453a790b0729710c6b63cb0014550",
@@ -526,11 +776,18 @@
   "duration_s": 211.5254,
   "fit": null,
   "lag_s": 0.0,
+  "moves_ms": {
+   "kick": 0.0
+  },
   "offset_s": -48.8113,
   "parent": "right_where",
   "path": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/2025/Steady Project/FINALS/Steady (Right Where I Need You) - FINAL 02.wav",
+  "relative": {
+   "pattern": "kick",
+   "residual_ms": 0.0
+  },
   "sha256": "3d6e1865f05da10fd2126e1a163686fe72e0c1fe7719ed888e2b7f59a8f10b15",
-  "status": "proven (relative: the kick fit moves with the catalogue lag)"
+  "status": "proven (relative: the kick fit moves with the catalogue lag, +0.00 ms)"
  },
  "right_where@mix-502c675a5f": {
   "als": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/2025/Steady Project/Steady - Up Tempo MASTER V5.als",
@@ -538,6 +795,9 @@
   "duration_s": 212.0,
   "fit": null,
   "lag_s": 2.0833333333333333e-05,
+  "moves_ms": {
+   "kick": -2030.877
+  },
   "parent": "right_where",
   "path": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Interim - LS X EE - EP/FINAL RELEASE/01 - LS x EE - Right Where I Need You T3 (mastered) 48k 24-bit.wav",
   "sha256": "502c675a5f37f25867f19552f8154114753475c87bc23eddaa08654108183bfc",
@@ -549,6 +809,9 @@
   "duration_s": 211.75,
   "fit": null,
   "lag_s": 2.0833333333333333e-05,
+  "moves_ms": {
+   "kick": -2030.877
+  },
   "parent": "right_where",
   "path": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Interim - LS X EE - EP/LS X EE - Interim T2 (masters)/01 - LS x EE - Steady (Right Where I Need You) T2 (mastered) 48k 24-bit.wav",
   "sha256": "67f3d73a8ab7e33cd5044d927392d12e70d245da6bb694838586f407cc8a0120",
@@ -560,11 +823,18 @@
   "duration_s": 211.5254,
   "fit": null,
   "lag_s": 0.0,
+  "moves_ms": {
+   "kick": 0.0
+  },
   "offset_s": -48.8113,
   "parent": "right_where",
   "path": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/2025/Steady Project/FINALS/Steady (Right Where I Need You) - FINAL 03.wav",
+  "relative": {
+   "pattern": "kick",
+   "residual_ms": 0.0
+  },
   "sha256": "6f258f5e8f9437c337e84323281fb7f69622a9b41de88eca88ccba731e6118e9",
-  "status": "proven (relative: the kick fit moves with the catalogue lag)"
+  "status": "proven (relative: the kick fit moves with the catalogue lag, +0.00 ms)"
  },
  "right_where@mix-8813484f16": {
   "als": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/2025/Steady Project/Steady - Up Tempo MASTER V5.als",
@@ -572,11 +842,18 @@
   "duration_s": 211.5254,
   "fit": null,
   "lag_s": 0.0,
+  "moves_ms": {
+   "kick": 0.0
+  },
   "offset_s": -48.8113,
   "parent": "right_where",
   "path": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/2025/Steady Project/FINALS/Steady (Right Where I Need You) - FINAL 01.wav",
+  "relative": {
+   "pattern": "kick",
+   "residual_ms": 0.0
+  },
   "sha256": "8813484f16c7de31b781b76af7887553081317c6c64a8be8feade8896abb01c5",
-  "status": "proven (relative: the kick fit moves with the catalogue lag)"
+  "status": "proven (relative: the kick fit moves with the catalogue lag, +0.00 ms)"
  },
  "right_where@mix-be64f8b640": {
   "als": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/2025/Steady Project/Steady - Up Tempo MASTER V5.als",
@@ -584,10 +861,18 @@
   "duration_s": 211.5254,
   "fit": null,
   "lag_s": 0.0,
+  "moves_ms": {
+   "kick": 1.0
+  },
+  "offset_s": -48.8113,
   "parent": "right_where",
   "path": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/2025/Steady Project/FINALS/Steady (Right Where I Need You) - PREMASTER 03.wav",
+  "relative": {
+   "pattern": "kick",
+   "residual_ms": 1.0
+  },
   "sha256": "be64f8b64076438b6778bb21cca343665ea2f0badb6329358577856531cb32ef",
-  "status": "not proven"
+  "status": "proven (relative: the kick fit moves with the catalogue lag, +1.00 ms)"
  },
  "right_where@mix-c40e61bf35": {
   "als": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/2025/Steady Project/Steady - Up Tempo MASTER V5.als",
@@ -595,11 +880,18 @@
   "duration_s": 211.5254,
   "fit": null,
   "lag_s": 0.0,
+  "moves_ms": {
+   "kick": 0.0
+  },
   "offset_s": -48.8113,
   "parent": "right_where",
   "path": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/2025/Steady Project/FINALS/Steady (Right Where I Need You) - PREMASTER 01.wav",
+  "relative": {
+   "pattern": "kick",
+   "residual_ms": 0.0
+  },
   "sha256": "c40e61bf350decd4be6d490d6269b599d0c16cac148ee0659d715fd0c5730097",
-  "status": "proven (relative: the kick fit moves with the catalogue lag)"
+  "status": "proven (relative: the kick fit moves with the catalogue lag, +0.00 ms)"
  },
  "stagnate@mix-c594ddd776": {
   "lag_s": 0.0,
@@ -614,6 +906,10 @@
   "duration_s": 183.0509,
   "fit": -32.533,
   "lag_s": 0.047,
+  "moves_ms": {
+   "kick": -0.0,
+   "snare": 2.0
+  },
   "offset_s": -32.532999999999994,
   "parent": "weight",
   "path": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/2025/Weight Project/FINALS/Weight - Final 1.wav",

@@ -222,7 +222,7 @@ lab/test_lab.py                         # the lab's tests (unittest, run directl
 | The recipe env is pinned | `recipe.apply` exits on conflict; `test_lab.py::test_recipe_conflict_exits` |
 | Auditing never changes the labels sha | sidecar file; `test_lab.py::test_audit_keeps_labels_sha` |
 | A song's copies (gain, mix variant) share one song's draws and weight; copy-less songs train unchanged | `kick_goal_nn.train` versions, `models.weights`; `test_lab.py::test_versions_share_one_draw_budget`, `test_versions_share_weight`, `test_train_sampling_matches_head` |
-| A mix variant trains only on a proven offset, its labels moved by it | `lab/offsets.py --variants`, `registry.variants_of`; `test_lab.py::test_mix_variants` |
+| A mix variant trains only on a proven offset, its labels moved by it; one pattern moving by the catalogue lag within 5 ms proves it (training only, never the exam's 1 ms) | `lab/offsets.py --variants`, `registry.variants_of`; `test_lab.py::test_mix_variants`, `test_variant_proof_rule` |
 | The release holdout is never in a dev exam or cutoff pool | `run.setup`, `score.without_holdout`; `test_lab.py::test_release_holdout` |
 
 ## 5. The plausible-wrong turns, by name

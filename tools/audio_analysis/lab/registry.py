@@ -244,6 +244,11 @@ def _decoded(key):
     """The body's decoded parent-scale audio, one bounded entry per process."""
     from types import SimpleNamespace
     how, paths, start_s, end_s, sample_rate = key
+    if how == 'variant' and not paths[0].lower().endswith('.wav'):
+        # A variant is any bounce the catalogue aligned (mp3, aiff, flac): decoded by the catalogue's own reader, so
+        # its measured lag (decoder delay included) holds. Its content id is its file's bytes, so no cached stamp moves.
+        from tools.audio_analysis.lab import remix
+        return remix.read_mono(paths[0], sample_rate)
     return _mix_body(SimpleNamespace(source=dict(how=how, paths=list(paths), start_s=start_s, end_s=end_s),
                                       sample_rate=sample_rate))
 
