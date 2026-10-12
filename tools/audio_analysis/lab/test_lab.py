@@ -630,6 +630,41 @@ def builder(x):
         self.assertFalse(set(meta['copies']) & set(meta['exam'] + meta['holdout'] + meta['songs']))
         self.assertNotEqual(meta['run_id'], run.setup(base)[2]['run_id'])
 
+    def test_variant_proof_rule(self):
+        """A variant is proven relatively when one pattern's fit moves by the catalogue lag within 10 ms, whatever the
+        other pattern does; the nearest pattern and its residual are recorded. A byte-identical copy of the lab mix is
+        excluded before any decode, and a non-wav variant decodes through the catalogue's reader."""
+        from types import SimpleNamespace
+
+        import soundfile as sf
+
+        from tools.audio_analysis.lab import offsets, registry, remix
+        spb, lag = .5, .3
+        parent = (dict(k=2, lag=.010), dict(k=2, lag=.012), spb)
+
+        def variant(kick_miss, snare_miss, snare_k=2):
+            # a variant later by lag: its fitted offset is the parent's less the lag, plus the miss
+            return (dict(k=2, lag=.010 - lag + kick_miss), dict(k=snare_k, lag=.012 - lag + snare_miss), spb)
+        got = offsets.moves(parent, variant(.0099, .5, snare_k=1), lag)
+        self.assertEqual(sorted(got), ['kick', 'snare'])
+        self.assertEqual(offsets.relative(got), ('kick', got['kick']))
+        self.assertAlmostEqual(got['kick'], .0099)
+        self.assertIsNone(offsets.relative(offsets.moves(parent, variant(.0101, -.011), lag)))
+        self.assertEqual(offsets.relative(offsets.moves(parent, variant(.009, -.002), lag))[0], 'snare')
+        self.assertIsNone(offsets.relative(offsets.moves(None, variant(0, 0), lag)))
+        self.assertIsNone(offsets.relative(offsets.moves(parent, (None, None, spb), lag)))
+        self.assertEqual(offsets.VARIANT_TOL_S, .010)
+        s = SimpleNamespace(id='x', source_sha256=('a' * 64,))
+        _, row = offsets.prove_variant(s, '/nowhere.mp3', 'a' * 64, 0.0, None, {})
+        self.assertEqual(row['status'], 'excluded (a byte-identical copy of the lab mix)')
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / 'v.flac'
+            sf.write(p, np.random.default_rng(0).uniform(-.5, .5, (44100, 2)), 44100)
+            v = registry.variant_copy(song('x', p), dict(path=str(p), sha256=sha256_file(p), offset_s=0.0,
+                                                         status='proven (test)'))
+            np.testing.assert_array_equal(registry.mix(v), remix.read_mono(str(p), 48000))
+            self.assertEqual(len(registry.mix(v)), 48000)
+
     def test_versions_share_weight(self):
         """The trees' and templates' weights: a song's versions split one song's weight; distinct keys change
         nothing, byte for byte."""
