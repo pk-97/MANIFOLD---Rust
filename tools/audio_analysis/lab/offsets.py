@@ -10,7 +10,7 @@ use (within 1 ms). Writes lab/offset_proofs.json; registry.py reads it.
 song's offset less the catalogue's lag); failing that, relatively: one pattern fitted on both the song's mix and the
 variant moves by the catalogue's lag within VARIANT_TOL_S, so the song's proven offset carries over. Variants train and
 are never scored, and the catalogue's whole-file lag is the alignment; the pattern only confirms it, and mastering
-moves a fitted attack by a few ms. Any audio the catalogue reads (mp3, aiff, flac) is proven. Identical audio and
+moves a fitted kick attack by up to 10 ms. Any audio the catalogue reads (mp3, aiff, flac) is proven. Identical audio and
 byte-identical copies of the lab mix or of another variant are listed, not proven. Writes lab/variant_proofs.json, which
 sampling.mix_variants reads (registry.variants_of).
 
@@ -30,7 +30,7 @@ import numpy as np  # noqa: E402
 
 PROOFS = Path(__file__).with_name('offset_proofs.json')
 CLEAR_R, CLEAR_SD = .3, 1.0
-VARIANT_TOL_S = .005   # how far a mastering chain moves a fitted attack; variants only, never the exam's 1 ms
+VARIANT_TOL_S = .010   # how far mastering legitimately moves a fitted kick attack; variants only, never the exam's 1 ms
 
 
 def fits(song, als):

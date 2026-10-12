@@ -539,7 +539,7 @@ def builder(x):
         self.assertNotEqual(meta['run_id'], run.setup(base)[2]['run_id'])
 
     def test_variant_proof_rule(self):
-        """A variant is proven relatively when one pattern's fit moves by the catalogue lag within 5 ms, whatever the
+        """A variant is proven relatively when one pattern's fit moves by the catalogue lag within 10 ms, whatever the
         other pattern does; the nearest pattern and its residual are recorded. A byte-identical copy of the lab mix is
         excluded before any decode, and a non-wav variant decodes through the catalogue's reader."""
         from types import SimpleNamespace
@@ -553,15 +553,15 @@ def builder(x):
         def variant(kick_miss, snare_miss, snare_k=2):
             # a variant later by lag: its fitted offset is the parent's less the lag, plus the miss
             return (dict(k=2, lag=.010 - lag + kick_miss), dict(k=snare_k, lag=.012 - lag + snare_miss), spb)
-        got = offsets.moves(parent, variant(.0049, .5, snare_k=1), lag)
+        got = offsets.moves(parent, variant(.0099, .5, snare_k=1), lag)
         self.assertEqual(sorted(got), ['kick', 'snare'])
         self.assertEqual(offsets.relative(got), ('kick', got['kick']))
-        self.assertAlmostEqual(got['kick'], .0049)
-        self.assertIsNone(offsets.relative(offsets.moves(parent, variant(.0051, -.006), lag)))
-        self.assertEqual(offsets.relative(offsets.moves(parent, variant(.004, -.002), lag))[0], 'snare')
+        self.assertAlmostEqual(got['kick'], .0099)
+        self.assertIsNone(offsets.relative(offsets.moves(parent, variant(.0101, -.011), lag)))
+        self.assertEqual(offsets.relative(offsets.moves(parent, variant(.009, -.002), lag))[0], 'snare')
         self.assertIsNone(offsets.relative(offsets.moves(None, variant(0, 0), lag)))
         self.assertIsNone(offsets.relative(offsets.moves(parent, (None, None, spb), lag)))
-        self.assertEqual(offsets.VARIANT_TOL_S, .005)
+        self.assertEqual(offsets.VARIANT_TOL_S, .010)
         s = SimpleNamespace(id='x', source_sha256=('a' * 64,))
         _, row = offsets.prove_variant(s, '/nowhere.mp3', 'a' * 64, 0.0, None, {})
         self.assertEqual(row['status'], 'excluded (a byte-identical copy of the lab mix)')

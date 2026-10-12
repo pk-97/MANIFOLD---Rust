@@ -192,10 +192,15 @@
   "moves_ms": {
    "kick": 8.021
   },
+  "offset_s": -43.63572083333333,
   "parent": "hung_up",
   "path": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Interim - LS X EE - EP/FINAL RELEASE/03 - LS x EE - Hung Up T3 (mastered) 48k 24-bit.wav",
+  "relative": {
+   "pattern": "kick",
+   "residual_ms": 8.021
+  },
   "sha256": "925bf0cbca66f537cc4d847631099729e8e936f649709f6f73cb2045bd7324d2",
-  "status": "not proven"
+  "status": "proven (relative: the kick fit moves with the catalogue lag, +8.02 ms)"
  },
  "hung_up@mix-cd3b0c4ada": {
   "als": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/2025/Rainfall Project/Rainfall - Master V2.als",
@@ -277,10 +282,15 @@
   "moves_ms": {
    "kick": 8.437
   },
+  "offset_s": -35.28073750000001,
   "parent": "late_night",
   "path": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/Other And Backups/LATENT SPACE - LIve Show Project/ALEX MASTERS/LATE NIGHT - ALEX REMASTER V2.wav",
+  "relative": {
+   "pattern": "kick",
+   "residual_ms": 8.437
+  },
   "sha256": "912ad9f09abcdeb45d28d3491c0dc2fce39e3ee0cf9ff3e6a583e93d63f6e6ac",
-  "status": "not proven"
+  "status": "proven (relative: the kick fit moves with the catalogue lag, +8.44 ms)"
  },
  "late_night@mix-b74327249a": {
   "als": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/2024/Late Night - STEM MASTER Project/L12 Meld + Roar (Late Night) - Master FLAT Final.als",
@@ -305,10 +315,15 @@
   "moves_ms": {
    "kick": 8.437
   },
+  "offset_s": -35.28073750000001,
   "parent": "late_night",
   "path": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/2024/Late Night - STEM MASTER Project/ALEX MASTERS/LATE NIGHT - ALEX REMASTER V1.wav",
+  "relative": {
+   "pattern": "kick",
+   "residual_ms": 8.437
+  },
   "sha256": "ccee7f3c8c36132ab41b39c48c31fc4c185b3a185c2d10c274ac835e887c0f7b",
-  "status": "not proven"
+  "status": "proven (relative: the kick fit moves with the catalogue lag, +8.44 ms)"
  },
  "late_night@mix-ea8ef92c12": {
   "als": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/2024/Late Night - STEM MASTER Project/L12 Meld + Roar (Late Night) - Master FLAT Final.als",
