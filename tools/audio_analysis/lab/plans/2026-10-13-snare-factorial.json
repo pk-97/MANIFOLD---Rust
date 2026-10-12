@@ -1,0 +1,9 @@
+{"name": "snare-factorial-2026-10-13", "steps": [
+  {"compare": ["snare_v2_mid", "snare_v2_hardneg_coincident"], "args": ["--seeds", "0,1,2,3,4", "--exam-of", "snare-994ddd8d5571"]},
+  {"compare": ["snare_v2_mid", "snare_v2_hardneg"], "args": ["--seeds", "0,1,2,3,4", "--exam-of", "snare-994ddd8d5571"]},
+  {"compare": ["snare_v2_mid", "snare_v2_coincident"], "args": ["--seeds", "0,1,2,3,4", "--exam-of", "snare-994ddd8d5571"]},
+  {"compare": ["snare_v2_mid", "snare_v2_mid_e24"], "args": ["--seeds", "0,1,2,3,4", "--exam-of", "snare-994ddd8d5571"]},
+  {"compare": ["snare_v2_mid", "snare_v2_hardneg_coincident_e24"], "args": ["--seeds", "0,1,2,3,4", "--exam-of", "snare-994ddd8d5571"]},
+  {"compare": ["snare_v2_mid", "snare_v2_hardneg_e24"], "args": ["--seeds", "0,1,2,3,4", "--exam-of", "snare-994ddd8d5571"]},
+  {"compare": ["snare_v2_mid", "snare_v2_coincident_e24"], "args": ["--seeds", "0,1,2,3,4", "--exam-of", "snare-994ddd8d5571"]}
+]}
