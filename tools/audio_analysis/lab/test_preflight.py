@@ -58,6 +58,9 @@ class FakeProbe:
     def gpu(self):
         return self.gpu_state
 
+    def memory(self):
+        return 36 * 2 ** 30, 2153167, 1955.4
+
 
 class PreflightTests(unittest.TestCase):
     def setUp(self):
@@ -76,13 +79,23 @@ class PreflightTests(unittest.TestCase):
     def verdicts(self, rows):
         return [r[0] for r in rows]
 
-    def test_everything_fine_passes_all_nine_in_order(self):
+    def test_everything_fine_passes_all_ten_in_order(self):
         rows = self.rows()
-        self.assertEqual(self.verdicts(rows), [True] * 9)
+        self.assertEqual(self.verdicts(rows), [True] * 10)
         text = '\n'.join(preflight.render(rows))
         self.assertIn('PASS 4. configs resolve: kick_a -> kick-kick_a, snare_a -> snare-snare_a', text)
         self.assertIn('kick_a --release -> kick-kick_a-rel', text)
         self.assertNotIn('FAIL', text)
+        self.assertIn('PASS 10. memory: 36 GB RAM, swap used 1955 MB, 2153167 pageouts since boot; the queue kills a '
+                      'step when pageouts rise at every 5 s sample for 60 s', text)
+
+    def test_unreadable_memory_counters_fail(self):
+        def broken():
+            raise RuntimeError('cannot read paging counters')
+        self.probe.memory = broken
+        rows = self.rows()
+        self.assertFalse(rows[9][0])
+        self.assertEqual(self.verdicts(rows)[:9], [True] * 9)
 
     def test_configs_are_deduped_and_release_flag_is_part_of_the_key(self):
         cfgs, exams = preflight.configs_of(overnight.load_plan(self.plan)[1])

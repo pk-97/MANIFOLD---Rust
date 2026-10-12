@@ -1,10 +1,10 @@
 {"name": "night-2026-10-12", "steps": [
   {"run": "kick_v2_final", "args": ["--seeds", "0,1,2"]},
   {"run": "snare_v2_mid", "args": ["--seeds", "0,1,2"]},
+  {"release": "kick_v2_final", "args": ["--seed", "0", "--nets", "1"]},
+  {"release": "snare_v2_mid", "args": ["--seed", "0", "--nets", "3"]},
   {"compare": ["kick_v2_final", "kick_v2_mix"], "args": ["--seeds", "0,1,2", "--exam-of", "kick-04f861efae29"]},
   {"compare": ["snare_v2_mid", "snare_v2_mix"], "args": ["--seeds", "0,1,2", "--exam-of", "snare-994ddd8d5571"]},
   {"compare": ["snare_v2_mid", "snare_v2_hardneg"], "args": ["--seeds", "0,1,2", "--exam-of", "snare-994ddd8d5571"]},
-  {"compare": ["snare_v2_mid", "snare_v2_coincident"], "args": ["--seeds", "0,1,2", "--exam-of", "snare-994ddd8d5571"]},
-  {"release": "kick_v2_final", "args": ["--seed", "0", "--nets", "1"]},
-  {"release": "snare_v2_mid", "args": ["--seed", "0", "--nets", "3"]}
+  {"compare": ["snare_v2_mid", "snare_v2_coincident"], "args": ["--seeds", "0,1,2", "--exam-of", "snare-994ddd8d5571"]}
 ]}

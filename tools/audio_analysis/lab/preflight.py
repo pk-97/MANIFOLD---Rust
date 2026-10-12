@@ -13,6 +13,8 @@ writes nothing.
      patches) already exists for every song the config trains or scores; a miss names the song and artifact
   8  the GPU lock (scripts/gpu_queue.py) is free, or its holder is a live process (reported either way)
   9  the plan passes overnight.py load_plan
+  10 memory (info): RAM, swap used and pageouts now, read the way the queue's paging watchdog reads them; FAIL only
+     if they cannot be read (the queue would stop at its first step)
 
 Check 7 runs run.py's own warm() with cache.artifact swapped for a lookup that records a miss and returns a stub, so
 its list of what a seed reads is the one that really runs. Each config is inspected in its own process (the net's
@@ -127,6 +129,12 @@ class Probe:
             raise FileNotFoundError(f'no kick verdict store {path.name}: run lab/kick_verdict.py build')
         with np.load(path) as z:
             return path, set(z.files)
+
+    def memory(self):
+        """(RAM bytes, pageouts since boot, swap used MB), the watchdog's own reading (overnight.vm_sample)."""
+        from tools.audio_analysis.lab import overnight
+        ram = int(subprocess.run(['sysctl', '-n', 'hw.memsize'], capture_output=True, text=True).stdout)
+        return (ram, *overnight.vm_sample())
 
     def gpu(self):
         """(free, holder text, holder alive)."""
@@ -288,6 +296,14 @@ def check(plan_path, probe, load_plan):
         add(False, 'GPU lock', f'cannot read the lock: {e}')
 
     add(plan_err is None, 'plan loads', f'{plan_name}: {len(steps)} steps' if not plan_err else plan_err)
+
+    try:
+        from tools.audio_analysis.lab.overnight import SWAP_WATCH_S
+        ram, pageouts, swap = probe.memory()
+        add(True, 'memory', f'{ram / 2 ** 30:.0f} GB RAM, swap used {swap:.0f} MB, {pageouts} pageouts since boot; '
+            f'the queue kills a step when pageouts rise at every 5 s sample for {SWAP_WATCH_S} s')
+    except Exception as e:
+        add(False, 'memory', f'cannot read RAM, swap or pageouts: {e}')
     return rows
 
 

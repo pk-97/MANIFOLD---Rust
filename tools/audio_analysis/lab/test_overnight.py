@@ -5,6 +5,7 @@ import io
 import json
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -149,6 +150,107 @@ class OvernightTests(unittest.TestCase):
                 f.write_text(json.dumps(plan))
                 with self.assertRaises(SystemExit, msg=str(plan)):
                     overnight.load_plan(f)
+
+
+class PagingWatchTests(unittest.TestCase):
+    def test_trips_only_after_every_sample_rose_for_the_window(self):
+        w = overnight.PagingWatch(60, 100, 0)
+        trips = [w.update(100 + 10 * i, 5 * i) for i in range(1, 14)]
+        self.assertEqual(trips, [False] * 11 + [True, True])   # t = 60 is the 12th sample after the baseline
+
+    def test_one_flat_sample_restarts_the_count(self):
+        w = overnight.PagingWatch(60, 0, 0)
+        for i in range(1, 12):
+            self.assertFalse(w.update(i, 5 * i))
+        self.assertFalse(w.update(11, 60))                   # no rise at t = 60
+        self.assertFalse(w.update(12, 65))                   # a new run starts at t = 60
+        self.assertFalse(w.update(13, 70))
+        self.assertTrue(w.update(14, 120))                   # 60 s since the restart
+
+    def test_zero_never_trips_and_a_counter_that_goes_back_restarts(self):
+        w = overnight.PagingWatch(0, 0, 0)
+        self.assertFalse(any(w.update(i, 100 * i) for i in range(1, 50)))
+        w = overnight.PagingWatch(10, 100, 0)
+        self.assertFalse(w.update(110, 5))
+        self.assertFalse(w.update(50, 10))
+        self.assertFalse(w.update(60, 15))     # the new run starts at t = 10
+        self.assertTrue(w.update(70, 20))
+
+
+class ExecuteTests(unittest.TestCase):
+    """The real runner on a sleeping child, with fake machine readings."""
+    SLEEP = [sys.executable, '-c', 'import time; time.sleep(30)']
+
+    def go(self, cmd, counter, watch_s=0.15):
+        d = tempfile.TemporaryDirectory()
+        self.addCleanup(d.cleanup)
+        n = iter(counter)
+        return overnight.execute(cmd, Path(d.name) / 'log', watch_s=watch_s, poll_s=0.03,
+                                 vm=lambda: (next(n), 777.0), rss=lambda pid: (3_000_000, [pid]))
+
+    def test_sustained_paging_kills_the_step_and_reports_the_numbers(self):
+        t0 = time.time()
+        res = self.go(self.SLEEP, (1000 + 50 * i for i in range(10_000)))
+        self.assertLess(time.time() - t0, 10)
+        self.assertEqual((res['code'], res['killed']), (137, True))
+        self.assertGreater(res['pageouts'], 0)
+        self.assertEqual(res['swap_mb'], 777.0)
+        self.assertEqual(res['peak_gb'], 3.0)
+
+    def test_flat_counter_never_kills_however_large_the_step(self):
+        res = self.go([sys.executable, '-c', 'import time; time.sleep(0.4)'], (1000 for _ in range(10_000)))
+        self.assertEqual((res['code'], res['killed'], res['pageouts']), (0, False, 0))
+        self.assertEqual(res['peak_gb'], 3.0)
+
+    def test_exit_code_passes_through(self):
+        self.assertEqual(self.go([sys.executable, '-c', 'raise SystemExit(3)'], (5 for _ in range(100)))['code'], 3)
+
+    def test_vm_sample_parses_the_two_commands(self):
+        class R:
+            def __init__(self, out):
+                self.stdout = out
+        outs = {'vm_stat': 'Mach Virtual Memory Statistics: (page size of 16384 bytes)\nPageouts:     2153167.\n',
+                'sysctl': 'vm.swapusage: total = 3072.00M  used = 1955.44M  free = 1116.56M  (encrypted)\n'}
+        real = overnight.subprocess.run
+        overnight.subprocess.run = lambda cmd, **kw: R(outs[cmd[0]])
+        try:
+            self.assertEqual(overnight.vm_sample(), (2153167, 1955.44))
+        finally:
+            overnight.subprocess.run = real
+
+
+class KilledStepTests(unittest.TestCase):
+    def test_a_killed_step_is_recorded_and_the_queue_goes_on(self):
+        steps = PLAN['steps']
+
+        def runner(cmd, log):
+            n = len([1 for _ in runner.seen]) + 1
+            runner.seen.append(cmd)
+            Path(log).write_text('')
+            if n == 2:
+                return dict(code=137, killed=True, peak_gb=21.5, pageouts=90000, swap_mb=3000.0)
+            return dict(code=0, killed=False, peak_gb=4.0, pageouts=12, swap_mb=100.0)
+        runner.seen = []
+        with tempfile.TemporaryDirectory() as d:
+            code = overnight.run_plan('night', steps, Path(d) / 'q', runner=runner, clock=Clock(), log=lambda m: None,
+                                      watch_s=60)
+            summary = (Path(d) / 'q/summary.txt').read_text()
+        self.assertEqual(len(runner.seen), 5)
+        self.assertEqual(code, 137)
+        self.assertIn('step 2 run snare_gain: exit 137 (KILLED: sustained paging, pageouts rose at every sample for 60 s), '
+                      'peak 21.5 GB resident, pageouts +90000, swap used 3000 MB', summary)
+        self.assertIn('step 1 run snare_base: exit 0, peak 4.0 GB resident, pageouts +12, swap used 100 MB', summary)
+        self.assertIn('all 5 steps ran; killed for sustained paging: step 2 (run snare_gain)', summary)
+        self.assertNotIn('STOPPED', summary)
+
+    def test_another_failure_after_a_kill_still_stops_the_queue(self):
+        codes = iter([dict(code=137, killed=True), dict(code=2, killed=False)])
+        with tempfile.TemporaryDirectory() as d:
+            code = overnight.run_plan('night', PLAN['steps'], Path(d) / 'q', runner=lambda c, l: next(codes),
+                                      clock=Clock(), log=lambda m: None)
+            summary = (Path(d) / 'q/summary.txt').read_text()
+        self.assertEqual(code, 2)
+        self.assertIn('STOPPED: step 2 exited 2', summary)
 
 
 if __name__ == '__main__':
