@@ -5,10 +5,14 @@ With song groups it also trains the pair models that choose each group's cutoff 
 and every tools/audio_analysis module the process imported, so an edit to the code that ran is a new run. Seeds
 already saved are skipped. Prints the finish time after each seed.
 
-Usage: run.py CONFIG [--seeds 0,1] [--cpu]   (CONFIG: a lab/experiments name or a path; a net trains on the GPU
-                                              and exits unless --cpu says the CPU is meant)
-       run.py --plan CONFIG            (prints the run id; trains nothing)
-       run.py --warm CONFIG            (builds the cached inputs every seed reads; trains nothing)"""
+The release holdout (registry.release_holdout, about one project song in six) trains like every other song but is
+never in a run's exam, nor in the cutoff pools its exam is scored on. --release makes the exam the holdout alone, a
+run of its own id: use it once, for a release decision.
+
+Usage: run.py CONFIG [--seeds 0,1] [--cpu] [--release]   (CONFIG: a lab/experiments name or a path; a net trains on
+                                                        the GPU and exits unless --cpu says the CPU is meant)
+       run.py --plan CONFIG [--release]   (prints the exam, the holdout and the run id; trains nothing)
+       run.py --warm CONFIG               (builds the cached inputs every seed reads; trains nothing)"""
 import hashlib
 import json
 import subprocess
@@ -118,8 +122,9 @@ def module_hashes():
                   if getattr(m, '__file__', None) and Path(m.__file__).resolve().is_relative_to(TOOLS))
 
 
-def setup(cfg):
-    """The run's labels, songs and plan under the pinned recipe; returns everything the run id and the child need."""
+def setup(cfg, release=False):
+    """The run's labels, songs and plan under the pinned recipe; returns everything the run id and the child need.
+    The plan never depends on release: only the exam does (the holdout, or every project song but the holdout)."""
     from tools.audio_analysis.lab import models, recipe
     recipe.apply(cfg.net_env())
     imports()
@@ -133,20 +138,19 @@ def setup(cfg):
     check_sources([songs[t] for t in lab])
     content = {t: songs[t].content_id for t in lab}
     label_ids = {t: hashlib.sha256(json.dumps(s, sort_keys=True).encode()).hexdigest()[:16] for t, s in lab.items()}
-    partner = partner_of(cfg)
-    for t in lab if partner else ():
-        if t in partner:   # the net's draws read the partner labels, so they belong to the song's label id
-            label_ids[t] = hashlib.sha256((label_ids[t] + json.dumps(partner[t]['positives'])).encode()).hexdigest()[:16]
     for t, s in lab.items():
         if (s.get('kind') == 'generated') != (songs[t].kind == 'generated'):
             sys.exit(f'{t}: labels and song list disagree on its kind; rebuild with lab/registry.py build')
-    exam = [t for t in lab if songs[t].kind == 'project']
-    check_exam(exam, songs, failed)
-    copies, probes = [], {}
+    projects = [t for t in lab if songs[t].kind == 'project']
+    check_exam(projects, songs, failed)
+    from tools.audio_analysis.lab.registry import release_holdout
+    holdout = release_holdout({t: songs[t] for t in projects})
+    exam = holdout if release else [t for t in projects if t not in holdout]
+    copies, probes, variants_excluded = [], {}, {}
     if cfg.gain_variants or cfg.gain_probes:
         from tools.audio_analysis.lab.registry import gain_copies, gain_copy
         gv = cfg.gain_variants
-        for t in exam:
+        for t in projects:
             made = (gain_copies(songs[t], gv['count'], *gv['db']) if gv else []) \
                 + [gain_copy(songs[t], g, probe=True) for g in cfg.gain_probes or ()]
             for c in made:
@@ -156,15 +160,42 @@ def setup(cfg):
                     probes[c.id] = dict(parent=t, gain_db=c.gain_db)
                 content[c.id] = c.content_id
                 label_ids[c.id] = label_ids[t]
+    if cfg.mix_variants:
+        from tools.audio_analysis.lab.registry import variant_labels, variant_proofs, variant_shift, variants_of
+        proofs = variant_proofs()
+        made = []
+        for t in projects:
+            used, out = variants_of(songs[t], proofs)
+            variants_excluded.update(out)
+            for v, row in used:
+                songs[v.id] = v
+                lab[v.id] = variant_labels(lab[t], variant_shift(v, songs[t]), row['duration_s'])
+                copies.append(v.id)
+                made.append(v)
+                content[v.id] = v.content_id
+                label_ids[v.id] = hashlib.sha256(json.dumps(lab[v.id], sort_keys=True).encode()).hexdigest()[:16]
+        check_sources(made)
+    partner = partner_of(cfg)
+    for t in lab if partner else ():
+        if (songs[t].parent or t) in partner:   # the net's draws read the partner labels, so they belong to the label id
+            label_ids[t] = hashlib.sha256((label_ids[t] + json.dumps(partner[songs[t].parent or t]['positives'])).encode()).hexdigest()[:16]
     grps, trainings, _ = models.plan(cfg, lab, songs)
     models.check_disjoint(trainings, {c: songs[c].parent for c in copies})
     used = parts(cfg)
     mods = module_hashes()
-    key = json.dumps(dict(config=cfg.key(), labels=sha, modules=mods, parts=used, content=content), sort_keys=True)
+    key = dict(config=cfg.key(), labels=sha, modules=mods, parts=used, content=content)
+    if release:
+        key['release'] = True
+    variant_ids = {c: label_ids[c] for c in copies if songs[c].source['how'] == 'variant'}
+    if variant_ids:
+        key['variant_labels'] = variant_ids   # a variant's labels are its song's moved by its proven offset
+    key = json.dumps(key, sort_keys=True)
     run_id = f'{cfg.family}-{hashlib.sha256(key.encode()).hexdigest()[:12]}'
     meta = dict(schema=META_SCHEMA, run_id=run_id, config=cfg.key(), names=[cfg.name], labels_sha256=sha,
-                songs=[t for t in lab if t not in copies], exam=exam,
-                generated=[t for t in lab if t not in exam and t not in copies], copies=copies, probes=probes, excluded=failed,
+                songs=[t for t in lab if t not in copies], exam=exam, release=release, holdout=holdout,
+                projects=projects, generated=[t for t in lab if t not in projects and t not in copies], copies=copies,
+                parents={c: songs[c].parent for c in copies}, probes=probes, variants_excluded=variants_excluded,
+                excluded=failed,
                 recall_only=[t for t in exam if lab[t]['positives_only']], groups=grps, trainings=trainings,
                 layers=[*sorted(cfg.models), *(['combined'] if models.final_layer(cfg) == 'combined' else []),
                         *(['staged'] if cfg.stage else [])],
@@ -185,18 +216,24 @@ def partner_of(cfg):
     return partner
 
 
-def row_weights(cfg, song, s, onset, y, partner):
+def row_weights(cfg, song, s, onset, y, partner, parent=None):
     """(neg_w, pos_w) per candidate for the net's draws (kick_goal_nn.draw_weights); None where the option is off.
     hard_negatives: the cached rise profile (components prof32), no audio recomputed. coincident_weight: the
-    partner labels of the song a gain copy was made from; a song the partner does not label draws evenly."""
+    partner labels of the song a copy was made from, moved by a mix variant's proven shift (parent: that song);
+    a song the partner does not label draws evenly."""
+    import numpy as np
+
     from tools.audio_analysis.lab import components, models
     neg_w = pos_w = None
     if cfg.hard_negatives:
         profile = components.measure(song, cfg.candidates, cfg.family, 'prof32')
         neg_w = models.hard_negative_weights(models.onset_strength(profile), cfg.hard_negatives['power'])
     if partner is not None and (song.parent or song.id) in partner:
-        pos_w = models.coincident_row_weights(onset, y, s['positives'], partner[song.parent or song.id]['positives'],
-                                              cfg.coincident_weight)
+        theirs = np.asarray(partner[song.parent or song.id]['positives'], float)
+        if song.source['how'] == 'variant':
+            from tools.audio_analysis.lab.registry import variant_shift
+            theirs = theirs + variant_shift(song, parent)
+        pos_w = models.coincident_row_weights(onset, y, s['positives'], theirs, cfg.coincident_weight)
     return neg_w, pos_w
 
 
@@ -215,7 +252,7 @@ def build(cfg, lab, songs, dev, log=print):
         cand, onset, emit = c.cand, c.onset_s, c.emit_s
         mask, y, hard = rows(s, onset)
         extra = tuple(components.frame(song, m) for m in cfg.net['channels'])
-        neg_w, pos_w = row_weights(cfg, song, s, onset, y, partner)
+        neg_w, pos_w = row_weights(cfg, song, s, onset, y, partner, songs.get(song.parent))
         data[t] = Song(cache.spectrum(song), onset, emit + ahead, mask, y, t, hard, extra, neg_w, pos_w)
         # Every song stays on the CPU: slices() cuts bit-identically there, so no Song holds MPS pool memory and
         # train() moves only the per-batch tensors to the net's device. Gain copies and probes were already cut here.
@@ -277,9 +314,17 @@ def model_key(cfg, model, meta):
     return f'{model}-{hashlib.sha256(key.encode()).hexdigest()[:12]}'
 
 
-def net_model(cfg, trainings, seed, data, log):
+def net_songs(names, data, parents):
+    """kick_goal_nn.train's songs for these training songs: a song with copies is one entry, its versions in a list
+    (they share its draws); a song without copies is its bare Song, so its training is unchanged."""
+    from tools.audio_analysis.lab.models import versions_of
+    return [[data[v] for v in vs] if len(vs) > 1 else data[t] for t, vs in versions_of(names, parents)]
+
+
+def net_model(cfg, trainings, seed, data, log, parents=None):
     """The net's layer (kick_goal_nn.train/predict): [{held song: probabilities} per training], [seconds per
-    training]. Training i uses random state 1000 * i + seed, so the outer nets match the retired runner's."""
+    training]. Training i uses random state 1000 * i + seed, so the outer nets match the retired runner's. parents:
+    copy -> its song (meta['parents'])."""
     from tools.audio_analysis.eval.kick_goal_nn import predict, train
     share = cfg.sampling['generated'] if cfg.generated_as_clips() else None
     out, secs = [], []
@@ -287,30 +332,32 @@ def net_model(cfg, trainings, seed, data, log):
         t0 = time.time()
         kw = dict(epochs=cfg.net['epochs'], swa_epochs=cfg.net['swa_epochs'], batch=cfg.net['batch'], lr=cfg.net['lr'],
                   precision=cfg.net['precision'], **({'synth_share': share} if share is not None else {}))
-        net = train([data[u] for u in n['trained']], 1000 * i + seed, [data[c] for c in n['clips']], **kw)
+        net = train(net_songs(n['trained'], data, parents or {}), 1000 * i + seed, [data[c] for c in n['clips']], **kw)
         out.append({t: predict(net, data[t]) for t in n['held']})
         secs.append(round(time.time() - t0, 1))
         log(f'net without groups {n["without"]}: {secs[-1]} s')
     return out, secs
 
 
-def trees_model(cfg, trainings, seed, trees, log):
+def trees_model(cfg, trainings, seed, trees, log, parents=None):
     """The trees' layer (models.fit_trees): [{held song: probabilities} per training], [seconds per training].
-    Training i uses random state 1000 * i + seed, the net's stream over the same trainings."""
+    Training i uses random state 1000 * i + seed, the net's stream over the same trainings. A song's copies
+    (parents: copy -> its song) share its weight."""
     from tools.audio_analysis.lab import models
     share = cfg.sampling['generated'] if cfg.generated_as_clips() else None
     out, secs = [], []
     for i, n in enumerate(trainings):
         t0 = time.time()
-        fit = models.fit_trees(cfg.models['trees'], [(*trees[u][1], u in n['clips']) for u in n['trained'] + n['clips']],
-                               1000 * i + seed, share)
+        names = n['trained'] + n['clips']
+        fit = models.fit_trees(cfg.models['trees'], [(*trees[u][1], u in n['clips']) for u in names],
+                               1000 * i + seed, share, [(parents or {}).get(u, u) for u in names])
         out.append({t: fit.predict_proba(trees[t][0])[:, 1] for t in n['held']})
         secs.append(round(time.time() - t0, 1))
         log(f'trees without groups {n["without"]}: {secs[-1]} s')
     return out, secs
 
 
-def train_templated(cfg, trainings, seed, trees, tmpl, log):
+def train_templated(cfg, trainings, seed, trees, tmpl, log, parents=None):
     """The trees with sound templates (lab/templates.py) appended to every song's measures: each training fits its
     own templates on its trained songs and clips (never its held songs), random state 1000 i + seed for the
     templates and the trees alike."""
@@ -324,14 +371,14 @@ def train_templated(cfg, trainings, seed, trees, tmpl, log):
         t0 = time.time()
         rs = 1000 * i + seed
         fitted = templates.fit({u: tmpl[u] for u in n['trained'] + n['clips']}, set(n['clips']),
-                               cfg.models['trees']['templates']['k'], rs, share)
+                               cfg.models['trees']['templates']['k'], rs, share, parents)
         rows = {}
         for u in n['trained'] + n['clips'] + n['held']:
             x = np.hstack([trees[u][0], templates.features(tmpl[u][0], fitted)])
             mask, y, hard = tmpl[u][1]
             rows[u] = (x, (x[mask], y[mask], hard[mask]))
         took = time.time() - t0
-        got, s = trees_model(cfg, [n], rs, rows, log)
+        got, s = trees_model(cfg, [n], rs, rows, log, parents)
         out += got
         secs.append(round(s[0] + took, 1))
     return out, secs
@@ -348,11 +395,12 @@ def layer(cfg, model, meta, seed, data, trees, log, tmpl=None):
             out = [{t: z[f'{i}__{t}'] for t in n['held']} for i, n in enumerate(meta['trainings'])]
         log(f'{model}: reused {d.name}')
         return out, [0.0] * len(out)
+    parents = meta.get('parents') or {}
     if model == 'trees' and templated(cfg):
-        out, secs = train_templated(cfg, meta['trainings'], seed, trees, tmpl, log)
+        out, secs = train_templated(cfg, meta['trainings'], seed, trees, tmpl, log, parents)
     else:
-        out, secs = (net_model(cfg, meta['trainings'], seed, data, log) if model == 'net'
-                     else trees_model(cfg, meta['trainings'], seed, trees, log))
+        out, secs = (net_model(cfg, meta['trainings'], seed, data, log, parents) if model == 'net'
+                     else trees_model(cfg, meta['trainings'], seed, trees, log, parents))
     d.mkdir(parents=True, exist_ok=True)
     tmp = d / f's{seed}.tmp.npz'
     np.savez(tmp, **{f'{i}__{t}': p for i, per in enumerate(out) for t, p in per.items()})
@@ -409,8 +457,8 @@ def check_device(dev, cpu=False):
         sys.exit(f'refusing to train a net on the CPU (about 3x slower): {why}; pass --cpu if that is intended')
 
 
-def child(cfg, seed, run_id, cpu=False):
-    lab, songs, meta = setup(cfg)
+def child(cfg, seed, run_id, cpu=False, release=False):
+    lab, songs, meta = setup(cfg, release)
     if meta['run_id'] != run_id:
         sys.exit(f'run id {meta["run_id"]} is not the planned {run_id}: code or labels changed mid-run')
     sys.path.insert(0, str(ROOT / 'scripts'))
@@ -436,7 +484,7 @@ def child(cfg, seed, run_id, cpu=False):
     if cfg.stage:
         from tools.audio_analysis.lab.stage import song_parts
         stage_parts = {t: song_parts(cfg, songs[t], lab[t]) for t in lab
-                       if songs[t].gain_db is None or songs[t].probe}
+                       if songs[t].parent is None or songs[t].probe}
     else:
         stage_parts = None
     built = time.time()
@@ -480,25 +528,28 @@ def warm(cfg):
         print(f'{t}: {time.time() - t0:.1f} s', flush=True)
 
 
-def run_id_of(config):
+def run_id_of(config, release=False):
     """The run id a seed of this config would save under (a separate process, so the parent's imports don't count)."""
-    r = subprocess.run([str(Path(__file__)), '--plan', str(config)], capture_output=True, text=True)
+    r = subprocess.run([str(Path(__file__)), '--plan', str(config), *(['--release'] if release else [])],
+                       capture_output=True, text=True)
     if r.returncode:
         sys.exit(r.stderr or r.stdout)
     return r.stdout.strip().splitlines()[-1]
 
 
-def run(config, seeds=None, cpu=False):
-    """Trains the config's missing seeds, one process each; returns the run id. cpu lets a net train on the CPU."""
+def run(config, seeds=None, cpu=False, release=False):
+    """Trains the config's missing seeds, one process each; returns the run id. cpu lets a net train on the CPU;
+    release: the exam is the release holdout (setup)."""
     from tools.audio_analysis.lab.config import load
     cfg = load(config)
     seeds = cfg.seeds if seeds is None else seeds
-    run_id = run_id_of(config)
+    run_id = run_id_of(config, release)
     todo = [s for s in seeds if not (RUNS / run_id / f's{s}.npz').exists()]
     print(f'{cfg.name}: run {run_id}, seeds {list(seeds)}, {len(todo)} to train', flush=True)
     for k, seed in enumerate(todo):
         t0 = time.time()
-        r = subprocess.run([str(Path(__file__)), '--child', str(config), str(seed), run_id, *(['--cpu'] if cpu else [])])
+        r = subprocess.run([str(Path(__file__)), '--child', str(config), str(seed), run_id, *(['--cpu'] if cpu else []),
+                            *(['--release'] if release else [])])
         if r.returncode:
             sys.exit(f'{cfg.name} seed {seed} failed')
         took = time.time() - t0
@@ -511,18 +562,26 @@ def run(config, seeds=None, cpu=False):
 
 def main():
     a = sys.argv[1:]
+    release = '--release' in a
+    if release:
+        a.remove('--release')
     if a[:1] == ['--plan']:
         from tools.audio_analysis.lab.config import load
-        print(setup(load(a[1]))[2]['run_id'])
+        meta = setup(load(a[1]), release)[2]
+        print('exam: ' + ' '.join(meta['exam']))
+        print('holdout: ' + ' '.join(meta['holdout']))
+        if meta['variants_excluded']:
+            print('mix variants excluded: ' + ' '.join(sorted(meta['variants_excluded'])))
+        print(meta['run_id'])
     elif a[:1] == ['--warm']:
         from tools.audio_analysis.lab.config import load
         warm(load(a[1]))
     elif a[:1] == ['--child']:
         from tools.audio_analysis.lab.config import load
-        child(load(a[1]), int(a[2]), a[3], cpu='--cpu' in a)
+        child(load(a[1]), int(a[2]), a[3], cpu='--cpu' in a, release=release)
     elif a:
         seeds = [int(s) for s in a[a.index('--seeds') + 1].split(',')] if '--seeds' in a else None
-        run(a[0], seeds, cpu='--cpu' in a)
+        run(a[0], seeds, cpu='--cpu' in a, release=release)
     else:
         sys.exit(__doc__)
 

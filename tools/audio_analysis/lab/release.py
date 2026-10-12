@@ -546,7 +546,7 @@ def train_provisional(cfg, n_nets, seed):
     os.environ['KICK_GOAL_NN_DEVICE'] = 'cpu'
     t0 = time.time()
     lab, songs, meta = run.setup(cfg)
-    picks = [t for t in meta['exam'] if not lab[t]['positives_only']][:PROVISIONAL_SONGS]
+    picks = [t for t in meta['projects'] if not lab[t]['positives_only']][:PROVISIONAL_SONGS]
     sub = {t: lab[t] for t in picks}
     layers, nets, trees, stage_model = {}, [], None, None
     if cfg.net:
@@ -619,7 +619,9 @@ def train_final(cfg, n_nets, seed):
     zs = [dict(np.load(p)) for p in paths]
     layers = run_layers(cfg, meta, zs)
     outer = outer_of(meta, layers)
-    exam = meta['exam']
+    # Every project song sets the release's cutoffs, the release holdout too: the final models train on it anyway, and
+    # the holdout judges the recipe (lab/run.py --release), not these weights.
+    exam = meta['projects']
     lost = [t for t in exam if t not in outer]
     if lost:
         sys.exit(f'exam songs without an outer prediction: {lost}')
@@ -628,7 +630,9 @@ def train_final(cfg, n_nets, seed):
     st = cfg.stage
     grps, trainings = meta['groups'], meta['trainings']
     if st:
-        part = {t: stage.song_parts(cfg, songs[t], lab[t], build=False) for t in lab}
+        # The stage judges songs and probes, never training copies (run.child builds parts for the same songs).
+        staged = [t for t in lab if songs[t].parent is None or songs[t].probe]
+        part = {t: stage.song_parts(cfg, songs[t], lab[t], build=False) for t in staged}
         if n_nets == 1:
             if any(f'stageraw__{t}' not in zs[0] for t in exam):
                 sys.exit(f'run {meta["run_id"]} predates the stageraw save; train its seeds again')
@@ -636,7 +640,7 @@ def train_final(cfg, n_nets, seed):
         else:
             # The averaged layer is a new detector: its outer stages are judged again on it, by the lab's own stage.
             got = stage.train(cfg, grps, trainings, layers, part, seed, generated=meta['generated'])
-            raw = {t: got[f'stageraw__{t}'] for t in lab}
+            raw = {t: got[f'stageraw__{t}'] for t in staged}
         inputs = {t: stage.inputs(st, part[t], outer[t]) for t in outer}
     else:
         inputs = raw = None
@@ -654,16 +658,19 @@ def train_final(cfg, n_nets, seed):
     nets, trees, stage_model = [], None, None
     if 'trees' in cfg.models:
         rows = run.tree_rows(cfg, lab, songs)
-        trees = models.fit_trees(cfg.models['trees'], [(*rows[u][1], u in tr['clips']) for u in trained], seed, share)
+        trees = models.fit_trees(cfg.models['trees'], [(*rows[u][1], u in tr['clips']) for u in trained], seed, share,
+                                 [meta['parents'].get(u, u) for u in trained])
     if cfg.net:
         sys.path.insert(0, str(ROOT / 'scripts'))
         import gpu_queue
         data = run.build(cfg, lab, songs, nnm.device(), log=lambda m: None)
         with gpu_queue.hold('detector-release'):
-            nets = [nnm.train([data[u] for u in tr['trained']], seed + k, [data[c] for c in tr['clips']], **net_kwargs(cfg, share))
+            nets = [nnm.train(run.net_songs(tr['trained'], data, meta['parents']), seed + k, [data[c] for c in tr['clips']],
+                              **net_kwargs(cfg, share))
                     for k in range(n_nets)]
     if st:
-        learn = {u for n in trainings for u in n['trained'] + n['clips']}
+        # The stage learns on songs, never copies: the lab's stage (stage.train) learns on the groups' songs alone.
+        learn = {u for n in trainings for u in n['trained'] + n['clips']} - set(meta['parents'])
         if st['learn'] == 'project':
             learn -= set(meta['generated'])
         clips = {u for n in trainings for u in n['clips']}

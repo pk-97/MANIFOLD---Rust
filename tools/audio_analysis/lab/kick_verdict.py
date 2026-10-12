@@ -79,10 +79,19 @@ def features(song, c):
     if not path.exists():
         raise SystemExit(f'no kick verdict store for {tid}: run lab/kick_verdict.py build')
     z = np.load(path)
-    cid = dataclasses.replace(song, gain_db=None).content_id   # a gain copy reads its song's verdict: not rescaled
+    from tools.audio_analysis.lab.registry import is_variant, load, variant_shift
+    if is_variant(song):
+        # A mix variant reads its song's verdict moved onto its timeline: the store's verdicts come from kick models
+        # that never trained on the song, and the release itself did, so the variant's own audio is not judged.
+        parent = load()[song.parent]
+        cid, shift = parent.content_id, variant_shift(song, parent)
+    else:
+        cid, shift = dataclasses.replace(song, gain_db=None).content_id, None   # a gain copy reads its song's verdict
     if f'{cid}.p' not in z:
         raise SystemExit(f'{song.id}: not in the kick verdict store {path.name}: run lab/kick_verdict.py build')
     on, emit, p = (z[f'{cid}.{k}'] for k in ('onset', 'emit', 'p'))
+    if shift is not None:
+        on, emit = on + shift, emit + shift
     return features_from(on, emit, p, c)
 
 

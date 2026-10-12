@@ -22,8 +22,18 @@ songs' hits, never on the songs it predicts.
 predictions per layer under a run id that changes whenever the config, the labels or the code changes. With song
 groups it also trains the pair models that choose each song's cutoff without ever seeing it. A model another config
 already trained is reused, so changing only the trees retrains no nets. `--warm` builds the cached inputs first;
-`--plan` prints the run id. A net trains on the GPU (MPS); a child that would land on the CPU exits non-zero with one
-line saying why, unless the command carries `--cpu` (a queue step passes it in `"args"`). Trees-only runs are exempt.
+`--plan` prints the exam, the release holdout and the run id. A net trains on the GPU (MPS); a child that would land
+on the CPU exits non-zero with one line saying why, unless the command carries `--cpu` (a queue step passes it in
+`"args"`). Trees-only runs are exempt.
+
+**Copies of a song.** `sampling.gain_variants` adds seeded gain copies, `sampling.mix_variants: true` the song's other
+masters, premasters and mixes the catalogue judged `same_arrangement` (`lab/offsets.py --variants` proves each one's
+offset into `lab/variant_proofs.json`; unproven ones are listed, never used). A copy trains with its song's group,
+never in the exam, and shares its song's draws and weight: a song with three copies weighs what it did alone.
+
+**Release holdout.** About one project song in six (a salted hash of its id, `registry.release_holdout`) trains as
+usual but is never scored, nor used to choose a cutoff. `run.py CONFIG --release` / `compare.py A B --release` score
+the holdout alone, once, for a release decision; compare says loudly that the holdout is spent.
 
 **Score and compare.** `lab/score.py RUN_ID [--layer net|trees|combined]` scores in seconds from the saves.
 `lab/compare.py A B` trains whatever is missing, A and B interleaved, then prints the A/B on the real songs and,
