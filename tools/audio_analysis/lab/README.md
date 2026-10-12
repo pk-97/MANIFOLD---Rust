@@ -3,9 +3,11 @@
 One place to label, train and judge the trained audio detectors. Rules and reasons: `docs/DETECTOR_LAB_DESIGN.md`.
 Every script applies the pinned recipe itself; never set `KICK_GOAL_*` or `SNARE_*` env by hand.
 
-**Add a song.** Build its labels with the family's builder (`eval/snare_labels.py` / `eval/kick_labels.py` for
-project songs, `eval/snare_generated.py` for Peter's generated sets), then `lab/registry.py build` and `lab/registry.py verify SONG`
-(the audio the lab reads matches the legacy loader byte for byte).
+**Add a song.** A project song outside the goal set needs its set and bounce in `eval/detector_wip.py` (`PAIRS`, picked
+from the catalogue: `catalog.py usable --ready`) and a proven offset (`detector_wip.py SONG`). Build its labels with the
+family's builder (`eval/snare_labels.py` under the recipe env; `eval/kick_labels.py`, and `kick_labels.py project` for
+those songs; `eval/snare_generated.py` for Peter's generated sets), then `lab/registry.py build` and
+`lab/registry.py verify SONG` (the audio the lab reads matches the legacy loader byte for byte).
 
 **Audit the labels.** `lab/audit.py FAMILY`. A project song fails without a proven export offset; prove one with
 `lab/offsets.py SONG`. Training refuses labels whose audit is missing or older than the labels file.

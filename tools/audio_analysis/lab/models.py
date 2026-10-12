@@ -86,6 +86,39 @@ def weights(ys, hards, clip, share=None, versions=None):
     return ws
 
 
+HARD_FLOOR_DB = 1.0   # a candidate that barely rises still gets drawn, at one dB's worth
+
+
+def onset_strength(profile):
+    """dB onset strength per candidate from its cached rise profile (components prof32, kick_goal_profile): the
+    largest early-half rise over the 16 paired bands, floored at HARD_FLOOR_DB so every weight stays positive."""
+    from tools.audio_analysis.eval.kick_goal_profile import PAIRS
+    return np.maximum(np.asarray(profile, float)[:, :PAIRS].max(axis=1), HARD_FLOOR_DB)
+
+
+def hard_negative_weights(strength, power):
+    """Per-candidate draw weight of sampling.hard_negatives: onset strength to the power; train() normalises per song
+    and multiplies it into the vouched-negative weight."""
+    return np.asarray(strength, float) ** power
+
+
+def coincident_row_weights(onset, y, positives, partner_positives, weight):
+    """Per-candidate draw weight of sampling.coincident_weight: `weight` for a positive row whose nearest label of
+    this song sits within the coincident window of a partner-family label (score.coincident_mask), 1 for every other
+    row."""
+    from tools.audio_analysis.lab.score import coincident_mask
+    out = np.ones(len(onset))
+    pos = np.sort(np.asarray(positives, float))
+    if not len(pos) or not len(onset):
+        return out
+    onset = np.asarray(onset, float)
+    j = np.searchsorted(pos, onset)
+    lo, hi = np.clip(j - 1, 0, len(pos) - 1), np.clip(j, 0, len(pos) - 1)
+    near = np.where(np.abs(onset - pos[lo]) <= np.abs(pos[hi] - onset), lo, hi)
+    out[(np.asarray(y) == 1) & coincident_mask(pos, partner_positives)[near]] = weight
+    return out
+
+
 def fit_trees(p, rows, random_state, share=None, versions=None):
     """HistGradientBoosting on rows [(x, y, hard, is_clip)], the config's settings; versions as in weights."""
     from sklearn.ensemble import HistGradientBoostingClassifier

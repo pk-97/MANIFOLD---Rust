@@ -345,6 +345,10 @@ pitch restarts; trigger kicks; reviewed labels where there is no stem); unscored
 uncertain and doubtful spans, and kick rolls (`detector_labels.roll_spans`, Peter's rolls ruling); vouched
 negatives are melodic note starts far from kicks (`kick_goal_melodic`); recall songs are positives-only. One truth
 per song for training and scoring: the legacy loop scored dev songs on reviewed passages but trained on whole songs.
+Project songs outside the goal set (the catalogue's label-ready songs, `detector_wip.PAIRS`) have no record: `kick_labels.py
+project` writes `GOAL/kick_labels_project.json` by the shared labeller's rules with the kick as the family (`own_kicks`:
+kicks are never negatives, negatives keep 105 ms from every kick note; attacks judged in 100-400 Hz, where the sub and
+bass do not hide them).
 
 **Consequence, stated plainly.** Lab kick numbers use a different truth (whole songs, rolls out) and the shared
 scorer (detector_eval), so they are not comparable with the shipped 0.889 / 0.894. Proof of the move is part

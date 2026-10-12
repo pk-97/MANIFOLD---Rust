@@ -121,8 +121,10 @@ def extra_caches(g, t, spec):
 class Song:
     """A spectrum, its candidates' slice anchors and training rows (mask, labels)."""
 
-    def __init__(self, spec, onset_s, emit_s, mask, y, name='', hard=None, extra=()):
+    def __init__(self, spec, onset_s, emit_s, mask, y, name='', hard=None, extra=(), neg_w=None, pos_w=None):
         self.spec, self.mask, self.y, self.name = torch.from_numpy(spec), mask, y, name
+        # Per-candidate draw weights beyond the vouched-negative one (lab/models.py): None draws them evenly.
+        self.neg_w, self.pos_w = neg_w, pos_w
         self.extra = [torch.from_numpy(e) for e in extra]
         self.hard = np.zeros(len(onset_s), bool) if hard is None else np.asarray(hard, bool)
         n = len(self.spec)
@@ -194,6 +196,15 @@ def device():
     return torch.device(want or ('mps' if torch.backends.mps.is_available() else 'cpu'))
 
 
+def draw_weights(song, idx, y):
+    """The relative draw weights of candidates idx of one song for class y: project-vouched non-kicks
+    (kick_goal_melodic) are drawn HARD_W times as often; the song's neg_w / pos_w, when set, scale the rest."""
+    if y == 0.0:
+        w = np.where(song.hard[idx], HARD_W, 1.0)
+        return w if song.neg_w is None else w * song.neg_w[idx]
+    return np.ones(len(idx)) if song.pos_w is None else song.pos_w[idx]
+
+
 def train(songs, seed, synth=(), epochs=EPOCHS, synth_share=0.5, swa_epochs=0, batch=BATCH, lr=LR, precision='float32'):
     """A net fitted on the songs' training rows: song-equal, class-balanced sampling.
     A song may be a list of versions (the song first, then its copies: gain or mix variants): the versions share one
@@ -230,8 +241,7 @@ def train(songs, seed, synth=(), epochs=EPOCHS, synth_share=0.5, swa_epochs=0, b
             for idx, y in ((pos, 1.0), (neg, 0.0)):
                 if not len(idx):
                     continue
-                # Project-vouched non-kicks (kick_goal_melodic) are drawn HARD_W times as often.
-                w = np.where(song.hard[idx], HARD_W, 1.0) if y == 0.0 else np.ones(len(idx))
+                w = draw_weights(song, idx, y)
                 pick = rng.choice(idx, draws, p=w / w.sum())
                 picks.append(np.stack([pick, rng.integers(-JITTER, JITTER + 1, len(pick))]))
                 ys.append(np.full(len(pick), y, np.float32))
@@ -281,7 +291,7 @@ def _draw_versions(rng, versions, draws, drawn, ys):
             if not n:
                 continue
             song, idx = versions[j][0], versions[j][c]
-            w = np.where(song.hard[idx], HARD_W, 1.0) if y == 0.0 else np.ones(len(idx))
+            w = draw_weights(song, idx, y)
             pick = rng.choice(idx, n, p=w / w.sum())
             picks[j].append(np.stack([pick, rng.integers(-JITTER, JITTER + 1, len(pick))]))
             labels[j].append(np.full(len(pick), y, np.float32))

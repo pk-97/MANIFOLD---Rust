@@ -3,7 +3,8 @@
 own mix: the project's kick notes against the mix's low onset strength, its snare notes against the 1-8 kHz
 rises, each fitted to whole bars plus a lag. Proven when both patterns pick the same bar, or when only one pattern
 exists and it wins clearly (r >= 0.3, margin >= 1 sd). A proof counts only when its offset equals the one the labels
-use (within 1 ms). Writes lab/offset_proofs.json; registry.py reads it.
+use (within 1 ms). A WIP song (detector_wip) is checked against its recorded set and offset, on the audio the lab
+reads. Writes lab/offset_proofs.json; registry.py reads it.
 
 --variants proves the mix and master variants the catalogue judged same_arrangement against a song's lab mix
 (catalog.py variants): each by the same fit on the variant's own audio, against the offset its labels would use (the
@@ -184,8 +185,15 @@ def variants(ids):
     VARIANT_PROOFS.write_text(json.dumps(proofs, indent=1, sort_keys=True) + '\n')
 
 
-def main():
+def source(t):
+    """(set, export offset the labels use) for a goal song with a project or a WIP song."""
+    from tools.audio_analysis.eval.detector_songs import wip
     from tools.audio_analysis.eval.kick_goal_melodic import _source
+    w = wip().get(t)
+    return _source(t) or (w and (w['als'], w['offset_s']))
+
+
+def main():
     from tools.audio_analysis.lab.registry import load
     if len(sys.argv) < 2:
         sys.exit(__doc__)
@@ -194,7 +202,7 @@ def main():
     songs = load()
     proofs = json.loads(PROOFS.read_text()) if PROOFS.exists() else {}
     for t in sys.argv[1:]:
-        als, used = _source(t)
+        als, used = source(t)
         proofs[t] = dict(prove(songs[t], als, used), als=str(als))
         print(f"{t:18s} {proofs[t]['status']}")
     PROOFS.write_text(json.dumps(proofs, indent=1, sort_keys=True) + '\n')
