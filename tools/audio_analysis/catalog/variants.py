@@ -8,8 +8,10 @@ the lab mix and judged: lag, correlation, residual, and a verdict.
   different_arrangement  no shared timeline: the labels do not transfer
 
 Method: the lag is remix's alignment (attack cross-correlation, refined to the sample on the loudest 8 s). Then the whole
-song is cut into SEG_S windows; a window matches when the attack (onset)
-envelopes of the aligned files correlate (>= MATCH_ATTACK). seg_frac is the matching share of the windows where both files sound. drift_ms is the
+song is cut into SEG_S windows; a window matches when the onset pattern of the aligned files, in four frequency bands,
+correlates far above what the same window correlates to at other lags (z >= MATCH_Z). A fixed correlation threshold is
+wrong: a limited final against an unlimited stem sum correlates at 0.2-0.6 on a timeline that is exactly the same, while
+other lags sit at 0.0-0.1. seg_frac is the matching share of the windows where both files sound. drift_ms is the
 largest local lag found at four anchors (a tempo change or a stretched section moves it). cover is the share of the lab
 mix the variant spans. verdict() is a pure function of those numbers; thresholds below, tested in test_catalog.py.
 
@@ -27,14 +29,18 @@ sys.path.insert(0, str(ROOT))
 
 import numpy as np  # noqa: E402
 
-VERSION = 'variant-2'
+VERSION = 'variant-3'
 BAND = (100, 8000)
 Z_MIN = 8.0                # attack cross-correlation peak over the other lags (remix.LAG_Z_MIN)
 SEG_S = 8.0
 PEAKS = 4                  # onset lags tried per candidate
 PEAK_GAP_MS = 100
 SLACK_MS = 4               # a window may sit this far off the global lag (a mastering chain's latency)
-MATCH_ATTACK = 0.5
+ONSET_BANDS = ((40, 150), (150, 600), (600, 2500), (2500, 10000))   # kick/bass, low mid, snare/body, hats: each band's onsets count
+ONSET_SMOOTH_MS = 10
+MATCH_NCC = 0.12           # mean onset correlation over the bands at the global lag, at least
+MATCH_Z = 4.0              # and this many standard deviations over the same window's correlation at other lags
+NULL_LAGS_MS = range(120, 2401, 37)   # other lags (both signs), clear of the slack and the 5 ms smoothing
 SEG_SAME = 0.9             # share of matching windows for same_arrangement
 SEG_DIFF = 0.5             # under this share: different_arrangement
 DRIFT_SAME_MS = 5.0
@@ -152,13 +158,41 @@ def _win_pow(x, k, i, w):
     return float(np.dot(x[a:b], x[a:b])) / w if b > a else 0.0
 
 
-def segments(ref, x, ra, xa, k, sr):
+def band_attacks(x, sr):
+    """Onset envelopes of x per ONSET_BANDS on a 1 ms grid, shape (bands, ms): the positive rises of each band's dB
+    energy, smoothed. One band hides every band quieter than the loudest (a pad over the drums)."""
+    from scipy.ndimage import uniform_filter1d
+
+    from tools.audio_analysis.eval.detector_labels import env_db
+    out = []
+    for lo, hi in ONSET_BANDS:
+        e = env_db(x, sr, lo, hi)
+        out.append(uniform_filter1d(np.maximum(np.diff(e, prepend=e[0]), 0.0), ONSET_SMOOTH_MS))
+    return np.array(out)
+
+
+def window_z(rb, xb, lo, hi):
+    """(onset correlation at the global lag, its z over the other lags) of window [lo, hi) ms. rb and xb are band
+    onset envelopes with xb already delayed to the global lag; the correlation is the best within +-SLACK_MS, averaged
+    over the bands; the null is the same average at NULL_LAGS_MS either side."""
+    n = xb.shape[1]
+    on = [[_ncc(rb[i, lo:hi], xb[i, lo + d:hi + d]) for d in range(-SLACK_MS, SLACK_MS + 1) if lo + d >= 0 and hi + d <= n]
+          for i in range(len(rb))]
+    best = float(np.mean(np.max(np.array(on), axis=1)))
+    lags = [s * d for d in NULL_LAGS_MS for s in (1, -1) if lo + s * d >= 0 and hi + s * d <= n]
+    if len(lags) < 8:
+        return best, 0.0
+    null = np.mean([[_ncc(rb[i, lo:hi], xb[i, lo + d:hi + d]) for d in lags] for i in range(len(rb))], axis=0)
+    return best, float((best - null.mean()) / (null.std() + 1e-3))
+
+
+def segments(ref, x, rb, xb, k, sr):
     """(windows where both files sound, windows whose onset pattern matches) with x delayed by k samples."""
     n, w, hop_ms = len(ref), int(SEG_S * sr), int(SEG_S * 1000)
     starts = list(range(0, max(n - w, 1), w))
     rp = [float(np.dot(ref[i:i + w], ref[i:i + w])) / w for i in starts]
     floor = max(float(np.median(rp)) * 1e-3, 1e-12)
-    xs = _shift_env(xa, int(round(k * 1000 / sr)), len(ra))
+    xs = np.array([_shift_env(b, int(round(k * 1000 / sr)), rb.shape[1]) for b in xb])
     ok = matched = 0
     for j, i in enumerate(starts):
         if rp[j] < floor or _win_pow(x, k, i, w) < floor:
@@ -166,9 +200,8 @@ def segments(ref, x, ra, xa, k, sr):
         ok += 1
         # the labels are drum onsets: a window matches when its onset pattern does (a held bass or pad correlating
         # across two different drum patterns must not count)
-        lo, hi = j * hop_ms, (j + 1) * hop_ms
-        ca = max(_ncc(ra[lo:hi], xs[lo + d:hi + d]) for d in range(-SLACK_MS, SLACK_MS + 1) if lo + d >= 0 and hi + d <= len(xs))
-        matched += ca >= MATCH_ATTACK
+        on, z = window_z(rb, xs, j * hop_ms, (j + 1) * hop_ms)
+        matched += on >= MATCH_NCC and z >= MATCH_Z
     return ok, matched, xs
 
 
@@ -177,19 +210,21 @@ def compare(ref, x, sr):
     lags wins (most matching windows, then the strongest peak)."""
     n = len(ref)
     rr, xr = rises(ref, sr), rises(x, sr)
-    ra, xa0 = smooth(rr), smooth(xr)
+    ra = smooth(rr)
+    rb, xb = band_attacks(ref, sr), band_attacks(x, sr)
     best = None
     for L, z in lag_peaks(rr, xr):
         k = int(round(L * sr / 1000))
-        ok, matched, xs_env = segments(ref, x, ra, xa0, k, sr)
+        ok, matched, _ = segments(ref, x, rb, xb, k, sr)
         key = (matched / ok if ok else 0.0, z)
         if best is None or key > best[0]:
-            best = (key, L, z, k, ok, matched, xs_env)
+            best = (key, L, z, k, ok, matched)
     if best is None:
         raise ValueError('no onset lag (silent or too short)')
-    _, L, z, k0, ok, matched, xa = best
+    _, L, z, k0, ok, matched = best
+    xa = _shift_env(smooth(xr), L, len(ra))
     k = refine(ref, x, k0, sr)
-    xs = _shift_view(x, k, 0, n)
+    xs =_shift_view(x, k, 0, n)
     rx, xx, pm = float(np.dot(ref, xs)), float(np.dot(xs, xs)), float(np.dot(ref, ref))
     g = rx / max(xx, 1e-30)
     # |ref - a*xs|^2 / |ref|^2 in dB from the three dot products: no whole-file temporaries
