@@ -61,6 +61,7 @@ Render and measure:
   lab-score               detector lab: score a run from its saves in seconds (exam and generated songs apart); --legacy NPZ for parity  [tools/audio_analysis/lab/score.py]  (cost: focused)
   lab-compare             detector lab A/B of two experiment configs: trains missing seeds interleaved, refuses unfair pairs, prints the comparison  [tools/audio_analysis/lab/compare.py]  (cost: broad)
   lab-queue               detector lab overnight queue: PLAN.json of run/compare steps, one at a time under the GPU lock, a log per step and a summary, stops on the first failure (--dry-run)  [tools/audio_analysis/lab/overnight.py]  (cost: broad)
+  lab-preflight           detector lab: read-only check that an overnight PLAN.json can run (clean tree, MPS, disk, configs, kick verdicts, caches warm, GPU lock)  [tools/audio_analysis/lab/preflight.py]  (cost: focused)
   repair-audio-fixture    rebuild a fixture mix from aligned stems, preserving the original; dry-run unless --apply  [scripts/repair_audio_fixture.py]  (cost: focused)
 
 CPU reference oracles (f64, seconds, no GPU):

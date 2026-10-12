@@ -3,6 +3,14 @@
 of experiments needs no one at the keyboard. Nothing clever: no retries, no judgment, no config edits. The first step
 that exits non-zero ends the queue; the steps after it stay unrun and the summary says so.
 
+One exception, the paging watchdog: every 5 seconds the machine's pageout counter (vm_stat) is read; if it has risen
+at every sample for --swap-watch-seconds (default 60, 0 off) the machine is paging for real, so the step's process
+group and every descendant are killed, the step is recorded as exit 137 and the queue goes on to the next step. A
+healthy run can hold 20+ GB of clean memory-mapped spectra without paging, so resident size is not the trigger; it is
+only recorded. Each summary row carries the step's peak resident memory, the pageouts during it and the swap used at
+its end. The queue still ends with exit 137 after a kill so the morning sees it. Every other failure stops the queue
+as above.
+
 The plan is JSON:
   {"name": "tuesday", "steps": [
      {"run": "snare_base"},
@@ -21,9 +29,11 @@ step so a crash leaves the record up to there.
 Named overnight.py, not queue.py: a script named queue.py in the lab folder shadows the standard library's queue for
 run.py (torch imports it) whenever the lab folder leads sys.path.
 
-Usage: overnight.py PLAN.json [--dry-run] [--out DIR]"""
+Usage: overnight.py PLAN.json [--dry-run] [--out DIR] [--swap-watch-seconds N]"""
 import json
+import os
 import re
+import signal
 import subprocess
 import sys
 import time
@@ -34,6 +44,8 @@ LAB = ROOT / 'tools/audio_analysis/lab'
 GPU_QUEUE = ROOT / 'scripts/gpu_queue.py'
 OUT = Path.home() / '.cache/manifold/detector-lab/queue'
 SCRIPT = {'run': 'run.py', 'compare': 'compare.py', 'release': 'release.py'}
+SWAP_WATCH_S = 60   # sustained paging this long kills the step (module doc); 0 turns the watch off
+POLL_S = 5
 STEP_KEYS = {'run', 'compare', 'args', 'release'}
 HEADLINE = re.compile(r'^(old exam \| )?(B - A over (songs|seeds)|[AB]: F1 |songs better / worse|  [AB]: coincident '
                       r'|old exam \()')
@@ -98,18 +110,108 @@ def stamp(t):
     return time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(t))
 
 
-def execute(cmd, log):
-    """Runs cmd with its output in log; returns its exit code."""
+def tree_rss(root):
+    """(resident KB of root and all its descendants, their pids), from one ps listing; (0, []) when root is gone."""
+    out = subprocess.run(['ps', '-axo', 'pid=,ppid=,rss='], capture_output=True, text=True).stdout
+    kids, rss = {}, {}
+    for ln in out.splitlines():
+        f = ln.split()
+        if len(f) == 3 and all(x.isdigit() for x in f):
+            pid, ppid, kb = map(int, f)
+            kids.setdefault(ppid, []).append(pid)
+            rss[pid] = kb
+    pids, todo = [], [root]
+    while todo:
+        p = todo.pop()
+        if p in rss:
+            pids.append(p)
+        todo += kids.get(p, [])
+    return sum(rss[p] for p in pids), pids
+
+
+def vm_sample():
+    """(pageouts since boot, swap used in MB): vm_stat's Pageouts counter and sysctl vm.swapusage. The one place
+    the machine is read, so preflight and the watchdog see the same numbers."""
+    vm = subprocess.run(['vm_stat'], capture_output=True, text=True).stdout
+    swap = subprocess.run(['sysctl', '-n', 'vm.swapusage'], capture_output=True, text=True).stdout
+    po = re.search(r'^Pageouts:\s+(\d+)', vm, re.M)
+    used = re.search(r'used = ([\d.]+)M', swap)
+    if not po or not used:
+        raise RuntimeError(f'cannot read paging counters: vm_stat gave {vm[:80]!r}, vm.swapusage gave {swap[:80]!r}')
+    return int(po.group(1)), float(used.group(1))
+
+
+class PagingWatch:
+    """True from update() once the pageout counter has risen at every sample for watch_s seconds straight. One
+    sample that does not rise (or a counter that goes back) restarts the count; watch_s 0 never trips."""
+
+    def __init__(self, watch_s, pageouts, now):
+        self.watch_s, self.last, self.rising_since = watch_s, pageouts, None
+        self.t = now
+
+    def update(self, pageouts, now):
+        if pageouts > self.last:
+            if self.rising_since is None:
+                self.rising_since = self.t
+        else:
+            self.rising_since = None
+        self.last, self.t = pageouts, now
+        return bool(self.watch_s) and self.rising_since is not None and now - self.rising_since >= self.watch_s
+
+
+def execute(cmd, log, watch_s=SWAP_WATCH_S, poll_s=POLL_S, vm=vm_sample, rss=tree_rss, clock=time.monotonic):
+    """Runs cmd with its output in log, in its own process group, sampling the machine every poll_s seconds. If the
+    pageout counter rises at every sample for watch_s seconds (sustained paging) the group and every descendant are
+    killed (SIGKILL). Returns dict(code, killed, peak_gb, pageouts, swap_mb): the step's peak resident memory, the
+    pageouts during it and the swap used at the end; code is 137 when killed."""
+    po0, swap = vm()
+    watch = PagingWatch(watch_s, po0, clock())
+    peak_kb, po = 0, po0
     with open(log, 'w') as f:
-        return subprocess.run(cmd, stdout=f, stderr=subprocess.STDOUT).returncode
+        proc = subprocess.Popen(cmd, stdout=f, stderr=subprocess.STDOUT, start_new_session=True)
+        killed = False
+        while True:
+            try:
+                rc = proc.wait(timeout=poll_s)
+                break
+            except subprocess.TimeoutExpired:
+                pass
+            kb, pids = rss(proc.pid)
+            peak_kb = max(peak_kb, kb)
+            po, swap = vm()
+            if watch.update(po, clock()):
+                for p in pids:
+                    try:
+                        os.kill(p, signal.SIGKILL)
+                    except OSError:
+                        pass
+                try:
+                    os.killpg(proc.pid, signal.SIGKILL)
+                except OSError:
+                    pass
+                proc.wait()
+                rc, killed = 137, True
+                f.write(f'\n[overnight.py] killed: pageouts rose at every sample for {watch_s:g} s '
+                        f'(+{po - po0}, swap used {swap:.0f} MB)\n')
+                break
+    po, swap = vm()
+    return dict(code=rc, killed=killed, peak_gb=peak_kb / 1e6, pageouts=po - po0, swap_mb=swap)
+
+
+def as_result(r):
+    """A runner's result as a dict: an int is a bare exit code."""
+    return dict(code=r, killed=False) if isinstance(r, int) else r
 
 
 def summary_text(name, started, rows, steps, finished, stopped=None):
     out = [f'queue {name}: started {stamp(started)}' + (f', finished {stamp(finished)}' if finished else ''),
            f'{len(steps)} steps']
     for r in rows:
-        out.append(f'step {r["n"]} {r["kind"]} {r["what"]}: exit {r["code"]}, {stamp(r["start"])} to {stamp(r["end"])}, '
-                   f'{r["end"] - r["start"]:.0f} s, log {r["log"]}')
+        why = f' (KILLED: sustained paging, pageouts rose at every sample for {r["watch_s"]:g} s)' if r['killed'] else ''
+        peak = (f', peak {r["peak_gb"]:.1f} GB resident, pageouts +{r["pageouts"]}, swap used {r["swap_mb"]:.0f} MB'
+                if r.get('peak_gb') is not None else '')
+        out.append(f'step {r["n"]} {r["kind"]} {r["what"]}: exit {r["code"]}{why}{peak}, {stamp(r["start"])} to '
+                   f'{stamp(r["end"])}, {r["end"] - r["start"]:.0f} s, log {r["log"]}')
         out += [f'    {ln}' for ln in r['headlines']]
     if stopped is not None:
         left = list(range(len(rows) + 1, len(steps) + 1))
@@ -117,38 +219,46 @@ def summary_text(name, started, rows, steps, finished, stopped=None):
                    + (', '.join(f'step {n} ({kind_of(steps[n - 1])} {what_of(steps[n - 1])})' for n in left)
                       or 'none'))
     elif finished:
-        out.append(f'all {len(steps)} steps passed')
+        killed = [r['n'] for r in rows if r['killed']]
+        out.append(f'all {len(steps)} steps ran; killed for sustained paging: '
+                   + ', '.join(f'step {n} ({rows[n - 1]["kind"]} {rows[n - 1]["what"]})' for n in killed)
+                   if killed else f'all {len(steps)} steps passed')
     return '\n'.join(out) + '\n'
 
 
-def run_plan(name, steps, out_dir, runner=execute, clock=time.time, log=print):
-    """Runs the steps in order through runner(cmd, log_path) -> exit code; stops at the first non-zero. Writes the
-    logs and summary.txt into out_dir. Returns the exit code (0, or the failing step's)."""
+def run_plan(name, steps, out_dir, runner=execute, clock=time.time, log=print, watch_s=SWAP_WATCH_S):
+    """Runs the steps in order through runner(cmd, log_path) -> exit code, or the dict execute() returns;
+    stops at the first non-zero exit unless the runner killed the step, which is recorded and passed.
+    Writes the logs and summary.txt into out_dir. Returns the exit code: the failing step's, else 137 if any step
+    was killed, else 0."""
     out_dir.mkdir(parents=True, exist_ok=True)
-    started, rows, stopped, code = clock(), [], None, 0
+    started, rows, stopped, code, killed_any = clock(), [], None, 0, False
     for n, step in enumerate(steps, 1):
         kind, what = kind_of(step), what_of(step)
         path = out_dir / log_name(step, n)
         log(f'[{stamp(clock())}] step {n}/{len(steps)}: {kind} {what}')
         t0 = clock()
         try:
-            rc = runner(step_command(step, n), path)
+            res = as_result(runner(step_command(step, n), path))
         except KeyboardInterrupt:
-            rc = 130
+            res = dict(code=130, killed=False)
+        rc, killed = res['code'], res['killed']
         if not path.exists():
             path.write_text('')
-        row = dict(n=n, kind=kind, what=what, code=rc, start=t0, end=clock(), log=path.name,
-                   headlines=headlines(path) if kind == 'compare' else [])
+        row = dict(n=n, kind=kind, what=what, code=rc, killed=killed, watch_s=watch_s, peak_gb=res.get('peak_gb'),
+                   pageouts=res.get('pageouts'), swap_mb=res.get('swap_mb'), start=t0, end=clock(),
+                   log=path.name, headlines=headlines(path) if kind == 'compare' else [])
         rows.append(row)
-        if rc:
+        killed_any = killed_any or killed
+        if rc and not killed:
             stopped, code = row, rc
         (out_dir / 'summary.txt').write_text(summary_text(name, started, rows, steps, None, stopped))
-        if rc:
+        if stopped:
             break
     finished = clock()
     (out_dir / 'summary.txt').write_text(summary_text(name, started, rows, steps, finished, stopped))
     log(f'-> {out_dir / "summary.txt"}')
-    return code
+    return code or (137 if killed_any else 0)
 
 
 def main(argv=None):
@@ -161,7 +271,8 @@ def main(argv=None):
             print(' '.join(step_command(s, n)))
         return 0
     base = Path(a[a.index('--out') + 1]) if '--out' in a else OUT / f'{name}_{time.strftime("%Y%m%d_%H%M%S")}'
-    return run_plan(name, steps, base)
+    watch = float(a[a.index('--swap-watch-seconds') + 1]) if '--swap-watch-seconds' in a else SWAP_WATCH_S
+    return run_plan(name, steps, base, runner=lambda cmd, log: execute(cmd, log, watch), watch_s=watch)
 
 
 if __name__ == '__main__':
