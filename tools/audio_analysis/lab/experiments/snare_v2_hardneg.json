@@ -58,7 +58,7 @@
     "generated": 0.5,
     "hard_negatives": {
       "by": "onset",
-      "power": 1.0
+      "power": 0.5
     }
   },
   "train": [

@@ -489,7 +489,7 @@ def builder(x):
         for off in (dict(hard_negatives=None), dict(coincident_weight=None)):
             self.assertEqual(config.build('x', with_sampling(**off)).key(), base.key())
         hard, co = config.load('snare_v2_hardneg'), config.load('snare_v2_coincident')
-        self.assertEqual(hard.hard_negatives, dict(by='onset', power=1.0))
+        self.assertEqual(hard.hard_negatives, dict(by='onset', power=0.5))
         self.assertEqual(co.coincident_weight, 3.0)
         self.assertEqual({k: v for k, v in hard.sampling.items() if k != 'hard_negatives'}, base.sampling)
         self.assertEqual({k: v for k, v in co.sampling.items() if k != 'coincident_weight'}, base.sampling)
