@@ -1888,7 +1888,7 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
     textureStore(dst, coord, r2);
 }
 
-=== effect:CodeTerminal node:44 ===
+=== effect:CodeTerminal node:45 ===
 struct Params {
     n0_block_size: f32,
     n0_columns: f32,
@@ -1905,11 +1905,15 @@ struct Params {
     n6_amount: f32,
     n7_amount: f32,
     n7_mode: u32,
-    n8_amount: f32,
-    n8_mode: u32,
-    n9_low: f32,
-    n9_high: f32,
-    n10_amount: f32,
+    n8_intensity: f32,
+    n9_amount: f32,
+    n9_mode: u32,
+    n10_low: f32,
+    n10_high: f32,
+    n11_amount: f32,
+    _pad0: u32,
+    _pad1: u32,
+    _pad2: u32,
 }
 
 @group(0) @binding(0) var<uniform> params: Params;
@@ -2080,7 +2084,12 @@ fn n7_body(a: vec4<f32>, b: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, amount: f
     return vec4<f32>(out_rgb, out_a);
 }
 
-fn n8_body(a: vec4<f32>, b: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, amount: f32, mode: u32) -> vec4<f32> {
+fn n8_body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, intensity: f32) -> vec4<f32> {
+    let inverted = vec4<f32>(1.0 - c.r, 1.0 - c.g, 1.0 - c.b, c.a);
+    return mix(c, inverted, intensity);
+}
+
+fn n9_body(a: vec4<f32>, b: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, amount: f32, mode: u32) -> vec4<f32> {
     let blended = blend_rgb(a.rgb, b.rgb, mode);
     let out_rgb = mix(a.rgb, blended, amount);
     // Branchless on purpose: an `if` here compiles differently in fused vs
@@ -2093,7 +2102,7 @@ fn n8_body(a: vec4<f32>, b: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, amount: f
     return vec4<f32>(out_rgb, out_a);
 }
 
-fn n9_body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, low: f32, high: f32) -> vec4<f32> {
+fn n10_body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, low: f32, high: f32) -> vec4<f32> {
     return vec4<f32>(
         smoothstep(low, high, c.r),
         smoothstep(low, high, c.g),
@@ -2102,7 +2111,7 @@ fn n9_body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, low: f32, high: f32) ->
     );
 }
 
-fn n10_body(a: vec4<f32>, b: vec4<f32>, mask: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, amount: f32) -> vec4<f32> {
+fn n11_body(a: vec4<f32>, b: vec4<f32>, mask: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, amount: f32) -> vec4<f32> {
     let weight = clamp(mask.r * amount, 0.0, 1.0);
     return mix(a, b, weight);
 }
@@ -2126,13 +2135,14 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
     let r5 = n5_body(r4, uv, vec2<f32>(dims), params.n5_exponent);
     let r6 = n6_body(r4, r5, r1, uv, vec2<f32>(dims), params.n6_amount);
     let r7 = n7_body(ext_5, r6, uv, vec2<f32>(dims), params.n7_amount, params.n7_mode);
-    let r8 = n8_body(r3, r4, uv, vec2<f32>(dims), params.n8_amount, params.n8_mode);
-    let r9 = n9_body(r8, uv, vec2<f32>(dims), params.n9_low, params.n9_high);
-    let r10 = n10_body(ext_6, r7, r9, uv, vec2<f32>(dims), params.n10_amount);
-    textureStore(dst, coord, r10);
+    let r8 = n8_body(r4, uv, vec2<f32>(dims), params.n8_intensity);
+    let r9 = n9_body(r3, r8, uv, vec2<f32>(dims), params.n9_amount, params.n9_mode);
+    let r10 = n10_body(r9, uv, vec2<f32>(dims), params.n10_low, params.n10_high);
+    let r11 = n11_body(ext_6, r7, r10, uv, vec2<f32>(dims), params.n11_amount);
+    textureStore(dst, coord, r11);
 }
 
-=== effect:CodeTerminal node:45 ===
+=== effect:CodeTerminal node:46 ===
 // @input_access: src_0 coincident
 struct Params {
     n0_gain: f32,
@@ -2298,7 +2308,7 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
     textureStore(dst_2, coord, r3);
 }
 
-=== effect:CodeTerminal node:46 ===
+=== effect:CodeTerminal node:47 ===
 // @input_access: src_0 coincident
 struct Params {
     n0_amount: f32,

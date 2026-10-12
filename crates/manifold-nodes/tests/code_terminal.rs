@@ -1201,8 +1201,8 @@ mod gpu {
             "intermediate amount keeps both source and terminal regions: {mid_changed:.3}"
         );
 
-        // Mid Amount dissolves pixel by pixel: letter strokes turn first, so
-        // letters form inside the image before the gaps around them go black.
+        // Mid Amount dissolves pixel by pixel: the gaps around each letter go
+        // black first, so the image survives in letter shapes before recolouring.
         let source_pixels = f32_pixels(&source_raw);
         let mid_pixels = f32_pixels(&mid);
         let difference = |p: &[f32; 4], q: &[f32; 4]| {
@@ -1234,8 +1234,8 @@ mod gpu {
         assert!(fraction(untouched) > 0.1, "mid amount keeps live image");
         let (strokes, gaps) = (turned_share(true), turned_share(false));
         assert!(
-            strokes > gaps + 0.1,
-            "letter strokes turn before gaps: strokes={strokes:.3} gaps={gaps:.3}"
+            gaps > strokes + 0.1,
+            "gaps turn before letter strokes: strokes={strokes:.3} gaps={gaps:.3}"
         );
         assert!(fraction(faded) > 0.01, "mid amount fades some cells to terminal");
 

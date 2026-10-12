@@ -1,7 +1,7 @@
 {
   "version": 2,
   "name": "CodeTerminal",
-  "description": "The source image is drawn with terminal glyphs. Source colour and brightness are sampled once per character cell, keeping whole glyphs at image contours. Brightness controls character illumination and stroke weight; gaps and spaces never fill. Amount dissolves the image into code pixel by pixel: in each character cell the pixels on the letter's strokes turn first, so the letter forms inside the image, then the pixels around it crumble to black in a blue-noise order, with cells flickering at the arrival edge. At full Amount the image is entirely terminal. Fresh Text keeps retyping groups of lines with new shell, code, log and memory passages; at zero, still content settles. Source changes trigger local typing and data-character edits. Layout selects Single or tmux-style panes; Activity zero holds the characters.",
+  "description": "The source image is drawn with terminal glyphs. Source colour and brightness are sampled once per character cell, keeping whole glyphs at image contours. Brightness controls character illumination and stroke weight; gaps and spaces never fill. Amount dissolves the image into code pixel by pixel: in each character cell the gaps around the letter crumble to black first in a blue-noise order, so the image survives only in the shape of its letter, then those letter-shaped pixels shift into the terminal colour, with cells flickering at the arrival edge. At full Amount the image is entirely terminal. Fresh Text keeps retyping groups of lines with new shell, code, log and memory passages; at zero, still content settles. Source changes trigger local typing and data-character edits. Layout selects Single or tmux-style panes; Activity zero holds the characters.",
   "presetMetadata": {
     "id": "CodeTerminal",
     "displayName": "Code Terminal",
@@ -716,10 +716,10 @@
     },
     {
       "id": 43,
-      "nodeId": "strokes_first",
+      "nodeId": "gaps_first",
       "typeId": "node.mix",
-      "handle": "strokes_first",
-      "title": "Letter Strokes First",
+      "handle": "gaps_first",
+      "title": "Gaps Go First",
       "params": {
         "amount": {
           "type": "Float",
@@ -728,6 +728,19 @@
         "mode": {
           "type": "Enum",
           "value": 2
+        }
+      }
+    },
+    {
+      "id": 44,
+      "nodeId": "letter_gaps",
+      "typeId": "node.invert",
+      "handle": "letter_gaps",
+      "title": "Letter Gaps",
+      "params": {
+        "intensity": {
+          "type": "Float",
+          "value": 1.0
         }
       }
     }
@@ -1034,12 +1047,6 @@
       "toPort": "a"
     },
     {
-      "fromNode": 3,
-      "fromPort": "out",
-      "toNode": 43,
-      "toPort": "b"
-    },
-    {
       "fromNode": 43,
       "fromPort": "out",
       "toNode": 18,
@@ -1062,6 +1069,18 @@
       "fromPort": "out",
       "toNode": 19,
       "toPort": "mask"
+    },
+    {
+      "fromNode": 3,
+      "fromPort": "out",
+      "toNode": 44,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 44,
+      "fromPort": "out",
+      "toNode": 43,
+      "toPort": "b"
     }
   ]
 }
