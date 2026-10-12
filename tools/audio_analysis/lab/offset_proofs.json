@@ -16,6 +16,74 @@
   },
   "status": "proven (kick and snare agree)"
  },
+ "affect": {
+  "als": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/2025/Affect Project/Affect V2.als",
+  "kick": {
+   "k": 16,
+   "lag": 0.059,
+   "margin_sd": 0.55,
+   "r": 0.684
+  },
+  "offset_s": -39.1313,
+  "snare": {
+   "k": 16,
+   "lag": 0.049,
+   "margin_sd": 0.93,
+   "r": 0.55
+  },
+  "status": "proven (kick and snare agree)"
+ },
+ "break": {
+  "als": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/Ableton 11/Break Project/Break - SONIBLE.als",
+  "kick": {
+   "k": 48,
+   "lag": 0.013,
+   "margin_sd": 0.46,
+   "r": 0.559
+  },
+  "offset_s": -73.8398,
+  "snare": {
+   "k": 48,
+   "lag": 0.003,
+   "margin_sd": 0.12,
+   "r": 0.478
+  },
+  "status": "proven (kick and snare agree)"
+ },
+ "concentrate": {
+  "als": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/Ableton 11/Faux Project/Faux.als",
+  "kick": {
+   "k": 16,
+   "lag": 0.069,
+   "margin_sd": 0.73,
+   "r": 0.585
+  },
+  "offset_s": -30.6576,
+  "snare": {
+   "k": 16,
+   "lag": -0.068,
+   "margin_sd": 0.16,
+   "r": 0.319
+  },
+  "status": "proven (kick and snare agree)"
+ },
+ "control": {
+  "als": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/Ableton 11/Rise Project/Rise.als",
+  "kick": {
+   "k": 16,
+   "lag": 0.064,
+   "margin_sd": 0.21,
+   "r": 0.616
+  },
+  "offset_s": -30.4188,
+  "snare": {
+   "k": 16,
+   "lag": 0.056,
+   "margin_sd": 0.12,
+   "r": 0.447
+  },
+  "status": "proven (kick and snare agree)"
+ },
  "default_haze": {
   "als": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/2026/Default Haze Project/Default Haze.als",
   "kick": {
@@ -27,6 +95,57 @@
   "offset_s": -25.5486,
   "snare": null,
   "status": "proven (one pattern, clear win)"
+ },
+ "desire": {
+  "als": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/Ableton 11/Wait Project/Wait.als",
+  "kick": {
+   "k": 32,
+   "lag": 0.062,
+   "margin_sd": 0.17,
+   "r": 0.714
+  },
+  "offset_s": -55.5968,
+  "snare": {
+   "k": 32,
+   "lag": 0.055,
+   "margin_sd": 0.18,
+   "r": 0.441
+  },
+  "status": "proven (kick and snare agree)"
+ },
+ "dream": {
+  "als": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/Ableton 11/Idle Project/Idle.als",
+  "kick": {
+   "k": 8,
+   "lag": 0.012,
+   "margin_sd": 2.34,
+   "r": 0.696
+  },
+  "offset_s": -13.7089,
+  "snare": {
+   "k": 8,
+   "lag": 0.003,
+   "margin_sd": 0.7,
+   "r": 0.545
+  },
+  "status": "proven (kick and snare agree)"
+ },
+ "echo": {
+  "als": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/Ableton 11/Clue Project/Clue V2.als",
+  "kick": {
+   "k": 16,
+   "lag": 0.029,
+   "margin_sd": 1.6,
+   "r": 0.437
+  },
+  "offset_s": -27.8037,
+  "snare": {
+   "k": 16,
+   "lag": 0.005,
+   "margin_sd": 0.56,
+   "r": 0.304
+  },
+  "status": "proven (kick and snare agree)"
  },
  "facade": {
   "als": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/2026/Facade Project/Facade.als",
@@ -57,6 +176,40 @@
   },
   "status": "proven (kick and snare agree)"
  },
+ "fortuity": {
+  "als": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/2025/Fortuity Project/Fortuity V2.als",
+  "kick": {
+   "k": 16,
+   "lag": 0.055,
+   "margin_sd": 0.5,
+   "r": 0.48
+  },
+  "offset_s": -27.3802,
+  "snare": {
+   "k": 16,
+   "lag": 0.057,
+   "margin_sd": 0.37,
+   "r": 0.311
+  },
+  "status": "proven (kick and snare agree)"
+ },
+ "go_with_you": {
+  "als": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/Ableton 11/Bright Project/Bright.als",
+  "kick": {
+   "k": 16,
+   "lag": 0.061,
+   "margin_sd": 0.29,
+   "r": 0.634
+  },
+  "offset_s": -32.488,
+  "snare": {
+   "k": 16,
+   "lag": 0.054,
+   "margin_sd": 0.16,
+   "r": 0.475
+  },
+  "status": "proven (kick and snare agree)"
+ },
  "got_it": {
   "als": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/2026/MudPie Project/Got It Wip 5.als",
   "kick": {
@@ -67,6 +220,23 @@
   },
   "snare": null,
   "status": "not proven"
+ },
+ "know_youre_there": {
+  "als": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/2024/Sound Design Session Project/05 - Know You're There - LIVE EDITS.als",
+  "kick": {
+   "k": 16,
+   "lag": 0.015,
+   "margin_sd": 0.95,
+   "r": 0.431
+  },
+  "offset_s": -28.6483,
+  "snare": {
+   "k": 16,
+   "lag": 0.001,
+   "margin_sd": 0.36,
+   "r": 0.456
+  },
+  "status": "proven (kick and snare agree)"
  },
  "lowkey": {
   "als": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/2026/I Guess It's Just This Project/Lowkey V2 - Mix WIP 1.als",
@@ -85,6 +255,35 @@
   },
   "status": "proven (kick and snare agree)"
  },
+ "mendez": {
+  "als": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/Ableton 11/Mendez X PK Project/Mendez X PK V2.als",
+  "kick": null,
+  "offset_s": -30.673,
+  "snare": {
+   "k": 16,
+   "lag": 0.047,
+   "margin_sd": 3.22,
+   "r": 0.518
+  },
+  "status": "proven (one pattern, clear win)"
+ },
+ "motion": {
+  "als": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/2025/Motion Project/Motion - Dub - Mixdown V2.als",
+  "kick": {
+   "k": 16,
+   "lag": 0.059,
+   "margin_sd": 1.36,
+   "r": 0.208
+  },
+  "offset_s": -29.4861,
+  "snare": {
+   "k": 16,
+   "lag": 0.05,
+   "margin_sd": 0.26,
+   "r": 0.29
+  },
+  "status": "proven (kick and snare agree)"
+ },
  "overwhelming_force": {
   "als": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/2026/Overwhelming Force Project/Overwhelming Force v2.als",
   "kick": {
@@ -96,6 +295,40 @@
   "snare": null,
   "status": "not proven"
  },
+ "paces": {
+  "als": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/Ableton 11/Map Project/Map.als",
+  "kick": {
+   "k": 16,
+   "lag": 0.013,
+   "margin_sd": 0.2,
+   "r": 0.711
+  },
+  "offset_s": -28.6503,
+  "snare": {
+   "k": 16,
+   "lag": 0.005,
+   "margin_sd": 0.02,
+   "r": 0.375
+  },
+  "status": "proven (kick and snare agree)"
+ },
+ "pulse": {
+  "als": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/Ableton 11/Pulse Project/Pulse.als",
+  "kick": {
+   "k": 16,
+   "lag": 0.062,
+   "margin_sd": 0.57,
+   "r": 0.634
+  },
+  "offset_s": -27.3732,
+  "snare": {
+   "k": 16,
+   "lag": 0.055,
+   "margin_sd": 0.02,
+   "r": 0.454
+  },
+  "status": "proven (kick and snare agree)"
+ },
  "renew": {
   "als": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/2026/Renew Project/Renew.als",
   "kick": {
@@ -106,5 +339,90 @@
   },
   "snare": null,
   "status": "not proven"
+ },
+ "running": {
+  "als": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/Ableton 11/Running Remaster - SONIBLE Project/Running Remaster - FINAL.als",
+  "kick": {
+   "k": 16,
+   "lag": 0.018,
+   "margin_sd": 0.6,
+   "r": 0.739
+  },
+  "offset_s": -28.2239,
+  "snare": {
+   "k": 16,
+   "lag": 0.003,
+   "margin_sd": 0.02,
+   "r": 0.417
+  },
+  "status": "proven (kick and snare agree)"
+ },
+ "skyline": {
+  "als": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/Ableton 11/Stay Project/Stay - BETA.als",
+  "kick": {
+   "k": 16,
+   "lag": 0.061,
+   "margin_sd": 0.27,
+   "r": 0.701
+  },
+  "offset_s": -27.3742,
+  "snare": {
+   "k": 16,
+   "lag": 0.054,
+   "margin_sd": 0.33,
+   "r": 0.663
+  },
+  "status": "proven (kick and snare agree)"
+ },
+ "sol": {
+  "als": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/Ableton 11/Sol Project/Sol V2 - Update.als",
+  "kick": {
+   "k": 12,
+   "lag": 0.016,
+   "margin_sd": 0.6,
+   "r": 0.517
+  },
+  "offset_s": -27.1604,
+  "snare": {
+   "k": 12,
+   "lag": 0.003,
+   "margin_sd": 0.6,
+   "r": 0.366
+  },
+  "status": "proven (kick and snare agree)"
+ },
+ "touch": {
+  "als": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/2024/Sense (Touch) Project/Sense - Album Master.als",
+  "kick": {
+   "k": 8,
+   "lag": 0.015,
+   "margin_sd": 0.57,
+   "r": 0.474
+  },
+  "offset_s": -13.9046,
+  "snare": {
+   "k": 8,
+   "lag": 0.002,
+   "margin_sd": 0.41,
+   "r": 0.505
+  },
+  "status": "proven (kick and snare agree)"
+ },
+ "waypoints": {
+  "als": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/Other And Backups/Ways Project/Waypoints PREMASTER T2.als",
+  "kick": {
+   "k": 48,
+   "lag": 0.013,
+   "margin_sd": 0.68,
+   "r": 0.886
+  },
+  "offset_s": -104.7209,
+  "snare": {
+   "k": 48,
+   "lag": 0.003,
+   "margin_sd": 0.08,
+   "r": 0.597
+  },
+  "status": "proven (kick and snare agree)"
  }
 }
