@@ -32,7 +32,8 @@ GPU_QUEUE = ROOT / 'scripts/gpu_queue.py'
 OUT = Path.home() / '.cache/manifold/detector-lab/queue'
 SCRIPT = {'run': 'run.py', 'compare': 'compare.py'}
 STEP_KEYS = {'run', 'compare', 'args', 'release'}
-HEADLINE = re.compile(r'^(B - A over (songs|seeds)|[AB]: F1 |songs better / worse|  [AB]: coincident )')
+HEADLINE = re.compile(r'^(old exam \| )?(B - A over (songs|seeds)|[AB]: F1 |songs better / worse|  [AB]: coincident '
+                      r'|old exam \()')
 
 
 def load_plan(path):

@@ -22,7 +22,8 @@ songs' hits, never on the songs it predicts.
 predictions per layer under a run id that changes whenever the config, the labels or the code changes. With song
 groups it also trains the pair models that choose each song's cutoff without ever seeing it. A model another config
 already trained is reused, so changing only the trees retrains no nets. `--warm` builds the cached inputs first;
-`--plan` prints the run id.
+`--plan` prints the run id. A net trains on the GPU (MPS); a child that would land on the CPU exits non-zero with one
+line saying why, unless the command carries `--cpu` (a queue step passes it in `"args"`). Trees-only runs are exempt.
 
 **Score and compare.** `lab/score.py RUN_ID [--layer net|trees|combined]` scores in seconds from the saves.
 `lab/compare.py A B` trains whatever is missing, A and B interleaved, then prints the A/B on the real songs and,
@@ -30,6 +31,10 @@ apart, on the generated songs. The headline is the 90% interval over songs; seed
 refuses a pair whose exam songs or labels differ, and one-net-per-song configs. Snare and kick reports also carry
 `coincident`: recall on the labels within 20 ms of a label of the other family (snare against kick, kick against
 snare), per song and pooled, beside overall recall; `compare.py` prints it under the exam A/B.
+`--exam-of RUN_ID` (on `compare.py` and `score.py`) adds the same numbers restricted to the exam songs of that earlier
+run's `meta.json`, headed by which subset and how many songs; `compare.py` prefixes those lines `old exam | `. It reads
+saved per-song results only, so run ids, cached layers and the full-exam numbers do not move. Use it when the exam has
+grown and you need a number comparable with a detector scored on the old exam.
 
 **Overnight.** `lab/overnight.py PLAN.json [--dry-run]` (`scripts/dev.py lab-queue`) runs a JSON list of run and
 compare steps one at a time under the GPU lock, writes a log per step and a summary, and stops at the first failure.

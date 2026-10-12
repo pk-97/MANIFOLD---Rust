@@ -5,7 +5,8 @@ project songs, never on generated or recall-only songs; with song groups, on the
 saw the scored group. Writes report_s<seed>.json per seed (report_<layer>_s<seed>.json for a named layer): exam songs
 under results.net.per_song (detector_compare's layout), generated songs in their own section.
 
-Usage: score.py RUN_ID [--layer net|trees|combined]   (default: the run's final layer)
+Usage: score.py RUN_ID [--layer net|trees|combined] [--exam-of OLD_RUN_ID]   (default: the run's final layer;
+         --exam-of also prints pooled recall, precision and F1 on the songs of OLD_RUN_ID's exam, beside the full exam)
        score.py --legacy NPZ CONFIG   (a save of a retired runner, scored by these rules under CONFIG)"""
 import json
 import sys
@@ -194,6 +195,34 @@ def score_run(run_id, layer=None, log=print):
     return reports
 
 
+def old_exam(old_id, exam):
+    """(songs, header): the songs of run old_id's exam (its meta.json) that this exam also holds, and the one line
+    saying which subset that is. Reads saved results only."""
+    p = RUNS / old_id / 'meta.json'
+    if not p.exists():
+        sys.exit(f'--exam-of {old_id}: no such run (no {p})')
+    old = json.loads(p.read_text())['exam']
+    kept = [t for t in exam if t in set(old)]
+    lost = [t for t in old if t not in set(exam)]
+    head = f'old exam (run {old_id}): {len(kept)} of its {len(old)} songs are scored here, out of {len(exam)} in this exam'
+    return kept, head + (f'; not in this exam: {lost}' if lost else '')
+
+
+def old_exam_lines(reports, old_id):
+    """Per seed, pooled recall, precision and F1 on the full exam and on the old exam's songs."""
+    from tools.audio_analysis.eval.detector_compare import pooled
+    first = next(iter(reports.values()))
+    kept, head = old_exam(old_id, first['exam'])
+    out = [head]
+    for seed, r in sorted(reports.items()):
+        ps, ro = r['results']['net']['per_song'], tuple(r['recall_only'])
+        full, sub = pooled(ps, r['exam'], ro), pooled(ps, kept, ro) if kept else None
+        out.append(f'  seed {seed}: full exam ({len(r["exam"])} songs) recall {full[0]:.3f} precision {full[1]:.3f} '
+                   f'F1 {full[2]:.4f}' + (f' | old exam ({len(kept)} songs) recall {sub[0]:.3f} precision {sub[1]:.3f} '
+                                          f'F1 {sub[2]:.4f}' if sub else ' | old exam: no songs in common'))
+    return out
+
+
 def legacy(npz, config, lab=None):
     """{song: song_result} for a save of the retired snare runner, on lab (the labels it was scored with; default
     today's); the scorer-parity oracle (test_scorer_parity)."""
@@ -214,7 +243,9 @@ def main():
         out.write_text(json.dumps(dict(results=dict(net=dict(per_song=legacy(a[1], a[2])))), indent=1, default=float))
         print(f'-> {out} ({time.time() - t0:.1f} s)')
     elif a:
-        score_run(a[0], a[a.index('--layer') + 1] if '--layer' in a else None)
+        reps = score_run(a[0], a[a.index('--layer') + 1] if '--layer' in a else None)
+        if '--exam-of' in a and reps:
+            print('\n'.join(old_exam_lines(reps, a[a.index('--exam-of') + 1])))
     else:
         sys.exit(__doc__)
 

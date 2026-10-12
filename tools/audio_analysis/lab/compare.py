@@ -5,7 +5,9 @@ songs or labels differ, and prints the exam A/B (detector_compare), then the gen
 is also written to the lab cache's compare/ folder. Configs with one net per song are refused: they cannot choose a
 song's cutoff on models that never saw it.
 
-Usage: compare.py CONFIG_A CONFIG_B [--seeds 0,1,2] [--layer net|trees|combined]   (layer: default each final)"""
+Usage: compare.py CONFIG_A CONFIG_B [--seeds 0,1,2] [--layer net|trees|combined] [--exam-of RUN_ID] [--cpu]
+       (layer: default each final; --exam-of adds the A/B on just the songs of that earlier run's exam, lines
+       prefixed 'old exam | '; --cpu lets a net train on the CPU, otherwise it refuses)"""
 import sys
 import time
 from pathlib import Path
@@ -83,6 +85,22 @@ def coincident_lines(sides, family):
     return out
 
 
+def old_exam_lines(sides, old_id, family):
+    """The exam A/B again on the songs of run old_id's exam (its meta.json), every line prefixed 'old exam | ' so
+    the full-exam numbers above stay the headline. sides = [A's reports by seed, B's reports by seed]."""
+    from tools.audio_analysis.eval.detector_compare import compare
+    from tools.audio_analysis.lab.score import old_exam
+    first = sides[0][0]
+    kept, head = old_exam(old_id, first['exam'])
+    if not kept:
+        return [f'old exam | {head}', 'old exam | no songs in common; nothing to compare']
+    lines = []
+    compare([[{t: r['results']['net']['per_song'][t] for t in kept} for r in side] for side in sides],
+            tuple(first['recall_only']), lambda m: lines.append(m))
+    lines += coincident_lines([[dict(r, exam=kept) for r in side] for side in sides], family)
+    return [f'old exam | {head}'] + [f'old exam | {m}' for m in lines]
+
+
 def main():
     from tools.audio_analysis.eval.detector_compare import compare
     from tools.audio_analysis.lab.config import load
@@ -96,11 +114,15 @@ def main():
             sys.exit(f'{c.name}: folds 0 (one net per song) has optimistic cutoffs; compare runs with song groups')
     layer = a[a.index('--layer') + 1] if '--layer' in a else None
     seeds = [int(s) for s in a[a.index('--seeds') + 1].split(',')] if '--seeds' in a else sorted(set(cfgs[0].seeds) & set(cfgs[1].seeds))
+    old_id = a[a.index('--exam-of') + 1] if '--exam-of' in a else None
+    if old_id:
+        from tools.audio_analysis.lab.score import old_exam
+        old_exam(old_id, [])   # a missing run id fails now, not after the training
     ids = [run_id_of(a[0]), run_id_of(a[1])]
     todo = [(k, s) for s in seeds for k in (0, 1) if not (RUNS / ids[k] / f's{s}.npz').exists()]
     t0 = time.time()
     for n, (k, s) in enumerate(todo):
-        run(a[k], [s])
+        run(a[k], [s], cpu='--cpu' in a)
         left = len(todo) - n - 1
         if left:
             per = (time.time() - t0) / (n + 1)
@@ -125,6 +147,9 @@ def main():
     compare([[reps[k][s]['results']['net']['per_song'] for s in seeds] for k in (0, 1)], tuple(first['recall_only']), out)
     for m in coincident_lines([[reps[k][s] for s in seeds] for k in (0, 1)], cfgs[0].family):
         out(m)
+    if old_id:
+        for m in old_exam_lines([[reps[k][s] for s in seeds] for k in (0, 1)], old_id, cfgs[0].family):
+            out(m)
     if first['generated']:
         out('generated songs (never set a cutoff; trained on only where the config trains them):')
         compare([[reps[k][s]['generated'] for s in seeds] for k in (0, 1)], (), out)
