@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Export-offset proofs for project songs (docs/DETECTOR_LAB_DESIGN.md D5), by detector_wip's method on the song's
 own mix: the project's kick notes against the mix's low onset strength, its snare notes against the 1-8 kHz
-rises, each fitted to whole bars plus a lag. Proven when both patterns pick the same bar, or when only one pattern
-exists and it wins clearly (r >= 0.3, margin >= 1 sd). A proof counts only when its offset equals the one the labels
-use (within 1 ms). A WIP song (detector_wip) is checked against its recorded set and offset, on the audio the lab
+rises, each fitted to whole bars plus a lag, the offset chosen by detector_wip.export_offset. Proven when both
+patterns pick the same bar, or when only one pattern exists and it wins clearly (r >= 0.3, margin >= 1 sd). A proof
+counts only when its offset equals the one the labels use (within 1 ms). A WIP song (detector_wip) is checked against its recorded set and offset, on the audio the lab
 reads. Writes lab/offset_proofs.json; registry.py reads it.
 
 --variants proves the mix and master variants the catalogue judged same_arrangement against a song's lab mix
@@ -30,7 +30,6 @@ recipe.apply()
 import numpy as np  # noqa: E402
 
 PROOFS = Path(__file__).with_name('offset_proofs.json')
-CLEAR_R, CLEAR_SD = .3, 1.0
 VARIANT_TOL_S = .010   # how far mastering legitimately moves a fitted kick attack; variants only, never the exam's 1 ms
 
 
@@ -55,26 +54,17 @@ def fits(song, als):
     return kick, snare, spb
 
 
-def fit_offsets(kick, snare, spb):
-    """{pattern: the export offset its fit implies}."""
-    from tools.audio_analysis.eval.kick_goal_wip_sections import ENV_BIAS
-    return {name: -4 * p['k'] * spb + p['lag'] - bias for name, p, bias in (('kick', kick, ENV_BIAS), ('snare', snare, 0.0)) if p}
-
-
 def prove(song, als, used, got=False):
     """got: fits(song, als) when already computed."""
-    from tools.audio_analysis.eval.kick_goal_wip_sections import ENV_BIAS
+    from tools.audio_analysis.eval.detector_wip import export_offset
     got = fits(song, als) if got is False else got
     if got is None:
         return dict(status='not proven (tempo automation)')
     kick, snare, spb = got
-    if kick and snare and kick['k'] == snare['k']:
-        status, use = 'proven (kick and snare agree)', kick
-    elif len([p for p in (kick, snare) if p]) == 1 and any(p and p['r'] >= CLEAR_R and p['margin_sd'] >= CLEAR_SD for p in (kick, snare)):
-        status, use = 'proven (one pattern, clear win)', kick or snare
-    else:
+    chosen = export_offset(kick, snare, spb)
+    if chosen is None:
         return dict(status='not proven', kick=kick, snare=snare)
-    off = -4 * use['k'] * spb + use['lag'] - (ENV_BIAS if use is kick else 0.0)
+    status, off = chosen
     if abs(off - used) > .001:
         return dict(status=f'not proven (fit {off:.4f} s, labels use {used:.4f} s)', kick=kick, snare=snare)
     return dict(status=status, offset_s=round(off, 4), kick=kick, snare=snare)
@@ -95,7 +85,8 @@ def moves(parent_fits, variant_fits, lag_s):
     and the variant. The fit's bias on a mix is the song's, so it cancels."""
     if parent_fits is None or variant_fits is None:
         return {}
-    a, b = fit_offsets(*parent_fits), fit_offsets(*variant_fits)
+    from tools.audio_analysis.eval.detector_wip import implied_offsets
+    a, b = implied_offsets(*parent_fits), implied_offsets(*variant_fits)
     return {k: (b[k] - a[k]) + lag_s for k in sorted(set(a) & set(b))}
 
 

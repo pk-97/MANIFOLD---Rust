@@ -4,11 +4,11 @@ Known times only (Peter, 2026-10-11: no result counts unless the labels are cert
 labels file holds (detector_eval scores against it):
 - positives: project MIDI notes on the family's playing tracks or drum-rack pads (excluded voices left out, muted
   pads only on trigger tracks), and the starts of the family's playing audio clips where a loud hit begins within
-  clip_onset_s (a placed one-shot), shifted by the song's proven export offset. Muted drum sources are unknown, not
-  silent, except groups muted only for a stem export (project_parts, export_groups). Layers within layer_s are one
-  event. Only PROMINENT events count (Peter, 2026-10-10: the ones you hear
-  in the mix): an attack in the family band (rise >= prominent_db) whose peak is within main_db of the song's main
-  events; others are unscored.
+  clip_onset_s (a placed one-shot), shifted by the song's proven export offset and nothing else (a fitted slide
+  toward the attack picked late shifts no proof checked: BUG-a2pma (labels timing_shift)). Muted drum sources are
+  unknown, not silent, except groups muted only for a stem export (project_parts, export_groups). Layers within
+  layer_s are one event. Only PROMINENT events count (Peter, 2026-10-10: the ones you hear in the mix): an attack in
+  the family band (rise >= prominent_db) whose peak is within main_db of the song's main events; others are unscored.
 - unscored: windows that cannot be judged (quiet events; notes with probability under 1; drum notes on pads or tracks
   no voice names; fast runs under dense_s apart, padded).
 - loop_spans: the family's own audio clips (hits past a clip's start are not known times), audio clips that may
@@ -104,17 +104,6 @@ def prominent(env, t, fam):
     if not ok.any():
         return ok
     return ok & (lvl >= np.percentile(lvl[ok], 90) - fam.main_db)
-
-
-def timing_shift(env, t, fam):
-    """Offset (s) in -30..+30 ms that gives the most events with a clear attack. Project offsets can sit ~20 ms off
-    (sample attack delay, device latency). Kept at 0 unless another shift beats it by 10% of the events."""
-    t = np.asarray(t)
-    if not len(t):
-        return 0.0
-    counts = {s: int(on_attack(env, t + s / 1000, fam.prominent_db).sum()) for s in range(-30, 31)}
-    best = max(counts, key=lambda s: (counts[s], -abs(s)))
-    return best / 1000 if counts[best] - counts[0] > .1 * len(t) else 0.0
 
 
 def merge_layers(t, layer_s=.030):
@@ -451,8 +440,6 @@ def song(g, t, fam):
     placed = clip_starts(own, Path(src[0]).parent, sr, fam.stem_band, points, fam.clip_onset_s)
     pos = merge_layers(np.concatenate([notes, placed]) + off, fam.layer_s)
     pos = pos[(pos > .1) & (pos < dur - .1)]
-    shift = timing_shift(env, pos, fam)
-    pos = pos + shift
     ok = prominent(env, pos, fam)
     dropped = list(pos[~ok])
     unscored += [(u + h0, u + h1) for u in pos[~ok]]
@@ -497,7 +484,7 @@ def song(g, t, fam):
                 loop_spans=[list(map(float, u)) for u in loops], hard_neg=sorted(map(float, np.unique(np.round(neg, 4)))),
                 positives_only=t in fam.recall_only, dropped=sorted(map(float, dropped)), dense=dense,
                 dense_pos=sorted(map(float, dense_pos)), dense_all=sorted(map(float, dense_all)),
-                timing_shift_ms=round(1000 * shift, 1), offset_s=float(off), unmuted=sorted(unmute), drum_stem=blind is not None,
+                timing_shift_ms=0.0, offset_s=float(off), unmuted=sorted(unmute), drum_stem=blind is not None,
                 sources=dict(midi=len(notes), clip_start=len(placed)), builder=builder_id(__file__))
 
 
@@ -531,8 +518,6 @@ def multitrack_song(g, t, fam, unknown):
     voice = [i for i, q in enumerate(stems) if role[q] == 'voice']
     pos = merge_layers(np.concatenate([hits[stems[i]] for i in voice]) if voice else np.zeros(0), fam.layer_s)
     pos = pos[(pos > .1) & (pos < dur - .1)]
-    shift = timing_shift(env, pos, fam)
-    pos = pos + shift
     ok = prominent(env, pos, fam)
     dropped = pos[~ok]
     unscored = [(u + h0, u + h1) for u in dropped]
@@ -543,7 +528,7 @@ def multitrack_song(g, t, fam, unknown):
         for i in voice:
             vsum[:len(xs[i])] += xs[i]
         ve = env_db(vsum, sr, *fam.band)
-        at = np.round((pos - shift) * 1e3).astype(int)
+        at = np.round(pos * 1e3).astype(int)
         main = np.median([ve[j - 10:j + 30].max() for j in at])
     elif any(r == 'unknown' for r in role.values()):
         lv = [env_db(y, sr, *fam.band)[np.round(stem_hits(y, sr, fam.band)[0] * 1e3).astype(int)]
@@ -573,7 +558,7 @@ def multitrack_song(g, t, fam, unknown):
                 loop_spans=[list(map(float, u)) for u in loops], hard_neg=sorted(map(float, np.unique(np.round(neg, 4)))),
                 positives_only=t in fam.recall_only, dropped=sorted(map(float, dropped)), dense=dense,
                 dense_pos=sorted(map(float, dense_pos)), dense_all=sorted(map(float, dense_all)),
-                timing_shift_ms=round(1000 * shift, 1), offset_s=0.0, unmuted=[], drum_stem=True, proof='stem',
+                timing_shift_ms=0.0, offset_s=0.0, unmuted=[], drum_stem=True, proof='stem',
                 sources=dict(stems={q.name: role[q] for q in stems}), builder=builder_id(__file__))
 
 

@@ -665,6 +665,30 @@ def builder(x):
             np.testing.assert_array_equal(registry.mix(v), remix.read_mono(str(p), 48000))
             self.assertEqual(len(registry.mix(v)), 48000)
 
+    def test_export_offset_rule(self):
+        """The kick fit gives the offset unless it sits on the kick's body: more than 10 ms (and at most 50 ms) later
+        than the snare fit, as echo's sub swell put it (BUG-a2pma (labels timing_shift)). The fits are the recorded
+        ones of echo, fortuity (kick 8.6 ms early: ordinary disagreement) and concentrate (snare fit 130 ms off)."""
+        from tools.audio_analysis.eval import detector_wip as dw
+        from tools.audio_analysis.eval.kick_goal_wip_sections import ENV_BIAS
+        spb = .5
+
+        def fit(k, lag, r=.5, margin_sd=.5):
+            return dict(k=k, lag=lag, r=r, margin_sd=margin_sd)
+        status, off = dw.export_offset(fit(16, .029), fit(16, .005), spb)   # echo
+        self.assertTrue(status.startswith('proven (kick and snare agree; snare lag'))
+        self.assertAlmostEqual(off, -32 + .005)
+        for kl, sl in ((.055, .057), (.069, -.068), (.064, .056), (.0164, 0.0)):   # fortuity, concentrate, control, 9.8 ms
+            status, off = dw.export_offset(fit(16, kl), fit(16, sl), spb)
+            self.assertEqual(status, 'proven (kick and snare agree)')
+            self.assertAlmostEqual(off, -32 + kl - ENV_BIAS)
+        self.assertEqual(dw.export_offset(fit(16, .056), fit(16, 0.0), spb)[0][:46],   # 49.4 ms: still the body
+                         'proven (kick and snare agree; snare lag, the k')
+        self.assertIsNone(dw.export_offset(fit(16, .029), fit(12, .005), spb))
+        self.assertAlmostEqual(dw.export_offset(None, fit(8, .01, r=.3, margin_sd=1.0), spb)[1], -16 + .01)
+        self.assertIsNone(dw.export_offset(fit(8, .01, r=.29, margin_sd=3.0), None, spb))
+        self.assertIsNone(dw.export_offset(None, None, spb))
+
     def test_versions_share_weight(self):
         """The trees' and templates' weights: a song's versions split one song's weight; distinct keys change
         nothing, byte for byte."""

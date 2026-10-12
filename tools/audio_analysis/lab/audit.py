@@ -4,9 +4,9 @@
 and prints the table and the failures.
 
 Project song fails when its export offset has no proof (a kick stem, a trigger track, or the kick-and-snare grid fit
-of detector_wip or lab/offsets.py) or its fitted timing shift sits at the edge of the +-30 ms search. The share of
-known times kept is reported, never failed: quiet fills and rolls are dropped by design (Peter, 2026-10-11: "we should
-focus on the snares on the main off beats, not all of the little fills and percusions"). Generated song fails when a
+of detector_wip or lab/offsets.py). The share of known times kept is reported, never failed: quiet fills and rolls
+are dropped by design (Peter, 2026-10-11: "we should focus on the snares on the main off beats, not all of the little
+fills and percusions"). Generated song fails when a
 label sits on no family note of its section, or a family note of its section outside its unscored spans (rolls, fast
 runs) has no label; a bass note on a kick is the kick's. A failing song is excluded from every
 run until Peter sets audit_override in songs.json. If more than MAX_FAILS project songs fail, stop: the table goes to
@@ -31,7 +31,7 @@ PROVEN = ('wip:proven', 'lab:proven', 'goal:trigger', 'goal:kick stem', 'generat
 # the song's own kick stem, rendered with the mix; 'trigger': the trigger track's verified kicks; 'reviewed': Peter's
 # reviewed passages. 'project' (project MIDI) falls back to the song's offset proof.
 LABEL_PROOFS = ('stem', 'trigger', 'reviewed')
-SHIFT_EDGE_MS, MAX_FAILS = 30.0, 3
+MAX_FAILS = 3
 LAYER_S = .030   # drum hits this close are one event (detector_labels.Family.layer_s)
 
 
@@ -42,9 +42,7 @@ def project_check(s, song):
     proof = s['proof'] if s.get('proof') in LABEL_PROOFS else song.proof
     if proof not in LABEL_PROOFS and not proof.startswith(PROVEN):
         why.append(f'offset proof: {proof}')
-    if abs(s.get('timing_shift_ms', 0.0)) >= SHIFT_EDGE_MS:
-        why.append(f"timing shift {s['timing_shift_ms']} ms at the search edge")
-    return dict(known=known, kept=kept, shift_ms=s.get('timing_shift_ms', 0.0), proof=proof, why=why)
+    return dict(known=known, kept=kept, proof=proof, why=why)
 
 
 def generated_check(s, notes, kicks=(), kick_s=0.0):

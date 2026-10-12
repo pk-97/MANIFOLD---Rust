@@ -102,10 +102,12 @@ labels file: they live in a sidecar `<labels>.audit.json` keyed by the labels fi
 changes the labels sha.
 
 **D5. The audit checks offsets and note truth, not loudness.** Per project song it records known times found,
-kept, dropped as not prominent, the fitted timing shift, and the offset proof: `wip:<status>` (detector_wip),
+kept, dropped as not prominent, and the offset proof: `wip:<status>` (detector_wip),
 `lab:<status>` (`lab/offsets.py`, the same kick-and-snare grid fit run on a goal song's own mix, counted only when it
 lands within 1 ms of the offset the labels use), `goal:trigger ...`, `goal:kick stem ...`, or `none`. A project song
-**fails** when its proof is not proven or its timing shift sits at the ±30 ms search edge. The kept share is reported,
+**fails** when its proof is not proven. Labels sit at the proven offset with no fitted slide (BUG-a2pma (labels
+timing_shift): the slide picked late shifts no proof checked); when the kick fit sits on the kick's body, more than
+10 ms later than the snare fit, the snare fit's lag is the offset (`detector_wip.export_offset`). The kept share is reported,
 never failed: quiet fills and rolls are dropped by design. Peter, 2026-10-11: "we should focus on the snares on the
 main off beats, not all of the little fills and percusions." A generated song fails when a label is not a snare or
 clap note of its section, or such a note has no label. Failing songs are excluded and listed in every report until

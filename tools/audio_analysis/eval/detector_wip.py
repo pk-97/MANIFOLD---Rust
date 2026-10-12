@@ -8,7 +8,8 @@ over its song's project folder.
 Timing proof (kick survey's wip_sections method): export start = whole bars + one lag (+-80 ms), chosen by the Pearson r
 between a note pattern on the 16th grid and the mix's onset strength. Run twice, independently: kick notes against the
 40-400 Hz onset strength, snare notes against the 1-8 kHz onset strength. Proven when both pick the same bar, or when
-only one pattern exists and it wins clearly (r >= 0.3, margin >= 1 sd of the other candidates).
+only one pattern exists and it wins clearly (r >= 0.3, margin >= 1 sd of the other candidates). The offset is the kick
+fit's, unless it sits on the kick's body rather than its attack (export_offset).
 Writes GOAL/snare_wip/{song}.npy (48 kHz mono float32) and GOAL/snare_wip.json ({song: als, wip, offset_s, bpm, proof}).
 Projects are read only through als_extract (sha-checked); nothing is written near them.
 Usage: detector_wip.py [SONG...]   (named songs are proven again and merged into snare_wip.json; the rest are kept)"""
@@ -129,6 +130,37 @@ def prove(env, beats, dur, spb):
     return dict(k=int(k0), r=round(best[k0][0], 3), margin_sd=round(float((best[k0][0] - best[order[1]][0]) / (rs.std() + 1e-9)), 2), lag=lag)
 
 
+# The kick fit reads the onset-envelope peak, which a kick whose sub swell peaks after its attack drags late (echo: 17 ms;
+# BUG-a2pma (labels timing_shift)); the snare fit reads the 1-8 kHz rise itself. On every other proven song the two
+# implied offsets differ by -8.6..+8.4 ms (2026-10-13); the early side has no late-swell failure, so that spread is the
+# fits' ordinary disagreement. A kick fit later than the snare's by more than KICK_LATE_S is on the kick's body: the
+# snare's lag is used (echo, crush, dusk, cadence). Beyond KICK_BODY_S no kick body explains the gap and the snare fit
+# is the one that failed (concentrate, openings: 130 ms).
+KICK_LATE_S = .010
+KICK_BODY_S = .050
+CLEAR_R, CLEAR_SD = .3, 1.0   # one pattern alone proves the offset when it wins this clearly
+
+
+def implied_offsets(kick, snare, spb):
+    """{pattern: the export offset its fit implies}."""
+    from tools.audio_analysis.eval.kick_goal_wip_sections import ENV_BIAS
+    return {name: -4 * p['k'] * spb + p['lag'] - bias for name, p, bias in (('kick', kick, ENV_BIAS), ('snare', snare, 0.0)) if p}
+
+
+def export_offset(kick, snare, spb):
+    """(status, offset s) from the kick and snare fits, or None when not proven. Proven when both pick the same bar
+    (the kick's lag, or the snare's when the kick fit sits on the kick's body: KICK_LATE_S), or when only one pattern
+    exists and it wins clearly (r >= 0.3, margin >= 1 sd)."""
+    off = implied_offsets(kick, snare, spb)
+    if kick and snare and kick['k'] == snare['k']:
+        if KICK_LATE_S < off['kick'] - off['snare'] <= KICK_BODY_S:
+            return 'proven (kick and snare agree; snare lag, the kick fit sits on the kick body)', off['snare']
+        return 'proven (kick and snare agree)', off['kick']
+    if len(off) == 1 and all(p['r'] >= CLEAR_R and p['margin_sd'] >= CLEAR_SD for p in (kick, snare) if p):
+        return 'proven (one pattern, clear win)', next(iter(off.values()))
+    return None
+
+
 def source(song):
     """(set, mixdown) paths: the song's catalogue pair, else the newest .als and audio file of its project folder."""
     if song in PAIRS:
@@ -143,7 +175,7 @@ def one(song):
     from scipy.ndimage import maximum_filter1d
     from tools.audio_analysis.eval.als_extract import extract
     from tools.audio_analysis.eval.kick_goal_eval import GOAL
-    from tools.audio_analysis.eval.kick_goal_wip_sections import ENV_BIAS, band_amp_rise, load, onset_env
+    from tools.audio_analysis.eval.kick_goal_wip_sections import band_amp_rise, load, onset_env
     als, wip = source(song)
     res = extract(str(als))
     row = dict(song=song, als=str(als), wip=str(wip))
@@ -155,16 +187,10 @@ def one(song):
     kick = prove(onset_env(x), kick_beats(res), dur, spb)
     snare = prove(100 * maximum_filter1d(band_amp_rise(x, 1000, 8000), 7), snare_beats(res), dur, spb)
     row.update(bpm=res['tempo_points'][0]['bpm'], duration_s=round(dur, 1), kick=kick, snare=snare)
-    clear = [p for p in (kick, snare) if p and p['r'] >= .3 and p['margin_sd'] >= 1.0]
-    if kick and snare and kick['k'] == snare['k']:
-        status = 'proven (kick and snare agree)'
-    elif len([p for p in (kick, snare) if p]) == 1 and clear:
-        status = 'proven (one pattern, clear win)'
-    else:
+    got = export_offset(kick, snare, spb)
+    if got is None:
         return dict(row, status='not proven')
-    use = kick if kick and (not snare or kick['k'] == snare['k']) else snare
-    lag = use['lag'] - (ENV_BIAS if use is kick else 0.0)
-    row.update(status=status, offset_s=round(-4 * use['k'] * spb + lag, 4))
+    row.update(status=got[0], offset_s=round(got[1], 4))
     (GOAL / 'snare_wip').mkdir(exist_ok=True)
     np.save(GOAL / 'snare_wip' / f'{song}.npy', x.astype(np.float32))
     return row
