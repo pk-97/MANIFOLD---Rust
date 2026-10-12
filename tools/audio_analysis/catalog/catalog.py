@@ -14,6 +14,14 @@ Usage:
   catalog.py stats                  counts per role, licence and local state, hours, groups, remix-ready songs
   catalog.py sql "SELECT ..."       read-only ad-hoc query
   catalog.py dump                   stable text view of every table, for review diffs
+Whole tree (every composition, lab or not; tree.py comps.py als_scan.py variants.py usable.py):
+  catalog.py scan-tree [--no-meta]  every audio file and Ableton set under the music folder (stat only for online-only)
+  catalog.py scan-sets [NAME...]    read the local Ableton sets (kick/snare/hat MIDI, audio drums, tempo), changed ones only
+  catalog.py comps                  infer compositions from names; match each bounce to its probable set
+  catalog.py variants [SONG...]     judge every local master/mix/WIP of a lab song against its lab mix (same_arrangement...)
+  catalog.py stemsum [SONG...]      judge each stem folder's sum against the composition's bounces
+  catalog.py download PATH... --why TEXT   bring named online-only files down (logged in `downloads`)
+  catalog.py usable [COMP] [--kind K] [--lab|--ready|--blocked|--remix]   what training material each composition has
 Library: stems(song_id) -> {role: [Path]} for the song's chosen stem set (local files only)."""
 import argparse
 import hashlib
@@ -70,6 +78,30 @@ MIGRATIONS = [
       params TEXT);
     CREATE VIEW song_groups AS SELECT id AS song_id, COALESCE(group_override, group_id) AS grp,
       COALESCE(licence_override, licence) AS lic FROM songs;
+    """,
+    # 2: the whole tree: compositions (lab or not), Ableton sets, where each bounce's set is, variants, downloads
+    """
+    CREATE TABLE als_files(
+      path TEXT PRIMARY KEY, project_dir TEXT, name TEXT, size INTEGER, mtime_ns INTEGER, local INTEGER,
+      scanned_mtime_ns INTEGER, creator TEXT, tempo REAL, tempo_min REAL, tempo_max REAL, arrangement_s REAL,
+      verdict TEXT, kick_notes INTEGER, snare_notes INTEGER, hat_notes INTEGER, perc_notes INTEGER,
+      muted_kick INTEGER, muted_snare INTEGER, audio_drums TEXT, tracks TEXT, error TEXT);
+    CREATE TABLE comps(
+      id TEXT PRIMARY KEY, title TEXT, kind TEXT, basis TEXT, aliases TEXT, groups TEXT, note TEXT NOT NULL DEFAULT '',
+      kind_override TEXT);
+    CREATE TABLE comp_assets(comp_id TEXT, path TEXT, via TEXT, flags TEXT, PRIMARY KEY(comp_id, path));
+    CREATE TABLE comp_als(comp_id TEXT, path TEXT, PRIMARY KEY(comp_id, path));
+    CREATE TABLE als_matches(audio_path TEXT PRIMARY KEY, als_path TEXT, how TEXT, gap_days REAL, len_diff_s REAL);
+    CREATE TABLE variants(
+      song_id TEXT, ref TEXT, path TEXT, lag_s REAL, lag_z REAL, corr REAL, residual_db REAL, raw_residual_db REAL,
+      seg_frac REAL, drift_ms REAL, dur_s REAL, ref_dur_s REAL, verdict TEXT, detail TEXT, key TEXT,
+      PRIMARY KEY(song_id, ref, path));
+    CREATE TABLE downloads(path TEXT PRIMARY KEY, size INTEGER, at TEXT, why TEXT);
+    CREATE TABLE skipped(path TEXT PRIMARY KEY, reason TEXT, audio_files INTEGER, bytes INTEGER);
+    """,
+    # running findings of the whole-tree work, so none of it lives only in a session
+    """
+    CREATE TABLE findings(topic TEXT NOT NULL, at TEXT NOT NULL, text TEXT NOT NULL, PRIMARY KEY(topic, at));
     """,
 ]
 DERIVED_SONG = ('title', 'kind', 'content_id', 'sample_rate', 'offset_s', 'proof', 'audit_override', 'families',
@@ -827,7 +859,8 @@ def build(only=(), con=None):
             kind = 'generated' if g.startswith('gen_') else 'single' if n == 1 else 'versions'
             upsert(con, 'groups', ('id',), dict(id=g, kind=kind, size=n))
         con.execute('DELETE FROM groups WHERE id NOT IN (%s) AND note=\'\'' % ','.join('?' * len(sizes)), list(sizes))
-        con.execute('DELETE FROM assets WHERE path NOT IN (SELECT path FROM song_assets)')
+        con.execute('DELETE FROM assets WHERE path NOT IN (SELECT path FROM song_assets) '
+                    'AND path NOT IN (SELECT path FROM comp_assets)')
         seed_manual(con)
         ingest_remix(con)
     print(f'{len(todo)} songs, {len(assets)} files scanned')
@@ -974,6 +1007,31 @@ def sql(query):
         print('\t'.join('' if v is None else str(v) for v in r))
 
 
+def whole_tree(a):
+    """The whole-tree commands (tree.py, comps.py, variants.py, usable.py)."""
+    if a.cmd == 'usable':
+        from tools.audio_analysis.catalog import usable
+        usable.report(connect(readonly=True), a)
+        return
+    con = connect()
+    if a.cmd == 'scan-tree':
+        from tools.audio_analysis.catalog import tree
+        tree.scan(con, meta=not a.no_meta)
+    elif a.cmd == 'scan-sets':
+        from tools.audio_analysis.catalog import tree
+        tree.scan_sets(con, tuple(a.only), a.force)
+    elif a.cmd == 'comps':
+        from tools.audio_analysis.catalog import comps, usable
+        comps.build(con)
+        usable.match_sets(con)
+    elif a.cmd == 'download':
+        from tools.audio_analysis.catalog import tree
+        tree.download(con, a.paths, a.why)
+    elif a.cmd in ('variants', 'stemsum'):
+        from tools.audio_analysis.catalog import variants
+        variants.run(con, a.cmd, a.songs, a.force)
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest='cmd', required=True)
@@ -989,6 +1047,28 @@ def main():
     sub.add_parser('stats')
     sub.add_parser('dump')
     sub.add_parser('sql').add_argument('query')
+    t = sub.add_parser('scan-tree')
+    t.add_argument('--no-meta', action='store_true')
+    t = sub.add_parser('scan-sets')
+    t.add_argument('only', nargs='*')
+    t.add_argument('--force', action='store_true')
+    sub.add_parser('comps')
+    t = sub.add_parser('variants')
+    t.add_argument('songs', nargs='*')
+    t.add_argument('--force', action='store_true')
+    t = sub.add_parser('stemsum')
+    t.add_argument('songs', nargs='*')
+    t.add_argument('--force', action='store_true')
+    t = sub.add_parser('download')
+    t.add_argument('paths', nargs='+')
+    t.add_argument('--why', required=True)
+    t = sub.add_parser('usable')
+    t.add_argument('comp', nargs='?')
+    t.add_argument('--kind')
+    t.add_argument('--lab', action='store_true')
+    t.add_argument('--ready', action='store_true')
+    t.add_argument('--blocked', action='store_true')
+    t.add_argument('--remix', action='store_true')
     a = ap.parse_args()
     if a.cmd == 'build':
         build(set(a.songs))
@@ -1002,6 +1082,8 @@ def main():
         dump()
     elif a.cmd == 'sql':
         sql(a.query)
+    else:
+        whole_tree(a)
 
 
 if __name__ == '__main__':
