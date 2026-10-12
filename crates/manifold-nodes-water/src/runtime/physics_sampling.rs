@@ -355,7 +355,12 @@ impl super::WaterRuntime<'_> {
     /// ticks or rendering. Close the held-input interval first, then record
     /// the current inputs at the same timestamp. Moving the observation anchor
     /// prevents the next rendered frame from replaying the interval twice.
-    pub(super) fn observe_physics_at_source(&mut self, source: FrameTime) -> Result<(), String> {
+    ///
+    /// Returns the time the event is observed at. Triggers are never skipped:
+    /// an event older than the latest observation (audio always arrives after
+    /// its detector decides) is observed at that latest time and lands on the
+    /// next step, since history cannot be reopened.
+    pub(super) fn observe_physics_at_source(&mut self, source: FrameTime) -> Result<FrameTime, String> {
         if !source.seconds.0.is_finite() || !source.beats.0.is_finite() {
             return Err("Impulse: source clock must be finite".into());
         }
@@ -363,9 +368,11 @@ impl super::WaterRuntime<'_> {
             .water
             .last_frame_time
             .ok_or("Impulse: render the scene before capturing an event")?;
-        if source.seconds.0 < previous.seconds.0 {
-            return Err("Impulse: source precedes the latest physics observation".into());
-        }
+        let source = if source.seconds.0 < previous.seconds.0 {
+            FrameTime { delta: Seconds::ZERO, ..previous }
+        } else {
+            source
+        };
         if self.graph.prepared_param_violation().is_some() {
             return Err("Impulse: graph preparation is pending".into());
         }
@@ -380,7 +387,7 @@ impl super::WaterRuntime<'_> {
             self.water.sample_steps.as_ref(),
         ) else {
             self.water.last_frame_time = Some(source);
-            return Ok(());
+            return Ok(source);
         };
         inputs.set_sample_time(source);
         execute_physics_sample_frame(
@@ -393,7 +400,7 @@ impl super::WaterRuntime<'_> {
             step,
         );
         self.water.last_frame_time = Some(source);
-        Ok(())
+        Ok(source)
     }
 
     pub(crate) fn sample_physics_history(&mut self, current: FrameTime, step: SimStep) {
