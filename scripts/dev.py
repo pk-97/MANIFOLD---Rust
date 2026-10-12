@@ -148,6 +148,9 @@ VERBS = [
      "lab-queue", ["tools/audio_analysis/lab/overnight.py"],
      "detector lab overnight queue: PLAN.json of run/compare steps, one at a time under the GPU lock, a log per step and a summary, stops on the first failure (--dry-run)"),
     ("Render and measure",
+     "lab-preflight", ["tools/audio_analysis/lab/preflight.py"],
+     "detector lab: read-only check that an overnight PLAN.json can run (clean tree, MPS, disk, configs, kick verdicts, caches warm, GPU lock)"),
+    ("Render and measure",
      "repair-audio-fixture", "repair_audio_fixture.py", "rebuild a fixture mix from aligned stems, preserving the original; dry-run unless --apply"),
 
     ("CPU reference oracles (f64, seconds, no GPU)",
@@ -251,6 +254,7 @@ COST_CLASSES = {
     "score.py": "focused",
     "compare.py": "broad",
     "overnight.py": "broad",
+    "preflight.py": "focused",
     "land_branch.py": "focused",
     "land_wave.py": "focused",
     "landing_gate.py": "focused",
