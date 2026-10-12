@@ -210,6 +210,13 @@ class VerdictTests(unittest.TestCase):
         self.assertEqual(self.v(cover=variants.COVER_SAME - .01), 'aligned_needs_check')
 
 
+class DistinctTests(unittest.TestCase):
+    def test_identical_copies_are_one_variant(self):
+        c = [('a.wav', 'master', 'T1', 'S1', 100.0), ('b.wav', 'master', 'T1', 'S1', 100.0), ('c.wav', 'master', 'T2', 'S2', 100.0),
+             ('d.wav', 'full_mix', '', 'LAB', 100.0)]
+        self.assertEqual([x[0] for x in variants.distinct(c, {'LAB'})], ['a.wav', 'c.wav'])
+
+
 SR = 24000
 
 
