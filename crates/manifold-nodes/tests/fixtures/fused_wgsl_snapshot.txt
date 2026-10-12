@@ -1888,224 +1888,29 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
     textureStore(dst, coord, r2);
 }
 
-=== effect:CodeTerminal node:30 ===
-// @input_access: src_0 coincident
-struct Params {
-    n0_algorithm: u32,
-    n1_weights_x: f32,
-    n1_weights_y: f32,
-    n1_weights_z: f32,
-    n2_min: f32,
-    n2_max: f32,
-    n3_intensity: f32,
-    n4_amount: f32,
-    n4_mode: u32,
-    n5_amount: f32,
-    n5_mode: u32,
-    n6_min: f32,
-    n6_max: f32,
-    _pad0: u32,
-    _pad1: u32,
-    _pad2: u32,
-}
-
-@group(0) @binding(0) var<uniform> params: Params;
-@group(0) @binding(1) var src_0: texture_2d<f32>;
-@group(0) @binding(2) var dst_0: texture_storage_2d<rgba16float, write>;
-@group(0) @binding(3) var dst_1: texture_storage_2d<rgba16float, write>;
-
-fn bayer_threshold(pixel_pos: vec2<f32>) -> f32 {
-    let px = i32(abs(pixel_pos.x)) % 8;
-    let py = i32(abs(pixel_pos.y)) % 8;
-    let idx = py * 8 + px;
-    var bayer = array<f32, 64>(
-         0.0/64.0, 32.0/64.0,  8.0/64.0, 40.0/64.0,  2.0/64.0, 34.0/64.0, 10.0/64.0, 42.0/64.0,
-        48.0/64.0, 16.0/64.0, 56.0/64.0, 24.0/64.0, 50.0/64.0, 18.0/64.0, 58.0/64.0, 26.0/64.0,
-        12.0/64.0, 44.0/64.0,  4.0/64.0, 36.0/64.0, 14.0/64.0, 46.0/64.0,  6.0/64.0, 38.0/64.0,
-        60.0/64.0, 28.0/64.0, 52.0/64.0, 20.0/64.0, 62.0/64.0, 30.0/64.0, 54.0/64.0, 22.0/64.0,
-         3.0/64.0, 35.0/64.0, 11.0/64.0, 43.0/64.0,  1.0/64.0, 33.0/64.0,  9.0/64.0, 41.0/64.0,
-        51.0/64.0, 19.0/64.0, 59.0/64.0, 27.0/64.0, 49.0/64.0, 17.0/64.0, 57.0/64.0, 25.0/64.0,
-        15.0/64.0, 47.0/64.0,  7.0/64.0, 39.0/64.0, 13.0/64.0, 45.0/64.0,  5.0/64.0, 37.0/64.0,
-        63.0/64.0, 31.0/64.0, 55.0/64.0, 23.0/64.0, 61.0/64.0, 29.0/64.0, 53.0/64.0, 21.0/64.0
-    );
-    return bayer[idx];
-}
-
-fn halftone_threshold(pixel_pos: vec2<f32>) -> f32 {
-    let cell_size = 6.0;
-    let cell = (pixel_pos % cell_size) / cell_size - 0.5;
-    return clamp(length(cell) * 2.0, 0.0, 1.0);
-}
-
-fn lines_threshold(pixel_pos: vec2<f32>) -> f32 {
-    let line_width = 4.0;
-    return abs(fract(pixel_pos.y / line_width) - 0.5) * 2.0;
-}
-
-fn crosshatch_threshold(pixel_pos: vec2<f32>) -> f32 {
-    let spacing = 5.0;
-    let d1 = abs(fract((pixel_pos.x + pixel_pos.y) / spacing) - 0.5) * 2.0;
-    let d2 = abs(fract((pixel_pos.x - pixel_pos.y) / spacing) - 0.5) * 2.0;
-    return min(d1, d2);
-}
-
-fn noise_threshold(pixel_pos: vec2<f32>) -> f32 {
-    return fract(52.9829189 * fract(0.06711056 * pixel_pos.x + 0.00583715 * pixel_pos.y));
-}
-
-fn diamond_threshold(pixel_pos: vec2<f32>) -> f32 {
-    let p = (pixel_pos % 4.0) - 2.0;
-    return clamp((abs(p.x) + abs(p.y)) / 4.0, 0.0, 1.0);
-}
-
-fn overlay_channel(a: f32, b: f32) -> f32 {
-    if a < 0.5 {
-        return 2.0 * a * b;
-    }
-    return 1.0 - 2.0 * (1.0 - a) * (1.0 - b);
-}
-
-fn safe_div(a: f32, b: f32) -> f32 {
-    if abs(b) < 1.0e-6 {
-        return 0.0;
-    }
-    return a / b;
-}
-
-fn blend_rgb(a: vec3<f32>, b: vec3<f32>, mode: u32) -> vec3<f32> {
-    switch mode {
-        case 0u: { return b; }
-        case 1u: { return 1.0 - (1.0 - a) * (1.0 - b); }
-        case 2u: { return a + b; }
-        case 3u: { return max(a, b); }
-        case 4u: { return a * b; }
-        case 5u: { return abs(a - b); }
-        case 6u: {
-            return vec3<f32>(
-                overlay_channel(a.x, b.x),
-                overlay_channel(a.y, b.y),
-                overlay_channel(a.z, b.z),
-            );
-        }
-        case 7u: {
-            return vec3<f32>(safe_div(a.x, b.x), safe_div(a.y, b.y), safe_div(a.z, b.z));
-        }
-        default: { return b; }
-    }
-}
-
-fn n0_body(uv: vec2<f32>, dims: vec2<f32>, algorithm: u32) -> vec4<f32> {
-    let pixel_pos = floor(uv * dims) + 0.5;
-    var t: f32;
-    if algorithm == 0u {
-        t = bayer_threshold(pixel_pos);
-    } else if algorithm == 1u {
-        t = halftone_threshold(pixel_pos);
-    } else if algorithm == 2u {
-        t = lines_threshold(pixel_pos);
-    } else if algorithm == 3u {
-        t = crosshatch_threshold(pixel_pos);
-    } else if algorithm == 4u {
-        t = noise_threshold(pixel_pos);
-    } else {
-        t = diamond_threshold(pixel_pos);
-    }
-    return vec4<f32>(t, t, t, 1.0);
-}
-
-fn n1_body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, weights: vec3<f32>) -> vec4<f32> {
-    let g = dot(c.rgb, weights);
-    return vec4<f32>(g, g, g, c.a);
-}
-
-fn n2_body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, min_v: f32, max_v: f32) -> vec4<f32> {
-    return vec4<f32>(clamp(c.rgb, vec3<f32>(min_v), vec3<f32>(max_v)), c.a);
-}
-
-fn n3_body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, intensity: f32) -> vec4<f32> {
-    let inverted = vec4<f32>(1.0 - c.r, 1.0 - c.g, 1.0 - c.b, c.a);
-    return mix(c, inverted, intensity);
-}
-
-fn n4_body(a: vec4<f32>, b: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, amount: f32, mode: u32) -> vec4<f32> {
-    let blended = blend_rgb(a.rgb, b.rgb, mode);
-    let out_rgb = mix(a.rgb, blended, amount);
-    // Branchless on purpose: an `if` here compiles differently in fused vs
-    // standalone kernel contexts (FMA regrouping) and broke the fp32
-    // bit-exact proof (precision contract section 7.1's "match the exact arithmetic
-    // form" gotcha). mix(x, y, 0.0) = x + (y-x)*0.0 = x exactly, so t_a = 0
-    // IS alpha pass-through, in the original instruction shape.
-    let t_a = select(0.0, amount, mode == 0u);
-    let out_a = mix(a.a, b.a, t_a);
-    return vec4<f32>(out_rgb, out_a);
-}
-
-fn n5_body(a: vec4<f32>, b: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, amount: f32, mode: u32) -> vec4<f32> {
-    let blended = blend_rgb(a.rgb, b.rgb, mode);
-    let out_rgb = mix(a.rgb, blended, amount);
-    // Branchless on purpose: an `if` here compiles differently in fused vs
-    // standalone kernel contexts (FMA regrouping) and broke the fp32
-    // bit-exact proof (precision contract section 7.1's "match the exact arithmetic
-    // form" gotcha). mix(x, y, 0.0) = x + (y-x)*0.0 = x exactly, so t_a = 0
-    // IS alpha pass-through, in the original instruction shape.
-    let t_a = select(0.0, amount, mode == 0u);
-    let out_a = mix(a.a, b.a, t_a);
-    return vec4<f32>(out_rgb, out_a);
-}
-
-fn n6_body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, min_v: f32, max_v: f32) -> vec4<f32> {
-    return vec4<f32>(clamp(c.rgb, vec3<f32>(min_v), vec3<f32>(max_v)), c.a);
-}
-
-@compute @workgroup_size(16, 16)
-fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
-    let dims = textureDimensions(dst_0);
-    if id.x >= dims.x || id.y >= dims.y {
-        return;
-    }
-    let coord = vec2<i32>(i32(id.x), i32(id.y));
-    let uv = (vec2<f32>(id.xy) + 0.5) / vec2<f32>(dims);
-    let ext_0 = textureLoad(src_0, coord, 0);
-    let r0 = n0_body(uv, vec2<f32>(dims), params.n0_algorithm);
-    let r1 = n1_body(ext_0, uv, vec2<f32>(dims), vec3<f32>(params.n1_weights_x, params.n1_weights_y, params.n1_weights_z));
-    let r2 = n2_body(r1, uv, vec2<f32>(dims), params.n2_min, params.n2_max);
-    let r3 = n3_body(r2, uv, vec2<f32>(dims), params.n3_intensity);
-    let r4 = n4_body(r3, r2, uv, vec2<f32>(dims), params.n4_amount, params.n4_mode);
-    let r5 = n5_body(r4, r0, uv, vec2<f32>(dims), params.n5_amount, params.n5_mode);
-    let r6 = n6_body(r5, uv, vec2<f32>(dims), params.n6_min, params.n6_max);
-    textureStore(dst_0, coord, r2);
-    textureStore(dst_1, coord, r6);
-}
-
-=== effect:CodeTerminal node:31 ===
+=== effect:CodeTerminal node:42 ===
 struct Params {
     n0_block_size: f32,
     n0_columns: f32,
     n0_rows: f32,
     n1_exponent: f32,
-    n2_block_size: f32,
     n2_columns: f32,
     n2_rows: f32,
-    n3_low: f32,
-    n3_high: f32,
-    n4_columns: f32,
-    n4_rows: f32,
-    n5_exponent: f32,
-    n6_amount: f32,
-    n7_amount: f32,
-    n7_mode: u32,
-    n8_amount: f32,
+    n3_exponent: f32,
+    n4_amount: f32,
+    n5_amount: f32,
+    n5_mode: u32,
+    _pad0: u32,
+    _pad1: u32,
 }
 
 @group(0) @binding(0) var<uniform> params: Params;
 @group(0) @binding(1) var src_0: texture_2d<f32>;
 @group(0) @binding(2) var src_1: texture_2d<f32>;
-@group(0) @binding(3) var src_2: texture_2d<f32>;
-@group(0) @binding(4) var<storage, read> src_3: array<u32>;
-@group(0) @binding(5) var src_4: texture_2d<f32>;
-@group(0) @binding(6) var src_5: texture_2d<f32>;
-@group(0) @binding(7) var samp: sampler;
-@group(0) @binding(8) var dst: texture_storage_2d<rgba16float, write>;
+@group(0) @binding(3) var<storage, read> src_2: array<u32>;
+@group(0) @binding(4) var src_3: texture_2d<f32>;
+@group(0) @binding(5) var samp: sampler;
+@group(0) @binding(6) var dst: texture_storage_2d<rgba16float, write>;
 
 const ATLAS_WIDTH: f32 = 512.0;
 const ATLAS_HEIGHT: f32 = 288.0;
@@ -2171,29 +1976,7 @@ fn n1_body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, exponent: f32) -> vec4<
     );
 }
 
-fn n2_body(source: texture_2d<f32>, samp: sampler, uv: vec2<f32>, dims: vec2<f32>, block_size: f32, columns: f32, rows: f32) -> vec4<f32> {
-    let group = max(round(block_size), 1.0);
-    let size = vec2<f32>(
-        select(group, dims.x * group / max(columns, 1.0), columns > 0.0),
-        select(group, dims.y * group / max(rows, 1.0), rows > 0.0));
-    let pixel = uv * dims;
-    let block_origin = floor(pixel / size) * size;
-    let centre = block_origin + 0.5 * size;
-    let texel = vec2<f32>(0.5) / dims;
-    let sample_uv = clamp(centre / dims, texel, vec2<f32>(1.0) - texel);
-    return textureSampleLevel(source, samp, sample_uv, 0.0);
-}
-
-fn n3_body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, low: f32, high: f32) -> vec4<f32> {
-    return vec4<f32>(
-        smoothstep(low, high, c.r),
-        smoothstep(low, high, c.g),
-        smoothstep(low, high, c.b),
-        c.a,
-    );
-}
-
-fn n4_body(
+fn n2_body(
     atlas: texture_2d<f32>,
     atlas_sampler: sampler,
     uv: vec2<f32>,
@@ -2209,11 +1992,11 @@ fn n4_body(
     let cell = min(floor(uv * grid), grid - vec2<f32>(1.0));
     let cell_index = u32(cell.y) * cols + u32(cell.x);
 
-    let cell_count = arrayLength(&src_3);
+    let cell_count = arrayLength(&src_2);
     if (cell_index >= cell_count) {
         return vec4<f32>(0.0, 0.0, 0.0, 1.0);
     }
-    let codepoint = src_3[cell_index];
+    let codepoint = src_2[cell_index];
     if (codepoint < 32u || codepoint > 127u) {
         return vec4<f32>(0.0, 0.0, 0.0, 1.0);
     }
@@ -2233,7 +2016,7 @@ fn n4_body(
     return vec4<f32>(coverage, coverage, coverage, 1.0);
 }
 
-fn n5_body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, exponent: f32) -> vec4<f32> {
+fn n3_body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, exponent: f32) -> vec4<f32> {
     return vec4<f32>(
         pow(max(c.r, 0.0), exponent),
         pow(max(c.g, 0.0), exponent),
@@ -2242,12 +2025,12 @@ fn n5_body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, exponent: f32) -> vec4<
     );
 }
 
-fn n6_body(a: vec4<f32>, b: vec4<f32>, mask: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, amount: f32) -> vec4<f32> {
+fn n4_body(a: vec4<f32>, b: vec4<f32>, mask: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, amount: f32) -> vec4<f32> {
     let weight = clamp(mask.r * amount, 0.0, 1.0);
     return mix(a, b, weight);
 }
 
-fn n7_body(a: vec4<f32>, b: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, amount: f32, mode: u32) -> vec4<f32> {
+fn n5_body(a: vec4<f32>, b: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, amount: f32, mode: u32) -> vec4<f32> {
     let blended = blend_rgb(a.rgb, b.rgb, mode);
     let out_rgb = mix(a.rgb, blended, amount);
     // Branchless on purpose: an `if` here compiles differently in fused vs
@@ -2260,11 +2043,6 @@ fn n7_body(a: vec4<f32>, b: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, amount: f
     return vec4<f32>(out_rgb, out_a);
 }
 
-fn n8_body(a: vec4<f32>, b: vec4<f32>, mask: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, amount: f32) -> vec4<f32> {
-    let weight = clamp(mask.r * amount, 0.0, 1.0);
-    return mix(a, b, weight);
-}
-
 @compute @workgroup_size(16, 16)
 fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
     let dims = textureDimensions(dst);
@@ -2273,21 +2051,17 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
     }
     let coord = vec2<i32>(i32(id.x), i32(id.y));
     let uv = (vec2<f32>(id.xy) + 0.5) / vec2<f32>(dims);
-    let ext_4 = textureLoad(src_4, coord, 0);
-    let ext_5 = textureLoad(src_5, coord, 0);
+    let ext_3 = textureLoad(src_3, coord, 0);
     let r0 = n0_body(src_0, samp, uv, vec2<f32>(dims), params.n0_block_size, params.n0_columns, params.n0_rows);
     let r1 = n1_body(r0, uv, vec2<f32>(dims), params.n1_exponent);
-    let r2 = n2_body(src_1, samp, uv, vec2<f32>(dims), params.n2_block_size, params.n2_columns, params.n2_rows);
-    let r3 = n3_body(r2, uv, vec2<f32>(dims), params.n3_low, params.n3_high);
-    let r4 = n4_body(src_2, samp, uv, vec2<f32>(dims), params.n4_columns, params.n4_rows);
-    let r5 = n5_body(r4, uv, vec2<f32>(dims), params.n5_exponent);
-    let r6 = n6_body(r4, r5, r1, uv, vec2<f32>(dims), params.n6_amount);
-    let r7 = n7_body(ext_4, r6, uv, vec2<f32>(dims), params.n7_amount, params.n7_mode);
-    let r8 = n8_body(ext_5, r7, r3, uv, vec2<f32>(dims), params.n8_amount);
-    textureStore(dst, coord, r8);
+    let r2 = n2_body(src_1, samp, uv, vec2<f32>(dims), params.n2_columns, params.n2_rows);
+    let r3 = n3_body(r2, uv, vec2<f32>(dims), params.n3_exponent);
+    let r4 = n4_body(r2, r3, r1, uv, vec2<f32>(dims), params.n4_amount);
+    let r5 = n5_body(ext_3, r4, uv, vec2<f32>(dims), params.n5_amount, params.n5_mode);
+    textureStore(dst, coord, r5);
 }
 
-=== effect:CodeTerminal node:32 ===
+=== effect:CodeTerminal node:43 ===
 // @input_access: src_0 coincident
 struct Params {
     n0_gain: f32,
@@ -2451,6 +2225,495 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
     textureStore(dst_0, coord, r4);
     textureStore(dst_1, coord, r5);
     textureStore(dst_2, coord, r3);
+}
+
+=== effect:CodeTerminal node:44 ===
+// @input_access: src_0 gather
+// @input_access: src_1 coincident
+// @input_access: src_2 gather
+struct Params {
+    n0_amount: f32,
+    n0_scanline: f32,
+    n0_speed: f32,
+    n0_motion: u32,
+    n0_bands: f32,
+    n0_spread: f32,
+    n0_spread_mode: u32,
+    n0_angle: f32,
+    n0_time: f32,
+    n1_wrap: u32,
+    n1_mode: u32,
+    n2_amount: f32,
+    n2_mode: u32,
+    n3_block_size: f32,
+    n3_columns: f32,
+    n3_rows: f32,
+    n4_low: f32,
+    n4_high: f32,
+    n5_amount: f32,
+    n6_low: f32,
+    n6_high: f32,
+    n7_amount: f32,
+    _pad0: u32,
+    _pad1: u32,
+}
+
+// @derived_uniform_member: n0_time words=1 node.scanline_jitter_field
+@group(0) @binding(0) var<uniform> params: Params;
+@group(0) @binding(1) var src_0: texture_2d<f32>;
+@group(0) @binding(2) var src_1: texture_2d<f32>;
+@group(0) @binding(3) var src_2: texture_2d<f32>;
+@group(0) @binding(4) var samp: sampler;
+@group(0) @binding(5) var dst: texture_storage_2d<rgba16float, write>;
+
+fn sjf_hash1(n: f32) -> f32 {
+    return fract(sin(n) * 43758.5453123);
+}
+
+// Value-noise field (123.34/456.21/45.32 hash) — smooth, in [0,1]. Same field
+// node.noise emits as its Value type; lifted here so Slide is self-contained.
+
+fn sjf_value_hash(p_in: vec2<f32>) -> f32 {
+    var p = fract(p_in * vec2<f32>(123.34, 456.21));
+    p = p + dot(p, p + 45.32);
+    return fract(p.x * p.y);
+}
+
+fn sjf_value_noise(p: vec2<f32>) -> f32 {
+    let i = floor(p);
+    let f = fract(p);
+    let uu = f * f * (3.0 - 2.0 * f);
+    return mix(
+        mix(sjf_value_hash(i),                       sjf_value_hash(i + vec2<f32>(1.0, 0.0)), uu.x),
+        mix(sjf_value_hash(i + vec2<f32>(0.0, 1.0)), sjf_value_hash(i + vec2<f32>(1.0, 1.0)), uu.x),
+        uu.y
+    );
+}
+
+fn wrap_coord(t: f32, mode: u32) -> f32 {
+    if mode == 1u {
+        // Repeat
+        return fract(t);
+    }
+    if mode == 2u {
+        // Mirror: triangle wave, period 2, peak 1.
+        let m = fract(t * 0.5) * 2.0;
+        return 1.0 - abs(1.0 - m);
+    }
+    // Clamp (default)
+    return clamp(t, 0.0, 1.0);
+}
+
+fn overlay_channel(a: f32, b: f32) -> f32 {
+    if a < 0.5 {
+        return 2.0 * a * b;
+    }
+    return 1.0 - 2.0 * (1.0 - a) * (1.0 - b);
+}
+
+fn safe_div(a: f32, b: f32) -> f32 {
+    if abs(b) < 1.0e-6 {
+        return 0.0;
+    }
+    return a / b;
+}
+
+fn blend_rgb(a: vec3<f32>, b: vec3<f32>, mode: u32) -> vec3<f32> {
+    switch mode {
+        case 0u: { return b; }
+        case 1u: { return 1.0 - (1.0 - a) * (1.0 - b); }
+        case 2u: { return a + b; }
+        case 3u: { return max(a, b); }
+        case 4u: { return a * b; }
+        case 5u: { return abs(a - b); }
+        case 6u: {
+            return vec3<f32>(
+                overlay_channel(a.x, b.x),
+                overlay_channel(a.y, b.y),
+                overlay_channel(a.z, b.z),
+            );
+        }
+        case 7u: {
+            return vec3<f32>(safe_div(a.x, b.x), safe_div(a.y, b.y), safe_div(a.z, b.z));
+        }
+        default: { return b; }
+    }
+}
+
+fn n0_body(uv: vec2<f32>, dims: vec2<f32>, amount: f32, scanline: f32, speed: f32, motion: u32, bands: f32, spread: f32, spread_mode: u32, angle: f32, time: f32) -> vec4<f32> {
+    let res = dims;
+
+    if motion == 1u {
+        // Slide — smooth, ungated, every band drifts. speed=2 → website 0.13.
+        // bands = 0 → no rows (offset 0, full coverage): a downstream
+        // flow/domain warp carries the motion instead of slicing the image
+        // into per-row tears.
+        if bands <= 0.0 {
+            return vec4<f32>(0.0, 0.0, 1.0, 1.0);
+        }
+        // The whole slice frame rotates by `angle` degrees around the canvas
+        // centre: bands quantise across the rotated y, the slide runs along
+        // the rotated x, the spread pushes across the rotated y.
+        let rad = angle * 0.01745329;
+        let ca = cos(rad);
+        let sa = sin(rad);
+        let cuv = uv - vec2<f32>(0.5, 0.5);
+        let ruv = vec2<f32>(ca * cuv.x + sa * cuv.y, -sa * cuv.x + ca * cuv.y) + vec2<f32>(0.5, 0.5);
+        let t = time * speed * 0.065;
+        var band = floor(ruv.y * bands);
+        var offset_y = 0.0;
+        var coverage = 1.0;
+        if spread_mode == 1u {
+            // Split — translate the strips themselves apart from the centre;
+            // gaps emit coverage 0 so a downstream masked_mix composites
+            // them as transparent. u inverts the strip translation: output
+            // row ruv.y pulls the strip content from u.
+            let u = (ruv.y + 0.5 * spread) / (1.0 + spread);
+            band = floor(u * bands);
+            let f = fract(u * bands);
+            let edge = 0.5 * spread / (1.0 + spread);
+            coverage = step(edge, f) * step(f, 1.0 - edge);
+            offset_y = u - ruv.y;
+        } else {
+            // Shear — resample each band's window shifted across the slice
+            // axis; the gap between adjacent bands is `spread` band-heights.
+            offset_y = ((band + 0.5) / bands - 0.5) * spread;
+        }
+        let n = sjf_value_noise(vec2<f32>(band, t));
+        let offset_x = (n - 0.5) * amount * 0.05;
+        let off = vec2<f32>(ca * offset_x - sa * offset_y, sa * offset_x + ca * offset_y);
+        return vec4<f32>(off.x, off.y, coverage, 1.0);
+    }
+
+    // Tear (default) — byte-identical to the original VHS jolt.
+    let t = floor(time * speed * 12.0);
+    let scanline_row = floor(uv.y * res.y);
+    let scan_hash = sjf_hash1(scanline_row + t * 7.31);
+    let scan_mask = step(1.0 - scanline * amount * 0.3, scan_hash);
+    let scan_shift = (sjf_hash1(scanline_row + t * 3.17) * 2.0 - 1.0) * amount * 0.08;
+    let offset_x = scan_shift * scan_mask;
+
+    return vec4<f32>(offset_x, 0.0, 1.0, 1.0);
+}
+
+fn n1_body(source: texture_2d<f32>, samp: sampler, field_color: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, wrap: u32, mode: u32) -> vec4<f32> {
+    let field = field_color.rg;
+    let sample_uv = select(field, uv + field, mode == 1u);
+    let wrapped = vec2<f32>(wrap_coord(sample_uv.x, wrap), wrap_coord(sample_uv.y, wrap));
+    return textureSampleLevel(source, samp, wrapped, 0.0);
+}
+
+fn n2_body(a: vec4<f32>, b: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, amount: f32, mode: u32) -> vec4<f32> {
+    let blended = blend_rgb(a.rgb, b.rgb, mode);
+    let out_rgb = mix(a.rgb, blended, amount);
+    // Branchless on purpose: an `if` here compiles differently in fused vs
+    // standalone kernel contexts (FMA regrouping) and broke the fp32
+    // bit-exact proof (precision contract section 7.1's "match the exact arithmetic
+    // form" gotcha). mix(x, y, 0.0) = x + (y-x)*0.0 = x exactly, so t_a = 0
+    // IS alpha pass-through, in the original instruction shape.
+    let t_a = select(0.0, amount, mode == 0u);
+    let out_a = mix(a.a, b.a, t_a);
+    return vec4<f32>(out_rgb, out_a);
+}
+
+fn n3_body(source: texture_2d<f32>, samp: sampler, uv: vec2<f32>, dims: vec2<f32>, block_size: f32, columns: f32, rows: f32) -> vec4<f32> {
+    let group = max(round(block_size), 1.0);
+    let size = vec2<f32>(
+        select(group, dims.x * group / max(columns, 1.0), columns > 0.0),
+        select(group, dims.y * group / max(rows, 1.0), rows > 0.0));
+    let pixel = uv * dims;
+    let block_origin = floor(pixel / size) * size;
+    let centre = block_origin + 0.5 * size;
+    let texel = vec2<f32>(0.5) / dims;
+    let sample_uv = clamp(centre / dims, texel, vec2<f32>(1.0) - texel);
+    return textureSampleLevel(source, samp, sample_uv, 0.0);
+}
+
+fn n4_body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, low: f32, high: f32) -> vec4<f32> {
+    return vec4<f32>(
+        smoothstep(low, high, c.r),
+        smoothstep(low, high, c.g),
+        smoothstep(low, high, c.b),
+        c.a,
+    );
+}
+
+fn n5_body(a: vec4<f32>, b: vec4<f32>, mask: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, amount: f32) -> vec4<f32> {
+    let weight = clamp(mask.r * amount, 0.0, 1.0);
+    return mix(a, b, weight);
+}
+
+fn n6_body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, low: f32, high: f32) -> vec4<f32> {
+    return vec4<f32>(
+        smoothstep(low, high, c.r),
+        smoothstep(low, high, c.g),
+        smoothstep(low, high, c.b),
+        c.a,
+    );
+}
+
+fn n7_body(a: vec4<f32>, b: vec4<f32>, mask: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, amount: f32) -> vec4<f32> {
+    let weight = clamp(mask.r * amount, 0.0, 1.0);
+    return mix(a, b, weight);
+}
+
+@compute @workgroup_size(16, 16)
+fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
+    let dims = textureDimensions(dst);
+    if id.x >= dims.x || id.y >= dims.y {
+        return;
+    }
+    let coord = vec2<i32>(i32(id.x), i32(id.y));
+    let uv = (vec2<f32>(id.xy) + 0.5) / vec2<f32>(dims);
+    let ext_1 = textureLoad(src_1, coord, 0);
+    let r0 = n0_body(uv, vec2<f32>(dims), params.n0_amount, params.n0_scanline, params.n0_speed, params.n0_motion, params.n0_bands, params.n0_spread, params.n0_spread_mode, params.n0_angle, params.n0_time);
+    let r1 = n1_body(src_0, samp, r0, uv, vec2<f32>(dims), params.n1_wrap, params.n1_mode);
+    let r2 = n2_body(ext_1, r1, uv, vec2<f32>(dims), params.n2_amount, params.n2_mode);
+    let r3 = n3_body(src_2, samp, uv, vec2<f32>(dims), params.n3_block_size, params.n3_columns, params.n3_rows);
+    let r4 = n4_body(r3, uv, vec2<f32>(dims), params.n4_low, params.n4_high);
+    let r5 = n5_body(ext_1, r2, r4, uv, vec2<f32>(dims), params.n5_amount);
+    let r6 = n6_body(r3, uv, vec2<f32>(dims), params.n6_low, params.n6_high);
+    let r7 = n7_body(r5, r1, r6, uv, vec2<f32>(dims), params.n7_amount);
+    textureStore(dst, coord, r7);
+}
+
+=== effect:CodeTerminal node:45 ===
+// @input_access: src_0 coincident
+struct Params {
+    n0_amount: f32,
+    n0_block_size: f32,
+    n0_speed: f32,
+    n0_time: f32,
+    n1_algorithm: u32,
+    n2_weights_x: f32,
+    n2_weights_y: f32,
+    n2_weights_z: f32,
+    n3_min: f32,
+    n3_max: f32,
+    n4_intensity: f32,
+    n5_amount: f32,
+    n5_mode: u32,
+    n6_amount: f32,
+    n6_mode: u32,
+    n7_min: f32,
+    n7_max: f32,
+    n8_amount: f32,
+    n8_mode: u32,
+    _pad0: u32,
+}
+
+// @derived_uniform_member: n0_time words=1 node.block_displace_field
+@group(0) @binding(0) var<uniform> params: Params;
+@group(0) @binding(1) var src_0: texture_2d<f32>;
+@group(0) @binding(2) var dst_0: texture_storage_2d<rgba16float, write>;
+@group(0) @binding(3) var dst_1: texture_storage_2d<rgba16float, write>;
+
+struct N0BodyOutputs {
+    offset: vec4<f32>,
+    hash: vec4<f32>,
+}
+
+
+fn bdf_hash2(p: vec2<f32>) -> f32 {
+    let h = dot(p, vec2<f32>(127.1, 311.7));
+    return fract(sin(h) * 43758.5453123);
+}
+
+fn bayer_threshold(pixel_pos: vec2<f32>) -> f32 {
+    let px = i32(abs(pixel_pos.x)) % 8;
+    let py = i32(abs(pixel_pos.y)) % 8;
+    let idx = py * 8 + px;
+    var bayer = array<f32, 64>(
+         0.0/64.0, 32.0/64.0,  8.0/64.0, 40.0/64.0,  2.0/64.0, 34.0/64.0, 10.0/64.0, 42.0/64.0,
+        48.0/64.0, 16.0/64.0, 56.0/64.0, 24.0/64.0, 50.0/64.0, 18.0/64.0, 58.0/64.0, 26.0/64.0,
+        12.0/64.0, 44.0/64.0,  4.0/64.0, 36.0/64.0, 14.0/64.0, 46.0/64.0,  6.0/64.0, 38.0/64.0,
+        60.0/64.0, 28.0/64.0, 52.0/64.0, 20.0/64.0, 62.0/64.0, 30.0/64.0, 54.0/64.0, 22.0/64.0,
+         3.0/64.0, 35.0/64.0, 11.0/64.0, 43.0/64.0,  1.0/64.0, 33.0/64.0,  9.0/64.0, 41.0/64.0,
+        51.0/64.0, 19.0/64.0, 59.0/64.0, 27.0/64.0, 49.0/64.0, 17.0/64.0, 57.0/64.0, 25.0/64.0,
+        15.0/64.0, 47.0/64.0,  7.0/64.0, 39.0/64.0, 13.0/64.0, 45.0/64.0,  5.0/64.0, 37.0/64.0,
+        63.0/64.0, 31.0/64.0, 55.0/64.0, 23.0/64.0, 61.0/64.0, 29.0/64.0, 53.0/64.0, 21.0/64.0
+    );
+    return bayer[idx];
+}
+
+fn halftone_threshold(pixel_pos: vec2<f32>) -> f32 {
+    let cell_size = 6.0;
+    let cell = (pixel_pos % cell_size) / cell_size - 0.5;
+    return clamp(length(cell) * 2.0, 0.0, 1.0);
+}
+
+fn lines_threshold(pixel_pos: vec2<f32>) -> f32 {
+    let line_width = 4.0;
+    return abs(fract(pixel_pos.y / line_width) - 0.5) * 2.0;
+}
+
+fn crosshatch_threshold(pixel_pos: vec2<f32>) -> f32 {
+    let spacing = 5.0;
+    let d1 = abs(fract((pixel_pos.x + pixel_pos.y) / spacing) - 0.5) * 2.0;
+    let d2 = abs(fract((pixel_pos.x - pixel_pos.y) / spacing) - 0.5) * 2.0;
+    return min(d1, d2);
+}
+
+fn noise_threshold(pixel_pos: vec2<f32>) -> f32 {
+    return fract(52.9829189 * fract(0.06711056 * pixel_pos.x + 0.00583715 * pixel_pos.y));
+}
+
+fn diamond_threshold(pixel_pos: vec2<f32>) -> f32 {
+    let p = (pixel_pos % 4.0) - 2.0;
+    return clamp((abs(p.x) + abs(p.y)) / 4.0, 0.0, 1.0);
+}
+
+fn overlay_channel(a: f32, b: f32) -> f32 {
+    if a < 0.5 {
+        return 2.0 * a * b;
+    }
+    return 1.0 - 2.0 * (1.0 - a) * (1.0 - b);
+}
+
+fn safe_div(a: f32, b: f32) -> f32 {
+    if abs(b) < 1.0e-6 {
+        return 0.0;
+    }
+    return a / b;
+}
+
+fn blend_rgb(a: vec3<f32>, b: vec3<f32>, mode: u32) -> vec3<f32> {
+    switch mode {
+        case 0u: { return b; }
+        case 1u: { return 1.0 - (1.0 - a) * (1.0 - b); }
+        case 2u: { return a + b; }
+        case 3u: { return max(a, b); }
+        case 4u: { return a * b; }
+        case 5u: { return abs(a - b); }
+        case 6u: {
+            return vec3<f32>(
+                overlay_channel(a.x, b.x),
+                overlay_channel(a.y, b.y),
+                overlay_channel(a.z, b.z),
+            );
+        }
+        case 7u: {
+            return vec3<f32>(safe_div(a.x, b.x), safe_div(a.y, b.y), safe_div(a.z, b.z));
+        }
+        default: { return b; }
+    }
+}
+
+fn n0_body(uv: vec2<f32>, dims: vec2<f32>, amount: f32, block_size: f32, speed: f32, time: f32) -> N0BodyOutputs {
+    let res = dims;
+    let t = floor(time * speed * 12.0);
+
+    let block_pixels = max(block_size, 4.0);
+    let block_uv = floor(uv * res / block_pixels);
+    let block_hash = bdf_hash2(block_uv + t * 0.37);
+
+    let displace_mask = step(1.0 - amount * 0.6, block_hash);
+    let displace_x = (bdf_hash2(block_uv + t * 1.13) * 2.0 - 1.0) * amount * 0.15;
+    let displace_y = (bdf_hash2(block_uv + t * 2.77) * 2.0 - 1.0) * amount * 0.03;
+    let offset = vec2<f32>(displace_x, displace_y) * displace_mask;
+
+    return N0BodyOutputs(
+        vec4<f32>(offset.x, offset.y, 0.0, 1.0),
+        vec4<f32>(block_hash, block_hash, block_hash, 1.0),
+    );
+}
+
+fn n1_body(uv: vec2<f32>, dims: vec2<f32>, algorithm: u32) -> vec4<f32> {
+    let pixel_pos = floor(uv * dims) + 0.5;
+    var t: f32;
+    if algorithm == 0u {
+        t = bayer_threshold(pixel_pos);
+    } else if algorithm == 1u {
+        t = halftone_threshold(pixel_pos);
+    } else if algorithm == 2u {
+        t = lines_threshold(pixel_pos);
+    } else if algorithm == 3u {
+        t = crosshatch_threshold(pixel_pos);
+    } else if algorithm == 4u {
+        t = noise_threshold(pixel_pos);
+    } else {
+        t = diamond_threshold(pixel_pos);
+    }
+    return vec4<f32>(t, t, t, 1.0);
+}
+
+fn n2_body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, weights: vec3<f32>) -> vec4<f32> {
+    let g = dot(c.rgb, weights);
+    return vec4<f32>(g, g, g, c.a);
+}
+
+fn n3_body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, min_v: f32, max_v: f32) -> vec4<f32> {
+    return vec4<f32>(clamp(c.rgb, vec3<f32>(min_v), vec3<f32>(max_v)), c.a);
+}
+
+fn n4_body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, intensity: f32) -> vec4<f32> {
+    let inverted = vec4<f32>(1.0 - c.r, 1.0 - c.g, 1.0 - c.b, c.a);
+    return mix(c, inverted, intensity);
+}
+
+fn n5_body(a: vec4<f32>, b: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, amount: f32, mode: u32) -> vec4<f32> {
+    let blended = blend_rgb(a.rgb, b.rgb, mode);
+    let out_rgb = mix(a.rgb, blended, amount);
+    // Branchless on purpose: an `if` here compiles differently in fused vs
+    // standalone kernel contexts (FMA regrouping) and broke the fp32
+    // bit-exact proof (precision contract section 7.1's "match the exact arithmetic
+    // form" gotcha). mix(x, y, 0.0) = x + (y-x)*0.0 = x exactly, so t_a = 0
+    // IS alpha pass-through, in the original instruction shape.
+    let t_a = select(0.0, amount, mode == 0u);
+    let out_a = mix(a.a, b.a, t_a);
+    return vec4<f32>(out_rgb, out_a);
+}
+
+fn n6_body(a: vec4<f32>, b: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, amount: f32, mode: u32) -> vec4<f32> {
+    let blended = blend_rgb(a.rgb, b.rgb, mode);
+    let out_rgb = mix(a.rgb, blended, amount);
+    // Branchless on purpose: an `if` here compiles differently in fused vs
+    // standalone kernel contexts (FMA regrouping) and broke the fp32
+    // bit-exact proof (precision contract section 7.1's "match the exact arithmetic
+    // form" gotcha). mix(x, y, 0.0) = x + (y-x)*0.0 = x exactly, so t_a = 0
+    // IS alpha pass-through, in the original instruction shape.
+    let t_a = select(0.0, amount, mode == 0u);
+    let out_a = mix(a.a, b.a, t_a);
+    return vec4<f32>(out_rgb, out_a);
+}
+
+fn n7_body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, min_v: f32, max_v: f32) -> vec4<f32> {
+    return vec4<f32>(clamp(c.rgb, vec3<f32>(min_v), vec3<f32>(max_v)), c.a);
+}
+
+fn n8_body(a: vec4<f32>, b: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, amount: f32, mode: u32) -> vec4<f32> {
+    let blended = blend_rgb(a.rgb, b.rgb, mode);
+    let out_rgb = mix(a.rgb, blended, amount);
+    // Branchless on purpose: an `if` here compiles differently in fused vs
+    // standalone kernel contexts (FMA regrouping) and broke the fp32
+    // bit-exact proof (precision contract section 7.1's "match the exact arithmetic
+    // form" gotcha). mix(x, y, 0.0) = x + (y-x)*0.0 = x exactly, so t_a = 0
+    // IS alpha pass-through, in the original instruction shape.
+    let t_a = select(0.0, amount, mode == 0u);
+    let out_a = mix(a.a, b.a, t_a);
+    return vec4<f32>(out_rgb, out_a);
+}
+
+@compute @workgroup_size(16, 16)
+fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
+    let dims = textureDimensions(dst_0);
+    if id.x >= dims.x || id.y >= dims.y {
+        return;
+    }
+    let coord = vec2<i32>(i32(id.x), i32(id.y));
+    let uv = (vec2<f32>(id.xy) + 0.5) / vec2<f32>(dims);
+    let ext_0 = textureLoad(src_0, coord, 0);
+    let r0 = n0_body(uv, vec2<f32>(dims), params.n0_amount, params.n0_block_size, params.n0_speed, params.n0_time);
+    let r1 = n1_body(uv, vec2<f32>(dims), params.n1_algorithm);
+    let r2 = n2_body(ext_0, uv, vec2<f32>(dims), vec3<f32>(params.n2_weights_x, params.n2_weights_y, params.n2_weights_z));
+    let r3 = n3_body(r2, uv, vec2<f32>(dims), params.n3_min, params.n3_max);
+    let r4 = n4_body(r3, uv, vec2<f32>(dims), params.n4_intensity);
+    let r5 = n5_body(r4, r3, uv, vec2<f32>(dims), params.n5_amount, params.n5_mode);
+    let r6 = n6_body(r5, r1, uv, vec2<f32>(dims), params.n6_amount, params.n6_mode);
+    let r7 = n7_body(r6, uv, vec2<f32>(dims), params.n7_min, params.n7_max);
+    let r8 = n8_body(r7, r0.hash, uv, vec2<f32>(dims), params.n8_amount, params.n8_mode);
+    textureStore(dst_0, coord, r3);
+    textureStore(dst_1, coord, r8);
 }
 
 === effect:ColorGrade node:9 ===

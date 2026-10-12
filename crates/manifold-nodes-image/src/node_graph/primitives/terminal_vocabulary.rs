@@ -1,10 +1,14 @@
 //! Deterministic, source-aware text for the Code Terminal panes.
 //!
-//! The terminal stream owns the scheduler and the cell storage.  This module
-//! only supplies bounded text: each row selects one of a small set of related
-//! shell, source, log, or inspection fragments, and the measured source values
-//! are inserted where they make sense.  The writer intentionally uses a fixed
-//! scratch-free buffer so changing a line never allocates on the frame path.
+//! The terminal stream owns the scheduler and the cell storage. This module
+//! turns a passage seed plus a line index into one row of text: the seed picks
+//! a passage from `terminal_passages`, the line index walks down it, and the
+//! measured source values and a seeded number stream fill its placeholders.
+//! A new seed shows a different passage, so a group that is rewritten reads
+//! as fresh output rather than the same lines with new numbers. Writes go into
+//! the caller's fixed buffer, so changing a line never allocates.
+
+use super::terminal_passages::{CODE, INSPECT, LOGS, Passage, SHELL};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Role {
@@ -16,7 +20,10 @@ pub(super) enum Role {
 
 #[derive(Clone, Copy)]
 pub(super) struct Context {
-    pub row: usize,
+    /// Picks the passage. Neighbouring lines that share it read as one block.
+    pub stream: u32,
+    /// Line index down the passage; past its end the next passage continues.
+    pub line: usize,
     pub left: f32,
     pub right: f32,
     pub light: f32,
@@ -24,28 +31,91 @@ pub(super) struct Context {
     pub signature: u32,
 }
 
-/// Fill `dst` with spaces and append one deterministic terminal row.
+/// Fill `dst` with spaces and write one deterministic terminal row.
 ///
-/// All output is printable ASCII.  Writes are clipped at the supplied
-/// destination, so this remains safe for the small buffers used by tiny panes
-/// as well as the normal 640-cell line buffer.
+/// All output is printable ASCII. Writes are clipped at the supplied
+/// destination, so this stays safe for the small buffers of tiny panes as
+/// well as the normal 640-cell line buffer.
 pub(super) fn write_line(dst: &mut [u8], role: Role, context: Context) -> usize {
     dst.fill(b' ');
-    let mut writer = Writer { dst, at: 0 };
-    let row = context.row;
-    match role {
-        Role::Shell => shell(&mut writer, row, context),
-        Role::Code => code(&mut writer, row, context),
-        Role::Logs => logs(&mut writer, row, context),
-        Role::Inspect => inspect(&mut writer, row, context),
-    }
+    let template = template(passages(role), context.stream, context.line);
+    let mut writer = Writer {
+        dst,
+        at: 0,
+        rng: Rng::new(hash3(context.stream, context.line as u32, context.signature)),
+    };
+    writer.template(template, context);
     writer.at
+}
+
+fn passages(role: Role) -> &'static [Passage] {
+    match role {
+        Role::Shell => SHELL,
+        Role::Code => CODE,
+        Role::Logs => LOGS,
+        Role::Inspect => INSPECT,
+    }
+}
+
+fn template(passages: &'static [Passage], stream: u32, line: usize) -> &'static [u8] {
+    let mut passage = stream as usize % passages.len();
+    let mut line = line;
+    loop {
+        let lines = passages[passage];
+        if line < lines.len() {
+            return lines[line];
+        }
+        line -= lines.len();
+        passage = (passage + 1) % passages.len();
+    }
+}
+
+pub(super) fn hash(mut x: u32) -> u32 {
+    x ^= x >> 16;
+    x = x.wrapping_mul(0x7feb_352d);
+    x ^= x >> 15;
+    x = x.wrapping_mul(0x846c_a68b);
+    x ^ (x >> 16)
+}
+
+pub(super) fn hash3(a: u32, b: u32, c: u32) -> u32 {
+    hash(a ^ hash(b ^ hash(c)))
+}
+
+struct Rng(u32);
+
+impl Rng {
+    fn new(seed: u32) -> Self {
+        Self(seed)
+    }
+
+    fn next(&mut self) -> u32 {
+        self.0 = self.0.wrapping_add(0x9e37_79b9);
+        hash(self.0)
+    }
+
+    fn below(&mut self, bound: u32) -> u32 {
+        self.next() % bound.max(1)
+    }
 }
 
 struct Writer<'a> {
     dst: &'a mut [u8],
     at: usize,
+    rng: Rng,
 }
+
+const REGISTERS: [&[u8]; 14] = [
+    b"rax", b"rbx", b"rcx", b"rdx", b"rsi", b"rdi", b"rbp", b"r8", b"r9", b"r10", b"r11", b"r12",
+    b"r13", b"r14",
+];
+const BINARY: [&[u8]; 12] = [
+    b"mov", b"add", b"sub", b"xor", b"and", b"or", b"cmp", b"test", b"lea", b"imul", b"shl",
+    b"shr",
+];
+const UNARY: [&[u8]; 5] = [b"push", b"pop", b"inc", b"dec", b"neg"];
+const BRANCH: [&[u8]; 5] = [b"call", b"jmp", b"jne", b"je", b"jg"];
+const VECTOR: [&[u8]; 4] = [b"vmulps", b"vaddps", b"vfmadd231ps", b"vxorps"];
 
 impl Writer<'_> {
     fn bytes(&mut self, bytes: &[u8]) {
@@ -113,8 +183,193 @@ impl Writer<'_> {
         }
     }
 
-    fn row(&mut self, row: usize) {
-        self.number(row);
+    fn template(&mut self, template: &[u8], context: Context) {
+        let mut i = 0;
+        while i < template.len() {
+            let ch = template[i];
+            if ch == b'%' && i + 1 < template.len() {
+                self.token(template[i + 1], context);
+                i += 2;
+            } else {
+                self.byte(ch);
+                i += 1;
+            }
+        }
+    }
+
+    fn token(&mut self, token: u8, context: Context) {
+        let passage = hash(context.stream);
+        let line = context.line;
+        match token {
+            b'L' => self.fixed(context.left, 2),
+            b'R' => self.fixed(context.right, 2),
+            b'B' => self.fixed(context.light, 2),
+            b'E' => self.fixed(context.edge, 2),
+            b'C' => self.bytes(contour(context)),
+            b'H' => {
+                let value = self.rng.next() ^ context.signature;
+                self.hex(value, 8);
+            }
+            b'h' => {
+                let value = self.rng.next();
+                self.hex(value, 4);
+            }
+            b'b' => {
+                let value = self.rng.next();
+                self.hex(value, 2);
+            }
+            b'G' => {
+                let value = self.rng.next();
+                self.hex(value, 7);
+            }
+            b'N' => {
+                let value = self.rng.below(10_000);
+                self.number(value as usize);
+            }
+            b'n' => {
+                let value = self.rng.below(10);
+                self.number(value as usize);
+            }
+            b'P' => self.number(2 + (passage % 250) as usize),
+            b'W' => {
+                let shift = 6 + self.rng.below(7);
+                self.number(1 << shift);
+            }
+            b'M' => {
+                let value = self.rng.below(1000) as usize;
+                self.number(value / 10);
+                self.byte(b'.');
+                self.number(value % 10);
+            }
+            b'K' => {
+                let value = 1 + self.rng.below(999) as usize;
+                self.number(value);
+                if value < 100 {
+                    self.byte(b'.');
+                    let tenth = self.rng.below(10);
+                    self.number(tenth as usize);
+                }
+                let unit = [b'K', b'M', b'G'][self.rng.below(3) as usize];
+                self.byte(unit);
+            }
+            b'T' => {
+                // One clock per passage that ticks forward down its lines.
+                let seconds = passage as usize % 86_400 + line * 3;
+                self.padded_number(seconds / 3600 % 24, 2);
+                self.byte(b':');
+                self.padded_number(seconds / 60 % 60, 2);
+                self.byte(b':');
+                self.padded_number(seconds % 60, 2);
+                self.byte(b'.');
+                let millis = self.rng.below(1000);
+                self.padded_number(millis as usize, 3);
+            }
+            b'S' => self.number((passage % 50_000) as usize + line),
+            b'A' => self.hex((passage & 0x00ff_fff0).wrapping_add(line as u32 * 16), 8),
+            b'X' => self.hexdump(),
+            b'D' => self.instruction(),
+            b'%' => self.byte(b'%'),
+            other => {
+                self.byte(b'%');
+                self.byte(other);
+            }
+        }
+    }
+
+    fn hexdump(&mut self) {
+        let mut ascii = [b'.'; 16];
+        for (i, cell) in ascii.iter_mut().enumerate() {
+            let value = (self.rng.next() & 0xff) as u8;
+            self.hex(u32::from(value), 2);
+            self.byte(b' ');
+            if i == 7 {
+                self.byte(b' ');
+            }
+            if (32..127).contains(&value) {
+                *cell = value;
+            }
+        }
+        self.bytes(b" |");
+        self.bytes(&ascii);
+        self.byte(b'|');
+    }
+
+    fn instruction(&mut self) {
+        let count = 2 + self.rng.below(4) as usize;
+        for i in 0..6 {
+            if i < count {
+                let value = self.rng.next();
+                self.hex(value, 2);
+                self.byte(b' ');
+            } else {
+                self.bytes(b"   ");
+            }
+        }
+        self.byte(b' ');
+        match self.rng.below(10) {
+            0..=4 => {
+                let op = BINARY[self.rng.below(BINARY.len() as u32) as usize];
+                self.bytes(op);
+                self.byte(b' ');
+                self.register();
+                self.bytes(b", ");
+                self.operand();
+            }
+            5 => {
+                let op = UNARY[self.rng.below(UNARY.len() as u32) as usize];
+                self.bytes(op);
+                self.byte(b' ');
+                self.register();
+            }
+            6 | 7 => {
+                let op = BRANCH[self.rng.below(BRANCH.len() as u32) as usize];
+                self.bytes(op);
+                self.bytes(b" 0x");
+                let target = self.rng.next();
+                self.hex(target, 8);
+            }
+            8 => {
+                let op = VECTOR[self.rng.below(VECTOR.len() as u32) as usize];
+                self.bytes(op);
+                for i in 0..3 {
+                    self.bytes(if i == 0 { b" ymm" } else { b", ymm" });
+                    let reg = self.rng.below(16);
+                    self.number(reg as usize);
+                }
+            }
+            _ => {
+                let op: &[u8] = if self.rng.below(2) == 0 { b"ret" } else { b"nop" };
+                self.bytes(op);
+            }
+        }
+    }
+
+    fn register(&mut self) {
+        let reg = REGISTERS[self.rng.below(REGISTERS.len() as u32) as usize];
+        self.bytes(reg);
+    }
+
+    fn operand(&mut self) {
+        match self.rng.below(4) {
+            0 => self.register(),
+            1 => {
+                self.bytes(b"[rbp-0x");
+                let offset = self.rng.next();
+                self.hex(offset, 2);
+                self.byte(b']');
+            }
+            2 => {
+                self.bytes(b"[rip+0x");
+                let offset = self.rng.next();
+                self.hex(offset, 4);
+                self.byte(b']');
+            }
+            _ => {
+                self.bytes(b"0x");
+                let value = self.rng.next();
+                self.hex(value, 2);
+            }
+        }
     }
 }
 
@@ -126,192 +381,13 @@ fn finite_unit(value: f32) -> f32 {
     }
 }
 
-fn source_values(context: Context) -> (f32, f32, f32, f32, u32) {
-    let left = finite_unit(context.left);
-    let right = finite_unit(context.right);
-    let light = finite_unit(context.light);
-    let edge = finite_unit(context.edge);
-    (left, right, light, edge, context.signature)
-}
-
-fn shell(writer: &mut Writer<'_>, row: usize, context: Context) {
-    let (_, right, light, edge, signature) = source_values(context);
-    match row % 8 {
-        0 => {
-            writer.bytes(b"$ ssh relay@10.0.0.");
-            writer.number(2 + (signature as usize % 240));
-        }
-        1 => {
-            writer.bytes(b"$ find /srv/streams -type f -name '*.raw' | sort");
-        }
-        2 => {
-            writer.bytes(b"$ sha256sum /srv/streams/capture.raw");
-        }
-        3 => {
-            writer.bytes(b"$ ss -tnp | head -n 12");
-        }
-        4 => {
-            writer.bytes(b"$ curl -fsS http://10.0.0.");
-            writer.number(2 + (signature as usize % 240));
-            writer.bytes(b":8080/health | jq '.streams'");
-        }
-        5 => {
-            writer.bytes(b"ok   packet row=");
-            writer.row(row);
-            writer.bytes(b" bytes=");
-            writer.number(64 + ((right * 512.0) as usize & !7));
-            writer.bytes(b" checksum=0x");
-            writer.hex(signature ^ (row as u32).rotate_left(5), 8);
-        }
-        6 => {
-            writer.bytes(b"$ journalctl -u stream-relay --no-pager | rg 'connected|decoded|synced' | tail -n 24 > /tmp/relay.log");
-        }
-        7 => {
-            writer.bytes(if edge > 0.2 {
-                b"[ok] contour acquired"
-            } else if light < 0.12 {
-                b"[wait] signal quiet"
-            } else {
-                b"[ok] signal locked"
-            });
-        }
-        _ => unreachable!(),
-    }
-}
-
-fn code(writer: &mut Writer<'_>, row: usize, context: Context) {
-    let (left, right, _, edge, signature) = source_values(context);
-    match row % 8 {
-        0 => writer.bytes(b"fn decode_region(frame: &Frame) -> Patch {"),
-        1 => {
-            writer.bytes(b"    let window = frame.crop(");
-            writer.fixed(left, 2);
-            writer.bytes(b", ");
-            writer.fixed(right, 2);
-            writer.bytes(b");");
-        }
-        2 => {
-            writer.bytes(b"    let edges = window.sobel().threshold(");
-            writer.fixed(edge, 2);
-            writer.bytes(b");");
-        }
-        3 => writer.bytes(b"    if edges.has_contour() {"),
-        4 => {
-            writer.bytes(b"        return Patch::tracked(window, 0x");
-            writer.hex(signature, 8);
-            writer.bytes(b");");
-        }
-        5 => writer.bytes(b"    }"),
-        6 => writer.bytes(b"    Patch::passthrough(window)"),
-        7 => writer.bytes(b"}"),
-        _ => unreachable!(),
-    }
-}
-
-fn logs(writer: &mut Writer<'_>, row: usize, context: Context) {
-    let (left, right, light, edge, signature) = source_values(context);
-    match row % 8 {
-        0 => {
-            writer.bytes(b"INFO  relay: accepted stream channel=");
-            writer.row(row);
-            writer.bytes(b" signature=0x");
-            writer.hex(signature, 8);
-        }
-        1 => {
-            writer.bytes(b"DEBUG decoder: region [");
-            writer.fixed(left, 2);
-            writer.bytes(b", ");
-            writer.fixed(right, 2);
-            writer.bytes(b"] exposure=");
-            writer.fixed(light, 2);
-        }
-        2 => {
-            writer.bytes(if edge > 0.2 {
-                b"INFO  tracker: contour acquired; following silhouette"
-            } else {
-                b"INFO  tracker: waiting for structure"
-            });
-        }
-        3 => {
-            writer.bytes(b"INFO  transport: packet verified channel=");
-            writer.number(row % 3);
-            writer.bytes(b" checksum=0x");
-            writer.hex(signature.rotate_left(7), 8);
-        }
-        4 => {
-            writer.bytes(b"TRACE scan: channel=");
-            writer.number(row % 4);
-            writer.bytes(b" region width=");
-            writer.fixed((right - left).abs(), 2);
-        }
-        5 => writer.bytes(b"OK    relay ready"),
-        6 => {
-            writer.bytes(b"NOTICE archive: samples indexed=");
-            writer.number(32 + ((light * 96.0) as usize));
-            writer.bytes(b" confidence=");
-            writer.fixed(edge, 2);
-        }
-        7 => {
-            writer.bytes(b"INFO  decoder: image block committed index=");
-            writer.row(row);
-        }
-        _ => unreachable!(),
-    }
-}
-
-fn inspect(writer: &mut Writer<'_>, row: usize, context: Context) {
-    let (left, right, light, edge, signature) = source_values(context);
-    match row % 8 {
-        0 => {
-            writer.bytes(b"0000 48 8b 05 ");
-            writer.hex(signature, 8);
-            writer.bytes(b"  mov rax,[rip+0x");
-            writer.hex((right * 65535.0) as u32, 4);
-            writer.bytes(b"]");
-        }
-        1 => {
-            writer.bytes(b"0x");
-            writer.hex(signature.wrapping_add(row as u32), 8);
-            writer.bytes(b" | bounds [");
-            writer.fixed(left, 2);
-            writer.bytes(b", ");
-            writer.fixed(right, 2);
-            writer.bytes(b"]");
-        }
-        2 => {
-            writer.bytes(b"field[");
-            writer.padded_number(row, 4);
-            writer.bytes(b"] = 0x");
-            writer.hex(((light * 255.0) as u32) << 8 | (edge * 255.0) as u32, 4);
-        }
-        3 => {
-            writer.bytes(b"packet seq=");
-            writer.number(row);
-            writer.bytes(b" len=");
-            writer.number(24 + ((right * 64.0) as usize));
-            writer.bytes(b" crc16=0x");
-            writer.hex((signature ^ 0xa55a_5aa5) & 0xffff, 4);
-        }
-        4 => {
-            writer.bytes(b"00000040  7b 22 70 61 6e 65 22 3a  ");
-            writer.bytes(b"{ pane: ");
-            writer.number(row % 4);
-            writer.bytes(b" }");
-        }
-        5 => {
-            writer.bytes(b"disasm: test rdi,rdi ; jne 0x");
-            writer.hex(signature.rotate_right(3), 8);
-            writer.bytes(b" ; load source profile and return to caller");
-        }
-        6 => {
-            writer.bytes(b"offset +");
-            writer.padded_number(((left * 4096.0) as usize) & 0xfff, 3);
-            writer.bytes(b"  mask=0x");
-            writer.hex(((edge * 65535.0) as u32) & 0xffff, 4);
-            writer.bytes(b"  readable");
-        }
-        7 => writer.bytes(b"reg  r12=0x00000000  r13=0x00000001  flags=NZ"),
-        _ => unreachable!(),
+fn contour(context: Context) -> &'static [u8] {
+    if finite_unit(context.edge) > 0.2 {
+        b"contour acquired; following silhouette"
+    } else if finite_unit(context.light) < 0.12 {
+        b"signal quiet; waiting for structure"
+    } else {
+        b"signal locked"
     }
 }
 
@@ -319,9 +395,12 @@ fn inspect(writer: &mut Writer<'_>, row: usize, context: Context) {
 mod tests {
     use super::*;
 
-    fn context(row: usize) -> Context {
+    const ROLES: [Role; 4] = [Role::Shell, Role::Code, Role::Logs, Role::Inspect];
+
+    fn context(stream: u32, line: usize) -> Context {
         Context {
-            row,
+            stream,
+            line,
             left: 0.13,
             right: 0.87,
             light: 0.42,
@@ -341,60 +420,129 @@ mod tests {
     fn repeated_input_is_byte_for_byte_deterministic() {
         let mut first = [0u8; 640];
         let mut second = [0u8; 640];
-        let input = context(27);
-        assert_eq!(
-            write_line(&mut first, Role::Shell, input),
-            write_line(&mut second, Role::Shell, input)
-        );
-        assert_eq!(first, second);
+        for role in ROLES {
+            let input = context(27, 3);
+            assert_eq!(
+                write_line(&mut first, role, input),
+                write_line(&mut second, role, input)
+            );
+            assert_eq!(first, second);
+        }
     }
 
     #[test]
     fn output_is_printable_and_bounded_for_tiny_buffers() {
-        for role in [Role::Shell, Role::Code, Role::Logs, Role::Inspect] {
-            for size in 0..=7 {
-                let mut buffer = [0u8; 7];
-                let written = write_line(&mut buffer[..size], role, context(3));
-                assert!(written <= size);
-                assert!(
-                    buffer[..size]
-                        .iter()
-                        .all(|&byte| (32..=126).contains(&byte))
-                );
+        for role in ROLES {
+            for stream in 0..40 {
+                for size in 0..=7 {
+                    let mut buffer = [0u8; 7];
+                    let written = write_line(&mut buffer[..size], role, context(stream, 3));
+                    assert!(written <= size);
+                    assert!(buffer[..size].iter().all(|&byte| (32..=126).contains(&byte)));
+                }
             }
         }
     }
 
     #[test]
-    fn roles_have_distinct_vocabulary() {
-        let mut lines = [[0u8; 128]; 4];
-        for (line, role) in
-            lines
-                .iter_mut()
-                .zip([Role::Shell, Role::Code, Role::Logs, Role::Inspect])
-        {
-            write_line(line, role, context(0));
+    fn every_template_uses_only_known_placeholders() {
+        const KNOWN: &[u8] = b"LRBECHhbGNnPWMKTSAXD%";
+        for role in ROLES {
+            for passage in passages(role) {
+                assert!(!passage.is_empty());
+                for line in *passage {
+                    let mut i = 0;
+                    while i < line.len() {
+                        if line[i] == b'%' {
+                            let token = line.get(i + 1).copied().unwrap_or(b' ');
+                            assert!(
+                                KNOWN.contains(&token),
+                                "{role:?}: unknown placeholder in {}",
+                                String::from_utf8_lossy(line)
+                            );
+                            i += 2;
+                        } else {
+                            assert!((32..=126).contains(&line[i]) || line[i] == b'\t');
+                            i += 1;
+                        }
+                    }
+                }
+            }
         }
-        assert!(lines.windows(2).all(|pair| pair[0] != pair[1]));
-        assert!(lines[0].starts_with(b"$ "));
-        assert!(lines[1].starts_with(b"fn "));
-        assert!(lines[2].starts_with(b"INFO"));
-        assert!(lines[3].starts_with(b"0000"));
     }
 
     #[test]
-    fn rows_have_meaningful_length_variation() {
-        for role in [Role::Shell, Role::Code, Role::Logs, Role::Inspect] {
-            let mut lengths = [0usize; 8];
-            for (row, length) in lengths.iter_mut().enumerate() {
+    fn every_line_renders_printable_text() {
+        for role in ROLES {
+            let total: usize = passages(role).iter().map(|p| p.len()).sum();
+            for line in 0..total {
                 let mut buffer = [0u8; 640];
-                write_line(&mut buffer, role, context(row));
-                *length = visible_len(&buffer);
+                let written = write_line(&mut buffer, role, context(0, line));
+                assert!(written > 0);
+                assert!(buffer.iter().all(|&byte| (32..=126).contains(&byte)));
             }
-            let min = *lengths.iter().min().expect("templates");
-            let max = *lengths.iter().max().expect("templates");
-            assert!(max >= min + 25, "{role:?}: {lengths:?}");
-            assert!(lengths.iter().any(|&length| (20..=75).contains(&length)));
+        }
+    }
+
+    #[test]
+    fn each_role_has_a_large_pool_of_distinct_lines() {
+        for role in ROLES {
+            let passages = passages(role);
+            let mut lines: Vec<&[u8]> = passages.iter().flat_map(|p| p.iter().copied()).collect();
+            lines.sort_unstable();
+            lines.dedup();
+            let floor = if role == Role::Inspect { 25 } else { 45 };
+            assert!(passages.len() >= 8, "{role:?}: {} passages", passages.len());
+            assert!(lines.len() >= floor, "{role:?}: {} distinct lines", lines.len());
+        }
+    }
+
+    #[test]
+    fn a_new_stream_shows_a_different_passage() {
+        for role in ROLES {
+            let count = passages(role).len() as u32;
+            let mut firsts = Vec::new();
+            for stream in 0..count {
+                let mut buffer = [0u8; 640];
+                write_line(&mut buffer, role, context(stream, 1));
+                firsts.push(buffer);
+            }
+            firsts.sort_unstable();
+            firsts.dedup();
+            assert!(firsts.len() as u32 >= count - 1, "{role:?}");
+        }
+    }
+
+    #[test]
+    fn lines_walk_down_one_passage_then_continue_into_the_next() {
+        for role in ROLES {
+            let passages = passages(role);
+            let stream = 5_u32;
+            let first = stream as usize % passages.len();
+            let len = passages[first].len();
+            assert_eq!(template(passages, stream, 0), passages[first][0]);
+            assert_eq!(template(passages, stream, len - 1), passages[first][len - 1]);
+            assert_eq!(
+                template(passages, stream, len),
+                passages[(first + 1) % passages.len()][0]
+            );
+        }
+    }
+
+    #[test]
+    fn group_lines_have_meaningful_length_variation() {
+        for role in [Role::Shell, Role::Code, Role::Logs] {
+            for stream in 0..8 {
+                let mut lengths = [0usize; 8];
+                for (line, length) in lengths.iter_mut().enumerate() {
+                    let mut buffer = [0u8; 640];
+                    write_line(&mut buffer, role, context(stream, line));
+                    *length = visible_len(&buffer);
+                }
+                let min = *lengths.iter().min().expect("lines");
+                let max = *lengths.iter().max().expect("lines");
+                assert!(max >= min + 10, "{role:?} stream {stream}: {lengths:?}");
+            }
         }
     }
 
@@ -403,22 +551,28 @@ mod tests {
         let mut before = [0u8; 640];
         let mut after = [0u8; 640];
         let mut changed = 0;
-        let mut altered = context(5);
-        altered.left = 0.73;
-        altered.right = 0.24;
-        altered.light = 0.91;
-        altered.edge = 0.04;
-        altered.signature = 0xcafe_f00d;
-        for role in [Role::Shell, Role::Code, Role::Logs, Role::Inspect] {
-            for row in 0..8 {
-                altered.row = row;
-                write_line(&mut before, role, context(row));
-                write_line(&mut after, role, altered);
-                if before != after {
-                    changed += 1;
+        let mut total = 0;
+        for role in ROLES {
+            for stream in 0..8 {
+                for line in 0..8 {
+                    let mut altered = context(stream, line);
+                    altered.left = 0.73;
+                    altered.right = 0.24;
+                    altered.light = 0.91;
+                    altered.edge = 0.04;
+                    altered.signature = 0xcafe_f00d;
+                    write_line(&mut before, role, context(stream, line));
+                    write_line(&mut after, role, altered);
+                    total += 1;
+                    if before != after {
+                        changed += 1;
+                    }
                 }
             }
         }
-        assert!(changed >= 12, "only {changed} templates used source values");
+        assert!(
+            changed * 2 >= total,
+            "only {changed} of {total} lines used source values"
+        );
     }
 }

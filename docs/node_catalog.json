@@ -2984,6 +2984,7 @@
       ],
       "category": "Fields & Coordinates",
       "examples": [
+        "CodeTerminal",
         "DataMosh",
         "Glitch"
       ],
@@ -20815,6 +20816,7 @@
         "BlobTrackingV2Motion",
         "BlossomWire",
         "ChromaticAberration",
+        "CodeTerminal",
         "ColorCompass",
         "ConcentricTunnel",
         "DataMosh",
@@ -35369,6 +35371,7 @@
       ],
       "category": "Distort & Warp",
       "examples": [
+        "CodeTerminal",
         "DataMosh",
         "DigitalDrift",
         "EdgeStretch",
@@ -39635,6 +39638,7 @@
       ],
       "category": "Fields & Coordinates",
       "examples": [
+        "CodeTerminal",
         "DigitalDrift",
         "Glitch"
       ],
@@ -44317,6 +44321,11 @@
           "name": "detail_reactivity",
           "required": false,
           "type": "f32"
+        },
+        {
+          "name": "turnover",
+          "required": false,
+          "type": "f32"
         }
       ],
       "label": "Terminal Stream",
@@ -44381,9 +44390,19 @@
             "3"
           ],
           "type": "enum"
+        },
+        {
+          "default": "0.5",
+          "label": "Fresh Text",
+          "name": "turnover",
+          "range": [
+            "0",
+            "1"
+          ],
+          "type": "float"
         }
       ],
-      "purpose": "Emit long source-driven terminal lines in a single terminal or bordered tmux layouts. Image structure changes statement content; shell, code, log and inspection passages have distinct edit rhythms, with at most three edits active. Detail Reactivity selectively cycles data characters on fine image changes, then settles. Zero detail bypasses these edits; still input produces still text; unwired reaction holds a neutral terminal. Activity controls edit speed and zero freezes cells; Text Size controls the 1080p-reference grid.",
+      "purpose": "Emit long source-driven terminal lines in a single terminal or bordered tmux layouts. Image structure changes statement content; shell, code, log and inspection passages have distinct edit rhythms, with at most three edits active. Fresh Text keeps retyping 8-row groups with new passages from a large shell, code, log and memory-view library; at zero, still input produces still text. Detail Reactivity selectively cycles data characters on fine image changes, then settles. Activity controls edit speed and zero freezes cells; Text Size controls the 1080p-reference grid.",
       "role": "Source",
       "stratum": "atom",
       "summary": "Image-reactive shell, code and logs with source-driven typing and optional tmux panes.",
@@ -47383,6 +47402,7 @@
       "category": "Control",
       "examples": [
         "BlobTrackingV2Motion",
+        "CodeTerminal",
         "ColorCompass",
         "Cymatics",
         "DataMosh",
@@ -51968,10 +51988,10 @@
       "params": [
         {
           "default": "1",
-          "id": "erosion",
+          "id": "amount",
           "max": "1",
           "min": "0",
-          "name": "Erosion"
+          "name": "Amount"
         },
         {
           "default": "16",
@@ -52014,6 +52034,13 @@
           "max": "1",
           "min": "0",
           "name": "Detail Reactivity"
+        },
+        {
+          "default": "0.5",
+          "id": "fresh_text",
+          "max": "1",
+          "min": "0",
+          "name": "Fresh Text"
         }
       ]
     },
