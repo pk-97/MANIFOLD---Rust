@@ -291,7 +291,7 @@ def stem_groups(con, comp):
     sid = con.execute("SELECT id, sample_rate, stem_set FROM songs WHERE COALESCE(group_override, group_id)=? AND kind='project' "
                       "AND stem_set IS NOT NULL", (comp,)).fetchall()
     for s, sr, ss in sid:
-        ps = json.loads(ss)['paths']
+        ps = (json.loads(ss) or {}).get('paths') or []
         if len(ps) >= 2:
             out.append((f'catalogue:{s}', ps, sr))
     for folder, files in usable.stem_folders(con, comp):

@@ -11,7 +11,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 import numpy as np  # noqa: E402
 
-from tools.audio_analysis.catalog import als_scan, comps, names, tree, variants  # noqa: E402
+from tools.audio_analysis.catalog import als_scan, comps, names, tree, usable, variants  # noqa: E402
 
 
 def midi_clip(notes_by_key, start=0, end=64, disabled=False):
@@ -248,6 +248,29 @@ def song(seed=0, secs=64, edit_after=None):
         seg = (t >= i * 4) & (t < i * 4 + 4)
         x[seg] += .25 * np.sin(2 * np.pi * notes[int(r.integers(4))] * t[seg])
     return x
+
+
+class ClassifyTests(unittest.TestCase):
+    base = dict(kind='original', songs=[], labels={}, bounces_local=1, bounces_online=0, stems_local=0, stems_online=0, sets=1,
+                ready_sets=0, audio_only_sets=0, muted_sets=0, unread_sets=0)
+
+    def state(self, **kw):
+        return usable.classify(dict(self.base, **kw))
+
+    def test_ready_needs_local_audio(self):
+        self.assertEqual(self.state(ready_sets=1)[0], 'label_ready')
+        self.assertEqual(self.state(ready_sets=1, bounces_local=0, bounces_online=2)[0], 'label_ready_online')
+
+    def test_blocked_reasons(self):
+        self.assertIn('audio clips', self.state(audio_only_sets=1)[1])
+        self.assertIn('muted', self.state(muted_sets=1)[1])
+        self.assertIn('no Ableton set', self.state(sets=0)[1])
+        self.assertIn('online-only (unread)', self.state(sets=3, unread_sets=1)[1])
+        self.assertEqual(self.state(bounces_local=0)[1], 'no audio bounce or stems')
+
+    def test_lab_and_stem_packs(self):
+        self.assertEqual(self.state(songs=['a'], labels={'a': {'kick': 4}})[0], 'lab')
+        self.assertEqual(self.state(kind='stem_pack')[0], 'blocked')
 
 
 class CompareTests(unittest.TestCase):

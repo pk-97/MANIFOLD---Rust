@@ -18,6 +18,7 @@ from tools.audio_analysis.catalog import als_scan
 STEM_ROLES = ('drums', 'kick', 'snare', 'bass', 'other', 'nodrums', 'nokick')
 BOUNCE_ROLES = ('full_mix', 'master', 'premaster')
 VERSION_WORD = re.compile(r'wip ?\d+|final ?\d*|premaster|master|mstr|t[1-3]\b|v\d+|mixdown|album|live|edits?|remaster|export', re.I)
+STEM_NEAR_CORR = 0.85   # stems summed correlate with a bounce this well (bus processing keeps the residual high): same version, not exact
 MUSIC_KINDS = ('lab', 'original', 'remix', 'stem_pack')
 
 
@@ -92,11 +93,11 @@ def comp_summary(con, cid):
             s['same'].append((sid, os.path.basename(path)))
     s['variants'] = v
     s['stem_sums'] = []
-    for ref, path, verdict, detail, res in con.execute(
-            "SELECT ref, path, verdict, detail, residual_db FROM variants WHERE ref LIKE 'stem_sum:%' AND song_id=?", (cid,)):
+    for ref, path, verdict, detail, res, corr in con.execute(
+            "SELECT ref, path, verdict, detail, residual_db, corr FROM variants WHERE ref LIKE 'stem_sum:%' AND song_id=?", (cid,)):
         d = json.loads(detail or '{}')
         s['stem_sums'].append(dict(set=ref.split(':', 1)[1], bounce=os.path.basename(path), verdict=verdict, residual_db=res,
-                                   sums=bool(d.get('sums'))))
+                                   sums=bool(d.get('sums')), near=verdict != 'different_arrangement' and (corr or 0) >= STEM_NEAR_CORR))
     s['generated'] = None
     for sid, g in con.execute("SELECT id, generated FROM songs WHERE COALESCE(group_override, group_id)=? AND generated IS NOT NULL", (cid,)):
         g = json.loads(g)
@@ -195,7 +196,8 @@ def report(con, args):
         rows.append([cid, s['kind'], st,
                      ','.join(f"{f}:{n}" for sid, d in s['labels'].items() for f, n in d.items())[:24] if s['labels'] else '',
                      f"{v.get('same_arrangement', 0)}/{v.get('aligned_needs_check', 0)}/{v.get('different_arrangement', 0)}" if v else '',
-                     'remix' if s['remix_ready'] else ('/'.join(f'{x}' for x in s['unity'].values()) if s['unity'] else ''),
+                     'remix' if s['remix_ready'] else ('near' if any(x['near'] for x in s['stem_sums']) else
+                                                        ('/'.join(f'{x}' for x in s['unity'].values()) if s['unity'] else '')),
                      f"{s['bounces_local']}+{s['bounces_online']}", f"{s['stems_local']}+{s['stems_online']}",
                      f"{s['ready_sets']}/{s['sets']}" + (f" ({s['best_set']['kick']}k {s['best_set']['snare']}s)" if s['best_set'] else ''),
                      why])

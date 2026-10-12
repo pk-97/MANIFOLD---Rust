@@ -101,7 +101,7 @@ MIGRATIONS = [
     """,
     # running findings of the whole-tree work, so none of it lives only in a session
     """
-    CREATE TABLE findings(topic TEXT NOT NULL, at TEXT NOT NULL, text TEXT NOT NULL, PRIMARY KEY(topic, at));
+    CREATE TABLE IF NOT EXISTS findings(topic TEXT NOT NULL, at TEXT NOT NULL, text TEXT NOT NULL, PRIMARY KEY(topic, at));
     """,
 ]
 DERIVED_SONG = ('title', 'kind', 'content_id', 'sample_rate', 'offset_s', 'proof', 'audit_override', 'families',
