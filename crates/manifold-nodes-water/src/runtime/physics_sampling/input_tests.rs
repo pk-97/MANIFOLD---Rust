@@ -323,6 +323,22 @@ fn source_observation_uses_project_tempo_and_closes_history_once() {
     );
 }
 
+/// An audio trigger decides after its detector's lag, so its source time is
+/// older than the latest frame. It is observed at that frame, never refused.
+#[test]
+fn source_older_than_the_latest_observation_lands_at_it() {
+    let mut runtime = runtime();
+    frame(&mut runtime, 0.0, 1.0, 0.0);
+    frame(&mut runtime, 0.1, 1.0, 0.0);
+    let latest = runtime.water_ref().water.last_frame_time.unwrap();
+    OBSERVATIONS.with_borrow_mut(std::mem::take);
+    let late = FrameTime { seconds: Seconds(0.06), beats: Beats(0.12), delta: Seconds::ZERO, frame_count: 1 };
+    let observed = runtime.water().observe_physics_at_source(late).unwrap();
+    assert_eq!((observed.seconds, observed.beats), (latest.seconds, latest.beats));
+    let samples = OBSERVATIONS.with_borrow_mut(std::mem::take);
+    assert!(samples.iter().all(|sample| sample.time.seconds == latest.seconds), "history never reopens");
+}
+
 #[test]
 fn unchanged_tempo_preserves_external_beat_authority_at_the_closing_observation() {
     let tempo = ProjectTempo::new(&TempoMap::default(), Bpm(137.37));

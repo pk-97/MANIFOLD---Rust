@@ -311,19 +311,19 @@ impl LiquidImpulses {
         self.queue.as_ref().map(|_| self.epoch)
     }
 
-    /// Stamp a hit at the simulated time of the frame last observed. A hit
-    /// from a later transport (an audio fire captured after the engine ticked,
-    /// before the frame runs) has no tick yet, so it takes the same stamp and
-    /// lands on the next frame's first tick. Only an older hit is stale.
+    /// Stamp a hit at the simulated time of the frame last observed. Every hit
+    /// has no tick yet whatever its transport, so it lands on the next
+    /// frame's first tick. A hit older than that frame is late, never
+    /// skipped: triggers are the performance.
     pub fn stamp(&self, transport: f64, sequence: u64) -> Result<EventStamp, String> {
         if let Some(error) = &self.failure {
             return Err(error.clone());
         }
-        if self.queue.is_none() {
+        if self.queue.is_none() || self.transport.is_none() {
             return Err("Liquid impulses: the clock has not started".into());
         }
-        if !transport.is_finite() || self.transport.is_none_or(|last| transport < last) {
-            return Err("Liquid impulses: the hit is older than the frame the liquid last ran".into());
+        if !transport.is_finite() {
+            return Err("Liquid impulses: the hit time is not finite".into());
         }
         Ok(EventStamp {
             epoch: self.epoch,
