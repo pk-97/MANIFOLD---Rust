@@ -3,6 +3,7 @@
 folder skipping, variant verdict thresholds and an end-to-end variant comparison on synthetic audio.
 No music folder needed. Run directly: test_tree.py"""
 import gzip
+import sqlite3
 import sys
 import tempfile
 import unittest
@@ -215,6 +216,28 @@ class DistinctTests(unittest.TestCase):
         c = [('a.wav', 'master', 'T1', 'S1', 100.0), ('b.wav', 'master', 'T1', 'S1', 100.0), ('c.wav', 'master', 'T2', 'S2', 100.0),
              ('d.wav', 'full_mix', '', 'LAB', 100.0)]
         self.assertEqual([x[0] for x in variants.distinct(c, {'LAB'})], ['a.wav', 'c.wav'])
+
+    def test_same_size_and_tag_are_two_files_until_the_bytes_say_otherwise(self):
+        """Same-length bounces of different masters share a byte size: size and version tag never make a copy."""
+        con = sqlite3.connect(':memory:')
+        con.executescript("""
+            CREATE TABLE songs(id TEXT, group_override TEXT, group_id TEXT);
+            CREATE TABLE comp_assets(comp_id TEXT, path TEXT, flags TEXT);
+            CREATE TABLE assets(path TEXT, role TEXT, version TEXT, size INT, local INT);
+            INSERT INTO songs VALUES ('late_night', NULL, 'late_night');""")
+        for i in (2, 3, 4):
+            p = f'/m/Late Night FINAL {i}.wav'
+            con.execute("INSERT INTO comp_assets VALUES ('late_night', ?, '')", (p,))
+            con.execute("INSERT INTO assets VALUES (?, 'master', 'FINAL', 5000, 0)", (p,))
+        con.execute("INSERT INTO comp_assets VALUES ('late_night', '/m/Late Night no vocals FINAL.wav', '')")
+        con.execute("INSERT INTO assets VALUES ('/m/Late Night no vocals FINAL.wav', 'master', 'FINAL', 5000, 0)")
+        self.assertEqual([c[0] for c in variants.download_candidates(con, 'late_night')],
+                         [f'/m/Late Night FINAL {i}.wav' for i in (2, 3, 4)])
+
+    def test_download_plan_takes_every_version_tag_before_repeats_and_respects_the_cap(self):
+        c = [('s', 'a1', 'FINAL', 100), ('s', 'a2', 'FINAL', 100), ('s', 'b1', 'T2', 100), ('s', 'c1', 'V3', 100), ('t', 'd1', 'FINAL', 100)]
+        self.assertEqual([x[1] for x in variants.plan_downloads(c, 400)], ['a1', 'b1', 'c1', 'd1'])
+        self.assertEqual(len(variants.plan_downloads(c, 10 ** 6)), 5)
 
 
 SR = 24000
