@@ -111,7 +111,12 @@ fn part_parity(set: &str, m: &Container, spec: &Spec, name: &str, g: &Container)
                 err[2] = err[2].max(max_err([f], [p_final[i]]));
             }
             report.push(format!("stage.x {:.1e} p.stage {:.1e} p.final {:.1e}", err[0], err[1], err[2]));
-            assert!(err.iter().all(|&e| e <= 1e-12), "{set}/{name}: history {err:?}");
+            // The reference's window sums are differences of whole-clip prefix sums divided by the window weight
+            // (kick_goal_selfsim.self_features), so its inputs carry eps x the clip's running total / that weight
+            // (1.4e-11 on the 2026-10-13 snare's level column); the history here sums each window directly. The
+            // stage's outputs and the fires stay exact.
+            assert!(err[0] <= 1e-9, "{set}/{name}: history inputs {err:?}");
+            assert!(err[1] <= 1e-12 && err[2] <= 1e-12, "{set}/{name}: history {err:?}");
             assert_eq!(h.dropped(), 0);
         }
         None => assert_eq!(p_final, p_combined, "{set}/{name}: no stage, p.final is p.combined"),
