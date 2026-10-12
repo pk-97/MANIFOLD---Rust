@@ -145,6 +145,9 @@ VERBS = [
      "lab-compare", ["tools/audio_analysis/lab/compare.py"],
      "detector lab A/B of two experiment configs: trains missing seeds interleaved, refuses unfair pairs, prints the comparison"),
     ("Render and measure",
+     "lab-queue", ["tools/audio_analysis/lab/overnight.py"],
+     "detector lab overnight queue: PLAN.json of run/compare steps, one at a time under the GPU lock, a log per step and a summary, stops on the first failure (--dry-run)"),
+    ("Render and measure",
      "repair-audio-fixture", "repair_audio_fixture.py", "rebuild a fixture mix from aligned stems, preserving the original; dry-run unless --apply"),
 
     ("CPU reference oracles (f64, seconds, no GPU)",
@@ -247,6 +250,7 @@ COST_CLASSES = {
     "run.py": "broad",
     "score.py": "focused",
     "compare.py": "broad",
+    "overnight.py": "broad",
     "land_branch.py": "focused",
     "land_wave.py": "focused",
     "landing_gate.py": "focused",

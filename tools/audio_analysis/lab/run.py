@@ -9,9 +9,10 @@ The release holdout (registry.release_holdout, about one project song in six) tr
 never in a run's exam, nor in the cutoff pools its exam is scored on. --release makes the exam the holdout alone, a
 run of its own id: use it once, for a release decision.
 
-Usage: run.py CONFIG [--seeds 0,1] [--release]     (CONFIG: a lab/experiments name or a path)
-       run.py --plan CONFIG [--release]            (prints the exam, the holdout and the run id; trains nothing)
-       run.py --warm CONFIG                        (builds the cached inputs every seed reads; trains nothing)"""
+Usage: run.py CONFIG [--seeds 0,1] [--cpu] [--release]   (CONFIG: a lab/experiments name or a path; a net trains on
+                                                        the GPU and exits unless --cpu says the CPU is meant)
+       run.py --plan CONFIG [--release]   (prints the exam, the holdout and the run id; trains nothing)
+       run.py --warm CONFIG               (builds the cached inputs every seed reads; trains nothing)"""
 import hashlib
 import json
 import subprocess
@@ -394,7 +395,28 @@ def train_layers(cfg, meta, seed, data, trees, log=print, stage_parts=None, tmpl
     return held, record
 
 
-def child(cfg, seed, run_id, release=False):
+def why_no_gpu(dev):
+    """One plain line on why a net would train on the CPU, or None when it would not."""
+    import os
+
+    import torch
+    if dev.type != 'cpu':
+        return None
+    if os.environ.get('KICK_GOAL_NN_DEVICE') == 'cpu':
+        return 'KICK_GOAL_NN_DEVICE=cpu is set in the environment'
+    if not torch.backends.mps.is_built():
+        return 'this torch build has no MPS support'
+    return 'torch reports MPS unavailable here (no Metal GPU visible to this process, e.g. a sandboxed or remote session)'
+
+
+def check_device(dev, cpu=False):
+    """A net trains on the CPU only when --cpu says so; otherwise exits with the reason the GPU was not used."""
+    why = why_no_gpu(dev)
+    if why and not cpu:
+        sys.exit(f'refusing to train a net on the CPU (about 3x slower): {why}; pass --cpu if that is intended')
+
+
+def child(cfg, seed, run_id, cpu=False, release=False):
     lab, songs, meta = setup(cfg, release)
     if meta['run_id'] != run_id:
         sys.exit(f'run id {meta["run_id"]} is not the planned {run_id}: code or labels changed mid-run')
@@ -409,6 +431,8 @@ def child(cfg, seed, run_id, release=False):
     t0 = time.time()
     dev = device()
     todo = [m for m in cfg.models if not (LAYERS / model_key(cfg, m, meta) / f's{seed}.npz').exists()]
+    if 'net' in todo:
+        check_device(dev, cpu)
     data = build(cfg, lab, songs, dev, log=lambda m: None) if 'net' in todo else None
     trees = tree_rows(cfg, lab, songs) if 'trees' in todo else None
     if 'trees' in todo and templated(cfg):
@@ -472,9 +496,9 @@ def run_id_of(config, release=False):
     return r.stdout.strip().splitlines()[-1]
 
 
-def run(config, seeds=None, release=False):
-    """Trains the config's missing seeds, one process each; returns the run id. release: the exam is the release
-    holdout (setup)."""
+def run(config, seeds=None, cpu=False, release=False):
+    """Trains the config's missing seeds, one process each; returns the run id. cpu lets a net train on the CPU;
+    release: the exam is the release holdout (setup)."""
     from tools.audio_analysis.lab.config import load
     cfg = load(config)
     seeds = cfg.seeds if seeds is None else seeds
@@ -483,7 +507,8 @@ def run(config, seeds=None, release=False):
     print(f'{cfg.name}: run {run_id}, seeds {list(seeds)}, {len(todo)} to train', flush=True)
     for k, seed in enumerate(todo):
         t0 = time.time()
-        r = subprocess.run([str(Path(__file__)), '--child', str(config), str(seed), run_id, *(['--release'] if release else [])])
+        r = subprocess.run([str(Path(__file__)), '--child', str(config), str(seed), run_id, *(['--cpu'] if cpu else []),
+                            *(['--release'] if release else [])])
         if r.returncode:
             sys.exit(f'{cfg.name} seed {seed} failed')
         took = time.time() - t0
@@ -512,10 +537,10 @@ def main():
         warm(load(a[1]))
     elif a[:1] == ['--child']:
         from tools.audio_analysis.lab.config import load
-        child(load(a[1]), int(a[2]), a[3], release)
+        child(load(a[1]), int(a[2]), a[3], cpu='--cpu' in a, release=release)
     elif a:
         seeds = [int(s) for s in a[a.index('--seeds') + 1].split(',')] if '--seeds' in a else None
-        run(a[0], seeds, release)
+        run(a[0], seeds, cpu='--cpu' in a, release=release)
     else:
         sys.exit(__doc__)
 

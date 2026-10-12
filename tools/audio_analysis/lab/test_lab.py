@@ -602,6 +602,70 @@ def builder(x):
             with self.assertRaises(ValueError):
                 compare.check(a, dict(a, run_id='b', **{k: v}))
 
+    def test_child_refuses_cpu_unless_asked(self):
+        """A net child on the CPU exits with the reason unless --cpu; the GPU, and --cpu on the CPU, pass; run() hands
+        --cpu on to the child. train() called directly (the parity tests) never meets the guard."""
+        import subprocess
+        from unittest import mock
+
+        import torch
+        cpu, mps = torch.device('cpu'), torch.device('mps')
+        with self.assertRaises(SystemExit) as e:
+            run.check_device(cpu)
+        self.assertIn('refusing to train a net on the CPU', str(e.exception))
+        self.assertIn('--cpu', str(e.exception))
+        with mock.patch.dict(os.environ, {'KICK_GOAL_NN_DEVICE': 'cpu'}):
+            with self.assertRaises(SystemExit) as e:
+                run.check_device(cpu)
+            self.assertIn('KICK_GOAL_NN_DEVICE=cpu', str(e.exception))
+        run.check_device(cpu, cpu=True)
+        run.check_device(mps)
+        seen = []
+
+        def fake(cmd, **kw):
+            seen.append(cmd)
+            return subprocess.CompletedProcess(cmd, 0)
+        for flag in (False, True):
+            seen.clear()
+            with mock.patch.object(run, 'run_id_of', return_value='kick-none'), \
+                    mock.patch.object(run.subprocess, 'run', fake), mock.patch.object(run, 'RUNS', Path(tempfile.mkdtemp())):
+                run.run('kick_v2_final', [7], cpu=flag)
+            self.assertEqual(['--child' in c and '--cpu' in c for c in seen], [flag])
+
+    def test_old_exam_view(self):
+        """--exam-of: the A/B on the songs of an earlier run's exam, beside the untouched full-exam numbers."""
+        from unittest import mock
+
+        from tools.audio_analysis.eval.detector_compare import pooled
+
+        def side(hits):
+            ps = {t: dict(matched=h, labels=10, extra=e, minutes=1.0, late_ms=[]) for t, (h, e) in hits.items()}
+            return dict(exam=list(hits), recall_only=[], results=dict(net=dict(per_song=ps)))
+        a = [side(dict(s1=(5, 1), s2=(6, 1), s3=(9, 0), s4=(9, 0)))]
+        b = [side(dict(s1=(7, 1), s2=(8, 1), s3=(4, 4), s4=(4, 4)))]
+        before = json.dumps([a, b], sort_keys=True)
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(score, 'RUNS', Path(d)):
+            (Path(d) / 'old-run').mkdir()
+            (Path(d) / 'old-run' / 'meta.json').write_text(json.dumps(dict(exam=['s1', 's2', 'gone'])))
+            kept, head = score.old_exam('old-run', a[0]['exam'])
+            self.assertEqual(kept, ['s1', 's2'])
+            self.assertIn('2 of its 3 songs', head)
+            self.assertIn('out of 4 in this exam', head)
+            self.assertIn("not in this exam: ['gone']", head)
+            lines = compare.old_exam_lines([a, b], 'old-run', 'snare')
+            self.assertTrue(all(ln.startswith('old exam | ') for ln in lines))
+            self.assertIn('2 songs', '\n'.join(lines))
+            self.assertIn('| 2 songs', lines[2])   # A: F1 line counts the subset only
+            sub = pooled({t: a[0]['results']['net']['per_song'][t] for t in kept}, kept, ())
+            self.assertIn(f'{sub[2]:.4f}', lines[2])
+            self.assertNotIn(f'{pooled(a[0]["results"]["net"]["per_song"], a[0]["exam"], ())[2]:.4f}', lines[2])
+            rows = score.old_exam_lines({0: dict(a[0], run_id='x')}, 'old-run')
+            self.assertIn('full exam (4 songs)', rows[1])
+            self.assertIn('old exam (2 songs)', rows[1])
+            with self.assertRaises(SystemExit):
+                score.old_exam('no-such-run', [])
+        self.assertEqual(before, json.dumps([a, b], sort_keys=True))
+
     def test_scorer_parity(self):
         """The lab scorer on saves of the retired runners reproduces their results files exactly, each on the labels
         it was scored with (snare: rolls still in; bass: the old 30 ms window and fitted shift)."""
