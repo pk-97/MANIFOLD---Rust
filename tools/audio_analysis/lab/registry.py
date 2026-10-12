@@ -136,6 +136,37 @@ def gain_copies(song, count, lo, hi):
     return [gain_copy(song, g) for g in gain_gains(song.id, count, lo, hi)]
 
 
+# Wrapping below the original mix() body. Reader note: the wraps chain must still unwrap to that byte-identical
+# body (cache.loader_id()/code_id(mix) walk __wrapped__, lab/cache.py:43-44) and the body's referenced globals
+# (_export, read_audio) are untouched, so no artifact stamp moves; only the decode is memoized. The cache is
+# bounded (maxsize=3: a song and its gain copies build consecutively, so three decoded songs cover a build's
+# active window) and never stores a gain-scaled array - a copy scales a fresh one inside _with_gain.
+# A Song carries dict fields (an lru_cache cannot key on it), so the key is the hashable identity the body reads.
+_mix_body = mix
+
+
+def _decode_key(song):
+    """The hashable identity of the decode the body above performs: a song and its gain copies share one key."""
+    return (song.source['how'], tuple(song.source['paths']), song.source.get('start_s'), song.source.get('end_s'),
+            song.sample_rate)
+
+
+@functools.lru_cache(maxsize=3)
+def _decoded(key):
+    """The body's decoded parent-scale audio, one bounded entry per process."""
+    from types import SimpleNamespace
+    how, paths, start_s, end_s, sample_rate = key
+    return _mix_body(SimpleNamespace(source=dict(how=how, paths=list(paths), start_s=start_s, end_s=end_s),
+                                      sample_rate=sample_rate))
+
+
+@functools.wraps(mix)
+def _mix_memo(song):
+    """mix() through the decode memo. functools.wraps keeps this wrapper's __wrapped__ at the original body, so
+    code_id(mix) keeps hashing that body and every cached artifact stamp stays valid."""
+    return _decoded(_decode_key(song))
+
+
 def _with_gain(fn):
     """mix() for a gain copy scales the parent's audio. functools.wraps keeps code_id(mix) as it was, so the cached
     artifacts of every ordinary song stay valid; a copy's content id carries its gain."""
@@ -146,7 +177,7 @@ def _with_gain(fn):
     return wrapper
 
 
-mix = _with_gain(mix)
+mix = _with_gain(_mix_memo)
 
 
 def _proof(t, W):

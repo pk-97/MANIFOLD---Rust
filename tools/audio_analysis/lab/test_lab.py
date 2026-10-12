@@ -1084,5 +1084,314 @@ class ReleaseTests(unittest.TestCase):
             self.assertTrue(release.check_parts(bad), bad)
 
 
+class FileBackedSpectrumTests(unittest.TestCase):
+    """BUG-xd15a: the spectrum artifact is file-backed (a raw .npy beside the bundle, memory-mapped into the Song),
+    so Songs hold file-backed pages the kernel can evict without swapping instead of anonymous RAM. The cache key,
+    stamps and .npz bundles are unchanged; an existing cache is migrated by widening its own .npz copy."""
+
+    def _stub(self, d, name, blob):
+        """A registry Song whose content is only these bytes (the test_recycled_name pattern)."""
+        p = Path(d) / f'{name}.wav'
+        p.write_bytes(blob)
+        return song(f'fb_{name}', p)
+
+    def _spec16(self, seed):
+        rng = np.random.default_rng(seed)
+        return (rng.normal(0, 20, (600, 64)) + 20).astype(np.float16)
+
+    def test_legacy_cache_reads_backed_identically(self):
+        """An existing .npz cache is still the hit: its first file-backed read is migrated to a .npy sidecar widened
+        from it, the view holds the identical float32 bytes, the builder is not re-run, and the bundle files keep
+        their names and bytes."""
+        with tempfile.TemporaryDirectory() as d:
+            d = Path(d)
+            root = d / 'c'
+            stub = self._stub(d, 'one', b'backed-fixture-one')
+            spec16 = self._spec16(1)
+            builds = []
+
+            def build():
+                builds.append(1)
+                return spec16.copy()
+            old = cache.artifact(stub, 'spectrum', dict(bands=64), build, root=root)
+            self.assertEqual(builds, [1])
+            names = sorted(p.name for p in root.iterdir())
+            hashes = {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in root.iterdir()}
+            backed = cache.artifact(stub, 'spectrum', dict(bands=64), build, root=root, file_backed=True)
+            self.assertEqual(builds, [1], 'the migration must not rebuild')
+            npy_name = next(n for n in names if n.endswith('.npz')).replace('.npz', '.npy')
+            self.assertEqual(sorted(p.name for p in root.iterdir()), sorted([*names, npy_name]),
+                             'the sidecar joins the existing bundle files, none of which moves')
+            self.assertTrue(np.array_equal(np.asarray(backed), old.astype(np.float32)),
+                            'the mmap view must hold the same bytes the legacy npz path returned')
+            self.assertEqual(backed.dtype, np.float32)
+            self.assertTrue(backed.flags.writeable, 'torch.from_numpy needs a writeable view')
+            after = {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in root.iterdir()
+                     if p.suffix in ('.json', '.npz')}
+            self.assertEqual(after, {k: v for k, v in hashes.items() if k.endswith(('.json', '.npz'))},
+                             'the bundle is untouched by the migration')
+
+    def test_backed_hit_is_a_view_and_rebuilds_nothing(self):
+        """The first file-backed read builds the artifact, saves the sidecar .npy and returns only a view of it; a
+        second read serves the same view without rebuilding, and the legacy read still returns the float16 payload."""
+        with tempfile.TemporaryDirectory() as d:
+            d = Path(d)
+            root = d / 'c'
+            stub = self._stub(d, 'two', b'backed-fixture-two')
+            spec16 = self._spec16(2)
+            builds = []
+
+            def build():
+                builds.append(1)
+                return spec16.copy()
+            first = cache.artifact(stub, 'spectrum', dict(bands=64), build, root=root, file_backed=True)
+            self.assertEqual(builds, [1])
+            self.assertIsInstance(first, np.memmap)
+            second = cache.artifact(stub, 'spectrum', dict(bands=64), build, root=root, file_backed=True)
+            self.assertEqual(builds, [1])
+            self.assertTrue(np.array_equal(np.asarray(second), np.asarray(first)))
+            legacy = cache.artifact(stub, 'spectrum', dict(bands=64), build, root=root)
+            self.assertEqual(legacy.dtype, np.float16)
+            self.assertTrue(np.array_equal(legacy.astype(np.float32), np.asarray(first)))
+
+    def test_backed_song_matches_legacy_song_slices(self):
+        """A Song over the mmap cuts byte-identical slices to a Song over the RAM float32 array."""
+        import torch
+        from tools.audio_analysis.eval.kick_goal_nn import Song as NetSong
+        with tempfile.TemporaryDirectory() as d:
+            d = Path(d)
+            root = d / 'c'
+            stub = self._stub(d, 'three', b'backed-fixture-three')
+            spec16 = self._spec16(3)
+            build = lambda: spec16.copy()  # noqa: E731
+            rng = np.random.default_rng(4)
+            onset = np.sort(rng.uniform(1.0, 3.0, 40))
+            emit = onset + 0.08
+            mask, y, hard = np.ones(40, bool), rng.integers(0, 2, 40), np.zeros(40, bool)
+            idx, shift = np.arange(6), rng.integers(-1, 2, 6)
+            ram = NetSong(cache.artifact(stub, 'spectrum', dict(bands=64), build, root=root).astype(np.float32),
+                          onset, emit, mask, y, 'fb', hard)
+            backed = NetSong(cache.artifact(stub, 'spectrum', dict(bands=64), build, root=root, file_backed=True),
+                             onset, emit, mask, y, 'fb', hard)
+            self.assertTrue(bool(ram.slices(idx, shift).equal(backed.slices(idx, shift))),
+                            'a Song over the mmap must cut the same slices as a Song over the RAM array')
+
+
+class _Draws:
+    """A default_rng stand-in for the train() sampling block that records every draw it makes."""
+
+    def __init__(self, gen):
+        self.gen, self.calls = gen, []
+
+    def choice(self, idx, draws, p=None):
+        pick = self.gen.choice(idx, draws, p=p)
+        self.calls.append(('choice', tuple(int(x) for x in pick)))
+        return pick
+
+    def integers(self, *a, **k):
+        out = self.gen.integers(*a, **k)
+        self.calls.append(('integers', tuple(int(x) for x in np.asarray(out).ravel())))
+        return out
+
+    def permutation(self, n):
+        out = self.gen.permutation(n)
+        self.calls.append(('permutation', tuple(int(x) for x in out)))
+        return out
+
+
+class TrainMathBatteryTests(unittest.TestCase):
+    """The sampling arithmetic is untouched by the on-disk edits: the drawn indices, the jitter and the batch
+    permutation, the cut slices, and a one-step gradient all match git HEAD's train() exactly, on tiny fixtures and
+    the CPU device only (no GPU, no MPS)."""
+
+    _HEAD = None
+
+    @classmethod
+    def _head_nn(cls):
+        """The kick_goal_nn module as git HEAD has it, executed from a scratch copy (never the worktree's file)."""
+        if cls._HEAD is None:
+            import importlib.util
+            import subprocess
+            src = subprocess.run(['git', '-C', str(Path(__file__).resolve().parents[3]),
+                                  'show', 'HEAD:tools/audio_analysis/eval/kick_goal_nn.py'],
+                                 check=True, capture_output=True, text=True).stdout
+            scratch = Path(tempfile.mkdtemp()) / 'kick_goal_nn_head.py'
+            scratch.write_text(src)
+            mod_spec = importlib.util.spec_from_file_location('kick_goal_nn_head', scratch)
+            head = importlib.util.module_from_spec(mod_spec)
+            mod_spec.loader.exec_module(head)
+            cls._HEAD = head
+        return cls._HEAD
+
+    @staticmethod
+    def _nn():
+        from tools.audio_analysis.eval import kick_goal_nn
+        return kick_goal_nn
+
+    @staticmethod
+    def _tiny_songs():
+        """Two Songs, each a small spectrum with a few dozen training rows and one extra channel (no clips)."""
+        from tools.audio_analysis.eval.kick_goal_nn import Song
+        out = []
+        for k in range(2):
+            rng = np.random.default_rng(10 + k)
+            n = 2000
+            spec = (rng.normal(0, 20, (n, 64)) + 20).astype(np.float32)
+            onset = np.sort(rng.uniform(1.0, 3.0, 60))
+            emit = onset + 0.08
+            mask, y = np.ones(60, bool), rng.integers(0, 2, 60)
+            hard = rng.integers(0, 2, 60) == 1
+            extra = rng.normal(0, 1, (n, 64)).astype(np.float32)
+            out.append(Song(spec, onset, emit, mask, y, f't{k}', hard, (extra,)))
+        return out
+
+    @staticmethod
+    def _train_once(mod, songs, seed):
+        """train() one epoch with the default_rng behind a recorder, so every draw is captured; returns the trained
+        state dict and the draws."""
+        real, recs = np.random.default_rng, []
+
+        def recorded(s, *a, **k):
+            wrap = _Draws(real(s, *a, **k))
+            recs.append(wrap)
+            return wrap
+        want = os.environ.get('KICK_GOAL_NN_DEVICE')
+        os.environ['KICK_GOAL_NN_DEVICE'] = 'cpu'
+        np.random.default_rng = recorded
+        try:
+            net = mod.train(songs, seed, epochs=1, batch=10 ** 9)
+        finally:
+            np.random.default_rng = real
+            if want is None:
+                os.environ.pop('KICK_GOAL_NN_DEVICE', None)
+            else:
+                os.environ['KICK_GOAL_NN_DEVICE'] = want
+        return net.state_dict(), recs[0].calls
+
+    def test_train_sampling_matches_head(self):
+        """For one seed, HEAD and current train() draw the same indices, the same jitter and the same batch
+        permutation (the same numpy stream over the same fixture)."""
+        _, head_draws = self._train_once(self._head_nn(), self._tiny_songs(), 5)
+        _, now_draws = self._train_once(self._nn(), self._tiny_songs(), 5)
+        self.assertTrue(head_draws, 'the sampling must have drawn')
+        self.assertEqual(head_draws, now_draws)
+
+    def test_train_one_step_matches_head(self):
+        """One forward/backward on a tiny batch, weights fixed by the seed: the trained state is byte-identical to
+        the HEAD-materialized training's."""
+        head_state, _ = self._train_once(self._head_nn(), self._tiny_songs(), 7)
+        now_state, _ = self._train_once(self._nn(), self._tiny_songs(), 7)
+        self.assertEqual(sorted(head_state), sorted(now_state))
+        for k, v in head_state.items():
+            np.testing.assert_array_equal(v.numpy(), now_state[k].numpy(), err_msg=k)
+
+    def test_slices_cut_then_moved_equal_cut_on_cpu(self):
+        """On the CPU: a song cut after .to(cpu) cuts exactly what it cut before the move, and the per-batch move
+        leaves the values alone (the train() batch-layout change is arithmetic-free on this device)."""
+        import torch
+        song0 = self._tiny_songs()[0]
+        idx, shift = np.arange(0, 12), np.array([1, -1, 0, 1, -1, 0, 1, -1, 0, 1, -1, 0])
+        cut = song0.slices(idx, shift)
+        moved = song0.to(torch.device('cpu')).slices(idx, shift)
+        self.assertTrue(bool(cut.equal(moved)))
+        self.assertTrue(bool(cut.equal(cut.to(torch.device('cpu')))))
+
+
+class ModelKeyScopeTests(unittest.TestCase):
+    """BUG-4x7jh: one model's key moves with what can change its saved layer, and with nothing else."""
+
+    CFG = 'kick_blend'   # both models; no probing settings of its own
+
+    def _meta(self):
+        trainings = [dict(without=[0], held=['a'], trained=['b', 'c'], clips=[]),
+                     dict(without=[1], held=['b'], trained=['a', 'c'], clips=[])]
+        return dict(parts=dict(finder='f', frames='fm', measures='m'), trainings=trainings,
+                    label_ids=dict(a='1', b='2', c='3', p='7'), content=dict(a='A', b='B', c='C', p='P'))
+
+    def test_model_key_ignores_songs_it_never_touches(self):
+        """A song outside every training (a new generated song nobody fits or predicts) moves no model's key; a
+        held song's audio still does, because the layer npz stores its predictions."""
+        cfg = config.load(self.CFG)
+        base = {m: run.model_key(cfg, m, self._meta()) for m in cfg.models}
+        wide = self._meta()
+        wide['content'] = dict(wide['content'], p='P2')
+        wide['label_ids'] = dict(wide['label_ids'], p='8')
+        self.assertEqual({m: run.model_key(cfg, m, wide) for m in cfg.models}, base)
+        who_moves = {m: run.model_key(cfg, m, dict(self._meta(), content=dict(self._meta()['content'], a='A2')))
+                     for m in cfg.models}
+        self.assertNotEqual(who_moves, base)
+
+    def test_net_code_ignores_the_trees_fitting(self):
+        """BUG-4x7jh: the net's code term covers only the net's training path, so a change to models.fit_trees (even
+        a comment) moves the trees' key and not the net's."""
+        from tools.audio_analysis.lab import models
+        cfg = config.load(self.CFG)
+        meta = self._meta()
+        base = {m: run.model_key(cfg, m, meta) for m in cfg.models}
+        real = models.fit_trees
+
+        def another_fit(*a, **k):
+            return real(*a, **k)
+        models.fit_trees = another_fit
+        try:
+            now = {m: run.model_key(cfg, m, meta) for m in cfg.models}
+        finally:
+            models.fit_trees = real
+        self.assertEqual(now['net'], base['net'])
+        self.assertNotEqual(now['trees'], base['trees'])
+
+    def test_trees_code_ignores_the_net_training(self):
+        """The trees' code term covers only the trees path (models.fit_trees, tree_rows): a change to
+        kick_goal_nn.train moves the net's key and not the trees'."""
+        from tools.audio_analysis.eval import kick_goal_nn
+        cfg = config.load(self.CFG)
+        meta = self._meta()
+        base = {m: run.model_key(cfg, m, meta) for m in cfg.models}
+        real = kick_goal_nn.train
+
+        def another_train(*a, **k):
+            return real(*a, **k)
+        kick_goal_nn.train = another_train
+        try:
+            now = {m: run.model_key(cfg, m, meta) for m in cfg.models}
+        finally:
+            kick_goal_nn.train = real
+        self.assertNotEqual(now['net'], base['net'])
+        self.assertEqual(now['trees'], base['trees'])
+
+    def test_sampling_probes_leave_the_model_keys(self):
+        """BUG-4x7jh: the sampling.gain_probes setting rides the run's scoring, not a model's key; the probe copies
+        themselves still do, as held songs (the layer npz stores their predictions)."""
+        base = config.load(self.CFG)
+        probed = config.Experiment(**{**base.__dict__, 'sampling': {**base.sampling, 'gain_probes': [-6.0, 6.0]}})
+        self.assertEqual({m: run.model_key(probed, m, self._meta()) for m in probed.models},
+                         {m: run.model_key(base, m, self._meta()) for m in base.models})
+        meta = self._meta()
+        meta['trainings'] = [dict(n, held=n['held'] + ['p']) for n in meta['trainings']]
+        self.assertNotEqual({m: run.model_key(probed, m, meta) for m in probed.models},
+                            {m: run.model_key(base, m, self._meta()) for m in base.models})
+
+    def test_plan_matches_the_imported_run(self):
+        """BUG-1yrqo: run.py's --plan path in its own process derives the same net and trees model keys the imported
+        run does, so imported-vs-__main__ env drift (recipe or import order) cannot silently fork the keys. --plan
+        only the id and nothing trains."""
+        import subprocess
+        cfg = config.load('kick_v2_final')
+        lab, songs, meta = run.setup(cfg)
+        want = {m: run.model_key(cfg, m, meta) for m in cfg.models}
+        prog = ('import json, runpy, sys\n'
+                'sys.argv = ["run.py", "--plan", "kick_v2_final"]\n'
+                f'runpy.run_path({str(Path(run.__file__).resolve())!r}, run_name="__main__")\n'
+                'from tools.audio_analysis.lab import config, run\n'
+                'cfg = config.load(sys.argv[2])\n'
+                'lab, songs, meta = run.setup(cfg)\n'
+                'keys = {m: run.model_key(cfg, m, meta) for m in cfg.models}\n'
+                'print(json.dumps(keys))\n')
+        r = subprocess.run([sys.executable, '-P', '-c', prog], capture_output=True, text=True,
+                           cwd=str(Path(tempfile.gettempdir())))
+        self.assertEqual(r.returncode, 0, r.stderr[-2000:])
+        self.assertEqual(json.loads(r.stdout.strip().splitlines()[-1]), want)
+
+
 if __name__ == '__main__':
     unittest.main()
