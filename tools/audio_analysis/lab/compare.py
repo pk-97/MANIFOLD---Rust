@@ -3,9 +3,10 @@
 interleaved so a slow machine hour hurts both alike, scores both from their saves, refuses to compare runs whose exam
 songs or labels differ, and prints the exam A/B (detector_compare), then the generated songs on their own. The text
 is also written to the lab cache's compare/ folder. Configs with one net per song are refused: they cannot choose a
-song's cutoff on models that never saw it.
+song's cutoff on models that never saw it. --release scores both on the release holdout alone (lab/run.py) and says,
+loudly, that the holdout is spent.
 
-Usage: compare.py CONFIG_A CONFIG_B [--seeds 0,1,2] [--layer net|trees|combined] [--exam-of RUN_ID] [--cpu]
+Usage: compare.py CONFIG_A CONFIG_B [--seeds 0,1,2] [--layer net|trees|combined] [--exam-of RUN_ID] [--cpu] [--release]
        (layer: default each final; --exam-of adds the A/B on just the songs of that earlier run's exam, lines
        prefixed 'old exam | '; --cpu lets a net train on the CPU, otherwise it refuses)"""
 import sys
@@ -26,6 +27,14 @@ def check(a, b):
     for k in ('labels_sha256', 'exam', 'recall_only'):
         if a[k] != b[k]:
             raise ValueError(f'{k} differs between {a["run_id"]} and {b["run_id"]}: not a fair A/B')
+
+
+def banner(holdout, out):
+    """The release holdout was scored: say so where nobody can miss it."""
+    line = '!' * 100
+    for m in (line, f'!!! RELEASE HOLDOUT CONSUMED: {len(holdout)} held-out songs were scored ({" ".join(holdout)}).',
+              '!!! They are no longer untouched: never tune on this result; a fresh holdout needs new songs.', line):
+        out(m)
 
 
 def robustness(reps, recall_only, out):
@@ -106,6 +115,9 @@ def main():
     from tools.audio_analysis.lab.config import load
     from tools.audio_analysis.lab.score import score_run
     a = sys.argv[1:]
+    release = '--release' in a
+    if release:
+        a.remove('--release')
     if len(a) < 2:
         sys.exit(__doc__)
     cfgs = [load(a[0]), load(a[1])]
@@ -118,11 +130,11 @@ def main():
     if old_id:
         from tools.audio_analysis.lab.score import old_exam
         old_exam(old_id, [])   # a missing run id fails now, not after the training
-    ids = [run_id_of(a[0]), run_id_of(a[1])]
+    ids = [run_id_of(a[0], release), run_id_of(a[1], release)]
     todo = [(k, s) for s in seeds for k in (0, 1) if not (RUNS / ids[k] / f's{s}.npz').exists()]
     t0 = time.time()
     for n, (k, s) in enumerate(todo):
-        run(a[k], [s], cpu='--cpu' in a)
+        run(a[k], [s], cpu='--cpu' in a, release=release)
         left = len(todo) - n - 1
         if left:
             per = (time.time() - t0) / (n + 1)
@@ -138,12 +150,19 @@ def main():
     def out(m):
         lines.append(m)
         print(m)
+    first = reps[0][seeds[0]]
+    if first.get('release'):
+        banner(first['holdout'], out)
     for k, c in enumerate(cfgs):
         r = reps[k][seeds[0]]
         out(f'{"AB"[k]}: {c.name} (run {ids[k]}, layer {r["layer"]}) sampling {r["sampling"]}, train {list(c.train)}, '
             f'train {sum(reps[k][s]["timings"]["train_s"] for s in seeds) / 60:.1f} min over {len(seeds)} seeds')
-    first = reps[0][seeds[0]]
-    out(f'exam: {len(first["exam"])} project songs, seeds {seeds}, excluded by audit {first["excluded"]}')
+    out(f'exam: {len(first["exam"])} project songs, seeds {seeds}, excluded by audit {first["excluded"]}'
+        + ('' if first.get('release') else f', release holdout kept out: {first.get("holdout", [])}'))
+    for k, c in enumerate(cfgs):
+        gone = reps[k][seeds[0]].get('variants_excluded')
+        if gone:
+            out(f'{"AB"[k]}: mix variants excluded (offset not proven or not usable): {len(gone)}: {" ".join(sorted(gone))}')
     compare([[reps[k][s]['results']['net']['per_song'] for s in seeds] for k in (0, 1)], tuple(first['recall_only']), out)
     for m in coincident_lines([[reps[k][s] for s in seeds] for k in (0, 1)], cfgs[0].family):
         out(m)
@@ -157,9 +176,11 @@ def main():
         if reps[k][seeds[0]].get('probes'):
             out(f'{"AB"[k]}: {c.name}')
             robustness([reps[k][s] for s in seeds], first['recall_only'], out)
+    if first.get('release'):
+        banner(first['holdout'], out)
     d = RUNS.parent / 'compare'
     d.mkdir(parents=True, exist_ok=True)
-    path = d / f'{cfgs[0].name}_vs_{cfgs[1].name}.txt'
+    path = d / f'{cfgs[0].name}_vs_{cfgs[1].name}{"_RELEASE" if release else ""}.txt'
     path.write_text('\n'.join(lines) + '\n')
     print(f'-> {path}')
 

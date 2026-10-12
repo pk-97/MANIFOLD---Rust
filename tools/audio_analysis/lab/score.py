@@ -2,7 +2,8 @@
 """Scores a run from its saves (docs/DETECTOR_LAB_DESIGN.md D7, D8): saved held-out probabilities, cached candidates
 and the labels; no audio, no GPU. The rules are detector_eval.held_out's: each song at a cutoff chosen on other
 project songs, never on generated or recall-only songs; with song groups, on the pair models' predictions, which never
-saw the scored group. Writes report_s<seed>.json per seed (report_<layer>_s<seed>.json for a named layer): exam songs
+saw the scored group. Outside a --release run the release holdout (registry.release_holdout) is neither scored nor in
+any cutoff pool, so no dev result reads its labels. Writes report_s<seed>.json per seed (report_<layer>_s<seed>.json for a named layer): exam songs
 under results.net.per_song (detector_compare's layout), generated songs in their own section.
 
 Usage: score.py RUN_ID [--layer net|trees|combined] [--exam-of OLD_RUN_ID]   (default: the run's final layer;
@@ -133,6 +134,18 @@ def layer_of(meta, z, layer):
     return held, pool
 
 
+def without_holdout(meta, held, pool, probes):
+    """(held, pool) with the release holdout gone, unless the run is a --release run: its songs and their probes are
+    not scored, and no other song's cutoff is chosen on them."""
+    hold = set(meta.get('holdout') or ())
+    if meta.get('release') or not hold:
+        return held, pool
+    held = {t: v for t, v in held.items() if t not in hold and (probes.get(t) or {}).get('parent') not in hold}
+    if pool is not None:
+        pool = {t: {u: q for u, q in o.items() if u not in hold} for t, o in pool.items() if t in held}
+    return held, pool
+
+
 def coincident_section(family, co, meta):
     """The report's coincident block: recall on the family's labels within COINCIDENT_S of a partner-family label,
     per song (exam and generated) and pooled over the exam songs the partner labels. None for a family without a
@@ -176,15 +189,18 @@ def score_run(run_id, layer=None, log=print):
                     lab = dict(lab, **{p: lab[v['parent']]})
                     held[p] = z[f'{layer}__{p}']
                     pool[p] = pool[v['parent']]
+        held, pool = without_holdout(meta, held, pool, probes)
         co = {}
         ps = score(cfg, lab, songs, held, pool, partner=partner, coincident=co)
         timing = json.loads((d / f's{seed}.json').read_text())
         rep = dict(run_id=run_id, names=meta['names'], seed=seed, layer=layer, honest_cutoffs=pool is not None,
                    labels_sha256=sha, config=meta['config'],
                    sampling=meta['config']['sampling'], exam=meta['exam'], excluded=meta['excluded'],
+                   release=bool(meta.get('release')), holdout=meta.get('holdout') or [],
+                   variants_excluded=meta.get('variants_excluded') or {},
                    recall_only=meta['recall_only'], results=dict(net=dict(per_song={t: ps[t] for t in meta['exam']})),
                    generated={t: ps[t] for t in meta['generated']},
-                   probes={str(g): {v['parent']: ps[p] for p, v in probes.items() if v['gain_db'] == g}
+                   probes={str(g): {v['parent']: ps[p] for p, v in probes.items() if v['gain_db'] == g and p in ps}
                            for g in sorted({v['gain_db'] for v in probes.values()})},
                    coincident=coincident_section(cfg.family, co, meta),
                    timings=dict(build_s=timing['build_s'], train_s=timing['train_s'], score_s=round(time.time() - t0, 1)))

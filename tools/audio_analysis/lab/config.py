@@ -18,6 +18,8 @@ PRECISIONS = ('float32', 'mixed')
 # templates: null, or {'k': K} sound templates fitted per training (lab/templates.py), three tree inputs.
 TREE_DEFAULTS = dict(templates=None)
 TREE_KEYS = {'measures', 'max_iter', 'learning_rate', 'max_leaf_nodes', 'min_samples_leaf', 'l2', *TREE_DEFAULTS}
+# Sampling keys that add copies of songs; absent, null and false all mean none, and leave the config key as before.
+COPY_KEYS = ('gain_variants', 'gain_probes', 'mix_variants')
 COMBINES = {'net': ('net',), 'trees': ('trees',), 'mean_logit': ('net', 'trees')}
 
 
@@ -58,6 +60,11 @@ class Experiment:
         """None, or dB gains: each exam song also predicted (held out, never trained on) at these gains, scored by
         score.py as the level-robustness section."""
         return self.sampling.get('gain_probes')
+
+    @property
+    def mix_variants(self):
+        """True: each exam song's proven mix and master variants (registry.variants_of) train as its copies."""
+        return bool(self.sampling.get('mix_variants'))
 
     def generated_as_clips(self):
         return 'generated' in self.train and self.sampling['generated'] != 'songs'
@@ -117,7 +124,7 @@ def check(d, where=''):
     if s.get('per_song') != 'median':
         raise ValueError(f'{where}: sampling.per_song is "median" in v1 (label-rich draws: BUG-9ngk8.5 (label-rich songs))')
     gen = s.get('generated')
-    if ('generated' in train) != (gen is not None) or set(s) - {'per_song', 'generated', 'gain_variants', 'gain_probes'}:
+    if ('generated' in train) != (gen is not None) or set(s) - {'per_song', 'generated', *COPY_KEYS}:
         raise ValueError(f'{where}: sampling.generated is set exactly when generated songs train')
     if gen is not None and gen != 'songs' and not (isinstance(gen, float) and 0 < gen < 1):
         raise ValueError(f'{where}: sampling.generated is "songs" or a share between 0 and 1')
@@ -129,13 +136,15 @@ def check(d, where=''):
     gp = s.get('gain_probes')
     if gp is not None and not (isinstance(gp, list) and gp and all(isinstance(v, (int, float)) and v for v in gp)):
         raise ValueError(f'{where}: sampling.gain_probes is null or a list of non-zero dB gains')
+    if s.get('mix_variants') not in (None, False, True):
+        raise ValueError(f'{where}: sampling.mix_variants is true, false or null')
 
 
 def build(name, d):
     """An Experiment from a config dict (schema 1 migrates); seeds may be absent (a run's meta drops them)."""
     d = migrate(d)
     if 'sampling' in d:   # null is absent: the key (and run ids) stay as before
-        d = dict(d, sampling={k: v for k, v in d['sampling'].items() if k not in ('gain_variants', 'gain_probes') or v is not None})
+        d = dict(d, sampling={k: v for k, v in d['sampling'].items() if k not in COPY_KEYS or v not in (None, False)})
     check({k: v for k, v in d.items() if k != 'seeds'} | {'seeds': d.get('seeds', [])}, name)
     return Experiment(name=name, family=d['family'], candidates=d['candidates'], models=d['models'],
                       combine=d['combine'], stage=d['stage'], sampling=d['sampling'], train=tuple(d['train']),
