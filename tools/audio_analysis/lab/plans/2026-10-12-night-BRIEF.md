@@ -1,5 +1,12 @@
 # Overnight Detector Lab run, 2026-10-12 — orchestrator brief
 
+**Amendment (Peter, 2026-10-12 late): the two release steps are removed.** The plan is now 6 steps: step 1 run
+kick_v2_final, step 2 run snare_v2_mid, steps 3 to 6 the four compares (kick mix, snare mix, snare hardneg, snare
+coincident). Releases happen in the morning from whichever configs win. Wherever this brief says "8 steps", read 6;
+wherever it numbers the compares 5 to 8, read 3 to 6; ignore every row, timing and rule about release steps, and
+the wake condition "both releases failed" no longer exists. The final summary line is `all 6 steps passed`.
+Everything else stands.
+
 You run one thing tonight: the committed plan `tools/audio_analysis/lab/plans/2026-10-12-night.json` (8 steps) through
 `tools/audio_analysis/lab/overnight.py`, on main at or after `8133b104a`. You watch it, you restart or continue it
 when a step dies, you write the morning record. You do not improve anything. Peter's two rules: the worst thing we
