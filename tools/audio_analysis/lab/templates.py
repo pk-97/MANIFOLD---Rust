@@ -62,14 +62,15 @@ def _kmeans(x, w, k, random_state):
         return KMeans(n_clusters=k, n_init=4, random_state=random_state).fit(x, sample_weight=w).cluster_centers_
 
 
-def fit(inputs, clips, k, random_state, share=None):
+def fit(inputs, clips, k, random_state, share=None, parents=None):
     """(k, span, 32) templates from the positive training rows of the given songs only (the training's trained songs
-    and clips). At most CAP patches per song; weighted like tree rows (each song equal, clips together `share` of the
-    weight when set); kick_goal_templates.fit_templates otherwise: empty patches dropped, k-means on unit patches."""
+    and clips). At most CAP patches per song; weighted like tree rows (each song equal, its copies sharing its weight
+    (parents: copy -> its song), clips together `share` of the weight when set); kick_goal_templates.fit_templates
+    otherwise: empty patches dropped, k-means on unit patches."""
     from tools.audio_analysis.eval.kick_goal_templates import BANDS, unit
     from tools.audio_analysis.lab.models import weights
     rng = np.random.default_rng(random_state)
-    ps, is_clip = [], []
+    ps, is_clip, keys = [], [], []
     for u, (p, (mask, y, _)) in inputs.items():
         p = p[mask & (y == 1)]
         p = p[p.sum(axis=(1, 2)) > 0]
@@ -78,10 +79,11 @@ def fit(inputs, clips, k, random_state, share=None):
         if len(p):
             ps.append(p)
             is_clip.append(u in clips)
+            keys.append((parents or {}).get(u, u))
     n = sum(len(p) for p in ps)
     if n < k:
         raise ValueError(f'{n} positive patches for {k} templates')
-    w = weights([np.ones(len(p)) for p in ps], [np.zeros(len(p), bool) for p in ps], is_clip, share)
+    w = weights([np.ones(len(p)) for p in ps], [np.zeros(len(p), bool) for p in ps], is_clip, share, keys)
     x = np.concatenate(ps)
     return _kmeans(unit(x), np.concatenate(w), k, random_state).reshape(k, x.shape[1], BANDS)
 

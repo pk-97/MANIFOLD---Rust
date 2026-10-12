@@ -27,7 +27,7 @@ HASHES = Path.home() / '.cache/manifold/detector-lab/source_hashes.json'   # pat
 FAMILIES = {'snare': ('snare_labels.json', 'snare_labels_generated.json'),
             'bass': ('bass_labels.json', 'bass_labels_generated.json'),
             'synth': ('synth_labels.json', 'synth_labels_generated.json'),
-            'kick': ('kick_labels.json', 'kick_labels_generated.json')}
+            'kick': ('kick_labels.json', 'kick_labels_project.json', 'kick_labels_generated.json')}
 GEN_SR = 48000
 
 
@@ -136,6 +136,94 @@ def gain_copies(song, count, lo, hi):
     return [gain_copy(song, g) for g in gain_gains(song.id, count, lo, hi)]
 
 
+# Mix and master variants (sampling.mix_variants): another bounce of a project song that the catalogue judged
+# same_arrangement against the lab mix, with its own export offset proven by lab/offsets.py --variants. A variant is a
+# training copy of its song like a gain copy: its own audio and content id, the song's labels moved onto its timeline.
+VARIANT_PROOFS = Path(__file__).with_name('variant_proofs.json')
+# Label fields that hold times (s) on the mix timeline, as points or [start, end] spans; every other field is a
+# setting. A field in neither list is refused, so a new time field can never ride along unshifted.
+LABEL_TIMES = ('positives', 'hard_neg', 'dropped', 'dense_pos', 'dense_all')
+LABEL_SPANS = ('unscored', 'loop_spans', 'dense')
+LABEL_SETTINGS = ('kind', 'positives_only', 'timing_shift_ms', 'unmuted', 'drum_stem', 'sources', 'builder', 'proof',
+                  'counts', 'kinds', 'window_s', 'tol_s')
+
+
+def variant_id(parent_id, sha):
+    return f'{parent_id}@mix-{sha[:10]}'
+
+
+def variant_copy(song, rec):
+    """A proven variant (a row of variant_proofs.json) of song as a training copy. Its audio is the variant file read
+    at the song's rate; its offset is the one its labels use, which lab/offsets.py proved on its own audio."""
+    import dataclasses
+    return dataclasses.replace(song, id=variant_id(song.id, rec['sha256']), source=dict(how='variant', paths=[rec['path']]),
+                               source_sha256=(rec['sha256'],), offset_s=rec['offset_s'], proof=f"lab:{rec['status']}",
+                               audit_override=None, gain_db=None, parent=song.id, probe=False)
+
+
+def is_variant(song):
+    return song.source['how'] == 'variant'
+
+
+def variant_shift(song, parent):
+    """Seconds a variant's timeline runs behind its song's: the difference of their proven export offsets."""
+    return song.offset_s - parent.offset_s
+
+
+def variant_labels(labels, shift_s, duration_s):
+    """The song's labels on a variant's timeline: every time moved by shift_s, the duration the variant's."""
+    out = {}
+    for k, v in labels.items():
+        if k in LABEL_TIMES:
+            out[k] = [t + shift_s for t in v]
+        elif k in LABEL_SPANS:
+            out[k] = [[a + shift_s, b + shift_s] for a, b in v]
+        elif k == 'duration_s':
+            out[k] = duration_s
+        elif k == 'offset_s':
+            out[k] = None if v is None else v + shift_s
+        elif k in LABEL_SETTINGS:
+            out[k] = v
+        else:
+            raise ValueError(f'label field {k!r} is neither a time nor a setting: add it to registry.LABEL_* first')
+    return out
+
+
+def variant_proofs():
+    """{parent song: [proof rows]}: every variant lab/offsets.py --variants judged, proven or not."""
+    rows = json.loads(VARIANT_PROOFS.read_text()) if VARIANT_PROOFS.exists() else {}
+    out = {}
+    for vid, r in sorted(rows.items()):
+        out.setdefault(r['parent'], []).append(dict(r, id=vid))
+    return out
+
+
+def variants_of(song, proofs):
+    """([(training copy, its proof row)], {variant id: why it is not one}) for one song from variant_proofs()."""
+    used, excluded = [], {}
+    for r in proofs.get(song.id, ()):
+        if r['status'].startswith('proven'):
+            used.append((variant_copy(song, r), r))
+        else:
+            excluded[r['id']] = r['status']
+    return used, excluded
+
+
+# The release holdout: about one project song in six, picked by a salted hash of its id alone, so the slice never
+# moves when songs are added or reordered. Lab runs never score these songs unless invoked with --release.
+HOLDOUT_SALT = 'manifold-detector-release-holdout-1'
+HOLDOUT_ONE_IN = 6
+
+
+def in_holdout(song_id):
+    return int(hashlib.sha256(f'{HOLDOUT_SALT}:{song_id}'.encode()).hexdigest(), 16) % HOLDOUT_ONE_IN == 0
+
+
+def release_holdout(songs):
+    """The holdout songs among songs ({id: Song}): project songs only, in the given order."""
+    return [t for t, s in songs.items() if s.kind == 'project' and s.parent is None and in_holdout(t)]
+
+
 # Wrapping below the original mix() body. Reader note: the wraps chain must still unwrap to that byte-identical
 # body (cache.loader_id()/code_id(mix) walk __wrapped__, lab/cache.py:43-44) and the body's referenced globals
 # (_export, read_audio) are untouched, so no artifact stamp moves; only the decode is memoized. The cache is
@@ -156,6 +244,11 @@ def _decoded(key):
     """The body's decoded parent-scale audio, one bounded entry per process."""
     from types import SimpleNamespace
     how, paths, start_s, end_s, sample_rate = key
+    if how == 'variant' and not paths[0].lower().endswith('.wav'):
+        # A variant is any bounce the catalogue aligned (mp3, aiff, flac): decoded by the catalogue's own reader, so
+        # its measured lag (decoder delay included) holds. Its content id is its file's bytes, so no cached stamp moves.
+        from tools.audio_analysis.lab import remix
+        return remix.read_mono(paths[0], sample_rate)
     return _mix_body(SimpleNamespace(source=dict(how=how, paths=list(paths), start_s=start_s, end_s=end_s),
                                       sample_rate=sample_rate))
 

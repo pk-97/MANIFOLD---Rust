@@ -1,13 +1,17 @@
 #!/usr/bin/env python3
-"""New snare songs from Peter's 2024/2025 projects: newest WIP mixdown against the newest .als (Peter, 2026-10-10:
-the latest WIP matches the latest project; no other pairings are tried).
+"""Project songs from Peter's sets and their mixdowns. PROJECTS: newest WIP mixdown against the newest .als of a 2024/2025
+project folder (Peter, 2026-10-10: the latest WIP matches the latest project). PAIRS: the label-ready songs of the
+detector data catalogue (catalog.py usable --ready), each with the set and bounce chosen from every ready set against
+every local bounce: the pair proven by the fit below, the set saved closest to the bounce, wav before mp3. A pair wins
+over its song's project folder.
 
 Timing proof (kick survey's wip_sections method): export start = whole bars + one lag (+-80 ms), chosen by the Pearson r
 between a note pattern on the 16th grid and the mix's onset strength. Run twice, independently: kick notes against the
 40-400 Hz onset strength, snare notes against the 1-8 kHz onset strength. Proven when both pick the same bar, or when
 only one pattern exists and it wins clearly (r >= 0.3, margin >= 1 sd of the other candidates).
 Writes GOAL/snare_wip/{song}.npy (48 kHz mono float32) and GOAL/snare_wip.json ({song: als, wip, offset_s, bpm, proof}).
-Projects are read only through als_extract (sha-checked); nothing is written near them. Usage: detector_wip.py"""
+Projects are read only through als_extract (sha-checked); nothing is written near them.
+Usage: detector_wip.py [SONG...]   (named songs are proven again and merged into snare_wip.json; the rest are kept)"""
 import json
 import os
 import re
@@ -27,6 +31,41 @@ PROJECTS = {  # song -> project folder; duplicates of goal songs or of each othe
     'growth': '2025/Growth Project', 'linear': '2025/Linear Project', 'motion': '2025/Motion Project',
     'push': '2025/Push Project', 'stagnate': '2025/Stagnate Project', 'weight': '2025/Weight Project'}
 AUDIO = ('.wav', '.mp3', '.aif', '.aiff', '.flac', '.m4a')
+# Song -> (set, bounce) under the music folder. Know You're There: the live-edit set holds the premaster set's notes and
+# clips unchanged before the song's end (bar 136) and only mutes some; the premaster set's notes after the end send its
+# snare fit to bar 184.
+PAIRS = {
+    'affect': ('Ableton Projects/2025/Affect Project/Affect V2.als', 'Album Draft 2027/11 - Affect (Give Me A Reason) - WIP 2.mp3'),
+    'break': ('Ableton Projects/Ableton 11/Break Project/Break - SONIBLE.als',
+              'Ableton Projects/Ableton 11/Break Project/FINALS/LATENT SPACE - Break - [FINAL 02].wav'),
+    'concentrate': ('Ableton Projects/Ableton 11/Faux Project/Faux.als', 'Ableton Projects/Ableton 11/Faux Project/Concentrate WIP 3.mp3'),
+    'control': ('Ableton Projects/Ableton 11/Rise Project/Rise.als', 'Ableton Projects/Ableton 11/Rise Project/Control - WIP 5.mp3'),
+    'desire': ('Ableton Projects/Ableton 11/Wait Project/Wait.als', 'Ableton Projects/Ableton 11/Wait Project/Wait WIP 2.mp3'),
+    'dream': ('Ableton Projects/Ableton 11/Idle Project/Idle.als',
+              'Ableton Projects/Ableton 11/Idle Project/FINALS/LATENT SPACE - Dream [FINAL MIX 3].wav'),
+    'echo': ('Ableton Projects/Ableton 11/Clue Project/Clue V2.als',
+             'Ableton Projects/Ableton 11/Clue Project/FINAL - MAYBE/LATENT SPACE - Echo [FINAL].wav'),
+    'fortuity': ('Ableton Projects/2025/Fortuity Project/Fortuity V2.als',
+                 'Album Draft 2027/12 - Fortuity (Flowers In Her Head - Draft Vox) - WIP 3 - SINGLE.mp3'),
+    'go_with_you': ('Ableton Projects/Ableton 11/Bright Project/Bright.als', 'Ableton Projects/Ableton 11/Bright Project/Go With You WIP 1.mp3'),
+    'know_youre_there': ("Ableton Projects/2024/Sound Design Session Project/05 - Know You're There - LIVE EDITS.als",
+                         "EMERGENCE - ALBUM 2026/PRE MASTERS T2/05 - Know You're There - PREMASTER T2.wav"),
+    'mendez': ('Ableton Projects/Ableton 11/Mendez X PK Project/Mendez X PK V2.als',
+               'Ableton Projects/Ableton 11/Mendez X PK Project/Mendez X PK - The Future.mp3'),
+    'motion': ('Ableton Projects/2025/Motion Project/Motion - Dub - Mixdown V2.als', 'Ableton Projects/2025/Motion Project/Motion - WIP 9.mp3'),
+    'paces': ('Ableton Projects/Ableton 11/Map Project/Map.als',
+              'Ableton Projects/Ableton 11/Map Project/FINALS/LATENT SPACE - Paces - [FINAL 02].wav'),
+    'pulse': ('Ableton Projects/Ableton 11/Pulse Project/Pulse.als', 'Ableton Projects/Ableton 11/Pulse Project/Pulse - Concept 1.mp3'),
+    'running': ('Ableton Projects/Ableton 11/Running Remaster - SONIBLE Project/Running Remaster - FINAL.als',
+                'Ableton Projects/Ableton 11/Running Remaster - SONIBLE Project/FINALS/LATENT SPACE - Running - [FINAL 03].wav'),
+    'skyline': ('Ableton Projects/Ableton 11/Stay Project/Stay - BETA.als', 'Ableton Projects/Ableton 11/Stay Project/Skyline WIP 1.mp3'),
+    'sol': ('Ableton Projects/Ableton 11/Sol Project/Sol V2 - Update.als',
+            'Ableton Projects/Ableton 11/Sol Project/FINAL/LATENT SPACE - Sol [REMASTER FINAL].wav'),
+    'touch': ('Ableton Projects/2024/Sense (Touch) Project/Sense - Album Master.als',
+              'EMERGENCE - ALBUM 2026/PRE MASTERS/10 - Touch - ALBUM FINAL 2 - PREMASTER.wav'),
+    'waypoints': ('Ableton Projects/Other And Backups/Ways Project/Waypoints PREMASTER T2.als',
+                  'EMERGENCE - ALBUM 2026/PRE MASTERS T2/09 - Waypoints - PREMASTER T2.wav'),
+}
 KICK = re.compile(r'kick|\bbd\b|bass ?drum', re.I)
 
 
@@ -90,15 +129,22 @@ def prove(env, beats, dur, spb):
     return dict(k=int(k0), r=round(best[k0][0], 3), margin_sd=round(float((best[k0][0] - best[order[1]][0]) / (rs.std() + 1e-9)), 2), lag=lag)
 
 
-def one(item):
-    song, folder = item
+def source(song):
+    """(set, mixdown) paths: the song's catalogue pair, else the newest .als and audio file of its project folder."""
+    if song in PAIRS:
+        return tuple(BASE.parent / p for p in PAIRS[song])
+    proj = BASE / PROJECTS[song]
+    als = max(proj.glob('*.als'), key=lambda p: p.stat().st_mtime)
+    wip = max((p for p in proj.iterdir() if p.is_file() and p.suffix.lower() in AUDIO), key=lambda p: p.stat().st_mtime)
+    return als, wip
+
+
+def one(song):
     from scipy.ndimage import maximum_filter1d
     from tools.audio_analysis.eval.als_extract import extract
     from tools.audio_analysis.eval.kick_goal_eval import GOAL
     from tools.audio_analysis.eval.kick_goal_wip_sections import ENV_BIAS, band_amp_rise, load, onset_env
-    proj = BASE / folder
-    als = max(proj.glob('*.als'), key=lambda p: p.stat().st_mtime)
-    wip = max((p for p in proj.iterdir() if p.is_file() and p.suffix.lower() in AUDIO), key=lambda p: p.stat().st_mtime)
+    als, wip = source(song)
     res = extract(str(als))
     row = dict(song=song, als=str(als), wip=str(wip))
     if len(res['tempo_points']) != 1:
@@ -126,12 +172,23 @@ def one(item):
 
 def main():
     from tools.audio_analysis.eval.kick_goal_eval import GOAL
+    named = sys.argv[1:]
+    songs = named or list(dict.fromkeys(list(PROJECTS) + list(PAIRS)))
+    unknown = [t for t in songs if t not in PROJECTS and t not in PAIRS]
+    if unknown:
+        sys.exit(f'not a project or catalogue pair: {unknown}')
     with ProcessPoolExecutor(6) as ex:
-        rows = list(ex.map(one, PROJECTS.items()))
+        rows = list(ex.map(one, songs))
     for r in rows:
         k, s = r.get('kick'), r.get('snare')
         print(f"{r['song']:16s} {r['status']:30s} kick {k and (k['k'] * 4, k['r'], k['margin_sd'])} snare {s and (s['k'] * 4, s['r'], s['margin_sd'])} | {Path(r['wip']).name}", flush=True)
-    (GOAL / 'snare_wip.json').write_text(json.dumps({r['song']: r for r in rows if 'offset_s' in r}, indent=1))
+    path = GOAL / 'snare_wip.json'
+    out = json.loads(path.read_text()) if named and path.exists() else {}
+    for r in rows:
+        out.pop(r['song'], None)
+        if 'offset_s' in r:
+            out[r['song']] = r
+    path.write_text(json.dumps(out, indent=1))
 
 
 if __name__ == '__main__':

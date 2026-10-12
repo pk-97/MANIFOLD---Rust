@@ -16,7 +16,8 @@ labels file holds (detector_eval scores against it):
   positives count. A song with an every-drum stem (Family.drum_stems) replaces them with the stem's unexplained loud
   moments (drum_stem_blind), and its unknown notes stay unscored only there.
 - hard_neg: vouched non-events: kicks, melodic note starts and excluded or other voices more than far_s from any
-  positive, outside loop spans (a melodic note in a drum loop may sit on a baked-in snare).
+  positive, outside loop spans (a melodic note in a drum loop may sit on a baked-in snare). For the kick family
+  (own_kicks) the kicks are the family's notes: negatives are the rest, far_s from every kick note.
 - positives_only: recall-only songs.
 Projects are read only through als_extract (read-only, sha-checked).
 """
@@ -59,6 +60,12 @@ class Family:
     drum_stems: tuple = ()      # (song, stem path or paths): the song's every-drum stem (drum_stem_blind)
     # (goal song, unknown-stem regex): goal songs whose mix is the sum of their stems (multitrack_song).
     multitracks: tuple = ()
+    # The family is the kick: the project's kicks are its own notes, never vouched negatives, and a negative keeps far_s
+    # from every one of them, heard or not.
+    own_kicks: bool = False
+    # Songs the family leaves out though their set is proven: a muted group the bounce played, which export_groups
+    # cannot see in a dense mix.
+    skip: tuple = ()
 
 
 def builder_id(module_file):
@@ -476,10 +483,15 @@ def song(g, t, fam):
     # Proven kicks are not the family's sound even inside unknown audio (Peter, 2026-10-11); other negatives inside
     # unknown audio stay unknown.
     neg = np.concatenate([mel, neg_own])
-    neg = np.concatenate([kicks, neg[~inside(neg, loops)] if loops else neg])
-    if len(pos):
-        j = np.clip(np.searchsorted(pos, neg), 1, len(pos) - 1) if len(pos) > 1 else np.zeros(len(neg), int)
-        near = np.minimum(np.abs(neg - pos[np.clip(j - 1, 0, len(pos) - 1)]), np.abs(neg - pos[j]))
+    if fam.own_kicks:
+        neg = neg[~inside(neg, loops)] if loops else neg
+        ref = np.sort(np.concatenate([every, kicks]))
+    else:
+        neg = np.concatenate([kicks, neg[~inside(neg, loops)] if loops else neg])
+        ref = pos
+    if len(ref):
+        j = np.clip(np.searchsorted(ref, neg), 1, len(ref) - 1) if len(ref) > 1 else np.zeros(len(neg), int)
+        near = np.minimum(np.abs(neg - ref[np.clip(j - 1, 0, len(ref) - 1)]), np.abs(neg - ref[j]))
         neg = neg[near > fam.far_s]
     return dict(kind='project', duration_s=dur, positives=sorted(map(float, pos)), unscored=[list(map(float, u)) for u in unscored],
                 loop_spans=[list(map(float, u)) for u in loops], hard_neg=sorted(map(float, np.unique(np.round(neg, 4)))),
@@ -586,7 +598,7 @@ def songs(fam):
     from tools.audio_analysis.eval.detector_songs import wip
     listed = fam.midi_songs + fam.clip_songs + (tuple(wip()) if fam.wip and fam.add_wip else ()) + \
         tuple(m[0] for m in fam.multitracks)
-    return tuple(dict.fromkeys(listed))
+    return tuple(t for t in dict.fromkeys(listed) if t not in fam.skip)
 
 
 def write(fam, path, log=print):

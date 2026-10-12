@@ -16,7 +16,13 @@ trigger kicks or the project sections). Per song:
 Gate: before rolls, detector_eval.rows(labels, the record's candidates) equals the record's (train_mask, train_y) for
 every song, or nothing is written.
 
-Usage: kick_labels.py"""
+`project` writes GOAL/kick_labels_project.json for the catalogue's label-ready songs (detector_wip.PAIRS with a proven
+offset) by the shared labeller's rules (detector_labels, PROJECT): kick notes on playing tracks and pads and placed kick
+one-shots are the positives, kept where the mix has a kick-band attack; muted drums, unnamed drum pads and drum audio
+are unknown; rolls are unscored; melodic notes and other drum voices more than 105 ms from every kick note are vouched
+negatives. The offset proof is the song's own (detector_wip).
+
+Usage: kick_labels.py [project]"""
 import json
 import sys
 from pathlib import Path
@@ -139,7 +145,43 @@ def build(write=True):
     return out
 
 
+def project_family():
+    """The kick as a detector_labels family, for project songs labelled from their sets."""
+    import re
+
+    from tools.audio_analysis.eval.detector_labels import Family
+    from tools.audio_analysis.eval.detector_songs import wip
+    from tools.audio_analysis.eval.detector_wip import PAIRS
+    return Family(
+        name='kick',
+        voice=re.compile(r'kick|kik\b|\bbd\b|bass ?drum', re.I),
+        exclude=re.compile(r'(?!)'),
+        other_voice=re.compile(r'snare|snr|clap|clp|rim|xstick|cross|hat|\bhh|ride|cymbal|crash|perc|shaker|shkr|tamb|tom|'
+                               r'conga|bongo|cowbell|clave|wood|block|triangle|guiro|cabasa|snap', re.I),
+        # Drum audio and unclassed audio may hold a kick (detector_labels.project_parts).
+        other_parts=re.compile(r'drum|break|_top|top_?loop|perc|groove|fill|beat|kit', re.I),
+        not_other_parts=re.compile(r'vocal|vox|synth|string|pad|chord', re.I),
+        band=(100, 400),       # the kick's punch: below 100 Hz the sub and bass hide its rise
+        stem_band=(40, 10000),
+        dense_s=0.0,           # a double or triple kick stays a hit; only rolls are unscored
+        drop_kick_rolls=True,
+        far_s=HARD_FAR_S,
+        own_kicks=True,
+        add_wip=False,
+        midi_songs=tuple(t for t in PAIRS if t in wip()),
+    )
+
+
+def build_project():
+    from tools.audio_analysis.eval.detector_labels import write
+    from tools.audio_analysis.eval.kick_goal_eval import GOAL
+    return write(project_family(), GOAL / 'kick_labels_project.json', lambda m: print(m, flush=True))
+
+
 if __name__ == '__main__':
-    if sys.argv[1:]:
+    if sys.argv[1:] == ['project']:
+        build_project()
+    elif sys.argv[1:]:
         sys.exit(__doc__)
-    build()
+    else:
+        build()

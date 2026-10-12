@@ -21,6 +21,11 @@ coincident hits (snare labels within 20 ms of a kick label), recall:
   A: coincident 0.500 (4.0 of 8) | overall 0.900 (9.0 of 10) | 5 songs
   B: coincident 0.625 (5.0 of 8) | overall 0.900 (9.0 of 10) | 5 songs
     per song line that is not a headline
+old exam | old exam (run k1): 3 of its 3 songs are scored here, out of 5 in this exam
+old exam | B - A over songs (hits and false fires averaged over seeds first): +0.50 F1 points, 90% interval -1.00 to +2.00
+old exam | A: F1 0.7000 | mean 0.7000 ± 0.0000 | 3 songs
+old exam | songs better / worse on F1: 2 / 1 (sign test p = 1.00)
+old exam | hits change per song (B - A, mean over seeds), worst first: not a headline
 '''
 
 PLAN = dict(name='night', steps=[
@@ -108,6 +113,10 @@ class OvernightTests(unittest.TestCase):
         self.assertIn('A: F1 0.8000 | mean 0.8000 ± 0.0000 | 5 songs', head)
         self.assertIn('A: coincident 0.500 (4.0 of 8) | overall 0.900 (9.0 of 10) | 5 songs', head)
         self.assertNotIn('per song line that is not a headline', head)
+        self.assertIn('old exam | old exam (run k1): 3 of its 3 songs are scored here, out of 5 in this exam', head)
+        self.assertIn('old exam | A: F1 0.7000 | mean 0.7000 ± 0.0000 | 3 songs', head)
+        self.assertIn('old exam | songs better / worse on F1: 2 / 1 (sign test p = 1.00)', head)
+        self.assertFalse([h for h in head if 'not a headline' in h])
         run_block = summary.split('step 2')[0].split('step 1')[1]
         self.assertNotIn('F1', run_block)   # a run step has no headlines
 
