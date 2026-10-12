@@ -664,23 +664,13 @@ pub(crate) fn render_main_ui_passes(
         },
     );
 
-    // Flush all overlay commands
-    if ui_renderer.prepare(device, logical_w, logical_h, scale) {
-        ui_renderer.render(&mut encoder, offscreen, manifold_gpu::GpuLoadAction::Load);
-    }
-
-    // Audio Setup spectrogram waterfall. Drawn AFTER the overlay flush so it
-    // lands on top of the modal's scope-area background (the modal is an
-    // overlay, drawn into `offscreen` just above). Render the live VQT
-    // columns into a UI-device texture, then blit it into the panel's
-    // reserved scope rect via the unified TexturePane path.
-    //
-    // Suppressed while a dropdown is open: dropdowns (device / channel) are
-    // overlays that expand down over the scope, and this blit lands on top of
-    // them — so painting the waterfall would hide the open list. The scope
-    // briefly shows its dark background instead, and returns when it closes.
+    // Audio Setup spectrogram waterfall — live content of a docked,
+    // base-layer panel. Blitted here, after the panel atlas and BEFORE the
+    // popup flush below, so every popup layer (dropdowns, the browser,
+    // menus, tooltips) covers it the same way it covers the panel itself.
+    // Render the live VQT columns into a UI-device texture, then blit it
+    // into the panel's reserved scope rect.
     if ui_root.audio_setup_panel.is_open()
-        && !ui_root.dropdown.is_open()
         && let Some(vqt) = vqt
         && vqt.content_num_bins > 0
         && let Some(rect) = ui_root.audio_setup_panel.scope_rect()
@@ -809,6 +799,11 @@ pub(crate) fn render_main_ui_passes(
                 "Audio Scope Blit",
             );
         }
+    }
+
+    // Flush all overlay commands
+    if ui_renderer.prepare(device, logical_w, logical_h, scale) {
+        ui_renderer.render(&mut encoder, offscreen, manifold_gpu::GpuLoadAction::Load);
     }
 
     // ── Commit offscreen render ──
