@@ -63,6 +63,9 @@ class Family:
     # The family is the kick: the project's kicks are its own notes, never vouched negatives, and a negative keeps far_s
     # from every one of them, heard or not.
     own_kicks: bool = False
+    # Songs the family leaves out though their set is proven: a muted group the bounce played, which export_groups
+    # cannot see in a dense mix.
+    skip: tuple = ()
 
 
 def builder_id(module_file):
@@ -595,7 +598,7 @@ def songs(fam):
     from tools.audio_analysis.eval.detector_songs import wip
     listed = fam.midi_songs + fam.clip_songs + (tuple(wip()) if fam.wip and fam.add_wip else ()) + \
         tuple(m[0] for m in fam.multitracks)
-    return tuple(dict.fromkeys(listed))
+    return tuple(t for t in dict.fromkeys(listed) if t not in fam.skip)
 
 
 def write(fam, path, log=print):

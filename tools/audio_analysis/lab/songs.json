@@ -1009,30 +1009,6 @@
   "probe": false
  },
  {
-  "id": "know_youre_there",
-  "kind": "project",
-  "source": {
-   "how": "wip",
-   "paths": [
-    "/Users/peterkiemann/.cache/manifold/kick-goal-2026-10-10/snare_wip/know_youre_there.npy"
-   ]
-  },
-  "source_sha256": [
-   "ffe53bb6f15d21486dfa1d77949456753e6296d84602d98a5177124447e72df6"
-  ],
-  "sample_rate": 48000,
-  "offset_s": -28.6483,
-  "proof": "wip:proven (kick and snare agree)",
-  "families": [
-   "snare",
-   "kick"
-  ],
-  "audit_override": null,
-  "gain_db": null,
-  "parent": null,
-  "probe": false
- },
- {
   "id": "mendez",
   "kind": "project",
   "source": {
@@ -3592,6 +3568,29 @@
   "sample_rate": 48000,
   "offset_s": null,
   "proof": "none",
+  "families": [
+   "kick"
+  ],
+  "audit_override": null,
+  "gain_db": null,
+  "parent": null,
+  "probe": false
+ },
+ {
+  "id": "know_youre_there",
+  "kind": "project",
+  "source": {
+   "how": "wip",
+   "paths": [
+    "/Users/peterkiemann/.cache/manifold/kick-goal-2026-10-10/snare_wip/know_youre_there.npy"
+   ]
+  },
+  "source_sha256": [
+   "ffe53bb6f15d21486dfa1d77949456753e6296d84602d98a5177124447e72df6"
+  ],
+  "sample_rate": 48000,
+  "offset_s": -28.6483,
+  "proof": "wip:proven (kick and snare agree)",
   "families": [
    "kick"
   ],
