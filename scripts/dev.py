@@ -151,6 +151,9 @@ VERBS = [
      "lab-preflight", ["tools/audio_analysis/lab/preflight.py"],
      "detector lab: read-only check that an overnight PLAN.json can run (clean tree, MPS, disk, configs, kick verdicts, caches warm, GPU lock)"),
     ("Render and measure",
+     "lab-review", ["tools/audio_analysis/lab/review_project.py"],
+     "detector label review project: build OUT.manifold [--songs] [--fires-dir] [--dry-run] | fires DIR | read ORIGINAL EDITED (Peter's edits as per-family overlays)"),
+    ("Render and measure",
      "repair-audio-fixture", "repair_audio_fixture.py", "rebuild a fixture mix from aligned stems, preserving the original; dry-run unless --apply"),
 
     ("CPU reference oracles (f64, seconds, no GPU)",
@@ -247,6 +250,7 @@ COST_CLASSES = {
     "kick_label_extract.py": "focused",
     "release.py": "broad",
     "registry.py": "focused",
+    "review_project.py": "focused",
     "audit.py": "focused",
     "test_lab.py": "focused",
     "offsets.py": "focused",
