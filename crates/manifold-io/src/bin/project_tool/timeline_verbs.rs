@@ -6,11 +6,8 @@
 //! archive writer. Every new entity is built through its typed constructor and
 //! serialized, so the JSON shape comes from the model. stdout carries only the
 //! payload (an id, or a JSON array); status and warnings go to stderr.
-//!
-//! IDs are minted unique against the whole file: `short_id` is 32 random bits,
-//! so tens of thousands of clips would otherwise collide with real odds.
+//! New ids are the ones the typed constructors mint, the same as the app's.
 
-use std::collections::HashSet;
 use std::path::Path;
 use std::process::ExitCode;
 
@@ -19,7 +16,7 @@ use serde_json::{Value, json};
 
 use manifold_core::clip::TimelineClip;
 use manifold_core::color::Color;
-use manifold_core::id::{ClipId, LayerId, MarkerId};
+use manifold_core::id::LayerId;
 use manifold_core::layer::Layer;
 use manifold_core::marker::TimelineMarker;
 use manifold_core::preset_type_id::PresetTypeId;
@@ -162,36 +159,6 @@ fn layer_type_of(layer: &Value) -> LayerType {
     layer.get("layerType").cloned().and_then(|v| serde_json::from_value(v).ok()).unwrap_or_default()
 }
 
-fn ids_under(root: &Value, pointer: &str, key: &str) -> HashSet<String> {
-    let mut out = HashSet::new();
-    if let Some(items) = root.pointer(pointer).and_then(Value::as_array) {
-        out.extend(items.iter().map(|v| str_at(v, key).to_string()));
-    }
-    out
-}
-
-fn all_clip_ids(root: &Value) -> HashSet<String> {
-    let mut out = HashSet::new();
-    if let Some(layers) = root.pointer("/timeline/layers").and_then(Value::as_array) {
-        for l in layers {
-            if let Some(clips) = l.get("clips").and_then(Value::as_array) {
-                out.extend(clips.iter().map(|c| str_at(c, "id").to_string()));
-            }
-        }
-    }
-    out
-}
-
-/// A fresh `short_id` not in `taken` (which then holds it).
-fn mint(taken: &mut HashSet<String>) -> String {
-    loop {
-        let id = manifold_core::math::short_id();
-        if taken.insert(id.clone()) {
-            return id;
-        }
-    }
-}
-
 // ── project new ─────────────────────────────────────────────────────────
 
 pub(crate) fn run_project(rest: &[String]) -> ExitCode {
@@ -299,8 +266,6 @@ pub(crate) fn add_layer(root: &mut Value, spec: &NewLayer<'_>) -> Result<String,
         LayerType::Generator => Layer::new_generator(spec.name.to_string(), PresetTypeId::NONE, 0),
         t => Layer::new(spec.name.to_string(), t, 0),
     };
-    let mut taken: HashSet<String> = layers.iter().map(|l| str_at(l, "layerId").to_string()).collect();
-    layer.layer_id = LayerId::new(mint(&mut taken));
     layer.parent_layer_id = parent.as_ref().map(|(_, id)| LayerId::new(id));
     layer.layer_color = match spec.color {
         Some([r, g, b]) => Color::new(r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0, 1.0),
@@ -392,7 +357,6 @@ pub(crate) fn add_clips(root: &mut Value, layer_name: &str, specs: &[ClipSpec]) 
             }
         }
     }
-    let mut taken = all_clip_ids(root);
     let layers = layers_mut(root)?;
     let li = layer_index(layers, layer_name)?;
     let layer = &mut layers[li];
@@ -447,8 +411,7 @@ pub(crate) fn add_clips(root: &mut Value, layer_name: &str, specs: &[ClipSpec]) 
     let mut ids = Vec::with_capacity(specs.len());
     let mut values = Vec::with_capacity(specs.len());
     for (i, s) in specs.iter().enumerate() {
-        let mut clip = make(s).map_err(|e| format!("clip #{i}: {e}"))?;
-        clip.id = ClipId::new(mint(&mut taken));
+        let clip = make(s).map_err(|e| format!("clip #{i}: {e}"))?;
         ids.push(clip.id.to_string());
         values.push(serde_json::to_value(&clip).map_err(|e| format!("serialize clip failed: {e}"))?);
     }
@@ -498,7 +461,6 @@ fn marker_add_bulk(rest: &[String]) -> Result<(), Fail> {
 
 /// Adds every marker or none, kept sorted by beat. Returns ids in input order.
 pub(crate) fn add_markers(root: &mut Value, specs: &[MarkerSpec]) -> Result<Vec<String>, String> {
-    let mut taken = ids_under(root, "/timeline/markers", "id");
     let mut ids = Vec::with_capacity(specs.len());
     let mut values = Vec::with_capacity(specs.len());
     for (i, s) in specs.iter().enumerate() {
@@ -509,7 +471,6 @@ pub(crate) fn add_markers(root: &mut Value, specs: &[MarkerSpec]) -> Result<Vec<
         if let Some(c) = &s.color {
             marker = marker.with_color(marker_color(c).map_err(|e| format!("marker #{i}: {e}"))?);
         }
-        marker.id = MarkerId::new(mint(&mut taken));
         ids.push(marker.id.to_string());
         values.push(serde_json::to_value(&marker).map_err(|e| format!("serialize marker failed: {e}"))?);
     }

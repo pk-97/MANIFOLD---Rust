@@ -38,15 +38,74 @@ impl MathUtils {
     }
 }
 
-/// ID generation matching C# IdUtil.ShortId().
+/// A fresh entity id: 64 random bits as 16 lowercase hex chars.
+///
+/// 64 bits keeps a duplicate out of reach at any project size (a million
+/// clips is about a 3-in-100-million chance), so minting needs no lookup
+/// against the live project. Ids are opaque strings everywhere: files written
+/// before this carry 8-char ids and load and save back unchanged, and an older
+/// build reads these 16-char ids the same way.
 pub fn short_id() -> String {
-    let uuid = uuid::Uuid::new_v4();
-    format!("{:08x}", uuid.as_u128() as u32)
+    format!("{:016x}", random_u64(uuid::Uuid::new_v4()))
+}
+
+/// 64 uniform bits from a v4 UUID. Each half has fixed bits (the version
+/// nibble in the high half, the two variant bits in the low half) at
+/// positions where the other half is random, so their XOR is uniform.
+fn random_u64(uuid: uuid::Uuid) -> u64 {
+    let (hi, lo) = uuid.as_u64_pair();
+    hi ^ lo
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn short_id_is_16_hex_chars() {
+        for _ in 0..1000 {
+            let id = short_id();
+            assert_eq!(id.len(), 16, "{id}");
+            assert!(id.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')), "{id}");
+        }
+    }
+
+    /// Every one of the 64 bits must vary, including the positions a v4
+    /// UUID pins in each half.
+    #[test]
+    fn short_id_uses_all_64_bits() {
+        let (mut ones, mut zeros) = (0u64, 0u64);
+        for _ in 0..4096 {
+            let v = u64::from_str_radix(&short_id(), 16).unwrap();
+            ones |= v;
+            zeros |= !v;
+        }
+        assert_eq!(ones, u64::MAX, "a bit never set");
+        assert_eq!(zeros, u64::MAX, "a bit never cleared");
+    }
+
+    /// A million ids from seeded UUIDs collide nowhere. Seeded so the run is
+    /// reproducible; the bits go through the same `random_u64` as production.
+    #[test]
+    fn million_ids_have_no_duplicate() {
+        let mut state = 0x9e37_79b9_7f4a_7c15u64;
+        let mut next = || {
+            // splitmix64
+            state = state.wrapping_add(0x9e37_79b9_7f4a_7c15);
+            let mut z = state;
+            z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+            z ^ (z >> 31)
+        };
+        let mut seen = std::collections::HashSet::with_capacity(1 << 20);
+        for _ in 0..1_000_000 {
+            let mut bytes = [0u8; 16];
+            bytes[..8].copy_from_slice(&next().to_le_bytes());
+            bytes[8..].copy_from_slice(&next().to_le_bytes());
+            let uuid = uuid::Builder::from_random_bytes(bytes).into_uuid();
+            assert!(seen.insert(random_u64(uuid)), "duplicate id");
+        }
+    }
 
     #[test]
     fn test_quantize_bpm() {
