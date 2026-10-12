@@ -54,6 +54,13 @@ def parts(cfg):
     modules, so a run's module list is the same whether or not the cache is warm."""
     from tools.audio_analysis.lab import components
     from tools.audio_analysis.lab.cache import code_id
+
+    def measure_part(m):
+        # A song measure reads the shipped kick's verdicts: a new kick is new training data, so a new run and layer.
+        if m in components.SONG_MEASURES:
+            from tools.audio_analysis.lab import kick_verdict
+            return dict(code=code_id(components.MEASURES[m]), verdict=kick_verdict.kick_release())
+        return code_id(components.MEASURES[m])
     finder = components.FINDERS[cfg.candidates.split(':')[0]](cfg.candidates, None, cfg.family)[0]
     out = dict(finder=finder)
     if cfg.net:
@@ -61,10 +68,10 @@ def parts(cfg):
     if cfg.hard_negatives:
         out['onset'] = code_id(components.MEASURES['prof32'])
     if 'trees' in cfg.models:
-        out['measures'] = {m: code_id(components.MEASURES[m]) for m in cfg.models['trees']['measures']}
+        out['measures'] = {m: measure_part(m) for m in cfg.models['trees']['measures']}
     if cfg.stage:
         from tools.audio_analysis.lab.stage import measures_of
-        out['stage'] = {m: code_id(components.MEASURES[m]) for m in measures_of(cfg.stage)}
+        out['stage'] = {m: measure_part(m) for m in measures_of(cfg.stage)}
     return out
 
 

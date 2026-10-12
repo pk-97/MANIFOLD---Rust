@@ -1692,6 +1692,26 @@ class ModelKeyScopeTests(unittest.TestCase):
                      for m in cfg.models}
         self.assertNotEqual(who_moves, base)
 
+    def test_kick_release_moves_kick2_readers_only(self):
+        """A snare reading the kick's verdicts trains on new data when a new kick ships: its run parts and trees key
+        move with the kick release, its net key does not, and a config without kick2 does not move at all."""
+        from tools.audio_analysis.lab import kick_verdict
+        real = kick_verdict.kick_release
+
+        def keys(name, tid):
+            kick_verdict.kick_release = lambda: tid
+            try:
+                cfg = config.load(name)
+                meta = dict(self._meta(), parts=run.parts(cfg))
+                return meta['parts'], {m: run.model_key(cfg, m, meta) for m in cfg.models}
+            finally:
+                kick_verdict.kick_release = real
+        a, b = keys('snare_v2_mid', 'kick-A'), keys('snare_v2_mid', 'kick-B')
+        self.assertNotEqual(a[0], b[0])
+        self.assertNotEqual(a[1]['trees'], b[1]['trees'])
+        self.assertEqual(a[1]['net'], b[1]['net'])
+        self.assertEqual(keys(self.CFG, 'kick-A'), keys(self.CFG, 'kick-B'))
+
     def test_net_code_ignores_the_trees_fitting(self):
         """BUG-4x7jh: the net's code term covers only the net's training path, so a change to models.fit_trees (even
         a comment) moves the trees' key and not the net's."""
