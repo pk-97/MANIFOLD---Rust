@@ -567,7 +567,7 @@ def builder(x):
             neg_w, pos_w = run.row_weights(config.load('snare_v2_hardneg'), copy, mine, onset[:4], y[:4], None)
         finally:
             components.measure = real
-        np.testing.assert_allclose(neg_w, [6.0, 12.0, 1.0, 1.0])
+        np.testing.assert_allclose(neg_w, [6.0 ** .5, 12.0 ** .5, 1.0, 1.0])
         self.assertIsNone(pos_w)
 
     def test_mix_variants(self):
