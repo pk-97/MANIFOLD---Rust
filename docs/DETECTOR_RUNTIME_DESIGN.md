@@ -1,6 +1,6 @@
 # Detector Runtime — one app runtime that runs any lab-built detector from its model file
 
-**Status:** SHIPPED · kick-2026-10-12-60984540f and snare-2026-10-12-b5ccd28c9 (the snare reads the kick, section 5.5) · owed: Peter's live test of the v2 pair
+**Status:** SHIPPED · kick-2026-10-13-bef3c00b1 and snare-2026-10-13-fd1412d9d (the snare reads the kick, section 5.5) · owed: Peter's live test of the retrained pair
 **Prerequisites:** Detector Lab P6 (landed on main, `5461d2fee`); the snare port (`feat/snare-port`) merged into this work's branch (section 9, P0).
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (phase briefs) and section 6 (seam briefs) before starting any phase.
 
