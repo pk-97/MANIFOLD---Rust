@@ -478,12 +478,193 @@ def builder(x):
             self.assertNotEqual(c.content_id, gain_copy(s, -5.0).content_id)
         self.assertEqual(cache.code_id(mix), cache.code_id(mix.__wrapped__))
 
+    def test_mix_variants(self):
+        """sampling.mix_variants is validated like gain_variants and false or null leave the key; a variant's labels
+        are its song's with every time moved (a field of unknown meaning is refused); variants train with their song's
+        group, are never held out or examined, and only proven ones become copies."""
+        from tools.audio_analysis.lab import registry
+        base = config.load('snare_v2_mid')
+        raw = json.loads((config.EXPERIMENTS / 'snare_v2_mid.json').read_text())
+        for v in (None, False):
+            self.assertEqual(config.build('x', dict(raw, sampling=dict(raw['sampling'], mix_variants=v))).key(), base.key())
+        on = config.build('x', dict(raw, sampling=dict(raw['sampling'], mix_variants=True)))
+        self.assertTrue(on.mix_variants and not base.mix_variants)
+        self.assertNotEqual(on.key(), base.key())
+        with self.assertRaises(ValueError):
+            config.build('x', dict(raw, sampling=dict(raw['sampling'], mix_variants='yes')))
+        lab1 = dict(kind='project', duration_s=10.0, positives=[1.0, 2.0], hard_neg=[3.0], unscored=[[4.0, 5.0]],
+                    loop_spans=[], dense=[[6.0, 6.5]], dense_pos=[6.1], dense_all=[6.1, 6.25], dropped=[7.0],
+                    offset_s=-30.0, positives_only=False, timing_shift_ms=0.0)
+        got = registry.variant_labels(lab1, .25, 11.0)
+        self.assertEqual((got['positives'], got['hard_neg'], got['unscored'], got['dense'], got['dense_all'], got['dropped']),
+                         ([1.25, 2.25], [3.25], [[4.25, 5.25]], [[6.25, 6.75]], [6.35, 6.5], [7.25]))
+        self.assertEqual((got['duration_s'], got['offset_s'], got['positives_only']), (11.0, -29.75, False))
+        with self.assertRaises(ValueError):
+            registry.variant_labels(dict(lab1, onsets=[1.0]), .25, 11.0)
+        # Every field of every family's project labels is known: a zero shift returns the labels unchanged.
+        for fam in registry.FAMILIES:
+            for t, s in run.labels(fam)[0].items():
+                if s.get('kind') == 'project':
+                    self.assertEqual(registry.variant_labels(s, 0.0, s['duration_s']), s, f'{fam} {t}')
+        songs = load()
+        lab, _ = run.labels('snare')
+        exam = [t for t in lab if songs[t].kind == 'project' and songs[t].offset_s is not None]
+        plain = models.plan(base, lab, songs)
+        vs = {}
+        for t in exam:
+            v = registry.variant_copy(songs[t], dict(path='/nowhere.wav', sha256=hashlib.sha256(t.encode()).hexdigest(),
+                                                     offset_s=songs[t].offset_s - .01, status='proven (test)'))
+            self.assertTrue(registry.is_variant(v) and v.content_id != songs[t].content_id and v.parent == t)
+            self.assertAlmostEqual(registry.variant_shift(v, songs[t]), -.01)
+            songs[v.id], lab[v.id], vs[t] = v, lab[t], v.id
+        grps, trainings, _ = models.plan(base, lab, songs)
+        self.assertEqual(grps, plain[0])
+        models.check_disjoint(trainings, {c: t for t, c in vs.items()})
+        for n in trainings:
+            self.assertFalse(set(vs.values()) & set(n['held']))
+            self.assertEqual({c for t, c in vs.items() if t not in n['held']}, set(n['trained']) & set(vs.values()))
+        # The committed proofs through setup: proven variants are copies with moved labels, the rest are listed.
+        cfg = config.Experiment(**{**base.__dict__, 'sampling': {**base.sampling, 'mix_variants': True}})
+        lab, songs, meta = run.setup(cfg)
+        proofs = registry.variant_proofs()
+        for t in meta['projects']:
+            for r in proofs.get(t, ()):
+                if r['status'].startswith('proven'):
+                    self.assertEqual(meta['parents'][r['id']], t)
+                    shift = r['offset_s'] - songs[t].offset_s
+                    self.assertEqual(lab[r['id']]['positives'], [x + shift for x in lab[t]['positives']])
+                else:
+                    self.assertIn(r['id'], meta['variants_excluded'])
+        self.assertFalse(set(meta['copies']) & set(meta['exam'] + meta['holdout'] + meta['songs']))
+        self.assertNotEqual(meta['run_id'], run.setup(base)[2]['run_id'])
+
+    def test_versions_share_weight(self):
+        """The trees' and templates' weights: a song's versions split one song's weight; distinct keys change
+        nothing, byte for byte."""
+        rng = np.random.default_rng(3)
+        ys = [rng.integers(0, 2, 40).astype(float) for _ in range(3)]
+        hards = [rng.uniform(size=40) < .2 for _ in range(3)]
+        flat = models.weights(ys, hards, [False] * 3)
+        for got, want in zip(models.weights(ys, hards, [False] * 3, versions=['a', 'b', 'c']), flat):
+            np.testing.assert_array_equal(got, want)
+        shared = models.weights(ys, hards, [False] * 3, versions=['a', 'a', 'b'])
+        self.assertAlmostEqual(shared[0].sum() + shared[1].sum(), shared[2].sum())
+        self.assertEqual(models.versions_of(['a', 'b', 'a@x', 'b@y'], {'a@x': 'a', 'b@y': 'b'}),
+                         [('a', ['a', 'a@x']), ('b', ['b', 'b@y'])])
+        with self.assertRaises(ValueError):
+            models.versions_of(['a@x', 'a'], {'a@x': 'a'})
+
+    def test_release_holdout(self):
+        """About one project song in six by a salted hash of its id: adding or reordering songs never moves one in
+        or out. Without --release the exam never holds a holdout song (run.py --plan in its own process included) and
+        scoring drops them from every cutoff pool; with it the exam is the holdout. The plan and the model keys never
+        depend on the mode; the run id does, and meta records the holdout."""
+        import subprocess
+        from types import SimpleNamespace
+
+        from tools.audio_analysis.lab import registry
+
+        def fake(names, kind='project'):
+            return {t: SimpleNamespace(kind=kind, parent=None) for t in names}
+        ids = [f'song_{k}' for k in range(600)]
+        big = registry.release_holdout(fake(ids))
+        self.assertEqual(registry.release_holdout(fake(ids[:50])), [t for t in big if t in ids[:50]])
+        self.assertEqual(sorted(registry.release_holdout(fake(ids[::-1]))), sorted(big))
+        self.assertTrue(70 <= len(big) <= 130, len(big))
+        self.assertEqual(registry.release_holdout(fake(ids, 'generated')), [])
+        cfg = config.load('snare_v2_mid')
+        _, _, dev = run.setup(cfg)
+        _, _, rel = run.setup(cfg, release=True)
+        self.assertTrue(dev['holdout'] and not set(dev['exam']) & set(dev['holdout']))
+        self.assertEqual(rel['exam'], dev['holdout'])
+        self.assertEqual(sorted(dev['exam'] + dev['holdout']), sorted(dev['projects']))
+        self.assertEqual((dev['groups'], dev['trainings']), (rel['groups'], rel['trainings']))
+        self.assertEqual({m: run.model_key(cfg, m, dev) for m in cfg.models}, {m: run.model_key(cfg, m, rel) for m in cfg.models})
+        self.assertNotEqual(dev['run_id'], rel['run_id'])
+        r = subprocess.run([sys.executable, str(Path(run.__file__).resolve()), '--plan', 'snare_v2_mid'],
+                           capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stderr[-2000:])
+        lines = r.stdout.splitlines()
+        exam, hold = (next(x for x in lines if x.startswith(p)).split()[1:] for p in ('exam:', 'holdout:'))
+        self.assertTrue(exam and not set(exam) & set(hold))
+        self.assertEqual(hold, dev['holdout'])
+        h = dev['holdout'][0]
+        held = {'a': 1, 'b': 2, h: 3, 'p': 4}
+        pool = {'a': {'b': 2, h: 3}, 'b': {'a': 1, h: 3}, h: {'a': 1}, 'p': {'a': 1}}
+        got = score.without_holdout(dev, held, pool, {'p': dict(parent=h)})
+        self.assertEqual(got, ({'a': 1, 'b': 2}, {'a': {'b': 2}, 'b': {'a': 1}}))
+        self.assertEqual(score.without_holdout(rel, held, pool, {'p': dict(parent=h)}), (held, pool))
+
     def test_compare_refuses_mismatch(self):
         a = dict(run_id='a', labels_sha256='x', exam=['s1', 's2'], recall_only=[])
         compare.check(a, dict(a, run_id='b'))
         for k, v in (('labels_sha256', 'y'), ('exam', ['s1']), ('recall_only', ['s1'])):
             with self.assertRaises(ValueError):
                 compare.check(a, dict(a, run_id='b', **{k: v}))
+
+    def test_child_refuses_cpu_unless_asked(self):
+        """A net child on the CPU exits with the reason unless --cpu; the GPU, and --cpu on the CPU, pass; run() hands
+        --cpu on to the child. train() called directly (the parity tests) never meets the guard."""
+        import subprocess
+        from unittest import mock
+
+        import torch
+        cpu, mps = torch.device('cpu'), torch.device('mps')
+        with self.assertRaises(SystemExit) as e:
+            run.check_device(cpu)
+        self.assertIn('refusing to train a net on the CPU', str(e.exception))
+        self.assertIn('--cpu', str(e.exception))
+        with mock.patch.dict(os.environ, {'KICK_GOAL_NN_DEVICE': 'cpu'}):
+            with self.assertRaises(SystemExit) as e:
+                run.check_device(cpu)
+            self.assertIn('KICK_GOAL_NN_DEVICE=cpu', str(e.exception))
+        run.check_device(cpu, cpu=True)
+        run.check_device(mps)
+        seen = []
+
+        def fake(cmd, **kw):
+            seen.append(cmd)
+            return subprocess.CompletedProcess(cmd, 0)
+        for flag in (False, True):
+            seen.clear()
+            with mock.patch.object(run, 'run_id_of', return_value='kick-none'), \
+                    mock.patch.object(run.subprocess, 'run', fake), mock.patch.object(run, 'RUNS', Path(tempfile.mkdtemp())):
+                run.run('kick_v2_final', [7], cpu=flag)
+            self.assertEqual(['--child' in c and '--cpu' in c for c in seen], [flag])
+
+    def test_old_exam_view(self):
+        """--exam-of: the A/B on the songs of an earlier run's exam, beside the untouched full-exam numbers."""
+        from unittest import mock
+
+        from tools.audio_analysis.eval.detector_compare import pooled
+
+        def side(hits):
+            ps = {t: dict(matched=h, labels=10, extra=e, minutes=1.0, late_ms=[]) for t, (h, e) in hits.items()}
+            return dict(exam=list(hits), recall_only=[], results=dict(net=dict(per_song=ps)))
+        a = [side(dict(s1=(5, 1), s2=(6, 1), s3=(9, 0), s4=(9, 0)))]
+        b = [side(dict(s1=(7, 1), s2=(8, 1), s3=(4, 4), s4=(4, 4)))]
+        before = json.dumps([a, b], sort_keys=True)
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(score, 'RUNS', Path(d)):
+            (Path(d) / 'old-run').mkdir()
+            (Path(d) / 'old-run' / 'meta.json').write_text(json.dumps(dict(exam=['s1', 's2', 'gone'])))
+            kept, head = score.old_exam('old-run', a[0]['exam'])
+            self.assertEqual(kept, ['s1', 's2'])
+            self.assertIn('2 of its 3 songs', head)
+            self.assertIn('out of 4 in this exam', head)
+            self.assertIn("not in this exam: ['gone']", head)
+            lines = compare.old_exam_lines([a, b], 'old-run', 'snare')
+            self.assertTrue(all(ln.startswith('old exam | ') for ln in lines))
+            self.assertIn('2 songs', '\n'.join(lines))
+            self.assertIn('| 2 songs', lines[2])   # A: F1 line counts the subset only
+            sub = pooled({t: a[0]['results']['net']['per_song'][t] for t in kept}, kept, ())
+            self.assertIn(f'{sub[2]:.4f}', lines[2])
+            self.assertNotIn(f'{pooled(a[0]["results"]["net"]["per_song"], a[0]["exam"], ())[2]:.4f}', lines[2])
+            rows = score.old_exam_lines({0: dict(a[0], run_id='x')}, 'old-run')
+            self.assertIn('full exam (4 songs)', rows[1])
+            self.assertIn('old exam (2 songs)', rows[1])
+            with self.assertRaises(SystemExit):
+                score.old_exam('no-such-run', [])
+        self.assertEqual(before, json.dumps([a, b], sort_keys=True))
 
     def test_scorer_parity(self):
         """The lab scorer on saves of the retired runners reproduces their results files exactly, each on the labels
@@ -767,7 +948,7 @@ def builder(x):
             def predict_proba(self, x):
                 return np.column_stack([1 - x[:, 0] / 100, x[:, 0] / 100])
         with mock.patch.object(templates, '_kmeans', kmeans), \
-                mock.patch.object(models, 'fit_trees', lambda p, rows, rs, share: Fit()):
+                mock.patch.object(models, 'fit_trees', lambda p, rows, rs, share, versions=None: Fit()):
             out, _ = run.train_templated(cfg, trainings, 0, trees, tmpl, log=lambda m: None)
         self.assertEqual(len(seen), len(trainings))
         for marks, tr, got in zip(seen, trainings, out):
@@ -1284,6 +1465,28 @@ class TrainMathBatteryTests(unittest.TestCase):
         self.assertEqual(sorted(head_state), sorted(now_state))
         for k, v in head_state.items():
             np.testing.assert_array_equal(v.numpy(), now_state[k].numpy(), err_msg=k)
+
+    def test_versions_share_one_draw_budget(self):
+        """A song with copies draws per_song rows per class in all, its versions picked by the training rng, not
+        per_song per version. A song without copies draws exactly as before: a one-version list equals the bare Song,
+        and copies never move the draws of the songs before them."""
+        a, b = self._tiny_songs()
+        x, y = self._tiny_songs()
+        per_song = int(np.median([int((s.mask & (s.y == 1)).sum()) for s in (a, b)]))
+        _, draws = self._train_once(self._nn(), [[a, x, y], b], 5)
+        rows = len(next(c for c in draws if c[0] == 'permutation')[1])
+        self.assertEqual(rows, 2 * 2 * per_song)
+        _, flat = self._train_once(self._nn(), [a, x, y, b], 5)
+        self.assertEqual(len(next(c for c in flat if c[0] == 'permutation')[1]), 4 * 2 * per_song)
+        bare_state, bare = self._train_once(self._nn(), [a, b], 5)
+        listed_state, listed = self._train_once(self._nn(), [[a], [b]], 5)
+        self.assertEqual(bare, listed)
+        for k, v in bare_state.items():
+            np.testing.assert_array_equal(v.numpy(), listed_state[k].numpy(), err_msg=k)
+        # b's draws (a choice and a jitter per class) lead the stream whether or not a's copies follow it.
+        _, after = self._train_once(self._nn(), [b, [a, x, y]], 5)
+        _, alone = self._train_once(self._nn(), [b, a], 5)
+        self.assertEqual(after[:4], alone[:4])
 
     def test_slices_cut_then_moved_equal_cut_on_cpu(self):
         """On the CPU: a song cut after .to(cpu) cuts exactly what it cut before the move, and the per-batch move
