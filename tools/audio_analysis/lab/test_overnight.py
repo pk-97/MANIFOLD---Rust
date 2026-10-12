@@ -33,6 +33,7 @@ PLAN = dict(name='night', steps=[
     dict(run='snare_gain', args=['--seeds', '0,1']),
     dict(compare=['snare_base', 'snare_gain'], release=True),
     dict(compare=['a', 'b'], release='TRAIN7'),
+    dict(release='snare_gain', args=['--seed', '0', '--nets', '3']),
 ])
 
 
@@ -70,16 +71,16 @@ class OvernightTests(unittest.TestCase):
     def test_all_pass_in_order_one_at_a_time_under_the_gpu_lock(self):
         code, fake, out, summary = self.go([])
         self.assertEqual(code, 0)
-        self.assertEqual(len(fake.cmds), 4)
+        self.assertEqual(len(fake.cmds), 5)
         for cmd in fake.cmds:
             self.assertTrue(cmd[1].endswith('scripts/gpu_queue.py'))
             self.assertEqual(cmd[cmd.index('--') + 1], sys.executable)
         scripts = [Path(c[c.index('--') + 2]).name for c in fake.cmds]
-        self.assertEqual(scripts, ['run.py', 'run.py', 'compare.py', 'compare.py'])
+        self.assertEqual(scripts, ['run.py', 'run.py', 'compare.py', 'compare.py', 'release.py'])
         self.assertEqual(sorted(p.name for p in out.glob('*.log')),
                          ['01_run_snare_base.log', '02_run_snare_gain.log', '03_compare_snare_base_vs_snare_gain.log',
-                          '04_compare_a_vs_b.log'])
-        self.assertIn('all 4 steps passed', summary)
+                          '04_compare_a_vs_b.log', '05_release_snare_gain.log'])
+        self.assertIn('all 5 steps passed', summary)
 
     def test_args_and_release_pass_through(self):
         _, fake, _, _ = self.go([])
@@ -88,6 +89,7 @@ class OvernightTests(unittest.TestCase):
         self.assertEqual(tails[1], ['snare_gain', '--seeds', '0,1'])
         self.assertEqual(tails[2], ['snare_base', 'snare_gain', '--release'])
         self.assertEqual(tails[3], ['a', 'b', '--release', 'TRAIN7'])
+        self.assertEqual(tails[4], ['train', 'snare_gain', '--seed', '0', '--nets', '3'])   # no --release flag
 
     def test_stops_at_first_failure_and_says_what_is_unrun(self):
         code, fake, out, summary = self.go([0, 3])
@@ -95,12 +97,14 @@ class OvernightTests(unittest.TestCase):
         self.assertEqual(len(fake.cmds), 2)
         self.assertFalse(list(out.glob('03_*')))
         self.assertIn('STOPPED: step 2 exited 3', summary)
-        self.assertIn('not run: step 3 (compare snare_base snare_gain), step 4 (compare a b)', summary)
+        self.assertIn('not run: step 3 (compare snare_base snare_gain), step 4 (compare a b), '
+                      'step 5 (release snare_gain)', summary)
         self.assertIn('step 2 run snare_gain: exit 3', summary)
 
     def test_last_step_failure_leaves_nothing_unrun(self):
-        code, _, _, summary = self.go([0, 0, 0, 9])
+        code, _, _, summary = self.go([0, 0, 0, 0, 9])
         self.assertEqual(code, 9)
+        self.assertIn('step 5 release snare_gain: exit 9', summary)
         self.assertIn('not run: none', summary)
 
     def test_summary_times_and_compare_headlines(self):
@@ -128,15 +132,17 @@ class OvernightTests(unittest.TestCase):
             with contextlib.redirect_stdout(buf):
                 self.assertEqual(overnight.main([str(plan), '--dry-run']), 0)
             lines = buf.getvalue().splitlines()
-            self.assertEqual(len(lines), 4)
+            self.assertEqual(len(lines), 5)
             self.assertIn('gpu_queue.py', lines[0])
             self.assertTrue(lines[3].endswith('compare.py a b --release TRAIN7'))
+            self.assertTrue(lines[4].endswith('release.py train snare_gain --seed 0 --nets 3'))
             self.assertEqual(list(Path(d).iterdir()), [plan])
 
     def test_bad_plans_exit_before_anything_runs(self):
         bad = [dict(steps=[]), dict(steps=[dict()]), dict(steps=[dict(run='a', compare=['a', 'b'])]),
                dict(steps=[dict(compare=['a'])]), dict(steps=[dict(run='a', retries=2)]),
-               dict(steps=[dict(run='a', args='--seeds 0')])]
+               dict(steps=[dict(run='a', args='--seeds 0')]), dict(steps=[dict(release=True)]),
+               dict(steps=[dict(release='a', args='--seed 0')])]
         with tempfile.TemporaryDirectory() as d:
             for i, plan in enumerate(bad):
                 f = Path(d) / f'{i}.json'

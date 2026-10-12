@@ -7,10 +7,13 @@ The plan is JSON:
   {"name": "tuesday", "steps": [
      {"run": "snare_base"},
      {"run": "snare_gain", "args": ["--seeds", "0,1"]},
-     {"compare": ["snare_base", "snare_gain"], "release": true}]}
-A step is a run (lab/run.py CONFIG) or a compare (lab/compare.py A B). "args" is appended verbatim. "release" is
-passed through as --release (true), or --release VALUE (a string). Each step runs as
-  scripts/gpu_queue.py --label ... -- python lab/<run|compare>.py ...
+     {"compare": ["snare_base", "snare_gain"], "release": true},
+     {"release": "snare_gain", "args": ["--seed", "0", "--nets", "3"]}]}
+A step is a run (lab/run.py CONFIG), a compare (lab/compare.py A B) or a release (lab/release.py train CONFIG; it
+needs the run's seeds SEED..SEED+NETS-1 already trained). "args" is appended verbatim. On a run or compare step,
+"release" is passed through as --release (true), or --release VALUE (a string); a step with "release" and no
+"run"/"compare" is a release step and its value is the config name. Each step runs as
+  scripts/gpu_queue.py --label ... -- python lab/<run|compare|release>.py ...
 Output goes to ~/.cache/manifold/detector-lab/queue/<name>_<stamp>/: one NN_<kind>_<config>.log per step and
 summary.txt (start, end, wall seconds, exit code and the compare headline lines per step), rewritten after every
 step so a crash leaves the record up to there.
@@ -30,7 +33,7 @@ ROOT = Path(__file__).resolve().parents[3]
 LAB = ROOT / 'tools/audio_analysis/lab'
 GPU_QUEUE = ROOT / 'scripts/gpu_queue.py'
 OUT = Path.home() / '.cache/manifold/detector-lab/queue'
-SCRIPT = {'run': 'run.py', 'compare': 'compare.py'}
+SCRIPT = {'run': 'run.py', 'compare': 'compare.py', 'release': 'release.py'}
 STEP_KEYS = {'run', 'compare', 'args', 'release'}
 HEADLINE = re.compile(r'^(old exam \| )?(B - A over (songs|seeds)|[AB]: F1 |songs better / worse|  [AB]: coincident '
                       r'|old exam \()')
@@ -44,22 +47,22 @@ def load_plan(path):
     for i, s in enumerate(d['steps'], 1):
         if not isinstance(s, dict) or set(s) - STEP_KEYS:
             sys.exit(f'{path}: step {i}: keys must be among {sorted(STEP_KEYS)}')
-        kinds = [k for k in SCRIPT if k in s]
+        kinds = [k for k in ('run', 'compare') if k in s] or [k for k in ('release',) if k in s]
         if len(kinds) != 1:
-            sys.exit(f'{path}: step {i}: exactly one of "run" or "compare"')
+            sys.exit(f'{path}: step {i}: exactly one of "run", "compare" or (alone) "release"')
         want = [str, list][kinds[0] == 'compare']
         v = s[kinds[0]]
         if not isinstance(v, want) or (want is list and (len(v) != 2 or not all(isinstance(x, str) for x in v))):
-            sys.exit(f'{path}: step {i}: "run" is a config name, "compare" is [A, B]')
+            sys.exit(f'{path}: step {i}: "run" and "release" are config names, "compare" is [A, B]')
         if not isinstance(s.get('args', []), list) or not all(isinstance(x, str) for x in s.get('args', [])):
             sys.exit(f'{path}: step {i}: "args" is a list of strings')
-        if not isinstance(s.get('release', False), (bool, str)):
+        if kinds[0] != 'release' and not isinstance(s.get('release', False), (bool, str)):
             sys.exit(f'{path}: step {i}: "release" is true or a string')
     return d.get('name') or Path(path).stem, d['steps']
 
 
 def kind_of(step):
-    return 'run' if 'run' in step else 'compare'
+    return 'run' if 'run' in step else 'compare' if 'compare' in step else 'release'
 
 
 def what_of(step):
@@ -70,10 +73,11 @@ def what_of(step):
 def step_command(step, n):
     """The argv of one step: the GPU lock around the lab script."""
     kind = kind_of(step)
-    configs = [step[kind]] if kind == 'run' else list(step[kind])
-    cmd = [sys.executable, str(LAB / SCRIPT[kind]), *configs, *step.get('args', [])]
+    configs = list(step[kind]) if kind == 'compare' else [step[kind]]
+    cmd = [sys.executable, str(LAB / SCRIPT[kind]), *(['train'] if kind == 'release' else []), *configs,
+           *step.get('args', [])]
     rel = step.get('release', False)
-    if rel:
+    if rel and kind != 'release':
         cmd += ['--release'] + ([rel] if isinstance(rel, str) else [])
     label = f'lab-queue step {n}: {kind} {" ".join(configs)}'
     return [sys.executable, str(GPU_QUEUE), '--label', label, '--'] + cmd
@@ -81,7 +85,7 @@ def step_command(step, n):
 
 def log_name(step, n):
     kind = kind_of(step)
-    configs = [step[kind]] if kind == 'run' else step[kind]
+    configs = step[kind] if kind == 'compare' else [step[kind]]
     return f'{n:02d}_{kind}_{"_vs_".join(Path(c).stem for c in configs)}.log'
 
 
