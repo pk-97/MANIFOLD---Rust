@@ -8,6 +8,7 @@ labels; on every other song it is the release itself. It is built in its own pro
 net env) into one store per kick release; the snare measure only reads the store.
 
 Usage: kick_verdict.py build"""
+import dataclasses
 import sys
 from pathlib import Path
 
@@ -78,9 +79,10 @@ def features(song, c):
     if not path.exists():
         raise SystemExit(f'no kick verdict store for {tid}: run lab/kick_verdict.py build')
     z = np.load(path)
-    if f'{song.content_id}.p' not in z:
+    cid = dataclasses.replace(song, gain_db=None).content_id   # a gain copy reads its song's verdict: not rescaled
+    if f'{cid}.p' not in z:
         raise SystemExit(f'{song.id}: not in the kick verdict store {path.name}: run lab/kick_verdict.py build')
-    on, emit, p = (z[f'{song.content_id}.{k}'] for k in ('onset', 'emit', 'p'))
+    on, emit, p = (z[f'{cid}.{k}'] for k in ('onset', 'emit', 'p'))
     return features_from(on, emit, p, c)
 
 

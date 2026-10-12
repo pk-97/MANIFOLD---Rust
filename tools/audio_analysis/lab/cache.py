@@ -7,6 +7,7 @@ import functools
 import hashlib
 import importlib
 import inspect
+import os
 import re
 import textwrap
 import types
@@ -14,7 +15,9 @@ from pathlib import Path
 
 import numpy as np
 
-from tools.audio_analysis.eval.bundles import AnalysisBundle, BundleStamp, load_bundle
+# _filename_stem_for: the shared stem rule (content hash + stamp hash); eval/bundles.py owns it so both sides of
+# every cache entry stay one key.
+from tools.audio_analysis.eval.bundles import AnalysisBundle, BundleStamp, _filename_stem_for, load_bundle
 
 ROOT = Path.home() / '.cache/manifold/detector-lab'
 VERSION = 'detector-lab-1'
@@ -106,25 +109,46 @@ def loader_id():
     return code_id(mix)
 
 
-def artifact(song, name, settings, build, root=ROOT / 'artifacts'):
-    """The cached array for (song content, name, settings, the audio loader); build() makes it on a miss."""
+def artifact(song, name, settings, build, root=ROOT / 'artifacts', file_backed=False):
+    """The cached array for (song content, name, settings, the audio loader); build() makes it on a miss.
+    file_backed (BUG-xd15a): a float32 copy is also kept as a raw .npy beside the bundle and returned as a memory
+    map, so Songs hold file-backed pages the kernel evicts without swapping (a legacy .npz hit decompresses into
+    anonymous RAM, which only swapping can evict — the corpus's ~15 GB of spectra is what froze the Mac). The stamp
+    is unchanged, so an existing bundle stays a hit: its first file-backed read is migrated from the .npz it
+    already has, writing the identical float32 (the stored float16 widened). The .npz itself is untouched."""
     stamp = BundleStamp(pipeline_version=f'{VERSION}/{name}',
                         models={k: str(v) for k, v in sorted({**settings, 'loader': loader_id()}.items())})
+    npy = None
+    if file_backed:
+        npy = root / f'{_filename_stem_for(song.content_id, stamp)}.npy'
+        if npy.exists():
+            # A sidecar at this stem was written for exactly this (content, stamp) key, so it is the hit.
+            return np.load(npy, mmap_mode='r+')
+
+        def backed(arr):
+            tmp = npy.with_name(npy.stem + '.tmp.npy')  # np.save appends .npy when missing; same guard as save()
+            np.save(tmp, arr.astype(np.float32))
+            os.replace(tmp, npy)
+            return np.load(npy, mmap_mode='r+')
     hit = load_bundle(song.content_id, stamp, root)
     if hit is not None:
-        return hit.arrays['a']
+        arr = hit.arrays['a']
+        return backed(arr) if file_backed else arr
     arr = build()
     AnalysisBundle(content_hash=song.content_id, stamp=stamp, arrays={'a': arr}).save(root)
-    return arr
+    return backed(arr) if file_backed else arr
 
 
-def spectrum(song):
-    """The net's 64-band spectrum, as the legacy name-keyed cache returns it (float16 stored, float32 out)."""
+def spectrum(song, root=ROOT / 'artifacts'):
+    """The net's 64-band spectrum, as the legacy name-keyed cache returns it (float16 stored, float32 out).
+    File-backed (BUG-xd15a): the float32 array is a raw .npy beside the bundle and the Song gets a memory-mapped
+    view of it, so it reads the identical bytes the legacy npz path returned without pinning anonymous RAM."""
     from tools.audio_analysis.eval import kick_goal_nn as nn
     from tools.audio_analysis.lab.registry import mix
     a = artifact(song, 'spectrum', dict(bands=nn.BANDS, code=code_id(nn.spectrum)),
-                 lambda: nn.spectrum(mix(song), song.sample_rate).astype(np.float16))
-    return a.astype(np.float32)
+                 lambda: nn.spectrum(mix(song), song.sample_rate).astype(np.float16),
+                 root=root, file_backed=True)
+    return a if a.dtype == np.float32 else a.astype(np.float32)
 
 
 def flatness(song):

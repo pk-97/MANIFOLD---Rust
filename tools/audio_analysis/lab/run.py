@@ -135,14 +135,29 @@ def setup(cfg):
             sys.exit(f'{t}: labels and song list disagree on its kind; rebuild with lab/registry.py build')
     exam = [t for t in lab if songs[t].kind == 'project']
     check_exam(exam, songs, failed)
+    copies, probes = [], {}
+    if cfg.gain_variants or cfg.gain_probes:
+        from tools.audio_analysis.lab.registry import gain_copies, gain_copy
+        gv = cfg.gain_variants
+        for t in exam:
+            made = (gain_copies(songs[t], gv['count'], *gv['db']) if gv else []) \
+                + [gain_copy(songs[t], g, probe=True) for g in cfg.gain_probes or ()]
+            for c in made:
+                songs[c.id], lab[c.id] = c, lab[t]
+                copies.append(c.id)
+                if c.probe:
+                    probes[c.id] = dict(parent=t, gain_db=c.gain_db)
+                content[c.id] = c.content_id
+                label_ids[c.id] = label_ids[t]
     grps, trainings, _ = models.plan(cfg, lab, songs)
-    models.check_disjoint(trainings)
+    models.check_disjoint(trainings, {c: songs[c].parent for c in copies})
     used = parts(cfg)
     mods = module_hashes()
     key = json.dumps(dict(config=cfg.key(), labels=sha, modules=mods, parts=used, content=content), sort_keys=True)
     run_id = f'{cfg.family}-{hashlib.sha256(key.encode()).hexdigest()[:12]}'
     meta = dict(schema=META_SCHEMA, run_id=run_id, config=cfg.key(), names=[cfg.name], labels_sha256=sha,
-                songs=list(lab), exam=exam, generated=[t for t in lab if t not in exam], excluded=failed,
+                songs=[t for t in lab if t not in copies], exam=exam,
+                generated=[t for t in lab if t not in exam and t not in copies], copies=copies, probes=probes, excluded=failed,
                 recall_only=[t for t in exam if lab[t]['positives_only']], groups=grps, trainings=trainings,
                 layers=[*sorted(cfg.models), *(['combined'] if models.final_layer(cfg) == 'combined' else []),
                         *(['staged'] if cfg.stage else [])],
@@ -165,7 +180,9 @@ def build(cfg, lab, songs, dev, log=print):
         cand, onset, emit = c.cand, c.onset_s, c.emit_s
         mask, y, hard = rows(s, onset)
         extra = tuple(components.frame(song, m) for m in cfg.net['channels'])
-        data[t] = Song(cache.spectrum(song), onset, emit + ahead, mask, y, t, hard, extra).to(dev)
+        data[t] = Song(cache.spectrum(song), onset, emit + ahead, mask, y, t, hard, extra)
+        # Every song stays on the CPU: slices() cuts bit-identically there, so no Song holds MPS pool memory and
+        # train() moves only the per-batch tensors to the net's device. Gain copies and probes were already cut here.
         log(f'{t}: {len(cand)} candidates, {int(mask.sum())} training rows')
     return data
 
@@ -188,11 +205,14 @@ def tree_rows(cfg, lab, songs):
 
 
 def model_code(model, with_templates=False):
-    """The code that trains a model and builds its inputs, closure included (cache.code_id); trees with sound
-    templates add the templates' training and patch code."""
+    """The code that trains a model and builds its inputs, closure included (cache.code_id): the net's covers only
+    the net's training path (kick_goal_nn's train/predict and the net's input build), the trees' only theirs
+    (models.fit_trees and tree_rows), so editing one model's fitting code cannot move the other model's key. Trees
+    with sound templates add the templates' training and patch code."""
     from tools.audio_analysis.lab import templates
     from tools.audio_analysis.lab.cache import code_id
-    code = code_id(train_model) + code_id(build if model == 'net' else tree_rows)
+    train, inputs = (net_model, build) if model == 'net' else (trees_model, tree_rows)
+    code = code_id(train) + code_id(inputs)
     return code + code_id(train_templated) + code_id(templates.song_inputs) if with_templates else code
 
 
@@ -201,46 +221,62 @@ def templated(cfg):
 
 
 def model_key(cfg, model, meta):
-    """What decides one model's predictions in a run: its own settings, the finder, sampling and plan, the labels of
-    the songs it trains on (never the held songs'), every song's audio, the training code, and the parts it reads.
-    Configs that share it share the trained layer (LAYERS); relabelling a song nobody trains on retrains nothing."""
+    """What decides one model's predictions in a run: its own settings, the finder, the sampling that feeds it and
+    the plan, the labels of the songs it trains on (never the held songs'), the audio of every song it trains on or
+    predicts (a song in no training invalidates nothing), the training code, and the parts it reads. Configs that
+    share it share the trained layer (LAYERS); relabelling a song nobody trains on retrains nothing."""
     sub = {k: v for k, v in cfg.key().items() if k not in ('models', 'combine', 'stage')}
+    # Probes are predicted and scored, never trained on (gain_probes): the setting belongs to the run's key, and the
+    # copies themselves ride the plan (`trainings`) and the layer rows as held songs.
+    sub['sampling'] = {k: v for k, v in sub['sampling'].items() if k != 'gain_probes'}
     sub['models'] = {model: cfg.models[model]}
     reads = dict(net='frames', trees='measures')[model]
     used = {k: v for k, v in meta['parts'].items() if k in ('finder', reads)}
     taught = sorted({u for n in meta['trainings'] for u in n['trained'] + n['clips']})
+    layer_songs = sorted({u for n in meta['trainings'] for u in n['trained'] + n['clips'] + n['held']})
     code = model_code(model, model == 'trees' and templated(cfg))
     key = json.dumps(dict(model=sub, labels={u: meta['label_ids'][u] for u in taught}, code=code, parts=used,
-                          content=meta['content'], trainings=meta['trainings']), sort_keys=True)
+                          content={u: meta['content'][u] for u in layer_songs}, trainings=meta['trainings']),
+                     sort_keys=True)
     return f'{model}-{hashlib.sha256(key.encode()).hexdigest()[:12]}'
 
 
-def train_model(cfg, model, trainings, seed, data, trees, log):
-    """[{held song: probabilities} per training], [seconds per training] for one model. Training i uses random state
-    1000 * i + seed, so the outer nets match the retired runner's."""
+def net_model(cfg, trainings, seed, data, log):
+    """The net's layer (kick_goal_nn.train/predict): [{held song: probabilities} per training], [seconds per
+    training]. Training i uses random state 1000 * i + seed, so the outer nets match the retired runner's."""
+    from tools.audio_analysis.eval.kick_goal_nn import predict, train
+    share = cfg.sampling['generated'] if cfg.generated_as_clips() else None
+    out, secs = [], []
+    for i, n in enumerate(trainings):
+        t0 = time.time()
+        kw = dict(epochs=cfg.net['epochs'], swa_epochs=cfg.net['swa_epochs'], batch=cfg.net['batch'], lr=cfg.net['lr'],
+                  precision=cfg.net['precision'], **({'synth_share': share} if share is not None else {}))
+        net = train([data[u] for u in n['trained']], 1000 * i + seed, [data[c] for c in n['clips']], **kw)
+        out.append({t: predict(net, data[t]) for t in n['held']})
+        secs.append(round(time.time() - t0, 1))
+        log(f'net without groups {n["without"]}: {secs[-1]} s')
+    return out, secs
+
+
+def trees_model(cfg, trainings, seed, trees, log):
+    """The trees' layer (models.fit_trees): [{held song: probabilities} per training], [seconds per training].
+    Training i uses random state 1000 * i + seed, the net's stream over the same trainings."""
     from tools.audio_analysis.lab import models
     share = cfg.sampling['generated'] if cfg.generated_as_clips() else None
     out, secs = [], []
     for i, n in enumerate(trainings):
         t0 = time.time()
-        if model == 'net':
-            from tools.audio_analysis.eval.kick_goal_nn import predict, train
-            kw = dict(epochs=cfg.net['epochs'], swa_epochs=cfg.net['swa_epochs'], batch=cfg.net['batch'], lr=cfg.net['lr'],
-                      precision=cfg.net['precision'], **({'synth_share': share} if share is not None else {}))
-            net = train([data[u] for u in n['trained']], 1000 * i + seed, [data[c] for c in n['clips']], **kw)
-            out.append({t: predict(net, data[t]) for t in n['held']})
-        else:
-            fit = models.fit_trees(cfg.models['trees'], [(*trees[u][1], u in n['clips']) for u in n['trained'] + n['clips']],
-                                   1000 * i + seed, share)
-            out.append({t: fit.predict_proba(trees[t][0])[:, 1] for t in n['held']})
+        fit = models.fit_trees(cfg.models['trees'], [(*trees[u][1], u in n['clips']) for u in n['trained'] + n['clips']],
+                               1000 * i + seed, share)
+        out.append({t: fit.predict_proba(trees[t][0])[:, 1] for t in n['held']})
         secs.append(round(time.time() - t0, 1))
-        log(f'{model} without groups {n["without"]}: {secs[-1]} s')
+        log(f'trees without groups {n["without"]}: {secs[-1]} s')
     return out, secs
 
 
 def train_templated(cfg, trainings, seed, trees, tmpl, log):
-    """train_model's trees with sound templates (lab/templates.py) appended to every song's measures: each training
-    fits its own templates on its trained songs and clips (never its held songs), random state 1000 i + seed for the
+    """The trees with sound templates (lab/templates.py) appended to every song's measures: each training fits its
+    own templates on its trained songs and clips (never its held songs), random state 1000 i + seed for the
     templates and the trees alike."""
     import numpy as np
 
@@ -259,7 +295,7 @@ def train_templated(cfg, trainings, seed, trees, tmpl, log):
             mask, y, hard = tmpl[u][1]
             rows[u] = (x, (x[mask], y[mask], hard[mask]))
         took = time.time() - t0
-        got, s = train_model(cfg, 'trees', [n], rs, None, rows, log)
+        got, s = trees_model(cfg, [n], rs, rows, log)
         out += got
         secs.append(round(s[0] + took, 1))
     return out, secs
@@ -279,7 +315,8 @@ def layer(cfg, model, meta, seed, data, trees, log, tmpl=None):
     if model == 'trees' and templated(cfg):
         out, secs = train_templated(cfg, meta['trainings'], seed, trees, tmpl, log)
     else:
-        out, secs = train_model(cfg, model, meta['trainings'], seed, data, trees, log)
+        out, secs = (net_model(cfg, meta['trainings'], seed, data, log) if model == 'net'
+                     else trees_model(cfg, meta['trainings'], seed, trees, log))
     d.mkdir(parents=True, exist_ok=True)
     tmp = d / f's{seed}.tmp.npz'
     np.savez(tmp, **{f'{i}__{t}': p for i, per in enumerate(out) for t, p in per.items()})
@@ -309,7 +346,7 @@ def train_layers(cfg, meta, seed, data, trees, log=print, stage_parts=None, tmpl
         from tools.audio_analysis.lab import stage
         t0 = time.time()
         held.update(stage.train(cfg, grps, trainings, lay[models.final_layer(cfg)], stage_parts, seed,
-                                generated=meta['generated'], log=log))
+                                generated=meta['generated'], probes=meta.get('probes'), log=log))
         record = [dict(r, seconds=dict(r['seconds'], stage=round(time.time() - t0, 1) if i == 0 else 0.0))
                   for i, r in enumerate(record)]
     return held, record
@@ -339,7 +376,8 @@ def child(cfg, seed, run_id):
         tmpl = None
     if cfg.stage:
         from tools.audio_analysis.lab.stage import song_parts
-        stage_parts = {t: song_parts(cfg, songs[t], lab[t]) for t in lab}
+        stage_parts = {t: song_parts(cfg, songs[t], lab[t]) for t in lab
+                       if songs[t].gain_db is None or songs[t].probe}
     else:
         stage_parts = None
     built = time.time()

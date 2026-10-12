@@ -1,0 +1,84 @@
+{
+  "family": "kick",
+  "candidates": "kick",
+  "models": {
+    "net": {
+      "past_ms": 150,
+      "ahead_ms": 40,
+      "channels": [
+        "flat",
+        "perc"
+      ],
+      "epochs": 12,
+      "swa_epochs": 0,
+      "batch": 256,
+      "lr": 0.002,
+      "precision": "float32"
+    },
+    "trees": {
+      "measures": [
+        "f15",
+        "tail3",
+        "prof32",
+        "fall16",
+        "low16",
+        "note13",
+        "cdom4"
+      ],
+      "max_iter": 200,
+      "learning_rate": 0.05,
+      "max_leaf_nodes": 15,
+      "min_samples_leaf": 40,
+      "l2": 1.0,
+      "templates": null
+    }
+  },
+  "combine": "mean_logit",
+  "stage": {
+    "windows_s": [
+      8.0
+    ],
+    "shape": [
+      "prof32",
+      "low16"
+    ],
+    "level": [
+      "f15",
+      0
+    ],
+    "max_iter": 150,
+    "learning_rate": 0.05,
+    "max_leaf_nodes": 7,
+    "min_samples_leaf": 80,
+    "l2": 1.0,
+    "learn": "project",
+    "gate": 1.0
+  },
+  "sampling": {
+    "per_song": "median",
+    "generated": 0.5,
+    "gain_variants": {
+      "count": 3,
+      "db": [
+        -12,
+        6
+      ]
+    },
+    "gain_probes": [
+      -6,
+      6
+    ]
+  },
+  "train": [
+    "project",
+    "generated"
+  ],
+  "seeds": [
+    0,
+    1,
+    2,
+    3,
+    4
+  ],
+  "folds": 4
+}

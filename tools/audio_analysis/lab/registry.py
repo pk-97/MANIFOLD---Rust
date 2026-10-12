@@ -42,12 +42,17 @@ class Song:
     proof: str                    # 'wip:...' | 'goal:...' | 'generated' | 'none'
     families: tuple
     audit_override: str | None = None
+    gain_db: float | None = None   # a gain copy: the parent's audio scaled by this (gain_variants)
+    parent: str | None = None      # the song a gain copy was made from
+    probe: bool = False            # a gain copy that is only predicted, never trained on (gain_probes)
 
     @property
     def content_id(self):
         """What the song's audio is: its source bytes, section bounds and rate. Caches key on this, never on id."""
         key = dict(sha=list(self.source_sha256), start=self.source.get('start_s'), end=self.source.get('end_s'),
                    sr=self.sample_rate, how=self.source['how'])
+        if self.gain_db is not None:
+            key['gain_db'] = self.gain_db
         return hashlib.sha256(json.dumps(key, sort_keys=True).encode()).hexdigest()
 
 
@@ -106,6 +111,73 @@ def mix(song):
     if path.endswith('.npy'):
         return np.load(path).astype(np.float64)
     return read_audio(path, song.sample_rate)[1]
+
+
+def gain_gains(song_id, count, lo, hi):
+    """The fixed gains (dB) of a song's copies: distinct draws, uniform on a 0.1 dB grid (never 0), seeded by the
+    song's id alone, so they never depend on the training seed, the config's other settings or the other songs."""
+    import zlib
+    grid = np.round(np.arange(lo, hi + 1e-9, .1), 1)
+    rng = np.random.default_rng(zlib.crc32(song_id.encode()))
+    return [float(g) for g in rng.choice(grid[grid != 0], count, replace=False)]
+
+
+def gain_copy(song, db, probe=False):
+    """The song's copy at a gain: the same source scaled. Every artifact is computed from the scaled audio (mix),
+    cached under the copy's own content id. A probe is held out and predicted (level-robustness scoring), never
+    trained on."""
+    import dataclasses
+    return dataclasses.replace(song, id=f'{song.id}@{"probe" if probe else ""}{db:+.1f}dB', gain_db=float(db),
+                               parent=song.id, probe=probe)
+
+
+def gain_copies(song, count, lo, hi):
+    """The song's training copies at fixed seeded gains."""
+    return [gain_copy(song, g) for g in gain_gains(song.id, count, lo, hi)]
+
+
+# Wrapping below the original mix() body. Reader note: the wraps chain must still unwrap to that byte-identical
+# body (cache.loader_id()/code_id(mix) walk __wrapped__, lab/cache.py:43-44) and the body's referenced globals
+# (_export, read_audio) are untouched, so no artifact stamp moves; only the decode is memoized. The cache is
+# bounded (maxsize=3: a song and its gain copies build consecutively, so three decoded songs cover a build's
+# active window) and never stores a gain-scaled array - a copy scales a fresh one inside _with_gain.
+# A Song carries dict fields (an lru_cache cannot key on it), so the key is the hashable identity the body reads.
+_mix_body = mix
+
+
+def _decode_key(song):
+    """The hashable identity of the decode the body above performs: a song and its gain copies share one key."""
+    return (song.source['how'], tuple(song.source['paths']), song.source.get('start_s'), song.source.get('end_s'),
+            song.sample_rate)
+
+
+@functools.lru_cache(maxsize=3)
+def _decoded(key):
+    """The body's decoded parent-scale audio, one bounded entry per process."""
+    from types import SimpleNamespace
+    how, paths, start_s, end_s, sample_rate = key
+    return _mix_body(SimpleNamespace(source=dict(how=how, paths=list(paths), start_s=start_s, end_s=end_s),
+                                      sample_rate=sample_rate))
+
+
+@functools.wraps(mix)
+def _mix_memo(song):
+    """mix() through the decode memo. functools.wraps keeps this wrapper's __wrapped__ at the original body, so
+    code_id(mix) keeps hashing that body and every cached artifact stamp stays valid."""
+    return _decoded(_decode_key(song))
+
+
+def _with_gain(fn):
+    """mix() for a gain copy scales the parent's audio. functools.wraps keeps code_id(mix) as it was, so the cached
+    artifacts of every ordinary song stay valid; a copy's content id carries its gain."""
+    @functools.wraps(fn)
+    def wrapper(song):
+        x = fn(song)
+        return x if song.gain_db is None else x * 10.0 ** (song.gain_db / 20.0)
+    return wrapper
+
+
+mix = _with_gain(_mix_memo)
 
 
 def _proof(t, W):

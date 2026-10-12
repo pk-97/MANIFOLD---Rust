@@ -228,16 +228,17 @@ def train(songs, seed, synth=(), epochs=EPOCHS, synth_share=0.5, swa_epochs=0, b
                 ys.append(np.full(len(pick), y, np.float32))
             if picks:
                 drawn.append((song, np.concatenate(picks, axis=1)))
-        # One copy per epoch carries every draw and jitter to the songs' device; each song's slices are cut there.
-        at = torch.from_numpy(np.concatenate([d for _, d in drawn], axis=1)).to(drawn[0][0].dev)
+        # Songs stay on the CPU: each epoch's slices are cut there bit-identically to MPS, and only the per-batch
+        # tensors move to the net's device (an MPS index tensor cannot index a CPU tensor) inside the loop.
+        at = torch.from_numpy(np.concatenate([d for _, d in drawn], axis=1))
         parts = at.split([d.shape[1] for _, d in drawn], dim=1)
-        x = torch.cat([song.slices(p[0], p[1]).to(dev) for (song, _), p in zip(drawn, parts)])
-        y = torch.from_numpy(np.concatenate(ys)).to(dev)
-        order = torch.from_numpy(rng.permutation(len(y))).to(dev)
+        x = torch.cat([song.slices(p[0], p[1]) for (song, _), p in zip(drawn, parts)])
+        y = torch.from_numpy(np.concatenate(ys))
+        order = torch.from_numpy(rng.permutation(len(y)))
         net.train()
         for s in range(0, len(y), batch):
             b = order[s:s + batch]
-            xb, yb = x[b], y[b]
+            xb, yb = x[b].to(dev), y[b].to(dev)
             opt.zero_grad()
             if mixed:
                 with torch.autocast(dev.type, dtype=torch.float16):

@@ -19,12 +19,16 @@ def plan(cfg, lab, songs, final=False):
     gen = [t for t in lab if songs[t].kind == 'generated']
     untrained = set(gen) if cfg.train == ('project',) or cfg.generated_as_clips() else set()
     clips = gen if cfg.generated_as_clips() else []
-    grps = net_groups(list(lab), cfg.folds, untrained)
+    # Gain copies (registry.gain_copy) are not songs of any group: they train with their parent's group, so no model
+    # trains on a copy of a song it predicts. Probes are held out with their parent.
+    grps = net_groups([t for t in lab if songs[t].gain_db is None], cfg.folds, untrained)
 
     def training(without):
         held = [t for k in without for t in grps[k]]
-        return dict(without=list(without), held=held, trained=[u for u in lab if u not in held and u not in untrained],
-                    clips=[c for c in clips if c not in held])
+        trained = [u for u in lab if (songs[u].parent or u) not in held and u not in untrained and not songs[u].probe]
+        # Probes are predicted by the outer models only: a pair model's predictions choose cutoffs, and probes never do.
+        probes = [u for u in lab if songs[u].probe and songs[u].parent in held] if len(without) == 1 else []
+        return dict(without=list(without), held=held + probes, trained=trained, clips=[c for c in clips if c not in held])
     if final:
         return grps, [training(())], untrained
     out = [training((k,)) for k in range(len(grps))]
@@ -33,10 +37,11 @@ def plan(cfg, lab, songs, final=False):
     return grps, out, untrained
 
 
-def check_disjoint(trainings):
-    """No model predicts a song it trained on."""
+def check_disjoint(trainings, parents=None):
+    """No model predicts a song it trained on, nor one whose gain copy it trained on (parents: copy -> its song)."""
+    parents = parents or {}
     for n in trainings:
-        seen = set(n['held']) & (set(n['trained']) | set(n['clips']))
+        seen = set(n['held']) & {parents.get(u) or u for u in n['trained'] + n['clips']}
         if seen:
             raise ValueError(f'training without groups {n["without"]} trained on {sorted(seen)}')
 
