@@ -244,6 +244,19 @@ def candidates(con, song_id):
     return out
 
 
+def distinct(cands, skip_shas=()):
+    """Byte-identical copies are one variant: the first path (sorted) of each sha stays; a copy of a file in skip_shas
+    (the lab mix itself) goes."""
+    seen = set(skip_shas)
+    out = []
+    for c in cands:
+        if c[3] in seen:
+            continue
+        seen.add(c[3])
+        out.append(c)
+    return out
+
+
 def lab_variants(con, songs, ids, force=False):
     """Compare every candidate of the given lab songs against the lab mix; store in variants."""
     from tools.audio_analysis.catalog import catalog
@@ -251,7 +264,11 @@ def lab_variants(con, songs, ids, force=False):
     for sid in ids:
         s = songs[sid]
         todo = []
-        for p, role, ver, sha, dur in candidates(con, sid):
+        lab = json.loads(con.execute('SELECT lab_mix FROM songs WHERE id=?', (sid,)).fetchone()[0] or 'null') or {}
+        lab_files = [f for f in [lab.get('file')] + list(lab.get('parts') or []) if f]
+        lab_shas = {r[0] for r in con.execute(
+            f"SELECT sha256 FROM assets WHERE path IN ({','.join('?' * len(lab_files))})", lab_files)} - {None}
+        for p, role, ver, sha, dur in distinct(candidates(con, sid), lab_shas):
             k = key_of(s.content_id, sha)
             have = con.execute("SELECT key FROM variants WHERE song_id=? AND ref='lab_mix' AND path=?", (sid, p)).fetchone()
             if force or not have or have[0] != k:
