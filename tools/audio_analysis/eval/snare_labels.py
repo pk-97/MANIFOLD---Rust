@@ -65,6 +65,9 @@ FAMILY = Family(
 
 
 def main():
+    # The pinned recipe decides which songs the goal set holds; applied here, not at import (detector_wip imports SNARE).
+    from tools.audio_analysis.lab import recipe
+    recipe.apply()
     from tools.audio_analysis.eval.detector_labels import write
     from tools.audio_analysis.eval.kick_goal_eval import GOAL
     write(FAMILY, GOAL / 'snare_labels.json', lambda s: print(s, flush=True))
