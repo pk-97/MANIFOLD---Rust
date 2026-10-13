@@ -135,6 +135,10 @@ mod mute_visibility_probe;
 // Self-contained gap-start rendering regression through the real content pipeline.
 #[cfg(all(test, target_os = "macos"))]
 mod gap_start_probe;
+// Frame-exact transport determinism through the real content thread; red until
+// P2 wires the clock and deletes the `frame-exact-red` feature.
+#[cfg(all(test, target_os = "macos", feature = "frame-exact-red"))]
+mod frame_exact_app;
 // D8.4 acceptance — deliberate native GPU journey with external reference projects.
 #[cfg(all(test, target_os = "macos", feature = "journey-proofs"))]
 mod corridor_acceptance;

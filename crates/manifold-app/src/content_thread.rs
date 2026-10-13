@@ -572,8 +572,16 @@ impl ContentThread {
     /// loop) instead of going through the command channel — no behavior
     /// change to this function itself.
     pub(crate) fn tick_frame(&mut self, state_tx: &Sender<ContentState>) {
+        self.tick_frame_at(std::time::Instant::now(), state_tx);
+    }
+
+    /// `tick_frame` with the tick's instant injected, so a test can drive the
+    /// real content thread through a chosen press phase, jitter and stalls
+    /// (docs/FRAME_EXACT_TRANSPORT_DESIGN.md section 3.4). Only the timer's
+    /// tick reads `now`; wall telemetry stays on the real clock (D13).
+    pub(crate) fn tick_frame_at(&mut self, now: std::time::Instant, state_tx: &Sender<ContentState>) {
         let _frame_start = std::time::Instant::now();
-        let dt = self.timer.consume_tick();
+        let dt = self.timer.consume_tick_at(now);
         let realtime = self.timer.realtime_since_start();
         self.time_since_start = Seconds(realtime);
 

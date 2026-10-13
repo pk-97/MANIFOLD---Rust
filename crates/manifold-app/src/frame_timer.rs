@@ -357,7 +357,8 @@ impl FrameTimer {
         self.consume_tick_at(Instant::now())
     }
 
-    fn consume_tick_at(&mut self, now: Instant) -> f64 {
+    /// `consume_tick` at an injected instant (the content thread's `tick_frame_at`).
+    pub(crate) fn consume_tick_at(&mut self, now: Instant) -> f64 {
         let wall_dt = (now - self.last_tick_time).as_secs_f64();
         #[cfg(any(feature = "profiling", test))]
         {
