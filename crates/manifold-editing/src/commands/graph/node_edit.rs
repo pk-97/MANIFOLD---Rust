@@ -19,8 +19,8 @@ mod modifier;
 
 use super::card_owned_write::card_owned_write_warning;
 use super::{
-    descend_level, install_target_graph, take_target_graph, with_existing_target_graph_mut,
-    with_target_graph_mut,
+    descend_level, install_target_graph, refuses_second_scene, take_target_graph,
+    with_existing_target_graph_mut, with_target_graph_mut,
 };
 
 /// Add a new node to the per-card graph at the given editor position.
@@ -44,6 +44,8 @@ pub struct AddGraphNodeCommand {
     /// a redo reuses the same identity — otherwise a binding made against this
     /// node would orphan when the node is re-created with a fresh id.
     minted_node_id: Option<NodeId>,
+    /// Set when execute refused the edit (one scene per layer).
+    rejection: Option<&'static str>,
 }
 
 impl AddGraphNodeCommand {
@@ -61,6 +63,7 @@ impl AddGraphNodeCommand {
             scope_path: Vec::new(),
             minted_id: None,
             minted_node_id: None,
+            rejection: None,
         }
     }
 
@@ -83,6 +86,12 @@ impl Command for AddGraphNodeCommand {
     }
 
     fn execute(&mut self, project: &mut Project) {
+        self.rejection = None;
+        let added = usize::from(self.node_type_id == manifold_core::effect_graph_def::RENDER_SCENE_TYPE_ID);
+        if refuses_second_scene(project, &self.target, &self.catalog_default, added) {
+            self.rejection = Some(manifold_core::effect_graph_def::ONE_SCENE_PER_LAYER);
+            return;
+        }
         let node_type_id = self.node_type_id.clone();
         let pos = self.pos;
         let prev_minted = self.minted_id;
@@ -142,6 +151,14 @@ impl Command for AddGraphNodeCommand {
 
     fn description(&self) -> &str {
         "Add Graph Node"
+    }
+
+    fn rejection_reason(&self) -> Option<&str> {
+        self.rejection
+    }
+
+    fn was_applied(&self) -> bool {
+        self.rejection.is_none()
     }
 }
 
