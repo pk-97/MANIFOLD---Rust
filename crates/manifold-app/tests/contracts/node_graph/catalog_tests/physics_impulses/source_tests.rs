@@ -124,7 +124,7 @@ fn scene_impulse_source_maps_speed_edits_and_pause_without_stepping() {
 }
 
 #[test]
-fn scene_impulse_source_rejects_old_or_pending_capture_without_moving_anchor() {
+fn scene_impulse_source_lands_old_capture_at_the_anchor_and_rejects_pending_capture() {
     let def = fixture();
     let mut runtime = runtime(&def);
     runtime.execute_frame(time(1.0));
@@ -146,17 +146,18 @@ fn scene_impulse_source_rejects_old_or_pending_capture_without_moving_anchor() {
         Seconds(1.1)
     );
     hit.clear();
-    assert!(
-        runtime
-            .water()
-            .capture_scene_impulse_at_source(&mut binding, &mut hit, time(1.05), 1,)
-            .unwrap_err()
-            .contains("precedes")
-    );
+    // Triggers are never skipped: a source older than the latest observation
+    // lands at it, and the anchor does not move back.
+    runtime
+        .water()
+        .capture_scene_impulse_at_source(&mut binding, &mut hit, time(1.05), 1)
+        .unwrap();
+    assert_eq!(hit.source_time().unwrap().seconds, Seconds(1.1));
     assert_eq!(
         manifold_nodes_water::runtime::testkit::last_physics_frame_time(&runtime).unwrap().seconds,
         Seconds(1.1)
     );
+    hit.clear();
     assert!(
         runtime
             .water()

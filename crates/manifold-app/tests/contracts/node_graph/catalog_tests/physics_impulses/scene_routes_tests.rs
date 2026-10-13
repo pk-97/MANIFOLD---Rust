@@ -252,6 +252,10 @@ fn scene_impulse_routes_accept_audio_hits_stamped_ahead_of_the_last_render() {
     runtime.water().drain_scene_impulses(|_, event| sequences.push(event.source.sequence));
     sequences.sort();
     assert_eq!(sequences, [0, 1], "each hit applies once");
-    // Older than the latest observation: stale, refused.
-    assert!(runtime.fire_scene_impulse(&fire, time(2.0 * DT), &mut sequence).is_err());
+    // Older than the latest observation: lands at it, never skipped.
+    runtime.fire_scene_impulse(&fire, time(2.0 * DT), &mut sequence).unwrap();
+    runtime.execute_frame(time(4.0 * DT));
+    let mut late = Vec::new();
+    runtime.water().drain_scene_impulses(|_, event| late.push(event.source.sequence));
+    assert_eq!(late, [2], "a late hit applies once");
 }
