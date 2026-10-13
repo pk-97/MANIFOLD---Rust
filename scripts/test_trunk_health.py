@@ -105,5 +105,51 @@ class ReservationTests(unittest.TestCase):
         self.assertIn("1800000000", line)
 
 
+class InterpreterGuardTests(unittest.TestCase):
+    def test_modern_python_does_not_reexec(self):
+        execs = []
+        trunk_health.ensure_modern_python((3, 11, 0), ["/x"], execv=lambda *a: execs.append(a))
+        self.assertEqual(execs, [])
+
+    def test_old_python_reexecs_under_first_modern_candidate(self):
+        with tempfile.TemporaryDirectory() as d:
+            a, b = Path(d, "a"), Path(d, "b")
+            a.mkdir()
+            b.mkdir()
+            for dirp in (a, b):
+                p = dirp / "python3"
+                p.write_text("#!/bin/sh\necho 3.12\n")
+                p.chmod(0o755)
+            execs = []
+            with patch.object(trunk_health, "python_version_of", return_value=(3, 12)):
+                trunk_health.ensure_modern_python(
+                    (3, 9, 6), [str(a), str(b)], argv=["t.py", "--dry-run"],
+                    execv=lambda *args: execs.append(args))
+            self.assertEqual(execs[0][0], str(a / "python3"))
+            self.assertEqual(execs[0][1], [str(a / "python3"), "t.py", "--dry-run"])
+
+    def test_no_modern_python_aborts_loudly(self):
+        aborts = []
+        with tempfile.TemporaryDirectory() as d:
+            trunk_health.ensure_modern_python(
+                (3, 9, 6), [d], argv=["t.py"], execv=lambda *a: self.fail("exec"),
+                abort=lambda msg: aborts.append(msg))
+        self.assertEqual(len(aborts), 1)
+        self.assertIn("3.11", aborts[0])
+
+    def test_abort_logs_files_bead_notifies_and_exits_2(self):
+        with tempfile.TemporaryDirectory() as d:
+            ran = []
+            with patch.object(trunk_health, "LOG_DIR", Path(d)), \
+                 patch.object(trunk_health.subprocess, "run", side_effect=lambda c, **k: ran.append(c)):
+                with self.assertRaises(SystemExit) as cm:
+                    trunk_health.abort_no_modern_python("no python")
+            self.assertEqual(cm.exception.code, 2)
+            logs = list(Path(d).glob("*.log"))
+            self.assertIn("[ABORT]", logs[0].read_text())
+            self.assertTrue(any(c[1] == "create" and "1" in c for c in ran))
+            self.assertTrue(any(c[0] == "osascript" for c in ran))
+
+
 if __name__ == "__main__":
     unittest.main()
