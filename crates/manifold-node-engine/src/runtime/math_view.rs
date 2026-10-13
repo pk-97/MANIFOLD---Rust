@@ -5,7 +5,7 @@
 //! modifier of its scene against bounded sample geometry, borrowing the
 //! parent's exported buffers and scene depth rather than copying them.
 //! Migrated Scope controls retain two variants for their original carrier;
-//! selection uses the same parent control graph and event clock.
+//! selection uses the same parent control graph.
 
 use super::*;
 use crate::primitives::standalone_pipeline::dispatch_standalone_2d;
@@ -19,7 +19,6 @@ pub(crate) struct MathViewRuntime {
     pub variants: Vec<PresetRuntime>,
     presentation: Option<Presentation>,
     last_active_scope: Option<usize>,
-    pub(super) events: super::math_view_events::MathEvents,
     pub(super) shared_resources: Vec<Vec<(ResourceId, ResourceId)>>,
     pub(super) shared_depth: Vec<Vec<(ResourceId, ResourceId)>>,
 }
@@ -81,24 +80,6 @@ impl PresetRuntime {
         }
     }
 
-    pub(super) fn tick_math_view_events(&mut self, beat: Beats) {
-        for view in &mut self.math_views {
-            let (count, baseline) = self
-                .modifier_events
-                .as_ref()
-                .and_then(|events| events.counts(&view.modifier_id))
-                .expect("prepared Math View event stream");
-            let enabled = view.enabled(&self.graph);
-            view.events.tick(
-                &mut self.graph,
-                &mut view.variants,
-                count,
-                baseline,
-                beat,
-                enabled,
-            );
-        }
-    }
 
     pub(super) fn render_math_views(
         &mut self,
@@ -203,19 +184,13 @@ pub(super) fn prepare_views(
                 Some((&modifier.id, None)),
             )?);
         }
-        let controls = manifold_core::scene_modifier_math_view::CONTROLS
-            .iter()
-            .map(|(name, _, default, _, _)| control(name).map(|node| (*name, node, *default)))
-            .collect::<Result<Vec<_>, _>>()?;
-        let events =
-            super::math_view_events::MathEvents::prepare(modifier, parent, &variants, controls)?;
         let shared_depth = variants
             .iter()
             .map(|variant| shared_resources(parent, variant, modifier, &["depth"]))
             .collect::<Result<Vec<_>, _>>()?;
         let shared_resources = variants
             .iter()
-            .map(|variant| shared_resources(parent, variant, modifier, &["vertices", "weights"]))
+            .map(|variant| shared_resources(parent, variant, modifier, &["vertices"]))
             .collect::<Result<Vec<_>, _>>()?;
         views.push(MathViewRuntime {
             modifier_id: modifier.id.clone(),
@@ -225,7 +200,6 @@ pub(super) fn prepare_views(
             variants,
             presentation: None,
             last_active_scope: None,
-            events,
             shared_resources,
             shared_depth,
         });
@@ -334,7 +308,6 @@ impl MathViewRuntime {
             presentation.diagram = prepared.diagram;
             presentation.background = prepared.background;
         }
-        self.events.clear();
         self.last_active_scope = None;
         self.bind_shared_resources(parent)
             .expect("prepared Math View shared resources");

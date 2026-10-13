@@ -1,4 +1,4 @@
-//! Prepared resource sharing and appearance masks; authored deformation stays intact.
+//! Math View face samplers and export boundaries; authored deformation stays intact.
 use super::super::SceneModifierNodeRoute;
 use super::*;
 
@@ -61,18 +61,10 @@ fn wire(def: &mut EffectGraphDef, from: PortAddress, to: u32, port: &str) {
         to_port: port.into(),
     });
 }
-fn float(value: f32) -> SerializedParamValue {
-    SerializedParamValue::Float { value }
-}
 
-/// Add small real-face sources in the scene and borrowed inputs in each view.
-/// A scene mask is shared with every connected view. Off-mode masks remain
-/// presentation-only and are evaluated over the bounded reference samples.
-///
-/// Connect to Mesh is supported only when exactly one preceding modifier in
-/// the view's scene chain carries a reference patch transform for every
-/// selected object; anything else leaves the mask presentation-only so the
-/// scene is never partially affected.
+/// Add small real-face samplers in the scene and borrowed inputs in each view.
+/// The scene graph exports each sampled object's faces and the scene depth;
+/// the derived view turns that export into a `system.mesh_input` boundary.
 pub(super) fn prepare(
     owner: &EffectGraphDef,
     def: &mut EffectGraphDef,
@@ -80,7 +72,6 @@ pub(super) fn prepare(
     routes: &[SceneModifierNodeRoute],
     request: Option<MathViewRequest<'_>>,
 ) -> Result<(), SceneModifierExpandError> {
-    let mut exports = Vec::new();
     for modifier in &owner.scene_modifiers {
         if !manifold_core::scene_modifier_math_view::is_math_view_recipe(&modifier.graph) {
             continue;
@@ -88,21 +79,6 @@ pub(super) fn prepare(
         if request.is_some_and(|r| *r.modifier_id != modifier.id) {
             continue;
         }
-        // Preceding modifiers of the same scene, in chain order.
-        let preceding: Vec<NodeId> = owner
-            .scene_modifiers
-            .iter()
-            .take_while(|item| item.id != modifier.id)
-            .filter(|item| item.scene == modifier.scene)
-            .map(|item| item.id.clone())
-            .collect();
-        // A view migrated from a legacy carrier names it
-        // (`legacy_math_view_carrier`); while the named carrier still
-        // precedes the view in this scene, only its patch routes qualify, so
-        // several patch carriers no longer disable the authored connection.
-        // Retain dangling associations: they qualify no patches rather than
-        // silently binding an unrelated preceding carrier.
-        let preferred_carrier = modifier.legacy_math_view_carrier.clone();
         let control = |name: &str| -> Result<u32, SceneModifierExpandError> {
             let local = NodeId::new(format!("__math_view_{name}"));
             let copy = routes
@@ -117,85 +93,11 @@ pub(super) fn prepare(
                 .ok_or_else(|| invalid("mathView", "missing control node"))
         };
         let density = control("density")?;
-        // The event count/baseline producers are installed by the normal
-        // compiler context seam, including while all diagrams are inactive.
-        // Connect support is all-or-nothing across the view's objects.
-        let patches: Vec<Option<EffectGraphNode>> = modifier
-            .mesh_frames
-            .iter()
-            .map(|frame| {
-                let found: Vec<_> = routes
-                    .iter()
-                    .filter(|r| preceding.contains(&r.modifier_id))
-                    .filter(|r| {
-                        preferred_carrier
-                            .as_ref()
-                            .is_none_or(|preferred| r.modifier_id == *preferred)
-                    })
-                    .flat_map(|r| &r.copies)
-                    .filter(|c| c.object.as_ref() == Some(&frame.target))
-                    .filter_map(|c| {
-                        def.nodes.iter().find(|n| {
-                            n.node_id == c.node_id && n.type_id == "node.transform_mesh_patches"
-                        })
-                    })
-                    .collect();
-                (found.len() == 1).then(|| (*found[0]).clone())
-            })
-            .collect();
-        let connect_supported = !patches.is_empty() && patches.iter().all(Option::is_some);
-        for (frame, patch) in modifier.mesh_frames.iter().zip(patches) {
-            let mask = add(
-                def,
-                resource_node_id(&modifier.id, &frame.target, "weights"),
-                "node.mesh_spatial_mask",
-                BTreeMap::from([
-                    (
-                        "sample_mode".into(),
-                        SerializedParamValue::Enum { value: 2 },
-                    ),
-                    ("shape".into(), SerializedParamValue::Enum { value: 0 }),
-                    ("amount".into(), float(0.0)),
-                    ("low".into(), float(1.0)),
-                    ("high".into(), float(1.0)),
-                    ("feather".into(), float(0.03)),
-                ]),
-            )?;
-            for (port, default) in [
-                ("cell_size", 0.15),
-                ("scale", 1.0),
-                ("source_offset_x", 0.0),
-                ("source_offset_y", 0.0),
-                ("source_offset_z", 0.0),
-            ] {
-                let borrowed = patch.as_ref().and_then(|patch| {
-                    def.wires
-                        .iter()
-                        .find(|w| w.to_node == patch.id && w.to_port == port)
-                        .cloned()
-                });
-                if let Some(w) = borrowed {
-                    wire(def, (w.from_node, w.from_port), mask, port);
-                } else {
-                    let value = patch
-                        .as_ref()
-                        .and_then(|patch| patch.params.get(port).cloned())
-                        .unwrap_or_else(|| float(default));
-                    def.nodes
-                        .iter_mut()
-                        .find(|n| n.id == mask)
-                        .unwrap()
-                        .params
-                        .insert(port.into(), value);
-                }
-            }
+        for frame in &modifier.mesh_frames {
             if request.is_some() {
                 // Keep the old sampler's stable identity and routes, changing
                 // only its boundary role. Parent resources are prebound later.
-                let mut parts = vec!["math_view", modifier.id.as_str()];
-                parts.extend(frame.target.scope.iter().map(NodeId::as_str));
-                parts.push(frame.target.node.as_str());
-                let sample_id = namespace::namespace_node_id(&parts);
+                let sample_id = sample_node_id(&modifier.id, &frame.target);
                 let sample = def
                     .nodes
                     .iter_mut()
@@ -205,7 +107,6 @@ pub(super) fn prepare(
                 sample.params.clear();
                 let sample = sample.id;
                 def.wires.retain(|w| w.to_node != sample);
-                wire(def, (sample, "vertices".into()), mask, "in");
                 let diagram_id = resource_node_id(&modifier.id, &frame.target, "diagram");
                 let diagram = def
                     .nodes
@@ -220,10 +121,6 @@ pub(super) fn prepare(
                     .find(|n| n.node_id == surface_id)
                     .ok_or_else(|| invalid("mathView", "surface missing"))?
                     .id;
-                wire(def, (sample, "weights".into()), diagram, "mesh_weights");
-                wire(def, (mask, "weights".into()), diagram, "scan_weights");
-                wire(def, (sample, "weights".into()), surface, "mesh_weights");
-                wire(def, (mask, "weights".into()), surface, "scan_weights");
                 // The view's boundary input borrows the parent render_scene
                 // depth at runtime. Every presentation node consumes that
                 // same borrowed texture, so the derived plan never revives
@@ -235,10 +132,6 @@ pub(super) fn prepare(
                     .by_ref
                     .get(&frame.source)
                     .ok_or_else(|| invalid("mathView", "saved source missing"))?;
-                let object = *index
-                    .by_ref
-                    .get(&frame.target)
-                    .ok_or_else(|| invalid("mathView", "saved object missing"))?;
                 let source_port = index
                     .input(&frame.target, "vertices")?
                     .filter(|wire| wire.from_node == source)
@@ -246,33 +139,6 @@ pub(super) fn prepare(
                     .ok_or_else(|| {
                         invalid("mathView", "saved source no longer feeds the object")
                     })?;
-                wire(def, (source, source_port.clone()), mask, "in");
-                if connect_supported {
-                    // connect_supported implies one patch per frame.
-                    let patch = patch.expect("supported connect has a patch");
-                    if !def.wires.iter().any(|wire| {
-                        wire.to_node == patch.id
-                            && wire.to_port == "reference"
-                            && wire.from_node == source
-                            && wire.from_port == source_port
-                    }) {
-                        return Err(invalid(
-                            "mathView",
-                            "patch reference must use the saved original mesh for connected face correspondence",
-                        ));
-                    }
-                    if let Some(prior) = def
-                        .wires
-                        .iter()
-                        .find(|w| w.to_node == object && w.to_port == "weights")
-                        .cloned()
-                    {
-                        wire(def, (prior.from_node, prior.from_port), mask, "weights");
-                        def.wires
-                            .retain(|w| !(w.to_node == object && w.to_port == "weights"));
-                    }
-                    wire(def, (mask, "weights".into()), object, "weights");
-                }
                 let sample = add(
                     def,
                     resource_node_id(&modifier.id, &frame.target, "samples"),
@@ -296,43 +162,8 @@ pub(super) fn prepare(
                     .get(&modifier.scene)
                     .ok_or_else(|| invalid("mathView", "scene target missing"))?;
                 wire(def, (scene, "depth".into()), output, "depth");
-                for (kind, port) in [("count", "trigger_count"), ("baseline", "trigger_baseline")] {
-                    let key = serde_json::to_string(&(modifier.id.as_str(), "events", kind))
-                        .map_err(|e| invalid("mathView", e.to_string()))?;
-                    let nid = namespace::namespace_node_id(&["context", &key]);
-                    let node = def
-                        .nodes
-                        .iter()
-                        .find(|n| n.node_id == nid)
-                        .ok_or_else(|| invalid("mathView", "event context node missing"))?
-                        .id;
-                    wire(def, (node, "out".into()), output, port);
-                }
-                if connect_supported {
-                    exports.push((object, output));
-                } else {
-                    // Without a qualified patch carrier the mask never reaches
-                    // the scene object; the view still reads its own event mask.
-                    wire(def, (mask, "weights".into()), output, "weights");
-                }
             }
         }
-    }
-    // Export the composed final visibility for this object, so all connected
-    // cards agree with the actual scene even when several masks overlap.
-    for (object, output) in exports {
-        let weights = def
-            .wires
-            .iter()
-            .find(|w| w.to_node == object && w.to_port == "weights")
-            .cloned()
-            .ok_or_else(|| invalid("mathView", "scene mask missing"))?;
-        wire(
-            def,
-            (weights.from_node, weights.from_port),
-            output,
-            "weights",
-        );
     }
     Ok(())
 }

@@ -347,7 +347,6 @@ manifold_core::testkit_visible! {
     pub(crate) fn carry_modifier_control_state_from(&mut self, prior: &mut Self) {
         for view in &mut self.math_views {
             if let Some(previous) = prior.math_views.iter_mut().find(|previous| previous.modifier_id == view.modifier_id) {
-                view.events.carry_from(&previous.events);
                 for (variant, previous_variant) in view.variants.iter_mut().zip(&mut previous.variants) {
                     variant.carry_generator_state_from(previous_variant);
                 }

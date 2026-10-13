@@ -1013,9 +1013,9 @@ fn legacy_math_view_migration_journey() {
 /// Multi-carrier legacy migration (BUG-ngdf): four Vortex carriers, one per
 /// authoredness class. A is disabled with default content; D is enabled but
 /// equally untouched — neither is authored, and both strip cleanly without a
-/// view. B is enabled, in Math mode, with a beat driver on its pulse trigger
+/// view. B is enabled, in Math mode, with a beat driver on its grid brightness
 /// and an explicit one-object selection. C is enabled, in Overlay mode, with
-/// an envelope on scan amount and all objects. B and C each gain their own
+/// an envelope on vectors brightness and all objects. B and C each gain their own
 /// view immediately after themselves; binding ids are unchanged so values
 /// and modulation survive save/reload, and a second migration pass plus a
 /// save/reload round trip change nothing.
@@ -1047,8 +1047,8 @@ fn legacy_math_view_multi_carrier_migration_journey() {
     let mode_macro = |carrier: &NodeId, suffix: &str| {
         format!("sceneModifier:[\"{carrier}\",\"math_view_{suffix}\"]")
     };
-    let pulse_trigger = mode_macro(&carrier_b, "pulse_trigger");
-    let scan_amount = mode_macro(&carrier_c, "scan_amount");
+    let brightness_driven = mode_macro(&carrier_b, "grid_brightness");
+    let brightness_enveloped = mode_macro(&carrier_c, "vectors_brightness");
     let mode_macro_b = mode_macro(&carrier_b, "mode");
     let mode_macro_c = mode_macro(&carrier_c, "mode");
     {
@@ -1113,14 +1113,14 @@ fn legacy_math_view_multi_carrier_migration_journey() {
         // default, every Math View control at its default.
         owner.set_base_param(&mode_macro_b, 1.0);
         owner.drivers_mut().push(ParameterDriver::new(
-            ParamId::from(pulse_trigger.clone()),
+            ParamId::from(brightness_driven.clone()),
             BeatDivision::Quarter,
             DriverWaveform::Sine,
         ));
         owner.set_base_param(&mode_macro_c, 2.0);
         owner
             .envelopes_mut()
-            .push(ParamEnvelope::new(ParamId::from(scan_amount.clone())));
+            .push(ParamEnvelope::new(ParamId::from(brightness_enveloped.clone())));
         owner.refresh_manifest_from_graph();
     }
 
@@ -1227,8 +1227,8 @@ fn legacy_math_view_multi_carrier_migration_journey() {
             .as_ref()
             .expect("drivers survive")
             .iter()
-            .any(|driver| driver.param_id.as_ref() == pulse_trigger.as_str()),
-        "B's pulse driver still keyed by the unchanged binding id"
+            .any(|driver| driver.param_id.as_ref() == brightness_driven.as_str()),
+        "B's grid brightness driver still keyed by the unchanged binding id"
     );
     assert!(
         owner
@@ -1236,8 +1236,8 @@ fn legacy_math_view_multi_carrier_migration_journey() {
             .as_ref()
             .expect("envelopes survive")
             .iter()
-            .any(|envelope| envelope.param_id.as_ref() == scan_amount.as_str()),
-        "C's scan envelope still keyed by the unchanged binding id"
+            .any(|envelope| envelope.param_id.as_ref() == brightness_enveloped.as_str()),
+        "C's vectors brightness envelope still keyed by the unchanged binding id"
     );
 
     // A and D carried no authored content: their minted math_view bindings
@@ -1422,322 +1422,6 @@ fn vortex_recipe() -> EffectGraphDef {
     .expect("Vortex Fragments recipe parses")
 }
 
-/// Set the patch transform's cell_size inside a (possibly grouped) recipe.
-fn set_patch_cell_size(graph: &mut EffectGraphDef, value: f32) {
-    fn walk(nodes: &mut [EffectGraphNode], value: f32) -> bool {
-        for node in nodes {
-            if node.node_id == "patch" && node.type_id == "node.transform_mesh_patches" {
-                node.params.insert(
-                    "cell_size".into(),
-                    SerializedParamValue::Float { value },
-                );
-                return true;
-            }
-            if let Some(group) = node.group.as_mut() && walk(&mut group.nodes, value) {
-                return true;
-            }
-        }
-        false
-    }
-    assert!(walk(&mut graph.nodes, value), "patch node found");
-}
-
-/// Two authored legacy carriers on the same objects, both with Connect to
-/// Mesh on (BUG-ngdf): before this fix the second view saw two preceding
-/// patch sources, `math_view_connect_support` reported ambiguous and the
-/// authored connection silently died. Migration now records the carrier on
-/// each view; each view's mask must borrow its own carrier's patch params
-/// (cell_size/source_offset) and both masks must compose into the scene
-/// object's weights. Save/reload preserves the association.
-#[test]
-fn legacy_math_view_connected_multi_carrier_migration_journey() {
-    use manifold_core::scene_modifier_math_view as mv;
-    let output_dir = PathBuf::from("target/journey-proofs/math-view-connect-parity");
-    std::fs::create_dir_all(&output_dir).expect("migration artifact directory");
-    let (mut project, layer_id, frames, scene) = legacy_carrier_project();
-    let carrier_a = NodeId::new("legacy_vortex_a");
-    let carrier_b = NodeId::new("legacy_vortex_b");
-    let mut carrier_b_graph = legacy_vortex_carrier_graph();
-    set_patch_cell_size(&mut carrier_b_graph, 0.3);
-    push_modifier(
-        &mut project,
-        &layer_id,
-        &carrier_a,
-        &scene,
-        frames.clone(),
-        legacy_vortex_carrier_graph(),
-        true,
-    );
-    push_modifier(
-        &mut project,
-        &layer_id,
-        &carrier_b,
-        &scene,
-        frames.clone(),
-        carrier_b_graph,
-        true,
-    );
-    {
-        let target = manifold_core::GraphTarget::Generator(layer_id.clone());
-        let owner = project.graph_target_owner_mut(&target).unwrap();
-        for carrier in [&carrier_a, &carrier_b] {
-            owner.set_base_param(&carrier_macro(carrier, "connect_mesh"), 1.0);
-            owner.set_base_param(&carrier_macro(carrier, "mode"), 1.0);
-        }
-        owner.set_base_param(&carrier_macro(&carrier_a, "pulse_strength"), 2.0);
-        owner.set_base_param(&carrier_macro(&carrier_b, "pulse_strength"), 0.5);
-        owner.refresh_manifest_from_graph();
-    }
-
-    let pre_save = output_dir.join("legacy-connected-multi-carrier.manifold");
-    manifold_io::saver::save_project_v1(&project, &pre_save).expect("save legacy project");
-    let mut reopened =
-        manifold_io::loader::load_project(&pre_save).expect("reopen legacy project");
-    let notices = crate::project_io::migrate_project_scene_graphs(&mut reopened);
-    assert!(
-        notices
-            .iter()
-            .any(|notice| notice.contains("became 2 standalone Math View modifiers")),
-        "per-carrier migration summary expected, got: {notices:?}"
-    );
-
-    let graph = generator_graph(&reopened, &layer_id);
-    assert_eq!(
-        graph.scene_modifiers.len(),
-        4,
-        "two carriers plus one view each: {:#?}",
-        graph
-            .scene_modifiers
-            .iter()
-            .map(|m| m.id.clone())
-            .collect::<Vec<_>>()
-    );
-    assert_eq!(graph.scene_modifiers[0].id, carrier_a);
-    assert_eq!(graph.scene_modifiers[2].id, carrier_b);
-    let view_a = &graph.scene_modifiers[1];
-    let view_b = &graph.scene_modifiers[3];
-    for view in [view_a, view_b] {
-        assert!(
-            mv::is_math_view_recipe(&view.graph),
-            "appended instance is the standalone Math View"
-        );
-        assert!(
-            mv::math_view_connect_support(graph, &view.id).is_ok(),
-            "migrated view keeps its authored Connect to Mesh: {:?}",
-            mv::math_view_connect_support(graph, &view.id)
-        );
-    }
-    // The migration association survives on both views.
-    assert_eq!(view_a.legacy_math_view_carrier, Some(carrier_a.clone()));
-    assert_eq!(view_b.legacy_math_view_carrier, Some(carrier_b.clone()));
-    // Distinct authored settings moved with each carrier's bindings (binding
-    // ids are unchanged by retargeting, so the carrier-keyed macros resolve).
-    let owner = reopened
-        .graph_target_owner(&manifold_core::GraphTarget::Generator(layer_id.clone()))
-        .unwrap();
-    assert_eq!(
-        owner.get_base_param(&carrier_macro(&carrier_a, "pulse_strength")),
-        2.0,
-        "A's pulse strength lands on A's view"
-    );
-    assert_eq!(
-        owner.get_base_param(&carrier_macro(&carrier_b, "pulse_strength")),
-        0.5,
-        "B's pulse strength lands on B's view"
-    );
-
-    // Preparation: each view's mask borrows its own carrier's patch params
-    // and the masks compose into the scene objects' weights.
-    let registry = manifold_node_engine::persistence::PrimitiveRegistry::with_builtin();
-    let prepared =
-        manifold_node_engine::load::expand::prepare_scene_modifiers(
-            graph, &registry,
-        )
-        .expect("connected migrated views prepare");
-    let node_by_id = |id: u32| {
-        prepared
-            .def
-            .nodes
-            .iter()
-            .find(|node| node.id == id)
-            .expect("prepared node")
-    };
-    // Namespaced node ids are length-prefixed UTF-8 parts; decoding exposes
-    // the provenance baked into them (e.g. the per-carrier coordinate
-    // context that feeds each mask's source_offset).
-    let decode_namespace = |node_id: &str| -> Vec<String> {
-        let hex = node_id
-            .strip_prefix("__scene_modifier_namespace_v1")
-            .unwrap_or(node_id);
-        let bytes: Vec<u8> = (0..hex.len())
-            .step_by(2)
-            .map(|index| u8::from_str_radix(&hex[index..index + 2], 16).expect("hex pair"))
-            .collect();
-        let mut parts = Vec::new();
-        let mut pos = 0;
-        while pos + 4 <= bytes.len() {
-            let len = u32::from_be_bytes([
-                bytes[pos],
-                bytes[pos + 1],
-                bytes[pos + 2],
-                bytes[pos + 3],
-            ]) as usize;
-            pos += 4;
-            if pos + len > bytes.len() {
-                break;
-            }
-            parts.push(String::from_utf8_lossy(&bytes[pos..pos + len]).into_owned());
-            pos += len;
-        }
-        parts
-    };
-    // View-resource masks live in the "math_view" namespace (observed first
-    // namespace part); the carriers' internal recipe masks live in their own.
-    let view_masks: Vec<&EffectGraphNode> = prepared
-        .def
-        .nodes
-        .iter()
-        .filter(|node| node.type_id == "node.mesh_spatial_mask")
-        .filter(|node| {
-            node.node_id
-                .as_str()
-                .starts_with("__scene_modifier_namespace_v1000000096d6174685f76696577")
-        })
-        .collect();
-    assert_eq!(view_masks.len(), 4, "two views times two sampled objects");
-    let mut from_a = 0;
-    let mut from_b = 0;
-    for mask in &view_masks {
-        let cell_size = match mask.params.get("cell_size") {
-            Some(SerializedParamValue::Float { value }) => *value,
-            other => panic!("view mask borrows cell_size as a param, got {other:?}"),
-        };
-        let offset_wire = prepared
-            .def
-            .wires
-            .iter()
-            .find(|wire| wire.to_node == mask.id && wire.to_port == "source_offset_x")
-            .expect("view mask borrows source_offset_x");
-        // The offset source is the coordinate-context node of the mask's own
-        // carrier; its name carries the carrier id.
-        let offset_parts = decode_namespace(&node_by_id(offset_wire.from_node).node_id);
-        assert_eq!(
-            offset_parts.first().map(String::as_str),
-            Some("context"),
-            "offset provenance is a coordinate context: {offset_parts:?}"
-        );
-        let provenance = offset_parts.get(1).expect("context name");
-        match cell_size {
-            0.15 if provenance.contains(carrier_a.as_str()) => from_a += 1,
-            0.3 if provenance.contains(carrier_b.as_str()) => from_b += 1,
-            cell_size => panic!(
-                "mask cell_size {cell_size} borrows offset from {provenance}, not its own carrier"
-            ),
-        }
-    }
-    assert_eq!(from_a, 2, "both A masks borrow A's patch params");
-    assert_eq!(from_b, 2, "both B masks borrow B's patch params");
-    // The connected masks compose: the first view's mask feeds the second's
-    // weights input before the chain reaches the scene.
-    let composes = view_masks.iter().any(|mask| {
-        prepared.def.wires.iter().any(|wire| {
-            wire.from_node == mask.id
-                && wire.from_port == "weights"
-                && view_masks.iter().any(|other| other.id == wire.to_node)
-        })
-    });
-    assert!(composes, "connected view masks multiply into one chain");
-    // Every view mask reaches both scene objects' weights inputs through the
-    // prepared graph (via the carriers' fragment-cut remap chain).
-    let mut reachable: std::collections::BTreeSet<u32> = Default::default();
-    let mut stack: Vec<u32> = view_masks.iter().map(|mask| mask.id).collect();
-    while let Some(id) = stack.pop() {
-        if reachable.insert(id) {
-            for wire in prepared.def.wires.iter().filter(|wire| wire.from_node == id) {
-                stack.push(wire.to_node);
-            }
-        }
-    }
-    for frame in &frames {
-        let object = prepared
-            .def
-            .nodes
-            .iter()
-            .find(|node| node.node_id == frame.target.node)
-            .expect("sampled scene object");
-        let weights_from = prepared
-            .def
-            .wires
-            .iter()
-            .find(|wire| wire.to_node == object.id && wire.to_port == "weights")
-            .map(|wire| wire.from_node)
-            .expect("object weights input");
-        assert!(
-            reachable.contains(&weights_from),
-            "view masks feed the weights of {}",
-            frame.target.node
-        );
-    }
-
-    // Idempotence and save/reload stability carry the association.
-    let once = serde_json::to_string(
-        &reopened
-            .graph_target_owner(&manifold_core::GraphTarget::Generator(layer_id.clone()))
-            .unwrap()
-            .graph,
-    )
-    .unwrap();
-    let mut twice = reopened.clone();
-    let notices = crate::project_io::migrate_project_scene_graphs(&mut twice);
-    assert!(notices.is_empty(), "second pass adds no notices: {notices:?}");
-    let twice_graph = serde_json::to_string(
-        &twice
-            .graph_target_owner(&manifold_core::GraphTarget::Generator(layer_id.clone()))
-            .unwrap()
-            .graph,
-    )
-    .unwrap();
-    assert_eq!(once, twice_graph, "migration is idempotent");
-    let post_save = output_dir.join("migrated-connected-multi-carrier.manifold");
-    manifold_io::saver::save_project_v1(&reopened, &post_save).expect("save migrated project");
-    let mut reloaded =
-        manifold_io::loader::load_project(&post_save).expect("reload migrated project");
-    let notices = crate::project_io::migrate_project_scene_graphs(&mut reloaded);
-    assert!(
-        notices.is_empty(),
-        "migrated project reloads without new migration work: {notices:?}"
-    );
-    let reloaded_graph = generator_graph(&reloaded, &layer_id);
-    assert_eq!(
-        reloaded_graph.scene_modifiers[1].legacy_math_view_carrier,
-        Some(carrier_a.clone()),
-        "save/reload preserves A's carrier association"
-    );
-    assert_eq!(
-        reloaded_graph.scene_modifiers[3].legacy_math_view_carrier,
-        Some(carrier_b.clone()),
-        "save/reload preserves B's carrier association"
-    );
-
-    // The migrated project drives the runtime: both views render.
-    let mut ct = headless_content_thread(Project::default(), 320, 180);
-    let (state_tx, _state_rx) = crossbeam_channel::unbounded::<ContentState>();
-    ct.handle_command(ContentCommand::LoadProject(Box::new(reopened)));
-    assert!(
-        ct.graph_edit_diagnostic.is_none(),
-        "migrated connected project rejected: {:?}",
-        ct.graph_edit_diagnostic
-    );
-    ct.timer.set_frame_clocked(true);
-    warm_project(&mut ct, &state_tx);
-    ct.handle_command(ContentCommand::SeekToBeat(Beats(0.0)));
-    ct.tick_frame(&state_tx);
-    ct.tick_frame(&state_tx);
-    let (_, migrated_nonzero) =
-        capture_output_allow_uniform(&ct, &output_dir.join("migrated-connected-views.png"));
-    assert!(migrated_nonzero > 0, "migrated connected Math Views render");
-}
-
 /// Modifier-limit overflow (BUG-ty86): nine authored legacy carriers become
 /// 18 modifiers and must prepare, round-trip, and keep every carrier's
 /// authored value on its own view.
@@ -1763,7 +1447,7 @@ fn legacy_math_view_nine_carrier_capacity_journey() {
         let target = manifold_core::GraphTarget::Generator(layer_id.clone());
         let owner = project.graph_target_owner_mut(&target).unwrap();
         owner.set_base_param(&carrier_macro(carrier, "mode"), 1.0);
-        owner.set_base_param(&carrier_macro(carrier, "scan_amount"), index as f32 / 10.0);
+        owner.set_base_param(&carrier_macro(carrier, "path_hue"), index as f32 / 10.0);
         owner.refresh_manifest_from_graph();
     }
 
@@ -1801,9 +1485,9 @@ fn legacy_math_view_nine_carrier_capacity_journey() {
             "view records its carrier"
         );
         assert_eq!(
-            owner.get_base_param(&carrier_macro(carrier, "scan_amount")),
+            owner.get_base_param(&carrier_macro(carrier, "path_hue")),
             index as f32 / 10.0,
-            "{carrier}'s authored scan amount lands on its own view"
+            "{carrier}'s authored path hue lands on its own view"
         );
     }
     // The 18-modifier graph prepares: 9 stage carriers + 9 views, each under
@@ -2577,8 +2261,8 @@ fn legacy_math_view_historical_snapshots_migration_journey() {
             .expect("reconcile historical carrier")
             .graph;
             owner.refresh_manifest_from_graph();
-            // Non-default values prove carriage; the events era also connects
-            // to its patch carrier and animates the pulse trigger.
+            // Non-default values prove carriage; the events era also
+            // animates a core control.
             let mode_macro = format!("sceneModifier:[\"{carrier_id}\",\"math_view_mode\"]");
             owner.set_base_param(&mode_macro, 1.0);
             if *era == "initial" {
@@ -2587,13 +2271,10 @@ fn legacy_math_view_historical_snapshots_migration_journey() {
                 owner.set_base_param(&density, 5.0);
             }
             if *era == "events" {
-                let connect =
-                    format!("sceneModifier:[\"{carrier_id}\",\"math_view_connect_mesh\"]");
-                owner.set_base_param(&connect, 1.0);
-                let pulse_trigger =
-                    format!("sceneModifier:[\"{carrier_id}\",\"math_view_pulse_trigger\"]");
+                let path_hue =
+                    format!("sceneModifier:[\"{carrier_id}\",\"math_view_path_hue\"]");
                 owner.drivers_mut().push(ParameterDriver::new(
-                    ParamId::from(pulse_trigger.clone()),
+                    ParamId::from(path_hue.clone()),
                     BeatDivision::Quarter,
                     DriverWaveform::Sine,
                 ));
@@ -2690,23 +2371,17 @@ fn legacy_math_view_historical_snapshots_migration_journey() {
             );
         }
         if *era == "events" {
-            // The connected mask contract holds on the migrated view: exactly
-            // one preceding patch carrier covers every sampled object, and
-            // the pulse driver is still keyed by its unchanged binding id.
-            assert!(
-                mv::math_view_connect_support(graph, &view.id).is_ok(),
-                "{era}: migrated connected mask contract holds"
-            );
-            let pulse_trigger =
-                format!("sceneModifier:[\"{carrier_id}\",\"math_view_pulse_trigger\"]");
+            // The driver is still keyed by its unchanged binding id.
+            let path_hue =
+                format!("sceneModifier:[\"{carrier_id}\",\"math_view_path_hue\"]");
             assert!(
                 owner
                     .drivers
                     .as_ref()
                     .expect("drivers survive")
                     .iter()
-                    .any(|driver| driver.param_id.as_ref() == pulse_trigger.as_str()),
-                "{era}: pulse driver still keyed by the unchanged binding id"
+                    .any(|driver| driver.param_id.as_ref() == path_hue.as_str()),
+                "{era}: driver still keyed by the unchanged binding id"
             );
         }
 

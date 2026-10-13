@@ -51,11 +51,6 @@ pub fn math_array_sharing(runtime: &PresetRuntime, view: usize, variant: usize) 
 }
 
 #[cfg(feature = "gpu-proofs")]
-pub fn math_weight_buffers(runtime: &PresetRuntime) -> impl Iterator<Item = &manifold_gpu::GpuBuffer> {
-    runtime.math_views[0].variants[0].shared_arrays.chunks_exact(2).map(|resources| &resources[1].1)
-}
-
-#[cfg(feature = "gpu-proofs")]
 pub fn all_math_array_links_share_storage(runtime: &PresetRuntime) -> Vec<bool> {
     let backend = runtime.executor.backend();
     runtime.math_views.iter().flat_map(|view| view.variants.iter().zip(&view.shared_resources))

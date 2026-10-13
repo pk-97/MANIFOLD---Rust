@@ -48,24 +48,6 @@ const OUTPUT_INPUTS: &[NodeInput] = &[
         kind: PortKind::Input,
         required: true,
     },
-    NodePort {
-        name: Cow::Borrowed("weights"),
-        ty: PortType::Array(ArrayType::of_known::<f32>()),
-        kind: PortKind::Input,
-        required: true,
-    },
-    NodePort {
-        name: Cow::Borrowed("trigger_count"),
-        ty: PortType::Scalar(crate::ports::ScalarType::F32),
-        kind: PortKind::Input,
-        required: false,
-    },
-    NodePort {
-        name: Cow::Borrowed("trigger_baseline"),
-        ty: PortType::Scalar(crate::ports::ScalarType::F32),
-        kind: PortKind::Input,
-        required: false,
-    },
 ];
 
 impl EffectNode for MeshInput {

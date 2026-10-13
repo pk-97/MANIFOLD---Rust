@@ -1069,8 +1069,6 @@ fn scene_modifier_math_view_shares_depth_and_appearance_across_surfaces() {
             "incoming",
             "camera",
             "transform",
-            "mesh_weights",
-            "scan_weights",
         ] {
             assert!(
                 prepared
@@ -1095,7 +1093,7 @@ fn scene_modifier_math_view_shares_depth_and_appearance_across_surfaces() {
         }
     }
     for (surface, diagram) in surfaces.iter().zip(&diagrams) {
-        for port in ["current", "reference", "incoming", "camera", "transform", "mesh_weights", "scan_weights"] {
+        for port in ["current", "reference", "incoming", "camera", "transform"] {
             let source = |node| prepared.def.wires.iter()
                 .find(|wire| wire.to_node == node && wire.to_port == port)
                 .map(|wire| (wire.from_node, wire.from_port.as_str()));
@@ -1528,81 +1526,3 @@ fn scene_modifier_math_view_follows_the_final_scene_camera_past_the_view() {
     );
 }
 
-#[test]
-fn scene_modifier_math_view_instance_only_chain_never_partially_connects() {
-    // Connect to Mesh stays all-or-nothing: an instances-only preceding
-    // chain (SpatialEchoes alone, no patch carrier) must keep the view's
-    // mask presentation-only — no weights wire reaches the scene object from
-    // the generated mask (BUG-uvts acceptance).
-    let fixture = crate::contracts::node_graph::catalog_tests::math_view_fixtures::test_owner_with_instance_echoes();
-    let mut owner = fixture.clone();
-    owner.scene_modifiers.retain(|instance| instance.id != NodeId::new("vortex_a"));
-    let metadata = owner.preset_metadata.as_mut().unwrap();
-    metadata
-        .bindings
-        .retain(|binding| !matches!(
-            &binding.target,
-            BindingTarget::SceneModifier { modifier_id, .. } if modifier_id.as_str() == "vortex_a"
-        ));
-    let binding_ids: std::collections::HashSet<_> = metadata
-        .bindings
-        .iter()
-        .map(|binding| binding.id.clone())
-        .collect();
-    metadata.params.retain(|param| binding_ids.contains(&param.id));
-    let owner = owner;
-    let registry = PrimitiveRegistry::with_builtin();
-    let parent = prepare_scene_modifiers(&owner, &registry).unwrap();
-    let view = owner
-        .scene_modifiers
-        .iter()
-        .find(|instance| instance.id == NodeId::new("math_view"))
-        .unwrap();
-    let objects: std::collections::BTreeSet<u32> = parent
-        .def
-        .nodes
-        .iter()
-        .filter(|node| node.type_id == "node.scene_object")
-        .map(|node| node.id)
-        .collect();
-    for frame in &view.mesh_frames {
-        let mask_id = manifold_node_engine::load::expand::testkit::resource_node_id(&view.id, &frame.target, "weights");
-        let mask = parent
-            .def
-            .nodes
-            .iter()
-            .find(|node| node.node_id == mask_id)
-            .expect("generated appearance mask");
-        assert!(
-            parent.def.wires.iter().all(|wire| {
-                !(wire.from_node == mask.id && objects.contains(&wire.to_node))
-            }),
-            "unsupported chain: mask weights must not reach the scene object"
-        );
-        // Without a qualified patch carrier the mask stays presentation-only:
-        // it feeds the view's export boundary for the derived view to read,
-        // never the scene object itself.
-        let export_id = manifold_node_engine::load::expand::testkit::resource_node_id(&view.id, &frame.target, "export");
-        let export = parent
-            .def
-            .nodes
-            .iter()
-            .find(|node| node.node_id == export_id)
-            .expect("generated mesh export");
-        let consumers: Vec<u32> = parent
-            .def
-            .wires
-            .iter()
-            .filter(|wire| wire.from_node == mask.id)
-            .map(|wire| wire.to_node)
-            .collect();
-        assert!(
-            !consumers.is_empty(),
-            "the presentation mask must still feed the view export"
-        );
-        assert!(
-            consumers.iter().all(|consumer| *consumer == export.id),
-            "unsupported chain: mask weights must only reach the view export"
-        );
-    }
-}

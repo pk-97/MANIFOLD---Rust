@@ -95,9 +95,10 @@ fn uniforms(
         inv_view_proj: super::super::render_scene::mat4_inverse(view_proj).unwrap(),
         camera_pos_far: [camera.pos[0], camera.pos[1], camera.pos[2], camera.far],
         brightness: [1.0, fragments_gain, 1.0, 1.0],
-        event_values: [1.0, 1.0, 0.0, 0.0],
-        scan_values: [0.2, 2.0, 0.0, 0.0],
-        event_targets: [0; 4],
+        trails_brightness: 1.0,
+        _brightness_pad0: 0.0,
+        _brightness_pad1: 0.0,
+        _brightness_pad2: 0.0,
         copy_count: 1,
         instances_wired: 0,
         instance_history_stride: 0,
@@ -111,7 +112,7 @@ fn bindings<'a>(
     surface: &'a manifold_gpu::GpuTexture,
     scene: &'a manifold_gpu::GpuTexture,
     sampler: &'a manifold_gpu::GpuSampler,
-) -> [GpuBinding<'a>; 11] {
+) -> [GpuBinding<'a>; 9] {
     [
         GpuBinding::Bytes {
             binding: 0,
@@ -134,16 +135,6 @@ fn bindings<'a>(
         },
         GpuBinding::Buffer {
             binding: 4,
-            buffer: current,
-            offset: 0,
-        },
-        GpuBinding::Buffer {
-            binding: 5,
-            buffer: current,
-            offset: 0,
-        },
-        GpuBinding::Buffer {
-            binding: 6,
             buffer: current,
             offset: 0,
         },

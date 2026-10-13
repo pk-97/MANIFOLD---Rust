@@ -3906,10 +3906,9 @@ pub(super) mod tests {
 
     #[test]
     fn disabled_row_click_dispatches_nothing() {
-        // `RowSpec.disabled` — the projection's unsupported reason (Math
-        // View's Connect to Mesh on an unsupported chain is the shipped
-        // case): the greyed row is a dead click. Neither the toggle button
-        // nor the label (OSC copy) may emit anything.
+        // `RowSpec.disabled` — the projection's unsupported reason: the
+        // greyed row is a dead click. Neither the toggle button nor the
+        // label (OSC copy) may emit anything.
         let mut tree = UITree::new();
         let mut panel = ParamCardPanel::new();
         let mut cfg = effect_config_with_toggle_and_trigger();

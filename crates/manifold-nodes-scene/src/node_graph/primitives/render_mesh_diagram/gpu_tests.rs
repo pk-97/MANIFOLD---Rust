@@ -310,7 +310,7 @@ fn math_view_trails_render_recorded_copy_motion() {
             instances_wired: wired,
             inv_view_proj: super::super::render_scene::mat4_inverse(view_proj).unwrap(),
             camera_pos_far: [camera.pos[0], camera.pos[1], camera.pos[2], camera.far],
-            event_values: [1.0, 1.0, 0.0, 0.0],
+            trails_brightness: 1.0,
             ..bytemuck::Zeroable::zeroed()
         };
         let copies = if wired != 0 { copy_count } else { 1 };
@@ -326,8 +326,6 @@ fn math_view_trails_render_recorded_copy_motion() {
                 GpuBinding::Buffer { binding: 2, buffer: &vertex_buffer, offset: 0 },
                 GpuBinding::Buffer { binding: 3, buffer: &vertex_buffer, offset: 0 },
                 GpuBinding::Buffer { binding: 4, buffer: &history, offset: 0 },
-                GpuBinding::Buffer { binding: 5, buffer: &vertex_buffer, offset: 0 },
-                GpuBinding::Buffer { binding: 6, buffer: &vertex_buffer, offset: 0 },
                 GpuBinding::Buffer { binding: 10, buffer: &instance_buffer, offset: 0 },
                 GpuBinding::Buffer { binding: 11, buffer: &ring, offset: 0 },
                 GpuBinding::Buffer { binding: 12, buffer: &counts, offset: 0 },
@@ -493,7 +491,7 @@ fn math_view_instance_copies_draw_per_copy_marks_and_skip_inactive_holes() {
             copy_count,
             instances_wired: wired,
             brightness: [1.0; 4],
-            event_values: [1.0, 1.0, 0.0, 0.0],
+            trails_brightness: 1.0,
             inv_view_proj: super::super::render_scene::mat4_inverse(view_proj).unwrap(),
             camera_pos_far: [camera.pos[0], camera.pos[1], camera.pos[2], camera.far],
             ..bytemuck::Zeroable::zeroed()
@@ -512,8 +510,6 @@ fn math_view_instance_copies_draw_per_copy_marks_and_skip_inactive_holes() {
                 GpuBinding::Buffer { binding: 2, buffer: &vertex_buffer, offset: 0 },
                 GpuBinding::Buffer { binding: 3, buffer: &vertex_buffer, offset: 0 },
                 GpuBinding::Buffer { binding: 4, buffer: &vertex_buffer, offset: 0 },
-                GpuBinding::Buffer { binding: 5, buffer: &vertex_buffer, offset: 0 },
-                GpuBinding::Buffer { binding: 6, buffer: &vertex_buffer, offset: 0 },
                 GpuBinding::Buffer { binding: 10, buffer: instances, offset: 0 },
             ],
             18,
@@ -613,7 +609,7 @@ fn math_view_world_grid_matches_camera_and_ignores_object_transform() {
             inv_view_proj: super::super::render_scene::mat4_inverse(view_proj).unwrap(),
             camera_pos_far: [camera.pos[0], camera.pos[1], camera.pos[2], camera.far],
             brightness: [1.0;4],
-            event_values: [1.0,1.0,0.0,0.0],
+            trails_brightness: 1.0,
             ..bytemuck::Zeroable::zeroed()
         };
         let mut encoder = device.create_encoder("world-grid-proof");
@@ -646,8 +642,6 @@ fn math_view_world_grid_matches_camera_and_ignores_object_transform() {
                     buffer: &buffer,
                     offset: 0,
                 },
-                GpuBinding::Buffer { binding: 5, buffer: &buffer, offset: 0 },
-                GpuBinding::Buffer { binding: 6, buffer: &buffer, offset: 0 },
             ],
             18,
             1,

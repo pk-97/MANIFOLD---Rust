@@ -1964,7 +1964,6 @@ impl PresetRuntime {
         }
 
         // 3. Install the host's target as the FinalOutput's source slot.
-        self.tick_math_view_events(Beats(ctx.beat));
         self.install_target(target);
 
         // 4. Run the graph through the state-aware executor entry.
@@ -2009,7 +2008,6 @@ impl PresetRuntime {
     pub fn reset_state(&mut self, _device: &GpuDevice) {
         self.for_each_extension(|extension, _| extension.reset());
         for view in &mut self.math_views {
-            view.events.clear();
             for variant in &mut view.variants {
                 variant.reset_state(_device);
             }
@@ -2048,7 +2046,6 @@ impl PresetRuntime {
     /// `ContentCommand::LoadProject` arms.
     pub fn clear_trigger_state(&mut self) {
         for view in &mut self.math_views {
-            view.events.clear();
             for variant in &mut view.variants {
                 variant.clear_trigger_state();
             }

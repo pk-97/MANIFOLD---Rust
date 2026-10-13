@@ -291,15 +291,12 @@ use ahash::AHashMap;
     }
 
     #[test]
-    fn math_view_borrowed_arrays_keep_owner_storage_and_capacity() {
+    fn math_view_borrowed_arrays_keep_owner_storage() {
         let mut graph = Graph::new();
         let registry = manifold_node_engine::persistence::PrimitiveRegistry::with_builtin();
         let source = graph.add_node(registry.construct("system.mesh_input").unwrap());
-        let mask = graph.add_node(Box::new(manifold_nodes_scene::node_graph::primitives::mesh_spatial_mask::MeshSpatialMask::new()));
-        graph.connect((source, "vertices"), (mask, "in")).unwrap();
         let output = graph.add_node(registry.construct("system.mesh_output").unwrap());
         graph.connect((source, "vertices"), (output, "vertices")).unwrap();
-        graph.connect((mask, "weights"), (output, "weights")).unwrap();
         let plan = compile(&graph).unwrap();
         let outputs = &plan.steps().iter().find(|step| step.node == source).unwrap().outputs;
         let mut prebound = AHashMap::default();
@@ -317,9 +314,7 @@ use ahash::AHashMap;
             assert!(planned.actions.iter().all(|action| !matches!(action,
                 ArrayAllocationAction::Allocate(allocation) if allocation.resource == *resource)));
         }
-        assert_eq!(planned.actions.len(), 1);
-        assert!(matches!(planned.actions[0], ArrayAllocationAction::Allocate(allocation)
-            if allocation.node == mask && allocation.bytes == 1536 * 4));
+        assert!(planned.actions.is_empty());
     }
 
     fn scatter_graph() -> (Graph, NodeInstanceId) {

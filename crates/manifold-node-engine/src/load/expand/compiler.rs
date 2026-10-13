@@ -383,11 +383,6 @@ fn prepare_scene_modifiers_impl(
             None
         };
         let leaves = builder.append_instance(owner, instance, &targets)?;
-        if math_view.is_none() && manifold_core::scene_modifier_math_view::is_math_view_recipe(&instance.graph) {
-            for value in [SceneContextValue::TriggerCount, SceneContextValue::TriggerBaseline] {
-                builder.context(owner, instance, None, &targets, value)?;
-            }
-        }
         if let Some(mut capture) = capture {
             if legacy_carrier.is_some() {
                 for (target, sample) in &mut capture {
@@ -1133,9 +1128,6 @@ impl Builder<'_> {
                     | "ghosts_brightness"
                     | "vectors_brightness"
                     | "trails_brightness"
-                    | "pulse_target"
-                    | "scan_target"
-                    | "connect_mesh"
             ) || (*suffix == "grid" && !include_grid)
             {
                 continue;
