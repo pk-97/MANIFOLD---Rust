@@ -160,6 +160,9 @@ def _safe_size(path: Path, seen: Optional[set[tuple[int, int]]] = None,
                 return 0
             seen.add(key)
             return stat.st_blocks * ALLOCATED_BLOCK
+        except FileNotFoundError:
+            # A live build deletes files mid-walk; a gone file holds no space.
+            return 0
         except OSError as error:
             errors.append(f"cannot inspect {path}: {error}")
             return 0
@@ -180,11 +183,15 @@ def _safe_size(path: Path, seen: Optional[set[tuple[int, int]]] = None,
                             continue
                         seen.add(key)
                         total += stat.st_blocks * ALLOCATED_BLOCK
+                    except FileNotFoundError:
+                        continue
                     except OSError as error:
                         errors.append(f"cannot inspect {child_path}: {error}")
                         continue
                 elif child.is_dir(follow_symlinks=False):
                     total += _safe_size(child_path, seen, errors)
+    except FileNotFoundError:
+        return total
     except OSError as error:
         errors.append(f"cannot inspect {path}: {error}")
         return total
@@ -459,7 +466,9 @@ def target_size(target: Path) -> int:
     if target.is_symlink() or not target.is_dir():
         return 0
     result = subprocess.run(["du", "-sk", str(target)], capture_output=True, text=True)
-    if result.returncode:
+    vanished = all("No such file or directory" in line
+                   for line in result.stderr.splitlines() if line.strip())
+    if result.returncode and not (vanished and result.stdout.strip()):
         raise OSError(f"cannot measure {target}: {result.stderr.strip()}")
     return int(result.stdout.split()[0]) * 1024
 
@@ -581,6 +590,8 @@ def _iter_regular_files(root: Path, errors: Optional[list[str]] = None) -> Itera
                     yield path
                 elif child.is_dir(follow_symlinks=False):
                     yield from _iter_regular_files(path, errors)
+    except FileNotFoundError:
+        return
     except OSError as error:
         errors.append(f"cannot inspect {root}: {error}")
         return
@@ -615,6 +626,8 @@ def plan_cache_cleanup(target: Path, profiles: Optional[Iterable[Path]] = None) 
                     allocated = 0 if key in inode_seen else stat.st_blocks * ALLOCATED_BLOCK
                     inode_seen.add(key)
                     entries.append(CacheEntry(path, allocated, _identity(path)))
+                except FileNotFoundError:
+                    continue
                 except OSError as error:
                     refusals.append(f"cannot inspect {path}: {error}")
     entries.sort(key=lambda entry: str(entry.path))
@@ -688,11 +701,18 @@ def process_snapshot():
                 st = root.stat()
                 return (st.st_dev, st.st_ino) in identities
             errors = []
+            def walk_error(error):
+                if not isinstance(error, FileNotFoundError):
+                    errors.append(error)
+
             for directory, dirs, files in os.walk(root, followlinks=False,
-                                                  onerror=errors.append):
+                                                  onerror=walk_error):
                 dirs[:] = [d for d in dirs if not (Path(directory) / d).is_symlink()]
                 for candidate in (Path(directory), *(Path(directory) / f for f in files)):
-                    st = candidate.lstat()
+                    try:
+                        st = candidate.lstat()
+                    except FileNotFoundError:
+                        continue
                     if (st.st_dev, st.st_ino) in identities:
                         return True
             return None if errors else False

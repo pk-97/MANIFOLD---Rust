@@ -48,6 +48,14 @@ SLOW_TESTS = contextvars.ContextVar('slow_tests', default=None)
 # deadline before asking a child to handle SIGTERM.  Keeping this in context
 # avoids changing run_cmd's established return shape or call signature.
 ACTIVE_CHECK = contextvars.ContextVar('active_check', default=None)
+# Armed once the up-front storage check admits the run. A later per-build
+# refusal then stops the whole gate instead of failing every remaining leg:
+# one full disk showed as 25 reds.
+STORAGE_ADMITTED = contextvars.ContextVar('storage_admitted', default=False)
+
+
+class StorageStop(Exception):
+    """The disk filled after the up-front admission; the gate stops once."""
 
 # GPU-proofs scope (touched paths -> focused tests + smoke, time budget, no
 # run-everything fallback) lives in scripts/gpu_scope.py; the full suite runs
@@ -96,6 +104,17 @@ def build_environment(cmd, cwd):
         return None, "Storage admission refused: " + admission.reason + note
     environment["CARGO_TARGET_DIR"] = str(admission.target)
     return environment, None
+
+
+def storage_preflight(repo):
+    """Admit the disk once before any leg runs.
+
+    Uses the same admission (and reclaim, then recheck) every build gets, so a
+    full disk is one refusal naming the shortfall and the slots reclaim had to
+    keep, never one red per build leg. Returns the refusal or None.
+    """
+    _, refusal = build_environment(["cargo", "build"], repo)
+    return refusal
 
 
 def reclaim_landed_caches(reserve_bytes):
@@ -199,6 +218,8 @@ def run_cmd(cmd, cwd, timeout, live_log=None):
     start = time.time()
     environment, refusal = build_environment(cmd, cwd)
     if refusal:
+        if STORAGE_ADMITTED.get():
+            raise StorageStop(refusal)
         return 2, "", refusal, time.time() - start
     proc = subprocess.Popen(cmd, cwd=str(cwd), stdout=subprocess.PIPE,
                             stderr=subprocess.PIPE, text=True, errors="replace",
@@ -476,15 +497,21 @@ def main():
     ran = RAN_EVERY_CHECK.set(False)
     wait = GPU_WAIT.set(None)
     slow = SLOW_TESTS.set({})
+    admitted = STORAGE_ADMITTED.set(False)
     try:
         with cancellation_signals(), contextlib.ExitStack() as stack:
             stack.enter_context(gate_passes.session())
             return _main(stack)
+    except StorageStop as error:
+        RAN_EVERY_CHECK.set(False)
+        print(f"[FAIL] storage: gate stopped, the disk filled mid-run\n{error}", flush=True)
+        return 1
     except Cancelled as error:
         RAN_EVERY_CHECK.set(False)
         repo = Path(sys.argv[sys.argv.index('--repo') + 1]) if '--repo' in sys.argv else Path.cwd()
         return record_incomplete(repo, error)
     finally:
+        STORAGE_ADMITTED.reset(admitted)
         SLOW_TESTS.reset(slow)
         GPU_WAIT.reset(wait)
         RAN_EVERY_CHECK.reset(ran)
@@ -586,6 +613,15 @@ def _main(stack):
     if args.plan_only:
         print(json.dumps(dict(gate_readiness.describe(readiness), planning_seconds=planning_seconds), indent=2))
         return int(any(row[0] == 'FAIL' for row in results))
+
+    if paths:
+        refusal = storage_preflight(repo)
+        if refusal:
+            tail = refusal.splitlines()
+            results.append(('FAIL', 'storage', None, tail))
+            print_result('storage', 'FAIL', tail=tail)
+            return finish_cheap(results) if args.cheap else refuse(repo, base_sha, results)
+        STORAGE_ADMITTED.set(True)
 
     # Execute the tooling selection already validated by readiness.
     tooling = readiness['tooling']

@@ -810,6 +810,88 @@ def test_pool_ignores_unregistered_cargo_slot(repo):
           str(aw.pool_slots()))
 
 
+def _reclaim_until_short(live=lambda target: False):
+    with patch.object(aw, "disk_free", return_value=0), \
+            patch.object(aw, "slot_has_live_session", return_value=False), \
+            patch.object(aw, "target_live_status", side_effect=lambda t, **_: live(t)), \
+            redirect_stdout(io.StringIO()) as out:
+        try:
+            aw.cmd_reclaim(SimpleNamespace(free_bytes=100 * 2**30))
+        except SystemExit:
+            pass
+    return out.getvalue()
+
+
+def test_reclaim_clears_whole_target_of_landed_idle_slot(repo):
+    """File-level cleanup keeps warm artifacts; a landed idle slot whose
+    session ended without a build lock still held them (BUG-z95fl.1)."""
+    wt = add_slot(repo, "slot-0", "lane/landed-whole")
+    fake_target(wt)
+    text = _reclaim_until_short()
+    check("qualifying slot loses its whole target", not (wt / "target").exists(), text)
+    check("checkout of the cleared slot untouched", (wt / "f.txt").read_text() == "base\n", text)
+    check("clear is reported", "CLEARED slot-0" in text, text)
+    check("shortfall is named", "RECLAIM SHORT:" in text, text)
+
+
+def test_reclaim_whole_target_spares_dirty_slot(repo):
+    wt = add_slot(repo, "slot-0", "lane/dirty-whole")
+    (wt / "f.txt").write_text("uncommitted\n")
+    exe = fake_target(wt)
+    text = _reclaim_until_short()
+    check("dirty slot target untouched", exe.exists(), text)
+    check("dirty slot named unreclaimable", "UNRECLAIMABLE slot-0:" in text and "dirty" in text, text)
+
+
+def test_reclaim_whole_target_spares_unlanded_slot(repo):
+    wt = add_slot(repo, "slot-0", "lane/unlanded-whole")
+    (wt / "g.txt").write_text("x\n")
+    sh(wt, "git", "add", "g.txt")
+    sh(wt, "git", "commit", "-qm", "unlanded")
+    exe = fake_target(wt)
+    text = _reclaim_until_short()
+    check("unlanded slot target untouched", exe.exists(), text)
+    check("unlanded slot named unreclaimable", "UNRECLAIMABLE slot-0:" in text and "unlanded" in text, text)
+
+
+def test_reclaim_whole_target_spares_leased_slot(repo):
+    wt = add_slot(repo, "slot-0", "lane/leased-whole")
+    write_lease(wt, holder_pid=os.getpid(), age_h=0.5)
+    exe = fake_target(wt)
+    text = _reclaim_until_short()
+    check("leased slot target untouched", exe.exists(), text)
+
+
+def test_reclaim_whole_target_spares_live_process(repo):
+    wt = add_slot(repo, "slot-0", "lane/live-whole")
+    exe = fake_target(wt)
+    text = _reclaim_until_short(live=lambda target: True)
+    check("live slot target untouched", exe.exists(), text)
+    check("live slot kept for a live process", "live process" in text, text)
+    unknown = _reclaim_until_short(live=lambda target: None)
+    check("uninspectable process state keeps the target", exe.exists(), unknown)
+
+
+def test_reclaim_whole_target_spares_main_checkout(repo):
+    main_exe = fake_target(repo)
+    slot = add_slot(repo, "slot-0", "lane/landed-beside-main")
+    fake_target(slot)
+    text = _reclaim_until_short()
+    check("main checkout target untouched by reclaim", main_exe.exists(), text)
+    with patch.object(aw, "slot_has_live_session", return_value=False), \
+            patch.object(aw, "target_live_status", return_value=False):
+        cleared, why = aw.clear_landed_target(repo)
+    check("main checkout refused directly", cleared == 0 and main_exe.exists(), why)
+
+
+TESTS += [test_reclaim_clears_whole_target_of_landed_idle_slot,
+          test_reclaim_whole_target_spares_dirty_slot,
+          test_reclaim_whole_target_spares_unlanded_slot,
+          test_reclaim_whole_target_spares_leased_slot,
+          test_reclaim_whole_target_spares_live_process,
+          test_reclaim_whole_target_spares_main_checkout]
+
+
 TESTS += [test_scrub_frees_an_idle_slot_over_its_cap,
           test_scrub_prunes_idle_incremental_without_pressure,
           test_reclaim_touches_only_landed_clean_idle_slots,

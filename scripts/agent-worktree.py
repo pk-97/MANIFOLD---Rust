@@ -55,6 +55,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from storage_budget import (MAINTENANCE_GOAL_BYTES, admission_pool_lock,
                             apply_cache_cleanup, CleanupPlan, disk_free,
+                            is_cargo_target,
                             incremental_size, maintain_caches,
                             plan_cache_cleanup, registered_worktrees,
                             slot_cap_bytes, STALE_CACHE_SECONDS,
@@ -667,12 +668,13 @@ def reclaimable_for_landing(wt):
 
 def cmd_reclaim(args):
     need = max(args.free_bytes, MAINTENANCE_GOAL_BYTES)
-    victims = []
+    victims, kept = [], []
     stop_idle_brokers(pool_slots())
     for wt in pool_slots():
         ok, why = reclaimable_for_landing(wt)
         if not ok:
             print(f"KEEP {wt.name}: {why}")
+            kept.append((wt, why))
         elif target_size(wt / "target"):
             victims.append(wt)
     removed, files, failures = maintain_caches(
@@ -684,9 +686,51 @@ def cmd_reclaim(args):
     for failure in failures:
         print(failure)
     free = disk_free(POOL)
+    # File-level cleanup keeps warm artifacts because a direct launch holds no
+    # Cargo lock. A qualifying slot has no lease, session or process, so its
+    # whole target is only a rebuild away: clear the biggest first.
+    for wt in sorted(victims, key=lambda wt: target_size(wt / "target"), reverse=True):
+        if free >= need:
+            break
+        cleared, why = clear_landed_target(wt)
+        if cleared:
+            print(f"CLEARED {wt.name}: whole target ({cleared / 2**30:.1f}G)")
+            free = disk_free(POOL)
+        else:
+            print(f"KEEP {wt.name}: {why}")
+            kept.append((wt, why))
     print(f"RECLAIM: {free / 2**30:.1f}G free (need {need / 2**30:.0f}G)")
     if free < need:
+        print(f"RECLAIM SHORT: {(need - free) / 2**30:.1f}G more needed")
+        sized = sorted(((target_size(wt / "target"), wt, why) for wt, why in kept),
+                       key=lambda row: row[0], reverse=True)
+        for size, wt, why in sized[:5]:
+            print(f"UNRECLAIMABLE {wt.name}: {size / 2**30:.1f}G target, {why}")
         sys.exit(3)
+
+
+def clear_landed_target(wt):
+    """Remove a slot's whole target/ only when it still qualifies right now.
+
+    Returns (bytes freed, "") or (0, reason kept). Rechecks the landing
+    predicate and process liveness at the moment of removal; never the main
+    checkout, never a symlinked or unmarked target.
+    """
+    target = wt / "target"
+    if wt.resolve() == REPO.resolve() or wt.parent != POOL or not wt.name.startswith(SLOT_PREFIX):
+        return 0, "not a pool slot"
+    ok, why = reclaimable_for_landing(wt)
+    if not ok:
+        return 0, why
+    if target.is_symlink() or not target.is_dir() or not is_cargo_target(target):
+        return 0, "target missing, linked or unmarked"
+    if target_live_status(target) is not False:
+        return 0, "live process"
+    size = target_size(target)
+    shutil.rmtree(target, ignore_errors=True)
+    if target.exists():
+        return 0, "target could not be fully removed"
+    return size, ""
 
 
 def cmd_release(args):

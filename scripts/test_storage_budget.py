@@ -744,7 +744,47 @@ def test_executor_holds_reservation_for_validation_and_unlink():
             check("busy reservation refuses direct maintenance", cache.exists() and result[2], result)
 
 
-for test in (test_inventory_and_symlink_boundary, test_build_admission,
+def test_vanishing_file_during_walk_is_skipped():
+    """A live build deletes files while the size walk runs; a gone file is
+    skipped, never a refusal (BUG-mrucw disk checked per step)."""
+    with fixture_directory() as root:
+        target = Path(root) / "slot" / "target"
+        session, cache = stale_session(target)
+        keep = session / "dep-graph.bin"
+        keep.write_bytes(b"x" * 4096)
+        real_iter = sb._iter_regular_files
+
+        def vanishing_iter(subtree, errors=None):
+            for path in real_iter(subtree, errors):
+                if path == cache and cache.exists():
+                    path.unlink()
+                yield path
+
+        with patch.object(sb, "_iter_regular_files", side_effect=vanishing_iter):
+            plan = sb.plan_cache_cleanup(target)
+        check("vanished file leaves the cleanup plan clean", not plan.refusals, plan.refusals)
+        check("surviving file still planned", any(e.path == keep for e in plan.entries), plan.entries)
+
+        doomed = session / "work-products.bin"
+        doomed.write_bytes(b"y" * 4096)
+        real_scandir = os.scandir
+
+        @contextmanager
+        def vanishing_scandir(path):
+            with real_scandir(path) as children:
+                entries = list(children)
+            if Path(path) == session and doomed.exists():
+                doomed.unlink()
+            yield iter(entries)
+
+        errors = []
+        with patch.object(sb.os, "scandir", side_effect=vanishing_scandir):
+            size = sb._safe_size(target, errors=errors)
+        check("vanished file skipped by the size walk", not errors and size > 0, (errors, size))
+
+
+for test in (test_vanishing_file_during_walk_is_skipped,
+             test_inventory_and_symlink_boundary, test_build_admission,
              test_manifest_dry_run_apply_and_identity, test_live_and_uninspectable_refused,
              test_lsof_and_cargo_lock_safety, test_ancestor_symlink_refused_by_fd_traversal,
              test_real_cargo_names, test_hashed_executables,

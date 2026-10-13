@@ -251,6 +251,9 @@ class LandingTests(unittest.TestCase):
         self.enterContext(patch.object(landing_gate.gpu_scope, "learned_times_path", return_value=None))
         # The synthetic workspace exercises gate ordering, not shipped smoke ownership.
         self.enterContext(patch.object(landing_gate.gpu_scope, "SMOKE_FILTERS", ['fixture_smoke::']))
+        # Synthetic repos have no real disk to admit; storage admission has its
+        # own tests in test_landing_gate_storage.py.
+        self.enterContext(patch.object(landing_gate, "storage_preflight", return_value=None))
 
     checks = ["tooling", "design-status", "ignored-tests", "deny",
               "clippy", "tests-build", "test-ownership/manifold-gpu",

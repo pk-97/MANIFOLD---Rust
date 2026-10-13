@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Storage admission at actual landing-gate subprocess boundaries."""
+import io
 import os
 import unittest
 from pathlib import Path
@@ -78,6 +79,67 @@ class StorageGateTests(unittest.TestCase):
             _, refusal = landing_gate.build_environment(["cargo", "build"], self.repo)
         self.assertIn("unmanaged", refusal)
         reclaim.assert_not_called()
+
+    def _gate(self, refusal, argv_extra):
+        def fake_run_cmd(cmd, cwd, timeout, live_log=None):
+            if "merge-base" in cmd:
+                return 0, "base\n", "", 0
+            if "rev-parse" in cmd:
+                return 0, "head\n", "", 0
+            return 0, "", "", 0
+
+        readiness = {"packages": ["manifold-core"], "dependents": [], "cpu": None,
+                     "gpu": None, "errors": [], "tooling": [], "flows": False}
+        with patch("sys.argv", ["landing_gate.py", "--repo", str(self.repo), *argv_extra]), \
+                patch("landing_gate.run_cmd", side_effect=fake_run_cmd), \
+                patch("landing_gate.diff_scope.effective_paths",
+                      return_value=(["crates/manifold-core/src/lib.rs"], [])), \
+                patch("landing_gate.gate_readiness.plan", return_value=readiness), \
+                patch("landing_gate.freshness_problems", return_value=[]), \
+                patch("landing_gate.storage_preflight", return_value=refusal) as preflight, \
+                patch("landing_gate.run_check") as legs, \
+                patch("landing_gate.build_leg") as builds, \
+                patch("sys.stdout", new_callable=io.StringIO) as out:
+            code = landing_gate.main()
+        return code, out.getvalue(), preflight, legs, builds
+
+    def test_full_disk_is_one_refusal_before_any_leg(self):
+        refusal = ("Storage admission refused: REFUSED: only 3.0 GiB free; reserve is 50 GiB\n"
+                   "RECLAIM SHORT: 47.0G more needed\n"
+                   "UNRECLAIMABLE slot-2: 30.1G target, unlanded\n"
+                   "UNRECLAIMABLE slot-1: 12.0G target, dirty")
+        code, text, preflight, legs, builds = self._gate(refusal, ["--cheap"])
+        self.assertNotEqual(code, 0)
+        preflight.assert_called_once()
+        legs.assert_not_called()
+        builds.assert_not_called()
+        self.assertEqual(text.count("FAIL storage"), 1, text)
+        self.assertEqual(text.count("REFUSED"), 1, text)
+        self.assertIn("47.0G more needed", text)
+        self.assertIn("UNRECLAIMABLE slot-2: 30.1G target, unlanded", text)
+
+    def test_mid_run_refusal_after_admission_stops_the_gate_once(self):
+        short = BuildCheck(False, self.repo / "target", 0, reason="REFUSED: disk filled")
+        token = landing_gate.STORAGE_ADMITTED.set(True)
+        try:
+            with patch("storage_budget.check_build", return_value=short), \
+                    patch("landing_gate.subprocess.Popen") as execute:
+                with self.assertRaises(landing_gate.StorageStop):
+                    landing_gate.run_cmd(["cargo", "clippy"], self.repo, 10)
+            execute.assert_not_called()
+        finally:
+            landing_gate.STORAGE_ADMITTED.reset(token)
+
+    def test_preflight_uses_build_admission_with_reclaim(self):
+        short = BuildCheck(False, self.repo / "target", 10 * 2**30, 100 * 2**30,
+                           reason="REFUSED: only 10.0 GiB free", reclaimable=True)
+        tail = "\nRECLAIM SHORT: 90.0G more needed\nUNRECLAIMABLE slot-3: 40.0G target, dirty"
+        with patch("storage_budget.check_build", return_value=short), \
+                patch("landing_gate.reclaim_landed_caches", return_value=tail) as reclaim:
+            refusal = landing_gate.storage_preflight(self.repo)
+        reclaim.assert_called_once_with(100 * 2**30)
+        self.assertIn("90.0G more needed", refusal)
+        self.assertIn("UNRECLAIMABLE slot-3", refusal)
 
     def test_read_only_commands_do_not_require_space(self):
         with patch("storage_budget.check_build") as check:
