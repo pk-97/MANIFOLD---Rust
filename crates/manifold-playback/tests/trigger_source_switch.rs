@@ -96,6 +96,14 @@ fn trigger_source_project() -> (Project, LayerId, LayerId, LayerId, SceneId) {
     (project, owner_id, source_a_id, source_b_id, scene_id)
 }
 
+/// Playing with an external clock that freezes the grid (the CLK stopgap):
+/// each `follow_external_beat` lands on the nearest frame at once, with no
+/// seek side effects, and ticks never move the playhead.
+fn play_on_external_clock(engine: &mut PlaybackEngine) {
+    engine.set_state(PlaybackState::Playing);
+    engine.set_external_time_sync(true);
+}
+
 fn tick(engine: &mut PlaybackEngine) {
     // No step: these tests place the playhead themselves.
     let _ = engine.tick(TickContext {
@@ -308,7 +316,7 @@ fn direct_backward_clock_clears_pending_fire_without_retriggering_active_clip() 
 
         let mut engine = PlaybackEngine::new(Vec::new());
         engine.initialize(project);
-        engine.set_state(PlaybackState::Playing);
+        play_on_external_clock(&mut engine);
         engine.follow_external_beat(Beats::ZERO);
         engine.sync_clips_to_time();
         tick(&mut engine);
@@ -351,7 +359,7 @@ fn backward_set_beat_clears_late_source_cutoff_before_earlier_start() {
     let (project, owner_id, _, source_b_id, _) = trigger_source_project();
     let mut engine = PlaybackEngine::new(Vec::new());
     engine.initialize(project);
-    engine.set_state(PlaybackState::Playing);
+    play_on_external_clock(&mut engine);
     engine.follow_external_beat(Beats(4.0));
     engine.sync_clips_to_time();
 
@@ -393,7 +401,7 @@ fn backward_clock_clears_unevaluated_later_step_start() {
 
     let mut engine = PlaybackEngine::new(Vec::new());
     engine.initialize(project);
-    engine.set_state(PlaybackState::Playing);
+    play_on_external_clock(&mut engine);
     engine.follow_external_beat(Beats(4.0));
     engine.sync_clips_to_time();
     assert_eq!(step_value(&engine, &owner_id), None);
@@ -488,7 +496,7 @@ fn numeric_trigger_source_roundtrip_assignment_disconnect_and_undo() {
             .unwrap()
             .enabled
     );
-    engine.set_state(PlaybackState::Playing);
+    play_on_external_clock(&mut engine);
 
     for (beat, expected) in [(0.0, Some(1.0)), (1.0, Some(1.0)), (3.0, Some(1.0))] {
         engine.follow_external_beat(Beats(beat));
@@ -560,7 +568,7 @@ fn numeric_trigger_source_roundtrip_assignment_disconnect_and_undo() {
 
     let mut loaded_engine = PlaybackEngine::new(Vec::new());
     loaded_engine.initialize(reloaded.clone());
-    loaded_engine.set_state(PlaybackState::Playing);
+    play_on_external_clock(&mut loaded_engine);
     for (beat, expected) in [
         (0.0, Some(1.0)),
         (1.0, Some(1.0)),
@@ -620,7 +628,7 @@ fn numeric_trigger_source_roundtrip_assignment_disconnect_and_undo() {
     );
     let mut missing_engine = PlaybackEngine::new(Vec::new());
     missing_engine.initialize(missing);
-    missing_engine.set_state(PlaybackState::Playing);
+    play_on_external_clock(&mut missing_engine);
     missing_engine.follow_external_beat(Beats::ZERO);
     missing_engine.sync_clips_to_time();
     tick(&mut missing_engine);

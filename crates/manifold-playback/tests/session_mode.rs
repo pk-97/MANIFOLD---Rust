@@ -45,21 +45,20 @@ fn add_session_slot(project: &mut Project, layer_id: &LayerId, scene_id: &SceneI
     });
 }
 
-/// Move the playhead to `beat`'s frame and return the frame's beat. Every
-/// beat these tests use sits on a 60 fps frame at 120 BPM; the frame's beat
-/// is taken a ten-millionth of a frame after its time
-/// (FRAME_EXACT_TRANSPORT_DESIGN D14), so a launch, stop or return made on
-/// that frame is recorded at the returned beat, a hair past `beat`.
+/// Move the playhead to `beat`'s frame and return the frame's exact beat,
+/// where a launch, stop or return made on that frame is recorded
+/// (FRAME_EXACT_TRANSPORT_DESIGN D14). Every beat these tests use sits on a
+/// 60 fps frame at 120 BPM.
 fn locate_beat(engine: &mut PlaybackEngine, beat: Beats) -> Beats {
     let time = engine.beat_to_timeline_time_immut(beat);
     engine.locate(time);
-    engine.current_beat()
+    engine.frame_beat()
 }
 
-/// Elapsed phases measured from launch beats carry the D14 sample offset.
+/// Elapsed phases are differences of on-frame beats: exact up to rounding.
 fn assert_elapsed(actual: Option<Beats>, expected: Option<f64>, context: &str) {
     match (actual, expected) {
-        (Some(a), Some(e)) => assert!((a.0 - e).abs() < 1e-6, "{context}: {} vs {e}", a.0),
+        (Some(a), Some(e)) => assert!((a.0 - e).abs() < 1e-9, "{context}: {} vs {e}", a.0),
         (a, e) => assert_eq!(a.map(|b| b.0), e, "{context}"),
     }
 }

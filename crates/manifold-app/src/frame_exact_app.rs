@@ -195,6 +195,9 @@ fn drive(ct: &mut ContentThread, anchor: Instant, events: &[Event], mut on_frame
         let playing = ct.engine.is_playing();
         ct.tick_frame_at(now, &state_tx);
         while state_rx.try_recv().is_ok() {}
+        // D5: graphs get the tick's grid frames as dt, never wall time.
+        let grid_dt = f64::from(ct.engine.tick_frames()) * ct.engine.transport_clock().step().0;
+        assert_eq!(ct.content_pipeline.last_render_dt().to_bits(), grid_dt.to_bits(), "render dt is whole grid frames");
         if playing {
             on_frame(ct, ct.engine.transport_frame());
         }

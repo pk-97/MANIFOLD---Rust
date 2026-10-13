@@ -172,7 +172,6 @@ fn spawn_background_content_thread() -> Arc<AtomicBool> {
                 &ct.gpu,
                 &mut ct.engine,
                 &tick_result,
-                dt,
                 frame,
                 false,
                 ct.editing_service.data_version(),

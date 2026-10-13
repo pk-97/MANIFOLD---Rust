@@ -403,8 +403,8 @@ fn short_session_loops_are_independent_of_frame_partition_and_repeated_sync() {
     let elapsed = coarse.clip_controls().elapsed(
         &manifold_core::params::ClipTriggerSource::OwnLayer, Some(owner), Beats(0.12),
     ).unwrap();
-    // The loop edge is anchored at the launch beat, a hair past the frame (D14).
-    assert!((elapsed.0 - 0.02).abs() < 1e-6);
+    // An immediate launch is stamped at its frame's exact beat (D14), so the elapsed phase is exact.
+    assert!((elapsed.0 - 0.02).abs() < 1e-9, "{}", elapsed.0 - 0.02);
 
     let mut repeated = short_session_engine(200.0);
     repeated.locate(Seconds(0.17));
@@ -461,7 +461,7 @@ fn short_pattern_is_independent_of_frame_partition_and_repeated_sync() {
     let elapsed = coarse.clip_controls().elapsed(
         &manifold_core::params::ClipTriggerSource::OwnLayer, Some(owner), Beats(0.22),
     ).unwrap();
-    assert!((elapsed.0 - 0.02).abs() < 1e-6);
+    assert!((elapsed.0 - 0.02).abs() < 1e-9, "{}", elapsed.0 - 0.02);
 
     let mut repeated = short_pattern_engine(60.0);
     repeated.sync_clips_to_time();

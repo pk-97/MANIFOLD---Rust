@@ -550,7 +550,6 @@ fn trigger_lane_force_mixed_audio_timing_acceptance() {
             &content.gpu,
             &mut content.engine,
             &tick_result,
-            DT,
             frame as u64,
             true,
             DATA_VERSION,

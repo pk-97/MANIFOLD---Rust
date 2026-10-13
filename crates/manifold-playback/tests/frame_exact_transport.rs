@@ -19,9 +19,11 @@ use manifold_core::layer::Layer;
 use manifold_core::params::Param;
 use manifold_core::project::Project;
 use manifold_core::session::{ClipSequence, Scene, SessionSlot};
-use manifold_core::types::{BeatDivision, DriverWaveform, TempoPointSource};
+use manifold_core::tempo::TempoMapConverter;
+use manifold_core::types::{BeatDivision, DriverWaveform, PlaybackState, TempoPointSource};
 use manifold_core::{Beats, Bpm, ClipId, LayerId, PresetTypeId, SceneId, Seconds};
 use manifold_playback::engine::{PlaybackEngine, TickContext};
+use manifold_playback::sync::SyncArbiterTarget;
 use manifold_playback::frame_grid::FrameGrid;
 use manifold_playback::renderer::StubRenderer;
 
@@ -606,25 +608,32 @@ fn play_advances_from_anchor_without_repeat() {
     assert_eq!(engine.transport_frame(), 1, "from stop, frame 0 was on screen");
 }
 
-/// Export as `content_export` drives the engine: the export clock before the
-/// first seek, a warm-up tick, the second seek, then frame k with no advance
-/// on frame 0 and one frame after.
-fn export(engine: &mut PlaybackEngine, fps: f32, start: Seconds, n: u64, mut on_frame: impl FnMut(&PlaybackEngine, u64)) {
+/// Export through the engine's own export sequence, the one `content_export`
+/// runs: the restore point, stop, export mode, `begin_export_run` (with one
+/// warm-up tick standing in for a video project's decoder wait), frame k's
+/// `export_frame_context`, then `end_export_run`.
+fn export(engine: &mut PlaybackEngine, fps: f32, start: Seconds, n: u32, on_frame: impl FnMut(&PlaybackEngine, u32)) {
+    export_with(engine, fps, start, n, true, on_frame);
+}
+
+/// `export`, warming up only when `warm_up` is set: production skips the
+/// warm-up for a project with no video clips.
+fn export_with(engine: &mut PlaybackEngine, fps: f32, start: Seconds, n: u32, warm_up: bool, mut on_frame: impl FnMut(&PlaybackEngine, u32)) {
+    let restore = engine.export_restore_point();
+    engine.stop();
     engine.set_export_mode(true);
-    engine.begin_export_clock(fps);
-    engine.seek_to(start);
-    engine.play();
-    let warm_up = engine.tick(TickContext { frames: 1, frame_count: u64::MAX, ..TickContext::default() });
-    engine.reclaim_tick_result(warm_up);
-    engine.seek_to(start);
-    engine.begin_export_frames();
+    engine.begin_export_run(fps, start, |engine| {
+        if warm_up {
+            engine.export_warm_up_tick();
+        }
+        warm_up
+    });
     for k in 0..n {
-        let result = engine.tick(TickContext { frames: u32::from(k != 0), frame_count: k, ..TickContext::default() });
+        let result = engine.tick(PlaybackEngine::export_frame_context(k, Seconds::ZERO));
         engine.reclaim_tick_result(result);
         on_frame(engine, k);
     }
-    engine.end_export_clock();
-    engine.set_export_mode(false);
+    engine.end_export_run(restore);
 }
 
 /// D9, D17: export frames sit on the song-time-0 grid. At the project rate
@@ -643,15 +652,27 @@ fn export_frames_match_live_indices() {
         tick(&mut live, 1);
         live_frames.insert(live.transport_frame(), capture(&live, &clip_ids, &session_layer));
     }
+    // From 0 s, as production exports this generator-only project (no
+    // warm-up), every value matches live but the clip-edge step's param: a
+    // step reaches its param one tick after it fires (`evaluate_modulation`
+    // writes the step shadows before this tick's starts advance them).
+    // Export frame 0 ticks the start frame, which live play never does, so
+    // the step of the clip starting at 0 shows on export frame 1 and on live
+    // frame 2: at the project rate that param is left out on export frame 1
+    // only, and every other value on every frame is exact. At half the rate
+    // the lag is one export frame, two live ones, so that param is left out.
     // From 2.01 s, off both grids, export frame 0 is the first frame at or
-    // after it. The clip-edge step envelope is history, not grid: it counts
-    // edges since the export's second seek, which live play from 0 never
-    // made, so it is left out; `param_step_clip_edge` covers its live and
+    // after it, with the warm-up and re-seek a video project runs. There the
+    // step envelope is history, not grid: it counts edges since playback
+    // started, which live play from 0 and export from 2.01 s do not share,
+    // so it alone is left out; `param_step_clip_edge` covers its live and
     // export counts.
     let level = 3;
-    for (start, fps, ratio, first) in [(0.0, 60.0, 1, 0), (0.0, 30.0, 2, 0), (2.01, 60.0, 1, 121), (2.01, 30.0, 2, 61)] {
+    for (start, fps, ratio, first, warm_up) in
+        [(0.0, 60.0, 1, 0, false), (0.0, 30.0, 2, 0, false), (2.01, 60.0, 1, 121, true), (2.01, 30.0, 2, 61, true)]
+    {
         let mut engine = engine_with(project.clone());
-        export(&mut engine, fps, Seconds(start), 200, |engine, k| {
+        export_with(&mut engine, fps, Seconds(start), 200, warm_up, |engine, k| {
             let index = engine.transport_frame();
             let at = format!("export from {start} s at {fps} fps, frame {k}");
             assert_eq!(index, first + k as i64, "{at}");
@@ -660,8 +681,13 @@ fn export_frames_match_live_indices() {
                 return;
             };
             let mut frame = capture(engine, &clip_ids, &session_layer);
-            frame.param_bits[level] = live.param_bits[level];
-            frame.step_values.clone_from(&live.step_values);
+            let history = start != 0.0;
+            if history || ratio != 1 || k == 1 {
+                frame.param_bits[level] = live.param_bits[level];
+            }
+            if history {
+                frame.step_values.clone_from(&live.step_values);
+            }
             if ratio == 1 {
                 let one = BTreeMap::from([(index, frame)]);
                 if let Some(divergence) = first_divergence(&live_frames, &one) {
@@ -682,16 +708,28 @@ fn export_frames_match_live_indices() {
     }
 }
 
+fn start_count(engine: &PlaybackEngine, clip: &ClipId) -> usize {
+    stub(engine).start_count_for(clip.as_str())
+}
+
+fn stub(engine: &PlaybackEngine) -> &StubRenderer {
+    engine.renderers()[0].as_any().downcast_ref::<StubRenderer>().expect("stub renderer")
+}
+
 /// A 24 fps export of a 60 fps project starting at 1.04 s (beat 2.08 at 120
 /// BPM): export frame 0 is index 25 (1.0417 s, beat 2.083). A clip at beat
-/// 2.09 (1.045 s) starts after it, so it first shows on export frame 1.
+/// 2.09 (1.045 s) starts after it, so it first shows on export frame 1 and
+/// starts exactly once: a seek on the 60 fps grid (1.05 s) would start it
+/// before export frame 0.
 #[test]
 fn export_clip_inside_first_frame() {
     let mut engine = engine_with(constant_tempo(120.0, 60.0, &[(2.09, 4.0)]));
     let clip = engine.project().unwrap().timeline.layers[0].clips[0].id.clone();
     let mut shown = Vec::new();
-    export(&mut engine, 24.0, Seconds(1.04), 3, |engine, _| shown.push((engine.transport_frame(), is_active(engine, &clip))));
-    assert_eq!(shown, vec![(25, false), (26, true), (27, true)]);
+    export_with(&mut engine, 24.0, Seconds(1.04), 3, false, |engine, _| {
+        shown.push((engine.transport_frame(), is_active(engine, &clip), start_count(engine, &clip)));
+    });
+    assert_eq!(shown, vec![(25, false, 0), (26, true, 1), (27, true, 1)]);
     assert_eq!(engine.frame_rate(), 60.0, "the end of export returns to the project rate");
 }
 
@@ -704,7 +742,204 @@ fn export_under_external_sync_advances() {
     let mut indices = Vec::new();
     export(&mut engine, 30.0, Seconds(1.0), 5, |engine, _| indices.push(engine.transport_frame()));
     assert_eq!(indices, vec![30, 31, 32, 33, 34]);
+    engine.play();
     let parked = engine.transport_frame();
     tick(&mut engine, 1);
     assert_eq!(engine.transport_frame(), parked, "live ticks under external sync wait for the source");
 }
+
+/// An export returns the transport to the frame it left, at every tempo,
+/// playing or paused (D14: the restore point is the frame's exact beat, and
+/// a seek snaps wider than the sample offset).
+#[test]
+fn export_restores_the_frame_it_left() {
+    for bpm in [120.0, 128.0, 141.0, 150.0, 174.0] {
+        let mut engine = engine_with(constant_tempo(bpm, FPS, &[(0.0, 400.0)]));
+        let mut moved = Vec::new();
+        for k in (1..3_000).step_by(7).chain([86_399, 216_001]) {
+            let time = engine.transport_clock().time_at(k);
+            engine.locate(time);
+            let state = if k % 2 == 0 { PlaybackState::Playing } else { PlaybackState::Paused };
+            engine.set_state(state);
+            export(&mut engine, 24.0, Seconds(2.0), 2, |_, _| {});
+            if engine.transport_frame() != k {
+                moved.push((k, engine.transport_frame()));
+            }
+            assert_eq!(engine.current_state(), state, "{bpm} BPM frame {k}: state restored");
+        }
+        assert!(moved.is_empty(), "{bpm} BPM: {} restores moved, first {:?}", moved.len(), &moved[..moved.len().min(5)]);
+    }
+}
+
+// ─── STOPGAP(frame-exact P3): external follow without flapping ───
+
+/// How an external source reaches the engine in the stopgap.
+#[derive(Clone, Copy, Debug)]
+enum Source {
+    /// Link: the content thread copies its beat before every tick.
+    LinkBeat,
+    /// AbletonOSC: a song-time message nudges every third tick.
+    Nudge,
+}
+
+/// Held and skipped frames over one simulated minute at 120 BPM, 60 fps.
+/// The source is read as each tick begins: `phase` frames off the grid,
+/// plus uniform jitter of ±`jitter` frames, plus `step` frames from tick
+/// `step_at` on. Every 97th tick misses a deadline and every 1,013th misses
+/// two; the source has moved on by the same frames. A hold or a skip is a
+/// tick whose index moved less or more than the frames it counted.
+fn follow_minute(source: Source, phase: f64, jitter: f64, step: f64, step_at: usize, seed: u64) -> (usize, usize) {
+    let mut engine = engine_with(constant_tempo(120.0, FPS, &[]));
+    let step_s = engine.transport_clock().step().0;
+    let mut rng = Rng(seed);
+    engine.play();
+    let mut deadline = 0i64;
+    let (mut holds, mut skips) = (0, 0);
+    for n in 1..=3_600usize {
+        let frames: u32 = if n % 1_013 == 0 { 3 } else if n % 97 == 0 { 2 } else { 1 };
+        deadline += i64::from(frames);
+        let shift = if n >= step_at { step } else { 0.0 };
+        // One frame behind the frame this tick shows, as a source read when
+        // the tick starts is.
+        let position = (deadline - 1) as f64 + phase + shift + (rng.unit() * 2.0 - 1.0) * jitter;
+        let time = Seconds(position * step_s);
+        // Before the source acts: a re-place made on the follow call itself
+        // counts as much as one made inside the tick.
+        let before = engine.transport_frame();
+        match source {
+            Source::LinkBeat => engine.follow_external_beat(Beats(time.0 * 2.0)),
+            Source::Nudge if n % 3 == 0 => SyncArbiterTarget::nudge_time(&mut engine, time),
+            Source::Nudge => {}
+        }
+        tick(&mut engine, frames);
+        let moved = engine.transport_frame() - before;
+        holds += usize::try_from(i64::from(frames) - moved).unwrap_or(0);
+        skips += usize::try_from(moved - i64::from(frames)).unwrap_or(0);
+    }
+    (holds, skips)
+}
+
+/// Phases across a whole frame in 1/64 steps, the grid on the source's
+/// nearest frame, ±0.15 frame of jitter and late ticks: no held or skipped
+/// frame in a minute. Fails on re-placing every tick: at a half-frame phase
+/// the nearest frame flips with the jitter.
+#[test]
+fn external_follow_never_holds_or_skips_without_drift() {
+    for source in [Source::LinkBeat, Source::Nudge] {
+        for i in 0..64 {
+            let phase = f64::from(i) / 64.0;
+            let nearest = phase - phase.round();
+            let (holds, skips) = follow_minute(source, nearest, 0.15, 0.0, usize::MAX, SEED ^ i as u64);
+            assert_eq!((holds, skips), (0, 0), "{source:?} phase {phase}: holds and skips in a minute");
+        }
+    }
+}
+
+/// A real one-frame step in the source is followed with exactly one skip or
+/// one hold, and nothing after it.
+#[test]
+fn external_follow_corrects_a_real_frame_of_drift() {
+    for source in [Source::LinkBeat, Source::Nudge] {
+        for (phase, step, expected) in [(0.0, 1.0, (0, 1)), (0.0, -1.0, (1, 0)), (0.3, 1.0, (0, 1)), (-0.3, -1.0, (1, 0))] {
+            let got = follow_minute(source, phase, 0.15, step, 1_800, SEED);
+            assert_eq!(got, expected, "{source:?} phase {phase} step {step}: (holds, skips)");
+        }
+    }
+}
+
+/// D14 at the engine: at 150 BPM / 60 fps, on-frame edges whose frame time
+/// computes a hair below their beat still start their clip on that frame.
+#[test]
+fn on_frame_edges_below_their_beat_start_on_their_frame() {
+    let probe = constant_tempo(150.0, FPS, &[]);
+    let mut map = probe.tempo_map.clone();
+    let step = 1.0 / f64::from(FPS);
+    // Every 1/8 beat at 150 BPM is 3 frames: frame 3k is beat k/8.
+    let edges: Vec<(i64, f64)> = (1..2_000i64)
+        .map(|k| (3 * k, k as f64 / 8.0))
+        .filter(|&(frame, beat)| {
+            TempoMapConverter::seconds_to_beat_f64(&mut map, frame as f64 * step, Bpm(150.0)) < beat
+        })
+        .take(12)
+        .collect();
+    assert!(edges.len() >= 8, "150 BPM must have on-frame edges that round below: {edges:?}");
+    // Each clip 1/16 beat long: shown on its frame and the next.
+    let spans: Vec<(f64, f64)> = edges.iter().map(|&(_, beat)| (beat, 1.0 / 16.0)).collect();
+    let mut engine = engine_with(constant_tempo(150.0, FPS, &spans));
+    let ids: Vec<ClipId> = engine.project().unwrap().timeline.layers[0].clips.iter().map(|c| c.id.clone()).collect();
+    let last = edges.last().unwrap().0 + 3;
+    engine.play();
+    for frame in 1..=last {
+        tick(&mut engine, 1);
+        assert_eq!(engine.transport_frame(), frame);
+        for ((edge_frame, beat), id) in edges.iter().zip(&ids) {
+            let expected = frame == *edge_frame || frame == edge_frame + 1;
+            assert_eq!(is_active(&engine, id), expected, "clip at beat {beat} (frame {edge_frame}) on frame {frame}");
+        }
+    }
+}
+
+/// D5: every consumer gets `frames × step` as its dt, playing and paused,
+/// never a wall-clock value; `pre_render` is the one renderers see.
+#[test]
+fn tick_dt_reaches_consumers_as_whole_frames() {
+    let mut engine = engine_with(constant_tempo(120.0, FPS, &[(0.0, 8.0)]));
+    let step = engine.transport_clock().step().0;
+    engine.play();
+    for (state, frames) in [(PlaybackState::Playing, 1), (PlaybackState::Playing, 3), (PlaybackState::Paused, 2), (PlaybackState::Paused, 1)] {
+        engine.set_state(state);
+        let result = engine.tick(TickContext { frames, realtime_now: Seconds(0.123_456 * f64::from(frames)), frame_count: 7 });
+        engine.reclaim_tick_result(result);
+        let expected = (f64::from(frames) * step) as f32;
+        assert_eq!(stub(&engine).last_pre_render_dt().map(f32::to_bits), Some(expected.to_bits()), "{state:?}, {frames} frames");
+        assert_eq!(engine.tick_dt().0.to_bits(), (f64::from(frames) * step).to_bits());
+    }
+}
+
+/// Frames between the restarts of an unquantised session loop launched on
+/// `launch_after` (one clip spanning the loop, so each wrap restarts it).
+fn loop_restart_intervals(bpm: f32, length: f64, launch_after: i64, loops: usize) -> Vec<i64> {
+    let mut project = constant_tempo(bpm, FPS, &[]);
+    let layer = project.timeline.layers[0].layer_id.clone();
+    let scene = SceneId::new("loop-scene");
+    project.session.scenes.push(Scene { id: scene.clone(), name: "Scene".into(), color: None });
+    project.session.slots.push(SessionSlot {
+        layer_id: layer.clone(),
+        scene_id: scene.clone(),
+        name: "Loop".into(),
+        color: None,
+        sequence: ClipSequence { length_beats: Beats(length), clips: clips(&[(0.0, length)]) },
+    });
+    let clip = project.session.slots[0].sequence.clips[0].id.clone();
+    let mut engine = engine_with(project);
+    engine.session_set_quantize(Beats::ZERO);
+    engine.play();
+    tick(&mut engine, u32::try_from(launch_after).unwrap());
+    engine.session_launch_slot(layer, scene);
+    assert_eq!(start_count(&engine, &clip), 1, "quantize 0 launches on the frame it is pressed");
+    let mut starts = vec![engine.transport_frame()];
+    while starts.len() <= loops {
+        let before = start_count(&engine, &clip);
+        tick(&mut engine, 1);
+        if start_count(&engine, &clip) > before {
+            starts.push(engine.transport_frame());
+        }
+    }
+    starts.windows(2).map(|w| w[1] - w[0]).collect()
+}
+
+/// An unquantised loop is anchored at the frame's exact beat, so it restarts
+/// every whole loop of frames: 60 for 2 beats at 120 BPM, 12 for ½ beat at
+/// 150 BPM, over 100 loops from several launch frames. Anchored at the
+/// sampled beat it drifts between 59 and 61.
+#[test]
+fn unquantised_loops_restart_on_whole_frames() {
+    for (bpm, length, frames) in [(120.0, 2.0, 60), (150.0, 0.5, 12)] {
+        for launch_after in [37, 41, 53, 64, 97, 128] {
+            let intervals = loop_restart_intervals(bpm, length, launch_after, 100);
+            let off: Vec<(usize, i64)> = intervals.iter().copied().enumerate().filter(|&(_, d)| d != frames).collect();
+            assert!(off.is_empty(), "{bpm} BPM {length}-beat loop from frame {launch_after}: {} of 100 restarts off {frames} frames, first {:?}", off.len(), &off[..off.len().min(5)]);
+        }
+    }
+}
+

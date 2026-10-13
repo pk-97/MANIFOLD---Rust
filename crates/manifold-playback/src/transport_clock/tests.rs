@@ -87,18 +87,21 @@ fn edge_frame_rational(n16: u64, bpm: u32, fps: f32) -> (u128, u128) {
 }
 
 /// The frame the lattice rule must show an edge on: its exact ceil, or the frame
-/// just before when the edge sits within the tolerance after it (D14).
-fn expected_edge_frame(num: u128, den: u128) -> Option<i64> {
+/// just before when the edge sits within the sample offset after it (D14).
+/// Also whether a seek to the edge must land there: an edge between the sample
+/// offset and the snap tolerance after a frame snaps to the frame before it.
+fn expected_edge_frame(num: u128, den: u128) -> Option<(i64, bool)> {
     let floor = (num / den) as i64;
     let rem = num % den;
     if rem == 0 {
-        return Some(floor);
+        return Some((floor, true));
     }
     let after = rem as f64 / den as f64;
-    if (after - LATTICE_TOLERANCE_FRAMES).abs() < 1e-9 {
-        return None; // on the tolerance boundary itself: either frame is honest
+    if (after - BEAT_SAMPLE_OFFSET_FRAMES).abs() < 1e-9 || (after - SNAP_TOLERANCE_FRAMES).abs() < 1e-9 {
+        return None; // on a tolerance boundary itself: either frame is honest
     }
-    Some(if after <= LATTICE_TOLERANCE_FRAMES { floor } else { floor + 1 })
+    let frame = if after <= BEAT_SAMPLE_OFFSET_FRAMES { floor } else { floor + 1 };
+    Some((frame, after > SNAP_TOLERANCE_FRAMES || after <= BEAT_SAMPLE_OFFSET_FRAMES))
 }
 
 /// The beat the engine will see on frame `index`: the clock's own sample time
@@ -137,7 +140,7 @@ fn on_frame_edges_land_on_their_frame() {
             let map = tempo_map(bpm);
             for n16 in candidate_edges(bpm, fps) {
                 let (num, den) = edge_frame_rational(n16, bpm, fps);
-                let Some(frame) = expected_edge_frame(num, den) else { continue };
+                let Some((frame, seek_lands)) = expected_edge_frame(num, den) else { continue };
                 if num % den == 0 {
                     on_frame += 1;
                 }
@@ -154,8 +157,10 @@ fn on_frame_edges_land_on_their_frame() {
                     );
                 }
                 // The seek rule agrees with the beat rule.
-                let edge_time = TempoMapConverter::beat_to_seconds_immut(&map, Beats(edge), Bpm(bpm as f32));
-                assert_eq!(clock.index_at_or_after(edge_time), frame, "{fps} fps {bpm} BPM edge {edge}: seek");
+                if seek_lands {
+                    let edge_time = TempoMapConverter::beat_to_seconds_immut(&map, Beats(edge), Bpm(bpm as f32));
+                    assert_eq!(clock.index_at_or_after(edge_time), frame, "{fps} fps {bpm} BPM edge {edge}: seek");
+                }
             }
         }
     }
@@ -204,6 +209,47 @@ fn seek_snaps_forward_and_round_trips() {
             assert_eq!(clock.index(), index + 1, "{fps} locate snaps forward");
         }
     }
+}
+
+/// A beat sampled on frame k (D14), turned back into a time through the map,
+/// snaps to k: the snap tolerance is wider than the sample offset. Fails with
+/// the two equal, where about one restore in ten lands a frame late.
+#[test]
+fn sampled_beats_round_trip_to_their_frame() {
+    for fps in RATES {
+        for bpm in [120u32, 128, 141, 150, 174] {
+            let map = tempo_map(bpm);
+            let clock = TransportClock::new(fps);
+            for index in (0..5_000).chain(431_000..432_000) {
+                let beat = sampled_beat(&map, bpm, &clock, index);
+                let t = TempoMapConverter::beat_to_seconds_immut(&map, Beats(beat), Bpm(bpm as f32));
+                assert_eq!(clock.index_at_or_after(t), index, "{fps} fps {bpm} BPM frame {index}");
+            }
+        }
+    }
+}
+
+/// STOPGAP(frame-exact P3): a per-tick external target inside ¾ frame of the
+/// grid leaves it alone; past ¾ it goes to the nearest frame.
+#[test]
+fn follow_external_keeps_the_grid_inside_three_quarters_of_a_frame() {
+    let mut clock = playing_clock(60.0);
+    clock.advance(100);
+    let at = |clock: &TransportClock, frames: f64| Seconds(clock.time_at(100).0 + frames * clock.step().0);
+    for frames in [-0.74, -0.5, -0.2, 0.0, 0.49, 0.51, 0.74] {
+        assert!(!clock.follow_external(at(&clock, frames)), "{frames}");
+        assert_eq!(clock.index(), 100, "{frames}");
+    }
+    assert!(clock.follow_external(at(&clock, 0.8)));
+    assert_eq!(clock.index(), 101);
+    assert!(clock.follow_external(at(&clock, -0.3)), "1.3 frames behind the grid now");
+    assert_eq!(clock.index(), 100);
+    assert!(clock.follow_external(at(&clock, -1.6)));
+    assert_eq!(clock.index(), 98);
+    for bad in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+        assert!(!clock.follow_external(Seconds(bad)));
+    }
+    assert_eq!(clock.index(), 98);
 }
 
 #[test]

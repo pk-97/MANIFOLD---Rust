@@ -1,6 +1,6 @@
 # Frame-Exact Transport — one frame grid for live play and export
 
-**Status:** IN PROGRESS · 2026-10-14 · P1 and P2 committed on `feat/frame-exact-clock`. Owed: the P1+P2 merge, then Peter's rig test, then P3, then P4. Bead: BUG-gqhep (live-transport-nondeterministic-frame-clock).
+**Status:** IN PROGRESS · 2026-10-14 · P1 and P2 committed on `feat/frame-exact-clock`, with the P2 review fixes. P2 gate items owed before the merge: the scoped export-path GPU proofs and the `journey-proofs` angular run on the fix commit, the 20 ms frame comparison against main, and the Liveschool L2 log (blocked by BUG-pe2tr (frame-time aborts on Liveschool V6 fixtures)). Then the P1+P2 merge, Peter's rig test, P3, P4. Bead: BUG-gqhep (live-transport-nondeterministic-frame-clock).
 **Prerequisites:** none.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs) and section 6 (Seam briefs) before starting any phase.
 
@@ -205,7 +205,7 @@ Why compare instants: a division near a boundary can disagree with the timer's o
 **D3 — Stalls skip and stay in time.** After a stall of any length, the transport skips the deadlines passed. No cap. The 5 s GPU surface timeout (`content_thread.rs:485`, `:498-502`) is the longest stall the content thread itself creates. The physics clock keeps its own rule, with at most two Sim Rate intervals per frame and the rest discarded (LIVE_SIM_CLOCK_DESIGN.md section 7 (Decided — do not reopen)). The transport keeps time while the water goes slow-motion.
 
 **D4 — Re-anchors snap to the grid. Only a seek while playing holds.**
-- Snap rule: `index_at_or_after(t) = ceil(t / step − 1e-7)`, the tolerance `Driver::evaluate_frame_aligned` uses. A scripted round trip at nine rates over frames 0–5,000 and 431,000–433,000 had zero mismatches.
+- Snap rule: `index_at_or_after(t) = ceil(t / step − 2e-7)`. The tolerance is twice D14's sample offset, so a beat sampled on frame k, turned back into a time, snaps to k: with equal tolerances about one export restore in ten landed a frame late. A scripted round trip at nine rates over frames 0–5,000 and 431,000–433,000 had zero mismatches. Cost: an edge between 1e-7 and 2e-7 of a frame after frame k snaps to k, where its beat shows on k + 1. No 1/16 edge at a whole-number BPM and fps falls there.
 - Play and resume: anchor at or after the current time and advance normally. The first playing tick moves `frames` from the anchor, exactly as a `frame_clocked` harness does today. The paused frame was already on screen, so nothing repeats.
 - Seek while stopped or paused: snap forward. The next tick renders it because the transport is not moving.
 - Seek while playing: snap forward and hold one advance, so the next tick renders the target frame. Without the hold the first frame after a seek to a clip start would be one frame into the clip.
@@ -274,9 +274,12 @@ The clock and the tick grid accept 1 to 1000 fps through one rule (`sanitize_fps
 
 **D14 — A frame's beat is sampled a ten-millionth of a frame late.** The engine computes the one beat per frame as `beat_at(time(index) + 1e-7 × step)`. Time itself stays exact. An edge that sits exactly on frame k then always counts as reached on frame k. That covers clip edges, automation steps, session quantise targets and one-shot expiry, with one rule at one site. A nudge of 1e-7 frames is 1.7 ns at 60 fps, 2,000 times the worst rounding error (3.6e-12 beats) and far below anything visible. Scripted over every on-frame 1/16 edge at 60, 50, 30, 25 and 24 fps and 120–180 BPM: the matching frame rule `ceil(edge_time / step − 1e-7)` selects the right frame for all of them. It moves no off-frame edge.
 Rejected: comparing each edge as an integer frame against the index. It is the same rule, but it would put an fps into `Layer`'s beat queries and into every other comparer.
+The sampled beat is for comparisons only. **Actions are recorded at the frame's exact beat**, `beat(time(index))` (`PlaybackEngine::frame_beat`): a session launch or stop that takes effect now, a return to arrangement, an automation touch, a saved position, a recorded tempo point. A later frame's sampled beat then reaches them on the frame they belong to, at any fps. Recorded at the sampled beat instead, an unquantised 2-beat loop at 120 BPM restarted at 59 to 61 frame intervals, and about one export restore in ten came back a frame late.
 Consequences:
-- Actions recorded on the current frame (a session launch at quantise 0, a stop, a return to arrangement, an automation touch) record the sampled beat, a hair past the frame. A query at the frame's exact beat falls before them.
-- Clip-control binding cutoffs compare against the frame's floor beat, `beat(time − 1e-7 × step)`, so a start recorded on this frame at the sampled beat is not cut.
+- A quantised press rounds up from the sampled beat, not the exact one. The sampled beat is reliably past a boundary on this frame, so a press on a downbeat always waits for the next one; the exact beat would round either way.
+- An automation take ends at the last touched frame's sampled beat: the take holds its last value through that instant, then the old curve resumes. Replay reads the last touch on its own frame.
+- Clip-control binding cutoffs compare against the frame's floor beat, `beat(time − 1e-7 × step)`. An authored edge on this frame computes a hair either side of the frame's beat, so the floor keeps it as new.
+- MIDI phantom clips keep the sampled beat. They become visible on the next frame either way, and one-shot stamps are `f32`, far coarser than the offset.
 - The offset is a fraction of the clock's own frame. An export at a rate other than the project's matches live time bit for bit, and its beat to within the offset.
 
 **D15 — Link offset is sampled at the anchor deadline and aligned to the quantum.** `cache_link_beat_offset` samples `beat_at_time` at the anchor frame's deadline, not the last poll, and pairs it with the anchor frame's beat. It also runs on every transition into Playing that Link caused, which closes the NaN gap in audit item 1.6. On a Link-initiated Play, per Peter's ruling of 2026-10-13, the offset rounds to a whole multiple of Link's quantum. MANIFOLD then locates to `link_beat − offset` at the nearest frame, so its bar lines up with Link's bar. The play start moves by at most half a quantum.
@@ -298,8 +301,10 @@ Owned by `PlaybackEngine`, content thread only. Pure: no `Instant`, no allocatio
 Precedents: `manifold_physics::clock::SimulationClock` (`crates/manifold-physics/src/clock.rs:278-400`) for absolute time from an integer count. `Driver::evaluate_frame_aligned` (`driver.rs:189-200`) for the lattice tolerance.
 
 ```rust
-/// The frame's beat is taken this many frames after its time (D14); also the seek-snap tolerance.
-pub const LATTICE_TOLERANCE_FRAMES: f64 = 1e-7;
+/// The frame's beat is taken this many frames after its time (D14).
+pub const BEAT_SAMPLE_OFFSET_FRAMES: f64 = 1e-7;
+/// Seek snap tolerance (D4): wider than the sample offset, so sampled beats round-trip.
+pub const SNAP_TOLERANCE_FRAMES: f64 = 2e-7;
 
 /// 1–1000 fps accepted, else 60 with a one-time warning (D10). Shared with `FrameGrid`.
 pub(crate) fn sanitize_fps(fps: f32) -> f32;
@@ -333,10 +338,12 @@ impl TransportClock {
     pub fn time_at(&self, index: i64) -> Seconds;
     /// time(index) + 1e-7 * step: the instant the frame's beat is taken at (D14).
     pub fn beat_sample_time(&self) -> Seconds;
+    /// time(index) - 1e-7 * step: binding cutoffs (D14).
+    pub fn frame_floor_time(&self) -> Seconds;
     pub fn index(&self) -> i64;
     pub fn step(&self) -> Seconds;
     pub fn fps(&self) -> f32;
-    pub fn index_at_or_after(&self, t: Seconds) -> i64; // ceil(t/step - 1e-7)
+    pub fn index_at_or_after(&self, t: Seconds) -> i64; // ceil(t/step - 2e-7)
     pub fn index_nearest(&self, t: Seconds) -> i64;
     /// Play, resume, paused seek, tempo edit: snap forward, no hold. Non-finite t ignored.
     pub fn locate(&mut self, t: Seconds);
@@ -344,6 +351,8 @@ impl TransportClock {
     pub fn seek_playing(&mut self, t: Seconds);
     /// External-authority locate: nearest frame, no hold (D4).
     pub fn locate_nearest(&mut self, t: Seconds);
+    /// STOPGAP(frame-exact P3): locate_nearest only when t is over ¾ frame from the grid.
+    pub fn follow_external(&mut self, t: Seconds) -> bool;
     pub fn reset(&mut self); // index 0, no hold, lock cleared
     /// Once per playing tick: hold, then `frames`, then at most one correction.
     /// Returns the net move, negative only for a backward jump.
@@ -396,17 +405,17 @@ pub struct TickContext {
 
 | Old | New |
 |---|---|
-| fields `current_time_double`, `current_time`, `playback_speed`, `export_origin_seconds`, `on_time_changed` | `clock: TransportClock`; `tempo: TempoSource` (map, or `LiveTempo` in P3); `current_beat: f64` stays a cache, refreshed after every clock change from `beat_sample_time()` |
+| fields `current_time_double`, `current_time`, `playback_speed`, `export_origin_seconds`, `on_time_changed` | `clock: TransportClock`; `tempo: TempoSource` (map, or `LiveTempo` in P3); `current_beat: f64` stays a cache, refreshed after every clock change from `beat_sample_time()`, beside `frame_beat` from `time()` for recording actions (D14) |
 | `advance_time(dt)`, inherent `nudge_time(t)` | deleted; `tick_playing` calls `clock.advance(ctx.frames)` |
 | `set_time(t)` | `locate(t)` |
 | `seek_to(t)` | unchanged contract; `clock.seek_playing(t)` while playing, else `clock.locate(t)` |
-| `set_beat(b)` + `sync_time_from_beat()` | P2: `follow_external_beat(b)` = `clock.locate_nearest(map(b))`, marked stopgap. P3: deleted |
-| `set_export_origin(t)` + `export_fixed_dt` | `begin_export_clock(fps)` before the first seek, `end_export_clock()`; in export mode the tick calls `set_export_frame` whatever the sync flag |
+| `set_beat(b)` + `sync_time_from_beat()` | P2: `follow_external_beat(b)`, marked stopgap: nearest frame on a frozen grid, hysteresis on a running one (section 6, P2). P3: deleted |
+| `set_export_origin(t)` + `export_fixed_dt` | `begin_export_run(fps, start, warm_up)`: the export clock before the first seek, then seek, Play, warm-up, re-seek and frame numbering; `export_frame_context(k)` per frame; `export_restore_point()` and `end_export_run()` around it. Production and the tests run this one sequence. In export mode the tick calls `set_export_frame` whatever the sync flag |
 | `external_time_sync` and its setters (engine and `SyncArbiterTarget`) | P2 keeps them as the stopgap; deleted in P3 |
 | — | `transport_frame() -> i64`, `tick_dt() -> Seconds` (D5), `frame_rate() -> f32` (D10), `rederive_beat()` |
 | each tick, outside export | `if project fps != clock.fps() { clock.set_fps(project fps) }` (D10) |
 
-`tick_dt()` is what the content thread passes to `render_content` in place of wall dt, and what `filter_ready_clips`, modulation and audio triggers read in place of `ctx.dt_seconds` / `ctx.pre_render_dt`.
+`tick_dt()` is what `render_content` reads for every graph (it takes no dt argument, so no caller can pass wall dt), and what `filter_ready_clips`, modulation and audio triggers read in place of `ctx.dt_seconds` / `ctx.pre_render_dt`.
 
 ### 3.3 `FrameTimer` — `crates/manifold-app/src/frame_timer.rs`
 
@@ -427,7 +436,7 @@ Consequence: after a tick that is late by less than a frame, the next deadline i
 
 ### 3.4 Content thread
 
-- `tick_frame(state_tx)` becomes `tick_frame_at(Instant::now(), state_tx)`. `tick_frame_at` is the seam the app-level test drives (section 5). It calls `consume_frames_at(now)` and builds `TickContext { frames, realtime_now, frame_count }`, then calls `render_content(…, self.engine.tick_dt().0, …)`.
+- `tick_frame(state_tx)` becomes `tick_frame_at(Instant::now(), state_tx)`. `tick_frame_at` is the seam the app-level test drives (section 5). It calls `consume_frames_at(now)` and builds `TickContext { frames, realtime_now, frame_count }`, then calls `render_content`, which reads `engine.tick_dt()` itself.
 - `ContentThread` builds its timer with `FrameTimer::new_grid` (`app.rs:2556`, `headless_harness.rs:92`).
 - After each engine tick: `if self.timer.target_fps() != self.engine.frame_rate() { self.timer.set_target_fps(…) }` (D10). The copies at `content_commands.rs:1358`, `:1436`, `:1492` and `:1656` are deleted. `rt_capture.rs:483`, `:498` write `settings.frame_rate` on the project before load instead.
 - `derive_external_beat` (`content_thread.rs:1922-1968`): P2 calls `follow_external_beat`. P3 replaces it with `observe_external`.
@@ -470,15 +479,17 @@ Consequence: after a tick that is late by less than a frame, the next deadline i
 | Invariant | Machine check |
 |---|---|
 | Transport time is `index × step`, never accumulated | `transport_clock::tests::time_is_absolute_at_two_hours` (60, 24, f32 29.97, bit-equal to the formula up to frame 432,000); negative gate `rg -n 'current_time_double \+=|fn advance_time' crates/manifold-playback/src` = 0 |
-| On-frame edges land on their frame | `transport_clock::tests::on_frame_edges_land_on_their_frame`: every 1/16-beat edge at 120–180 BPM and 60/50/30/25/24 fps, first 2 hours, through `TempoMapConverter`. The frame whose `beat_sample_time` beat first reaches the edge equals the exact rational edge frame, and off-frame edges are unmoved. It must fail on today's sampling at 150 BPM. |
-| Seeks snap forward and round-trip | `transport_clock::tests::seek_snaps_forward_and_round_trips` |
+| On-frame edges land on their frame | `transport_clock::tests::on_frame_edges_land_on_their_frame`: every 1/16-beat edge at 120–180 BPM and 60/50/30/25/24 fps, first 2 hours, through `TempoMapConverter`. The frame whose `beat_sample_time` beat first reaches the edge equals the exact rational edge frame, and off-frame edges are unmoved. It must fail on today's sampling at 150 BPM. Engine: `frame_exact_transport::on_frame_edges_below_their_beat_start_on_their_frame` (150 BPM, 60 fps, edges whose frame time computes below their beat start their clip on that frame). Actions on a frame record its exact beat: `unquantised_loops_restart_on_whole_frames` (120 BPM 2 beats and 150 BPM ½ beat, 100 loops, every interval whole), `engine::tests::recording_boundaries_capture_last_touch_and_commit_once` (take at the exact beat, read back at the sampled one). |
+| Seeks snap forward and round-trip, sampled beats included | `transport_clock::tests::seek_snaps_forward_and_round_trips`, `sampled_beats_round_trip_to_their_frame` (nine rates, 120/128/141/150/174 BPM); `frame_exact_transport::export_restores_the_frame_it_left` (same five tempos, playing and paused, zero moved) |
 | Only a seek while playing holds | `transport_clock::tests::only_playing_seek_holds` (play, resume, paused seek, playing seek, external locate) |
 | Same arrangement, same values per index, whatever the press phase, jitter or stalls | `frame_exact_transport::same_values_per_index_across_phase_jitter_and_stalls` (playback, CPU) and `frame_exact_app::same_values_per_index_through_content_thread` (app, one queued GPU run). Both committed red first (section 5). |
 | Sub-frame jitter never changes `frames`; a missed deadline skips | `frame_grid::tests::grid_frames_ignore_subframe_jitter`, `grid_counts_missed_deadlines`, `grid_count_matches_deadline_comparison` (P1); `frame_timer::tests::frame_clocked_counts_one` (P2) |
 | The tick grid and the clock share one step | `frame_grid::tests::grid_and_clock_share_the_step`: both checked against D1's written formula and the exact `n / fps`, not against each other |
-| Export samples the same grid as live | `transport_clock::tests::export_frames_sit_on_the_song_grid` (P1, D17); `frame_exact_transport::export_frames_match_live_indices` (bit-equal to live at the project rate; at another rate the time bits match and the beat is within D14's offset) and `export_clip_inside_first_frame` (24 fps export of a 60 fps project, a clip starting between the export start and the next live-grid frame: no start before its own export frame) |
+| Export samples the same grid as live | `transport_clock::tests::export_frames_sit_on_the_song_grid` (P1, D17); `frame_exact_transport::export_frames_match_live_indices` (bit-equal to live at the project rate; at another rate the time bits match and the beat is within D14's offset) and `export_clip_inside_first_frame` (24 fps export of a 60 fps project, a clip starting between the export start and the next live-grid frame: no start before its own export frame), through `begin_export_run`, the sequence `content_export` runs |
 | An export frame leaves no seek hold | `transport_clock::tests::export_frame_clears_a_pending_hold` |
 | Export advances under external sync | `frame_exact_transport::export_under_external_sync_advances` |
+| Every render consumer gets `frames × step` (D5) | `frame_exact_transport::tick_dt_reaches_consumers_as_whole_frames` (`pre_render`, playing and paused); `frame_exact_app::same_values_per_index_through_content_thread` asserts the dt `render_content` hands graphs each tick; `render_content` takes no dt argument |
+| The P2 external stopgap neither holds nor skips on jitter (STOPGAP(frame-exact P3)) | `frame_exact_transport::external_follow_never_holds_or_skips_without_drift` (Link beat copy and AbletonOSC nudges, phases over a frame in 1/64 steps, ±0.15 frame jitter, missed deadlines: zero in a simulated minute); `external_follow_corrects_a_real_frame_of_drift`; `transport_clock::tests::follow_external_keeps_the_grid_inside_three_quarters_of_a_frame` |
 | fps has one source and one sanitising rule | `transport_clock::tests::fps_outside_one_to_a_thousand_falls_back_to_sixty`, `frame_grid::tests::bad_fps_falls_back_without_panicking` (P1); `content_thread::tests::timer_and_clock_follow_project_fps` (load, SetFrameRate, undo, redo) |
 | Bad input never moves or breaks the clock (D18) | `transport_clock::tests::non_finite_and_absurd_input_is_safe` (NaN, ±inf, ±1e300 to every mutator; `i64` extremes to `set_export_frame`; `u32::MAX` advances) |
 | Corrections never flap, never rewind on a slew, never get stuck, never bump the epoch | `transport_clock::tests::phase_lock_hysteresis_no_flap` (start phase swept over [−½, ½] in 1/64 frame steps, MIDI 90–180 BPM and an exact source, offsets 0, ±0.6, ±0.8: at most one correction each); `phase_lock_bounded_under_noise` (noise past the contract, ±0.3 exact and ±0.5 coarse, offsets −1.5 to 1.5 in 1/16 steps, two start phases, one hour each: at most two corrections over need; fails at K = 1); `correction_needs_a_persistent_streak`; `reverse_after_skip_is_never_stuck`; `slew_never_rewinds` (to −2.5); `jumps_beyond_two_and_a_half_frames`; `due_hold_waits_when_there_is_no_frame_to_remove`; `coarse_locate_is_one_jump` (3, ±24, 100 frames); `coarse_outlier_is_ignored`; `correction_subtracts_from_estimate`; `authority_change_clears_and_reseeds`; `frame_exact_transport::external_correction_keeps_epoch_and_triggers` |
@@ -568,9 +579,9 @@ P1 and P2 land together as one merge. That merge keeps today's external-sync beh
   - `angular.rs:207-211` moves to the grid frames either side of beat 1.
 - **The stopgap, named:** each remaining external path carries `// STOPGAP(frame-exact P3)`; P3's entry counts them.
   - `external_time_sync` stays: while it is set, live playing ticks don't advance the clock, as today.
-  - `set_beat` + `sync_time_from_beat` become `follow_external_beat`, which puts the index on the frame nearest `map(b)`.
-  - Nudges become `locate_nearest`.
-  - So under CLK, timecode, AbletonOSC and Link, MANIFOLD follows the external source as it does today, rounded to the nearest frame (at most half a frame from today's value). Being exactly today's behaviour would need an off-grid time source next to the clock, and that would re-open the path this bead closes.
+  - `set_beat` + `sync_time_from_beat` become `follow_external_beat`, and nudges go to the same place. On a frozen grid (CLK, timecode) or a stopped transport the index goes to the frame nearest the target at once.
+  - On a grid that advances on its own (Link's beat copy every tick, AbletonOSC nudges per message), the target waits for the tick's advance and moves the index only when it is more than ¾ frame from it (`TransportClock::follow_external`, D6's threshold without persistence). Re-placing every tick turned sub-frame jitter into held and skipped frames: at a half-frame phase with ±0.02 frame of jitter, about 890 of each a minute at 120 BPM. The target is read as the tick begins and the tick shows the next frame, so it is compared one frame on, as the old place-then-advance did; a tick that counted two frames is not counted twice.
+  - So under CLK, timecode, AbletonOSC and Link, MANIFOLD follows the external source as it does today, within ¾ of a frame of today's value. Being exactly today's behaviour would need an off-grid time source next to the clock, and that would re-open the path this bead closes.
   - The determinism claim in P2 holds under Internal authority only.
 - **Deliverables:** the above; `crates/manifold-playback/tests/frame_exact_transport.rs` and `crates/manifold-app/src/frame_exact_app.rs` (tests in section 4 and section 5, minus the P3 ones); the timer grid tests; deletion of `advance_time`, inherent `nudge_time`, `playback_speed`, `on_time_changed`; `--transport-log` and `--pre-play-delay-seed` on `frame-time`.
 - **Gate:**
@@ -652,7 +663,7 @@ Total estimate: about 1,450 lines changed plus 1,300 lines of tests across P1–
 1. Integer frame index; time = index × (1 / fps as f64) from song time 0, live and export alike.
 2. The content timer uses anchored grid deadlines counted by instant comparison; the UI timer is unchanged.
 3. Stalls skip and stay in time; no cap.
-4. Seeks snap forward (`ceil` with 1e-7 tolerance). Only a seek while playing holds. Play and resume advance normally. External locates go to the nearest frame without a hold.
+4. Seeks snap forward (`ceil` with a 2e-7 tolerance, wider than D14's sample offset). Only a seek while playing holds. Play and resume advance normally. External locates go to the nearest frame without a hold.
 5. One tick dt (`frames × step`) for every render consumer, in every transport state.
 6. External sources correct, never drive. Sources keep smoothed noise under ¼ frame. Act above ½ + ¼ frame on 6 consecutive observations on one side; subtract applied corrections; seed at each anchor; clear on authority change. Up to 2½ frames: one frame per correction, never backward. Beyond: a jump. Coarse locates re-seed on two agreeing samples. Beyond the seek threshold: a seek.
 7. Sources are projected to the frame deadline from timestamped arrivals, with per-source bias removed.
@@ -660,7 +671,7 @@ Total estimate: about 1,450 lines changed plus 1,300 lines of tests across P1–
 9. On a Link-initiated play the offset rounds to Link's quantum. Peter, 2026-10-13.
 10. Export shares the clock, set before the first seek; live equals export, not bit-identity with old export.
 11. `project.settings.frame_rate` is the only fps; the engine and the timer follow it.
-12. A frame's beat is taken at `time + 1e-7 × step`.
+12. A frame's beat is taken at `time + 1e-7 × step` for comparisons; actions on the frame are recorded at its exact beat.
 13. Physics and liquid stay outside the determinism claim.
 14. P1+P2 land first with a named external-sync stopgap; P3 after Peter's rig test; P4 separate.
 15. Export runs on the song-time-0 grid: frame k is the first export-grid frame at or after the start, plus k. Peter, Q2.

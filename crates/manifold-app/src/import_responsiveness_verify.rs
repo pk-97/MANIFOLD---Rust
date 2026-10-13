@@ -161,7 +161,6 @@ fn content_thread_keeps_advancing_while_a_large_import_runs_in_the_background() 
                 &ct.gpu,
                 &mut ct.engine,
                 &tick_result,
-                dt,
                 frame,
                 false,
                 ct.editing_service.data_version(),

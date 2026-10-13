@@ -66,6 +66,14 @@ pub struct TickContext {
     pub frame_count: u64,
 }
 
+/// The transport position and state an export returns to
+/// (`PlaybackEngine::export_restore_point`, `end_export_run`).
+#[derive(Debug, Clone, Copy)]
+pub struct ExportRestore {
+    beat: Beats,
+    state: PlaybackState,
+}
+
 /// Output of a single engine tick.
 ///
 /// No longer `Clone` as of automation recording (section 5): `pending_gesture_commits`
@@ -118,15 +126,23 @@ pub struct PlaybackEngine {
     /// Transport time as a frame index on the song-time-0 grid (D1). Time is
     /// always computed from it, never accumulated.
     clock: TransportClock,
-    /// The frame's beat, sampled at `clock.beat_sample_time()` (D14). A cache:
-    /// refreshed after every clock or tempo change.
+    /// The frame's beat, sampled at `clock.beat_sample_time()` (D14), for
+    /// every comparison against an edge. A cache: refreshed after every clock
+    /// or tempo change, with `frame_beat`.
     current_beat: f64,
+    /// The frame's exact beat, at `clock.time()`. Actions taken on this frame
+    /// are recorded here, so a later frame's sampled beat reaches them on the
+    /// frame they belong to (D14).
+    frame_beat: f64,
     /// `TickContext::frames` of the current tick; `tick_dt` is this many steps.
     tick_frames: u32,
     is_recording: bool,
     // STOPGAP(frame-exact P3): while set, live ticks don't advance the clock
     // and the external source places it. P3 replaces this with corrections.
     external_time_sync: bool,
+    // STOPGAP(frame-exact P3): the last external position read before this
+    // tick, while the grid advances on its own; applied after the advance.
+    external_follow: Option<Seconds>,
 
     // Project reference
     project: Option<Project>,
@@ -304,9 +320,11 @@ impl PlaybackEngine {
             // `initialize` puts it on the project rate.
             clock: TransportClock::new(60.0),
             current_beat: 0.0,
+            frame_beat: 0.0,
             tick_frames: 0,
             is_recording: false,
             external_time_sync: false,
+            external_follow: None,
             project: None,
             renderers,
             active_clip_renderers: AHashMap::with_capacity(32),
@@ -422,6 +440,12 @@ impl PlaybackEngine {
     pub fn current_beat(&self) -> Beats {
         Beats(self.current_beat)
     }
+    /// The frame's exact beat: where an action taken on this frame is
+    /// recorded (a launch, a return, an automation touch, a saved position).
+    /// Comparisons use `current_beat`, a hair later (D14).
+    pub fn frame_beat(&self) -> Beats {
+        Beats(self.frame_beat)
+    }
 
     /// Mutable access to the audio-feature snapshot the modulation pipeline
     /// reads. The content thread (which owns the capture/analysis worker) fills
@@ -520,12 +544,10 @@ impl PlaybackEngine {
         if !self.clip_bindings_dirty {
             return;
         }
-        // An assignment accepts starts at its own beat as new. The frame's
-        // beat is sampled a hair after its time (D14), so an edge exactly on
-        // this frame would read as history; the cutoff takes the frame's
-        // lower edge instead, the same hair before its time.
-        let frame_floor = self.clock.time().0
-            - crate::transport_clock::LATTICE_TOLERANCE_FRAMES * self.clock.step().0;
+        // An assignment accepts starts on its own frame as new. An authored
+        // edge exactly on this frame computes a hair either side of the
+        // frame's beat, so the cutoff is the same hair before the frame (D14).
+        let frame_floor = self.clock.frame_floor_time().0;
         if let Some(project) = &mut self.project {
             let floor_beat = Beats(TempoMapConverter::seconds_to_beat_f64(
                 &mut project.tempo_map,
@@ -742,11 +764,29 @@ impl PlaybackEngine {
     /// the transport on the frame nearest its beat, as today's per-frame beat
     /// copy did, rounded to the grid. P3 replaces it with `observe_external`.
     pub fn follow_external_beat(&mut self, beat: Beats) {
-        self.reconcile_clip_control_bindings();
         if let Some(project) = &mut self.project {
             let t = TempoMapConverter::beat_to_seconds(&mut project.tempo_map, beat, project.settings.bpm);
-            self.clock.locate_nearest(Seconds(t.0.max(0.0)));
+            self.follow_external_time(t);
         }
+    }
+
+    /// STOPGAP(frame-exact P3): Link's beat copy and every nudge land here.
+    /// While the grid advances on its own (playing, not under
+    /// `external_time_sync`), the position waits for this tick's advance and
+    /// only moves the grid past ¾ frame (`TransportClock::follow_external`),
+    /// so a source with sub-frame jitter never holds or skips a frame. A
+    /// frozen grid or a stopped transport goes to the nearest frame now.
+    fn follow_external_time(&mut self, t: Seconds) {
+        if !t.0.is_finite() {
+            return;
+        }
+        let t = Seconds(t.0.max(0.0));
+        if self.is_playing() && !self.external_time_sync && !self.is_export_mode {
+            self.external_follow = Some(t);
+            return;
+        }
+        self.reconcile_clip_control_bindings();
+        self.clock.locate_nearest(t);
         self.refresh_beat();
     }
 
@@ -848,6 +888,55 @@ impl PlaybackEngine {
         let fps = self.project.as_ref().map_or(self.clock.fps(), |p| p.settings.frame_rate);
         self.clock.end_export(fps);
         self.refresh_beat();
+    }
+
+    /// Where the transport goes back to after an export: the frame's exact
+    /// beat, which snaps back to the same frame, and the state.
+    pub fn export_restore_point(&self) -> ExportRestore {
+        ExportRestore { beat: Beats(self.frame_beat), state: self.current_state }
+    }
+
+    /// Export's clock sequence, the one production and the tests run (D9):
+    /// the export grid first, then the seek to `start`, Play, `warm_up`, and
+    /// export frame numbering from the start's grid frame. `warm_up` may tick
+    /// the engine (`export_warm_up_tick`) and returns whether it did; the
+    /// transport then seeks back to `start`.
+    pub fn begin_export_run(&mut self, fps: f32, start: Seconds, warm_up: impl FnOnce(&mut Self) -> bool) {
+        self.begin_export_clock(fps);
+        self.seek_to(start);
+        self.play();
+        if warm_up(self) {
+            self.seek_to(start);
+        }
+        self.begin_export_frames();
+    }
+
+    /// One export-grid frame of decoder warm-up, before frame numbering
+    /// starts. True when every active clip is ready.
+    pub fn export_warm_up_tick(&mut self) -> bool {
+        let result = self.tick(TickContext { frames: 1, realtime_now: Seconds::ZERO, frame_count: u64::MAX });
+        self.reclaim_tick_result(result);
+        self.all_active_clips_ready()
+    }
+
+    /// Export frame `k`'s tick: frame 0 renders the start and does not
+    /// advance, so dt-driven state starts there; every later frame is one.
+    pub fn export_frame_context(k: u32, realtime_now: Seconds) -> TickContext {
+        TickContext { frames: u32::from(k != 0), realtime_now, frame_count: u64::from(k) }
+    }
+
+    /// Leave export: the project rate, the saved position and state.
+    pub fn end_export_run(&mut self, restore: ExportRestore) {
+        self.stop();
+        self.end_export_clock();
+        let restore_time = self.beat_to_timeline_time(restore.beat);
+        self.seek_to(restore_time);
+        if restore.state == PlaybackState::Playing {
+            self.play();
+        } else {
+            self.set_state(restore.state);
+        }
+        self.set_export_mode(false);
     }
 
     pub fn set_video_sync_interval(&mut self, interval: Seconds) {
@@ -981,8 +1070,9 @@ impl PlaybackEngine {
         self.check_preparing_clips();
 
         // ── Phase 4: Branch on playback state ──
+        let external = self.external_follow.take();
         let mut result = if self.current_state == PlaybackState::Playing {
-            self.tick_playing(ctx)
+            self.tick_playing(ctx, external)
         } else {
             self.tick_non_playing(ctx)
         };
@@ -1068,7 +1158,7 @@ impl PlaybackEngine {
     }
 
     /// Playing-state tick. Matches C# PlaybackController.Update lines 1135-1218.
-    fn tick_playing(&mut self, ctx: TickContext) -> TickResult {
+    fn tick_playing(&mut self, ctx: TickContext, external: Option<Seconds>) -> TickResult {
         // Direct state transitions (including export) need the same initial
         // membership as play(), before advancing past a short first clip.
         if self.clip_control_cursor.is_none() {
@@ -1084,6 +1174,13 @@ impl PlaybackEngine {
             // STOPGAP(frame-exact P3): while an external source is the clock
             // authority, live ticks leave the frame where it put it.
             self.clock.advance(ctx.frames);
+            // STOPGAP(frame-exact P3): the source was read as this tick
+            // began, and this tick shows the frame after; the stopgap always
+            // showed it one frame on. Its advance already moved the grid, so
+            // only a gap past ¾ frame moves it again.
+            if let Some(target) = external {
+                self.clock.follow_external(target + self.clock.step());
+            }
             true
         } else {
             false
@@ -1130,9 +1227,10 @@ impl PlaybackEngine {
         //     `EditingService` right after this tick returns.
         let (automation_dirty, mut pending_gesture_commits) = if let Some(project) = &mut self.project
         {
-            crate::automation::evaluate_all_automation_with_mode(
+            crate::automation::evaluate_all_automation_at(
                 project,
                 Beats(self.current_beat),
+                Beats(self.frame_beat),
                 &mut self.automation_latches,
                 self.automation_armed,
                 &mut self.automation_gestures,
@@ -1983,13 +2081,27 @@ impl PlaybackEngine {
     /// that case launches immediately rather than waiting for the next
     /// quantize boundary (section 4: "the grid is dead on first click for
     /// timeline-free users" otherwise).
+    /// The beat a session action pressed on this frame is given. One that
+    /// takes effect now (quantize 0, or a launch that starts the transport)
+    /// is anchored at the frame's exact beat, so a loop it starts restarts
+    /// on whole frames. A quantised one rounds up from the sampled beat,
+    /// which is reliably past a boundary on this frame, so a press on a
+    /// downbeat always waits for the next one, however the beat rounds (D14).
+    fn session_press_beat(&self, immediate: bool) -> f64 {
+        if immediate || self.session_runtime.quantize_beats().0 <= 0.0 {
+            self.frame_beat
+        } else {
+            self.current_beat
+        }
+    }
+
     pub fn session_launch_slot(&mut self, layer_id: LayerId, scene_id: SceneId) {
         let has_slot = self
             .project
             .as_ref()
             .is_some_and(|p| p.session.get_slot(&layer_id, &scene_id).is_some());
         let immediate = !self.is_playing();
-        let current_beat = self.current_beat;
+        let current_beat = self.session_press_beat(immediate);
         if has_slot {
             self.session_runtime
                 .launch_slot(layer_id, scene_id, current_beat, immediate);
@@ -2010,7 +2122,7 @@ impl PlaybackEngine {
     /// persists (section 5/section 12) — the layer goes black, it does not fall back to
     /// the arrangement.
     pub fn session_stop_slot(&mut self, layer_id: LayerId) {
-        let current_beat = self.current_beat;
+        let current_beat = self.session_press_beat(false);
         self.session_runtime.stop_slot(layer_id, current_beat, false);
         self.sync_clips_to_time();
     }
@@ -2021,7 +2133,7 @@ impl PlaybackEngine {
     /// same as `session_launch_slot`.
     pub fn session_launch_scene(&mut self, scene_id: SceneId) {
         let immediate = !self.is_playing();
-        let current_beat = self.current_beat;
+        let current_beat = self.session_press_beat(immediate);
         if let Some(project) = &self.project {
             self.session_runtime
                 .launch_scene(&scene_id, &project.session, current_beat, immediate);
@@ -2036,7 +2148,7 @@ impl PlaybackEngine {
     /// slot. Distinct from a full transport stop: `session_override` is
     /// untouched, exactly like a single `session_stop_slot`.
     pub fn session_stop_all(&mut self) {
-        let current_beat = self.current_beat;
+        let current_beat = self.session_press_beat(false);
         self.session_runtime.stop_all(current_beat);
         self.sync_clips_to_time();
     }
@@ -2048,7 +2160,7 @@ impl PlaybackEngine {
     pub fn session_back_to_arrangement(&mut self, layer_id: Option<LayerId>) {
         // Retain the final session interval before clearing its authority.
         self.sync_clips_to_time();
-        self.session_runtime.back_to_arrangement(layer_id.as_ref(), Beats(self.current_beat));
+        self.session_runtime.back_to_arrangement(layer_id.as_ref(), Beats(self.frame_beat));
         self.sync_clips_to_time();
     }
 
@@ -2173,9 +2285,9 @@ impl PlaybackEngine {
         if self.is_playing() && self.automation_armed && !self.is_export_mode
             && let Some(project) = &mut self.project
         {
-            let (_, expired) = crate::automation::evaluate_all_automation(
-                project, Beats(self.current_beat), &mut self.automation_latches,
-                true, &mut self.automation_gestures,
+            let (_, expired) = crate::automation::evaluate_all_automation_at(
+                project, Beats(self.current_beat), Beats(self.frame_beat), &mut self.automation_latches,
+                true, &mut self.automation_gestures, crate::automation::AutomationSamplingMode::Playback,
             );
             commands.extend(expired);
         }
@@ -2210,14 +2322,14 @@ impl PlaybackEngine {
     // ─── Time/Tempo math ───
 
     /// The frame's beat, taken a ten-millionth of a frame after its time so
-    /// an edge exactly on the frame counts as reached on it (D14).
+    /// an edge exactly on the frame counts as reached on it, and its exact
+    /// beat for recording actions (D14).
     fn refresh_beat(&mut self) {
         if let Some(project) = &mut self.project {
-            self.current_beat = TempoMapConverter::seconds_to_beat_f64(
-                &mut project.tempo_map,
-                self.clock.beat_sample_time().0,
-                project.settings.bpm,
-            );
+            let bpm = project.settings.bpm;
+            self.current_beat =
+                TempoMapConverter::seconds_to_beat_f64(&mut project.tempo_map, self.clock.beat_sample_time().0, bpm);
+            self.frame_beat = TempoMapConverter::seconds_to_beat_f64(&mut project.tempo_map, self.clock.time().0, bpm);
         }
     }
 
@@ -3405,12 +3517,10 @@ impl crate::sync::SyncArbiterTarget for PlaybackEngine {
         }
     }
 
-    /// STOPGAP(frame-exact P3): a nudge puts the transport on the frame
-    /// nearest the external time; P3 makes it a phase-lock observation.
+    /// STOPGAP(frame-exact P3): a nudge follows the external time with the
+    /// same ¾-frame hysteresis as Link; P3 makes it a phase-lock observation.
     fn nudge_time(&mut self, time: Seconds) {
-        self.reconcile_clip_control_bindings();
-        self.clock.locate_nearest(time);
-        self.refresh_beat();
+        self.follow_external_time(time);
     }
 
     fn seek(&mut self, time: Seconds) {
@@ -4112,8 +4222,9 @@ mod tests {
             engine.initialize(project);
             engine.set_state(PlaybackState::Playing);
             engine.locate(Seconds(1.0));
-            // Beat 2's frame: the take starts at the frame's sampled beat (D14).
-            let touch_beat = engine.current_beat();
+            // Beat 2's frame: the take starts at the frame's exact beat and
+            // holds through its sampled beat, where replay reads it (D14).
+            let (touch_beat, replay_beat) = (engine.frame_beat(), engine.current_beat());
             engine.set_automation_armed(true);
             engine.project_mut().unwrap().find_effect_by_id_mut(&id).unwrap().set_base_param("amount", 0.9);
             // No tick between the final input and the boundary: the last touch
@@ -4130,6 +4241,8 @@ mod tests {
             commands[0].execute(engine.project_mut().unwrap());
             let lane = &engine.project().unwrap().find_effect_by_id(&id).unwrap().automation_lanes.as_ref().unwrap()[0];
             assert_eq!(lane.value_at(touch_beat), 0.9);
+            assert_eq!(lane.value_at(replay_beat), 0.9);
+            assert_eq!(touch_beat, Beats(2.0));
             assert!((lane.value_at(Beats(1.0)) - 0.35).abs() < 1e-6);
             commands[0].undo(engine.project_mut().unwrap());
             assert_eq!(engine.project().unwrap().find_effect_by_id(&id).unwrap().automation_lanes.as_ref().unwrap()[0].points, original);

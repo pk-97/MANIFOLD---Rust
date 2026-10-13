@@ -800,12 +800,10 @@ impl ContentThread {
         // thumbnails never reach the drained slots.
         self.content_pipeline.take_sim_metrics(&mut self.engine);
         let render_work_start = std::time::Instant::now();
-        let tick_dt = self.engine.tick_dt().0;
         self.content_pipeline.render_content(
             &self.gpu,
             &mut self.engine,
             &tick_result,
-            tick_dt,
             self.frame_count,
             false,
             self.editing_service.data_version(),
@@ -2068,7 +2066,8 @@ impl ContentThread {
             }
         };
 
-        let current_beat = self.engine.current_beat();
+        // A recorded tempo point pairs the frame's time with its exact beat.
+        let current_beat = self.engine.frame_beat();
         let current_time = self.engine.current_time();
 
         let mut tempo_map_changed = false;

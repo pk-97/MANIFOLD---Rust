@@ -11,9 +11,13 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use manifold_core::{Beats, Bpm, Seconds};
 
 /// A frame's beat is taken this many frames after its time, so an edge that
-/// sits exactly on a frame always counts as reached on that frame (D14). It
-/// is also the seek-snap tolerance, matching `Driver::evaluate_frame_aligned`.
-pub const LATTICE_TOLERANCE_FRAMES: f64 = 1e-7;
+/// sits exactly on a frame always counts as reached on that frame (D14).
+/// Matches `Driver::evaluate_frame_aligned`.
+pub const BEAT_SAMPLE_OFFSET_FRAMES: f64 = 1e-7;
+/// Seeks snap forward to the first frame at or after the target, less this
+/// tolerance (D4). Strictly larger than the sample offset, so any beat
+/// sampled on frame k, turned back into a time, snaps to k again.
+pub const SNAP_TOLERANCE_FRAMES: f64 = 2e-7;
 
 /// Peter's half-frame rule plus ¼ frame of hysteresis (D6). Sources keep
 /// their smoothed noise under ¼ frame, so one true offset can never read past
@@ -240,7 +244,13 @@ impl TransportClock {
 
     /// The instant this frame's beat is taken at (D14).
     pub fn beat_sample_time(&self) -> Seconds {
-        Seconds(self.time().0 + LATTICE_TOLERANCE_FRAMES * self.step)
+        Seconds(self.time().0 + BEAT_SAMPLE_OFFSET_FRAMES * self.step)
+    }
+
+    /// The same offset before the frame: the latest instant still before
+    /// anything that lands on this frame, however its beat rounds.
+    pub fn frame_floor_time(&self) -> Seconds {
+        Seconds(self.time().0 - BEAT_SAMPLE_OFFSET_FRAMES * self.step)
     }
 
     pub fn index(&self) -> i64 {
@@ -257,7 +267,7 @@ impl TransportClock {
 
     /// First frame at or after `t`.
     pub fn index_at_or_after(&self, t: Seconds) -> i64 {
-        to_index((t.0 / self.step - LATTICE_TOLERANCE_FRAMES).ceil())
+        to_index((t.0 / self.step - SNAP_TOLERANCE_FRAMES).ceil())
     }
 
     pub fn index_nearest(&self, t: Seconds) -> i64 {
@@ -292,6 +302,21 @@ impl TransportClock {
             self.set_index(self.index_nearest(t));
             self.reanchored();
         }
+    }
+
+    /// STOPGAP(frame-exact P3): a source that re-places a grid which also
+    /// advances on its own (Link every tick, AbletonOSC per message), with no
+    /// phase lock yet. The grid keeps its own advance unless the target is
+    /// more than ½ + ¼ frame away (D6's threshold, without persistence), so
+    /// sub-frame jitter never becomes a held or skipped frame. Past it, the
+    /// nearest frame. Returns whether the index moved; non-finite is ignored.
+    pub fn follow_external(&mut self, target: Seconds) -> bool {
+        if !target.0.is_finite() || ((target.0 - self.time().0) / self.step).abs() <= ACT_ABOVE_FRAMES {
+            return false;
+        }
+        let before = self.index;
+        self.locate_nearest(target);
+        self.index != before
     }
 
     /// Stop, initialize: index 0, no hold, lock cleared.
