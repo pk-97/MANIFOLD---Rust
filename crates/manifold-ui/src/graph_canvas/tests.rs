@@ -1750,6 +1750,26 @@ fn fitted_zoom_is_reachable_and_scroll_does_not_snap() {
     );
 }
 
+/// Pinch zooms around the cursor, and a pinch out then back in returns to the
+/// starting zoom and pan.
+#[test]
+fn pinch_zooms_around_cursor_and_round_trips() {
+    let mut canvas = GraphCanvas::new();
+    let viewport = Rect::new(0.0, 0.0, 900.0, 800.0);
+    canvas.cursor = (300.0, 250.0);
+    let (zoom0, pan0) = (canvas.zoom, canvas.pan);
+    let anchor = canvas.to_graph(viewport, 300.0, 250.0);
+
+    canvas.on_pinch(viewport, 0.3);
+    assert!(canvas.zoom > zoom0, "spreading fingers must zoom in");
+    let after = canvas.to_graph(viewport, 300.0, 250.0);
+    assert!((after.0 - anchor.0).abs() < 1e-3 && (after.1 - anchor.1).abs() < 1e-3);
+
+    canvas.on_pinch(viewport, -0.3);
+    assert!((canvas.zoom - zoom0).abs() < 1e-5);
+    assert!((canvas.pan.0 - pan0.0).abs() < 1e-3 && (canvas.pan.1 - pan0.1).abs() < 1e-3);
+}
+
 /// Peter's second ask: Cmd+L (`request_relayout`) must reframe as well as
 /// reformat — a format that leaves the tidy graph scrolled off-screen isn't
 /// much use. After scrolling far away, a relayout must arm the fit so the next

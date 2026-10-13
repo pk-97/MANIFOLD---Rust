@@ -2674,7 +2674,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
         #[cfg(all(feature = "ui-automation", unix))]
         if is_primary && matches!(&event, WindowEvent::MouseInput { .. }
-            | WindowEvent::MouseWheel { .. } | WindowEvent::KeyboardInput { .. }
+            | WindowEvent::MouseWheel { .. } | WindowEvent::PinchGesture { .. }
+            | WindowEvent::KeyboardInput { .. }
             | WindowEvent::ModifiersChanged(_) | WindowEvent::CursorMoved { .. }
             | WindowEvent::Focused(false) | WindowEvent::Resized(_)
             | WindowEvent::ScaleFactorChanged { .. }) {
@@ -2789,6 +2790,11 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             // ── Mouse wheel (scroll / zoom) ──────────────────────────
             WindowEvent::MouseWheel { delta, .. } => {
                 self.input_mouse_wheel(window_id, is_primary, is_graph_editor, delta);
+            }
+
+            // ── Trackpad pinch (zoom) ────────────────────────────────
+            WindowEvent::PinchGesture { delta, .. } => {
+                self.input_pinch(window_id, is_primary, is_graph_editor, delta as f32);
             }
 
             // ── Modifier tracking ──────────────────────────────────

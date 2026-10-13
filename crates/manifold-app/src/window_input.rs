@@ -67,6 +67,18 @@ pub(crate) fn normalize_scroll_delta(delta: MouseScrollDelta) -> (f32, f32) {
     }
 }
 
+/// A window's size in logical pixels; `(1, 1)` if it is gone.
+fn editor_logical_size(
+    registry: &crate::window_registry::WindowRegistry,
+    window_id: WindowId,
+) -> (f32, f32) {
+    registry.get(&window_id).map_or((1.0, 1.0), |ws| {
+        let s = ws.window.scale_factor() as f32;
+        let sz = ws.window.inner_size();
+        (sz.width as f32 / s, sz.height as f32 / s)
+    })
+}
+
 pub(crate) fn native_timeline_cursor(cursor: TimelineCursor) -> winit::window::CursorIcon {
     match cursor {
         TimelineCursor::Default => winit::window::CursorIcon::Default,
@@ -811,18 +823,12 @@ impl Application {
                 }
             } else if tracks_rect.contains(pos) {
                 if self.modifiers.alt {
-                    // Alt + scroll Y → continuous, cursor-anchored zoom (section 24 5e):
-                    // smooth scaling of pixels-per-beat (not a jump between ten
-                    // fixed levels), anchored on the beat under the mouse so the
-                    // view zooms toward where you're pointing.
+                    // Alt + scroll Y → continuous, cursor-anchored zoom (section 24 5e).
                     if dy.abs() > 0.01 {
-                        let beat_at_cursor =
-                            self.ws.ui_root.viewport.pixel_to_beat(pos.x).as_f32();
                         let exponent = dy / LINE_DELTA_PX;
-                        let factor = manifold_ui::color::ZOOM_WHEEL_STEP_PER_NOTCH.powf(exponent);
-                        let new_ppb = self.ws.ui_root.viewport.zoom_continuous(factor);
-                        self.ws.ui_root.viewport.zoom_to(new_ppb, beat_at_cursor, pos.x);
-                        self.scroll_dirty.zoom = true;
+                        self.zoom_timeline_at_cursor(
+                            manifold_ui::color::ZOOM_WHEEL_STEP_PER_NOTCH.powf(exponent),
+                        );
                     }
                 } else if self.modifiers.shift {
                     // Shift + scroll Y → horizontal pan
@@ -871,6 +877,47 @@ impl Application {
                     // BUG-159: see the Shift+scroll site above.
                     self.ws.ui_root.viewport.note_user_scroll_x();
                 }
+            }
+        }
+    }
+
+    /// Scale pixels-per-beat by `factor` (smooth, not a jump between the fixed
+    /// levels), keeping the beat under the mouse where it is on screen.
+    fn zoom_timeline_at_cursor(&mut self, factor: f32) {
+        let pos = self.cursor_pos;
+        let beat_at_cursor = self.ws.ui_root.viewport.pixel_to_beat(pos.x).as_f32();
+        let new_ppb = self.ws.ui_root.viewport.zoom_continuous(factor);
+        self.ws.ui_root.viewport.zoom_to(new_ppb, beat_at_cursor, pos.x);
+        self.scroll_dirty.zoom = true;
+    }
+
+    /// Trackpad pinch in any window. `magnification` is winit's per-event
+    /// `PinchGesture` delta: positive = fingers spreading = zoom in. Zooms the
+    /// timeline over the tracks and the graph canvas in the editor; the 3D
+    /// viewport and side panels ignore it.
+    pub(crate) fn input_pinch(
+        &mut self,
+        window_id: WindowId,
+        is_primary: bool,
+        is_graph_editor: bool,
+        magnification: f32,
+    ) {
+        if !magnification.is_finite() || self.ws.ui_root.export_progress.is_open() {
+            return;
+        }
+        if is_graph_editor {
+            self.editor_pinch(window_id, magnification);
+        } else if is_primary {
+            if self.perform_handle_mouse_wheel()
+                || self.ws.ui_root.dropdown.is_open()
+                || self.ws.ui_root.background_input_blocked()
+            {
+                return;
+            }
+            if self.ws.ui_root.layout.timeline_tracks().contains(self.cursor_pos) {
+                self.zoom_timeline_at_cursor(
+                    (magnification * manifold_ui::color::ZOOM_PINCH_GAIN).exp(),
+                );
             }
         }
     }
@@ -1868,23 +1915,7 @@ impl Application {
             ed.offscreen_dirty = true;
             return true;
         }
-        let card_x = self.graph_editor.as_ref().map(|ed| {
-            let (s, sz) = {
-                let w = &self.window_registry.get(&window_id);
-                w.map(|ws| (ws.window.scale_factor(), ws.window.inner_size()))
-                    .unwrap_or((1.0, winit::dpi::PhysicalSize::new(1, 1)))
-            };
-            let area = manifold_ui::Rect::new(
-                0.0,
-                0.0,
-                sz.width as f32 / s as f32,
-                sz.height as f32 / s as f32,
-            );
-            ed.dock.rects(area).right.x
-        });
-        if let Some(card_x) = card_x
-            && cx >= card_x
-        {
+        if self.editor_cursor_over_card_lane(window_id, cx) {
             let (_dx, dy) = normalize_scroll_delta(delta);
             if let Some(ed) = self.graph_editor.as_mut() {
                 ed.ui_root.inspector.handle_scroll_at(dy, cx);
@@ -1898,21 +1929,8 @@ impl Application {
                 winit::event::MouseScrollDelta::LineDelta(_, y) => y * LINE_DELTA_PX,
                 winit::event::MouseScrollDelta::PixelDelta(pos) => pos.y as f32,
             };
-            let viewport = self
-                .window_registry
-                .get(&window_id)
-                .map(|ws| {
-                    let s = ws.window.scale_factor();
-                    let sz = ws.window.inner_size();
-                    crate::graph_canvas::Rect::new(
-                        0.0,
-                        0.0,
-                        sz.width as f32 / s as f32,
-                        sz.height as f32 / s as f32,
-                    )
-                })
-                .unwrap_or(crate::graph_canvas::Rect::new(0.0, 0.0, 1.0, 1.0));
-            canvas.on_scroll(viewport, dy);
+            let (w, h) = editor_logical_size(&self.window_registry, window_id);
+            canvas.on_scroll(crate::graph_canvas::Rect::new(0.0, 0.0, w, h), dy);
             if let Some(ed) = self.graph_editor.as_mut() {
                 ed.offscreen_dirty = true;
             }
@@ -1920,6 +1938,38 @@ impl Application {
         } else {
             false
         }
+    }
+
+    /// Pinch in the editor window zooms the graph canvas around the cursor.
+    /// The 3D viewport pane and the right card lane ignore it.
+    fn editor_pinch(&mut self, window_id: WindowId, magnification: f32) {
+        let Some((cx, cy)) = self.graph_canvas.as_ref().map(|c| c.cursor()) else {
+            return;
+        };
+        let over_viewport = self
+            .graph_editor
+            .as_ref()
+            .and_then(|ed| ed.viewport_rect)
+            .is_some_and(|rect| rect.contains(Vec2::new(cx, cy)));
+        if over_viewport || self.editor_cursor_over_card_lane(window_id, cx) {
+            return;
+        }
+        let (w, h) = editor_logical_size(&self.window_registry, window_id);
+        if let Some(canvas) = self.graph_canvas.as_mut() {
+            canvas.on_pinch(crate::graph_canvas::Rect::new(0.0, 0.0, w, h), magnification);
+        }
+        if let Some(ed) = self.graph_editor.as_mut() {
+            ed.offscreen_dirty = true;
+        }
+    }
+
+    /// Whether logical x `cx` sits in the editor's right card lane (the
+    /// inspector column), read from the same `Dock` the present lays out.
+    fn editor_cursor_over_card_lane(&self, window_id: WindowId, cx: f32) -> bool {
+        let (w, h) = editor_logical_size(&self.window_registry, window_id);
+        self.graph_editor.as_ref().is_some_and(|ed| {
+            cx >= ed.dock.rects(manifold_ui::Rect::new(0.0, 0.0, w, h)).right.x
+        })
     }
 
     /// All editor-window keyboard handling — popover/canvas text-field editing,
