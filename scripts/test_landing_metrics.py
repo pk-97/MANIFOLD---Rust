@@ -134,6 +134,19 @@ class MetricsTests(unittest.TestCase):
         self.assertEqual(lm.classify_red(self.red("stable-tree")), "unclassified")
         self.assertEqual(lm.classify_red(row(self.now, 1, [("tests", "PASS", 1)])), "unclassified")
 
+    def test_labels_alone_never_guess(self):
+        fast = row(self.now, 1, [("tests-build/manifold-app", "FAIL", 0.8),
+                                 ("tests-build/manifold-core", "FAIL", 0.6),
+                                 ("tests-build/manifold-editing", "FAIL", 0.5)])
+        self.assertEqual(lm.classify_red(fast), "unclassified")
+        self.assertEqual(lm.classify_red(self.red("flow-gate", duration=3600.1)), "unclassified")
+        mixed = row(self.now, 1, [("clippy/x", "FAIL", 5), ("test-ownership/y", "FAIL", 5)])
+        self.assertEqual(lm.classify_red(mixed), "unclassified")
+
+    def test_empty_fallback_diff_is_unknown(self):
+        self.assertIsNone(lm.branch_paths("lane/e", {}, lambda *a: ""))
+        self.assertIsNone(lm.branch_paths("lane/e", {"lane/e": "abc"}, lambda *a: "\n"))
+
     def test_red_hours_per_class_and_render(self):
         rows = [self.red("clippy", duration=3600 - 5), self.red("deny", duration=1800 - 5),
                 self.red("gpu-proofs", duration=1800 - 5), row(self.now, 0, [("tests", "PASS", 9)])]

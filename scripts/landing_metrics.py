@@ -47,8 +47,9 @@ TEXT_CLASSES = (
 MAPPING_LABELS = {"test-ownership", "gpu-ownership", "cpu-ownership", "entrypoints", "feature-coverage"}
 INPUT_LABELS = {"deny", "dependency-bans", "docs-index", "fresh-docs-index", "catalog-fresh",
                 "fresh-preset-thumbnails"}
-CODE_LABELS = {"clippy", "tests", "tests-build", "flow-gate", "flow-gate-build", "gpu-proofs-build",
-               "ignored-tests", "design-status", "scripts", ".codex"}
+# Only clippy names a code fault by itself; build/test/flow/gpu legs also fail on storage,
+# timeouts and resets, so a label alone never places them.
+DECISIVE_CODE_LABELS = {"clippy"}
 UNCLASSIFIED = "unclassified"
 RUST_SUFFIXES = (".rs", ".toml", ".lock", ".wgsl")
 
@@ -60,12 +61,14 @@ def classify_red(row):
         if any(pattern.search(c.get("detail") or "") for c in failing):
             return name
     labels = {c["label"].split("/")[0] for c in failing}
-    if labels & MAPPING_LABELS:
-        return "mapping gap"
-    if labels & INPUT_LABELS:
-        return "missing gate input"
-    if labels & CODE_LABELS:
+    if not labels:
+        return UNCLASSIFIED
+    if labels <= DECISIVE_CODE_LABELS:
         return "real code red"
+    if labels <= MAPPING_LABELS:
+        return "mapping gap"
+    if labels <= INPUT_LABELS:
+        return "missing gate input"
     return UNCLASSIFIED
 
 
@@ -85,7 +88,8 @@ def branch_paths(branch, merges, git):
             out = git("diff", "--name-only", f"origin/main...{ref}")
             if out is not None:
                 break
-    return None if out is None else out.split()
+    paths = None if out is None else out.split()
+    return paths or None  # an empty diff proves nothing about the branch
 
 
 def split_landing_time(attempts, paths_of):
@@ -245,7 +249,8 @@ def render(metrics, days):
              f"flow-gate over 10 min: {m['flow_gate_over_10min']}",
              "  hours by leg: " + ", ".join(f"{k} {v}" for k, v in m["leg_hours"].items())]
     if m.get("red_classes"):
-        lines.append("  red runs by cause (hours = whole run's check time):")
+        lines.append("  red runs by cause (classes come from check labels until landing_gate.py logs "
+                     "a failure detail; hours = whole run's check time):")
         lines.extend(f"    {name}: {c['runs']} runs, {c['hours']} h" for name, c in m["red_classes"].items())
     if m.get("split"):
         names = {"python_only": "python-only", "rust": "rust-touching", "unknown": "unknown"}
