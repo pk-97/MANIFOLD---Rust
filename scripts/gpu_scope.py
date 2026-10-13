@@ -594,6 +594,12 @@ def plan_for_paths(paths, repo, shader_users=None, base="origin/main", workspace
                 if catalog_mapped:
                     plan.filters.update(module_filters(path, root))
                     continue
+                mounted = binary_only_proof_mounts(path, repo, workspace, owner)
+                if mounted is not None:
+                    plan.filters.update(mounted)
+                    if not mounted:
+                        plan.notes.append(f'{path}: no {owner} GPU proof compiles this file; smoke only')
+                    continue
                 plan.whole_packages.add(owner)
                 continue
         plan.unmapped.append((path, "no GPU test mapping rule for this file type"))
@@ -608,6 +614,33 @@ def plan_for_paths(paths, repo, shader_users=None, base="origin/main", workspace
         plan.required_binaries.update(cpu_plan.gpu_binaries)
         plan.filters.update(cpu_plan.gpu_filters)
     return plan
+
+
+def binary_only_proof_mounts(path, repo, workspace, owner):
+    """Proof modules that compile a binary-only package's source file.
+
+    A package with no lib target (manifold-app) cannot be imported by its own
+    integration tests, so its GPU proofs exercise one of its src files only when
+    a proof root mounts it with `#[path]`. Returns those module filters, an empty
+    set when no proof compiles the file (smoke covers the libraries it drives),
+    or None for a package with a lib, which keeps the whole-package rule.
+    Obsolete when: the app gains a lib target (BUG-zezjf app lib split); then
+    this returns None and app src goes back to whole-package until mapped.
+    """
+    if workspace.targets(owner, 'lib'):
+        return None
+    source = (Path(repo) / path).resolve()
+    found = set()
+    for target in workspace.targets(owner, 'test'):
+        if not ('gpu-proofs' in target.get('required-features', [])
+                or target['name'] == GPU_CONTRACT_TARGETS.get(owner)):
+            continue
+        for prefix in module_mounts(target['src_path']).get(source, ()):
+            if prefix:
+                found.add('::'.join(prefix) + '::')
+            else:
+                return None  # the proof root itself: run the package whole
+    return found
 
 
 def _map_wgsl(plan, path, repo, shader_users):
