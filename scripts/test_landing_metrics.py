@@ -107,6 +107,80 @@ class MetricsTests(unittest.TestCase):
                 '\n'.join(json.dumps(a) for a in attempts) + '\n')
             self.assertEqual(len(lm.read_attempts(timings, self.now - timedelta(days=1))), 12)
 
+    def red(self, label, detail=None, duration=100):
+        r = row(self.now, 1, [("clippy", "PASS", 5), (label, "FAIL", duration)])
+        if detail:
+            r["checks"][1]["detail"] = detail
+        return r
+
+    def test_each_red_class_from_a_minimal_row(self):
+        cases = [
+            ("storage refusal", self.red("tests-build/manifold-app", "Storage admission refused: REFUSED")),
+            ("flaky", self.red("tests", "FLAKY consolidated_peel passed on retry")),
+            ("real code red", self.red("clippy/manifold-ui")),
+            ("mapping gap", self.red("test-ownership/manifold-app")),
+            ("merge conflict", self.red("stable-tree", "CONFLICT (content): Merge conflict in x")),
+            ("missing gate input", self.red("deny")),
+            ("missing gate input", self.red("docs-index")),
+            ("GPU reset", self.red("gpu-proofs", "kIOGPUCommandBufferCallbackErrorInnocentVictim")),
+            ("GPU reset", self.red("gpu-proofs", "kIOGPUCommandBufferCallbackErrorHang")),
+            ("GPU budget only", self.red("gpu-proofs", "GPU-PROOFS TIMING: FAIL 1073s of 360s")),
+        ]
+        for expected, r in cases:
+            self.assertEqual(lm.classify_red(r), expected, r["checks"][1])
+
+    def test_unrecorded_cause_is_unclassified_never_guessed(self):
+        self.assertEqual(lm.classify_red(self.red("gpu-proofs", duration=983.7)), "unclassified")
+        self.assertEqual(lm.classify_red(self.red("stable-tree")), "unclassified")
+        self.assertEqual(lm.classify_red(row(self.now, 1, [("tests", "PASS", 1)])), "unclassified")
+
+    def test_red_hours_per_class_and_render(self):
+        rows = [self.red("clippy", duration=3600 - 5), self.red("deny", duration=1800 - 5),
+                self.red("gpu-proofs", duration=1800 - 5), row(self.now, 0, [("tests", "PASS", 9)])]
+        classes = lm.summarize(rows, 3)["red_classes"]
+        self.assertEqual(classes["real code red"], {"runs": 1, "hours": 1.0})
+        self.assertEqual(classes["missing gate input"], {"runs": 1, "hours": 0.5})
+        self.assertEqual(classes["unclassified"], {"runs": 1, "hours": 0.5})
+        text = lm.render(lm.summarize(rows, 3), 7)
+        self.assertIn("red runs by cause", text)
+        self.assertIn("real code red: 1 runs, 1.0 h", text)
+
+    def test_dead_renderer_crate_rows_are_dropped_from_slowest(self):
+        r = row(self.now, 0, [("tests", "PASS", 100)])
+        r["checks"][0]["slow_tests"] = [{"name": "manifold-renderer node_graph::x", "s": 90.0},
+                                        {"name": "manifold-nodes real", "s": 45.0}]
+        self.assertEqual([t["name"] for t in lm.summarize([r], 1)["slow_tests"]],
+                         ["manifold-nodes real"])
+
+    def test_python_rust_split_of_landing_time(self):
+        def attempt(branch, minutes):
+            return {"branch": branch, "start": self.now.isoformat(), "outcome": "landed",
+                    "end": (self.now + timedelta(minutes=minutes)).isoformat()}
+        files = {"py": ["scripts/a.py", "docs/x.md"], "rs": ["scripts/a.py", "crates/c/src/lib.rs"],
+                 "gone": None}
+        split = lm.split_landing_time(
+            [attempt("py", 2), attempt("py", 4), attempt("rs", 30), attempt("gone", 99),
+             {**attempt("py", 500), "outcome": "red"}],
+            lambda branch: files[branch])
+        self.assertEqual(split["python_only"], {"landings": 2, "median_min": 3.0})
+        self.assertEqual(split["rust"], {"landings": 1, "median_min": 30.0})
+        self.assertEqual(split["unknown"], {"landings": 1, "median_min": 99.0})
+        text = lm.render({**lm.summarize(self.rows(), 2), "split": split}, 7)
+        self.assertIn("python-only 2 landings, median 3.0 min", text)
+        self.assertIn("unknown 1", text)
+
+    def test_branch_paths_prefer_merge_commit_then_ref_then_none(self):
+        merges = {"lane/x": "abc123"}
+        calls = []
+        def git(*args):
+            calls.append(args)
+            return "scripts/a.py\n"
+        self.assertEqual(lm.branch_paths("lane/x", merges, git), ["scripts/a.py"])
+        self.assertEqual(calls[0], ("diff", "--name-only", "abc123^1", "abc123"))
+        self.assertEqual(lm.branch_paths("lane/y", {}, lambda *a: "scripts/b.py\n" if "origin/lane/y" in a[-1] else None),
+                         ["scripts/b.py"])
+        self.assertIsNone(lm.branch_paths("lane/z", {}, lambda *a: None))
+
     def test_window_and_red_threshold(self):
         with tempfile.TemporaryDirectory() as d:
             path = Path(d) / "t.jsonl"

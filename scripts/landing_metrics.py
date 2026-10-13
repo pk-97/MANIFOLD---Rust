@@ -31,6 +31,93 @@ RUNS_PER_LANDING_RED = 2.0
 # Rows logged before the gate parser learned nextest's in-progress marker
 # carry it as a name prefix; they duplicate the real test row.
 SLOW_MARKER = re.compile(r"\(─+\) ")
+# Crates that no longer exist; their old rows would crowd the slowest-tests table.
+DEAD_CRATES = ("manifold-renderer ",)
+
+# A red run gets one class. Text signals (a failing check's optional "detail") win
+# over label signals; the gate rows carry labels and durations today, so a cause
+# that only shows in the transcript lands in "unclassified" until detail is logged.
+TEXT_CLASSES = (
+    ("storage refusal", re.compile(r"Storage admission refused|REFUSED", re.I)),
+    ("GPU reset", re.compile(r"InnocentVictim|ErrorHang|GPU Hang")),
+    ("flaky", re.compile(r"\bFLAKY\b")),
+    ("merge conflict", re.compile(r"\bCONFLICT\b|merge conflict", re.I)),
+    ("GPU budget only", re.compile(r"GPU-PROOFS TIMING: FAIL")),
+)
+MAPPING_LABELS = {"test-ownership", "gpu-ownership", "cpu-ownership", "entrypoints", "feature-coverage"}
+INPUT_LABELS = {"deny", "dependency-bans", "docs-index", "fresh-docs-index", "catalog-fresh",
+                "fresh-preset-thumbnails"}
+CODE_LABELS = {"clippy", "tests", "tests-build", "flow-gate", "flow-gate-build", "gpu-proofs-build",
+               "ignored-tests", "design-status", "scripts", ".codex"}
+UNCLASSIFIED = "unclassified"
+RUST_SUFFIXES = (".rs", ".toml", ".lock", ".wgsl")
+
+
+def classify_red(row):
+    """One cause class for a red gate row, from what the row records; else unclassified."""
+    failing = [c for c in row.get("checks", []) if c.get("status") == "FAIL"]
+    for name, pattern in TEXT_CLASSES:
+        if any(pattern.search(c.get("detail") or "") for c in failing):
+            return name
+    labels = {c["label"].split("/")[0] for c in failing}
+    if labels & MAPPING_LABELS:
+        return "mapping gap"
+    if labels & INPUT_LABELS:
+        return "missing gate input"
+    if labels & CODE_LABELS:
+        return "real code red"
+    return UNCLASSIFIED
+
+
+def is_rust_path(path):
+    return path.startswith("crates/") or path.endswith(RUST_SUFFIXES)
+
+
+def branch_paths(branch, merges, git):
+    """Paths a branch changed: its landing merge's diff to the first parent, else the live ref.
+    None when neither exists. git(*args) returns stdout or None."""
+    sha = merges.get(branch)
+    if sha:
+        out = git("diff", "--name-only", f"{sha}^1", sha)
+    else:
+        out = None
+        for ref in (f"origin/{branch}", branch):
+            out = git("diff", "--name-only", f"origin/main...{ref}")
+            if out is not None:
+                break
+    return None if out is None else out.split()
+
+
+def split_landing_time(attempts, paths_of):
+    """Median end-to-end minutes for landed attempts: Python-only vs Rust-touching vs unknown."""
+    buckets = collections.defaultdict(list)
+    for a in attempts:
+        if a.get("outcome") != "landed" or not a.get("end"):
+            continue
+        minutes = (datetime.fromisoformat(a["end"]) - datetime.fromisoformat(a["start"])).total_seconds() / 60
+        paths = paths_of(a["branch"])
+        key = "unknown" if paths is None else "rust" if any(map(is_rust_path, paths)) else "python_only"
+        buckets[key].append(minutes)
+    return {key: {"landings": len(buckets[key]), "median_min": round(statistics.median(buckets[key]), 1)}
+            for key in ("python_only", "rust", "unknown") if buckets[key]}
+
+
+def git_runner(repo):
+    def git(*args):
+        out = subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True, timeout=60)
+        return out.stdout if out.returncode == 0 else None
+    return git
+
+
+def landing_merges(git):
+    """{branch: merge sha} from 'Land <branch>: ...' first-parent merge subjects on main."""
+    merges = {}
+    for line in (git("log", "--merges", "--first-parent", "--format=%H%x09%s", "origin/main") or "").splitlines():
+        sha, _, subject = line.partition("\t")
+        match = re.match(r"Land (\S+?):? ", subject + " ")
+        if match:
+            merges.setdefault(match[1], sha)
+    return merges
 
 
 def timings_path(repo):
@@ -110,12 +197,20 @@ def summarize(rows, landings):
                 legs[label].append(check["duration_s"])
             for test in check.get("slow_tests", []):
                 name, seconds = test["name"], test["s"]
-                if SLOW_MARKER.match(name):
+                if SLOW_MARKER.match(name) or any(crate in name for crate in DEAD_CRATES):
                     continue
                 slow_max[name] = max(slow_max.get(name, 0), seconds)
                 seen.add(name)
         # A timing row is one logged landing attempt, even across several checks.
         slow_landings.update(seen)
+    red_classes = {}
+    for row in rows:
+        if row.get("failed"):
+            entry = red_classes.setdefault(classify_red(row), {"runs": 0, "seconds": 0.0})
+            entry["runs"] += 1
+            entry["seconds"] += sum(c.get("duration_s") or 0 for c in row["checks"])
+    red_classes = {k: {"runs": v["runs"], "hours": round(v["seconds"] / 3600, 1)}
+                   for k, v in sorted(red_classes.items(), key=lambda kv: -kv[1]["seconds"])}
     proofs = {s: status[("gpu-proofs", s)] for s in ("PASS", "REUSED", "FAIL", "SKIP")}
     proof_runs = proofs["PASS"] + proofs["REUSED"] + proofs["FAIL"]
     waits = [r["gpu_wait_s"] for r in rows if r.get("gpu_wait_s") is not None]
@@ -129,6 +224,7 @@ def summarize(rows, landings):
         "gpu_proofs_median_s": round(statistics.median(legs["gpu-proofs"])) if legs["gpu-proofs"] else None,
         "gpu_wait_total_s": round(sum(waits)),
         "gpu_wait_runs_logged": len(waits),
+        "red_classes": red_classes,
         "flow_gate_over_10min": sum(1 for s in legs["flow-gate"] if s > 600),
         "leg_hours": {label: round(sum(v) / 3600, 1) for label, v in
                       sorted(legs.items(), key=lambda kv: -sum(kv[1]))[:5]},
@@ -148,6 +244,14 @@ def render(metrics, days):
              f"  gpu queue wait: {m['gpu_wait_total_s']}s over {m['gpu_wait_runs_logged']} logged runs; "
              f"flow-gate over 10 min: {m['flow_gate_over_10min']}",
              "  hours by leg: " + ", ".join(f"{k} {v}" for k, v in m["leg_hours"].items())]
+    if m.get("red_classes"):
+        lines.append("  red runs by cause (hours = whole run's check time):")
+        lines.extend(f"    {name}: {c['runs']} runs, {c['hours']} h" for name, c in m["red_classes"].items())
+    if m.get("split"):
+        names = {"python_only": "python-only", "rust": "rust-touching", "unknown": "unknown"}
+        lines.append("  end-to-end landing by branch kind: " + "; ".join(
+            f"{names[k]} {v['landings']} landings, median {v['median_min']} min"
+            for k, v in m["split"].items()))
     if m.get("attempts"):
         outcomes = ", ".join(f"{k} {v}" for k, v in sorted(m["outcomes"].items(), key=str))
         lines += [f"  land_branch attempts {m['attempts']} ({outcomes}); end-to-end landing "
@@ -174,7 +278,12 @@ def main(argv=None):
     try:
         timings = args.timings or timings_path(args.repo)
         metrics = summarize(read_rows(timings, since), landings_since(args.repo, since))
-        metrics.update(summarize_attempts(read_attempts(timings, since)))
+        attempts = read_attempts(timings, since)
+        metrics.update(summarize_attempts(attempts))
+        if attempts:
+            git = git_runner(args.repo)
+            merges = landing_merges(git)
+            metrics["split"] = split_landing_time(attempts, lambda b: branch_paths(b, merges, git))
     except (OSError, ValueError, KeyError, RuntimeError, subprocess.SubprocessError) as error:
         print(f"landing metrics skipped: {error}")
         return 0
