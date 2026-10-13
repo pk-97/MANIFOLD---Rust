@@ -79,6 +79,7 @@ Live UI (opt-in connection to a running app):
 
 Process, beads, usage:
   fleet-health            stalls and blockers across lanes (the lead's cron)  [scripts/fleet_health.py]  (cost: unit)
+  status                  one screen: lanes, GPU holder, worktree slots, running gate with ETA  [scripts/status.py]  (cost: unit)
   stale-beads             open beads untouched past threshold  [scripts/stale_beads.py]  (cost: unit)
   hook-census             which hooks fire, how often, from telemetry  [scripts/hook_census.py]  (cost: unit)
   token-report            Claude Code token spend from local transcripts  [scripts/token_report.py]  (cost: unit)
