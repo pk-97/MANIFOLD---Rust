@@ -10,7 +10,7 @@
     main, `update-ref refs/heads/main` or `gh pr merge` is DENIED unless the
     resulting tree has a gate pass recorded by scripts/land_branch.py in
     <git-common-dir>/land-passes-v1/<tree>.json, the commits are already on
-    origin/main, or the diff versus origin/main touches only .beads/ and docs/
+    origin/main, or the diff versus origin/main touches only .beads/, docs/ and .claude/hooks/
     (beads: commits and docs edits land directly; they carry no code to gate).
     land_branch.py's own git calls are subprocesses the hook never sees, so no
     allowlist exists. Any Bash command that could write into land-passes-v1
@@ -789,7 +789,7 @@ def landing_protocol_guard(cmd, cwd):
 # never Bash tool calls, so this hook cannot see them and needs no allowlist.
 # Every agent Bash call that would put a tree on main is DENIED unless the
 # tree has such a record, the commits are already on origin/main, or the change
-# versus origin/main touches only .beads/ and docs/ (the `beads:` commits and
+# versus origin/main touches only .beads/, docs/ and .claude/hooks/ (the `beads:` commits and
 # docs edits go straight to main; they carry no code for the gate to prove).
 # Shapes: `git merge` while on main (or after `checkout/switch main`), `git push`
 # naming main (bare push on main, `HEAD:main`, `<br>:main`, --all, globs), any
@@ -798,12 +798,12 @@ def landing_protocol_guard(cmd, cwd):
 # ---------------------------------------------------------------------------
 
 LAND_PASS_DIR = "land-passes-v1"  # writer: scripts/land_branch.py record_land_pass
-_BEADS_DOCS_PREFIXES = (".beads/", "docs/")
+_BEADS_DOCS_PREFIXES = (".beads/", "docs/", ".claude/hooks/")
 _MERGE_VALUE_FLAGS = {"-m", "-F", "-s", "-X", "--message", "--file", "--strategy",
                       "--strategy-option", "--into-name"}
 _PUSH_VALUE_FLAGS = {"-o", "--push-option", "--repo", "--receive-pack", "--exec"}
 _LAND_HOW = ("Land through scripts/land_branch.py (it gates the merged tree and records "
-             "the pass). Only changes confined to .beads/ and docs/ may go to main directly.")
+             "the pass). Only changes confined to .beads/, docs/ and .claude/hooks/ may go to main directly.")
 
 
 def _git_run(target_dir, *args):
@@ -830,7 +830,7 @@ def _tree_may_land(target_dir, tree):
     if all(n.startswith(_BEADS_DOCS_PREFIXES) for n in files):
         return None
     return (f"tree {tree[:9]} has no recorded land_branch gate pass and changes code outside "
-            f".beads/ and docs/ versus origin/main (e.g. {files[0]}). {_LAND_HOW}")
+            f".beads/, docs/ and .claude/hooks/ versus origin/main (e.g. {files[0]}). {_LAND_HOW}")
 
 
 def _rev_may_land(target_dir, rev):
