@@ -1,6 +1,6 @@
-//! Shared mesh resources at the boundary between a scene and its render views.
-//! These nodes perform no copies. The parent owns the buffers; a view borrows
-//! them after resource installation and consumes them on the same GPU encoder.
+//! `system.mesh_input`: a mesh boundary whose buffers the owner prebinds.
+//! The node performs no copies; consumers read the prebound buffers on the
+//! same GPU encoder.
 
 use crate::exec::effect_node::{EffectNode, EffectNodeContext, EffectNodeType, ParamValues};
 use crate::parameters::ParamDef;
@@ -9,9 +9,6 @@ use crate::mesh::MeshVertex;
 use std::borrow::Cow;
 
 pub struct MeshInput {
-    ty: EffectNodeType,
-}
-pub struct MeshOutput {
     ty: EffectNodeType,
 }
 
@@ -32,38 +29,6 @@ const INPUT_OUTPUTS: &[NodeOutput] = &[
         name: Cow::Borrowed("weights"),
         ty: PortType::Array(ArrayType::of_known::<f32>()),
         kind: PortKind::Output,
-        required: false,
-    },
-];
-const OUTPUT_INPUTS: &[NodeInput] = &[
-    NodePort {
-        name: Cow::Borrowed("depth"),
-        ty: PortType::Texture2D,
-        kind: PortKind::Input,
-        required: false,
-    },
-    NodePort {
-        name: Cow::Borrowed("vertices"),
-        ty: PortType::Array(ArrayType::of_known::<MeshVertex>()),
-        kind: PortKind::Input,
-        required: true,
-    },
-    NodePort {
-        name: Cow::Borrowed("weights"),
-        ty: PortType::Array(ArrayType::of_known::<f32>()),
-        kind: PortKind::Input,
-        required: true,
-    },
-    NodePort {
-        name: Cow::Borrowed("trigger_count"),
-        ty: PortType::Scalar(crate::ports::ScalarType::F32),
-        kind: PortKind::Input,
-        required: false,
-    },
-    NodePort {
-        name: Cow::Borrowed("trigger_baseline"),
-        ty: PortType::Scalar(crate::ports::ScalarType::F32),
-        kind: PortKind::Input,
         required: false,
     },
 ];
@@ -101,32 +66,4 @@ impl EffectNode for MeshInput {
     }
     fn evaluate(&mut self, _: &mut EffectNodeContext<'_, '_>) {}
 }
-impl EffectNode for MeshOutput {
-    fn type_id(&self) -> &EffectNodeType {
-        &self.ty
-    }
-    fn inputs(&self) -> &[NodeInput] {
-        OUTPUT_INPUTS
-    }
-    fn outputs(&self) -> &[NodeOutput] {
-        &[]
-    }
-    fn parameters(&self) -> &[ParamDef] {
-        &[]
-    }
-    fn depth_rule(&self) -> super::depth_rule::DepthRule {
-        super::depth_rule::DepthRule::Terminal
-    }
-    fn boundary_reason(&self) -> Option<crate::freeze::classify::BoundaryReason> {
-        Some(crate::freeze::classify::BoundaryReason::NonGpu)
-    }
-    fn is_liveness_root(&self) -> bool {
-        true
-    }
-    fn carries_resources(&self) -> bool {
-        true
-    }
-    fn evaluate(&mut self, _: &mut EffectNodeContext<'_, '_>) {}
-}
 inventory::submit! { crate::persistence::PrimitiveFactory { type_id: "system.mesh_input", create: || Box::new(MeshInput { ty: EffectNodeType::new("system.mesh_input") }), picker: None } }
-inventory::submit! { crate::persistence::PrimitiveFactory { type_id: "system.mesh_output", create: || Box::new(MeshOutput { ty: EffectNodeType::new("system.mesh_output") }), picker: None } }

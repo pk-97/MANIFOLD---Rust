@@ -20,7 +20,7 @@ pub fn prepare_impulses(owner: &EffectGraphDef, routes: &[SceneModifierNodeRoute
     super::impulses::prepare(owner, routes, graph)
 }
 pub fn resource_node_id(modifier: &NodeId, target: &SceneNodeRef, role: &str) -> NodeId {
-    super::math_resource_node_id(modifier, target, role)
+    super::compiler::math_resource_node_id(modifier, target, role)
 }
 pub struct GuardFixture(super::PreparedModifierParameterGuards);
 impl GuardFixture {

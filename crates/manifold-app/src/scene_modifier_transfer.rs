@@ -592,13 +592,6 @@ mod tests {
         assert_ne!(pasted_carrier.id, carrier_b);
         let reloaded: EffectGraphDef = serde_json::from_value(serde_json::to_value(graph).unwrap()).unwrap();
         assert_eq!(&reloaded, graph, "pasted association survives serialization");
-        assert_eq!(
-            manifold_core::scene_modifier_math_view::math_view_connect_support(
-                graph,
-                &pasted_view.id,
-            ),
-            Ok(())
-        );
         let after = serde_json::to_value(host).unwrap();
         assert!(service.undo(&mut project));
         assert_eq!(

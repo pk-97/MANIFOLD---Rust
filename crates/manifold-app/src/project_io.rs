@@ -196,24 +196,73 @@ pub struct ProjectIOAction {
     /// `docs/PROJECT_FILE_INTEGRITY_DESIGN.md` section 3.6.
     pub notice: Option<String>,
 }
-
 /// Load-time compatibility for the pre-standalone Math View. Each legacy
 /// carrier with authored content — non-default control values or host-side
 /// animation or modulation touching them — gains its own Math View instance
 /// immediately after it in the chain, keeping the carrier's target selection
 /// and mesh frames, and the carrier's host bindings move onto it (binding ids
 /// are unchanged, so values, animation and modulation survive). The view
-/// records the carrier in `legacy_math_view_carrier` so its authored Connect
-/// to Mesh keeps pointing at that carrier's patch transform even when other
-/// patch carriers precede it. Embedded control values without host bindings
-/// are copied onto the view. Legacy Scope remains a hidden compatibility
-/// macro, including its automation; new standalone views have no Scope.
+/// records the carrier in `legacy_math_view_carrier`. Embedded control values
+/// without host bindings are copied onto the view. Legacy Scope and the
+/// other removed controls stay on the carrier and are dropped with it.
 /// Carriers with only default, inactive content — including
 /// enabled-but-untouched ones — are stripped cleanly. When an authored
 /// carrier's view cannot be created (recipe unavailable, no mesh frames, or
 /// the view cap is reached) its embedded controls are preserved untouched
 /// and the skip is reported. Returns the host base values the caller must
 /// seed once the manifest is refreshed.
+/// Remove host params and everything keyed by them: LFO drivers, envelopes,
+/// Ableton mappings, audio mods (including trigger routes) and automation
+/// lanes. A macro so callers holding a borrow of `host.graph` keep disjoint
+/// field borrows.
+macro_rules! prune_host_param_refs {
+    ($host:expr, $dropped:expr) => {{
+        let ids: std::collections::BTreeSet<&str> = $dropped.iter().map(String::as_str).collect();
+        if !ids.is_empty() {
+            for id in &ids {
+                $host.params.remove(id);
+            }
+            macro_rules! prune_entries {
+                ($field:ident) => {
+                    if let Some(entries) = $host.$field.as_mut() {
+                        entries.retain(|entry| !ids.contains(entry.param_id.as_ref()));
+                    }
+                };
+            }
+            prune_entries!(drivers);
+            prune_entries!(envelopes);
+            prune_entries!(ableton_mappings);
+            prune_entries!(audio_mods);
+            prune_entries!(automation_lanes);
+        }
+    }};
+}
+
+/// Load-time upgrade of every saved standalone Math View on this host: the
+/// removed controls (Pulse, Scan, Connect to Mesh, legacy Scope) leave the
+/// instance, the host and everything that animates or modulates them, and
+/// the params return to the bundled card order. Idempotent, so it runs on
+/// every load with no version bump. Returns the removed host param ids.
+fn upgrade_math_views(host: &mut manifold_core::effects::PresetInstance) -> Vec<String> {
+    use manifold_core::scene_modifier_math_view as mv;
+    let Some(graph) = host.graph.as_mut() else { return Vec::new() };
+    let mut dropped = Vec::new();
+    let views: Vec<manifold_core::NodeId> = graph
+        .scene_modifiers
+        .iter_mut()
+        .filter(|m| mv::is_math_view_recipe(&m.graph))
+        .map(|m| {
+            mv::upgrade_math_view_instance(&mut m.graph);
+            m.id.clone()
+        })
+        .collect();
+    for view in &views {
+        dropped.extend(mv::drop_removed_math_view_bindings(graph, view));
+    }
+    prune_host_param_refs!(host, dropped);
+    dropped
+}
+
 fn migrate_legacy_math_views(
     host: &mut manifold_core::effects::PresetInstance,
     notices: &mut Vec<String>,
@@ -287,25 +336,7 @@ fn migrate_legacy_math_views(
                 mv::strip_legacy_math_view_controls(&mut instance.graph);
             }
             let dropped = mv::drop_math_view_bindings(graph, carrier_id);
-            if !dropped.is_empty() {
-                let ids: std::collections::BTreeSet<&str> =
-                    dropped.iter().map(String::as_str).collect();
-                for id in &ids {
-                    host.params.remove(id);
-                }
-                macro_rules! prune_entries {
-                    ($field:ident) => {
-                        if let Some(entries) = host.$field.as_mut() {
-                            entries.retain(|entry| !ids.contains(entry.param_id.as_ref()));
-                        }
-                    };
-                }
-                prune_entries!(drivers);
-                prune_entries!(envelopes);
-                prune_entries!(ableton_mappings);
-                prune_entries!(audio_mods);
-                prune_entries!(automation_lanes);
-            }
+            prune_host_param_refs!(host, dropped);
         }};
     }
     for scene in scenes {
@@ -368,13 +399,6 @@ fn migrate_legacy_math_views(
                 continue;
             };
             created += 1;
-            // Install Scope before retargeting so its original host id and
-            // animation survive alongside the other Math View controls.
-            let carrier_graph = graph.scene_modifiers.iter()
-                .find(|m| &m.id == carrier_id).expect("surveyed carrier").graph.clone();
-            let view_graph = &mut graph.scene_modifiers.iter_mut()
-                .find(|m| m.id == view_id).expect("created view").graph;
-            mv::preserve_legacy_scope_control(&carrier_graph, view_graph);
             mv::retarget_math_view_bindings(graph, carrier_id, &view_id);
             // Embedded values for controls the carrier never had a host
             // binding for: host bindings win where they exist, otherwise the
@@ -524,7 +548,9 @@ pub(crate) fn migrate_project_scene_graphs(project: &mut Project) -> Vec<String>
         project.load_report.unresolved_preset_templates = project.reconcile_param_manifests();
     }
     let registry = manifold_node_engine::persistence::PrimitiveRegistry::with_builtin();
+    let mut removed_macro_targets = Vec::new();
     for layer in &mut project.timeline.layers {
+        let layer_id = layer.layer_id.clone();
         let Some(host) = layer.gen_params_mut() else { continue; };
         if host.graph.is_none() { continue; }
         {
@@ -542,6 +568,10 @@ pub(crate) fn migrate_project_scene_graphs(project: &mut Project) -> Vec<String>
         // Borrows host.graph internally; the legacy-migration borrow above
         // must end first.
         let pending_base_values = migrate_legacy_math_views(host, &mut notices);
+        let removed = upgrade_math_views(host);
+        if !removed.is_empty() {
+            removed_macro_targets.push((layer_id, removed));
+        }
         if let Some(graph) = host.graph.as_mut() {
             manifold_core::scene_modifier_periodicity::repair_scene_modifier_periodicity(graph);
         }
@@ -551,6 +581,17 @@ pub(crate) fn migrate_project_scene_graphs(project: &mut Project) -> Vec<String>
         for (macro_id, value) in pending_base_values {
             host.set_base_param(&macro_id, value);
         }
+    }
+    // Project macros that drove a removed Math View control go with it.
+    for slot in &mut project.settings.macro_bank.slots {
+        slot.mappings.retain(|mapping| match &mapping.target {
+            manifold_core::macro_bank::MacroMappingTarget::GenParam { layer_id, param_id } => {
+                !removed_macro_targets.iter().any(|(layer, ids): &(_, Vec<String>)| {
+                    layer == layer_id && ids.iter().any(|id| id == param_id.as_ref())
+                })
+            }
+            _ => true,
+        });
     }
     notices
 }

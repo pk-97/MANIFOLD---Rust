@@ -1,7 +1,6 @@
 //! Transactional GPU resource replacement for a live preset runtime.
 
 use super::*;
-use super::core::GRAPH_FORMAT;
 use crate::exec::backend::Backend;
 
 /// Opaque, fully prepared runtime resize.  Preparation allocates replacement
@@ -12,7 +11,6 @@ pub struct PreparedRuntimeResize {
     height: u32,
     backend: Option<crate::exec::metal_backend::PreparedMetalBackendResize>,
     io: Option<PresetIo>,
-    math_views: Vec<super::math_view::PreparedMathViewResize>,
 }
 
 impl PresetRuntime {
@@ -24,16 +22,6 @@ impl PresetRuntime {
         width: u32,
         height: u32,
     ) -> Result<PreparedRuntimeResize, JsonGeneratorLoadError> {
-        self.prepare_resize_with_overrides(device, width, height, &[])
-    }
-
-    pub(super) fn prepare_resize_with_overrides(
-        &self,
-        device: &GpuDevice,
-        width: u32,
-        height: u32,
-        array_overrides: &[(ResourceId, manifold_gpu::GpuBuffer)],
-    ) -> Result<PreparedRuntimeResize, JsonGeneratorLoadError> {
         let backend = self
             .executor
             .backend()
@@ -44,9 +32,6 @@ impl PresetRuntime {
                     .prepare_resize(&self.plan, device, width, height)
                     .map_err(JsonGeneratorLoadError::Resize)?;
                 let candidate = prepared.candidate_mut();
-                for (resource, buffer) in array_overrides {
-                    candidate.pre_bind_array(*resource, buffer.clone());
-                }
                 crate::load::graph_loader::allocate_resources(
                     &self.graph,
                     &self.plan,
@@ -58,15 +43,6 @@ impl PresetRuntime {
                 Ok::<_, JsonGeneratorLoadError>(prepared)
             })
             .transpose()?;
-        let math_views = if let Some(prepared) = &backend {
-            let parent = prepared.candidate();
-            self.math_views
-                .iter()
-                .map(|view| view.prepare_resize(parent, device, width, height, self.target_format.unwrap_or(GRAPH_FORMAT)))
-                .collect::<Result<Vec<_>, _>>()?
-        } else {
-            Vec::new()
-        };
         let io = backend.as_ref().map(|prepared| {
             let candidate = prepared.candidate();
             match self.io {
@@ -97,7 +73,7 @@ impl PresetRuntime {
                 }
             }
         });
-        Ok(PreparedRuntimeResize { width, height, backend, io, math_views })
+        Ok(PreparedRuntimeResize { width, height, backend, io })
     }
 
     /// Publish a previously prepared resize.  All fallible work has already
@@ -121,10 +97,6 @@ impl PresetRuntime {
         }
         self.state_store.cleanup_all();
         self.pending_trigger_baseline = None;
-        let backend = self.executor.backend();
-        for (view, prepared_view) in self.math_views.iter_mut().zip(prepared.math_views) {
-            view.commit_resize(prepared_view, backend);
-        }
     }
 
     /// Compatibility wrapper for callers that do not need to split prepare

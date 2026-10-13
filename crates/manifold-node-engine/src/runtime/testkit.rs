@@ -17,67 +17,16 @@ pub fn insert_state<T: crate::state_store::NodeState>(runtime: &mut PresetRuntim
 pub fn has_state<T: crate::state_store::NodeState>(runtime: &mut PresetRuntime, node: NodeInstanceId, key: crate::state_store::OwnerKey) -> bool {
     runtime.state_store.get::<T>(node, key).is_some()
 }
-pub fn math_view_count(runtime: &PresetRuntime) -> usize { runtime.math_views.len() }
-pub fn math_variant_count(runtime: &PresetRuntime, view: usize) -> usize { runtime.math_views[view].variants.len() }
-pub fn math_mode(runtime: &PresetRuntime, view: usize) -> u32 { runtime.math_views[view].mode(&runtime.graph) }
-pub fn math_variant(runtime: &mut PresetRuntime, view: usize, variant: usize) -> &mut PresetRuntime {
-    &mut runtime.math_views[view].variants[variant]
-}
 pub fn fused_retarget(runtime: &PresetRuntime, node: &NodeId, param: &str) -> Option<(NodeId, String)> {
     runtime.effect_nodes[0].bound.fused_retarget.get(&(node.to_string(), param.into())).cloned()
 }
 
-#[cfg(feature = "gpu-proofs")]
-pub fn math_depth_sharing(runtime: &PresetRuntime, view: usize, variant: usize) -> Vec<(bool, (u32, u32), manifold_gpu::GpuTextureFormat)> {
-    let prepared = &runtime.math_views[view];
-    let parent = runtime.executor.backend();
-    let child = prepared.variants[variant].executor.backend();
-    prepared.shared_depth[variant].iter().map(|&(source, destination)| {
-        let original = parent.texture_2d(parent.slot_for(source).unwrap()).unwrap();
-        let borrowed = child.texture_2d(child.slot_for(destination).unwrap()).unwrap();
-        (original.ptr_eq(borrowed), (borrowed.width, borrowed.height), borrowed.format)
-    }).collect()
-}
-
-#[cfg(feature = "gpu-proofs")]
-pub fn math_array_sharing(runtime: &PresetRuntime, view: usize, variant: usize) -> Vec<bool> {
-    runtime.math_views[view].variants[variant].shared_arrays.iter().map(|(_, retained)| {
-        runtime.plan.steps().iter().flat_map(|step| &step.outputs).any(|(_, resource)| {
-            runtime.executor.backend().slot_for(*resource)
-                .and_then(|slot| runtime.executor.backend().array_buffer(slot))
-                .is_some_and(|parent| parent.ptr_eq(retained))
-        })
-    }).collect()
-}
-
-#[cfg(feature = "gpu-proofs")]
-pub fn math_weight_buffers(runtime: &PresetRuntime) -> impl Iterator<Item = &manifold_gpu::GpuBuffer> {
-    runtime.math_views[0].variants[0].shared_arrays.chunks_exact(2).map(|resources| &resources[1].1)
-}
-
-#[cfg(feature = "gpu-proofs")]
-pub fn all_math_array_links_share_storage(runtime: &PresetRuntime) -> Vec<bool> {
-    let backend = runtime.executor.backend();
-    runtime.math_views.iter().flat_map(|view| view.variants.iter().zip(&view.shared_resources))
-        .flat_map(|(variant, links)| links.iter().map(move |(parent, child)| {
-            let parent = backend.array_buffer(backend.slot_for(*parent).unwrap()).unwrap();
-            let child_backend = variant.executor.backend();
-            let child = child_backend.array_buffer(child_backend.slot_for(*child).unwrap()).unwrap();
-            parent.ptr_eq(child)
-        })).collect()
-}
-
 use manifold_core::effect_graph_def::EffectGraphDef;
-use manifold_core::params::ParamManifest;
 use crate::persistence::PrimitiveRegistry;
 #[cfg(feature = "gpu-proofs")]
 use crate::load::loaded_preset_view::LoadedPresetView;
-use crate::load::expand::{PreparedModifierEvents, LegacyMathViewScope};
-use super::JsonGeneratorLoadError;
+use crate::load::expand::PreparedModifierEvents;
 
-pub fn render_view(def: EffectGraphDef, registry: &PrimitiveRegistry, params: Option<&ParamManifest>, fused: bool, view: Option<(&NodeId, Option<LegacyMathViewScope>)>) -> Result<PresetRuntime, JsonGeneratorLoadError> {
-    PresetRuntime::from_def_for_render_view(def, registry, params, fused, view)
-}
 pub fn set_modifier_events(runtime: &mut PresetRuntime, events: Option<PreparedModifierEvents>) { runtime.modifier_events = events; }
 pub fn heal_bool_convert_bindings(def: &mut EffectGraphDef, registry: &PrimitiveRegistry) -> usize { super::convert_heal::heal_bool_convert_bindings(def, registry) }
 pub fn prepare_surface(def: &mut EffectGraphDef) {

@@ -38,7 +38,7 @@ This block is **generated from the node registry** by `gen_node_catalog` (`cargo
 
 <!-- BEGIN GENERATED: registered-node-index — do not edit; run `cargo run -p manifold-nodes --bin gen_node_catalog` -->
 
-_Generated from the node registry. Do not hand-edit. 391 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
+_Generated from the node registry. Do not hand-edit. 390 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
 
 ### Color & Tone (16)
 
@@ -514,12 +514,11 @@ _Generated from the node registry. Do not hand-edit. 391 nodes registered, group
 | Vortex Vector Field | `node.vortex_vector_field` | Source | Outputs tangential vectors circling a world-space axis within a radius. |
 | Wave Field 3D | `node.wave_field_3d` | Map | Samples a moving sine wave at every 3D point, producing weights for copy displacement or other maps. |
 
-### Uncategorized (2)
+### Uncategorized (1)
 
 | Node | type_id | role | summary |
 |---|---|---|---|
 | — | `system.mesh_input` | — | — |
-| — | `system.mesh_output` | — | — |
 
 ### Effect & generator presets (95)
 

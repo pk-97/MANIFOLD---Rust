@@ -315,32 +315,17 @@ impl PresetRuntime {
     /// column (realtime vs export). Forwards to the executor.
     pub fn set_rt_quality(&mut self, q: crate::exec::effect_node::RtQuality) {
         self.executor.set_rt_quality(q);
-        for view in &mut self.math_views {
-            for variant in &mut view.variants {
-                variant.set_rt_quality(q);
-            }
-        }
     }
 
     /// This frame's simulation step, to the executor and every math view.
     pub fn set_sim_step(&mut self, step: crate::exec::effect_node::SimStep) {
         self.executor.set_sim_step(step);
-        for view in &mut self.math_views {
-            for variant in &mut view.variants {
-                variant.set_sim_step(step);
-            }
-        }
     }
 
     /// Fold the simulation metrics this runtime and its math views recorded
     /// since the last drain into `into`, clearing their slots.
     pub fn drain_sim_metrics(&mut self, into: &mut crate::exec::sim_metrics::SimMetrics) {
         into.merge(&self.executor.take_sim_metrics());
-        for view in &mut self.math_views {
-            for variant in &mut view.variants {
-                variant.drain_sim_metrics(into);
-            }
-        }
     }
 
     /// Drain this chain's per-step CPU profiles recorded on the last profiled

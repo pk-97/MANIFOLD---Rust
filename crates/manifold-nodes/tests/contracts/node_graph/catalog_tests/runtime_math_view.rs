@@ -23,54 +23,6 @@ fn owner() -> EffectGraphDef {
     owner
 }
 
-#[cfg(feature = "gpu-proofs")]
-fn legacy_scope_owner() -> EffectGraphDef {
-    let mut owner = owner();
-    let legacy_carrier: EffectGraphDef = serde_json::from_str(include_str!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../manifold-core/tests/fixtures/math-view-legacy/vortex-fragments-events-96c78f522.json"
-    )))
-    .unwrap();
-    let view_id = NodeId::new("math_view");
-    {
-        let view = owner
-            .scene_modifiers
-            .iter_mut()
-            .find(|instance| instance.id == view_id)
-            .unwrap();
-        manifold_core::scene_modifier_math_view::preserve_legacy_scope_control(
-            &legacy_carrier,
-            &mut view.graph,
-        );
-    }
-    owner = manifold_core::scene_modifier_edit::reconcile_scene_modifier_parameters(
-        &owner, &view_id,
-    )
-    .unwrap()
-    .graph;
-
-    let mut carrier_b = owner.scene_modifiers[0].clone();
-    carrier_b.id = NodeId::new("vortex_b");
-    let metadata = carrier_b.graph.preset_metadata.as_mut().unwrap();
-    metadata
-        .params
-        .iter_mut()
-        .find(|param| param.id == "orbit")
-        .unwrap()
-        .default_value = 4.0;
-    metadata
-        .bindings
-        .iter_mut()
-        .find(|binding| binding.id == "orbit")
-        .unwrap()
-        .default_value = 4.0;
-    owner = manifold_core::scene_modifier_edit::insert_scene_modifier(&owner, 1, carrier_b)
-        .unwrap()
-        .graph;
-    owner.scene_modifiers[2].legacy_math_view_carrier = Some(NodeId::new("vortex_b"));
-    owner
-}
-
 fn manifest(owner: &EffectGraphDef) -> ParamManifest {
     ParamManifest::from_params(
         owner
@@ -95,44 +47,48 @@ fn set(owner: &EffectGraphDef, manifest: &mut ParamManifest, local: &str, value:
 }
 
 #[test]
-fn math_view_runtime_keeps_scene_plan_and_routes_values_to_bounded_variants() {
+fn math_view_runtime_adds_diagrams_to_the_one_scene_plan_and_routes_values() {
     let owner = owner();
     let registry = PrimitiveRegistry::with_builtin();
     let mut params = manifest(&owner);
+    let plain = crate::contracts::node_graph::catalog_tests::math_view_fixtures::without_view(&owner);
+    let count = |runtime: &PresetRuntime, type_id: &str| {
+        runtime.plan.steps().iter().filter(|step| {
+            runtime.graph.get_node(step.node).unwrap().node.type_id().as_str() == type_id
+        }).count()
+    };
     for fused in [false, true] {
-        let baseline = manifold_node_engine::runtime::testkit::render_view(
-            owner.clone(),
-            &registry,
-            Some(&params),
-            fused,
-            None,
-        )
-        .unwrap();
+        let baseline =
+            PresetRuntime::from_def_for_render(plain.clone(), &registry, Some(&params), fused)
+                .unwrap();
         let mut runtime =
             PresetRuntime::from_def_for_render(owner.clone(), &registry, Some(&params), fused)
-        .unwrap();
-        assert_eq!(runtime.plan.steps().len(), baseline.plan.steps().len());
-        assert_eq!(manifold_node_engine::runtime::testkit::math_view_count(&runtime), 1);
-        assert_eq!(manifold_node_engine::runtime::testkit::math_variant_count(&runtime, 0), 1);
-        assert_eq!(manifold_node_engine::runtime::testkit::math_mode(&runtime, 0), 0);
+                .unwrap();
+        assert!(runtime.plan.steps().len() > baseline.plan.steps().len());
+        assert!(count(&runtime, "node.render_mesh_diagram") > 0);
+        assert_eq!(count(&baseline, "node.render_mesh_diagram"), 0);
+        // The diagram reads the parent's mesh; the scene is never rendered twice.
+        assert_eq!(
+            count(&runtime, "node.render_scene"),
+            count(&baseline, "node.render_scene"),
+            "fused={fused}"
+        );
         set(&owner, &mut params, "math_view_mode", 1.0);
         set(&owner, &mut params, "orbit", 0.73);
         runtime.apply_param_values(&params);
-        assert_eq!(manifold_node_engine::runtime::testkit::math_mode(&runtime, 0), 1);
-        let variant = manifold_node_engine::runtime::testkit::math_variant(&mut runtime, 0, 0);
-        variant.apply_param_values(&params);
         let local = manifold_core::scene_modifier_preset::SceneNodeRef {
             scope: vec![NodeId::new("vortex_stage")],
             node: NodeId::new("patch"),
         };
-        let copies = variant
+        let copies = runtime
             .modifier_node_copies(&NodeId::new("vortex_a"), &local)
             .unwrap();
+        assert!(!copies.is_empty());
         for copy in copies {
-            let (target, param) = manifold_node_engine::runtime::testkit::fused_retarget(variant, &copy.node_id, "orbit")
+            let (target, param) = manifold_node_engine::runtime::testkit::fused_retarget(&runtime, &copy.node_id, "orbit")
                 .unwrap_or_else(|| (copy.node_id.clone(), "orbit".into()));
-            let node = variant.graph.instance_by_node_id(&target).unwrap();
-            let value = variant.graph.get_node(node).unwrap().params[param.as_str()]
+            let node = runtime.graph.instance_by_node_id(&target).unwrap();
+            let value = runtime.graph.get_node(node).unwrap().params[param.as_str()]
                 .as_scalar()
                 .unwrap();
             assert!(
@@ -140,21 +96,6 @@ fn math_view_runtime_keeps_scene_plan_and_routes_values_to_bounded_variants() {
                 "scoped Orbit binding diverged: {value}"
             );
         }
-        let usage = variant
-            .prepared_modifier_buffer_usage((320, 180))
-            .unwrap()
-            .unwrap();
-        assert!(
-            usage.candidate_bytes > 0 && usage.candidate_bytes < 4 * 1024 * 1024,
-            "{usage:?}"
-        );
-        assert!(variant.plan.steps().iter().all(|step| {
-            let node = variant.graph.get_node(step.node).unwrap();
-            !matches!(
-                node.node.type_id().as_str(),
-                "node.render_scene" | "node.cube_mesh" | "node.gltf_mesh_source"
-            )
-        }));
         set(&owner, &mut params, "math_view_mode", 0.0);
     }
     let restored: EffectGraphDef =
@@ -164,96 +105,7 @@ fn math_view_runtime_keeps_scene_plan_and_routes_values_to_bounded_variants() {
 
 #[cfg(feature = "gpu-proofs")]
 #[test]
-fn legacy_math_view_runtime_switches_scope_variants() {
-    const W: u32 = 320;
-    const H: u32 = 180;
-    let guard = manifold_gpu::testkit::test_device();
-    let device = guard.arc();
-    let owner = legacy_scope_owner();
-    let registry = PrimitiveRegistry::with_builtin();
-    let mut params = manifest(&owner);
-    set(&owner, &mut params, "math_view_mode", 1.0);
-    let mut runtime = PresetRuntime::from_def_for_render(
-        owner.clone(),
-        &registry,
-        Some(&params),
-        false,
-    )
-    .unwrap()
-    .with_generator_device(device.clone(), W, H, GpuTextureFormat::Rgba16Float)
-    .unwrap();
-    assert_eq!(manifold_node_engine::runtime::testkit::math_variant_count(&runtime, 0), 2);
-    let target = RenderTarget::new(
-        &device,
-        W,
-        H,
-        GpuTextureFormat::Rgba16Float,
-        "legacy-math-view-scope-proof",
-    );
-    let render = |runtime: &mut PresetRuntime, params: &ParamManifest| {
-        let ctx = PresetContext {
-            time: 0.0,
-            beat: 0.0,
-            dt: 1.0 / 60.0,
-            width: W,
-            height: H,
-            output_width: W,
-            output_height: H,
-            aspect: W as f32 / H as f32,
-            owner_key: 1,
-            is_clip_level: false,
-            frame_count: 1,
-            anim_progress: 0.0,
-            trigger_count: 0,
-        };
-        let mut encoder = device.create_encoder("legacy-math-view-scope-proof");
-        runtime.render(
-            &mut GpuEncoder::new(&mut encoder, &device),
-            &target.texture,
-            &ctx,
-            params,
-        );
-        encoder.commit_and_wait_completed();
-        manifold_node_engine::testkit::gpu::readback_raw_halves(&device, &target.texture, W, H)
-    };
-    set(&owner, &mut params, "math_view_scope", 0.0);
-    let _warm = render(&mut runtime, &params);
-    let isolated = render(&mut runtime, &params);
-    if let Ok(path) = std::env::var("MANIFOLD_MATH_SCOPE_PREVIEW") {
-        std::fs::write(
-            format!("{path}-scope0.png"),
-            manifold_node_engine::testkit::gpu::readback_to_srgb_png_linear(
-                &device,
-                &target.texture,
-                W,
-                H,
-            ),
-        )
-        .unwrap();
-    }
-    set(&owner, &mut params, "math_view_scope", 1.0);
-    let chained = render(&mut runtime, &params);
-    if let Ok(path) = std::env::var("MANIFOLD_MATH_SCOPE_PREVIEW") {
-        std::fs::write(
-            format!("{path}-scope1.png"),
-            manifold_node_engine::testkit::gpu::readback_to_srgb_png_linear(
-                &device,
-                &target.texture,
-                W,
-                H,
-            ),
-        )
-        .unwrap();
-    }
-    set(&owner, &mut params, "math_view_scope", 0.0);
-    let restored = render(&mut runtime, &params);
-    assert_ne!(isolated, chained, "legacy Scope must select a different variant");
-    assert_eq!(isolated, restored, "switching Scope back must restore the first variant");
-}
-
-#[cfg(feature = "gpu-proofs")]
-#[test]
-fn math_view_depth_modes_borrow_scene_depth_and_survive_resize() {
+fn math_view_occlusion_applies_to_overlay_only_and_survives_resize() {
     let guard = manifold_gpu::testkit::test_device();
     let device = guard.arc();
     let owner = owner();
@@ -290,25 +142,21 @@ fn math_view_depth_modes_borrow_scene_depth_and_survive_resize() {
                 encoder.commit_and_wait_completed();
                 manifold_node_engine::testkit::gpu::readback_raw_halves(&device, &target.texture, w, h)
             };
+            // A wired mode selector lands one frame late; render once to settle.
             set(&owner, &mut params, "math_view_mode", 1.0);
             set(&owner, &mut params, "math_view_occlusion", 0.0);
+            render(&mut runtime, &params);
             let xray = render(&mut runtime, &params);
+            assert!(energy(&xray) > 1.0, "Math view must draw marks");
             set(&owner, &mut params, "math_view_occlusion", 1.0);
-            let depth = render(&mut runtime, &params);
-            assert!(energy(&depth) > 1.0, "Depth must not blank Math view");
-            assert!(energy(&depth) < energy(&xray), "Depth must hide rear marks: fused={fused}");
+            assert_eq!(xray, render(&mut runtime, &params), "Math view never occludes: fused={fused}");
             set(&owner, &mut params, "math_view_occlusion", 0.0);
-            assert_eq!(xray, render(&mut runtime, &params), "X-ray must restore the original image");
             set(&owner, &mut params, "math_view_mode", 2.0);
+            render(&mut runtime, &params);
             let overlay_xray = render(&mut runtime, &params);
             set(&owner, &mut params, "math_view_occlusion", 1.0);
             let overlay_depth = render(&mut runtime, &params);
-            assert!(energy(&overlay_depth) < energy(&overlay_xray), "Depth must occlude Overlay marks");
-            for (shared, size, format) in manifold_node_engine::runtime::testkit::math_depth_sharing(&runtime, 0, 0) {
-                assert!(shared, "view must borrow the retained scene depth");
-                assert_eq!(size, (w, h));
-                assert_eq!(format, GpuTextureFormat::R32Float);
-            }
+            assert!(energy(&overlay_depth) < energy(&overlay_xray), "Depth must occlude Overlay marks behind the scene");
             if w == 320 {
                 if fused {
                     assert!(manifold_node_engine::testkit::gpu::mean_abs_half_diff(
@@ -337,13 +185,8 @@ fn math_view_native_scene_parity_orbit_change_and_overlay() {
     let owner = owner();
     let registry = PrimitiveRegistry::with_builtin();
     let mut params = manifest(&owner);
-    let mut baseline = manifold_node_engine::runtime::testkit::render_view(
-        owner.clone(),
-        &registry,
-        Some(&params),
-        false,
-        None,
-    )
+    let plain = crate::contracts::node_graph::catalog_tests::math_view_fixtures::without_view(&owner);
+    let mut baseline = PresetRuntime::from_def_for_render(plain, &registry, Some(&params), false)
     .unwrap()
     .with_generator_device(device.clone(), W, H, GpuTextureFormat::Rgba16Float)
     .unwrap();
@@ -352,11 +195,6 @@ fn math_view_native_scene_parity_orbit_change_and_overlay() {
             .unwrap()
             .with_generator_device(device.clone(), W, H, GpuTextureFormat::Rgba16Float)
             .unwrap();
-    let view_shared = manifold_node_engine::runtime::testkit::math_array_sharing(&runtime, 0, 0);
-    assert!(!view_shared.is_empty());
-    for shared in view_shared {
-        assert!(shared, "borrowed storage must be the parent's buffer");
-    }
     let target = RenderTarget::new(
         &device,
         W,
@@ -393,20 +231,22 @@ fn math_view_native_scene_parity_orbit_change_and_overlay() {
         render_at(runtime, params, frame, 0)
     };
     let black = |pixels: &[u8]| pixels.chunks_exact(8).all(|pixel| pixel[..6] == [0; 6]);
+    // The wired mode selector lands one frame late: each mode change renders
+    // one settling frame before its result is read.
     let expected = render(&mut baseline, &params, 1);
     let scene = render(&mut runtime, &params, 1);
     assert_eq!(scene, expected, "Scene mode changed the existing renderer");
     set(&owner, &mut params, "math_view_mode", 1.0);
     set(&owner, &mut params, "math_view_trails", 0.0);
     set(&owner, &mut params, "orbit", 0.0);
+    render(&mut runtime, &params, 2);
     let initial = render(&mut runtime, &params, 2);
     set(&owner, &mut params, "orbit", 2.2);
     let moved = render(&mut runtime, &params, 3);
     assert_ne!(initial, moved, "Orbit must move the sampled authored graph");
     assert_ne!(scene, moved, "Math must replace the scene");
 
-    // Modifier controls are public writes. Brightness is per diagram element,
-    // while pulse and mesh connection affect the composed visibility path.
+    // Modifier controls are public writes. Brightness is per diagram element.
     for control in ["fragments", "ghosts", "vectors", "trails"] {
         set(&owner, &mut params, &format!("math_view_{control}"), 0.0);
     }
@@ -421,20 +261,10 @@ fn math_view_native_scene_parity_orbit_change_and_overlay() {
         !black(&render(&mut runtime, &params, 7)),
         "Grid brightness must be independent"
     );
-    set(&owner, &mut params, "math_view_pulse", 1.0);
-    set(&owner, &mut params, "math_view_pulse_strength", -1.0);
-    set(&owner, &mut params, "math_view_pulse_target", 0.0);
-    assert!(
-        black(&render(&mut runtime, &params, 8)),
-        "negative pulse strength at pulse 1 must be zero"
-    );
-    set(&owner, &mut params, "math_view_pulse", 0.0);
-    set(&owner, &mut params, "math_view_pulse_strength", 1.0);
-
     set(&owner, &mut params, "math_view_grid", 0.0);
     set(&owner, &mut params, "math_view_fragments", 1.0);
     set(&owner, &mut params, "math_view_mode", 0.0);
-    set(&owner, &mut params, "math_view_connect_mesh", 0.0);
+    render(&mut runtime, &params, 9);
     let neutral_scene = render(&mut runtime, &params, 9);
     assert!(
         !black(&neutral_scene),
@@ -443,133 +273,8 @@ fn math_view_native_scene_parity_orbit_change_and_overlay() {
     assert_eq!(
         neutral_scene,
         render(&mut baseline, &params, 9),
-        "disconnecting Math View must preserve Scene output"
+        "Scene mode must preserve Scene output"
     );
-    set(&owner, &mut params, "math_view_pulse", 1.0);
-    set(&owner, &mut params, "math_view_pulse_strength", -1.0);
-    assert_eq!(
-        render(&mut runtime, &params, 9),
-        neutral_scene,
-        "graphics-only pulse must leave the actual scene visible"
-    );
-    set(&owner, &mut params, "math_view_mode", 1.0);
-    assert!(
-        black(&render(&mut runtime, &params, 9)),
-        "graphics-only pulse must hide the marks"
-    );
-    set(&owner, &mut params, "math_view_connect_mesh", 1.0);
-    for mode in [0.0, 1.0, 2.0] {
-        set(&owner, &mut params, "math_view_mode", mode);
-        assert!(
-            black(&render(&mut runtime, &params, 9)),
-            "connected pulse must hide every presentation"
-        );
-    }
-    set(&owner, &mut params, "math_view_pulse", 0.0);
-    set(&owner, &mut params, "math_view_pulse_strength", 1.0);
-    set(&owner, &mut params, "math_view_scan_mode", 1.0);
-    set(&owner, &mut params, "math_view_scan_amount", 1.0);
-    set(&owner, &mut params, "math_view_scan_progress", 0.0);
-    set(&owner, &mut params, "math_view_scan_target", 0.0);
-    for (mode, label) in [(0.0, "Scene"), (1.0, "Math"), (2.0, "Overlay")] {
-        runtime.clear_state();
-        set(&owner, &mut params, "math_view_mode", mode);
-        assert!(
-            black(&render(&mut runtime, &params, 10)),
-            "connected reveal start must hide {label} mesh and diagram"
-        );
-        set(&owner, &mut params, "math_view_scan_progress", 1.0);
-        assert!(
-            !black(&render(&mut runtime, &params, 11)),
-            "connected reveal endpoint must restore {label} mesh and diagram"
-        );
-        set(&owner, &mut params, "math_view_scan_progress", 0.0);
-    }
-    set(&owner, &mut params, "math_view_scan_progress", 0.5);
-    render(&mut runtime, &params, 12);
-    for weights in manifold_node_engine::runtime::testkit::math_weight_buffers(&runtime) {
-        // Read only after render's commit-and-wait, never from a live frame.
-        let values = unsafe {
-            std::slice::from_raw_parts(
-                weights.mapped_ptr().unwrap() as *const f32,
-                weights.size as usize / 4,
-            )
-        };
-        assert!(
-            values.contains(&0.0) && values.contains(&1.0),
-            "mid-scan must select some real faces and hide others"
-        );
-        assert!(
-            values
-                .chunks_exact(3)
-                .all(|face| face[0] == face[1] && face[1] == face[2]),
-            "selection must retain complete real faces"
-        );
-    }
-    set(&owner, &mut params, "math_view_scan_progress", 0.0);
-
-    // Trigger count edges are one-shot and retriggerable; a backward seek
-    // cancels the active pulse instead of reviving a negative phase.
-    set(&owner, &mut params, "math_view_scan_mode", 0.0);
-    set(&owner, &mut params, "math_view_scan_amount", 0.0);
-    set(&owner, &mut params, "math_view_connect_mesh", 0.0);
-    set(&owner, &mut params, "math_view_pulse_trigger", 1.0);
-    set(&owner, &mut params, "math_view_pulse_beats", 1.0);
-    runtime.note_modifier_clip_event(None);
-    let pulse_first = render_at(&mut runtime, &params, 30, 1);
-    let pulse_tail = render_at(&mut runtime, &params, 31, 1);
-    runtime.note_modifier_clip_event(None);
-    let pulse_retrigger = render_at(&mut runtime, &params, 32, 2);
-    assert_ne!(
-        pulse_first, pulse_tail,
-        "pulse must decay after its one-shot edge"
-    );
-    assert_ne!(
-        pulse_retrigger, pulse_tail,
-        "a new trigger must retrigger the pulse"
-    );
-    let seek = render_at(&mut runtime, &params, 2, 2);
-    assert_ne!(
-        seek, pulse_retrigger,
-        "backward seek must cancel the active pulse"
-    );
-    set(&owner, &mut params, "math_view_pulse_trigger", 0.0);
-
-    // The parent's scan clock continues through presentation cuts.
-    set(&owner, &mut params, "math_view_connect_mesh", 1.0);
-    set(&owner, &mut params, "math_view_scan_trigger", 1.0);
-    set(&owner, &mut params, "math_view_scan_beats", 4.0);
-    set(&owner, &mut params, "math_view_scan_mode", 1.0);
-    runtime.note_modifier_clip_event(None);
-    set(&owner, &mut params, "math_view_mode", 0.0);
-    assert!(black(&render(&mut runtime, &params, 60)));
-    set(&owner, &mut params, "math_view_mode", 1.0);
-    render(&mut runtime, &params, 90);
-    set(&owner, &mut params, "math_view_mode", 2.0);
-    render(&mut runtime, &params, 120);
-    let event_mask = runtime
-        .graph
-        .instance_by_node_id(
-            &manifold_node_engine::load::expand::compiler::math_events::resource_node_id(
-                &owner.scene_modifiers[1].id,
-                &owner.scene_modifiers[1].mesh_frames[0].target,
-                "weights",
-            ),
-        )
-        .unwrap();
-    let center = runtime.graph.get_node(event_mask).unwrap().params["center_y"]
-        .as_scalar()
-        .unwrap();
-    assert!(
-        center.abs() < 1e-5,
-        "two elapsed beats must remain halfway through the four-beat scan after cuts"
-    );
-    runtime.note_modifier_clip_event(None);
-    assert!(
-        black(&render(&mut runtime, &params, 121)),
-        "clip edge must restart the connected scan"
-    );
-    set(&owner, &mut params, "math_view_scan_trigger", 0.0);
 
     // Restore the original moved-frame controls before the pre-existing
     // standalone/fused parity proof below.
@@ -577,20 +282,9 @@ fn math_view_native_scene_parity_orbit_change_and_overlay() {
         set(&owner, &mut params, &format!("math_view_{control}"), 1.0);
     }
     set(&owner, &mut params, "math_view_trails", 0.0);
-    for (control, value) in [
-        ("grid_brightness", 1.0),
-        ("pulse", 0.0),
-        ("pulse_strength", 1.0),
-        ("pulse_target", 0.0),
-        ("scan_amount", 0.0),
-        ("scan_progress", 0.0),
-        ("scan_mode", 0.0),
-        ("scan_target", 0.0),
-        ("connect_mesh", 0.0),
-    ] {
-        set(&owner, &mut params, &format!("math_view_{control}"), value);
-    }
+    set(&owner, &mut params, "math_view_grid_brightness", 1.0);
     set(&owner, &mut params, "math_view_mode", 1.0);
+    render(&mut runtime, &params, 3);
     runtime.clear_state();
     let moved_restored = render(&mut runtime, &params, 3);
 
@@ -609,10 +303,12 @@ fn math_view_native_scene_parity_orbit_change_and_overlay() {
         .unwrap();
     }
     set(&owner, &mut params, "math_view_mode", 2.0);
+    render(&mut runtime, &params, 4);
     let overlay = render(&mut runtime, &params, 4);
     assert_ne!(overlay, moved);
     assert_ne!(overlay, scene);
     set(&owner, &mut params, "math_view_mode", 1.0);
+    render(&mut runtime, &params, 4);
     let mut fused =
         PresetRuntime::from_def_for_render(owner.clone(), &registry, Some(&params), true)
             .unwrap()
@@ -666,6 +362,7 @@ fn math_view_native_scene_parity_orbit_change_and_overlay() {
     );
     runtime.clear_state();
     set(&owner, &mut params, "math_view_mode", 0.0);
+    render(&mut runtime, &params, 5);
     assert_eq!(
         render(&mut runtime, &params, 5),
         render(&mut baseline, &params, 5)
@@ -680,6 +377,7 @@ fn math_view_native_scene_parity_orbit_change_and_overlay() {
         set(&owner, &mut params, &format!("math_view_{control}"), 0.0);
     }
     for (name, runtime) in [("standalone", &mut runtime), ("fused", &mut fused)] {
+        render(runtime, &params, 20);
         assert!(
             black(&render(runtime, &params, 20)),
             "{name}: all marks off must be black"
@@ -732,12 +430,9 @@ fn math_view_resize_rejection_preserves_live_resources_at_every_allocation() {
             Ok(prepared) => { runtime.commit_resize(prepared); successes += 1; break; }
         }
     }
-    assert!(failures > 2, "must exercise parent and child allocation failures");
+    assert!(failures > 0, "must exercise an allocation failure");
     assert_eq!(successes, 1, "bounded preparation must eventually succeed");
     assert_eq!((runtime.width_for_test(), runtime.height_for_test()), (48, 64));
-    for shared in manifold_node_engine::runtime::testkit::all_math_array_links_share_storage(&runtime) {
-        assert!(shared);
-    }
 }
 
 #[cfg(feature = "gpu-proofs")]

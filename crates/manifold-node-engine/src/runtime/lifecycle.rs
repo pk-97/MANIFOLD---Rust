@@ -11,12 +11,6 @@ impl PresetRuntime {
     /// alongside instance-local state.
     pub fn clear_state(&mut self) {
         self.executor.reset_scene_viewport_state();
-        for view in &mut self.math_views {
-            view.events.clear();
-            for variant in &mut view.variants {
-                variant.clear_state();
-            }
-        }
         self.pending_trigger_baseline = None;
         if let Some(events) = &mut self.modifier_events {
             events.clear();

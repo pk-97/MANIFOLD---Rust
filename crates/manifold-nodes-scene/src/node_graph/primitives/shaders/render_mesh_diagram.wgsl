@@ -4,9 +4,9 @@ struct U {
     grid: u32, fragments: u32, ghosts: u32, vectors: u32, trails: u32,
     tri_count: u32, vertex_count: u32, history_head: u32, history_len: u32,
     history_capacity: u32, history_stride: u32, axes: u32,
-    depth_pass: u32, occlusion: u32, mode: u32, _depth_pad: u32,
+    topology_mismatch: u32, occlusion: u32, mode: u32, _depth_pad: u32,
     inv_view_proj: mat4x4<f32>, camera_pos_far: vec4<f32>,
-    brightness: vec4<f32>, event_values: vec4<f32>, scan_values: vec4<f32>, event_targets: vec4<u32>,
+    brightness: vec4<f32>, trails_brightness: f32, _brightness_pad0: f32, _brightness_pad1: f32, _brightness_pad2: f32,
     copy_count: u32, instances_wired: u32, instance_history_stride: u32, _instances_pad: u32,
 };
 struct V { position: vec3<f32>, _p: f32, normal: vec3<f32>, _n: f32, uv: vec2<f32>, _u: vec2<f32>, tangent: vec4<f32>, color: vec4<f32> };
@@ -17,50 +17,19 @@ struct O { @builtin(position) p: vec4<f32>, @location(0) color: vec4<f32>, @loca
 @group(0) @binding(2) var<storage, read> reference: array<V>;
 @group(0) @binding(3) var<storage, read> incoming: array<V>;
 @group(0) @binding(4) var<storage, read> history: array<vec4<f32>>;
-@group(0) @binding(5) var<storage, read> mesh_weights: array<f32>;
-@group(0) @binding(6) var<storage, read> scan_weights: array<f32>;
-@group(0) @binding(7) var surface_depth: texture_2d<f32>;
 @group(0) @binding(8) var scene_depth: texture_2d<f32>;
 @group(0) @binding(9) var depth_sampler: sampler;
 @group(0) @binding(10) var<storage, read> copy_instances: array<I>;
 @group(0) @binding(11) var<storage, read> instance_history: array<I>;
 @group(0) @binding(12) var<storage, read> instance_counts: array<u32>;
 
-fn targeted(target_element: u32, element: u32) -> bool { return target_element == 0u || target_element == element; }
 fn tone(color: vec4<f32>, gain: f32) -> vec4<f32> {
     return vec4<f32>(color.rgb * max(gain, 1.0), color.a * clamp(gain, 0.0, 1.0));
 }
-fn grid_gain(world: vec3<f32>) -> f32 {
-    var gain = u.brightness.x;
-    if targeted(u.event_targets.x, 1u) { gain *= u.event_values.y; }
-    if targeted(u.event_targets.y, 1u) {
-        let direction = u32(round(u.scan_values.y));
-        let coordinate = select(select(world.z, world.y, direction / 2u == 1u), world.x, direction / 2u == 0u) / max(u.radius, 0.000001);
-        let axis_position = coordinate * select(-1.0, 1.0, direction % 2u == 0u);
-        let center = (2.0 * u.event_values.w - 1.0) * (1.0 + u.scan_values.x);
-        var distance = abs(axis_position-center) - u.scan_values.x;
-        if u.scan_values.z >= 0.5 { distance = axis_position-center; }
-        var mask = 1.0 - smoothstep(0.0, 0.03, distance);
-        if u.scan_values.z >= 0.5 {
-            if u.event_values.w <= 0.0 { mask = 0.0; }
-            if u.event_values.w >= 1.0 { mask = 1.0; }
-            gain *= 1.0-u.event_values.z + u.event_values.z*mask;
-        } else { gain *= 1.0+u.event_values.z*mask; }
-    }
-    return gain;
-}
-fn appearance(element: u32, triangle: u32) -> f32 {
-    if element == 1u { return grid_gain(vec3<f32>(0.0)); }
-    var gain = u.event_values.x;
-    if element < 5u { gain = u.brightness[element-1u]; }
-    if u.scan_values.w >= 0.5 && u.event_targets.z > 0u && u.tri_count > 0u {
-        let face = source_face_index(triangle,u.event_targets.z,u.tri_count);
-        // The same final composed buffer is bound to the scene object.
-        return gain * mesh_weights[face*3u];
-    }
-    if targeted(u.event_targets.x,element) { gain *= u.event_values.y; }
-    if targeted(u.event_targets.y,element) && triangle*3u < u.event_targets.w { gain *= scan_weights[triangle*3u]; }
-    return gain;
+// Elements: 1 grid, 2 fragments, 3 ghosts, 4 vectors, 5 trails.
+fn appearance(element: u32) -> f32 {
+    if element < 5u { return u.brightness[element-1u]; }
+    return u.trails_brightness;
 }
 
 fn hidden() -> O {
@@ -116,26 +85,10 @@ fn world_line(a: vec3<f32>, b: vec3<f32>, color: vec4<f32>, vi: u32) -> O {
     return clip_line(u.view_proj * vec4<f32>(a, 1.0), u.view_proj * vec4<f32>(b, 1.0), color, vi);
 }
 
-fn depth_surface_vertex(vi: u32, instance: u32) -> O {
-    // Instance slots below tri_count * copy_count are current-surface
-    // triangles, repeated per copy transform like the colour fragments.
-    if u.fragments == 0u || vi >= 3u || instance >= u.tri_count * u.copy_count { return hidden(); }
-    let c = instance / u.tri_count;
-    let triangle = instance % u.tri_count;
-    var position = current[triangle * 3u + vi].position;
-    if u.instances_wired != 0u {
-        let inst = copy_instances[c];
-        if inactive_copy(inst) { return hidden(); }
-        position = apply_copy(position, inst);
-    }
-    // Let the rasterizer clip whole triangles; moving one behind-camera
-    // vertex to hidden() would invent a different surface at the near plane.
-    let clip = clip_point(position);
-    var o: O; o.p = clip; o.color = vec4<f32>(1.0, 1.0, 1.0, 1.0); o.grid = 0u; return o;
-}
-
+// A topology change upstream breaks face correspondence: reference and
+// incoming then read as current, so ghosts coincide with the fragments.
 fn sample_position(which: u32, idx: u32) -> vec3<f32> {
-    if (which == 0u) { return current[idx].position; }
+    if (which == 0u || u.topology_mismatch != 0u) { return current[idx].position; }
     if (which == 1u) { return reference[idx].position; }
     return incoming[idx].position;
 }
@@ -203,7 +156,6 @@ fn fragment_frame_triangle(frame: u32) -> u32 {
 }
 
 fn vertex_body(vi: u32, instance: u32) -> O {
-    if u.depth_pass != 0u { return depth_surface_vertex(vi, instance); }
     // Draw the world grid first, behind the diagram marks. A fullscreen
     // triangle has no finite mesh boundary and never inherits object pose.
     if (instance == 0u) {
@@ -249,7 +201,8 @@ fn vertex_body(vi: u32, instance: u32) -> O {
         return line(apply_copy(sample_position(2u, b + e), inst), apply_copy(sample_position(2u, b + ((e + 1u) % 3u)), inst), vec4<f32>(hsv(u.path_hue), 0.22), vi);
     }
     if (ii < grid_base) {
-        if (u.vectors == 0u) { return hidden(); }
+        // Without face correspondence there is no displacement to draw.
+        if (u.vectors == 0u || u.topology_mismatch != 0u) { return hidden(); }
         let local = ii - arrow_base;
         let t = local % tri;
         let inst = copy_transform(local / tri);
@@ -258,7 +211,7 @@ fn vertex_body(vi: u32, instance: u32) -> O {
         // The tail stays on the undeformed reference; the head is the
         // copy-transformed current centroid, so the arrow reads as the total
         // reference -> copy displacement of the chain.
-        let a = (incoming[idx].position + incoming[idx + 1u].position + incoming[idx + 2u].position) / 3.0;
+        let a = (sample_position(2u, idx) + sample_position(2u, idx + 1u) + sample_position(2u, idx + 2u)) / 3.0;
         let b = apply_copy((current[idx].position + current[idx + 1u].position + current[idx + 2u].position) / 3.0, inst);
         let edge = vi / 6u;
         if (edge == 0u) { return line(a, b, vec4<f32>(hsv(u.path_hue), 0.85), vi); }
@@ -332,25 +285,17 @@ fn vertex_body(vi: u32, instance: u32) -> O {
 @vertex
 fn vs_main(@builtin(vertex_index) vi: u32, @builtin(instance_index) instance: u32) -> O {
     var o=vertex_body(vi,instance);
-    if u.depth_pass != 0u {
-        // Instance repeats the same triangle per copy; appearance indexing
-        // stays on the base triangle so connected weights cannot read past
-        // the sampled face range.
-        o.color = tone(o.color, appearance(2u, instance % max(u.tri_count, 1u)));
-        return o;
-    }
     if instance==0u || u.tri_count==0u { return o; }
     let ii=instance-1u;
     let per = u.tri_count * u.copy_count;
     var element=2u;
-    var triangle=0u;
-    if ii < 2u*per { triangle=ii%u.tri_count; }
-    else if ii < 3u*per { element=3u; triangle=(ii-2u*per)%u.tri_count; }
-    else if ii < 4u*per { element=4u; triangle=(ii-3u*per)%u.tri_count; }
+    if ii < 2u*per { element=2u; }
+    else if ii < 3u*per { element=3u; }
+    else if ii < 4u*per { element=4u; }
     else if ii < 4u*per+3u { element=1u; }
-    else if ii < 4u*per+3u+fragment_frame_count()*3u { triangle=fragment_frame_triangle((ii-4u*per-3u)/3u); }
-    else { element=5u; triangle=((ii-4u*per-3u-fragment_frame_count()*3u)%u.vertex_count)/3u; }
-    o.color=tone(o.color,appearance(element,triangle));
+    else if ii < 4u*per+3u+fragment_frame_count()*3u { element=2u; }
+    else { element=5u; }
+    o.color=tone(o.color,appearance(element));
     return o;
 }
 
@@ -431,7 +376,7 @@ fn world_grid(pixel: vec2<f32>) -> vec4<f32> {
     let fade_end = u.camera_pos_far.w * 0.9;
     let fade = 1.0 - smoothstep(fade_end * 0.35, fade_end, distance);
     let visible = select(0.0, 1.0, t > 0.0 && t < 1.0 && u.grid != 0u);
-    return tone(vec4<f32>(color, alpha * fade * horizon * visible), grid_gain(world));
+    return tone(vec4<f32>(color, alpha * fade * horizon * visible), appearance(1u));
 }
 
 fn world_grid_position(pixel: vec2<f32>) -> vec3<f32> {
@@ -447,11 +392,12 @@ fn world_grid_position(pixel: vec2<f32>) -> vec3<f32> {
     return near + t * ray;
 }
 
+// Only Overlay with Depth occlusion tests anything, and only the scene's own
+// depth; the host folds that rule into `u.occlusion`.
 fn depth_occluded(depth: f32, pixel: vec2<f32>, bias: f32) -> bool {
     if u.occlusion == 0u { return false; }
     let uv = pixel / u.viewport.xy;
-    var cutoff = textureSampleLevel(surface_depth, depth_sampler, uv, 0.0).r;
-    if u.mode == 2u { cutoff = max(cutoff, textureSampleLevel(scene_depth, depth_sampler, uv, 0.0).r); }
+    let cutoff = textureSampleLevel(scene_depth, depth_sampler, uv, 0.0).r;
     return depth < cutoff - bias;
 }
 
@@ -478,10 +424,4 @@ fn fs_depth_color(in: O) -> @location(0) vec4<f32> {
     let bias = clamp(fwidth(depth) * (u.line_width + 1.0), 0.000002, 0.0002);
     if depth_occluded(depth, in.p.xy, bias) { return vec4<f32>(0.0); }
     return select(in.color, grid, in.grid != 0u);
-}
-
-@fragment
-fn fs_depth(in: O) -> @location(0) f32 {
-    if in.color.a <= 0.0 { return 0.0; }
-    return clamp(in.p.z, 0.0, 1.0);
 }

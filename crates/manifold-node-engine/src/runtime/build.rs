@@ -659,8 +659,6 @@ manifold_core::testkit_visible! {
             executor: Executor::with_mock(),
             effect_nodes: vec![segment],
             modifier_preview_routes: Vec::new(),
-            math_views: Vec::new(),
-            shared_arrays: Vec::new(),
             pending_trigger_baseline: None,
             modifier_control_state: None,
             modifier_events: None,

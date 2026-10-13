@@ -62,25 +62,6 @@ impl PresetRuntime {
         } else {
             doc
         };
-        if !doc.scene_modifiers.iter().any(|modifier|
-            manifold_core::scene_modifier_math_view::is_math_view_recipe(&modifier.graph)) {
-            return Self::from_def_for_render_view(doc, registry, manifest, render_fused, None);
-        }
-        let mut runtime = Self::from_def_for_render_view(doc.clone(), registry, manifest, render_fused, None)?;
-        runtime.math_views = super::math_view::prepare_views(&doc, registry, manifest, render_fused, &runtime)?;
-        Ok(runtime)
-    }
-
-    pub(super) fn from_def_for_render_view(
-        doc: EffectGraphDef,
-        registry: &PrimitiveRegistry,
-        manifest: Option<&ParamManifest>,
-        render_fused: bool,
-        math_view: Option<(
-            &manifold_core::NodeId,
-            Option<crate::load::expand::LegacyMathViewScope>,
-        )>,
-    ) -> Result<Self, JsonGeneratorLoadError> {
         let mut doc = doc;
         // Retired params leave before anything reads the authored graph: the
         // scene-modifier expansion, its value writes and the render def must
@@ -96,11 +77,7 @@ impl PresetRuntime {
             if manifold_core::scene_modifier_preset::has_scene_modifier_data(&doc)
                 || crate::load::expand::contains_fragments(&doc)
             {
-                let prepared = match math_view {
-                    Some((modifier_id, None)) => crate::load::expand::prepare_scene_modifier_math_view(&doc, registry, modifier_id)?,
-                    Some((modifier_id, Some(scope))) => crate::load::expand::prepare_legacy_scene_modifier_math_view(&doc, registry, modifier_id, scope)?,
-                    None => crate::load::expand::prepare_scene_modifiers(&doc, registry)?,
-                };
+                let prepared = crate::load::expand::prepare_scene_modifiers(&doc, registry)?;
                 // The generator resolver drops Composite bindings. Keep provenance
                 // in the same order before installing the resolved binding list.
                 let sources = prepared
@@ -233,25 +210,8 @@ impl PresetRuntime {
             canvas,
             &AHashMap::default(),
         )?;
-        let mut usage = budget.account(&allocation)
+        let usage = budget.account(&allocation)
             .map_err(crate::load::graph_loader::PreAllocationError::ModifierAdmission)?;
-        let add = |left: u64, right: u64| left.checked_add(right).ok_or_else(||
-            crate::load::graph_loader::PreAllocationError::ModifierAdmission(
-                crate::load::expand::SceneModifierExpandError::CapacityExceeded {
-                    path: "mathViewBuffers".into(), detail: "prepared byte count overflow".into(),
-                }));
-        for view in &self.math_views {
-            for variant in &view.variants {
-                if let Some(extra) = variant.prepared_modifier_buffer_usage(canvas)? {
-                    usage.candidate_bytes = add(usage.candidate_bytes, extra.candidate_bytes)?;
-                    usage.baseline_bytes = add(usage.baseline_bytes, extra.baseline_bytes)?;
-                    for (scene, bytes) in extra.modifier_bytes {
-                        let entry = usage.modifier_bytes.entry(scene).or_default();
-                        *entry = add(*entry, bytes)?;
-                    }
-                }
-            }
-        }
         Ok(Some(usage))
     }
 
@@ -282,33 +242,18 @@ impl PresetRuntime {
 
     #[cfg(any(test, feature = "testkit"))]
     pub fn note_modifier_audio_event(&mut self, param: &str) -> bool {
-        for view in &mut self.math_views {
-            for variant in &mut view.variants {
-                variant.note_modifier_audio_event(param);
-            }
-        }
         self.modifier_events
             .as_mut()
             .is_some_and(|events| events.note_audio(param))
     }
 
     pub fn note_modifier_audio_key(&mut self, param_key: u64) -> bool {
-        for view in &mut self.math_views {
-            for variant in &mut view.variants {
-                variant.note_modifier_audio_key(param_key);
-            }
-        }
         self.modifier_events
             .as_mut()
             .is_some_and(|events| events.note_audio_key(param_key))
     }
 
     pub fn note_modifier_clip_event(&mut self, host: Option<&PresetInstance>) {
-        for view in &mut self.math_views {
-            for variant in &mut view.variants {
-                variant.note_modifier_clip_event(host);
-            }
-        }
         if let Some(events) = &mut self.modifier_events {
             events.note_clip(|param| {
                 host.is_none_or(|host| {
@@ -329,11 +274,6 @@ impl PresetRuntime {
     /// Multiple events before an evaluation preserve the earliest baseline.
     pub fn note_trigger_event(&mut self, previous_count: u32) {
         self.pending_trigger_baseline.get_or_insert(previous_count);
-        for view in &mut self.math_views {
-            for variant in &mut view.variants {
-                variant.note_trigger_event(previous_count);
-            }
-        }
     }
 
 manifold_core::testkit_visible! {
@@ -345,14 +285,6 @@ manifold_core::testkit_visible! {
 
 manifold_core::testkit_visible! {
     pub(crate) fn carry_modifier_control_state_from(&mut self, prior: &mut Self) {
-        for view in &mut self.math_views {
-            if let Some(previous) = prior.math_views.iter_mut().find(|previous| previous.modifier_id == view.modifier_id) {
-                view.events.carry_from(&previous.events);
-                for (variant, previous_variant) in view.variants.iter_mut().zip(&mut previous.variants) {
-                    variant.carry_generator_state_from(previous_variant);
-                }
-            }
-        }
         self.carry_pending_trigger_from(prior);
         if let (Some(current), Some(previous)) = (&mut self.modifier_events, &prior.modifier_events)
         {

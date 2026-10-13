@@ -80,14 +80,10 @@ impl PresetRuntime {
         // Pre-allocate every Array<T> buffer + Texture3D volume the compiled
         // plan declares, then run the post-allocation audit — the same shared
         // pipeline the effect chain uses.
-        for (resource, buffer) in &g.shared_arrays {
-            backend.pre_bind_array(*resource, buffer.clone());
-        }
         crate::load::graph_loader::pre_allocate_resources(&mut g.graph, &g.plan, &device, &mut backend)
             .map_err(super::modifier_runtime::generator_error_from_prealloc)?;
 
         g.executor = Executor::new(Box::new(backend));
-        g.install_math_views(device, width, height, format)?;
         Ok(())
     }
 }

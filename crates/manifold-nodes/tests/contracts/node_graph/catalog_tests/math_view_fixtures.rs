@@ -174,3 +174,22 @@ pub(crate) fn test_owner_with_instance_echoes() -> manifold_core::effect_graph_d
     .unwrap()
     .graph
 }
+
+/// The same owner with its Math View and the view's card removed: the
+/// scene the view must leave untouched.
+pub(crate) fn without_view(
+    owner: &manifold_core::effect_graph_def::EffectGraphDef,
+) -> manifold_core::effect_graph_def::EffectGraphDef {
+    use manifold_core::effect_graph_def::BindingTarget;
+    let mut owner = owner.clone();
+    owner.scene_modifiers.retain(|instance| instance.id != NodeId::new("math_view"));
+    let metadata = owner.preset_metadata.as_mut().unwrap();
+    metadata.bindings.retain(|binding| !matches!(
+        &binding.target,
+        BindingTarget::SceneModifier { modifier_id, .. } if modifier_id.as_str() == "math_view"
+    ));
+    let binding_ids: std::collections::HashSet<_> =
+        metadata.bindings.iter().map(|binding| binding.id.clone()).collect();
+    metadata.params.retain(|param| binding_ids.contains(&param.id));
+    owner
+}
