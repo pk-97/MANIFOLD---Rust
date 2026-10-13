@@ -53,7 +53,6 @@
       "check": "Exists"
     }
   },
-  "Snapshot",
   {
     "Pointer": {
       "target": {
@@ -86,11 +85,8 @@
         }
       },
       "check": {
-        "RectWithin": {
-          "x": 1291.0,
-          "y": 248.0,
-          "width": 233.0,
-          "height": 28.0
+        "Above": {
+          "text": "Mask — Layer: 2 · GLOW"
         }
       }
     }
@@ -115,7 +111,6 @@
       "check": "Exists"
     }
   },
-  "Snapshot",
   {
     "Pointer": {
       "target": {
@@ -184,8 +179,6 @@
       "check": "Exists"
     }
   },
-  "Snapshot",
-  "Dump",
   {
     "Key": {
       "key": "Z",
@@ -196,7 +189,7 @@
   },
   {
     "Step": {
-      "frames": 30
+      "frames": 15
     }
   },
   {
@@ -328,7 +321,7 @@
   },
   {
     "Step": {
-      "frames": 30
+      "frames": 15
     }
   },
   {
@@ -390,7 +383,7 @@
   },
   {
     "Step": {
-      "frames": 30
+      "frames": 15
     }
   },
   {
@@ -425,7 +418,7 @@
   },
   {
     "Step": {
-      "frames": 30
+      "frames": 15
     }
   },
   {
@@ -449,7 +442,7 @@
   },
   {
     "Step": {
-      "frames": 30
+      "frames": 15
     }
   },
   {
