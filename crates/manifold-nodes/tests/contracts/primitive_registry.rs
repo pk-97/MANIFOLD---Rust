@@ -387,6 +387,9 @@ use manifold_nodes_image::node_graph::primitives::filter::{Blur, Threshold};
         ("node.math", "a"),
         ("node.scale_offset_value", "a"),
         ("node.switch_array", "selector"),
+        ("node.switch_indices", "selector"),
+        ("node.switch_instances", "selector"),
+        ("node.switch_mesh", "selector"),
         ("node.switch_texture", "selector"),
         ("node.switch_value", "selector"),
     ];

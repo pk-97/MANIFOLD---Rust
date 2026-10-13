@@ -306,7 +306,8 @@ fn water_family_clipboard_rejects_every_group_output() {
     let family = rows(&project, &layer);
     let family_rows: Vec<_> = family.iter().filter(|row| row.look_mesh.is_some()
         || (row.is_group && row.liquid_domain.is_some())).collect();
-    assert_eq!(family_rows.len(), 8, "both complete families");
+    // Five rows each: Water, three looks and Physics View's dots.
+    assert_eq!(family_rows.len(), 10, "both complete families");
     for row in family_rows {
         let error = crate::scene_item_transfer::SceneItemClipboard::capture(
             &project,

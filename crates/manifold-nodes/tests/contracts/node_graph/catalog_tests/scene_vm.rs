@@ -95,7 +95,23 @@ use manifold_nodes_scene::node_graph::scene_vm::testkit::ORBIT_CAMERA_TYPE_ID;
             assert!(!water.fluid_controls.is_empty());
 
             let names: Vec<_> = family.iter().map(|row| row.name.as_str()).collect();
-            assert_eq!(names, ["Water", "Foam", "Spray", "Bubbles"], "{preset}: family order");
+            // Physics View's dots are the Dam Break's fifth family output, a
+            // child row after the looks; the Particle View has none.
+            let physics_view = preset == "WaterDamBreakGpuFlip";
+            let expected: &[&str] = if physics_view {
+                &["Water", "Foam", "Spray", "Bubbles", "Physics Dots"]
+            } else {
+                &["Water", "Foam", "Spray", "Bubbles"]
+            };
+            assert_eq!(names, expected, "{preset}: family order");
+            let dots: Vec<_> = vm.objects.iter().filter(|object| matches!(object,
+                SceneObjectVm::Known(row) if row.name == "Physics Dots")).collect();
+            assert_eq!(dots.len(), usize::from(physics_view), "{preset}: no top-level dots row");
+            for switch in ["water_vertices_switch", "water_indices_switch", "dots_visible",
+                "dots_instances_switch", "dots_mesh_switch"] {
+                assert_eq!(water.fluid_controls.iter().any(|id| id.as_str() == switch), physics_view,
+                    "{preset}: the Water row owns {switch}");
+            }
             for row in family.iter().filter(|row| row.name != "Water") {
                 assert_eq!(row.parent_group_id, Some(water.object_node_id), "{preset}: {} parent", row.name);
                 assert!(row.look_mesh.is_some(), "{preset}: {} owns its platonic mesh", row.name);

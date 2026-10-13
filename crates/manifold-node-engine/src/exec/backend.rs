@@ -317,7 +317,19 @@ pub trait Backend: Send {
         false
     }
 
-    /// Clear every transient slot alias installed by [`Self::alias_2d`].
+    /// The array twin of [`Self::alias_2d`]: until the next
+    /// [`Self::clear_skip_aliases`], reads of `dst_slot`'s buffer and live
+    /// extent resolve to `src_slot`'s. Nothing is copied and `dst_slot`'s own
+    /// buffer is untouched. The executor only asks when the plan allows it
+    /// ([`ExecutionPlan::array_passthrough`](crate::exec::execution_plan::ExecutionPlan::array_passthrough)).
+    ///
+    /// Default: no-op (mock backends).
+    fn alias_array(&mut self, _src_slot: Slot, _dst_slot: Slot) -> bool {
+        false
+    }
+
+    /// Clear every transient slot alias installed by [`Self::alias_2d`]
+    /// and [`Self::alias_array`].
     /// Called by the executor at the start of each frame so a skip-frame's
     /// alias doesn't shadow a subsequent non-skip-frame's real write.
     /// Host-installed borrows (e.g. the chain source slot's per-frame
@@ -388,6 +400,8 @@ pub struct MockBackend {
     /// the pairs (and returning `true`) lets executor tests observe the
     /// alias path the way `MetalBackend` takes it.
     skip_aliases: Vec<(Slot, Slot)>,
+    /// Array aliases installed this frame via [`Backend::alias_array`].
+    array_aliases: Vec<(Slot, Slot)>,
 }
 
 impl MockBackend {
@@ -407,12 +421,18 @@ impl MockBackend {
             mesh_sources: AHashMap::default(),
             objects: AHashMap::default(),
             skip_aliases: Vec::new(),
+            array_aliases: Vec::new(),
         }
     }
 
     /// Skip-passthrough aliases installed this frame (test observation).
     pub fn skip_aliases(&self) -> &[(Slot, Slot)] {
         &self.skip_aliases
+    }
+
+    /// Array aliases installed this frame (test observation).
+    pub fn array_aliases(&self) -> &[(Slot, Slot)] {
+        &self.array_aliases
     }
 }
 
@@ -423,6 +443,10 @@ impl Default for MockBackend {
 }
 
 impl Backend for MockBackend {
+    fn as_any(&self) -> Option<&dyn std::any::Any> {
+        Some(self)
+    }
+
     fn cpu_values(&self) -> &CpuWireValues {
         &self.cpu_values
     }
@@ -568,8 +592,14 @@ impl Backend for MockBackend {
         true
     }
 
+    fn alias_array(&mut self, src_slot: Slot, dst_slot: Slot) -> bool {
+        self.array_aliases.push((src_slot, dst_slot));
+        true
+    }
+
     fn clear_skip_aliases(&mut self) {
         self.skip_aliases.clear();
+        self.array_aliases.clear();
     }
 }
 

@@ -489,7 +489,10 @@ use serde_json::{Value, json};
         use std::collections::{BTreeMap, BTreeSet};
         fn facts(nodes: &[EffectGraphNode], wires: &[EffectGraphWire], particle_view: bool) -> (Value, Value) {
             let omitted = |name: &str| name == "fluid_input" || particle_view &&
-                matches!(name, "surface" | "liquid_particle_mesh" | "liquid_particle_copies");
+                matches!(name, "surface" | "liquid_particle_mesh" | "liquid_particle_copies" |
+                    "water_vertices_switch" | "water_indices_switch" | "dots_mesh" | "dots_material" |
+                    "dots_blend" | "dots_copies" | "dots_object" | "dots_visible" |
+                    "dots_instances_switch" | "dots_mesh_switch");
             let names: BTreeMap<_, _> = nodes.iter().map(|n| (n.id, n.node_id.as_str())).collect();
             let nodes: BTreeMap<_, _> = nodes.iter().filter(|n| !omitted(n.node_id.as_str())).map(|n| {
                 let mut value = serde_json::to_value(n).unwrap();
@@ -524,7 +527,11 @@ use serde_json::{Value, json};
             let def: EffectGraphDef = serde_json::from_str(&saved).unwrap();
             let family = find_node(&def.nodes, "water_family").unwrap();
             let group = family.group.as_ref().expect("ordinary family group");
-            assert_eq!(group.interface.outputs.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(), family_outputs());
+            // Physics View's dots are a fifth output beside the four roles;
+            // the Particle View has no Physics View.
+            let mut outputs = family_outputs().to_vec();
+            if !particles { outputs.push("object_4"); }
+            assert_eq!(group.interface.outputs.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(), outputs);
             assert_eq!(group.interface.inputs.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(),
                 if obstacle { vec!["role_0"] } else { vec![] });
             assert_eq!(facts(&body.nodes, &body.wires, particles), facts(&group.nodes, &group.wires, particles));
@@ -761,6 +768,55 @@ use serde_json::{Value, json};
         }
         for frozen in [false, true] {
             walked(&def, frozen, "16³ per-tick whitewater");
+        }
+    }
+
+    /// Physics View swaps which side runs. With the card on, no surface node
+    /// is live while the dots' GPU chain, the water and the simulation are.
+    /// With it off the surface is live and nothing of the dots that does GPU
+    /// work is: the normal show pays nothing for the toggle.
+    #[test]
+    fn gpu_flip_physics_view_skips_the_surface() {
+        use manifold_node_engine::exec::execution::Executor;
+        fn names(nodes: &[EffectGraphNode], into: &mut Vec<String>) {
+            // The atoms a flattened graph plans: groups and their boundaries dissolve.
+            for node in nodes {
+                match &node.group {
+                    Some(group) => names(&group.nodes, into),
+                    None if !node.type_id.starts_with("system.group_") => into.push(node.node_id.as_str().to_string()),
+                    None => {}
+                }
+            }
+        }
+        let def = render_def(WaterScene::dam_break(64));
+        let family = find_node(&def.nodes, "water_family").expect("Water family");
+        let surface = find_node(&family.group.as_ref().expect("family group").nodes, "surface").expect("surface");
+        let mut surface_nodes = Vec::new();
+        names(&surface.group.as_ref().expect("surface group").nodes, &mut surface_nodes);
+        assert!(surface_nodes.len() > 5, "{surface_nodes:?}");
+        let card: Vec<_> = def.preset_metadata.as_ref().unwrap().bindings.iter()
+            .filter(|binding| binding.id == "physics_view").collect();
+        for (view, surface_live) in [(1.0, false), (0.0, true)] {
+            let (mut graph, plan) = built(&def);
+            for binding in &card {
+                let BindingTarget::Node { node_id, param } = &binding.target else { panic!("node target") };
+                let id = graph.instance_by_node_id(node_id).expect("card target");
+                graph.set_param(id, param, ParamValue::Float(view)).unwrap();
+            }
+            let mut executor = Executor::with_mock();
+            let live = executor.live_steps_for(&graph, &plan);
+            let ran: Vec<String> = plan.steps().iter().zip(live).filter(|(_, live)| **live)
+                .map(|(step, _)| graph.get_node(step.node).expect("planned node").node_id.as_str().to_string())
+                .collect();
+            for name in &surface_nodes {
+                assert_eq!(ran.contains(name), surface_live, "physics view {view}: surface node {name} live");
+            }
+            for name in ["water_object", "dots_object", "domain", STEP_NODE, "frame", "whitewater"] {
+                assert!(ran.iter().any(|ran| ran == name), "physics view {view}: {name} must be live, live {ran:?}");
+            }
+            for name in ["dots_mesh", "dots_blend", "dots_copies"] {
+                assert_eq!(ran.iter().any(|ran| ran == name), !surface_live, "physics view {view}: dots GPU node {name} live");
+            }
         }
     }
 

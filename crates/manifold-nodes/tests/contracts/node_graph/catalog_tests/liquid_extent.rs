@@ -378,6 +378,9 @@ fn extent_rule_inventory_preserves_the_rule_table() {
         "node.whitewater_step",
         "node.upwind_distance",
         "node.particles_to_copies",
+        "node.switch_mesh",
+        "node.switch_indices",
+        "node.switch_instances",
     ];
     expected.sort_unstable();
     let registered: Vec<_> = EXTENT_RULES.iter().map(|rule| rule.type_id).collect();

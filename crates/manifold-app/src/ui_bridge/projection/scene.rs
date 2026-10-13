@@ -782,6 +782,39 @@ mod ownership_tests {
         assert!(sections.iter().any(|section| section == "Whitewater"), "{sections:?}");
     }
 
+    /// Physics View is one card on the Water row: five bindings, the
+    /// surface's two switches first, then the dots' visibility, instances
+    /// and mesh, every one a switch selector.
+    #[test]
+    fn gpu_flip_water_row_shows_the_physics_view_card() {
+        use manifold_core::effect_graph_def::BindingTarget;
+        use manifold_nodes_scene::node_graph::scene_vm::{SceneObjectVm, SceneVm};
+        let def = manifold_nodes::bundled_presets::bundled_preset_def(&PresetTypeId::new("WaterDamBreakGpuFlip")).unwrap();
+        let metadata = def.preset_metadata.as_ref().unwrap();
+        let targets: Vec<_> = metadata.bindings.iter().filter(|binding| binding.id == "physics_view")
+            .map(|binding| match &binding.target {
+                BindingTarget::Node { node_id, param } => (node_id.as_str(), param.as_str()),
+                target => panic!("physics_view targets {target:?}"),
+            }).collect();
+        assert_eq!(targets, [("water_vertices_switch", "selector"), ("water_indices_switch", "selector"),
+            ("dots_visible", "selector"), ("dots_instances_switch", "selector"), ("dots_mesh_switch", "selector")]);
+        let spec = metadata.params.iter().find(|spec| spec.id == "physics_view").expect("Physics View card");
+        assert_eq!((spec.name.as_str(), spec.section.as_deref(), spec.is_toggle), ("Physics View", Some("Water"), true));
+        let vm = SceneVm::from_def(def.as_ref()).unwrap();
+        let rows: Vec<_> = vm.objects.iter().filter_map(|object| match object {
+            SceneObjectVm::Known(row) => Some(row),
+            _ => None,
+        }).collect();
+        let showing: Vec<_> = rows.iter().filter(|row| {
+            let owned = object_controls(Some(def.as_ref()), row, &vm.objects);
+            let mut ids = parameter_ids_for_nodes(Some(def.as_ref()), &owned);
+            filter_family_parameter_ids(Some(def.as_ref()), row, &mut ids);
+            ids.iter().any(|id| id == "physics_view")
+        }).map(|row| row.name.as_str()).collect();
+        assert_eq!(showing, ["Water"]);
+        assert_one_owner("WaterDamBreakGpuFlip", def.as_ref());
+    }
+
     #[test]
     fn water_family_projection_keeps_parent_and_look_ownership() {
         use manifold_core::effect_graph_def::BindingTarget;
@@ -810,6 +843,25 @@ mod ownership_tests {
                 SceneObjectVm::Known(row) if row.parent_group_id == Some(water.object_node_id) => Some(row),
                 _ => None,
             }).collect();
+            // The Dam Break adds Physics View's dots after the three looks.
+            let physics_view = preset == "WaterDamBreakGpuFlip";
+            assert_eq!(children.len(), 3 + usize::from(physics_view), "{preset}: look rows");
+            let (dots, children): (Vec<_>, Vec<_>) = children.into_iter().partition(|child| child.name == "Physics Dots");
+            for dots in dots {
+                // Its switches belong to Water's Physics View card; the dots
+                // row shows only its material.
+                let owned = object_controls(Some(def.as_ref()), dots, &vm.objects);
+                let mut ids = parameter_ids_for_nodes(Some(def.as_ref()), &owned);
+                filter_family_parameter_ids(Some(def.as_ref()), dots, &mut ids);
+                let MaterialVm::Known(material) = &dots.material else { panic!("{preset}: dots material") };
+                let metadata = def.preset_metadata.as_ref().unwrap();
+                for id in &ids {
+                    let binding = metadata.bindings.iter().find(|binding| &binding.id == id).expect("binding");
+                    assert!(matches!(&binding.target, BindingTarget::Node { node_id, .. } if node_id == &material.node),
+                        "{preset}: Physics Dots shows {id}");
+                }
+                assert!(dots.visible_driven, "{preset}: the card drives the dots' visibility");
+            }
             assert_eq!(children.len(), 3, "{preset}: three look rows");
             for child in children {
                 let material = match &child.material {

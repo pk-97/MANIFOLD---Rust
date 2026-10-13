@@ -169,6 +169,10 @@ pub struct ExecutionPlan {
     /// [`steps`](Self::steps). Outputs of these steps make up
     /// [`held_resources`](Self::held_resources).
     hoistable_steps: Vec<bool>,
+    /// `array_passthrough[i]`: step `i` may alias its chosen array input onto
+    /// its variadic passthrough output for the frame instead of running. See
+    /// [`array_passthrough_steps`].
+    array_passthrough: Vec<bool>,
     /// Indices into [`steps`] of nodes that declare non-empty
     /// [`state_capture_input_ports`](crate::node_graph::effect_node::EffectNode::state_capture_input_ports).
     /// The executor invokes
@@ -316,6 +320,11 @@ impl ExecutionPlan {
         self.hoistable_steps.get(idx).copied().unwrap_or(false)
     }
 
+    /// Whether step `idx` may alias its chosen array input onto its output.
+    pub fn array_passthrough(&self, idx: usize) -> bool {
+        self.array_passthrough.get(idx).copied().unwrap_or(false)
+    }
+
     /// Step indices that need a post-frame `late_capture` invocation —
     /// see [`late_capture_steps`](Self::late_capture_steps) field docs.
     pub fn late_capture_step_indices(&self) -> &[usize] {
@@ -360,6 +369,7 @@ manifold_core::testkit_visible! {
         let mut p = self.clone();
         p.steps.truncate(k);
         p.hoistable_steps.truncate(k);
+        p.array_passthrough.truncate(k);
         p.late_capture_steps.retain(|&i| i < k);
         p.node_pairs.retain(|pair| pair.second_step < k);
         // A prefix cutting through a region body has no repeat semantics;
@@ -907,15 +917,21 @@ pub fn compile(graph: &Graph) -> Result<ExecutionPlan, GraphError> {
     // Done after step-building (so `last_reader` is fully
     // populated) and before bucketing (so the bumped lifetimes
     // land in the correct free_at_step bucket).
-    for (step_idx, &node_id) in order.iter().enumerate() {
+    //
+    // Walked in reverse topological order: a node extends its inputs to its
+    // outputs' last readers, and those may themselves have been extended by a
+    // later node (a switch feeding a `carries_resources` scene object whose
+    // struct is read by `render_scene`). Visiting consumers first makes one
+    // pass reach the final lifetime; extensions only ever grow.
+    for (step_idx, &node_id) in order.iter().enumerate().rev() {
         let inst = graph
             .get_node(node_id)
             .expect("topo order references existing node");
 
-        // Variadic router (mux): the runtime may alias ANY wired texture
-        // input onto the declared output, so every one of them gets the
-        // extension — the planner can't know which `in_N` the selector
-        // picks at runtime.
+        // Variadic router (texture mux, array switches): the runtime may alias
+        // ANY wired texture or array input onto the declared output, so every
+        // one of them gets the extension — the planner can't know which `in_N`
+        // the selector picks at runtime.
         if let Some(out_port) = inst.node.variadic_skip_passthrough_out() {
             let Some(&r_out) = output_resources.get(&(node_id, std::borrow::Cow::Borrowed(out_port)))
             else {
@@ -923,7 +939,7 @@ pub fn compile(graph: &Graph) -> Result<ExecutionPlan, GraphError> {
             };
             let r_out_last = *last_reader.get(&r_out).unwrap_or(&step_idx);
             for input in inst.node.inputs() {
-                if !matches!(input.ty, PortType::Texture2D) {
+                if !matches!(input.ty, PortType::Texture2D | PortType::Array(_)) {
                     continue;
                 }
                 let r_in = wire_by_target
@@ -1145,6 +1161,7 @@ pub fn compile(graph: &Graph) -> Result<ExecutionPlan, GraphError> {
         acc.union(inst.node.requires())
     });
 
+    let array_passthrough = array_passthrough_steps(graph, &steps, &resource_types);
     persistent.sort();
     held.sort();
     held.dedup();
@@ -1161,11 +1178,62 @@ pub fn compile(graph: &Graph) -> Result<ExecutionPlan, GraphError> {
         held_resources: held,
         provided_texture_resources,
         hoistable_steps,
+        array_passthrough,
         late_capture_steps,
         node_pairs,
         mesh_rules,
         substep_regions,
     })
+}
+
+/// Which steps may alias a chosen array input onto their variadic passthrough
+/// output (the array switches) for a frame. While aliased, readers of the
+/// output read the input's storage, so no write may reach that storage
+/// through either side before the output's readers run. The only in-frame
+/// writer to existing array storage is an in-place step (`aliased_array_io`),
+/// whose output shares its input's storage. The alias is refused when such a
+/// write lands on the output's storage at all, or on an input's storage after
+/// the switch: there the output's readers would see bytes the switch never
+/// chose. Refused steps run their node instead.
+fn array_passthrough_steps(graph: &Graph, steps: &[ExecutionStep], resource_types: &[PortType]) -> Vec<bool> {
+    let port = |list: &[(&'static str, ResourceId)], name: &str| {
+        list.iter().find(|(port, _)| *port == name).map(|&(_, resource)| resource)
+    };
+    let is_array = |resource: ResourceId| matches!(resource_types.get(resource.0 as usize), Some(PortType::Array(_)));
+    let mut storage: AHashMap<ResourceId, ResourceId> = AHashMap::default();
+    let mut writes: Vec<(usize, ResourceId)> = Vec::new();
+    for (idx, step) in steps.iter().enumerate() {
+        let Some(inst) = graph.get_node(step.node) else { continue };
+        for &(input_port, output_port) in inst.node.aliased_array_io() {
+            let Some(input) = port(&step.inputs, input_port) else { continue };
+            let root = storage.get(&input).copied().unwrap_or(input);
+            writes.push((idx, root));
+            if let Some(output) = port(&step.outputs, output_port) {
+                storage.insert(output, root);
+            }
+        }
+    }
+    let root = |resource: ResourceId| storage.get(&resource).copied().unwrap_or(resource);
+    steps
+        .iter()
+        .enumerate()
+        .map(|(idx, step)| {
+            let Some(out) = graph
+                .get_node(step.node)
+                .and_then(|inst| inst.node.variadic_skip_passthrough_out())
+                .and_then(|out_port| port(&step.outputs, out_port))
+                .filter(|&out| is_array(out))
+            else {
+                return false;
+            };
+            let out_root = root(out);
+            !writes.iter().any(|&(at, written)| {
+                written == out_root
+                    || (at > idx
+                        && step.inputs.iter().any(|&(_, input)| is_array(input) && root(input) == written))
+            })
+        })
+        .collect()
 }
 
 /// SCENE_MODIFIER_RT_DESIGN.md §3.1/3.2: compile one output port's mesh
@@ -2255,4 +2323,166 @@ mod tests {
     }
 
 
+    /// Array routing roles for the passthrough planner tests.
+    struct ArrayRoute {
+        type_id: EffectNodeType,
+        inputs: Vec<NodeInput>,
+        outputs: Vec<NodeOutput>,
+        switch: bool,
+        carries: bool,
+        in_place: bool,
+        root: bool,
+    }
+
+    impl ArrayRoute {
+        fn array() -> PortType {
+            PortType::Array(crate::ports::ArrayType::of::<u32>())
+        }
+        fn new(name: &'static str, inputs: &[&'static str], outputs: &[(&'static str, PortType)]) -> Self {
+            Self {
+                type_id: EffectNodeType::new(name),
+                inputs: inputs.iter().map(|&n| input(n, Self::array(), false)).collect(),
+                outputs: outputs.iter().map(|&(n, ty)| output(n, ty)).collect(),
+                switch: false,
+                carries: false,
+                in_place: false,
+                root: false,
+            }
+        }
+        fn source(name: &'static str) -> Self {
+            Self::new(name, &[], &[("out", Self::array())])
+        }
+        fn stage(name: &'static str) -> Self {
+            Self::new(name, &["in"], &[("out", Self::array())])
+        }
+        fn switch() -> Self {
+            Self { switch: true, ..Self::new("switch", &["in_0", "in_1"], &[("out", Self::array())]) }
+        }
+        fn in_place(name: &'static str) -> Self {
+            Self { in_place: true, ..Self::stage(name) }
+        }
+        fn sink() -> Self {
+            Self { root: true, ..Self::new("sink", &["in"], &[]) }
+        }
+    }
+
+    impl crate::exec::effect_node::EffectNode for ArrayRoute {
+        fn depth_rule(&self) -> crate::scene::depth_rule::DepthRule {
+            crate::scene::depth_rule::DepthRule::Terminal
+        }
+        fn type_id(&self) -> &EffectNodeType {
+            &self.type_id
+        }
+        fn inputs(&self) -> &[NodeInput] {
+            &self.inputs
+        }
+        fn outputs(&self) -> &[NodeOutput] {
+            &self.outputs
+        }
+        fn parameters(&self) -> &[ParamDef] {
+            &[]
+        }
+        fn evaluate(&mut self, _: &mut EffectNodeContext<'_, '_>) {}
+        fn variadic_skip_passthrough_out(&self) -> Option<&'static str> {
+            self.switch.then_some("out")
+        }
+        fn carries_resources(&self) -> bool {
+            self.carries
+        }
+        fn is_liveness_root(&self) -> bool {
+            self.root
+        }
+        fn aliased_array_io(&self) -> &[(&str, &str)] {
+            if self.in_place { &[("in", "out")] } else { &[] }
+        }
+    }
+
+    fn step_of(plan: &ExecutionPlan, node: NodeInstanceId) -> usize {
+        plan.steps().iter().position(|step| step.node == node).unwrap()
+    }
+
+    fn out_of(plan: &ExecutionPlan, node: NodeInstanceId) -> ResourceId {
+        plan.steps()[step_of(plan, node)].outputs[0].1
+    }
+
+    /// source -> switch -> object (carries its array into a struct) -> render.
+    /// The object stretches the switch output to the render step, so the
+    /// switch input, which the output may alias, must live as long.
+    #[test]
+    fn array_switch_input_lives_until_the_carried_output_is_rendered() {
+        let mut g = Graph::new();
+        let source = g.add_node(Box::new(ArrayRoute::source("source")));
+        let switch = g.add_node(Box::new(ArrayRoute::switch()));
+        let object = g.add_node(Box::new(ArrayRoute {
+            carries: true,
+            ..ArrayRoute::new("object", &["vertices"], &[("object", PortType::Scalar(crate::ports::ScalarType::F32))])
+        }));
+        let later = g.add_node(Box::new(ArrayRoute::source("later")));
+        let render = g.add_node(Box::new(TestNode::new(
+            "render",
+            vec![
+                input("object", PortType::Scalar(crate::ports::ScalarType::F32), true),
+                input("other", ArrayRoute::array(), true),
+            ],
+            vec![],
+        )));
+        g.connect((source, "out"), (switch, "in_0")).unwrap();
+        g.connect((switch, "out"), (object, "vertices")).unwrap();
+        g.connect((object, "object"), (render, "object")).unwrap();
+        g.connect((later, "out"), (render, "other")).unwrap();
+        let plan = compile(&g).unwrap();
+
+        let input = out_of(&plan, source);
+        let render_step = step_of(&plan, render);
+        assert!(step_of(&plan, object) < render_step);
+        assert!(plan.steps()[render_step].free_after.contains(&input), "{:?}", plan.steps());
+        assert!(plan.array_passthrough(step_of(&plan, switch)));
+    }
+
+    /// An in-place write that would reach the aliased storage refuses the
+    /// alias: on the output at all, or on an input after the switch ran. One
+    /// before the switch is what the switch chose, so the alias stands.
+    #[test]
+    fn array_switch_alias_is_refused_where_an_in_place_write_reaches_it() {
+        let build = |writer_on_output: bool, writer_before: bool, writer_after: bool| {
+            let mut g = Graph::new();
+            let source = g.add_node(Box::new(ArrayRoute::source("source")));
+            let mut feed = source;
+            if writer_before {
+                let before = g.add_node(Box::new(ArrayRoute::in_place("before")));
+                g.connect((source, "out"), (before, "in")).unwrap();
+                feed = before;
+            }
+            let switch = g.add_node(Box::new(ArrayRoute::switch()));
+            g.connect((feed, "out"), (switch, "in_0")).unwrap();
+            let reader = g.add_node(Box::new(if writer_on_output {
+                ArrayRoute::in_place("reader")
+            } else {
+                ArrayRoute::stage("reader")
+            }));
+            g.connect((switch, "out"), (reader, "in")).unwrap();
+            let sink = |g: &mut Graph, from: NodeInstanceId| {
+                let sink = g.add_node(Box::new(ArrayRoute::sink()));
+                g.connect((from, "out"), (sink, "in")).unwrap();
+            };
+            sink(&mut g, reader);
+            if writer_after {
+                // `order` sequences the write after the switch's reader.
+                let after = g.add_node(Box::new(ArrayRoute {
+                    in_place: true,
+                    ..ArrayRoute::new("after", &["in", "order"], &[("out", ArrayRoute::array())])
+                }));
+                g.connect((feed, "out"), (after, "in")).unwrap();
+                g.connect((reader, "out"), (after, "order")).unwrap();
+                sink(&mut g, after);
+            }
+            let plan = compile(&g).unwrap();
+            plan.array_passthrough(step_of(&plan, switch))
+        };
+        assert!(build(false, false, false), "read-only readers keep the alias");
+        assert!(build(false, true, false), "an in-place write before the switch is what it chose");
+        assert!(!build(true, false, false), "an in-place reader of the output writes the input");
+        assert!(!build(false, false, true), "an in-place write to the input after the switch");
+        assert!(!build(false, true, true), "the same storage, reached through an earlier in-place step");
+    }
 }
