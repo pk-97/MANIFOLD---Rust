@@ -164,19 +164,19 @@ impl PresetInstance {
         use serde::ser::SerializeStruct;
 
         let mut field_count = 2; // generatorType + params
-        if self.drivers.is_some() {
+        if crate::has_items(&self.drivers) {
             field_count += 1;
         }
-        if self.envelopes.is_some() {
+        if crate::has_items(&self.envelopes) {
             field_count += 1;
         }
-        if self.ableton_mappings.is_some() {
+        if crate::has_items(&self.ableton_mappings) {
             field_count += 1;
         }
-        if self.audio_mods.is_some() {
+        if crate::has_items(&self.audio_mods) {
             field_count += 1;
         }
-        if self.automation_lanes.is_some() {
+        if crate::has_items(&self.automation_lanes) {
             field_count += 1;
         }
         if self.graph.is_some() {
@@ -203,19 +203,19 @@ impl PresetInstance {
                 graph: self.graph.as_ref(),
             },
         )?;
-        if let Some(d) = &self.drivers {
+        if let Some(d) = crate::items(&self.drivers) {
             s.serialize_field("drivers", d)?;
         }
-        if let Some(e) = &self.envelopes {
+        if let Some(e) = crate::items(&self.envelopes) {
             s.serialize_field("envelopes", e)?;
         }
-        if let Some(m) = &self.ableton_mappings {
+        if let Some(m) = crate::items(&self.ableton_mappings) {
             s.serialize_field("abletonMappings", m)?;
         }
-        if let Some(a) = &self.audio_mods {
+        if let Some(a) = crate::items(&self.audio_mods) {
             s.serialize_field("audioMods", a)?;
         }
-        if let Some(a) = &self.automation_lanes {
+        if let Some(a) = crate::items(&self.automation_lanes) {
             s.serialize_field("automationLanes", a)?;
         }
         if let Some(g) = &self.graph {

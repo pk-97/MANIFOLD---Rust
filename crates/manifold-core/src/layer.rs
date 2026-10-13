@@ -109,9 +109,9 @@ pub struct Layer {
     /// See `docs/TIMELINE_INGEST_DESIGN.md` section 5 P5 / D8.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub detect_stem_role: Option<DetectStemRole>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "crate::has_no_items")]
     pub effects: Option<Vec<PresetInstance>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "crate::has_no_items")]
     pub effect_groups: Option<Vec<EffectGroup>>,
     // Effect envelopes moved onto each effect's `PresetInstance.envelopes`
     // (envelope-home unification, v1.6). The old layer-level `envelopes` array
