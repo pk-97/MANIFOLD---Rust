@@ -16,6 +16,7 @@ fn add_water(project: &mut Project, layer: &LayerId, render: u32) {
         &mut selection,
         &mut active,
         &mut prefs,
+        Default::default(),
     );
     let ContentCommand::ExecuteSelecting(command, _) = rx.try_recv().expect("Add Water command")
     else { panic!("Add Water must use content-owned editing"); };

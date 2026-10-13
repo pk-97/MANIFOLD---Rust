@@ -189,17 +189,22 @@ impl Application {
     /// Save As. Delegates to ProjectIOService.save_project_as.
     pub(crate) fn save_project_as(&mut self) {
         let Some(save_version) = self.prepare_recording_save() else { return; };
-        self.send_content_cmd(ContentCommand::PauseRendering);
         let current_time = self.content_state.current_time;
         self.local_project.saved_playhead_time = current_time.as_f32();
         self.save_viewport_state();
+        let host = crate::file_dialogs::host(
+            &self.window_registry,
+            self.dialog_window_id,
+            self.primary_window_id,
+            self.current_project_path.as_deref(),
+        );
         let mut action = self.project_io.save_project_as(
             &mut self.local_project,
             current_time.as_f32(),
             &mut EditingService::new(), // placeholder — mark clean via content thread
+            host,
             &mut self.user_prefs,
         );
-        self.send_content_cmd(ContentCommand::ResumeRendering);
         if action.mark_clean {
             self.send_content_cmd(ContentCommand::MarkCleanAt(save_version));
             action.mark_clean = false;
@@ -271,68 +276,28 @@ impl Application {
             project.settings.output_height.max(1) as u32,
         );
 
-        // Pause rendering while native file dialog is open (macOS GPU contention)
-        self.send_content_cmd(ContentCommand::PauseRendering);
-
-        // Restore last-used directory and filename from persisted prefs.
-        let saved_dir = crate::dialog_path_memory::get_last_directory(
-            crate::dialog_path_memory::DialogContext::ExportMP4,
-            &mut self.user_prefs,
+        let project_name = if project.project_name.is_empty() {
+            "MANIFOLD_Export"
+        } else {
+            &project.project_name
+        };
+        let host = crate::file_dialogs::host(
+            &self.window_registry,
+            self.dialog_window_id,
+            self.primary_window_id,
+            self.current_project_path.as_deref(),
         );
-        let saved_name = self
-            .user_prefs
-            .get_string("MANIFOLD_LastExportFileName", "");
-        log::debug!("[Export] Dialog prefs: dir={saved_dir:?} name={saved_name:?}");
-
-        let default_name = if !saved_name.is_empty() {
-            saved_name
-        } else {
-            let project_name = if project.project_name.is_empty() {
-                "MANIFOLD_Export"
-            } else {
-                &project.project_name
-            };
-            format!("{project_name}.mp4")
+        let Some(mut path) = crate::file_dialogs::save_file(
+            crate::file_dialogs::DialogAction::ExportVideo,
+            host,
+            &mut self.user_prefs,
+            &format!("{project_name}.mp4"),
+        ) else {
+            return;
         };
 
-        let mut dialog = rfd::FileDialog::new()
-            .set_title("Export Video")
-            .add_filter("MP4 Video", &["mp4"])
-            .set_file_name(&default_name);
-
-        if !saved_dir.is_empty() {
-            dialog = dialog.set_directory(&saved_dir);
-        } else {
-            let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-            let desktop = std::path::Path::new(&home).join("Desktop");
-            if desktop.exists() {
-                dialog = dialog.set_directory(&desktop);
-            }
-        }
-
-        let result = dialog.save_file();
-        self.send_content_cmd(ContentCommand::ResumeRendering);
-
-        let Some(mut path) = result else {
-            return; // User cancelled
-        };
-
-        // Ensure .mp4 extension
         if path.extension().is_none_or(|e| e != "mp4") {
             path.set_extension("mp4");
-        }
-
-        // Persist directory and filename for next export dialog (survives app restart).
-        let path_str = path.to_string_lossy();
-        crate::dialog_path_memory::remember_directory(
-            crate::dialog_path_memory::DialogContext::ExportMP4,
-            &path_str,
-            &mut self.user_prefs,
-        );
-        if let Some(name) = path.file_name() {
-            self.user_prefs
-                .set_string("MANIFOLD_LastExportFileName", &name.to_string_lossy());
-            self.user_prefs.save();
         }
         self.last_export_path = Some(path.clone());
 
@@ -374,41 +339,28 @@ impl Application {
     pub(crate) fn export_frame(&mut self) {
         use manifold_media::still_exporter::StillFormat;
 
-        // Pause rendering while the native file dialog is open (GPU contention).
-        self.send_content_cmd(ContentCommand::PauseRendering);
+        // Grab the frame on screen now; playback keeps running behind the dialog.
+        self.send_content_cmd(ContentCommand::CaptureStill);
 
-        let saved_dir = crate::dialog_path_memory::get_last_directory(
-            crate::dialog_path_memory::DialogContext::ExportImage,
-            &mut self.user_prefs,
-        );
         let project_name = if self.local_project.project_name.is_empty() {
             "MANIFOLD_Frame"
         } else {
             &self.local_project.project_name
         };
-        let default_name = format!("{project_name}.png");
-
-        let mut dialog = rfd::FileDialog::new()
-            .set_title("Export Frame")
-            .add_filter("PNG Image", &["png"])
-            .add_filter("JPEG Image", &["jpg", "jpeg"])
-            .set_file_name(&default_name);
-
-        if !saved_dir.is_empty() {
-            dialog = dialog.set_directory(&saved_dir);
-        } else {
-            let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-            let desktop = std::path::Path::new(&home).join("Desktop");
-            if desktop.exists() {
-                dialog = dialog.set_directory(&desktop);
-            }
-        }
-
-        let result = dialog.save_file();
-        self.send_content_cmd(ContentCommand::ResumeRendering);
-
-        let Some(mut path) = result else {
-            return; // User cancelled
+        let host = crate::file_dialogs::host(
+            &self.window_registry,
+            self.dialog_window_id,
+            self.primary_window_id,
+            self.current_project_path.as_deref(),
+        );
+        let Some(mut path) = crate::file_dialogs::save_file(
+            crate::file_dialogs::DialogAction::ExportFrame,
+            host,
+            &mut self.user_prefs,
+            &format!("{project_name}.png"),
+        ) else {
+            self.send_content_cmd(ContentCommand::DiscardStill);
+            return;
         };
 
         // Pick format from the chosen extension; default to PNG.
@@ -428,13 +380,6 @@ impl Application {
         };
 
         let path_str = path.to_string_lossy().to_string();
-        crate::dialog_path_memory::remember_directory(
-            crate::dialog_path_memory::DialogContext::ExportImage,
-            &path_str,
-            &mut self.user_prefs,
-        );
-        self.user_prefs.save();
-
         log::info!("[Application] Exporting frame -> {path_str}");
         self.send_content_cmd(ContentCommand::ExportFrame {
             path: path_str,
@@ -446,25 +391,19 @@ impl Application {
     /// Opens a native file dialog, probes metadata, adds to VideoLibrary, and
     /// creates a TimelineClip at the playhead beat on the active layer.
     pub(crate) fn import_video_clip(&mut self) {
-        self.send_content_cmd(ContentCommand::PauseRendering);
-
-        let mut dialog = rfd::FileDialog::new()
-            .set_title("Import Video")
-            .add_filter("Video Files", &["mp4", "mov", "webm", "avi"]);
-
-        let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-        let desktop = std::path::Path::new(&home).join("Desktop");
-        if desktop.exists() {
-            dialog = dialog.set_directory(&desktop);
-        }
-
-        let result = dialog.pick_files();
-        self.send_content_cmd(ContentCommand::ResumeRendering);
-
-        let Some(paths) = result else {
-            return; // User cancelled
+        let host = crate::file_dialogs::host(
+            &self.window_registry,
+            self.dialog_window_id,
+            self.primary_window_id,
+            self.current_project_path.as_deref(),
+        );
+        let Some(paths) = crate::file_dialogs::pick_files(
+            crate::file_dialogs::DialogAction::ImportVideo,
+            host,
+            &mut self.user_prefs,
+        ) else {
+            return;
         };
-
         self.import_video_files(&paths);
     }
 
@@ -921,9 +860,13 @@ impl Application {
 
     /// Open. Delegates to ProjectIOService.open_project.
     pub(crate) fn open_project(&mut self) {
-        self.send_content_cmd(ContentCommand::PauseRendering);
-        let action = self.project_io.open_project(&mut self.user_prefs);
-        self.send_content_cmd(ContentCommand::ResumeRendering);
+        let host = crate::file_dialogs::host(
+            &self.window_registry,
+            self.dialog_window_id,
+            self.primary_window_id,
+            self.current_project_path.as_deref(),
+        );
+        let action = self.project_io.open_project(host, &mut self.user_prefs);
         self.apply_project_io_action(action);
     }
 

@@ -1404,6 +1404,7 @@ mod cache_path_full_render {
                 user_prefs: &mut *user_prefs,
                 editor_target: None,
                 scrub: &mut scrub,
+                dialogs: Default::default(),
             };
             let result = crate::ui_bridge::dispatch(action, &mut dctx);
             structural |= result.structural_change;

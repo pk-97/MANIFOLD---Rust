@@ -1816,6 +1816,7 @@ impl Application {
                 user_prefs: &mut self.user_prefs,
                 editor_target: None,
                 scrub: &mut self.scrub,
+                dialogs: crate::file_dialogs::host(&self.window_registry, self.dialog_window_id, self.primary_window_id, self.current_project_path.as_deref()),
             };
             let result = crate::ui_bridge::dispatch(action, &mut dctx);
             if result.structural_change {
@@ -1884,6 +1885,7 @@ impl Application {
                         user_prefs: &mut self.user_prefs,
                         editor_target: None,
                         scrub: &mut self.scrub,
+                        dialogs: crate::file_dialogs::host(&self.window_registry, self.dialog_window_id, self.primary_window_id, self.current_project_path.as_deref()),
                     };
                     let result = crate::ui_bridge::dispatch(action, &mut dctx);
                     if result.structural_change {
@@ -2653,6 +2655,7 @@ impl Application {
                             user_prefs: &mut self.user_prefs,
                             editor_target,
                             scrub: &mut self.scrub,
+                            dialogs: crate::file_dialogs::host(&self.window_registry, self.dialog_window_id, self.primary_window_id, self.current_project_path.as_deref()),
                         };
                         let _ = crate::ui_bridge::dispatch(&action, &mut dctx);
                     }
@@ -2675,10 +2678,24 @@ impl Application {
                         let n = param_name.to_ascii_lowercase();
                         n.contains("folder") || n.contains("dir")
                     };
+                    let host = crate::file_dialogs::host(
+                        &self.window_registry,
+                        self.dialog_window_id,
+                        self.primary_window_id,
+                        self.current_project_path.as_deref(),
+                    );
                     let picked = if wants_folder {
-                        rfd::FileDialog::new().pick_folder()
+                        crate::file_dialogs::pick_folder(
+                            crate::file_dialogs::DialogAction::NodeFolder,
+                            host,
+                            &mut self.user_prefs,
+                        )
                     } else {
-                        rfd::FileDialog::new().pick_file()
+                        crate::file_dialogs::pick_file(
+                            crate::file_dialogs::DialogAction::NodeFile,
+                            host,
+                            &mut self.user_prefs,
+                        )
                     };
                     if let (Some(eid), Some(default)) = (
                         self.watched_graph_target.as_ref(),

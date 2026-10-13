@@ -5,13 +5,16 @@ detector data catalogue (catalog.py usable --ready), each with the set and bounc
 every local bounce: the pair proven by the fit below, the set saved closest to the bounce, wav before mp3. A pair wins
 over its song's project folder.
 
-Timing proof (kick survey's wip_sections method): export start = whole bars + one lag (+-80 ms), chosen by the Pearson r
-between a note pattern on the 16th grid and the mix's onset strength. Run twice, independently: kick notes against the
-40-400 Hz onset strength, snare notes against the 1-8 kHz onset strength. Proven when both pick the same bar, or when
-only one pattern exists and it wins clearly (r >= 0.3, margin >= 1 sd of the other candidates).
+Timing proof (lab/offsets.prove_seconds, the kick survey's wip_sections method on the set's tempo map): export start =
+a whole bar's time on the map + one lag (+-80 ms), chosen by the Pearson r between a note pattern on the 16th grid and
+the mix's onset strength. Run twice, independently: kick notes against the 40-400 Hz onset strength, snare notes against
+the 1-8 kHz onset strength. Proven when both pick the same bar, or when only one pattern exists and it wins clearly
+(r >= 0.3, margin >= 1 sd of the other candidates), and the kick attacks at that offset are not off.
 Writes GOAL/snare_wip/{song}.npy (48 kHz mono float32) and GOAL/snare_wip.json ({song: als, wip, offset_s, bpm, proof}).
 Projects are read only through als_extract (sha-checked); nothing is written near them.
-Usage: detector_wip.py [SONG...]   (named songs are proven again and merged into snare_wip.json; the rest are kept)"""
+A recorded song is never proven again unless named, and a named project-folder song keeps its recorded set and mixdown
+(a newer save in its folder never moves a proven offset); rows are merged into snare_wip.json, never rebuilt.
+Usage: detector_wip.py [SONG...]   (no names: every song not yet recorded)"""
 import json
 import os
 import re
@@ -28,10 +31,14 @@ PROJECTS = {  # song -> project folder; duplicates of goal songs or of each othe
     'touch': '2024/Sense (Touch) Project', 'better_strangers': '2024/Sound Design Session Project',
     'staged': '2024/Staged Project', 'just_the_way': '2024/Stay The Night Project', 'rush': '2024/Tension Project',
     'water_shimmer': '2024/Water Shimmer Project', 'basalt': '2025/Basalt Project', 'cadence': '2025/Cadence Project',
-    'growth': '2025/Growth Project', 'linear': '2025/Linear Project', 'motion': '2025/Motion Project',
+    'linear': '2025/Linear Project', 'motion': '2025/Motion Project',
     'push': '2025/Push Project', 'stagnate': '2025/Stagnate Project', 'weight': '2025/Weight Project'}
 AUDIO = ('.wav', '.mp3', '.aif', '.aiff', '.flac', '.m4a')
-# Song -> (set, bounce) under the music folder. Know You're There: the live-edit set holds the premaster set's notes and
+SF_DATALESS = 0x40000000  # an online-only Dropbox file: reading it downloads it, which needs Peter's OK
+# Song -> (set, bounce) under the music folder. All In For You (all_in_for_you, the Growth project folder) is left out:
+# its sets' kick notes hit the T2 kick stem before the 164-110-164 bpm ramps and miss it after them, and the grid fit
+# picks the live-edit block after the song's end (27 of 129 kicks) over the song itself (BUG-fffrv (album and EP songs)).
+# Know You're There: the live-edit set holds the premaster set's notes and
 # clips unchanged before the song's end (bar 136) and only mutes some; the premaster set's notes after the end send its
 # snare fit to bar 184.
 PAIRS = {
@@ -41,6 +48,8 @@ PAIRS = {
     'concentrate': ('Ableton Projects/Ableton 11/Faux Project/Faux.als', 'Ableton Projects/Ableton 11/Faux Project/Concentrate WIP 3.mp3'),
     'control': ('Ableton Projects/Ableton 11/Rise Project/Rise.als', 'Ableton Projects/Ableton 11/Rise Project/Control - WIP 5.mp3'),
     'desire': ('Ableton Projects/Ableton 11/Wait Project/Wait.als', 'Ableton Projects/Ableton 11/Wait Project/Wait WIP 2.mp3'),
+    'drmendez': ('Ableton Projects/Ableton 11/DRMENDEZ TIMEPLATE Project/DRMENDEZ - PROJECT 3 ( ORIGNAL MIX )  - No Suite.als',
+                 'Ableton Projects/Ableton 11/DRMENDEZ TIMEPLATE Project/DRMENDEZ - PROJECT 3 (PK EDIT).mp3'),
     'dream': ('Ableton Projects/Ableton 11/Idle Project/Idle.als',
               'Ableton Projects/Ableton 11/Idle Project/FINALS/LATENT SPACE - Dream [FINAL MIX 3].wav'),
     'echo': ('Ableton Projects/Ableton 11/Clue Project/Clue V2.als',
@@ -90,6 +99,17 @@ def kick_beats(res):
     return np.unique(np.round(out, 4))
 
 
+def kick_seconds(res):
+    """kick_beats in arrangement seconds through the set's tempo map. One tempo keeps beats * 60 / bpm, the arithmetic
+    the recorded labels were built with, bit for bit."""
+    from tools.audio_analysis.eval.als_extract import beat_seconds
+    points = [(q['beat'], q['bpm']) for q in res['tempo_points']]
+    beats = kick_beats(res)
+    if len(points) == 1:
+        return beats * 60 / points[0][1]
+    return np.array([beat_seconds(points, b) for b in beats], float)
+
+
 def snare_beats(res):
     from tools.audio_analysis.eval.snare_labels import NOT_SNARE, SNARE
     out = []
@@ -113,77 +133,60 @@ def snare_beats(res):
     return np.unique(np.round(out, 4))
 
 
-def prove(env, beats, dur, spb):
-    from scipy.ndimage import maximum_filter1d
-    from tools.audio_analysis.eval.kick_goal_wip_sections import LAGS, grid_corr, vals
-    if len(beats) < 16:
-        return None
-    best, order = grid_corr(maximum_filter1d(env, 41), beats, dur, spb)
-    if len(order) < 2:
-        return None
-    k0 = order[0]
-    rs = np.array([best[k][0] for k in order])
-    t = beats * spb - 4 * k0 * spb
-    t = t[(t >= .6) & (t <= dur - .6)]
-    lag = float(LAGS[int(np.argmax([vals(env, t + lg).mean() for lg in LAGS]))])
-    return dict(k=int(k0), r=round(best[k0][0], 3), margin_sd=round(float((best[k0][0] - best[order[1]][0]) / (rs.std() + 1e-9)), 2), lag=lag)
-
-
-def source(song):
-    """(set, mixdown) paths: the song's catalogue pair, else the newest .als and audio file of its project folder."""
+def source(song, recorded=None):
+    """(set, mixdown) paths: the song's catalogue pair, else its recorded pair (a snare_wip.json row), else the newest
+    .als and audio file of its project folder."""
     if song in PAIRS:
         return tuple(BASE.parent / p for p in PAIRS[song])
+    if recorded:
+        return Path(recorded['als']), Path(recorded['wip'])
     proj = BASE / PROJECTS[song]
     als = max(proj.glob('*.als'), key=lambda p: p.stat().st_mtime)
     wip = max((p for p in proj.iterdir() if p.is_file() and p.suffix.lower() in AUDIO), key=lambda p: p.stat().st_mtime)
     return als, wip
 
 
-def one(song):
-    from scipy.ndimage import maximum_filter1d
+def one(song, recorded=None):
     from tools.audio_analysis.eval.als_extract import extract
     from tools.audio_analysis.eval.kick_goal_eval import GOAL
-    from tools.audio_analysis.eval.kick_goal_wip_sections import ENV_BIAS, band_amp_rise, load, onset_env
-    als, wip = source(song)
-    res = extract(str(als))
+    from tools.audio_analysis.eval.kick_goal_wip_sections import load
+    from tools.audio_analysis.lab.offsets import prove_seconds
+    als, wip = source(song, recorded)
     row = dict(song=song, als=str(als), wip=str(wip))
-    if len(res['tempo_points']) != 1:
-        return dict(row, status='tempo automation')
-    spb = 60 / res['tempo_points'][0]['bpm']
+    online = [str(p) for p in (als, wip) if os.stat(p).st_flags & SF_DATALESS]
+    if online:
+        return dict(row, status=f'not proven (online-only, not read: {online})')
+    res = extract(str(als))
     x = load(str(wip))
-    dur = len(x) / 48000
-    kick = prove(onset_env(x), kick_beats(res), dur, spb)
-    snare = prove(100 * maximum_filter1d(band_amp_rise(x, 1000, 8000), 7), snare_beats(res), dur, spb)
-    row.update(bpm=res['tempo_points'][0]['bpm'], duration_s=round(dur, 1), kick=kick, snare=snare)
-    clear = [p for p in (kick, snare) if p and p['r'] >= .3 and p['margin_sd'] >= 1.0]
-    if kick and snare and kick['k'] == snare['k']:
-        status = 'proven (kick and snare agree)'
-    elif len([p for p in (kick, snare) if p]) == 1 and clear:
-        status = 'proven (one pattern, clear win)'
-    else:
-        return dict(row, status='not proven')
-    use = kick if kick and (not snare or kick['k'] == snare['k']) else snare
-    lag = use['lag'] - (ENV_BIAS if use is kick else 0.0)
-    row.update(status=status, offset_s=round(-4 * use['k'] * spb + lag, 4))
+    got = prove_seconds(res, x)
+    row.update(bpm=res['tempo_points'][0]['bpm'], tempo_points=len(res['tempo_points']), duration_s=round(len(x) / 48000, 1),
+               kick=got['kick'], snare=got['snare'], attack=got.get('attack'), status=got['status'])
+    if 'offset_s' not in got or not got['status'].startswith('proven'):
+        return row
+    row.update(offset_s=got['offset_s'])
     (GOAL / 'snare_wip').mkdir(exist_ok=True)
     np.save(GOAL / 'snare_wip' / f'{song}.npy', x.astype(np.float32))
     return row
 
 
 def main():
+    from tools.audio_analysis.lab import recipe
+    recipe.apply()
     from tools.audio_analysis.eval.kick_goal_eval import GOAL
+    path = GOAL / 'snare_wip.json'
+    out = json.loads(path.read_text()) if path.exists() else {}
     named = sys.argv[1:]
-    songs = named or list(dict.fromkeys(list(PROJECTS) + list(PAIRS)))
+    songs = named or [t for t in dict.fromkeys(list(PROJECTS) + list(PAIRS)) if t not in out]
     unknown = [t for t in songs if t not in PROJECTS and t not in PAIRS]
     if unknown:
         sys.exit(f'not a project or catalogue pair: {unknown}')
     with ProcessPoolExecutor(6) as ex:
-        rows = list(ex.map(one, songs))
+        rows = list(ex.map(one, songs, [out.get(t) for t in songs]))
     for r in rows:
         k, s = r.get('kick'), r.get('snare')
-        print(f"{r['song']:16s} {r['status']:30s} kick {k and (k['k'] * 4, k['r'], k['margin_sd'])} snare {s and (s['k'] * 4, s['r'], s['margin_sd'])} | {Path(r['wip']).name}", flush=True)
-    path = GOAL / 'snare_wip.json'
-    out = json.loads(path.read_text()) if named and path.exists() else {}
+        print(f"{r['song']:16s} {r['status']:50s} kick {k and (k['k'] * 4, k['r'], k['margin_sd'])} snare {s and (s['k'] * 4, s['r'], s['margin_sd'])} | {Path(r['wip']).name}", flush=True)
+        if r['song'] in out and 'offset_s' not in r:
+            print(f"  {r['song']}: recorded at {out[r['song']]['offset_s']} s, no longer proven: removed", flush=True)
     for r in rows:
         out.pop(r['song'], None)
         if 'offset_s' in r:
