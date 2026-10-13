@@ -21,7 +21,7 @@ def main():
     from tools.audio_analysis.eval.detector_labels import env_db
     from tools.audio_analysis.eval.detector_eval import nearest
     from tools.audio_analysis.eval.detector_songs import audio, rate, wip
-    from tools.audio_analysis.eval.detector_wip import kick_beats
+    from tools.audio_analysis.eval.detector_wip import kick_seconds
     from tools.audio_analysis.eval.als_extract import extract
     from tools.audio_analysis.eval.kick_goal_eval import Goal
     from tools.audio_analysis.eval.kick_goal_melodic import _source
@@ -53,7 +53,7 @@ def main():
         r = g.records.get(t, {})
         kicks = np.asarray(r.get('stem_kicks') if r.get('stem_kicks') is not None else r.get('all_labels', r.get('truth', [])), float)
         if t in W:
-            kicks = kick_beats(res) * 60 / bpm + off
+            kicks = kick_seconds(res) + off
         rise = np.array([e[int(s * 1000) - 10:int(s * 1000) + 40].max() - np.median(e[int(s * 1000) - 90:int(s * 1000) - 30]) for s in st])
         prom = (rise >= RISE_DB) & (nearest(st, kicks) > .03)
         tot_n, tot_p = tot_n + len(st), tot_p + int(prom.sum())
