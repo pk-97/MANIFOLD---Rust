@@ -6,6 +6,7 @@ import contextlib
 import fcntl
 import io
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -147,6 +148,7 @@ class FlowTests(unittest.TestCase):
             argv += ['--close-bead', 'BUG-done']
         code = None
         with patch.object(sys, 'argv', argv), \
+                patch.object(land_branch, 'start_checks', return_value=False), \
                 patch.object(land_branch, 'MAIN', self.root), \
                 patch.object(land_branch, 'step', side_effect=fake), \
                 patch.object(land_branch, 'run_landing_gate', side_effect=gate), \
@@ -240,6 +242,177 @@ class FlowTests(unittest.TestCase):
                 self.assertEqual(row['outcome'], outcome)
                 self.assertEqual(code, 130 if outcome == 'cancelled' else ('exit', 1))
                 self.assert_unlocked()
+
+
+def git(cwd, *args):
+    return subprocess.run(['git', *args], cwd=cwd, check=True, capture_output=True,
+                          text=True).stdout.strip()
+
+
+class StartCheckTests(unittest.TestCase):
+    """A real throwaway repo: the slot must hold the named branch's tip, clean
+    and quiet, before land_branch fetches or gates anything."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name).resolve()
+        self.repo = self.root / 'repo'
+        self.repo.mkdir()
+        git(self.repo, 'init', '-q', '-b', 'main')
+        git(self.repo, 'config', 'user.name', 'Test')
+        git(self.repo, 'config', 'user.email', 'test@example.invalid')
+        git(self.repo, '-c', 'commit.gpgsign=false', 'commit', '-q', '--allow-empty', '-m', 'base')
+        git(self.repo, 'update-ref', 'refs/remotes/origin/main', 'HEAD')
+        self.wt = self.root / 'slot'
+        git(self.repo, 'worktree', 'add', '-q', '-b', 'lane/x', str(self.wt))
+        (self.wt / 'work.txt').write_text('work\n')
+        git(self.wt, 'add', '--', 'work.txt')
+        git(self.wt, '-c', 'commit.gpgsign=false', 'commit', '-q', '-m', 'work', '--', 'work.txt')
+        self.age_files()
+        self.later = time.time()
+        self.busy_patch = patch.object(land_branch, 'codex_busy', return_value=None)
+        self.busy = self.enterContext(self.busy_patch)
+
+    def age_files(self):
+        old = time.time() - 3600
+        for path in self.wt.rglob('*'):
+            if '.git' not in path.parts:
+                os.utime(path, (old, old), follow_symlinks=False)
+
+    def land(self, *extra, branch='lane/x'):
+        """main() with the gate and git steps faked; returns (exit, rows, stderr, fakes)."""
+        argv = ['land_branch.py', branch, '--worktree', str(self.wt), '--message', 'm', *extra]
+        err = io.StringIO()
+        with patch.object(sys, 'argv', argv), \
+                patch.object(land_branch, 'MAIN', self.root), \
+                patch.object(land_branch, 'step') as step, \
+                patch.object(land_branch, 'run_landing_gate', return_value=1) as gate, \
+                contextlib.redirect_stdout(io.StringIO()) as out, \
+                contextlib.redirect_stderr(err):
+            step.return_value = subprocess.CompletedProcess([], 0, 'tip\n', '')
+            try:
+                code = land_branch.main()
+            except SystemExit as stop:
+                code = stop.code
+        log = self.root / land_branch.RUNS_LOG
+        rows = [json.loads(r) for r in log.read_text().splitlines()] if log.exists() else []
+        return code, rows, out.getvalue() + err.getvalue(), step, gate
+
+    def assert_refused(self, why):
+        code, rows, text, step, gate = self.land()
+        self.assertEqual(code, 1)
+        self.assertIn('REFUSED', text)
+        self.assertIn(why, text)
+        self.assertTrue('Check:' in text or 'rerun' in text, 'names the check to rerun')
+        self.assertFalse(step.called, 'refused before any fetch')
+        self.assertFalse(gate.called, 'refused before any gate')
+        self.assertEqual([r['outcome'] for r in rows], ['refused'])
+
+    def test_help_and_bad_args_write_no_row(self):
+        for argv in (['--help'], ['--worktree', str(self.wt)]):
+            with self.subTest(argv=argv), patch.object(sys, 'argv', ['land_branch.py', *argv]), \
+                    patch.object(land_branch, 'MAIN', self.root), \
+                    contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                with self.assertRaises(SystemExit):
+                    land_branch.main()
+            self.assertFalse((self.root / land_branch.RUNS_LOG).exists())
+
+    def test_clean_quiet_tip_passes_start_checks(self):
+        self.assertFalse(land_branch.start_checks('lane/x', self.wt))
+
+    def test_refuses_missing_branch(self):
+        git(self.wt, 'switch', '-q', '--detach')
+        git(self.repo, 'branch', '-q', '-D', 'lane/x')
+        self.assert_refused('does not exist')
+
+    def test_refuses_slot_holding_other_work(self):
+        """The 2026-10-13 incident: the slot was reused, detached elsewhere."""
+        git(self.wt, 'switch', '-q', '--detach', 'HEAD~1')
+        git(self.repo, 'branch', '-q', '-f', 'lane/x', 'main')
+        git(self.wt, '-c', 'commit.gpgsign=false', 'commit', '-q', '--allow-empty', '-m', 'other')
+        self.assert_refused('is not the tip')
+
+    def test_refuses_dirty_tree(self):
+        (self.wt / 'work.txt').write_text('changed\n')
+        self.age_files()
+        self.assert_refused('not clean')
+
+    def test_refuses_busy_codex_job(self):
+        self.busy.return_value = 'job j1 is running'
+        self.assert_refused('job j1 is running')
+
+    def test_refuses_recent_write_outside_target(self):
+        (self.wt / 'work.txt').touch()
+        self.assert_refused('modified in the last')
+
+    def test_writes_under_target_and_git_do_not_count(self):
+        (self.wt / 'target').mkdir()
+        (self.wt / 'target' / 'build.log').write_text('x\n')
+        self.assertIsNone(land_branch.recent_write(self.wt, time.time()))
+
+    def test_codex_busy_reuses_broker_state(self):
+        real = self.busy_patch.temp_original
+        state = self.root / 'state'
+        with patch('codex_brokers.state_dirs', return_value=[state]) as dirs, \
+                patch('codex_brokers.busy_reason', return_value='job j2 is queued') as reason:
+            self.assertEqual(real(self.wt), 'job j2 is queued')
+        dirs.assert_called_once_with(self.wt)
+        reason.assert_called_once_with(state)
+
+    def fresh_branch(self):
+        """A lane branch cut from main with no commits of its own."""
+        git(self.wt, 'switch', '-q', '-c', 'lane/fresh', 'main')
+        self.age_files()
+
+    def test_uncommitted_work_on_a_fresh_branch_refuses_as_dirty(self):
+        self.fresh_branch()
+        (self.wt / 'forgot.txt').write_text('uncommitted\n')
+        self.age_files()
+        code, rows, text, step, gate = self.land(branch='lane/fresh')
+        self.assertEqual(code, 1)
+        self.assertIn('not clean', text)
+        self.assertEqual([r['outcome'] for r in rows], ['refused'])
+        self.assertFalse(step.called or gate.called)
+
+    def test_fresh_clean_branch_refuses_nothing_to_land(self):
+        self.fresh_branch()
+        code, rows, text, step, gate = self.land(branch='lane/fresh')
+        self.assertEqual(code, 1)
+        self.assertIn('nothing to land', text)
+        self.assertNotIn('already landed', text)
+        self.assertEqual([r['outcome'] for r in rows], ['refused'])
+        self.assertFalse(step.called or gate.called)
+
+    def test_start_check_exception_records_error_and_refuses(self):
+        self.busy.side_effect = RuntimeError('broker state unreadable')
+        code, rows, text, step, gate = self.land()
+        self.assertEqual(code, 1)
+        self.assertIn('REFUSED', text)
+        self.assertIn('broker state unreadable', text)
+        self.assertEqual([r['outcome'] for r in rows], ['error'])
+        self.assertFalse(step.called or gate.called)
+
+    def test_recent_pyc_write_does_not_refuse(self):
+        cache = self.wt / 'scripts' / '__pycache__'
+        cache.mkdir(parents=True)
+        (cache / 'x.cpython-312.pyc').write_bytes(b'x')
+        (self.wt / 'loose.pyc').write_bytes(b'x')
+        self.assertIsNone(land_branch.recent_write(self.wt, time.time()))
+
+    def test_already_landed_exits_zero_without_a_row(self):
+        git(self.repo, '-c', 'commit.gpgsign=false', 'merge', '-q', '--no-ff', '-m', 'land', 'lane/x')
+        git(self.repo, 'update-ref', 'refs/remotes/origin/main', 'main')
+        code, rows, text, step, gate = self.land()
+        self.assertEqual(code, 0)
+        self.assertIn('already landed', text)
+        self.assertEqual(rows, [])
+        self.assertFalse(step.called or gate.called)
+
+    def test_good_slot_reaches_the_gate(self):
+        code, rows, _, step, gate = self.land()
+        self.assertTrue(gate.called)
+        self.assertEqual([r['outcome'] for r in rows], ['red'])
 
 
 if __name__ == '__main__':

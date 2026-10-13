@@ -1742,7 +1742,9 @@ class CancellationTests(unittest.TestCase):
                             f"root = pathlib.Path({d!r})\n"
                             f"land._main = lambda: land.run_landing_gate([sys.executable, '-u', '-c', {gate_code!r}], root, root / 'gate.log')\n"
                             "land.MAIN = root\n"
-                            "sys.argv = ['land_branch.py', '--worktree', str(root)]\n"
+                            "land.start_checks = lambda *a: False\n"
+                            "land._main = (lambda body: lambda a: body())(land._main)\n"
+                            "sys.argv = ['land_branch.py', 'lane/test', '--worktree', str(root), '--message', 'test']\n"
                             "sys.exit(land.main())\n")
                     with (root / 'outer.log').open('w') as output:
                         proc = subprocess.Popen([sys.executable, '-u', '-c', code], stdout=output,
@@ -1775,6 +1777,8 @@ class DeliveryTests(unittest.TestCase):
         # Attempt rows go to MAIN; never the real checkout's landing log.
         main = self.enterContext(tempfile.TemporaryDirectory())
         self.enterContext(patch.object(land_branch, 'MAIN', Path(main)))
+        # Fixture slots are fresh, sometimes already landed; start checks have their own tests.
+        self.enterContext(patch.object(land_branch, 'start_checks', return_value=False))
 
     def test_verified_slot_cleanup_detaches_and_never_reports_a_landing_red(self):
         import watch_land
