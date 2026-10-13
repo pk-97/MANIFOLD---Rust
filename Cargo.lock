@@ -2312,6 +2312,7 @@ dependencies = [
  "sha2",
  "smallvec",
  "winit",
+ "zip",
 ]
 
 [[package]]

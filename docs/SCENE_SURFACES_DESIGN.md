@@ -42,7 +42,7 @@ Extend, don't redesign. Every row below was read in the tree on 2026-10-13.
 | User range override | calibration: `CalibrationWire` min, max, curve, invert (`instance_serde.rs:34`); set by `EditParamMappingCommand` (`manifold-editing/src/commands/effects.rs:1263`, `calibrated = true` at `:1399`) through `BindingMappingEdit::apply_to_manifest_spec` (`:1146-1185`), which writes the user's label, min, max, curve, invert and section straight into `spec` | becomes `ParamChoices` (P2) |
 | Card-to-node reshape | `manifold-node-engine/src/runtime/build.rs:383-411`: invert and curve normalise the card value over `spec.min/max`; standalone builds read `meta.params` copies (`:386-395`) | reads the declared slider range (P2) |
 | OSC addresses | `preset_definition_registry.rs:401-422`: `/master/{prefix}/{param_id}` and `/layer/{layer_id}/{prefix}/{param_id}`; the router keys targets by `p.id()` (`manifold-playback/src/osc_param_router.rs:91`, `:150`, `:258`). `ParamSpecDef.osc_suffix` is only linted for duplicates (`node-engine validate.rs:524-537`) | **id-based already — a rename never moves an address** |
-| `project_tool` | `manifold-io/src/bin/project_tool.rs:29-33`: no registry, so it edits `project.json` as raw JSON and validates through `load_project_from_json` (`:178`), whose typed load drops what it cannot resolve. `manifold-io` cannot gain the registry: `manifold-nodes` → `node-engine` → `playback` → `io` is already a dependency chain, so the reverse edge is a cycle | moves to `manifold-app` (P1), like `graph-tool` (`manifold-app/Cargo.toml:16-17`) |
+| `project_tool` | `manifold-app/src/bin/project_tool.rs:29-33`: no registry, so it edits `project.json` as raw JSON and validates through `load_project_from_json` (`:178`), whose typed load drops what it cannot resolve. `manifold-io` cannot gain the registry: `manifold-nodes` → `node-engine` → `playback` → `io` is already a dependency chain, so the reverse edge is a cycle | moves to `manifold-app` (P1), like `graph-tool` (`manifold-app/Cargo.toml:16-17`) |
 | Primary-binding ownership rule (fan-outs keep one owner) | `projection/scene.rs:229-248` `owned_specs`; tests `:494-512`, `:957-1012` | becomes the ownership rule for both surfaces |
 | Scene discovery | `nodes-scene node_graph/scene_vm.rs:113-138` (`objects`, `lights`, `camera_controls`, `world_controls`); light name is the raw handle at `:1797` | extended with `scene_items` (P4) |
 | Panel item selection | `manifold-ui/src/panels/scene_setup_panel.rs:713-723` `SceneSelection` (Object, Light, Force, Camera, World, Physics, Rendering) | exists |
@@ -417,7 +417,7 @@ Every reader below either already reads the joined manifest (no change) or reads
 | Row widget | `param_slider_shared/row_host.rs:342`, `:373`, `:391`, `:499`, `:512`, `:597`, `:686`; `builders.rs` | `spec.min/max` as span; drag clamps to track | span = slider range; drag relative, value clamps to `limit` (P8) |
 | io migrations | `solve_level_card_v1180.rs:56,70`, `pressure_cap_card_v1190.rs:66,80`, `scene_cinematic_tail_v1130.rs:316` | write authored labels into copies | unchanged; their label and range writes become inert |
 | Scene legacy migrations | `scene_modifier_legacy_migration/loop_upgrade.rs:242-246` (writes), `photoscan.rs:771`, `sources.rs:258` (read for matching) | `binding.label` | writes inert; ⚠ VERIFY-AT-IMPL (P2) that the two reads match old files only, before the join |
-| `project_tool` | `manifold-io/src/bin/project_tool.rs` (raw JSON; `load_project_from_json` at `:178`; writes `genParams.params` entries near `:683`) | no labels; its typed check drops unresolved params | moves to `manifold-app` with the registry installed (P1) |
+| `project_tool` | `manifold-app/src/bin/project_tool.rs` (raw JSON; `load_project_from_json` at `:178`; writes `genParams.params` entries near `:683`) | no labels; its typed check drops unresolved params | moves to `manifold-app` with the registry installed (P1) |
 
 ### 3.9 Commands and actions
 
@@ -526,7 +526,7 @@ Common to every phase. **Entry:** the status line reads APPROVED; `git -C "/User
 - **Test scope:** `-p manifold-app -p manifold-node-engine -p manifold-editing`, plus the flow suite filtered to `scene`.
 
 ### P1 — The live lookup and the saved-control format (core, io, registration; no visible change)
-- **Entry:** P0 landed. Anchors: `instance_serde.rs:34`, `:47-63`, `:135-145`, `:155-196`, `:272-300`, `:356`; `params.rs:62-94`, `:167`; core `scene_exposure.rs:22-48`, `:381`; `preset_definition_registry.rs:340`; `effects/instance.rs:375`, `:413`; `manifold-io/src/bin/project_tool.rs`.
+- **Entry:** P0 landed. Anchors: `instance_serde.rs:34`, `:47-63`, `:135-145`, `:155-196`, `:272-300`, `:356`; `params.rs:62-94`, `:167`; core `scene_exposure.rs:22-48`, `:381`; `preset_definition_registry.rs:340`; `effects/instance.rs:375`, `:413`; `manifold-app/src/bin/project_tool.rs`.
 - **Read-back:** D2, D7, D13, sections 3.2, 3.4, 3.8; docs/PARAM_STORAGE_DESIGN.md D6 (calibration). Restate where the join runs, what is saved per control, and the three old-project rules.
 - **Deliverables:**
   - foundation `param_range.rs` and the `CardPin` enum (3.1).
