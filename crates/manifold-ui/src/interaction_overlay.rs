@@ -4778,7 +4778,7 @@ mod p1_4_gesture_integrity_tests {
         let mut overlay = InteractionOverlay::new(crate::color::CLIP_VERTICAL_PAD);
         let pos = Vec2::new(lane.curve_rect().x + 33.7, lane.y_at_norm(0.1));
         assert!(panel.tracks_rect().contains(pos));
-        overlay.refresh_automation_feedback(pos, &lanes, &mut state, &panel);
+        overlay.refresh_automation_feedback(pos, lanes, &mut state, &panel);
         let feedback = state.automation_feedback.clone().unwrap();
         assert_eq!(feedback.operation, AutomationOperation::Insert);
         assert!(feedback.hint.starts_with("Click: add point"));
@@ -4787,7 +4787,7 @@ mod p1_4_gesture_integrity_tests {
         assert_eq!(host.automation_added, vec![(feedback.beat, feedback.value)]);
         for y in [lane.header_rect().y + 3.0, lane.strip_rect.y_max() - 12.0] {
             let chrome = Vec2::new(pos.x, y);
-            overlay.refresh_automation_feedback(chrome, &lanes, &mut state, &panel);
+            overlay.refresh_automation_feedback(chrome, lanes, &mut state, &panel);
             assert_eq!(state.automation_feedback.as_ref().unwrap().operation, AutomationOperation::Header);
             overlay.handle_automation_click(chrome, 2, &mut host, &mut state, &panel);
             overlay.on_begin_drag(chrome, &mut host, &mut state, &panel);
@@ -4938,7 +4938,7 @@ mod p1_4_gesture_integrity_tests {
         let x = lane.strip_rect.x + lane.strip_rect.width * 0.5;
         let t = (x - lane.dots[0].x) / (lane.dots[1].x - lane.dots[0].x);
         let y = lane.y_at_norm(0.5 + 0.3 * t);
-        assert_eq!(automation_hit_tester::hit_test_automation(Vec2::new(x, y), &lanes),
+        assert_eq!(automation_hit_tester::hit_test_automation(Vec2::new(x, y), lanes),
             Some(AutomationHit::Segment { lane_index: 0, left_dot_index: 0 }));
     }
 
