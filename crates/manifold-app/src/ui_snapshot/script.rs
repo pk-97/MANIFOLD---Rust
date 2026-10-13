@@ -403,6 +403,9 @@ struct Runner {
     // folds into `needs_structural_sync` instead, which the seam treats
     // identically.
     needs_structural_sync: bool,
+    /// Mirrors `Application::automation_lanes_dirty`: a lanes-only geometry
+    /// resync requested by the overlay, honored right after dispatch.
+    automation_lanes_dirty: bool,
     scroll_dirty: ScrollDirty,
     pre_drag_commands: Vec<Box<dyn Command>>,
     // BUG-198: the harness had no undo stack at all — commands executed
@@ -452,6 +455,7 @@ impl Runner {
             cursor_manager: manifold_ui::cursors::CursorManager::default(),
             active_layer: None,
             needs_structural_sync: false,
+            automation_lanes_dirty: false,
             scroll_dirty: ScrollDirty::default(),
             pre_drag_commands: Vec::new(),
             undo: UndoRedoManager::new(),
@@ -556,7 +560,7 @@ impl Runner {
             }
             AutomationAction::Dump => {
                 let path = out_dir.join(format!("{index:02}.tree.json"));
-                self.write_dump(ui, data, &path);
+                self.write_dump(ui, &path);
                 StepResult {
                     index,
                     action: action_desc,
@@ -590,7 +594,7 @@ impl Runner {
                         StepResult { index, action: action_desc, status: "ok",
                             detail: "saved and reloaded through project IO".into(), artifact: Some(path.display().to_string()) }
                     }
-                    Err(error) => self.fail(index, action_desc, ui, data, out_dir, error),
+                    Err(error) => self.fail(index, action_desc, ui, out_dir, error),
                 }
             }
             AutomationAction::Key { key, modifiers } => {
@@ -645,7 +649,6 @@ impl Runner {
                             index,
                             action_desc,
                             ui,
-                            data,
                             out_dir,
                             format!(
                                 "modifier-bearing Key {key:?} ({modifiers:?}) produced no \
@@ -686,13 +689,13 @@ impl Runner {
                 // re-derived while building this driver). Fails loudly (D6)
                 // rather than silently no-op-ing; section 7's live door is the
                 // precedent for wiring this once P3 has a live Application.
-                self.fail(index, action_desc, ui, data, out_dir, "no headless seam for AutomationAction::Text (Application::text_input only; see UI_AUTOMATION_DESIGN.md section 7)".into())
+                self.fail(index, action_desc, ui, out_dir, "no headless seam for AutomationAction::Text (Application::text_input only; see UI_AUTOMATION_DESIGN.md section 7)".into())
             }
             AutomationAction::Pointer { target, gesture } => {
                 self.pointer(ui, data, zoom_ppb, index, action_desc, target, gesture, out_dir, render)
             }
             AutomationAction::Assert { selector, check } => {
-                self.assert(ui, data, index, action_desc, selector, check, out_dir)
+                self.assert(ui, index, action_desc, selector, check, out_dir)
             }
             AutomationAction::ScrollTo { target } => {
                 self.scroll_to(ui, data, zoom_ppb, index, action_desc, target, out_dir, render)
@@ -824,20 +827,19 @@ impl Runner {
         changed
     }
 
-    fn surfaces_owned(&self, ui: &UIRoot, data: &SceneData) -> (Vec<manifold_ui::panels::viewport::ClipScreenRect>, Vec<manifold_ui::panels::viewport::AutomationLaneScreen>) {
+    fn surfaces_owned(&self, ui: &UIRoot) -> (Vec<manifold_ui::panels::viewport::ClipScreenRect>, Vec<manifold_ui::panels::viewport::AutomationLaneScreen>) {
         let mut clip_rects = Vec::new();
         ui.viewport.visible_clip_rects(&mut clip_rects);
-        let automation_lanes = ui.viewport.automation_lane_screens(&data.content.automation_latched_params);
+        let automation_lanes = ui.viewport.automation_lane_screens().to_vec();
         (clip_rects, automation_lanes)
     }
 
     fn resolve(
         &self,
         ui: &UIRoot,
-        data: &SceneData,
         target: &AutomationTarget,
     ) -> Result<Rect, String> {
-        let (clip_rects, automation_lanes) = self.surfaces_owned(ui, data);
+        let (clip_rects, automation_lanes) = self.surfaces_owned(ui);
         let clip_targets = ClipHitTargets(&clip_rects);
         let automation_targets = AutomationHitTargets(&automation_lanes);
         let surfaces: Vec<&dyn HitTargets> = vec![&clip_targets, &automation_targets];
@@ -849,10 +851,9 @@ impl Runner {
     fn resolve_all(
         &self,
         ui: &UIRoot,
-        data: &SceneData,
         target: &AutomationTarget,
     ) -> (Vec<MatchInfo>, String) {
-        let (clip_rects, automation_lanes) = self.surfaces_owned(ui, data);
+        let (clip_rects, automation_lanes) = self.surfaces_owned(ui);
         let clip_targets = ClipHitTargets(&clip_rects);
         let automation_targets = AutomationHitTargets(&automation_lanes);
         let surfaces: Vec<&dyn HitTargets> = vec![&clip_targets, &automation_targets];
@@ -872,9 +873,9 @@ impl Runner {
         out_dir: &std::path::Path,
         render: &mut RenderState,
     ) -> StepResult {
-        let rect = match self.resolve(ui, data, target) {
+        let rect = match self.resolve(ui, target) {
             Ok(r) => r,
-            Err(e) => return self.fail(index, action_desc, ui, data, out_dir, e),
+            Err(e) => return self.fail(index, action_desc, ui, out_dir, e),
         };
         let center = Vec2::new(rect.x + rect.width * 0.5, rect.y + rect.height * 0.5);
 
@@ -927,9 +928,9 @@ impl Runner {
                 scrolled_in_place = self.scroll_once(ui, data, center, *delta);
             }
             Gesture::Drag { to, steps } => {
-                let to_rect = match self.resolve(ui, data, to) {
+                let to_rect = match self.resolve(ui, to) {
                     Ok(r) => r,
-                    Err(e) => return self.fail(index, action_desc, ui, data, out_dir, e),
+                    Err(e) => return self.fail(index, action_desc, ui, out_dir, e),
                 };
                 let to_center = Vec2::new(to_rect.x + to_rect.width * 0.5, to_rect.y + to_rect.height * 0.5);
                 ui.input.set_modifiers(self.modifiers);
@@ -1019,9 +1020,9 @@ impl Runner {
         // Resolve once to locate the target's COLUMN. Pick the container by X
         // (scroll-invariant) — the target's Y is exactly what is off-screen, so a
         // `contains(center)` test on it would mis-route.
-        let rect0 = match self.resolve(ui, data, target) {
+        let rect0 = match self.resolve(ui, target) {
             Ok(r) => r,
-            Err(e) => return self.fail(index, action_desc, ui, data, out_dir, e),
+            Err(e) => return self.fail(index, action_desc, ui, out_dir, e),
         };
         let cx = rect0.x + rect0.width * 0.5;
         let insp = ui.layout.inspector();
@@ -1036,7 +1037,6 @@ impl Runner {
                 index,
                 action_desc,
                 ui,
-                data,
                 out_dir,
                 format!("ScrollTo: target column x={cx:.0} is in no open scroll container (inspector {insp:?}, scene {scene:?})"),
             );
@@ -1057,9 +1057,9 @@ impl Runner {
         let mut step = STEP;
 
         for _ in 0..MAX_ITERS {
-            let rect = match self.resolve(ui, data, target) {
+            let rect = match self.resolve(ui, target) {
                 Ok(r) => r,
-                Err(e) => return self.fail(index, action_desc.clone(), ui, data, out_dir, e),
+                Err(e) => return self.fail(index, action_desc.clone(), ui, out_dir, e),
             };
             let vis = container_rect(ui);
             let top = vis.y + MARGIN;
@@ -1083,7 +1083,7 @@ impl Runner {
             let prev_y = rect.y;
             let sip = self.scroll_once(ui, data, sc, Vec2::new(0.0, dir * sign * step));
             self.advance_frame(ui, data, zoom_ppb, render, sip);
-            let moved = match self.resolve(ui, data, target) {
+            let moved = match self.resolve(ui, target) {
                 Ok(r) => r.y - prev_y,
                 Err(_) => 0.0,
             };
@@ -1105,7 +1105,7 @@ impl Runner {
             }
         }
 
-        match self.resolve(ui, data, target) {
+        match self.resolve(ui, target) {
             Ok(rect) => {
                 let vis = container_rect(ui);
                 let cy_target = rect.y + rect.height * 0.5;
@@ -1122,7 +1122,6 @@ impl Runner {
                         index,
                         action_desc,
                         ui,
-                        data,
                         out_dir,
                         format!(
                             "ScrollTo: exhausted {MAX_ITERS} steps, target center y={cy_target:.0} still outside band [{:.0},{:.0}]",
@@ -1132,7 +1131,7 @@ impl Runner {
                     )
                 }
             }
-            Err(e) => self.fail(index, action_desc, ui, data, out_dir, e),
+            Err(e) => self.fail(index, action_desc, ui, out_dir, e),
         }
     }
 
@@ -1174,6 +1173,7 @@ impl Runner {
             &mut self.active_layer,
             &mut rebuild_flag,
             &mut self.needs_structural_sync,
+            &mut self.automation_lanes_dirty,
             &mut self.scroll_dirty,
             &mut layer_bitmap_scratch,
             &mut self.pre_drag_commands,
@@ -1264,6 +1264,18 @@ impl Runner {
         ui.intercept_overlay_actions(&mut pending);
         if rebuild_flag {
             self.needs_structural_sync = true;
+        }
+        // Same lanes-only resync the live frame runs (app_render.rs step 4b).
+        if std::mem::take(&mut self.automation_lanes_dirty) {
+            crate::ui_bridge::sync_automation_lane_geometry(
+                ui,
+                &data.project,
+                data.selection.automation_mode_visible,
+                &data.selection.chosen_automation_params,
+                &data.selection.automation_lane_order,
+                &data.selection.hidden_automation_lanes,
+                &data.selection.pinned_automation_lanes,
+            );
         }
         self.apply_panel_actions(ui, data, &pending);
         n_actions + pending.len()
@@ -1501,14 +1513,13 @@ impl Runner {
     fn assert(
         &mut self,
         ui: &mut UIRoot,
-        data: &mut SceneData,
         index: usize,
         action_desc: String,
         selector: &AutomationTarget,
         check: &AssertCheck,
         out_dir: &std::path::Path,
     ) -> StepResult {
-        let (matches, query) = self.resolve_all(ui, data, selector);
+        let (matches, query) = self.resolve_all(ui, selector);
         let result = match check {
             AssertCheck::Exists => {
                 if matches.is_empty() {
@@ -1562,7 +1573,7 @@ impl Runner {
             },
             AssertCheck::Above(other) => {
                 let other_target = AutomationTarget::Query(other.clone());
-                let (other_matches, other_query) = self.resolve_all(ui, data, &other_target);
+                let (other_matches, other_query) = self.resolve_all(ui, &other_target);
                 match matches.len() {
                     0 => Err(format!("no match for {query} (want Above {other_query})")),
                     1 => match other_matches.len() {
@@ -1590,7 +1601,7 @@ impl Runner {
 
         match result {
             Ok(detail) => StepResult { index, action: action_desc, status: "ok", detail, artifact: None },
-            Err(detail) => self.fail(index, action_desc, ui, data, out_dir, detail),
+            Err(detail) => self.fail(index, action_desc, ui, out_dir, detail),
         }
     }
 
@@ -1601,12 +1612,11 @@ impl Runner {
         index: usize,
         action_desc: String,
         ui: &UIRoot,
-        data: &SceneData,
         out_dir: &std::path::Path,
         detail: String,
     ) -> StepResult {
         let path = out_dir.join(format!("{index:02}.fail.tree.json"));
-        self.write_dump(ui, data, &path);
+        self.write_dump(ui, &path);
         StepResult {
             index,
             action: action_desc,
@@ -1616,8 +1626,8 @@ impl Runner {
         }
     }
 
-    fn write_dump(&self, ui: &UIRoot, data: &SceneData, path: &std::path::Path) {
-        let (clip_rects, automation_lanes) = self.surfaces_owned(ui, data);
+    fn write_dump(&self, ui: &UIRoot, path: &std::path::Path) {
+        let (clip_rects, automation_lanes) = self.surfaces_owned(ui);
         let clip_targets = ClipHitTargets(&clip_rects);
         let automation_targets = AutomationHitTargets(&automation_lanes);
         let surfaces: Vec<&dyn HitTargets> = vec![&clip_targets, &automation_targets];
@@ -1655,15 +1665,13 @@ impl Runner {
                 alpha: 1.0,
             })
             .collect();
-        let automation_lanes =
-            ui.viewport.automation_lane_screens(&data.content.automation_latched_params);
         // Use the live point-feedback resolver so snapshots exercise the same
         // nearby readout and point highlight as frame/present.rs.
         self.overlay.set_modifiers(self.modifiers);
         if ui.background_input_blocked() {
             data.selection.automation_feedback = None;
         } else if let Some(&position) = self.last_gesture_points.last() {
-            self.overlay.refresh_automation_feedback(position, &automation_lanes,
+            self.overlay.refresh_automation_feedback(position, ui.viewport.automation_lane_screens(),
                 &mut data.selection, &ui.viewport);
         }
         let text_input = crate::text_input::TextInputState::new();
@@ -1689,7 +1697,7 @@ impl Runner {
                 timeline_overlays: manifold_ui::panels::viewport::TimelineOverlays::default(),
                 markers: &[],
                 landing_flash: None,
-                automation_lanes: &automation_lanes,
+                automation_latched: &data.content.automation_latched_params,
                 automation_selection: Some(&data.selection),
                 cursor_pos: manifold_ui::node::Vec2::ZERO,
                 text_input: &text_input,
@@ -1750,7 +1758,7 @@ pub(super) fn click_by_text(ui: &mut UIRoot, data: &mut SceneData, text: &str) -
         text: Some(text.to_string()),
         ..Default::default()
     });
-    let rect = runner.resolve(ui, data, &target)?;
+    let rect = runner.resolve(ui, &target)?;
     let center = Vec2::new(rect.x + rect.width * 0.5, rect.y + rect.height * 0.5);
     ui.input.set_modifiers(manifold_ui::input::Modifiers::NONE);
     ui.pointer_event(center, PointerAction::Down, 0.0);
@@ -1762,6 +1770,6 @@ pub(super) fn click_by_text(ui: &mut UIRoot, data: &mut SceneData, text: &str) -
 /// A dump written as failure evidence for a non-script (`--interact`) miss —
 /// same D6 contract as `Runner::fail`, exposed for `mod.rs`'s `--interact`
 /// branch (no `Runner`/script run in progress there).
-pub(super) fn write_fail_dump(ui: &UIRoot, data: &SceneData, path: &std::path::Path) {
-    Runner::new().write_dump(ui, data, path);
+pub(super) fn write_fail_dump(ui: &UIRoot, path: &std::path::Path) {
+    Runner::new().write_dump(ui, path);
 }

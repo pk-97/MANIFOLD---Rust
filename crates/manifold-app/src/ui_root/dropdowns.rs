@@ -1522,8 +1522,8 @@ impl UIRoot {
             }
             PanelAction::Editing(EditingAction::AutomationLaneRightClicked(target, param_id)) => {
                 use manifold_ui::automation_hit_tester::{AutomationHit, hit_test_automation};
-                let lanes = self.viewport.automation_lane_screens(&[]);
-                let hit = hit_test_automation(right_click_pos, &lanes);
+                let lanes = self.viewport.automation_lane_screens();
+                let hit = hit_test_automation(right_click_pos, lanes);
                 let point = match hit {
                     Some(AutomationHit::Dot { lane_index, dot_index }) => Some(lanes[lane_index].dots[dot_index]),
                     Some(AutomationHit::Segment { lane_index, left_dot_index }) => Some(lanes[lane_index].dots[left_dot_index]),

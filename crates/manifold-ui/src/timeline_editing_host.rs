@@ -193,8 +193,20 @@ pub trait TimelineEditingHost {
     /// Invalidate all layer bitmaps. Unity: InvalidateAllLayerBitmaps().
     fn invalidate_all_layer_bitmaps(&mut self);
 
-    /// Mark the timeline UI as needing a visual refresh. Unity: MarkDirty().
+    /// The project structure changed: forces a full UI tree rebuild and a
+    /// project-data resync. Expensive — never call it per pointer move or for
+    /// state the paint pass already reads every frame.
     fn mark_dirty(&mut self);
+
+    /// Visual-only: repaint the next frame, no rebuild and no resync. For
+    /// hover feedback, selection and marquee changes the paint pass reads
+    /// straight from `UIState`.
+    fn request_redraw(&mut self);
+
+    /// Automation lane points were previewed or restored in the local
+    /// project: re-project lane geometry only (no clip resync, no rebuild)
+    /// and repaint.
+    fn request_automation_lane_resync(&mut self);
 
     // ── Cursor ──────────────────────────────────────────────────────
 

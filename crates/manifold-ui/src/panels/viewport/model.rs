@@ -257,9 +257,9 @@ pub struct AutomationLaneScreen {
     pub beats_per_bar: f32,
     pub bar_skip: u32,
     pub label: String,
-    /// True when this lane's param is currently latched/overridden — draws
-    /// grayed instead of red (Live's affordance).
-    pub overridden: bool,
+    /// The lane's effect, matched against `ContentState::automation_latched_params`
+    /// at paint time by [`Self::is_overridden`].
+    pub effect_id: EffectId,
     /// The sampled breakpoint line, screen-space `(x, y)` pairs in ascending
     /// x order — the caller draws consecutive segments with `draw_line`.
     pub polyline: Vec<(f32, f32)>,
@@ -285,6 +285,15 @@ pub struct AutomationLaneScreen {
 }
 
 impl AutomationLaneScreen {
+    /// True when this lane's param is latched/overridden — draws grayed
+    /// instead of red (Live's affordance). `latched` is
+    /// `ContentState::automation_latched_params`.
+    pub fn is_overridden(&self, latched: &[(EffectId, ParamId)]) -> bool {
+        latched
+            .iter()
+            .any(|(eid, pid)| *eid == self.effect_id && *pid == self.param_id)
+    }
+
     /// Chrome and graph share one geometry contract with input and rendering.
     pub fn header_rect(&self) -> Rect {
         Rect::new(
@@ -557,7 +566,7 @@ mod automation_lane_geometry_tests {
             beats_per_bar: 3.0,
             bar_skip: 1,
             label: "Fx: amount".into(),
-            overridden: false,
+            effect_id: EffectId::new("fx"),
             polyline: Vec::new(),
             dots: Vec::new(),
             target: crate::view::UiGraphTarget::Effect(EffectId::new("fx")),

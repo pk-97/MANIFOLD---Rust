@@ -435,7 +435,7 @@ fn render_ui_scene(
         if outcome.missed {
             sync_build(&mut ui, &data, zoom_ppb);
             let fail_path = dir.join(format!("{scene}.interact-miss.tree.json"));
-            script::write_fail_dump(&ui, &data, &fail_path);
+            script::write_fail_dump(&ui, &fail_path);
             eprintln!(
                 "ui-snap: interact MISS — the real input path did not resolve; dump at {}",
                 fail_path.display()
@@ -1062,8 +1062,8 @@ fn render_and_dump(
         let mut clip_rects = Vec::new();
         ui.viewport.visible_clip_rects(&mut clip_rects);
         let clip_targets = manifold_ui::clip_hit_tester::ClipHitTargets(&clip_rects);
-        let automation_lanes = ui.viewport.automation_lane_screens(automation_latched);
-        let automation_targets = manifold_ui::automation_hit_tester::AutomationHitTargets(&automation_lanes);
+        let automation_lanes = ui.viewport.automation_lane_screens();
+        let automation_targets = manifold_ui::automation_hit_tester::AutomationHitTargets(automation_lanes);
         let surfaces: Vec<&dyn manifold_ui::hit_targets::HitTargets> =
             vec![&clip_targets, &automation_targets];
 
