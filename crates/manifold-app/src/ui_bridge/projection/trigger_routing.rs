@@ -73,7 +73,7 @@ pub(crate) fn response_uses_scene_panel(project: &Project, target: &GraphTarget,
 
 /// Scene modifier rows retain the host generator address. Binding metadata is
 /// still enough to give those shared host parameters their friendly card label.
-fn modifier_label_for_param(
+pub(crate) fn modifier_label_for_param(
     instance: &manifold_core::effects::PresetInstance,
     param_id: &str,
 ) -> Option<String> {
@@ -250,7 +250,7 @@ pub(crate) fn attach_trigger_sources(configs: &mut [ParamSurface], project: &Pro
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use manifold_core::effect_graph_def::ParamSpecDef;
     use manifold_core::effects::PresetInstance;
@@ -396,7 +396,7 @@ mod tests {
         }
     }
 
-    fn duplicate_force_project() -> Project {
+    pub(crate) fn duplicate_force_project() -> Project {
         let mut graph: manifold_core::effect_graph_def::EffectGraphDef = serde_json::from_str(
             manifold_nodes::testkit::assets::TESTS_FIXTURES_SCENE_MODIFIERS_NESTED_MULTIMATERIAL_V2_JSON,
         ).unwrap();
