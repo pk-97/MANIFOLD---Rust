@@ -1365,9 +1365,9 @@ impl TimelineInputHost for AppInputHost<'_> {
 
         if clip_count == 0 {
             // No clips — reset to default zoom, scroll to start
-            let levels = &manifold_ui::color::ZOOM_LEVELS;
-            let default_idx = levels.len() / 2; // middle of zoom range
-            self.ui_root.viewport.set_zoom(levels[default_idx]);
+            self.ui_root.viewport.set_zoom(
+                manifold_ui::color::ZOOM_LEVELS[manifold_ui::color::DEFAULT_ZOOM_INDEX],
+            );
             self.ui_root.viewport.set_scroll(0.0, 0.0);
             self.scroll_dirty.zoom = true;
             return;
@@ -1379,8 +1379,10 @@ impl TimelineInputHost for AppInputHost<'_> {
         let fit_beats = extent_beats + padding * 2.0;
 
         // Calculate ideal ppb — arbitrary float, NOT nearest preset
-        let max_ppb = *manifold_ui::color::ZOOM_LEVELS.last().unwrap_or(&200.0);
-        let ideal_ppb = (viewport_width / fit_beats).clamp(1.0, max_ppb);
+        let ideal_ppb = (viewport_width / fit_beats).clamp(
+            manifold_ui::color::MIN_PIXELS_PER_BEAT,
+            manifold_ui::color::MAX_PIXELS_PER_BEAT,
+        );
 
         self.ui_root.viewport.set_zoom(ideal_ppb);
 
@@ -1441,7 +1443,7 @@ impl TimelineInputHost for AppInputHost<'_> {
         // Capture the pre-zoom view — B14 `Shift+Z` restores it.
         self.ui_root.viewport.store_zoom_back();
 
-        let max_ppb = *manifold_ui::color::ZOOM_LEVELS.last().unwrap_or(&200.0);
+        let max_ppb = manifold_ui::color::MAX_PIXELS_PER_BEAT;
         let (ideal_ppb, scroll_beat) =
             selection_fit_zoom(min_beat, max_beat, viewport_width, max_ppb);
         self.ui_root.viewport.set_zoom(ideal_ppb);
@@ -1800,7 +1802,8 @@ fn selection_fit_zoom(min_beat: f32, max_beat: f32, viewport_width: f32, max_ppb
     let padding = (extent_beats * 0.1).max(1.0);
     let fit_beats = extent_beats + padding * 2.0;
 
-    let ideal_ppb = (viewport_width / fit_beats).clamp(1.0, max_ppb);
+    let ideal_ppb =
+        (viewport_width / fit_beats).clamp(manifold_ui::color::MIN_PIXELS_PER_BEAT, max_ppb);
 
     let center_beat = min_beat + extent_beats * 0.5;
     let center_pixel = center_beat * ideal_ppb;
@@ -1846,13 +1849,12 @@ mod zoom_to_selection_tests {
         assert!(scroll_beat >= 0.0);
     }
 
-    /// Very large selections clamp to the minimum zoom (`max_ppb` floor isn't
-    /// exceeded on the low end either — `ideal_ppb` never goes below the
-    /// clamp's lower bound of 1.0).
+    /// A selection too wide to fit even at the furthest zoom-out lands on the
+    /// timeline's minimum zoom.
     #[test]
     fn wide_selection_clamps_ppb_within_bounds() {
         let (ppb, _) = selection_fit_zoom(0.0, 100_000.0, 800.0, 200.0);
-        assert!((1.0..=200.0).contains(&ppb));
+        assert_eq!(ppb, manifold_ui::color::MIN_PIXELS_PER_BEAT);
     }
 }
 

@@ -25,7 +25,6 @@ import contextlib
 import io
 import json
 import os
-import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -100,7 +99,8 @@ class Probe:
         return False, 'torch reports MPS unavailable in this process (no Metal GPU visible here)'
 
     def free_bytes(self):
-        return shutil.disk_usage(Path.home()).free
+        from storage_budget import disk_free
+        return disk_free(Path.home())
 
     def run_id(self, config, release):
         """(ok, run id or the reason): what run.py --plan prints, in its own process like overnight's run_id_of."""

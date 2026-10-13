@@ -67,8 +67,7 @@ impl TimelineViewportPanel {
             return beat.max(Beats::ZERO);
         }
         // At max zoom, disable snapping (Unity: ShouldUseFreeScrub, lines 64-66)
-        let max_zoom = *color::ZOOM_LEVELS.last().unwrap();
-        if self.mapper.pixels_per_beat() >= max_zoom - 0.001 {
+        if self.mapper.pixels_per_beat() >= color::MAX_PIXELS_PER_BEAT - 0.001 {
             return beat.max(Beats::ZERO);
         }
         let grid =

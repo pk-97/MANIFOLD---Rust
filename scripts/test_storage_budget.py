@@ -744,6 +744,16 @@ def test_executor_holds_reservation_for_validation_and_unlink():
             check("busy reservation refuses direct maintenance", cache.exists() and result[2], result)
 
 
+def test_free_counts_purgeable_space():
+    import shutil
+    raw = shutil.disk_usage(Path.cwd()).free
+    free = sb.disk_free(Path.cwd())
+    check("free space never reads below raw statvfs free", free >= raw * 0.99, (free, raw))
+    if sys.platform == "darwin":
+        check("macOS free comes from the important-usage capacity",
+              sb._macos_important_capacity(Path.cwd()) is not None)
+
+
 for test in (test_inventory_and_symlink_boundary, test_build_admission,
              test_manifest_dry_run_apply_and_identity, test_live_and_uninspectable_refused,
              test_lsof_and_cargo_lock_safety, test_ancestor_symlink_refused_by_fd_traversal,
@@ -758,7 +768,8 @@ for test in (test_inventory_and_symlink_boundary, test_build_admission,
              test_binary_opened_after_enumeration,
              test_hard_link_liveness_identity,
              test_unregistered_target_executor_confinement,
-             test_executor_holds_reservation_for_validation_and_unlink):
+             test_executor_holds_reservation_for_validation_and_unlink,
+             test_free_counts_purgeable_space):
     try:
         test()
     except Exception as error:

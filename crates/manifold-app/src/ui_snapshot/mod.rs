@@ -264,8 +264,8 @@ pub fn run(args: &[String]) {
     );
 }
 
-/// P0.3 (`docs/TIMELINE_LAYOUT_P0_SPEC.md`): `hairlineclips` needs genuine far
-/// zoom (the minimum `color::ZOOM_LEVELS` entry) to make its clips
+/// P0.3 (`docs/TIMELINE_LAYOUT_P0_SPEC.md`): `hairlineclips` needs a far
+/// zoom (1px/beat) to make its clips
 /// sub-pixel-wide; every other scene keeps the existing fixed 24px/beat so
 /// their PNGs stay byte-identical across phases. Shared by `render_ui_scene`
 /// and `script::run` so a script's resolved rects agree with a plain

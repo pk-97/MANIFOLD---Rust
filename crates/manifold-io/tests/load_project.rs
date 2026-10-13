@@ -760,3 +760,99 @@ fn liveschool_v6_leds_clip_trigger_migration_round_trips_cleanly() {
     assert_eq!(reloaded.timeline.layers.len(), project.timeline.layers.len());
     assert_eq!(reloaded.timeline.total_clip_count(), project.timeline.total_clip_count());
 }
+
+/// Every id-like string (an `id` key or a key ending in `Id`), keyed by its
+/// path with array indices dropped, values sorted. Index-free so a loader that
+/// re-sorts clips still compares equal; sorted so the multiset is exact.
+fn id_strings(root: &serde_json::Value) -> std::collections::BTreeMap<String, Vec<String>> {
+    fn walk(
+        v: &serde_json::Value,
+        path: &str,
+        out: &mut std::collections::BTreeMap<String, Vec<String>>,
+    ) {
+        match v {
+            serde_json::Value::Object(map) => {
+                for (k, child) in map {
+                    let p = format!("{path}/{k}");
+                    match child {
+                        serde_json::Value::String(s) if k == "id" || k.ends_with("Id") => {
+                            out.entry(p).or_default().push(s.clone());
+                        }
+                        _ => walk(child, &p, out),
+                    }
+                }
+            }
+            serde_json::Value::Array(items) => {
+                for item in items {
+                    walk(item, &format!("{path}/#"), out);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut out = std::collections::BTreeMap::new();
+    walk(root, "", &mut out);
+    for values in out.values_mut() {
+        values.sort();
+    }
+    out
+}
+
+fn archive_project_json(path: &std::path::Path) -> serde_json::Value {
+    use std::io::Read;
+    let file = std::fs::File::open(path).expect("open archive");
+    let mut archive = zip::ZipArchive::new(file).expect("read archive");
+    let mut json = String::new();
+    archive
+        .by_name("project.json")
+        .expect("archive has project.json")
+        .read_to_string(&mut json)
+        .expect("read project.json");
+    serde_json::from_str(&json).expect("parse project.json")
+}
+
+/// BUG-aaca3 (clip id collisions): new ids are 64-bit, old files keep their
+/// 32-bit ids. Loading the canonical fixture and saving it through the real
+/// saver must write back every existing id exactly as it was read: re-keying
+/// would break the references between clips, layers and effects.
+#[test]
+fn liveschool_old_ids_round_trip_unchanged() {
+    let path = fixture_path("Liveschool Live Show V6 LEDS.manifold");
+    assert!(path.exists(), "Test fixture not found: {}", path.display());
+
+    let before = id_strings(&archive_project_json(&path));
+    let clip_ids = &before["/timeline/layers/#/clips/#/id"];
+    assert_eq!(clip_ids.len(), 2828);
+    assert!(
+        clip_ids.iter().all(|id| id.len() == 8),
+        "the fixture is meant to carry old 8-char ids"
+    );
+
+    let mut project = loader::load_project(&path).expect("load liveschool project");
+    let new_layer = manifold_core::layer::Layer::new(
+        "wide id".into(),
+        manifold_core::types::LayerType::Video,
+        project.timeline.layers.len() as i32,
+    );
+    let new_id = new_layer.layer_id.to_string();
+    assert_eq!(new_id.len(), 16, "a freshly minted id carries 64 bits");
+    project.timeline.layers.push(new_layer);
+
+    let dir = std::env::temp_dir().join(format!("manifold-wide-ids-{}", std::process::id()));
+    let out = dir.join("liveschool.manifold");
+    manifold_io::saver::save_project(&mut project, &out, None, false).expect("save");
+    let mut after = id_strings(&archive_project_json(&out));
+    let reloaded = loader::load_project(&out).expect("reload saved project");
+    let _ = std::fs::remove_dir_all(&dir);
+
+    let layer_ids = after.get_mut("/timeline/layers/#/layerId").expect("layer ids");
+    let pos = layer_ids.iter().position(|id| *id == new_id).expect("new layer id saved");
+    layer_ids.remove(pos);
+    for (key, ids) in &before {
+        assert_eq!(after.get(key), Some(ids), "ids under {key} changed on save");
+    }
+    assert!(
+        reloaded.timeline.layers.iter().any(|l| l.layer_id.as_str() == new_id),
+        "a 16-char id reloads as itself"
+    );
+}

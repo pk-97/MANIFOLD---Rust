@@ -1059,8 +1059,15 @@ pub const FONT_TITLE: u16 = 16; // top-level headings
 pub const FONT_WEIGHT_DEFAULT: crate::node::FontWeight = crate::node::FontWeight::Medium;
 
 // ── Zoom levels (pixels per beat) ───────────────────────────────────
-pub const ZOOM_LEVELS: [f32; 10] = [1.0, 2.0, 5.0, 10.0, 20.0, 40.0, 80.0, 120.0, 200.0, 400.0];
-pub const DEFAULT_ZOOM_INDEX: usize = 7; // 120 pixels/beat
+/// The +/- buttons step through these; wheel, pinch and zoom-to-fit move
+/// freely between the two ends. The bottom fits ~75,000 beats (about ten
+/// hours at 128 BPM) across a 1500px timeline.
+pub const ZOOM_LEVELS: [f32; 15] = [
+    0.02, 0.05, 0.1, 0.25, 0.5, 1.0, 2.0, 5.0, 10.0, 20.0, 40.0, 80.0, 120.0, 200.0, 400.0,
+];
+pub const DEFAULT_ZOOM_INDEX: usize = 12; // 120 pixels/beat
+pub const MIN_PIXELS_PER_BEAT: f32 = ZOOM_LEVELS[0];
+pub const MAX_PIXELS_PER_BEAT: f32 = ZOOM_LEVELS[ZOOM_LEVELS.len() - 1];
 
 // ── Scroll ──────────────────────────────────────────────────────────
 pub const SCROLL_SENSITIVITY: f32 = 1.0;
@@ -1069,6 +1076,10 @@ pub const BITMAP_SCROLL_SPEED: f32 = 12.5;
 /// wheel notch. Each notch scales pixels-per-beat by this factor (or its inverse
 /// when zooming out), so zoom is smooth instead of jumping between fixed levels.
 pub const ZOOM_WHEEL_STEP_PER_NOTCH: f32 = 1.18;
+/// Timeline zoom per unit of trackpad pinch: pixels-per-beat scales by
+/// `exp(magnification * gain)`. Above 1 because the timeline's zoom range
+/// is so wide that a 1:1 pinch would take many strokes to cross it.
+pub const ZOOM_PINCH_GAIN: f32 = 2.0;
 
 // ── Layer control panel layout ──────────────────────────────────────
 pub const LAYER_CTRL_PADDING: f32 = SPACE_M; // mockup edge gutter (8px) — tracks breathe
