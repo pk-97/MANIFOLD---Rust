@@ -564,6 +564,9 @@ def lane_content(wins, pmap, labels, fires_dir):
                 lanes[LANE_OF[fam, 'fire']].append(dict(start_beat=b, duration_beats=d, meta=dict(
                     song=s.id, family=fam, kind='fire', lab_s=fr[idx[0]][0], emit_s=fr[idx[0]][1])))
             st[f'{fam}_fires'] = len(fclips)
+            if lab is None:          # the family does not label this song: every fire would read as a missing label
+                st[f'{fam}_checks'] = None
+                continue
             cm = check_markers(w, fam, [b for b, _, _ in kept], [b for b, _, _ in fclips], ub)
             markers += cm
             st[f'{fam}_checks'] = len(cm)
