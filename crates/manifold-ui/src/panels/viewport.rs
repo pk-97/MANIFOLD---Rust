@@ -897,7 +897,11 @@ impl TimelineViewportPanel {
                 continue;
             }
             let clip_top = track_y + CLIP_VERTICAL_PAD;
-            let clip_h = track_h - CLIP_VERTICAL_PAD * 2.0;
+            // Lane strips stack below the base card (see automation_lane_screens),
+            // so a clip body and its name strip end at the card, not under the lanes.
+            let has_lanes = self.automation_lanes_by_layer.get(i).is_some_and(|l| !l.is_empty());
+            let body_h = if has_lanes { track_h.min(color::TRACK_HEIGHT) } else { track_h };
+            let clip_h = body_h - CLIP_VERTICAL_PAD * 2.0;
             if clip_h <= 0.0 {
                 continue;
             }
