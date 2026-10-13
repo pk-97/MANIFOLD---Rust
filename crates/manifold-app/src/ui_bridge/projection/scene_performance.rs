@@ -391,6 +391,17 @@ fn is_user_added(
     })
 }
 
+/// A driver, envelope, automation lane, audio mod or Ableton mapping the
+/// card projection already put on the row. Hiding such a row hides a live
+/// control from the performer.
+fn has_attachment(row: &ParamRow) -> bool {
+    row.modulation.driver_active
+        || row.modulation.envelope_active
+        || row.modulation.automation_active
+        || row.audio.active
+        || row.mapping.ableton_display.is_some()
+}
+
 fn is_retained_extra(
     row: &ParamRow,
     inst: &PresetInstance,
@@ -399,6 +410,10 @@ fn is_retained_extra(
     let metadata = def.preset_metadata.as_ref();
     if is_user_added(row, inst, metadata) {
         return row.value.exposed;
+    }
+    // Stopgap for BUG-pmbd3.7 (Scene card hides mapped rows); retired by P4 (scene_card.rs).
+    if row.value.exposed && has_attachment(row) {
+        return true;
     }
     let Some(param) = inst.params.get(row.id.as_ref()) else {
         return false;
@@ -712,5 +727,30 @@ mod tests {
                 .collect::<Vec<_>>(),
             before
         );
+    }
+
+    /// INV-S5: a row carrying a driver or a host mapping stays on the card,
+    /// whatever node it binds to.
+    #[test]
+    fn attached_rows_stay_on_card() {
+        let (inst, def, mut rows) = scene_fixture();
+        for row in rows.iter_mut() {
+            match row.id.as_ref() {
+                "object_position" => row.modulation.driver_active = true,
+                "other_light" => {
+                    row.mapping.ableton_display = Some(manifold_ui::panels::param_slider_shared::AbletonMappingDisplay {
+                        macro_name: "Macro 1".into(),
+                        track_name: "Track".into(),
+                        device_name: "Rack".into(),
+                        status: Default::default(),
+                        inverted: false,
+                    });
+                }
+                _ => {}
+            }
+        }
+        assert!(curate_scene_rows(&mut rows, &inst, &def));
+        assert!(rows.iter().any(|row| row.id.as_ref() == "object_position"), "driven object row dropped");
+        assert!(rows.iter().any(|row| row.id.as_ref() == "other_light"), "mapped light row dropped");
     }
 }

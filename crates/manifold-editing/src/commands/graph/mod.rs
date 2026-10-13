@@ -83,6 +83,26 @@ where
     project.with_graph_for_target_mut(target, Some(catalog_default), structural, f)
 }
 
+/// One scene per layer (D17): `added` more render-scene nodes would give the
+/// layer's generator graph a second scene. Checked before any mutation so a
+/// refused edit leaves the graph and the undo stack untouched. A project that
+/// already holds two loads unchanged; only new additions are refused.
+pub(super) fn refuses_second_scene(
+    project: &Project,
+    target: &GraphTarget,
+    catalog_default: &EffectGraphDef,
+    added: usize,
+) -> bool {
+    if added == 0 || !matches!(target, GraphTarget::Generator(_)) {
+        return false;
+    }
+    let Some(owner) = project.graph_target_owner(target) else {
+        return false;
+    };
+    let existing = owner.graph.as_ref().unwrap_or(catalog_default);
+    manifold_core::effect_graph_def::render_scene_count(&existing.nodes) + added > 1
+}
+
 /// Variant of [`with_target_graph_mut`] that doesn't lift the graph
 /// from `None` — `f` only runs if the target already has a `Some(def)`.
 /// Used by undo paths that mutate an already-edited graph; the catalog

@@ -287,6 +287,25 @@ pub struct GroupDef {
     pub tint: Option<[f32; 4]>,
 }
 
+/// Type id of the node that renders a 3D scene.
+pub const RENDER_SCENE_TYPE_ID: &str = "node.render_scene";
+
+/// User-visible refusal for an edit that would give a layer a second scene.
+pub const ONE_SCENE_PER_LAYER: &str = "This layer already has a scene";
+
+/// Render-scene nodes anywhere in a node tree, group bodies included. One
+/// generator graph holds at most one (D17 one scene per layer); the graph
+/// validator and the node add/paste commands share this count.
+pub fn render_scene_count(nodes: &[EffectGraphNode]) -> usize {
+    nodes
+        .iter()
+        .map(|node| {
+            usize::from(node.type_id == RENDER_SCENE_TYPE_ID)
+                + node.group.as_ref().map_or(0, |group| render_scene_count(&group.nodes))
+        })
+        .sum()
+}
+
 /// Find a stable node id anywhere in a graph node tree. Groups without a
 /// node id are not searched: a scope path cannot address them.
 pub fn find_node<'a>(nodes: &'a [EffectGraphNode], node_id: &str) -> Option<&'a EffectGraphNode> {
