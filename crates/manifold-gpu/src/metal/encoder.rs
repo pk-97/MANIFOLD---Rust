@@ -2749,7 +2749,7 @@ impl GpuEncoder {
                     code,
                     desc,
                 );
-                super::gpu_fault::record_fault(&desc);
+                super::gpu_fault::record_fault(code, &desc);
             }
             // Publish completion after diagnostics and fault state so a
             // fatal-path drain cannot race the evidence it is meant to save.
@@ -2814,7 +2814,7 @@ impl GpuEncoder {
                         scopes.join(" | ")
                     ));
                 }
-                super::gpu_fault::record_fault(&desc);
+                super::gpu_fault::record_fault(code, &desc);
             }
             super::gpu_fault::complete_submission();
         });

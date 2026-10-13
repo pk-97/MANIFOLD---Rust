@@ -1526,7 +1526,7 @@ fn add_ready_completion_handler<T: Send + 'static>(
                     (err.code() as i64, err.localizedDescription().to_string())
                 },
             };
-            super::super::gpu_fault::record_fault(&desc);
+            super::super::gpu_fault::record_fault(code, &desc);
             log::error!("[GPU] Command buffer '{label}' error (code={code}): {desc}");
             // BUG-84fv: a failed build/refit must NOT flip ready — tracing
             // a structure the GPU faulted while writing sends hardware
