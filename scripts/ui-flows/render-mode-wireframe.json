@@ -1,0 +1,100 @@
+[
+  {
+    "Assert": {
+      "selector": { "Query": { "text": "+ Add Modifier" } },
+      "check": "Exists"
+    }
+  },
+  {
+    "ScrollTo": {
+      "target": { "Query": { "text": "+ Add Modifier" } }
+    }
+  },
+  {
+    "Pointer": {
+      "target": { "Query": { "text": "+ Add Modifier" } },
+      "gesture": { "Click": { "modifiers": {} } }
+    }
+  },
+  {
+    "Assert": {
+      "selector": { "Query": { "text": "Render Mode" } },
+      "check": "Exists"
+    }
+  },
+  {
+    "Pointer": {
+      "target": { "Query": { "text": "Render Mode" } },
+      "gesture": { "Click": { "modifiers": {} } }
+    }
+  },
+  "Snapshot",
+  {
+    "Assert": {
+      "selector": { "Query": { "name": "inspector.modifier.enable_toggle" } },
+      "check": "Exists"
+    }
+  },
+  {
+    "Assert": {
+      "selector": { "Query": { "text": "Mode" } },
+      "check": "Exists"
+    }
+  },
+  {
+    "Assert": {
+      "selector": { "Query": { "text": "Rendered", "under_text": "Mode" } },
+      "check": "Exists"
+    }
+  },
+  {
+    "Assert": {
+      "selector": { "Query": { "text": "Line Brightness" } },
+      "check": "Exists"
+    }
+  },
+  {
+    "Assert": {
+      "selector": { "Query": { "text": "Point Size" } },
+      "check": "Exists"
+    }
+  },
+  {
+    "Assert": {
+      "selector": { "Query": { "text": "Clay Color R" } },
+      "check": "Exists"
+    }
+  },
+  {
+    "ScrollTo": {
+      "target": { "Query": { "type": "Button", "under_text": "Mode" } }
+    }
+  },
+  "Snapshot",
+  {
+    "Pointer": {
+      "target": { "Query": { "type": "Button", "under_text": "Mode", "nth": 0 } },
+      "gesture": {
+        "Drag": {
+          "to": { "Point": { "x": 1277.0, "y": 1147.0 } },
+          "steps": 8
+        }
+      }
+    }
+  },
+  "Snapshot",
+  {
+    "Assert": {
+      "selector": { "Query": { "text": "Wireframe", "under_text": "Mode" } },
+      "check": "Exists"
+    }
+  },
+  {
+    "Assert": {
+      "selector": { "Query": { "text": "Rendered", "under_text": "Mode" } },
+      "check": { "Count": 0 }
+    }
+  },
+  "Snapshot",
+  "Dump"
+]
