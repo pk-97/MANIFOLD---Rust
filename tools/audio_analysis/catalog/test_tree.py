@@ -3,6 +3,7 @@
 folder skipping, variant verdict thresholds and an end-to-end variant comparison on synthetic audio.
 No music folder needed. Run directly: test_tree.py"""
 import gzip
+import sqlite3
 import sys
 import tempfile
 import unittest
@@ -216,13 +217,36 @@ class DistinctTests(unittest.TestCase):
              ('d.wav', 'full_mix', '', 'LAB', 100.0)]
         self.assertEqual([x[0] for x in variants.distinct(c, {'LAB'})], ['a.wav', 'c.wav'])
 
+    def test_same_size_and_tag_are_two_files_until_the_bytes_say_otherwise(self):
+        """Same-length bounces of different masters share a byte size: size and version tag never make a copy."""
+        con = sqlite3.connect(':memory:')
+        con.executescript("""
+            CREATE TABLE songs(id TEXT, group_override TEXT, group_id TEXT);
+            CREATE TABLE comp_assets(comp_id TEXT, path TEXT, flags TEXT);
+            CREATE TABLE assets(path TEXT, role TEXT, version TEXT, size INT, local INT);
+            INSERT INTO songs VALUES ('late_night', NULL, 'late_night');""")
+        for i in (2, 3, 4):
+            p = f'/m/Late Night FINAL {i}.wav'
+            con.execute("INSERT INTO comp_assets VALUES ('late_night', ?, '')", (p,))
+            con.execute("INSERT INTO assets VALUES (?, 'master', 'FINAL', 5000, 0)", (p,))
+        con.execute("INSERT INTO comp_assets VALUES ('late_night', '/m/Late Night no vocals FINAL.wav', '')")
+        con.execute("INSERT INTO assets VALUES ('/m/Late Night no vocals FINAL.wav', 'master', 'FINAL', 5000, 0)")
+        self.assertEqual([c[0] for c in variants.download_candidates(con, 'late_night')],
+                         [f'/m/Late Night FINAL {i}.wav' for i in (2, 3, 4)])
+
+    def test_download_plan_takes_every_version_tag_before_repeats_and_respects_the_cap(self):
+        c = [('s', 'a1', 'FINAL', 100), ('s', 'a2', 'FINAL', 100), ('s', 'b1', 'T2', 100), ('s', 'c1', 'V3', 100), ('t', 'd1', 'FINAL', 100)]
+        self.assertEqual([x[1] for x in variants.plan_downloads(c, 400)], ['a1', 'b1', 'c1', 'd1'])
+        self.assertEqual(len(variants.plan_downloads(c, 10 ** 6)), 5)
+
 
 SR = 24000
 
 
-def song(seed=0, secs=64, edit_after=None):
+def song(seed=0, secs=64, edit_after=None, pad=False):
     """Two-second bars of kick, snare and hat hits on a sixteen-slot grid (positions drawn from the seed), under a
-    bass line. edit_after redraws the patterns after that second: the same song, a different second half."""
+    bass line. edit_after redraws the patterns after that second: the same song, a different second half. pad lays a
+    loud detuned saw pad with a noise floor over everything: the wideband level is then the pad's, as in a full mix."""
     n = SR * secs
     t = np.arange(n) / SR
     x = np.zeros(n)
@@ -254,7 +278,35 @@ def song(seed=0, secs=64, edit_after=None):
     for i in range(secs // 4):
         seg = (t >= i * 4) & (t < i * 4 + 4)
         x[seg] += .25 * np.sin(2 * np.pi * notes[int(r.integers(4))] * t[seg])
+    if pad:
+        root = 220.0 * 2 ** (int(np.random.default_rng(seed + 9).integers(12)) / 12)
+        for f in (root, root * 1.26, root * 1.5, root * 2):
+            for detune in (.994, 1.0, 1.006):
+                x += .12 * (2 * ((t * f * detune) % 1.0) - 1)
+        x += .02 * np.random.default_rng(seed + 7).standard_normal(n)
     return x
+
+
+def wash(n, level=.6, seed=3):
+    """Broadband noise with a wandering 50 ms level: what a final carries that the lab mix's stem sum lacks (reverb
+    returns, vocal breath, bus noise). Its level jitter swamps a wideband onset envelope."""
+    r = np.random.default_rng(seed)
+    env = np.abs(np.convolve(r.standard_normal(n), np.ones(int(.05 * SR)) / int(.05 * SR), 'same'))
+    return level * r.standard_normal(n) * env / env.mean()
+
+
+def limited(x, ceiling=.35, release_s=.15):
+    """A heavy lookahead limiter: instant attack over 3 ms of lookahead, one-pole release. Pumps the whole mix on every
+    loud hit, as a mastering limiter does on a final; the lab mix (a stem sum) has none."""
+    from scipy.ndimage import maximum_filter1d, minimum_filter1d
+    from scipy.signal import lfilter
+    hold = maximum_filter1d(np.abs(x), int(.003 * SR))
+    reduction = 1.0 - np.minimum(1.0, ceiling / np.maximum(hold, 1e-9))
+    reduction = maximum_filter1d(reduction, int(.003 * SR))
+    a = np.exp(-1.0 / (release_s * SR))
+    smoothed = lfilter([1 - a], [1, -a], reduction)
+    smoothed = minimum_filter1d(smoothed, 1)
+    return x * (1.0 - np.maximum(reduction, smoothed))
 
 
 class ClassifyTests(unittest.TestCase):
@@ -290,6 +342,31 @@ class CompareTests(unittest.TestCase):
         m = variants.compare(ref, x, SR)
         self.assertEqual(m['verdict'], 'same_arrangement', m)
         self.assertAlmostEqual(m['lag_s'], -.137, delta=.002)       # x is late by 137 ms: its events sit 137 ms earlier in ref
+
+    def test_limited_final_on_a_shifted_timeline_is_same_arrangement(self):
+        """The Back to You failure: finals sat at one constant lag from the lab mix yet only ~30% of windows matched,
+        because a fixed onset correlation (0.5) is out of reach for a limited bounce of a full mix against an unlimited
+        sum. Same timeline, mastered: the labels transfer."""
+        ref = song(pad=True)
+        final = limited(ref + wash(len(ref)))
+        self.assertLess(float(np.abs(final).max()), .4)                  # the limiter really works
+        delay = int(2.61 * SR)
+        x = np.concatenate([np.zeros(delay), final])
+        m = variants.compare(ref, x, SR)
+        self.assertEqual(m['verdict'], 'same_arrangement', m)
+        self.assertAlmostEqual(m['lag_s'], -2.61, delta=.002)
+
+    def test_one_replaced_section_of_a_limited_shifted_final_is_flagged(self):
+        """The same final with 16 s swapped for another piece of music is not the same arrangement: the lag still fits
+        (one timeline) but the windows over the section do not."""
+        ref = song(pad=True)
+        edited = ref.copy()
+        edited[24 * SR:40 * SR] = song(seed=5, pad=True)[24 * SR:40 * SR]
+        x = np.concatenate([np.zeros(int(2.61 * SR)), limited(edited + wash(len(edited)))])
+        m = variants.compare(ref, x, SR)
+        self.assertIn(m['verdict'], ('aligned_needs_check', 'different_arrangement'), m)
+        self.assertLess(m['seg_frac'], variants.SEG_SAME)
+        self.assertGreater(m['seg_frac'], variants.SEG_DIFF)             # most of the song still lines up
 
     def test_changed_second_half_is_not_same(self):
         ref = song()
