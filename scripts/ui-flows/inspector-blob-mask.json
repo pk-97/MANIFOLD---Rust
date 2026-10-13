@@ -108,7 +108,7 @@
     "Assert": {
       "selector": {
         "Query": {
-      "text": "Mask Blob Detector"
+          "text": "Mask Blob Detector"
         }
       },
       "check": "Exists"
@@ -128,5 +128,106 @@
     }
   },
   "Snapshot",
-  "Dump"
+  "Dump",
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "name": "param_card.drag_handle.Mirror"
+        }
+      },
+      "gesture": "RightClick"
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "text": "Add Mask — Circle"
+        }
+      },
+      "check": "Exists"
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "text": "Add Mask — Circle"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "text": "Mask Circle"
+        }
+      },
+      "check": "Exists"
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "name": "inspector.effect_group.header"
+        }
+      },
+      "check": "Exists"
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "name": "inspector.effect_group.add_modifier"
+        }
+      },
+      "check": "Exists"
+    }
+  },
+  "Snapshot",
+  "Dump",
+  {
+    "Key": {
+      "key": "Z",
+      "modifiers": {
+        "command": true
+      }
+    }
+  },
+  {
+    "Step": {
+      "frames": 30
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "text": "Mask Circle"
+        }
+      },
+      "check": {
+        "Count": 0
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "text": "Mirror"
+        }
+      },
+      "check": "Exists"
+    }
+  }
 ]
