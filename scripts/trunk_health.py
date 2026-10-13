@@ -214,7 +214,8 @@ INFRA_TITLE = "nightly infra: tool crash, timeout or admission refusal"
 LEG_FOLD = 10
 NEXTEST_LINE = re.compile(r"^\s*(PASS|FAIL|SIGSEGV|SIGABRT|SIGKILL|TIMEOUT)\s+\[[^\]]*\]\s+(?:\([^)]*\)\s+)?(\S+)\s+(\S+)\s*$")
 RUNNING_LINE = re.compile(r"^\s*Running .*\(.*deps/([A-Za-z0-9_]+)-[0-9a-f]+\)\s*$")
-CARGO_TEST_LINE = re.compile(r"^test (\S+) \.\.\. (ok|FAILED)\s*$")
+CARGO_CMD_LINE = re.compile(r"^\$ cargo (?:test|build)\b.*?\s-p\s+(\S+)")
+CARGO_TEST_LINE =re.compile(r"^test (\S+) \.\.\. (ok|FAILED)\s*$")
 
 
 def nightly_legs(bridge_due):
@@ -262,16 +263,28 @@ def bridge_probe_due(log_dir, now=None):
 
 def parse_test_results(output):
     """([(crate, test)] failed in order, {(crate, test)} passed) from nextest or cargo test output.
-    For cargo test the crate is the test binary's name, hyphenated."""
-    failed, passed, binary = [], set(), "unknown"
+
+    The crate is the Cargo package. A test outside the library is named
+    binary/test so same-named tests in different binaries keep apart; a library
+    test has the same key in nextest and cargo test. For cargo test a library
+    binary is named after its package; any other binary takes the package from
+    the gate's echoed command (gpu_proofs_gate prints "$ cargo test -p <package>
+    ..." before each run)."""
+    failed, passed = [], set()
+    package, crate, prefix = None, "unknown", ""
     for line in output.splitlines():
         if m := NEXTEST_LINE.match(line):
-            key = (m.group(2).split("::")[0], m.group(3))
+            crate_, _, binary = m.group(2).partition("::")
+            key = (crate_, f"{binary.replace('-', '_')}/{m.group(3)}" if binary else m.group(3))
             (passed.add(key) if m.group(1) == "PASS" else failed.append(key))
+        elif m := CARGO_CMD_LINE.match(line):
+            package = m.group(1)
         elif m := RUNNING_LINE.match(line):
-            binary = m.group(1).replace("_", "-")
+            lib = "unittests src/lib.rs" in line
+            crate = m.group(1).replace("_", "-") if lib else (package or "unknown")
+            prefix = "" if lib else f"{m.group(1)}/"
         elif m := CARGO_TEST_LINE.match(line):
-            key = (binary, m.group(1))
+            key = (crate, prefix + m.group(1))
             (passed.add(key) if m.group(2) == "ok" else failed.append(key))
     return list(dict.fromkeys(failed)), passed
 
@@ -336,6 +349,8 @@ def route_nightly(sha, results, green_legs, state_path):
         last_green = json.loads(Path(state_path).read_text())
     except (OSError, ValueError):
         last_green = {}
+    if not isinstance(last_green, dict):
+        last_green = {}
     try:
         beads = bd_open_beads()
     except Exception as e:
@@ -364,8 +379,12 @@ def route_nightly(sha, results, green_legs, state_path):
     for crate in {c for c, _ in passed} - failed_crates:
         last_green[crate] = sha
     with contextlib.suppress(OSError):
-        Path(state_path).write_text(json.dumps(last_green, indent=1, sort_keys=True))
-    closing = {f"nightly red: {c} {t}" for c, t in passed}
+        tmp = Path(f"{state_path}.tmp")
+        tmp.write_text(json.dumps(last_green, indent=1, sort_keys=True))
+        os.replace(tmp, state_path)
+    # A test that failed in any leg tonight stays open, even if another leg passed it.
+    failed_tonight = {key for r in results for key in r["failed"]}
+    closing = {f"nightly red: {c} {t}" for c, t in passed - failed_tonight}
     closing |= {f"nightly red leg: {cmd[:60]}" for cmd in green_legs}
     for bead in beads:
         title, desc = bead.get("title", ""), bead.get("description", "")

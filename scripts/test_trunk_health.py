@@ -157,16 +157,67 @@ NEXTEST_RED = """
 
 
 class RoutingTests(unittest.TestCase):
+    def test_failed_anywhere_tonight_never_closes(self):
+        nextest = "        FAIL [   0.1s] (1/2) manifold-core tests::x\n"
+        cargo = ("$ cargo test -p manifold-core --features gpu-proofs --no-fail-fast\n"
+                 "     Running unittests src/lib.rs (target/debug/deps/manifold_core-ab12cd)\n"
+                 "test tests::x ... ok\n")
+        results = [trunk_health.classify_leg("cargo nextest run", 100, nextest, ""),
+                   trunk_health.classify_leg("python3 scripts/gpu_proofs_gate.py --all", 0, cargo, "")]
+        calls = []
+        open_beads = [{"id": "BUG-x", "title": "nightly red: manifold-core tests::x", "description": ""}]
+        with tempfile.TemporaryDirectory() as d, \
+                patch.object(trunk_health, "BD", "bd"), \
+                patch.object(trunk_health.subprocess, "run", side_effect=fake_bd(open_beads, calls)), \
+                contextlib.redirect_stdout(io.StringIO()):
+            trunk_health.route_nightly("sha", results, ["python3 scripts/gpu_proofs_gate.py --all"],
+                                       Path(d, "g.json"))
+        self.assertFalse([c for c in calls if c[1] == "close"])
+        self.assertTrue([c for c in calls if c[1] == "update" and c[2] == "BUG-x"])
+
+    def test_same_test_in_two_packages_gets_two_beads_with_real_crates(self):
+        out = ("$ cargo test -p manifold-nodes --features gpu-proofs --no-fail-fast\n"
+               "     Running tests/gpu_proofs.rs (target/debug/deps/gpu_proofs-ab12)\n"
+               "test a::b ... FAILED\n"
+               "$ cargo test -p manifold-gpu --features gpu-proofs --no-fail-fast\n"
+               "     Running tests/gpu_proofs.rs (target/debug/deps/gpu_proofs-cd34)\n"
+               "test a::b ... FAILED\n")
+        result = trunk_health.classify_leg("python3 scripts/gpu_proofs_gate.py --all", 1, out, "")
+        calls = []
+        with tempfile.TemporaryDirectory() as d, \
+                patch.object(trunk_health, "BD", "bd"), \
+                patch.object(trunk_health.subprocess, "run", side_effect=fake_bd([], calls)), \
+                contextlib.redirect_stdout(io.StringIO()):
+            trunk_health.route_nightly("sha", [result], [], Path(d, "g.json"))
+        creates = [c for c in calls if c[1] == "create"]
+        self.assertEqual(len(creates), 2)
+        labels = [c[c.index("-l") + 1] for c in creates]
+        self.assertTrue(any("manifold-nodes" in l for l in labels))
+        self.assertTrue(any("manifold-gpu" in l for l in labels))
+        self.assertFalse(any("gpu-proofs" in l for l in labels))
+
+    def test_non_dict_last_green_is_treated_as_empty(self):
+        result = trunk_health.classify_leg("cargo nextest run", 100, NEXTEST_RED, "")
+        with tempfile.TemporaryDirectory() as d, \
+                patch.object(trunk_health, "BD", "bd"), \
+                patch.object(trunk_health.subprocess, "run", side_effect=fake_bd([], [])), \
+                contextlib.redirect_stdout(io.StringIO()):
+            state = Path(d, "g.json")
+            state.write_text("[1, 2]")
+            trunk_health.route_nightly("sha", [result], [], state)
+            self.assertIsInstance(json.loads(state.read_text()), dict)
+
     def test_parse_nextest_and_cargo_test_output(self):
         failed, passed = trunk_health.parse_test_results(NEXTEST_RED)
         self.assertEqual(failed, [("manifold-core", "tests::broken"), ("manifold-editing", "undo::cap")])
         self.assertIn(("manifold-core", "tests::fine"), passed)
-        cargo = ("     Running tests/gpu_proofs.rs (target/debug/deps/gpu_proofs-ab12)\n"
+        cargo = ("$ cargo test -p manifold-gpu --features gpu-proofs --no-fail-fast\n"
+                 "     Running tests/gpu_proofs.rs (target/debug/deps/gpu_proofs-ab12)\n"
                  "test a::b ... FAILED\n"
                  "     Running unittests src/lib.rs (target/debug/deps/manifold_nodes-cd34)\n"
                  "test c::d ... ok\n")
         failed, passed = trunk_health.parse_test_results(cargo)
-        self.assertEqual(failed, [("gpu-proofs", "a::b")])
+        self.assertEqual(failed, [("manifold-gpu", "gpu_proofs/a::b")])
         self.assertIn(("manifold-nodes", "c::d"), passed)
 
     def test_failing_tests_route_to_one_bead_each_with_suspects(self):
@@ -309,6 +360,41 @@ class InterpreterGuardTests(unittest.TestCase):
             self.assertIn("[ABORT]", logs[0].read_text())
             self.assertTrue(any(c[1] == "create" and "1" in c for c in ran))
             self.assertTrue(any(c[0] == "osascript" for c in ran))
+
+
+_PROD_LAST_GREEN = trunk_health.LAST_GREEN
+
+
+def _stat(path):
+    with contextlib.suppress(OSError):
+        st = path.stat()
+        return st.st_mtime_ns, st.st_size
+    return None
+
+
+_PROD_BEFORE = _stat(_PROD_LAST_GREEN)
+_SANDBOX = tempfile.TemporaryDirectory()
+_PATCHES = [patch.object(trunk_health, "LOG_DIR", Path(_SANDBOX.name)),
+            patch.object(trunk_health, "LAST_GREEN", Path(_SANDBOX.name, "last_green.json"))]
+
+
+def setUpModule():
+    # Every test runs with production state paths pointed at a sandbox.
+    for p in _PATCHES:
+        p.start()
+
+
+def tearDownModule():
+    for p in _PATCHES:
+        p.stop()
+    _SANDBOX.cleanup()
+
+
+class ProductionPathTests(unittest.TestCase):
+    def test_zz_production_last_green_untouched(self):
+        # Named to sort last so it sees every earlier test's writes.
+        self.assertNotEqual(trunk_health.LAST_GREEN, _PROD_LAST_GREEN)
+        self.assertEqual(_stat(_PROD_LAST_GREEN), _PROD_BEFORE)
 
 
 if __name__ == "__main__":
