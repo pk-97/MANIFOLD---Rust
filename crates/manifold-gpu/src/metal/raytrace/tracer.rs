@@ -3,6 +3,8 @@
 //! atrous/accumulate dispatch implementations plus their tests. Split out
 //! of `raytrace.rs` (BUG-xmsx driver split); see that file for the map.
 
+use std::cell::RefCell;
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -25,7 +27,12 @@ use super::super::types::{GpuBuffer, GpuComputePipeline, GpuTexture};
 use super::super::{GpuEncoder, Slot, SlotKind, SlotMap};
 use super::*;
 use crate::types::{GpuBinding, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage};
-use crate::trace_planner::{TraceRegion, DEFAULT_TRACE_WORK_LIMITS, estimate_trace_query_units_per_pixel, plan_trace_regions};
+use crate::trace_planner::{TraceRegion, TraceWorkLimits, estimate_trace_query_units_per_pixel, plan_trace_regions};
+use super::trace_timing::{TraceTiming, TraceTimingReport};
+
+/// Candidates one ray's walk may test before it stops (BUG-k1n2w). Mirrors
+/// the MSL `RT_WALK_MAX_CANDIDATES` default; a unit test pins the two.
+pub const RT_WALK_MAX_CANDIDATES: u32 = 64;
 
 // ─── Raw MSL kernels (shadow-only slice of rt_trace.metal) ────────────
 
@@ -550,6 +557,36 @@ const TRACE_TRANSLUCENCY_CONSTANT_INDEX: usize = 100;
 const TRACE_PASS_CONSTANT_INDEX: usize = 101;
 const MAX_RT_REFLECTION_SPP: u32 = 32;
 
+#[derive(Clone, Copy, Hash)]
+enum TraceKind {
+    Lighting,
+    Subsurface,
+}
+
+/// Identity of a trace's cost shape: kind, scene acceleration structure,
+/// size and quality. A new shape starts from small tiles; a structural
+/// scene change replaces the TLAS and so the shape too.
+fn trace_shape_key(kind: TraceKind, accel: &RtAccel, size: [u32; 2], query_units: u64, quality: &[u32]) -> u64 {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    kind.hash(&mut hasher);
+    (Retained::as_ptr(&accel.structure) as usize).hash(&mut hasher);
+    size.hash(&mut hasher);
+    query_units.hash(&mut hasher);
+    quality.hash(&mut hasher);
+    hasher.finish()
+}
+
+/// The planner rejects a pixel cap below one workgroup.
+fn floor_to_workgroup(mut limits: TraceWorkLimits, workgroup: [u32; 3]) -> TraceWorkLimits {
+    let group = u64::from(workgroup[0]) * u64::from(workgroup[1]);
+    limits.max_pixels_per_tile = limits.max_pixels_per_tile.max(group);
+    limits
+}
+
+fn region_pixels(region: &TraceRegion) -> u64 {
+    u64::from(region.extent[0]) * u64::from(region.extent[1])
+}
+
 fn trace_region_bytes(region: &TraceRegion) -> &[u8] {
     const _: () = assert!(std::mem::size_of::<TraceRegion>() == 16);
     // repr(C), four initialized u32s, and no padding.
@@ -619,7 +656,8 @@ pub struct DebugRayQueryHit {
     pub coverage: f32,
     pub brightness: f32,
     pub normal: [f32; 3],
-    pub pad1: f32,
+    /// Candidates the walk tested, at most [`RT_WALK_MAX_CANDIDATES`].
+    pub candidates: u32,
     pub uv: [f32; 2],
     pub pad2: [f32; 2],
 }
@@ -692,6 +730,10 @@ pub struct MetalShadowRayTracer {
     secondary_irradiance: Option<GpuTexture>,
     secondary_brdf_lut: Option<GpuTexture>,
     secondary_prefiltered_sheen: Option<GpuTexture>,
+    /// BUG-k1n2w: measured GPU time per trace buffer sizes the next tiles.
+    /// `dispatch_shadow_rays` takes `&self` across the backend seam; the
+    /// content thread is the only user.
+    trace_timing: RefCell<TraceTiming>,
 }
 
 /// COMPILE_CONTRACT_DESIGN D3: the RT pipeline set is device-global code —
@@ -752,6 +794,12 @@ pub struct EmissivePipelines {
 
 impl RtPipelines {
     pub(crate) fn compile(device: &GpuDevice) -> Self {
+        Self::compile_with_prelude(device, "")
+    }
+
+    /// `prelude` is MSL placed before the kernels; proofs use it to override
+    /// a `#ifndef` default such as `RT_WALK_MAX_CANDIDATES`.
+    fn compile_with_prelude(device: &GpuDevice, prelude: &str) -> Self {
         // One MSL library compile per populate (the PSO compiles record
         // themselves inside compile_pipeline_with_constants).
         record_cold_touch(ColdTouchKind::PipelineCompile);
@@ -760,7 +808,7 @@ impl RtPipelines {
         // the WGSL path's pinned older version — matches the prototype's
         // `Gpu::compile_library`.
         opts.setLanguageVersion(MTLLanguageVersion::Version3_1);
-        let source = format!("{SHADOW_RAYS_MSL}\n{SUBSURFACE_MSL}");
+        let source = format!("{prelude}{SHADOW_RAYS_MSL}\n{SUBSURFACE_MSL}");
         let src_ns = NSString::from_str(&source);
         let library = device
             .raw_device()
@@ -1184,7 +1232,34 @@ impl MetalShadowRayTracer {
     pub fn new(device: &GpuDevice) -> Self {
         // COMPILE_CONTRACT_DESIGN D3: code is device-global (compiled once
         // per process); the tracer instance owns only data.
-        let p = device.rt_pipelines();
+        Self::with_pipelines(device, device.rt_pipelines())
+    }
+
+    /// A tracer whose candidate walks test up to `cap` candidates per ray
+    /// instead of [`RT_WALK_MAX_CANDIDATES`]. Compiles its own pipelines;
+    /// proofs use `u32::MAX` to compare capped against unbounded walks.
+    #[cfg(feature = "gpu-proofs")]
+    pub fn with_walk_cap_for_proof(device: &GpuDevice, cap: u32) -> Self {
+        let prelude = format!("#define RT_WALK_MAX_CANDIDATES {cap}u\n");
+        Self::with_pipelines(device, &RtPipelines::compile_with_prelude(device, &prelude))
+    }
+
+    /// Start the next trace from the smallest tiles. The renderer calls this
+    /// on a camera cut, seek or topology change, where the measured cost no
+    /// longer describes the frame.
+    pub fn restart_trace_tiles(&self) {
+        self.trace_timing.borrow_mut().restart_all();
+    }
+
+    /// Read back any finished trace buffers now instead of at the next
+    /// dispatch, and report what has been measured.
+    pub fn poll_trace_timing(&self) -> TraceTimingReport {
+        let mut timing = self.trace_timing.borrow_mut();
+        timing.poll();
+        timing.report()
+    }
+
+    fn with_pipelines(device: &GpuDevice, p: &RtPipelines) -> Self {
         let dummy_alpha_tex = create_dummy_alpha_texture(device);
         let enabled = super::super::gpu_fault::diagnostics_enabled();
         if enabled {
@@ -1229,6 +1304,7 @@ impl MetalShadowRayTracer {
             dummy_alpha_tex,
             rt_diagnostics,
             tlas_probe: std::sync::OnceLock::new(),
+            trace_timing: RefCell::new(TraceTiming::new()),
         }
     }
 
@@ -1361,20 +1437,24 @@ impl MetalShadowRayTracer {
         }
 
         // Keep the full-resolution pass bounded by the same deterministic
-        // 8x8 planner as the other ray-query dispatches. The tile is the
-        // shader's binding(6) inline snapshot; no host allocation or commit
-        // is needed between regions because the caller owns the encoder.
-        let mut regions = plan_trace_regions(
+        // 8x8 planner and measured-time budget as the lighting trace. The
+        // tile is the shader's binding(6) inline snapshot; each tile commits
+        // as its own command buffer.
+        let query_units = u64::from(params.query_units_per_pixel.max(1));
+        let shape = trace_shape_key(TraceKind::Subsurface, accel, params.render_size, query_units, &[]);
+        let (timing_slot, limits) = self.trace_timing.borrow_mut().begin(shape);
+        let limits = floor_to_workgroup(limits, SHADOW_WORKGROUP);
+        let regions = plan_trace_regions(
             params.render_size[0],
             params.render_size[1],
             SHADOW_WORKGROUP[0],
             SHADOW_WORKGROUP[1],
-            u64::from(params.query_units_per_pixel.max(1)),
-            DEFAULT_TRACE_WORK_LIMITS,
+            query_units,
+            limits,
         )
-        .expect("validated subsurface dimensions must produce a tile plan")
-        .peekable();
-        while let Some(region) = regions.next() {
+        .expect("validated subsurface dimensions must produce a tile plan");
+        encoder.commit_and_continue(device);
+        for region in regions {
             encoder.dispatch_compute_with_accel(
                 &self.subsurface_pipeline,
                 0,
@@ -1392,9 +1472,10 @@ impl MetalShadowRayTracer {
                 dispatch_groups_2d(region.extent, SHADOW_WORKGROUP),
                 "trace_subsurface",
             );
-            if regions.peek().is_some() {
-                encoder.commit_and_continue(device);
-            }
+            self.trace_timing.borrow_mut().record(
+                timing_slot, &encoder.cmd_buf, region_pixels(&region), limits.max_pixels_per_tile,
+            );
+            encoder.commit_and_continue(device);
         }
 
         let reconstruction = SubsurfaceReconstructionParams {
@@ -2217,11 +2298,22 @@ impl ShadowRayTracer for MetalShadowRayTracer {
             caster_count, diffuse_light_count, params.shadow_spp, params.ao_spp,
             params.gi_spp, params.refl_spp, emissive_active,
         ).expect("validated RT quality must have a finite query estimate");
+        let shape = trace_shape_key(TraceKind::Lighting, accel, params.trace_size, query_units, &[
+            params.shadow_spp, params.ao_spp, params.gi_spp, params.refl_spp,
+            caster_count, diffuse_light_count, u32::from(emissive_active), u32::from(has_translucency),
+        ]);
+        let (timing_slot, limits) = self.trace_timing.borrow_mut().begin(shape);
+        let limits = floor_to_workgroup(limits, SHADOW_WORKGROUP);
         let mut regions = plan_trace_regions(
             params.trace_size[0], params.trace_size[1],
             SHADOW_WORKGROUP[0], SHADOW_WORKGROUP[1], query_units,
-            DEFAULT_TRACE_WORK_LIMITS,
+            limits,
         ).expect("validated RT trace dimensions must produce a tile plan").peekable();
+        // Every tile runs in a command buffer of its own: its measured GPU
+        // time is the trace's alone, and no earlier work shares its
+        // watchdog window.
+        encoder.commit_and_continue(device);
+        let mut diagnostic_callback = diagnostic_callback;
         while let Some(region) = regions.next() {
             for pass in TracePass::ALL {
                 if !pass.enabled(params) { continue; }
@@ -2241,15 +2333,19 @@ impl ShadowRayTracer for MetalShadowRayTracer {
                     diagnostic_label.as_deref().unwrap_or(&pipeline.label),
                 );
             }
-            if regions.peek().is_some() {
-                encoder.commit_and_continue(device);
+            // The pool slot covers all regions. Only the last tile's
+            // completion may read/release it; earlier regions are ordered on
+            // the same queue.
+            if regions.peek().is_none()
+                && let Some(block) = diagnostic_callback.take()
+            {
+                super::super::gpu_fault::begin_submission();
+                unsafe { encoder.cmd_buf.addCompletedHandler(block2::RcBlock::as_ptr(&block)); }
             }
-        }
-        // The pool slot covers all regions. Only final-buffer completion may
-        // read/release it; earlier regions are ordered on the same queue.
-        if let Some(block) = diagnostic_callback {
-            super::super::gpu_fault::begin_submission();
-            unsafe { encoder.cmd_buf.addCompletedHandler(block2::RcBlock::as_ptr(&block)); }
+            self.trace_timing.borrow_mut().record(
+                timing_slot, &encoder.cmd_buf, region_pixels(&region), limits.max_pixels_per_tile,
+            );
+            encoder.commit_and_continue(device);
         }
     }
 
@@ -2885,6 +2981,23 @@ mod tests {
                         "batched parameters changed: post={post} pass={i} channel={c} {values:?}");
                 }
             }
+        }
+    }
+
+    /// BUG-k1n2w: the Rust mirror of the walk cap matches the MSL default,
+    /// and every candidate walk in the RT kernels goes through the cap.
+    #[test]
+    fn walk_cap_mirror_and_every_candidate_walk_is_bounded() {
+        let define = format!("#define RT_WALK_MAX_CANDIDATES {RT_WALK_MAX_CANDIDATES}u");
+        assert!(SHADOW_RAYS_MSL.contains(&define), "MSL default must read: {define}");
+        for (name, source, bounded) in [
+            ("shadow_rays.msl", SHADOW_RAYS_MSL, "rt_walk_exhausted(q, "),
+            ("subsurface.msl", SUBSURFACE_MSL, ">= RT_WALK_MAX_CANDIDATES"),
+        ] {
+            let walks = source.matches(".next())").count();
+            assert!(walks > 0, "{name}: no candidate walk found");
+            assert_eq!(source.matches(bounded).count(), walks,
+                "{name}: every ray-query `.next()` walk must test the candidate cap");
         }
     }
 

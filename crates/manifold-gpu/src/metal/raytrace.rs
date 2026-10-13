@@ -46,3 +46,5 @@ pub use params::*;
 pub use emissive::*;
 mod tracer;
 pub use tracer::*;
+mod trace_timing;
+pub use trace_timing::{request_conservative_trace_tiles, TraceTimingReport};

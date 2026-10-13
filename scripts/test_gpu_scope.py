@@ -856,6 +856,15 @@ class ScopeTests(unittest.TestCase):
         self.assertEqual(sorted(set(p.final_skips()) - {n for n, _ in g.slow_tests()}), [])
         self.assertEqual(p.broad, [])
 
+    def test_rt_trace_and_mesh_to_rt_paths_run_the_walk_bound_proofs(self):
+        for path in ("crates/manifold-gpu/src/metal/shadow_rays.msl",
+                     "crates/manifold-gpu/src/metal/subsurface.msl",
+                     "crates/manifold-gpu/src/metal/raytrace/tracer.rs",
+                     "crates/manifold-gpu/src/metal/raytrace/accel.rs",
+                     "crates/manifold-gpu/src/trace_planner.rs",
+                     "crates/manifold-nodes-scene/src/node_graph/primitives/render_scene/rt_changes.rs"):
+            self.assertTrue({"rt_alpha_walk_bound::", "rt_t2a_alpha_mask::"} <= plan([path]).filters, path)
+
     def test_skip_dropped_when_it_would_hide_a_selected_filter(self):
         p = plan(["crates/manifold-gpu/src/metal/raytrace.rs", "crates/manifold-nodes-image/src/node_graph/primitives/particletext.rs"])
         self.assertEqual(sorted(set(p.final_skips()) - {n for n, _ in g.slow_tests()}), [])

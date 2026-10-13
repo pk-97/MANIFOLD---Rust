@@ -62,10 +62,169 @@ fn is_blacklist_desc(desc: &str) -> bool {
     desc.contains("for causing prior") || desc.contains("SubmissionsIgnored")
 }
 
-/// Called from command-buffer completion handlers on `Error` status.
-pub(crate) fn record_fault(desc: &str) {
-    FAULT_COUNT.fetch_add(1, Ordering::Relaxed);
+/// What a failed command buffer was, decided once where the error is read.
+/// Hosts branch on this instead of parsing log text.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FaultKind {
+    /// The GPU watchdog killed the buffer (kIOGPUCommandBufferCallbackErrorHang,
+    /// or Metal's own Timeout). The device is healthy; resubmitting can work.
+    Hang,
+    /// Bad address. GPU memory can no longer be trusted.
+    PageFault,
+    /// The device went away.
+    DeviceLost,
+    /// The driver blacklisted the queue; it never runs again.
+    SubmissionsIgnored,
+    /// Discarded because another buffer faulted. Never the cause.
+    InnocentVictim,
+    /// Anything else (out of memory, invalid resource, internal error).
+    Other,
+}
+
+impl FaultKind {
+    const ALL: [FaultKind; 6] = [
+        FaultKind::Hang,
+        FaultKind::PageFault,
+        FaultKind::DeviceLost,
+        FaultKind::SubmissionsIgnored,
+        FaultKind::InnocentVictim,
+        FaultKind::Other,
+    ];
+
+    fn index(self) -> usize {
+        self as usize
+    }
+
+    /// Short name for user-facing error text.
+    pub fn describe(self) -> &'static str {
+        match self {
+            FaultKind::Hang => "GPU hang",
+            FaultKind::PageFault => "GPU page fault",
+            FaultKind::DeviceLost => "GPU device lost",
+            FaultKind::SubmissionsIgnored => "GPU queue blacklisted by the driver",
+            FaultKind::InnocentVictim => "GPU work discarded after another fault",
+            FaultKind::Other => "GPU error",
+        }
+    }
+}
+
+/// Classify a command-buffer error. The kIOGPU token in the description is
+/// the stable identifier (its hex prefix is IOGPU's own numbering, which
+/// differs from `NSError::code`); the public Metal codes cover errors that
+/// carry no token.
+pub(crate) fn classify_fault(code: i64, desc: &str) -> FaultKind {
     if is_blacklist_desc(desc) {
+        FaultKind::SubmissionsIgnored
+    } else if desc.contains("ErrorHang") {
+        FaultKind::Hang
+    } else if desc.contains("ErrorPageFault") {
+        FaultKind::PageFault
+    } else if desc.contains("InnocentVictim") {
+        FaultKind::InnocentVictim
+    } else if desc.contains("ErrorDeviceRemoved") {
+        FaultKind::DeviceLost
+    } else if desc.contains("kIOGPU") {
+        FaultKind::Other
+    } else {
+        // MTLCommandBufferError: Timeout 2, PageFault 3, DeviceRemoved 11.
+        match code {
+            2 => FaultKind::Hang,
+            3 => FaultKind::PageFault,
+            11 => FaultKind::DeviceLost,
+            _ => FaultKind::Other,
+        }
+    }
+}
+
+static KIND_COUNTS: [AtomicU64; 6] = [
+    AtomicU64::new(0),
+    AtomicU64::new(0),
+    AtomicU64::new(0),
+    AtomicU64::new(0),
+    AtomicU64::new(0),
+    AtomicU64::new(0),
+];
+
+/// The fault kinds seen since a [`FaultMark`] was taken.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct FaultKinds(u8);
+
+impl FaultKinds {
+    pub fn with(self, kind: FaultKind) -> Self {
+        FaultKinds(self.0 | 1 << kind.index())
+    }
+    pub fn contains(self, kind: FaultKind) -> bool {
+        self.0 & (1 << kind.index()) != 0
+    }
+    pub fn is_empty(self) -> bool {
+        self.0 == 0
+    }
+    /// The device or queue cannot be trusted: stop the process.
+    pub fn is_fatal(self) -> bool {
+        self.contains(FaultKind::PageFault)
+            || self.contains(FaultKind::DeviceLost)
+            || self.contains(FaultKind::SubmissionsIgnored)
+    }
+    /// A hang, or work discarded by the GPU's recovery from a hang we did not
+    /// see reported, and nothing worse: resubmitting the work is reasonable.
+    pub fn is_recoverable_hang(self) -> bool {
+        (self.contains(FaultKind::Hang) || self.contains(FaultKind::InnocentVictim))
+            && !self.is_fatal()
+            && !self.contains(FaultKind::Other)
+    }
+    /// The most telling kind, for an error message.
+    pub fn headline(self) -> Option<FaultKind> {
+        [
+            FaultKind::DeviceLost,
+            FaultKind::PageFault,
+            FaultKind::SubmissionsIgnored,
+            FaultKind::Hang,
+            FaultKind::Other,
+            FaultKind::InnocentVictim,
+        ]
+        .into_iter()
+        .find(|kind| self.contains(*kind))
+    }
+}
+
+/// Snapshot of the fault counters; ask it what happened afterwards.
+#[derive(Clone, Copy, Debug)]
+pub struct FaultMark {
+    total: u64,
+    kinds: [u64; 6],
+}
+
+impl FaultMark {
+    pub fn total(&self) -> u64 {
+        self.total
+    }
+    /// Kinds recorded since this mark was taken.
+    pub fn kinds_since(&self) -> FaultKinds {
+        let now = mark();
+        FaultKind::ALL.iter().fold(FaultKinds::default(), |set, kind| {
+            if now.kinds[kind.index()] != self.kinds[kind.index()] {
+                set.with(*kind)
+            } else {
+                set
+            }
+        })
+    }
+}
+
+/// Take a snapshot of the fault counters.
+pub fn mark() -> FaultMark {
+    FaultMark {
+        total: FAULT_COUNT.load(Ordering::Relaxed),
+        kinds: std::array::from_fn(|i| KIND_COUNTS[i].load(Ordering::Acquire)),
+    }
+}
+
+/// Called from command-buffer completion handlers on `Error` status.
+pub(crate) fn record_fault(code: i64, desc: &str) {
+    let kind = classify_fault(code, desc);
+    KIND_COUNTS[kind.index()].fetch_add(1, Ordering::Release);
+    FAULT_COUNT.fetch_add(1, Ordering::Relaxed);
+    if kind == FaultKind::SubmissionsIgnored {
         SUBMISSIONS_IGNORED.store(true, Ordering::Release);
     }
 }
@@ -162,8 +321,39 @@ mod tests {
     // The exact description strings the driver produced in the BUG-84fv
     // incident log (2026-08-02) — pinning the REAL text, not a remembered
     // paraphrase, is what the BUG-665r original lacked.
-    use super::{complete_submission, begin_submission, drain_completions, is_blacklist_desc,
-        reset_submission_counters_for_test};
+    use super::{classify_fault, complete_submission, begin_submission, drain_completions, is_blacklist_desc,
+        reset_submission_counters_for_test, FaultKind, FaultKinds};
+
+    #[test]
+    fn real_descriptions_classify_by_kind() {
+        let hang = "Caused GPU Hang Error (00000003:kIOGPUCommandBufferCallbackErrorHang)";
+        let page = "Caused GPU Address Fault Error (0000000b:kIOGPUCommandBufferCallbackErrorPageFault)";
+        let victim = "Discarded (victim of GPU error/recovery) (00000005:kIOGPUCommandBufferCallbackErrorInnocentVictim)";
+        let ignored = "Ignored (for causing prior/excessive GPU errors) (00000004:kIOGPUCommandBufferCallbackErrorSubmissionsIgnored)";
+        // NSError::code is deliberately wrong here: the token decides.
+        assert_eq!(classify_fault(1, hang), FaultKind::Hang);
+        assert_eq!(classify_fault(1, page), FaultKind::PageFault);
+        assert_eq!(classify_fault(1, victim), FaultKind::InnocentVictim);
+        assert_eq!(classify_fault(1, ignored), FaultKind::SubmissionsIgnored);
+        assert_eq!(classify_fault(8, "Insufficient Memory"), FaultKind::Other);
+        assert_eq!(classify_fault(2, "Execution timed out"), FaultKind::Hang);
+        assert_eq!(classify_fault(11, "Device removed"), FaultKind::DeviceLost);
+    }
+
+    #[test]
+    fn recovery_policy_follows_the_worst_kind() {
+        let hang = FaultKinds::default().with(FaultKind::Hang);
+        let hang_and_victim = hang.with(FaultKind::InnocentVictim);
+        assert!(hang.is_recoverable_hang() && hang_and_victim.is_recoverable_hang());
+        assert!(FaultKinds::default().with(FaultKind::InnocentVictim).is_recoverable_hang());
+        assert!(!hang_and_victim.is_fatal());
+        assert!(hang.with(FaultKind::PageFault).is_fatal());
+        assert!(!hang.with(FaultKind::PageFault).is_recoverable_hang());
+        assert!(hang.with(FaultKind::DeviceLost).is_fatal());
+        assert!(hang.with(FaultKind::SubmissionsIgnored).is_fatal());
+        assert!(!hang.with(FaultKind::Other).is_recoverable_hang());
+        assert!(!FaultKinds::default().with(FaultKind::Other).is_fatal());
+    }
 
     #[test]
     fn blacklist_description_matches() {

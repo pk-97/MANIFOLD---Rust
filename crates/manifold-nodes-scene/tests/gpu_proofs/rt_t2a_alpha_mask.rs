@@ -128,6 +128,26 @@ fn run_fixture_with_metadata(
     alpha_cutoff: f32,
 ) -> [f32; 2] {
     let h = manifold_node_engine::testkit::gpu_harness::shared();
+    run_fixture_on(
+        &MetalShadowRayTracer::new(&h.device), alpha_mask, base_color_alpha, texture_enabled,
+        uv_set, uv_transform, wrap, linear, vertex_alpha, alpha_cutoff,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_fixture_on(
+    tracer: &MetalShadowRayTracer,
+    alpha_mask: bool,
+    base_color_alpha: f32,
+    texture_enabled: bool,
+    uv_set: u32,
+    uv_transform: [f32; 6],
+    wrap: [u32; 2],
+    linear: bool,
+    vertex_alpha: f32,
+    alpha_cutoff: f32,
+) -> [f32; 2] {
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
     let device = &h.device;
 
     // ─── Occluder: one quad at z=1, x,y in [-1,1], u=(x+1)/2 ──
@@ -211,7 +231,6 @@ fn run_fixture_with_metadata(
         tangent_offset: u32::MAX,
     }];
 
-    let tracer = MetalShadowRayTracer::new(device);
     // P3 seam: plan/prepare allocate, encode rides the dispatch encoder
     // below (built before the trace dispatch on the same command buffer).
     let plan = tracer.plan_accel(device, None, &objects).expect("plan accel");
@@ -539,4 +558,21 @@ fn alpha_metadata_linear_filter_and_vertex_color_multiply() {
         0.5,
     );
     assert_eq!(vertex_transparent_with_map, [1.0, 1.0], "vertex alpha must multiply mapped alpha");
+}
+
+/// BUG-k1n2w: the candidate-walk cap never engages on this fixture, so the
+/// capped production walk and an unbounded walk trace identical values.
+#[test]
+fn alpha_walk_cap_matches_unbounded_walk() {
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
+    let capped = MetalShadowRayTracer::new(&h.device);
+    let unbounded = MetalShadowRayTracer::with_walk_cap_for_proof(&h.device, u32::MAX);
+    for (alpha_mask, linear, cutoff) in [(true, false, 0.5), (false, false, 0.5), (true, true, 0.8)] {
+        let run = |tracer| run_fixture_on(
+            tracer, alpha_mask, 1.0, true, 0, [1.0, 0.0, 0.0, 1.0, 0.0, 0.0], [1, 1], linear, 1.0, cutoff,
+        );
+        let (with_cap, without_cap) = (run(&capped), run(&unbounded));
+        assert_eq!(with_cap.map(f32::to_bits), without_cap.map(f32::to_bits),
+            "mask={alpha_mask} linear={linear} cutoff={cutoff}: {with_cap:?} vs {without_cap:?}");
+    }
 }
