@@ -722,6 +722,7 @@ impl GeneratorRenderer {
         // structurally changed (layer reorder/add/delete bumps data_version).
         // layer_id stays stable across reorders so generator state follows.
         if data_version != self.last_data_version {
+            manifold_core::work_count::record_work(manifold_core::work_count::WorkKind::GeneratorStructureRefresh);
             self.last_data_version = data_version;
             for (clip_id, active) in self.active_clips.iter_mut() {
                 if let Some(pos) = layers.iter().position(|l| l.layer_id == active.layer_id) {

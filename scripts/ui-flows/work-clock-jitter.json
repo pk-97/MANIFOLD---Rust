@@ -1,0 +1,5 @@
+[
+  "ResetWork",
+  { "PlayingStep": { "frames": 120, "bpm": 120.0, "wobble": 0.01 } },
+  { "AssertWork": { "window": "jitter_2s" } }
+]

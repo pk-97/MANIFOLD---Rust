@@ -1,0 +1,10 @@
+[
+  "ResetWork",
+  {
+    "Pointer": {
+      "target": { "Surface": { "surface": "automation_lanes", "kind": "automation_point", "label": "Mirror: Amount pt1" } },
+      "gesture": { "DragFrames": { "to": { "Point": { "x": 700.0, "y": 690.0 } }, "steps": 60 } }
+    }
+  },
+  { "AssertWork": { "window": "point_drag_1s" } }
+]

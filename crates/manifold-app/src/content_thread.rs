@@ -10,6 +10,7 @@ use std::sync::Arc;
 use manifold_core::math::BeatQuantizer;
 use manifold_core::types::{ClockAuthority, OscSyncMode, PlaybackState, TempoPointSource};
 use manifold_core::{Beats, Bpm, Seconds};
+use manifold_core::work_count::{record_work, WorkKind};
 use manifold_editing::service::EditingService;
 use manifold_playback::clip_launcher::ClipLauncher;
 use manifold_playback::engine::{PlaybackEngine, TickContext};
@@ -323,7 +324,9 @@ impl ContentThread {
         // LED output is NOT auto-initialized. The user enables it via the
         // master-inspector toggle, which sends InitLedOutput / ShutdownLedOutput.
 
+        let mut work_trace = manifold_core::work_count::WorkTrace::new();
         loop {
+            work_trace.frame("content");
             // 1. Drain ALL pending commands, coalescing consecutive seeks.
             // During scrubbing the UI sends a SeekTo/SeekToBeat per mouse-move
             // event — at high polling rates this floods the channel. Only the
@@ -1217,7 +1220,10 @@ impl ContentThread {
             let arc = self
                 .engine
                 .project()
-                .map(|p| std::sync::Arc::new(p.clone()));
+                .map(|p| {
+                    record_work(WorkKind::ProjectClone);
+                    std::sync::Arc::new(p.clone())
+                });
             self.cached_project_snapshot = arc.clone();
             arc
         } else {
@@ -1236,6 +1242,7 @@ impl ContentThread {
         // values (see ModulationSnapshot).
         let modulation_snapshot = if let Some(project) = self.engine.project() {
             self.mod_scratch.capture_into(project);
+            record_work(WorkKind::ModSnapshotCopy);
             Some(self.mod_scratch.clone())
         } else {
             None

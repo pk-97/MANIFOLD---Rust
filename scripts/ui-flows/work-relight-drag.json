@@ -1,0 +1,5 @@
+[
+  "ResetWork",
+  { "ScrubDrag": { "param": { "Relight": { "effect": 0, "field": "Gain" } }, "from": 0.2, "to": 0.9, "steps": 60 } },
+  { "AssertWork": { "window": "drag_1s" } }
+]

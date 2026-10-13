@@ -56,6 +56,7 @@ pub fn push_state(
     project_path: Option<&std::path::Path>,
     transport_cache: &mut TransportDisplayCache,
 ) {
+    manifold_core::work_count::record_work(manifold_core::work_count::WorkKind::ValuePush);
     let tree = &mut ui.tree;
 
     // Transport state — three visual states matching Unity TransportPanel

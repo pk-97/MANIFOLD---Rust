@@ -16,6 +16,7 @@ fn rebuild_editor_inspector(
     active_layer: Option<usize>,
     viewport: manifold_ui::Rect,
 ) {
+    manifold_core::work_count::record_work(manifold_core::work_count::WorkKind::EditorTreeBuild);
     ui.tree.clear();
     ui.build_inspector_in_rect(viewport);
     crate::ui_bridge::sync_card_values(ui, project, active_layer);
@@ -1404,6 +1405,7 @@ impl Application {
         // off-scope / collapsed-group nodes cost nothing. The set is the whole
         // current scope level (what the atlas shows), so it changes only on a
         // scope descend/ascend or a topology edit, not on pan/zoom.
+        manifold_core::work_count::record_work(manifold_core::work_count::WorkKind::EditorProjection);
         let visible_nodes: Vec<manifold_core::NodeId> = match (
             self.graph_canvas.as_ref(),
             editor_ui_snap.as_deref(),

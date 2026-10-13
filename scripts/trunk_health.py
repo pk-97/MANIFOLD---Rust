@@ -295,6 +295,10 @@ def main():
         ["python3", "scripts/rt_noise_gate.py", "--motion",
          "--project", "tests/fixtures/rt/RtMotionHelmet.manifold",
          "--require-fixture"],
+        # UI work-count gate (docs/UI_INVALIDATION_DESIGN.md D10): every work
+        # flow counts real gestures' UI work against the committed ceilings in
+        # scripts/ui-flows/work_ceilings.json; a count above its ceiling is red.
+        ["python3", "scripts/run_ui_flows.py", "work-"],
         # Presentation-tear class (BUG-xaw4): legacy policy must keep tearing
         # (probe not blind) AND fenced policy must stay clean (the shipped
         # read-fence contract). Independent legs yield to pending landings.

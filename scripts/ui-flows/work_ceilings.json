@@ -1,0 +1,594 @@
+{
+  "content_reaction_budget": {
+    "ableton_bridge_tick": {
+      "ClipBindingReconcile": 2,
+      "ModSnapshotCopy": 1
+    },
+    "ableton_trim_tick": {
+      "ClipBindingReconcile": 3,
+      "ModSnapshotCopy": 1,
+      "PresetFingerprint": 1,
+      "RendererReload": 3
+    },
+    "audio_mod_tick": {
+      "ClipBindingReconcile": 3,
+      "ModSnapshotCopy": 1
+    },
+    "band_split_tick": {
+      "ClipBindingReconcile": 3,
+      "ModSnapshotCopy": 1
+    },
+    "clip_move_execute": {
+      "AudioReconcile": 1,
+      "ClipBindingReconcile": 3,
+      "GeneratorStructureRefresh": 1,
+      "ModSnapshotCopy": 1,
+      "OscRouteRebuild": 1,
+      "PresetFingerprint": 1,
+      "ProjectClone": 1,
+      "TempoReconcile": 1
+    },
+    "driver_trim_tick": {
+      "ClipBindingReconcile": 3,
+      "ModSnapshotCopy": 1
+    },
+    "envelope_tick": {
+      "ClipBindingReconcile": 3,
+      "ModSnapshotCopy": 1
+    },
+    "idle_ticks_x10": {
+      "ClipBindingReconcile": 20,
+      "ModSnapshotCopy": 10
+    },
+    "layer_gain_tick": {
+      "ClipBindingReconcile": 3,
+      "ModSnapshotCopy": 1
+    },
+    "led_tick": {
+      "ClipBindingReconcile": 3,
+      "ModSnapshotCopy": 1,
+      "PresetFingerprint": 1,
+      "RendererReload": 3
+    },
+    "mapping_drawer_tick": {
+      "ClipBindingReconcile": 3,
+      "ModSnapshotCopy": 1,
+      "PresetFingerprint": 1
+    },
+    "node_param_tick": {
+      "ClipBindingReconcile": 3,
+      "ModSnapshotCopy": 1
+    },
+    "osc_router_tick": {
+      "ClipBindingReconcile": 2,
+      "ModSnapshotCopy": 1
+    },
+    "param_execute": {
+      "AbletonListenerRebuild": 1,
+      "AudioReconcile": 1,
+      "ClipBindingReconcile": 3,
+      "GeneratorStructureRefresh": 1,
+      "ModSnapshotCopy": 1,
+      "OscRouteRebuild": 1,
+      "PresetFingerprint": 1,
+      "ProjectClone": 1,
+      "TempoReconcile": 1
+    },
+    "param_slider_tick": {
+      "ClipBindingReconcile": 3,
+      "ModSnapshotCopy": 1
+    },
+    "relight_tick": {
+      "ClipBindingReconcile": 3,
+      "ModSnapshotCopy": 1
+    },
+    "send_gain_tick": {
+      "ClipBindingReconcile": 3,
+      "ModSnapshotCopy": 1
+    },
+    "trigger_shape_tick": {
+      "ClipBindingReconcile": 3,
+      "ModSnapshotCopy": 1
+    },
+    "undo": {
+      "AbletonListenerRebuild": 1,
+      "AudioReconcile": 1,
+      "ClipBindingReconcile": 3,
+      "GeneratorStructureRefresh": 1,
+      "ModSnapshotCopy": 1,
+      "OscRouteRebuild": 1,
+      "PresetFingerprint": 1,
+      "ProjectClone": 1,
+      "TempoReconcile": 1
+    }
+  },
+  "flows": {
+    "work-audio-mod-range": {
+      "drag_1s": {
+        "ChromeLayout": 186,
+        "FrameAlloc": 11205,
+        "FullBuild": 1,
+        "OverviewRepaint": 62,
+        "PresetFingerprint": 62,
+        "SlotInvalidate": 7,
+        "TextMeasureMiss": 5094,
+        "ValuePush": 62
+      }
+    },
+    "work-automation-hover": {
+      "hover_lanes_2s": {
+        "ChromeLayout": 366,
+        "FrameAlloc": 63390,
+        "GridBitmapRepaint": 4,
+        "OverviewRepaint": 122,
+        "PresetFingerprint": 122,
+        "RegionRebuild": 122,
+        "SlotInvalidate": 244,
+        "TextMeasureMiss": 11102,
+        "ValuePush": 122
+      }
+    },
+    "work-automation-point-drag": {
+      "point_drag_1s": {
+        "ChromeLayout": 186,
+        "ClipProjection": 1,
+        "FrameAlloc": 34708,
+        "FullBuild": 1,
+        "GridBitmapRepaint": 8,
+        "InspectorSync": 1,
+        "LaneProjection": 62,
+        "OverviewRepaint": 62,
+        "PresetFingerprint": 62,
+        "ProjectSync": 1,
+        "RegionRebuild": 60,
+        "SlotInvalidate": 127,
+        "TextMeasureMiss": 5711,
+        "ValuePush": 62
+      }
+    },
+    "work-band-split": {
+      "drag_1s": {
+        "ChromeLayout": 186,
+        "ClipProjection": 1,
+        "DeviceQuery": 1,
+        "FrameAlloc": 16401,
+        "FullBuild": 2,
+        "GridBitmapRepaint": 27,
+        "InspectorSync": 1,
+        "LaneProjection": 2,
+        "OverviewRepaint": 62,
+        "PresetFingerprint": 62,
+        "ProjectSync": 1,
+        "SlotInvalidate": 14,
+        "TextMeasureMiss": 5192,
+        "ValuePush": 62
+      }
+    },
+    "work-clip-drag": {
+      "drag_2s": {
+        "ChromeLayout": 366,
+        "ClipProjection": 119,
+        "FrameAlloc": 66610,
+        "FullBuild": 2,
+        "GridBitmapRepaint": 15,
+        "InspectorSync": 2,
+        "LaneProjection": 5,
+        "OverviewRepaint": 122,
+        "PresetFingerprint": 122,
+        "ProjectSync": 2,
+        "RegionRebuild": 119,
+        "SlotInvalidate": 252,
+        "TextMeasureMiss": 11251,
+        "ValuePush": 122
+      }
+    },
+    "work-clip-trim": {
+      "trim_1s": {
+        "ChromeLayout": 186,
+        "ClipProjection": 60,
+        "FrameAlloc": 34046,
+        "FullBuild": 2,
+        "GridBitmapRepaint": 15,
+        "InspectorSync": 2,
+        "LaneProjection": 5,
+        "OverviewRepaint": 62,
+        "PresetFingerprint": 62,
+        "ProjectSync": 2,
+        "RegionRebuild": 59,
+        "SlotInvalidate": 132,
+        "TextMeasureMiss": 5791,
+        "ValuePush": 62
+      }
+    },
+    "work-clock-jitter": {
+      "jitter_2s": {
+        "ChromeLayout": 360,
+        "DriverScan": 120,
+        "FrameAlloc": 19908,
+        "FullBuild": 1,
+        "OverviewRepaint": 120,
+        "PresetFingerprint": 120,
+        "SlotInvalidate": 7,
+        "TextMeasureMiss": 9734,
+        "ValuePush": 120
+      }
+    },
+    "work-cursor-nav": {
+      "four_cursor_moves": {
+        "ChromeLayout": 12,
+        "ClipProjection": 4,
+        "FrameAlloc": 3980,
+        "FullBuild": 4,
+        "GridBitmapRepaint": 28,
+        "InspectorSync": 7,
+        "LaneProjection": 12,
+        "OverviewRepaint": 4,
+        "PresetFingerprint": 4,
+        "ProjectSync": 4,
+        "SlotInvalidate": 28,
+        "TextMeasureMiss": 684,
+        "ValuePush": 4
+      }
+    },
+    "work-dock-scroll": {
+      "four_notches": {
+        "ChromeLayout": 12,
+        "FrameAlloc": 3110,
+        "FullBuild": 1,
+        "OverviewRepaint": 4,
+        "PresetFingerprint": 4,
+        "SlotInvalidate": 7,
+        "TextMeasureMiss": 436,
+        "ValuePush": 4
+      }
+    },
+    "work-drawer-tween": {
+      "drawer_change_half_second": {
+        "ChromeLayout": 93,
+        "ClipProjection": 1,
+        "FrameAlloc": 5737,
+        "FullBuild": 2,
+        "GridBitmapRepaint": 1,
+        "InspectorSync": 1,
+        "LaneProjection": 2,
+        "OverviewRepaint": 31,
+        "PresetFingerprint": 31,
+        "ProjectSync": 1,
+        "SlotInvalidate": 14,
+        "TextMeasureMiss": 2698,
+        "ValuePush": 31
+      }
+    },
+    "work-driver-trim": {
+      "drag_1s": {
+        "ChromeLayout": 186,
+        "FrameAlloc": 11204,
+        "FullBuild": 1,
+        "OverviewRepaint": 62,
+        "PresetFingerprint": 62,
+        "SlotInvalidate": 7,
+        "TextMeasureMiss": 5094,
+        "ValuePush": 62
+      }
+    },
+    "work-envelope-drag": {
+      "drag_1s": {
+        "ChromeLayout": 186,
+        "FrameAlloc": 9504,
+        "FullBuild": 1,
+        "OverviewRepaint": 62,
+        "PresetFingerprint": 62,
+        "SlotInvalidate": 7,
+        "TextMeasureMiss": 5069,
+        "ValuePush": 62
+      }
+    },
+    "work-follow-scroll": {
+      "follow_2s": {
+        "ChromeLayout": 360,
+        "DriverScan": 1,
+        "FrameAlloc": 18648,
+        "GridBitmapRepaint": 7,
+        "OverviewRepaint": 120,
+        "PresetFingerprint": 120,
+        "RegionRebuild": 1,
+        "SlotInvalidate": 2,
+        "TextMeasureMiss": 9600,
+        "ValuePush": 120
+      }
+    },
+    "work-hover": {
+      "hover_clips_2s": {
+        "ChromeLayout": 366,
+        "FrameAlloc": 60925,
+        "GridBitmapRepaint": 1,
+        "OverviewRepaint": 122,
+        "PresetFingerprint": 122,
+        "RegionRebuild": 122,
+        "SlotInvalidate": 244,
+        "TextMeasureMiss": 11102,
+        "ValuePush": 122
+      }
+    },
+    "work-idle": {
+      "idle_2s": {
+        "ChromeLayout": 360,
+        "FrameAlloc": 18488,
+        "OverviewRepaint": 120,
+        "PresetFingerprint": 120,
+        "TextMeasureMiss": 9600,
+        "ValuePush": 120
+      }
+    },
+    "work-inspector-resize": {
+      "resize_1s": {
+        "ChromeLayout": 180,
+        "FrameAlloc": 93350,
+        "FullBuild": 60,
+        "GridBitmapRepaint": 180,
+        "OverviewRepaint": 60,
+        "PresetFingerprint": 60,
+        "SlotInvalidate": 420,
+        "TextMeasureMiss": 12840,
+        "ValuePush": 60
+      }
+    },
+    "work-lane-resize": {
+      "resize_1s": {
+        "ChromeLayout": 186,
+        "ClipProjection": 60,
+        "FrameAlloc": 68870,
+        "FullBuild": 60,
+        "GridBitmapRepaint": 421,
+        "InspectorSync": 60,
+        "LaneProjection": 121,
+        "OverviewRepaint": 62,
+        "PresetFingerprint": 62,
+        "ProjectSync": 60,
+        "RegionRebuild": 1,
+        "SlotInvalidate": 422,
+        "TextMeasureMiss": 10431,
+        "ValuePush": 62
+      }
+    },
+    "work-layer-gain": {
+      "drag_1s": {
+        "ChromeLayout": 186,
+        "FrameAlloc": 11021,
+        "FullBuild": 1,
+        "OverviewRepaint": 62,
+        "PresetFingerprint": 62,
+        "SlotInvalidate": 7,
+        "TextMeasureMiss": 5094,
+        "ValuePush": 62
+      }
+    },
+    "work-layer-reorder": {
+      "drag_1s": {
+        "ChromeLayout": 186,
+        "ClipProjection": 1,
+        "FrameAlloc": 11937,
+        "FullBuild": 1,
+        "GridBitmapRepaint": 7,
+        "InspectorSync": 1,
+        "LaneProjection": 2,
+        "OverviewRepaint": 62,
+        "PresetFingerprint": 62,
+        "ProjectSync": 1,
+        "SlotInvalidate": 7,
+        "TextMeasureMiss": 5051,
+        "ValuePush": 62
+      }
+    },
+    "work-marquee": {
+      "marquee_1s": {
+        "ChromeLayout": 186,
+        "ClipProjection": 61,
+        "FrameAlloc": 34181,
+        "FullBuild": 2,
+        "GridBitmapRepaint": 14,
+        "InspectorSync": 2,
+        "LaneProjection": 5,
+        "OverviewRepaint": 62,
+        "PresetFingerprint": 62,
+        "ProjectSync": 2,
+        "RegionRebuild": 59,
+        "SlotInvalidate": 132,
+        "TextMeasureMiss": 5791,
+        "ValuePush": 62
+      }
+    },
+    "work-modifier": {
+      "four_modifier_changes": {
+        "ChromeLayout": 12,
+        "FrameAlloc": 2177,
+        "FullBuild": 4,
+        "OverviewRepaint": 4,
+        "PresetFingerprint": 4,
+        "SlotInvalidate": 28,
+        "TextMeasureMiss": 684,
+        "ValuePush": 4
+      }
+    },
+    "work-paused-cursor": {
+      "cursor_select_cursor_paused": {
+        "ChromeLayout": 99,
+        "ClipProjection": 3,
+        "FrameAlloc": 7701,
+        "FullBuild": 3,
+        "GridBitmapRepaint": 21,
+        "InspectorSync": 5,
+        "LaneProjection": 9,
+        "OverviewRepaint": 33,
+        "PresetFingerprint": 33,
+        "ProjectSync": 3,
+        "SlotInvalidate": 21,
+        "TextMeasureMiss": 2913,
+        "ValuePush": 33
+      }
+    },
+    "work-playback": {
+      "play_2s": {
+        "ChromeLayout": 360,
+        "FrameAlloc": 18506,
+        "OverviewRepaint": 120,
+        "PresetFingerprint": 120,
+        "TextMeasureMiss": 9600,
+        "ValuePush": 120
+      }
+    },
+    "work-relight-drag": {
+      "drag_1s": {
+        "ChromeLayout": 186,
+        "FrameAlloc": 11021,
+        "FullBuild": 1,
+        "OverviewRepaint": 62,
+        "PresetFingerprint": 62,
+        "SlotInvalidate": 7,
+        "TextMeasureMiss": 5094,
+        "ValuePush": 62
+      }
+    },
+    "work-scrollbar-drag": {
+      "drag_1s": {
+        "ChromeLayout": 186,
+        "ClipProjection": 60,
+        "FrameAlloc": 56878,
+        "FullBuild": 60,
+        "GridBitmapRepaint": 420,
+        "InspectorSync": 60,
+        "LaneProjection": 120,
+        "OverviewRepaint": 62,
+        "PresetFingerprint": 62,
+        "ProjectSync": 60,
+        "SlotInvalidate": 420,
+        "TextMeasureMiss": 10420,
+        "ValuePush": 62
+      }
+    },
+    "work-select-click": {
+      "select_clip": {
+        "ChromeLayout": 3,
+        "ClipProjection": 1,
+        "FrameAlloc": 1018,
+        "FullBuild": 1,
+        "GridBitmapRepaint": 7,
+        "InspectorSync": 1,
+        "LaneProjection": 3,
+        "OverviewRepaint": 1,
+        "PresetFingerprint": 1,
+        "ProjectSync": 1,
+        "SlotInvalidate": 7,
+        "TextMeasureMiss": 171,
+        "ValuePush": 1
+      }
+    },
+    "work-send-gain": {
+      "drag_1s": {
+        "ChromeLayout": 186,
+        "FrameAlloc": 14484,
+        "FullBuild": 1,
+        "OverviewRepaint": 62,
+        "PresetFingerprint": 62,
+        "SlotInvalidate": 7,
+        "TextMeasureMiss": 5076,
+        "ValuePush": 62
+      }
+    },
+    "work-slider-drag": {
+      "drag_2s": {
+        "ChromeLayout": 366,
+        "FrameAlloc": 104849,
+        "FullBuild": 61,
+        "OverviewRepaint": 122,
+        "PresetFingerprint": 122,
+        "SlotInvalidate": 427,
+        "TextMeasureMiss": 17934,
+        "ValuePush": 122
+      }
+    },
+    "work-slider-grab": {
+      "three_grabs_lanes_hidden": {
+        "ChromeLayout": 27,
+        "FrameAlloc": 5644,
+        "FullBuild": 3,
+        "OverviewRepaint": 9,
+        "PresetFingerprint": 9,
+        "SlotInvalidate": 21,
+        "TextMeasureMiss": 1122,
+        "ValuePush": 9
+      }
+    },
+    "work-split-drag": {
+      "split_1s": {
+        "ChromeLayout": 180,
+        "FrameAlloc": 32230,
+        "FullBuild": 60,
+        "OverviewRepaint": 60,
+        "PresetFingerprint": 60,
+        "SlotInvalidate": 420,
+        "TextMeasureMiss": 10260,
+        "ValuePush": 60
+      }
+    },
+    "work-trigger-shape": {
+      "drag_1s": {
+        "ChromeLayout": 186,
+        "FrameAlloc": 11021,
+        "FullBuild": 1,
+        "OverviewRepaint": 62,
+        "PresetFingerprint": 62,
+        "SlotInvalidate": 7,
+        "TextMeasureMiss": 5094,
+        "ValuePush": 62
+      }
+    },
+    "work-trim-undo": {
+      "undo": {
+        "ChromeLayout": 3,
+        "ClipProjection": 1,
+        "FrameAlloc": 2165,
+        "FullBuild": 1,
+        "GridBitmapRepaint": 3,
+        "InspectorSync": 1,
+        "LaneProjection": 2,
+        "OverviewRepaint": 1,
+        "PresetFingerprint": 1,
+        "ProjectSync": 1,
+        "SlotInvalidate": 7,
+        "TextMeasureMiss": 214,
+        "ValuePush": 1
+      }
+    },
+    "work-values-undo": {
+      "undo": {
+        "ChromeLayout": 3,
+        "ClipProjection": 1,
+        "FrameAlloc": 2166,
+        "FullBuild": 1,
+        "GridBitmapRepaint": 3,
+        "InspectorSync": 1,
+        "LaneProjection": 2,
+        "OverviewRepaint": 1,
+        "PresetFingerprint": 1,
+        "ProjectSync": 1,
+        "SlotInvalidate": 7,
+        "TextMeasureMiss": 214,
+        "ValuePush": 1
+      }
+    },
+    "work-zoom": {
+      "zoom_30_notches": {
+        "ChromeLayout": 90,
+        "FrameAlloc": 9577,
+        "GridBitmapRepaint": 119,
+        "OverviewRepaint": 30,
+        "PresetFingerprint": 30,
+        "RegionRebuild": 30,
+        "SlotInvalidate": 60,
+        "TextMeasureMiss": 2730,
+        "ValuePush": 30
+      }
+    }
+  }
+}

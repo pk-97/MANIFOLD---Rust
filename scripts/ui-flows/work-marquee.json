@@ -1,0 +1,10 @@
+[
+  "ResetWork",
+  {
+    "Pointer": {
+      "target": { "Point": { "x": 470.0, "y": 665.0 } },
+      "gesture": { "DragFrames": { "to": { "Point": { "x": 900.0, "y": 700.0 } }, "steps": 60 } }
+    }
+  },
+  { "AssertWork": { "window": "marquee_1s" } }
+]

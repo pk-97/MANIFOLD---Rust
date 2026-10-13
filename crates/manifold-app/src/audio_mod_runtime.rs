@@ -367,6 +367,7 @@ impl AudioModRuntime {
         // aggregate churn — never rebuilds a device or system-audio capture.
         let app_rebuild = processes_changed && matches!(source_kind, Some(AudioSourceKind::App));
         if data_version != self.last_version || device_rebuild || app_rebuild || self.spec_dirty {
+            manifold_core::work_count::record_work(manifold_core::work_count::WorkKind::AudioReconcile);
             if device_rebuild || app_rebuild {
                 self.visuals.clear();
             }

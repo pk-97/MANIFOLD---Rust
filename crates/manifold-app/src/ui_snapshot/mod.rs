@@ -67,15 +67,18 @@ pub fn run(args: &[String]) {
     }
     // `batch <scene> <script> ...`: many `--script` flows in one process
     // (`script::run_batch`), for `scripts/run_ui_flows.py`.
+    // `--record-work`: every `AssertWork` step writes the counts it observed as
+    // the flow's ceilings instead of checking them (UI_INVALIDATION_DESIGN D11).
+    let record_work = args.iter().any(|a| a == "--record-work");
     if scene == "batch" {
-        let pairs = &args[2..];
+        let pairs: Vec<&String> = args[2..].iter().filter(|a| *a != "--record-work").collect();
         if pairs.is_empty() || !pairs.len().is_multiple_of(2) {
-            eprintln!("ui-snap batch: usage: ui-snap batch <scene> <script.json> [<scene> <script.json> ...]");
+            eprintln!("ui-snap batch: usage: ui-snap batch [--record-work] <scene> <script.json> [<scene> <script.json> ...]");
             std::process::exit(2);
         }
         let flows: Vec<(String, String)> =
             pairs.chunks(2).map(|p| (p[0].clone(), p[1].clone())).collect();
-        script::run_batch(&flows);
+        script::run_batch(&flows, record_work);
         return;
     }
     if scene == "crop" {
@@ -145,7 +148,7 @@ pub fn run(args: &[String]) {
     // `AutomationAction`s executed in order. Fully owns its own build + gate
     // exit code — bypasses the `--dump`/`--interact`/mockup flags below.
     if let Some(path) = script_path {
-        script::run(scene, &path);
+        script::run(scene, &path, record_work);
         return;
     }
 

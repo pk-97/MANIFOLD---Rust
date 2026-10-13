@@ -604,6 +604,11 @@ PREFIX_ROWS += [
 
 PREFIX_ROWS += [('crates/manifold-compositor/src/', ".wgsl", "manifold-nodes", ["wgsl_validation"], [])]
 
+# A command's edit drives content reactions; the count gate's content half
+# measures them against committed ceilings (docs/UI_INVALIDATION_DESIGN.md D10).
+PREFIX_ROWS += [("crates/manifold-editing/src/commands/", ".rs", "manifold-app",
+                 ["content_reaction_budget"], [])]
+
 # P2 extractions retain catalog ownership when their production source changes.
 # (source prefix, catalog module, has default-config CPU tests).
 CATALOG_TEST_ROWS = [

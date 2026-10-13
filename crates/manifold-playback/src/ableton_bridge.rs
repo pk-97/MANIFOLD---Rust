@@ -695,6 +695,13 @@ impl AbletonBridge {
     /// ModulationSnapshot send (param-feed unification), the content thread
     /// no longer consults this — the snapshot ships every tick regardless.
     /// Kept for tests and future callers that want the dirty signal.
+    /// Queue a parameter value exactly as the receiver thread's fast path
+    /// does, so a headless test drives the real `apply`.
+    #[cfg(feature = "testkit")]
+    pub fn inject_param_value(&self, key: (i32, i32, i32), value: f32) {
+        self.pending_values.lock().insert(key, value);
+    }
+
     pub fn apply(&mut self, project: &mut Project, now: f64) -> bool {
         // 1. Drain inbound raw values into the per-source filter targets.
         {
@@ -2059,6 +2066,7 @@ impl AbletonBridge {
 
     /// Scan all Active mappings in the project and subscribe/unsubscribe accordingly.
     pub fn rebuild_listeners(&mut self, project: &Project) {
+        manifold_core::work_count::record_work(manifold_core::work_count::WorkKind::AbletonListenerRebuild);
         let mut needed: AHashSet<(i32, i32, i32)> = AHashSet::new();
         let mut new_write_targets: AHashMap<(i32, i32, i32), Vec<WriteTarget>> = AHashMap::new();
 
