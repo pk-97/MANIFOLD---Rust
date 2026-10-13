@@ -1069,6 +1069,10 @@ pub const BITMAP_SCROLL_SPEED: f32 = 12.5;
 /// wheel notch. Each notch scales pixels-per-beat by this factor (or its inverse
 /// when zooming out), so zoom is smooth instead of jumping between fixed levels.
 pub const ZOOM_WHEEL_STEP_PER_NOTCH: f32 = 1.18;
+/// Timeline zoom per unit of trackpad pinch: pixels-per-beat scales by
+/// `exp(magnification * gain)`. Above 1 because the timeline spans a 400x
+/// zoom range, which a 1:1 pinch would take many strokes to cross.
+pub const ZOOM_PINCH_GAIN: f32 = 2.0;
 
 // ── Layer control panel layout ──────────────────────────────────────
 pub const LAYER_CTRL_PADDING: f32 = SPACE_M; // mockup edge gutter (8px) — tracks breathe
