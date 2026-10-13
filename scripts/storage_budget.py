@@ -339,51 +339,10 @@ def inventory_targets(repo: Path, pool_dir: Optional[Path] = None,
 
 
 def disk_free(path: Path) -> int:
-    """Space a write can claim. On macOS that includes purgeable caches the OS
-    deletes on demand (what Finder and System Settings report); raw statvfs
-    free leaves them out and calls a false shortage."""
-    path = _absolute(path)
-    if sys.platform == "darwin":
-        important = _macos_important_capacity(path)
-        if important is not None:
-            return important
-    return shutil.disk_usage(path).free
-
-
-def _macos_important_capacity(path: Path) -> Optional[int]:
-    import ctypes
-    try:
-        cf = ctypes.CDLL("/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation")
-        cf.CFURLCreateFromFileSystemRepresentation.restype = ctypes.c_void_p
-        cf.CFURLCreateFromFileSystemRepresentation.argtypes = [
-            ctypes.c_void_p, ctypes.c_char_p, ctypes.c_long, ctypes.c_bool]
-        cf.CFURLCopyResourcePropertyForKey.restype = ctypes.c_bool
-        cf.CFURLCopyResourcePropertyForKey.argtypes = [
-            ctypes.c_void_p, ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p), ctypes.c_void_p]
-        cf.CFNumberGetValue.restype = ctypes.c_bool
-        cf.CFNumberGetValue.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_void_p]
-        cf.CFRelease.argtypes = [ctypes.c_void_p]
-        key = ctypes.c_void_p.in_dll(cf, "kCFURLVolumeAvailableCapacityForImportantUsageKey")
-        raw = os.fsencode(str(path))
-        url = cf.CFURLCreateFromFileSystemRepresentation(None, raw, len(raw), True)
-        if not url:
-            return None
-        try:
-            value = ctypes.c_void_p()
-            if not cf.CFURLCopyResourcePropertyForKey(url, key, ctypes.byref(value), None) or not value:
-                return None
-            try:
-                out = ctypes.c_int64()
-                kCFNumberSInt64Type = 4
-                if not cf.CFNumberGetValue(value, kCFNumberSInt64Type, ctypes.byref(out)):
-                    return None
-                return out.value if out.value > 0 else None
-            finally:
-                cf.CFRelease(value)
-        finally:
-            cf.CFRelease(url)
-    except (OSError, ValueError, AttributeError):
-        return None
+    # Raw free on purpose. macOS "available" adds purgeable space, which here is
+    # mostly Dropbox's local copies: counting it stops cache reclaim and builds
+    # then push out the lab's Dropbox audio instead (reverted 2026-10-13).
+    return shutil.disk_usage(_absolute(path)).free
 
 
 def check_build(target_dir: Path, repo: Path, free_bytes: Optional[int] = None,
