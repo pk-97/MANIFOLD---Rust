@@ -31,13 +31,9 @@ struct ExportFrameFailure {
 
 /// Before a hang retry, ask the RT tracer for its most conservative tiles so
 /// the retried frame is less likely to trip the watchdog again.
-// TODO(BUG-k1n2w, lane feat/rt-hang-budget): call the tracer's conservative
-// tile request here once that lane lands it in manifold-gpu. The lead wires
-// the final method name at merge; until then a retry re-renders unchanged.
 fn request_conservative_rt_tiles(_pipeline: &mut crate::content_pipeline::ContentPipeline, attempt: u32) {
-    log::warn!(
-        "[Export] Hang retry {attempt}: conservative RT tiles are not available yet (BUG-k1n2w); re-rendering with current tiles"
-    );
+    manifold_gpu::raytrace::request_conservative_trace_tiles();
+    log::warn!("[Export] Hang retry {attempt}: re-rendering with conservative RT tiles");
 }
 
 /// One production export frame immediately before the native encoder call.
