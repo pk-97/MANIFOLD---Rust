@@ -165,9 +165,12 @@ impl FaultKinds {
             || self.contains(FaultKind::DeviceLost)
             || self.contains(FaultKind::SubmissionsIgnored)
     }
-    /// A hang and nothing worse: resubmitting the work is reasonable.
+    /// A hang, or work discarded by the GPU's recovery from a hang we did not
+    /// see reported, and nothing worse: resubmitting the work is reasonable.
     pub fn is_recoverable_hang(self) -> bool {
-        self.contains(FaultKind::Hang) && !self.is_fatal() && !self.contains(FaultKind::Other)
+        (self.contains(FaultKind::Hang) || self.contains(FaultKind::InnocentVictim))
+            && !self.is_fatal()
+            && !self.contains(FaultKind::Other)
     }
     /// The most telling kind, for an error message.
     pub fn headline(self) -> Option<FaultKind> {
@@ -342,6 +345,7 @@ mod tests {
         let hang = FaultKinds::default().with(FaultKind::Hang);
         let hang_and_victim = hang.with(FaultKind::InnocentVictim);
         assert!(hang.is_recoverable_hang() && hang_and_victim.is_recoverable_hang());
+        assert!(FaultKinds::default().with(FaultKind::InnocentVictim).is_recoverable_hang());
         assert!(!hang_and_victim.is_fatal());
         assert!(hang.with(FaultKind::PageFault).is_fatal());
         assert!(!hang.with(FaultKind::PageFault).is_recoverable_hang());
