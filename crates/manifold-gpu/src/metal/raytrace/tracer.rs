@@ -2064,6 +2064,12 @@ impl ShadowRayTracer for MetalShadowRayTracer {
                     // relaxed-atomic publication within this completed buffer.
                     let ptr = pool.buffers[slot].mapped_ptr().expect("shared diagnostic slot");
                     let d = unsafe { ptr.cast::<RtTraceDiagnostics>().read_unaligned() };
+                    log::info!("[RT-DIAG] frame={frame} walk max_candidates={} walks_over_4096={}", d.max_walk, d.long_walks);
+                    unsafe {
+                        let record = ptr.cast::<RtTraceDiagnostics>();
+                        (*record).max_walk = 0;
+                        (*record).long_walks = 0;
+                    }
                     if d.state == 2 {
                         log::error!("[RT-DIAG] frame={frame} slot={slot} first_invalid_in_slot stage={} pixel={} origin={:?} direction={:?} min={} max={} diagnostic_ray_replaced=true", d.first_stage, d.first_pixel, d.raw_origin, d.raw_direction, d.raw_min_distance, d.raw_max_distance);
                     } else {

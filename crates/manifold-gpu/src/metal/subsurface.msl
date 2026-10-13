@@ -112,7 +112,7 @@ static float3 sss_boundary_light(
             q.reset(r, accel, RT_MASK_SHADOW_CASTER);
             float brightness;
             blocked = walk_with_alpha_test(q, sources, textures, true, pixel,
-                p.frame_index, seed + i, brightness);
+                p.frame_index, seed + i, brightness, nullptr);
         }
         if (!blocked) result += color.rgb * (cosine*attenuation/SSS_PI);
     }
@@ -125,7 +125,7 @@ static float3 sss_boundary_light(
     q.reset(r, accel, RT_MASK_VISIBLE);
     float brightness;
     if (walk_with_alpha_test(q, sources, textures, false, pixel, p.frame_index,
-        seed+101u, brightness)) {
+        seed+101u, brightness, nullptr)) {
         uint instance = q.get_committed_instance_id();
         device RtNormalSource& src = sources[instance];
         result += brightness * emissive_at_hit(float3(materials[src.object_index].emissive),
@@ -222,7 +222,7 @@ kernel void trace_subsurface(
     intersection_query<triangle_data, instancing> primary_q;
     primary_q.reset(primary,accel,RT_MASK_VISIBLE);
     float brightness;
-    if (!walk_with_alpha_test(primary_q,sources,textures,false,pixel,p.frame_index,19000u,brightness)) return;
+    if (!walk_with_alpha_test(primary_q,sources,textures,false,pixel,p.frame_index,19000u,brightness,nullptr)) return;
     uint instance = primary_q.get_committed_instance_id();
     uint object = sources[instance].object_index;
     if (object >= p.material_count) return;

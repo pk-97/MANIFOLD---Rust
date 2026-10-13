@@ -807,6 +807,53 @@ fn validate_object_geometry(index: usize, o: &RtObjectGeometry) -> Result<(), Rt
     Ok(())
 }
 
+/// Diagnostics only (BUG-k1n2w): what the tree builder is about to read for
+/// one object. Shared buffers hold the last completed frame's contents here,
+/// since this frame's producers have not run yet. Logs triangle count, the
+/// largest coordinate magnitude, non-finite positions and out-of-range
+/// indices, so garbage reaching the builder shows up frame by frame.
+fn log_geometry_health(index: usize, o: &RtObjectGeometry) {
+    let Some(base) = o.vertex_buffer.mapped_ptr() else {
+        log::info!("[RT-GEOM] object={index} tris={} vertices=private", o.triangle_count);
+        return;
+    };
+    let vertex_count = mesh_vertex_count(o);
+    let position = |v: u32| -> [f32; 3] {
+        let at = o.vertex_offset as usize + v as usize * o.vertex_stride as usize;
+        unsafe { base.add(at).cast::<[f32; 3]>().read_unaligned() }
+    };
+    let (mut nonfinite, mut first_bad, mut max_abs) = (0u32, None, 0.0f32);
+    let mut bad_indices = 0u32;
+    let check = |v: u32, nonfinite: &mut u32, first_bad: &mut Option<(u32, [f32; 3])>, max_abs: &mut f32| {
+        let p = position(v);
+        if p.iter().all(|c| c.is_finite()) {
+            *max_abs = p.iter().fold(*max_abs, |m, c| m.max(c.abs()));
+        } else {
+            *nonfinite += 1;
+            first_bad.get_or_insert((v, p));
+        }
+    };
+    match o.index_buffer.and_then(|ib| ib.mapped_ptr()) {
+        Some(ib) => {
+            let count = (o.triangle_count as usize * 3).min(o.index_buffer.map_or(0, |b| b.size() as usize / 4));
+            let indices = unsafe { std::slice::from_raw_parts(ib.cast::<u32>(), count) };
+            for &v in indices {
+                if v >= vertex_count { bad_indices += 1; } else { check(v, &mut nonfinite, &mut first_bad, &mut max_abs); }
+            }
+        }
+        None if o.index_buffer.is_some() => {
+            log::info!("[RT-GEOM] object={index} tris={} indices=private", o.triangle_count);
+        }
+        None => {
+            for v in 0..(o.triangle_count * 3).min(vertex_count) { check(v, &mut nonfinite, &mut first_bad, &mut max_abs); }
+        }
+    }
+    log::info!(
+        "[RT-GEOM] object={index} tris={} vertices={vertex_count} indexed={} max_abs={max_abs:e} nonfinite={nonfinite} bad_indices={bad_indices} first_bad={first_bad:?}",
+        o.triangle_count, o.index_buffer.is_some()
+    );
+}
+
 /// §5.2 (P4b): the mesh vertex count from the base address onward — the
 /// count `RtNormalSource::vertex_count` carries and the appearance-weights
 /// check validates against.
@@ -1258,6 +1305,11 @@ pub(crate) fn encode_accel_update(
     let mut slot_total = 0u32;
     let mut blas_builds = 0u32;
     let mut blas_refits = 0u32;
+    if super::super::gpu_fault::diagnostics_enabled() {
+        for (i, o) in objects.iter().enumerate() {
+            log_geometry_health(i, o);
+        }
+    }
     for (i, (o, change)) in objects.iter().zip(changes).enumerate() {
         validate_object_geometry(i, o)?;
         let current = RtGeometryTopology::from_geometry(o);
