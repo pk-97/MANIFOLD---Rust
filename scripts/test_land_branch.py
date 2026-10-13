@@ -529,6 +529,106 @@ class GeneratedMergeTests(unittest.TestCase):
         self.merge()
         self.assertFalse(self.marker.exists())
 
+    def merge_stops(self, generators=None):
+        err = io.StringIO()
+        with self.assertRaises(SystemExit) as stop, contextlib.redirect_stderr(err):
+            with patch.object(land_branch, 'GENERATED', generators or self.generators), \
+                    contextlib.redirect_stdout(io.StringIO()):
+                land_branch.merge_main_into(self.wt, 'origin/main', 'merge origin/main into branch')
+        self.assertEqual(stop.exception.code, 1)
+        return err.getvalue()
+
+    def test_failing_generator_stops_with_no_commit(self):
+        self.add_doc('b.md')
+        self.main_moves(lambda: self.add_doc('c.md', regen=False))
+        failing = ({'outputs': ('docs/README.md',), 'regen': [sys.executable, '-c', 'raise SystemExit(3)'],
+                    'check': None, 'scope': None},)
+        self.merge_stops(failing)
+        self.assertNotIn('regenerate', git(self.wt, 'log', '-1', '--format=%s'))
+
+    def test_mixed_generated_and_source_conflict_stops(self):
+        (self.wt / 'lib.rs').write_text('branch\n')
+        git(self.wt, 'commit', '-q', '-am', 'branch edit')
+        self.add_doc('b.md')
+        def change():
+            (self.wt / 'lib.rs').write_text('main\n')
+            git(self.wt, 'commit', '-q', '-am', 'main edit')
+            self.add_doc('c.md')
+        self.main_moves(change)
+        self.assertIn('[land] FAILED at merge origin/main into branch:', self.merge_stops())
+
+    def test_catalog_check_runs_for_every_scanned_crate(self):
+        scope = land_branch.GENERATED[0]['scope']
+        for crate in ('manifold-node-engine', 'manifold-nodes', 'manifold-nodes-image',
+                      'manifold-nodes-scene', 'manifold-nodes-water', 'manifold-water-rigid',
+                      'manifold-water-liquid', 'manifold-water-gpu-flip', 'manifold-water-gpu-mpm',
+                      'manifold-water-whitewater', 'manifold-water-surface'):
+            self.assertTrue(f'crates/{crate}/src/x.rs'.startswith(scope), crate)
+        self.assertFalse('crates/manifold-core/src/x.rs'.startswith(scope))
+        checked = self.root / 'checked'
+        gens = ({'outputs': ('docs/CATALOG.md',), 'regen': [sys.executable, '-c', 'pass'],
+                 'check': [sys.executable, '-c', f'open({str(checked)!r}, "w").close()'],
+                 'scope': scope},)
+        (self.wt / 'crates' / 'manifold-water-surface').mkdir(parents=True)
+        (self.wt / 'crates' / 'manifold-water-surface' / 'x.rs').write_text('x\n')
+        git(self.wt, 'add', '-A')
+        git(self.wt, 'commit', '-q', '-m', 'water edit')
+        self.main_moves(lambda: self.add_doc('c.md'))
+        with patch.object(land_branch, 'GENERATED', gens), \
+                contextlib.redirect_stdout(io.StringIO()):
+            land_branch.merge_main_into(self.wt, 'origin/main', 'merge origin/main into branch')
+        self.assertTrue(checked.exists())
+
+    BEGIN = '<!-- BEGIN GENERATED: test -->'
+    END = '<!-- END GENERATED: test -->'
+
+    def partly(self, branch_lines, main_lines):
+        """Catalog with prose around a marker block; returns the generator set."""
+        base = ['# Catalog', 'intro', '', 'p1', 'p2', 'p3', 'p4', '', self.BEGIN, 'row a',
+                'row b', self.END, '', 'q1', 'q2', 'q3', 'outro']
+        doc = self.wt / 'docs' / 'CATALOG.md'
+        git(self.wt, 'switch', '-q', 'main')
+        doc.write_text('\n'.join(base) + '\n')
+        git(self.wt, 'add', '-A')
+        git(self.wt, 'commit', '-q', '-m', 'catalog')
+        git(self.wt, 'switch', '-q', 'lane/x')
+        git(self.wt, 'merge', '-q', 'main')
+        doc.write_text('\n'.join(branch_lines(list(base))) + '\n')
+        git(self.wt, 'commit', '-q', '-am', 'branch catalog')
+        def change():
+            doc.write_text('\n'.join(main_lines(list(base))) + '\n')
+            git(self.wt, 'commit', '-q', '-am', 'main catalog')
+        self.main_moves(change)
+        return ({'outputs': ('docs/CATALOG.md',), 'regen': [sys.executable, '-c', 'pass'],
+                 'check': None, 'scope': None,
+                 'markers': {'docs/CATALOG.md': (self.BEGIN, self.END)}},)
+
+    @staticmethod
+    def edit(at, text):
+        def f(lines):
+            lines[at] = text
+            return lines
+        return f
+
+    def test_block_only_conflict_keeps_branch_prose(self):
+        def branch(lines):
+            lines[1] = 'branch prose'
+            lines[9] = 'row a branch'
+            return lines
+        gens = self.partly(branch, self.edit(9, 'row a main'))
+        with patch.object(land_branch, 'GENERATED', gens), \
+                contextlib.redirect_stdout(io.StringIO()):
+            land_branch.merge_main_into(self.wt, 'origin/main', 'merge origin/main into branch')
+        text = (self.wt / 'docs' / 'CATALOG.md').read_text()
+        self.assertIn('branch prose', text)
+        self.assertIn('row a main', text)
+        self.assertNotIn('<<<<<<<', text)
+        self.assertEqual(git(self.wt, 'status', '--porcelain'), '')
+
+    def test_conflict_outside_markers_stops(self):
+        gens = self.partly(self.edit(14, 'q2 branch'), self.edit(14, 'q2 main'))
+        self.assertIn('[land] FAILED at merge origin/main into branch:', self.merge_stops(gens))
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -48,6 +48,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 from datetime import datetime, timezone
 import time
 from pathlib import Path
@@ -255,7 +256,14 @@ GENERATED = (
      'regen': ['cargo', 'run', '-p', 'manifold-nodes', '--bin', 'gen_node_catalog', '--'],
      'check': ['cargo', 'run', '-p', 'manifold-nodes', '--bin', 'gen_node_catalog', '--', '--check'],
      'source': 'crates/manifold-nodes/src/bin/gen_node_catalog.rs',
-     'scope': ('crates/manifold-node-engine/', 'crates/manifold-nodes')},
+     # Every crate manifold-nodes links whose primitives or presets reach the catalog.
+     'scope': tuple(f'crates/manifold-{c}/' for c in (
+         'node-engine', 'nodes', 'nodes-image', 'nodes-scene', 'nodes-water', 'water-rigid',
+         'water-liquid', 'water-gpu-flip', 'water-gpu-mpm', 'water-whitewater', 'water-surface')),
+     # Only the block between these markers is generated (catalog_gen.rs inject);
+     # the rest of NODE_CATALOG.md is hand-written prose.
+     'markers': {'docs/NODE_CATALOG.md': ('<!-- BEGIN GENERATED: registered-node-index',
+                                          '<!-- END GENERATED: registered-node-index -->')}},
     {'outputs': ('docs/README.md',), 'regen': [_PY, 'scripts/gen_docs_index.py'],
      'check': None, 'scope': None, 'source': 'scripts/gen_docs_index.py'},
     {'outputs': ('scripts/TOOLS.md',), 'regen': [_PY, 'scripts/dev.py', '--write-index'],
@@ -273,20 +281,78 @@ def merge_main_into(worktree, ref, name):
 
     git merge-tree previews the conflict set without touching the tree, so
     every case that is not generated-only runs the merge as one plain step."""
-    code, out = probe(['merge-tree', '--write-tree', '--name-only', 'HEAD', ref], worktree)
-    conflicted = set(out.split('\n\n')[0].splitlines()[1:]) if code == 1 else set()
+    stages = conflict_stages(worktree, ref)
+    conflicted = set(stages)
     generated = {p for g in GENERATED for p in g['outputs']}
-    if not conflicted or not conflicted <= generated:
+    markers = {p: m for g in GENERATED for p, m in g.get('markers', {}).items()}
+    resolved = {}
+    if conflicted and conflicted <= generated:
+        for path in sorted(conflicted):
+            text = resolve_hunks(worktree, stages[path], markers.get(path))
+            if text is None:
+                break
+            resolved[path] = text
+    if not conflicted or len(resolved) != len(conflicted):
         step(name, ['git', 'merge', ref, '--no-edit'], worktree)
         conflicted = set()
     else:
         step(name, ['git', 'merge', ref, '--no-edit'], worktree, check=False)
+        for path, text in resolved.items():
+            (Path(worktree) / path).write_bytes(text)
         paths = sorted(conflicted)
-        step('take main side of generated files', ['git', 'checkout', '--theirs', '--', *paths],
-             worktree)
         step('stage generated files', ['git', 'add', '--', *paths], worktree)
         step('commit merge', ['git', 'commit', '--no-edit'], worktree)
     regenerate_stale(worktree, ref, conflicted)
+
+
+def conflict_stages(worktree, ref):
+    """Preview the merge: {conflicted path: {stage: blob}} with the tree untouched."""
+    code, out = probe(['merge-tree', '--write-tree', 'HEAD', ref], worktree)
+    stages = {}
+    if code != 1:
+        return stages
+    for line in out.split('\n\n')[0].splitlines()[1:]:
+        meta, _, path = line.partition('\t')
+        _mode, blob, stage = meta.split()
+        stages.setdefault(path, {})[stage] = blob
+    return stages
+
+
+def resolve_hunks(worktree, stages, markers):
+    """Three-way merge one generated file, taking main's side only inside
+    conflict hunks. With markers (a partly generated file), every conflict
+    hunk must lie inside the generated block, or None: the conflict touches
+    hand-written text and the landing stops. None too for a delete conflict."""
+    if '2' not in stages or '3' not in stages:
+        return None
+    with tempfile.TemporaryDirectory() as tmp:
+        files = []
+        for stage in ('2', '1', '3'):
+            f = Path(tmp) / stage
+            blob = stages.get(stage)
+            f.write_bytes(subprocess.run(['git', 'cat-file', 'blob', blob], cwd=str(worktree),
+                                         capture_output=True, check=True).stdout if blob else b'')
+            files.append(str(f))
+        if markers:
+            plain = subprocess.run(['git', 'merge-file', '-p', *files], cwd=str(worktree),
+                                   capture_output=True, text=True)
+            if not 0 <= plain.returncode < 128 or not hunks_inside(plain.stdout, *markers):
+                return None
+        return subprocess.run(['git', 'merge-file', '-p', '--theirs', *files], cwd=str(worktree),
+                              capture_output=True, check=True).stdout
+
+
+def hunks_inside(merged, begin, end):
+    """True when every conflict hunk of merged text sits between begin and end."""
+    inside = False
+    for line in merged.splitlines():
+        if line.startswith(begin):
+            inside = True
+        elif line.startswith(end):
+            inside = False
+        elif line.startswith(('<<<<<<<', '>>>>>>>')) and not inside:
+            return False
+    return True
 
 
 def regenerate_stale(worktree, ref, conflicted):
