@@ -6146,6 +6146,11 @@
           "capacity": "inputs:197607@1000,197631@1024",
           "name": "map",
           "type": "Array"
+        },
+        {
+          "capacity": "fixed:1",
+          "name": "live_count",
+          "type": "Array"
         }
       ],
       "params": [
@@ -6258,6 +6263,11 @@
         {
           "capacity": "inputs:197607@1000,197631@1024",
           "name": "map",
+          "type": "Array"
+        },
+        {
+          "capacity": "fixed:1",
+          "name": "live_count",
           "type": "Array"
         }
       ],
@@ -39038,6 +39048,11 @@
           "type": "Array"
         },
         {
+          "name": "live_count",
+          "required": false,
+          "type": "Array"
+        },
+        {
           "name": "density",
           "required": false,
           "type": "f32"
@@ -39063,7 +39078,7 @@
           "type": "float"
         }
       ],
-      "purpose": "Select at most 512 complete triangles, evenly distributed by original face index, without changing any vertex attributes. Inactive output triangles are zero. This preserves original face correspondence for sparse mesh diagnostics.",
+      "purpose": "Select at most 512 complete triangles, evenly distributed by original face index, without changing any vertex attributes. Inactive output triangles are zero. An optional live_count (element 0 = live vertex count, e.g. a cut map's live_count) limits selection to the live front of a padded mesh. This preserves original face correspondence for sparse mesh diagnostics.",
       "role": "Source",
       "stratum": "atom",
       "summary": "Selects a bounded set of real mesh faces for inspection.",

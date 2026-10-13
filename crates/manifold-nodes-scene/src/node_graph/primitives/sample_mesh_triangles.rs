@@ -25,8 +25,8 @@ struct SampleMeshTrianglesUniforms {
 manifold_node_engine::primitive! {
     name: SampleMeshTriangles,
     type_id: "node.sample_mesh_triangles",
-    purpose: "Select at most 512 complete triangles, evenly distributed by original face index, without changing any vertex attributes. Inactive output triangles are zero. This preserves original face correspondence for sparse mesh diagnostics.",
-    inputs: { in: Array(MeshVertex) required, density: ScalarF32 optional },
+    purpose: "Select at most 512 complete triangles, evenly distributed by original face index, without changing any vertex attributes. Inactive output triangles are zero. An optional live_count (element 0 = live vertex count, e.g. a cut map's live_count) limits selection to the live front of a padded mesh. This preserves original face correspondence for sparse mesh diagnostics.",
+    inputs: { in: Array(MeshVertex) required, live_count: Array(u32) optional, density: ScalarF32 optional },
     outputs: { vertices: Array(MeshVertex) },
     params: [ParamDef { name: Cow::Borrowed("density"), label: "Density", ty: ParamType::Float, default: ParamValue::Float(3.0), range: Some((2.0,8.0)), enum_values: &[] }],
     depth_rule: Terminal,
@@ -37,8 +37,9 @@ manifold_node_engine::primitive! {
     pure: true,
     fusion_kind: Pointwise,
     wgsl_body: include_str!("shaders/sample_mesh_triangles_body.wgsl"),
-    input_access: [BufferGather],
+    input_access: [BufferGather, BufferGather],
     wgsl_includes: [include_str!("shaders/sample_face_common.wgsl")],
+    extra_fields: { unbounded_live_count: Option<manifold_gpu::GpuBuffer> = None },
 }
 impl Primitive for SampleMeshTriangles {
     fn array_output_capacity(
@@ -51,6 +52,19 @@ impl Primitive for SampleMeshTriangles {
     }
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         let Some(src) = ctx.inputs.array("in") else {
+            return;
+        };
+        if self.unbounded_live_count.is_none() {
+            let buffer = ctx.gpu_encoder().device.create_buffer_shared(4);
+            unsafe { buffer.write(0, bytemuck::bytes_of(&u32::MAX)) };
+            self.unbounded_live_count = Some(buffer);
+        }
+        // Unwired: u32::MAX, so the whole buffer length is live.
+        let Some(live_count) = ctx
+            .inputs
+            .array("live_count")
+            .or(self.unbounded_live_count.as_ref())
+        else {
             return;
         };
         let Some(dst) = ctx.outputs.array("vertices") else {
@@ -80,6 +94,11 @@ impl Primitive for SampleMeshTriangles {
                 },
                 GpuBinding::Buffer {
                     binding: 2,
+                    buffer: live_count,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 3,
                     buffer: dst,
                     offset: 0,
                 },
@@ -104,9 +123,11 @@ mod tests {
     #[test]
     fn bounded_capacity_and_complete_face_contract() {
         assert_eq!(SAMPLE_MESH_TRIANGLES_CAPACITY, 1536);
-        assert_eq!(SampleMeshTriangles::INPUTS.len(), 2);
+        assert_eq!(SampleMeshTriangles::INPUTS.len(), 3);
         assert!(SampleMeshTriangles::INPUTS[0].required);
+        assert_eq!(SampleMeshTriangles::INPUTS[1].name, "live_count");
         assert!(!SampleMeshTriangles::INPUTS[1].required);
+        assert!(!SampleMeshTriangles::INPUTS[2].required);
         assert_eq!(SampleMeshTriangles::OUTPUTS.len(), 1);
         assert_eq!(
             SampleMeshTriangles::array_output_capacity(
@@ -139,6 +160,7 @@ mod tests {
     fn standalone_formula_and_zero_inactive_slots_are_declared() {
         let body = SampleMeshTriangles::WGSL_BODY.expect("sample mesh triangles body");
         assert!(body.contains("source_face_index(idx / 3u,total,sample_count)"));
+        assert!(body.contains("min(arrayLength(&buf_in), buf_live_count[0]) / 3u"));
         assert!(body.contains("Element(v.position,v.normal,v.uv,v.uv1,v.tangent,v.color)"));
         assert!(body.contains("if idx / 3u >= sample_count"));
         assert!(
@@ -166,8 +188,8 @@ mod tests {
                 fusion_kind: FusionKind::Pointwise,
                 body: SampleMeshTriangles::WGSL_BODY.unwrap(),
                 params: SampleMeshTriangles::PARAMS,
-                inputs: vec![InputSource::External(0)],
-                input_access: vec![InputAccess::BufferGather],
+                inputs: vec![InputSource::External(0), InputSource::External(1)],
+                input_access: vec![InputAccess::BufferGather, InputAccess::BufferGather],
                 node_inputs: SampleMeshTriangles::INPUTS,
                 node_outputs: SampleMeshTriangles::OUTPUTS,
                 node_includes: SampleMeshTriangles::WGSL_INCLUDES,
@@ -178,7 +200,7 @@ mod tests {
                 stencil_fetch: false,
                 quantize_f16: false,
             }],
-            num_external_inputs: 1,
+            num_external_inputs: 2,
             outputs: vec![(id(0), "vertices".to_string())],
             in_place_alias: None,
             sampler_address_mode: "clamp",
@@ -196,7 +218,7 @@ mod tests {
         let prim = SampleMeshTriangles::new();
         let node: &dyn manifold_node_engine::exec::effect_node::EffectNode = &prim;
         assert_eq!(
-            node.array_output_capacity("vertices", &Default::default(), &[("in", 1009)]),
+            node.array_output_capacity("vertices", &Default::default(), &[("in", 1009), ("live_count", 1)]),
             Some(SAMPLE_MESH_TRIANGLES_CAPACITY),
             "fixed capacity is the non-identity the probe refuses"
         );
@@ -230,6 +252,7 @@ mod gpu_tests {
     fn dispatch(
         wgsl: &str,
         source: &[MeshVertex],
+        live_count: u32,
         output_len: usize,
         label: &str,
     ) -> Vec<MeshVertex> {
@@ -240,6 +263,10 @@ mod gpu_tests {
             .create_buffer_shared(output_len as u64 * std::mem::size_of::<MeshVertex>() as u64);
         unsafe {
             src.write(0, bytemuck::cast_slice(source));
+        }
+        let live = device.create_buffer_shared(4);
+        unsafe {
+            live.write(0, bytemuck::bytes_of(&live_count));
         }
         let uniform = SampleMeshTrianglesUniforms {
             density: 2.0,
@@ -262,6 +289,11 @@ mod gpu_tests {
                 },
                 GpuBinding::Buffer {
                     binding: 2,
+                    buffer: &live,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 3,
                     buffer: &dst,
                     offset: 0,
                 },
@@ -289,7 +321,7 @@ mod gpu_tests {
             .collect();
         let wgsl = manifold_node_engine::freeze::codegen::standalone_for_spec::<SampleMeshTriangles>()
             .expect("sample mesh triangles codegen");
-        let sampled = dispatch(&wgsl, &source, 24, "sample-mesh-triangles");
+        let sampled = dispatch(&wgsl, &source, u32::MAX, 24, "sample-mesh-triangles");
         let selected_faces = [0, 1, 2, 3, 5, 6, 7, 8];
         for (sample_face, source_face) in selected_faces.into_iter().enumerate() {
             for corner in 0..3 {
@@ -303,7 +335,7 @@ mod gpu_tests {
         let source_small: Vec<_> = (0..1)
             .flat_map(|face| (0..3).map(move |corner| vertex(face, corner)))
             .collect();
-        let sampled_small = dispatch(&wgsl, &source_small, 12, "sample-mesh-triangles-small");
+        let sampled_small = dispatch(&wgsl, &source_small, u32::MAX, 12, "sample-mesh-triangles-small");
         for (vertex, source) in sampled_small[..3].iter().zip(&source_small) {
             assert_attrs_eq(vertex, source);
         }
@@ -314,5 +346,27 @@ mod gpu_tests {
             assert_eq!(vertex.tangent, [0.0; 4]);
             assert_eq!(vertex.color, [1.0; 4]);
         }
+    }
+
+    /// A cut-map-style padded mesh: 10 live faces then a zero tail. The live
+    /// count makes sampling match the unpadded mesh exactly; without it the
+    /// samples would spread into the tail.
+    #[test]
+    fn live_count_limits_sampling_to_the_live_front() {
+        let live: Vec<_> = (0..10)
+            .flat_map(|face| (0..3).map(move |corner| vertex(face, corner)))
+            .collect();
+        let mut padded = live.clone();
+        padded.resize(300, bytemuck::Zeroable::zeroed());
+        let wgsl = manifold_node_engine::freeze::codegen::standalone_for_spec::<SampleMeshTriangles>()
+            .expect("sample mesh triangles codegen");
+        let sampled = dispatch(&wgsl, &padded, 30, 24, "sample-mesh-triangles-live");
+        let unpadded = dispatch(&wgsl, &live, u32::MAX, 24, "sample-mesh-triangles-unpadded");
+        for (index, (a, b)) in sampled.iter().zip(&unpadded).enumerate() {
+            assert_attrs_eq(a, b);
+            assert_ne!(a.position, [0.0; 3], "sample {index} fell in the padded tail");
+        }
+        let unbounded = dispatch(&wgsl, &padded, u32::MAX, 24, "sample-mesh-triangles-unbounded");
+        assert!(unbounded.iter().any(|vertex| vertex.position == [0.0; 3]), "control: without a live count the tail is sampled");
     }
 }

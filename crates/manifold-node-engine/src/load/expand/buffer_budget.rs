@@ -28,7 +28,7 @@ pub struct ModifierBufferUsage {
 
 pub struct PreparedModifierBufferBudget {
     scenes: BTreeMap<SceneNodeRef, AHashSet<NodeInstanceId>>,
-    cutters: AHashMap<NodeInstanceId, fn(u64) -> Option<u64>>,
+    cutters: AHashMap<NodeInstanceId, &'static crate::exec::resource_allocation::ArrayScratch>,
 }
 
 fn invalid(detail: impl Into<String>) -> SceneModifierExpandError {
@@ -274,10 +274,14 @@ impl PreparedModifierBufferBudget {
         &self,
         item: &crate::exec::resource_allocation::ArrayAllocation,
     ) -> Result<u64, SceneModifierExpandError> {
-        let Some(bytes) = self.cutters.get(&item.node) else {
+        let Some(bytes) = self
+            .cutters
+            .get(&item.node)
+            .filter(|scratch| scratch.port == item.port)
+        else {
             return Ok(item.bytes);
         };
-        bytes(item.bytes / 16)
+        (bytes.bytes)(item.bytes / 16)
             .and_then(|scratch| item.bytes.checked_add(scratch))
             .ok_or_else(|| {
                 Self::memory_exceeded(0, u64::MAX, u64::MAX, "cut scratch arithmetic overflow")
@@ -416,6 +420,12 @@ mod tests {
             assert_eq!(records, 196_608 + 3 * 257);
             Some(2_136)
         }
+        static FIXTURE: crate::exec::resource_allocation::ArrayScratch =
+            crate::exec::resource_allocation::ArrayScratch {
+                type_id: "fixture.cutter",
+                port: "map",
+                bytes: fixture_scratch_bytes,
+            };
         let scene = SceneNodeRef {
             scope: Vec::new(),
             node: NodeId::new("scene"),
@@ -423,13 +433,14 @@ mod tests {
         let cutter = NodeInstanceId(7);
         let budget = PreparedModifierBufferBudget {
             scenes: BTreeMap::from([(scene.clone(), AHashSet::from_iter([cutter]))]),
-            cutters: AHashMap::from_iter([(cutter, fixture_scratch_bytes as fn(u64) -> Option<u64>)]),
+            cutters: AHashMap::from_iter([(cutter, &FIXTURE)]),
         };
         let map_bytes = (196_608 + 3 * 257) * 16;
         let private_bytes = (257 + 2) * 4 * 2 + 16 + 48;
         let allocation = ArrayAllocationPlan {
             actions: vec![ArrayAllocationAction::Allocate(ArrayAllocation {
                 node: cutter,
+                port: "map",
                 resource: ResourceId(0),
                 bytes: map_bytes,
                 zero_init: false,
@@ -463,12 +474,14 @@ mod tests {
             actions: vec![
                 ArrayAllocationAction::Allocate(ArrayAllocation {
                     node: NodeInstanceId(1),
+                    port: "map",
                     resource: ResourceId(0),
                     bytes: 100,
                     zero_init: false,
                 }),
                 ArrayAllocationAction::Allocate(ArrayAllocation {
                     node: NodeInstanceId(2),
+                    port: "map",
                     resource: ResourceId(1),
                     bytes: 80,
                     zero_init: false,

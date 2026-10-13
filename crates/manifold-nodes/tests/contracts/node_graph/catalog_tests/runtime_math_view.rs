@@ -617,3 +617,76 @@ fn retired_params_leave_before_scene_modifier_value_writes() {
     PresetRuntime::from_def_for_render(def, &PrimitiveRegistry::with_builtin(), None, false)
         .expect("the retired card leaves at load and the layer builds");
 }
+
+/// Each mesh modifier before Math View. Fragment presets cut the mesh into a
+/// padded layout; Math View must align its reference through the same cut
+/// map so arrows still draw. Arrow energy is Vectors on minus Vectors off; the
+/// topology guard hides arrows, so a positive difference means it did not
+/// fire. SpatialEchoes moves copies, not vertices: it only must not fail.
+#[cfg(feature = "gpu-proofs")]
+#[test]
+fn math_view_arrows_draw_after_every_mesh_modifier() {
+    let guard = manifold_gpu::testkit::test_device();
+    let device = guard.arc();
+    let registry = PrimitiveRegistry::with_builtin();
+    let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/scene-modifier-presets/");
+    let energy = |pixels: &[u8]| -> f64 {
+        pixels.chunks_exact(8).map(|pixel| {
+            pixel[..6].chunks_exact(2).map(|channel| {
+                f64::from(half::f16::from_le_bytes([channel[0], channel[1]]).to_f32())
+            }).sum::<f64>()
+        }).sum()
+    };
+    let (w, h) = (320, 180);
+    for (name, must_draw_arrows) in [
+        ("VortexFragments", true), ("SurfacePeel", true), ("MaskedPeel", true),
+        ("OrderedRecon", true), ("SurfaceWaves", true), ("ElasticSculpture", true),
+        ("SpatialEchoes", false),
+    ] {
+        let mut owner = owner();
+        let recipe: EffectGraphDef = serde_json::from_str(
+            &std::fs::read_to_string(format!("{dir}{name}.json")).unwrap(),
+        ).unwrap();
+        owner.scene_modifiers[0].graph = Box::new(recipe);
+        let owner = manifold_core::scene_modifier_edit::reconcile_scene_modifier_parameters(
+            &owner, &NodeId::new("vortex_a"),
+        ).unwrap().graph;
+        let mut params = manifest(&owner);
+        for (control, value) in [("mode", 1.0), ("grid", 0.0), ("trails", 0.0), ("ghosts", 0.0), ("density", 8.0)] {
+            set(&owner, &mut params, &format!("math_view_{control}"), value);
+        }
+        let mut runtime = PresetRuntime::from_def_for_render(owner.clone(), &registry, Some(&params), false)
+            .unwrap_or_else(|error| panic!("{name}: {error:?}"))
+            .with_generator_device(device.clone(), w, h, GpuTextureFormat::Rgba16Float)
+            .unwrap();
+        let target = RenderTarget::new(&device, w, h, GpuTextureFormat::Rgba16Float, "math-arrows");
+        let mut frame = 0_u32;
+        let mut render = |runtime: &mut PresetRuntime, params: &ParamManifest| {
+            frame += 1;
+            let ctx = PresetContext {
+                time: f64::from(frame) * 0.5, beat: f64::from(frame), dt: 0.5, width: w, height: h,
+                output_width: w, output_height: h, aspect: w as f32 / h as f32,
+                owner_key: 1, is_clip_level: false, frame_count: i64::from(frame),
+                anim_progress: 0.0, trigger_count: 0,
+            };
+            let mut encoder = device.create_encoder("math-arrows");
+            runtime.render(&mut GpuEncoder::new(&mut encoder, &device), &target.texture, &ctx, params);
+            encoder.commit_and_wait_completed();
+            manifold_node_engine::testkit::gpu::readback_raw_halves(&device, &target.texture, w, h)
+        };
+        // Wired controls land one frame late; render twice per setting.
+        set(&owner, &mut params, "math_view_vectors", 1.0);
+        render(&mut runtime, &params);
+        let with_vectors = energy(&render(&mut runtime, &params));
+        set(&owner, &mut params, "math_view_vectors", 0.0);
+        render(&mut runtime, &params);
+        let without_vectors = energy(&render(&mut runtime, &params));
+        assert!(without_vectors > 1.0, "{name}: Math view must draw fragment marks");
+        if must_draw_arrows {
+            assert!(
+                with_vectors > without_vectors + 1.0,
+                "{name}: arrows missing (Vectors on {with_vectors}, off {without_vectors})"
+            );
+        }
+    }
+}
