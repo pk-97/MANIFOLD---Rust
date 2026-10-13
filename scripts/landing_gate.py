@@ -800,29 +800,13 @@ def _main(stack):
         print_result('stable-inputs', 'FAIL', tail=tail)
         return refuse(repo, base_sha, results)
 
-    # Nextest tests call GpuDevice::new_queued; each would queue behind every
-    # agent's GPU run on its own. Hold the machine-wide GPU lock once, from
-    # here through gpu-proofs: child test processes inherit an ancestor's hold,
-    # so the landing waits once (visibly, on stdout) then runs straight through.
-    # Keep the hold for scoped nextest: transitive helpers can open a device,
-    # so source-path inspection alone cannot prove a selected test CPU-only.
     proofs_pending = run_gpu and not proof_cached and "gpu-proofs" not in unbuilt
     if expensive_blocked(args, results):
         return refuse(repo, base_sha, results)
-    if pending_tests or (flows_pending and "flow-gate" not in unbuilt) or proofs_pending or gpu_tooling:
-        print("[gpu-queue] taking the GPU lock for the flow-gate, tests and gpu-proofs legs", flush=True)
-        started = time.monotonic()
-        stack.enter_context(gpu_queue.hold("landing_gate flows+tests+gpu-proofs", out=sys.stdout))
-        GPU_WAIT.set(time.monotonic() - started)
-        print(f"[gpu-queue] held after {GPU_WAIT.get():.0f}s", flush=True)
-        if gate_passes.changed_passes(planned_passes):
-            tail = ['inputs changed while waiting for the GPU; replan before execution',
-                    f'rerun: {rerun_command(readiness_cmd[:-1], repo)}']
-            results.append(('FAIL', 'stable-inputs', None, tail))
-            print_result('stable-inputs', 'FAIL', tail=tail)
-            return refuse(repo, base_sha, results)
 
-    # f. tests (if packages touched)
+    # f. tests run outside the GPU hold: every Rust test opens its device
+    # through GpuDevice::new_queued, which queues that test process alone
+    # (BUG-z25ji (gate takes the GPU lock for CPU-only tests)).
     if test_legs:
         for label, cmd, passed in test_legs:
             if cmd[cmd.index('-p') + 1] in unbuilt:
@@ -840,6 +824,21 @@ def _main(stack):
 
     if expensive_blocked(args, results):
         return refuse(repo, base_sha, results)
+
+    # Flows, nested tooling and proofs share one machine-wide GPU hold: the
+    # landing waits once (visibly, on stdout) then runs straight through.
+    if (flows_pending and "flow-gate" not in unbuilt) or proofs_pending or gpu_tooling:
+        print("[gpu-queue] taking the GPU lock for the flow-gate and gpu-proofs legs", flush=True)
+        started = time.monotonic()
+        stack.enter_context(gpu_queue.hold("landing_gate flows+tests+gpu-proofs", out=sys.stdout))
+        GPU_WAIT.set(time.monotonic() - started)
+        print(f"[gpu-queue] held after {GPU_WAIT.get():.0f}s", flush=True)
+        if gate_passes.changed_passes([flow_pass, *proof_passes]):
+            tail = ['inputs changed while waiting for the GPU; replan before execution',
+                    f'rerun: {rerun_command(readiness_cmd[:-1], repo)}']
+            results.append(('FAIL', 'stable-inputs', None, tail))
+            print_result('stable-inputs', 'FAIL', tail=tail)
+            return refuse(repo, base_sha, results)
 
     if "flow-gate" in unbuilt:
         skip(results, "flow-gate", "flow-gate-build failed")
@@ -872,7 +871,7 @@ def _main(stack):
             print("[gpu-proofs] " + plan.describe().replace("\n", "\n[gpu-proofs] "), flush=True)
             cmd = ["python3", "scripts/gpu_proofs_gate.py", *gpu_args,
                    "--budget", str(gpu_scope.LANDING_BUDGET_S), "--learn-times"]
-            # The GPU hold was taken before the tests leg and is still held.
+            # The GPU hold was taken after the tests leg and is still held.
             if proof_cached:
                 for passed in proof_passes:
                     if not passed.reused():

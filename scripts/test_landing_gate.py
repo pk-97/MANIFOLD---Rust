@@ -645,13 +645,26 @@ class LandingTests(unittest.TestCase):
         self.assertEqual([e for e in events if e.startswith("hold")],
                          ["hold-enter:landing_gate flows+tests+gpu-proofs", "hold-exit"])
         enter, leave = events.index("hold-enter:landing_gate flows+tests+gpu-proofs"), events.index("hold-exit")
-        self.assertLess(enter, events.index("tests"))
+        self.assertLess(events.index("tests"), enter)
         self.assertLess(events.index("gpu-proofs"), leave)
         # Cheap prerequisites, clippy and every test-binary compile run
         # before the hold, so it covers test time only.
         self.assertLess(events.index("clippy"), enter)
         self.assertLess(events.index("tests-build"), enter)
         self.assertLess(events.index("gpu-proofs-build"), enter)
+
+    def test_nextest_runs_before_and_outside_the_gpu_hold(self):
+        # Each GPU test process queues itself through GpuDevice::new_queued,
+        # so CPU legs never wait behind another landing's hold (BUG-z25ji).
+        code, *_ = self.exercise(extra=["--skip-gpu", "test"])
+        self.assertEqual(code, 0)
+        self.assertIn("tests", self.events)
+        self.assertFalse(any(e.startswith("hold") for e in self.events))
+        code, *_ = self.exercise()
+        self.assertEqual(code, 0)
+        enter = self.events.index("hold-enter:landing_gate flows+tests+gpu-proofs")
+        self.assertLess(self.events.index("tests"), enter)
+        self.assertLess(enter, self.events.index("gpu-proofs"))
 
     def test_builds_compile_exactly_what_the_held_legs_run(self):
         _, _, _, commands, *_ = self.exercise()
@@ -756,7 +769,7 @@ class LandingTests(unittest.TestCase):
         self.assertIn(f"[SKIP] {skipped_label} ({failed} failed)", output)
 
     def test_tests_failure_still_releases_the_hold(self):
-        self.exercise("tests")
+        self.exercise("tests", extra=["--keep-going"])
         self.assertEqual(self.events[-1], "hold-exit")
 
     def test_unmapped_gpu_path_fails_gate_naming_path(self):

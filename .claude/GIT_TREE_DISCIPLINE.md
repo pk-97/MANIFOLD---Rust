@@ -152,8 +152,9 @@ Obsolete when: main stops being a locally-landed shared trunk (PR/CI-gated merge
   `scripts/gpu_scope.py`, 360s test-time budget, unmapped GPU path fails,
   `glb_conformance` only for glTF paths; the whole suite is `--all`, nightly).
   Comment/blank-only and docs-only diffs skip the build, clippy, CPU-test, and
-  GPU-proof legs. The selected CPU tests retain the GPU lock because device use
-  cannot be known cheaply; builds run outside that hold. Full touched-crate and
+  GPU-proof legs. The selected CPU tests run before and outside the GPU hold;
+  any test that opens a device queues its own process. Only flows and GPU
+  proofs share the hold, and builds run outside it. Full touched-crate and
   workspace CPU suites run nightly through `trunk_health.py`.
   Successful legs are stored in the Git common directory, shared by every
   slot. Keys cover content, dependency crates, test selection, features,
