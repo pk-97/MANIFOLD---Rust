@@ -4785,14 +4785,12 @@ mod p1_4_gesture_integrity_tests {
         assert_eq!(feedback.beat, panel.snap_to_grid(panel.pixel_to_beat(pos.x)));
         overlay.handle_automation_click(pos, 1, &mut host, &mut state, &panel);
         assert_eq!(host.automation_added, vec![(feedback.beat, feedback.value)]);
-        for y in [lane.header_rect().y + 3.0, lane.strip_rect.y_max() - 12.0] {
-            let chrome = Vec2::new(pos.x, y);
-            overlay.refresh_automation_feedback(chrome, lanes, &mut state, &panel);
-            assert_eq!(state.automation_feedback.as_ref().unwrap().operation, AutomationOperation::Header);
-            overlay.handle_automation_click(chrome, 2, &mut host, &mut state, &panel);
-            overlay.on_begin_drag(chrome, &mut host, &mut state, &panel);
-            assert_eq!(overlay.drag_mode(), DragMode::None);
-        }
+        let chrome = Vec2::new(pos.x, lane.header_rect().y + 3.0);
+        overlay.refresh_automation_feedback(chrome, lanes, &mut state, &panel);
+        assert_eq!(state.automation_feedback.as_ref().unwrap().operation, AutomationOperation::Header);
+        overlay.handle_automation_click(chrome, 2, &mut host, &mut state, &panel);
+        overlay.on_begin_drag(chrome, &mut host, &mut state, &panel);
+        assert_eq!(overlay.drag_mode(), DragMode::None);
         assert_eq!(host.automation_added.len(), 1);
     }
 

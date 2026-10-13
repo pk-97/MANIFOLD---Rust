@@ -314,12 +314,12 @@ impl AutomationLaneScreen {
 
     pub fn curve_rect_for(strip: Rect) -> Rect {
         let header = if strip.height >= 64.0 { 22.0 } else { 0.0 };
-        let padding = if header > 0.0 { 8.0 } else { 0.0 };
+        let padding = if header > 0.0 { 4.0 } else { 0.0 };
         Rect::new(
             strip.x,
             strip.y + header + padding,
             strip.width,
-            (strip.height - header - padding - if header > 0.0 { 24.0 } else { 0.0 }).max(1.0),
+            (strip.height - header - padding - if header > 0.0 { 8.0 } else { 0.0 }).max(1.0),
         )
     }
 
