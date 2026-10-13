@@ -19,11 +19,26 @@ impl Rng {
 
 const NTSC_2997: f32 = 29.97;
 const RATES: [f32; 9] = [60.0, 50.0, 30.0, 25.0, 24.0, NTSC_2997, 23.976, 59.94, 120.0];
+const K: u32 = PERSIST_OBSERVATIONS;
 
 fn playing_clock(fps: f32) -> TransportClock {
     let mut clock = TransportClock::new(fps);
     clock.locate(Seconds(0.0));
     clock
+}
+
+/// One external sample `frames` from the current grid time.
+fn observe_at(clock: &mut TransportClock, frames: f64, smoothing: Smoothing) {
+    let target = Seconds(clock.time().0 + frames * clock.step().0);
+    clock.observe_external(target, smoothing);
+}
+
+/// A full persistence streak of exact samples, then one tick.
+fn persist_then_advance(clock: &mut TransportClock, frames: f64) -> i64 {
+    for _ in 0..K {
+        observe_at(clock, frames, Smoothing::Exact);
+    }
+    clock.advance(1)
 }
 
 // ── Absolute time ────────────────────────────────────────────────────────────
@@ -37,7 +52,7 @@ fn time_is_absolute_at_two_hours() {
         for index in 1..=frames {
             assert_eq!(clock.advance(1), 1);
             assert_eq!(clock.index(), index);
-            let expected = 0.0 + index as f64 * step;
+            let expected = index as f64 * step;
             assert_eq!(clock.time().0.to_bits(), expected.to_bits(), "fps {fps} index {index}");
         }
     }
@@ -240,7 +255,7 @@ fn reset_returns_to_zero_and_clears_hold() {
     assert_eq!(clock.advance(1), 1);
 }
 
-// ── D10, D9: fps change and export ───────────────────────────────────────────
+// ── D10, D9, D17: fps change and export ──────────────────────────────────────
 
 #[test]
 fn set_fps_keeps_time_and_snaps_forward() {
@@ -255,157 +270,374 @@ fn set_fps_keeps_time_and_snaps_forward() {
 }
 
 #[test]
-fn export_frames_match_the_export_formula() {
-    for fps in [24.0_f32, NTSC_2997, 60.0] {
-        let origin = Seconds(37.123_456_789);
-        let mut clock = TransportClock::new(60.0);
-        clock.begin_export(fps, origin);
-        let dt = 1.0 / fps as f64;
-        for k in 0..20_000u32 {
-            clock.set_export_frame(0, k);
-            let today = origin.0 + k as f64 * dt;
-            assert_eq!(clock.time().0.to_bits(), today.to_bits(), "{fps} frame {k}");
-        }
-        // Song-time-0 anchor: frame k sits on the live grid.
-        let mut song = TransportClock::new(60.0);
-        song.begin_export(fps, Seconds(0.0));
-        let first = song.index_at_or_after(origin);
-        song.set_export_frame(first, 0);
-        assert!(song.time().0 >= origin.0 && song.time().0 - origin.0 < dt);
-        song.set_export_frame(first, 7);
-        assert_eq!(song.time().0.to_bits(), ((first + 7) as f64 * dt).to_bits());
-        song.end_export(60.0);
-        assert_eq!(song.fps(), 60.0);
-        assert_eq!(song.time_at(0).0, 0.0, "live origin restored");
+fn fps_outside_one_to_a_thousand_falls_back_to_sixty() {
+    for fps in [0.0_f32, -24.0, 0.5, 1000.5, f32::NAN, f32::INFINITY, f32::NEG_INFINITY, f32::MAX, 1e-30] {
+        let clock = TransportClock::new(fps);
+        assert_eq!(clock.fps(), 60.0, "{fps}");
+        assert_eq!(clock.step().0.to_bits(), (1.0_f64 / 60.0).to_bits(), "{fps}");
+        let mut clock = playing_clock(24.0);
+        clock.set_fps(fps);
+        assert_eq!(clock.fps(), 60.0, "set_fps {fps}");
+        clock.begin_export(fps);
+        assert_eq!(clock.fps(), 60.0, "begin_export {fps}");
     }
+    for fps in [1.0_f32, 23.976, 1000.0] {
+        assert_eq!(TransportClock::new(fps).fps(), fps, "{fps} is accepted");
+    }
+}
+
+/// Export frame k is the first song-grid frame at or after the start, plus k
+/// (D17), so live and export sample identical times for the same song moment.
+#[test]
+fn export_frames_sit_on_the_song_grid() {
+    let start = Seconds(37.123_456_789);
+    for fps in [24.0_f32, NTSC_2997, 60.0] {
+        let mut clock = playing_clock(60.0);
+        clock.begin_export(fps);
+        assert_eq!(clock.fps(), fps);
+        let step = 1.0 / fps as f64;
+        let first = clock.index_at_or_after(start);
+        for k in 0..20_000u32 {
+            clock.set_export_frame(first, k);
+            let expected = (first + i64::from(k)) as f64 * step;
+            assert_eq!(clock.time().0.to_bits(), expected.to_bits(), "{fps} frame {k}");
+        }
+        clock.set_export_frame(first, 0);
+        assert!(clock.time().0 >= start.0 && clock.time().0 - start.0 < step, "{fps}: frame 0 is the first at or after the start");
+        clock.end_export(60.0);
+        assert_eq!(clock.fps(), 60.0);
+    }
+
+    let mut live = playing_clock(60.0);
+    live.locate(start);
+    let mut export = TransportClock::new(24.0);
+    export.begin_export(60.0);
+    let first = export.index_at_or_after(start);
+    for k in 0..1_000u32 {
+        export.set_export_frame(first, k);
+        assert_eq!(export.time().0.to_bits(), live.time().0.to_bits(), "export frame {k} equals live");
+        live.advance(1);
+    }
+}
+
+#[test]
+fn export_frame_clears_a_pending_hold() {
+    let mut clock = playing_clock(60.0);
+    clock.seek_playing(Seconds(2.0));
+    clock.set_export_frame(clock.index(), 0);
+    assert_eq!(clock.advance(1), 1, "an export frame leaves no seek hold behind");
 }
 
 // ── D6: phase lock ───────────────────────────────────────────────────────────
 
-fn applied(c: Correction) -> i64 {
-    match c {
-        Correction::None => 0,
-        Correction::Skip => 1,
-        Correction::Hold => -1,
-        Correction::Jump(n) => n,
+#[test]
+fn correction_needs_a_persistent_streak() {
+    let mut clock = playing_clock(60.0);
+    clock.advance(1);
+    // One sample back inside ¾ breaks the streak.
+    for _ in 0..K - 1 {
+        observe_at(&mut clock, 0.9, Smoothing::Exact);
     }
+    observe_at(&mut clock, 0.5, Smoothing::Exact);
+    assert_eq!(clock.advance(1), 1);
+    assert_eq!(clock.last_correction(), Correction::None);
+
+    // One short of the streak: nothing yet. The last sample completes it.
+    for _ in 0..K - 1 {
+        observe_at(&mut clock, 0.9, Smoothing::Exact);
+    }
+    assert_eq!(clock.advance(1), 1);
+    assert_eq!(clock.last_correction(), Correction::None);
+    observe_at(&mut clock, 0.9, Smoothing::Exact);
+    assert_eq!(clock.advance(1), 2);
+    assert_eq!(clock.last_correction(), Correction::Skip);
+    let drift = clock.last_correction_drift().0 / clock.step().0;
+    assert!((drift - 0.9).abs() < 1e-9, "the drift that triggered the skip, got {drift}");
+    assert_eq!(clock.advance(1), 1);
+    assert_eq!(clock.last_correction_drift().0, 0.0);
+
+    // A change of side starts a new streak.
+    for _ in 0..K - 1 {
+        observe_at(&mut clock, 0.9, Smoothing::Exact);
+    }
+    for _ in 0..K - 1 {
+        observe_at(&mut clock, -0.9, Smoothing::Exact);
+    }
+    assert_eq!(clock.advance(1), 1);
+    assert_eq!(clock.last_correction(), Correction::None);
+    observe_at(&mut clock, -0.9, Smoothing::Exact);
+    assert_eq!(clock.advance(1), 0);
+    assert_eq!(clock.last_correction(), Correction::Hold);
+
+    // Each slew frame needs its own streak: after a skip at 2.0 the residual
+    // 1.0 is still past ¾, but one sample is not enough.
+    persist_then_advance(&mut clock, 2.0);
+    assert_eq!(clock.last_correction(), Correction::Skip);
+    observe_at(&mut clock, 1.0, Smoothing::Exact);
+    clock.advance(1);
+    assert_eq!(clock.last_correction(), Correction::None);
 }
 
 #[test]
 fn correction_subtracts_from_estimate() {
     for smoothing in [Smoothing::Exact, Smoothing::Coarse] {
         let mut clock = playing_clock(60.0);
-        // At 0.95 a filter that kept the old drift after the skip would skip again.
-        let corrections = simulate(&mut clock, Source::Constant(smoothing), 0.95, 120.0, 10_000, 1);
+        // At 1.4 a coarse filter that kept the old drift after the skip stays
+        // past ¾ for a full streak while it decays toward 0.4, and skips again.
+        let corrections = simulate(&mut clock, Source::Constant(smoothing), 1.4, 120.0, 10_000, 1);
         assert_eq!(corrections, vec![Correction::Skip], "{smoothing:?}: one skip, then quiet");
     }
 }
 
+/// Up to 2½ frames the lock slews a frame at a time and the index never moves
+/// backward. 64 fps makes every drift here exact in binary.
 #[test]
-fn slew_holds_never_rewind() {
-    // Holds stop once the residual is inside ¾ frame: -1.5 needs one, -1.9 two.
-    for (drift, holds) in [(-1.0, -1), (-1.5, -1), (-1.9, -2)] {
-        let mut clock = playing_clock(60.0);
+fn slew_never_rewinds() {
+    for (drift, holds) in [(-1.0, -1), (-1.5, -1), (-1.9, -2), (-2.01, -2), (-2.3, -2), (-2.5, -2)] {
+        let mut clock = playing_clock(64.0);
         let step = clock.step().0;
         let mut last = clock.index();
         for n in 1..=2_000i64 {
             clock.advance(1);
             assert!(clock.index() >= last, "slew moved backward at drift {drift}");
+            assert!(!matches!(clock.last_correction(), Correction::Jump(_)), "drift {drift} jumped");
             last = clock.index();
             let truth = (n as f64 + drift) * step;
             clock.observe_external(Seconds(truth), Smoothing::Exact);
         }
-        let net = clock.index() - 2_000;
-        assert_eq!(net, holds, "holds absorb {drift}");
+        assert_eq!(clock.index() - 2_000, holds, "holds absorb {drift}");
     }
 }
 
 #[test]
-fn jumps_beyond_two_frames() {
-    let mut clock = playing_clock(60.0);
+fn jumps_beyond_two_and_a_half_frames() {
+    let mut clock = playing_clock(64.0);
     clock.advance(1);
-    clock.observe_external(Seconds(clock.time().0 + 5.3 * clock.step().0), Smoothing::Exact);
-    clock.advance(1);
+    persist_then_advance(&mut clock, 5.3);
     assert_eq!(clock.last_correction(), Correction::Jump(5));
     assert_eq!(clock.index(), 7);
 
-    clock.observe_external(Seconds(clock.time().0 - 4.6 * clock.step().0), Smoothing::Exact);
-    clock.advance(1);
+    persist_then_advance(&mut clock, -4.6);
     assert_eq!(clock.last_correction(), Correction::Jump(-5));
     assert_eq!(clock.index(), 3, "a jump may move backward");
+
+    persist_then_advance(&mut clock, -2.75);
+    assert_eq!(clock.last_correction(), Correction::Jump(-3));
+    assert_eq!(clock.index(), 1);
+
+    // Exactly 2½ is still a slew.
+    persist_then_advance(&mut clock, 2.5);
+    assert_eq!(clock.last_correction(), Correction::Skip);
+    persist_then_advance(&mut clock, -2.5);
+    assert_eq!(clock.last_correction(), Correction::Hold);
+}
+
+/// The seek-hold tick has no frame to remove, so a due hold waits for the
+/// next tick instead of stepping the index backward (D6).
+#[test]
+fn due_hold_waits_when_there_is_no_frame_to_remove() {
+    let mut clock = playing_clock(60.0);
+    clock.advance(10);
+    clock.seek_playing(Seconds(1.0));
+    let target = clock.index();
+    for _ in 0..K {
+        observe_at(&mut clock, -1.0, Smoothing::Exact);
+    }
+    assert_eq!(clock.advance(1), 0, "the seek hold renders the target");
+    assert_eq!(clock.index(), target);
+    assert_eq!(clock.last_correction(), Correction::None);
+    assert_eq!(clock.advance(1), 0, "the hold lands on the next tick");
+    assert_eq!(clock.last_correction(), Correction::Hold);
+    assert_eq!(clock.advance(1), 1);
+
+    for _ in 0..K {
+        observe_at(&mut clock, -1.0, Smoothing::Exact);
+    }
+    assert_eq!(clock.advance(0), 0, "a zero-frame tick has nothing to remove either");
+    assert_eq!(clock.last_correction(), Correction::None);
+    assert_eq!(clock.advance(1), 0);
+    assert_eq!(clock.last_correction(), Correction::Hold);
 }
 
 #[test]
 fn authority_change_clears_and_reseeds() {
     let mut clock = playing_clock(60.0);
     clock.advance(1);
-    // Coarse: an unseeded average from 0 would need many samples to cross ¾.
+    // Coarse seeds from its first sample; averaged in from 0 it would sit near
+    // 0.42 after a streak's worth of samples.
     clock.clear_external();
-    clock.observe_external(Seconds(clock.time().0 + 0.9 * clock.step().0), Smoothing::Coarse);
+    for _ in 0..K {
+        observe_at(&mut clock, 0.9, Smoothing::Coarse);
+    }
     clock.advance(1);
     assert_eq!(clock.last_correction(), Correction::Skip, "first sample seeds the estimate");
 
-    // After a clear, the opposite direction is free at once.
+    // After a clear, the opposite side needs only its own streak.
     clock.clear_external();
-    clock.observe_external(Seconds(clock.time().0 - 0.9 * clock.step().0), Smoothing::Coarse);
+    for _ in 0..K {
+        observe_at(&mut clock, -0.9, Smoothing::Coarse);
+    }
     clock.advance(1);
     assert_eq!(clock.last_correction(), Correction::Hold);
 
-    // Re-anchors clear too.
-    clock.observe_external(Seconds(clock.time().0 + 0.9 * clock.step().0), Smoothing::Coarse);
+    // Re-anchors clear too: a full exact streak would otherwise skip.
+    for _ in 0..K {
+        observe_at(&mut clock, 0.9, Smoothing::Exact);
+    }
     clock.locate(clock.time());
     clock.advance(1);
     assert_eq!(clock.last_correction(), Correction::None);
-}
 
-#[test]
-fn reverse_correction_needs_rearm() {
-    let step = 1.0 / 60.0;
-    let mut clock = playing_clock(60.0);
-    clock.advance(1);
-    let at = |clock: &TransportClock, frames: f64| Seconds(clock.time().0 + frames * step);
-    clock.observe_external(at(&clock, 1.3), Smoothing::Exact);
-    clock.advance(1);
-    assert_eq!(clock.last_correction(), Correction::Skip);
-    // Residual +0.3, not yet back inside ¼: the reverse is refused.
-    clock.observe_external(at(&clock, -0.3), Smoothing::Exact);
-    clock.observe_external(at(&clock, -0.8), Smoothing::Exact);
+    for _ in 0..K {
+        observe_at(&mut clock, 0.9, Smoothing::Exact);
+    }
+    clock.clear_external();
     clock.advance(1);
     assert_eq!(clock.last_correction(), Correction::None);
-    // Back inside ¼, then out again: allowed.
-    clock.observe_external(at(&clock, -0.1), Smoothing::Exact);
-    clock.observe_external(at(&clock, -0.8), Smoothing::Exact);
-    clock.advance(1);
-    assert_eq!(clock.last_correction(), Correction::Hold);
 }
 
-/// A real reverse move larger than any flapping noise is never refused, even
-/// when an exact source steps across the re-arm band without landing in it.
+/// After a skip the residual sits inside ¾; when the source then moves back
+/// past ¾ on the other side, one hold follows within a streak. The old re-arm
+/// band left −0.8..−1.2 uncorrected for an hour.
 #[test]
-fn large_reverse_is_never_stuck() {
-    let step = 1.0 / 60.0;
+fn reverse_after_skip_is_never_stuck() {
+    for back in [-0.6, -0.8, -0.9, -1.0, -1.1, -1.2, -1.6] {
+        let mut clock = playing_clock(60.0);
+        let step = clock.step().0;
+        let mut corrections = Vec::new();
+        let mut reversed_at = None;
+        let moves_at = 600i64;
+        for n in 1..=216_000i64 {
+            clock.advance(1);
+            if clock.last_correction() != Correction::None {
+                corrections.push(clock.last_correction());
+                if n > moves_at && reversed_at.is_none() {
+                    reversed_at = Some(n - moves_at);
+                }
+            }
+            // +1.3 frames ahead, so one skip leaves +0.3; then the source moves
+            // so the residual becomes `back`.
+            let offset = if n < moves_at { 1.3 } else { 1.0 + back };
+            clock.observe_external(Seconds((n as f64 + offset) * step), Smoothing::Exact);
+        }
+        if back < -ACT_ABOVE_FRAMES {
+            assert_eq!(corrections, vec![Correction::Skip, Correction::Hold], "back {back}");
+            assert!(reversed_at.unwrap() <= i64::from(K) + 1, "back {back}: hold after {reversed_at:?} ticks");
+        } else {
+            assert_eq!(corrections, vec![Correction::Skip], "back {back}");
+        }
+    }
+}
+
+/// A coarse locate below the seek threshold is one jump: two agreeing samples
+/// re-seed the estimate instead of averaging toward it.
+#[test]
+fn coarse_locate_is_one_jump() {
+    for (frames, jump) in [(3.0, 3), (24.0, 24), (100.0, 100), (-24.0, -24)] {
+        let mut clock = playing_clock(60.0);
+        let step = clock.step().0;
+        let mut rng = Rng(5);
+        let mut got = Vec::new();
+        for n in 1..=3_000i64 {
+            clock.advance(1);
+            if clock.last_correction() != Correction::None {
+                got.push(clock.last_correction());
+            }
+            let offset = if n < 300 { 0.0 } else { frames };
+            if n % 2 == 0 {
+                let target = (n as f64 + offset + rng.range(-0.05, 0.05)) * step;
+                clock.observe_external(Seconds(target), Smoothing::Coarse);
+            }
+        }
+        assert_eq!(got, vec![Correction::Jump(jump)], "{frames}-frame locate");
+    }
+}
+
+#[test]
+fn coarse_outlier_is_ignored() {
     let mut clock = playing_clock(60.0);
     clock.advance(1);
-    let at = |clock: &TransportClock, frames: f64| Seconds(clock.time().0 + frames * step);
-    clock.observe_external(at(&clock, 1.3), Smoothing::Exact);
+    // One short of a streak at 0.9; an outlier must neither complete it nor move the estimate.
+    for _ in 0..K - 1 {
+        observe_at(&mut clock, 0.9, Smoothing::Coarse);
+    }
+    observe_at(&mut clock, 50.0, Smoothing::Coarse);
     clock.advance(1);
-    assert_eq!(clock.last_correction(), Correction::Skip);
-    clock.observe_external(at(&clock, -1.5), Smoothing::Exact);
+    assert_eq!(clock.last_correction(), Correction::None);
+    observe_at(&mut clock, 0.9, Smoothing::Coarse);
     clock.advance(1);
-    assert_eq!(clock.last_correction(), Correction::Hold);
+    assert_eq!(clock.last_correction(), Correction::Skip, "the outlier left the streak and estimate alone");
+
+    // Two outliers that disagree are not a locate.
+    observe_at(&mut clock, 50.0, Smoothing::Coarse);
+    observe_at(&mut clock, 20.0, Smoothing::Coarse);
+    for _ in 0..3_000 {
+        observe_at(&mut clock, 0.0, Smoothing::Coarse);
+        clock.advance(1);
+        assert_eq!(clock.last_correction(), Correction::None);
+    }
+}
+
+#[test]
+fn non_finite_and_absurd_input_is_safe() {
+    let mut clock = playing_clock(60.0);
+    clock.advance(600);
+    for bad in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+        clock.locate(Seconds(bad));
+        clock.seek_playing(Seconds(bad));
+        clock.locate_nearest(Seconds(bad));
+        assert_eq!(clock.index(), 600, "{bad} is ignored");
+        for _ in 0..K {
+            clock.observe_external(Seconds(bad), Smoothing::Exact);
+            clock.observe_external(Seconds(bad), Smoothing::Coarse);
+        }
+    }
+    assert_eq!(clock.advance(1), 1, "non-finite input set no hold and no correction");
+    assert_eq!(clock.last_correction(), Correction::None);
+
+    for huge in [1e300, -1e300] {
+        clock.locate(Seconds(huge));
+        assert!(clock.time().0.is_finite());
+        clock.advance(u32::MAX);
+        clock.advance(u32::MAX);
+        clock.seek_playing(Seconds(huge));
+        clock.advance(1);
+        assert!(clock.time().0.is_finite());
+    }
+
+    let mut clock = playing_clock(60.0);
+    clock.advance(1);
+    for target in [1e300, -1e300] {
+        for _ in 0..K {
+            clock.observe_external(Seconds(target), Smoothing::Exact);
+        }
+        clock.advance(1);
+        let Correction::Jump(n) = clock.last_correction() else {
+            panic!("{target}: expected a jump, got {:?}", clock.last_correction())
+        };
+        assert!(n.unsigned_abs() as f64 <= MAX_DRIFT_FRAMES, "{target}: jump {n} is clamped");
+    }
+    clock.set_export_frame(i64::MAX, u32::MAX);
+    assert!(clock.time().0.is_finite());
+    clock.set_export_frame(i64::MIN, 0);
+    clock.advance(u32::MAX);
+    assert!(clock.time().0.is_finite());
 }
 
 /// External source models. Each produces the target the P3 source code will
-/// hand the clock: its position projected to this frame's deadline.
+/// hand the clock: its position projected to this frame's deadline. The
+/// projection uses the true tempo and exact send times; P3 owns the error of
+/// its own BPM estimate and arrival stamps.
 #[derive(Clone, Copy, Debug)]
 enum Source {
     /// A target every frame with no error.
     Constant(Smoothing),
     /// 24 PPQN ticks with ±1 ms arrival jitter, projected from arrival (D7).
     MidiClock,
-    /// Timecode at `hz`, floor-quantised to its frames, sent at a fixed phase,
-    /// ±1 ms jitter, +½ timecode frame bias, projected from arrival (D7).
-    Timecode { hz: f64, send_phase: f64 },
+    /// The P3 M4L sender: unquantised song seconds every `period_ms` on its
+    /// own free-running metro, starting at `phase` of a period, ±1 ms
+    /// arrival jitter, projected from arrival (D7).
+    SongSeconds { period_ms: f64, phase: f64 },
 }
 
 /// Run `ticks` frames against a source whose true position is `drift` frames
@@ -447,17 +679,16 @@ fn simulate(
                     None
                 }
             }
-            Source::Timecode { hz, send_phase } => {
-                let period = 1.0 / hz;
-                let k = ((wall - send_phase * period - 0.001) / period).floor() as i64;
+            Source::SongSeconds { period_ms, phase } => {
+                let period = period_ms / 1000.0;
+                let k = ((wall - phase * period - 0.001) / period).floor() as i64;
                 if k > last_event {
                     last_event = k;
                     let jitter = rng.range(-0.001, 0.001);
-                    let send_wall = (k as f64 + send_phase) * period;
+                    let send_wall = (k as f64 + phase) * period;
                     let position = send_wall + drift * step;
-                    let reported = (position / period).floor() * period;
                     let arrival = send_wall + jitter;
-                    Some((reported + 0.5 * period + (wall - arrival), Smoothing::Coarse))
+                    Some((position + (wall - arrival), Smoothing::Coarse))
                 } else {
                     None
                 }
@@ -473,7 +704,7 @@ fn simulate(
 fn assert_no_flap(corrections: &[Correction], context: &str) {
     let mut sign = 0i64;
     for c in corrections {
-        let s = applied(*c).signum();
+        let s = c.frames().signum();
         assert!(sign == 0 || s == sign, "{context}: flapped {corrections:?}");
         sign = s;
     }
@@ -495,7 +726,7 @@ fn phase_lock_hysteresis_no_flap() {
                 let got = simulate(&mut clock, source, drift, bpm, 3_600, seed);
                 let context = format!("{source:?} {bpm} BPM drift {drift:+.3}");
                 assert_no_flap(&got, &context);
-                let net: i64 = got.iter().map(|c| applied(*c)).sum();
+                let net: i64 = got.iter().map(|c| c.frames()).sum();
                 if drift.abs() < 0.65 {
                     assert!(got.is_empty(), "{context}: corrected {got:?}");
                 } else if drift.abs() > 0.85 {
@@ -509,6 +740,56 @@ fn phase_lock_hysteresis_no_flap() {
     }
 }
 
+/// Noise past the ¼-frame contract, swept over true offset and start phase,
+/// for an hour each: a constant offset gets at most two corrections more than
+/// a clean source needs. One observation per correction gives 18,000 an hour
+/// at ±0.3 frame.
+#[test]
+fn phase_lock_bounded_under_noise() {
+    let hour = 216_000u32;
+    let cases: [(Smoothing, u32, &[f64]); 3] = [
+        (Smoothing::Exact, 1, &[0.0, 0.1, 0.2, 0.25, 0.3]),
+        (Smoothing::Coarse, 1, &[0.0, 0.25, 0.5]),
+        (Smoothing::Coarse, 2, &[0.0, 0.25, 0.5]),
+    ];
+    for (smoothing, every, noises) in cases {
+        for &noise in noises {
+            for offset16 in -24..=24 {
+                let offset = offset16 as f64 / 16.0;
+                for phase in 0..every.max(2) {
+                    let mut clock = playing_clock(60.0);
+                    let mut rng = Rng(0x5EED ^ (u64::from(phase) << 32) ^ (offset16 + 100) as u64);
+                    let mut corrections = 0u32;
+                    for n in 0..hour {
+                        clock.advance(1);
+                        if clock.last_correction() != Correction::None {
+                            corrections += 1;
+                        }
+                        if (n + phase) % every == 0 {
+                            let residual = offset - corrections_net(&clock, n);
+                            observe_at(&mut clock, residual + rng.range(-noise, noise), smoothing);
+                        }
+                    }
+                    let needed = if offset.abs() > ACT_ABOVE_FRAMES { (offset.abs() - ACT_ABOVE_FRAMES).ceil() as u32 } else { 0 };
+                    assert!(
+                        corrections <= needed + 2,
+                        "{smoothing:?} every {every} noise ±{noise} offset {offset:+} phase {phase}: {corrections} corrections in an hour"
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// Net frames the corrections have moved the grid: the index minus the ticks.
+fn corrections_net(clock: &TransportClock, ticks_before: u32) -> f64 {
+    (clock.index() - i64::from(ticks_before) - 1) as f64
+}
+
+/// Projected sources hold phase at matched tempo: MIDI clock over the start
+/// phase and tempo sweep, and the P3 song-seconds sender over free-running
+/// send periods. A sender that quantises to timecode frames on an unlocked
+/// metro does not; P3 changes the sender (D7).
 #[test]
 fn projected_sources_hold_phase() {
     let two_hours = 2 * 3600 * 60;
@@ -519,17 +800,14 @@ fn projected_sources_hold_phase() {
             assert!(got.is_empty(), "MIDI {bpm} BPM drift {drift}: {got:?}");
         }
     }
-    // Timecode is quantised to its own frames: a fixed send phase leaves a
-    // constant bias of up to ½ timecode frame, worth at most one correction.
-    // Phases sit off the timecode frame edge; a sender exactly on it is a P3
-    // measurement, not a model input.
-    for hz in [25.0, 30.0] {
-        for send_phase in [0.1, 0.35, 0.6, 0.85] {
-            let mut clock = playing_clock(60.0);
-            let got = simulate(&mut clock, Source::Timecode { hz, send_phase }, 0.0, 120.0, two_hours, 11);
-            let context = format!("timecode {hz} Hz phase {send_phase}");
-            assert_no_flap(&got, &context);
-            assert!(got.len() <= 1, "{context}: {got:?}");
+    for period_ms in [40.0, 40.1, 33.3, 33.4, 20.0, 50.0] {
+        for phase in [0.1, 0.5, 0.9] {
+            for drift in [-0.5, 0.0, 0.5] {
+                let mut clock = playing_clock(60.0);
+                let source = Source::SongSeconds { period_ms, phase };
+                let got = simulate(&mut clock, source, drift, 120.0, two_hours, 11);
+                assert!(got.is_empty(), "song seconds every {period_ms} ms phase {phase} drift {drift}: {got:?}");
+            }
         }
     }
 }
@@ -539,19 +817,35 @@ fn projected_sources_hold_phase() {
 #[test]
 fn live_tempo_is_absolute_and_continuous() {
     let clock = TransportClock::new(60.0);
-    let mut tempo = LiveTempo::new(120, Beats(4.0), Bpm(120.0));
-    let at = |tempo: &LiveTempo, index: i64| tempo.beat_at(&clock, clock.time_at(index)).0;
+    let mut tempo = LiveTempo::new(clock.time_at(120), Beats(4.0), Bpm(120.0));
+    let at = |tempo: &LiveTempo, index: i64| tempo.beat_at(clock.time_at(index)).0;
     assert_eq!(at(&tempo, 120), 4.0);
     assert!((at(&tempo, 150) - 5.0).abs() < 1e-12, "30 frames at 120 BPM is one beat");
-    assert!((tempo.time_at(&clock, Beats(5.0)).0 - clock.time_at(150).0).abs() < 1e-12);
+    assert!((tempo.time_at(Beats(5.0)).0 - clock.time_at(150).0).abs() < 1e-12);
 
     // A ramp: re-anchor every 15 frames, BPM up 0.5 each time. The beat never jumps.
     let mut index = 150;
     for i in 0..64 {
         let before = at(&tempo, index);
-        tempo.reanchor(&clock, index, Bpm(120.0 + 0.5 * i as f32));
+        tempo.reanchor(clock.time_at(index), Bpm(120.0 + 0.5 * i as f32));
         assert_eq!(at(&tempo, index).to_bits(), before.to_bits(), "continuous at {index}");
         index += 15;
     }
     assert!(at(&tempo, index) > at(&tempo, index - 1));
+}
+
+/// The segment is anchored on a time, so moving to another grid keeps the beat.
+#[test]
+fn live_tempo_survives_grid_changes() {
+    let mut clock = playing_clock(60.0);
+    let tempo = LiveTempo::new(clock.time_at(600), Beats(20.0), Bpm(120.0));
+    clock.advance(1_200);
+    let before = tempo.beat_at(clock.time()).0;
+    assert!((before - 40.0).abs() < 1e-9, "20 s at 120 BPM from beat 20 at 10 s, got {before}");
+    clock.set_fps(30.0);
+    assert!((tempo.beat_at(clock.time()).0 - before).abs() < 1e-9, "fps change moved the beat");
+    clock.begin_export(24.0);
+    assert!((tempo.beat_at(clock.time()).0 - before).abs() < 1e-9, "export grid moved the beat");
+    clock.end_export(60.0);
+    assert!((tempo.beat_at(clock.time()).0 - before).abs() < 1e-9, "end of export moved the beat");
 }

@@ -1,10 +1,12 @@
-//! Transport time as an integer frame index on the project frame grid
-//! (docs/FRAME_EXACT_TRANSPORT_DESIGN.md, D1). Time is always computed from the
+//! Transport time as an integer frame index on the song-time-0 frame grid
+//! (docs/FRAME_EXACT_TRANSPORT_DESIGN.md, D1). Time is computed from the
 //! index, never accumulated, so live play and export sample the same instants.
 //! External sources correct the index by whole frames through a phase lock
-//! with hysteresis (D6); they never set time directly.
+//! (D6); they never set time directly.
 //!
 //! Pure: no wall clock, no tempo map, no allocation. The engine owns one.
+
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use manifold_core::{Beats, Bpm, Seconds};
 
@@ -13,29 +15,64 @@ use manifold_core::{Beats, Bpm, Seconds};
 /// is also the seek-snap tolerance, matching `Driver::evaluate_frame_aligned`.
 pub const LATTICE_TOLERANCE_FRAMES: f64 = 1e-7;
 
-/// Hysteresis around the half-frame rule: act above ½ + h, re-arm the reverse
-/// direction only inside ½ − h (D6).
-const HYSTERESIS_FRAMES: f64 = 0.25;
-const ACT_ABOVE_FRAMES: f64 = 0.5 + HYSTERESIS_FRAMES;
-const REARM_INSIDE_FRAMES: f64 = 0.5 - HYSTERESIS_FRAMES;
-/// A reverse request this large is a real move, not flapping near the
-/// threshold, so it is never refused. Without it an exact source that steps
-/// across the re-arm band would be stuck off by up to two frames.
-const REVERSE_ALWAYS_ABOVE_FRAMES: f64 = 1.0 + HYSTERESIS_FRAMES;
-/// Above this the drift is corrected in one jump instead of a frame per tick.
-const SLEW_LIMIT_FRAMES: f64 = 2.0;
+/// Peter's half-frame rule plus ¼ frame of hysteresis (D6). Sources keep
+/// their smoothed noise under ¼ frame, so one true offset can never read past
+/// this on both sides.
+const ACT_ABOVE_FRAMES: f64 = 0.75;
+/// Consecutive observations past `ACT_ABOVE_FRAMES` before any correction.
+/// It absorbs noise beyond the contract: with ±0.3 frame of exact-source
+/// noise a half-frame offset corrects at most once an hour, against 18,000
+/// times when one observation is enough (D6 sweep).
+const PERSIST_OBSERVATIONS: u32 = 6;
+/// Above this the drift is corrected in one jump. Every jump then moves at
+/// least 3 frames, so a backward jump never nets a 1-frame rewind against a
+/// tick's own advance.
+const SLEW_LIMIT_FRAMES: f64 = 2.5;
+/// A coarse sample this far from the estimate is a locate or an outlier,
+/// never jitter, so it is not averaged in.
+const COARSE_OUTLIER_FRAMES: f64 = 2.0;
+/// Two consecutive outliers this close together are a locate.
+const COARSE_AGREE_FRAMES: f64 = 1.0;
 const COARSE_ALPHA: f64 = 0.1;
+/// Every source seeks above 2 s, so drift past this is corrupt input. The
+/// clamp keeps the jump arithmetic exact.
+const MAX_DRIFT_FRAMES: f64 = 1e6;
+/// The index stays inside ±2^52: time is exact in `f64` there, and no index
+/// sum can overflow.
+const MAX_INDEX: i64 = 1 << 52;
 
-/// Seconds per frame. The timer grid and the clock both use this expression,
-/// so their steps agree bit for bit.
-#[inline]
-pub fn step_for_fps(fps: f32) -> f64 {
-    1.0 / fps as f64
+const MIN_FPS: f32 = 1.0;
+const MAX_FPS: f32 = 1000.0;
+const FALLBACK_FPS: f32 = 60.0;
+
+static WARNED_BAD_FPS: AtomicBool = AtomicBool::new(false);
+
+/// The one fps rule for the transport clock and the content tick grid: 1 to
+/// 1000 fps is accepted, anything else runs at 60 so a corrupt setting never
+/// stops the transport.
+pub(crate) fn sanitize_fps(fps: f32) -> f32 {
+    if (MIN_FPS..=MAX_FPS).contains(&fps) {
+        return fps;
+    }
+    if !WARNED_BAD_FPS.swap(true, Ordering::Relaxed) {
+        log::warn!("[Transport] frame rate {fps} is outside {MIN_FPS}-{MAX_FPS} fps; running at {FALLBACK_FPS}");
+    }
+    FALLBACK_FPS
 }
 
-/// A corrupt rate must not stop the transport; the settings layer owns validation.
-fn sane_fps(fps: f32) -> f32 {
-    if fps.is_finite() && fps > 0.0 { fps } else { 60.0 }
+/// Seconds per frame. The tick grid and the clock both use this expression,
+/// so their steps agree bit for bit.
+#[inline]
+pub(crate) fn step_for_fps(fps: f32) -> f64 {
+    1.0 / sanitize_fps(fps) as f64
+}
+
+/// Whole frames to an index. NaN maps to 0; the mutators never pass one.
+fn to_index(frames: f64) -> i64 {
+    if frames.is_nan() {
+        return 0;
+    }
+    frames.clamp(-(MAX_INDEX as f64), MAX_INDEX as f64) as i64
 }
 
 /// The whole-frame correction applied on the last advance.
@@ -46,6 +83,18 @@ pub enum Correction {
     Skip,
     Hold,
     Jump(i64),
+}
+
+impl Correction {
+    /// Frames the correction moved the index, on top of the tick's own advance.
+    pub fn frames(self) -> i64 {
+        match self {
+            Correction::None => 0,
+            Correction::Skip => 1,
+            Correction::Hold => -1,
+            Correction::Jump(n) => n,
+        }
+    }
 }
 
 /// How an external sample enters the drift estimate (D7).
@@ -66,22 +115,20 @@ impl Smoothing {
     }
 }
 
-/// Drift estimate in frames (target minus grid) with the D6 hysteresis.
-#[derive(Debug, Clone)]
+/// Drift estimate in frames (target minus grid) and the D6 persistence rule.
+#[derive(Debug, Clone, Default)]
 struct PhaseLock {
     estimate: f64,
     seeded: bool,
-    /// Sign of the last applied correction; 0 when none since the last clear.
-    last_sign: i64,
-    /// The estimate has been inside ½ − h since that correction.
-    rearmed: bool,
+    /// Consecutive observations with the estimate past `ACT_ABOVE_FRAMES`
+    /// on the `streak_sign` side.
+    streak: u32,
+    streak_sign: i64,
+    /// A coarse outlier waiting for a second sample to confirm a locate.
+    candidate: Option<f64>,
     last: Correction,
-}
-
-impl Default for PhaseLock {
-    fn default() -> Self {
-        Self { estimate: 0.0, seeded: false, last_sign: 0, rearmed: true, last: Correction::None }
-    }
+    /// The estimate that triggered `last`, in frames; 0 when `last` is None.
+    last_drift: f64,
 }
 
 impl PhaseLock {
@@ -89,56 +136,76 @@ impl PhaseLock {
         *self = Self::default();
     }
 
-    fn observe(&mut self, drift: f64, alpha: f64) {
-        if !drift.is_finite() {
+    fn observe(&mut self, drift: f64, smoothing: Smoothing) {
+        if drift.is_nan() {
             return;
         }
-        if self.seeded {
-            self.estimate += alpha * (drift - self.estimate);
-        } else {
+        let drift = drift.clamp(-MAX_DRIFT_FRAMES, MAX_DRIFT_FRAMES);
+        if !self.seeded {
             self.estimate = drift;
             self.seeded = true;
+        } else if smoothing == Smoothing::Coarse && (drift - self.estimate).abs() > COARSE_OUTLIER_FRAMES {
+            match self.candidate.take() {
+                Some(previous) if (drift - previous).abs() <= COARSE_AGREE_FRAMES => self.estimate = drift,
+                _ => {
+                    self.candidate = Some(drift);
+                    return;
+                }
+            }
+        } else {
+            self.candidate = None;
+            self.estimate += smoothing.alpha() * (drift - self.estimate);
         }
-        if self.estimate.abs() < REARM_INSIDE_FRAMES {
-            self.rearmed = true;
-        }
+        self.count_streak();
+    }
+
+    fn count_streak(&mut self) {
+        let sign = if self.estimate > ACT_ABOVE_FRAMES {
+            1
+        } else if self.estimate < -ACT_ABOVE_FRAMES {
+            -1
+        } else {
+            0
+        };
+        self.streak = match sign {
+            0 => 0,
+            s if s == self.streak_sign => self.streak.saturating_add(1),
+            _ => 1,
+        };
+        self.streak_sign = sign;
     }
 
     /// Whole frames to correct now; 0 for none.
     fn due(&self) -> i64 {
-        if !self.seeded {
+        if self.streak < PERSIST_OBSERVATIONS {
             return 0;
         }
-        let e = self.estimate;
-        if e.abs() > SLEW_LIMIT_FRAMES {
-            return e.round() as i64;
+        if self.estimate.abs() > SLEW_LIMIT_FRAMES {
+            self.estimate.round() as i64
+        } else {
+            self.streak_sign
         }
-        if e.abs() <= ACT_ABOVE_FRAMES {
-            return 0;
-        }
-        let sign = if e > 0.0 { 1 } else { -1 };
-        let allowed = self.last_sign == 0
-            || sign == self.last_sign
-            || self.rearmed
-            || e.abs() > REVERSE_ALWAYS_ABOVE_FRAMES;
-        if allowed { sign } else { 0 }
     }
 
-    /// The grid moved by `frames` toward the target: carry it in the estimate
-    /// so the same drift is not corrected twice.
-    fn applied(&mut self, frames: i64) {
-        self.estimate -= frames as f64;
-        self.last_sign = frames.signum();
-        self.rearmed = self.estimate.abs() < REARM_INSIDE_FRAMES;
+    /// The grid moved toward the target: carry it in the estimate so the same
+    /// drift is not corrected twice, and demand a fresh streak for the next.
+    fn record(&mut self, correction: Correction) {
+        self.last = correction;
+        self.last_drift = 0.0;
+        let frames = correction.frames();
+        if frames != 0 {
+            self.last_drift = self.estimate;
+            self.estimate -= frames as f64;
+            self.streak = 0;
+            self.streak_sign = 0;
+        }
     }
 }
 
 /// Transport time as an integer frame index on a fixed step.
-/// `time(index) = origin + index as f64 * step`, never accumulated.
+/// `time(index) = index as f64 * step`, never accumulated.
 #[derive(Debug, Clone)]
 pub struct TransportClock {
-    /// 0 live; the export origin during export (D9).
-    origin: Seconds,
     step: f64,
     fps: f32,
     index: i64,
@@ -151,9 +218,8 @@ pub struct TransportClock {
 
 impl TransportClock {
     pub fn new(fps: f32) -> Self {
-        let fps = sane_fps(fps);
+        let fps = sanitize_fps(fps);
         Self {
-            origin: Seconds(0.0),
             step: step_for_fps(fps),
             fps,
             index: 0,
@@ -169,7 +235,7 @@ impl TransportClock {
 
     /// Time of any frame on this clock's grid.
     pub fn time_at(&self, index: i64) -> Seconds {
-        Seconds(self.origin.0 + index as f64 * self.step)
+        Seconds(index as f64 * self.step)
     }
 
     /// The instant this frame's beat is taken at (D14).
@@ -191,30 +257,41 @@ impl TransportClock {
 
     /// First frame at or after `t`.
     pub fn index_at_or_after(&self, t: Seconds) -> i64 {
-        ((t.0 - self.origin.0) / self.step - LATTICE_TOLERANCE_FRAMES).ceil() as i64
+        to_index((t.0 / self.step - LATTICE_TOLERANCE_FRAMES).ceil())
     }
 
     pub fn index_nearest(&self, t: Seconds) -> i64 {
-        ((t.0 - self.origin.0) / self.step).round() as i64
+        to_index((t.0 / self.step).round())
+    }
+
+    fn set_index(&mut self, index: i64) {
+        self.index = index.clamp(-MAX_INDEX, MAX_INDEX);
     }
 
     /// Play, resume, paused seek, tempo edit: snap forward, no hold (D4, D11).
+    /// A non-finite time is ignored.
     pub fn locate(&mut self, t: Seconds) {
-        self.index = self.index_at_or_after(t);
-        self.reanchored();
+        if t.0.is_finite() {
+            self.set_index(self.index_at_or_after(t));
+            self.reanchored();
+        }
     }
 
     /// Seek while playing: snap forward and hold the next advance (D4).
     pub fn seek_playing(&mut self, t: Seconds) {
-        self.index = self.index_at_or_after(t);
-        self.reanchored();
-        self.hold_next = true;
+        if t.0.is_finite() {
+            self.set_index(self.index_at_or_after(t));
+            self.reanchored();
+            self.hold_next = true;
+        }
     }
 
     /// External-authority locate: nearest frame, no hold (D4).
     pub fn locate_nearest(&mut self, t: Seconds) {
-        self.index = self.index_nearest(t);
-        self.reanchored();
+        if t.0.is_finite() {
+            self.set_index(self.index_nearest(t));
+            self.reanchored();
+        }
     }
 
     /// Stop, initialize: index 0, no hold, lock cleared.
@@ -233,35 +310,22 @@ impl TransportClock {
     /// correction from the phase lock. Returns the net frames the index moved,
     /// negative only for a backward jump.
     pub fn advance(&mut self, frames: u32) -> i64 {
-        let base = if self.hold_next {
-            self.hold_next = false;
-            0
-        } else {
-            i64::from(frames)
-        };
+        let base = if std::mem::take(&mut self.hold_next) { 0 } else { i64::from(frames) };
         let correction = match self.lock.due() {
             0 => Correction::None,
             1 => Correction::Skip,
             // A hold removes a frame from this tick's advance; the index never
-            // steps backward on a slew. With nothing to remove it waits a tick.
+            // steps backward on a slew. With nothing to remove it waits a tick
+            // and the estimate is kept.
             -1 if base >= 1 => Correction::Hold,
             -1 => Correction::None,
             n => Correction::Jump(n),
         };
-        let applied = match correction {
-            Correction::None => 0,
-            Correction::Skip => 1,
-            Correction::Hold => -1,
-            Correction::Jump(n) => n,
-        };
-        if applied != 0 {
-            self.lock.applied(applied);
-        }
-        self.lock.last = correction;
-        let moved = base + applied;
-        self.index += moved;
-        self.last_advance = moved;
-        moved
+        self.lock.record(correction);
+        let before = self.index;
+        self.set_index(before.saturating_add(base).saturating_add(correction.frames()));
+        self.last_advance = self.index - before;
+        self.last_advance
     }
 
     pub fn last_advance(&self) -> i64 {
@@ -269,49 +333,47 @@ impl TransportClock {
     }
 
     /// Keep the current time and move to the first frame at or after it on
-    /// the new step, with no hold (D10). A live tempo segment must re-anchor
-    /// after this, because its anchor frame now sits at a different time.
+    /// the new step, with no hold (D10).
     pub fn set_fps(&mut self, fps: f32) {
-        let fps = sane_fps(fps);
-        if fps == self.fps {
-            return;
+        let fps = sanitize_fps(fps);
+        if fps != self.fps {
+            self.retarget(fps);
         }
-        self.retarget(self.origin, fps);
     }
 
-    fn retarget(&mut self, origin: Seconds, fps: f32) {
+    fn retarget(&mut self, fps: f32) {
         let t = self.time();
-        self.origin = origin;
-        self.fps = fps;
-        self.step = step_for_fps(fps);
-        self.index = self.index_at_or_after(t);
+        self.fps = sanitize_fps(fps);
+        self.step = step_for_fps(self.fps);
+        self.set_index(self.index_at_or_after(t));
         self.reanchored();
     }
 
-    /// Switch to the export grid (D9). `origin` is 0 for the song-time-0
-    /// anchor, or the export start for the marker anchor (Q2).
-    pub fn begin_export(&mut self, fps: f32, origin: Seconds) {
-        self.retarget(origin, sane_fps(fps));
+    /// Switch to the export grid at `fps`, still anchored at song time 0 (D9, D17).
+    pub fn begin_export(&mut self, fps: f32) {
+        self.retarget(fps);
     }
 
-    /// Back to the live grid at song time 0. The caller seeks to its restore time.
+    /// Back to the live grid. The caller seeks to its restore time.
     pub fn end_export(&mut self, live_fps: f32) {
-        self.retarget(Seconds(0.0), sane_fps(live_fps));
+        self.retarget(live_fps);
     }
 
     /// Export frame `k` is grid frame `first_index + k`, set exactly (D9).
     pub fn set_export_frame(&mut self, first_index: i64, k: u32) {
-        let index = first_index + i64::from(k);
-        self.last_advance = index - self.index;
-        self.index = index;
+        let before = self.index;
+        self.set_index(first_index.saturating_add(i64::from(k)));
+        self.last_advance = self.index - before;
         self.hold_next = false;
     }
 
     /// One external target, already projected to this frame's deadline (D7).
-    /// Call after this tick's `advance`; a correction lands on the next advance.
+    /// Call after this tick's `advance`; a correction lands on a later advance.
+    /// A non-finite target is ignored.
     pub fn observe_external(&mut self, target: Seconds, smoothing: Smoothing) {
-        let drift = (target.0 - self.time().0) / self.step;
-        self.lock.observe(drift, smoothing.alpha());
+        if target.0.is_finite() {
+            self.lock.observe((target.0 - self.time().0) / self.step, smoothing);
+        }
     }
 
     /// Authority change, anchor, Stop (D6).
@@ -322,13 +384,20 @@ impl TransportClock {
     pub fn last_correction(&self) -> Correction {
         self.lock.last
     }
+
+    /// The smoothed drift that triggered `last_correction`; zero when it is None.
+    pub fn last_correction_drift(&self) -> Seconds {
+        Seconds(self.lock.last_drift * self.step)
+    }
 }
 
 /// The beat under CLK or Link authority: Ableton's live tempo from an anchor
-/// frame (D8). Computed from the index each time, never accumulated.
+/// (D8). The anchor is a time, not a frame index, so an fps change or the
+/// export grid cannot move the beat. Callers pass grid times, so the beat is
+/// still a function of the index.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct LiveTempo {
-    anchor_index: i64,
+    anchor_time: f64,
     anchor_beat: f64,
     bpm: f64,
 }
@@ -339,29 +408,26 @@ fn live_bpm(bpm: Bpm) -> f64 {
 }
 
 impl LiveTempo {
-    pub fn new(anchor_index: i64, anchor_beat: Beats, bpm: Bpm) -> Self {
-        Self { anchor_index, anchor_beat: anchor_beat.0, bpm: live_bpm(bpm) }
+    pub fn new(anchor_time: Seconds, anchor_beat: Beats, bpm: Bpm) -> Self {
+        Self { anchor_time: anchor_time.0, anchor_beat: anchor_beat.0, bpm: live_bpm(bpm) }
     }
 
     pub fn bpm(&self) -> Bpm {
         Bpm(self.bpm as f32)
     }
 
-    pub fn beat_at(&self, clock: &TransportClock, t: Seconds) -> Beats {
-        let since = t.0 - clock.time_at(self.anchor_index).0;
-        Beats(self.anchor_beat + since * self.bpm / 60.0)
+    pub fn beat_at(&self, t: Seconds) -> Beats {
+        Beats(self.anchor_beat + (t.0 - self.anchor_time) * self.bpm / 60.0)
     }
 
-    pub fn time_at(&self, clock: &TransportClock, beat: Beats) -> Seconds {
-        let beats = beat.0 - self.anchor_beat;
-        Seconds(clock.time_at(self.anchor_index).0 + beats * 60.0 / self.bpm)
+    pub fn time_at(&self, beat: Beats) -> Seconds {
+        Seconds(self.anchor_time + (beat.0 - self.anchor_beat) * 60.0 / self.bpm)
     }
 
-    /// Re-anchor at `index` with a new tempo, keeping the beat continuous there.
-    pub fn reanchor(&mut self, clock: &TransportClock, index: i64, bpm: Bpm) {
-        let beat = self.beat_at(clock, clock.time_at(index));
-        self.anchor_index = index;
-        self.anchor_beat = beat.0;
+    /// Re-anchor at `at` with a new tempo, keeping the beat continuous there.
+    pub fn reanchor(&mut self, at: Seconds, bpm: Bpm) {
+        self.anchor_beat = self.beat_at(at).0;
+        self.anchor_time = at.0;
         self.bpm = live_bpm(bpm);
     }
 }
