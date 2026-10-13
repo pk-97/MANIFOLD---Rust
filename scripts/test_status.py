@@ -2,6 +2,7 @@
 """scripts/status.py blocks from fake inputs, a failing source, and the ETA math."""
 import json
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -23,6 +24,12 @@ class BlockTests(unittest.TestCase):
         out = ("CACHE: cap 160G\nHUMAN    slot-0 a\nIN-USE   slot-1 b\nIN-USE   slot-2 c\n"
                "FREE     slot-3 d\n")
         self.assertEqual(status.slots_block(lambda cmd, t: out), ["slots: 4 total, FREE 1, HUMAN 1, IN-USE 2"])
+
+    def test_slots_block_calls_list_fast(self):
+        seen = []
+        status.slots_block(lambda cmd, t: seen.append(cmd) or "")
+        self.assertIn("--fast", seen[0])
+        self.assertEqual(seen[0][-2:], ["list", "--fast"])
 
     def test_gate_block_none_running(self):
         self.assertEqual(status.gate_block([], now=100, timings=[]), ["gate: none running"])
@@ -50,7 +57,9 @@ class BlockTests(unittest.TestCase):
 
     def test_hanging_source_times_out(self):
         t0 = time.time()
-        lines = status.guarded("lanes", lambda: time.sleep(5) or [], timeout=0.2)
+        release = threading.Event()
+        self.addCleanup(release.set)  # frees the abandoned worker so the interpreter exits at once
+        lines = status.guarded("lanes", lambda: release.wait(30) or [], timeout=0.2)
         self.assertLess(time.time() - t0, 2)
         self.assertEqual(lines, ["lanes: timed out after 0.2s"])
 

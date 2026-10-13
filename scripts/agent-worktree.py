@@ -355,12 +355,17 @@ def verify_and_report(wt):
           "before any work.")
 
 
-def cmd_list(_args):
+def cmd_list(args):
     slots = pool_slots()
     if not slots:
         print(f"(pool empty — slots are created on demand, cap {MAX_SLOTS})")
         return
     holders = branch_holders()
+    if getattr(args, "fast", False):
+        for wt in slots:
+            cat, reason, _ = slot_state(wt, holders)
+            print(f"{cat:8} {wt.name:8} {reason}")
+        return
     cap = slot_cap_bytes()
     print(f"CACHE: cap {cap / 2**30:g}G/slot; stale {STALE_CACHE_SECONDS // 60}m; "
           f"reserve {MAINTENANCE_GOAL_BYTES / 2**30:g}G")
@@ -714,7 +719,8 @@ def cmd_release(args):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="cmd", required=True)
-    sub.add_parser("list")
+    list_parser = sub.add_parser("list")
+    list_parser.add_argument("--fast", action="store_true", help="category and slot name only; skips size scans")
     acq = sub.add_parser("acquire")
     acq.add_argument("name", help="task label, recorded in the lease "
                      "(does NOT name the directory)")

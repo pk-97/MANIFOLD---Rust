@@ -47,7 +47,7 @@ def gpu_block(runner=run):
 
 def slots_block(runner=run):
     counts = {}
-    for line in runner([str(HERE / "agent-worktree.py"), "list"], SOURCE_TIMEOUT).splitlines():
+    for line in runner([str(HERE / "agent-worktree.py"), "list", "--fast"], SOURCE_TIMEOUT).splitlines():
         m = re.match(r"^([A-Z][A-Z-]+)\s+slot-\d+", line)
         if m:
             counts[m.group(1)] = counts.get(m.group(1), 0) + 1
@@ -55,29 +55,6 @@ def slots_block(runner=run):
         return ["slots: none listed"]
     parts = ", ".join(f"{k} {v}" for k, v in sorted(counts.items()))
     return [f"slots: {sum(counts.values())} total, {parts}"]
-
-
-SLOTS_CACHE = Path.home() / ".cache/manifold/status-slots.txt"
-
-
-def slots_source(runner=run, cache=None):
-    """agent-worktree list scans git and disk (~2.5 s); a timeout shows the last good line."""
-    cache = cache or SLOTS_CACHE
-    try:
-        lines = slots_block(runner)
-    except Exception as exc:
-        try:
-            age = round((time.time() - cache.stat().st_mtime) / 60)
-            return [f"slots: list too slow ({exc}); last known {age} min ago: "
-                    + cache.read_text().strip().removeprefix("slots: ")]
-        except OSError:
-            raise exc
-    try:
-        cache.parent.mkdir(parents=True, exist_ok=True)
-        cache.write_text(lines[0] + "\n")
-    except OSError:
-        pass
-    return lines
 
 
 def read_timings(path):
@@ -185,7 +162,7 @@ def guarded(name, fn, timeout=SOURCE_TIMEOUT + 0.1):
         pool.shutdown(wait=False, cancel_futures=True)
 
 
-SOURCES = [("lanes", lanes_block), ("gpu", gpu_block), ("slots", slots_source), ("gate", gate_source)]
+SOURCES = [("lanes", lanes_block), ("gpu", gpu_block), ("slots", slots_block), ("gate", gate_source)]
 
 
 def main(argv=None):
