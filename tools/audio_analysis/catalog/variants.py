@@ -8,8 +8,10 @@ the lab mix and judged: lag, correlation, residual, and a verdict.
   different_arrangement  no shared timeline: the labels do not transfer
 
 Method: the lag is remix's alignment (attack cross-correlation, refined to the sample on the loudest 8 s). Then the whole
-song is cut into SEG_S windows; a window matches when the attack (onset)
-envelopes of the aligned files correlate (>= MATCH_ATTACK). seg_frac is the matching share of the windows where both files sound. drift_ms is the
+song is cut into SEG_S windows; a window matches when the onset pattern of the aligned files, in four frequency bands,
+correlates far above what the same window correlates to at other lags (z >= MATCH_Z). A fixed correlation threshold is
+wrong: a limited final against an unlimited stem sum correlates at 0.2-0.6 on a timeline that is exactly the same, while
+other lags sit at 0.0-0.1. seg_frac is the matching share of the windows where both files sound. drift_ms is the
 largest local lag found at four anchors (a tempo change or a stretched section moves it). cover is the share of the lab
 mix the variant spans. verdict() is a pure function of those numbers; thresholds below, tested in test_catalog.py.
 
@@ -19,6 +21,7 @@ Usage: catalog.py variants [SONG...] | stemsum [SONG...]   (the music folder is 
 import hashlib
 import json
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -27,14 +30,19 @@ sys.path.insert(0, str(ROOT))
 
 import numpy as np  # noqa: E402
 
-VERSION = 'variant-2'
+VERSION = 'variant-4'
 BAND = (100, 8000)
-Z_MIN = 8.0                # attack cross-correlation peak over the other lags (remix.LAG_Z_MIN)
+Z_MIN = 4.0                # attack cross-correlation peak over the other lags: it must at least stand out; the windows prove the lag
+DRIFT_Z = 6.0              # a local lag counts when its correlation stands this far over the other lags tried
 SEG_S = 8.0
 PEAKS = 4                  # onset lags tried per candidate
 PEAK_GAP_MS = 100
 SLACK_MS = 4               # a window may sit this far off the global lag (a mastering chain's latency)
-MATCH_ATTACK = 0.5
+ONSET_BANDS = ((40, 150), (150, 600), (600, 2500), (2500, 10000))   # kick/bass, low mid, snare/body, hats: each band's onsets count
+ONSET_SMOOTH_MS = 10
+MATCH_NCC = 0.12           # mean onset correlation over the bands at the global lag, at least
+MATCH_Z = 4.0              # and this many standard deviations over the same window's correlation at other lags
+NULL_LAGS_MS = range(120, 2401, 37)   # other lags (both signs), clear of the slack and the 5 ms smoothing
 SEG_SAME = 0.9             # share of matching windows for same_arrangement
 SEG_DIFF = 0.5             # under this share: different_arrangement
 DRIFT_SAME_MS = 5.0
@@ -108,18 +116,15 @@ def _ncc(a, b):
     return float(np.dot(a, b) / d) if d > 1e-12 else 0.0
 
 
-def _local_lag_ms(ra, xa, lo, hi, search=300):
-    """Lag (ms) of xa against ra in [lo, hi) ms within +-search, and the correlation there."""
-    r = ra[lo:hi] - ra[lo:hi].mean()
-    best, bl = -1.0, 0
-    for lag in range(-search, search + 1, 2):
-        a, b = lo - lag, hi - lag
-        if a < 0 or b > len(xa):
-            continue
-        v = _ncc(r, xa[a:b])
-        if v > best:
-            best, bl = v, lag
-    return bl, best
+def _local_lag_ms(rb, xb, lo, hi, search=300):
+    """(lag ms, z) of the band onsets xb against rb in [lo, hi) ms within +-search: the best lag's band-mean correlation
+    and its z over the other lags tried. A lag with no peak (z under DRIFT_Z) is not a lag; the caller drops it."""
+    lags = [lag for lag in range(-search, search + 1, 2) if lo - lag >= 0 and hi - lag <= xb.shape[1]]
+    if len(lags) < 20:
+        return 0, 0.0
+    c = np.mean([[_ncc(rb[i, lo:hi], xb[i, lo - lag:hi - lag]) for lag in lags] for i in range(len(rb))], axis=0)
+    i = int(np.argmax(c))
+    return lags[i], float((c[i] - c.mean()) / (c.std() + 1e-3))
 
 
 def lag_peaks(ra, xa, search_s=20.0, top=PEAKS):
@@ -152,13 +157,41 @@ def _win_pow(x, k, i, w):
     return float(np.dot(x[a:b], x[a:b])) / w if b > a else 0.0
 
 
-def segments(ref, x, ra, xa, k, sr):
+def band_attacks(x, sr):
+    """Onset envelopes of x per ONSET_BANDS on a 1 ms grid, shape (bands, ms): the positive rises of each band's dB
+    energy, smoothed. One band hides every band quieter than the loudest (a pad over the drums)."""
+    from scipy.ndimage import uniform_filter1d
+
+    from tools.audio_analysis.eval.detector_labels import env_db
+    out = []
+    for lo, hi in ONSET_BANDS:
+        e = env_db(x, sr, lo, hi)
+        out.append(uniform_filter1d(np.maximum(np.diff(e, prepend=e[0]), 0.0), ONSET_SMOOTH_MS))
+    return np.array(out)
+
+
+def window_z(rb, xb, lo, hi):
+    """(onset correlation at the global lag, its z over the other lags) of window [lo, hi) ms. rb and xb are band
+    onset envelopes with xb already delayed to the global lag; the correlation is the best within +-SLACK_MS, averaged
+    over the bands; the null is the same average at NULL_LAGS_MS either side."""
+    n = xb.shape[1]
+    on = [[_ncc(rb[i, lo:hi], xb[i, lo + d:hi + d]) for d in range(-SLACK_MS, SLACK_MS + 1) if lo + d >= 0 and hi + d <= n]
+          for i in range(len(rb))]
+    best = float(np.mean(np.max(np.array(on), axis=1)))
+    lags = [s * d for d in NULL_LAGS_MS for s in (1, -1) if lo + s * d >= 0 and hi + s * d <= n]
+    if len(lags) < 8:
+        return best, 0.0
+    null = np.mean([[_ncc(rb[i, lo:hi], xb[i, lo + d:hi + d]) for d in lags] for i in range(len(rb))], axis=0)
+    return best, float((best - null.mean()) / (null.std() + 1e-3))
+
+
+def segments(ref, x, rb, xb, k, sr):
     """(windows where both files sound, windows whose onset pattern matches) with x delayed by k samples."""
     n, w, hop_ms = len(ref), int(SEG_S * sr), int(SEG_S * 1000)
     starts = list(range(0, max(n - w, 1), w))
     rp = [float(np.dot(ref[i:i + w], ref[i:i + w])) / w for i in starts]
     floor = max(float(np.median(rp)) * 1e-3, 1e-12)
-    xs = _shift_env(xa, int(round(k * 1000 / sr)), len(ra))
+    xs = np.array([_shift_env(b, int(round(k * 1000 / sr)), rb.shape[1]) for b in xb])
     ok = matched = 0
     for j, i in enumerate(starts):
         if rp[j] < floor or _win_pow(x, k, i, w) < floor:
@@ -166,9 +199,8 @@ def segments(ref, x, ra, xa, k, sr):
         ok += 1
         # the labels are drum onsets: a window matches when its onset pattern does (a held bass or pad correlating
         # across two different drum patterns must not count)
-        lo, hi = j * hop_ms, (j + 1) * hop_ms
-        ca = max(_ncc(ra[lo:hi], xs[lo + d:hi + d]) for d in range(-SLACK_MS, SLACK_MS + 1) if lo + d >= 0 and hi + d <= len(xs))
-        matched += ca >= MATCH_ATTACK
+        on, z = window_z(rb, xs, j * hop_ms, (j + 1) * hop_ms)
+        matched += on >= MATCH_NCC and z >= MATCH_Z
     return ok, matched, xs
 
 
@@ -177,17 +209,17 @@ def compare(ref, x, sr):
     lags wins (most matching windows, then the strongest peak)."""
     n = len(ref)
     rr, xr = rises(ref, sr), rises(x, sr)
-    ra, xa0 = smooth(rr), smooth(xr)
+    rb, xb = band_attacks(ref, sr), band_attacks(x, sr)
     best = None
     for L, z in lag_peaks(rr, xr):
         k = int(round(L * sr / 1000))
-        ok, matched, xs_env = segments(ref, x, ra, xa0, k, sr)
+        ok, matched, xs_b = segments(ref, x, rb, xb, k, sr)
         key = (matched / ok if ok else 0.0, z)
         if best is None or key > best[0]:
-            best = (key, L, z, k, ok, matched, xs_env)
+            best = (key, L, z, k, ok, matched, xs_b)
     if best is None:
         raise ValueError('no onset lag (silent or too short)')
-    _, L, z, k0, ok, matched, xa = best
+    _, L, z, k0, ok, matched, xs_b = best
     k = refine(ref, x, k0, sr)
     xs = _shift_view(x, k, 0, n)
     rx, xx, pm = float(np.dot(ref, xs)), float(np.dot(xs, xs)), float(np.dot(ref, ref))
@@ -198,14 +230,14 @@ def compare(ref, x, sr):
     cov, vr, vx = rx - n * mr * mx, pm - n * mr * mr, xx - n * mx * mx
     corr = float(cov / np.sqrt(vr * vx)) if vr > 0 and vx > 0 else 0.0
     drifts = []
-    total_ms = min(len(ra), len(xa))
+    total_ms = rb.shape[1]
     for frac in (.2, .4, .6, .8):
         lo = int(frac * total_ms)
         hi = min(lo + 20000, total_ms - 400)
         if hi - lo < 4000 or lo < 400:
             continue
-        lag, c = _local_lag_ms(ra, xa, lo, hi)
-        if c >= .3:
+        lag, lz = _local_lag_ms(rb, xs_b, lo, hi)
+        if lz >= DRIFT_Z:
             drifts.append(abs(lag))
     over = max(0, min(n, k + len(x)) - max(0, k))
     m = dict(lag_s=k / sr, lag_samples=int(k), lag_z=round(float(z), 1), corr=round(corr, 5), residual_db=round(res(g), 2),
@@ -257,6 +289,46 @@ def distinct(cands, skip_shas=()):
     return out
 
 
+FINALISH = re.compile(r'final|(?<![a-z])master|mstr|(?<![a-z])v\d', re.I)
+NOT_BOUNCE = re.compile(r'suno|vocals|no leads|no master fx|instrumental|no linn|no vox|no drums|no kick', re.I)
+WIP_MASTER = re.compile(r'^WIP \d+ MASTER$')     # a WIP whose project name says master
+
+
+def download_candidates(con, song_id):
+    """Online-only master-like bounces in the song's composition, as [(path, role, version, size)] sorted by path. A
+    file is a candidate by what it is (a master, premaster or final by role, version tag or name; not a stem, vocal or
+    mix-minus). Never dropped for looking like another file: same-length bounces of different masters share a byte
+    size, so the only copy test is an identical sha256, and that needs the bytes (distinct(), after the download)."""
+    row = con.execute('SELECT group_override, group_id FROM songs WHERE id=?', (song_id,)).fetchone()
+    out = []
+    for p, role, ver, size in con.execute(
+            "SELECT a.path, a.role, a.version, a.size FROM comp_assets ca JOIN assets a USING(path) WHERE ca.comp_id=? "
+            "AND a.role IN ('full_mix','master','premaster') AND a.local=0 AND ca.flags NOT LIKE '%reference%' ORDER BY a.path",
+            (row[0] or row[1],)):
+        name, ver = os.path.basename(p), ver or ''
+        if not (role in ('master', 'premaster') or FINALISH.search(ver) or FINALISH.search(name)):
+            continue
+        if NOT_BOUNCE.search(name) or WIP_MASTER.match(ver):
+            continue
+        out.append((p, role, ver, size or 0))
+    return out
+
+
+def plan_downloads(cands, cap_bytes):
+    """cands as [(song_id, path, version, size)] -> the ones to download under cap_bytes: the first file of every
+    distinct (song, version tag) before any second file of a tag, so the cap cuts repeats of a tag, not whole tags."""
+    seen, ranked = {}, []
+    for c in sorted(cands, key=lambda c: (c[0], c[2], c[1])):
+        n = seen[(c[0], c[2])] = seen.get((c[0], c[2]), -1) + 1
+        ranked.append((n, c[0], c[2], c[1], c))
+    out, total = [], 0
+    for *_, c in sorted(ranked, key=lambda r: r[:4]):
+        if total + c[3] <= cap_bytes:
+            out.append(c)
+            total += c[3]
+    return out
+
+
 def lab_variants(con, songs, ids, force=False):
     """Compare every candidate of the given lab songs against the lab mix; store in variants."""
     from tools.audio_analysis.catalog import catalog
@@ -268,7 +340,11 @@ def lab_variants(con, songs, ids, force=False):
         lab_files = [f for f in [lab.get('file')] + list(lab.get('parts') or []) if f]
         lab_shas = {r[0] for r in con.execute(
             f"SELECT sha256 FROM assets WHERE path IN ({','.join('?' * len(lab_files))})", lab_files)} - {None}
-        for p, role, ver, sha, dur in distinct(candidates(con, sid), lab_shas):
+        kept = distinct(candidates(con, sid), lab_shas)
+        with con:       # a copy that distinct() drops is not a variant, so a row stored before it was dropped goes
+            con.execute(f"DELETE FROM variants WHERE song_id=? AND ref='lab_mix' AND path NOT IN ({','.join('?' * len(kept))})",
+                        [sid, *[c[0] for c in kept]])
+        for p, role, ver, sha, dur in kept:
             k = key_of(s.content_id, sha)
             have = con.execute("SELECT key FROM variants WHERE song_id=? AND ref='lab_mix' AND path=?", (sid, p)).fetchone()
             if force or not have or have[0] != k:
