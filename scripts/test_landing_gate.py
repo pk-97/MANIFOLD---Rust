@@ -541,7 +541,7 @@ class LandingTests(unittest.TestCase):
         code, called, timings, commands, *_ = self.exercise(paths=[path], manifest=manifest)
         self.assertEqual(code, 0)
         events = self.events
-        enter = events.index("hold-enter:landing_gate flows+tests+gpu-proofs")
+        enter = events.index("hold-enter:landing_gate flows+gpu-proofs")
         self.assertLess(events.index("flow-gate-build"), enter)
         self.assertLess(enter, events.index("flow-gate"))
         self.assertIn(["python3", "scripts/run_ui_flows.py", "--touched", "base...HEAD", "--build-only"], commands)
@@ -638,17 +638,17 @@ class LandingTests(unittest.TestCase):
         self.assertIn("[gpu-proofs] mode: scoped", output)
         self.assertIn("GPU backend core", output)
 
-    def test_tests_and_gpu_proofs_legs_run_inside_one_hold(self):
+    def test_flows_and_gpu_proofs_share_one_hold_after_tests(self):
         code, *_ = self.exercise()
         self.assertEqual(code, 0)
         events = self.events
         self.assertEqual([e for e in events if e.startswith("hold")],
-                         ["hold-enter:landing_gate flows+tests+gpu-proofs", "hold-exit"])
-        enter, leave = events.index("hold-enter:landing_gate flows+tests+gpu-proofs"), events.index("hold-exit")
+                         ["hold-enter:landing_gate flows+gpu-proofs", "hold-exit"])
+        enter, leave = events.index("hold-enter:landing_gate flows+gpu-proofs"), events.index("hold-exit")
         self.assertLess(events.index("tests"), enter)
         self.assertLess(events.index("gpu-proofs"), leave)
         # Cheap prerequisites, clippy and every test-binary compile run
-        # before the hold, so it covers test time only.
+        # before the hold, so it covers flow and proof run time only.
         self.assertLess(events.index("clippy"), enter)
         self.assertLess(events.index("tests-build"), enter)
         self.assertLess(events.index("gpu-proofs-build"), enter)
@@ -662,7 +662,7 @@ class LandingTests(unittest.TestCase):
         self.assertFalse(any(e.startswith("hold") for e in self.events))
         code, *_ = self.exercise()
         self.assertEqual(code, 0)
-        enter = self.events.index("hold-enter:landing_gate flows+tests+gpu-proofs")
+        enter = self.events.index("hold-enter:landing_gate flows+gpu-proofs")
         self.assertLess(self.events.index("tests"), enter)
         self.assertLess(enter, self.events.index("gpu-proofs"))
 
@@ -771,6 +771,14 @@ class LandingTests(unittest.TestCase):
     def test_tests_failure_still_releases_the_hold(self):
         self.exercise("tests", extra=["--keep-going"])
         self.assertEqual(self.events[-1], "hold-exit")
+
+    def test_held_leg_failure_releases_the_hold_in_default_mode(self):
+        for failed in ("flow-gate", "gpu-proofs"):
+            with self.subTest(failed=failed):
+                code, *_ = self.exercise(failed)
+                self.assertNotEqual(code, 0)
+                self.assertIn("hold-enter:landing_gate flows+gpu-proofs", self.events)
+                self.assertEqual(self.events[-1], "hold-exit")
 
     def test_unmapped_gpu_path_fails_gate_naming_path(self):
         # A non-Rust source file is GPU-scoped but owns no CPU test binary.

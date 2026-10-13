@@ -662,10 +662,11 @@ def _main(stack):
 
     # c. flow-gate uses the same comment-aware diff and writes its landing
     # marker even when no flows need a build or run. Its binary compiles
-    # before the GPU hold and its flows run under the hold with the tests and
-    # proofs: one wait per landing, and no leg's timeout counts queue time
-    # (both hour-long flow-gate reds on 2026-10-06 were waits behind a
-    # 45-minute render).
+    # before the GPU hold and its flows run under the hold with the proofs, so
+    # the flow and proof timeouts never count queue time (both hour-long
+    # flow-gate reds on 2026-10-06 were waits behind a 45-minute render). The
+    # tests leg runs outside the hold and its timeout does count queue time:
+    # each GPU test process waits for the GPU lock on its own.
     flow_cmd = ["python3", "scripts/run_ui_flows.py", "--touched", f"{base_sha}...HEAD"]
     flow_pass = gate_passes.command_pass(repo, "flow-gate", flow_cmd)
     flows_pending = (readiness['flows'] and not flow_pass.record)
@@ -712,12 +713,13 @@ def _main(stack):
             [row for passed, run in zip(proof_passes, plan.runs())
              for row in gpu_proofs_gate.receipt_timings(passed, run)])
 
-    # Compile every test binary the hold will run before taking it, so the
-    # hold covers test time only (BUG-w0hh (landing gate speed)). The legs
-    # under the hold then find everything built and go straight to testing.
+    # Compile every test binary before any leg runs, so the GPU hold and the
+    # per-test GPU lock cover run time only (BUG-w0hh (landing gate speed)).
+    # The test and proof legs then find everything built and go straight to
+    # running.
     print("[tests] " + cpu_plan.describe().replace("\n", "\n[tests] "), flush=True)
     # A leg whose compile failed is skipped by name (the build's red stands);
-    # the hold still serves whatever else compiled.
+    # every other leg still runs whatever compiled.
     unbuilt = set()
     if pending_tests or cpu_plan.check_packages:
         builds = {}
@@ -725,7 +727,7 @@ def _main(stack):
             builds.setdefault(cmd[cmd.index('-p') + 1], []).append(cmd[cmd.index('-E') + 1])
         for package, filters in sorted(builds.items()):
             # Match each run's package selection. Building a union of packages
-            # can unify extra dependency features and force a rebuild in the hold.
+            # can unify extra dependency features and force a rebuild in the run.
             label = 'tests-build' if len(builds) == 1 else f'tests-build/{package}'
             if build_leg(results, label, ['cargo', 'nextest', 'run', '--no-run',
                                          '-p', package, '-E', ' | '.join(filters)],
@@ -830,7 +832,7 @@ def _main(stack):
     if (flows_pending and "flow-gate" not in unbuilt) or proofs_pending or gpu_tooling:
         print("[gpu-queue] taking the GPU lock for the flow-gate and gpu-proofs legs", flush=True)
         started = time.monotonic()
-        stack.enter_context(gpu_queue.hold("landing_gate flows+tests+gpu-proofs", out=sys.stdout))
+        stack.enter_context(gpu_queue.hold("landing_gate flows+gpu-proofs", out=sys.stdout))
         GPU_WAIT.set(time.monotonic() - started)
         print(f"[gpu-queue] held after {GPU_WAIT.get():.0f}s", flush=True)
         if gate_passes.changed_passes([flow_pass, *proof_passes]):

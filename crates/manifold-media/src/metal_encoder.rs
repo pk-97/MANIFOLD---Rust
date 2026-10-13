@@ -89,11 +89,13 @@ unsafe impl Send for MetalEncoder {}
 impl MetalEncoder {
     /// Check if a Metal device is available for encoding.
     pub fn is_available() -> bool {
+        crate::admit_native_metal();
         unsafe { metal_ffi::MetalEncoder_IsAvailable() != 0 }
     }
 
     /// Check if HDR (HEVC 10-bit) encoding is supported.
     pub fn is_hdr_available() -> bool {
+        crate::admit_native_metal();
         unsafe { metal_ffi::MetalEncoder_IsHDRAvailable() != 0 }
     }
 
@@ -117,6 +119,7 @@ impl MetalEncoder {
             return Err(EncoderError::Unavailable);
         }
 
+        crate::admit_native_metal();
         let c_path = CString::new(output_path).map_err(|_| EncoderError::WriterFailed)?;
         let (fps_num, fps_den) = fps_to_rational(fps);
 
@@ -178,6 +181,7 @@ impl MetalEncoder {
         hdr: bool,
         device_ptr: *mut c_void,
     ) -> Result<Self, EncoderError> {
+        crate::admit_native_metal();
         let c_path = CString::new(output_path).map_err(|_| EncoderError::WriterFailed)?;
         let (fps_num, fps_den) = fps_to_rational(fps);
 

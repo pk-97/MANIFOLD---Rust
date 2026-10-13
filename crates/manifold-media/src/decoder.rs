@@ -97,6 +97,7 @@ unsafe impl Sync for DecoderPool {}
 impl DecoderPool {
     /// Create a new shared decoder pool.
     pub fn new() -> Result<Self, DecoderError> {
+        crate::admit_native_metal();
         let handle = unsafe { decoder_ffi::VideoDecoder_CreatePool() };
         if handle.is_null() {
             return Err(DecoderError::Unavailable);
