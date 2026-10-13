@@ -213,7 +213,6 @@ fn topo_order(def: &EffectGraphDef, ids: &[u32]) -> Result<Vec<u32>, SceneModifi
                 || is_mesh_multi(&node.type_id)
                 || is_weight_source(&node.type_id)
                 || node.type_id == "node.scene_object"
-                || node.type_id == "system.mesh_output"
         }) && matches!(
             wire.to_port.as_str(),
             "in" | "reference" | "b" | "weights" | "vertices"
@@ -390,15 +389,6 @@ pub(super) fn apply(
         let Some(current_node) = node(def, id).cloned() else {
             continue;
         };
-        if current_node.type_id == "system.mesh_output" {
-            if let Some(vertices) = input(def, id, "vertices") {
-                lineages.insert(
-                    (id, "vertices".into()),
-                    mesh_input_lineage(&lineages, &vertices),
-                );
-            }
-            continue;
-        }
         let Some(current_wire) = input(def, id, "in") else {
             continue;
         };

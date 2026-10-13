@@ -4,7 +4,7 @@ struct U {
     grid: u32, fragments: u32, ghosts: u32, vectors: u32, trails: u32,
     tri_count: u32, vertex_count: u32, history_head: u32, history_len: u32,
     history_capacity: u32, history_stride: u32, axes: u32,
-    depth_pass: u32, occlusion: u32, mode: u32, _depth_pad: u32,
+    topology_mismatch: u32, occlusion: u32, mode: u32, _depth_pad: u32,
     inv_view_proj: mat4x4<f32>, camera_pos_far: vec4<f32>,
     brightness: vec4<f32>, trails_brightness: f32, _brightness_pad0: f32, _brightness_pad1: f32, _brightness_pad2: f32,
     copy_count: u32, instances_wired: u32, instance_history_stride: u32, _instances_pad: u32,
@@ -17,7 +17,6 @@ struct O { @builtin(position) p: vec4<f32>, @location(0) color: vec4<f32>, @loca
 @group(0) @binding(2) var<storage, read> reference: array<V>;
 @group(0) @binding(3) var<storage, read> incoming: array<V>;
 @group(0) @binding(4) var<storage, read> history: array<vec4<f32>>;
-@group(0) @binding(7) var surface_depth: texture_2d<f32>;
 @group(0) @binding(8) var scene_depth: texture_2d<f32>;
 @group(0) @binding(9) var depth_sampler: sampler;
 @group(0) @binding(10) var<storage, read> copy_instances: array<I>;
@@ -86,26 +85,10 @@ fn world_line(a: vec3<f32>, b: vec3<f32>, color: vec4<f32>, vi: u32) -> O {
     return clip_line(u.view_proj * vec4<f32>(a, 1.0), u.view_proj * vec4<f32>(b, 1.0), color, vi);
 }
 
-fn depth_surface_vertex(vi: u32, instance: u32) -> O {
-    // Instance slots below tri_count * copy_count are current-surface
-    // triangles, repeated per copy transform like the colour fragments.
-    if u.fragments == 0u || vi >= 3u || instance >= u.tri_count * u.copy_count { return hidden(); }
-    let c = instance / u.tri_count;
-    let triangle = instance % u.tri_count;
-    var position = current[triangle * 3u + vi].position;
-    if u.instances_wired != 0u {
-        let inst = copy_instances[c];
-        if inactive_copy(inst) { return hidden(); }
-        position = apply_copy(position, inst);
-    }
-    // Let the rasterizer clip whole triangles; moving one behind-camera
-    // vertex to hidden() would invent a different surface at the near plane.
-    let clip = clip_point(position);
-    var o: O; o.p = clip; o.color = vec4<f32>(1.0, 1.0, 1.0, 1.0); o.grid = 0u; return o;
-}
-
+// A topology change upstream breaks face correspondence: reference and
+// incoming then read as current, so ghosts coincide with the fragments.
 fn sample_position(which: u32, idx: u32) -> vec3<f32> {
-    if (which == 0u) { return current[idx].position; }
+    if (which == 0u || u.topology_mismatch != 0u) { return current[idx].position; }
     if (which == 1u) { return reference[idx].position; }
     return incoming[idx].position;
 }
@@ -173,7 +156,6 @@ fn fragment_frame_triangle(frame: u32) -> u32 {
 }
 
 fn vertex_body(vi: u32, instance: u32) -> O {
-    if u.depth_pass != 0u { return depth_surface_vertex(vi, instance); }
     // Draw the world grid first, behind the diagram marks. A fullscreen
     // triangle has no finite mesh boundary and never inherits object pose.
     if (instance == 0u) {
@@ -219,7 +201,8 @@ fn vertex_body(vi: u32, instance: u32) -> O {
         return line(apply_copy(sample_position(2u, b + e), inst), apply_copy(sample_position(2u, b + ((e + 1u) % 3u)), inst), vec4<f32>(hsv(u.path_hue), 0.22), vi);
     }
     if (ii < grid_base) {
-        if (u.vectors == 0u) { return hidden(); }
+        // Without face correspondence there is no displacement to draw.
+        if (u.vectors == 0u || u.topology_mismatch != 0u) { return hidden(); }
         let local = ii - arrow_base;
         let t = local % tri;
         let inst = copy_transform(local / tri);
@@ -228,7 +211,7 @@ fn vertex_body(vi: u32, instance: u32) -> O {
         // The tail stays on the undeformed reference; the head is the
         // copy-transformed current centroid, so the arrow reads as the total
         // reference -> copy displacement of the chain.
-        let a = (incoming[idx].position + incoming[idx + 1u].position + incoming[idx + 2u].position) / 3.0;
+        let a = (sample_position(2u, idx) + sample_position(2u, idx + 1u) + sample_position(2u, idx + 2u)) / 3.0;
         let b = apply_copy((current[idx].position + current[idx + 1u].position + current[idx + 2u].position) / 3.0, inst);
         let edge = vi / 6u;
         if (edge == 0u) { return line(a, b, vec4<f32>(hsv(u.path_hue), 0.85), vi); }
@@ -302,10 +285,6 @@ fn vertex_body(vi: u32, instance: u32) -> O {
 @vertex
 fn vs_main(@builtin(vertex_index) vi: u32, @builtin(instance_index) instance: u32) -> O {
     var o=vertex_body(vi,instance);
-    if u.depth_pass != 0u {
-        o.color = tone(o.color, appearance(2u));
-        return o;
-    }
     if instance==0u || u.tri_count==0u { return o; }
     let ii=instance-1u;
     let per = u.tri_count * u.copy_count;
@@ -413,11 +392,12 @@ fn world_grid_position(pixel: vec2<f32>) -> vec3<f32> {
     return near + t * ray;
 }
 
+// Only Overlay with Depth occlusion tests anything, and only the scene's own
+// depth; the host folds that rule into `u.occlusion`.
 fn depth_occluded(depth: f32, pixel: vec2<f32>, bias: f32) -> bool {
     if u.occlusion == 0u { return false; }
     let uv = pixel / u.viewport.xy;
-    var cutoff = textureSampleLevel(surface_depth, depth_sampler, uv, 0.0).r;
-    if u.mode == 2u { cutoff = max(cutoff, textureSampleLevel(scene_depth, depth_sampler, uv, 0.0).r); }
+    let cutoff = textureSampleLevel(scene_depth, depth_sampler, uv, 0.0).r;
     return depth < cutoff - bias;
 }
 
@@ -444,10 +424,4 @@ fn fs_depth_color(in: O) -> @location(0) vec4<f32> {
     let bias = clamp(fwidth(depth) * (u.line_width + 1.0), 0.000002, 0.0002);
     if depth_occluded(depth, in.p.xy, bias) { return vec4<f32>(0.0); }
     return select(in.color, grid, in.grid != 0u);
-}
-
-@fragment
-fn fs_depth(in: O) -> @location(0) f32 {
-    if in.color.a <= 0.0 { return 0.0; }
-    return clamp(in.p.z, 0.0, 1.0);
 }

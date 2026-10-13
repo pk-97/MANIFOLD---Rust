@@ -1,6 +1,4 @@
-use manifold_node_engine::load::expand::compiler::prepare_legacy_scene_modifier_math_view;
 use manifold_core::scene_modifier_preset::{SceneStageScope, SceneEndpoint, SceneModifierInstanceDef, SceneNodeRef};
-use manifold_node_engine::load::expand::math_view::LegacyMathViewScope;
 use manifold_node_engine::load::expand::PreparedSceneModifierGraph;
 use std::collections::BTreeSet;
 use manifold_node_engine::load::expand::*;
@@ -813,463 +811,15 @@ fn math_view_fixture() -> EffectGraphDef {
     crate::contracts::node_graph::catalog_tests::math_view_fixtures::test_owner()
 }
 
-#[test]
-fn scene_modifier_math_view_legacy_scope_keeps_carrier_boundaries() {
-    let mut owner = math_view_fixture();
-    let mut carrier = owner.scene_modifiers[0].clone();
-    carrier.id = NodeId::new("legacy_carrier");
-    owner.scene_modifiers.insert(1, carrier);
-    owner.scene_modifiers[2].legacy_math_view_carrier = Some(NodeId::new("legacy_carrier"));
-    // Even when moved away from the carrier, compatibility capture ends there.
-    let mut later = owner.scene_modifiers[0].clone();
-    later.id = NodeId::new("later");
-    owner.scene_modifiers.insert(2, later);
-    let registry = PrimitiveRegistry::with_builtin();
-    let view = NodeId::new("math_view");
-    let mut live_counts = Vec::new();
-    for scope in [LegacyMathViewScope::ThisModifier, LegacyMathViewScope::WithinChain] {
-        let prepared = prepare_legacy_scene_modifier_math_view(&owner, &registry, &view, scope).unwrap();
-        let (diagram, surface) = diagram_and_surface(&prepared);
-        for node in [diagram, surface] {
-            let incoming = diagram_input_source(&prepared, node, "incoming").unwrap();
-            let reference = diagram_input_source(&prepared, node, "reference").unwrap();
-            let current = diagram_input_source(&prepared, node, "current").unwrap();
-            assert_ne!(current, incoming, "carrier deformation must remain visible");
-            assert_eq!(incoming == reference, scope == LegacyMathViewScope::ThisModifier,
-                "legacy arrows start at the carrier input, not always the original mesh");
-        }
-        let graph = prepared.def.into_graph(&registry,
-            &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default()).unwrap();
-        let plan = manifold_node_engine::exec::execution_plan::compile(&graph).unwrap();
-        live_counts.push(plan.steps().iter().filter(|step| {
-            graph.get_node(step.node).unwrap().node.type_id().as_str() == "node.transform_mesh_patches"
-        }).count());
-    }
-    assert!(live_counts[0] > 0);
-    assert_eq!(live_counts[1], 2 * live_counts[0],
-        "isolated Scope evaluates the carrier only; chain Scope includes its predecessor, never later stages");
-    owner.scene_modifiers[3].legacy_math_view_carrier = Some(NodeId::new("missing"));
-    assert!(prepare_legacy_scene_modifier_math_view(&owner, &registry, &view,
-        LegacyMathViewScope::ThisModifier).is_err(), "missing legacy carrier cannot silently retarget");
+fn prepare_parent(owner: &EffectGraphDef) -> PreparedSceneModifierGraph {
+    prepare_scene_modifiers(owner, &PrimitiveRegistry::with_builtin()).unwrap()
 }
 
-#[test]
-fn scene_modifier_math_view_is_sparse_and_cuts_final_output_at_requested_stage() {
-    let owner = math_view_fixture();
-    let registry = PrimitiveRegistry::with_builtin();
-    let prepared = prepare_scene_modifier_math_view(
-        &owner,
-        &registry,
-        &NodeId::new("math_view"),
-    )
-    .unwrap();
-
-    assert_eq!(
-        prepared
-            .def
-            .nodes
-            .iter()
-            .filter(|node| node.type_id == "system.mesh_input")
-            .count(),
-        2
-    );
-    assert_eq!(
-        prepared
-            .def
-            .nodes
-            .iter()
-            .filter(|node| node.type_id == "node.render_mesh_diagram")
-            .count(),
-        4,
-        "each captured object has a colour diagram and a depth surface"
-    );
-    let modifier = &owner.scene_modifiers[1];
-    for role in ["diagram", "surface"] {
-        let expected: std::collections::HashSet<_> = modifier
-            .mesh_frames
-            .iter()
-            .map(|frame| manifold_node_engine::load::expand::testkit::resource_node_id(&modifier.id, &frame.target, role))
-            .collect();
-        let actual: std::collections::HashSet<_> = prepared
-            .def
-            .nodes
-            .iter()
-            .filter(|node| node.type_id == "node.render_mesh_diagram")
-            .filter(|node| expected.contains(&node.node_id))
-            .map(|node| node.node_id.clone())
-            .collect();
-        assert_eq!(actual, expected, "Math View {role} identities are stable");
-    }
-    let final_id = prepared
-        .def
-        .nodes
-        .iter()
-        .find(|node| node.type_id == "system.final_output")
-        .unwrap()
-        .id;
-    let final_source = prepared
-        .def
-        .wires
-        .iter()
-        .find(|wire| wire.to_node == final_id && wire.to_port == "in")
-        .unwrap();
-    assert_eq!(
-        prepared
-            .def
-            .nodes
-            .iter()
-            .find(|node| node.id == final_source.from_node)
-            .unwrap()
-            .type_id,
-        "node.set_alpha"
-    );
-
-    // The imported scene remains in the authoring snapshot, but is outside
-    // the final-output dependency closure, so its full mesh/material inputs
-    // cannot receive live execution-plan allocations.
-    let mut live = BTreeSet::from([final_id]);
-    let mut changed = true;
-    while changed {
-        changed = false;
-        for wire in &prepared.def.wires {
-            if live.contains(&wire.to_node) && live.insert(wire.from_node) {
-                changed = true;
-            }
-        }
-    }
-    assert!(
-        prepared
-            .def
-            .nodes
-            .iter()
-            .filter(|node| live.contains(&node.id))
-            .all(|node| {
-                node.type_id != "node.render_scene" && node.type_id != "node.gltf_mesh_source"
-            })
-    );
-}
-
-#[test]
-fn scene_modifier_math_view_routes_one_shared_grid_control() {
-    let prepared = prepare_scene_modifier_math_view(
-        &math_view_fixture(),
-        &PrimitiveRegistry::with_builtin(),
-        &NodeId::new("math_view"),
-    )
-    .unwrap();
-    let owner = math_view_fixture();
-    let modifier = &owner.scene_modifiers[1];
-    let diagram_ids: std::collections::HashSet<_> = modifier
-        .mesh_frames
-        .iter()
-        .map(|frame| {
-            manifold_node_engine::load::expand::testkit::resource_node_id(&modifier.id, &frame.target, "diagram")
-        })
-        .collect();
-    let diagrams: Vec<_> = prepared
-        .def
-        .nodes
-        .iter()
-        .filter(|node| diagram_ids.contains(&node.node_id))
-        .collect();
-    assert_eq!(diagrams.len(), 2);
-
-    assert!(diagrams.iter().all(|diagram| matches!(
-        diagram.params.get("grid"),
-        Some(SerializedParamValue::Bool { value: false })
-    )));
-    let grid_wires: Vec<_> = prepared
-        .def
-        .wires
-        .iter()
-        .filter(|wire| {
-            diagrams.iter().any(|diagram| diagram.id == wire.to_node)
-                && wire.to_port == "grid"
-        })
-        .collect();
-    assert_eq!(grid_wires.len(), 1);
-}
-
-#[test]
-fn scene_modifier_math_view_shares_depth_and_appearance_across_surfaces() {
-    let owner = math_view_fixture();
-    let modifier = &owner.scene_modifiers[1];
-    let parent = prepare_scene_modifiers(&owner, &PrimitiveRegistry::with_builtin()).unwrap();
-    let scene_id = parent
-        .def
-        .nodes
-        .iter()
-        .find(|candidate| candidate.node_id == modifier.scene.node)
-        .expect("parent render scene")
-        .id;
-    let parent_depth_sources: BTreeSet<_> = modifier
-        .mesh_frames
-        .iter()
-        .map(|frame| {
-            let export_id =
-                manifold_node_engine::load::expand::testkit::resource_node_id(&modifier.id, &frame.target, "export");
-            let export = parent
-                .def
-                .nodes
-                .iter()
-                .find(|candidate| candidate.node_id == export_id)
-                .expect("generated parent mesh export")
-                .id;
-            parent
-                .def
-                .wires
-                .iter()
-                .find(|wire| wire.to_node == export && wire.to_port == "depth")
-                .map(|wire| (wire.from_node, wire.from_port.clone()))
-                .expect("parent scene depth reaches every mesh export")
-        })
-        .collect();
-    assert_eq!(
-        parent_depth_sources,
-        BTreeSet::from([(scene_id, "depth".to_string())]),
-        "all mesh exports borrow one parent scene depth"
-    );
-    let prepared = prepare_scene_modifier_math_view(
-        &owner,
-        &PrimitiveRegistry::with_builtin(),
-        &NodeId::new("math_view"),
-    )
-    .unwrap();
-
-    let frames: Vec<_> = modifier.mesh_frames.iter().collect();
-    let surfaces: Vec<_> = frames
-        .iter()
-        .map(|frame| {
-            let id = manifold_node_engine::load::expand::testkit::resource_node_id(&modifier.id, &frame.target, "surface");
-            prepared
-                .def
-                .nodes
-                .iter()
-                .find(|candidate| candidate.node_id == id)
-                .expect("generated Math View surface")
-        })
-        .collect();
-    let diagrams: Vec<_> = frames
-        .iter()
-        .map(|frame| {
-            let id = manifold_node_engine::load::expand::testkit::resource_node_id(&modifier.id, &frame.target, "diagram");
-            prepared
-                .def
-                .nodes
-                .iter()
-                .find(|candidate| candidate.node_id == id)
-                .expect("generated Math View diagram")
-        })
-        .collect();
-
-    for candidate in surfaces.iter().chain(diagrams.iter()) {
-        for port in [
-            "current",
-            "reference",
-            "incoming",
-            "camera",
-            "transform",
-        ] {
-            assert!(
-                prepared
-                    .def
-                    .wires
-                    .iter()
-                    .any(|wire| wire.to_node == candidate.id && wire.to_port == port),
-                "{} is missing shared {port} input",
-                candidate.node_id
-            );
-        }
-        for port in ["mode", "occlusion", "axes"] {
-            assert!(
-                prepared
-                    .def
-                    .wires
-                    .iter()
-                    .any(|wire| wire.to_node == candidate.id && wire.to_port == port),
-                "{} is missing {port} control",
-                candidate.node_id
-            );
-        }
-    }
-    for (surface, diagram) in surfaces.iter().zip(&diagrams) {
-        for port in ["current", "reference", "incoming", "camera", "transform"] {
-            let source = |node| prepared.def.wires.iter()
-                .find(|wire| wire.to_node == node && wire.to_port == port)
-                .map(|wire| (wire.from_node, wire.from_port.as_str()));
-            assert_eq!(source(surface.id), source(diagram.id), "surface and colour disagree on {port}");
-        }
-    }
-    assert!(prepared.def.wires.iter().all(|wire| {
-        !surfaces
-            .iter()
-            .any(|surface| surface.id == wire.to_node && wire.to_port == "grid")
-    }));
-    for candidate in surfaces.iter().chain(diagrams.iter()) {
-        assert!(
-            prepared
-                .def
-                .wires
-                .iter()
-                .any(|wire| wire.to_node == candidate.id && wire.to_port == "scene_depth"),
-            "{} is missing borrowed scene depth",
-            candidate.node_id
-        );
-    }
-    for window in surfaces.windows(2) {
-        assert!(prepared.def.wires.iter().any(|wire| {
-            wire.from_node == window[0].id
-                && wire.from_port == "depth"
-                && wire.to_node == window[1].id
-                && wire.to_port == "surface_depth"
-        }));
-    }
-    let final_surface = surfaces.last().expect("surface depth accumulator");
-    for diagram in &diagrams {
-        assert!(prepared.def.wires.iter().any(|wire| {
-            wire.from_node == final_surface.id
-                && wire.from_port == "depth"
-                && wire.to_node == diagram.id
-                && wire.to_port == "surface_depth"
-        }));
-    }
-    assert!(prepared.def.wires.iter().all(|wire| {
-        !surfaces
-            .iter()
-            .any(|surface| surface.id == wire.from_node && wire.from_port == "color")
-    }));
-}
-
-#[test]
-fn scene_modifier_math_view_captures_the_combined_chain_at_its_position() {
-    // vortex_a -> vortex_b -> math_view: the capture's "current" producer is
-    // vortex_b's stage output, not the seed samples and not vortex_a's output.
-    let mut owner = math_view_fixture();
-    let mut vortex_b = owner.scene_modifiers[0].clone();
-    vortex_b.id = NodeId::new("vortex_b");
-    owner.scene_modifiers.insert(1, vortex_b);
-    let registry = PrimitiveRegistry::with_builtin();
-    let chained =
-        prepare_scene_modifier_math_view(&owner, &registry, &NodeId::new("math_view")).unwrap();
-    let single = prepare_scene_modifier_math_view(
-        &math_view_fixture(),
-        &registry,
-        &NodeId::new("math_view"),
-    )
-    .unwrap();
-
-    fn diagram_source(prepared: &PreparedSceneModifierGraph, port: &str) -> (u32, String) {
-        let diagram = prepared
-            .def
-            .nodes
-            .iter()
-            .find(|node| node.type_id == "node.render_mesh_diagram")
-            .unwrap();
-        let wire = prepared
-            .def
-            .wires
-            .iter()
-            .find(|wire| wire.to_node == diagram.id && wire.to_port == port)
-            .unwrap();
-        (
-            wire.from_node,
-            prepared
-                .def
-                .nodes
-                .iter()
-                .find(|node| node.id == wire.from_node)
-                .unwrap()
-                .type_id
-                .clone(),
-        )
-    }
-
-    let (current, current_type) = diagram_source(&chained, "current");
-    let (reference, _) = diagram_source(&chained, "reference");
-    let (incoming, _) = diagram_source(&chained, "incoming");
-    let (single_current, single_type) = diagram_source(&single, "current");
-    assert_eq!(
-        current_type, single_type,
-        "the chain producer is the same stage output shape as one modifier"
-    );
-    assert_ne!(
-        current, single_current,
-        "a second preceding modifier changes the captured producer"
-    );
-    assert_ne!(
-        current, reference,
-        "the capture is not the undeformed seed samples"
-    );
-    assert_eq!(
-        incoming, reference,
-        "incoming arrows read the undeformed reference samples"
-    );
-}
-
-#[test]
-fn scene_modifier_math_view_first_in_chain_captures_the_seed_samples() {    // math_view with an empty preceding chain captures the seed samples as
-    // both reference and current.
-    let fixture = math_view_fixture();
-    let mut owner = fixture.clone();
-    owner.scene_modifiers = vec![owner.scene_modifiers[1].clone()];
-    let metadata = owner.preset_metadata.as_mut().unwrap();
-    metadata
-        .bindings
-        .retain(|binding| !matches!(
-            &binding.target,
-            BindingTarget::SceneModifier { modifier_id, .. } if modifier_id.as_str() == "vortex_a"
-        ));
-    let binding_ids: std::collections::HashSet<_> = metadata
-        .bindings
-        .iter()
-        .map(|binding| binding.id.clone())
-        .collect();
-    metadata.params.retain(|param| binding_ids.contains(&param.id));
-    let prepared = prepare_scene_modifier_math_view(
-        &owner,
-        &PrimitiveRegistry::with_builtin(),
-        &NodeId::new("math_view"),
-    )
-    .unwrap();
-    let diagram = prepared
-        .def
-        .nodes
-        .iter()
-        .find(|node| node.type_id == "node.render_mesh_diagram")
-        .unwrap();
-    // The seed sample keeps its stable identity but becomes the view's
-    // boundary mesh input, so the empty-chain capture reads that node for
-    // every geometry port.
-    let mut sources = Vec::new();
-    for port in ["current", "reference", "incoming"] {
-        let wire = prepared
-            .def
-            .wires
-            .iter()
-            .find(|wire| wire.to_node == diagram.id && wire.to_port == port)
-            .unwrap();
-        let source = prepared
-            .def
-            .nodes
-            .iter()
-            .find(|node| node.id == wire.from_node)
-            .unwrap();
-        assert_eq!(
-            source.type_id,
-            "system.mesh_input",
-            "empty chain: {port} reads the seed boundary"
-        );
-        assert_eq!(
-            source.title.as_deref(),
-            Some("Math View Samples"),
-            "empty chain: {port} reads the seed samples"
-        );
-        sources.push(wire.from_node);
-    }
-    assert!(
-        sources.windows(2).all(|pair| pair[0] == pair[1]),
-        "empty chain: every geometry port reads the same seed node"
-    );
+fn node_by_id(
+    prepared: &PreparedSceneModifierGraph,
+    id: u32,
+) -> &manifold_core::effect_graph_def::EffectGraphNode {
+    prepared.def.nodes.iter().find(|node| node.id == id).unwrap()
 }
 
 fn diagram_input_source(
@@ -1285,205 +835,276 @@ fn diagram_input_source(
         .map(|wire| (wire.from_node, wire.from_port.clone()))
 }
 
-fn diagram_and_surface(prepared: &PreparedSceneModifierGraph) -> (u32, u32) {
-    let diagram = prepared
+fn math_diagrams(prepared: &PreparedSceneModifierGraph) -> Vec<u32> {
+    prepared
         .def
         .nodes
         .iter()
-        .find(|node| {
-            node.type_id == "node.render_mesh_diagram" && node.title.as_deref() == Some("Math View Diagram")
-        })
-        .expect("colour diagram");
-    let surface = prepared
+        .filter(|node| node.type_id == "node.render_mesh_diagram")
+        .map(|node| node.id)
+        .collect()
+}
+
+/// The real mesh a diagram's sampled port reads: diagram port <- sampler <- mesh.
+fn sampled_mesh(prepared: &PreparedSceneModifierGraph, diagram: u32, port: &str) -> (u32, String) {
+    let (sampler, _) = diagram_input_source(prepared, diagram, port).unwrap();
+    assert_eq!(node_by_id(prepared, sampler).type_id, "node.sample_mesh_triangles");
+    diagram_input_source(prepared, sampler, "in").unwrap()
+}
+
+fn object_vertices_source(
+    prepared: &PreparedSceneModifierGraph,
+    owner: &EffectGraphDef,
+    frame: usize,
+) -> (u32, String) {
+    let target = &owner.scene_modifiers[0].mesh_frames[frame].target;
+    let object = prepared
         .def
         .nodes
         .iter()
-        .find(|node| {
-            node.type_id == "node.render_mesh_diagram" && node.title.as_deref() == Some("Math View Surface Depth")
-        })
-        .expect("surface depth diagram");
-    (diagram.id, surface.id)
+        // Prepared parents flatten groups; object ids are unique in the fixture.
+        .find(|node| node.type_id == "node.scene_object" && node.node_id == target.node)
+        .expect("scene object for frame")
+        .id;
+    diagram_input_source(prepared, object, "vertices").expect("object vertices wire")
+}
+
+fn stage_node_count(prepared: &PreparedSceneModifierGraph, type_id: &str) -> usize {
+    prepared.def.nodes.iter().filter(|node| node.type_id == type_id).count()
+}
+
+#[test]
+fn scene_modifier_math_view_builds_in_the_parent_graph_with_stable_identities() {
+    let owner = math_view_fixture();
+    let prepared = prepare_parent(&owner);
+    let modifier = &owner.scene_modifiers[1];
+    for role in ["diagram", "current_samples", "reference_samples"] {
+        let expected: std::collections::HashSet<_> = modifier
+            .mesh_frames
+            .iter()
+            .map(|frame| manifold_node_engine::load::expand::testkit::resource_node_id(&modifier.id, &frame.target, role))
+            .collect();
+        let actual: std::collections::HashSet<_> = prepared
+            .def
+            .nodes
+            .iter()
+            .filter(|node| expected.contains(&node.node_id))
+            .map(|node| node.node_id.clone())
+            .collect();
+        assert_eq!(actual, expected, "Math View {role} identities are stable");
+    }
+    assert_eq!(math_diagrams(&prepared).len(), 2, "one diagram per sampled object");
+    for retired in ["system.mesh_input", "system.mesh_output", "node.set_alpha"] {
+        assert_eq!(stage_node_count(&prepared, retired), 0, "no {retired} in the parent graph");
+    }
+    assert!(
+        prepared.def.wires.iter().all(|wire| wire.to_port != "surface_depth"),
+        "the surface-depth chain is gone"
+    );
+
+    // final_output <- switch(selector = mode x enabled, [scene, diagrams, over]).
+    let plain = prepare_parent(&crate::contracts::node_graph::catalog_tests::math_view_fixtures::without_view(&owner));
+    let final_of = |prepared: &PreparedSceneModifierGraph| {
+        let id = prepared.def.nodes.iter().find(|node| node.type_id == "system.final_output").unwrap().id;
+        diagram_input_source(prepared, id, "in").unwrap()
+    };
+    let (switch, _) = final_of(&prepared);
+    assert_eq!(node_by_id(&prepared, switch).type_id, "node.switch_texture");
+    let scene_image = final_of(&plain);
+    let in_0 = diagram_input_source(&prepared, switch, "in_0").unwrap();
+    assert_eq!(
+        node_by_id(&prepared, in_0.0).node_id,
+        node_by_id(&plain, scene_image.0).node_id,
+        "Scene mode selects the image that fed final_output before the view"
+    );
+    let (math, _) = diagram_input_source(&prepared, switch, "in_1").unwrap();
+    assert_eq!(node_by_id(&prepared, math).type_id, "node.over", "two diagrams stack with over");
+    let (overlay, _) = diagram_input_source(&prepared, switch, "in_2").unwrap();
+    assert_eq!(node_by_id(&prepared, overlay).type_id, "node.over");
+    assert_eq!(diagram_input_source(&prepared, overlay, "top").unwrap().0, math);
+    assert_eq!(diagram_input_source(&prepared, overlay, "bottom").unwrap(), in_0);
+    let (selector, _) = diagram_input_source(&prepared, switch, "selector").unwrap();
+    assert_eq!(node_by_id(&prepared, selector).type_id, "node.math");
+    let mode = diagram_input_source(&prepared, math_diagrams(&prepared)[0], "mode");
+    assert_eq!(diagram_input_source(&prepared, selector, "a"), mode, "selector a is the mode control");
+    let (enabled, _) = diagram_input_source(&prepared, selector, "b").unwrap();
+    assert_eq!(node_by_id(&prepared, enabled).type_id, "node.value", "selector b is the enabled toggle");
+    assert_ne!(Some(enabled), mode.map(|(id, _)| id));
+
+    // The scene's own depth texture feeds every diagram directly.
+    let scene = prepared
+        .def
+        .nodes
+        .iter()
+        .find(|node| node.node_id == modifier.scene.node)
+        .unwrap()
+        .id;
+    for diagram in math_diagrams(&prepared) {
+        assert_eq!(
+            diagram_input_source(&prepared, diagram, "scene_depth"),
+            Some((scene, "depth".to_string()))
+        );
+    }
+}
+
+#[test]
+fn scene_modifier_math_view_routes_one_shared_grid_control() {
+    let prepared = prepare_parent(&math_view_fixture());
+    let diagrams = math_diagrams(&prepared);
+    assert_eq!(diagrams.len(), 2);
+    assert!(diagrams.iter().all(|diagram| matches!(
+        node_by_id(&prepared, *diagram).params.get("grid"),
+        Some(SerializedParamValue::Bool { value: false })
+    )));
+    let grid_wires = prepared
+        .def
+        .wires
+        .iter()
+        .filter(|wire| diagrams.contains(&wire.to_node) && wire.to_port == "grid")
+        .count();
+    assert_eq!(grid_wires, 1);
+}
+
+#[test]
+fn scene_modifier_math_view_diagrams_share_camera_and_controls() {
+    let prepared = prepare_parent(&math_view_fixture());
+    let diagrams = math_diagrams(&prepared);
+    for diagram in &diagrams {
+        for port in [
+            "current", "reference", "incoming", "current_mesh", "reference_mesh", "camera",
+            "transform", "scene_depth", "mode", "occlusion", "axes",
+        ] {
+            assert!(
+                diagram_input_source(&prepared, *diagram, port).is_some(),
+                "{} is missing {port}",
+                node_by_id(&prepared, *diagram).node_id
+            );
+        }
+        assert_eq!(
+            diagram_input_source(&prepared, *diagram, "incoming"),
+            diagram_input_source(&prepared, *diagram, "reference"),
+            "arrow tails read the reference samples"
+        );
+    }
+    let camera = |diagram| diagram_input_source(&prepared, diagram, "camera");
+    assert_eq!(camera(diagrams[0]), camera(diagrams[1]), "one scene camera");
+}
+
+#[test]
+fn scene_modifier_math_view_reads_the_real_mesh_at_its_position_without_rerunning_the_chain() {
+    // vortex_a -> vortex_b -> math_view. The diagram samples the parent's own
+    // producers: current is the real full mesh after vortex_b (what the scene
+    // object draws), reference is the object's real mesh wire at chain start.
+    // The preceding chain is not evaluated a second time: the patch stage
+    // count matches the same chain without the view.
+    let mut owner = math_view_fixture();
+    let mut vortex_b = owner.scene_modifiers[0].clone();
+    vortex_b.id = NodeId::new("vortex_b");
+    owner.scene_modifiers.insert(1, vortex_b);
+    let owner = manifold_core::scene_modifier_edit::reconcile_scene_modifier_parameters(
+        &owner,
+        &NodeId::new("vortex_b"),
+    )
+    .unwrap()
+    .graph;
+    let prepared = prepare_parent(&owner);
+    let plain = prepare_parent(&crate::contracts::node_graph::catalog_tests::math_view_fixtures::without_view(&owner));
+    assert_eq!(
+        stage_node_count(&prepared, "node.transform_mesh_patches"),
+        stage_node_count(&plain, "node.transform_mesh_patches"),
+        "Math View adds no second evaluation of the preceding chain"
+    );
+    let diagrams = math_diagrams(&prepared);
+    for (frame, diagram) in diagrams.iter().enumerate() {
+        let current = sampled_mesh(&prepared, *diagram, "current");
+        assert_eq!(
+            current,
+            object_vertices_source(&prepared, &owner, frame),
+            "current samples the producer the scene object itself draws"
+        );
+        assert_eq!(
+            node_by_id(&prepared, current.0).type_id,
+            "node.morph_mesh",
+            "current is the last preceding modifier's real output"
+        );
+        assert_eq!(diagram_input_source(&prepared, *diagram, "current_mesh"), Some(current.clone()));
+        let reference = sampled_mesh(&prepared, *diagram, "reference");
+        assert_ne!(reference, current, "the reference is the undeformed mesh");
+        assert_eq!(diagram_input_source(&prepared, *diagram, "reference_mesh"), Some(reference));
+    }
+}
+
+#[test]
+fn scene_modifier_math_view_first_in_chain_reads_the_host_mesh_and_ignores_later_modifiers() {
+    // BUG-jvn5 (post-view leak): with the view first, every later modifier
+    // stays out of the diagram — current and reference both sample the
+    // object's real host mesh wire, and no instances are wired.
+    let mut owner = math_view_fixture();
+    let view = owner.scene_modifiers.remove(1);
+    owner.scene_modifiers.insert(0, view);
+    let prepared = prepare_parent(&owner);
+    let plain = prepare_parent(&crate::contracts::node_graph::catalog_tests::math_view_fixtures::without_view(&owner));
+    for diagram in math_diagrams(&prepared) {
+        let current = sampled_mesh(&prepared, diagram, "current");
+        let reference = sampled_mesh(&prepared, diagram, "reference");
+        assert_eq!(current, reference, "nothing precedes the view");
+        assert_ne!(
+            node_by_id(&prepared, current.0).type_id,
+            "node.transform_mesh_patches",
+            "the post-view vortex never reaches the diagram"
+        );
+        assert!(
+            diagram_input_source(&prepared, diagram, "instances").is_none(),
+            "post-view instances never reach the diagram"
+        );
+    }
+    // The post-view modifier still drives the scene exactly as before.
+    assert_eq!(
+        stage_node_count(&prepared, "node.transform_mesh_patches"),
+        stage_node_count(&plain, "node.transform_mesh_patches")
+    );
 }
 
 #[test]
 fn scene_modifier_math_view_captures_preceding_instance_echoes() {
     // BUG-uvts: SpatialEchoes writes only SceneEndpoint::Instances. The view
-    // must capture that producer and wire it into both diagram passes, while
-    // the vertices-only fixture stays unwired.
+    // wires that producer; the vertices-only fixture leaves the port unwired.
     let owner = crate::contracts::node_graph::catalog_tests::math_view_fixtures::test_owner_with_instance_echoes();
-    let registry = PrimitiveRegistry::with_builtin();
-    let prepared = prepare_scene_modifier_math_view(
-        &owner,
-        &registry,
-        &NodeId::new("math_view"),
-    )
-    .unwrap();
-    let (diagram, surface) = diagram_and_surface(&prepared);
-    for node_id in [diagram, surface] {
-        let instances = diagram_input_source(&prepared, node_id, "instances")
+    let prepared = prepare_parent(&owner);
+    for diagram in math_diagrams(&prepared) {
+        let instances = diagram_input_source(&prepared, diagram, "instances")
             .expect("echo chain: instances input is wired");
-        let current = diagram_input_source(&prepared, node_id, "current")
-            .expect("echo chain: current input is wired");
+        let current = sampled_mesh(&prepared, diagram, "current");
+        assert_ne!(instances.0, current.0, "each endpoint reads its own producer");
         assert_ne!(
-            instances.0, current.0,
-            "instances and vertices read their own chain producers"
-        );
-        let source = prepared
-            .def
-            .nodes
-            .iter()
-            .find(|node| node.id == instances.0)
-            .unwrap();
-        assert_ne!(
-            source.type_id, "system.mesh_input",
-            "instances come from the echo stage, not the seeded samples"
-        );
-        assert_ne!(
-            source.type_id,
+            node_by_id(&prepared, instances.0).type_id,
             "node.arrange_copies",
             "instances come from the echo stage, not the identity fallback"
         );
     }
-
-    // Vertices-only capture: no producer exists upstream, so the port stays
-    // unwired and the diagram behaves exactly as before (BUG-uvts acceptance).
-    let plain = prepare_scene_modifier_math_view(
-        &math_view_fixture(),
-        &registry,
-        &NodeId::new("math_view"),
-    )
-    .unwrap();
-    let (plain_diagram, plain_surface) = diagram_and_surface(&plain);
-    for node_id in [plain_diagram, plain_surface] {
+    let plain = prepare_parent(&math_view_fixture());
+    for diagram in math_diagrams(&plain) {
         assert!(
-            diagram_input_source(&plain, node_id, "instances").is_none(),
+            diagram_input_source(&plain, diagram, "instances").is_none(),
             "vertices-only chain keeps the instances port unwired"
         );
     }
 }
 
 #[test]
-fn scene_modifier_math_view_captures_vertices_and_instances_from_the_right_producers() {
-    // Vortex deforms vertices, SpatialEchoes echoes instances: each endpoint
-    // must reach the diagram from its own stage output.
-    let owner = crate::contracts::node_graph::catalog_tests::math_view_fixtures::test_owner_with_instance_echoes();
-    let registry = PrimitiveRegistry::with_builtin();
-    let prepared = prepare_scene_modifier_math_view(
-        &owner,
-        &registry,
-        &NodeId::new("math_view"),
-    )
-    .unwrap();
-    let (diagram, _) = diagram_and_surface(&prepared);
-    let source_type = |prepared: &PreparedSceneModifierGraph, diagram: u32, port: &str| {
-        let (id, _) = diagram_input_source(prepared, diagram, port).unwrap();
-        prepared
-            .def
-            .nodes
-            .iter()
-            .find(|node| node.id == id)
-            .unwrap()
-            .type_id
-            .clone()
-    };
-    // The vertices capture is the same producer shape as the vertices-only
-    // fixture; the instances capture is a different, non-seed producer.
-    let plain = prepare_scene_modifier_math_view(
-        &math_view_fixture(),
-        &registry,
-        &NodeId::new("math_view"),
-    )
-    .unwrap();
-    let (plain_diagram, _) = diagram_and_surface(&plain);
-    assert_eq!(
-        source_type(&prepared, diagram, "current"),
-        source_type(&plain, plain_diagram, "current"),
-        "adding an echo modifier must not change the vertices capture"
-    );
-    let current_id = diagram_input_source(&prepared, diagram, "current").unwrap().0;
-    let instances_id = diagram_input_source(&prepared, diagram, "instances").unwrap().0;
-    assert_ne!(current_id, instances_id, "each endpoint reads its own producer");
-    assert_ne!(
-        source_type(&prepared, diagram, "instances"),
-        "system.mesh_input",
-        "instances come from the echo stage, not the seeded samples"
-    );
-}
-
-#[test]
-fn scene_modifier_math_view_post_view_modifiers_do_not_leak_into_capture() {
-    // BUG-jvn5 tie: modifiers after the view never feed the diagram. The
-    // capture must read the seed samples for vertices and stay unwired for
-    // instances, even when a vertex modifier and an echo modifier follow.
-    let mut owner = math_view_fixture();
-    let view = owner.scene_modifiers.remove(1);
-    owner.scene_modifiers.insert(0, view);
-    let registry = PrimitiveRegistry::with_builtin();
-    let prepared = prepare_scene_modifier_math_view(
-        &owner,
-        &registry,
-        &NodeId::new("math_view"),
-    )
-    .unwrap();
-    let (diagram, surface) = diagram_and_surface(&prepared);
-    for node_id in [diagram, surface] {
-        let (current_id, _) = diagram_input_source(&prepared, node_id, "current").unwrap();
-        let source = prepared
-            .def
-            .nodes
-            .iter()
-            .find(|node| node.id == current_id)
-            .unwrap();
-        assert_eq!(
-            source.type_id, "system.mesh_input",
-            "post-view vertex modifiers must not leak into the capture"
-        );
-        assert!(
-            diagram_input_source(&prepared, node_id, "instances").is_none(),
-            "post-view echo modifiers must not leak into the capture"
-        );
-    }
-
-    // The compiled view plan drops the post-view stage work entirely; only
-    // load-time expansion still sees it (BUG-jvn5 verification: the GPU cost
-    // premise holds only for stateful post-view roots, not ordinary stages).
-    let graph = prepared
-        .def
-        .clone()
-        .into_graph(&registry, &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default())
-        .unwrap();
-    let plan = manifold_node_engine::exec::execution_plan::compile(&graph).unwrap();
-    for step in plan.steps() {
-        let node = graph.get_node(step.node).unwrap();
-        assert!(
-            !node.node_id.as_str().starts_with("instance/vortex_a/"),
-            "post-view modifier stage is evaluated in the view plan: {}",
-            node.node_id
-        );
-    }
-}
-
-#[test]
 fn scene_modifier_math_view_follows_the_final_scene_camera_past_the_view() {
-    // Design call for BUG-jvn5: a post-view modifier that writes Camera (like
-    // SceneLoop's lens stage) still frames the diagram — the view is a window
-    // into the scene and must match the performer's final framing. Its
-    // instance copies, however, are post-view and must not enter the capture.
+    // A post-view modifier that writes Camera (SceneLoop's lens stage) still
+    // frames the diagram; its instance copies are post-view and stay out.
     let mut owner = math_view_fixture();
     let loop_recipe: EffectGraphDef = serde_json::from_str(include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/assets/scene-modifier-presets/SceneLoop.json"
     )))
     .unwrap();
-    let view = owner
-        .scene_modifiers
-        .iter()
-        .find(|instance| instance.id == NodeId::new("math_view"))
-        .expect("fixture view")
-        .clone();
+    let scene = owner.scene_modifiers[1].scene.clone();
     owner.scene_modifiers.push(SceneModifierInstanceDef {
         id: NodeId::new("scene_loop"),
-        scene: view.scene.clone(),
+        scene,
         targets: SceneTargetSelection::AllObjects,
         // SceneLoop consumes no mesh coordinate context, so saved frames are
         // rejected for it; its EachObject stage resolves targets directly.
@@ -1497,27 +1118,15 @@ fn scene_modifier_math_view_follows_the_final_scene_camera_past_the_view() {
     )
     .unwrap()
     .graph;
-    let registry = PrimitiveRegistry::with_builtin();
-    let prepared = prepare_scene_modifier_math_view(
-        &owner,
-        &registry,
-        &NodeId::new("math_view"),
-    )
-    .unwrap();
-    // Baseline without the post-view SceneLoop: the diagram reads the host
-    // camera chain producer.
-    let plain = prepare_scene_modifier_math_view(
-        &math_view_fixture(),
-        &registry,
-        &NodeId::new("math_view"),
-    )
-    .unwrap();
-    let (diagram, _) = diagram_and_surface(&prepared);
-    let (plain_diagram, _) = diagram_and_surface(&plain);
-    let (camera_id, _) = diagram_input_source(&prepared, diagram, "camera").unwrap();
-    let (plain_camera_id, _) = diagram_input_source(&plain, plain_diagram, "camera").unwrap();
+    let prepared = prepare_parent(&owner);
+    let plain = prepare_parent(&math_view_fixture());
+    let diagram = math_diagrams(&prepared)[0];
+    let plain_diagram = math_diagrams(&plain)[0];
+    let (camera, _) = diagram_input_source(&prepared, diagram, "camera").unwrap();
+    let (plain_camera, _) = diagram_input_source(&plain, plain_diagram, "camera").unwrap();
     assert_ne!(
-        camera_id, plain_camera_id,
+        node_by_id(&prepared, camera).node_id,
+        node_by_id(&plain, plain_camera).node_id,
         "post-view camera writes keep framing the diagram (final scene camera)"
     );
     assert!(
@@ -1526,3 +1135,28 @@ fn scene_modifier_math_view_follows_the_final_scene_camera_past_the_view() {
     );
 }
 
+#[test]
+fn scene_modifier_math_view_that_cannot_resolve_never_fails_the_layer() {
+    // The view's enabled toggle is missing: the view is skipped with a
+    // warning, the layer prepares, and final_output keeps the scene image.
+    let mut owner = math_view_fixture();
+    let view = &mut owner.scene_modifiers[1].graph;
+    let renamed = NodeId::new("mv_toggle");
+    for node in &mut view.nodes {
+        if node.node_id.as_str() == "mv_enabled" {
+            node.node_id = renamed.clone();
+        }
+    }
+    for binding in &mut view.preset_metadata.as_mut().unwrap().bindings {
+        if let manifold_core::effect_graph_def::BindingTarget::Node { node_id, .. } = &mut binding.target
+            && node_id.as_str() == "mv_enabled"
+        {
+            *node_id = renamed.clone();
+        }
+    }
+    let prepared = prepare_scene_modifiers(&owner, &PrimitiveRegistry::with_builtin())
+        .expect("a Math View problem never fails the layer");
+    assert!(math_diagrams(&prepared).is_empty());
+    assert_eq!(stage_node_count(&prepared, "node.switch_texture"), stage_node_count(
+        &prepare_parent(&crate::contracts::node_graph::catalog_tests::math_view_fixtures::without_view(&owner)), "node.switch_texture"));
+}

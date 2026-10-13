@@ -269,22 +269,12 @@ impl PresetRuntime {
         self.for_each_extension(|extension, context| {
             extension.set_project_tempo(context.graph, tempo)
         });
-        for view in &mut self.math_views {
-            for variant in &mut view.variants {
-                variant.set_project_tempo(tempo);
-            }
-        }
     }
 
     pub fn set_source_instance(&mut self, instance: Option<&PresetInstance>) {
         self.for_each_extension(|extension, context| {
             extension.set_source_instance(context.graph, instance)
         });
-        for view in &mut self.math_views {
-            for variant in &mut view.variants {
-                variant.set_source_instance(instance);
-            }
-        }
     }
 
     pub fn carry_generator_state_from(&mut self, prior: &mut Self) {

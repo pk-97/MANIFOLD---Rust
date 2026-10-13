@@ -290,33 +290,6 @@ use ahash::AHashMap;
         assert_eq!(prebound[&prebound_resource].bytes, bytes);
     }
 
-    #[test]
-    fn math_view_borrowed_arrays_keep_owner_storage() {
-        let mut graph = Graph::new();
-        let registry = manifold_node_engine::persistence::PrimitiveRegistry::with_builtin();
-        let source = graph.add_node(registry.construct("system.mesh_input").unwrap());
-        let output = graph.add_node(registry.construct("system.mesh_output").unwrap());
-        graph.connect((source, "vertices"), (output, "vertices")).unwrap();
-        let plan = compile(&graph).unwrap();
-        let outputs = &plan.steps().iter().find(|step| step.node == source).unwrap().outputs;
-        let mut prebound = AHashMap::default();
-        for (port, resource) in outputs {
-            let bytes = if *port == "vertices" {
-                1536 * std::mem::size_of::<MeshVertex>() as u64
-            } else {
-                4 * 9000
-            };
-            prebound.insert(*resource, ArrayStorage { root: *resource, bytes });
-        }
-        let planned = plan_array_allocations(&graph, &plan, (64, 64), &prebound).unwrap();
-        for (resource, storage) in &prebound {
-            assert_eq!(planned.storage[resource], *storage);
-            assert!(planned.actions.iter().all(|action| !matches!(action,
-                ArrayAllocationAction::Allocate(allocation) if allocation.resource == *resource)));
-        }
-        assert!(planned.actions.is_empty());
-    }
-
     fn scatter_graph() -> (Graph, NodeInstanceId) {
         let mut graph = Graph::new();
         let seed = graph.add_node(Box::new(SeedParticles::new()));

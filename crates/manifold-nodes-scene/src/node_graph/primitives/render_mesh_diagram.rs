@@ -56,7 +56,7 @@ struct DiagramUniforms {
     history_capacity: u32,
     history_stride: u32,
     axes: u32,
-    depth_pass: u32,
+    topology_mismatch: u32,
     occlusion: u32,
     mode: u32,
     _depth_pad: u32,
@@ -88,7 +88,7 @@ struct HistoryCaptureUniforms {
 manifold_node_engine::primitive! {
     name: RenderMeshDiagram,
     type_id: "node.render_mesh_diagram",
-    purpose: "Render sparse evaluated MeshVertex samples as a diagram or current-surface depth through the authored Camera. Optional shared surface and scene depth occlude diagram marks; an optional InstanceTransform array repeats fragments, ghosts, displacement arrows and motion trails per copy so echo chains are visible. This presentation node contains no modifier math.",
+    purpose: "Render sparse MeshVertex samples as a transparent diagram through the authored Camera. Scene depth occludes the marks in Overlay mode when Occlusion is on; an optional InstanceTransform array repeats fragments, ghosts, displacement arrows and motion trails per copy so echo chains are visible. Optional full current and reference meshes are a count-only topology guard. This presentation node contains no modifier math.",
     inputs: {
         current: Array(MeshVertex) required,
         reference: Array(MeshVertex) required,
@@ -112,12 +112,13 @@ manifold_node_engine::primitive! {
         ghosts_brightness: ScalarF32 optional,
         vectors_brightness: ScalarF32 optional,
         trails_brightness: ScalarF32 optional,
-        surface_depth: Texture2D optional,
+        current_mesh: Array(MeshVertex) optional,
+        reference_mesh: Array(MeshVertex) optional,
         scene_depth: Texture2D optional,
         occlusion: ScalarF32 optional,
         mode: ScalarF32 optional,
     },
-    outputs: { color: Texture2D, depth: Texture2D },
+    outputs: { color: Texture2D },
     params: [
         ParamDef { name: Cow::Borrowed("grid_brightness"), label: "grid brightness", ty: ParamType::Float, default: ParamValue::Float(1.0), range: None, enum_values: &[] },
         ParamDef { name: Cow::Borrowed("fragments_brightness"), label: "fragments brightness", ty: ParamType::Float, default: ParamValue::Float(1.0), range: None, enum_values: &[] },
@@ -139,14 +140,13 @@ manifold_node_engine::primitive! {
         ParamDef { name: Cow::Borrowed("radius"), label: "Radius", ty: ParamType::Float, default: ParamValue::Float(1.0), range: Some((0.001, 100.0)), enum_values: &[] },
     ],
     depth_rule: SourceHeight,
-    composition_notes: "Current, reference, and incoming arrays are authored graph outputs. The transparent diagram uses the Camera and optional object Transform; Motion trails are temporal history, never parameter-sweep trajectories. Wire depth-only instances in a surface_depth chain (matching canvas-sized R32Float), then feed its final depth to colour instances. Occlusion=1 tests shared surfaces; Mode=2 also tests scene_depth at its own resolution. Ghosts/trails remain translucent, and the grid never writes depth. Unwired depth inputs mean no external occluder.",
+    composition_notes: "Current, reference, and incoming arrays are sampled faces of real meshes. The transparent diagram uses the Camera and optional object Transform; Motion trails are temporal history, never parameter-sweep trajectories. Occlusion=1 with Mode=2 tests scene_depth at its own resolution; Mode 1 never occludes. When current_mesh and reference_mesh are both wired and differ in size, reference and incoming read as current (ghosts coincide, arrows hide). Ghosts/trails remain translucent.",
     examples: [], picker: { label: "Mesh Diagram", category: Atom },
     summary: "Draws sparse evaluated mesh samples as a transparent native diagram.",
     category: Geometry3D, role: Filter, aliases: ["mesh diagram", "math view"], boundary_reason: DrawCall,
     extra_fields: {
         render_pipeline: Option<manifold_gpu::GpuRenderPipeline> = None,
         depth_color_pipeline: Option<manifold_gpu::GpuRenderPipeline> = None,
-        depth_pipeline: Option<manifold_gpu::GpuRenderPipeline> = None,
         depth_sampler: Option<manifold_gpu::GpuSampler> = None,
         dummy_depth: Option<manifold_gpu::GpuTexture> = None,
         identity_instances: Option<manifold_gpu::GpuBuffer> = None,
@@ -167,6 +167,7 @@ manifold_node_engine::primitive! {
         history_reset: bool = false,
         last_vertex_count: u32 = 0,
         last_copy_count: u32 = 0,
+        topology_warned: bool = false,
     },
 }
 
@@ -200,21 +201,6 @@ impl RenderMeshDiagram {
             GpuTextureFormat::Rgba16Float,
             Some(DIAGRAM_BLEND),
             MSAA_SAMPLE_COUNT,
-            Self::TYPE_ID,
-        );
-        device.create_render_pipeline(
-            SHADER,
-            "vs_main",
-            "fs_depth",
-            GpuTextureFormat::R32Float,
-            Some(GpuBlendState {
-                src_factor: GpuBlendFactor::One,
-                dst_factor: GpuBlendFactor::One,
-                operation: GpuBlendOp::Max,
-                src_alpha_factor: GpuBlendFactor::One,
-                dst_alpha_factor: GpuBlendFactor::One,
-                alpha_operation: GpuBlendOp::Max,
-            }),
             Self::TYPE_ID,
         );
         device.create_compute_pipeline(CAPTURE_SHADER, "cs_main", "math-view-history-capture");
@@ -324,12 +310,10 @@ impl Primitive for RenderMeshDiagram {
             return;
         };
         let color_out = ctx.outputs.texture_2d("color");
-        let depth_out = ctx.outputs.texture_2d("depth");
-        if color_out.is_none() && depth_out.is_none() {
+        if color_out.is_none() {
             return;
         }
         let (width, height) = color_out
-            .or(depth_out)
             .map(|target| (target.width, target.height))
             .unwrap_or((0, 0));
         if width == 0 || height == 0 {
@@ -404,6 +388,24 @@ impl Primitive for RenderMeshDiagram {
             log::error!("Math View cannot project the world grid: singular scene camera");
             return;
         };
+        // Face correspondence needs the same full mesh size on both sides.
+        // Counts only: the full buffers are never read here.
+        let topology_mismatch = match (
+            ctx.inputs.array("current_mesh"),
+            ctx.inputs.array("reference_mesh"),
+        ) {
+            (Some(current_mesh), Some(reference_mesh)) => current_mesh.size != reference_mesh.size,
+            _ => false,
+        };
+        if topology_mismatch && !self.topology_warned {
+            log::warn!(
+                "Math View: the mesh topology changed upstream; ghosts and arrows are hidden for this object"
+            );
+        }
+        self.topology_warned = topology_mismatch;
+        let mode = ctx.scalar_or_param("mode", 0.0).round().clamp(0.0, 2.0) as u32;
+        // Depth occlusion applies to Overlay only; Math draws on black.
+        let occlusion = ctx.scalar_or_param("occlusion", 0.0).round().clamp(0.0, 1.0) as u32;
         let uniforms = DiagramUniforms {
             view_proj,
             model: Self::model_matrix(
@@ -427,9 +429,9 @@ impl Primitive for RenderMeshDiagram {
             history_capacity: HISTORY_SAMPLES,
             history_stride: MAX_VERTICES,
             axes: toggled("axes"),
-            depth_pass: 0,
-            occlusion: ctx.scalar_or_param("occlusion", 0.0).round().clamp(0.0, 1.0) as u32,
-            mode: ctx.scalar_or_param("mode", 0.0).round().clamp(0.0, 2.0) as u32,
+            topology_mismatch: u32::from(topology_mismatch),
+            occlusion: u32::from(occlusion != 0 && mode == 2),
+            mode,
             _depth_pad: 0,
             inv_view_proj,
             camera_pos_far: [camera.pos[0], camera.pos[1], camera.pos[2], camera.far],
@@ -443,7 +445,6 @@ impl Primitive for RenderMeshDiagram {
             instance_history_stride: MAX_COPY_INSTANCES,
             _instances_pad: 0,
         };
-        let input_surface_depth = ctx.inputs.texture_2d("surface_depth");
         let input_scene_depth = ctx.inputs.texture_2d("scene_depth");
         let gpu = ctx.gpu_encoder();
         if color_out.is_some() {
@@ -454,7 +455,6 @@ impl Primitive for RenderMeshDiagram {
         }
         self.ensure_depth_resources(gpu.device);
         let dummy_depth = self.dummy_depth.as_ref().expect("depth resources initialized");
-        let surface_depth = input_surface_depth.unwrap_or(dummy_depth);
         let scene_depth = input_scene_depth.unwrap_or(dummy_depth);
         let depth_sampler = self.depth_sampler.as_ref().expect("depth sampler initialized");
         let instances = input_instances.unwrap_or_else(|| {
@@ -538,7 +538,6 @@ impl Primitive for RenderMeshDiagram {
                         GpuBinding::Buffer { binding: 2, buffer: reference, offset: 0 },
                         GpuBinding::Buffer { binding: 3, buffer: incoming, offset: 0 },
                         GpuBinding::Buffer { binding: 4, buffer: history, offset: 0 },
-                        GpuBinding::Texture { binding: 7, texture: surface_depth },
                         GpuBinding::Texture { binding: 8, texture: scene_depth },
                         GpuBinding::Sampler { binding: 9, sampler: depth_sampler },
                         GpuBinding::Buffer { binding: 10, buffer: instances, offset: 0 },
@@ -562,60 +561,6 @@ impl Primitive for RenderMeshDiagram {
                     ], 18, instance_count.max(1), GpuLoadAction::Clear, Self::TYPE_ID,
                 );
             }
-        }
-        if let Some(depth_out) = depth_out {
-            if self.depth_pipeline.is_none() {
-                self.depth_pipeline = Some(gpu.device.create_render_pipeline(
-                    SHADER, "vs_main", "fs_depth", GpuTextureFormat::R32Float,
-                    Some(GpuBlendState {
-                        src_factor: GpuBlendFactor::One, dst_factor: GpuBlendFactor::One,
-                        operation: GpuBlendOp::Max, src_alpha_factor: GpuBlendFactor::One,
-                        dst_alpha_factor: GpuBlendFactor::One, alpha_operation: GpuBlendOp::Max,
-                    }), Self::TYPE_ID,
-                ));
-            }
-            if let Some(previous) = input_surface_depth {
-                if (previous.width, previous.height, previous.format)
-                    != (depth_out.width, depth_out.height, GpuTextureFormat::R32Float)
-                {
-                    log::error!("Mesh diagram surface depth accumulation requires matching canvas-sized R32Float inputs");
-                    return;
-                }
-                gpu.copy_texture_to_texture(previous, depth_out, depth_out.width, depth_out.height);
-            } else {
-                gpu.native_enc.clear_texture(depth_out, 0.0, 0.0, 0.0, 0.0);
-            }
-            let mut depth_uniforms = uniforms;
-            depth_uniforms.depth_pass = 1;
-            depth_uniforms.occlusion = uniforms.occlusion;
-            gpu.native_enc.draw_instanced(
-                self.depth_pipeline.as_ref().expect("depth pipeline initialized"),
-                depth_out,
-                &[
-                    GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&depth_uniforms) },
-                    GpuBinding::Buffer { binding: 1, buffer: current, offset: 0 },
-                    GpuBinding::Buffer { binding: 2, buffer: reference, offset: 0 },
-                    GpuBinding::Buffer { binding: 3, buffer: incoming, offset: 0 },
-                    // The depth entry point never reads history. Bind an
-                    // existing vertex buffer to keep the shared layout valid
-                    // without allocating or capturing trail state.
-                    GpuBinding::Buffer { binding: 4, buffer: current, offset: 0 },
-                    GpuBinding::Texture { binding: 7, texture: surface_depth },
-                    GpuBinding::Texture { binding: 8, texture: scene_depth },
-                    GpuBinding::Sampler { binding: 9, sampler: depth_sampler },
-                    GpuBinding::Buffer { binding: 10, buffer: instances, offset: 0 },
-                    // Never read by the depth entry point; existing buffers
-                    // keep the shared layout valid.
-                    GpuBinding::Buffer { binding: 11, buffer: instance_ring, offset: 0 },
-                    GpuBinding::Buffer { binding: 12, buffer: instance_ring_counts, offset: 0 },
-                ],
-                manifold_gpu::DrawCount::Direct {
-                    vertices: 3,
-                    instances: if uniforms.occlusion != 0 { tri_count * copies } else { 0 },
-                },
-                GpuLoadAction::Load,
-                Self::TYPE_ID,
-            );
         }
         // The capture follows the diagram pass in the same command stream,
         // after the authored graph has produced `current`. This is a GPU
@@ -705,11 +650,7 @@ impl Primitive for RenderMeshDiagram {
         port: &str,
         _p: &manifold_node_engine::exec::effect_node::ParamValues,
     ) -> Option<(u32, u32)> {
-        matches!(port, "color" | "depth").then_some((1, 1))
-    }
-
-    fn output_format(&self, port: &str) -> Option<GpuTextureFormat> {
-        (port == "depth").then_some(GpuTextureFormat::R32Float)
+        (port == "color").then_some((1, 1))
     }
 }
 

@@ -21,14 +21,7 @@ mod impulses;
 manifold_core::testkit_visible! {
 pub(crate) mod compiler;
 }
-pub(crate) use compiler::math_events::resource_node_id as math_resource_node_id;
-pub(crate) use compiler::math_events::sample_node_id as math_sample_node_id;
 mod control_state;
-manifold_core::testkit_visible! {
-pub(crate) mod math_view;
-}
-pub(crate) use math_view::LegacyMathViewScope;
-pub(crate) use compiler::prepare_legacy_scene_modifier_math_view;
 pub use control_state::PreparedModifierControlState;
 mod frames;
 mod fragment_cuts;
@@ -43,7 +36,7 @@ pub use value_sources::{SceneModifierValueSource, SceneModifierValueSourcePlan};
 pub use value_writes::PreparedGraphValueWrites;
 
 pub use compiler::{
-    expand_scene_modifiers, prepare_scene_modifier_math_view, prepare_scene_modifiers,
+    expand_scene_modifiers, prepare_scene_modifiers,
     validate_modifier_attachment, validate_modifier_runtime,
 };
 pub use routes::{PreparedSceneModifierGraph, SceneModifierNodeCopy, SceneModifierNodeRoute};

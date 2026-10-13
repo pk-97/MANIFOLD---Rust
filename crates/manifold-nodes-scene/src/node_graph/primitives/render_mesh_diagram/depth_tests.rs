@@ -1,4 +1,4 @@
-//! Focused GPU proofs for the mesh diagram's optional depth path.
+//! Focused GPU proofs for the mesh diagram's scene-depth occlusion path.
 //!
 //! These tests bind the production `SHADER` directly. They deliberately use
 //! small deterministic fixtures so a numerical assertion catches a broken
@@ -9,7 +9,7 @@ use super::*;
 use manifold_node_engine::gpu::headless_readback::{encode_rgba8_png, readback_raw_halves, readback_srgb_rgba8};
 use manifold_node_engine::scene::camera::Camera;
 use manifold_gpu::{
-    GpuBinding, GpuBlendFactor, GpuBlendOp, GpuBlendState, GpuLoadAction, GpuTextureDesc,
+    GpuBinding, GpuLoadAction, GpuTextureDesc,
     GpuTextureDimension, GpuTextureFormat, GpuTextureUsage,
 };
 
@@ -63,7 +63,6 @@ fn uniforms(
     camera: &Camera,
     tri_count: u32,
     vertex_count: u32,
-    depth_pass: u32,
     occlusion: u32,
     fragments_gain: f32,
 ) -> DiagramUniforms {
@@ -88,7 +87,7 @@ fn uniforms(
         history_capacity: HISTORY_SAMPLES,
         history_stride: MAX_VERTICES,
         axes: 0,
-        depth_pass,
+        topology_mismatch: 0,
         occlusion,
         mode: 0,
         _depth_pad: 0,
@@ -109,10 +108,9 @@ fn uniforms(
 fn bindings<'a>(
     u: &'a DiagramUniforms,
     current: &'a manifold_gpu::GpuBuffer,
-    surface: &'a manifold_gpu::GpuTexture,
     scene: &'a manifold_gpu::GpuTexture,
     sampler: &'a manifold_gpu::GpuSampler,
-) -> [GpuBinding<'a>; 9] {
+) -> [GpuBinding<'a>; 8] {
     [
         GpuBinding::Bytes {
             binding: 0,
@@ -137,10 +135,6 @@ fn bindings<'a>(
             binding: 4,
             buffer: current,
             offset: 0,
-        },
-        GpuBinding::Texture {
-            binding: 7,
-            texture: surface,
         },
         GpuBinding::Texture {
             binding: 8,
@@ -179,19 +173,6 @@ fn rgba_signal(raw: &[u8], x: usize, y: usize) -> f32 {
     signal
 }
 
-fn depth_values(device: &manifold_gpu::GpuDevice, texture: &manifold_gpu::GpuTexture) -> Vec<f32> {
-    let bytes_per_row = W * 4;
-    let buffer = device.create_buffer_shared((H * bytes_per_row) as u64);
-    let mut encoder = device.create_encoder("mesh-diagram-depth-readback");
-    encoder.copy_texture_to_buffer(texture, &buffer, W, H, bytes_per_row);
-    encoder.commit_and_wait_completed();
-    let ptr = buffer.mapped_ptr().unwrap();
-    let raw = unsafe { std::slice::from_raw_parts(ptr.cast::<u8>(), (H * bytes_per_row) as usize) };
-    raw.chunks_exact(4)
-        .map(|px| f32::from_le_bytes([px[0], px[1], px[2], px[3]]))
-        .collect()
-}
-
 #[test]
 fn sloping_depth_line_keeps_front_and_rejects_back_xray_is_unchanged() {
     let guard = manifold_gpu::testkit::test_device();
@@ -214,8 +195,7 @@ fn sloping_depth_line_keeps_front_and_rejects_back_xray_is_unchanged() {
             vertex([-0.06, 0.05, -0.85]),
         ],
     );
-    let surface = texture_f32(&device, 0.5, "mesh-diagram-constant-occluder");
-    let scene = texture_f32(&device, 0.0, "mesh-diagram-far-scene");
+    let scene = texture_f32(&device, 0.5, "mesh-diagram-constant-scene-depth");
     let sampler = device.create_sampler(&manifold_gpu::GpuSamplerDesc {
         min_filter: manifold_gpu::GpuFilterMode::Nearest,
         mag_filter: manifold_gpu::GpuFilterMode::Nearest,
@@ -267,10 +247,10 @@ fn sloping_depth_line_keeps_front_and_rejects_back_xray_is_unchanged() {
         MSAA_SAMPLE_COUNT,
         "mesh-diagram-xray",
     );
-    let u_depth = uniforms(&camera, 1, 3, 0, 1, 1.0);
-    let u_xray = uniforms(&camera, 1, 3, 0, 0, 1.0);
-    let b_depth = bindings(&u_depth, &current, &surface, &scene, &sampler);
-    let b_xray = bindings(&u_xray, &current, &surface, &scene, &sampler);
+    let u_depth = uniforms(&camera, 1, 3, 1, 1.0);
+    let u_xray = uniforms(&camera, 1, 3, 0, 1.0);
+    let b_depth = bindings(&u_depth, &current, &scene, &sampler);
+    let b_xray = bindings(&u_xray, &current, &scene, &sampler);
     let mut encoder = device.create_encoder("mesh-diagram-depth-line-proof");
     encoder.draw_instanced_msaa(
         &depth_pipeline,
@@ -286,7 +266,7 @@ fn sloping_depth_line_keeps_front_and_rejects_back_xray_is_unchanged() {
         &xray_pipeline,
         &xray_msaa,
         &xray_target.texture,
-        &b_xray[..7],
+        &b_xray[..6],
         18,
         2,
         GpuLoadAction::Clear,
@@ -333,7 +313,7 @@ fn sloping_depth_line_keeps_front_and_rejects_back_xray_is_unchanged() {
     );
     assert!(
         back_signal < 0.01,
-        "back half crossed the 0.5 occluder: {back_signal}"
+        "back half crossed the 0.5 scene depth: {back_signal}"
     );
     assert!(
         rgba_signal(
@@ -356,102 +336,6 @@ fn sloping_depth_line_keeps_front_and_rejects_back_xray_is_unchanged() {
         }
         std::fs::write(path, encode_rgba8_png(&side_by_side, W * 2, H)).unwrap();
     }
-
-    // A live scene is an occluder only in Overlay. Math mode uses its own
-    // sampled surfaces, even when the borrowed scene texture is connected.
-    for mode in [1, 2] {
-        let mut u = u_depth;
-        u.mode = mode;
-        let b = bindings(&u, &current, &scene, &surface, &sampler);
-        let mut encoder = device.create_encoder("mesh-diagram-scene-depth-proof");
-        encoder.draw_instanced_msaa(
-            &depth_pipeline, &msaa, &target.texture, &b, 18, 2,
-            GpuLoadAction::Clear, "mesh-diagram-scene-depth-proof",
-        );
-        encoder.commit_and_wait_completed();
-        let raw = readback_raw_halves(&device, &target.texture, W, H);
-        let signal = rgba_signal(&raw, back.px.round() as usize, back.py.round() as usize);
-        if mode == 1 {
-            assert!(signal > 0.1, "Math mode must ignore live scene depth");
-        } else {
-            assert!(signal < 0.01, "Overlay must use live scene depth");
-        }
-    }
-}
-
-#[test]
-fn surface_depth_is_maximum_and_zero_appearance_does_not_occlude() {
-    let guard = manifold_gpu::testkit::test_device();
-    let device = guard.arc();
-    let camera = Camera::look_at(
-        [0.0, 0.0, -1.0],
-        [0.0, 0.0, 1.0],
-        [0.0, 1.0, 0.0],
-        1.0,
-        0.1,
-        10.0,
-    );
-    let current = vertices_buffer(
-        &device,
-        &[
-            vertex([-0.06, -0.05, -0.88]),
-            vertex([0.06, -0.05, -0.88]),
-            vertex([0.0, 0.06, -0.88]),
-            vertex([-0.6, -0.5, 0.0]),
-            vertex([0.6, -0.5, 0.0]),
-            vertex([0.0, 0.6, 0.0]),
-        ],
-    );
-    let target = manifold_node_engine::gpu::render_target::RenderTarget::new(
-        &device,
-        W,
-        H,
-        GpuTextureFormat::R32Float,
-        "mesh-diagram-surface-depth",
-    );
-    let pipeline = device.create_render_pipeline(
-        SHADER,
-        "vs_main",
-        "fs_depth",
-        GpuTextureFormat::R32Float,
-        Some(GpuBlendState {
-            src_factor: GpuBlendFactor::One,
-            dst_factor: GpuBlendFactor::One,
-            operation: GpuBlendOp::Max,
-            src_alpha_factor: GpuBlendFactor::One,
-            dst_alpha_factor: GpuBlendFactor::One,
-            alpha_operation: GpuBlendOp::Max,
-        }),
-        "mesh-diagram-surface-depth",
-    );
-    let far = texture_f32(&device, 0.0, "mesh-diagram-depth-far");
-    let sampler = device.create_sampler(&Default::default());
-    let render = |gain: f32| {
-        let u = uniforms(&camera, 2, 6, 1, 1, gain);
-        let b = bindings(&u, &current, &far, &far, &sampler);
-        let mut encoder = device.create_encoder("mesh-diagram-surface-depth-proof");
-        encoder.clear_texture(&target.texture, 0.0, 0.0, 0.0, 0.0);
-        encoder.draw_instanced(
-            &pipeline,
-            &target.texture,
-            &b,
-            manifold_gpu::DrawCount::Direct { vertices: 3, instances: 2 },
-            GpuLoadAction::Load,
-            "mesh-diagram-surface-depth-proof",
-        );
-        encoder.commit_and_wait_completed();
-        depth_values(&device, &target.texture)
-    };
-    let maximum = render(1.0)[64 * W as usize + 64];
-    assert!(
-        maximum > 0.8,
-        "surface depth did not keep the nearer triangle: {maximum}"
-    );
-    let hidden = render(0.0)[64 * W as usize + 64];
-    assert!(
-        hidden < 0.01,
-        "zero appearance gain wrote occluding depth: {hidden}"
-    );
 }
 
 #[test]
@@ -490,17 +374,17 @@ fn math_view_axes_follow_representative_faces_and_toggle_without_hiding_outlines
                 "math-axes-proof",
             );
             for axes in [1, 0] {
-                let mut u = uniforms(&camera, 9, 27, 0, occlusion, 1.0);
+                let mut u = uniforms(&camera, 9, 27, occlusion, 1.0);
                 u.axes = axes;
                 u.radius = 2.0;
                 u.line_width = 1.0;
                 u.geometry_hue = 0.5;
                 u.model = super::super::render_scene::model_matrix([offset, 0.0, 0.0], [0.0; 3], [1.0; 3]);
-                let b = bindings(&u, &buffer, &far, &far, &sampler);
+                let b = bindings(&u, &buffer, &far, &sampler);
                 let mut encoder = device.create_encoder("math-axes-proof");
                 encoder.draw_instanced_msaa(
                     &pipeline, &msaa, &target.texture,
-                    if occlusion == 0 { &b[..7] } else { &b },
+                    if occlusion == 0 { &b[..6] } else { &b },
                     18, 1 + 9 * 4 + 3 + 3 * 3, GpuLoadAction::Clear, "math-axes-proof",
                 );
                 encoder.commit_and_wait_completed();
