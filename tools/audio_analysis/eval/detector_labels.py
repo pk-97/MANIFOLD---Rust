@@ -256,9 +256,7 @@ def refuse_online(path):
 
 
 def read_any(path, sr, load):
-    """Mono audio at sr: the goal loader for wav, soundfile (mp3, flac, aiff) when it cannot read the file. Never reads
-    an online-only file (refuse_online)."""
-    refuse_online(path)
+    """Mono audio at sr: the goal loader for wav, soundfile (mp3, flac, aiff) when it cannot read the file."""
     try:
         return load(path, sr)
     except ValueError:
@@ -315,6 +313,7 @@ def clip_hits(rows, als_dir, sr, band=(150, 10000), points=None):
         if not p:
             continue
         if p not in cache:
+            refuse_online(p)
             cache[p] = read_any(p, sr, load)
         if points is not None and c['warped'] and len(c['markers']) >= 2:
             h_loud, h_quiet = warped_hits(c, cache[p], sr, band, points)
