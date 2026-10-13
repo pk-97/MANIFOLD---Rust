@@ -273,7 +273,7 @@ def write_attempt(attempt):
 
 
 QUIET_S = 120  # a file written this recently means a writer may still be at work
-QUIET_SKIP = {'.git', 'target'}
+QUIET_SKIP = {'.git', 'target', '__pycache__'}  # bytecode writes come from running tests, not authors
 
 
 class Refused(Exception):
@@ -290,7 +290,7 @@ def recent_write(wt, now, window=QUIET_S):
     """A file under the worktree, outside target/ and .git, modified in the window."""
     for root, dirs, files in os.walk(wt):
         dirs[:] = [d for d in dirs if d not in QUIET_SKIP]
-        for name in (f for f in files if f not in QUIET_SKIP):
+        for name in (f for f in files if f not in QUIET_SKIP and not f.endswith('.pyc')):
             path = Path(root) / name
             try:
                 if now - path.lstat().st_mtime < window:
@@ -313,7 +313,8 @@ def codex_busy(wt):
 def start_checks(branch, wt, now=None):
     """Before any fetch or gate: is this slot really the named branch, done and quiet?
 
-    Returns True when the tip is already on origin/main. Raises Refused
+    Returns True when the branch's own commits are already on origin/main,
+    checked only after the slot proves clean and quiet. Raises Refused
     otherwise-unsafe. A lease or a live holder pid is never evidence either
     way: a subagent's holder is its lead's process."""
     q = f'git -C "{wt}"'
@@ -326,8 +327,6 @@ def start_checks(branch, wt, now=None):
     if code or head != tip:
         raise Refused(f'worktree HEAD {head[:9] or "?"} is not the tip {tip[:9]} of {branch}; '
                       f'the slot holds other work. Check: {q} rev-parse HEAD {branch}')
-    if probe(['merge-base', '--is-ancestor', tip, 'origin/main'], wt)[0] == 0:
-        return True
     code, dirty = probe(['status', '--porcelain'], wt)
     if code or dirty:
         raise Refused(f'worktree is not clean; commit or remove the changes. Check: {q} status --short')
@@ -339,7 +338,15 @@ def start_checks(branch, wt, now=None):
     if fresh:
         raise Refused(f'{fresh} was modified in the last {QUIET_S}s; a writer may still be at work. '
                       f'Wait until the slot is quiet, then rerun the land command.')
-    return False
+    if probe(['merge-base', '--is-ancestor', tip, 'origin/main'], wt)[0] != 0:
+        return False
+    # On main's first-parent line means the branch never had commits of its own;
+    # a landed branch's tip arrives through a merge's second parent.
+    code, trunk = probe(['rev-list', '--first-parent', 'origin/main'], wt)
+    if code or tip in trunk.split():
+        raise Refused(f'nothing to land: {branch} has no commits beyond origin/main. '
+                      f'Check: {q} log --oneline origin/main..{branch}')
+    return True
 
 
 def parse_args(argv):
@@ -370,6 +377,12 @@ def main():
         ATTEMPT['outcome'] = 'refused'
         write_attempt(ATTEMPT)
         print(f'[land] REFUSED: {why}', file=sys.stderr)
+        return 1
+    except Exception as error:  # fail closed: a broken check never lets a landing start
+        ATTEMPT['outcome'] = 'error'
+        write_attempt(ATTEMPT)
+        print(f'[land] REFUSED: start checks failed ({type(error).__name__}: {error}). '
+              f'Fix the check, then rerun the land command.', file=sys.stderr)
         return 1
     if landed:
         print(f'[land] already landed: {a.branch} tip is on origin/main; nothing to do.')

@@ -360,9 +360,49 @@ class StartCheckTests(unittest.TestCase):
         dirs.assert_called_once_with(self.wt)
         reason.assert_called_once_with(state)
 
+    def fresh_branch(self):
+        """A lane branch cut from main with no commits of its own."""
+        git(self.wt, 'switch', '-q', '-c', 'lane/fresh', 'main')
+        self.age_files()
+
+    def test_uncommitted_work_on_a_fresh_branch_refuses_as_dirty(self):
+        self.fresh_branch()
+        (self.wt / 'forgot.txt').write_text('uncommitted\n')
+        self.age_files()
+        code, rows, text, step, gate = self.land(branch='lane/fresh')
+        self.assertEqual(code, 1)
+        self.assertIn('not clean', text)
+        self.assertEqual([r['outcome'] for r in rows], ['refused'])
+        self.assertFalse(step.called or gate.called)
+
+    def test_fresh_clean_branch_refuses_nothing_to_land(self):
+        self.fresh_branch()
+        code, rows, text, step, gate = self.land(branch='lane/fresh')
+        self.assertEqual(code, 1)
+        self.assertIn('nothing to land', text)
+        self.assertNotIn('already landed', text)
+        self.assertEqual([r['outcome'] for r in rows], ['refused'])
+        self.assertFalse(step.called or gate.called)
+
+    def test_start_check_exception_records_error_and_refuses(self):
+        self.busy.side_effect = RuntimeError('broker state unreadable')
+        code, rows, text, step, gate = self.land()
+        self.assertEqual(code, 1)
+        self.assertIn('REFUSED', text)
+        self.assertIn('broker state unreadable', text)
+        self.assertEqual([r['outcome'] for r in rows], ['error'])
+        self.assertFalse(step.called or gate.called)
+
+    def test_recent_pyc_write_does_not_refuse(self):
+        cache = self.wt / 'scripts' / '__pycache__'
+        cache.mkdir(parents=True)
+        (cache / 'x.cpython-312.pyc').write_bytes(b'x')
+        (self.wt / 'loose.pyc').write_bytes(b'x')
+        self.assertIsNone(land_branch.recent_write(self.wt, time.time()))
+
     def test_already_landed_exits_zero_without_a_row(self):
-        git(self.repo, 'update-ref', 'refs/remotes/origin/main', 'lane/x')
-        (self.wt / 'work.txt').touch()  # landed work never needs quiet
+        git(self.repo, '-c', 'commit.gpgsign=false', 'merge', '-q', '--no-ff', '-m', 'land', 'lane/x')
+        git(self.repo, 'update-ref', 'refs/remotes/origin/main', 'main')
         code, rows, text, step, gate = self.land()
         self.assertEqual(code, 0)
         self.assertIn('already landed', text)
