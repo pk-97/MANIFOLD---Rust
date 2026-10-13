@@ -151,6 +151,8 @@ fn physics_solids(graph: manifold_core::effect_graph_def::EffectGraphDef) -> Pre
     ));
     fx.init_defaults();
     fx.graph = Some(graph);
+    // The command edits the graph; the manifest rebuild runs on the content
+    // thread in the app, so do it here.
     fx.refresh_manifest_from_graph();
     fx
 }
@@ -196,4 +198,116 @@ fn old_template_copy_section_becomes_a_choice_once() {
     let q = back.timeline.layers[0].gen_params().unwrap().params.get(&id).unwrap().clone();
     let q = &q;
     assert_eq!((&q.choices, &q.spec), (&p.choices, &p.spec));
+}
+
+/// Each joined Lookup control that differs from its saved spec on what the
+/// card shows: name, range and flags.
+fn joined_vs_saved(fx: &PresetInstance) -> (usize, Vec<String>) {
+    let Some(meta) = fx.graph.as_ref().and_then(|g| g.preset_metadata.as_ref()) else {
+        return (0, Vec::new());
+    };
+    let close = |a: f32, b: f32| (a - b).abs() <= 1e-4 * a.abs().max(b.abs()).max(1.0);
+    let mut compared = 0;
+    let mut diffs = Vec::new();
+    for p in fx.params.iter().filter(|p| p.source == SpecSource::Lookup) {
+        let Some(saved) = meta.params.iter().find(|s| s.id == p.id()) else { continue };
+        compared += 1;
+        let j = &p.spec;
+        let same = j.name == saved.name
+            && close(j.min, saved.min)
+            && close(j.max, saved.max)
+            && (j.whole_numbers, j.is_toggle, j.is_trigger, j.card_visible, j.is_angle)
+                == (saved.whole_numbers, saved.is_toggle, saved.is_trigger, saved.card_visible, saved.is_angle)
+            && j.value_labels == saved.value_labels;
+        if !same {
+            diffs.push(format!(
+                "{} {}: saved {:?} [{}, {}] w{} t{} g{} v{} a{} | joined {:?} [{}, {}] w{} t{} g{} v{} a{}",
+                fx.effect_type().as_str(), p.id(),
+                saved.name, saved.min, saved.max, saved.whole_numbers, saved.is_toggle,
+                saved.is_trigger, saved.card_visible, saved.is_angle,
+                j.name, j.min, j.max, j.whole_numbers, j.is_toggle, j.is_trigger, j.card_visible, j.is_angle
+            ));
+        }
+    }
+    (compared, diffs)
+}
+
+/// The card and panel dump on a scene with a model merged into its layer
+/// graph through the production merge command.
+fn merged_model_layer() -> PresetInstance {
+    use manifold_core::GraphTarget;
+    let mut project = manifold_core::project::Project::default();
+    let ty = manifold_core::PresetTypeId::from_string("PhysicsSolids".into());
+    let index = project.timeline.add_layer("Merged", manifold_core::types::LayerType::Generator, ty.clone());
+    project.timeline.layers[index].gen_params_or_init();
+    let layer = project.timeline.layers[index].layer_id.clone();
+    let default = manifold_nodes::bundled_presets::bundled_preset_def(&ty).expect("PhysicsSolids").as_ref().clone();
+    let glb = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/gltf/cc0__tiger_lily.glb");
+    let plan = manifold_nodes_scene::node_graph::gltf_import::assemble_merge_plan(&default, &glb).expect("merge plan");
+    let mut editing = manifold_editing::service::EditingService::new();
+    editing.execute(
+        Box::new(
+            manifold_editing::commands::graph::ImportModelIntoSceneCommand::new(
+                GraphTarget::Generator(layer), vec![], plan.render_scene_node_id, plan.new_nodes,
+                plan.new_wires, plan.new_objects_count, plan.new_card_params.clone(), plan.new_card_bindings,
+                plan.new_string_bindings, default,
+            )
+            .with_scene_bounds(plan.scene_bounds),
+        ),
+        &mut project,
+    );
+    assert_eq!(editing.take_rejection(), None);
+    let mut fx = project.timeline.layers[index].gen_params().expect("merged layer").clone();
+    // The command edits the graph; the manifest rebuild runs on the content
+    // thread in the app, so do it here.
+    fx.refresh_manifest_from_graph();
+    let merged = plan.new_card_params.iter().filter(|s| fx.params.get(&s.id).is_some_and(|p| p.source == SpecSource::Lookup)).count();
+    println!("JOIN_DUMP merged tiger_lily: {merged} of {} merged controls resolve through the lookup", plan.new_card_params.len());
+    assert!(merged > 0, "merged controls missing from the joined manifest");
+    fx
+}
+
+/// SCENE_SURFACES_DESIGN.md P1 gate (no visible change): for every control
+/// the lookup describes, the joined name, range and flags equal the saved
+/// full spec the stamp wrote.
+#[test]
+fn joined_specs_match_saved_specs_on_bundled_scenes() {
+    let mut scenes: Vec<(String, PresetInstance)> = definitions::all_of_kind(PresetKind::Generator)
+        .into_iter()
+        .map(|t| with_graph(definitions::create_default(&t)))
+        .filter(|fx| {
+            fx.graph.as_ref().is_some_and(|g| g.nodes.iter().any(|n| n.type_id == "node.render_scene"))
+        })
+        .map(|fx| (format!("bundled {}", fx.effect_type().as_str()), fx))
+        .collect();
+    let mut cache = super::fixtures::FixtureCache::default();
+    for scene in ["physicsscene", "gltfscene"] {
+        let data = super::fixtures::build_cached(scene, &mut cache).expect("fixture");
+        for fx in data.project.timeline.layers.iter().filter_map(|l| l.gen_params()) {
+            scenes.push((format!("fixture {scene}"), with_graph(fx.clone())));
+        }
+    }
+    scenes.push(("merged tiger_lily".into(), merged_model_layer()));
+    let mut all = Vec::new();
+    let mut total = 0;
+    for (label, fx) in &scenes {
+        let (compared, diffs) = joined_vs_saved(fx);
+        total += compared;
+        println!("JOIN_DUMP {label}: {compared} lookup controls, {} differing", diffs.len());
+        all.extend(diffs.into_iter().map(|d| format!("{label}: {d}")));
+    }
+    assert!(total > 0, "no lookup controls compared");
+    assert!(all.is_empty(), "{} joined specs differ from saved:\n{}", all.len(), all.join("\n"));
+}
+
+/// The instance with its graph made explicit: a layer on the catalog default
+/// carries no graph, so join the bundled template the card is drawn from.
+fn with_graph(mut fx: PresetInstance) -> PresetInstance {
+    if fx.graph.is_none()
+        && let Some(def) = manifold_nodes::bundled_presets::bundled_preset_def(fx.effect_type())
+    {
+        fx.graph = Some(def.as_ref().clone());
+        fx.refresh_manifest_from_graph();
+    }
+    fx
 }

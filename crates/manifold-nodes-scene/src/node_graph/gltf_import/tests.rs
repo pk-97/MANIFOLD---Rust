@@ -2592,31 +2592,52 @@ fn import_stamps_world_to_mm_and_scene_f_stop_range() {
     assert!(fstop.default_value >= fstop.min && fstop.default_value <= fstop.max);
 }
 
-/// BUG-upfq P1: merged object transform sliders get the scene-derived range
-/// too (blanket per-object cards) — the merge path stamps them from the
-/// incoming bbox, not the existing scene's.
-#[test]
-fn merge_stamps_scene_ranges_on_transform_cards() {
-    let target = scene_def_with_bbox_half_extent(1.0);
-    // Merge a 10×-larger asset — its transform pos slider must widen 10×.
+/// The merged object's transform pos_x card param.
+fn merged_pos_x(
+    target: &manifold_core::effect_graph_def::EffectGraphDef,
+) -> (MergePlan, manifold_core::effect_graph_def::ParamSpecDef) {
+    // A 10x-larger asset than the half-extent-1 target.
     let summary = merge_summary(vec![full_material(0, "Big", 100)], 10.0);
     let path = std::path::Path::new("/tmp/synthetic_merge_scene_range.glb");
-    let plan = merge_import_into_graph(&target, &summary, path).expect("merge");
-
+    let plan = merge_import_into_graph(target, &summary, path).expect("merge");
     let transformed = plan
         .new_nodes
         .iter()
         .find_map(|n| n.group.as_ref())
         .and_then(|g| g.nodes.iter().find(|n| n.type_id == "node.transform_3d"))
         .expect("merged object has a transform_3d");
-    let r = super::scene_scale::SceneScale::from_bbox([-10.0; 3], [10.0; 3]).radius;
     let pos = plan
         .new_card_params
         .iter()
         .find(|p| p.id == format!("{}_pos_x", transformed.id))
-        .expect("merged object's transform pos_x card param");
+        .expect("merged object's transform pos_x card param")
+        .clone();
+    (plan, pos)
+}
+
+/// One radius per graph (SCENE_SURFACES ruling L1): merging into a scene
+/// that already has bounds scales the new transform sliders by the scene's
+/// radius, not the incoming asset's, so the live lookup reads the same band.
+#[test]
+fn merge_into_bounded_scene_uses_scene_radius() {
+    let target = scene_def_with_bbox_half_extent(1.0);
+    let (plan, pos) = merged_pos_x(&target);
+    let r = super::scene_scale::SceneScale::from_bbox([-1.0; 3], [1.0; 3]).radius;
     assert_eq!(pos.default_value, 0.0);
-    assert!((pos.max - 2.0 * r).abs() < 1e-3, "merged transform pos slider must be ±2·incoming-radius, got {}", pos.max);
+    assert!((pos.max - 2.0 * r).abs() < 1e-3, "pos slider must be ±2·scene-radius, got {}", pos.max);
+    assert_eq!(plan.scene_bounds, ([-1.0; 3], [1.0; 3]), "the scene keeps its own bounds");
+}
+
+/// A scene with no bounds takes the incoming asset's box as its bounds, and
+/// the merged transform sliders scale by that radius.
+#[test]
+fn merge_into_unbounded_scene_uses_incoming_radius() {
+    let mut target = scene_def_with_bbox_half_extent(1.0);
+    target.preset_metadata.as_mut().expect("meta").scene_bounds = None;
+    let (plan, pos) = merged_pos_x(&target);
+    let r = super::scene_scale::SceneScale::from_bbox([-10.0; 3], [10.0; 3]).radius;
+    assert!((pos.max - 2.0 * r).abs() < 1e-3, "pos slider must be ±2·incoming-radius, got {}", pos.max);
+    assert_eq!(plan.scene_bounds, ([-10.0; 3], [10.0; 3]), "the incoming box becomes the scene's bounds");
 }
 
 /// BUG-upfq follow-up: orbit camera `distance`/`near`/`far` slider ranges
