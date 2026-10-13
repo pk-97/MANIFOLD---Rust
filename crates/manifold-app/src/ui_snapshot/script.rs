@@ -3,9 +3,8 @@
 //! order against a scene fixture. Artifacts land in
 //! `target/ui-snapshots/<scene>/run-<script-stem>/`: a numbered PNG/dump per
 //! `Snapshot`/`Dump` step, plus `result.json`, plus `filmstrip.png` when any
-//! `Step` action ran (D9a): one tile per `Snapshot`, since only a `Snapshot`
-//! composites (BUG-ych08, flows composite only on Snapshot steps). Exit 0 only
-//! if every step succeeded (D6, D10).
+//! `Step` action advanced frames (D9a). Exit 0 only if every step succeeded
+//! (D6, D10).
 //!
 //! Gesture synthesis (D4) follows `interact.rs`'s `select_layer` precedent —
 //! `UIRoot::pointer_event` → `ui.process_events()` (the SAME per-frame call
@@ -285,7 +284,6 @@ fn run_flow(
     let mut render = RenderState::new(device, tex_w, tex_h);
 
     let mut runner = Runner::new();
-    runner.stepped = actions.iter().any(|a| matches!(a, AutomationAction::Step { .. }));
     // BUG-296: `resolve_effect_target` falls back to `timeline.layers.first()`
     // when `Runner.active_layer` is None, silently mutating the wrong layer's
     // effect chain for structural PanelActions dispatched before any
@@ -311,9 +309,8 @@ fn run_flow(
         }
     }
 
-    // D9a: a contact sheet of the flow's `Snapshot` frames, written only for
-    // flows that use `Step` (the ones that watch something move).
-    if runner.stepped && !runner.filmstrip.is_empty() {
+    // D9a: a contact sheet of every frame a `Step` action advanced.
+    if !runner.filmstrip.is_empty() {
         let cols = (runner.filmstrip.len() as u32).clamp(1, 4);
         let filmstrip_path = out_dir.join("filmstrip.png");
         super::render::save_filmstrip_png(&runner.filmstrip, tex_w, tex_h, cols, &filmstrip_path);
@@ -361,8 +358,8 @@ struct RenderState<'d> {
 }
 
 /// Composites are deferred until something reads pixels. No flow asserts on
-/// pixels and the UI never reads GPU state back, so the only reader is
-/// `write_png` (a `Snapshot`). Painting is incremental over dirty panels and
+/// pixels and the UI never reads GPU state back, so the only readers are
+/// `write_png` (a `Snapshot`) and the filmstrip tile of each `Step` frame. Painting is incremental over dirty panels and
 /// the tree's dirty flags accumulate until a composite clears them, so one
 /// composite at the `Snapshot` paints the same atlas as compositing after
 /// every frame in between.
@@ -382,6 +379,13 @@ impl CompositeGate {
         let owed = std::mem::take(&mut self.pending);
         self.composites += usize::from(owed);
         owed
+    }
+
+    /// A `Step` frame owes its filmstrip tile a composite (D9a), so it pays
+    /// at once. True when the caller must composite.
+    fn step_frame(&mut self) -> bool {
+        self.mark();
+        self.take()
     }
 }
 
@@ -408,8 +412,12 @@ impl<'d> RenderState<'d> {
     /// Composite now if any frame since the last composite changed the UI.
     fn flush_composite(&mut self, ui: &mut UIRoot) {
         if self.gate.take() {
-            composite_frame(self.device, &mut self.ui_renderer, &mut self.cache, ui, &self.composite, 1.0);
+            self.composite_now(ui);
         }
+    }
+
+    fn composite_now(&mut self, ui: &mut UIRoot) {
+        composite_frame(self.device, &mut self.ui_renderer, &mut self.cache, ui, &self.composite, 1.0);
     }
 
     /// Read back the offscreen as last composited — raw linear UI bytes (the
@@ -468,14 +476,14 @@ struct Runner {
     // are in-memory, never the user's file — D7 determinism holds).
     user_prefs: crate::user_prefs::UserPrefs,
     scrub: crate::ui_bridge::ScrubState,
-    // D9a: every `Snapshot` frame, in order — assembled into one
-    // contact-sheet PNG at the end of `run` when `stepped`. D9b: the most
+    // D9a: every composited frame a `Step` action advanced, in order —
+    // assembled into one contact-sheet PNG at the end of `run` when
+    // non-empty. D9b: the most
     // recent `Pointer` gesture's synthesized
     // point(s) (center, interpolated drag path, drag end) — consumed
     // (drained) by the next `Snapshot`, which stamps a crosshair at each
     // one on the readback COPY only.
     filmstrip: Vec<Vec<u8>>,
-    stepped: bool,
     last_gesture_points: Vec<Vec2>,
     // Persistent headless engine: scripted controls use production clip sync.
     modulation_engine: manifold_playback::engine::PlaybackEngine,
@@ -503,7 +511,6 @@ impl Runner {
             user_prefs: crate::user_prefs::UserPrefs::in_memory(),
             scrub: crate::ui_bridge::ScrubState::default(),
             filmstrip: Vec::new(),
-            stepped: false,
             last_gesture_points: Vec::new(),
             modulation_engine,
         }
@@ -580,13 +587,16 @@ impl Runner {
                     // write into `data.project`'s param `effective` value
                     // never reaches the widget tree a `Dump`/`Snapshot` reads.
                     super::reconcile_state(ui, data);
-                    render.gate.mark();
+                    if render.gate.step_frame() {
+                        render.composite_now(ui);
+                    }
+                    self.filmstrip.push(render.readback_linear());
                 }
                 StepResult {
                     index,
                     action: action_desc,
                     status: "ok",
-                    detail: format!("clock -> {:.3}s ({frames} frame(s))", self.clock),
+                    detail: format!("clock -> {:.3}s ({frames} filmstrip tile(s))", self.clock),
                     artifact: None,
                 }
             }
@@ -1734,9 +1744,6 @@ impl Runner {
             },
         );
         let mut linear = render.readback_linear();
-        if self.stepped {
-            self.filmstrip.push(linear.clone());
-        }
         for pt in self.last_gesture_points.drain(..) {
             stamp_crosshair(&mut linear, tex_w, tex_h, pt);
         }
@@ -1811,29 +1818,50 @@ mod composite_gate_tests {
         serde_json::from_str(&std::fs::read_to_string(path).expect("read flow")).expect("parse flow")
     }
 
-    /// Drives the gate the way `run_flow` does: every step may dirty the
-    /// frame, and only a step that reads the composite takes it.
-    fn composites_for(actions: &[AutomationAction]) -> usize {
+    /// Mirrors `run_flow`: flush before a reader, a `Step` composites and
+    /// tiles every frame, a `Snapshot` advances nothing, every other step
+    /// advances one frame. Returns (composites, filmstrip tiles).
+    fn composites_for(actions: &[AutomationAction]) -> (usize, usize) {
         let mut gate = CompositeGate::default();
         gate.mark();
+        let mut tiles = 0;
         for action in actions {
             if reads_composite(action) {
                 gate.take();
             }
-            gate.mark();
+            match action {
+                AutomationAction::Step { frames } => {
+                    for _ in 0..*frames {
+                        gate.step_frame();
+                        tiles += 1;
+                    }
+                }
+                AutomationAction::Snapshot => {}
+                _ => gate.mark(),
+            }
         }
-        gate.composites
+        (gate.composites, tiles)
+    }
+
+    #[test]
+    fn step_composites_and_tiles_every_frame() {
+        let actions = [AutomationAction::Dump, AutomationAction::Step { frames: 5 }];
+        // Seed + the Dump frame are owed but folded into the first Step frame.
+        assert_eq!(composites_for(&actions), (5, 5));
+        let actions = [AutomationAction::Step { frames: 3 }, AutomationAction::Step { frames: 2 }];
+        assert_eq!(composites_for(&actions), (5, 5));
     }
 
     #[test]
     fn run_without_snapshot_steps_never_composites() {
         let mut actions = flow("water-family-preset");
+        actions.retain(|a| !matches!(a, AutomationAction::Step { .. }));
         let snapshots = actions.iter().filter(|a| reads_composite(a)).count();
         assert!(snapshots > 0, "fixture flow should carry Snapshot steps");
-        assert_eq!(composites_for(&actions), snapshots);
+        assert_eq!(composites_for(&actions).0, snapshots);
         actions.retain(|a| !reads_composite(a));
         assert!(actions.len() > 20);
-        assert_eq!(composites_for(&actions), 0);
+        assert_eq!(composites_for(&actions).0, 0);
     }
 
     #[test]
