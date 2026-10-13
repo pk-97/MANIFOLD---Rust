@@ -15,7 +15,7 @@ use std::fs;
 use std::io::{self, Read};
 use std::path::Path;
 
-use manifold_core::effect_graph_def::PresetMetadata;
+use manifold_core::effect_graph_def::{BindingTarget, PresetMetadata};
 use manifold_core::preset_def::PresetKind;
 use manifold_core::project::Project;
 
@@ -62,6 +62,62 @@ pub fn repair_project_embedded_scene_bounds(project: &mut Project) -> usize {
                     e
                 );
             }
+        }
+    }
+    changed += repair_layer_graph_scene_bounds(project);
+    changed
+}
+
+/// Backfill `scene_bounds` on per-layer generator graphs that hold a
+/// `render_scene`, have no bounds, and carry mesh-source `path` string
+/// bindings: scenes a model was merged into before the merge wrote bounds.
+/// Follows the merge's rule (`assemble_merge_plan`): the scene takes the
+/// first merged asset's bounds, so the first `path` binding in order wins.
+/// Bounds come from `gltf_import_summary`, the merge's source. A missing or
+/// unreadable GLB leaves bounds unset with one warning.
+fn repair_layer_graph_scene_bounds(project: &mut Project) -> usize {
+    let mut changed = 0usize;
+    for layer in &mut project.timeline.layers {
+        let Some(def) = layer.gen_params_mut().and_then(|gp| gp.graph.as_mut()) else {
+            continue;
+        };
+        if !def
+            .nodes
+            .iter()
+            .any(|n| n.type_id == crate::node_graph::scene_vm::RENDER_SCENE_TYPE_ID)
+        {
+            continue;
+        }
+        let Some(meta) = def.preset_metadata.as_mut() else {
+            continue;
+        };
+        if meta.scene_bounds.is_some() {
+            continue;
+        }
+        let Some(model_path) = meta
+            .string_bindings
+            .iter()
+            .find(|b| {
+                matches!(&b.target, BindingTarget::Node { param, .. } if param == "path")
+                    && !b.default_value.is_empty()
+            })
+            .map(|b| b.default_value.clone())
+        else {
+            continue;
+        };
+        // The merge's own summary, not the cheap JSON probe: the probe boxes
+        // transformed accessor AABBs and comes out larger, which would give
+        // different ranges than the merge wrote. Full decode, once per layer;
+        // the bounds then persist on save.
+        match crate::node_graph::gltf_load::gltf_import_summary(std::path::Path::new(&model_path)) {
+            Ok(summary) => {
+                meta.scene_bounds = Some((summary.bbox_min, summary.bbox_max));
+                project.load_report.scene_bounds_backfilled += 1;
+                changed += 1;
+            }
+            Err(e) => log::warn!(
+                "[SceneBoundsBackfill] failed to probe {model_path}: {e}; layer scene keeps declared ranges"
+            ),
         }
     }
     changed
@@ -488,5 +544,43 @@ mod tests {
 
         // Migration should have stamped scene-vocabulary params for the orbit_camera.
         assert!(!meta_after.params.is_empty());
+    }
+
+    /// A scene a model was merged into before the merge wrote bounds loads
+    /// with the bounds the importer derives for that GLB; a missing GLB
+    /// leaves them unset.
+    #[test]
+    fn backfills_layer_scene_graph_bounds_from_merged_mesh_path() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures/gltf/cc0__tiger_lily.glb");
+        let summary = crate::node_graph::gltf_load::gltf_import_summary(&path).expect("summary");
+        let (mut def, _) = super::super::assemble_import_graph(&path).expect("imports");
+        def.preset_metadata.as_mut().expect("meta").scene_bounds = None;
+
+        let mut missing = def.clone();
+        for b in &mut missing.preset_metadata.as_mut().unwrap().string_bindings {
+            b.default_value = "/nonexistent/manifold_missing.glb".to_string();
+        }
+
+        let mut project = Project::default();
+        for (i, graph) in [def, missing].into_iter().enumerate() {
+            let mut layer = manifold_core::layer::Layer::new_generator(
+                format!("L{i}"),
+                manifold_core::preset_type_id::PresetTypeId::NONE,
+                i as i32,
+            );
+            layer.gen_params_mut().unwrap().graph = Some(graph);
+            project.timeline.layers.push(layer);
+        }
+
+        assert_eq!(repair_project_embedded_scene_bounds(&mut project), 1);
+        let got = project.timeline.layers[0].generator_graph().unwrap()
+            .preset_metadata.as_ref().unwrap().scene_bounds.expect("backfilled");
+        for k in 0..3 {
+            assert!((got.0[k] - summary.bbox_min[k]).abs() < 1e-3, "min {got:?} vs {:?}", summary.bbox_min);
+            assert!((got.1[k] - summary.bbox_max[k]).abs() < 1e-3, "max {got:?} vs {:?}", summary.bbox_max);
+        }
+        assert!(project.timeline.layers[1].generator_graph().unwrap()
+            .preset_metadata.as_ref().unwrap().scene_bounds.is_none());
     }
 }
