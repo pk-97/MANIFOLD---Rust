@@ -461,19 +461,19 @@ impl Serialize for PresetInstance {
         // field). Other optional fields use the same `skip_if_none` policy
         // as the previous derive(Serialize) impl.
         let mut field_count = 5; // id, effectType, enabled, collapsed, params
-        if self.drivers.is_some() {
+        if crate::has_items(&self.drivers) {
             field_count += 1;
         }
-        if self.envelopes.is_some() {
+        if crate::has_items(&self.envelopes) {
             field_count += 1;
         }
-        if self.ableton_mappings.is_some() {
+        if crate::has_items(&self.ableton_mappings) {
             field_count += 1;
         }
-        if self.audio_mods.is_some() {
+        if crate::has_items(&self.audio_mods) {
             field_count += 1;
         }
-        if self.automation_lanes.is_some() {
+        if crate::has_items(&self.automation_lanes) {
             field_count += 1;
         }
         if self.group_id.is_some() {
@@ -518,20 +518,20 @@ impl Serialize for PresetInstance {
                 graph: self.graph.as_ref(),
             },
         )?;
-        if let Some(d) = &self.drivers {
+        if let Some(d) = crate::items(&self.drivers) {
             s.serialize_field("drivers", d)?;
         }
         // Envelope-home unification: effect envelopes ride on the instance.
-        if let Some(e) = &self.envelopes {
+        if let Some(e) = crate::items(&self.envelopes) {
             s.serialize_field("envelopes", e)?;
         }
-        if let Some(m) = &self.ableton_mappings {
+        if let Some(m) = crate::items(&self.ableton_mappings) {
             s.serialize_field("abletonMappings", m)?;
         }
-        if let Some(a) = &self.audio_mods {
+        if let Some(a) = crate::items(&self.audio_mods) {
             s.serialize_field("audioMods", a)?;
         }
-        if let Some(a) = &self.automation_lanes {
+        if let Some(a) = crate::items(&self.automation_lanes) {
             s.serialize_field("automationLanes", a)?;
         }
         if let Some(g) = &self.group_id {

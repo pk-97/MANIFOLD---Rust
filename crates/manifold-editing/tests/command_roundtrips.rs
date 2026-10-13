@@ -2495,3 +2495,68 @@ fn project_commands_undo_and_redo_restore_the_whole_project() {
         },
     ]);
 }
+
+/// Undo must restore the saved file byte for byte, and redo must reproduce
+/// the edited one. Undoing the first add into an optional list leaves an
+/// empty list behind in memory; the save must not see it (BUG-rr482 (undo
+/// leaves empty lists)).
+fn assert_undo_restores_saved_bytes(name: &str, mut project: Project, mut command: Box<dyn Command>) {
+    let before = serde_json::to_string(&project).unwrap();
+    command.execute(&mut project);
+    let after = serde_json::to_string(&project).unwrap();
+    assert_ne!(after, before, "{name}: the command changed nothing");
+    command.undo(&mut project);
+    assert_eq!(serde_json::to_string(&project).unwrap(), before, "{name}: undo");
+    command.execute(&mut project);
+    assert_eq!(serde_json::to_string(&project).unwrap(), after, "{name}: redo");
+}
+
+#[test]
+fn first_add_into_each_optional_list_undoes_to_the_same_saved_bytes() {
+    use manifold_core::GraphTarget;
+    use manifold_core::audio_mod::ParameterAudioMod;
+    use manifold_editing::commands::audio_mod::AddAudioModCommand;
+    use manifold_editing::commands::automation::AddAutomationPointCommand;
+
+    let with_master_bloom = || {
+        let mut project = make_test_project();
+        project.settings.master_effects.push(make_effect(&PresetTypeId::BLOOM));
+        let effect_id = project.settings.master_effects[0].id.clone();
+        (project, effect_id)
+    };
+    let mut project = make_test_project();
+    project.timeline.layers[1] = Layer::new_generator("Plasma".into(), PresetTypeId::PLASMA, 1);
+    let target = GraphTarget::Generator(project.timeline.layers[1].layer_id.clone());
+    assert_undo_restores_saved_bytes("generator envelope", project,
+        Box::new(AddEnvelopeCommand::new(target, make_envelope())));
+
+    let (project, effect_id) = with_master_bloom();
+    assert_undo_restores_saved_bytes("effect envelope", project,
+        Box::new(AddEnvelopeCommand::new(GraphTarget::Effect(effect_id), ParamEnvelope::new("amount"))));
+
+    let (project, effect_id) = with_master_bloom();
+    let driver = ParameterDriver::new("amount", BeatDivision::Quarter, DriverWaveform::Sine);
+    assert_undo_restores_saved_bytes("effect driver", project,
+        Box::new(AddDriverCommand::new(DriverTarget::Effect { effect_id }, driver)));
+
+    let (project, effect_id) = with_master_bloom();
+    let audio_mod = ParameterAudioMod::new(
+        "amount".into(), manifold_core::AudioSendId::new(""), manifold_core::AudioFeature::default(),
+    );
+    assert_undo_restores_saved_bytes("effect audio mod", project,
+        Box::new(AddAudioModCommand::new(DriverTarget::Effect { effect_id }, audio_mod)));
+
+    let (project, effect_id) = with_master_bloom();
+    let point = AutomationPoint { beat: Beats(0.0), value: 1.0, shape: SegmentShape::Linear };
+    assert_undo_restores_saved_bytes("effect automation lane", project,
+        Box::new(AddAutomationPointCommand::new(GraphTarget::Effect(effect_id), "amount", point)));
+
+    let project = make_test_project();
+    let layer_id = project.timeline.layers[0].layer_id.clone();
+    assert_undo_restores_saved_bytes("layer effect", project,
+        Box::new(AddEffectCommand::new(EffectTarget::Layer { layer_id }, make_effect(&PresetTypeId::BLOOM), 0)));
+
+    let (project, _) = with_master_bloom();
+    assert_undo_restores_saved_bytes("master effect group", project,
+        Box::new(GroupEffectsCommand::new(EffectTarget::Master, vec![0], "Group".into())));
+}

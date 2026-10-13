@@ -5,6 +5,22 @@ mod testkit_visibility;
 /// Build-time identity of core tempo sources used by recorded physics results.
 pub const SOURCE_IDENTITY: &str = env!("MANIFOLD_CORE_SOURCE_IDENTITY");
 
+/// Optional model lists have two in-memory forms of "nothing" (`None` and an
+/// emptied `Some`). The wire has one: absent. Undo of an add leaves `Some([])`,
+/// so serializing by `is_some` would change the saved file (BUG-rr482 (undo
+/// leaves empty lists)).
+pub(crate) fn has_items<T>(list: &Option<Vec<T>>) -> bool {
+    list.as_ref().is_some_and(|items| !items.is_empty())
+}
+
+pub(crate) fn items<T>(list: &Option<Vec<T>>) -> Option<&Vec<T>> {
+    list.as_ref().filter(|items| !items.is_empty())
+}
+
+pub(crate) fn has_no_items<T>(list: &Option<Vec<T>>) -> bool {
+    !has_items(list)
+}
+
 pub mod ableton_mapping;
 pub mod audio_clip_detection;
 pub mod audio_features;
