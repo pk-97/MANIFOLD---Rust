@@ -184,25 +184,13 @@
       "scene-modifier-preset"
     ],
     "crates/manifold-app/src/ui_bridge/projection/material.rs": [
-      "material-inspector-colour",
-      "material-inspector-features",
-      "material-inspector-groups",
-      "material-inspector-looks",
-      "material-inspector-textures"
+      "material-inspector-colour"
     ],
     "crates/manifold-app/src/ui_bridge/material_looks.rs": [
-      "material-inspector-colour",
-      "material-inspector-features",
-      "material-inspector-groups",
-      "material-inspector-looks",
-      "material-inspector-textures"
+      "material-inspector-colour"
     ],
     "crates/manifold-app/src/ui_bridge/material_colour.rs": [
-      "material-inspector-colour",
-      "material-inspector-features",
-      "material-inspector-groups",
-      "material-inspector-looks",
-      "material-inspector-textures"
+      "material-inspector-colour"
     ]
   },
   "flows": {
@@ -270,11 +258,7 @@
     "render-mode-wireframe": "gltfscene",
     "render-mode-solid": "gltfscene",
     "render-mode-points": "gltfscene",
-    "material-inspector-groups": "gltfscene",
     "material-inspector-colour": "gltfscene",
-    "material-inspector-features": "gltfscene",
-    "material-inspector-looks": "gltfscene",
-    "material-inspector-textures": "gltfscene",
     "physics-box-count": "physicsboxes",
     "scene-panel-card-convergence-c-p1b-object-scrub": "gltfscene",
     "scene-setup-add-fog-drag": "gltfscene",

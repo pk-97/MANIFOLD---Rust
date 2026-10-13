@@ -805,3 +805,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "material_inspector_tests.rs"]
+mod material_inspector_tests;
