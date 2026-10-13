@@ -15,19 +15,21 @@ use crate::ports::PortType;
 
 type ReusableKey = (PortType, u64);
 
-/// Private scratch required by a family array output.
+/// Private scratch required by one array output of a node family.
 pub struct ArrayScratch {
     pub type_id: &'static str,
+    /// The output whose allocation size drives the scratch.
+    pub port: &'static str,
     pub bytes: fn(u64) -> Option<u64>,
 }
 inventory::collect!(ArrayScratch);
 
-pub fn array_scratch(type_id: &str) -> Option<fn(u64) -> Option<u64>> {
+pub fn array_scratch(type_id: &str) -> Option<&'static ArrayScratch> {
     let mut entries = inventory::iter::<ArrayScratch>.into_iter()
         .filter(|entry| entry.type_id == type_id);
     let entry = entries.next()?;
     assert!(entries.next().is_none(), "duplicate array scratch provider");
-    Some(entry.bytes)
+    Some(entry)
 }
 type ReusableBuckets = AHashMap<ReusableKey, Vec<ResourceId>>;
 
@@ -198,6 +200,7 @@ pub struct ArrayStorage {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ArrayAllocation {
     pub node: NodeInstanceId,
+    pub port: &'static str,
     pub resource: ResourceId,
     pub bytes: u64,
     pub zero_init: bool,
@@ -534,6 +537,7 @@ pub fn plan_array_allocations(
                 } else {
                     actions.push(ArrayAllocationAction::Allocate(ArrayAllocation {
                         node: step.node,
+                        port: port_name,
                         resource: *resource,
                         bytes,
                         zero_init,

@@ -28,6 +28,8 @@ struct AxisBounds { minimum: i32, maximum: i32, valid: bool, empty: bool };
 @group(0) @binding(3) var<storage, read_write> prefix: array<u32>;
 @group(0) @binding(4) var<storage, read_write> status: array<atomic<u32>>;
 @group(0) @binding(5) var<storage, read_write> map: array<Vec4Vertex>;
+// Live record count: the valid records are compacted at the front of `map`.
+@group(0) @binding(6) var<storage, read_write> live_count: array<u32>;
 
 fn finite(v: f32) -> bool { return v == v && abs(v) <= 3.402823466e+38; }
 fn finite3(v: vec3<f32>) -> bool { return finite(v.x) && finite(v.y) && finite(v.z); }
@@ -261,6 +263,7 @@ fn emit_polygon(polygon: Polygon, triangle: u32, start: u32) {
 @compute @workgroup_size(256, 1, 1)
 fn clear_main(@builtin(global_invocation_id) id: vec3<u32>) {
     if id.x < params.output_capacity { map[id.x] = Vec4Vertex(vec4<f32>(0.0, 0.0, 0.0, -1.0)); }
+    if id.x == 0u { live_count[0] = 0u; }
 }
 @compute @workgroup_size(1, 1, 1)
 fn clear_status_main() { atomicStore(&status[3], 0u); }
@@ -340,6 +343,8 @@ fn scan_main() {
         } else { total = total + block_sum; }
     }
     atomicStore(&status[0], total);
+    // emit_main writes nothing when status[1] is set, so the live count is 0.
+    live_count[0] = select(total, 0u, atomicLoad(&status[1]) != 0u);
 }
 
 fn emit_cells(triangle: u32, start: u32) {

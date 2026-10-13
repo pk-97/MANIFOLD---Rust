@@ -629,6 +629,84 @@ pub(super) fn apply(
         }
         wire_to(def, object, "topology", (map_id, "map".into()));
     }
+    align_mesh_diagrams(def, &mut next_id, &lineages, &mut remap_cache)
+}
+
+/// Math View seam. The diagram compares `reference_mesh` with `current_mesh`
+/// face by face, and its samplers pick faces by index, so the reference and
+/// its sampler are remapped through the current mesh's cut maps. Every
+/// sampler also reads the last map's live count so it never samples the
+/// map's padded tail. Incompatible lineages are left alone; the diagram's
+/// size guard then hides the arrows.
+fn align_mesh_diagrams(
+    def: &mut EffectGraphDef,
+    next_id: &mut u32,
+    lineages: &BTreeMap<Address, Lineage>,
+    cache: &mut BTreeMap<(Address, u32, RemapKind), Address>,
+) -> Result<(), SceneModifierExpandError> {
+    let diagrams: Vec<u32> = def
+        .nodes
+        .iter()
+        .filter(|node| node.type_id == "node.render_mesh_diagram")
+        .map(|node| node.id)
+        .collect();
+    for diagram in diagrams {
+        let Some(current) = input(def, diagram, "current_mesh") else {
+            continue;
+        };
+        let target = mesh_input_lineage(lineages, &current);
+        let Some(map_id) = target.maps.last().copied() else {
+            continue;
+        };
+        let compatible = |lineage: &Lineage| {
+            lineage.source == target.source
+                && lineage.maps.len() <= target.maps.len()
+                && target.maps[..lineage.maps.len()] == lineage.maps[..]
+        };
+        if let Some(reference) = input(def, diagram, "reference_mesh") {
+            let lineage = mesh_input_lineage(lineages, &reference);
+            if compatible(&lineage) {
+                let aligned = align_mesh(
+                    def,
+                    next_id,
+                    (reference.from_node, reference.from_port),
+                    &lineage,
+                    &target,
+                    cache,
+                    RemapKind::Mesh,
+                )?;
+                wire_to(def, diagram, "reference_mesh", aligned);
+            }
+        }
+        let samplers: BTreeSet<u32> = ["current", "reference", "incoming"]
+            .iter()
+            .filter_map(|port| input(def, diagram, port))
+            .map(|wire| wire.from_node)
+            .filter(|id| {
+                node(def, *id).is_some_and(|node| node.type_id == "node.sample_mesh_triangles")
+            })
+            .collect();
+        for sampler in samplers {
+            let Some(mesh) = input(def, sampler, "in") else {
+                continue;
+            };
+            let lineage = mesh_input_lineage(lineages, &mesh);
+            if !compatible(&lineage) {
+                continue;
+            }
+            let aligned = align_mesh(
+                def,
+                next_id,
+                (mesh.from_node, mesh.from_port),
+                &lineage,
+                &target,
+                cache,
+                RemapKind::Mesh,
+            )?;
+            wire_to(def, sampler, "in", aligned);
+            wire_to(def, sampler, "live_count", (map_id, "live_count".into()));
+        }
+    }
     Ok(())
 }
 
