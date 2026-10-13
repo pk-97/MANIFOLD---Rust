@@ -293,7 +293,15 @@ class Guards(unittest.TestCase):
         with patch.dict(guard.tool_inventory.COST_CLASSES, {"gpu_scope.py": "broad"}):
             self.assertEqual(["broad"], list(guard.expensive_checks("python3 scripts/gpu_scope.py")))
             self.assertEqual(["broad"], list(guard.expensive_checks("python3 scripts/dev.py gpu-scope")))
-        self.assertEqual(["focused"], list(guard.expensive_checks("python3 scripts/test_census.py")))
+        # An explicit entry overrides the test_*.py unit default: test_lab.py is
+        # the live declared one, a patched entry pins the rule under scripts/.
+        self.assertEqual("focused", guard.tool_inventory.COST_CLASSES["test_lab.py"])
+        self.assertEqual(["focused"], list(guard.expensive_checks(
+            "python3 tools/audio_analysis/lab/test_lab.py")))
+        self.assertEqual(["focused"], list(guard.expensive_checks("python3 scripts/dev.py lab-test")))
+        self.assertEqual([], list(guard.expensive_checks("python3 scripts/test_dev.py")))
+        with patch.dict(guard.tool_inventory.COST_CLASSES, {"test_dev.py": "focused"}):
+            self.assertEqual(["focused"], list(guard.expensive_checks("python3 scripts/test_dev.py")))
         for command in ("python3 scripts/dev.py --help", "cat scripts/rt_toggle_matrix.py",
                         "python3 scripts/test_dev.py --fixture scripts/trunk_health.py"):
             self.assertEqual([], list(guard.expensive_checks(command)))
