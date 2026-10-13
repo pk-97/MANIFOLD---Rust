@@ -13,7 +13,7 @@ use objc2_foundation::NSString;
 use objc2_metal::{
     MTLBinaryArchive, MTLBuffer, MTLCommandBuffer, MTLCommandQueue, MTLCompileOptions,
     MTLCommandBufferDescriptor, MTLCommandBufferErrorOption,
-    MTLComputePipelineDescriptor, MTLDepthStencilDescriptor, MTLDevice, MTLFence, MTLHeap, MTLHeapDescriptor,
+    MTLComputePipelineDescriptor, MTLDepthStencilDescriptor, MTLDevice, MTLHeap, MTLHeapDescriptor,
     MTLLanguageVersion, MTLLibrary, MTLPipelineOption, MTLRenderPipelineDescriptor, MTLResource,
     MTLResourceOptions, MTLSamplerDescriptor, MTLStorageMode, MTLTexture, MTLTextureDescriptor,
     MTLTextureType, MTLTextureUsage, MTLVertexDescriptor, MTLVertexStepFunction,
@@ -168,18 +168,6 @@ pub struct GpuDevice {
     /// code is device-global, instances own data. OnceLock like
     /// `clear_pipelines`; populate-once, never on the hot path.
     rt_pipelines: std::sync::OnceLock<super::raytrace::RtPipelines>,
-    /// Orders this queue's compute and acceleration-structure encoders
-    /// (BUG-k1n2w RT trace hangs). Metal tracks hazards only on directly
-    /// bound resources; a trace reaches each object's BLAS through the TLAS
-    /// and vertex data through raw addresses, and a refit rewrites that
-    /// BLAS in place. Without this fence a refit can land while an earlier
-    /// trace is still walking the structure, and the walk reads a tree
-    /// mid-rewrite: it exits at once or never. Every compute encoder waits
-    /// on the fence when it opens and updates it when it ends; the AS
-    /// encoder does the same, so mesh writes, the structure update, the
-    /// trace and the next frame run in order. One queue per device, so the
-    /// fence never crosses queues.
-    order_fence: Retained<ProtocolObject<dyn MTLFence>>,
     /// Lazily-created linear (bilinear) sampler with clamp addressing.
     /// Shared by `GpuEncoder::resize_sample` and any other helper that
     /// needs a default filtering sampler without minting a fresh
@@ -251,12 +239,10 @@ impl GpuDevice {
         let queue = device
             .newCommandQueue()
             .expect("Failed to create command queue");
-        let order_fence = device.newFence().expect("Failed to create the encoder order fence");
         Self {
             resource_scope_id,
             device,
             queue,
-            order_fence,
             archive: std::sync::Mutex::new(None),
             compute_cache: std::sync::Mutex::new(std::collections::HashMap::new()),
             render_cache: std::sync::Mutex::new(std::collections::HashMap::new()),
@@ -1452,7 +1438,6 @@ impl GpuDevice {
         let cmd_buf = self.new_command_buffer(label);
         GpuEncoder {
             cmd_buf,
-            order_fence: self.order_fence.clone(),
             state: EncoderState::None,
             compute_cache: super::encoder::ComputeBindCache::new(),
             render_cache: RenderBindCache::new(),
