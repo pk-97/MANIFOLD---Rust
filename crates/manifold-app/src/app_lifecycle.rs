@@ -127,6 +127,8 @@ impl Application {
             self.ws.ui_root.inspector.layer_chrome().is_collapsed();
         self.local_project.settings.clip_chrome_collapsed =
             self.ws.ui_root.inspector.clip_chrome().is_collapsed();
+        self.local_project.settings.audio_triggers_collapsed =
+            self.ws.ui_root.inspector.audio_trigger_section().collapsed_setting();
     }
 
     /// Save. Delegates to ProjectIOService.save_project.

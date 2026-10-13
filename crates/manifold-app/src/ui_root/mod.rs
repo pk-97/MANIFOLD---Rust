@@ -699,6 +699,9 @@ impl UIRoot {
         self.inspector
             .clip_chrome_mut()
             .set_collapsed(settings.clip_chrome_collapsed);
+        self.inspector
+            .audio_trigger_section_mut()
+            .set_collapsed(settings.audio_triggers_collapsed);
     }
 
     /// Build all panels. Call once after creation and after resize.
