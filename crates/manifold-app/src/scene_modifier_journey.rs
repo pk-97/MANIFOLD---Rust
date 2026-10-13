@@ -880,7 +880,7 @@ fn legacy_math_view_migration_journey() {
         .expect("reconcile legacy carrier")
         .graph;
         owner.refresh_manifest_from_graph();
-        // Non-default Mode and Scope both survive migration.
+        // Non-default Mode survives migration; the retired Scope does not.
         let mode_macro = format!("sceneModifier:[\"{carrier_id}\",\"math_view_mode\"]");
         owner.set_base_param(mode_macro.as_str(), 1.0);
         let scope_macro = format!("sceneModifier:[\"{carrier_id}\",\"math_view_scope\"]");
@@ -944,25 +944,19 @@ fn legacy_math_view_migration_journey() {
         1.0,
         "saved Mode value survives migration"
     );
-    // Scope keeps its stable macro id but leaves the authoring card.
+    // The retired Scope leaves the host entirely.
     let scope_macro = format!("sceneModifier:[\"{carrier_id}\",\"math_view_scope\"]");
     assert!(
-        graph
+        !graph
             .preset_metadata
             .as_ref()
             .unwrap()
             .bindings
             .iter()
             .any(|binding| binding.id == scope_macro),
-        "scope binding survives"
+        "scope binding is dropped"
     );
-    assert!(
-        owner.params.contains(scope_macro.as_str()),
-        "scope host param survives"
-    );
-    assert_eq!(owner.get_base_param(&scope_macro), 0.0);
-    assert!(!graph.preset_metadata.as_ref().unwrap().params.iter()
-        .find(|param| param.id == scope_macro).unwrap().card_visible);
+    assert!(!owner.params.contains(scope_macro.as_str()), "scope host param is dropped");
     // The view's enabled param got a fresh host binding.
     let _ = host_binding(&reopened, &layer_id, &view.id, "enabled");
 
@@ -2117,9 +2111,10 @@ fn legacy_math_view_reuse_guards_migration_journey() {
     );
 }
 
-/// Scope remains an animated hidden binding after migration and save/reload.
+/// The retired Scope leaves with its LFO; Mode survives on the view, and the
+/// result is stable across save/reload.
 #[test]
-fn legacy_math_view_isolated_scope_preservation_journey() {
+fn legacy_math_view_scope_is_dropped_with_its_lfo_journey() {
     use manifold_core::scene_modifier_math_view as mv;
     let (mut project, layer_id, frames, project_scene) = legacy_carrier_project();
     // A plain modifier precedes the carrier in the same scene.
@@ -2156,7 +2151,7 @@ fn legacy_math_view_isolated_scope_preservation_journey() {
     }
     let mut migrated = project.clone();
     let notices = crate::project_io::migrate_project_scene_graphs(&mut migrated);
-    assert!(notices.is_empty(), "Scope is preserved: {notices:?}");
+    assert!(notices.is_empty(), "clean migration: {notices:?}");
     let graph = generator_graph(&migrated, &layer_id);
     assert_eq!(graph.scene_modifiers.len(), 3, "preceding modifier, carrier, view");
     assert!(
@@ -2165,26 +2160,18 @@ fn legacy_math_view_isolated_scope_preservation_journey() {
     );
     let scope_macro = carrier_macro(&carrier, "scope");
     assert!(
-        graph
-            .preset_metadata
-            .as_ref()
-            .unwrap()
-            .bindings
-            .iter()
-            .any(|binding| binding.id == scope_macro && matches!(&binding.target,
-                BindingTarget::SceneModifier { modifier_id, param_id }
-                    if modifier_id == &graph.scene_modifiers[2].id && param_id == "math_view_scope")),
-        "scope binding retargets to the view"
+        !graph.preset_metadata.as_ref().unwrap().bindings.iter().any(|binding| binding.id == scope_macro),
+        "scope binding is dropped"
     );
     let view = &graph.scene_modifiers[2];
     assert_eq!(view.legacy_math_view_carrier.as_ref(), Some(&carrier));
-    assert!(mv::has_legacy_scope_control(&view.graph));
     assert!(!view.graph.preset_metadata.as_ref().unwrap().params.iter()
-        .find(|param| param.id == "math_view_scope").unwrap().card_visible);
+        .any(|param| param.id == "math_view_scope"));
     let target = manifold_core::GraphTarget::Generator(layer_id.clone());
     let owner = migrated.graph_target_owner(&target).unwrap();
-    assert_eq!(owner.get_base_param(&scope_macro), 0.0);
-    assert!(owner.drivers.as_ref().unwrap().iter().any(|driver| driver.param_id.as_ref() == scope_macro));
+    assert!(!owner.params.contains(scope_macro.as_str()));
+    assert!(!owner.drivers.as_ref().unwrap().iter().any(|driver| driver.param_id.as_ref() == scope_macro));
+    assert_eq!(owner.get_base_param(&carrier_macro(&carrier, "mode")), 1.0);
     let dir = PathBuf::from("target/journey-proofs/math-view-scope");
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("migrated-scope.manifold");
@@ -2193,6 +2180,159 @@ fn legacy_math_view_isolated_scope_preservation_journey() {
     assert!(crate::project_io::migrate_project_scene_graphs(&mut reloaded).is_empty());
     let reloaded_owner = reloaded.graph_target_owner(&target).unwrap();
     assert_eq!(serde_json::to_value(owner).unwrap(), serde_json::to_value(reloaded_owner).unwrap());
+}
+
+/// A Math View saved before Pulse, Scan and Connect to Mesh were removed, in
+/// the old card layout and still carrying the legacy Scope, upgrades on load:
+/// the removed controls leave the view, the host, their LFO, automation lane
+/// and project macro; kept controls keep their values; Display is one
+/// contiguous section in bundled order; and a second load changes nothing.
+#[test]
+fn saved_math_view_drops_removed_controls_on_load_journey() {
+    use manifold_core::macro_bank::{MacroCurve, MacroMapping, MacroMappingTarget};
+    use manifold_core::scene_modifier_math_view as mv;
+    let bundled: EffectGraphDef =
+        serde_json::from_str(manifold_nodes::testkit::assets::ASSETS_SCENE_MODIFIER_PRESETS_MATHVIEW_JSON)
+            .expect("Math View recipe parses");
+    // The old shape: Pulse, Scan and Mesh sections sat between the Display
+    // toggles and Density, and migrated views carried a hidden Scope.
+    let mut saved = bundled.clone();
+    {
+        let metadata = saved.preset_metadata.as_mut().unwrap();
+        let template_spec = metadata.params.iter().find(|p| p.id == "math_view_mode").unwrap().clone();
+        let template_binding = metadata.bindings.iter().find(|b| b.id == "math_view_mode").unwrap().clone();
+        let template_node = saved.nodes.iter().find(|n| n.node_id.as_str() == "__math_view_mode").unwrap().clone();
+        let at = metadata.params.iter().position(|p| p.id == "math_view_density").unwrap();
+        let mut next_node = saved.nodes.iter().map(|n| n.id).max().unwrap() + 1;
+        for (index, suffix) in mv::REMOVED_CONTROLS.iter().enumerate() {
+            let id = format!("math_view_{suffix}");
+            let mut spec = template_spec.clone();
+            spec.id = id.clone();
+            spec.name = (*suffix).into();
+            spec.section = Some(match *suffix {
+                s if s.starts_with("pulse") => "Pulse",
+                s if s.starts_with("scan") => "Scan",
+                "connect_mesh" => "Mesh",
+                _ => "Display",
+            }.into());
+            spec.card_visible = *suffix != "scope";
+            let mut binding = template_binding.clone();
+            binding.id = id.clone();
+            binding.target = BindingTarget::Node {
+                node_id: NodeId::new(format!("__math_view_{suffix}")),
+                param: "value".into(),
+            };
+            let mut node = template_node.clone();
+            node.id = next_node;
+            next_node += 1;
+            node.node_id = NodeId::new(format!("__math_view_{suffix}"));
+            node.handle = Some(id.clone());
+            if *suffix == "scope" {
+                metadata.params.push(spec);
+            } else {
+                metadata.params.insert(at + index, spec);
+            }
+            metadata.bindings.push(binding);
+            saved.nodes.push(node);
+        }
+    }
+    let (mut project, layer_id, frames, scene) = legacy_carrier_project();
+    let view = NodeId::new("saved_math_view");
+    push_modifier(&mut project, &layer_id, &view, &scene, frames, saved, true);
+    let target = manifold_core::GraphTarget::Generator(layer_id.clone());
+    let removed: Vec<String> = mv::REMOVED_CONTROLS.iter().map(|s| carrier_macro(&view, s)).collect();
+    for suffix in mv::REMOVED_CONTROLS {
+        let _ = host_binding(&project, &layer_id, &view, &format!("math_view_{suffix}"));
+    }
+    {
+        let owner = project.graph_target_owner_mut(&target).unwrap();
+        owner.set_base_param(&carrier_macro(&view, "mode"), 2.0);
+        owner.set_base_param(&carrier_macro(&view, "grid_brightness"), 0.5);
+        owner.set_base_param(&carrier_macro(&view, "pulse"), 1.0);
+        owner.drivers_mut().push(ParameterDriver::new(
+            ParamId::from(carrier_macro(&view, "pulse")),
+            BeatDivision::Whole,
+            DriverWaveform::Sine,
+        ));
+        owner.automation_lanes_mut().push(manifold_core::effects::AutomationLane {
+            param_id: ParamId::from(carrier_macro(&view, "scan_amount")),
+            enabled: true,
+            points: Vec::new(),
+        });
+        owner.refresh_manifest_from_graph();
+    }
+    let kept_macro = MacroMapping {
+        target: MacroMappingTarget::GenParam {
+            layer_id: layer_id.clone(),
+            param_id: ParamId::from(carrier_macro(&view, "mode")),
+        },
+        range_min: 0.0,
+        range_max: 1.0,
+        curve: MacroCurve::Linear,
+        legacy_param_index: None,
+        legacy_effect_addr: None,
+    };
+    let mut removed_macro = kept_macro.clone();
+    removed_macro.target = MacroMappingTarget::GenParam {
+        layer_id: layer_id.clone(),
+        param_id: ParamId::from(carrier_macro(&view, "connect_mesh")),
+    };
+    project.settings.macro_bank.slots[0].mappings = vec![kept_macro, removed_macro];
+
+    let dir = PathBuf::from("target/journey-proofs/math-view-removed-controls");
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("saved.manifold");
+    manifold_io::saver::save_project_v1(&project, &path).unwrap();
+    let mut loaded = manifold_io::loader::load_project(&path).unwrap();
+    let notices = crate::project_io::migrate_project_scene_graphs(&mut loaded);
+    // The fixture also draws an unrelated scene-camera notice; only Math View
+    // problems matter here.
+    assert!(notices.iter().all(|n| !n.contains("Math View")), "clean upgrade: {notices:?}");
+
+    let graph = generator_graph(&loaded, &layer_id);
+    let instance = graph.scene_modifiers.iter().find(|m| m.id == view).unwrap();
+    let view_metadata = instance.graph.preset_metadata.as_ref().unwrap();
+    for suffix in mv::REMOVED_CONTROLS {
+        let local = format!("math_view_{suffix}");
+        assert!(!view_metadata.params.iter().any(|p| p.id == local), "{local} param left");
+        assert!(!view_metadata.bindings.iter().any(|b| b.id == local), "{local} binding left");
+        assert!(
+            !instance.graph.nodes.iter().any(|n| n.node_id.as_str() == format!("__math_view_{suffix}")),
+            "{local} node left"
+        );
+    }
+    let host_metadata = graph.preset_metadata.as_ref().unwrap();
+    let owner = loaded.graph_target_owner(&target).unwrap();
+    for id in &removed {
+        assert!(!host_metadata.bindings.iter().any(|b| &b.id == id), "host binding {id} left");
+        assert!(!host_metadata.params.iter().any(|p| &p.id == id), "host param spec {id} left");
+        assert!(!owner.params.contains(id.as_str()), "host param {id} left");
+    }
+    assert!(owner.drivers.iter().flatten().all(|d| !removed.contains(&d.param_id.to_string())), "LFO left");
+    assert!(owner.automation_lanes.iter().flatten().all(|l| !removed.contains(&l.param_id.to_string())), "lane left");
+    let mappings = &loaded.settings.macro_bank.slots[0].mappings;
+    assert_eq!(mappings.len(), 1, "only the removed control's macro mapping goes");
+    assert!(matches!(&mappings[0].target, MacroMappingTarget::GenParam { param_id, .. }
+        if param_id.as_ref() == carrier_macro(&view, "mode")));
+    assert_eq!(owner.get_base_param(&carrier_macro(&view, "mode")), 2.0);
+    assert_eq!(owner.get_base_param(&carrier_macro(&view, "grid_brightness")), 0.5);
+    // Bundled order, so Display is one contiguous run.
+    let ids: Vec<&str> = view_metadata.params.iter().map(|p| p.id.as_str()).collect();
+    let expected: Vec<&str> = bundled.preset_metadata.as_ref().unwrap().params.iter().map(|p| p.id.as_str()).collect();
+    assert_eq!(ids, expected);
+    let display: Vec<usize> = view_metadata.params.iter().enumerate()
+        .filter(|(_, p)| p.section.as_deref() == Some("Display")).map(|(at, _)| at).collect();
+    assert!(display.windows(2).all(|w| w[1] == w[0] + 1), "Display is contiguous: {display:?}");
+
+    // Loading twice changes nothing.
+    let once = serde_json::to_value(loaded.graph_target_owner(&target).unwrap()).unwrap();
+    let once_macros = serde_json::to_value(&loaded.settings.macro_bank).unwrap();
+    let path = dir.join("upgraded.manifold");
+    manifold_io::saver::save_project_v1(&loaded, &path).unwrap();
+    let mut reloaded = manifold_io::loader::load_project(&path).unwrap();
+    crate::project_io::migrate_project_scene_graphs(&mut reloaded);
+    assert_eq!(once, serde_json::to_value(reloaded.graph_target_owner(&target).unwrap()).unwrap());
+    assert_eq!(once_macros, serde_json::to_value(&reloaded.settings.macro_bank).unwrap());
 }
 /// Historical partial control sets (BUG-t8at): the real bundled Vortex
 /// snapshots from each legacy era detect as carriers, migrate to a standalone

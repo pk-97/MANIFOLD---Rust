@@ -16,18 +16,13 @@ use crate::NodeId;
 pub const MATH_VIEW_RECIPE_ID: &str = "MathView";
 
 /// Separate admission cap for stage-less Math View instances, split from the
-/// stage-carrier limit in `prepare_scene_modifiers`. Budget per view, surveyed
-/// 2026-09-18: (1) the parent prepared def gains 2 generated nodes per sampled
-/// object (samples, export) plus one route per shared control
-/// (~20); (2) the runtime owns one derived sparse `PresetRuntime` per new view
-/// (two only for migrated Scope compatibility),
-/// evaluating the preceding chain over at most 512 sampled triangles per
-/// object (density-bounded), plus 2 output-size render targets and a fixed
-/// small pipeline/sampler set; (3) the modifier buffer budget is byte-based
-/// (`buffer_budget.rs`), not count-based, so it self-limits regardless of view
-/// count. Nothing scales quadratically in views, so the view cap matches the
-/// stage-carrier cap: 16 carriers migrating to 16 views yields 32 total
-/// modifiers, which must fit (BUG-ty86).
+/// stage-carrier limit in `prepare_scene_modifiers`. Per view and sampled
+/// object the parent graph gains two triangle samplers and one diagram, plus
+/// one route per shared control, a switch and two overs per view; the
+/// modifier buffer budget (`buffer_budget.rs`) is byte-based, so it
+/// self-limits regardless of view count. Nothing scales quadratically in
+/// views, so the view cap matches the stage-carrier cap: 16 carriers
+/// migrating to 16 views yields 32 total modifiers, which must fit (BUG-ty86).
 pub const MAX_MATH_VIEW_MODIFIERS: usize = 16;
 
 pub const CONTROL_PREFIX: &str = "math_view_";
@@ -175,20 +170,88 @@ pub fn strip_legacy_math_view_controls(graph: &mut EffectGraphDef) -> bool {
     if !has_legacy_math_view_controls(graph) {
         return false;
     }
-    let is_control_param = |id: &str| id.starts_with(CONTROL_PREFIX);
-    let is_control_node = |id: &NodeId| id.as_str().starts_with("__math_view_");
-    if let Some(metadata) = graph.preset_metadata.as_mut() {
-        metadata.params.retain(|param| !is_control_param(&param.id));
-        metadata.bindings.retain(|binding| !is_control_param(&binding.id));
-    }
-    graph.nodes.retain(|node| !is_control_node(&node.node_id));
+    strip_controls(graph, |_| true);
     true
 }
 
+/// Controls a saved Math View may still carry that no longer exist: Pulse,
+/// Scan and Connect to Mesh (removed 2026-10-13) and the legacy Scope.
+pub const REMOVED_CONTROLS: &[&str] = &[
+    "pulse",
+    "pulse_strength",
+    "pulse_target",
+    "pulse_beats",
+    "pulse_trigger",
+    "scan_amount",
+    "scan_progress",
+    "scan_width",
+    "scan_direction",
+    "scan_mode",
+    "scan_target",
+    "scan_beats",
+    "scan_trigger",
+    "connect_mesh",
+    "scope",
+];
+
+fn is_removed_control(suffix: &str) -> bool {
+    REMOVED_CONTROLS.contains(&suffix)
+}
+
+/// Remove `math_view_<suffix>` params and bindings and `__math_view_<suffix>`
+/// nodes (and any wire touching them) for every suffix `strip` accepts.
+/// Returns whether anything was removed.
+fn strip_controls(graph: &mut EffectGraphDef, strip: impl Fn(&str) -> bool) -> bool {
+    let param = |id: &str| id.strip_prefix(CONTROL_PREFIX).is_some_and(&strip);
+    let node = |id: &NodeId| id.as_str().strip_prefix("__math_view_").is_some_and(&strip);
+    let before = (graph.nodes.len(), graph.wires.len());
+    let mut changed = false;
+    if let Some(metadata) = graph.preset_metadata.as_mut() {
+        let counts = (metadata.params.len(), metadata.bindings.len());
+        metadata.params.retain(|spec| !param(&spec.id));
+        metadata.bindings.retain(|binding| !param(&binding.id));
+        changed |= counts != (metadata.params.len(), metadata.bindings.len());
+    }
+    let removed: std::collections::HashSet<u32> = graph
+        .nodes
+        .iter()
+        .filter(|n| node(&n.node_id))
+        .map(|n| n.id)
+        .collect();
+    graph.nodes.retain(|n| !removed.contains(&n.id));
+    graph
+        .wires
+        .retain(|w| !removed.contains(&w.from_node) && !removed.contains(&w.to_node));
+    changed || before != (graph.nodes.len(), graph.wires.len())
+}
+
+/// Load-time upgrade of a saved standalone Math View instance: drop the
+/// removed controls and put the params in the bundled card order (Enabled,
+/// then `CONTROLS`), so Display is one contiguous section. Idempotent;
+/// returns whether anything changed. Host bindings are the caller's job
+/// (`drop_removed_math_view_bindings`).
+pub fn upgrade_math_view_instance(graph: &mut EffectGraphDef) -> bool {
+    if !is_math_view_recipe(graph) {
+        return false;
+    }
+    let mut changed = strip_controls(graph, is_removed_control);
+    let Some(metadata) = graph.preset_metadata.as_mut() else {
+        return changed;
+    };
+    let rank = |id: &str| -> usize {
+        id.strip_prefix(CONTROL_PREFIX)
+            .and_then(|suffix| CONTROLS.iter().position(|(s, ..)| *s == suffix))
+            .map_or(if id.starts_with(CONTROL_PREFIX) { CONTROLS.len() + 1 } else { 0 }, |at| at + 1)
+    };
+    let order: Vec<String> = metadata.params.iter().map(|p| p.id.clone()).collect();
+    metadata.params.sort_by_key(|spec| rank(&spec.id));
+    changed |= metadata.params.iter().map(|p| &p.id).ne(order.iter());
+    changed
+}
 /// Move one carrier's host Math View bindings onto the standalone instance.
-/// Only bindings for params the view recipe declares are moved, including
-/// its hidden legacy Scope when present. Host binding ids are left unchanged so
-/// host-side values, animation and modulation keyed by id survive; only the
+/// Only bindings for params the view recipe declares are moved. Host binding
+/// ids are left unchanged so host-side values, animation and modulation keyed
+/// by id survive; only the target changes. Returns the number moved.
 /// target changes. Returns the number of retargeted bindings.
 pub fn retarget_math_view_bindings(
     owner: &mut EffectGraphDef,
@@ -221,11 +284,6 @@ pub fn retarget_math_view_bindings(
             && declared.contains(param_id.as_str())
         {
             *modifier_id = to.clone();
-            if param_id == "math_view_scope"
-                && let Some(spec) = metadata.params.iter_mut().find(|p| p.id == binding.id)
-            {
-                spec.card_visible = false;
-            }
             moved += 1;
         }
     }
@@ -236,13 +294,28 @@ pub fn retarget_math_view_bindings(
 /// params (the standalone instance already received the donor's). Returns the
 /// removed host param ids so the caller can prune live instance state.
 pub fn drop_math_view_bindings(owner: &mut EffectGraphDef, carrier: &NodeId) -> Vec<String> {
+    drop_host_bindings(owner, carrier, |_| true)
+}
+
+/// Drop a view's host bindings and host params for the removed controls.
+/// Returns the removed host param ids so the caller can prune animation and
+/// modulation keyed by them.
+pub fn drop_removed_math_view_bindings(owner: &mut EffectGraphDef, view: &NodeId) -> Vec<String> {
+    drop_host_bindings(owner, view, is_removed_control)
+}
+
+fn drop_host_bindings(
+    owner: &mut EffectGraphDef,
+    modifier: &NodeId,
+    strip: impl Fn(&str) -> bool,
+) -> Vec<String> {
     let Some(metadata) = owner.preset_metadata.as_mut() else {
         return Vec::new();
     };
     let mut removed = Vec::new();
     metadata.bindings.retain(|binding| {
         let drop = matches!(&binding.target, BindingTarget::SceneModifier { modifier_id, param_id }
-            if modifier_id == carrier && param_id.starts_with(CONTROL_PREFIX));
+            if modifier_id == modifier && param_id.strip_prefix(CONTROL_PREFIX).is_some_and(&strip));
         if drop {
             removed.push(binding.id.clone());
         }
@@ -352,30 +425,6 @@ pub fn carrier_has_authored_math_view_content(
         }
     }
     false
-}
-
-/// Retain the original Scope macro and automation as hidden compatibility data.
-pub fn preserve_legacy_scope_control(carrier: &EffectGraphDef, view: &mut EffectGraphDef) {
-    if has_legacy_scope_control(view) {
-        return;
-    }
-    let Some(metadata) = &carrier.preset_metadata else { return; };
-    let Some(spec) = metadata.params.iter().find(|p| p.id == "math_view_scope") else { return; };
-    let Some(binding) = metadata.bindings.iter().find(|b| b.id == "math_view_scope") else { return; };
-    let Some(node) = carrier.nodes.iter().find(|n| n.node_id == control_node_id("scope")) else { return; };
-    let mut spec = spec.clone();
-    spec.card_visible = false;
-    let mut node = node.clone();
-    node.id = view.nodes.iter().map(|n| n.id).max().unwrap_or(0) + 1;
-    let metadata = view.preset_metadata.as_mut().expect("Math View recipe metadata");
-    metadata.params.push(spec);
-    metadata.bindings.push(binding.clone());
-    view.nodes.push(node);
-}
-
-/// New views omit Scope; migrated views retain it for playback compatibility.
-pub fn has_legacy_scope_control(graph: &EffectGraphDef) -> bool {
-    is_math_view_recipe(graph) && control_present(graph, "scope")
 }
 
 /// The carrier's embedded `__math_view_*` control node values, suffix → value.

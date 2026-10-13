@@ -8,6 +8,8 @@ Peter wants to show “the pure math, the graphs, lines, behaviours” behind a 
 
 ## 8. Standalone Math View — one modifier owns the view — k3 (lead), 2026-09-17
 
+**Status 2026-10-13:** derived runtimes, Pulse, Scan and Connect to Mesh are removed; the view reads the real mesh in the parent graph (captured before `append_instance`, finished after write-back), and saved views drop the removed controls on load.
+
 Sections 1–7 embedded Math View controls in each qualified modifier's recipe. That direction is superseded: Math View is now one standalone scene modifier that visualises the combined deformation of all preceding modifiers in its scene. No target selector, no per-modifier sections.
 
 Verified mechanics behind the design:

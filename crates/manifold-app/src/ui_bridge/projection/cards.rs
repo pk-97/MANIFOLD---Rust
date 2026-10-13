@@ -841,7 +841,6 @@ pub(crate) fn modifier_surfaces(
         // as an ordinary labeled toggle row so its meaning remains visible.
         let enabled_row_in_body = enabled_row.is_some_and(|row| row.spec.name != "Enabled");
         let enabled = modifier_enabled_value_for_binding(gp, bindings, instance, &recipe.enabled_param);
-        let legacy_scope = manifold_core::scene_modifier_math_view::has_legacy_scope_control(&instance.graph);
         let force = manifold_core::scene_modifier_preset::is_force_recipe(&instance.graph);
         let force_objects = if force {
             Some(manifold_node_engine::load::expand::force_objects_for_authoring(def, &instance.scene)
@@ -860,7 +859,7 @@ pub(crate) fn modifier_surfaces(
             ))
         });
         let mut rows: Vec<_> = full.rows.iter().filter(|row| local_id(row.id.as_ref()).is_some_and(|id|
-            (enabled_row_in_body || id != recipe.enabled_param) && !(legacy_scope && id == "math_view_scope")
+            (enabled_row_in_body || id != recipe.enabled_param)
                 && !recipe.preparation_params.iter().any(|p| p == id))).cloned().collect();
         for row in &mut rows { row.scene_addr = None; }
         Some(ParamSurface {
