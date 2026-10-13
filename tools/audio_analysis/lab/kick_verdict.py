@@ -8,6 +8,8 @@ labels; on every other song it is the release itself. It is built in its own pro
 net env) into one store per kick release; the snare measure only reads the store.
 
 Usage: kick_verdict.py build"""
+import dataclasses
+import json
 import sys
 from pathlib import Path
 
@@ -47,10 +49,13 @@ def build():
                     held[t] = z[k]
     from tools.audio_analysis.lab.registry import mix
     out = {}
+    # Held-out probabilities exist only for the songs the release's own run trained on; a kick-labelled song that
+    # joined the lab after that run was never seen by the release, so the release itself is its held-out verdict.
+    trained = set(json.loads((run.RUNS / rec['run_id'] / 'meta.json').read_text())['songs'])
     for t, song in songs.items():
         if 'snare' not in song.families:
             continue
-        if t in klab:
+        if t in klab and t in trained:
             if t not in held:
                 sys.exit(f'{t}: the kick run {rec["run_id"]} saved no held-out probability')
             c = components.candidates(song, kcfg.candidates, kcfg.family, build=False)
@@ -78,9 +83,19 @@ def features(song, c):
     if not path.exists():
         raise SystemExit(f'no kick verdict store for {tid}: run lab/kick_verdict.py build')
     z = np.load(path)
-    if f'{song.content_id}.p' not in z:
+    from tools.audio_analysis.lab.registry import is_variant, load, variant_shift
+    if is_variant(song):
+        # A mix variant reads its song's verdict moved onto its timeline: the store's verdicts come from kick models
+        # that never trained on the song, and the release itself did, so the variant's own audio is not judged.
+        parent = load()[song.parent]
+        cid, shift = parent.content_id, variant_shift(song, parent)
+    else:
+        cid, shift = dataclasses.replace(song, gain_db=None).content_id, None   # a gain copy reads its song's verdict
+    if f'{cid}.p' not in z:
         raise SystemExit(f'{song.id}: not in the kick verdict store {path.name}: run lab/kick_verdict.py build')
-    on, emit, p = (z[f'{song.content_id}.{k}'] for k in ('onset', 'emit', 'p'))
+    on, emit, p = (z[f'{cid}.{k}'] for k in ('onset', 'emit', 'p'))
+    if shift is not None:
+        on, emit = on + shift, emit + shift
     return features_from(on, emit, p, c)
 
 

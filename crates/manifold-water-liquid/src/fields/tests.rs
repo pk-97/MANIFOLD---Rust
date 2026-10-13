@@ -599,24 +599,24 @@ fn liquid_impulse_refusals_are_named() {
 
 /// An audio hit is captured after the engine ticked to the next frame's time
 /// but before that frame runs; manual Fire carries the time the liquid last
-/// ran. Both land once on the next frame's first tick; a hit older than the
-/// last run is refused.
+/// ran; an audio hit decided after its detector's lag is older than the last
+/// run. All three land once on the next frame's first tick: no trigger is
+/// skipped.
 #[test]
-fn liquid_impulse_accepts_hits_stamped_ahead_of_the_last_frame() {
+fn liquid_impulse_lands_hits_stamped_around_the_last_frame() {
     let mut clock = LiquidClock::default();
     let mut impulses = LiquidImpulses::default();
     frame(&mut clock, &mut impulses, 0.0, TICK, 1.0);
     frame(&mut clock, &mut impulses, TICK, TICK, 1.0);
     let manual = hit(&mut impulses, TICK, 1, 1.0);
     let audio = hit(&mut impulses, 2.0 * TICK, 2, 2.0);
-    assert_eq!((manual.tick, audio.tick), (1, 1));
-    let error = impulses.stamp(0.5 * TICK, 3).unwrap_err();
-    assert!(error.contains("older"), "{error}");
+    let late = hit(&mut impulses, 0.5 * TICK, 3, 3.0);
+    assert_eq!((manual.tick, audio.tick, late.tick), (1, 1, 1));
     frame(&mut clock, &mut impulses, 2.0 * TICK, TICK, 1.0);
     assert_eq!(impulses.impulse_tick(), Some(1));
     impulses.commit_frame();
     let delivered = receipts(&mut impulses);
-    assert_eq!(delivered.iter().map(|event| event.source.sequence).collect::<Vec<_>>(), [1, 2]);
+    assert_eq!(delivered.iter().map(|event| event.source.sequence).collect::<Vec<_>>(), [1, 2, 3]);
     assert!(delivered.iter().all(|event| event.applied.tick == 1 && event.lateness == Seconds(0.0)));
     frame(&mut clock, &mut impulses, 3.0 * TICK, TICK, 1.0);
     impulses.commit_frame();

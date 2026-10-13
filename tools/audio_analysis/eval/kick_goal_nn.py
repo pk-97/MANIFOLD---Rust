@@ -121,8 +121,10 @@ def extra_caches(g, t, spec):
 class Song:
     """A spectrum, its candidates' slice anchors and training rows (mask, labels)."""
 
-    def __init__(self, spec, onset_s, emit_s, mask, y, name='', hard=None, extra=()):
+    def __init__(self, spec, onset_s, emit_s, mask, y, name='', hard=None, extra=(), neg_w=None, pos_w=None):
         self.spec, self.mask, self.y, self.name = torch.from_numpy(spec), mask, y, name
+        # Per-candidate draw weights beyond the vouched-negative one (lab/models.py): None draws them evenly.
+        self.neg_w, self.pos_w = neg_w, pos_w
         self.extra = [torch.from_numpy(e) for e in extra]
         self.hard = np.zeros(len(onset_s), bool) if hard is None else np.asarray(hard, bool)
         n = len(self.spec)
@@ -194,15 +196,28 @@ def device():
     return torch.device(want or ('mps' if torch.backends.mps.is_available() else 'cpu'))
 
 
+def draw_weights(song, idx, y):
+    """The relative draw weights of candidates idx of one song for class y: project-vouched non-kicks
+    (kick_goal_melodic) are drawn HARD_W times as often; the song's neg_w / pos_w, when set, scale the rest."""
+    if y == 0.0:
+        w = np.where(song.hard[idx], HARD_W, 1.0)
+        return w if song.neg_w is None else w * song.neg_w[idx]
+    return np.ones(len(idx)) if song.pos_w is None else song.pos_w[idx]
+
+
 def train(songs, seed, synth=(), epochs=EPOCHS, synth_share=0.5, swa_epochs=0, batch=BATCH, lr=LR, precision='float32'):
     """A net fitted on the songs' training rows: song-equal, class-balanced sampling.
+    A song may be a list of versions (the song first, then its copies: gain or mix variants): the versions share one
+    song's draws, each draw from a version picked by the training rng; the draw count follows the first version's.
+    A bare Song (or a one-version list) draws exactly as it always has.
     Clips (synth) together get synth_share of all draws (0.5: as many as the real songs), spread evenly.
     swa_epochs > 0 returns the equal-weight average of the weights at the end of each of the last swa_epochs epochs.
     precision 'mixed' runs forward and loss in float16 (autocast) with float32 weights and a loss scaler."""
     rng = np.random.default_rng(seed)
     torch.manual_seed(seed)
     dev = device()
-    net = Net(2 + len(songs[0].extra)).to(dev)
+    songs = [list(s) if isinstance(s, (list, tuple)) else [s] for s in songs]
+    net = Net(2 + len(songs[0][0].extra)).to(dev)
     # Averaged weights are only valid as they stand without batch statistics to recompute.
     assert not any(isinstance(m, nn.modules.batchnorm._BatchNorm) for m in net.modules())
     assert precision in ('float32', 'mixed') and 0 <= swa_epochs <= epochs
@@ -210,34 +225,39 @@ def train(songs, seed, synth=(), epochs=EPOCHS, synth_share=0.5, swa_epochs=0, b
     mixed = precision == 'mixed'
     scaler = torch.amp.GradScaler(dev.type) if mixed else None
     avg = None
-    rows = [(s, np.flatnonzero(s.mask & (s.y == 1)), np.flatnonzero(s.mask & (s.y == 0))) for s in list(songs) + list(synth)]
-    per_song = max(1, int(np.median([len(p) for _, p, _ in rows[:len(songs)]])))
+    rows = [[(s, np.flatnonzero(s.mask & (s.y == 1)), np.flatnonzero(s.mask & (s.y == 0))) for s in g]
+            for g in songs + [[c] for c in synth]]
+    per_song = max(1, int(np.median([len(g[0][1]) for g in rows[:len(songs)]])))
     per_clip = max(1, int(round(per_song * len(songs) * synth_share / (1 - synth_share))) // max(1, len(synth)))
     for e in range(epochs):
         drawn, ys = [], []
-        for k, (song, pos, neg) in enumerate(rows):
+        for k, versions in enumerate(rows):
             draws = per_song if k < len(songs) else per_clip
+            if len(versions) > 1:
+                _draw_versions(rng, versions, draws, drawn, ys)
+                continue
+            song, pos, neg = versions[0]
             picks = []
             for idx, y in ((pos, 1.0), (neg, 0.0)):
                 if not len(idx):
                     continue
-                # Project-vouched non-kicks (kick_goal_melodic) are drawn HARD_W times as often.
-                w = np.where(song.hard[idx], HARD_W, 1.0) if y == 0.0 else np.ones(len(idx))
+                w = draw_weights(song, idx, y)
                 pick = rng.choice(idx, draws, p=w / w.sum())
                 picks.append(np.stack([pick, rng.integers(-JITTER, JITTER + 1, len(pick))]))
                 ys.append(np.full(len(pick), y, np.float32))
             if picks:
                 drawn.append((song, np.concatenate(picks, axis=1)))
-        # One copy per epoch carries every draw and jitter to the songs' device; each song's slices are cut there.
-        at = torch.from_numpy(np.concatenate([d for _, d in drawn], axis=1)).to(drawn[0][0].dev)
+        # Songs stay on the CPU: each epoch's slices are cut there bit-identically to MPS, and only the per-batch
+        # tensors move to the net's device (an MPS index tensor cannot index a CPU tensor) inside the loop.
+        at = torch.from_numpy(np.concatenate([d for _, d in drawn], axis=1))
         parts = at.split([d.shape[1] for _, d in drawn], dim=1)
-        x = torch.cat([song.slices(p[0], p[1]).to(dev) for (song, _), p in zip(drawn, parts)])
-        y = torch.from_numpy(np.concatenate(ys)).to(dev)
-        order = torch.from_numpy(rng.permutation(len(y))).to(dev)
+        x = torch.cat([song.slices(p[0], p[1]) for (song, _), p in zip(drawn, parts)])
+        y = torch.from_numpy(np.concatenate(ys))
+        order = torch.from_numpy(rng.permutation(len(y)))
         net.train()
         for s in range(0, len(y), batch):
             b = order[s:s + batch]
-            xb, yb = x[b], y[b]
+            xb, yb = x[b].to(dev), y[b].to(dev)
             opt.zero_grad()
             if mixed:
                 with torch.autocast(dev.type, dtype=torch.float16):
@@ -255,6 +275,30 @@ def train(songs, seed, synth=(), epochs=EPOCHS, synth_share=0.5, swa_epochs=0, b
     if avg is not None:
         net.load_state_dict({k: v / swa_epochs for k, v in avg.items()})
     return net.eval()
+
+
+def _draw_versions(rng, versions, draws, drawn, ys):
+    """One song's draws spread over its versions [(Song, pos, neg)]: per class, each of the draws picks a version
+    that has rows of that class (rng.integers), then each version draws its share as a lone song would."""
+    picks = [[] for _ in versions]
+    labels = [[] for _ in versions]
+    for c, y in ((1, 1.0), (2, 0.0)):
+        have = [j for j, v in enumerate(versions) if len(v[c])]
+        if not have:
+            continue
+        who = rng.integers(0, len(have), draws)
+        for n, j in zip(np.bincount(who, minlength=len(have)), have):
+            if not n:
+                continue
+            song, idx = versions[j][0], versions[j][c]
+            w = draw_weights(song, idx, y)
+            pick = rng.choice(idx, n, p=w / w.sum())
+            picks[j].append(np.stack([pick, rng.integers(-JITTER, JITTER + 1, len(pick))]))
+            labels[j].append(np.full(len(pick), y, np.float32))
+    for (song, _, _), p, lab in zip(versions, picks, labels):
+        if p:
+            drawn.append((song, np.concatenate(p, axis=1)))
+            ys.extend(lab)
 
 
 @torch.no_grad()

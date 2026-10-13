@@ -20,7 +20,10 @@
    "synth",
    "kick"
   ],
-  "audit_override": null
+  "audit_override": null,
+  "gain_db": null,
+  "parent": null,
+  "probe": false
  },
  {
   "id": "48_hours",
@@ -43,7 +46,10 @@
    "synth",
    "kick"
   ],
-  "audit_override": null
+  "audit_override": null,
+  "gain_db": null,
+  "parent": null,
+  "probe": false
  },
  {
   "id": "pattern",
@@ -66,7 +72,10 @@
    "synth",
    "kick"
   ],
-  "audit_override": null
+  "audit_override": null,
+  "gain_db": null,
+  "parent": null,
+  "probe": false
  },
  {
   "id": "back_to_you",
@@ -89,7 +98,10 @@
    "synth",
    "kick"
   ],
-  "audit_override": null
+  "audit_override": null,
+  "gain_db": null,
+  "parent": null,
+  "probe": false
  },
  {
   "id": "lowkey",
@@ -112,7 +124,10 @@
    "synth",
    "kick"
   ],
-  "audit_override": null
+  "audit_override": null,
+  "gain_db": null,
+  "parent": null,
+  "probe": false
  },
  {
   "id": "corrosion",
@@ -135,7 +150,10 @@
    "synth",
    "kick"
   ],
-  "audit_override": null
+  "audit_override": null,
+  "gain_db": null,
+  "parent": null,
+  "probe": false
  },
  {
   "id": "burn_stems",
@@ -158,7 +176,10 @@
    "synth",
    "kick"
   ],
-  "audit_override": null
+  "audit_override": null,
+  "gain_db": null,
+  "parent": null,
+  "probe": false
  },
  {
   "id": "midnight_patience",
@@ -181,7 +202,10 @@
    "synth",
    "kick"
   ],
-  "audit_override": null
+  "audit_override": null,
+  "gain_db": null,
+  "parent": null,
+  "probe": false
  },
  {
   "id": "heavy_on_mind",
@@ -204,7 +228,10 @@
    "synth",
    "kick"
   ],
-  "audit_override": null
+  "audit_override": null,
+  "gain_db": null,
+  "parent": null,
+  "probe": false
  },
  {
   "id": "miracle",
@@ -227,7 +254,10 @@
    "synth",
    "kick"
   ],
-  "audit_override": null
+  "audit_override": null,
+  "gain_db": null,
+  "parent": null,
+  "probe": false
  },
  {
   "id": "right_where",
@@ -250,7 +280,10 @@
    "synth",
    "kick"
   ],
-  "audit_override": null
+  "audit_override": null,
+  "gain_db": null,
+  "parent": null,
+  "probe": false
  },
  {
   "id": "hung_up",
@@ -273,7 +306,10 @@
    "synth",
    "kick"
   ],
-  "audit_override": null
+  "audit_override": null,
+  "gain_db": null,
+  "parent": null,
+  "probe": false
  },
  {
   "id": "got_it",
@@ -296,7 +332,10 @@
    "synth",
    "kick"
   ],
-  "audit_override": "Peter, 2026-10-11: 100% usable. Kick labels sit on the mix kick attacks (isolated labels: median -6 ms, p10-p90 -7 to -4); the kick pattern picks the labels bar (r 0.72 vs 0.67)."
+  "audit_override": "Peter, 2026-10-11: 100% usable. Kick labels sit on the mix kick attacks (isolated labels: median -6 ms, p10-p90 -7 to -4); the kick pattern picks the labels bar (r 0.72 vs 0.67).",
+  "gain_db": null,
+  "parent": null,
+  "probe": false
  },
  {
   "id": "renew",
@@ -319,7 +358,10 @@
    "synth",
    "kick"
   ],
-  "audit_override": "Peter, 2026-10-11: 100% usable. Kick labels sit on the mix kick attacks (median 0 ms, p10-p90 -1 to +8); the kick pattern picks the labels bar (r 0.89 vs 0.72)."
+  "audit_override": "Peter, 2026-10-11: 100% usable. Kick labels sit on the mix kick attacks (median 0 ms, p10-p90 -1 to +8); the kick pattern picks the labels bar (r 0.89 vs 0.72).",
+  "gain_db": null,
+  "parent": null,
+  "probe": false
  },
  {
   "id": "overwhelming_force",
@@ -342,7 +384,10 @@
    "synth",
    "kick"
   ],
-  "audit_override": "Peter, 2026-10-11: 100% usable. Kick labels sit on the mix kick attacks (median -2 ms, p10-p90 -4 to +4); the kick pattern and the other instruments both pick the labels bar."
+  "audit_override": "Peter, 2026-10-11: 100% usable. Kick labels sit on the mix kick attacks (median -2 ms, p10-p90 -4 to +4); the kick pattern and the other instruments both pick the labels bar.",
+  "gain_db": null,
+  "parent": null,
+  "probe": false
  },
  {
   "id": "murmur",
@@ -365,7 +410,10 @@
    "synth",
    "kick"
   ],
-  "audit_override": null
+  "audit_override": null,
+  "gain_db": null,
+  "parent": null,
+  "probe": false
  },
  {
   "id": "default_haze",
@@ -388,7 +436,10 @@
    "synth",
    "kick"
   ],
-  "audit_override": null
+  "audit_override": null,
+  "gain_db": null,
+  "parent": null,
+  "probe": false
  },
  {
   "id": "late_night",
@@ -411,7 +462,10 @@
    "synth",
    "kick"
   ],
-  "audit_override": null
+  "audit_override": null,
+  "gain_db": null,
+  "parent": null,
+  "probe": false
  },
  {
   "id": "crush",
@@ -433,7 +487,10 @@
    "bass",
    "synth"
   ],
-  "audit_override": null
+  "audit_override": null,
+  "gain_db": null,
+  "parent": null,
+  "probe": false
  },
  {
   "id": "dusk",
@@ -455,7 +512,10 @@
    "bass",
    "synth"
   ],
-  "audit_override": null
+  "audit_override": null,
+  "gain_db": null,
+  "parent": null,
+  "probe": false
  },
  {
   "id": "imitation",
@@ -477,7 +537,10 @@
    "bass",
    "synth"
   ],
-  "audit_override": null
+  "audit_override": null,
+  "gain_db": null,
+  "parent": null,
+  "probe": false
  },
  {
   "id": "set_me_free",
@@ -499,7 +562,10 @@
    "bass",
    "synth"
   ],
-  "audit_override": null
+  "audit_override": null,
+  "gain_db": null,
+  "parent": null,
+  "probe": false
  },
  {
   "id": "openings",
@@ -521,7 +587,10 @@
    "bass",
    "synth"
   ],
-  "audit_override": null
+  "audit_override": null,
+  "gain_db": null,
+  "parent": null,
+  "probe": false
  },
  {
   "id": "staged",
@@ -543,7 +612,10 @@
    "bass",
    "synth"
   ],
-  "audit_override": null
+  "audit_override": null,
+  "gain_db": null,
+  "parent": null,
+  "probe": false
  },
  {
   "id": "just_the_way",
@@ -565,7 +637,10 @@
    "bass",
    "synth"
   ],
-  "audit_override": null
+  "audit_override": null,
+  "gain_db": null,
+  "parent": null,
+  "probe": false
  },
  {
   "id": "water_shimmer",
@@ -587,7 +662,10 @@
    "bass",
    "synth"
   ],
-  "audit_override": null
+  "audit_override": null,
+  "gain_db": null,
+  "parent": null,
+  "probe": false
  },
  {
   "id": "basalt",
@@ -609,7 +687,10 @@
    "bass",
    "synth"
   ],
-  "audit_override": null
+  "audit_override": null,
+  "gain_db": null,
+  "parent": null,
+  "probe": false
  },
  {
   "id": "cadence",
@@ -631,7 +712,10 @@
    "bass",
    "synth"
   ],
-  "audit_override": null
+  "audit_override": null,
+  "gain_db": null,
+  "parent": null,
+  "probe": false
  },
  {
   "id": "push",
@@ -653,7 +737,10 @@
    "bass",
    "synth"
   ],
-  "audit_override": null
+  "audit_override": null,
+  "gain_db": null,
+  "parent": null,
+  "probe": false
  },
  {
   "id": "stagnate",
@@ -675,7 +762,10 @@
    "bass",
    "synth"
   ],
-  "audit_override": null
+  "audit_override": null,
+  "gain_db": null,
+  "parent": null,
+  "probe": false
  },
  {
   "id": "weight",
@@ -697,7 +787,442 @@
    "bass",
    "synth"
   ],
-  "audit_override": null
+  "audit_override": null,
+  "gain_db": null,
+  "parent": null,
+  "probe": false
+ },
+ {
+  "id": "affect",
+  "kind": "project",
+  "source": {
+   "how": "wip",
+   "paths": [
+    "/Users/peterkiemann/.cache/manifold/kick-goal-2026-10-10/snare_wip/affect.npy"
+   ]
+  },
+  "source_sha256": [
+   "235c88f1a6485b5bb54ffa789dab6858df880b0274e714f04719e956d8bddfa1"
+  ],
+  "sample_rate": 48000,
+  "offset_s": -39.1313,
+  "proof": "wip:proven (kick and snare agree)",
+  "families": [
+   "snare",
+   "kick"
+  ],
+  "audit_override": null,
+  "gain_db": null,
+  "parent": null,
+  "probe": false
+ },
+ {
+  "id": "break",
+  "kind": "project",
+  "source": {
+   "how": "wip",
+   "paths": [
+    "/Users/peterkiemann/.cache/manifold/kick-goal-2026-10-10/snare_wip/break.npy"
+   ]
+  },
+  "source_sha256": [
+   "07c80c8712d603ca17e370e8b0483c66a55a5ac51e54ee4022dc1a80bdb896f6"
+  ],
+  "sample_rate": 48000,
+  "offset_s": -73.8398,
+  "proof": "wip:proven (kick and snare agree)",
+  "families": [
+   "snare",
+   "kick"
+  ],
+  "audit_override": null,
+  "gain_db": null,
+  "parent": null,
+  "probe": false
+ },
+ {
+  "id": "concentrate",
+  "kind": "project",
+  "source": {
+   "how": "wip",
+   "paths": [
+    "/Users/peterkiemann/.cache/manifold/kick-goal-2026-10-10/snare_wip/concentrate.npy"
+   ]
+  },
+  "source_sha256": [
+   "7bb6edc43d2547663bd9ed1ba583ba98181fcaec6e79545c17db3c1fe223fd00"
+  ],
+  "sample_rate": 48000,
+  "offset_s": -30.6576,
+  "proof": "wip:proven (kick and snare agree)",
+  "families": [
+   "snare",
+   "kick"
+  ],
+  "audit_override": null,
+  "gain_db": null,
+  "parent": null,
+  "probe": false
+ },
+ {
+  "id": "control",
+  "kind": "project",
+  "source": {
+   "how": "wip",
+   "paths": [
+    "/Users/peterkiemann/.cache/manifold/kick-goal-2026-10-10/snare_wip/control.npy"
+   ]
+  },
+  "source_sha256": [
+   "c5eb1a647d0f0591efba6602e2c60b68272fb92eed6697a9580aa9bc3b4d86c9"
+  ],
+  "sample_rate": 48000,
+  "offset_s": -30.4188,
+  "proof": "wip:proven (kick and snare agree)",
+  "families": [
+   "snare",
+   "kick"
+  ],
+  "audit_override": null,
+  "gain_db": null,
+  "parent": null,
+  "probe": false
+ },
+ {
+  "id": "desire",
+  "kind": "project",
+  "source": {
+   "how": "wip",
+   "paths": [
+    "/Users/peterkiemann/.cache/manifold/kick-goal-2026-10-10/snare_wip/desire.npy"
+   ]
+  },
+  "source_sha256": [
+   "b78a82a493e4e6248117b4cdd977c20f6e41d994869cf0b326b401334b8bc55d"
+  ],
+  "sample_rate": 48000,
+  "offset_s": -55.5968,
+  "proof": "wip:proven (kick and snare agree)",
+  "families": [
+   "snare",
+   "kick"
+  ],
+  "audit_override": null,
+  "gain_db": null,
+  "parent": null,
+  "probe": false
+ },
+ {
+  "id": "dream",
+  "kind": "project",
+  "source": {
+   "how": "wip",
+   "paths": [
+    "/Users/peterkiemann/.cache/manifold/kick-goal-2026-10-10/snare_wip/dream.npy"
+   ]
+  },
+  "source_sha256": [
+   "502ac440df12ebacfaf76b607506d8acc00969148fa411c3f36f7c548ad3a0bf"
+  ],
+  "sample_rate": 48000,
+  "offset_s": -13.7089,
+  "proof": "wip:proven (kick and snare agree)",
+  "families": [
+   "snare",
+   "kick"
+  ],
+  "audit_override": null,
+  "gain_db": null,
+  "parent": null,
+  "probe": false
+ },
+ {
+  "id": "echo",
+  "kind": "project",
+  "source": {
+   "how": "wip",
+   "paths": [
+    "/Users/peterkiemann/.cache/manifold/kick-goal-2026-10-10/snare_wip/echo.npy"
+   ]
+  },
+  "source_sha256": [
+   "6d0e66b5d3a80a3b53cff784c90ac45d1452b5217c235cf14a616674d3921f50"
+  ],
+  "sample_rate": 48000,
+  "offset_s": -27.8037,
+  "proof": "wip:proven (kick and snare agree)",
+  "families": [
+   "snare",
+   "kick"
+  ],
+  "audit_override": null,
+  "gain_db": null,
+  "parent": null,
+  "probe": false
+ },
+ {
+  "id": "fortuity",
+  "kind": "project",
+  "source": {
+   "how": "wip",
+   "paths": [
+    "/Users/peterkiemann/.cache/manifold/kick-goal-2026-10-10/snare_wip/fortuity.npy"
+   ]
+  },
+  "source_sha256": [
+   "48895f70d434c845aaa2c372e6e48b36207c8455034682256f8839dc9fed7581"
+  ],
+  "sample_rate": 48000,
+  "offset_s": -27.3802,
+  "proof": "wip:proven (kick and snare agree)",
+  "families": [
+   "snare",
+   "kick"
+  ],
+  "audit_override": null,
+  "gain_db": null,
+  "parent": null,
+  "probe": false
+ },
+ {
+  "id": "go_with_you",
+  "kind": "project",
+  "source": {
+   "how": "wip",
+   "paths": [
+    "/Users/peterkiemann/.cache/manifold/kick-goal-2026-10-10/snare_wip/go_with_you.npy"
+   ]
+  },
+  "source_sha256": [
+   "6570c6cfb0948601f214e440069328eee8b567c962af8eb4845fdc110821f1ee"
+  ],
+  "sample_rate": 48000,
+  "offset_s": -32.488,
+  "proof": "wip:proven (kick and snare agree)",
+  "families": [
+   "snare",
+   "kick"
+  ],
+  "audit_override": null,
+  "gain_db": null,
+  "parent": null,
+  "probe": false
+ },
+ {
+  "id": "mendez",
+  "kind": "project",
+  "source": {
+   "how": "wip",
+   "paths": [
+    "/Users/peterkiemann/.cache/manifold/kick-goal-2026-10-10/snare_wip/mendez.npy"
+   ]
+  },
+  "source_sha256": [
+   "2d2de25be2fceca4e9e79c2a8378198449aae09e6f8035eaf9a2cf417ab27a99"
+  ],
+  "sample_rate": 48000,
+  "offset_s": -30.673,
+  "proof": "wip:proven (one pattern, clear win)",
+  "families": [
+   "snare",
+   "kick"
+  ],
+  "audit_override": null,
+  "gain_db": null,
+  "parent": null,
+  "probe": false
+ },
+ {
+  "id": "motion",
+  "kind": "project",
+  "source": {
+   "how": "wip",
+   "paths": [
+    "/Users/peterkiemann/.cache/manifold/kick-goal-2026-10-10/snare_wip/motion.npy"
+   ]
+  },
+  "source_sha256": [
+   "c68bce33cd0e021b13c612f1579907865a7e5488b7ef2ba32f8c8cca940b4530"
+  ],
+  "sample_rate": 48000,
+  "offset_s": -29.4861,
+  "proof": "wip:proven (kick and snare agree)",
+  "families": [
+   "snare",
+   "kick"
+  ],
+  "audit_override": null,
+  "gain_db": null,
+  "parent": null,
+  "probe": false
+ },
+ {
+  "id": "paces",
+  "kind": "project",
+  "source": {
+   "how": "wip",
+   "paths": [
+    "/Users/peterkiemann/.cache/manifold/kick-goal-2026-10-10/snare_wip/paces.npy"
+   ]
+  },
+  "source_sha256": [
+   "873c9fd6bcb68227a11026dd89fedb03a5fe598be4eddbcfdd6dc8d4bdf3b6d7"
+  ],
+  "sample_rate": 48000,
+  "offset_s": -28.6503,
+  "proof": "wip:proven (kick and snare agree)",
+  "families": [
+   "snare",
+   "kick"
+  ],
+  "audit_override": null,
+  "gain_db": null,
+  "parent": null,
+  "probe": false
+ },
+ {
+  "id": "pulse",
+  "kind": "project",
+  "source": {
+   "how": "wip",
+   "paths": [
+    "/Users/peterkiemann/.cache/manifold/kick-goal-2026-10-10/snare_wip/pulse.npy"
+   ]
+  },
+  "source_sha256": [
+   "a3a4cda72d8828d9538f879470b1cdb6a70b4eae4abff4c226b021775a1b7a8a"
+  ],
+  "sample_rate": 48000,
+  "offset_s": -27.3732,
+  "proof": "wip:proven (kick and snare agree)",
+  "families": [
+   "snare",
+   "kick"
+  ],
+  "audit_override": null,
+  "gain_db": null,
+  "parent": null,
+  "probe": false
+ },
+ {
+  "id": "running",
+  "kind": "project",
+  "source": {
+   "how": "wip",
+   "paths": [
+    "/Users/peterkiemann/.cache/manifold/kick-goal-2026-10-10/snare_wip/running.npy"
+   ]
+  },
+  "source_sha256": [
+   "db7c3e17726672fb42394242be3d8c0d9a74d46d415e9bef0b2cdf47389d0518"
+  ],
+  "sample_rate": 48000,
+  "offset_s": -28.2239,
+  "proof": "wip:proven (kick and snare agree)",
+  "families": [
+   "snare",
+   "kick"
+  ],
+  "audit_override": null,
+  "gain_db": null,
+  "parent": null,
+  "probe": false
+ },
+ {
+  "id": "skyline",
+  "kind": "project",
+  "source": {
+   "how": "wip",
+   "paths": [
+    "/Users/peterkiemann/.cache/manifold/kick-goal-2026-10-10/snare_wip/skyline.npy"
+   ]
+  },
+  "source_sha256": [
+   "ad99111734f9a4bf4ed5ea92bb20ef146823b30dec6b09045d48895e903c86fb"
+  ],
+  "sample_rate": 48000,
+  "offset_s": -27.3742,
+  "proof": "wip:proven (kick and snare agree)",
+  "families": [
+   "snare",
+   "kick"
+  ],
+  "audit_override": null,
+  "gain_db": null,
+  "parent": null,
+  "probe": false
+ },
+ {
+  "id": "sol",
+  "kind": "project",
+  "source": {
+   "how": "wip",
+   "paths": [
+    "/Users/peterkiemann/.cache/manifold/kick-goal-2026-10-10/snare_wip/sol.npy"
+   ]
+  },
+  "source_sha256": [
+   "270da254418294a598e0c49067ecdcef0431aa3afe1012d7447abc281ac8c8d3"
+  ],
+  "sample_rate": 48000,
+  "offset_s": -27.1604,
+  "proof": "wip:proven (kick and snare agree)",
+  "families": [
+   "snare",
+   "kick"
+  ],
+  "audit_override": null,
+  "gain_db": null,
+  "parent": null,
+  "probe": false
+ },
+ {
+  "id": "touch",
+  "kind": "project",
+  "source": {
+   "how": "wip",
+   "paths": [
+    "/Users/peterkiemann/.cache/manifold/kick-goal-2026-10-10/snare_wip/touch.npy"
+   ]
+  },
+  "source_sha256": [
+   "f61d52385f3479aa59b1b30ef2d0bfaf101964e1e0525b8669ed7f868ff32496"
+  ],
+  "sample_rate": 48000,
+  "offset_s": -13.9046,
+  "proof": "wip:proven (kick and snare agree)",
+  "families": [
+   "snare",
+   "kick"
+  ],
+  "audit_override": null,
+  "gain_db": null,
+  "parent": null,
+  "probe": false
+ },
+ {
+  "id": "waypoints",
+  "kind": "project",
+  "source": {
+   "how": "wip",
+   "paths": [
+    "/Users/peterkiemann/.cache/manifold/kick-goal-2026-10-10/snare_wip/waypoints.npy"
+   ]
+  },
+  "source_sha256": [
+   "2bedcab73517f19d5dc346dfc13fde7a16c97acdff314450ca52ad919b7ff752"
+  ],
+  "sample_rate": 48000,
+  "offset_s": -104.7209,
+  "proof": "wip:proven (kick and snare agree)",
+  "families": [
+   "snare",
+   "kick"
+  ],
+  "audit_override": null,
+  "gain_db": null,
+  "parent": null,
+  "probe": false
  },
  {
   "id": "cold_remix",
@@ -718,7 +1243,10 @@
    "snare",
    "kick"
   ],
-  "audit_override": null
+  "audit_override": null,
+  "gain_db": null,
+  "parent": null,
+  "probe": false
  },
  {
   "id": "worship",
@@ -739,7 +1267,10 @@
    "snare",
    "kick"
   ],
-  "audit_override": null
+  "audit_override": null,
+  "gain_db": null,
+  "parent": null,
+  "probe": false
  },
  {
   "id": "business",
@@ -760,7 +1291,10 @@
    "snare",
    "kick"
   ],
-  "audit_override": null
+  "audit_override": null,
+  "gain_db": null,
+  "parent": null,
+  "probe": false
  },
  {
   "id": "eat_sleep",
@@ -781,7 +1315,10 @@
    "snare",
    "kick"
   ],
-  "audit_override": null
+  "audit_override": null,
+  "gain_db": null,
+  "parent": null,
+  "probe": false
  },
  {
   "id": "lh",
@@ -802,7 +1339,10 @@
    "snare",
    "kick"
   ],
-  "audit_override": null
+  "audit_override": null,
+  "gain_db": null,
+  "parent": null,
+  "probe": false
  },
  {
   "id": "gerrit",
@@ -823,7 +1363,10 @@
    "snare",
    "kick"
   ],
-  "audit_override": null
+  "audit_override": null,
+  "gain_db": null,
+  "parent": null,
+  "probe": false
  },
  {
   "id": "linn_1",
@@ -848,7 +1391,10 @@
    "synth",
    "kick"
   ],
-  "audit_override": null
+  "audit_override": null,
+  "gain_db": null,
+  "parent": null,
+  "probe": false
  },
  {
   "id": "linn_2",
@@ -873,7 +1419,10 @@
    "synth",
    "kick"
   ],
-  "audit_override": null
+  "audit_override": null,
+  "gain_db": null,
+  "parent": null,
+  "probe": false
  },
  {
   "id": "linn_3",
@@ -898,7 +1447,10 @@
    "synth",
    "kick"
   ],
-  "audit_override": null
+  "audit_override": null,
+  "gain_db": null,
+  "parent": null,
+  "probe": false
  },
  {
   "id": "linn_4",
@@ -923,7 +1475,10 @@
    "synth",
    "kick"
   ],
-  "audit_override": null
+  "audit_override": null,
+  "gain_db": null,
+  "parent": null,
+  "probe": false
  },
  {
   "id": "rolls_var01",
@@ -948,7 +1503,10 @@
    "synth",
    "kick"
   ],
-  "audit_override": null
+  "audit_override": null,
+  "gain_db": null,
+  "parent": null,
+  "probe": false
  },
  {
   "id": "rolls_var02",
@@ -973,7 +1531,10 @@
    "synth",
    "kick"
   ],
-  "audit_override": null
+  "audit_override": null,
+  "gain_db": null,
+  "parent": null,
+  "probe": false
  },
  {
   "id": "rolls_var03",
@@ -998,7 +1559,10 @@
    "synth",
    "kick"
   ],
-  "audit_override": null
+  "audit_override": null,
+  "gain_db": null,
+  "parent": null,
+  "probe": false
  },
  {
   "id": "rolls_var04",
@@ -1023,7 +1587,10 @@
    "synth",
    "kick"
   ],
-  "audit_override": null
+  "audit_override": null,
+  "gain_db": null,
+  "parent": null,
+  "probe": false
  },
  {
   "id": "rolls_music01",
@@ -1048,7 +1615,10 @@
    "synth",
    "kick"
   ],
-  "audit_override": null
+  "audit_override": null,
+  "gain_db": null,
+  "parent": null,
+  "probe": false
  },
  {
   "id": "rolls_music02",
@@ -1073,7 +1643,10 @@
    "synth",
    "kick"
   ],
-  "audit_override": null
+  "audit_override": null,
+  "gain_db": null,
+  "parent": null,
+  "probe": false
  },
  {
   "id": "rolls_music03",
@@ -1098,7 +1671,10 @@
    "synth",
    "kick"
   ],
-  "audit_override": null
+  "audit_override": null,
+  "gain_db": null,
+  "parent": null,
+  "probe": false
  },
  {
   "id": "rolls_music04",
@@ -1123,7 +1699,10 @@
    "synth",
    "kick"
   ],
-  "audit_override": null
+  "audit_override": null,
+  "gain_db": null,
+  "parent": null,
+  "probe": false
  },
  {
   "id": "rolls_music05",
@@ -1148,7 +1727,10 @@
    "synth",
    "kick"
   ],
-  "audit_override": null
+  "audit_override": null,
+  "gain_db": null,
+  "parent": null,
+  "probe": false
  },
  {
   "id": "rolls_music06",
@@ -1173,7 +1755,10 @@
    "synth",
    "kick"
   ],
-  "audit_override": null
+  "audit_override": null,
+  "gain_db": null,
+  "parent": null,
+  "probe": false
  },
  {
   "id": "rolls_music07",
@@ -1198,7 +1783,10 @@
    "synth",
    "kick"
   ],
-  "audit_override": null
+  "audit_override": null,
+  "gain_db": null,
+  "parent": null,
+  "probe": false
  },
  {
   "id": "rolls_music08",
@@ -1223,7 +1811,10 @@
    "synth",
    "kick"
   ],
-  "audit_override": null
+  "audit_override": null,
+  "gain_db": null,
+  "parent": null,
+  "probe": false
  },
  {
   "id": "rolls_music09",
@@ -1248,7 +1839,10 @@
    "synth",
    "kick"
   ],
-  "audit_override": null
+  "audit_override": null,
+  "gain_db": null,
+  "parent": null,
+  "probe": false
  },
  {
   "id": "rolls_music10",
@@ -1273,7 +1867,10 @@
    "synth",
    "kick"
   ],
-  "audit_override": null
+  "audit_override": null,
+  "gain_db": null,
+  "parent": null,
+  "probe": false
  },
  {
   "id": "rolls_music11",
@@ -1298,7 +1895,10 @@
    "synth",
    "kick"
   ],
-  "audit_override": null
+  "audit_override": null,
+  "gain_db": null,
+  "parent": null,
+  "probe": false
  },
  {
   "id": "rolls_music12",
@@ -1323,7 +1923,10 @@
    "synth",
    "kick"
   ],
-  "audit_override": null
+  "audit_override": null,
+  "gain_db": null,
+  "parent": null,
+  "probe": false
  },
  {
   "id": "mod_01",
@@ -1346,7 +1949,10 @@
    "snare",
    "kick"
   ],
-  "audit_override": null
+  "audit_override": null,
+  "gain_db": null,
+  "parent": null,
+  "probe": false
  },
  {
   "id": "mod_02",
@@ -1369,7 +1975,10 @@
    "snare",
    "kick"
   ],
-  "audit_override": null
+  "audit_override": null,
+  "gain_db": null,
+  "parent": null,
+  "probe": false
  },
  {
   "id": "mod_03",
@@ -1392,7 +2001,10 @@
    "snare",
    "kick"
   ],
-  "audit_override": null
+  "audit_override": null,
+  "gain_db": null,
+  "parent": null,
+  "probe": false
  },
  {
   "id": "mod_04",
@@ -1415,7 +2027,10 @@
    "snare",
    "kick"
   ],
-  "audit_override": null
+  "audit_override": null,
+  "gain_db": null,
+  "parent": null,
+  "probe": false
  },
  {
   "id": "mod_05",
@@ -1438,7 +2053,10 @@
    "snare",
    "kick"
   ],
-  "audit_override": null
+  "audit_override": null,
+  "gain_db": null,
+  "parent": null,
+  "probe": false
  },
  {
   "id": "mod_06",
@@ -1461,7 +2079,10 @@
    "snare",
    "kick"
   ],
-  "audit_override": null
+  "audit_override": null,
+  "gain_db": null,
+  "parent": null,
+  "probe": false
  },
  {
   "id": "mod_07",
@@ -1484,7 +2105,10 @@
    "snare",
    "kick"
   ],
-  "audit_override": null
+  "audit_override": null,
+  "gain_db": null,
+  "parent": null,
+  "probe": false
  },
  {
   "id": "mod_08",
@@ -1507,7 +2131,10 @@
    "snare",
    "kick"
   ],
-  "audit_override": null
+  "audit_override": null,
+  "gain_db": null,
+  "parent": null,
+  "probe": false
  },
  {
   "id": "mod_09",
@@ -1530,7 +2157,10 @@
    "snare",
    "kick"
   ],
-  "audit_override": null
+  "audit_override": null,
+  "gain_db": null,
+  "parent": null,
+  "probe": false
  },
  {
   "id": "mod_10",
@@ -1553,7 +2183,10 @@
    "snare",
    "kick"
   ],
-  "audit_override": null
+  "audit_override": null,
+  "gain_db": null,
+  "parent": null,
+  "probe": false
  },
  {
   "id": "mod_11",
@@ -1576,7 +2209,10 @@
    "snare",
    "kick"
   ],
-  "audit_override": null
+  "audit_override": null,
+  "gain_db": null,
+  "parent": null,
+  "probe": false
  },
  {
   "id": "mod_12",
@@ -1599,7 +2235,10 @@
    "snare",
    "kick"
   ],
-  "audit_override": null
+  "audit_override": null,
+  "gain_db": null,
+  "parent": null,
+  "probe": false
  },
  {
   "id": "mod_13",
@@ -1622,7 +2261,10 @@
    "snare",
    "kick"
   ],
-  "audit_override": null
+  "audit_override": null,
+  "gain_db": null,
+  "parent": null,
+  "probe": false
  },
  {
   "id": "mod_14",
@@ -1645,7 +2287,10 @@
    "snare",
    "kick"
   ],
-  "audit_override": null
+  "audit_override": null,
+  "gain_db": null,
+  "parent": null,
+  "probe": false
  },
  {
   "id": "mod_15",
@@ -1668,7 +2313,10 @@
    "snare",
    "kick"
   ],
-  "audit_override": null
+  "audit_override": null,
+  "gain_db": null,
+  "parent": null,
+  "probe": false
  },
  {
   "id": "mod_16",
@@ -1691,7 +2339,10 @@
    "snare",
    "kick"
   ],
-  "audit_override": null
+  "audit_override": null,
+  "gain_db": null,
+  "parent": null,
+  "probe": false
  },
  {
   "id": "mod_17",
@@ -1714,7 +2365,10 @@
    "snare",
    "kick"
   ],
-  "audit_override": null
+  "audit_override": null,
+  "gain_db": null,
+  "parent": null,
+  "probe": false
  },
  {
   "id": "mod_18",
@@ -1737,7 +2391,10 @@
    "snare",
    "kick"
   ],
-  "audit_override": null
+  "audit_override": null,
+  "gain_db": null,
+  "parent": null,
+  "probe": false
  },
  {
   "id": "mod_19",
@@ -1760,7 +2417,10 @@
    "snare",
    "kick"
   ],
-  "audit_override": null
+  "audit_override": null,
+  "gain_db": null,
+  "parent": null,
+  "probe": false
  },
  {
   "id": "mod_20",
@@ -1783,7 +2443,10 @@
    "snare",
    "kick"
   ],
-  "audit_override": null
+  "audit_override": null,
+  "gain_db": null,
+  "parent": null,
+  "probe": false
  },
  {
   "id": "mod_21",
@@ -1806,7 +2469,10 @@
    "snare",
    "kick"
   ],
-  "audit_override": null
+  "audit_override": null,
+  "gain_db": null,
+  "parent": null,
+  "probe": false
  },
  {
   "id": "mod_22",
@@ -1829,7 +2495,10 @@
    "snare",
    "kick"
   ],
-  "audit_override": null
+  "audit_override": null,
+  "gain_db": null,
+  "parent": null,
+  "probe": false
  },
  {
   "id": "mod_23",
@@ -1852,7 +2521,10 @@
    "snare",
    "kick"
   ],
-  "audit_override": null
+  "audit_override": null,
+  "gain_db": null,
+  "parent": null,
+  "probe": false
  },
  {
   "id": "mod_24",
@@ -1875,7 +2547,10 @@
    "snare",
    "kick"
   ],
-  "audit_override": null
+  "audit_override": null,
+  "gain_db": null,
+  "parent": null,
+  "probe": false
  },
  {
   "id": "mod_25",
@@ -1898,7 +2573,10 @@
    "snare",
    "kick"
   ],
-  "audit_override": null
+  "audit_override": null,
+  "gain_db": null,
+  "parent": null,
+  "probe": false
  },
  {
   "id": "mod_26",
@@ -1921,7 +2599,10 @@
    "snare",
    "kick"
   ],
-  "audit_override": null
+  "audit_override": null,
+  "gain_db": null,
+  "parent": null,
+  "probe": false
  },
  {
   "id": "mod_27",
@@ -1944,7 +2625,10 @@
    "snare",
    "kick"
   ],
-  "audit_override": null
+  "audit_override": null,
+  "gain_db": null,
+  "parent": null,
+  "probe": false
  },
  {
   "id": "mod_28",
@@ -1967,7 +2651,10 @@
    "snare",
    "kick"
   ],
-  "audit_override": null
+  "audit_override": null,
+  "gain_db": null,
+  "parent": null,
+  "probe": false
  },
  {
   "id": "mod_29",
@@ -1990,7 +2677,10 @@
    "snare",
    "kick"
   ],
-  "audit_override": null
+  "audit_override": null,
+  "gain_db": null,
+  "parent": null,
+  "probe": false
  },
  {
   "id": "mod_30",
@@ -2013,7 +2703,10 @@
    "snare",
    "kick"
   ],
-  "audit_override": null
+  "audit_override": null,
+  "gain_db": null,
+  "parent": null,
+  "probe": false
  },
  {
   "id": "mod_31",
@@ -2036,7 +2729,10 @@
    "snare",
    "kick"
   ],
-  "audit_override": null
+  "audit_override": null,
+  "gain_db": null,
+  "parent": null,
+  "probe": false
  },
  {
   "id": "mod_32",
@@ -2059,7 +2755,10 @@
    "snare",
    "kick"
   ],
-  "audit_override": null
+  "audit_override": null,
+  "gain_db": null,
+  "parent": null,
+  "probe": false
  },
  {
   "id": "mod_33",
@@ -2082,7 +2781,10 @@
    "snare",
    "kick"
   ],
-  "audit_override": null
+  "audit_override": null,
+  "gain_db": null,
+  "parent": null,
+  "probe": false
  },
  {
   "id": "mod_34",
@@ -2105,7 +2807,10 @@
    "snare",
    "kick"
   ],
-  "audit_override": null
+  "audit_override": null,
+  "gain_db": null,
+  "parent": null,
+  "probe": false
  },
  {
   "id": "mod_35",
@@ -2128,7 +2833,10 @@
    "snare",
    "kick"
   ],
-  "audit_override": null
+  "audit_override": null,
+  "gain_db": null,
+  "parent": null,
+  "probe": false
  },
  {
   "id": "mod_36",
@@ -2151,7 +2859,10 @@
    "snare",
    "kick"
   ],
-  "audit_override": null
+  "audit_override": null,
+  "gain_db": null,
+  "parent": null,
+  "probe": false
  },
  {
   "id": "mod_37",
@@ -2174,7 +2885,10 @@
    "snare",
    "kick"
   ],
-  "audit_override": null
+  "audit_override": null,
+  "gain_db": null,
+  "parent": null,
+  "probe": false
  },
  {
   "id": "mod_38",
@@ -2197,7 +2911,10 @@
    "snare",
    "kick"
   ],
-  "audit_override": null
+  "audit_override": null,
+  "gain_db": null,
+  "parent": null,
+  "probe": false
  },
  {
   "id": "mod_39",
@@ -2220,7 +2937,10 @@
    "snare",
    "kick"
   ],
-  "audit_override": null
+  "audit_override": null,
+  "gain_db": null,
+  "parent": null,
+  "probe": false
  },
  {
   "id": "mod_40",
@@ -2243,7 +2963,10 @@
    "snare",
    "kick"
   ],
-  "audit_override": null
+  "audit_override": null,
+  "gain_db": null,
+  "parent": null,
+  "probe": false
  },
  {
   "id": "mod_41",
@@ -2266,7 +2989,10 @@
    "snare",
    "kick"
   ],
-  "audit_override": null
+  "audit_override": null,
+  "gain_db": null,
+  "parent": null,
+  "probe": false
  },
  {
   "id": "mod_42",
@@ -2289,7 +3015,10 @@
    "snare",
    "kick"
   ],
-  "audit_override": null
+  "audit_override": null,
+  "gain_db": null,
+  "parent": null,
+  "probe": false
  },
  {
   "id": "mod_43",
@@ -2312,7 +3041,10 @@
    "snare",
    "kick"
   ],
-  "audit_override": null
+  "audit_override": null,
+  "gain_db": null,
+  "parent": null,
+  "probe": false
  },
  {
   "id": "mod_44",
@@ -2335,7 +3067,10 @@
    "snare",
    "kick"
   ],
-  "audit_override": null
+  "audit_override": null,
+  "gain_db": null,
+  "parent": null,
+  "probe": false
  },
  {
   "id": "mod_45",
@@ -2358,7 +3093,10 @@
    "snare",
    "kick"
   ],
-  "audit_override": null
+  "audit_override": null,
+  "gain_db": null,
+  "parent": null,
+  "probe": false
  },
  {
   "id": "mod_46",
@@ -2381,7 +3119,10 @@
    "snare",
    "kick"
   ],
-  "audit_override": null
+  "audit_override": null,
+  "gain_db": null,
+  "parent": null,
+  "probe": false
  },
  {
   "id": "mod_47",
@@ -2404,7 +3145,10 @@
    "snare",
    "kick"
   ],
-  "audit_override": null
+  "audit_override": null,
+  "gain_db": null,
+  "parent": null,
+  "probe": false
  },
  {
   "id": "mod_48",
@@ -2427,7 +3171,10 @@
    "snare",
    "kick"
   ],
-  "audit_override": null
+  "audit_override": null,
+  "gain_db": null,
+  "parent": null,
+  "probe": false
  },
  {
   "id": "mod_49",
@@ -2450,7 +3197,10 @@
    "snare",
    "kick"
   ],
-  "audit_override": null
+  "audit_override": null,
+  "gain_db": null,
+  "parent": null,
+  "probe": false
  },
  {
   "id": "mod_50",
@@ -2473,7 +3223,10 @@
    "snare",
    "kick"
   ],
-  "audit_override": null
+  "audit_override": null,
+  "gain_db": null,
+  "parent": null,
+  "probe": false
  },
  {
   "id": "mod_51",
@@ -2496,7 +3249,10 @@
    "snare",
    "kick"
   ],
-  "audit_override": null
+  "audit_override": null,
+  "gain_db": null,
+  "parent": null,
+  "probe": false
  },
  {
   "id": "mod_52",
@@ -2519,7 +3275,10 @@
    "snare",
    "kick"
   ],
-  "audit_override": null
+  "audit_override": null,
+  "gain_db": null,
+  "parent": null,
+  "probe": false
  },
  {
   "id": "mod_53",
@@ -2542,7 +3301,10 @@
    "snare",
    "kick"
   ],
-  "audit_override": null
+  "audit_override": null,
+  "gain_db": null,
+  "parent": null,
+  "probe": false
  },
  {
   "id": "mod_54",
@@ -2565,7 +3327,10 @@
    "snare",
    "kick"
   ],
-  "audit_override": null
+  "audit_override": null,
+  "gain_db": null,
+  "parent": null,
+  "probe": false
  },
  {
   "id": "mod_55",
@@ -2588,7 +3353,10 @@
    "snare",
    "kick"
   ],
-  "audit_override": null
+  "audit_override": null,
+  "gain_db": null,
+  "parent": null,
+  "probe": false
  },
  {
   "id": "mod_56",
@@ -2611,7 +3379,10 @@
    "snare",
    "kick"
   ],
-  "audit_override": null
+  "audit_override": null,
+  "gain_db": null,
+  "parent": null,
+  "probe": false
  },
  {
   "id": "mod_57",
@@ -2634,7 +3405,10 @@
    "snare",
    "kick"
   ],
-  "audit_override": null
+  "audit_override": null,
+  "gain_db": null,
+  "parent": null,
+  "probe": false
  },
  {
   "id": "mod_58",
@@ -2657,7 +3431,10 @@
    "snare",
    "kick"
   ],
-  "audit_override": null
+  "audit_override": null,
+  "gain_db": null,
+  "parent": null,
+  "probe": false
  },
  {
   "id": "facade",
@@ -2679,7 +3456,10 @@
    "synth",
    "kick"
   ],
-  "audit_override": null
+  "audit_override": null,
+  "gain_db": null,
+  "parent": null,
+  "probe": false
  },
  {
   "id": "apricots_128bpm",
@@ -2699,7 +3479,10 @@
   "families": [
    "kick"
   ],
-  "audit_override": null
+  "audit_override": null,
+  "gain_db": null,
+  "parent": null,
+  "probe": false
  },
  {
   "id": "bad_guy_128bpm",
@@ -2719,7 +3502,10 @@
   "families": [
    "kick"
   ],
-  "audit_override": null
+  "audit_override": null,
+  "gain_db": null,
+  "parent": null,
+  "probe": false
  },
  {
   "id": "feel_the_vibration_174bpm",
@@ -2739,7 +3525,10 @@
   "families": [
    "kick"
   ],
-  "audit_override": null
+  "audit_override": null,
+  "gain_db": null,
+  "parent": null,
+  "probe": false
  },
  {
   "id": "inhale_exhale_145bpm",
@@ -2759,7 +3548,10 @@
   "families": [
    "kick"
   ],
-  "audit_override": null
+  "audit_override": null,
+  "gain_db": null,
+  "parent": null,
+  "probe": false
  },
  {
   "id": "tears_140bpm",
@@ -2779,6 +3571,32 @@
   "families": [
    "kick"
   ],
-  "audit_override": null
+  "audit_override": null,
+  "gain_db": null,
+  "parent": null,
+  "probe": false
+ },
+ {
+  "id": "know_youre_there",
+  "kind": "project",
+  "source": {
+   "how": "wip",
+   "paths": [
+    "/Users/peterkiemann/.cache/manifold/kick-goal-2026-10-10/snare_wip/know_youre_there.npy"
+   ]
+  },
+  "source_sha256": [
+   "ffe53bb6f15d21486dfa1d77949456753e6296d84602d98a5177124447e72df6"
+  ],
+  "sample_rate": 48000,
+  "offset_s": -28.6483,
+  "proof": "wip:proven (kick and snare agree)",
+  "families": [
+   "kick"
+  ],
+  "audit_override": null,
+  "gain_db": null,
+  "parent": null,
+  "probe": false
  }
 ]

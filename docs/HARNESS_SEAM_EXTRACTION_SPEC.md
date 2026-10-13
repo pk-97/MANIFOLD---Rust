@@ -129,7 +129,7 @@ caller-identity.
 | 5 top-level overlays | ~4463–4498 | `ui_renderer.render_sub_region` @ `Depth::OVERLAY` + shadow | **BUG-097** — this call choice is the drift |
 | 5 card-drag ghost + text input | ~4502–4510 | `ui_root.inspector.card_drag_first_node()` + `inputs.text_input/frame_timer` | on ui_root / caller |
 | 5 prepare+render flush | ~4513–4515 | `ui_renderer` | — |
-| VQT waterfall | ~4528–4662 | `inputs.vqt` + `ui_root.audio_setup_panel/dropdown` + `inputs.blit_*` | absent headless (None) |
+| VQT waterfall | ~4528–4662 | `inputs.vqt` + `ui_root.audio_setup_panel` + `inputs.blit_*` | absent headless (None) |
 | commit | ~4664–4677 | — | seam commits its own encoder |
 | overlay dirty-clear | ~4681–4695 | `ui_root.overlay_region_start` + `tree.clear_dirty_range` | on ui_root |
 

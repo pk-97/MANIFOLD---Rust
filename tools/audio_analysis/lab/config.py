@@ -15,9 +15,15 @@ KEYS = {'family', 'candidates', 'models', 'combine', 'stage', 'sampling', 'train
 NET_DEFAULTS = dict(swa_epochs=0, batch=256, lr=0.002, precision='float32')
 NET_KEYS = {'past_ms', 'ahead_ms', 'channels', 'epochs', *NET_DEFAULTS}
 PRECISIONS = ('float32', 'mixed')
+# Sampling options that reweight the net's draws; absent and null both mean off, and leave the config key as before.
+ROW_WEIGHT_KEYS = ('hard_negatives', 'coincident_weight')
+# Families with a partner family's labels for sampling.coincident_weight (score.PARTNER; a test keeps them equal).
+COINCIDENT_FAMILIES = ('snare', 'kick')
 # templates: null, or {'k': K} sound templates fitted per training (lab/templates.py), three tree inputs.
 TREE_DEFAULTS = dict(templates=None)
 TREE_KEYS = {'measures', 'max_iter', 'learning_rate', 'max_leaf_nodes', 'min_samples_leaf', 'l2', *TREE_DEFAULTS}
+# Sampling keys that add copies of songs; absent, null and false all mean none, and leave the config key as before.
+COPY_KEYS = ('gain_variants', 'gain_probes', 'mix_variants')
 COMBINES = {'net': ('net',), 'trees': ('trees',), 'mean_logit': ('net', 'trees')}
 
 
@@ -47,6 +53,34 @@ class Experiment:
         """The kick net's input env; kick_goal_nn reads it at import. Channels are passed to the net, not env."""
         return dict(KICK_GOAL_NN_PAST_MS=str(self.net['past_ms'] if self.net else 150), KICK_GOAL_NN_AHEAD_MS='0',
                     KICK_GOAL_NN_PERC='0', KICK_GOAL_NN_FLAT='0')
+
+    @property
+    def gain_variants(self):
+        """None, or {'count': K, 'db': [lo, hi]}: K extra copies of each exam song at fixed seeded gains, training only."""
+        return self.sampling.get('gain_variants')
+
+    @property
+    def gain_probes(self):
+        """None, or dB gains: each exam song also predicted (held out, never trained on) at these gains, scored by
+        score.py as the level-robustness section."""
+        return self.sampling.get('gain_probes')
+
+    @property
+    def hard_negatives(self):
+        """None, or {'by': 'onset', 'power': P}: the net draws each negative candidate in proportion to its onset
+        strength to the power P (per song, times the vouched-negative weight)."""
+        return self.sampling.get('hard_negatives')
+
+    @property
+    def coincident_weight(self):
+        """None, or W: the net draws a positive whose label sits within 20 ms of a partner-family label (snare <->
+        kick) W times as often."""
+        return self.sampling.get('coincident_weight')
+
+    @property
+    def mix_variants(self):
+        """True: each exam song's proven mix and master variants (registry.variants_of) train as its copies."""
+        return bool(self.sampling.get('mix_variants'))
 
     def generated_as_clips(self):
         return 'generated' in self.train and self.sampling['generated'] != 'songs'
@@ -106,15 +140,35 @@ def check(d, where=''):
     if s.get('per_song') != 'median':
         raise ValueError(f'{where}: sampling.per_song is "median" in v1 (label-rich draws: BUG-9ngk8.5 (label-rich songs))')
     gen = s.get('generated')
-    if ('generated' in train) != (gen is not None) or set(s) - {'per_song', 'generated'}:
+    if ('generated' in train) != (gen is not None) or set(s) - {'per_song', 'generated', *COPY_KEYS, *ROW_WEIGHT_KEYS}:
         raise ValueError(f'{where}: sampling.generated is set exactly when generated songs train')
     if gen is not None and gen != 'songs' and not (isinstance(gen, float) and 0 < gen < 1):
         raise ValueError(f'{where}: sampling.generated is "songs" or a share between 0 and 1')
+    gv = s.get('gain_variants')
+    if gv is not None and not (isinstance(gv, dict) and set(gv) == {'count', 'db'} and type(gv['count']) is int
+                               and gv['count'] >= 1 and isinstance(gv['db'], list) and len(gv['db']) == 2
+                               and all(isinstance(v, (int, float)) for v in gv['db']) and gv['db'][0] <= gv['db'][1]):
+        raise ValueError(f'{where}: sampling.gain_variants is null or {{"count": K >= 1, "db": [lo, hi]}}')
+    gp = s.get('gain_probes')
+    if gp is not None and not (isinstance(gp, list) and gp and all(isinstance(v, (int, float)) and v for v in gp)):
+        raise ValueError(f'{where}: sampling.gain_probes is null or a list of non-zero dB gains')
+    hn = s.get('hard_negatives')
+    if hn is not None and not (isinstance(hn, dict) and set(hn) == {'by', 'power'} and hn['by'] == 'onset'
+                               and type(hn['power']) in (int, float) and hn['power'] > 0 and 'net' in m):
+        raise ValueError(f'{where}: sampling.hard_negatives is null or {{"by": "onset", "power": P > 0}}, and needs a net')
+    cw = s.get('coincident_weight')
+    if cw is not None and not (type(cw) in (int, float) and cw > 0 and 'net' in m and d['family'] in COINCIDENT_FAMILIES):
+        raise ValueError(f'{where}: sampling.coincident_weight is null or W > 0, for a net in the {COINCIDENT_FAMILIES} families')
+    if s.get('mix_variants') not in (None, False, True):
+        raise ValueError(f'{where}: sampling.mix_variants is true, false or null')
 
 
 def build(name, d):
     """An Experiment from a config dict (schema 1 migrates); seeds may be absent (a run's meta drops them)."""
     d = migrate(d)
+    if 'sampling' in d:   # null is absent: the key (and run ids) stay as before
+        d = dict(d, sampling={k: v for k, v in d['sampling'].items()
+                              if (k not in COPY_KEYS or v not in (None, False)) and (k not in ROW_WEIGHT_KEYS or v is not None)})
     check({k: v for k, v in d.items() if k != 'seeds'} | {'seeds': d.get('seeds', [])}, name)
     return Experiment(name=name, family=d['family'], candidates=d['candidates'], models=d['models'],
                       combine=d['combine'], stage=d['stage'], sampling=d['sampling'], train=tuple(d['train']),

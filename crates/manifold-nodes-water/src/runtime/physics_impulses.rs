@@ -106,8 +106,8 @@ impl WaterRuntime<'_> {
     /// simulation clock. Apply the source's resolved controls before calling.
     /// Scene setup and GPU-derived geometry must already have been evaluated
     /// by a full frame; this entry point samples live CPU controls only.
-    /// Historical observations must be supplied in order; later render inputs
-    /// cannot reconstruct an earlier audio event.
+    /// An event older than the latest observation is captured at that
+    /// observation and lands on the next step: triggers are never skipped.
     pub fn capture_scene_impulse_at_source(
         &mut self,
         binding: &mut PreparedSceneImpulse,
@@ -116,7 +116,7 @@ impl WaterRuntime<'_> {
         sequence: u64,
     ) -> Result<(), String> {
         self.validate_impulse_capture(binding, captured)?;
-        self.observe_physics_at_source(source)?;
+        let source = self.observe_physics_at_source(source)?;
         let step = self.executor.sim_step();
         self.capture_scene_impulse_with_stamp(
             binding,

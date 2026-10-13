@@ -40,7 +40,7 @@ Render and measure:
   node-catalog            regenerate docs/NODE_CATALOG.md from the primitive registry  [cargo run -p manifold-nodes --bin gen_node_catalog --]  (cost: focused)
   thumbnails              regenerate preset picker thumbnails  [scripts/gpu_queue.py -- cargo run -p manifold-app --bin generate-preset-thumbnails --]  (cost: broad)
   freeze-profile          profile the freeze compiler's fused kernels  [scripts/gpu_queue.py -- cargo run -p manifold-nodes --bin freeze-profile --]  (cost: broad)
-  project-tool            .manifold files: info, json, tempo show|set|at, clip add-audio, scene set-model (never hand-edit the ZIP)  [cargo run -p manifold-io --bin project_tool --]  (cost: focused)
+  project-tool            .manifold files: info, json, project new, layer add, tempo show|set|at, clip add-audio|add-bulk|list, marker add-bulk|list, scene set-model (never hand-edit the ZIP)  [cargo run -p manifold-io --bin project_tool --]  (cost: focused)
   rt-toggle-matrix        one rt-capture per RT toggle; the RT A/B harness  [scripts/rt_toggle_matrix.py]  (cost: broad)
   rt-quality-matrix       RT quality oracle against the committed baseline  [scripts/rt_quality_matrix.py]  (cost: broad)
   rt-region-probe         region-mean probe for the multi-bounce GI gate  [scripts/rt_region_probe.py]  (cost: unit)
@@ -60,6 +60,9 @@ Render and measure:
   lab-run                 detector lab: train an experiment config's missing seeds, one process each, saving held-out predictions (--plan, --warm)  [tools/audio_analysis/lab/run.py]  (cost: broad)
   lab-score               detector lab: score a run from its saves in seconds (exam and generated songs apart); --legacy NPZ for parity  [tools/audio_analysis/lab/score.py]  (cost: focused)
   lab-compare             detector lab A/B of two experiment configs: trains missing seeds interleaved, refuses unfair pairs, prints the comparison  [tools/audio_analysis/lab/compare.py]  (cost: broad)
+  lab-queue               detector lab overnight queue: PLAN.json of run/compare steps, one at a time under the GPU lock, a log per step and a summary, stops on the first failure (--dry-run)  [tools/audio_analysis/lab/overnight.py]  (cost: broad)
+  lab-preflight           detector lab: read-only check that an overnight PLAN.json can run (clean tree, MPS, disk, configs, kick verdicts, caches warm, GPU lock)  [tools/audio_analysis/lab/preflight.py]  (cost: focused)
+  lab-review              detector label review project: build OUT.manifold [--songs] [--fires-dir] [--dry-run] | fires DIR | read ORIGINAL EDITED (Peter's edits as per-family overlays)  [tools/audio_analysis/lab/review_project.py]  (cost: focused)
   repair-audio-fixture    rebuild a fixture mix from aligned stems, preserving the original; dry-run unless --apply  [scripts/repair_audio_fixture.py]  (cost: focused)
 
 CPU reference oracles (f64, seconds, no GPU):

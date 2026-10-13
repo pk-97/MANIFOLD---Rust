@@ -221,6 +221,9 @@ lab/test_lab.py                         # the lab's tests (unittest, run directl
 | The lab feeds training what the legacy runner did | `test_lab.py::test_input_parity` (song order, groups, seeds, tensor bytes) |
 | The recipe env is pinned | `recipe.apply` exits on conflict; `test_lab.py::test_recipe_conflict_exits` |
 | Auditing never changes the labels sha | sidecar file; `test_lab.py::test_audit_keeps_labels_sha` |
+| A song's copies (gain, mix variant) share one song's draws and weight; copy-less songs train unchanged | `kick_goal_nn.train` versions, `models.weights`; `test_lab.py::test_versions_share_one_draw_budget`, `test_versions_share_weight`, `test_train_sampling_matches_head` |
+| A mix variant trains only on a proven offset, its labels moved by it; one pattern moving by the catalogue lag within 10 ms proves it (training only, never the exam's 1 ms) | `lab/offsets.py --variants`, `registry.variants_of`; `test_lab.py::test_mix_variants`, `test_variant_proof_rule` |
+| The release holdout is never in a dev exam or cutoff pool | `run.setup`, `score.without_holdout`; `test_lab.py::test_release_holdout` |
 
 ## 5. The plausible-wrong turns, by name
 
@@ -342,6 +345,10 @@ pitch restarts; trigger kicks; reviewed labels where there is no stem); unscored
 uncertain and doubtful spans, and kick rolls (`detector_labels.roll_spans`, Peter's rolls ruling); vouched
 negatives are melodic note starts far from kicks (`kick_goal_melodic`); recall songs are positives-only. One truth
 per song for training and scoring: the legacy loop scored dev songs on reviewed passages but trained on whole songs.
+Project songs outside the goal set (the catalogue's label-ready songs, `detector_wip.PAIRS`) have no record: `kick_labels.py
+project` writes `GOAL/kick_labels_project.json` by the shared labeller's rules with the kick as the family (`own_kicks`:
+kicks are never negatives, negatives keep 105 ms from every kick note; attacks judged in 100-400 Hz, where the sub and
+bass do not hide them).
 
 **Consequence, stated plainly.** Lab kick numbers use a different truth (whole songs, rolls out) and the shared
 scorer (detector_eval), so they are not comparable with the shipped 0.889 / 0.894. Proof of the move is part

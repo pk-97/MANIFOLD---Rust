@@ -139,7 +139,7 @@ class LabTests(unittest.TestCase):
             measures=['tail3'], max_iter=10, learning_rate=.1, max_leaf_nodes=7, min_samples_leaf=5, l2=1.0)),
             combine='trees', stage=None, sampling=dict(per_song='median'), train=['project'], seeds=[0], folds=3))
         lab = {t: {} for t in 'abcdef'}
-        songs = {t: type('S', (), dict(kind='project'))() for t in lab}
+        songs = {t: type('S', (), dict(kind='project', gain_db=None, parent=None, probe=False))() for t in lab}
         grps, trainings, _ = models.plan(cfg, lab, songs)
         z = {}
         for i, n in enumerate(trainings):
@@ -426,12 +426,372 @@ def builder(x):
         with self.assertRaises(ValueError):
             models.check_disjoint(trainings)
 
+    def test_gain_variants(self):
+        """Gain copies train with their song's group and are never held out; null changes nothing; a copy's audio is
+        the song's, scaled, under its own content id; probes are held out with their song and never trained."""
+        from tools.audio_analysis.lab.registry import gain_copies, gain_copy, gain_gains, mix
+        base = config.load('snare_v2_mid')
+        raw = json.loads((config.EXPERIMENTS / 'snare_v2_mid.json').read_text())
+        for sampling in (dict(raw['sampling'], gain_variants=None), dict(raw['sampling'], gain_probes=None)):
+            self.assertEqual(config.build('x', dict(raw, sampling=sampling)).key(), base.key())
+        gv = config.load('snare_v2_gain')
+        self.assertEqual(gv.gain_variants, dict(count=3, db=[-12, 6]))
+        self.assertEqual({k: v for k, v in gv.sampling.items() if k != 'gain_variants'}, base.sampling)
+        with self.assertRaises(ValueError):
+            config.build('x', dict(raw, sampling=dict(raw['sampling'], gain_variants=dict(count=0, db=[-1, 1]))))
+        songs = load()
+        lab, _ = run.labels('snare')
+        exam = [t for t in lab if songs[t].kind == 'project']
+        plain = models.plan(base, lab, songs)
+        for t in exam:
+            for c in gain_copies(songs[t], 3, -12, 6) + [gain_copy(songs[t], -6, probe=True)]:
+                songs[c.id], lab[c.id] = c, lab[t]
+        grps, trainings, untrained = models.plan(base, lab, songs)
+        self.assertEqual((grps, untrained), plain[:1] + plain[2:])
+        copy = {t: [c for c in lab if songs[c].parent == t and not songs[c].probe] for t in exam}
+        probe = {t: [c for c in lab if songs[c].parent == t and songs[c].probe] for t in exam}
+        self.assertTrue(all(len(v) == 3 for v in copy.values()) and all(len(v) == 1 for v in probe.values()))
+        models.check_disjoint(trainings, {c: songs[c].parent for c in lab if songs[c].parent})
+        for n, old in zip(trainings, plain[1]):
+            held = {t for t in old['held']}
+            self.assertEqual([t for t in n['held'] if t in held], old['held'])
+            if len(n['without']) == 1:
+                self.assertEqual(sorted(set(n['held']) - held), sorted(c for t in held for c in probe.get(t, [])))
+            else:
+                self.assertEqual(set(n['held']), held)
+            # Each held song's copies stay out of the training; every other song's copies are in it, probes never.
+            self.assertFalse(any(c in n['trained'] for t in held for c in copy.get(t, []) + probe.get(t, [])))
+            self.assertTrue(all(c in n['trained'] for t in exam if t not in held for c in copy[t]))
+            self.assertFalse(any(songs[u].probe for u in n['trained']))
+            self.assertEqual([u for u in n['trained'] if songs[u].gain_db is None], old['trained'])
+        t = exam[0]
+        self.assertEqual(gain_gains(t, 3, -12, 6), gain_gains(t, 3, -12, 6))
+        self.assertNotEqual(gain_gains(t, 3, -12, 6), gain_gains(exam[1], 3, -12, 6))
+        with tempfile.TemporaryDirectory() as d:
+            a = Path(d) / 'a.npy'
+            np.save(a, np.linspace(-.5, .5, 100))
+            s = song('s', a)
+            c = gain_copy(s, -6.0)
+            np.testing.assert_allclose(mix(c), mix(s) * 10 ** (-6 / 20))
+            self.assertEqual(mix(s).tolist(), np.load(a).tolist())
+            self.assertNotEqual(c.content_id, s.content_id)
+            self.assertNotEqual(c.content_id, gain_copy(s, -5.0).content_id)
+        self.assertEqual(cache.code_id(mix), cache.code_id(mix.__wrapped__))
+
+    def test_row_weight_options(self):
+        """sampling.hard_negatives and sampling.coincident_weight: null reads as absent (the key and run ids stay as
+        before), bad values are refused, and each rides the per-model key through the sampling dict."""
+        base = config.load('snare_v2_mid')
+        raw = json.loads((config.EXPERIMENTS / 'snare_v2_mid.json').read_text())
+
+        def with_sampling(**kw):
+            return dict(raw, sampling=dict(raw['sampling'], **kw))
+        for off in (dict(hard_negatives=None), dict(coincident_weight=None)):
+            self.assertEqual(config.build('x', with_sampling(**off)).key(), base.key())
+        hard, co = config.load('snare_v2_hardneg'), config.load('snare_v2_coincident')
+        self.assertEqual(hard.hard_negatives, dict(by='onset', power=0.5))
+        self.assertEqual(co.coincident_weight, 3.0)
+        self.assertEqual({k: v for k, v in hard.sampling.items() if k != 'hard_negatives'}, base.sampling)
+        self.assertEqual({k: v for k, v in co.sampling.items() if k != 'coincident_weight'}, base.sampling)
+        for f in ('snare_v2_hardneg', 'snare_v2_coincident'):   # the shipped recipe plus the one option, nothing else
+            a, b = json.loads((config.EXPERIMENTS / f'{f}.json').read_text()), dict(raw)
+            self.assertEqual({k: v for k, v in a.items() if k != 'sampling'}, {k: v for k, v in b.items() if k != 'sampling'})
+        for bad in (dict(hard_negatives=dict(by='onset')), dict(hard_negatives=dict(by='level', power=1.0)),
+                    dict(hard_negatives=dict(by='onset', power=0)), dict(hard_negatives=dict(by='onset', power=True)),
+                    dict(hard_negatives=dict(by='onset', power=1.0, extra=1)), dict(hard_negatives=2.0),
+                    dict(coincident_weight=0), dict(coincident_weight=-1.0), dict(coincident_weight=True),
+                    dict(coincident_weight='3')):
+            with self.assertRaises(ValueError, msg=str(bad)):
+                config.build('bad', with_sampling(**bad))
+        trees_only = dict(raw, models=dict(trees=raw['models']['trees']), combine='trees', stage=None)
+        for opt in (dict(hard_negatives=dict(by='onset', power=1.0)), dict(coincident_weight=2.0)):
+            with self.assertRaises(ValueError, msg='a trees-only config would ignore it'):
+                config.build('bad', dict(trees_only, sampling=dict(raw['sampling'], **opt)))
+        with self.assertRaises(ValueError):
+            config.build('bad', dict(with_sampling(coincident_weight=2.0), family='bass'))
+        self.assertEqual(config.COINCIDENT_FAMILIES, tuple(score.PARTNER))
+        # The per-model key moves with each option, and with the partner labels the draws read.
+        trainings = [dict(without=[0], held=['a'], trained=['b', 'c'], clips=[]),
+                     dict(without=[1], held=['b'], trained=['a', 'c'], clips=[])]
+        meta = dict(parts=dict(finder='f', frames='fm', measures='m'), trainings=trainings,
+                    label_ids=dict(a='1', b='2', c='3'), content=dict(a='A', b='B', c='C'))
+        keys = {c.name: run.model_key(c, 'net', meta) for c in (base, hard, co)}
+        self.assertEqual(len(set(keys.values())), 3)
+        self.assertNotEqual(run.model_key(co, 'net', meta),
+                            run.model_key(co, 'net', dict(meta, label_ids=dict(meta['label_ids'], b='9'))))
+        self.assertNotEqual(keys['snare_v2_hardneg'], run.model_key(hard, 'net', dict(meta, parts=dict(meta['parts'], onset='o'))))
+
+    def test_row_weights_follow_the_spec(self):
+        """hard_negatives: a candidate's weight is its onset strength (the largest early rise of the cached profile, at
+        least one dB) to the power. coincident_weight: W on positive rows whose nearest label sits within 20 ms of a
+        partner-family label, 1 on every other row, negatives included."""
+        pairs = 16
+        profile = np.zeros((4, 2 * pairs))
+        profile[0, 3], profile[1, 15], profile[2, pairs + 5], profile[3, 0] = 6.0, 12.0, 40.0, .2
+        strength = models.onset_strength(profile)
+        np.testing.assert_array_equal(strength, [6.0, 12.0, models.HARD_FLOOR_DB, models.HARD_FLOOR_DB])
+        np.testing.assert_allclose(models.hard_negative_weights(strength, 1.0), [6.0, 12.0, 1.0, 1.0])
+        np.testing.assert_allclose(models.hard_negative_weights(strength, 2.0), [36.0, 144.0, 1.0, 1.0])
+        # Snare labels at 1, 2, 3; kicks at 1.010 (together), 2.025 (not), 3.020 (exactly 20 ms: together).
+        onset = np.array([.5, 1.002, 1.5, 2.001, 2.9, 3.001, 4.0])
+        y = np.array([0., 1., 0., 1., 0., 1., 0.])
+        w = models.coincident_row_weights(onset, y, [3.0, 1.0, 2.0], [1.010, 2.025, 3.020], 3.0)
+        np.testing.assert_array_equal(w, [1, 3, 1, 1, 1, 3, 1])
+        # The partner mirror: a kick row beside a snare label.
+        w = models.coincident_row_weights(np.array([1.011, 2.024]), np.array([1., 1.]), [1.010, 2.025], [1.0, 2.0], 2.0)
+        np.testing.assert_array_equal(w, [2, 1])
+        np.testing.assert_array_equal(models.coincident_row_weights(onset, y, [], [1.0], 3.0), np.ones(len(onset)))
+        np.testing.assert_array_equal(models.coincident_row_weights(onset, y, [1.0], [], 3.0), np.ones(len(onset)))
+        # run.row_weights wires them: a gain copy reads its parent's partner labels, an unlabelled song draws evenly,
+        # and a config without the options hands the net nothing.
+        import types
+
+        from tools.audio_analysis.lab import components
+        mine, copy = dict(positives=[3.0, 1.0, 2.0]), types.SimpleNamespace(id='a_g-6', parent='a', source=dict(how='goal'))
+        partner = dict(a=dict(positives=[1.010, 2.025, 3.020]))
+        neg_w, pos_w = run.row_weights(config.load('snare_v2_coincident'), copy, mine, onset, y, partner)
+        self.assertIsNone(neg_w)
+        np.testing.assert_array_equal(pos_w, [1, 3, 1, 1, 1, 3, 1])
+        # A mix variant's labels are its song's moved by the proven shift, so the partner labels move with them.
+        variant = types.SimpleNamespace(id='a_mix', parent='a', source=dict(how='variant'), offset_s=.5)
+        moved = dict(positives=[3.5, 1.5, 2.5])
+        _, pos_w = run.row_weights(config.load('snare_v2_coincident'), variant, moved, onset + .5, y, partner,
+                                   types.SimpleNamespace(offset_s=0.0))
+        np.testing.assert_array_equal(pos_w, [1, 3, 1, 1, 1, 3, 1])
+        other = types.SimpleNamespace(id='b', parent=None, source=dict(how='goal'))
+        self.assertEqual(run.row_weights(config.load('snare_v2_coincident'), other, mine, onset, y, partner), (None, None))
+        self.assertEqual(run.row_weights(config.load('snare_v2_mid'), copy, mine, onset, y, None), (None, None))
+        real = components.measure
+        components.measure = lambda song, rule, family, name: profile
+        try:
+            neg_w, pos_w = run.row_weights(config.load('snare_v2_hardneg'), copy, mine, onset[:4], y[:4], None)
+        finally:
+            components.measure = real
+        np.testing.assert_allclose(neg_w, [6.0 ** .5, 12.0 ** .5, 1.0, 1.0])
+        self.assertIsNone(pos_w)
+
+    def test_mix_variants(self):
+        """sampling.mix_variants is validated like gain_variants and false or null leave the key; a variant's labels
+        are its song's with every time moved (a field of unknown meaning is refused); variants train with their song's
+        group, are never held out or examined, and only proven ones become copies."""
+        from tools.audio_analysis.lab import registry
+        base = config.load('snare_v2_mid')
+        raw = json.loads((config.EXPERIMENTS / 'snare_v2_mid.json').read_text())
+        for v in (None, False):
+            self.assertEqual(config.build('x', dict(raw, sampling=dict(raw['sampling'], mix_variants=v))).key(), base.key())
+        on = config.build('x', dict(raw, sampling=dict(raw['sampling'], mix_variants=True)))
+        self.assertTrue(on.mix_variants and not base.mix_variants)
+        self.assertNotEqual(on.key(), base.key())
+        with self.assertRaises(ValueError):
+            config.build('x', dict(raw, sampling=dict(raw['sampling'], mix_variants='yes')))
+        lab1 = dict(kind='project', duration_s=10.0, positives=[1.0, 2.0], hard_neg=[3.0], unscored=[[4.0, 5.0]],
+                    loop_spans=[], dense=[[6.0, 6.5]], dense_pos=[6.1], dense_all=[6.1, 6.25], dropped=[7.0],
+                    offset_s=-30.0, positives_only=False, timing_shift_ms=0.0)
+        got = registry.variant_labels(lab1, .25, 11.0)
+        self.assertEqual((got['positives'], got['hard_neg'], got['unscored'], got['dense'], got['dense_all'], got['dropped']),
+                         ([1.25, 2.25], [3.25], [[4.25, 5.25]], [[6.25, 6.75]], [6.35, 6.5], [7.25]))
+        self.assertEqual((got['duration_s'], got['offset_s'], got['positives_only']), (11.0, -29.75, False))
+        with self.assertRaises(ValueError):
+            registry.variant_labels(dict(lab1, onsets=[1.0]), .25, 11.0)
+        # Every field of every family's project labels is known: a zero shift returns the labels unchanged.
+        for fam in registry.FAMILIES:
+            for t, s in run.labels(fam)[0].items():
+                if s.get('kind') == 'project':
+                    self.assertEqual(registry.variant_labels(s, 0.0, s['duration_s']), s, f'{fam} {t}')
+        songs = load()
+        lab, _ = run.labels('snare')
+        exam = [t for t in lab if songs[t].kind == 'project' and songs[t].offset_s is not None]
+        plain = models.plan(base, lab, songs)
+        vs = {}
+        for t in exam:
+            v = registry.variant_copy(songs[t], dict(path='/nowhere.wav', sha256=hashlib.sha256(t.encode()).hexdigest(),
+                                                     offset_s=songs[t].offset_s - .01, status='proven (test)'))
+            self.assertTrue(registry.is_variant(v) and v.content_id != songs[t].content_id and v.parent == t)
+            self.assertAlmostEqual(registry.variant_shift(v, songs[t]), -.01)
+            songs[v.id], lab[v.id], vs[t] = v, lab[t], v.id
+        grps, trainings, _ = models.plan(base, lab, songs)
+        self.assertEqual(grps, plain[0])
+        models.check_disjoint(trainings, {c: t for t, c in vs.items()})
+        for n in trainings:
+            self.assertFalse(set(vs.values()) & set(n['held']))
+            self.assertEqual({c for t, c in vs.items() if t not in n['held']}, set(n['trained']) & set(vs.values()))
+        # The committed proofs through setup: proven variants are copies with moved labels, the rest are listed.
+        cfg = config.Experiment(**{**base.__dict__, 'sampling': {**base.sampling, 'mix_variants': True}})
+        lab, songs, meta = run.setup(cfg)
+        proofs = registry.variant_proofs()
+        for t in meta['projects']:
+            for r in proofs.get(t, ()):
+                if r['status'].startswith('proven'):
+                    self.assertEqual(meta['parents'][r['id']], t)
+                    shift = r['offset_s'] - songs[t].offset_s
+                    self.assertEqual(lab[r['id']]['positives'], [x + shift for x in lab[t]['positives']])
+                else:
+                    self.assertIn(r['id'], meta['variants_excluded'])
+        self.assertFalse(set(meta['copies']) & set(meta['exam'] + meta['holdout'] + meta['songs']))
+        self.assertNotEqual(meta['run_id'], run.setup(base)[2]['run_id'])
+
+    def test_variant_proof_rule(self):
+        """A variant is proven relatively when one pattern's fit moves by the catalogue lag within 10 ms, whatever the
+        other pattern does; the nearest pattern and its residual are recorded. A byte-identical copy of the lab mix is
+        excluded before any decode, and a non-wav variant decodes through the catalogue's reader."""
+        from types import SimpleNamespace
+
+        import soundfile as sf
+
+        from tools.audio_analysis.lab import offsets, registry, remix
+        spb, lag = .5, .3
+        parent = (dict(k=2, lag=.010), dict(k=2, lag=.012), spb)
+
+        def variant(kick_miss, snare_miss, snare_k=2):
+            # a variant later by lag: its fitted offset is the parent's less the lag, plus the miss
+            return (dict(k=2, lag=.010 - lag + kick_miss), dict(k=snare_k, lag=.012 - lag + snare_miss), spb)
+        got = offsets.moves(parent, variant(.0099, .5, snare_k=1), lag)
+        self.assertEqual(sorted(got), ['kick', 'snare'])
+        self.assertEqual(offsets.relative(got), ('kick', got['kick']))
+        self.assertAlmostEqual(got['kick'], .0099)
+        self.assertIsNone(offsets.relative(offsets.moves(parent, variant(.0101, -.011), lag)))
+        self.assertEqual(offsets.relative(offsets.moves(parent, variant(.009, -.002), lag))[0], 'snare')
+        self.assertIsNone(offsets.relative(offsets.moves(None, variant(0, 0), lag)))
+        self.assertIsNone(offsets.relative(offsets.moves(parent, (None, None, spb), lag)))
+        self.assertEqual(offsets.VARIANT_TOL_S, .010)
+        s = SimpleNamespace(id='x', source_sha256=('a' * 64,))
+        _, row = offsets.prove_variant(s, '/nowhere.mp3', 'a' * 64, 0.0, None, {})
+        self.assertEqual(row['status'], 'excluded (a byte-identical copy of the lab mix)')
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / 'v.flac'
+            sf.write(p, np.random.default_rng(0).uniform(-.5, .5, (44100, 2)), 44100)
+            v = registry.variant_copy(song('x', p), dict(path=str(p), sha256=sha256_file(p), offset_s=0.0,
+                                                         status='proven (test)'))
+            np.testing.assert_array_equal(registry.mix(v), remix.read_mono(str(p), 48000))
+            self.assertEqual(len(registry.mix(v)), 48000)
+
+    def test_versions_share_weight(self):
+        """The trees' and templates' weights: a song's versions split one song's weight; distinct keys change
+        nothing, byte for byte."""
+        rng = np.random.default_rng(3)
+        ys = [rng.integers(0, 2, 40).astype(float) for _ in range(3)]
+        hards = [rng.uniform(size=40) < .2 for _ in range(3)]
+        flat = models.weights(ys, hards, [False] * 3)
+        for got, want in zip(models.weights(ys, hards, [False] * 3, versions=['a', 'b', 'c']), flat):
+            np.testing.assert_array_equal(got, want)
+        shared = models.weights(ys, hards, [False] * 3, versions=['a', 'a', 'b'])
+        self.assertAlmostEqual(shared[0].sum() + shared[1].sum(), shared[2].sum())
+        self.assertEqual(models.versions_of(['a', 'b', 'a@x', 'b@y'], {'a@x': 'a', 'b@y': 'b'}),
+                         [('a', ['a', 'a@x']), ('b', ['b', 'b@y'])])
+        with self.assertRaises(ValueError):
+            models.versions_of(['a@x', 'a'], {'a@x': 'a'})
+
+    def test_release_holdout(self):
+        """About one project song in six by a salted hash of its id: adding or reordering songs never moves one in
+        or out. Without --release the exam never holds a holdout song (run.py --plan in its own process included) and
+        scoring drops them from every cutoff pool; with it the exam is the holdout. The plan and the model keys never
+        depend on the mode; the run id does, and meta records the holdout."""
+        import subprocess
+        from types import SimpleNamespace
+
+        from tools.audio_analysis.lab import registry
+
+        def fake(names, kind='project'):
+            return {t: SimpleNamespace(kind=kind, parent=None) for t in names}
+        ids = [f'song_{k}' for k in range(600)]
+        big = registry.release_holdout(fake(ids))
+        self.assertEqual(registry.release_holdout(fake(ids[:50])), [t for t in big if t in ids[:50]])
+        self.assertEqual(sorted(registry.release_holdout(fake(ids[::-1]))), sorted(big))
+        self.assertTrue(70 <= len(big) <= 130, len(big))
+        self.assertEqual(registry.release_holdout(fake(ids, 'generated')), [])
+        cfg = config.load('snare_v2_mid')
+        _, _, dev = run.setup(cfg)
+        _, _, rel = run.setup(cfg, release=True)
+        self.assertTrue(dev['holdout'] and not set(dev['exam']) & set(dev['holdout']))
+        self.assertEqual(rel['exam'], dev['holdout'])
+        self.assertEqual(sorted(dev['exam'] + dev['holdout']), sorted(dev['projects']))
+        self.assertEqual((dev['groups'], dev['trainings']), (rel['groups'], rel['trainings']))
+        self.assertEqual({m: run.model_key(cfg, m, dev) for m in cfg.models}, {m: run.model_key(cfg, m, rel) for m in cfg.models})
+        self.assertNotEqual(dev['run_id'], rel['run_id'])
+        r = subprocess.run([sys.executable, str(Path(run.__file__).resolve()), '--plan', 'snare_v2_mid'],
+                           capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stderr[-2000:])
+        lines = r.stdout.splitlines()
+        exam, hold = (next(x for x in lines if x.startswith(p)).split()[1:] for p in ('exam:', 'holdout:'))
+        self.assertTrue(exam and not set(exam) & set(hold))
+        self.assertEqual(hold, dev['holdout'])
+        h = dev['holdout'][0]
+        held = {'a': 1, 'b': 2, h: 3, 'p': 4}
+        pool = {'a': {'b': 2, h: 3}, 'b': {'a': 1, h: 3}, h: {'a': 1}, 'p': {'a': 1}}
+        got = score.without_holdout(dev, held, pool, {'p': dict(parent=h)})
+        self.assertEqual(got, ({'a': 1, 'b': 2}, {'a': {'b': 2}, 'b': {'a': 1}}))
+        self.assertEqual(score.without_holdout(rel, held, pool, {'p': dict(parent=h)}), (held, pool))
+
     def test_compare_refuses_mismatch(self):
         a = dict(run_id='a', labels_sha256='x', exam=['s1', 's2'], recall_only=[])
         compare.check(a, dict(a, run_id='b'))
         for k, v in (('labels_sha256', 'y'), ('exam', ['s1']), ('recall_only', ['s1'])):
             with self.assertRaises(ValueError):
                 compare.check(a, dict(a, run_id='b', **{k: v}))
+
+    def test_child_refuses_cpu_unless_asked(self):
+        """A net child on the CPU exits with the reason unless --cpu; the GPU, and --cpu on the CPU, pass; run() hands
+        --cpu on to the child. train() called directly (the parity tests) never meets the guard."""
+        import subprocess
+        from unittest import mock
+
+        import torch
+        cpu, mps = torch.device('cpu'), torch.device('mps')
+        with self.assertRaises(SystemExit) as e:
+            run.check_device(cpu)
+        self.assertIn('refusing to train a net on the CPU', str(e.exception))
+        self.assertIn('--cpu', str(e.exception))
+        with mock.patch.dict(os.environ, {'KICK_GOAL_NN_DEVICE': 'cpu'}):
+            with self.assertRaises(SystemExit) as e:
+                run.check_device(cpu)
+            self.assertIn('KICK_GOAL_NN_DEVICE=cpu', str(e.exception))
+        run.check_device(cpu, cpu=True)
+        run.check_device(mps)
+        seen = []
+
+        def fake(cmd, **kw):
+            seen.append(cmd)
+            return subprocess.CompletedProcess(cmd, 0)
+        for flag in (False, True):
+            seen.clear()
+            with mock.patch.object(run, 'run_id_of', return_value='kick-none'), \
+                    mock.patch.object(run.subprocess, 'run', fake), mock.patch.object(run, 'RUNS', Path(tempfile.mkdtemp())):
+                run.run('kick_v2_final', [7], cpu=flag)
+            self.assertEqual(['--child' in c and '--cpu' in c for c in seen], [flag])
+
+    def test_old_exam_view(self):
+        """--exam-of: the A/B on the songs of an earlier run's exam, beside the untouched full-exam numbers."""
+        from unittest import mock
+
+        from tools.audio_analysis.eval.detector_compare import pooled
+
+        def side(hits):
+            ps = {t: dict(matched=h, labels=10, extra=e, minutes=1.0, late_ms=[]) for t, (h, e) in hits.items()}
+            return dict(exam=list(hits), recall_only=[], results=dict(net=dict(per_song=ps)))
+        a = [side(dict(s1=(5, 1), s2=(6, 1), s3=(9, 0), s4=(9, 0)))]
+        b = [side(dict(s1=(7, 1), s2=(8, 1), s3=(4, 4), s4=(4, 4)))]
+        before = json.dumps([a, b], sort_keys=True)
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(score, 'RUNS', Path(d)):
+            (Path(d) / 'old-run').mkdir()
+            (Path(d) / 'old-run' / 'meta.json').write_text(json.dumps(dict(exam=['s1', 's2', 'gone'])))
+            kept, head = score.old_exam('old-run', a[0]['exam'])
+            self.assertEqual(kept, ['s1', 's2'])
+            self.assertIn('2 of its 3 songs', head)
+            self.assertIn('out of 4 in this exam', head)
+            self.assertIn("not in this exam: ['gone']", head)
+            lines = compare.old_exam_lines([a, b], 'old-run', 'snare')
+            self.assertTrue(all(ln.startswith('old exam | ') for ln in lines))
+            self.assertIn('2 songs', '\n'.join(lines))
+            self.assertIn('| 2 songs', lines[2])   # A: F1 line counts the subset only
+            sub = pooled({t: a[0]['results']['net']['per_song'][t] for t in kept}, kept, ())
+            self.assertIn(f'{sub[2]:.4f}', lines[2])
+            self.assertNotIn(f'{pooled(a[0]["results"]["net"]["per_song"], a[0]["exam"], ())[2]:.4f}', lines[2])
+            rows = score.old_exam_lines({0: dict(a[0], run_id='x')}, 'old-run')
+            self.assertIn('full exam (4 songs)', rows[1])
+            self.assertIn('old exam (2 songs)', rows[1])
+            with self.assertRaises(SystemExit):
+                score.old_exam('no-such-run', [])
+        self.assertEqual(before, json.dumps([a, b], sort_keys=True))
 
     def test_scorer_parity(self):
         """The lab scorer on saves of the retired runners reproduces their results files exactly, each on the labels
@@ -489,6 +849,7 @@ def builder(x):
                 self.assertTrue(bool((getattr(old, k) == getattr(new, k)).all()), (t, k))
             for k in ('end', 'pre', 'on', 'mask', 'y', 'hard'):
                 np.testing.assert_array_equal(getattr(old, k), getattr(new, k), err_msg=f'{t} {k}')
+            self.assertEqual((new.neg_w, new.pos_w), (None, None), 'a config without the options draws as before')
 
     def test_input_parity_note_family(self):
         """Bass through the lab gets the retired family runner's inputs: its candidates in the bass band, rows and
@@ -595,7 +956,7 @@ def builder(x):
         cfg = config.build('x', json.loads((config.EXPERIMENTS / 'snare_gen50_staged.json').read_text()))
         cfg = config.Experiment(**{**cfg.__dict__, 'train': ('project',), 'sampling': dict(per_song='median')})
         lab = {t: {} for t in 'abcdefgh'}
-        songs = {t: type('S', (), dict(kind='project'))() for t in lab}
+        songs = {t: type('S', (), dict(kind='project', gain_db=None, parent=None, probe=False))() for t in lab}
         grps, trainings, _ = models.plan(cfg, lab, songs)
         code = {t: i for i, t in enumerate(lab)}
         name = {i: t for t, i in code.items()}
@@ -687,7 +1048,7 @@ def builder(x):
         cfg = config.Experiment(**{**cfg.__dict__, 'models': dict(cfg.models, trees=dict(cfg.models['trees'],
                                                                                           templates=dict(k=2)))})
         lab = {t: {} for t in 'abcdefghyz'}
-        songs = {t: type('S', (), dict(kind='generated' if t in 'yz' else 'project'))() for t in lab}
+        songs = {t: type('S', (), dict(kind='generated' if t in 'yz' else 'project', gain_db=None, parent=None, probe=False))() for t in lab}
         grps, trainings, _ = models.plan(cfg, lab, songs)
         self.assertTrue(any(n['clips'] for n in trainings))
         code = {t: i for i, t in enumerate(lab)}
@@ -715,7 +1076,7 @@ def builder(x):
             def predict_proba(self, x):
                 return np.column_stack([1 - x[:, 0] / 100, x[:, 0] / 100])
         with mock.patch.object(templates, '_kmeans', kmeans), \
-                mock.patch.object(models, 'fit_trees', lambda p, rows, rs, share: Fit()):
+                mock.patch.object(models, 'fit_trees', lambda p, rows, rs, share, versions=None: Fit()):
             out, _ = run.train_templated(cfg, trainings, 0, trees, tmpl, log=lambda m: None)
         self.assertEqual(len(seen), len(trainings))
         for marks, tr, got in zip(seen, trainings, out):
@@ -886,7 +1247,7 @@ class ReleaseTests(unittest.TestCase):
         from tools.audio_analysis.lab import release, stage
         cfg = config.load('kick_gen50_gated')
         lab = {t: {} for t in 'abcdefgh'}
-        songs = {t: type('S', (), dict(kind='project'))() for t in lab}
+        songs = {t: type('S', (), dict(kind='project', gain_db=None, parent=None, probe=False))() for t in lab}
         grps, trainings, _ = models.plan(cfg, lab, songs)
         meta = dict(groups=grps, trainings=trainings)
         rng = np.random.default_rng(7)
@@ -935,7 +1296,7 @@ class ReleaseTests(unittest.TestCase):
             return logit(np.clip(p, 1e-6, 1 - 1e-6))
         cfg = config.load('cover_kick')
         lab = {t: {} for t in 'abcdef'}
-        songs = {t: type('S', (), dict(kind='project'))() for t in lab}
+        songs = {t: type('S', (), dict(kind='project', gain_db=None, parent=None, probe=False))() for t in lab}
         grps, trainings, _ = models.plan(cfg, lab, songs)
         meta = dict(groups=grps, trainings=trainings)
         rng = np.random.default_rng(5)
@@ -1030,6 +1391,397 @@ class ReleaseTests(unittest.TestCase):
                     dict(pts, channels=['flat', 'side']), dict(pts, finders=['kick', 'rise']),
                     dict(pts, stage=dict(pts['stage'], max_windows=5))):
             self.assertTrue(release.check_parts(bad), bad)
+
+
+class FileBackedSpectrumTests(unittest.TestCase):
+    """BUG-xd15a: the spectrum artifact is file-backed (a raw .npy beside the bundle, memory-mapped into the Song),
+    so Songs hold file-backed pages the kernel can evict without swapping instead of anonymous RAM. The cache key,
+    stamps and .npz bundles are unchanged; an existing cache is migrated by widening its own .npz copy."""
+
+    def _stub(self, d, name, blob):
+        """A registry Song whose content is only these bytes (the test_recycled_name pattern)."""
+        p = Path(d) / f'{name}.wav'
+        p.write_bytes(blob)
+        return song(f'fb_{name}', p)
+
+    def _spec16(self, seed):
+        rng = np.random.default_rng(seed)
+        return (rng.normal(0, 20, (600, 64)) + 20).astype(np.float16)
+
+    def test_legacy_cache_reads_backed_identically(self):
+        """An existing .npz cache is still the hit: its first file-backed read is migrated to a .npy sidecar widened
+        from it, the view holds the identical float32 bytes, the builder is not re-run, and the bundle files keep
+        their names and bytes."""
+        with tempfile.TemporaryDirectory() as d:
+            d = Path(d)
+            root = d / 'c'
+            stub = self._stub(d, 'one', b'backed-fixture-one')
+            spec16 = self._spec16(1)
+            builds = []
+
+            def build():
+                builds.append(1)
+                return spec16.copy()
+            old = cache.artifact(stub, 'spectrum', dict(bands=64), build, root=root)
+            self.assertEqual(builds, [1])
+            names = sorted(p.name for p in root.iterdir())
+            hashes = {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in root.iterdir()}
+            backed = cache.artifact(stub, 'spectrum', dict(bands=64), build, root=root, file_backed=True)
+            self.assertEqual(builds, [1], 'the migration must not rebuild')
+            npy_name = next(n for n in names if n.endswith('.npz')).replace('.npz', '.npy')
+            self.assertEqual(sorted(p.name for p in root.iterdir()), sorted([*names, npy_name]),
+                             'the sidecar joins the existing bundle files, none of which moves')
+            self.assertTrue(np.array_equal(np.asarray(backed), old.astype(np.float32)),
+                            'the mmap view must hold the same bytes the legacy npz path returned')
+            self.assertEqual(backed.dtype, np.float32)
+            self.assertTrue(backed.flags.writeable, 'torch.from_numpy needs a writeable view')
+            after = {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in root.iterdir()
+                     if p.suffix in ('.json', '.npz')}
+            self.assertEqual(after, {k: v for k, v in hashes.items() if k.endswith(('.json', '.npz'))},
+                             'the bundle is untouched by the migration')
+
+    def test_backed_hit_is_a_view_and_rebuilds_nothing(self):
+        """The first file-backed read builds the artifact, saves the sidecar .npy and returns only a view of it; a
+        second read serves the same view without rebuilding, and the legacy read still returns the float16 payload."""
+        with tempfile.TemporaryDirectory() as d:
+            d = Path(d)
+            root = d / 'c'
+            stub = self._stub(d, 'two', b'backed-fixture-two')
+            spec16 = self._spec16(2)
+            builds = []
+
+            def build():
+                builds.append(1)
+                return spec16.copy()
+            first = cache.artifact(stub, 'spectrum', dict(bands=64), build, root=root, file_backed=True)
+            self.assertEqual(builds, [1])
+            self.assertIsInstance(first, np.memmap)
+            second = cache.artifact(stub, 'spectrum', dict(bands=64), build, root=root, file_backed=True)
+            self.assertEqual(builds, [1])
+            self.assertTrue(np.array_equal(np.asarray(second), np.asarray(first)))
+            legacy = cache.artifact(stub, 'spectrum', dict(bands=64), build, root=root)
+            self.assertEqual(legacy.dtype, np.float16)
+            self.assertTrue(np.array_equal(legacy.astype(np.float32), np.asarray(first)))
+
+    def test_backed_song_matches_legacy_song_slices(self):
+        """A Song over the mmap cuts byte-identical slices to a Song over the RAM float32 array."""
+        import torch
+        from tools.audio_analysis.eval.kick_goal_nn import Song as NetSong
+        with tempfile.TemporaryDirectory() as d:
+            d = Path(d)
+            root = d / 'c'
+            stub = self._stub(d, 'three', b'backed-fixture-three')
+            spec16 = self._spec16(3)
+            build = lambda: spec16.copy()  # noqa: E731
+            rng = np.random.default_rng(4)
+            onset = np.sort(rng.uniform(1.0, 3.0, 40))
+            emit = onset + 0.08
+            mask, y, hard = np.ones(40, bool), rng.integers(0, 2, 40), np.zeros(40, bool)
+            idx, shift = np.arange(6), rng.integers(-1, 2, 6)
+            ram = NetSong(cache.artifact(stub, 'spectrum', dict(bands=64), build, root=root).astype(np.float32),
+                          onset, emit, mask, y, 'fb', hard)
+            backed = NetSong(cache.artifact(stub, 'spectrum', dict(bands=64), build, root=root, file_backed=True),
+                             onset, emit, mask, y, 'fb', hard)
+            self.assertTrue(bool(ram.slices(idx, shift).equal(backed.slices(idx, shift))),
+                            'a Song over the mmap must cut the same slices as a Song over the RAM array')
+
+
+class _Draws:
+    """A default_rng stand-in for the train() sampling block that records every draw it makes."""
+
+    def __init__(self, gen):
+        self.gen, self.calls = gen, []
+
+    def choice(self, idx, draws, p=None):
+        pick = self.gen.choice(idx, draws, p=p)
+        self.calls.append(('choice', tuple(int(x) for x in pick)))
+        return pick
+
+    def integers(self, *a, **k):
+        out = self.gen.integers(*a, **k)
+        self.calls.append(('integers', tuple(int(x) for x in np.asarray(out).ravel())))
+        return out
+
+    def permutation(self, n):
+        out = self.gen.permutation(n)
+        self.calls.append(('permutation', tuple(int(x) for x in out)))
+        return out
+
+
+class TrainMathBatteryTests(unittest.TestCase):
+    """The sampling arithmetic is untouched by the on-disk edits: the drawn indices, the jitter and the batch
+    permutation, the cut slices, and a one-step gradient all match git HEAD's train() exactly, on tiny fixtures and
+    the CPU device only (no GPU, no MPS)."""
+
+    _HEAD = None
+
+    @classmethod
+    def _head_nn(cls):
+        """The kick_goal_nn module as git HEAD has it, executed from a scratch copy (never the worktree's file)."""
+        if cls._HEAD is None:
+            import importlib.util
+            import subprocess
+            src = subprocess.run(['git', '-C', str(Path(__file__).resolve().parents[3]),
+                                  'show', 'HEAD:tools/audio_analysis/eval/kick_goal_nn.py'],
+                                 check=True, capture_output=True, text=True).stdout
+            scratch = Path(tempfile.mkdtemp()) / 'kick_goal_nn_head.py'
+            scratch.write_text(src)
+            mod_spec = importlib.util.spec_from_file_location('kick_goal_nn_head', scratch)
+            head = importlib.util.module_from_spec(mod_spec)
+            mod_spec.loader.exec_module(head)
+            cls._HEAD = head
+        return cls._HEAD
+
+    @staticmethod
+    def _nn():
+        from tools.audio_analysis.eval import kick_goal_nn
+        return kick_goal_nn
+
+    @staticmethod
+    def _tiny_songs():
+        """Two Songs, each a small spectrum with a few dozen training rows and one extra channel (no clips)."""
+        from tools.audio_analysis.eval.kick_goal_nn import Song
+        out = []
+        for k in range(2):
+            rng = np.random.default_rng(10 + k)
+            n = 2000
+            spec = (rng.normal(0, 20, (n, 64)) + 20).astype(np.float32)
+            onset = np.sort(rng.uniform(1.0, 3.0, 60))
+            emit = onset + 0.08
+            mask, y = np.ones(60, bool), rng.integers(0, 2, 60)
+            hard = rng.integers(0, 2, 60) == 1
+            extra = rng.normal(0, 1, (n, 64)).astype(np.float32)
+            out.append(Song(spec, onset, emit, mask, y, f't{k}', hard, (extra,)))
+        return out
+
+    @staticmethod
+    def _train_once(mod, songs, seed):
+        """train() one epoch with the default_rng behind a recorder, so every draw is captured; returns the trained
+        state dict and the draws."""
+        real, recs = np.random.default_rng, []
+
+        def recorded(s, *a, **k):
+            wrap = _Draws(real(s, *a, **k))
+            recs.append(wrap)
+            return wrap
+        want = os.environ.get('KICK_GOAL_NN_DEVICE')
+        os.environ['KICK_GOAL_NN_DEVICE'] = 'cpu'
+        np.random.default_rng = recorded
+        try:
+            net = mod.train(songs, seed, epochs=1, batch=10 ** 9)
+        finally:
+            np.random.default_rng = real
+            if want is None:
+                os.environ.pop('KICK_GOAL_NN_DEVICE', None)
+            else:
+                os.environ['KICK_GOAL_NN_DEVICE'] = want
+        return net.state_dict(), recs[0].calls
+
+    def test_train_sampling_matches_head(self):
+        """For one seed, HEAD and current train() draw the same indices, the same jitter and the same batch
+        permutation (the same numpy stream over the same fixture)."""
+        _, head_draws = self._train_once(self._head_nn(), self._tiny_songs(), 5)
+        _, now_draws = self._train_once(self._nn(), self._tiny_songs(), 5)
+        self.assertTrue(head_draws, 'the sampling must have drawn')
+        self.assertEqual(head_draws, now_draws)
+
+    def test_unit_row_weights_leave_the_stream_alone(self):
+        """sampling.hard_negatives / coincident_weight off is the HEAD stream (the test above); weights of all ones
+        are the same draws, so the option only moves the rows it reweights."""
+        _, head_draws = self._train_once(self._head_nn(), self._tiny_songs(), 5)
+        songs = self._tiny_songs()
+        for s in songs:
+            s.neg_w, s.pos_w = np.ones(len(s.y)), np.ones(len(s.y))
+        _, ones_draws = self._train_once(self._nn(), songs, 5)
+        self.assertEqual(head_draws, ones_draws)
+        songs = self._tiny_songs()
+        songs[0].neg_w = np.where(np.arange(60) % 2 == 0, 5.0, 1.0)
+        _, moved = self._train_once(self._nn(), songs, 5)
+        self.assertNotEqual(head_draws, moved)
+
+    def test_row_weights_set_the_draw_probabilities(self):
+        """draw_weights: the vouched-negative weight times neg_w for negatives, pos_w for positives, each untouched by
+        the other; and train() draws only the candidates a weight leaves alive."""
+        nn = self._nn()
+        song = self._tiny_songs()[0]
+        idx = np.arange(60)
+        hard = np.where(song.hard[idx], nn.HARD_W, 1.0)
+        np.testing.assert_array_equal(nn.draw_weights(song, idx, 0.0), hard)
+        np.testing.assert_array_equal(nn.draw_weights(song, idx, 1.0), np.ones(60))
+        song.neg_w = np.linspace(1.0, 7.0, 60)
+        np.testing.assert_array_equal(nn.draw_weights(song, idx, 0.0), hard * song.neg_w)
+        np.testing.assert_array_equal(nn.draw_weights(song, idx, 1.0), np.ones(60))
+        song.pos_w = np.linspace(2.0, 3.0, 60)
+        np.testing.assert_array_equal(nn.draw_weights(song, idx, 1.0), song.pos_w)
+        np.testing.assert_array_equal(nn.draw_weights(song, idx, 0.0), hard * song.neg_w)
+        # In train(): only one negative and one positive of song t0 stay alive, so every draw of that class is it.
+        songs = self._tiny_songs()
+        pos, neg = np.flatnonzero(songs[0].mask & (songs[0].y == 1)), np.flatnonzero(songs[0].mask & (songs[0].y == 0))
+        songs[0].neg_w, songs[0].pos_w = np.zeros(60), np.zeros(60)
+        songs[0].neg_w[neg[3]], songs[0].pos_w[pos[2]] = 1.0, 1.0
+        _, calls = self._train_once(self._nn(), songs, 5)
+        picks = [c[1] for c in calls if c[0] == 'choice']   # song t0: positives, negatives; then song t1's
+        self.assertEqual(set(picks[0]), {int(pos[2])})
+        self.assertEqual(set(picks[1]), {int(neg[3])})
+        self.assertGreater(len(set(picks[2])), 1)
+
+    def test_train_one_step_matches_head(self):
+        """One forward/backward on a tiny batch, weights fixed by the seed: the trained state is byte-identical to
+        the HEAD-materialized training's."""
+        head_state, _ = self._train_once(self._head_nn(), self._tiny_songs(), 7)
+        now_state, _ = self._train_once(self._nn(), self._tiny_songs(), 7)
+        self.assertEqual(sorted(head_state), sorted(now_state))
+        for k, v in head_state.items():
+            np.testing.assert_array_equal(v.numpy(), now_state[k].numpy(), err_msg=k)
+
+    def test_versions_share_one_draw_budget(self):
+        """A song with copies draws per_song rows per class in all, its versions picked by the training rng, not
+        per_song per version. A song without copies draws exactly as before: a one-version list equals the bare Song,
+        and copies never move the draws of the songs before them."""
+        a, b = self._tiny_songs()
+        x, y = self._tiny_songs()
+        per_song = int(np.median([int((s.mask & (s.y == 1)).sum()) for s in (a, b)]))
+        _, draws = self._train_once(self._nn(), [[a, x, y], b], 5)
+        rows = len(next(c for c in draws if c[0] == 'permutation')[1])
+        self.assertEqual(rows, 2 * 2 * per_song)
+        _, flat = self._train_once(self._nn(), [a, x, y, b], 5)
+        self.assertEqual(len(next(c for c in flat if c[0] == 'permutation')[1]), 4 * 2 * per_song)
+        bare_state, bare = self._train_once(self._nn(), [a, b], 5)
+        listed_state, listed = self._train_once(self._nn(), [[a], [b]], 5)
+        self.assertEqual(bare, listed)
+        for k, v in bare_state.items():
+            np.testing.assert_array_equal(v.numpy(), listed_state[k].numpy(), err_msg=k)
+        # b's draws (a choice and a jitter per class) lead the stream whether or not a's copies follow it.
+        _, after = self._train_once(self._nn(), [b, [a, x, y]], 5)
+        _, alone = self._train_once(self._nn(), [b, a], 5)
+        self.assertEqual(after[:4], alone[:4])
+
+    def test_slices_cut_then_moved_equal_cut_on_cpu(self):
+        """On the CPU: a song cut after .to(cpu) cuts exactly what it cut before the move, and the per-batch move
+        leaves the values alone (the train() batch-layout change is arithmetic-free on this device)."""
+        import torch
+        song0 = self._tiny_songs()[0]
+        idx, shift = np.arange(0, 12), np.array([1, -1, 0, 1, -1, 0, 1, -1, 0, 1, -1, 0])
+        cut = song0.slices(idx, shift)
+        moved = song0.to(torch.device('cpu')).slices(idx, shift)
+        self.assertTrue(bool(cut.equal(moved)))
+        self.assertTrue(bool(cut.equal(cut.to(torch.device('cpu')))))
+
+
+class ModelKeyScopeTests(unittest.TestCase):
+    """BUG-4x7jh: one model's key moves with what can change its saved layer, and with nothing else."""
+
+    CFG = 'kick_blend'   # both models; no probing settings of its own
+
+    def _meta(self):
+        trainings = [dict(without=[0], held=['a'], trained=['b', 'c'], clips=[]),
+                     dict(without=[1], held=['b'], trained=['a', 'c'], clips=[])]
+        return dict(parts=dict(finder='f', frames='fm', measures='m'), trainings=trainings,
+                    label_ids=dict(a='1', b='2', c='3', p='7'), content=dict(a='A', b='B', c='C', p='P'))
+
+    def test_model_key_ignores_songs_it_never_touches(self):
+        """A song outside every training (a new generated song nobody fits or predicts) moves no model's key; a
+        held song's audio still does, because the layer npz stores its predictions."""
+        cfg = config.load(self.CFG)
+        base = {m: run.model_key(cfg, m, self._meta()) for m in cfg.models}
+        wide = self._meta()
+        wide['content'] = dict(wide['content'], p='P2')
+        wide['label_ids'] = dict(wide['label_ids'], p='8')
+        self.assertEqual({m: run.model_key(cfg, m, wide) for m in cfg.models}, base)
+        who_moves = {m: run.model_key(cfg, m, dict(self._meta(), content=dict(self._meta()['content'], a='A2')))
+                     for m in cfg.models}
+        self.assertNotEqual(who_moves, base)
+
+    def test_kick_release_moves_kick2_readers_only(self):
+        """A snare reading the kick's verdicts trains on new data when a new kick ships: its run parts and trees key
+        move with the kick release, its net key does not, and a config without kick2 does not move at all."""
+        from tools.audio_analysis.lab import kick_verdict
+        real = kick_verdict.kick_release
+
+        def keys(name, tid):
+            kick_verdict.kick_release = lambda: tid
+            try:
+                cfg = config.load(name)
+                meta = dict(self._meta(), parts=run.parts(cfg))
+                return meta['parts'], {m: run.model_key(cfg, m, meta) for m in cfg.models}
+            finally:
+                kick_verdict.kick_release = real
+        a, b = keys('snare_v2_mid', 'kick-A'), keys('snare_v2_mid', 'kick-B')
+        self.assertNotEqual(a[0], b[0])
+        self.assertNotEqual(a[1]['trees'], b[1]['trees'])
+        self.assertEqual(a[1]['net'], b[1]['net'])
+        self.assertEqual(keys(self.CFG, 'kick-A'), keys(self.CFG, 'kick-B'))
+
+    def test_net_code_ignores_the_trees_fitting(self):
+        """BUG-4x7jh: the net's code term covers only the net's training path, so a change to models.fit_trees (even
+        a comment) moves the trees' key and not the net's."""
+        from tools.audio_analysis.lab import models
+        cfg = config.load(self.CFG)
+        meta = self._meta()
+        base = {m: run.model_key(cfg, m, meta) for m in cfg.models}
+        real = models.fit_trees
+
+        def another_fit(*a, **k):
+            return real(*a, **k)
+        models.fit_trees = another_fit
+        try:
+            now = {m: run.model_key(cfg, m, meta) for m in cfg.models}
+        finally:
+            models.fit_trees = real
+        self.assertEqual(now['net'], base['net'])
+        self.assertNotEqual(now['trees'], base['trees'])
+
+    def test_trees_code_ignores_the_net_training(self):
+        """The trees' code term covers only the trees path (models.fit_trees, tree_rows): a change to
+        kick_goal_nn.train moves the net's key and not the trees'."""
+        from tools.audio_analysis.eval import kick_goal_nn
+        cfg = config.load(self.CFG)
+        meta = self._meta()
+        base = {m: run.model_key(cfg, m, meta) for m in cfg.models}
+        real = kick_goal_nn.train
+
+        def another_train(*a, **k):
+            return real(*a, **k)
+        kick_goal_nn.train = another_train
+        try:
+            now = {m: run.model_key(cfg, m, meta) for m in cfg.models}
+        finally:
+            kick_goal_nn.train = real
+        self.assertNotEqual(now['net'], base['net'])
+        self.assertEqual(now['trees'], base['trees'])
+
+    def test_sampling_probes_leave_the_model_keys(self):
+        """BUG-4x7jh: the sampling.gain_probes setting rides the run's scoring, not a model's key; the probe copies
+        themselves still do, as held songs (the layer npz stores their predictions)."""
+        base = config.load(self.CFG)
+        probed = config.Experiment(**{**base.__dict__, 'sampling': {**base.sampling, 'gain_probes': [-6.0, 6.0]}})
+        self.assertEqual({m: run.model_key(probed, m, self._meta()) for m in probed.models},
+                         {m: run.model_key(base, m, self._meta()) for m in base.models})
+        meta = self._meta()
+        meta['trainings'] = [dict(n, held=n['held'] + ['p']) for n in meta['trainings']]
+        self.assertNotEqual({m: run.model_key(probed, m, meta) for m in probed.models},
+                            {m: run.model_key(base, m, self._meta()) for m in base.models})
+
+    def test_plan_matches_the_imported_run(self):
+        """BUG-1yrqo: run.py's --plan path in its own process derives the same net and trees model keys the imported
+        run does, so imported-vs-__main__ env drift (recipe or import order) cannot silently fork the keys. --plan
+        only the id and nothing trains."""
+        import subprocess
+        cfg = config.load('kick_v2_final')
+        lab, songs, meta = run.setup(cfg)
+        want = {m: run.model_key(cfg, m, meta) for m in cfg.models}
+        prog = ('import json, runpy, sys\n'
+                'sys.argv = ["run.py", "--plan", "kick_v2_final"]\n'
+                f'runpy.run_path({str(Path(run.__file__).resolve())!r}, run_name="__main__")\n'
+                'from tools.audio_analysis.lab import config, run\n'
+                'cfg = config.load(sys.argv[2])\n'
+                'lab, songs, meta = run.setup(cfg)\n'
+                'keys = {m: run.model_key(cfg, m, meta) for m in cfg.models}\n'
+                'print(json.dumps(keys))\n')
+        r = subprocess.run([sys.executable, '-P', '-c', prog], capture_output=True, text=True,
+                           cwd=str(Path(tempfile.gettempdir())))
+        self.assertEqual(r.returncode, 0, r.stderr[-2000:])
+        self.assertEqual(json.loads(r.stdout.strip().splitlines()[-1]), want)
 
 
 if __name__ == '__main__':

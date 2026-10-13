@@ -79,7 +79,7 @@ def inputs(st, part, p):
     return np.hstack([xs[0][:, :1]] + [x[:, keep] for x in xs])
 
 
-def train(cfg, grps, trainings, final, parts, seed, generated=(), log=print):
+def train(cfg, grps, trainings, final, parts, seed, generated=(), probes=None, log=print):
     """{save key: staged probabilities}. final[i] = {held song: the detector's probabilities} for trainings[i] (plan
     order); parts[song] = song_parts. Learns on the songs the detector trains on (generated ones as clips, weighted
     by the config's share), less the generated songs when learn is 'project'."""
@@ -128,7 +128,8 @@ def train(cfg, grps, trainings, final, parts, seed, generated=(), log=print):
                     models.cutoff(metas, {u: q for u, (_, q) in pool.items()}))
         for u, (j, q) in pool.items():
             out[f'pair{k}__staged__{u}'] = gated(st, stage_x(k, j, u), q, cuts)
-        for t in g:
+        # Probes (gain_probes) are judged by their group's stage and cutoffs, like the song they copy.
+        for t in g + [p for p, v in (probes or {}).items() if v['parent'] in g]:
             q = outer.predict_proba(stage_x(k, k, t))[:, 1]
             out[f'staged__{t}'] = gated(st, stage_x(k, k, t), q, cuts)
             # Ungated, so a release chooses the stage's own cutoff on it (docs/DETECTOR_RUNTIME_DESIGN.md D5).
