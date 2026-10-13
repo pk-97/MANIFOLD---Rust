@@ -302,6 +302,9 @@ impl UIState {
         target: UiGraphTarget,
         param_id: ParamId,
     ) {
+        let key = (target.clone(), param_id.clone());
+        self.automation_lane_order.retain(|k| k != &key);
+        self.automation_lane_order.insert(0, key);
         self.chosen_automation_params
             .insert(layer_id, (target, param_id));
     }
@@ -1070,6 +1073,22 @@ mod tests {
         s.pin_scope(InspectorTab::Master); // already pinned — no extra churn
         assert_eq!(s.selection_version, v);
         assert_eq!(s.pinned_scope(), Some(InspectorTab::Master));
+    }
+
+    #[test]
+    fn choosing_a_param_moves_its_lane_to_the_front() {
+        let mut s = UIState::new();
+        let a = UiGraphTarget::Effect(manifold_foundation::EffectId::from("fx-a"));
+        let pa = ParamId::from("amount");
+        let pb = ParamId::from("mix");
+        s.automation_lane_order.push((a.clone(), pa.clone()));
+        s.automation_lane_order.push((a.clone(), pb.clone()));
+        s.set_chosen_automation_param(LayerId::from("l1"), a.clone(), pb.clone());
+        assert_eq!(s.automation_lane_order[0], (a.clone(), pb.clone()));
+        assert_eq!(s.automation_lane_order.len(), 2);
+        s.set_chosen_automation_param(LayerId::from("l1"), a.clone(), pa.clone());
+        assert_eq!(s.automation_lane_order[0], (a, pa));
+        assert_eq!(s.automation_lane_order.len(), 2);
     }
 
     #[test]

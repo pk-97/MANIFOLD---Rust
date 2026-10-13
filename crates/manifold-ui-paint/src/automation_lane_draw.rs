@@ -41,42 +41,65 @@ fn dot(ui: &mut UIRenderer, x: f32, y: f32, radius: f32, tint: Color32) {
     );
 }
 
-/// Stack formatting keeps moving readouts off the allocator.
-fn readout(
-    ui: &mut UIRenderer,
-    x: f32,
-    y: f32,
+/// Empty lane: the flat value line is dashed, like Ableton's.
+fn dashed_hline(ui: &mut UIRenderer, x0: f32, x1: f32, y: f32, thickness: f32, tint: Color32) {
+    const DASH: f32 = 6.0;
+    const GAP: f32 = 4.0;
+    let mut x = x0;
+    while x < x1 {
+        ui.draw_aa_line(x, y, (x + DASH).min(x1), y, thickness, tint);
+        x += DASH + GAP;
+    }
+}
+
+/// Longest lane label kept in a bubble; the rest is cut so the numbers survive.
+const READOUT_LABEL_MAX: usize = 200;
+
+/// Stack formatting keeps moving readouts off the allocator. Never panics:
+/// output that overflows the buffer is truncated.
+fn format_readout<'b>(
+    bytes: &'b mut [u8; 512],
+    label: Option<&str>,
     beat: Option<f64>,
     beats_per_bar: f32,
     value: f32,
     whole_numbers: bool,
-) {
-    let mut bytes = [0_u8; 512];
+) -> &'b str {
     let mut text = std::io::Cursor::new(bytes.as_mut_slice());
+    // Write errors only mean the buffer is full; the partial text is kept.
+    if let Some(label) = label {
+        let mut end = label.len().min(READOUT_LABEL_MAX);
+        while !label.is_char_boundary(end) {
+            end -= 1;
+        }
+        let _ = write!(text, "{}   ", &label[..end]);
+    }
     if let Some(beat) = beat {
         let (bar, beat_in_bar, subbeat) = musical_position(beat, beats_per_bar);
-        if whole_numbers {
+        let _ = if whole_numbers {
             write!(text, "{bar}.{beat_in_bar}.{subbeat:03}   Value {value:.0}")
         } else {
             write!(text, "{bar}.{beat_in_bar}.{subbeat:03}   Value {value:.3}")
-        }
-        .expect("numeric readout fits");
+        };
     } else {
-        if whole_numbers {
-            write!(text, "{value:.0}").expect("numeric value fits");
+        let _ = if whole_numbers {
+            write!(text, "{value:.0}")
         } else {
-            write!(text, "{value:.3}").expect("numeric value fits");
-        }
+            write!(text, "{value:.3}")
+        };
     }
     let len = text.position() as usize;
-    let text = std::str::from_utf8(&bytes[..len]).expect("numeric readout is UTF-8");
-    ui.draw_text(
-        x,
-        y,
-        text,
-        color::AUTOMATION_LABEL_FONT as f32,
-        color::TEXT_WHITE_C32,
-    );
+    match std::str::from_utf8(&bytes[..len]) {
+        Ok(t) => t,
+        Err(e) => std::str::from_utf8(&bytes[..e.valid_up_to()]).unwrap_or(""),
+    }
+}
+
+/// Min/max scale label.
+fn readout(ui: &mut UIRenderer, x: f32, y: f32, beams: f32, whole_numbers: bool) {
+    let mut bytes = [0_u8; 512];
+    let text = format_readout(&mut bytes, None, None, 1.0, beams, whole_numbers);
+    ui.draw_text(x, y, text, color::AUTOMATION_LABEL_FONT as f32, color::TEXT_WHITE_C32);
 }
 
 /// Format the same one-based bar/beat convention used by the timeline ruler.
@@ -263,8 +286,6 @@ pub fn emit_automation_lanes(
                         } else {
                             (y + 2.0).min(r.y_max() - 16.0)
                         },
-                        None,
-                        lane.beats_per_bar,
                         lane.param_min + norm * (lane.param_max - lane.param_min),
                         lane.whole_numbers,
                     );
@@ -287,7 +308,12 @@ pub fn emit_automation_lanes(
                     .zip(lane.dots.iter().find(|d| d.beat == b))
             })
             .map(|(a, b)| (a.x, b.x));
-        for pair in lane.polyline.windows(2) {
+        if lane.dots.is_empty()
+            && let Some(&(_, y)) = lane.polyline.first()
+        {
+            dashed_hline(ui, graph.x, graph.x_max(), y, color::AUTOMATION_LINE_THICKNESS, accent);
+        }
+        for pair in lane.polyline.windows(2).filter(|_| !lane.dots.is_empty()) {
             let (x0, y0) = pair[0];
             let (x1, y1) = pair[1];
             let segment_hot = hot_segment.is_some_and(|(left, right)| x0 >= left && x1 <= right);
@@ -423,7 +449,19 @@ pub fn emit_automation_lanes(
                         | AutomationOperation::Segment
                         | AutomationOperation::Bend
                 );
-                let bubble_w = r.width.min(190.0);
+                let mut readout_bytes = [0_u8; 512];
+                let readout_text = format_readout(
+                    &mut readout_bytes,
+                    Some(&lane.label),
+                    Some(f.beat.0),
+                    lane.beats_per_bar,
+                    f.value,
+                    lane.whole_numbers,
+                );
+                let text_w = ui
+                    .measure_text_cached(readout_text, color::AUTOMATION_LABEL_FONT, FontWeight::Medium)
+                    .x;
+                let bubble_w = (text_w + 12.0).min(r.width);
                 let bubble_h = 20.0;
                 let gap = 8.0;
                 let min_x = r.x;
@@ -463,27 +501,16 @@ pub fn emit_automation_lanes(
                         Color32::new(20, 23, 28, 245),
                         3.0,
                     );
-                    readout(
-                        ui,
+                    ui.draw_text(
                         bubble_x + 6.0,
                         bubble_y + 3.0,
-                        Some(f.beat.0),
-                        lane.beats_per_bar,
-                        f.value,
-                        lane.whole_numbers,
+                        readout_text,
+                        color::AUTOMATION_LABEL_FONT as f32,
+                        color::TEXT_WHITE_C32,
                     );
                     ui.pop_depth();
                 }
             }
-        }
-        if lane.dots.is_empty() && feedback.is_none() && graph.height >= 20.0 {
-            ui.draw_text(
-                graph.x + 8.0,
-                graph.y_max() - 16.0,
-                "Click to add an automation point",
-                color::FONT_LABEL as f32,
-                color::AUTOMATION_LABEL_COLOR,
-            );
         }
         ui.pop_immediate_clip();
     }
@@ -492,7 +519,7 @@ pub fn emit_automation_lanes(
 
 #[cfg(test)]
 mod tests {
-    use super::musical_position;
+    use super::{format_readout, musical_position};
 
     #[test]
     fn readout_position_uses_runtime_time_signature() {
@@ -504,5 +531,14 @@ mod tests {
     fn readout_position_stays_finite_for_invalid_inputs() {
         assert_eq!(musical_position(f64::NAN, 0.0), (1, 1, 0));
         assert_eq!(musical_position(f64::INFINITY, f32::NAN), (1, 1, 0));
+    }
+
+    #[test]
+    fn long_lane_label_truncates_without_panicking() {
+        let label = "é".repeat(600);
+        let mut bytes = [0_u8; 512];
+        let text = format_readout(&mut bytes, Some(&label), Some(4.0), 4.0, 0.5, false);
+        assert!(text.len() <= 512);
+        assert!(text.ends_with("Value 0.500"));
     }
 }

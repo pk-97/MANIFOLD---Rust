@@ -779,7 +779,6 @@ impl ScenePanel {
             color::FONT_LABEL,
             true,
             label_width,
-            false,
             self.properties_card
                 .mod_active_tab
                 .get(slot)

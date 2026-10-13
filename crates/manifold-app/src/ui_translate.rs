@@ -320,10 +320,6 @@ pub fn layer_automation_lanes_to_ui_with_view(
         let target = UiGraphTarget::Generator(layer.layer_id.clone());
         push_instance_automation_lanes(gp, target, &mut out);
     }
-    let chosen_was_real = chosen.is_some_and(|(target, param_id)| {
-        out.iter()
-            .any(|lane| &lane.target == target && lane.param_id == *param_id)
-    });
     if let Some((target, param_id)) = chosen {
         push_chosen_placeholder_lane(layer, target, param_id, &mut out);
     }
@@ -344,20 +340,12 @@ pub fn layer_automation_lanes_to_ui_with_view(
             .iter()
             .position(|(target, param_id)| target == &lane.target && param_id == &lane.param_id)
             .unwrap_or(usize::MAX);
-        // A newly touched lane has no persisted rank yet. Keep it at the
-        // placeholder's append position so materializing its first point does
-        // not reorder the existing effect/generator lanes.
-        if stable_rank == usize::MAX
-            && !chosen_was_real
-            && chosen.is_some_and(|(target, param_id)| {
-                target == &lane.target && param_id == &lane.param_id
-            })
-        {
-            usize::MAX
-        } else if stable_rank == usize::MAX {
-            usize::MAX - 1
+        // A lane with no rank is newly touched or newly created: it goes on
+        // top, ahead of every ranked lane.
+        if stable_rank == usize::MAX {
+            0
         } else {
-            stable_rank
+            stable_rank + 1
         }
     });
     out

@@ -1238,7 +1238,6 @@ impl ParamCardPanel {
         self.row_host.ableton_trim_ids[i] = None;
         self.row_host.audio_trim_ids[i] = None;
         self.row_host.ableton_config_ids[i] = None;
-        self.row_host.automation_btn_ids[i] = None;
         self.row_host.mapping_chevron_ids[i] = None;
         self.row_host.toggle_ids[i] = None;
         self.row_host.mod_tab_ids[i] = Vec::new();
@@ -1369,7 +1368,6 @@ impl ParamCardPanel {
                 CONFIG_BTN_FONT_SIZE,
                 self.supports_envelopes,
                 label_width,
-                self.automation_entry_supported,
                 self.mod_active_tab.get(i).copied().unwrap_or(ModTab::Driver),
                 !self.compact,
                 Some(param_row_key_base(&info.id)),
@@ -1837,7 +1835,6 @@ impl ParamCardPanel {
                         FONT_SIZE,
                         true,
                         label_width,
-                        self.automation_entry_supported,
                         self.mod_active_tab.get(i).copied().unwrap_or(ModTab::Driver),
                         !self.compact,
                         Some(param_row_key_base(&info.id)),

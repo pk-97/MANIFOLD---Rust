@@ -233,7 +233,6 @@ pub struct ParamCardPanel {
     /// Whether the owning inspector scope supports direct automation entry.
     /// The app sets this for layer-owned effect/generator cards; master and
     /// scene-property cards keep the default false.
-    automation_entry_supported: bool,
     /// Rows are pub for test access to verify spec updates reach the built card.
     pub rows: Vec<ParamRow>,
     string_param_info: Vec<ParamCardStringInfo>,
@@ -483,7 +482,6 @@ impl ParamCardPanel {
             collapse_configured: false,
             is_selected: false,
             supports_envelopes: true,
-            automation_entry_supported: false,
             rows: Vec::new(),
             string_param_info: Vec::new(),
             row_host: RowHost::new(),
@@ -886,13 +884,6 @@ impl ParamCardPanel {
 
     pub fn set_layer_id(&mut self, id: Option<LayerId>) {
         self.layer_id = id;
-    }
-
-    /// Enable the explicit AUTO affordance for this card's supported scope.
-    /// This is UI-only capability state and is intentionally separate from the
-    /// serialized parameter surface.
-    pub fn set_automation_entry_supported(&mut self, supported: bool) {
-        self.automation_entry_supported = supported;
     }
 
     /// Whether this panel already represents `config`'s effect instance. The
@@ -1443,48 +1434,16 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn automation_entry_button_is_queryable_and_does_not_scrub() {
-        let mut tree = UITree::new();
-        let mut panel = ParamCardPanel::new();
-        panel.configure(&effect_config());
-        panel.set_automation_entry_supported(true);
-        panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 300.0));
-
-        let button = panel.row_host.automation_btn_ids[0].expect("supported row has AUTO");
-        assert_eq!(tree.name_of(button), Some("param_automation.radius"));
-        let widget = tree.widget_of(button);
-        assert!(matches!(panel.row_host.row_index.get(widget), Some((0, RowRole::AutomationBtn))));
-        let actions = panel.handle_click(button, &tree);
-        assert!(matches!(
-            actions.as_slice(),
-            [PanelAction::Params(ParamsAction::ShowAutomation(GraphParamTarget::Effect(0), id))]
-                if id.as_ref() == "radius"
-        ));
-        assert!(!actions.iter().any(|a| matches!(a, PanelAction::Scrub(..))));
-
-        let mut intents = crate::intent::IntentRegistry::new();
-        panel.register_intents(&mut intents);
-        assert!(matches!(
-            intents.resolve(&tree, Some(button), crate::intent::Gesture::RightClick),
-            Some(PanelAction::Params(ParamsAction::ParamLabelRightClick(GraphParamTarget::Effect(0), id)))
-                if id.as_ref() == "radius"
-        ));
-
-        let widget_before = tree.widget_of(button);
-        tree.clear();
-        panel.state.mod_state.driver_expanded[0] = true;
-        panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 300.0));
-        let widget_after = tree.widget_of(panel.row_host.automation_btn_ids[0].expect("AUTO survives rebuild"));
-        assert_eq!(widget_before, widget_after, "AUTO identity survives drawer insertion");
-    }
-
-    #[test]
-    fn automation_entry_button_is_absent_when_scope_is_unsupported() {
+    fn param_rows_have_no_auto_button() {
         let mut tree = UITree::new();
         let mut panel = ParamCardPanel::new();
         panel.configure(&effect_config());
         panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 300.0));
-        assert!(panel.row_host.automation_btn_ids.iter().all(Option::is_none));
+        for i in 0..tree.count() {
+            let id = tree.id_at(i);
+            assert_ne!(tree.get_node(id).and_then(|n| n.text.as_deref()), Some("AUTO"));
+            assert!(!tree.name_of(id).is_some_and(|n| n.starts_with("param_automation.")));
+        }
     }
 
     /// D9 widget-catalog self-test — the enumeration view proves out, and the
