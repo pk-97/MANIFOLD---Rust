@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Export-offset proofs for project songs (docs/DETECTOR_LAB_DESIGN.md D5), by detector_wip's method on the song's
 own mix: the project's kick notes against the mix's low onset strength, its snare notes against the 1-8 kHz
-rises, each fitted to whole bars plus a lag. Proven when both patterns pick the same bar, or when only one pattern
+rises, each fitted to a whole bar's time on the set's tempo map (als_extract's integration, so tempo automation fits
+too) plus a lag. Proven when both patterns pick the same bar, or when only one pattern
 exists and it wins clearly (r >= 0.3, margin >= 1 sd). A proof counts only when its offset equals the one the labels
 use (within 1 ms). A WIP song (detector_wip) is checked against its recorded set and offset, on the audio the lab
 reads. Writes lab/offset_proofs.json; registry.py reads it.
@@ -15,8 +16,7 @@ moves a fitted kick attack by up to 10 ms. Any audio the catalogue reads (mp3, a
 byte-identical copies of the lab mix or of another variant are listed, not proven. Writes lab/variant_proofs.json, which
 sampling.mix_variants reads (registry.variants_of).
 
-prove_seconds is the same fit on any tempo map (note times through als_extract's tempo integration), plus the kick
-attack timing; it proves a mix against a set, for songs not yet in the lab.
+prove_seconds is the same fit plus the kick attack timing: detector_wip's proof of a new song's set and bounce.
 
 Usage: offsets.py SONG...
        offsets.py --variants [SONG...]"""
@@ -46,46 +46,47 @@ ATTACK_MIN, ATTACK_MAX_MS = 16, 8
 
 
 def fits(song, als):
-    """(kick fit, snare fit, seconds per beat) of the song's mix against its set's notes, or None under tempo
-    automation. A fit is None when the set has no such notes."""
-    from scipy.ndimage import maximum_filter1d
+    """(kick fit, snare fit, the set's beat clock) of the song's mix against its set's notes, on any tempo map. A fit
+    is None when the set has no such notes."""
     from scipy.signal import resample_poly
     from tools.audio_analysis.eval.als_extract import extract
-    from tools.audio_analysis.eval.detector_wip import kick_beats, prove as fit, snare_beats
-    from tools.audio_analysis.eval.kick_goal_wip_sections import band_amp_rise, onset_env
+    from tools.audio_analysis.eval.detector_wip import kick_beats, snare_beats
     from tools.audio_analysis.lab.registry import mix
     res = extract(als)
-    if len(res['tempo_points']) != 1:
-        return None
     x = mix(song)
     if song.sample_rate != 48000:
         x = resample_poly(x, 48000, song.sample_rate)
-    spb, dur = 60 / res['tempo_points'][0]['bpm'], len(x) / 48000
-    kick = fit(onset_env(x), kick_beats(res), dur, spb)
-    snare = fit(100 * maximum_filter1d(band_amp_rise(x, 1000, 8000), 7), snare_beats(res), dur, spb)
-    return kick, snare, spb
+    envs, clock = MixEnvs(x), beat_clock(res['tempo_points'])
+    return fit_map(envs.kick, kick_beats(res), envs.dur, clock), fit_map(envs.snare, snare_beats(res), envs.dur, clock), clock
 
 
-def fit_offsets(kick, snare, spb):
-    """{pattern: the export offset its fit implies}."""
+def bar_start(clock, k):
+    """Seconds at the start of bar k on the set's tempo map; on one tempo exactly detector_wip's 4 * k * spb."""
+    return float(clock(np.array([4.0 * k]))[0])
+
+
+def pattern_offset(p, clock, is_kick):
+    """The export offset a fit implies: its bar's start on the map, less its lag (and the kick envelope's bias)."""
     from tools.audio_analysis.eval.kick_goal_wip_sections import ENV_BIAS
-    return {name: -4 * p['k'] * spb + p['lag'] - bias for name, p, bias in (('kick', kick, ENV_BIAS), ('snare', snare, 0.0)) if p}
+    return -bar_start(clock, p['k']) + p['lag'] - (ENV_BIAS if is_kick else 0.0)
+
+
+def fit_offsets(kick, snare, clock):
+    """{pattern: the export offset its fit implies}."""
+    return {name: pattern_offset(p, clock, name == 'kick') for name, p in (('kick', kick), ('snare', snare)) if p}
 
 
 def prove(song, als, used, got=False):
     """got: fits(song, als) when already computed."""
-    from tools.audio_analysis.eval.kick_goal_wip_sections import ENV_BIAS
     got = fits(song, als) if got is False else got
-    if got is None:
-        return dict(status='not proven (tempo automation)')
-    kick, snare, spb = got
+    kick, snare, clock = got
     if kick and snare and kick['k'] == snare['k']:
         status, use = 'proven (kick and snare agree)', kick
     elif len([p for p in (kick, snare) if p]) == 1 and any(p and p['r'] >= CLEAR_R and p['margin_sd'] >= CLEAR_SD for p in (kick, snare)):
         status, use = 'proven (one pattern, clear win)', kick or snare
     else:
         return dict(status='not proven', kick=kick, snare=snare)
-    off = -4 * use['k'] * spb + use['lag'] - (ENV_BIAS if use is kick else 0.0)
+    off = pattern_offset(use, clock, use is kick)
     if abs(off - used) > .001:
         return dict(status=f'not proven (fit {off:.4f} s, labels use {used:.4f} s)', kick=kick, snare=snare)
     return dict(status=status, offset_s=round(off, 4), kick=kick, snare=snare)
@@ -104,8 +105,10 @@ def beat_clock(tempo_points):
 
 
 def fit_map(env, beats, dur, clock):
-    """detector_wip.prove on any tempo map: export start = a whole bar's time on the map plus one lag (+-80 ms),
-    chosen by the Pearson r between the note pattern on the 16th grid and the onset strength at every grid point."""
+    """The grid fit (kick survey's wip_sections method) on any tempo map: export start = a whole bar's time on the map
+    plus one lag (+-80 ms), chosen by the Pearson r between the note pattern on the 16th grid and the onset strength at
+    every grid point. {k: the bar, r, margin_sd: r over the runner-up in sd of every bar's r, lag}; None under 16
+    notes or fewer than two candidate bars. On one tempo it is the bar-grid fit number for number (test_lab)."""
     import numpy as np
     from scipy.ndimage import maximum_filter1d
     from tools.audio_analysis.eval.kick_goal_wip_sections import LAGS, vals
@@ -143,7 +146,7 @@ def fit_map(env, beats, dur, clock):
     t = t[(t >= .6) & (t <= dur - .6)]
     lag = float(LAGS[int(np.argmax([vals(env, t + lg).mean() for lg in LAGS]))])
     return dict(k=int(k0), r=round(best[k0], 3), margin_sd=round(float((best[k0] - best[order[1]]) / (rs.std() + 1e-9)), 2),
-                lag=lag, start_s=round(float(sec[16 * k0]), 4))
+                lag=lag)
 
 
 def attack_lags(env_db, times):
@@ -208,7 +211,6 @@ def prove_seconds(res, x, kick_b=None, snare_b=None):
     pattern wins clearly); the kick attack timing must then not be off. A failed pattern rule still reports the
     attack timing at the best pattern's bar (top_offset_s), as evidence for Peter, never as a proof."""
     from tools.audio_analysis.eval.detector_wip import kick_beats, snare_beats
-    from tools.audio_analysis.eval.kick_goal_wip_sections import ENV_BIAS
     x = x if isinstance(x, MixEnvs) else MixEnvs(x)
     kick_b = kick_beats(res) if kick_b is None else kick_b
     snare_b = snare_beats(res) if snare_b is None else snare_b
@@ -223,10 +225,10 @@ def prove_seconds(res, x, kick_b=None, snare_b=None):
     else:
         top = kick or snare
         if top:
-            off = -top['start_s'] + top['lag'] - (ENV_BIAS if top is kick else 0.0)
+            off = pattern_offset(top, clock, top is kick)
             row.update(top_offset_s=round(off, 4), attack=attacks_at(x, res, kick_b, off))
         return dict(row, status='not proven (patterns)')
-    off = -use['start_s'] + use['lag'] - (ENV_BIAS if use is kick else 0.0)
+    off = pattern_offset(use, clock, use is kick)
     att = attacks_at(x, res, kick_b, off)
     row.update(offset_s=round(off, 4), attack=att)
     if att['verdict'] == 'off':

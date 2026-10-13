@@ -17,7 +17,7 @@ Gate: before rolls, detector_eval.rows(labels, the record's candidates) equals t
 every song, or nothing is written.
 
 `project` writes GOAL/kick_labels_project.json for the catalogue's label-ready songs (detector_wip.PAIRS with a proven
-offset) by the shared labeller's rules (detector_labels, PROJECT): kick notes on playing tracks and pads and placed kick
+offset) and the project-folder songs in PROJECT_KICKS by the shared labeller's rules (detector_labels, PROJECT): kick notes on playing tracks and pads and placed kick
 one-shots are the positives, kept where the mix has a kick-band attack; muted drums, unnamed drum pads and drum audio
 are unknown; rolls are unscored; melodic notes and other drum voices more than 105 ms from every kick note are vouched
 negatives. The offset proof is the song's own (detector_wip).
@@ -39,6 +39,9 @@ from tools.audio_analysis.eval.detector_eval import LAB_TOL, rows  # noqa: E402
 
 GAP_HOPS = 8          # the kick finder's emission comes this many hops after its candidate
 HARD_FAR_S = .105     # vouched negatives: melodic notes this far from every kick
+# detector_wip.PROJECTS songs whose kicks are labelled too (Cadence: 173 kick notes audible in its mix, BUG-fffrv (album
+# and EP songs)).
+PROJECT_KICKS = ('cadence',)
 EPS = 1e-9
 
 
@@ -168,7 +171,7 @@ def project_family():
         far_s=HARD_FAR_S,
         own_kicks=True,
         add_wip=False,
-        midi_songs=tuple(t for t in PAIRS if t in wip()),
+        midi_songs=tuple(t for t in (*PAIRS, *PROJECT_KICKS) if t in wip()),
     )
 
 

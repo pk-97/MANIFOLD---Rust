@@ -578,13 +578,13 @@ def multitrack_song(g, t, fam, unknown):
 
 
 def vouched(g, t, W, src, res):
-    """(kick times, melodic note starts) in mix time: WIP songs straight from the project, shifted by the proven
-    offset; goal songs from the kick labels and kick_goal_melodic."""
+    """(kick times, melodic note starts) in mix time: WIP songs straight from the project through its tempo map,
+    shifted by the proven offset; goal songs from the kick labels and kick_goal_melodic."""
     from tools.audio_analysis.eval.kick_goal_melodic import melodic_onsets
     if t in W:
-        from tools.audio_analysis.eval.detector_wip import kick_beats
+        from tools.audio_analysis.eval.detector_wip import kick_seconds
         from tools.audio_analysis.eval.kick_goal_melodic import NOT_MELODIC
-        kicks = kick_beats(res) * 60 / W[t]['bpm'] + src[1]
+        kicks = kick_seconds(res) + src[1]
         mel = np.array([n['s'] for tr in res['tracks'] if tr.get('speaker_on', True) and not NOT_MELODIC.search(tr['name'])
                         for c in tr['midi_clips'] for n in c['notes']]) + src[1]
         return kicks, mel

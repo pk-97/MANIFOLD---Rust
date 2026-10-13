@@ -639,12 +639,12 @@ def builder(x):
         import soundfile as sf
 
         from tools.audio_analysis.lab import offsets, registry, remix
-        spb, lag = .5, .3
-        parent = (dict(k=2, lag=.010), dict(k=2, lag=.012), spb)
+        clock, lag = offsets.beat_clock([dict(beat=0.0, bpm=120.0)]), .3   # .5 s a beat
+        parent = (dict(k=2, lag=.010), dict(k=2, lag=.012), clock)
 
         def variant(kick_miss, snare_miss, snare_k=2):
             # a variant later by lag: its fitted offset is the parent's less the lag, plus the miss
-            return (dict(k=2, lag=.010 - lag + kick_miss), dict(k=snare_k, lag=.012 - lag + snare_miss), spb)
+            return (dict(k=2, lag=.010 - lag + kick_miss), dict(k=snare_k, lag=.012 - lag + snare_miss), clock)
         got = offsets.moves(parent, variant(.0099, .5, snare_k=1), lag)
         self.assertEqual(sorted(got), ['kick', 'snare'])
         self.assertEqual(offsets.relative(got), ('kick', got['kick']))
@@ -652,7 +652,7 @@ def builder(x):
         self.assertIsNone(offsets.relative(offsets.moves(parent, variant(.0101, -.011), lag)))
         self.assertEqual(offsets.relative(offsets.moves(parent, variant(.009, -.002), lag))[0], 'snare')
         self.assertIsNone(offsets.relative(offsets.moves(None, variant(0, 0), lag)))
-        self.assertIsNone(offsets.relative(offsets.moves(parent, (None, None, spb), lag)))
+        self.assertIsNone(offsets.relative(offsets.moves(parent, (None, None, clock), lag)))
         self.assertEqual(offsets.VARIANT_TOL_S, .010)
         s = SimpleNamespace(id='x', source_sha256=('a' * 64,))
         _, row = offsets.prove_variant(s, '/nowhere.mp3', 'a' * 64, 0.0, None, {})
@@ -1832,19 +1832,52 @@ class OffsetProofTests(unittest.TestCase):
             got = prove_seconds(dict(tempo_points=self.RAMP), x, kick, snare)
             self.assertTrue(got['status'].startswith('not proven'), (seed, got))
 
-    def test_seconds_fit_equals_wip_fit_on_one_tempo(self):
-        """On one tempo the map fit is detector_wip's fit, number for number."""
+    def test_seconds_fit_equals_bar_fit_on_one_tempo(self):
+        """On one tempo the map fit is the bar-grid fit every recorded offset was proven with, number for number, and
+        the offset it implies is the same float."""
         from scipy.ndimage import maximum_filter1d
-        from tools.audio_analysis.eval.detector_wip import prove
-        from tools.audio_analysis.eval.kick_goal_wip_sections import band_amp_rise, onset_env
-        from tools.audio_analysis.lab.offsets import beat_clock, fit_map
+        from tools.audio_analysis.eval.kick_goal_wip_sections import ENV_BIAS, band_amp_rise, onset_env
+        from tools.audio_analysis.lab.offsets import beat_clock, fit_map, pattern_offset
         tp = [dict(beat=0.0, bpm=134.0)]
         kick, snare, x, _ = _drum_song(4, tp, 32, 2)
         dur, spb = len(x) / 48000, 60 / 134.0
-        for env, beats in ((onset_env(x), kick), (100 * maximum_filter1d(band_amp_rise(x, 1000, 8000), 7), snare)):
-            old, new = prove(env, beats, dur, spb), fit_map(env, beats, dur, beat_clock(tp))
-            self.assertEqual(old, {k: v for k, v in new.items() if k != 'start_s'})
-            self.assertEqual(new['start_s'], round(4 * old['k'] * spb, 4))
+        for env, beats, is_kick in ((onset_env(x), kick, True), (100 * maximum_filter1d(band_amp_rise(x, 1000, 8000), 7), snare, False)):
+            old, new = _bar_fit(env, beats, dur, spb), fit_map(env, beats, dur, beat_clock(tp))
+            self.assertEqual(old, new)
+            self.assertEqual(pattern_offset(new, beat_clock(tp), is_kick),
+                             -4 * old['k'] * spb + old['lag'] - (ENV_BIAS if is_kick else 0.0))
+
+    def test_kick_seconds_on_tempo_map(self):
+        """WIP kick times (detector_labels.vouched) follow the set's tempo map; one tempo keeps beats * 60 / bpm."""
+        from tools.audio_analysis.eval.als_extract import beat_seconds
+        from tools.audio_analysis.eval.detector_wip import kick_seconds
+        beats = [0.0, 1.0, 95.5, 130.25, 200.0]
+        track = dict(kind='MidiTrack', name='Kick', devices=[], midi_clips=[dict(notes=[dict(beat=b, key=36) for b in beats])])
+        one = kick_seconds(dict(tempo_points=[dict(beat=0.0, bpm=134.0)], tracks=[track]))
+        self.assertTrue(np.array_equal(one, np.array(beats) * 60 / 134.0))
+        ramp = kick_seconds(dict(tempo_points=self.RAMP, tracks=[track]))
+        pts = [(q['beat'], q['bpm']) for q in self.RAMP]
+        self.assertEqual(ramp.tolist(), [beat_seconds(pts, b) for b in beats])
+        self.assertGreater(abs(ramp[-1] - beats[-1] * 60 / 110.0), 10)
+
+
+def _bar_fit(env, beats, dur, spb):
+    """The one-tempo bar-grid fit (detector_wip.prove before tempo maps), kept verbatim as the reference that recorded
+    offsets were proven with."""
+    from scipy.ndimage import maximum_filter1d
+    from tools.audio_analysis.eval.kick_goal_wip_sections import LAGS, grid_corr, vals
+    if len(beats) < 16:
+        return None
+    best, order = grid_corr(maximum_filter1d(env, 41), beats, dur, spb)
+    if len(order) < 2:
+        return None
+    k0 = order[0]
+    rs = np.array([best[k][0] for k in order])
+    t = beats * spb - 4 * k0 * spb
+    t = t[(t >= .6) & (t <= dur - .6)]
+    lag = float(LAGS[int(np.argmax([vals(env, t + lg).mean() for lg in LAGS]))])
+    return dict(k=int(k0), r=round(best[k0][0], 3), margin_sd=round(float((best[k0][0] - best[order[1]][0]) / (rs.std() + 1e-9)), 2), lag=lag)
+
 
 if __name__ == '__main__':
     unittest.main()
