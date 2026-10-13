@@ -39,9 +39,10 @@ from tools.audio_analysis.eval.detector_eval import LAB_TOL, rows  # noqa: E402
 
 GAP_HOPS = 8          # the kick finder's emission comes this many hops after its candidate
 HARD_FAR_S = .105     # vouched negatives: melodic notes this far from every kick
-# detector_wip.PROJECTS songs whose kicks are labelled too (Cadence: 173 kick notes audible in its mix, BUG-fffrv (album
-# and EP songs)).
-PROJECT_KICKS = ('cadence',)
+# detector_wip.PROJECTS songs whose kicks are labelled too. Cadence (173 kick notes, BUG-fffrv (album and EP songs)) joins
+# when its offset is corrected: built now, its kick labels sit 9 ms after the attacks and its snares 11 ms, and
+# fix/label-timing-2026-10-13 (BUG-a2pma (labels timing_shift)) moves its offset by -12.4 ms.
+PROJECT_KICKS = ()
 EPS = 1e-9
 
 
