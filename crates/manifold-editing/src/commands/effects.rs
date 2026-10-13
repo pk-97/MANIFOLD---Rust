@@ -1396,7 +1396,7 @@ impl Command for EditParamMappingCommand {
                 // write.
                 let p = host.params.get_mut(&binding_id)?;
                 let spec_snap = new.apply_to_manifest_spec(&mut p.spec);
-                p.calibrated = true;
+                p.calibrate_from_spec();
 
                 Some(MappingReverse {
                     spec: spec_snap,
@@ -1419,6 +1419,9 @@ impl Command for EditParamMappingCommand {
                 apply_scale_offset_on_graph(host, &binding_id, &reverse_edit);
                 if let Some(p) = host.params.get_mut(&binding_id) {
                     reverse_edit.apply_to_manifest_spec(&mut p.spec);
+                    if p.choices.calibrated() {
+                        p.calibrate_from_spec();
+                    }
                 }
             });
             return;
@@ -1442,6 +1445,9 @@ impl Command for EditParamMappingCommand {
             // Restore the manifest spec (see execute) — the sole live authority.
             if let Some(p) = host.params.get_mut(&binding_id) {
                 reverse.spec.restore(&mut p.spec);
+                if p.choices.calibrated() {
+                    p.calibrate_from_spec();
+                }
             }
         });
     }
@@ -2026,7 +2032,7 @@ mod tests {
         assert_eq!(p.spec.max, 4.0);
         assert!(p.spec.invert);
         assert_eq!(p.spec.curve, MacroCurve::Exponential);
-        assert!(p.calibrated);
+        assert!(p.choices.calibrated());
 
         // Undo restores the pre-edit spec exactly, still without an override.
         cmd.undo(&mut project);
@@ -2103,7 +2109,7 @@ mod tests {
             .and_then(|gp| gp.params.get("complexity"))
             .expect("manifest entry present");
         assert_eq!(p.spec.curve, MacroCurve::Exponential);
-        assert!(p.calibrated);
+        assert!(p.choices.calibrated());
 
         cmd.undo(&mut project);
         let layer = &project.timeline.layers[0];

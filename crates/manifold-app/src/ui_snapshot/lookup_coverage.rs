@@ -311,3 +311,70 @@ fn with_graph(mut fx: PresetInstance) -> PresetInstance {
     }
     fx
 }
+
+/// INV-S14 at save level: a scene saves its described controls as id stubs
+/// with unlabelled bindings, and a reload gives back the same manifest,
+/// the user's choices included.
+#[test]
+fn saved_scene_has_id_only_lookup_entries() {
+    let mut cache = super::fixtures::FixtureCache::default();
+    for scene in ["physicsscene", "gltfscene"] {
+        let mut project = super::fixtures::build_cached(scene, &mut cache).expect("fixture").project.clone();
+        let mut chosen = 0;
+        for layer in project.timeline.layers.iter_mut() {
+            let Some(fx) = layer.gen_params_mut() else { continue };
+            // A layer on the catalog default saves no graph; give it one so
+            // its described controls reach the saved meta.params.
+            *fx = with_graph(fx.clone());
+            fx.folded_sections = vec!["Light".into()];
+            if let Some(p) = fx.params.iter_mut().find(|p| p.source == SpecSource::Lookup) {
+                p.choices.rename = Some("Chosen".into());
+                p.spec.max += 1.0;
+                p.calibrate_from_spec();
+                p.choices.clone().apply(&mut p.spec);
+                chosen += 1;
+            }
+        }
+        assert!(chosen > 0, "{scene} has no lookup control");
+        let json = serde_json::to_string(&project).expect("save");
+        let wire: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let reloaded = manifold_io::loader::load_project_from_json(&json).expect("reload");
+        for (before, after) in project.timeline.layers.iter().zip(&reloaded.timeline.layers) {
+            let (Some(a), Some(b)) = (before.gen_params(), after.gen_params()) else { continue };
+            let view = |fx: &PresetInstance| {
+                fx.params
+                    .iter()
+                    // Debug text: a NaN field never equals itself.
+                    .map(|p| format!("{:?}", (p.id(), &p.spec, &p.choices, p.source, p.value)))
+                    .collect::<Vec<_>>()
+            };
+            for (x, y) in view(a).into_iter().zip(view(b)) {
+                assert_eq!(x, y, "{scene} control changed across save and reload");
+            }
+            assert_eq!(a.params.len(), b.params.len(), "{scene} control count changed");
+            assert_eq!(a.folded_sections, b.folded_sections);
+        }
+        let mut lookup_entries = 0;
+        let layers = wire["timeline"]["layers"].as_array().unwrap();
+        for (layer, fx) in layers.iter().zip(project.timeline.layers.iter().map(|l| l.gen_params())) {
+            let Some(fx) = fx else { continue };
+            let meta = &layer["genParams"]["graph"]["presetMetadata"];
+            for entry in meta["params"].as_array().into_iter().flatten() {
+                let id = entry["id"].as_str().unwrap();
+                if fx.params.get(id).is_some_and(|p| p.source == SpecSource::Lookup) {
+                    lookup_entries += 1;
+                    assert!(entry.get("min").is_none() && entry.get("max").is_none(), "{scene} {id} saved a copy: {entry}");
+                }
+            }
+            for b in meta["bindings"].as_array().into_iter().flatten() {
+                let id = b["id"].as_str().unwrap();
+                if fx.params.get(id).is_some_and(|p| p.source == SpecSource::Lookup)
+                    && b["target"]["kind"] != "composite"
+                {
+                    assert!(b.get("label").is_none(), "{scene} {id} saved a label: {b}");
+                }
+            }
+        }
+        assert!(lookup_entries > 0, "{scene} saved no lookup entries: {}", &json[..json.len().min(400)]);
+    }
+}

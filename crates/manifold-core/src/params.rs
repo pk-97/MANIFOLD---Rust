@@ -48,11 +48,16 @@ pub enum SpecSource {
 }
 
 /// Per-control display choices a project saves (SCENE_SURFACES_DESIGN.md D7
-/// (one saved choice set)). Slider range, curve and invert still ride the
-/// calibration block on [`Param::calibrated`].
+/// (one saved choice set)). The calibration wire block loads into `slider`,
+/// `curve` and `invert`.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ParamChoices {
     pub rename: Option<String>,
+    /// The user's slider span. Display only (D15): never the reshape or the
+    /// wrap period.
+    pub slider: Option<(f32, f32)>,
+    pub curve: Option<crate::macro_bank::MacroCurve>,
+    pub invert: Option<bool>,
     /// `Some(None)` clears the section the lookup gives.
     pub section: Option<Option<String>>,
     pub pin: Option<manifold_foundation::scene_surface::CardPin>,
@@ -63,6 +68,11 @@ impl ParamChoices {
         *self == Self::default()
     }
 
+    /// True when the user set a slider range, curve or invert.
+    pub fn calibrated(&self) -> bool {
+        self.slider.is_some() || self.curve.is_some() || self.invert.is_some()
+    }
+
     /// Lay these choices over a described spec.
     pub fn apply(&self, spec: &mut ParamSpecDef) {
         if let Some(name) = &self.rename {
@@ -70,6 +80,16 @@ impl ParamChoices {
         }
         if let Some(section) = &self.section {
             spec.section = section.clone();
+        }
+        if let Some((min, max)) = self.slider {
+            spec.min = min;
+            spec.max = max;
+        }
+        if let Some(curve) = self.curve {
+            spec.curve = curve;
+        }
+        if let Some(invert) = self.invert {
+            spec.invert = invert;
         }
     }
 }
@@ -103,8 +123,7 @@ impl ClipTriggerSource {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Param {
     /// Descriptor — reuses the existing wire struct ([`ParamSpecDef`]).
-    /// Calibration edits `spec.min`/`spec.max`/`spec.curve`/`spec.invert` in
-    /// place and sets [`Param::calibrated`] (D6).
+    /// The joined spec with [`Param::choices`] applied on top.
     pub spec: ParamSpecDef,
     pub origin: ParamOrigin,
     /// Where `spec` came from; never serialized.
@@ -112,10 +131,6 @@ pub struct Param {
     /// The user's display choices on this control (SCENE_SURFACES_DESIGN.md
     /// D7 (one saved choice set)). Already applied to `spec`.
     pub choices: ParamChoices,
-    /// True once calibration has diverged this param's `spec` from the
-    /// template. Serialization gate for the `calibration` wire block; cleared
-    /// by a calibration reset (which re-reads the template range).
-    pub calibrated: bool,
     /// Effective (post-modulation) value — what the renderer reads.
     pub value: f32,
     /// User-intended base (pre-modulation) value. Modulation reads `base`,
@@ -162,7 +177,6 @@ impl Param {
                 ParamOrigin::UserAdded => SpecSource::Authored,
             },
             choices: ParamChoices::default(),
-            calibrated: false,
             value: default,
             base: default,
             exposed: true,
@@ -170,6 +184,15 @@ impl Param {
             clip_control_digest: None,
             touched: false,
         }
+    }
+
+    /// Record the spec's current range, curve and invert as the user's
+    /// slider choice. The mapping drawer writes `spec` directly until P2 moves
+    /// it onto choices.
+    pub fn calibrate_from_spec(&mut self) {
+        self.choices.slider = Some((self.spec.min, self.spec.max));
+        self.choices.curve = Some(self.spec.curve);
+        self.choices.invert = Some(self.spec.invert);
     }
 
     #[inline]
@@ -390,7 +413,7 @@ mod tests {
         assert_eq!(p.base, 0.7);
         assert!(p.exposed);
         assert!(!p.touched);
-        assert!(!p.calibrated);
+        assert!(!p.choices.calibrated());
         assert_eq!(p.clip_trigger_source, ClipTriggerSource::OwnLayer);
         assert_eq!(p.id(), "amount");
         assert_eq!(p.origin, ParamOrigin::Bundled);

@@ -150,6 +150,9 @@ pub struct PresetInstance {
     /// into the compiled graph, not whether they exist. Same custom-impl
     /// note as `relight` above.
     pub relight_params: RelightParams,
+    /// Card section titles the user folded (SCENE_SURFACES_DESIGN.md D7 (one
+    /// saved choice set)). View state; skipped on the wire when empty.
+    pub folded_sections: Vec<String>,
 }
 
 
@@ -189,6 +192,9 @@ impl PresetInstance {
             field_count += 1;
         }
         if !self.relight_params.is_default() {
+            field_count += 1;
+        }
+        if !self.folded_sections.is_empty() {
             field_count += 1;
         }
 
@@ -234,6 +240,9 @@ impl PresetInstance {
         }
         if !self.relight_params.is_default() {
             s.serialize_field("relightParams", &self.relight_params)?;
+        }
+        if !self.folded_sections.is_empty() {
+            s.serialize_field("foldedSections", &self.folded_sections)?;
         }
         s.end()
     }
@@ -322,6 +331,7 @@ impl PresetInstance {
             legacy_param_version: None,
             relight: false,
             relight_params: RelightParams::default(),
+            folded_sections: Vec::new(),
         }
     }
 
@@ -354,6 +364,7 @@ impl PresetInstance {
             legacy_param_version: None,
             relight: false,
             relight_params: RelightParams::default(),
+            folded_sections: Vec::new(),
         };
         s.init_defaults();
         s
@@ -1748,7 +1759,7 @@ mod tests {
             p.spec.min = 10.0;
             p.spec.max = 20.0;
             p.spec.name = "Recalibrated Amount".to_string();
-            p.calibrated = true;
+            p.calibrate_from_spec();
         }
         // The graph's own shadow copy — STALE template range (0..1, "Amount").
         // Nothing after this construction ever writes to it directly; only

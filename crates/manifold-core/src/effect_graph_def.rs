@@ -658,6 +658,9 @@ impl Default for ParamSpecDef {
 #[serde(rename_all = "camelCase")]
 pub struct BindingDef {
     pub id: String,
+    /// Saved only where the lookup cannot name the control (composite,
+    /// fan-out, user-added, unresolved); a load fills it back in.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub label: String,
     pub default_value: f32,
     pub target: BindingTarget,

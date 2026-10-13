@@ -235,7 +235,7 @@ impl<'a> Join<'a> {
                 rename: (!saved.name.is_empty() && saved.name != spec.name)
                     .then(|| saved.name.clone()),
                 section: (saved.section != spec.section).then(|| saved.section.clone()),
-                pin: None,
+                ..ParamChoices::default()
             };
             return (spec, SpecSource::Lookup, choices);
         }
@@ -254,6 +254,25 @@ impl<'a> Join<'a> {
             return (saved.clone(), SpecSource::Unresolved, none);
         };
         (overlay(saved, described, binding.default_value), SpecSource::Lookup, none)
+    }
+
+    /// A user-exposed control keeps its saved spec. A saved label that
+    /// differs from what the lookup calls its target becomes a rename
+    /// choice, the one place an old file holds a user rename (D2 (one live
+    /// lookup), old projects).
+    pub(crate) fn user_choices(&mut self, saved: &ParamSpecDef) -> ParamChoices {
+        let mut matching = self.bindings.iter().filter(|b| b.id == saved.id);
+        let (Some(binding), None) = (matching.next(), matching.next()) else {
+            return ParamChoices::default();
+        };
+        let described = key_for(self.preset, binding, &self.nodes, self.scene_radius)
+            .and_then(|key| self.resolver.describe(key));
+        ParamChoices {
+            rename: described
+                .filter(|d| !saved.name.is_empty() && saved.name != d.name)
+                .map(|_| saved.name.clone()),
+            ..ParamChoices::default()
+        }
     }
 }
 
@@ -488,5 +507,131 @@ mod tests {
         let json = serde_json::to_string(&meta).unwrap();
         let parsed: PresetMetadata = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.params[0], saved("1_x"));
+    }
+
+    // ── Saved choices through a full generator load and save ──
+
+    fn user_binding(id: &str) -> BindingDef {
+        BindingDef { user_added: true, ..binding(id, lamp("intensity"), 1.0) }
+    }
+
+    fn scene_json(params: serde_json::Value, user_label: &str) -> String {
+        let mut def = graph(vec![
+            binding("1_intensity", lamp("intensity"), 1.0),
+            binding("mix", BindingTarget::Composite { outer_name: "mix".into() }, 1.0),
+            user_binding("user.lamp"),
+        ]);
+        let meta = def.preset_metadata.as_mut().unwrap();
+        meta.params = vec![
+            saved("1_intensity"),
+            saved("mix"),
+            ParamSpecDef { name: user_label.into(), ..saved("user.lamp") },
+        ];
+        serde_json::json!({
+            "generatorType": "test.param_lookup",
+            "params": params,
+            "graph": def,
+        })
+        .to_string()
+    }
+
+    fn load(json: &str) -> crate::effects::PresetInstance {
+        let mut de = serde_json::Deserializer::from_str(json);
+        let mut fx = crate::effects::deserialize_generator_instance(&mut de).unwrap();
+        fx.reconcile_manifest();
+        fx
+    }
+
+    fn save(fx: &crate::effects::PresetInstance) -> String {
+        serde_json::to_string(fx).unwrap()
+    }
+
+    fn state(fx: &crate::effects::PresetInstance) -> Vec<(ParamSpecDef, ParamChoices, SpecSource, f32)> {
+        fx.params.iter().map(|p| (p.spec.clone(), p.choices.clone(), p.source, p.value)).collect()
+    }
+
+    fn chosen_params() -> serde_json::Value {
+        serde_json::json!({
+            "1_intensity": {
+                "value": 3.0,
+                "calibration": {"min": 2.0, "max": 4.0, "invert": true},
+                "rename": "Key",
+                "section": null,
+                "pin": "shown",
+            },
+            "mix": {"value": 0.5},
+            "user.lamp": {"value": 1.0},
+        })
+    }
+
+    #[test]
+    fn calibration_wire_round_trips_as_slider_choice() {
+        let fx = load(&scene_json(chosen_params(), "Lamp Power"));
+        let p = fx.params.get("1_intensity").unwrap();
+        assert_eq!(p.choices.slider, Some((2.0, 4.0)));
+        assert_eq!(p.choices.invert, Some(true));
+        assert_eq!((p.spec.min, p.spec.max, p.spec.invert), (2.0, 4.0, true));
+        let wire: serde_json::Value = serde_json::from_str(&save(&fx)).unwrap();
+        assert_eq!(
+            wire["params"]["1_intensity"]["calibration"],
+            serde_json::json!({"min": 2.0, "max": 4.0, "invert": true})
+        );
+        assert_eq!(state(&load(&save(&fx))), state(&fx));
+    }
+
+    #[test]
+    fn user_exposure_label_becomes_rename_once() {
+        let fx = load(&scene_json(chosen_params(), "Lamp Power"));
+        let p = fx.params.get("user.lamp").unwrap();
+        assert_eq!(p.choices.rename.as_deref(), Some("Lamp Power"));
+        assert_eq!(p.spec.name, "Lamp Power");
+        let again = load(&save(&fx));
+        assert_eq!(again.params.get("user.lamp").unwrap().choices, p.choices);
+        // A label equal to what the lookup calls the target is no rename.
+        let plain = load(&scene_json(chosen_params(), "Intensity"));
+        assert_eq!(plain.params.get("user.lamp").unwrap().choices.rename, None);
+    }
+
+    #[test]
+    fn join_preserves_choices_and_user_bindings() {
+        let mut fx = load(&scene_json(chosen_params(), "Lamp Power"));
+        let before = state(&fx);
+        let bindings = fx.graph.as_ref().unwrap().preset_metadata.as_ref().unwrap().bindings.clone();
+        fx.refresh_manifest_from_graph();
+        assert_eq!(state(&fx), before);
+        let p = fx.params.get("1_intensity").unwrap();
+        assert_eq!(p.choices.rename.as_deref(), Some("Key"));
+        assert_eq!(p.choices.section, Some(None));
+        assert_eq!(p.choices.pin, Some(manifold_foundation::scene_surface::CardPin::Shown));
+        let user = fx.params.get("user.lamp").unwrap();
+        assert_eq!(user.origin, crate::params::ParamOrigin::UserAdded);
+        assert_eq!(fx.graph.as_ref().unwrap().preset_metadata.as_ref().unwrap().bindings, bindings);
+    }
+
+    #[test]
+    fn migrate_twice_is_noop() {
+        let mut fx = load(&scene_json(chosen_params(), "Lamp Power"));
+        fx.folded_sections = vec!["Key Light".into()];
+        let first = save(&fx);
+        let second = save(&load(&first));
+        assert_eq!(first, second);
+        let wire: serde_json::Value = serde_json::from_str(&first).unwrap();
+        assert_eq!(wire["foldedSections"], serde_json::json!(["Key Light"]));
+        // A described binding saves no label; composite and user ones keep it.
+        let labels: Vec<_> = wire["graph"]["presetMetadata"]["bindings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|b| (b["id"].as_str().unwrap().to_string(), b.get("label").is_some()))
+            .collect();
+        assert_eq!(
+            labels,
+            [("1_intensity".into(), false), ("mix".into(), true), ("user.lamp".into(), true)]
+        );
+        let back = load(&first);
+        let lamp = &back.graph.as_ref().unwrap().preset_metadata.as_ref().unwrap().bindings[0];
+        assert_eq!(lamp.label, "Key", "a load names the binding from the join");
+        fx.folded_sections.clear();
+        assert!(!save(&fx).contains("foldedSections"));
     }
 }

@@ -27,7 +27,7 @@ use super::*;
 
 /// The per-entry calibration block: the recalibrated range (and curve/invert
 /// when non-default) a chevron popover wrote onto a *bundled* param. Present on
-/// the wire iff [`crate::params::Param::calibrated`]; a bundled param without
+/// the wire iff the user set a slider range (`ParamChoices::slider`); a param without
 /// it tracks the template (D6).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -96,11 +96,11 @@ impl ParamEntryWire {
             value: p.value,
             exposed: p.exposed,
             base: base_tracked.then_some(p.base),
-            calibration: p.calibrated.then_some(CalibrationWire {
-                min: p.spec.min,
-                max: p.spec.max,
-                curve: p.spec.curve,
-                invert: p.spec.invert,
+            calibration: p.choices.slider.map(|(min, max)| CalibrationWire {
+                min,
+                max,
+                curve: p.choices.curve.unwrap_or(p.spec.curve),
+                invert: p.choices.invert.unwrap_or(p.spec.invert),
             }),
             spec: ((inline_graph_spec && p.source != crate::params::SpecSource::Lookup)
                 || matches!(p.origin, crate::params::ParamOrigin::UserAdded))
@@ -137,12 +137,12 @@ impl ParamEntryWire {
         p.base = self.base.unwrap_or(self.value);
         p.exposed = self.exposed;
         p.clip_trigger_source = self.clip_trigger_source.clone();
+        // The calibration block is the user's slider choice; its key and
+        // shape stay so old files load and save byte-identically.
         if let Some(c) = &self.calibration {
-            p.spec.min = c.min;
-            p.spec.max = c.max;
-            p.spec.curve = c.curve;
-            p.spec.invert = c.invert;
-            p.calibrated = true;
+            p.choices.slider = Some((c.min, c.max));
+            p.choices.curve = Some(c.curve);
+            p.choices.invert = Some(c.invert);
         }
         self.base.is_some()
     }
@@ -237,6 +237,16 @@ impl Serialize for GraphWithDerivedParams<'_> {
                         crate::params::SpecSource::Authored => *spec = p.spec.clone(),
                         // Saved back word for word until the lookup answers.
                         crate::params::SpecSource::Unresolved => {}
+                    }
+                }
+            }
+            if self.joined {
+                for b in meta.bindings.iter_mut() {
+                    if self.manifest.get(&b.id).is_some_and(|p| {
+                        p.source == crate::params::SpecSource::Lookup
+                            && !matches!(b.target, crate::effect_graph_def::BindingTarget::Composite { .. })
+                    }) {
+                        b.label.clear();
                     }
                 }
             }
@@ -355,7 +365,8 @@ fn gather_known_params(
             .map(|s| {
                 let user = meta.bindings.iter().any(|b| b.user_added && b.id == s.id);
                 if user {
-                    (s.clone(), ParamOrigin::UserAdded, SpecSource::Authored, ParamChoices::default())
+                    let choices = join.user_choices(s);
+                    (s.clone(), ParamOrigin::UserAdded, SpecSource::Authored, choices)
                 } else {
                     let (spec, source, choices) = join.join_control(s);
                     (spec, ParamOrigin::Bundled, source, choices)
@@ -535,6 +546,12 @@ pub(super) fn normalize_meta_params(
             *spec = p.spec.clone();
         }
     }
+    // A described binding saves no label; give it the joined name back.
+    for b in meta.bindings.iter_mut().filter(|b| b.label.is_empty()) {
+        if let Some(p) = manifest.get(&b.id) {
+            b.label = p.spec.name.clone();
+        }
+    }
 }
 
 // ─── Custom Serialize / Deserialize for PresetInstance ───
@@ -595,6 +612,9 @@ impl Serialize for PresetInstance {
             field_count += 1;
         }
         if !self.relight_params.is_default() {
+            field_count += 1;
+        }
+        if !self.folded_sections.is_empty() {
             field_count += 1;
         }
 
@@ -662,6 +682,9 @@ impl Serialize for PresetInstance {
         }
         if !self.relight_params.is_default() {
             s.serialize_field("relightParams", &self.relight_params)?;
+        }
+        if !self.folded_sections.is_empty() {
+            s.serialize_field("foldedSections", &self.folded_sections)?;
         }
         s.end()
     }
@@ -758,6 +781,8 @@ impl<'de> Deserialize<'de> for PresetInstance {
             relight: bool,
             #[serde(default)]
             relight_params: RelightParams,
+            #[serde(default)]
+            folded_sections: Vec<String>,
         }
 
         let raw = Raw::deserialize(deserializer)?;
@@ -803,6 +828,7 @@ impl<'de> Deserialize<'de> for PresetInstance {
             legacy_param_version: None,
             relight: raw.relight,
             relight_params: raw.relight_params,
+            folded_sections: raw.folded_sections,
         })
     }
 }
@@ -846,6 +872,8 @@ struct GeneratorInstanceRaw {
     relight: bool,
     #[serde(default)]
     relight_params: RelightParams,
+    #[serde(default)]
+    folded_sections: Vec<String>,
 }
 
 impl GeneratorInstanceRaw {
@@ -887,6 +915,7 @@ impl GeneratorInstanceRaw {
             legacy_param_version: self.legacy_param_version,
             relight: self.relight,
             relight_params: self.relight_params,
+            folded_sections: self.folded_sections,
         }
     }
 }
@@ -1027,6 +1056,7 @@ mod tests {
             legacy_param_version: None,
             relight: false,
             relight_params: RelightParams::default(),
+            folded_sections: Vec::new(),
         };
         let json = serde_json::to_string(&fx).unwrap();
         assert!(
@@ -1065,6 +1095,7 @@ mod tests {
             legacy_param_version: None,
             relight: false,
             relight_params: RelightParams::default(),
+            folded_sections: Vec::new(),
         };
         let json = serde_json::to_string(&fx).unwrap();
         assert!(json.contains("\"alpha\":{\"value\":0.1,\"exposed\":true}"));
