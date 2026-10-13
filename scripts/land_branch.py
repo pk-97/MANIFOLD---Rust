@@ -22,6 +22,9 @@ that gate also ran every check and went red on exactly the same check labels;
 anything else stops. --named-red requests the complete gate run.
 After verified landing, slot detachment, release and branch deletion are cleanup:
 failures are notes, not landing failures. Unlanded branches are never deleted.
+Before merging it records the gated tree as a land pass in the git common dir
+(land-passes-v1/<tree>.json); the Bash hook denies a manual merge or push to
+main of any tree without one (preToolUseBash.py land_pass_guard).
 Every attempt, cancelled ones included, appends one row to
 .claude/orchestration/landing-runs.jsonl in the main checkout.
 
@@ -53,6 +56,7 @@ from landing_gate import (CHECKS_RED, record_incomplete,
 MAIN = Path("/Users/peterkiemann/MANIFOLD - Rust")
 LOCK_NAME = "manifold-landing.lock"
 RUNS_LOG = ".claude/orchestration/landing-runs.jsonl"
+LAND_PASS_DIR = "land-passes-v1"  # reader: land_pass_guard in .claude/hooks/preToolUseBash.py
 ATTEMPT = None  # this attempt's landing-runs.jsonl row, set by main()
 
 
@@ -172,6 +176,21 @@ def landing_lock(path, holder):
             fcntl.flock(handle, fcntl.LOCK_UN)
 
 
+def record_land_pass(tree, commit, branch, named_red):
+    """Record that `tree` passed the landing gate, in the git common dir next to
+    gate-passes-v1. The bash hook denies a manual merge or push of any other
+    tree to main. Written just before the merge, so a crash leaves a harmless
+    record, never an unrecorded landing."""
+    directory = lock_path().parent / LAND_PASS_DIR
+    directory.mkdir(parents=True, exist_ok=True)
+    record = {'schema': 1, 'tree': tree, 'commit': commit, 'branch': branch,
+              'named_red': named_red or None,
+              'time': datetime.now(timezone.utc).isoformat()}
+    tmp = directory / f'.{tree}.tmp'
+    tmp.write_text(json.dumps(record) + '\n')
+    os.replace(tmp, directory / f'{tree}.json')
+
+
 def stop(outcome, message):
     ATTEMPT['outcome'] = outcome
     print(f'[land] {message}', file=sys.stderr)
@@ -192,6 +211,7 @@ def land_gated(a, worktree, base, gated_commit, verdict):
                 check=False).returncode:
             stop('error', 'local main has commits origin/main lacks; push or drop them first.')
     gated = git_out('gated tree', ['git', 'rev-parse', f'{gated_commit}^{{tree}}'], worktree)
+    record_land_pass(gated, gated_commit, a.branch, a.named_red if verdict else None)
     merged = step('merge --no-ff to main',
                   ['git', 'merge', '--no-ff', '--no-commit', gated_commit, '-m', a.message], MAIN,
                   check=False)
