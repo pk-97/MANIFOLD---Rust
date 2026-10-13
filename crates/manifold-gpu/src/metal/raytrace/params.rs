@@ -104,8 +104,6 @@ pub(crate) struct RtTraceDiagnostics {
     pub(crate) raw_direction: [f32; 3],
     pub(crate) raw_min_distance: f32,
     pub(crate) raw_max_distance: f32,
-    pub(crate) max_walk: u32,
-    pub(crate) long_walks: u32,
 }
 
 

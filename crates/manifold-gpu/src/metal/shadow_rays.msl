@@ -14,19 +14,7 @@ struct RtTraceDiagnostics {
     float raw_direction[3];
     float raw_min_distance;
     float raw_max_distance;
-    // Longest candidate walk in this record's dispatch, and how many walks
-    // passed RT_DIAG_LONG_WALK candidates (BUG-k1n2w).
-    atomic_uint max_walk;
-    atomic_uint long_walks;
 };
-
-#define RT_DIAG_LONG_WALK 4096u
-
-static void rt_note_walk(device RtTraceDiagnostics* d, uint walked) {
-    if (d == nullptr || d->enabled == 0u) return;
-    atomic_fetch_max_explicit(&d->max_walk, walked, memory_order_relaxed);
-    if (walked > RT_DIAG_LONG_WALK) atomic_fetch_add_explicit(&d->long_walks, 1u, memory_order_relaxed);
-}
 
 static bool rt_finite(float x);
 
@@ -1236,13 +1224,10 @@ static bool walk_with_alpha_test(
     uint2 tid,
     uint frame,
     uint ray_seed,
-    thread float& out_brightness,
-    device RtTraceDiagnostics* diagnostics)
+    thread float& out_brightness)
 {
     out_brightness = 1.0f;
-    uint walked = 0u;
     while (q.next()) {
-        walked++;
         if (q.get_candidate_intersection_type() != intersection_type::triangle) continue;
         uint iid = q.get_candidate_instance_id();
         device RtNormalSource& src = normal_sources[iid];
@@ -1267,14 +1252,13 @@ static bool walk_with_alpha_test(
             // on `intersection_query` — confirmed by the real Metal
             // compiler rejecting the latter).
             q.commit_triangle_intersection();
-            if (any_hit) { rt_note_walk(diagnostics, walked); return true; }
+            if (any_hit) return true;
         }
     }
     // Terminal check is load-bearing for BOTH modes: an OPAQUE-BLAS object
     // auto-commits in hardware without ever delivering a candidate, so a
     // ray that ended on plain opaque geometry falls out of the loop with a
     // committed hit and no visible candidate.
-    rt_note_walk(diagnostics, walked);
     if (q.get_committed_intersection_type() == intersection_type::none) return false;
     if (!any_hit && q.get_committed_intersection_type() == intersection_type::triangle) {
         // The committed hit is the CLOSEST accepted candidate — recompute
@@ -1332,14 +1316,11 @@ static float3 walk_with_transmission(
     // only, never a transmission tint.
     uint2 tid,
     uint frame,
-    uint ray_seed,
-    device RtTraceDiagnostics* diagnostics)
+    uint ray_seed)
 {
     float3 tint = float3(1.0);
     uint transmitted = 0u;
-    uint walked = 0u;
     while (q.next()) {
-        walked++;
         if (q.get_candidate_intersection_type() != intersection_type::triangle) continue;
         uint iid = q.get_candidate_instance_id();
         device RtNormalSource& src = normal_sources[iid];
@@ -1364,14 +1345,12 @@ static float3 walk_with_transmission(
             // it in here double-tints transmitted light.
             tint *= tl * float3(gi_materials[iid].translucency.yzw);
             transmitted += 1u;
-            if (luma(tint) < RT_TRANSMISSION_LUMA_FLOOR) { rt_note_walk(diagnostics, walked); return tint; }
+            if (luma(tint) < RT_TRANSMISSION_LUMA_FLOOR) return tint;
             continue;
         }
         q.commit_triangle_intersection();
-        rt_note_walk(diagnostics, walked);
         return float3(0.0);
     }
-    rt_note_walk(diagnostics, walked);
     // Terminal check is load-bearing (same as `walk_with_alpha_test`): an
     // OPAQUE-BLAS object auto-commits in hardware without ever delivering a
     // candidate, so a ray that ended on plain opaque geometry falls out of
@@ -1511,7 +1490,7 @@ static float3 sun_bounce_at_hit(
         float hit_back_l = max(dot(-hit_n, sdir), 0.0);
         float hit_tl = clamp(hit_translucency.x, 0.0, 1.0);
         if (HAS_TRANSLUCENCY) {
-            float3 hit_sun_tint = walk_with_transmission(sun_q, normal_sources, gi_materials, material_textures, tid, p.frame_index, RT_APP_STREAM_SUN_BOUNCE + seed_base + sc, diagnostics);
+            float3 hit_sun_tint = walk_with_transmission(sun_q, normal_sources, gi_materials, material_textures, tid, p.frame_index, RT_APP_STREAM_SUN_BOUNCE + seed_base + sc);
             term += hit_albedo * float3(sun_cst.color) * hit_sun_tint * hit_ndotl
                 * (1.0 - hit_tl) * SUN_BOUNCE_INTENSITY_SCALE;
             term += float3(sun_cst.color) * hit_sun_tint
@@ -1519,7 +1498,7 @@ static float3 sun_bounce_at_hit(
                 * hit_back_l * SUN_BOUNCE_INTENSITY_SCALE;
         } else {
             float sun_brightness;
-            float hit_sun_vis = walk_with_alpha_test(sun_q, normal_sources, material_textures, true, tid, p.frame_index, RT_APP_STREAM_SUN_BOUNCE + seed_base + sc, sun_brightness, diagnostics) ? 0.0 : 1.0;
+            float hit_sun_vis = walk_with_alpha_test(sun_q, normal_sources, material_textures, true, tid, p.frame_index, RT_APP_STREAM_SUN_BOUNCE + seed_base + sc, sun_brightness) ? 0.0 : 1.0;
             term += hit_albedo * float3(sun_cst.color) * hit_sun_vis * hit_ndotl
                 * (1.0 - hit_tl) * SUN_BOUNCE_INTENSITY_SCALE;
             term += float3(sun_cst.color) * hit_sun_vis
@@ -1814,9 +1793,9 @@ static float3 rt_direct_lights(instance_acceleration_structure accel,device RtNo
             if(HAS_TRANSLUCENCY) {
                 intersection_params options;options.force_opacity(forced_opacity::non_opaque);
                 q.reset(r,accel,RT_MASK_SHADOW_CASTER,options);
-                vis=walk_with_transmission(q,sources,materials,textures,pixel,p.frame_index,seed+i, diagnostics);
+                vis=walk_with_transmission(q,sources,materials,textures,pixel,p.frame_index,seed+i);
             }else { q.reset(r,accel,RT_MASK_SHADOW_CASTER);float brightness;
-                if(walk_with_alpha_test(q,sources,textures,true,pixel,p.frame_index,seed+i,brightness, diagnostics))vis=float3(0.0f); }
+                if(walk_with_alpha_test(q,sources,textures,true,pixel,p.frame_index,seed+i,brightness))vis=float3(0.0f); }
         }
         total+=rt_direct_brdf(m,view,l,sheen_scale)*color.rgb*attenuation*vis;
     }
@@ -2104,7 +2083,7 @@ kernel void trace_shadow_rays(
             intersection_query<triangle_data, instancing> primary_q;
             rt_sanitize_ray(pr, 0u, tid, diagnostics); primary_q.reset(pr, accel, RT_MASK_VISIBLE);
             float primary_brightness;
-            if (walk_with_alpha_test(primary_q, slot_sources, material_textures, false, tid, p.frame_index, RT_APP_STREAM_PRIMARY, primary_brightness, diagnostics)) {
+            if (walk_with_alpha_test(primary_q, slot_sources, material_textures, false, tid, p.frame_index, RT_APP_STREAM_PRIMARY, primary_brightness)) {
                 primary_iid = primary_q.get_committed_instance_id();
                 primary_pid = primary_q.get_committed_primitive_id();
                 primary_bary = primary_q.get_committed_triangle_barycentric_coord();
@@ -2253,11 +2232,11 @@ kernel void trace_shadow_rays(
                     intersection_params transmission_params;
                     transmission_params.force_opacity(forced_opacity::non_opaque);
                     shadow_q.reset(r, accel, RT_MASK_SHADOW_CASTER, transmission_params);
-                    vis_rgb += walk_with_transmission(shadow_q, slot_sources, slot_materials, material_textures, tid, p.frame_index, RT_APP_STREAM_SHADOW + c * spp + s, diagnostics);
+                    vis_rgb += walk_with_transmission(shadow_q, slot_sources, slot_materials, material_textures, tid, p.frame_index, RT_APP_STREAM_SHADOW + c * spp + s);
                 } else {
                     shadow_q.reset(r, accel, RT_MASK_SHADOW_CASTER);
                     float shadow_brightness;
-                    bool blocked = walk_with_alpha_test(shadow_q, slot_sources, material_textures, true, tid, p.frame_index, RT_APP_STREAM_SHADOW + c * spp + s, shadow_brightness, diagnostics);
+                    bool blocked = walk_with_alpha_test(shadow_q, slot_sources, material_textures, true, tid, p.frame_index, RT_APP_STREAM_SHADOW + c * spp + s, shadow_brightness);
                     if (!blocked) vis += 1.0;
                 }
             }
@@ -2301,7 +2280,7 @@ kernel void trace_shadow_rays(
             intersection_query<triangle_data, instancing> ao_q;
                 rt_sanitize_ray(ao_r, 2u, tid, diagnostics); ao_q.reset(ao_r, accel, RT_MASK_VISIBLE);
             float ao_brightness;
-            if (!walk_with_alpha_test(ao_q, slot_sources, material_textures, true, tid, p.frame_index, RT_APP_STREAM_AO + s, ao_brightness, diagnostics)) ao += 1.0;
+            if (!walk_with_alpha_test(ao_q, slot_sources, material_textures, true, tid, p.frame_index, RT_APP_STREAM_AO + s, ao_brightness)) ao += 1.0;
         }
         ao /= float(p.ao_spp);
     }
@@ -2397,7 +2376,7 @@ kernel void trace_shadow_rays(
                 // P4b (§5.2): the committed hit's appearance brightness
                 // multiplies its evaluated radiance ONCE (below).
                 float gi_brightness;
-                if (!walk_with_alpha_test(gi_q, slot_sources, material_textures, false, tid, p.frame_index, RT_APP_STREAM_GI + s * 4u + bounce, gi_brightness, diagnostics)) {
+                if (!walk_with_alpha_test(gi_q, slot_sources, material_textures, false, tid, p.frame_index, RT_APP_STREAM_GI + s * 4u + bounce, gi_brightness)) {
                     // ED1: env radiance in the ray's own direction, mip 0,
                     // scaled by the path's throughput at extension depths.
                     float3 env_miss = refl_env_sample(prefiltered_env, gr.direction, 0.0);
@@ -2562,7 +2541,7 @@ kernel void trace_shadow_rays(
                         intersection_query<triangle_data, instancing> em_q;
                         rt_sanitize_ray(em_r, 4u, tid, diagnostics); em_q.reset(em_r, accel, RT_MASK_SHADOW_CASTER);
                         float em_vis_brightness;
-                        bool blocked = walk_with_alpha_test(em_q, slot_sources, material_textures, true, tid, p.frame_index, RT_APP_STREAM_EMISSIVE_VIS, em_vis_brightness, diagnostics);
+                        bool blocked = walk_with_alpha_test(em_q, slot_sources, material_textures, true, tid, p.frame_index, RT_APP_STREAM_EMISSIVE_VIS, em_vis_brightness);
                         if (!blocked) {
                             float3 em_factor = float3(gi_materials[tri.object_index].emissive);
                             float2 uv0 = tri.uv0;
@@ -2731,7 +2710,7 @@ kernel void trace_shadow_rays(
             // P4b (§5.2): the committed hit's appearance brightness
             // multiplies its evaluated radiance ONCE (below).
             float refl_hit_brightness;
-            if (walk_with_alpha_test(refl_q, slot_sources, material_textures, false, tid, p.frame_index, RT_APP_STREAM_REFLECTION + rs, refl_hit_brightness, diagnostics)) {
+            if (walk_with_alpha_test(refl_q, slot_sources, material_textures, false, tid, p.frame_index, RT_APP_STREAM_REFLECTION + rs, refl_hit_brightness)) {
                 uint hoi = refl_q.get_committed_instance_id();
                 uint hpid = refl_q.get_committed_primitive_id();
                 float2 hbary = refl_q.get_committed_triangle_barycentric_coord();
@@ -4191,7 +4170,7 @@ kernel void debug_ray_query(
     // P4b: the fractional acceptance draw keys on (seed_base, ray index)
     // via the shared helper — the ray index rides the ray-seed slot.
     float hit_brightness = 1.0f;
-    if (walk_with_alpha_test(q, slot_sources, material_textures, false, tid2, p.seed_base, tid, hit_brightness, nullptr)) {
+    if (walk_with_alpha_test(q, slot_sources, material_textures, false, tid2, p.seed_base, tid, hit_brightness)) {
         uint iid = q.get_committed_instance_id();
         uint pid = q.get_committed_primitive_id();
         float2 bary = q.get_committed_triangle_barycentric_coord();
