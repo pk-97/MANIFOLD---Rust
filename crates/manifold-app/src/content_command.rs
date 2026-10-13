@@ -253,13 +253,6 @@ pub enum ContentCommand {
         new_type: manifold_core::PresetTypeId,
     },
 
-    // ── Lifecycle ─────────────────────────────────────────────────
-    /// Pause rendering (content thread stops ticking/rendering but still drains commands).
-    /// Used while native file dialogs are open to avoid GPU contention on macOS.
-    PauseRendering,
-    /// Resume rendering after a dialog closes.
-    ResumeRendering,
-
     // ── Profiling ────────────────────────────────────────────────
     /// Start a profiling session on the content thread.
     #[cfg(feature = "profiling")]
@@ -309,6 +302,11 @@ pub enum ContentCommand {
         path: String,
         format: manifold_media::still_exporter::StillFormat,
     },
+    /// Grab the frame on screen now and hold it for a following `ExportFrame`
+    /// (sent when the save dialog closes).
+    CaptureStill,
+    /// Drop a held capture — the save dialog was cancelled.
+    DiscardStill,
 
     // ── Live Recording ───────────────────────────────────────────
     /// Start live recording. Captures output frames + optional audio.

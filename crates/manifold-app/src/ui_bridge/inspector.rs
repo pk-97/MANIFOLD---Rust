@@ -132,6 +132,7 @@ mod scene_card_convergence_tests {
                 user_prefs: &mut self.user_prefs,
                 editor_target: None,
                 scrub: &mut self.scrub,
+                dialogs: Default::default(),
             };
             crate::ui_bridge::dispatch(action, &mut ctx)
         }
@@ -167,6 +168,7 @@ mod scene_card_convergence_tests {
                 user_prefs: &mut self.user_prefs,
                 editor_target,
                 scrub: &mut self.scrub,
+                dialogs: Default::default(),
             };
             crate::ui_bridge::dispatch(action, &mut ctx)
         }
@@ -2746,6 +2748,7 @@ mod scene_card_convergence_tests {
                 &mut selection,
                 &mut active_layer,
                 &mut prefs,
+                Default::default(),
             );
             assert_undo_cycle(
                 &mut side,

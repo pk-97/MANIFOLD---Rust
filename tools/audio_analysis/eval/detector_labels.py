@@ -247,6 +247,14 @@ def stem_hits(x, sr, band=(150, 10000)):
     return h[loud] * 1e-3, h[~loud] * 1e-3
 
 
+def refuse_online(path):
+    """Exits on an online-only (dataless) Dropbox file: reading it downloads it, which needs Peter's OK."""
+    import os
+    import sys
+    if os.stat(path).st_flags & 0x40000000:
+        sys.exit(f'online-only file, not read (ask Peter before downloading): {path}')
+
+
 def read_any(path, sr, load):
     """Mono audio at sr: the goal loader for wav, soundfile (mp3, flac, aiff) when it cannot read the file."""
     try:
@@ -305,6 +313,7 @@ def clip_hits(rows, als_dir, sr, band=(150, 10000), points=None):
         if not p:
             continue
         if p not in cache:
+            refuse_online(p)
             cache[p] = read_any(p, sr, load)
         if points is not None and c['warped'] and len(c['markers']) >= 2:
             h_loud, h_quiet = warped_hits(c, cache[p], sr, band, points)
@@ -391,6 +400,8 @@ def drum_stem_blind(fam, t, x, sr, pos, explained, proven_lag=None):
     paths = dict(fam.drum_stems).get(t)
     if not paths:
         return None
+    for p in [paths] if isinstance(paths, (str, Path)) else paths:
+        refuse_online(p)
     stem = load(paths, sr)
     L, z = stem_lag(stem, x, sr, fam.band)
     if z < LAG_Z_MIN and not (proven_lag is not None and abs(L - proven_lag) <= .005):
@@ -438,6 +449,7 @@ def song(g, t, fam):
     h0, h1 = fam.half
     unscored = []
     src = (W[t]['als'], W[t]['offset_s']) if t in W else _source(t)
+    refuse_online(src[0])
     res = extract(src[0])
     off = src[1]
     unmute = export_groups(res, fam, x, sr, off, Path(src[0]).parent)
@@ -513,6 +525,8 @@ def multitrack_song(g, t, fam, unknown):
     sr = rate(g, t)
     x = audio(g, t)
     stems = [Path(q) for q in g.labels['new'][t]['mix_parts']]
+    for q in stems:
+        refuse_online(q)
     xs = [load(str(q), sr) for q in stems]
     total = np.zeros(len(x))
     for y in xs:
@@ -578,13 +592,13 @@ def multitrack_song(g, t, fam, unknown):
 
 
 def vouched(g, t, W, src, res):
-    """(kick times, melodic note starts) in mix time: WIP songs straight from the project, shifted by the proven
-    offset; goal songs from the kick labels and kick_goal_melodic."""
+    """(kick times, melodic note starts) in mix time: WIP songs straight from the project through its tempo map,
+    shifted by the proven offset; goal songs from the kick labels and kick_goal_melodic."""
     from tools.audio_analysis.eval.kick_goal_melodic import melodic_onsets
     if t in W:
-        from tools.audio_analysis.eval.detector_wip import kick_beats
+        from tools.audio_analysis.eval.detector_wip import kick_seconds
         from tools.audio_analysis.eval.kick_goal_melodic import NOT_MELODIC
-        kicks = kick_beats(res) * 60 / W[t]['bpm'] + src[1]
+        kicks = kick_seconds(res) + src[1]
         mel = np.array([n['s'] for tr in res['tracks'] if tr.get('speaker_on', True) and not NOT_MELODIC.search(tr['name'])
                         for c in tr['midi_clips'] for n in c['notes']]) + src[1]
         return kicks, mel

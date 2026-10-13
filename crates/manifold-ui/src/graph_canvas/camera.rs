@@ -147,8 +147,20 @@ impl GraphCanvas {
     }
 
     pub fn on_scroll(&mut self, viewport: Rect, dy: f32) {
+        self.zoom_at_cursor(viewport, (dy * 0.0015).exp());
+    }
+
+    /// Trackpad pinch. `magnification` is the per-event amount macOS reports
+    /// (positive = fingers spreading); `exp` makes a pinch out and back land
+    /// on the zoom it started from.
+    pub fn on_pinch(&mut self, viewport: Rect, magnification: f32) {
+        self.zoom_at_cursor(viewport, magnification.exp());
+    }
+
+    /// Scale the zoom by `factor`, keeping the graph point under the cursor
+    /// fixed on screen.
+    fn zoom_at_cursor(&mut self, viewport: Rect, factor: f32) {
         let (gx_before, gy_before) = self.to_graph(viewport, self.cursor.0, self.cursor.1);
-        let factor = (dy * 0.0015).exp();
         let new_zoom = (self.zoom * factor).clamp(MIN_ZOOM, MAX_ZOOM);
         self.zoom = new_zoom;
         let (gx_after, gy_after) = self.to_graph(viewport, self.cursor.0, self.cursor.1);

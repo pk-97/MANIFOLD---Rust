@@ -987,6 +987,7 @@ fn modifier_live_scrub_keeps_runtime_couplings_through_undo_redo() {
                         user_prefs: &mut prefs,
                         editor_target: None,
                         scrub: &mut scrub,
+                        dialogs: Default::default(),
                     },
                 );
                 let commands: Vec<_> = content_rx.try_iter().collect();

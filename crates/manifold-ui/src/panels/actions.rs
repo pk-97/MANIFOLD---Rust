@@ -286,8 +286,7 @@ pub enum ProjectAction {
     /// Disable standard imported-object physics.
     SceneSetupDisablePhysics(LayerId, u32, u32),
     /// P4 "Import Model…" button: `(layer_id, render_scene_node_doc_id)`.
-    /// Opens a native file dialog (the app's existing open-file plumbing,
-    /// same `rfd::FileDialog` pattern as `ClipReplaceAudioClicked`) and, on
+    /// Opens the native file dialog (`file_dialogs.rs` in manifold-app) and, on
     /// a picked `.glb`/`.gltf`, merges its objects into THIS scene via
     /// `merge_import_into_graph` + `ImportModelIntoSceneCommand` (D5) — a
     /// second (third, nth) model added to a scene the panel already shows,
