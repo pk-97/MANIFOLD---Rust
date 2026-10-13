@@ -38,10 +38,11 @@ pub(crate) fn dispatch_preset(
             DispatchResult::structural()
         }
         PresetActionKind::Import => {
-            if let Some(path) = rfd::FileDialog::new()
-                .add_filter("MANIFOLD Preset", &["json"])
-                .pick_file()
-            {
+            if let Some(path) = crate::file_dialogs::pick_file(
+                crate::file_dialogs::DialogAction::ImportPreset,
+                ctx.dialogs,
+                ctx.user_prefs,
+            ) {
                 match manifold_io::preset_file::import_preset(&path) {
                     Ok(def) => submit(
                         &target,
@@ -59,10 +60,12 @@ pub(crate) fn dispatch_preset(
         }
         PresetActionKind::Export => {
             if let Some((def, id)) = preset_source_def(&target, ctx.project)
-                && let Some(path) = rfd::FileDialog::new()
-                    .add_filter("MANIFOLD Preset", &["json"])
-                    .set_file_name(format!("{}.json", id.as_str()))
-                    .save_file()
+                && let Some(path) = crate::file_dialogs::save_file(
+                    crate::file_dialogs::DialogAction::ExportPreset,
+                    ctx.dialogs,
+                    ctx.user_prefs,
+                    &format!("{}.json", id.as_str()),
+                )
                 && let Err(error) = manifold_io::preset_file::export_preset(&def, &path)
             {
                 log::error!("[preset] export failed: {error}");

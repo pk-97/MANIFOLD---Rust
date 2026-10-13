@@ -12,7 +12,6 @@ use manifold_ui::EditingAction;
 
 use super::DispatchResult;
 use crate::app::SelectionState;
-use crate::dialog_path_memory::{self, DialogContext};
 use crate::ui_root::UIRoot;
 use crate::user_prefs::UserPrefs;
 use crate::input_host::automation;
@@ -26,6 +25,7 @@ pub(super) fn dispatch_editing(
     selection: &mut SelectionState,
     active_layer: &mut Option<LayerId>,
     user_prefs: &mut UserPrefs,
+    dialogs: crate::file_dialogs::DialogHost,
 ) -> DispatchResult {
     use crate::content_command::ContentCommand;
     match action {
@@ -496,22 +496,12 @@ pub(super) fn dispatch_editing(
             DispatchResult::structural()
         }
         EditingAction::ContextImportMidi(layer_id) => {
-            // Open file dialog for MIDI import
-            let last_dir =
-                dialog_path_memory::get_last_directory(DialogContext::MidiImport, user_prefs);
-            let mut dialog = rfd::FileDialog::new()
-                .set_title("Import MIDI File")
-                .add_filter("MIDI Files", &["mid", "midi"]);
-            if !last_dir.is_empty() {
-                dialog = dialog.set_directory(&last_dir);
-            }
-            if let Some(path) = dialog.pick_file() {
+            if let Some(path) = crate::file_dialogs::pick_file(
+                crate::file_dialogs::DialogAction::ImportMidi,
+                dialogs,
+                user_prefs,
+            ) {
                 let path_str = path.to_string_lossy().to_string();
-                dialog_path_memory::remember_directory(
-                    DialogContext::MidiImport,
-                    &path_str,
-                    user_prefs,
-                );
                 // Parse MIDI file and import to layer
                 let notes = manifold_playback::midi_parser::MidiFileParser::parse_file(&path_str);
                 if !notes.is_empty() {

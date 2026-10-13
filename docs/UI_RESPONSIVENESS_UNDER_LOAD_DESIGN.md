@@ -34,7 +34,6 @@ it is potentially not all that correct" — its lessons are prior evidence, not 
 | Generator encode loop | `crates/manifold-app/src/content_pipeline.rs:2073` (`gen_renderer.render_all(&mut gpu_gen, …)`) | All layers' generators encode into the one "Generators" buffer via the `GpuEncoder` wrapper (`crates/manifold-node-engine/src/gpu/gpu_encoder.rs:7`). |
 | Command drain under load | `crates/manifold-app/src/content_thread.rs:478` (`wait_for_surface_draining_commands`), main drain :371–431 | Commands are already processed promptly while the GPU is behind. Latency is in *publish*, not apply. |
 | Snapshot publish | `crates/manifold-app/src/content_thread.rs:1112` (`data_version` check), build :1241, `state_tx.send` :1403 — all inside `tick_frame` (:589) | Publish is welded to rendering. `last_data_version` field already exists (:80). |
-| Rendering-paused mode | `crates/manifold-app/src/content_thread.rs:85` (`rendering_paused`), skip at :449–453 | While paused, mutations never publish — the ready-made test harness for I3. |
 | Commit API | `crates/manifold-gpu/src/metal/encoder.rs:2299` (`commit`, consumes self), :2306/:2322 (wait variants); encoder created at `crates/manifold-gpu/src/metal/device.rs:1111` | No commit-and-continue exists. |
 | Dispatch profiling | `crates/manifold-app/src/content_pipeline.rs:2044` (`enable_dispatch_profiling` on the Generators encoder when `--profile`) | Per-buffer timestamps; incompatible with mid-encode chunk splits (D5). |
 | Profiler segments for verification | `crates/manifold-app/src/ui_frame_profile.rs:54` (`present.next_drawable`); offscreen GPU-time handler `crates/manifold-app/src/ui_frame.rs:806` | Already measures exactly the starvation this design attacks. |
@@ -112,8 +111,7 @@ fn publish_snapshot_if_dirty(&mut self, state_tx: &Sender<ContentState>) {
 
 Call sites: `tick_frame` (replaces the inline code), end of the main drain pass
 (`content_thread.rs:431`), and each drained batch in `wait_for_surface_draining_commands`
-(:478). While `rendering_paused`, the drain still runs, so paused-mode edits now publish — this
-is intended and is the I3 test harness.
+(:478).
 
 Precedent: `data_version` dirty-checking is the established hot-path pattern
 (`last_data_version` already at :80). No new channels, no new shared state; the UI already
@@ -185,9 +183,9 @@ build both, verify after).
   `rg -A25 'fn commit_and_continue' crates/manifold-gpu/src/metal/encoder.rs | rg 'wait'`
   must return zero hits; signature returns `()`.
 - **I3 — A mutation publishes a snapshot even when no frame renders.** Enforcement: test
-  `paused_mutation_publishes_snapshot` (manifold-app): content thread with
-  `rendering_paused = true`, send a mutating `ContentCommand`, assert a `ContentState` with the
-  bumped `data_version` arrives on the receiver within 500ms.
+  `mutation_publishes_snapshot_without_a_tick` (manifold-app `content_thread`): handle a
+  mutating `ContentCommand`, run the post-drain publish with no tick, assert a `ContentState`
+  with the bumped `data_version` is on the receiver.
 - **I4 — No new shared state, no new threads/channels.** Enforcement: negative gate —
   `rg 'Arc<Mutex|Arc<RwLock' crates/manifold-app/src/content_thread.rs crates/manifold-node-engine/src/gpu/gpu_encoder.rs crates/manifold-gpu/src/metal/encoder.rs`
   shows only pre-existing hits (diff against main at landing).

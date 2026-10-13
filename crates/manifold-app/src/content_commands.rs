@@ -2026,15 +2026,38 @@ impl ContentThread {
                 // No-op outside of export loop — cancel flag checked inside run_export.
             }
             #[cfg(target_os = "macos")]
-            ContentCommand::ExportFrame { path, format } => {
-                // Captured over the next two ticks by submit/poll_still_export.
-                // A new request supersedes any not-yet-submitted one.
+            ContentCommand::CaptureStill => {
+                // Captured over the next two ticks by submit/poll_still_export,
+                // then held until ExportFrame names the destination.
                 self.still_export = Some(crate::content_thread::StillExportJob {
-                    path,
-                    format,
+                    dest: None,
                     dims: None,
+                    pixels: None,
                 });
             }
+            #[cfg(target_os = "macos")]
+            ContentCommand::ExportFrame { path, format } => {
+                // Writes the held capture if one is waiting for a destination;
+                // otherwise captures the next frame.
+                match self.still_export.as_mut() {
+                    Some(job) if job.dest.is_none() => job.dest = Some((path, format)),
+                    _ => {
+                        self.still_export = Some(crate::content_thread::StillExportJob {
+                            dest: Some((path, format)),
+                            dims: None,
+                            pixels: None,
+                        });
+                    }
+                }
+            }
+            #[cfg(target_os = "macos")]
+            ContentCommand::DiscardStill => {
+                if self.still_export.as_ref().is_some_and(|job| job.dest.is_none()) {
+                    self.still_export = None;
+                }
+            }
+            #[cfg(not(target_os = "macos"))]
+            ContentCommand::CaptureStill | ContentCommand::DiscardStill => {}
             #[cfg(not(target_os = "macos"))]
             ContentCommand::ExportFrame { .. } => {
                 log::warn!("[ContentThread] Frame export not supported on this platform");
@@ -2088,15 +2111,6 @@ impl ContentThread {
                 log::warn!("[ContentThread] Live recording not supported on this platform");
             }
 
-            // ── Lifecycle ────────────────────────────────────────────
-            ContentCommand::PauseRendering => {
-                self.rendering_paused = true;
-                log::info!("[ContentThread] rendering paused (dialog open)");
-            }
-            ContentCommand::ResumeRendering => {
-                self.rendering_paused = false;
-                log::info!("[ContentThread] rendering resumed");
-            }
 
             // ── Profiling ────────────────────────────────────────────
             #[cfg(feature = "profiling")]

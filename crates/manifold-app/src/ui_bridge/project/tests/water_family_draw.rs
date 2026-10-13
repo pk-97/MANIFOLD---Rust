@@ -53,6 +53,7 @@ mod gpu {
             &mut selection,
             &mut active_layer,
             &mut prefs,
+            Default::default(),
         );
         let Some(command) = rx.try_iter().next() else {
             // The dispatch layer suppresses an epsilon no-op.
@@ -207,6 +208,7 @@ mod gpu {
             &mut selection,
             &mut active_layer,
             &mut prefs,
+            Default::default(),
         );
         let add = rx.try_recv().expect("Add Water queued a content edit");
         assert!(matches!(&add, ContentCommand::ExecuteSelecting(_, _)));
