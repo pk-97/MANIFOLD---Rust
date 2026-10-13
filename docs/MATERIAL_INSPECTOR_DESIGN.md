@@ -292,7 +292,7 @@ The table records the required invariants; concrete regression names below match
 | No invented readiness or placement capability | `material_inspector_texture_families_split_connected_and_dormant_drawers` and the descriptor schema test asserts connected/graph-source states and only five independent UV families |
 | Shared material scope and map ownership remain visible | `material_inspector_texture_facts_track_shared_identity_and_graph_sources` checks two objects, one material, separate maps and shared placement edits |
 | No lossy UV write on view/rebuild | Foundation UV decomposition tests and `material_inspector_placement_opening_and_noop_emit_zero_actions` tests unchanged bytes/values on opening and numeric tolerance `1e-6` after explicit decomposable edits |
-| UI uses shared routing | Extend existing widget-tree coverage/dispatch tests; The six `material-inspector-*` UI flows exercises mapping, modulation, type-in and undo |
+| UI uses shared routing | Extend existing widget-tree coverage/dispatch tests; The `material-inspector-colour` UI flow and the four material-inspector CPU flow tests in `crates/manifold-app/src/ui_snapshot/script_cpu_flow_tests.rs` exercise mapping, modulation, type-in and undo |
 | Texture-owned factors and locked recipes are explained | Editing material ownership tests plus app look conflict tests covers MR map, wires, automation, fan-out and emissive Skin |
 
 No per-frame scan/allocation is added for grouping or texture facts. New periodic/content work would require a `MANIFOLD_RENDER_TRACE=1` acceptance run with no >20ms content-frame spike; this design schedules structural work only. No new GPU pipeline is created during authoring.
@@ -328,21 +328,21 @@ First four counts at audit: 29, 18, 11, 4. Literal/declaration inventories: `Par
 - **Entry/read-back:** no implementation prerequisite. Re-find `metadata_for_node_type`, `stamp_scene_node_exposures`, `ParamSpecDef`, `param_surface`, `build_object_properties_body`; read WIDGET_TREE_DESIGN and D1/D3/D4. Restate no renamed IDs, copied ranges, direct UI writes or new shader behaviour.
 - **Deliverables:** core/UI role types, single renderer classifier, additive migration, grouped existing scalar rows; Opacity & Cutout terminology; Advanced recovery of every row. No fake feature toggles or RGB picker yet.
 - **Gate:** focused core/renderer/app/UI tests for schema, descriptors, migration, grouped actions and zero-crossing stability; common clippy/negative/landing checks. Save/reload and modulate a previously hidden row after reload.
-- **Demo/gesture:** new `material-inspector-groups` flow opens selected PBR, changes roughness, opens its mapping drawer, undoes and asserts previous value. L3 plus PNG, with a held-out imported material as well as a plain generated object. This phase's snapshot is deliberately intermediate and must not show controls for unimplemented features.
+- **Demo/gesture:** the `material-inspector-groups` CPU flow test in `crates/manifold-app/src/ui_snapshot/script_cpu_flow_tests.rs` opens selected PBR, changes roughness, opens its mapping drawer, undoes and asserts previous value. L3 plus PNG, with a held-out imported material as well as a plain generated object. This phase's snapshot is deliberately intermediate and must not show controls for unimplemented features.
 
 ### P2 — Atomic compound editing and saved feature state
 
 - **Entry/read-back:** P1 landed. Read `CompositeCommand`, scrub lifecycle, binding resolution and PbrMaterial run; re-run descriptor and command inventory. D2/D6 and content ownership bind this phase.
 - **Deliverables:** batch command/preflight, seven appended mode params and output gates, Add Feature/Off/On headers, stable authored membership. Glass remains unavailable until its separate bug dependencies are verified. Explicitly Off groups remain visible.
 - **Gate:** atomic/stale/scope/legacy/Off round-trip tests; renderer output-value tests and focused GPU proof comparing old-default material vs FollowValues at zero pixel difference on the same backend. Common checks. No per-frame project mutations from output gating.
-- **Demo/gesture:** `material-inspector-features`: add Coat, modulate its amount, turn Off, turn On, undo, save/reload, modulate again. Assert retained factor/attachment and gated runtime factor; L3+PNG. One reproduction/one verification for any observed failure, not an open-ended render sweep.
+- **Demo/gesture:** the `material-inspector-features` CPU flow test in `crates/manifold-app/src/ui_snapshot/script_cpu_flow_tests.rs`: add Coat, modulate its amount, turn Off, turn On, undo, save/reload, modulate again. Assert retained factor/attachment and gated runtime factor; L3+PNG. One reproduction/one verification for any observed failure, not an open-ended render sweep.
 
 ### P3 — Texture facts (Scene placement removed by UX revision)
 
 - **Entry/read-back:** P1 landed; P2 needed for feature map grouping. Re-find scene-object ports, producer resolver, Skin commands and five shader UV families. Read D4/D5/D9. Hold arbitrary nested source resolution to current capabilities.
 - **Deliverables:** VM texture/source/shared-user facts and existing Skin assignment. UX revision removes local UV/sampling drawers; graph parameters remain unchanged.
 - **Gate:** texture capabilities/shared material/scope tests; bound editing and Skin undo/save/reload tests. Held-out fixture has shared material, distinct object maps and nonidentity UVs. Common checks; structural projection must not enter the per-frame value path.
-- **Demo/gesture:** `material-inspector-textures`: assert no affine, matrix or sampler controls exist in the Scene dock. Existing graph/import round-trip coverage retains data compatibility.
+- **Demo/gesture:** the `material-inspector-textures` CPU flow test in `crates/manifold-app/src/ui_snapshot/script_cpu_flow_tests.rs`: assert no affine, matrix or sampler controls exist in the Scene dock. Existing graph/import round-trip coverage retains data compatibility.
 
 ### P4 — RGB swatches
 
@@ -356,11 +356,11 @@ First four counts at audit: 29, 18, 11, 4. Literal/declaration inventories: `Par
 - **Entry/read-back:** P2/P3 landed. Read recipe precedent, MR ownership, Skin temporary ownership and batch rejection. Glass recipe stays absent until BUG-1c9c/BUG-vj1p have bounded runtime proofs; this is a named dependency, not worker discretion.
 - **Deliverables:** static Matte/Coated/Brushed Metal recipes and atomic apply action; shared scope notice, named conflicts. Add Glass only after prerequisites pass. No persistent preset-name field.
 - **Gate:** look conflict/atomic/round-trip tests; serialized before/after comparison proves maps/UVs/samplers/colour/alpha/object gain/attachments unchanged except specified writes. Common checks.
-- **Demo/gesture:** `material-inspector-looks`: apply Coated, undo once, redo, reload; attempt Brushed Metal with MR texture and assert zero writes plus ownership explanation. L3+PNG.
+- **Demo/gesture:** the `material-inspector-looks` CPU flow test in `crates/manifold-app/src/ui_snapshot/script_cpu_flow_tests.rs`: apply Coated, undo once, redo, reload; attempt Brushed Metal with MR texture and assert zero writes plus ownership explanation. L3+PNG.
 
 ### P6 — Friendly placement (retired by Scene-panel UX revision)
 
-The Scene dock widget and its release-only gesture path were removed at Peter’s request. Original affine values, node parameters and graph editing remain unchanged. `material-inspector-textures` now verifies their absence from the panel. No renderer or serialization change accompanies removal.
+The Scene dock widget and its release-only gesture path were removed at Peter’s request. Original affine values, node parameters and graph editing remain unchanged. The `material-inspector-textures` CPU flow test in `crates/manifold-app/src/ui_snapshot/script_cpu_flow_tests.rs` now verifies their absence from the panel. No renderer or serialization change accompanies removal.
 
 The two renderer repairs were included in the authorized end-to-end work after their bounded proof was established: transmissive PBR output enters the transparent pass independently of authored alpha mode, and transmission replaces only the diffuse term while preserving additional lobes. The shader ABI is unchanged.
 

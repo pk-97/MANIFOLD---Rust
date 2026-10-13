@@ -219,54 +219,7 @@ fn run_flow(
     let out_dir = PathBuf::from("target/ui-snapshots").join(scene).join(format!("run-{stem}"));
     std::fs::create_dir_all(&out_dir).expect("create run output dir");
 
-    let zoom_ppb = super::zoom_ppb_for_scene(scene);
-    let mut ui = UIRoot::new();
-    ui.resize(super::LOGICAL_W, super::LOGICAL_H);
-    if scene == "inspector"
-        || scene == "audiovisualizers"
-        || scene == "modifiergroup"
-        || scene == "bug060"
-        || scene == "bug060heavy"
-        || scene == "paramsteps"
-        || scene == "gltfscene"
-        || scene == "mushroomscene"
-        || scene == "physicsscene"
-        || scene == "physicsboxes"
-        || scene == "gltfanimscene"
-        || scene == "bug047"
-        || scene == "envmod"
-        || scene == "dmxcard"
-    {
-        ui.layout.inspector_width = 600.0;
-        ui.layout.timeline_split_ratio = 0.6;
-    } else {
-        ui.layout.inspector_width = 0.0;
-        ui.layout.timeline_split_ratio = 0.93;
-    }
-    // `audiosends` is the Audio Setup dock's flow-testing scene (P4/D8 gain-
-    // reset hygiene flow): the panel isn't reachable from a flow's `Click`
-    // gesture (the header opens it through the perform-entry menu, which
-    // renders outside the `UITree` selector surface) — so, script-mode only,
-    // pre-open it the same way `interact.rs`'s `open:audio_setup` verb does,
-    // and seed real crossovers/range so the scope isn't "dark". Mirrors the
-    // `paramsteps`/`gltfscene` pre-armed-state pattern above (BUG-073: a
-    // script harness has no per-frame tick to drive a reveal tween, so state
-    // that needs to already be settled is constructed, not clicked into).
-    if scene == "audiosends" {
-        ui.audio_setup_panel.open();
-        ui.layout.audio_setup_width = manifold_ui::color::DEFAULT_AUDIO_SETUP_WIDTH;
-        ui.audio_setup_panel.set_scope_bands(250.0, 2000.0, 10.0, 22_000.0);
-    }
-    // `rtquality` is the RT Quality panel's flow-testing scene: the panel
-    // opens from the MANIFOLD menu / Settings popup, both outside the UITree
-    // selector surface — so, script-mode only, pre-open it (same call the
-    // live dispatch makes), then the flow's clicks drive the real
-    // dropdown → ChangeRtQualityCommand → state-sync path.
-    if scene == "rtquality" {
-        ui.rt_quality_panel.open();
-        ui.overlay_dirty = true;
-    }
-    super::sync_build(&mut ui, &data, zoom_ppb);
+    let (mut ui, zoom_ppb) = prepare_ui(scene, &data);
 
     // P2 (D3): ONE persistent cache + composited offscreen for the whole
     // script run, seeded with a full self-clearing composite — mirrors
@@ -276,26 +229,12 @@ fn run_flow(
     let tex_w = (super::LOGICAL_W * super::SCALE) as u32;
     let tex_h = (super::LOGICAL_H * super::SCALE) as u32;
     let device = device.get_or_insert_with(|| GpuDevice::new_queued("ui-snap script"));
-    let mut render = RenderState::new(device, tex_w, tex_h);
-    composite_frame(
-        render.device,
-        &mut render.ui_renderer,
-        &mut render.cache,
-        &mut ui,
-        &render.composite,
-        1.0,
-    );
+    let mut render = Some(RenderState::new(device, tex_w, tex_h));
+    if let Some(r) = render.as_mut() {
+        r.composite(&mut ui);
+    }
 
-    let mut runner = Runner::new();
-    // BUG-296: `resolve_effect_target` falls back to `timeline.layers.first()`
-    // when `Runner.active_layer` is None, silently mutating the wrong layer's
-    // effect chain for structural PanelActions dispatched before any
-    // `LayerClicked` gesture. Seed it from the fixture's actual active layer
-    // (`data.active`) so a script's first structural dispatch (e.g.
-    // `EffectReorder`) targets the layer the display is actually showing.
-    runner.active_layer = data
-        .active
-        .and_then(|i| data.project.timeline.layers.get(i).map(|l| l.layer_id.clone()));
+    let mut runner = Runner::for_scene(&data);
     let mut results = Vec::with_capacity(actions.len());
     let mut ok = true;
 
@@ -370,6 +309,10 @@ impl<'d> RenderState<'d> {
         cache.invalidate_all();
         let composite = CompositeResources::new(device, tex_w, tex_h);
         Self { device, ui_renderer, cache, composite, tex_w, tex_h }
+    }
+
+    fn composite(&mut self, ui: &mut UIRoot) {
+        composite_frame(self.device, &mut self.ui_renderer, &mut self.cache, ui, &self.composite, 1.0);
     }
 
     /// Read back the CURRENTLY composited offscreen — raw linear UI bytes (the
@@ -469,6 +412,17 @@ impl Runner {
         }
     }
 
+    /// BUG-296 (wrong-layer structural dispatch): `resolve_effect_target`
+    /// falls back to `timeline.layers.first()` when `active_layer` is None,
+    /// so seed it from the fixture's actual active layer before any step.
+    fn for_scene(data: &SceneData) -> Self {
+        let mut runner = Self::new();
+        runner.active_layer = data
+            .active
+            .and_then(|i| data.project.timeline.layers.get(i).map(|l| l.layer_id.clone()));
+        runner
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn step(
         &mut self,
@@ -478,7 +432,7 @@ impl Runner {
         index: usize,
         action: &AutomationAction,
         out_dir: &std::path::Path,
-        render: &mut RenderState,
+        render: &mut Option<RenderState>,
     ) -> StepResult {
         let action_desc = format!("{action:?}");
         let outcome = match action {
@@ -527,7 +481,7 @@ impl Runner {
                         scroll_dirty: self.scroll_dirty,
                         ..Default::default()
                     };
-                    apply_ui_frame_invalidations(ui, Some(&mut render.cache), &mut signals);
+                    apply_ui_frame_invalidations(ui, render.as_mut().map(|r| &mut r.cache), &mut signals);
                     self.needs_structural_sync = signals.needs_structural_sync;
                     self.scroll_dirty = signals.scroll_dirty;
                     // BUG-234 cont'd: `apply_ui_frame_invalidations` only
@@ -540,15 +494,10 @@ impl Runner {
                     // write into `data.project`'s param `effective` value
                     // never reaches the widget tree a `Dump`/`Snapshot` reads.
                     super::reconcile_state(ui, data);
-                    composite_frame(
-                        render.device,
-                        &mut render.ui_renderer,
-                        &mut render.cache,
-                        ui,
-                        &render.composite,
-                        1.0,
-                    );
-                    self.filmstrip.push(render.readback_linear());
+                    if let Some(r) = render.as_mut() {
+                        r.composite(ui);
+                        self.filmstrip.push(r.readback_linear());
+                    }
                 }
                 StepResult {
                     index,
@@ -571,13 +520,25 @@ impl Runner {
             }
             AutomationAction::Snapshot => {
                 let path = out_dir.join(format!("{index:02}.png"));
-                self.write_png(ui, data, render, &path);
-                StepResult {
-                    index,
-                    action: action_desc,
-                    status: "ok",
-                    detail: "snapshot written".into(),
-                    artifact: Some(path.display().to_string()),
+                match render.as_mut() {
+                    Some(r) => {
+                        self.write_png(ui, data, r, &path);
+                        StepResult {
+                            index,
+                            action: action_desc,
+                            status: "ok",
+                            detail: "snapshot written".into(),
+                            artifact: Some(path.display().to_string()),
+                        }
+                    }
+                    // A pixel check with no pixels must never read as a pass.
+                    None => StepResult {
+                        index,
+                        action: action_desc,
+                        status: "fail",
+                        detail: "Snapshot needs a RenderState; this run has none".into(),
+                        artifact: None,
+                    },
                 }
             }
             AutomationAction::SaveReloadProject => {
@@ -871,7 +832,7 @@ impl Runner {
         target: &AutomationTarget,
         gesture: &Gesture,
         out_dir: &std::path::Path,
-        render: &mut RenderState,
+        render: &mut Option<RenderState>,
     ) -> StepResult {
         let rect = match self.resolve(ui, target) {
             Ok(r) => r,
@@ -1003,7 +964,7 @@ impl Runner {
         action_desc: String,
         target: &AutomationTarget,
         out_dir: &std::path::Path,
-        render: &mut RenderState,
+        render: &mut Option<RenderState>,
     ) -> StepResult {
         // Start with a chunky wheel notch so deep rows reach the viewport within
         // the cap. Halve it when a step crosses the whole viewport; wheel speed
@@ -1402,7 +1363,7 @@ impl Runner {
         action_desc: String,
         param: &manifold_ui::automation::FlowScrubTarget,
         value: f32,
-        render: &mut RenderState,
+        render: &mut Option<RenderState>,
     ) -> StepResult {
         use manifold_ui::automation::FlowScrubTarget;
         use manifold_ui::panels::{GraphParamTarget, ScrubPhase, ScrubValue, ValueRef};
@@ -1451,7 +1412,7 @@ impl Runner {
         ui: &mut UIRoot,
         data: &mut SceneData,
         zoom_ppb: f32,
-        render: &mut RenderState,
+        render: &mut Option<RenderState>,
         scrolled_in_place: bool,
     ) {
         crate::ui_bridge::sync_automation_lane_order(&data.project, &mut data.selection);
@@ -1493,21 +1454,16 @@ impl Runner {
         if overlay_changed {
             signals.scroll_dirty.visual = true;
         }
-        apply_ui_frame_invalidations(ui, Some(&mut render.cache), &mut signals);
+        apply_ui_frame_invalidations(ui, render.as_mut().map(|r| &mut r.cache), &mut signals);
         self.needs_structural_sync = signals.needs_structural_sync;
         self.scroll_dirty = signals.scroll_dirty;
         // The visual bit is one-shot (consumed by the rebuild decision above),
         // same as the live driver's per-frame `scroll_dirty.clear()`.
         self.scroll_dirty.visual = false;
         super::reconcile_state(ui, data);
-        composite_frame(
-            render.device,
-            &mut render.ui_renderer,
-            &mut render.cache,
-            ui,
-            &render.composite,
-            1.0,
-        );
+        if let Some(r) = render.as_mut() {
+            r.composite(ui);
+        }
     }
 
     fn assert(
@@ -1773,3 +1729,61 @@ pub(super) fn click_by_text(ui: &mut UIRoot, data: &mut SceneData, text: &str) -
 pub(super) fn write_fail_dump(ui: &UIRoot, path: &std::path::Path) {
     Runner::new().write_dump(ui, path);
 }
+
+/// The flow-mode `UIRoot` for `scene`: layout, scene-specific pre-opened
+/// panels, and the first full build. Shared by `run_flow` and the CPU flow tests.
+fn prepare_ui(scene: &str, data: &SceneData) -> (UIRoot, f32) {
+    let zoom_ppb = super::zoom_ppb_for_scene(scene);
+    let mut ui = UIRoot::new();
+    ui.resize(super::LOGICAL_W, super::LOGICAL_H);
+    if scene == "inspector"
+        || scene == "audiovisualizers"
+        || scene == "modifiergroup"
+        || scene == "bug060"
+        || scene == "bug060heavy"
+        || scene == "paramsteps"
+        || scene == "gltfscene"
+        || scene == "mushroomscene"
+        || scene == "physicsscene"
+        || scene == "physicsboxes"
+        || scene == "gltfanimscene"
+        || scene == "bug047"
+        || scene == "envmod"
+        || scene == "dmxcard"
+    {
+        ui.layout.inspector_width = 600.0;
+        ui.layout.timeline_split_ratio = 0.6;
+    } else {
+        ui.layout.inspector_width = 0.0;
+        ui.layout.timeline_split_ratio = 0.93;
+    }
+    // `audiosends` is the Audio Setup dock's flow-testing scene (P4/D8 gain-
+    // reset hygiene flow): the panel isn't reachable from a flow's `Click`
+    // gesture (the header opens it through the perform-entry menu, which
+    // renders outside the `UITree` selector surface) — so, script-mode only,
+    // pre-open it the same way `interact.rs`'s `open:audio_setup` verb does,
+    // and seed real crossovers/range so the scope isn't "dark". Mirrors the
+    // `paramsteps`/`gltfscene` pre-armed-state pattern above (BUG-073: a
+    // script harness has no per-frame tick to drive a reveal tween, so state
+    // that needs to already be settled is constructed, not clicked into).
+    if scene == "audiosends" {
+        ui.audio_setup_panel.open();
+        ui.layout.audio_setup_width = manifold_ui::color::DEFAULT_AUDIO_SETUP_WIDTH;
+        ui.audio_setup_panel.set_scope_bands(250.0, 2000.0, 10.0, 22_000.0);
+    }
+    // `rtquality` is the RT Quality panel's flow-testing scene: the panel
+    // opens from the MANIFOLD menu / Settings popup, both outside the UITree
+    // selector surface — so, script-mode only, pre-open it (same call the
+    // live dispatch makes), then the flow's clicks drive the real
+    // dropdown → ChangeRtQualityCommand → state-sync path.
+    if scene == "rtquality" {
+        ui.rt_quality_panel.open();
+        ui.overlay_dirty = true;
+    }
+    super::sync_build(&mut ui, data, zoom_ppb);
+    (ui, zoom_ppb)
+}
+
+#[cfg(test)]
+#[path = "script_cpu_flow_tests.rs"]
+mod cpu_flow_tests;
