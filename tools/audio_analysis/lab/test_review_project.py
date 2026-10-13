@@ -270,6 +270,7 @@ class EndToEndTests(unittest.TestCase):
             with mock.patch.object(rp, 'plan_songs', lambda only: plans), \
                     mock.patch.object(rp, 'load_labels', lambda: labels), \
                     mock.patch.object(rp, 'write_audio', lambda ps: (wavs, {}, {'a': 'none', 'b': 'none'})), \
+                    mock.patch.object(rp, 'online_only_inputs', lambda only: []), \
                     mock.patch.object(rp, 'drum_stem_status', lambda t: (None, None, 'none')), \
                     mock.patch('builtins.print'):
                 rp.build(out, None, None, False, str(tool))
@@ -299,6 +300,273 @@ class EndToEndTests(unittest.TestCase):
             self.assertEqual(ov['reviewed'], ['a'])
             self.assertEqual(ov['unreviewed'], ['b'])
             self.assertEqual(ov['counts']['a']['not_hits'], 1)
+
+
+def clicks(sr, dur, times, amp=0.8):
+    """Silence with a decaying 200 Hz burst at each time (s)."""
+    x = np.random.default_rng(3).standard_normal(int(dur * sr)) * 1e-4
+    n = np.arange(int(.06 * sr))
+    burst = amp * np.sin(2 * np.pi * 200 * n / sr) * np.exp(-n / (.015 * sr))
+    for t in times:
+        a = int(round(t * sr))
+        x[a:a + len(n)] += burst[:len(x) - a]
+    return x
+
+
+MASTER_DB = '''
+CREATE TABLE songs(id TEXT PRIMARY KEY, group_id TEXT, group_override TEXT, lab_mix TEXT);
+CREATE TABLE assets(path TEXT PRIMARY KEY, name TEXT, role TEXT, variant TEXT, version TEXT, mtime_ns INTEGER,
+  local INTEGER, sha256 TEXT, duration_s REAL);
+CREATE TABLE comp_assets(comp_id TEXT, path TEXT, via TEXT, flags TEXT, PRIMARY KEY(comp_id, path));
+CREATE TABLE variants(song_id TEXT, ref TEXT, path TEXT, lag_s REAL, verdict TEXT, key TEXT);
+'''
+
+
+def master_db(rows):
+    """An in-memory catalogue with song 'a' in comp 'c' and the given (path, role, version, day, local, sha) rows."""
+    import sqlite3
+    con = sqlite3.connect(':memory:')
+    con.executescript(MASTER_DB)
+    con.execute("INSERT INTO songs VALUES ('a', 'c', NULL, NULL)")
+    for path, role, ver, day, local, sha in rows:
+        con.execute('INSERT INTO assets VALUES (?,?,?,?,?,?,?,?,?)', (path, Path(path).name, role, None, ver,
+                                                                      day * 86400 * 10**9, local, sha, 200.0))
+        con.execute("INSERT INTO comp_assets VALUES ('c', ?, 'release', '[]')", (path,))
+    return con
+
+
+class LatestMasterTests(unittest.TestCase):
+    def test_rule(self):
+        con = master_db([
+            ('/m/x - T1 (mastered).wav', 'master', 'T1 MASTER', 10, 1, 's1'),
+            ('/m/x - T2 (mastered).wav', 'master', 'T2 MASTER', 20, 1, 's2'),
+            ('/r/x - T2 (mastered).wav', 'master', 'T2 MASTER', 90, 1, 's2'),        # a copy into a release folder
+            ('/m/x - T2 (mastered) MP3.mp3', 'master', 'T2 MASTER', 25, 1, 's2mp3'),  # lossy, later
+            ('/m/x - PRE MASTER V9.wav', 'master', 'PREMASTER MASTER V9', 30, 1, 'p'),
+            ('/m/x STEM MASTER - WIP 6.mp3', 'master', 'WIP 6 MASTER', 30, 0, None),
+            ('/m/x - NO MASTER FX.wav', 'master', 'MASTER', 40, 1, 'nofx'),
+            ('/m/x - MASTER 4.wav', 'master', 'MASTER', 50, 1, 'm4'),                 # no number: under any T or V
+            ('/m/x - FINAL.wav', 'full_mix', 'FINAL', 60, 1, 'f'),
+        ])
+        m = rp.latest_master(con, 'a')
+        self.assertEqual((m['sha256'], m['revision'], m['date']), ('s2', 2, 20 * 86400 * 10**9))
+        self.assertEqual(m['local_paths'], ['/m/x - T2 (mastered).wav', '/r/x - T2 (mastered).wav'])
+
+    def test_online_copy_joins_its_local_file_and_a_higher_online_master_still_wins(self):
+        con = master_db([('/m/x T2 (mastered).wav', 'master', 'T2 MASTER', 20, 1, 's2'),
+                         ('/o/x T2 (mastered).wav', 'master', 'T2 MASTER', 21, 0, None)])
+        m = rp.latest_master(con, 'a')
+        self.assertTrue(m['local'])
+        self.assertEqual(len(m['paths']), 2)
+        con = master_db([('/m/x T2 (mastered).wav', 'master', 'T2 MASTER', 20, 1, 's2'),
+                         ('/o/x T3 (mastered).wav', 'master', 'T3 MASTER', 21, 0, None)])
+        self.assertFalse(rp.latest_master(con, 'a')['local'])
+
+    def test_remaster_counts_and_no_master_is_none(self):
+        con = master_db([('/m/x MASTER 4.wav', 'master', 'MASTER', 20, 1, 'm4'),
+                         ('/m/x [REMASTER FINAL].wav', 'full_mix', 'FINAL', 21, 1, 'rf'),
+                         ('/m/x Remaster WIP 8.mp3', 'full_mix', 'WIP 8', 30, 1, 'w8')])
+        self.assertEqual(rp.latest_master(con, 'a')['sha256'], 'rf')
+        self.assertIsNone(rp.latest_master(master_db([('/m/x WIP 3.mp3', 'full_mix', 'WIP 3', 1, 1, 'w')]), 'a'))
+
+
+class AudioPlanTests(unittest.TestCase):
+    """Which audio a song plays, from the latest master and the proofs."""
+
+    def setUp(self):
+        from tools.audio_analysis.lab import registry
+        self.d = tempfile.TemporaryDirectory()
+        d = Path(self.d.name)
+        self.t2, self.t2b = str(d / 'x T2 (mastered).wav'), str(d / 'x T2 copy (mastered).wav')
+        for p in (self.t2, self.t2b):
+            Path(p).write_bytes(b'x')
+        self.con = master_db([(self.t2, 'master', 'T2 MASTER', 20, 1, 's2')])
+        self.song = registry.Song('a', 'project', dict(how='goal', paths=['/lab/a.npy']), ('labsha',), 48000, -30.0,
+                                  'lab', ('kick',))
+
+    def tearDown(self):
+        self.d.cleanup()
+
+    def plan(self, rows):
+        with mock.patch.object(rp, 'review_proof', lambda s, m, con: dict(status='not proven [review proof]')):
+            return rp.audio_plan(self.song, self.con, {'a': rows})
+
+    def row(self, vid, sha, status, lag=None, path=None):
+        r = dict(id=vid, parent='a', sha256=sha, status=status, lag_s=lag, path=path or self.t2)
+        if status.startswith('proven'):
+            r['offset_s'] = self.song.offset_s - lag
+        return r
+
+    def test_proven_master_moves_by_minus_the_lag(self):
+        a = self.plan([self.row('a@mix-s2', 's2', 'proven (kick and snare agree)', lag=-0.0125)])
+        self.assertEqual((a.source, a.path, a.sha256), ('master', self.t2, 's2'))
+        self.assertAlmostEqual(a.shift_s, 0.0125, places=12)
+        self.assertEqual(a.label, 'master T2 MASTER')
+
+    def test_same_audio_follows_to_the_proven_file(self):
+        a = self.plan([self.row('a@mix-s2', 's2', 'excluded (same audio as a@mix-s9)'),
+                       self.row('a@mix-s9', 's9', 'proven (relative: x)', lag=0.002, path=self.t2b)])
+        self.assertEqual(a.source, 'master')
+        self.assertAlmostEqual(a.shift_s, -0.002, places=12)
+        Path(self.t2).unlink()           # the chosen copy evicted: the proven file with the same audio is read instead
+        a = self.plan([self.row('a@mix-s2', 's2', 'excluded (same audio as a@mix-s9)'),
+                       self.row('a@mix-s9', 's9', 'proven (relative: x)', lag=0.002, path=self.t2b)])
+        self.assertEqual((a.path, a.sha256), (self.t2b, 's9'))
+
+    def test_kept_with_a_reason(self):
+        a = self.plan([self.row('a@mix-s2', 's2', 'not proven (fit -29.07 s, labels use -29.22 s)')])
+        self.assertEqual((a.source, a.shift_s), ('labelled', 0.0))
+        self.assertEqual(a.label, 'lab mix: master not proven')
+        a = self.plan([])
+        self.assertIn('review proof', a.why)
+        a = self.plan([self.row('a@mix-s2', 's2', 'excluded (identical audio to the lab mix)')])
+        self.assertEqual((a.source, a.label), ('labelled', 'lab mix: the labelled file is the latest master'))
+        self.assertEqual(rp.audio_plan(self.song, master_db([]), {}).label, 'lab mix: no master in the catalogue')
+        on = master_db([('/o/x T3 (mastered).wav', 'master', 'T3 MASTER', 21, 0, None)])
+        self.assertEqual(rp.audio_plan(self.song, on, {}).label, 'lab mix: master online-only')
+
+
+class ShiftSignTests(unittest.TestCase):
+    """The catalogue's lag, the proof's offset and the review's shift agree in sign: a master that starts D seconds
+    later than the labelled file plays a label at t at t + D."""
+
+    def test_sign_end_to_end(self):
+        from tools.audio_analysis.catalog import variants
+        from tools.audio_analysis.lab import registry
+        sr, d = 32000, 0.4375
+        times = list(np.cumsum(np.random.default_rng(5).uniform(.2, .6, 140)) + 1.0)
+        lab = clicks(sr, 70.0, times)
+        master = np.concatenate([np.zeros(int(round(d * sr))), lab])
+        lag = variants.compare(lab, master, sr)['lag_s']
+        self.assertAlmostEqual(lag, -d, places=6)                    # catalogue: master time = lab time - lag_s
+        song = registry.Song('a', 'project', dict(how='goal', paths=['x']), ('s',), sr, -12.0, 'lab', ('kick',))
+        rec = dict(path='m.wav', sha256='m' * 64, offset_s=song.offset_s - lag, status='proven')   # offsets.prove_variant
+        shift = registry.variant_shift(registry.variant_copy(song, rec), song)
+        self.assertAlmostEqual(shift, d, places=6)
+        for t in times[10:15]:
+            self.assertLess(abs(rp.attack_time(master, sr, t + shift, (100, 400)) - (t + d)), .004)
+
+
+class MovedGridTests(unittest.TestCase):
+    def test_bar_lines_follow_the_labels_onto_the_master(self):
+        sh = 0.3125
+        plan = rp.on_audio(song('a', [(0, 120), (40, 120), (40, 90)], -30.0, 60.0),
+                           rp.AudioPlan('master', 'm.wav', 'm', sh, master=dict(version='T2'), duration_s=60.3125))
+        self.assertEqual((plan.offset_s, plan.duration_s), (-30.0 + sh, 60.3125))
+        ref = song('a', [(0, 120), (40, 120), (40, 90)], -30.0, 60.0)
+        wins, pm = rp.layout([plan])
+        w = wins[0]
+        for t in (0.5, 7.25, 31.0):                       # a label at labelled second t, on the master at t + sh
+            b = rp.to_beat(pm, w, t + sh)
+            self.assertAlmostEqual(b - w.start_beat, ref.amap.beat(t - ref.offset_s) - plan.a0_beat, places=9)
+        labels = {'kick': {'a': dict(positives=[-0.5, 1.0, 59.9], unscored=[], duration_s=60.0)}, 'snare': {}}
+        lanes, markers, stats = rp.lane_content(wins, pm, labels, None)
+        self.assertEqual([c['meta']['lab_s'] for c in lanes['Kick labels']], [1.0, 59.9])
+        self.assertEqual(stats['a']['kick_outside'], 1)               # -0.5 + 0.3125 is before the master starts
+        self.assertTrue(markers[0]['name'].endswith('[master T2]'))
+
+
+class StereoTests(unittest.TestCase):
+    def test_read_stereo_folds_to_the_lab_reader(self):
+        import soundfile as sf
+        from scipy.io import wavfile
+
+        from tools.audio_analysis.lab import remix
+        rng = np.random.default_rng(7)
+        x = (rng.standard_normal((44100, 2)) * 3000).astype(np.int16)
+        with tempfile.TemporaryDirectory() as d:
+            w, f = Path(d) / 's.wav', Path(d) / 's.flac'
+            wavfile.write(w, 44100, x)
+            sf.write(str(f), x.astype(np.float64) / 32768, 44100, subtype='PCM_16')
+            for p in (w, f):
+                st = rp.read_stereo(p, 48000)
+                self.assertEqual(st.shape[1], 2)
+                np.testing.assert_allclose(st.mean(axis=1), remix.read_mono(p, 48000), atol=1e-12)
+
+    def test_labelled_stereo_keeps_only_the_same_audio(self):
+        rng = np.random.default_rng(8)
+        st = rng.standard_normal((48000, 2)) * .1
+        ref = st.mean(axis=1)
+        s = SimpleSong()
+        with mock.patch.object(rp, 'stereo_sources', lambda song, con: (['a', 'b'], None)), \
+                mock.patch.object(rp, 'read_stereo', lambda p, sr: st / 2 if p == 'a' else st / 2):
+            got, why = rp.labelled_stereo(s, ref, None)
+            self.assertIsNone(why)
+            np.testing.assert_allclose(got, st)
+        with mock.patch.object(rp, 'stereo_sources', lambda song, con: (['a'], None)), \
+                mock.patch.object(rp, 'read_stereo', lambda p, sr: np.roll(st, 3, axis=0)):
+            got, why = rp.labelled_stereo(s, ref, None)
+            self.assertIsNone(got)
+            self.assertIn('does not fold back', why)
+
+    def test_mono_part_goes_to_every_channel(self):
+        out = rp.add_channels(np.ones((4, 2)), np.full((6, 1), 2.0))
+        self.assertEqual(out.shape, (6, 2))
+        np.testing.assert_allclose(out.mean(axis=1), [3, 3, 3, 3, 2, 2])
+        np.testing.assert_allclose(rp.shift_channels(np.arange(8.).reshape(4, 2), 1, 4)[:, 1], [0, 1, 3, 5])
+
+
+class SimpleSong:
+    sample_rate = 48000
+
+
+class MasterRoundTripTests(unittest.TestCase):
+    """build on a master timeline -> edits -> read: every time comes back in the labelled file's seconds."""
+
+    def test_round_trip(self):
+        sh = 0.75
+        with tempfile.TemporaryDirectory() as d:
+            d = Path(d)
+            tool = d / 'project_tool'
+            tool.write_text(FAKE_TOOL.replace('sys.path.insert(0, ROOT)', f'sys.path.insert(0, {str(rp.ROOT)!r})'))
+            tool.chmod(0o755)
+            plan = rp.on_audio(song('a', [(0, 120)], -10.0, 8.0),
+                               rp.AudioPlan('master', 'm.wav', 'm', sh, master=dict(version='T2'), duration_s=8.75))
+            sr = 48000
+            kicks = [1.0, 2.0, 3.5]
+            x = clicks(sr, 8.75, [t + sh for t in kicks])            # the master: the labelled hits, 0.75 s later
+            wav = d / 'a.wav'
+            import soundfile as sf
+            sf.write(str(wav), np.stack([x, x], axis=1).astype(np.float32), sr, subtype='FLOAT')
+            labels = {'kick': {'a': dict(positives=kicks, unscored=[[5.0, 6.0]], duration_s=8.0)}, 'snare': {}}
+            out = d / 'review.manifold'
+            with mock.patch.object(rp, 'plan_songs', lambda only: [plan]), \
+                    mock.patch.object(rp, 'load_labels', lambda: labels), \
+                    mock.patch.object(rp, 'online_only_inputs', lambda only: []), \
+                    mock.patch.object(rp, 'write_audio', lambda ps: ({'a': wav}, {}, {'a': 'none'})), \
+                    mock.patch.object(rp, 'drum_stem_status', lambda t: (None, None, 'none')), \
+                    mock.patch('builtins.print'):
+                rp.build(out, None, None, False, str(tool))
+            side = json.loads(rp.sidecar_path(out).read_text())
+            self.assertEqual((side['version'], side['songs'][0]['shift_s']), (2, sh))
+            self.assertEqual(side['songs'][0]['audio']['source'], 'master')
+            self.assertEqual(sorted(m['lab_s'] for m in side['clips'].values() if m['kind'] == 'label'), kicks)
+            proj = json.loads(out.read_text())
+            pm = rp.StepMap(proj['tempo'])
+            kick = {round(pm.seconds(c['start_beat']) - side['songs'][0]['mix_proj_s'], 6): c for c in proj['clips']
+                    if c['layer'] == 'Kick labels'}
+            self.assertEqual(sorted(kick), [t + sh for t in kicks])  # on the master, each label sits on its hit
+            edited = d / 'edited.manifold'
+            kick[1.0 + sh]['start_beat'] += 0.02                      # nudged 10 ms (120 BPM)
+            proj['clips'].remove(kick[2.0 + sh])                      # not a hit
+            proj['clips'].append(dict(clip_id='new1', layer='Kick labels', start_beat=kick[3.5 + sh]['start_beat'],
+                                      duration_beats=.0625))          # a new hit exactly on an existing label
+            unsure = next(c for c in proj['clips'] if c['layer'] == 'Kick unsure')
+            proj['clips'].append(dict(clip_id='new2', layer='Kick labels', start_beat=unsure['start_beat'] + 1.0,
+                                      duration_beats=.0625))          # a hit inside the unsure span
+            edited.write_text(json.dumps(proj))
+            with mock.patch.object(rp, 'family_bands', lambda: {'kick': (100, 400), 'snare': (1000, 8000)}), \
+                    mock.patch('builtins.print'):
+                rp.read(out, edited, str(tool))
+            ov = json.loads((d / 'edited.review' / 'kick_overlay.json').read_text())['songs']['a']
+            self.assertEqual(ov['not_hits'], [2.0])
+            self.assertAlmostEqual(ov['moved'][0]['grid_s'], 1.01, places=6)
+            self.assertEqual(ov['moved'][0]['from_s'], 1.0)
+            self.assertLess(abs(ov['moved'][0]['attack_s'] - 1.0), .004)   # the attack is found back on the hit
+            news = sorted(h['grid_s'] for h in ov['new_hits'])
+            self.assertAlmostEqual(news[0], 3.5, places=6)
+            self.assertAlmostEqual(news[1], 5.5, places=6)                # unsure span 5..6 at 120 BPM, +1 beat
+            self.assertEqual(ov['unsure_resolved'][0]['span'], [5.0, 6.0])
 
 
 if __name__ == '__main__':

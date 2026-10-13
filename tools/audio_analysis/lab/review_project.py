@@ -2,20 +2,24 @@
 """A MANIFOLD project for reviewing detector labels by ear and eye (docs/DETECTOR_LABEL_REVIEW_DESIGN.md).
 
 Every project song sits end to end on one timeline, each in its own tempo window that matches its Ableton set: the
-bar the lab mix starts in lands on the window start, so every bar line is Ableton's. Lanes: Mix, Drums (proven stems
-only), Kick labels, Snare labels, Kick fires, Snare fires, Kick unsure, Snare unsure. Peter edits a copy; `read`
-diffs his copy against the original by clip id and writes one overlay per family. Nothing here writes a label file.
+bar the song's audio starts in lands on the window start, so every bar line is Ableton's. A song plays its latest
+master when the lab proved that master carries its labels (lab/variant_proofs.json), shifted by the proven lag; else
+the labelled file, with the reason on the song's start marker. Lanes: Mix, Drums (proven stems only), Kick labels,
+Snare labels, Kick fires, Snare fires, Kick unsure, Snare unsure. Peter edits a copy; `read` diffs his copy against
+the original by clip id and writes one overlay per family, in the labelled file's seconds. Nothing here writes a label
+file.
 
 Usage:
   review_project.py build OUT.manifold [--songs a,b] [--fires-dir DIR] [--dry-run] [--project-tool CMD]
   review_project.py fires DIR [--songs a,b] [--fires-cmd CMD] [--force]
   review_project.py read ORIGINAL.manifold EDITED.manifold [--project-tool CMD]
 
-build writes the mix and drum WAVs (48 kHz float) under ~/.cache/manifold/detector-lab/review/, the project through
-project_tool, and OUT.review.json beside it (clip id -> song, family, kind, lab time). --dry-run prints the layout
-and per-lane counts and writes nothing. Fires are an input: DIR/<song>.json, a JSON list or JSON lines of
-{"family", "onset_s", "emit_s"} in lab-mix seconds; `fires DIR` makes them with the shipped detectors (manifold-audio's
-detector_fires example, CPU) from the same WAVs."""
+build writes the mix and drum WAVs (48 kHz, stereo where the source is) under ~/.cache/manifold/detector-lab/review/,
+the project through project_tool, and OUT.review.json beside it (clip id -> song, family, kind, labelled-file time;
+per song its audio source and shift). --dry-run prints the layout and per-lane counts and writes nothing. Fires are
+an input: DIR/<song>.json, a JSON list or JSON lines of {"family", "onset_s", "emit_s"} in the seconds of the WAV
+named in DIR/<song>.source; `fires DIR` makes them with the shipped detectors (manifold-audio's detector_fires
+example, CPU) from the same WAVs, and build skips a song's fires made from another WAV."""
 import argparse
 import bisect
 import hashlib
@@ -48,6 +52,11 @@ CHECK_MERGE_GAP_BARS = 1          # one silent or unsure bar inside a stretch do
 TS_FOUR_FOUR = 201                # Live's encoding of 4/4 in the main track's time signature
 MOVE_EPS_BEATS = 1e-6
 ATTACK_WINDOW_S = 0.020
+MASTER_NOT = re.compile(r'PREMASTER|WIP')       # a version tag that names a premaster or a work in progress
+REVISION = re.compile(r'(?<![A-Z])[TV](\d+)(?![0-9])')   # the T or V number of a version tag ('T2 MASTER', 'MSTR V3')
+LOSSLESS = ('.wav', '.aif', '.aiff', '.flac')
+REMASTER = re.compile(r'(?<![a-z])re-?master', re.I)   # the catalogue files these as full mixes
+SIDECAR_VERSION = 2
 LANES = (  # (name, type, colour, family, kind)
     ('Mix', 'audio', '#5B8DEF', None, 'mix'),
     ('Drums', 'audio', '#8A94A6', None, 'drums'),
@@ -172,20 +181,48 @@ def window_steps(amap, b_from, b_to, step=RAMP_STEP_BEATS):
 # ---- songs ---------------------------------------------------------------------------------------------------------
 
 @dataclass
+class AudioPlan:
+    """What a song's window plays. Audio seconds = labelled-file seconds + shift_s; the labels, the sidecar and the
+    overlays stay in labelled-file seconds."""
+    source: str = 'labelled'      # 'master' | 'labelled'
+    path: str | None = None       # the master file (source 'master')
+    sha256: str | None = None
+    shift_s: float = 0.0
+    why: str = ''                 # why this source, one line for the start marker and the report
+    master: dict | None = None    # the latest master found, with its proof status
+    duration_s: float | None = None   # the master's length at the song's rate (its proof row), for --dry-run
+    channels: int | None = None   # set by write_audio
+    mono_why: str | None = None   # set by write_audio when a song that should be stereo plays mono
+
+    @property
+    def label(self):
+        """The start marker's note: the why without its detail ('' for a plan with no why)."""
+        if self.source == 'labelled' and not self.why:
+            return ''
+        out = f"master {self.master['version']}" if self.source == 'master' else f"lab mix: {self.why.split(' (')[0]}"
+        return out + (f'; mono: {self.mono_why}' if self.mono_why else '')
+
+
+@dataclass
 class SongPlan:
     id: str
-    duration_s: float
+    duration_s: float             # of the audio the window plays
     amap: AbletonMap
-    offset_s: float               # mix seconds = arrangement seconds + offset_s
+    offset_s: float               # audio seconds = arrangement seconds + offset_s
     tempo_source: str             # 'ableton' | 'fitted' | 'no grid'
     als: str | None = None
     locators: list = field(default_factory=list)   # [(arrangement beat, name)]
     notes: list = field(default_factory=list)
     sample_rate: int = OUT_SR
+    audio: AudioPlan = field(default_factory=AudioPlan)
+
+    @property
+    def shift_s(self):
+        return self.audio.shift_s
 
     @property
     def start_beat(self):
-        """Arrangement beat at mix time 0."""
+        """Arrangement beat at audio time 0."""
         return self.amap.beat(-self.offset_s)
 
     @property
@@ -212,7 +249,7 @@ class Window:
     start_beat: float             # project beat of Ableton bar A0
     steps: list                   # [(project beat, bpm)]
     ramp_error_s: float
-    mix_proj_s: float = 0.0       # project second of lab mix time 0
+    mix_proj_s: float = 0.0       # project second of audio time 0
 
     @property
     def end_beat(self):
@@ -221,7 +258,7 @@ class Window:
 
 def layout(plans):
     """(windows, project StepMap): each song's window starts on a bar, its tempo steps follow its own map, and the
-    lab mix time t sits at project second mix_proj_s + t."""
+    audio time t sits at project second mix_proj_s + t."""
     wins, beat = [], 0.0
     for s in plans:
         steps, err = window_steps(s.amap, s.a0_beat, s.a0_beat + s.span_beats)
@@ -234,7 +271,7 @@ def layout(plans):
 
 
 def to_beat(pmap, w, t):
-    """Project beat of lab mix time t in window w."""
+    """Project beat of audio time t in window w."""
     return pmap.beat(w.mix_proj_s + t)
 
 
@@ -355,13 +392,17 @@ def label_times(lab):
     return sorted(pts)
 
 
-def load_fires(fires_dir, song):
-    """[(family, onset s, emit s)] from DIR/<song>.json (JSON list or JSON lines), None when absent."""
+def load_fires(fires_dir, song, wav=None):
+    """[(family, onset s, emit s)] from DIR/<song>.json (JSON list or JSON lines), None when absent, 'stale' when wav
+    is given and DIR/<song>.source names another WAV (the fires sit on that WAV's timeline)."""
     if not fires_dir:
         return None
     p = Path(fires_dir) / f'{song}.json'
     if not p.exists():
         return None
+    src = p.with_suffix('.source')
+    if wav is not None and (not src.exists() or src.read_text() != str(wav)):
+        return 'stale'
     text = p.read_text().strip()
     rows = json.loads(text) if text.startswith('[') else [json.loads(x) for x in text.splitlines() if x.strip()]
     return [(r['family'], float(r['onset_s']), float(r['emit_s'])) for r in rows]
@@ -438,6 +479,143 @@ def fit_grid(kicks, name_bpm=None):
     return bpm, down, note + ', downbeat guessed'
 
 
+def latest_master(con, song_id):
+    """The song's latest master in the catalogue, or None, as dict(path, paths, version, revision, local, sha256).
+    Candidates: the composition's files of role 'master', and full mixes named remaster (no mix-minus, no reference, no premaster or WIP version tag,
+    no variants.NOT_BOUNCE name, none shorter than variants.MIN_DUR_S). Byte-identical copies are one master; an
+    online-only file with a local file's name is that file's copy. Rank: the version tag's T or V number (none is 0),
+    then lossless over lossy, then local over online-only, then the newest date (each master dated by its earliest
+    copy: a copy into a release folder is not a new master)."""
+    from tools.audio_analysis.catalog.variants import MIN_DUR_S, NOT_BOUNCE
+    row = con.execute('SELECT COALESCE(group_override, group_id) FROM songs WHERE id=?', (song_id,)).fetchone()
+    if row is None:
+        return None
+    masters = {p for (p,) in con.execute("SELECT a.path FROM comp_assets ca JOIN assets a USING(path) WHERE ca.comp_id=? "
+                                         "AND a.role='master'", (row[0],))}
+    rows = [r for r in con.execute(
+        "SELECT a.path, a.name, a.version, a.mtime_ns, a.local, a.sha256, a.duration_s FROM comp_assets ca JOIN assets a "
+        "USING(path) WHERE ca.comp_id=? AND a.role IN ('master', 'full_mix') AND a.variant IS NULL "
+        "AND ca.flags NOT LIKE '%reference%' ORDER BY a.path", (row[0],))
+            if (r[0] in masters or REMASTER.search(r[1])) and not MASTER_NOT.search(r[2] or '') and not NOT_BOUNCE.search(r[1]) and not (r[6] is not None and r[6] < MIN_DUR_S)]
+    local_sha = {name: sha for _, name, _, _, local, sha, _ in rows if local and sha}
+    groups = {}
+    for path, name, ver, mtime, local, sha, _ in rows:
+        key = sha if local and sha else local_sha.get(name, ('online', name))
+        g = groups.setdefault(key, dict(paths=[], version=ver, revision=0, date=mtime, local=False, lossless=False,
+                                        sha256=None))
+        g['paths'].append(path)
+        rev = max([int(n) for n in REVISION.findall(ver or '')] or [0])
+        if rev > g['revision']:
+            g['revision'], g['version'] = rev, ver
+        g['date'] = min(g['date'], mtime)
+        g['local'] |= bool(local)
+        g['lossless'] |= path.lower().endswith(LOSSLESS)
+        if local and sha:
+            g['sha256'] = sha
+    if not groups:
+        return None
+    g = max(groups.values(), key=lambda g: (g['revision'], g['lossless'], g['local'], g['date']))
+    g['local_paths'] = [p for p in sorted(g['paths'], key=lambda p: (not p.lower().endswith(LOSSLESS), p))
+                        if con.execute('SELECT local FROM assets WHERE path=?', (p,)).fetchone()[0]]
+    g['path'] = (g['local_paths'] or g['paths'])[0]
+    return g
+
+
+def audio_plan(song, con, proofs):
+    """The AudioPlan for a registry song: its latest master when lab/offsets.py --variants proved that master carries
+    the song's labels (a 'proven' row of variant_proofs.json for the master's sha256, possibly through 'same audio as'),
+    shifted by registry.variant_shift; else the labelled file and why. proofs: registry.variant_proofs()."""
+    from tools.audio_analysis.catalog.catalog import is_dataless
+    from tools.audio_analysis.lab import registry
+    m = latest_master(con, song.id)
+    if m is None:
+        return AudioPlan(why='no master in the catalogue')
+    if not m['local']:
+        return AudioPlan(why=f"master online-only ({Path(m['path']).name})", master=m)
+    if m['sha256'] in song.source_sha256:
+        return AudioPlan(why='the labelled file is the latest master', master=m)
+    rows = proofs.get(song.id, ())
+    by_id = {r['id']: r for r in rows}
+    r = next((r for r in rows if r['sha256'] == m['sha256']), None)
+    hops = 0
+    while r is not None and r['status'].startswith('excluded (same audio as ') and hops < len(rows):
+        r = by_id.get(r['status'][len('excluded (same audio as '):-1])
+        hops += 1
+    if r is None:
+        r = review_proof(song, m, con)
+        if 'path' not in r:
+            online = r['status'].startswith('master online-only')
+            return AudioPlan(why=r['status'] if online else f"master not proven ({r['status']})",
+                             master=dict(m, proof=r['status']))
+    m = dict(m, proof=r['status'])
+    if r['status'].startswith(('excluded (identical audio', 'excluded (a byte-identical copy')) or '(the lab mix)' in r['status']:
+        return AudioPlan(why='the labelled file is the latest master (identical audio)', master=m)
+    if not r['status'].startswith('proven'):
+        return AudioPlan(why=f"master not proven ({r['status']})", master=m)
+    # any local copy, or the proven file itself (its decoded audio is the master's: 'same audio as')
+    reads = [(p, m['sha256']) for p in m['local_paths']] + [(r['path'], r['sha256'])]
+    pick = next(((p, h) for p, h in reads if Path(p).exists() and not is_dataless(p)), None)
+    if pick is None:
+        return AudioPlan(why=f"master online-only ({Path(m['path']).name})", master=m)
+    shift = registry.variant_shift(registry.variant_copy(song, r), song)
+    return AudioPlan('master', pick[0], pick[1], shift, why=f"master {m['version']} proven, shift {shift * 1e3:+.3f} ms",
+                     master=m, duration_s=r.get('duration_s'))
+
+
+REVIEW_PROOF_VERSION = 1
+
+
+def review_proof(song, m, con):
+    """A variant_proofs.json-shaped row for a latest master that lab/offsets.py --variants never judged, by the same
+    code: the catalogue's verdict and lag (catalog.py variants' row when its key is current, else variants.compare
+    on the two files), then offsets.prove_variant on the master's own audio. Cached under REVIEW_DIR/proofs and never
+    written to variant_proofs.json, so no training copy or run id moves. A row without 'path' is a reason, not a
+    proof."""
+    from tools.audio_analysis.catalog import variants
+    from tools.audio_analysis.catalog.catalog import is_dataless
+    from tools.audio_analysis.lab import offsets, registry
+    reads = [p for p in m['local_paths'] if Path(p).exists() and not is_dataless(p)]
+    if not reads:
+        return dict(status=f"master online-only ({Path(m['path']).name})")
+    path, sha = reads[0], m['sha256']
+    key = variants.key_of(song.content_id, sha, REVIEW_PROOF_VERSION)
+    cache = REVIEW_DIR / 'proofs' / f'{song.id}_{sha[:12]}.json'
+    if cache.exists():
+        got = json.loads(cache.read_text())
+        if got.get('key') == key:
+            return got['row']
+    if song.offset_s is None:
+        row = dict(status='the song has no export offset or Ableton set')
+    else:
+        q = ','.join('?' * len(m['paths']))
+        v = con.execute(f"SELECT verdict, lag_s, key FROM variants WHERE song_id=? AND ref='lab_mix' AND path IN ({q}) "
+                        "ORDER BY path", [song.id, *m['paths']]).fetchone()
+        if v and v[2] == variants.key_of(song.content_id, sha):
+            verdict, lag = v[0], v[1]
+        else:
+            cmp = variants.compare(registry.mix(song), variants.read_mono(path, song.sample_rate), song.sample_rate)
+            verdict, lag = cmp['verdict'], cmp['lag_s']
+        if verdict != 'same_arrangement':
+            row = dict(status=f'catalogue verdict {verdict}')
+        else:
+            als = offsets.source(song.id)[0]
+            seen = {hashlib.sha256(np.ascontiguousarray(registry.mix(song)).tobytes()).hexdigest(): f'{song.id} (the lab mix)'}
+            _, row = offsets.prove_variant(song, path, sha, lag, als, seen, offsets.fits(song, als))
+            row = dict(row, status=f"{row['status']} [review proof, not in variant_proofs.json]")
+    cache.parent.mkdir(parents=True, exist_ok=True)
+    cache.write_text(json.dumps(dict(key=key, row=row), indent=1, default=str))
+    return row
+
+
+def audio_plans(songs):
+    """{song id: AudioPlan} for registry songs."""
+    from tools.audio_analysis.catalog.catalog import connect
+    from tools.audio_analysis.lab import registry
+    con = connect(readonly=True)
+    proofs = registry.variant_proofs()
+    return {s.id: audio_plan(s, con, proofs) for s in songs}
+
+
 def plan_songs(only=None):
     """[SongPlan] for the project songs in registry order."""
     from tools.audio_analysis.eval.als_extract import extract
@@ -445,9 +623,11 @@ def plan_songs(only=None):
     from tools.audio_analysis.lab.offsets import source
     labels = load_labels()
     out = []
-    for t, s in registry.load().items():
-        if s.kind != 'project' or s.parent is not None or (only and t not in only):
-            continue
+    reg = registry.load()
+    picked = [s for t, s in reg.items() if s.kind == 'project' and s.parent is None and (not only or t in only)]
+    audio = audio_plans(picked)
+    for s in picked:
+        t = s.id
         labs = [labels[f][t] for f in FAMILIES if t in labels[f]]
         dur = max(float(lab['duration_s']) for lab in labs)
         notes = []
@@ -475,8 +655,19 @@ def plan_songs(only=None):
                 bar = BEATS_PER_BAR * 60 / bpm
                 p = SongPlan(t, dur, AbletonMap([(0, bpm)]), down % bar - bar, 'fitted', notes=notes + [note],
                              sample_rate=s.sample_rate)
-        out.append(p)
+        out.append(on_audio(p, audio[t]))
     return out
+
+
+def on_audio(plan, audio):
+    """The plan moved onto the audio it plays. The grid follows the labelled file through offset_s (labelled seconds =
+    arrangement seconds + offset_s), and audio seconds = labelled seconds + shift_s, so the audio's offset is
+    offset_s + shift_s: the bar lines move with the audio and stay on the same labels."""
+    plan.audio = audio
+    plan.offset_s += audio.shift_s
+    if audio.duration_s:
+        plan.duration_s = audio.duration_s
+    return plan
 
 
 # ---- drum stems ----------------------------------------------------------------------------------------------------
@@ -516,43 +707,50 @@ def resample_48k(x, sr):
     return resample_poly(x, OUT_SR // g, sr // g)
 
 
-def lane_content(wins, pmap, labels, fires_dir):
+def lane_content(wins, pmap, labels, fires_dir, wavs=None):
     """{lane: [clip dicts]} and markers, all in project beats, plus per-song stats. A clip dict carries `meta` for
-    the sidecar (song, family, kind, lab time)."""
+    the sidecar (song, family, kind, labelled-file time). Labels and unsure spans move by the song's shift_s onto its
+    audio; a label the shift puts outside the audio is left out and counted. Fires are in audio seconds; with wavs
+    ({song: WAV path}), fires made from another WAV are skipped as stale."""
     lanes = {name: [] for name, *_ in LANES}
     markers, stats = [], {}
     for w in wins:
         s = w.song
+        sh = s.shift_s
         st = stats.setdefault(s.id, {})
         bar_no = int(round(s.a0_beat / BEATS_PER_BAR)) + 1
         start_name = {'ableton': f'{s.id} (bar {bar_no})', 'fitted': f'{s.id} (fitted grid)',
                       'no grid': f'{s.id} (no grid)'}[s.tempo_source]
-        markers.append(dict(beat=w.start_beat, name=start_name))
+        markers.append(dict(beat=w.start_beat, name=f'{start_name} [{s.audio.label}]' if s.audio.label else start_name))
         for b, name in s.locators:
             if s.a0_beat <= b < s.a0_beat + s.span_beats:
                 markers.append(dict(beat=w.start_beat + b - s.a0_beat, name=name))
         mix_b0, mix_b1 = to_beat(pmap, w, 0.0), to_beat(pmap, w, s.duration_s)
         lanes['Mix'].append(dict(start_beat=mix_b0, duration_beats=mix_b1 - mix_b0, in_point=0.0,
-                                 source_duration=s.duration_s, meta=dict(song=s.id, kind='mix', lab_s=0.0)))
-        fires = load_fires(fires_dir, s.id)
-        st['fires'] = 'none' if fires is None else len(fires)
+                                 source_duration=s.duration_s, meta=dict(song=s.id, kind='mix', lab_s=-sh)))
+        fires = load_fires(fires_dir, s.id, wavs.get(s.id) if wavs else None)
+        st['fires'] = 'none' if fires is None else 'stale' if fires == 'stale' else len(fires)
+        fires = None if fires == 'stale' else fires
         for fam in FAMILIES:
             lab = labels[fam].get(s.id)
-            pts = label_times(lab) if lab else []
-            beats = [to_beat(pmap, w, t) for t, _ in pts]
+            every = label_times(lab) if lab else []
+            pts = [(t, k) for t, k in every if 0.0 <= t + sh <= s.duration_s]
+            st[f'{fam}_outside'] = len(every) - len(pts)
+            beats = [to_beat(pmap, w, t + sh) for t, _ in pts]
             kept = point_clips(beats)
             for b, d, i in kept:
                 lanes[LANE_OF[fam, 'label']].append(dict(start_beat=b, duration_beats=d, meta=dict(
                     song=s.id, family=fam, kind='label', subkind=pts[i][1], lab_s=pts[i][0])))
             st[f'{fam}_labels'] = len(kept)
             st[f'{fam}_label_dupes'] = len(pts) - len(kept)
-            uns = merge_spans([(max(0.0, a), min(s.duration_s, b)) for a, b in (lab or {}).get('unscored', [])
-                               if b > 0 and a < s.duration_s])
+            uns = merge_spans([(max(0.0, a + sh), min(s.duration_s, b + sh)) for a, b in (lab or {}).get('unscored', [])
+                               if b + sh > 0 and a + sh < s.duration_s])
             ub = [(to_beat(pmap, w, a), to_beat(pmap, w, b)) for a, b in uns]
             uclips = span_clips(ub, merge=True)
             for b, d, idx in uclips:
                 lanes[LANE_OF[fam, 'unsure']].append(dict(start_beat=b, duration_beats=d, meta=dict(
-                    song=s.id, family=fam, kind='unsure', lab_s=uns[idx[0]][0], lab_end_s=max(uns[i][1] for i in idx))))
+                    song=s.id, family=fam, kind='unsure', lab_s=uns[idx[0]][0] - sh,
+                    lab_end_s=max(uns[i][1] for i in idx) - sh)))
             st[f'{fam}_unsure'] = len(uclips)
             if fires is None:
                 st[f'{fam}_checks'] = None
@@ -562,7 +760,7 @@ def lane_content(wins, pmap, labels, fires_dir):
             fclips = span_clips(fb, merge=False)
             for b, d, idx in fclips:
                 lanes[LANE_OF[fam, 'fire']].append(dict(start_beat=b, duration_beats=d, meta=dict(
-                    song=s.id, family=fam, kind='fire', lab_s=fr[idx[0]][0], emit_s=fr[idx[0]][1])))
+                    song=s.id, family=fam, kind='fire', lab_s=fr[idx[0]][0] - sh, emit_s=fr[idx[0]][1] - sh)))
             st[f'{fam}_fires'] = len(fclips)
             if lab is None:          # the family does not label this song: every fire would read as a missing label
                 st[f'{fam}_checks'] = None
@@ -617,44 +815,216 @@ def parse_ids(text, n):
     return ids
 
 
+# ---- review audio: stereo, on the timeline of what each window plays -----------------------------------------------
+# The lab's training readers (registry.mix, remix.read_mono) fold to mono and stay as they are; this path is review only.
+
+def read_stereo(path, sr):
+    """(n, channels) float64 at sr: remix.read_mono's decoders (scipy's WAV reader, soundfile when it cannot read the
+    file) with the channels kept, each resampled alone, so the mean over channels is read_mono's audio."""
+    import math
+
+    import soundfile as sf
+    from scipy.io import wavfile
+    from scipy.signal import resample_poly
+    try:
+        r, x = wavfile.read(str(path))
+        x = x.astype(np.float64) / float(2 ** (x.dtype.itemsize * 8 - 1)) if np.issubdtype(x.dtype, np.integer) \
+            else x.astype(np.float64)
+    except ValueError:
+        x, r = sf.read(str(path), dtype='float64', always_2d=True)
+    x = x.reshape(len(x), -1)
+    if r != sr:
+        g = math.gcd(sr, r)
+        x = resample_poly(x, sr // g, r // g, axis=0)
+    return x
+
+
+def shift_channels(x, k, n):
+    """remix.shift on every channel of (samples, channels) audio."""
+    from tools.audio_analysis.lab import remix
+    return np.stack([remix.shift(c, k, n) for c in x.T], axis=1)
+
+
+def add_channels(total, y):
+    """total + y, the longer length and the wider channel count; a mono part goes to every channel, so the mean over
+    channels still adds the part once."""
+    n, ch = max(len(total), len(y)), max(total.shape[1], y.shape[1])
+    out = np.zeros((n, ch))
+    out[:len(total)] += total
+    out[:len(y)] += y
+    return out
+
+
+def raw_residual_db(ref, x):
+    """|ref - x|^2 / |ref|^2 in dB over ref's length (x cut or padded to it)."""
+    import math
+    y = np.zeros(len(ref))
+    y[:min(len(x), len(ref))] = x[:len(ref)]
+    pm = float(np.dot(ref, ref))
+    return 10 * math.log10(max(float(np.dot(ref - y, ref - y)), 1e-30 * pm) / max(pm, 1e-30))
+
+
+def stereo_sources(song, con):
+    """(paths, None): the original files whose plain sum is the song's labelled audio, or (None, why). A lab-only mono
+    cache (.npy) points at its bounce or stem parts through the catalogue's lab_mix."""
+    from tools.audio_analysis.catalog.catalog import is_dataless
+    src = song.source
+    if src['how'] == 'section':
+        return None, 'a section of an export'
+    if not src['paths'][0].endswith('.npy'):
+        paths = [src['paths'][0]]
+    else:
+        row = con.execute('SELECT lab_mix FROM songs WHERE id=?', (song.id,)).fetchone()
+        lm = json.loads(row[0] or 'null') if row else None
+        if not lm:
+            return None, 'the catalogue does not say what the lab mix is made from'
+        paths = lm.get('parts') if lm.get('kind') == 'stem_sum' else [lm['file']] if lm.get('file') else None
+        if not paths:
+            return None, f"the lab mix is a {lm.get('kind')} with no source file"
+    for p in paths:
+        if not Path(p).exists():
+            return None, f'{Path(p).name} is missing'
+        if is_dataless(p):
+            return None, 'stems online-only' if len(paths) > 1 else f'{Path(p).name} online-only'
+    return paths, None
+
+
+def labelled_stereo(song, ref, con):
+    """(audio (samples, channels) on the labelled file's timeline, None) or (None, why). The original files' plain
+    sum, kept only when its mean over channels is the lab's own mono audio at lag 0 (raw residual under
+    variants.IDENTICAL_DB): the same audio, so every channel sits on the labels."""
+    from tools.audio_analysis.catalog.variants import IDENTICAL_DB
+    paths, why = stereo_sources(song, con)
+    if paths is None:
+        return None, why
+    total = np.zeros((0, 1))
+    for p in paths:
+        total = add_channels(total, read_stereo(p, song.sample_rate))
+    res = raw_residual_db(ref, total.mean(axis=1))
+    if res > IDENTICAL_DB:
+        return None, f'its stereo source does not fold back to the lab audio ({res:.0f} dB)'
+    out = np.zeros((len(ref), total.shape[1]))
+    out[:min(len(ref), len(total))] = total[:len(ref)]
+    return out, None
+
+
+def write_review_wav(path, x):
+    """48 kHz WAV, 24-bit when it fits under full scale (half the disk of float), else float."""
+    import soundfile as sf
+    sf.write(str(path), x.astype(np.float32), OUT_SR, subtype='PCM_24' if np.abs(x).max() <= 1.0 else 'FLOAT')
+
+
+def fall_back(plan, why):
+    """The plan back on its labelled file: the shift undone, the reason kept."""
+    plan.offset_s -= plan.audio.shift_s
+    plan.audio = AudioPlan(why=why, master=plan.audio.master)
+
+
 def write_audio(plans):
-    """The lab mix and the proven drum stems as 48 kHz float WAVs. Sets each plan's duration_s to its mix's length.
-    Returns ({song: mix path}, {song: drums path}, {song: why no drums})."""
-    from tools.audio_analysis.lab import registry, remix
+    """The audio each plan plays and the proven drum stems as 48 kHz WAVs, stereo where the source is (else mono, the
+    reason in plan.audio.mono_why). A master is read only when it is local and still hashes to the catalogue's sha256,
+    else the plan falls back to its labelled file. Sets each plan's duration_s to its audio's length. Returns
+    ({song: mix path}, {song: drums path}, {song: why no drums})."""
+    from tools.audio_analysis.catalog.catalog import connect, is_dataless, sha256_file
+    from tools.audio_analysis.lab import registry
     songs = registry.load()
+    con = connect(readonly=True)
     mixes, drums, skipped = {}, {}, {}
     REVIEW_DIR.mkdir(parents=True, exist_ok=True)
     for plan in plans:
         s = songs[plan.id]
-        x = registry.mix(s)
-        if abs(len(x) / s.sample_rate - plan.duration_s) > 2e-3:
-            print(f'{s.id}: lab mix lasts {len(x) / s.sample_rate:.3f} s, the labels say {plan.duration_s:.3f} s; '
-                  f'the mix length is used')
+        a = plan.audio
+        x = None
+        if a.source == 'master':
+            if is_dataless(a.path):
+                fall_back(plan, f'master online-only ({Path(a.path).name})')
+            elif sha256_file(a.path) != a.sha256:
+                fall_back(plan, f'master changed since the catalogue hashed it ({Path(a.path).name})')
+            else:
+                x = read_stereo(a.path, s.sample_rate)
+                name = f'{s.id}_master_{a.sha256[:12]}'
+        a = plan.audio
+        if x is None:
+            ref = registry.mix(s)
+            if abs(len(ref) / s.sample_rate - plan.duration_s) > 2e-3:
+                print(f'{s.id}: lab mix lasts {len(ref) / s.sample_rate:.3f} s, the labels say {plan.duration_s:.3f} s; '
+                      f'the mix length is used')
+            x, a.mono_why = labelled_stereo(s, ref, con)
+            if x is None:
+                x = ref[:, None]
+            name = f'{s.id}_mix_{s.content_id[:12]}'
+        if x.shape[1] == 1 and a.mono_why is None:
+            a.mono_why = 'the source is mono'
+        a.channels = x.shape[1]
         plan.duration_s = len(x) / s.sample_rate
-        tag = s.content_id[:12]
-        p = REVIEW_DIR / f'{s.id}_mix_{tag}.wav'
+        stereo = '_stereo' if a.channels > 1 else ''
+        p = REVIEW_DIR / f'{name}{stereo}.wav'
         if not p.exists():
-            remix.write_wav(p, resample_48k(x, s.sample_rate), OUT_SR)
+            write_review_wav(p, resample_48k(x, s.sample_rate))
         mixes[s.id] = p
         paths, lag, why = drum_stem_status(s.id)
+        if paths is not None and any(is_dataless(pp) for pp in paths):
+            paths, why = None, 'drum stems online-only'
         if paths is None:
             skipped[s.id] = why
             continue
-        q = REVIEW_DIR / f'{s.id}_drums_{tag}_{lag}.wav'
+        k = lag + int(round(a.shift_s * s.sample_rate))   # the unity lag is to the labelled file; the audio is shifted on
+        y = np.zeros((0, 1))
+        for pp in paths:
+            y = add_channels(y, shift_channels(read_stereo(pp, s.sample_rate), k, len(x)))
+        tag = s.content_id[:12] if a.source == 'labelled' else f'master_{a.sha256[:12]}'
+        q = REVIEW_DIR / f"{s.id}_drums_{tag}_{k}{'_stereo' if y.shape[1] > 1 else ''}.wav"
         if not q.exists():
-            y = sum(remix.shift(remix.read_mono(pp, s.sample_rate), lag, len(x)) for pp in paths)
-            remix.write_wav(q, resample_48k(y, s.sample_rate), OUT_SR)
+            write_review_wav(q, resample_48k(y, s.sample_rate))
         drums[s.id] = q
     return mixes, drums, skipped
 
 
+def online_only_inputs(only=None):
+    """[(path, what)]: online-only files the review would read if they were local: a latest master with no readable
+    copy, the sources of a stereo labelled file, the drum stems. Read from file flags only; nothing is fetched. Peter
+    brings them down himself (catalog.py download PATH --why ...)."""
+    from tools.audio_analysis.catalog import catalog
+    from tools.audio_analysis.catalog.catalog import connect, is_dataless
+    from tools.audio_analysis.lab import registry
+    con = connect(readonly=True)
+    out = []
+
+    def online(p):
+        return Path(p).exists() and is_dataless(p)
+    for t, s in registry.load().items():
+        if s.kind != 'project' or s.parent is not None or (only and t not in only):
+            continue
+        m = latest_master(con, t)
+        if m is not None and m['sha256'] not in s.source_sha256 and not any(
+                Path(p).exists() and not is_dataless(p) for p in m['local_paths']):
+            p = sorted(m['paths'], key=lambda p: (not p.lower().endswith(LOSSLESS), p))[0]
+            if online(p):
+                out.append((p, f'{t} latest master'))
+        if stereo_sources(s, con)[0] is None:
+            src = s.source['paths'][0]
+            row = con.execute('SELECT lab_mix FROM songs WHERE id=?', (t,)).fetchone()
+            lm = json.loads(row[0] or 'null') if row and src.endswith('.npy') else None
+            cand = (lm.get('parts') if lm and lm.get('kind') == 'stem_sum' else [lm['file']] if lm and lm.get('file')
+                    else [src])
+            out += [(p, f'{t} stereo source') for p in cand if p and online(p)]
+        st = catalog.stems(t)
+        out += [(str(p), f'{t} drum stem') for r in DRUM_ROLES for p in st.get(r, []) if online(p)]
+    return out
+
+
 def build(out, only, fires_dir, dry_run, tool_arg):
+    need = online_only_inputs(only)
+    if need:
+        print(f'{len(need)} online-only files would bring songs closer to their masters or to stereo (not fetched):')
+        for p, what in need:
+            print(f'  {what}: {p}')
     plans = plan_songs(only)
     if not dry_run:
         mixes, drums, skipped = write_audio(plans)
     wins, pmap = layout(plans)
     labels = load_labels()
-    lanes, markers, stats = lane_content(wins, pmap, labels, fires_dir)
+    lanes, markers, stats = lane_content(wins, pmap, labels, fires_dir, None if dry_run else mixes)
     assert_overlap_free(lanes)
     drum_why = {}
     for w in wins:
@@ -707,14 +1077,15 @@ def write_project(out, cmd, tmp, wins, pmap, lanes, markers, mixes, drums, skipp
             raise SystemExit(f'{w.song.id}: project_tool puts the mix at {tool_mix[w.song.id]:.6f} s, the layout at '
                              f'{w.mix_proj_s:.6f} s; the tempo maps disagree')
         w.mix_proj_s = tool_mix[w.song.id]
-    sidecar = dict(version=1, project=str(out), project_sha256=hashlib.sha256(out.read_bytes()).hexdigest(),
+    sidecar = dict(version=SIDECAR_VERSION, project=str(out), project_sha256=hashlib.sha256(out.read_bytes()).hexdigest(),
                    tempo=[[b, v] for b, v in pmap.pts], drums_skipped=skipped, clips=clip_meta,
                    songs=[dict(id=w.song.id, window_start_beat=w.start_beat, window_end_beat=w.end_beat,
                                window_start_s=pmap.seconds(w.start_beat), window_end_s=pmap.seconds(w.end_beat),
                                mix_proj_s=w.mix_proj_s, duration_s=w.song.duration_s, tempo_source=w.song.tempo_source,
                                als=w.song.als, offset_s=w.song.offset_s, a0_bar=int(w.song.a0_beat // BEATS_PER_BAR) + 1,
                                ramp_error_s=w.ramp_error_s, mix_wav=str(mixes[w.song.id]),
-                               drums_wav=str(drums[w.song.id]) if w.song.id in drums else None, notes=w.song.notes)
+                               drums_wav=str(drums[w.song.id]) if w.song.id in drums else None, notes=w.song.notes,
+                               shift_s=w.song.shift_s, audio=audio_record(w.song.audio))
                           for w in wins])
     sidecar_path(out).write_text(json.dumps(sidecar, indent=1))
     print(f'wrote {out} and {sidecar_path(out)}')
@@ -722,17 +1093,27 @@ def write_project(out, cmd, tmp, wins, pmap, lanes, markers, mixes, drums, skipp
         print(f'  no drums lane for {t}: {why}')
 
 
+def audio_record(a):
+    """The sidecar's record of what a window plays: read-back needs source and shift_s; the rest is for Peter."""
+    m = a.master or {}
+    return dict(source=a.source, path=a.path, sha256=a.sha256, shift_s=a.shift_s, why=a.why, channels=a.channels,
+                mono_why=a.mono_why, latest_master=dict(path=m.get('path'), version=m.get('version'), local=m.get('local'),
+                                                        sha256=m.get('sha256'), proof=m.get('proof')) if m else None)
+
+
 def song_list(only=None):
-    """[(song id, duration s)] of the project songs in registry order, from the label files (no set reads)."""
+    """Plans with id, duration s, offset_s and audio for the project songs in registry order, from the label files
+    and the catalogue (no set reads): what write_audio needs."""
     from types import SimpleNamespace
 
     from tools.audio_analysis.lab import registry
     labels = load_labels()
+    picked = [s for t, s in registry.load().items() if s.kind == 'project' and s.parent is None and (not only or t in only)]
+    audio = audio_plans(picked)
     out = []
-    for t, s in registry.load().items():
-        if s.kind == 'project' and s.parent is None and (not only or t in only):
-            dur = max(float(labels[f][t]['duration_s']) for f in FAMILIES if t in labels[f])
-            out.append(SimpleNamespace(id=t, duration_s=dur))
+    for s in picked:
+        dur = max(float(labels[f][s.id]['duration_s']) for f in FAMILIES if s.id in labels[f])
+        out.append(on_audio(SimpleNamespace(id=s.id, duration_s=dur, offset_s=0.0), audio[s.id]))
     return out
 
 
@@ -793,7 +1174,19 @@ def report(wins, lanes, markers, stats, drum_why):
               f'bpm {bpms[0] if len(bpms) == 1 else f"{bpms[0]}..{bpms[-1]} ({steps} steps, {ramps} ramps)"} '
               f'kick {st.get("kick_labels", 0)}/{st.get("kick_unsure", 0)} snare {st.get("snare_labels", 0)}/'
               f'{st.get("snare_unsure", 0)} checks k/s {chk}{flag} drums {drum_why.get(s.id, "?")}'
+              + (f' fires {st["fires"]}' if st.get('fires') == 'stale' else '')
+              + ''.join(f' {f} outside the audio {st[f"{f}_outside"]}' for f in FAMILIES if st.get(f'{f}_outside'))
+              + f'  audio: {s.audio.why}' + (f' ({s.audio.channels} ch)' if s.audio.channels else '')
+              + (f'; mono: {s.audio.mono_why}' if s.audio.mono_why else '')
               + (f'  [{"; ".join(s.notes)}]' if s.notes else ''))
+    by = {}
+    for w in wins:
+        by.setdefault(w.song.audio.source if w.song.audio.source == 'master' else w.song.audio.label, []).append(w.song.id)
+    for k, ids in sorted(by.items(), key=lambda kv: -len(kv[1])):
+        print(f'audio {k}: {len(ids)} ({", ".join(ids)})')
+    ch = [w.song.audio.channels for w in wins if w.song.audio.channels]
+    if ch:
+        print(f'channels: {sum(c > 1 for c in ch)} stereo, {sum(c == 1 for c in ch)} mono')
     print('lanes: ' + ', '.join(f'{k} {v}' for k, v in total.items()))
     print(f'markers: {len(markers)} ({sum(m["name"].startswith("check ") for m in markers)} check)')
 
@@ -832,8 +1225,8 @@ def song_at(songs, sec):
 
 def diff(sidecar, orig_clips, edited_clips, edited_markers):
     """The edits, by clip id, as plain data: {family: {song: {not_hits, moved, new_hits, unsure_resolved,
-    lane_moves}}}, other edits, reviewed songs. Lab time of an edited clip = its project second minus its song's
-    mix_proj_s (the window it now sits in)."""
+    lane_moves}}}, other edits, reviewed songs. Every time is in the labelled file's seconds: an edited clip's is its
+    project second minus its song's mix_proj_s (the window it now sits in) and shift_s (0 in a version 1 sidecar)."""
     songs = sidecar['songs']
     meta = sidecar['clips']
     orig = {c['clip_id']: c for c in orig_clips}
@@ -846,7 +1239,7 @@ def diff(sidecar, orig_clips, edited_clips, edited_markers):
 
     def lab_time(c):
         s = song_at(songs, c['start_s'])
-        return (s['id'], c['start_s'] - s['mix_proj_s']) if s else (None, None)
+        return (s['id'], c['start_s'] - s['mix_proj_s'] - s.get('shift_s', 0.0)) if s else (None, None)
 
     for cid, m in meta.items():
         if m['kind'] != 'label':
@@ -905,9 +1298,10 @@ def diff(sidecar, orig_clips, edited_clips, edited_markers):
 
 
 def refine(fam_out, sidecar, bands):
-    """Adds attack_s to every moved and new hit, from the song's mix WAV."""
+    """Adds attack_s to every moved and new hit, from the song's WAV (in its seconds, so through shift_s)."""
     import soundfile as sf
     wav = {s['id']: s['mix_wav'] for s in sidecar['songs']}
+    shift = {s['id']: s.get('shift_s', 0.0) for s in sidecar['songs']}
     cache = {}
     for fam, by in fam_out.items():
         for song, b in by.items():
@@ -916,7 +1310,8 @@ def refine(fam_out, sidecar, bands):
                     x, sr = sf.read(wav[song], dtype='float64')
                     cache = {song: (x if x.ndim == 1 else x.mean(axis=1), sr)}
                 x, sr = cache[song]
-                h['attack_s'] = attack_time(x, sr, h['grid_s'], bands[fam])
+                at = attack_time(x, sr, h['grid_s'] + shift[song], bands[fam])
+                h['attack_s'] = None if at is None else at - shift[song]
 
 
 def read(original, edited, tool_arg):
