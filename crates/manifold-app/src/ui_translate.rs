@@ -405,12 +405,11 @@ fn push_chosen_placeholder_lane(
     let range = (pmax - pmin).abs().max(f32::EPSILON);
     let base = instance.get_base_param(param_id.as_ref());
     let norm = ((base - pmin) / range).clamp(0.0, 1.0);
-    let effect_label = manifold_core::preset_type_registry::display_name(instance.effect_type());
     out.push(UiAutomationLane {
         effect_id: instance.id.clone(),
         param_id: param_id.clone(),
         target: target.clone(),
-        label: format!("{effect_label}: {}", p.spec.name),
+        label: automation_lane_label(instance, param_id.as_ref(), &p.spec),
         points: vec![UiAutomationPoint {
             beat: manifold_core::Beats::ZERO,
             value_norm: norm,
@@ -423,6 +422,20 @@ fn push_chosen_placeholder_lane(
     });
 }
 
+/// Lane label prefix, in order: the scene modifier that owns the param, the
+/// card section the inspector shows for it, then the preset display name.
+fn automation_lane_label(
+    instance: &PresetInstance,
+    param_id: &str,
+    spec: &manifold_core::effect_graph_def::ParamSpecDef,
+) -> String {
+    let prefix = crate::ui_bridge::modifier_label_for_param(instance, param_id)
+        .or_else(|| spec.section.clone().filter(|s| !s.is_empty()))
+        .unwrap_or_else(|| {
+            manifold_core::preset_type_registry::display_name(instance.effect_type()).to_string()
+        });
+    format!("{prefix}: {}", spec.name)
+}
 fn push_instance_automation_lanes(
     instance: &PresetInstance,
     target: UiGraphTarget,
@@ -434,7 +447,6 @@ fn push_instance_automation_lanes(
     if lanes.is_empty() {
         return;
     }
-    let effect_label = manifold_core::preset_type_registry::display_name(instance.effect_type());
     for lane in lanes {
         if !lane.enabled {
             continue;
@@ -459,7 +471,7 @@ fn push_instance_automation_lanes(
             effect_id: instance.id.clone(),
             param_id: lane.param_id.clone(),
             target: target.clone(),
-            label: format!("{effect_label}: {}", p.spec.name),
+            label: automation_lane_label(instance, lane.param_id.as_ref(), &p.spec),
             points,
             param_min: pmin,
             param_max: pmax,
@@ -865,5 +877,67 @@ mod placeholder_lane_owner {
                 );
             }
         }
+    }
+}
+#[cfg(test)]
+mod lane_label_section {
+    use super::*;
+
+    fn pinned_label(layer: &Layer, param: &str) -> String {
+        let key: AutomationLaneKey = (UiGraphTarget::Generator(layer.layer_id.clone()), param.to_string().into());
+        let lanes = layer_automation_lanes_to_ui_with_view(
+            layer,
+            None,
+            &[],
+            &HashSet::new(),
+            std::slice::from_ref(&key),
+        );
+        assert_eq!(lanes.len(), 1);
+        lanes[0].label.clone()
+    }
+
+    fn gen_label(section: Option<&str>) -> String {
+        let mut json = serde_json::json!({
+            "id":"gain","name":"Gain","min":0.0,"max":1.0,"defaultValue":0.2
+        });
+        if let Some(s) = section {
+            json["section"] = serde_json::json!(s);
+        }
+        let spec = serde_json::from_value(json).unwrap();
+        let mut layer = Layer::new_generator("A".into(), PresetTypeId::NONE, 0);
+        layer.gen_params_or_init().params = ParamManifest::from_params(vec![Param::bundled(spec)]);
+        pinned_label(&layer, "gain")
+    }
+
+    #[test]
+    fn section_names_the_lane() {
+        assert_eq!(gen_label(Some("Depth of Field")), "Depth of Field: Gain");
+    }
+
+    #[test]
+    fn generator_param_without_section_uses_the_generator_name() {
+        let fallback = manifold_core::preset_type_registry::display_name(&PresetTypeId::NONE);
+        assert_eq!(gen_label(None), format!("{fallback}: Gain"));
+    }
+
+    #[test]
+    fn scene_modifier_param_is_named_by_its_modifier() {
+        let project = crate::ui_bridge::duplicate_force_project();
+        let layer = &project.timeline.layers[0];
+        let graph = layer.gen_params().unwrap().graph.as_ref().unwrap();
+        let first = &graph.scene_modifiers[0].id;
+        let binding = graph
+            .preset_metadata
+            .as_ref()
+            .unwrap()
+            .bindings
+            .iter()
+            .find(|b| {
+                matches!(&b.target, manifold_core::effect_graph_def::BindingTarget::SceneModifier { modifier_id, param_id }
+                    if modifier_id == first && param_id != "enabled")
+            })
+            .expect("a bound modifier param");
+        let label = pinned_label(layer, binding.id.as_str());
+        assert!(label.starts_with("Radial Force #1: "), "{label}");
     }
 }
