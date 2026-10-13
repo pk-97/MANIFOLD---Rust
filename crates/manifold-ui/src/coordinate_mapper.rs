@@ -147,10 +147,10 @@ impl CoordinateMapper {
         self.pixels_per_beat = color::ZOOM_LEVELS[idx];
     }
 
-    /// Set zoom level directly (pixels per beat, minimum 1.0).
-    /// Unity line 101-104.
+    /// Set zoom level directly (pixels per beat), floored at
+    /// [`color::MIN_PIXELS_PER_BEAT`].
     pub fn set_zoom(&mut self, new_ppb: f32) {
-        self.pixels_per_beat = new_ppb.max(1.0);
+        self.pixels_per_beat = new_ppb.max(color::MIN_PIXELS_PER_BEAT);
     }
 
     /// Index of the [`color::ZOOM_LEVELS`] entry nearest the current zoom. Handles
@@ -183,11 +183,9 @@ impl CoordinateMapper {
 
     /// New ppb after a continuous multiplicative zoom by `factor`, clamped to the
     /// [`color::ZOOM_LEVELS`] range. Used by cursor-anchored scroll-wheel zoom so
-    /// zoom is smooth, not a jump between ten fixed steps (section 24 5e).
+    /// zoom is smooth, not a jump between fixed steps (section 24 5e).
     pub fn zoom_continuous(&self, factor: f32) -> f32 {
-        let min = color::ZOOM_LEVELS[0];
-        let max = color::ZOOM_LEVELS[color::ZOOM_LEVELS.len() - 1];
-        (self.pixels_per_beat * factor).clamp(min, max)
+        (self.pixels_per_beat * factor).clamp(color::MIN_PIXELS_PER_BEAT, color::MAX_PIXELS_PER_BEAT)
     }
 
     /// Calculate zoom level to fit timeline duration in viewport width.
@@ -477,24 +475,26 @@ mod tests {
     fn set_zoom_clamps_minimum() {
         let mut mapper = CoordinateMapper::new();
         mapper.set_zoom(0.5);
-        assert!((mapper.pixels_per_beat() - 1.0).abs() < 0.001);
+        assert!((mapper.pixels_per_beat() - 0.5).abs() < 0.001);
+
+        mapper.set_zoom(0.001);
+        assert_eq!(mapper.pixels_per_beat(), color::MIN_PIXELS_PER_BEAT);
 
         mapper.set_zoom(-10.0);
-        assert!((mapper.pixels_per_beat() - 1.0).abs() < 0.001);
+        assert_eq!(mapper.pixels_per_beat(), color::MIN_PIXELS_PER_BEAT);
     }
 
     #[test]
     fn set_zoom_by_index_clamps() {
         let mut mapper = CoordinateMapper::new();
-        // ZoomLevels: [1, 2, 5, 10, 20, 40, 80, 120, 200, 400]
         mapper.set_zoom_by_index(0);
-        assert!((mapper.pixels_per_beat() - 1.0).abs() < 0.001);
+        assert_eq!(mapper.pixels_per_beat(), color::MIN_PIXELS_PER_BEAT);
 
         mapper.set_zoom_by_index(100);
         assert!((mapper.pixels_per_beat() - 400.0).abs() < 0.001);
 
         mapper.set_zoom_by_index(2);
-        assert!((mapper.pixels_per_beat() - 5.0).abs() < 0.001);
+        assert_eq!(mapper.pixels_per_beat(), color::ZOOM_LEVELS[2]);
     }
 
     // ── Fit zoom ─────────────────────────────────────────────────────
