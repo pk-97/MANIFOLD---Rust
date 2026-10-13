@@ -29,7 +29,12 @@ static bool sss_boundary(
     intersection_params options;
     options.force_opacity(forced_opacity::non_opaque);
     q.reset(r, accel, RT_MASK_VISIBLE, options);
+    // Forced non-opaque makes every scene triangle on the ray a candidate, so
+    // this walk shares the alpha walks' cap. Past it the nearest own-instance
+    // boundary found so far stands; none found reads as an invalid sample.
+    uint tested = 0u;
     while (q.next()) {
+        if (tested++ >= RT_WALK_MAX_CANDIDATES) { q.abort(); break; }
         if (q.get_candidate_intersection_type() == intersection_type::triangle &&
             q.get_candidate_instance_id() == instance) q.commit_triangle_intersection();
     }
