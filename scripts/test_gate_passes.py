@@ -940,12 +940,16 @@ class CacheTests(unittest.TestCase):
             self.assertTrue(cache.proof_pass(slot, self.run_spec()).reused())
             return 0
 
+        self.git('branch', '-f', 'origin/main', 'main')
         with patch.object(land_branch, 'MAIN', self.repo), \
+                patch.object(land_branch, 'ATTEMPT', land_branch.new_attempt('work')), \
                 patch.object(land_branch, 'run_landing_gate', side_effect=regate) as gate:
-            land_branch.merge_gated_tree('work', slot, 'landing', ['fake-gate'],
-                                          self.repo / 'target/gate.log', tip)
-        self.assertEqual(gate.call_count, 1)
-        self.assertEqual(self.git('rev-parse', 'main^{tree}'), self.git('rev-parse', 'work^{tree}'))
+            gated, code, _ = land_branch.regate_moved_main(slot, ['fake-gate'],
+                                                           self.repo / 'target/gate.log')
+        self.assertEqual((gate.call_count, code), (1, 0))
+        self.assertEqual(gated, self.git('rev-parse', 'work'))
+        self.git('merge-base', '--is-ancestor', 'main', 'work')
+        self.assertNotEqual(gated, tip)
 
     def test_unknown_dependency_runs_and_explains_why(self):
         self.write('crates/a/Cargo.toml', '[package]\nname="a"\n[dependencies]\nbad={path="../../../outside"}\n')
@@ -1123,7 +1127,10 @@ class CacheTests(unittest.TestCase):
                     patch.object(land_branch, 'MAIN', self.repo), \
                     patch.object(land_branch, 'step', return_value=MagicMock(stdout='tip\n', returncode=0)), \
                     patch.object(land_branch, 'run_landing_gate', return_value=gate_code) as gate, \
-                    patch.object(land_branch, 'merge_gated_tree') as merge, \
+                    patch.object(land_branch, 'land_gated', return_value=None) as merge, \
+                    patch.object(land_branch, 'lock_path', return_value=None), \
+                    patch.object(land_branch, 'landing_lock',
+                                 side_effect=lambda *_: contextlib.nullcontext(0)), \
                     contextlib.redirect_stderr(io.StringIO()):
                 if lands:
                     land_branch.main()
