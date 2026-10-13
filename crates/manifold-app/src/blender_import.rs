@@ -28,7 +28,7 @@ use crate::user_prefs::UserPrefs;
 
 /// Pref key for a user-supplied Blender path override (Settings UI can write
 /// this; discovery checks it first). Same naming convention as the other
-/// `MANIFOLD_*` pref keys in `project_io.rs`/`dialog_path_memory.rs`.
+/// `MANIFOLD_*` pref keys in `project_io.rs`/`file_dialogs.rs`.
 pub const BLENDER_PATH_PREF_KEY: &str = "MANIFOLD_BlenderPath";
 
 /// Wall-clock budget for a single conversion. Rigged Mixamo-scale assets

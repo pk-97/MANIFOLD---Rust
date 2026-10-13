@@ -43,4 +43,7 @@ pub struct DispatchCtx<'a> {
     pub editor_target: Option<&'a GraphTarget>,
     /// In-flight scrub-gesture snapshots (regrouped; see `scrub.rs`).
     pub scrub: &'a mut ScrubState,
+    /// Parent window and project path for any file dialog an action opens.
+    /// Default (floating, no project) for headless callers.
+    pub dialogs: crate::file_dialogs::DialogHost<'a>,
 }

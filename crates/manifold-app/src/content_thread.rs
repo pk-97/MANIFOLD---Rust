@@ -29,6 +29,10 @@ use crate::content_pipeline::ContentPipeline;
 use crate::content_state::ContentState;
 use crate::frame_timer::FrameTimer;
 
+/// Undrained states past which the UI counts as stalled (about half a second
+/// at 60 fps). A healthy UI keeps the queue at one or two.
+const UI_STATE_BACKLOG: usize = 32;
+
 /// Cache entry for the watched editor-canvas snapshot (effect OR generator).
 /// Holds the snapshot inside an `Arc` so the per-frame
 /// `ContentState::active_graph_snapshot` field can clone the refcount
@@ -56,12 +60,18 @@ pub struct CachedGraphSnapshot {
 /// fills `dims`), tick N+1 reads the pixels back and hands them to an off-thread
 /// encoder. See [`ContentThread::submit_still_export_if_pending`] /
 /// [`ContentThread::poll_still_export`].
+///
+/// The capture can start before the destination is known: Export Frame grabs
+/// the frame on screen when clicked, then the save dialog supplies `dest`.
+/// Playback keeps running behind the dialog, so capturing afterwards would
+/// save whatever is playing when the dialog closes.
 pub struct StillExportJob {
-    pub path: String,
-    pub format: manifold_media::still_exporter::StillFormat,
+    pub dest: Option<(String, manifold_media::still_exporter::StillFormat)>,
     /// Captured dimensions, set once the readback has been submitted. `None`
     /// until then — the poll step skips jobs that haven't been submitted yet.
     pub dims: Option<(u32, u32)>,
+    /// Read-back pixels held until `dest` arrives.
+    pub pixels: Option<Vec<u8>>,
 }
 
 /// Owns all content-side state and runs the content loop.
@@ -82,9 +92,6 @@ pub struct ContentThread {
     pub midi_input: MidiInputController,
     /// Bridges MIDI note events to LiveClipManager.
     pub clip_launcher: ClipLauncher,
-    /// When true, skip tick+render but still drain commands.
-    /// Used while native file dialogs are open on macOS.
-    pub rendering_paused: bool,
     /// Content frame timer — target FPS synced from project settings.
     pub timer: FrameTimer,
     /// Physics metrics from the most recently completed live content render.
@@ -129,8 +136,8 @@ pub struct ContentThread {
     /// Version counter for completed readbacks (bumps into `Frame`).
     pub led_preview_version: u64,
 
-    /// Pending single-frame export, if any. Set by `ContentCommand::ExportFrame`
-    /// and cleared once the frame has been read back and dispatched to the
+    /// Pending single-frame export, if any. Set by `ContentCommand::CaptureStill`
+    /// or `ExportFrame` and cleared once the frame has been read back and dispatched to the
     /// off-thread encoder. At most one capture is in flight at a time.
     pub still_export: Option<StillExportJob>,
 
@@ -424,13 +431,8 @@ impl ContentThread {
                 .set_last_fence_wait_ms(fence_start.elapsed().as_secs_f64() * 1000.0);
         }
 
-        // 2. Wait for next content frame (skip tick+render when paused)
+        // 2. Wait for next content frame
         self.timer.ensure_thread_policy();
-        if self.rendering_paused {
-            self.physics_metrics = Default::default();
-            std::thread::sleep(std::time::Duration::from_millis(16));
-            return false;
-        }
 
         // Precision frame pacing: block until the next frame deadline.
         // mach_wait_until for the bulk, spin for the final 2ms.
@@ -1185,6 +1187,20 @@ impl ContentThread {
     fn send_state(&mut self, state_tx: &Sender<ContentState>) {
         let version = self.editing_service.data_version();
         let version_changed = version != self.last_data_version;
+        // The UI drains to the latest state every frame. When it stops — a
+        // native dialog or alert holds the main thread for as long as the
+        // user leaves it open — per-tick states would queue without limit and
+        // be replayed one by one on return. Past a short backlog, send only
+        // states that carry something the UI must not miss: a project edit or
+        // an undo/redo event. Everything else is superseded by the next tick.
+        if state_tx.len() >= UI_STATE_BACKLOG
+            && !version_changed
+            && self.pending_undo_redo_event.is_none()
+        {
+            self.audio_mod_runtime.drain_spectrogram_columns(|_| {});
+            self.audio_mod_runtime.drain_spectrogram_scalars(|_| {});
+            return;
+        }
         if version_changed {
             self.last_data_version = version;
         }
@@ -2126,69 +2142,53 @@ impl ContentThread {
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
-
     use manifold_core::project::Project;
 
     use crate::content_command::ContentCommand;
-    use crate::content_state::ContentState;
     use crate::headless_harness::headless_content_thread;
 
+    // The run loop publishes after each command drain, before the paced
+    // frame, so the UI confirms edits even while the GPU is behind.
+
     #[test]
-    fn paused_mutation_publishes_snapshot() {
+    fn mutation_publishes_snapshot_without_a_tick() {
         let mut thread = headless_content_thread(Project::default(), 1280, 720);
-        thread.rendering_paused = true;
-
-        let (cmd_tx, cmd_rx) = crossbeam_channel::bounded(64);
-        let (state_tx, state_rx) = crossbeam_channel::bounded(4);
-
-        let cmd_tx_for_test = cmd_tx.clone();
-        let handle = std::thread::spawn(move || {
-            thread.run(cmd_tx, cmd_rx, state_tx);
-        });
-
-        // A mutating command that bumps EditingService::data_version.
-        cmd_tx_for_test
-            .send(ContentCommand::SetProject)
-            .expect("command channel open");
-
-        let state: ContentState = state_rx
-            .recv_timeout(Duration::from_millis(500))
-            .expect("snapshot published while paused");
-
-        assert!(
-            state.data_version > 0,
-            "expected data_version to bump, got {}",
-            state.data_version
-        );
-
-        let _ = cmd_tx_for_test.send(ContentCommand::Shutdown);
-        handle.join().expect("content thread joined");
+        let (state_tx, state_rx) = crossbeam_channel::unbounded();
+        assert!(!thread.handle_command(ContentCommand::SetProject));
+        thread.publish_snapshot_if_dirty(&state_tx);
+        let state = state_rx.try_recv().expect("snapshot published");
+        assert!(state.data_version > 0, "expected data_version to bump, got {}", state.data_version);
     }
 
     #[test]
-    fn paused_sdr_preview_publishes_runtime_snapshot() {
+    fn sdr_preview_publishes_runtime_snapshot_without_a_tick() {
         let mut thread = headless_content_thread(Project::default(), 64, 64);
-        thread.rendering_paused = true;
-
-        let (cmd_tx, cmd_rx) = crossbeam_channel::bounded(64);
-        let (state_tx, state_rx) = crossbeam_channel::bounded(4);
-        let cmd_tx_for_test = cmd_tx.clone();
-        let handle = std::thread::spawn(move || {
-            thread.run(cmd_tx, cmd_rx, state_tx);
-        });
-
-        cmd_tx_for_test
-            .send(ContentCommand::SetSdrPreview(true))
-            .expect("command channel open");
-        let state = state_rx
-            .recv_timeout(Duration::from_millis(500))
-            .expect("runtime preview snapshot published while paused");
+        let (state_tx, state_rx) = crossbeam_channel::unbounded();
+        assert!(!thread.handle_command(ContentCommand::SetSdrPreview(true)));
+        thread.publish_snapshot_if_dirty(&state_tx);
+        let state = state_rx.try_recv().expect("runtime preview snapshot published");
         assert_eq!(state.sdr_preview, Some(true));
         assert_eq!(state.data_version, 0, "preview must not create an edit");
         assert!(!state.editing_is_dirty, "preview must not dirty the project");
+    }
 
-        let _ = cmd_tx_for_test.send(ContentCommand::Shutdown);
-        handle.join().expect("content thread joined");
+    #[test]
+    fn stalled_ui_gets_only_states_it_must_not_miss() {
+        let mut thread = headless_content_thread(Project::default(), 64, 64);
+        let (state_tx, state_rx) = crossbeam_channel::unbounded();
+        for _ in 0..super::UI_STATE_BACKLOG {
+            state_tx.send(crate::content_state::ContentState::default()).unwrap();
+        }
+        thread.send_state(&state_tx);
+        assert_eq!(state_rx.len(), super::UI_STATE_BACKLOG, "per-tick state queued behind a stalled UI");
+
+        assert!(!thread.handle_command(ContentCommand::SetProject));
+        thread.send_state(&state_tx);
+        assert_eq!(state_rx.len(), super::UI_STATE_BACKLOG + 1, "project edit dropped behind a stalled UI");
+        let edit = state_rx.try_iter().last().expect("queued");
+        assert!(edit.project_snapshot.is_some());
+
+        thread.send_state(&state_tx);
+        assert_eq!(state_rx.len(), 1, "drained UI gets per-tick states again");
     }
 }

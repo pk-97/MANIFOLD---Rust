@@ -682,8 +682,8 @@ fn audio_sends_scene() -> SceneData {
 
 /// P0.3 evidence scene for `docs/TIMELINE_LAYOUT_P0_SPEC.md`: one lane of many
 /// short trigger clips — the MIDI-mockup workflow's bread and butter — spread
-/// across a wide beat range. Rendered at the minimum zoom level
-/// (`color::ZOOM_LEVELS[0]` = 1px/beat, wired in by `ui_snapshot::mod`'s
+/// across a wide beat range. Rendered at a far zoom
+/// (1px/beat, wired in by `ui_snapshot::mod`'s
 /// `zoom_ppb` override for this scene name) so each clip's on-screen width
 /// (0.5 beats × 1px/beat = 0.5px) rounds below 1px. Proves `visible_clip_rects`
 /// clamps sub-pixel clips to a 1px hairline instead of culling them — pre-fix

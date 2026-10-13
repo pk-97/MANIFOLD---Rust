@@ -1359,6 +1359,7 @@ impl Runner {
                 user_prefs: &mut self.user_prefs,
                 editor_target: None,
                 scrub: &mut self.scrub,
+                dialogs: Default::default(),
             };
             let result = crate::ui_bridge::dispatch(action, &mut dctx);
             println!("ui-snap --script: dispatched {action:?} (structural={})", result.structural_change);

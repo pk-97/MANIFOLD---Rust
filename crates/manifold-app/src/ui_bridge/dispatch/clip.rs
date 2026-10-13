@@ -90,12 +90,11 @@ pub(crate) fn dispatch_clip(action: &ClipAction, ctx: &mut super::super::Dispatc
             use manifold_editing::command::{Command, CompositeCommand};
             use manifold_editing::commands::clip::{DeleteClipCommand, ReplaceAudioFileCommand};
             if let Some(clip_id) = ctx.selection.primary_selected_clip_id.clone()
-                && let Some(path) = rfd::FileDialog::new()
-                    .add_filter(
-                        "Audio",
-                        &["wav", "mp3", "flac", "aif", "aiff", "ogg", "m4a", "aac"],
-                    )
-                    .pick_file()
+                && let Some(path) = crate::file_dialogs::pick_file(
+                    crate::file_dialogs::DialogAction::ReplaceAudio,
+                    ctx.dialogs,
+                    ctx.user_prefs,
+                )
                 && let Some(clip) = ctx.project.timeline.find_clip_by_id(&clip_id)
             {
                 let new_path = path.to_string_lossy().into_owned();
