@@ -62,6 +62,7 @@ Render and measure:
   lab-compare             detector lab A/B of two experiment configs: trains missing seeds interleaved, refuses unfair pairs, prints the comparison  [tools/audio_analysis/lab/compare.py]  (cost: broad)
   lab-queue               detector lab overnight queue: PLAN.json of run/compare steps, one at a time under the GPU lock, a log per step and a summary, stops on the first failure (--dry-run)  [tools/audio_analysis/lab/overnight.py]  (cost: broad)
   lab-preflight           detector lab: read-only check that an overnight PLAN.json can run (clean tree, MPS, disk, configs, kick verdicts, caches warm, GPU lock)  [tools/audio_analysis/lab/preflight.py]  (cost: focused)
+  lab-review              detector label review project: build OUT.manifold [--songs] [--fires-dir] [--dry-run] | fires DIR | read ORIGINAL EDITED (Peter's edits as per-family overlays)  [tools/audio_analysis/lab/review_project.py]  (cost: focused)
   repair-audio-fixture    rebuild a fixture mix from aligned stems, preserving the original; dry-run unless --apply  [scripts/repair_audio_fixture.py]  (cost: focused)
 
 CPU reference oracles (f64, seconds, no GPU):
