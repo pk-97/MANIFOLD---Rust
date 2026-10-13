@@ -288,5 +288,67 @@ class RunnerTests(unittest.TestCase):
             proc.stdout.close()
 
 
+class PathTriggerTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        with open(run_ui_flows.MANIFEST) as f:
+            cls.manifest = json.load(f)
+        cls.all_flows = (set(cls.manifest["flows"]) | set(cls.manifest["expected_fail"])
+                         | set(cls.manifest["unresolved"]))
+
+    def select(self, *paths):
+        return run_ui_flows.filters_for_paths(list(paths), self.manifest)[0]
+
+    def test_project_rs_selects_nothing(self):
+        self.assertEqual(self.select("crates/manifold-app/src/ui_bridge/project.rs"), [])
+
+    def test_test_only_paths_select_nothing(self):
+        for path in (
+            "crates/manifold-ui/src/panels/scene_setup_panel/tests/a.rs",
+            "crates/manifold-ui/src/panels/param_card/tests.rs",
+            "crates/manifold-ui/src/panels/param_card/foo_tests.rs",
+            "crates/manifold-ui/src/panels/param_card/foo_test.rs",
+            "crates/manifold-ui/src/panels/param_card/test.rs",
+        ):
+            self.assertEqual(self.select(path), [], path)
+
+    def test_scene_setup_panel_selects_exactly_the_ten(self):
+        ten = sorted([
+            "scene-setup-add-object", "scene-setup-light-intensity-drag",
+            "scene-setup-add-fog-drag", "scene-setup-modifier-stack",
+            "scene-setup-heldout-merge-snapshot", "scene-setup-empty-states",
+            "scene-skin", "material-inspector-colour", "scene-fluid-role-lifecycle",
+            "scene-forces-controls"])
+        self.assertEqual(self.select("crates/manifold-ui/src/panels/scene_setup_panel.rs"), ten)
+        self.assertEqual(self.select("crates/manifold-ui/src/panels/scene_setup_panel/x.rs"), ten)
+
+    def test_shared_surfaces_select_exactly_the_four_sentinels(self):
+        four = sorted([
+            "set-param-layer-opacity", "calibrated-param-card-reads-manifest",
+            "param-step-action",
+            "scene-card-convergence-c-p1d-roughness-scrub-drawer-undo"])
+        for path in (
+            "crates/manifold-ui/src/panels/param_card/x.rs",
+            "crates/manifold-ui/src/panels/param_slider_shared/x.rs",
+            "crates/manifold-app/src/ui_bridge/projection/cards.rs",
+            "crates/manifold-app/src/ui_bridge/state_sync.rs",
+            "crates/manifold-app/src/ui_translate.rs",
+            "crates/manifold-app/src/ui_bridge/projection/inspector.rs",
+        ):
+            self.assertEqual(self.select(path), four, path)
+
+    def test_every_trigger_entry_is_an_existing_flow(self):
+        for prefix, names in self.manifest["path_triggers"].items():
+            for name in names:
+                self.assertIn(name, self.all_flows, f"{prefix} -> {name}")
+
+    def test_trigger_filters_match_exactly_but_cli_filters_stay_substring(self):
+        pick = run_ui_flows.flow_selected
+        self.assertFalse(pick("inspector-extra", [], {"inspector"}))
+        self.assertTrue(pick("inspector", [], {"inspector"}))
+        self.assertTrue(pick("inspector-extra", ["inspector"], set()))
+        self.assertTrue(pick("anything", [], set()))
+
+
 if __name__ == "__main__":
     unittest.main()
