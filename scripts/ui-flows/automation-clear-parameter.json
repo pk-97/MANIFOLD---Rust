@@ -1,29 +1,14 @@
 [
-  {
-    "ScrollTo": {
-      "target": {
-        "Query": {
-          "name": "param_automation.amount",
-          "nth": 0
-        }
-      }
-    }
-  },
-  {
-    "Pointer": {
-      "target": {
-        "Query": {
-          "name": "param_automation.amount",
-          "nth": 0
-        }
-      },
-      "gesture": {
-        "Click": {
-          "modifiers": {}
-        }
-      }
-    }
-  },
+  { "ScrollTo": { "target": { "Query": { "name": "param_row.amount.value", "nth": 0 } } } },
+  { "Pointer": {
+    "target": { "Query": { "name": "param_row.amount.value", "nth": 0 } },
+    "gesture": "RightClick"
+  } },
+  { "Assert": { "selector": { "Query": { "text": "Show Automation" } }, "check": "Exists" } },
+  { "Pointer": {
+    "target": { "Query": { "text": "Show Automation" } },
+    "gesture": { "Click": { "modifiers": {} } }
+  } },
   {
     "Assert": {
       "selector": {
@@ -68,7 +53,7 @@
     "Pointer": {
       "target": {
         "Query": {
-          "name": "param_automation.amount",
+          "name": "param_row.amount.value",
           "nth": 0
         }
       },

@@ -382,8 +382,6 @@ pub enum RowRole {
     EnvelopeBtn,
     /// "A" audio-mod arm/disarm button.
     AudioBtn,
-    /// Explicit automation-entry button (shown only for supported cards).
-    AutomationBtn,
     /// Toggle / trigger button row (`is_toggle` / `is_trigger` decide the action).
     ToggleBtn,
     /// Driver config drawer (all its sub-buttons; retained drawer actions).

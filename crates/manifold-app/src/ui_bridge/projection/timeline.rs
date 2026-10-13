@@ -75,7 +75,7 @@ mod automation_order_tests {
         sync_automation_lane_order(&project, &mut selection);
         let before = selection.automation_lane_order.clone();
         assert_eq!(before.len(), 2);
-        assert_eq!(before[1], (target, "amount".into()));
+        assert_eq!(before[0], (target, "amount".into()), "chosen lane goes on top");
         project.timeline.layers[0].effects.as_mut().unwrap()[0].automation_lanes = Some(vec![AutomationLane {
             param_id: "amount".into(), enabled: true,
             points: vec![AutomationPoint { beat: Beats(4.0), value: 0.6, shape: SegmentShape::Linear }],
