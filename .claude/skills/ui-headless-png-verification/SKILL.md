@@ -1,6 +1,6 @@
 ---
 name: ui-headless-png-verification
-description: The custom Metal UI renders headlessly to a PNG you can Read — visual UI changes are self-verifiable without the running app. Invoke to verify any visual UI change. LEAD SEAT ONLY — lanes never run this (docs/AGENT_ROUTING.md, lead token economy).
+description: The custom Metal UI renders headlessly to a PNG you can Read — visual UI changes are self-verifiable without the running app. Invoke to verify any visual UI change. OPUS SEATS ONLY — never Sonnet or Haiku (docs/AGENT_ROUTING.md, lead token economy).
 ---
 **Seat rule (Peter, 2026-08-19): lead only.** Lanes never run PNG verification — it is evidence the lead acts on and a lane grinding a render loop burns its window. Lane briefs name the expected visual outcome; the lead renders and looks post-commit.
 

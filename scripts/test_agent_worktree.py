@@ -831,6 +831,22 @@ def test_list_exposes_cache_budgets(repo):
 TESTS.append(test_list_exposes_cache_budgets)
 
 
+def test_list_fast_prints_category_and_name_without_sizes(repo):
+    add_slot(repo, "slot-0", "lane/fast-a")
+    add_slot(repo, "slot-1", "lane/fast-b")
+    boom = patch.object(aw, "target_size", side_effect=AssertionError("size called"))
+    boom2 = patch.object(aw, "incremental_size", side_effect=AssertionError("incremental called"))
+    with boom, boom2, redirect_stdout(io.StringIO()) as out:
+        aw.cmd_list(SimpleNamespace(fast=True))
+    rows = [l.split() for l in out.getvalue().splitlines() if l.split()[:1] and l.split()[0][0].isupper() and l.startswith(tuple("FHINU"))]
+    names = sorted(r[1] for r in rows if r[1].startswith("slot-"))
+    check("list --fast prints each slot name without calling size functions",
+          names == ["slot-0", "slot-1"], out.getvalue())
+
+
+TESTS.append(test_list_fast_prints_category_and_name_without_sizes)
+
+
 # ------------------------------------------------- idle Codex plugin brokers
 
 cb = sys.modules["codex_brokers"]

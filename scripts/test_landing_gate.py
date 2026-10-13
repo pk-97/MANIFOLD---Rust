@@ -477,6 +477,64 @@ class LandingTests(unittest.TestCase):
             self.assertIn('FAIL ' + label, output)
         self.assertGreaterEqual(output.count('rerun: '), 6)
 
+    def test_cheap_runs_only_the_legs_before_the_expensive_boundary(self):
+        for comment in (False, True):
+            with self.subTest(comment=comment):
+                code, called, timings, commands, _, output, _ = self.exercise(
+                    extra=['--cheap'], comment=comment)
+                self.assertEqual(code, 0)
+                cheap = self.checks[:-3] if not comment else ['design-status', 'ignored-tests', 'deny']
+                self.assertEqual(called, cheap)
+                self.assertFalse(any(event.startswith('hold-enter:') for event in self.events))
+                self.assertIn('cheap gate: ', output)
+
+    def test_cheap_red_exits_non_zero(self):
+        code, called, *_ = self.exercise('clippy', extra=['--cheap'])
+        self.assertEqual(code, 1)
+        self.assertNotIn('tests', called)
+        self.assertNotIn('gpu-proofs', called)
+
+    def test_cheap_writes_no_full_gate_verdict(self):
+        code, _, timings, commands, _, output, _ = self.exercise(extra=['--cheap'])
+        self.assertEqual(code, 0)
+        self.assertNotIn(['git', 'log', 'base..HEAD', '--format=%B'], commands)
+        self.assertNotIn('[COMPLETE] landing gate', output)
+        self.assertNotIn('landing gate: ', output)
+        self.assertNotIn('verdict stamped', output)
+        self.assertIsNone(timings)
+
+    def test_cheap_passes_are_reused_by_the_following_full_gate(self):
+        store = {}
+
+        class FakePass:
+            def __init__(self, repo, label, cmd):
+                self.key = (label, tuple(cmd))
+                self.label = label
+
+            @property
+            def record(self):
+                return store.get(self.key)
+
+            def reused(self):
+                return bool(self.record)
+
+            def save(self, code, seconds=0, **_):
+                if code == 0:
+                    store[self.key] = {'seconds': seconds}
+
+            def accepted(self):
+                pass
+
+        with patch.object(landing_gate.gate_passes, 'command_pass', side_effect=FakePass):
+            self.exercise(extra=['--cheap'])
+            self.assertIn(('clippy', ('cargo', 'clippy', '-p', 'manifold-gpu', '--tests', '--', '-D', 'warnings')),
+                          store)
+            code, called, _, _, _, output, _ = self.exercise()
+        self.assertEqual(code, 0)
+        self.assertIn('REUSED clippy', output)
+        self.assertNotIn('clippy', called)
+        self.assertIn('tests', called)
+
     def test_terminal_success_follows_verdict_publication(self):
         with tempfile.TemporaryDirectory() as directory, contextlib.ExitStack() as stack:
             root = Path(directory)
@@ -1742,7 +1800,9 @@ class CancellationTests(unittest.TestCase):
                             f"root = pathlib.Path({d!r})\n"
                             f"land._main = lambda: land.run_landing_gate([sys.executable, '-u', '-c', {gate_code!r}], root, root / 'gate.log')\n"
                             "land.MAIN = root\n"
-                            "sys.argv = ['land_branch.py', '--worktree', str(root)]\n"
+                            "land.start_checks = lambda *a: False\n"
+                            "land._main = (lambda body: lambda a: body())(land._main)\n"
+                            "sys.argv = ['land_branch.py', 'lane/test', '--worktree', str(root), '--message', 'test']\n"
                             "sys.exit(land.main())\n")
                     with (root / 'outer.log').open('w') as output:
                         proc = subprocess.Popen([sys.executable, '-u', '-c', code], stdout=output,
@@ -1775,6 +1835,8 @@ class DeliveryTests(unittest.TestCase):
         # Attempt rows go to MAIN; never the real checkout's landing log.
         main = self.enterContext(tempfile.TemporaryDirectory())
         self.enterContext(patch.object(land_branch, 'MAIN', Path(main)))
+        # Fixture slots are fresh, sometimes already landed; start checks have their own tests.
+        self.enterContext(patch.object(land_branch, 'start_checks', return_value=False))
 
     def test_verified_slot_cleanup_detaches_and_never_reports_a_landing_red(self):
         import watch_land

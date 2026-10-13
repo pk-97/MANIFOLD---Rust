@@ -1124,6 +1124,7 @@ class CacheTests(unittest.TestCase):
                 '--named-red', 'BUG-cache', '--reason', 'reviewed red']
         for gate_code, lands in [(1, False), (2, False), (landing.CHECKS_RED, True)]:
             with patch.object(sys, 'argv', argv), \
+                    patch.object(land_branch, 'start_checks', return_value=False), \
                     patch.object(land_branch, 'MAIN', self.repo), \
                     patch.object(land_branch, 'step', return_value=MagicMock(stdout='tip\n', returncode=0)), \
                     patch.object(land_branch, 'run_landing_gate', return_value=gate_code) as gate, \

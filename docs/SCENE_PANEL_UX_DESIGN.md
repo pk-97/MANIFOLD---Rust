@@ -93,7 +93,7 @@ Handled in `dispatch_inspector` (ui_bridge/mod.rs) next to the other `SceneSetup
 
 | Invariant | Enforcement |
 |---|---|
-| Outliner click updates Properties the same frame, without any project mutation | L3 flow script `scripts/ui-flows/scene-setup-select-updates.json` (UX-P1 gate): click a second object's row, assert the Properties header text changed, with zero param writes in the flow |
+| Outliner click updates Properties the same frame, without any project mutation | L3 flow script (UX-P1 gate; flow deleted, BUG-zezjf.13 UI flow suite review): click a second object's row, assert the Properties header text changed, with zero param writes in the flow |
 | Value-cell gesture table unchanged | existing `value_cell::tests::intent_for_pins_the_full_contract_table` stays green untouched |
 | No new style constants outside the token set | negative gate: `rg -n 'const .*Color|rgb\(|rgba\(' crates/manifold-ui/src/panels/scene_setup_panel.rs` returns no NEW hits vs. the pre-phase count (record both counts in the phase report); swatch-size const exempt by name |
 | No new shared state | `rg -n 'Arc<Mutex|Arc<RwLock' crates/manifold-ui/src crates/manifold-app/src/ui_bridge` → zero new hits |
@@ -107,8 +107,8 @@ Both phases live in `manifold-ui` + the `dispatch_inspector`/state_sync seams in
 
 - **Entry state:** `624d34a4` or later on the wave branch. Verify anchors: scene_setup_panel.rs:2432 (click handler returns empty actions), app_render.rs:3326 (event-gated sync), ui_bridge/mod.rs:32 (`structural_change`). If any moved, re-locate before coding; if the mechanism changed, escalate.
 - **Read-back:** this doc section 2 D1/D5/D6 + section 3; DESIGN_DOC_STANDARD section 5-section 6; scene_setup_panel.rs's own module docs (top 300 lines). Restate the decisions and forbidden moves before coding.
-- **Deliverables:** `PanelAction::SceneSetupSelectionChanged` + dispatch arm (section 3); outliner row template per D5 (icons, section labels, uniform trailing slot); compact action row per D6 (buttons only — the modifier dropdown is UX-P2); flow script `scripts/ui-flows/scene-setup-select-updates.json`; the invariant checks in section 4 rows 1 and 5.
-- **Gate:** *Positive:* the new flow script passes via `cargo xtask ui-snap gltfscene --script scripts/ui-flows/scene-setup-select-updates.json` (drives the real `cc0__*.glb` fixture scene); focused nextest green; PNG artifact of the rebuilt outliner. *Negative:* section 4 style-constant and shared-state gates.
+- **Deliverables:** `PanelAction::SceneSetupSelectionChanged` + dispatch arm (section 3); outliner row template per D5 (icons, section labels, uniform trailing slot); compact action row per D6 (buttons only — the modifier dropdown is UX-P2); the invariant checks in section 4 rows 1 and 5.
+- **Gate:** *Positive:* focused nextest green (the L3 flow was deleted, BUG-zezjf.13 UI flow suite review); PNG artifact of the rebuilt outliner. *Negative:* section 4 style-constant and shared-state gates.
 - **Acceptance demo:** L3 — the flow script above, plus the PNG read by the orchestrator (affordance check: every row's trailing slot, section labels legible, selected-row highlight).
 - **Performer gesture:** mid-set, tap through three objects in a row and watch Properties follow each tap instantly — the flow script drives exactly this (three sequential row clicks, three header assertions).
 - **Forbidden moves:** adding a per-frame rebuild path "to be safe" (the action IS the mechanism); a second selection store outside the panel; changing `SceneSelection` semantics or serializing it; touching value_cell.rs; nesting outliner rows (D5's rejected alternative).
