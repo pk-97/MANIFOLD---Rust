@@ -251,6 +251,9 @@ fn remove_graph_node_prunes_bound_card_slider_and_undo_restores() {
             section: None,
             card_visible: true,
             material_role: None,
+            limit: Default::default(),
+            unit: None,
+            scene: None,
         }],
         bindings: vec![BindingDef {
             id: "amount".into(),
@@ -392,6 +395,9 @@ fn remove_group_node_prunes_card_slider_bound_to_a_nested_node() {
             section: None,
             card_visible: true,
             material_role: None,
+            limit: Default::default(),
+            unit: None,
+            scene: None,
         }],
         // Bound to the NESTED node's id ("uv_transform"), not the group
         // container's id ("the_group") — this is the exact configuration

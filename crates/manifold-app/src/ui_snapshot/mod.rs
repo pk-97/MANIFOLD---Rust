@@ -11,6 +11,8 @@ mod composite_resources;
 mod dump;
 mod fixtures;
 mod interact;
+#[cfg(test)]
+mod lookup_coverage;
 mod readback;
 mod render;
 mod script;

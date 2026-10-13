@@ -2673,6 +2673,10 @@ pub struct ImportModelIntoSceneCommand {
     new_card_params: Vec<ParamSpecDef>,
     new_card_bindings: Vec<BindingDef>,
     new_string_bindings: Vec<StringBindingDef>,
+    /// The scene's bounds the merged card ranges were scaled by, written to
+    /// `meta.scene_bounds` when the graph has none so the live param lookup
+    /// reads the same radius (SCENE_SURFACES_DESIGN.md D2 (one live lookup)).
+    scene_bounds: Option<([f32; 3], [f32; 3])>,
     catalog_default: EffectGraphDef,
     /// Pre-edit `(nodes, wires)` at `scope_path`, plus the pre-edit
     /// `preset_metadata` (whole-def field, outside the scoped level) — set
@@ -2708,9 +2712,15 @@ impl ImportModelIntoSceneCommand {
             new_card_params,
             new_card_bindings,
             new_string_bindings,
+            scene_bounds: None,
             catalog_default,
             prev: None,
         }
+    }
+
+    pub fn with_scene_bounds(mut self, bounds: ([f32; 3], [f32; 3])) -> Self {
+        self.scene_bounds = Some(bounds);
+        self
     }
 }
 
@@ -2728,9 +2738,15 @@ impl Command for ImportModelIntoSceneCommand {
         let new_card_params = self.new_card_params.clone();
         let new_card_bindings = self.new_card_bindings.clone();
         let new_string_bindings = self.new_string_bindings.clone();
+        let scene_bounds = self.scene_bounds;
         let result =
             with_target_graph_mut(project, &self.target, &self.catalog_default, true, |def| {
                 let prev_metadata = def.preset_metadata.clone();
+                if let (Some(bounds), Some(meta)) = (scene_bounds, def.preset_metadata.as_mut())
+                    && meta.scene_bounds.is_none()
+                {
+                    meta.scene_bounds = Some(bounds);
+                }
 
                 // Card-spec additions land on the WHOLE def's preset_metadata
                 // (not the scoped level) — done before descending into scope so

@@ -56,6 +56,10 @@ pub struct MergePlan {
     /// plus, when the D5 scale-sanity rule fired, one line naming the
     /// normalize factor applied. Never a silent adjustment.
     pub report_lines: Vec<String>,
+    /// The graph's scene bounds after the merge: the target's own when it has
+    /// them, else the incoming asset's. The card ranges above are scaled by
+    /// this radius and the command saves it, so the live lookup reads the same.
+    pub scene_bounds: ([f32; 3], [f32; 3]),
 }
 
 manifold_core::testkit_visible! {
@@ -349,9 +353,15 @@ pub(super) fn merge_import_into_graph(
 
     // BUG-upfq P1+P2: scene-derived slider ranges on the merged objects'
     // transform cards (same display-only override as `build_import_graph`).
-    // The merge keyed on `new_nodes`, so target the scale the incoming
-    // asset parses to, not the existing scene's.
-    let scene_scale = super::scene_scale::SceneScale::from_bbox(summary.bbox_min, summary.bbox_max);
+    // One radius per graph: the scene's saved bounds win, and a scene with
+    // none takes the incoming asset's, so the live lookup that re-derives
+    // these ranges on load reads the same radius.
+    let scene_bounds = def
+        .preset_metadata
+        .as_ref()
+        .and_then(|meta| meta.scene_bounds)
+        .unwrap_or((summary.bbox_min, summary.bbox_max));
+    let scene_scale = super::scene_scale::SceneScale::from_bbox(scene_bounds.0, scene_bounds.1);
     super::scene_scale::apply_scene_ranges(
         &mut new_card_params,
         &new_card_bindings,
@@ -368,6 +378,7 @@ pub(super) fn merge_import_into_graph(
         new_card_bindings,
         new_string_bindings,
         report_lines,
+        scene_bounds,
     })
 }
 }

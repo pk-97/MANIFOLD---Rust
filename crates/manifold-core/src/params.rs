@@ -32,6 +32,48 @@ pub enum ParamOrigin {
     UserAdded,
 }
 
+/// Where a param's spec came from (SCENE_SURFACES_DESIGN.md D2 (one live
+/// lookup)). In memory only: the join sets it when the manifest is built.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SpecSource {
+    /// The live lookup described it; the code is the authority.
+    #[default]
+    Lookup,
+    /// No template or node declares it (composite, fan-out, graph-local or
+    /// user-added), so its saved spec is the user's own.
+    Authored,
+    /// A lookup key exists but did not answer (type missing, registry not
+    /// filled yet). The saved spec is kept word for word until it resolves.
+    Unresolved,
+}
+
+/// Per-control display choices a project saves (SCENE_SURFACES_DESIGN.md D7
+/// (one saved choice set)). Slider range, curve and invert still ride the
+/// calibration block on [`Param::calibrated`].
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ParamChoices {
+    pub rename: Option<String>,
+    /// `Some(None)` clears the section the lookup gives.
+    pub section: Option<Option<String>>,
+    pub pin: Option<manifold_foundation::scene_surface::CardPin>,
+}
+
+impl ParamChoices {
+    pub fn is_empty(&self) -> bool {
+        *self == Self::default()
+    }
+
+    /// Lay these choices over a described spec.
+    pub fn apply(&self, spec: &mut ParamSpecDef) {
+        if let Some(name) = &self.rename {
+            spec.name = name.clone();
+        }
+        if let Some(section) = &self.section {
+            spec.section = section.clone();
+        }
+    }
+}
+
 /// Which layer supplies clip-trigger events for this parameter.
 ///
 /// `OwnLayer` is the default and means that the parameter follows the layer
@@ -65,6 +107,11 @@ pub struct Param {
     /// place and sets [`Param::calibrated`] (D6).
     pub spec: ParamSpecDef,
     pub origin: ParamOrigin,
+    /// Where `spec` came from; never serialized.
+    pub source: SpecSource,
+    /// The user's display choices on this control (SCENE_SURFACES_DESIGN.md
+    /// D7 (one saved choice set)). Already applied to `spec`.
+    pub choices: ParamChoices,
     /// True once calibration has diverged this param's `spec` from the
     /// template. Serialization gate for the `calibration` wire block; cleared
     /// by a calibration reset (which re-reads the template range).
@@ -110,6 +157,11 @@ impl Param {
         Self {
             spec,
             origin,
+            source: match origin {
+                ParamOrigin::Bundled => SpecSource::Lookup,
+                ParamOrigin::UserAdded => SpecSource::Authored,
+            },
+            choices: ParamChoices::default(),
             calibrated: false,
             value: default,
             base: default,
@@ -321,6 +373,9 @@ mod tests {
             section: None,
             card_visible: true,
             material_role: None,
+            limit: Default::default(),
+            unit: None,
+            scene: None,
         }
     }
 

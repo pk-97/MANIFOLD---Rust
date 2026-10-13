@@ -3773,6 +3773,9 @@ mod bound_node_param_drag_tests {
             section: None,
             card_visible: true,
             material_role: None,
+            limit: Default::default(),
+            unit: None,
+            scene: None,
         }));
         project.settings.master_effects.push(fx);
         (project, GraphTarget::Effect(effect_id))

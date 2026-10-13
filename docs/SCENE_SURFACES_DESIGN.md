@@ -224,6 +224,14 @@ Rejected: keeping the dock beside the inspector. It costs width on a laptop on s
 
 Rejected: deleting extra scenes on load (rewrites the past). Rejected: a scene picker in the tab (supports a shape Peter ruled out).
 
+**D18 — The lookup's sources register at link time.** The node source (`param_lookup::NodeParamSource`, from `manifold-nodes-scene`) and the template-graph source (`param_lookup::TemplateGraphSource`, from `manifold-nodes`) are `inventory` submissions, not an `install()` into a `OnceLock`. A binary that links the crates has the lookup with no start-up call, and nothing can run before it is installed. Lead ruling, 2026-10-14.
+
+**D19 — The metadata renames wait for P3.** `SceneExposureMetadataProvider` / `SceneParamMetadata` keep their names, and `NodeParamMetadata` gains `scene`, `unit` and `limit` in P3, where the scene filters move into the scene table. P1 reads the existing types unchanged. Lead ruling, 2026-10-14.
+
+**D20 — Stubs bump the project version to 1.21.0.** An older build reads a stub as a nameless 0..0 control and could save that back; refusing the newer file is the safe failure. The rung is a structural no-op. One radius per graph: an import or merge saves `meta.scene_bounds` (the target's own win, else the incoming asset's) and the lookup scales node ranges by it.
+
+**D21 — Names stay as saved until P5.** Until the naming pass (P5) brings the label rules, the lookup supplies range and flags only; names come from the lookup from P5.
+
 **Consequences, stated honestly:**
 1. Scene projects get smaller on disk: no names or ranges per control. A file saved after P1 shows placeholders in an older build (format version bump, P1).
 2. Label fixes reach old shows on next load, on the card, the panel, automation lanes, OSC docs and Ableton displays. Peter will see new names on lanes in old shows after P5. Ids do not change, so nothing unmaps.
@@ -526,6 +534,7 @@ Common to every phase. **Entry:** the status line reads APPROVED; `git -C "/User
 - **Test scope:** `-p manifold-app -p manifold-node-engine -p manifold-editing`, plus the flow suite filtered to `scene`.
 
 ### P1 — The live lookup and the saved-control format (core, io, registration; no visible change)
+P1 and P2 land together as one batch: P1 does not land until P2 moves the drawer (`EditParamMappingCommand`) onto `ParamChoices`, so no build drops a drawer rename on reload.
 - **Entry:** P0 landed. Anchors: `instance_serde.rs:34`, `:47-63`, `:135-145`, `:155-196`, `:272-300`, `:356`; `params.rs:62-94`, `:167`; core `scene_exposure.rs:22-48`, `:381`; `preset_definition_registry.rs:340`; `effects/instance.rs:375`, `:413`; `manifold-io/src/bin/project_tool.rs`.
 - **Read-back:** D2, D7, D13, sections 3.2, 3.4, 3.8; docs/PARAM_STORAGE_DESIGN.md D6 (calibration). Restate where the join runs, what is saved per control, and the three old-project rules.
 - **Deliverables:**

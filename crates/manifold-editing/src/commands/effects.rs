@@ -1627,6 +1627,9 @@ mod tests {
                     section: None,
                     card_visible: true,
                     material_role: None,
+                    limit: Default::default(),
+                    unit: None,
+                    scene: None,
                 }],
                 bindings: vec![BindingDef {
                     id: param_id.to_string(),
@@ -1713,6 +1716,9 @@ mod tests {
             section: None,
             card_visible: true,
             material_role: None,
+            limit: Default::default(),
+            unit: None,
+            scene: None,
         }));
     }
 

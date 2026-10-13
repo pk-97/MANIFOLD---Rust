@@ -288,6 +288,9 @@ pub fn stamp_scene_node_exposures_into(
             section: Some(section.to_string()),
             card_visible: card_visible_for(type_id, &meta.name),
             material_role: meta.material_role,
+            limit: Default::default(),
+            unit: None,
+            scene: None,
         });
 
         bindings.push(BindingDef {
@@ -315,7 +318,7 @@ pub fn stamp_scene_node_exposures_into(
     changed
 }
 
-fn serialized_default_as_f32(value: &SerializedParamValue) -> f32 {
+pub(crate) fn serialized_default_as_f32(value: &SerializedParamValue) -> f32 {
     match value {
         SerializedParamValue::Float { value } => *value,
         SerializedParamValue::Int { value } => *value as f32,
@@ -975,6 +978,9 @@ mod tests {
             section: Some("Light".to_string()),
             card_visible: card_visible_for("node.light", param),
             material_role: None,
+            limit: Default::default(),
+            unit: None,
+            scene: None,
         };
         let binding = BindingDef {
             id,
@@ -1481,6 +1487,9 @@ mod tests {
             section: Some("Transform".to_string()),
             card_visible: true,
             material_role: None,
+            limit: Default::default(),
+            unit: None,
+            scene: None,
         };
         let stale_binding = BindingDef {
             id: "7_pos_x".to_string(),
@@ -2575,6 +2584,9 @@ mod tests {
             section: Some("Camera".to_string()),
             card_visible: true,
             material_role: None,
+            limit: Default::default(),
+            unit: None,
+            scene: None,
         };
         let stale_binding = BindingDef {
             id: "3_distance".to_string(),
@@ -2673,6 +2685,9 @@ mod tests {
             section: Some("Transform".to_string()),
             card_visible: true,
             material_role: None,
+            limit: Default::default(),
+            unit: None,
+            scene: None,
         };
         let stale_binding = BindingDef {
             id: "2_pos_x".to_string(),
@@ -2774,6 +2789,9 @@ mod tests {
             section: Some("Transform".to_string()),
             card_visible: true,
             material_role: None,
+            limit: Default::default(),
+            unit: None,
+            scene: None,
         };
         let stale_binding = BindingDef {
             id: "4_scale_x".to_string(),

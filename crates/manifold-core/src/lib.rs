@@ -51,6 +51,7 @@ pub mod marker;
 pub mod material_inspector;
 pub mod math;
 pub mod midi;
+pub mod param_lookup;
 pub mod params;
 pub mod percussion_analysis;
 pub mod percussion_binding;

@@ -958,3 +958,7 @@ mod metadata_source_tests {
         }
     }
 }
+
+inventory::submit! {
+    manifold_core::param_lookup::TemplateGraphSource { graph_for: bundled_preset_def }
+}

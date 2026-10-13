@@ -6,7 +6,7 @@
 use super::*;
 use super::automation::{prune_automation_by_ids, take_automation_by_ids};
 use super::instance_serde::{
-    build_param_manifest, template_known_for, GraphWithDerivedParams, ManifestSer,
+    build_param_manifest, normalize_meta_params, template_known_for, GraphWithDerivedParams, ManifestSer,
     ParamEntryWire,
 };
 
@@ -223,7 +223,7 @@ impl PresetInstance {
             // (D12) — see `GraphWithDerivedParams`.
             s.serialize_field(
                 "graph",
-                &GraphWithDerivedParams { graph: g, manifest: &self.params },
+                &GraphWithDerivedParams { graph: g, manifest: &self.params, joined: true },
             )?;
         }
         if let Some(v) = self.legacy_param_version {
@@ -378,6 +378,7 @@ impl PresetInstance {
         };
         let (params, base_tracked) =
             build_param_manifest(self.is_generator(), &self.effect_type, &self.graph, Some(wire), true);
+        normalize_meta_params(&mut self.graph, &params);
         self.params = params;
         self.base_tracked = base_tracked;
         if template_known_for(self.is_generator(), &self.effect_type, &self.graph) {
@@ -418,6 +419,7 @@ impl PresetInstance {
             .collect();
         let (params, base_tracked) =
             build_param_manifest(self.is_generator(), &self.effect_type, &self.graph, Some(wire), false);
+        normalize_meta_params(&mut self.graph, &params);
         self.params = params;
         self.base_tracked = base_tracked;
     }
@@ -974,6 +976,9 @@ impl PresetInstance {
             section: binding.section.clone(),
             card_visible: true,
             material_role: None,
+            limit: Default::default(),
+            unit: None,
+            scene: None,
         });
 
         // Re-insert the manifest entry at its original display position among
@@ -1784,6 +1789,9 @@ mod tests {
                     section: None,
                     card_visible: true,
                     material_role: None,
+                    limit: Default::default(),
+                    unit: None,
+                    scene: None,
                 }],
                 bindings: vec![BindingDef {
                     id: "amount".to_string(),
