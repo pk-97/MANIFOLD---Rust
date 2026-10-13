@@ -282,7 +282,7 @@ def parse_slow_tests(output):
     for line in output.splitlines():
         match = re.fullmatch(
             r'\s*(?:SLOW|PASS)\s+\[\s*>?\s*([0-9]+(?:\.[0-9]+)?)s\]\s+'
-            r'(?:\(\d+/\d+\)\s+)?(\S+)\s+(\S.*?)\s*', line)
+            r'(?:\((?:\d+/\d+|─+)\)\s+)?(\S+)\s+(\S.*?)\s*', line)
         if not match:
             continue
         seconds = float(match[1])

@@ -216,12 +216,13 @@ class SlowTestParsingTests(unittest.TestCase):
             '    PASS [  10.000s] manifold-core boundary\n'
             '    PASS [   9.999s] manifold-core fast\n'
             '    SLOW [>30.000s] manifold-nodes unfinished\n'
+            '    SLOW [>60.000s] (─────────) manifold-nodes unfinished\n'
             '     Summary [  62.400s] 3 tests run\n'
             '    SLOW [  62.345s] manifold-nodes preset_runtime::tests::foo\n'
         )
         self.assertEqual(landing_gate.parse_slow_tests(transcript), [
             {'name': 'manifold-nodes preset_runtime::tests::foo', 's': 62.345},
-            {'name': 'manifold-nodes unfinished', 's': 30.0},
+            {'name': 'manifold-nodes unfinished', 's': 60.0},
             {'name': 'manifold-core::integration binary::name', 's': 12.3},
             {'name': 'manifold-core boundary', 's': 10.0},
         ])
@@ -1740,6 +1741,7 @@ class CancellationTests(unittest.TestCase):
                             "import land_branch as land\n"
                             f"root = pathlib.Path({d!r})\n"
                             f"land._main = lambda: land.run_landing_gate([sys.executable, '-u', '-c', {gate_code!r}], root, root / 'gate.log')\n"
+                            "land.MAIN = root\n"
                             "sys.argv = ['land_branch.py', '--worktree', str(root)]\n"
                             "sys.exit(land.main())\n")
                     with (root / 'outer.log').open('w') as output:
@@ -1769,6 +1771,11 @@ class CancellationTests(unittest.TestCase):
 
 
 class DeliveryTests(unittest.TestCase):
+    def setUp(self):
+        # Attempt rows go to MAIN; never the real checkout's landing log.
+        main = self.enterContext(tempfile.TemporaryDirectory())
+        self.enterContext(patch.object(land_branch, 'MAIN', Path(main)))
+
     def test_verified_slot_cleanup_detaches_and_never_reports_a_landing_red(self):
         import watch_land
 
@@ -1810,7 +1817,10 @@ class DeliveryTests(unittest.TestCase):
                 with patch.object(land_branch, 'MAIN', repo), \
                         patch.object(land_branch, 'run_cmd', side_effect=run), \
                         patch.object(land_branch, 'run_landing_gate', return_value=0), \
-                        patch.object(land_branch, 'merge_gated_tree'), \
+                        patch.object(land_branch, 'land_gated', return_value=None), \
+                        patch.object(land_branch, 'lock_path', return_value=None), \
+                        patch.object(land_branch, 'landing_lock',
+                                     side_effect=lambda *_: contextlib.nullcontext(0)), \
                         patch.object(sys, 'argv', ['land_branch.py', 'lane/landed',
                             '--worktree', str(wt), '--message', 'test']), \
                         contextlib.redirect_stdout(io.StringIO()) as output:
@@ -1913,7 +1923,7 @@ class DeliveryTests(unittest.TestCase):
                 land_branch.main()
             self.assertEqual(stopped.exception.code, 1)
             self.assertEqual([call.args[0] for call in step.call_args_list],
-                             ["fetch", "merge origin/main into branch", "pin gate commit"])
+                             ["fetch", "origin/main", "merge origin/main into branch", "pin gate commit"])
             self.assertNotIn("--keep-going", gate.call_args.args[0])
 
 

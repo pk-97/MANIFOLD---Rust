@@ -2,18 +2,28 @@
 """Mechanical landing ceremony (GIT_TREE_DISCIPLINE.md section 2 (Landing protocol)).
 
 One command after the lead's review passes: merges origin/main into the
-branch (in its slot worktree), runs landing_gate.py, merges --no-ff to main
-in the main checkout, pushes, optionally closes beads, deletes the branch
-when it is an ancestor of origin/main.
+branch (in its slot worktree), runs landing_gate.py, then under the landing
+lock merges --no-ff to main in the main checkout, commits any no-gate verdict
+and bead closes, and pushes once, so a landing moves main once. Deletes the
+branch when it is an ancestor of origin/main.
+
+The landing lock is an flock in the git common dir, shared by every worktree.
+It covers only: origin/main still equals the gate's base, merge, commits,
+push. No gate ever runs under it. When main moved, the lock is released, the
+branch takes the new main and is gated again outside it, then the lock is
+retried. A waiter prints who holds it.
 
 The JUDGMENT stays with the lead: the review, the named-red call (pass
---named-red BUG-id --reason "..."), the design-doc status edits. This
-script is the fixed git+gate sequence only — required steps exit on failure
-with the step named, and push happens only after a green gate (or an
-explicit named red over a gate that ran every check). --named-red requests
-the complete gate run; ordinary landings stop before expensive legs on cheap reds.
+--named-red BUG-id --reason "..."), the design-doc status edits. Required
+steps exit on failure with the step named. Push happens only after a green
+gate or an explicit named red over a gate that ran every check (exit
+CHECKS_RED). After a moved-main re-gate the named red carries over only when
+that gate also ran every check and went red on exactly the same check labels;
+anything else stops. --named-red requests the complete gate run.
 After verified landing, slot detachment, release and branch deletion are cleanup:
 failures are notes, not landing failures. Unlanded branches are never deleted.
+Every attempt, cancelled ones included, appends one row to
+.claude/orchestration/landing-runs.jsonl in the main checkout.
 
 Usage:
   scripts/land_branch.py <branch> --worktree <path> --message '<merge msg>' \
@@ -25,6 +35,11 @@ Obsolete when: the landing protocol itself changes shape (edit both).
 """
 
 import argparse
+import contextlib
+import fcntl
+import json
+import os
+import re
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -36,6 +51,9 @@ from landing_gate import (CHECKS_RED, record_incomplete,
                           run_cmd, landing_log_path, stop_child)
 
 MAIN = Path("/Users/peterkiemann/MANIFOLD - Rust")
+LOCK_NAME = "manifold-landing.lock"
+RUNS_LOG = ".claude/orchestration/landing-runs.jsonl"
+ATTEMPT = None  # this attempt's landing-runs.jsonl row, set by main()
 
 
 def step(name, cmd, cwd, check=True, cleanup=False):
@@ -85,46 +103,172 @@ def run_landing_gate(cmd, cwd, log_path):
             proc.stdout.close()
 
 
-def merge_gated_tree(branch, worktree, message, gate_cmd, gate_log, gated_commit):
-    """Commit only the gated tree, including when main moves during the gate.
+def git_out(name, cmd, cwd):
+    return step(name, cmd, cwd).stdout.strip()
 
-    --no-commit leaves the proposed merge inspectable before it becomes trunk.
-    A changed merge tree is aborted, merged into the slot, and gated again.
-    Content-addressed leg passes make that retry proportional to the change.
-    """
-    while True:
-        gated = step('gated tree', ['git', 'rev-parse', f'{gated_commit}^{{tree}}'], worktree).stdout.strip()
-        merged = step('merge --no-ff to main',
-                      ['git', 'merge', '--no-ff', '--no-commit', gated_commit, '-m', message], MAIN,
-                      check=False)
-        if merged.returncode:
-            step('abort failed landing merge', ['git', 'merge', '--abort'], MAIN, check=False)
-            print('[land] main merge conflicted; resolve current main in the slot and retry.', file=sys.stderr)
-            sys.exit(1)
-        tree = step('verify merge tree', ['git', 'write-tree'], MAIN).stdout.strip()
-        if tree == gated:
-            pending = step('pending merge', ['git', 'rev-parse', '-q', '--verify', 'MERGE_HEAD'],
-                           MAIN, check=False)
-            if pending.returncode == 0:
-                step('commit gated merge', ['git', 'commit', '--no-edit'], MAIN)
-            return
-        step('abort changed merge tree', ['git', 'merge', '--abort'], MAIN)
-        step('merge moved main into branch', ['git', 'merge', 'main', '--no-edit'], worktree)
-        gated_commit = step('pin gate commit', ['git', 'rev-parse', 'HEAD'], worktree).stdout.strip()
-        # Even a named-red override was for the earlier tree. A changed tree
-        # must earn green or return to the lead for another named-red review.
-        if run_landing_gate(gate_cmd, worktree, gate_log):
-            print('[land] moved-main gate red; stopping before main changes.', file=sys.stderr)
-            sys.exit(1)
+
+def red_labels(gate_text):
+    """Check labels the gate summary printed as FAIL (never nextest's 'FAIL [')."""
+    return frozenset(m[1] for m in re.finditer(r'^FAIL (?!\[)(\S+)', gate_text, re.M))
+
+
+def gpu_wait_seconds(gate_text):
+    waits = [float(m[1]) for m in re.finditer(r'^gpu-queue wait: ([0-9.]+)s', gate_text, re.M)]
+    return sum(waits) if waits else None
+
+
+def carry_over_allowed(named_reds, code, reds):
+    """A named red covers a moved-main re-gate only when nothing new went red.
+
+    The gate must have run every check (CHECKS_RED) and the red set must be
+    exactly the one the lead reviewed: a vanished red is also a changed tree."""
+    return bool(named_reds) and code == CHECKS_RED and reds == named_reds
+
+
+def gate(gate_cmd, worktree, gate_log):
+    """One gate run, counted in the attempt row. Returns (exit code, red labels)."""
+    code = run_landing_gate(gate_cmd, worktree, gate_log)
+    ATTEMPT['gate_runs'] += 1
+    try:
+        text = gate_log.read_text(errors='replace')
+    except OSError:
+        text = ''
+    wait = gpu_wait_seconds(text)
+    if wait is not None:
+        ATTEMPT['gpu_wait_s'] = round((ATTEMPT['gpu_wait_s'] or 0) + wait, 1)
+    return code, red_labels(text)
+
+
+def lock_path():
+    """In the git common dir, so every worktree of this repo shares one lock."""
+    common = git_out('git common dir', ['git', 'rev-parse', '--git-common-dir'], MAIN)
+    return (MAIN / common).resolve() / LOCK_NAME
+
+
+@contextlib.contextmanager
+def landing_lock(path, holder):
+    """Exclusive flock around the main-moving critical section; yields seconds waited.
+
+    The kernel drops a flock when its process dies, so a crash or cancel
+    never strands the lock."""
+    started = time.monotonic()
+    with open(path, 'a+') as handle:
+        try:
+            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            handle.seek(0)
+            who = handle.read().strip() or 'an unnamed landing'
+            print(f'[land] waiting for the landing lock held by {who}', flush=True)
+            fcntl.flock(handle, fcntl.LOCK_EX)
+        waited = time.monotonic() - started
+        try:
+            handle.truncate(0)
+            handle.write(holder + '\n')
+            handle.flush()
+            yield waited
+        finally:
+            handle.truncate(0)
+            handle.flush()
+            fcntl.flock(handle, fcntl.LOCK_UN)
+
+
+def stop(outcome, message):
+    ATTEMPT['outcome'] = outcome
+    print(f'[land] {message}', file=sys.stderr)
+    sys.exit(1)
+
+
+def land_gated(a, worktree, base, gated_commit, verdict):
+    """The critical section, run under the landing lock. Returns the new
+    origin/main when main moved since the gate's base, else None once pushed.
+
+    Main moves once per landing: merge, verdict and bead closes go in one push."""
+    step('fetch', ['git', 'fetch', 'origin', 'main'], MAIN)
+    origin = git_out('origin/main', ['git', 'rev-parse', 'origin/main'], MAIN)
+    if origin != base:
+        return origin
+    if git_out('local main', ['git', 'rev-parse', 'main'], MAIN) != origin:
+        if step('fast-forward main', ['git', 'merge', '--ff-only', 'origin/main'], MAIN,
+                check=False).returncode:
+            stop('error', 'local main has commits origin/main lacks; push or drop them first.')
+    gated = git_out('gated tree', ['git', 'rev-parse', f'{gated_commit}^{{tree}}'], worktree)
+    merged = step('merge --no-ff to main',
+                  ['git', 'merge', '--no-ff', '--no-commit', gated_commit, '-m', a.message], MAIN,
+                  check=False)
+    if merged.returncode:
+        step('abort failed landing merge', ['git', 'merge', '--abort'], MAIN, check=False)
+        stop('conflict', 'main merge conflicted; resolve current main in the slot and retry.')
+    if git_out('verify merge tree', ['git', 'write-tree'], MAIN) != gated:
+        step('abort changed merge tree', ['git', 'merge', '--abort'], MAIN, check=False)
+        stop('error', 'merge tree differs from the gated tree although main did not move.')
+    if step('pending merge', ['git', 'rev-parse', '-q', '--verify', 'MERGE_HEAD'],
+            MAIN, check=False).returncode == 0:
+        step('commit gated merge', ['git', 'commit', '--no-edit'], MAIN)
+    if verdict:
+        step("no-gate verdict", ["scripts/gate_runner.py", "no-gate", "--task", a.named_red,
+                                 "--reason", f"{a.reason} {a.lead}"], MAIN)
+        step("commit verdict", ["git", "add", "--", ".beads/interactions.jsonl"], MAIN, check=False)
+        step("commit verdict", ["git", "commit", "-m",
+                                f"beads: no-gate verdict on {a.named_red} for landing {a.branch}. {a.lead}",
+                                "--", ".beads/interactions.jsonl"], MAIN, check=False)
+    for bead in a.close_bead:
+        step(f"close {bead}", ["bd", "close", bead, "-r", f"{a.close_reason} {a.lead}"], MAIN)
+    if a.close_bead:
+        step("commit beads", ["git", "add", "--", ".beads/issues.jsonl"], MAIN)
+        step("commit beads", ["git", "commit", "-m",
+                              f"beads: {', '.join(a.close_bead)} closed with the {a.branch} landing. {a.lead}",
+                              "--", ".beads/issues.jsonl"], MAIN)
+    step("push main", ["git", "push", "origin", "main"], MAIN)
+    return None
+
+
+def regate_moved_main(worktree, gate_cmd, gate_log):
+    """Outside the lock: bring the branch onto the new origin/main and gate it."""
+    step('merge moved main into branch', ['git', 'merge', 'origin/main', '--no-edit'], worktree)
+    gated_commit = git_out('pin gate commit', ['git', 'rev-parse', 'HEAD'], worktree)
+    ATTEMPT['moved_main_regates'] += 1
+    code, reds = gate(gate_cmd, worktree, gate_log)
+    return gated_commit, code, reds
+
+
+def new_attempt(branch):
+    return {'branch': branch, 'start': datetime.now(timezone.utc).isoformat(), 'end': None,
+            'outcome': None, 'gate_runs': 0, 'moved_main_regates': 0,
+            'lock_wait_s': 0.0, 'gpu_wait_s': None}
+
+
+def write_attempt(attempt):
+    attempt['end'] = datetime.now(timezone.utc).isoformat()
+    attempt['lock_wait_s'] = round(attempt['lock_wait_s'], 1)
+    try:
+        path = MAIN / RUNS_LOG
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, 'a') as log:
+            log.write(json.dumps(attempt) + '\n')
+    except OSError as error:
+        print(f'[land] WARN: landing log not written: {error}', file=sys.stderr)
 
 
 def main():
+    global ATTEMPT
+    ATTEMPT = new_attempt(sys.argv[1] if len(sys.argv) > 1 else None)
     try:
         with cancellation_signals():
-            return _main()
+            result = _main()
+        ATTEMPT['outcome'] = 'landed'
+        return result
     except Cancelled as error:
+        ATTEMPT['outcome'] = 'cancelled'
         repo = Path(sys.argv[sys.argv.index('--worktree') + 1]) if '--worktree' in sys.argv else Path.cwd()
         return record_incomplete(repo, error)
+    except SystemExit:
+        ATTEMPT['outcome'] = ATTEMPT['outcome'] or 'error'
+        raise
+    except BaseException:
+        ATTEMPT['outcome'] = 'error'
+        raise
+    finally:
+        write_attempt(ATTEMPT)
 
 
 def _main():
@@ -140,13 +284,15 @@ def _main():
     p.add_argument("--close-reason", default="")
     p.add_argument("--lead", default="k3 (lead)")
     a = p.parse_args()
+    ATTEMPT['branch'] = a.branch
 
     wt = Path(a.worktree)
     assert wt.exists(), f"worktree {wt} missing"
     assert a.branch != "main", "land a branch, never main itself"
 
     step("fetch", ["git", "fetch", "origin", "main"], MAIN)
-    step("merge origin/main into branch", ["git", "merge", "origin/main", "--no-edit"], wt)
+    base = git_out("origin/main", ["git", "rev-parse", "origin/main"], MAIN)
+    step("merge origin/main into branch", ["git", "merge", base, "--no-edit"], wt)
 
     # A reviewed named red needs every leg's result, including when the known
     # red is cheap. Completion is still enforced by CHECKS_RED below.
@@ -159,39 +305,38 @@ def _main():
     log_dir.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
     gate_log = (log_dir / f"landing-gate-{stamp}-{time.time_ns()}.log").resolve()
-    gated_commit = step('pin gate commit', ['git', 'rev-parse', 'HEAD'], wt).stdout.strip()
-    gate_returncode = run_landing_gate(gate_cmd, wt, gate_log)
+    gated_commit = git_out('pin gate commit', ['git', 'rev-parse', 'HEAD'], wt)
+    gate_returncode, named_reds = gate(gate_cmd, wt, gate_log)
     if gate_returncode != 0:
         if a.skip_gpu or not (a.named_red and a.reason):
-            print("[land] gate red and no --named-red/--reason given — stopping. "
-                  "Review the failure; land over it only with an explicit named red.", file=sys.stderr)
-            sys.exit(1)
+            stop('red', "gate red and no --named-red/--reason given — stopping. "
+                 "Review the failure; land over it only with an explicit named red.")
         if gate_returncode != CHECKS_RED:
-            print(f"[land] the gate exited {gate_returncode} without running every check (a refusal, "
-                  "a crash or a moved tree); a named red covers only checks that ran red — stopping.",
-                  file=sys.stderr)
-            sys.exit(1)
-        step("no-gate verdict", ["scripts/gate_runner.py", "no-gate", "--task", a.named_red,
-                                 "--reason", f"{a.reason} {a.lead}"], MAIN)
+            stop('red', f"the gate exited {gate_returncode} without running every check (a refusal, "
+                 "a crash or a moved tree); a named red covers only checks that ran red — stopping.")
+    else:
+        named_reds = frozenset()
 
-    merge_gated_tree(a.branch, wt, a.message, gate_cmd, gate_log, gated_commit)
-    if gate_returncode != 0:
-        # After the merge: a verdict commit before it moves main, so the
-        # merge tree no longer matches the gated tree and the gate reruns red.
-        step("commit verdict", ["git", "add", "--", ".beads/interactions.jsonl"], MAIN, check=False)
-        step("commit verdict", ["git", "commit", "-m",
-                                f"beads: no-gate verdict on {a.named_red} for landing {a.branch}. {a.lead}",
-                                "--", ".beads/interactions.jsonl"], MAIN, check=False)
-    step("push main", ["git", "push", "origin", "main"], MAIN)
-
-    for bead in a.close_bead:
-        step(f"close {bead}", ["bd", "close", bead, "-r", f"{a.close_reason} {a.lead}"], MAIN)
-    if a.close_bead:
-        step("commit beads", ["git", "add", "--", ".beads/issues.jsonl"], MAIN)
-        step("commit beads", ["git", "commit", "-m",
-                              f"beads: {', '.join(a.close_bead)} closed with the {a.branch} landing. {a.lead}",
-                              "--", ".beads/issues.jsonl"], MAIN)
-        step("push beads", ["git", "push", "origin", "main"], MAIN)
+    holder = f"{a.branch} (pid {os.getpid()}, {a.lead}, since {{}})"
+    while True:
+        with landing_lock(lock_path(), holder.format(datetime.now().strftime('%H:%M:%S'))) as waited:
+            ATTEMPT['lock_wait_s'] += waited
+            moved = land_gated(a, wt, base, gated_commit, verdict=bool(named_reds))
+        if moved is None:
+            break
+        print(f"[land] main moved to {moved[:9]} since the gate's base; re-gating outside the lock.",
+              flush=True)
+        base = moved
+        gated_commit, code, reds = regate_moved_main(wt, gate_cmd, gate_log)
+        if code == 0:
+            named_reds = frozenset()
+        elif not carry_over_allowed(named_reds, code, reds):
+            new = ', '.join(sorted(reds - named_reds)) or 'none'
+            stop('red', f"moved-main gate red (exit {code}; new reds: {new}); the named red covered "
+                 f"{', '.join(sorted(named_reds)) or 'nothing'}. Stopping before main changes.")
+        else:
+            print(f"[land] moved-main gate red on exactly the named reds "
+                  f"({', '.join(sorted(reds))}); the named red carries over.", flush=True)
 
     anc = step("verify landed ancestry", ["git", "merge-base", "--is-ancestor", a.branch, "origin/main"],
                MAIN, check=False, cleanup=True).returncode == 0

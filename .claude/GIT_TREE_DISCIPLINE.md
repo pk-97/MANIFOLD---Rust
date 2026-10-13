@@ -119,6 +119,11 @@ Obsolete when: main stops being a locally-landed shared trunk (PR/CI-gated merge
   delete with per-step exit checks; push happens only after a green gate or
   an explicit `--named-red BUG-id --reason` over a gate that ran every check
   (`landing_gate.py` exit `CHECKS_RED`; a refusal or crash never lands).
+  Merge, verdict and bead-close commits and the one push run under a
+  landing lock shared by every worktree; gates never do. If main moved, the
+  branch takes it and re-gates outside the lock; a named red carries over
+  only when that re-gate ran every check and went red on exactly the same
+  checks. Each attempt logs one row to `.claude/orchestration/landing-runs.jsonl`.
   **The gate collects cheap reds before flows and GPU proofs.** Any cheap red
   stops at that boundary; every red prints its `rerun:` command. `--fail-fast`
   stops at the first red; `--keep-going` is an explicit diagnostic run. A named
