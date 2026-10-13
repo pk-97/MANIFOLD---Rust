@@ -1187,6 +1187,11 @@ impl TimelineViewportPanel {
                     param_min: lane.param_min,
                     param_max: lane.param_max,
                     whole_numbers: lane.whole_numbers,
+                    placeholder_value: lane
+                        .placeholder
+                        .then(|| lane.points.first())
+                        .flatten()
+                        .map(|p| lane.param_min + p.value_norm * (lane.param_max - lane.param_min)),
                 });
             }
         }
@@ -1646,7 +1651,7 @@ impl Panel for TimelineViewportPanel {
         // Interactive button so hit_test returns valid ID for click/drag scrubbing.
         // Clip miniatures (non-interactive panels) are added on top but fall through
         // to this button on hit_test. Same pattern as the tracks area overlay.
-        self.overview_btn_id = Some(tree.add_button(
+        self.overview_btn_id = Some(tree.add_button_keyed(
             None,
             overview_rect.x,
             overview_rect.y,
@@ -1657,6 +1662,7 @@ impl Panel for TimelineViewportPanel {
                 ..UIStyle::default()
             },
             "",
+            crate::param_surface::stable_key("viewport.overview"),
         ));
 
         // Overview strip bitmap — repainted in repaint_overview() each frame,
@@ -1664,7 +1670,7 @@ impl Panel for TimelineViewportPanel {
         self.overview_dirty = true;
 
         // Ruler background — INTERACTIVE so clicks register for playhead scrubbing
-        self.ruler_bg_id = Some(tree.add_button(
+        self.ruler_bg_id = Some(tree.add_button_keyed(
             None,
             self.ruler_rect.x,
             self.ruler_rect.y,
@@ -1675,6 +1681,7 @@ impl Panel for TimelineViewportPanel {
                 ..UIStyle::default()
             },
             "",
+            crate::param_surface::stable_key("viewport.ruler"),
         ));
 
         // Clip region covering ruler + tracks — prevents ticks, labels, markers,
@@ -1693,7 +1700,9 @@ impl Panel for TimelineViewportPanel {
         // (matches Unity's InteractionOverlay which is a transparent MonoBehaviour
         // covering the tracks viewport). Without this, clicks on non-interactive
         // panel nodes (track backgrounds, grid lines) won't generate events.
-        tree.add_button(
+        // Keyed so its widget id survives a rebuild between press and release;
+        // otherwise the release misses the pressed widget and no Click fires.
+        tree.add_button_keyed(
             None,
             self.tracks_rect.x,
             self.tracks_rect.y,
@@ -1704,6 +1713,7 @@ impl Panel for TimelineViewportPanel {
                 ..UIStyle::default()
             },
             "",
+            crate::param_surface::stable_key("viewport.tracks"),
         );
 
         // Horizontal scrollbar routing button (section 24 5e). Transparent — the track
@@ -1711,7 +1721,7 @@ impl Panel for TimelineViewportPanel {
         // (one geometry source for draw + hit). The button only exists so the
         // input system emits press/drag events over the strip; the actual routing
         // is by rect containment in `on_timeline_event`.
-        self.scrollbar_h_btn_id = Some(tree.add_button(
+        self.scrollbar_h_btn_id = Some(tree.add_button_keyed(
             None,
             self.scrollbar_h_rect.x,
             self.scrollbar_h_rect.y,
@@ -1722,6 +1732,7 @@ impl Panel for TimelineViewportPanel {
                 ..UIStyle::default()
             },
             "",
+            crate::param_surface::stable_key("viewport.scrollbar_h"),
         ));
 
         // Build track backgrounds

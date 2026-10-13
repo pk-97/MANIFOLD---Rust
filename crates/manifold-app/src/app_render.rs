@@ -1000,7 +1000,7 @@ impl Application {
                             );
                         }
                         UIEvent::PointerUp { .. } => {
-                            self.overlay.on_pointer_up(&mut host);
+                            self.overlay.on_pointer_up(&mut host, &mut self.selection);
                         }
                         UIEvent::Click { pos, modifiers, .. } => {
                             self.overlay.on_pointer_click(

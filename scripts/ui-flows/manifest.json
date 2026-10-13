@@ -189,6 +189,7 @@
     "automation-time-selection": "automation",
     "automation-lane-management": "automation",
     "automation-show-parameter": "inspector",
+    "automation-scene-camera-click": "gltfscene",
     "automation-clear-parameter": "inspector",
     "automation-coincident-points": "automation",
     "automation-resize-lane": "automation",
