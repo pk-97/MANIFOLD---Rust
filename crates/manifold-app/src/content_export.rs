@@ -16,10 +16,28 @@ use crate::content_command::ContentCommand;
 use crate::content_state::{ContentState, ExportFinishedEvent};
 use crate::content_thread::ContentThread;
 
-/// Distinguish encoder failures from GPU failures that invalidate the session.
+use manifold_gpu::gpu_fault::{FaultKind, FaultKinds};
+
+/// How many times a frame is re-rendered after a recoverable GPU hang.
+const EXPORT_HANG_RETRIES: u32 = 2;
+
+/// `fatal` is set only when the device or queue can no longer be trusted
+/// (page fault, device loss, blacklisted queue); every other failure ends the
+/// export but leaves the app running.
 struct ExportFrameFailure {
     message: String,
-    gpu: bool,
+    fatal: bool,
+}
+
+/// Before a hang retry, ask the RT tracer for its most conservative tiles so
+/// the retried frame is less likely to trip the watchdog again.
+// TODO(BUG-k1n2w, lane feat/rt-hang-budget): call the tracer's conservative
+// tile request here once that lane lands it in manifold-gpu. The lead wires
+// the final method name at merge; until then a retry re-renders unchanged.
+fn request_conservative_rt_tiles(_pipeline: &mut crate::content_pipeline::ContentPipeline, attempt: u32) {
+    log::warn!(
+        "[Export] Hang retry {attempt}: conservative RT tiles are not available yet (BUG-k1n2w); re-rendering with current tiles"
+    );
 }
 
 /// One production export frame immediately before the native encoder call.
@@ -51,9 +69,13 @@ pub(crate) enum ExportTestFault {
     PendingGeometry,
     Preparation,
     Encode,
+    /// Reported as a page fault: fatal.
     GpuFault,
     IgnoredSubmission,
+    /// No fault, the fence just never signals: the export fails, the app lives.
     CompletionTimeout,
+    /// The first `failing_attempts` renders of the frame hang.
+    Hang { failing_attempts: u32 },
 }
 
 #[cfg(all(test, feature = "journey-proofs", target_os = "macos"))]
@@ -64,6 +86,13 @@ thread_local! {
     static EXPORT_HDR_READBACK: Cell<bool> = const { Cell::new(false) };
     static EXPORT_FAILURE_FRAME: Cell<Option<(u32, ExportTestFault)>> = const { Cell::new(None) };
     static EXPORT_GPU_ABORT_REQUESTED: Cell<bool> = const { Cell::new(false) };
+    /// Renders of export frames, retries included.
+    static EXPORT_RENDER_ATTEMPTS: Cell<u32> = const { Cell::new(0) };
+}
+
+#[cfg(all(test, feature = "journey-proofs", target_os = "macos"))]
+pub(crate) fn export_test_render_attempts() -> u32 {
+    EXPORT_RENDER_ATTEMPTS.with(Cell::get)
 }
 
 /// Installs the test-only observer and optional pre-encode fault injection for
@@ -98,6 +127,7 @@ pub(crate) fn install_export_observer_with_export_readbacks(
     EXPORT_HDR_READBACK.with(|capture| capture.set(capture_first_hdr_frame));
     EXPORT_FAILURE_FRAME.with(|frame| frame.set(fail_before_encode_frame));
     EXPORT_GPU_ABORT_REQUESTED.with(|requested| requested.set(false));
+    EXPORT_RENDER_ATTEMPTS.with(|count| count.set(0));
     ExportObservationGuard
 }
 
@@ -147,20 +177,38 @@ fn export_hdr_readback_requested(frame_idx: u32) -> bool {
     frame_idx == 0 && EXPORT_HDR_READBACK.with(Cell::get)
 }
 
+/// Why a frame's GPU work failed. `kinds` is empty for a plain timeout.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct ExportGpuFailure {
+    pub message: String,
+    pub kinds: FaultKinds,
+}
+
 /// A signalled fence is not success if any GPU work failed during the frame.
+/// `kinds` are the fault kinds recorded since the frame's fault mark.
 pub(crate) fn export_gpu_completion(
     completed: bool,
     initial_faults: u64,
     current_faults: u64,
+    kinds: FaultKinds,
     submissions_ignored: bool,
     timed_out: bool,
-) -> Option<Result<(), String>> {
+) -> Option<Result<(), ExportGpuFailure>> {
     if current_faults != initial_faults || submissions_ignored {
-        Some(Err("GPU execution failed during export; see session encoder diagnostics".into()))
+        let kinds = if submissions_ignored { kinds.with(FaultKind::SubmissionsIgnored) } else { kinds };
+        let kinds = if kinds.is_empty() { kinds.with(FaultKind::Other) } else { kinds };
+        let cause = kinds.headline().map_or("GPU error", FaultKind::describe);
+        Some(Err(ExportGpuFailure {
+            message: format!("{cause} during export; see session encoder diagnostics"),
+            kinds,
+        }))
     } else if completed {
         Some(Ok(()))
     } else if timed_out {
-        Some(Err("GPU completion timed out during export".into()))
+        Some(Err(ExportGpuFailure {
+            message: "GPU completion timed out during export".into(),
+            kinds: FaultKinds::default(),
+        }))
     } else {
         None
     }
@@ -169,18 +217,40 @@ pub(crate) fn export_gpu_completion(
 #[cfg(test)]
 mod gpu_completion_tests {
     use super::export_gpu_completion;
+    use manifold_gpu::gpu_fault::{FaultKind, FaultKinds};
+
+    fn none() -> FaultKinds {
+        FaultKinds::default()
+    }
 
     #[test]
     fn gpu_failure_overrides_signalled_fence() {
-        assert!(export_gpu_completion(true, 4, 5, false, false).unwrap().is_err());
-        assert!(export_gpu_completion(true, 4, 4, true, false).unwrap().is_err());
+        let page = none().with(FaultKind::PageFault);
+        assert!(export_gpu_completion(true, 4, 5, page, false, false).unwrap().unwrap_err().kinds.is_fatal());
+        assert!(export_gpu_completion(true, 4, 4, none(), true, false).unwrap().unwrap_err().kinds.is_fatal());
+    }
+
+    #[test]
+    fn hang_is_recoverable_and_named() {
+        let failure = export_gpu_completion(true, 0, 1, none().with(FaultKind::Hang), false, false)
+            .unwrap()
+            .unwrap_err();
+        assert!(failure.kinds.is_recoverable_hang());
+        assert!(failure.message.contains("GPU hang"), "{}", failure.message);
+    }
+
+    #[test]
+    fn unclassified_fault_is_neither_fatal_nor_retried() {
+        let failure = export_gpu_completion(true, 0, 1, none(), false, false).unwrap().unwrap_err();
+        assert!(!failure.kinds.is_fatal() && !failure.kinds.is_recoverable_hang());
     }
 
     #[test]
     fn unfinished_frame_waits_then_fails_at_deadline() {
-        assert!(export_gpu_completion(false, 0, 0, false, false).is_none());
-        assert!(export_gpu_completion(false, 0, 0, false, true).unwrap().is_err());
-        assert_eq!(export_gpu_completion(true, 0, 0, false, true), Some(Ok(())));
+        assert!(export_gpu_completion(false, 0, 0, none(), false, false).is_none());
+        let timeout = export_gpu_completion(false, 0, 0, none(), false, true).unwrap().unwrap_err();
+        assert!(!timeout.kinds.is_fatal() && !timeout.kinds.is_recoverable_hang());
+        assert_eq!(export_gpu_completion(true, 0, 0, none(), false, true), Some(Ok(())));
     }
 }
 
@@ -808,7 +878,7 @@ impl ContentThread {
         //    autoreleased ObjC objects per-frame.
         let mut cancelled = false;
         let mut encode_error: Option<String> = None;
-        let mut gpu_failed = false;
+        let mut gpu_fatal = false;
         for frame_idx in 0..total_frames {
             // Check for cancel command (non-blocking drain)
             cancelled = poll_export_cancel(cmd_rx);
@@ -845,7 +915,7 @@ impl ContentThread {
             );
 
             if let Some(err) = frame_err {
-                gpu_failed = err.gpu;
+                gpu_fatal = err.fatal;
                 encode_error = Some(err.message);
                 break;
             }
@@ -927,14 +997,13 @@ impl ContentThread {
             self.send_export_finished(state_tx, false, msg, &export_config.output_path);
         }
 
-        if gpu_failed {
-            // Synthetic completion failures must prove the fatal decision and
-            // real partial-file cleanup without terminating the test process.
-            // Real GPU failures still use the unchanged fatal-session path.
+        if gpu_fatal {
+            // Only a page fault, device loss or blacklisted queue lands here
+            // (hangs retry; other failures end the export and keep the app).
+            // Synthetic faults must prove the decision and the partial-file
+            // cleanup without terminating the test process.
             #[cfg(all(test, feature = "journey-proofs", target_os = "macos"))]
-            if EXPORT_FAILURE_FRAME.with(|fault| matches!(fault.get(), Some((_,
-                ExportTestFault::GpuFault | ExportTestFault::IgnoredSubmission | ExportTestFault::CompletionTimeout
-            )))) {
+            if EXPORT_FAILURE_FRAME.with(|fault| fault.get().is_some()) {
                 EXPORT_GPU_ABORT_REQUESTED.with(|requested| requested.set(true));
                 return failed || finalize_failed;
             }
@@ -956,7 +1025,6 @@ impl ContentThread {
         generator_only: bool,
         mut offline_audio_mod: Option<&mut crate::offline_audio_mod::OfflineAudioModDriver>,
     ) -> Option<ExportFrameFailure> {
-        let initial_gpu_faults = manifold_gpu::gpu_fault::fault_count();
         // Frame k samples the timeline at export_start + k * frame_dt via the
         // engine's absolute export clock (origin pinned before the loop), so
         // frame 0 renders the exact export start and the export spans
@@ -985,7 +1053,7 @@ impl ContentThread {
         {
             return Some(ExportFrameFailure {
                 message: format!("Export stopped at frame {frame_idx}: {error}."),
-                gpu: false,
+                fatal: false,
             });
         }
         let tick_result = self.engine.tick(ctx);
@@ -993,13 +1061,13 @@ impl ContentThread {
             self.engine.reclaim_tick_result(tick_result);
             return Some(ExportFrameFailure {
                 message: format!("Export stopped at frame {frame_idx}: {error}"),
-                gpu: false,
+                fatal: false,
             });
         }
         if let Some(message) = self.engine.project()
             .and_then(manifold_playback::modulation::control_capture_error)
         {
-            return Some(ExportFrameFailure { message, gpu: false });
+            return Some(ExportFrameFailure { message, fatal: false });
         }
 
         // Wait for any in-flight video decodes to complete before rendering.
@@ -1010,6 +1078,19 @@ impl ContentThread {
             self.engine.flush_pending_decodes();
         }
 
+        // A recoverable GPU hang re-renders this same frame. Everything above
+        // (audio feed, tick, decode flush) has run once and is not repeated, so
+        // the timeline position and audio are consumed exactly once.
+        let mut attempt = 0u32;
+        #[cfg(all(test, feature = "journey-proofs", target_os = "macos"))]
+        let mut sdr_mapped_rgba16f = None;
+        #[cfg(all(test, feature = "journey-proofs", target_os = "macos"))]
+        let mut hdr_scene_rgba16f = None;
+        let mut tex_ptr;
+        loop {
+        let fault_mark = manifold_gpu::gpu_fault::mark();
+        #[cfg(all(test, feature = "journey-proofs", target_os = "macos"))]
+        EXPORT_RENDER_ATTEMPTS.with(|count| count.set(count.get() + 1));
         self.content_pipeline.render_content(
             &self.gpu,
             &mut self.engine,
@@ -1044,18 +1125,14 @@ impl ContentThread {
                 "Export frame {frame_idx} is not complete ({frame_status:?}); refusing to encode"
             );
             log::error!("[Export] {message}");
-            return Some(ExportFrameFailure { message, gpu: false });
+            return Some(ExportFrameFailure { message, fatal: false });
         }
 
         #[cfg(all(test, feature = "journey-proofs", target_os = "macos"))]
-        let mut sdr_mapped_rgba16f = None;
-        #[cfg(all(test, feature = "journey-proofs", target_os = "macos"))]
         let mut sdr_mapped_texture = None;
         #[cfg(all(test, feature = "journey-proofs", target_os = "macos"))]
-        let mut hdr_scene_rgba16f = None;
-        #[cfg(all(test, feature = "journey-proofs", target_os = "macos"))]
         let mut hdr_scene_texture = None;
-        let tex_ptr = if export_config.hdr {
+        tex_ptr = if export_config.hdr {
             let paper_white = 200.0f32;
             let max_nits = 10000.0f32;
             #[cfg(all(test, feature = "journey-proofs", target_os = "macos"))]
@@ -1082,14 +1159,23 @@ impl ContentThread {
             Self::get_metal_texture_ptr(texture)
         };
 
-        let completion = self.content_pipeline.wait_for_export_complete(initial_gpu_faults);
+        let completion = self.content_pipeline.wait_for_export_complete(&fault_mark);
         // Exercise the real completion decision without faulting or hanging
         // hardware, and only after the actual submitted work has completed.
         #[cfg(all(test, feature = "journey-proofs", target_os = "macos"))]
         let completion = completion.and_then(|()| match export_test_fault(frame_idx) {
-            Some(ExportTestFault::GpuFault) => export_gpu_completion(true, 0, 1, false, false).unwrap(),
-            Some(ExportTestFault::IgnoredSubmission) => export_gpu_completion(true, 0, 0, true, false).unwrap(),
-            Some(ExportTestFault::CompletionTimeout) => export_gpu_completion(false, 0, 0, false, true).unwrap(),
+            Some(ExportTestFault::GpuFault) => export_gpu_completion(
+                true, 0, 1, FaultKinds::default().with(FaultKind::PageFault), false, false,
+            ).unwrap(),
+            Some(ExportTestFault::IgnoredSubmission) => export_gpu_completion(
+                true, 0, 0, FaultKinds::default(), true, false,
+            ).unwrap(),
+            Some(ExportTestFault::CompletionTimeout) => export_gpu_completion(
+                false, 0, 0, FaultKinds::default(), false, true,
+            ).unwrap(),
+            Some(ExportTestFault::Hang { failing_attempts }) if attempt < failing_attempts => export_gpu_completion(
+                true, 0, 1, FaultKinds::default().with(FaultKind::Hang), false, false,
+            ).unwrap(),
             _ => Ok(()),
         });
         #[cfg(all(test, feature = "journey-proofs", target_os = "macos"))]
@@ -1122,9 +1208,39 @@ impl ContentThread {
                 texture.height,
             ));
         }
-        if let Err(message) = completion {
-            log::error!("[Export] Frame {frame_idx} failed: {message}");
-            return Some(ExportFrameFailure { message, gpu: true });
+        if let Err(failure) = completion {
+            log::error!("[Export] Frame {frame_idx} attempt {attempt} failed: {}", failure.message);
+            if failure.kinds.is_recoverable_hang() && attempt < EXPORT_HANG_RETRIES {
+                // Victim buffers from the hang must land before the retry
+                // takes its fault mark, or they would be blamed on it.
+                if !manifold_gpu::gpu_fault::drain_completions(std::time::Duration::from_secs(2)) {
+                    return Some(ExportFrameFailure {
+                        message: format!(
+                            "Export stopped at frame {frame_idx}: {}. The GPU did not settle, so the frame was not retried.",
+                            failure.message
+                        ),
+                        fatal: false,
+                    });
+                }
+                attempt += 1;
+                log::warn!(
+                    "[Export] Re-rendering frame {frame_idx} after a GPU hang (retry {attempt} of {EXPORT_HANG_RETRIES}). \
+                     Timeline and audio are not re-run; layers with feedback or simulation state advance twice."
+                );
+                request_conservative_rt_tiles(&mut self.content_pipeline, attempt);
+                continue;
+            }
+            let retried = match attempt {
+                0 => String::new(),
+                1 => " after 1 retry".to_owned(),
+                n => format!(" after {n} retries"),
+            };
+            return Some(ExportFrameFailure {
+                message: format!("Export stopped at frame {frame_idx}{retried}: {}", failure.message),
+                fatal: failure.kinds.is_fatal(),
+            });
+        }
+        break;
         }
 
         #[cfg(all(test, feature = "journey-proofs", target_os = "macos"))]
@@ -1135,7 +1251,7 @@ impl ContentThread {
                 frame_idx,
                 time_seconds: frame_idx as f64 * frame_dt,
                 dt_seconds: this_dt,
-                status: frame_status,
+                status: manifold_node_engine::runtime::frame_status::FrameRenderStatus::Complete,
                 rt_updates,
                 rt_dispatches,
                 history_resets,
@@ -1151,7 +1267,7 @@ impl ContentThread {
             if export_test_fault(frame_idx) == Some(ExportTestFault::BeforeEncode) {
                 return Some(ExportFrameFailure {
                     message: format!("injected export failure before encode at frame {frame_idx}"),
-                    gpu: false,
+                    fatal: false,
                 });
             }
         }
@@ -1160,12 +1276,12 @@ impl ContentThread {
             Some(ptr) => {
                 if let Err(e) = unsafe { session.encode_frame(ptr) } {
                     log::error!("[ContentThread] Encode failed at frame {frame_idx}: {e}");
-                    return Some(ExportFrameFailure { message: format!("Encode failed at frame {frame_idx}: {e}"), gpu: false });
+                    return Some(ExportFrameFailure { message: format!("Encode failed at frame {frame_idx}: {e}"), fatal: false });
                 }
             }
             None => {
                 log::error!("[ContentThread] No Metal texture at frame {frame_idx}");
-                return Some(ExportFrameFailure { message: format!("No texture at frame {frame_idx}"), gpu: false });
+                return Some(ExportFrameFailure { message: format!("No texture at frame {frame_idx}"), fatal: false });
             }
         }
 
