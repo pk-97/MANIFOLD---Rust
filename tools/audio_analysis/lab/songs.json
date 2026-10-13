@@ -1225,6 +1225,30 @@
   "probe": false
  },
  {
+  "id": "drmendez",
+  "kind": "project",
+  "source": {
+   "how": "wip",
+   "paths": [
+    "/Users/peterkiemann/.cache/manifold/kick-goal-2026-10-10/snare_wip/drmendez.npy"
+   ]
+  },
+  "source_sha256": [
+   "22cdc672a2ec147d3a26e6735f410542ec567bff32d1b40cb0910786e7ffa2b8"
+  ],
+  "sample_rate": 48000,
+  "offset_s": 0.0504,
+  "proof": "wip:proven (kick and snare agree; attacks on time)",
+  "families": [
+   "snare",
+   "kick"
+  ],
+  "audit_override": null,
+  "gain_db": null,
+  "parent": null,
+  "probe": false
+ },
+ {
   "id": "cold_remix",
   "kind": "project",
   "source": {
