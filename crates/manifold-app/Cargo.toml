@@ -16,6 +16,9 @@ path = "src/bin/generate_preset_thumbnails.rs"
 name = "graph-tool"
 path = "src/bin/graph_tool.rs"
 [[bin]]
+name = "project_tool"
+path = "src/bin/project_tool.rs"
+[[bin]]
 name = "render-import"
 path = "src/bin/render_import.rs"
 
@@ -34,6 +37,7 @@ manifold-ui-paint = { path = "../manifold-ui-paint" }
 manifold-playback = { path = "../manifold-playback" }
 manifold-nodes = { path = "../manifold-nodes" }
 manifold-io = { path = "../manifold-io" }
+zip = "2"
 manifold-media = { path = "../manifold-media" }
 manifold-gpu = { path = "../manifold-gpu" }
 manifold-led = { path = "../manifold-led" }
