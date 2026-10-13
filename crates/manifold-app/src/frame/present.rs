@@ -623,18 +623,14 @@ impl Application {
         // Pass 5 input: automation lanes + landing flash, resolved
         // caller-side like `timeline_overlays` above (module doc,
         // `ui_frame.rs`) — the actual draw calls moved into the seam.
-        let automation_lanes = self
-            .ws
-            .ui_root
-            .viewport
-            .automation_lane_screens(&self.content_state.automation_latched_params);
         let had_automation_feedback = self.selection.automation_feedback.is_some();
         self.overlay.set_modifiers(self.modifiers);
         if self.ws.ui_root.background_input_blocked() {
             self.selection.automation_feedback = None;
         } else {
-            self.overlay.refresh_automation_feedback(self.cursor_pos, &automation_lanes,
-                &mut self.selection, &self.ws.ui_root.viewport);
+            let viewport = &self.ws.ui_root.viewport;
+            self.overlay.refresh_automation_feedback(self.cursor_pos, viewport.automation_lane_screens(),
+                &mut self.selection, viewport);
         }
         if had_automation_feedback || self.selection.automation_feedback.is_some() {
             self.cursor_manager.set(self.selection.automation_feedback.as_ref()
@@ -674,7 +670,7 @@ impl Application {
                     timeline_overlays,
                     markers: &self.timeline_marker_scratch,
                     landing_flash,
-                    automation_lanes: &automation_lanes,
+                    automation_latched: &self.content_state.automation_latched_params,
                     automation_selection: Some(&self.selection),
                     cursor_pos: self.cursor_pos,
                     text_input: &self.text_input,

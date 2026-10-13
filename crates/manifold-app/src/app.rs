@@ -537,6 +537,9 @@ pub struct Application {
     /// Set by keyboard shortcuts that mutate project data (undo, delete, etc.).
     /// Consumed by tick_and_render to trigger sync_project_data + rebuild.
     pub(crate) needs_structural_sync: bool,
+    /// Set by `AppEditingHost::request_automation_lane_resync`; consumed by
+    /// tick_and_render's lanes-only geometry resync.
+    pub(crate) automation_lanes_dirty: bool,
 }
 
 impl Application {
@@ -744,6 +747,7 @@ impl Application {
             needs_rebuild: false,
             scroll_dirty: crate::ui_root::ScrollDirty::default(),
             needs_structural_sync: false,
+            automation_lanes_dirty: false,
         }
     }
 

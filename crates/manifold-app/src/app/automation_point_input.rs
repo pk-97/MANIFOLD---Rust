@@ -212,7 +212,7 @@ fn find_point(
 }
 
 fn point_anchor(app: &Application, target: &UiGraphTarget, param_id: &ParamId, beat: Beats, value_norm: f32) -> Option<AnchorRect> {
-    let dot = app.ws.ui_root.viewport.automation_lane_screens(&[])
+    let dot = app.ws.ui_root.viewport.automation_lane_screens()
         .iter()
         .find(|lane| lane.target == *target && lane.param_id == *param_id)
         .and_then(|lane| lane.dots.iter().find(|dot| dot.beat == beat && dot.value_norm == value_norm).copied())?;

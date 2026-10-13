@@ -96,6 +96,9 @@ pub struct AppEditingHost<'a> {
     pub active_layer: &'a mut Option<LayerId>,
     pub needs_rebuild: &'a mut bool,
     pub needs_structural_sync: &'a mut bool,
+    /// Lane geometry must be re-projected from the local project (a point
+    /// preview or restore). Drained by app_render.rs's lanes-only resync.
+    pub automation_lanes_dirty: &'a mut bool,
     pub scroll_dirty: &'a mut crate::ui_root::ScrollDirty,
     /// Per-layer bitmap invalidation targets. Drained in app_render.rs.
     pub invalidate_layers: &'a mut Vec<usize>,
@@ -113,10 +116,9 @@ pub struct AppEditingHost<'a> {
     pub pending_actions: Vec<PanelAction>,
 
     /// UI-local snapshot of the layer list (Phase 5: the `TimelineEditingHost`
-    /// trait speaks UI view-models, not engine types). Built once per host
-    /// construction from `project.timeline.layers` — per-interaction, not
-    /// per-frame, and tiny (one entry per layer).
-    ui_layers: Vec<UiLayer>,
+    /// trait speaks UI view-models, not engine types). Built on first use,
+    /// since most input batches never ask for it.
+    ui_layers: std::cell::OnceCell<Vec<UiLayer>>,
 }
 
 impl<'a> AppEditingHost<'a> {
@@ -156,11 +158,11 @@ impl<'a> AppEditingHost<'a> {
         active_layer: &'a mut Option<LayerId>,
         needs_rebuild: &'a mut bool,
         needs_structural_sync: &'a mut bool,
+        automation_lanes_dirty: &'a mut bool,
         scroll_dirty: &'a mut crate::ui_root::ScrollDirty,
         invalidate_layers: &'a mut Vec<usize>,
         pre_drag_commands: &'a mut Vec<Box<dyn Command>>,
     ) -> Self {
-        let ui_layers = crate::ui_translate::layers_to_ui(&project.timeline.layers);
         Self {
             project,
             content_tx,
@@ -169,12 +171,13 @@ impl<'a> AppEditingHost<'a> {
             active_layer,
             needs_rebuild,
             needs_structural_sync,
+            automation_lanes_dirty,
             scroll_dirty,
             invalidate_layers,
             command_batch: Vec::new(),
             pre_drag_commands,
             pending_actions: Vec::new(),
-            ui_layers,
+            ui_layers: std::cell::OnceCell::new(),
         }
     }
 }
@@ -189,7 +192,8 @@ impl TimelineEditingHost for AppEditingHost<'_> {
     }
 
     fn layers(&self) -> &[UiLayer] {
-        &self.ui_layers
+        self.ui_layers
+            .get_or_init(|| crate::ui_translate::layers_to_ui(&self.project.timeline.layers))
     }
 
     fn layer_id_at_index(&self, index: usize) -> Option<manifold_core::LayerId> {
@@ -454,6 +458,15 @@ impl TimelineEditingHost for AppEditingHost<'_> {
     fn mark_dirty(&mut self) {
         *self.needs_rebuild = true;
         *self.needs_structural_sync = true;
+    }
+
+    fn request_redraw(&mut self) {
+        self.scroll_dirty.visual = true;
+    }
+
+    fn request_automation_lane_resync(&mut self) {
+        *self.automation_lanes_dirty = true;
+        self.scroll_dirty.visual = true;
     }
 
     // ── Cursor ──────────────────────────────────────────────────

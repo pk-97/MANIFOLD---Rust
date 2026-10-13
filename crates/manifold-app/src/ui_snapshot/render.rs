@@ -148,7 +148,6 @@ pub fn render_ui_to_png(
         _ => None,
     };
 
-    let automation_lanes = ui.viewport.automation_lane_screens(automation_latched);
     let text_input = crate::text_input::TextInputState::new();
     let frame_timer = crate::frame_timer::FrameTimer::new(60.0);
     let blit_pipeline = &res.blit_pipeline;
@@ -175,7 +174,7 @@ pub fn render_ui_to_png(
             timeline_overlays: manifold_ui::panels::viewport::TimelineOverlays::default(),
             markers: &[],
             landing_flash: None,
-            automation_lanes: &automation_lanes,
+            automation_latched,
             automation_selection: Some(selection),
             cursor_pos: manifold_ui::node::Vec2::ZERO,
             text_input: &text_input,

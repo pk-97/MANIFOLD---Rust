@@ -474,15 +474,7 @@ impl Application {
         // until the next unrelated edit. Re-sync so the new renderer attaches; the
         // per-layer fingerprint (waveform.is_some()) then repaints the lane once.
         if self.ws.ui_root.audio_waveforms.poll_and_request(&audio_clips) {
-            crate::ui_bridge::sync_clip_positions(
-                &mut self.ws.ui_root,
-                &self.local_project,
-                self.selection.automation_mode_visible,
-                &self.selection.chosen_automation_params,
-                &self.selection.automation_lane_order,
-                &self.selection.hidden_automation_lanes,
-                &self.selection.pinned_automation_lanes,
-            );
+            crate::ui_bridge::sync_clip_positions(&mut self.ws.ui_root, &self.local_project);
         }
 
         // 1c. Push the latest graph snapshot into the editor canvas
@@ -985,6 +977,7 @@ impl Application {
                     &mut self.active_layer_id,
                     &mut self.needs_rebuild,
                     &mut self.needs_structural_sync,
+                    &mut self.automation_lanes_dirty,
                     &mut self.scroll_dirty,
                     &mut self.invalidate_layers,
                     &mut self.pre_drag_commands,
@@ -3114,6 +3107,7 @@ impl Application {
                     &mut self.active_layer_id,
                     &mut self.needs_rebuild,
                     &mut self.needs_structural_sync,
+                    &mut self.automation_lanes_dirty,
                     &mut self.scroll_dirty,
                     &mut self.invalidate_layers,
                     &mut self.pre_drag_commands,
@@ -3231,12 +3225,22 @@ impl Application {
             &mut self.transport_cache,
         );
 
-        // 4b. Sync clip positions — only during drag or structural change.
-        // During drag, InteractionOverlay mutates clip data directly in the
-        // project model. Outside of drag with no version change, the viewport
-        // cache is already current. Skipping saves 50+ string clones per frame.
-        if self.mouse_pressed || needs_structural_sync {
-            crate::ui_bridge::sync_clip_positions(
+        // 4b. Re-project clips and automation lanes only when their source
+        // moved: a clip move/trim drag writes clip data into the project each
+        // frame; a point preview or restore asks for a lanes-only resync. A
+        // plain press or hover needs neither — each costs name strings and
+        // waveform breakpoints per clip, or polylines per lane.
+        let clip_drag = matches!(
+            self.overlay.drag_mode(),
+            manifold_ui::interaction_overlay::DragMode::Move
+                | manifold_ui::interaction_overlay::DragMode::TrimLeft
+                | manifold_ui::interaction_overlay::DragMode::TrimRight
+        );
+        if needs_structural_sync || clip_drag {
+            crate::ui_bridge::sync_clip_positions(&mut self.ws.ui_root, &self.local_project);
+        }
+        if needs_structural_sync || self.automation_lanes_dirty {
+            crate::ui_bridge::sync_automation_lane_geometry(
                 &mut self.ws.ui_root,
                 &self.local_project,
                 self.selection.automation_mode_visible,
@@ -3246,6 +3250,7 @@ impl Application {
                 &self.selection.pinned_automation_lanes,
             );
         }
+        self.automation_lanes_dirty = false;
 
         // 4c. Apply per-layer bitmap invalidation from editing operations.
         for layer_idx in self.invalidate_layers.drain(..) {

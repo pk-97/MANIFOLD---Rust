@@ -749,7 +749,8 @@ pub(crate) fn led_exit_path_label(
 
 // Re-export public functions from sub-modules
 pub use state_sync::{
-    TransportDisplayCache, check_auto_scroll, push_state, sync_card_values, sync_clip_positions,
+    TransportDisplayCache, check_auto_scroll, push_state, sync_automation_lane_geometry,
+    sync_card_values, sync_clip_positions,
     sync_scene_row_values,
     sync_inspector_data, sync_project_data,
 };

@@ -489,30 +489,10 @@ fn clip_base_color(
 /// Lightweight per-frame clip position sync.
 /// Refreshes viewport.clips_by_layer from the live project model so that
 /// drag mutations (clip move, trim) are visible in the bitmap renderer.
-/// Does NOT touch tracks, bitmap renderers, or layer headers — only clip data.
-/// The bitmap fingerprint will detect if positions actually changed and skip
-/// repaint when nothing moved (cheap no-op outside of drag).
-///
-/// `automation_visible` also refreshes `viewport`'s automation lane geometry
-/// from the live project when true (P4 Unit A automation point drag —
-/// `InteractionOverlay::handle_automation_drag` mutates the project directly
-/// each frame the same way clip move-drag does, and needs the SAME per-frame
-/// resync path so a dragged dot's on-screen position updates live instead of
-/// waiting for the next structural sync — `docs/AUTOMATION_LANES_DESIGN.md`
-/// section 7). Cheap: gated the same way the clip refresh already is (mouse-pressed
-/// or structural change), and lane counts are tens, not hundreds.
-pub fn sync_clip_positions(
-    ui: &mut UIRoot,
-    project: &Project,
-    automation_visible: bool,
-    chosen_automation_params: &std::collections::HashMap<
-        manifold_core::LayerId,
-        (manifold_ui::view::UiGraphTarget, manifold_core::effects::ParamId),
-    >,
-    lane_order: &[manifold_ui::ui_state::AutomationLaneKey],
-    hidden_lanes: &std::collections::HashSet<manifold_ui::ui_state::AutomationLaneKey>,
-    pinned_lanes: &[manifold_ui::ui_state::AutomationLaneKey],
-) {
+/// Does NOT touch tracks, bitmap renderers, layer headers or automation
+/// lanes — only clip data and markers. The bitmap fingerprint will detect if
+/// positions actually changed and skip repaint when nothing moved.
+pub fn sync_clip_positions(ui: &mut UIRoot, project: &Project) {
     use manifold_ui::panels::viewport::ViewportClip;
     let mut viewport_clips = Vec::new();
     for (i, layer) in project.timeline.layers.iter().enumerate() {
@@ -543,33 +523,52 @@ pub fn sync_clip_positions(
     }
     ui.viewport.set_clips(viewport_clips);
 
-    if automation_visible {
-        use manifold_ui::panels::viewport::ViewportAutomationLane;
-        let mut viewport_lanes = Vec::new();
-        for (i, layer) in project.timeline.layers.iter().enumerate() {
-            if layer.is_collapsed || layer.is_group() {
-                continue;
-            }
-            let chosen = chosen_automation_params.get(&layer.layer_id);
-            for lane in crate::ui_translate::layer_automation_lanes_to_ui_with_view(
-                layer,
-                chosen,
-                lane_order,
-                hidden_lanes,
-                pinned_lanes,
-            ) {
-                viewport_lanes.push(ViewportAutomationLane { layer_index: i, lane });
-            }
-        }
-        ui.viewport.set_automation_lanes(viewport_lanes);
-    }
-
     // Only sync markers when marker data has changed (avoids re-pushing on every
     // drag frame). Markers are few (dozens), so building the UI view to compare is cheap.
     let ui_markers = crate::ui_translate::markers_to_ui(&project.timeline.markers);
     if ui.viewport.markers_stale(&ui_markers) {
         ui.viewport.set_markers(ui_markers);
     }
+}
+
+/// Re-projects `viewport`'s automation lane geometry from the live project:
+/// a point preview or restore (`InteractionOverlay` drags and press drafts)
+/// writes the local project, and the lanes must follow without a clip resync
+/// or a tree rebuild (`docs/AUTOMATION_LANES_DESIGN.md` section 7). No-op when
+/// automation mode is hidden.
+pub fn sync_automation_lane_geometry(
+    ui: &mut UIRoot,
+    project: &Project,
+    automation_visible: bool,
+    chosen_automation_params: &std::collections::HashMap<
+        manifold_core::LayerId,
+        (manifold_ui::view::UiGraphTarget, manifold_core::effects::ParamId),
+    >,
+    lane_order: &[manifold_ui::ui_state::AutomationLaneKey],
+    hidden_lanes: &std::collections::HashSet<manifold_ui::ui_state::AutomationLaneKey>,
+    pinned_lanes: &[manifold_ui::ui_state::AutomationLaneKey],
+) {
+    if !automation_visible {
+        return;
+    }
+    use manifold_ui::panels::viewport::ViewportAutomationLane;
+    let mut viewport_lanes = Vec::new();
+    for (i, layer) in project.timeline.layers.iter().enumerate() {
+        if layer.is_collapsed || layer.is_group() {
+            continue;
+        }
+        let chosen = chosen_automation_params.get(&layer.layer_id);
+        for lane in crate::ui_translate::layer_automation_lanes_to_ui_with_view(
+            layer,
+            chosen,
+            lane_order,
+            hidden_lanes,
+            pinned_lanes,
+        ) {
+            viewport_lanes.push(ViewportAutomationLane { layer_index: i, lane });
+        }
+    }
+    ui.viewport.set_automation_lanes(viewport_lanes);
 }
 
 

@@ -291,7 +291,7 @@ mod tests {
             beats_per_bar: 4.0,
             bar_skip: 1,
             label: "Test: amount".into(),
-            overridden: false,
+            effect_id: EffectId::new("fx"),
             polyline: Vec::new(),
             dots,
             target: UiGraphTarget::Effect(EffectId::new("fx")),

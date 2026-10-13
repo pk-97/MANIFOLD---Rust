@@ -5,6 +5,7 @@ use manifold_ui::bitmap_renderer::timing_grid_lines;
 use manifold_ui::node::{Color32, Rect};
 use manifold_ui::panels::viewport::AutomationLaneScreen;
 use manifold_ui::{UIState, color};
+use manifold_foundation::{EffectId, ParamId};
 use std::io::Write;
 
 fn dot(ui: &mut UIRenderer, x: f32, y: f32, radius: f32, tint: Color32) {
@@ -123,6 +124,7 @@ pub fn emit_automation_lanes(
     lanes: &[AutomationLaneScreen],
     tracks: Rect,
     selection: Option<&UIState>,
+    latched: &[(EffectId, ParamId)],
 ) {
     if lanes.is_empty() {
         if selection.is_some_and(|s| s.automation_mode_visible) {
@@ -154,7 +156,8 @@ pub fn emit_automation_lanes(
                     .iter()
                     .any(|p| p.target == lane.target && p.param_id == lane.param_id)
         });
-        let accent = if lane.overridden {
+        let overridden = lane.is_overridden(latched);
+        let accent = if overridden {
             color::AUTOMATION_LINE_OVERRIDDEN_COLOR
         } else {
             color::AUTOMATION_LINE_COLOR
@@ -205,7 +208,7 @@ pub fn emit_automation_lanes(
                 color::FONT_LABEL as f32,
                 color::TEXT_WHITE_C32,
             );
-            let state = if lane.overridden {
+            let state = if overridden {
                 "LAYER · ARRANGEMENT · OVERRIDDEN"
             } else {
                 "LAYER · ARRANGEMENT AUTOMATION"

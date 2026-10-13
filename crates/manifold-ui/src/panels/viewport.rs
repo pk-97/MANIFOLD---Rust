@@ -98,6 +98,9 @@ pub struct TimelineViewportPanel {
     // know the mode flag itself.
     automation_lanes_by_layer: Vec<Vec<UiAutomationLane>>,
     automation_lane_heights: Vec<Vec<f32>>,
+    /// Screen geometry for every visible lane, rebuilt eagerly by every
+    /// mutator of its inputs so per-event and per-frame reads never allocate.
+    automation_lane_screens: Vec<AutomationLaneScreen>,
 
     // Per-layer bitmap renderers (None for group layers)
     bitmap_renderers: Vec<Option<crate::bitmap_renderer::LayerBitmapRenderer>>,
@@ -335,6 +338,7 @@ impl TimelineViewportPanel {
             clips_by_layer: Vec::new(),
             automation_lanes_by_layer: Vec::new(),
             automation_lane_heights: Vec::new(),
+            automation_lane_screens: Vec::new(),
             bitmap_renderers: Vec::new(),
             render_scale: 2.0, // default HiDPI (macOS Retina)
             playhead_beat: Beats::ZERO,
@@ -566,6 +570,7 @@ impl TimelineViewportPanel {
                 self.collapsed_group_bitmaps.push(None);
             }
         }
+        self.rebuild_automation_lane_screens();
     }
 
     /// Rebuild the CoordinateMapper's Y-layout from layer data.
@@ -580,6 +585,7 @@ impl TimelineViewportPanel {
     pub fn rebuild_mapper_layout(&mut self, layers: &[crate::view::UiLayer]) {
         self.mapper.rebuild_y_layout(layers);
         self.set_scroll(self.scroll_x_beats.as_f32(), self.scroll_y_px);
+        self.rebuild_automation_lane_screens();
     }
 
     /// Cache the resolved per-lane geometry once per structural sync. The
@@ -592,6 +598,7 @@ impl TimelineViewportPanel {
         }
         let totals: Vec<f32> = heights.iter().map(|lanes| lanes.iter().sum()).collect();
         self.mapper.set_automation_lane_heights(&totals);
+        self.rebuild_automation_lane_screens();
     }
 
     /// Get a reference to the shared CoordinateMapper.
@@ -653,6 +660,7 @@ impl TimelineViewportPanel {
                 self.automation_lanes_by_layer[entry.layer_index].push(entry.lane);
             }
         }
+        self.rebuild_automation_lane_screens();
     }
 
     /// Resolve the current viewport before clamping scroll or building headers.
@@ -679,6 +687,7 @@ impl TimelineViewportPanel {
         self.scrollbar_h_rect = Rect::new(tracks_x, body.y + body.height - sb_h, tracks_w, sb_h);
 
         self.set_scroll(self.scroll_x_beats.as_f32(), self.scroll_y_px);
+        self.rebuild_automation_lane_screens();
     }
 
     pub fn has_visible_automation_lane(
@@ -1059,11 +1068,20 @@ impl TimelineViewportPanel {
             .map(|lane| (lane.param_min, lane.param_max, lane.whole_numbers))
     }
 
-    pub fn automation_lane_screens(
-        &self,
-        latched: &[(EffectId, ParamId)],
-    ) -> Vec<AutomationLaneScreen> {
-        let mut out = Vec::new();
+    /// Cached screen geometry for every visible automation lane strip; see
+    /// [`Self::rebuild_automation_lane_screens`].
+    pub fn automation_lane_screens(&self) -> &[AutomationLaneScreen] {
+        &self.automation_lane_screens
+    }
+
+    /// One [`AutomationLaneScreen`] per visible lane (P4,
+    /// `docs/AUTOMATION_LANES_DESIGN.md` section 7); empty whenever
+    /// `set_automation_lanes` last got no data. Every mutator of an input read
+    /// here (lanes, lane heights, tracks, layout rect, scroll, zoom, beats per
+    /// bar) calls this, so the cache is never stale. May allocate; reads never do.
+    fn rebuild_automation_lane_screens(&mut self) {
+        let mut out = std::mem::take(&mut self.automation_lane_screens);
+        out.clear();
         let tx0 = self.tracks_rect.x;
         let tx1 = self.tracks_rect.x_max();
         let ty0 = self.tracks_rect.y;
@@ -1100,9 +1118,6 @@ impl TimelineViewportPanel {
                     .unwrap_or(color::AUTOMATION_LANE_STRIP_HEIGHT);
                 let strip_rect = Rect::new(tx0, strip_y, (tx1 - tx0).max(0.0), lane_h);
                 strip_y += lane_h;
-                let overridden = latched
-                    .iter()
-                    .any(|(eid, pid)| *eid == lane.effect_id && *pid == lane.param_id);
 
                 let graph = AutomationLaneScreen::curve_rect_for(strip_rect);
 
@@ -1160,7 +1175,7 @@ impl TimelineViewportPanel {
                     beats_per_bar,
                     bar_skip,
                     label: lane.label.clone(),
-                    overridden,
+                    effect_id: lane.effect_id.clone(),
                     polyline,
                     dots,
                     target: lane.target.clone(),
@@ -1171,15 +1186,17 @@ impl TimelineViewportPanel {
                 });
             }
         }
-        out
+        self.automation_lane_screens = out;
     }
 
     pub fn set_zoom(&mut self, pixels_per_beat: f32) {
         self.mapper.set_zoom(pixels_per_beat);
+        self.rebuild_automation_lane_screens();
     }
 
     pub fn set_zoom_index(&mut self, index: usize) {
         self.mapper.set_zoom_by_index(index);
+        self.rebuild_automation_lane_screens();
     }
 
     /// New ppb after stepping `delta` discrete zoom levels from the nearest current
@@ -1207,6 +1224,7 @@ impl TimelineViewportPanel {
         let applied_ppb = self.mapper.pixels_per_beat();
         let new_scroll = anchor_beat - local_x / applied_ppb;
         self.set_scroll(new_scroll.max(0.0), self.scroll_y_px);
+        self.rebuild_automation_lane_screens();
     }
 
     // ── Horizontal scrollbar (section 24 5e) ────────────────────────────────
@@ -1293,6 +1311,9 @@ impl TimelineViewportPanel {
             || (new_y - self.scroll_y_px).abs() > 0.001;
         self.scroll_x_beats = Beats(new_x as f64);
         self.scroll_y_px = new_y;
+        if changed {
+            self.rebuild_automation_lane_screens();
+        }
         changed
     }
 
@@ -1377,7 +1398,11 @@ impl TimelineViewportPanel {
     }
 
     pub fn set_beats_per_bar(&mut self, bpb: u32) {
-        self.beats_per_bar = bpb.max(1);
+        let bpb = bpb.max(1);
+        if bpb != self.beats_per_bar {
+            self.beats_per_bar = bpb;
+            self.rebuild_automation_lane_screens();
+        }
     }
 
     pub fn set_playhead(&mut self, beat: Beats) {
@@ -2409,10 +2434,60 @@ mod tests {
         }]);
 
         assert!(panel.reveal_automation_lane(&target, &ParamId::from("amount")));
-        let lane = &panel.automation_lane_screens(&[])[0];
+        let lane = &panel.automation_lane_screens()[0];
         assert!(lane.strip_rect.y >= panel.tracks_rect.y - 0.001);
         assert!(lane.strip_rect.y_max() <= panel.tracks_rect.y_max() + 0.001);
         assert!(!panel.reveal_automation_lane(&target, &ParamId::from("amount")));
+    }
+
+    /// The lane geometry is a cache: repeated reads return the same storage
+    /// (no per-call rebuild), and a scroll moves it without any other call.
+    #[test]
+    fn automation_lane_screens_cached_and_follow_scroll() {
+        use crate::types::LayerType;
+        use crate::view::{UiAutomationLane, UiAutomationPoint, UiGraphTarget, UiLayer, UiSegmentShape};
+
+        let mut panel = TimelineViewportPanel::new();
+        panel.tracks_rect = Rect::new(0.0, 0.0, 1000.0, 400.0);
+        panel.set_tracks(vec![TrackInfo::default()]);
+        panel.set_automation_lane_layout(&[vec![112.0]]);
+        panel.rebuild_mapper_layout(&[UiLayer {
+            layer_id: LayerId::new("L0"),
+            parent_layer_id: None,
+            layer_type: LayerType::Video,
+            is_collapsed: false,
+            automation_lane_count: 1,
+        }]);
+        panel.set_automation_lanes(vec![ViewportAutomationLane {
+            layer_index: 0,
+            lane: UiAutomationLane {
+                effect_id: EffectId::new("fx"),
+                param_id: ParamId::from("amount"),
+                target: UiGraphTarget::Effect(EffectId::new("fx")),
+                label: "Fx: amount".into(),
+                points: vec![
+                    UiAutomationPoint { beat: Beats::from_f32(4.0), value_norm: 0.5, shape: UiSegmentShape::Linear },
+                    UiAutomationPoint { beat: Beats::from_f32(8.0), value_norm: 0.8, shape: UiSegmentShape::Linear },
+                ],
+                param_min: 0.0,
+                param_max: 1.0,
+                whole_numbers: false,
+                placeholder: false,
+            },
+        }]);
+
+        let first = panel.automation_lane_screens();
+        let second = panel.automation_lane_screens();
+        assert_eq!(first.len(), 1);
+        assert!(std::ptr::eq(first.as_ptr(), second.as_ptr()));
+        assert!(std::ptr::eq(first[0].dots.as_ptr(), second[0].dots.as_ptr()));
+        let before = first[0].dots[0].x;
+
+        assert!(panel.set_scroll(2.0, 0.0));
+        let ppb = panel.pixels_per_beat();
+        let after = panel.automation_lane_screens()[0].dots[0].x;
+        assert!((before - after - 2.0 * ppb).abs() < 0.01, "dot moved {} px, want {}", before - after, 2.0 * ppb);
+        assert_eq!(after, panel.beat_to_pixel(Beats::from_f32(4.0)));
     }
 
     // P0.1 gate (D3): a collapse/delete that shrinks content must move the

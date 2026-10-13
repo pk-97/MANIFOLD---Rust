@@ -15,7 +15,7 @@ use crate::ui_bridge::projection::cards::describe_macro_mapping;
 pub use crate::ui_bridge::projection::cards::sync_card_values;
 pub use crate::ui_bridge::projection::inspector::sync_inspector_data;
 pub use crate::ui_bridge::projection::scene::sync_scene_row_values;
-pub use crate::ui_bridge::projection::timeline::{sync_clip_positions, sync_project_data};
+pub use crate::ui_bridge::projection::timeline::{sync_automation_lane_geometry, sync_clip_positions, sync_project_data};
 pub use crate::ui_bridge::projection::transport::{TransportDisplayCache, check_auto_scroll};
 
 // Transport colors for play state.

@@ -145,7 +145,7 @@ use manifold_ui_paint::ui_cache_manager::UICacheManager;
 use manifold_ui_paint::ui_renderer::UIRenderer;
 use manifold_spectral::{ScopeColumn, Spectrogram, SpectrogramConfig};
 use manifold_ui::node::{Color32, Vec2};
-use manifold_ui::panels::viewport::{AutomationLaneScreen, ClipScreenRect, TimelineOverlays};
+use manifold_ui::panels::viewport::{ClipScreenRect, TimelineOverlays};
 
 use crate::texture_pane::TexturePane;
 use crate::ui_root::{ScrollDirty, UIRoot};
@@ -403,7 +403,9 @@ pub(crate) struct MainUiPassInputs<'a> {
     pub timeline_overlays: TimelineOverlays,
     pub markers: &'a [(f32, Color32)],
     pub landing_flash: Option<LandingFlash>,
-    pub automation_lanes: &'a [AutomationLaneScreen],
+    /// `ContentState::automation_latched_params`; lane geometry itself is
+    /// read from `ui_root.viewport`'s cache.
+    pub automation_latched: &'a [(manifold_core::EffectId, manifold_core::effects::ParamId)],
     pub automation_selection: Option<&'a manifold_ui::UIState>,
     pub cursor_pos: Vec2, // scrollbar hover
     // Pass 5 text-input overlay (card-drag ghost + overlay_draw come off
@@ -459,7 +461,7 @@ pub(crate) fn render_main_ui_passes(
         timeline_overlays,
         markers,
         landing_flash,
-        automation_lanes,
+        automation_latched,
         automation_selection,
         cursor_pos,
         text_input,
@@ -592,7 +594,13 @@ pub(crate) fn render_main_ui_passes(
     // on top of the clip names, same overlay pass. Empty whenever
     // automation mode is off (the caller never populated any lanes this
     // frame), so this is a no-op cost in the common case.
-    manifold_ui_paint::automation_lane_draw::emit_automation_lanes(ui_renderer, automation_lanes, tracks, automation_selection);
+    manifold_ui_paint::automation_lane_draw::emit_automation_lanes(
+        ui_renderer,
+        ui_root.viewport.automation_lane_screens(),
+        tracks,
+        automation_selection,
+        automation_latched,
+    );
 
     // Playhead — a red line spanning ruler + tracks, capped by a downward
     // triangle head at the top of the ruler (section 24 5e). The head is the
