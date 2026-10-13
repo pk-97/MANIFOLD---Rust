@@ -1,6 +1,6 @@
 # UI Invalidation — work runs only when its inputs change
 
-**Status:** PROPOSED · 2026-10-13 · Opus 5.5 (lane draft, for lead review before Peter)
+**Status:** PROPOSED · 2026-10-13 · Opus 5.5 · lead-reviewed; Peter's answers folded into section 8; awaits Peter's approval.
 **Prerequisites:** none.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs) and section 6 (Seam briefs — refactors and API changes) before starting any phase.
 
@@ -8,7 +8,7 @@
 
 On stage: dragging LED brightness or an Ableton trim stops doing project-load work on the render thread, so the output never hitches on a mixer move. Hovering, scrolling and modifier keys stop rebuilding the UI, so controls stay responsive mid-set (the lag behind BUG-y3a9a (automation-lane-hover-drag-full-rebuild-lag)). An open graph editor stops costing frames when nobody touches it. And a count gate stops the next feature from adding per-frame work a few percent at a time.
 
-Direction agreed by Peter and the lead on 2026-10-13 (change stamps at the gateway, inputs declared by consumers, content reacts to the same stamps, one cached text measurer, a count gate wired into landing). Where this doc departs from it, the decision says so and why.
+Direction agreed by Peter and the lead on 2026-10-13 (change stamps at the gateway, inputs declared by consumers, content reacts to the same stamps, one cached text measurer, a count gate). Where this doc departs from it, the decision says so and why.
 
 **Binding constraints** (docs/DESIGN_AUTHORING.md section 1 (The intake)): *Hot path* — the planner and the counters run every frame on both threads, so both are fixed-size integer work, no allocation. *Thread residency* — content stamps are owned by `EditingService` on the content thread and travel in `ContentState`; UI stamps are owned by the UI thread; nothing is shared. *Persistence* — stamps are never serialized; a load moves every part. *Performance surface* — slider, opacity and LED drags must stay value-only writes.
 
@@ -40,14 +40,12 @@ Companion docs: `UI_HARNESS_UNIFICATION_DESIGN.md` (the `ui_frame.rs` seam and t
 | Real content handler, headless | `headless_harness.rs` `headless_content_thread`; `ContentThread::handle_command` (`content_commands.rs` :779); precedent test `sdr_controls_route_pointer_gestures_to_content_and_undo` (`ui_bridge/project.rs` :2556) | Exists. The content half of the gate uses it. |
 | Thread-local counters | `cold_touch.rs` (foundation): per-kind thread counters, "tests assert zero" | Precedent for the work counters. |
 | Baseline-and-record gate | `scripts/rt_noise_gate.py` + `rt_noise_baseline.json` (`--record`) | Precedent for work ceilings. |
-| Flow gate in landing | `scripts/run_ui_flows.py --touched`, `scripts/ui-flows/manifest.json` path triggers, called by `landing_gate.py` :669 | Exists. Work flows ride it. |
+| Flow runner, nightly sweep | `scripts/run_ui_flows.py` (name filters); `scripts/trunk_health.py` GPU gate list, where `rt_noise_gate.py` runs nightly | Exist. Work flows run through both. |
 | Text measurement | `native_text.rs` `CoreTextMeasure` :1688 (no cache, used by the tree, installed `ui_root/mod.rs` :429); `NativeTextRenderer::measure_text_cached` :1106 (cached, renderer only); `NativeTextRenderer`'s own `TextMeasure` impl :1665 is a character-count guess; `text.rs` `truncate_with_ellipsis` :14 measures once per byte trimmed | Three measurers. Collapse to one cached one. |
 
 **A finding the brief did not list:** the BUG-y3a9a fix routed hover through `request_redraw`, which sets `scroll_dirty.visual` (`editing_host.rs` :464). That still runs `rebuild_scroll_panels`, which truncates and rebuilds layer headers, the viewport and every overlay (`ui_root/mod.rs` :1081–1085). Hover still rebuilds; it just rebuilds less.
 
 Negative claims, checked: no part-level versioning exists (`rg 'struct DataVersion|PartStamps|ChangeSet' crates` → only comments); no work counter beyond `cold_touch` (`rg 'GlobalAlloc|alloc_count' crates` → only the `mimalloc` line in `main.rs`).
-
-Classification. **Exists:** the gateway, graph versions, selection version, tree structure version, region truncation, in-place scroll, the frame seam, the runner, the headless content thread, the counter and record precedents, the flow gate. **One wire away:** device-change flags to the UI, the overview strip's own dirty check (keyed on the wrong resolution). **Genuinely new:** part stamps and change sets, `touches()`, the frame planner, the work counters and work flows, the freshness check, one cached measurer.
 
 ---
 
@@ -72,7 +70,7 @@ Classification. **Exists:** the gateway, graph versions, selection version, tree
 **D9 — One cached text measurer per tree.** `CachedTextMeasure` (in `native_text.rs`) owns a CoreText font manager and a bounded hash cache behind a `RefCell` (UI thread only, one owner, not shared). Each `UITree` owns one. The renderer measures through the tree it draws, so its own cache and the character-count `TextMeasure` impl are deleted. `truncate_with_ellipsis` binary-searches char boundaries: O(log n) cached measures instead of one CTLine per byte. Rejected: *one measurer shared by both windows through `Rc<RefCell<>>`* — shared state for a cache that costs a few kilobytes per window.
 
 **D10 — The gate counts work; the change audit and the freshness check guard correctness.** Three machine checks, each catching a different error:
-- **Work counters** catch too much work. A `WorkKind` counter set in `manifold-foundation` (new module `work_count`, shaped like `cold_touch.rs`, thread-local only). Work flows drive real gestures and compare counts to committed ceilings. A content test drives the real `handle_command`. Counts, never timings. Allocations are counted too, so "no per-frame allocation" stops being prose.
+- **Work counters** catch too much work. A `WorkKind` counter set in `manifold-foundation` (new module `work_count`, shaped like `cold_touch.rs`, thread-local only). Work flows drive real gestures and compare counts to committed ceilings, nightly and as each phase's local gate. A content test drives the real `handle_command`. Counts, never timings. Allocations are counted too, so "no per-frame allocation" stops being prose.
 - **The change audit** catches a declared set that is too narrow. Under `cfg(test)` and feature `change-audit`, `EditingService` fingerprints each part before and after every edit and panics if an undeclared part changed. The UI side runs the same audit around each runner step. Over-declaring is allowed; it only costs work, which the counters show.
 - **The freshness check** catches a planner input that is missing. A flow step `AssertFresh` dumps the tree, forces every projection and a full build from the same inputs, dumps again, and requires no difference. Incremental and full rebuild are two paths that must agree, so the agreement is tested every run (docs/DESIGN_AUTHORING.md section 4 (Alternatives), essential duplication).
 
@@ -177,8 +175,8 @@ pub(crate) struct FrameInputs {
     pub dock_view: u64, pub dock_scroll_px: i32,
     pub overlays: u64,
     pub audio_directory: u64,
-    pub editor: EditorInputs,            // snapshot Arc address, canvas scope version,
-                                         // watched graph_version, preview aspect bits
+    pub editor: EditorInputs,            // snapshot version, catalog default version, canvas
+                                         // scope version, watched graph_version, preview aspect bits
 }
 pub(crate) struct FramePlan {
     pub projections: ProjectionMask,     // bit set over the projection table, section 4
@@ -190,6 +188,8 @@ pub(crate) enum RegionSlot { Transport, Header, Footer, Inspector, AudioDock, Sc
 pub(crate) fn plan_frame(last: &FrameInputs, next: &FrameInputs) -> FramePlan;   // pure
 pub(crate) fn apply_frame_plan(plan: &FramePlan, frame: &mut UiFrame<'_>);       // interior free
 ```
+
+**No raw `Arc` addresses as keys.** A freed `Arc` and a new one can share an address, so a stored integer would read "unchanged". Shared snapshots enter as versions instead: where an `Arc` arrives (`editor_ui_snapshot` in `editor_bridge.rs`, and the setter of `watched_catalog_default`), the intake compares it with `Arc::ptr_eq` against the `Arc` it already retains, which keeps the address alive, and bumps a `u64` when they differ. `FrameInputs` carries the version. Versions keep `FrameInputs` a `Copy` struct of integers, and the `ptr_eq` stays sound because it only ever runs against a retained `Arc`.
 
 `UiFrame` bundles what projections read today (`ui_root`, `local_project`, `selection`, `content_state`, cache). Its field list is the executor's, re-derived from the current `sync_*` signatures.
 
@@ -231,8 +231,8 @@ These are the contract. If the freshness check fails, the missing input is added
 | `sync_clip_positions` | Clips, Layers |
 | `sync_automation_lane_geometry`, `sync_automation_lane_order` | Automation, Effects, Layers; automation view |
 | Embedded preset list (`dropdowns.rs` `sync_embedded_presets`) | EmbeddedPresets |
-| Editor canvas `set_snapshot` | snapshot Arc address; canvas scope version; preview aspect |
-| Editor MODIFIED badge, viewport def | watched graph_version; catalog default Arc address |
+| Editor canvas `set_snapshot` | snapshot version; canvas scope version; preview aspect |
+| Editor MODIFIED badge, viewport def | watched graph_version; catalog default version |
 | Editor mini timeline | Clips, Layers; watched target |
 | Overview strip repaint | Clips, Layers; scroll; zoom; `playhead_px`; layout |
 | Audio waveform requests (`app_render.rs` :458) | Clips |
@@ -274,11 +274,11 @@ These are the contract. If the freshness check fails, the missing input is added
 | 2 | Scrollbar and overview drags return `structural()` per move | `DispatchResult::structural_change` deleted. Scroll is a `FrameInputs` field; the plan updates the viewport in place | P4b |
 | 3 | Text measurer uncached; chrome view + layout every frame; truncation one CTLine per byte | One cached measurer; binary-search truncation; chrome rebuilds only when its displayed values move | P2, P5b |
 | 4 | LED and Ableton trim drags trigger project-load work per move | LED declares Values: no reaction. Trim declares Mappings: one listener rebuild per content frame, nothing else | P3 |
-| 5 | Open graph editor re-derives everything each frame | Canvas, badge, mini timeline and viewport def keyed on snapshot address, graph_version and stamps; editor window runs the same planner | P4b, P5a |
+| 5 | Open graph editor re-derives everything each frame | Canvas, badge, mini timeline and viewport def keyed on snapshot version, graph_version and stamps; editor window runs the same planner | P4b, P5a |
 | 6 | Selection syncs the inspector 2–3x; device queries inside the sync | The planner runs each projection at most once per frame. Device query keyed on the audio directory version | P4b |
 | 7 | Modifier keys, dock wheel, import progress, browser search rebuild | Modifiers are not an input. Dock scroll in place. Import progress updates the header in place and completion arrives as stamps. Search bumps the overlays version, so only the overlay region rebuilds | P5a, P5b |
 | 8 | Per-frame work regardless of change | Overview keyed on the playhead pixel, not the beat float. Detect status in place on change. Waveform requests keyed on Clips. Allocation residue (`push_state` churn, param-card name clone, `present.rs` scratch, unused `duration_beats()`) cleared to an allocation count of zero | P4b, P6 |
-| 9 | Inspector, drawer and split tweens force full build + `invalidate_all` | Tween progress is a view input: suffix rebuild from the inspector (P5a), then in place (P5b). Split tween moves layout, so every region rebuilds for its ~200 ms — stated cost, open decision 3 | P5a, P5b |
+| 9 | Inspector, drawer and split tweens force full build + `invalidate_all` | Tween progress is a view input: suffix rebuild from the inspector (P5a), then in place (P5b). Split tween moves layout, so every region rebuilds for its ~200 ms (decided item 12) | P5a, P5b |
 | 10 | Whole-project deep clones; `sync_driver_bpm` under clock jitter | Measured: `ProjectClone` counted on both threads; driver BPM scan counted under a jitter gesture. Structural sharing is Deferred with a trigger | P1 |
 | — | Hover still rebuilds scroll panels after the BUG-y3a9a fix | `redraw()` never touches the tree | P5a |
 
@@ -308,12 +308,12 @@ Phased by layer: measure, then the measurer, then the content gateway, then UI p
 
 - **Entry:** anchors in section 1 re-verified (`rg -n 'fn apply_ui_frame_invalidations' crates/manifold-app/src/ui_frame.rs`; `rg -n 'struct Runner' crates/manifold-app/src/ui_snapshot/script.rs`; `rg -n 'pub fn headless_content_thread' crates/manifold-app/src/headless_harness.rs`).
 - **Read-back:** this doc sections 1–3 and 6; `cold_touch.rs`; `script.rs` :1–74 and `record_executed_commands`; `scripts/rt_noise_gate.py`; `scripts/run_ui_flows.py`. Restate D10, D11, the forbidden moves, and the entry findings.
-- **Deliverables:** `work_count` module; `record_work` at every site the `WorkKind` list names, across both threads; the counting allocator under `work-trace`; `MANIFOLD_WORK_TRACE=1` per-frame trace line on both threads (env read once at startup, the `MANIFOLD_AUDIO_TRACE` precedent `audio_mod_runtime.rs` :318); `AutomationAction::ResetWork`, `AutomationAction::AssertWork { window }`; a `Step` that advances `ContentState` beat position while playing (a driver input, not an engine copy); work flows `scripts/ui-flows/work-{idle,playback,clock-jitter,hover,automation-hover,scrollbar-drag,slider-drag,select-click,modifier,drawer-tween,dock-scroll,browser-search,editor-open}.json` (clock-jitter steps frames while the `ContentState` BPM wobbles by ±0.01); `work_ceilings.json` recorded from today's code; `--record-work` on `ui-snap` and `run_ui_flows.py`; content test module `content_reaction_budget` driving the real `handle_command` on `headless_content_thread` with commands produced by real `ui_bridge::dispatch` for: LED tick, Ableton trim tick, mapping-drawer tick, param slider tick, param Execute, clip move Execute, undo; `manifest.json` path triggers for `crates/manifold-ui/`, `crates/manifold-ui-paint/`, `crates/manifold-app/src/{ui_*,app_render.rs,window_input.rs,editing_host.rs,editor_bridge.rs}`; a CPU-scope mapping so touching `crates/manifold-editing/src/commands/` runs `content_reaction_budget`. `⚠ VERIFY-AT-IMPL: how scripts/cpu_scope.py maps paths to filtersets — read it before adding the mapping.` `⚠ VERIFY-AT-IMPL: whether the runner can drive the editor window; if not, editor-open is measured by the live trace only and filed as verification debt.`
+- **Deliverables:** `work_count` module; `record_work` at every site the `WorkKind` list names, across both threads; the counting allocator under `work-trace`; `MANIFOLD_WORK_TRACE=1` per-frame trace line on both threads (env read once at startup, the `MANIFOLD_AUDIO_TRACE` precedent `audio_mod_runtime.rs` :318); `AutomationAction::ResetWork`, `AutomationAction::AssertWork { window }`; a `Step` that advances `ContentState` beat position while playing (a driver input, not an engine copy); work flows `scripts/ui-flows/work-{idle,playback,clock-jitter,hover,automation-hover,scrollbar-drag,slider-drag,select-click,modifier,drawer-tween,dock-scroll,browser-search,editor-open}.json` (clock-jitter steps frames while the `ContentState` BPM wobbles by ±0.01); `work_ceilings.json` recorded from today's code; `--record-work` on `ui-snap` and `run_ui_flows.py`; content test module `content_reaction_budget` driving the real `handle_command` on `headless_content_thread` with commands produced by real `ui_bridge::dispatch` for: LED tick, Ableton trim tick, mapping-drawer tick, param slider tick, param Execute, clip move Execute, undo; a nightly leg `["python3", "scripts/run_ui_flows.py", "work-"]` in `scripts/trunk_health.py`'s GPU gate list (beside `rt_noise_gate.py`), so a red files a bead; a CPU-scope mapping so touching `crates/manifold-editing/src/commands/` runs `content_reaction_budget`. `⚠ VERIFY-AT-IMPL: how scripts/cpu_scope.py maps paths to filtersets — read it before adding the mapping.` `⚠ VERIFY-AT-IMPL: whether the runner can drive the editor window; if not, editor-open is measured by the live trace only and filed as verification debt.`
 - **Gate (positive):** every work flow exits 0 against its recorded ceilings; `content_reaction_budget` green; the trace prints on a live run. Report the before table (counts per gesture) in the landing commit. **Gate (negative):** no `Instant`, `elapsed` or duration in any work assertion (`rg 'elapsed|Instant' crates/manifold-app/src/ui_snapshot/` shows no new hits in the work code).
 - **Demo:** L3 — the work flows drive real input; plus one `MANIFOLD_WORK_TRACE=1` live run on Liveschool by the lead for the app-only per-frame work the runner does not yet execute.
 - **Performer gesture:** hover the automation lanes for 2 seconds. The count of rebuilds that produces is the headline number of the before table.
 - **Forbidden moves:** timing-based assertions · counters behind `Arc`, atomics or globals (thread-local only) · a content-side lookalike (no hand-built `ContentSide` — use `handle_command`) · fixing any finding in this phase.
-- **Test scope:** `manifold-foundation`, `manifold-app` focused nextest; the work flows via `scripts/run_ui_flows.py work-`.
+- **Test scope:** `manifold-foundation`, `manifold-app` focused nextest; work flows locally via `scripts/run_ui_flows.py work-`, as every later phase does.
 
 ### P2 — One cached text measurer
 
@@ -321,8 +321,7 @@ Phased by layer: measure, then the measurer, then the content gateway, then UI p
 - **Read-back:** `native_text.rs` :1095–1140 and :1660–1730; `text.rs`; `tree.rs` `set_text_measure`. Restate D9.
 - **Seam brief:** old `CoreTextMeasure` (uncached), `NativeTextRenderer::measure_text_cached` + its guess impl → new `CachedTextMeasure`, one per `UITree`; renderer calls go through `tree.text_measure()`. Inventory: `rg -n 'measure_text_cached|CoreTextMeasure|measure_text\(' crates/manifold-ui-paint crates/manifold-app crates/manifold-ui -g '*.rs'` — re-run, list the count in the phase notes, stop if a call site has no tree in reach. Compiler-driven: delete `CoreTextMeasure` and `measure_text_cached` first.
 - **Deliverables:** `CachedTextMeasure`; binary-search `truncate_with_ellipsis`; `TextMeasureMiss` counted at the miss; INV-7 check.
-- **Gate:** existing UI suites green untouched; work ceilings for `TextMeasureMiss` re-recorded down; INV-7 rg. A unit test proves truncation output equals the old linear result on a fixed string set.
-- **Demo:** none — L1 (no visible change; pinned by unchanged suites and the equality test).
+- **Gate:** existing UI suites green untouched; work ceilings for `TextMeasureMiss` re-recorded down; INV-7 rg; a unit test proves truncation output equals the old linear result on a fixed string set. Demo: none — L1.
 - **Forbidden moves:** a second cache "for the renderer" · `Rc<RefCell<>>` sharing across windows · changing truncation output.
 - **Test scope:** `manifold-ui`, `manifold-ui-paint`, `manifold-app` focused.
 
@@ -343,26 +342,32 @@ Phased by layer: measure, then the measurer, then the content gateway, then UI p
 - **Entry:** P3 landed. `rg -n 'needs_structural_sync' crates/manifold-app/src/ui_snapshot/script.rs` hits (the transcription to delete).
 - **Read-back:** `app_render.rs` :240–420 (snapshot accept) and :2990–3260 (selection sync, structural sync, clip and lane resync); `ui_frame.rs`; UI_HARNESS_UNIFICATION_DESIGN.md section 4 (The shared seam). Restate D6 and that this phase moves code without changing a decision.
 - **Deliverables:** one function in `ui_frame.rs` that runs the projection block exactly as `tick_and_render` does today, called by the app and the runner; the runner's own `needs_structural_sync` and its sync calls deleted; `AssertFresh` action and the `ui-snap diff` fix that ignores generations (reviving UI_HARNESS_UNIFICATION's Deferred diff item, whose trigger this is); ceilings re-recorded (they rise: the runner now does the real per-frame work — record it as the true before, named in the commit).
-- **Gate:** all existing flows exit 0; every work flow passes `AssertFresh` (today's code always rebuilds, so it must); negative: `rg 'needs_structural_sync' crates/manifold-app/src/ui_snapshot/` → 0.
-- **Demo:** L3 — the work flows.
+- **Gate:** all existing flows exit 0; every work flow passes `AssertFresh` (today's code always rebuilds, so it must); demo L3; negative: `rg 'needs_structural_sync' crates/manifold-app/src/ui_snapshot/` → 0.
 - **Forbidden moves:** changing any decision while moving it · a runner-only branch in the seam (vary on input presence only, the D3 hardening rule).
 - **Test scope:** `manifold-app` with `--features ui-snapshot`; all flows.
 
-### P4b — The planner lands; `needs_structural_sync` and `structural()` die
+### P4b — The planner lands beside the old flags
 
-- **Entry:** P4a landed. Re-run: `rg -F 'needs_structural_sync = true' crates -g '*.rs' | wc -l` (68) and `rg -F 'DispatchResult::structural()' crates -g '*.rs' | wc -l` (165). A different count: stop and list the new sites first.
-- **Read-back:** sections 2–5; `ui_bridge/mod.rs` `DispatchResult` :52; `editing_host.rs`; `context.rs`; `ui_root/mod.rs` `build` :719 and `rebuild_scroll_panels` :1050. Restate D5–D8, both planner tables, the forbidden registry.
-- **Why the whole planner lands here:** a `structural()` site that becomes `handled()` must still get its rebuild. Only a planner that already sees view versions and scroll can give it one. So `plan_frame` lands complete in this phase. The old `needs_rebuild` and `ScrollDirty` paths stay live after the planner runs; they are existing code scheduled for deletion in P5a, not a new flag, and they can only add work, never hide it.
-- **Seam brief:** delete `DispatchResult::structural_change` and the `needs_structural_sync` field first. Each site is one of four kinds. (a) It sent a command or closure: local writes move to `ctx.mutate` or the host mutator; the site returns `handled()`. Example: rack expand (`dispatch/params.rs` :123). (b) It changed panel view state: the panel setter bumps its view version; `handled()`. Example: `MacrosCollapseToggle` (:194). (c) It changed timeline scroll or zoom: the planner sees the pixel value move; `handled()`. Example: `TimelineScrollbarH` (`ui_bridge/transport.rs` :89). (d) It changed selection: `selection_version` already moves; delete. A site fitting none of these is an escalation.
+- **Entry:** P4a landed.
+- **Read-back:** sections 2–5; `editing_host.rs`; `context.rs`; `ui_root/mod.rs` `build` :719 and `rebuild_scroll_panels` :1050. Restate D5–D8, both planner tables, the forbidden registry.
+- **Shape:** `plan_frame` lands complete and runs first each frame. `needs_structural_sync`, `structural()`, `needs_rebuild` and `ScrollDirty` all stay live after it. They can only add work, never hide it, so nothing goes stale while sites move over in P4c and P5a.
 - **Deliverables:** `UiStamps` with the snapshot fold; `FrameInputs`, `plan_frame` (projections, regions, in-place) and `apply_frame_plan`; `rebuild_from(RegionSlot)` with region starts recorded at build; `DispatchCtx::mutate`; host mutators stamp; panel view versions with private fields; `UIState` lane fields private with a version; device query keyed on `audio_directory_version`; editor projections keyed (section 4); overview keyed on `playhead_px`; detect status in place; waveform requests keyed on Clips; `sync_driver_bpm` counted; `embedded_presets_fingerprint` and the `PresetFingerprint` kind deleted; a `plan_frame` unit test per row of both section 4 tables (pure, no GPU).
-- **Gate (positive):** work ceilings re-recorded down: `work-idle`, `work-playback` and `work-modifier` show zero projections; `work-select-click` one inspector sync and no chrome rebuild from the planner; `work-scrollbar-drag` zero project and inspector syncs; `work-editor-open` zero editor projections after the first frame. `AssertFresh` passes in every flow. **Gate (negative):** `rg 'needs_structural_sync|structural_change|embedded_presets_fingerprint' crates/` → 0.
-- **Demo:** L3. **Performer gesture:** click between three clips quickly mid-playback; the inspector follows each click with one sync per click.
-- **Forbidden moves:** a new flag under another name · a subscription or callback from model to panel · `ctx.mutate` with a non-`Clone` closure worked around by boxing (escalate) · re-adding a hash of project content as a key · moving the inspector after the viewport in build order.
-- **Test scope:** `manifold-ui`, `manifold-app` focused; all flows. This is the largest phase. If it cannot finish in one session, stop at a compiling checkpoint and escalate. Never land half the sites with the field still present.
+- **Gate:** `AssertFresh` passes in every flow; `plan_frame` tests green; `work-idle`, `work-playback` and `work-modifier` show zero projections; `work-editor-open` zero editor projections after the first frame; ceilings re-recorded; demo L3. **Negative:** `rg 'embedded_presets_fingerprint' crates/` → 0.
+- **Forbidden moves:** a new flag under another name · a subscription or callback from model to panel · `ctx.mutate` with a non-`Clone` closure worked around by boxing (escalate) · re-adding a hash of project content as a key · moving the inspector after the viewport in build order · deleting old sites in this phase.
+- **Test scope:** `manifold-ui`, `manifold-app` focused; work flows locally.
+
+### P4c — `structural()` and `needs_structural_sync` die, in batches
+
+- **Entry:** P4b landed. Re-run: `rg -F 'needs_structural_sync = true' crates -g '*.rs' | wc -l` (68) and `rg -F 'DispatchResult::structural()' crates -g '*.rs' | wc -l` (165). A different count: list the new sites before touching any.
+- **Seam brief:** four batches by site kind, each landing alone. (a) It sent a command or closure: local writes move to `ctx.mutate` or the host mutator; return `handled()`. Example: rack expand (`dispatch/params.rs` :123). (b) It changed panel view state: the setter already bumps the view version; `handled()`. Example: `MacrosCollapseToggle` (:194). (c) It changed timeline scroll or zoom: the planner sees the pixel value; `handled()`. Example: `TimelineScrollbarH` (`ui_bridge/transport.rs` :89). (d) It changed selection: `selection_version` already moves; delete. The last batch deletes the `needs_structural_sync` field and `DispatchResult::structural_change`. A site fitting no kind is an escalation.
+- **Gate per batch:** `AssertFresh` in every flow; ceilings re-recorded down (batch c: `work-scrollbar-drag` zero project and inspector syncs; batch d: `work-select-click` one inspector sync). **Last batch negative:** `rg 'needs_structural_sync|structural_change' crates/` → 0.
+- **Demo:** L3. **Performer gesture:** click between three clips quickly mid-playback; one inspector sync per click.
+- **Forbidden moves:** converting a site whose kind the planner does not yet cover · deleting the field before the last batch. Half the sites converted is fine while the planner covers them; the field goes last.
+- **Test scope:** `manifold-ui`, `manifold-app` focused; work flows locally.
 
 ### P5a — The remaining flags die
 
-- **Entry:** P4b landed. Re-run counts: `needs_rebuild = true` (95), `scroll_dirty.` writes (23), host dirty calls (24), `automation_lanes_dirty` (1).
+- **Entry:** P4c landed. Re-run counts: `needs_rebuild = true` (95), `scroll_dirty.` writes (23), host dirty calls (24), `automation_lanes_dirty` (1).
 - **Read-back:** section 4 region table; `ui_frame.rs` `apply_ui_frame_invalidations`; `ui_cache_manager.rs` :101–175. Restate D7, D8.
 - **Seam brief:** delete `needs_rebuild`, `ScrollDirty`, `automation_lanes_dirty`, `mark_dirty`, `request_redraw`, `request_automation_lane_resync` first, then `apply_ui_frame_invalidations`' flag branches. Site kinds: view change (setter already bumps; delete the line); scroll (the planner already sees it; delete); tween poll (the tween's progress bumps the view version; delete); modifier keys (delete); import progress (delete; the header updates in place); browser search (`set_filter` bumps overlays; delete); hover (`redraw()`). Old `invalidate_all`/`invalidate_scroll_panels`/`invalidate_inspector` → `invalidate_slot`. `⚠ VERIFY-AT-IMPL: which atlas slot covers the docks and overlays (ui_root/mod.rs panel_cache_info :564).`
 - **Deliverables:** the deletions; `invalidate_slot`; the editor window's `UIRoot` on the same planner; INV-5, INV-6.
@@ -373,12 +378,12 @@ Phased by layer: measure, then the measurer, then the content gateway, then UI p
 
 ### P5b — In-place motion and keyed chrome
 
-- **Entry:** P5a landed. **Blocked on open decision 1** (drawer tween look).
-- **Read-back:** `inspector/mod.rs` `drawer_anim_active` :528 and the in-place scroll path; `layout.rs` `is_split_reset_animating` :399; chrome `View` and `diff.rs`. Restate D7 and the decision 1 answer.
-- **Deliverables:** drawer and object-card tweens update node positions and the drawer clip in place (shaped like inspector in-place scroll); dock wheel scroll in place; chrome regions keyed on displayed values at display resolution (the clock keyed on its shown digits, not the beat float).
+- **Entry:** P5a landed.
+- **Read-back:** `inspector/mod.rs` `drawer_anim_active` :528 and the in-place scroll path; chrome `View` and `diff.rs`. Restate D7 and decided item 10.
+- **Deliverables:** drawer and object-card tweens by reveal: content laid out once at final size, revealed by the animated drawer clip while cards below move in place (shaped like inspector in-place scroll); dock wheel scroll in place; chrome regions keyed on displayed values at display resolution (the clock keyed on its shown digits, not the beat float).
 - **Gate:** `work-drawer-tween` and `work-dock-scroll` show zero region rebuilds; `work-playback` shows no chrome layout except when shown digits change; `AssertFresh` at tween end.
-- **Demo:** L3, plus a drawer filmstrip (the existing `inspector-drawer-filmstrip.json`) for Peter to look at. **Performer gesture:** open a modulation drawer mid-playback; the motion looks the same as decided and costs no rebuilds.
-- **Forbidden moves:** keeping a per-frame rebuild for "just the last frame of the tween" · animating the split tween in place without a decision (it stays a full rebuild, decision 3).
+- **Demo:** L3, plus a drawer filmstrip (the existing `inspector-drawer-filmstrip.json`) for Peter to look at. **Performer gesture:** open a modulation drawer mid-playback; the drawer reveals and costs no rebuilds.
+- **Forbidden moves:** keeping a per-frame rebuild for "just the last frame of the tween" · moving the split tween in place (it stays a full rebuild, decided item 12).
 - **Test scope:** `manifold-ui`, `manifold-app` focused; all flows.
 
 ### P6 — Close-out
@@ -394,16 +399,7 @@ Phasing completeness: every mechanism in sections 2–5 appears in exactly one p
 
 ---
 
-## 8. Open decisions for Peter
-
-1. **Drawer tween look (blocks P5b).** In place means the drawer's content is laid out at its final size and revealed as the drawer opens, while the cards below slide. Today the content re-lays out every frame. Recommendation: the reveal; it is the Ableton and Resolume behavior and costs nothing per frame.
-2. **Ableton mapping range during a drag (defaulted).** Default: the mapped param follows the range live, with one listener rebuild per content frame while dragging. The old mapping-drawer preview skipped this and stayed stale until release. Trigger to revisit: the trim or mapping gesture's render trace shows a frame over 20 ms on Liveschool.
-3. **Split-reset tween (defaulted).** Default: it rebuilds every region for its ~200 ms, because every region's size moves. Trigger: a dropped UI frame during the tween in the live trace.
-4. **Landing cost (defaulted).** Default: the work flows run in the landing flow gate on any branch touching the UI paths, adding 13 flows under the GPU hold. Trigger: landing time complaints, then they move to nightly with a weekly local run.
-
----
-
-## 9. Decided — do not reopen
+## 8. Decided — do not reopen
 
 1. Parts and stamps at the gateway; `EditingService` owns content stamps; the UI owns its own. (D1, D5)
 2. Commands declare `touches()`; no default after P6; the change audit checks every declaration. (D2, D10)
@@ -414,10 +410,14 @@ Phasing completeness: every mechanism in sections 2–5 appears in exactly one p
 7. Hover, modifiers and playhead are not rebuild inputs; `redraw()` never touches the tree. (D8)
 8. One cached measurer per tree; the renderer measures through it. (D9)
 9. Counts, not timings; allocations counted; ceilings move only by explicit record; missing inputs are found by the freshness check, never by adding flags. (D10, D11)
+10. Drawers open by reveal: content is laid out once at its final size and revealed as the drawer slides open. (Peter, 2026-10-13)
+11. An Ableton range follows live mid-drag, with one listener rebuild per content frame. (Peter, 2026-10-13)
+12. The split-reset tween rebuilds every region for its ~200 ms; every region's size moves. An implementation call, not a question for Peter.
+13. Work flows run nightly through `scripts/trunk_health.py`, never in the landing gate; landing time is a priority. Each phase runs its own work flows locally as its gate. `content_reaction_budget` is ordinary nextest, scoped normally. (Peter, 2026-10-13)
 
 ---
 
-## 10. Deferred
+## 9. Deferred
 
 | Item | Revive when |
 |---|---|
@@ -425,4 +425,4 @@ Phasing completeness: every mechanism in sections 2–5 appears in exactly one p
 | Structural sharing of project parts (`Arc` per part) to drop snapshot deep clones | `ProjectClone` work dominates an editing gesture on Liveschool. Needs live values moved out of `Project` first, or every tick copies |
 | Per-layer or per-effect stamps | An edit on one layer causes work proportional to all layers that the existing per-layer bitmap fingerprints do not skip |
 | Projection output equality as a second gate (skip the rebuild when a projection's output equals the last) | A projection runs often with unchanged output, visible as region rebuilds without visible change |
-| Scoped Ableton listener update (one mapping, not all) | Open decision 2's trigger fires |
+| Scoped Ableton listener update (one mapping, not all) | A trim or mapping drag on Liveschool shows a content frame over 20 ms in `MANIFOLD_RENDER_TRACE` |
