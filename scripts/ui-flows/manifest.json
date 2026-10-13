@@ -273,7 +273,9 @@
     "scene-setup-add-fog-drag": "gltfscene",
     "scene-fluid-role-lifecycle": "fluidauthoring",
     "water-family-preset": "scene-setup",
-    "scene-forces-controls": "physicsscene"
+    "scene-forces-controls": "physicsscene",
+    "scene-surfaces-clickthrough": "gltfscene",
+    "scene-surfaces-clickthrough-physics": "physicsscene"
   },
   "expected_fail": {},
   "unresolved": {}
