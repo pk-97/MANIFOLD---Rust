@@ -125,6 +125,14 @@ class NightlyAlarmTests(unittest.TestCase):
         fleet_health.check_nightly(problems, 1_800_000_000, self._dir(1, "Traceback (most recent call last):\n  x\nModuleNotFoundError: tomllib\n"))
         self.assertTrue(any("crash" in m for _, m in problems))
 
+    def test_launchd_recovery_lines_after_traceback_do_not_alarm(self):
+        tb = "Traceback (most recent call last):\n  x\nModuleNotFoundError: tomllib\n"
+        for line in ("[trunk-health] deferred: nightly GPU reservation held by x\n",
+                     "[trunk-health] origin/main @ abc1234\n"):
+            problems = []
+            fleet_health.check_nightly(problems, 1_800_000_000, self._dir(1, tb + line))
+            self.assertEqual(problems, [], line)
+
 
 if __name__ == "__main__":
     unittest.main()

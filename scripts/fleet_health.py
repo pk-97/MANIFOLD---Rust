@@ -352,7 +352,7 @@ def check_nightly(problems, now, log_dir=NIGHTLY_DIR):
     except OSError:
         return
     last = tail.rfind("Traceback")
-    if last != -1 and "trunk-health for origin/main" not in tail[last:]:
+    if last != -1 and "[trunk-health] " not in tail[last:]:
         problems.append(("FAIL", "trunk-health: launchd.log ends in a crash (Traceback). The nightly died before reporting."))
 
 
