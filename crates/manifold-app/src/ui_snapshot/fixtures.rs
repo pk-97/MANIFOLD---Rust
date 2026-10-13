@@ -651,7 +651,7 @@ fn audio_sends_scene() -> SceneData {
     // BUG-199 (dock scroll): 24 extra Send-A consumer layers, each a distinct
     // video layer carrying its own Bloom-audio-mod consumer row in the
     // "Consumers — Kick" list. Pushes the Audio Setup dock's content well
-    // past its viewport height (`audio-dock-scroll.json`'s acceptance flow),
+    // past its viewport height (the deleted audio-dock-scroll flow),
     // without touching the sends themselves (Send A/B stay exactly as
     // above) — `audio-setup-hygiene.json`'s gain-reset assertions only key
     // on the two sends' gain labels and are unaffected by extra consumers.
