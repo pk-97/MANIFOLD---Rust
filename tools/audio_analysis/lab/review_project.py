@@ -980,10 +980,10 @@ def write_audio(plans):
     return mixes, drums, skipped
 
 
-def online_only_inputs(only=None):
-    """[(path, what)]: online-only files the review would read if they were local: a latest master with no readable
-    copy, the sources of a stereo labelled file, the drum stems. Read from file flags only; nothing is fetched. Peter
-    brings them down himself (catalog.py download PATH --why ...)."""
+def online_only_inputs(plans):
+    """[(path, what)]: online-only files the review would read if they were local: a latest master that is the only
+    reason a song keeps its labelled file, the sources of a stereo labelled file, the drum stems. Read from file flags
+    only; nothing is fetched. Peter brings them down himself (catalog.py download PATH --why ...)."""
     from tools.audio_analysis.catalog import catalog
     from tools.audio_analysis.catalog.catalog import connect, is_dataless
     from tools.audio_analysis.lab import registry
@@ -992,16 +992,13 @@ def online_only_inputs(only=None):
 
     def online(p):
         return Path(p).exists() and is_dataless(p)
-    for t, s in registry.load().items():
-        if s.kind != 'project' or s.parent is not None or (only and t not in only):
-            continue
-        m = latest_master(con, t)
-        if m is not None and m['sha256'] not in s.source_sha256 and not any(
-                Path(p).exists() and not is_dataless(p) for p in m['local_paths']):
-            p = sorted(m['paths'], key=lambda p: (not p.lower().endswith(LOSSLESS), p))[0]
-            if online(p):
-                out.append((p, f'{t} latest master'))
-        if stereo_sources(s, con)[0] is None:
+    reg = registry.load()
+    for plan in plans:
+        t, s, a = plan.id, reg[plan.id], plan.audio
+        if a.source == 'labelled' and a.why.startswith('master online-only'):
+            p = sorted(a.master['paths'], key=lambda p: (not p.lower().endswith(LOSSLESS), p))[0]
+            out.append((p, f'{t} latest master'))
+        if a.source == 'labelled' and stereo_sources(s, con)[0] is None:
             src = s.source['paths'][0]
             row = con.execute('SELECT lab_mix FROM songs WHERE id=?', (t,)).fetchone()
             lm = json.loads(row[0] or 'null') if row and src.endswith('.npy') else None
@@ -1014,12 +1011,12 @@ def online_only_inputs(only=None):
 
 
 def build(out, only, fires_dir, dry_run, tool_arg):
-    need = online_only_inputs(only)
+    plans = plan_songs(only)
+    need = online_only_inputs(plans)
     if need:
         print(f'{len(need)} online-only files would bring songs closer to their masters or to stereo (not fetched):')
         for p, what in need:
             print(f'  {what}: {p}')
-    plans = plan_songs(only)
     if not dry_run:
         mixes, drums, skipped = write_audio(plans)
     wins, pmap = layout(plans)

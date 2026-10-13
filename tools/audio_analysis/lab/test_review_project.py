@@ -270,7 +270,7 @@ class EndToEndTests(unittest.TestCase):
             with mock.patch.object(rp, 'plan_songs', lambda only: plans), \
                     mock.patch.object(rp, 'load_labels', lambda: labels), \
                     mock.patch.object(rp, 'write_audio', lambda ps: (wavs, {}, {'a': 'none', 'b': 'none'})), \
-                    mock.patch.object(rp, 'online_only_inputs', lambda only: []), \
+                    mock.patch.object(rp, 'online_only_inputs', lambda plans: []), \
                     mock.patch.object(rp, 'drum_stem_status', lambda t: (None, None, 'none')), \
                     mock.patch('builtins.print'):
                 rp.build(out, None, None, False, str(tool))
@@ -532,7 +532,7 @@ class MasterRoundTripTests(unittest.TestCase):
             out = d / 'review.manifold'
             with mock.patch.object(rp, 'plan_songs', lambda only: [plan]), \
                     mock.patch.object(rp, 'load_labels', lambda: labels), \
-                    mock.patch.object(rp, 'online_only_inputs', lambda only: []), \
+                    mock.patch.object(rp, 'online_only_inputs', lambda plans: []), \
                     mock.patch.object(rp, 'write_audio', lambda ps: ({'a': wav}, {}, {'a': 'none'})), \
                     mock.patch.object(rp, 'drum_stem_status', lambda t: (None, None, 'none')), \
                     mock.patch('builtins.print'):
