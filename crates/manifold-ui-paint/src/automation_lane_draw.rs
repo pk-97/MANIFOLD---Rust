@@ -512,15 +512,6 @@ pub fn emit_automation_lanes(
                 }
             }
         }
-        if lane.dots.is_empty() && feedback.is_none() && graph.height >= 20.0 {
-            ui.draw_text(
-                graph.x + 8.0,
-                graph.y_max() - 16.0,
-                "Click to add an automation point",
-                color::FONT_LABEL as f32,
-                color::AUTOMATION_LABEL_COLOR,
-            );
-        }
         ui.pop_immediate_clip();
     }
     ui.pop_immediate_clip();
