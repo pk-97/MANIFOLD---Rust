@@ -292,9 +292,20 @@ impl ContentThread {
             .collect();
         log::info!("[ContentThread] Warmup RT quality: {:?}", project.settings.rt_quality.realtime);
         let total = warmup_layers.len() as u32;
+        // MANIFOLD_WARMUP_SCALE stretches every warm-up ceiling by that
+        // factor, for headless runs under Metal shader validation, which
+        // slows warm-up past the per-layer budget before export starts.
+        let scale = std::env::var("MANIFOLD_WARMUP_SCALE")
+            .ok()
+            .and_then(|value| value.parse::<f64>().ok())
+            .filter(|scale| scale.is_finite() && *scale >= 1.0)
+            .unwrap_or(1.0);
+        let defaults = manifold_core::WarmupBudget::default();
         let budget = manifold_core::WarmupBudget {
             frame_interval: std::time::Duration::from_secs_f64(1.0 / f64::from(project.settings.frame_rate)),
-            ..manifold_core::WarmupBudget::default()
+            per_layer: defaults.per_layer.mul_f64(scale),
+            total: defaults.total.mul_f64(scale),
+            ..defaults
         };
         let mut pass = manifold_core::WarmupPass::new(budget, start);
         let run = pass.run();

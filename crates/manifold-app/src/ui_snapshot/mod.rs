@@ -1862,7 +1862,7 @@ mod overlay_fidelity_proof {
             timeline_overlays: manifold_ui::panels::viewport::TimelineOverlays::default(),
             markers: &[],
             landing_flash: None,
-            automation_lanes: &[],
+            automation_latched: &[],
             automation_selection: None,
             cursor_pos: manifold_ui::node::Vec2::ZERO,
             text_input,

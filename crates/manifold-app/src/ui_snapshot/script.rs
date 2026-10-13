@@ -117,7 +117,7 @@ fn setup_error(message: String) -> FlowOutcome {
 /// pass), 2 on a setup error.
 pub fn run(scene: &str, script_path: &str) {
     let mut device = None;
-    match run_flow(scene, script_path, &mut device, None) {
+    match run_flow(scene, script_path, &mut device, &mut super::fixtures::FixtureCache::default(), None) {
         FlowOutcome::Done { code: 0, .. } => {}
         FlowOutcome::Done { code, .. } => std::process::exit(code),
         FlowOutcome::Requeue(_) => unreachable!("requeue needs a batch context"),
@@ -130,8 +130,9 @@ const BATCH_RECORD: &str = "@@ui-snap-batch@@";
 
 /// `ui-snap batch <scene> <script> [<scene> <script> ...]`: run many flows in
 /// one process, sharing only the `GpuDevice` (and with it the one GPU-lock
-/// acquisition and process start-up). Every flow still builds its own
-/// fixture, `UIRoot`, `UIRenderer`, cache and offscreen exactly as a solo run
+/// acquisition and process start-up) and the parsed GLBs of imported-glTF
+/// scenes ([`super::fixtures::FixtureCache`]). Every flow still builds its own
+/// fixture `Project` from scratch, `UIRoot`, `UIRenderer`, cache and offscreen exactly as a solo run
 /// does, and writes the same artifacts.
 ///
 /// Each flow prints `@@ui-snap-batch@@ {"begin": index}` on stdout, then one
@@ -154,12 +155,13 @@ pub fn run_batch(flows: &[(String, String)]) {
     order.sort_by_key(|&i| super::fixtures::installs_preset_overlay(&flows[i].0));
     let fresh_generation = manifold_node_engine::load::preset_loader::catalog_generation();
     let mut device = None;
+    let mut fixtures = super::fixtures::FixtureCache::default();
     for index in order {
         let (scene, script) = &flows[index];
         println!("{BATCH_RECORD} {}", serde_json::json!({"begin": index}));
         let start = std::time::Instant::now();
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            run_flow(scene, script, &mut device, Some(fresh_generation))
+            run_flow(scene, script, &mut device, &mut fixtures, Some(fresh_generation))
         }));
         let record = match &outcome {
             Ok(FlowOutcome::Done { code, tail }) => serde_json::json!({
@@ -183,10 +185,11 @@ fn run_flow(
     scene: &str,
     script_path: &str,
     device: &mut Option<GpuDevice>,
+    fixtures: &mut super::fixtures::FixtureCache,
     batch_generation: Option<u64>,
 ) -> FlowOutcome {
     let generation_before = manifold_node_engine::load::preset_loader::catalog_generation();
-    let Some(mut data) = super::fixtures::build(scene) else {
+    let Some(mut data) = super::fixtures::build_cached(scene, fixtures) else {
         return setup_error(format!(
             "ui-snap --script: unknown scene '{scene}' (known: timeline, states, inspector, dmxcard, \
              paramsteps, scrollshrink, hairlineclips, automation, selectionclips, gltfscene, \

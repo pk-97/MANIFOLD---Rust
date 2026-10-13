@@ -20,6 +20,7 @@ mod encoder;
 mod format;
 mod frame_fence;
 pub mod gpu_fault;
+pub mod firmware_reports;
 mod msl_cache;
 mod profiling;
 mod residency;
