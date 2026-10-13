@@ -16,6 +16,9 @@ checkout, except:
 The deny repeats on every attempt: moving into a worktree makes the path stop
 matching, so the guard falls silent on its own.
 
+Also denies any path under a `land-passes-v1` directory (gate-pass records;
+only scripts/land_branch.py writes them), anywhere on disk.
+
 Fails OPEN on any error or unrecognized shape. A path that resolves cleanly into
 the main checkout is a deliberate deny.
 
@@ -172,6 +175,21 @@ def main():
     tool_input = data.get("tool_input") or {}
     resolved = resolve_target(tool_input.get("file_path") or "", data.get("cwd") or "")
     if resolved is None:
+        return 0
+
+    # Land passes (BUG-3srqb): only scripts/land_branch.py writes them.
+    if "land-passes-v1" in resolved.parts:
+        print(json.dumps({
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "deny",
+                "permissionDecisionReason": (
+                    "Blocked: land-passes-v1 records are written only by "
+                    "scripts/land_branch.py after the landing gate passes. "
+                    "Path: " + str(resolved)
+                ),
+            }
+        }))
         return 0
 
     # I2: verdicts are written only by gate_runner, never via Edit|Write|MultiEdit.

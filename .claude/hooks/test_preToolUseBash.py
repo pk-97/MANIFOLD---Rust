@@ -975,6 +975,25 @@ def test_land_pass_guard_reads_land_branch_record():
               hook.land_pass_guard("git push origin feat/code:main", str(repo)) is None)
 
 
+def test_land_pass_tamper_guard():
+    d = ".git/land-passes-v1"
+    for name, cmd in {
+        "redirect": f"echo {{}} > {d}/abc.json",
+        "append": f"echo x >> {d}/abc.json",
+        "cp": f"cp /tmp/x {d}/abc.json",
+        "mv": f"mv /tmp/x {d}/abc.json",
+        "tee": f"echo x | tee {d}/abc.json",
+        "touch": f"touch {d}/abc.json",
+        "mkdir": f"mkdir -p {d}",
+        "sed -i": f"sed -i s/a/b/ {d}/abc.json",
+        "python": f"/tmp/w.py {d}/abc.json",
+        "redirect after cat": f"cat {d}/x > /tmp/y; echo a > {d}/z",
+    }.items():
+        check(f"land pass tamper: {name} -> denied", hook.land_pass_tamper_guard(cmd) is not None, cmd)
+    for cmd in (f"ls {d}", f"cat {d}/abc.json", f"rg tree {d}", "scripts/land_branch.py feat/x --worktree /w --message m"):
+        check(f"land pass tamper: read allowed: {cmd[:30]}", hook.land_pass_tamper_guard(cmd) is None, cmd)
+
+
 def main():
     test_sed_guard_ignores_quoted_shell_variable()
     test_xargs_gated_on_its_command()
@@ -1052,6 +1071,7 @@ def main():
     test_land_pass_guard_denies_bypass_shapes()
     test_land_pass_guard_allowed_paths()
     test_land_pass_guard_reads_land_branch_record()
+    test_land_pass_tamper_guard()
 
     test_index_add_denied_all_modes()
     test_pathspec_add_and_commit_unaffected()

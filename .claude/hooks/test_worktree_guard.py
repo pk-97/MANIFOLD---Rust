@@ -60,6 +60,14 @@ def edit(file_path, cwd=None, tool="Edit"):
     return p
 
 
+def test_land_passes_denied():
+    for tool in ("Write", "Edit", "MultiEdit"):
+        r = run_hook(edit("/anywhere/.git/land-passes-v1/abc.json", tool=tool))
+        check(f"{tool} into land-passes-v1 -> deny", r is not None and "land_branch" in r, r)
+    r = run_hook(edit(str(WT / "slot-1/.git-like/land-passes-v1/x.json"), tool="Write"))
+    check("land-passes-v1 inside a worktree -> deny", r is not None, r)
+
+
 def test_main_source_absolute_denies():
     r = run_hook(edit(str(PROJ / "crates/manifold-app/src/ui_root.rs")))
     check("absolute main-checkout source -> deny", r is not None, r)
@@ -213,6 +221,7 @@ def main():
         test_merge_conflicted_file_allowed,
         test_merge_nonconflicted_file_still_denies,
         test_no_merge_denies,
+        test_land_passes_denied,
     ]:
         fn()
 

@@ -13,7 +13,9 @@
     origin/main, or the diff versus origin/main touches only .beads/ and docs/
     (beads: commits and docs edits land directly; they carry no code to gate).
     land_branch.py's own git calls are subprocesses the hook never sees, so no
-    allowlist exists. Spec: `land_pass_guard`. Peter's terminal is ungoverned.
+    allowlist exists. Any Bash command that could write into land-passes-v1
+    is denied too (`land_pass_tamper_guard`; the Edit/Write twin is in
+    worktree-guard.py). Spec: `land_pass_guard`. Peter's terminal is ungoverned.
 
 1.  ALLOW pre-approved commands outright, including compounds the static
     `permissions.allow` matcher cannot express — pipes, `;` chains, for/while
@@ -912,6 +914,30 @@ def _check_update_ref(target_dir, rest):
         return f"deleting refs/heads/main is not allowed. {_LAND_HOW}"
     reason = _rev_may_land(target_dir, positional[1])
     return f"update-ref refs/heads/main: {reason}" if reason else None
+
+
+_PASS_DIR_READERS = {"ls", "cat", "rg", "fd", "stat", "head", "tail", "wc", "file", "test", "["}
+
+
+def land_pass_tamper_guard(cmd):
+    """Deny reason for a Bash command that could write into land-passes-v1
+    (any redirect, cp, mv, tee, touch, mkdir, interpreter or sed naming the
+    directory); only scripts/land_branch.py writes it. Reads are fine."""
+    if LAND_PASS_DIR not in cmd:
+        return None
+    try:
+        segments = _shlex_segments(cmd)
+    except Exception:
+        segments = []
+    readonly = bool(segments) and ">" not in cmd
+    for toks in segments:
+        toks = _strip_leading_keywords(toks)
+        if any(LAND_PASS_DIR in t for t in toks) and (not toks or toks[0] not in _PASS_DIR_READERS):
+            readonly = False
+    if readonly:
+        return None
+    return (f"{LAND_PASS_DIR} holds the gate-pass records; only scripts/land_branch.py writes "
+            "them (run it by path). Reading them with ls/cat/rg is fine.")
 
 
 def land_pass_guard(cmd, cwd):
@@ -1938,7 +1964,7 @@ def main() -> int:
 
     # 0b2. Land-pass guard: a merge, push, update-ref or `gh pr merge` that
     # would put an unrecorded tree on main is denied in every mode.
-    land_deny = land_pass_guard(cmd, cwd)
+    land_deny = land_pass_tamper_guard(cmd) or land_pass_guard(cmd, cwd)
     if land_deny:
         json.dump(build_deny([land_deny]), sys.stdout)
         return 0
