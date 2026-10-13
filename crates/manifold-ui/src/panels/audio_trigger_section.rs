@@ -3,14 +3,9 @@
 //! drawer redesigned 2026-07-19).
 //!
 //! A single collapsible section pinned at the top of the selected layer's
-//! inspector content, default-collapsed (Peter, 2026-07-10: "a single
-//! section that sits at the top of the inspector for the layer and is
-//! default collapsed"). Collapse mechanics mirror `macros_panel.rs`
-//! (`is_collapsed`, default `true`, chevron toggle) and `layer_chrome.rs`
-//! (the same pattern, used for a section that lives INSIDE the layer's own
-//! card rather than as its own bordered strip — this section follows THAT
-//! precedent since it sits inside the layer column like `layer_chrome`
-//! does, not as an independent top-level strip like `MacrosPanel`).
+//! inspector content. Collapsed while the layer has no triggers, open when
+//! it has some, until the user toggles it; the toggled state is saved with
+//! the project like the other inspector sections' collapse states.
 //!
 //! Each row is one `Layer.clip_triggers` entry: an ON/OFF toggle, a label
 //! that expands/collapses the row's drawer, and a remove button. The
@@ -99,7 +94,10 @@ pub struct AudioTriggerSectionConfig {
 
 pub struct AudioTriggerSection {
     host: ChromeHost,
-    is_collapsed: bool,
+    /// `None` = never toggled for this project: open exactly when the layer has
+    /// triggers, so a project reopened with triggers shows them. A toggle pins
+    /// it; saved in `ProjectSettings::audio_triggers_collapsed`.
+    collapsed: Option<bool>,
     layer_id: Option<LayerId>,
     labels: Vec<String>,
     enabled: Vec<bool>,
@@ -129,7 +127,7 @@ impl AudioTriggerSection {
     pub fn new() -> Self {
         Self {
             host: ChromeHost::new(),
-            is_collapsed: true,
+            collapsed: None,
             layer_id: None,
             labels: Vec::new(),
             enabled: Vec::new(),
@@ -144,11 +142,20 @@ impl AudioTriggerSection {
     }
 
     pub fn is_collapsed(&self) -> bool {
-        self.is_collapsed
+        self.collapsed.unwrap_or(self.labels.is_empty())
+    }
+
+    /// The saved form (`None` = follow the layer's triggers).
+    pub fn collapsed_setting(&self) -> Option<bool> {
+        self.collapsed
+    }
+
+    pub fn set_collapsed(&mut self, v: Option<bool>) {
+        self.collapsed = v;
     }
 
     pub fn toggle_collapsed(&mut self) {
-        self.is_collapsed = !self.is_collapsed;
+        self.collapsed = Some(!self.is_collapsed());
     }
 
     pub fn toggle_row_expanded(&mut self, index: usize) {
@@ -220,7 +227,7 @@ impl AudioTriggerSection {
 
     /// Total height this section occupies at the top of the layer column.
     pub fn height(&self) -> f32 {
-        if self.is_collapsed {
+        if self.is_collapsed() {
             return HEADER_ROW_H;
         }
         let mut h = HEADER_ROW_H + ROW_SPACING;
@@ -255,7 +262,7 @@ impl AudioTriggerSection {
     }
 
     fn chrome_view(&self) -> View {
-        let chevron = View::button(if self.is_collapsed { "\u{25B6}" } else { "\u{25BC}" })
+        let chevron = View::button(if self.is_collapsed() { "\u{25B6}" } else { "\u{25BC}" })
             .fixed(CHEVRON_W, CHEVRON_H)
             .style(UIStyle {
                 bg_color: Color32::TRANSPARENT,
@@ -284,7 +291,7 @@ impl AudioTriggerSection {
 
         let mut col = View::column(ROW_SPACING).fill_w().child(header);
 
-        if !self.is_collapsed {
+        if !self.is_collapsed() {
             if self.labels.is_empty() {
                 col = col.child(
                     View::label("No triggers on this layer")
@@ -365,7 +372,7 @@ impl AudioTriggerSection {
         self.first_node = self.host.node_id(0);
 
         self.audio_configs = (0..self.labels.len()).map(|_| None).collect();
-        if !self.is_collapsed {
+        if !self.is_collapsed() {
             for i in 0..self.labels.len() {
                 if !self.expanded.get(i).copied().unwrap_or(false) {
                     continue;
@@ -770,7 +777,7 @@ mod tests {
                 }],
             },
         );
-        section.toggle_collapsed();
+        section.set_collapsed(Some(false));
         section.expand_row(0);
         let mut tree = UITree::new();
         section.build(&mut tree, Rect::new(0.0, 0.0, 420.0, 260.0));
@@ -890,7 +897,21 @@ mod tests {
         assert_eq!(section.expanded, vec![false, true]);
     }
 
+    #[test]
+    fn untoggled_section_opens_exactly_when_the_layer_has_triggers() {
+        let one_row = AudioTriggerSectionConfig {
+            rows: vec![AudioTriggerRowConfig::default()],
+            sends: Vec::new(),
+        };
+        let mut section = AudioTriggerSection::new();
+        section.configure(Some(LayerId::new("empty")), &AudioTriggerSectionConfig::default());
+        assert!(section.is_collapsed());
+        section.configure(Some(LayerId::new("armed")), &one_row);
+        assert!(!section.is_collapsed(), "a loaded layer with triggers must show them");
 
-
-
+        section.toggle_collapsed();
+        assert_eq!(section.collapsed_setting(), Some(true));
+        section.configure(Some(LayerId::new("armed")), &one_row);
+        assert!(section.is_collapsed(), "an explicit toggle outlives resyncs");
+    }
 }

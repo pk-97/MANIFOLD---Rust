@@ -143,6 +143,7 @@ pub(crate) struct UiStateStamp {
     master_chrome_collapsed: bool,
     layer_chrome_collapsed: bool,
     clip_chrome_collapsed: bool,
+    audio_triggers_collapsed: Option<bool>,
 }
 
 impl UiStateStamp {
@@ -157,6 +158,7 @@ impl UiStateStamp {
         project.settings.master_chrome_collapsed = self.master_chrome_collapsed;
         project.settings.layer_chrome_collapsed = self.layer_chrome_collapsed;
         project.settings.clip_chrome_collapsed = self.clip_chrome_collapsed;
+        project.settings.audio_triggers_collapsed = self.audio_triggers_collapsed;
     }
 }
 
@@ -273,6 +275,7 @@ impl Application {
             master_chrome_collapsed: self.ws.ui_root.inspector.master_chrome().is_collapsed(),
             layer_chrome_collapsed: self.ws.ui_root.inspector.layer_chrome().is_collapsed(),
             clip_chrome_collapsed: self.ws.ui_root.inspector.clip_chrome().is_collapsed(),
+            audio_triggers_collapsed: self.ws.ui_root.inspector.audio_trigger_section().collapsed_setting(),
         };
 
         match spawn_autosave(snapshot, path, stamp) {

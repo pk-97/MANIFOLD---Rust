@@ -150,6 +150,10 @@ pub struct ProjectSettings {
     pub layer_chrome_collapsed: bool,
     #[serde(default)]
     pub clip_chrome_collapsed: bool,
+    // `None` (never toggled, or saved before this field): the AUDIO TRIGGERS
+    // section opens exactly when the selected layer has triggers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audio_triggers_collapsed: Option<bool>,
 
     // ── Legacy flat effect fields (V1.0.0) ──
     #[serde(
@@ -309,6 +313,7 @@ impl Default for ProjectSettings {
             master_chrome_collapsed: false,
             layer_chrome_collapsed: false,
             clip_chrome_collapsed: false,
+            audio_triggers_collapsed: None,
             legacy_bloom_amount: None,
             legacy_feedback_amount: None,
             legacy_pixel_sort_amount: None,

@@ -2254,7 +2254,7 @@ mod fire_meter_roundtrip_tests {
         // the AUDIO TRIGGERS section's clip-trigger row (d) is gated behind
         // its OWN collapse/expand UI state (`AudioTriggerSection`), which
         // `configure()` never touches — so it must be opened explicitly here.
-        ui.inspector.audio_trigger_section_mut().toggle_collapsed();
+        ui.inspector.audio_trigger_section_mut().set_collapsed(Some(false));
         ui.inspector.audio_trigger_section_mut().toggle_row_expanded(0);
 
         ui.build_inspector_in_rect(Rect::new(0.0, 0.0, 640.0, 4000.0));
