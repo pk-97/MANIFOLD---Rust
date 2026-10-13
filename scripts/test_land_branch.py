@@ -415,5 +415,120 @@ class StartCheckTests(unittest.TestCase):
         self.assertEqual([r['outcome'] for r in rows], ['red'])
 
 
+FAKE_INDEX = '''import sys
+from pathlib import Path
+docs = Path("docs")
+names = sorted(p.name for p in docs.glob("*.md") if p.name != "README.md")
+(docs / "README.md").write_text("index\\n" + "".join(n + "\\n" for n in names))
+'''
+
+
+class GeneratedMergeTests(unittest.TestCase):
+    """A real repo with a fake docs index generator: merging main into the
+    branch resolves generated-only conflicts and stale outputs by
+    regeneration, and stops on any other conflict as before."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name).resolve()
+        self.wt = self.root / 'repo'
+        (self.wt / 'docs').mkdir(parents=True)
+        gen = self.root / 'gen_index.py'
+        gen.write_text(FAKE_INDEX)
+        self.marker = self.root / 'catalog-ran'
+        catalog = self.root / 'gen_catalog.py'
+        catalog.write_text(f'open({str(self.marker)!r}, "w").close()\n')
+        self.generators = (
+            {'outputs': ('docs/README.md',), 'regen': [sys.executable, str(gen)], 'check': None,
+             'scope': None},
+            {'outputs': ('docs/CATALOG.md',), 'regen': [sys.executable, str(catalog)],
+             'check': None, 'scope': ('crates/manifold-node-engine/', 'crates/manifold-nodes')},
+        )
+        git(self.wt, 'init', '-q', '-b', 'main')
+        git(self.wt, 'config', 'user.name', 'Test')
+        git(self.wt, 'config', 'user.email', 'test@example.invalid')
+        git(self.wt, 'config', 'commit.gpgsign', 'false')
+        (self.wt / '.gitignore').write_text('target/\n')
+        (self.wt / 'lib.rs').write_text('base\n')
+        self.add_doc('a.md')
+        git(self.wt, 'switch', '-q', '-c', 'lane/x')
+
+    def add_doc(self, name, regen=True, extra=()):
+        (self.wt / 'docs' / name).write_text('# doc\n')
+        if regen:
+            subprocess.run([sys.executable, str(self.root / 'gen_index.py')], cwd=self.wt, check=True)
+        git(self.wt, 'add', '-A')
+        git(self.wt, 'commit', '-q', '-m', f'add {name}')
+
+    def main_moves(self, change):
+        git(self.wt, 'switch', '-q', 'main')
+        change()
+        git(self.wt, 'update-ref', 'refs/remotes/origin/main', 'main')
+        git(self.wt, 'switch', '-q', 'lane/x')
+
+    def merge(self, how='first'):
+        out = io.StringIO()
+        with patch.object(land_branch, 'GENERATED', self.generators), \
+                contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
+            if how == 'first':
+                land_branch.merge_main_into(self.wt, 'origin/main', 'merge origin/main into branch')
+            else:
+                land_branch.ATTEMPT = land_branch.new_attempt('lane/x')
+                with patch.object(land_branch, 'gate', return_value=(0, frozenset())):
+                    land_branch.regate_moved_main(self.wt, ['gate'], self.root / 'g.log')
+        return out.getvalue()
+
+    def index(self):
+        return (self.wt / 'docs' / 'README.md').read_text()
+
+    def assert_clean_and_merged(self):
+        self.assertEqual(git(self.wt, 'status', '--porcelain'), '')
+        self.assertEqual(self.index(), 'index\na.md\nb.md\nc.md\n')
+        git(self.wt, 'merge-base', '--is-ancestor', 'origin/main', 'HEAD')
+
+    def generated_conflict(self, how):
+        self.add_doc('b.md')
+        self.main_moves(lambda: self.add_doc('c.md'))
+        self.merge(how)
+        self.assert_clean_and_merged()
+
+    def test_generated_conflict_resolves_at_first_merge(self):
+        self.generated_conflict('first')
+
+    def test_generated_conflict_resolves_at_moved_main_regate(self):
+        self.generated_conflict('moved')
+
+    def test_conflict_in_source_file_stops_as_before(self):
+        (self.wt / 'lib.rs').write_text('branch\n')
+        git(self.wt, 'commit', '-q', '-am', 'branch edit')
+        def change():
+            (self.wt / 'lib.rs').write_text('main\n')
+            git(self.wt, 'commit', '-q', '-am', 'main edit')
+        self.main_moves(change)
+        err = io.StringIO()
+        with self.assertRaises(SystemExit) as stop, contextlib.redirect_stderr(err):
+            with patch.object(land_branch, 'GENERATED', self.generators), \
+                    contextlib.redirect_stdout(io.StringIO()):
+                land_branch.merge_main_into(self.wt, 'origin/main', 'merge origin/main into branch')
+        self.assertEqual(stop.exception.code, 1)
+        self.assertIn('[land] FAILED at merge origin/main into branch:', err.getvalue())
+
+    def test_stale_generated_file_without_conflict_is_regenerated(self):
+        self.add_doc('b.md')
+        self.main_moves(lambda: self.add_doc('c.md', regen=False))
+        self.merge()
+        self.assert_clean_and_merged()
+        self.assertIn('regenerate', git(self.wt, 'log', '-1', '--format=%s'))
+
+    def test_catalog_skipped_for_scripts_only_diff(self):
+        (self.wt / 'tool.py').write_text('x\n')
+        git(self.wt, 'add', '-A')
+        git(self.wt, 'commit', '-q', '-m', 'scripts only')
+        self.main_moves(lambda: self.add_doc('c.md'))
+        self.merge()
+        self.assertFalse(self.marker.exists())
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -245,9 +245,76 @@ def land_gated(a, worktree, base, gated_commit, verdict):
     return None
 
 
+_PY = sys.executable
+# Every generated file merges can conflict on. check None: regenerate, then
+# git status decides. scope: the generator runs only when the branch diff
+# touches one of these prefixes (or its output conflicted). Drift tests stay
+# the backstop; this keeps their outputs from stopping a landing.
+GENERATED = (
+    {'outputs': ('docs/node_catalog.json', 'docs/NODE_CATALOG.md'),
+     'regen': ['cargo', 'run', '-p', 'manifold-nodes', '--bin', 'gen_node_catalog', '--'],
+     'check': ['cargo', 'run', '-p', 'manifold-nodes', '--bin', 'gen_node_catalog', '--', '--check'],
+     'source': 'crates/manifold-nodes/src/bin/gen_node_catalog.rs',
+     'scope': ('crates/manifold-node-engine/', 'crates/manifold-nodes')},
+    {'outputs': ('docs/README.md',), 'regen': [_PY, 'scripts/gen_docs_index.py'],
+     'check': None, 'scope': None, 'source': 'scripts/gen_docs_index.py'},
+    {'outputs': ('scripts/TOOLS.md',), 'regen': [_PY, 'scripts/dev.py', '--write-index'],
+     'check': None, 'scope': None, 'source': 'scripts/dev.py'},
+    {'outputs': ('docs/GLB_CONFORMANCE_STATUS.md',),
+     'regen': [_PY, 'scripts/gen_glb_conformance_status.py'], 'check': None, 'scope': None,
+     'source': 'scripts/gen_glb_conformance_status.py'},
+)
+
+
+def merge_main_into(worktree, ref, name):
+    """Merge ref into the branch; a conflict only in generated files resolves
+    by regeneration, any other conflict stops exactly as a failed step. Then
+    regenerate stale outputs and commit them to the branch.
+
+    git merge-tree previews the conflict set without touching the tree, so
+    every case that is not generated-only runs the merge as one plain step."""
+    code, out = probe(['merge-tree', '--write-tree', '--name-only', 'HEAD', ref], worktree)
+    conflicted = set(out.split('\n\n')[0].splitlines()[1:]) if code == 1 else set()
+    generated = {p for g in GENERATED for p in g['outputs']}
+    if not conflicted or not conflicted <= generated:
+        step(name, ['git', 'merge', ref, '--no-edit'], worktree)
+        conflicted = set()
+    else:
+        step(name, ['git', 'merge', ref, '--no-edit'], worktree, check=False)
+        paths = sorted(conflicted)
+        step('take main side of generated files', ['git', 'checkout', '--theirs', '--', *paths],
+             worktree)
+        step('stage generated files', ['git', 'add', '--', *paths], worktree)
+        step('commit merge', ['git', 'commit', '--no-edit'], worktree)
+    regenerate_stale(worktree, ref, conflicted)
+
+
+def regenerate_stale(worktree, ref, conflicted):
+    """Runs only generators present in this tree; quiet when nothing is stale."""
+    changed = probe(['diff', '--name-only', f'{ref}...HEAD'], worktree)[1].split()
+    outputs = []
+    for g in GENERATED:
+        in_scope = (g['scope'] is None or conflicted & set(g['outputs'])
+                    or any(p.startswith(g['scope']) for p in changed))
+        if not in_scope or (g.get('source') and not (Path(worktree) / g['source']).exists()):
+            continue
+        if g['check'] and step('check ' + g['outputs'][0], g['check'], worktree,
+                               check=False).returncode == 0:
+            continue
+        step('regenerate ' + g['outputs'][0], g['regen'], worktree)
+        outputs += g['outputs']
+    if not outputs:
+        return
+    if not probe(['status', '--porcelain', '--', *outputs], worktree)[1]:
+        return
+    step('commit regenerated files',
+         ['git', 'commit', '-m', 'regenerate generated files after merging main', '--', *outputs],
+         worktree)
+
+
 def regate_moved_main(worktree, gate_cmd, gate_log):
     """Outside the lock: bring the branch onto the new origin/main and gate it."""
-    step('merge moved main into branch', ['git', 'merge', 'origin/main', '--no-edit'], worktree)
+    merge_main_into(worktree, 'origin/main', 'merge moved main into branch')
     gated_commit = git_out('pin gate commit', ['git', 'rev-parse', 'HEAD'], worktree)
     ATTEMPT['moved_main_regates'] += 1
     code, reds = gate(gate_cmd, worktree, gate_log)
@@ -410,7 +477,7 @@ def _main(a):
 
     step("fetch", ["git", "fetch", "origin", "main"], MAIN)
     base = git_out("origin/main", ["git", "rev-parse", "origin/main"], MAIN)
-    step("merge origin/main into branch", ["git", "merge", base, "--no-edit"], wt)
+    merge_main_into(wt, base, "merge origin/main into branch")
 
     # A reviewed named red needs every leg's result, including when the known
     # red is cheap. Completion is still enforced by CHECKS_RED below.
