@@ -86,6 +86,7 @@ struct ExportObservation {
     states: Vec<ContentState>,
     frames: Vec<crate::content_export::ExportFrameObservation>,
     gpu_abort_requested: bool,
+    render_attempts: u32,
 }
 
 fn output_dir(name: &str) -> PathBuf {
@@ -224,6 +225,7 @@ fn run_export(
         states,
         frames,
         gpu_abort_requested: crate::content_export::export_test_gpu_abort_requested(),
+        render_attempts: crate::content_export::export_test_render_attempts(),
     }
 }
 
@@ -551,9 +553,7 @@ fn rt_dynamic_export_fault_before_encode() {
             observation.gpu_abort_requested,
             matches!(
                 fault,
-                ExportTestFault::GpuFault
-                    | ExportTestFault::IgnoredSubmission
-                    | ExportTestFault::CompletionTimeout
+                ExportTestFault::GpuFault | ExportTestFault::IgnoredSubmission
             )
         );
         assert!(observation.states.iter().any(|state| {
@@ -572,6 +572,104 @@ fn rt_dynamic_export_fault_before_encode() {
             "{fault:?}: injection must stop before frame 1 and before native encoding"
         );
     }
+}
+
+/// A plain built-in generator: the fault-recovery tests exercise export
+/// control flow, not RT, so they do not depend on the RT fixture.
+fn plain_generator_project() -> Project {
+    let mut project = Project::default();
+    project.settings.bpm = Bpm(BPM);
+    project.settings.output_width = WIDTH as i32;
+    project.settings.output_height = HEIGHT as i32;
+    let mut layer = manifold_core::layer::Layer::new_generator(
+        "Plain export generator".into(),
+        PresetTypeId::new("Plasma"),
+        0,
+    );
+    layer
+        .clips
+        .push(TimelineClip::new_generator(Beats::ZERO, Beats(TWO_BEATS)));
+    project.timeline.layers.push(layer);
+    project
+}
+
+/// A hang re-renders the same frame without re-running the tick, so the
+/// frame sequence matches an uninterrupted export exactly.
+#[test]
+fn rt_dynamic_export_hang_retry_succeeds() {
+    use crate::content_export::ExportTestFault;
+    let dir = output_dir("rt_dynamic_export_hang_retry_succeeds");
+    let clean_path = dir.join("clean.mp4");
+    let clean = run_export(plain_generator_project(), config(&clean_path, WIDTH, HEIGHT, false, false), false, None);
+    assert!(clean.output.is_some());
+    for failing_attempts in [1u32, 2] {
+        let path = dir.join(format!("hang-{failing_attempts}.mp4"));
+        let fault = ExportTestFault::Hang { failing_attempts };
+        let hung = run_export(
+            plain_generator_project(),
+            config(&path, WIDTH, HEIGHT, false, false),
+            false,
+            Some((2, fault)),
+        );
+        assert!(hung.output.is_some(), "a retried hang must still finish the export");
+        assert!(!hung.gpu_abort_requested);
+        assert_eq!(hung.render_attempts, clean.render_attempts + failing_attempts);
+        assert_eq!(hung.frames.len(), clean.frames.len());
+        for (a, b) in hung.frames.iter().zip(&clean.frames) {
+            assert_eq!(
+                (a.frame_idx, a.time_seconds, a.dt_seconds, a.beat),
+                (b.frame_idx, b.time_seconds, b.dt_seconds, b.beat),
+                "a retried frame must keep the timeline position"
+            );
+            assert_eq!(a.generator_values, b.generator_values);
+        }
+        assert_video(&path, WIDTH, HEIGHT, clean.frames.len());
+    }
+}
+
+/// Retries run out: the export fails cleanly, names the frame and cause,
+/// deletes both partial files, and the app keeps running.
+#[test]
+fn rt_dynamic_export_hang_retries_exhausted_fails_cleanly() {
+    use crate::content_export::ExportTestFault;
+    let dir = output_dir("rt_dynamic_export_hang_exhausted");
+    let path = dir.join("hang.mp4");
+    let video_only = PathBuf::from(format!("{}.video_only.mp4", path.display()));
+    let observation = run_export(
+        plain_generator_project(),
+        config(&path, WIDTH, HEIGHT, false, false),
+        false,
+        Some((2, ExportTestFault::Hang { failing_attempts: 3 })),
+    );
+    assert!(!observation.gpu_abort_requested, "a hang must never abort the app");
+    assert!(observation.output.is_none());
+    let event = observation
+        .states
+        .iter()
+        .find_map(|state| state.export_finished.as_ref())
+        .expect("failure is reported to the UI");
+    assert!(!event.success);
+    assert!(event.message.contains("frame 2"), "{}", event.message);
+    assert!(event.message.contains("GPU hang"), "{}", event.message);
+    assert!(event.message.contains("2 retries"), "{}", event.message);
+    assert!(!path.exists() && !video_only.exists(), "partial files must be deleted");
+}
+
+/// A page fault leaves the device untrustworthy: still the fatal path, no retry.
+#[test]
+fn rt_dynamic_export_page_fault_still_aborts() {
+    use crate::content_export::ExportTestFault;
+    let dir = output_dir("rt_dynamic_export_page_fault_aborts");
+    let path = dir.join("fault.mp4");
+    let observation = run_export(
+        plain_generator_project(),
+        config(&path, WIDTH, HEIGHT, false, false),
+        false,
+        Some((1, ExportTestFault::GpuFault)),
+    );
+    assert!(observation.gpu_abort_requested);
+    assert!(observation.output.is_none());
+    assert!(!path.exists());
 }
 
 fn imported_modifiers_content(recipes: &[&str]) -> crate::content_thread::ContentThread {

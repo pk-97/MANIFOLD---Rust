@@ -502,7 +502,7 @@ fn trigger_lane_force_mixed_audio_timing_acceptance() {
         .expect("audio mod must consume the synthetic send");
     let mut content = headless_content_thread(project, WIDTH, HEIGHT);
     content.engine.set_state(PlaybackState::Playing);
-    let initial_faults = manifold_gpu::gpu_fault::fault_count();
+    let initial_faults = manifold_gpu::gpu_fault::mark();
 
     let mut retained_audio_hops = 0usize;
     let mut max_audio_ms = 0.0f64;
@@ -563,7 +563,7 @@ fn trigger_lane_force_mixed_audio_timing_acceptance() {
         let render_ms = render_start.elapsed().as_secs_f64() * 1000.0;
         content
             .content_pipeline
-            .wait_for_export_complete(initial_faults)
+            .wait_for_export_complete(&initial_faults)
             .expect("native frame must complete without GPU faults");
         content.engine.reclaim_tick_result(tick_result);
 

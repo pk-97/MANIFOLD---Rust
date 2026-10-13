@@ -3800,6 +3800,11 @@ impl RenderScene {
                     bytemuck::cast_slice(&self.rt_motion_upload),
                 );
                 let tracer = self.rt_tracer.as_ref().expect("ensured above");
+                // A cut, seek or topology change voids the measured trace
+                // cost, so the trace restarts from small tiles (BUG-k1n2w).
+                if reset_decision {
+                    tracer.restart_trace_tiles();
+                }
                 let accel = self.rt_accel.as_ref().expect("rt_ready implies rt_accel.is_some()");
                 // P4a: the emissive count/mean/area/local flag live in the
                 // GPU-written stats buffer, not CPU params. Bind the table's

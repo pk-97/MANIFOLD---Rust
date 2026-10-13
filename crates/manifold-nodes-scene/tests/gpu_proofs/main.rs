@@ -11,6 +11,7 @@ mod render_scene_punctual_fidelity;
 mod render_scene_shadows;
 mod render_scene_uv1_preservation;
 mod rt_6caster_shadow;
+mod rt_alpha_walk_bound;
 mod rt_bug17r3_lightless_gi;
 mod rt_bug88m_blend_specular_gate;
 mod rt_dynamic_fusion;
