@@ -282,6 +282,10 @@ pub struct AutomationLaneScreen {
     /// Whether this param is integral — new points click-added on it default
     /// to `Hold` instead of `Linear` (`docs/AUTOMATION_LANES_DESIGN.md` section 8).
     pub whole_numbers: bool,
+    /// The param's current value in param units when this is a placeholder
+    /// lane (no breakpoints yet). The first click lands here, not at the
+    /// clicked height.
+    pub placeholder_value: Option<f32>,
 }
 
 impl AutomationLaneScreen {
@@ -574,6 +578,7 @@ mod automation_lane_geometry_tests {
             param_min: 0.0,
             param_max: 1.0,
             whole_numbers: false,
+            placeholder_value: None,
         }
     }
 

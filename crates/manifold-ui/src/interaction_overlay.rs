@@ -334,7 +334,8 @@ struct AutomationPressDraft {
     shape: UiSegmentShape,
     segment: bool,
     hit: AutomationHit,
-    click_seen: bool,
+    param_min: f32,
+    param_max: f32,
 }
 
 #[derive(Debug, Clone)]
@@ -851,6 +852,9 @@ pub struct InteractionOverlay {
     automation_lane_snapshots: Vec<AutomationLaneGestureSnapshot>,
     automation_press: Option<AutomationPressDraft>,
     forced_automation_hit: Option<AutomationHit>,
+    /// Set when a press draft was cancelled or committed: the gesture is
+    /// finished, so a Click routed after it must not insert again.
+    /// Cleared by the next pointer-down.
     suppress_next_automation_click: bool,
 }
 
@@ -915,10 +919,21 @@ impl InteractionOverlay {
         host.request_automation_lane_resync();
     }
 
-    fn commit_pending_automation_press(&mut self, host: &mut dyn TimelineEditingHost) {
+    fn commit_pending_automation_press(&mut self, host: &mut dyn TimelineEditingHost, ui_state: &mut UIState) {
         let Some(draft) = self.automation_press.take() else {
             return;
         };
+        ui_state.selected_automation_points.clear();
+        ui_state.automation_time_selection = None;
+        ui_state.automation_insert_beat = Some(draft.beat);
+        ui_state.selected_automation_point = Some(UiAutomationPointRef {
+            target: draft.target.clone(),
+            param_id: draft.param_id.clone(),
+            beat: draft.beat,
+            value_norm: ((draft.value - draft.param_min)
+                / (draft.param_max - draft.param_min).max(f32::EPSILON))
+                .clamp(0.0, 1.0),
+        });
         // The live preview already contains the candidate. Restore the
         // pre-press lane before issuing the authoritative insert so the
         // command captures the real old state and creates exactly one undo.
@@ -937,8 +952,7 @@ impl InteractionOverlay {
     }
 
     /// Arm a point candidate on a bare strip or curve segment. This mutates
-    /// only the host's live preview; the undoable insert happens at release
-    /// after the routed click is observed.
+    /// only the host's live preview; the undoable insert happens at release.
     pub fn on_pointer_down(
         &mut self,
         pos: Vec2,
@@ -992,7 +1006,7 @@ impl InteractionOverlay {
         let (value, segment_t, resolved_segment_left_beat) = segment_index
             .and_then(|_| segment_value_at_beat(lane, beat))
             .map(|(value, t, left_beat)| (value, t, Some(left_beat)))
-            .unwrap_or((lane.value_at_y(pos.y), 0.0, None));
+            .unwrap_or_else(|| (lane.placeholder_value.unwrap_or_else(|| lane.value_at_y(pos.y)), 0.0, None));
         let shape = if lane.whole_numbers { UiSegmentShape::Hold } else { UiSegmentShape::Linear };
         let old_points = host.automation_lane_points(&lane.target, &lane.param_id);
         let mut working = old_points.clone().unwrap_or_default();
@@ -1009,20 +1023,19 @@ impl InteractionOverlay {
             shape,
             segment: segment_index.is_some(),
             hit,
-            click_seen: false,
+            param_min: lane.param_min,
+            param_max: lane.param_max,
         });
     }
 
-    /// Finish or restore the candidate armed by [`Self::on_pointer_down`].
-    /// The click event marks the draft as committed; a bare pointer-up (for
-    /// example after a platform event was consumed) restores the snapshot.
-    pub fn on_pointer_up(&mut self, host: &mut dyn TimelineEditingHost) {
-        if self.automation_press.as_ref().is_some_and(|draft| draft.click_seen) {
-            self.commit_pending_automation_press(host);
-        } else {
-            self.restore_pending_automation_press(host);
+    /// Commit the candidate armed by [`Self::on_pointer_down`]. Release is
+    /// the commit signal: a drag or cancel has already consumed the draft,
+    /// and the routed Click can be lost when the tree rebuilds mid-press.
+    pub fn on_pointer_up(&mut self, host: &mut dyn TimelineEditingHost, ui_state: &mut UIState) {
+        if self.automation_press.is_some() {
+            self.commit_pending_automation_press(host, ui_state);
+            self.suppress_next_automation_click = true;
         }
-        self.suppress_next_automation_click = false;
     }
 
     // ── P2 motion (`UI_CRAFT_AND_MOTION_PLAN.md` D15/D17) ──────────────
@@ -1320,25 +1333,8 @@ impl InteractionOverlay {
                 self.restore_pending_automation_press(host);
                 return;
             }
-            if let Some(draft) = self.automation_press.as_mut() {
-                draft.click_seen = true;
-                ui_state.selected_automation_points.clear();
-                ui_state.automation_time_selection = None;
-                ui_state.automation_insert_beat = Some(draft.beat);
-                if let Some(lane) = viewport
-                    .automation_lane_screens()
-                    .iter()
-                    .find(|lane| lane.target == draft.target && lane.param_id == draft.param_id)
-                {
-                    ui_state.selected_automation_point = Some(UiAutomationPointRef {
-                        target: draft.target.clone(),
-                        param_id: draft.param_id.clone(),
-                        beat: draft.beat,
-                        value_norm: ((draft.value - lane.param_min)
-                            / (lane.param_max - lane.param_min).max(f32::EPSILON))
-                            .clamp(0.0, 1.0),
-                    });
-                }
+            // The pending press owns this gesture; release commits it.
+            if self.automation_press.is_some() {
                 return;
             }
         }
@@ -1551,7 +1547,7 @@ impl InteractionOverlay {
                         .map(|(value, _, _)| value)
                         .unwrap_or_else(|| lane.value_at_y(pos.y))
                 } else {
-                    lane.value_at_y(pos.y)
+                    lane.placeholder_value.unwrap_or_else(|| lane.value_at_y(pos.y))
                 };
                 let shape = if lane.whole_numbers {
                     UiSegmentShape::Hold
@@ -4585,8 +4581,22 @@ mod p1_4_gesture_integrity_tests {
     }
 
     fn build_viewport_with_automation() -> TimelineViewportPanel {
+        use crate::view::UiAutomationPoint;
+        build_viewport_with_lane(
+            vec![
+                UiAutomationPoint { beat: Beats::from_f32(4.0), value_norm: 0.5, shape: UiSegmentShape::Linear },
+                UiAutomationPoint { beat: Beats::from_f32(8.0), value_norm: 0.8, shape: UiSegmentShape::Linear },
+            ],
+            false,
+        )
+    }
+
+    fn build_viewport_with_lane(
+        points: Vec<crate::view::UiAutomationPoint>,
+        placeholder: bool,
+    ) -> TimelineViewportPanel {
         use crate::panels::viewport::ViewportAutomationLane;
-        use crate::view::{UiAutomationLane, UiAutomationPoint};
+        use crate::view::UiAutomationLane;
         use manifold_foundation::EffectId;
 
         let mut tree = UITree::new();
@@ -4607,14 +4617,11 @@ mod p1_4_gesture_integrity_tests {
                 param_id: ParamId::Borrowed("amount"),
                 target: UiGraphTarget::Effect(EffectId::new("fx-mirror")),
                 label: "Mirror: amount".into(),
-                points: vec![
-                    UiAutomationPoint { beat: Beats::from_f32(4.0), value_norm: 0.5, shape: UiSegmentShape::Linear },
-                    UiAutomationPoint { beat: Beats::from_f32(8.0), value_norm: 0.8, shape: UiSegmentShape::Linear },
-                ],
+                points,
                 param_min: 0.0,
                 param_max: 1.0,
                 whole_numbers: false,
-                placeholder: false,
+                placeholder,
             },
         }]);
         let mut layout = ScreenLayout::new(1920.0, 1080.0);
@@ -5201,14 +5208,55 @@ mod p1_4_gesture_integrity_tests {
         overlay.cancel_drag(&mut host);
         overlay.on_pointer_click(pos, false, false, 1, false, &mut host, &mut state, &panel);
         overlay.on_pointer_click(pos, false, false, 2, false, &mut host, &mut state, &panel);
-        overlay.on_pointer_up(&mut host);
+        overlay.on_pointer_up(&mut host, &mut state);
         assert!(!overlay.has_pending_automation_press());
         assert!(host.automation_added.is_empty());
         assert_eq!(host.automation_lane_restores.len(), 1);
         overlay.on_pointer_down(pos, &mut host, &mut state, &panel);
         overlay.on_pointer_click(pos, false, false, 1, false, &mut host, &mut state, &panel);
-        overlay.on_pointer_up(&mut host);
+        overlay.on_pointer_up(&mut host, &mut state);
         assert_eq!(host.automation_added.len(), 1, "next press must be independent of the cancelled gesture");
+    }
+
+    #[test]
+    fn automation_press_commits_on_release_without_click() {
+        let panel = build_viewport_with_automation();
+        let mut host = GestureTestHost::new(&["layer-0"]);
+        let mut state = UIState::new();
+        let mut overlay = InteractionOverlay::new(crate::color::CLIP_VERTICAL_PAD);
+        let lane = &panel.automation_lane_screens()[0];
+        let pos = Vec2::new(panel.beat_to_pixel(Beats(6.0)), lane.curve_rect().y_max() - 1.0);
+        overlay.on_pointer_down(pos, &mut host, &mut state, &panel);
+        overlay.on_pointer_up(&mut host, &mut state);
+        assert_eq!(host.automation_added.len(), 1, "release alone commits the press");
+        assert!(state.selected_automation_point.is_some());
+        overlay.on_pointer_click(pos, false, false, 1, false, &mut host, &mut state, &panel);
+        assert_eq!(host.automation_added.len(), 1, "a late click must not insert again");
+    }
+
+    #[test]
+    fn automation_first_click_on_empty_lane_uses_current_value() {
+        use crate::view::UiAutomationPoint;
+        let panel = build_viewport_with_lane(
+            vec![UiAutomationPoint { beat: Beats::ZERO, value_norm: 0.25, shape: UiSegmentShape::Linear }],
+            true,
+        );
+        let mut host = GestureTestHost::new(&["layer-0"]);
+        let mut state = UIState::new();
+        let mut overlay = InteractionOverlay::new(crate::color::CLIP_VERTICAL_PAD);
+        let lane = &panel.automation_lane_screens()[0];
+        assert_eq!(lane.placeholder_value, Some(0.25));
+        let pos = Vec2::new(panel.beat_to_pixel(Beats(6.0)), lane.curve_rect().y + 1.0);
+        overlay.on_pointer_down(pos, &mut host, &mut state, &panel);
+        overlay.on_pointer_click(pos, false, false, 1, false, &mut host, &mut state, &panel);
+        overlay.on_pointer_up(&mut host, &mut state);
+        assert_eq!(host.automation_added, vec![(Beats(6.0), 0.25)]);
+
+        // The no-press fallback path lands on the same value.
+        let mut host = GestureTestHost::new(&["layer-0"]);
+        let mut overlay = InteractionOverlay::new(crate::color::CLIP_VERTICAL_PAD);
+        overlay.on_pointer_click(pos, false, false, 1, false, &mut host, &mut state, &panel);
+        assert_eq!(host.automation_added, vec![(Beats(6.0), 0.25)]);
     }
 
     #[test]
