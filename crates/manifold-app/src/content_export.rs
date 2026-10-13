@@ -708,6 +708,11 @@ impl ContentThread {
             export_config.fps,
             export_config.has_audio(),
         );
+        // BUG-k1n2w: after a firmware GPU reset, more hangs in the same boot
+        // are likely whatever the project; only a reboot cleared them.
+        if let Some(resets) = manifold_gpu::firmware_reports::summary_since_boot() {
+            log::warn!("[Export] {resets}. Further GPU hangs are likely until a reboot; reboot before a long export.");
+        }
 
         // Seek to start (export mode was entered and the pipeline resized once
         // by the caller, before the section loop).
