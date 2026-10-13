@@ -413,6 +413,17 @@ class AudioPlanTests(unittest.TestCase):
                        self.row('a@mix-s9', 's9', 'proven (relative: x)', lag=0.002, path=self.t2b)])
         self.assertEqual((a.path, a.sha256), (self.t2b, 's9'))
 
+    def test_evicted_master_plays_from_its_review_wav(self):
+        import soundfile as sf
+        rows = [self.row('a@mix-s2', 's2', 'proven (kick and snare agree)', lag=-0.0125)]
+        Path(self.t2).unlink()
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(rp, 'REVIEW_DIR', Path(d)):
+            self.assertEqual(self.plan(rows).label, 'lab mix: master online-only')
+            sf.write(str(Path(d) / 'a_master_s2_stereo.wav'), np.zeros((4800, 2), np.float32), 48000)
+            a = self.plan(rows)
+            self.assertEqual((a.source, a.sha256), ('master', 's2'))
+            self.assertEqual(rp.cached_wav('a_master_s2')[1:], (2, 0.1))
+
     def test_kept_with_a_reason(self):
         a = self.plan([self.row('a@mix-s2', 's2', 'not proven (fit -29.07 s, labels use -29.22 s)')])
         self.assertEqual((a.source, a.shift_s), ('labelled', 0.0))

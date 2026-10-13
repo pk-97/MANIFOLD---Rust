@@ -103,5 +103,8 @@ band) within ±20 ms, found on the song's WAV and shifted back.
 
 - Folding an overlay into the label builders (a Peter-provenance layer the audit understands) is not designed.
 - The no-grid songs (worship, gerrit, two third-party sections) review without bar lines.
-- Drum stems skipped: heavy_on_mind, miracle, late_night, basalt, weight (unity check not aligned), staged (stems
-  online only); 46 songs have no drum stems in the catalogue.
+- Songs stay on the labelled file or play mono when an input is online-only; `build` lists those files (catalogue
+  `local = 0` or evicted) and never fetches them. Peter brings them down himself (`catalog.py download PATH --why`).
+- Masters proven by the review's in-memory proof (back_to_you, set_me_free, imitation, sol, touch, waypoints, running)
+  are not in `variant_proofs.json`; adding them there is a training change and Peter's call.
+- drmendez's lab mix has no `lab_mix` row in the catalogue yet, so it plays mono.

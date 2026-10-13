@@ -555,6 +555,8 @@ def audio_plan(song, con, proofs):
     # any local copy, or the proven file itself (its decoded audio is the master's: 'same audio as')
     reads = [(p, m['sha256']) for p in m['local_paths']] + [(r['path'], r['sha256'])]
     pick = next(((p, h) for p, h in reads if Path(p).exists() and not is_dataless(p)), None)
+    if pick is None:     # evicted since: a review WAV written from it when it was local still plays it
+        pick = next(((p, h) for p, h in reads if cached_wav(master_wav_stem(song.id, h))), None)
     if pick is None:
         return AudioPlan(why=f"master online-only ({Path(m['path']).name})", master=m)
     shift = registry.variant_shift(registry.variant_copy(song, r), song)
@@ -574,16 +576,17 @@ def review_proof(song, m, con):
     from tools.audio_analysis.catalog import variants
     from tools.audio_analysis.catalog.catalog import is_dataless
     from tools.audio_analysis.lab import offsets, registry
-    reads = [p for p in m['local_paths'] if Path(p).exists() and not is_dataless(p)]
-    if not reads:
-        return dict(status=f"master online-only ({Path(m['path']).name})")
-    path, sha = reads[0], m['sha256']
+    sha = m['sha256']
     key = variants.key_of(song.content_id, sha, REVIEW_PROOF_VERSION)
     cache = REVIEW_DIR / 'proofs' / f'{song.id}_{sha[:12]}.json'
     if cache.exists():
         got = json.loads(cache.read_text())
         if got.get('key') == key:
             return got['row']
+    reads = [p for p in m['local_paths'] if Path(p).exists() and not is_dataless(p)]
+    if not reads:
+        return dict(status=f"master online-only ({Path(m['path']).name})")
+    path = reads[0]
     if song.offset_s is None:
         row = dict(status='the song has no export offset or Ableton set')
     else:
@@ -909,9 +912,24 @@ def labelled_stereo(song, ref, con):
 
 
 def write_review_wav(path, x):
-    """48 kHz WAV, 24-bit when it fits under full scale (half the disk of float), else float."""
+    """48 kHz WAV, 24-bit when it fits under full scale (half the disk of float), else float. Written whole then moved
+    into place, so a WAV under its final name is always complete: build reuses it (cached_wav)."""
     import soundfile as sf
-    sf.write(str(path), x.astype(np.float32), OUT_SR, subtype='PCM_24' if np.abs(x).max() <= 1.0 else 'FLOAT')
+    tmp = Path(path).with_name(Path(path).stem + '.partial.wav')
+    sf.write(str(tmp), x.astype(np.float32), OUT_SR, subtype='PCM_24' if np.abs(x).max() <= 1.0 else 'FLOAT')
+    tmp.replace(path)
+
+
+def cached_wav(stem):
+    """(path, channels, seconds) of a review WAV already written under this name (stereo or mono), else None. Its name
+    carries what it was made from (the master's sha256, the song's content id, the drum lag), so it is reused without
+    reading the source again: Dropbox evicts files minutes after they are read."""
+    import soundfile as sf
+    for p in (REVIEW_DIR / f'{stem}_stereo.wav', REVIEW_DIR / f'{stem}.wav'):
+        if p.exists():
+            info = sf.info(str(p))
+            return p, info.channels, info.frames / info.samplerate
+    return None
 
 
 def fall_back(plan, why):
@@ -920,11 +938,16 @@ def fall_back(plan, why):
     plan.audio = AudioPlan(why=why, master=plan.audio.master)
 
 
+def master_wav_stem(song_id, sha):
+    return f'{song_id}_master_{sha[:12]}'
+
+
 def write_audio(plans):
     """The audio each plan plays and the proven drum stems as 48 kHz WAVs, stereo where the source is (else mono, the
-    reason in plan.audio.mono_why). A master is read only when it is local and still hashes to the catalogue's sha256,
-    else the plan falls back to its labelled file. Sets each plan's duration_s to its audio's length. Returns
-    ({song: mix path}, {song: drums path}, {song: why no drums})."""
+    reason in plan.audio.mono_why). A WAV already written under its name is reused (cached_wav). Otherwise a master is
+    read only when it is local and still hashes to its proof's sha256, else the plan falls back to its labelled file.
+    Sets each plan's duration_s to its audio's length. Returns ({song: mix path}, {song: drums path},
+    {song: why no drums})."""
     from tools.audio_analysis.catalog.catalog import connect, is_dataless, sha256_file
     from tools.audio_analysis.lab import registry
     songs = registry.load()
@@ -933,50 +956,63 @@ def write_audio(plans):
     REVIEW_DIR.mkdir(parents=True, exist_ok=True)
     for plan in plans:
         s = songs[plan.id]
+        sr = s.sample_rate
+        got = x = None
+        if plan.audio.source == 'master':
+            a = plan.audio
+            stem = master_wav_stem(s.id, a.sha256)
+            got = cached_wav(stem)
+            if got is None:
+                if not Path(a.path).exists() or is_dataless(a.path):
+                    fall_back(plan, f'master online-only ({Path(a.path).name})')
+                elif sha256_file(a.path) != a.sha256:
+                    fall_back(plan, f'master changed since the catalogue hashed it ({Path(a.path).name})')
+                else:
+                    x = read_stereo(a.path, sr)
         a = plan.audio
-        x = None
-        if a.source == 'master':
-            if is_dataless(a.path):
-                fall_back(plan, f'master online-only ({Path(a.path).name})')
-            elif sha256_file(a.path) != a.sha256:
-                fall_back(plan, f'master changed since the catalogue hashed it ({Path(a.path).name})')
-            else:
-                x = read_stereo(a.path, s.sample_rate)
-                name = f'{s.id}_master_{a.sha256[:12]}'
-        a = plan.audio
-        if x is None:
-            ref = registry.mix(s)
-            if abs(len(ref) / s.sample_rate - plan.duration_s) > 2e-3:
-                print(f'{s.id}: lab mix lasts {len(ref) / s.sample_rate:.3f} s, the labels say {plan.duration_s:.3f} s; '
+        if a.source == 'labelled':
+            stem = f'{s.id}_mix_{s.content_id[:12]}'
+            got = cached_wav(stem)
+            ref = None
+            if got is None or got[1] == 1:      # a mono WAV may be an older build's: try stereo again
+                ref = registry.mix(s)
+                st, a.mono_why = labelled_stereo(s, ref, con)
+                if st is not None:
+                    got, x = None, st
+                elif got is None:
+                    x = ref[:, None]
+            if ref is not None and abs(len(ref) / sr - plan.duration_s) > 2e-3:
+                print(f'{s.id}: lab mix lasts {len(ref) / sr:.3f} s, the labels say {plan.duration_s:.3f} s; '
                       f'the mix length is used')
-            x, a.mono_why = labelled_stereo(s, ref, con)
-            if x is None:
-                x = ref[:, None]
-            name = f'{s.id}_mix_{s.content_id[:12]}'
-        if x.shape[1] == 1 and a.mono_why is None:
+        if got is None:
+            p = REVIEW_DIR / f"{stem}{'_stereo' if x.shape[1] > 1 else ''}.wav"
+            write_review_wav(p, resample_48k(x, sr))
+            got = (p, x.shape[1], len(x) / sr)
+        p, a.channels, plan.duration_s = got
+        if a.channels == 1 and a.mono_why is None:
             a.mono_why = 'the source is mono'
-        a.channels = x.shape[1]
-        plan.duration_s = len(x) / s.sample_rate
-        stereo = '_stereo' if a.channels > 1 else ''
-        p = REVIEW_DIR / f'{name}{stereo}.wav'
-        if not p.exists():
-            write_review_wav(p, resample_48k(x, s.sample_rate))
         mixes[s.id] = p
         paths, lag, why = drum_stem_status(s.id)
-        if paths is not None and any(is_dataless(pp) for pp in paths):
-            paths, why = None, 'drum stems online-only'
         if paths is None:
             skipped[s.id] = why
             continue
-        k = lag + int(round(a.shift_s * s.sample_rate))   # the unity lag is to the labelled file; the audio is shifted on
-        y = np.zeros((0, 1))
-        for pp in paths:
-            y = add_channels(y, shift_channels(read_stereo(pp, s.sample_rate), k, len(x)))
+        k = lag + int(round(a.shift_s * sr))     # the unity lag is to the labelled file; the audio is shifted on
         tag = s.content_id[:12] if a.source == 'labelled' else f'master_{a.sha256[:12]}'
-        q = REVIEW_DIR / f"{s.id}_drums_{tag}_{k}{'_stereo' if y.shape[1] > 1 else ''}.wav"
-        if not q.exists():
-            write_review_wav(q, resample_48k(y, s.sample_rate))
-        drums[s.id] = q
+        dstem = f'{s.id}_drums_{tag}_{k}'
+        dgot = cached_wav(dstem)
+        online = any(is_dataless(pp) for pp in paths)
+        if dgot is None and online:
+            skipped[s.id] = 'drum stems online-only'
+            continue
+        if dgot is None or (dgot[1] == 1 and not online):     # a mono WAV may be an older build's: try stereo again
+            n = int(round(plan.duration_s * sr))
+            y = np.zeros((0, 1))
+            for pp in paths:
+                y = add_channels(y, shift_channels(read_stereo(pp, sr), k, n))
+            q = REVIEW_DIR / f"{dstem}{'_stereo' if y.shape[1] > 1 else ''}.wav"
+            write_review_wav(q, resample_48k(y, sr))
+            dgot = (q,)
+        drums[s.id] = dgot[0]
     return mixes, drums, skipped
 
 
