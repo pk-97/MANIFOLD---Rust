@@ -2,10 +2,31 @@
 use crate::ui_renderer::UIRenderer;
 use manifold_ui::automation_hit_tester::AutomationOperation;
 use manifold_ui::bitmap_renderer::timing_grid_lines;
-use manifold_ui::node::{Color32, Rect};
+use manifold_ui::node::{Color32, FontWeight, Rect};
 use manifold_ui::panels::viewport::AutomationLaneScreen;
 use manifold_ui::{UIState, color};
 use std::io::Write;
+
+/// Shortens the END of `text` with "…" until it fits `max_w`; returns the
+/// text to draw and its measured width.
+fn elide_end(ui: &mut UIRenderer, text: &str, max_w: f32) -> (String, f32) {
+    let size = color::FONT_LABEL;
+    let weight = FontWeight::Medium;
+    let w = ui.measure_text_cached(text, size, weight).x;
+    if w <= max_w {
+        return (text.to_string(), w);
+    }
+    let mut chars: Vec<char> = text.chars().collect();
+    while !chars.is_empty() {
+        chars.pop();
+        let cand: String = chars.iter().collect::<String>() + "…";
+        let w = ui.measure_text_cached(&cand, size, weight).x;
+        if w <= max_w {
+            return (cand, w);
+        }
+    }
+    (String::new(), 0.0)
+}
 
 fn dot(ui: &mut UIRenderer, x: f32, y: f32, radius: f32, tint: Color32) {
     ui.draw_rounded_rect(
@@ -198,27 +219,27 @@ pub fn emit_automation_lanes(
                     color::AUTOMATION_LINE_OVERRIDDEN_COLOR
                 },
             );
-            ui.draw_text(
-                r.x + 8.0,
-                r.y + 3.0,
-                &lane.label,
-                color::FONT_LABEL as f32,
-                color::TEXT_WHITE_C32,
-            );
-            let state = if lane.overridden {
-                "LAYER · ARRANGEMENT · OVERRIDDEN"
+            let label_color = if lane.overridden {
+                color::AUTOMATION_LINE_OVERRIDDEN_COLOR
+            } else if selected || feedback.is_some() {
+                color::AUTOMATION_LINE_COLOR
             } else {
-                "LAYER · ARRANGEMENT AUTOMATION"
+                color::TEXT_WHITE_C32
             };
-            if r.width > 380.0 {
-                ui.draw_text(
-                    r.x + r.width - 330.0,
-                    r.y + 4.0,
-                    state,
-                    color::AUTOMATION_LABEL_FONT as f32,
-                    color::AUTOMATION_LABEL_COLOR,
-                );
-            }
+            let full_label = if lane.overridden {
+                format!("{} · overridden", lane.label)
+            } else {
+                lane.label.to_string()
+            };
+            let avail = (header.width - 16.0).max(0.0);
+            let (shown, shown_w) = elide_end(ui, &full_label, avail);
+            ui.draw_text(
+                header.x + header.width - 8.0 - shown_w,
+                r.y + 3.0,
+                &shown,
+                color::FONT_LABEL as f32,
+                label_color,
+            );
             for norm in [0.0, 0.5, 1.0] {
                 let y = lane.y_at_norm(norm);
                 ui.draw_aa_line(
@@ -229,10 +250,10 @@ pub fn emit_automation_lanes(
                     1.0,
                     Color32::new(47, 50, 57, 255),
                 );
-                if graph.width >= 180.0 {
+                if graph.width >= 180.0 && norm != 0.5 {
                     readout(
                         ui,
-                        graph.x_max() - 65.0,
+                        graph.x + 6.0,
                         (y + 2.0).min(r.y_max() - 16.0),
                         None,
                         lane.beats_per_bar,
@@ -383,25 +404,8 @@ pub fn emit_automation_lanes(
                     Color32::new(91, 190, 220, 55),
                 );
             }
-            if r.height >= 64.0 {
-                let footer_y = r.y_max() - 20.0;
-                ui.draw_rect(
-                    r.x + 34.0,
-                    footer_y,
-                    (r.width - 34.0).max(0.0),
-                    20.0,
-                    Color32::new(20, 23, 28, 245),
-                );
-                ui.draw_text(
-                    r.x + 40.0,
-                    footer_y + 3.0,
-                    f.hint,
-                    color::AUTOMATION_LABEL_FONT as f32,
-                    color::TEXT_WHITE_C32,
-                );
-            }
-            // The operation hint stays in the footer; the nearby point tooltip
-            // is deliberately compact so long hints never overflow the lane.
+            // The point tooltip is deliberately compact so long hints never
+            // overflow the lane.
             if r.width >= 64.0 && r.height >= 24.0 {
                 let show_point_tooltip = matches!(
                     f.operation,
