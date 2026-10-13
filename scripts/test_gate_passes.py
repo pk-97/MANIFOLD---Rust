@@ -11,6 +11,7 @@ import io
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -112,6 +113,7 @@ class CacheTests(unittest.TestCase):
         self.write('.gitignore', 'target/\n__pycache__/\n.claude/orchestration/\ntests/fixtures/ignored.bin\n')
         self.write('scripts/ui-flows/manifest.json', '{"flows": {}, "path_triggers": {}}')
         self.write('scripts/codex_regressions.json', '{}\n')
+        self.write('tests/fixtures/tracked.txt', 'tracked fixture root')
         packages = [('base', ''), ('a', '[dependencies]\nbase = {path="../base"}\n'),
                     ('b', ''), ('manifold-nodes', '[dependencies]\nbase = {path="../base"}\n'
                      'manifold-node-engine = {path="../manifold-node-engine"}\n'),
@@ -132,6 +134,12 @@ class CacheTests(unittest.TestCase):
             self.write(f'crates/{name}/Cargo.toml',
                        f'[package]\nname = "{name}"\nversion = "0.1.0"\n{deps}{features}{targets}')
             self.write(f'crates/{name}/src/lib.rs', 'pub fn original() {}\n')
+            if name == 'base':
+                # Out-of-crate reads every dependent's key must carry.
+                self.write('crates/base/src/lib.rs',
+                           'pub fn original() {}\n'
+                           'pub const FIXTURE: &[u8] = include_bytes!("../../../tests/fixtures/ignored.bin");\n'
+                           'pub const SCOPE: &str = "../../scripts/gpu_scope.py";\n')
             if name == 'manifold-nodes':
                 self.write(f'crates/{name}/tests/gpu_proofs.rs', '')
                 self.write(f'crates/{name}/tests/glb_conformance.rs', '')
@@ -713,6 +721,14 @@ class CacheTests(unittest.TestCase):
                 self.assertIsNotNone(cache.proof_pass(self.repo, proof).record)
                 self.write(path, 'changed ' + path)
                 self.assertIsNone(cache.proof_pass(self.repo, proof).record)
+        # Files no crate names never invalidate a Rust leg.
+        cache.proof_pass(self.repo, proof).save(0)
+        a = ['cargo', 'nextest', 'run', '-p', 'a', '-E', 'test(foo)']
+        cache.command_pass(self.repo, 'tests', a).save(0)
+        for path in ('tools/catalog.sqlite', 'docs/DESIGN.md', 'assets/other.png'):
+            self.write(path, 'unrelated ' + path)
+            self.assertIsNotNone(cache.proof_pass(self.repo, proof).record, path)
+            self.assertIsNotNone(cache.command_pass(self.repo, 'tests', a).record, path)
         original = self.run_spec()
         cache.proof_pass(self.repo, original).save(0)
         changed = dict(original, filters=['different'])
@@ -1173,6 +1189,72 @@ class CacheTests(unittest.TestCase):
         self.assertIn('All BUG- tasks have passing verdicts', context)
         self.assertIsNone(flow_reason)
         self.assertIn('green marker matches', flow_context)
+
+
+class ExternalReadCoverageTests(unittest.TestCase):
+    """A false reuse lands a broken main: every out-of-crate path a crate's
+    source names must be inside that crate's Rust-leg key. Extraction here is
+    deliberately broader than the key's own scanner."""
+    REPO = Path(__file__).resolve().parents[1]
+    LINE = re.compile(r'include_str!|include_bytes!|#\[path|CARGO_MANIFEST_DIR|"\.\./|'
+                      r'scripts/|tools/|docs/|assets/|native/|shaders/|vendor/|tests/|\.claude/|'
+                      r'join\("')
+    COMPILE = re.compile(r'include_str!|include_bytes!|include!|#\[path')
+    QUOTED = re.compile(r'"((?:[^"\\\n]|\\.)*)"')
+
+    def named_paths(self, crate, compile_only):
+        repo, root = self.REPO, self.REPO / crate
+        top = {p.name for p in repo.iterdir()}
+        found = {}
+        for file in root.rglob('*.rs'):
+            if {'target', '.git'} & set(file.relative_to(root).parts):
+                continue
+            text = cache._join_chains(file.read_text(errors='replace'))
+            for number, line in enumerate(text.splitlines(), 1):
+                if not self.LINE.search(line) or (compile_only and not self.COMPILE.search(line)):
+                    continue
+                for literal in self.QUOTED.findall(line):
+                    for word in {literal, *literal.split()}:
+                        token = word.split('{')[0].split('*')[0]
+                        # Prose words are paths only with a slash.
+                        if not token or ('/' not in token and word != literal):
+                            continue
+                        for base in (file.parent, root, repo):
+                            if base == repo and token.split('/')[0] not in top - {'crates'} \
+                                    and not token.startswith('crates/'):
+                                continue
+                            target = Path(os.path.normpath(base / token))
+                            if not target.exists() or repo not in target.parents:
+                                continue
+                            rel = target.relative_to(repo).as_posix()
+                            if root.is_relative_to(target) or rel.startswith(crate + '/') \
+                                    or 'target' in Path(rel).parts:
+                                continue
+                            found.setdefault(rel, f'{file.relative_to(repo)}:{number}')
+        return found
+
+    def test_every_named_out_of_crate_path_is_keyed(self):
+        crates = sorted(p.parent.relative_to(self.REPO).as_posix()
+                        for p in self.REPO.glob('crates/*/Cargo.toml'))
+        self.assertTrue(crates)
+        missing = []
+        for crate in crates:
+            for compile_only in (False, True):
+                keyed = cache.crate_external_reads(self.REPO, crate, runtime=not compile_only)
+                for rel, where in self.named_paths(crate, compile_only).items():
+                    if (crate, rel) in cache.NARROWED_DIR_REFS:
+                        continue
+                    if not any(rel == k or rel.startswith(k + '/') for k in keyed):
+                        missing.append(f'{"clippy" if compile_only else "tests"} key of '
+                                       f'{crate} misses {rel} (named at {where})')
+        self.assertEqual(missing, [], 'widen crate_external_reads or review a narrowing')
+
+    def test_reviewed_scripts_read_only_themselves_and_imports(self):
+        # The shell entry is read as text by its test, never run.
+        for rel in sorted(r for r in cache.SELF_CONTAINED_SCRIPTS if r.endswith('.py')):
+            text = (self.REPO / rel).read_text()
+            self.assertNotIn('with_name', text, rel)
+            self.assertNotRegex(text, r'__file__|\$\(dirname|BASH_SOURCE', rel)
 
 
 if __name__ == '__main__':

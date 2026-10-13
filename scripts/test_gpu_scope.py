@@ -57,8 +57,10 @@ def fixture_workspace(repo):
         "manifold-gpu": ("crates/manifold-gpu", False, []),
     }
     for index, (name, (root, gpu, tests)) in enumerate(rows.items()):
-        targets = [{"name": name, "kind": ["lib"], "src_path": str(repo / root / "src/lib.rs"),
-                    "required-features": []}]
+        # manifold-app is binary-only, like the real crate.
+        targets = [] if name == "manifold-app" else [
+            {"name": name, "kind": ["lib"], "src_path": str(repo / root / "src/lib.rs"),
+             "required-features": []}]
         targets.extend({"name": target, "kind": ["test"],
                         "src_path": str(repo / root / "tests" / ("renderer_contracts/gpu_proofs/main.rs" if target == "renderer_gpu_proofs" else "gpu_proofs/main.rs" if target == "gpu_proofs" else f"{target}.rs")),
                         "required-features": [] if (name in ("manifold-ui-paint", "manifold-nodes") and target == "main") or target == "renderer_contracts" else ["gpu-proofs"]}
@@ -142,7 +144,7 @@ class ScopeTests(unittest.TestCase):
         result = g.Plan(paths=["synthetic"], workspace=workspace,
                         filters=set(g.SMOKE_FILTERS) | {"future::filter"})
         runs = result.runs()
-        self.assertEqual(len(runs), 20)
+        self.assertEqual(len(runs), 19)  # manifold-app has no lib run
         self.assertTrue(all(run["filters"] == result.final_filters() for run in runs))
 
     def test_whole_package_override_survives_filter_pruning(self):
@@ -725,6 +727,57 @@ class ScopeTests(unittest.TestCase):
         self.assertFalse(result.whole_packages)
         self.assertFalse(result.unmapped)
 
+    def test_app_sources_no_proof_compiles_run_smoke_only(self):
+        repo = Path(__file__).resolve().parents[1]
+        workspace = g.Workspace(repo)
+        self.assertFalse(workspace.targets('manifold-app', 'lib'))
+        for path in ('crates/manifold-app/src/ui_bridge/editing.rs',
+                     'crates/manifold-app/src/app_lifecycle.rs',
+                     'crates/manifold-app/src/content_pipeline.rs'):
+            with self.subTest(path=path):
+                result = g.plan_for_paths([path], repo, workspace=workspace, cpu_plan=None)
+                self.assertTrue(result.active)
+                self.assertFalse(result.unmapped)
+                self.assertFalse(result.whole_packages)
+                self.assertFalse(result.required_binaries)
+                self.assertEqual(result.final_filters(), sorted(g.SMOKE_FILTERS))
+                self.assertTrue(any('smoke only' in note for note in result.notes))
+
+    def test_app_source_mounted_by_a_proof_selects_that_module(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            workspace = fixture_workspace(repo)
+            src = repo / 'crates/manifold-app/src/shared_texture.rs'
+            src.parent.mkdir(parents=True)
+            src.write_text('')
+            root = repo / 'crates/manifold-app/tests/renderer_contracts/gpu_proofs/main.rs'
+            root.parent.mkdir(parents=True)
+            root.write_text('#[path = "../../../src/shared_texture.rs"]\nmod texture_share;\n')
+            path = src.relative_to(repo).as_posix()
+            result = g.plan_for_paths([path], repo, workspace=workspace, cpu_plan=None)
+            self.assertEqual(result.filters, {'texture_share::'})
+            self.assertFalse(result.whole_packages)
+            run = next(r for r in result.runs() if r['target'] == 'renderer_gpu_proofs')
+            self.assertIn('texture_share::', run['filters'])
+
+    def test_lib_packages_keep_the_whole_package_fallback(self):
+        repo = Path('/nonexistent')
+        workspace = fixture_workspace(repo)
+        workspace.packages['manifold-app']['targets'].append(
+            {'name': 'manifold_app', 'kind': ['lib'], 'required-features': [],
+             'src_path': str(repo / 'crates/manifold-app/src/lib.rs')})
+        for path, owner in (('crates/manifold-app/src/app_lifecycle.rs', 'manifold-app'),
+                            ('crates/manifold-compositor/src/unmapped_helper.rs', 'manifold-compositor')):
+            with self.subTest(path=path):
+                result = g.plan_for_paths([path], repo, workspace=workspace, cpu_plan=None)
+                self.assertIn(owner, result.whole_packages)
+
+    def test_unmapped_gpu_path_still_fails(self):
+        path = 'crates/manifold-app/src/orphan.wgsl'
+        result = plan([path], repo=self._repo_with(path))
+        self.assertTrue(result.unmapped)
+        self.assertIn('no run-everything fallback', g.unmapped_message(result))
+
     def test_non_gpu_paths_run_nothing(self):
         p = plan(["docs/X.md", "scripts/a.py", "crates/manifold-ui/src/lib.rs"])
         self.assertFalse(p.active)
@@ -1073,7 +1126,7 @@ class ScopeTests(unittest.TestCase):
         p = plan([E + 'runtime/tests/layer_skin.rs'], repo=repo)
         self.assertTrue(p.active)
         self.assertIn("runtime::layer_skin_tests::", p.filters)
-        self.assertTrue(p.runs()[0]["lib"])
+        self.assertTrue(any(run["lib"] for run in p.runs()))
 
     def test_undeclared_preset_runtime_test_file_falls_back_to_the_module(self):
         p = plan([E + 'runtime/tests/unknown.rs'])
