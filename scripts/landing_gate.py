@@ -504,6 +504,9 @@ def _main(stack):
                       help="diagnostic: run expensive legs even after cheap reds")
     mode.add_argument("--fail-fast", action="store_true",
                       help="stop at the first red")
+    mode.add_argument("--cheap", action="store_true",
+                      help="run only the legs before the expensive boundary, record their "
+                           "passes for reuse, publish no gate verdict")
     parser.add_argument('--plan-only', action='store_true', help='read-only plan including working-tree changes; no build, test or receipt writes')
     parser.add_argument('--paths-json', type=Path, help='plan-only path fixture with paths/base/head')
     args = parser.parse_args()
@@ -679,6 +682,8 @@ def _main(stack):
         return status
 
     if not paths:
+        if args.cheap:
+            return finish_cheap(results)
         if expensive_blocked(args, results):
             return refuse(repo, base_sha, results)
         flow_leg()
@@ -807,6 +812,8 @@ def _main(stack):
     # Keep the hold for scoped nextest: transitive helpers can open a device,
     # so source-path inspection alone cannot prove a selected test CPU-only.
     proofs_pending = run_gpu and not proof_cached and "gpu-proofs" not in unbuilt
+    if args.cheap:
+        return finish_cheap(results)
     if expensive_blocked(args, results):
         return refuse(repo, base_sha, results)
     if pending_tests or (flows_pending and "flow-gate" not in unbuilt) or proofs_pending or gpu_tooling:
@@ -955,6 +962,24 @@ def expensive_blocked(args, results):
     for label in ('tests', 'flow-gate', 'gpu-proofs'):
         skip(results, label, reason)
     return True
+
+
+def finish_cheap(results):
+    """End a --cheap run at the expensive boundary. Leg passes were already
+    saved by run_check under the full gate's keys; this writes no timing row,
+    no verdict and no [COMPLETE] line, so nothing reads it as a landing pass."""
+    results = [('REUSED' if status == 'PASS' and any(line.startswith('[REUSED]') for line in tail)
+                else status, label, duration, tail) for status, label, duration, tail in results]
+    for status, label, duration, tail in results:
+        print(f"{status} {label}" + (f" ({duration:.0f}s)" if duration else ""))
+        for line in tail:
+            if status == 'FAIL' and line.startswith('rerun: '):
+                print(line)
+    failed = sum(1 for status, *_ in results if status == 'FAIL')
+    passed = sum(1 for status, *_ in results if status in {'PASS', 'REUSED'})
+    print(f"cheap gate: {passed} passed, {failed} failed; tests, flows and GPU proofs not run "
+          "(not a landing pass)", flush=True)
+    return 1 if failed else 0
 
 
 def refuse(repo, base_sha, results):
