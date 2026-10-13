@@ -76,6 +76,37 @@ class MetricsTests(unittest.TestCase):
         self.assertIn('1011.000s', out.getvalue())
         self.assertNotIn('LANDING METRICS: RED', out.getvalue())
 
+    def test_slow_marker_rows_are_dropped(self):
+        recent = row(self.now, 0, [('tests', 'PASS', 100)])
+        recent['checks'][0]['slow_tests'] = [
+            {'name': '(────) pkg real', 's': 60.0}, {'name': 'pkg real', 's': 45.0}]
+        self.assertEqual(lm.summarize([recent], 1)['slow_tests'],
+                         [{'name': 'pkg real', 'max_s': 45.0, 'landings': 1}])
+
+    def test_attempts_report_landing_time_percentiles_and_split(self):
+        def attempt(minutes, outcome='landed', **extra):
+            start = self.now
+            return {'branch': 'b', 'start': start.isoformat(),
+                    'end': (start + timedelta(minutes=minutes)).isoformat(), 'outcome': outcome,
+                    'gate_runs': 1, 'moved_main_regates': 0, 'lock_wait_s': 2.0, 'gpu_wait_s': None,
+                    **extra}
+        attempts = [attempt(m) for m in (10, 20, 30, 40, 50, 60, 70, 80, 90, 100)]
+        attempts += [attempt(500, 'red', gpu_wait_s=30.0), attempt(1, 'cancelled', moved_main_regates=2)]
+        m = lm.summarize_attempts(attempts)
+        self.assertEqual((m['landing_median_min'], m['landing_p90_min']), (55.0, 100.0))
+        self.assertEqual(m['outcomes'], {'landed': 10, 'red': 1, 'cancelled': 1})
+        self.assertEqual((m['attempt_gate_runs'], m['attempt_moved_main_regates'],
+                          m['attempt_lock_wait_s'], m['attempt_gpu_wait_s']), (12, 2, 24, 30))
+        text = lm.render({**lm.summarize(self.rows(), 2), **m}, 7)
+        self.assertIn('median 55.0 min, p90 100.0 min', text)
+        self.assertIn('moved-main re-gates 2', text)
+        with tempfile.TemporaryDirectory() as d:
+            timings = Path(d) / 'landing-gate-timings.jsonl'
+            self.assertEqual(lm.read_attempts(timings, self.now), [])
+            timings.with_name('landing-runs.jsonl').write_text(
+                '\n'.join(json.dumps(a) for a in attempts) + '\n')
+            self.assertEqual(len(lm.read_attempts(timings, self.now - timedelta(days=1))), 12)
+
     def test_window_and_red_threshold(self):
         with tempfile.TemporaryDirectory() as d:
             path = Path(d) / "t.jsonl"
