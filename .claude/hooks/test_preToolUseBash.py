@@ -846,6 +846,135 @@ def test_xargs_gated_on_its_command():
           not hook.is_preapproved_command("cat list | xargs"))
 
 
+def _git(repo, *args):
+    import subprocess
+    out = subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True)
+    assert out.returncode == 0, (args, out.stderr)
+    return out.stdout.strip()
+
+
+def _land_repo(td):
+    """Bare origin + clone on main; branch feat/code changes src/, feat/docs
+    changes docs/ only. origin/main is current."""
+    origin, repo = Path(td) / "origin.git", Path(td) / "repo"
+    _git(td, "init", "-q", "--bare", "-b", "main", str(origin))
+    _git(td, "clone", "-q", str(origin), str(repo))
+    for k, v in (("user.email", "t@t"), ("user.name", "t")):
+        _git(repo, "config", k, v)
+    _git(repo, "checkout", "-q", "-b", "main")
+    (repo / "src").mkdir()
+    (repo / "docs").mkdir()
+    (repo / "src/a.rs").write_text("a\n")
+    (repo / "docs/d.md").write_text("d\n")
+    _git(repo, "add", "--", "src", "docs")
+    _git(repo, "commit", "-q", "-m", "base", "--", "src", "docs")
+    _git(repo, "push", "-q", "origin", "main")
+    _git(repo, "checkout", "-q", "-b", "feat/code")
+    (repo / "src/a.rs").write_text("b\n")
+    _git(repo, "commit", "-q", "-m", "code", "--", "src/a.rs")
+    _git(repo, "checkout", "-q", "main")
+    _git(repo, "checkout", "-q", "-b", "feat/docs")
+    (repo / "docs/d.md").write_text("e\n")
+    _git(repo, "commit", "-q", "-m", "docs", "--", "docs/d.md")
+    _git(repo, "checkout", "-q", "main")
+    return repo
+
+
+def _record_pass(repo, tree):
+    common = (repo / _git(repo, "rev-parse", "--git-common-dir")).resolve()
+    (common / hook.LAND_PASS_DIR).mkdir(exist_ok=True)
+    (common / hook.LAND_PASS_DIR / f"{tree}.json").write_text("{}")
+
+
+def test_land_pass_guard_denies_bypass_shapes():
+    with tempfile.TemporaryDirectory() as td:
+        repo = _land_repo(td)
+        other = Path(td) / "elsewhere"
+        other.mkdir()
+        shapes = {
+            "git merge while on main": ("git merge feat/code", str(repo)),
+            "git merge --no-ff while on main": ("git merge --no-ff -m 'x y' feat/code", str(repo)),
+            "git -C <path> merge": (f'git -C "{repo}" merge feat/code', str(other)),
+            "checkout main && merge": ("git checkout feat/code && git checkout main && git merge feat/code", str(repo)),
+            "push origin HEAD:main": ("git push origin HEAD:main", None),
+            "push origin <branch>:main": ("git push origin feat/code:main", str(repo)),
+            "push origin <branch>:refs/heads/main": ("git push origin feat/code:refs/heads/main", str(repo)),
+            "git -C <path> push <br>:main": (f'git -C "{repo}" push origin feat/code:main', str(other)),
+            "gh pr merge": ("gh pr merge 12 --squash", str(repo)),
+            "update-ref main": ("git update-ref refs/heads/main feat/code", str(repo)),
+        }
+        for name, (cmd, cwd) in shapes.items():
+            if name == "push origin HEAD:main":
+                _git(repo, "checkout", "-q", "feat/code")
+                cwd = str(repo)
+            reason = hook.land_pass_guard(cmd, cwd)
+            check(f"land pass: {name} -> denied", reason is not None, reason)
+            if name == "push origin HEAD:main":
+                _git(repo, "checkout", "-q", "main")
+        _git(repo, "checkout", "-q", "feat/code")
+        check("land pass: bare push on main denied",
+              hook.land_pass_guard("git push", str(repo)) is None, "feat branch bare push is not main")
+        _git(repo, "checkout", "-q", "main")
+        _git(repo, "merge", "-q", "--ff-only", "feat/code")
+        check("land pass: push --all with unpassed main commits denied",
+              hook.land_pass_guard("git push --all origin", str(repo)) is not None)
+        check("land pass: bare push on main with unpassed commits denied",
+              hook.land_pass_guard("git push", str(repo)) is not None)
+
+
+def test_land_pass_guard_allowed_paths():
+    with tempfile.TemporaryDirectory() as td:
+        repo = _land_repo(td)
+        c = str(repo)
+        check("land pass: merge of a docs-only branch allowed",
+              hook.land_pass_guard("git merge --no-ff feat/docs", c) is None)
+        check("land pass: push of a docs-only branch to main allowed",
+              hook.land_pass_guard("git push origin feat/docs:main", c) is None)
+        check("land pass: merge on a feature branch allowed",
+              hook.land_pass_guard("git checkout feat/docs && git merge main", c) is None)
+        check("land pass: push of a feature branch to itself allowed",
+              hook.land_pass_guard("git push origin feat/code", c) is None)
+        check("land pass: merge --abort allowed",
+              hook.land_pass_guard("git merge --abort", c) is None)
+        check("land pass: push of main already on origin allowed",
+              hook.land_pass_guard("git push origin main", c) is None)
+        check("land pass: unrelated git commands untouched",
+              hook.land_pass_guard("git status && git log -3", c) is None)
+        # a recorded pass for the merged tree opens exactly that merge and push
+        tree = _git(repo, "rev-parse", "feat/code^{tree}")
+        check("land pass: unrecorded code push denied first",
+              hook.land_pass_guard("git push origin feat/code:main", c) is not None)
+        _record_pass(repo, tree)
+        check("land pass: recorded tree push allowed",
+              hook.land_pass_guard("git push origin feat/code:main", c) is None)
+        check("land pass: recorded tree merge allowed (ff result tree matches)",
+              hook.land_pass_guard("git merge feat/code", c) is None)
+        check("land pass: recorded tree update-ref allowed",
+              hook.land_pass_guard("git update-ref refs/heads/main feat/code", c) is None)
+
+
+def test_land_pass_guard_reads_land_branch_record():
+    """The writer in scripts/land_branch.py and this reader agree on the format."""
+    land_spec = importlib.util.spec_from_file_location(
+        "land_branch", HOOK_PATH.parents[2] / "scripts" / "land_branch.py")
+    sys.path.insert(0, str(HOOK_PATH.parents[2] / "scripts"))
+    try:
+        land = importlib.util.module_from_spec(land_spec)
+        land_spec.loader.exec_module(land)
+    finally:
+        sys.path.pop(0)
+    check("land pass: writer and reader share the directory name",
+          land.LAND_PASS_DIR == hook.LAND_PASS_DIR, (land.LAND_PASS_DIR, hook.LAND_PASS_DIR))
+    with tempfile.TemporaryDirectory() as td:
+        repo = _land_repo(td)
+        tree = _git(repo, "rev-parse", "feat/code^{tree}")
+        common = (repo / _git(repo, "rev-parse", "--git-common-dir")).resolve()
+        land.lock_path = lambda: common / land.LOCK_NAME
+        land.record_land_pass(tree, "abc", "feat/code", None)
+        check("land pass: record written by land_branch opens the push",
+              hook.land_pass_guard("git push origin feat/code:main", str(repo)) is None)
+
+
 def main():
     test_sed_guard_ignores_quoted_shell_variable()
     test_xargs_gated_on_its_command()
@@ -919,6 +1048,10 @@ def main():
     test_inline_python_heredoc_denied()
     test_inline_python_dash_c_denied()
     test_inline_python_script_path_unaffected()
+
+    test_land_pass_guard_denies_bypass_shapes()
+    test_land_pass_guard_allowed_paths()
+    test_land_pass_guard_reads_land_branch_record()
 
     test_index_add_denied_all_modes()
     test_pathspec_add_and_commit_unaffected()
