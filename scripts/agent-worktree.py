@@ -726,6 +726,11 @@ def clear_landed_target(wt):
         return 0, "target missing, linked or unmarked"
     if target_live_status(target) is not False:
         return 0, "live process"
+    # A slot missing its .git file lets git fall through to the main checkout,
+    # which reads clean and landed: the slot must be its own checkout.
+    top = git(wt, "rev-parse", "--show-toplevel", check=False)
+    if top.returncode != 0 or Path(top.stdout.strip()).resolve() != wt.resolve():
+        return 0, "not its own checkout"
     size = target_size(target)
     shutil.rmtree(target, ignore_errors=True)
     if target.exists():

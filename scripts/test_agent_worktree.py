@@ -860,6 +860,46 @@ def test_reclaim_whole_target_spares_leased_slot(repo):
     exe = fake_target(wt)
     text = _reclaim_until_short()
     check("leased slot target untouched", exe.exists(), text)
+    check("leased slot named unreclaimable for its lease",
+          "UNRECLAIMABLE slot-0:" in text and "leased" in text, text)
+
+
+def _reclaim_turning(wt, mutate):
+    """Run reclaim with the slot changing after the scan, before the clear."""
+    def scan_then_change(*_args, **_kwargs):
+        mutate(wt)
+        return 0, 0, []
+    with patch.object(aw, "maintain_caches", side_effect=scan_then_change):
+        return _reclaim_until_short()
+
+
+def test_clear_rechecks_a_slot_turned_dirty(repo):
+    wt = add_slot(repo, "slot-0", "lane/turns-dirty")
+    exe = fake_target(wt)
+    text = _reclaim_turning(wt, lambda w: (w / "f.txt").write_text("edited\n"))
+    check("slot dirtied after the scan keeps its target", exe.exists(), text)
+    check("slot dirtied after the scan is kept as dirty", "KEEP slot-0: dirty" in text, text)
+
+
+def test_clear_rechecks_a_slot_turned_leased(repo):
+    wt = add_slot(repo, "slot-0", "lane/turns-leased")
+    exe = fake_target(wt)
+    text = _reclaim_turning(wt, lambda w: write_lease(w, holder_pid=os.getpid()))
+    check("slot leased after the scan keeps its target", exe.exists(), text)
+    check("slot leased after the scan is kept as leased", "KEEP slot-0: leased" in text, text)
+
+
+def test_clear_refuses_a_slot_without_its_git_file(repo):
+    """Without .git, git -C slot resolves to the main checkout, which reads
+    clean and landed; the clear must check the slot is its own checkout."""
+    wt = add_slot(repo, "slot-0", "lane/no-git-file")
+    exe = fake_target(wt)
+    (wt / ".git").unlink()
+    with patch.object(aw, "slot_has_live_session", return_value=False), \
+            patch.object(aw, "target_live_status", return_value=False):
+        cleared, why = aw.clear_landed_target(wt)
+    check("slot without .git keeps its target", cleared == 0 and exe.exists(), why)
+    check("slot without .git names why", "checkout" in why, why)
 
 
 def test_reclaim_whole_target_spares_live_process(repo):
@@ -889,7 +929,10 @@ TESTS += [test_reclaim_clears_whole_target_of_landed_idle_slot,
           test_reclaim_whole_target_spares_unlanded_slot,
           test_reclaim_whole_target_spares_leased_slot,
           test_reclaim_whole_target_spares_live_process,
-          test_reclaim_whole_target_spares_main_checkout]
+          test_reclaim_whole_target_spares_main_checkout,
+          test_clear_rechecks_a_slot_turned_dirty,
+          test_clear_rechecks_a_slot_turned_leased,
+          test_clear_refuses_a_slot_without_its_git_file]
 
 
 TESTS += [test_scrub_frees_an_idle_slot_over_its_cap,

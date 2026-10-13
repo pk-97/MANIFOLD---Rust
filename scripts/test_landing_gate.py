@@ -398,6 +398,18 @@ class LandingTests(unittest.TestCase):
             logs = [p.read_text() for p in (root / "target/landing-logs").glob("*.log")]
             return code, called, timings, commands, logs, output.getvalue(), deps.call_count
 
+    def test_python_only_plan_never_admits_storage(self):
+        with patch.object(landing_gate, "storage_preflight", return_value=None) as preflight:
+            code, *_ = self.exercise(paths=['scripts/gate_readiness.py'])
+        self.assertEqual(code, 0)
+        preflight.assert_not_called()
+
+    def test_package_plan_admits_storage(self):
+        with patch.object(landing_gate, "storage_preflight", return_value=None) as preflight:
+            code, *_ = self.exercise()
+        self.assertEqual(code, 0)
+        preflight.assert_called_once()
+
     def test_nested_gpu_tooling_builds_before_hold_and_runs_after_cheap_checks(self):
         tooling = [
             {'name': 'nested-build', 'argv': ['python3', 'gpu_proofs_gate.py', '--build-only']},

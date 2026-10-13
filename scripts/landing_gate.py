@@ -68,6 +68,13 @@ import gate_readiness
 from gate_workspace import Workspace
 
 
+def drives_build(cmd):
+    return ((Path(cmd[0]).name == "cargo" and len(cmd) > 1
+             and cmd[1] in {"clippy", "nextest", "test", "check", "build", "run"})
+            or any(Path(arg).name in {"gpu_proofs_gate.py", "run_ui_flows.py"}
+                   for arg in cmd[:2]))
+
+
 def build_environment(cmd, cwd):
     """Check each build stage and pin Cargo to its admitted canonical target.
 
@@ -75,11 +82,7 @@ def build_environment(cmd, cwd):
     admission. Setting the absolute target also prevents a Cargo config file
     from silently redirecting a gate build to an unmanaged directory.
     """
-    builds = ((Path(cmd[0]).name == "cargo" and len(cmd) > 1
-               and cmd[1] in {"clippy", "nextest", "test", "check", "build", "run"})
-              or any(Path(arg).name in {"gpu_proofs_gate.py", "run_ui_flows.py"}
-                     for arg in cmd[:2]))
-    if not builds:
+    if not drives_build(cmd):
         return None, None
     from storage_budget import check_build
     repo = Path(cwd).resolve()
@@ -614,7 +617,11 @@ def _main(stack):
         print(json.dumps(dict(gate_readiness.describe(readiness), planning_seconds=planning_seconds), indent=2))
         return int(any(row[0] == 'FAIL' for row in results))
 
-    if paths:
+    # Admit the disk only for a plan that builds; a python-only landing must
+    # never demand the build reserve or reclaim other slots' caches.
+    builds = (packages or readiness['flows'] or touches_gpu
+              or any(drives_build(check['argv']) for check in readiness['tooling']))
+    if builds:
         refusal = storage_preflight(repo)
         if refusal:
             tail = refusal.splitlines()
