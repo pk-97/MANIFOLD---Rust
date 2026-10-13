@@ -24,7 +24,6 @@ import argparse
 import json
 import os
 import re
-import shutil
 import subprocess
 import sys
 import time
@@ -225,7 +224,8 @@ def save_seen(seen):
 
 
 def check_disk(problems):
-    free = shutil.disk_usage(MAIN_CHECKOUT).free
+    from storage_budget import disk_free
+    free = disk_free(MAIN_CHECKOUT)
     if free < DISK_FLOOR:
         problems.append(("FAIL", f"disk: {free / GIB:.0f} GiB free, under the {DISK_FLOOR // GIB} GiB build guard; every cargo run is refused. Clean merged slots' targets."))
     elif free < DISK_FLOOR + DISK_WARN_MARGIN:
