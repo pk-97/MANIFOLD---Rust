@@ -657,6 +657,23 @@ fn math_view_world_grid_matches_camera_and_ignores_object_transform() {
         encoder.commit_and_wait_completed();
         readback_raw_halves(&device, &target.texture, W, H)
     };
+    // MANIFOLD_MATH_GRID_PREVIEW=<dir> writes one PNG per view for a look,
+    // before any assertion can stop the test.
+    if let Ok(dir) = std::env::var("MANIFOLD_MATH_GRID_PREVIEW") {
+        let views = [
+            ("grazing", Camera::look_at([0.0, 1.0, 8.0], [0.0, 1.0, 0.0], [0.0, 1.0, 0.0], 1.0, 0.05, 1000.0)),
+            ("downward", camera),
+            ("stage", Camera::look_at([2.5, 1.6, 4.0], [0.0, 0.4, 0.0], [0.0, 1.0, 0.0], 0.8, 0.05, 1000.0)),
+            ("close", Camera::look_at([0.4, 0.3, 0.6], [0.0; 3], [0.0, 1.0, 0.0], 0.9, 0.01, 1000.0)),
+            ("high", Camera::look_at([30.0, 40.0, 50.0], [0.0; 3], [0.0, 1.0, 0.0], 0.9, 0.05, 1000.0)),
+        ];
+        for (name, view) in views {
+            render(view, Transform::default(), 1);
+            let rgba = manifold_node_engine::gpu::headless_readback::readback_srgb_rgba8(&device, &target.texture, W, H);
+            let png = manifold_node_engine::gpu::headless_readback::encode_rgba8_png(&rgba, W, H);
+            std::fs::write(format!("{dir}/grid-{name}.png"), png).unwrap();
+        }
+    }
     let mut previous = None;
     for camera in [
         camera,
@@ -694,9 +711,10 @@ fn math_view_world_grid_matches_camera_and_ignores_object_transform() {
             ]))
             .to_f32()
         };
+        let on_line = alpha_at([4.0, 0.0, 0.5]);
         assert!(
-            alpha_at([4.0, 0.0, 0.5]) > 0.08,
-            "grid must align to a projected world line beyond sample radius"
+            on_line > 0.08,
+            "grid must align to a projected world line beyond sample radius (alpha {on_line})"
         );
         assert!(
             alpha_at([4.5, 0.0, 0.5]) < 0.01,
@@ -738,9 +756,5 @@ fn math_view_world_grid_matches_camera_and_ignores_object_transform() {
             let alpha = half::f16::from_bits(u16::from_le_bytes([pixel[6], pixel[7]])).to_f32();
             assert_eq!(alpha, 0.0, "unresolved horizon graduation at row {row}");
         }
-    }
-    if let Ok(path) = std::env::var("MANIFOLD_MATH_GRID_PREVIEW") {
-        let rgba = manifold_node_engine::gpu::headless_readback::readback_srgb_rgba8(&device, &target.texture, W, H);
-        std::fs::write(path, manifold_node_engine::gpu::headless_readback::encode_rgba8_png(&rgba, W, H)).unwrap();
     }
 }

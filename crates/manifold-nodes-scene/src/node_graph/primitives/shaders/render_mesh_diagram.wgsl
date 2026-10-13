@@ -354,17 +354,35 @@ fn vs_main(@builtin(vertex_index) vi: u32, @builtin(instance_index) instance: u3
     return o;
 }
 
-fn grid_lines(p: vec2<f32>, footprint: vec2<f32>, spacing: f32) -> f32 {
-    let cell = p / spacing;
-    let distance = abs(fract(cell + vec2<f32>(0.5)) - vec2<f32>(0.5)) * spacing;
-    let pixels = distance / footprint;
-    let coverage = vec2<f32>(1.0) - smoothstep(vec2<f32>(u.line_width * 0.35), vec2<f32>(u.line_width * 0.35 + 1.0), pixels);
-    // Retire the whole graduation together. Independent axis fades leave
-    // a dense fan of longitudinal lines after the transverse cells vanish
-    // at a grazing camera angle, especially around the vanishing point.
-    let resolved = 1.0 - smoothstep(0.05, 0.2, max(footprint.x, footprint.y) / spacing);
-    return max(coverage.x, coverage.y) * resolved;
+// Per-axis coverage of `u.line_width`-pixel lines, given the distance to the
+// nearest line (0 on it, 1 mid-cell) and cells per pixel. A line that would
+// be thinner than a pixel stays one pixel wide and dims to its true coverage,
+// so distant lines average to a flat tone instead of shimmering
+// (Ben Golus, "The Best Darn Grid Shader").
+fn line_coverage(distance: vec2<f32>, cell_deriv: vec2<f32>) -> vec2<f32> {
+    let target_width = min(cell_deriv * u.line_width, vec2<f32>(1.0));
+    let draw_width = clamp(target_width, cell_deriv, vec2<f32>(0.5));
+    let aa = cell_deriv * 1.5;
+    var lines = vec2<f32>(1.0) - smoothstep(draw_width - aa, draw_width + aa, distance);
+    lines *= clamp(target_width / draw_width, vec2<f32>(0.0), vec2<f32>(1.0));
+    return mix(lines, target_width, clamp(cell_deriv * 2.0 - 1.0, vec2<f32>(0.0), vec2<f32>(1.0)));
 }
+
+fn grid_lines(p: vec2<f32>, deriv: vec2<f32>, spacing: f32) -> f32 {
+    let lines = line_coverage(1.0 - abs(fract(p / spacing) * 2.0 - 1.0), deriv / spacing);
+    return mix(lines.x, 1.0, lines.y);
+}
+
+// The two world axes as single lines, with the same width and softening as
+// the grid lines they sit on. x is the line x=0, y the line z=0.
+fn axis_lines(p: vec2<f32>, deriv: vec2<f32>) -> vec2<f32> {
+    let span = 10000.0;
+    return line_coverage(min(abs(p) * (2.0 / span), vec2<f32>(1.0)), deriv / span);
+}
+
+// Smallest on-screen cell, in pixels, before the finest level is gone.
+const GRID_MIN_CELL_PX: f32 = 60.0;
+const INV_LOG2_10: f32 = 0.30103;
 
 fn world_grid(pixel: vec2<f32>) -> vec4<f32> {
     // Native Metal framebuffer Y runs down; Camera clip-space Y runs up.
@@ -378,19 +396,39 @@ fn world_grid(pixel: vec2<f32>) -> vec4<f32> {
     let denominator = select(-max(abs(ray.y), 0.000001), max(abs(ray.y), 0.000001), ray.y >= 0.0);
     let t = -near.y / denominator;
     let world = near + t * ray;
-    let footprint = max(fwidth(world.xz), vec2<f32>(0.000001));
-    // Fixed world-unit graduations at 1, 10 and 100 units remain anchored
-    // during camera/object motion; finer levels fade out with perspective.
-    let fine = grid_lines(world.xz, footprint, 1.0);
-    let major = grid_lines(world.xz, footprint, 10.0);
-    let coarse = grid_lines(world.xz, footprint, 100.0);
-    let alpha = max(fine * 0.28, max(major * 0.40, coarse * 0.45));
+    let p = world.xz;
+    let deriv = max(
+        vec2<f32>(length(vec2<f32>(dpdx(p.x), dpdy(p.x))), length(vec2<f32>(dpdx(p.y), dpdy(p.y)))),
+        vec2<f32>(0.000001),
+    );
+    // Spacing follows zoom in powers of ten. The finest level fades out as
+    // its cells shrink, the next brightens to take its place, and every
+    // coarser level is full strength, so crossing a level boundary is seamless.
+    let lod = log2(max(deriv.x, deriv.y) * GRID_MIN_CELL_PX) * INV_LOG2_10;
+    let level = floor(lod);
+    let blend = lod - level;
+    let spacing = exp2(level / INV_LOG2_10);
+    // Fine holds near half strength through most of its range and mid
+    // reaches it exactly as the levels shift, which is what keeps it seamless.
+    let ease = blend * blend;
+    let fine = grid_lines(p, deriv, spacing) * (1.0 - ease) * 0.5;
+    let mid = grid_lines(p, deriv, spacing * 10.0) * (1.0 - ease * 0.5);
+    let major = grid_lines(p, deriv, spacing * 100.0);
+    let lines = max(fine, max(mid, major)) * 0.7;
+    // World X runs along z=0 (red), world Z along x=0 (blue).
+    let axes = axis_lines(p, deriv);
+    var color = vec3<f32>(0.24, 0.46, 0.52);
+    color = mix(color, vec3<f32>(0.90, 0.25, 0.25), axes.y);
+    color = mix(color, vec3<f32>(0.25, 0.45, 0.95), axes.x);
+    let alpha = max(lines, max(axes.x, axes.y) * 0.9);
+    // Fade toward the horizon by viewing angle, and before the far plane.
+    let grazing = abs(ray.y) / max(length(ray), 0.000001);
+    let horizon = smoothstep(0.02, 0.05, grazing) * (1.0 - pow(1.0 - grazing, 4.0));
     let distance = length(world - u.camera_pos_far.xyz);
     let fade_end = u.camera_pos_far.w * 0.9;
     let fade = 1.0 - smoothstep(fade_end * 0.35, fade_end, distance);
-    let horizon = smoothstep(0.02, 0.08, abs(ray.y) / max(length(ray), 0.000001));
     let visible = select(0.0, 1.0, t > 0.0 && t < 1.0 && u.grid != 0u);
-    return tone(vec4<f32>(0.18, 0.35, 0.40, alpha * fade * horizon * visible),grid_gain(world));
+    return tone(vec4<f32>(color, alpha * fade * horizon * visible), grid_gain(world));
 }
 
 fn world_grid_position(pixel: vec2<f32>) -> vec3<f32> {
