@@ -3,8 +3,9 @@
 //! order against a scene fixture. Artifacts land in
 //! `target/ui-snapshots/<scene>/run-<script-stem>/`: a numbered PNG/dump per
 //! `Snapshot`/`Dump` step, plus `result.json`, plus `filmstrip.png` when any
-//! `Step` action advanced frames (D9a). Exit 0 only if every step succeeded
-//! (D6, D10).
+//! `Step` action ran (D9a): one tile per `Snapshot`, since only a `Snapshot`
+//! composites (BUG-ych08, flows composite only on Snapshot steps). Exit 0 only
+//! if every step succeeded (D6, D10).
 //!
 //! Gesture synthesis (D4) follows `interact.rs`'s `select_layer` precedent —
 //! `UIRoot::pointer_event` → `ui.process_events()` (the SAME per-frame call
@@ -279,17 +280,12 @@ fn run_flow(
     let tex_w = (super::LOGICAL_W * super::SCALE) as u32;
     let tex_h = (super::LOGICAL_H * super::SCALE) as u32;
     let device = device.get_or_insert_with(|| GpuDevice::new_queued("ui-snap script"));
+    // The seed composite is deferred like every other one: the first
+    // `Snapshot` paints it (the cache starts fully invalidated).
     let mut render = RenderState::new(device, tex_w, tex_h);
-    composite_frame(
-        render.device,
-        &mut render.ui_renderer,
-        &mut render.cache,
-        &mut ui,
-        &render.composite,
-        1.0,
-    );
 
     let mut runner = Runner::new();
+    runner.stepped = actions.iter().any(|a| matches!(a, AutomationAction::Step { .. }));
     // BUG-296: `resolve_effect_target` falls back to `timeline.layers.first()`
     // when `Runner.active_layer` is None, silently mutating the wrong layer's
     // effect chain for structural PanelActions dispatched before any
@@ -303,6 +299,9 @@ fn run_flow(
     let mut ok = true;
 
     for (index, action) in actions.iter().enumerate() {
+        if reads_composite(action) {
+            render.flush_composite(&mut ui);
+        }
         let outcome = runner.step(&mut ui, &mut data, zoom_ppb, index, action, &out_dir, &mut render);
         let failed = outcome.status == "fail";
         results.push(outcome);
@@ -312,11 +311,9 @@ fn run_flow(
         }
     }
 
-    // D9a: a contact sheet of every frame a `Step` action advanced. Most
-    // flows carry no `Step` (the two shipped flows don't), so most runs
-    // write nothing here — this is additive, not a new requirement on every
-    // script.
-    if !runner.filmstrip.is_empty() {
+    // D9a: a contact sheet of the flow's `Snapshot` frames, written only for
+    // flows that use `Step` (the ones that watch something move).
+    if runner.stepped && !runner.filmstrip.is_empty() {
         let cols = (runner.filmstrip.len() as u32).clamp(1, 4);
         let filmstrip_path = out_dir.join("filmstrip.png");
         super::render::save_filmstrip_png(&runner.filmstrip, tex_w, tex_h, cols, &filmstrip_path);
@@ -360,6 +357,37 @@ struct RenderState<'d> {
     composite: CompositeResources,
     tex_w: u32,
     tex_h: u32,
+    gate: CompositeGate,
+}
+
+/// Composites are deferred until something reads pixels. No flow asserts on
+/// pixels and the UI never reads GPU state back, so the only reader is
+/// `write_png` (a `Snapshot`). Painting is incremental over dirty panels and
+/// the tree's dirty flags accumulate until a composite clears them, so one
+/// composite at the `Snapshot` paints the same atlas as compositing after
+/// every frame in between.
+#[derive(Default)]
+struct CompositeGate {
+    pending: bool,
+    composites: usize,
+}
+
+impl CompositeGate {
+    fn mark(&mut self) {
+        self.pending = true;
+    }
+
+    /// True when a composite is owed; counts it.
+    fn take(&mut self) -> bool {
+        let owed = std::mem::take(&mut self.pending);
+        self.composites += usize::from(owed);
+        owed
+    }
+}
+
+/// The only step type whose behaviour depends on a composited frame.
+fn reads_composite(action: &AutomationAction) -> bool {
+    matches!(action, AutomationAction::Snapshot)
 }
 
 impl<'d> RenderState<'d> {
@@ -372,13 +400,20 @@ impl<'d> RenderState<'d> {
         cache.ensure_atlas(device, tex_w, tex_h);
         cache.invalidate_all();
         let composite = CompositeResources::new(device, tex_w, tex_h);
-        Self { device, ui_renderer, cache, composite, tex_w, tex_h }
+        let mut gate = CompositeGate::default();
+        gate.mark();
+        Self { device, ui_renderer, cache, composite, tex_w, tex_h, gate }
     }
 
-    /// Read back the CURRENTLY composited offscreen — raw linear UI bytes (the
-    /// seam's own format). Does not re-composite; callers drive that
-    /// separately (`composite_frame`, called from `Runner::advance_frame` /
-    /// the `Step` loop).
+    /// Composite now if any frame since the last composite changed the UI.
+    fn flush_composite(&mut self, ui: &mut UIRoot) {
+        if self.gate.take() {
+            composite_frame(self.device, &mut self.ui_renderer, &mut self.cache, ui, &self.composite, 1.0);
+        }
+    }
+
+    /// Read back the offscreen as last composited — raw linear UI bytes (the
+    /// seam's own format). Callers flush first (`flush_composite`).
     fn readback_linear(&self) -> Vec<u8> {
         super::render::readback(self.device, &self.composite.offscreen, self.tex_w, self.tex_h)
     }
@@ -433,13 +468,14 @@ struct Runner {
     // are in-memory, never the user's file — D7 determinism holds).
     user_prefs: crate::user_prefs::UserPrefs,
     scrub: crate::ui_bridge::ScrubState,
-    // D9a: every composited frame a `Step` action advanced, in order —
-    // assembled into one contact-sheet PNG at the end of `run` when
-    // non-empty. D9b: the most recent `Pointer` gesture's synthesized
+    // D9a: every `Snapshot` frame, in order — assembled into one
+    // contact-sheet PNG at the end of `run` when `stepped`. D9b: the most
+    // recent `Pointer` gesture's synthesized
     // point(s) (center, interpolated drag path, drag end) — consumed
     // (drained) by the next `Snapshot`, which stamps a crosshair at each
     // one on the readback COPY only.
     filmstrip: Vec<Vec<u8>>,
+    stepped: bool,
     last_gesture_points: Vec<Vec2>,
     // Persistent headless engine: scripted controls use production clip sync.
     modulation_engine: manifold_playback::engine::PlaybackEngine,
@@ -467,6 +503,7 @@ impl Runner {
             user_prefs: crate::user_prefs::UserPrefs::in_memory(),
             scrub: crate::ui_bridge::ScrubState::default(),
             filmstrip: Vec::new(),
+            stepped: false,
             last_gesture_points: Vec::new(),
             modulation_engine,
         }
@@ -543,21 +580,13 @@ impl Runner {
                     // write into `data.project`'s param `effective` value
                     // never reaches the widget tree a `Dump`/`Snapshot` reads.
                     super::reconcile_state(ui, data);
-                    composite_frame(
-                        render.device,
-                        &mut render.ui_renderer,
-                        &mut render.cache,
-                        ui,
-                        &render.composite,
-                        1.0,
-                    );
-                    self.filmstrip.push(render.readback_linear());
+                    render.gate.mark();
                 }
                 StepResult {
                     index,
                     action: action_desc,
                     status: "ok",
-                    detail: format!("clock -> {:.3}s ({frames} filmstrip tile(s))", self.clock),
+                    detail: format!("clock -> {:.3}s ({frames} frame(s))", self.clock),
                     artifact: None,
                 }
             }
@@ -1503,14 +1532,7 @@ impl Runner {
         // same as the live driver's per-frame `scroll_dirty.clear()`.
         self.scroll_dirty.visual = false;
         super::reconcile_state(ui, data);
-        composite_frame(
-            render.device,
-            &mut render.ui_renderer,
-            &mut render.cache,
-            ui,
-            &render.composite,
-            1.0,
-        );
+        render.gate.mark();
     }
 
     fn assert(
@@ -1712,6 +1734,9 @@ impl Runner {
             },
         );
         let mut linear = render.readback_linear();
+        if self.stepped {
+            self.filmstrip.push(linear.clone());
+        }
         for pt in self.last_gesture_points.drain(..) {
             stamp_crosshair(&mut linear, tex_w, tex_h, pt);
         }
@@ -1775,4 +1800,59 @@ pub(super) fn click_by_text(ui: &mut UIRoot, data: &mut SceneData, text: &str) -
 /// branch (no `Runner`/script run in progress there).
 pub(super) fn write_fail_dump(ui: &UIRoot, path: &std::path::Path) {
     Runner::new().write_dump(ui, path);
+}
+
+#[cfg(test)]
+mod composite_gate_tests {
+    use super::*;
+
+    fn flow(name: &str) -> Vec<AutomationAction> {
+        let path = format!("{}/../../scripts/ui-flows/{name}.json", env!("CARGO_MANIFEST_DIR"));
+        serde_json::from_str(&std::fs::read_to_string(path).expect("read flow")).expect("parse flow")
+    }
+
+    /// Drives the gate the way `run_flow` does: every step may dirty the
+    /// frame, and only a step that reads the composite takes it.
+    fn composites_for(actions: &[AutomationAction]) -> usize {
+        let mut gate = CompositeGate::default();
+        gate.mark();
+        for action in actions {
+            if reads_composite(action) {
+                gate.take();
+            }
+            gate.mark();
+        }
+        gate.composites
+    }
+
+    #[test]
+    fn run_without_snapshot_steps_never_composites() {
+        let mut actions = flow("water-family-preset");
+        let snapshots = actions.iter().filter(|a| reads_composite(a)).count();
+        assert!(snapshots > 0, "fixture flow should carry Snapshot steps");
+        assert_eq!(composites_for(&actions), snapshots);
+        actions.retain(|a| !reads_composite(a));
+        assert!(actions.len() > 20);
+        assert_eq!(composites_for(&actions), 0);
+    }
+
+    #[test]
+    fn only_snapshot_reads_the_composite() {
+        let non_readers = [
+            AutomationAction::Dump,
+            AutomationAction::Step { frames: 3 },
+            AutomationAction::SaveReloadProject,
+        ];
+        assert!(non_readers.iter().all(|a| !reads_composite(a)));
+        assert!(reads_composite(&AutomationAction::Snapshot));
+    }
+
+    #[test]
+    fn back_to_back_snapshots_composite_once() {
+        let mut gate = CompositeGate::default();
+        gate.mark();
+        assert!(gate.take());
+        assert!(!gate.take());
+        assert_eq!(gate.composites, 1);
+    }
 }
