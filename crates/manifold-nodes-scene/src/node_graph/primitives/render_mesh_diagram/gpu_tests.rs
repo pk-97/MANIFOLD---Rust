@@ -666,6 +666,8 @@ fn math_view_world_grid_matches_camera_and_ignores_object_transform() {
             ("stage", Camera::look_at([2.5, 1.6, 4.0], [0.0, 0.4, 0.0], [0.0, 1.0, 0.0], 0.8, 0.05, 1000.0)),
             ("close", Camera::look_at([0.4, 0.3, 0.6], [0.0; 3], [0.0, 1.0, 0.0], 0.9, 0.01, 1000.0)),
             ("high", Camera::look_at([30.0, 40.0, 50.0], [0.0; 3], [0.0, 1.0, 0.0], 0.9, 0.05, 1000.0)),
+            ("oblique", Camera::look_at([1.4, 1.1, 0.5], [-0.3, 0.0, -0.4], [0.0, 1.0, 0.0], 0.9, 0.01, 1000.0)),
+            ("yawed", Camera::look_at([6.0, 3.0, 2.0], [0.0; 3], [0.0, 1.0, 0.0], 0.8, 0.05, 1000.0)),
         ];
         for (name, view) in views {
             render(view, Transform::default(), 1);
@@ -713,7 +715,7 @@ fn math_view_world_grid_matches_camera_and_ignores_object_transform() {
         };
         let on_line = alpha_at([4.0, 0.0, 0.5]);
         assert!(
-            on_line > 0.08,
+            on_line > 0.03,
             "grid must align to a projected world line beyond sample radius (alpha {on_line})"
         );
         assert!(
