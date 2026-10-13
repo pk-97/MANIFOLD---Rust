@@ -1,16 +1,16 @@
-# Scene Surfaces — the scene card and the Scene Setup panel as one system
+# Scene Surfaces — the scene card and the Scene tab as one system
 
-**Status:** PROPOSED · 2026-10-13 · Opus 5.5 (lead session with Peter). Awaiting Peter's approval; P0–P10 not started. Beads: BUG-pmbd3 (3D scene inspector panel upgrades), children mapped in section 5.
+**Status:** APPROVED · 2026-10-14 · Peter, with D16 (Scene tab) and D17 (one scene per layer). P0–P10 not started. Beads: BUG-pmbd3 (3D scene inspector panel upgrades), children mapped in section 5.
 **Prerequisites:** none.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs) through section 6 (Seam briefs) before starting any phase.
 
-<!-- index: Scene card (performance) and Scene Setup panel (setup) as two views of one scene item list; one live param lookup (projects save only id, value and user choices); slider range vs hard limit; naming pass, pins, navigation. -->
+<!-- index: Scene card (performance) and Scene tab in the inspector (setup) as two views of one scene item list; one live param lookup (projects save only id, value and user choices); slider range vs hard limit; naming pass, pins, navigation; one scene per layer. -->
 
-**The governing insight: the card and the panel already share one row widget, one edit path and stable param ids. What they do not share is the answer to three questions — what is this control called, which scene item owns it, and does it belong on stage. Today eight places answer those questions, and the answers are copied into every saved project, where they go stale.** This design answers them once, in one lookup in code that every reader uses, the way a DAW reads a plugin's parameter names at load. A saved project keeps only each control's id, its value and the user's own choices. The card and the panel become two filters over the same rows: the card shows the performance role, the panel shows the selected item.
+**The governing insight: the card and the panel already share one row widget, one edit path and stable param ids. What they do not share is the answer to three questions — what is this control called, which scene item owns it, and does it belong on stage. Today eight places answer those questions, and the answers are copied into every saved project, where they go stale.** This design answers them once, in one lookup in code that every reader uses, the way a DAW reads a plugin's parameter names at load. A saved project keeps only each control's id, its value and the user's own choices. The card and the panel become two filters over the same rows: the card shows the performance role, the panel shows the selected item. After D16 the panel is the Scene tab of the inspector, not a separate dock; in this doc "the panel" and "the Scene tab" name that one surface.
 
 Peter, 2026-10-13, on the split and the order: "Camera first, most useful controls out of the box that get used frequently." On camera rows: orbit, translate, focus, distance and FOV "are actually all very useful on the inspector card." On lights: "'Main Light' is confusing and doesn't mean anything, multiple lights are possible in a scene." On pins: "YES love this!!! also needs right click to remove from card." On the panel tree: "Physics should be it's own thing, not under world." On master force strength: "sounds like a lot of new work? Let's focus on what we have already."
 
-**Stage translation.** The card is what Peter grabs mid-set. After this design, a scene's card opens with the camera, then the scene's own toys (box count, water speed, the preset's macros), then forces with a Kick button each, then one fader per light named after the light, then depth of field and motion blur as two switches. A mapped control never disappears. Right-click moves anything from the panel onto the card and back, and sets how wide its slider is. A slider's end is no longer a wall: drag or type past it and the value keeps going until the real limit. A label fixed in code shows up in every old show on next load, on the card, the panel, the automation lanes and the tools. Nothing on the card is a placeholder for a control the scene does not have.
+**Stage translation.** The card is what Peter grabs mid-set. After this design, a scene's card opens with the camera, then the scene's own toys (box count, water speed, the preset's macros), then forces with a Kick button each, then one fader per light named after the light, then depth of field and motion blur as two switches. A mapped control never disappears. Setting up the scene happens in a Scene tab beside the clip, layer and master tabs in the inspector, so there is no second panel to open, dock or lose; clicking a card section title jumps to that item in the Scene tab. One layer holds one scene, so the tab never has to guess which scene it shows. Right-click moves anything from the Scene tab onto the card and back, and sets how wide its slider is. A slider's end is no longer a wall: drag or type past it and the value keeps going until the real limit. A label fixed in code shows up in every old show on next load, on the card, the panel, the automation lanes and the tools. Nothing on the card is a placeholder for a control the scene does not have.
 
 **Binding constraints** (docs/DESIGN_AUTHORING.md section 1 (the intake)): *hot path* — none; the lookup runs when a manifest is built (load, structural edit), both projections run on the structural sync path, and the per-frame value channel is untouched (id join, WIDGET_TREE INV-6). *Thread residency* — projection on the UI thread from `Arc<Project>` snapshots; every mutation through `EditingService` or `MutateProject`. *Time model* — not involved. *Persistence* — yes, and the largest change here: saved projects stop carrying names, ranges and roles for any control the lookup can describe, and carry the user's choices (rename, slider range, curve, invert, section, pin, fold) per control instead. The canonical fixture (`Liveschool Live Show V6 LEDS.manifold`) is pre-3D, its controls already track their templates, and it must load and save byte-identically. Param ids never change, so mappings, automation lanes, OSC addresses and macros survive every phase. *Performance surface* — the card is the performance surface; MIDI, OSC, Ableton and automation rows are part of every phase that touches it.
 
@@ -77,7 +77,7 @@ Extend, don't redesign. Every row below was read in the tree on 2026-10-13.
 
 ## 2. Decisions
 
-**D1 — The card is the performance surface; the Scene Setup panel is the setup surface. Same items, same names.** Every row on the card is a row the panel also shows, under the same label, except the two card label rules in D4 (light name, group name), whose words the panel also displays. Rejected: a card with its own wording ("Horizontal Angle" beside the panel's "Orbit") — that is the "Intensity" vs "Sun Intensity" split the predecessor named as a bug.
+**D1 — The card is the performance surface; the Scene tab (D16) is the setup surface. Same items, same names.** Every row on the card is a row the panel also shows, under the same label, except the two card label rules in D4 (light name, group name), whose words the panel also displays. Rejected: a card with its own wording ("Horizontal Angle" beside the panel's "Orbit") — that is the "Intensity" vs "Sun Intensity" split the predecessor named as a bug.
 
 **D2 — One live lookup; a saved project keeps only each control's id, its value and the user's choices.** This is the decided architecture. Name, unit, slider range, hard limit and surface role come from one lookup in code, and every reader uses it: the card, the panel, automation lanes, OSC, `project_tool` and the content thread. A DAW does the same with plugin parameter names: it reads them from the plugin at load and never trusts a name saved in the song.
 
@@ -148,7 +148,7 @@ Camera translate: Target Height (`look_y`) is the only translate the orbit camer
 
 **D7 — User choices are the only per-control display state a project saves.** `ParamChoices` (section 3.4) holds rename, slider range, curve, invert, section and card pin. They are written only by commands the user triggers: `SetCardPinCommand`, `SetSliderRangeCommand`, `EditParamMappingCommand`. The join never writes them. The pin is `Option<CardPin>` (`Shown` / `Removed`); `None` follows the role. Card section fold state is saved as `PresetInstance.folded_sections`, written through `MutateProject` like `EffectCollapseToggle` (not undoable, because it is view state). Rejected: pinning through `card_visible`, a lookup output that is no longer saved. Rejected: pinning through `user_added`, because un-exposing a user binding deletes it (`expose.rs` `unexpose_user_binding_freezes_effective_value_into_def_slot`). Rejected: pinning through `SceneSetupExposeParam`, a no-op on an exposed param, which every scene param is.
 
-**D8 — Panel tree.** Fixed groups in this order: **Camera, Lights, Objects, Forces, Physics, World** (Peter: physics is its own group). A group with no items is not drawn, except Lights and Objects, which always show so their add button is reachable. Each row: type icon, readable name, eye toggle where the item has `visible`. Each group owns its own add button: Lights "+" adds a light; Objects "+" opens one menu (Object, Plane, Water, Import Model…); Forces "+" opens the force picker. World holds Environment, Fog and Ray Tracing (the old Rendering row). Below the tree, the selected item's header shows its name once (click to rename where a rename command exists), its kind, and copy and delete where commands exist: objects copy and delete, forces copy and delete, lights delete only, Camera, Physics and World neither. Sections under the header follow the item's `ControlGroup`s in declaration order. The stats line is deleted.
+**D8 — Scene tab tree.** The tree sits at the top of the Scene tab (D16). Fixed groups in this order: **Camera, Lights, Objects, Forces, Physics, World** (Peter: physics is its own group). A group with no items is not drawn, except Lights and Objects, which always show so their add button is reachable. Each row: type icon, readable name, eye toggle where the item has `visible`. Each group owns its own add button: Lights "+" adds a light; Objects "+" opens one menu (Object, Plane, Water, Import Model…); Forces "+" opens the force picker. World holds Environment, Fog and Ray Tracing (the old Rendering row). Below the tree, the selected item's header shows its name once (click to rename where a rename command exists), its kind, and copy and delete where commands exist: objects copy and delete, forces copy and delete, lights delete only, Camera, Physics and World neither. Sections under the header follow the item's `ControlGroup`s in declaration order. The stats line is deleted.
 
 **D9 — One word list, on the declarations.** Labels change only where they are declared: `ParamDef.label`, recipe JSON and bundled preset JSON. After D2 a label edit reaches every old project on next load with no migration rung. Units move to `unit` and render in the value readout. The agreed table, plus the six meanings resolved from code:
 
@@ -176,7 +176,7 @@ Camera translate: Target Height (`look_y`) is the only translate the orbit camer
 
 FLIP Fluids' own terms stay (Sheet Fill Rate). Re-derivation for any row: `rg -n '"<current label>"' crates/ -g '*.rs' -g '*.json'`; a label not found as a literal is composed — find its parts, never guess. Where a card label today differs from the target primitive's label only because an io migration or the importer authored it, the primitive's label is the one home (the migration's label is inert after D2).
 
-**D10 — Cross-surface gestures.** Right-click on any row in either surface opens the one param menu (`dropdowns.rs:1666`). It gains **Show on Card** (on a panel row whose card state is off), **Remove from Card** (on a card row; disabled on attached rows, D6), **Show in Scene Setup** (on a card row), and **Set slider range…** / **Reset slider range** (D15). Clicking a card section's title (not its fold triangle) opens the Scene Setup panel at the first row of that section. All navigation is by `(GraphParamTarget, ParamId)` against the panel's full surface, never by section string. Rejected: a second menu for scene rows (one menu, WIDGET_TREE section 5b).
+**D10 — Cross-surface gestures.** Right-click on any row in either surface opens the one param menu (`dropdowns.rs:1666`). It gains **Show on Card** (on a panel row whose card state is off), **Remove from Card** (on a card row; disabled on attached rows, D6), **Show in Scene tab** (on a card row), and **Set slider range…** / **Reset slider range** (D15). Show in Scene tab, and clicking a card section's title (not its fold triangle, revealing the section's first row), switch the inspector to the Scene tab, select the item that owns the row and scroll the row into view. Show on Card from the Scene tab flashes a brief highlight on that card row the next time the card is shown. All navigation is by `(GraphParamTarget, ParamId)` against the Scene tab's full surface, never by section string. Rejected: a second menu for scene rows (one menu, WIDGET_TREE section 5b).
 
 **D11 — Lights.** Display name: node `title`, else the handle humanised (`fill_light` → "Fill Light"), else "Light N". The importer writes the GLB light name into `title`; a load rung copies it into `title` for already-imported lights whose intensity stamp's section string differs from the handle. The title is the imported scene's own data, not a display copy. Every light gets a card row; no cap. The Lighting section starts folded when it holds more than eight light rows; the user's fold choice then persists (D7). Rejected: a light-count cap ("never add a size rule").
 
@@ -207,6 +207,22 @@ Behaviour:
 - The card-to-node reshape (invert and curve) normalises over the declared slider range, never the user's, so a user's slider range never changes what reaches the node.
 
 "Set slider range…" is in the shared right-click menu (D10). It works on any row on the card or the scene panel, because both surfaces build rows through the shared row widget. It is saved per control as `ParamChoices.slider`, and the old calibration block migrates into it. "Reset slider range" clears it. Its min and max edit the same field as the graph editor mapping drawer's range. The drawer stays as it is for modulation reshaping (invert, curve, scale, offset), so there is one home for the range and two places to edit it. Rejected: one range field with a "soft" flag (it can't express "slider 0–10, limit ≥0"). Rejected: auto-widening the slider when a value goes past its end (the slider would jump under the performer's hand).
+
+**D16 — The scene is a tab in the inspector.** Peter, 2026-10-14: one inspector column with categories clips, layers, master, and scene when the selected layer has one; the scene surface and the inspector never need to be open at the same time.
+- The Scene Setup dock stops being a separate surface. Today it is its own docked region beside the inspector (`ui_root/mod.rs:767-776` builds it into `layout.scene_setup()`; `layout.scene_setup_width`, `layout.rs:34`), opened by `toggle_scene_dock` (`ui_root/mod.rs:1412`; callers `ui_bridge/mod.rs:319`, `dispatch/params.rs:105`, `app_render.rs:1198`) and mutually exclusive with the Audio Setup dock (`:1340-1353`). Its content becomes a **Scene** tab beside Clip, Layer, Group and Master (`InspectorTab`, `manifold-ui/src/panels/mod.rs:243-248` gains `Scene`): the D8 tree on top, the selected item's header and properties below.
+- The Scene tab exists only when the selected layer is a generator layer whose graph holds a `node.render_scene`. The layer is picked by today's rule (`projection/inspector.rs:258-263`: `selected_layer_id_for_clip`, else `primary_selected_layer_id`, else the active layer), which already binds the dock today (`:1030-1053`). When the layer changes to one without a scene, the inspector falls back to the Layer tab.
+- External selection writes (`edit_selection.rs:205-217`, `set_selection` for lights and objects) switch the inspector to the Scene tab instead of assuming an open dock.
+- Navigation into the tab is D10's: by param id, switching the tab and revealing the owning item.
+- The 3D viewport is not affected. It lives in the graph editor workspace (`workspace.rs:84-104`, `viewport_open` toggled by `v`; its rect is set in `editor_bridge.rs:1641`), rendered by `SceneViewportPass` (`nodes-scene render_scene/scene_viewport.rs:18`), not inside the dock.
+
+Rejected: keeping the dock beside the inspector. It costs width on a laptop on stage and shows two param columns for one layer. Rejected: a floating scene window (Peter never needs both open at once).
+
+**D17 — One scene per layer.** A layer's generator graph holds at most one `node.render_scene`.
+- One shared check in the graph validator (`manifold-node-engine/src/validate.rs:244` `validate_def`, the function `graph-tool validate --kind generator` runs) reports two or more `node.render_scene` nodes as an error. Every bundled preset must pass it.
+- Editing commands that add, paste, duplicate or import a node into a layer's generator graph refuse when the result would hold a second `render_scene`, with the user-visible reason "This layer already has a scene". The refusal happens before the command enters undo, so the graph and the undo stack are unchanged.
+- Projects that already hold two load unchanged (CLAUDE.md invariant: reading the past never changes it). No migration deletes nodes. The Scene tab shows the lowest-id one, as `scene_vm.rs:113-118` does today, with a one-line notice in the tab ("This layer has more than one scene; showing the first").
+
+Rejected: deleting extra scenes on load (rewrites the past). Rejected: a scene picker in the tab (supports a shape Peter ruled out).
 
 **Consequences, stated honestly:**
 1. Scene projects get smaller on disk: no names or ranges per control. A file saved after P1 shows placeholders in an older build (format version bump, P1).
@@ -370,9 +386,9 @@ Called at the same site (`cards.rs:540-542`), after modulation is attached. Per 
 
 User-added rows with no `scene` description are on the card unless `Removed`. Attached rows with role Setup or Hidden join their item's section in their band (the Scene band when the item has none).
 
-### 3.7 Panel — `scene_setup_panel/outliner.rs` and `scene_setup_panel/item_header.rs` (new modules; `scene_setup_panel.rs` only shrinks)
+### 3.7 Scene tab — `scene_setup_panel/outliner.rs` and `scene_setup_panel/item_header.rs` (new modules; `scene_setup_panel.rs` only shrinks)
 
-The tree reads `SceneSetupVm.items` (D8). Icons are new `Icon` atlas entries (`icons.rs`): SceneCamera, SceneLight, SceneMesh, ScenePlane, SceneWater, SceneModel, SceneForce, ScenePhysics, SceneWorld, bitmaps added where `native_text::generate_atlas_icons` builds the others. Properties for the selected item: rows owned by the item, minus Hidden (unless attached), grouped by `ControlGroup`, each group a fold section titled by the group's display name. The material inspector keeps its own layout inside the Material group.
+The panel's body is hosted by the inspector column as `InspectorTab::Scene` (D16); the dock region, `layout.scene_setup_width`, `toggle_scene_dock` and the header's scene dock toggle are deleted. The tree reads `SceneSetupVm.items` (D8). Icons are new `Icon` atlas entries (`icons.rs`): SceneCamera, SceneLight, SceneMesh, ScenePlane, SceneWater, SceneModel, SceneForce, ScenePhysics, SceneWorld, bitmaps added where `native_text::generate_atlas_icons` builds the others. Properties for the selected item: rows owned by the item, minus Hidden (unless attached), grouped by `ControlGroup`, each group a fold section titled by the group's display name. The material inspector keeps its own layout inside the Material group.
 
 ### 3.8 Readers of saved labels, ranges and roles — what each needs (D2)
 
@@ -409,8 +425,8 @@ Every reader below either already reads the joined manifest (no change) or reads
 |---|---|---|---|
 | Show on Card / Remove from Card | `ParamsAction::SetCardPin(GraphParamTarget, ParamId, Option<UiCardPin>)` | `SetCardPinCommand { target, param_id, pin, previous }` in `manifold-editing/src/commands/graph/card_pin.rs`; writes `Param.choices.pin`; undoable | `ToggleNodeParamExposeCommand` (`graph/expose.rs:41`) for target resolution |
 | Set slider range… / Reset slider range | `ParamsAction::SetSliderRange(GraphParamTarget, ParamId, Option<(f32, f32)>)` | `SetSliderRangeCommand` writes `Param.choices.slider`, re-joins the spec; undoable | `EditParamMappingCommand` (`effects.rs:1263`) |
-| Show in Scene Setup | `ParamsAction::RevealInSceneSetup(GraphParamTarget, ParamId)` | UI-only: open panel, `reveal_param` | `reveal_clip_response` (`parameter_navigation.rs:56`) |
-| Section title click | `ParamsAction::RevealSectionInSceneSetup(GraphParamTarget, ParamId)` (first row of the section) | same | same |
+| Show in Scene tab | `ParamsAction::RevealInSceneTab(GraphParamTarget, ParamId)` | UI-only: switch the inspector to the Scene tab, `reveal_param` | `reveal_clip_response` (`parameter_navigation.rs:56`) |
+| Section title click | `ParamsAction::RevealSectionInSceneTab(GraphParamTarget, ParamId)` (first row of the section) | same | same |
 | Section fold | existing fold toggle, plus `MutateProject` write of `folded_sections` | non-undoable | `EffectCollapseToggle` (`dispatch/params.rs:337`) |
 | Use this view | `SceneSetupAction::CopyViewportCamera(LayerId)` | `CopyViewportCameraCommand` — one undo unit setting the D14 params | `SetGraphNodeParamCommand::with_previous` batching |
 
@@ -470,7 +486,7 @@ Off the per-frame path. The lookup runs once per control when a manifest is buil
 
 ## 5. Phasing
 
-Phased by layer. P1 is the saved-control format and the lookup, P2 moves every reader onto it, and P3 adds the scene table. P4 is the card projection and the first visible phase, running model → manifest → projection → card pixels end to end. P5 is the words and P6 the panel. P7 adds the gestures between the two surfaces. P8 is slider range against hard limit, through the shared row widget. P9 and P10 are two small new affordances.
+Phased by layer. P1 is the saved-control format and the lookup, P2 moves every reader onto it, and P3 adds the scene table. P4 is the card projection and the first visible phase, running model → manifest → projection → card pixels end to end. P0 also ships D17 (one scene per layer). P5 is the words and P6 the Scene tab. P7 adds the gestures between the two surfaces. P8 is slider range against hard limit, through the shared row widget. P9 and P10 are two small new affordances.
 
 Every child of BUG-pmbd3 (3D scene inspector panel upgrades) lands in a phase:
 
@@ -486,7 +502,7 @@ Every child of BUG-pmbd3 (3D scene inspector panel upgrades) lands in a phase:
 | .8 camera rows follow camera type | P4 |
 | .9 rows keep their section | P4 |
 | .10 light colour swatch | P9 |
-| .11 right-click Show in Scene Setup | P7 |
+| .11 right-click Show in Scene tab | P7 |
 | .12 dim controls that do nothing | P4 |
 | .13 remember card fold state | P1 (field), P7 (behaviour) |
 | .14 Use this view | P10 |
@@ -495,17 +511,19 @@ Every child of BUG-pmbd3 (3D scene inspector panel upgrades) lands in a phase:
 | .17 naming pass | P5 |
 | .18 one live lookup | P1, P2 |
 | .19 slider range vs hard limit | P8 (P1 carries the `limit` field and the choice) |
+| D17 one scene per layer (no child bead yet; the lead files one) | P0 |
+| D16 Scene tab in the inspector (no child bead yet; the lead files one) | P6 (host), P7 (navigation) |
 
 Common to every phase. **Entry:** the status line reads APPROVED; `git -C "/Users/peterkiemann/MANIFOLD - Rust" log --oneline -1 origin/main`; re-run the section 1 anchors the phase names. **Forbidden in every phase:** type ids or param names in `scene_card.rs` or the panel tree; a label map anywhere outside the declarations; a lookup call outside the join; saving a name, range or role for a control the lookup describes; bespoke rows, sliders or swatches (WIDGET_TREE section 5b (agent contract and enforcement)); new `Arc<Mutex>`; per-frame work; silently dropping an unresolved control on load or save; widening scope into material inspector internals. **GPU:** none in this design; land with `--skip-gpu`. **Reports** carry `Shortcuts taken:` and `Demo artifact:`.
 
 ### P0 — Baseline and the live bug
 - **Entry:** `ls scripts/ui-flows | rg -c '^scene'` = 36 (stop if not; list the new ones).
 - **Read-back:** this doc's sections 1, D6; `scene_performance.rs` whole; `scripts/run_ui_flows.py` docstring. Restate D6 and the forbidden list.
-- **Deliverables:** (1) run every scene flow (`.claude/scripts/with-build-lock.sh scripts/run_ui_flows.py scene`) and file one typed bead per red, with the flow name and failing step. (2) `scripts/ui-flows/scene-surfaces-clickthrough.json` (gltfscene) and `-physics.json` (physicsscene): select every outliner item in turn and assert its properties header text and at least one `param_row.*` under it; every failing step is a bead, not a fix. (3) **Named stopgap** for BUG-pmbd3.7 (card hides mapped rows): `is_retained_extra` keeps any row whose modulation, audio, mapping or automation facts are set. Deleted with the function in P4. (4) `attached_rows_stay_on_card` test (INV-S5), shaped to survive P4.
-- **Gate:** positive — `cargo nextest run -p manifold-app scene_performance` green; INV-S5 test fails on the pre-fix code (show it red first) and passes after; flow counts reported as `N pass / M fail / 36 total + 2 new`. Negative — none.
+- **Deliverables:** (1) run every scene flow (`.claude/scripts/with-build-lock.sh scripts/run_ui_flows.py scene`) and file one typed bead per red, with the flow name and failing step. (2) `scripts/ui-flows/scene-surfaces-clickthrough.json` (gltfscene) and `-physics.json` (physicsscene): select every outliner item in turn and assert its properties header text and at least one `param_row.*` under it; every failing step is a bead, not a fix. (3) **Named stopgap** for BUG-pmbd3.7 (card hides mapped rows): `is_retained_extra` keeps any row whose modulation, audio, mapping or automation facts are set. Deleted with the function in P4. (4) `attached_rows_stay_on_card` test (INV-S5), shaped to survive P4. (5) D17 (one scene per layer): the `validate_def` check; the add, paste, duplicate and import refusal with "This layer already has a scene", before undo; the lowest-id pick plus the one-line notice for old two-scene projects (shown in the dock until P6 moves it into the Scene tab).
+- **Gate:** positive — `cargo nextest run -p manifold-app scene_performance` green; INV-S5 test fails on the pre-fix code (show it red first) and passes after; D17 tests `validate_rejects_two_render_scenes`, `every_bundled_preset_has_at_most_one_scene`, `add_paste_duplicate_import_second_scene_refused_graph_and_undo_unchanged`, `two_scene_project_loads_unchanged_and_shows_notice`; flow counts reported as `N pass / M fail / 36 total + 2 new`. Negative — none.
 - **Demo:** L3 — the two click-through flows; their failures are the bug list. Performer gesture: map a light's position to an LFO, check it stays on the card.
-- **Forbidden:** fixing anything the click-through finds (beads only); inventing bugs not observed in a flow run.
-- **Test scope:** `-p manifold-app`, plus the flow suite filtered to `scene`.
+- **Forbidden:** fixing anything the click-through finds (beads only); inventing bugs not observed in a flow run; a D17 migration that deletes or rewires nodes.
+- **Test scope:** `-p manifold-app -p manifold-node-engine -p manifold-editing`, plus the flow suite filtered to `scene`.
 
 ### P1 — The live lookup and the saved-control format (core, io, registration; no visible change)
 - **Entry:** P0 landed. Anchors: `instance_serde.rs:34`, `:47-63`, `:135-145`, `:155-196`, `:272-300`, `:356`; `params.rs:62-94`, `:167`; core `scene_exposure.rs:22-48`, `:381`; `preset_definition_registry.rs:340`; `effects/instance.rs:375`, `:413`; `manifold-io/src/bin/project_tool.rs`.
@@ -591,30 +609,31 @@ Common to every phase. **Entry:** the status line reads APPROVED; `git -C "/User
 - **Forbidden:** a display-name map; renaming any `ParamDef.name` (the wire key); a label rung.
 - **Test scope:** `-p manifold-nodes-scene -p manifold-water-gpu-flip -p manifold-water-gpu-mpm -p manifold-water-rigid -p manifold-nodes-image -p manifold-nodes -p manifold-app` (labels are declared across these crates).
 
-### P6 — Panel tree and item header
-- **Entry:** P4 landed (items exist). `wc -l crates/manifold-ui/src/panels/scene_setup_panel.rs` recorded.
-- **Read-back:** D8, section 3.7; SCENE_SETUP_PANEL_DESIGN.md section 7 (Decided — do not reopen) for outliner verbs still standing; P0's bead list for this panel.
+### P6 — Scene tab: tree, item header, inspector host
+- **Entry:** P4 landed (items exist). `wc -l crates/manifold-ui/src/panels/scene_setup_panel.rs` recorded; `rg -n 'toggle_scene_dock|scene_setup_width|set_dock_toggle_state' crates/` recorded.
+- **Read-back:** D8, D16, D17, section 3.7; SCENE_SETUP_PANEL_DESIGN.md section 7 (Decided — do not reopen) for outliner verbs still standing; P0's bead list for this panel.
 - **Deliverables:**
+  - `InspectorTab::Scene`, present only when the D16 layer holds a `render_scene`; fallback to Layer when it does not. The dock region, `scene_setup_width`, `toggle_scene_dock` and its three callers, and the header's scene dock toggle are deleted. `edit_selection.rs` selection writes switch to the Scene tab. The D17 two-scene notice moves into the tab.
   - `outliner.rs`, `item_header.rs`; icons; per-group add buttons with the Objects menu.
   - Physics group; World with Ray Tracing. `SceneSelection::Rendering` deleted; stats line deleted.
   - Item header with rename, kind, and copy and delete per D8. The force item header owns the name; the force card's own header keeps only enable, targets and trigger chips.
   - Properties grouped by `ControlGroup`; Hidden rows omitted unless attached (D6).
   - `scene_setup_panel.rs` ceiling lowered.
-  - Every scene flow that asserted the old tree is rewritten.
+  - Every scene flow that asserted the old tree, or opened the dock, is rewritten to select the layer and open the Scene tab.
 
   This is BUG-pmbd3.15 (scene panel tree).
-- **Gate:** positive — `scene_setup_panel::tests::tree_groups_in_fixed_order`, `add_buttons_one_per_group`, `header_names_item_once`; full scene flow suite green with the P0 count reconciled (every flow on disk accounted for). Negative — `rg -n 'Motion & Physics|Lighting & Environment|SceneSelection::Rendering|\\u\{1F4F7\}|\\u\{25A0\}' crates/manifold-ui/src` → 0.
-- **Demo:** L3 — `scene-panel-tree.json` on gltfscene and physicsscene: assert group order, select a light, assert header text equals its readable name once. Performer gesture: add a light from the Lights "+", rename it, see the new name on its card row.
-- **Forbidden:** a new row or header widget outside the shared builders; keeping the old add row "for now".
+- **Gate:** positive — `scene_setup_panel::tests::tree_groups_in_fixed_order`, `add_buttons_one_per_group`, `header_names_item_once`; `scene_tab_present_only_for_scene_layer`, `scene_tab_falls_back_to_layer`; full scene flow suite green with the P0 count reconciled (every flow on disk accounted for). Negative — `rg -n 'Motion & Physics|Lighting & Environment|SceneSelection::Rendering|\\u\{1F4F7\}|\\u\{25A0\}' crates/manifold-ui/src` → 0; `rg -n 'toggle_scene_dock|scene_setup_width' crates/` → 0.
+- **Demo:** L3 — `scene-panel-tree.json` on gltfscene and physicsscene: select the layer, open the Scene tab, assert group order, select a light, assert header text equals its readable name once; select a non-scene layer, assert no Scene tab. Performer gesture: add a light from the Lights "+", rename it, see the new name on its card row.
+- **Forbidden:** a new row or header widget outside the shared builders; keeping the old add row "for now"; keeping the dock beside the tab.
 - **Test scope:** `-p manifold-ui -p manifold-app`; scene flows.
 
 ### P7 — Cross-surface gestures and fold persistence
 - **Entry:** P4 and P6 landed.
 - **Read-back:** D6, D7, D10, section 3.9; `dropdowns.rs:1666-1731`; `parameter_navigation.rs` whole.
-- **Deliverables:** scene panel rows emit `ParamLabelRightClick`; menu items Show on Card, Remove from Card (disabled on attached rows), Show in Scene Setup; `SetCardPinCommand` with undo; section title click → panel; `reveal_param`; `folded_sections` persistence and the D11 default fold; delete `reveal_clip_response`, `property_selection_for_row`, the `SceneSetupExposeParam` action and arm.
+- **Deliverables:** scene panel rows emit `ParamLabelRightClick`; menu items Show on Card, Remove from Card (disabled on attached rows), Show in Scene tab; `SetCardPinCommand` with undo; section title click and Show in Scene tab switch the inspector to the Scene tab and reveal the owning item; the brief card-row highlight after Show on Card; `reveal_param`; `folded_sections` persistence and the D11 default fold; delete `reveal_clip_response`, `property_selection_for_row`, the `SceneSetupExposeParam` action and arm.
 - **Gate:** positive — `card_pin::tests::{pin_unpin_undo_redo, remove_disabled_on_mapped_row}`, `reveal_param_selects_owning_item_for_light_object_force_world`. Negative — INV-S10; `rg -n 'SceneSetupExposeParam|reveal_clip_response' crates/` → 0.
 - **Round trip:** pin a material colour row and unpin Orbit, fold Lighting, save, reload: pins and fold hold, a mapping on the pinned row still drives it.
-- **Demo:** L3 — `scene-pin-roundtrip.json` (right-click Roughness in the panel → Show on Card → assert a card row; right-click it on the card → Remove from Card → assert gone), `scene-card-to-panel.json` (click the Lighting title → assert the panel selects a light). Performer gesture: mid-set, pin an object's Y position to the card and drive it.
+- **Demo:** L3 — `scene-pin-roundtrip.json` (right-click Roughness in the panel → Show on Card → assert a card row; right-click it on the card → Remove from Card → assert gone), `scene-card-to-tab.json` (click the Lighting title → assert the inspector shows the Scene tab with a light selected). Performer gesture: mid-set, pin an object's Y position to the card and drive it.
 - **Forbidden:** a second context menu; navigation by section string; pins stored anywhere but `ParamChoices`.
 - **Test scope:** `-p manifold-editing -p manifold-ui -p manifold-app`.
 
@@ -659,7 +678,7 @@ Common to every phase. **Entry:** the status line reads APPROVED; `git -C "/User
 
 ## 6. Decided — do not reopen
 
-1. Card = performance, panel = setup; same items, same names (D1).
+1. Card = performance, Scene tab = setup; same items, same names (D1).
 2. One live lookup read only by the manifest join. A saved project keeps per control only its id, value and user choices, and every reader uses the lookup. Unresolved controls are kept word for word, never dropped (D2).
 3. OSC addresses are id-based; renames never move them (D2).
 4. One scene item list; ownership by primary binding; both surfaces use it (D3).
@@ -673,6 +692,8 @@ Common to every phase. **Entry:** the status line reads APPROVED; `git -C "/User
 12. Row sets follow base values (D12).
 13. Migration keeps structure only; water gets no rungs (D13).
 14. Slider range and hard limit are separate. Values pass the slider end up to the limit. The user's slider range is a per-control choice set from the shared menu, and never reaches the reshape or the wrap period (D15).
+15. The scene is a tab in the inspector, present only for a layer with a scene; no separate dock (D16).
+16. One scene per layer: the validator rejects two, edits that would add a second refuse before undo, old two-scene projects load unchanged with a notice (D17).
 
 ## 7. Deferred
 
