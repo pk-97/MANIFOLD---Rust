@@ -1462,7 +1462,7 @@ pub(crate) fn encode_accel_update(
             update.tlas_refits = 1;
         }
     }
-    enc.endEncoding();
+    encoder.end_acceleration_structure_encoder(&enc);
 
     // Pins ride the CALLER's command buffer completion — they must survive
     // graph teardown before the caller commits (§4.3), which attaching

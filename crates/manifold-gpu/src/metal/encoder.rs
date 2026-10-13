@@ -11,7 +11,7 @@ use objc2_metal::{
     MTLAccelerationStructureCommandEncoder, MTLAccelerationStructurePassDescriptor, MTLBuffer,
     MTLBlitCommandEncoder, MTLBlitOption, MTLBlitPassDescriptor, MTLCommandBuffer,
     MTLCommandEncoder, MTLComputeCommandEncoder, MTLComputePassDescriptor,
-    MTLComputePipelineState, MTLIndexType,
+    MTLComputePipelineState, MTLFence, MTLIndexType,
     MTLLoadAction, MTLMultisampleDepthResolveFilter, MTLOrigin, MTLPrimitiveType,
     MTLRenderCommandEncoder, MTLRenderPassDescriptor, MTLResourceUsage, MTLScissorRect, MTLSize,
     MTLStoreAction, MTLTexture, MTLTextureUsage, MTLViewport,
@@ -98,6 +98,8 @@ impl RenderBindCache {
 pub struct GpuEncoder {
     /// Retained MTLCommandBuffer. Released on drop.
     pub(crate) cmd_buf: Retained<ProtocolObject<dyn MTLCommandBuffer>>,
+    /// The device's queue-order fence: see `GpuDevice::order_fence`.
+    pub(crate) order_fence: Retained<ProtocolObject<dyn MTLFence>>,
     pub(crate) state: EncoderState,
     pub(super) compute_cache: ComputeBindCache,
     pub(super) render_cache: RenderBindCache,
@@ -364,6 +366,7 @@ impl GpuEncoder {
             .cmd_buf
             .computeCommandEncoder()
             .expect("Failed to create compute encoder");
+        enc.waitForFence(&self.order_fence);
         self.state = EncoderState::Compute(enc.clone());
         enc
     }
@@ -383,6 +386,7 @@ impl GpuEncoder {
         match state {
             EncoderState::None => {}
             EncoderState::Compute(enc) => {
+                enc.updateFence(&self.order_fence);
                 enc.endEncoding();
                 self.compute_cache.clear();
             }
@@ -522,6 +526,7 @@ impl GpuEncoder {
             .cmd_buf
             .computeCommandEncoderWithDescriptor(&desc)
             .expect("computeCommandEncoderWithDescriptor failed");
+        enc.waitForFence(&self.order_fence);
         self.state = EncoderState::Compute(enc.clone());
         enc
     }
@@ -629,13 +634,28 @@ impl GpuEncoder {
                 att.setStartOfEncoderSampleIndex(start);
                 att.setEndOfEncoderSampleIndex(end);
             }
-            return self
+            let enc = self
                 .cmd_buf
                 .accelerationStructureCommandEncoderWithDescriptor(&desc);
+            enc.waitForFence(&self.order_fence);
+            return enc;
         }
-        self.cmd_buf
+        let enc = self
+            .cmd_buf
             .accelerationStructureCommandEncoder()
-            .expect("accelerationStructureCommandEncoder failed")
+            .expect("accelerationStructureCommandEncoder failed");
+        enc.waitForFence(&self.order_fence);
+        enc
+    }
+
+    /// The caller ends an acceleration-structure encoder itself; this
+    /// publishes its work to the queue-order fence first.
+    pub(crate) fn end_acceleration_structure_encoder(
+        &self,
+        enc: &ProtocolObject<dyn MTLAccelerationStructureCommandEncoder>,
+    ) {
+        enc.updateFence(&self.order_fence);
+        enc.endEncoding();
     }
 
     /// Dispatch a compute shader.

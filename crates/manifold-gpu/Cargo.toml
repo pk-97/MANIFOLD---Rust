@@ -52,6 +52,7 @@ block2 = "0.6"
 objc2-foundation = { version = "0.3", features = ["NSString", "NSURL", "NSError", "NSArray", "NSDictionary", "NSValue", "NSObjCRuntime"] }
 objc2-metal = { version = "0.3", features = [
     "MTLDevice",
+    "MTLFence",
     "MTLTexture",
     "MTLBuffer",
     "MTLCommandBuffer",
