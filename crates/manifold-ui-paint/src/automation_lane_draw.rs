@@ -254,7 +254,11 @@ pub fn emit_automation_lanes(
                     readout(
                         ui,
                         graph.x + 6.0,
-                        (y + 2.0).min(r.y_max() - 16.0),
+                        if norm == 0.0 {
+                            y - color::AUTOMATION_LABEL_FONT as f32 - 2.0
+                        } else {
+                            (y + 2.0).min(r.y_max() - 16.0)
+                        },
                         None,
                         lane.beats_per_bar,
                         lane.param_min + norm * (lane.param_max - lane.param_min),
