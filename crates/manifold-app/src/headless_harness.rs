@@ -89,7 +89,6 @@ pub(crate) fn headless_content_thread(project: Project, w: u32, h: u32) -> Conte
         last_data_version: 0,
         midi_input,
         clip_launcher: manifold_playback::clip_launcher::ClipLauncher::new(),
-        rendering_paused: false,
         timer: crate::frame_timer::FrameTimer::new(60.0),
         physics_metrics: Default::default(),
         sync_arbiter: manifold_playback::sync::SyncArbiter::new(),

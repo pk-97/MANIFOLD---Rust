@@ -20,7 +20,7 @@ use manifold_editing::commands::clip::AddClipCommand;
 use manifold_editing::commands::layer::AddLayerCommand;
 use manifold_editing::service::EditingService;
 
-use crate::dialog_path_memory::{self, DialogContext};
+use crate::file_dialogs::{self, DialogAction, DialogHost};
 use crate::user_prefs::UserPrefs;
 
 /// Install a loaded project's embedded ("forked") presets into the renderer's
@@ -662,25 +662,8 @@ impl ProjectIOService {
     // ── Open Project ────────────────────────────────────────────────
 
     /// Unity ProjectIOService.OnOpenProject / OnOpenProjectAsync (lines 92-106).
-    pub fn open_project(&mut self, user_prefs: &mut UserPrefs) -> ProjectIOAction {
-        let last_dir =
-            dialog_path_memory::get_last_directory(DialogContext::ProjectOpen, user_prefs);
-
-        let mut dialog = rfd::FileDialog::new()
-            .set_title("Open MANIFOLD Project")
-            .add_filter("MANIFOLD Project", &["json", "manifold"]);
-
-        if !last_dir.is_empty() {
-            dialog = dialog.set_directory(&last_dir);
-        }
-
-        if let Some(path) = dialog.pick_file() {
-            let path_str = path.to_string_lossy().to_string();
-            dialog_path_memory::remember_directory(
-                DialogContext::ProjectOpen,
-                &path_str,
-                user_prefs,
-            );
+    pub fn open_project(&mut self, host: DialogHost, user_prefs: &mut UserPrefs) -> ProjectIOAction {
+        if let Some(path) = file_dialogs::pick_file(DialogAction::OpenProject, host, user_prefs) {
             self.open_project_from_path(&path, user_prefs)
         } else {
             ProjectIOAction::default()
@@ -836,59 +819,17 @@ impl ProjectIOService {
         }
     }
 
-    // ── Save Project ────────────────────────────────────────────────
-
-    /// Unity ProjectIOService.OnSaveProject (lines 175-194).
-    // Ported save path; the live save currently routes elsewhere. Kept for
-    // the in-progress port integration.
-    #[allow(dead_code)]
-    pub fn save_project(
-        &mut self,
-        project: &mut Project,
-        current_path: Option<&Path>,
-        current_time: f32,
-        editing_service: &mut EditingService,
-        user_prefs: &mut UserPrefs,
-    ) -> ProjectIOAction {
-        // Sync playhead before save (Unity line 179)
-        project.saved_playhead_time = current_time;
-        snapshot_and_prune_embedded_presets(project);
-
-        if let Some(path) = current_path {
-            match manifold_io::saver::save_project(project, path, None, false) {
-                Ok(()) => {
-                    editing_service.mark_clean();
-                    log::info!("[ProjectIO] Saved to {}", path.display());
-                    ProjectIOAction {
-                        mark_clean: true,
-                        flash_save: true,
-                        ..Default::default()
-                    }
-                }
-                Err(e) => {
-                    log::error!("[ProjectIO] Save failed: {e}");
-                    ProjectIOAction::default()
-                }
-            }
-        } else {
-            // No existing path → trigger Save As
-            self.save_project_as(project, current_time, editing_service, user_prefs)
-        }
-    }
-
     /// Unity ProjectIOService.OnSaveProjectAs / OnSaveProjectAsAsync (lines 196-228).
     pub fn save_project_as(
         &mut self,
         project: &mut Project,
         current_time: f32,
         editing_service: &mut EditingService,
+        host: DialogHost,
         user_prefs: &mut UserPrefs,
     ) -> ProjectIOAction {
         // Sync playhead before save (Unity line 205)
         project.saved_playhead_time = current_time;
-
-        let last_dir =
-            dialog_path_memory::get_last_directory(DialogContext::ProjectSave, user_prefs);
 
         let project_name = if project.project_name.is_empty() {
             "project"
@@ -896,16 +837,9 @@ impl ProjectIOService {
             &project.project_name
         };
 
-        let mut dialog = rfd::FileDialog::new()
-            .set_title("Save MANIFOLD Project")
-            .add_filter("MANIFOLD Project", &["manifold"])
-            .set_file_name(project_name);
-
-        if !last_dir.is_empty() {
-            dialog = dialog.set_directory(&last_dir);
-        }
-
-        if let Some(dialog_path) = dialog.save_file() {
+        if let Some(dialog_path) =
+            file_dialogs::save_file(DialogAction::SaveProjectAs, host, user_prefs, project_name)
+        {
             self.save_project_as_to_path(project, &dialog_path, editing_service, user_prefs)
         } else {
             ProjectIOAction::default()
@@ -976,11 +910,6 @@ impl ProjectIOService {
                 let path_str = save_path.to_string_lossy().to_string();
                 self.last_opened_project_path = Some(path_str.clone());
                 user_prefs.set_string(LAST_OPENED_PROJECT_PREF_KEY, &path_str);
-                dialog_path_memory::remember_directory(
-                    DialogContext::ProjectSave,
-                    &path_str,
-                    user_prefs,
-                );
                 user_prefs.save();
                 // Promote to the front of the Open Recent list.
                 self.push_recent_project(&path_str, user_prefs);
@@ -1401,15 +1330,13 @@ pub fn resolve_dropped_file_path(raw_path: &Path) -> Option<PathBuf> {
     }
 }
 
-/// Unity ProjectIOService.IsSupportedVideoExtension (lines 466-473).
+/// Video files the importer takes, by drop or by the Import Video dialog.
+pub(crate) const VIDEO_EXTENSIONS: &[&str] = &["mp4", "mov", "webm", "avi"];
+
 pub fn is_supported_video_extension(path: &Path) -> bool {
-    matches!(
-        path.extension()
-            .and_then(|e| e.to_str())
-            .map(|e| e.to_lowercase())
-            .as_deref(),
-        Some("mp4" | "mov" | "webm" | "avi")
-    )
+    path.extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| VIDEO_EXTENSIONS.contains(&e.to_lowercase().as_str()))
 }
 
 /// Whether `path` is a still image we can drop onto a Video layer as an
@@ -1436,16 +1363,15 @@ pub fn is_supported_midi_extension(path: &Path) -> bool {
     )
 }
 
-/// Audio file extensions that drop onto an audio layer. Mirrors what the
-/// decoder (symphonia) and kira can read. See `docs/AUDIO_LAYER_DESIGN.md`.
+/// Audio files an audio layer takes, by drop or by the Replace Audio dialog.
+/// Mirrors what the decoder (symphonia) and kira can read. See
+/// `docs/AUDIO_LAYER_DESIGN.md`.
+pub(crate) const AUDIO_EXTENSIONS: &[&str] = &["wav", "mp3", "flac", "aif", "aiff", "ogg", "m4a", "aac"];
+
 pub fn is_supported_audio_extension(path: &Path) -> bool {
-    matches!(
-        path.extension()
-            .and_then(|e| e.to_str())
-            .map(|e| e.to_lowercase())
-            .as_deref(),
-        Some("wav" | "mp3" | "flac" | "aif" | "aiff" | "ogg" | "m4a" | "aac")
-    )
+    path.extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| AUDIO_EXTENSIONS.contains(&e.to_lowercase().as_str()))
 }
 
 /// Decoded duration of an audio file expressed in beats (0 on failure). Used to

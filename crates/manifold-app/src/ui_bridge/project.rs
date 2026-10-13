@@ -78,7 +78,8 @@ pub(super) fn dispatch_project(
     ui: &mut UIRoot,
     _selection: &mut SelectionState,
     _active_layer: &mut Option<LayerId>,
-    _user_prefs: &mut UserPrefs,
+    user_prefs: &mut UserPrefs,
+    dialogs: crate::file_dialogs::DialogHost,
 ) -> DispatchResult {
     use crate::content_command::ContentCommand;
     match action {
@@ -1067,10 +1068,11 @@ pub(super) fn dispatch_project(
                 .and_then(|(_, layer)| layer.generator_graph().cloned())
                 .unwrap_or_else(|| default.clone());
 
-            let Some(path) = rfd::FileDialog::new()
-                .add_filter("glTF", &["glb", "gltf"])
-                .pick_file()
-            else {
+            let Some(path) = crate::file_dialogs::pick_file(
+                crate::file_dialogs::DialogAction::ImportModel,
+                dialogs,
+                user_prefs,
+            ) else {
                 return DispatchResult::handled();
             };
 
@@ -1788,7 +1790,7 @@ mod tests {
                 ProjectAction::SceneSetupDisablePhysics(layer_id.clone(), scene_id, 0)
             };
             dispatch_project(&action, &mut project, &tx, &state, &mut ui,
-                &mut selection, &mut active_layer, &mut prefs);
+                &mut selection, &mut active_layer, &mut prefs, Default::default());
             assert!(effective_def(&project, &layer_id) == before_dispatch,
                 "UI dispatch waits for content");
             let crate::content_command::ContentCommand::ExecuteOnContent(mut cmd) = rx.try_recv().unwrap() else {
@@ -1855,6 +1857,7 @@ mod tests {
             &mut selection,
             &mut active_layer,
             &mut prefs,
+            Default::default(),
         );
         assert_eq!(
             effective_def(&project, &layer_id),
@@ -1957,6 +1960,7 @@ mod tests {
             &mut selection,
             &mut active_layer,
             &mut prefs,
+            Default::default(),
         );
         assert_eq!(
             effective_def(&project, &layer_id),
@@ -2110,6 +2114,7 @@ mod tests {
                 &mut selection,
                 &mut active_layer,
                 &mut prefs,
+                Default::default(),
             );
             assert_eq!(effective_def(&project, &layer_id), before_toggle);
             let ContentCommand::ExecuteOnContent(mut toggle) = rx.try_recv().unwrap() else {
@@ -2149,7 +2154,7 @@ mod tests {
         let result = dispatch_project(
             &ProjectAction::SceneSetupAddFluid(layer_id.clone(), render_scene_id),
             &mut project, &content_tx, &content_state, &mut ui, &mut selection,
-            &mut active_layer, &mut user_prefs,
+            &mut active_layer, &mut user_prefs, Default::default(),
         );
         assert!(result.structural_change);
         assert_eq!(effective_def(&project, &layer_id), original,
@@ -2350,7 +2355,7 @@ mod tests {
         dispatch_project(
             &ProjectAction::SceneSetupAddLight(layer_id.clone(), render_scene_id, lights),
             &mut project, &content_tx, &content_state, &mut ui, &mut selection,
-            &mut active_layer, &mut user_prefs,
+            &mut active_layer, &mut user_prefs, Default::default(),
         );
         let ContentCommand::ExecuteSelecting(mut command, _) = content_rx.try_recv().expect("queued light insertion")
         else { panic!("the light insertion goes through content-owned editing"); };
@@ -2390,7 +2395,7 @@ mod tests {
             ProjectAction::SceneSetupAddObject(layer_id.clone(), render_scene_id, 0),
         ] {
             dispatch_project(&action, &mut project, &tx, &state, &mut ui,
-                &mut selection, &mut active, &mut prefs);
+                &mut selection, &mut active, &mut prefs, Default::default());
             let ContentCommand::ExecuteSelecting(mut command, _) = rx.try_recv().unwrap()
             else { panic!("insertion must execute on content"); };
             command.execute(&mut project);
@@ -2410,7 +2415,7 @@ mod tests {
         dispatch_project(&ProjectAction::SceneSetupAssignFluidRole {
             layer_id: layer_id.clone(), render_scene_node_id: render_scene_id,
             object_index: object.index as u32, domain: domains[0].node.clone(), role: 1,
-        }, &mut project, &tx, &state, &mut ui, &mut selection, &mut active, &mut prefs);
+        }, &mut project, &tx, &state, &mut ui, &mut selection, &mut active, &mut prefs, Default::default());
         assert_eq!(effective_def(&project, &layer_id), before, "UI must not edit project state");
         let ContentCommand::ExecuteOnContent(mut command) = rx.try_recv().unwrap()
         else { panic!("role assignment must execute on content"); };
@@ -2453,7 +2458,7 @@ mod tests {
         assert_eq!(effective_def(&project, &layer_id), after, "redo chain preserves source and domain identity");
 
         dispatch_project(&ProjectAction::SceneSetupAddFluid(layer_id.clone(), render_scene_id),
-            &mut project, &tx, &state, &mut ui, &mut selection, &mut active, &mut prefs);
+            &mut project, &tx, &state, &mut ui, &mut selection, &mut active, &mut prefs, Default::default());
         let ContentCommand::ExecuteSelecting(mut second_fluid, _) = rx.try_recv().unwrap()
         else { panic!("second fluid insertion executes on content"); };
         second_fluid.execute(&mut project);
@@ -2464,7 +2469,7 @@ mod tests {
         let new_domain = manifold_core::SceneNodeRef::locate(&with_second, &domains[1].node).unwrap();
         dispatch_project(&ProjectAction::SceneSetupRetargetFluidRole {
             layer_id: layer_id.clone(), source_node_id: role.id, domain: domains[1].node.clone(),
-        }, &mut project, &tx, &state, &mut ui, &mut selection, &mut active, &mut prefs);
+        }, &mut project, &tx, &state, &mut ui, &mut selection, &mut active, &mut prefs, Default::default());
         assert_eq!(effective_def(&project, &layer_id), with_second, "retarget waits for content");
         let ContentCommand::ExecuteOnContent(mut retarget) = rx.try_recv().unwrap()
         else { panic!("retarget executes on content"); };
@@ -2477,7 +2482,7 @@ mod tests {
         assert_eq!(effective_def(&reloaded, &layer_id), retargeted);
         dispatch_project(&ProjectAction::SceneSetupRemoveFluidRole {
             layer_id: layer_id.clone(), source_node_id: role.id,
-        }, &mut project, &tx, &state, &mut ui, &mut selection, &mut active, &mut prefs);
+        }, &mut project, &tx, &state, &mut ui, &mut selection, &mut active, &mut prefs, Default::default());
         assert_eq!(effective_def(&project, &layer_id), retargeted, "removal waits for content");
         let ContentCommand::ExecuteOnContent(mut remove) = rx.try_recv().unwrap()
         else { panic!("removal executes on content"); };
@@ -2529,7 +2534,7 @@ mod tests {
                 for action in actions {
                     if let PanelAction::Project(action) = action {
                         dispatch_project(&action, &mut project, &tx, &state, &mut ui,
-                            &mut selection, &mut active, &mut prefs);
+                            &mut selection, &mut active, &mut prefs, Default::default());
                     }
                 }
             }
@@ -2594,7 +2599,7 @@ mod tests {
                         };
                         dispatch_project(
                             &action, &mut project, &content_tx, &content_state,
-                            &mut ui, &mut selection, &mut active_layer, &mut user_prefs,
+                            &mut ui, &mut selection, &mut active_layer, &mut user_prefs, Default::default(),
                         );
                     }
                 }
@@ -2676,6 +2681,7 @@ mod tests {
             &mut selection,
             &mut active_layer,
             &mut user_prefs,
+            Default::default(),
         );
         assert!(
             result.structural_change,
@@ -2734,6 +2740,7 @@ mod tests {
             &mut selection,
             &mut active_layer,
             &mut user_prefs,
+            Default::default(),
         );
         let unchanged = objects_param(&project, &layer_id, render_scene_id);
         assert_eq!(unchanged, before as f32, "UI dispatch waits for content");
@@ -2771,6 +2778,7 @@ mod tests {
             &mut selection,
             &mut active_layer,
             &mut user_prefs,
+            Default::default(),
         );
 
         assert_eq!(objects_param(&project, &layer_id, render_scene_id), (before + 1) as f32,
@@ -2838,6 +2846,7 @@ mod tests {
             &mut selection,
             &mut active_layer,
             &mut user_prefs,
+            Default::default(),
         );
         apply_queued_scene_edit(&content_rx, &mut project);
 
@@ -2893,6 +2902,7 @@ mod tests {
             &mut selection,
             &mut active_layer,
             &mut user_prefs,
+            Default::default(),
         );
         assert_eq!(objects_param(&project, &layer_id, render_scene_id), duplicate_index as f32,
             "UI duplication waits for content");
@@ -2948,6 +2958,7 @@ mod tests {
             &mut selection,
             &mut active_layer,
             &mut user_prefs,
+            Default::default(),
         );
         apply_queued_scene_edit(&content_rx, &mut project);
 
@@ -3096,6 +3107,7 @@ mod tests {
             &mut selection,
             &mut active_layer,
             &mut user_prefs,
+            Default::default(),
         );
         assert_eq!(
             serde_json::to_value(&project).expect("project serializes"),
@@ -3181,6 +3193,7 @@ mod tests {
             &mut selection,
             &mut active_layer,
             &mut user_prefs,
+            Default::default(),
         );
         (result, content_rx)
     }
@@ -3447,7 +3460,7 @@ mod tests {
         let (tx, rx) = crossbeam_channel::unbounded();
         dispatch_project(
             &ProjectAction::SceneSetupAddFluid(layer_id.clone(), render_scene_id),
-            &mut project, &tx, &state, &mut ui, &mut selection, &mut active_layer, &mut prefs,
+            &mut project, &tx, &state, &mut ui, &mut selection, &mut active_layer, &mut prefs, Default::default(),
         );
         let add = rx.try_recv().expect("Add Fluid queued a content edit");
 

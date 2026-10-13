@@ -22,7 +22,7 @@ mod content_export;
 mod content_pipeline;
 pub(crate) mod content_state;
 pub(crate) mod content_thread;
-mod dialog_path_memory;
+mod file_dialogs;
 #[cfg(target_os = "macos")]
 mod display_link;
 mod drag_hover;

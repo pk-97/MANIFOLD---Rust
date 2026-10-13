@@ -1191,6 +1191,7 @@ mod audio_send_dispatch_tests {
                 user_prefs: &mut user_prefs,
                 editor_target: None,
                 scrub: &mut scrub,
+                dialogs: Default::default(),
             };
             crate::ui_bridge::dispatch(&action, &mut ctx)
         };
@@ -1272,6 +1273,7 @@ mod trigger_dispatch_tests {
                 user_prefs: &mut user_prefs,
                 editor_target: None,
                 scrub: &mut scrub,
+                dialogs: Default::default(),
             },
         );
         assert!(!result.structural_change, "snapshot projection waits for the content receipt");
@@ -1319,7 +1321,7 @@ mod trigger_dispatch_tests {
             &mut crate::ui_bridge::DispatchCtx {
                 project: &mut project, content_tx: &content_tx, content_state: &content_state,
                 ui: &mut ui, selection: &mut selection, active_layer: &mut active_layer,
-                user_prefs: &mut user_prefs, editor_target: None, scrub: &mut scrub,
+                user_prefs: &mut user_prefs, editor_target: None, scrub: &mut scrub, dialogs: Default::default(),
             },
         );
         assert!(result.structural_change);
@@ -1372,6 +1374,7 @@ mod trigger_dispatch_tests {
                 user_prefs: &mut user_prefs,
                 editor_target: None,
                 scrub: &mut scrub,
+                dialogs: Default::default(),
             },
         );
         assert!(!result.structural_change, "snapshot projection waits for the content receipt");

@@ -1243,17 +1243,30 @@ impl ContentThread {
     /// readback has been submitted (`dims` set) and the GPU copy is readable.
     #[cfg(target_os = "macos")]
     pub(crate) fn poll_still_export(&mut self, state_tx: &Sender<ContentState>) {
-        // Only act once the readback has been submitted (dims set on the prior tick).
-        if self.still_export.as_ref().is_none_or(|j| j.dims.is_none()) {
-            return;
-        }
-        let Some(packed_f16) = self.content_pipeline.take_still_readback() else {
+        let Some(job) = self.still_export.as_mut() else {
             return;
         };
+        // Only act once the readback has been submitted (dims set on the prior tick).
+        if job.dims.is_none() {
+            return;
+        }
+        if job.pixels.is_none() {
+            let Some(packed_f16) = self.content_pipeline.take_still_readback() else {
+                return;
+            };
+            let Some(job) = self.still_export.as_mut() else {
+                return;
+            };
+            job.pixels = Some(packed_f16);
+        }
+        // Held until the save dialog names a destination.
+        if self.still_export.as_ref().is_none_or(|j| j.dest.is_none()) {
+            return;
+        }
         let job = self.still_export.take().expect("checked above");
         let (w, h) = job.dims.expect("checked above");
-        let path = job.path;
-        let format = job.format;
+        let packed_f16 = job.pixels.expect("checked above");
+        let (path, format) = job.dest.expect("checked above");
         let tx = state_tx.clone();
 
         std::thread::Builder::new()

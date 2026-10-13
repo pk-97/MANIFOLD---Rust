@@ -342,6 +342,9 @@ pub struct Application {
     /// `WindowId` of the graph editor window when open. Paired with
     /// `graph_editor` — both are `Some` together or both `None`.
     pub(crate) graph_editor_window_id: Option<WindowId>,
+    /// The editor window (main or graph editor) the user last focused — file
+    /// dialogs attach to it. See `file_dialogs::host`.
+    pub(crate) dialog_window_id: Option<WindowId>,
     /// Remembered outer position + inner size of the editor window from
     /// its last close, so reopening lands where the user left it instead
     /// of winit's default cascade. `None` until the first close.
@@ -644,6 +647,7 @@ impl Application {
             ws: Workspace::new(WorkspaceKind::Main),
             graph_editor: None,
             graph_editor_window_id: None,
+            dialog_window_id: None,
             graph_editor_geometry: None,
             graph_canvas: None,
             editor_ui_graph: None,
@@ -1043,6 +1047,7 @@ impl Application {
                                 user_prefs: &mut self.user_prefs,
                                 editor_target: None,
                                 scrub: &mut self.scrub,
+                                dialogs: crate::file_dialogs::host(&self.window_registry, self.dialog_window_id, self.primary_window_id, self.current_project_path.as_deref()),
                             };
                             let _ = crate::ui_bridge::dispatch(&act, &mut dctx);
                         }
@@ -1069,6 +1074,7 @@ impl Application {
                             user_prefs: &mut self.user_prefs,
                             editor_target: None,
                             scrub: &mut self.scrub,
+                            dialogs: crate::file_dialogs::host(&self.window_registry, self.dialog_window_id, self.primary_window_id, self.current_project_path.as_deref()),
                         };
                         let _ = crate::ui_bridge::dispatch(&action, &mut dctx);
                     }
@@ -1110,6 +1116,7 @@ impl Application {
                         user_prefs: &mut self.user_prefs,
                         editor_target: None,
                         scrub: &mut self.scrub,
+                        dialogs: crate::file_dialogs::host(&self.window_registry, self.dialog_window_id, self.primary_window_id, self.current_project_path.as_deref()),
                     };
                     let _ = crate::ui_bridge::dispatch(&act, &mut dctx);
                     self.needs_rebuild = true;
@@ -1134,6 +1141,7 @@ impl Application {
                         user_prefs: &mut self.user_prefs,
                         editor_target: None,
                         scrub: &mut self.scrub,
+                        dialogs: crate::file_dialogs::host(&self.window_registry, self.dialog_window_id, self.primary_window_id, self.current_project_path.as_deref()),
                     };
                     let _ = crate::ui_bridge::dispatch(&act, &mut dctx);
                     self.needs_rebuild = true;
@@ -1172,6 +1180,7 @@ impl Application {
                             user_prefs: &mut self.user_prefs,
                             editor_target: None,
                             scrub: &mut self.scrub,
+                            dialogs: crate::file_dialogs::host(&self.window_registry, self.dialog_window_id, self.primary_window_id, self.current_project_path.as_deref()),
                         };
                         let _ = crate::ui_bridge::dispatch(&act, &mut dctx);
                         self.needs_rebuild = true;
@@ -1713,6 +1722,7 @@ impl Application {
                                     user_prefs: &mut self.user_prefs,
                                     editor_target,
                                     scrub: &mut self.scrub,
+                                    dialogs: crate::file_dialogs::host(&self.window_registry, self.dialog_window_id, self.primary_window_id, self.current_project_path.as_deref()),
                                 };
                                 let _ = crate::ui_bridge::dispatch(&action, &mut dctx);
                             }
@@ -2539,7 +2549,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 last_data_version: 0,
                 midi_input,
                 clip_launcher: manifold_playback::clip_launcher::ClipLauncher::new(),
-                rendering_paused: false,
                 timer: crate::frame_timer::FrameTimer::new(
                     self.local_project.settings.frame_rate as f64,
                 ),
@@ -2868,7 +2877,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             }
 
             WindowEvent::Focused(true) => {
-                // No action needed on focus gain.
+                if is_primary || is_graph_editor {
+                    self.dialog_window_id = Some(window_id);
+                }
             }
 
             // File drag-drop support.
