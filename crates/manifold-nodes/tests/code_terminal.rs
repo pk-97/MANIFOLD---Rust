@@ -104,22 +104,24 @@ fn code_terminal_roundtrip_compiles_and_resolves_all_controls() {
     let values = manifest(
         &roundtrip,
         &[
-            ("erosion", 0.47),
+            ("amount", 0.47),
             ("text_size", 31.0),
             ("activity", 2.0),
             ("detail_reactivity", 0.73),
             ("tonal_bias", -0.35),
             ("colour", 2.0),
             ("layout", 2.0),
+            ("fresh_text", 0.8),
         ],
     );
     bound.apply(&mut graph, &values);
-    assert_eq!(bound.bindings.len(), 7, "every card control has a route");
+    assert_eq!(bound.bindings.len(), 8, "every card control has a route");
     for (node_id, param, expected) in [
-        ("erosion_low", "a", 0.47),
+        ("amount_value", "value", 0.47),
         ("terminal", "text_size", 31.0),
         ("terminal", "activity", 2.0),
         ("terminal", "detail_reactivity", 0.73),
+        ("terminal", "turnover", 0.8),
         ("bias", "a", -0.35),
         ("palette", "selector", 2.0),
     ] {
@@ -150,10 +152,25 @@ fn code_terminal_roundtrip_compiles_and_resolves_all_controls() {
         "terminal.layout binding"
     );
 
-    let layout = roundtrip
+    let metadata = roundtrip
         .preset_metadata
         .as_ref()
-        .expect("CodeTerminal metadata")
+        .expect("CodeTerminal metadata");
+    let amount = metadata
+        .params
+        .iter()
+        .find(|spec| spec.id == "amount")
+        .expect("amount card control");
+    assert_eq!(amount.name, "Amount");
+    assert!(
+        metadata
+            .param_aliases
+            .iter()
+            .any(|alias| alias.old == "erosion" && alias.new.as_deref() == Some("amount")),
+        "projects saved with the Erosion control load into Amount"
+    );
+
+    let layout = metadata
         .params
         .iter()
         .find(|spec| spec.id == "layout")
@@ -223,37 +240,40 @@ mod gpu {
 
     #[derive(Clone, Copy)]
     struct Controls {
-        erosion: f32,
+        amount: f32,
         text_size: f32,
         activity: f32,
         tonal_bias: f32,
         colour: f32,
         layout: f32,
         detail_reactivity: f32,
+        fresh_text: f32,
     }
 
     impl Controls {
         fn defaults() -> Self {
             Self {
-                erosion: 1.0,
+                amount: 1.0,
                 text_size: 24.0,
                 activity: 1.0,
                 tonal_bias: 0.0,
                 colour: 1.0,
                 layout: 0.0,
                 detail_reactivity: 0.0, // Isolate existing line-scheduler proofs.
+                fresh_text: 0.0,        // Still sources settle; turnover is CPU-proven.
             }
         }
 
-        fn pairs(self) -> [(&'static str, f32); 7] {
+        fn pairs(self) -> [(&'static str, f32); 8] {
             [
-                ("erosion", self.erosion),
+                ("amount", self.amount),
                 ("text_size", self.text_size),
                 ("activity", self.activity),
                 ("tonal_bias", self.tonal_bias),
                 ("colour", self.colour),
                 ("layout", self.layout),
                 ("detail_reactivity", self.detail_reactivity),
+                ("fresh_text", self.fresh_text),
             ]
         }
     }
@@ -887,7 +907,7 @@ mod gpu {
                     harness.render(
                         &def,
                         Controls {
-                            erosion: 0.5,
+                            amount: 0.5,
                             ..controls
                         },
                         0.0,
@@ -966,7 +986,7 @@ mod gpu {
         let def = preset();
         let source = diagonal_edge_source();
         let controls = Controls {
-            erosion: 1.0,
+            amount: 1.0,
             activity: 0.0,
             detail_reactivity: 0.0,
             ..Controls::defaults()
@@ -1138,7 +1158,7 @@ mod gpu {
         let source = unfused.render(
             &def,
             Controls {
-                erosion: 0.0,
+                amount: 0.0,
                 ..Controls::defaults()
             },
             0.0,
@@ -1146,13 +1166,13 @@ mod gpu {
         );
         assert!(
             mean_abs(&source, &source_raw) < 0.0001,
-            "erosion=0 preserves source identity"
+            "amount=0 preserves source identity"
         );
 
         let full = unfused.render(&def, Controls::defaults(), 0.0, 1);
         assert!(
             changed_fraction(&source_raw, &full, 0.02) > 0.05,
-            "full erosion shows glyph coverage"
+            "full amount shows glyph coverage"
         );
         let full_pixels = f32_pixels(&full);
         let dark = full_pixels.iter().filter(|p| p[1] < 0.002).count();
@@ -1163,13 +1183,13 @@ mod gpu {
         );
         assert!(
             max_alpha_error(&source_raw, &full) < 0.001,
-            "full erosion preserves source alpha"
+            "full amount preserves source alpha"
         );
 
         let mid = unfused.render(
             &def,
             Controls {
-                erosion: 0.5,
+                amount: 0.5,
                 ..Controls::defaults()
             },
             0.0,
@@ -1178,29 +1198,46 @@ mod gpu {
         let mid_changed = changed_fraction(&source_raw, &mid, 0.02);
         assert!(
             (0.02..0.98).contains(&mid_changed),
-            "intermediate erosion keeps both source and terminal regions: {mid_changed:.3}"
+            "intermediate amount keeps both source and terminal regions: {mid_changed:.3}"
         );
 
-        // At partial erosion the choice is made once per character cell.
-        // Almost every pixel is wholly source or wholly reconstructed code;
-        // no cloudy feathering across the image is allowed.
+        // Mid Amount dissolves pixel by pixel: the gaps around each letter go
+        // black first, so the image survives in letter shapes before recolouring.
         let source_pixels = f32_pixels(&source_raw);
         let mid_pixels = f32_pixels(&mid);
-        let mixed = mid_pixels
+        let difference = |p: &[f32; 4], q: &[f32; 4]| {
+            (0..3).map(|c| (p[c] - q[c]).abs()).fold(0.0_f32, f32::max)
+        };
+        let fraction = |count: usize| count as f32 / mid_pixels.len() as f32;
+        let untouched = mid_pixels
+            .iter()
+            .zip(&source_pixels)
+            .filter(|(m, s)| difference(m, s) < 0.002)
+            .count();
+        let turned_share = |stroke: bool| {
+            let (mut turned, mut total) = (0usize, 0usize);
+            for ((m, s), f) in mid_pixels.iter().zip(&source_pixels).zip(&full_pixels) {
+                if difference(s, f) < 0.05 || (f[1] > 0.08) != stroke {
+                    continue;
+                }
+                total += 1;
+                turned += usize::from(difference(m, f) < 0.002);
+            }
+            turned as f32 / total.max(1) as f32
+        };
+        let faded = mid_pixels
             .iter()
             .zip(&source_pixels)
             .zip(&full_pixels)
-            .filter(|((m, a), b)| {
-                let difference = |p: &[f32; 4], q: &[f32; 4]| {
-                    (0..3).map(|c| (p[c] - q[c]).abs()).fold(0.0_f32, f32::max)
-                };
-                difference(m, a) > 0.002 && difference(m, b) > 0.002
-            })
+            .filter(|((m, s), f)| difference(m, f) < 0.002 && difference(m, s) > 0.02)
             .count();
+        assert!(fraction(untouched) > 0.1, "mid amount keeps live image");
+        let (strokes, gaps) = (turned_share(true), turned_share(false));
         assert!(
-            mixed < mid_pixels.len() / 50,
-            "erosion must replace crisp cells"
+            gaps > strokes + 0.1,
+            "gaps turn before letter strokes: strokes={strokes:.3} gaps={gaps:.3}"
         );
+        assert!(fraction(faded) > 0.01, "mid amount fades some cells to terminal");
 
         let frozen_a = unfused.render(
             &def,
@@ -1439,7 +1476,7 @@ mod gpu {
         let shadows = unfused.render(
             &def,
             Controls {
-                erosion: 0.5,
+                amount: 0.5,
                 tonal_bias: -1.0,
                 ..Controls::defaults()
             },
@@ -1449,7 +1486,7 @@ mod gpu {
         let highlights = unfused.render(
             &def,
             Controls {
-                erosion: 0.5,
+                amount: 0.5,
                 tonal_bias: 1.0,
                 ..Controls::defaults()
             },
@@ -1458,7 +1495,7 @@ mod gpu {
         );
         assert!(
             mean_abs(&shadows, &highlights) > 0.001,
-            "Tonal Bias selects different erosion tones"
+            "Tonal Bias selects different arrival tones"
         );
         let source_colour = unfused.render(
             &def,

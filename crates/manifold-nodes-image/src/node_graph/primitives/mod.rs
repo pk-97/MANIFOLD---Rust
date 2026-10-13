@@ -3,6 +3,7 @@ mod glyph_atlas;
 mod render_glyph_grid;
 pub mod terminal_analysis;
 mod terminal_detail;
+mod terminal_passages;
 mod terminal_reaction;
 mod terminal_stream;
 mod terminal_vocabulary;

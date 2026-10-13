@@ -11,7 +11,18 @@
 //!     --start-beat <B> --duration-beats <B> [--in-point <s>] [--source-duration <s>]
 //! project_tool scene set-model <file.manifold> <model_path>
 //!     --layer <index> [--layer-name <name>]
+//! project_tool project new <file.manifold> [--bpm <f64>]
+//! project_tool layer add <file.manifold> --name <N> --type audio|trigger|group|generator
+//!     [--parent <name>] [--color <#rrggbb>] [--collapsed]
+//! project_tool clip add-bulk <file.manifold> --layer <name> --json <clips.json>
+//! project_tool clip list <file.manifold> [--json]
+//! project_tool marker add-bulk <file.manifold> --json <markers.json>
+//! project_tool marker list <file.manifold> [--json]
 //! ```
+//!
+//! The timeline-authoring verbs (`project`, `layer`, `clip add-bulk|list`,
+//! `marker`) live in `project_tool/timeline_verbs.rs`; their stdout is pure
+//! JSON or an id, so scripts can parse it.
 //!
 //! ## Why mutations are raw-JSON surgery, not model round-trips
 //!
@@ -58,6 +69,11 @@ use manifold_core::units::{Beats, Bpm, Seconds};
 use manifold_io::archive::save_v2_archive;
 use manifold_io::loader::{load_project, load_project_from_json};
 
+// A plain `mod` would resolve to `src/bin/timeline_verbs.rs`, which Cargo
+// would also build as its own binary.
+#[path = "project_tool/timeline_verbs.rs"]
+mod timeline_verbs;
+
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
 
@@ -69,6 +85,9 @@ fn main() -> ExitCode {
     match verb.as_str() {
         "info" => run_info(rest),
         "json" => run_json(rest),
+        "project" => timeline_verbs::run_project(rest),
+        "layer" => timeline_verbs::run_layer(rest),
+        "marker" => timeline_verbs::run_marker(rest),
         "tempo" => run_tempo(rest),
         "clip" => run_clip(rest),
         "scene" => run_scene(rest),
@@ -102,6 +121,16 @@ USAGE:
   project_tool tempo at <file.manifold> <beat> [<beat>...]
   project_tool clip add-audio <file.manifold> --layer <name> --path <audio>
       --start-beat <B> --duration-beats <B> [--in-point <s>] [--source-duration <s>]
+  project_tool project new <file.manifold> [--bpm <f64>]
+  project_tool layer add <file.manifold> --name <N> --type audio|trigger|group|generator
+      [--parent <name>] [--color <#rrggbb>] [--collapsed]          (prints the layer id)
+  project_tool clip add-bulk <file.manifold> --layer <name> --json <clips.json>
+      [{{\"start_beat\",\"duration_beats\",\"name\"?,\"path\"?,\"in_point\"?,\"source_duration\"?}}]
+      all-or-nothing, refuses any overlap; prints the clip ids in input order
+  project_tool clip list <file.manifold> [--json]
+  project_tool marker add-bulk <file.manifold> --json <markers.json>
+      [{{\"beat\",\"name\",\"color\"?}}]  color: #rrggbb (nearest flag colour) or a palette name
+  project_tool marker list <file.manifold> [--json]
   project_tool scene set-model <file.manifold> <model_path> --layer <index> [--layer-name <name>]
   project_tool settings set-rt-quality <file.manifold> <realtime|export> <field> <value>
       field: shadows|ao|gi|reflections  value: ultra_low|low|medium|high|extra_high|ultra
@@ -141,32 +170,30 @@ fn parse_root(json: &str) -> Result<serde_json::Value, String> {
 
 /// Validate edited JSON through the real typed loader (in-memory only — its
 /// registry-less param drops don't touch the file), then write it back with
-/// the app's own archive writer.
-fn validate_and_save(root: &serde_json::Value, path: &str) -> ExitCode {
-    let json = match serde_json::to_string_pretty(root) {
-        Ok(j) => j,
-        Err(e) => {
-            eprintln!("error: serialize failed: {e}");
-            return ExitCode::from(2);
-        }
-    };
+/// the app's own archive writer. Status goes to stderr; the error carries its
+/// exit code (1 refused, 2 IO).
+fn write_validated(root: &serde_json::Value, path: &str) -> Result<(), (u8, String)> {
+    let json = serde_json::to_string_pretty(root).map_err(|e| (2, format!("serialize failed: {e}")))?;
     eprintln!("(validating through typed loader — param-spec warnings below are expected)");
-    if let Err(e) = load_project_from_json(&json) {
-        eprintln!("error: edited project fails to load, NOT saving: {e}");
-        return ExitCode::FAILURE;
-    }
+    load_project_from_json(&json).map_err(|e| (1, format!("edited project fails to load, NOT saving: {e}")))?;
     let name = root
         .get("projectName")
         .and_then(|v| v.as_str())
         .unwrap_or("");
-    match save_v2_archive(&json, name, path, Some("project_tool"), false) {
-        Ok(_) => {
+    save_v2_archive(&json, name, path, Some("project_tool"), false)
+        .map_err(|e| (2, format!("failed to save '{path}': {e}")))?;
+    Ok(())
+}
+
+fn validate_and_save(root: &serde_json::Value, path: &str) -> ExitCode {
+    match write_validated(root, path) {
+        Ok(()) => {
             println!("saved: {path}");
             ExitCode::SUCCESS
         }
-        Err(e) => {
-            eprintln!("error: failed to save '{path}': {e}");
-            ExitCode::from(2)
+        Err((code, e)) => {
+            eprintln!("error: {e}");
+            ExitCode::from(code)
         }
     }
 }
@@ -267,7 +294,11 @@ fn run_tempo(rest: &[String]) -> ExitCode {
 }
 
 fn read_tempo_context(path: &str) -> Result<(TempoMap, Bpm), String> {
-    let root = parse_root(&read_raw_json(path)?)?;
+    tempo_context_from_root(&parse_root(&read_raw_json(path)?)?)
+}
+
+/// The stored tempo map and the `settings.bpm` fallback, as `tempo at` reads them.
+fn tempo_context_from_root(root: &serde_json::Value) -> Result<(TempoMap, Bpm), String> {
     let map: TempoMap = root
         .get("tempoMap")
         .cloned()
@@ -675,6 +706,8 @@ fn run_clip(rest: &[String]) -> ExitCode {
     };
     match sub.as_str() {
         "add-audio" => clip_add_audio(rest),
+        "add-bulk" => timeline_verbs::run_clip_bulk(rest),
+        "list" => timeline_verbs::run_clip_list(rest),
         other => {
             eprintln!("error: unknown clip subcommand '{other}'\n");
             print_usage();
