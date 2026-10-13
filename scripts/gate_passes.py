@@ -5,6 +5,8 @@ Records live in the Git common directory, outside every checkout. Fingerprints
 use Git blob IDs and modes (the leaves of the selected Git trees), overlaying
 working-tree edits so a standalone pass survives committing the same content.
 Unknown commands/dependencies and unreadable inputs run without reuse.
+Rust legs key on their crate closure plus the out-of-crate paths those crates'
+sources name, never whole top-level folders (test_gate_passes guards coverage).
 """
 import contextlib
 import contextvars
@@ -62,6 +64,7 @@ class Snapshot:
         self.roots = {}
         self.workspaces = {}
         self.tracked = {}
+        self.reads = {}
 
     def tracked_roots(self, repo):
         if repo not in self.tracked:
@@ -253,9 +256,15 @@ def selected_entries(repo, prefixes):
     untracked = git(repo, 'ls-files', '--others', '--exclude-standard', '-z').split('\0')
     # Fixtures ignored by Git still change test results. Limit the scan to
     # selected input roots; never walk target or another slot's checkout.
-    roots = [p for p in prefixes if (repo / p).is_dir()
-             and not any(part in {'target', '.git', '.claude', '__pycache__'}
-                         for part in Path(p).parts)]
+    # A named path that does not exist yet scans its nearest existing folder.
+    def scan_root(p):
+        path = Path(p)
+        while path.parts and not (repo / path).is_dir():
+            path = path.parent
+        return path.as_posix() if path.parts else None
+    roots = sorted({r for r in map(scan_root, prefixes) if r
+                    and not any(part in {'target', '.git', '.claude', '__pycache__'}
+                                for part in Path(r).parts)})
     ignored = git(repo, 'ls-files', '--others', '--ignored', '--exclude-standard', '-z',
                   '--', *roots).split('\0') if roots else []
     for path in set(dirty + untracked + ignored):
@@ -275,15 +284,142 @@ def selected_entries(repo, prefixes):
     return entries
 
 
-def rust_paths(repo, packages):
-    # Non-crate runtime assets, native sources, fixtures and build helpers are
-    # shared inputs. CPU doc contracts add docs separately below; renderer
-    # proofs read the generated node catalog, not design prose or bead history.
-    return dependency_paths(repo, packages) + [
-        'Cargo.toml', 'Cargo.lock', 'rust-toolchain', 'rust-toolchain.toml',
-        '.cargo', '.config', 'deny.toml', 'clippy.toml', '.clippy.toml',
-        'scripts', 'tests', 'assets', 'tools', 'native', 'shaders', 'vendor',
-        'docs/node_catalog', '.gitignore', *SHARED_ASSETS]
+# Toolchain and fingerprint-scan inputs every Rust leg shares.
+RUST_TOOLCHAIN_INPUTS = ['Cargo.toml', 'Cargo.lock', 'rust-toolchain', 'rust-toolchain.toml',
+                         '.cargo', '.config', 'deny.toml', 'clippy.toml', '.clippy.toml',
+                         '.gitignore']
+_COMPILE_REF = re.compile(r'(?:include_str|include_bytes|include)!\s*\(\s*(?:concat!\s*\(\s*'
+                          r'env!\s*\(\s*"CARGO_MANIFEST_DIR"\s*\)\s*,\s*)?"([^"]+)"'
+                          r'|#\[path\s*=\s*"([^"]+)"\]')
+_STRING = re.compile(r'"((?:[^"\\\n]|\\.)*)"')
+_PY_IMPORT = re.compile(r'^\s*(?:from\s+([A-Za-z_]\w*)|import\s+([A-Za-z_][\w, ]*))', re.M)
+_JOIN_PART = re.compile(r'\.join\(\s*"([^"\\\n]*)"\s*\)')
+_JOIN_CHAIN = re.compile(r'(?:\.join\(\s*"[^"\\\n]*"\s*\)\s*){2,}')
+_SKIP_PARTS = {'target', '.git', '__pycache__'}
+# A named script may read its siblings, so it keys its whole folder; these were
+# reviewed to read only themselves and their sibling imports.
+SELF_CONTAINED_SCRIPTS = {'scripts/gpu_queue.py', 'scripts/lentine_reference.py',
+                          'scripts/fetch-gltf-conformance.sh'}
+# A bare folder reference whose use was reviewed to be narrower than the
+# folder: (crate root, folder) -> what the crate's other references already key.
+NARROWED_DIR_REFS = {
+    ('crates/manifold-gpu', 'scripts'): 'PYTHONPATH for gpu_queue.py, keyed with its imports',
+}
+
+
+def _join_chains(text):
+    # join("tools").join("audio") names tools/audio, not all of tools.
+    return _JOIN_CHAIN.sub(lambda m: '.join("' + '/'.join(_JOIN_PART.findall(m.group(0))) + '")',
+                           text)
+
+
+def _literal_candidates(text, top):
+    # Any word with a slash counts, prose included; a bare top-level name only
+    # when it is the whole literal, as in join("docs").
+    bare = top - {'crates', 'target', '.git'}
+    for match in _STRING.finditer(_join_chains(text)):
+        whole = match.group(1).strip()
+        for word in {whole, *whole.split()}:
+            token = word.split('{')[0].split('*')[0]
+            if token and ('/' in token or token.startswith('..')
+                          or (word == whole and token in bare)):
+                yield token
+
+
+def _resolve(repo, crate, file, literal, top):
+    """Every out-of-crate repo path a literal can name; errs toward more.
+
+    A path that does not exist yet is keyed as named: an untracked or ignored
+    file appearing there later still changes the key.
+    """
+    found = set()
+    bases = [file.parent, repo / crate]
+    if literal.split('/')[0] in top:
+        bases.append(repo)
+    for base in bases:
+        target = Path(os.path.normpath(base / literal))
+        if target == repo or repo not in target.parents:
+            continue
+        rel = target.relative_to(repo).as_posix()
+        if (repo / crate).is_relative_to(target) or rel.startswith(crate + '/'):
+            continue
+        if _SKIP_PARTS & set(Path(rel).parts):
+            continue
+        found.add(rel)
+    return found
+
+
+def _python_closure(repo, rel, seen):
+    """A referenced Python file reads its sibling imports too."""
+    if rel in seen:
+        return
+    seen.add(rel)
+    path = repo / rel
+    if not rel.endswith('.py') or not path.is_file():
+        return
+    for a, b in _PY_IMPORT.findall(path.read_text(errors='replace')):
+        for name in ([a] if a else [n.strip().split(' ')[0] for n in b.split(',')]):
+            sibling = path.parent / f'{name}.py'
+            if name and sibling.is_file():
+                _python_closure(repo, sibling.relative_to(repo).as_posix(), seen)
+
+
+def crate_external_reads(repo, crate, runtime=True, own=True):
+    """Out-of-crate repo paths a crate's sources name.
+
+    Compile-time includes always count. With runtime, every string literal that
+    resolves to an existing repo path counts too; for a dependency (own=False)
+    only library and build-script sources do, since its tests never run.
+    Memoized within one content snapshot, like the workspace graph.
+    """
+    current = SNAPSHOT.get()
+    key = (Path(repo), crate, runtime, own)
+    if current is not None and key in current.reads:
+        return current.reads[key]
+    reads = _scan_external_reads(Path(repo), crate, runtime, own)
+    if current is not None:
+        current.reads[key] = reads
+    return reads
+
+
+def _scan_external_reads(repo, crate, runtime, own):
+    root = repo / crate
+    top = {p.name for p in repo.iterdir()}
+    files = [p for p in root.rglob('*.rs') if not _SKIP_PARTS & set(p.relative_to(root).parts)]
+    if not own:
+        files = [p for p in files if p.relative_to(root).parts[0] in ('src', 'build.rs')]
+    reads = set()
+    for file in files:
+        text = file.read_text(errors='replace')
+        literals = [a or b for a, b in _COMPILE_REF.findall(text)]
+        if runtime:
+            literals += list(_literal_candidates(text, top))
+        for literal in literals:
+            reads |= _resolve(repo, crate, file, literal, top)
+    keyed = set()
+    for rel in reads:
+        if (crate, rel) in NARROWED_DIR_REFS:
+            continue
+        if rel.endswith(('.py', '.sh')) and rel not in SELF_CONTAINED_SCRIPTS:
+            keyed.add(Path(rel).parent.as_posix())
+        _python_closure(repo, rel, keyed)
+    return keyed
+
+
+def rust_paths(repo, packages, runtime=True):
+    """Reuse key: the dependency closure, toolchain, and the files each crate names.
+
+    Clippy (runtime=False) reads only compile-time includes; tests and proofs
+    also read the data files their sources name.
+    """
+    repo = Path(repo)
+    own = {workspace_inputs(repo).roots[n] for n in packages}
+    crates = dependency_paths(repo, packages)
+    extra = set()
+    for crate in crates:
+        extra |= crate_external_reads(repo, crate, runtime=runtime, own=crate in own)
+    # Renderer proofs read the generated node catalog through assembled paths.
+    return crates + RUST_TOOLCHAIN_INPUTS + sorted(extra) + ['docs/node_catalog', *SHARED_ASSETS]
 
 
 def command_spec(repo, label, cmd):
@@ -291,15 +427,14 @@ def command_spec(repo, label, cmd):
     if cmd[:2] in (['cargo', 'clippy'], ['cargo', 'nextest']):
         if not packages:
             raise ValueError('Rust leg has no explicit packages')
-        # CPU integration tests include docs_index_sync and docs_lifecycle.
-        return rust_paths(repo, packages) + ['docs', '.claude/hooks'], cmd, True
+        return rust_paths(repo, packages, runtime=cmd[1] == 'nextest'), cmd, True
     if label == 'deny':
         workspace = tomllib.loads((repo / 'Cargo.toml').read_text())['workspace']
         packages = [tomllib.loads((p / 'Cargo.toml').read_text())['package']['name']
                     for pattern in workspace['members'] for p in repo.glob(pattern)]
         manifests = [p + '/Cargo.toml' for p in dependency_paths(repo, packages)]
         return manifests + ['Cargo.toml', 'Cargo.lock', 'deny.toml', '.cargo',
-                            'rust-toolchain', 'rust-toolchain.toml', 'scripts'], cmd, True
+                            'rust-toolchain', 'rust-toolchain.toml'], cmd, True
     if label == 'docs-index':
         return ['docs', 'scripts'], cmd, False
     # Diff-based checks depend on both sides, not the spelling of a moving ref.
