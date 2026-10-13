@@ -1,153 +1,249 @@
 [
- {
-  "Pointer": {
-   "target": {
-    "Query": {
-     "text": "Scene"
-    }
-   },
-   "gesture": {
-    "Click": {
-     "modifiers": {}
-    }
-   }
-  }
- },
- "Snapshot",
- {
-  "Assert": {
-   "selector": {
-    "Query": {
-     "text": "Objects"
-    }
-   },
-   "check": "Exists"
-  }
- },
- {
-  "Pointer": {
-   "target": {
-    "Query": {
-     "text": "🌍 World"
-    }
-   },
-   "gesture": {
-    "Click": {
-     "modifiers": {}
-    }
-   }
-  }
- },
- "Snapshot",
- {
-  "Assert": {
-   "selector": {
-    "Query": {
-     "text": "Environment"
-    }
-   },
-   "check": "Exists"
-  }
- },
- {
-  "Assert": {
-   "selector": {
-    "Query": {
-     "text": "+ Add Fog"
-    }
-   },
-   "check": "Exists"
-  }
- },
- "Snapshot",
- {
-  "ScrollTo": {
-   "target": {
-    "Query": {
-     "text": "+ Add Fog"
-    }
-   }
-  }
- },
- {
-  "Pointer": {
-   "target": {
-    "Query": {
-     "text": "+ Add Fog"
-    }
-   },
-   "gesture": {
-    "Click": {
-     "modifiers": {}
-    }
-   }
-  }
- },
- "Snapshot",
- {
-  "Assert": {
-   "selector": {
-    "Query": {
-     "text": "Fog Density",
-     "nth": 0
-    }
-   },
-   "check": "Exists"
-  }
- },
- {
-  "ScrollTo": {
-   "target": {
-    "Query": {
-     "type": "Button",
-     "under_text": "Fog Density"
-    }
-   }
-  }
- },
- {
-  "Pointer": {
-   "target": {
-    "Query": {
-     "type": "Button",
-     "under_text": "Fog Density"
-    }
-   },
-   "gesture": {
-    "Drag": {
-     "to": {
-      "Query": {
-       "type": "Label",
-       "under_text": "Fog Density"
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "text": "Scene"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
       }
-     },
-     "steps": 8
     }
-   }
-  }
- },
- "Snapshot",
- {
-  "Assert": {
-   "selector": {
-    "Query": {
-     "text": "0.00",
-     "under_text": "Fog Density",
-     "nth": 0
+  },
+  "Snapshot",
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "text": "Objects"
+        }
+      },
+      "check": "Exists"
     }
-   },
-   "check": {
-    "Count": 0
-   }
-  }
- },
- {
-  "Key": {
-   "key": "Z",
-   "modifiers": {
-    "command": true
-   }
-  }
- },
- "Snapshot"
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "text": "🌍 World"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  "Snapshot",
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "text": "Environment"
+        }
+      },
+      "check": "Exists"
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "text": "Fog: None"
+        }
+      },
+      "check": "Exists"
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "text": "+ Add Fog"
+        }
+      },
+      "check": "Exists"
+    }
+  },
+  "Snapshot",
+  {
+    "ScrollTo": {
+      "target": {
+        "Query": {
+          "text": "+ Add Fog"
+        }
+      }
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "text": "+ Add Fog"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  "Snapshot",
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "text": "Fog Density",
+          "nth": 0
+        }
+      },
+      "check": "Exists"
+    }
+  },
+  {
+    "Key": {
+      "key": "Z",
+      "modifiers": {
+        "command": true
+      }
+    }
+  },
+  "Snapshot",
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "text": "Fog Density",
+          "nth": 0
+        }
+      },
+      "check": {
+        "Count": 0
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "text": "+ Add Fog"
+        }
+      },
+      "check": "Exists"
+    }
+  },
+  {
+    "Key": {
+      "key": "Z",
+      "modifiers": {
+        "command": true,
+        "shift": true
+      }
+    }
+  },
+  "Snapshot",
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "text": "Fog Density",
+          "nth": 0
+        }
+      },
+      "check": "Exists"
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Point": {
+          "x": 722.2,
+          "y": 728.0
+        }
+      },
+      "gesture": {
+        "Drag": {
+          "to": {
+            "Point": {
+              "x": 902.75,
+              "y": 728.0
+            }
+          },
+          "steps": 8
+        }
+      }
+    }
+  },
+  "Snapshot",
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "text": "Fog Density",
+          "nth": 0
+        }
+      },
+      "check": "Exists"
+    }
+  },
+  {
+    "ScrollTo": {
+      "target": {
+        "Query": {
+          "type": "Button",
+          "under_text": "Fog Density"
+        }
+      }
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "type": "Button",
+          "under_text": "Fog Density"
+        }
+      },
+      "gesture": {
+        "Drag": {
+          "to": {
+            "Query": {
+              "type": "Label",
+              "under_text": "Fog Density"
+            }
+          },
+          "steps": 8
+        }
+      }
+    }
+  },
+  "Snapshot",
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "text": "0.00",
+          "under_text": "Fog Density",
+          "nth": 0
+        }
+      },
+      "check": {
+        "Count": 0
+      }
+    }
+  },
+  {
+    "Key": {
+      "key": "Z",
+      "modifiers": {
+        "command": true
+      }
+    }
+  },
+  "Snapshot"
 ]
