@@ -365,7 +365,8 @@ pub fn push_state(
         };
         ui.header.set_project_name(&header_name);
         let ppb = ui.viewport.pixels_per_beat();
-        ui.header.set_zoom_label(&format!("{:.0} px/beat", ppb));
+        let decimals = if ppb >= 1.0 { 0 } else { 2 };
+        ui.header.set_zoom_label(&format!("{ppb:.decimals$} px/beat"));
 
         // Footer — quantize mode + FPS. (Resolution / render scale / tonemap
         // moved to the Settings popup; the footer keeps the live FPS readout.)

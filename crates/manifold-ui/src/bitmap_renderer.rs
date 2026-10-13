@@ -77,15 +77,12 @@ pub fn timing_grid_policy(logical_ppb: f32, beats_per_bar: f32) -> TimingGridPol
         1
     };
     let bar_px = ppb * bpb;
-    let bar_skip = if bar_px >= 8.0 {
-        1
-    } else if bar_px >= 4.0 {
-        2
-    } else if bar_px >= 2.0 {
-        4
-    } else {
-        8
-    };
+    // Show every 2nd, 4th, 8th... bar so drawn bar lines stay >= 8px apart at
+    // any zoom-out.
+    let mut bar_skip = 1u32;
+    while bar_px * (bar_skip as f32) < 8.0 && bar_skip < 1 << 20 {
+        bar_skip *= 2;
+    }
     TimingGridPolicy {
         subdivisions_per_beat,
         show_beat_lines: ppb >= 6.0,
@@ -440,12 +437,9 @@ fn paint_grid_lines(
     paint_x0: usize,
     paint_x1: usize,
 ) {
-    if scaled_ppb < 1.0 || time_sig_numerator < 1 || paint_x0 >= paint_x1 {
-        return;
-    }
-    let policy = timing_grid_policy(logical_ppb, time_sig_numerator as f32);
-    let subdiv_width = scaled_ppb / policy.subdivisions_per_beat as f32;
-    if subdiv_width < 1.0 {
+    // Line density is the grid policy's job (it thins lines to stay several
+    // pixels apart), so only degenerate inputs bail here.
+    if scaled_ppb.is_nan() || scaled_ppb <= 0.0 || time_sig_numerator < 1 || paint_x0 >= paint_x1 {
         return;
     }
 
@@ -599,6 +593,20 @@ mod tests {
         assert_eq!(timing_grid_policy(12.0, 4.0).subdivisions_per_beat, 2);
         assert_eq!(timing_grid_policy(16.0, 4.0).subdivisions_per_beat, 4);
         assert_eq!(timing_grid_policy(1.0, 4.0).bar_skip, 2);
+    }
+
+    /// At the deepest zoom-out bar lines keep thinning so they never pack
+    /// tighter than 8px, and the clip-lane painter still draws them.
+    #[test]
+    fn far_zoom_out_keeps_bar_lines_spaced_and_painted() {
+        let ppb = color::MIN_PIXELS_PER_BEAT;
+        let policy = timing_grid_policy(ppb, 4.0);
+        let spacing = ppb * 4.0 * policy.bar_skip as f32;
+        assert!((8.0..16.0).contains(&spacing), "bar spacing {spacing}px");
+
+        let mut buf = vec![Color32::TRANSPARENT; 400 * 4];
+        paint_grid_lines(&mut buf, 400, 4, 0.0, ppb, ppb, 4, 0, 400);
+        assert_ne!(buf[0], Color32::TRANSPARENT, "bar line at beat 0 must paint");
     }
 
     #[test]
