@@ -18,12 +18,6 @@ rusty_link = "0.4"
 parking_lot = { workspace = true }
 ahash = { workspace = true }
 
-[features]
-# The frame-exact transport determinism test, committed red before the clock is
-# wired (docs/FRAME_EXACT_TRANSPORT_DESIGN.md section 5). P2 deletes this
-# feature in the commit that turns the test green.
-frame-exact-red = []
-
 [build-dependencies]
 cc = "1"
 

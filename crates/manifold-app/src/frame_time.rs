@@ -32,6 +32,14 @@
 //! never on disk; `--sim-rate` overrides the project's Sim Rate the same way.
 //! Presentation is not timed here (no window); the pacing doc's vsync
 //! quantisation applies on top of these numbers.
+//!
+//! Frame-exact transport (docs/FRAME_EXACT_TRANSPORT_DESIGN.md section 5, L2
+//! artifact): `--transport-log <path>` writes one line per playing tick,
+//! `index beat_bits automation_hash`, where the hash covers every generator
+//! and effect param value. `--pre-play-delay-seed <n>` waits a seeded 0–2
+//! frames of wall time before Play, so two runs press Play at different grid
+//! phases; `diff` of two such logs over shared indices must be empty. The
+//! summary prints the histogram of grid frames per tick.
 
 use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
@@ -67,6 +75,8 @@ struct Args {
     granularity: ProfileGranularity,
     splash_frames: usize,
     png: Option<(usize, String)>,
+    transport_log: Option<String>,
+    pre_play_delay_seed: Option<u64>,
 }
 
 fn usage_exit(msg: &str) -> ! {
@@ -74,7 +84,7 @@ fn usage_exit(msg: &str) -> ! {
     eprintln!(
         "usage: manifold frame-time <project.manifold> --frames N [--frame-clock] [--resolution R] [--solve-level L] [--sim-rate 15|20|30|60] \
          [--stamp-every K] [--stamp-granularity dispatch|node] [--splash-frames S] \
-         [--png-frame T --png <path>]"
+         [--png-frame T --png <path>] [--transport-log <path>] [--pre-play-delay-seed N]"
     );
     std::process::exit(2);
 }
@@ -121,7 +131,47 @@ fn parse(args: &[String]) -> Args {
         (Some(_), None) | (None, Some(_)) => usage_exit("--png-frame and --png go together"),
         (Some(_), Some(path)) => Some((number("--png-frame", None), path)),
     };
-    Args { project, frames, frame_clock, resolution, solve_level, sim_rate, stamp_every, granularity, splash_frames, png }
+    let transport_log = value(args, "--transport-log");
+    let pre_play_delay_seed = value(args, "--pre-play-delay-seed")
+        .map(|s| s.parse::<u64>().unwrap_or_else(|_| usage_exit("--pre-play-delay-seed must be a whole number")));
+    Args {
+        project, frames, frame_clock, resolution, solve_level, sim_rate, stamp_every, granularity, splash_frames, png,
+        transport_log, pre_play_delay_seed,
+    }
+}
+
+/// 0–2 frames of wall time from a seed (splitmix64), so two seeds press Play
+/// at different grid phases.
+fn pre_play_delay(seed: u64, frame_rate: f64) -> Duration {
+    let mut z = seed.wrapping_add(0x9E37_79B9_7F4A_7C15);
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    z ^= z >> 31;
+    let unit = (z >> 11) as f64 / (1u64 << 53) as f64;
+    Duration::from_secs_f64(unit * 2.0 / frame_rate)
+}
+
+/// FNV-1a over every generator and effect param value's bits: what the
+/// transport wrote this frame, in a fixed order, with no per-process hash seed.
+fn automation_hash(project: &manifold_core::project::Project) -> u64 {
+    let mut hash = 0xCBF2_9CE4_8422_2325_u64;
+    let mut eat = |bits: u32| {
+        for byte in bits.to_le_bytes() {
+            hash = (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01B3);
+        }
+    };
+    for fx in &project.settings.master_effects {
+        fx.params.iter().for_each(|p| eat(p.value.to_bits()));
+    }
+    for layer in &project.timeline.layers {
+        for fx in layer.effects.iter().flatten() {
+            fx.params.iter().for_each(|p| eat(p.value.to_bits()));
+        }
+        if let Some(gp) = layer.gen_params() {
+            gp.params.iter().for_each(|p| eat(p.value.to_bits()));
+        }
+    }
+    hash
 }
 
 #[cfg(test)]
@@ -134,6 +184,20 @@ mod tests {
         assert!(!parse(&args).frame_clock);
         args.push("--frame-clock".into());
         assert!(parse(&args).frame_clock);
+    }
+
+    #[test]
+    fn transport_log_flags_parse_and_delay_stays_within_two_frames() {
+        let mut args: Vec<String> = ["frame-time", "x.manifold", "--frames", "2"].into_iter().map(str::to_owned).collect();
+        let parsed = parse(&args);
+        assert!(parsed.transport_log.is_none() && parsed.pre_play_delay_seed.is_none());
+        args.extend(["--transport-log", "/tmp/a.log", "--pre-play-delay-seed", "7"].map(str::to_owned));
+        let parsed = parse(&args);
+        assert_eq!(parsed.transport_log.as_deref(), Some("/tmp/a.log"));
+        assert_eq!(parsed.pre_play_delay_seed, Some(7));
+        let delays: Vec<Duration> = (0..64).map(|seed| pre_play_delay(seed, 60.0)).collect();
+        assert!(delays.iter().all(|d| *d < Duration::from_secs_f64(2.0 / 60.0)));
+        assert_ne!(delays[1], delays[2], "different seeds press Play at different phases");
     }
 
     #[test]
@@ -842,7 +906,19 @@ fn probe(args: &Args) -> Result<(), String> {
 
     ct.timer.set_frame_clocked(args.frame_clock);
     ct.timer.resume_after_load();
+    if let Some(seed) = args.pre_play_delay_seed {
+        let delay = pre_play_delay(seed, f64::from(ct.engine.frame_rate()));
+        println!("frame-time: pre-play delay {:.3} ms (seed {seed})", delay.as_secs_f64() * 1e3);
+        std::thread::sleep(delay);
+    }
     ct.handle_command(ContentCommand::Play);
+    let mut transport_log = match &args.transport_log {
+        Some(path) => Some(std::io::BufWriter::new(
+            std::fs::File::create(path).map_err(|e| format!("--transport-log {path}: {e}"))?,
+        )),
+        None => None,
+    };
+    let mut frames_histogram: BTreeMap<u32, usize> = BTreeMap::new();
     let (gpu_time_tx, gpu_time_rx) = crossbeam_channel::unbounded::<(&'static str, f64, f64)>();
     ct.content_pipeline.set_gpu_time_tap(Some(gpu_time_tx));
     let mut frames: Vec<Frame> = Vec::with_capacity(args.frames);
@@ -870,6 +946,15 @@ fn probe(args: &Args) -> Result<(), String> {
             last = now;
             (interval_ms, ct.content_pipeline.last_fence_wait_ms())
         };
+        *frames_histogram.entry(ct.engine.tick_frames()).or_default() += 1;
+        if let Some(log) = &mut transport_log
+            && ct.engine.is_playing()
+            && let Some(project) = ct.engine.project()
+        {
+            use std::io::Write;
+            writeln!(log, "{} {:#018x} {:#018x}", ct.engine.transport_frame(), ct.engine.current_beat_f64().to_bits(), automation_hash(project))
+                .map_err(|e| format!("--transport-log: {e}"))?;
+        }
         let frame_split = stamped.then(|| split(&mut ct, args.granularity));
         if args.frame_clock && let Some(split) = &frame_split
             && (split.invalid != 0 || split.overflow != 0)
@@ -884,6 +969,17 @@ fn probe(args: &Args) -> Result<(), String> {
         let clock = ct.physics_metrics.clock;
         frames.push(Frame { interval_ms, fence_ms, plain_gpu_ms: None, split: frame_split, clock, no_tick: None });
     }
+    if let Some(mut log) = transport_log.take() {
+        use std::io::Write;
+        log.flush().map_err(|e| format!("--transport-log: {e}"))?;
+    }
+    let histogram: Vec<String> = frames_histogram.iter().map(|(n, ticks)| format!("{n}: {ticks}")).collect();
+    let multi: usize = frames_histogram.iter().filter(|(n, _)| **n > 1).map(|(_, ticks)| ticks).sum();
+    println!(
+        "frame-time: grid frames per tick over {} ticks: {} | ticks with frames > 1: {multi}",
+        args.frames,
+        histogram.join(", "),
+    );
     let clocks: Vec<ClockMetrics> = frames.iter().map(|frame| frame.clock).collect();
     for (frame, verdict) in frames.iter_mut().zip(attribute(&clocks)) {
         frame.no_tick = verdict;

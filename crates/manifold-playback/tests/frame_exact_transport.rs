@@ -3,10 +3,8 @@
 //!
 //! The same arrangement played twice must give the same values on the same
 //! transport frame, whatever the Play-press phase, tick jitter or stalls.
-//! Committed red: today the engine adds measured wall time, so a jittered run
-//! samples different beats. Only `drive` changes when P2 wires the clock; P2
-//! deletes the `frame-exact-red` feature in the commit that turns this green.
-#![cfg(feature = "frame-exact-red")]
+//! Committed red while the engine added measured wall time; green once the
+//! tick hands the engine grid frames and time comes from the frame index.
 
 use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
@@ -243,15 +241,11 @@ fn schedule(anchor: Instant, seed: Option<u64>) -> Vec<Event> {
 }
 
 /// Feed one run's events to the engine; `on_frame` sees each playing tick
-/// with the transport frame index it rendered. The one part of this file P2
-/// changes: today each tick hands the engine the wall time since the previous
-/// tick, as `FrameTimer::consume_tick_at` hands the content thread, and the
-/// index is the D2 grid's frame count since Play. After P2 the tick hands the
-/// engine those frames and the index comes from the engine's clock.
+/// with the transport frame index it rendered. Each tick hands the engine the
+/// grid frames the D2 tick grid counted since the previous tick, as the
+/// content thread's timer does, and the index is the engine clock's.
 fn drive(engine: &mut PlaybackEngine, anchor: Instant, events: &[Event], mut on_frame: impl FnMut(&mut PlaybackEngine, i64)) {
     let mut grid = FrameGrid::new(FPS, anchor);
-    let mut last_tick = anchor;
-    let mut index = 0i64;
     let mut frame_count = 0u64;
     for event in events {
         let now = match event {
@@ -262,20 +256,16 @@ fn drive(engine: &mut PlaybackEngine, anchor: Instant, events: &[Event], mut on_
             Event::Tick(now) => *now,
         };
         let frames = grid.consume_at(now);
-        let dt = Seconds(now.saturating_duration_since(last_tick).as_secs_f64());
-        last_tick = now;
         let playing = engine.is_playing();
         let result = engine.tick(TickContext {
-            dt_seconds: dt,
+            frames,
             realtime_now: Seconds(now.saturating_duration_since(anchor).as_secs_f64()),
-            pre_render_dt: dt,
             frame_count,
-            export_fixed_dt: Seconds::ZERO,
         });
         engine.reclaim_tick_result(result);
         frame_count += 1;
         if playing {
-            index += i64::from(frames);
+            let index = engine.transport_frame();
             on_frame(engine, index);
         }
     }
@@ -366,4 +356,355 @@ fn same_values_per_index_across_phase_jitter_and_stalls() {
     if let Some(divergence) = first_divergence(&steady, &jittered) {
         panic!("same arrangement, different values per transport frame: {divergence}");
     }
+}
+
+// ─── Edge cases (section 5). `jump_over_two_frames_launches_and_resets` is D6, P3. ───
+
+/// NoteOn is pressed right after the tick that reaches this frame.
+const NOTE_AFTER_INDEX: i64 = 400;
+
+fn engine_with(project: Project) -> PlaybackEngine {
+    let mut engine = PlaybackEngine::new(vec![Box::new(StubRenderer::new_generator())]);
+    engine.initialize(project);
+    engine
+}
+
+fn tick(engine: &mut PlaybackEngine, frames: u32) {
+    let result = engine.tick(TickContext { frames, ..TickContext::default() });
+    engine.reclaim_tick_result(result);
+}
+
+/// One generator layer with `spans` as clips, at one tempo.
+fn constant_tempo(bpm: f32, fps: f32, spans: &[(f64, f64)]) -> Project {
+    let mut project = Project::default();
+    project.settings.bpm = Bpm(bpm);
+    project.settings.frame_rate = fps;
+    project.tempo_map.add_or_replace_point(Beats::ZERO, Bpm(bpm), TempoPointSource::Manual, 0.001);
+    let mut layer = Layer::new_generator("Gen".into(), PresetTypeId::new("TestGen"), 0);
+    layer.clips = clips(spans);
+    project.timeline.layers.push(layer);
+    project
+}
+
+/// `constant_tempo` plus a session layer with one two-beat slot.
+fn session_project(bpm: f32) -> (Project, LayerId, SceneId) {
+    let mut project = constant_tempo(bpm, FPS, &[]);
+    let session = Layer::new_generator("Session".into(), PresetTypeId::new("TestGen"), 1);
+    let layer = session.layer_id.clone();
+    let scene = SceneId::new("edge-scene");
+    project.session.scenes.push(Scene { id: scene.clone(), name: "Scene".into(), color: None });
+    project.session.slots.push(SessionSlot {
+        layer_id: layer.clone(),
+        scene_id: scene.clone(),
+        name: "Loop".into(),
+        color: None,
+        sequence: ClipSequence { length_beats: Beats(2.0), clips: clips(&[(0.0, 1.0)]) },
+    });
+    project.timeline.layers.push(session);
+    (project, layer, scene)
+}
+
+fn is_active(engine: &PlaybackEngine, clip: &ClipId) -> bool {
+    engine.renderers()[0].is_active(clip.as_str())
+}
+
+/// D11: a tempo edit while playing keeps the musical position. The index
+/// moves to the first frame at or after the position's new time, with no hold.
+#[test]
+fn tempo_edit_during_play_keeps_beat() {
+    let mut engine = engine_with(constant_tempo(150.0, FPS, &[]));
+    engine.play();
+    // Beat 12 at 150 BPM is 4.8 s, frame 288.
+    tick(&mut engine, 288);
+    assert_eq!(engine.transport_frame(), 288);
+    let before = engine.current_beat_f64();
+    let old_map = engine.project().unwrap().tempo_map.clone();
+    engine.project_mut().unwrap().tempo_map.add_or_replace_point(Beats(8.0), Bpm(128.0), TempoPointSource::Manual, 0.001);
+    engine.reconcile_tempo_edit(&old_map, Bpm(150.0));
+    // Beat 12 now sits at 3.2 s + 4 beats at 128 BPM = 5.075 s, frame 304.5.
+    assert_eq!(engine.transport_frame(), 305);
+    let per_frame = 128.0 / 60.0 / f64::from(FPS);
+    let after = engine.current_beat_f64();
+    assert!(after >= before && after < before + per_frame, "beat {before} became {after}");
+    tick(&mut engine, 1);
+    assert_eq!(engine.transport_frame(), 306);
+    assert!((engine.current_beat_f64() - after - per_frame).abs() < 1e-9, "the new tempo holds");
+}
+
+/// D10: a project fps change keeps the time, moves the index to the first
+/// frame at or after it, then advances on the new grid.
+#[test]
+fn fps_change_remaps_forward() {
+    let mut engine = engine_with(constant_tempo(120.0, 60.0, &[]));
+    engine.play();
+    for _ in 0..7 {
+        tick(&mut engine, 1);
+    }
+    assert_eq!(engine.transport_frame(), 7);
+    engine.project_mut().unwrap().settings.frame_rate = 24.0;
+    tick(&mut engine, 1);
+    // 7/60 s is frame 2.8 at 24 fps: remapped forward to 3, then one advance.
+    assert_eq!(engine.frame_rate(), 24.0);
+    assert_eq!(engine.transport_frame(), 4);
+    assert_eq!(engine.current_time(), engine.transport_clock().time_at(4));
+    assert_eq!(engine.tick_dt(), engine.transport_clock().step());
+}
+
+/// Pause keeps the frame and the beat; resume advances from it without
+/// repeating it; stop goes to frame 0. Paused ticks still carry their dt (D5).
+#[test]
+fn stop_resets_pause_keeps() {
+    let mut engine = engine_with(constant_tempo(120.0, FPS, &[(0.0, 100.0)]));
+    engine.play();
+    for _ in 0..100 {
+        tick(&mut engine, 1);
+    }
+    assert_eq!(engine.transport_frame(), 100);
+    let beat = engine.current_beat_f64();
+    engine.pause();
+    tick(&mut engine, 1);
+    tick(&mut engine, 3);
+    assert_eq!(engine.transport_frame(), 100);
+    assert_eq!(engine.current_beat_f64().to_bits(), beat.to_bits());
+    assert_eq!(engine.tick_dt().0, 3.0 * engine.transport_clock().step().0, "paused graphs keep moving");
+    engine.play();
+    tick(&mut engine, 1);
+    assert_eq!(engine.transport_frame(), 101, "resume renders the next frame, not the paused one again");
+    engine.stop();
+    assert_eq!(engine.transport_frame(), 0);
+    assert_eq!(engine.current_time(), Seconds::ZERO);
+    assert!((0.0..1e-6).contains(&engine.current_beat_f64()), "{}", engine.current_beat_f64());
+    tick(&mut engine, 2);
+    assert_eq!(engine.transport_frame(), 0, "stopped ticks don't move the transport");
+}
+
+fn first_session_frame(bpm: f32) -> Option<i64> {
+    let (project, layer, scene) = session_project(bpm);
+    let mut engine = engine_with(project);
+    engine.session_set_quantize(Beats(4.0));
+    engine.play();
+    tick(&mut engine, 10);
+    engine.session_launch_slot(layer, scene);
+    for _ in 0..200 {
+        tick(&mut engine, 1);
+        if engine.session_runtime().playing_count() > 0 {
+            return Some(engine.transport_frame());
+        }
+    }
+    None
+}
+
+/// A launch quantised to beat 4 activates on the first frame whose beat
+/// reaches it: exactly on frame 96 at 150 BPM (on the grid, D14), and on
+/// frame 113 at 128 BPM, where beat 4 falls at frame 112.5.
+#[test]
+fn session_launch_on_first_grid_frame() {
+    assert_eq!(first_session_frame(150.0), Some(96));
+    assert_eq!(first_session_frame(128.0), Some(113));
+}
+
+/// The phantom clip a NoteOn creates, stamped at the beat on screen.
+fn stamp_note_on(seed: Option<u64>) -> (i64, u64, u64) {
+    let Fixture { project, .. } = fixture();
+    let mut engine = engine_with(project);
+    let anchor = Instant::now();
+    let events = schedule(anchor, seed);
+    let mut stamp = None;
+    drive(&mut engine, anchor, &events, |engine, index| {
+        if stamp.is_none() && index >= NOTE_AFTER_INDEX {
+            // MIDI drains before the next engine tick, so the note sees this
+            // frame's beat. The trigger only reads the engine as its host.
+            let mut project = engine.project().expect("project").clone();
+            let clip = manifold_playback::live_clip_manager::LiveClipManager::new()
+                .trigger_live_content_clip(&mut project, &*engine, 0, 1.0, None, -1, false, 0.0, -1)
+                .expect("phantom clip");
+            stamp = Some((index, clip.start_beat.0.to_bits(), engine.current_beat_f64().to_bits()));
+        }
+    });
+    stamp.expect("the note fired")
+}
+
+/// NoteOn stamps the previous grid frame's beat, the same bits whatever the
+/// press phase or jitter.
+#[test]
+fn noteon_stamps_previous_grid_beat() {
+    let steady = stamp_note_on(None);
+    assert_eq!(steady.0, NOTE_AFTER_INDEX);
+    assert_eq!(steady.1, steady.2, "the phantom clip starts at the beat of the frame on screen");
+    assert_eq!(stamp_note_on(Some(SEED)), steady, "same frame, same stamp");
+}
+
+/// D3: a tick 5 frames late skips the passed frames and stays in time, and a
+/// quantised launch whose target the skip jumped over activates on the
+/// landing frame.
+#[test]
+fn stall_skips_and_stays_in_time() {
+    let (project, layer, scene) = session_project(150.0);
+    let mut engine = engine_with(project);
+    engine.session_set_quantize(Beats(4.0));
+    let anchor = Instant::now();
+    let mut grid = FrameGrid::new(FPS, anchor);
+    engine.play();
+    for n in 1..=94 {
+        let frames = grid.consume_at(grid.deadline(n));
+        tick(&mut engine, frames);
+    }
+    assert_eq!(engine.transport_frame(), 94);
+    // The launch targets beat 4, frame 96 at 150 BPM.
+    engine.session_launch_slot(layer, scene);
+    let step = 1.0 / f64::from(FPS);
+    let frames = grid.consume_at(offset(grid.deadline(99), 0.3 * step));
+    assert_eq!(frames, 5);
+    tick(&mut engine, frames);
+    assert_eq!(engine.transport_frame(), 99);
+    assert_eq!(engine.current_time(), engine.transport_clock().time_at(99));
+    assert_eq!(engine.tick_dt().0, 5.0 * engine.transport_clock().step().0);
+    assert!(engine.session_runtime().playing_count() > 0, "the jumped-over launch activates on the landing frame");
+    let frames = grid.consume_at(grid.deadline(100));
+    assert_eq!(frames, 1, "the next on-time tick is one frame");
+    tick(&mut engine, frames);
+    assert_eq!(engine.transport_frame(), 100);
+}
+
+/// D4: a seek while playing snaps forward and holds one advance, so the next
+/// tick renders the target frame.
+#[test]
+fn seek_while_playing_renders_target_first() {
+    // 150 BPM: the clip at beat 2.5 starts at 1.0 s, frame 60.
+    let mut engine = engine_with(constant_tempo(150.0, FPS, &[(2.5, 1.0)]));
+    let clip = engine.project().unwrap().timeline.layers[0].clips[0].id.clone();
+    engine.play();
+    tick(&mut engine, 1);
+    tick(&mut engine, 1);
+    engine.seek_to(Seconds(1.0));
+    tick(&mut engine, 1);
+    assert_eq!(engine.transport_frame(), 60, "the first tick after a playing seek renders the target");
+    assert!(is_active(&engine, &clip), "the clip's first frame is on screen");
+    tick(&mut engine, 1);
+    assert_eq!(engine.transport_frame(), 61);
+    // 1.004 s is frame 60.24: snapped forward to 61.
+    engine.seek_to(Seconds(1.004));
+    tick(&mut engine, 1);
+    assert_eq!(engine.transport_frame(), 61);
+}
+
+/// D4: play anchors on the frame already on screen and the first playing
+/// tick moves on from it.
+#[test]
+fn play_advances_from_anchor_without_repeat() {
+    let mut engine = engine_with(constant_tempo(120.0, FPS, &[]));
+    // 0.81 s is frame 48.6: the stopped transport shows frame 49.
+    engine.locate(Seconds(0.81));
+    assert_eq!(engine.transport_frame(), 49);
+    engine.play();
+    assert_eq!(engine.transport_frame(), 49, "play anchors on the frame on screen");
+    tick(&mut engine, 1);
+    assert_eq!(engine.transport_frame(), 50);
+    engine.stop();
+    engine.play();
+    tick(&mut engine, 1);
+    assert_eq!(engine.transport_frame(), 1, "from stop, frame 0 was on screen");
+}
+
+/// Export as `content_export` drives the engine: the export clock before the
+/// first seek, a warm-up tick, the second seek, then frame k with no advance
+/// on frame 0 and one frame after.
+fn export(engine: &mut PlaybackEngine, fps: f32, start: Seconds, n: u64, mut on_frame: impl FnMut(&PlaybackEngine, u64)) {
+    engine.set_export_mode(true);
+    engine.begin_export_clock(fps);
+    engine.seek_to(start);
+    engine.play();
+    let warm_up = engine.tick(TickContext { frames: 1, frame_count: u64::MAX, ..TickContext::default() });
+    engine.reclaim_tick_result(warm_up);
+    engine.seek_to(start);
+    engine.begin_export_frames();
+    for k in 0..n {
+        let result = engine.tick(TickContext { frames: u32::from(k != 0), frame_count: k, ..TickContext::default() });
+        engine.reclaim_tick_result(result);
+        on_frame(engine, k);
+    }
+    engine.end_export_clock();
+    engine.set_export_mode(false);
+}
+
+/// D9, D17: export frames sit on the song-time-0 grid. At the project rate
+/// they match live play on the same frame bit for bit. At half the rate the
+/// time is the same bits and the clips the same; the beat is sampled 1e-7 of
+/// an export frame late instead of a live one (D14), so beats and params
+/// agree to within that.
+#[test]
+fn export_frames_match_live_indices() {
+    let Fixture { project, session_layer, .. } = fixture();
+    let clip_ids = all_clip_ids(&project);
+    let mut live = engine_with(project.clone());
+    live.play();
+    let mut live_frames = BTreeMap::new();
+    for _ in 0..600 {
+        tick(&mut live, 1);
+        live_frames.insert(live.transport_frame(), capture(&live, &clip_ids, &session_layer));
+    }
+    // From 2.01 s, off both grids, export frame 0 is the first frame at or
+    // after it. The clip-edge step envelope is history, not grid: it counts
+    // edges since the export's second seek, which live play from 0 never
+    // made, so it is left out; `param_step_clip_edge` covers its live and
+    // export counts.
+    let level = 3;
+    for (start, fps, ratio, first) in [(0.0, 60.0, 1, 0), (0.0, 30.0, 2, 0), (2.01, 60.0, 1, 121), (2.01, 30.0, 2, 61)] {
+        let mut engine = engine_with(project.clone());
+        export(&mut engine, fps, Seconds(start), 200, |engine, k| {
+            let index = engine.transport_frame();
+            let at = format!("export from {start} s at {fps} fps, frame {k}");
+            assert_eq!(index, first + k as i64, "{at}");
+            let Some(live) = live_frames.get(&(index * ratio)) else {
+                assert_eq!(index, 0, "live play renders every frame after 0");
+                return;
+            };
+            let mut frame = capture(engine, &clip_ids, &session_layer);
+            frame.param_bits[level] = live.param_bits[level];
+            frame.step_values.clone_from(&live.step_values);
+            if ratio == 1 {
+                let one = BTreeMap::from([(index, frame)]);
+                if let Some(divergence) = first_divergence(&live_frames, &one) {
+                    panic!("{at}: {divergence}");
+                }
+                return;
+            }
+            assert_eq!(frame.time_bits, live.time_bits, "{at}: time");
+            assert_eq!(frame.active_clips, live.active_clips, "{at}: clips");
+            assert_eq!(frame.session, live.session, "{at}: session");
+            let beat_gap = (f64::from_bits(frame.beat_bits) - f64::from_bits(live.beat_bits)).abs();
+            assert!(beat_gap < 1e-8, "{at}: beats {beat_gap} apart");
+            for (p, (a, b)) in frame.param_bits.iter().zip(&live.param_bits).enumerate() {
+                let gap = (f32::from_bits(*a) - f32::from_bits(*b)).abs();
+                assert!(gap < 1e-5, "{at}: param {p} {gap} apart");
+            }
+        });
+    }
+}
+
+/// A 24 fps export of a 60 fps project starting at 1.04 s (beat 2.08 at 120
+/// BPM): export frame 0 is index 25 (1.0417 s, beat 2.083). A clip at beat
+/// 2.09 (1.045 s) starts after it, so it first shows on export frame 1.
+#[test]
+fn export_clip_inside_first_frame() {
+    let mut engine = engine_with(constant_tempo(120.0, 60.0, &[(2.09, 4.0)]));
+    let clip = engine.project().unwrap().timeline.layers[0].clips[0].id.clone();
+    let mut shown = Vec::new();
+    export(&mut engine, 24.0, Seconds(1.04), 3, |engine, _| shown.push((engine.transport_frame(), is_active(engine, &clip))));
+    assert_eq!(shown, vec![(25, false), (26, true), (27, true)]);
+    assert_eq!(engine.frame_rate(), 60.0, "the end of export returns to the project rate");
+}
+
+/// D9: export advances under external sync; live play under it still waits
+/// for the source (STOPGAP(frame-exact P3)).
+#[test]
+fn export_under_external_sync_advances() {
+    let mut engine = engine_with(constant_tempo(120.0, 60.0, &[]));
+    engine.set_external_time_sync(true);
+    let mut indices = Vec::new();
+    export(&mut engine, 30.0, Seconds(1.0), 5, |engine, _| indices.push(engine.transport_frame()));
+    assert_eq!(indices, vec![30, 31, 32, 33, 34]);
+    let parked = engine.transport_frame();
+    tick(&mut engine, 1);
+    assert_eq!(engine.transport_frame(), parked, "live ticks under external sync wait for the source");
 }

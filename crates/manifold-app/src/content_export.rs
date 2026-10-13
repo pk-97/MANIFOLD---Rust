@@ -33,7 +33,7 @@ struct ExportFrameFailure {
 pub(crate) struct ExportFrameObservation {
     pub frame_idx: u32,
     pub time_seconds: f64,
-    pub dt_seconds: f64,
+    pub tick_dt: f64,
     pub status: manifold_node_engine::runtime::frame_status::FrameRenderStatus,
     pub rt_updates: manifold_gpu::raytrace::RtAccelUpdate,
     pub rt_dispatches: u32,
@@ -423,6 +423,7 @@ impl ContentThread {
         ) {
             log::error!("[ContentThread] Export resize failed: {message}");
             self.engine.stop();
+            self.engine.end_export_clock();
             let restore_time = self.engine.beat_to_timeline_time(saved_beat);
             self.engine.seek_to(restore_time);
             if was_playing {
@@ -493,6 +494,8 @@ impl ContentThread {
             return;
         }
         self.engine.stop();
+        // Back on the project-rate grid before the restore seek snaps to it.
+        self.engine.end_export_clock();
         let restore_time = self.engine.beat_to_timeline_time(saved_beat);
         self.engine.seek_to(restore_time);
         if was_playing { self.engine.play(); }
@@ -710,7 +713,11 @@ impl ContentThread {
         );
 
         // Seek to start (export mode was entered and the pipeline resized once
-        // by the caller, before the section loop).
+        // by the caller, before the section loop). The clock goes onto the
+        // export grid first, so the seeks, warm-up and frames all land on it:
+        // frame 0 is the first export-grid frame at or after the start
+        // (FRAME_EXACT_TRANSPORT_DESIGN D9, D17).
+        self.engine.begin_export_clock(export_config.fps);
         let start_time = self
             .engine
             .beat_to_timeline_time(Beats(start_beat));
@@ -758,15 +765,12 @@ impl ContentThread {
         if !generator_only {
             const MAX_WARMUP_TICKS: u32 = 120;
             for warmup_i in 0..MAX_WARMUP_TICKS {
+                // One export-grid frame per warm-up tick; the exact frame
+                // numbering starts at the frame loop, after the re-seek below.
                 let warmup_ctx = TickContext {
-                    dt_seconds: Seconds(frame_dt),
+                    frames: 1,
                     realtime_now: Seconds::ZERO,
-                    pre_render_dt: Seconds(frame_dt),
                     frame_count: u64::MAX,
-                    // Zero: warm-up uses the accumulating clock. The absolute
-                    // export clock (origin + frame_count * dt) starts at the
-                    // frame loop, after the re-seek below.
-                    export_fixed_dt: Seconds::ZERO,
                 };
                 let warmup_result = self.engine.tick(warmup_ctx);
                 self.engine.reclaim_tick_result(warmup_result);
@@ -790,10 +794,9 @@ impl ContentThread {
         }
 
         // 5. Export frame loop.
-        //    The engine is parked at the export start; pin that as the clock
-        //    origin so each frame's tick sets time absolutely
-        //    (origin + frame_idx * frame_dt) instead of accumulating dt.
-        self.engine.set_export_origin(start_time);
+        //    The engine is parked on the export start's grid frame; export
+        //    frame k is that frame + k, set exactly whatever the sync state.
+        self.engine.begin_export_frames();
         // Project warmup can evaluate a variable number of frames while
         // imported assets load. Restart simulation and RT sampling once per
         // section so those preparation frames cannot affect exported pixels.
@@ -957,19 +960,15 @@ impl ContentThread {
         mut offline_audio_mod: Option<&mut crate::offline_audio_mod::OfflineAudioModDriver>,
     ) -> Option<ExportFrameFailure> {
         let initial_gpu_faults = manifold_gpu::gpu_fault::fault_count();
-        // Frame k samples the timeline at export_start + k * frame_dt via the
-        // engine's absolute export clock (origin pinned before the loop), so
-        // frame 0 renders the exact export start and the export spans
-        // [start, end) like the live compositor. dt-driven effect state does
-        // not integrate on the first frame — it renders the state at the
-        // export start, then advances one frame per output frame.
-        let this_dt = if frame_idx == 0 { 0.0 } else { frame_dt };
+        // Frame k is the export start's grid frame + k on the song-time-0
+        // export grid, so it samples the same time live play does. dt-driven
+        // effect state does not integrate on the first frame (frames 0): it
+        // renders the state at the export start, then advances one frame per
+        // output frame.
         let ctx = TickContext {
-            dt_seconds: Seconds(this_dt),
+            frames: u32::from(frame_idx != 0),
             realtime_now: Seconds(frame_idx as f64 * frame_dt),
-            pre_render_dt: Seconds(this_dt),
             frame_count: frame_idx as u64,
-            export_fixed_dt: Seconds(frame_dt),
         };
         // P2 (docs/OFFLINE_AUDIO_REACTIVE_EXPORT_DESIGN.md): feed this frame's
         // export-rendered audio through the analyzer chain and write the
@@ -989,6 +988,7 @@ impl ContentThread {
             });
         }
         let tick_result = self.engine.tick(ctx);
+        let tick_dt = self.engine.tick_dt().0;
         if let Some(error) = self.engine.trigger_delivery_failure() {
             self.engine.reclaim_tick_result(tick_result);
             return Some(ExportFrameFailure {
@@ -1014,7 +1014,7 @@ impl ContentThread {
             &self.gpu,
             &mut self.engine,
             &tick_result,
-            this_dt,
+            tick_dt,
             frame_idx as u64,
             true,
             self.editing_service.data_version(),
@@ -1134,7 +1134,7 @@ impl ContentThread {
             observe_export_frame(ExportFrameObservation {
                 frame_idx,
                 time_seconds: frame_idx as f64 * frame_dt,
-                dt_seconds: this_dt,
+                tick_dt,
                 status: frame_status,
                 rt_updates,
                 rt_dispatches,

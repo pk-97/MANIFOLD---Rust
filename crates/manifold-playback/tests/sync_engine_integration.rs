@@ -23,16 +23,14 @@ fn create_engine() -> PlaybackEngine {
     PlaybackEngine::new(renderers)
 }
 
-fn tick(engine: &mut PlaybackEngine, realtime: &mut f64, frame: &mut u64, dt: f64) -> manifold_playback::engine::TickResult {
+fn tick(engine: &mut PlaybackEngine, realtime: &mut f64, frame: &mut u64, frames: u32) -> manifold_playback::engine::TickResult {
     let ctx = TickContext {
-        dt_seconds: Seconds(dt),
+        frames,
         realtime_now: Seconds(*realtime),
-        pre_render_dt: Seconds(dt),
         frame_count: *frame,
-        export_fixed_dt: Seconds(0.0),
     };
     let result = engine.tick(ctx);
-    *realtime += dt;
+    *realtime += engine.tick_dt().0;
     *frame += 1;
     result
 }
@@ -90,7 +88,7 @@ fn drift_correction_reseeks_only_after_cadence_interval() {
     // Tick until the clip is active (start_beat 0, so this settles fast).
     let mut clip_id: Option<manifold_core::ClipId> = None;
     for _ in 0..30 {
-        let result = tick(&mut engine, &mut realtime, &mut frame, dt);
+        let result = tick(&mut engine, &mut realtime, &mut frame, 1);
         for r in &result.ready_clips {
             if engine.renderers_mut()[1].is_active(&r.clip_id) {
                 clip_id = Some(r.clip_id.clone());
@@ -106,14 +104,14 @@ fn drift_correction_reseeks_only_after_cadence_interval() {
     // reference point. (Deliberately NOT asserting where in the cadence
     // phase this lands — see the doc comment above.)
     for _ in 0..5 {
-        tick(&mut engine, &mut realtime, &mut frame, dt);
+        tick(&mut engine, &mut realtime, &mut frame, 1);
     }
     let t0 = engine.renderers_mut()[1].get_clip_playback_time(&clip_id);
 
     // A short window (well under the interval) must show no correction —
     // rules out "corrects every tick" regardless of the configured cadence.
     for _ in 0..3 {
-        tick(&mut engine, &mut realtime, &mut frame, dt);
+        tick(&mut engine, &mut realtime, &mut frame, 1);
     }
     let just_after = engine.renderers_mut()[1].get_clip_playback_time(&clip_id);
     assert_eq!(
@@ -127,7 +125,7 @@ fn drift_correction_reseeks_only_after_cadence_interval() {
     // 0.1s threshold by then.
     let interval_frames = (interval.0 / dt).ceil() as u32 + 5;
     for _ in 0..interval_frames {
-        tick(&mut engine, &mut realtime, &mut frame, dt);
+        tick(&mut engine, &mut realtime, &mut frame, 1);
     }
     let after_interval = engine.renderers_mut()[1].get_clip_playback_time(&clip_id);
     assert!(
@@ -173,14 +171,13 @@ fn custom_loop_boundary_restarts_clip_at_loop_in() {
     engine.initialize(project);
     engine.set_state(PlaybackState::Playing);
 
-    let dt = 1.0 / 60.0;
     let mut realtime = 0.0_f64;
     let mut frame = 0_u64;
 
     // Tick until the clip is active and StubRenderer reports it ready.
     let mut clip_id: Option<manifold_core::ClipId> = None;
     for _ in 0..30 {
-        let result = tick(&mut engine, &mut realtime, &mut frame, dt);
+        let result = tick(&mut engine, &mut realtime, &mut frame, 1);
         for r in &result.ready_clips {
             if engine.renderers_mut()[1].is_active(&r.clip_id) {
                 clip_id = Some(r.clip_id.clone());
@@ -246,11 +243,9 @@ fn clip_start_anchors_recently_started_gate_on_real_clock_not_zero_epoch() {
     // must use `last_realtime_now` (set from `ctx.realtime_now`), not zero.
     let clock_at_start = 2.0;
     let ctx = TickContext {
-        dt_seconds: Seconds(1.0 / 60.0),
+        frames: 1,
         realtime_now: Seconds(clock_at_start),
-        pre_render_dt: Seconds(1.0 / 60.0),
         frame_count: 0,
-        export_fixed_dt: Seconds(0.0),
     };
     let _ = engine.tick(ctx);
 

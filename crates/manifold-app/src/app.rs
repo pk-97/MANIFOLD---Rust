@@ -2553,7 +2553,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 last_data_version: 0,
                 midi_input,
                 clip_launcher: manifold_playback::clip_launcher::ClipLauncher::new(),
-                timer: crate::frame_timer::FrameTimer::new(
+                timer: crate::frame_timer::FrameTimer::new_grid(
                     self.local_project.settings.frame_rate as f64,
                 ),
                 physics_metrics: Default::default(),

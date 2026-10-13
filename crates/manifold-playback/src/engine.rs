@@ -12,6 +12,7 @@ use crate::live_clip_manager::LiveClipManager;
 use crate::renderer::ClipRenderer;
 use crate::scheduler::{ActiveClipRef, ClipScheduler};
 use crate::session_state::SessionRuntime;
+use crate::transport_clock::TransportClock;
 
 use ahash::{AHashMap, AHashSet};
 use std::collections::HashMap;
@@ -55,13 +56,14 @@ pub const COMBINED_PREWARM_MAX_UNIQUE_CLIPS: usize = 20;
 /// Input context for a single engine tick.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct TickContext {
-    pub dt_seconds: Seconds,
+    /// Content-tick grid frames since the last tick
+    /// (docs/FRAME_EXACT_TRANSPORT_DESIGN.md D2). Normally 1; more after a
+    /// stall; 0 only on export frame 0. The transport steps this many frames
+    /// and every render consumer gets `frames × step` as its dt (D5).
+    pub frames: u32,
     pub realtime_now: Seconds,
-    pub pre_render_dt: Seconds,
+    /// Content tick counter; in export, the export frame index.
     pub frame_count: u64,
-    /// Fixed delta for export mode (0.0 = use real dt_seconds).
-    /// Port of C# PlaybackController.exportFixedDeltaSeconds (line 42).
-    pub export_fixed_dt: Seconds,
 }
 
 /// Output of a single engine tick.
@@ -113,11 +115,17 @@ pub struct PlaybackEngine {
     current_state: PlaybackState,
     /// Advances on explicit transport boundaries, never ordinary clock nudges.
     transport_epoch: u64,
-    current_time_double: f64,
-    current_time: Seconds,
+    /// Transport time as a frame index on the song-time-0 grid (D1). Time is
+    /// always computed from it, never accumulated.
+    clock: TransportClock,
+    /// The frame's beat, sampled at `clock.beat_sample_time()` (D14). A cache:
+    /// refreshed after every clock or tempo change.
     current_beat: f64,
-    playback_speed: f32,
+    /// `TickContext::frames` of the current tick; `tick_dt` is this many steps.
+    tick_frames: u32,
     is_recording: bool,
+    // STOPGAP(frame-exact P3): while set, live ticks don't advance the clock
+    // and the external source places it. P3 replaces this with corrections.
     external_time_sync: bool,
 
     // Project reference
@@ -174,11 +182,11 @@ pub struct PlaybackEngine {
     last_sync_time: Seconds,
     drift_correction_count: i32,
     is_export_mode: bool,
-    /// Export clock origin (seconds): the engine time at the export start.
-    /// In export mode the tick sets time absolutely as
-    /// `origin + frame_count * export_fixed_dt` — accumulated dt addition
-    /// drifts off exact clip boundaries within seconds.
-    export_origin_seconds: f64,
+    /// The clock is on the export grid (D9): set before the first export
+    /// seek, cleared before the restore seek.
+    export_clock: bool,
+    /// Grid frame of export frame 0; export frame k sets the index to this + k.
+    export_first_index: Option<i64>,
 
     last_realtime_now: f64,
     last_frame_count: u64,
@@ -282,10 +290,6 @@ pub struct PlaybackEngine {
     // Debug flag. Port of C# PlaybackEngine.showDebugLogs.
     pub show_debug_logs: bool,
 
-    // Callback: fires each frame during playback after AdvanceTime.
-    // Port of C# PlaybackController.OnTimeChanged (line 1149).
-    pub on_time_changed: Option<Box<dyn Fn(Seconds) + Send>>,
-
     // Sort comparator scratch. Port of C# PlaybackEngine lines 211-214.
     // Rust uses closures for sorting — no static delegates needed, but
     // we keep the scratch buffers for zero-alloc iteration.
@@ -296,11 +300,11 @@ impl PlaybackEngine {
     pub fn new(renderers: Vec<Box<dyn ClipRenderer>>) -> Self {
         Self {
             current_state: PlaybackState::Stopped,
-            current_time_double: 0.0,
             transport_epoch: 0,
-            current_time: Seconds::ZERO,
+            // `initialize` puts it on the project rate.
+            clock: TransportClock::new(60.0),
             current_beat: 0.0,
-            playback_speed: 1.0,
+            tick_frames: 0,
             is_recording: false,
             external_time_sync: false,
             project: None,
@@ -324,7 +328,8 @@ impl PlaybackEngine {
             last_sync_time: Seconds::ZERO,
             drift_correction_count: 0,
             is_export_mode: false,
-            export_origin_seconds: 0.0,
+            export_clock: false,
+            export_first_index: None,
             last_realtime_now: 0.0,
             last_frame_count: 0,
             stop_buffer: Vec::with_capacity(16),
@@ -372,7 +377,6 @@ impl PlaybackEngine {
             absolute_tick_resolver: None,
             record_command_delegate: None,
             show_debug_logs: false,
-            on_time_changed: None,
             to_pause_list: Vec::with_capacity(8),
         }
     }
@@ -383,13 +387,37 @@ impl PlaybackEngine {
         self.current_state
     }
     pub fn current_time_double(&self) -> f64 {
-        self.current_time_double
+        self.clock.time().0
     }
     pub fn transport_epoch(&self) -> u64 {
         self.transport_epoch
     }
     pub fn current_time(&self) -> Seconds {
-        self.current_time
+        self.clock.time()
+    }
+    /// The frame index the transport is on (D1).
+    pub fn transport_frame(&self) -> i64 {
+        self.clock.index()
+    }
+    /// The transport clock, read-only: its grid rules (`index_at_or_after`,
+    /// `time_at`, `step`) for callers that place things on frames.
+    pub fn transport_clock(&self) -> &TransportClock {
+        &self.clock
+    }
+    /// `frames × step` of the current tick: the dt every render consumer
+    /// gets, in every transport state (D5). 0 on export frame 0.
+    pub fn tick_dt(&self) -> Seconds {
+        Seconds(f64::from(self.tick_frames) * self.clock.step().0)
+    }
+    /// `TickContext::frames` of the last tick: grid frames the content tick
+    /// counted (D2).
+    pub fn tick_frames(&self) -> u32 {
+        self.tick_frames
+    }
+    /// The clock's frame rate: the project's `settings.frame_rate`, sanitised,
+    /// or the export rate during export (D10). The content timer follows it.
+    pub fn frame_rate(&self) -> f32 {
+        self.clock.fps()
     }
     pub fn current_beat(&self) -> Beats {
         Beats(self.current_beat)
@@ -418,9 +446,6 @@ impl PlaybackEngine {
     }
     pub fn current_beat_f64(&self) -> f64 {
         self.current_beat
-    }
-    pub fn playback_speed(&self) -> f32 {
-        self.playback_speed
     }
     pub fn is_playing(&self) -> bool {
         self.current_state == PlaybackState::Playing
@@ -495,9 +520,20 @@ impl PlaybackEngine {
         if !self.clip_bindings_dirty {
             return;
         }
+        // An assignment accepts starts at its own beat as new. The frame's
+        // beat is sampled a hair after its time (D14), so an edge exactly on
+        // this frame would read as history; the cutoff takes the frame's
+        // lower edge instead, the same hair before its time.
+        let frame_floor = self.clock.time().0
+            - crate::transport_clock::LATTICE_TOLERANCE_FRAMES * self.clock.step().0;
         if let Some(project) = &mut self.project {
+            let floor_beat = Beats(TempoMapConverter::seconds_to_beat_f64(
+                &mut project.tempo_map,
+                frame_floor,
+                project.settings.bpm,
+            ));
             let delivery = &mut self.trigger_delivery;
-            self.clip_controls.reconcile_bindings(project, Beats(self.current_beat), |owner, param| {
+            self.clip_controls.reconcile_bindings(project, floor_beat, |owner, param| {
                 delivery.cancel_clip_parameter(owner,
                     manifold_core::audio_trigger::fire_meter_key_for_param("", param));
             });
@@ -576,9 +612,11 @@ impl PlaybackEngine {
         // serialized) — a fresh/loaded project always starts arrangement-only.
         self.session_runtime.reset();
 
-        self.current_time_double = 0.0;
-        self.current_time = Seconds::ZERO;
-        self.current_beat = 0.0;
+        if let Some(project) = &self.project {
+            self.clock.set_fps(project.settings.frame_rate);
+        }
+        self.clock.reset();
+        self.refresh_beat();
         self.last_sync_time = Seconds::ZERO;
         self.drift_correction_count = 0;
         self.last_realtime_now = 0.0;
@@ -638,6 +676,9 @@ impl PlaybackEngine {
         self.current_state = PlaybackState::Playing;
         self.transport_epoch = self.transport_epoch.wrapping_add(1);
         self.pending_pauses.clear();
+        // Anchor at the current frame and advance normally from it (D4): the
+        // paused frame is already on screen, so nothing repeats.
+        self.clock.locate(self.clock.time());
 
         // Sync clips at current position (start clips that should be active)
         self.sync_clips_to_time();
@@ -672,9 +713,8 @@ impl PlaybackEngine {
         // launches (Ableton behavior). session_override is NOT cleared —
         // layers stay detached until an explicit Back to Arrangement (section 4).
         self.session_runtime.on_transport_stop();
-        self.current_time_double = 0.0;
-        self.current_time = Seconds::ZERO;
-        self.current_beat = 0.0;
+        self.clock.reset();
+        self.refresh_beat();
         self.compositor_dirty_deadline = 0.0; // Force one more compositor update
     }
 
@@ -689,51 +729,56 @@ impl PlaybackEngine {
         self.pause_active_clips();
     }
 
-    pub fn set_time(&mut self, time_double: Seconds) {
+    /// Move the transport to the first frame at or after `t`, with no hold
+    /// (D4): play, resume, a paused seek, a tempo edit. Non-finite `t` is
+    /// ignored (D18).
+    pub fn locate(&mut self, t: Seconds) {
         self.reconcile_clip_control_bindings();
-        self.current_time_double = time_double.0;
-        self.current_time = time_double;
-        self.update_beat_from_time();
+        self.clock.locate(t);
+        self.refresh_beat();
     }
 
-    pub fn set_beat(&mut self, beat: Beats) {
+    /// STOPGAP(frame-exact P3): an external source (Link, MIDI clock) places
+    /// the transport on the frame nearest its beat, as today's per-frame beat
+    /// copy did, rounded to the grid. P3 replaces it with `observe_external`.
+    pub fn follow_external_beat(&mut self, beat: Beats) {
         self.reconcile_clip_control_bindings();
-        self.current_beat = beat.0;
-    }
-
-    /// Derive `current_time` / `current_time_double` from the current beat
-    /// using the active tempo map. Call after `set_beat()` when the beat is
-    /// the authoritative time source (external clock: Link, MIDI Clock).
-    pub fn sync_time_from_beat(&mut self) {
         if let Some(project) = &mut self.project {
-            let secs = TempoMapConverter::beat_to_seconds(
-                &mut project.tempo_map,
-                Beats(self.current_beat),
-                project.settings.bpm,
-            );
-            self.current_time_double = secs.0.max(0.0);
-            self.current_time = Seconds(self.current_time_double);
+            let t = TempoMapConverter::beat_to_seconds(&mut project.tempo_map, beat, project.settings.bpm);
+            self.clock.locate_nearest(Seconds(t.0.max(0.0)));
         }
+        self.refresh_beat();
+    }
+
+    /// The tempo map changed under the current frame and time is the master:
+    /// keep the frame, take the beat from the new map.
+    pub fn rederive_beat(&mut self) {
+        self.refresh_beat();
     }
 
     /// Editing the tempo changes the time of the current musical position,
-    /// not the position itself. External transport remains authoritative.
+    /// not the position itself: the index moves to the first frame at or
+    /// after the position's new time, with no hold (D11).
     pub fn reconcile_tempo_edit(&mut self, old_map: &manifold_core::tempo::TempoMap, old_bpm: Bpm) {
+        // STOPGAP(frame-exact P3): the external source keeps placing the frame.
         if self.external_time_sync {
             return;
         }
-        if self.project.as_ref().is_some_and(|p| {
-            !p.tempo_map.same_timing_as(old_map) || p.settings.bpm != old_bpm
-        }) {
-            self.sync_time_from_beat();
-            self.sync_project_bpm_from_current_beat();
+        let Some(project) = &mut self.project else { return };
+        if project.tempo_map.same_timing_as(old_map) && project.settings.bpm == old_bpm {
+            return;
         }
+        // The frame's exact time, not the D14 sample instant: the round trip
+        // through an unchanged stretch of the map must land on the same frame.
+        let mut old_map = old_map.clone();
+        let beat = TempoMapConverter::seconds_to_beat_f64(&mut old_map, self.clock.time().0, old_bpm);
+        let t = TempoMapConverter::beat_to_seconds(&mut project.tempo_map, Beats(beat), project.settings.bpm);
+        self.clock.locate(Seconds(t.0.max(0.0)));
+        self.refresh_beat();
+        self.sync_project_bpm_from_current_beat();
     }
 
-    pub fn set_playback_speed(&mut self, speed: f32) {
-        self.playback_speed = speed.clamp(MIN_CLIP_PLAYBACK_RATE, MAX_CLIP_PLAYBACK_RATE);
-    }
-
+    // STOPGAP(frame-exact P3): deleted with the flag.
     pub fn set_external_time_sync(&mut self, value: bool) {
         self.external_time_sync = value;
     }
@@ -763,49 +808,71 @@ impl PlaybackEngine {
                     if let Some(fx) = layer.gen_params() { capture(GraphTarget::Generator(layer.layer_id.clone()), fx); }
                 }
             }
-        } else if let Some(project) = &mut self.project {
-            for (target, id, base, value, touched) in self.export_param_values.drain(..) {
-                if let Some(fx) = project.preset_instance_mut(&target)
-                    && let Some(p) = fx.params.get_mut(id.as_ref())
-                { p.base = base; p.value = value; p.touched = touched; }
+        } else {
+            if let Some(project) = &mut self.project {
+                for (target, id, base, value, touched) in self.export_param_values.drain(..) {
+                    if let Some(fx) = project.preset_instance_mut(&target)
+                        && let Some(p) = fx.params.get_mut(id.as_ref())
+                    { p.base = base; p.value = value; p.touched = touched; }
+                }
             }
+            self.end_export_clock();
         }
         self.is_export_mode = value;
     }
 
-    /// Set the export clock origin — call with the engine parked at the export
-    /// start, before the frame loop. Each export tick then sets time to
-    /// `origin + frame_count * export_fixed_dt` exactly.
-    pub fn set_export_origin(&mut self, origin: Seconds) {
-        self.export_origin_seconds = origin.0;
+    /// Put the clock on the export grid at `fps`, still anchored at song time
+    /// 0 (D9, D17). Call before the first export seek, so the seeks, warm-up
+    /// ticks and frames all land on the export grid.
+    pub fn begin_export_clock(&mut self, fps: f32) {
+        self.clock.begin_export(fps);
+        self.export_clock = true;
+        self.export_first_index = None;
+        self.refresh_beat();
+    }
+
+    /// Call with the transport parked at the export start, right before the
+    /// frame loop: export frame k is then this frame + k, set exactly each
+    /// tick whatever the external-sync state (D9).
+    pub fn begin_export_frames(&mut self) {
+        self.export_first_index = Some(self.clock.index());
+    }
+
+    /// Back to the project rate, keeping the time. Call before the restore
+    /// seek. A no-op when no export clock is running.
+    pub fn end_export_clock(&mut self) {
+        if !std::mem::take(&mut self.export_clock) {
+            return;
+        }
+        self.export_first_index = None;
+        let fps = self.project.as_ref().map_or(self.clock.fps(), |p| p.settings.frame_rate);
+        self.clock.end_export(fps);
+        self.refresh_beat();
     }
 
     pub fn set_video_sync_interval(&mut self, interval: Seconds) {
         self.video_sync_interval = interval;
     }
 
-    pub fn advance_time(&mut self, dt_seconds: Seconds) -> Seconds {
-        self.current_time_double += dt_seconds.0;
-        self.current_time = Seconds(self.current_time_double);
-        self.update_beat_from_time();
-        Seconds(self.current_time_double)
-    }
-
-    /// Set time from an external sync source (NudgeTime path).
-    /// Port of C# PlaybackEngine.NudgeTime (lines 519-525).
-    pub fn nudge_time(&mut self, time: Seconds) {
-        self.current_time_double = time.0;
-        self.current_time = time;
-        self.update_beat_from_time();
-        self.sync_project_bpm_from_current_beat();
-    }
-
+    /// Seek. Snaps forward to the grid; while playing it also holds one
+    /// advance, so the next tick renders the target frame (D4). Non-finite
+    /// times are ignored (D18).
     pub fn seek_to(&mut self, time: Seconds) -> f32 {
+        if !time.0.is_finite() {
+            return 0.0;
+        }
         self.transport_epoch = self.transport_epoch.wrapping_add(1);
         self.reset_trigger_delivery();
         self.queue_finished_automation();
         let old_beat = self.current_beat;
-        self.set_time(Seconds(time.0.max(0.0)));
+        self.reconcile_clip_control_bindings();
+        let time = Seconds(time.0.max(0.0));
+        if self.is_playing() {
+            self.clock.seek_playing(time);
+        } else {
+            self.clock.locate(time);
+        }
+        self.refresh_beat();
         self.sync_project_bpm_from_current_beat();
 
         // Session slots are beat-anchored and stateless, so a seek never
@@ -881,6 +948,18 @@ impl PlaybackEngine {
 
         self.last_realtime_now = ctx.realtime_now.0;
         self.last_frame_count = ctx.frame_count;
+        self.tick_frames = ctx.frames;
+        // The project's rate is the only fps (D10): a load, an edit or an
+        // undo that changed it moves the clock here, keeping the time.
+        if !self.export_clock
+            && let Some(project) = &self.project
+        {
+            let before = self.clock.fps();
+            self.clock.set_fps(project.settings.frame_rate);
+            if self.clock.fps() != before {
+                self.refresh_beat();
+            }
+        }
 
         // D6 fire meter (BUG-109 fix): ONE reset per tick, before either
         // branch's evaluators write this tick's levels — param gate cards
@@ -936,7 +1015,7 @@ impl PlaybackEngine {
             Err(self.trigger_delivery.reject_input_overflow())
         } else {
             self.trigger_delivery.append_batch(
-                pulses.pulses_mut(), self.current_time, Beats(self.current_beat),
+                pulses.pulses_mut(), self.clock.time(), Beats(self.current_beat),
             )
         };
         if let Err(error) = result {
@@ -995,33 +1074,31 @@ impl PlaybackEngine {
         if self.clip_control_cursor.is_none() {
             self.sync_clips_to_time();
         }
-        // 1. Advance time (unless external sync source is the clock authority).
-        //    Port of C# lines 1141-1150.
-        if !self.external_time_sync {
-            if self.is_export_mode && ctx.export_fixed_dt.0 > 0.0 {
-                // Frame-exact export clock: absolute per-frame time, never an
-                // accumulated dt. Repeated addition of 1/fps drifts off exact
-                // clip boundaries within seconds (a cut due at t=2.0s lands a
-                // hair before it and the incoming clip appears one frame late).
-                self.set_time(Seconds(
-                    self.export_origin_seconds + ctx.frame_count as f64 * ctx.export_fixed_dt.0,
-                ));
-            } else {
-                self.advance_time(Seconds(ctx.dt_seconds.0 * self.playback_speed as f64));
-            }
+        // 1. Step the transport. Export sets the frame exactly and always
+        //    advances, external sync or not (D9); live play steps the grid
+        //    frames the content tick counted (D2).
+        let stepped = if let Some(first) = self.export_first_index {
+            self.clock.set_export_frame(first, u32::try_from(ctx.frame_count).unwrap_or(u32::MAX));
+            true
+        } else if self.is_export_mode || !self.external_time_sync {
+            // STOPGAP(frame-exact P3): while an external source is the clock
+            // authority, live ticks leave the frame where it put it.
+            self.clock.advance(ctx.frames);
+            true
+        } else {
+            false
+        };
+        if stepped {
+            self.refresh_beat();
             self.sync_project_bpm_from_current_beat();
-
-            // Fire on_time_changed callback. Port of C# line 1149.
-            if let Some(ref cb) = self.on_time_changed {
-                cb(self.current_time);
-            }
         }
+        let tick_dt = self.tick_dt();
 
         // 3b. Live audio triggers — fire one-shot clips from incoming transients
         //     and expire elapsed ones, before the sync below picks up the new
         //     slots (same-frame, matching the MIDI activation above). Uses the
         //     audio snapshot set by the content thread before this tick.
-        if self.tick_audio_triggers(ctx.realtime_now.0, ctx.dt_seconds) {
+        if self.tick_audio_triggers(ctx.realtime_now.0, tick_dt) {
             self.mark_compositor_dirty(ctx.realtime_now);
         }
 
@@ -1096,8 +1173,8 @@ impl PlaybackEngine {
             crate::modulation::evaluate_modulation(
                 project,
                 Beats(self.current_beat),
-                Seconds(self.current_time_double),
-                ctx.dt_seconds,
+                self.clock.time(),
+                tick_dt,
                 audio,
                 &self.clip_controls,
                 &mut pulses,
@@ -1123,16 +1200,16 @@ impl PlaybackEngine {
         //    Skipped during export — re-seeking every 2s causes visible stutters.
         //    Port of C# lines 1175-1183.
         if !self.is_export_mode
-            && self.current_time - self.last_sync_time >= self.video_sync_interval
+            && self.clock.time() - self.last_sync_time >= self.video_sync_interval
         {
             self.correct_video_drift();
-            self.last_sync_time = self.current_time;
+            self.last_sync_time = self.clock.time();
         }
 
         // 9. Filter ready clips for compositor (full filtering with pre_render + recently-started).
         //    Replaces the simpler build_ready_clips_list with Unity's FilterReadyClips.
         //    Port of C# UpdateCompositor → engine.FilterReadyClips (lines 1432-1458).
-        let ready = self.filter_ready_clips(ctx.pre_render_dt);
+        let ready = self.filter_ready_clips(tick_dt);
 
         let compositor_dirty =
             !ready.is_empty() || ctx.realtime_now.0 < self.compositor_dirty_deadline;
@@ -1157,6 +1234,8 @@ impl PlaybackEngine {
 
     /// Non-playing (paused/stopped) tick. Matches C# PlaybackController.Update lines 1114-1133.
     fn tick_non_playing(&mut self, ctx: TickContext) -> TickResult {
+        // Paused graphs keep moving: tick dt is never zeroed by the state (D5).
+        let tick_dt = self.tick_dt();
         // 1. Reconcile desired membership every tick (P1: unconditional reconcile).
         //    Seek active clips only when membership actually changed — re-seeking
         //    every paused frame would churn every active video player.
@@ -1215,7 +1294,7 @@ impl PlaybackEngine {
                 &self.audio_snapshot,
                 &project.audio_setup,
                 &project.timeline.layers,
-                ctx.dt_seconds,
+                tick_dt,
                 &mut self.fire_meters,
             );
         }
@@ -1235,8 +1314,8 @@ impl PlaybackEngine {
                 crate::modulation::evaluate_modulation(
                     project,
                     Beats(self.current_beat),
-                    Seconds(self.current_time_double),
-                    ctx.dt_seconds,
+                    self.clock.time(),
+                    tick_dt,
                     audio,
                     &self.clip_controls,
                     &mut pulses,
@@ -1260,7 +1339,7 @@ impl PlaybackEngine {
         //    Port of C# UpdateCompositor (lines 1126-1132).
         //    With hot mute, ready clips on hidden layers don't keep the
         //    compositor running, so a fully-muted paused rig idles.
-        let ready = self.filter_ready_clips(ctx.pre_render_dt);
+        let ready = self.filter_ready_clips(tick_dt);
         let has_visible_ready = if let Some(project) = &self.project {
             let layers = &project.timeline.layers;
             let any_solo_video = manifold_core::layer::Layer::any_solo_video(layers);
@@ -1401,7 +1480,7 @@ impl PlaybackEngine {
                 .map_or(&[] as &[_], |p| &p.timeline.layers);
             let success = self.renderers[idx].start_clip(
                 clip,
-                self.current_time,
+                self.clock.time(),
                 layers,
                 layer_index,
                 fire_clip_edge,
@@ -1568,7 +1647,7 @@ impl PlaybackEngine {
                 let loop_dur_seconds = clip.loop_duration_beats.as_f32() * spb;
                 let media_length = self.renderers[renderer_idx].get_clip_media_length(clip_id);
                 let video_time = crate::video_time::compute_video_time(
-                    self.current_time.as_f32(),
+                    self.clock.time().as_f32(),
                     clip_start_time,
                     clip.in_point,
                     clip.is_looping,
@@ -1694,7 +1773,7 @@ impl PlaybackEngine {
         self.timeline_control_scratch.extend(self.completed_control_scratch.iter().cloned());
 
         let sync_result = self.scheduler.compute_sync(
-            self.current_time,
+            self.clock.time(),
             Beats(self.current_beat),
             &self.timeline_active_scratch,
             &self.live_slot_refs_scratch,
@@ -2130,11 +2209,13 @@ impl PlaybackEngine {
 
     // ─── Time/Tempo math ───
 
-    fn update_beat_from_time(&mut self) {
+    /// The frame's beat, taken a ten-millionth of a frame after its time so
+    /// an edge exactly on the frame counts as reached on it (D14).
+    fn refresh_beat(&mut self) {
         if let Some(project) = &mut self.project {
             self.current_beat = TempoMapConverter::seconds_to_beat_f64(
                 &mut project.tempo_map,
-                self.current_time_double,
+                self.clock.beat_sample_time().0,
                 project.settings.bpm,
             );
         }
@@ -2528,7 +2609,7 @@ impl PlaybackEngine {
             return Seconds(elapsed_beats * recorded_spb as f64);
         }
         let clip_start_time = self.get_clip_start_time_seconds(clip);
-        let clip_local_time = (self.current_time - clip_start_time).max(Seconds::ZERO);
+        let clip_local_time = (self.clock.time() - clip_start_time).max(Seconds::ZERO);
         Seconds(clip_local_time.0 * self.get_clip_playback_rate(clip) as f64)
     }
 
@@ -2934,7 +3015,7 @@ impl PlaybackEngine {
         } else {
             RECENTLY_STARTED_TIME as f64
         };
-        let remaining = clip_end_time_seconds - self.current_time;
+        let remaining = clip_end_time_seconds - self.clock.time();
         if remaining > Seconds::ZERO {
             gate_time = gate_time.min(remaining.0 * 0.4);
         }
@@ -2945,7 +3026,7 @@ impl PlaybackEngine {
     /// Filter active clips to only those ready for compositing.
     /// Applies recently-started gate for video clips.
     /// Port of C# PlaybackEngine.FilterReadyClips (lines 1193-1239).
-    pub fn filter_ready_clips(&mut self, pre_render_dt: Seconds) -> Vec<ActiveClipRef> {
+    pub fn filter_ready_clips(&mut self, tick_dt: Seconds) -> Vec<ActiveClipRef> {
         // Resolve should-be-active clips (timeline + live slots).
         // Skip re-query if sync_clips_to_time already populated the scratch this frame.
         self.compositor_fallback_clips.clear();
@@ -2961,9 +3042,9 @@ impl PlaybackEngine {
         // Pre-render all renderers (generators blit shaders, video is no-op)
         for renderer in &mut self.renderers {
             renderer.pre_render(
-                self.current_time,
+                self.clock.time(),
                 Beats(self.current_beat),
-                pre_render_dt.as_f32(),
+                tick_dt.as_f32(),
             );
         }
 
@@ -3051,8 +3132,8 @@ impl PlaybackEngine {
                 LOOKAHEAD_PREWARM_INTERVAL
             } as f64;
 
-        let window_start = self.current_time - Seconds(LOOKAHEAD_PREWARM_BEHIND_TIME as f64);
-        let window_end = self.current_time + Seconds(LOOKAHEAD_PREWARM_AHEAD_TIME as f64);
+        let window_start = self.clock.time() - Seconds(LOOKAHEAD_PREWARM_BEHIND_TIME as f64);
+        let window_end = self.clock.time() + Seconds(LOOKAHEAD_PREWARM_AHEAD_TIME as f64);
 
         // Collect candidate clips (use immutable beat_to_seconds to avoid &mut self borrow).
         // Mute/solo/clip-mute are presentational (P2), so prewarm considers every
@@ -3176,7 +3257,7 @@ impl LiveClipHost for PlaybackEngine {
         Beats(self.current_beat)
     }
     fn current_time(&self) -> Seconds {
-        self.current_time
+        self.clock.time()
     }
     fn is_recording(&self) -> bool {
         self.is_recording
@@ -3282,7 +3363,7 @@ impl crate::sync::SyncTarget for PlaybackEngine {
         self.current_state
     }
     fn current_time(&self) -> Seconds {
-        self.current_time
+        self.clock.time()
     }
     fn is_playing(&self) -> bool {
         self.current_state == PlaybackState::Playing
@@ -3305,6 +3386,7 @@ impl crate::sync::SyncArbiterTarget for PlaybackEngine {
     fn current_project(&self) -> Option<&Project> {
         self.project.as_ref()
     }
+    // STOPGAP(frame-exact P3): the flag and its setter go in P3.
     fn external_time_sync(&self) -> bool {
         self.external_time_sync
     }
@@ -3323,8 +3405,12 @@ impl crate::sync::SyncArbiterTarget for PlaybackEngine {
         }
     }
 
+    /// STOPGAP(frame-exact P3): a nudge puts the transport on the frame
+    /// nearest the external time; P3 makes it a phase-lock observation.
     fn nudge_time(&mut self, time: Seconds) {
-        self.set_time(time);
+        self.reconcile_clip_control_bindings();
+        self.clock.locate_nearest(time);
+        self.refresh_beat();
     }
 
     fn seek(&mut self, time: Seconds) {
@@ -3650,8 +3736,8 @@ mod tests {
         assert_eq!(captured.len(), 1);
         let scratch_capacity = engine.modulation_trigger_scratch.capacity();
         engine.pause();
-        engine.set_time(Seconds(0.1));
-        engine.set_beat(Beats(0.2));
+        crate::sync::SyncArbiterTarget::nudge_time(&mut engine, Seconds(0.1));
+        engine.follow_external_beat(Beats(0.2));
         trigger_delivery_tick(&mut engine);
         assert_eq!(engine.trigger_delivery.as_slice(), captured);
         engine.play();
@@ -3722,7 +3808,7 @@ mod tests {
         engine.initialize(Project::default());
         engine.play();
         let running = engine.transport_epoch();
-        engine.nudge_time(Seconds(0.1));
+        crate::sync::SyncArbiterTarget::nudge_time(&mut engine, Seconds(0.1));
         assert_eq!(engine.transport_epoch(), running);
         engine.seek_to(Seconds(0.11));
         assert_ne!(engine.transport_epoch(), running);
@@ -4025,7 +4111,9 @@ mod tests {
             let mut engine = PlaybackEngine::new(Vec::new());
             engine.initialize(project);
             engine.set_state(PlaybackState::Playing);
-            engine.set_time(Seconds(1.0));
+            engine.locate(Seconds(1.0));
+            // Beat 2's frame: the take starts at the frame's sampled beat (D14).
+            let touch_beat = engine.current_beat();
             engine.set_automation_armed(true);
             engine.project_mut().unwrap().find_effect_by_id_mut(&id).unwrap().set_base_param("amount", 0.9);
             // No tick between the final input and the boundary: the last touch
@@ -4041,7 +4129,7 @@ mod tests {
             assert!(engine.finish_automation_recording().is_empty());
             commands[0].execute(engine.project_mut().unwrap());
             let lane = &engine.project().unwrap().find_effect_by_id(&id).unwrap().automation_lanes.as_ref().unwrap()[0];
-            assert_eq!(lane.value_at(Beats(2.0)), 0.9);
+            assert_eq!(lane.value_at(touch_beat), 0.9);
             assert!((lane.value_at(Beats(1.0)) - 0.35).abs() < 1e-6);
             commands[0].undo(engine.project_mut().unwrap());
             assert_eq!(engine.project().unwrap().find_effect_by_id(&id).unwrap().automation_lanes.as_ref().unwrap()[0].points, original);
@@ -4069,7 +4157,7 @@ mod tests {
         engine.set_automation_armed(true);
         engine.set_export_mode(true);
         engine.set_state(PlaybackState::Playing);
-        engine.set_time(Seconds(1.0));
+        engine.locate(Seconds(1.0));
         let tick = engine.tick(TickContext::default());
         assert!(tick.pending_gesture_commits.is_empty());
         assert!((engine.project().unwrap().find_effect_by_id(&id).unwrap().get_base_param("amount") - 0.5).abs() < 1e-6);
@@ -4153,14 +4241,39 @@ mod audio_tempo_edit_tests {
             project.tempo_map.add_or_replace_point(Beats::ZERO, Bpm(120.0), TempoPointSource::Manual, 0.001);
             engine.initialize(project);
             engine.set_state(state);
-            engine.set_time(Seconds(10.0));
+            engine.locate(Seconds(10.0));
             let old_map = engine.project().unwrap().tempo_map.clone();
             engine.project_mut().unwrap().tempo_map.add_or_replace_point(Beats::ZERO, Bpm(60.0), TempoPointSource::Manual, 0.001);
             engine.reconcile_tempo_edit(&old_map, Bpm(120.0));
-            assert_eq!(engine.current_beat(), Beats(20.0));
+            // The frame's beat sits a ten-millionth of a frame past its time (D14).
+            assert!((engine.current_beat().0 - 20.0).abs() < 1e-6, "{}", engine.current_beat());
             assert_eq!(engine.current_time(), Seconds(20.0));
-            engine.advance_time(Seconds(0.5));
-            assert_eq!(engine.current_beat(), Beats(20.5));
+            assert_eq!(engine.transport_frame(), 1200);
+            // Half a second later the new tempo holds: 30 frames at 60 BPM.
+            if state == PlaybackState::Playing {
+                let _ = engine.tick(TickContext { frames: 30, ..TickContext::default() });
+            } else {
+                engine.locate(Seconds(20.5));
+            }
+            assert!((engine.current_beat().0 - 20.5).abs() < 1e-6, "{}", engine.current_beat());
+        }
+    }
+
+    /// The edit happens ahead of the playhead, so the frame's position in
+    /// the old and new maps is the same: the round trip keeps the frame,
+    /// even though the frame's beat is sampled a hair after its time.
+    #[test]
+    fn tempo_edit_after_the_playhead_keeps_the_frame() {
+        for frame in [1i64, 37, 600, 4321] {
+            let mut engine = PlaybackEngine::new(Vec::new());
+            let mut project = Project::default();
+            project.tempo_map.add_or_replace_point(Beats::ZERO, Bpm(150.0), TempoPointSource::Manual, 0.001);
+            engine.initialize(project);
+            engine.locate(engine.transport_clock().time_at(frame));
+            let old_map = engine.project().unwrap().tempo_map.clone();
+            engine.project_mut().unwrap().tempo_map.add_or_replace_point(Beats(10_000.0), Bpm(90.0), TempoPointSource::Manual, 0.001);
+            engine.reconcile_tempo_edit(&old_map, Bpm(120.0));
+            assert_eq!(engine.transport_frame(), frame);
         }
     }
 }

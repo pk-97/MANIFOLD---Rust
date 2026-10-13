@@ -7,11 +7,10 @@
 //! phase, ticks jittered ±40% of a frame and one 3-frame stall. Per transport
 //! frame the engine's time, beat, clip membership and every param must match
 //! a steady run bit for bit; pixels are not compared. Opens the test GPU
-//! device, so it runs as one queued GPU run. Committed red: today each tick
-//! hands the engine measured wall time. Only `drive` changes when P2 wires the
-//! clock; P2 deletes the `frame-exact-red` feature in the commit that turns
-//! this green.
-#![cfg(all(test, target_os = "macos", feature = "frame-exact-red"))]
+//! device, so it runs as one queued GPU run. Committed red while each tick
+//! handed the engine measured wall time; green once the timer counts grid
+//! frames and time comes from the frame index.
+#![cfg(all(test, target_os = "macos"))]
 
 use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
@@ -178,16 +177,12 @@ fn wait_for_surface(ct: &ContentThread) {
 }
 
 /// Feed one run's events to the content thread; `on_frame` sees each playing
-/// tick with the transport frame index it rendered. The one part of this file
-/// P2 changes: today the index is the D2 grid's frame count since Play while
-/// the content thread hands the engine wall dt. After P2 the index comes from
-/// the engine's clock.
+/// tick with the transport frame index it rendered. The content thread's own
+/// grid timer, anchored where the schedule's grid is, counts each tick's
+/// frames; the index is the engine clock's.
 fn drive(ct: &mut ContentThread, anchor: Instant, events: &[Event], mut on_frame: impl FnMut(&ContentThread, i64)) {
     let (state_tx, state_rx) = crossbeam_channel::unbounded::<ContentState>();
-    let mut grid = FrameGrid::new(FPS, anchor);
-    // A stopped tick at the anchor: every later tick's wall dt comes from the schedule alone.
-    ct.tick_frame_at(anchor, &state_tx);
-    let mut index = 0i64;
+    ct.timer.reanchor_grid_at(anchor);
     for event in events {
         let now = match event {
             Event::Press(_) => {
@@ -197,13 +192,11 @@ fn drive(ct: &mut ContentThread, anchor: Instant, events: &[Event], mut on_frame
             Event::Tick(now) => *now,
         };
         wait_for_surface(ct);
-        let frames = grid.consume_at(now);
         let playing = ct.engine.is_playing();
         ct.tick_frame_at(now, &state_tx);
         while state_rx.try_recv().is_ok() {}
         if playing {
-            index += i64::from(frames);
-            on_frame(ct, index);
+            on_frame(ct, ct.engine.transport_frame());
         }
     }
 }

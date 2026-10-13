@@ -107,10 +107,6 @@ journey-proofs = []
 # worst-frame breakdown come from its FrameRecord/SessionSummary, not a new
 # timing framework).
 perf-soak = ["profiling"]
-# The frame-exact transport determinism test through the content thread,
-# committed red before the clock is wired (docs/FRAME_EXACT_TRANSPORT_DESIGN.md
-# section 5). P2 deletes this feature in the commit that turns the test green.
-frame-exact-red = []
 
 [dev-dependencies]
 manifold-foundation = { path = "../manifold-foundation" }

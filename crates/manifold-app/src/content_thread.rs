@@ -581,7 +581,7 @@ impl ContentThread {
     /// tick reads `now`; wall telemetry stays on the real clock (D13).
     pub(crate) fn tick_frame_at(&mut self, now: std::time::Instant, state_tx: &Sender<ContentState>) {
         let _frame_start = std::time::Instant::now();
-        let dt = self.timer.consume_tick_at(now);
+        let frames = self.timer.consume_frames_at(now).frames;
         let realtime = self.timer.realtime_since_start();
         self.time_since_start = Seconds(realtime);
 
@@ -652,13 +652,17 @@ impl ContentThread {
         let _t0 = std::time::Instant::now();
 
         let ctx = TickContext {
-            dt_seconds: Seconds(dt),
+            frames,
             realtime_now: Seconds(realtime),
-            pre_render_dt: Seconds(dt),
             frame_count: self.frame_count,
-            export_fixed_dt: Seconds::ZERO,
         };
         let mut tick_result = self.engine.tick(ctx);
+        // The engine's clock follows the project rate (D10); the tick grid
+        // follows the clock, so the two never run at different rates.
+        let clock_fps = f64::from(self.engine.frame_rate());
+        if self.timer.target_fps() != clock_fps {
+            self.timer.set_target_fps(clock_fps);
+        }
 
         // 4b. Transport output (LateUpdate equivalent — after engine tick).
         // In M4L mode: OscPositionSender sends /manifold/* to M4L device.
@@ -796,11 +800,12 @@ impl ContentThread {
         // thumbnails never reach the drained slots.
         self.content_pipeline.take_sim_metrics(&mut self.engine);
         let render_work_start = std::time::Instant::now();
+        let tick_dt = self.engine.tick_dt().0;
         self.content_pipeline.render_content(
             &self.gpu,
             &mut self.engine,
             &tick_result,
-            dt,
+            tick_dt,
             self.frame_count,
             false,
             self.editing_service.data_version(),
@@ -1943,9 +1948,10 @@ impl ContentThread {
                     && link.has_active_peers()
                     && !self.link_beat_offset.is_nan()
                 {
+                    // STOPGAP(frame-exact P3): nearest frame to Link's beat;
+                    // P3 observes it at the frame deadline instead.
                     self.engine
-                        .set_beat(Beats(link.current_beat.0 - self.link_beat_offset));
-                    self.engine.sync_time_from_beat();
+                        .follow_external_beat(Beats(link.current_beat.0 - self.link_beat_offset));
                 }
             }
             ClockAuthority::MidiClock => {
@@ -1964,13 +1970,14 @@ impl ContentThread {
                     && clk.is_midi_clock_enabled()
                     && clk.is_receiving_clock()
                 {
+                    // STOPGAP(frame-exact P3): nearest frame to the last
+                    // clock tick's beat; P3 projects it to the deadline.
                     self.engine
-                        .set_beat(Beats::from_f32(clk.current_clock_beat()));
-                    self.engine.sync_time_from_beat();
+                        .follow_external_beat(Beats::from_f32(clk.current_clock_beat()));
                 }
-                // else: beat derived from time (engine handles this in advance_time)
+                // else: the engine's clock steps the frame
             }
-            // ClockAuthority::Internal | Osc: beat derived from time (engine handles this)
+            // ClockAuthority::Internal | Osc: the engine's clock steps the frame
             _ => {}
         }
     }
@@ -2113,10 +2120,8 @@ impl ContentThread {
         }
 
         if tempo_map_changed {
-            // Re-derive beat from time after tempo map change.
-            // Port of C# ApplyResolvedTempo line 1139.
-            let new_beat = self.engine.time_to_timeline_beat(current_time);
-            self.engine.set_beat(new_beat);
+            // Time is kept; the frame's beat comes from the new map.
+            self.engine.rederive_beat();
         }
     }
 
@@ -2198,5 +2203,37 @@ mod tests {
 
         thread.send_state(&state_tx);
         assert_eq!(state_rx.len(), 1, "drained UI gets per-tick states again");
+    }
+
+    /// FRAME_EXACT_TRANSPORT_DESIGN D10: the project setting is the only fps.
+    /// The engine clock follows it on the next tick and the content timer
+    /// follows the clock: after a load, a frame-rate edit, its undo and redo.
+    #[test]
+    fn timer_and_clock_follow_project_fps() {
+        use manifold_editing::commands::settings::ChangeFrameRateCommand;
+        let mut thread = headless_content_thread(Project::default(), 64, 64);
+        let (state_tx, _state_rx) = crossbeam_channel::unbounded();
+        let tick_and_check = |thread: &mut super::ContentThread, fps: f32, after: &str| {
+            let give_up = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            while !thread.content_pipeline.is_surface_ready(thread.frame_count) {
+                assert!(std::time::Instant::now() < give_up, "GPU surface not ready after 5 s");
+                std::thread::yield_now();
+            }
+            thread.tick_frame_at(std::time::Instant::now(), &state_tx);
+            assert_eq!(thread.engine.frame_rate(), fps, "engine clock after {after}");
+            assert_eq!(thread.timer.target_fps(), f64::from(fps), "content timer after {after}");
+        };
+        let mut project = Project::default();
+        project.settings.frame_rate = 24.0;
+        assert!(!thread.handle_command(ContentCommand::LoadProject(Box::new(project))));
+        tick_and_check(&mut thread, 24.0, "load");
+        let edit = ChangeFrameRateCommand::new(24.0, 30.0);
+        assert!(!thread.handle_command(ContentCommand::Execute(Box::new(edit))));
+        assert!(!thread.handle_command(ContentCommand::SetFrameRate(30.0)));
+        tick_and_check(&mut thread, 30.0, "the frame-rate edit");
+        assert!(!thread.handle_command(ContentCommand::Undo));
+        tick_and_check(&mut thread, 24.0, "undo");
+        assert!(!thread.handle_command(ContentCommand::Redo));
+        tick_and_check(&mut thread, 30.0, "redo");
     }
 }

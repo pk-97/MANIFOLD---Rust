@@ -109,11 +109,9 @@ fn stub_video(engine: &PlaybackEngine) -> &StubRenderer {
 
 fn tick_once(engine: &mut PlaybackEngine, realtime: f64, frame: u64) {
     let ctx = TickContext {
-        dt_seconds: Seconds(1.0 / 60.0),
+        frames: 1,
         realtime_now: Seconds(realtime),
-        pre_render_dt: Seconds(1.0 / 60.0),
         frame_count: frame,
-        export_fixed_dt: Seconds(0.0),
     };
     let _ = engine.tick(ctx);
 }
@@ -256,11 +254,9 @@ fn playing_tick_leaves_the_clip_trigger_level_in_fire_meters() {
     *engine.audio_snapshot_mut() = hot_snapshot();
 
     let ctx = TickContext {
-        dt_seconds: Seconds(1.0 / 60.0),
+        frames: 1,
         realtime_now: Seconds(0.0),
-        pre_render_dt: Seconds(1.0 / 60.0),
         frame_count: 0,
-        export_fixed_dt: Seconds(0.0),
     };
     let _ = engine.tick(ctx);
 
@@ -288,11 +284,9 @@ fn stopped_tick_pushes_the_level_and_fires_no_clip() {
     *engine.audio_snapshot_mut() = hot_snapshot();
 
     let ctx = TickContext {
-        dt_seconds: Seconds(1.0 / 60.0),
+        frames: 1,
         realtime_now: Seconds(0.0),
-        pre_render_dt: Seconds(1.0 / 60.0),
         frame_count: 0,
-        export_fixed_dt: Seconds(0.0),
     };
     let result = engine.tick(ctx);
 
@@ -321,7 +315,9 @@ fn engine_initializes_with_project() {
 
     assert_eq!(engine.current_state(), PlaybackState::Stopped);
     assert_eq!(engine.current_time(), Seconds(0.0));
-    assert_eq!(engine.current_beat(), Beats(0.0));
+    assert_eq!(engine.transport_frame(), 0);
+    // Frame 0's beat is taken a ten-millionth of a frame after its time (D14).
+    assert!((0.0..1e-6).contains(&engine.current_beat().0), "{}", engine.current_beat());
     assert!((engine.get_timeline_fallback_bpm() - 138.0).abs() < 0.01);
 }
 
@@ -332,11 +328,9 @@ fn stopped_engine_activates_clip_under_playhead() {
     engine.initialize(project);
 
     let ctx = TickContext {
-        dt_seconds: Seconds(1.0 / 60.0),
+        frames: 1,
         realtime_now: Seconds(0.0),
-        pre_render_dt: Seconds(1.0 / 60.0),
         frame_count: 0,
-        export_fixed_dt: Seconds(0.0),
     };
 
     let result = engine.tick(ctx);
@@ -432,11 +426,9 @@ fn engine_advances_time_when_playing() {
     // Tick 60 frames (1 second)
     for i in 0..60 {
         let ctx = TickContext {
-            dt_seconds: Seconds(dt),
+            frames: 1,
             realtime_now: Seconds(realtime),
-            pre_render_dt: Seconds(dt),
             frame_count: i as u64,
-            export_fixed_dt: Seconds(0.0),
         };
         let _ = engine.tick(ctx);
         realtime += dt;
@@ -475,11 +467,9 @@ fn engine_schedules_clips_at_correct_beats() {
 
     for i in 0..num_frames {
         let ctx = TickContext {
-            dt_seconds: Seconds(dt),
+            frames: 1,
             realtime_now: Seconds(realtime),
-            pre_render_dt: Seconds(dt),
             frame_count: i as u64,
-            export_fixed_dt: Seconds(0.0),
         };
         let result = engine.tick(ctx);
         if !result.ready_clips.is_empty() {
@@ -510,11 +500,9 @@ fn engine_tick_1000_frames_no_panic() {
 
     for i in 0..1000 {
         let ctx = TickContext {
-            dt_seconds: Seconds(dt),
+            frames: 1,
             realtime_now: Seconds(realtime),
-            pre_render_dt: Seconds(dt),
             frame_count: i as u64,
-            export_fixed_dt: Seconds(0.0),
         };
         let _result = engine.tick(ctx);
         realtime += dt;
@@ -617,11 +605,9 @@ fn muted_layer_clip_stays_active() {
     engine.initialize(project);
 
     let ctx = TickContext {
-        dt_seconds: Seconds(1.0 / 60.0),
+        frames: 1,
         realtime_now: Seconds(0.0),
-        pre_render_dt: Seconds(1.0 / 60.0),
         frame_count: 0,
-        export_fixed_dt: Seconds(0.0),
     };
     let _ = engine.tick(ctx);
 
@@ -642,11 +628,9 @@ fn clip_muted_stays_active_hidden() {
     engine.initialize(project);
 
     let ctx = TickContext {
-        dt_seconds: Seconds(1.0 / 60.0),
+        frames: 1,
         realtime_now: Seconds(0.0),
-        pre_render_dt: Seconds(1.0 / 60.0),
         frame_count: 0,
-        export_fixed_dt: Seconds(0.0),
     };
     let result = engine.tick(ctx);
 
@@ -671,11 +655,9 @@ fn audio_solo_does_not_suppress_video() {
     engine.initialize(project);
 
     let ctx = TickContext {
-        dt_seconds: Seconds(1.0 / 60.0),
+        frames: 1,
         realtime_now: Seconds(0.0),
-        pre_render_dt: Seconds(1.0 / 60.0),
         frame_count: 0,
-        export_fixed_dt: Seconds(0.0),
     };
     let result = engine.tick(ctx);
 
@@ -713,11 +695,9 @@ fn stopped_engine_shows_gap_at_lone_end_boundary() {
     engine.seek_to(manifold_core::Seconds(8.0 * 60.0 / 120.0));
 
     let ctx = TickContext {
-        dt_seconds: Seconds(1.0 / 60.0),
+        frames: 1,
         realtime_now: Seconds(0.0),
-        pre_render_dt: Seconds(1.0 / 60.0),
         frame_count: 0,
-        export_fixed_dt: Seconds(0.0),
     };
     let result = engine.tick(ctx);
 
@@ -750,11 +730,9 @@ fn stopped_engine_starts_clip_with_sub_frame_remaining() {
     engine.seek_to(manifold_core::Seconds(8.0 * 60.0 / 120.0 - 1.0 / 60.0));
 
     let ctx = TickContext {
-        dt_seconds: Seconds(1.0 / 60.0),
+        frames: 1,
         realtime_now: Seconds(0.0),
-        pre_render_dt: Seconds(1.0 / 60.0),
         frame_count: 0,
-        export_fixed_dt: Seconds(0.0),
     };
     let result = engine.tick(ctx);
 
@@ -785,11 +763,9 @@ fn stopped_engine_keeps_clip_active_at_start_boundary() {
     engine.seek_to(manifold_core::Seconds(8.0 * 60.0 / 120.0));
 
     let ctx = TickContext {
-        dt_seconds: Seconds(1.0 / 60.0),
+        frames: 1,
         realtime_now: Seconds(0.0),
-        pre_render_dt: Seconds(1.0 / 60.0),
         frame_count: 0,
-        export_fixed_dt: Seconds(0.0),
     };
     let result = engine.tick(ctx);
 
@@ -823,11 +799,9 @@ fn stopped_engine_prefers_later_clip_at_adjacent_boundary() {
     engine.seek_to(manifold_core::Seconds(8.0 * 60.0 / 120.0));
 
     let ctx = TickContext {
-        dt_seconds: Seconds(1.0 / 60.0),
+        frames: 1,
         realtime_now: Seconds(0.0),
-        pre_render_dt: Seconds(1.0 / 60.0),
         frame_count: 0,
-        export_fixed_dt: Seconds(0.0),
     };
     let result = engine.tick(ctx);
 
@@ -860,11 +834,9 @@ fn all_muted_paused_rig_idles() {
     let start_rt = 1.0;
     for i in 0..10 {
         let ctx = TickContext {
-            dt_seconds: Seconds(dt),
+            frames: 1,
             realtime_now: Seconds(start_rt + i as f64 * dt),
-            pre_render_dt: Seconds(dt),
             frame_count: i as u64,
-            export_fixed_dt: Seconds(0.0),
         };
         let result = engine.tick(ctx);
         if i >= 5 {

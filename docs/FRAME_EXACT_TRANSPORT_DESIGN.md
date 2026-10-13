@@ -1,6 +1,6 @@
 # Frame-Exact Transport — one frame grid for live play and export
 
-**Status:** IN PROGRESS · 2026-10-14 · P1 (the clock type, CPU only) committed on `feat/frame-exact-clock`, revised after its adversarial review. Owed: P2, landed with P1 as one merge, then Peter's rig test, then P3, then P4. Bead: BUG-gqhep (live-transport-nondeterministic-frame-clock).
+**Status:** IN PROGRESS · 2026-10-14 · P1 and P2 committed on `feat/frame-exact-clock`. Owed: the P1+P2 merge, then Peter's rig test, then P3, then P4. Bead: BUG-gqhep (live-transport-nondeterministic-frame-clock).
 **Prerequisites:** none.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs) and section 6 (Seam briefs) before starting any phase.
 
@@ -95,7 +95,7 @@ Readers outside the engine:
 
 LED output reads no time (`rg '\bbeat\b|\btime\b|\bdt\b|Instant' crates/manifold-led/src` has no hits outside tests).
 
-Re-derive: `rg -n '\.(current_time_double|current_time|current_beat|current_beat_f64|time_to_timeline_beat|beat_to_timeline_time|advance_time|nudge_time|set_time|set_beat|sync_time_from_beat|seek_to|set_export_origin|transport_epoch)\(' crates -g '*.rs'`. On this base it hits 24 files outside `engine.rs`.
+Re-derive: `rg -n '\.(current_time_double|current_time|current_beat|current_beat_f64|time_to_timeline_beat|beat_to_timeline_time|advance_time|nudge_time|set_time|set_beat|sync_time_from_beat|seek_to|set_export_origin|transport_epoch)\(' crates -g '*.rs'`. On this base it hits 28 files outside `engine.rs`. The four not in the tables: `input_handler.rs` (UI seeks, including the End key's `f64::MAX` sentinel, which `input_host.rs:489` resolves to the song end before it reaches the engine), `ui_bridge/inspector.rs:2513` (a test), `crates/manifold-media/src/decode_scheduler.rs:317` (a decoder seek, not the transport) and `content_pipeline/trigger_lane_force_tests.rs` (reads only).
 
 ### 1.3 Where dt flows past the transport
 
@@ -172,13 +172,13 @@ These sources are not white noise. A 24 PPQN clock against a 60 fps grid, and 25
 
 ### 1.8 Harnesses and tests that lean on today's behaviour
 
-- `frame_clocked`: 24 call sites (`rg -c 'set_frame_clocked\(' crates`). Rechecked against D4. Every harness seeks while stopped or paused, then plays: rt-dynamic held-out (`rt_dynamic_held_out.rs:327-328`), blob and scene-modifier performance, the journeys, corridor acceptance (`corridor_acceptance.rs:657`, `:907`), gap start (`gap_start_probe.rs:71`, `:98`), rt-capture and `frame_time.rs:845`. None seeks while playing, so the D4 hold never fires in a harness. Play advances one frame from the anchor on the first tick, as `frame_clocked` does today. Only the forward snap of a paused seek changes what they see:
+- `frame_clocked`: 26 matches, 25 calls plus the definition (`rg -c 'set_frame_clocked\(' crates`). Rechecked against D4. Every harness seeks while stopped or paused, then plays: rt-dynamic held-out (`rt_dynamic_held_out.rs:327-328`), blob and scene-modifier performance, the journeys, corridor acceptance (`corridor_acceptance.rs:657`, `:907`), gap start (`gap_start_probe.rs:71`, `:98`), rt-capture and `frame_time.rs:845`. `mute_visibility_probe.rs` (2 calls) never seeks. None seeks while playing, so the D4 hold never fires in a harness. Play advances one frame from the anchor on the first tick, as `frame_clocked` does today. Only the forward snap of a paused seek changes what they see:
   - `scene_modifier_journey/angular.rs:207-211` breaks. It seeks to beats 0.99999 and 1.00001 to straddle a sawtooth reset and asserts `|actual − beat| < 1e-6`. Both snap, and 0.99999 lands on 1.0, after the reset. P2 moves the probe to the grid frames either side of beat 1 (`journey-proofs` feature).
   - `angular.rs:259` (1.00001), `consolidation.rs:93`, `:170` (0.1), `periodic.rs:229`, `:289` and `scene_modifier_journey.rs:561`, `:608` (4.25) compare captures taken at the same snapped beat, or compute expectations from `current_beat_f64()`. They keep working. P2 reruns them once.
   - `gap_start_probe.rs:105` makes its own `beat >= start_beat` compare. D14 makes the engine's beat land at or past on-frame edges, so the probe and the engine agree.
 - `manifold frame-time` (`crates/manifold-app/src/frame_time.rs:1-33`) measures production pacing headless. It is the oracle for the timer change.
 - `headless_content_thread` opens the test GPU device (`crates/manifold-app/src/headless_harness.rs:26`). App-level tests built on it are single queued GPU runs, not CPU proofs.
-- `TickContext` struct literals: 33 sites (`rg -n 'TickContext \{' crates -g '*.rs'`): engine tests 3, `tests/engine_tick.rs` 15, `tests/param_step_clip_edge.rs` 3, `tests/sync_engine_integration.rs` 2, `tests/session_mode.rs` 1, `tests/trigger_source_switch.rs` 1, `content_thread.rs` 1, `content_export.rs` 2, `content_pipeline/trigger_lane_force_tests.rs` 2, `bug219_verify.rs` 1, `import_responsiveness_verify.rs` 1, `ui_snapshot/script.rs` 1. Plus `TickContext::default()` in engine unit tests.
+- `TickContext` struct literals: 33 matches (`rg -n 'TickContext \{' crates -g '*.rs'`): `engine.rs` 3 (the definition and 2 test literals), `tests/engine_tick.rs` 15, `tests/param_step_clip_edge.rs` 3, `tests/sync_engine_integration.rs` 2, `tests/session_mode.rs` 1, `tests/trigger_source_switch.rs` 1, `content_thread.rs` 1, `content_export.rs` 2, `content_pipeline/trigger_lane_force_tests.rs` 2, `bug219_verify.rs` 1, `import_responsiveness_verify.rs` 1, `ui_snapshot/script.rs` 1. Plus `TickContext::default()` in engine unit tests.
 - Tests that step by non-frame amounts: `tests/param_step_clip_edge.rs` uses 0.25, 0.295, 0.005, 0.5, 0.1, 0.03, 0.01 and 1000.0 s (`:96-107`, `:200-219`). The mapping is in the P2 seam brief.
 - Tests that assume accumulation within a tolerance: `tests/engine_tick.rs:422-458`. They pass unchanged on the grid.
 - Timer tests: `frame_timer.rs:518-531`, `:550-569`, `:636-647`.
@@ -274,6 +274,10 @@ The clock and the tick grid accept 1 to 1000 fps through one rule (`sanitize_fps
 
 **D14 — A frame's beat is sampled a ten-millionth of a frame late.** The engine computes the one beat per frame as `beat_at(time(index) + 1e-7 × step)`. Time itself stays exact. An edge that sits exactly on frame k then always counts as reached on frame k. That covers clip edges, automation steps, session quantise targets and one-shot expiry, with one rule at one site. A nudge of 1e-7 frames is 1.7 ns at 60 fps, 2,000 times the worst rounding error (3.6e-12 beats) and far below anything visible. Scripted over every on-frame 1/16 edge at 60, 50, 30, 25 and 24 fps and 120–180 BPM: the matching frame rule `ceil(edge_time / step − 1e-7)` selects the right frame for all of them. It moves no off-frame edge.
 Rejected: comparing each edge as an integer frame against the index. It is the same rule, but it would put an fps into `Layer`'s beat queries and into every other comparer.
+Consequences:
+- Actions recorded on the current frame (a session launch at quantise 0, a stop, a return to arrangement, an automation touch) record the sampled beat, a hair past the frame. A query at the frame's exact beat falls before them.
+- Clip-control binding cutoffs compare against the frame's floor beat, `beat(time − 1e-7 × step)`, so a start recorded on this frame at the sampled beat is not cut.
+- The offset is a fraction of the clock's own frame. An export at a rate other than the project's matches live time bit for bit, and its beat to within the offset.
 
 **D15 — Link offset is sampled at the anchor deadline and aligned to the quantum.** `cache_link_beat_offset` samples `beat_at_time` at the anchor frame's deadline, not the last poll, and pairs it with the anchor frame's beat. It also runs on every transition into Playing that Link caused, which closes the NaN gap in audit item 1.6. On a Link-initiated Play, per Peter's ruling of 2026-10-13, the offset rounds to a whole multiple of Link's quantum. MANIFOLD then locates to `link_beat − offset` at the nearest frame, so its bar lines up with Link's bar. The play start moves by at most half a quantum.
 
@@ -413,7 +417,6 @@ impl FrameTimer {
     pub fn new(target_fps: f64) -> Self;      // free-running, UI thread, unchanged
     pub fn new_grid(target_fps: f64) -> Self; // content thread
     pub fn consume_frames_at(&mut self, now: Instant) -> TickFrames;
-    pub fn consume_frames(&mut self) -> TickFrames; // = consume_frames_at(Instant::now())
     pub fn consume_tick(&mut self) -> f64;    // UI thread, unchanged
 }
 ```
@@ -473,7 +476,7 @@ Consequence: after a tick that is late by less than a frame, the next deadline i
 | Same arrangement, same values per index, whatever the press phase, jitter or stalls | `frame_exact_transport::same_values_per_index_across_phase_jitter_and_stalls` (playback, CPU) and `frame_exact_app::same_values_per_index_through_content_thread` (app, one queued GPU run). Both committed red first (section 5). |
 | Sub-frame jitter never changes `frames`; a missed deadline skips | `frame_grid::tests::grid_frames_ignore_subframe_jitter`, `grid_counts_missed_deadlines`, `grid_count_matches_deadline_comparison` (P1); `frame_timer::tests::frame_clocked_counts_one` (P2) |
 | The tick grid and the clock share one step | `frame_grid::tests::grid_and_clock_share_the_step`: both checked against D1's written formula and the exact `n / fps`, not against each other |
-| Export samples the same grid as live | `transport_clock::tests::export_frames_sit_on_the_song_grid` (P1, D17); `frame_exact_transport::export_frames_match_live_indices` and `export_clip_inside_first_frame` (24 fps export of a 60 fps project, a clip starting between the export start and the next live-grid frame: no start before its own export frame) |
+| Export samples the same grid as live | `transport_clock::tests::export_frames_sit_on_the_song_grid` (P1, D17); `frame_exact_transport::export_frames_match_live_indices` (bit-equal to live at the project rate; at another rate the time bits match and the beat is within D14's offset) and `export_clip_inside_first_frame` (24 fps export of a 60 fps project, a clip starting between the export start and the next live-grid frame: no start before its own export frame) |
 | An export frame leaves no seek hold | `transport_clock::tests::export_frame_clears_a_pending_hold` |
 | Export advances under external sync | `frame_exact_transport::export_under_external_sync_advances` |
 | fps has one source and one sanitising rule | `transport_clock::tests::fps_outside_one_to_a_thousand_falls_back_to_sixty`, `frame_grid::tests::bad_fps_falls_back_without_panicking` (P1); `content_thread::tests::timer_and_clock_follow_project_fps` (load, SetFrameRate, undo, redo) |
@@ -489,7 +492,7 @@ Consequence: after a tick that is late by less than a frame, the next deadline i
 Reuse, don't build:
 - the engine tests' `create_engine` / `StubRenderer` / `load_project` helpers (`crates/manifold-playback/tests/engine_tick.rs:6-120`);
 - the live-versus-export pattern in `tests/param_step_clip_edge.rs:200-219`;
-- `FrameTimer::consume_tick_at` for injected instants (`frame_timer.rs:360`);
+- `FrameTimer::consume_frames_at` for injected instants (`frame_timer.rs`);
 - `manifold frame-time` for pacing;
 - `headless_content_thread` for app-level checks.
 
@@ -499,19 +502,19 @@ Reuse, don't build:
 
 **Playback test** — `crates/manifold-playback/tests/frame_exact_transport.rs::same_values_per_index_across_phase_jitter_and_stalls`:
 1. Project:
-   - a tempo change (128 → 141 at beat 32);
+   - 150 BPM on beats 0–8, 128 BPM to beat 32 (frame 867), then 141;
    - an automation lane with curve and step segments, with steps on on-frame beats;
    - a sync LFO (1/16 sine) and a free LFO;
    - a clip-edge step envelope;
-   - clips starting on off-grid beats and on on-frame beats at 150 BPM;
+   - clips starting on off-grid beats and on on-frame beats (at 150 BPM every 1/8 beat is a 60 fps frame);
    - a session launch quantised to 4 beats.
-2. Run A: Play at instant 0, 900 ticks one step apart.
+2. Run A: Play right after the last stopped tick, 1200 ticks one step apart (the app test runs 960). 900 ticks at 128 BPM from beat 0 would stop exactly at beat 32 and never play the 141 section.
 3. Run B, seeded:
    - Play pressed at a random phase within a frame;
    - each tick's instant jittered by ±40% of a frame;
    - one 3-frame stall.
 4. Record per transport index: `time` bits, `beat` bits, active clip ids, every param `value` bit, session slot state.
-5. For every index both runs rendered, the records are equal bit for bit. Today this fails at the first tick, because the press phase moves every beat.
+5. For every index both runs rendered, the records are equal bit for bit. It was red before P2 because each tick added jittered wall dt. The press phase only decides which tick is the first playing one: dt ran from the previous tick, and Play read no clock.
 
 **App test** — `crates/manifold-app/src/frame_exact_app.rs::same_values_per_index_through_content_thread`. Same shape through `headless_content_thread` and `tick_frame_at` with the real grid timer, not `frame_clocked`: random press phase, jitter and a 3-frame stall. It compares per-index beat bits and param bits from the engine and does not compare pixels. One queued GPU run (audit item 1.8).
 
@@ -526,7 +529,7 @@ Reuse, don't build:
 - `stall_skips_and_stays_in_time`
 - `seek_while_playing_renders_target_first`
 - `play_advances_from_anchor_without_repeat`
-- `jump_over_two_frames_launches_and_resets` (D6)
+- `jump_over_two_frames_launches_and_resets` (D6, P3: jumps are corrections)
 
 **Export regression:** the export tests above, plus the existing ones untouched: the `param_step_clip_edge.rs` export arm, `crates/manifold-app/src/rt_dynamic_export_tests.rs`, and the scoped GPU proofs `scripts/gpu_scope.py` maps for `content_export.rs`.
 
