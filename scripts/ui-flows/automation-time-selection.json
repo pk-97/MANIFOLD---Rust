@@ -4,7 +4,7 @@
       "target": {
         "Point": {
           "x": 470.0,
-          "y": 750.0
+          "y": 665.0
         }
       },
       "gesture": {
@@ -20,7 +20,7 @@
       "target": {
         "Point": {
           "x": 800.0,
-          "y": 750.0
+          "y": 665.0
         }
       },
       "gesture": "Hover"
@@ -31,7 +31,7 @@
       "target": {
         "Point": {
           "x": 800.0,
-          "y": 750.0
+          "y": 665.0
         }
       },
       "gesture": "Release"
@@ -129,7 +129,7 @@
       "target": {
         "Point": {
           "x": 850.0,
-          "y": 750.0
+          "y": 665.0
         }
       },
       "gesture": "RightClick"
