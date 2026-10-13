@@ -697,7 +697,11 @@ pub(crate) fn dispatch_scrub(
                         // one funnel every param drag fires through, once per
                         // touch. Layer-scoped only.
                         if effective_tab.is_layer_scope()
-                            && let Some(layer_id) = active_layer.clone()
+                            && let Some(layer_id) =
+                                super::dispatch::params::automation_owner_layer_id(
+                                    ctx.project,
+                                    &target,
+                                )
                         {
                             ctx.selection.set_chosen_automation_param(
                                 layer_id,

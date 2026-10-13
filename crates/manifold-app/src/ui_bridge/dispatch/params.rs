@@ -1068,6 +1068,29 @@ pub(crate) fn dispatch_params(action: &ParamsAction, ctx: &mut super::super::Dis
     }
 }
 
+/// Layer that owns an automation target, resolved from the stable target
+/// itself so a scene card bound to a non-active layer still files correctly.
+/// None for scene modifiers and group layers.
+pub(crate) fn automation_owner_layer_id(
+    project: &manifold_core::project::Project,
+    target: &manifold_core::GraphTarget,
+) -> Option<manifold_core::LayerId> {
+    project
+        .timeline
+        .layers
+        .iter()
+        .find(|layer| match target {
+            manifold_core::GraphTarget::Generator(id) => layer.layer_id == *id,
+            manifold_core::GraphTarget::Effect(id) => layer
+                .effects
+                .as_ref()
+                .is_some_and(|effects| effects.iter().any(|effect| effect.id == *id)),
+            manifold_core::GraphTarget::SceneModifier { .. } => false,
+        })
+        .filter(|layer| !layer.is_group())
+        .map(|layer| layer.layer_id.clone())
+}
+
 fn show_automation_target(
     target: &manifold_core::GraphTarget,
     param_id: &manifold_core::effects::ParamId,
@@ -1079,18 +1102,9 @@ fn show_automation_target(
     if !instance.params.contains(param_id.as_ref()) {
         return DispatchResult::handled();
     }
-    // Resolve the owning layer from the stable target, including a scene card
-    // bound to a different layer than the active inspector.
-    let owner = ctx.project.timeline.layers.iter().find(|layer| match target {
-        manifold_core::GraphTarget::Generator(id) => layer.layer_id == *id,
-        manifold_core::GraphTarget::Effect(id) => layer.effects.as_ref()
-            .is_some_and(|effects| effects.iter().any(|effect| effect.id == *id)),
-        manifold_core::GraphTarget::SceneModifier { .. } => false,
-    });
-    let Some(owner) = owner.filter(|layer| !layer.is_group()) else {
+    let Some(owner_id) = automation_owner_layer_id(ctx.project, target) else {
         return DispatchResult::handled();
     };
-    let owner_id = owner.layer_id.clone();
     expand_layer_ancestors(&owner_id, ctx);
     let ui_target = crate::editing_host::to_ui_graph_target(target);
     ctx.selection
@@ -1410,5 +1424,32 @@ mod trigger_dispatch_tests {
         assert_eq!(project.timeline.layers.len(), 4);
         assert_ne!(project.graph_target_owner(&target).unwrap().params.get("amount").unwrap().clip_trigger_source,
             manifold_core::params::ClipTriggerSource::OwnLayer);
+    }
+}
+
+#[cfg(test)]
+mod automation_owner_tests {
+    use super::*;
+    use manifold_core::layer::Layer;
+    use manifold_core::project::Project;
+    use manifold_core::PresetTypeId;
+
+    #[test]
+    fn owner_is_target_layer_and_modifiers_have_none() {
+        let mut project = Project::default();
+        let a = Layer::new_generator("A".into(), PresetTypeId::NONE, 0);
+        let b = Layer::new_generator("B".into(), PresetTypeId::NONE, 1);
+        let b_id = b.layer_id.clone();
+        project.timeline.layers.push(a);
+        project.timeline.layers.push(b);
+        assert_eq!(
+            automation_owner_layer_id(&project, &GraphTarget::Generator(b_id.clone())),
+            Some(b_id.clone())
+        );
+        let modifier = GraphTarget::SceneModifier {
+            owner: Box::new(GraphTarget::Generator(b_id)),
+            modifier_id: "m".into(),
+        };
+        assert_eq!(automation_owner_layer_id(&project, &modifier), None);
     }
 }

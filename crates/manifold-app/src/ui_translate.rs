@@ -388,7 +388,8 @@ fn push_chosen_placeholder_lane(
             .effects
             .as_ref()
             .and_then(|fx| fx.iter().find(|f| f.id == *eid)),
-        UiGraphTarget::Generator(_) => layer.gen_params(),
+        UiGraphTarget::Generator(id) if id == &layer.layer_id => layer.gen_params(),
+        UiGraphTarget::Generator(_) => None,
         UiGraphTarget::SceneModifier { owner, .. } => match owner.as_ref() {
             UiGraphTarget::Generator(id) if id == &layer.layer_id => layer.gen_params(),
             _ => None,
@@ -814,6 +815,55 @@ mod feature_kind_parity {
                 *c,
                 "mirror order must match core (drawer indices are exchanged numerically)"
             );
+        }
+    }
+}
+
+#[cfg(test)]
+mod placeholder_lane_owner {
+    use super::*;
+
+    fn gen_layer(name: &str, order: i32) -> Layer {
+        let spec = serde_json::from_value(serde_json::json!({
+            "id":"gain","name":"Gain","min":0.0,"max":1.0,"defaultValue":0.2
+        }))
+        .unwrap();
+        let mut layer = Layer::new_generator(name.into(), PresetTypeId::NONE, order);
+        layer.gen_params_or_init().params = ParamManifest::from_params(vec![Param::bundled(spec)]);
+        layer
+    }
+
+    #[test]
+    fn chosen_and_pinned_generator_lane_land_only_on_owner_layer() {
+        let a = gen_layer("A", 0);
+        let b = gen_layer("B", 1);
+        let target_b = UiGraphTarget::Generator(b.layer_id.clone());
+        let pid: manifold_core::effects::ParamId = "gain".into();
+        let key: AutomationLaneKey = (target_b.clone(), pid.clone());
+        for layer in [&a, &b] {
+            let chosen = layer_automation_lanes_to_ui_with_view(
+                layer,
+                Some(&(target_b.clone(), pid.clone())),
+                &[],
+                &HashSet::new(),
+                &[],
+            );
+            let pinned = layer_automation_lanes_to_ui_with_view(
+                layer,
+                None,
+                &[],
+                &HashSet::new(),
+                std::slice::from_ref(&key),
+            );
+            let want = layer.layer_id == b.layer_id;
+            for lanes in [&chosen, &pinned] {
+                assert_eq!(
+                    lanes.iter().any(|l| l.target == target_b),
+                    want,
+                    "placeholder for Generator(B) on layer {}",
+                    layer.name
+                );
+            }
         }
     }
 }
