@@ -84,7 +84,7 @@ pub struct ProjectSettings {
     pub master_opacity: f32,
     #[serde(default)]
     pub master_effects: Vec<PresetInstance>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "crate::has_no_items")]
     pub master_effect_groups: Option<Vec<EffectGroup>>,
 
     #[serde(default = "default_neg_one_i32")]
