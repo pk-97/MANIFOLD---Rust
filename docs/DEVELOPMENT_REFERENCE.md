@@ -2,6 +2,44 @@
 
 <!-- index: Quick reference grab-bag: texture formats, math gotchas, module layout, and the ui_bridge split. Facts you reach for mid-task. -->
 
+## Crates
+
+| Crate | Role |
+|---|---|
+| `manifold-foundation` | Shared primitive vocabulary; zero-dependency leaf crate |
+| `manifold-core` | Data models, types, registries (no GPU) |
+| `manifold-editing` | Commands, undo/redo, EditingService |
+| `manifold-playback` | PlaybackEngine, scheduling, sync, MIDI/OSC |
+| `manifold-gpu` | GPU backend — native Metal today; Vulkan approved, not built |
+| `manifold-node-engine` | Graph loading, execution, freeze compiler and engine primitives |
+| `manifold-nodes-image` / `manifold-nodes-scene` | Image and scene primitive implementations |
+| `manifold-fluids` | Safe owned access to the pinned FLIP Fluids CPU reference engine |
+| `manifold-physics` | Small owned Rust interface to the pinned Box3D C library |
+| `manifold-nodes-water` | Water registration: links the six water crates; owns migrations, bundled water presets, the physics scene, the runtime extension and cross-solver harnesses |
+| `manifold-water-rigid` | Box3D rigid-body graph adapter and the native pair contract that coupled liquids implement |
+| `manifold-water-liquid` | The liquid seam every solver shares: clock, lattice, bodies, coupling, fields, frame ring, roles and the shared atoms |
+| `manifold-water-gpu-flip` | The GPU FLIP liquid solver: step, pressure solve, clock, bodies, sheeting and its own particle atoms |
+| `manifold-water-gpu-mpm` | The GPU MLS-MPM liquid solver (Matter): domain, particle-to-grid, grid update, grid-to-particle, body reaction and its frame |
+| `manifold-water-whitewater` | The whitewater step: foam, spray and bubble emitters, potentials, lifecycle and the CPU handoff, seeded from a liquid frame |
+| `manifold-water-surface` | The liquid surface mesher: particle volume, lattice bricks, the welded mesh, its smoothing and normals, the liquid frame and blob bounds |
+| `manifold-compositor` | Layer composition, generator rendering and preset thumbnails |
+| `manifold-ui-paint` | GPU painting for the bitmap UI |
+| `manifold-nodes` | Bundled presets, registration and catalog contracts. See `docs/NODE_CATALOG.md`, `docs/PRIMITIVE_AUDIT_AND_DECOMPOSITION_PLAN.md` |
+| `manifold-media` | Audio/video decode, Metal-accelerated encode, export |
+| `manifold-ui` | Custom bitmap UI: tree, panels, input |
+| `manifold-io` | Project serialization (V1 JSON + V2 ZIP) |
+| `manifold-native` | Native plugin FFI (`DepthEstimator`, `BlobDetector`) |
+| `manifold-profiler` | Profiling and instrumentation |
+| `manifold-led` | DMX/Art-Net LED output |
+| `manifold-audio` | Audio capture behind one `CaptureBackend` trait → lock-free ring + off-RT analysis worker (`docs/AUDIO_INFRASTRUCTURE.md` section 11 (Output taps), `docs/AUDIO_MODULATION_DESIGN.md`) |
+| `manifold-spectral` | Spectral DSP and spectrogram rendering |
+| `manifold-recording` | Live recording of compositor output and optional audio input to QuickTime |
+| `manifold-app` | winit entry, Application, ContentThread, ContentPipeline |
+
+Workspace dependencies (from each crate's `[dependencies]`): `foundation`, `native` and `profiler` have none; `core`, `gpu`, `physics` and `ui` on `foundation`; `fluids` on `foundation`+`physics`; `editing` and `io` on `core`; `playback` on `core`+`editing`; `audio` on `core`+`spectral`; `spectral` on `gpu`; `recording` on `audio`; `node-engine` on `core`+`foundation`+`gpu`+`playback`; `nodes` on `core`+`gpu`+`node-engine`+`nodes-image`+`nodes-scene`+`nodes-water`+`water-gpu-mpm`+`water-liquid`+`water-whitewater`; `nodes-image` on `core`+`foundation`+`gpu`+`native`+`node-engine`; `nodes-scene` on `core`+`foundation`+`gpu`+`node-engine`; `nodes-water` on `core`+`fluids`+`foundation`+`gpu`+`node-engine`+`physics`+`water-gpu-flip`+`water-gpu-mpm`+`water-liquid`+`water-rigid`+`water-surface`+`water-whitewater`; `water-liquid` on `core`+`fluids`+`gpu`+`node-engine`+`physics`+`water-rigid`; `water-gpu-flip` and `water-gpu-mpm` on `core`+`gpu`+`node-engine`+`physics`+`water-liquid`+`water-rigid`; `water-whitewater` on `core`+`fluids`+`gpu`+`node-engine`+`physics`+`water-liquid`; `water-surface` on `core`+`gpu`+`node-engine`+`water-liquid`; `water-rigid` on `core`+`gpu`+`node-engine`+`physics`; `compositor` on `core`+`gpu`+`node-engine`+`playback`; `ui-paint` on `foundation`+`gpu`+`ui`; `media` on `core`+`playback`; `led` on `gpu`; `app` on `audio`+`compositor`+`core`+`editing`+`gpu`+`io`+`led`+`media`+`node-engine`+`nodes`+`nodes-image`+`nodes-scene`+`nodes-water`+`playback`+`profiler`+`recording`+`spectral`+`ui`+`ui-paint`.
+
+`ui` depends on `foundation` only: mutations leave as `PanelAction` values translated to commands app-side, and UI-reachable shared types go in `foundation`.
+
 ## Texture Format Mapping
 
 | Format | Metal (manifold-gpu) | Notes |
