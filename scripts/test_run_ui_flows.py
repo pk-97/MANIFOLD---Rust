@@ -337,6 +337,20 @@ class PathTriggerTests(unittest.TestCase):
         ):
             self.assertEqual(self.select(path), four, path)
 
+    def test_protected_drag_flows_stay_selected_by_their_old_rows(self):
+        for path in (
+            "crates/manifold-ui/src/interaction_overlay.rs",
+            "crates/manifold-ui/src/automation_hit_tester.rs",
+            "crates/manifold-ui/src/panels/viewport.rs",
+            "crates/manifold-ui-paint/src/automation_lane_draw.rs",
+            "crates/manifold-app/src/ui_bridge/projection/timeline.rs",
+        ):
+            self.assertIn("drag-automation-point", self.select(path), path)
+        self.assertIn(
+            "drag-clip-release-over-inspector",
+            self.select("crates/manifold-app/src/ui_bridge/projection/timeline.rs"),
+        )
+
     def test_every_trigger_entry_is_an_existing_flow(self):
         for prefix, names in self.manifest["path_triggers"].items():
             for name in names:

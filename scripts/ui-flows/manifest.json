@@ -25,6 +25,7 @@
       "automation-scene-camera-click",
       "automation-show-parameter",
       "automation-time-selection",
+      "drag-automation-point",
       "toggle-lanes"
     ],
     "crates/manifold-ui/src/automation_hit_tester.rs": [
@@ -36,7 +37,8 @@
       "automation-resize-lane",
       "automation-scene-camera-click",
       "automation-show-parameter",
-      "automation-time-selection"
+      "automation-time-selection",
+      "drag-automation-point"
     ],
     "crates/manifold-ui/src/panels/viewport.rs": [
       "automation-clear-parameter",
@@ -48,6 +50,7 @@
       "automation-scene-camera-click",
       "automation-show-parameter",
       "automation-time-selection",
+      "drag-automation-point",
       "toggle-lanes"
     ],
     "crates/manifold-ui-paint/src/automation_lane_draw.rs": [
@@ -60,6 +63,7 @@
       "automation-scene-camera-click",
       "automation-show-parameter",
       "automation-time-selection",
+      "drag-automation-point",
       "toggle-lanes"
     ],
     "crates/manifold-ui/src/panels/scene_setup_panel/": [
@@ -162,7 +166,9 @@
       "automation-scene-camera-click",
       "automation-show-parameter",
       "automation-time-selection",
+      "drag-automation-point",
       "drag-clip",
+      "drag-clip-release-over-inspector",
       "ruler-scrub",
       "toggle-lanes",
       "trim-clip-left",
