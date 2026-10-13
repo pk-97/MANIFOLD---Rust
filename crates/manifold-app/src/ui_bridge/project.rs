@@ -55,7 +55,8 @@ pub(crate) fn gpu_flip_liquid_template() -> manifold_editing::commands::graph::L
         nodes: body.nodes,
         wires: body.wires,
         output_node,
-        object_outputs: vec!["object".into(), "object_1".into(), "object_2".into(), "object_3".into()],
+        // The four recognised roles, then Physics View's dots.
+        object_outputs: vec!["object".into(), "object_1".into(), "object_2".into(), "object_3".into(), "object_4".into()],
         exposures,
     }
 }
@@ -2163,7 +2164,7 @@ mod tests {
         assert!(matches!(pending.resolve(&project),
             Some(crate::edit_selection::EditSelection::Object { .. })));
         let added = effective_def(&project, &layer_id);
-        assert_eq!(objects_param(&project, &layer_id, render_scene_id), before + 4.0);
+        assert_eq!(objects_param(&project, &layer_id, render_scene_id), before + 5.0);
         let vm = SceneVm::from_def(&added).expect("scene with fluid");
         let row = vm.objects.iter().find_map(|object| match object {
             SceneObjectVm::Known(row) if row.liquid_domain.is_some() => Some(row),

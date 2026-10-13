@@ -1,6 +1,6 @@
 //! `node.switch_mesh` — two-way `Array<MeshVertex>` selector that routes on
-//! the GPU. `node.switch_indices` is its `Array<u32>` twin and shares
-//! [`ArraySwitch`].
+//! the GPU. `node.switch_indices` (`Array<u32>`) and `node.switch_instances`
+//! (`Array<InstanceTransform>`) are its twins and share [`ArraySwitch`].
 //!
 //! A selector param (not a wire) names the chosen input before the frame
 //! runs, so the executor skips everything that feeds only the other input.

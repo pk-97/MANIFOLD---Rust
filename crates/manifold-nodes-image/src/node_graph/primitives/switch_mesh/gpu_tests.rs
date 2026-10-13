@@ -1,4 +1,5 @@
-//! GPU proofs for `node.switch_mesh` and `node.switch_indices`: the chosen
+//! GPU proofs for `node.switch_mesh`, `node.switch_indices` and
+//! `node.switch_instances`: the chosen
 //! input, written on the GPU earlier in the same command buffer, reaches `out`
 //! element for element with its live extent; everything past it is zero; an
 //! unwired choice publishes a live extent of zero.
@@ -15,13 +16,14 @@ use manifold_node_engine::exec::execution_plan::{ExecutionPlan, ResourceId, comp
 use manifold_node_engine::exec::metal_backend::MetalBackend;
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
 use manifold_node_engine::graph::Graph;
-use manifold_node_engine::mesh::MeshVertex;
+use manifold_node_engine::mesh::{InstanceTransform, MeshVertex};
 use manifold_node_engine::parameters::{ParamDef, ParamValue};
 use manifold_node_engine::ports::{ArrayType, KnownItem, NodeInput, NodeOutput, NodePort, PortKind, PortType};
 use manifold_node_engine::scene::live_extent::LiveExtent;
 
 use super::SwitchMesh;
 use crate::node_graph::primitives::switch_indices::SwitchIndices;
+use crate::node_graph::primitives::switch_instances::SwitchInstances;
 
 /// One switch input: `live` items followed by zeros up to `capacity`, with a
 /// live extent of `live / per_item` items and `bound`, or none.
@@ -319,4 +321,32 @@ fn switch_mesh_input_without_extent_is_live_to_its_capacity() {
     let b = Input::new(vertex, 5, 7, 9, 1);
     let frames = run(mesh_switch(), Some(&a), Some(&b), &[0.0]);
     assert_eq!(frames[0], expected(Some(&a), 9));
+}
+
+fn instance(i: usize) -> InstanceTransform {
+    let f = i as f32 + 1.0;
+    InstanceTransform { pos_scale: [f, -f, 0.5 * f, 0.01 * f], rot_pad: [0.1 * f, 0.2 * f, 0.3 * f, 0.0] }
+}
+
+fn instance_switch() -> Box<dyn EffectNode> {
+    Box::new(SwitchInstances::new())
+}
+
+#[test]
+fn switch_instances_routes_the_chosen_gpu_written_instances_and_their_live_extent() {
+    assert_routes(instance_switch, Input::new(instance, 3, 4, 6, 1), Input::new(instance, 5, 7, 9, 1));
+}
+
+/// Physics View's shape: copies on in_1 only; the off choice is empty.
+#[test]
+fn switch_instances_unwired_choice_has_zero_live_extent() {
+    assert_unwired_choice_is_empty(instance_switch, Input::new(instance, 5, 7, 9, 1));
+}
+
+/// Copies publish no extent: the switch states one at their capacity.
+#[test]
+fn switch_instances_input_without_extent_is_live_to_its_capacity() {
+    let b = Input::new(instance, 9, 9, 9, 1).without_extent();
+    let frames = run(instance_switch(), None, Some(&b), &[1.0]);
+    assert_eq!(frames[0], expected(Some(&b), 9));
 }

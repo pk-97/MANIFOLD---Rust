@@ -100,16 +100,21 @@ fn water_family_add_undo_redo() {
     for insertion in 0..2 {
         add_water(&mut project, &layer, render, &mut editing);
         let added = effective_def(&project, &layer);
-        let start = initial_count + insertion * 4;
-        assert_eq!(objects_param(&project, &layer, render) as usize, start + 4);
-        let family: Vec<_> = rows(&added).into_iter().filter(|row| (start..start + 4).contains(&row.index)).collect();
-        assert_eq!(family.len(), 4);
-        assert!(family[0].is_group);
-        for (row, suffix) in family.iter().zip(["", " Foam", " Spray", " Bubbles"]) {
+        // Five outputs: the four recognised roles, then Physics View's dots,
+        // and the family is still recognised as water.
+        let start = initial_count + insertion * 5;
+        assert_eq!(objects_param(&project, &layer, render) as usize, start + 5);
+        let family: Vec<_> = rows(&added).into_iter().filter(|row| (start..start + 5).contains(&row.index)).collect();
+        assert_eq!(family.len(), 5);
+        assert!(family[0].is_group && family[0].liquid_domain.is_some());
+        for (row, suffix) in family.iter().zip(["", " Foam", " Spray", " Bubbles", " Physics Dots"]) {
             assert_eq!(row.name, format!("Water {}{suffix}", insertion + 1));
         }
+        for child in &family[1..] {
+            assert_eq!(child.parent_group_id, Some(family[0].object_node_id), "{} is a Water child row", child.name);
+        }
         let group_id = family[0].group_node_id.unwrap();
-        for (offset, port) in ["object", "object_1", "object_2", "object_3"].into_iter().enumerate() {
+        for (offset, port) in ["object", "object_1", "object_2", "object_3", "object_4"].into_iter().enumerate() {
             assert!(added.wires.iter().any(|wire| wire.from_node == group_id && wire.from_port == port
                 && wire.to_node == render && wire.to_port == format!("object_{}", start + offset)));
         }
@@ -124,9 +129,10 @@ fn water_family_add_undo_redo() {
             }
         }
         let gate = binding(&added, &family[0].object, "parent_visible");
-        assert_eq!(added.preset_metadata.as_ref().unwrap().bindings.iter().filter(|binding| binding.id == gate).count(), 4);
+        assert_eq!(added.preset_metadata.as_ref().unwrap().bindings.iter().filter(|binding| binding.id == gate).count(), 5);
         let metadata = added.preset_metadata.as_ref().unwrap();
-        for child in &family[1..] {
+        // The three looks carry a Size; the dots are drawn at particle radius.
+        for child in &family[1..4] {
             let mesh = child.look_mesh.as_ref().expect("look mesh");
             let size = binding(&added, mesh, "radius");
             assert!(size.ends_with("_size"), "recipe-authored Size survives fresh IDs");
@@ -186,7 +192,8 @@ fn water_family_visibility_round_trip() {
     let families = rows(&def);
     for water in families.iter().filter(|row| row.is_group && row.liquid_domain.is_some()) {
         let children: Vec<_> = families.iter().filter(|row| row.parent_group_id == Some(water.object_node_id)).collect();
-        assert_eq!(children.len(), 3);
+        // Three looks, then Physics View's dots.
+        assert_eq!(children.len(), 4);
         let child = children[0];
         let write = |project: &mut Project, editing: &mut EditingService, row: &SceneObjectKnownRow, value| {
             let command = apply_scene_param_write(project, &layer, row.visible_addr.scope_path.clone(),
@@ -277,7 +284,7 @@ fn water_family_delete_undo() {
         water.index as u32, before.clone())), &mut project);
     assert_eq!(editing.take_rejection(), None);
     let deleted = effective_def(&project, &layer);
-    assert_eq!(objects_param(&project, &layer, render) as u32, source_slot + 1 - 4);
+    assert_eq!(objects_param(&project, &layer, render) as u32, source_slot + 1 - 5);
     assert!(!deleted.nodes.iter().any(|node| Some(node.id) == water.group_node_id));
     assert_eq!(deleted.nodes.iter().find(|node| node.id == source_group), Some(&source_before),
         "external object, role source and its authored controls survive");
@@ -316,7 +323,9 @@ fn water_family_recognizers_agree() {
         let before = effective_def(&project, &layer);
         let family_rows: Vec<_> = rows(&before).into_iter().filter(|row|
             row.look_mesh.is_some() || (row.is_group && row.liquid_domain.is_some())).collect();
-        assert_eq!(family_rows.len(), 8, "shipped and Add Water families");
+        // Water, three looks and the dots per family; Particle View has no dots.
+        let shipped = if preset == "WaterDamBreakGpuFlip" { 5 } else { 4 };
+        assert_eq!(family_rows.len(), shipped + 5, "shipped and Add Water families");
         for row in family_rows {
             // Renaming the enclosing group is editing's observable parent predicate.
             let mut renamed = project.clone();

@@ -499,6 +499,10 @@
             {
               "name": "object_3",
               "portType": "SceneObject"
+            },
+            {
+              "name": "object_4",
+              "portType": "SceneObject"
             }
           ]
         },
@@ -2657,6 +2661,125 @@
             "id": 35,
             "nodeId": "bubble_blend",
             "typeId": "node.interpolate_particle_frames"
+          },
+          {
+            "id": 36,
+            "nodeId": "water_vertices_switch",
+            "params": {
+              "selector": {
+                "type": "Float",
+                "value": 0.0
+              }
+            },
+            "typeId": "node.switch_mesh"
+          },
+          {
+            "id": 37,
+            "nodeId": "water_indices_switch",
+            "params": {
+              "selector": {
+                "type": "Float",
+                "value": 0.0
+              }
+            },
+            "typeId": "node.switch_indices"
+          },
+          {
+            "id": 38,
+            "nodeId": "dots_mesh",
+            "params": {
+              "radius": {
+                "type": "Float",
+                "value": 1.0
+              },
+              "shape": {
+                "type": "Enum",
+                "value": 0
+              }
+            },
+            "typeId": "node.platonic_solid_mesh"
+          },
+          {
+            "id": 39,
+            "nodeId": "dots_material",
+            "params": {
+              "color_b": {
+                "type": "Float",
+                "value": 1.0
+              },
+              "color_g": {
+                "type": "Float",
+                "value": 0.729411780834198
+              },
+              "color_r": {
+                "type": "Float",
+                "value": 0.37254902720451355
+              }
+            },
+            "typeId": "node.unlit_material"
+          },
+          {
+            "id": 40,
+            "nodeId": "dots_blend",
+            "typeId": "node.interpolate_particle_frames"
+          },
+          {
+            "id": 41,
+            "nodeId": "dots_copies",
+            "typeId": "node.particles_to_copies"
+          },
+          {
+            "handle": "Physics Dots",
+            "id": 42,
+            "nodeId": "dots_object",
+            "params": {
+              "cast_shadows": {
+                "type": "Float",
+                "value": 0.0
+              }
+            },
+            "typeId": "node.scene_object"
+          },
+          {
+            "id": 43,
+            "nodeId": "dots_visible",
+            "params": {
+              "in_0": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "in_1": {
+                "type": "Float",
+                "value": 1.0
+              },
+              "selector": {
+                "type": "Float",
+                "value": 0.0
+              }
+            },
+            "typeId": "node.switch_value"
+          },
+          {
+            "id": 44,
+            "nodeId": "dots_mesh_switch",
+            "params": {
+              "selector": {
+                "type": "Float",
+                "value": 0.0
+              }
+            },
+            "typeId": "node.switch_mesh"
+          },
+          {
+            "id": 45,
+            "nodeId": "dots_instances_switch",
+            "params": {
+              "selector": {
+                "type": "Float",
+                "value": 0.0
+              }
+            },
+            "typeId": "node.switch_instances"
           }
         ],
         "wires": [
@@ -3951,18 +4074,6 @@
             "toPort": "solid"
           },
           {
-            "fromNode": 10,
-            "fromPort": "vertices",
-            "toNode": 19,
-            "toPort": "vertices"
-          },
-          {
-            "fromNode": 10,
-            "fromPort": "indices",
-            "toNode": 19,
-            "toPort": "indices"
-          },
-          {
             "fromNode": 18,
             "fromPort": "out",
             "toNode": 19,
@@ -4135,6 +4246,138 @@
             "fromPort": "object",
             "toNode": 20,
             "toPort": "object_3"
+          },
+          {
+            "fromNode": 10,
+            "fromPort": "vertices",
+            "toNode": 36,
+            "toPort": "in_0"
+          },
+          {
+            "fromNode": 36,
+            "fromPort": "out",
+            "toNode": 19,
+            "toPort": "vertices"
+          },
+          {
+            "fromNode": 10,
+            "fromPort": "indices",
+            "toNode": 37,
+            "toPort": "in_0"
+          },
+          {
+            "fromNode": 37,
+            "fromPort": "out",
+            "toNode": 19,
+            "toPort": "indices"
+          },
+          {
+            "fromNode": 8,
+            "fromPort": "particles_a",
+            "toNode": 40,
+            "toPort": "particles_a"
+          },
+          {
+            "fromNode": 8,
+            "fromPort": "particles_b",
+            "toNode": 40,
+            "toPort": "particles_b"
+          },
+          {
+            "fromNode": 8,
+            "fromPort": "count_a",
+            "toNode": 40,
+            "toPort": "count_a"
+          },
+          {
+            "fromNode": 8,
+            "fromPort": "count_b",
+            "toNode": 40,
+            "toPort": "count_b"
+          },
+          {
+            "fromNode": 8,
+            "fromPort": "identity_a",
+            "toNode": 40,
+            "toPort": "identity_a"
+          },
+          {
+            "fromNode": 8,
+            "fromPort": "identity_b",
+            "toNode": 40,
+            "toPort": "identity_b"
+          },
+          {
+            "fromNode": 8,
+            "fromPort": "blend",
+            "toNode": 40,
+            "toPort": "blend"
+          },
+          {
+            "fromNode": 8,
+            "fromPort": "span",
+            "toNode": 40,
+            "toPort": "span"
+          },
+          {
+            "fromNode": 40,
+            "fromPort": "out",
+            "toNode": 41,
+            "toPort": "particles"
+          },
+          {
+            "fromNode": 8,
+            "fromPort": "count_b",
+            "toNode": 41,
+            "toPort": "live_count"
+          },
+          {
+            "fromNode": 41,
+            "fromPort": "copies",
+            "toNode": 45,
+            "toPort": "in_1"
+          },
+          {
+            "fromNode": 45,
+            "fromPort": "out",
+            "toNode": 42,
+            "toPort": "instances"
+          },
+          {
+            "fromNode": 8,
+            "fromPort": "count_b",
+            "toNode": 42,
+            "toPort": "instance_count"
+          },
+          {
+            "fromNode": 38,
+            "fromPort": "vertices",
+            "toNode": 44,
+            "toPort": "in_1"
+          },
+          {
+            "fromNode": 44,
+            "fromPort": "out",
+            "toNode": 42,
+            "toPort": "vertices"
+          },
+          {
+            "fromNode": 39,
+            "fromPort": "out",
+            "toNode": 42,
+            "toPort": "material"
+          },
+          {
+            "fromNode": 43,
+            "fromPort": "out",
+            "toNode": 42,
+            "toPort": "visible"
+          },
+          {
+            "fromNode": 42,
+            "fromPort": "object",
+            "toNode": 20,
+            "toPort": "object_4"
           },
           {
             "fromNode": 0,
@@ -4575,6 +4818,19 @@
         "convert": {
           "type": "Float"
         },
+        "defaultValue": 1.0,
+        "id": "parent_visible",
+        "label": "Visible",
+        "target": {
+          "kind": "node",
+          "nodeId": "dots_object",
+          "param": "parent_visible"
+        }
+      },
+      {
+        "convert": {
+          "type": "Float"
+        },
         "defaultMirrorsNodeParam": true,
         "defaultValue": 0.004999999888241291,
         "id": "foam_size",
@@ -4653,6 +4909,71 @@
           "kind": "node",
           "nodeId": "bubble_object",
           "param": "visible"
+        }
+      },
+      {
+        "convert": {
+          "type": "Float"
+        },
+        "defaultValue": 0.0,
+        "id": "physics_view",
+        "label": "Physics View",
+        "target": {
+          "kind": "node",
+          "nodeId": "water_vertices_switch",
+          "param": "selector"
+        }
+      },
+      {
+        "convert": {
+          "type": "Float"
+        },
+        "defaultValue": 0.0,
+        "id": "physics_view",
+        "label": "Physics View",
+        "target": {
+          "kind": "node",
+          "nodeId": "water_indices_switch",
+          "param": "selector"
+        }
+      },
+      {
+        "convert": {
+          "type": "Float"
+        },
+        "defaultValue": 0.0,
+        "id": "physics_view",
+        "label": "Physics View",
+        "target": {
+          "kind": "node",
+          "nodeId": "dots_visible",
+          "param": "selector"
+        }
+      },
+      {
+        "convert": {
+          "type": "Float"
+        },
+        "defaultValue": 0.0,
+        "id": "physics_view",
+        "label": "Physics View",
+        "target": {
+          "kind": "node",
+          "nodeId": "dots_instances_switch",
+          "param": "selector"
+        }
+      },
+      {
+        "convert": {
+          "type": "Float"
+        },
+        "defaultValue": 0.0,
+        "id": "physics_view",
+        "label": "Physics View",
+        "target": {
+          "kind": "node",
+          "nodeId": "dots_mesh_switch",
+          "param": "selector"
         }
       }
     ],
@@ -4978,6 +5299,17 @@
         "name": "Visible",
         "section": "Bubbles",
         "wholeNumbers": false
+      },
+      {
+        "defaultValue": 0.0,
+        "id": "physics_view",
+        "isToggle": true,
+        "isTrigger": false,
+        "max": 1.0,
+        "min": 0.0,
+        "name": "Physics View",
+        "section": "Water",
+        "wholeNumbers": false
       }
     ],
     "stringBindings": [
@@ -5178,6 +5510,12 @@
       "fromPort": "object_3",
       "toNode": 463,
       "toPort": "object_8"
+    },
+    {
+      "fromNode": 475,
+      "fromPort": "object_4",
+      "toNode": 463,
+      "toPort": "object_6"
     },
     {
       "fromNode": 476,

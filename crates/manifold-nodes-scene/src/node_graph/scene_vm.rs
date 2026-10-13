@@ -59,6 +59,10 @@ const BAKE_ENVIRONMENT_TYPE_ID: &str = "node.bake_environment";
 const HDRI_SOURCE_TYPE_ID: &str = "node.hdri_source";
 const EXPOSURE_TYPE_ID: &str = "node.exposure";
 const SWITCH_TEXTURE_TYPE_ID: &str = "node.switch_texture";
+const SWITCH_MESH_TYPE_ID: &str = "node.switch_mesh";
+const SWITCH_INDICES_TYPE_ID: &str = "node.switch_indices";
+const SWITCH_TYPE_IDS: [&str; 4] =
+    ["node.switch_value", SWITCH_MESH_TYPE_ID, SWITCH_INDICES_TYPE_ID, "node.switch_instances"];
 const TRANSFORM_3D_TYPE_ID: &str = "node.transform_3d";
 const ORBIT_CAMERA_TYPE_ID: &str = "node.orbit_camera";
 const FREE_CAMERA_TYPE_ID: &str = "node.free_camera";
@@ -946,11 +950,21 @@ fn discover_water_families(
             if !family_owner_reaches_domain(group_node, water_object_id, domain_node_id) {
                 return None;
             }
+            // Further scene objects the family outputs (Physics View's dots)
+            // are child rows too, after the looks; they never decide
+            // recognition.
+            let mut extras: Vec<_> = members
+                .iter()
+                .filter(|(port, object)| !output_roles.contains(port) && !objects_seen.contains(object))
+                .collect();
+            extras.sort_unstable();
             let output_order = output_roles
                 .iter()
-                .enumerate()
                 .skip(1)
-                .map(|(order, role)| (members[*role], order))
+                .map(|role| members[*role])
+                .chain(extras.into_iter().map(|(_, object)| *object))
+                .enumerate()
+                .map(|(order, object)| (object, order + 1))
                 .collect();
             Some((
                 group_id,
@@ -1028,6 +1042,9 @@ fn family_look_mesh(group_node: &EffectGraphNode, object_id: u32) -> Option<Node
             cursor = Some((inner_id, inner_port));
         } else if MODIFIER_TYPE_IDS.contains(&node.type_id.as_str()) {
             cursor = level.producer(node.id, "in");
+        } else if node.type_id == SWITCH_MESH_TYPE_ID {
+            // Physics View's dots reach their mesh through a switch.
+            cursor = ["in_0", "in_1"].into_iter().find_map(|input| level.producer(node.id, input));
         } else {
             return None;
         }
@@ -1163,6 +1180,20 @@ fn trace_objects(
                     .node(row.object_node_id)
                     .is_none_or(|node| param_f32(node, "parent_visible", 1.0) > 0.5);
                 row.visible_driven = inner.producer(row.object_node_id, "parent_visible").is_some();
+                // Switches feeding a child (Physics View's dots: visibility,
+                // mesh, instances) are the water's controls, not the child's.
+                let mut children: Vec<_> = family.output_order.iter().collect();
+                children.sort_unstable_by_key(|(_, order)| **order);
+                for (child, _) in children {
+                    for port in ["visible", "vertices", "indices", "instances"] {
+                        if let Some((id, _)) = inner.producer(*child, port)
+                            && let Some(switch) = inner.node(id).filter(|node| SWITCH_TYPE_IDS.contains(&node.type_id.as_str()))
+                            && !row.fluid_controls.contains(&switch.node_id)
+                        {
+                            row.fluid_controls.push(switch.node_id.clone());
+                        }
+                    }
+                }
             } else if family.output_order.contains_key(&row.object_node_id) {
                 // The other outputs are looks: they own material, Size and
                 // their local eye only. Simulation and object-editing fields
@@ -1498,6 +1529,13 @@ fn trace_scene_object(
     let mut mesh_scope_path = scope_path.clone();
     let mut parseable = cursor.is_some();
     let mut source_vertex_count: Option<u32> = None;
+    let mut switches: Vec<NodeId> = level
+        .producer(object_node_id, "indices")
+        .and_then(|(id, _)| level.node(id))
+        .filter(|node| node.type_id == SWITCH_INDICES_TYPE_ID)
+        .map(|node| node.node_id.clone())
+        .into_iter()
+        .collect();
     let mut fluid_domain = None;
     let mut fluid_domain_transform = None;
     let mut guard = 0;
@@ -1529,6 +1567,15 @@ fn trace_scene_object(
             current_level = inner;
             mesh_scope_path.push(node_id);
             cursor = Some((inner_id, inner_port));
+            continue;
+        }
+        if n.type_id == SWITCH_MESH_TYPE_ID {
+            // A mesh switch is transparent: the mesh is its first wired
+            // input (Physics View's surface on in_0), and the switch is
+            // the water's control.
+            switches.push(n.node_id.clone());
+            cursor = ["in_0", "in_1"].into_iter().find_map(|port| current_level.producer(n.id, port));
+            parseable = cursor.is_some();
             continue;
         }
         if !MODIFIER_TYPE_IDS.contains(&n.type_id.as_str()) {
@@ -1627,6 +1674,15 @@ fn trace_scene_object(
 
     if group_node_id.is_some() {
         level.nodes.iter().filter(|node| node.type_id == "node.fluid_role_source").for_each(&mut own);
+    }
+    // The switches between the water and its surface (Physics View) are the
+    // water's controls.
+    if liquid_domain.is_some() {
+        for switch in switches {
+            if !switch.is_empty() && !fluid_controls.contains(&switch) {
+                fluid_controls.push(switch);
+            }
+        }
     }
 
     let row = SceneObjectVm::Known(Box::new(SceneObjectKnownRow {

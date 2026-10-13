@@ -38,7 +38,7 @@ This block is **generated from the node registry** by `gen_node_catalog` (`cargo
 
 <!-- BEGIN GENERATED: registered-node-index — do not edit; run `cargo run -p manifold-nodes --bin gen_node_catalog` -->
 
-_Generated from the node registry. Do not hand-edit. 390 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
+_Generated from the node registry. Do not hand-edit. 391 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
 
 ### Color & Tone (16)
 
@@ -464,7 +464,7 @@ _Generated from the node registry. Do not hand-edit. 390 nodes registered, group
 | Wrap | `node.wrap` | Filter | Keeps only the part after the decimal point, which wraps every value back into 0 to 1. Multiply the input first to tile or repeat a gradient. |
 | Clear Array | `node.zero_array` | Filter | Resets a list of whole numbers to zero so it can be added into again. |
 
-### Routing (12)
+### Routing (13)
 
 | Node | type_id | role | summary |
 |---|---|---|---|
@@ -473,6 +473,7 @@ _Generated from the node registry. Do not hand-edit. 390 nodes registered, group
 | Resize Limit | `node.resize_limit` | Filter | Bounds an image's longest side while preserving its proportions. |
 | Switch (array) | `node.switch_array` | Filter | Picks one of several incoming lists and passes it through, chosen by a selector number. |
 | Switch (indices) | `node.switch_indices` | Filter | Picks one of two incoming triangle index lists and passes it through, chosen by a selector number. The list it does not pick is not computed. |
+| Switch (instances) | `node.switch_instances` | Filter | Picks one of two incoming instance lists and passes it through, chosen by a selector number. The list it does not pick is not computed. |
 | Switch (mesh) | `node.switch_mesh` | Filter | Picks one of two incoming meshes and passes it through, chosen by a selector number. The mesh it does not pick is not computed. |
 | Switch (texture) | `node.switch_texture` | Filter | Picks one of several incoming images and passes it through, chosen by a selector number. The input count grows as you wire more in. |
 | Switch (value) | `node.switch_value` | Filter | Picks one of several incoming values and passes it through, chosen by a selector number. Use it to flip between sources live. |
@@ -610,7 +611,7 @@ _Generated from the node registry. Do not hand-edit. 390 nodes registered, group
 | `Text` | Text | generator | Text & Media | 9 |
 | `Transform` | Transform | effect | Spatial | 4 |
 | `VoronoiPrism` | Voronoi Prism | effect | Spatial | 3 |
-| `WaterDamBreakGpuFlip` | Water — Dam Break (GPU FLIP) | generator | Sim | 2014 |
+| `WaterDamBreakGpuFlip` | Water — Dam Break (GPU FLIP) | generator | Sim | 2052 |
 | `WaterDamBreakMatter` | Water — Dam Break (Live GPU) | generator | Sim | 1406 |
 | `WaterDamBreakParticles` | Water — Dam Break (Particle View) | generator | Sim | 2007 |
 | `WaterFloatingBoxMatter` | Water — Floating Box (Live GPU) | generator | Sim | 1399 |
@@ -925,6 +926,7 @@ Variadic N-way selectors driven by a scalar.
 | Mux Array | `node.mux_array` | 8-way `Array<T>` selector |
 | Switch (mesh) | `node.switch_mesh` | 2-way `Array<MeshVertex>` selector; GPU blit of the chosen input's live vertices, carries its live extent |
 | Switch (indices) | `node.switch_indices` | 2-way `Array<u32>` index-buffer selector; pairs with Switch (mesh), carries the live extent that controls indexed draws |
+| Switch (instances) | `node.switch_instances` | 2-way `Array<InstanceTransform>` selector; an unwired choice is empty instances and prunes the other side's copies |
 
 ### 3.18 Native / FFI / host-side sources
 

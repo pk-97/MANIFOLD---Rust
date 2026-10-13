@@ -732,6 +732,15 @@ impl Executor {
         self.rebuild_epoch
     }
 
+    /// The steps the next frame would run, indexed like
+    /// [`ExecutionPlan::steps`]: the same live set a frame computes, without
+    /// evaluating anything.
+    #[cfg(any(test, feature = "testkit"))]
+    pub fn live_steps_for(&mut self, graph: &Graph, plan: &ExecutionPlan) -> &[bool] {
+        self.compute_live_steps(graph, plan);
+        &self.live_steps
+    }
+
     /// Profiling-only: when on, [`compute_live_steps`] marks every step live
     /// (no mux/liveness pruning), so an arbitrary plan prefix runs all of its
     /// steps. Used by the per-dispatch profiler; never set on the live path.

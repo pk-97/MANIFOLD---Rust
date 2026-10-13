@@ -556,6 +556,7 @@ const NON_STANDALONE: &[&str] = &[
     "node.switch_array",
     // Blit-only routing: a buffer copy of the chosen input, no kernel.
     "node.switch_indices",
+    "node.switch_instances",
     "node.switch_mesh",
     // CPU terminal cells are uploaded directly; there is no GPU uniform ABI.
     "node.terminal_stream",

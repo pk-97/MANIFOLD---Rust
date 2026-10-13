@@ -595,6 +595,22 @@ pub(super) const WHITEWATER_KINDS: [&str; 4] = ["foam", "bubble", "spray", "dust
 /// Child looks in family-output order. Dust has no display chain.
 const RENDERED_KINDS: [&str; 3] = ["foam", "spray", "bubble"];
 const FAMILY_OUTPUTS: [&str; 4] = ["object", "object_1", "object_2", "object_3"];
+/// Physics View's dots: a fifth output beside the four recognised roles.
+const DOTS_OUTPUT: &str = "object_4";
+/// The render slot the dots take: the one the tank layout leaves empty.
+#[cfg(any(test, feature = "testkit", feature = "gpu-proofs"))]
+const DOTS_RENDER_SLOT: &str = "object_6";
+/// Physics View's switches: the surface's two wires, the dots' visibility and
+/// the dots' two GPU inputs. The card drives them all; the first owns it.
+const VERTICES_SWITCH: &str = "water_vertices_switch";
+const INDICES_SWITCH: &str = "water_indices_switch";
+const DOTS_VISIBLE: &str = "dots_visible";
+const DOTS_INSTANCES_SWITCH: &str = "dots_instances_switch";
+const DOTS_MESH_SWITCH: &str = "dots_mesh_switch";
+const PHYSICS_VIEW_SWITCHES: [&str; 5] =
+    [VERTICES_SWITCH, INDICES_SWITCH, DOTS_VISIBLE, DOTS_INSTANCES_SWITCH, DOTS_MESH_SWITCH];
+/// The Platonic shape a physics dot is drawn with, scaled by the particle's radius.
+const TETRAHEDRON: usize = 0;
 
 /// The body output retained by the insertion template.
 pub const LIQUID_BODY_OUTPUT: &str = "fluid_output";
@@ -671,8 +687,6 @@ impl WaterScene {
             "volume_scattering_density": float(0.08826533),
         }));
         let water = b.node("water_object", "node.scene_object", json!({}));
-        b.wire((surface, "vertices"), water, "vertices");
-        b.wire((surface, "indices"), water, "indices");
         b.wire((material, "out"), water, "material");
         let output = b.node(LIQUID_BODY_OUTPUT, "system.group_output", json!({}));
         b.wire((water, "object"), output, FAMILY_OUTPUTS[0]);
@@ -708,6 +722,44 @@ impl WaterScene {
                 }
             }
         }
+        // Physics View: the surface sits on in_0 of its switches and the
+        // dots on in_1 of theirs, so the card prunes whichever side is off.
+        // An unwired choice draws nothing; dots_visible hides the object.
+        for (switch, type_id, port) in [(VERTICES_SWITCH, "node.switch_mesh", "vertices"),
+            (INDICES_SWITCH, "node.switch_indices", "indices")] {
+            let switch = b.node(switch, type_id, json!({"selector": float(0.0)}));
+            b.wire((surface, port), switch, "in_0");
+            b.wire((switch, "out"), water, port);
+        }
+        let dots_mesh = b.node("dots_mesh", "node.platonic_solid_mesh",
+            json!({"radius": float(1.0), "shape": {"type": "Enum", "value": TETRAHEDRON}}));
+        let dots_material = b.node("dots_material", "node.unlit_material", json!({
+            "color_r": float(0.37254903), "color_g": float(0.7294118), "color_b": float(1.0),
+        }));
+        // Their own display blend, so the surface's push-out keeps its one
+        // consumer and its fusion; no push-out, so dots may touch solids.
+        let dots_blend = b.node("dots_blend", "node.interpolate_particle_frames", json!({}));
+        b.wires(frame, dots_blend, &["particles_a", "particles_b", "count_a", "count_b", "identity_a", "identity_b", "blend", "span"]);
+        let dots_copies = b.node("dots_copies", "node.particles_to_copies", json!({}));
+        let dots = b.node("dots_object", "node.scene_object", json!({"cast_shadows": float(0.0)}));
+        let dots_visible = b.node(DOTS_VISIBLE, "node.switch_value",
+            json!({"selector": float(0.0), "in_0": float(0.0), "in_1": float(1.0)}));
+        let mesh_switch = b.node(DOTS_MESH_SWITCH, "node.switch_mesh", json!({"selector": float(0.0)}));
+        let instances_switch = b.node(DOTS_INSTANCES_SWITCH, "node.switch_instances", json!({"selector": float(0.0)}));
+        for (from, to) in [
+            ((dots_blend, "out"), (dots_copies, "particles")),
+            ((frame, "count_b"), (dots_copies, "live_count")),
+            ((dots_copies, "copies"), (instances_switch, "in_1")),
+            ((instances_switch, "out"), (dots, "instances")),
+            ((frame, "count_b"), (dots, "instance_count")),
+            ((dots_mesh, "vertices"), (mesh_switch, "in_1")),
+            ((mesh_switch, "out"), (dots, "vertices")),
+            ((dots_material, "out"), (dots, "material")),
+            ((dots_visible, "out"), (dots, "visible")),
+        ] {
+            b.wire(from, to.0, to.1);
+        }
+        b.wire((dots, "object"), output, DOTS_OUTPUT);
         // Resolve durations inside the domain-owning scope before it is wrapped.
         feed_intervals(&b.nodes, &mut b.wires, domain as u32);
         for node in &mut b.nodes {
@@ -729,13 +781,14 @@ impl WaterScene {
                 "bubble_mesh" => Some("Bubble Mesh"),
                 "bubble_material" => Some("Bubble Material"),
                 "bubble_copies" => Some("Bubble Copies"),
+                "dots_object" => Some("Physics Dots"),
                 _ => None,
             }.map(str::to_owned);
         }
         let mut def = b.finish();
         // Author the parent gate once. Insertion remaps this metadata and
         // presets copy it intact; neither consumer recreates the target list.
-        let mut bindings: Vec<_> = FAMILY_OUTPUTS.iter().map(|port| {
+        let mut bindings: Vec<_> = FAMILY_OUTPUTS.iter().chain([&DOTS_OUTPUT]).map(|port| {
             let wire = def.wires.iter().find(|wire| wire.to_node == output as u32 && wire.to_port == *port)
                 .expect("family object output");
             let object = def.nodes.iter().find(|node| node.id == wire.from_node).expect("family object");
@@ -751,6 +804,12 @@ impl WaterScene {
         bindings.push(json!({"id":"whitewater_capacity", "label":"Whitewater Budget", "defaultValue":100000.0,
             "defaultMirrorsNodeParam":true, "convert":{"type":"IntRound"},
             "target":{"kind":"node", "nodeId":budget_node.node_id, "param":"value"}}));
+        // The vertices switch comes first: a card belongs to its first target.
+        for switch in PHYSICS_VIEW_SWITCHES {
+            bindings.push(json!({"id":"physics_view", "label":"Physics View", "defaultValue":0.0,
+                "convert":{"type":"Float"},
+                "target":{"kind":"node", "nodeId":switch, "param":"selector"}}));
+        }
         def.preset_metadata = Some(serde_json::from_value(json!({
             "id":"WaterFamily", "displayName":"Water", "category":"Geometry", "oscPrefix":"water",
             "params":[{"id":"parent_visible", "name":"Visible", "defaultValue":1.0,
@@ -759,7 +818,9 @@ impl WaterScene {
                 "min":0.0, "max":1.0, "formatString":"F2", "wholeNumbers":false,
                 "isToggle":false, "isTrigger":false, "section":"Fluid"},
                 {"id":"whitewater_capacity", "name":"Whitewater Budget", "defaultValue":100000.0,
-                "min":1000.0, "max":250000.0, "wholeNumbers":true, "formatString":"F0", "section":"Water Detail"}],
+                "min":1000.0, "max":250000.0, "wholeNumbers":true, "formatString":"F0", "section":"Water Detail"},
+                {"id":"physics_view", "name":"Physics View", "defaultValue":0.0,
+                "min":0.0, "max":1.0, "isToggle":true, "section":"Water"}],
             "bindings":bindings
         })).expect("family visibility metadata"));
         let metadata = def.preset_metadata.as_mut().expect("family metadata");
@@ -835,7 +896,8 @@ pub fn render_def(scene: WaterScene) -> EffectGraphDef {
     let family_metadata = body.preset_metadata.clone().expect("family metadata");
     let family = b.node("water_family", "group", json!({}));
     let inputs = if scene.obstacle { vec![json!({"name": "role_0", "portType": "FluidRole"})] } else { vec![] };
-    let outputs: Vec<_> = FAMILY_OUTPUTS.iter().map(|name| json!({"name": name, "portType": "SceneObject"})).collect();
+    let outputs: Vec<_> = FAMILY_OUTPUTS.iter().chain([&DOTS_OUTPUT])
+        .map(|name| json!({"name": name, "portType": "SceneObject"})).collect();
     let node = b.nodes.last_mut().expect("family");
     node.handle = Some("Water".into());
     node.group = Some(serde_json::from_value(json!({
@@ -846,9 +908,10 @@ pub fn render_def(scene: WaterScene) -> EffectGraphDef {
     for (output, slot) in FAMILY_OUTPUTS.into_iter().zip(["object_0", "object_7", "object_9", "object_8"]) {
         b.wire((family, output), render, slot);
     }
+    b.wire((family, DOTS_OUTPUT), render, DOTS_RENDER_SLOT);
     if scene.obstacle { add_obstacle_render(&mut b, family, render); }
     let render_node = b.nodes.iter_mut().find(|n| n.id == render as u32).expect("render");
-    // Physical slots span 0 through 9; slot 6 is intentionally empty.
+    // Physical slots span 0 through 9; slot 6 holds Physics View's dots.
     render_node.params.insert("objects".into(), serde_json::from_value(int(10)).expect("object count"));
     def.nodes = b.nodes;
     def.wires = b.wires;
@@ -920,7 +983,12 @@ pub fn particle_view_def() -> EffectGraphDef {
     let family = find_node_mut(&mut def.nodes, "water_family").expect("Water family");
     let group = family.group.as_mut().expect("family group");
     let mut b = Builder { nodes: std::mem::take(&mut group.nodes), wires: std::mem::take(&mut group.wires) };
-    b.remove(&["surface"]);
+    // The particles are already the picture: no surface and no Physics View.
+    b.remove(&["surface", "dots_mesh", "dots_material", "dots_blend", "dots_copies", "dots_object"]);
+    b.remove(&PHYSICS_VIEW_SWITCHES);
+    group.interface.outputs.retain(|output| output.name != DOTS_OUTPUT);
+    let family_id = family.id;
+    def.wires.retain(|wire| wire.from_node != family_id || wire.from_port != DOTS_OUTPUT);
     let copies = b.node("liquid_particle_copies", "node.particles_to_copies", json!({}));
     let sphere = b.node("liquid_particle_mesh", "node.platonic_solid_mesh",
         json!({"radius": float(1.0), "shape": {"type": "Enum", "value": ICOSAHEDRON}}));
