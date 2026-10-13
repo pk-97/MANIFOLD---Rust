@@ -1,8 +1,9 @@
 //! GPU proofs for `node.switch_mesh`, `node.switch_indices` and
-//! `node.switch_instances`: the chosen
-//! input, written on the GPU earlier in the same command buffer, reaches `out`
-//! element for element with its live extent; everything past it is zero; an
-//! unwired choice publishes a live extent of zero.
+//! `node.switch_instances`. With a param selector the consumer of `out` reads
+//! the chosen input's own buffer and live extent (same identities), holding
+//! what the input's GPU write left there; an unwired choice is the switch's
+//! own buffer, zeroed, with a live extent of zero. A wired selector copies the
+//! chosen live items into `out` on the GPU, zero past them.
 
 use std::borrow::Cow;
 use std::sync::{Arc, Mutex};
@@ -18,7 +19,7 @@ use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
 use manifold_node_engine::graph::Graph;
 use manifold_node_engine::mesh::{InstanceTransform, MeshVertex};
 use manifold_node_engine::parameters::{ParamDef, ParamValue};
-use manifold_node_engine::ports::{ArrayType, KnownItem, NodeInput, NodeOutput, NodePort, PortKind, PortType};
+use manifold_node_engine::ports::{ArrayType, KnownItem, NodeInput, NodeOutput, NodePort, PortKind, PortType, ScalarType};
 use manifold_node_engine::scene::live_extent::LiveExtent;
 
 use super::SwitchMesh;
@@ -93,6 +94,35 @@ impl EffectNode for GpuWriter {
     }
 }
 
+/// Drives the switch's selector through a wire, which keeps both inputs live
+/// and makes the switch copy instead of alias.
+struct SelectorWire {
+    outputs: Vec<NodeOutput>,
+    value: Arc<Mutex<f32>>,
+}
+
+impl EffectNode for SelectorWire {
+    fn depth_rule(&self) -> manifold_node_engine::scene::depth_rule::DepthRule {
+        manifold_node_engine::scene::depth_rule::DepthRule::Terminal
+    }
+    fn type_id(&self) -> &EffectNodeType {
+        static ID: std::sync::OnceLock<EffectNodeType> = std::sync::OnceLock::new();
+        ID.get_or_init(|| EffectNodeType::new("test.selector_wire"))
+    }
+    fn inputs(&self) -> &[NodeInput] {
+        &[]
+    }
+    fn outputs(&self) -> &[NodeOutput] {
+        &self.outputs
+    }
+    fn parameters(&self) -> &[ParamDef] {
+        &[]
+    }
+    fn evaluate(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
+        ctx.outputs.set_scalar("out", ParamValue::Float(*self.value.lock().unwrap()));
+    }
+}
+
 type Seen = Arc<Mutex<Option<(GpuBuffer, Option<LiveExtent>)>>>;
 
 /// Keeps the switch live and records the buffer and extent it receives.
@@ -150,35 +180,55 @@ fn shared<T: bytemuck::Pod>(device: &manifold_gpu::GpuDevice, items: &[T], fill:
 /// What the switch's consumer saw after one frame.
 #[derive(Debug, PartialEq)]
 struct Frame {
+    /// Identity of the buffer the consumer read.
+    buffer: usize,
     out: Vec<u8>,
-    count: u32,
-    per_item: u32,
-    bound: u32,
+    /// Count word, items per count and bound of the extent it read.
+    extent: Option<(u32, u32, u32)>,
+    /// Identity of the extent's count buffer when it is a writer's own.
+    counts: Option<usize>,
+}
+
+/// Identities of the pre-bound buffers: each wired input's storage and count
+/// word, and the switch's own output storage.
+struct Keys {
+    inputs: [Option<(usize, usize)>; 2],
+    switch: usize,
 }
 
 /// Runs `in_0 = a`, `in_1 = b` (either may be unwired) through `switch`, one
-/// frame per selector, and returns what its consumer saw each frame. Every
-/// pre-bound output starts as garbage, so only GPU writes can match.
-fn run<T: KnownItem>(switch: Box<dyn EffectNode>, a: Option<&Input<T>>, b: Option<&Input<T>>, selectors: &[f32]) -> Vec<Frame> {
+/// frame per selector (a param, or through a wire when `wired`), and returns
+/// what its consumer saw each frame. Every pre-bound output starts as
+/// garbage, so only GPU writes can match.
+fn run<T: KnownItem>(
+    switch: Box<dyn EffectNode>,
+    a: Option<&Input<T>>,
+    b: Option<&Input<T>>,
+    selectors: &[f32],
+    wired: bool,
+) -> (Vec<Frame>, Keys) {
     let device = manifold_gpu::testkit::test_device();
     let ty = PortType::Array(ArrayType::of_known::<T>());
     let mut graph = Graph::new();
     let switch = graph.add_node(switch);
     let mut writers = Vec::new();
-    for (input, port) in [(a, "in_0"), (b, "in_1")] {
+    let mut keys = Keys { inputs: [None, None], switch: 0 };
+    for (slot, (input, port)) in [(a, "in_0"), (b, "in_1")].into_iter().enumerate() {
         let Some(input) = input else { continue };
+        let counts = shared(&device, &[u32::MAX], 0xAB);
+        let counts_key = counts.identity_key();
         let writer = graph.add_node(Box::new(GpuWriter {
             type_id: EffectNodeType::new(port),
             outputs: vec![NodePort { name: Cow::Borrowed("out"), ty, kind: PortKind::Output, required: false }],
             staged: shared(&device, &input.items, 0),
             staged_count: shared(&device, &[(input.live as u32) / input.per_item], 0),
-            counts: shared(&device, &[u32::MAX], 0xAB),
+            counts,
             per_item: input.per_item,
             bound: input.bound,
             extent: input.extent,
         }));
         graph.connect((writer, "out"), (switch, port)).unwrap();
-        writers.push((writer, input.items.len()));
+        writers.push((writer, input.items.len(), slot, counts_key));
     }
     let seen: Seen = Arc::new(Mutex::new(None));
     let sink = graph.add_node(Box::new(Sink {
@@ -186,20 +236,34 @@ fn run<T: KnownItem>(switch: Box<dyn EffectNode>, a: Option<&Input<T>>, b: Optio
         seen: seen.clone(),
     }));
     graph.connect((switch, "out"), (sink, "in")).unwrap();
+    let wire = Arc::new(Mutex::new(0.0));
+    if wired {
+        let scalar = PortType::Scalar(ScalarType::F32);
+        let selector = graph.add_node(Box::new(SelectorWire {
+            outputs: vec![NodePort { name: Cow::Borrowed("out"), ty: scalar, kind: PortKind::Output, required: false }],
+            value: wire.clone(),
+        }));
+        graph.connect((selector, "out"), (switch, "selector")).unwrap();
+    }
     let plan = compile(&graph).unwrap();
 
     let item = std::mem::size_of::<T>();
-    let capacity = writers.iter().map(|&(_, n)| n).max().unwrap_or(1);
+    let capacity = writers.iter().map(|&(_, n, _, _)| n).max().unwrap_or(1);
     let mut backend = MetalBackend::new(device.arc(), 1, 1, GpuTextureFormat::Rgba16Float);
-    for &(writer, n) in &writers {
-        backend.pre_bind_array(output_resource(&plan, writer), shared(&device, &vec![0xEEu8; n * item], 0xEE));
+    for &(writer, n, slot, counts_key) in &writers {
+        let buffer = shared(&device, &vec![0xEEu8; n * item], 0xEE);
+        keys.inputs[slot] = Some((buffer.identity_key(), counts_key));
+        backend.pre_bind_array(output_resource(&plan, writer), buffer);
     }
-    backend.pre_bind_array(output_resource(&plan, switch), shared(&device, &vec![0xCDu8; capacity * item], 0xCD));
+    let own = shared(&device, &vec![0xCDu8; capacity * item], 0xCD);
+    keys.switch = own.identity_key();
+    backend.pre_bind_array(output_resource(&plan, switch), own);
     let mut executor = Executor::new(Box::new(backend));
 
     let mut frames = Vec::new();
     for (frame_count, &selector) in selectors.iter().enumerate() {
         graph.set_param(switch, "selector", ParamValue::Float(selector)).unwrap();
+        *wire.lock().unwrap() = selector;
         let mut native = device.create_encoder("switch gpu proof");
         {
             let mut gpu = RendererGpuEncoder::new(&mut native, &device);
@@ -213,37 +277,54 @@ fn run<T: KnownItem>(switch: Box<dyn EffectNode>, a: Option<&Input<T>>, b: Optio
         }
         native.commit_and_wait_completed();
         let (buffer, extent) = seen.lock().unwrap().take().expect("sink ran");
-        let extent = extent.expect("the switch always publishes a live extent");
         let read = |buffer: &GpuBuffer, offset: u64, len: usize| {
             let ptr = buffer.mapped_ptr().expect("shared buffer");
             // SAFETY: shared buffer holding `offset + len` bytes; GPU work done.
             unsafe { std::slice::from_raw_parts(ptr.add(offset as usize), len) }.to_vec()
         };
-        let count = u32::from_le_bytes(read(&extent.counts, extent.offset, 4).try_into().unwrap());
+        let counts = extent.as_ref().map(|e| e.counts.identity_key()).filter(|key| {
+            keys.inputs.iter().flatten().any(|&(_, counts)| counts == *key)
+        });
         frames.push(Frame {
+            buffer: buffer.identity_key(),
             out: read(&buffer, 0, buffer.size as usize),
-            count,
-            per_item: extent.per_item,
-            bound: extent.bound,
+            extent: extent.map(|e| {
+                let count = u32::from_le_bytes(read(&e.counts, e.offset, 4).try_into().unwrap());
+                (count, e.per_item, e.bound)
+            }),
+            counts,
         });
     }
-    frames
+    (frames, keys)
 }
 
-/// The frame the chosen input should produce in an `out` of `capacity` items.
-fn expected<T: KnownItem>(input: Option<&Input<T>>, capacity: usize) -> Frame {
-    let mut out = vec![0u8; capacity * std::mem::size_of::<T>()];
+/// What the consumer should see when `in_{port}` is chosen. A wired choice is
+/// the input's own buffer and extent, untouched; an unwired one is the
+/// switch's own buffer, zeroed, with an extent of zero.
+fn expected<T: KnownItem>(input: Option<&Input<T>>, port: usize, keys: &Keys, capacity: usize) -> Frame {
     let Some(input) = input else {
-        return Frame { out, count: 0, per_item: 1, bound: 0 };
+        let out = vec![0u8; capacity * std::mem::size_of::<T>()];
+        return Frame { buffer: keys.switch, out, extent: Some((0, 1, 0)), counts: None };
     };
+    let (buffer, counts) = keys.inputs[port].expect("a wired input is pre-bound");
+    let out = bytemuck::cast_slice(&input.items).to_vec();
+    if input.extent {
+        let extent = Some((input.live as u32 / input.per_item, input.per_item, input.bound));
+        Frame { buffer, out, extent, counts: Some(counts) }
+    } else {
+        Frame { buffer, out, extent: None, counts: None }
+    }
+}
+
+/// What the consumer should see when a wired selector copies `in_{port}`:
+/// the switch's own buffer holding the live items then zeros, and the input's
+/// extent.
+fn copied<T: KnownItem>(input: &Input<T>, port: usize, keys: &Keys, capacity: usize) -> Frame {
+    let mut out = vec![0u8; capacity * std::mem::size_of::<T>()];
     let live: &[u8] = bytemuck::cast_slice(&input.items[..input.live]);
     out[..live.len()].copy_from_slice(live);
-    if input.extent {
-        Frame { out, count: input.live as u32 / input.per_item, per_item: input.per_item, bound: input.bound }
-    } else {
-        let n = input.items.len() as u32;
-        Frame { out, count: n, per_item: 1, bound: n }
-    }
+    let counts = keys.inputs[port].map(|(_, counts)| counts);
+    Frame { buffer: keys.switch, out, extent: Some((input.live as u32 / input.per_item, input.per_item, input.bound)), counts }
 }
 
 fn vertex(i: usize) -> MeshVertex {
@@ -264,22 +345,32 @@ fn index(i: usize) -> u32 {
     (i as u32 * 7 + 3) % 1000 + 1
 }
 
-/// Frames choose b, a, b: the first clears fresh garbage by copying b's zero
-/// tail, the second clears what b left past a's capacity, the third grows back.
+/// Frames choose b, a, b: each frame the consumer reads the chosen writer's
+/// own buffer and extent, the bytes its GPU write left there, and the
+/// switch's own garbage-filled buffer is never seen.
 fn assert_routes<T: KnownItem>(switch: fn() -> Box<dyn EffectNode>, a: Input<T>, b: Input<T>) {
     let capacity = a.items.len().max(b.items.len());
-    let frames = run(switch(), Some(&a), Some(&b), &[1.0, 0.0, 1.0]);
-    let want = [expected(Some(&b), capacity), expected(Some(&a), capacity), expected(Some(&b), capacity)];
+    let (frames, keys) = run(switch(), Some(&a), Some(&b), &[1.0, 0.0, 1.0], false);
+    let want = [
+        expected(Some(&b), 1, &keys, capacity),
+        expected(Some(&a), 0, &keys, capacity),
+        expected(Some(&b), 1, &keys, capacity),
+    ];
     for (i, (got, want)) in frames.iter().zip(&want).enumerate() {
         assert_eq!(got, want, "frame {i}");
     }
 }
 
-/// Only in_1 is wired: choosing in_0 draws nothing, with no garbage left.
+/// Only in_1 is wired: choosing in_0 draws nothing from the switch's own
+/// buffer, zeroed once; passing b through in between leaves it zero.
 fn assert_unwired_choice_is_empty<T: KnownItem>(switch: fn() -> Box<dyn EffectNode>, b: Input<T>) {
     let capacity = b.items.len();
-    let frames = run(switch(), None, Some(&b), &[0.0, 1.0, 0.0]);
-    let want = [expected::<T>(None, capacity), expected(Some(&b), capacity), expected::<T>(None, capacity)];
+    let (frames, keys) = run(switch(), None, Some(&b), &[0.0, 1.0, 0.0], false);
+    let want = [
+        expected::<T>(None, 0, &keys, capacity),
+        expected(Some(&b), 1, &keys, capacity),
+        expected::<T>(None, 0, &keys, capacity),
+    ];
     for (i, (got, want)) in frames.iter().zip(&want).enumerate() {
         assert_eq!(got, want, "frame {i}");
     }
@@ -313,14 +404,28 @@ fn switch_indices_unwired_choice_has_zero_live_extent() {
     assert_unwired_choice_is_empty(index_switch, Input::new(index, 9, 12, 15, 3));
 }
 
-/// An input that publishes no extent is live to its capacity, which the
-/// switch states as an extent so `out`'s spare capacity is not drawn.
+/// An input that publishes no extent passes through without one: the
+/// consumer reads the input's own buffer, live to its own size.
 #[test]
-fn switch_mesh_input_without_extent_is_live_to_its_capacity() {
+fn switch_mesh_input_without_extent_passes_through_without_one() {
     let a = Input::new(vertex, 6, 6, 6, 1).without_extent();
     let b = Input::new(vertex, 5, 7, 9, 1);
-    let frames = run(mesh_switch(), Some(&a), Some(&b), &[0.0]);
-    assert_eq!(frames[0], expected(Some(&a), 9));
+    let (frames, keys) = run(mesh_switch(), Some(&a), Some(&b), &[0.0], false);
+    assert_eq!(frames[0], expected(Some(&a), 0, &keys, 9));
+}
+
+/// A wired selector keeps both inputs live, so the switch copies on the GPU:
+/// frames choose b, a, b, and each copy leaves `out` zero past the live
+/// items (fresh garbage first, then what b left past a).
+#[test]
+fn switch_mesh_wired_selector_copies_the_chosen_live_vertices() {
+    let a = Input::new(vertex, 3, 4, 6, 1);
+    let b = Input::new(vertex, 5, 7, 9, 1);
+    let (frames, keys) = run(mesh_switch(), Some(&a), Some(&b), &[1.0, 0.0, 1.0], true);
+    let want = [copied(&b, 1, &keys, 9), copied(&a, 0, &keys, 9), copied(&b, 1, &keys, 9)];
+    for (i, (got, want)) in frames.iter().zip(&want).enumerate() {
+        assert_eq!(got, want, "frame {i}");
+    }
 }
 
 fn instance(i: usize) -> InstanceTransform {
@@ -343,10 +448,11 @@ fn switch_instances_unwired_choice_has_zero_live_extent() {
     assert_unwired_choice_is_empty(instance_switch, Input::new(instance, 5, 7, 9, 1));
 }
 
-/// Copies publish no extent: the switch states one at their capacity.
+/// Copies publish no extent: the consumer reads their own buffer, live to
+/// its size, and the switch's buffer is not touched.
 #[test]
-fn switch_instances_input_without_extent_is_live_to_its_capacity() {
+fn switch_instances_input_without_extent_passes_through_without_one() {
     let b = Input::new(instance, 9, 9, 9, 1).without_extent();
-    let frames = run(instance_switch(), None, Some(&b), &[1.0]);
-    assert_eq!(frames[0], expected(Some(&b), 9));
+    let (frames, keys) = run(instance_switch(), None, Some(&b), &[1.0], false);
+    assert_eq!(frames[0], expected(Some(&b), 1, &keys, 9));
 }

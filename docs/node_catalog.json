@@ -43946,7 +43946,7 @@
           "type": "float"
         }
       ],
-      "purpose": "Two-way Array<u32> selector for triangle index buffers. Routes in_0 or in_1 to out on the GPU (a blit of the chosen input's live indices) with the chosen input's live extent, chosen by the selector (rounded, clamped). With the selector set as a param, everything feeding only the other input is skipped. Output capacity = the larger wired input.",
+      "purpose": "Two-way Array<u32> selector for triangle index buffers. Passes in_0 or in_1 through to out with the chosen input's live extent, chosen by the selector (rounded, clamped). With the selector set as a param, out is the chosen input's own buffer for the frame (no copy, no GPU work) and everything feeding only the other input is skipped; a wired selector blits the chosen live indices on the GPU. Output capacity = the larger wired input.",
       "role": "Filter",
       "stratum": "atom",
       "summary": "Picks one of two incoming triangle index lists and passes it through, chosen by a selector number. The list it does not pick is not computed.",
@@ -44002,7 +44002,7 @@
           "type": "float"
         }
       ],
-      "purpose": "Two-way Array<InstanceTransform> selector. Routes in_0 or in_1 to out on the GPU (a blit of the chosen input's live instances) with the chosen input's live extent, chosen by the selector (rounded, clamped). With the selector set as a param, everything feeding only the other input is skipped. Output capacity = the larger wired input.",
+      "purpose": "Two-way Array<InstanceTransform> selector. Passes in_0 or in_1 through to out with the chosen input's live extent, chosen by the selector (rounded, clamped). With the selector set as a param, out is the chosen input's own buffer for the frame (no copy, no GPU work) and everything feeding only the other input is skipped; a wired selector blits the chosen live instances on the GPU. Output capacity = the larger wired input.",
       "role": "Filter",
       "stratum": "atom",
       "summary": "Picks one of two incoming instance lists and passes it through, chosen by a selector number. The list it does not pick is not computed.",
@@ -44058,7 +44058,7 @@
           "type": "float"
         }
       ],
-      "purpose": "Two-way Array<MeshVertex> selector. Routes in_0 or in_1 to out on the GPU (a blit of the chosen input's live vertices) with the chosen input's live extent, chosen by the selector (rounded, clamped). With the selector set as a param, everything feeding only the other input is skipped. Output capacity = the larger wired input.",
+      "purpose": "Two-way Array<MeshVertex> selector. Passes in_0 or in_1 through to out with the chosen input's live extent, chosen by the selector (rounded, clamped). With the selector set as a param, out is the chosen input's own buffer for the frame (no copy, no GPU work) and everything feeding only the other input is skipped; a wired selector blits the chosen live vertices on the GPU. Output capacity = the larger wired input.",
       "role": "Filter",
       "stratum": "atom",
       "summary": "Picks one of two incoming meshes and passes it through, chosen by a selector number. The mesh it does not pick is not computed.",

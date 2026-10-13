@@ -300,6 +300,18 @@ pub fn plan_array_allocations(
                 excluded_resources.insert(*resource);
             }
         }
+        // A variadic passthrough (the array switches) may alias any wired
+        // array input onto its output for a frame. The backend shadows the
+        // output's slot, so that slot must have no other tenant, and the
+        // inputs' storage must not pass to a later step while the output's
+        // readers still read through it.
+        if node_inst.node.variadic_skip_passthrough_out().is_some() {
+            for (_, resource) in step.inputs.iter().chain(&step.outputs) {
+                if matches!(plan.resource_type(*resource), Some(PortType::Array(_))) {
+                    excluded_resources.insert(*resource);
+                }
+            }
+        }
         if node_inst.node.carries_resources() {
             for (_, resource) in &step.inputs {
                 if matches!(plan.resource_type(*resource), Some(PortType::Array(_))) {
@@ -689,6 +701,8 @@ mod tests {
         follows: Option<&'static str>,
         /// Keeps its upstream live when the graph has other liveness roots.
         root: bool,
+        /// May alias any wired array input onto `out`, like the array switches.
+        passthrough: bool,
     }
 
     impl FixedArrayNode {
@@ -707,6 +721,7 @@ mod tests {
                 provides: false,
                 follows: None,
                 root: false,
+                passthrough: false,
             }
         }
     }
@@ -744,6 +759,10 @@ mod tests {
 
         fn is_liveness_root(&self) -> bool {
             self.root
+        }
+
+        fn variadic_skip_passthrough_out(&self) -> Option<&'static str> {
+            self.passthrough.then_some("out")
         }
 
         fn array_output_capacity(
@@ -827,6 +846,58 @@ mod tests {
             }
             assert_eq!(allocated.storage[&output(nodes[3])].root, output(nodes[0]),
                 "ordinary GPU lifetimes remain eligible for reuse");
+        }
+    }
+
+    /// producer -> switch -> a -> b -> c, all GPU steps of one size. Without the
+    /// passthrough declaration the producer's storage frees after the switch and
+    /// a later stage takes it. With it, the switch output may read that storage
+    /// until its last reader, so neither side is ever shared.
+    #[test]
+    fn array_passthrough_keeps_its_input_and_output_storage_dedicated() {
+        let array = PortType::Array(ArrayType::of::<u32>());
+        for passthrough in [false, true] {
+            let mut graph = Graph::new();
+            let stage = |graph: &mut Graph, name: &'static str, input: Option<(NodeInstanceId, &'static str)>| {
+                let mut node = FixedArrayNode::new(
+                    name,
+                    input.map_or_else(Vec::new, |(_, port)| vec![mock_port(port, array, PortKind::Input, false)]),
+                    vec![mock_port("out", array, PortKind::Output, false)],
+                    4,
+                );
+                node.passthrough = passthrough && name == "test.switch";
+                let id = graph.add_node(Box::new(node));
+                if let Some((from, port)) = input {
+                    graph.connect((from, "out"), (id, port)).unwrap();
+                }
+                id
+            };
+            let producer = stage(&mut graph, "test.producer", None);
+            let switch = stage(&mut graph, "test.switch", Some((producer, "in_0")));
+            let a = stage(&mut graph, "test.a", Some((switch, "in")));
+            let b = stage(&mut graph, "test.b", Some((a, "in")));
+            let c = stage(&mut graph, "test.c", Some((b, "in")));
+            let sink = graph.add_node(Box::new(FixedArrayNode::new(
+                "test.sink",
+                vec![mock_port("in", array, PortKind::Input, true)],
+                vec![],
+                4,
+            )));
+            graph.connect((c, "out"), (sink, "in")).unwrap();
+            let plan = compile(&graph).unwrap();
+            let allocated = plan_array_allocations(&graph, &plan, (64, 64), &AHashMap::default()).unwrap();
+            let output = |node| plan.steps().iter().find(|step| step.node == node).unwrap().outputs[0].1;
+            let shared = |resource| {
+                allocated.storage.iter().any(|(other, storage)| *other != resource && storage.root == allocated.storage[&resource].root)
+            };
+            if passthrough {
+                for resource in [output(producer), output(switch)] {
+                    assert_eq!(allocated.storage[&resource].root, resource);
+                    assert!(!shared(resource), "a switch side was handed to another step");
+                }
+            } else {
+                assert!(shared(output(producer)), "control: a later stage takes the freed producer storage");
+            }
         }
     }
 

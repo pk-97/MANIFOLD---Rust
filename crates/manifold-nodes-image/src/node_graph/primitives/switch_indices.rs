@@ -1,6 +1,6 @@
-//! `node.switch_indices` — two-way `Array<u32>` selector that routes on the
-//! GPU: the index-buffer twin of `node.switch_mesh`, which owns the shared
-//! routing ([`ArraySwitch`]).
+//! `node.switch_indices` — two-way `Array<u32>` selector: the
+//! index-buffer twin of `node.switch_mesh`, which owns the shared passthrough
+//! and run path ([`ArraySwitch`]).
 
 use std::borrow::Cow;
 
@@ -8,12 +8,12 @@ use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
 
-use super::switch_mesh::{selected_switch_input, switch_output_capacity, ArraySwitch};
+use super::switch_mesh::{selected_switch_input, switch_output_capacity, switch_passthrough, ArraySwitch};
 
 manifold_node_engine::primitive! {
     name: SwitchIndices,
     type_id: "node.switch_indices",
-    purpose: "Two-way Array<u32> selector for triangle index buffers. Routes in_0 or in_1 to out on the GPU (a blit of the chosen input's live indices) with the chosen input's live extent, chosen by the selector (rounded, clamped). With the selector set as a param, everything feeding only the other input is skipped. Output capacity = the larger wired input.",
+    purpose: "Two-way Array<u32> selector for triangle index buffers. Passes in_0 or in_1 through to out with the chosen input's live extent, chosen by the selector (rounded, clamped). With the selector set as a param, out is the chosen input's own buffer for the frame (no copy, no GPU work) and everything feeding only the other input is skipped; a wired selector blits the chosen live indices on the GPU. Output capacity = the larger wired input.",
     inputs: {
         selector: ScalarF32 required,
         in_0: Array(u32) optional,
@@ -53,6 +53,14 @@ manifold_node_engine::param_tooltips!("node.switch_indices", {
 impl Primitive for SwitchIndices {
     fn selected_input_branch(&self, params: &ParamValues, wired_inputs: &[&str]) -> Option<&'static str> {
         selected_switch_input(params, wired_inputs)
+    }
+
+    fn skip_passthrough(&self, params: &ParamValues, wired_inputs: &[&str]) -> Option<(&'static str, &'static str)> {
+        switch_passthrough(params, wired_inputs)
+    }
+
+    fn variadic_skip_passthrough_out(&self) -> Option<&'static str> {
+        Some("out")
     }
 
     fn array_output_capacity(

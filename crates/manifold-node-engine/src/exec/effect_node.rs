@@ -876,7 +876,9 @@ pub trait EffectNode: Send + AsAny {
     /// stale data.
     ///
     /// Implementors must ensure the returned port pair maps to slots
-    /// of compatible type — currently only `Texture2D` is supported.
+    /// of compatible type: `Texture2D`, or `Array` for a variadic router (the
+    /// array switches), whose alias the plan may refuse
+    /// ([`ExecutionPlan::array_passthrough`](crate::exec::execution_plan::ExecutionPlan::array_passthrough)).
     /// Aliases auto-clear at the start of each frame so a non-skip
     /// frame's real write isn't shadowed.
     ///
@@ -903,9 +905,10 @@ pub trait EffectNode: Send + AsAny {
 
     /// Variadic-router passthrough declaration: the OUTPUT port this node's
     /// [`skip_passthrough`](Self::skip_passthrough) may alias ANY of its wired
-    /// texture inputs onto (mux's selected `in_N → out`). The planner extends
-    /// every wired texture input's lifetime to the output's last reader, since
-    /// it can't know statically which input the runtime will pick. Default
+    /// texture or array inputs onto (mux's or an array switch's selected
+    /// `in_N → out`). The planner extends every such input's lifetime to the
+    /// output's last reader, since it can't know statically which input the
+    /// runtime will pick. Default
     /// `None` — fixed-pair nodes use [`skip_passthrough_ports`](Self::skip_passthrough_ports).
     fn variadic_skip_passthrough_out(&self) -> Option<&'static str> {
         None

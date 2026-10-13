@@ -133,6 +133,11 @@ pub struct MetalBackend {
     /// primitive's `max_capacity` param. No lazy-alloc path for arrays
     /// — capacity is per-instance data, not a port-static property.
     buffers_array: AHashMap<Slot, GpuBuffer>,
+    /// Array slots whose reads resolve to another slot for this frame,
+    /// installed by [`Backend::alias_array`] (`dst -> src`) and wiped by
+    /// [`Backend::clear_skip_aliases`]. Holds slots, not buffer clones, so a
+    /// read sees the source exactly as it is bound now, buffer and extent.
+    array_aliases: AHashMap<Slot, Slot>,
 
     /// Real `GpuTexture` backing for [`PortType::Texture3D`] slots.
     /// Pre-bound by the chain build at dimensions computed from each
@@ -229,6 +234,7 @@ impl MetalBackend {
             skip_aliased_slots: Vec::new(),
             scalars: AHashMap::default(),
             buffers_array: AHashMap::default(),
+            array_aliases: AHashMap::default(),
             textures_3d: AHashMap::default(),
             cameras: AHashMap::default(),
             lights: AHashMap::default(),
@@ -267,6 +273,7 @@ impl MetalBackend {
             skip_aliased_slots: Vec::new(),
             scalars: AHashMap::default(),
             buffers_array: AHashMap::default(),
+            array_aliases: AHashMap::default(),
             textures_3d: AHashMap::default(),
             cameras: AHashMap::default(),
             lights: AHashMap::default(),
@@ -461,7 +468,12 @@ impl MetalBackend {
     /// through the [`Backend::array_buffer`] trait method via the
     /// effect-node context.
     pub fn array_buffer(&self, slot: Slot) -> Option<&GpuBuffer> {
-        self.buffers_array.get(&slot)
+        self.buffers_array.get(&self.array_source(slot))
+    }
+
+    /// The slot an array read of `slot` resolves to this frame.
+    fn array_source(&self, slot: Slot) -> Slot {
+        self.array_aliases.get(&slot).copied().unwrap_or(slot)
     }
 
     /// Pin a [`ResourceId`] to a host-supplied 3D [`GpuTexture`] for a
@@ -512,6 +524,7 @@ impl MetalBackend {
         self.skip_aliased_slots.clear();
         self.scalars.clear();
         self.buffers_array.clear();
+        self.array_aliases.clear();
         self.textures_3d.clear();
         self.cpu_values.clear();
         self.mesh_sources.clear();
@@ -570,6 +583,7 @@ impl MetalBackend {
             skip_aliased_slots: Vec::new(),
             scalars: AHashMap::default(),
             buffers_array: self.buffers_array.clone(),
+            array_aliases: AHashMap::default(),
             textures_3d: self.textures_3d.clone(),
             cameras: AHashMap::default(),
             lights: AHashMap::default(),
@@ -846,6 +860,7 @@ impl Backend for MetalBackend {
         self.bound.clear();
         self.free_by_type.clear();
         self.pinned.clear();
+        self.array_aliases.clear();
         self.provided_2d.clear();
         self.cpu_values.clear();
         self.mesh_sources.clear();
@@ -954,7 +969,7 @@ impl Backend for MetalBackend {
     }
 
     fn live_extent(&self, slot: Slot) -> Option<crate::scene::live_extent::LiveExtent> {
-        self.live_extents.get(&slot).cloned()
+        self.live_extents.get(&self.array_source(slot)).cloned()
     }
 
     fn set_live_extent(&mut self, slot: Slot, value: crate::scene::live_extent::LiveExtent) {
@@ -970,7 +985,7 @@ impl Backend for MetalBackend {
     }
 
     fn array_buffer(&self, slot: Slot) -> Option<&GpuBuffer> {
-        self.buffers_array.get(&slot)
+        self.buffers_array.get(&self.array_source(slot))
     }
 
     fn texture_3d(&self, slot: Slot) -> Option<&GpuTexture> {
@@ -1018,10 +1033,21 @@ impl Backend for MetalBackend {
         true
     }
 
+    fn alias_array(&mut self, src_slot: Slot, dst_slot: Slot) -> bool {
+        // Resolve first, so a switch reading another switch aliases the root.
+        let src = self.array_source(src_slot);
+        if src == dst_slot || !self.buffers_array.contains_key(&src) || !self.buffers_array.contains_key(&dst_slot) {
+            return false;
+        }
+        self.array_aliases.insert(dst_slot, src);
+        true
+    }
+
     fn clear_skip_aliases(&mut self) {
         for slot in self.skip_aliased_slots.drain(..) {
             self.borrowed_2d.remove(&slot);
         }
+        self.array_aliases.clear();
     }
 }
 
@@ -1509,5 +1535,38 @@ mod alias_tests {
             1,
             "skip_aliased_slots should contain exactly one entry (dst), not duplicated",
         );
+    }
+
+    /// The array twin: `dst` reads `src`'s own buffer and live extent (same
+    /// buffer identity, nothing copied), a chain resolves to the root, and
+    /// clearing restores `dst`'s own buffer and extent.
+    #[test]
+    fn alias_array_makes_dst_read_src_buffer_and_extent() {
+        let (device, mut b) = make_backend();
+        let buffer = |n: u64| device.create_buffer_shared(n);
+        let src = b.pre_bind_array(ResourceId(0), buffer(64));
+        let dst = b.pre_bind_array(ResourceId(1), buffer(128));
+        let next = b.pre_bind_array(ResourceId(2), buffer(128));
+        let src_key = b.array_buffer(src).unwrap().identity_key();
+        let dst_key = b.array_buffer(dst).unwrap().identity_key();
+        let counts = buffer(4);
+        let extent = |bound| crate::scene::live_extent::LiveExtent { counts: counts.clone(), offset: 0, per_item: 3, bound };
+        b.set_live_extent(src, extent(7));
+        b.set_live_extent(dst, extent(0));
+
+        assert!(b.alias_array(src, dst));
+        assert_eq!(Backend::array_buffer(&b, dst).unwrap().identity_key(), src_key);
+        assert_eq!(b.array_buffer(dst).unwrap().identity_key(), src_key);
+        let seen = b.live_extent(dst).expect("src extent");
+        assert_eq!((seen.counts.identity_key(), seen.per_item, seen.bound), (counts.identity_key(), 3, 7));
+
+        assert!(b.alias_array(dst, next), "a switch reading a switch");
+        assert_eq!(b.array_buffer(next).unwrap().identity_key(), src_key, "resolves to the root");
+        assert!(!b.alias_array(src, src));
+        assert!(!b.alias_array(src, Slot(999)), "no alias onto an unbound slot");
+
+        b.clear_skip_aliases();
+        assert_eq!(b.array_buffer(dst).unwrap().identity_key(), dst_key);
+        assert_eq!(b.live_extent(dst).map(|e| e.bound), Some(0));
     }
 }

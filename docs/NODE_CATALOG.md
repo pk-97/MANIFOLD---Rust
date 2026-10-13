@@ -924,7 +924,7 @@ Variadic N-way selectors driven by a scalar.
 | Mux Scalar | `node.mux_scalar` | 8-way scalar selector |
 | Mux Texture | `node.mux_texture` | 8-way `Texture2D` selector |
 | Mux Array | `node.mux_array` | 8-way `Array<T>` selector |
-| Switch (mesh) | `node.switch_mesh` | 2-way `Array<MeshVertex>` selector; GPU blit of the chosen input's live vertices, carries its live extent |
+| Switch (mesh) | `node.switch_mesh` | 2-way `Array<MeshVertex>` selector; with a param selector `out` is the chosen input's own buffer and live extent for the frame (no copy, no GPU work) |
 | Switch (indices) | `node.switch_indices` | 2-way `Array<u32>` index-buffer selector; pairs with Switch (mesh), carries the live extent that controls indexed draws |
 | Switch (instances) | `node.switch_instances` | 2-way `Array<InstanceTransform>` selector; an unwired choice is empty instances and prunes the other side's copies |
 

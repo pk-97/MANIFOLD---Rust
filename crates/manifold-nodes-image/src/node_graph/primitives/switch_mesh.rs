@@ -1,13 +1,19 @@
-//! `node.switch_mesh` — two-way `Array<MeshVertex>` selector that routes on
-//! the GPU. `node.switch_indices` (`Array<u32>`) and `node.switch_instances`
+//! `node.switch_mesh` — two-way `Array<MeshVertex>` selector that passes the
+//! chosen input through. `node.switch_indices` (`Array<u32>`) and `node.switch_instances`
 //! (`Array<InstanceTransform>`) are its twins and share [`ArraySwitch`].
 //!
 //! A selector param (not a wire) names the chosen input before the frame
-//! runs, so the executor skips everything that feeds only the other input.
-//! The chosen input reaches `out` by a blit copy of its live bytes on the
-//! frame's encoder, after its producer's GPU writes, never a CPU memcpy. The
-//! input's live extent passes on with it, so a scene object draws exactly what
-//! the direct wire would have drawn.
+//! runs, so the executor skips everything that feeds only the other input and
+//! aliases the chosen one onto `out`: readers of `out` read the input's own
+//! buffer and live extent, with no copy and no GPU work, so a scene object
+//! draws exactly what the direct wire would have drawn. The planner keeps the
+//! input's storage alive and unshared while `out` is read, and refuses the
+//! alias when an in-place step would write through it.
+//!
+//! [`ArraySwitch`] runs only when there is nothing to alias: an unwired choice
+//! publishes a live extent of zero (clearing `out`'s own buffer once, when it
+//! is new), and a wired selector or a refused alias blits the chosen live
+//! bytes on the frame's encoder.
 
 use std::borrow::Cow;
 
@@ -24,7 +30,7 @@ pub(super) const SWITCH_INPUTS: [&str; 2] = ["in_0", "in_1"];
 manifold_node_engine::primitive! {
     name: SwitchMesh,
     type_id: "node.switch_mesh",
-    purpose: "Two-way Array<MeshVertex> selector. Routes in_0 or in_1 to out on the GPU (a blit of the chosen input's live vertices) with the chosen input's live extent, chosen by the selector (rounded, clamped). With the selector set as a param, everything feeding only the other input is skipped. Output capacity = the larger wired input.",
+    purpose: "Two-way Array<MeshVertex> selector. Passes in_0 or in_1 through to out with the chosen input's live extent, chosen by the selector (rounded, clamped). With the selector set as a param, out is the chosen input's own buffer for the frame (no copy, no GPU work) and everything feeding only the other input is skipped; a wired selector blits the chosen live vertices on the GPU. Output capacity = the larger wired input.",
     inputs: {
         selector: ScalarF32 required,
         in_0: Array(MeshVertex) optional,
@@ -66,6 +72,14 @@ impl Primitive for SwitchMesh {
         selected_switch_input(params, wired_inputs)
     }
 
+    fn skip_passthrough(&self, params: &ParamValues, wired_inputs: &[&str]) -> Option<(&'static str, &'static str)> {
+        switch_passthrough(params, wired_inputs)
+    }
+
+    fn variadic_skip_passthrough_out(&self) -> Option<&'static str> {
+        Some("out")
+    }
+
     fn array_output_capacity(
         &self,
         port_name: &str,
@@ -94,6 +108,14 @@ pub(super) fn selected_switch_input(params: &ParamValues, wired_inputs: &[&str])
     Some(switch_port(selector))
 }
 
+/// With a param selector, a wired choice passes through by alias: the executor
+/// points `out` at the chosen input's buffer and live extent for the frame
+/// and `run` does not execute. An unwired choice runs, to publish extent zero.
+pub(super) fn switch_passthrough(params: &ParamValues, wired_inputs: &[&str]) -> Option<(&'static str, &'static str)> {
+    let port = selected_switch_input(params, wired_inputs)?;
+    wired_inputs.contains(&port).then_some((port, "out"))
+}
+
 /// `out` holds the larger wired input, so either choice fits.
 pub(super) fn switch_output_capacity(port_name: &str, input_capacities: &[(&str, u32)]) -> Option<u32> {
     if port_name != "out" {
@@ -108,7 +130,8 @@ pub(super) fn switch_output_capacity(port_name: &str, input_capacities: &[(&str,
     Some(max.max(1))
 }
 
-/// GPU routing shared by the array switches.
+/// The run path shared by the array switches, for frames the executor does not
+/// alias: the unwired choice, a wired selector, or a refused alias.
 #[derive(Default)]
 pub struct ArraySwitch {
     /// Identity of the output buffer `dirty` describes.
@@ -224,6 +247,19 @@ pub(super) mod tests {
             params.insert(Cow::Borrowed("selector"), ParamValue::Float(selector));
             assert_eq!(Primitive::selected_input_branch(&node, &params, &["in_0", "in_1"]), Some(port), "{selector}");
         }
+    }
+
+    /// A param selector passes a wired choice through by alias; an unwired
+    /// choice or a wired selector runs instead.
+    #[test]
+    fn param_selector_on_a_wired_choice_passes_through() {
+        let node = SwitchMesh::new();
+        let mut params = ParamValues::default();
+        params.insert(Cow::Borrowed("selector"), ParamValue::Float(1.0));
+        assert_eq!(Primitive::skip_passthrough(&node, &params, &["in_0", "in_1"]), Some(("in_1", "out")));
+        assert_eq!(Primitive::skip_passthrough(&node, &params, &["in_0"]), None);
+        assert_eq!(Primitive::skip_passthrough(&node, &params, &["selector", "in_0", "in_1"]), None);
+        assert_eq!(Primitive::variadic_skip_passthrough_out(&node), Some("out"));
     }
 
     #[test]

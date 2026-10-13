@@ -140,6 +140,8 @@ enum StepFlow {
 mod node_pairs;
 mod array_growth;
 mod substep_region;
+#[cfg(test)]
+mod array_passthrough_tests;
 
 pub struct Executor {
     backend: Box<dyn Backend>,
@@ -2216,13 +2218,22 @@ impl Executor {
                             _ => plan_compatible,
                         }
                     };
+                    // An array passthrough (the array switches) aliases the
+                    // chosen input's buffer and live extent: no shape to
+                    // match, only the plan's storage-safety verdict.
+                    let array = step
+                        .outputs
+                        .iter()
+                        .find(|&&(n, _)| n == out_port)
+                        .is_some_and(|&(_, r)| matches!(plan.resource_type(r), Some(PortType::Array(_))));
                     let compatible = match (in_slot, out_slot) {
+                        (Some(_), Some(_)) if array => plan.array_passthrough(idx),
                         (Some(i), Some(o)) => compatible(i, o),
                         _ => false,
                     };
                     if let (Some(i), Some(o)) = (in_slot, out_slot)
                         && compatible
-                        && self.backend.alias_2d(i, o)
+                        && if array { self.backend.alias_array(i, o) } else { self.backend.alias_2d(i, o) }
                     {
                         performed_alias = true;
                         // Propagate the empty mark through a data-skip alias
