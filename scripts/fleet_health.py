@@ -334,6 +334,28 @@ def check_gpu_lock(problems):
         problems.append(("WARN", f"GPU lock: held {(time.time() - since) / 60:.0f} min by pid {pid} ({info.get('label', '?')[:80]}). Check it is not hung."))
 
 
+NIGHTLY_DIR = MAIN_CHECKOUT / ".claude/orchestration/trunk-health"
+NIGHTLY_STALE_HOURS = 36
+
+
+def check_nightly(problems, now, log_dir=NIGHTLY_DIR):
+    """A nightly that never starts leaves no red bead, so its silence is the only signal."""
+    dated = sorted(log_dir.glob("[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9].log"))
+    if not dated:
+        problems.append(("FAIL", f"trunk-health: no nightly log in {log_dir}. The nightly has never run."))
+    else:
+        age = (now - dated[-1].stat().st_mtime) / 3600
+        if age > NIGHTLY_STALE_HOURS:
+            problems.append(("FAIL", f"trunk-health: newest nightly log {dated[-1].name} is {age:.0f} h old. The nightly is not running."))
+    try:
+        tail = (log_dir / "launchd.log").read_text(errors="replace")[-4000:]
+    except OSError:
+        return
+    last = tail.rfind("Traceback")
+    if last != -1 and "trunk-health for origin/main" not in tail[last:]:
+        problems.append(("FAIL", "trunk-health: launchd.log ends in a crash (Traceback). The nightly died before reporting."))
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--no-mark", action="store_true", help="report finished jobs without marking them seen")
@@ -346,6 +368,7 @@ def main(argv=None):
     running = check_jobs(jobs, seen, now, problems)
     check_slots(jobs, now, problems)
     check_gpu_lock(problems)
+    check_nightly(problems, now)
     if not args.no_mark:
         save_seen(seen)
     for level, line in problems:
