@@ -74,25 +74,6 @@ pub(crate) struct Blas {
     pub(crate) built: bool,
 }
 
-/// Refits a BLAS takes before its next position change rebuilds it instead.
-///
-/// A refit keeps the tree built for the original mesh and only moves its
-/// boxes. Fragment modifiers (Surface Peel and friends) carry pieces far
-/// from where they started, so refit after refit the boxes grow until they
-/// all overlap and every ray tests most of the object's triangles — on
-/// alpha-masked foliage each one with a texture read. The trace then takes
-/// longer every frame until the GPU watchdog kills it (BUG-k1n2w). Capping
-/// the refit run bounds how stale a tree can get; the stagger keeps the
-/// rebuild cost to about one object per frame.
-pub(crate) const BLAS_REFIT_LIMIT: u32 = 8;
-
-/// A requested refit of object `index` becomes a rebuild on the refit
-/// rounds where its phase comes up: every object rebuilds once per
-/// `BLAS_REFIT_LIMIT` rounds, neighbours on different rounds.
-pub(crate) fn refit_round_rebuilds(refit_round: u32, index: usize) -> bool {
-    (refit_round as usize + index).is_multiple_of(BLAS_REFIT_LIMIT as usize)
-}
-
 /// The resident RT scene: N per-object BLAS instanced into one TLAS via
 /// `transform`. Built once (scene load / topology change — dirty-checked
 /// by the caller, e.g. render_scene.rs's existing shadow-map cache-key
@@ -109,9 +90,6 @@ pub struct RtAccel {
     /// TLAS — membership/order/capacity changes are a TLAS build, not a
     /// refit (§4.2 dirty rule 1).
     pub(crate) tlas_needs_build: bool,
-    /// Encodes that refit or rebuild at least one BLAS, the clock behind
-    /// `refit_round_rebuilds`.
-    refit_round: u32,
     /// Immutable resident-handle set packaged at preparation/replacement
     /// (§4.3): completion callbacks clone this existing `Arc` — no new
     /// mutex, no per-frame pin assembly. Readiness belongs to the resource
@@ -1189,7 +1167,6 @@ pub(crate) fn prepare_accel(
         build_scratch: tlas_build_scratch,
         refit_scratch: tlas_refit_scratch,
         tlas_needs_build: true,
-        refit_round: 0,
         pins,
         blas: blas_out,
         instance_buffer,
@@ -1306,13 +1283,10 @@ pub(crate) fn encode_accel_update(
         match change {
             RtGeometryChange::Reuse | RtGeometryChange::Attributes => {}
             RtGeometryChange::Refit => {
-                if !blas_storage_compatible(&accel.topology[i], &current) {
-                    return Err(RtAccelError::NeedsPreparation);
-                }
-                if refit_round_rebuilds(accel.refit_round, i) {
-                    blas_builds += 1;
-                } else {
+                if blas_storage_compatible(&accel.topology[i], &current) {
                     blas_refits += 1;
+                } else {
+                    return Err(RtAccelError::NeedsPreparation);
                 }
             }
             RtGeometryChange::Rebuild => {
@@ -1423,12 +1397,9 @@ pub(crate) fn encode_accel_update(
     }
 
     if blas_builds > 0 || blas_refits > 0 {
-        for (i, (blas, change)) in accel.blas.iter_mut().zip(changes).enumerate() {
-            let refit = blas.built
-                && matches!(change, RtGeometryChange::Refit)
-                && !refit_round_rebuilds(accel.refit_round, i);
-            let build = !refit
-                && (!blas.built || matches!(change, RtGeometryChange::Rebuild | RtGeometryChange::Refit));
+        for (blas, change) in accel.blas.iter_mut().zip(changes) {
+            let build = !blas.built || matches!(change, RtGeometryChange::Rebuild);
+            let refit = blas.built && matches!(change, RtGeometryChange::Refit);
             if !build && !refit {
                 continue;
             }
@@ -1457,7 +1428,6 @@ pub(crate) fn encode_accel_update(
         }
         update.blas_builds = blas_builds;
         update.blas_refits = blas_refits;
-        accel.refit_round = accel.refit_round.wrapping_add(1);
     }
 
     if tlas_build || tlas_refit {
@@ -1904,25 +1874,6 @@ pub fn ensure_normal_sources_snapshot<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// BUG-k1n2w: with every object refitting each round, each one rebuilds
-    /// once per `BLAS_REFIT_LIMIT` rounds and each round rebuilds the same
-    /// small share of them.
-    #[test]
-    fn refit_rounds_rebuild_every_object_on_a_flat_stagger() {
-        let objects = 2 * BLAS_REFIT_LIMIT as usize;
-        let rounds = 3 * BLAS_REFIT_LIMIT;
-        let mut rebuilds = vec![0u32; objects];
-        for round in 0..rounds {
-            let built: Vec<usize> = (0..objects).filter(|&i| refit_round_rebuilds(round, i)).collect();
-            assert_eq!(built.len(), objects / BLAS_REFIT_LIMIT as usize, "round {round}: {built:?}");
-            for i in built {
-                rebuilds[i] += 1;
-            }
-        }
-        assert!(rebuilds.iter().all(|&n| n == rounds / BLAS_REFIT_LIMIT), "{rebuilds:?}");
-        assert!(refit_round_rebuilds(u32::MAX, 1), "the round clock wraps without skipping a phase");
-    }
 
     fn topo(id: usize, slots: u32, wired: bool) -> RtGeometryTopology {
         RtGeometryTopology { vertex: id, vertex_offset: 4, vertex_stride: 32, triangle_count: 3, index: Some(id + 100), normal_offset: 12, uv_offset: 24, instance_slots: slots, wired, nonopaque: false, appearance_weights: None }
