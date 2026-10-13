@@ -462,6 +462,9 @@ fn write_fatal_gpu_report(reason: &str, exit_code: i32) {
     );
     msg.push_str(&format!("diagnostic_mode={}\napp_version={}\narchitecture={}\n",
         manifold_gpu::gpu_fault::diagnostics_enabled(), env!("CARGO_PKG_VERSION"), std::env::consts::ARCH));
+    // The Metal error carries no reason; macOS's own reset report does.
+    msg.push_str(&format!("firmware_gpu_resets={}\n",
+        manifold_gpu::firmware_reports::summary_since_boot().as_deref().unwrap_or("none since boot")));
     msg.push_str("diagnostic_limitations=GPU timing may be unavailable on failed buffers; missing completion is not proof of a hang; shader counters may be incomplete after device failure; resource metadata does not prove lifetime or ordering safety; geometry hit-index bounds and driver-internal traversal are not fully instrumented.\n");
     msg.push_str("--- recent session evidence (bounded; full session path above) ---\n");
     msg.push_str(&session_log::crash_tail());
