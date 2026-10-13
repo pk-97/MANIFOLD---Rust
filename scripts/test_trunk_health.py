@@ -2,7 +2,9 @@
 """Fake-only tests for nightly reservation deferral."""
 
 import json
+import os
 import sys
+import time
 import tempfile
 import contextlib
 import io
@@ -56,9 +58,9 @@ class ReservationTests(unittest.TestCase):
 
     def test_reservation_set_during_run_stops_before_builds_or_gpu(self):
         info = {'owner': 'campaign', 'reason': 'proof window', 'end_epoch': 1800000000}
-        # Initial admission + three cheap scripts precede clippy; seven CPU
+        # Initial admission + two info legs precede clippy; five CPU-side
         # legs precede the first GPU hold. All commands below are fakes.
-        for allowed_checks, expected_runs in ((4, 5), (8, 9)):
+        for allowed_checks, expected_runs in ((3, 4), (6, 7)):
             with self.subTest(allowed_checks=allowed_checks), tempfile.TemporaryDirectory() as d, contextlib.ExitStack() as stack:
                 stack.enter_context(contextlib.redirect_stdout(io.StringIO()))
                 stack.enter_context(patch.object(sys, 'argv', ['trunk_health.py']))
@@ -103,6 +105,164 @@ class ReservationTests(unittest.TestCase):
         self.assertIn("owner", line)
         self.assertIn("reason", line)
         self.assertIn("1800000000", line)
+
+
+def fake_bd(open_beads, calls, git_log="abc123 suspect commit\n"):
+    def run(cmd, **kwargs):
+        calls.append(cmd)
+        if cmd[1] == "list":
+            out = json.dumps(open_beads)
+        elif cmd[0] == "git":
+            out = git_log
+        else:
+            out = ""
+        return type("R", (), {"returncode": 0, "stdout": out, "stderr": ""})()
+    return run
+
+
+class LegListTests(unittest.TestCase):
+    def test_leg_list_after_cuts(self):
+        info, cpu, gpu = trunk_health.nightly_legs(bridge_due=True)
+        joined = [" ".join(c) for c in info + cpu + gpu]
+        self.assertEqual([" ".join(c) for c in info],
+                         ["python3 scripts/stale_beads.py", "python3 scripts/landing_metrics.py --days 7"])
+        self.assertFalse(any("ignored-test-guard" in c or "cargo deny" in c for c in joined))
+        self.assertTrue(any(c.startswith("cargo clippy --workspace") for c in joined))
+        self.assertTrue(any("feature_matrix.py" in c for c in joined))
+        self.assertTrue(any("gpu_proofs_gate.py --all" in c for c in joined))
+        self.assertEqual(sum("rt_noise_gate.py" in c for c in joined), 2)
+        self.assertTrue(any("bridge_probe_gate.py" in c for c in joined))
+        self.assertEqual(len(cpu), 3)
+
+    def test_bridge_probe_runs_weekly(self):
+        _, _, gpu = trunk_health.nightly_legs(bridge_due=False)
+        self.assertFalse(any("bridge_probe_gate.py" in " ".join(c) for c in gpu))
+        with tempfile.TemporaryDirectory() as d:
+            self.assertTrue(trunk_health.bridge_probe_due(Path(d)))
+            log = Path(d, "2026-10-10.log")
+            log.write_text(f"{trunk_health.BRIDGE_MARKER}\n[PASS] (300s)\n")
+            self.assertFalse(trunk_health.bridge_probe_due(Path(d)))
+            old = time.time() - 8 * 86400
+            os.utime(log, (old, old))
+            self.assertTrue(trunk_health.bridge_probe_due(Path(d)))
+            Path(d, "2026-10-12.log").write_text("no probe tonight\n")
+            self.assertTrue(trunk_health.bridge_probe_due(Path(d)))
+
+
+NEXTEST_RED = """
+        PASS [   0.010s] manifold-core tests::fine
+        FAIL [   0.020s] manifold-core tests::broken
+        FAIL [   0.020s] manifold-editing undo::cap
+"""
+
+
+class RoutingTests(unittest.TestCase):
+    def test_parse_nextest_and_cargo_test_output(self):
+        failed, passed = trunk_health.parse_test_results(NEXTEST_RED)
+        self.assertEqual(failed, [("manifold-core", "tests::broken"), ("manifold-editing", "undo::cap")])
+        self.assertIn(("manifold-core", "tests::fine"), passed)
+        cargo = ("     Running tests/gpu_proofs.rs (target/debug/deps/gpu_proofs-ab12)\n"
+                 "test a::b ... FAILED\n"
+                 "     Running unittests src/lib.rs (target/debug/deps/manifold_nodes-cd34)\n"
+                 "test c::d ... ok\n")
+        failed, passed = trunk_health.parse_test_results(cargo)
+        self.assertEqual(failed, [("gpu-proofs", "a::b")])
+        self.assertIn(("manifold-nodes", "c::d"), passed)
+
+    def test_failing_tests_route_to_one_bead_each_with_suspects(self):
+        result = trunk_health.classify_leg("cargo nextest run", 100, NEXTEST_RED, "")
+        self.assertEqual(result["kind"], "tests")
+        calls = []
+        with tempfile.TemporaryDirectory() as d, \
+                patch.object(trunk_health, "BD", "bd"), \
+                patch.object(trunk_health.subprocess, "run", side_effect=fake_bd([], calls)), \
+                contextlib.redirect_stdout(io.StringIO()):
+            state = Path(d, "last_green.json")
+            state.write_text(json.dumps({"manifold-core": "000green"}))
+            trunk_health.route_nightly("sha1", [result], [], state)
+            # Failing crates keep their last green sha.
+            self.assertEqual(json.loads(state.read_text())["manifold-core"], "000green")
+        creates = [c for c in calls if c[1] == "create"]
+        self.assertEqual([c[2] for c in creates],
+                         ["nightly red: manifold-core tests::broken", "nightly red: manifold-editing undo::cap"])
+        desc = creates[0][creates[0].index("-d") + 1]
+        self.assertIn("Summary", desc)
+        self.assertIn("000green", desc)
+        self.assertIn("abc123 suspect commit", desc)
+        labels = creates[0][creates[0].index("-l") + 1]
+        self.assertIn("nightly", labels)
+        self.assertIn("manifold-core", labels)
+        git = [c for c in calls if c[0] == "git"]
+        self.assertTrue(any("000green..sha1" in c for c in git))
+
+    def test_more_than_ten_failures_fold_into_one_leg_bead(self):
+        out = "\n".join(f"        FAIL [ 0.1s] manifold-core t::n{i}" for i in range(11))
+        result = trunk_health.classify_leg("cargo nextest run", 100, out, "")
+        calls = []
+        with tempfile.TemporaryDirectory() as d, \
+                patch.object(trunk_health, "BD", "bd"), \
+                patch.object(trunk_health.subprocess, "run", side_effect=fake_bd([], calls)), \
+                contextlib.redirect_stdout(io.StringIO()):
+            trunk_health.route_nightly("sha1", [result], [], Path(d, "g.json"))
+        creates = [c for c in calls if c[1] == "create"]
+        self.assertEqual(len(creates), 1)
+        self.assertEqual(creates[0][2], "nightly red leg: cargo nextest run")
+        desc = creates[0][creates[0].index("-d") + 1]
+        self.assertIn("t::n10", desc)
+
+    def test_bead_closes_when_its_test_passes_later(self):
+        result = trunk_health.classify_leg("cargo nextest run", 0, NEXTEST_RED.replace("FAIL", "PASS"), "")
+        calls = []
+        open_beads = [{"id": "BUG-a", "title": "nightly red: manifold-core tests::broken", "description": ""},
+                      {"id": "BUG-b", "title": "nightly red: manifold-x other::t", "description": ""}]
+        with tempfile.TemporaryDirectory() as d, \
+                patch.object(trunk_health, "BD", "bd"), \
+                patch.object(trunk_health.subprocess, "run", side_effect=fake_bd(open_beads, calls)), \
+                contextlib.redirect_stdout(io.StringIO()):
+            state = Path(d, "g.json")
+            trunk_health.route_nightly("sha2", [result], ["cargo nextest run"], state)
+            self.assertEqual(json.loads(state.read_text())["manifold-core"], "sha2")
+        closes = [c for c in calls if c[1] == "close"]
+        self.assertEqual([c[2] for c in closes], ["BUG-a"])
+
+    def test_crash_timeout_and_refusal_share_one_infra_bead(self):
+        results = [trunk_health.infra_result("cargo nextest run", "timed out"),
+                   trunk_health.classify_leg("python3 scripts/bridge_probe_gate.py", 2, "EXIT 2: GPU busy", ""),
+                   trunk_health.classify_leg("cargo clippy", -11, "", "")]
+        self.assertTrue(all(r["kind"] == "infra" for r in results))
+        calls = []
+        with tempfile.TemporaryDirectory() as d, \
+                patch.object(trunk_health, "BD", "bd"), \
+                patch.object(trunk_health.subprocess, "run", side_effect=fake_bd([], calls)), \
+                contextlib.redirect_stdout(io.StringIO()):
+            trunk_health.route_nightly("sha1", results, [], Path(d, "g.json"))
+        creates = [c for c in calls if c[1] == "create"]
+        self.assertEqual([c[2] for c in creates], [trunk_health.INFRA_TITLE])
+        desc = creates[0][creates[0].index("-d") + 1]
+        self.assertIn("timed out", desc)
+        self.assertIn("bridge_probe_gate.py", desc)
+
+    def test_info_legs_never_file(self):
+        with tempfile.TemporaryDirectory() as d, contextlib.ExitStack() as stack:
+            def fake_run(cmd, **kwargs):
+                if "stale_beads.py" in " ".join(cmd) or "landing_metrics.py" in " ".join(cmd):
+                    return 1, "red metrics", "", 0
+                return 0, "tip", "", 0
+            stack.enter_context(contextlib.redirect_stdout(io.StringIO()))
+            stack.enter_context(patch.object(sys, "argv", ["trunk_health.py"]))
+            stack.enter_context(patch.object(trunk_health, "LOG_DIR", Path(d)))
+            stack.enter_context(patch.object(trunk_health, "missing_tools", return_value=[]))
+            stack.enter_context(patch.object(trunk_health, "cap_main_target", return_value=""))
+            stack.enter_context(patch.object(trunk_health.gpu_queue, "reservation", return_value={}))
+            stack.enter_context(patch.object(trunk_health.gpu_queue, "hold"))
+            stack.enter_context(patch.object(trunk_health, "run_cmd", side_effect=fake_run))
+            stack.enter_context(patch.object(trunk_health, "file_flaky_beads"))
+            calls = []
+            stack.enter_context(patch.object(trunk_health, "BD", "bd"))
+            stack.enter_context(patch.object(trunk_health.subprocess, "run", side_effect=fake_bd([], calls)))
+            self.assertEqual(trunk_health.main(), 0)
+            self.assertFalse([c for c in calls if c[1] == "create"])
+            self.assertIn("red metrics", next(Path(d).glob("*.log")).read_text())
 
 
 class InterpreterGuardTests(unittest.TestCase):

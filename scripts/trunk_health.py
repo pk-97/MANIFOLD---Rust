@@ -11,6 +11,7 @@ import argparse
 import contextlib
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -204,6 +205,181 @@ def file_flaky_beads(sha):
             print(f"[trunk-health] flaky bead failed: {e}")
 
 
+NIGHTLY_NEXTEST = ["cargo", "nextest", "run", "--workspace", "--no-fail-fast"]
+BRIDGE_PROBE = ["python3", "scripts/bridge_probe_gate.py"]
+BRIDGE_MARKER = f"\n=== {' '.join(BRIDGE_PROBE)} ===\n".strip()
+BRIDGE_PERIOD_S = 7 * 86400
+LAST_GREEN = LOG_DIR / "last_green.json"
+INFRA_TITLE = "nightly infra: tool crash, timeout or admission refusal"
+LEG_FOLD = 10
+NEXTEST_LINE = re.compile(r"^\s*(PASS|FAIL|SIGSEGV|SIGABRT|SIGKILL|TIMEOUT)\s+\[[^\]]*\]\s+(?:\([^)]*\)\s+)?(\S+)\s+(\S+)\s*$")
+RUNNING_LINE = re.compile(r"^\s*Running .*\(.*deps/([A-Za-z0-9_]+)-[0-9a-f]+\)\s*$")
+CARGO_TEST_LINE = re.compile(r"^test (\S+) \.\.\. (ok|FAILED)\s*$")
+
+
+def nightly_legs(bridge_due):
+    """(info, cpu, gpu) legs. Info legs log only: they never file or turn the night red.
+    The landing gate already runs the ignored-test ratchet and cargo deny."""
+    info = [
+        # Stale open beads get one forced verb a night.
+        ["python3", "scripts/stale_beads.py"],
+        # The landing loop measured over the week.
+        ["python3", "scripts/landing_metrics.py", "--days", "7"],
+    ]
+    cpu = [
+        ["cargo", "clippy", "--workspace", "--tests", "--", "-D", "warnings"],
+        # Compile the default-feature suite before admission; its execution
+        # stays with the GPU legs because tests may open a device transitively.
+        gpu_queue.cargo_build_command(NIGHTLY_NEXTEST, "nextest-run"),
+        ["python3", "scripts/feature_matrix.py"],
+    ]
+    gpu = [
+        NIGHTLY_NEXTEST,
+        # Full renderer coverage; learned timings are informational only.
+        ["python3", "scripts/gpu_proofs_gate.py", "--all", "--learn-times",
+         "--record-times", "/tmp/gpu_test_times.nightly.json"],
+        # RT temporal stability, static then camera-orbit motion (BUG-sz0u motion leg).
+        ["python3", "scripts/rt_noise_gate.py", "--require-fixture"],
+        ["python3", "scripts/rt_noise_gate.py", "--motion",
+         "--project", "tests/fixtures/rt/RtMotionHelmet.manifold",
+         "--require-fixture"],
+    ]
+    if bridge_due:
+        # Presentation-tear class (BUG-xaw4 tear probe), weekly.
+        gpu.append(BRIDGE_PROBE)
+    return info, cpu, gpu
+
+
+def bridge_probe_due(log_dir, now=None):
+    """Due when no nightly log from the last seven days shows the probe ran."""
+    now = time.time() if now is None else now
+    for log in Path(log_dir).glob("*.log"):
+        with contextlib.suppress(OSError):
+            if now - log.stat().st_mtime < BRIDGE_PERIOD_S and BRIDGE_MARKER in log.read_text(errors="replace"):
+                return False
+    return True
+
+
+def parse_test_results(output):
+    """([(crate, test)] failed in order, {(crate, test)} passed) from nextest or cargo test output.
+    For cargo test the crate is the test binary's name, hyphenated."""
+    failed, passed, binary = [], set(), "unknown"
+    for line in output.splitlines():
+        if m := NEXTEST_LINE.match(line):
+            key = (m.group(2).split("::")[0], m.group(3))
+            (passed.add(key) if m.group(1) == "PASS" else failed.append(key))
+        elif m := RUNNING_LINE.match(line):
+            binary = m.group(1).replace("_", "-")
+        elif m := CARGO_TEST_LINE.match(line):
+            key = (binary, m.group(1))
+            (passed.add(key) if m.group(2) == "ok" else failed.append(key))
+    return list(dict.fromkeys(failed)), passed
+
+
+def infra_result(cmd_str, reason):
+    return {"kind": "infra", "cmd": cmd_str, "detail": reason, "failed": [], "passed": set()}
+
+
+def classify_leg(cmd_str, exit_, out, err):
+    """Route one finished leg: green, failing tests, a red leg, or infra (the tool itself broke)."""
+    failed, passed = parse_test_results(out + err)
+    tail = "\n".join((out + err).rstrip().splitlines()[-10:])[:800]
+    base = {"cmd": cmd_str, "failed": failed, "passed": passed, "detail": tail}
+    if exit_ == 0:
+        return dict(base, kind="green")
+    if exit_ < 0 or (exit_ == 2 and cmd_str.startswith("python3") and not failed):
+        # Signal death, or a gate's exit 2: measurement not made or admission refused.
+        return dict(base, kind="infra", detail=f"exit {exit_}: {tail}")
+    return dict(base, kind="tests" if 0 < len(failed) <= LEG_FOLD else "leg")
+
+
+def bd_open_beads():
+    r = subprocess.run([BD, "list", "--status", "open", "--json", "--flat"],
+                       capture_output=True, text=True, timeout=30)
+    return json.loads(r.stdout) if r.returncode == 0 and r.stdout.strip() else []
+
+
+def suspect_commits(crate, since, sha):
+    if not since:
+        return "  (no green night recorded for this crate yet)"
+    path = MAIN_CHECKOUT / "crates" / crate
+    cmd = ["git", "log", "--oneline", "-n", "15", f"{since}..{sha}"] + (["--", str(path)] if path.is_dir() else [])
+    try:
+        r = subprocess.run(cmd, cwd=str(MAIN_CHECKOUT), capture_output=True, text=True, timeout=60)
+        lines = r.stdout.strip().splitlines() if r.returncode == 0 else []
+    except (OSError, subprocess.SubprocessError) as e:
+        return f"  (git log failed: {e})"
+    return "\n".join(f"  {l}" for l in lines) or "  (none touching this crate)"
+
+
+def file_or_note(beads, title, desc, labels):
+    """One open bead per title: create it, or append tonight's note to the open one."""
+    existing = next((b for b in beads if b.get("title") == title), None)
+    cmd = ([BD, "update", existing["id"], "--append-notes", desc] if existing else
+           [BD, "create", title, "-t", "bug", "-p", "1", "-l", labels, "-d", desc])
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        print(f"[trunk-health] {'noted' if existing else 'filed'}: {title}" if r.returncode == 0
+              else f"[trunk-health] bead failed (exit {r.returncode}): {title}")
+    except Exception as e:
+        print(f"[trunk-health] bead failed: {title}: {e}")
+
+
+def route_nightly(sha, results, green_legs, state_path):
+    """File, note and close nightly beads.
+
+    A failing test gets its own bead with suspect commits since its crate's last green
+    sha; more than LEG_FOLD in one leg fold into one leg bead; a crash, timeout or
+    refusal goes to the single infra bead. A test bead closes once that test passes."""
+    date = datetime.now().strftime("%Y-%m-%d")
+    try:
+        last_green = json.loads(Path(state_path).read_text())
+    except (OSError, ValueError):
+        last_green = {}
+    try:
+        beads = bd_open_beads()
+    except Exception as e:
+        print(f"[trunk-health] bd list failed: {e}")
+        beads = []
+    infra = [r for r in results if r["kind"] == "infra"]
+    if infra:
+        body = "\n".join(f"- {r['cmd']}: {r['detail']}" for r in infra)
+        file_or_note(beads, INFRA_TITLE, f"trunk-health {date} main @{sha}: the tool itself broke; main's health is unknown for:\n{body}",
+                     "nightly,trunk-health,infra,open")
+    for r in results:
+        if r["kind"] == "tests":
+            for crate, test in r["failed"]:
+                since = last_green.get(crate)
+                desc = (f"Summary\n  test: {test}\n  crate: {crate}\n  leg: {r['cmd']}\n  red on main @{sha} ({date})\n"
+                        f"  last green for crate: {since or 'none'}\n  suspect commits since then:\n"
+                        f"{suspect_commits(crate, since, sha)}\n\ntail:\n{r['detail']}")
+                file_or_note(beads, f"nightly red: {crate} {test}", desc, f"nightly,trunk-health,{crate},open")
+        elif r["kind"] == "leg":
+            listed = "\n".join(f"  {c} {t}" for c, t in r["failed"]) or "  (no test failures parsed)"
+            desc = (f"Summary\n  leg: {r['cmd']}\n  red on main @{sha} ({date})\n  failing tests ({len(r['failed'])}):\n"
+                    f"{listed}\n\ntail:\n{r['detail']}")
+            file_or_note(beads, f"nightly red leg: {r['cmd'][:60]}", desc, "nightly,trunk-health,open")
+    passed = set().union(*(r["passed"] for r in results)) if results else set()
+    failed_crates = {c for r in results for c, _ in r["failed"]}
+    for crate in {c for c, _ in passed} - failed_crates:
+        last_green[crate] = sha
+    with contextlib.suppress(OSError):
+        Path(state_path).write_text(json.dumps(last_green, indent=1, sort_keys=True))
+    closing = {f"nightly red: {c} {t}" for c, t in passed}
+    closing |= {f"nightly red leg: {cmd[:60]}" for cmd in green_legs}
+    for bead in beads:
+        title, desc = bead.get("title", ""), bead.get("description", "")
+        # Legacy one-per-leg beads close on their command, as before this routing.
+        legacy = "trunk-health:" in desc and any(cmd in desc for cmd in green_legs)
+        if title in closing or legacy:
+            try:
+                r = subprocess.run([BD, "close", bead["id"]], capture_output=True, text=True, timeout=30)
+                print(f"[trunk-health] closed {bead['id']} (green again)" if r.returncode == 0
+                      else f"[trunk-health] failed to close {bead['id']} (exit {r.returncode})")
+            except Exception as e:
+                print(f"[trunk-health] exception closing {bead.get('id')}: {e}")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--dry-run", action="store_true",
@@ -251,58 +427,25 @@ def main():
     print(cap_line, end="")
     log_lines.append(cap_line)
 
-    nightly_nextest = ["cargo", "nextest", "run", "--workspace", "--no-fail-fast"]
-    cpu_gates = [
-        # Ignored-test ratchet: any #[ignore] beyond the baseline is a red
-        # gate made invisible (SCENE_LOOP shipped broken behind one).
-        # Cheap, runs first so it files before the long legs.
-        ["python3", ".claude/hooks/ignored-test-guard.py", "--scan"],
-        # Stale open beads get one forced verb a night (fix, demote, close)
-        # instead of a nag at every session start.
-        ["python3", "scripts/stale_beads.py"],
-        # The landing loop measured: runs per landing, red share, GPU reuse
-        # and queue wait over the week. Red when reds are found by rerunning
-        # the gate instead of its printed rerun commands.
-        ["python3", "scripts/landing_metrics.py", "--days", "7"],
-        ["cargo", "clippy", "--workspace", "--tests", "--", "-D", "warnings"],
-        # Compile the default-feature suite before admission. Its execution
-        # stays with the nightly GPU legs because selected tests may open a
-        # device transitively and must yield to an announced landing.
-        gpu_queue.cargo_build_command(nightly_nextest, "nextest-run"),
-        ["cargo", "deny", "check", "bans"],
-        ["python3", "scripts/feature_matrix.py"],
-    ]
-    gpu_gates = [
-        nightly_nextest,
-        # Full renderer coverage, including the asset-conformance sweep, belongs
-        # here (landing runs only the scoped set; see scripts/gpu_scope.py).
-        # Export successful keyed measurements for review. Learned timings are
-        # informational; only committed timings set landing watchdog allowances.
-        ["python3", "scripts/gpu_proofs_gate.py", "--all", "--learn-times",
-         "--record-times", "/tmp/gpu_test_times.nightly.json"],
-        # RT temporal stability. Nightly and not at landing: it costs an app
-        # build plus a 300-frame render, three times over. Skips green (loudly)
-        # while its ceilings are unvalidated, so it files no beads until the
-        # numbers mean something.
-        ["python3", "scripts/rt_noise_gate.py", "--require-fixture"],
-        # RT MOTION leg (BUG-sz0u): camera-orbit ramp on the helmet fixture —
-        # the coverage that catches motion-only regressions (D-64 boil,
-        # sv-gate re-trip) the static legs can't see. Red-validated against
-        # boil-era gate behavior before this wiring (sv_hold median 4x over
-        # the healthy ceiling with D-64/tr5o reverted). The fixture is
-        # RtMotionHelmet.manifold, NOT RtNoiseTesting: the noise fixture
-        # shows no red/green separation for this class (measured 2026-08-01).
-        ["python3", "scripts/rt_noise_gate.py", "--motion",
-         "--project", "tests/fixtures/rt/RtMotionHelmet.manifold",
-         "--require-fixture"],
-        # Presentation-tear class (BUG-xaw4): legacy policy must keep tearing
-        # (probe not blind) AND fenced policy must stay clean (the shipped
-        # read-fence contract). Independent legs yield to pending landings.
-        ["python3", "scripts/bridge_probe_gate.py"],
-    ]
+    info_gates, cpu_gates, gpu_gates = nightly_legs(bridge_probe_due(LOG_DIR))
 
     green_gates = []
-    red_gates = []
+    results = []
+
+    for cmd in info_gates:
+        if defer_if_reserved(log_path, log_lines, args.dry_run):
+            return 0
+        cmd_str = " ".join(cmd)
+        print(f"[trunk-health] info {cmd_str}...")
+        log_lines.append(f"\n=== {cmd_str} (info only) ===\n")
+        if args.dry_run:
+            print(f"[dry-run] would run (info only, never files): {cmd_str}")
+            continue
+        try:
+            exit_, out, err, _ = run_cmd(cmd, cwd=MAIN_CHECKOUT, timeout=600)
+            log_lines.append(out + err + f"\n[INFO exit {exit_}]\n")
+        except Exception as e:
+            log_lines.append(f"[INFO skipped: {e}]\n")
 
     def run_gate(cmd):
         cmd_str = " ".join(cmd)
@@ -311,11 +454,12 @@ def main():
         log_lines.append(header)
 
         if args.dry_run:
-            # Simulate ONE fake red gate for dedupe logic demo
-            if cmd_str.startswith("cargo deny"):
+            # Simulate one failing test on the nextest leg to show routing.
+            if cmd is NIGHTLY_NEXTEST:
                 print(f"[dry-run] would run: {cmd_str}")
-                print(f"[dry-run] [FAIL] cargo deny check bans (simulated red)")
-                red_gates.append((cmd_str, "[FAIL] cargo deny check bans (simulated red)", "simulated tail\nline 2\nline 3"))
+                fake = "        FAIL [   0.1s] manifold-core simulated::test\n"
+                results.append(classify_leg(cmd_str, 100, fake, ""))
+                print(f"[dry-run] [FAIL] {cmd_str} (simulated red)")
                 return
             print(f"[dry-run] would run: {cmd_str}")
             print(f"[dry-run] [PASS] {cmd_str}")
@@ -338,16 +482,14 @@ def main():
                     log_path.write_text("".join(log_lines))
                 return 3
 
-            if exit_ != 0:
-                tail = (out + err).rstrip().splitlines()[-10:]
-                tail_str = "\n".join(tail)[:800]
-                red_gates.append((cmd_str, f"[FAIL] {cmd_str}", tail_str))
-            else:
+            result = classify_leg(cmd_str, exit_, out, err)
+            results.append(result)
+            if result["kind"] == "green":
                 green_gates.append(cmd_str)
         except subprocess.TimeoutExpired:
             print(f"[FAIL] {cmd_str} (timed out)")
             log_lines.append(f"[FAIL] (timed out)\n")
-            red_gates.append((cmd_str, f"[FAIL] {cmd_str} (timed out)", "timeout"))
+            results.append(infra_result(cmd_str, "timed out"))
         except ReservationDeferred:
             line = "[trunk-health] deferred: nightly GPU reservation became active"
             print(line)
@@ -366,7 +508,7 @@ def main():
         except Exception as e:
             print(f"[FAIL] {cmd_str} ({e})")
             log_lines.append(f"[FAIL] ({e})\n")
-            red_gates.append((cmd_str, f"[FAIL] {cmd_str}", str(e)[:800]))
+            results.append(infra_result(cmd_str, f"crashed: {str(e)[:800]}"))
 
     for cmd in cpu_gates:
         if defer_if_reserved(log_path, log_lines, args.dry_run):
@@ -391,33 +533,10 @@ def main():
                 return 0
 
     if args.dry_run:
-        # Simulate bead dedupe logic for the fake red gate
-        print("[dry-run] checking for existing trunk-health beads...")
-        if not BD:
-            print("[dry-run] [bd binary not found, would exit 2]")
-            return 2
-
-        try:
-            result = subprocess.run([BD, "list", "--status", "open", "--json", "--flat"],
-                                   capture_output=True, text=True, timeout=30)
-            if result.returncode == 0:
-                beads = result.stdout.strip().splitlines()
-                for line in beads:
-                    if "trunk-health:" in line and "cargo deny check bans" in line:
-                        print(f"[dry-run] existing bead found, would skip filing: {line[:100]}")
-                        return 0
-        except Exception as e:
-            print(f"[dry-run] bd list failed: {e}")
-
-        print("[dry-run] would file bead:")
-        cmd_str = "cargo deny check bans"
-        desc = f"trunk-health: {cmd_str} red on main @{sha} ({datetime.now().strftime('%Y-%m-%d')}); tail: simulated tail\nline 2\nline 3"
-        print(f"  bd create \"trunk-health red: {cmd_str[:60]}\" -t bug -p 1 -l trunk-health,open -d '{desc}'")
-
-        # Simulate bead auto-close for green gates
-        print("[dry-run] would close beads for green gates:")
-        for green_cmd in green_gates:
-            print(f"[dry-run] would close beads matching trunk-health: {green_cmd}")
+        for r in results:
+            names = [f"nightly red: {c} {t}" for c, t in r["failed"]] if r["kind"] == "tests" else [r["kind"]]
+            print(f"[dry-run] would route {r['cmd']}: {', '.join(names)}")
+        print(f"[dry-run] would close beads for green legs: {', '.join(green_gates)}")
         return 0
 
     # Hook-telemetry census — informational only, never files a bead or fails.
@@ -439,72 +558,15 @@ def main():
         f.writelines(log_lines)
     print(f"[trunk-health] log written to {log_path}")
 
-    # File beads for red gates
-    for cmd_str, status_line, tail in red_gates:
-        if not BD:
-            print(f"[trunk-health] [FAIL] cannot file bead: bd binary not found at {BD}")
-            return 2
+    if not BD:
+        print(f"[trunk-health] [FAIL] cannot file beads: bd binary not found")
+        return 2
+    route_nightly(sha, results, green_gates, LAST_GREEN)
+    file_flaky_beads(sha)
 
-        # Dedupe check
-        already_filed = False
-        try:
-            result = subprocess.run([BD, "list", "--status", "open", "--json", "--flat"],
-                                   capture_output=True, text=True, timeout=30)
-            if result.returncode == 0:
-                for line in result.stdout.strip().splitlines():
-                    if "trunk-health:" in line and cmd_str in line:
-                        print(f"[trunk-health] existing bead found, skipping: {line[:100]}")
-                        already_filed = True
-                        break
-        except Exception as e:
-            print(f"[trunk-health] dedupe check failed: {e}")
-        if already_filed:
-            continue
-
-        # File new bead
-        title = f"trunk-health red: {cmd_str[:60]}"
-        desc = f"trunk-health: {cmd_str} red on main @{sha} ({datetime.now().strftime('%Y-%m-%d')}); tail: {tail}"
-        try:
-            r = subprocess.run([BD, "create", title, "-t", "bug", "-p", "1", "-l", "trunk-health,open", "-d", desc],
-                              capture_output=True, text=True, timeout=30)
-            if r.returncode != 0:
-                print(f"[trunk-health] failed to file bead (exit {r.returncode}): {(r.stderr or '').strip()[:200]}")
-                return 2
-            print(f"[trunk-health] filed bead: {title}")
-        except Exception as e:
-            print(f"[trunk-health] failed to file bead: {e}")
-            return 2
-
-    if BD:
-        file_flaky_beads(sha)
-
-    # Auto-close beads for green gates — a gate that recovered closes its own
-    # bead even when another gate is still red.
-    try:
-        result = subprocess.run([BD, "list", "--status", "open", "--json", "--flat"],
-                               capture_output=True, text=True, timeout=30)
-        beads = json.loads(result.stdout) if result.returncode == 0 else []
-    except Exception as e:
-        print(f"[trunk-health] bd list failed for bead close: {e}")
-        beads = []
-    for green_cmd in green_gates:
-        for bead in beads:
-            description = bead.get("description", "")
-            if "trunk-health:" in description and green_cmd in description:
-                bead_id = bead.get("id")
-                try:
-                    r = subprocess.run([BD, "close", bead_id],
-                                    capture_output=True, text=True, timeout=30)
-                    if r.returncode == 0:
-                        print(f"[trunk-health] closed {bead_id} (gate green again)")
-                    else:
-                        print(f"[trunk-health] failed to close {bead_id} (exit {r.returncode})")
-                except Exception as e:
-                    print(f"[trunk-health] exception closing {bead_id}: {e}")
-
-    if red_gates:
-        red_names = ", ".join(cmd_str[:50] for cmd_str, _, _ in red_gates)
-        print(f"[trunk-health] RED: {red_names}")
+    red = [r["cmd"][:50] for r in results if r["kind"] != "green"]
+    if red:
+        print(f"[trunk-health] RED: {', '.join(red)}")
         return 1
     print(f"[trunk-health] green: all gates passed")
     return 0

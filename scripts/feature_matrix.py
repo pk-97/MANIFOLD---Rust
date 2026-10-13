@@ -12,8 +12,19 @@ from gate_workspace import Workspace
 REPO = Path(__file__).resolve().parent.parent
 
 
+# Features the nightly matrix never builds, with why.
+SKIPPED_FEATURES = {
+    # The Vulkan backend is approved but not built; the row only compiles a stub.
+    'vulkan': 'not built yet',
+    # Probe-only feature retired from the workspace; dropped if it ever reappears.
+    'water-race-probes': 'dead probe feature',
+    # gpu_proofs_gate.py --all already compiles every gpu-proofs package's tests.
+    'gpu-proofs': 'compiled by the gpu_proofs --all leg',
+}
+
+
 def workspace_features():
-    return Workspace(REPO).feature_matrix()
+    return [(p, f) for p, f in Workspace(REPO).feature_matrix() if f not in SKIPPED_FEATURES]
 
 
 def check_coverage():

@@ -46,6 +46,12 @@ class FeatureMatrixTests(unittest.TestCase):
         self.assertEqual(launched[0][0:2], ["cargo", "clippy"])
         self.assertIn("DEFER", output.getvalue())
 
+    def test_dead_and_gpu_proofs_rows_dropped(self):
+        rows = [("a", "vulkan"), ("a", "water-race-probes"), ("a", "gpu-proofs"), ("a", "testkit")]
+        with patch.object(feature_matrix, "Workspace") as ws:
+            ws.return_value.feature_matrix.return_value = rows
+            self.assertEqual(feature_matrix.workspace_features(), [("a", "testkit")])
+
     def test_feature_coverage_is_metadata_only(self):
         with patch.object(feature_matrix, "workspace_features", return_value=[("one", "feature-one")]), \
                 patch.object(feature_matrix.gpu_queue, "run_admitted",
