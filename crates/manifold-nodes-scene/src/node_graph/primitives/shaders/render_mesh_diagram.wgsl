@@ -382,6 +382,8 @@ fn axis_lines(p: vec2<f32>, deriv: vec2<f32>) -> vec2<f32> {
 
 // Smallest on-screen cell, in pixels, before the finest level is gone.
 const GRID_MIN_CELL_PX: f32 = 60.0;
+// Peak strength of the finest level relative to the coarser ones.
+const GRID_FINE: f32 = 0.35;
 const INV_LOG2_10: f32 = 0.30103;
 
 fn world_grid(pixel: vec2<f32>) -> vec4<f32> {
@@ -401,20 +403,21 @@ fn world_grid(pixel: vec2<f32>) -> vec4<f32> {
         vec2<f32>(length(vec2<f32>(dpdx(p.x), dpdy(p.x))), length(vec2<f32>(dpdx(p.y), dpdy(p.y)))),
         vec2<f32>(0.000001),
     );
-    // Spacing follows zoom in powers of ten. The finest level fades out as
-    // its cells shrink, the next brightens to take its place, and every
-    // coarser level is full strength, so crossing a level boundary is seamless.
-    let lod = log2(max(deriv.x, deriv.y) * GRID_MIN_CELL_PX) * INV_LOG2_10;
+    // Spacing follows zoom in powers of ten, chosen from world units per
+    // screen pixel along the screen axes (as Blender does), so the choice
+    // never depends on which way the world axes face.
+    let footprint = max(length(dpdx(p)), length(dpdy(p)));
+    let lod = log2(max(footprint, 0.000001) * GRID_MIN_CELL_PX) * INV_LOG2_10;
     let level = floor(lod);
     let blend = lod - level;
     let spacing = exp2(level / INV_LOG2_10);
-    // Fine holds near half strength through most of its range and mid
-    // reaches it exactly as the levels shift, which is what keeps it seamless.
-    let ease = blend * blend;
-    let fine = grid_lines(p, deriv, spacing) * (1.0 - ease) * 0.5;
-    let mid = grid_lines(p, deriv, spacing * 10.0) * (1.0 - ease * 0.5);
+    // Each level fades evenly across its whole range. Fine ends at zero, mid
+    // ends at fine's starting strength, major at mid's, so where the levels
+    // shift every line keeps exactly the strength it had.
+    let fine = grid_lines(p, deriv, spacing) * GRID_FINE * (1.0 - blend);
+    let mid = grid_lines(p, deriv, spacing * 10.0) * (1.0 - (1.0 - GRID_FINE) * blend);
     let major = grid_lines(p, deriv, spacing * 100.0);
-    let lines = max(fine, max(mid, major)) * 0.7;
+    let lines = max(fine, max(mid, major)) * 0.55;
     // World X runs along z=0 (red), world Z along x=0 (blue).
     let axes = axis_lines(p, deriv);
     var color = vec3<f32>(0.24, 0.46, 0.52);
