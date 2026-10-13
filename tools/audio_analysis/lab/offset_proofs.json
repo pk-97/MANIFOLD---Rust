@@ -130,6 +130,23 @@
   },
   "status": "proven (kick and snare agree)"
  },
+ "drmendez": {
+  "als": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/Ableton 11/DRMENDEZ TIMEPLATE Project/DRMENDEZ - PROJECT 3 ( ORIGNAL MIX )  - No Suite.als",
+  "kick": {
+   "k": 0,
+   "lag": 0.057,
+   "margin_sd": 0.68,
+   "r": 0.361
+  },
+  "offset_s": 0.0504,
+  "snare": {
+   "k": 0,
+   "lag": 0.05,
+   "margin_sd": 0.46,
+   "r": 0.374
+  },
+  "status": "proven (kick and snare agree)"
+ },
  "echo": {
   "als": "/Users/peterkiemann/Library/CloudStorage/Dropbox/Music Production/Ableton Projects/Ableton 11/Clue Project/Clue V2.als",
   "kick": {
