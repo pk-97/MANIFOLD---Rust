@@ -35,7 +35,7 @@ Usage:
   scripts/land_branch.py <branch> --worktree <path> --message '<merge msg>' \
       [--named-red BUG-xxxx --reason '<why safe>'] \
       [--close-bead BUG-xxxx ...] [--close-reason '<closing note>'] \
-      [--lead 'k3 (lead)']
+      [--lead 'Claude lead']
 
 Obsolete when: the landing protocol itself changes shape (edit both).
 """
@@ -360,7 +360,7 @@ def parse_args(argv):
                    help="defer GPU proofs with a recorded reason; all other gates must pass")
     p.add_argument("--close-bead", action="append", default=[])
     p.add_argument("--close-reason", default="")
-    p.add_argument("--lead", default="k3 (lead)")
+    p.add_argument("--lead", default="Claude lead")
     return p.parse_args(argv)
 
 

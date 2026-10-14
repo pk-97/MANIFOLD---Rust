@@ -78,7 +78,7 @@ Live UI (opt-in connection to a running app):
   live-ui-safety-demo     rollback when a live client disconnects mid-gesture  [scripts/live_ui_safety_demo.py]  (cost: broad)
 
 Process, beads, usage:
-  fleet-health            stalls and blockers across lanes (the lead's cron)  [scripts/fleet_health.py]  (cost: unit)
+  fleet-health            Astra job stalls, orphaned slot edits, disk, GPU lock, nightly (the lead's cron)  [scripts/fleet_health.py]  (cost: unit)
   status                  one screen: lanes, GPU holder, worktree slots, running gate with ETA  [scripts/status.py]  (cost: unit)
   stale-beads             open beads untouched past threshold  [scripts/stale_beads.py]  (cost: unit)
   hook-census             which hooks fire, how often, from telemetry  [scripts/hook_census.py]  (cost: unit)
