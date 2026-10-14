@@ -80,13 +80,13 @@ pub(super) fn dispatch_transport(
             let target_scroll = target_scroll.max(0.0);
             ui.viewport
                 .set_scroll(target_scroll, ui.viewport.scroll_y_px());
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
         TransportAction::TimelineScrollbarH(scroll_x_beats) => {
             // Horizontal scrollbar drag/jump (section 24 5e) — absolute scroll-x in beats.
             ui.viewport
                 .set_scroll(*scroll_x_beats, ui.viewport.scroll_y_px());
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
         TransportAction::SetInsertCursor(beat) => {
             // Legacy path — when no layer context available.
@@ -174,19 +174,20 @@ pub(super) fn dispatch_transport(
         // (no cursor to anchor to). `zoom_level_stepped` resolves the nearest
         // level first, so the buttons stay sane after a continuous scroll-zoom
         // (section 24 5e); `zoom_to` is the one shared anchored-zoom path.
+        // The planner sees the moved scroll and zoom, so these return handled().
         TransportAction::ZoomIn => {
             let playhead = content_state.current_beat.as_f32();
             let playhead_px = ui.viewport.beat_to_pixel(Beats::from_f32(playhead));
             let new_ppb = ui.viewport.zoom_level_stepped(1);
             ui.viewport.zoom_to(new_ppb, playhead, playhead_px);
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
         TransportAction::ZoomOut => {
             let playhead = content_state.current_beat.as_f32();
             let playhead_px = ui.viewport.beat_to_pixel(Beats::from_f32(playhead));
             let new_ppb = ui.viewport.zoom_level_stepped(-1);
             ui.viewport.zoom_to(new_ppb, playhead, playhead_px);
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
 
         // ── Inspector navigation ───────────────────────────────────
@@ -200,5 +201,79 @@ pub(super) fn dispatch_transport(
             DispatchResult::handled()
         }
 
+    }
+}
+
+#[cfg(test)]
+mod view_move_dispatch_tests {
+    use crate::frame_plan::{FramePlanner, Projection};
+    use manifold_ui::{PanelAction, TransportAction};
+
+    /// Scrollbar, overview scrub and zoom buttons move only the timeline view:
+    /// the plan updates the scroll panels and runs no project or inspector sync.
+    #[test]
+    fn scroll_and_zoom_are_view_moves_not_structural_syncs() {
+        let mut project = manifold_core::project::Project::default();
+        let (content_tx, content_rx) = crossbeam_channel::unbounded();
+        let content_state = crate::content_state::ContentState::default();
+        let mut ui = crate::ui_root::UIRoot::new();
+        let mut selection = manifold_ui::UIState::new();
+        let mut active_layer = None;
+        let mut user_prefs = crate::user_prefs::UserPrefs::in_memory();
+        let mut scrub = crate::ui_bridge::ScrubState::default();
+        let mut edits = crate::gesture_preview::UiEdits::default();
+        let mut planner = FramePlanner::default();
+        let inputs = |planner: &mut FramePlanner,
+                          ui: &crate::ui_root::UIRoot,
+                          selection: &mut manifold_ui::UIState,
+                          project: &manifold_core::project::Project,
+                          edits: &crate::gesture_preview::UiEdits| {
+            crate::ui_frame::gather_frame_inputs(
+                planner,
+                ui,
+                selection,
+                &None,
+                edits,
+                &content_state,
+                crate::frame_plan::ChromeSource { project, is_dirty: false, project_path: None, automation_draw_mode: false },
+            )
+        };
+        let seed = inputs(&mut planner, &ui, &mut selection, &project, &edits);
+        planner.plan(seed);
+
+        // (action, scroll moves, zoom moves); an anchored zoom may also scroll.
+        let cases = [
+            (TransportAction::TimelineScrollbarH(4.3), true, false),
+            (TransportAction::OverviewScrub(0.0), true, false),
+            (TransportAction::ZoomIn, false, true),
+            (TransportAction::ZoomOut, false, true),
+        ];
+        for (action, scroll, zoom) in cases {
+            let result = {
+                let mut ctx = crate::ui_bridge::DispatchCtx {
+                    project: crate::ui_bridge::ProjectRef::new(&mut project, &mut edits.stamps, &content_tx),
+                    content_tx: &content_tx,
+                    content_state: &content_state,
+                    ui: &mut ui,
+                    selection: &mut selection,
+                    active_layer: &mut active_layer,
+                    user_prefs: &mut user_prefs,
+                    editor_target: None,
+                    scrub: &mut scrub,
+                    dialogs: Default::default(),
+                };
+                crate::ui_bridge::dispatch(&PanelAction::Transport(action.clone()), &mut ctx)
+            };
+            assert!(!result.structural_change, "{action:?}");
+            assert!(content_rx.try_recv().is_err(), "{action:?} sends nothing");
+            let next = inputs(&mut planner, &ui, &mut selection, &project, &edits);
+            let plan = planner.plan(next);
+            if !zoom {
+                assert_eq!(plan.viewport.scroll_x, scroll, "{action:?} scroll");
+            }
+            assert_eq!(plan.viewport.zoom, zoom, "{action:?} zoom");
+            assert!(!plan.projections.contains(Projection::ProjectSync), "{action:?}");
+            assert!(!plan.projections.contains(Projection::InspectorSync), "{action:?}");
+        }
     }
 }
