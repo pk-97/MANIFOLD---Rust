@@ -200,19 +200,19 @@
       "idle_2s": {
         "ChromeLayout": 360,
         "EditorTreeBuild": 120,
-        "FrameAlloc": 81368
+        "FrameAlloc": 80048
       }
     },
     "work-editor-open": {
       "after_open_half_second": {
         "ChromeLayout": 90,
         "EditorTreeBuild": 30,
-        "FrameAlloc": 20349
+        "FrameAlloc": 20019
       },
       "open_click": {
         "ChromeLayout": 3,
         "EditorTreeBuild": 1,
-        "FrameAlloc": 1445,
+        "FrameAlloc": 1461,
         "InspectorSync": 1,
         "ProjectSync": 1,
         "TextMeasureMiss": 7
