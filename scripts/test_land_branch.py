@@ -249,8 +249,8 @@ def git(cwd, *args):
 
 
 class StartCheckTests(unittest.TestCase):
-    """A real throwaway repo: the slot must hold the named branch's tip, clean
-    with no Codex job running, before land_branch fetches or gates anything."""
+    """A real throwaway repo: the slot must hold the named branch's tip, clean,
+    before land_branch fetches or gates anything."""
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -269,8 +269,6 @@ class StartCheckTests(unittest.TestCase):
         git(self.wt, 'add', '--', 'work.txt')
         git(self.wt, '-c', 'commit.gpgsign=false', 'commit', '-q', '-m', 'work', '--', 'work.txt')
         self.later = time.time()
-        self.busy_patch = patch.object(land_branch, 'codex_busy', return_value=None)
-        self.busy = self.enterContext(self.busy_patch)
 
     def land(self, *extra, branch='lane/x'):
         """main() with the gate and git steps faked; returns (exit, rows, stderr, fakes)."""
@@ -329,19 +327,6 @@ class StartCheckTests(unittest.TestCase):
         (self.wt / 'work.txt').write_text('changed\n')
         self.assert_refused('not clean')
 
-    def test_refuses_busy_codex_job(self):
-        self.busy.return_value = 'job j1 is running'
-        self.assert_refused('job j1 is running')
-
-    def test_codex_busy_reuses_broker_state(self):
-        real = self.busy_patch.temp_original
-        state = self.root / 'state'
-        with patch('codex_brokers.state_dirs', return_value=[state]) as dirs, \
-                patch('codex_brokers.busy_reason', return_value='job j2 is queued') as reason:
-            self.assertEqual(real(self.wt), 'job j2 is queued')
-        dirs.assert_called_once_with(self.wt)
-        reason.assert_called_once_with(state)
-
     def fresh_branch(self):
         """A lane branch cut from main with no commits of its own."""
         git(self.wt, 'switch', '-q', '-c', 'lane/fresh', 'main')
@@ -365,11 +350,11 @@ class StartCheckTests(unittest.TestCase):
         self.assertFalse(step.called or gate.called)
 
     def test_start_check_exception_records_error_and_refuses(self):
-        self.busy.side_effect = RuntimeError('broker state unreadable')
+        self.enterContext(patch.object(land_branch, 'start_checks', side_effect=RuntimeError('slot state unreadable')))
         code, rows, text, step, gate = self.land()
         self.assertEqual(code, 1)
         self.assertIn('REFUSED', text)
-        self.assertIn('broker state unreadable', text)
+        self.assertIn('slot state unreadable', text)
         self.assertEqual([r['outcome'] for r in rows], ['error'])
         self.assertFalse(step.called or gate.called)
 

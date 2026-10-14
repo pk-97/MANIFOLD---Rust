@@ -4,7 +4,7 @@
 
 **Status:** IMPLEMENTED · 2026-09-23 · Codex. V2 presets, detector/tracker and masks are present; legacy Blob Track is preserved. Owed: allocation measurement (BUG-7bi8) and visual/mask refinement (BUG-sh4i). Evidence and refinement history: §7.
 **Prerequisites:** existing effect-group masks, native BlobDetector bundle, and optical-flow primitive; verified against the implementation.
-**Execution contract:** P1–P4 ownership and run constraints are recorded in §7; current AGENTS.md and landing gates still apply.
+**Execution contract:** P1–P4 ownership and run constraints are recorded in §7; current CLAUDE.md and landing gates still apply.
 
 Build a new Blob Track V2 effect and an organic Blob Mask modifier from the same region detector. Preserve the original Blob Track: Peter explicitly said, “it must be available please that was wrong.” This is a new effect, not a replacement or project migration. Peter's mask request was “a blob tracking mask modifier that you can feed effects into.” In the existing product this means adding a mask to an effect group, then putting effects inside that group.
 

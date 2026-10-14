@@ -1,6 +1,6 @@
 # Merge — scene modifier that melts intersecting 3D objects into each other
 
-**Status:** PROPOSED design, not built · 2026-09-06 · k3 (lead) · revised 2026-09-06 after adversarial review (RT + lighting correctness in D5/D10) and again after Peter's edge-case rulings (pair-less all-instances semantics, D11–D14)
+**Status:** PROPOSED design, not built · 2026-09-06 · revised 2026-09-06 after adversarial review (RT + lighting correctness in D5/D10) and again after Peter's edge-case rulings (pair-less all-instances semantics, D11–D14)
 **Prerequisites:** none — the scene modifier framework ships (SCENE_MODIFIER_FRAMEWORK, `scene_loop` is kind #1).
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md sections 5–6 (phase briefs, seam briefs) before starting any phase.
 

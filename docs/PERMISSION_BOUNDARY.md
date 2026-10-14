@@ -40,8 +40,7 @@ demoted pane never recovers — restart it.
 
 With Claude models only, every slot is an Anthropic model, so the sonnet slot
 resolves to Sonnet 5.5 and a demotion lands on Opus (Fable or Opus 5.5 leads) or
-on the main model. The provider-proxy cases (non-Anthropic sonnet slot, classifier
-auth through a proxy key) are retired with the proxy; git history has them.
+on the main model.
 
 Oracle: `claude --debug -p '…' --permission-mode auto`, then grep
 `~/.claude/debug/latest` for `classifier_request_started` (prints the model).
@@ -297,8 +296,7 @@ Rationale for the script rules (unchanged from the original audit):
 | `scripts/run_ui_flows.py *` | bounded by `scripts/ui-flows/manifest.json` — which is agent-editable, so this is a section 4 residual-risk rule |
 | `scripts/gen_glb_conformance_status.py` | no arguments |
 
-Deliberately NOT allowlisted, keep classified: `psql` in wildcard form (one
-literal read-only query IS allowlisted — see block; the wildcard never),
+Deliberately NOT allowlisted, keep classified: `psql` in any form,
 `curl` / `wget` (network egress), `rm`, `gate_runner.py per-lane` (executes
 commands extracted from a brief file), `agent-worktree.py release` (deletes a
 worktree and any uncommitted work in it).

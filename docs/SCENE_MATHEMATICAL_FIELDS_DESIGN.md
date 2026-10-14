@@ -2,7 +2,7 @@
 
 <!-- index: Shared spatial fields and object/instance responses for travelling waves, interference, formation transitions and selective transformation. -->
 
-**Status:** IN PROGRESS · 2026-09-12 · Codex lead. Surface Waves and shared mesh band/sphere masks are implemented in the worktree; the wider W1–W4 field programme remains proposed.
+**Status:** IN PROGRESS · 2026-09-12. Surface Waves and shared mesh band/sphere masks are implemented in the worktree; the wider W1–W4 field programme remains proposed.
 **Prerequisites:** Existing unified modifier attachment, preparation and modulation infrastructure in the worktree. Foundation validation debt remains in the foundation plan; this bounded slice does not complete the entire contract.
 **Execution contract:** [DESIGN_DOC_STANDARD](DESIGN_DOC_STANDARD.md) sections 5–6 and 8. Conformance treatment: the shipped atoms and their semantics are fixed; re-verify channel projections at implementation and extend exact equivalents instead of duplicating them. Foundation F7 is a file-only authorship proof using those atoms, not another travelling-wave implementation.
 

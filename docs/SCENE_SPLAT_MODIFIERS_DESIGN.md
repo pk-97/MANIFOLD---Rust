@@ -2,7 +2,7 @@
 
 <!-- index: Modifier integration for the approved Gaussian splat design: reference channels, masks, anisotropic transforms, assembly and qualification. -->
 
-**Status:** PROPOSED · 2026-09-12 · Codex lead · not implemented.
+**Status:** PROPOSED · 2026-09-12 · not implemented.
 **Prerequisites:** Foundation F8 (F1–F8 remains unbuilt; that foundation migrates Elastic Sculpture, Surface Peel, Vortex Fragments and Loop/Fog), fields W1–W4 and [GAUSSIAN_SPLATS_DESIGN](GAUSSIAN_SPLATS_DESIGN.md) source/renderer phases. This contract does not build a second splat renderer, and no Gaussian splat renderer is currently shipped.
 **Execution contract:** [DESIGN_DOC_STANDARD](DESIGN_DOC_STANDARD.md) sections 5–6 and 8. Conformance treatment; the old splat design's source/render/depth anchors must be refreshed before implementation.
 

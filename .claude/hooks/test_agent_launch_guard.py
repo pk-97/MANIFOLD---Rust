@@ -36,12 +36,6 @@ check(
     == ("claude-haiku-4-5-20251001", "haiku"),
 )
 
-# Non-Claude backend -> last-segment label.
-check(
-    "non-claude backend label",
-    hook.backend_for_slot("haiku", {"ANTHROPIC_DEFAULT_HAIKU_MODEL": "qwen3-coder"}) == ("qwen3-coder", "coder"),
-)
-
 # --- decide(): one-pass model + naming -------------------------------------
 
 
@@ -89,10 +83,6 @@ check(
     "chars + casing + prefix all auto-fixed in one pass",
     d == "" and f is not None and f["name"] == "sonnet-scene-loop-wrap",
 )
-
-# Non-Claude backend: the derived label is the slot.
-d, n, f = spawn("doc-sweep-pass", model="haiku", env={"ANTHROPIC_DEFAULT_HAIKU_MODEL": "qwen3-coder"})
-check("non-claude slot prefix auto-fixed", d == "" and f is not None and f["name"] == "coder-doc-sweep-pass")
 
 # Judgment defects still deny: opaque task part, missing model.
 d, n, f = spawn("haiku-t1", model="haiku")

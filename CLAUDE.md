@@ -22,8 +22,8 @@ You don't persist between sessions. This file is what tomorrow's instance gets f
 - No inline python, read-only included: `python3 -c`, `python3 -` and heredocs are denied. Edit files with Edit/Write, read JSON with `jq`, run throwaway python as a scratchpad file (shebang, `chmod +x`) by its path.
 - No `cd`, not even as a prefix (`cd /tmp;`, `cd /dev/null;`). Use absolute paths, `git -C`, `--manifest-path`, or a subshell (`(cd X && cmd)`).
 - Never wait in the foreground. Long commands run with `run_in_background`; follow gates and landings with `scripts/watch_land.py` and anything else with the Monitor tool. No sleep loops, `kill -0` polls or sleep-then-tail.
-- Before a lane's one commit: clippy `--tests` on the touched crates, scoped nextest, and regenerate what you made stale (`dev.py node-catalog`, `dev.py docs-index`). After the commit, lanes run `scripts/landing_gate.py --repo "$WT" --cheap`.
-- Never gate or land a slot whose agent or Astra job may still be writing. A completed report does not prove it stopped; check first.
+- Before a lane's one commit: clippy `--tests` on the touched crates, scoped nextest, regenerate what you made stale (`dev.py node-catalog`, `dev.py docs-index`), then `scripts/landing_gate.py --repo "$WT" --cheap` on the uncommitted tree. Its passes are reused at landing.
+- Never gate or land a slot whose agent may still be writing. A completed report does not prove it stopped; check first.
 
 ## Hard rules
 
@@ -98,7 +98,7 @@ Verify one level closer to the stage than where you changed things — compiles 
 - **`scripts/TOOLS.md` is the tool inventory** (`scripts/dev.py --help` prints the same; `dev.py <verb>` runs it). Read it before writing any script, probe, or renderer: every verb names a tool that exists. A new `scripts/*` file gets a verb in `dev.py` (test-enforced); one-offs live in the scratchpad.
 - `rg` not `grep`, `fd` not `find`, `ast-grep` for code-shape queries. No rust-analyzer in agent sessions: it costs 3 GB and a re-index per branch switch on the cores cargo needs.
 - Runtime bugs: printlns, reproduce, read logs. Static analysis is for compile errors.
-- **Parallel lanes share one GPU and 14 cores.** Solve on the CPU first: small CPU reference tests that run in seconds. A GPU proof or an app render only confirms a finished stage, one run, through `scripts/gpu_queue.py`. Order the work in stages: edit, check, CPU proof, commit. Cargo runs one command at a time with `CARGO_BUILD_JOBS=4`. Codex can't take the GPU lock, so it writes GPU proofs and the lead runs them.
+- **Parallel lanes share one GPU and 14 cores.** Solve on the CPU first: small CPU reference tests that run in seconds. A GPU proof or an app render only confirms a finished stage, one run, through `scripts/gpu_queue.py`. Order the work in stages: edit, check, CPU proof, commit. Cargo uses every core by default; concurrent builds share them.
 - **Tests are scoped by default.** `cargo nextest run -p <touched crate> [filter]`; the landing gate maps changed Rust files to their module filtersets, sibling test modules, and named integration binaries. Comment/blank-only and docs-only diffs add no build, clippy, test, or GPU work. A `--workspace` sweep is justified only at a multi-crate landing or when blast radius genuinely crosses crates — say why in one line. Config: `.config/nextest.toml`. Adding or renaming a doc requires `scripts/gen_docs_index.py` (a freshness test enforces it).
 - **Clippy before every commit.** Worktree: `cargo clippy -p <touched> -- -D warnings`. Land with `scripts/land_branch.py`. Never blanket `cargo fmt` (the repo is not rustfmt-clean).
 - **GPU proofs** run through `scripts/gpu_proofs_gate.py`: always `cargo test`, never nextest (process-per-test defeats the device lock).

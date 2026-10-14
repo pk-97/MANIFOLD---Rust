@@ -83,7 +83,7 @@ def main() -> int:
     code, out = run([str(GUARD)], p)
     check("PermissionDenied is observe-only", code == 0 and out == "", out[:120])
     p = pr_payload("x", worker=False)
-    p["teammate_name"] = "k27-lane-3"
+    p["teammate_name"] = "sonnet-lane-3"
     code, out = run([str(GUARD)], p)
     check("teammate_name counts as a worker seat", json.loads(out)["hookSpecificOutput"]["decision"]["behavior"] == "deny")
     pp = subprocess.run([str(GUARD)], input="not json", capture_output=True, text=True)
