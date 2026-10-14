@@ -1374,6 +1374,10 @@ impl PlaybackEngine {
         } else {
             self.clock.advance(ctx.frames);
             if self.tempo == TempoSource::Follow
+                && sample.is_none()
+            {
+                self.follower.free_wheel(self.clock.time());
+            } else if self.tempo == TempoSource::Follow
                 && let Some(sample) = sample
             {
                 let before = self.follower.beat_at(self.clock.time()).0;

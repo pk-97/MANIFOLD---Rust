@@ -332,3 +332,31 @@ fn segment_survives_grid_changes() {
     clock.end_export(60.0);
     assert!((f.beat_at(clock.time()).0 - before).abs() < 1e-9, "end of export moved the beat");
 }
+
+/// With no fresh sample the beat carries on at the base tempo and the
+/// learned rate gap only: inside a catch-up window the lifted trim goes,
+/// and the beat stays continuous where the samples stopped.
+#[test]
+fn free_wheel_drops_the_proportional_part() {
+    let mut f = ExternalFollower::starting_at(FollowProfile::SLOW, Seconds(0.0), Beats(0.0), Bpm(128.0));
+    let (jump, stop) = (10.0, 10.5);
+    let mut n = 0i64;
+    let t = loop {
+        let t = n as f64 * STEP;
+        if t >= stop {
+            break t;
+        }
+        let beat = if t < jump { t * 128.0 / 60.0 } else { jump * 128.0 / 60.0 + (t - jump) * 174.0 / 60.0 };
+        f.observe(Seconds(t), sample(beat, if t < jump + 0.1 { 128.0 } else { 174.0 }));
+        n += 1;
+    };
+    assert!(f.catch_up_open() && f.trim().abs() > FollowProfile::SLOW.trim_cap, "the window lifted the trim: {}", f.trim());
+    let before = f.beat_at(Seconds(t)).0;
+    let stale = ExternalSample { fresh: false, ..sample(0.0, 174.0) };
+    assert_eq!(f.observe(Seconds(t), stale), FollowEvent::None);
+    assert_eq!(f.beat_at(Seconds(t)).0, before, "the beat is continuous where the samples stop");
+    assert!(f.trim().abs() <= FollowProfile::SLOW.integral_cap, "only the integral is left: {}", f.trim());
+    let rate = (f.beat_at(Seconds(t + 1.0)).0 - before) * 60.0;
+    let expected = f64::from(f.base_bpm().0) * (1.0 + f.trim());
+    assert!((rate / expected - 1.0).abs() < 1e-6, "free-wheel rate {rate} BPM, expected {expected}");
+}

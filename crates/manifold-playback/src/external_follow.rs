@@ -288,6 +288,22 @@ impl ExternalFollower {
         self.catch_up.clear();
     }
 
+    /// A tick with no fresh sample: the beat carries on at the base tempo and
+    /// the learned rate gap (the integral) only. The proportional part, and
+    /// a catch-up window's lift of it, needs a measured error to act on.
+    pub fn free_wheel(&mut self, t: Seconds) {
+        if !t.0.is_finite() {
+            return;
+        }
+        let rate = self.base_bpm / 60.0 * (1.0 + self.integral);
+        if self.segment.beats_per_second == rate {
+            return;
+        }
+        let beat = self.segment.beat_at(t.0);
+        self.trim = self.integral;
+        self.segment = FollowSegment { anchor_time: t.0, anchor_beat: beat, beats_per_second: rate };
+    }
+
     /// Bumpless switch to another source (D6): the segment is kept, the
     /// integral takes the trim, the pre-filter clears.
     pub fn hand_over(&mut self, profile: FollowProfile) {
@@ -302,7 +318,11 @@ impl ExternalFollower {
     pub fn observe(&mut self, t: Seconds, sample: ExternalSample) -> FollowEvent {
         let t = t.0;
         let Some(bpm) = valid_bpm(sample.bpm) else { return FollowEvent::None };
-        if !(t.is_finite() && sample.beat.is_finite() && sample.fresh) {
+        if !(t.is_finite() && sample.beat.is_finite()) {
+            return FollowEvent::None;
+        }
+        if !sample.fresh {
+            self.free_wheel(Seconds(t));
             return FollowEvent::None;
         }
         if self.awaiting_seed {
