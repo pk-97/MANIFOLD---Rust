@@ -17,7 +17,7 @@
     "Pointer": {
       "target": {
         "Query": {
-          "text": "+ Force"
+          "name": "scene_tree.add.Forces"
         }
       },
       "gesture": {
@@ -45,7 +45,7 @@
     "Pointer": {
       "target": {
         "Query": {
-          "text": "\u26a1 Uniform Force"
+          "name": "scene_tree.item", "text": "Uniform Force"
         }
       },
       "gesture": {
@@ -189,7 +189,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "text": "\u26a1 Uniform Force"
+          "name": "scene_tree.item", "text": "Uniform Force"
         }
       },
       "check": "Exists"
@@ -453,7 +453,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "text": "\u26a1 Uniform Force",
+          "name": "scene_tree.item", "text": "Uniform Force",
           "type": "Button"
         }
       },
@@ -472,7 +472,7 @@
       "check": {
         "RectWithin": {
           "x": 1028.0,
-          "y": 791.0,
+          "y": 685.0,
           "width": 480.0,
           "height": 22.0
         }
@@ -493,7 +493,7 @@
       "check": {
         "RectWithin": {
           "x": 1028.0,
-          "y": 791.0,
+          "y": 685.0,
           "width": 480.0,
           "height": 22.0
         }

@@ -3,45 +3,27 @@
 use super::*;
 
 impl ScenePanel {
-    /// P2 slice 2a: replaced the per-family Orbit/Free/LookAt row lists
-    /// (plus the separate Lens sub-section) with one `build_filtered_
-    /// properties` pass over `vm.camera_sections` (the camera atom's REAL
-    /// P1 section, plus the lens's if wired — see
-    /// `SceneSetupVm::camera_sections`'s doc comment). Custom/None fallback
-    /// messaging (no camera vocabulary matched, or the port is unwired)
-    /// stays panel-shaped, unchanged.
-    pub(super) fn build_camera_section(&mut self, tree: &mut UITree, inner_x: f32, inner_w: f32, mut cy: f32, vm: &SceneSetupVm) -> f32 {
-        cy = match &vm.camera {
-            CameraRowVm::Orbit(_) | CameraRowVm::Free(_) | CameraRowVm::LookAt(_) => {
-                match vm.camera_parameter_ids.as_deref() {
-                    Some(owned) => self.build_filtered_properties_parameter_ids(
-                        tree, inner_x, inner_w, cy, (&vm.camera_sections, owned, &[]),
-                    ),
-                    None => self.build_filtered_properties(tree, inner_x, inner_w, cy, &vm.camera_sections),
-                }
-            }
-            CameraRowVm::Custom => {
-                if !vm.camera_sections.is_empty() {
-                    cy = match vm.camera_parameter_ids.as_deref() {
-                        Some(owned) => self.build_filtered_properties_parameter_ids(
-                            tree, inner_x, inner_w, cy, (&vm.camera_sections, owned, &[]),
-                        ),
-                        None => self.build_filtered_properties(tree, inner_x, inner_w, cy, &vm.camera_sections),
-                    };
-                }
-                let message = if vm.camera_sections.is_empty() {
-                    "Custom (edit in graph)"
-                } else {
-                    "Movement: controlled by camera graph"
-                };
-                tree.add_label(Some(self.content_parent), inner_x, cy, inner_w, ROW_H, message, label_style());
-                cy + ROW_H
-            }
-            CameraRowVm::None => {
-                tree.add_label(Some(self.content_parent), inner_x, cy, inner_w, ROW_H, "No camera wired", label_style());
-                cy + ROW_H
-            }
+    /// The Camera item's controls, then a note when the camera graph is
+    /// custom or missing, then the one-time effects setup when needed.
+    pub(super) fn build_camera_section(
+        &mut self,
+        tree: &mut UITree,
+        (inner_x, inner_w): (f32, f32),
+        mut cy: f32,
+        vm: &SceneSetupVm,
+        owned: &[String],
+    ) -> f32 {
+        cy = self.build_item_properties(tree, inner_x, inner_w, cy, PropertyRows::new(owned, ControlGroup::Camera));
+        let message = match &vm.camera {
+            CameraRowVm::Custom if owned.is_empty() => Some("Custom (edit in graph)"),
+            CameraRowVm::Custom => Some("Movement: controlled by camera graph"),
+            CameraRowVm::None => Some("No camera wired"),
+            CameraRowVm::Orbit(_) | CameraRowVm::Free(_) | CameraRowVm::LookAt(_) => None,
         };
+        if let Some(message) = message {
+            tree.add_label(Some(self.content_parent), inner_x, cy, inner_w, ROW_H, message, label_style());
+            cy += ROW_H;
+        }
         if vm.camera_setup_needed {
             let button = tree.add_button_keyed(
                 Some(self.content_parent),
@@ -74,8 +56,7 @@ mod tests {
     fn camera_boolean_controls_toggle_and_keep_synced_values_after_rebuild() {
         let (mut vm, mut surface) = world_transform_vm();
         vm.camera = CameraRowVm::Custom;
-        vm.camera_sections = vec!["Camera".into()];
-        vm.camera_parameter_ids = Some(vec!["72_enabled".into(), "73_enabled".into()]);
+        super::super::tests::set_item_ids(&mut vm, SceneSelection::Camera, &["72_enabled", "73_enabled"]);
         let template = surface.rows[0].clone();
         surface.rows = [("72_enabled", "Motion Blur"), ("73_enabled", "Depth of Field")]
             .into_iter().map(|(id, name)| {
@@ -93,7 +74,7 @@ mod tests {
             }).collect();
         let mut panel = ScenePanel::new();
         panel.open();
-        panel.configure(SceneSetupState::Live(Box::new(vm)));
+        panel.configure(super::super::tests::live(vm));
         panel.configure_params(Some(surface));
         panel.selection.insert(LayerId::new("layer-1"), SceneSelection::Camera);
         let mut tree = UITree::new();
@@ -134,8 +115,7 @@ mod tests {
     fn camera_custom_shared_controls_exclude_inactive_movement_and_keep_dispatch() {
         let (mut vm, mut surface) = world_transform_vm();
         vm.camera = CameraRowVm::Custom;
-        vm.camera_sections = vec!["Camera".into()];
-        vm.camera_parameter_ids = Some(["71_focus_distance", "72_enabled", "73_enabled"].map(String::from).to_vec());
+        super::super::tests::set_item_ids(&mut vm, SceneSelection::Camera, &["71_focus_distance", "72_enabled", "73_enabled"]);
         let template = surface.rows[0].clone();
         surface.rows = ["70_distance", "71_focus_distance", "72_enabled", "73_enabled"]
             .into_iter().map(|id| {
@@ -147,7 +127,7 @@ mod tests {
             }).collect();
         let mut panel = ScenePanel::new();
         panel.open();
-        panel.configure(SceneSetupState::Live(Box::new(vm)));
+        panel.configure(super::super::tests::live(vm));
         panel.configure_params(Some(surface));
         panel.selection.insert(LayerId::new("layer-1"), SceneSelection::Camera);
         let mut tree = UITree::new();

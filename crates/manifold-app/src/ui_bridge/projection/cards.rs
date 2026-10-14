@@ -33,9 +33,9 @@ pub(crate) enum SurfaceVisibility {
     /// macros, drivers all still resolve it by id) — it just never becomes a
     /// card row.
     CuratedCard,
-    /// Every manifest param becomes a row. The Scene Setup dock's full
-    /// generator surface uses this so scale/material rows reach the panel; the
-    /// panel then filters by SECTION, not by `card_visible`.
+    /// Every manifest param becomes a row. The Scene tab's full generator
+    /// surface uses this so scale/material rows reach the panel; the panel
+    /// then filters by item ownership, not by `card_visible`.
     All,
 }
 
@@ -413,7 +413,7 @@ fn param_surface(
     // table marks `card_visible: false` (any role but performance) —
     // it stays a real, fully addressable manifest entry (OSC, Ableton, macros,
     // drivers all still resolve it by id), it just never becomes a CARD row.
-    // `All` keeps every param (the Scene Setup dock's full generator surface).
+    // `All` keeps every param (the Scene tab's full generator surface).
     // The per-frame value push no longer mirrors this filter: `sync_card_values`
     // hands the FULL manifest as an id-keyed channel and the card JOINS by id
     // (BUG-313), so a hidden param simply finds no row — there is no second
@@ -495,6 +495,7 @@ fn param_surface(
                     section: p.spec.section.clone(),
                     material_role: p.spec.material_role.map(super::material::role),
                     inactive_reason: None,
+                    scene: p.spec.scene,
                     disabled: None,
                 },
                 // D7: display-value resolution decided here — base/effective

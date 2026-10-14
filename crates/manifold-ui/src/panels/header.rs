@@ -53,10 +53,8 @@ pub struct HeaderPanel {
     import_progress_visible: bool,
     time_display: String,
     zoom_label: String,
-    /// Whether the Audio Setup dock is open and whether the inspector shows
-    /// the Scene tab — drives the two header buttons' active highlight.
+    /// Whether the Audio Setup dock is open — drives its button's highlight.
     audio_setup_open: bool,
-    scene_setup_open: bool,
 }
 
 impl HeaderPanel {
@@ -71,7 +69,6 @@ impl HeaderPanel {
             time_display: "00:00.00 / 00:00.00  |  1.1.1".into(),
             zoom_label: "120 px/beat".into(),
             audio_setup_open: false,
-            scene_setup_open: false,
         }
     }
 
@@ -95,12 +92,9 @@ impl HeaderPanel {
         self.zoom_label = text.into();
     }
 
-    /// Set the two utility-dock toggle buttons' active state (D2: mutually
-    /// exclusive — the app dispatch guarantees at most one is ever true, this
-    /// setter doesn't enforce it, it just paints whatever it's told).
-    pub fn set_dock_toggle_state(&mut self, audio_setup_open: bool, scene_setup_open: bool) {
+    /// Paint the Audio dock toggle's active state.
+    pub fn set_audio_dock_open(&mut self, audio_setup_open: bool) {
         self.audio_setup_open = audio_setup_open;
-        self.scene_setup_open = scene_setup_open;
     }
 
     // ── Styles ──────────────────────────────────────────────────────
@@ -213,40 +207,22 @@ impl HeaderPanel {
     }
 
     fn right_group(&self, room: f32) -> (View, f32) {
-        let dock_button_w = ((room - ZOOM_CLUSTER_W - GROUP_SPACING) * 0.5)
-            .clamp(0.0, 60.0);
+        let dock_button_w = (room - ZOOM_CLUSTER_W - GROUP_SPACING).clamp(0.0, 60.0);
         let dock_visible = dock_button_w >= 24.0;
-        let dock_gap = if dock_visible { color::SPACE_XS } else { 0.0 };
         let audio_label = if dock_button_w >= 50.0 { "Audio" } else { "A" };
-        let scene_label = if dock_button_w >= 50.0 { "Scene" } else { "S" };
-        // Utility-dock toggles (SCENE_SETUP_PANEL_DESIGN D2): "Audio" and
-        // "Scene" sit side by side while there is room for their compact
-        // labels; the zoom cluster keeps its full button affordances first.
-        // They remain highlighted when their dock is open and are also
-        // reachable via the View menu (⌘⇧A for Audio).
-        let dock_toggles = View::row(dock_gap)
+        // The Audio dock toggle, highlighted while the dock is open; the zoom
+        // cluster keeps its full button affordances first. The Scene tab
+        // lives in the inspector (SCENE_SURFACES D16), so it has no button here.
+        let dock_toggles = View::button(audio_label)
+            .w(Sizing::Fixed(dock_button_w))
             .fill_h()
-            .child(
-                View::button(audio_label)
-                    .w(Sizing::Fixed(dock_button_w))
-                    .fill_h()
-                    .visible(dock_visible)
-                    .style(Self::dock_toggle_style(self.audio_setup_open))
-                    .on_click(PanelAction::Root(RootAction::OpenAudioSetup)),
-            )
-            .child(
-                View::button(scene_label)
-                    .w(Sizing::Fixed(dock_button_w))
-                    .fill_h()
-                    .visible(dock_visible)
-                    .style(Self::dock_toggle_style(self.scene_setup_open))
-                    .on_click(PanelAction::Root(RootAction::OpenSceneSetup)),
-            );
+            .visible(dock_visible)
+            .style(Self::dock_toggle_style(self.audio_setup_open))
+            .on_click(PanelAction::Root(RootAction::OpenAudioSetup));
 
         // Tight zoom cluster [−][label][+], end-aligned to the inset right edge.
         let zoom_label_w = (room
-            - dock_button_w * 2.0
-            - dock_gap
+            - dock_button_w
             - GROUP_SPACING
             - ZOOM_BUTTON_W * 2.0)
             .clamp(0.0, ZOOM_LABEL_W);
@@ -275,8 +251,7 @@ impl HeaderPanel {
                     .on_click(PanelAction::Transport(TransportAction::ZoomIn)),
             );
 
-        let used_w = dock_button_w * 2.0
-            + dock_gap
+        let used_w = dock_button_w
             + GROUP_SPACING
             + ZOOM_BUTTON_W * 2.0
             + zoom_label_w;

@@ -256,6 +256,7 @@ pub fn dispatch(action: &PanelAction, ctx: &mut DispatchCtx) -> DispatchResult {
             | RootAction::OpenRtQualityDenoiseDropdown { .. }
             | RootAction::SceneSetupAddModifierClicked(..)
             | RootAction::SceneSetupAddForceClicked(..)
+            | RootAction::SceneSetupAddObjectMenuClicked(..)
             | RootAction::SceneSetupFluidRoleClicked { .. }
             | RootAction::SceneSetupFluidRoleTargetClicked { .. }
             | RootAction::SceneSetupFluidDomainClicked { .. }

@@ -17,7 +17,7 @@
     "ScrollTo": {
       "target": {
         "Query": {
-          "name": "scene_setup.add_fluid"
+          "name": "scene_tree.add.Objects"
         }
       }
     }
@@ -26,7 +26,21 @@
     "Pointer": {
       "target": {
         "Query": {
-          "name": "scene_setup.add_fluid"
+          "name": "scene_tree.add.Objects"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "text": "Water", "under_name": "dropdown"
         }
       },
       "gesture": {
@@ -40,7 +54,7 @@
     "ScrollTo": {
       "target": {
         "Query": {
-          "text": "+ Object"
+          "name": "scene_tree.add.Objects"
         }
       }
     }
@@ -49,7 +63,21 @@
     "Pointer": {
       "target": {
         "Query": {
-          "text": "+ Object"
+          "name": "scene_tree.add.Objects"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "text": "Object", "under_name": "dropdown"
         }
       },
       "gesture": {
@@ -319,7 +347,7 @@
     "ScrollTo": {
       "target": {
         "Query": {
-          "text": "■ Object 7"
+          "name": "scene_tree.item", "text": "Object 7"
         }
       }
     }
@@ -328,7 +356,7 @@
     "Pointer": {
       "target": {
         "Query": {
-          "text": "■ Object 7"
+          "name": "scene_tree.item", "text": "Object 7"
         }
       },
       "gesture": {
@@ -443,7 +471,7 @@
     "ScrollTo": {
       "target": {
         "Query": {
-          "text": "■ Object 7"
+          "name": "scene_tree.item", "text": "Object 7"
         }
       }
     }
@@ -452,7 +480,7 @@
     "Pointer": {
       "target": {
         "Query": {
-          "text": "■ Object 7"
+          "name": "scene_tree.item", "text": "Object 7"
         }
       },
       "gesture": {
@@ -489,7 +517,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "text": "■ Object 7"
+          "name": "scene_tree.item", "text": "Object 7"
         }
       },
       "check": {
@@ -501,7 +529,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "text": "■ Object 7_3"
+          "name": "scene_tree.item", "text": "Object 7_3"
         }
       },
       "check": "Exists"
@@ -511,7 +539,7 @@
     "ScrollTo": {
       "target": {
         "Query": {
-          "text": "■ Object 7_3"
+          "name": "scene_tree.item", "text": "Object 7_3"
         }
       }
     }
@@ -520,7 +548,7 @@
     "Pointer": {
       "target": {
         "Query": {
-          "text": "■ Object 7_3"
+          "name": "scene_tree.item", "text": "Object 7_3"
         }
       },
       "gesture": {
@@ -552,7 +580,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "text": "■ Object 7"
+          "name": "scene_tree.item", "text": "Object 7"
         }
       },
       "check": "Exists"
@@ -570,7 +598,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "text": "■ Object 7_3"
+          "name": "scene_tree.item", "text": "Object 7_3"
         }
       },
       "check": {
@@ -591,7 +619,7 @@
     "ScrollTo": {
       "target": {
         "Query": {
-          "text": "■ Object 7_3"
+          "name": "scene_tree.item", "text": "Object 7_3"
         }
       }
     }
@@ -600,7 +628,7 @@
     "Pointer": {
       "target": {
         "Query": {
-          "text": "■ Object 7_3"
+          "name": "scene_tree.item", "text": "Object 7_3"
         }
       },
       "gesture": {
@@ -660,7 +688,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "text": "■ Object 7_3"
+          "name": "scene_tree.item", "text": "Object 7_3"
         }
       },
       "check": {
@@ -672,7 +700,7 @@
     "ScrollTo": {
       "target": {
         "Query": {
-          "name": "scene_setup.add_fluid"
+          "name": "scene_tree.add.Objects"
         }
       }
     }
@@ -681,7 +709,21 @@
     "Pointer": {
       "target": {
         "Query": {
-          "name": "scene_setup.add_fluid"
+          "name": "scene_tree.add.Objects"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "text": "Water", "under_name": "dropdown"
         }
       },
       "gesture": {
@@ -695,7 +737,7 @@
     "ScrollTo": {
       "target": {
         "Query": {
-          "text": "■ Object 7"
+          "name": "scene_tree.item", "text": "Object 7"
         }
       }
     }
@@ -704,7 +746,7 @@
     "Pointer": {
       "target": {
         "Query": {
-          "text": "■ Object 7"
+          "name": "scene_tree.item", "text": "Object 7"
         }
       },
       "gesture": {
@@ -753,7 +795,7 @@
     "Pointer": {
       "target": {
         "Query": {
-          "text": "Water 2"
+          "text": "Water 2", "under_name": "dropdown"
         }
       },
       "gesture": {

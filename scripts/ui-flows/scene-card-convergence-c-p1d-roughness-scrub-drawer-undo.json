@@ -31,7 +31,7 @@
     "Pointer": {
       "target": {
         "Query": {
-          "text": "■ QS1694-W02-1-1"
+          "name": "scene_tree.item", "text": "QS1694-W02-1-1"
         }
       },
       "gesture": {
@@ -324,7 +324,7 @@
     "ScrollTo": {
       "target": {
         "Query": {
-          "text": "💡 Sun"
+          "name": "scene_tree.item", "text": "Sun"
         }
       }
     }
@@ -333,7 +333,7 @@
     "Pointer": {
       "target": {
         "Query": {
-          "text": "💡 Sun"
+          "name": "scene_tree.item", "text": "Sun"
         }
       },
       "gesture": {

@@ -51,7 +51,7 @@ fn setup(control: Control) -> (ScenePanel, UITree, ParamCardPanel, UITree) {
     card.build(&mut card_tree, Rect::new(0.0, 0.0, 500.0, 1400.0));
     let mut scene = ScenePanel::new();
     scene.open();
-    scene.configure(SceneSetupState::Live(Box::new(vm)));
+    scene.configure(tests::live(vm));
     scene.configure_params(Some(surface));
     scene
         .selection

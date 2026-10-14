@@ -1333,7 +1333,7 @@ impl UIRoot {
         } else {
             0.0
         };
-        self.header.set_dock_toggle_state(open, self.scene_setup_panel.is_open());
+        self.header.set_audio_dock_open(open);
     }
 
     /// Audio Setup dock resize-handle colour feedback (idle/hover/drag).
@@ -1723,6 +1723,7 @@ mod tick_parity_tests {
                     section: None,
                     material_role: None,
                     inactive_reason: None,
+                    scene: None,
                     disabled: None,
                 },
                 value: manifold_ui::RowValue { base: 0.5, effective: 0.5, exposed: true, driven: false },

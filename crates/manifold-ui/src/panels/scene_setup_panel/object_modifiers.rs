@@ -634,6 +634,7 @@ mod tests {
                     disabled: None,
                     material_role: None,
                     inactive_reason: None,
+                    scene: None,
                 },
                 value: RowValue { base: 0.5, effective: 0.5, exposed: true, driven: false },
                 audio: Default::default(),

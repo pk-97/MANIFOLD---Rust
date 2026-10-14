@@ -1,4 +1,4 @@
-//! Scene-panel projection: the Scene Setup dock's per-frame row value sync
+//! Scene tab projection: the Scene tab's per-frame row value sync
 //! and the exposure-section doc-id resolver. Moved from state_sync.rs (P-P,
 //! UI_FUNNEL_DECOMPOSITION_DESIGN.md).
 
@@ -84,9 +84,9 @@ pub(crate) fn owned_nodes<'a>(
     items.iter().find(|item| &item.id == id).map_or(&[], |item| item.owned_nodes.as_slice())
 }
 
-/// The nodes of the World and every physics world: the Scene tab's World
-/// and Physics views pick their sections from one list until the tree
-/// gives each item its own view (P6b).
+/// The nodes of the World and every physics world, for tests that read
+/// their stored section strings.
+#[cfg(test)]
 pub(crate) fn world_and_physics_nodes(
     items: &[manifold_nodes_scene::node_graph::scene_items::SceneItem],
 ) -> Vec<manifold_core::NodeId> {
@@ -95,6 +95,49 @@ pub(crate) fn world_and_physics_nodes(
         .iter()
         .filter(|item| matches!(item.kind, SceneItemKind::World | SceneItemKind::Physics))
         .flat_map(|item| item.owned_nodes.iter().cloned())
+        .collect()
+}
+
+/// The Scene tab tree's items (SCENE_SURFACES D8) from the scene items and
+/// the panel rows already projected from the same `SceneVm`. Lights and
+/// objects pair with their Known rows in order, since `scene_items` lists
+/// exactly those, in that order. `object_ids` are each Known object's
+/// filtered control ids; every other item owns its nodes' controls.
+pub(crate) fn scene_item_vms(
+    def: Option<&manifold_core::effect_graph_def::EffectGraphDef>,
+    items: &[manifold_nodes_scene::node_graph::scene_items::SceneItem],
+    objects: &[manifold_ui::panels::scene_setup_panel::ObjectRowVm],
+    lights: &[manifold_ui::panels::scene_setup_panel::LightRowVm],
+    object_ids: Vec<Vec<String>>,
+) -> Vec<manifold_ui::panels::scene_setup_panel::SceneItemVm> {
+    use manifold_nodes_scene::node_graph::scene_items::SceneItemId;
+    use manifold_ui::panels::scene_setup_panel::{LightRowVm, ObjectRowVm, SceneItemVm, SceneSelection};
+    let mut known_objects = objects.iter().filter_map(|object| match object {
+        ObjectRowVm::Known(row) => Some((row.object_node_id, row.parent_group_id)),
+        ObjectRowVm::Custom { .. } => None,
+    });
+    let mut known_lights = lights.iter().filter_map(|light| match light {
+        LightRowVm::Known(row) => Some(row.node_doc_id),
+        LightRowVm::Custom { .. } => None,
+    });
+    let mut object_ids = object_ids.into_iter();
+    items
+        .iter()
+        .filter_map(|item| {
+            let owned = || parameter_ids_for_nodes(def, &item.owned_nodes);
+            let (selection, parent, parameter_ids) = match &item.id {
+                SceneItemId::Camera => (SceneSelection::Camera, None, owned()),
+                SceneItemId::World => (SceneSelection::World, None, owned()),
+                SceneItemId::Light(_) => (SceneSelection::Light(known_lights.next()?), None, owned()),
+                SceneItemId::Object(_) => {
+                    let (id, parent) = known_objects.next()?;
+                    (SceneSelection::Object(id), parent, object_ids.next()?)
+                }
+                SceneItemId::Force(id) => (SceneSelection::Force(id.clone()), None, Vec::new()),
+                SceneItemId::Physics(id) => (SceneSelection::Physics(id.clone()), None, owned()),
+            };
+            Some(SceneItemVm { kind: item.kind, selection, name: item.name.clone(), parent, parameter_ids })
+        })
         .collect()
 }
 
@@ -118,7 +161,7 @@ pub(crate) fn filter_family_parameter_ids(
     });
 }
 
-/// Per-frame VALUE sync for the Scene Setup dock's rows — the scene-row
+/// Per-frame VALUE sync for the Scene tab's rows — the scene-row
 /// sibling of [`sync_card_values`]: push each built row's CURRENT value from
 /// `project` (the layer's generator graph def, instance override or bundled
 /// default) onto the already-built panel, so rows track OSC / command /
@@ -164,6 +207,9 @@ pub fn sync_scene_row_values(ui: &mut UIRoot, project: &Project) {
 ///
 /// Deliberately does NOT filter by `spec.card_visible`: that flag gates the
 /// generator's outer card, never the scene panel.
+/// The Scene tab partitions by item ownership now; tests still read the
+/// stored strings to check what the importers stamp.
+#[cfg(test)]
 pub(crate) fn sections_for_nodes(
     def: Option<&manifold_core::effect_graph_def::EffectGraphDef>,
     nodes: &[manifold_core::NodeId],
