@@ -25,7 +25,7 @@ There is no dispatcher seat. The clerical loop (pop queue, run gates, park failu
 
 ## Standing practice
 
-- **Owner seats.** Each area gets one long-lived owner seat. About three are live at once. The lead continues an owner with `SendMessage` instead of spawning a fresh agent, so the seat keeps what it learned. A fresh spawn happens only when the owner hits the context ceiling (section Unattended multi-slice runs) or fails twice; the outgoing owner writes a handoff to its branch or findings doc first.
+- **Owner seats.** Each area gets one long-lived owner seat. About three are live at once. The lead continues an owner with `SendMessage` instead of spawning a fresh agent, so the seat keeps what it learned. A fresh spawn happens only when the owner fails twice; the outgoing owner writes a handoff to its branch or findings doc first.
 - **Port from the reference.** When a reference implementation exists, the brief says port from it and name every deviation, with the reason, in the report. Silent divergence from a working reference is a brief violation.
 
 ## The landing seat
@@ -105,5 +105,5 @@ Use when a phase's judgment is done and only mechanical bulk remains.
 - **Command hygiene for auto mode:** single-purpose commands, no `$()` writes or repo-path redirects (`/tmp` and `/dev/null` are fine). A blocked command = park, never retry variants.
 - **Scope fence per night**, written into the queue: only pre-decided mechanical phases run.
 - **A report is a trigger, never a stopping point:** act on a lane completion within standing authority immediately; ending a turn on a status summary is the observed stall.
-- **Worker seats rotate at about 200K context:** commit, handoff, report, respawn. A well-shaped worker never nears 150K; hitting it is the defect signal. Rationale: `docs/TOKEN_ECONOMICS.md` section 3c (Cost inside a session grows without limit).
+- **No context cap on worker seats (Peter, 2026-10-14):** long, hard tasks stay in one seat; a seat is replaced only when it fails twice.
 - **Nudges are idempotent:** the lead either nudges or dispatches for a slice, never both.

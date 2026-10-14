@@ -47,11 +47,6 @@
       "file": ".claude/hooks/agent-worktree-isolation-guard.py"
     },
     {
-      "transition": "worker seats rotate at ~200K context",
-      "enforcement": "prompt",
-      "file": null
-    },
-    {
       "transition": "a lane's report is its final text turn, never a SendMessage",
       "enforcement": "prompt",
       "file": null
