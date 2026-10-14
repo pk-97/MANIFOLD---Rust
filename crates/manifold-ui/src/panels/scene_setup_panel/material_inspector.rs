@@ -893,7 +893,9 @@ impl ScenePanel {
     ) -> f32 {
         if row.is_group && row.material_inspector.is_none() {
             self.active_material_info = None;
-            cy = self.build_item_properties(tree, inner_x, inner_w, cy, PropertyRows::new(owned, ControlGroup::Transform));
+            // The row still goes in: its physics facts pick the body controls.
+            let rows = PropertyRows { object: Some(row), ..PropertyRows::new(owned, ControlGroup::Transform) };
+            cy = self.build_item_properties(tree, inner_x, inner_w, cy, rows);
             return self.build_object_physics_properties(tree, inner_x, inner_w, cy, row);
         }
         let modifier_ids: Vec<String> = match &self.state {

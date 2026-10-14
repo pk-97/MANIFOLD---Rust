@@ -778,6 +778,10 @@ pub struct SetGraphNodeParamCommand {
     /// redirect and its card-owned-write warning, which exist to catch
     /// LONE def writes that the render would stomp — not this.
     force_def_write: bool,
+    /// The param decides which rows exist (a body's `enabled` shows or hides
+    /// its controls), so the edit touches Effects as well as Values
+    /// (UI_INVALIDATION D21, D22). Set by the caller, which knows.
+    sets_rows: bool,
     /// Stable diagnostic when a calibrated source or raster scene guard
     /// rejects the write before any graph or card state is touched.
     rejection: Option<String>,
@@ -802,9 +806,16 @@ impl SetGraphNodeParamCommand {
             previous_value: None,
             card_redirect: None,
             force_def_write: false,
+            sets_rows: false,
             rejection: None,
             applied: false,
         }
+    }
+
+    /// The param decides which rows exist; see the field.
+    pub fn with_sets_rows(mut self) -> Self {
+        self.sets_rows = true;
+        self
     }
 
     /// Deliberate def write to a card-owned param — see the field. Caller
@@ -923,7 +934,11 @@ impl SetGraphNodeParamCommand {
 impl Command for SetGraphNodeParamCommand {
     fn touches(&self) -> manifold_core::change::ChangeSet {
         use manifold_core::change::{ChangeSet, Part};
-        ChangeSet::of(&[Part::Overrides, Part::Shapes, Part::Values])
+        if self.sets_rows {
+            ChangeSet::of(&[Part::Overrides, Part::Shapes, Part::Values, Part::Effects])
+        } else {
+            ChangeSet::of(&[Part::Overrides, Part::Shapes, Part::Values])
+        }
     }
     fn execute(&mut self, project: &mut Project) {
         self.rejection = None;

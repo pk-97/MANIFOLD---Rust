@@ -882,7 +882,7 @@ pub(super) fn dispatch_project(
                         target, physics.body_node_id, "enabled".into(),
                         manifold_core::effect_graph_def::SerializedParamValue::Bool { value: enabled },
                         default,
-                    ).with_scope(physics.body_scope_path))
+                    ).with_scope(physics.body_scope_path).with_sets_rows())
                 } else if enabled {
                     Box::new(manifold_editing::commands::graph::EnableSceneObjectPhysicsCommand::new(
                         target, *render_scene_node_id, *object_index,
@@ -1701,6 +1701,8 @@ mod tests {
                 panic!("toggle must send an undoable edit to content");
             };
             cmd.execute(&mut project);
+            assert!(cmd.touches().contains(manifold_core::change::Part::Effects),
+                "the toggle shows or hides the body rows, so the Scene tab re-projects");
             let current = body(&project);
             assert_eq!(current.enabled, enabled);
             assert_eq!(current.body_node_id, original.body_node_id);

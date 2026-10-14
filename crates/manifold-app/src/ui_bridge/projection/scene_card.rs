@@ -9,7 +9,7 @@
 //! param name: every per-type fact is a row of the scene table or an
 //! authored `scene` field.
 
-use manifold_core::effect_graph_def::EffectGraphDef;
+use manifold_core::effect_graph_def::{BindingTarget, EffectGraphDef};
 use manifold_core::effects::PresetInstance;
 use manifold_core::params::{Param, ParamOrigin};
 use manifold_core::scene_modifier_preset::SceneTargetSelection;
@@ -41,7 +41,8 @@ pub(super) fn scene_card_rows(rows: &mut Vec<ParamRow>, inst: &PresetInstance, d
         let owner_index = owner(row.id.as_ref());
         let item = owner_index.map(|index| &items[index]);
         let attached = row.is_attached();
-        let Some(place) = Placement::of(param, item, attached, user_added(param, def, row.id.as_ref())) else {
+        let id = row.id.as_ref();
+        let Some(place) = Placement::of(param, item, attached, user_added(param, def, id), modifier_bound(def, id)) else {
             continue;
         };
         if !attached && !row.value.exposed {
@@ -142,13 +143,16 @@ struct Placement {
 }
 
 impl Placement {
-    fn of(param: &Param, item: Option<&SceneItem>, attached: bool, user_added: bool) -> Option<Self> {
+    fn of(param: &Param, item: Option<&SceneItem>, attached: bool, user_added: bool, modifier_bound: bool) -> Option<Self> {
         let pin = param.choices.pin;
         let shown = attached || pin == Some(CardPin::Shown) || (user_added && pin != Some(CardPin::Removed));
         let Some(scene) = param.spec.scene else {
             // An authored control (composite macro, preset control on a
             // non-scene node) follows its card visibility, in the Scene band.
-            let on = shown || (param.spec.card_visible && pin != Some(CardPin::Removed));
+            // A scene modifier's control with no scene description already
+            // has its home on the modifier's own card; only recipes that
+            // author scene fields (the forces) also place rows here.
+            let on = shown || (!modifier_bound && param.spec.card_visible && pin != Some(CardPin::Removed));
             return on.then_some(Self { band: CardBand::Scene, card_order: 0, label: CardLabel::Param, gate: None });
         };
         let performance = scene.role == SurfaceRole::Performance && pin != Some(CardPin::Removed);
@@ -257,6 +261,15 @@ fn idle_forces(def: &EffectGraphDef, items: &[SceneItem]) -> Vec<manifold_core::
         })
         .map(|instance| instance.id.clone())
         .collect()
+}
+
+fn modifier_bound(def: &EffectGraphDef, id: &str) -> bool {
+    def.preset_metadata.as_ref().is_some_and(|meta| {
+        meta.bindings
+            .iter()
+            .find(|binding| binding.id == id)
+            .is_some_and(|binding| matches!(binding.target, BindingTarget::SceneModifier { .. }))
+    })
 }
 
 fn user_added(param: &Param, def: &EffectGraphDef, id: &str) -> bool {
@@ -758,5 +771,25 @@ mod tests {
             }
             assert!(checked > 0, "{scene}: no owned card rows");
         }
+    }
+
+    /// A non-force modifier's controls (Render Mode, Surface Waves) live on
+    /// the modifier's own card; the scene card shows them only when the user
+    /// attaches, pins or adds them.
+    #[test]
+    fn modifier_controls_without_scene_fields_stay_off_the_card() {
+        let param = Param::bundled(manifold_core::effect_graph_def::ParamSpecDef {
+            id: "mode".into(),
+            card_visible: true,
+            ..Default::default()
+        });
+        assert!(param.spec.scene.is_none());
+        assert!(Placement::of(&param, None, false, false, true).is_none());
+        assert!(Placement::of(&param, None, true, false, true).is_some(), "attached rows stay (D6)");
+        assert!(Placement::of(&param, None, false, true, true).is_some(), "user-added rows stay");
+        let mut pinned = param.clone();
+        pinned.choices.pin = Some(CardPin::Shown);
+        assert!(Placement::of(&pinned, None, false, false, true).is_some(), "Show on Card wins");
+        assert!(Placement::of(&param, None, false, false, false).is_some(), "authored controls keep card visibility");
     }
 }

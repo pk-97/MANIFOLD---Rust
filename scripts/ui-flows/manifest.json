@@ -126,7 +126,8 @@
     "scene-card-dof-switch",
     "scene-naming",
     "scene-pin-roundtrip",
-    "scene-card-to-tab"
+    "scene-card-to-tab",
+    "render-mode-solid"
   ],
   "crates/manifold-app/src/ui_bridge/projection/scene.rs": [
       "scene-setup-add-object",
@@ -339,69 +340,21 @@
     "scene-use-this-view": "gltfscene",
     "scene-light-swatch": "gltfscene",
     "work-editor-open": "paramsteps",
-    "work-editor-idle": "paramsteps"
+    "work-editor-idle": "paramsteps",
+    "scene-fluid-authoring": "fluidauthoring",
+    "scene-fluid-template": "fluidauthoring",
+    "scene-physics-controls": "physicsscene",
+    "scene-physics-duplicate-paused": "physicsscene",
+    "scene-imported-physics": "gltfscene",
+    "render-mode-solid": "gltfscene",
+    "render-mode-points": "gltfscene",
+    "render-mode-wireframe": "gltfscene",
+    "gltf-import-card-sections": "gltfscene",
+    "physics-box-count": "physicsboxes",
+    "audio-clip-trigger-add": "inspector",
+    "rt-dynamic-modifier": "mushroomscene"
   },
   "expected_fail": {
-    "render-mode-solid": {
-      "scene": "gltfscene",
-      "bug": "BUG-8a7uq",
-      "reason": "red on main: render-mode labels moved, flow not updated"
-    },
-    "render-mode-points": {
-      "scene": "gltfscene",
-      "bug": "BUG-8a7uq",
-      "reason": "red on main: render-mode labels moved, flow not updated"
-    },
-    "render-mode-wireframe": {
-      "scene": "gltfscene",
-      "bug": "BUG-8a7uq",
-      "reason": "red on main: render-mode labels moved, flow not updated"
-    },
-    "gltf-import-card-sections": {
-      "scene": "gltfscene",
-      "bug": "BUG-8a7uq",
-      "reason": "red on main"
-    },
-    "scene-imported-physics": {
-      "scene": "gltfscene",
-      "bug": "BUG-8a7uq",
-      "reason": "red on main"
-    },
-    "physics-box-count": {
-      "scene": "physicsboxes",
-      "bug": "BUG-t4hhr",
-      "reason": "red on main"
-    },
-    "audio-clip-trigger-add": {
-      "scene": "inspector",
-      "bug": "BUG-t4hhr",
-      "reason": "red on main"
-    },
-    "rt-dynamic-modifier": {
-      "scene": "mushroomscene",
-      "bug": "BUG-t4hhr",
-      "reason": "red on main"
-    },
-    "scene-fluid-authoring": {
-      "scene": "fluidauthoring",
-      "bug": "BUG-pmbd3.24",
-      "reason": "fluid flows hardcode node id 24; fluid body is now node 31"
-    },
-    "scene-fluid-template": {
-      "scene": "fluidauthoring",
-      "bug": "BUG-pmbd3.24",
-      "reason": "fluid flows hardcode node id 24; fluid body is now node 31"
-    },
-    "scene-physics-controls": {
-      "scene": "physicsscene",
-      "bug": "BUG-kpl2",
-      "reason": "two Reset rows; World no longer shows Gravity Y (BUG-pmbd3.22)"
-    },
-    "scene-physics-duplicate-paused": {
-      "scene": "physicsscene",
-      "bug": "BUG-pmbd3.23",
-      "reason": "duplicate names Ground_2, flow expects Ground 2"
-    }
   },
   "unresolved": {}
 }
