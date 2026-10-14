@@ -165,7 +165,7 @@ pub(crate) fn dispatch_mapping(action: &MappingAction, ctx: &mut super::super::D
                     }
                 });
             }
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
 
         MappingAction::AbletonMacroInvertToggle(slot_idx) => {
@@ -177,7 +177,7 @@ pub(crate) fn dispatch_mapping(action: &MappingAction, ctx: &mut super::super::D
                     m.inverted = !m.inverted;
                 }
             });
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
 
     }

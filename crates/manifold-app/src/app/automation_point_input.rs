@@ -6,7 +6,6 @@
 
 use manifold_core::effects::{AutomationPoint, ParamId};
 use manifold_core::{Beats, GraphTarget};
-use manifold_editing::command::Command;
 use manifold_editing::commands::automation::MoveAutomationPointCommand;
 use manifold_ui::view::UiGraphTarget;
 use manifold_ui::slider::BitmapSlider;
@@ -149,11 +148,8 @@ pub(crate) fn commit(app: &mut Application, field: TextInputField, text: &str) {
     if old_point.beat == new_point.beat && old_point.value == new_point.value {
         return;
     }
-    let mut command =
-        MoveAutomationPointCommand::new(graph_target, ctx.param_id.as_ref(), old_point, new_point);
-    command.execute(&mut app.local_project);
-    app.send_content_cmd(crate::content_command::ContentCommand::Execute(Box::new(
-        command,
+    app.execute_local(Box::new(MoveAutomationPointCommand::new(
+        graph_target, ctx.param_id.as_ref(), old_point, new_point,
     )));
     let new_value_norm = BitmapSlider::value_to_normalized(value, ctx.param_min, ctx.param_max);
     if field == TextInputField::AutomationPointTime || field == TextInputField::AutomationPointValue {
@@ -165,7 +161,6 @@ pub(crate) fn commit(app: &mut Application, field: TextInputField, text: &str) {
         });
         app.selection.selected_automation_points.clear();
     }
-    app.needs_structural_sync = true;
     app.ws.ui_root.mark_overlay_dirty();
 }
 

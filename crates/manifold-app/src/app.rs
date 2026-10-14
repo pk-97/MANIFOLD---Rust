@@ -817,6 +817,15 @@ impl Application {
         }
     }
 
+    /// An undoable edit from an app-level path (text commits): through
+    /// [`crate::ui_bridge::ProjectRef::execute`], which writes the local
+    /// project, stamps what the command touches and sends it (UI_INVALIDATION D5).
+    pub(crate) fn execute_local(&mut self, cmd: Box<dyn manifold_editing::command::Command>) {
+        if let Some(tx) = self.content_tx.as_ref() {
+            crate::ui_bridge::ProjectRef::new(&mut self.local_project, &mut self.ui_edits.stamps, tx).execute(cmd);
+        }
+    }
+
     /// The GPU device import-graph validation (`import_model_file`) builds
     /// its trial `PresetRuntime` against. IMPORT_RESPONSIVENESS_DESIGN.md
     /// D2/P2: never a fresh `GpuDevice` per import. Reuses the app's real
@@ -1201,10 +1210,7 @@ impl Application {
                         let cmd = manifold_editing::commands::layer::RenameLayerCommand::new(
                             layer_id, old_name, new_name,
                         );
-                        let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
-                            Box::new(cmd);
-                        boxed.execute(&mut self.local_project);
-                        self.send_content_cmd(ContentCommand::Execute(boxed));
+                        self.execute_local(Box::new(cmd));
                     }
                 }
                 self.needs_rebuild = true;
@@ -1250,10 +1256,7 @@ impl Application {
                             manifold_editing::commands::settings::RenameMacroLabelCommand::new(
                                 idx, old_label, new_label,
                             );
-                        let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
-                            Box::new(cmd);
-                        boxed.execute(&mut self.local_project);
-                        self.send_content_cmd(ContentCommand::Execute(boxed));
+                        self.execute_local(Box::new(cmd));
                     }
                 }
                 self.needs_rebuild = true;
@@ -1331,10 +1334,7 @@ impl Application {
                                 old_val,
                                 new_val,
                             );
-                        let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
-                            Box::new(cmd);
-                        boxed.execute(&mut self.local_project);
-                        self.send_content_cmd(ContentCommand::Execute(boxed));
+                        self.execute_local(Box::new(cmd));
                     }
                 }
                 self.needs_rebuild = true;
@@ -1372,10 +1372,7 @@ impl Application {
                                 old_val,
                                 new_val,
                             );
-                        let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
-                            Box::new(cmd);
-                        boxed.execute(&mut self.local_project);
-                        self.send_content_cmd(ContentCommand::Execute(boxed));
+                        self.execute_local(Box::new(cmd));
                     }
                 }
                 self.needs_rebuild = true;
@@ -1422,10 +1419,7 @@ impl Application {
                                 manifold_editing::commands::clip::SetClipStringParamCommand::new(
                                     clip_id, key, old_value, new_value,
                                 );
-                            let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
-                                Box::new(cmd);
-                            boxed.execute(&mut self.local_project);
-                            self.send_content_cmd(ContentCommand::Execute(boxed));
+                            self.execute_local(Box::new(cmd));
                         }
                     }
                 }
@@ -1481,10 +1475,7 @@ impl Application {
                             manifold_editing::commands::effect_groups::RenameGroupCommand::new(
                                 target, group_id, old_name, new_name,
                             );
-                        let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
-                            Box::new(cmd);
-                        boxed.execute(&mut self.local_project);
-                        self.send_content_cmd(ContentCommand::Execute(boxed));
+                        self.execute_local(Box::new(cmd));
                     }
                 }
                 self.needs_rebuild = true;
@@ -1510,10 +1501,7 @@ impl Application {
                         let cmd = manifold_editing::commands::marker::RenameMarkerCommand::new(
                             marker_id, old_name, new_name,
                         );
-                        let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
-                            Box::new(cmd);
-                        boxed.execute(&mut self.local_project);
-                        self.send_content_cmd(ContentCommand::Execute(boxed));
+                        self.execute_local(Box::new(cmd));
                     }
                 }
                 self.needs_rebuild = true;
@@ -1532,10 +1520,7 @@ impl Application {
                             manifold_editing::commands::audio_setup::RenameAudioSendCommand::new(
                                 send_id, old_label, new_label,
                             );
-                        let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
-                            Box::new(cmd);
-                        boxed.execute(&mut self.local_project);
-                        self.send_content_cmd(ContentCommand::Execute(boxed));
+                        self.execute_local(Box::new(cmd));
                     }
                 }
                 self.needs_rebuild = true;
@@ -1848,10 +1833,7 @@ impl Application {
                                     manifold_editing::commands::preset::SaveToProjectCommand::new(
                                         ctx.kind, def,
                                     );
-                                let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
-                                    Box::new(cmd);
-                                boxed.execute(&mut self.local_project);
-                                self.send_content_cmd(ContentCommand::Execute(boxed));
+                                self.execute_local(Box::new(cmd));
                             }
                         }
                     }
@@ -1884,10 +1866,7 @@ impl Application {
                                     ctx.id,
                                     typed.to_string(),
                                 );
-                                let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
-                                    Box::new(cmd);
-                                boxed.execute(&mut self.local_project);
-                                self.send_content_cmd(ContentCommand::Execute(boxed));
+                                self.execute_local(Box::new(cmd));
                             }
                             Source::Factory => {
                                 log::error!("[preset] rename requested for a Factory id — unreachable");

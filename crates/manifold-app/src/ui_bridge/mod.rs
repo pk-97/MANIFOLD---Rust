@@ -305,7 +305,7 @@ pub fn dispatch(action: &PanelAction, ctx: &mut DispatchCtx) -> DispatchResult {
                         kind: if item.is_light { crate::scene_item_transfer::SceneItemKind::Light } else { crate::scene_item_transfer::SceneItemKind::Object },
                     }));
                 }
-                DispatchResult::structural()
+                DispatchResult::handled()
             }
             RootAction::SceneItemRename | RootAction::SceneItemFrame => {
                 let action = if matches!(a, RootAction::SceneItemRename) {
@@ -900,5 +900,127 @@ mod d2_d3_tests {
             "a TimeRange selection must still dispatch today's region-duplicate mode"
         );
         assert!(!commands.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod command_site_plan_tests {
+    //! UI_INVALIDATION P4d batch a: a command site returns `handled()` and the
+    //! planner follows the stamps its write moved, one test per write kind.
+    use super::*;
+    use crate::content_command::ContentCommand;
+    use crate::frame_plan::{plan_frame, FrameInputs, Projection, UiStamps};
+    use manifold_core::change::PartStamps;
+    use manifold_ui::{LayerAction, ProjectAction};
+
+    /// Dispatch `action` against `project` with fresh stamps; the result, the
+    /// stamps it left and what it sent.
+    fn dispatch_stamped(
+        action: &PanelAction,
+        project: &mut Project,
+    ) -> (DispatchResult, UiStamps, Vec<ContentCommand>) {
+        let (content_tx, content_rx) = crossbeam_channel::unbounded();
+        let content_state = crate::content_state::ContentState::default();
+        let mut ui = UIRoot::new();
+        let mut selection = manifold_ui::UIState::new();
+        let mut active_layer = project.timeline.layers.first().map(|l| l.layer_id.clone());
+        let mut user_prefs = crate::user_prefs::UserPrefs::in_memory();
+        let mut scrub = ScrubState::default();
+        let mut stamps = UiStamps::default();
+        let result = dispatch(action, &mut DispatchCtx {
+            project: ProjectRef::new(project, &mut stamps, &content_tx),
+            content_tx: &content_tx,
+            content_state: &content_state,
+            ui: &mut ui,
+            selection: &mut selection,
+            active_layer: &mut active_layer,
+            user_prefs: &mut user_prefs,
+            editor_target: None,
+            scrub: &mut scrub,
+            dialogs: Default::default(),
+        });
+        (result, stamps, content_rx.try_iter().collect())
+    }
+
+    fn plan_after(stamps: &UiStamps) -> crate::frame_plan::FramePlan {
+        plan_frame(&FrameInputs::default(), &FrameInputs { parts: stamps.parts(), ..Default::default() })
+    }
+
+    #[test]
+    fn execute_site_projects_from_its_stamps() {
+        let mut project = Project::default();
+        project.timeline.add_layer_default();
+        let (result, stamps, sent) =
+            dispatch_stamped(&PanelAction::Layer(LayerAction::AddLayerClicked), &mut project);
+        assert!(!result.structural_change);
+        assert_eq!(project.timeline.layers.len(), 2, "executed locally");
+        assert!(matches!(sent.as_slice(), [ContentCommand::Execute(_)]));
+        let plan = plan_after(&stamps);
+        assert!(plan.projections.contains(Projection::ProjectSync));
+        assert!(plan.projections.contains(Projection::InspectorSync));
+    }
+
+    #[test]
+    fn mutate_site_projects_from_its_stamps() {
+        let mut project = Project::default();
+        project.timeline.add_layer_default();
+        let id = project.timeline.layers[0].layer_id.clone();
+        let collapsed = project.timeline.layers[0].is_collapsed;
+        let (result, stamps, sent) =
+            dispatch_stamped(&PanelAction::Layer(LayerAction::ChevronClicked(id)), &mut project);
+        assert!(!result.structural_change);
+        assert_ne!(project.timeline.layers[0].is_collapsed, collapsed, "written locally");
+        assert!(matches!(sent.as_slice(), [ContentCommand::MutateProject { .. }]));
+        let plan = plan_after(&stamps);
+        assert!(plan.projections.contains(Projection::ProjectSync));
+        assert!(plan.projections.contains(Projection::ClipPositions));
+    }
+
+    /// BUG-bo2mx (scene setup skin edits run against the UI snapshot): the
+    /// skin edit is content-owned. Dispatch leaves the UI project and stamps
+    /// untouched; the content receipt's stamps drive the projection.
+    #[test]
+    fn execute_on_content_site_waits_for_the_receipt() {
+        let mut project = Project::default();
+        let idx = project.timeline.add_layer(
+            "Scene",
+            manifold_core::types::LayerType::Generator,
+            manifold_core::PresetTypeId::from_string("Scene".to_string()),
+        );
+        let layer_id = project.timeline.layers[idx].layer_id.clone();
+        let before = serde_json::to_value(&project).unwrap();
+        for action in [
+            ProjectAction::SceneSetupSkinSourceSet {
+                layer_id: layer_id.clone(),
+                scope_path: Vec::new(),
+                scene_object_id: 1,
+                source_node_id: None,
+                target_map: manifold_ui::panels::scene_setup_panel::SkinTargetMap::Emissive,
+                source: None,
+            },
+            ProjectAction::SceneSetupSkinTargetMapSet {
+                layer_id: layer_id.clone(),
+                scope_path: Vec::new(),
+                scene_object_id: 1,
+                source_node_id: None,
+                target_map: manifold_ui::panels::scene_setup_panel::SkinTargetMap::BaseColor,
+            },
+        ] {
+            let (result, stamps, sent) = dispatch_stamped(&PanelAction::Project(action.clone()), &mut project);
+            assert!(!result.structural_change, "{action:?}");
+            assert_eq!(serde_json::to_value(&project).unwrap(), before, "{action:?}: UI snapshot untouched");
+            assert!(plan_after(&stamps).projections == Default::default(), "{action:?}: nothing to project yet");
+            let [ContentCommand::ExecuteOnContent(command)] = sent.as_slice() else {
+                panic!("{action:?}: expected one content-owned edit");
+            };
+            // The receipt: the content thread stamps what the command touches
+            // and the accepted snapshot folds those stamps in.
+            let mut content = PartStamps::default();
+            content.bump(command.touches());
+            let mut folded = stamps;
+            folded.fold_snapshot(&content);
+            let plan = plan_after(&folded);
+            assert!(plan.projections.contains(Projection::InspectorSync), "{action:?}");
+        }
     }
 }

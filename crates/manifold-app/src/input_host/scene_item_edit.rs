@@ -86,7 +86,6 @@ impl AppInputHost<'_> {
                 );
             }
         }
-        *self.needs_structural_sync = true;
         *self.needs_rebuild = true;
         true
     }
