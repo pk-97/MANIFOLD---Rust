@@ -102,7 +102,7 @@ pub(crate) fn dispatch_params(action: &ParamsAction, ctx: &mut super::super::Dis
             if crate::ui_bridge::projection::trigger_routing::response_uses_scene_panel(&ctx.project, &address, param_id.as_ref()) {
                 ctx.selection.pin_scope(InspectorTab::Scene);
             }
-            ctx.ui.pending_trigger_response_reveal = Some((target.clone(), param_id.clone()));
+            ctx.ui.request_trigger_response_reveal(target.clone(), param_id.clone());
             // Card/rack folding is presentation state, not an undo step; the
             // source and response stay intact.
             ctx.mutate(crate::content_command::touch::EFFECTS, move |project| {
@@ -137,7 +137,7 @@ pub(crate) fn dispatch_params(action: &ParamsAction, ctx: &mut super::super::Dis
             );
             if let manifold_ui::view::UiClipTriggerSource::Lane(id) = source {
                 expand_layer_ancestors(id, ctx);
-                ctx.ui.pending_layer_reveal = Some(id.clone());
+                ctx.ui.request_layer_reveal(id.clone());
             }
             ContentCommand::send(ctx.content_tx, ContentCommand::ExecuteOnContent(Box::new(command)));
             DispatchResult::handled()
@@ -1110,8 +1110,8 @@ fn reveal_in_scene_tab(
         return DispatchResult::handled();
     };
     ctx.selection.pin_scope(InspectorTab::Scene);
-    ctx.ui.pending_scene_reveal = Some((manifold_ui::view::UiGraphTarget::Generator(layer), params));
-    DispatchResult::structural()
+    ctx.ui.request_scene_reveal(manifold_ui::view::UiGraphTarget::Generator(layer), params);
+    DispatchResult::handled()
 }
 
 #[cfg(test)]
@@ -1163,10 +1163,10 @@ mod audio_send_dispatch_tests {
             "send-2".to_string(),
         ));
 
-        let result = {
-            let mut stamps = crate::frame_plan::UiStamps::default();
+        {
+            let mut edits = crate::gesture_preview::UiEdits::default();
             let mut ctx = crate::ui_bridge::DispatchCtx {
-                project: crate::ui_bridge::ProjectRef::new(&mut project, &mut stamps, &content_tx),
+                project: crate::ui_bridge::ProjectRef::new(&mut project, &mut edits, &content_tx),
                 content_tx: &content_tx,
                 content_state: &content_state,
                 ui: &mut ui,
@@ -1179,7 +1179,6 @@ mod audio_send_dispatch_tests {
             };
             crate::ui_bridge::dispatch(&action, &mut ctx)
         };
-        assert!(!result.structural_change, "the content receipt drives the projection");
 
         let command = match content_rx.try_recv().expect("selection queues a command") {
             crate::content_command::ContentCommand::ExecuteOnContent(command) => command,
@@ -1214,14 +1213,14 @@ mod view_fold_dispatch_tests {
         let mut active_layer = None;
         let mut user_prefs = crate::user_prefs::UserPrefs::in_memory();
         let mut scrub = crate::ui_bridge::ScrubState::default();
-        let mut stamps = crate::frame_plan::UiStamps::default();
+        let mut edits = crate::gesture_preview::UiEdits::default();
         let mut last = FrameInputs { inspector_view: ui.inspector.view_version(), ..Default::default() };
 
         for action in [ParamsAction::MacrosCollapseToggle, ParamsAction::MasterCollapseToggle, ParamsAction::SectionFoldToggled] {
             let was_collapsed = ui.inspector.macros_panel().is_collapsed();
-            let result = {
+            {
                 let mut ctx = crate::ui_bridge::DispatchCtx {
-                    project: crate::ui_bridge::ProjectRef::new(&mut project, &mut stamps, &content_tx),
+                    project: crate::ui_bridge::ProjectRef::new(&mut project, &mut edits, &content_tx),
                     content_tx: &content_tx,
                     content_state: &content_state,
                     ui: &mut ui,
@@ -1234,7 +1233,6 @@ mod view_fold_dispatch_tests {
                 };
                 crate::ui_bridge::dispatch(&PanelAction::Params(action.clone()), &mut ctx)
             };
-            assert!(!result.structural_change, "{action:?}");
             assert!(content_rx.try_recv().is_err(), "{action:?} sends nothing");
             if matches!(action, ParamsAction::MacrosCollapseToggle) {
                 assert_ne!(ui.inspector.macros_panel().is_collapsed(), was_collapsed);
@@ -1298,7 +1296,7 @@ mod trigger_dispatch_tests {
             UiClipTriggerSource::Lane(lane_id.clone()),
         ));
 
-        let result = crate::ui_bridge::dispatch(
+        crate::ui_bridge::dispatch(
             &action,
             &mut crate::ui_bridge::DispatchCtx {
                 project: crate::ui_bridge::ProjectRef::new(&mut project, &mut Default::default(), &content_tx),
@@ -1313,9 +1311,8 @@ mod trigger_dispatch_tests {
                 dialogs: Default::default(),
             },
         );
-        assert!(!result.structural_change, "snapshot projection waits for the content receipt");
         assert_eq!(serde_json::to_value(&project).unwrap(), before);
-        assert_eq!(ui.pending_layer_reveal.as_ref(), Some(&lane_id));
+        assert_eq!(ui.pending_layer_reveal(), Some(&lane_id));
         assert_eq!(active_layer, Some(project.timeline.layers[2].layer_id.clone()));
 
         let ContentCommand::ExecuteOnContent(command) = content_rx.try_recv().unwrap() else {
@@ -1354,7 +1351,7 @@ mod trigger_dispatch_tests {
         let mut user_prefs = crate::user_prefs::UserPrefs::in_memory();
         let mut scrub = crate::ui_bridge::ScrubState::default();
         let ui_target = crate::editing_host::to_ui_graph_target(&target);
-        let result = crate::ui_bridge::dispatch(
+        crate::ui_bridge::dispatch(
             &PanelAction::Params(ParamsAction::ShowClipTriggerResponse(ui_target.clone(), "amount".into())),
             &mut crate::ui_bridge::DispatchCtx {
                 project: crate::ui_bridge::ProjectRef::new(&mut project, &mut Default::default(), &content_tx), content_tx: &content_tx, content_state: &content_state,
@@ -1362,10 +1359,9 @@ mod trigger_dispatch_tests {
                 user_prefs: &mut user_prefs, editor_target: None, scrub: &mut scrub, dialogs: Default::default(),
             },
         );
-        assert!(!result.structural_change, "the Effects stamp drives the projection");
         assert_eq!(active_layer, Some(owner_id.clone()));
         assert_eq!(selection.primary_selected_layer_id(), Some(&owner_id));
-        assert_eq!(ui.pending_trigger_response_reveal, Some((ui_target, "amount".into())));
+        assert_eq!(ui.pending_trigger_response_reveal(), Some(&(ui_target, "amount".into())));
         // The card expands locally, and the content thread gets the same write.
         assert!(!project.graph_target_owner(&target).unwrap().collapsed);
         for command in content_rx.try_iter() {
@@ -1401,7 +1397,7 @@ mod trigger_dispatch_tests {
             )),
         });
 
-        let result = crate::ui_bridge::dispatch(
+        crate::ui_bridge::dispatch(
             &action,
             &mut crate::ui_bridge::DispatchCtx {
                 project: crate::ui_bridge::ProjectRef::new(&mut project, &mut Default::default(), &content_tx),
@@ -1416,7 +1412,6 @@ mod trigger_dispatch_tests {
                 dialogs: Default::default(),
             },
         );
-        assert!(!result.structural_change, "snapshot projection waits for the content receipt");
         // The parent expands locally (a stamped presentation write); the lane
         // itself waits for the content receipt.
         assert!(!project.timeline.layers[0].is_collapsed);
@@ -1480,5 +1475,72 @@ mod automation_owner_tests {
             modifier_id: "m".into(),
         };
         assert_eq!(automation_owner_layer_id(&project, &modifier), None);
+    }
+}
+
+#[cfg(test)]
+mod reveal_dispatch_tests {
+    use crate::frame_plan::{plan_frame, FrameInputs, MainRegion, Projection};
+    use manifold_core::types::LayerType;
+    use manifold_core::PresetTypeId;
+    use manifold_ui::{InspectorTab, PanelAction, ParamsAction};
+
+    /// Show in Scene tab with the inspector already pinned to Scene: the pin
+    /// moves nothing, so the reveal's own version is what runs the inspector
+    /// projection that takes it. Asking again while it is pending moves
+    /// nothing.
+    #[test]
+    fn scene_reveal_moves_its_version_when_the_tab_is_already_pinned() {
+        let mut project = manifold_core::project::Project::default();
+        let idx = project.timeline.add_layer("Scene", LayerType::Generator, PresetTypeId::NONE);
+        let layer_id = project.timeline.layers[idx].layer_id.clone();
+        let (content_tx, content_rx) = crossbeam_channel::unbounded();
+        let content_state = crate::content_state::ContentState::default();
+        let mut ui = crate::ui_root::UIRoot::new();
+        let mut selection = manifold_ui::UIState::new();
+        selection.pin_scope(InspectorTab::Scene);
+        let mut active_layer = Some(layer_id.clone());
+        let mut user_prefs = crate::user_prefs::UserPrefs::in_memory();
+        let mut scrub = crate::ui_bridge::ScrubState::default();
+        let mut edits = crate::gesture_preview::UiEdits::default();
+        let inputs = |ui: &crate::ui_root::UIRoot, selection: &manifold_ui::UIState| FrameInputs {
+            inspector_reveal: ui.inspector_reveal_version(),
+            selection_identity: selection.selection_identity_version(),
+            ..Default::default()
+        };
+        let action = PanelAction::Params(ParamsAction::RevealInSceneTab(
+            manifold_ui::GraphParamTarget::GeneratorOf(layer_id.clone()),
+            "amount".into(),
+        ));
+        let mut last = inputs(&ui, &selection);
+        for pass in 0..2 {
+            {
+                let mut ctx = crate::ui_bridge::DispatchCtx {
+                    project: crate::ui_bridge::ProjectRef::new(&mut project, &mut edits, &content_tx),
+                    content_tx: &content_tx,
+                    content_state: &content_state,
+                    ui: &mut ui,
+                    selection: &mut selection,
+                    active_layer: &mut active_layer,
+                    user_prefs: &mut user_prefs,
+                    editor_target: None,
+                    scrub: &mut scrub,
+                    dialogs: Default::default(),
+                };
+                crate::ui_bridge::dispatch(&action, &mut ctx);
+            }
+            assert!(content_rx.try_recv().is_err(), "a reveal sends nothing");
+            let next = inputs(&ui, &selection);
+            assert_eq!(next.selection_identity, last.selection_identity, "already pinned to Scene");
+            let plan = plan_frame(&last, &next);
+            if pass == 0 {
+                assert!(plan.projections.contains(Projection::InspectorSync));
+                assert!(plan.rebuild.contains(MainRegion::Inspector));
+                assert!(!plan.projections.contains(Projection::ProjectSync));
+            } else {
+                assert!(plan.is_empty(), "the same reveal still pending moves nothing");
+            }
+            last = next;
+        }
     }
 }

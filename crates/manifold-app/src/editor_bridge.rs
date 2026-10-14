@@ -1078,15 +1078,14 @@ impl Application {
             .local_project
             .preset_instance(&target)
             .is_some_and(|inst| inst.graph.is_none());
-        build_mapping_command(&target, param_id, edit.clone(), seed_def.clone())
-            .execute(&mut self.local_project);
+        let Some(tx) = self.content_tx.as_ref() else { return; };
         let pid = param_id.to_string();
-        self.send_content_cmd(ContentCommand::mutate(
+        crate::ui_bridge::ProjectRef::new(&mut self.local_project, &mut self.ui_edits, tx).mutate(
             crate::content_command::touch::shapes_first_move(graph_absent),
-            Box::new(move |p| {
+            move |p| {
                 build_mapping_command(&target, &pid, edit, seed_def).execute(p);
-            }),
-        ));
+            },
+        );
     }
 
     /// Commit / single-shot: send the reshape edit as one undoable command.

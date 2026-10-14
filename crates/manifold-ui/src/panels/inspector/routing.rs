@@ -31,13 +31,31 @@ impl InspectorCompositePanel {
         }
     }
 
+    /// Select exactly `ids` on `tab` and queue a reveal of the first. The
+    /// selected cards and the reveal show at the next inspector build, so the
+    /// view version moves, but only when the selection or the reveal changed.
     pub fn select_effect_ids(&mut self, tab: InspectorTab, ids: &[EffectId]) {
+        let reveal = ids.first().cloned().map(|id| (id, None));
+        let wanted: HashSet<EffectId> = ids.iter().cloned().collect();
+        let (shown, other) = if Self::scope_idx(tab) == Self::SCOPE_MASTER {
+            (&self.selected_master_ids, &self.selected_layer_ids)
+        } else {
+            (&self.selected_layer_ids, &self.selected_master_ids)
+        };
+        let unchanged = *shown == wanted
+            && other.is_empty()
+            && self.selected_modifier_ids.is_empty()
+            && self.last_effect_tab == tab
+            && self.pending_reveal == reveal;
         self.selected_master_ids.clear();
         self.selected_layer_ids.clear();
         self.selected_modifier_ids.clear();
         self.selection_set_mut(tab).extend(ids.iter().cloned());
         self.last_effect_tab = tab;
-        self.pending_reveal = ids.first().cloned().map(|id| (id, None));
+        self.pending_reveal = reveal;
+        if !unchanged {
+            self.view_version += 1;
+        }
     }
 
     /// Open the existing response drawer of the card routing this trigger

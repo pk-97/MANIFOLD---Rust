@@ -247,9 +247,9 @@ mod view_move_dispatch_tests {
             (TransportAction::ZoomOut, false, true),
         ];
         for (action, scroll, zoom) in cases {
-            let result = {
+            {
                 let mut ctx = crate::ui_bridge::DispatchCtx {
-                    project: crate::ui_bridge::ProjectRef::new(&mut project, &mut edits.stamps, &content_tx),
+                    project: crate::ui_bridge::ProjectRef::new(&mut project, &mut edits, &content_tx),
                     content_tx: &content_tx,
                     content_state: &content_state,
                     ui: &mut ui,
@@ -262,7 +262,6 @@ mod view_move_dispatch_tests {
                 };
                 crate::ui_bridge::dispatch(&PanelAction::Transport(action.clone()), &mut ctx)
             };
-            assert!(!result.structural_change, "{action:?}");
             assert!(content_rx.try_recv().is_err(), "{action:?} sends nothing");
             let next = inputs(&mut planner, &ui, &mut selection, &project, &edits);
             let plan = planner.plan(next);

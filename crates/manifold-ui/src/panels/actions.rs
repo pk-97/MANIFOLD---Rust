@@ -908,10 +908,9 @@ pub enum RootAction {
     /// Opened from the Settings popup; a floating overlay, not a dock.
     OpenRtQuality,
     /// Scene Setup outliner selection moved (D1 of SCENE_PANEL_UX_DESIGN.md).
-    /// The panel has already updated its UI-local selection; this action's
-    /// only job is to ride the dispatch loop back as `structural_change:
-    /// true` so `sync_inspector_data` rebuilds the panel this same frame —
-    /// same-frame Properties update, no polling, no per-frame rebuild.
+    /// The panel has already updated its UI-local selection and moved its
+    /// selection version, which re-runs `sync_inspector_data` this same
+    /// frame — same-frame Properties update, no polling, no per-frame rebuild.
     /// Payload: the layer whose selection moved (the panel key) — the
     /// selection itself stays panel-internal (D7 of SCENE_SETUP_PANEL).
     SceneSetupSelectionChanged(LayerId),

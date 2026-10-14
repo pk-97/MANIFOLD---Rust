@@ -52,8 +52,6 @@ use crate::ui_root::UIRoot;
 
 /// Result of dispatching a panel action.
 pub struct DispatchResult {
-    /// True if the action changed project structure (needs sync_project_data).
-    pub structural_change: bool,
     /// Set by the `SaveToLibrary`/`SaveToProject` card-menu actions
     /// (PRESET_LIBRARY_DESIGN D4, P3): the resolved kind + current effective
     /// definition + destination, for the caller to open the shared
@@ -83,14 +81,6 @@ pub struct DispatchResult {
 impl DispatchResult {
     pub(crate) fn handled() -> Self {
         Self {
-            structural_change: false,
-            begin_save_preset: None,
-            begin_rename_preset: None,
-        }
-    }
-    pub(crate) fn structural() -> Self {
-        Self {
-            structural_change: true,
             begin_save_preset: None,
             begin_rename_preset: None,
         }
@@ -99,7 +89,6 @@ impl DispatchResult {
     /// documentation for unclaimed variants — identical to `handled()`.
     pub(crate) fn unhandled() -> Self {
         Self {
-            structural_change: false,
             begin_save_preset: None,
             begin_rename_preset: None,
         }
@@ -721,7 +710,7 @@ pub(crate) fn led_exit_path_label(
 pub use state_sync::{
     LiveGroups, TransportDisplayCache, check_auto_scroll, drain_events, push_chrome, push_frame, push_live, push_selection,
     sync_automation_lane_geometry,
-    sync_card_values, sync_clip_positions, sync_driver_readouts,
+    sync_card_values, sync_clip_positions, sync_driver_readouts, sync_markers,
     sync_scene_row_values,
     sync_audio_dock, sync_inspector_data, sync_project_data,
 };
@@ -926,9 +915,9 @@ mod command_site_plan_tests {
         let mut active_layer = project.timeline.layers.first().map(|l| l.layer_id.clone());
         let mut user_prefs = crate::user_prefs::UserPrefs::in_memory();
         let mut scrub = ScrubState::default();
-        let mut stamps = UiStamps::default();
+        let mut edits = crate::gesture_preview::UiEdits::default();
         let result = dispatch(action, &mut DispatchCtx {
-            project: ProjectRef::new(project, &mut stamps, &content_tx),
+            project: ProjectRef::new(project, &mut edits, &content_tx),
             content_tx: &content_tx,
             content_state: &content_state,
             ui: &mut ui,
@@ -939,7 +928,7 @@ mod command_site_plan_tests {
             scrub: &mut scrub,
             dialogs: Default::default(),
         });
-        (result, stamps, content_rx.try_iter().collect())
+        (result, edits.stamps, content_rx.try_iter().collect())
     }
 
     fn plan_after(stamps: &UiStamps) -> crate::frame_plan::FramePlan {
@@ -950,9 +939,8 @@ mod command_site_plan_tests {
     fn execute_site_projects_from_its_stamps() {
         let mut project = Project::default();
         project.timeline.add_layer_default();
-        let (result, stamps, sent) =
+        let (_, stamps, sent) =
             dispatch_stamped(&PanelAction::Layer(LayerAction::AddLayerClicked), &mut project);
-        assert!(!result.structural_change);
         assert_eq!(project.timeline.layers.len(), 2, "executed locally");
         assert!(matches!(sent.as_slice(), [ContentCommand::Execute(_)]));
         let plan = plan_after(&stamps);
@@ -966,9 +954,8 @@ mod command_site_plan_tests {
         project.timeline.add_layer_default();
         let id = project.timeline.layers[0].layer_id.clone();
         let collapsed = project.timeline.layers[0].is_collapsed;
-        let (result, stamps, sent) =
+        let (_, stamps, sent) =
             dispatch_stamped(&PanelAction::Layer(LayerAction::ChevronClicked(id)), &mut project);
-        assert!(!result.structural_change);
         assert_ne!(project.timeline.layers[0].is_collapsed, collapsed, "written locally");
         assert!(matches!(sent.as_slice(), [ContentCommand::MutateProject { .. }]));
         let plan = plan_after(&stamps);
@@ -1006,8 +993,7 @@ mod command_site_plan_tests {
                 target_map: manifold_ui::panels::scene_setup_panel::SkinTargetMap::BaseColor,
             },
         ] {
-            let (result, stamps, sent) = dispatch_stamped(&PanelAction::Project(action.clone()), &mut project);
-            assert!(!result.structural_change, "{action:?}");
+            let (_, stamps, sent) = dispatch_stamped(&PanelAction::Project(action.clone()), &mut project);
             assert_eq!(serde_json::to_value(&project).unwrap(), before, "{action:?}: UI snapshot untouched");
             assert!(plan_after(&stamps).projections == Default::default(), "{action:?}: nothing to project yet");
             let [ContentCommand::ExecuteOnContent(command)] = sent.as_slice() else {

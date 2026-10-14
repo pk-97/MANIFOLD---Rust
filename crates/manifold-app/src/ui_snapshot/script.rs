@@ -300,9 +300,9 @@ fn run_flow(
         crate::frame_plan::ChromeSource { project: &data.project, is_dirty: false, project_path: None, automation_draw_mode },
     );
     runner.planner.plan(seed);
-    // The App's first frame after a load is a structural one; `sync_build`
-    // is the fixture's build, not that frame, so run it once here.
-    runner.flags.structural = true;
+    // The App's first frame after a load moves every part; `sync_build` is
+    // the fixture's build, not that frame, so run it once here.
+    runner.edits.stamps.project_replaced();
     runner.live_frame(&mut ui, &mut data, &mut render, false, true);
     let mut results = Vec::with_capacity(actions.len());
     let mut ok = true;
@@ -467,6 +467,9 @@ struct Runner {
     /// Commands recorded at the end of a frame: the App sees them as a new
     /// snapshot next frame.
     echo_pending: bool,
+    /// `AssertFresh` asked for its reference frame: the next frame runs every
+    /// projection (D10). Test oracle only; the App has no such input.
+    fresh_reference: bool,
     edits: crate::gesture_preview::UiEdits,
     // BUG-198: the harness had no undo stack at all — commands executed
     // straight against `data.project` via `AppEditingHost`/`ui_bridge` and
@@ -544,6 +547,7 @@ impl Runner {
             content_stamps: Default::default(),
             transport_cache: crate::ui_bridge::TransportDisplayCache::new(),
             echo_pending: false,
+            fresh_reference: false,
             edits: Default::default(),
             undo: UndoRedoManager::new(),
             clock: 0.0,
@@ -649,7 +653,7 @@ impl Runner {
                     Ok(project) => {
                         data.project = project;
                         self.undo = UndoRedoManager::new();
-                        self.flags.structural = true;
+                        self.edits.stamps.project_replaced();
                         self.live_frame(ui, data, render, false, true);
                         StepResult { index, action: action_desc, status: "ok",
                             detail: "saved and reloaded through project IO".into(), artifact: Some(path.display().to_string()) }
@@ -670,13 +674,12 @@ impl Runner {
                 // of falling through, mirroring the `Text` arm's fail.
                 // Plain unmodified keys keep the existing `key_event` path.
                 if modifiers.is_command_only() && *key == Key::Z {
+                    // As `EditingService::undo`: the undone command's parts.
+                    let touches = self.undo.peek_undo_touches();
                     let undone = self.undo.undo(&mut data.project);
-                    self.content_stamps.bump(manifold_core::change::ChangeSet::ALL);
-                    // Undo can add/remove nodes, layers, clips — always
-                    // force a structural resync rather than guessing per
-                    // command (same conservative call `commit_command_batch`
-                    // makes for a completed drag).
-                    self.flags.structural = true;
+                    if undone {
+                        self.content_stamps.bump(touches);
+                    }
                     self.live_frame(ui, data, render, false, true);
                     StepResult {
                         index,
@@ -686,9 +689,11 @@ impl Runner {
                         artifact: None,
                     }
                 } else if modifiers.is_command_shift() && *key == Key::Z {
+                    let touches = self.undo.peek_redo_touches();
                     let redone = self.undo.redo(&mut data.project);
-                    self.content_stamps.bump(manifold_core::change::ChangeSet::ALL);
-                    self.flags.structural = true;
+                    if redone {
+                        self.content_stamps.bump(touches);
+                    }
                     self.live_frame(ui, data, render, false, true);
                     StepResult {
                         index,
@@ -856,7 +861,6 @@ impl Runner {
             &mut self.cursor_manager,
             &mut self.active_layer,
             &mut self.flags.rebuild,
-            &mut self.flags.structural,
             &mut self.flags.automation_lanes,
             &mut self.flags.scroll,
             &mut self.flags.invalidated_layers,
@@ -866,20 +870,19 @@ impl Runner {
     }
 
     /// Drain and record what the step sent (see `record_executed_commands`);
-    /// when that changed the project, apply the selection update and ask for a
-    /// structural sync. True when it did.
+    /// when that changed the project, apply the selection update; the commands
+    /// bumped `content_stamps`, which the next frame folds. True when it did.
     fn absorb_commands(&mut self, ui: &mut UIRoot, data: &mut SceneData) -> bool {
         if !self.record_executed_commands(data) {
             return false;
         }
         crate::edit_selection::apply_update(ui, &data.project, data.content.edit_selection_update.as_deref(), &mut data.selection, &mut self.active_layer);
         data.active = self.active_layer.as_ref().and_then(|id| data.project.timeline.find_layer_index_by_id(id));
-        self.flags.structural = true;
         true
     }
 
     /// One UI frame in the live App's order (`app_render.rs` `tick_and_render`):
-    /// consume the deferred structural flag, then `ui_frame::apply_frame_plan`
+    /// fold the content echo, plan, then `ui_frame::apply_frame_plan`
     /// (the same function the App calls), then the tween polls and the CPU half
     /// of the grid and overview repaints. No forced zoom. With `settle_tweens`
     /// a tween settles in the frame after it starts, as under reduced motion,
@@ -911,11 +914,11 @@ impl Runner {
                 automation_draw_mode,
             },
         );
-        let plan = self.planner.plan(inputs);
-        let changes = crate::ui_frame::ProjectionChanges {
-            structural: std::mem::take(&mut self.flags.structural),
-            scrolled_in_place,
-        };
+        let mut plan = self.planner.plan(inputs);
+        if std::mem::take(&mut self.fresh_reference) {
+            plan = plan.with_every_projection();
+        }
+        let changes = crate::ui_frame::ProjectionChanges { scrolled_in_place };
         let overlay = &self.overlay;
         crate::ui_frame::apply_frame_plan(
             ui,
@@ -1004,10 +1007,16 @@ impl Runner {
             let surfaces: Vec<&dyn HitTargets> = vec![&clip_targets, &automation_targets];
             super::dump::dump_tree_ex(&ui.tree, &surfaces)
         };
+        // A tween the last frame started (the value-change flash after an
+        // undo) settles in the next frame; compare settled frames only.
+        if ui.inspector.skip_to_settled(&mut ui.tree) | ui.scene_setup_panel.skip_cards_to_settled(&mut ui.tree) {
+            self.flags.rebuild = true;
+            self.live_frame(ui, data, render, false, true);
+        }
         let tree_before = surfaces_dump(self, ui);
         let immediate_before = self.immediate_inputs(ui, data);
 
-        self.flags.structural = true;
+        self.fresh_reference = true;
         self.flags.rebuild = true;
         self.live_frame(ui, data, render, false, true);
 
@@ -1681,7 +1690,6 @@ impl Runner {
             &mut self.cursor_manager,
             &mut self.active_layer,
             &mut self.flags.rebuild,
-            &mut self.flags.structural,
             &mut self.flags.automation_lanes,
             &mut self.flags.scroll,
             &mut self.flags.invalidated_layers,
@@ -1791,9 +1799,7 @@ impl Runner {
             // editor's viewport; here the runner's viewport stands in.
             if let PanelAction::Root(manifold_ui::RootAction::SceneSetupCopyViewportCamera(layer)) = action {
                 let view = self.viewport.as_ref().filter(|(shown, _)| shown == layer).map(|(_, camera)| *camera);
-                if crate::scene_view_copy::run(&mut data.project, &self.content_tx, ui, &mut self.edits.stamps, layer, view.as_ref()) {
-                    self.flags.structural = true;
-                }
+                crate::scene_view_copy::run(&mut data.project, &self.content_tx, ui, &mut self.edits.stamps, layer, view.as_ref());
                 continue;
             }
             if let PanelAction::Params(manifold_ui::ParamsAction::EditCards(edit)) = action {
@@ -1811,7 +1817,7 @@ impl Runner {
                     &mut data.selection,
                     &mut self.active_layer,
                     &mut self.flags,
-                    &mut self.edits.stamps,
+                    &mut self.edits,
                     &mut scratch,
                     &mut project_io,
                     #[cfg(target_os = "macos")]
@@ -1860,7 +1866,7 @@ impl Runner {
                 continue;
             }
             let mut dctx = crate::ui_bridge::DispatchCtx {
-                project: crate::ui_bridge::ProjectRef::new(&mut data.project, &mut self.edits.stamps, &self.content_tx),
+                project: crate::ui_bridge::ProjectRef::new(&mut data.project, &mut self.edits, &self.content_tx),
                 content_tx: &self.content_tx,
                 content_state: &self.content_state,
                 ui: &mut *ui,
@@ -1871,11 +1877,8 @@ impl Runner {
                 scrub: &mut self.scrub,
                 dialogs: Default::default(),
             };
-            let result = crate::ui_bridge::dispatch(action, &mut dctx);
-            println!("ui-snap --script: dispatched {action:?} (structural={})", result.structural_change);
-            if result.structural_change {
-                self.flags.structural = true;
-            }
+            crate::ui_bridge::dispatch(action, &mut dctx);
+            println!("ui-snap --script: dispatched {action:?}");
             // The fixture's active-layer INDEX feeds `sync_build`'s inspector
             // sync; derive it from the id the real bridge maintains (the old
             // mirrored arm set it directly).
