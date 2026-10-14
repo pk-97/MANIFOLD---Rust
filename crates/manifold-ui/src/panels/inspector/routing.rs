@@ -40,11 +40,13 @@ impl InspectorCompositePanel {
         self.pending_reveal = ids.first().cloned().map(|id| (id, None));
     }
 
-    /// Open the existing response drawer and reuse the inspector's reveal path.
-    pub fn reveal_clip_response(&mut self, target: &crate::view::UiGraphTarget, param: &manifold_foundation::ParamId) -> bool {
+    /// Open the existing response drawer of the card routing this trigger
+    /// and reuse the inspector's reveal path.
+    pub fn reveal_trigger_response(&mut self, target: &crate::view::UiGraphTarget, param: &manifold_foundation::ParamId) -> bool {
         let id = self.effects[Self::SCOPE_LAYER].iter_mut()
             .chain(self.gen_params.iter_mut()).chain(self.modifier_cards.iter_mut())
-            .find_map(|card| card.reveal_clip_response(target, param).then(|| card.effect_id().clone()));
+            .find(|card| card.routes_clip_trigger(target, param))
+            .and_then(|card| card.reveal_param(param).then(|| card.effect_id().clone()));
         let Some(id) = id else { return false; };
         for group in &mut self.rack_groups[Self::SCOPE_LAYER] {
             if group.member_ids.contains(&id) { group.collapsed = false; }

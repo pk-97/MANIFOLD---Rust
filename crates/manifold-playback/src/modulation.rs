@@ -4354,9 +4354,7 @@ mod tests {
         let mut project = project_with(layer);
         let layer_id = project.timeline.layers[0].layer_id.clone();
 
-        // The exact command the scene panel's mod button dispatches
-        // (`PanelAction::SceneSetupExposeParam`'s app-side handler,
-        // `ui_bridge/project.rs`).
+        // The graph editor's expose command on a scene material param.
         let mut cmd = ToggleNodeParamExposeCommand::new(
             GraphTarget::Generator(layer_id),
             NodeId::new("mat_0"),
