@@ -8,7 +8,7 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use manifold_core::{Beats, Bpm, Seconds};
+use manifold_core::Seconds;
 
 /// A frame's beat is taken this many frames after its time, so an edge that
 /// sits exactly on a frame always counts as reached on that frame (D14).
@@ -434,47 +434,6 @@ impl TransportClock {
     /// The smoothed drift that triggered `last_correction`; zero when it is None.
     pub fn last_correction_drift(&self) -> Seconds {
         Seconds(self.lock.last_drift * self.step)
-    }
-}
-
-/// The beat under CLK or Link authority: Ableton's live tempo from an anchor
-/// (D8). The anchor is a time, not a frame index, so an fps change or the
-/// export grid cannot move the beat. Callers pass grid times, so the beat is
-/// still a function of the index.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct LiveTempo {
-    anchor_time: f64,
-    anchor_beat: f64,
-    bpm: f64,
-}
-
-/// Same clamp as the tempo map's conversions.
-fn live_bpm(bpm: Bpm) -> f64 {
-    f64::from(bpm.0.clamp(20.0, 300.0))
-}
-
-impl LiveTempo {
-    pub fn new(anchor_time: Seconds, anchor_beat: Beats, bpm: Bpm) -> Self {
-        Self { anchor_time: anchor_time.0, anchor_beat: anchor_beat.0, bpm: live_bpm(bpm) }
-    }
-
-    pub fn bpm(&self) -> Bpm {
-        Bpm(self.bpm as f32)
-    }
-
-    pub fn beat_at(&self, t: Seconds) -> Beats {
-        Beats(self.anchor_beat + (t.0 - self.anchor_time) * self.bpm / 60.0)
-    }
-
-    pub fn time_at(&self, beat: Beats) -> Seconds {
-        Seconds(self.anchor_time + (beat.0 - self.anchor_beat) * 60.0 / self.bpm)
-    }
-
-    /// Re-anchor at `at` with a new tempo, keeping the beat continuous there.
-    pub fn reanchor(&mut self, at: Seconds, bpm: Bpm) {
-        self.anchor_beat = self.beat_at(at).0;
-        self.anchor_time = at.0;
-        self.bpm = live_bpm(bpm);
     }
 }
 

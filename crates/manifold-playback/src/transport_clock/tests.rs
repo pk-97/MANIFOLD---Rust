@@ -1,4 +1,5 @@
 use super::*;
+use manifold_core::{Beats, Bpm};
 use manifold_core::tempo::{TempoMap, TempoMapConverter};
 use manifold_core::types::TempoPointSource;
 
@@ -856,42 +857,4 @@ fn projected_sources_hold_phase() {
             }
         }
     }
-}
-
-// ── D8: live tempo ───────────────────────────────────────────────────────────
-
-#[test]
-fn live_tempo_is_absolute_and_continuous() {
-    let clock = TransportClock::new(60.0);
-    let mut tempo = LiveTempo::new(clock.time_at(120), Beats(4.0), Bpm(120.0));
-    let at = |tempo: &LiveTempo, index: i64| tempo.beat_at(clock.time_at(index)).0;
-    assert_eq!(at(&tempo, 120), 4.0);
-    assert!((at(&tempo, 150) - 5.0).abs() < 1e-12, "30 frames at 120 BPM is one beat");
-    assert!((tempo.time_at(Beats(5.0)).0 - clock.time_at(150).0).abs() < 1e-12);
-
-    // A ramp: re-anchor every 15 frames, BPM up 0.5 each time. The beat never jumps.
-    let mut index = 150;
-    for i in 0..64 {
-        let before = at(&tempo, index);
-        tempo.reanchor(clock.time_at(index), Bpm(120.0 + 0.5 * i as f32));
-        assert_eq!(at(&tempo, index).to_bits(), before.to_bits(), "continuous at {index}");
-        index += 15;
-    }
-    assert!(at(&tempo, index) > at(&tempo, index - 1));
-}
-
-/// The segment is anchored on a time, so moving to another grid keeps the beat.
-#[test]
-fn live_tempo_survives_grid_changes() {
-    let mut clock = playing_clock(60.0);
-    let tempo = LiveTempo::new(clock.time_at(600), Beats(20.0), Bpm(120.0));
-    clock.advance(1_200);
-    let before = tempo.beat_at(clock.time()).0;
-    assert!((before - 40.0).abs() < 1e-9, "20 s at 120 BPM from beat 20 at 10 s, got {before}");
-    clock.set_fps(30.0);
-    assert!((tempo.beat_at(clock.time()).0 - before).abs() < 1e-9, "fps change moved the beat");
-    clock.begin_export(24.0);
-    assert!((tempo.beat_at(clock.time()).0 - before).abs() < 1e-9, "export grid moved the beat");
-    clock.end_export(60.0);
-    assert!((tempo.beat_at(clock.time()).0 - before).abs() < 1e-9, "end of export moved the beat");
 }

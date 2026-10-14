@@ -9,6 +9,7 @@ pub mod audio_warp;
 pub mod clip_launcher;
 pub mod clip_controls;
 pub mod engine;
+pub mod external_follow;
 pub mod link_sync;
 pub mod live_clip_manager;
 pub mod live_trigger;
