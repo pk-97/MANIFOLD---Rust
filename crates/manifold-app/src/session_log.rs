@@ -41,7 +41,7 @@ impl Write for TeeWriter {
     }
 }
 
-fn log_dir() -> Option<std::path::PathBuf> {
+pub(crate) fn log_dir() -> Option<std::path::PathBuf> {
     match std::env::var_os("HOME") {
         Some(home) => {
             Some(std::path::PathBuf::from(home).join("Library/Logs/com.latentspace.manifold"))
@@ -57,6 +57,11 @@ fn log_dir() -> Option<std::path::PathBuf> {
 }
 
 fn prune(dir: &std::path::Path) {
+    prune_prefix(dir, "session-", SESSION_LOGS_KEPT);
+}
+
+/// Keep the newest `keep` `<prefix>*.log` files in `dir` (names sort by time).
+pub(crate) fn prune_prefix(dir: &std::path::Path, prefix: &str, keep: usize) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
     };
@@ -66,11 +71,11 @@ fn prune(dir: &std::path::Path) {
         .filter(|p| {
             p.file_name()
                 .and_then(|n| n.to_str())
-                .is_some_and(|n| n.starts_with("session-") && n.ends_with(".log"))
+                .is_some_and(|n| n.starts_with(prefix) && n.ends_with(".log"))
         })
         .collect();
     paths.sort();
-    let excess = paths.len().saturating_sub(SESSION_LOGS_KEPT);
+    let excess = paths.len().saturating_sub(keep);
     for path in paths.into_iter().take(excess) {
         if let Err(err) = std::fs::remove_file(&path) {
             let _ = writeln!(
