@@ -108,8 +108,25 @@ def test_merge_while_on_main_reminds():
         reason, context = hook.landing_protocol_guard("git merge feature-branch", MAIN_CWD)
         check("merge while on main -> no ask", reason is None, reason)
         check("merge while on main -> reminder attached", context is not None, context)
+        check("reminder points at land_branch.py", "land_branch.py" in (context or ""), context)
     finally:
         hook._current_branch = orig
+
+
+def test_merge_trunk_into_main_no_reminder():
+    orig = hook._current_branch
+    hook._current_branch = lambda cwd: "main"
+    try:
+        reason, context = hook.landing_protocol_guard("git merge --ff-only origin/main", MAIN_CWD)
+        check("merge origin/main while on main -> no reminder", reason is None and context is None, (reason, context))
+    finally:
+        hook._current_branch = orig
+
+
+def test_lane_merging_main_in_worktree_no_reminder():
+    cmd = f'git -C "{WORKTREE_CWD}" merge origin/main --no-edit'
+    reason, context = hook.landing_protocol_guard(cmd, MAIN_CWD)
+    check("lane merging origin/main in its worktree -> no reminder", reason is None and context is None, (reason, context))
 
 
 def test_merge_while_on_other_branch_unaffected():
@@ -350,26 +367,17 @@ def test_merge_passes_docs_only():
 PIPEY_CMD = "python3 scripts/frob.py | tee /Users/peterkiemann/out.txt"
 
 
-def test_cc_fleet_lane_workflow_preapproved():
-    # K3 lane workflow (2026-07-18 routing directive): spawn/poll auto-allow.
+def test_cc_fleet_not_preapproved():
+    # cc-fleet lanes are retired; nothing of it auto-allows.
     check(
-        "cc-fleet subagent spawn is pre-approved",
-        hook.is_preapproved_command(
+        "cc-fleet subagent spawn is NOT pre-approved",
+        not hook.is_preapproved_command(
             "cc-fleet subagent kimi --prompt-file /tmp/b.md --background"
         ),
     )
     check(
-        "ccf alias + status polling is pre-approved",
-        hook.is_preapproved_command("ccf subagent-status abc123"),
-    )
-    # Provider mutation and key material still prompt.
-    check(
-        "cc-fleet add is NOT pre-approved",
-        not hook.is_preapproved_command("cc-fleet add evil --api-key-stdin"),
-    )
-    check(
-        "cc-fleet keyget is NOT pre-approved",
-        not hook.is_preapproved_command("cc-fleet keyget kimi"),
+        "ccf status polling is NOT pre-approved",
+        not hook.is_preapproved_command("ccf subagent-status abc123"),
     )
 
 
@@ -1421,8 +1429,10 @@ def main():
     test_push_worktree_unaffected()
     test_merge_while_on_main_reminds()
     test_merge_while_on_other_branch_unaffected()
+    test_merge_trunk_into_main_no_reminder()
+    test_lane_merging_main_in_worktree_no_reminder()
     test_bare_push_on_main_branch_reminds()
-    test_cc_fleet_lane_workflow_preapproved()
+    test_cc_fleet_not_preapproved()
     test_pipe_deny_active_in_default_mode()
     test_pipe_deny_skipped_in_auto_mode()
     test_pipe_deny_active_when_mode_missing()
