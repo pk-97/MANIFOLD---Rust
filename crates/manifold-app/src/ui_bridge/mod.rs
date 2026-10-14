@@ -272,6 +272,7 @@ pub fn dispatch(action: &PanelAction, ctx: &mut DispatchCtx) -> DispatchResult {
             | RootAction::OpenCardMapping { .. }
             | RootAction::OpenGeneratorGraphEditor
             | RootAction::SceneSetupOpenGraphEditor(_)
+            | RootAction::SceneSetupCopyViewportCamera(_)
             | RootAction::EffectMappingRangeSnapshot { .. }
             | RootAction::EffectMappingRangeChanged { .. }
             | RootAction::EffectMappingRangeCommit { .. }

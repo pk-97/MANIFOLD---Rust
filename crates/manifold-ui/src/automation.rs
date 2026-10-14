@@ -115,6 +115,14 @@ pub enum AutomationAction {
         delta_y: f32,
         steps: u32,
     },
+    /// Orbit the 3D viewport camera by a left-drag of `(dx, dy)` pixels,
+    /// through the same `viewport_input::apply` a viewport drag runs. Headless
+    /// only: the runner has no graph editor, so its viewport shows the scene
+    /// the Scene tab shows, opened at the default framing on first use.
+    ViewportOrbit {
+        dx: f32,
+        dy: f32,
+    },
     /// Start a work-count window (UI_INVALIDATION_DESIGN.md D10).
     ResetWork,
     /// Compare the work counted since the last `ResetWork` against the

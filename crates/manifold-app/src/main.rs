@@ -82,6 +82,7 @@ mod scene_modifier_edit;
 mod scene_modifier_transfer;
 mod scene_item_transfer;
 mod scene_camera_edit;
+mod scene_view_copy;
 mod object_modifier_transfer;
 mod generator_change;
 mod modifier_preset;

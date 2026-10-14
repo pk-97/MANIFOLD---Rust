@@ -998,9 +998,7 @@ pub struct ScenePanel {
     physics_enable_id: Option<(NodeId, usize)>,
     /// The groups the tree drew this frame, in order.
     tree_groups: Vec<SceneGroup>,
-    /// The selected force's header copy and delete buttons.
-    force_duplicate_ids: Vec<(NodeId, FoundationNodeId)>,
-    force_remove_ids: Vec<(NodeId, FoundationNodeId)>,
+    header_buttons: item_header::HeaderButtons,
     /// P5 (D7): the outliner selection, per layer — UI-local workspace
     /// state, like fold state, NEVER serialized. Missing entry = the
     /// default (first object, else World) — resolved by
@@ -1154,8 +1152,7 @@ impl Default for ScenePanel {
             add_force_id: None,
             physics_enable_id: None,
             tree_groups: Vec::new(),
-            force_duplicate_ids: Vec::new(),
-            force_remove_ids: Vec::new(),
+            header_buttons: Default::default(),
             selection: std::collections::HashMap::new(),
             outliner_row_ids: Vec::new(),
             outliner_eye_ids: Vec::new(),
@@ -1455,8 +1452,7 @@ impl ScenePanel {
         self.add_force_id = None;
         self.physics_enable_id = None;
         self.tree_groups.clear();
-        self.force_duplicate_ids.clear();
-        self.force_remove_ids.clear();
+        self.header_buttons.clear();
         self.outliner_row_ids.clear();
         self.group_toggle_ids.clear();
         self.outliner_eye_ids.clear();
