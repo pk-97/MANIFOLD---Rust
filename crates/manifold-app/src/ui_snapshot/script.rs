@@ -1044,6 +1044,7 @@ impl Runner {
             ui.inspector.skip_to_settled(&mut ui.tree);
             ui.scene_setup_panel.skip_cards_to_settled(&mut ui.tree);
         }
+        crate::ui_bridge::intake_overlay_state(ui, &data.content);
         crate::ui_bridge::check_auto_scroll(ui, &data.content, &data.project);
         let automation_draw_mode = data.selection.automation_draw_mode;
         let inputs = crate::ui_frame::gather_frame_inputs(

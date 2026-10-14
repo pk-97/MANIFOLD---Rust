@@ -2548,8 +2548,9 @@ impl Application {
         // 2-4. Plan the frame, then apply it (`ui_frame::apply_frame_plan`,
         // shared with the script runner): projections, drag polling, the
         // planned region work, the `push_state` pieces, then the drag-time
-        // clip and lane re-projection. Playhead follow moves the scroll first,
-        // so the plan sees it as an input.
+        // clip and lane re-projection. The overlay intake and playhead follow
+        // run first, so the plan sees what they move as inputs.
+        crate::ui_bridge::intake_overlay_state(&mut self.ws.ui_root, &self.content_state);
         crate::ui_bridge::check_auto_scroll(&mut self.ws.ui_root, &self.content_state, &self.local_project);
         let automation_draw_mode = self.selection.automation_draw_mode;
         let inputs = crate::ui_frame::gather_frame_inputs(

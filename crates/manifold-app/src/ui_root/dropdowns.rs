@@ -2481,6 +2481,9 @@ mod led_browser_scoped_open_tests {
 
 impl UIRoot {
     /// Called only when a new project snapshot updates the derived catalog.
+    /// No version bump: this runs inside the project projection, after the
+    /// frame was planned, and the planner already rebuilds an open overlay
+    /// with that projection.
     pub(crate) fn refresh_trigger_target_picker(&mut self) {
         let Some(source) = self.browser_popup.persistent_actions_layer().cloned() else { return; };
         if !self.trigger_routing.sources.iter().any(|item| item.id == source) {
@@ -2489,6 +2492,5 @@ impl UIRoot {
             let picker = trigger_target_picker_items(&source, &self.trigger_routing.targets);
             self.browser_popup.refresh_actions(picker.items, picker.categories, picker.actions, picker.secondary_actions);
         }
-        self.mark_overlay_dirty();
     }
 }

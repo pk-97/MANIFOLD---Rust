@@ -77,6 +77,10 @@ impl UIRoot {
         })
     }
 
+    pub(crate) fn any_overlay_open(&self) -> bool {
+        self.current_overlay_open_mask() != 0
+    }
+
     /// Live open-set as a bitmask, bit `i` = `OverlayId::Z_ORDER[i]` is open.
     /// Eight overlays fit in the `u8` snapshot.
     fn current_overlay_open_mask(&self) -> u8 {

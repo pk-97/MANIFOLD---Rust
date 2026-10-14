@@ -61,6 +61,7 @@ pub fn push_state(
     project_path: Option<&std::path::Path>,
     transport_cache: &mut TransportDisplayCache,
 ) {
+    intake_overlay_state(ui, content_state);
     drain_events(ui, content_state);
     push_chrome(ui, project, content_state, selection, is_dirty, project_path, transport_cache);
     push_selection(ui, project, active_layer, selection);
@@ -68,11 +69,10 @@ pub fn push_state(
     push_live(ui, project, content_state, active_layer, LiveGroups { values: true, shapes: true });
 }
 
-/// One-shot events keyed on their own sequences: toasts, content-driven
-/// selections, cached session and device lists. Runs every frame.
+/// One-shot events keyed on their own sequences: toasts and content-driven
+/// selections. Runs every frame, after the build, since the selections find
+/// cards this frame's projection made.
 pub fn drain_events(ui: &mut UIRoot, content_state: &crate::content_state::ContentState) {
-    // MIDI device names and the Ableton session, taken by pointer.
-    let session_changed = ui.intake_shared(content_state);
     let tree = &mut ui.tree;
 
     // D11 undo/redo toast (`UI_CRAFT_AND_MOTION_PLAN.md` P2) — real command
@@ -136,6 +136,14 @@ pub fn drain_events(ui: &mut UIRoot, content_state: &crate::content_state::Conte
     } else {
         ui.last_object_modifier_selection_sequence = None;
     }
+}
+
+/// Content-driven overlay state, taken before the frame is planned so a
+/// changed overlay moves the overlays' view key this frame (UI_INVALIDATION
+/// D6). Taken after the build it would show one frame late.
+pub fn intake_overlay_state(ui: &mut UIRoot, content_state: &crate::content_state::ContentState) {
+    // MIDI device names and the Ableton session, taken by pointer.
+    let session_changed = ui.intake_shared(content_state);
 
     // A new Ableton session refreshes the open picker.
     if session_changed
@@ -152,9 +160,6 @@ pub fn drain_events(ui: &mut UIRoot, content_state: &crate::content_state::Conte
     if let Some(sdr_preview) = content_state.sdr_preview
         && ui.settings_popup.set_sdr_preview(sdr_preview)
     {
-        // The runtime preview does not bump the project version. Request the
-        // established overlay visual rebuild so its segment active styling
-        // reflects the new snapshot even while paused.
         ui.mark_overlay_dirty();
     }
 }

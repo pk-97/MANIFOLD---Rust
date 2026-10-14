@@ -286,6 +286,9 @@ pub(crate) struct FrameInputs {
     pub dock_view: u64,
     pub dock_scroll_px: i32,
     pub overlays: u64,
+    /// Any overlay is open: the project projection rewrites lists an open
+    /// overlay shows (the trigger target picker's ticks).
+    pub overlay_open: bool,
     pub audio_directory: u64,
     /// D15: `ContentState.values_seq`.
     pub values: u64,
@@ -684,7 +687,10 @@ fn plan_regions(
     }
 
     let overlays = MainRegion::Overlays;
-    if last.overlays != next.overlays || moved(overlays) {
+    if last.overlays != next.overlays
+        || moved(overlays)
+        || (projections.contains(Projection::ProjectSync) && next.overlay_open)
+    {
         rebuild.insert(overlays);
     }
     // Warmup and export progress are overlay in-place inputs too, but their
@@ -1245,6 +1251,11 @@ mod tests {
         let r = MainRegion::Overlays;
         let mut next = base();
         next.overlays = 1;
+        assert!(plan(next).rebuild.contains(r));
+        // The project projection rewrites the lists an open overlay shows.
+        let mut next = with_parts(&[Part::Layers]);
+        assert!(!plan(next).rebuild.contains(r), "nothing open, nothing to rebuild");
+        next.overlay_open = true;
         assert!(plan(next).rebuild.contains(r));
         let mut next = base();
         next.runtime.ableton_session = 1;

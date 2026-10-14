@@ -350,6 +350,7 @@ pub(crate) fn gather_frame_inputs(
         dock_view: ui_root.audio_setup_panel.view_version(),
         dock_scroll_px: ui_root.audio_setup_panel.scroll_px().round() as i32,
         overlays: ui_root.overlays_version(),
+        overlay_open: ui_root.any_overlay_open(),
         audio_directory: content_state.audio_directory_version,
         values: content_state.values_seq,
         runtime: content_state.runtime,

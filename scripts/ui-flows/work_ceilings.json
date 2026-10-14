@@ -493,16 +493,15 @@
       "drag_1s": {
         "ChromeLayout": 189,
         "ClipProjection": 2,
-        "FrameAlloc": 9678,
-        "FullBuild": 1,
+        "FrameAlloc": 9496,
         "GridBitmapRepaint": 6,
         "InspectorSync": 2,
         "LaneProjection": 4,
         "OverviewRepaint": 2,
         "PresetListProjection": 2,
         "ProjectSync": 2,
-        "RegionRebuild": 4,
-        "SlotInvalidate": 12,
+        "RegionRebuild": 8,
+        "SlotInvalidate": 8,
         "ValuePush": 62
       }
     },
