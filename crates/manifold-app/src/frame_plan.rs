@@ -404,6 +404,9 @@ pub(crate) fn plan_frame(last: &FrameInputs, next: &FrameInputs) -> FramePlan {
         || selection_identity
         || active_layer
         || automation_view
+        // The scene projection fills the Properties card for the selected
+        // outliner item.
+        || last.scene_selection != next.scene_selection
         || runtime.automation_latches != last.runtime.automation_latches
         || runtime.led_preview_presence != last.runtime.led_preview_presence
     {
@@ -542,7 +545,6 @@ fn plan_regions(
     if size(inspector)
         || projections.contains(Projection::InspectorSync)
         || last.inspector_view != next.inspector_view
-        || last.scene_selection != next.scene_selection
     {
         rebuild.insert(inspector);
     } else if origin(inspector) {
@@ -1024,12 +1026,13 @@ mod tests {
         let mut next = base();
         next.inspector_view = 1;
         assert!(plan(next).rebuild.contains(r));
-        // The Scene panel's selection rebuilds its Properties body, no sync.
+        // The Scene panel's selection re-runs the scene projection that fills
+        // its Properties card; the timeline lists stay.
         let mut next = base();
         next.scene_selection = 1;
         let p = plan(next);
         assert!(p.rebuild.contains(r));
-        assert!(!p.projections.contains(Projection::InspectorSync));
+        assert!(p.projections.contains(Projection::InspectorSync));
         assert!(!p.projections.contains(Projection::ProjectSync));
         assert!(plan(moved(r)).translate.contains(r));
         let mut next = base();

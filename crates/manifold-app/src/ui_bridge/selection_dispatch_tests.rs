@@ -130,10 +130,10 @@ fn inspector_tab_click_is_a_selection_change() {
     assert!(!plan.projections.contains(Projection::InspectorSync), "same tab again");
 }
 
-/// The Scene panel's own selection rebuilds the inspector without a sync,
-/// and only when the selection changed.
+/// The Scene panel's own selection re-runs the inspector projection (it fills
+/// the Properties card), and only when the selection changed.
 #[test]
-fn scene_selection_rebuilds_the_inspector_only() {
+fn scene_selection_reprojects_only_on_change() {
     let mut rig = Rig::new();
     let layer = rig.project.timeline.layers[0].layer_id.clone();
     for (selection, moves) in [
@@ -144,7 +144,7 @@ fn scene_selection_rebuilds_the_inspector_only() {
         rig.ui.scene_setup_panel.set_selection(layer.clone(), selection.clone());
         let plan = rig.frame(PanelAction::Root(RootAction::SceneSetupSelectionChanged(layer.clone())));
         assert_eq!(plan.rebuild.contains(MainRegion::Inspector), moves, "{selection:?}");
-        assert!(!plan.projections.contains(Projection::InspectorSync), "{selection:?}");
+        assert_eq!(plan.projections.contains(Projection::InspectorSync), moves, "{selection:?}");
         assert!(!plan.projections.contains(Projection::ProjectSync), "{selection:?}");
     }
 }

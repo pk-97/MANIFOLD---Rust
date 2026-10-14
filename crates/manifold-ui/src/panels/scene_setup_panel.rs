@@ -1503,7 +1503,7 @@ impl ScenePanel {
     }
 
     /// The Scene panel's selection version (UI_INVALIDATION D14): the
-    /// planner rebuilds the inspector when it moves.
+    /// planner re-runs the inspector projection when it moves.
     pub fn selection_version(&self) -> u64 {
         self.selection_version
     }
@@ -1559,6 +1559,13 @@ impl ScenePanel {
             Some(sel) if Self::selection_exists(vm, sel.clone()) => sel,
             _ => Self::default_selection(vm),
         };
+        // The build shows the fallback, so it is what the next note compares
+        // against: reselecting the vanished item after a redo is a change.
+        if let Some((layer, noted)) = self.noted_selection.as_mut()
+            && *layer == vm.layer_id
+        {
+            *noted = Some(resolved.clone());
+        }
         self.selection.insert(vm.layer_id.clone(), resolved.clone());
         resolved
     }
@@ -1887,9 +1894,8 @@ impl ScenePanel {
                 }
                 // D7: an outliner row click sets the UI-local selection —
                 // no command, no undo unit, valid even before a `Live` state
-                // exists. D1 of SCENE_PANEL_UX_DESIGN.md: also emit
-                // `SceneSetupSelectionChanged` so the dispatch loop's
-                // `structural_change: true` rebuilds Properties THIS frame
+                // exists. D1 of SCENE_PANEL_UX_DESIGN.md: the noted
+                // selection version re-projects Properties THIS frame
                 // instead of waiting for the next unrelated sync.
                 if let Some((_, sel)) = self.outliner_row_ids.iter().find(|(id, _)| *id == *node_id) {
                     // scene-panel-ux lane: handle outliner fold toggles
