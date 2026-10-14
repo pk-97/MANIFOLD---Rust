@@ -16,6 +16,7 @@ impl crate::app::Application {
             active_layer: &mut self.active_layer_id,
             needs_rebuild: &mut self.needs_rebuild,
             needs_structural_sync: &mut self.needs_structural_sync,
+            stamps: &mut self.ui_edits.stamps,
             scroll_dirty: &mut self.scroll_dirty,
             current_project_path: &self.current_project_path,
             has_output_window: self.window_registry.has_output_window(),
@@ -42,6 +43,7 @@ impl<'a> AppInputHost<'a> {
         selection: &'a mut UIState,
         active_layer: &'a mut Option<LayerId>,
         flags: &'a mut crate::ui_frame::UiFrameFlags,
+        stamps: &'a mut crate::frame_plan::UiStamps,
         scratch: &'a mut [bool; 2],
         project_io: &'a mut crate::project_io::ProjectIOService,
         #[cfg(target_os = "macos")] clipboard_change_count: &'a mut Option<i64>,
@@ -56,6 +58,7 @@ impl<'a> AppInputHost<'a> {
             active_layer,
             needs_rebuild: &mut flags.rebuild,
             needs_structural_sync: &mut flags.structural,
+            stamps,
             scroll_dirty: &mut flags.scroll,
             current_project_path: &None,
             has_output_window: false,
@@ -120,7 +123,6 @@ impl<'a> AppInputHost<'a> {
             Box::new(PasteEffectsCommand::new(target.clone(), pasted, groups, before, destination_group)),
             crate::edit_selection::SelectAfterEdit::Effects { target, ids },
         ));
-        *self.needs_structural_sync = true;
         *self.needs_rebuild = true;
         true
     }

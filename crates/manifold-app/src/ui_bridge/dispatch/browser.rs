@@ -103,7 +103,7 @@ pub(crate) fn dispatch_browser(action: &BrowserAction, ctx: &mut super::super::D
                     let boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
                     ctx.execute(boxed);
                     ctx.ui.browser_popup.close();
-                    DispatchResult::structural()
+                    DispatchResult::handled()
                 }
                 Source::Factory => unreachable!("returned above"),
             }

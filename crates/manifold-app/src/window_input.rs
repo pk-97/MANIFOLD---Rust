@@ -2837,6 +2837,7 @@ impl Application {
                     active_layer: &mut self.active_layer_id,
                     needs_rebuild: &mut self.needs_rebuild,
                     needs_structural_sync: &mut self.needs_structural_sync,
+                    stamps: &mut self.ui_edits.stamps,
                     scroll_dirty: &mut self.scroll_dirty,
                     current_project_path: &self.current_project_path,
                     has_output_window: self.window_registry.has_output_window(),

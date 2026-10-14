@@ -178,7 +178,7 @@ pub(super) fn dispatch_layer(
                     }
                 }
             });
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
         LayerAction::BlendModeClicked(_id) => {
             // Intercepted by UIRoot::try_open_dropdown (opens dropdown at button).
@@ -202,7 +202,7 @@ pub(super) fn dispatch_layer(
                     }
                 }
             }
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
         LayerAction::SetLayerAudioSend(id, send_id) => {
             // Layer-centric routing: this layer feeds the chosen send (or none).
@@ -214,7 +214,7 @@ pub(super) fn dispatch_layer(
                     Box::new(SetLayerAudioSendCommand::new(layer_id, send_id.clone()));
                 project.execute(boxed);
             }
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
         LayerAction::ExpandLayer(id) => {
             // Collapse/expand is a view-state toggle (MutateProject, not undoable),
@@ -233,7 +233,7 @@ pub(super) fn dispatch_layer(
                     }
                 }
             });
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
         LayerAction::CollapseLayer(id) => {
             // Collapse/expand is a view-state toggle (MutateProject, not undoable),
@@ -252,7 +252,7 @@ pub(super) fn dispatch_layer(
                     }
                 }
             });
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
         LayerAction::FolderClicked(_id) => {
             log::info!("Folder clicked (file picker not yet implemented)");
@@ -267,7 +267,7 @@ pub(super) fn dispatch_layer(
                     EditingService::create_clip_at_position(p, beat, layer_idx, Beats(4.0))
                 });
             }
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
         LayerAction::AddGenClipClicked(id) => {
             let beat = content_state.current_beat;
@@ -276,7 +276,7 @@ pub(super) fn dispatch_layer(
                     EditingService::create_clip_at_position(p, beat, layer_idx, Beats(4.0))
                 });
             }
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
         LayerAction::MidiInputClicked(_id) => {
             // Intercepted by UIRoot::try_open_dropdown (opens dropdown at button).
@@ -418,7 +418,7 @@ pub(super) fn dispatch_layer(
                     }
                 }
             }
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
 
         // ── Layer management ───────────────────────────────────────
@@ -439,7 +439,7 @@ pub(super) fn dispatch_layer(
                     project.execute(boxed);
                 }
             }
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
         LayerAction::DeleteLayerClicked(id) => {
             {
@@ -461,7 +461,7 @@ pub(super) fn dispatch_layer(
                     }
                 }
             }
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
 
     }
