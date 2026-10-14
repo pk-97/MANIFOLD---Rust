@@ -6,5 +6,6 @@
       "gesture": { "Sweep": { "to": { "Point": { "x": 1300.0, "y": 760.0 } }, "steps": 120 } }
     }
   },
-  { "AssertWork": { "window": "hover_clips_2s" } }
+  { "AssertWork": { "window": "hover_clips_2s" } },
+  "AssertFresh"
 ]

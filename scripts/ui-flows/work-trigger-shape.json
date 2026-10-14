@@ -1,5 +1,6 @@
 [
   "ResetWork",
   { "ScrubDrag": { "param": { "AudioTriggerShape": { "layer": 1, "index": 0, "shape": "Attack" } }, "from": 5.0, "to": 80.0, "steps": 60 } },
-  { "AssertWork": { "window": "drag_1s" } }
+  { "AssertWork": { "window": "drag_1s" } },
+  "AssertFresh"
 ]

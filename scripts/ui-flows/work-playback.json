@@ -1,5 +1,6 @@
 [
   "ResetWork",
   { "PlayingStep": { "frames": 120, "bpm": 120.0 } },
-  { "AssertWork": { "window": "play_2s" } }
+  { "AssertWork": { "window": "play_2s" } },
+  "AssertFresh"
 ]

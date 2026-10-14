@@ -4,5 +4,6 @@
   { "Modifiers": { "modifiers": {} } },
   { "Modifiers": { "modifiers": { "command": true } } },
   { "Modifiers": { "modifiers": {} } },
-  { "AssertWork": { "window": "four_modifier_changes" } }
+  { "AssertWork": { "window": "four_modifier_changes" } },
+  "AssertFresh"
 ]

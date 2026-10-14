@@ -1,5 +1,6 @@
 [
   "ResetWork",
   { "ScrubDrag": { "param": { "Trim": { "kind": "Audio", "effect": 1, "param": "amount" } }, "from": 1.0, "to": 0.5, "steps": 60 } },
-  { "AssertWork": { "window": "drag_1s" } }
+  { "AssertWork": { "window": "drag_1s" } },
+  "AssertFresh"
 ]

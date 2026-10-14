@@ -2,5 +2,6 @@
   { "Modifiers": { "modifiers": { "alt": true } } },
   "ResetWork",
   { "TrackWheel": { "at": { "x": 700.0, "y": 700.0 }, "delta_y": 20.0, "steps": 30 } },
-  { "AssertWork": { "window": "zoom_30_notches" } }
+  { "AssertWork": { "window": "zoom_30_notches" } },
+  "AssertFresh"
 ]
