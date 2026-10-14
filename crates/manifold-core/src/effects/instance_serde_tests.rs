@@ -114,6 +114,7 @@ fn effect_instance_serialize_omits_params_without_registry() {
         relight: false,
         relight_params: RelightParams::default(),
         folded_sections: Vec::new(),
+        unfolded_sections: Vec::new(),
     };
     let json = serde_json::to_string(&fx).unwrap();
     assert!(
@@ -153,6 +154,7 @@ fn effect_instance_serialize_round_trips_hidden_and_visible_params() {
         relight: false,
         relight_params: RelightParams::default(),
         folded_sections: Vec::new(),
+        unfolded_sections: Vec::new(),
     };
     let json = serde_json::to_string(&fx).unwrap();
     assert!(json.contains("\"alpha\":{\"value\":0.1,\"exposed\":true}"));

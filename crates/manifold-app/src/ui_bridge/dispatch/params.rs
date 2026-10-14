@@ -424,6 +424,54 @@ pub(crate) fn dispatch_params(action: &ParamsAction, ctx: &mut super::super::Dis
             // workspace-local, never serialized).
             DispatchResult::structural()
         }
+        ParamsAction::CardSectionFolded { target, section, folded } => {
+            // A scene card fold is a saved view choice (SCENE_SURFACES_DESIGN.md
+            // D7), not an undo step: written to the local project so the
+            // rebuild sees it, and through MutateProject so the next snapshot
+            // keeps it, like EffectCollapseToggle.
+            let Some(target) = resolve_graph_target(target, ctx.editor_target, effective_tab, active_layer, ctx.selection, ctx.project) else {
+                return DispatchResult::structural();
+            };
+            let (section, folded) = (section.clone(), *folded);
+            let write = move |instance: &mut PresetInstance| {
+                instance.folded_sections.retain(|title| *title != section);
+                instance.unfolded_sections.retain(|title| *title != section);
+                if folded {
+                    instance.folded_sections.push(section.clone());
+                } else {
+                    instance.unfolded_sections.push(section.clone());
+                }
+            };
+            ctx.project.with_preset_graph_mut(&target, write.clone());
+            ContentCommand::send(
+                ctx.content_tx,
+                ContentCommand::mutate(crate::content_command::touch::EFFECTS, Box::new(move |project| {
+                    project.with_preset_graph_mut(&target, write);
+                })),
+            );
+            DispatchResult::structural()
+        }
+        ParamsAction::SetCardPin(gpt, param_id, pin) => {
+            let Some(target) = resolve_graph_target(gpt, ctx.editor_target, effective_tab, active_layer, ctx.selection, ctx.project) else {
+                return DispatchResult::handled();
+            };
+            if let (GraphTarget::Generator(layer), Some(manifold_core::scene_surface::CardPin::Shown)) = (&target, pin) {
+                ctx.ui.inspector.flash_card_row_when_shown(layer.clone(), param_id.clone());
+            }
+            let command = manifold_editing::commands::graph::SetCardPinCommand::new(target, param_id.to_string(), *pin);
+            ContentCommand::send(ctx.content_tx, ContentCommand::ExecuteOnContent(Box::new(command)));
+            DispatchResult::handled()
+        }
+        ParamsAction::RevealInSceneTab(gpt, param_id) | ParamsAction::RevealSectionInSceneTab(gpt, param_id) => {
+            let Some(GraphTarget::Generator(layer)) =
+                resolve_graph_target(gpt, ctx.editor_target, effective_tab, active_layer, ctx.selection, ctx.project)
+            else {
+                return DispatchResult::handled();
+            };
+            ctx.selection.pin_scope(InspectorTab::Scene);
+            ctx.ui.pending_scene_reveal = Some((manifold_ui::view::UiGraphTarget::Generator(layer), param_id.clone()));
+            DispatchResult::structural()
+        }
         ParamsAction::ModsCompactToggled => {
             // section 6b — the inspector already flipped its own compact flag in
             // route_click; rebuild so every card hides/shows its mod drawers.

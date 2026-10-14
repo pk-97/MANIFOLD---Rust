@@ -410,11 +410,17 @@ impl ParamCardPanel {
         }
     }
 
-    /// Navigate to a routed parameter without changing its authored response.
-    pub fn reveal_clip_response(&mut self, target: &crate::view::UiGraphTarget, param: &manifold_foundation::ParamId) -> bool {
-        let Some(i) = self.rows.iter().position(|row| row.id == *param
+    /// Whether this card holds `param` routed from a clip trigger on `target`.
+    pub fn routes_clip_trigger(&self, target: &crate::view::UiGraphTarget, param: &manifold_foundation::ParamId) -> bool {
+        self.rows.iter().any(|row| row.id == *param
             && row.clip_trigger.as_ref().is_some_and(|source| source.target == *target))
-        else { return false; };
+    }
+
+    /// Unfold the card and the row's section and open its active response
+    /// tab, without changing anything authored. `false` when the row is not
+    /// on this card.
+    pub fn reveal_param(&mut self, param: &manifold_foundation::ParamId) -> bool {
+        let Some(i) = self.rows.iter().position(|row| row.id == *param) else { return false; };
         if let Some(section) = &self.rows[i].spec.section {
             self.section_folded.insert(section.clone(), false);
         }

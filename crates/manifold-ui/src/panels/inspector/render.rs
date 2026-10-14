@@ -432,6 +432,37 @@ impl InspectorCompositePanel {
         });
     }
 
+    /// Load the generator card's scene-card state (see
+    /// `ParamCardPanel::set_scene_sections`). Call after `configure_gen_params`.
+    pub fn set_gen_scene_sections(&mut self, folded: Option<&[String]>) {
+        if let Some(card) = self.gen_params.as_mut() {
+            card.set_scene_sections(folded);
+        }
+    }
+
+    /// The scene card's row for `param`, when the generator card is `layer`'s
+    /// scene card.
+    pub fn scene_card_row(&self, layer: &LayerId, param: &str) -> Option<&crate::ParamRow> {
+        self.scene_card_of(layer)?.row(param)
+    }
+
+    /// The generator card, when it is `layer`'s scene card.
+    pub fn scene_card_of(&self, layer: &LayerId) -> Option<&ParamCardPanel> {
+        self.gen_params
+            .as_ref()
+            .filter(|card| card.is_scene_card() && card.owning_layer_id() == Some(layer))
+    }
+
+    /// The generator card's layer, when it is a scene card.
+    pub fn scene_card_layer(&self) -> Option<&LayerId> {
+        self.gen_params.as_ref().filter(|card| card.is_scene_card())?.owning_layer_id()
+    }
+
+    /// Flash `param`'s row the next time `layer`'s card is shown.
+    pub fn flash_card_row_when_shown(&mut self, layer: LayerId, param: manifold_foundation::ParamId) {
+        self.pending_card_flash = Some((layer, param));
+    }
+
     // ── LED composite preview (LED_STRIPS_DESIGN MVP-P4, D24) ──
 
     /// Structural configure from the projection: whether the DMX lane's card

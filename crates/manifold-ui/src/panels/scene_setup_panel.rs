@@ -197,14 +197,9 @@ pub struct RowValue {
     pub min: f32,
     pub max: f32,
     pub driven: bool,
-    /// UX-P3a (SCENE_PANEL_UX_DESIGN.md D8/sizing amendment): whether this
-    /// param is currently an exposed card param on the layer's generator
-    /// graph — `manifold_nodes::node_graph::scene_vm::is_param_exposed`'s
-    /// read off the SAME `EffectGraphDef` `SceneVm::from_def` already
-    /// walked, transcribed by `state_sync` like every other field on this
-    /// struct. Drives the row's mod-button lit state; NOT written by this
-    /// panel (exposure is a graph-side toggle via
-    /// `PanelAction::SceneSetupExposeParam`, never a direct field write).
+    /// Whether this param is an exposed card param on the layer's generator
+    /// graph (`scene_vm::is_param_exposed`). Read-only here: exposure is a
+    /// graph-editor toggle.
     pub exposed: bool,
 }
 
@@ -1223,10 +1218,15 @@ impl ScenePanel {
     /// panel — the missing hookup was why scene-panel sliders had no
     /// right-click reset while every other slider in the app did.
     pub fn register_intents(&self, intents: &mut crate::intent::IntentRegistry) {
-        if !self.open || !matches!(self.state, SceneSetupState::Live(_)) {
+        let (true, SceneSetupState::Live(vm)) = (self.open, &self.state) else {
             return;
-        }
+        };
         self.properties_card.row_host.register_intents(intents);
+        // The one param menu, addressed at this panel's own layer (BUG-292).
+        let target = GraphParamTarget::GeneratorOf(vm.layer_id.clone());
+        self.properties_card
+            .row_host
+            .register_param_menus(&self.properties_card.rows, &target, intents, |_| false);
         for card in &self.object_modifier_cards {
             card.register_intents(intents);
         }

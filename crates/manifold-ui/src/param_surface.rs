@@ -417,6 +417,9 @@ pub enum RowRole {
     MappingChevron,
     /// D5 section fold header (row = first row of the section).
     SectionHeader,
+    /// A scene card section's title (row = first row of the section): opens
+    /// the Scene tab on the item that owns that row.
+    SectionTitle,
     /// Relight: header toggle ("3D Shading") — row is unused (card-level).
     RelightToggle,
     /// Relight: one of the Height From option buttons (0..3; index resolved
