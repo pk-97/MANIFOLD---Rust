@@ -34,7 +34,11 @@
 //! rebuild decision, `push_state`, drag-time re-projection) and, when pixels
 //! are read, `composite_main_ui_frame`. The runner holds no projection or
 //! rebuild logic of its own; it differs from the App only in what inputs are
-//! present (no content thread, no drag polling, no editor window).
+//! present (no content thread, no drag polling, no OS window). A flow that
+//! clicks a card's graph-editor button opens the editor window through
+//! `editor_frame::open_editor_workspace`; every later frame builds its tree
+//! through `editor_frame::build_editor_tree`, the functions the App calls.
+//! `Dump`, `Assert` and `AssertFresh` read that tree too.
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -508,6 +512,27 @@ struct Runner {
     /// The headless stand-in for the graph editor's viewport: the layer it
     /// shows and its navigation camera, moved by `ViewportOrbit`.
     viewport: Option<(LayerId, manifold_node_engine::scene::viewport_camera::ViewportCamera)>,
+    /// The graph editor window, once a flow opens it.
+    editor: Option<RunnerEditor>,
+}
+
+/// The graph editor window as the App holds it (`graph_editor`,
+/// `graph_canvas`, `graph_editor_panel`), opened and built through the
+/// `editor_frame.rs` seams. No window exists, so no offscreen, and the window
+/// keeps the size a first open gives it.
+struct RunnerEditor {
+    ws: crate::workspace::Workspace,
+    canvas: manifold_ui::graph_canvas::GraphCanvas,
+    panel: manifold_ui::panels::graph_editor::GraphEditorPanel,
+    logical_w: u32,
+    logical_h: u32,
+}
+
+impl RunnerEditor {
+    /// The tree dump `Dump`, `AssertFresh` and a failure write for this window.
+    fn dump(&self) -> serde_json::Value {
+        super::dump::dump_tree_ex(&self.ws.ui_root.tree, &[])
+    }
 }
 
 /// The count gate's state for one flow (UI_INVALIDATION_DESIGN.md D10, D11).
@@ -559,7 +584,58 @@ impl Runner {
             modulation_engine,
             work: WorkWindow::default(),
             viewport: None,
+            editor: None,
         }
+    }
+
+    /// `open_graph_editor` without a window: the same workspace, canvas and
+    /// projected inspector column. A second open is a no-op here; live it
+    /// only brings the window to the front.
+    fn open_editor(&mut self, data: &SceneData) -> bool {
+        if self.editor.is_some() {
+            return false;
+        }
+        let active = self.active_layer.as_ref().and_then(|id| data.project.timeline.find_layer_index_by_id(id));
+        let (ws, canvas) = crate::editor_frame::open_editor_workspace(
+            None,
+            &data.project,
+            active,
+            &data.selection,
+            &data.content,
+        );
+        let (logical_w, logical_h) =
+            crate::editor_frame::first_open_logical_size(f64::from(super::LOGICAL_W), f64::from(super::LOGICAL_H));
+        self.editor = Some(RunnerEditor {
+            ws,
+            canvas,
+            panel: manifold_ui::panels::graph_editor::GraphEditorPanel::new(),
+            logical_w,
+            logical_h,
+        });
+        true
+    }
+
+    /// The editor window's frame, after the main window's as in the App
+    /// (`present_graph_editor_window` runs after `present_all_windows`). No
+    /// content thread publishes a node preview or a pipeline size, so the
+    /// node monitor shows no image and the monitors take the default aspect.
+    fn editor_frame(&mut self, data: &SceneData) {
+        let Some(ed) = self.editor.as_mut() else { return };
+        let layout = crate::editor_frame::EditorLayout::compute(&ed.ws.dock, ed.logical_w, ed.logical_h, None);
+        let active = self.active_layer.as_ref().and_then(|id| data.project.timeline.find_layer_index_by_id(id));
+        crate::editor_frame::build_editor_tree(
+            &mut ed.ws.ui_root,
+            &ed.panel,
+            Some(&mut ed.canvas),
+            &layout,
+            crate::editor_frame::EditorTreeInputs {
+                project: &data.project,
+                active_layer: active,
+                fire_meters: &data.content.fire_meters,
+                dt: DT,
+                show_image: false,
+            },
+        );
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -932,7 +1008,7 @@ impl Runner {
         let overlay = &self.overlay;
         crate::ui_frame::apply_frame_plan(
             ui,
-            None,
+            self.editor.as_mut().map(|ed| &mut ed.ws.ui_root),
             Some(&mut render.cache),
             &mut data.project,
             &mut data.selection,
@@ -967,6 +1043,7 @@ impl Runner {
         }
         ui.viewport.repaint_dirty_layers();
         ui.viewport.repaint_overview();
+        self.editor_frame(data);
         render.gate.mark();
         // What this frame sent reaches the App's next frame as a content
         // snapshot; record it now (a long gesture sends a command per move
@@ -1025,6 +1102,7 @@ impl Runner {
         }
         let tree_before = surfaces_dump(self, ui);
         let immediate_before = self.immediate_inputs(ui, data);
+        let editor_before = self.editor.as_ref().map(RunnerEditor::dump);
 
         self.fresh_reference = true;
         self.flags.rebuild = true;
@@ -1032,8 +1110,17 @@ impl Runner {
 
         let tree_after = surfaces_dump(self, ui);
         let immediate_after = self.immediate_inputs(ui, data);
+        let editor_after = self.editor.as_ref().map(RunnerEditor::dump);
 
-        let (tree_lines, tree_differs) = super::readback::diff_trees(&tree_before, &tree_after);
+        let (mut tree_lines, mut tree_differs) = super::readback::diff_trees(&tree_before, &tree_after);
+        // The editor window's tree must equal its own full build too.
+        if let (Some(before), Some(after)) = (&editor_before, &editor_after) {
+            let (lines, differs) = super::readback::diff_trees(before, after);
+            if differs {
+                tree_differs = true;
+                tree_lines.extend(lines.into_iter().map(|line| format!("editor: {line}")));
+            }
+        }
         let immediate_diff: Vec<String> = immediate_before
             .iter()
             .zip(immediate_after.iter())
@@ -1045,7 +1132,8 @@ impl Runner {
             )
             .collect();
         if !tree_differs && immediate_diff.is_empty() {
-            return StepResult { index, action: action_desc, status: "ok", detail: "fresh".into(), artifact: None };
+            let detail = if editor_before.is_some() { "fresh (main and editor windows)" } else { "fresh" };
+            return StepResult { index, action: action_desc, status: "ok", detail: detail.into(), artifact: None };
         }
         let path = out_dir.join(format!("{index:02}.stale.txt"));
         let report: Vec<String> = immediate_diff.iter().cloned().chain(tree_lines).collect();
@@ -1359,7 +1447,16 @@ impl Runner {
         let clip_targets = ClipHitTargets(&clip_rects);
         let automation_targets = AutomationHitTargets(&automation_lanes);
         let surfaces: Vec<&dyn HitTargets> = vec![&clip_targets, &automation_targets];
-        automation::resolve_all(&ui.tree, &surfaces, target)
+        let (matches, query) = automation::resolve_all(&ui.tree, &surfaces, target);
+        // A selector nothing in the main window matches is looked up in the
+        // open editor window, so a flow can assert on what that window shows.
+        match self.editor.as_ref() {
+            Some(ed) if matches.is_empty() => {
+                let (editor_matches, _) = automation::resolve_all(&ed.ws.ui_root.tree, &[], target);
+                (editor_matches, query)
+            }
+            _ => (matches, query),
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1805,6 +1902,22 @@ impl Runner {
     /// any host, `save()` diverted to the temp dir.
     fn apply_panel_actions(&mut self, ui: &mut UIRoot, data: &mut SceneData, actions: &[PanelAction]) {
         for action in actions {
+            // The live action loop answers these by watching the graph and
+            // opening the editor window (`open_graph_editor`). No content
+            // thread runs here, so nothing snapshots the watched graph and the
+            // canvas stays empty; the window and its card lane are real.
+            if let PanelAction::Root(
+                manifold_ui::RootAction::OpenGraphEditor(_)
+                | manifold_ui::RootAction::OpenGeneratorGraphEditor
+                | manifold_ui::RootAction::OpenGraphTarget(_)
+                | manifold_ui::RootAction::SceneSetupOpenGraphEditor(_)
+                | manifold_ui::RootAction::PreviewSceneModifierObject(..),
+            ) = action
+            {
+                let opened = self.open_editor(data);
+                println!("ui-snap --script: {action:?} -> graph editor {}", if opened { "opened" } else { "already open" });
+                continue;
+            }
             // The live app resolves this in `app_render.rs` from its graph
             // editor's viewport; here the runner's viewport stands in.
             if let PanelAction::Root(manifold_ui::RootAction::SceneSetupCopyViewportCamera(layer)) = action {
@@ -2102,6 +2215,14 @@ impl Runner {
         let json = super::dump::dump_tree_ex(&ui.tree, &surfaces);
         std::fs::write(path, serde_json::to_string_pretty(&json).expect("serialize dump"))
             .expect("write dump json");
+        // An open editor window's tree lands beside it: `NN.tree.json` ->
+        // `NN.editor.tree.json`.
+        if let Some(ed) = self.editor.as_ref() {
+            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("tree.json");
+            let editor_path = path.with_file_name(name.replacen("tree.json", "editor.tree.json", 1));
+            std::fs::write(&editor_path, serde_json::to_string_pretty(&ed.dump()).expect("serialize dump"))
+                .expect("write editor dump json");
+        }
     }
 
     /// P2 (D3): reads back the offscreen `live_frame`/the `Step` loop
