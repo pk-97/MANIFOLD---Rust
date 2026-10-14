@@ -33,6 +33,8 @@ inventory = "0.3"
 # on the change audit (docs/UI_INVALIDATION_DESIGN.md D10) in every test build
 # that links the testkit.
 testkit = ["manifold-editing/change-audit"]
+# The UI snapshot harness lends its own project to an engine for one tick.
+project-lend = []
 
 [lints]
 workspace = true

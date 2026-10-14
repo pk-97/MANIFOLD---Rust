@@ -111,6 +111,10 @@ pub struct TickResult {
     /// in the same spot. Always empty while stopped/paused (recording only
     /// runs during `tick_playing`).
     pub pending_gesture_commits: Vec<Box<dyn manifold_editing::command::Command>>,
+    /// Structural writes the live-clip path asked for during the tick (a
+    /// recorded MIDI take, a missing layer). Executed through
+    /// `EditingService` right after the tick, like the gesture commits (D13).
+    pub pending_structural_commits: Vec<Box<dyn manifold_editing::command::Command>>,
 }
 
 // ─── Playback Engine ───
@@ -297,8 +301,6 @@ pub struct PlaybackEngine {
     pub on_drift_corrected: Option<Box<dyn Fn(&str, f32) + Send>>,
     pub beat_snapped_beat_resolver: Option<Box<dyn Fn() -> f32 + Send>>,
     pub absolute_tick_resolver: Option<Box<dyn Fn() -> i32 + Send>>,
-    pub record_command_delegate:
-        Option<Box<dyn Fn(Box<dyn manifold_editing::command::Command>) + Send>>,
 
     // Debug flag. Port of C# PlaybackEngine.showDebugLogs.
     pub show_debug_logs: bool,
@@ -389,7 +391,6 @@ impl PlaybackEngine {
             on_drift_corrected: None,
             beat_snapped_beat_resolver: None,
             absolute_tick_resolver: None,
-            record_command_delegate: None,
             show_debug_logs: false,
             to_pause_list: Vec::with_capacity(8),
         }
@@ -504,8 +505,20 @@ impl PlaybackEngine {
     pub fn project(&self) -> Option<&Project> {
         self.project.as_ref()
     }
-    pub fn project_mut(&mut self) -> Option<&mut Project> {
+    pub(crate) fn project_mut(&mut self) -> Option<&mut Project> {
         self.project.as_mut()
+    }
+    /// Exchange the whole project with the caller's, keeping runtime state.
+    /// For the UI snapshot harness, which owns its project and lends it for
+    /// one tick; never a write path. False when no project is loaded.
+    #[cfg(feature = "project-lend")]
+    pub fn swap_project(&mut self, project: &mut Project) -> bool {
+        self.project.as_mut().map(|own| std::mem::swap(own, project)).is_some()
+    }
+    /// The only public mutable entry into the project (D13): every write goes
+    /// through `EditingService` or `tick_write`.
+    pub fn project_edit(&mut self) -> Option<manifold_editing::edit::ProjectEdit<'_>> {
+        self.project.as_mut().map(manifold_editing::edit::ProjectEdit::new)
     }
     /// Clip-control bindings are stale: the next reconcile walks once. Called
     /// by the content reaction pass when Layers, Clips, Effects or Session
@@ -518,6 +531,11 @@ impl PlaybackEngine {
     }
     pub fn live_clip_manager_mut(&mut self) -> Option<&mut LiveClipManager> {
         self.live_clip_manager.as_mut()
+    }
+    /// Structural commands the live-clip path queued (recorded takes, missing
+    /// layers), for the content thread to execute through `EditingService`.
+    pub fn take_live_commits(&mut self) -> Vec<Box<dyn manifold_editing::command::Command>> {
+        self.live_clip_manager.as_mut().map(LiveClipManager::take_pending_commands).unwrap_or_default()
     }
     pub fn compositor_dirty_deadline(&self) -> f64 {
         self.compositor_dirty_deadline
@@ -586,12 +604,11 @@ impl PlaybackEngine {
         (&mut self.renderers, self.project.as_ref())
     }
 
-    /// Split borrow for operations that must validate a project mutation while
-    /// updating renderer state atomically (for example, output resize).
-    pub fn split_renderer_project_mut(
+    /// Renderers and the project through the gateway, for the resize validator.
+    pub fn split_renderer_project_edit(
         &mut self,
-    ) -> (&mut Vec<Box<dyn ClipRenderer>>, Option<&mut Project>) {
-        (&mut self.renderers, self.project.as_mut())
+    ) -> (&mut Vec<Box<dyn ClipRenderer>>, Option<manifold_editing::edit::ProjectEdit<'_>>) {
+        (&mut self.renderers, self.project.as_mut().map(manifold_editing::edit::ProjectEdit::new))
     }
 
     /// Mutable access to renderers for re-notification (e.g. after MutateProject).
@@ -1332,6 +1349,7 @@ impl PlaybackEngine {
             stopped_clips: Vec::new(), // Populated by tick() after this returns
             prewarm_candidates: prewarm,
             pending_gesture_commits,
+            pending_structural_commits: self.take_live_commits(),
         }
     }
 
@@ -1474,6 +1492,7 @@ impl PlaybackEngine {
             // Recording only runs during tick_playing (section 5's "armed + playing
             // + touched") — stopped/paused never opens or closes a gesture.
             pending_gesture_commits: self.take_finished_automation(),
+            pending_structural_commits: self.take_live_commits(),
         }
     }
 
@@ -2574,7 +2593,11 @@ impl PlaybackEngine {
             let bpm_f32 = bpm_f32.clamp(20.0, 300.0);
             let q_bpm = BeatQuantizer::quantize_bpm(bpm_f32);
             if (project.settings.bpm.0 - q_bpm).abs() > BeatQuantizer::BPM_STEP * 0.5 {
-                project.settings.bpm = Bpm(q_bpm);
+                manifold_editing::edit::tick_write(
+                    manifold_editing::edit::TickField::Bpm,
+                    manifold_editing::edit::ProjectEdit::new(project),
+                    |p| p.settings.bpm = Bpm(q_bpm),
+                );
             }
         }
     }
@@ -3453,12 +3476,6 @@ impl LiveClipHost for PlaybackEngine {
         // PlaybackEngine looks up clips via the timeline and live_clip_manager.
         // No separate lookup table is needed — the engine's find_timeline_clip
         // already searches both the timeline and live slots.
-    }
-
-    fn record_command(&mut self, cmd: Box<dyn manifold_editing::command::Command>) {
-        if let Some(ref delegate) = self.record_command_delegate {
-            delegate(cmd);
-        }
     }
 
     fn beat_to_timeline_time(&self, beat: Beats) -> Seconds {

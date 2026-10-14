@@ -697,6 +697,31 @@ class CacheTests(unittest.TestCase):
             self.assertEqual(before.path, passed.path)
             self.assertTrue(passed.reused())
 
+    def test_cheap_gate_before_commit_is_reused_by_landing_after_commit(self):
+        # The lane's --cheap run gates the dirty tree; the landing gate then
+        # runs on the commit of that same content and must reuse every leg.
+        self.write('crates/a/src/lib.rs', 'pub fn uncommitted() {}\n')
+        self.write('crates/a/src/new.rs', 'pub fn untracked() {}\n')
+        base = self.git('rev-parse', 'origin/main')
+        snapshot = landing.working_tree_commit(self.repo)
+        self.assertEqual(self.git('status', '--porcelain'),
+                         'M crates/a/src/lib.rs\n?? crates/a/src/new.rs')
+
+        def legs(head):
+            return [self.clippy('a'),
+                    cache.command_pass(self.repo, 'design-status',
+                                       ['python3', '.claude/hooks/design_status_check.py', base, head]),
+                    cache.command_pass(self.repo, 'flow-gate',
+                                       ['python3', 'scripts/run_ui_flows.py', '--touched', f'{base}...{head}'])]
+
+        for passed in legs(snapshot):
+            self.assertIsNotNone(passed.key, passed.reason)
+            passed.save(0)
+        self.commit('the gated content')
+        for passed in legs('HEAD'):
+            with self.subTest(leg=passed.label):
+                self.assertTrue(passed.reused())
+
     def test_failure_corruption_and_mid_run_edits_do_not_reuse(self):
         passed = self.clippy('a')
         passed.save(1)
@@ -987,11 +1012,11 @@ class CacheTests(unittest.TestCase):
         self.assertGreater(self.run_landing()[3], 0)
 
     def test_worker_identity_is_not_rust_input_but_runtime_switch_is(self):
-        with patch.dict(os.environ, {'CODEX_THREAD_ID': 'worker'}, clear=True), \
+        with patch.dict(os.environ, {'CLAUDE_CODE_SESSION_ID': 'worker'}, clear=True), \
                 patch.object(cache.platform, 'platform', return_value='test-platform'), \
                 patch.object(cache.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, b'version', b'')):
             first = self.real_host_inputs(self.repo, True)
-            os.environ['CODEX_THREAD_ID'] = 'lead'
+            os.environ['CLAUDE_CODE_SESSION_ID'] = 'lead'
             self.assertEqual(first, self.real_host_inputs(self.repo, True))
             os.environ['UPDATE_CONFORMANCE_GOLDENS'] = '1'
             self.assertNotEqual(first, self.real_host_inputs(self.repo, True))

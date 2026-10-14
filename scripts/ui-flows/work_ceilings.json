@@ -26,11 +26,14 @@
     "param_execute": {
       "ProjectClone": 1
     },
-    "param_slider_tick": {},
+    "param_slider_tick": {
+      "ModSnapshotCopy": 1
+    },
     "relight_tick": {},
     "send_gain_tick": {},
     "trigger_shape_tick": {},
     "undo": {
+      "ModSnapshotCopy": 1,
       "ProjectClone": 1
     }
   },

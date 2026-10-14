@@ -71,9 +71,7 @@ impl TransportController {
         authority: ClockAuthority,
     ) {
         // Set authority on project settings
-        if let Some(project) = engine.project_mut() {
-            project.settings.clock_authority = authority;
-        }
+        write_clock_authority(engine, authority);
 
         if authority == ClockAuthority::Internal {
             self.disable_non_authority_sources(ClockAuthority::Internal);
@@ -83,9 +81,7 @@ impl TransportController {
 
             // Fail-safe: if the source failed to enable, revert to Internal
             if !self.is_authority_source_enabled(authority) {
-                if let Some(project) = engine.project_mut() {
-                    project.settings.clock_authority = ClockAuthority::Internal;
-                }
+                write_clock_authority(engine, ClockAuthority::Internal);
                 self.disable_non_authority_sources(ClockAuthority::Internal);
                 log::warn!(
                     "[TransportController] Failed to enable {:?}; reverted to Internal.",
@@ -338,5 +334,17 @@ impl TransportController {
 impl Default for TransportController {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// Clock authority is derived from which sync source is live, never a user
+/// choice, so every write is an audited tick write (D24).
+pub fn write_clock_authority(engine: &mut PlaybackEngine, authority: ClockAuthority) {
+    if engine.project().is_some_and(|p| p.settings.clock_authority != authority)
+        && let Some(edit) = engine.project_edit()
+    {
+        manifold_editing::edit::tick_write(manifold_editing::edit::TickField::ClockAuthority, edit, |p| {
+            p.settings.clock_authority = authority;
+        });
     }
 }

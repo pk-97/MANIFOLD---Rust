@@ -731,6 +731,11 @@ impl AbletonBridge {
         self.validation_dirty = true;
     }
 
+    /// `apply` has values to drain or filters still settling.
+    pub fn has_values_to_apply(&self) -> bool {
+        !self.filtered_sources.is_empty() || !self.pending_values.lock().is_empty()
+    }
+
     pub fn apply(&mut self, project: &mut Project, now: f64) -> bool {
         // 1. Drain inbound raw values into the per-source filter targets.
         {

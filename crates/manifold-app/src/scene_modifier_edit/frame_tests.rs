@@ -124,7 +124,7 @@ fn apply_peel(project: &mut Project, layer_id: &LayerId, service: &mut EditingSe
         SceneModifierAction::Add(layer_id.clone(), "SurfacePeel".into()),
     )
     .expect("elastic modifier action builds");
-    service.execute(with_admission(command), project);
+    service.execute(with_admission(command), &mut *project);
     assert!(service.take_rejection().is_none());
     modifier_id(project, layer_id)
 }

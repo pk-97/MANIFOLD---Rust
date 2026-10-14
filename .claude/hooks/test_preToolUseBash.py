@@ -367,20 +367,6 @@ def test_merge_passes_docs_only():
 PIPEY_CMD = "python3 scripts/frob.py | tee /Users/peterkiemann/out.txt"
 
 
-def test_cc_fleet_not_preapproved():
-    # cc-fleet lanes are retired; nothing of it auto-allows.
-    check(
-        "cc-fleet subagent spawn is NOT pre-approved",
-        not hook.is_preapproved_command(
-            "cc-fleet subagent kimi --prompt-file /tmp/b.md --background"
-        ),
-    )
-    check(
-        "ccf status polling is NOT pre-approved",
-        not hook.is_preapproved_command("ccf subagent-status abc123"),
-    )
-
-
 def test_settings_allowed_segments_compose():
     """BUG-ls9y (Bash hook chain parity): a chain whose every segment is
     allowed alone by permissions.allow is pre-approved; anything else in the
@@ -1132,7 +1118,6 @@ def test_config_reads_silent():
         "git commit -m 'Hook: tighten' -- .claude/hooks/preToolUseBash.py",
         "git restore --staged .claude/hooks/x.py",
         ".claude/hooks/test_preToolUseBash.py 2>&1 | tail -4",
-        "nice -n 10 \"$S/.claude/hooks/permissions_sync_check.py\" 2>&1 | tail -3",
         ".claude/hooks/design_status_check.py origin/main HEAD",
         "python3 .claude/hooks/design_status.py --lifecycle-check",
         "echo x > /tmp/w/.claude/settings.json",
@@ -1432,7 +1417,6 @@ def main():
     test_merge_trunk_into_main_no_reminder()
     test_lane_merging_main_in_worktree_no_reminder()
     test_bare_push_on_main_branch_reminds()
-    test_cc_fleet_not_preapproved()
     test_pipe_deny_active_in_default_mode()
     test_pipe_deny_skipped_in_auto_mode()
     test_pipe_deny_active_when_mode_missing()

@@ -9,9 +9,7 @@ slot budgets are met. It never touches a
 dirty or unlanded slot, nor the main checkout.
 Acquire reuses clean landed slots, or clean inactive branches whose exact HEAD
 is freshly confirmed on origin. It never resets an existing branch name.
-Process inspection failures protect the checkout. Idle Codex plugin brokers in
-lease-free slots are stopped first (codex_brokers.py); left running, they read as
-live sessions forever. The ring remains capped at ten.
+Process inspection failures protect the checkout. The ring remains capped at ten.
 
 Retire preserves reviewed tracked changes and handoff notes on a unique remote
 archive/worktrees branch, verifies its SHA, then clears the checkout and cache.
@@ -60,7 +58,6 @@ from storage_budget import (MAINTENANCE_GOAL_BYTES, admission_pool_lock,
                             plan_cache_cleanup, registered_worktrees,
                             slot_cap_bytes, STALE_CACHE_SECONDS,
                             target_live_status, target_size)
-from codex_brokers import stop_idle as stop_idle_codex_brokers
 
 def _main_checkout():
     """Anchor to the MAIN checkout even when this script's copy runs inside a
@@ -420,23 +417,6 @@ def slot_has_live_session(wt):
     return False
 
 
-def stop_idle_brokers(slots):
-    """A Codex plugin broker outlives the session that started it and keeps its
-    cwd in the slot, so `slot_has_live_session` reads every slot an Astra job
-    ever ran in as occupied and the ring fills with idle slots. Stop the idle
-    ones before that scan. Leased slots keep theirs: a lane between Codex
-    turns still owns its broker."""
-    for wt in slots:
-        if lease_blocks(wt)[0]:
-            continue
-        try:
-            lines = stop_idle_codex_brokers(wt)
-        except Exception as error:  # a broken helper must not take the ring down
-            lines = [f"KEEP brokers: helper failed ({error!r})"]
-        for line in lines:
-            print(f"{wt.name}: {line}")
-
-
 def pool_full_report(slots, states):
     """Exit loudly, grouped by WHO can free each slot. A flat status list reads as
     N busy agents when it is really N abandoned trees (2026-07-30: ten slots, one
@@ -603,7 +583,6 @@ def cmd_scrub(_args):
     slots = pool_slots()
     holders = branch_holders()
     idle, pinned = [], []
-    stop_idle_brokers(slots)
     for wt in slots:
         cat, reason, _ = slot_state(wt, holders)
         if cat == IN_USE:
@@ -674,7 +653,6 @@ def reclaimable_for_landing(wt):
 def cmd_reclaim(args):
     need = max(args.free_bytes, MAINTENANCE_GOAL_BYTES)
     victims = []
-    stop_idle_brokers(pool_slots())
     for wt in pool_slots():
         ok, why = reclaimable_for_landing(wt)
         if not ok:
@@ -773,7 +751,6 @@ def cmd_remove(args):
                   if line.startswith("worktree ")}
     if wt not in registered or wt.resolve() == REPO.resolve() or wt.is_symlink():
         sys.exit("REFUSED: not an eligible registered worktree")
-    stop_idle_brokers([wt])
     if lease_blocks(wt)[0] or slot_has_live_session(wt):
         sys.exit("REFUSED: worktree is active")
     if git(wt, "status", "--porcelain").stdout:
@@ -817,7 +794,6 @@ def cmd_retire(args):
     wt = POOL / args.slot
     if wt not in pool_slots() or wt.is_symlink():
         sys.exit(f"REFUSED: invalid slot: {args.slot}")
-    stop_idle_brokers([wt])
     blocked, why = lease_blocks(wt)
     if blocked or slot_has_live_session(wt):
         sys.exit(f"REFUSED: {wt.name} is active ({why if blocked else 'live session'})")

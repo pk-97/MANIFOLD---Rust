@@ -2,7 +2,7 @@
 
 <!-- index: Approved unified modifier schema, typed attachment and coordinate contracts, photoscan migration, bindings and runtime deletion. -->
 
-**Status:** APPROVED · 2026-09-12 · Codex lead · unified architecture not implemented. Shipped photoscan recipes are migration inputs, not completion of this schema.
+**Status:** APPROVED · 2026-09-12 · unified architecture not implemented. Shipped photoscan recipes are migration inputs, not completion of this schema.
 **Prerequisites:** Existing graph/preset/parameter infrastructure and the shipped Loop/Fog/photoscan modifiers. No new backend.
 **Execution contract:** Read [DESIGN_DOC_STANDARD](DESIGN_DOC_STANDARD.md) sections 5–6 and 8; phases are in [Foundation Plan](SCENE_MODIFIER_FOUNDATION_PLAN.md).
 

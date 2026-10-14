@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """UserPromptSubmit hook: inject a compact response-style reminder every turn.
 
-Peter prefers K3's plain-human register over Fable's structured/padded one
-(transcript analysis 2026-07-27) — but without K3's jargon compression."""
+The register is plain human prose: no structured padding, no jargon compression."""
 import sys
 
 REMINDER = """<response-style>

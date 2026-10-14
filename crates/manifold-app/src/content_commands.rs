@@ -2,7 +2,7 @@
 //! Contains the `handle_command` method which routes `ContentCommand` variants
 //! to the appropriate subsystem on the content thread.
 
-use manifold_core::change::Part;
+use manifold_core::change::{ChangeSet, Part};
 use manifold_core::types::ClockAuthority;
 use manifold_core::{Beats, LayerId, NodeId, Seconds};
 use manifold_playback::transport_controller::TransportController;
@@ -76,8 +76,8 @@ fn commit_recording(
     let commands = if finish_active { engine.finish_automation_recording() }
         else { engine.take_finished_automation() };
     if !commands.is_empty() {
-        if let Some(project) = engine.project_mut() {
-            for command in commands { editing.execute(command, project); }
+        if let Some(mut edit) = engine.project_edit() {
+            for command in commands { editing.execute(command, edit.reborrow()); }
         }
         engine.mark_compositor_dirty_now();
     }
@@ -157,7 +157,7 @@ impl ContentThread {
         command: Box<dyn manifold_editing::command::Command>,
     ) -> bool {
         self.engine.clear_automation_previews();
-        let (renderers, project) = self.engine.split_renderer_project_mut();
+        let (renderers, project) = self.engine.split_renderer_project_edit();
         let applied = if let Some(project) = project {
             self.editing_service.execute_with_validation(
                 command,
@@ -1169,15 +1169,11 @@ impl ContentThread {
                             && before + 1.0 > before)
                 });
                 if accepted && let manifold_core::GraphTarget::Generator(layer_id) = &target {
-                    let (renderers, mut project) = self.engine.split_renderer_project_mut();
-                    if let Some(project) = project.as_mut() {
-                        project.tempo_map.ensure_sorted();
-                    }
-                    let result = if let Some(layer) = project.as_deref().and_then(|project|
+                    let (renderers, project) = self.engine.split_renderer_project();
+                    let result = if let Some(layer) = project.and_then(|project|
                         project.timeline.layers.iter().find(|layer| &layer.layer_id == layer_id)) {
                         if GeneratorRenderer::has_scene_impulse(layer, param_id.as_ref()) {
                             let project_tempo = project
-                                .as_deref()
                                 .map(|project| manifold_node_engine::runtime::preset_context::ProjectTempo::new(
                                     &project.tempo_map,
                                     project.settings.bpm,
@@ -1203,7 +1199,7 @@ impl ContentThread {
                         p.settings.render_scale,
                     )
                 });
-                let (renderers, project) = self.engine.split_renderer_project_mut();
+                let (renderers, project) = self.engine.split_renderer_project_edit();
                 if let Some(project) = project {
                     self.editing_service.execute_with_validation(
                         cmd,
@@ -1245,7 +1241,7 @@ impl ContentThread {
                         p.settings.render_scale,
                     )
                 });
-                let (renderers, project) = self.engine.split_renderer_project_mut();
+                let (renderers, project) = self.engine.split_renderer_project_edit();
                 if let Some(project) = project {
                     let command = Box::new(manifold_editing::command::CompositeCommand::new(cmds, desc));
                     let command = crate::scene_modifier_edit::with_admission_device(command, budget_device);
@@ -1292,7 +1288,7 @@ impl ContentThread {
                 // after would need a second (post-undo) accessor.
                 let desc = self.editing_service.peek_undo_description().map(str::to_string);
                 let undone = {
-                    let (renderers, project) = self.engine.split_renderer_project_mut();
+                    let (renderers, project) = self.engine.split_renderer_project_edit();
                     if let Some(project) = project {
                         self.editing_service.undo_with_validation(project, |candidate| {
                             let changed = pre.is_some_and(|(pre_w, pre_h, pre_rs)| {
@@ -1353,7 +1349,7 @@ impl ContentThread {
                 // matching comment in the `Undo` arm above.
                 let desc = self.editing_service.peek_redo_description().map(str::to_string);
                 let redone = {
-                    let (renderers, project) = self.engine.split_renderer_project_mut();
+                    let (renderers, project) = self.engine.split_renderer_project_edit();
                     if let Some(project) = project {
                         self.editing_service.redo_with_validation(project, |candidate| {
                             let changed = pre.is_some_and(|(pre_w, pre_h, pre_rs)| {
@@ -1472,8 +1468,14 @@ impl ContentThread {
                 // they don't sit at default Dormant after a project load.
                 // Discovery may already be complete from a prior connect, in
                 // which case `take_validation_dirty` won't fire on its own.
-                if let Some(p) = self.engine.project_mut() {
-                    self.ableton_bridge.validate_mappings(p);
+                if self.engine.project().is_some_and(|p| self.ableton_bridge.validation_would_change(p))
+                    && let Some(edit) = self.engine.project_edit()
+                {
+                    let bridge = &self.ableton_bridge;
+                    self.editing_service.mutate(ChangeSet::of(&[Part::Mappings]), edit, |p| bridge.validate_mappings(p));
+                    self.reactions.publish_pending = true;
+                }
+                if let Some(p) = self.engine.project() {
                     self.ableton_bridge.rebuild_listeners(p);
                 }
                 // Honor the persisted LED ON/OFF state. If the project saved
@@ -1603,8 +1605,12 @@ impl ContentThread {
             ContentCommand::SetFrameRate(fps) => {
                 // The engine's clock and then the content timer follow the
                 // setting on the next tick (FRAME_EXACT_TRANSPORT_DESIGN D10).
-                if let Some(p) = self.engine.project_mut() {
-                    p.settings.frame_rate = fps as f32;
+                let fps = fps as f32;
+                if self.engine.project().is_some_and(|p| p.settings.frame_rate != fps)
+                    && let Some(edit) = self.engine.project_edit()
+                {
+                    self.editing_service.mutate(ChangeSet::of(&[Part::Settings]), edit, |p| p.settings.frame_rate = fps);
+                    self.reactions.publish_pending = true;
                 }
             }
 
@@ -1650,8 +1656,8 @@ impl ContentThread {
             // ── Direct project mutation ────────────────────────────
             // Reactions run once per drain pass from the stamps (D4).
             ContentCommand::MutateProject { touches, f } => {
-                if let Some(p) = self.engine.project_mut() {
-                    self.editing_service.mutate(touches, p, f);
+                if let Some(edit) = self.engine.project_edit() {
+                    self.editing_service.mutate(touches, edit, f);
                 }
             }
 
@@ -1667,17 +1673,8 @@ impl ContentThread {
                 target_layer,
                 result_tx,
             } => {
-                if let Some(p) = self.engine.project_mut() {
-                    let result =
-                        self.editing_service
-                            .paste_clips(p, target_beat, target_layer);
-                    if !result.commands.is_empty() {
-                        self.editing_service.execute_batch(
-                            result.commands,
-                            "Paste clips".into(),
-                            p,
-                        );
-                    }
+                if let Some(edit) = self.engine.project_edit() {
+                    let result = self.editing_service.paste_clips_into(edit, target_beat, target_layer);
                     let _ = result_tx.send((result.pasted_clip_ids, result.skip_reason));
                 } else {
                     let _ = result_tx.send((Vec::new(), None));
@@ -1686,28 +1683,12 @@ impl ContentThread {
 
             // ── Percussion ────────────────────────────────────────
             ContentCommand::DetectClip(clip_id) => {
-                if let Some(p) = self.engine.project_mut() {
+                if let Some(p) = self.engine.project() {
                     self.percussion_orchestrator.detect_clip(clip_id, p);
                 }
             }
-            ContentCommand::ReplanClip(clip_id) => {
-                if let Some(p) = self.engine.project_mut() {
-                    self.percussion_orchestrator.replan_clip(
-                        clip_id,
-                        p,
-                        &mut self.editing_service,
-                    );
-                }
-            }
-            ContentCommand::ClearClipTriggers(clip_id) => {
-                if let Some(p) = self.engine.project_mut() {
-                    self.percussion_orchestrator.clear_clip_triggers(
-                        clip_id,
-                        p,
-                        &mut self.editing_service,
-                    );
-                }
-            }
+            ContentCommand::ReplanClip(clip_id) => self.rewrite_clip_triggers(clip_id, false),
+            ContentCommand::ClearClipTriggers(clip_id) => self.rewrite_clip_triggers(clip_id, true),
 
             // ── Ableton bridge ──────────────────────────────────────
             ContentCommand::AbletonMapParam { target, address } => {
@@ -1715,7 +1696,7 @@ impl ContentThread {
                     AbletonMappingStatus, AbletonMappingTarget, AbletonParamMapping,
                 };
                 use manifold_editing::commands::ableton::ChangeAbletonMappingCommand;
-                if let Some(p) = self.engine.project_mut() {
+                if let Some(p) = self.engine.project() {
                     // Effect/gen targets carry the canonical param_id; the
                     // macro-slot variant doesn't have one (it routes to a
                     // slot index instead).
@@ -1756,17 +1737,22 @@ impl ContentThread {
                         old_label,
                         new_label,
                     );
-                    self.editing_service.execute(Box::new(cmd), p);
-                    p.settings.ableton_set_context = Some(self.ableton_bridge.build_set_context());
+                    let context = Some(self.ableton_bridge.build_set_context());
+                    if let Some(mut edit) = self.engine.project_edit() {
+                        self.editing_service.execute(Box::new(cmd), edit.reborrow());
+                        if edit.project().settings.ableton_set_context != context {
+                            self.editing_service.mutate(ChangeSet::of(&[Part::Mappings]), edit, |p| p.settings.ableton_set_context = context);
+                        }
+                    }
                 }
             }
             ContentCommand::AbletonUnmapParam { target } => {
                 use manifold_editing::commands::ableton::ChangeAbletonMappingCommand;
-                if let Some(p) = self.engine.project_mut()
-                    && let Some(old) = get_existing_mapping(p, &target)
+                if let Some(old) = self.engine.project().and_then(|p| get_existing_mapping(p, &target))
+                    && let Some(edit) = self.engine.project_edit()
                 {
                     let cmd = ChangeAbletonMappingCommand::unmap(target, old);
-                    self.editing_service.execute(Box::new(cmd), p);
+                    self.editing_service.execute(Box::new(cmd), edit);
                 }
             }
             ContentCommand::AbletonRediscover => {
@@ -1778,8 +1764,12 @@ impl ContentThread {
             ContentCommand::ToggleOscSyncMode => {
                 // Toggle AbletonOSC transport sync on/off.
                 // Sets mode to AbletonOsc and enables/disables transport listeners.
-                if let Some(p) = self.engine.project_mut() {
-                    p.settings.osc_sync_mode = manifold_core::types::OscSyncMode::AbletonOsc;
+                let mode = manifold_core::types::OscSyncMode::AbletonOsc;
+                if self.engine.project().is_some_and(|p| p.settings.osc_sync_mode != mode)
+                    && let Some(edit) = self.engine.project_edit()
+                {
+                    self.editing_service.mutate(ChangeSet::of(&[Part::Settings]), edit, |p| p.settings.osc_sync_mode = mode);
+                    self.reactions.publish_pending = true;
                 }
                 if self.ableton_bridge.is_transport_enabled() {
                     self.ableton_bridge.disable_transport_sync();
@@ -2127,17 +2117,17 @@ mod recording_save_tests {
         engine.set_state(manifold_core::types::PlaybackState::Playing);
         engine.locate(Seconds(1.0));
         engine.set_automation_armed(true);
-        engine.project_mut().unwrap().find_effect_by_id_mut(&id).unwrap().set_base_param("amount", 0.7);
+        editing.mutate(ChangeSet::of(&[Part::Values]), engine.project_edit().unwrap(), |p| { p.find_effect_by_id_mut(&id).unwrap().set_base_param("amount", 0.7); });
         // Match the ordered FinishAutomationRecording -> Execute messages.
         commit_recording(&mut engine, &mut editing, true);
         editing.execute(Box::new(manifold_editing::commands::automation::RemoveLaneCommand::new(
             manifold_core::GraphTarget::Effect(id.clone()), "amount", 0,
-        )), engine.project_mut().unwrap());
+        )), engine.project_edit().unwrap());
         assert!(engine.project().unwrap().find_effect_by_id(&id).unwrap().automation_lanes.as_ref().unwrap().is_empty());
         assert!(engine.finish_automation_recording().is_empty(), "no delayed take can recreate the lane");
-        assert!(editing.undo(engine.project_mut().unwrap()));
+        assert!(editing.undo(engine.project_edit().unwrap()));
         assert_eq!(engine.project().unwrap().find_effect_by_id(&id).unwrap().automation_lanes.as_ref().unwrap()[0].value_at(Beats(2.0)), 0.7);
-        assert!(editing.redo(engine.project_mut().unwrap()));
+        assert!(editing.redo(engine.project_edit().unwrap()));
         assert!(engine.project().unwrap().find_effect_by_id(&id).unwrap().automation_lanes.as_ref().unwrap().is_empty());
     }
 
@@ -2156,7 +2146,7 @@ mod recording_save_tests {
         engine.set_state(manifold_core::types::PlaybackState::Playing);
         engine.locate(Seconds(1.0));
         engine.set_automation_armed(true);
-        engine.project_mut().unwrap().find_effect_by_id_mut(&id).unwrap().set_base_param("amount", 0.7);
+        editing.mutate(ChangeSet::of(&[Part::Values]), engine.project_edit().unwrap(), |p| { p.find_effect_by_id_mut(&id).unwrap().set_base_param("amount", 0.7); });
         let (snapshot, version) = prepare_project_save(&mut engine, &mut editing).unwrap();
         assert_eq!(version, editing.data_version());
         assert!(version > 0);
@@ -2166,9 +2156,9 @@ mod recording_save_tests {
         assert_eq!(lane.value_at(Beats(2.0)), 0.7);
         let (_, repeated_version) = prepare_project_save(&mut engine, &mut editing).unwrap();
         assert_eq!(version, repeated_version, "saving twice must not create a second take");
-        assert!(editing.undo(engine.project_mut().unwrap()));
+        assert!(editing.undo(engine.project_edit().unwrap()));
         assert!(engine.project().unwrap().find_effect_by_id(&id).unwrap().automation_lanes.as_ref().is_none_or(Vec::is_empty));
-        assert!(editing.redo(engine.project_mut().unwrap()));
+        assert!(editing.redo(engine.project_edit().unwrap()));
         assert_eq!(engine.project().unwrap().find_effect_by_id(&id).unwrap().automation_lanes.as_ref().unwrap()[0].points, lane.points);
     }
 }

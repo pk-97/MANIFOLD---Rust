@@ -201,6 +201,7 @@ impl PartStamps {
 | ViewPrefs (added at P3a) | `saved_playhead_time` (restored on load, never read by a consumer after) |
 | Layers (added at P3a) | the load-only `legacy_gen_*` fields on a layer |
 | Effects (added at P3a) | the load-only `legacy_param0..3`, `legacy_param_version` on an instance, `legacy_effect_addr` on a macro mapping. Binding membership in a materialized graph (which bindings and params exist, their ids and targets) is Effects; their reshape values (spec min, max, curve, invert, binding scale, offset, `calibrated`) are Shapes, and the audit fingerprints the two apart |
+| No part (P3b) | `clip_control_digest` on a param: a runtime cache the tick re-derives from Clips and Effects; unowned in the change audit |
 
 `⚠ VERIFY-AT-IMPL (P3a): re-derive this table against the struct definitions (project/mod.rs :73, settings.rs, timeline.rs, layer.rs, the Ableton mapping struct). A field that fits no row, or a Values or Shapes field that some consumer reads only on change, is an escalation. The live drags in section 1 are the worked examples: each writes only Shapes or Values fields.`
 
