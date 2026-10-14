@@ -655,9 +655,10 @@ impl ParamCardPanel {
     /// (UI_INVALIDATION_DESIGN.md decided item 10: drawers open by reveal).
     /// Each drawer whose height moved since the tree showed it is pushed as a
     /// [`Reflow`] for the column to apply; each sliding ink moves to its
-    /// tween's x. Nothing for a card not built.
+    /// tween's x. Nothing for a card the current tree does not hold: one not
+    /// built, or built into an arena that has been rebuilt since.
     pub fn take_motion(&mut self, tree: &mut UITree, out: &mut Vec<crate::scroll_container::Reflow>) {
-        if !self.is_live() {
+        if !self.is_live() || !self.border_id.is_some_and(|id| tree.is_live(id)) {
             return;
         }
         for i in 0..self.drawer_shown.len() {

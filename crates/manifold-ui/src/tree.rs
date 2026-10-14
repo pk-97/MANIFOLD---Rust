@@ -1247,8 +1247,6 @@ impl UITree {
         self.structure_version = self.structure_version.wrapping_add(1);
     }
 
-    /// Move every node of `region` by `(dx, dy)` in place (D7): a region whose
-    /// rect moved but kept its size is translated, never rebuilt.
     /// Give a region's root clip a new rect, for a region its panel laid out
     /// again in place at a new rect.
     pub fn set_region_rect(&mut self, region: u8, rect: Rect) {
@@ -1257,6 +1255,8 @@ impl UITree {
         }
     }
 
+    /// Move every node of `region` by `(dx, dy)` in place (D7): a region whose
+    /// rect moved but kept its size is translated, never rebuilt.
     pub fn translate_region(&mut self, region: u8, dx: f32, dy: f32) {
         let arena = &mut self.arenas[region as usize];
         for n in &mut arena.nodes {

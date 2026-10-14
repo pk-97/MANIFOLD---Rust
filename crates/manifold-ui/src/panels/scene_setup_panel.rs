@@ -1128,6 +1128,8 @@ pub struct ScenePanel {
     object_cards_were_animating: bool,
     /// Reused per frame: the drawer reflows the object cards report.
     reflow_scratch: Vec<crate::scroll_container::Reflow>,
+    /// Object-card motion moved built nodes since the frame last asked.
+    moved_in_place: bool,
 }
 
 impl Default for ScenePanel {
@@ -1207,6 +1209,7 @@ impl Default for ScenePanel {
             object_cards_animating: false,
             object_cards_were_animating: false,
             reflow_scratch: Vec::new(),
+            moved_in_place: false,
         }
     }
 }

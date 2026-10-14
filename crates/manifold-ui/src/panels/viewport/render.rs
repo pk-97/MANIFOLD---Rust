@@ -1035,6 +1035,19 @@ impl TimelineViewportPanel {
                         color::MARKER_LABEL_HEIGHT,
                     ),
                 );
+                // A drag past a neighbour re-sorts the list, so the marker at
+                // this index may not be the one the label was built for.
+                tree.set_text(group.label_id, &marker.name);
+                tree.set_style(
+                    group.label_id,
+                    UIStyle {
+                        bg_color: color::MARKER_LABEL_BG,
+                        text_color: mc,
+                        font_size: RULER_FONT_SIZE,
+                        text_align: TextAlign::Left,
+                        ..UIStyle::default()
+                    },
+                );
             }
         }
 

@@ -183,7 +183,7 @@
       "drawer_change_click": {
         "ChromeLayout": 6,
         "ClipProjection": 2,
-        "FrameAlloc": 1253,
+        "FrameAlloc": 1254,
         "GridBitmapRepaint": 2,
         "InspectorSync": 2,
         "LaneProjection": 4,

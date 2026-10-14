@@ -183,7 +183,8 @@ pub(crate) fn apply_ui_frame_invalidations(
     // An in-place inspector scroll offset the content nodes without a
     // rebuild: repaint just the inspector's atlas slot. One-shot, so a caller
     // that reuses `UiFrameSignals` across frames (the harness) never replays it.
-    if std::mem::take(&mut signals.scrolled_in_place)
+    let inspector_scrolled = std::mem::take(&mut signals.scrolled_in_place);
+    if inspector_scrolled
         && let Some(cm) = &mut cache
         && let Some(slot) = MainRegion::Inspector.panel_slot()
     {
@@ -240,6 +241,12 @@ pub(crate) fn apply_ui_frame_invalidations(
     }
     let moved = translate_regions(ui_root, cache.as_deref_mut(), translate);
     let rebuilt = rebuild_regions(ui_root, cache, regions) || scrolled || moved;
+    // Nodes that moved in place slid under a still cursor; no rebuild
+    // cleared their hover, so resolve it again where the pointer is.
+    let cards_moved = ui_root.inspector.take_moved_in_place() | ui_root.scene_setup_panel.take_moved_in_place();
+    if inspector_scrolled || scrolled || moved || cards_moved {
+        ui_root.input.refresh_hover(&mut ui_root.tree);
+    }
     settle_ghosts(ui_root);
     rebuilt
 }
@@ -350,7 +357,10 @@ pub(crate) fn gather_frame_inputs(
         active_layer: planner.active_layer_version(active_layer),
         automation_view: selection.automation_view(),
         lane_heights: selection.lane_heights_view(),
-        chrome: planner.chrome_inputs(content_state, &chrome),
+        chrome: crate::frame_plan::ChromeInputs {
+            export_open: ui_root.export_progress.is_open(),
+            ..planner.chrome_inputs(content_state, &chrome)
+        },
         rects: ui_root.region_rects(),
         scroll_x_px: ui_root.viewport.beat_to_pixel(Beats::ZERO).round() as i32,
         scroll_y_px: ui_root.viewport.scroll_y_px().round() as i32,
@@ -444,8 +454,8 @@ pub(crate) fn apply_frame_plan(
         let idx = active_idx(project, active_layer);
         crate::ui_bridge::sync_inspector_data(ui_root, project, idx, selection, latched, led_preview);
     }
-    // A marker drag moved the dragged marker; the viewport rebuild that
-    // follows draws the new list.
+    // A marker drag moved the dragged marker; the viewport lays the new list
+    // out in place.
     if projections.contains(Projection::MarkerPreview) && !project_sync {
         crate::ui_bridge::sync_markers(ui_root, project);
     }

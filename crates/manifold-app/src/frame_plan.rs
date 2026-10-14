@@ -180,6 +180,8 @@ pub(crate) struct ChromeInputs {
     /// Detect progress in tenths of a percent, and whether it shows.
     pub detect_permille: u16,
     pub detect_show: bool,
+    /// Export progress is open: the header hides the detect status.
+    pub export_open: bool,
     pub is_dirty: bool,
     /// Moves when a shown string changed: the clock device and position, the
     /// detect status, the project path (compared by retained pointer).
@@ -384,11 +386,13 @@ pub(crate) struct ViewportMoves {
     /// The layer headers' or viewport's rect, or the track heights, moved:
     /// both lay their rows out again in place.
     pub relayout: bool,
+    /// A marker drag moved the marker list: the flags lay out again in place.
+    pub markers: bool,
 }
 
 impl ViewportMoves {
     pub(crate) fn any(self) -> bool {
-        self.scroll_x || self.scroll_y || self.zoom || self.relayout
+        self.scroll_x || self.scroll_y || self.zoom || self.relayout || self.markers
     }
 }
 
@@ -581,6 +585,7 @@ pub(crate) fn plan_frame(last: &FrameInputs, next: &FrameInputs) -> FramePlan {
         scroll_y: last.scroll_y_bits != next.scroll_y_bits,
         zoom: last.zoom_bits != next.zoom_bits,
         relayout: lane_heights,
+        markers: false,
     };
     // The timeline lists change shape only when their project parts move or
     // the lanes open or close; a selection or active-layer change re-projects
@@ -701,12 +706,13 @@ fn plan_regions(
         in_place.insert(headers);
     }
 
-    // Marker flags are tree nodes with no in-place path yet, so a marker
-    // drag rebuilds the viewport like a committed marker edit.
-    if timeline_shape || projections.contains(Projection::MarkerPreview) {
+    if timeline_shape {
         rebuild.insert(viewport);
     }
+    // A marker drag keeps the marker count, so the flags move in place.
+    plan.viewport.markers = projections.contains(Projection::MarkerPreview);
     if relayout
+        || plan.viewport.markers
         || last.scroll_x_px != next.scroll_x_px
         || last.scroll_y_px != next.scroll_y_px
         || last.zoom_bits != next.zoom_bits
@@ -787,6 +793,8 @@ impl FramePlanner {
             time_digits: time_digits(content, source.project.settings.time_signature_numerator),
             detect_permille: (progress * 1000.0).round() as u16,
             detect_show: content.percussion_show_progress,
+            // The gatherer, which holds the UI, fills this in.
+            export_open: false,
             is_dirty: source.is_dirty,
             text: self.chrome_text.version(content, source.project_path),
         }
@@ -1253,7 +1261,7 @@ mod tests {
         let mut next = base();
         next.preview.markers = 1;
         let p = plan(next);
-        assert!(p.rebuild.contains(r), "marker flags have no in-place path yet");
+        assert!(p.in_place.contains(r) && !p.rebuild.contains(r), "marker flags move in place");
         assert!(!runs(&p, Projection::ProjectSync), "a marker drag projects only the markers");
     }
 
@@ -1404,6 +1412,8 @@ mod tests {
         assert!(runs(&p, Projection::MarkerPreview));
         assert!(!runs(&p, Projection::InspectorSync));
         assert!(!runs(&p, Projection::ClipPreview));
+        assert!(p.viewport.markers && p.in_place.contains(MainRegion::Viewport));
+        assert!(!p.rebuild.contains(MainRegion::Viewport), "a marker drag moves the flags in place");
     }
 
     #[test]

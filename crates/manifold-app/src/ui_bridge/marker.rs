@@ -191,8 +191,8 @@ mod drag_preview_tests {
     }
 
     /// A marker drag is a preview (D12): each move moves the marker preview
-    /// version and no stamp, so the plan re-projects the markers and the
-    /// viewport and nothing else; the drop commits and stamps Markers.
+    /// version and no stamp, so the plan re-projects the markers and moves the
+    /// viewport flags in place, nothing else; the drop commits and stamps Markers.
     #[test]
     fn marker_drag_moves_the_preview_and_the_drop_stamps_markers() {
         let mut project = Project::default();
@@ -219,7 +219,8 @@ mod drag_preview_tests {
             assert!(plan.projections.contains(Projection::MarkerPreview));
             assert!(!plan.projections.contains(Projection::ProjectSync));
             assert!(!plan.projections.contains(Projection::InspectorSync));
-            assert!(plan.rebuild.contains(MainRegion::Viewport));
+            assert!(plan.viewport.markers && plan.in_place.contains(MainRegion::Viewport));
+            assert!(!plan.rebuild.contains(MainRegion::Viewport), "a marker drag moves flags in place");
             last = next;
         }
         assert!(rx.try_recv().is_err(), "the content thread never sees a preview");

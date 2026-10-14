@@ -489,7 +489,7 @@ impl ScenePanel {
         if self.object_cards_animating {
             self.view_version += 1;
         }
-        self.apply_object_card_motion(tree);
+        self.moved_in_place |= self.apply_object_card_motion(tree);
         if let Some(pos) = self.object_modifier_drag.as_ref().and_then(|drag| drag.pointer) {
             let bounds = self.object_modifier_bounds;
             if bounds.contains(pos) {
@@ -509,6 +509,11 @@ impl ScenePanel {
 
     pub fn object_cards_animating(&self) -> bool { self.object_cards_animating }
 
+    /// Whether object-card motion moved built nodes since the last call.
+    pub fn take_moved_in_place(&mut self) -> bool {
+        std::mem::take(&mut self.moved_in_place)
+    }
+
     /// Settle shared card motion for scripted frames without a running UI clock.
     pub fn skip_cards_to_settled(&mut self, tree: &mut UITree) -> bool {
         let mut structural = false;
@@ -517,7 +522,9 @@ impl ScenePanel {
             structural |= card.structural_motion();
             any |= card.skip_to_settled(tree);
         }
-        any |= self.apply_object_card_motion(tree);
+        let moved = self.apply_object_card_motion(tree);
+        self.moved_in_place |= moved;
+        any |= moved;
         self.object_cards_animating = false;
         self.object_cards_were_animating = false;
         if structural {

@@ -1098,8 +1098,8 @@ impl UIRoot {
     }
 
     /// Apply a scroll, zoom or relayout to the layer headers and viewport in
-    /// place: ruler, markers and export markers on a horizontal move or a
-    /// zoom, track and header rows on a vertical one, everything on a
+    /// place: ruler, markers and export markers on a horizontal move, a zoom
+    /// or a marker drag, track and header rows on a vertical one, everything on a
     /// relayout (a new rect or new track heights). A panel in `rebuilding`
     /// is left to its rebuild. Returns false when a count no longer matches,
     /// and the caller rebuilds
@@ -1134,7 +1134,7 @@ impl UIRoot {
             return ok;
         }
         let mut ok = true;
-        if dirty.scroll_x || dirty.zoom {
+        if dirty.scroll_x || dirty.zoom || dirty.markers {
             ok = self.viewport.try_update_horizontal_scroll(&mut self.tree);
         }
         if ok && dirty.scroll_y {
@@ -1673,6 +1673,7 @@ mod region_structural_tests {
                 scroll_y: true,
                 zoom: true,
                 relayout: false,
+                markers: false,
             }),
             ..Default::default()
         };

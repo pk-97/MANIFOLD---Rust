@@ -166,13 +166,22 @@ impl ScrollContainer {
     /// clip. With no clip (a closing drawer whose content is gone) the space
     /// closes below the card frame. The content height follows, and a scroll
     /// a shorter column clamps moves the content back into range. Equal to a
-    /// fresh build at the new height. Returns false when nothing is built.
+    /// fresh build at the new height. Returns false when nothing is built, or
+    /// when the column or the card is not the current build.
     pub fn reflow(&mut self, tree: &mut UITree, r: Reflow) -> bool {
         const EPS: f32 = 0.01;
         let Some(clip_root) = self.clip_node_id else {
             return false;
         };
         if self.content_end <= self.content_start || r.dy == 0.0 {
+            return false;
+        }
+        // A column or card from an earlier build: its slots now hold other
+        // nodes, so nothing here may move.
+        if !tree.is_live(clip_root)
+            || r.clip.is_some_and(|clip| !tree.is_live(clip))
+            || r.frame.iter().flatten().any(|&id| !tree.is_live(id))
+        {
             return false;
         }
         let frame = r.frame[0].map(|id| tree.get_bounds(id));

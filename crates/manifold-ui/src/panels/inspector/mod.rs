@@ -398,6 +398,9 @@ pub struct InspectorCompositePanel {
     drawer_anim_prev: bool,
     /// Reused per frame: the drawer reflows the cards report.
     reflow_scratch: Vec<crate::scroll_container::Reflow>,
+    /// Card motion moved built nodes since the frame last asked, so hover
+    /// under a still cursor is stale.
+    moved_in_place: bool,
     /// Wall-clock anchor for this frame's tween `dt_ms` — the inspector has no
     /// frame timer, so it measures its own delta (same pattern as the layer
     /// header's mute-chip motion). `None` until the first `update()` call, so
@@ -544,6 +547,7 @@ impl InspectorCompositePanel {
             drawer_anim_active: false,
             drawer_anim_prev: false,
             reflow_scratch: Vec::new(),
+            moved_in_place: false,
             motion_last_tick: None,
         }
     }
@@ -578,13 +582,20 @@ impl InspectorCompositePanel {
         }
         // Drawer heights and tab inks settle in place; only a structural
         // tween needs the region rebuilt.
-        any |= self.apply_card_motion(tree);
+        let moved = self.apply_card_motion(tree);
+        self.moved_in_place |= moved;
+        any |= moved;
         self.drawer_anim_active = false;
         self.drawer_anim_prev = false;
         if structural {
             self.view_version += 1;
         }
         any
+    }
+
+    /// Whether card motion moved built nodes since the last call.
+    pub fn take_moved_in_place(&mut self) -> bool {
+        std::mem::take(&mut self.moved_in_place)
     }
 
     /// Move each column's built cards to where their drawer and tab-ink
@@ -1429,7 +1440,7 @@ impl Panel for InspectorCompositePanel {
         if self.drawer_anim_active {
             self.view_version += 1;
         }
-        self.apply_card_motion(tree);
+        self.moved_in_place |= self.apply_card_motion(tree);
     }
 
     fn handle_event(&mut self, event: &UIEvent, tree: &UITree) -> Vec<PanelAction> {
