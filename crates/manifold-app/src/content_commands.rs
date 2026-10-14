@@ -3,7 +3,7 @@
 //! to the appropriate subsystem on the content thread.
 
 use manifold_core::change::{ChangeSet, Part};
-use manifold_core::{Beats, LayerId, NodeId, Seconds};
+use manifold_core::{LayerId, NodeId, Seconds};
 use manifold_playback::external_sync::OffsetTake;
 use manifold_playback::transport_controller::TransportController;
 use manifold_compositor::generator_renderer::GeneratorRenderer;
@@ -2097,6 +2097,7 @@ impl ContentThread {
 mod recording_save_tests {
     use super::*;
     use manifold_core::effects::PresetInstance;
+    use manifold_core::Beats;
     use manifold_core::params::{Param, ParamManifest};
     use manifold_core::effect_graph_def::ParamSpecDef;
 
