@@ -16,7 +16,7 @@ struct Rig {
     active_layer: Option<LayerId>,
     user_prefs: crate::user_prefs::UserPrefs,
     scrub: crate::ui_bridge::ScrubState,
-    stamps: crate::frame_plan::UiStamps,
+    edits: crate::gesture_preview::UiEdits,
     planner: FramePlanner,
 }
 
@@ -44,7 +44,7 @@ impl Rig {
             active_layer: None,
             user_prefs: crate::user_prefs::UserPrefs::in_memory(),
             scrub: crate::ui_bridge::ScrubState::default(),
-            stamps: crate::frame_plan::UiStamps::default(),
+            edits: Default::default(),
             planner: FramePlanner::default(),
         };
         let first = rig.inputs();
@@ -54,7 +54,7 @@ impl Rig {
 
     fn dispatch(&mut self, action: PanelAction) -> crate::ui_bridge::DispatchResult {
         let mut ctx = crate::ui_bridge::DispatchCtx {
-            project: crate::ui_bridge::ProjectRef::new(&mut self.project, &mut self.stamps, &self.content_tx),
+            project: crate::ui_bridge::ProjectRef::new(&mut self.project, &mut self.edits, &self.content_tx),
             content_tx: &self.content_tx,
             content_state: &self.content_state,
             ui: &mut self.ui,
@@ -71,7 +71,7 @@ impl Rig {
     /// The selection-side planner inputs, read as `gather_frame_inputs` does.
     fn inputs(&mut self) -> FrameInputs {
         FrameInputs {
-            parts: self.stamps.parts(),
+            parts: self.edits.stamps.parts(),
             selection_identity: self.selection.selection_identity_version(),
             selection_visual: self.selection.selection_visual_version(),
             cursor: self.selection.cursor_version(),
@@ -85,8 +85,7 @@ impl Rig {
 
     /// Dispatch one gesture and plan the frame after it.
     fn frame(&mut self, action: PanelAction) -> crate::frame_plan::FramePlan {
-        let result = self.dispatch(action.clone());
-        assert!(!result.structural_change, "{action:?} returns handled()");
+        self.dispatch(action.clone());
         assert!(self.content_rx.try_recv().is_err(), "{action:?} sends nothing");
         let next = self.inputs();
         self.planner.plan(next)

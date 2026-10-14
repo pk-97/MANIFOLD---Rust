@@ -156,7 +156,10 @@ use crate::ui_root::{ScrollDirty, UIRoot};
 #[derive(Default)]
 pub(crate) struct UiFrameSignals {
     pub needs_rebuild: bool,
-    pub needs_structural_sync: bool,
+    /// A projection rewrote the panels' lists this frame, so the tree
+    /// rebuilds; unlike `needs_rebuild` it is not kept across a drag that
+    /// defers the rebuild.
+    pub projected: bool,
     pub scroll_dirty: ScrollDirty,
     pub scrolled_in_place: bool, // the scroll-in-place path (app_render.rs, pre-extraction :960-964)
 }
@@ -202,7 +205,7 @@ pub(crate) fn apply_ui_frame_invalidations(
     // snap-back.
     let inspector_dragging = ui_root.inspector.is_dragging();
     let layer_dragging = ui_root.layer_headers.is_dragging();
-    if signals.needs_rebuild || signals.needs_structural_sync {
+    if signals.needs_rebuild || signals.projected {
         if inspector_dragging {
             // Defer — keep needs_rebuild set so it fires after drag ends.
             // But still rebuild scroll panels if needed (they're separate
@@ -250,8 +253,6 @@ pub(crate) fn apply_ui_frame_invalidations(
 pub(crate) struct UiFrameFlags {
     /// A tree rebuild with no projection (modifier keys, resize drags, tweens).
     pub rebuild: bool,
-    /// Re-project the project and inspector and rebuild, next frame.
-    pub structural: bool,
     /// A lanes-only automation geometry resync.
     pub automation_lanes: bool,
     pub scroll: ScrollDirty,
@@ -279,10 +280,8 @@ impl UiFrameFlags {
     }
 }
 
-/// What the old flags say moved this frame. They stay live beside the plan
-/// and can only add work (UI_INVALIDATION_DESIGN.md P4b).
+/// What moved this frame outside the plan: an in-place inspector scroll.
 pub(crate) struct ProjectionChanges {
-    pub structural: bool,
     pub scrolled_in_place: bool,
 }
 
@@ -323,6 +322,8 @@ pub(crate) fn gather_frame_inputs(
         playhead_px: ui_root.viewport.playhead_pixel().map_or(i32::MIN, |px| px.round() as i32),
         inspector_view: ui_root.inspector.view_version(),
         scene_selection: ui_root.scene_setup_panel.selection_version(),
+        inspector_reveal: ui_root.inspector_reveal_version(),
+        layer_reveal: ui_root.layer_reveal_version(),
         dock_view: ui_root.audio_setup_panel.view_version(),
         overlays: ui_root.overlays_version(),
         audio_directory: content_state.audio_directory_version,
@@ -370,10 +371,9 @@ pub(crate) fn apply_frame_plan(
         id.as_ref().and_then(|id| project.timeline.find_layer_index_by_id(id))
     };
 
-    let structural = changes.structural;
-    let project_sync = structural || projections.contains(Projection::ProjectSync);
+    let project_sync = projections.contains(Projection::ProjectSync);
     let inspector_sync = project_sync || projections.contains(Projection::InspectorSync);
-    if structural || projections.contains(Projection::PresetList) {
+    if projections.contains(Projection::PresetList) {
         ui_root.sync_embedded_presets(project);
     }
     // The content clock's bpm, before the inspector projection reads it. A
@@ -381,7 +381,7 @@ pub(crate) fn apply_frame_plan(
     // (D20), never a structural sync.
     let mut driver_periods_moved = false;
     let mut editor_ui_root = editor_ui_root;
-    if (structural || projections.contains(Projection::DriverReadout))
+    if projections.contains(Projection::DriverReadout)
         && push.content_state.bpm.is_finite()
         && push.content_state.bpm > 0.0
     {
@@ -400,13 +400,16 @@ pub(crate) fn apply_frame_plan(
         let idx = active_idx(project, active_layer);
         crate::ui_bridge::sync_inspector_data(ui_root, project, idx, selection, latched, led_preview);
     }
+    // A marker drag moved the dragged marker; the viewport rebuild that
+    // follows draws the new list.
+    if projections.contains(Projection::MarkerPreview) && !project_sync {
+        crate::ui_bridge::sync_markers(ui_root, project);
+    }
     // The dock's device query keys on its own inputs, not on every inspector
     // sync (P4c).
-    if structural || projections.contains(Projection::AudioDevices) {
+    if projections.contains(Projection::AudioDevices) {
         crate::ui_bridge::sync_audio_dock(ui_root, project);
     }
-    // A projection rewrote the inspector or the timeline lists: rebuild.
-    let needs_structural_sync = inspector_sync;
     // Mirror the inspector sync onto the editor window's own inspector so its
     // column stays in lockstep with the main one; reconfigure (which resets
     // transient card state) fires only when it does for the main window.
@@ -454,7 +457,8 @@ pub(crate) fn apply_frame_plan(
 
     let mut signals = UiFrameSignals {
         needs_rebuild,
-        needs_structural_sync,
+        // A projection rewrote the inspector or the timeline lists: rebuild.
+        projected: inspector_sync,
         scroll_dirty,
         scrolled_in_place: changes.scrolled_in_place,
     };
@@ -490,6 +494,10 @@ pub(crate) fn apply_frame_plan(
     };
     if live.any() {
         crate::ui_bridge::push_live(ui_root, project, push.content_state, idx, live);
+    }
+    // The inspector projection already built the eyes from the project.
+    if projections.contains(Projection::SceneEyes) && !inspector_sync {
+        crate::ui_bridge::sync_scene_outliner_eyes(ui_root, project);
     }
     if driver_periods_moved {
         crate::ui_bridge::sync_driver_readouts(ui_root, project, idx);

@@ -2055,12 +2055,11 @@ mod tests {
         let (_, content_state, mut ui, mut selection, mut active_layer, mut user_prefs) =
             dispatch_harness();
         let (content_tx, content_rx) = crossbeam_channel::unbounded();
-        let result = dispatch_project(
+        dispatch_project(
             &ProjectAction::SceneSetupAddFluid(layer_id.clone(), render_scene_id),
             &mut crate::ui_bridge::ProjectRef::new(&mut project, &mut Default::default(), &content_tx), &content_tx, &content_state, &mut ui, &mut selection,
             &mut active_layer, &mut user_prefs, Default::default(),
         );
-        assert!(!result.structural_change, "the content receipt drives the projection");
         assert_eq!(effective_def(&project, &layer_id), original,
             "UI dispatch must leave the project unchanged until content accepts the edit");
         let ContentCommand::ExecuteSelecting(mut command, request) =
@@ -2579,7 +2578,7 @@ mod tests {
         let (content_tx, content_rx) = crossbeam_channel::unbounded();
 
         let action = ProjectAction::SceneSetupFrameSelected(layer_id.clone(), render_scene_id, object_node_id);
-        let result = dispatch_project(
+        dispatch_project(
             &action,
             &mut crate::ui_bridge::ProjectRef::new(&mut project, &mut Default::default(), &content_tx),
             &content_tx,
@@ -2589,10 +2588,6 @@ mod tests {
             &mut active_layer,
             &mut user_prefs,
             Default::default(),
-        );
-        assert!(
-            !result.structural_change,
-            "framing the camera is a content-owned param write"
         );
         assert_eq!(
             (
@@ -3225,8 +3220,7 @@ mod tests {
             assert!(before >= 1.0, "{name}: Scene ships with at least one");
 
             let action = (case.action)(layer_id.clone(), render_scene_id, before as u32);
-            let (result, content_rx) = dispatch_once(&action, &mut project);
-            assert!(!result.structural_change, "{name}: the content receipt drives the projection");
+            let (_, content_rx) = dispatch_once(&action, &mut project);
             assert_eq!(
                 (case.count)(&project, &layer_id, render_scene_id),
                 before,
@@ -3329,8 +3323,7 @@ mod tests {
                 case.param.to_string(),
                 case.value,
             );
-            let (result, content_rx) = dispatch_once(&action, &mut project);
-            assert!(!result.structural_change, "{name}: a param scrub is not structural");
+            let (_, content_rx) = dispatch_once(&action, &mut project);
             assert_ne!(
                 effective_scene_param_value(&project, &layer_id, node, case.param),
                 case.value,

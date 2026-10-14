@@ -418,7 +418,6 @@ impl Application {
                         &mut self.cursor_manager,
                         &mut self.active_layer_id,
                         &mut self.needs_rebuild,
-                        &mut self.needs_structural_sync,
                         &mut self.automation_lanes_dirty,
                         &mut self.scroll_dirty,
                         &mut self.invalidate_layers,
@@ -1255,12 +1254,16 @@ impl Application {
                     (0.0, 0.0),
                     catalog,
                 );
-                cmd.execute(&mut self.local_project);
-                if cmd.created_node_id().is_none() {
+                let created = self.content_tx.as_ref().and_then(|tx| {
+                    crate::ui_bridge::ProjectRef::new(&mut self.local_project, &mut self.ui_edits, tx).executed_by(|project| {
+                        cmd.execute(project);
+                        cmd.created_node_id()?;
+                        Some((Box::new(cmd) as Box<dyn manifold_editing::command::Command>, ()))
+                    })
+                });
+                if created.is_none() {
                     return true;
                 }
-                let boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
-                self.send_content_cmd(ContentCommand::Execute(boxed));
             }
             if let Some(ed) = self.graph_editor.as_mut() {
                 ed.viewport_gizmo_drag = Some(crate::workspace::GizmoDrag {
@@ -1414,9 +1417,7 @@ impl Application {
                     wires: Vec::new(),
                 },
             );
-            let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
-            boxed.execute(&mut self.local_project);
-            self.send_content_cmd(ContentCommand::Execute(boxed));
+            self.execute_local(Box::new(cmd));
         }
         if let Some(ed) = self.graph_editor.as_mut()
             && let Some(d) = ed.viewport_gizmo_drag.as_mut()
@@ -2654,7 +2655,6 @@ impl Application {
         }
         // App-level shortcuts (handled before UI forwarding)
         let mut consumed = false;
-        let data_version_before = self.content_state.data_version;
         if is_primary {
             // Escape cancels an in-flight timeline clip or automation drag before any
             // other Escape handling — a live drag holds uncommitted model
@@ -2692,7 +2692,6 @@ impl Application {
                     &mut self.cursor_manager,
                     &mut self.active_layer_id,
                     &mut self.needs_rebuild,
-                    &mut self.needs_structural_sync,
                     &mut self.automation_lanes_dirty,
                     &mut self.scroll_dirty,
                     &mut self.invalidate_layers,
@@ -2836,8 +2835,7 @@ impl Application {
                     selection: &mut self.selection,
                     active_layer: &mut self.active_layer_id,
                     needs_rebuild: &mut self.needs_rebuild,
-                    needs_structural_sync: &mut self.needs_structural_sync,
-                    stamps: &mut self.ui_edits.stamps,
+                    edits: &mut self.ui_edits,
                     scroll_dirty: &mut self.scroll_dirty,
                     current_project_path: &self.current_project_path,
                     has_output_window: self.window_registry.has_output_window(),
@@ -2880,6 +2878,7 @@ impl Application {
                     Key::Character(c) if c.as_str() == "n" && m.is_command_only() => {
                         let project = Self::create_default_project();
                         self.local_project = project.clone();
+                        self.ui_edits.stamps.project_replaced();
                         self.suppress_snapshot_until = self.content_state.data_version + 1;
                         self.suppress_snapshot_set_at = self.frame_count;
                         self.send_content_cmd(ContentCommand::LoadProject(Box::new(project)));
@@ -2902,12 +2901,6 @@ impl Application {
         } // end if is_primary
 
         // All other shortcuts handled by InputHandler → AppInputHost.
-
-        // If any keyboard shortcut mutated project data, trigger structural sync
-        if self.content_state.data_version != data_version_before {
-            self.needs_structural_sync = true;
-            self.needs_rebuild = true;
-        }
 
         // Forward to UI input system (unless consumed by app shortcut)
         if is_primary

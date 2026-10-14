@@ -1381,13 +1381,10 @@ mod cache_path_full_render {
 
     /// Click through the REAL input path (`pointer_event` -> `process_events`
     /// -> `crate::ui_bridge::dispatch`, the same real bridge call
-    /// `script.rs`'s Runner uses) and report whether any dispatched action
-    /// was structural or moved the inspector view version (the planner's
-    /// rebuild input; this driver has no planner) — the ONLY signal this
-    /// driver reads to decide `needs_structural_sync`, never a hand-set
-    /// flag. Per-gesture drag/undo
-    /// snapshots are scratch-local: this harness only ever clicks, never
-    /// drags, so they never carry state between calls.
+    /// `script.rs`'s Runner uses), then plan the frame from what the click
+    /// moved, as the App does: the plan's rebuild is the ONLY signal this
+    /// driver reads, never a hand-set flag. This harness only ever clicks,
+    /// never drags, so the scrub state carries nothing between calls.
     #[allow(clippy::too_many_arguments)]
     fn click(
         ui: &mut UIRoot,
@@ -1398,18 +1395,15 @@ mod cache_path_full_render {
         content_tx: &crossbeam_channel::Sender<crate::content_command::ContentCommand>,
         content_state: &ContentState,
         user_prefs: &mut UserPrefs,
+        frame: &mut PlannedFrame,
     ) -> bool {
         ui.pointer_event(pos, PointerAction::Down, clock);
         ui.pointer_event(pos, PointerAction::Up, clock);
-        let view_before = ui.inspector.view_version();
-        let identity_before = data.selection.selection_identity_version();
         let actions = ui.process_events();
-        let mut structural = false;
         let mut scrub = crate::ui_bridge::ScrubState::default();
         for action in &actions {
-            let mut stamps = crate::frame_plan::UiStamps::default();
             let mut dctx = crate::ui_bridge::DispatchCtx {
-                project: crate::ui_bridge::ProjectRef::new(&mut data.project, &mut stamps, content_tx),
+                project: crate::ui_bridge::ProjectRef::new(&mut data.project, &mut frame.edits, content_tx),
                 content_tx,
                 content_state,
                 ui: &mut *ui,
@@ -1420,13 +1414,44 @@ mod cache_path_full_render {
                 scrub: &mut scrub,
                 dialogs: Default::default(),
             };
-            let result = crate::ui_bridge::dispatch(action, &mut dctx);
-            structural |= result.structural_change;
+            crate::ui_bridge::dispatch(action, &mut dctx);
         }
-        // A tab click moves only the selection identity (P4d batch d).
-        structural
-            || ui.inspector.view_version() != view_before
-            || data.selection.selection_identity_version() != identity_before
+        frame.rebuilds(ui, data, active_layer, content_state)
+    }
+
+    /// The planner and the UI ledgers this driver keeps across clicks.
+    #[derive(Default)]
+    struct PlannedFrame {
+        planner: crate::frame_plan::FramePlanner,
+        edits: crate::gesture_preview::UiEdits,
+    }
+
+    impl PlannedFrame {
+        /// Plan against the last frame's inputs; true when a region rebuilds.
+        fn rebuilds(
+            &mut self,
+            ui: &UIRoot,
+            data: &mut fixtures::SceneData,
+            active_layer: &Option<LayerId>,
+            content_state: &ContentState,
+        ) -> bool {
+            let automation_draw_mode = data.selection.automation_draw_mode;
+            let inputs = crate::ui_frame::gather_frame_inputs(
+                &mut self.planner,
+                ui,
+                &mut data.selection,
+                active_layer,
+                &self.edits,
+                content_state,
+                crate::frame_plan::ChromeSource {
+                    project: &data.project,
+                    is_dirty: false,
+                    project_path: None,
+                    automation_draw_mode,
+                },
+            );
+            self.planner.plan(inputs).rebuild.slot().is_some()
+        }
     }
 
     #[test]
@@ -1469,6 +1494,9 @@ mod cache_path_full_render {
         let mut clock = 0.0_f32;
         let mut tab_swap_fallback_used = false;
         let mut filmstrip: Vec<Vec<u8>> = Vec::new();
+        // The planner starts from the fixture's build.
+        let mut frame = PlannedFrame::default();
+        frame.rebuilds(&ui, &mut data, &active_layer, &content_state);
 
         // ── scroll to bottom ──
         let insp = ui.layout.inspector();
@@ -1482,14 +1510,14 @@ mod cache_path_full_render {
         composite_frame(&device, &mut ui_renderer, &mut cache, &mut ui, &res);
 
         // ── expand/collapse every armed drawer at once (the compact toggle
-        // "cog") — a real click, real dispatch, real structural result; the
+        // "cog") — a real click, real dispatch, a real planned rebuild; the
         // tween it starts is polled below exactly as app_render.rs:2942-2944
         // does. The click's own post-composite frame opens the filmstrip. ──
         let cog_text = manifold_ui::icons::Icon::Cog.text();
         let cog_pos =
             resolve_button_center(&ui, &cog_text).expect("compact-toggle (cog) button must resolve");
-        if click(&mut ui, &mut data, cog_pos, clock, &mut active_layer, &content_tx, &content_state, &mut user_prefs) {
-            signals.needs_structural_sync = true;
+        if click(&mut ui, &mut data, cog_pos, clock, &mut active_layer, &content_tx, &content_state, &mut user_prefs, &mut frame) {
+            signals.needs_rebuild = true;
         }
         apply_decision(&mut ui, &mut cache, &mut signals);
         composite_frame(&device, &mut ui_renderer, &mut cache, &mut ui, &res);
@@ -1535,8 +1563,8 @@ mod cache_path_full_render {
         for tab_text in ["Master", "Layer"] {
             match resolve_button_center(&ui, tab_text) {
                 Some(pos) => {
-                    if click(&mut ui, &mut data, pos, clock, &mut active_layer, &content_tx, &content_state, &mut user_prefs) {
-                        signals.needs_structural_sync = true;
+                    if click(&mut ui, &mut data, pos, clock, &mut active_layer, &content_tx, &content_state, &mut user_prefs, &mut frame) {
+                        signals.needs_rebuild = true;
                     }
                 }
                 None => {
@@ -1550,7 +1578,9 @@ mod cache_path_full_render {
                         &[manifold_ui::InspectorTab::Layer, manifold_ui::InspectorTab::Master],
                         tab,
                     );
-                    signals.needs_structural_sync = true;
+                    if frame.rebuilds(&ui, &mut data, &active_layer, &content_state) {
+                        signals.needs_rebuild = true;
+                    }
                 }
             }
             apply_decision(&mut ui, &mut cache, &mut signals);

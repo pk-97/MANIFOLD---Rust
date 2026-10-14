@@ -152,8 +152,6 @@ pub struct ProjectIOAction {
     pub(crate) material_upgrade_applied: bool,
     /// Whether the editing service should be marked clean.
     pub mark_clean: bool,
-    /// Whether the UI needs a structural sync (rebuild tree).
-    pub needs_structural_sync: bool,
     /// Whether clip sync is needed (replaces host.MarkNeedsClipSync).
     pub needs_clip_sync: bool,
     /// New project path to set as current (for window title, save, etc.).
@@ -669,7 +667,6 @@ impl ProjectIOService {
 
         ProjectIOAction {
             apply_project: Some(new_project),
-            needs_structural_sync: true,
             set_project_path: Some(PathBuf::new()), // Clear current path
             ..Default::default()
         }
@@ -815,7 +812,6 @@ impl ProjectIOService {
                 ProjectIOAction {
                     apply_project: Some(project),
                     material_upgrade_applied: true,
-                    needs_structural_sync: true,
                     set_project_path: Some(path.to_path_buf()),
                     notice,
                     ..Default::default()
