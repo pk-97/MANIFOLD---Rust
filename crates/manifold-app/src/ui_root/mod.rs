@@ -291,6 +291,9 @@ pub struct UIRoot {
     /// rows; the Scene tab picks which to reveal.
     pending_scene_reveal: Option<(manifold_ui::view::UiGraphTarget, Vec<manifold_core::effects::ParamId>)>,
     inspector_reveal_version: u64,
+    /// Moves each time the inspector projection rewrote this root's inspector
+    /// lists: the graph editor's card lane rebuilds on it (D17).
+    inspector_projection_version: u64,
     pub(crate) pinned_automation_lanes: Vec<manifold_ui::ui_state::AutomationLaneKey>,
 
     /// Cached macro slot labels for context menu display.
@@ -439,6 +442,16 @@ impl UIRoot {
         self.inspector_reveal_version
     }
 
+    /// The inspector projection rewrote this root's inspector lists.
+    pub(crate) fn note_inspector_projected(&mut self) {
+        self.inspector_projection_version += 1;
+    }
+
+    /// `EditorInputs.inspector_projected`.
+    pub(crate) fn inspector_projection_version(&self) -> u64 {
+        self.inspector_projection_version
+    }
+
     /// Take the content thread's shared lists by pointer: each is compared
     /// against the Arc this root retains, never element by element
     /// (UI_INVALIDATION_DESIGN.md section 3). True when the Ableton session
@@ -566,6 +579,7 @@ impl UIRoot {
             pending_trigger_response_reveal: None,
             pending_scene_reveal: None,
             inspector_reveal_version: 0,
+            inspector_projection_version: 0,
             pinned_automation_lanes: Vec::new(),
             macro_labels: std::array::from_fn(|_| String::new()),
             macro_mapping_descs: std::array::from_fn(|_| Vec::new()),
@@ -981,18 +995,23 @@ impl UIRoot {
         self.tree.end_region(token, start);
     }
 
-    /// Build just the inspector column into an explicit `rect` (the disjoint
-    /// `inspector` + `tree` field split kept internal, like `build`). The
-    /// graph-editor window calls this to host the same inspector column in its
-    /// right lane (`dock.right`) — see docs/GRAPH_EDITOR_INSPECTOR_UNIFICATION.md.
-    /// Base tier region, same as the main window's own inspector build (D1/D5
-    /// — the mechanism is window-agnostic; only the editor window's OWN
-    /// panels, out of P1 scope, remain unmigrated).
-    pub fn build_inspector_in_rect(&mut self, rect: Rect) {
-        let region = self.tree.begin_region(rect, ZTier::Base, "inspector_in_rect", UIFlags::empty());
+    /// Build just the inspector column into `region`'s arena at an explicit
+    /// `rect`, which the caller has cleared. The graph-editor window hosts the
+    /// same inspector column in its card lane this way
+    /// (docs/GRAPH_EDITOR_INSPECTOR_UNIFICATION.md). The card-drag ghost is
+    /// the Ghosts arena's, settled by the window's frame.
+    pub fn build_inspector_in(&mut self, region: u8, rect: Rect) {
+        let token = self.tree.begin_region_in(region, rect, ZTier::Base, "inspector_in_rect", UIFlags::empty());
         let start = self.tree.count();
         self.inspector.build_in_rect(&mut self.tree, rect);
-        self.tree.end_region(region, start);
+        self.tree.end_region(token, start);
+    }
+
+    /// [`build_inspector_in`](Self::build_inspector_in) into the arena
+    /// outside any region, for tests that build a bare column.
+    #[cfg(test)]
+    pub fn build_inspector_in_rect(&mut self, rect: Rect) {
+        self.build_inspector_in(manifold_ui::tree::DEFAULT_REGION, rect);
         self.inspector.rebuild_card_drag_overlay(&mut self.tree);
     }
 
@@ -1458,10 +1477,9 @@ impl UIRoot {
         self.inspector.update(&mut self.tree);
     }
 
-    /// Push values for the editor window's HUD after its cacheless tree has
-    /// been rebuilt. The editor root never runs the main-window `update()`
-    /// path, so this targeted tick keeps the shared overlay live without
-    /// touching main-window-only panels.
+    /// Push values for the editor window's perf HUD. The editor root never
+    /// runs the main-window `update()` path, so this targeted tick keeps the
+    /// shared overlay live without touching main-window-only panels.
     pub fn tick_editor_perf_hud(&mut self) {
         self.perf_hud.push_values(&mut self.tree);
     }
@@ -1684,16 +1702,15 @@ mod region_structural_tests {
         );
     }
 
-    /// The editor window's `build_inspector_in_rect` entry point (D5: the
-    /// mechanism is window-agnostic) is likewise fully regioned.
+    /// The editor window's card lane build is likewise fully regioned.
     #[test]
     fn inspector_in_rect_has_no_stray_roots() {
         let mut ui = UIRoot::new();
         ui.resize(W, H);
-        ui.build_inspector_in_rect(Rect::new(0.0, 0.0, 400.0, H));
+        ui.build_inspector_in(crate::editor_frame::EditorRegion::CardLane.id(), Rect::new(0.0, 0.0, 400.0, H));
         assert!(
             ui.tree.all_roots_are_regions(),
-            "build_inspector_in_rect left a stray root"
+            "the card lane build left a stray root"
         );
     }
 }

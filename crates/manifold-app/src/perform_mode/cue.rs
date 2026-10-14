@@ -73,6 +73,16 @@ pub(crate) fn section_progress(
 /// fields so the renderer can lay them out with fixed-column digits and
 /// dot separators that don't shift as values tick over.
 pub(crate) fn format_bar_beat(current_beat: f64, beats_per_bar: u32) -> BarBeatDisplay {
+    let [bar, beat, sixteenth] = bar_beat_numbers(current_beat, beats_per_bar);
+    BarBeatDisplay {
+        bar: bar.to_string(),
+        beat: beat.to_string(),
+        sixteenth: sixteenth.to_string(),
+    }
+}
+
+/// The 1-indexed bar, beat and sixteenth [`format_bar_beat`] prints.
+pub(crate) fn bar_beat_numbers(current_beat: f64, beats_per_bar: u32) -> [i64; 3] {
     let beat = current_beat.max(0.0);
     let bpb = beats_per_bar.max(1) as f64;
     let bar_idx = (beat / bpb).floor() as i64;
@@ -80,11 +90,7 @@ pub(crate) fn format_bar_beat(current_beat: f64, beats_per_bar: u32) -> BarBeatD
     let beat_idx_in_bar = beat_in_bar.floor() as i64;
     let frac = beat_in_bar - beat_idx_in_bar as f64;
     let sixteenth_idx = (frac * 4.0).floor() as i64;
-    BarBeatDisplay {
-        bar: (bar_idx + 1).to_string(),
-        beat: (beat_idx_in_bar + 1).to_string(),
-        sixteenth: (sixteenth_idx + 1).to_string(),
-    }
+    [bar_idx + 1, beat_idx_in_bar + 1, sixteenth_idx + 1]
 }
 
 /// 1-indexed bar/beat/sixteenth strings ready for the fixed-column digit
@@ -112,13 +118,16 @@ pub(crate) struct BarBeatDisplay {
 /// - 3.5   beats → ("0.9",  "BARS")
 /// - 0.5   beats → ("0.1",  "BARS")
 pub(crate) fn format_countdown(beats: f64, beats_per_bar: u32) -> CountdownDisplay {
-    let beats = beats.max(0.0);
-    let bpb = beats_per_bar.max(1) as f64;
-    let bars = beats / bpb;
+    let bars = countdown_bars(beats, beats_per_bar);
     CountdownDisplay {
         number: format!("{bars:.1}"),
         unit: "BARS".to_string(),
     }
+}
+
+/// The bars [`format_countdown`] prints for `beats` remaining.
+pub(crate) fn countdown_bars(beats: f64, beats_per_bar: u32) -> f64 {
+    beats.max(0.0) / beats_per_bar.max(1) as f64
 }
 
 #[cfg(test)]

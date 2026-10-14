@@ -583,17 +583,7 @@ impl ClipChromePanel {
         self.host.build(tree, &view, rect);
         self.first_node = self.host.first_node();
 
-        // Onset + per-instrument sensitivity sliders (host-materialised).
-        match self.host.slider_ids(KEY_ONSET) {
-            Some(ids) => self.onset_slider.set_ids(ids),
-            None => self.onset_slider.clear(),
-        }
-        for (i, s) in self.instrument_sens_sliders.iter_mut().enumerate() {
-            match self.host.slider_ids(KEY_INSTR_SLIDER_BASE + i as u64) {
-                Some(ids) => s.set_ids(ids),
-                None => s.clear(),
-            }
-        }
+        self.wire_sliders();
 
         // The quantize + per-instrument layer dropdown triggers are now typed
         // View components (resolved by key); only the progress bar is still an
@@ -656,7 +646,24 @@ impl ClipChromePanel {
             return;
         }
         let view = self.chrome_view();
-        let _ = self.host.update(tree, &view, self.chrome_rect);
+        if self.host.update(tree, &view, self.chrome_rect) == crate::chrome::Reconcile::Updated {
+            self.wire_sliders();
+        }
+    }
+
+    /// Onset and per-instrument sensitivity sliders (host-materialised): their
+    /// ids, and their tracks after an in-place move, drive the drags.
+    fn wire_sliders(&mut self) {
+        match self.host.slider_ids(KEY_ONSET) {
+            Some(ids) => self.onset_slider.set_ids(ids),
+            None => self.onset_slider.clear(),
+        }
+        for (i, s) in self.instrument_sens_sliders.iter_mut().enumerate() {
+            match self.host.slider_ids(KEY_INSTR_SLIDER_BASE + i as u64) {
+                Some(ids) => s.set_ids(ids),
+                None => s.clear(),
+            }
+        }
     }
 
     // ── Sync methods ─────────────────────────────────────────────

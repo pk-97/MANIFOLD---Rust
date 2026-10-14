@@ -52,6 +52,7 @@ pub(crate) fn enter(
         ui_root.pointer_event(pos, manifold_ui::input::PointerAction::Up, time);
     }
     perform.exit_button_hover = false;
+    perform.shown = None;
     perform.active = true;
 }
 
@@ -152,10 +153,219 @@ pub(crate) fn begin_perform_frame(
     logical_w: u32,
     logical_h: u32,
 ) -> PerformLayout {
-    ui_root.intake_shared(content_state);
+    if ui_root.intake_shared(content_state) {
+        perform.intake.session += 1;
+    }
+    perform.intake.take_clock_text(content_state);
     let layout = PerformLayout::compute(logical_w, logical_h);
     perform.exit_button_rect = layout.exit_button;
     layout
+}
+
+/// The shared values the HUD shows, compared by retained pointer, never by
+/// content (UI_INVALIDATION_DESIGN.md section 3): a version per source.
+#[derive(Default)]
+pub(crate) struct PerformIntake {
+    /// Moves when a new Ableton session arrives: cue, track and macro names,
+    /// macro values, the PLAY group.
+    pub session: u64,
+    /// Moves when the MIDI clock device name or position text changes.
+    pub clock_text: u64,
+    clock_device: Option<Arc<str>>,
+    clock_position: Option<Arc<str>>,
+}
+
+impl PerformIntake {
+    fn take_clock_text(&mut self, content_state: &ContentState) {
+        let mut moved = false;
+        for (held, sent) in [
+            (&mut self.clock_device, &content_state.midi_clock_device_name),
+            (&mut self.clock_position, &content_state.midi_clock_position_display),
+        ] {
+            if !held.as_ref().is_some_and(|h| Arc::ptr_eq(h, sent)) {
+                *held = Some(Arc::clone(sent));
+                moved = true;
+            }
+        }
+        if moved {
+            self.clock_text += 1;
+        }
+    }
+}
+
+/// Text as the HUD prints it, held on the stack so deriving it per frame
+/// allocates nothing.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct ShownText {
+    bytes: [u8; 15],
+    len: u8,
+}
+
+impl ShownText {
+    /// `value` printed with one decimal, exactly as the HUD's `{:.1}`.
+    fn one_decimal(value: f64) -> Self {
+        use std::fmt::Write;
+        let mut text = Self::default();
+        let _ = write!(text, "{value:.1}");
+        text
+    }
+}
+
+impl std::fmt::Write for ShownText {
+    fn write_str(&mut self, s: &str) -> std::fmt::Result {
+        let start = self.len as usize;
+        let end = start + s.len();
+        if end > self.bytes.len() {
+            return Err(std::fmt::Error);
+        }
+        self.bytes[start..end].copy_from_slice(s.as_bytes());
+        self.len = end as u8;
+        Ok(())
+    }
+}
+
+/// The track rows a section lists, as indices into the PLAY group, at most
+/// [`render::MAX_SECTION_TRACKS`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct ShownTracks {
+    index: [u16; render::MAX_SECTION_TRACKS],
+    len: u8,
+}
+
+impl ShownTracks {
+    fn of(session: Option<&AbletonSession>, start: f64, end: f64) -> Self {
+        let mut shown = Self::default();
+        let Some(group) = session.and_then(|s| s.play_group.as_ref()) else {
+            return shown;
+        };
+        for (i, track) in group.tracks.iter().enumerate() {
+            if shown.len as usize == shown.index.len() {
+                break;
+            }
+            if tracks::plays_in_range(track, start, end) {
+                shown.index[shown.len as usize] = i as u16;
+                shown.len += 1;
+            }
+        }
+        shown
+    }
+}
+
+/// Everything the perform HUD draws, field by field from `draw_cue_hud`,
+/// `draw_sync_indicators`, `draw_macros_column` and `draw_exit_button`, at
+/// the resolution it is drawn (UI_INVALIDATION_DESIGN.md D17). Equal inputs
+/// keep the frame already on screen, so an idle perform frame derives no
+/// strings and lists and draws nothing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct PerformHudInputs {
+    /// Cue, track and macro names, macro values and the PLAY group.
+    pub session: u64,
+    /// The project's mapping set, which picks the macros shown.
+    pub project: u64,
+    pub current_cue: Option<u16>,
+    pub next_cue: Option<u16>,
+    /// The countdown number as printed, in bars.
+    pub countdown: Option<ShownText>,
+    /// Bar, beat and sixteenth, 1-indexed.
+    pub bar_beat: [i64; 3],
+    /// The section-progress fill width in whole logical pixels.
+    pub section_fill_px: Option<u16>,
+    pub now_tracks: ShownTracks,
+    pub next_tracks: ShownTracks,
+    pub bpm: ShownText,
+    pub playing: bool,
+    pub ableton_connected: bool,
+    pub cues_empty: bool,
+    pub clock_authority: u8,
+    pub link_enabled: bool,
+    pub link_peers: i32,
+    pub midi_clock_enabled: bool,
+    pub midi_clock_receiving: bool,
+    pub clock_text: u64,
+    pub exit_hover: bool,
+    pub size_px: [u32; 2],
+    /// The output aspect the preview beside the HUD is fitted to.
+    pub preview_aspect_bits: u32,
+}
+
+impl PerformHudInputs {
+    /// Derive this frame's inputs; allocates nothing.
+    pub(crate) fn derive(
+        perform: &PerformModeState,
+        content_state: &ContentState,
+        session: Option<&AbletonSession>,
+        project_key: u64,
+        layout: &PerformLayout,
+        preview_aspect: f32,
+    ) -> Self {
+        let beat = content_state.current_beat.0;
+        let beats_per_bar = content_state.time_signature_numerator.max(1) as u32;
+        let cues: &[manifold_playback::ableton_bridge::CuePoint] =
+            session.map(|s| s.cue_points.as_slice()).unwrap_or(&[]);
+        let current = cues.iter().rposition(|c| c.time <= beat);
+        let next = cues.iter().position(|c| c.time > beat);
+        let analysis = cue::analyze(cues, beat);
+        let now_tracks = match analysis.current {
+            Some(cur) => ShownTracks::of(session, cur.time, analysis.next.map_or(f64::INFINITY, |c| c.time)),
+            None => ShownTracks::default(),
+        };
+        let next_tracks = match analysis.next {
+            Some(n) => {
+                let end = cues.iter().find(|c| c.time > n.time).map_or(f64::INFINITY, |c| c.time);
+                ShownTracks::of(session, n.time, end)
+            }
+            None => ShownTracks::default(),
+        };
+        let bar_beat = cue::bar_beat_numbers(beat, beats_per_bar);
+        let progress = cue::section_progress(analysis.current, analysis.next, beat);
+        Self {
+            session: perform.intake.session,
+            project: project_key,
+            current_cue: current.map(|i| i as u16),
+            next_cue: next.map(|i| i as u16),
+            countdown: analysis
+                .beats_to_next
+                .map(|b| ShownText::one_decimal(cue::countdown_bars(b, beats_per_bar))),
+            bar_beat,
+            section_fill_px: progress.map(|p| render::section_fill_px(layout.logical_w as f32, p)),
+            now_tracks,
+            next_tracks,
+            bpm: ShownText::one_decimal(content_state.bpm),
+            playing: content_state.is_playing,
+            ableton_connected: content_state.ableton_connected,
+            cues_empty: cues.is_empty(),
+            clock_authority: content_state.clock_authority as u8,
+            link_enabled: content_state.link_enabled,
+            link_peers: content_state.link_peers,
+            midi_clock_enabled: content_state.midi_clock_enabled,
+            midi_clock_receiving: content_state.midi_clock_receiving,
+            clock_text: perform.intake.clock_text,
+            exit_hover: perform.exit_button_hover,
+            size_px: [layout.logical_w, layout.logical_h],
+            preview_aspect_bits: preview_aspect.to_bits(),
+        }
+    }
+}
+
+/// The project parts the macro column reads: which params are mapped to
+/// Ableton macros, on which effects and layers.
+pub(crate) const HUD_PROJECT_PARTS: manifold_core::change::ChangeSet = manifold_core::change::ChangeSet::of(&[
+    manifold_core::change::Part::Mappings,
+    manifold_core::change::Part::Effects,
+    manifold_core::change::Part::Layers,
+]);
+
+/// Whether the HUD must be drawn this frame: its inputs moved since the
+/// frame on screen, or `force` (a fresh reference frame).
+pub(crate) fn hud_moved(perform: &PerformModeState, inputs: &PerformHudInputs, force: bool) -> bool {
+    force || perform.shown.as_ref() != Some(inputs)
+}
+
+/// The output aspect the live preview beside the HUD takes; 16:9 without a
+/// pipeline, as the preview blit falls back.
+pub(crate) fn preview_aspect(dims: Option<(u32, u32)>) -> f32 {
+    let (w, h) = dims.unwrap_or((1920, 1080));
+    w as f32 / h.max(1) as f32
 }
 
 /// Sync source readout for the top-left badges.
@@ -288,5 +498,43 @@ pub(crate) fn composite_perform_frame(
     render::draw_exit_button(ui, tm, layout.exit_button, exit_hover);
     if ui.prepare(device, layout.logical_w, layout.logical_h, scale) {
         ui.render(encoder, offscreen, GpuLoadAction::Load);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn inputs(perform: &PerformModeState, content: &ContentState) -> PerformHudInputs {
+        PerformHudInputs::derive(perform, content, None, 0, &PerformLayout::compute(1920, 1080), preview_aspect(None))
+    }
+
+    #[test]
+    fn an_unchanged_hud_is_not_drawn_again() {
+        let mut perform = PerformModeState::new();
+        let content = ContentState::default();
+        let first = inputs(&perform, &content);
+        assert!(hud_moved(&perform, &first, false), "the first frame draws");
+        perform.shown = Some(first);
+        assert!(!hud_moved(&perform, &inputs(&perform, &content), false));
+        assert!(hud_moved(&perform, &inputs(&perform, &content), true), "a fresh reference always draws");
+    }
+
+    #[test]
+    fn the_hud_redraws_at_its_shown_resolution() {
+        let mut perform = PerformModeState::new();
+        let mut content = ContentState::default();
+        perform.shown = Some(inputs(&perform, &content));
+        // A beat change inside one sixteenth prints the same position.
+        content.current_beat = manifold_core::Beats(0.01);
+        assert!(!hud_moved(&perform, &inputs(&perform, &content), false));
+        content.current_beat = manifold_core::Beats(0.25);
+        assert!(hud_moved(&perform, &inputs(&perform, &content), false));
+        // A tempo change below the printed decimal draws nothing new.
+        perform.shown = Some(inputs(&perform, &content));
+        content.bpm += 0.01;
+        assert!(!hud_moved(&perform, &inputs(&perform, &content), false));
+        content.bpm += 0.1;
+        assert!(hud_moved(&perform, &inputs(&perform, &content), false));
     }
 }

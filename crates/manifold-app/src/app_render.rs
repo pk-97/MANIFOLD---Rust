@@ -485,7 +485,9 @@ impl Application {
             .filter(|(_, h)| *h > 0)
             .map(|(w, h)| w as f32 / h as f32);
         let ui_snap = self.editor_ui_snapshot();
-        if let (Some(canvas), Some(ui_snap)) = (self.graph_canvas.as_mut(), ui_snap) {
+        if let (Some(canvas), Some(ui_snap), Some(ed)) =
+            (self.graph_canvas.as_mut(), ui_snap, self.graph_editor.as_mut())
+        {
             // The "Reset to Default" pill shows only when the watched graph
             // diverges from its bundled preset; keyed on its inputs.
             let has_mod = self.editor_graph.has_graph_mod(
@@ -494,17 +496,16 @@ impl Application {
                 self.watched_catalog_default.as_ref(),
                 &self.ui_edits.stamps.parts(),
             );
-            crate::editor_frame::feed_canvas(
+            // The canvas draws again only when its feed moved (D17).
+            ed.offscreen_dirty |= crate::editor_frame::feed_canvas(
                 canvas,
+                &mut ed.editor_frame.canvas,
                 &ui_snap,
                 preview_aspect,
                 (dt * 1000.0) as f32,
                 &self.content_state.live_node_params,
                 has_mod,
             );
-            if let Some(ed) = self.graph_editor.as_mut() {
-                ed.offscreen_dirty = true;
-            }
         }
 
         // 1e. Sync percussion pipeline status to header panel

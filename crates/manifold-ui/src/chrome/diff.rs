@@ -260,6 +260,20 @@ impl ChromeHost {
                 tree.clear_flag(id, UIFlags::DISABLED);
             }
         }
+        // A materialised slider sits on top of its slot, outside the laid
+        // nodes; it moves with the slot. Holders re-read `slider_ids`.
+        for i in 0..self.scratch.len() {
+            let (Some(spec), Some(key)) = (self.scratch[i].slider.as_ref(), self.scratch[i].key) else {
+                continue;
+            };
+            let rect = self.scratch[i].rect;
+            if self.laid[i].rect == rect {
+                continue;
+            }
+            if let Some((_, ids, _)) = self.slider_ids.iter_mut().find(|(k, _, _)| *k == key) {
+                BitmapSlider::relayout(tree, ids, rect, spec.label_width, spec.value);
+            }
+        }
 
         std::mem::swap(&mut self.laid, &mut self.scratch);
         Reconcile::Updated
@@ -530,6 +544,44 @@ mod tests {
             .child(View::label("gone").h(Sizing::Fixed(16.0)));
         assert_eq!(host.update(&mut t, &shown, rect()), Reconcile::Updated);
         assert!(t.has_flag(hidden_id, UIFlags::VISIBLE));
+    }
+
+    // A row whose slider slot starts after a label of variable width.
+    fn slider_row(name: &str) -> View {
+        let spec = crate::chrome::view::SliderSpec {
+            label: Some("Opacity".to_string()),
+            value: 0.5,
+            default: 1.0,
+            value_text: "0.50".to_string(),
+            colors: crate::slider::SliderColors::default_slider(),
+            font_size: 12,
+            label_width: 40.0,
+            reset: PanelAction::Transport(TransportAction::Stop),
+        };
+        View::row(4.0)
+            .fill_w()
+            .h(Sizing::Fixed(20.0))
+            .child(View::label(name))
+            .child(View::slider_row(spec).fill_w().h(Sizing::Fixed(20.0)).key(7))
+    }
+
+    #[test]
+    fn an_in_place_update_moves_a_slider_with_its_slot() {
+        let bounds = |t: &UITree, ids: SliderNodeIds| {
+            [ids.label.map(|l| t.get_bounds(l)), Some(t.get_bounds(ids.track)), Some(t.get_bounds(ids.value_text))]
+        };
+        let mut fresh_tree = tree();
+        let mut fresh = ChromeHost::new();
+        fresh.build(&mut fresh_tree, &slider_row("a longer name"), rect());
+        let want = bounds(&fresh_tree, fresh.slider_ids(7).unwrap());
+
+        let mut t = tree();
+        let mut host = ChromeHost::new();
+        host.build(&mut t, &slider_row("ab"), rect());
+        assert_eq!(host.update(&mut t, &slider_row("a longer name"), rect()), Reconcile::Updated);
+        let ids = host.slider_ids(7).unwrap();
+        assert_eq!(bounds(&t, ids), want);
+        assert_eq!(ids.track_span, fresh.slider_ids(7).unwrap().track_span);
     }
 
     #[test]

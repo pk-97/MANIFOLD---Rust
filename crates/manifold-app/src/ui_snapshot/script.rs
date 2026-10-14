@@ -37,7 +37,7 @@
 //! present (no content thread, no drag polling, no OS window). A flow that
 //! clicks a card's graph-editor button opens the editor window through
 //! `editor_frame::open_editor_workspace`; every later frame builds its tree
-//! through `editor_frame::build_editor_tree`, the functions the App calls.
+//! through `editor_frame::run_editor_frame`, the functions the App calls.
 //! `Dump`, `Assert` and `AssertFresh` read that tree too. A `Menu` step for
 //! View > Perform enters perform mode through `perform_mode::frame::enter`;
 //! every later frame is a perform frame through the same `perform_mode::frame`
@@ -330,7 +330,7 @@ fn run_flow(
         }
         let outcome = runner.step(&mut ui, &mut data, index, action, &out_dir, &mut render);
         let failed = outcome.status == "fail";
-        results.push(outcome);
+        harness_work(&mut runner.work.excluded, || results.push(outcome));
         if failed {
             ok = false;
             break;
@@ -597,6 +597,15 @@ struct WorkWindow {
     flow: String,
 }
 
+/// Runs the harness's own bookkeeping (step labels, result strings) and
+/// removes what it counted from the work window: the App has no steps.
+fn harness_work<T>(excluded: &mut manifold_core::work_count::WorkSnapshot, f: impl FnOnce() -> T) -> T {
+    let start = manifold_core::work_count::thread_work_snapshot();
+    let out = f();
+    *excluded = excluded.plus(&manifold_core::work_count::thread_work_snapshot().since(&start));
+    out
+}
+
 /// Committed ceilings, read and written relative to the repo root (flows run
 /// with the repo root as cwd).
 pub(crate) const WORK_CEILINGS_PATH: &str = "scripts/ui-flows/work_ceilings.json";
@@ -749,7 +758,7 @@ impl Runner {
     /// (`present_graph_editor_window` runs after `present_all_windows`). No
     /// content thread publishes a node preview or a pipeline size, so the
     /// node monitor shows no image and the monitors take the default aspect.
-    fn editor_frame(&mut self, data: &SceneData) {
+    fn editor_frame(&mut self, data: &SceneData, fresh: bool) {
         let Some(ed) = self.editor.as_mut() else { return };
         // The canvas takes the watched graph as the App's tick pushes it; no
         // pipeline publishes an output aspect.
@@ -761,22 +770,33 @@ impl Runner {
                 self.catalog_default.as_ref(),
                 &self.edits.stamps.parts(),
             );
-            crate::editor_frame::feed_canvas(&mut ed.canvas, &graph, None, DT * 1000.0, &data.content.live_node_params, has_mod);
+            crate::editor_frame::feed_canvas(
+                &mut ed.canvas,
+                &mut ed.ws.editor_frame.canvas,
+                &graph,
+                None,
+                DT * 1000.0,
+                &data.content.live_node_params,
+                has_mod,
+            );
         }
         let layout = crate::editor_frame::EditorLayout::compute(&ed.ws.dock, ed.logical_w, ed.logical_h, None);
         let active = self.active_layer.as_ref().and_then(|id| data.project.timeline.find_layer_index_by_id(id));
-        ed.smart_preview_toggle = crate::editor_frame::build_editor_tree(
+        ed.smart_preview_toggle = crate::editor_frame::run_editor_frame(
             &mut ed.ws.ui_root,
+            &mut ed.ws.editor_frame,
             &ed.panel,
             Some(&mut ed.canvas),
             &layout,
-            crate::editor_frame::EditorTreeInputs {
+            crate::editor_frame::EditorFrameInputs {
                 project: &data.project,
+                content_state: &data.content,
                 active_layer: active,
-                fire_meters: &data.content.fire_meters,
+                live: self.planner.last.live(),
                 dt: DT,
                 show_image: false,
             },
+            fresh,
         );
     }
 
@@ -790,7 +810,7 @@ impl Runner {
         out_dir: &std::path::Path,
         render: &mut RenderState,
     ) -> StepResult {
-        let action_desc = format!("{action:?}");
+        let action_desc = harness_work(&mut self.work.excluded, || format!("{action:?}"));
         // In perform mode window input goes to the perform screen
         // (`perform_mode/input.rs`), never the frozen main window.
         if self.perform.active {
@@ -873,13 +893,9 @@ impl Runner {
                     }
                     self.filmstrip.push(render.readback_linear());
                 }
-                StepResult {
-                    index,
-                    action: action_desc,
-                    status: "ok",
-                    detail: format!("clock -> {:.3}s ({frames} filmstrip tile(s))", self.clock),
-                    artifact: None,
-                }
+                let clock = self.clock;
+                let detail = harness_work(&mut self.work.excluded, || format!("clock -> {clock:.3}s ({frames} filmstrip tile(s))"));
+                StepResult { index, action: action_desc, status: "ok", detail, artifact: None }
             }
             AutomationAction::Dump => {
                 let path = out_dir.join(format!("{index:02}.tree.json"));
@@ -1096,9 +1112,10 @@ impl Runner {
                 // only the gesture that follows.
                 self.work.open = true;
                 self.live_frame(ui, data, render, false, true);
+                let result = StepResult { index, action: action_desc, status: "ok", detail: "work window started".into(), artifact: None };
                 self.work.start = manifold_core::work_count::thread_work_snapshot();
                 self.work.excluded = manifold_core::work_count::WorkSnapshot::default();
-                StepResult { index, action: action_desc, status: "ok", detail: "work window started".into(), artifact: None }
+                result
             }
             AutomationAction::AssertWork { window } => self.assert_work(ui, index, action_desc, window, out_dir),
             AutomationAction::AssertFresh => self.assert_fresh(ui, data, render, index, action_desc, out_dir),
@@ -1209,6 +1226,10 @@ impl Runner {
         if settle_tweens {
             ui.inspector.skip_to_settled(&mut ui.tree);
             ui.scene_setup_panel.skip_cards_to_settled(&mut ui.tree);
+            if let Some(ed) = self.editor.as_mut() {
+                let ed_ui = &mut ed.ws.ui_root;
+                ed_ui.inspector.skip_to_settled(&mut ed_ui.tree);
+            }
         }
         crate::ui_bridge::intake_overlay_state(ui, &data.content);
         crate::ui_bridge::check_auto_scroll(ui, &data.content, &data.project);
@@ -1228,7 +1249,8 @@ impl Runner {
             },
         );
         let mut plan = self.planner.plan(inputs);
-        if std::mem::take(&mut self.fresh_reference) {
+        let fresh = std::mem::take(&mut self.fresh_reference);
+        if fresh {
             plan = plan.with_every_projection();
         }
         let changes = crate::ui_frame::ProjectionChanges { scrolled_in_place };
@@ -1258,7 +1280,7 @@ impl Runner {
         ui.update();
         ui.viewport.repaint_dirty_layers();
         ui.viewport.repaint_overview();
-        self.editor_frame(data);
+        self.editor_frame(data, fresh);
         render.gate.mark();
         // What this frame sent reaches the App's next frame as a content
         // snapshot; record it now (a long gesture sends a command per move
@@ -1270,19 +1292,31 @@ impl Runner {
     /// and composite, at the fixture's logical size into the runner's
     /// offscreen. No output window to poll, no preview bridge, no drawable.
     fn perform_frame(&mut self, ui: &mut UIRoot, data: &SceneData, render: &mut RenderState) {
-        // A perform frame has no projections for a fresh reference to force.
-        self.fresh_reference = false;
-        let layout = crate::perform_mode::frame::begin_perform_frame(
+        use crate::perform_mode::frame;
+        // A fresh reference redraws the HUD from its inputs.
+        let force = std::mem::take(&mut self.fresh_reference);
+        let layout = frame::begin_perform_frame(
             &mut self.perform,
             ui,
             &data.content,
             super::LOGICAL_W as u32,
             super::LOGICAL_H as u32,
         );
+        let inputs = frame::PerformHudInputs::derive(
+            &self.perform,
+            &data.content,
+            ui.ableton_session.as_deref(),
+            self.edits.stamps.parts().key(frame::HUD_PROJECT_PARTS),
+            &layout,
+            frame::preview_aspect(None),
+        );
+        if !frame::hud_moved(&self.perform, &inputs, force) {
+            return;
+        }
         let session = ui.ableton_session.clone();
-        let hud = crate::perform_mode::frame::PerformHud::derive(&data.content, session.as_deref(), &data.project);
+        let hud = frame::PerformHud::derive(&data.content, session.as_deref(), &data.project);
         let mut encoder = render.device.create_encoder("Perform Frame");
-        crate::perform_mode::frame::composite_perform_frame(
+        frame::composite_perform_frame(
             render.device,
             &mut encoder,
             Some(&mut render.ui_renderer),
@@ -1294,6 +1328,7 @@ impl Runner {
             f64::from(super::SCALE),
         );
         encoder.commit();
+        self.perform.shown = Some(inputs);
     }
 
     /// Window input in perform mode, as `perform_mode/input.rs` takes it: the
@@ -1809,6 +1844,9 @@ impl Runner {
             let session = ui.ableton_session.clone();
             let hud = crate::perform_mode::frame::PerformHud::derive(&data.content, session.as_deref(), &data.project);
             out.push(format!("perform {hud:?}"));
+            // What the HUD on screen was drawn from: a missed input leaves it
+            // behind the inputs a fresh frame derives.
+            out.push(format!("perform shown {:?}", self.perform.shown));
             out.push(format!(
                 "perform exit {:?} hover {}",
                 self.perform.exit_button_rect, self.perform.exit_button_hover
@@ -1837,7 +1875,11 @@ impl Runner {
         };
         // A tween the last frame started (the value-change flash after an
         // undo) settles in the next frame; compare settled frames only.
-        if ui.inspector.skip_to_settled(&mut ui.tree) | ui.scene_setup_panel.skip_cards_to_settled(&mut ui.tree) {
+        let editor_settled = self.editor.as_mut().is_some_and(|ed| {
+            let ed_ui = &mut ed.ws.ui_root;
+            ed_ui.inspector.skip_to_settled(&mut ed_ui.tree)
+        });
+        if ui.inspector.skip_to_settled(&mut ui.tree) | ui.scene_setup_panel.skip_cards_to_settled(&mut ui.tree) | editor_settled {
             self.live_frame(ui, data, render, false, true);
         }
         let tree_before = surfaces_dump(self, ui);

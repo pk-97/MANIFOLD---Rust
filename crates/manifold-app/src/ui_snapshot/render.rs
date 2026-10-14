@@ -349,20 +349,15 @@ pub fn render_graph_editor_to_png(
     open_perf_hud: bool,
 ) {
     use manifold_ui::graph_canvas::GraphCanvas;
-    use manifold_ui::panels::graph_editor::{EDITOR_CARD_LANE_WIDTH, GraphEditorPanel, SIDEBAR_WIDTH};
-    use manifold_ui::Rect as UiRect;
+    use manifold_ui::panels::graph_editor::GraphEditorPanel;
 
     assert_eq!(tex_w % 64, 0, "tex_w must be a multiple of 64 for aligned readback");
     let logical_w = tex_w as f32 / scale;
     let logical_h = tex_h as f32 / scale;
-    // Column + bottom-strip geometry from the same `Dock` the live editor uses,
-    // so the snapshot's canvas height / strip band match the runtime.
+    // The live editor's geometry: its `Dock` and the 16:9 monitor default (no
+    // content pipeline headless to read the project aspect from).
     let dock = manifold_ui::Dock::editor();
-    let dock_rects = dock.rects(UiRect::new(0.0, 0.0, logical_w, logical_h));
-    let canvas_x = SIDEBAR_WIDTH;
-    let canvas_width = (logical_w - SIDEBAR_WIDTH - EDITOR_CARD_LANE_WIDTH).max(0.0);
-    let canvas_height = dock_rects.canvas.height;
-    let card_x = canvas_x + canvas_width;
+    let layout = crate::editor_frame::EditorLayout::compute(&dock, logical_w as u32, logical_h as u32, None);
 
     // BUG-152: `Arc<GpuDevice>`, not a bare `GpuDevice` — `render_graph_node_
     // textures` below needs an owned `Arc` to hand `MetalBackend::new`
@@ -393,58 +388,29 @@ pub fn render_graph_editor_to_png(
     // either — the editor window never uploads the band bitmap.
     crate::ui_bridge::sync_inspector_data(&mut ui_root, project, active_idx, selection, &[], None);
     crate::ui_bridge::sync_audio_dock(&mut ui_root, project);
-    ui_root.build_inspector_in_rect(UiRect::new(
-        card_x,
-        0.0,
-        EDITOR_CARD_LANE_WIDTH,
-        canvas_height,
-    ));
+    ui_root.build_inspector_in(crate::editor_frame::EditorRegion::CardLane.id(), layout.card_viewport);
 
-    // Left sidebar preview column: backing panel + the two monitor titles +
-    // an empty-state hint, laid out with the same math
-    // `present_graph_editor_window` uses (16:9 `monitor_aspect` default — no
-    // content pipeline headless to read the real project aspect from). A
-    // fresh, unconfigured `GraphEditorPanel` reproduces the live window's
-    // own pre-selection empty state ("Node Output" / "Select a node")
-    // through the SAME `render_node_inspector` call live uses — see
-    // `editor_frame.rs` module doc deviation 1.
-    let preview_pad = 8.0_f32;
-    let preview_title_h = 18.0_f32;
-    let monitor_aspect = 16.0_f32 / 9.0;
-    let avail_w = (SIDEBAR_WIDTH - 2.0 * preview_pad).max(1.0);
-    let max_body_h = ((canvas_height - 3.0 * preview_pad - 2.0 * preview_title_h) * 0.5).max(1.0);
-    let width_bound_h = avail_w / monitor_aspect;
-    let (preview_w, preview_h) = if width_bound_h <= max_body_h {
-        (avail_w, width_bound_h)
-    } else {
-        (max_body_h * monitor_aspect, max_body_h)
-    };
-    let preview_x = (SIDEBAR_WIDTH - preview_w) * 0.5;
-    let pane_block_h = 2.0 * (preview_title_h + preview_h) + preview_pad;
-    let mut pane_y = ((canvas_height - pane_block_h) * 0.5).max(preview_pad);
-    let node_title_y = pane_y;
-    let node_img_y = node_title_y + preview_title_h;
-    pane_y = node_img_y + preview_h + preview_pad;
-    let master_title_y = pane_y;
-
+    // Left sidebar preview column. A fresh, unconfigured `GraphEditorPanel`
+    // reproduces the live window's pre-selection empty state ("Node Output" /
+    // "Select a node") through the same `render_node_inspector` call.
     let editor_panel = GraphEditorPanel::new();
     crate::editor_frame::build_editor_preview_column(
         &mut ui_root.tree,
         &editor_panel,
-        SIDEBAR_WIDTH,
-        canvas_height,
-        preview_x,
-        preview_w,
-        preview_h,
-        node_title_y,
-        node_img_y,
-        master_title_y,
+        layout.preview_width,
+        layout.canvas.height,
+        layout.preview_x,
+        layout.preview_w,
+        layout.preview_h,
+        layout.node_title_y,
+        layout.node_img_y,
+        layout.master_title_y,
         /* show_image */ false,
     );
 
     // Center canvas, offset into its lane between the two side columns — the
     // same per-node-dump machinery as `render_graph_to_png`.
-    let viewport = manifold_ui::graph_canvas::Rect::new(canvas_x, 0.0, canvas_width, canvas_height);
+    let viewport = layout.canvas_rect();
     let mut canvas = GraphCanvas::new();
     // Show the on-node param rows (the Blender-style layout) in the PNG — a live
     // canvas starts nodes collapsed for legibility, but the snapshot is a
@@ -559,12 +525,9 @@ pub fn render_graph_editor_to_png(
     }
 
     // Same paint order as `present_graph_editor_window` because it's the
-    // SAME function: clear + canvas immediate-mode draws + the merged
-    // sidebar/inspector `UITree` (ONE tree-range render call over the
-    // default arena, D2) + dock + mini-timeline + the shared
-    // tree-overlay pass (open overlays, if any) + popover/text-input +
-    // prepare/render.
-    let editor_area = UiRect::new(0.0, 0.0, logical_w, logical_h);
+    // same function: the panels painted into the editor atlas, then clear,
+    // canvas, atlas blit, dock, mini-timeline, the shared tree-overlay pass
+    // and popover.
     let (mini_clips, mini_layer_labels, mini_rows, mini_total, mini_bpb, mini_readout) =
         crate::app_render::mini_timeline_data(project, 0.0);
     // Closed/inactive by construction — the guarded branches inside
@@ -572,16 +535,23 @@ pub fn render_graph_editor_to_png(
     let mut popover = manifold_ui::graph_canvas::mapping_popover::MappingPopover::new();
     let text_input = crate::text_input::TextInputState::new();
     let frame_timer = crate::frame_timer::FrameTimer::new(60.0);
+    let res = super::composite_resources::CompositeResources::new(&device, tex_w, tex_h);
+    let mut cache = UICacheManager::with_slots(ATLAS_FORMAT, dpi, manifold_ui_paint::ui_cache_manager::EDITOR_SLOTS);
     crate::editor_frame::composite_editor_frame(
         &device,
         Some(&mut renderer),
         &mut ui_root,
+        &layout,
         &dock,
-        editor_area,
         Some(&canvas),
-        viewport,
+        crate::editor_frame::EditorAtlas {
+            cache: &mut cache,
+            pipeline: &res.atlas_pipeline,
+            sampler: &res.atlas_sampler,
+            scale_factor: dpi,
+        },
         crate::editor_frame::EditorMiniTimelineInputs {
-            bottom_rect: dock_rects.bottom,
+            bottom_rect: layout.bottom,
             show_bottom: dock.show_bottom,
             total_beats: mini_total,
             beats_per_bar: mini_bpb,
@@ -597,8 +567,6 @@ pub fn render_graph_editor_to_png(
         &text_input,
         &frame_timer,
         &target_tex.texture,
-        tex_w,
-        tex_h,
         dpi,
         None,
     );

@@ -711,8 +711,8 @@ pub(crate) fn led_exit_path_label(
 pub use state_sync::{
     LiveGroups, TransportDisplayCache, check_auto_scroll, drain_events, intake_overlay_state, push_chrome, push_frame, push_live, push_selection,
     sync_automation_lane_geometry,
-    sync_card_values, sync_clip_positions, sync_driver_readouts, sync_markers,
-    sync_scene_outliner_eyes, sync_scene_row_values,
+    sync_clip_positions, sync_driver_readouts, sync_markers,
+    sync_scene_outliner_eyes,
     sync_audio_dock, sync_inspector_data, sync_project_data, sync_track_layout,
 };
 #[cfg(feature = "ui-snapshot")]

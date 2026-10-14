@@ -52,7 +52,7 @@ const HEADER_FONT_SIZE: u16 = 14;
 /// builds it from the descriptor + the node-preview info and hands it over via
 /// [`GraphEditorPanel::set_node_inspector`]; it renders into the node-output
 /// pane in place of the (absent) image.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct NodeInspector {
     /// Node display title.
     pub title: String,
@@ -75,8 +75,11 @@ pub struct GraphEditorPanel {
     /// [`Self::set_node_preview_normalize`]); drives the toggle's checkmark.
     normalize_preview: bool,
     /// Value inspector for a previewed non-image node, or `None` when the preview
-    /// is an image (or nothing is previewed). Set each frame by the host.
+    /// is an image (or nothing is previewed). Set by the host when it changes.
     node_inspector: Option<NodeInspector>,
+    /// Moves only when a setter changed what the panel shows: the editor's
+    /// preview column rebuilds on it.
+    view_version: u64,
 }
 
 impl GraphEditorPanel {
@@ -84,18 +87,27 @@ impl GraphEditorPanel {
         Self::default()
     }
 
+    /// What the panel shows, as a version: moves on a visible change only.
+    pub fn view_version(&self) -> u64 {
+        self.view_version
+    }
+
     /// Set whether the node-output preview pane shows auto-gain / normalization,
-    /// so the toggle renders the right checkmark. Mirrors the app-side state;
-    /// called each frame before the render pass.
+    /// so the toggle renders the right checkmark. Mirrors the app-side state.
     pub fn set_node_preview_normalize(&mut self, on: bool) {
-        self.normalize_preview = on;
+        if self.normalize_preview != on {
+            self.normalize_preview = on;
+            self.view_version += 1;
+        }
     }
 
     /// Set (or clear) the value inspector shown when a non-image node is
-    /// previewed. Called each frame by the host; `None` when the preview is an
-    /// image (or nothing is selected).
+    /// previewed; `None` when the preview is an image (or nothing is selected).
     pub fn set_node_inspector(&mut self, inspector: Option<NodeInspector>) {
-        self.node_inspector = inspector;
+        if self.node_inspector != inspector {
+            self.node_inspector = inspector;
+            self.view_version += 1;
+        }
     }
 
     /// Draw the "Smart preview" auto-gain toggle into `region` (a row beside /
