@@ -1,5 +1,39 @@
+#[cfg(not(feature = "work-trace"))]
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
+/// `work-trace` builds count every allocation as `WorkKind::FrameAlloc` on the
+/// allocating thread (UI_INVALIDATION_DESIGN.md D10). Shipping builds keep the
+/// plain allocator.
+#[cfg(feature = "work-trace")]
+#[global_allocator]
+static GLOBAL: CountingAlloc = CountingAlloc;
+
+#[cfg(feature = "work-trace")]
+struct CountingAlloc;
+
+#[cfg(feature = "work-trace")]
+unsafe impl std::alloc::GlobalAlloc for CountingAlloc {
+    unsafe fn alloc(&self, layout: std::alloc::Layout) -> *mut u8 {
+        manifold_core::work_count::record_work(manifold_core::work_count::WorkKind::FrameAlloc);
+        // SAFETY: forwards the caller's layout contract unchanged.
+        unsafe { mimalloc::MiMalloc.alloc(layout) }
+    }
+    unsafe fn alloc_zeroed(&self, layout: std::alloc::Layout) -> *mut u8 {
+        manifold_core::work_count::record_work(manifold_core::work_count::WorkKind::FrameAlloc);
+        // SAFETY: as `alloc`.
+        unsafe { mimalloc::MiMalloc.alloc_zeroed(layout) }
+    }
+    unsafe fn realloc(&self, ptr: *mut u8, layout: std::alloc::Layout, new_size: usize) -> *mut u8 {
+        manifold_core::work_count::record_work(manifold_core::work_count::WorkKind::FrameAlloc);
+        // SAFETY: `ptr` came from this allocator with `layout`, per the caller.
+        unsafe { mimalloc::MiMalloc.realloc(ptr, layout, new_size) }
+    }
+    unsafe fn dealloc(&self, ptr: *mut u8, layout: std::alloc::Layout) {
+        // SAFETY: `ptr` came from this allocator with `layout`, per the caller.
+        unsafe { mimalloc::MiMalloc.dealloc(ptr, layout) }
+    }
+}
 
 mod alerts;
 mod app;
@@ -18,6 +52,7 @@ mod clip_filmstrip;
 mod clip_thumb_cache;
 pub(crate) mod content_command;
 mod content_commands;
+mod content_reactions;
 mod content_export;
 mod content_pipeline;
 pub(crate) mod content_state;
@@ -135,6 +170,13 @@ mod mute_visibility_probe;
 // Self-contained gap-start rendering regression through the real content pipeline.
 #[cfg(all(test, target_os = "macos"))]
 mod gap_start_probe;
+// Frame-exact transport determinism through the real content thread (opens
+// the test GPU device: one queued GPU run).
+#[cfg(all(test, target_os = "macos"))]
+mod frame_exact_app;
+// The count gate's content half (docs/UI_INVALIDATION_DESIGN.md D10).
+#[cfg(all(test, target_os = "macos"))]
+mod content_reaction_budget;
 // D8.4 acceptance — deliberate native GPU journey with external reference projects.
 #[cfg(all(test, target_os = "macos", feature = "journey-proofs"))]
 mod corridor_acceptance;

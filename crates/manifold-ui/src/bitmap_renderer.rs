@@ -296,6 +296,9 @@ impl LayerBitmapRenderer {
         if !self.force_dirty && !viewport_dirty && !timesig_dirty {
             return false;
         }
+        manifold_foundation::work_count::record_work(
+            manifold_foundation::work_count::WorkKind::GridBitmapRepaint,
+        );
 
         let ppb = pixels_per_beat;
         let scaled_ppb = ppb * self.render_scale;

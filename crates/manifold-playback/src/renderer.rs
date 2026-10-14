@@ -96,6 +96,8 @@ pub struct StubRenderer {
     start_log: Vec<(ClipId, bool)>,
     /// Test instrumentation: every stop request, in order.
     stop_log: Vec<ClipId>,
+    /// Test instrumentation: the dt the last `pre_render` received.
+    last_pre_render_dt: Option<f32>,
 }
 
 struct StubClipState {
@@ -114,6 +116,7 @@ impl StubRenderer {
             is_generator: false,
             start_log: Vec::new(),
             stop_log: Vec::new(),
+            last_pre_render_dt: None,
         }
     }
 
@@ -123,6 +126,7 @@ impl StubRenderer {
             is_generator: true,
             start_log: Vec::new(),
             stop_log: Vec::new(),
+            last_pre_render_dt: None,
         }
     }
 
@@ -140,6 +144,11 @@ impl StubRenderer {
             .iter()
             .filter(|id| id.as_str() == clip_id)
             .count()
+    }
+
+    #[doc(hidden)]
+    pub fn last_pre_render_dt(&self) -> Option<f32> {
+        self.last_pre_render_dt
     }
 
     #[doc(hidden)]
@@ -257,7 +266,9 @@ impl ClipRenderer for StubRenderer {
         }
     }
 
-    fn pre_render(&mut self, _time: Seconds, _beat: Beats, _dt: f32) {}
+    fn pre_render(&mut self, _time: Seconds, _beat: Beats, dt: f32) {
+        self.last_pre_render_dt = Some(dt);
+    }
     fn resize(&mut self, _width: i32, _height: i32) {}
 
     fn as_any(&self) -> &dyn Any {

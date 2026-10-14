@@ -96,16 +96,30 @@ fn two_layer_project(env: ParamEnvelope) -> Project {
     project
 }
 
-fn tick_n(engine: &mut PlaybackEngine, n: usize, dt: f64) {
+/// `n` ticks of `frames` grid frames each. A step that is not whole frames at
+/// 60 fps runs on a project rate where it is: the engine follows
+/// `settings.frame_rate`, set before `initialize` so locates use that grid.
+fn tick_n(engine: &mut PlaybackEngine, n: usize, frames: u32) {
     for i in 0..n {
+        let step = engine.transport_clock().step().0;
         let ctx = TickContext {
-            dt_seconds: Seconds(dt),
-            realtime_now: Seconds(i as f64 * dt),
-            pre_render_dt: Seconds(dt),
+            frames,
+            realtime_now: Seconds(i as f64 * f64::from(frames) * step),
             frame_count: i as u64,
-            export_fixed_dt: Seconds(0.0),
         };
         let _ = engine.tick(ctx);
+    }
+}
+
+/// Export frames `0..n` at `fps` from the engine's current frame: frame 0
+/// renders with no step, then one export-grid frame each.
+fn export_frames(engine: &mut PlaybackEngine, fps: f32, n: u64) {
+    engine.set_export_mode(true);
+    engine.begin_export_clock(fps);
+    engine.begin_export_frames();
+    for frame_count in 0..n {
+        let result = engine.tick(TickContext { frames: u32::from(frame_count != 0), frame_count, ..Default::default() });
+        engine.reclaim_tick_result(result);
     }
 }
 
@@ -119,7 +133,6 @@ fn envelope_step_value_of(engine: &PlaybackEngine, layer_index: usize) -> Option
         .step_value
 }
 
-const DT: f64 = 1.0 / 60.0;
 
 fn child_source(owner: &Layer) -> Layer {
     let mut source = Layer::new_trigger("Source".into(), owner.layer_id.clone(), 1);
@@ -148,16 +161,18 @@ fn reparenting_rechecks_group_source_scope_without_changing_saved_assignment() {
     engine.initialize(project);
     let owner_index = engine.project().unwrap().timeline.layer_index_for_id(&owner_id).unwrap();
     engine.set_state(PlaybackState::Playing);
-    tick_n(&mut engine, 1, 0.1);
+    tick_n(&mut engine, 1, 6);
     assert_eq!(envelope_step_value_of(&engine, owner_index), Some(1.0));
 
     // Mutate only hierarchy here: this isolates playback scope validation
     // from the separately tested editing command and undo machinery.
     engine.project_mut().unwrap().timeline.layers[owner_index].parent_layer_id = None;
-    tick_n(&mut engine, 1, 0.5);
+    engine.mark_clip_bindings_stale(); // the content reaction pass does this after an edit
+    tick_n(&mut engine, 1, 30);
     assert_eq!(envelope_step_value_of(&engine, owner_index), Some(1.0));
     engine.project_mut().unwrap().timeline.layers[owner_index].parent_layer_id = Some(group_id);
-    tick_n(&mut engine, 1, 0.5);
+    engine.mark_clip_bindings_stale(); // the content reaction pass does this after an edit
+    tick_n(&mut engine, 1, 30);
     assert_eq!(envelope_step_value_of(&engine, owner_index), Some(2.0));
     assert_eq!(engine.project().unwrap().timeline.layers[owner_index].gen_params().unwrap()
         .params.get("level").unwrap().clip_trigger_source, selection);
@@ -168,8 +183,9 @@ fn child_patterns_keep_step_responses_isolated_without_audio_or_renderer() {
     use manifold_core::audio_mod::{AudioFeature, ParameterAudioMod};
     use manifold_core::audio_trigger::TriggerFireMode;
     use manifold_core::params::ClipTriggerSource;
-    let build = || {
+    let build = |fps: f32| {
         let mut project = two_layer_project(clip_edge_step_envelope(1.0, WrapMode::Clamp));
+        project.settings.frame_rate = fps;
         project.timeline.layers.truncate(1);
         let owner = &mut project.timeline.layers[0];
         owner.clips.clear();
@@ -201,24 +217,22 @@ fn child_patterns_keep_step_responses_isolated_without_audio_or_renderer() {
         assert_eq!(gp.params.get("level").unwrap().value, 3.0);
         assert_eq!(gp.params.get("other").unwrap().value, 2.0);
     };
-    let mut coarse = build();
-    tick_n(&mut coarse, 1, 0.25);
+    // 0.25 s in one tick: 15 frames at 60 fps.
+    let mut coarse = build(60.0);
+    tick_n(&mut coarse, 1, 15);
     let gp = coarse.project().unwrap().timeline.layers[0].gen_params().unwrap();
     for (m, expected) in gp.audio_mods.as_ref().unwrap().iter().zip([vec![0.0, 0.1, 0.2], vec![0.05, 0.15]]) {
         assert_eq!(m.hop_timeline.values.iter().map(|point| point.time.0).collect::<Vec<_>>(), expected);
     }
-    tick_n(&mut coarse, 1, 0.0);
+    tick_n(&mut coarse, 1, 0);
     assert_values(&coarse);
-    let mut fine = build();
-    tick_n(&mut fine, 50, 0.005);
+    // 5 ms ticks: one frame each at 200 fps.
+    let mut fine = build(200.0);
+    tick_n(&mut fine, 50, 1);
     assert_values(&fine);
-    let mut export = build();
-    export.set_export_mode(true);
-    export.set_export_origin(Seconds::ZERO);
-    for frame_count in 0..3 {
-        let result = export.tick(TickContext { frame_count, export_fixed_dt: Seconds(0.25), ..Default::default() });
-        export.reclaim_tick_result(result);
-    }
+    // Three 4 fps export frames.
+    let mut export = build(60.0);
+    export_frames(&mut export, 4.0, 3);
     assert_values(&export);
 }
 
@@ -232,13 +246,13 @@ fn selected_source_fires_without_a_renderer_or_unmuted_owner() {
         .clip_trigger_source = manifold_core::params::ClipTriggerSource::Lane { layer_id: source_id };
     let mut engine = PlaybackEngine::new(Vec::new());
     engine.initialize(project);
-    engine.set_time(Seconds(0.5));
-    tick_n(&mut engine, 1, DT);
+    engine.locate(Seconds(0.5));
+    tick_n(&mut engine, 1, 1);
     assert_eq!(envelope_step_value_of(&engine, 0), None, "own clip is not the selected source");
-    engine.set_time(Seconds(2.25));
-    tick_n(&mut engine, 1, DT);
+    engine.locate(Seconds(2.25));
+    tick_n(&mut engine, 1, 1);
     assert_eq!(envelope_step_value_of(&engine, 0), Some(1.0));
-    tick_n(&mut engine, 2, DT);
+    tick_n(&mut engine, 2, 1);
     assert_eq!(envelope_step_value_of(&engine, 0), Some(1.0), "renderer retries are not new source starts");
 }
 
@@ -248,10 +262,10 @@ fn adjacent_clips_at_equal_elapsed_times_are_distinct_starts() {
     project.timeline.layers[0].clips[1].start_beat = Beats(4.0);
     let mut engine = create_engine();
     engine.initialize(project);
-    engine.set_time(Seconds(0.25));
-    tick_n(&mut engine, 1, DT);
-    engine.set_time(Seconds(2.25));
-    tick_n(&mut engine, 1, DT);
+    engine.locate(Seconds(0.25));
+    tick_n(&mut engine, 1, 1);
+    engine.locate(Seconds(2.25));
+    tick_n(&mut engine, 1, 1);
     assert_eq!(envelope_step_value_of(&engine, 0), Some(2.0));
 }
 
@@ -261,7 +275,7 @@ fn muted_main_clip_does_not_advance_an_envelope() {
     project.timeline.layers[0].clips[0].is_muted = true;
     let mut engine = create_engine();
     engine.initialize(project);
-    tick_n(&mut engine, 1, DT);
+    tick_n(&mut engine, 1, 1);
     assert_eq!(envelope_step_value_of(&engine, 0), None);
 }
 
@@ -274,10 +288,11 @@ fn deleting_a_source_cancels_its_unconsumed_start() {
         .clip_trigger_source = manifold_core::params::ClipTriggerSource::Lane { layer_id: source_id };
     let mut engine = create_engine();
     engine.initialize(project);
-    engine.set_time(Seconds(2.25));
+    engine.locate(Seconds(2.25));
     engine.sync_clips_to_time();
     engine.project_mut().unwrap().timeline.remove_layer(1);
-    tick_n(&mut engine, 1, DT);
+    engine.mark_clip_bindings_stale(); // the content reaction pass does this after an edit
+    tick_n(&mut engine, 1, 1);
     assert_eq!(envelope_step_value_of(&engine, 0), None);
 }
 
@@ -288,7 +303,7 @@ fn seeking_cancels_starts_queued_before_the_new_playhead() {
     engine.sync_clips_to_time();
     // Seek to the gap before modulation could consume the first clip start.
     engine.seek_to(Seconds(3.0));
-    tick_n(&mut engine, 1, DT);
+    tick_n(&mut engine, 1, 1);
     assert_eq!(envelope_step_value_of(&engine, 0), None);
 }
 
@@ -310,16 +325,17 @@ fn session_launch_and_loop_advance_the_same_envelope_source() {
     let mut engine = PlaybackEngine::new(Vec::new());
     engine.initialize(project);
     engine.session_launch_slot(layer_id, scene_id);
-    tick_n(&mut engine, 2, DT);
+    tick_n(&mut engine, 2, 1);
     assert_eq!(envelope_step_value_of(&engine, 0), Some(1.0));
-    engine.set_time(Seconds(2.1));
-    tick_n(&mut engine, 1, DT);
+    engine.locate(Seconds(2.1));
+    tick_n(&mut engine, 1, 1);
     assert_eq!(envelope_step_value_of(&engine, 0), Some(2.0));
 }
 
-fn short_session_engine() -> PlaybackEngine {
+fn short_session_engine(fps: f32) -> PlaybackEngine {
     use manifold_core::session::{ClipSequence, Scene, SessionSlot};
     let mut project = two_layer_project(clip_edge_step_envelope(1.0, WrapMode::Clamp));
+    project.settings.frame_rate = fps;
     project.timeline.layers[0].clips.clear();
     let layer_id = project.timeline.layers[0].layer_id.clone();
     let scene_id = manifold_core::SceneId::new("short-session");
@@ -340,19 +356,21 @@ fn short_session_engine() -> PlaybackEngine {
 
 #[test]
 fn session_launch_from_stopped_does_not_fire_the_overridden_arrangement() {
-    let mut engine = short_session_engine();
+    // One 10 ms tick: one frame at 100 fps.
+    let mut engine = short_session_engine(100.0);
     let mut project = engine.project().unwrap().clone();
     let layer = project.timeline.layers[0].layer_id.clone();
     project.timeline.layers[0].clips.push(TimelineClip::new_generator(Beats::ZERO, Beats(4.0)));
     engine.initialize(project);
     engine.session_launch_slot(layer, manifold_core::SceneId::new("short-session"));
-    tick_n(&mut engine, 1, 0.01);
+    tick_n(&mut engine, 1, 1);
     assert_eq!(envelope_step_value_of(&engine, 0), Some(1.0));
 }
 
 #[test]
 fn quantized_session_launch_preserves_only_arrangement_starts_before_the_boundary() {
-    let mut engine = short_session_engine();
+    // 200 fps puts 30 ms, 120 ms and 195 ms on whole frames.
+    let mut engine = short_session_engine(200.0);
     let mut project = engine.project().unwrap().clone();
     let layer = project.timeline.layers[0].layer_id.clone();
     project.timeline.layers[0].clips = vec![
@@ -362,14 +380,14 @@ fn quantized_session_launch_preserves_only_arrangement_starts_before_the_boundar
     ];
     engine.initialize(project);
     engine.play();
-    tick_n(&mut engine, 1, 0.03);
+    tick_n(&mut engine, 1, 6);
     engine.session_set_quantize(Beats(0.2));
     engine.session_launch_slot(layer.clone(), manifold_core::SceneId::new("short-session"));
-    engine.set_time(Seconds(0.12));
+    engine.locate(Seconds(0.12));
     engine.sync_clips_to_time();
-    engine.set_time(Seconds(0.195));
+    engine.locate(Seconds(0.195));
     engine.sync_clips_to_time();
-    tick_n(&mut engine, 1, 0.0);
+    tick_n(&mut engine, 1, 0);
     assert_eq!(envelope_step_value_of(&engine, 0), Some(4.0));
     let source = manifold_core::params::ClipTriggerSource::OwnLayer;
     let before = engine.clip_controls().elapsed(&source, Some(&layer), Beats(0.18)).unwrap();
@@ -380,38 +398,41 @@ fn quantized_session_launch_preserves_only_arrangement_starts_before_the_boundar
 
 #[test]
 fn short_session_loops_are_independent_of_frame_partition_and_repeated_sync() {
-    let mut fine = short_session_engine();
-    tick_n(&mut fine, 59, 0.005);
+    // 5 ms frames at 200 fps: 59 one-frame ticks against one 59-frame tick.
+    let mut fine = short_session_engine(200.0);
+    tick_n(&mut fine, 59, 1);
     assert_eq!(envelope_step_value_of(&fine, 0), Some(6.0));
-    let mut coarse = short_session_engine();
-    tick_n(&mut coarse, 1, 0.295);
+    let mut coarse = short_session_engine(200.0);
+    tick_n(&mut coarse, 1, 59);
     assert_eq!(envelope_step_value_of(&coarse, 0), Some(6.0));
     let owner = &coarse.project().unwrap().timeline.layers[0].layer_id;
     let elapsed = coarse.clip_controls().elapsed(
         &manifold_core::params::ClipTriggerSource::OwnLayer, Some(owner), Beats(0.12),
     ).unwrap();
-    assert!((elapsed.0 - 0.02).abs() < 1e-9);
+    // An immediate launch is stamped at its frame's exact beat (D14), so the elapsed phase is exact.
+    assert!((elapsed.0 - 0.02).abs() < 1e-9, "{}", elapsed.0 - 0.02);
 
-    let mut repeated = short_session_engine();
-    repeated.set_time(Seconds(0.17));
+    let mut repeated = short_session_engine(200.0);
+    repeated.locate(Seconds(0.17));
     repeated.sync_clips_to_time();
     repeated.sync_clips_to_time();
-    repeated.set_time(Seconds(0.295));
-    tick_n(&mut repeated, 1, 0.0);
+    repeated.locate(Seconds(0.295));
+    tick_n(&mut repeated, 1, 0);
     assert_eq!(envelope_step_value_of(&repeated, 0), Some(6.0));
 }
 
 #[test]
 fn session_interval_overflow_stops_delivery_instead_of_publishing_a_partial_stream() {
-    let mut engine = short_session_engine();
-    tick_n(&mut engine, 1, 0.005);
+    // At 200 fps: one 5 ms frame, then 1000 s in one tick, then 100 ms.
+    let mut engine = short_session_engine(200.0);
+    tick_n(&mut engine, 1, 1);
     let before = envelope_step_value_of(&engine, 0);
-    tick_n(&mut engine, 1, 1000.0);
+    tick_n(&mut engine, 1, 200_000);
     assert_eq!(engine.trigger_delivery_failure().unwrap().kind,
         manifold_playback::engine::trigger_delivery::TriggerDeliveryError::CapacityOverflow);
     assert!(engine.with_trigger_pulses(|_, _, _| ()).is_none());
     assert_eq!(envelope_step_value_of(&engine, 0), before);
-    tick_n(&mut engine, 1, 0.1);
+    tick_n(&mut engine, 1, 20);
     assert_eq!(envelope_step_value_of(&engine, 0), before);
     engine.seek_to(Seconds::ZERO);
     assert!(engine.trigger_delivery_failure().is_none());
@@ -419,8 +440,9 @@ fn session_interval_overflow_stops_delivery_instead_of_publishing_a_partial_stre
     assert!(!engine.clip_controls().starts(&manifold_core::params::ClipTriggerSource::OwnLayer, Some(owner)).is_empty());
 }
 
-fn short_pattern_engine() -> PlaybackEngine {
+fn short_pattern_engine(fps: f32) -> PlaybackEngine {
     let mut project = two_layer_project(clip_edge_step_envelope(1.0, WrapMode::Clamp));
+    project.settings.frame_rate = fps;
     project.timeline.layers[0].clips = [0.0, 0.2, 0.4].into_iter()
         .map(|start| TimelineClip::new_generator(Beats(start), Beats(0.05)))
         .collect();
@@ -432,52 +454,44 @@ fn short_pattern_engine() -> PlaybackEngine {
 
 #[test]
 fn short_pattern_is_independent_of_frame_partition_and_repeated_sync() {
-    let mut fine = short_pattern_engine();
-    tick_n(&mut fine, 50, 0.005);
+    // 50 one-frame ticks at 200 fps against one 15-frame tick at 60 fps.
+    let mut fine = short_pattern_engine(200.0);
+    tick_n(&mut fine, 50, 1);
     assert_eq!(envelope_step_value_of(&fine, 0), Some(3.0));
 
-    let mut coarse = short_pattern_engine();
-    tick_n(&mut coarse, 1, 0.25);
+    let mut coarse = short_pattern_engine(60.0);
+    tick_n(&mut coarse, 1, 15);
     assert_eq!(envelope_step_value_of(&coarse, 0), Some(3.0));
     // The completed clip's phase remains available to retained samples.
     let owner = &coarse.project().unwrap().timeline.layers[0].layer_id;
     let elapsed = coarse.clip_controls().elapsed(
         &manifold_core::params::ClipTriggerSource::OwnLayer, Some(owner), Beats(0.22),
     ).unwrap();
-    assert!((elapsed.0 - 0.02).abs() < 1e-9);
+    assert!((elapsed.0 - 0.02).abs() < 1e-9, "{}", elapsed.0 - 0.02);
 
-    let mut repeated = short_pattern_engine();
+    let mut repeated = short_pattern_engine(60.0);
     repeated.sync_clips_to_time();
-    repeated.set_time(Seconds(0.15));
+    repeated.locate(Seconds(0.15));
     repeated.sync_clips_to_time();
     repeated.sync_clips_to_time();
-    repeated.set_time(Seconds(0.25));
+    repeated.locate(Seconds(0.25));
     repeated.sync_clips_to_time();
-    tick_n(&mut repeated, 1, 0.0);
+    tick_n(&mut repeated, 1, 0);
     assert_eq!(envelope_step_value_of(&repeated, 0), Some(3.0));
-    tick_n(&mut repeated, 1, 0.0);
+    tick_n(&mut repeated, 1, 0);
     assert_eq!(envelope_step_value_of(&repeated, 0), Some(3.0));
 
-    let mut export = short_pattern_engine();
-    export.set_export_mode(true);
-    export.set_export_origin(Seconds::ZERO);
-    for frame_count in 0..2 {
-        let result = export.tick(TickContext {
-            frame_count,
-            export_fixed_dt: Seconds(0.25),
-            ..Default::default()
-        });
-        export.reclaim_tick_result(result);
-    }
+    let mut export = short_pattern_engine(60.0);
+    export_frames(&mut export, 4.0, 2);
     assert_eq!(envelope_step_value_of(&export, 0), Some(3.0));
 }
 
 #[test]
 fn seek_skips_short_pattern_instead_of_replaying_the_interval() {
-    let mut engine = short_pattern_engine();
+    let mut engine = short_pattern_engine(60.0);
     engine.sync_clips_to_time();
     engine.seek_to(Seconds(0.25));
-    tick_n(&mut engine, 1, 0.0);
+    tick_n(&mut engine, 1, 0);
     assert_eq!(envelope_step_value_of(&engine, 0), None);
 }
 
@@ -487,7 +501,7 @@ fn timeline_clip_start_fires_step_envelope() {
     engine.initialize(two_layer_project(clip_edge_step_envelope(1.0, WrapMode::Clamp)));
     engine.set_state(PlaybackState::Playing);
 
-    tick_n(&mut engine, 5, DT);
+    tick_n(&mut engine, 5, 1);
     assert_eq!(
         envelope_step_value_of(&engine, 0),
         Some(1.0),
@@ -510,7 +524,7 @@ fn no_clip_start_means_no_envelope_step() {
     engine.initialize(project);
     engine.set_state(PlaybackState::Playing);
 
-    tick_n(&mut engine, 60, DT);
+    tick_n(&mut engine, 60, 1);
     assert_eq!(
         envelope_step_value_of(&engine, 0),
         None,
@@ -524,7 +538,7 @@ fn random_envelope_fires_on_clip_edge() {
     engine.initialize(two_layer_project(clip_edge_random_envelope()));
     engine.set_state(PlaybackState::Playing);
 
-    tick_n(&mut engine, 5, DT);
+    tick_n(&mut engine, 5, 1);
     assert!(
         envelope_step_value_of(&engine, 0).is_some(),
         "Random envelope fires on the clip start"
@@ -541,7 +555,7 @@ fn other_layers_clip_start_does_not_fire() {
     // frames), where layer 1's clip starts — layer 0's own clip A is still
     // active the whole time (it ends at beat 4, exactly when layer 1
     // starts), so layer 0 sees no edge of its own in this window.
-    tick_n(&mut engine, 125, DT);
+    tick_n(&mut engine, 125, 1);
     assert_eq!(
         envelope_step_value_of(&engine, 0),
         Some(1.0),
@@ -567,12 +581,12 @@ fn clip_ending_with_nothing_replacing_fires_nothing_more() {
     engine.set_state(PlaybackState::Playing);
 
     // Fires once at the clip's start.
-    tick_n(&mut engine, 10, DT);
+    tick_n(&mut engine, 10, 1);
     assert_eq!(envelope_step_value_of(&engine, 0), Some(1.0));
 
     // Tick well past beat 4 (clip end, 2s = 120 frames) with nothing new
     // starting on the layer: the shadow must not advance again.
-    tick_n(&mut engine, 400, DT);
+    tick_n(&mut engine, 400, 1);
     assert_eq!(
         envelope_step_value_of(&engine, 0),
         Some(1.0),
@@ -588,11 +602,11 @@ fn second_timeline_clip_start_refires_step_envelope() {
     engine.initialize(two_layer_project(clip_edge_step_envelope(1.0, WrapMode::Clamp)));
     engine.set_state(PlaybackState::Playing);
 
-    tick_n(&mut engine, 5, DT);
+    tick_n(&mut engine, 5, 1);
     assert_eq!(envelope_step_value_of(&engine, 0), Some(1.0), "first clip start fires");
 
     // Tick past beat 8 (4s = 240 frames) where the second clip starts.
-    tick_n(&mut engine, 245, DT);
+    tick_n(&mut engine, 245, 1);
     assert_eq!(
         envelope_step_value_of(&engine, 0),
         Some(2.0),
@@ -608,14 +622,14 @@ fn unrelated_layer_edge_after_reorder_does_not_confuse_the_gate() {
     let mut engine = create_engine();
     engine.initialize(two_layer_project(clip_edge_step_envelope(1.0, WrapMode::Clamp)));
     engine.set_state(PlaybackState::Playing);
-    tick_n(&mut engine, 5, DT);
+    tick_n(&mut engine, 5, 1);
     assert_eq!(envelope_step_value_of(&engine, 0), Some(1.0));
 
     // Layer 1 has no envelope at all — this just documents that its own
     // clip start (beat 4, exercised in `other_layers_clip_start_does_not_fire`)
     // never touches layer 0's state, holding the count-of-fires invariant
     // exact at exactly one fire so far.
-    tick_n(&mut engine, 20, DT);
+    tick_n(&mut engine, 20, 1);
     assert_eq!(
         envelope_step_value_of(&engine, 0),
         Some(1.0),
@@ -664,7 +678,7 @@ fn step_envelope_resumes_from_committed_base_after_real_save_and_reload() {
     engine.initialize(reloaded);
     engine.set_state(PlaybackState::Playing);
 
-    tick_n(&mut engine, 5, DT);
+    tick_n(&mut engine, 5, 1);
     assert_eq!(
         envelope_step_value_of(&engine, 0),
         Some(1.0),

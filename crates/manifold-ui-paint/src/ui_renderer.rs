@@ -12,7 +12,6 @@ use crate::native_text::NativeTextRenderer;
 
 use manifold_ui::node::*;
 use manifold_ui::bitmap_renderer::TimingGridLineKind;
-use manifold_ui::text::TextMeasure;
 use manifold_ui::transform2d::Affine2;
 use manifold_ui::tree::{TraversalEvent, UITree};
 
@@ -1211,7 +1210,7 @@ impl UIRenderer {
                 {
                     return;
                 }
-                self.draw_node(node);
+                self.draw_node(tree, node);
             }
             TraversalEvent::PushClip(rect) => self.handle_push_clip(rect),
             TraversalEvent::PopClip => self.handle_pop_clip(),
@@ -1228,7 +1227,7 @@ impl UIRenderer {
         self.begin_scissor_tracking();
 
         tree.traverse_range(start_node, end_node, |event| match event {
-            TraversalEvent::Node(node) => self.draw_node(node),
+            TraversalEvent::Node(node) => self.draw_node(tree, node),
             TraversalEvent::PushClip(rect) => self.handle_push_clip(rect),
             TraversalEvent::PopClip => self.handle_pop_clip(),
         });
@@ -1245,7 +1244,7 @@ impl UIRenderer {
         self.begin_scissor_tracking();
 
         tree.traverse_flat_range(start, end, dirty_only, |event| match event {
-            TraversalEvent::Node(node) => self.draw_node(node),
+            TraversalEvent::Node(node) => self.draw_node(tree, node),
             TraversalEvent::PushClip(rect) => self.handle_push_clip(rect),
             TraversalEvent::PopClip => self.handle_pop_clip(),
         });
@@ -1254,7 +1253,7 @@ impl UIRenderer {
     /// Draw a single UI node — resolves effective colors and emits commands.
     /// Uses original node bounds (no geometry clamping). Scissor rects handle
     /// pixel-level clipping at the GPU level.
-    fn draw_node(&mut self, node: &UINode) {
+    fn draw_node(&mut self, tree: &UITree, node: &UINode) {
         let style = &node.style;
         let bounds = node.bounds;
 
@@ -1465,7 +1464,7 @@ impl UIRenderer {
                     transform,
                 );
             } else {
-                let text_size = self.text_renderer.measure_text_cached(
+                let text_size = tree.measure_text(
                     text,
                     style.font_size,
                     style.font_weight,
@@ -1483,8 +1482,7 @@ impl UIRenderer {
                 let prefix = style.prefix_label.filter(|p| !p.is_empty());
                 let prefix_advance = match prefix {
                     Some(p) => {
-                        self.text_renderer
-                            .measure_text_cached(p, style.font_size, style.font_weight)
+                        tree.measure_text(p, style.font_size, style.font_weight)
                             .x
                             + PREFIX_GAP
                     }
@@ -1585,9 +1583,7 @@ impl UIRenderer {
             let caret_color = manifold_ui::color::CHIP_CARET;
             let caret_color = [caret_color.r, caret_color.g, caret_color.b, caret_color.a];
             let caret_font = manifold_ui::color::CHIP_CARET_FONT;
-            let size = self
-                .text_renderer
-                .measure_text_cached(CARET, caret_font, style.font_weight);
+            let size = tree.measure_text(CARET, caret_font, style.font_weight);
             let caret_x =
                 bounds.x_max() - manifold_ui::color::CHIP_CARET_PAD_X - size.x;
             let caret_y = bounds.y + (bounds.height - size.y) * 0.5
@@ -1637,27 +1633,9 @@ impl UIRenderer {
         let _ = (icon_id, x, y, w, h, color, clip_bounds);
     }
 
-    /// Text measurement using NativeTextRenderer's cached measurement.
-    pub fn measure_text_cached(
-        &mut self,
-        text: &str,
-        font_size: u16,
-        font_weight: FontWeight,
-    ) -> Vec2 {
-        #[cfg(target_os = "macos")]
-        return self
-            .text_renderer
-            .measure_text_cached(text, font_size, font_weight);
-        #[cfg(not(target_os = "macos"))]
-        {
-            let em = font_size as f32;
-            Vec2::new(text.len() as f32 * em * 0.54, em)
-        }
-    }
-
     // ── Render pass ─────────────────────────────────────────────────
 
-    /// Advance text renderer frame counter (call once per frame).
+    /// Reset per-frame immediate-mode state (call once per frame).
     pub fn begin_frame(&mut self) {
         // Each frame starts unclipped on the Base layer; a caller (the graph
         // canvas) re-arms its lane clip after this, before queuing draws.
@@ -1665,8 +1643,6 @@ impl UIRenderer {
         self.immediate_clip_stack.clear();
         self.depth_stack.clear();
         self.transform_stack.clear();
-        #[cfg(target_os = "macos")]
-        self.text_renderer.begin_frame();
     }
 
     /// Prepare vertex/index buffers and text for drawing. Call before `render()`.
@@ -2262,26 +2238,6 @@ fn bug060_trace_band() -> Option<[f32; 4]> {
         let p: Vec<f32> = v.split(',').filter_map(|t| t.trim().parse().ok()).collect();
         (p.len() == 4).then(|| [p[0], p[1], p[2], p[3]])
     })
-}
-
-/// Implement TextMeasure for UIRenderer so panels can compute layout.
-impl TextMeasure for UIRenderer {
-    fn measure_text(&self, text: &str, font_size: u16, font_weight: FontWeight) -> Vec2 {
-        #[cfg(target_os = "macos")]
-        return self
-            .text_renderer
-            .measure_text(text, font_size, font_weight);
-        #[cfg(not(target_os = "macos"))]
-        {
-            let em = font_size as f32;
-            let avg_char_width = match font_weight {
-                FontWeight::Bold => em * 0.56,
-                FontWeight::Medium => em * 0.54,
-                FontWeight::Regular => em * 0.52,
-            };
-            Vec2::new(text.len() as f32 * avg_char_width, em)
-        }
-    }
 }
 
 /// Implement the immediate-mode `Painter` for `UIRenderer` so the graph canvas

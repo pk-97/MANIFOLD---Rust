@@ -59,6 +59,7 @@
 //!
 //! Exit codes: `0` ok, `1` validation/lookup failure, `2` usage / IO / parse.
 
+use manifold_nodes as _;
 use std::io::Read;
 use std::path::Path;
 use std::process::ExitCode;

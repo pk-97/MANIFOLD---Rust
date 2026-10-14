@@ -450,6 +450,9 @@ pub fn run(args: &[String]) -> ! {
         .find(|w| w[0] == "--fps")
         .and_then(|w| w[1].parse().ok())
         .unwrap_or(real_project.settings.frame_rate as f64);
+    // The project rate is the only fps (FRAME_EXACT_TRANSPORT_DESIGN D10):
+    // the transport clock and the content timer both follow it.
+    real_project.settings.frame_rate = fr as f32;
     let w = real_project.settings.output_width.max(1) as u32;
     let h = real_project.settings.output_height.max(1) as u32;
     println!("output={w}x{h} fps={fr}");
@@ -480,7 +483,6 @@ pub fn run(args: &[String]) -> ! {
 
     let empty = manifold_core::project::Project::default();
     let mut ct = headless_content_thread(empty, w, h);
-    ct.timer.set_target_fps(fr);
     ct.timer.set_frame_clocked(frame_clock);
     ct.timer.ensure_thread_policy();
 
@@ -494,8 +496,6 @@ pub fn run(args: &[String]) -> ! {
     let load = ct.load_project_and_warmup(Box::new(real_project), &cmd_rx, &cmd_tx, &state_tx);
     eprintln!("[rt-capture] warmup pass took {:.1}ms (completed={})",
         load.warmup.elapsed_ms, load.warmup.completed);
-    // This tool deliberately permits an FPS override after the production load.
-    ct.timer.set_target_fps(fr);
     if profile_cpu {
         for renderer in ct.engine.renderers_mut() {
             if let Some(generator) = renderer.as_any_mut()
@@ -512,7 +512,7 @@ pub fn run(args: &[String]) -> ! {
 
     // One-shot --set writes, using resolved layer indices and param IDs.
     for (layer_idx, param, value) in resolved_sets {
-        ct.handle_command(ContentCommand::MutateProject(Box::new(move |project| {
+        ct.handle_command(ContentCommand::mutate(crate::content_command::touch::VALUES, Box::new(move |project| {
             if let Some(g) = project.timeline.layers.get_mut(layer_idx).and_then(|l| l.gen_params_mut()) {
                 let old = g.get_param(&param);
                 g.set_param(&param, value);
@@ -549,7 +549,7 @@ pub fn run(args: &[String]) -> ! {
         for (at, layer_idx, param, value) in &resolved_set_ats {
             if *at == frame {
                 let (layer_idx, param, value) = (*layer_idx, param.clone(), *value);
-                ct.handle_command(ContentCommand::MutateProject(Box::new(move |project| {
+                ct.handle_command(ContentCommand::mutate(crate::content_command::touch::VALUES, Box::new(move |project| {
                     if let Some(g) = project.timeline.layers.get_mut(layer_idx).and_then(|l| l.gen_params_mut()) {
                         let old = g.get_param(&param);
                         g.set_param(&param, value);
@@ -560,7 +560,7 @@ pub fn run(args: &[String]) -> ! {
             }
         }
         if disable_driver_at == Some(frame) {
-            ct.handle_command(ContentCommand::MutateProject(Box::new(move |project| {
+            ct.handle_command(ContentCommand::mutate(crate::content_command::touch::SHAPES, Box::new(move |project| {
                 if let Some(g) = project.timeline.layers[0].gen_params_mut()
                     && let Some(drivers) = g.drivers.as_mut()
                 {
@@ -581,7 +581,7 @@ pub fn run(args: &[String]) -> ! {
                     .unwrap_or(0.0)
             });
             let (param, value) = (param.clone(), base + frame as f32 * delta);
-            ct.handle_command(ContentCommand::MutateProject(Box::new(move |project| {
+            ct.handle_command(ContentCommand::mutate(crate::content_command::touch::VALUES, Box::new(move |project| {
                 if let Some(g) = project.timeline.layers[layer_idx].gen_params_mut() {
                     g.set_param(&param, value);
                 }
@@ -614,7 +614,7 @@ pub fn run(args: &[String]) -> ! {
     if live_flip_param.is_some() {
         let param = resolved_flip_param.clone();
         let layer_idx = resolved_flip_layer;
-        ct.handle_command(ContentCommand::MutateProject(Box::new(move |project| {
+        ct.handle_command(ContentCommand::mutate(crate::content_command::touch::VALUES, Box::new(move |project| {
             if let Some(g) = project.timeline.layers.get_mut(layer_idx).and_then(|l| l.gen_params_mut()) {
                 // Read current value and flip it (for bool params).
                 let current = g.get_param(&param);

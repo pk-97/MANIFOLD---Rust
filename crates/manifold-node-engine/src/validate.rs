@@ -236,6 +236,21 @@ impl From<&JsonGeneratorLoadError> for ValidationIssue {
     }
 }
 
+/// One scene per layer (D17): a generator graph holding two or more
+/// render-scene nodes is an error. Device-free, so commands and the CLI
+/// share it.
+pub fn check_one_scene(def: &EffectGraphDef) -> Option<ValidationIssue> {
+    let count = manifold_core::effect_graph_def::render_scene_count(&def.nodes);
+    (count > 1).then(|| ValidationIssue {
+        node_id: None,
+        type_id: Some(manifold_core::effect_graph_def::RENDER_SCENE_TYPE_ID.to_string()),
+        port: None,
+        message: format!(
+            "{count} render_scene nodes in one generator graph; a layer holds one scene"
+        ),
+    })
+}
+
 /// THE validation entry point. Same pipeline the runtime loader
 /// takes: `into_graph` → `compile`, plus (for `ValidateKind::Generator`)
 /// the `PresetRuntime` chain build for the allocation-error class
@@ -260,6 +275,9 @@ pub fn validate_def(
         return report;
     }
 
+    if kind == ValidateKind::Generator {
+        report.errors.extend(check_one_scene(def));
+    }
     report.errors.extend(check_bindings_resolve(def));
 
     // Card lints (D8) resolve binding targets against the real,
@@ -651,6 +669,21 @@ pub(crate) fn check_card_lints(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn scene_graph(scene_count: usize) -> EffectGraphDef {
+        let nodes: Vec<_> = (0..scene_count)
+            .map(|i| serde_json::json!({"id": i, "typeId": "node.render_scene"}))
+            .collect();
+        serde_json::from_value(serde_json::json!({"version": 2, "nodes": nodes, "wires": []}))
+            .expect("scene graph JSON")
+    }
+
+    #[test]
+    fn one_scene_graph_passes_two_scene_graph_is_rejected() {
+        assert!(check_one_scene(&scene_graph(1)).is_none());
+        let issue = check_one_scene(&scene_graph(2)).expect("two scenes rejected");
+        assert!(issue.message.contains("one scene"), "{}", issue.message);
+    }
 
 
     use crate::persistence::PrimitiveRegistry;

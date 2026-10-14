@@ -355,7 +355,7 @@ impl AudioModShape {
     /// the attack/release envelope follower, invert, and the response curve —
     /// everything EXCEPT the output range map. Advances `smoothed` (the
     /// envelope-follower state) and `prev_raw` (the rate-of-change
-    /// differentiator's last sample) in place. `dt_seconds` is real wall time,
+    /// differentiator's last sample) in place. `dt` is the tick's seconds,
     /// so both attack/release and the rate are frame-rate independent — a
     /// 120 ms release feels the same at 60 or 144 fps.
     ///
@@ -364,7 +364,7 @@ impl AudioModShape {
     /// must never distort whether/when a mod fires. `invert` deliberately stays
     /// visible here (before the range map) so "fire on the quiet gaps" keeps
     /// working.
-    pub fn condition(&self, raw: f32, dt_seconds: f32, smoothed: &mut f32, prev_raw: &mut f32) -> f32 {
+    pub fn condition(&self, raw: f32, dt: f32, smoothed: &mut f32, prev_raw: &mut f32) -> f32 {
         // A non-finite feature value must never enter the follower: Rust's
         // clamp propagates NaN, and one NaN poisons `smoothed` permanently
         // (NaN in, NaN out, forever) — from there it rides map_range into
@@ -378,7 +378,7 @@ impl AudioModShape {
         // level path is the plain sensitivity-scaled value. `prev_raw` always
         // tracks the last raw, so toggling the mode mid-stream stays clean.
         let target = if self.rate_of_change {
-            let rate = (raw - *prev_raw) / dt_seconds.max(1e-4);
+            let rate = (raw - *prev_raw) / dt.max(1e-4);
             (0.5 + rate * self.sensitivity).clamp(0.0, 1.0)
         } else {
             (raw * self.sensitivity).clamp(0.0, 1.0)
@@ -391,7 +391,7 @@ impl AudioModShape {
         let coeff = if tau_ms <= 0.0 {
             1.0
         } else {
-            (1.0 - (-(dt_seconds * 1000.0) / tau_ms).exp()).clamp(0.0, 1.0)
+            (1.0 - (-(dt * 1000.0) / tau_ms).exp()).clamp(0.0, 1.0)
         };
         *smoothed += (target - *smoothed) * coeff;
 
@@ -411,8 +411,8 @@ impl AudioModShape {
     /// Smooth and map `raw` to a normalized 0..1 output within the target
     /// param's range — `map_range(condition(...))`, kept as one call for
     /// existing continuous-value callers (e.g. the `mod_harness` example).
-    pub fn apply(&self, raw: f32, dt_seconds: f32, smoothed: &mut f32, prev_raw: &mut f32) -> f32 {
-        self.map_range(self.condition(raw, dt_seconds, smoothed, prev_raw))
+    pub fn apply(&self, raw: f32, dt: f32, smoothed: &mut f32, prev_raw: &mut f32) -> f32 {
+        self.map_range(self.condition(raw, dt, smoothed, prev_raw))
     }
 
     /// The param-unit travel zone the trim handles (`range_min`/`range_max`)

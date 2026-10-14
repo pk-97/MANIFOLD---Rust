@@ -235,6 +235,7 @@ impl ChromeHost {
     /// In-place update if the structure is unchanged; otherwise
     /// [`Reconcile::NeedsRebuild`] with the tree left untouched.
     pub fn update(&mut self, tree: &mut UITree, root: &View, rect: Rect) -> Reconcile {
+        manifold_foundation::work_count::record_work(manifold_foundation::work_count::WorkKind::ChromeLayout);
         layout::solve_into(root, rect, tree.measurer(), &mut self.scratch);
 
         if !self.built

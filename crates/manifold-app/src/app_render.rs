@@ -102,7 +102,7 @@ impl BoundNodeParamDrag {
 /// mirror of [`BoundNodeParamDrag`] for the un-rerouted path. Opened at the
 /// first `SetGraphNodeParam`/`SetOuterParam`-family move on a given
 /// `(target, node_id, param_name, scope_path)`, live-written on every
-/// subsequent move via `MutateProjectLive` (no undo entry), closed on the
+/// subsequent move via `MutateProject` (Values or Shapes) (no undo entry), closed on the
 /// matching `EndGraphNodeParamScrub` — ONE undo-worthy
 /// `SetGraphNodeParamCommand` for the whole drag (`pre_drag_value` →
 /// `current_value`), not one `Execute` per pointer-move tick.
@@ -217,6 +217,7 @@ impl Application {
 
 
     pub(crate) fn tick_and_render(&mut self) {
+        self.work_trace.frame("ui");
         let dt = self.frame_timer.consume_tick();
         let realtime = self.frame_timer.realtime_since_start();
         self.time_since_start = realtime as f32;
@@ -274,7 +275,16 @@ impl Application {
                     // directly via the host — those would be overwritten by the
                     // snapshot, so we still suppress for overlay drags.
                     if !drag_active && !suppressed {
-                        let version_changed = state.data_version != self.content_state.data_version;
+                        // `ContentState` travels every tick, so only an accepted
+                        // snapshot compares stamps, and a Values, Shapes or
+                        // MappingRanges move alone never re-projects (D23).
+                        let version_changed = state.data_version != self.content_state.data_version
+                            || !state
+                                .stamps
+                                .moved_since(&self.accepted_stamps)
+                                .minus(manifold_core::change::ChangeSet::LIVE)
+                                .is_empty();
+                        self.accepted_stamps = state.stamps;
                         // Only deep-clone from Arc when it's a different allocation
                         // (new data_version). Modulation-only frames send the same
                         // Arc pointer — skip the clone (values are 1 frame stale,
@@ -284,6 +294,7 @@ impl Application {
                             .as_ref()
                             .is_none_or(|prev| !std::sync::Arc::ptr_eq(prev, &snapshot));
                         if is_new_arc {
+                            manifold_core::work_count::record_work(manifold_core::work_count::WorkKind::ProjectClone);
                             self.local_project = (*snapshot).clone();
                             self.last_snapshot_arc = Some(snapshot);
                         } else {
@@ -2432,7 +2443,7 @@ impl Application {
                                 // (`ui_bridge/inspector.rs`): mutate the
                                 // local mirror synchronously (so the
                                 // card slider follows every move) and
-                                // push a cheap `MutateProjectLive` for
+                                // push a cheap `MutateProject` (Values or Shapes) for
                                 // the render — no undo-stack entry here,
                                 // that's `EndGraphNodeParamScrub`'s job.
                                 self.local_project.with_preset_graph_mut(&target, |inst| {
@@ -2440,7 +2451,7 @@ impl Application {
                                 });
                                 let t = target.clone();
                                 let oid = outer_id.clone();
-                                self.send_content_cmd(ContentCommand::MutateProjectLive(
+                                self.send_content_cmd(ContentCommand::mutate(crate::content_command::touch::VALUES, 
                                     Box::new(move |p| {
                                         p.with_preset_graph_mut(&t, |inst| {
                                             inst.set_base_param(&oid, card_value);
@@ -2454,7 +2465,7 @@ impl Application {
                         }
                         // BUG-282: mirror the bound arm above — one session
                         // opened on the first move, live-written every tick
-                        // via `MutateProjectLive` (no undo entry), committed
+                        // via `MutateProject` (Values or Shapes) (no undo entry), committed
                         // as ONE undo-worthy `Execute` on
                         // `EndGraphNodeParamScrub` with the true pre-drag
                         // value seeded through `with_previous` (graph.rs
@@ -2498,6 +2509,10 @@ impl Application {
                         {
                             drag.current_value = core_value.clone();
                         }
+                        let graph_absent = self
+                            .local_project
+                            .preset_instance(&target)
+                            .is_none_or(|inst| inst.graph.is_none());
                         let mut live_cmd =
                             manifold_editing::commands::graph::SetGraphNodeParamCommand::new(
                                 target,
@@ -2507,7 +2522,12 @@ impl Application {
                                 default.clone(),
                             )
                             .with_scope(canvas_scope.clone());
-                        self.send_content_cmd(ContentCommand::MutateProjectLive(Box::new(
+                        // Unbound node param values are Shapes; the session's
+                        // first move may materialize the override (D21).
+                        let touches = crate::content_command::touch::shapes_first_move(
+                            is_new_session && graph_absent,
+                        );
+                        self.send_content_cmd(ContentCommand::mutate(touches, Box::new(
                             move |p| {
                                 live_cmd.execute(p);
                             },
@@ -3652,13 +3672,14 @@ pub(crate) fn render_text_input_overlay(
     ti: &crate::text_input::TextInputState,
     timer: &crate::frame_timer::FrameTimer,
     ui: &mut UIRenderer,
+    tm: &dyn manifold_ui::text::TextMeasure,
 ) {
     use crate::text_input::*;
 
     let fs = ti.font_size;
-    let width = |ui: &mut UIRenderer, s: &str| ui.measure_text_cached(s, fs as u16, FontWeight::Medium).x;
+    let width = |s: &str| tm.measure_text(s, fs as u16, FontWeight::Medium).x;
     let mut lines = Vec::new();
-    let g = ti.overlay_geometry(&mut lines, &mut |s| width(ui, s));
+    let g = ti.overlay_geometry(&mut lines, &mut |s| width(s));
     let line_h = g.line_h;
 
     let text = ti.model.text();
@@ -3686,8 +3707,8 @@ pub(crate) fn render_text_input_overlay(
         if has_selection && sel.start < l.end && sel.end > l.start {
             let hl_start = sel.start.max(l.start) - l.start;
             let hl_end = sel.end.min(l.end) - l.start;
-            let hx = g.text_x + width(ui, &line[..hl_start]);
-            let hw = width(ui, &line[..hl_end]) - width(ui, &line[..hl_start]);
+            let hx = g.text_x + width(&line[..hl_start]);
+            let hw = width(&line[..hl_end]) - width(&line[..hl_start]);
             ui.draw_rect(hx, ly, hw.max(2.0), line_h, TEXT_INPUT_SELECT_BG);
         }
         ui.draw_text(g.text_x, ly, line, fs, TEXT_INPUT_FG);
@@ -3698,7 +3719,7 @@ pub(crate) fn render_text_input_overlay(
         let blink_on = ((elapsed / TEXT_INPUT_BLINK_PERIOD) as u64).is_multiple_of(2);
         if blink_on {
             let i = manifold_ui::text_edit::line_of(&lines, caret);
-            let cursor_x = g.text_x + width(ui, &text[lines[i].start..caret]);
+            let cursor_x = g.text_x + width(&text[lines[i].start..caret]);
             let cursor_y = g.text_y + i as f32 * line_h;
             ui.draw_rect(cursor_x, cursor_y, TEXT_INPUT_CURSOR_W, line_h, TEXT_INPUT_CURSOR);
         }
@@ -3815,7 +3836,7 @@ mod bound_node_param_drag_tests {
 /// fresh undo-worthy `SetGraphNodeParamCommand::execute` on EVERY
 /// pointer-move tick — an N-tick drag flooded the 200-cap undo stack
 /// instead of coalescing to one entry. The fix mirrors the bound-row
-/// pattern: N in-flight ticks land via `MutateProjectLive` — a direct
+/// pattern: N in-flight ticks land via `MutateProject` (Values or Shapes) — a direct
 /// `Command::execute` call on the content-thread `Project` that never
 /// touches an undo manager — and only the ONE release-time command, seeded
 /// with `with_previous(pre_drag_value)` (the seam
@@ -3893,7 +3914,7 @@ mod unbound_node_param_drag_tests {
         let pre_drag_value = Some(SerializedParamValue::Float { value: 0.0 });
 
         // N pointer-move ticks: each is a live write — the app's
-        // `MutateProjectLive` path (`live_cmd.execute(p)` in the
+        // `MutateProject` (Values or Shapes) path (`live_cmd.execute(p)` in the
         // `SetGraphNodeParam` arm) calling `Command::execute` directly on
         // the content-thread project, never touching an undo manager.
         let ticks = [0.1_f32, 0.3, 0.55, 0.72, 0.9];

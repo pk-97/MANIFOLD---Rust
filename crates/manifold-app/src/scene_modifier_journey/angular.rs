@@ -189,7 +189,7 @@ fn scene_modifier_angular_wrap_journey() {
             PI
         );
 
-        ct.handle_command(ContentCommand::MutateProject(Box::new({
+        ct.handle_command(ContentCommand::mutate(crate::content_command::touch::SHAPES, Box::new({
             let target = target.clone();
             let binding = binding.clone();
             move |project| {
@@ -203,12 +203,23 @@ fn scene_modifier_angular_wrap_journey() {
                     .enabled = true;
             }
         })));
+        // The saw resets at beat 1. Transport frames sit on the project's
+        // frame grid, so the probe straddles the reset with the grid frames
+        // either side of it, plus the next frame as an ordinary one-frame step.
+        let clock = ct.engine.transport_clock();
+        let reset_frame = clock.index_at_or_after(ct.engine.beat_to_timeline_time_immut(Beats(1.0)));
+        let seam = [
+            ("before-reset", clock.time_at(reset_frame - 1)),
+            ("after-reset", clock.time_at(reset_frame)),
+            ("one-frame-on", clock.time_at(reset_frame + 1)),
+        ];
         let mut seam_frames = Vec::new();
-        for (label, beat) in [("before-reset", 0.99999), ("after-reset", 1.00001)] {
-            ct.handle_command(ContentCommand::SeekToBeat(Beats(beat)));
+        for (label, time) in seam {
+            ct.handle_command(ContentCommand::SeekTo(time));
             ct.tick_frame(&tx);
             let actual = ct.engine.current_beat_f64();
-            assert!((actual - beat).abs() < 1.0e-6, "paused saw position");
+            assert_eq!(ct.engine.current_time(), time, "paused seek lands on the grid frame");
+            assert_eq!(actual < 1.0, label == "before-reset", "{label} sits on its side of the reset: {actual}");
             let expected = ParameterDriver::evaluate_with_period(
                 Beats(actual),
                 1.0,
@@ -229,8 +240,14 @@ fn scene_modifier_angular_wrap_journey() {
             let (frame, _) = capture_output(&ct, &output.join(format!("{recipe}-{label}.png")));
             seam_frames.push(frame);
         }
+        // Across the reset the image moves like any other frame: an angle
+        // that wraps at 2π shows no jump.
         let seam_diff = difference(&seam_frames[0], &seam_frames[1]);
-        assert!(seam_diff < 0.1, "{recipe} saw reset jumps: MAD={seam_diff}");
+        let step_diff = difference(&seam_frames[1], &seam_frames[2]);
+        assert!(
+            seam_diff < 0.1 || seam_diff < 2.0 * step_diff,
+            "{recipe} saw reset jumps: MAD={seam_diff}, one ordinary frame MAD={step_diff}"
+        );
 
         let saved = output.join(format!("{recipe}.manifold"));
         manifold_io::saver::save_project_v1(ct.engine.project().unwrap(), &saved).unwrap();
@@ -256,7 +273,7 @@ fn scene_modifier_angular_wrap_journey() {
         assert!(ct.graph_edit_diagnostic.is_none());
         warm_project(&mut ct, &tx);
         ct.handle_command(ContentCommand::Pause);
-        ct.handle_command(ContentCommand::SeekToBeat(Beats(1.00001)));
+        ct.handle_command(ContentCommand::SeekTo(seam[1].1));
         ct.tick_frame(&tx);
         let (reload, _) = capture_output(&ct, &output.join(format!("{recipe}-reloaded.png")));
         assert!(

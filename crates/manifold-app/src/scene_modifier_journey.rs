@@ -454,7 +454,7 @@ fn f8_playing_photoscan_lfo_reorder_save_reopen_journey() {
 
     let driver_id = lift_id.clone();
     let driver_layer_id = mushroom_id.clone();
-    ct.handle_command(ContentCommand::MutateProject(Box::new(move |project| {
+    ct.handle_command(ContentCommand::mutate(crate::content_command::touch::EFFECTS_SHAPES, Box::new(move |project| {
         let owner = project
             .graph_target_owner_mut(&manifold_core::GraphTarget::Generator(driver_layer_id))
             .expect("mushroom owner");

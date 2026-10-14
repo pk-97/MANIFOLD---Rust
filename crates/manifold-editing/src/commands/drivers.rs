@@ -356,6 +356,10 @@ impl ChangeTrimCommand {
 }
 
 impl Command for ChangeTrimCommand {
+    fn touches(&self) -> manifold_core::change::ChangeSet {
+        use manifold_core::change::{ChangeSet, Part};
+        ChangeSet::of(&[Part::Shapes])
+    }
     fn execute(&mut self, project: &mut Project) {
         let idx = self.driver_index;
         let (min, max) = (self.new_min, self.new_max);

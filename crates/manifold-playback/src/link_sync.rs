@@ -8,6 +8,7 @@ use crate::sync::{SyncArbiter, SyncArbiterTarget};
 use crate::sync_source::SyncSource;
 use manifold_core::Beats;
 use manifold_core::types::ClockAuthority;
+use std::time::{Duration, Instant};
 
 /// Link sync controller state.
 /// Port of Unity LinkSyncController.cs fields.
@@ -91,13 +92,15 @@ impl LinkSyncController {
         log::info!("[LinkSync] Disabled");
     }
 
-    /// Poll Link state each frame.
-    /// Port of C# LinkSyncController.Update (lines 165-190).
+    /// Poll Link state each frame. Beat and phase are Link's at `sample_at`,
+    /// the deadline of the frame this tick shows, not when the tick woke: a
+    /// late wake must not read as Link running ahead of the grid (D15).
     pub fn update(
         &mut self,
         arbiter: &mut SyncArbiter,
         arb_target: &mut dyn SyncArbiterTarget,
         authority: ClockAuthority,
+        sample_at: Instant,
     ) {
         if !self.is_link_enabled {
             return;
@@ -105,7 +108,7 @@ impl LinkSyncController {
 
         if let Some(ref link) = self.link {
             link.capture_app_session_state(&mut self.session_state);
-            let time = link.clock_micros();
+            let time = link_micros_at(link.clock_micros(), Instant::now(), sample_at);
             self.current_beat = Beats(self.session_state.beat_at_time(time, self.quantum));
             self.current_phase = self.session_state.phase_at_time(time, self.quantum);
             self.link_tempo = self.session_state.tempo();
@@ -175,5 +178,37 @@ impl SyncSource for LinkSyncController {
 impl Default for LinkSyncController {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// Link's clock at `at`, from Link's clock read at `now`. Link's clock and
+/// `Instant` are both the host's monotonic clock, so the gap between the two
+/// instants carries over unchanged; `at` may be before or after `now`.
+fn link_micros_at(link_now: i64, now: Instant, at: Instant) -> i64 {
+    let micros = |d: Duration| i64::try_from(d.as_micros()).unwrap_or(i64::MAX);
+    match now.checked_duration_since(at) {
+        Some(back) => link_now.saturating_sub(micros(back)),
+        None => link_now.saturating_add(micros(at - now)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The sample instant, not the read instant, decides Link's time: a read
+    /// 0.8 frame after the deadline gives the deadline's time, and so does
+    /// one before it.
+    #[test]
+    fn link_is_read_at_the_given_instant() {
+        let deadline = Instant::now();
+        let link_at_deadline = 5_000_000_000i64;
+        for late_us in [0u64, 1, 13_333, 16_000, 250_000] {
+            let now = deadline + Duration::from_micros(late_us);
+            let link_now = link_at_deadline + late_us as i64;
+            assert_eq!(link_micros_at(link_now, now, deadline), link_at_deadline, "woke {late_us} us late");
+        }
+        let early = deadline - Duration::from_micros(6_667);
+        assert_eq!(link_micros_at(link_at_deadline - 6_667, early, deadline), link_at_deadline, "woke early");
     }
 }

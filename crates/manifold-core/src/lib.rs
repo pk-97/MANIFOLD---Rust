@@ -29,6 +29,7 @@ pub mod audio_visual;
 pub mod audio_mod;
 pub mod audio_setup;
 pub mod audio_trigger;
+pub mod change;
 pub mod clip;
 pub mod color;
 pub mod control_history;
@@ -130,3 +131,4 @@ pub use warmup::{WarmupBudget, WarmupCap, WarmupOutcome, WarmupPass, WarmupProgr
 // Re-export the cross-cutting cold-touch detector from `manifold-foundation`
 // so `manifold-app` can reach it through `manifold_core`.
 pub use manifold_foundation::cold_touch;
+pub use manifold_foundation::work_count;

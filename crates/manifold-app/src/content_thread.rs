@@ -7,9 +7,11 @@
 use crossbeam_channel::{Receiver, Sender};
 use std::sync::Arc;
 
+use manifold_core::change::{ChangeSet, Part};
 use manifold_core::math::BeatQuantizer;
 use manifold_core::types::{ClockAuthority, OscSyncMode, PlaybackState, TempoPointSource};
 use manifold_core::{Beats, Bpm, Seconds};
+use manifold_core::work_count::{record_work, WorkKind};
 use manifold_editing::service::EditingService;
 use manifold_playback::clip_launcher::ClipLauncher;
 use manifold_playback::engine::{PlaybackEngine, TickContext};
@@ -44,7 +46,7 @@ const UI_STATE_BACKLOG: usize = 32;
 ///   (effect/generator type swap via the picker while watched).
 /// - `version` — the instance's `graph_version` bumped (a graph-editor edit
 ///   landed on it).
-/// - `fingerprint` — the embedded-preset catalog overlay was reinstalled
+/// - `fingerprint` — the EmbeddedPresets stamp: the catalog overlay was reinstalled
 ///   (a fork or recalibrate), which can change the compositor-sourced
 ///   routings / default graph even when `version` didn't move.
 pub struct CachedGraphSnapshot {
@@ -87,6 +89,8 @@ pub struct ContentThread {
     pub gpu: GpuContext,
     pub frame_count: u64,
     pub time_since_start: Seconds,
+    /// The deadline of the frame this tick shows; Link is read there (D15).
+    pub(crate) link_sample_at: std::time::Instant,
     pub last_data_version: u64,
     /// MIDI device input — routes hardware note events to ClipLauncher.
     pub midi_input: MidiInputController,
@@ -192,14 +196,9 @@ pub struct ContentThread {
     /// Last-sent MIDI device names — only reallocated when the list changes.
     pub last_sent_midi_device_names: Arc<[String]>,
 
-    /// Fingerprint of the project's embedded ("forked") presets, so an
-    /// editing command that forks a preset or recalibrates an embedded one
-    /// re-installs the renderer catalog overlay (and re-derives the core
-    /// registry) — without paying that catalog rebuild on every unrelated
-    /// edit. `0` while the project carries no forks (the common case), so the
-    /// guard is a single integer compare on the editing path. See
-    /// [`Self::refresh_preset_overlay_if_changed`].
-    pub embedded_presets_fingerprint: u64,
+    /// Stamps the reaction pass last reacted to, and what it retains between
+    /// passes (docs/UI_INVALIDATION_DESIGN.md D4).
+    pub reactions: crate::content_reactions::ReactionState,
 
     /// D11 undo/redo toast (`UI_CRAFT_AND_MOTION_PLAN.md` P2) — set by
     /// `handle_command`'s `Undo`/`Redo` arms (peeked from
@@ -323,7 +322,9 @@ impl ContentThread {
         // LED output is NOT auto-initialized. The user enables it via the
         // master-inspector toggle, which sends InitLedOutput / ShutdownLedOutput.
 
+        let mut work_trace = manifold_core::work_count::WorkTrace::new();
         loop {
+            work_trace.frame("content");
             // 1. Drain ALL pending commands, coalescing consecutive seeks.
             // During scrubbing the UI sends a SeekTo/SeekToBeat per mouse-move
             // event — at high polling rates this floods the channel. Only the
@@ -572,8 +573,20 @@ impl ContentThread {
     /// loop) instead of going through the command channel — no behavior
     /// change to this function itself.
     pub(crate) fn tick_frame(&mut self, state_tx: &Sender<ContentState>) {
+        self.tick_frame_at(std::time::Instant::now(), state_tx);
+    }
+
+    /// `tick_frame` with the tick's instant injected, so a test can drive the
+    /// real content thread through a chosen press phase, jitter and stalls
+    /// (docs/FRAME_EXACT_TRANSPORT_DESIGN.md section 3.4). Only the timer's
+    /// tick reads `now`; wall telemetry stays on the real clock (D13).
+    pub(crate) fn tick_frame_at(&mut self, now: std::time::Instant, state_tx: &Sender<ContentState>) {
         let _frame_start = std::time::Instant::now();
-        let dt = self.timer.consume_tick();
+        // Reactions to commands handled outside a drain loop (tests, the
+        // headless harness); a no-op when the drain already reacted.
+        self.run_reactions();
+        let frames = self.timer.consume_frames_at(now).frames;
+        self.link_sample_at = self.timer.tick_deadline().unwrap_or(now);
         let realtime = self.timer.realtime_since_start();
         self.time_since_start = Seconds(realtime);
 
@@ -635,7 +648,7 @@ impl ContentThread {
         // BEFORE engine.tick() (the modulation pipeline reads the snapshot).
         self.audio_mod_runtime.update(
             &mut self.engine,
-            self.editing_service.data_version(),
+            self.editing_service.stamps(),
             self.audio_layer_playback.as_mut(),
         );
 
@@ -644,13 +657,17 @@ impl ContentThread {
         let _t0 = std::time::Instant::now();
 
         let ctx = TickContext {
-            dt_seconds: Seconds(dt),
+            frames,
             realtime_now: Seconds(realtime),
-            pre_render_dt: Seconds(dt),
             frame_count: self.frame_count,
-            export_fixed_dt: Seconds::ZERO,
         };
         let mut tick_result = self.engine.tick(ctx);
+        // The engine's clock follows the project rate (D10); the tick grid
+        // follows the clock, so the two never run at different rates.
+        let clock_fps = f64::from(self.engine.frame_rate());
+        if self.timer.target_fps() != clock_fps {
+            self.timer.set_target_fps(clock_fps);
+        }
 
         // 4b. Transport output (LateUpdate equivalent — after engine tick).
         // In M4L mode: OscPositionSender sends /manifold/* to M4L device.
@@ -792,10 +809,9 @@ impl ContentThread {
             &self.gpu,
             &mut self.engine,
             &tick_result,
-            dt,
             self.frame_count,
             false,
-            self.editing_service.data_version(),
+            self.editing_service.stamps(),
             Some(self.audio_mod_runtime.visuals()),
         );
         self.physics_metrics = self.content_pipeline.take_sim_metrics(&mut self.engine);
@@ -1186,7 +1202,9 @@ impl ContentThread {
     /// modulation/transport fields are sent every call.
     fn send_state(&mut self, state_tx: &Sender<ContentState>) {
         let version = self.editing_service.data_version();
-        let version_changed = version != self.last_data_version;
+        // D23: today's rule (every edit, undo, redo, record, load) plus a
+        // content-originated write outside the live scalars.
+        let version_changed = version != self.last_data_version || self.reactions.publish_pending;
         // The UI drains to the latest state every frame. When it stops — a
         // native dialog or alert holds the main thread for as long as the
         // user leaves it open — per-tick states would queue without limit and
@@ -1203,6 +1221,7 @@ impl ContentThread {
         }
         if version_changed {
             self.last_data_version = version;
+            self.reactions.publish_pending = false;
         }
         // Send a project snapshot when data_version changes (editing commands).
         // Value-only writers (LFO/envelope/Ableton/OSC/automation) never bump
@@ -1217,7 +1236,10 @@ impl ContentThread {
             let arc = self
                 .engine
                 .project()
-                .map(|p| std::sync::Arc::new(p.clone()));
+                .map(|p| {
+                    record_work(WorkKind::ProjectClone);
+                    std::sync::Arc::new(p.clone())
+                });
             self.cached_project_snapshot = arc.clone();
             arc
         } else {
@@ -1226,7 +1248,7 @@ impl ContentThread {
 
         // Build the lightweight modulation snapshot EVERY tick, not only when
         // drivers/envelopes/Ableton are active: OSC-router writes, automation
-        // lane sampling, and MutateProjectLive drags all move param_values
+        // lane sampling, and MutateProject (Values) drags all move param_values
         // without flagging `modulation_active`, and gating the send on that
         // flag left the UI showing stale values until the next structural
         // snapshot. The capture is a linear walk over the param manifests into
@@ -1234,12 +1256,24 @@ impl ContentThread {
         // of the flat buffer. Blocks are id-keyed at capture, so a structural
         // edit landing between capture and the UI's apply can't misroute
         // values (see ModulationSnapshot).
-        let modulation_snapshot = if let Some(project) = self.engine.project() {
-            self.mod_scratch.capture_into(project);
+        // D15: the capture compares as it writes; the buffer is cloned and
+        // `values_seq` moves only when a live value changed.
+        let modulation_snapshot = if let Some(project) = self.engine.project()
+            && self.mod_scratch.capture_into(project)
+        {
+            self.reactions.values_seq += 1;
+            record_work(WorkKind::ModSnapshotCopy);
             Some(self.mod_scratch.clone())
         } else {
             None
         };
+        let ableton_session = if self.ableton_bridge.session_changed() {
+            self.reactions.runtime.ableton_session += 1;
+            Some(Arc::new(self.ableton_bridge.session().clone()))
+        } else {
+            None
+        };
+        let runtime = self.track_runtime_seqs();
 
         // Update cached Arc<str> only when underlying values change.
         // On unchanged frames, .clone() = refcount bump (zero allocation).
@@ -1340,6 +1374,10 @@ impl ContentThread {
             active_clips: self.engine.active_clip_count(),
             data_version: version,
             editing_is_dirty: self.editing_service.is_dirty(),
+            stamps: self.editing_service.stamps(),
+            values_seq: self.reactions.values_seq,
+            audio_directory_version: self.audio_mod_runtime.directory_version(),
+            runtime,
             bpm: self
                 .engine
                 .project()
@@ -1471,11 +1509,7 @@ impl ContentThread {
             edit_selection_update: self.edit_selection_update.clone(),
             modifier_selection_update: self.modifier_selection_update.clone(),
             object_modifier_selection_update: self.object_modifier_selection_update.clone(),
-            ableton_session: if self.ableton_bridge.session_changed() {
-                Some(Arc::new(self.ableton_bridge.session().clone()))
-            } else {
-                None
-            },
+            ableton_session,
             ableton_connected: self.ableton_bridge.is_connected(),
             ableton_transport_enabled: self.ableton_bridge.is_transport_enabled(),
             ableton_sync_status: self.ableton_bridge.transport_sync_status(),
@@ -1512,7 +1546,11 @@ impl ContentThread {
     /// the last publish. Used outside the render tick so the UI confirms
     /// edits while the GPU is behind. Coalesces: one publish per drain pass.
     fn publish_snapshot_if_dirty(&mut self, state_tx: &Sender<ContentState>) {
-        if self.editing_service.data_version() != self.last_data_version {
+        // The drain pass is over: react once to everything it moved (D4).
+        self.run_reactions();
+        if self.editing_service.data_version() != self.last_data_version
+            || self.reactions.publish_pending
+        {
             self.send_state(state_tx);
         }
     }
@@ -1540,7 +1578,7 @@ impl ContentThread {
         target: &manifold_core::GraphTarget,
     ) -> Option<Arc<manifold_node_engine::snapshot::GraphSnapshot>> {
         use manifold_core::GraphTarget;
-        let fingerprint = self.embedded_presets_fingerprint;
+        let fingerprint = self.editing_service.stamps().get(manifold_core::change::Part::EmbeddedPresets);
         let project = self.engine.project()?;
 
         // Resolve the instance's preset type + graph version for the cache key.
@@ -1751,7 +1789,7 @@ impl ContentThread {
 
         // Link sync — poll beat/phase/tempo from Ableton Link network.
         let link_has_tempo = if let Some(ref mut link) = self.transport_controller.link_sync {
-            link.update(&mut self.sync_arbiter, &mut self.engine, authority);
+            link.update(&mut self.sync_arbiter, &mut self.engine, authority, self.link_sample_at);
             // Link provides the most accurate BPM when peers are connected.
             if link.is_link_enabled() && link.has_active_peers() {
                 self.engine.set_live_external_tempo(
@@ -1809,13 +1847,20 @@ impl ContentThread {
 
         // When discovery just completed, validate mappings and force a full
         // project snapshot so the UI receives updated [ABL]/[ABL-]/[ABL?] statuses.
+        // Validation is a Mappings write: the reaction pass rebuilds the
+        // listeners once, and the write publishes the new statuses (D23).
+        // A fresh session also changes the Live-side param ranges the write
+        // targets cache, so the listeners rebuild even when no status moved.
         if self.ableton_bridge.take_validation_dirty() {
-            if let Some(p) = self.engine.project_mut() {
-                self.ableton_bridge.validate_mappings(p);
-                self.ableton_bridge.rebuild_listeners(p);
+            self.reactions.session_discovered = true;
+            if self.engine.project().is_some_and(|p| self.ableton_bridge.validation_would_change(p))
+                && let Some(p) = self.engine.project_mut()
+            {
+                let bridge = &self.ableton_bridge;
+                self.editing_service.mutate(ChangeSet::of(&[Part::Mappings]), p, |p| bridge.validate_mappings(p));
+                self.reactions.publish_pending = true;
             }
-            // Bump data_version so UI sees updated [ABL] statuses.
-            self.editing_service.notify_external_change();
+            self.run_reactions();
         }
 
         if let Some(p) = self.engine.project_mut() {
@@ -1942,9 +1987,10 @@ impl ContentThread {
                     && link.has_active_peers()
                     && !self.link_beat_offset.is_nan()
                 {
+                    // STOPGAP(frame-exact P3): Link's beat at this frame's
+                    // deadline (D15), followed past ¾ frame; P3 observes it.
                     self.engine
-                        .set_beat(Beats(link.current_beat.0 - self.link_beat_offset));
-                    self.engine.sync_time_from_beat();
+                        .follow_external_beat(Beats(link.current_beat.0 - self.link_beat_offset));
                 }
             }
             ClockAuthority::MidiClock => {
@@ -1963,13 +2009,14 @@ impl ContentThread {
                     && clk.is_midi_clock_enabled()
                     && clk.is_receiving_clock()
                 {
+                    // STOPGAP(frame-exact P3): nearest frame to the last
+                    // clock tick's beat; P3 projects it to the deadline.
                     self.engine
-                        .set_beat(Beats::from_f32(clk.current_clock_beat()));
-                    self.engine.sync_time_from_beat();
+                        .follow_external_beat(Beats::from_f32(clk.current_clock_beat()));
                 }
-                // else: beat derived from time (engine handles this in advance_time)
+                // else: the engine's clock steps the frame
             }
-            // ClockAuthority::Internal | Osc: beat derived from time (engine handles this)
+            // ClockAuthority::Internal | Osc: the engine's clock steps the frame
             _ => {}
         }
     }
@@ -2060,7 +2107,8 @@ impl ContentThread {
             }
         };
 
-        let current_beat = self.engine.current_beat();
+        // A recorded tempo point pairs the frame's time with its exact beat.
+        let current_beat = self.engine.frame_beat();
         let current_time = self.engine.current_time();
 
         let mut tempo_map_changed = false;
@@ -2112,10 +2160,8 @@ impl ContentThread {
         }
 
         if tempo_map_changed {
-            // Re-derive beat from time after tempo map change.
-            // Port of C# ApplyResolvedTempo line 1139.
-            let new_beat = self.engine.time_to_timeline_beat(current_time);
-            self.engine.set_beat(new_beat);
+            // Time is kept; the frame's beat comes from the new map.
+            self.engine.rederive_beat();
         }
     }
 
@@ -2197,5 +2243,37 @@ mod tests {
 
         thread.send_state(&state_tx);
         assert_eq!(state_rx.len(), 1, "drained UI gets per-tick states again");
+    }
+
+    /// FRAME_EXACT_TRANSPORT_DESIGN D10: the project setting is the only fps.
+    /// The engine clock follows it on the next tick and the content timer
+    /// follows the clock: after a load, a frame-rate edit, its undo and redo.
+    #[test]
+    fn timer_and_clock_follow_project_fps() {
+        use manifold_editing::commands::settings::ChangeFrameRateCommand;
+        let mut thread = headless_content_thread(Project::default(), 64, 64);
+        let (state_tx, _state_rx) = crossbeam_channel::unbounded();
+        let tick_and_check = |thread: &mut super::ContentThread, fps: f32, after: &str| {
+            let give_up = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            while !thread.content_pipeline.is_surface_ready(thread.frame_count) {
+                assert!(std::time::Instant::now() < give_up, "GPU surface not ready after 5 s");
+                std::thread::yield_now();
+            }
+            thread.tick_frame_at(std::time::Instant::now(), &state_tx);
+            assert_eq!(thread.engine.frame_rate(), fps, "engine clock after {after}");
+            assert_eq!(thread.timer.target_fps(), f64::from(fps), "content timer after {after}");
+        };
+        let mut project = Project::default();
+        project.settings.frame_rate = 24.0;
+        assert!(!thread.handle_command(ContentCommand::LoadProject(Box::new(project))));
+        tick_and_check(&mut thread, 24.0, "load");
+        let edit = ChangeFrameRateCommand::new(24.0, 30.0);
+        assert!(!thread.handle_command(ContentCommand::Execute(Box::new(edit))));
+        assert!(!thread.handle_command(ContentCommand::SetFrameRate(30.0)));
+        tick_and_check(&mut thread, 30.0, "the frame-rate edit");
+        assert!(!thread.handle_command(ContentCommand::Undo));
+        tick_and_check(&mut thread, 24.0, "undo");
+        assert!(!thread.handle_command(ContentCommand::Redo));
+        tick_and_check(&mut thread, 30.0, "redo");
     }
 }

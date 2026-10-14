@@ -163,21 +163,18 @@ fn spawn_background_content_thread() -> Arc<AtomicBool> {
         let mut frame: u64 = 0;
         while !stop_clone.load(Ordering::Relaxed) {
             let ctx = TickContext {
-                dt_seconds: Seconds(dt),
+                frames: 1,
                 realtime_now: Seconds(frame as f64 * dt),
-                pre_render_dt: Seconds(dt),
                 frame_count: frame,
-                export_fixed_dt: Seconds::ZERO,
             };
             let tick_result = ct.engine.tick(ctx);
             ct.content_pipeline.render_content(
                 &ct.gpu,
                 &mut ct.engine,
                 &tick_result,
-                dt,
                 frame,
                 false,
-                ct.editing_service.data_version(),
+                ct.editing_service.stamps(),
                 None, // no audio-visual registry in this verify harness
             );
             frame += 1;

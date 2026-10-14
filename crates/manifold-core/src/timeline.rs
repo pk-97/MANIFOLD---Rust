@@ -27,13 +27,13 @@ pub struct Timeline {
 
     /// Runtime clip lookup cache: clip_id → (layer_index, clip_index).
     #[serde(skip)]
-    clip_lookup: AHashMap<ClipId, (usize, usize)>,
+    pub(crate) clip_lookup: AHashMap<ClipId, (usize, usize)>,
     #[serde(skip)]
-    clip_lookup_dirty: bool,
+    pub(crate) clip_lookup_dirty: bool,
 
     /// Runtime layer_id → position index map. Rebuilt in reindex_layers().
     #[serde(skip)]
-    layer_id_to_index: AHashMap<LayerId, usize>,
+    pub(crate) layer_id_to_index: AHashMap<LayerId, usize>,
 }
 
 impl Timeline {

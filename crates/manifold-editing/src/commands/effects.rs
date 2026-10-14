@@ -501,6 +501,15 @@ impl ChangeGraphParamCommand {
 }
 
 impl Command for ChangeGraphParamCommand {
+    fn touches(&self) -> manifold_core::change::ChangeSet {
+        use manifold_core::change::{ChangeSet, Part};
+        // A scene-modifier param lives inside the owner's graph definition.
+        if matches!(self.target, GraphTarget::SceneModifier { .. }) {
+            ChangeSet::of(&[Part::Values, Part::Effects])
+        } else {
+            ChangeSet::of(&[Part::Values])
+        }
+    }
     fn execute(&mut self, project: &mut Project) {
         self.rejection = None;
         if !matches!(self.target, GraphTarget::SceneModifier { .. })
@@ -625,6 +634,10 @@ impl SetRelightParamCommand {
 }
 
 impl Command for SetRelightParamCommand {
+    fn touches(&self) -> manifold_core::change::ChangeSet {
+        use manifold_core::change::{ChangeSet, Part};
+        ChangeSet::of(&[Part::Shapes])
+    }
     fn execute(&mut self, project: &mut Project) {
         if let Some(inst) = project.preset_instance_mut(&self.target) {
             self.field.set(&mut inst.relight_params, self.new_value);
@@ -1380,6 +1393,10 @@ fn apply_scale_offset_on_graph(
 }
 
 impl Command for EditParamMappingCommand {
+    fn touches(&self) -> manifold_core::change::ChangeSet {
+        use manifold_core::change::{ChangeSet, Part};
+        ChangeSet::of(&[Part::Overrides, Part::Shapes, Part::Values])
+    }
     fn execute(&mut self, project: &mut Project) {
         let binding_id = self.binding_id.clone();
         let new = self.new.clone();
@@ -1506,7 +1523,7 @@ impl Command for EditParamMappingCommand {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use manifold_core::PresetTypeId;
     use manifold_core::macro_bank::MacroCurve;
@@ -1641,7 +1658,7 @@ mod tests {
     /// seed the per-instance graph the reshape command materializes when an
     /// instance is still on the catalog default — the editing crate doesn't
     /// link the renderer, so it stands in for the renderer-resolved catalog def.
-    fn seed_def_with_param(param_id: &str) -> manifold_core::effect_graph_def::EffectGraphDef {
+    pub(crate) fn seed_def_with_param(param_id: &str) -> manifold_core::effect_graph_def::EffectGraphDef {
         use manifold_core::effect_graph_def::{
             BindingDef, BindingTarget, EffectGraphDef, ParamSpecDef, PresetMetadata,
         };

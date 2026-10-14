@@ -472,7 +472,7 @@ impl Application {
 
             // Send library update FIRST so content thread has the VideoClip
             // entries before AddClipCommand triggers sync_clips_to_time.
-            let _ = content_tx.send(ContentCommand::MutateProject(Box::new(move |p| {
+            let _ = content_tx.send(ContentCommand::mutate(crate::content_command::touch::MEDIA, Box::new(move |p| {
                 for vc in video_clips {
                     p.video_library.add_clip(vc);
                 }

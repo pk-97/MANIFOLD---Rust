@@ -16,6 +16,9 @@ path = "src/bin/generate_preset_thumbnails.rs"
 name = "graph-tool"
 path = "src/bin/graph_tool.rs"
 [[bin]]
+name = "project_tool"
+path = "src/bin/project_tool.rs"
+[[bin]]
 name = "render-import"
 path = "src/bin/render_import.rs"
 
@@ -34,6 +37,7 @@ manifold-ui-paint = { path = "../manifold-ui-paint" }
 manifold-playback = { path = "../manifold-playback" }
 manifold-nodes = { path = "../manifold-nodes" }
 manifold-io = { path = "../manifold-io" }
+zip = "2"
 manifold-media = { path = "../manifold-media" }
 manifold-gpu = { path = "../manifold-gpu" }
 manifold-led = { path = "../manifold-led" }
@@ -94,7 +98,9 @@ rt-perf-proofs = ["manifold-nodes/rt-perf-proofs", "gpu-proofs"]
 gpu-proofs = ["manifold-editing/gpu-proofs", "manifold-compositor/gpu-proofs", "manifold-nodes-scene/gpu-proofs", "manifold-nodes-image/gpu-proofs", "manifold-nodes/gpu-proofs", "manifold-node-engine/gpu-proofs"]
 ui-automation = []
 profiling = ["dep:manifold-profiler"]
-ui-snapshot = []
+ui-snapshot = ["work-trace"]
+# Count every allocation as `WorkKind::FrameAlloc` (docs/UI_INVALIDATION_DESIGN.md D10).
+work-trace = []
 # P3 release-journey harness (docs/OFFLINE_AUDIO_REACTIVE_EXPORT_DESIGN.md):
 # headless end-to-end export proofs (audio-reactive + LFO + round-trip),
 # plus the deliberate corridor reference-project acceptance journey.
@@ -109,6 +115,7 @@ journey-proofs = []
 perf-soak = ["profiling"]
 
 [dev-dependencies]
+manifold-playback = { path = "../manifold-playback", features = ["testkit"] }
 manifold-foundation = { path = "../manifold-foundation" }
 manifold-physics = { path = "../manifold-physics" }
 manifold-fluids = { path = "../manifold-fluids" }

@@ -46,6 +46,10 @@ impl ChangeAbletonMappingCommand {
 }
 
 impl Command for ChangeAbletonMappingCommand {
+    fn touches(&self) -> manifold_core::change::ChangeSet {
+        use manifold_core::change::{ChangeSet, Part};
+        ChangeSet::of(&[Part::Mappings, Part::MappingRanges, Part::Values, Part::Effects])
+    }
     fn execute(&mut self, project: &mut Project) {
         apply_mapping(project, &self.target, &self.new_mapping);
         if let AbletonMappingTarget::MacroSlot { slot_index } = &self.target
@@ -106,6 +110,10 @@ impl ChangeAbletonTrimCommand {
 }
 
 impl Command for ChangeAbletonTrimCommand {
+    fn touches(&self) -> manifold_core::change::ChangeSet {
+        use manifold_core::change::{ChangeSet, Part};
+        ChangeSet::of(&[Part::MappingRanges])
+    }
     fn execute(&mut self, project: &mut Project) {
         set_trim(project, &self.target, self.new_min, self.new_max);
     }

@@ -26,6 +26,7 @@ pub mod scene_surface;
 pub mod settings;
 pub mod units;
 pub mod uv_transform;
+pub mod work_count;
 
 pub use cold_touch::{ColdTouchKind, cold_touch_count, record_cold_touch, reset_cold_touch_counts, set_transport_playing, thread_cold_touch_count, total_cold_touches};
 

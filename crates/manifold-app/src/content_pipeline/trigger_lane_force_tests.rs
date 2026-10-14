@@ -270,11 +270,9 @@ fn trigger_lane_force_isolation() {
     for frame in 0..36_u64 {
         let started_before = generator(&mut engine).scene_impulse_diagnostics().started;
         let result = engine.tick(TickContext {
-            dt_seconds: Seconds(DT),
+            frames: 1,
             realtime_now: Seconds(frame as f64 * DT),
-            pre_render_dt: Seconds(DT),
             frame_count: frame,
-            ..TickContext::default()
         });
 
         engine
@@ -519,11 +517,9 @@ fn trigger_lane_force_mixed_audio_timing_acceptance() {
 
         let engine_start = Instant::now();
         let tick_result = content.engine.tick(TickContext {
-            dt_seconds: Seconds(DT),
+            frames: 1,
             realtime_now: Seconds(frame as f64 * DT),
-            pre_render_dt: Seconds(DT),
             frame_count: frame as u64,
-            ..TickContext::default()
         });
         let engine_ms = engine_start.elapsed().as_secs_f64() * 1000.0;
 
@@ -554,10 +550,9 @@ fn trigger_lane_force_mixed_audio_timing_acceptance() {
             &content.gpu,
             &mut content.engine,
             &tick_result,
-            DT,
             frame as u64,
             true,
-            DATA_VERSION,
+            manifold_core::change::PartStamps::default(),
             Some(audio_driver.visuals()),
         );
         let render_ms = render_start.elapsed().as_secs_f64() * 1000.0;

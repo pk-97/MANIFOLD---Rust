@@ -97,7 +97,7 @@ VERBS = [
      "freeze-profile", GPU + ["cargo", "run", "-p", "manifold-nodes", "--bin", "freeze-profile", "--"],
      "profile the freeze compiler's fused kernels"),
     ("Render and measure",
-     "project-tool", ["cargo", "run", "-p", "manifold-io", "--bin", "project_tool", "--"],
+     "project-tool", ["cargo", "run", "-p", "manifold-app", "--bin", "project_tool", "--"],
      ".manifold files: info, json, project new, layer add, tempo show|set|at, clip add-audio|add-bulk|list, marker add-bulk|list, scene set-model (never hand-edit the ZIP)"),
     ("Render and measure",
      "rt-toggle-matrix", "rt_toggle_matrix.py", "one rt-capture per RT toggle; the RT A/B harness"),

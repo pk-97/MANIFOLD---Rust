@@ -76,6 +76,62 @@ pub enum AutomationAction {
         param: FlowScrubTarget,
         value: f32,
     },
+    /// A continuous scrub as the live app sees it: `Scrub(Begin)`, then
+    /// `steps` evenly spaced `Move`s from `from` to `to` with one UI frame
+    /// each, then `Commit` — all through the real dispatch.
+    ScrubDrag {
+        param: FlowScrubTarget,
+        from: f32,
+        to: f32,
+        steps: u32,
+    },
+    /// Advance `frames` UI frames while playing: the fixture's `ContentState`
+    /// beat moves at `bpm`, and the reported BPM alternates by `±wobble` each
+    /// frame (a jittery external clock). A driver input, not an engine tick.
+    PlayingStep {
+        frames: u32,
+        bpm: f32,
+        #[serde(default)]
+        wobble: f32,
+    },
+    /// A modifier-key change with no key press, as `window_input` receives it.
+    Modifiers {
+        modifiers: Modifiers,
+    },
+    /// Drag a raw resize handle (`window_input`'s split and inspector-width
+    /// drags, which sit outside the widget tree) from `from` to `to` pixels in
+    /// `steps` moves, one UI frame each.
+    ResizeDrag {
+        handle: ResizeHandle,
+        from: f32,
+        to: f32,
+        steps: u32,
+    },
+    /// `steps` wheel notches of `delta_y` logical pixels over the timeline
+    /// tracks at `at`, one UI frame each, through `window_input`'s tracks
+    /// branch: Alt zooms at the cursor, Shift pans, otherwise scroll vertically.
+    TrackWheel {
+        at: Vec2,
+        delta_y: f32,
+        steps: u32,
+    },
+    /// Start a work-count window (UI_INVALIDATION_DESIGN.md D10).
+    ResetWork,
+    /// Compare the work counted since the last `ResetWork` against the
+    /// ceilings recorded for this flow's `window`; a kind with no ceiling has
+    /// a ceiling of zero.
+    AssertWork {
+        window: String,
+    },
+}
+
+/// A raw resize handle `window_input` drags outside the widget tree.
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
+pub enum ResizeHandle {
+    /// The timeline/video split (`ScreenLayout::update_split_from_drag`, y px).
+    TimelineSplit,
+    /// The inspector's left edge (`update_inspector_resize`, x px).
+    InspectorWidth,
 }
 
 /// A direct-set scrub address for the [`AutomationAction::SetParam`] verb (D8).
@@ -100,6 +156,26 @@ pub enum FlowScrubTarget {
     /// `ValueRef::Param(GraphParamTarget::Generator, param)` — a generator card
     /// param on the active layer.
     GeneratorParam { param: String },
+    /// `ValueRef::Trim(kind, target, param)`: a modulator's output sub-range.
+    /// `effect: None` is the active layer's generator. Moves carry the range
+    /// `(0, value)`.
+    Trim { kind: crate::panels::TrimKind, effect: Option<usize>, param: String },
+    /// `ValueRef::EnvelopeTarget(target, param)`.
+    EnvelopeTarget { effect: Option<usize>, param: String },
+    /// `ValueRef::AudioModShape(target, param, shape)`.
+    AudioModShape { effect: Option<usize>, param: String, shape: crate::panels::AudioShapeParam },
+    /// `ValueRef::AudioTriggerShape(layer, index, shape)`; `layer` indexes the timeline.
+    AudioTriggerShape { layer: usize, index: usize, shape: crate::panels::AudioShapeParam },
+    /// `ValueRef::LayerAudioGain(layer)`; `layer` indexes the timeline.
+    LayerAudioGain { layer: usize },
+    /// `ValueRef::RelightParam(target, field)`.
+    Relight { effect: Option<usize>, field: crate::panels::UiRelightField },
+    /// `ValueRef::AudioSendGain(send)`; `send` indexes `audio_setup.sends`.
+    AudioSendGain { send: usize },
+    /// `ValueRef::AudioCrossover(divider)`.
+    Crossover(crate::panels::BandDivider),
+    /// `ValueRef::AbletonMacroTrim(slot)`. Moves carry the range `(0, value)`.
+    AbletonMacroTrim(usize),
 }
 
 /// Shared address for headless and live callers. Surface names are owned:
@@ -141,6 +217,11 @@ pub enum Gesture {
     /// Down at target, interpolated Move steps (real drag thresholds must
     /// fire), Up at `to`. `steps` ≥ 2.
     Drag { to: AutomationTarget, steps: u32 },
+    /// `Drag` with one UI frame after the press, after each move and after
+    /// the release, as the live app processes a held mouse.
+    DragFrames { to: AutomationTarget, steps: u32 },
+    /// Button-up pointer moves from the target to `to`, one UI frame each.
+    Sweep { to: AutomationTarget, steps: u32 },
     Scroll { delta: Vec2 },
 }
 

@@ -405,7 +405,7 @@ fn rt_dynamic_export_first_frame_and_state_steps() {
         );
         assert!((frame.time_seconds - index as f64 / FPS as f64).abs() < 1e-9);
         let expected_dt = if index == 0 { 0.0 } else { 1.0 / FPS as f64 };
-        assert!((frame.dt_seconds - expected_dt).abs() < 1e-9);
+        assert!((frame.tick_dt - expected_dt).abs() < 1e-9);
         assert_eq!(
             frame.status,
             manifold_node_engine::runtime::frame_status::FrameRenderStatus::Complete
@@ -488,7 +488,7 @@ fn rt_dynamic_export_repeat_and_sections() {
         (
             frame.frame_idx,
             frame.time_seconds.to_bits(),
-            frame.dt_seconds.to_bits(),
+            frame.tick_dt.to_bits(),
             frame.status,
             frame.rt_updates,
             frame.rt_dispatches,
@@ -524,8 +524,8 @@ fn rt_dynamic_export_repeat_and_sections() {
     assert_eq!(section_observation.frames.len(), 12);
     assert_eq!(section_observation.frames[0].frame_idx, 0);
     assert_eq!(section_observation.frames[6].frame_idx, 0);
-    assert_eq!(section_observation.frames[0].dt_seconds, 0.0);
-    assert_eq!(section_observation.frames[6].dt_seconds, 0.0);
+    assert_eq!(section_observation.frames[0].tick_dt, 0.0);
+    assert_eq!(section_observation.frames[6].tick_dt, 0.0);
     assert!(
         !base.exists(),
         "split export must not write the unsuffixed file"
@@ -617,8 +617,8 @@ fn rt_dynamic_export_hang_retry_succeeds() {
         assert_eq!(hung.frames.len(), clean.frames.len());
         for (a, b) in hung.frames.iter().zip(&clean.frames) {
             assert_eq!(
-                (a.frame_idx, a.time_seconds, a.dt_seconds, a.beat),
-                (b.frame_idx, b.time_seconds, b.dt_seconds, b.beat),
+                (a.frame_idx, a.time_seconds, a.tick_dt, a.beat),
+                (b.frame_idx, b.time_seconds, b.tick_dt, b.beat),
                 "a retried frame must keep the timeline position"
             );
             assert_eq!(a.generator_values, b.generator_values);
@@ -832,7 +832,7 @@ fn rt_dynamic_export_stateful_scene_loop() {
         );
         assert_video(&path, WIDTH, HEIGHT, 12);
         assert_eq!(observation.frames.len(), 12);
-        assert_eq!(observation.frames[0].dt_seconds, 0.0);
+        assert_eq!(observation.frames[0].tick_dt, 0.0);
         assert!(
             observation
                 .frames
@@ -842,7 +842,7 @@ fn rt_dynamic_export_stateful_scene_loop() {
         assert!(
             observation.frames[1..]
                 .iter()
-                .all(|frame| (frame.dt_seconds - 1.0 / FPS as f64).abs() < 1e-9)
+                .all(|frame| (frame.tick_dt - 1.0 / FPS as f64).abs() < 1e-9)
         );
         assert!(
             observation.frames[1..]

@@ -206,3 +206,36 @@ fn lists_report_seconds_through_the_tempo_map_like_tempo_at() {
     assert!((markers[0]["seconds"].as_f64().unwrap() - tempo_at(&f, 777.0)).abs() < 1e-5);
     assert_eq!(load_project(Path::new(&f)).unwrap().tempo_map.point_count(), 400);
 }
+
+fn tool_stderr(args: &[&str]) -> String {
+    let out = Command::new(env!("CARGO_BIN_EXE_project_tool")).args(args).output().unwrap();
+    assert_eq!(out.status.code(), Some(0), "project_tool {args:?} failed");
+    String::from_utf8(out.stderr).unwrap()
+}
+
+/// The bin must link the bundled preset registry (`use manifold_nodes as _;`):
+/// with it, a generator layer's unknown param id is dropped with a warning and
+/// a bundled id is kept; without it nothing resolves and nothing is warned.
+#[test]
+fn info_resolves_bundled_generator_params_through_the_linked_registry() {
+    let s = Scratch::new("registry");
+    let f = s.file("scene.manifold");
+    ok(&["project", "new", &f, "--bpm", "120"]);
+    ok(&["layer", "add", &f, "--name", "Shapes", "--type", "generator"]);
+    let mut root = ok_json(&["json", &f]);
+    root["timeline"]["layers"][0]["genParams"] = json!({
+        "generatorType": "BasicShapes",
+        "params": {
+            "line": {"value": 1.0, "exposed": true},
+            "no_such_param_zz": {"value": 1.0, "exposed": true},
+        },
+    });
+    // A plain-JSON (V1) file is a valid input to the typed loader.
+    let plain = s.json("plain.manifold", &root);
+    let stderr = tool_stderr(&["info", &plain]);
+    assert!(
+        stderr.contains("dropping unknown param id \"no_such_param_zz\""),
+        "registry not linked: bogus id was not dropped. stderr: {stderr}"
+    );
+    assert!(!stderr.contains("dropping unknown param id \"line\""), "bundled id wrongly dropped: {stderr}");
+}

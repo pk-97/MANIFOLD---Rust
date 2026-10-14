@@ -178,7 +178,8 @@ def flow_problems(repo, paths):
         problems.append(f'{manifest_path}: path_triggers must map paths to string lists')
     accounted = set(flows) | set(xfail) | set(unresolved)
     flow_dir = manifest_path.parent
-    on_disk = {p.stem for p in flow_dir.glob('*.json') if p.name != 'manifest.json'}
+    from run_ui_flows import NOT_FLOWS
+    on_disk = {p.stem for p in flow_dir.glob('*.json') if p.name not in NOT_FLOWS}
     for name in sorted(accounted - on_disk):
         problems.append(f'{manifest_path}: stale flow entry {name}')
     for name in sorted(on_disk - accounted):

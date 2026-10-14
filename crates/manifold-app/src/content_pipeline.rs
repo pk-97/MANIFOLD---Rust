@@ -334,6 +334,12 @@ type ClipAtlasPendingLayout = (Vec<(manifold_core::ClipId, u32, u32)>, u64);
 /// `last_clip_atlas_layout` while still carrying this sentinel.
 const CLIP_ATLAS_LAYOUT_UNSTAMPED: u64 = u64::MAX;
 
+use manifold_core::change::{ChangeSet, Part};
+/// `render_all`'s structure key: layer index, string params, eviction (section 4).
+const GENERATOR_STRUCTURE_PARTS: ChangeSet = ChangeSet::of(&[Part::Layers, Part::Clips, Part::Effects]);
+/// Trigger targets resolve owners from layers and instances (section 4).
+const TRIGGER_TARGET_PARTS: ChangeSet = ChangeSet::of(&[Part::Layers, Part::Effects, Part::AudioSetup]);
+
 /// Aspect-fit viewport `(x, y, w, h)` for atlas cell `i`, letterboxing a source
 /// of `src_w`×`src_h` inside its 16:9 cell so the thumbnail keeps the source's
 /// true aspect (the atlas is cleared transparent first, so the letterbox bars
@@ -916,6 +922,10 @@ pub struct ContentPipeline {
     /// The last live `render_content` call's wall time in milliseconds; with
     /// the fence wait, the load that caps live physics intervals.
     last_render_work_ms: f64,
+    /// The dt the last `render_content` handed every graph (D5), for the
+    /// frame-exact app test.
+    #[cfg(test)]
+    last_render_dt: f64,
     /// SCENE_MODIFIER_RT_DESIGN.md section 5.4 (P5): the merged validity of
     /// the last rendered frame — reset at the top of `render_content`, then
     /// merged from the generator wrapper before it drops and the compositor
@@ -1208,6 +1218,8 @@ impl ContentPipeline {
             surface_signal_values: [0; crate::shared_texture::SURFACE_COUNT],
             last_fence_wait_ms: 0.0,
             last_render_work_ms: 0.0,
+            #[cfg(test)]
+            last_render_dt: 0.0,
             last_frame_status: manifold_node_engine::runtime::frame_status::FrameRenderStatus::Complete,
             last_rt_updates: Default::default(),
             last_rt_dispatches: 0,
@@ -1856,6 +1868,11 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
         self.last_render_work_ms = ms;
     }
 
+    #[cfg(test)]
+    pub(crate) fn last_render_dt(&self) -> f64 {
+        self.last_render_dt
+    }
+
     /// Current output resolution (post-upscale).
     pub fn output_dimensions(&self) -> (u32, u32) {
         (self.output_w, self.output_h)
@@ -2171,10 +2188,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
         gpu: &manifold_node_engine::gpu::context::GpuContext,
         engine: &mut PlaybackEngine,
         tick_result: &TickResult,
-        dt: f64,
         frame_count: u64,
         export_mode: bool,
-        data_version: u64,
+        stamps: manifold_core::change::PartStamps,
         audio_visuals: Option<&manifold_core::audio_visual::AudioVisualRegistry>,
     ) {
         // Prioritize accurate physics work before drawing, retaining any debt.
@@ -2234,6 +2250,14 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
         // round-trip — so beat phase stays exact over a long show.
         let time_f64 = engine.current_time_double();
         let beat_f64 = engine.current_beat_f64();
+        // The tick's grid frames times one frame, in every transport state
+        // (FRAME_EXACT_TRANSPORT_DESIGN D5). Read here, never passed in, so
+        // no caller can hand graphs a wall-clock dt.
+        let dt = engine.tick_dt().0;
+        #[cfg(test)]
+        {
+            self.last_render_dt = dt;
+        }
 
         // === NATIVE METAL PATH ===
         // When manifold-gpu is initialized, use raw Metal encoding.
@@ -2251,7 +2275,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
                 _t_frame,
                 _poll_ms,
                 export_mode,
-                data_version,
+                stamps,
                 audio_visuals,
             );
         }
@@ -2290,7 +2314,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
         _t_frame: std::time::Instant,
         _poll_ms: f64,
         export_mode: bool,
-        data_version: u64,
+        stamps: manifold_core::change::PartStamps,
         audio_visuals: Option<&manifold_core::audio_visual::AudioVisualRegistry>,
     ) {
         // One-shot graph dump: consume the request as a local so the borrow of
@@ -2356,7 +2380,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
         // the content snapshot exposes the failure and export rejects it.
         engine.with_trigger_pulses(|pulses, renderers, project| {
             if let Some(first) = pulses.first() {
-                self.trigger_targets.refresh(project, data_version, first.epoch);
+                self.trigger_targets.refresh(project, stamps.key(TRIGGER_TARGET_PARTS), first.epoch);
             }
             Self::apply_trigger_pulses(&mut self.master_trigger_count, &self.trigger_targets, pulses, renderers, project);
         });
@@ -2526,7 +2550,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
                             beat_f64,
                             dt as f32,
                             layers,
-                            data_version,
+                            stamps.key(GENERATOR_STRUCTURE_PARTS),
                             &self.render_skip_scratch,
                             project_tempo.as_ref(),
                         );

@@ -351,7 +351,16 @@ impl Application {
                         }
                         out.push_back(Input::Wheel(delta));
                     }
-                    Gesture::Drag { to, steps } => {
+                    Gesture::Sweep { to, steps } => {
+                        if !(2..=240).contains(&steps) { return Err("sweep steps must be 2..240".into()); }
+                        let rect = self.live_resolve(&to)?;
+                        let to = Vec2::new(rect.x + rect.width * 0.5, rect.y + rect.height * 0.5);
+                        for p in automation::interpolate_drag(from, to, steps) {
+                            out.push_back(Input::Move(p));
+                            out.push_back(Input::Wait);
+                        }
+                    }
+                    Gesture::Drag { to, steps } | Gesture::DragFrames { to, steps } => {
                         if !(2..=60).contains(&steps) { return Err("drag steps must be 2..60".into()); }
                         let rect = self.live_resolve(&to)?;
                         let to = Vec2::new(rect.x + rect.width * 0.5, rect.y + rect.height * 0.5);

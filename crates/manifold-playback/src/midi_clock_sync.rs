@@ -583,7 +583,8 @@ impl MidiClockSyncController {
             is_playing,
         );
 
-        // Suppress local deltaTime when CLK is active authority and playing.
+        // STOPGAP(frame-exact P3): the clock stops advancing on its own while
+        // CLK is the active authority and playing.
         // Not gated on manifold_owns — MIDI Clock always drives timing when active.
         // Gated on the clock-plane suppress — during scrubs and in-flight
         // AbletonOSC commands, the engine advances internally until Ableton

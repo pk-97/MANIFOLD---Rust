@@ -1259,3 +1259,142 @@ fn graph_admission_distinguishes_live_param_from_structural_insert() {
     structural.graph_admission_targets(&mut structural_targets);
     assert_eq!(structural_targets, vec![target]);
 }
+
+/// A generator layer whose graph already holds `scenes` render-scene nodes.
+fn generator_layer_with_scenes(scenes: u32) -> (Project, manifold_core::LayerId) {
+    let (mut project, lid) = project_with_one_generator_layer();
+    let mut def = mirror_catalog_default();
+    let base = def.nodes.iter().map(|n| n.id).max().map_or(0, |m| m + 1);
+    for i in 0..scenes {
+        let mut node = def.nodes[0].clone();
+        node.id = base + i;
+        node.node_id = NodeId::new(format!("scene{i}"));
+        node.handle = None;
+        node.type_id = "node.render_scene".to_string();
+        def.nodes.push(node);
+    }
+    project
+        .timeline
+        .find_layer_by_id_mut(&lid)
+        .unwrap()
+        .1
+        .gen_params_or_init()
+        .graph = Some(def);
+    (project, lid)
+}
+
+fn generator_graph(project: &Project, lid: &manifold_core::LayerId) -> EffectGraphDef {
+    project.timeline.find_layer_by_id(lid).unwrap().1.generator_graph().unwrap().clone()
+}
+
+fn assert_refused_unchanged(
+    mut project: Project,
+    lid: &manifold_core::LayerId,
+    command: Box<dyn Command>,
+) {
+    let before = generator_graph(&project, lid);
+    let mut service = crate::service::EditingService::new();
+    service.execute(command, &mut project);
+    assert_eq!(
+        service.take_rejection().as_deref(),
+        Some(manifold_core::effect_graph_def::ONE_SCENE_PER_LAYER)
+    );
+    assert!(!service.can_undo(), "a refused edit never reaches the undo stack");
+    assert_eq!(generator_graph(&project, lid), before, "graph unchanged");
+}
+
+fn render_scene_node() -> EffectGraphNode {
+    let mut node = mirror_catalog_default().nodes[0].clone();
+    node.type_id = "node.render_scene".to_string();
+    node.handle = None;
+    node
+}
+
+#[test]
+fn second_scene_add_is_refused() {
+    let (project, lid) = generator_layer_with_scenes(1);
+    let add = AddGraphNodeCommand::new(
+        GraphTarget::Generator(lid.clone()),
+        "node.render_scene".to_string(),
+        None,
+        mirror_catalog_default(),
+    );
+    assert_refused_unchanged(project, &lid, Box::new(add));
+}
+
+#[test]
+fn second_scene_paste_and_duplicate_are_refused() {
+    let (project, lid) = generator_layer_with_scenes(1);
+    // Paste of a copied scene node.
+    let paste = PasteNodesCommand::new(
+        GraphTarget::Generator(lid.clone()),
+        vec![],
+        vec![render_scene_node()],
+        vec![],
+        (30.0, 30.0),
+        mirror_catalog_default(),
+    );
+    assert_refused_unchanged(project.clone(), &lid, Box::new(paste));
+    // Duplicate is copy-then-paste of the selection, here the existing scene.
+    let selected = generator_graph(&project, &lid)
+        .nodes
+        .into_iter()
+        .filter(|n| n.type_id == "node.render_scene")
+        .collect::<Vec<_>>();
+    let duplicate = PasteNodesCommand::new(
+        GraphTarget::Generator(lid.clone()),
+        vec![],
+        selected,
+        vec![],
+        (30.0, 30.0),
+        mirror_catalog_default(),
+    );
+    assert_refused_unchanged(project, &lid, Box::new(duplicate));
+}
+
+#[test]
+fn first_scene_add_is_allowed() {
+    let (mut project, lid) = generator_layer_with_scenes(0);
+    let mut service = crate::service::EditingService::new();
+    service.execute(
+        Box::new(AddGraphNodeCommand::new(
+            GraphTarget::Generator(lid.clone()),
+            "node.render_scene".to_string(),
+            None,
+            mirror_catalog_default(),
+        )),
+        &mut project,
+    );
+    assert!(service.take_rejection().is_none());
+    assert!(service.can_undo());
+    assert_eq!(
+        manifold_core::effect_graph_def::render_scene_count(&generator_graph(&project, &lid).nodes),
+        1
+    );
+}
+
+/// Reading the past never changes it: a saved project that already holds two
+/// scenes on one layer round-trips unchanged, and non-scene edits still apply.
+#[test]
+fn existing_two_scene_layer_loads_and_round_trips_unchanged() {
+    let (mut project, lid) = generator_layer_with_scenes(2);
+    let saved = serde_json::to_value(&project).unwrap();
+    let loaded: Project = serde_json::from_value(saved.clone()).unwrap();
+    assert_eq!(generator_graph(&loaded, &lid), generator_graph(&project, &lid));
+    assert_eq!(
+        manifold_core::effect_graph_def::render_scene_count(&generator_graph(&loaded, &lid).nodes),
+        2
+    );
+    let mut service = crate::service::EditingService::new();
+    service.execute(
+        Box::new(AddGraphNodeCommand::new(
+            GraphTarget::Generator(lid),
+            "node.uv_field".to_string(),
+            None,
+            mirror_catalog_default(),
+        )),
+        &mut project,
+    );
+    assert!(service.take_rejection().is_none());
+    assert!(service.can_undo());
+}

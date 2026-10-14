@@ -258,6 +258,13 @@ impl OscReceiver {
     /// Drain pending messages from the queue and dispatch to subscribers.
     /// Must be called from the main thread each frame.
     /// Port of Unity OscReceiver.Update().
+    /// Queue a message exactly as the UDP thread does, so a headless test
+    /// drives the real `update` → subscriber → router path.
+    #[cfg(feature = "testkit")]
+    pub fn inject(&self, address: &str, values: &[f32]) {
+        self.queue.lock().push(address.to_string(), values.to_vec());
+    }
+
     pub fn update(&mut self) {
         // Snapshot latest messages under lock, dispatch outside lock.
         {

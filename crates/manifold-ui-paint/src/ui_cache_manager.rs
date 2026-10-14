@@ -2,6 +2,7 @@ use manifold_gpu::{
     GpuDevice, GpuLoadAction, GpuTexture, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat,
     GpuTextureUsage,
 };
+use manifold_foundation::work_count::{record_work, record_work_n, WorkKind};
 use manifold_ui::node::Rect;
 use manifold_ui::tree::UITree;
 
@@ -99,6 +100,7 @@ impl UICacheManager {
 
     /// Invalidate all panel regions (full rebuild, resize).
     pub fn invalidate_all(&mut self) {
+        record_work_n(WorkKind::SlotInvalidate, PANEL_SLOT_COUNT as u64);
         self.panel_valid = [false; PANEL_SLOT_COUNT];
         // Clear atlas: panel positions may have changed (split handle drag,
         // inspector resize, window resize). Without clearing, old-position
@@ -113,6 +115,7 @@ impl UICacheManager {
 
     /// Invalidate only scroll-panel regions.
     pub fn invalidate_scroll_panels(&mut self) {
+        record_work_n(WorkKind::SlotInvalidate, 2);
         self.panel_valid[PanelSlot::LayerHeaders as usize] = false;
         self.panel_valid[PanelSlot::Viewport as usize] = false;
     }
@@ -124,6 +127,7 @@ impl UICacheManager {
     /// `invalidate_all` (whole-atlas clear + all panels) that a `needs_rebuild`
     /// scroll would otherwise force every frame.
     pub fn invalidate_inspector(&mut self) {
+        record_work(WorkKind::SlotInvalidate);
         self.panel_valid[PanelSlot::Inspector as usize] = false;
     }
 

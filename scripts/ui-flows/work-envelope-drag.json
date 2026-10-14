@@ -1,0 +1,5 @@
+[
+  "ResetWork",
+  { "ScrubDrag": { "param": { "EnvelopeTarget": { "effect": 0, "param": "amount" } }, "from": 1.0, "to": 0.4, "steps": 60 } },
+  { "AssertWork": { "window": "drag_1s" } }
+]

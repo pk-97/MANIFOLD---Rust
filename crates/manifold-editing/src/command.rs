@@ -22,6 +22,13 @@ pub trait Command: Debug + Send {
     fn was_applied(&self) -> bool {
         true
     }
+    /// The project parts this command writes, on execute and on undo
+    /// (docs/UI_INVALIDATION_DESIGN.md D2). Over-declaring only costs work;
+    /// under-declaring is a stale-UI bug the change audit catches. The `ALL`
+    /// default is today's behaviour until P6 removes it.
+    fn touches(&self) -> manifold_core::change::ChangeSet {
+        manifold_core::change::ChangeSet::ALL
+    }
 }
 
 /// Callbacks for layer lifecycle events (add/remove).
@@ -107,6 +114,12 @@ impl Command for CompositeCommand {
 
     fn was_applied(&self) -> bool {
         self.rejection.is_none() && self.commands.iter().any(|command| command.was_applied())
+    }
+
+    fn touches(&self) -> manifold_core::change::ChangeSet {
+        self.commands
+            .iter()
+            .fold(manifold_core::change::ChangeSet::NONE, |set, c| set.union(c.touches()))
     }
 }
 

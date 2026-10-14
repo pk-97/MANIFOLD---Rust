@@ -98,6 +98,7 @@ pub fn sync_inspector_data(
     automation_latched: &[(manifold_core::EffectId, manifold_core::effects::ParamId)],
     led_preview: Option<&crate::content_state::LedPreview>,
 ) {
+    manifold_core::work_count::record_work(manifold_core::work_count::WorkKind::InspectorSync);
     let driver_timing = (ui.driver_bpm.unwrap_or(project.settings.bpm), project.settings.frame_rate);
     // The same stable layer projection feeds the mask-source picker and the
     // audio clip detector. Keep groups out: layer_source resolves visual
@@ -124,6 +125,7 @@ pub fn sync_inspector_data(
     if ui.audio_setup_panel.is_open() {
         use manifold_core::AudioSourceKind;
         use manifold_ui::panels::audio_setup_panel::AudioSendRow;
+        manifold_core::work_count::record_work(manifold_core::work_count::WorkKind::DeviceQuery);
         let dir = manifold_audio::directory::system_directory();
         // Only a hardware input device resolves to a DeviceInfo. Tap sources
         // (system / app output) don't live in the input-device list, and "none"

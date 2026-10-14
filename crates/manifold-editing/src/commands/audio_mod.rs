@@ -195,6 +195,10 @@ impl SetAudioModShapeCommand {
 }
 
 impl Command for SetAudioModShapeCommand {
+    fn touches(&self) -> manifold_core::change::ChangeSet {
+        use manifold_core::change::{ChangeSet, Part};
+        ChangeSet::of(&[Part::Shapes])
+    }
     fn execute(&mut self, project: &mut Project) {
         let v = self.new;
         with_audio_mods_mut(project, &self.target, |mods| {

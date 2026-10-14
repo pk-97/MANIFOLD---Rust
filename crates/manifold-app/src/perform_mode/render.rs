@@ -3,6 +3,7 @@
 use std::sync::Arc;
 
 use manifold_core::types::ClockAuthority;
+use manifold_ui::text::TextMeasure;
 use manifold_ui_paint::ui_renderer::UIRenderer;
 use manifold_ui::node::{Color32, FontWeight};
 
@@ -189,10 +190,13 @@ impl Application {
 
         // Build immediate-mode draws into the UIRenderer.
         if let Some(ui) = &mut self.ui_renderer {
+            let tm = self.ws.ui_root.tree.measurer();
             ui.begin_frame();
 
+            manifold_core::work_count::record_work(manifold_core::work_count::WorkKind::PerformHudBuild);
             draw_cue_hud(
                 ui,
+                tm,
                 lw,
                 lh,
                 current_name,
@@ -208,7 +212,7 @@ impl Application {
                 cue_points.is_empty(),
             );
 
-            draw_sync_indicators(ui, &sync_status);
+            draw_sync_indicators(ui, tm, &sync_status);
 
             if !macros_snapshot.is_empty() {
                 draw_macros_column(ui, lh, &macros_snapshot);
@@ -216,6 +220,7 @@ impl Application {
 
             draw_exit_button(
                 ui,
+                tm,
                 btn_x,
                 btn_y,
                 btn_w,
@@ -418,8 +423,8 @@ impl Application {
 /// Compute the rendered width of a numeric string when drawn with
 /// fixed-column digits. Result is constant for any input of the same
 /// (digit_count, non_digit_chars).
-fn numeric_text_width(ui: &mut UIRenderer, text: &str, font_size: u16) -> f32 {
-    let digit_w = ui.measure_text_cached("0", font_size, FontWeight::Medium).x;
+fn numeric_text_width(tm: &dyn TextMeasure, text: &str, font_size: u16) -> f32 {
+    let digit_w = tm.measure_text("0", font_size, FontWeight::Medium).x;
     let mut w = 0.0;
     let mut buf = [0u8; 4];
     for ch in text.chars() {
@@ -427,7 +432,7 @@ fn numeric_text_width(ui: &mut UIRenderer, text: &str, font_size: u16) -> f32 {
             w += digit_w;
         } else {
             let s = ch.encode_utf8(&mut buf);
-            w += ui.measure_text_cached(s, font_size, FontWeight::Medium).x;
+            w += tm.measure_text(s, font_size, FontWeight::Medium).x;
         }
     }
     w
@@ -440,7 +445,7 @@ fn numeric_text_width(ui: &mut UIRenderer, text: &str, font_size: u16) -> f32 {
 ///   SRC:CLK   LINK  ● 1 peer   CLK  IAC Driver Bus 1  ● 121.2.2
 ///
 /// Read-only — no click handling in perform mode.
-fn draw_sync_indicators(ui: &mut UIRenderer, sync: &SyncStatus) {
+fn draw_sync_indicators(ui: &mut UIRenderer, tm: &dyn TextMeasure, sync: &SyncStatus) {
     // Color palette — matches transport bar exactly. sRGB `Color32`; the draw
     // API converts to linear once at the boundary.
     let link_orange_bg = Color32::new(191, 122, 20, 255);
@@ -473,8 +478,8 @@ fn draw_sync_indicators(ui: &mut UIRenderer, sync: &SyncStatus) {
 
     // Helper: draw a badge (rounded rect with centered text).
     let draw_badge = |ui: &mut UIRenderer, x: f32, label: &str, bg: Color32| -> f32 {
-        let text_w = ui
-            .measure_text_cached(label, badge_font, FontWeight::Medium)
+        let text_w = tm
+            .measure_text(label, badge_font, FontWeight::Medium)
             .x;
         let w = text_w + badge_pad_h * 2.0;
         ui.draw_rounded_rect(x, y, w, badge_h, bg, badge_radius);
@@ -527,8 +532,8 @@ fn draw_sync_indicators(ui: &mut UIRenderer, sync: &SyncStatus) {
     draw_dot(ui, x, link_dot_color);
     x += dot_size + text_gap;
     ui.draw_text(x, text_y, &link_status, status_font as f32, link_text_color);
-    let status_w = ui
-        .measure_text_cached(&link_status, status_font, FontWeight::Medium)
+    let status_w = tm
+        .measure_text(&link_status, status_font, FontWeight::Medium)
         .x;
     x += status_w + group_gap;
 
@@ -576,13 +581,14 @@ fn draw_sync_indicators(ui: &mut UIRenderer, sync: &SyncStatus) {
 /// Returns the total rendered width.
 fn draw_numeric_text(
     ui: &mut UIRenderer,
+    tm: &dyn TextMeasure,
     x: f32,
     y: f32,
     text: &str,
     font_size: u16,
     color: [u8; 4],
 ) -> f32 {
-    let digit_w = ui.measure_text_cached("0", font_size, FontWeight::Medium).x;
+    let digit_w = tm.measure_text("0", font_size, FontWeight::Medium).x;
     let mut cur_x = x;
     let mut buf = [0u8; 4];
     for ch in text.chars() {
@@ -590,12 +596,12 @@ fn draw_numeric_text(
         if ch.is_ascii_digit() {
             // Center the digit within its fixed column so narrow digits
             // ("1") don't look left-shifted next to wide digits ("8").
-            let actual = ui.measure_text_cached(s, font_size, FontWeight::Medium).x;
+            let actual = tm.measure_text(s, font_size, FontWeight::Medium).x;
             let offset = (digit_w - actual) * 0.5;
             ui.draw_text(cur_x + offset, y, s, font_size as f32, color);
             cur_x += digit_w;
         } else {
-            let actual = ui.measure_text_cached(s, font_size, FontWeight::Medium).x;
+            let actual = tm.measure_text(s, font_size, FontWeight::Medium).x;
             ui.draw_text(cur_x, y, s, font_size as f32, color);
             cur_x += actual;
         }
@@ -609,6 +615,7 @@ fn draw_numeric_text(
 /// Caller must have already called `ui.begin_frame()`.
 fn draw_exit_button(
     ui: &mut UIRenderer,
+    tm: &dyn TextMeasure,
     btn_x: f32,
     btn_y: f32,
     btn_w: f32,
@@ -626,7 +633,7 @@ fn draw_exit_button(
 
     let label = "EXIT";
     let font_size_px: u16 = 12;
-    let text_size = ui.measure_text_cached(label, font_size_px, FontWeight::Medium);
+    let text_size = tm.measure_text(label, font_size_px, FontWeight::Medium);
     let text_x = btn_x + (btn_w - text_size.x) * 0.5;
     let text_y = btn_y + (btn_h - text_size.y) * 0.5;
     let text_color = if hover {
@@ -646,6 +653,7 @@ fn draw_exit_button(
 #[allow(clippy::too_many_arguments)]
 fn draw_cue_hud(
     ui: &mut UIRenderer,
+    tm: &dyn TextMeasure,
     lw: f32,
     lh: f32,
     current_name: &str,
@@ -693,8 +701,8 @@ fn draw_cue_hud(
     let track_size: u16 = 20;
     let track_line_h = track_size as f32 + 6.0;
     const MAX_TRACKS: usize = 5;
-    let label_dim = ui.measure_text_cached(label_now, label_size, FontWeight::Medium);
-    let now_dim = ui.measure_text_cached(current_name, now_size, FontWeight::Medium);
+    let label_dim = tm.measure_text(label_now, label_size, FontWeight::Medium);
+    let now_dim = tm.measure_text(current_name, now_size, FontWeight::Medium);
     let now_top = lh * 0.06;
     ui.draw_text(
         (lw - label_dim.x) * 0.5,
@@ -716,8 +724,8 @@ fn draw_cue_hud(
     if !now_section_tracks.is_empty() {
         let mut ny = now_track_top;
         for name in now_section_tracks.iter().take(MAX_TRACKS) {
-            let w = ui
-                .measure_text_cached(name, track_size, FontWeight::Medium)
+            let w = tm
+                .measure_text(name, track_size, FontWeight::Medium)
                 .x;
             ui.draw_text((lw - w) * 0.5, ny, name, track_size as f32, now_green_dim);
             ny += track_line_h;
@@ -728,8 +736,8 @@ fn draw_cue_hud(
     let label_next = "NEXT";
     let next_size: u16 = 64;
     let countdown_size: u16 = 72;
-    let label_next_dim = ui.measure_text_cached(label_next, label_size, FontWeight::Medium);
-    let next_name_dim = ui.measure_text_cached(next_name, next_size, FontWeight::Medium);
+    let label_next_dim = tm.measure_text(label_next, label_size, FontWeight::Medium);
+    let next_name_dim = tm.measure_text(next_name, next_size, FontWeight::Medium);
     // Position NEXT below the 5-track slot so it never overlaps NOW.
     let next_top = (now_track_top + MAX_TRACKS as f32 * track_line_h + 16.0).max(lh * 0.32);
     ui.draw_text(
@@ -752,8 +760,8 @@ fn draw_cue_hud(
     if !next_section_tracks.is_empty() {
         next_content_y += 10.0;
         for name in next_section_tracks.iter().take(MAX_TRACKS) {
-            let w = ui
-                .measure_text_cached(name, track_size, FontWeight::Medium)
+            let w = tm
+                .measure_text(name, track_size, FontWeight::Medium)
                 .x;
             ui.draw_text(
                 (lw - w) * 0.5,
@@ -777,9 +785,10 @@ fn draw_cue_hud(
         let number_right = center_x - gap * 0.5;
         let unit_left = center_x + gap * 0.5;
 
-        let num_w = numeric_text_width(ui, &cd.number, countdown_size);
+        let num_w = numeric_text_width(tm, &cd.number, countdown_size);
         draw_numeric_text(
             ui,
+            tm,
             number_right - num_w,
             countdown_y,
             &cd.number,
@@ -796,7 +805,7 @@ fn draw_cue_hud(
     } else {
         // No next cue — show a centered em-dash placeholder.
         let placeholder = "—";
-        let dim_size = ui.measure_text_cached(placeholder, countdown_size, FontWeight::Medium);
+        let dim_size = tm.measure_text(placeholder, countdown_size, FontWeight::Medium);
         ui.draw_text(
             (lw - dim_size.x) * 0.5,
             countdown_y,
@@ -842,23 +851,23 @@ fn draw_cue_hud(
     let bb_y = status_y - bb_size as f32 - 16.0;
     {
         let dot = " . ";
-        let dot_w = ui.measure_text_cached(dot, bb_size, FontWeight::Medium).x;
-        let bar_w = numeric_text_width(ui, &bar_beat.bar, bb_size);
-        let beat_w = numeric_text_width(ui, &bar_beat.beat, bb_size);
-        let six_w = numeric_text_width(ui, &bar_beat.sixteenth, bb_size);
+        let dot_w = tm.measure_text(dot, bb_size, FontWeight::Medium).x;
+        let bar_w = numeric_text_width(tm, &bar_beat.bar, bb_size);
+        let beat_w = numeric_text_width(tm, &bar_beat.beat, bb_size);
+        let six_w = numeric_text_width(tm, &bar_beat.sixteenth, bb_size);
         let total_w = bar_w + dot_w + beat_w + dot_w + six_w;
         let start_x = (lw - total_w) * 0.5;
 
         let mut x = start_x;
-        draw_numeric_text(ui, x, bb_y, &bar_beat.bar, bb_size, white);
+        draw_numeric_text(ui, tm, x, bb_y, &bar_beat.bar, bb_size, white);
         x += bar_w;
         ui.draw_text(x, bb_y, dot, bb_size as f32, dim);
         x += dot_w;
-        draw_numeric_text(ui, x, bb_y, &bar_beat.beat, bb_size, white);
+        draw_numeric_text(ui, tm, x, bb_y, &bar_beat.beat, bb_size, white);
         x += beat_w;
         ui.draw_text(x, bb_y, dot, bb_size as f32, dim);
         x += dot_w;
-        draw_numeric_text(ui, x, bb_y, &bar_beat.sixteenth, bb_size, white);
+        draw_numeric_text(ui, tm, x, bb_y, &bar_beat.sixteenth, bb_size, white);
     }
 
     let bpm_value = format!("{:.1}", bpm);
@@ -893,15 +902,16 @@ fn draw_cue_hud(
     let label_value_gap = 8.0_f32;
 
     let draw_numeric_cell = |ui: &mut UIRenderer, center_x: f32, label: &str, value: &str| {
-        let label_w = ui
-            .measure_text_cached(label, status_size, FontWeight::Medium)
+        let label_w = tm
+            .measure_text(label, status_size, FontWeight::Medium)
             .x;
-        let value_w = numeric_text_width(ui, value, status_size);
+        let value_w = numeric_text_width(tm, value, status_size);
         let total_w = label_w + label_value_gap + value_w;
         let start_x = center_x - total_w * 0.5;
         ui.draw_text(start_x, status_y, label, status_size as f32, dim);
         draw_numeric_text(
             ui,
+            tm,
             start_x + label_w + label_value_gap,
             status_y,
             value,
@@ -919,14 +929,14 @@ fn draw_cue_hud(
         let label_w = if label.is_empty() {
             0.0
         } else {
-            ui.measure_text_cached(label, status_size, FontWeight::Medium)
+            tm.measure_text(label, status_size, FontWeight::Medium)
                 .x
         };
-        let slot_w = ui
-            .measure_text_cached(max_value, status_size, FontWeight::Medium)
+        let slot_w = tm
+            .measure_text(max_value, status_size, FontWeight::Medium)
             .x;
-        let value_w = ui
-            .measure_text_cached(value, status_size, FontWeight::Medium)
+        let value_w = tm
+            .measure_text(value, status_size, FontWeight::Medium)
             .x;
         let gap = if label.is_empty() {
             0.0

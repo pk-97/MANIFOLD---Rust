@@ -4,6 +4,7 @@
 //! and the dropdown overlay. The app layer creates one UIRoot per
 //! workspace window and forwards winit events through it.
 
+use manifold_core::work_count::{record_work, WorkKind};
 use manifold_playback::ableton_bridge::AbletonSession;
 use manifold_ui::input::{Key, Modifiers, PointerAction, UIEvent};
 use manifold_ui::node::{Rect, Vec2};
@@ -411,6 +412,7 @@ impl UIRoot {
     pub fn sync_driver_bpm(&mut self, project: &manifold_core::project::Project, bpm: manifold_core::Bpm) -> bool {
         let previous = self.driver_bpm.replace(bpm).unwrap_or(project.settings.bpm);
         if previous == bpm { return false; }
+        record_work(WorkKind::DriverScan);
         let fps = project.settings.frame_rate;
         project.settings.master_effects.iter()
             .chain(project.timeline.layers.iter().flat_map(|l| l.effects.iter().flatten()))
@@ -422,12 +424,12 @@ impl UIRoot {
     pub fn new() -> Self {
         Self {
             // Give the build path real glyph-width measurement (size-to-content)
-            // instead of the heuristic fallback. CoreTextMeasure is GPU-free, so
+            // instead of the heuristic fallback. CachedTextMeasure is GPU-free, so
             // it installs here at construction; both windows' UIRoots get it.
             tree: {
                 let mut tree = UITree::new();
                 tree.set_text_measure(Box::new(
-                    manifold_ui_paint::native_text::CoreTextMeasure::new(),
+                    manifold_ui_paint::native_text::CachedTextMeasure::new(),
                 ));
                 tree
             },
@@ -717,6 +719,7 @@ impl UIRoot {
     /// `end_region`, the same idiom the inspector's own pre-existing
     /// `ClipRegion` already used before this design generalized it.
     pub fn build(&mut self) {
+        record_work(WorkKind::FullBuild);
         self.tree.clear();
         // Invalidate input state — old node IDs are now stale
         self.input.invalidate_hover();
@@ -1073,11 +1076,13 @@ impl UIRoot {
             }
 
             if ok {
+                record_work(WorkKind::InPlaceUpdate);
                 return;
             }
             // Fallback: count mismatch or never-built — do normal rebuild below.
         }
 
+        record_work(WorkKind::RegionRebuild);
         if dirty.needs_layer_headers() {
             // Full scroll rebuild — includes layer headers
             self.tree.truncate_from(self.scroll_panels_start);

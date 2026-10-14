@@ -141,7 +141,7 @@ pub(crate) fn render_tree_overlay_passes(
             .and_then(|id| ui_root.tree.get_node(id))
         && let Some(help) = node.tooltip.as_deref()
     {
-        let size = ui_renderer.measure_text_cached(help, 11, manifold_ui::node::FontWeight::Medium);
+        let size = ui_root.tree.measure_text(help, 11, manifold_ui::node::FontWeight::Medium);
         let width = size.x + 14.0;
         let height = size.y + 14.0;
         let x = node.bounds.x.min((logical_w as f32 - width).max(0.0));
@@ -158,7 +158,7 @@ pub(crate) fn render_tree_overlay_passes(
     // `.active` check that used to gate this lives inside that resolution,
     // not here.
     if let Some(text_input) = text_input {
-        crate::app_render::render_text_input_overlay(text_input, frame_timer, ui_renderer);
+        crate::app_render::render_text_input_overlay(text_input, frame_timer, ui_renderer, ui_root.tree.measurer());
     }
     ui_renderer.pop_depth();
 

@@ -1124,15 +1124,16 @@ class NightlyQueueTests(unittest.TestCase):
                 return_value=subprocess.CompletedProcess([], 0, "[]", "")))
             self.assertEqual(trunk_health.main(), 1)
             self.assertEqual(sum("create" in c.args[0] for c in beads.call_args_list), 2)
-        self.assertEqual(events.count("acquire"), 5)
-        self.assertEqual(events.count("release"), 5)
+        self.assertEqual(events.count("acquire"), 6)
+        self.assertEqual(events.count("release"), 6)
         cpu = events[:7]
         gpu = [event for event in events if isinstance(event, tuple) and event[1]]
         self.assertTrue(all(not locked for _, locked in cpu))
         self.assertEqual(cpu[3][0], ["cargo", "clippy", "--workspace", "--tests", "--", "-D", "warnings"])
         self.assertEqual(cpu[4][0], ["cargo", "nextest", "run", "--workspace", "--no-run"])
         self.assertEqual([cmd[1] for cmd, _ in gpu], ["nextest", "scripts/gpu_proofs_gate.py",
-            "scripts/rt_noise_gate.py", "scripts/rt_noise_gate.py", "scripts/bridge_probe_gate.py"])
+            "scripts/rt_noise_gate.py", "scripts/rt_noise_gate.py", "scripts/run_ui_flows.py",
+            "scripts/bridge_probe_gate.py"])
         self.assertTrue(all(locked for _, locked in gpu))
         self.assertTrue(all(event[1] for event in events
                             if isinstance(event, tuple)

@@ -141,6 +141,18 @@ pub struct ContentState {
     // ── Editing ────────────────────────────────────────────────────
     pub data_version: u64,
     pub editing_is_dirty: bool,
+    /// `EditingService::stamps()` at publish (D1).
+    pub stamps: manifold_core::change::PartStamps,
+    /// Moves only when a captured live value changed (D15); the modulation
+    /// snapshot rides along only then.
+    #[expect(dead_code, reason = "read by the UI frame planner's live push, UI_INVALIDATION_DESIGN.md P4b")]
+    pub values_seq: u64,
+    /// Bumped when an audio device or process hot-plug drains.
+    #[expect(dead_code, reason = "keys the device query in the inspector projection, UI_INVALIDATION_DESIGN.md P4c")]
+    pub audio_directory_version: u64,
+    /// Content runtime state the UI builds structure from (D16).
+    #[expect(dead_code, reason = "folded into FrameInputs.runtime, UI_INVALIDATION_DESIGN.md P4c")]
+    pub runtime: RuntimeSeqs,
 
     // ── Project settings (from authoritative project) ─────────────
     pub bpm: f64,
@@ -381,9 +393,21 @@ pub struct ModulationSnapshot {
     block_owners: Vec<BlockOwner>,
 }
 
+/// One sequence per piece of content runtime state the UI builds structure
+/// from, bumped on the content thread where the value changes (D16).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub struct RuntimeSeqs {
+    pub automation_latches: u64,
+    pub led_preview_presence: u64,
+    pub warmup: u64,
+    pub ableton_session: u64,
+    pub sdr_preview: u64,
+    pub export_progress: u64,
+}
+
 /// Identifies the owner of one param block in a [`ModulationSnapshot`], so
 /// `apply` can find the destination manifest by stable id.
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 enum BlockOwner {
     /// The macro bank — no per-slot ids, routed by slot index.
     Macros,
@@ -404,35 +428,29 @@ impl ModulationSnapshot {
         }
     }
 
-    /// Fill this snapshot from the project, reusing existing vec capacity.
-    /// Called each frame on the content thread's scratch instance — zero
-    /// allocation after the first frame (vecs grow once, never shrink; id
-    /// clones are `Arc<str>` refbumps).
-    pub fn capture_into(&mut self, project: &Project) {
-        self.values.clear();
-        self.block_lens.clear();
-        self.block_topos.clear();
-        self.block_owners.clear();
+    /// Fill this snapshot from the project, reusing existing vec capacity, and
+    /// report whether anything differs from what it held (D15). Values are
+    /// compared as they are written, so an unchanged capture writes nothing
+    /// and clones no id; the content thread clones the snapshot only when this
+    /// returns true.
+    pub fn capture_into(&mut self, project: &Project) -> bool {
+        let mut w = CaptureWriter { snap: self, value: 0, block: 0, changed: false };
 
         // Macros — no ParamManifest; guarded per-slot on apply, so its
         // topology slot is a sentinel that's never consulted.
-        let macro_count = project.settings.macro_bank.slots.len();
         for slot in &project.settings.macro_bank.slots {
-            self.values.push(slot.value);
+            w.value(slot.value);
         }
-        self.block_lens.push(macro_count as u16);
-        self.block_topos.push(0);
-        self.block_owners.push(BlockOwner::Macros);
+        w.block(project.settings.macro_bank.slots.len(), 0, &BlockOwnerRef::Macros);
 
         // Master effects — pack only `.value` from each ParamSlot;
         // exposure isn't a modulation concern and must not round-trip
         // through the per-frame fast path.
         for fx in &project.settings.master_effects {
-            let len = fx.params.len();
-            self.values.extend(fx.params.iter().map(|p| p.value));
-            self.block_lens.push(len as u16);
-            self.block_topos.push(fx.params.topology());
-            self.block_owners.push(BlockOwner::Effect(fx.id.clone()));
+            for p in fx.params.iter() {
+                w.value(p.value);
+            }
+            w.block(fx.params.len(), fx.params.topology(), &BlockOwnerRef::Effect(&fx.id));
         }
 
         // Per-layer: effects + optional gen params
@@ -441,22 +459,21 @@ impl ModulationSnapshot {
 
             if let Some(effects) = &layer.effects {
                 for fx in effects {
-                    let len = fx.params.len();
-                    self.values.extend(fx.params.iter().map(|p| p.value));
-                    self.block_lens.push(len as u16);
-                    self.block_topos.push(fx.params.topology());
-                    self.block_owners.push(BlockOwner::Effect(fx.id.clone()));
+                    for p in fx.params.iter() {
+                        w.value(p.value);
+                    }
+                    w.block(fx.params.len(), fx.params.topology(), &BlockOwnerRef::Effect(&fx.id));
                 }
             }
 
             if has_gen && let Some(gp) = layer.gen_params() {
-                let len = gp.params.len();
-                self.values.extend(gp.params.iter().map(|p| p.value));
-                self.block_lens.push(len as u16);
-                self.block_topos.push(gp.params.topology());
-                self.block_owners.push(BlockOwner::GenParams(layer.layer_id.clone()));
+                for p in gp.params.iter() {
+                    w.value(p.value);
+                }
+                w.block(gp.params.len(), gp.params.topology(), &BlockOwnerRef::GenParams(&layer.layer_id));
             }
         }
+        w.finish()
     }
 
     /// Apply modulated values to a project in-place. Overwrites only
@@ -546,6 +563,10 @@ impl Default for ContentState {
             active_clips: 0,
             data_version: 0,
             editing_is_dirty: false,
+            stamps: Default::default(),
+            values_seq: 0,
+            audio_directory_version: 0,
+            runtime: RuntimeSeqs::default(),
             bpm: 120.0,
             frame_rate: 60.0,
             clock_authority: ClockAuthority::Internal,
@@ -612,6 +633,97 @@ impl Default for ContentState {
             automation_latched_params: Vec::new(),
             automation_armed: false,
         }
+    }
+}
+
+
+/// A block owner by reference, so an unchanged capture clones no id.
+enum BlockOwnerRef<'a> {
+    Macros,
+    Effect(&'a EffectId),
+    GenParams(&'a manifold_core::LayerId),
+}
+
+impl BlockOwnerRef<'_> {
+    fn matches(&self, owner: &BlockOwner) -> bool {
+        match (self, owner) {
+            (BlockOwnerRef::Macros, BlockOwner::Macros) => true,
+            (BlockOwnerRef::Effect(a), BlockOwner::Effect(b)) => *a == b,
+            (BlockOwnerRef::GenParams(a), BlockOwner::GenParams(b)) => *a == b,
+            _ => false,
+        }
+    }
+
+    fn owned(&self) -> BlockOwner {
+        match self {
+            BlockOwnerRef::Macros => BlockOwner::Macros,
+            BlockOwnerRef::Effect(id) => BlockOwner::Effect((*id).clone()),
+            BlockOwnerRef::GenParams(id) => BlockOwner::GenParams((*id).clone()),
+        }
+    }
+}
+
+/// Overwrites a [`ModulationSnapshot`] in place, noting any difference.
+struct CaptureWriter<'a> {
+    snap: &'a mut ModulationSnapshot,
+    value: usize,
+    block: usize,
+    changed: bool,
+}
+
+impl CaptureWriter<'_> {
+    fn value(&mut self, v: f32) {
+        match self.snap.values.get_mut(self.value) {
+            Some(slot) if slot.to_bits() == v.to_bits() => {}
+            Some(slot) => {
+                *slot = v;
+                self.changed = true;
+            }
+            None => {
+                self.snap.values.push(v);
+                self.changed = true;
+            }
+        }
+        self.value += 1;
+    }
+
+    fn block(&mut self, len: usize, topo: u32, owner: &BlockOwnerRef<'_>) {
+        let i = self.block;
+        self.block += 1;
+        if i < self.snap.block_lens.len() {
+            if self.snap.block_lens[i] != len as u16 {
+                self.snap.block_lens[i] = len as u16;
+                self.changed = true;
+            }
+            if self.snap.block_topos[i] != topo {
+                self.snap.block_topos[i] = topo;
+                self.changed = true;
+            }
+            if !owner.matches(&self.snap.block_owners[i]) {
+                self.snap.block_owners[i] = owner.owned();
+                self.changed = true;
+            }
+        } else {
+            self.snap.block_lens.push(len as u16);
+            self.snap.block_topos.push(topo);
+            self.snap.block_owners.push(owner.owned());
+            self.changed = true;
+        }
+    }
+
+    fn finish(self) -> bool {
+        let mut changed = self.changed;
+        if self.snap.values.len() > self.value {
+            self.snap.values.truncate(self.value);
+            changed = true;
+        }
+        if self.snap.block_lens.len() > self.block {
+            self.snap.block_lens.truncate(self.block);
+            self.snap.block_topos.truncate(self.block);
+            self.snap.block_owners.truncate(self.block);
+            changed = true;
+        }
+        changed
     }
 }
 

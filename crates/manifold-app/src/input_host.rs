@@ -1086,7 +1086,7 @@ impl TimelineInputHost for AppInputHost<'_> {
         *self.needs_rebuild = true;
         ContentCommand::send(
             self.content_tx,
-            ContentCommand::MutateProject(Box::new(move |p| {
+            ContentCommand::mutate(crate::content_command::touch::MARKERS, Box::new(move |p| {
                 p.timeline.export_in_beat = snapped;
                 p.timeline.export_range_enabled = true;
             })),
@@ -1110,7 +1110,7 @@ impl TimelineInputHost for AppInputHost<'_> {
         *self.needs_rebuild = true;
         ContentCommand::send(
             self.content_tx,
-            ContentCommand::MutateProject(Box::new(move |p| {
+            ContentCommand::mutate(crate::content_command::touch::MARKERS, Box::new(move |p| {
                 p.timeline.export_out_beat = snapped;
                 p.timeline.export_range_enabled = true;
             })),
@@ -1125,7 +1125,7 @@ impl TimelineInputHost for AppInputHost<'_> {
             self.project.timeline.export_range_enabled = false;
             ContentCommand::send(
                 self.content_tx,
-                ContentCommand::MutateProject(Box::new(|p| {
+                ContentCommand::mutate(crate::content_command::touch::MARKERS, Box::new(|p| {
                     p.timeline.export_in_beat = manifold_core::Beats::ZERO;
                     p.timeline.export_out_beat = manifold_core::Beats::ZERO;
                     p.timeline.export_range_enabled = false;
@@ -1135,7 +1135,7 @@ impl TimelineInputHost for AppInputHost<'_> {
             self.project.timeline.export_in_beat = manifold_core::Beats::ZERO;
             ContentCommand::send(
                 self.content_tx,
-                ContentCommand::MutateProject(Box::new(|p| {
+                ContentCommand::mutate(crate::content_command::touch::MARKERS, Box::new(|p| {
                     p.timeline.export_in_beat = manifold_core::Beats::ZERO;
                 })),
             );
@@ -1163,7 +1163,7 @@ impl TimelineInputHost for AppInputHost<'_> {
         *self.needs_rebuild = true;
         ContentCommand::send(
             self.content_tx,
-            ContentCommand::MutateProject(Box::new(|p| {
+            ContentCommand::mutate(crate::content_command::touch::MARKERS, Box::new(|p| {
                 p.timeline.export_in_beat = manifold_core::Beats::ZERO;
                 p.timeline.export_out_beat = manifold_core::Beats::ZERO;
                 p.timeline.export_range_enabled = false;
