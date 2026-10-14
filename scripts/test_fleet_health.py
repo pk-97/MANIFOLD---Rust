@@ -20,7 +20,7 @@ class BlockerTests(unittest.TestCase):
     def test_known_blockers_are_named(self):
         cases = {
             "panicked: No Metal device found": "no Metal device",
-            "the disk has 44 GiB free and requires 50 GiB": "disk guard",
+            "the disk has 24 GiB free and requires 30 GiB": "disk guard",
             "write failed: Operation not permitted": "sandbox refusal",
             "I am blocked on the lead's GPU run": "says blocked",
         }

@@ -118,8 +118,8 @@ def test_build_admission():
         target.mkdir(parents=True)
         with patch.object(sb, "registered_worktrees", return_value=(repo,)):
             unknown = sb.check_build(root / "other" / "target", repo, free_bytes=200 * sb.GIB)
-            low = sb.check_build(target, repo, free_bytes=49 * sb.GIB)
-            good = sb.check_build(target, repo, free_bytes=51 * sb.GIB)
+            low = sb.check_build(target, repo, free_bytes=sb.MAINTENANCE_GOAL_BYTES - sb.GIB)
+            good = sb.check_build(target, repo, free_bytes=sb.MAINTENANCE_GOAL_BYTES + sb.GIB)
         check("unknown target override rejected", not unknown and "canonical" in unknown.reason, unknown.reason)
         check("low free space rejected", not low and "reserve" in low.reason, low.reason)
         check("canonical target with reserve accepted", bool(good), good.reason)
@@ -483,7 +483,7 @@ def test_admission_reclaims_same_slot_and_idle_only():
                 patch.object(sb, "disk_free", return_value=0):
             refused = sb.check_build(own / "target", own, reserve_bytes=1)
         check("reserve still refuses without safe reclaim and cannot be lowered",
-              not refused.ok and refused.reserve_bytes == 50 * sb.GIB, refused)
+              not refused.ok and refused.reserve_bytes == sb.MAINTENANCE_GOAL_BYTES == 30 * sb.GIB, refused)
 
 
 def test_cap_configuration():
@@ -533,7 +533,7 @@ def test_admission_cap_with_healthy_reserve_and_fresh_refusal():
         session, cache = stale_session(own / "target", age=30)
         with patch.object(sb, "registered_worktrees", return_value=(repo, own)), \
                 patch.object(sb, "process_snapshot", return_value=lambda *a, **k: False), \
-                patch.object(sb, "disk_free", return_value=49 * sb.GIB):
+                patch.object(sb, "disk_free", return_value=sb.MAINTENANCE_GOAL_BYTES - sb.GIB):
             result = sb.check_build(own / "target", own)
         check("admission refuses rather than deleting a fresh session", not result.ok and cache.exists(), result)
 
