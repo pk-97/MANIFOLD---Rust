@@ -303,7 +303,7 @@ Each phase is one bounded session and ends in a runnable, verified commit. The l
 
 ### Common execution and seam inventory
 
-Use the existing slot ring and build lock from `.claude/GIT_TREE_DISCIPLINE.md` for app changes. Read back this document's applicable decisions and the relevant source symbols before edits. Generate worker context with `scripts/codex_prepare.py` and diff checks with `scripts/codex_checks.py`. Finish through `scripts/land_branch.py`; preserve the mandatory `scripts/landing_gate.py` checks and release the slot.
+Use the existing slot ring and build lock from `.claude/GIT_TREE_DISCIPLINE.md` for app changes. Read back this document's applicable decisions and the relevant source symbols before edits. Generate diff checks with `scripts/codex_checks.py`. Finish through `scripts/land_branch.py`; preserve the mandatory `scripts/landing_gate.py` checks and release the slot.
 
 Focused CPU gate: `cargo test -p CRATE material_inspector_` for each changed crate with new tests; require nonzero matching test counts. Run `cargo clippy -p CRATE --all-targets -- -D warnings` for changed Rust crates, under the build lock. GPU changes additionally run `python3 scripts/gpu_proofs_gate.py --filter material_inspector` after registering the named proofs. Never use nextest for GPU proofs.
 

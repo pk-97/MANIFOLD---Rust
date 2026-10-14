@@ -1,6 +1,6 @@
 # RT Stage-4 Motion Denoise — history-aware filtering + temporal feedback
 
-**Status:** APPROVED design, not built · 2026-08-28 · k3 (lead) + Peter
+**Status:** APPROVED design, not built · 2026-08-28 · with Peter
 **Prerequisites:** RT_STAGE3_DENOISE_DESIGN.md (shipped 2026-08-28) — this design extends its filter, never replaces it.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs) before starting any phase.
 

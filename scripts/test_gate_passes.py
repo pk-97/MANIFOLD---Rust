@@ -987,11 +987,11 @@ class CacheTests(unittest.TestCase):
         self.assertGreater(self.run_landing()[3], 0)
 
     def test_worker_identity_is_not_rust_input_but_runtime_switch_is(self):
-        with patch.dict(os.environ, {'CODEX_THREAD_ID': 'worker'}, clear=True), \
+        with patch.dict(os.environ, {'CLAUDE_CODE_SESSION_ID': 'worker'}, clear=True), \
                 patch.object(cache.platform, 'platform', return_value='test-platform'), \
                 patch.object(cache.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, b'version', b'')):
             first = self.real_host_inputs(self.repo, True)
-            os.environ['CODEX_THREAD_ID'] = 'lead'
+            os.environ['CLAUDE_CODE_SESSION_ID'] = 'lead'
             self.assertEqual(first, self.real_host_inputs(self.repo, True))
             os.environ['UPDATE_CONFORMANCE_GOLDENS'] = '1'
             self.assertNotEqual(first, self.real_host_inputs(self.repo, True))

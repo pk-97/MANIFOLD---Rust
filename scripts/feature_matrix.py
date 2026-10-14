@@ -48,7 +48,7 @@ def main():
             cwd=REPO,
             capture_output=True,
             text=True,
-            env=dict(os.environ, CARGO_BUILD_JOBS='4', CARGO_INCREMENTAL='0'),
+            env=dict(os.environ, CARGO_INCREMENTAL='0'),
         )
         if result is None:
             print('[DEFER] feature matrix: nightly GPU reservation became active')

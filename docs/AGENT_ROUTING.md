@@ -1,6 +1,6 @@
 # Agent Routing — task shape → model, seat, gate
 
-**Status:** ACTIVE · Claude models only. Authoritative staffing and routing policy; CLAUDE.md section Agents points here. The Kimi, open-weight and proxy material is retired: `docs/archive/AGENT_ROUTING_PROVIDER_LANES.md`.
+**Status:** ACTIVE · Claude models only; no other harness or provider is in use. Authoritative staffing and routing policy; CLAUDE.md section Agents points here.
 
 ## Slots and effort
 
@@ -16,7 +16,8 @@ Slot names reach the Claude models directly: `fable` is Fable 5.1, `opus` is Opu
 | Opus lane | `opus` | Physics, GPU solvers and shaders, diagnosis, audits, anything that can hard-lock the Mac. |
 | Fable lane | `fable` | Hard whole-system root-cause work. |
 | Sonnet lane | `sonnet` | Fully decided work: app and UI wiring, tooling scripts, doc sweeps, test and flow runs, mechanical code moves. |
-| Consult | Fable fork | Read-and-discuss only. See section The consult seat. |
+| Reviewer | The lead, with `opus` agents | Default for every review. See section Reviews and the consult seat. |
+| Consult | Fable fork | Very complex reviews only. Read-and-discuss. |
 
 Haiku: the newest Haiku runs retrieval and given commands, never judgment or edits.
 
@@ -26,7 +27,7 @@ There is no dispatcher seat. The clerical loop (pop queue, run gates, park failu
 
 ## Standing practice
 
-- **Owner seats.** Each area gets one long-lived owner seat. About three are live at once. The lead continues an owner with `SendMessage` instead of spawning a fresh agent, so the seat keeps what it learned. A fresh spawn happens only when the owner fails twice; the outgoing owner writes a handoff to its branch or findings doc first.
+- **Shut a lane down when it reports.** Once its report is read, the lead stops the agent unless a follow-up brief for it is already planned. An idle agent is a token leak, and the harness can wake it to re-send its report. What it learned lives in its commit and report, so the next brief carries it to a fresh agent.
 - **Port from the reference.** When a reference implementation exists, the brief says port from it and name every deviation, with the reason, in the report. Silent divergence from a working reference is a brief violation.
 
 ## Landing
@@ -44,16 +45,16 @@ within five minutes.
 
 - **A judgment-tier model is the only orchestrator.** The lead. Never a lane model over lane models, at any depth.
 - **The lead steers before the lane spawns.** Every brief names the existing system the work rides on (the reuse target) and the conviction test that must fail before the fix. Building a parallel path is a brief violation.
-- **Lanes make exactly ONE commit, then STOP and report.** The lead reviews that commit before the lane continues. Wrong direction always shows in the first diff. An owner seat continued via `SendMessage` follows the same rule per continuation: one commit, stop, report.
+- **Lanes make exactly ONE commit, then STOP and report.** The lead reviews that commit before the lane continues. Wrong direction always shows in the first diff. A lane kept for a planned follow-up follows the same rule per continuation: one commit, stop, report.
 - **A lane's report is its final text turn, never a SendMessage.** The harness delivers that turn to the lead; a SendMessage copy doubles it. SendMessage is for mid-flight questions and for the lead's continuations.
 - **Lanes have no landing rights.** Lane branches are safe to abandon.
 - **Lanes never spawn agents.** Only the lead spawns.
 - **Decisions flow up.** "Existing system doesn't cover X" or "this needs a new module" = stop and report, never improvise.
-- **Review is the throttle.** About three owner seats live at once, plus short Sonnet lanes while review keeps up. Landing never outpaces review.
+- **Review is the throttle.** About three judgment lanes live at once, plus short Sonnet lanes while review keeps up. Landing never outpaces review.
 - **Resume note in every brief.** Lane state = branch + findings doc, recoverable by the next session.
 - **Work items are beads.** Briefs reference bead ids.
-- **Lane health is the lead's job, never Peter's.** `scripts/fleet_health.py` checks Astra jobs, orphaned slot edits, disk, the GPU lock and the nightly; it does not see Claude lanes (BUG-7eep8 (Claude-lane stall detection)). The lead watches Claude lanes through their completion notifications. Two consecutive idle checks with no report = stalled: message once, then stop the lane and escalate.
-- **A failing lane is respawned once, never taken over.** Stop it, carry what it learned into a fresh brief, respawn. A second failure means the task was shaped wrong: the lead re-shapes it (with the consult seat if stuck). The lead does not grind lane work itself.
+- **Lane health is the lead's job, never Peter's.** `scripts/fleet_health.py` checks orphaned slot edits, disk, the GPU lock and the nightly; it does not see Claude lanes (BUG-7eep8 (Claude-lane stall detection)). The lead watches Claude lanes through their completion notifications. Two consecutive idle checks with no report = stalled: message once, then stop the lane and escalate.
+- **A failing lane is respawned once, never taken over.** Stop it, carry what it learned into a fresh brief, respawn. A second failure means the task was shaped wrong: the lead re-shapes it (with an Opus review agent if stuck). The lead does not grind lane work itself.
 - **Briefs restate the invariants every time:** one commit then stop, pathspec commits, no landing, worktree via the slot ring, explicit `model`, effort (medium, high for hard judgment work), and the CLAUDE.md section How every session works rules (no inline python, no `cd`, never wait in the foreground, pre-commit checks plus `--cheap` gate, never gate a slot still being written).
 - **Launch defects are one deny that spells the corrected call** (`agent-launch-guard.py`). Names are `<slot>-<descriptive-task>`.
 
@@ -61,18 +62,20 @@ within five minutes.
 
 Lead context is the scarcest resource in the rig. The lead does no hands-on work and reads only to review; agents do every search, read, edit and run.
 
+Briefs and reports stay short. An agent re-reads its whole context on every call, and most calls write prose, so every padded line in a brief or a report is paid again on each later step. A brief carries findings and scope, not background; a report carries outcome, evidence and blockers, not narration.
+
 What never delegates: verification of evidence the lead acts on. A weaker model's omissions are invisible in its own summary, so the lead spot-checks the underlying code or data. **Visual checks are verification, never a landing gate; the gates are the gates.** Opus seats may render and judge headless stills to verify their own work, and the lead may look at them in review. Sonnet lanes never run headless-PNG or screenshot loops: briefs name the expected visual outcome and an Opus lane renders after the commit. Peter's eye is the stage check after landing. Obsolete when: Sonnet-tier lanes show real visual judgment.
 
-**Debug escalation ladder.** For "this looks wrong and it's not obvious why": (1) lead semantic review of the seam first, the cheapest oracle and the strongest against this codebase's wiring bugs; (2) still stuck → the consult seat, a Fable fork reading the seam fresh, read-and-discuss only; (3) instrument probe loops last, delegated to an Opus diagnosis lane with the evidence table in the brief, never lead-run. Three probes without a written evidence table is the signal to step back to (1).
+**Debug escalation ladder.** For "this looks wrong and it's not obvious why": (1) lead semantic review of the seam first, the cheapest oracle and the strongest against this codebase's wiring bugs; (2) still stuck → an Opus agent reading the seam fresh, read-and-discuss only (a Fable consult only when the seam is very complex); (3) instrument probe loops last, delegated to an Opus diagnosis lane with the evidence table in the brief, never lead-run. Three probes without a written evidence table is the signal to step back to (1).
 
-## The consult seat
+## Reviews and the consult seat
 
-Triggers:
+The default reviewer is the lead, with `opus` agents for the reading and the adversarial pass. A Fable consult is only for a very complex review. Uses:
 1. **Design fork** the audit can't kill (`docs/DESIGN_AUTHORING.md` section 5 (Foreseeing the plausible-wrong turn)). One focused question.
 2. **Debug ladder step 2.** A fresh strong read when the lead's seam review stalls.
 3. **Pre-wave sanity check.** Attack the brief set for wrong fix shapes, non-disjoint lanes, over-deletion.
 
-Contract: read-and-discuss only. No Edit/Write, no spawns, no commits. A Fable fork, or a `model: "fable"` agent told it is read-only. Every consult brief carries a hard budget and a partial-report checkpoint at half budget; output past budget is discarded, not awaited. The lead integrates and owns the call.
+Contract: read-and-discuss only. No Edit/Write, no spawns, no commits. An `opus` agent, or for a very complex review a Fable fork or `model: "fable"` agent, told it is read-only. Every review brief carries a hard budget and a partial-report checkpoint at half budget; output past budget is discarded, not awaited. The lead integrates and owns the call.
 
 ## The brief contract
 

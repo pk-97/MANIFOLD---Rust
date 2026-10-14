@@ -78,7 +78,6 @@ def build_environment(cmd, cwd):
     repo = Path(cwd).resolve()
     environment = os.environ.copy()
     environment["CARGO_INCREMENTAL"] = "0"
-    environment["CARGO_BUILD_JOBS"] = "4"
     overrides = [environment[name] for name in
                  ("CARGO_TARGET_DIR", "CARGO_BUILD_TARGET_DIR") if environment.get(name)]
     targets = {Path(os.path.abspath(repo / value)) for value in overrides}

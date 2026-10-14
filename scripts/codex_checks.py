@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Read-only check selection for Codex workflow tooling."""
+"""Read-only check selection: which script tests a diff triggers (the landing gate reads tooling_checks) and the focused worker check plan."""
 import argparse
 import json
 import subprocess
@@ -40,7 +40,7 @@ def tooling_checks(repo, paths):
         'scripts/test_gate_readiness.py': {'scripts/gate_readiness.py', 'scripts/gate_workspace.py',
             'scripts/gate_policy.py', 'scripts/cpu_scope.py', 'scripts/landing_gate.py',
             'scripts/test_gate_readiness.py', 'scripts/fixtures/gate-p1.json', '.config/nextest.toml'},
-        "scripts/test_agent_worktree.py": {"scripts/agent-worktree.py", "scripts/codex_brokers.py", "scripts/test_agent_worktree.py"},
+        "scripts/test_agent_worktree.py": {"scripts/agent-worktree.py", "scripts/test_agent_worktree.py"},
         "scripts/test_rt_noise_gate.py": {"scripts/rt_noise_gate.py", "scripts/test_rt_noise_gate.py", "scripts/rt_noise_baseline.json", "scripts/trunk_health.py"},
         "scripts/test_codex_checks.py": {"scripts/codex_checks.py", "scripts/test_codex_checks.py", "scripts/landing_gate.py", "scripts/run_ui_flows.py", "scripts/gpu_proofs_gate.py", "scripts/gpu_scope.py", "scripts/ui-flows/manifest.json"},
         "scripts/test_landing_gate.py": {"scripts/landing_gate.py", "scripts/gpu_scope.py", "scripts/cpu_scope.py", "scripts/diff_scope.py", "scripts/land_branch.py", "scripts/test_landing_gate.py", "scripts/trunk_health.py"},
@@ -49,13 +49,9 @@ def tooling_checks(repo, paths):
         "scripts/test_gpu_proofs_gate.py": {"scripts/gpu_proofs_gate.py", "scripts/test_gpu_proofs_gate.py", "scripts/gpu_scope.py"},
         "scripts/test_gate_passes.py": {"scripts/gate_passes.py", "scripts/test_gate_passes.py", "scripts/landing_gate.py", "scripts/gpu_proofs_gate.py", "scripts/gpu_queue.py"},
         "scripts/test_gpu_scope.py": {"scripts/gpu_scope.py", "scripts/test_gpu_scope.py"},
-        "scripts/test_codex_prepare.py": {"scripts/codex_prepare.py", "scripts/codex_subsystems.json", "scripts/test_codex_prepare.py", "scripts/codex_checks.py"},
-        "scripts/test_codex_usage.py": {"scripts/codex_usage.py", "scripts/test_codex_usage.py"},
         "scripts/test_storage_budget.py": {"scripts/storage_budget.py", "scripts/test_storage_budget.py"},
         "scripts/test_landing_gate_storage.py": {"scripts/landing_gate.py", "scripts/test_landing_gate_storage.py", "scripts/storage_budget.py"},
         "scripts/test_codex_regressions.py": {"scripts/codex_regressions.py", "scripts/codex_regressions.json", "scripts/test_codex_regressions.py", "scripts/codex_checks.py", "scripts/ui-flows/manifest.json"},
-        ".codex/hooks/test_guard.py": {".codex/hooks/guard.py", ".codex/hooks/test_guard.py", ".codex/hooks.json", "scripts/storage_budget.py"},
-        ".codex/hooks/test_context.py": {".codex/hooks/guard.py", ".codex/hooks/context.py", ".codex/hooks/test_context.py", "scripts/codex_prepare.py", "scripts/codex_subsystems.json", ".codex/hooks.json"},
         # The tool inventory covers every script: any script added, renamed or
         # removed must keep scripts/dev.py and scripts/TOOLS.md in step.
         "scripts/test_landing_metrics.py": {"scripts/landing_metrics.py", "scripts/test_landing_metrics.py"},
@@ -103,8 +99,6 @@ def build_plan(repo: Path, paths=None):
     scope = gpu_scope.plan_for_paths(paths, repo, workspace=workspace, cpu_plan=cpu_plan)
     checks = tooling_checks(repo, paths)
     def check(name, argv):
-        if 'cargo' in argv or name in {'ui-flows', 'gpu-proofs'}:
-            argv = ['env', 'CARGO_BUILD_JOBS=4', *argv]
         checks.append({"name": name, "argv": argv, "cwd": str(repo)})
     flows = flow_filters_for_paths(repo, paths)
     if packages:
@@ -147,7 +141,7 @@ def main():
     try:
         plan = build_plan(a.repo, a.paths if a.paths is not None else changed_paths(a.repo, a.base))
     except (RuntimeError, OSError, ValueError) as e:
-        print(f"codex checks: {e}", file=sys.stderr)
+        print(f"check selection: {e}", file=sys.stderr)
         return 2
     if a.json:
         print(json.dumps(plan, indent=2, sort_keys=True))

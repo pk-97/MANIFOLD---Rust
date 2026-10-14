@@ -2,9 +2,9 @@
 
 <!-- index: Shared numeric, migration, UI, GPU and performance gates for scene modifier milestones; planned test names and fixture budgets. -->
 
-**Status:** IN PROGRESS · 2026-09-12 · Codex lead · focused CPU and synthetic migration proofs retained; Peter confirmed Elastic Sculpture renders and LFOs work in the release app. Current completion uses focused CPU checks and static review; automated playback/performance qualification is deferred by explicit request.
+**Status:** IN PROGRESS · 2026-09-12 · focused CPU and synthetic migration proofs retained; Peter confirmed Elastic Sculpture renders and LFOs work in the release app. Current completion uses focused CPU checks and static review; automated playback/performance qualification is deferred by explicit request.
 **Prerequisites:** Each tested phase's implementation. This document itself requires only reference/diff checks.
-**Execution contract:** [DESIGN_DOC_STANDARD](DESIGN_DOC_STANDARD.md) sections 5–6 and 8, with current AGENTS.md bounded-check and reporting rules taking precedence over older broad-sweep instructions.
+**Execution contract:** [DESIGN_DOC_STANDARD](DESIGN_DOC_STANDARD.md) sections 5–6 and 8, with current CLAUDE.md bounded-check and reporting rules taking precedence over older broad-sweep instructions.
 
 **Current scope (Peter, September 12):** “4 - do a static analysis and review instead of a full set of system tests”. Complete shared card interactions, honest preset state and the Surface Peel clip-hit catalog variation. Review stable targeting, undo/persistence, event ownership and hot paths; run focused CPU checks/clippy. Do not repeat native journeys, performance probes or full-system sweeps. Peter supplies in-app interaction and visual feedback. The qualification prescriptions below describe future evidence, not additional work authorised for this pass. Prior black automated baselines remain an unisolated harness/runtime issue; they do not override Peter's positive release-app observation. Required landing gates still apply if this branch is merged.
 

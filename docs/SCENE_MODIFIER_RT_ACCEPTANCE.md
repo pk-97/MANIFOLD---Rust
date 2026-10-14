@@ -2,7 +2,7 @@
 
 <!-- index: Implementation-ready numerical, catalog, export, lifetime and performance gates for automatic RT on modified meshes. -->
 
-**Status:** APPROVED definitions · implementation evidence updated 2026-09-18 · Codex lead · A1–A9 remain the acceptance requirements; A11 distinguishes executed evidence from outstanding qualification.
+**Status:** APPROVED definitions · implementation evidence updated 2026-09-18 · A1–A9 remain the acceptance requirements; A11 distinguishes executed evidence from outstanding qualification.
 
 Authority: [design and phase briefs](SCENE_MODIFIER_RT_DESIGN.md), [dated source inventory](SCENE_MODIFIER_RT_INVENTORY.md), existing [modifier validation contract](SCENE_MODIFIER_VALIDATION_PLAN.md). Work item: `BUG-e3p6.4`. The lead owns acceptance. Measured results appear only in A11; requirements elsewhere are not implied passes.
 

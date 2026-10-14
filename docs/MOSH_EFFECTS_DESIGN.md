@@ -2,7 +2,7 @@
 
 **Status:** IMPLEMENTED · 2026-09-14 · Codex. P1/P2 complete; P3 bounded renderer proofs verified. Unobserved application surfaces are listed in section 9.
 **Prerequisites:** native Farneback plugin for Motion Mosh.
-**Execution contract:** AGENTS.md and DESIGN_DOC_STANDARD.md sections 5–6.
+**Execution contract:** CLAUDE.md and DESIGN_DOC_STANDARD.md sections 5–6.
 
 Movement pulls old imagery through the current picture; Data Mosh instead holds and displaces square fragments. Peter: “DO NOT bake timing or sync or cycles into the effect, the params and drivers are used to control speed and timing of param automation.” Clip-trigger events may change the visual, following Plasma and FluidSim3D. Neither preset reads a clock. References supplied on 2026-09-14 favour recognisable detail, selective square breakup, horizontal fragments and quiet dark regions.
 

@@ -762,17 +762,17 @@ class LandingTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertTrue(all("--features" not in c for c in commands))
 
-    def test_gate_builds_disable_incremental_and_preserve_jobs(self):
+    def test_gate_builds_disable_incremental_and_leave_jobs_to_cargo(self):
         from storage_budget import BuildCheck
         root = Path.cwd()
-        with patch.dict(os.environ, {"CARGO_INCREMENTAL": "1", "CARGO_BUILD_JOBS": "4"}, clear=True), \
+        with patch.dict(os.environ, {"CARGO_INCREMENTAL": "1"}, clear=True), \
                 patch("storage_budget.check_build", return_value=BuildCheck(True, root / "target", 200 * 2**30)):
             for cmd in (["cargo", "nextest"], ["python3", "scripts/gpu_proofs_gate.py"],
                         ["python3", "scripts/run_ui_flows.py"]):
                 env, refusal = landing_gate.build_environment(cmd, root)
                 self.assertIsNone(refusal)
                 self.assertEqual(env["CARGO_INCREMENTAL"], "0")
-                self.assertEqual(env["CARGO_BUILD_JOBS"], "4")
+                self.assertNotIn("CARGO_BUILD_JOBS", env)
 
     def test_stale_docs_reported_but_stale_thumbnails_ignored(self):
         with tempfile.TemporaryDirectory() as d:
