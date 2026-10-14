@@ -137,6 +137,12 @@ pub enum AutomationAction {
     Menu {
         item: MenuItem,
     },
+    /// Send the following pointer and key steps to `window`, as the OS sends
+    /// input to the window under the mouse or holding focus. `Assert` and
+    /// `AssertFresh` read every open window either way.
+    Focus {
+        window: FlowWindow,
+    },
     /// Start a work-count window (UI_INVALIDATION_DESIGN.md D10).
     ResetWork,
     /// Compare the work counted since the last `ResetWork` against the
@@ -163,6 +169,16 @@ pub enum AutomationAction {
 pub enum MenuItem {
     /// View > Perform: enter performance mode.
     Perform,
+}
+
+/// A window a flow's input can go to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+pub enum FlowWindow {
+    /// The timeline and inspector window.
+    #[default]
+    Main,
+    /// The graph editor window; a flow opens it first.
+    GraphEditor,
 }
 
 /// A raw resize handle `window_input` drags outside the widget tree.

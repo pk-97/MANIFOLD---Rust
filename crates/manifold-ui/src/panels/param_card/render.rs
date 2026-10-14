@@ -1924,6 +1924,9 @@ impl ParamCardPanel {
                             "\u{203A}", // ›
                             param_row_key_base(&info.id) | ROW_ROLE_CHEVRON,
                         ));
+                        if let Some(id) = self.row_host.mapping_chevron_ids[i] {
+                            tree.set_name(id, "inspector.param_card.mapping_chevron");
+                        }
                     }
                     self.row_host.reindex_row(tree, i);
                     cy = new_cy;
@@ -2263,12 +2266,15 @@ impl ParamCardPanel {
             *cached_max = max;
         }
 
-        // Update the built row's spec to reflect the new range
-        // This only affects future value syncs — the current spec is used for normalization
-        // We need to update the spec in the rows array so subsequent syncs use the new range
         if let Some(row) = self.rows.get_mut(i) {
             row.spec.min = min;
             row.spec.max = max;
+        }
+        // The fill and thumb sit at the value's place in the span, so a new
+        // span re-places them even when the value itself did not move. NaN
+        // is the resync mark: it skips the value-change flash.
+        if let Some(cached) = self.param_cache.get_mut(i) {
+            *cached = f32::NAN;
         }
     }
 

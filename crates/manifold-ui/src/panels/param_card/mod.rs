@@ -2414,6 +2414,23 @@ pub(super) mod tests {
         assert!(tree.has_dirty());
     }
 
+    /// A mapping-drawer range edit changes the span but not the value: the
+    /// fill must still move to the value's place in the new span.
+    #[test]
+    fn sync_values_range_change_replaces_fill_at_same_value() {
+        let mut tree = UITree::new();
+        let mut panel = ParamCardPanel::new();
+        panel.configure(&effect_config());
+        panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 200.0));
+        let slot = |min: f32, max: f32| crate::view::UiParamSlot { min, max, ..crate::view::UiParamSlot::exposed(50.0) };
+        panel.sync_values(&mut tree, &mut [("radius", slot(0.0, 100.0)), ("strength", slot(0.0, 1.0))].into_iter());
+        let fill = panel.row_host.slider_ids[0].as_ref().unwrap().fill;
+        let wide = tree.get_bounds(fill).width;
+        panel.sync_values(&mut tree, &mut [("radius", slot(0.0, 75.0)), ("strength", slot(0.0, 1.0))].into_iter());
+        let narrow_span = tree.get_bounds(fill).width;
+        assert!(narrow_span > wide + 1.0, "fill {wide} -> {narrow_span}: the span shrank, so 50 sits further along");
+    }
+
     #[test]
     fn unavailable_placeholder_needs_no_manifest_slot() {
         let mut tree = UITree::new();

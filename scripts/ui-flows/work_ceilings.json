@@ -217,21 +217,18 @@
     },
     "work-editor-idle": {
       "idle_2s": {
-        "ChromeLayout": 360,
         "EditorTreeBuild": 120,
-        "FrameAlloc": 80048
+        "FrameAlloc": 87848
       }
     },
     "work-editor-open": {
       "after_open_half_second": {
-        "ChromeLayout": 90,
         "EditorTreeBuild": 30,
-        "FrameAlloc": 20019
+        "FrameAlloc": 21969
       },
       "open_click": {
-        "ChromeLayout": 3,
-        "EditorTreeBuild": 1,
-        "FrameAlloc": 1461,
+        "EditorTreeBuild": 2,
+        "FrameAlloc": 2807,
         "InspectorSync": 1,
         "ProjectSync": 1,
         "TextMeasureMiss": 7
@@ -332,6 +329,17 @@
         "ValuePush": 2
       }
     },
+    "work-mapping-drawer": {
+      "open_drawer": {
+        "EditorTreeBuild": 1,
+        "FrameAlloc": 906
+      },
+      "type_range_max": {
+        "EditorTreeBuild": 4,
+        "FrameAlloc": 3958,
+        "ValuePush": 2
+      }
+    },
     "work-marquee": {
       "marquee_1s": {
         "ChromeLayout": 189,
@@ -357,6 +365,13 @@
       "step_half_second": {
         "FrameAlloc": 862,
         "ValuePush": 28
+      }
+    },
+    "work-node-param-drag": {
+      "card_lane_drag": {
+        "EditorTreeBuild": 11,
+        "FrameAlloc": 9669,
+        "ValuePush": 10
       }
     },
     "work-paused-cursor": {

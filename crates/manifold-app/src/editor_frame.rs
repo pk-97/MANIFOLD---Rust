@@ -285,6 +285,28 @@ pub(crate) fn build_editor_tree(
     toggle_id
 }
 
+/// Pushes the watched graph into the canvas for one frame. The preview
+/// aspect goes first, so a level's first layout takes the right node-face
+/// heights; then the canvas's own tweens (marquee fade, connect pop, error
+/// shake), the snapshot, this frame's live (modulated) node values over it so
+/// a driver or card slider is seen moving each knob, and the reset pill.
+pub(crate) fn feed_canvas(
+    canvas: &mut GraphCanvas,
+    graph: &manifold_ui::graph_view::GraphSnapshot,
+    preview_aspect: Option<f32>,
+    dt_ms: f32,
+    live: &manifold_ui::graph_view::LiveNodeParams,
+    has_graph_mod: bool,
+) {
+    if let Some(aspect) = preview_aspect {
+        canvas.set_preview_aspect(aspect);
+    }
+    canvas.tick(dt_ms);
+    canvas.set_snapshot(graph);
+    canvas.apply_live_values(live);
+    canvas.set_has_graph_mod(has_graph_mod);
+}
+
 /// Builds the editor sidebar's left preview column — backing panel,
 /// node-output pane (image, or `panel`'s value-inspector text, or a "Select
 /// a node" hint), master-out title — into `tree` at the given layout rect.

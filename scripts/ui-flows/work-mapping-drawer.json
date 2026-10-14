@@ -1,0 +1,108 @@
+[
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "name": "param_card.graph_editor.Plasma"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  {
+    "Focus": {
+      "window": "GraphEditor"
+    }
+  },
+  {
+    "Step": {
+      "frames": 2
+    }
+  },
+  "ResetWork",
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "name": "inspector.param_card.mapping_chevron",
+          "nth": 1
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  {
+    "AssertWork": {
+      "window": "open_drawer"
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Surface": {
+          "surface": "mapping_drawer",
+          "kind": "field",
+          "label": "Max"
+        }
+      },
+      "check": "Exists"
+    }
+  },
+  "ResetWork",
+  {
+    "Pointer": {
+      "target": {
+        "Surface": {
+          "surface": "mapping_drawer",
+          "kind": "field",
+          "label": "Max"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  {
+    "Text": {
+      "text": "0.75"
+    }
+  },
+  {
+    "Key": {
+      "key": "Enter",
+      "modifiers": {}
+    }
+  },
+  {
+    "AssertWork": {
+      "window": "type_range_max"
+    }
+  },
+  "AssertFresh",
+  "Snapshot",
+  {
+    "Key": {
+      "key": "Z",
+      "modifiers": {
+        "command": true
+      }
+    }
+  },
+  {
+    "Step": {
+      "frames": 1
+    }
+  },
+  "AssertFresh"
+]
