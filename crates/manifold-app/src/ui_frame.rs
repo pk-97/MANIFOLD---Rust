@@ -322,6 +322,7 @@ pub(crate) fn gather_frame_inputs(
         scroll_y_bits: ui_root.viewport.scroll_y_px().to_bits(),
         playhead_px: ui_root.viewport.playhead_pixel().map_or(i32::MIN, |px| px.round() as i32),
         inspector_view: ui_root.inspector.view_version(),
+        scene_selection: ui_root.scene_setup_panel.selection_version(),
         dock_view: ui_root.audio_setup_panel.view_version(),
         overlays: ui_root.overlays_version(),
         audio_directory: content_state.audio_directory_version,

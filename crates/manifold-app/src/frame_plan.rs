@@ -255,6 +255,8 @@ pub(crate) struct FrameInputs {
     /// The overview strip's playhead only.
     pub playhead_px: i32,
     pub inspector_view: u64,
+    /// The Scene panel's outliner selection (its Properties body).
+    pub scene_selection: u64,
     pub inspector_scroll_px: i32,
     pub dock_view: u64,
     pub dock_scroll_px: i32,
@@ -402,6 +404,9 @@ pub(crate) fn plan_frame(last: &FrameInputs, next: &FrameInputs) -> FramePlan {
         || selection_identity
         || active_layer
         || automation_view
+        // The scene projection fills the Properties card for the selected
+        // outliner item.
+        || last.scene_selection != next.scene_selection
         || runtime.automation_latches != last.runtime.automation_latches
         || runtime.led_preview_presence != last.runtime.led_preview_presence
     {
@@ -1021,6 +1026,14 @@ mod tests {
         let mut next = base();
         next.inspector_view = 1;
         assert!(plan(next).rebuild.contains(r));
+        // The Scene panel's selection re-runs the scene projection that fills
+        // its Properties card; the timeline lists stay.
+        let mut next = base();
+        next.scene_selection = 1;
+        let p = plan(next);
+        assert!(p.rebuild.contains(r));
+        assert!(p.projections.contains(Projection::InspectorSync));
+        assert!(!p.projections.contains(Projection::ProjectSync));
         assert!(plan(moved(r)).translate.contains(r));
         let mut next = base();
         next.inspector_scroll_px = 12;

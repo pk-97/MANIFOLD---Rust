@@ -71,7 +71,7 @@ pub(super) fn dispatch_editing(
                 .layers
                 .get(layer_idx)
                 .map(|l| l.layer_id.clone());
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
         EditingAction::ClipDoubleClicked(_clip_id) => {
             // Future: open clip properties or enter clip editing mode
@@ -99,7 +99,7 @@ pub(super) fn dispatch_editing(
                 .layers
                 .get(*layer)
                 .map(|l| l.layer_id.clone());
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
         EditingAction::TrackDoubleClicked(beat, layer) => {
             // From Unity InteractionOverlay.OnPointerClick double-click path:
@@ -360,7 +360,7 @@ pub(super) fn dispatch_editing(
         }
         EditingAction::ContextSelectAllAutomation(target, param_id) => {
             automation::select_all_in_lane(project, selection, target, param_id);
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
         EditingAction::ContextDeleteSelectedAutomation(target, param_id) => {
             automation::set_lane_context(selection, target, param_id);

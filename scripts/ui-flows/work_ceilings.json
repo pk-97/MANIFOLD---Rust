@@ -74,7 +74,7 @@
         "InspectorSync": 3,
         "LaneProjection": 64,
         "OverviewRepaint": 3,
-        "PresetListProjection": 1,
+        "PresetListProjection": 2,
         "ProjectSync": 3,
         "RegionRebuild": 59,
         "SlotInvalidate": 139,
@@ -143,18 +143,17 @@
     },
     "work-cursor-nav": {
       "four_cursor_moves": {
-        "ChromeLayout": 13,
+        "ChromeLayout": 12,
         "ClipProjection": 1,
-        "FrameAlloc": 2104,
-        "FullBuild": 1,
+        "FrameAlloc": 2440,
+        "FullBuild": 2,
         "GridBitmapRepaint": 7,
         "InspectorSync": 1,
         "LaneProjection": 6,
-        "OverviewRepaint": 4,
+        "OverviewRepaint": 1,
         "ProjectSync": 1,
-        "SlotInvalidate": 7,
-        "TextMeasureMiss": 1,
-        "ValuePush": 4
+        "SlotInvalidate": 14,
+        "ValuePush": 2
       }
     },
     "work-dock-scroll": {
@@ -339,18 +338,17 @@
     },
     "work-paused-cursor": {
       "cursor_select_cursor_paused": {
-        "ChromeLayout": 100,
+        "ChromeLayout": 99,
         "ClipProjection": 3,
-        "FrameAlloc": 8371,
-        "FullBuild": 3,
+        "FrameAlloc": 6811,
+        "FullBuild": 4,
         "GridBitmapRepaint": 21,
         "InspectorSync": 3,
         "LaneProjection": 9,
-        "OverviewRepaint": 33,
+        "OverviewRepaint": 3,
         "ProjectSync": 3,
-        "SlotInvalidate": 21,
-        "TextMeasureMiss": 1,
-        "ValuePush": 33
+        "SlotInvalidate": 28,
+        "ValuePush": 4
       }
     },
     "work-playback": {
@@ -408,18 +406,16 @@
     },
     "work-select-click": {
       "select_clip": {
-        "ChromeLayout": 4,
+        "ChromeLayout": 3,
         "ClipProjection": 1,
-        "FrameAlloc": 1308,
+        "FrameAlloc": 1253,
         "FullBuild": 1,
         "GridBitmapRepaint": 7,
         "InspectorSync": 1,
         "LaneProjection": 3,
         "OverviewRepaint": 1,
-        "PresetListProjection": 1,
         "ProjectSync": 1,
         "SlotInvalidate": 7,
-        "TextMeasureMiss": 1,
         "ValuePush": 1
       }
     },

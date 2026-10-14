@@ -925,8 +925,6 @@ impl Application {
         // These events were stashed by process_events() because the overlay
         // needs &mut TimelineEditingHost which UIRoot can't provide.
         {
-            let previous_automation_lane = self.selection.selected_automation_point.as_ref()
-                .map(|p| (p.target.clone(), p.param_id.clone()));
             let viewport_events = self.ws.ui_root.drain_viewport_events();
             if !viewport_events.is_empty() {
                 if viewport_events.iter().any(|event| matches!(event, manifold_ui::input::UIEvent::PointerDown { .. })) {
@@ -1041,11 +1039,8 @@ impl Application {
                 // (right-click context menus: ClipRightClicked, TrackRightClicked).
                 actions.append(&mut host.pending_actions);
             }
-            let current_automation_lane = self.selection.selected_automation_point.as_ref()
-                .map(|p| (p.target.clone(), p.param_id.clone()));
-            if previous_automation_lane != current_automation_lane {
-                self.needs_structural_sync = true;
-            }
+            // A selected point in another lane folds into `automation_view`
+            // when the planner reads it (D8).
         }
 
         // Overlay-generated right-click actions (TrackRightClicked, ClipRightClicked)
