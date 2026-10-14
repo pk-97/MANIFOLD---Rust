@@ -90,9 +90,16 @@ fn gap_start_black_frame_probe() {
     for _ in 0..8 {
         ct.tick_frame(&state_tx);
     }
+    // Exact frame, not current_beat: that is the comparison beat, sampled a
+    // hair past the frame (D14), so it is never 0.0 even on frame 0.
     assert_eq!(
-        ct.engine.current_beat_f64(),
-        0.0,
+        ct.engine.transport_frame(),
+        0,
+        "warm-up must not consume the test clips"
+    );
+    assert_eq!(
+        ct.engine.frame_beat(),
+        Beats::ZERO,
         "warm-up must not consume the test clips"
     );
     ct.handle_command(crate::content_command::ContentCommand::Play);
