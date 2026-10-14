@@ -21,9 +21,11 @@ import json
 import math
 import os
 import re
+import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from datetime import datetime, timezone
@@ -445,6 +447,35 @@ def rerun_command(cmd, repo):
     return " ".join(part if " " not in part else repr(part) for part in cmd)
 
 
+def working_tree_commit(repo):
+    """A dangling commit of the working tree (tracked edits plus untracked,
+    unignored files) whose parent is HEAD. HEAD, the index and the files are
+    untouched. Its tree equals HEAD's tree after the lane commits everything,
+    so diff-keyed passes recorded against it are reused at landing."""
+    repo = Path(repo)
+    def git(*args, env=None):
+        result = subprocess.run(['git', '-C', str(repo), *args], capture_output=True,
+                                text=True, timeout=300, env=env)
+        if result.returncode:
+            raise RuntimeError(f"git {' '.join(args)}: {result.stderr.strip()}")
+        return result.stdout.strip()
+    index = Path(git('rev-parse', '--path-format=absolute', '--git-path', 'index'))
+    with tempfile.TemporaryDirectory() as scratch:
+        scratch_index = Path(scratch) / 'index'
+        # Start from the real index so its stat cache spares rehashing every file.
+        if index.is_file():
+            shutil.copyfile(index, scratch_index)
+        env = dict(os.environ, GIT_INDEX_FILE=str(scratch_index),
+                   GIT_AUTHOR_NAME='landing_gate', GIT_AUTHOR_EMAIL='landing_gate@localhost',
+                   GIT_COMMITTER_NAME='landing_gate', GIT_COMMITTER_EMAIL='landing_gate@localhost')
+        if not index.is_file():
+            git('read-tree', 'HEAD', env=env)
+        git('add', '-A', '--', '.', env=env)
+        tree = git('write-tree', env=env)
+        return git('commit-tree', tree, '-p', 'HEAD', '-m', 'landing_gate --cheap: working tree',
+                   env=env)
+
+
 def stale_docs_index(repo):
     """True when docs/README.md differs from what gen_docs_index.py would write."""
     docs = Path(repo) / "docs"
@@ -529,7 +560,8 @@ def _main(stack):
                       help="stop at the first red")
     mode.add_argument("--cheap", action="store_true",
                       help="run only the legs before the expensive boundary, record their "
-                           "passes for reuse, publish no gate verdict")
+                           "passes for reuse, publish no gate verdict; lanes run it before "
+                           "their commit, on the uncommitted working tree")
     parser.add_argument('--plan-only', action='store_true', help='read-only plan including working-tree changes; no build, test or receipt writes')
     parser.add_argument('--paths-json', type=Path, help='plan-only path fixture with paths/base/head')
     args = parser.parse_args()
@@ -547,16 +579,28 @@ def _main(stack):
     # the base: nothing is touched, every check skips, exit 0. Two landings on
     # 2026-09-29 merged on that fully-skipped gate.
     head_sha = run_cmd(["git", "rev-parse", "HEAD"], cwd=repo, timeout=30)[1].strip()
-    if head_sha == base_sha and not args.plan_only:
+    dirty = run_cmd(['git', 'status', '--porcelain', '--untracked-files=normal'],
+                    cwd=repo, timeout=30)
+    dirty_tree = bool(dirty[0] or dirty[1].strip())
+    # --cheap runs before the lane's commit: it gates the working tree.
+    working_tree = args.cheap and dirty_tree
+    if head_sha == base_sha and not args.plan_only and not working_tree:
         print(f"[FAIL] HEAD == {args.base} at {repo}: nothing to gate. "
               "Pass --repo <worktree path> of the branch being landed.")
         return 1
-    dirty = run_cmd(['git', 'status', '--porcelain', '--untracked-files=normal'],
-                    cwd=repo, timeout=30)
-    if (dirty[0] or dirty[1].strip()) and not args.plan_only:
-        print('[FAIL] landing needs a clean committed tree; standalone proof passes can precede the commit')
+    if dirty_tree and not args.plan_only and not args.cheap:
+        print('[FAIL] landing needs a clean committed tree; run --cheap before the commit '
+              'and its passes are reused here')
         return 1
-    GATED_HEAD.set(None if args.plan_only else head_sha)
+    head_ref = 'HEAD'
+    if working_tree:
+        try:
+            head_ref = working_tree_commit(repo)
+        except (OSError, RuntimeError, subprocess.SubprocessError) as error:
+            print(f"[FAIL] cannot snapshot the working tree: {error}")
+            return 1
+        print(f"[scope] gating the uncommitted working tree against {args.base}", flush=True)
+    GATED_HEAD.set(None if args.plan_only or working_tree else head_sha)
     RAN_EVERY_CHECK.set(not args.fail_fast)
 
     try:
@@ -565,7 +609,7 @@ def _main(stack):
             paths, ignored_paths = fixture['paths'], []
             base_sha = fixture['base']
         else:
-            paths, ignored_paths = diff_scope.effective_paths(repo, base_sha, head=None if args.plan_only else 'HEAD')
+            paths, ignored_paths = diff_scope.effective_paths(repo, base_sha, head=None if args.plan_only else head_ref)
             if args.plan_only:
                 paths = sorted(set(paths) | set(diff_scope.git(repo, 'ls-files', '--others', '--exclude-standard', '-z').strip('\0').split('\0')) - {''})
     except RuntimeError as error:
@@ -628,7 +672,7 @@ def _main(stack):
 
     # a. design-status: execute and fingerprint the same base pinned at start.
     exit_, out, err, duration = run_check("design-status",
-        ["python3", ".claude/hooks/design_status_check.py", base_sha, "HEAD"],
+        ["python3", ".claude/hooks/design_status_check.py", base_sha, head_ref],
         cwd=repo, timeout=300)
     tail = (out + err).rstrip().splitlines()[-20:]
     status = "PASS" if exit_ == 0 else "FAIL"
@@ -692,7 +736,7 @@ def _main(stack):
     # proofs: one wait per landing, and no leg's timeout counts queue time
     # (both hour-long flow-gate reds on 2026-10-06 were waits behind a
     # 45-minute render).
-    flow_cmd = ["python3", "scripts/run_ui_flows.py", "--touched", f"{base_sha}...HEAD"]
+    flow_cmd = ["python3", "scripts/run_ui_flows.py", "--touched", f"{base_sha}...{head_ref}"]
     flow_pass = gate_passes.command_pass(repo, "flow-gate", flow_cmd)
     flows_pending = (readiness['flows'] and not flow_pass.record)
 

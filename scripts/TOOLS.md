@@ -82,7 +82,6 @@ Process, beads, usage:
   stale-beads             open beads untouched past threshold  [scripts/stale_beads.py]  (cost: unit)
   hook-census             which hooks fire, how often, from telemetry  [scripts/hook_census.py]  (cost: unit)
   token-report            Claude Code token spend from local transcripts  [scripts/token_report.py]  (cost: unit)
-  claude-usage            export Anthropic usage to the fleet dashboard  [scripts/claude_usage_export.py]  (cost: unit)
   codex-regressions       named regression evidence and the focused command per bead  [scripts/codex_regressions.py]  (cost: unit)
   fix-bare-ids            attach names to bare bead and section IDs in prose  [scripts/fix_bare_ids.py]  (cost: unit)
   fetch-gltf              fetch the Khronos glTF sample set  [scripts/fetch-gltf-conformance.sh]  (cost: focused)
