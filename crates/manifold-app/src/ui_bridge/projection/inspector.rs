@@ -1338,8 +1338,8 @@ pub fn sync_inspector_data(
     {
         ui.scene_setup_panel.reveal_param(&target, &param);
     }
-    if let Some((target, param)) = ui.pending_scene_reveal.take() {
-        ui.scene_setup_panel.reveal_param(&target, &param);
+    if let Some((target, params)) = ui.pending_scene_reveal.take() {
+        ui.scene_setup_panel.reveal_section(&target, &params);
     }
 }
 

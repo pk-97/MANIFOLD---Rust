@@ -462,15 +462,11 @@ pub(crate) fn dispatch_params(action: &ParamsAction, ctx: &mut super::super::Dis
             ContentCommand::send(ctx.content_tx, ContentCommand::ExecuteOnContent(Box::new(command)));
             DispatchResult::handled()
         }
-        ParamsAction::RevealInSceneTab(gpt, param_id) | ParamsAction::RevealSectionInSceneTab(gpt, param_id) => {
-            let Some(GraphTarget::Generator(layer)) =
-                resolve_graph_target(gpt, ctx.editor_target, effective_tab, active_layer, ctx.selection, ctx.project)
-            else {
-                return DispatchResult::handled();
-            };
-            ctx.selection.pin_scope(InspectorTab::Scene);
-            ctx.ui.pending_scene_reveal = Some((manifold_ui::view::UiGraphTarget::Generator(layer), param_id.clone()));
-            DispatchResult::structural()
+        ParamsAction::RevealInSceneTab(gpt, param_id) => {
+            reveal_in_scene_tab(gpt, vec![param_id.clone()], effective_tab, active_layer, ctx)
+        }
+        ParamsAction::RevealSectionInSceneTab(gpt, section) => {
+            reveal_in_scene_tab(gpt, section.clone(), effective_tab, active_layer, ctx)
         }
         ParamsAction::ModsCompactToggled => {
             // section 6b — the inspector already flipped its own compact flag in
@@ -1167,6 +1163,25 @@ fn expand_layer_ancestors(id: &manifold_core::LayerId, ctx: &mut super::super::D
             }
         })));
     }
+}
+
+/// Switch the inspector to the Scene tab and queue a reveal of `params`
+/// (one row, or a card section's rows for the Scene tab to choose from).
+fn reveal_in_scene_tab(
+    gpt: &manifold_ui::GraphParamTarget,
+    params: Vec<manifold_core::effects::ParamId>,
+    effective_tab: InspectorTab,
+    active_layer: &Option<manifold_core::LayerId>,
+    ctx: &mut super::super::DispatchCtx,
+) -> DispatchResult {
+    let Some(GraphTarget::Generator(layer)) =
+        resolve_graph_target(gpt, ctx.editor_target, effective_tab, active_layer, ctx.selection, ctx.project)
+    else {
+        return DispatchResult::handled();
+    };
+    ctx.selection.pin_scope(InspectorTab::Scene);
+    ctx.ui.pending_scene_reveal = Some((manifold_ui::view::UiGraphTarget::Generator(layer), params));
+    DispatchResult::structural()
 }
 
 #[cfg(test)]

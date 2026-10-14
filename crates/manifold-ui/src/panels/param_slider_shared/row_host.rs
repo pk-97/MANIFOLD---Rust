@@ -1391,7 +1391,14 @@ impl RowHost {
             }
             RowRole::SectionTitle => rows
                 .get(row)
-                .map(|first| vec![PanelAction::Params(ParamsAction::RevealSectionInSceneTab(target, first.id.clone()))])
+                .map(|first| {
+                    let section = rows[row..]
+                        .iter()
+                        .take_while(|r| r.spec.section == first.spec.section)
+                        .map(|r| r.id.clone())
+                        .collect();
+                    vec![PanelAction::Params(ParamsAction::RevealSectionInSceneTab(target, section))]
+                })
                 .unwrap_or_default(),
             RowRole::RelightToggle | RowRole::RelightHeightBtn | RowRole::RelightSlider => {
                 // Never inserted into `row_index` (relight has no `rows` slot) —

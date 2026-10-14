@@ -324,8 +324,9 @@ pub struct UIRoot {
     pub(crate) trigger_routing: crate::ui_bridge::TriggerRoutingCatalog,
     pub(crate) pending_trigger_response_reveal: Option<(manifold_ui::view::UiGraphTarget, manifold_core::effects::ParamId)>,
     /// Show in Scene tab / a card section title: revealed once the Scene tab
-    /// is projected (SCENE_SURFACES_DESIGN.md D10).
-    pub(crate) pending_scene_reveal: Option<(manifold_ui::view::UiGraphTarget, manifold_core::effects::ParamId)>,
+    /// is projected (SCENE_SURFACES_DESIGN.md D10). A section carries all its
+    /// rows; the Scene tab picks which to reveal.
+    pub(crate) pending_scene_reveal: Option<(manifold_ui::view::UiGraphTarget, Vec<manifold_core::effects::ParamId>)>,
     pub(crate) pinned_automation_lanes: Vec<manifold_ui::ui_state::AutomationLaneKey>,
 
     /// Cached macro slot labels for context menu display.

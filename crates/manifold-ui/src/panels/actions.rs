@@ -523,9 +523,9 @@ pub enum ParamsAction {
     /// Show in Scene tab: switch the inspector to the Scene tab and reveal
     /// the item that owns this row.
     RevealInSceneTab(GraphParamTarget, ParamId),
-    /// A scene card section title was clicked; carries the section's first
-    /// row, revealed the same way.
-    RevealSectionInSceneTab(GraphParamTarget, ParamId),
+    /// A scene card section title was clicked; carries the section's rows in
+    /// card order. The Scene tab picks which one to reveal (D10).
+    RevealSectionInSceneTab(GraphParamTarget, Vec<ParamId>),
     /// section 6b — the global "hide mod settings" (compact) toggle was clicked. The
     /// inspector already flipped its own UI-only flag; this routes to a
     /// structural rebuild so every card's drawers hide/show. No model mutation.

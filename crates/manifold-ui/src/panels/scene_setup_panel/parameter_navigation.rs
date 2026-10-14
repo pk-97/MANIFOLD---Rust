@@ -90,6 +90,23 @@ impl ScenePanel {
         true
     }
 
+    /// A card section title's reveal (SCENE_SURFACES_DESIGN.md D10): the
+    /// section's first row owned by a light, object or force item, else its
+    /// first row. So Lighting opens a light even when a camera row leads it.
+    pub fn reveal_section(&mut self, target: &UiGraphTarget, params: &[manifold_foundation::ParamId]) -> bool {
+        let item_owned = |panel: &Self, param: &manifold_foundation::ParamId| {
+            panel.force_cards.iter().chain(&panel.object_modifier_cards).any(|card| card.row(param.as_ref()).is_some())
+                || panel.state.as_live().is_some_and(|vm| {
+                    matches!(
+                        Self::owner_selection(vm, param.as_ref()),
+                        Some(SceneSelection::Light(_) | SceneSelection::Object(_) | SceneSelection::Force(_))
+                    )
+                })
+        };
+        let pick = params.iter().find(|param| item_owned(self, param)).or(params.first()).cloned();
+        pick.is_some_and(|param| self.reveal_param(target, &param))
+    }
+
     pub(super) fn property_explicitly_revealed(&self, row: &ParamRow) -> bool {
         self.revealed_property.as_ref().is_some_and(|(target, param)| {
             self.target_matches_scene(target) && row.id == *param
@@ -341,6 +358,40 @@ mod tests {
         assert!(!panel.force_cards[0].is_collapsed(), "the force card unfolds to show its row");
         assert!(!panel.reveal_param(&target, &"nobody_owns_this".into()));
         assert_eq!(panel.selection.get(&layer), Some(&SceneSelection::Force(force)), "a miss keeps the selection");
+    }
+
+    /// D10: a section title opens the first light, object or force row's
+    /// owner; a section with none of those opens its first row's owner.
+    #[test]
+    fn reveal_section_prefers_light_object_force_owner_over_first_row() {
+        let (mut vm, template) = world_transform_vm();
+        let layer = vm.layer_id.clone();
+        let target = UiGraphTarget::Generator(layer.clone());
+        super::super::tests::set_item_ids(&mut vm, SceneSelection::Camera, &["exposure", "orbit"]);
+        super::super::tests::set_item_ids(&mut vm, SceneSelection::Light(60), &["sun_intensity"]);
+        let mut surface = template.clone();
+        surface.rows = ["exposure", "orbit", "sun_intensity"]
+            .iter()
+            .map(|id| {
+                let mut row = template.rows[0].clone();
+                row.id = id.to_string().into();
+                row
+            })
+            .collect();
+        let mut panel = ScenePanel::new();
+        panel.open();
+        panel.configure(super::super::tests::live(vm));
+        panel.configure_params(Some(surface));
+
+        let lighting: Vec<manifold_foundation::ParamId> = vec!["exposure".into(), "sun_intensity".into()];
+        assert!(panel.reveal_section(&target, &lighting));
+        assert_eq!(panel.selection.get(&layer), Some(&SceneSelection::Light(60)), "Lighting opens the light");
+
+        let camera: Vec<manifold_foundation::ParamId> = vec!["exposure".into(), "orbit".into()];
+        assert!(panel.reveal_section(&target, &camera));
+        assert_eq!(panel.selection.get(&layer), Some(&SceneSelection::Camera), "no item-owned row: first row");
+
+        assert!(!panel.reveal_section(&target, &[]));
     }
 
     #[test]
