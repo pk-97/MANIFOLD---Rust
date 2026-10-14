@@ -411,9 +411,8 @@ pub struct LightRow {
     pub index: usize,
     pub node_doc_id: u32,
     pub node: NodeId,
-    /// P5: the light's display name — its own `handle`, falling back to
-    /// `"Light {k}"` (same convention as an object's name, D6). NEW: lights
-    /// didn't have an editable display name before this design.
+    /// Display name (SCENE_SURFACES D11 (Lights)): node `title`, else the
+    /// handle humanised, else `"Light {k}"`.
     pub name: String,
 }
 
@@ -1794,13 +1793,34 @@ fn trace_lights(level: &Level, scene_node: &EffectGraphNode) -> Vec<SceneLightVm
                         index: k,
                         node_doc_id: node_id,
                         node: node.node_id.clone(),
-                        name: node.handle.clone().unwrap_or_else(|| format!("Light {k}")),
+                        name: light_display_name(node, k),
                     }))
                 }
                 _ => SceneLightVm::Custom { index: k },
             }
         })
         .collect()
+}
+
+/// SCENE_SURFACES D11 (Lights): `title`, else the handle humanised
+/// (`fill_light` → "Fill Light"), else "Light N".
+fn light_display_name(node: &EffectGraphNode, k: usize) -> String {
+    if let Some(title) = node.title.as_deref().filter(|t| !t.is_empty()) {
+        return title.to_string();
+    }
+    let humanised = node
+        .handle
+        .as_deref()
+        .unwrap_or("")
+        .split(['_', ' '])
+        .filter(|w| !w.is_empty())
+        .map(|w| {
+            let mut c = w.chars();
+            c.next().map_or(String::new(), |f| f.to_uppercase().collect::<String>() + c.as_str())
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+    if humanised.is_empty() { format!("Light {k}") } else { humanised }
 }
 
 /// Builds a [`LensRow`] for `node.camera_lens` at `node_id` — identity only;
@@ -2871,7 +2891,7 @@ mod tests {
         match &vm.lights[0] {
             SceneLightVm::Known(row) => {
                 assert_eq!(row.node_doc_id, 8);
-                assert_eq!(row.name, "sun");
+                assert_eq!(row.name, "Sun", "D11: the handle humanised");
             }
             other => panic!("expected Known light, got {other:?}"),
         }

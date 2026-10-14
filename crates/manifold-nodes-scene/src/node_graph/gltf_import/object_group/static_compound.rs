@@ -121,7 +121,6 @@ pub(in super::super) fn build_static_compound_group(
         &mut primary.card_bindings,
         primary_transform_id,
         &transform_node_id,
-        "node.transform_3d",
         &compound_name,
         &metadata_for_node_type("node.transform_3d"),
         &transform_node_params,
@@ -304,7 +303,7 @@ pub(in super::super) fn build_static_compound_group(
         }
         stamp_scene_node_exposures_into(
             &mut primary.card_params, &mut primary.card_bindings, local.id,
-            &local.node_id, &local.type_id, &materials[index].name.clone().unwrap_or_else(|| format!("Submesh {}", index + 1)),
+            &local.node_id, &materials[index].name.clone().unwrap_or_else(|| format!("Submesh {}", index + 1)),
             &metadata_for_node_type("node.transform_3d"), &local.params,
         );
         body.wires.push(wire(local.id, "transform", *object_id, "transform"));

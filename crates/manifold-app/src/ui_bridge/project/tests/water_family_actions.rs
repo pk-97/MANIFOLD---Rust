@@ -371,7 +371,7 @@ fn water_and_imported_compound_rename_use_object_node_id() {
             plan.new_card_bindings,
             plan.new_string_bindings,
             default,
-        )),
+        ).with_scene_bounds(plan.scene_bounds)),
         &mut project,
     );
     assert_eq!(editing.take_rejection(), None);

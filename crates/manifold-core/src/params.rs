@@ -32,6 +32,68 @@ pub enum ParamOrigin {
     UserAdded,
 }
 
+/// Where a param's spec came from (SCENE_SURFACES_DESIGN.md D2 (one live
+/// lookup)). In memory only: the join sets it when the manifest is built.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SpecSource {
+    /// The live lookup described it; the code is the authority.
+    #[default]
+    Lookup,
+    /// No template or node declares it (composite, fan-out, graph-local or
+    /// user-added), so its saved spec is the user's own.
+    Authored,
+    /// A lookup key exists but did not answer (type missing, registry not
+    /// filled yet). The saved spec is kept word for word until it resolves.
+    Unresolved,
+}
+
+/// Per-control display choices a project saves (SCENE_SURFACES_DESIGN.md D7
+/// (one saved choice set)). The calibration wire block loads into `slider`,
+/// `curve` and `invert`.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ParamChoices {
+    pub rename: Option<String>,
+    /// The user's slider span. Display only (D15): never the reshape or the
+    /// wrap period.
+    pub slider: Option<(f32, f32)>,
+    pub curve: Option<crate::macro_bank::MacroCurve>,
+    pub invert: Option<bool>,
+    /// `Some(None)` clears the section the lookup gives.
+    pub section: Option<Option<String>>,
+    pub pin: Option<manifold_foundation::scene_surface::CardPin>,
+}
+
+impl ParamChoices {
+    pub fn is_empty(&self) -> bool {
+        *self == Self::default()
+    }
+
+    /// True when the user set a slider range, curve or invert.
+    pub fn calibrated(&self) -> bool {
+        self.slider.is_some() || self.curve.is_some() || self.invert.is_some()
+    }
+
+    /// Lay these choices over a described spec.
+    pub fn apply(&self, spec: &mut ParamSpecDef) {
+        if let Some(name) = &self.rename {
+            spec.name = name.clone();
+        }
+        if let Some(section) = &self.section {
+            spec.section = section.clone();
+        }
+        if let Some((min, max)) = self.slider {
+            spec.min = min;
+            spec.max = max;
+        }
+        if let Some(curve) = self.curve {
+            spec.curve = curve;
+        }
+        if let Some(invert) = self.invert {
+            spec.invert = invert;
+        }
+    }
+}
+
 /// Which layer supplies clip-trigger events for this parameter.
 ///
 /// `OwnLayer` is the default and means that the parameter follows the layer
@@ -61,14 +123,14 @@ impl ClipTriggerSource {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Param {
     /// Descriptor — reuses the existing wire struct ([`ParamSpecDef`]).
-    /// Calibration edits `spec.min`/`spec.max`/`spec.curve`/`spec.invert` in
-    /// place and sets [`Param::calibrated`] (D6).
+    /// The joined spec with [`Param::choices`] applied on top.
     pub spec: ParamSpecDef,
     pub origin: ParamOrigin,
-    /// True once calibration has diverged this param's `spec` from the
-    /// template. Serialization gate for the `calibration` wire block; cleared
-    /// by a calibration reset (which re-reads the template range).
-    pub calibrated: bool,
+    /// Where `spec` came from; never serialized.
+    pub source: SpecSource,
+    /// The user's display choices on this control (SCENE_SURFACES_DESIGN.md
+    /// D7 (one saved choice set)). Already applied to `spec`.
+    pub choices: ParamChoices,
     /// Effective (post-modulation) value — what the renderer reads.
     pub value: f32,
     /// User-intended base (pre-modulation) value. Modulation reads `base`,
@@ -94,6 +156,16 @@ pub struct Param {
 }
 
 impl Param {
+    /// A user's section edit. On a control the lookup describes, the saved
+    /// section is ignored on load, so the edit is kept as a section choice
+    /// (SCENE_SURFACES_DESIGN.md D7 (one saved choice set)). Returns the prior
+    /// choice when one was recorded, for undo.
+    pub fn choose_section(&mut self, section: Option<String>) -> Option<Option<Option<String>>> {
+        self.spec.section = section.clone();
+        (self.source == SpecSource::Lookup)
+            .then(|| self.choices.section.replace(section))
+    }
+
     /// A bundled (template-seeded) param, value + base at the spec default,
     /// exposed, untouched, uncalibrated.
     pub fn bundled(spec: ParamSpecDef) -> Self {
@@ -110,7 +182,11 @@ impl Param {
         Self {
             spec,
             origin,
-            calibrated: false,
+            source: match origin {
+                ParamOrigin::Bundled => SpecSource::Lookup,
+                ParamOrigin::UserAdded => SpecSource::Authored,
+            },
+            choices: ParamChoices::default(),
             value: default,
             base: default,
             exposed: true,
@@ -321,6 +397,9 @@ mod tests {
             section: None,
             card_visible: true,
             material_role: None,
+            limit: Default::default(),
+            unit: None,
+            scene: None,
         }
     }
 
@@ -335,7 +414,7 @@ mod tests {
         assert_eq!(p.base, 0.7);
         assert!(p.exposed);
         assert!(!p.touched);
-        assert!(!p.calibrated);
+        assert!(!p.choices.calibrated());
         assert_eq!(p.clip_trigger_source, ClipTriggerSource::OwnLayer);
         assert_eq!(p.id(), "amount");
         assert_eq!(p.origin, ParamOrigin::Bundled);

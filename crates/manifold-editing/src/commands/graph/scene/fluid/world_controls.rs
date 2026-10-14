@@ -45,8 +45,8 @@ pub(super) fn share_world_controls(
     def: &mut EffectGraphDef,
     group_id: u32,
     domain: &NestedLiquidDomain,
-    metadata: &[SceneParamMetadata],
-    fluid_metadata: &[SceneParamMetadata],
+    metadata: &[NodeParamMetadata],
+    fluid_metadata: &[NodeParamMetadata],
 ) -> Result<(), &'static str> {
     if CONTROLS
         .iter()

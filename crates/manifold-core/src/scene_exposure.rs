@@ -19,7 +19,7 @@ use crate::effects::ParamConvert;
 /// Metadata for one inner-node parameter, produced from the primitive's own
 /// `ParamDef` by the renderer-side provider.
 #[derive(Debug, Clone, PartialEq)]
-pub struct SceneParamMetadata {
+pub struct NodeParamMetadata {
     pub name: String,
     pub label: String,
     pub min: f32,
@@ -36,78 +36,28 @@ pub struct SceneParamMetadata {
     /// Optional material-inspector semantic role supplied by the renderer's
     /// classifier and copied into the persisted manifest descriptor.
     pub material_role: Option<crate::material_inspector::MaterialParamRole>,
+    /// Where the param lives on the scene surfaces, from the scene table
+    /// (SCENE_SURFACES_DESIGN.md section 3.3 (the scene table)). `None` for a
+    /// type outside the scene vocabulary.
+    pub scene: Option<manifold_foundation::scene_surface::SceneParamDesc>,
+    pub unit: Option<manifold_foundation::scene_surface::Unit>,
+    pub limit: manifold_foundation::param_range::HardLimit,
 }
 
 /// Source of per-type param metadata used by the creation-site commands and the
-/// load-time migration. Implemented by `manifold_nodes` using
+/// load-time migration. Implemented by `manifold_nodes_scene` using
 /// `PrimitiveRegistry`.
-pub trait SceneExposureMetadataProvider: Send + Sync {
-    /// Return the full param manifest for `type_id`, in the order it should
-    /// appear on the card. Empty when the type is unknown or has no exposed
-    /// params.
-    fn metadata_for_type(&self, type_id: &str) -> Vec<SceneParamMetadata>;
+pub trait NodeParamProvider: Send + Sync {
+    /// The params `type_id` stamps, in card order: every param except those
+    /// the scene table marks Hidden. Empty when the type is unknown.
+    fn params_for_type(&self, type_id: &str) -> Vec<NodeParamMetadata>;
 }
 
-/// Card-visibility curation for the P1 scene-vocabulary auto-stamping path
-/// (`docs/SCENE_PANEL_EXPOSURE_CONVERGENCE_DESIGN.md` — card-visibility
-/// convergence follow-up). P1 stamps EVERY param on a scene-vocabulary node
-/// as a scene-panel exposure — the scene panel keeps all of them (its own
-/// section query never filters, `sections_for_doc_ids` in
-/// `manifold_app::ui_bridge::projection::scene`), but the generator's outer
-/// CARD only wants a curated performance subset. This is a pure lookup: the
-/// param stays a real, fully addressable exposure either way (OSC, Ableton,
-/// macros, drivers) — `card_visible` only gates the CARD row builder.
-///
-/// Visible iff explicitly listed here; every other vocab type/param is
-/// hidden from the card. Hand-curated explicit card params stamped OUTSIDE
-/// this path (env_mode, scene_ambient, the Animation section, a user-added
-/// graph-editor expose, …) never call this function, so they default `true`
-/// unaffected.
-pub fn card_visible_for(type_id: &str, param: &str) -> bool {
-    let visible: &[&str] = match type_id {
-        "node.physics_world" => &["copy_count", "reset"],
-        // The performance subset under FLIP's names (D17); a domain without
-        // one of these params simply has no such row.
-        domain if crate::liquid_domain::is_liquid_domain(domain) => {
-            &["emission", "inflow_speed", "speed", "reset"]
-        }
-        "node.fluid_role_source" => &["enabled", "velocity_x", "velocity_y", "velocity_z"],
-        // `fov_y` lives on `node.orbit_camera` (not `node.camera_lens` —
-        // that primitive's real params are focus_distance/f_stop/
-        // shutter_angle/exposure_ev, all correctly hidden by the
-        // default-deny below).
-        "node.orbit_camera" => &["orbit", "tilt", "distance", "look_y", "fov_y"],
-        "node.light" => &[
-            "pos_x",
-            "pos_y",
-            "pos_z",
-            "intensity",
-            "color_r",
-            "color_g",
-            "color_b",
-            "cast_shadows",
-            "shadow_softness",
-        ],
-        "node.transform_3d" => &["pos_x", "pos_y", "pos_z", "rot_x", "rot_y", "rot_z"],
-        "node.scene_object" => &["cast_shadows"],
-        "node.bake_environment" => &["intensity", "fill"],
-        // RAYTRACING_DESIGN.md D14/section 5.2/section 9 RD9: the auto-stamp already curates the
-        // root to exactly these three (RENDER_SCENE_STAMPED_PARAMS), and the
-        // Scene Setup panel's World "Rendering" section renders through the
-        // card-filtered surface — hidden here means the section shows zero
-        // rows anywhere.
-        "node.render_scene" => &[
-            "rt_enabled",
-            "temporal_upscale",
-            "rt_reflections",
-            "rt_denoise_feed",
-            "rt_shadows",
-            "rt_ao",
-            "rt_gi",
-        ],
-        _ => &[],
-    };
-    visible.contains(&param)
+/// A stamped control is on the curated card only when the scene table gives
+/// its param the performance role; a type outside the vocabulary stays off.
+fn stamped_card_visible(meta: &NodeParamMetadata) -> bool {
+    meta.scene
+        .is_some_and(|s| s.role == manifold_foundation::scene_surface::SurfaceRole::Performance)
 }
 
 /// Stamp card exposures for every param in `params_metadata` onto the node with
@@ -119,13 +69,12 @@ pub fn stamp_scene_node_exposures(
     def: &mut EffectGraphDef,
     node_doc_id: u32,
     section: &str,
-    params_metadata: &[SceneParamMetadata],
+    params_metadata: &[NodeParamMetadata],
 ) -> bool {
     let Some(node) = def.nodes.iter().find(|n| n.id == node_doc_id) else {
         return false;
     };
     let node_id = node.node_id.clone();
-    let type_id = node.type_id.clone();
     // Cloned rather than borrowed: `meta` below needs a mutable borrow of
     // `def.preset_metadata`, and the node's `params` map is small
     // (edit-time only, never on a hot path).
@@ -140,7 +89,6 @@ pub fn stamp_scene_node_exposures(
         &mut meta.bindings,
         node_doc_id,
         &node_id,
-        &type_id,
         section,
         params_metadata,
         &node_params,
@@ -183,18 +131,13 @@ fn empty_scene_preset_metadata() -> PresetMetadata {
 /// this is what keeps an importer-placed object's position/material/framing
 /// from being clobbered back to the generic primitive default at bind time
 /// (`apply_binding_defaults`, BUG-303).
-///
-/// `type_id` selects the stamped spec's `card_visible` flag via
-/// [`card_visible_for`] — the CARD-curation table, orthogonal to `node_id`
-/// (the exposure's addressing target) and `section` (its card grouping).
 pub fn stamp_scene_node_exposures_into(
     params: &mut Vec<ParamSpecDef>,
     bindings: &mut Vec<BindingDef>,
     node_doc_id: u32,
     node_id: &NodeId,
-    type_id: &str,
     section: &str,
-    params_metadata: &[SceneParamMetadata],
+    params_metadata: &[NodeParamMetadata],
     node_params: &BTreeMap<String, SerializedParamValue>,
 ) -> bool {
     if params_metadata.is_empty() {
@@ -286,8 +229,11 @@ pub fn stamp_scene_node_exposures_into(
             is_trigger_gate: false,
             wraps: meta.wraps,
             section: Some(section.to_string()),
-            card_visible: card_visible_for(type_id, &meta.name),
+            card_visible: stamped_card_visible(meta),
             material_role: meta.material_role,
+            limit: Default::default(),
+            unit: None,
+            scene: None,
         });
 
         bindings.push(BindingDef {
@@ -315,7 +261,7 @@ pub fn stamp_scene_node_exposures_into(
     changed
 }
 
-fn serialized_default_as_f32(value: &SerializedParamValue) -> f32 {
+pub(crate) fn serialized_default_as_f32(value: &SerializedParamValue) -> f32 {
     match value {
         SerializedParamValue::Float { value } => *value,
         SerializedParamValue::Int { value } => *value as f32,
@@ -433,7 +379,7 @@ pub fn migrate_scene_exposures<F>(
     def: &mut EffectGraphDef,
     vocabulary: &[&str],
     mut section_name: F,
-    provider: &dyn SceneExposureMetadataProvider,
+    provider: &dyn NodeParamProvider,
 ) -> bool
 where
     F: FnMut(&EffectGraphNode) -> String,
@@ -456,7 +402,7 @@ where
 
     let mut changed = false;
     for (node_doc_id, node_id, type_id, section, node_params, wired_inputs) in &found {
-        let metadata = provider.metadata_for_type(type_id);
+        let metadata = provider.params_for_type(type_id);
         let fresh_metadata: Vec<_> = metadata
             .into_iter()
             .filter(|entry| {
@@ -473,7 +419,6 @@ where
             &mut meta.bindings,
             *node_doc_id,
             node_id,
-            type_id,
             section,
             &fresh_metadata,
             node_params,
@@ -488,7 +433,7 @@ where
     // because a binding already targets `(node_id, param)` — re-seed those in
     // place whenever the node still has a stamped value that disagrees.
     for (_, node_id, type_id, _, node_params, _) in &found {
-        let metadata = provider.metadata_for_type(type_id);
+        let metadata = provider.params_for_type(type_id);
         for meta_entry in &metadata {
             let Some(stamped) = node_params.get(&meta_entry.name) else {
                 // No stamped value for this param — nothing to repair against.
@@ -526,42 +471,6 @@ where
         }
     }
 
-    // Repair pass 2: a def stamped before the card-visibility curation
-    // (`card_visible_for`) landed carries auto exposures whose spec
-    // `card_visible` is stale — every param defaulted `true` regardless of
-    // vocabulary, so a param the curated table now hides (e.g. a transform's
-    // `scale_x`, any material param) still shows on the card. Unlike the
-    // default-value repair above, this doesn't need a stamped override on
-    // the node — `card_visible_for` is a pure function of `(type_id, param)`
-    // — so it applies to every exact numeric auto-stamp the vocab node has,
-    // whether or not its value diverges from the manifest default. The id
-    // guard keeps curated controls targeting the same node param untouched.
-    // Idempotent: a second run re-derives the same flag and writes nothing.
-    for (node_doc_id, node_id, type_id, _, _, _) in &found {
-        let metadata = provider.metadata_for_type(type_id);
-        for meta_entry in &metadata {
-            let Some(binding) = meta.bindings.iter().find(|b| {
-                !b.user_added
-                    && b.id == format!("{}_{}", node_doc_id, meta_entry.name)
-                    && matches!(
-                        &b.target,
-                        BindingTarget::Node { node_id: nid, param }
-                            if nid == node_id && param == &meta_entry.name
-                    )
-            }) else {
-                continue;
-            };
-            let binding_id = binding.id.clone();
-            let correct_visible = card_visible_for(type_id, &meta_entry.name);
-            if let Some(spec) = meta.params.iter_mut().find(|p| p.id == binding_id)
-                && spec.card_visible != correct_visible
-            {
-                spec.card_visible = correct_visible;
-                changed = true;
-            }
-        }
-    }
-
     // Repair pass 3: a def stamped before `default_mirrors_node_param`
     // existed carries auto exposures whose defaults are stamp-time snapshots
     // of the node param but which deserialize as authored (the field is
@@ -571,12 +480,12 @@ where
     // the flag from what the stamp itself would produce: every auto exposure
     // on a vocab node is a mirror by construction.
     //
-    // Same shape as pass 2 — no stamped override needed, and the
+    // No stamped override needed: the
     // not-user-added predicate is the guard that keeps a hand-authored
     // exposure on the same node authored. Idempotent: a second run
     // re-derives `true` and writes nothing.
     for (_, node_id, type_id, _, _, _) in &found {
-        let metadata = provider.metadata_for_type(type_id);
+        let metadata = provider.params_for_type(type_id);
         for meta_entry in &metadata {
             let Some(binding) = meta.bindings.iter_mut().find(|b| {
                 !b.user_added
@@ -590,97 +499,6 @@ where
             };
             if !binding.default_mirrors_node_param {
                 binding.default_mirrors_node_param = true;
-                changed = true;
-            }
-        }
-    }
-
-    // Repair pass 4: an auto exposure's display metadata (label, min, max) is
-    // a stamp-time copy of the primitive's ParamDef, so range/label tweaks in
-    // code never reached already-saved projects (2026-08-27: f-stop sliders
-    // stuck at 0.5–1000, two Camera-card toggles both labeled "Enabled").
-    // Re-derive all three from the current metadata on every load, keeping
-    // the stamper's widen rule so a seeded value outside the band (a
-    // 300-unit camera distance) still fits. When scene_bounds are present,
-    // use the shared scene-scaled range table instead of the generic metadata
-    // — this prevents import-time scene bands from being silently reverted to
-    // generic bands on project load (BUG-upfq follow-up).
-    // Repair runs over EVERY node with a stamp, not just the vocabulary — the
-    // vocabulary gates STAMPING, but non-vocab atoms carry stamps too (the
-    // cinematic tail's bokeh/motion_blur Camera-section toggles, stamped by
-    // the import assembly and the v1130 migration). The id-shape guard
-    // (`{doc_id}_{param}`) excludes curated fan-out exposures, whose labels
-    // and ranges are authored, never copies.
-    // Idempotent: a second run re-derives the same values and writes nothing.
-    let scene_radius = meta.scene_bounds.map(scene_radius_from_bounds);
-    fn collect_all_nodes(nodes: &[EffectGraphNode], out: &mut Vec<(u32, NodeId, String)>) {
-        for node in nodes {
-            out.push((node.id, node.node_id.clone(), node.type_id.clone()));
-            if let Some(body) = node.group.as_deref() {
-                collect_all_nodes(&body.nodes, out);
-            }
-        }
-    }
-    let mut all_nodes: Vec<(u32, NodeId, String)> = Vec::new();
-    collect_all_nodes(&def.nodes, &mut all_nodes);
-    for (node_doc_id, node_id, type_id) in &all_nodes {
-        let metadata = provider.metadata_for_type(type_id);
-        for meta_entry in &metadata {
-            let stamp_id = format!("{}_{}", node_doc_id, meta_entry.name);
-            let Some(binding) = meta.bindings.iter_mut().find(|b| {
-                !b.user_added
-                    && b.id == stamp_id
-                    && matches!(
-                        &b.target,
-                        BindingTarget::Node { node_id: nid, param }
-                            if nid == node_id && param == &meta_entry.name
-                    )
-            }) else {
-                continue;
-            };
-            if binding.label != meta_entry.label {
-                binding.label = meta_entry.label.clone();
-                changed = true;
-            }
-            let binding_id = binding.id.clone();
-            let Some(spec) = meta.params.iter_mut().find(|p| p.id == binding_id) else {
-                continue;
-            };
-            if spec.name != meta_entry.label {
-                spec.name = meta_entry.label.clone();
-                changed = true;
-            }
-            if spec.is_angle != meta_entry.is_angle {
-                spec.is_angle = meta_entry.is_angle;
-                changed = true;
-            }
-            // Value labels are a stamp-time copy of the primitive metadata,
-            // just like the name and range above. Refresh them for every
-            // exact auto-stamp, including scene light modes whose enum set
-            // can grow after an import. The exact stamp id and `!user_added`
-            // guard keep authored/fan-out bindings untouched.
-            if spec.value_labels != meta_entry.value_labels {
-                spec.value_labels = meta_entry.value_labels.clone();
-                changed = true;
-            }
-            let widen = !spec.whole_numbers && !spec.is_toggle && !spec.is_trigger;
-            // When scene_bounds are present, use the scene-scaled range as
-            // the base band (import-time bands preserved across load) instead
-            // of the generic metadata band (which reverts scene bands).
-            let (base_min, base_max) = scene_radius
-                .and_then(|r| scene_scaled_range(type_id, &meta_entry.name, r))
-                .unwrap_or((meta_entry.min, meta_entry.max));
-            let (min, max) = if widen {
-                (
-                    base_min.min(spec.default_value),
-                    base_max.max(spec.default_value),
-                )
-            } else {
-                (base_min, base_max)
-            };
-            if spec.min != min || spec.max != max {
-                spec.min = min;
-                spec.max = max;
                 changed = true;
             }
         }
@@ -750,8 +568,8 @@ mod tests {
         }
     }
 
-    fn float_meta(name: &str, label: &str) -> SceneParamMetadata {
-        SceneParamMetadata {
+    fn float_meta(name: &str, label: &str) -> NodeParamMetadata {
+        NodeParamMetadata {
             name: name.to_string(),
             label: label.to_string(),
             min: 0.0,
@@ -765,6 +583,9 @@ mod tests {
             value_labels: Vec::new(),
             convert: ParamConvert::Float,
             material_role: None,
+            scene: None,
+            unit: None,
+            limit: Default::default(),
         }
     }
 
@@ -899,8 +720,8 @@ mod tests {
     #[test]
     fn migrate_skips_unknown_nodes_and_is_idempotent() {
         struct TestProvider;
-        impl SceneExposureMetadataProvider for TestProvider {
-            fn metadata_for_type(&self, type_id: &str) -> Vec<SceneParamMetadata> {
+        impl NodeParamProvider for TestProvider {
+            fn params_for_type(&self, type_id: &str) -> Vec<NodeParamMetadata> {
                 if type_id == "node.light" {
                     vec![float_meta("intensity", "Intensity")]
                 } else {
@@ -973,8 +794,11 @@ mod tests {
             is_trigger_gate: false,
             wraps: false,
             section: Some("Light".to_string()),
-            card_visible: card_visible_for("node.light", param),
+            card_visible: true,
             material_role: None,
+            limit: Default::default(),
+            unit: None,
+            scene: None,
         };
         let binding = BindingDef {
             id,
@@ -994,8 +818,8 @@ mod tests {
     }
 
     struct LightProvider;
-    impl SceneExposureMetadataProvider for LightProvider {
-        fn metadata_for_type(&self, type_id: &str) -> Vec<SceneParamMetadata> {
+    impl NodeParamProvider for LightProvider {
+        fn params_for_type(&self, type_id: &str) -> Vec<NodeParamMetadata> {
             if type_id == "node.light" {
                 vec![float_meta("intensity", "Intensity")]
             } else {
@@ -1105,8 +929,8 @@ mod tests {
         use crate::effect_graph_def::{GROUP_TYPE_ID, GroupDef, GroupInterface};
 
         struct TestProvider;
-        impl SceneExposureMetadataProvider for TestProvider {
-            fn metadata_for_type(&self, type_id: &str) -> Vec<SceneParamMetadata> {
+        impl NodeParamProvider for TestProvider {
+            fn params_for_type(&self, type_id: &str) -> Vec<NodeParamMetadata> {
                 if type_id == "node.transform_3d" {
                     vec![float_meta("pos_x", "X")]
                 } else {
@@ -1181,8 +1005,8 @@ mod tests {
         use crate::effect_graph_def::{EffectGraphWire, GroupDef, GroupInterface};
 
         struct TestProvider;
-        impl SceneExposureMetadataProvider for TestProvider {
-            fn metadata_for_type(&self, type_id: &str) -> Vec<SceneParamMetadata> {
+        impl NodeParamProvider for TestProvider {
+            fn params_for_type(&self, type_id: &str) -> Vec<NodeParamMetadata> {
                 if type_id == "node.light" {
                     vec![float_meta("intensity", "Intensity")]
                 } else {
@@ -1441,8 +1265,8 @@ mod tests {
     #[test]
     fn migrate_repairs_pre_fix_binding_default_from_stamped_node_value() {
         struct TestProvider;
-        impl SceneExposureMetadataProvider for TestProvider {
-            fn metadata_for_type(&self, type_id: &str) -> Vec<SceneParamMetadata> {
+        impl NodeParamProvider for TestProvider {
+            fn params_for_type(&self, type_id: &str) -> Vec<NodeParamMetadata> {
                 if type_id == "node.transform_3d" {
                     vec![float_meta("pos_x", "X")]
                 } else {
@@ -1481,6 +1305,9 @@ mod tests {
             section: Some("Transform".to_string()),
             card_visible: true,
             material_role: None,
+            limit: Default::default(),
+            unit: None,
+            scene: None,
         };
         let stale_binding = BindingDef {
             id: "7_pos_x".to_string(),
@@ -1564,176 +1391,28 @@ mod tests {
         assert_eq!(def, after_repair);
     }
 
-    /// Angular primitive descriptors used to be stamped as plain 0..1
-    /// floats. Repair the auto-generated card metadata in place when the
-    /// descriptor becomes an angle, while leaving a user-authored exposure
-    /// targeting the same node parameter untouched.
-    #[test]
-    fn migrate_repairs_auto_angle_descriptor_without_touching_user_range() {
-        struct AngleProvider;
-        impl SceneExposureMetadataProvider for AngleProvider {
-            fn metadata_for_type(&self, type_id: &str) -> Vec<SceneParamMetadata> {
-                if type_id != "node.bend_mesh" {
-                    return Vec::new();
-                }
-                vec![SceneParamMetadata {
-                    name: "angle".to_string(),
-                    label: "Angle".to_string(),
-                    min: -std::f32::consts::TAU,
-                    max: std::f32::consts::TAU,
-                    default_value: SerializedParamValue::Float { value: 0.5 },
-                    is_angle: true,
-                    wraps: false,
-                    whole_numbers: false,
-                    is_toggle: false,
-                    is_trigger: false,
-                    value_labels: Vec::new(),
-                    convert: ParamConvert::Float,
-                    material_role: None,
-                }]
-            }
-        }
+    // ── Card visibility follows the scene table's role ──────────────────
 
-        let node = make_node(7, "node.bend_mesh");
-        let node_id = node.node_id.clone();
-        let auto_spec = ParamSpecDef {
-            tooltip: None,
-            id: "7_angle".to_string(),
-            name: "Angle".to_string(),
-            min: 0.0,
-            max: 1.0,
-            default_value: 0.5,
-            is_angle: false,
-            ..Default::default()
-        };
-        let auto_binding = BindingDef {
-            id: "7_angle".to_string(),
-            label: "Angle".to_string(),
-            default_value: 0.5,
-            target: BindingTarget::Node {
-                node_id: node_id.clone(),
-                param: "angle".to_string(),
-            },
-            convert: ParamConvert::Float,
-            user_added: false,
-            scale: 1.0,
-            offset: 0.0,
-            default_mirrors_node_param: true,
-        };
-        let user_spec = ParamSpecDef {
-            tooltip: None,
-            id: "user_angle".to_string(),
-            name: "My Angle".to_string(),
-            min: -9.0,
-            max: 9.0,
-            default_value: 2.0,
-            is_angle: false,
-            ..Default::default()
-        };
-        let user_binding = BindingDef {
-            id: "user_angle".to_string(),
-            label: "My Angle".to_string(),
-            default_value: 2.0,
-            target: BindingTarget::Node {
-                node_id,
-                param: "angle".to_string(),
-            },
-            convert: ParamConvert::Float,
-            user_added: true,
-            scale: 1.0,
-            offset: 0.0,
-            default_mirrors_node_param: false,
-        };
-
-        let mut meta = empty_scene_preset_metadata();
-        meta.params = vec![auto_spec, user_spec];
-        meta.bindings = vec![auto_binding, user_binding];
-        let mut def = EffectGraphDef {
-            version: 1,
-            name: None,
-            description: None,
-            preset_metadata: Some(meta),
-            scene_modifiers: Vec::new(),
-            nodes: vec![node],
-            wires: Vec::new(),
-        };
-
-        assert!(migrate_scene_exposures(
-            &mut def,
-            &["node.bend_mesh"],
-            |_node| "Modifier".to_string(),
-            &AngleProvider,
-        ));
-        let metadata = def.preset_metadata.as_ref().unwrap();
-        let auto = metadata
-            .params
-            .iter()
-            .find(|param| param.id == "7_angle")
-            .unwrap();
-        assert!(auto.is_angle);
-        assert_eq!(
-            (auto.min, auto.max),
-            (-std::f32::consts::TAU, std::f32::consts::TAU)
-        );
-        let user = metadata
-            .params
-            .iter()
-            .find(|param| param.id == "user_angle")
-            .unwrap();
-        assert!(!user.is_angle);
-        assert_eq!((user.min, user.max), (-9.0, 9.0));
-
-        let after_repair = def.clone();
-        assert!(!migrate_scene_exposures(
-            &mut def,
-            &["node.bend_mesh"],
-            |_node| "Modifier".to_string(),
-            &AngleProvider,
-        ));
-        assert_eq!(def, after_repair);
+    fn with_role(mut meta: NodeParamMetadata, role: manifold_foundation::scene_surface::SurfaceRole) -> NodeParamMetadata {
+        use manifold_foundation::scene_surface::{CardBand, CardLabel, ControlGroup, SceneParamDesc, SurfaceRole};
+        meta.scene = Some(SceneParamDesc {
+            role,
+            group: ControlGroup::Transform,
+            band: (role == SurfaceRole::Performance).then_some(CardBand::Scene),
+            card_order: 0,
+            card_label: CardLabel::Param,
+            gate: None,
+            switch: None,
+        });
+        meta
     }
 
-    // ── Card-visibility curation (card_visible_for) ────────────────────
-
+    /// A stamped control is card-visible exactly when its param has the
+    /// performance role; Setup and unclassified params stay off the card.
+    /// Every stamp is a real binding either way.
     #[test]
-    fn card_visible_for_transform_shows_pos_and_rot_hides_scale() {
-        assert!(card_visible_for("node.transform_3d", "pos_x"));
-        assert!(card_visible_for("node.transform_3d", "pos_y"));
-        assert!(card_visible_for("node.transform_3d", "pos_z"));
-        assert!(card_visible_for("node.transform_3d", "rot_x"));
-        assert!(card_visible_for("node.transform_3d", "rot_y"));
-        assert!(card_visible_for("node.transform_3d", "rot_z"));
-        assert!(!card_visible_for("node.transform_3d", "scale_x"));
-        assert!(!card_visible_for("node.transform_3d", "scale_y"));
-        assert!(!card_visible_for("node.transform_3d", "scale_z"));
-    }
-
-    #[test]
-    fn card_visible_for_render_scene_shows_all_rt_toggles() {
-        // RAYTRACING_DESIGN.md D14 / section 5.2 / section 17 DN4 / hybrid-split
-        // levers: all seven stamped RT toggles must surface on the curated card.
-        assert!(card_visible_for("node.render_scene", "rt_enabled"));
-        assert!(card_visible_for("node.render_scene", "temporal_upscale"));
-        assert!(card_visible_for("node.render_scene", "rt_reflections"));
-        assert!(card_visible_for("node.render_scene", "rt_denoise_feed"));
-        assert!(card_visible_for("node.render_scene", "rt_shadows"));
-        assert!(card_visible_for("node.render_scene", "rt_ao"));
-        assert!(card_visible_for("node.render_scene", "rt_gi"));
-    }
-
-    #[test]
-    fn card_visible_for_material_hides_everything() {
-        assert!(!card_visible_for("node.pbr_material", "color_r"));
-        assert!(!card_visible_for("node.pbr_material", "roughness"));
-        assert!(!card_visible_for("node.cel_material", "color_r"));
-    }
-
-    /// Stamping a transform node exposes `pos_x` (card-visible) and
-    /// `scale_x` (card-hidden) — both are real, fully addressable
-    /// exposures (the binding + spec both exist), `card_visible` only gates
-    /// which one becomes a CARD row.
-    #[test]
-    fn stamp_sets_card_visible_true_for_pos_false_for_scale() {
+    fn stamp_card_visible_follows_the_role() {
+        use manifold_foundation::scene_surface::SurfaceRole;
         let mut def = EffectGraphDef {
             version: 1,
             name: None,
@@ -1748,718 +1427,19 @@ mod tests {
             &mut def,
             7,
             "Transform",
-            &[float_meta("pos_x", "X"), float_meta("scale_x", "Scale X")],
-        ));
-
-        let meta = def.preset_metadata.as_ref().unwrap();
-        let pos_spec = meta.params.iter().find(|p| p.name == "X").unwrap();
-        assert!(pos_spec.card_visible, "pos_x stays visible on the card");
-        let scale_spec = meta.params.iter().find(|p| p.name == "Scale X").unwrap();
-        assert!(!scale_spec.card_visible, "scale_x is hidden from the card");
-
-        // Both are still real bindings — card_visible never affects addressing.
-        assert_eq!(meta.bindings.len(), 2);
-    }
-
-    /// Stamping a material node hides every param — `card_visible_for`
-    /// returns `false` for the entire vocab type.
-    #[test]
-    fn stamp_material_node_hides_all_params_from_card() {
-        let mut def = EffectGraphDef {
-            version: 1,
-            name: None,
-            description: None,
-            preset_metadata: None,
-            scene_modifiers: Vec::new(),
-            nodes: vec![make_node(3, "node.pbr_material")],
-            wires: vec![],
-        };
-
-        assert!(stamp_scene_node_exposures(
-            &mut def,
-            3,
-            "Material",
             &[
-                float_meta("color_r", "Colour R"),
-                float_meta("roughness", "Roughness")
+                with_role(float_meta("pos_x", "X"), SurfaceRole::Performance),
+                with_role(float_meta("scale_x", "Scale X"), SurfaceRole::Setup),
+                float_meta("loose", "Loose"),
             ],
         ));
 
         let meta = def.preset_metadata.as_ref().unwrap();
-        assert!(
-            meta.params.iter().all(|p| !p.card_visible),
-            "no material param shows on the card"
-        );
-    }
-
-    /// Migration repair for `card_visible`: a def stamped before the
-    /// curation table landed carries every auto exposure at `card_visible:
-    /// true` (the universal pre-fix default) — including `scale_x`, which
-    /// the curated table now hides. `migrate_scene_exposures` must correct
-    /// it in place, independent of whether the node's stamped value
-    /// disagrees with the manifest default (unlike the BUG-303 default-
-    /// value repair, this one doesn't need a `node_params` entry). Second
-    /// run is a no-op.
-    #[test]
-    fn migrate_repairs_stale_card_visible_flag_and_is_idempotent() {
-        struct TestProvider;
-        impl SceneExposureMetadataProvider for TestProvider {
-            fn metadata_for_type(&self, type_id: &str) -> Vec<SceneParamMetadata> {
-                if type_id == "node.transform_3d" {
-                    vec![float_meta("pos_x", "X"), float_meta("scale_x", "Scale X")]
-                } else {
-                    Vec::new()
-                }
-            }
-        }
-
-        let node = make_node(7, "node.transform_3d");
-        let node_id = node.node_id.clone();
-
-        // Pre-fix def: both specs/bindings stamped `card_visible: true`
-        // (the only value that existed before this fix), even though
-        // `scale_x` should now read `false`.
-        let mut stale_pos = float_spec_default("7_pos_x", "X", "Transform");
-        stale_pos.card_visible = true;
-        let mut stale_scale = float_spec_default("7_scale_x", "Scale X", "Transform");
-        stale_scale.card_visible = true;
-
-        let stale_pos_binding = BindingDef {
-            id: "7_pos_x".to_string(),
-            label: "X".to_string(),
-            default_value: 0.5,
-            target: BindingTarget::Node {
-                node_id: node_id.clone(),
-                param: "pos_x".to_string(),
-            },
-            convert: ParamConvert::Float,
-            user_added: false,
-            scale: 1.0,
-            offset: 0.0,
-            default_mirrors_node_param: false,
-        };
-        let stale_scale_binding = BindingDef {
-            id: "7_scale_x".to_string(),
-            label: "Scale X".to_string(),
-            default_value: 0.5,
-            target: BindingTarget::Node {
-                node_id: node_id.clone(),
-                param: "scale_x".to_string(),
-            },
-            convert: ParamConvert::Float,
-            user_added: false,
-            scale: 1.0,
-            offset: 0.0,
-            default_mirrors_node_param: false,
-        };
-
-        let mut def = EffectGraphDef {
-            scene_modifiers: Vec::new(),
-            version: 1,
-            name: None,
-            description: None,
-            preset_metadata: Some(PresetMetadata {
-                params: vec![stale_pos, stale_scale],
-                bindings: vec![stale_pos_binding, stale_scale_binding],
-                ..empty_scene_preset_metadata()
-            }),
-            nodes: vec![node],
-            wires: vec![],
-        };
-
-        let vocab = ["node.transform_3d"];
-        assert!(migrate_scene_exposures(
-            &mut def,
-            &vocab,
-            |_n| "Transform".to_string(),
-            &TestProvider
-        ));
-
-        let meta = def.preset_metadata.as_ref().unwrap();
-        let pos_spec = meta.params.iter().find(|p| p.id == "7_pos_x").unwrap();
-        assert!(
-            pos_spec.card_visible,
-            "pos_x was already correct (true) and stays true"
-        );
-        let scale_spec = meta.params.iter().find(|p| p.id == "7_scale_x").unwrap();
-        assert!(
-            !scale_spec.card_visible,
-            "scale_x repaired from stale true to correct false"
-        );
-
-        let after_repair = def.clone();
-        assert!(
-            !migrate_scene_exposures(
-                &mut def,
-                &vocab,
-                |_n| "Transform".to_string(),
-                &TestProvider
-            ),
-            "second migration run is a no-op once repaired"
-        );
-        assert_eq!(def, after_repair);
-    }
-
-    /// Repair pass 2 must identify auto-stamped exposures by their exact
-    /// numeric stamp id, not only by target and `user_added`. A curated
-    /// resolution control can share the same node target while keeping its
-    /// own card visibility and range.
-    #[test]
-    fn migrate_preserves_curated_resolution_card_control() {
-        struct TestProvider;
-        impl SceneExposureMetadataProvider for TestProvider {
-            fn metadata_for_type(&self, type_id: &str) -> Vec<SceneParamMetadata> {
-                if type_id == "node.render_scene" {
-                    vec![float_meta("resolution", "Resolution")]
-                } else {
-                    Vec::new()
-                }
-            }
-        }
-
-        let node = make_node(7, "node.render_scene");
-        let node_id = node.node_id.clone();
-
-        let mut auto_spec = float_spec_default("7_resolution", "Resolution", "Rendering");
-        auto_spec.card_visible = true;
-        auto_spec.min = 0.0;
-        auto_spec.max = 1.0;
-        let auto_binding = BindingDef {
-            id: "7_resolution".to_string(),
-            label: "Resolution".to_string(),
-            default_value: 0.5,
-            target: BindingTarget::Node {
-                node_id: node_id.clone(),
-                param: "resolution".to_string(),
-            },
-            convert: ParamConvert::Float,
-            user_added: false,
-            scale: 1.0,
-            offset: 0.0,
-            default_mirrors_node_param: true,
-        };
-
-        let mut curated_spec =
-            float_spec_default("curated_resolution", "Output Resolution", "Rendering");
-        curated_spec.card_visible = true;
-        curated_spec.min = 0.25;
-        curated_spec.max = 4.0;
-        let curated_binding = BindingDef {
-            id: "curated_resolution".to_string(),
-            label: "Output Resolution".to_string(),
-            default_value: 2.0,
-            target: BindingTarget::Node {
-                node_id,
-                param: "resolution".to_string(),
-            },
-            convert: ParamConvert::Float,
-            user_added: false,
-            scale: 1.0,
-            offset: 0.0,
-            default_mirrors_node_param: true,
-        };
-
-        let mut def = EffectGraphDef {
-            scene_modifiers: Vec::new(),
-            version: 1,
-            name: None,
-            description: None,
-            preset_metadata: Some(PresetMetadata {
-                params: vec![auto_spec, curated_spec],
-                bindings: vec![auto_binding, curated_binding],
-                ..empty_scene_preset_metadata()
-            }),
-            nodes: vec![node],
-            wires: Vec::new(),
-        };
-
-        assert!(migrate_scene_exposures(
-            &mut def,
-            &["node.render_scene"],
-            |_n| "Rendering".to_string(),
-            &TestProvider,
-        ));
-
-        let meta = def.preset_metadata.as_ref().unwrap();
-        let auto = meta.params.iter().find(|p| p.id == "7_resolution").unwrap();
-        assert!(
-            !auto.card_visible,
-            "auto-stamped resolution follows curation"
-        );
-        let curated = meta
-            .params
-            .iter()
-            .find(|p| p.id == "curated_resolution")
-            .unwrap();
-        assert!(curated.card_visible, "curated resolution remains visible");
-        assert_eq!(
-            (curated.min, curated.max),
-            (0.25, 4.0),
-            "curated resolution range remains authored"
-        );
-
-        let after_repair = def.clone();
-        assert!(!migrate_scene_exposures(
-            &mut def,
-            &["node.render_scene"],
-            |_n| "Rendering".to_string(),
-            &TestProvider,
-        ));
-        assert_eq!(def, after_repair, "second run must be idempotent");
-    }
-
-    /// Minimal `ParamSpecDef` builder for the card-visible repair test —
-    /// mirrors the shape of `stale_spec` above without repeating every field.
-    /// Migration repair for display metadata (label + range): a def stamped
-    /// before a ParamDef tweak carries the OLD label and min/max forever
-    /// (2026-08-27: f-stop sliders stuck at 0.5–1000, two Camera-card
-    /// toggles both labeled "Enabled"). Pass 4 re-derives all three from the
-    /// current metadata — and leaves a curated fan-out exposure (custom id,
-    /// custom label and range — authored, never a stamp copy) untouched.
-    /// Second run is a no-op.
-    #[test]
-    fn migrate_refreshes_stale_label_and_range_and_is_idempotent() {
-        struct TestProvider;
-        impl SceneExposureMetadataProvider for TestProvider {
-            fn metadata_for_type(&self, type_id: &str) -> Vec<SceneParamMetadata> {
-                if type_id == "node.camera_lens" {
-                    vec![SceneParamMetadata {
-                        min: 0.5,
-                        max: 32.0,
-                        default_value: SerializedParamValue::Float { value: 32.0 },
-                        ..float_meta("f_stop", "F-Stop")
-                    }]
-                } else {
-                    Vec::new()
-                }
-            }
-        }
-
-        let node = make_node(9, "node.camera_lens");
-        let node_id = node.node_id.clone();
-
-        // Pre-fix stamp: old label, stretched range (the legacy-1000 default
-        // itself is repaired renderer-side before core runs; here the
-        // default is already inside the band).
-        let mut stale_spec = float_spec_default("9_f_stop", "Enabled", "Camera");
-        stale_spec.min = 0.5;
-        stale_spec.max = 1000.0;
-        stale_spec.default_value = 32.0;
-        let stale_binding = BindingDef {
-            id: "9_f_stop".to_string(),
-            label: "Enabled".to_string(),
-            default_value: 32.0,
-            target: BindingTarget::Node {
-                node_id: node_id.clone(),
-                param: "f_stop".to_string(),
-            },
-            convert: ParamConvert::Float,
-            user_added: false,
-            scale: 1.0,
-            offset: 0.0,
-            default_mirrors_node_param: true,
-        };
-        // A curated fan-out exposure on the same node+param: custom id,
-        // label, and range — pass 4 must not touch it.
-        let mut curated_spec = float_spec_default("aperture_macro", "Aperture", "Camera");
-        curated_spec.min = 1.0;
-        curated_spec.max = 8.0;
-        let curated_binding = BindingDef {
-            id: "aperture_macro".to_string(),
-            label: "Aperture".to_string(),
-            default_value: 2.8,
-            target: BindingTarget::Node {
-                node_id: node_id.clone(),
-                param: "f_stop".to_string(),
-            },
-            convert: ParamConvert::Float,
-            user_added: false,
-            scale: 1.0,
-            offset: 0.0,
-            default_mirrors_node_param: true,
-        };
-
-        let mut def = EffectGraphDef {
-            scene_modifiers: Vec::new(),
-            version: 1,
-            name: None,
-            description: None,
-            preset_metadata: Some(PresetMetadata {
-                params: vec![stale_spec, curated_spec],
-                bindings: vec![stale_binding, curated_binding],
-                ..empty_scene_preset_metadata()
-            }),
-            nodes: vec![node],
-            wires: vec![],
-        };
-
-        let vocab = ["node.camera_lens"];
-        assert!(migrate_scene_exposures(
-            &mut def,
-            &vocab,
-            |_n| "Camera".to_string(),
-            &TestProvider
-        ));
-
-        let meta = def.preset_metadata.as_ref().unwrap();
-        let spec = meta.params.iter().find(|p| p.id == "9_f_stop").unwrap();
-        assert_eq!(spec.name, "F-Stop", "stale label refreshed from metadata");
-        assert_eq!(
-            (spec.min, spec.max),
-            (0.5, 32.0),
-            "stretched range re-derived from metadata"
-        );
-        assert_eq!(
-            meta.bindings
-                .iter()
-                .find(|b| b.id == "9_f_stop")
-                .unwrap()
-                .label,
-            "F-Stop",
-            "binding label refreshed too"
-        );
-        let curated = meta
-            .params
-            .iter()
-            .find(|p| p.id == "aperture_macro")
-            .unwrap();
-        assert_eq!(curated.name, "Aperture", "curated fan-out label untouched");
-        assert_eq!(
-            (curated.min, curated.max),
-            (1.0, 8.0),
-            "curated fan-out range untouched"
-        );
-
-        let after_repair = def.clone();
-        assert!(
-            !migrate_scene_exposures(&mut def, &vocab, |_n| "Camera".to_string(), &TestProvider),
-            "second migration run is a no-op once repaired"
-        );
-        assert_eq!(def, after_repair);
-    }
-
-    #[test]
-    fn migrate_refreshes_material_feature_mode_labels_and_keeps_custom_binding() {
-        struct TestProvider;
-        impl SceneExposureMetadataProvider for TestProvider {
-            fn metadata_for_type(&self, type_id: &str) -> Vec<SceneParamMetadata> {
-                if type_id == "node.pbr_material" {
-                    vec![SceneParamMetadata {
-                        min: 0.0,
-                        max: 3.0,
-                        default_value: SerializedParamValue::Enum { value: 0 },
-                        whole_numbers: true,
-                        value_labels: vec![
-                            "From values".into(),
-                            "Off".into(),
-                            "On".into(),
-                            "Removed".into(),
-                        ],
-                        material_role: Some(
-                            crate::material_inspector::MaterialParamRole::FeatureMode(
-                                crate::material_inspector::MaterialFeature::Coat,
-                            ),
-                        ),
-                        convert: ParamConvert::EnumRound,
-                        ..float_meta("coat_mode", "Coat Mode")
-                    }]
-                } else {
-                    Vec::new()
-                }
-            }
-        }
-
-        let node = make_node(7, "node.pbr_material");
-        let node_id = node.node_id.clone();
-        let mut stale_spec = float_spec_default("7_coat_mode", "Coat Mode", "Material");
-        stale_spec.min = 0.0;
-        stale_spec.max = 2.0;
-        stale_spec.default_value = 2.0;
-        stale_spec.whole_numbers = true;
-        stale_spec.value_labels = vec!["From values".into(), "Off".into(), "On".into()];
-        stale_spec.material_role = Some(crate::material_inspector::MaterialParamRole::FeatureMode(
-            crate::material_inspector::MaterialFeature::Coat,
-        ));
-        let stale_binding = BindingDef {
-            id: "7_coat_mode".into(),
-            label: "Coat Mode".into(),
-            default_value: 2.0,
-            target: BindingTarget::Node {
-                node_id: node_id.clone(),
-                param: "coat_mode".into(),
-            },
-            convert: ParamConvert::EnumRound,
-            user_added: false,
-            scale: 1.0,
-            offset: 0.0,
-            default_mirrors_node_param: true,
-        };
-        let user_binding = BindingDef {
-            id: "custom_coat_mode".into(),
-            label: "Custom coat control".into(),
-            default_value: 1.25,
-            target: BindingTarget::Node {
-                node_id: node_id.clone(),
-                param: "coat_mode".into(),
-            },
-            convert: ParamConvert::Float,
-            user_added: true,
-            scale: 0.5,
-            offset: 0.25,
-            default_mirrors_node_param: false,
-        };
-        let expected_user = user_binding.clone();
-        let mut def = EffectGraphDef {
-            version: 1,
-            name: None,
-            description: None,
-            preset_metadata: Some(PresetMetadata {
-                params: vec![stale_spec],
-                bindings: vec![stale_binding, user_binding],
-                ..empty_scene_preset_metadata()
-            }),
-            scene_modifiers: Vec::new(),
-            nodes: vec![node],
-            wires: Vec::new(),
-        };
-
-        assert!(migrate_scene_exposures(
-            &mut def,
-            &["node.pbr_material"],
-            |_n| "Material".into(),
-            &TestProvider
-        ));
-
-        let meta = def.preset_metadata.as_ref().unwrap();
-        let spec = meta.params.iter().find(|p| p.id == "7_coat_mode").unwrap();
-        assert_eq!((spec.min, spec.max), (0.0, 3.0));
-        assert_eq!(
-            spec.value_labels,
-            vec!["From values", "Off", "On", "Removed"]
-        );
-        assert_eq!(spec.default_value, 2.0, "authored mode survives repair");
-        assert_eq!(
-            meta.bindings
-                .iter()
-                .find(|b| b.id == "custom_coat_mode")
-                .unwrap(),
-            &expected_user,
-            "custom user binding is outside the stamp repair"
-        );
-
-        let after_repair = def.clone();
-        assert!(!migrate_scene_exposures(
-            &mut def,
-            &["node.pbr_material"],
-            |_n| "Material".into(),
-            &TestProvider
-        ));
-        assert_eq!(def, after_repair);
-    }
-
-    #[test]
-    fn migrate_refreshes_light_enum_labels_and_preserves_authored_binding() {
-        struct TestProvider;
-        impl SceneExposureMetadataProvider for TestProvider {
-            fn metadata_for_type(&self, type_id: &str) -> Vec<SceneParamMetadata> {
-                if type_id == "node.light" {
-                    vec![SceneParamMetadata {
-                        min: 0.0,
-                        max: 2.0,
-                        default_value: SerializedParamValue::Enum { value: 1 },
-                        whole_numbers: true,
-                        value_labels: vec!["Sun".into(), "Point".into(), "Spot".into()],
-                        convert: ParamConvert::EnumRound,
-                        ..float_meta("mode", "Light Mode")
-                    }]
-                } else {
-                    Vec::new()
-                }
-            }
-        }
-
-        let node = make_node(11, "node.light");
-        let node_id = node.node_id.clone();
-        let mut stale_spec = float_spec_default("11_mode", "Light Mode", "Light");
-        stale_spec.max = 1.0;
-        stale_spec.default_value = 1.0;
-        stale_spec.whole_numbers = true;
-        stale_spec.value_labels = vec!["Sun".into(), "Point".into()];
-        let stale_binding = BindingDef {
-            id: "11_mode".into(),
-            label: "Light Mode".into(),
-            default_value: 1.0,
-            target: BindingTarget::Node {
-                node_id: node_id.clone(),
-                param: "mode".into(),
-            },
-            convert: ParamConvert::EnumRound,
-            user_added: false,
-            scale: 1.0,
-            offset: 0.0,
-            default_mirrors_node_param: true,
-        };
-        let authored_spec = ParamSpecDef {
-            tooltip: None,
-            id: "custom_light_mode".into(),
-            name: "My light mode".into(),
-            min: 0.0,
-            max: 1.0,
-            default_value: 0.0,
-            whole_numbers: true,
-            value_labels: vec!["Custom off".into(), "Custom on".into()],
-            section: Some("Light".into()),
-            ..Default::default()
-        };
-        let authored_binding = BindingDef {
-            id: authored_spec.id.clone(),
-            label: authored_spec.name.clone(),
-            default_value: authored_spec.default_value,
-            target: BindingTarget::Node {
-                node_id,
-                param: "mode".into(),
-            },
-            convert: ParamConvert::EnumRound,
-            user_added: true,
-            scale: 0.5,
-            offset: 0.25,
-            default_mirrors_node_param: false,
-        };
-        let expected_authored = authored_binding.clone();
-        let mut def = EffectGraphDef {
-            version: 1,
-            name: None,
-            description: None,
-            preset_metadata: Some(PresetMetadata {
-                params: vec![stale_spec, authored_spec],
-                bindings: vec![stale_binding, authored_binding],
-                ..empty_scene_preset_metadata()
-            }),
-            scene_modifiers: Vec::new(),
-            nodes: vec![node],
-            wires: Vec::new(),
-        };
-
-        assert!(migrate_scene_exposures(
-            &mut def,
-            &["node.light"],
-            |_n| "Light".into(),
-            &TestProvider
-        ));
-
-        let meta = def.preset_metadata.as_ref().unwrap();
-        let spec = meta.params.iter().find(|p| p.id == "11_mode").unwrap();
-        assert_eq!((spec.min, spec.max), (0.0, 2.0));
-        assert_eq!(spec.value_labels, vec!["Sun", "Point", "Spot"]);
-        assert_eq!(
-            meta.bindings
-                .iter()
-                .find(|binding| binding.id == "custom_light_mode")
-                .unwrap(),
-            &expected_authored
-        );
-
-        let repaired = def.clone();
-        assert!(!migrate_scene_exposures(
-            &mut def,
-            &["node.light"],
-            |_n| "Light".into(),
-            &TestProvider
-        ));
-        assert_eq!(def, repaired);
-    }
-
-    /// Pass 4 covers NON-vocabulary nodes too (2026-08-27): the cinematic
-    /// tail's bokeh/motion_blur Camera-section toggles are stamped by the
-    /// import assembly and the v1130 migration, never by the vocabulary
-    /// stamper — but their stamped labels/ranges are the same stamp-time
-    /// copies and drift the same way (two toggles both labeled "Enabled").
-    #[test]
-    fn migrate_refreshes_labels_on_non_vocabulary_stamped_nodes() {
-        struct TestProvider;
-        impl SceneExposureMetadataProvider for TestProvider {
-            fn metadata_for_type(&self, type_id: &str) -> Vec<SceneParamMetadata> {
-                if type_id == "node.bokeh_gather" {
-                    vec![SceneParamMetadata {
-                        is_toggle: true,
-                        default_value: SerializedParamValue::Bool { value: true },
-                        ..float_meta("enabled", "Depth of Field")
-                    }]
-                } else {
-                    Vec::new()
-                }
-            }
-        }
-
-        let node = make_node(5, "node.bokeh_gather");
-        let node_id = node.node_id.clone();
-
-        // The tail stamp as last night's migration wrote it: bare "Enabled".
-        let mut stale_spec = float_spec_default("5_enabled", "Enabled", "Camera");
-        stale_spec.is_toggle = true;
-        stale_spec.default_value = 1.0;
-        let stale_binding = BindingDef {
-            id: "5_enabled".to_string(),
-            label: "Enabled".to_string(),
-            default_value: 1.0,
-            target: BindingTarget::Node {
-                node_id: node_id.clone(),
-                param: "enabled".to_string(),
-            },
-            convert: ParamConvert::BoolThreshold,
-            user_added: false,
-            scale: 1.0,
-            offset: 0.0,
-            default_mirrors_node_param: true,
-        };
-
-        let mut def = EffectGraphDef {
-            scene_modifiers: Vec::new(),
-            version: 1,
-            name: None,
-            description: None,
-            preset_metadata: Some(PresetMetadata {
-                params: vec![stale_spec],
-                bindings: vec![stale_binding],
-                ..empty_scene_preset_metadata()
-            }),
-            nodes: vec![make_node(9, "node.camera_lens"), node],
-            wires: vec![],
-        };
-
-        // bokeh_gather is deliberately NOT in the vocabulary — stamping must
-        // never auto-create its rows, but repair must still reach the
-        // existing stamp. (The lens keeps `found` non-empty: every real tail
-        // project has one.)
-        let vocab = ["node.camera_lens"];
-        assert!(migrate_scene_exposures(
-            &mut def,
-            &vocab,
-            |_n| "Camera".to_string(),
-            &TestProvider
-        ));
-
-        let meta = def.preset_metadata.as_ref().unwrap();
-        let spec = meta.params.iter().find(|p| p.id == "5_enabled").unwrap();
-        assert_eq!(
-            spec.name, "Depth of Field",
-            "non-vocab stamp label refreshed"
-        );
-        assert_eq!(
-            meta.bindings
-                .iter()
-                .find(|b| b.id == "5_enabled")
-                .unwrap()
-                .label,
-            "Depth of Field"
-        );
-
-        let after_repair = def.clone();
-        assert!(
-            !migrate_scene_exposures(&mut def, &vocab, |_n| "Camera".to_string(), &TestProvider),
-            "second migration run is a no-op once repaired"
-        );
-        assert_eq!(def, after_repair);
+        let visible = |name: &str| meta.params.iter().find(|p| p.name == name).unwrap().card_visible;
+        assert!(visible("X"));
+        assert!(!visible("Scale X"));
+        assert!(!visible("Loose"), "a param outside the table stays off the card");
+        assert_eq!(meta.bindings.len(), 3);
     }
 
     fn float_spec_default(id: &str, name: &str, section: &str) -> ParamSpecDef {
@@ -2525,301 +1505,5 @@ mod tests {
         let (_, max_large) = scene_scaled_range("node.atmosphere", "fog_density", 10.0).unwrap();
         assert!((max_small - 2.0).abs() < 1e-6);
         assert!((max_large - 0.2).abs() < 1e-6);
-    }
-
-    // ── pass 4 scene-scaled range integration tests ───────────────────
-
-    /// Pass 4 with scene_bounds rewrites an auto-stamped orbit_camera distance
-    /// from the generic band to the scene-scaled band; second run is idempotent.
-    #[test]
-    fn pass4_scene_bounds_rewrites_distance_band_and_is_idempotent() {
-        struct TestProvider;
-        impl SceneExposureMetadataProvider for TestProvider {
-            fn metadata_for_type(&self, type_id: &str) -> Vec<SceneParamMetadata> {
-                if type_id == "node.orbit_camera" {
-                    vec![SceneParamMetadata {
-                        name: "distance".to_string(),
-                        label: "Distance".to_string(),
-                        min: 0.01,
-                        max: 100.0, // generic band — should be overwritten
-                        default_value: SerializedParamValue::Float { value: 2.0 },
-                        ..float_meta("distance", "Distance")
-                    }]
-                } else {
-                    Vec::new()
-                }
-            }
-        }
-
-        let node = make_node(3, "node.orbit_camera");
-        let node_id = node.node_id.clone();
-
-        let stale_spec = ParamSpecDef {
-            tooltip: None,
-            id: "3_distance".to_string(),
-            name: "Distance".to_string(),
-            min: 0.01,
-            max: 100.0, // generic band
-            default_value: 2.0,
-            whole_numbers: false,
-            is_toggle: false,
-            is_trigger: false,
-            value_labels: Vec::new(),
-            format_string: None,
-            osc_suffix: String::new(),
-            curve: Default::default(),
-            invert: false,
-            is_angle: false,
-            is_trigger_gate: false,
-            wraps: false,
-            section: Some("Camera".to_string()),
-            card_visible: true,
-            material_role: None,
-        };
-        let stale_binding = BindingDef {
-            id: "3_distance".to_string(),
-            label: "Distance".to_string(),
-            default_value: 2.0,
-            target: BindingTarget::Node {
-                node_id: node_id.clone(),
-                param: "distance".to_string(),
-            },
-            convert: ParamConvert::Float,
-            user_added: false,
-            scale: 1.0,
-            offset: 0.0,
-            default_mirrors_node_param: true,
-        };
-
-        // scene_bounds: [-5, -5, -5]..[5, 5, 5] → radius = sqrt(75) ≈ 8.66
-        // scene-scaled distance band: 0.01..6·radius ≈ 0.01..51.96
-        let mut def = EffectGraphDef {
-            scene_modifiers: Vec::new(),
-            version: 1,
-            name: None,
-            description: None,
-            preset_metadata: Some(PresetMetadata {
-                params: vec![stale_spec],
-                bindings: vec![stale_binding],
-                scene_bounds: Some(([-5.0; 3], [5.0; 3])),
-                ..empty_scene_preset_metadata()
-            }),
-            nodes: vec![node],
-            wires: vec![],
-        };
-
-        let vocab = ["node.orbit_camera"];
-        assert!(
-            migrate_scene_exposures(&mut def, &vocab, |_n| "Camera".to_string(), &TestProvider),
-            "first run must repair the distance band"
-        );
-
-        let meta = def.preset_metadata.as_ref().unwrap();
-        let spec = meta.params.iter().find(|p| p.id == "3_distance").unwrap();
-        let r = scene_radius_from_bounds(([-5.0; 3], [5.0; 3]));
-        let expected_max = 6.0 * r;
-        assert!(
-            (spec.max - expected_max).abs() < 1e-3,
-            "distance max must be scene-scaled 6·radius ({expected_max}), got {}",
-            spec.max
-        );
-        assert_eq!(spec.min, 0.01, "distance min stays at 0.01");
-        // default_value (2.0) is inside 0.01..51.96 — widen rule doesn't distort
-        assert_eq!(spec.default_value, 2.0);
-
-        let after = def.clone();
-        assert!(
-            !migrate_scene_exposures(&mut def, &vocab, |_n| "Camera".to_string(), &TestProvider),
-            "second run must be a no-op"
-        );
-        assert_eq!(def, after, "second run must not touch a single byte");
-    }
-
-    /// Pass 4 with scene_bounds gives transform_3d pos_x ±2·radius.
-    #[test]
-    fn pass4_scene_bounds_rewrites_position_band() {
-        struct TestProvider;
-        impl SceneExposureMetadataProvider for TestProvider {
-            fn metadata_for_type(&self, type_id: &str) -> Vec<SceneParamMetadata> {
-                if type_id == "node.transform_3d" {
-                    vec![float_meta("pos_x", "X")]
-                } else {
-                    Vec::new()
-                }
-            }
-        }
-
-        let node = make_node(2, "node.transform_3d");
-        let node_id = node.node_id.clone();
-
-        let stale_spec = ParamSpecDef {
-            tooltip: None,
-            id: "2_pos_x".to_string(),
-            name: "X".to_string(),
-            min: -100.0,
-            max: 100.0, // generic band — should be overwritten
-            default_value: 0.5,
-            whole_numbers: false,
-            is_toggle: false,
-            is_trigger: false,
-            value_labels: Vec::new(),
-            format_string: None,
-            osc_suffix: String::new(),
-            curve: Default::default(),
-            invert: false,
-            is_angle: false,
-            is_trigger_gate: false,
-            wraps: false,
-            section: Some("Transform".to_string()),
-            card_visible: true,
-            material_role: None,
-        };
-        let stale_binding = BindingDef {
-            id: "2_pos_x".to_string(),
-            label: "X".to_string(),
-            default_value: 0.5,
-            target: BindingTarget::Node {
-                node_id: node_id.clone(),
-                param: "pos_x".to_string(),
-            },
-            convert: ParamConvert::Float,
-            user_added: false,
-            scale: 1.0,
-            offset: 0.0,
-            default_mirrors_node_param: true,
-        };
-
-        // scene_bounds: [-2, -2, -2]..[2, 2, 2] → radius = sqrt(12) ≈ 3.464
-        let mut def = EffectGraphDef {
-            scene_modifiers: Vec::new(),
-            version: 1,
-            name: None,
-            description: None,
-            preset_metadata: Some(PresetMetadata {
-                params: vec![stale_spec],
-                bindings: vec![stale_binding],
-                scene_bounds: Some(([-2.0; 3], [2.0; 3])),
-                ..empty_scene_preset_metadata()
-            }),
-            nodes: vec![node],
-            wires: vec![],
-        };
-
-        let vocab = ["node.transform_3d"];
-        assert!(migrate_scene_exposures(
-            &mut def,
-            &vocab,
-            |_n| "Transform".to_string(),
-            &TestProvider
-        ));
-
-        let meta = def.preset_metadata.as_ref().unwrap();
-        let spec = meta.params.iter().find(|p| p.id == "2_pos_x").unwrap();
-        let r = scene_radius_from_bounds(([-2.0; 3], [2.0; 3]));
-        assert!(
-            (spec.min - -2.0 * r).abs() < 1e-3,
-            "pos_x min = -2·radius ({})",
-            -2.0 * r
-        );
-        assert!(
-            (spec.max - 2.0 * r).abs() < 1e-3,
-            "pos_x max = 2·radius ({})",
-            2.0 * r
-        );
-    }
-
-    /// A param NOT in the scene-scaled table keeps the generic metadata
-    /// refresh path even when scene_bounds are present.
-    #[test]
-    fn pass4_unknown_param_keeps_generic_path() {
-        struct TestProvider;
-        impl SceneExposureMetadataProvider for TestProvider {
-            fn metadata_for_type(&self, type_id: &str) -> Vec<SceneParamMetadata> {
-                if type_id == "node.transform_3d" {
-                    vec![SceneParamMetadata {
-                        name: "scale_x".to_string(),
-                        label: "Scale X".to_string(),
-                        min: 0.0,
-                        max: 10.0,
-                        default_value: SerializedParamValue::Float { value: 1.0 },
-                        ..float_meta("scale_x", "Scale X")
-                    }]
-                } else {
-                    Vec::new()
-                }
-            }
-        }
-
-        let node = make_node(4, "node.transform_3d");
-        let node_id = node.node_id.clone();
-
-        let stale_spec = ParamSpecDef {
-            tooltip: None,
-            id: "4_scale_x".to_string(),
-            name: "Scale X".to_string(),
-            min: 0.0,
-            max: 5.0, // stale generic band
-            default_value: 1.0,
-            whole_numbers: false,
-            is_toggle: false,
-            is_trigger: false,
-            value_labels: Vec::new(),
-            format_string: None,
-            osc_suffix: String::new(),
-            curve: Default::default(),
-            invert: false,
-            is_angle: false,
-            is_trigger_gate: false,
-            wraps: false,
-            section: Some("Transform".to_string()),
-            card_visible: true,
-            material_role: None,
-        };
-        let stale_binding = BindingDef {
-            id: "4_scale_x".to_string(),
-            label: "Scale X".to_string(),
-            default_value: 1.0,
-            target: BindingTarget::Node {
-                node_id: node_id.clone(),
-                param: "scale_x".to_string(),
-            },
-            convert: ParamConvert::Float,
-            user_added: false,
-            scale: 1.0,
-            offset: 0.0,
-            default_mirrors_node_param: true,
-        };
-
-        let mut def = EffectGraphDef {
-            scene_modifiers: Vec::new(),
-            version: 1,
-            name: None,
-            description: None,
-            preset_metadata: Some(PresetMetadata {
-                params: vec![stale_spec],
-                bindings: vec![stale_binding],
-                scene_bounds: Some(([-5.0; 3], [5.0; 3])),
-                ..empty_scene_preset_metadata()
-            }),
-            nodes: vec![node],
-            wires: vec![],
-        };
-
-        let vocab = ["node.transform_3d"];
-        assert!(migrate_scene_exposures(
-            &mut def,
-            &vocab,
-            |_n| "Transform".to_string(),
-            &TestProvider
-        ));
-
-        let meta = def.preset_metadata.as_ref().unwrap();
-        let spec = meta.params.iter().find(|p| p.id == "4_scale_x").unwrap();
-        // scale_x is NOT in the scene-scaled table, so generic metadata applies
-        assert!((spec.min - 0.0).abs() < 1e-6, "scale_x min stays generic");
-        assert!(
-            (spec.max - 10.0).abs() < 1e-6,
-            "scale_x max refreshes to generic 10.0"
-        );
     }
 }

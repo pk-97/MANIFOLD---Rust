@@ -1142,8 +1142,8 @@ pub struct EnableSceneObjectPhysicsCommand {
     target: GraphTarget,
     render_scene_node_id: u32,
     object_index: u32,
-    body_metadata: Vec<SceneParamMetadata>,
-    world_metadata: Option<Vec<SceneParamMetadata>>,
+    body_metadata: Vec<NodeParamMetadata>,
+    world_metadata: Option<Vec<NodeParamMetadata>>,
     catalog_default: EffectGraphDef,
     prev: Option<(
         Vec<EffectGraphNode>,
@@ -1158,7 +1158,7 @@ impl EnableSceneObjectPhysicsCommand {
         target: GraphTarget,
         render_scene_node_id: u32,
         object_index: u32,
-        body_metadata: Vec<SceneParamMetadata>,
+        body_metadata: Vec<NodeParamMetadata>,
         catalog_default: EffectGraphDef,
     ) -> Self {
         Self {
@@ -1173,7 +1173,7 @@ impl EnableSceneObjectPhysicsCommand {
         }
     }
 
-    pub fn with_world_metadata(mut self, metadata: Vec<SceneParamMetadata>) -> Self {
+    pub fn with_world_metadata(mut self, metadata: Vec<NodeParamMetadata>) -> Self {
         self.world_metadata = Some(metadata);
         self
     }
@@ -1329,7 +1329,6 @@ impl Command for EnableSceneObjectPhysicsCommand {
                 &mut meta.bindings,
                 body_id,
                 &body_node_id,
-                "node.rigid_body",
                 &format!("{} — Physics", parts.object_handle),
                 &self.body_metadata,
                 &body_params,
@@ -1345,7 +1344,6 @@ impl Command for EnableSceneObjectPhysicsCommand {
                     &mut meta.bindings,
                     world.id,
                     &world.node_id,
-                    "node.physics_world",
                     "Physics World",
                     world_metadata,
                     &world.params,

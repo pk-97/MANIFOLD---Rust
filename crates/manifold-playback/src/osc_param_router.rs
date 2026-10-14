@@ -355,6 +355,9 @@ mod tests {
             section: None,
             card_visible: true,
             material_role: None,
+            limit: Default::default(),
+            unit: None,
+            scene: None,
         }
     }
 
@@ -465,5 +468,36 @@ mod tests {
             .unwrap()
             .value;
         assert!((v - 0.42).abs() < 1e-6, "dispatch must write user param by id; got {v}");
+    }
+
+    /// INV-S17 (a rename never moves an OSC address): renaming a control as a
+    /// user choice, or by a code label change, leaves every address and the
+    /// id it routes to unchanged (the address is built from the id).
+    #[test]
+    fn rename_keeps_address() {
+        let (ty, _) = effect_with_osc_prefix();
+        let defaults = manifold_core::preset_definition_registry::get_defaults(&ty);
+        let id = defaults[0].id().to_string();
+        let addresses = |fx: &PresetInstance| {
+            let project = project_with_master(fx.clone());
+            let mut receiver = OscReceiver::new();
+            let mut router = OscParamRouter::new();
+            router.rebuild(&project, &mut receiver);
+            let mut a = router.registered_addresses.clone();
+            a.sort();
+            a
+        };
+        let mut fx = PresetInstance::new(ty.clone());
+        fx.params = ParamManifest::from_params(defaults);
+        let before = addresses(&fx);
+
+        let p = fx.params.get_mut(&id).unwrap();
+        p.choices.rename = Some("Renamed By User".into());
+        let choices = p.choices.clone();
+        choices.apply(&mut p.spec);
+        assert_eq!(addresses(&fx), before, "a rename choice must not move an address");
+
+        fx.params.get_mut(&id).unwrap().spec.name = "Renamed In Code".into();
+        assert_eq!(addresses(&fx), before, "a code label change must not move an address");
     }
 }

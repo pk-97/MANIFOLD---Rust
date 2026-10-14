@@ -50,7 +50,6 @@
             &mut bindings,
             1,
             &node_id,
-            "node.bake_environment",
             "Environment",
             &metadata,
             &node_params,

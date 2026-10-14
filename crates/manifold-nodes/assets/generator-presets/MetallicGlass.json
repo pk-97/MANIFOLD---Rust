@@ -153,6 +153,136 @@
         "isToggle": false,
         "isTrigger": false,
         "formatString": "F2"
+      },
+      {
+        "id": "32_intensity",
+        "name": "Intensity",
+        "min": 0.0,
+        "max": 4.0,
+        "defaultValue": 1.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "section": "Environment Map — Environment",
+        "cardVisible": true
+      },
+      {
+        "id": "32_fill",
+        "name": "Fill Light",
+        "min": 0.0,
+        "max": 2.0,
+        "defaultValue": 0.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "section": "Environment Map — Environment",
+        "cardVisible": true
+      },
+      {
+        "id": "63_pos_x",
+        "name": "Position X",
+        "min": -100.0,
+        "max": 100.0,
+        "defaultValue": -2.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "section": "Key Light",
+        "cardVisible": true
+      },
+      {
+        "id": "63_pos_y",
+        "name": "Position Y",
+        "min": -100.0,
+        "max": 100.0,
+        "defaultValue": 2.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "section": "Key Light",
+        "cardVisible": true
+      },
+      {
+        "id": "63_pos_z",
+        "name": "Position Z",
+        "min": -100.0,
+        "max": 100.0,
+        "defaultValue": 5.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "section": "Key Light",
+        "cardVisible": true
+      },
+      {
+        "id": "63_color_r",
+        "name": "Colour R",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 1.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "section": "Key Light",
+        "cardVisible": true
+      },
+      {
+        "id": "63_color_g",
+        "name": "Colour G",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 1.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "section": "Key Light",
+        "cardVisible": true
+      },
+      {
+        "id": "63_color_b",
+        "name": "Colour B",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 1.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "section": "Key Light",
+        "cardVisible": true
+      },
+      {
+        "id": "63_cast_shadows",
+        "name": "Cast Shadows",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 0.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "valueLabels": [
+          "Off",
+          "On"
+        ],
+        "section": "Key Light",
+        "cardVisible": true
+      },
+      {
+        "id": "63_shadow_softness",
+        "name": "Shadow Softness",
+        "min": 0.0,
+        "max": 3.0,
+        "defaultValue": 1.0,
+        "wholeNumbers": true,
+        "isToggle": false,
+        "isTrigger": false,
+        "valueLabels": [
+          "Hard",
+          "Soft",
+          "VerySoft",
+          "Contact"
+        ],
+        "section": "Key Light",
+        "cardVisible": true
       }
     ],
     "bindings": [
@@ -350,6 +480,146 @@
         "convert": {
           "type": "Float"
         }
+      },
+      {
+        "id": "32_intensity",
+        "label": "Intensity",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "envmap",
+          "param": "intensity"
+        },
+        "convert": {
+          "type": "Float"
+        },
+        "defaultMirrorsNodeParam": true
+      },
+      {
+        "id": "32_fill",
+        "label": "Fill Light",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "envmap",
+          "param": "fill"
+        },
+        "convert": {
+          "type": "Float"
+        },
+        "defaultMirrorsNodeParam": true
+      },
+      {
+        "id": "63_pos_x",
+        "label": "Position X",
+        "defaultValue": -2.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "key_light",
+          "param": "pos_x"
+        },
+        "convert": {
+          "type": "Float"
+        },
+        "defaultMirrorsNodeParam": true
+      },
+      {
+        "id": "63_pos_y",
+        "label": "Position Y",
+        "defaultValue": 2.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "key_light",
+          "param": "pos_y"
+        },
+        "convert": {
+          "type": "Float"
+        },
+        "defaultMirrorsNodeParam": true
+      },
+      {
+        "id": "63_pos_z",
+        "label": "Position Z",
+        "defaultValue": 5.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "key_light",
+          "param": "pos_z"
+        },
+        "convert": {
+          "type": "Float"
+        },
+        "defaultMirrorsNodeParam": true
+      },
+      {
+        "id": "63_color_r",
+        "label": "Colour R",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "key_light",
+          "param": "color_r"
+        },
+        "convert": {
+          "type": "Float"
+        },
+        "defaultMirrorsNodeParam": true
+      },
+      {
+        "id": "63_color_g",
+        "label": "Colour G",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "key_light",
+          "param": "color_g"
+        },
+        "convert": {
+          "type": "Float"
+        },
+        "defaultMirrorsNodeParam": true
+      },
+      {
+        "id": "63_color_b",
+        "label": "Colour B",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "key_light",
+          "param": "color_b"
+        },
+        "convert": {
+          "type": "Float"
+        },
+        "defaultMirrorsNodeParam": true
+      },
+      {
+        "id": "63_cast_shadows",
+        "label": "Cast Shadows",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "key_light",
+          "param": "cast_shadows"
+        },
+        "convert": {
+          "type": "Float"
+        },
+        "defaultMirrorsNodeParam": true
+      },
+      {
+        "id": "63_shadow_softness",
+        "label": "Shadow Softness",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "key_light",
+          "param": "shadow_softness"
+        },
+        "convert": {
+          "type": "EnumRound"
+        },
+        "defaultMirrorsNodeParam": true
       }
     ]
   },

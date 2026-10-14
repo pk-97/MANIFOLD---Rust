@@ -529,15 +529,19 @@ struct PresetParam {
     default: f32,
 }
 
+/// Controls as the live lookup declares them, so the catalog shows what a
+/// fresh instance's card shows.
 fn preset_row_from_meta(meta: &PresetMetadata, kind: &'static str) -> PresetRow {
+    let params = bundled_preset_def(&meta.id)
+        .map(|def| manifold_core::param_lookup::template_params(&def))
+        .unwrap_or_else(|| meta.params.clone());
     PresetRow {
         id: meta.id.as_str().to_string(),
         name: meta.display_name.clone(),
         category: meta.category.clone(),
         kind,
         is_line_based: meta.is_line_based,
-        params: meta
-            .params
+        params: params
             .iter()
             .map(|p| PresetParam {
                 id: p.id.clone(),

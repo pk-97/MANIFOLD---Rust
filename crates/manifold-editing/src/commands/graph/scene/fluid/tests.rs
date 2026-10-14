@@ -122,7 +122,7 @@ fn command(target: GraphTarget, catalog_default: EffectGraphDef) -> AddSceneFlui
     .with_world_metadata(world_metadata())
 }
 
-fn world_metadata() -> Vec<manifold_core::scene_exposure::SceneParamMetadata> {
+fn world_metadata() -> Vec<manifold_core::scene_exposure::NodeParamMetadata> {
     [("gravity_x", 0.0), ("gravity_y", -9.81), ("gravity_z", 0.0), ("speed", 1.0), ("reset", 0.0)]
         .into_iter().map(|(name, value)| {
             let mut metadata = scene_param_meta(name, name);

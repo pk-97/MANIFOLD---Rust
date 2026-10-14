@@ -91,7 +91,7 @@ fn water_family_add_undo_redo() {
     editing.execute(Box::new(manifold_editing::commands::graph::ImportModelIntoSceneCommand::new(
         GraphTarget::Generator(layer.clone()), vec![], plan.render_scene_node_id, plan.new_nodes,
         plan.new_wires, plan.new_objects_count, plan.new_card_params, plan.new_card_bindings,
-        plan.new_string_bindings, default)), &mut project);
+        plan.new_string_bindings, default).with_scene_bounds(plan.scene_bounds)), &mut project);
     assert_eq!(editing.take_rejection(), None);
     let imported = effective_def(&project, &layer);
     assert!(rows(&imported).iter().any(|row| row.is_group && row.liquid_domain.is_none()), "real imported compound parent");
