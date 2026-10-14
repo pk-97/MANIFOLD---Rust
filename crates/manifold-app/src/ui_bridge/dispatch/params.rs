@@ -224,14 +224,10 @@ pub(crate) fn dispatch_params(action: &ParamsAction, ctx: &mut super::super::Dis
         }
         ParamsAction::SetLedExitIndex(idx) => {
             let idx = *idx;
-            ctx.project.settings.led_exit_index = idx;
-            // Push to content thread so the LED pipeline picks it up
-            ContentCommand::send(
-                ctx.content_tx,
-                ContentCommand::mutate(crate::content_command::touch::LED, Box::new(move |p| {
-                    p.settings.led_exit_index = idx;
-                })),
-            );
+            // Locally and on the content thread, so the LED pipeline picks it up.
+            ctx.mutate(crate::content_command::touch::LED, move |p: &mut manifold_core::project::Project| {
+                p.settings.led_exit_index = idx;
+            });
             DispatchResult::handled()
         }
         // ── LED enabled toggle ───────────────────────────────────
@@ -694,9 +690,9 @@ pub(crate) fn dispatch_params(action: &ParamsAction, ctx: &mut super::super::Dis
 
                     // Find clip: selected clip on this layer, or first clip
                     let clip = ctx.selection
-                        .primary_selected_clip_id
+                        .primary_selected_clip_id()
                         .as_ref()
-                        .and_then(|sel_id| layer.clips.iter().find(|c| c.id == *sel_id))
+                        .and_then(|sel_id| layer.clips.iter().find(|c| c.id == **sel_id))
                         .or_else(|| layer.clips.first());
                     if let Some(c) = clip {
                         let old_value = c.string_params.as_ref().and_then(|m| m.get(&key)).cloned();
@@ -1089,9 +1085,7 @@ fn show_automation_target(
     };
     expand_layer_ancestors(&owner_id, ctx);
     let ui_target = crate::editing_host::to_ui_graph_target(target);
-    ctx.selection
-        .hidden_automation_lanes
-        .remove(&(ui_target.clone(), param_id.clone()));
+    ctx.selection.unhide_automation_lane(ui_target.clone(), param_id.clone());
     let min_height = ctx.ui.layout.track_header_height()
         + manifold_ui::color::AUTOMATION_LANE_STRIP_HEIGHT + 60.0;
     if ctx.ui.layout.timeline_body().height < min_height {
@@ -1100,7 +1094,7 @@ fn show_automation_target(
     }
     ctx.ui.pending_automation_reveal = Some((ui_target.clone(), param_id.clone()));
     ctx.selection.set_chosen_automation_param(owner_id, ui_target, param_id.clone());
-    ctx.selection.automation_mode_visible = true;
+    ctx.selection.set_automation_mode_visible(true);
     ctx.selection.clear_automation_selection();
     DispatchResult::structural()
 }
@@ -1187,6 +1181,7 @@ mod audio_send_dispatch_tests {
                 user_prefs: &mut user_prefs,
                 editor_target: None,
                 scrub: &mut scrub,
+                stamps: &mut Default::default(),
                 dialogs: Default::default(),
             };
             crate::ui_bridge::dispatch(&action, &mut ctx)
@@ -1269,6 +1264,7 @@ mod trigger_dispatch_tests {
                 user_prefs: &mut user_prefs,
                 editor_target: None,
                 scrub: &mut scrub,
+                stamps: &mut Default::default(),
                 dialogs: Default::default(),
             },
         );
@@ -1317,12 +1313,12 @@ mod trigger_dispatch_tests {
             &mut crate::ui_bridge::DispatchCtx {
                 project: &mut project, content_tx: &content_tx, content_state: &content_state,
                 ui: &mut ui, selection: &mut selection, active_layer: &mut active_layer,
-                user_prefs: &mut user_prefs, editor_target: None, scrub: &mut scrub, dialogs: Default::default(),
+                user_prefs: &mut user_prefs, editor_target: None, scrub: &mut scrub, dialogs: Default::default(), stamps: &mut Default::default(),
             },
         );
         assert!(result.structural_change);
         assert_eq!(active_layer, Some(owner_id.clone()));
-        assert_eq!(selection.primary_selected_layer_id, Some(owner_id));
+        assert_eq!(selection.primary_selected_layer_id(), Some(&owner_id));
         assert_eq!(ui.pending_trigger_response_reveal, Some((ui_target, "amount".into())));
         assert_eq!(serde_json::to_value(&project).unwrap(), before, "UI snapshot is read-only");
         for command in content_rx.try_iter() {
@@ -1370,6 +1366,7 @@ mod trigger_dispatch_tests {
                 user_prefs: &mut user_prefs,
                 editor_target: None,
                 scrub: &mut scrub,
+                stamps: &mut Default::default(),
                 dialogs: Default::default(),
             },
         );

@@ -262,98 +262,95 @@ impl Application {
                 }
                 let suppressed = state.data_version < self.suppress_snapshot_until;
 
-                // Accept project snapshot if data_version changed (unless drag in progress)
-                if let Some(snapshot) = state.project_snapshot {
-                    // Inspector drags (slider/trim/target/ADSR) are safe to accept
-                    // snapshots through — handle_drag() writes the dragged value back
-                    // to local_project in the same tick (via dispatch()), so the
-                    // snapshot value is immediately overwritten. Accepting snapshots
-                    // during inspector drag lets modulation-driven slider animations
-                    // continue for non-dragged params.
-                    //
-                    // Overlay drags (clip move/trim in viewport) write clip positions
-                    // directly via the host — those would be overwritten by the
-                    // snapshot, so we still suppress for overlay drags.
-                    if !drag_active && !suppressed {
-                        // `ContentState` travels every tick, so only an accepted
-                        // snapshot compares stamps, and a Values, Shapes or
-                        // MappingRanges move alone never re-projects (D23).
-                        let version_changed = state.data_version != self.content_state.data_version
-                            || !state
-                                .stamps
-                                .moved_since(&self.accepted_stamps)
-                                .minus(manifold_core::change::ChangeSet::LIVE)
-                                .is_empty();
-                        self.accepted_stamps = state.stamps;
-                        // Only deep-clone from Arc when it's a different allocation
-                        // (new data_version). Modulation-only frames send the same
-                        // Arc pointer — skip the clone (values are 1 frame stale,
-                        // imperceptible).
-                        let is_new_arc = self
-                            .last_snapshot_arc
-                            .as_ref()
-                            .is_none_or(|prev| !std::sync::Arc::ptr_eq(prev, &snapshot));
-                        if is_new_arc {
-                            manifold_core::work_count::record_work(manifold_core::work_count::WorkKind::ProjectClone);
-                            self.local_project = (*snapshot).clone();
-                            self.last_snapshot_arc = Some(snapshot);
+                // Accept the project snapshot. A drag in flight lives in the
+                // gesture preview, which re-covers the fresh clone below, so
+                // no drag holds snapshots back (D12).
+                if let Some(snapshot) = state.project_snapshot
+                    && !suppressed
+                {
+                    // `ContentState` travels every tick, so only an accepted
+                    // snapshot folds stamps, and a Values, Shapes or
+                    // MappingRanges move alone never re-projects (D23).
+                    let moved = self.ui_edits.stamps.fold_snapshot(&state.stamps);
+                    let version_changed = state.data_version != self.content_state.data_version
+                        || !moved.minus(manifold_core::change::ChangeSet::LIVE).is_empty();
+                    // Only deep-clone from Arc when it's a different allocation
+                    // (new data_version). Modulation-only frames send the same
+                    // Arc pointer — skip the clone (values are 1 frame stale,
+                    // imperceptible).
+                    let is_new_arc = self
+                        .last_snapshot_arc
+                        .as_ref()
+                        .is_none_or(|prev| !std::sync::Arc::ptr_eq(prev, &snapshot));
+                    if is_new_arc {
+                        manifold_core::work_count::record_work(manifold_core::work_count::WorkKind::ProjectClone);
+                        self.local_project = (*snapshot).clone();
+                        self.last_snapshot_arc = Some(snapshot);
+                        // Re-cover the clone with the gesture in flight.
+                        // With no drag live, a leftover preview is stale
+                        // and drops with the content's truth.
+                        if drag_active {
+                            self.ui_edits.preview.reapply(&mut self.local_project);
                         } else {
-                            // Same Arc — skip deep clone. Drop the Arc ref.
-                            drop(snapshot);
+                            drop(self.ui_edits.preview.take_clip_gesture());
+                            self.ui_edits.preview.clear_lanes();
                         }
-                        // Restore the one actively-dragged gesture so a snapshot
-                        // doesn't overwrite the value the user is manipulating —
-                        // every family, panel-wired and frame-resident (the
-                        // bound-node-param card scrub, BUG-281, whose live writes
-                        // land in `local_project` every tick, is now a
-                        // `ResolvedScrub::BoundNodeParam` in `active`).
-                        self.scrub.restore_dragged(&mut self.local_project);
-                        // Clear suppression once we've accepted a post-load snapshot
-                        self.suppress_snapshot_until = 0;
+                    } else {
+                        // Same Arc — skip deep clone. Drop the Arc ref.
+                        drop(snapshot);
+                    }
+                    // Restore the one actively-dragged gesture so a snapshot
+                    // doesn't overwrite the value the user is manipulating —
+                    // every family, panel-wired and frame-resident (the
+                    // bound-node-param card scrub, BUG-281, whose live writes
+                    // land in `local_project` every tick, is now a
+                    // `ResolvedScrub::BoundNodeParam` in `active`).
+                    self.scrub.restore_dragged(&mut self.local_project);
+                    // Clear suppression once we've accepted a post-load snapshot
+                    self.suppress_snapshot_until = 0;
 
-                        // Only trigger structural sync when data_version changed
-                        // (editing commands, undo/redo). Modulation-only snapshots
-                        // just update param_values — push_state() syncs sliders
-                        // every frame without needing a structural rebuild.
-                        if version_changed {
-                            // Prune selection references to deleted clips/layers
-                            let valid_clips: std::collections::HashSet<manifold_core::ClipId> =
-                                self.local_project
-                                    .timeline
-                                    .layers
-                                    .iter()
-                                    .flat_map(|l| l.clips.iter().map(|c| c.id.clone()))
-                                    .collect();
-                            let valid_layers: std::collections::HashSet<manifold_core::LayerId> =
-                                self.local_project
-                                    .timeline
-                                    .layers
-                                    .iter()
-                                    .map(|l| l.layer_id.clone())
-                                    .collect();
-                            self.selection
-                                .prune_stale_references(&valid_clips, &valid_layers);
+                    // Only trigger structural sync when data_version changed
+                    // (editing commands, undo/redo). Modulation-only snapshots
+                    // just update param_values — push_state() syncs sliders
+                    // every frame without needing a structural rebuild.
+                    if version_changed {
+                        // Prune selection references to deleted clips/layers
+                        let valid_clips: std::collections::HashSet<manifold_core::ClipId> =
+                            self.local_project
+                                .timeline
+                                .layers
+                                .iter()
+                                .flat_map(|l| l.clips.iter().map(|c| c.id.clone()))
+                                .collect();
+                        let valid_layers: std::collections::HashSet<manifold_core::LayerId> =
+                            self.local_project
+                                .timeline
+                                .layers
+                                .iter()
+                                .map(|l| l.layer_id.clone())
+                                .collect();
+                        self.selection
+                            .prune_stale_references(&valid_clips, &valid_layers);
 
-                            // Validate active_layer_id
-                            if let Some(ref id) = self.active_layer_id
-                                && !valid_layers.contains(id)
-                            {
-                                self.active_layer_id = self
-                                    .local_project
-                                    .timeline
-                                    .layers
-                                    .last()
-                                    .map(|l| l.layer_id.clone());
-                            }
-
-                            self.needs_structural_sync = true;
-                            self.needs_rebuild = true;
+                        // Validate active_layer_id
+                        if let Some(ref id) = self.active_layer_id
+                            && !valid_layers.contains(id)
+                        {
+                            self.active_layer_id = self
+                                .local_project
+                                .timeline
+                                .layers
+                                .last()
+                                .map(|l| l.layer_id.clone());
                         }
+
+                        self.needs_structural_sync = true;
+                        self.needs_rebuild = true;
                     }
                 }
                 // The content clock can change BPM without a project edit. Keep
                 // the driver readout current without writing UI-side project state.
-                if !drag_active && !suppressed && state.bpm.is_finite() && state.bpm > 0.0 {
+                if !suppressed && state.bpm.is_finite() && state.bpm > 0.0 {
                     let bpm = manifold_core::Bpm(state.bpm as f32);
                     let changed = self.ws.ui_root.sync_driver_bpm(&self.local_project, bpm);
                     if let Some(ed) = self.graph_editor.as_mut() {
@@ -366,8 +363,7 @@ impl Application {
                 }
                 // Apply lightweight modulation snapshot (param_values only)
                 // to local_project — no full Project clone needed.
-                if !drag_active
-                    && !suppressed
+                if !suppressed
                     && let Some(ref mod_snap) = state.modulation_snapshot
                 {
                     mod_snap.apply(&mut self.local_project);
@@ -991,7 +987,7 @@ impl Application {
                     &mut self.automation_lanes_dirty,
                     &mut self.scroll_dirty,
                     &mut self.invalidate_layers,
-                    &mut self.pre_drag_commands,
+                    &mut self.ui_edits,
                 );
                 for event in &viewport_events {
                     use manifold_ui::input::UIEvent;
@@ -1110,8 +1106,6 @@ impl Application {
         // Consume deferred structural sync flag (set by keyboard shortcuts)
         let mut needs_structural_sync = self.needs_structural_sync;
         self.needs_structural_sync = false;
-        let prev_active_layer = self.active_layer_id.clone();
-        let prev_sel_version = self.selection.selection_version;
 
         // Append the editor inspector's actions as a trailing segment, recording
         // where it starts. Actions at or past `editor_card_seg_start` were emitted
@@ -1584,7 +1578,7 @@ impl Application {
                 PanelAction::Clip(ClipAction::ClipBpmClicked) => {
                     // Open text input for clip recorded BPM editing.
                     // Unity: ClipInspector.OnBitmapBpmClicked → BitmapTextInput.BeginEdit
-                    if let Some(clip_id) = &self.selection.primary_selected_clip_id {
+                    if let Some(clip_id) = self.selection.primary_selected_clip_id() {
                         let bpm_text = Some(&self.local_project)
                             .and_then(|p| {
                                 p.timeline
@@ -1811,6 +1805,7 @@ impl Application {
                 user_prefs: &mut self.user_prefs,
                 editor_target: None,
                 scrub: &mut self.scrub,
+                stamps: &mut self.ui_edits.stamps,
                 dialogs: crate::file_dialogs::host(&self.window_registry, self.dialog_window_id, self.primary_window_id, self.current_project_path.as_deref()),
             };
             let result = crate::ui_bridge::dispatch(action, &mut dctx);
@@ -1880,6 +1875,7 @@ impl Application {
                         user_prefs: &mut self.user_prefs,
                         editor_target: None,
                         scrub: &mut self.scrub,
+                        stamps: &mut self.ui_edits.stamps,
                         dialogs: crate::file_dialogs::host(&self.window_registry, self.dialog_window_id, self.primary_window_id, self.current_project_path.as_deref()),
                     };
                     let result = crate::ui_bridge::dispatch(action, &mut dctx);
@@ -2659,6 +2655,7 @@ impl Application {
                             user_prefs: &mut self.user_prefs,
                             editor_target,
                             scrub: &mut self.scrub,
+                            stamps: &mut self.ui_edits.stamps,
                             dialogs: crate::file_dialogs::host(&self.window_registry, self.dialog_window_id, self.primary_window_id, self.current_project_path.as_deref()),
                         };
                         let _ = crate::ui_bridge::dispatch(&action, &mut dctx);
@@ -3016,14 +3013,21 @@ impl Application {
             }
         }
 
-        // 2-4. The projection pass (`ui_frame::run_projection_pass`, shared
-        // with the script runner): selection, structural and active-layer
-        // projection, drag polling, auto-scroll, the rebuild decision,
-        // `push_state`, then the drag-time clip and lane re-projection.
+        // 2-4. Plan the frame, then apply it (`ui_frame::apply_frame_plan`,
+        // shared with the script runner) beside the old flags: projections,
+        // drag polling, auto-scroll, the rebuild, the `push_state` pieces,
+        // then the drag-time clip and lane re-projection.
+        let inputs = crate::ui_frame::gather_frame_inputs(
+            &mut self.frame_planner,
+            &self.ws.ui_root,
+            &mut self.selection,
+            &self.active_layer_id,
+            &self.ui_edits,
+            &self.content_state,
+        );
+        let plan = self.frame_planner.plan(inputs);
         let changes = crate::ui_frame::ProjectionChanges {
             structural: needs_structural_sync,
-            selection_changed: self.selection.selection_version != prev_sel_version,
-            active_layer_changed: self.active_layer_id != prev_active_layer,
             scrolled_in_place,
         };
 
@@ -3040,10 +3044,10 @@ impl Application {
         let content_state = &self.content_state;
         let cursor_manager = &mut self.cursor_manager;
         let deferred_structural = &mut self.needs_structural_sync;
-        let pre_drag_commands = &mut self.pre_drag_commands;
+        let ui_edits = &mut self.ui_edits;
         let ui_profile = &mut self.ui_profile;
         let seg_ref = &mut seg;
-        crate::ui_frame::run_projection_pass(
+        crate::ui_frame::apply_frame_plan(
             &mut self.ws.ui_root,
             self.graph_editor.as_mut().map(|ed| &mut ed.ui_root),
             self.ui_cache_manager.as_mut(),
@@ -3056,6 +3060,7 @@ impl Application {
                 scroll_dirty: &mut self.scroll_dirty,
                 invalidate_layers: &mut self.invalidate_layers,
             },
+            &plan,
             changes,
             crate::ui_frame::PushInputs {
                 content_state,
@@ -3085,7 +3090,7 @@ impl Application {
                         &mut *flags.automation_lanes_dirty,
                         &mut *flags.scroll_dirty,
                         &mut *flags.invalidate_layers,
-                        pre_drag_commands,
+                        ui_edits,
                     );
                     overlay.poll_drag(cursor_pos, &mut host, selection, &mut ui_root.viewport);
                     let readout = overlay

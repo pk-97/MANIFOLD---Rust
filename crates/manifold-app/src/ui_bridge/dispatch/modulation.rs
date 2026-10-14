@@ -61,7 +61,7 @@ pub(crate) fn dispatch_modulation(action: &ModulationAction, ctx: &mut super::su
                 return DispatchResult::structural();
             };
             let driver_target = DriverTarget::from(&target);
-            let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
+            let boxed: Box<dyn manifold_editing::command::Command + Send> =
                 if let Some((di, old)) = existing {
                     Box::new(ToggleDriverEnabledCommand::new(driver_target, di, old, !old))
                 } else {
@@ -82,8 +82,7 @@ pub(crate) fn dispatch_modulation(action: &ModulationAction, ctx: &mut super::su
                     };
                     Box::new(AddDriverCommand::new(driver_target, driver))
                 };
-            boxed.execute(ctx.project);
-            ContentCommand::send(ctx.content_tx, ContentCommand::Execute(boxed));
+            ctx.execute(boxed);
             DispatchResult::structural()
         }
         ModulationAction::AudioModToggle(gpt, param_id) => {

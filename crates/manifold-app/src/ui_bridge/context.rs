@@ -14,8 +14,10 @@ use crate::content_command::ContentCommand;
 use crate::content_state::ContentState;
 use crate::ui_root::UIRoot;
 use crate::user_prefs::UserPrefs;
+use manifold_core::change::ChangeSet;
 use manifold_core::project::Project;
 use manifold_core::{GraphTarget, LayerId};
+use manifold_editing::command::Command;
 
 use super::scrub::ScrubState;
 
@@ -46,4 +48,28 @@ pub struct DispatchCtx<'a> {
     /// Parent window and project path for any file dialog an action opens.
     /// Default (floating, no project) for headless callers.
     pub dialogs: crate::file_dialogs::DialogHost<'a>,
+    /// The UI's part stamps (D5). Only [`DispatchCtx::mutate`] and
+    /// [`DispatchCtx::execute`] move them; a preview never does.
+    pub stamps: &'a mut crate::frame_plan::UiStamps,
+}
+
+impl DispatchCtx<'_> {
+    /// A non-undoable write: apply `f` to the local project, stamp `touches`,
+    /// and send the same closure to the content thread (D5).
+    pub fn mutate<F>(&mut self, touches: ChangeSet, f: F)
+    where
+        F: FnOnce(&mut Project) + Clone + Send + 'static,
+    {
+        (f.clone())(self.project);
+        self.stamps.bump(touches);
+        ContentCommand::send(self.content_tx, ContentCommand::mutate(touches, Box::new(f)));
+    }
+
+    /// An undoable edit: execute `cmd` on the local project, stamp what it
+    /// touches, and send it to the content thread (D5).
+    pub fn execute(&mut self, mut cmd: Box<dyn Command>) {
+        cmd.execute(self.project);
+        self.stamps.bump(cmd.touches());
+        ContentCommand::send(self.content_tx, ContentCommand::Execute(cmd));
+    }
 }

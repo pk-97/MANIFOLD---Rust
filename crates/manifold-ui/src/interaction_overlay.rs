@@ -51,14 +51,13 @@ fn select_region_to(
     let anchor: Option<(Beats, usize)> = if ui_state.has_insert_cursor() {
         // Resolve insert cursor layer_id back to an index for region computation
         let anchor_idx = ui_state
-            .insert_cursor_layer_id
-            .as_ref()
+            .insert_cursor_layer_id()
             .and_then(|id| {
                 (0..layer_count).find(|&i| host.layer_id_at_index(i).as_ref() == Some(id))
             })
             .unwrap_or(0);
         Some((
-            ui_state.insert_cursor_beat.unwrap_or(Beats::ZERO),
+            ui_state.insert_cursor_beat().unwrap_or(Beats::ZERO),
             anchor_idx,
         ))
     } else if let Some(r) = ui_state.current_region() {
@@ -67,7 +66,7 @@ fn select_region_to(
             .map(|(lo, _)| lo)
             .unwrap_or(0);
         Some((r.start_beat, start_idx))
-    } else if let Some(clip_id) = ui_state.primary_selected_clip_id.clone() {
+    } else if let Some(clip_id) = ui_state.primary_selected_clip_id().cloned() {
         host.find_clip_by_id(&clip_id)
             .map(|c| (c.start_beat, c.layer_index))
     } else {
@@ -2544,10 +2543,10 @@ impl InteractionOverlay {
         viewport: &TimelineViewportPanel,
     ) {
         // Unity lines 222-223: track cursor position for paste target
-        ui_state.cursor_beat = viewport.pixel_to_beat(pos.x).as_f32();
-        ui_state.cursor_layer_id = viewport
-            .layer_at_y(pos.y)
-            .and_then(|idx| host.layer_id_at_index(idx));
+        ui_state.set_pointer_position(
+            viewport.pixel_to_beat(pos.x).as_f32(),
+            viewport.layer_at_y(pos.y).and_then(|idx| host.layer_id_at_index(idx)),
+        );
 
         // Unity lines 225-245: hover detection
         let hit = self.hit_test_at(pos, viewport);

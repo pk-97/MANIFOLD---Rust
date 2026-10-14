@@ -422,7 +422,7 @@ impl Application {
                         &mut self.automation_lanes_dirty,
                         &mut self.scroll_dirty,
                         &mut self.invalidate_layers,
-                        &mut self.pre_drag_commands,
+                        &mut self.ui_edits,
                     );
                     self.overlay.on_pointer_move(
                         self.cursor_pos,
@@ -2696,7 +2696,7 @@ impl Application {
                     &mut self.automation_lanes_dirty,
                     &mut self.scroll_dirty,
                     &mut self.invalidate_layers,
-                    &mut self.pre_drag_commands,
+                    &mut self.ui_edits,
                 );
                 self.overlay.cancel_drag(&mut host);
                 if automation_cancel {

@@ -145,13 +145,10 @@ pub struct ContentState {
     pub stamps: manifold_core::change::PartStamps,
     /// Moves only when a captured live value changed (D15); the modulation
     /// snapshot rides along only then.
-    #[expect(dead_code, reason = "read by the UI frame planner's live push, UI_INVALIDATION_DESIGN.md P4b")]
     pub values_seq: u64,
     /// Bumped when an audio device or process hot-plug drains.
-    #[expect(dead_code, reason = "keys the device query in the inspector projection, UI_INVALIDATION_DESIGN.md P4c")]
     pub audio_directory_version: u64,
     /// Content runtime state the UI builds structure from (D16).
-    #[expect(dead_code, reason = "folded into FrameInputs.runtime, UI_INVALIDATION_DESIGN.md P4c")]
     pub runtime: RuntimeSeqs,
 
     // ── Project settings (from authoritative project) ─────────────

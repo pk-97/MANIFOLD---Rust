@@ -1442,9 +1442,7 @@ pub(super) fn remove_parameter_automation(
         content_tx,
         crate::content_command::ContentCommand::Execute(Box::new(command)),
     );
-    selection
-        .chosen_automation_params
-        .retain(|_, (t, p)| t != target || p != param_id);
+    selection.unchoose_automation_lane(target, param_id);
     selection
         .selected_automation_points
         .retain(|point| point.target != *target || point.param_id != *param_id);
