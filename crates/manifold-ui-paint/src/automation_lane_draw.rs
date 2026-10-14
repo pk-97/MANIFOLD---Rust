@@ -174,7 +174,7 @@ pub fn emit_automation_lanes(
     latched: &[(EffectId, ParamId)],
 ) {
     if lanes.is_empty() {
-        if selection.is_some_and(|s| s.automation_mode_visible) {
+        if selection.is_some_and(|s| s.automation_mode_visible()) {
             ui.push_immediate_clip(tracks.x, tracks.y, tracks.width, tracks.height);
             ui.draw_text(
                 tracks.x + 12.0,

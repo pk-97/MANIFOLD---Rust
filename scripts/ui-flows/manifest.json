@@ -217,6 +217,7 @@
     "work-automation-point-drag": "automation",
     "work-lane-resize": "automation",
     "work-marquee": "timeline",
+    "work-region-move": "timeline",
     "work-split-drag": "timeline",
     "work-inspector-resize": "inspector",
     "work-modifier": "timeline",

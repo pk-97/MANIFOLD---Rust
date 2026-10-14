@@ -1161,7 +1161,7 @@ impl Application {
                 .map(|e| e.id.clone()),
             manifold_ui::InspectorTab::Clip => self
                 .selection
-                .primary_selected_clip_id
+                .primary_selected_clip_id()
                 .as_ref()
                 .and_then(|cid| self.local_project.timeline.find_clip_by_id(cid))
                 .and_then(|c| c.effects.get(ei))

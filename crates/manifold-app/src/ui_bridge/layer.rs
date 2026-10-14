@@ -28,10 +28,10 @@ pub(super) fn dispatch_layer(
         // ── Layer operations ───────────────────────────────────────
         LayerAction::ToggleMute(id) => {
             // If the clicked layer is part of a multi-selection, apply to all selected layers
-            let target_ids: Vec<LayerId> = if selection.selected_layer_ids.len() > 1
+            let target_ids: Vec<LayerId> = if selection.selected_layer_ids().len() > 1
                 && selection.is_layer_selected(id)
             {
-                selection.selected_layer_ids.iter().cloned().collect()
+                selection.selected_layer_ids().iter().cloned().collect()
             } else {
                 vec![id.clone()]
             };
@@ -62,10 +62,10 @@ pub(super) fn dispatch_layer(
             // Audio "analysis-only" output: silent to master, still feeding the
             // send. Direct dual-write (local + content thread) like mute/solo —
             // a live perform toggle, not an undo step. Multi-select aware.
-            let target_ids: Vec<LayerId> = if selection.selected_layer_ids.len() > 1
+            let target_ids: Vec<LayerId> = if selection.selected_layer_ids().len() > 1
                 && selection.is_layer_selected(id)
             {
-                selection.selected_layer_ids.iter().cloned().collect()
+                selection.selected_layer_ids().iter().cloned().collect()
             } else {
                 vec![id.clone()]
             };
@@ -92,10 +92,10 @@ pub(super) fn dispatch_layer(
             DispatchResult::handled()
         }
         LayerAction::ToggleSolo(id) => {
-            let target_ids: Vec<LayerId> = if selection.selected_layer_ids.len() > 1
+            let target_ids: Vec<LayerId> = if selection.selected_layer_ids().len() > 1
                 && selection.is_layer_selected(id)
             {
-                selection.selected_layer_ids.iter().cloned().collect()
+                selection.selected_layer_ids().iter().cloned().collect()
             } else {
                 vec![id.clone()]
             };
@@ -134,10 +134,10 @@ pub(super) fn dispatch_layer(
             {
                 return DispatchResult::handled();
             }
-            let target_ids: Vec<LayerId> = if selection.selected_layer_ids.len() > 1
+            let target_ids: Vec<LayerId> = if selection.selected_layer_ids().len() > 1
                 && selection.is_layer_selected(id)
             {
-                selection.selected_layer_ids.iter().cloned().collect()
+                selection.selected_layer_ids().iter().cloned().collect()
             } else {
                 vec![id.clone()]
             };
@@ -192,10 +192,10 @@ pub(super) fn dispatch_layer(
             DispatchResult::handled()
         }
         LayerAction::ChevronClicked(id) => {
-            let target_ids: Vec<LayerId> = if selection.selected_layer_ids.len() > 1
+            let target_ids: Vec<LayerId> = if selection.selected_layer_ids().len() > 1
                 && selection.is_layer_selected(id)
             {
-                selection.selected_layer_ids.iter().cloned().collect()
+                selection.selected_layer_ids().iter().cloned().collect()
             } else {
                 vec![id.clone()]
             };
@@ -262,10 +262,10 @@ pub(super) fn dispatch_layer(
         LayerAction::ExpandLayer(id) => {
             // Collapse/expand is a view-state toggle (MutateProject, not undoable),
             // multi-select aware — same pattern as ChevronClicked.
-            let target_ids: Vec<LayerId> = if selection.selected_layer_ids.len() > 1
+            let target_ids: Vec<LayerId> = if selection.selected_layer_ids().len() > 1
                 && selection.is_layer_selected(id)
             {
-                selection.selected_layer_ids.iter().cloned().collect()
+                selection.selected_layer_ids().iter().cloned().collect()
             } else {
                 vec![id.clone()]
             };
@@ -289,10 +289,10 @@ pub(super) fn dispatch_layer(
         LayerAction::CollapseLayer(id) => {
             // Collapse/expand is a view-state toggle (MutateProject, not undoable),
             // multi-select aware — same pattern as ChevronClicked.
-            let target_ids: Vec<LayerId> = if selection.selected_layer_ids.len() > 1
+            let target_ids: Vec<LayerId> = if selection.selected_layer_ids().len() > 1
                 && selection.is_layer_selected(id)
             {
-                selection.selected_layer_ids.iter().cloned().collect()
+                selection.selected_layer_ids().iter().cloned().collect()
             } else {
                 vec![id.clone()]
             };
@@ -373,7 +373,7 @@ pub(super) fn dispatch_layer(
                     .get(*from)
                     .map(|l| l.layer_id.clone())
                     .unwrap_or_default();
-                let is_multi = selection.selected_layer_ids.len() > 1
+                let is_multi = selection.selected_layer_ids().len() > 1
                     && selection.is_layer_selected(&dragged_id);
 
                 let old_order = project.timeline.layers.clone();
@@ -393,7 +393,7 @@ pub(super) fn dispatch_layer(
                 if is_multi {
                     // Multi-select: move all selected layers as a group
                     let selected_ids: Vec<LayerId> =
-                        selection.selected_layer_ids.iter().cloned().collect();
+                        selection.selected_layer_ids().iter().cloned().collect();
 
                     // If target is within the selection, reordering is a no-op
                     let target_id = old_order.get(*to).map(|l| &l.layer_id);

@@ -114,9 +114,9 @@ pub fn sync_inspector_data(
             .collect(),
     );
     let selected_automation = |layer_id: &manifold_core::LayerId| {
-        if !selection.automation_mode_visible { return None; }
+        if !selection.automation_mode_visible() { return None; }
         selection.selected_automation_point.as_ref().map(|point| (&point.target, &point.param_id))
-            .or_else(|| selection.chosen_automation_params.get(layer_id).map(|(target, param_id)| (target, param_id)))
+            .or_else(|| selection.chosen_automation_params().get(layer_id).map(|(target, param_id)| (target, param_id)))
     };
     // Audio Setup modal — refresh its current device + send list while it's
     // open. Resolving the device through the directory once per sync (only while
@@ -260,9 +260,8 @@ pub fn sync_inspector_data(
         };
 
         let sel_layer_idx = selection
-            .selected_layer_id_for_clip
-            .as_ref()
-            .or(selection.primary_selected_layer_id.as_ref())
+            .selected_layer_id_for_clip()
+            .or(selection.primary_selected_layer_id())
             .and_then(|id| project.timeline.find_layer_index_by_id(id))
             .or(active_layer);
         let layer = sel_layer_idx.and_then(|i| project.timeline.layers.get(i));
@@ -1174,9 +1173,9 @@ pub fn sync_inspector_data(
             // Generator params — find clip's string_params for text fields.
             // Use selected clip if on this layer, otherwise first clip.
             let clip_string_params = selection
-                .primary_selected_clip_id
+                .primary_selected_clip_id()
                 .as_ref()
-                .and_then(|sel_id| layer.clips.iter().find(|c| c.id == *sel_id))
+                .and_then(|sel_id| layer.clips.iter().find(|c| c.id == **sel_id))
                 .or_else(|| layer.clips.first())
                 .and_then(|c| c.string_params.as_ref());
             let mut gen_config = layer
@@ -1268,7 +1267,7 @@ pub fn sync_inspector_data(
     }
 
     // Clip chrome → inspector (per-clip effects removed)
-    if let Some(clip_id) = &selection.primary_selected_clip_id {
+    if let Some(clip_id) = selection.primary_selected_clip_id() {
         let clip = project
             .timeline
             .layers
@@ -1424,11 +1423,10 @@ pub(crate) fn inspector_tabs(
     current: manifold_ui::InspectorTab,
 ) -> (Vec<manifold_ui::InspectorTab>, manifold_ui::InspectorTab) {
     use manifold_ui::InspectorTab;
-    let has_clip = selection.primary_selected_clip_id.is_some();
+    let has_clip = selection.primary_selected_clip_id().is_some();
     let sel_layer_idx = selection
-        .selected_layer_id_for_clip
-        .as_ref()
-        .or(selection.primary_selected_layer_id.as_ref())
+        .selected_layer_id_for_clip()
+        .or(selection.primary_selected_layer_id())
         .and_then(|id| project.timeline.find_layer_index_by_id(id))
         .or(active_layer);
     let layer = sel_layer_idx.and_then(|i| project.timeline.layers.get(i));

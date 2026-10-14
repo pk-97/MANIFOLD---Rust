@@ -132,6 +132,7 @@ mod scene_card_convergence_tests {
                 user_prefs: &mut self.user_prefs,
                 editor_target: None,
                 scrub: &mut self.scrub,
+                stamps: &mut Default::default(),
                 dialogs: Default::default(),
             };
             crate::ui_bridge::dispatch(action, &mut ctx)
@@ -168,6 +169,7 @@ mod scene_card_convergence_tests {
                 user_prefs: &mut self.user_prefs,
                 editor_target,
                 scrub: &mut self.scrub,
+                stamps: &mut Default::default(),
                 dialogs: Default::default(),
             };
             crate::ui_bridge::dispatch(action, &mut ctx)
@@ -885,9 +887,9 @@ mod scene_card_convergence_tests {
                 )),
                 &mut project,
             );
-            assert!(h.selection.automation_mode_visible);
+            assert!(h.selection.automation_mode_visible());
             assert_eq!(
-                h.selection.chosen_automation_params.get(&layer_a),
+                h.selection.chosen_automation_params().get(&layer_a),
                 Some(&(manifold_ui::view::UiGraphTarget::Generator(layer_a), pid,))
             );
             assert_eq!(serde_json::to_value(&project).unwrap(), before);
@@ -942,7 +944,7 @@ mod scene_card_convergence_tests {
                     .unwrap()
                     .is_empty()
             );
-            assert!(!h.selection.chosen_automation_params.contains_key(&layer_a));
+            assert!(!h.selection.chosen_automation_params().contains_key(&layer_a));
             assert!(h.ui.pending_automation_reveal.is_none());
             let mut commands = h.drain();
             assert_eq!(commands.len(), 2);
@@ -2340,7 +2342,7 @@ mod scene_card_convergence_tests {
             automation_lanes_dirty: bool,
             scroll_dirty: crate::ui_root::ScrollDirty,
             invalidate: Vec<usize>,
-            pre_drag: Vec<Box<dyn manifold_editing::command::Command>>,
+            edits: crate::gesture_preview::UiEdits,
         }
 
         impl ClipRig {
@@ -2358,7 +2360,7 @@ mod scene_card_convergence_tests {
                     automation_lanes_dirty: false,
                     scroll_dirty: crate::ui_root::ScrollDirty::default(),
                     invalidate: Vec::new(),
-                    pre_drag: Vec::new(),
+                    edits: Default::default(),
                 }
             }
 
@@ -2374,7 +2376,7 @@ mod scene_card_convergence_tests {
                     &mut self.automation_lanes_dirty,
                     &mut self.scroll_dirty,
                     &mut self.invalidate,
-                    &mut self.pre_drag,
+                    &mut self.edits,
                 )
             }
 
@@ -3507,10 +3509,10 @@ mod scene_card_convergence_tests {
             // What add-effect's behind-the-scenes selection touch looks like
             // at the ui_state level: re-selecting the SAME layer bumps
             // `selection_version` without changing WHICH layer is selected.
-            let before = selection.selection_version;
+            let before = selection.selection_visual_version();
             selection.select_layer(layer_id.clone());
             assert!(
-                selection.selection_version > before,
+                selection.selection_visual_version() > before,
                 "sanity: version must actually bump"
             );
             assert_eq!(

@@ -888,7 +888,7 @@ impl TimelineInputHost for AppInputHost<'_> {
         }
 
         let selected_ids: Vec<LayerId> =
-            self.selection.selected_layer_ids.iter().cloned().collect();
+            self.selection.selected_layer_ids().iter().cloned().collect();
 
         if let Some(project) = Some(&mut *self.project) {
             // Validate: none are nested (have parent) or group layers
@@ -933,7 +933,7 @@ impl TimelineInputHost for AppInputHost<'_> {
         if self.selection.layer_selection_count() != 1 {
             return;
         }
-        let selected_id = self.selection.selected_layer_ids.iter().next().cloned();
+        let selected_id = self.selection.selected_layer_ids().iter().next().cloned();
         if let Some(id) = selected_id
             && let Some(project) = Some(&mut *self.project)
         {
@@ -984,7 +984,7 @@ impl TimelineInputHost for AppInputHost<'_> {
         }
 
         let selected_ids: Vec<LayerId> =
-            self.selection.selected_layer_ids.iter().cloned().collect();
+            self.selection.selected_layer_ids().iter().cloned().collect();
 
         if let Some(project) = Some(&mut *self.project) {
             // Find indices to delete (in reverse order for safe removal)
@@ -1040,7 +1040,7 @@ impl TimelineInputHost for AppInputHost<'_> {
             return;
         }
         let selected_ids: Vec<manifold_core::LayerId> =
-            self.selection.selected_layer_ids.iter().cloned().collect();
+            self.selection.selected_layer_ids().iter().cloned().collect();
         if let Some(cmd) = EditingService::duplicate_layers(self.project, &selected_ids) {
             let mut boxed: Box<dyn manifold_editing::command::Command> = cmd;
             boxed.execute(self.project);
@@ -1219,7 +1219,7 @@ impl TimelineInputHost for AppInputHost<'_> {
         // Step 4f: read cursor position from UIState (not viewport scroll)
         let current_beat = self
             .selection
-            .insert_cursor_beat
+            .insert_cursor_beat()
             .unwrap_or(self.content_state.current_beat)
             .as_f32();
         let active_idx = self
@@ -1228,7 +1228,7 @@ impl TimelineInputHost for AppInputHost<'_> {
             .and_then(|id| self.project.timeline.find_layer_index_by_id(id));
         let insert_cursor_idx = self
             .selection
-            .insert_cursor_layer_id
+            .insert_cursor_layer_id()
             .as_ref()
             .and_then(|id| self.project.timeline.find_layer_index_by_id(id));
         let current_layer = insert_cursor_idx.or(active_idx).unwrap_or(0);
@@ -1319,12 +1319,12 @@ impl TimelineInputHost for AppInputHost<'_> {
     }
 
     fn insert_cursor_beat(&self) -> Option<f32> {
-        self.selection.insert_cursor_beat.map(|beat| beat.as_f32())
+        self.selection.insert_cursor_beat().map(|beat| beat.as_f32())
     }
 
     fn insert_cursor_layer_index(&self) -> Option<usize> {
         self.selection
-            .insert_cursor_layer_id
+            .insert_cursor_layer_id()
             .as_ref()
             .and_then(|id| self.project.timeline.find_layer_index_by_id(id))
     }
@@ -1472,7 +1472,7 @@ impl TimelineInputHost for AppInputHost<'_> {
         use manifold_editing::commands::marker::DeleteMarkerCommand;
 
         let ids: Vec<manifold_core::MarkerId> =
-            self.selection.selected_marker_ids.iter().cloned().collect();
+            self.selection.selected_marker_ids().iter().cloned().collect();
         if ids.is_empty() {
             return;
         }
@@ -1489,12 +1489,12 @@ impl TimelineInputHost for AppInputHost<'_> {
             ContentCommand::ExecuteBatch(commands, "Delete Markers".into()),
         );
 
-        self.selection.selected_marker_ids.clear();
+        self.selection.clear_marker_selection();
         *self.needs_rebuild = true;
     }
 
     fn has_selected_markers(&self) -> bool {
-        !self.selection.selected_marker_ids.is_empty()
+        !self.selection.selected_marker_ids().is_empty()
     }
 
     // ── Automation lane editing ──────────────────────────────────
@@ -1553,7 +1553,7 @@ impl TimelineInputHost for AppInputHost<'_> {
     }
 
     fn select_all_automation(&mut self) -> bool {
-        if !self.selection.automation_mode_visible { return false; }
+        if !self.selection.automation_mode_visible() { return false; }
         let Some((target, param_id)) = self.selection.automation_paste_context.clone() else { return false; };
         automation::select_all_in_lane(self.project, self.selection, &target, &param_id);
         *self.needs_rebuild = true;
@@ -1616,13 +1616,13 @@ impl TimelineInputHost for AppInputHost<'_> {
 
     fn toggle_automation_draw_mode(&mut self) {
         self.selection.automation_draw_mode = !self.selection.automation_draw_mode;
-        self.selection.automation_mode_visible = true;
+        self.selection.set_automation_mode_visible(true);
         *self.needs_structural_sync = true;
         *self.needs_rebuild = true;
     }
 
     fn automation_mode_visible(&self) -> bool {
-        self.selection.automation_mode_visible
+        self.selection.automation_mode_visible()
     }
 
     fn toggle_automation_mode_visible(&mut self) {
@@ -1630,7 +1630,7 @@ impl TimelineInputHost for AppInputHost<'_> {
         // exactly — same view-state flip, same `DispatchResult::structural()`
         // semantics: it changes the Y-layout (lane strips appear/disappear),
         // so both dirty flags are needed, not just `needs_rebuild`.
-        self.selection.automation_mode_visible = !self.selection.automation_mode_visible;
+        self.selection.toggle_automation_mode_visible();
         self.selection.clear_automation_selection();
         *self.needs_rebuild = true;
         *self.needs_structural_sync = true;

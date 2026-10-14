@@ -50,7 +50,7 @@ pub(crate) fn dispatch_clip(action: &ClipAction, ctx: &mut super::super::Dispatc
         }
         ClipAction::ClipBpmClicked => DispatchResult::handled(),
         ClipAction::ClipWarpToggled => {
-            if let Some(clip_id) = &ctx.selection.primary_selected_clip_id
+            if let Some(clip_id) = ctx.selection.primary_selected_clip_id()
                 && let Some(clip) = ctx.project.timeline.find_clip_by_id(clip_id)
             {
                 ContentCommand::send(ctx.content_tx, ContentCommand::ExecuteOnContent(Box::new(
@@ -65,13 +65,13 @@ pub(crate) fn dispatch_clip(action: &ClipAction, ctx: &mut super::super::Dispatc
             // Per-clip detection: analyze the selected audio clip's file and place
             // its triggers. The orchestrator (content thread) does the work and the
             // result syncs back; status shows via the global percussion status.
-            if let Some(clip_id) = &ctx.selection.primary_selected_clip_id {
+            if let Some(clip_id) = ctx.selection.primary_selected_clip_id() {
                 ContentCommand::send(ctx.content_tx, ContentCommand::DetectClip(clip_id.clone()));
             }
             DispatchResult::handled()
         }
         ClipAction::ClipClearTriggersClicked => {
-            if let Some(clip_id) = &ctx.selection.primary_selected_clip_id {
+            if let Some(clip_id) = ctx.selection.primary_selected_clip_id() {
                 ContentCommand::send(
                     ctx.content_tx,
                     ContentCommand::ClearClipTriggers(clip_id.clone()),
@@ -89,7 +89,7 @@ pub(crate) fn dispatch_clip(action: &ClipAction, ctx: &mut super::super::Dispatc
             // worse than none. Detection is never re-run here; it stays manual.
             use manifold_editing::command::{Command, CompositeCommand};
             use manifold_editing::commands::clip::{DeleteClipCommand, ReplaceAudioFileCommand};
-            if let Some(clip_id) = ctx.selection.primary_selected_clip_id.clone()
+            if let Some(clip_id) = ctx.selection.primary_selected_clip_id().cloned()
                 && let Some(path) = crate::file_dialogs::pick_file(
                     crate::file_dialogs::DialogAction::ReplaceAudio,
                     ctx.dialogs,
@@ -137,7 +137,7 @@ pub(crate) fn dispatch_clip(action: &ClipAction, ctx: &mut super::super::Dispatc
         }
         ClipAction::ClipDetectInstrumentToggled(idx) => {
             let idx = *idx;
-            if let Some(clip_id) = ctx.selection.primary_selected_clip_id.clone() {
+            if let Some(clip_id) = ctx.selection.primary_selected_clip_id().cloned() {
                 apply_detection_edit(ctx.project, ctx.content_tx, &clip_id, |c| {
                     if let Some(inst) = c.instruments.get_mut(idx) {
                         inst.enabled = !inst.enabled;
@@ -148,7 +148,7 @@ pub(crate) fn dispatch_clip(action: &ClipAction, ctx: &mut super::super::Dispatc
         }
         ClipAction::ClipDetectSensitivityChanged(idx, value) => {
             let (idx, value) = (*idx, *value);
-            if let Some(clip_id) = ctx.selection.primary_selected_clip_id.clone() {
+            if let Some(clip_id) = ctx.selection.primary_selected_clip_id().cloned() {
                 apply_detection_edit(ctx.project, ctx.content_tx, &clip_id, |c| {
                     if let Some(inst) = c.instruments.get_mut(idx) {
                         inst.sensitivity = value.clamp(0.0, 1.0);
@@ -159,7 +159,7 @@ pub(crate) fn dispatch_clip(action: &ClipAction, ctx: &mut super::super::Dispatc
         }
         ClipAction::ClipDetectOnsetChanged(ms) => {
             let secs = manifold_core::Seconds((*ms / 1000.0) as f64);
-            if let Some(clip_id) = ctx.selection.primary_selected_clip_id.clone() {
+            if let Some(clip_id) = ctx.selection.primary_selected_clip_id().cloned() {
                 apply_detection_edit(ctx.project, ctx.content_tx, &clip_id, |c| {
                     c.onset_compensation = secs;
                 });
@@ -168,7 +168,7 @@ pub(crate) fn dispatch_clip(action: &ClipAction, ctx: &mut super::super::Dispatc
         }
         ClipAction::ClipDetectSetQuantize(step) => {
             let step = *step;
-            if let Some(clip_id) = ctx.selection.primary_selected_clip_id.clone() {
+            if let Some(clip_id) = ctx.selection.primary_selected_clip_id().cloned() {
                 apply_detection_edit(ctx.project, ctx.content_tx, &clip_id, |c| match step {
                     Some(beats) => {
                         c.quantize_on = true;
@@ -181,7 +181,7 @@ pub(crate) fn dispatch_clip(action: &ClipAction, ctx: &mut super::super::Dispatc
         }
         ClipAction::ClipDetectSetLayer(idx, layer) => {
             let (idx, layer) = (*idx, layer.clone());
-            if let Some(clip_id) = ctx.selection.primary_selected_clip_id.clone() {
+            if let Some(clip_id) = ctx.selection.primary_selected_clip_id().cloned() {
                 apply_detection_edit(ctx.project, ctx.content_tx, &clip_id, |c| {
                     if let Some(inst) = c.instruments.get_mut(idx) {
                         inst.target_layer = layer;
@@ -196,7 +196,7 @@ pub(crate) fn dispatch_clip(action: &ClipAction, ctx: &mut super::super::Dispatc
             DispatchResult::handled()
         }
         ClipAction::ClipLoopToggle => {
-            if let Some(clip_id) = &ctx.selection.primary_selected_clip_id {
+            if let Some(clip_id) = ctx.selection.primary_selected_clip_id() {
                 let clip_id = clip_id.clone();
                 if let Some(clip) = ctx.project.timeline.find_clip_by_id(&clip_id) {
                     let old_loop = clip.is_looping;

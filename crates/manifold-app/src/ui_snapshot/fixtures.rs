@@ -533,7 +533,7 @@ fn automation_scene() -> SceneData {
 
     let mut data = timeline_scene();
     data.content.automation_armed = true;
-    data.selection.automation_mode_visible = true;
+    data.selection.set_automation_mode_visible(true);
 
     let flowers = data
         .project
@@ -591,7 +591,7 @@ fn automation_scene() -> SceneData {
 /// pixel-exact assertions against Mirror/Bloom's Y offsets.
 fn automation_placeholder_scene() -> SceneData {
     let mut data = timeline_scene();
-    data.selection.automation_mode_visible = true;
+    data.selection.set_automation_mode_visible(true);
 
     let flowers = data
         .project
@@ -610,12 +610,10 @@ fn automation_placeholder_scene() -> SceneData {
     // placeholder is what makes it choosable/drawable anyway.
     flowers.effects = Some(vec![mirror]);
 
-    data.selection.chosen_automation_params.insert(
+    data.selection.choose_automation_param(
         lid("flowers"),
-        (
-            manifold_ui::view::UiGraphTarget::Effect(mirror_id),
-            mirror_param.into(),
-        ),
+        manifold_ui::view::UiGraphTarget::Effect(mirror_id),
+        mirror_param.into(),
     );
     data
 }

@@ -234,9 +234,8 @@ fn focus_scene_tab(
     layer_id: &LayerId,
 ) {
     let inspected = selection
-        .selected_layer_id_for_clip
-        .as_ref()
-        .or(selection.primary_selected_layer_id.as_ref());
+        .selected_layer_id_for_clip()
+        .or(selection.primary_selected_layer_id());
     if inspected != Some(layer_id) {
         selection.select_layer(layer_id.clone());
     }
@@ -316,7 +315,7 @@ mod tests {
             &mut active
         ));
         assert_eq!(active, Some(added_id.clone()));
-        assert_eq!(selection.primary_selected_layer_id, Some(added_id.clone()));
+        assert_eq!(selection.primary_selected_layer_id(), Some(&added_id));
         assert_eq!(ui.pending_layer_reveal, Some(added_id));
         assert!(!apply_update(
             &mut ui,
@@ -348,7 +347,7 @@ mod tests {
         ));
         assert_eq!(ui.last_edit_selection_sequence, Some(1));
         assert!(active.is_none());
-        assert!(selection.primary_selected_layer_id.is_none());
+        assert!(selection.primary_selected_layer_id().is_none());
         assert!(ui.pending_layer_reveal.is_none());
     }
 }

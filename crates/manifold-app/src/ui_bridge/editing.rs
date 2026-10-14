@@ -323,8 +323,8 @@ pub(super) fn dispatch_editing(
                 {
                     // If the right-clicked layer is among the selected layers, duplicate the
                     // full selection; otherwise duplicate just this layer.
-                    let ids: Vec<LayerId> = if selection.selected_layer_ids.contains(layer_id) {
-                        selection.selected_layer_ids.iter().cloned().collect()
+                    let ids: Vec<LayerId> = if selection.selected_layer_ids().contains(layer_id) {
+                        selection.selected_layer_ids().iter().cloned().collect()
                     } else {
                         vec![layer_id.clone()]
                     };
@@ -453,17 +453,17 @@ pub(super) fn dispatch_editing(
             for layer in &project.timeline.layers {
                 let lanes = crate::ui_translate::layer_automation_lanes_to_ui_with_view(
                     layer,
-                    selection.chosen_automation_params.get(&layer.layer_id),
-                    &selection.automation_lane_order,
-                    &selection.hidden_automation_lanes,
-                    &selection.pinned_automation_lanes,
+                    selection.chosen_automation_params().get(&layer.layer_id),
+                    selection.automation_lane_order(),
+                    selection.hidden_automation_lanes(),
+                    selection.pinned_automation_lanes(),
                 );
                 let Some(index) = lanes.iter().position(|lane| lane.target == *target && lane.param_id == *param_id) else { continue; };
                 let other = index as isize + direction.signum() as isize;
                 if *direction != 0 && other >= 0 && let Some(neighbor) = lanes.get(other as usize) {
-                    let a = selection.automation_lane_order.iter().position(|key| key.0 == *target && key.1 == *param_id);
-                    let b = selection.automation_lane_order.iter().position(|key| key.0 == neighbor.target && key.1 == neighbor.param_id);
-                    if let (Some(a), Some(b)) = (a, b) { selection.automation_lane_order.swap(a, b); }
+                    let a = selection.automation_lane_order().iter().position(|key| key.0 == *target && key.1 == *param_id);
+                    let b = selection.automation_lane_order().iter().position(|key| key.0 == neighbor.target && key.1 == neighbor.param_id);
+                    if let (Some(a), Some(b)) = (a, b) { selection.swap_automation_lane_ranks(a, b); }
                 }
                 break;
             }
@@ -529,7 +529,7 @@ pub(super) fn dispatch_editing(
         }
         EditingAction::ContextGroupSelectedLayers => {
             let selected_ids: Vec<manifold_core::LayerId> =
-                selection.selected_layer_ids.iter().cloned().collect();
+                selection.selected_layer_ids().iter().cloned().collect();
             if selected_ids.len() >= 2 {
                 let valid = selected_ids.iter().all(|id| {
                     project

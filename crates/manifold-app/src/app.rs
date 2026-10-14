@@ -96,9 +96,11 @@ pub struct Application {
     /// Last received project snapshot Arc. Used to skip redundant deep clones
     /// when the content thread sends the same Arc for modulation-only frames.
     pub(crate) last_snapshot_arc: Option<std::sync::Arc<manifold_core::project::Project>>,
-    /// Content stamps of the last accepted project snapshot: a move outside
-    /// the live scalars re-projects even when `data_version` did not move (D23).
-    pub(crate) accepted_stamps: manifold_core::change::PartStamps,
+    /// The UI's part stamps (folded from each accepted snapshot, D5) and the
+    /// in-flight gesture preview (D12), shared by every editing host.
+    pub(crate) ui_edits: crate::gesture_preview::UiEdits,
+    /// The main window's frame planner (D6).
+    pub(crate) frame_planner: crate::frame_plan::FramePlanner,
 
     /// After a local project load (open/new), suppress content thread snapshots
     /// until its data_version exceeds this value. Prevents the old project from
@@ -507,11 +509,6 @@ pub struct Application {
     // split-borrow it alongside ui_root.viewport and create AppEditingHost.
     pub(crate) overlay: manifold_ui::interaction_overlay::InteractionOverlay,
 
-    // Pre-drag split commands — persists between AppEditingHost instances.
-    // Unity stores these on InteractionOverlay; Rust stores them here because
-    // the overlay can't depend on manifold-editing Command types.
-    // Populated by split_clips_for_region_move, prepended on commit_command_batch.
-    pub(crate) pre_drag_commands: Vec<Box<dyn manifold_editing::command::Command>>,
     /// Per-layer bitmap invalidation targets from editing operations.
     /// Drained in app_render.rs to call invalidate() on targeted layers only.
     pub(crate) invalidate_layers: Vec<usize>,
@@ -571,7 +568,8 @@ impl Application {
             content_state: ContentState::default(),
             local_project: default_project,
             last_snapshot_arc: None,
-            accepted_stamps: Default::default(),
+            ui_edits: Default::default(),
+            frame_planner: Default::default(),
             suppress_snapshot_until: 0,
             suppress_snapshot_set_at: 0,
             autosave: crate::autosave::AutosaveState::new(),
@@ -737,7 +735,6 @@ impl Application {
             overlay: manifold_ui::interaction_overlay::InteractionOverlay::new(
                 manifold_ui::color::CLIP_VERTICAL_PAD,
             ),
-            pre_drag_commands: Vec::new(),
             invalidate_layers: Vec::new(),
             display_resolutions: Vec::new(),
             initialized: false,
@@ -1039,6 +1036,7 @@ impl Application {
                                 user_prefs: &mut self.user_prefs,
                                 editor_target: None,
                                 scrub: &mut self.scrub,
+                                stamps: &mut self.ui_edits.stamps,
                                 dialogs: crate::file_dialogs::host(&self.window_registry, self.dialog_window_id, self.primary_window_id, self.current_project_path.as_deref()),
                             };
                             let _ = crate::ui_bridge::dispatch(&act, &mut dctx);
@@ -1066,6 +1064,7 @@ impl Application {
                             user_prefs: &mut self.user_prefs,
                             editor_target: None,
                             scrub: &mut self.scrub,
+                            stamps: &mut self.ui_edits.stamps,
                             dialogs: crate::file_dialogs::host(&self.window_registry, self.dialog_window_id, self.primary_window_id, self.current_project_path.as_deref()),
                         };
                         let _ = crate::ui_bridge::dispatch(&action, &mut dctx);
@@ -1108,6 +1107,7 @@ impl Application {
                         user_prefs: &mut self.user_prefs,
                         editor_target: None,
                         scrub: &mut self.scrub,
+                        stamps: &mut self.ui_edits.stamps,
                         dialogs: crate::file_dialogs::host(&self.window_registry, self.dialog_window_id, self.primary_window_id, self.current_project_path.as_deref()),
                     };
                     let _ = crate::ui_bridge::dispatch(&act, &mut dctx);
@@ -1133,6 +1133,7 @@ impl Application {
                         user_prefs: &mut self.user_prefs,
                         editor_target: None,
                         scrub: &mut self.scrub,
+                        stamps: &mut self.ui_edits.stamps,
                         dialogs: crate::file_dialogs::host(&self.window_registry, self.dialog_window_id, self.primary_window_id, self.current_project_path.as_deref()),
                     };
                     let _ = crate::ui_bridge::dispatch(&act, &mut dctx);
@@ -1172,6 +1173,7 @@ impl Application {
                             user_prefs: &mut self.user_prefs,
                             editor_target: None,
                             scrub: &mut self.scrub,
+                            stamps: &mut self.ui_edits.stamps,
                             dialogs: crate::file_dialogs::host(&self.window_registry, self.dialog_window_id, self.primary_window_id, self.current_project_path.as_deref()),
                         };
                         let _ = crate::ui_bridge::dispatch(&act, &mut dctx);
@@ -1212,7 +1214,7 @@ impl Application {
                 } else {
                     return; // parse failed — silent no-op (matches Unity)
                 };
-                if let Some(clip_id) = &self.selection.primary_selected_clip_id {
+                if let Some(clip_id) = self.selection.primary_selected_clip_id() {
                     let clip_id = clip_id.clone();
                     if let Some(project) = Some(&mut self.local_project) {
                         let old_bpm = project
@@ -1295,7 +1297,7 @@ impl Application {
                             }),
                         manifold_ui::InspectorTab::Clip => self
                             .selection
-                            .primary_selected_clip_id
+                            .primary_selected_clip_id()
                             .as_ref()
                             .and_then(|cid| self.local_project.timeline.find_clip_by_id(cid))
                             .and_then(|c| c.effects.get(effect_idx))
@@ -1397,9 +1399,9 @@ impl Application {
                         // Find clip: selected clip on this layer, or first clip
                         let clip = self
                             .selection
-                            .primary_selected_clip_id
+                            .primary_selected_clip_id()
                             .as_ref()
-                            .and_then(|sel_id| layer.clips.iter().find(|c| c.id == *sel_id))
+                            .and_then(|sel_id| layer.clips.iter().find(|c| c.id == **sel_id))
                             .or_else(|| layer.clips.first());
                         let (clip_id, old_value) = clip
                             .map(|c| {
@@ -1445,7 +1447,7 @@ impl Application {
                             .map(|g| (g.id.clone(), g.name.clone())),
                         manifold_ui::InspectorTab::Clip => self
                             .selection
-                            .primary_selected_clip_id
+                            .primary_selected_clip_id()
                             .as_ref()
                             .and_then(|cid| self.local_project.timeline.find_clip_by_id(cid))
                             .and_then(|c| c.effect_groups.as_ref())
@@ -1715,6 +1717,7 @@ impl Application {
                                     user_prefs: &mut self.user_prefs,
                                     editor_target,
                                     scrub: &mut self.scrub,
+                                    stamps: &mut self.ui_edits.stamps,
                                     dialogs: crate::file_dialogs::host(&self.window_registry, self.dialog_window_id, self.primary_window_id, self.current_project_path.as_deref()),
                                 };
                                 let _ = crate::ui_bridge::dispatch(&action, &mut dctx);
