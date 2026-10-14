@@ -15,6 +15,7 @@ use manifold_core::types::TempoPointSource;
 use manifold_core::{Beats, Bpm, Seconds};
 use manifold_playback::engine::{PlaybackEngine, TickContext};
 use manifold_playback::external_follow::{ExternalSample, FollowProfile};
+use manifold_playback::external_sync::LinkTempoGuard;
 use manifold_playback::frame_grid::FrameGrid;
 use manifold_playback::midi_clock_sync::tick_filter::{ClockKind, ClockTracker};
 use manifold_playback::renderer::StubRenderer;
@@ -200,6 +201,10 @@ impl LinkReader {
         let step = self.steps[((r.max(0.0) / 30.0) as usize).min(self.steps.len() - 1)];
         self.live.beat(r + step)
     }
+    /// The session tempo at `r`.
+    pub fn tempo_at(&self, r: f64) -> f64 {
+        self.live.tempo.bpm_at(self.live.live_time(r))
+    }
 }
 
 impl Reader for LinkReader {
@@ -207,7 +212,7 @@ impl Reader for LinkReader {
         Kind::Link
     }
     fn read(&mut self, r: f64, _now: f64) -> Option<Sample> {
-        Some(Sample { beat: self.beat_at(r), bpm: self.live.tempo.bpm_at(self.live.live_time(r)), fresh: true, exact: true })
+        Some(Sample { beat: self.beat_at(r), bpm: self.tempo_at(r), fresh: true, exact: true })
     }
 }
 
@@ -249,17 +254,20 @@ pub fn clock_arrivals(live: &Live, until: f64, seed: u64, stalls: &[(f64, f64)],
 
 /// MIDI clock through the real position rules and tick filter (D20): each
 /// arrival goes to `ClockTracker` stamped as it arrived, and the beat is the
-/// filter's at the read instant.
+/// filter's at the read instant. With a Link session, the real guard (D21)
+/// compares it with the ticks and, latched, gives the filter Link's period
+/// and the sample Link's tempo.
 pub struct ClkReader {
     arrivals: Vec<(f64, ClockMsg)>,
     next: usize,
     tracker: ClockTracker,
     pub link: Option<LinkReader>,
+    guard: LinkTempoGuard,
 }
 
 impl ClkReader {
     pub fn new(arrivals: Vec<(f64, ClockMsg)>) -> Self {
-        Self { arrivals, next: 0, tracker: ClockTracker::new(), link: None }
+        Self { arrivals, next: 0, tracker: ClockTracker::new(), link: None, guard: LinkTempoGuard::new() }
     }
     pub fn with_link(mut self, link: LinkReader) -> Self {
         self.link = Some(link);
@@ -278,11 +286,17 @@ impl Reader for ClkReader {
                 ClockMsg::Start => ClockKind::Start,
                 ClockMsg::Tick => ClockKind::Tick,
             };
+            let latched = self.link.as_ref().filter(|_| self.guard.latched()).map(|l| l.tempo_at(at));
+            self.tracker.set_link_tempo(latched);
             // The map every proof plays over is at 120 BPM.
             self.tracker.event(kind, at, 120.0);
+            if let (Some(link), Some((k, t))) = (&self.link, self.tracker.last_landed()) {
+                self.guard.observe_clock(at, t, k, link.beat_at(t));
+            }
             self.next += 1;
         }
-        self.tracker.sample_at(r).map(|s| Sample { beat: s.beat, bpm: s.bpm, fresh: true, exact: false })
+        let latched = self.link.as_ref().filter(|_| self.guard.latched()).map(|l| l.tempo_at(r));
+        self.tracker.sample_at(r).map(|s| Sample { beat: s.beat, bpm: latched.unwrap_or(s.bpm), fresh: true, exact: false })
     }
 }
 

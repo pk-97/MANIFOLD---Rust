@@ -4,6 +4,7 @@
 
 use manifold_core::change::{ChangeSet, Part};
 use manifold_core::{Beats, LayerId, NodeId, Seconds};
+use manifold_playback::external_sync::OffsetTake;
 use manifold_playback::transport_controller::TransportController;
 use manifold_compositor::generator_renderer::GeneratorRenderer;
 use manifold_playback::renderer::ClipRenderer;
@@ -894,7 +895,7 @@ impl ContentThread {
                 // armed position (D20, D22): nothing is located here.
                 crate::sync_rig_log::user_transport(manifold_playback::rig_log::TransportKind::Play, f64::NAN);
                 self.engine.play();
-                self.cache_link_beat_offset();
+                self.link_offset.request(OffsetTake::Exact);
             }
             ContentCommand::Pause => {
                 if self.osc_sender.is_sender_enabled() || self.ableton_bridge.is_transport_enabled()
@@ -920,7 +921,7 @@ impl ContentThread {
                 self.end_tempo_recording_session();
                 crate::sync_rig_log::user_transport(manifold_playback::rig_log::TransportKind::Stop, f64::NAN);
                 self.engine.stop();
-                self.link_beat_offset = f64::NAN;
+                self.link_offset.clear();
                 // BUG-104: release generator-side trigger-edge latches
                 // (sample_and_hold / clip_trigger_cycle / clip_trigger_index /
                 // frequency_ratio / cycle_table_row / trigger_gate /
@@ -943,7 +944,7 @@ impl ContentThread {
                     self.engine.is_playing(),
                     self.time_since_start.0,
                 );
-                self.cache_link_beat_offset();
+                self.link_offset.request(OffsetTake::Exact);
             }
             ContentCommand::SeekToBeat(beat) => {
                 crate::sync_rig_log::user_transport(manifold_playback::rig_log::TransportKind::SeekToBeat, beat.0);
@@ -956,7 +957,7 @@ impl ContentThread {
                     self.engine.is_playing(),
                     self.time_since_start.0,
                 );
-                self.cache_link_beat_offset();
+                self.link_offset.request(OffsetTake::Exact);
             }
             ContentCommand::SetRecording(rec) => {
                 self.engine.set_recording(rec);
@@ -1406,7 +1407,7 @@ impl ContentThread {
                 }
                 // Reset link beat offset and tempo recorder on project load.
                 // Port of C# PlaybackController.OnProjectLoading lines 550-551.
-                self.link_beat_offset = f64::NAN;
+                self.link_offset.clear();
                 self.tempo_recorder.reset();
                 self.engine.initialize(*project);
                 // Clear stale temporal effect state from the previous project

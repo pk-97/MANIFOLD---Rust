@@ -15,6 +15,7 @@ use manifold_editing::service::EditingService;
 use manifold_playback::clip_launcher::ClipLauncher;
 use manifold_playback::engine::{PlaybackEngine, TickContext};
 use manifold_playback::external_follow::{ExternalSample, FollowProfile};
+use manifold_playback::external_sync::{live_tempo, LinkOffset, LinkTempoGuard, OffsetTake};
 use manifold_playback::midi_input::MidiInputController;
 use manifold_playback::osc_receiver::OscReceiver;
 use manifold_playback::osc_sender::OscPositionSender;
@@ -134,11 +135,10 @@ pub struct ContentThread {
     /// Tempo recording/provenance — tracks external tempo for tempo automation.
     /// Port of C# PlaybackController.tempoRecorder field.
     pub tempo_recorder: TempoRecorder,
-    /// Offset between Link's absolute beat epoch and MANIFOLD's timeline beat 0.
-    /// Cached ONLY at Play()/Seek() sync points. NOT refreshed periodically —
-    /// Link's cumulative beat counter keeps the offset valid across BPM changes.
-    /// Port of C# PlaybackController.linkBeatOffset field (line 74).
-    pub link_beat_offset: f64,
+    /// MANIFOLD's beat under Link is Link's beat minus this (D15).
+    pub link_offset: LinkOffset,
+    /// Whether Link's tempo stands in for MIDI clock's or AbletonOSC's (D21).
+    pub tempo_guard: LinkTempoGuard,
     /// A tempo source for tests that stand in for Link or MIDI clock: it
     /// delivers this tempo every tick, where a real source would (D21).
     #[cfg(test)]
@@ -660,7 +660,7 @@ impl ContentThread {
         let tick_stamps = self.editing_service.stamps();
         let tick_window = self.engine.project().map(manifold_editing::edit::tick_audit::open);
 
-        self.tick_sync_controllers();
+        self.tick_sync_controllers(frames);
 
         // 3c. External beat derivation + tempo recording/resolution.
         // Port of C# PlaybackController.Update lines 1064-1099.
@@ -1757,7 +1757,9 @@ impl ContentThread {
     /// Tick all sync controllers once per frame. Called before engine tick.
     /// Handles the borrow-split problem: snapshot read-only engine state first,
     /// then pass &mut engine for transport commands via SyncArbiter.
-    fn tick_sync_controllers(&mut self) {
+    /// `frames`: what this tick advances, so a Link offset is taken against
+    /// the frame it shows (D15).
+    fn tick_sync_controllers(&mut self, frames: u32) {
         let now = self.time_since_start;
         // Live tempo lasts one tick: only a source that delivers a tempo this
         // tick sets it (D21), so it can never outlive its source.
@@ -1820,26 +1822,36 @@ impl ContentThread {
             if auto != previous || self.engine.follows_external() != profile.is_some() {
                 self.engine.set_follow_authority(profile);
             }
+            // Link becoming the authority while MANIFOLD plays: the exact
+            // offset, so the beat does not move (D15).
+            if auto != previous && auto == ClockAuthority::Link && self.engine.is_playing() {
+                self.link_offset.request(OffsetTake::Exact);
+            }
             auto
         };
 
         // Link sync — poll beat/phase/tempo from Ableton Link network.
-        let link_has_tempo = if let Some(ref mut link) = self.transport_controller.link_sync {
+        if let Some(ref mut link) = self.transport_controller.link_sync {
             link.update(&mut self.sync_arbiter, &mut self.engine, authority, self.link_sample_at);
-            // Link provides the most accurate BPM when peers are connected.
-            if link.is_link_enabled() && link.has_active_peers() {
-                self.engine.set_live_external_tempo(
-                    true,
-                    Bpm(link.link_tempo as f32),
-                    TempoPointSource::Link,
-                );
-                true
-            } else {
-                false
+            if link.is_link_enabled() {
+                // A Link-initiated start lines MANIFOLD's bar up with Link's;
+                // every due offset is taken here, at the read instant,
+                // against the beat of the frame this tick shows (D15).
+                if link.started_playing() && authority == ClockAuthority::Link {
+                    self.link_offset.request(OffsetTake::Quantum);
+                }
+                if self.link_offset.is_due() {
+                    let frame_beat = self.engine.upcoming_frame_beat(frames).0;
+                    self.link_offset.take(link.current_beat.0, frame_beat, link.quantum());
+                }
             }
-        } else {
-            false
-        };
+        }
+        let link_bpm = self
+            .transport_controller
+            .link_sync
+            .as_ref()
+            .filter(|l| l.is_link_enabled() && l.has_active_peers())
+            .map(|l| l.link_tempo);
 
         // MIDI Clock sync — poll clock/SPP from midir.
         // Snapshot SyncTarget state before passing &mut engine as SyncArbiterTarget.
@@ -1850,6 +1862,10 @@ impl ContentThread {
         let suppress_clock_plane = self.sync_arbiter.is_seek_cooldown_active(now)
             || self.ableton_bridge.transport_sync_pending();
         if let Some(ref mut clk) = self.transport_controller.midi_clock_sync {
+            // With the guard latched the tick filter runs on Link's period
+            // and filters phase only (D20, D21).
+            let latched = authority == ClockAuthority::MidiClock && self.tempo_guard.latched();
+            clk.set_link_tempo(link_bpm.filter(|_| latched));
             let snap = SyncTargetSnapshot::from_engine(&self.engine);
             clk.update(
                 now,
@@ -1859,15 +1875,6 @@ impl ContentThread {
                 authority,
                 suppress_clock_plane,
             );
-            // Feed live MIDI Clock BPM to engine — but Link takes priority
-            // when available (more accurate, network-synced tempo).
-            if !link_has_tempo && clk.is_midi_clock_enabled() && clk.is_receiving_clock() {
-                self.engine.set_live_external_tempo(
-                    true,
-                    Bpm(clk.current_clock_bpm()),
-                    TempoPointSource::MidiClock,
-                );
-            }
         }
 
         // OSC receiver — drain queued UDP messages and dispatch to subscribers.
@@ -1996,6 +2003,56 @@ impl ContentThread {
                 }
             }
         }
+
+        self.update_tempo_plane(authority, osc_sync_mode, link_bpm);
+    }
+
+    /// The guard compares Link with the authority's own tempo, and the live
+    /// tempo reports the authority's base tempo (D21). After every source
+    /// has updated this tick.
+    fn update_tempo_plane(&mut self, authority: ClockAuthority, mode: OscSyncMode, link_bpm: Option<f64>) {
+        let now = self.time_since_start.0;
+        let clk = self
+            .transport_controller
+            .midi_clock_sync
+            .as_ref()
+            .filter(|c| c.is_midi_clock_enabled() && c.is_receiving_clock());
+        let listener = (mode == OscSyncMode::AbletonOsc && self.ableton_bridge.is_transport_receiving(now))
+            .then(|| f64::from(self.ableton_bridge.ableton_tempo()));
+        let link_beat = self.transport_controller.link_sync.as_ref().map(|l| l.current_beat.0);
+        // The guard watches whenever Link and a comparable source are both
+        // live, so it is already latched when that source takes over.
+        match (link_bpm, link_beat, clk, listener) {
+            (Some(bpm), Some(beat_at_r), Some(clk), _) => {
+                if let Some((tick, arrival)) = clk.last_landed_tick() {
+                    // Link's beat when the tick arrived: Link runs at its
+                    // session tempo between the arrival and the read instant.
+                    let back = clk.seconds(self.link_sample_at) - arrival;
+                    self.tempo_guard.observe_clock(now, arrival, tick, beat_at_r - back * bpm / 60.0);
+                }
+            }
+            (Some(bpm), _, None, Some(listener)) => self.tempo_guard.observe_listener(now, bpm, listener),
+            _ => self.tempo_guard.release(),
+        }
+
+        let own = match authority {
+            ClockAuthority::MidiClock => clk.map(|c| (f64::from(c.current_clock_bpm()), TempoPointSource::MidiClock)),
+            ClockAuthority::Osc => listener.map(|bpm| (bpm, TempoPointSource::AbletonOsc)),
+            _ => None,
+        };
+        if let Some((bpm, source)) = live_tempo(authority, link_bpm, own, self.tempo_guard.latched()) {
+            self.engine.set_live_external_tempo(true, Bpm(bpm as f32), source);
+        }
+    }
+
+    /// Link's session tempo while the guard lets it stand in for the
+    /// authority's own (D21).
+    fn latched_link_tempo(&self) -> Option<f64> {
+        self.transport_controller
+            .link_sync
+            .as_ref()
+            .filter(|l| self.tempo_guard.latched() && l.is_link_enabled() && l.has_active_peers())
+            .map(|l| l.link_tempo)
     }
 
     /// Sync rig log records for this tick; reads only, never steers playback.
@@ -2028,7 +2085,7 @@ impl ContentThread {
             authority,
             playing: self.engine.is_playing(),
             link,
-            link_offset: self.link_beat_offset,
+            link_offset: self.link_offset.get().unwrap_or(f64::NAN),
             clk,
             osc,
         };
@@ -2051,15 +2108,15 @@ impl ContentThread {
             ClockAuthority::Link => {
                 // Block while MANIFOLD owns transport (prevents brief
                 // authority-falls-to-Link glitches during MIDI Clock gaps).
-                // Link's beat is exact at this frame's deadline (D15).
+                // Link's beat is exact at the read instant, less the offset;
+                // none until an offset is taken (D15).
                 if !self.sync_arbiter.manifold_owns_playback
                     && let Some(ref link) = self.transport_controller.link_sync
                     && link.is_link_enabled()
                     && link.has_active_peers()
-                    && !self.link_beat_offset.is_nan()
                 {
-                    Some(ExternalSample {
-                        beat: link.current_beat.0 - self.link_beat_offset,
+                    self.link_offset.beat(link.current_beat.0).map(|beat| ExternalSample {
+                        beat,
                         bpm: link.link_tempo,
                         fresh: true,
                         exact: true,
@@ -2087,6 +2144,7 @@ impl ContentThread {
                 }
             }
             ClockAuthority::Osc => {
+                let latched_link = self.latched_link_tempo();
                 // The latest report projected from its arrival to the read
                 // instant, every tick while the source is live, as for CLK
                 // (D6: one sample per tick; D7).
@@ -2114,7 +2172,9 @@ impl ContentThread {
                                 tempo.bpm,
                                 seconds_between(tempo.at, r),
                             );
-                            ExternalSample { beat, bpm: tempo.bpm, fresh: true, exact: false }
+                            // Link's session tempo while the guard is latched (D21).
+                            let bpm = latched_link.unwrap_or(tempo.bpm);
+                            ExternalSample { beat, bpm, fresh: true, exact: false }
                         })
                     }
                 }
@@ -2123,23 +2183,6 @@ impl ContentThread {
         };
         if let Some(sample) = sample {
             self.engine.set_external_sample(sample);
-        }
-    }
-
-    /// Cache the offset between Link's absolute beat epoch and MANIFOLD's timeline beat 0.
-    /// Called at Play() and Seek() sync points.
-    /// Port of C# PlaybackController.CacheLinkBeatOffset lines 352-360.
-    pub(crate) fn cache_link_beat_offset(&mut self) {
-        if let Some(ref link) = self.transport_controller.link_sync {
-            if link.is_link_enabled() {
-                // The frame's own beat: under the follower or a hand-back
-                // offset it is not the map's beat at the frame's time (D8).
-                self.link_beat_offset = link.current_beat.0 - self.engine.frame_beat().0;
-            } else {
-                self.link_beat_offset = 0.0;
-            }
-        } else {
-            self.link_beat_offset = 0.0;
         }
     }
 

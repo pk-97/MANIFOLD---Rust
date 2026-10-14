@@ -99,7 +99,8 @@ pub(crate) fn headless_content_thread(project: Project, w: u32, h: u32) -> Conte
         osc_param_router: manifold_playback::osc_param_router::OscParamRouter::new(),
         ableton_bridge: manifold_playback::ableton_bridge::AbletonBridge::new(),
         tempo_recorder: manifold_playback::tempo_recorder::TempoRecorder::new(),
-        link_beat_offset: f64::NAN,
+        link_offset: manifold_playback::external_sync::LinkOffset::new(),
+        tempo_guard: manifold_playback::external_sync::LinkTempoGuard::new(),
         #[cfg(test)]
         test_tempo_source: None,
         rig_probe: crate::sync_rig_log::TickProbe::default(),

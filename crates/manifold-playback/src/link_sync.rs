@@ -24,6 +24,9 @@ pub struct LinkSyncController {
 
     // Private state
     last_link_is_playing: bool,
+    /// Link started playing on this update (D15: the offset rounds to the
+    /// quantum).
+    started_playing: bool,
     last_num_peers: i32,
 
     // rusty_link handles
@@ -74,6 +77,7 @@ impl LinkSyncController {
             enable_start_stop_sync: true,
             quantum: 4.0,
             last_link_is_playing: false,
+            started_playing: false,
             last_num_peers: 0,
             link: None,
             session_state: rusty_link::SessionState::new(),
@@ -94,6 +98,16 @@ impl LinkSyncController {
     }
     pub fn has_active_peers(&self) -> bool {
         self.is_link_enabled && self.num_peers > 0
+    }
+
+    /// Link's bar length in beats.
+    pub fn quantum(&self) -> f64 {
+        self.quantum
+    }
+
+    /// Link started playing on the last update and asked MANIFOLD to play.
+    pub fn started_playing(&self) -> bool {
+        self.started_playing
     }
 
     /// Enable Link with initial BPM.
@@ -142,6 +156,7 @@ impl LinkSyncController {
         authority: ClockAuthority,
         sample_at: Instant,
     ) {
+        self.started_playing = false;
         if !self.is_link_enabled {
             return;
         }
@@ -199,6 +214,7 @@ impl LinkSyncController {
         let is_playing = self.link_is_playing;
 
         if is_playing && !was_playing {
+            self.started_playing = true;
             arbiter.play(ClockAuthority::Link, authority, arb_target);
             log::info!("[LinkSync] Link started playing — MANIFOLD play");
         } else if !is_playing && was_playing {

@@ -165,6 +165,12 @@ impl TransportClock {
         self.last_advance = 0;
     }
 
+    /// The index the next playing advance of `frames` lands on (the seek
+    /// hold included).
+    pub fn index_after(&self, frames: u32) -> i64 {
+        if self.hold_next { self.index } else { self.index.saturating_add(i64::from(frames)) }
+    }
+
     /// Once per playing tick: the seek hold, then `frames`. Returns the net
     /// frames the index moved.
     pub fn advance(&mut self, frames: u32) -> i64 {

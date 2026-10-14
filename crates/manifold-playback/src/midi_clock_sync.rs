@@ -281,8 +281,21 @@ impl MidiClockSyncController {
         self.tracker.sample_at(self.seconds(r))
     }
 
-    fn seconds(&self, at: Instant) -> f64 {
+    /// Seconds on the clock's own monotonic origin, the base of
+    /// `last_landed_tick`.
+    pub fn seconds(&self, at: Instant) -> f64 {
         at.saturating_duration_since(self.origin).as_secs_f64()
+    }
+
+    /// Link's tempo while the guard is latched: the tick filter takes Link's
+    /// period and filters phase only (D20, D21). Set before `update`.
+    pub fn set_link_tempo(&mut self, bpm: Option<f64>) {
+        self.tracker.set_link_tempo(bpm);
+    }
+
+    /// The last landed tick and its arrival in `seconds`, for the guard (D21).
+    pub fn last_landed_tick(&self) -> Option<(i64, f64)> {
+        self.tracker.last_landed()
     }
 
     pub fn hard_seek_count(&self) -> i32 {
@@ -694,6 +707,31 @@ mod tests {
         let refit_at = refit_at.expect("the tempo change was refit");
         assert!(refit_at >= 3, "refit after {refit_at} ticks, before three misses");
         assert!(refit_at <= 8, "refit only after {refit_at} ticks");
+    }
+
+    /// With Link's tempo latched the period is Link's at each tick, a tempo
+    /// change included, and only phase is filtered (D20, D21).
+    #[test]
+    fn latched_link_period_filters_phase_only() {
+        let mut tracker = ClockTracker::new();
+        tracker.set_link_tempo(Some(128.0));
+        tracker.event(ClockKind::Start, 0.0, 120.0);
+        let p128 = period_of_bpm(128.0);
+        for k in 0..240 {
+            // Ticks 0.3 ms late on every other tick: phase noise only.
+            let late = if k % 2 == 0 { 0.0003 } else { 0.0 };
+            tracker.event(ClockKind::Tick, k as f64 * p128 + late, 120.0);
+        }
+        assert!((tracker.bpm().unwrap() - 128.0).abs() < 1e-9, "the period is Link's, not an estimate");
+        // Link and Live jump to 174 together: the next tick takes Link's
+        // period, with no wait for misses to refit.
+        tracker.set_link_tempo(Some(174.0));
+        let base = 239.0 * p128;
+        tracker.event(ClockKind::Tick, base + period_of_bpm(174.0), 120.0);
+        assert!((tracker.bpm().unwrap() - 174.0).abs() < 1e-9);
+        let s = tracker.sample_at(base + period_of_bpm(174.0)).unwrap();
+        assert!((s.beat - 240.0 / 24.0).abs() < 0.001, "beat {}", s.beat);
+        assert_eq!(tracker.last_landed().map(|(k, _)| k), Some(240));
     }
 
     /// Stalls of 150-600 ms released as a burst stamped on arrival: the

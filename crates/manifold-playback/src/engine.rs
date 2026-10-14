@@ -485,6 +485,17 @@ impl PlaybackEngine {
         Beats(self.frame_beat)
     }
 
+    /// The beat of the frame this tick will show after advancing `frames`,
+    /// as the converter stands now: Link's offset is taken against it (D15).
+    /// Paused, the frame does not move.
+    pub fn upcoming_frame_beat(&mut self, frames: u32) -> Beats {
+        if self.current_state != PlaybackState::Playing {
+            return Beats(self.frame_beat);
+        }
+        let t = self.clock.time_at(self.clock.index_after(frames));
+        Beats(self.converter_beat_at(t))
+    }
+
     /// Mutable access to the audio-feature snapshot the modulation pipeline
     /// reads. The content thread (which owns the capture/analysis worker) fills
     /// this in place each tick before `tick` — reusing the `Vec` capacity keeps

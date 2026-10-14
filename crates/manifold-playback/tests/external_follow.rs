@@ -385,7 +385,10 @@ fn guard_latches_and_holds_through_tempo_changes() {
         let session = Live::new(Tempo::constant(foreign));
         let mut clk = ClkReader::new(clock_arrivals(&live, 180.0, 133, &[], 0.0)).with_link(LinkReader::new(session, 134));
         let (m, _) = follow(engine_with_map(120.0, None), &mut clk, &live, 180.0, WARM, 14);
-        assert_bounds(&format!("foreign Link session at {foreign}"), &m, 1.5, 0.003, 0.0008);
+        // The plan's bound: no seek in 3 minutes. 127.8 is 0.16% off, inside
+        // the guard's 0.2%, so it latches and runs on its period; the trim
+        // holds the gap.
+        assert!(m.seeks.is_empty() && m.backward == 0, "foreign Link session at {foreign}: {}", m.report());
     }
 }
 

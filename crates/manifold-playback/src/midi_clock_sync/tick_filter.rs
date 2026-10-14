@@ -62,6 +62,9 @@ pub struct TickFilter {
     /// The current run of misses: (tick, arrival, error).
     misses: [(i64, f64, f64); REFIT_RUN],
     miss_count: usize,
+    /// The period is Link's (D20 with the D21 guard latched): only phase
+    /// is filtered.
+    locked: bool,
 }
 
 impl TickFilter {
@@ -73,8 +76,20 @@ impl TickFilter {
             period: clamp_period(if period.is_finite() && period > 0.0 { period } else { period_of_bpm(120.0) }),
             last_arrival: at,
             pending: None,
-            misses:[(0, 0.0, 0.0); REFIT_RUN],
+            misses: [(0, 0.0, 0.0); REFIT_RUN],
             miss_count: 0,
+            locked: false,
+        }
+    }
+
+    /// Link's period while the guard is latched, or the filter's own (D20).
+    pub fn lock_period(&mut self, period: Option<f64>) {
+        match period.filter(|p| p.is_finite() && *p > 0.0) {
+            Some(p) => {
+                self.period = clamp_period(p);
+                self.locked = true;
+            }
+            None => self.locked = false,
         }
     }
 
@@ -125,6 +140,15 @@ impl TickFilter {
         let predicted = self.t0 + n * self.period;
         let e = at - predicted;
 
+        let omega = 2.0 * std::f64::consts::PI * FILTER_BANDWIDTH_HZ * self.period;
+        let b = std::f64::consts::SQRT_2 * omega;
+        if self.locked {
+            self.t0 = predicted + b * e;
+            self.k0 = k;
+            self.miss_count = 0;
+            return true;
+        }
+
         if e.abs() > REFIT_MISS {
             let grows = self.miss_count > 0 && {
                 let (_, _, last) = self.misses[self.miss_count - 1];
@@ -143,8 +167,6 @@ impl TickFilter {
             self.miss_count = 0;
         }
 
-        let omega = 2.0 * std::f64::consts::PI * FILTER_BANDWIDTH_HZ * self.period;
-        let b = std::f64::consts::SQRT_2 * omega;
         let c = omega * omega;
         self.t0 = predicted + b * e;
         self.period = clamp_period(self.period + c * e / n);
@@ -192,6 +214,8 @@ pub struct ClockTracker {
     last_tick_at: f64,
     /// The last estimate, kept across seeds as the best tempo known.
     last_bpm: Option<f64>,
+    /// Link's tempo while the guard is latched (D21).
+    link_bpm: Option<f64>,
 }
 
 impl ClockTracker {
@@ -227,9 +251,12 @@ impl ClockTracker {
                 self.last_tick_at = at;
                 if self.seed_due || self.filter.is_none() {
                     self.seed_due = false;
-                    let bpm = self.last_bpm.unwrap_or(fallback_bpm);
-                    self.filter = Some(TickFilter::seeded(k, at, period_of_bpm(bpm)));
+                    let bpm = self.link_bpm.or(self.last_bpm).unwrap_or(fallback_bpm);
+                    let mut filter = TickFilter::seeded(k, at, period_of_bpm(bpm));
+                    filter.lock_period(self.link_bpm.map(period_of_bpm));
+                    self.filter = Some(filter);
                 } else if let Some(filter) = &mut self.filter {
+                    filter.lock_period(self.link_bpm.map(period_of_bpm));
                     filter.tick(k, at);
                 }
                 if let Some(filter) = &self.filter {
@@ -239,8 +266,19 @@ impl ClockTracker {
         }
     }
 
+    /// Link's tempo while the guard is latched: the filter takes Link's
+    /// period at each tick and filters phase only (D20). `None` unlocks.
+    pub fn set_link_tempo(&mut self, bpm: Option<f64>) {
+        self.link_bpm = bpm.filter(|b| b.is_finite() && *b > 0.0);
+    }
+
     pub fn is_playing(&self) -> bool {
         self.playing
+    }
+
+    /// The last landed tick and its arrival.
+    pub fn last_landed(&self) -> Option<(i64, f64)> {
+        self.landed.map(|k| (k, self.last_tick_at))
     }
 
     /// The tick the last landed tick was, while the clock has played.
