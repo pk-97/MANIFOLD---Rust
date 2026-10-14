@@ -76,6 +76,8 @@ pub fn build_cached(scene: &str, cache: &mut FixtureCache) -> Option<SceneData> 
         "scene-setup" => Some(physics_scene("WaterDamBreakGpuFlip", "Water — Dam Break")),
         "waterdambreak" => Some(physics_scene("WaterDamBreakGpuFlip", "Water — Dam Break")),
         "waterdambreakmatter" => Some(physics_scene("WaterDamBreakMatter", "Water — Dam Break (Live GPU)")),
+        // The free-camera scene: Ocean drives a free camera through a lens.
+        "oceanscene" => Some(physics_scene("Ocean", "Ocean")),
         "states" => Some(states_scene()),
         "inspector" => Some(inspector_scene()),
         "audiovisualizers" => {
@@ -533,7 +535,7 @@ fn automation_scene() -> SceneData {
 
     let mut data = timeline_scene();
     data.content.automation_armed = true;
-    data.selection.automation_mode_visible = true;
+    data.selection.set_automation_mode_visible(true);
 
     let flowers = data
         .project
@@ -591,7 +593,7 @@ fn automation_scene() -> SceneData {
 /// pixel-exact assertions against Mirror/Bloom's Y offsets.
 fn automation_placeholder_scene() -> SceneData {
     let mut data = timeline_scene();
-    data.selection.automation_mode_visible = true;
+    data.selection.set_automation_mode_visible(true);
 
     let flowers = data
         .project
@@ -610,12 +612,10 @@ fn automation_placeholder_scene() -> SceneData {
     // placeholder is what makes it choosable/drawable anyway.
     flowers.effects = Some(vec![mirror]);
 
-    data.selection.chosen_automation_params.insert(
+    data.selection.choose_automation_param(
         lid("flowers"),
-        (
-            manifold_ui::view::UiGraphTarget::Effect(mirror_id),
-            mirror_param.into(),
-        ),
+        manifold_ui::view::UiGraphTarget::Effect(mirror_id),
+        mirror_param.into(),
     );
     data
 }

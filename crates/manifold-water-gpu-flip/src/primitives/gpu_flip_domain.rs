@@ -122,7 +122,7 @@ fn fill_sites(
     initial_volume: Option<Transform>,
 ) -> Result<(u32, [[u32; 2]; 3]), String> {
     if !fill_height.is_finite() || fill_height < 0.0 || fill_height >= layout.size[1] {
-        return Err("GPU FLIP: Initial Fill Height must lie within the domain height".into());
+        return Err("GPU FLIP: Fill Height must lie within the domain height".into());
     }
     let min = layout.min.map(f64::from);
     let h = layout.cell_size;
@@ -173,13 +173,13 @@ pub fn gpu_flip_geometry(
     let (pool_sites, box_sites) = fill_sites(&layout, read("fill_height", 0.4), initial_volume)?;
     let capacity = read("particle_capacity", 0.0);
     if !capacity.is_finite() || capacity < 0.0 {
-        return Err("GPU FLIP: Particle Capacity must be 0 (the fill's count) or a positive count".into());
+        return Err("GPU FLIP: Max Particles must be 0 (the fill's count) or a positive count".into());
     }
     let particle_capacity = capacity.round() as u64;
     let particles = filled_sites(layout.cells, pool_sites, box_sites).max(particle_capacity);
     if particles > u64::from(EXACT_F32_COUNT) {
         return Err(format!(
-            "GPU FLIP: the pool holds {particles} particles, more than the {EXACT_F32_COUNT} a particle count carries exactly. Lower Resolution, Initial Fill Height or Particle Capacity."
+            "GPU FLIP: the pool holds {particles} particles, more than the {EXACT_F32_COUNT} a particle count carries exactly. Lower Resolution, Fill Height or Max Particles."
         ));
     }
     let setup = GpuFlipSetup {
@@ -408,23 +408,23 @@ manifold_node_engine::primitive! {
     },
     params: [
         ParamDef { name: Cow::Borrowed("resolution"), label: "Resolution", ty: ParamType::Int, default: ParamValue::Float(64.0), range: Some((8.0, 512.0)), enum_values: &[] },
-        ParamDef { name: Cow::Borrowed("solve_level"), label: "Solve Level", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0, 4.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("solve_level"), label: "Coarse Solve", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0, 4.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("max_iterations"), label: "Max Iterations", ty: ParamType::Int, default: ParamValue::Float(MAX_ITERATIONS as f32), range: Some((1.0, MAX_ITERATIONS as f32)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("sheet_fill_rate"), label: "Sheet Fill Rate", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((0.0, 1.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("domain_size"), label: "Domain Size", ty: ParamType::Float, default: ParamValue::Float(4.0), range: Some((0.5, 20.0)), enum_values: &[] },
-        ParamDef { name: Cow::Borrowed("fill_height"), label: "Initial Fill Height", ty: ParamType::Float, default: ParamValue::Float(0.4), range: Some((0.0, 20.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("fill_height"), label: "Fill Height", ty: ParamType::Float, default: ParamValue::Float(0.4), range: Some((0.0, 20.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("gravity_x"), label: "Gravity X", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-20.0, 20.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("gravity"), label: "Gravity Y", ty: ParamType::Float, default: ParamValue::Float(-9.81), range: Some((-20.0, 20.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("gravity_z"), label: "Gravity Z", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-20.0, 20.0)), enum_values: &[] },
-        ParamDef { name: Cow::Borrowed("speed"), label: "Simulation Speed", ty: ParamType::Float, default: ParamValue::Float(1.0), range: Some((0.0, 4.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("speed"), label: "Speed", ty: ParamType::Float, default: ParamValue::Float(1.0), range: Some((0.0, 4.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("reset"), label: "Reset", ty: ParamType::Trigger, default: ParamValue::Float(0.0), range: Some((0.0, 1.0)), enum_values: &[] },
-        ParamDef { name: Cow::Borrowed("closed_neg_x"), label: "Closed −X", ty: ParamType::Bool, default: ParamValue::Bool(true), range: None, enum_values: &[] },
-        ParamDef { name: Cow::Borrowed("closed_pos_x"), label: "Closed +X", ty: ParamType::Bool, default: ParamValue::Bool(true), range: None, enum_values: &[] },
-        ParamDef { name: Cow::Borrowed("closed_neg_y"), label: "Closed Bottom", ty: ParamType::Bool, default: ParamValue::Bool(true), range: None, enum_values: &[] },
-        ParamDef { name: Cow::Borrowed("closed_pos_y"), label: "Closed Top", ty: ParamType::Bool, default: ParamValue::Bool(true), range: None, enum_values: &[] },
-        ParamDef { name: Cow::Borrowed("closed_neg_z"), label: "Closed −Z", ty: ParamType::Bool, default: ParamValue::Bool(true), range: None, enum_values: &[] },
-        ParamDef { name: Cow::Borrowed("closed_pos_z"), label: "Closed +Z", ty: ParamType::Bool, default: ParamValue::Bool(true), range: None, enum_values: &[] },
-        ParamDef { name: Cow::Borrowed("particle_capacity"), label: "Particle Capacity", ty: ParamType::Int, default: ParamValue::Float(0.0), range: None, enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("closed_neg_x"), label: "Left Wall", ty: ParamType::Bool, default: ParamValue::Bool(true), range: None, enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("closed_pos_x"), label: "Right Wall", ty: ParamType::Bool, default: ParamValue::Bool(true), range: None, enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("closed_neg_y"), label: "Floor", ty: ParamType::Bool, default: ParamValue::Bool(true), range: None, enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("closed_pos_y"), label: "Ceiling", ty: ParamType::Bool, default: ParamValue::Bool(true), range: None, enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("closed_neg_z"), label: "Back Wall", ty: ParamType::Bool, default: ParamValue::Bool(true), range: None, enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("closed_pos_z"), label: "Front Wall", ty: ParamType::Bool, default: ParamValue::Bool(true), range: None, enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("particle_capacity"), label: "Max Particles", ty: ParamType::Int, default: ParamValue::Float(0.0), range: None, enum_values: &[] },
     ],
     depth_rule: Terminal,
     composition_notes: "The GPU FLIP group's source of truth: ticks and epoch into node.liquid_state (the tick region's clock owner), the fill sites and the padded lattice into node.liquid_fill, gravity, forces, impulses, the field scalars (field_nodes_x/y/z, field_spacing, force_lattices, first_tick, impulse_tick), bodies, regions, region_count, shapes, atlas, dynamic_bodies and the padded lattice into every node.gpu_flip_step, reaction into the first step of the tick (each later step takes the one before's reaction_out), and the padded lattice with bodies, shapes and atlas into node.liquid_solid_distance, node.liquid_frame and node.face_sample_component; simulation_time, display_time and epoch into node.liquid_frame; particle_mass into node.liquid_stats; particle_capacity into node.liquid_fill. The domain box, Resolution and fill restart the liquid; gravity and Simulation Speed are live. Live runs at most two fixed Sim Rate intervals per display frame and reports dropped time; export runs every interval.",
@@ -758,7 +758,7 @@ impl GpuFlipDomain {
             ctx.scalar_or_param("gravity_z", 0.0),
         ];
         if !speed.is_finite() || !(0.0..=4.0).contains(&speed) || gravity.iter().any(|g| !g.is_finite()) {
-            return Err("GPU FLIP: Simulation Speed must be between 0 and 4, and gravity must be finite".into());
+            return Err("GPU FLIP: Speed must be between 0 and 4, and gravity must be finite".into());
         }
         let offline = ctx.sim_step.offline();
         if let Some(error) = self.coupled.host_error.take() {
@@ -956,7 +956,7 @@ impl GpuFlipDomain {
         let Some(observation) = observation.as_ref() else { return Ok(false) };
         if speed != observation.speed {
             return Err(format!(
-                "GPU FLIP coupling: water and rigid bodies require the same Simulation Speed and shared World control (water {speed}, rigid {})",
+                "GPU FLIP coupling: water and rigid bodies require the same Speed and shared World control (water {speed}, rigid {})",
                 observation.speed
             ));
         }
@@ -1140,12 +1140,12 @@ mod tests {
     #[test]
     fn gpu_flip_domain_refuses_by_name() {
         let refused = |result: Result<GpuFlipGeometry, String>| result.expect_err("refused");
-        assert!(refused(geometry(64.0, 4.0, None)).contains("Initial Fill Height"));
+        assert!(refused(geometry(64.0, 4.0, None)).contains("Fill Height"));
         let turned = Transform { pos: [0.0, 1.0, 0.0], scale: [1.0; 3], rot_euler: [0.0, 0.3, 0.0], ..Transform::default() };
         assert!(refused(geometry(64.0, 0.16, Some(turned))).contains("initial volume"));
         // 256³ with a 2.5 m pool is 8 · 256² · 160 particles, past 2^24.
         let over = refused(geometry(256.0, 2.5, None));
-        assert!(over.contains("Resolution") && over.contains("Initial Fill Height"), "{over}");
+        assert!(over.contains("Resolution") && over.contains("Fill Height"), "{over}");
     }
 
     /// Max Iterations defaults to the engine's 900, rides the geometry to the
@@ -1205,9 +1205,9 @@ mod tests {
         assert_eq!(at(64.0, 0.0).expect("level 0").solve_level, 0);
         assert_eq!(at(64.0, 4.0).expect("native level 4").solve_level, 4);
         let refused = at(64.0, 5.0).expect_err("level 5 at 64");
-        assert!(refused.contains("Solve Level must be 0 to 4"), "{refused}");
+        assert!(refused.contains("Coarse Solve must be 0 to 4"), "{refused}");
         let fraction = at(64.0, 1.5).expect_err("a fraction");
-        assert!(fraction.contains("Solve Level must be a whole number"), "{fraction}");
+        assert!(fraction.contains("Coarse Solve must be a whole number"), "{fraction}");
     }
 }
 

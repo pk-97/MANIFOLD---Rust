@@ -1,4 +1,5 @@
 use crate::command::Command;
+use manifold_core::change::{ChangeSet, Part};
 use crate::service::EditingService;
 use manifold_core::audio_clip_detection::AudioClipDetection;
 use manifold_core::clip::TimelineClip;
@@ -109,7 +110,11 @@ struct ResolveDependentOverlaps {
 }
 
 impl Command for ResolveDependentOverlaps {
-    fn execute(&mut self, project: &mut Project) {
+    fn touches(&self) -> ChangeSet {
+        let base = ChangeSet::of(&[Part::Clips]);
+        self.commands.iter().flatten().fold(base, |set, c| set.union(c.touches()))
+    }
+    fn do_execute(&mut self, project: &mut Project) {
         if let Some(commands) = &mut self.commands {
             for command in commands { command.execute(project); }
             return;
@@ -128,7 +133,7 @@ impl Command for ResolveDependentOverlaps {
         self.commands = Some(commands);
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         if let Some(commands) = &mut self.commands {
             for command in commands.iter_mut().rev() { command.undo(project); }
         }
@@ -184,10 +189,9 @@ impl MoveClipCommand {
 
 impl Command for MoveClipCommand {
     fn touches(&self) -> manifold_core::change::ChangeSet {
-        use manifold_core::change::{ChangeSet, Part};
         ChangeSet::of(&[Part::Clips])
     }
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         self.applied = false;
         self.rejection = None;
 
@@ -261,7 +265,7 @@ impl Command for MoveClipCommand {
         self.applied = true;
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         if !self.applied {
             return;
         }
@@ -386,10 +390,9 @@ impl TrimClipCommand {
 
 impl Command for TrimClipCommand {
     fn touches(&self) -> manifold_core::change::ChangeSet {
-        use manifold_core::change::{ChangeSet, Part};
         ChangeSet::of(&[Part::Clips])
     }
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         let old_source = if self.retime_dependents && !self.dependent_prepared {
             project.timeline.find_clip_by_id(&self.clip_id).cloned()
         } else {
@@ -441,7 +444,7 @@ impl Command for TrimClipCommand {
         }
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         if self.retime_dependents {
             for command in self.dependent_commands.iter_mut().rev() {
                 command.undo(project);
@@ -531,7 +534,8 @@ impl RetimeAudioDependentCommand {
 }
 
 impl Command for RetimeAudioDependentCommand {
-    fn execute(&mut self, project: &mut Project) {
+    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Clips]) }
+    fn do_execute(&mut self, project: &mut Project) {
         Self::apply(project, &self.clip_id, self.new_state);
         if let Some(layer_index) = project.timeline.layer_index_for_id(&self.layer_id)
             && let Some(layer) = project.timeline.layers.get_mut(layer_index)
@@ -541,7 +545,7 @@ impl Command for RetimeAudioDependentCommand {
         project.timeline.mark_clip_lookup_dirty();
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         Self::apply(project, &self.clip_id, self.old_state);
         if let Some(layer_index) = project.timeline.layer_index_for_id(&self.layer_id)
             && let Some(layer) = project.timeline.layers.get_mut(layer_index)
@@ -573,7 +577,8 @@ impl DeleteClipCommand {
 }
 
 impl Command for DeleteClipCommand {
-    fn execute(&mut self, project: &mut Project) {
+    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Clips]) }
+    fn do_execute(&mut self, project: &mut Project) {
         let clip_id = self.clip.as_ref().unwrap().id.clone();
         if let Some(li) = project.timeline.layer_index_for_id(&self.layer_id)
             && let Some(layer) = project.timeline.layers.get_mut(li)
@@ -583,7 +588,7 @@ impl Command for DeleteClipCommand {
         project.timeline.mark_clip_lookup_dirty();
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         if let Some(clip) = self.clip.clone() {
             if let Some(li) = project.timeline.layer_index_for_id(&self.layer_id)
                 && let Some(layer) = project.timeline.layers.get_mut(li)
@@ -646,7 +651,8 @@ impl AddClipCommand {
 }
 
 impl Command for AddClipCommand {
-    fn execute(&mut self, project: &mut Project) {
+    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Clips]) }
+    fn do_execute(&mut self, project: &mut Project) {
         let clock = manifold_core::tempo::SourceClock::new(
             &project.tempo_map,
             project.settings.bpm,
@@ -660,7 +666,7 @@ impl Command for AddClipCommand {
         project.timeline.mark_clip_lookup_dirty();
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         if let Some(li) = project.timeline.layer_index_for_id(&self.layer_id)
             && let Some(layer) = project.timeline.layers.get_mut(li)
         {
@@ -745,7 +751,8 @@ impl SwapVideoCommand {
 }
 
 impl Command for SwapVideoCommand {
-    fn execute(&mut self, project: &mut Project) {
+    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Clips]) }
+    fn do_execute(&mut self, project: &mut Project) {
         if let Some(clip) = project.timeline.find_clip_by_id_mut(&self.clip_id) {
             clip.video_clip_id = self.new_video_clip_id.clone();
             clip.in_point = self.new_in_point;
@@ -753,7 +760,7 @@ impl Command for SwapVideoCommand {
         }
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         if let Some(clip) = project.timeline.find_clip_by_id_mut(&self.clip_id) {
             clip.video_clip_id = self.old_video_clip_id.clone();
             clip.in_point = self.old_in_point;
@@ -817,7 +824,8 @@ impl ReplaceAudioFileCommand {
 }
 
 impl Command for ReplaceAudioFileCommand {
-    fn execute(&mut self, project: &mut Project) {
+    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Clips]) }
+    fn do_execute(&mut self, project: &mut Project) {
         if let Some(clip) = project.timeline.find_clip_by_id_mut(&self.clip_id) {
             if self.old_audio_warp_enabled.is_none() {
                 self.old_audio_warp_enabled = Some(clip.audio_warp_enabled);
@@ -839,7 +847,7 @@ impl Command for ReplaceAudioFileCommand {
         }
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         if let Some(clip) = project.timeline.find_clip_by_id_mut(&self.clip_id) {
             clip.audio_file_path = self.old_path.clone();
             clip.source_duration = self.old_source_duration;
@@ -875,13 +883,14 @@ impl SlipClipCommand {
 }
 
 impl Command for SlipClipCommand {
-    fn execute(&mut self, project: &mut Project) {
+    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Clips]) }
+    fn do_execute(&mut self, project: &mut Project) {
         if let Some(clip) = project.timeline.find_clip_by_id_mut(&self.clip_id) {
             clip.in_point = self.new_in_point;
         }
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         if let Some(clip) = project.timeline.find_clip_by_id_mut(&self.clip_id) {
             clip.in_point = self.old_in_point;
         }
@@ -926,13 +935,14 @@ impl ClipEffectsCommand {
 }
 
 impl Command for ClipEffectsCommand {
-    fn execute(&mut self, project: &mut Project) {
+    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Clips]) }
+    fn do_execute(&mut self, project: &mut Project) {
         if let Some(clip) = project.timeline.find_clip_by_id_mut(&self.clip_id) {
             Self::apply(clip, &self.new);
         }
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         if let Some(clip) = project.timeline.find_clip_by_id_mut(&self.clip_id) {
             Self::apply(clip, &self.old);
         }
@@ -972,14 +982,15 @@ impl ChangeClipLoopCommand {
 }
 
 impl Command for ChangeClipLoopCommand {
-    fn execute(&mut self, project: &mut Project) {
+    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Clips]) }
+    fn do_execute(&mut self, project: &mut Project) {
         if let Some(clip) = project.timeline.find_clip_by_id_mut(&self.clip_id) {
             clip.is_looping = self.new_looping;
             clip.loop_duration_beats = self.new_loop_duration;
         }
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         if let Some(clip) = project.timeline.find_clip_by_id_mut(&self.clip_id) {
             clip.is_looping = self.old_looping;
             clip.loop_duration_beats = self.old_loop_duration;
@@ -1114,7 +1125,8 @@ impl ChangeClipRecordedBpmCommand {
 }
 
 impl Command for ChangeClipRecordedBpmCommand {
-    fn execute(&mut self, project: &mut Project) {
+    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Clips]) }
+    fn do_execute(&mut self, project: &mut Project) {
         if self.old_state.is_none() {
             let Some(old_clip) = project.timeline.find_clip_by_id(&self.clip_id).cloned() else {
                 return;
@@ -1184,7 +1196,7 @@ impl Command for ChangeClipRecordedBpmCommand {
         project.timeline.mark_clip_lookup_dirty();
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         for command in self.overlap_commands.iter_mut().rev() {
             command.undo(project);
         }
@@ -1236,7 +1248,8 @@ impl SplitClipCommand {
 }
 
 impl Command for SplitClipCommand {
-    fn execute(&mut self, project: &mut Project) {
+    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Clips]) }
+    fn do_execute(&mut self, project: &mut Project) {
         // Trim original
         if let Some(clip) = project.timeline.find_clip_by_id_mut(&self.clip_id) {
             clip.duration_beats = self.new_duration_beats;
@@ -1250,7 +1263,7 @@ impl Command for SplitClipCommand {
         project.timeline.mark_clip_lookup_dirty();
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         // Remove tail
         if let Some(li) = project.timeline.layer_index_for_id(&self.layer_id)
             && let Some(layer) = project.timeline.layers.get_mut(li)
@@ -1288,13 +1301,14 @@ impl MuteClipCommand {
 }
 
 impl Command for MuteClipCommand {
-    fn execute(&mut self, project: &mut Project) {
+    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Clips]) }
+    fn do_execute(&mut self, project: &mut Project) {
         if let Some(clip) = project.timeline.find_clip_by_id_mut(&self.clip_id) {
             clip.is_muted = self.new_muted;
         }
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         if let Some(clip) = project.timeline.find_clip_by_id_mut(&self.clip_id) {
             clip.is_muted = self.old_muted;
         }
@@ -1351,12 +1365,13 @@ impl SetClipStringParamCommand {
 }
 
 impl Command for SetClipStringParamCommand {
+    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Clips]) }
     fn graph_admission_clips(&self, clips: &mut Vec<ClipId>) { clips.push(self.clip_id.clone()); }
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         self.apply(project, &self.new_value.clone());
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         self.apply(project, &self.old_value.clone());
     }
 

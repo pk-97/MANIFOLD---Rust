@@ -20,9 +20,9 @@ pub(crate) fn dispatch_preset(
     match kind {
         PresetActionKind::MakeUnique => {
             let source = if matches!(target, GraphTarget::SceneModifier { .. }) {
-                crate::graph_target::resolve(ctx.project, &target).map(|graph| (*graph).clone())
+                crate::graph_target::resolve(&ctx.project, &target).map(|graph| (*graph).clone())
             } else {
-                preset_source_def(&target, ctx.project).map(|(def, _)| def)
+                preset_source_def(&target, &ctx.project).map(|(def, _)| def)
             };
             if let Some(source) = source {
                 submit(
@@ -35,7 +35,7 @@ pub(crate) fn dispatch_preset(
                     ctx,
                 );
             }
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
         PresetActionKind::Import => {
             if let Some(path) = crate::file_dialogs::pick_file(
@@ -56,10 +56,10 @@ pub(crate) fn dispatch_preset(
                     Err(error) => log::error!("[preset] import failed: {error}"),
                 }
             }
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
         PresetActionKind::Export => {
-            if let Some((def, id)) = preset_source_def(&target, ctx.project)
+            if let Some((def, id)) = preset_source_def(&target, &ctx.project)
                 && let Some(path) = crate::file_dialogs::save_file(
                     crate::file_dialogs::DialogAction::ExportPreset,
                     ctx.dialogs,
@@ -76,7 +76,7 @@ pub(crate) fn dispatch_preset(
         | PresetActionKind::SaveToProject
         | PresetActionKind::PushToLibrary => {
             let mut result = DispatchResult::handled();
-            if let Some((def, id)) = preset_source_def(&target, ctx.project) {
+            if let Some((def, id)) = preset_source_def(&target, &ctx.project) {
                 let library = crate::user_library::UserLibrary::new();
                 if kind == PresetActionKind::PushToLibrary
                     && library.is_user_entry(target.preset_kind(), &id)
@@ -100,10 +100,10 @@ pub(crate) fn dispatch_preset(
                 let Some(host_target) = target.host_target() else {
                     return DispatchResult::handled();
                 };
-                let Some(host) = crate::graph_target::resolve(ctx.project, host_target) else {
+                let Some(host) = crate::graph_target::resolve(&ctx.project, host_target) else {
                     return DispatchResult::handled();
                 };
-                let Some(local) = crate::graph_target::resolve(ctx.project, &target) else {
+                let Some(local) = crate::graph_target::resolve(&ctx.project, &target) else {
                     return DispatchResult::handled();
                 };
                 match crate::modifier_preset::library_baseline(&host, &local) {
@@ -126,18 +126,17 @@ pub(crate) fn dispatch_preset(
                 command = command.with_resolved_def(def);
             }
             submit(&target, Box::new(command), ctx);
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
     }
 }
 
-fn submit(target: &GraphTarget, mut command: Box<dyn Command + Send>, ctx: &mut DispatchCtx) {
+fn submit(target: &GraphTarget, command: Box<dyn Command + Send>, ctx: &mut DispatchCtx) {
     if matches!(target, GraphTarget::SceneModifier { .. }) {
         // Structural admission and authoritative mutation both belong to content.
         ContentCommand::send(ctx.content_tx, ContentCommand::ExecuteOnContent(command));
     } else {
         // Preserve the existing optimistic effect/generator UI contract.
-        command.execute(ctx.project);
-        ContentCommand::send(ctx.content_tx, ContentCommand::Execute(command));
+        ctx.execute(command);
     }
 }

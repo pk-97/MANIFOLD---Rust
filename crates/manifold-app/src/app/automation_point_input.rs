@@ -6,7 +6,6 @@
 
 use manifold_core::effects::{AutomationPoint, ParamId};
 use manifold_core::{Beats, GraphTarget};
-use manifold_editing::command::Command;
 use manifold_editing::commands::automation::MoveAutomationPointCommand;
 use manifold_ui::view::UiGraphTarget;
 use manifold_ui::slider::BitmapSlider;
@@ -34,8 +33,8 @@ pub(crate) fn begin_value(
         param_id: param_id.clone(),
         original_beat: beat,
         original_value_norm: value_norm,
-        param_min: param.spec.min,
-        param_max: param.spec.max,
+        param_min: param.slider_span().0,
+        param_max: param.slider_span().1,
         whole_numbers: param.whole_numbers(),
         beats_per_bar: beats_per_bar(app),
     };
@@ -75,8 +74,8 @@ pub(crate) fn begin_time(
         param_id: param_id.clone(),
         original_beat: beat,
         original_value_norm: value_norm,
-        param_min: param.spec.min,
-        param_max: param.spec.max,
+        param_min: param.slider_span().0,
+        param_max: param.slider_span().1,
         whole_numbers: param.whole_numbers(),
         beats_per_bar: bpb,
     };
@@ -149,11 +148,8 @@ pub(crate) fn commit(app: &mut Application, field: TextInputField, text: &str) {
     if old_point.beat == new_point.beat && old_point.value == new_point.value {
         return;
     }
-    let mut command =
-        MoveAutomationPointCommand::new(graph_target, ctx.param_id.as_ref(), old_point, new_point);
-    command.execute(&mut app.local_project);
-    app.send_content_cmd(crate::content_command::ContentCommand::Execute(Box::new(
-        command,
+    app.execute_local(Box::new(MoveAutomationPointCommand::new(
+        graph_target, ctx.param_id.as_ref(), old_point, new_point,
     )));
     let new_value_norm = BitmapSlider::value_to_normalized(value, ctx.param_min, ctx.param_max);
     if field == TextInputField::AutomationPointTime || field == TextInputField::AutomationPointValue {
@@ -165,8 +161,7 @@ pub(crate) fn commit(app: &mut Application, field: TextInputField, text: &str) {
         });
         app.selection.selected_automation_points.clear();
     }
-    app.needs_structural_sync = true;
-    app.ws.ui_root.overlay_dirty = true;
+    app.ws.ui_root.mark_overlay_dirty();
 }
 
 fn point_and_param<'a>(
@@ -186,7 +181,7 @@ fn point_and_param<'a>(
     let param = inst.params.get(param_id.as_ref())?;
     let point = lane.points.iter().find(|point| {
         point.beat == beat
-            && BitmapSlider::value_to_normalized(point.value, param.spec.min, param.spec.max) == value_norm
+            && BitmapSlider::value_to_normalized(point.value, param.slider_span().0, param.slider_span().1) == value_norm
     })?;
     Some((point, param))
 }
@@ -207,7 +202,7 @@ fn find_point(
         .find(|lane| lane.param_id.as_ref() == param_id.as_ref())?
         .points
         .iter()
-        .find(|point| point.beat == beat && BitmapSlider::value_to_normalized(point.value, param.spec.min, param.spec.max) == value_norm)
+        .find(|point| point.beat == beat && BitmapSlider::value_to_normalized(point.value, param.slider_span().0, param.slider_span().1) == value_norm)
         .copied()
 }
 
@@ -315,7 +310,7 @@ fn invalid(app: &mut Application, message: impl Into<String>) {
         .ui_root
         .toast
         .show_with_accent(message.into(), manifold_ui::color::RED_BASE);
-    app.ws.ui_root.overlay_dirty = true;
+    app.ws.ui_root.mark_overlay_dirty();
 }
 
 fn reject_edit(

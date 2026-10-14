@@ -1,11 +1,9 @@
 //! Editing-related dispatch: clip interaction, context menus, drag actions.
 use manifold_core::PresetTypeId;
-use manifold_core::project::Project;
 use manifold_core::types::LayerType;
 use manifold_core::{Beats, ClipId, LayerId};
 use manifold_core::effects::{AutomationPoint, SegmentShape};
 use manifold_editing::commands::automation::MoveAutomationPointCommand;
-use manifold_editing::command::Command;
 use manifold_editing::commands::layer::{AddLayerCommand, DeleteLayerCommand};
 use manifold_editing::service::EditingService;
 use manifold_ui::EditingAction;
@@ -18,7 +16,7 @@ use crate::input_host::automation;
 
 pub(super) fn dispatch_editing(
     action: &EditingAction,
-    project: &mut Project,
+    project: &mut crate::ui_bridge::ProjectRef<'_>,
     content_tx: &crossbeam_channel::Sender<crate::content_command::ContentCommand>,
     content_state: &crate::content_state::ContentState,
     ui: &mut UIRoot,
@@ -73,7 +71,7 @@ pub(super) fn dispatch_editing(
                 .layers
                 .get(layer_idx)
                 .map(|l| l.layer_id.clone());
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
         EditingAction::ClipDoubleClicked(_clip_id) => {
             // Future: open clip properties or enter clip editing mode
@@ -101,7 +99,7 @@ pub(super) fn dispatch_editing(
                 .layers
                 .get(*layer)
                 .map(|l| l.layer_id.clone());
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
         EditingAction::TrackDoubleClicked(beat, layer) => {
             // From Unity InteractionOverlay.OnPointerClick double-click path:
@@ -110,14 +108,9 @@ pub(super) fn dispatch_editing(
             let snapped = manifold_ui::snap::floor_beat_to_grid(Beats::from_f32(*beat), grid_step);
             {
                 // AddClipCommand enforces non-overlap internally.
-                if let Some((cmd, clip_id)) = EditingService::create_clip_at_position(
-                    project,
-                    snapped,
-                    *layer,
-                    Beats::from_f32(4.0),
-                ) {
-                    ContentCommand::send(content_tx, ContentCommand::Execute(cmd));
-
+                if let Some(clip_id) = project.executed_by(|p| {
+                    EditingService::create_clip_at_position(p, snapped, *layer, Beats::from_f32(4.0))
+                }) {
                     // Select the newly created clip
                     let new_lid = project
                         .timeline
@@ -133,7 +126,7 @@ pub(super) fn dispatch_editing(
                 .layers
                 .get(*layer)
                 .map(|l| l.layer_id.clone());
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
         EditingAction::ViewportHoverChanged(_clip_id) => {
             // Hover state is already tracked on viewport panel
@@ -152,7 +145,7 @@ pub(super) fn dispatch_editing(
                     }
                 }
             }
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
         EditingAction::ContextDeleteClip(clip_id) => {
             let clip_id = ClipId::new(clip_id.as_str());
@@ -172,14 +165,14 @@ pub(super) fn dispatch_editing(
                 );
             }
             selection.deselect_clips(&target_ids);
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
         EditingAction::ContextDuplicateClip(clip_id) => {
             let clip_id = ClipId::new(clip_id.as_str());
             {
                 // Calculate region from the single clip for proper offset
                 let mut region = manifold_core::selection::SelectionRegion::default();
-                if let Some(clip) = project.timeline.find_clip_by_id(&clip_id) {
+                if let Some(clip) = project.find_clip_by_id(&clip_id) {
                     region.start_beat = clip.start_beat;
                     region.end_beat = clip.start_beat + clip.duration_beats;
                     region.is_active = true;
@@ -196,7 +189,7 @@ pub(super) fn dispatch_editing(
                     );
                 }
             }
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
         EditingAction::ContextPasteAtTrack(beat, layer) => {
             // Paste the clip clipboard at the clicked beat/layer — same content-thread
@@ -209,7 +202,7 @@ pub(super) fn dispatch_editing(
                 selection,
                 &mut ui.toast,
             );
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
         EditingAction::ContextAddVideoLayer(after_layer) => {
             {
@@ -222,14 +215,13 @@ pub(super) fn dispatch_editing(
                     let cmd =
                         AddLayerCommand::new(name, LayerType::Video, PresetTypeId::NONE, idx, None);
                     {
-                        let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
+                        let boxed: Box<dyn manifold_editing::command::Command + Send> =
                             Box::new(cmd);
-                        boxed.execute(project);
-                        ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+                        project.execute(boxed);
                     }
                 }
             }
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
         EditingAction::ContextAddGeneratorLayer(after_layer) => {
             {
@@ -250,7 +242,7 @@ pub(super) fn dispatch_editing(
                     }
                 }
             }
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
         EditingAction::ContextAddLedLayer(after_layer) => {
             {
@@ -269,14 +261,13 @@ pub(super) fn dispatch_editing(
                         None,
                     );
                     {
-                        let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
+                        let boxed: Box<dyn manifold_editing::command::Command + Send> =
                             Box::new(cmd);
-                        boxed.execute(project);
-                        ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+                        project.execute(boxed);
                     }
                 }
             }
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
         EditingAction::ContextAddAudioLayer(after_layer) => {
             {
@@ -286,14 +277,13 @@ pub(super) fn dispatch_editing(
                     let cmd =
                         AddLayerCommand::new(name, LayerType::Audio, PresetTypeId::NONE, idx, None);
                     {
-                        let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
+                        let boxed: Box<dyn manifold_editing::command::Command + Send> =
                             Box::new(cmd);
-                        boxed.execute(project);
-                        ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+                        project.execute(boxed);
                     }
                 }
             }
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
 
         EditingAction::ContextDeleteLayer(layer_id) => {
@@ -304,14 +294,13 @@ pub(super) fn dispatch_editing(
                     let layer = layer.clone();
                     let cmd = DeleteLayerCommand::new(layer);
                     {
-                        let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
+                        let boxed: Box<dyn manifold_editing::command::Command + Send> =
                             Box::new(cmd);
-                        boxed.execute(project);
-                        ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+                        project.execute(boxed);
                     }
                 }
             }
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
 
         EditingAction::ContextDuplicateLayer(layer_id) => {
@@ -323,21 +312,17 @@ pub(super) fn dispatch_editing(
                 {
                     // If the right-clicked layer is among the selected layers, duplicate the
                     // full selection; otherwise duplicate just this layer.
-                    let ids: Vec<LayerId> = if selection.selected_layer_ids.contains(layer_id) {
-                        selection.selected_layer_ids.iter().cloned().collect()
+                    let ids: Vec<LayerId> = if selection.selected_layer_ids().contains(layer_id) {
+                        selection.selected_layer_ids().iter().cloned().collect()
                     } else {
                         vec![layer_id.clone()]
                     };
-                    if let Some(mut cmd) = EditingService::duplicate_layers(project, &ids) {
-                        cmd.execute(project);
-                        ContentCommand::send(
-                            content_tx,
-                            ContentCommand::ExecuteBatch(vec![cmd], "Duplicate Layers".to_string()),
-                        );
+                    if let Some(cmd) = EditingService::duplicate_layers(project, &ids) {
+                        project.execute_batch(vec![cmd], "Duplicate Layers".to_string());
                     }
                 }
             }
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
 
         EditingAction::ContextAutomationCopy(target, param_id, _beat) => {
@@ -347,51 +332,50 @@ pub(super) fn dispatch_editing(
         }
         EditingAction::ContextAutomationCut(target, param_id, _beat) => {
             automation::set_lane_context(selection, target, param_id);
-            let mut needs_rebuild = false;
-            automation::cut_selected(project, selection, content_tx, &mut needs_rebuild);
-            DispatchResult::structural()
+            project.with_sent(crate::content_command::touch::AUTOMATION, |p| {
+                automation::cut_selected(p, selection, content_tx)
+            });
+            DispatchResult::handled()
         }
         EditingAction::ContextAutomationPaste(target, param_id, beat) => {
             automation::set_lane_context(selection, target, param_id);
-            let mut needs_rebuild = false;
-            automation::paste(project, selection, content_tx, *beat, &mut needs_rebuild);
-            DispatchResult::structural()
+            project.with_sent(crate::content_command::touch::AUTOMATION, |p| {
+                automation::paste(p, selection, content_tx, *beat)
+            });
+            DispatchResult::handled()
         }
         EditingAction::ContextAutomationDuplicate(target, param_id, _beat) => {
             automation::set_lane_context(selection, target, param_id);
-            let mut needs_rebuild = false;
-            automation::duplicate_selected(
-                project,
+            project.with_sent(crate::content_command::touch::AUTOMATION, |p| automation::duplicate_selected(
+                p,
                 selection,
                 content_tx,
                 ui.viewport.grid_step(),
-                &mut needs_rebuild,
-            );
-            DispatchResult::structural()
+            ));
+            DispatchResult::handled()
         }
         EditingAction::ContextSelectAllAutomation(target, param_id) => {
             automation::select_all_in_lane(project, selection, target, param_id);
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
         EditingAction::ContextDeleteSelectedAutomation(target, param_id) => {
             automation::set_lane_context(selection, target, param_id);
-            let mut needs_rebuild = false;
-            automation::delete_selected(project, selection, content_tx, &mut needs_rebuild);
-            DispatchResult::structural()
+            project.with_sent(crate::content_command::touch::AUTOMATION, |p| {
+                automation::delete_selected(p, selection, content_tx)
+            });
+            DispatchResult::handled()
         }
         EditingAction::ContextInsertAutomationShape(target, param_id, beat, shape) => {
-            let mut needs_rebuild = false;
-            automation::insert_shape(
-                project,
+            project.with_sent(crate::content_command::touch::AUTOMATION, |p| automation::insert_shape(
+                p,
                 selection,
                 content_tx,
                 target,
                 param_id,
                 *beat,
                 *shape,
-                &mut needs_rebuild,
-            );
-            DispatchResult::structural()
+            ));
+            DispatchResult::handled()
         }
         EditingAction::ContextAutomationSetShape(target, param_id, beat, value_norm, shape) => {
             let graph_target = crate::editing_host::to_graph_target(target);
@@ -408,7 +392,7 @@ pub(super) fn dispatch_editing(
                 lanes.iter().find(|lane| lane.param_id.as_ref() == param_id.as_ref())
                     .and_then(|lane| lane.points.iter().find(|point| {
                         point.beat == *beat && manifold_ui::slider::BitmapSlider::value_to_normalized(
-                            point.value, param.spec.min, param.spec.max,
+                            point.value, param.slider_span().0, param.slider_span().1,
                         ) == *value_norm
                     }))
                     .copied()
@@ -424,15 +408,11 @@ pub(super) fn dispatch_editing(
                 }
             };
             let new_point = AutomationPoint { shape: new_shape, ..old_point };
-            let mut local = MoveAutomationPointCommand::new(
+            let local = MoveAutomationPointCommand::new(
                 graph_target.clone(), param_id.as_ref(), old_point, new_point,
             );
-            local.execute(project);
-            ContentCommand::send(
-                content_tx,
-                ContentCommand::Execute(Box::new(local)),
-            );
-            DispatchResult::structural()
+            project.execute(Box::new(local));
+            DispatchResult::handled()
         }
         EditingAction::AutomationPointEditValue(_, _, _, _)
         | EditingAction::AutomationPointEditTime(_, _, _, _) => {
@@ -442,36 +422,36 @@ pub(super) fn dispatch_editing(
 
         EditingAction::AutomationLaneHide(target, param_id) => {
             selection.hide_automation_lane(target.clone(), param_id.clone());
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
         EditingAction::AutomationLanePinToggle(target, param_id) => {
             selection.toggle_automation_lane_pin(target.clone(), param_id.clone());
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
         EditingAction::AutomationLaneMove(target, param_id, direction) => {
             super::sync_automation_lane_order(project, selection);
             for layer in &project.timeline.layers {
                 let lanes = crate::ui_translate::layer_automation_lanes_to_ui_with_view(
                     layer,
-                    selection.chosen_automation_params.get(&layer.layer_id),
-                    &selection.automation_lane_order,
-                    &selection.hidden_automation_lanes,
-                    &selection.pinned_automation_lanes,
+                    selection.chosen_automation_params().get(&layer.layer_id),
+                    selection.automation_lane_order(),
+                    selection.hidden_automation_lanes(),
+                    selection.pinned_automation_lanes(),
                 );
                 let Some(index) = lanes.iter().position(|lane| lane.target == *target && lane.param_id == *param_id) else { continue; };
                 let other = index as isize + direction.signum() as isize;
                 if *direction != 0 && other >= 0 && let Some(neighbor) = lanes.get(other as usize) {
-                    let a = selection.automation_lane_order.iter().position(|key| key.0 == *target && key.1 == *param_id);
-                    let b = selection.automation_lane_order.iter().position(|key| key.0 == neighbor.target && key.1 == neighbor.param_id);
-                    if let (Some(a), Some(b)) = (a, b) { selection.automation_lane_order.swap(a, b); }
+                    let a = selection.automation_lane_order().iter().position(|key| key.0 == *target && key.1 == *param_id);
+                    let b = selection.automation_lane_order().iter().position(|key| key.0 == neighbor.target && key.1 == neighbor.param_id);
+                    if let (Some(a), Some(b)) = (a, b) { selection.swap_automation_lane_ranks(a, b); }
                 }
                 break;
             }
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
         EditingAction::ShowAllAutomationLanes => {
             selection.show_all_automation_lanes();
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
 
         EditingAction::LayerHeaderRightClicked(_) => {
@@ -484,7 +464,7 @@ pub(super) fn dispatch_editing(
             // Paste at the current playhead beat on the right-clicked layer.
             // Re-resolve the id to its current index at execution time (BUG-031).
             let Some((idx, _)) = project.timeline.find_layer_by_id(layer_id.as_str()) else {
-                return DispatchResult::structural();
+                return DispatchResult::handled();
             };
             super::paste_clips_and_select(
                 content_tx,
@@ -493,7 +473,7 @@ pub(super) fn dispatch_editing(
                 selection,
                 &mut ui.toast,
             );
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
         EditingAction::ContextImportMidi(layer_id) => {
             if let Some(path) = crate::file_dialogs::pick_file(
@@ -507,29 +487,33 @@ pub(super) fn dispatch_editing(
                 if !notes.is_empty() {
                     // `layer_id` is already the stable target — no index resolution needed.
                     let target_layer_id = layer_id.clone();
-                    let result = manifold_playback::midi_import::MidiImportService::import_to_layer(
-                        &notes,
-                        &target_layer_id,
-                        0.0,
-                        project,
-                    );
-                    if result.success {
-                        if let Some(undo_cmd) = result.undo_command {
-                            ContentCommand::send(content_tx, ContentCommand::Execute(undo_cmd));
+                    let added = project.executed_by(|p| {
+                        let result = manifold_playback::midi_import::MidiImportService::import_to_layer(
+                            &notes,
+                            &target_layer_id,
+                            0.0,
+                            p,
+                        );
+                        if !result.success {
+                            return None;
                         }
+                        let added = result.added_clips;
+                        result.undo_command.map(|cmd| (cmd, added))
+                    });
+                    if let Some(added) = added {
                         log::info!(
                             "Imported {} clips from MIDI to layer '{}'",
-                            result.added_clips,
+                            added,
                             target_layer_id
                         );
                     }
                 }
             }
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
         EditingAction::ContextGroupSelectedLayers => {
             let selected_ids: Vec<manifold_core::LayerId> =
-                selection.selected_layer_ids.iter().cloned().collect();
+                selection.selected_layer_ids().iter().cloned().collect();
             if selected_ids.len() >= 2 {
                 let valid = selected_ids.iter().all(|id| {
                     project
@@ -546,16 +530,15 @@ pub(super) fn dispatch_editing(
                         original_order,
                     );
                     {
-                        let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
+                        let boxed: Box<dyn manifold_editing::command::Command + Send> =
                             Box::new(cmd);
-                        boxed.execute(project);
-                        ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+                        project.execute(boxed);
                     }
                     selection.clear_selection();
                 }
             }
             ContentCommand::send(content_tx, ContentCommand::MarkCompositorDirty);
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
         EditingAction::ContextUngroup(layer_id) => {
             if let Some((_, layer)) = project.timeline.find_layer_by_id(layer_id.as_str())
@@ -577,39 +560,29 @@ pub(super) fn dispatch_editing(
                     original_order,
                 );
                 {
-                    let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
+                    let boxed: Box<dyn manifold_editing::command::Command + Send> =
                         Box::new(cmd);
-                    boxed.execute(project);
-                    ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+                    project.execute(boxed);
                 }
             }
             ContentCommand::send(content_tx, ContentCommand::MarkCompositorDirty);
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
 
         EditingAction::ContextSetLayerColor(layer_id, color) => {
-            use crate::content_command::ContentCommand;
+            
             let r = color.r as f32 / 255.0;
             let g = color.g as f32 / 255.0;
             let b = color.b as f32 / 255.0;
             let a = color.a as f32 / 255.0;
-            // Local project mutation — resolved by id, not a baked-in index (BUG-031).
-            if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(layer_id.as_str()) {
-                layer.layer_color = manifold_core::color::Color { r, g, b, a };
-            }
-            // Mirror to content thread — this closure runs later, on a different
-            // thread, so it re-resolves the id there too rather than capturing
-            // an index that may be stale by the time it executes.
+            // Resolved by id on each side, never a baked-in index (BUG-031 (stale layer index)).
             let layer_id = layer_id.clone();
-            ContentCommand::send(
-                content_tx,
-                ContentCommand::mutate(crate::content_command::touch::LAYERS, Box::new(move |p| {
-                    if let Some((_, layer)) = p.timeline.find_layer_by_id_mut(layer_id.as_str()) {
-                        layer.layer_color = manifold_core::color::Color { r, g, b, a };
-                    }
-                })),
-            );
-            DispatchResult::structural()
+            project.mutate(crate::content_command::touch::LAYERS, move |p| {
+                if let Some((_, layer)) = p.timeline.find_layer_by_id_mut(layer_id.as_str()) {
+                    layer.layer_color = manifold_core::color::Color { r, g, b, a };
+                }
+            });
+            DispatchResult::handled()
         }
 
         // Right-click actions (intercepted by UIRoot for dropdown; should not reach dispatch)

@@ -1,9 +1,13 @@
 //! Whole-project undo/redo oracle for setter-style commands.
 //!
 //! Compared on the serialized project, which is exactly what a save persists.
+//! Each step is also held to the command's declared parts by the change audit
+//! fingerprint (docs/UI_INVALIDATION_DESIGN.md D10), so every case doubles as
+//! a `Command::touches` check.
 //! Shared by this crate's unit tests and `tests/command_roundtrips.rs` (pulled
 //! in with `#[path]`), so `Command` is named through the includer's `super`.
 
+use manifold_core::change::{ChangeSet, audit};
 use manifold_core::project::Project;
 use serde_json::Value;
 
@@ -65,26 +69,44 @@ fn first_difference(a: &Value, b: &Value, path: &mut String) -> Option<String> {
     }
 }
 
+/// The parts a step changed outside what the command declares. Execute's set
+/// is read after execute (it may depend on what execute found); undo's before.
+pub fn undeclared(step: &str, before: &audit::Fingerprint, project: &Project, declared: ChangeSet) -> Result<(), String> {
+    let extra = audit::changed(before, &audit::fingerprint(project)).minus(declared);
+    if extra.is_empty() {
+        return Ok(());
+    }
+    Err(format!("{step} changed undeclared parts {:?} (declared {:?})", extra.parts().collect::<Vec<_>>(), declared.parts().collect::<Vec<_>>()))
+}
+
 fn check(case: &SetterCase, fresh: fn() -> Project) -> Result<(), String> {
     let mut project = fresh();
     let mut cmd = (case.build)(&mut project);
     let before = snapshot(&project);
 
+    let fp = audit::fingerprint(&project);
     cmd.execute(&mut project);
     if !(case.applied)(&project) {
         return Err("execute did not apply".into());
     }
+    undeclared("execute", &fp, &project, cmd.touches())?;
     let executed = snapshot(&project);
     if before == executed {
         return Err("execute left the project unchanged".into());
     }
 
+    let fp = audit::fingerprint(&project);
+    let declared = cmd.touches();
     cmd.undo(&mut project);
+    undeclared("undo", &fp, &project, declared)?;
     if let Some(diff) = first_difference(&before, &snapshot(&project), &mut String::new()) {
         return Err(format!("undo diverged at {diff}"));
     }
 
+    let fp = audit::fingerprint(&project);
+    let declared = cmd.touches();
     cmd.execute(&mut project);
+    undeclared("redo", &fp, &project, declared)?;
     if let Some(diff) = first_difference(&executed, &snapshot(&project), &mut String::new()) {
         return Err(format!("redo diverged at {diff}"));
     }

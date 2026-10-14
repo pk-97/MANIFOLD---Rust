@@ -229,7 +229,7 @@ pass paints it on hover in either window; no scene-specific rows or handlers.
 
 | Invariant | Enforcement (machine check, by name) |
 |---|---|
-| INV-1 Rows mirror the manifest — every manifest slot has exactly one row, ids equal, order equal | `param_surface_tests::rows_mirror_manifest` property test over fixture projects incl. the Liveschool canonical fixture (P1 deliverable) |
+| INV-1 Rows mirror the manifest — every manifest slot has exactly one row, ids equal, order equal. Each manifest entry is the saved control (id, value, user choices) joined with the live lookup inside core when the manifest is built (SCENE_SURFACES_DESIGN.md D2, one live lookup); projections still read only the manifest. | `param_surface_tests::rows_mirror_manifest` property test over fixture projects incl. the Liveschool canonical fixture (P1 deliverable) |
 | INV-2 Actions carry identity, never positions | deletion of `pid_at`/`id_to_index` (`rg 'pid_at|id_to_index' crates/manifold-ui crates/manifold-app` → 0, P2 gate); dispatch tests assert emitted actions carry the clicked row's `ParamId` |
 | INV-3 The tree is the only *post-build* geometry source (restated 2026-07-20 post-W2-B: `card_y` already deleted; `compute_height` survives as `build()`'s layout cursor, which IS the geometry source at build time) | `rg 'card_y' crates/manifold-ui/src/panels` → 0 (true since `94632d65`); `compute_height` call sites confined to `build()`/column-height helpers — reviewed at P3 landing with the call-site list in the landing report; geometry tests compute drop targets from tree bounds under scroll + mid-tween states (P3 gate) |
 | INV-4 Widget identity survives ROW reorder/insert/fold AND CARD reorder, and is process-stable | keyed-identity tests shaped like `tree.rs:1747` covering both row reorder and card reorder (the D4 card-root spec), plus a pinned-hash test (known id bytes → known salt, cross-run) (P2 deliverables) |
@@ -251,7 +251,7 @@ Phased by **layer**, never by family (DESIGN_AUTHORING section 7): P1 swaps the 
 
 **P1a — collapse the parallel vecs in place (mechanical).** Inside the EXISTING `ParamCardConfig`: the ~15 per-param vecs PLUS `AudioCardState`'s ~14 more (`param_slider_shared.rs:572–600` — the fork-found second cliff) become per-row structs (`RowMod`-shaped), and `ParamModState`'s sync paths (`sync_audio` et al.) are re-pointed at them. No new types cross a crate boundary; no parallel path (the DTO's interior changes, its name and consumers don't).
 
-- **Entry:** `rg -n 'struct ParamCardConfig' crates/manifold-ui/src/panels/param_card.rs` hits; `rg -n 'struct AudioCardState' crates/manifold-ui/src/panels/param_slider_shared.rs` hits; re-derive counts.
+- **Entry:** `rg -n 'struct ParamCardConfig' crates/manifold-ui/src/panels/param_card/mod.rs` hits; `rg -n 'struct AudioCardState' crates/manifold-ui/src/panels/param_slider_shared/mod.rs` hits; re-derive counts.
 - **Gate:** existing card/golden/undo suites green untouched; negative: `rg 'driver_active|trim_min|target_norm|env_decay' crates/manifold-ui` → 0 (the vec names are gone).
 - **Demo:** none — **L1**, honestly (interior refactor pinned by untouched suites).
 

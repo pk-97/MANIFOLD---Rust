@@ -44,6 +44,15 @@ pub const MIN_CANVAS_H: f32 = 140.0;
 pub const EDITOR_LEFT_DEFAULT: f32 = 460.0;
 pub const EDITOR_RIGHT_DEFAULT: f32 = 340.0;
 
+/// What a dock's divider draw depends on ([`Dock::draw_key`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DockDrawKey {
+    sizes: [u32; 3],
+    shown: [bool; 3],
+    drag: Option<DockEdge>,
+    hover: Option<DockEdge>,
+}
+
 /// Which resizable edge a handle / drag refers to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DockEdge {
@@ -254,6 +263,17 @@ impl Dock {
     }
 
     // ── Draw (one call from the render pass) ────────────────────────────────
+
+    /// Everything [`Self::draw`] reads besides the area, for a window that
+    /// redraws only when what it paints moved.
+    pub fn draw_key(&self) -> DockDrawKey {
+        DockDrawKey {
+            sizes: [self.left_w.to_bits(), self.right_w.to_bits(), self.bottom_h.to_bits()],
+            shown: [self.show_left, self.show_right, self.show_bottom],
+            drag: self.drag.payload().copied(),
+            hover: self.hover,
+        }
+    }
 
     /// Draw one divider strip per visible edge — a *single* element whose
     /// width and colour change with state, never a seam plus a band stacked

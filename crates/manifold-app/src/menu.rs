@@ -54,9 +54,7 @@ pub enum MenuAction {
     Perform,
     Monitor,
     Audio,
-    /// Toggle the Scene Setup dock — mirrors [`Self::Audio`]
-    /// (`SCENE_SETUP_PANEL_DESIGN.md` D2: the two utility docks are the
-    /// same View-menu mechanism, mutually exclusive).
+    /// Toggle the inspector's Scene tab (SCENE_SURFACES D16).
     Scene,
     // App menu
     Settings,

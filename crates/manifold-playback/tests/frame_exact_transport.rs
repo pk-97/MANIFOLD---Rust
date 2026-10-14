@@ -71,6 +71,9 @@ fn bundled_param(inst: &mut PresetInstance, id: &str, max: f32, whole_numbers: b
         section: None,
         card_visible: true,
         material_role: None,
+        limit: Default::default(),
+        scene: Default::default(),
+        unit: Default::default(),
     }));
 }
 

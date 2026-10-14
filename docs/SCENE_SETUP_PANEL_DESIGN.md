@@ -1,5 +1,7 @@
 # Scene Setup Panel — compose, light, and dress a 3D scene without opening the graph
 
+> **SUPERSEDED for the dock, tree and card (2026-10-14) → [`docs/SCENE_SURFACES_DESIGN.md`](SCENE_SURFACES_DESIGN.md).** The dock is now the inspector's Scene tab (D16); the tree, item header and card follow that doc.
+
 > **SUPERSEDED for the param mechanism (2026-07-21) → [`docs/SCENE_PANEL_EXPOSURE_CONVERGENCE_DESIGN.md`](SCENE_PANEL_EXPOSURE_CONVERGENCE_DESIGN.md) is the current authority.** This doc's curated projection + synthesized `scene.{doc}.{param}` id system + resolution funnels are gone: the panel now renders exposed-param manifest rows through the card path (P1/P2 LANDED), and `scene_vm.rs` is slimmed to item-discovery only (P3 LANDED `7ee0a887`). The outliner / selection / structural verbs described here still stand; the per-param addressing, hand metadata tables, and dual write path do not.
 
 **Status: SHIPPED (all phases P1–P5) 2026-07-17 — dock column + discovery + Environment/Fog, Objects, Lights + Camera, Import Model merge, modifier stack; orchestrated overnight. Honest escalations opened, not blocking: BUG-193 (no object/light remove command), BUG-194 (vertex count not computable), BUG-195 (merge scale-sanity proxy), BUG-198 (headless Key Z misses Undo — pre-existing harness gap). REVISED 2026-07-17: D3's group trace, the section 4 (Invariants) "no new port types" invariant, the D4 layout, and the section 9 (Deferred) visibility deferral are superseded by `docs/SCENE_OBJECT_AND_PANEL_V2_DESIGN.md`; D1/D5/D6/D7/D8 doctrine carries forward unchanged. · 2026-07-16 · Fable, design session with Peter**
@@ -351,7 +353,7 @@ landing in the main checkout, landing reports per DESIGN_DOC_STANDARD section 8.
 - **Deliverables:** Objects section — per-object collapsible row: editable name → rename
   command; transform triplets; material quick knobs per D3; remove (delete-group + decrement
   composite, the existing path — ⚠ VERIFY-AT-IMPL: the exact existing removal command,
-  `rg -n "delete.*group\|RemoveScene" crates/manifold-editing/src/commands/graph.rs`);
+  `rg -n "delete.*group\|RemoveScene" crates/manifold-editing/src/commands/graph/mod.rs`);
   "+ Object"/"+ Light" buttons dispatching the existing commands; custom-object degraded
   rows; header counts row (objects/lights/vertices/shadow casters from the Vm).
 - **Gate.** *Positive:* Vm + panel unit tests (rows for the azalea-shaped synthetic def;

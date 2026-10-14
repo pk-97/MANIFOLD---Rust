@@ -55,7 +55,7 @@ pub use automation::{
 };
 pub use bitmap_renderer::LayerBitmapRenderer;
 pub use coordinate_mapper::CoordinateMapper;
-pub use dock::{Dock, DockEdge};
+pub use dock::{Dock, DockDrawKey, DockEdge};
 pub use mini_timeline::{MiniClip, MiniLayerLabel, MiniTimeline};
 pub use draw::{Depth, Painter};
 pub use graph_canvas::{GraphCanvas, MappingPopover};
@@ -64,10 +64,10 @@ pub use hit_targets::{HitTargetEntry, HitTargets};
 pub use input::{Modifiers, PointerAction, UIEvent, UIInputSystem};
 pub use layout::ScreenLayout;
 pub use param_surface::{
-    MaterialColour, MaterialFeature, MaterialGroup, MaterialLook, MaterialMapFamily, MaterialParamRole,
+    ColourGroup, MaterialColour, MaterialFeature, MaterialGroup, MaterialLook, MaterialMapFamily, MaterialParamRole,
     ModifierCardInfo, ModifierPickerEntry, ObjectModifierCardInfo, ParamRow, ParamSurface,
     RowMapping, RowSpec, RowValue,
-    RgbChannel, SamplerComponent, SceneRowAddr, UvComponent,
+    RgbChannel, RgbMembers, SamplerComponent, SceneRowAddr, UvComponent,
 };
 pub use node::*;
 pub use panels::clip_chrome::ClipChromePanel;

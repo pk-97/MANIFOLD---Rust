@@ -88,7 +88,7 @@ manifold_node_engine::primitive! {
         },
         ParamDef {
             name: Cow::Borrowed("fov_y"),
-            label: "FOV Y",
+            label: "Field of View",
             ty: ParamType::Angle,
             default: ParamValue::Float(0.9),
             range: Some((0.05, 2.5)),
@@ -96,7 +96,7 @@ manifold_node_engine::primitive! {
         },
         ParamDef {
             name: Cow::Borrowed("near"),
-            label: "Near",
+            label: "Near Clip",
             ty: ParamType::Float,
             default: ParamValue::Float(0.05),
             range: Some((0.001, 10000.0)),
@@ -104,7 +104,7 @@ manifold_node_engine::primitive! {
         },
         ParamDef {
             name: Cow::Borrowed("far"),
-            label: "Far",
+            label: "Far Clip",
             ty: ParamType::Float,
             default: ParamValue::Float(200.0),
             range: Some((1.0, 10000.0)),
@@ -128,7 +128,7 @@ manifold_node_engine::primitive! {
         },
         ParamDef {
             name: Cow::Borrowed("pitch"),
-            label: "Pitch",
+            label: "Tilt",
             ty: ParamType::Angle,
             default: ParamValue::Float(0.0),
             range: Some((-std::f32::consts::PI, std::f32::consts::PI)),
@@ -136,7 +136,7 @@ manifold_node_engine::primitive! {
         },
         ParamDef {
             name: Cow::Borrowed("yaw"),
-            label: "Yaw",
+            label: "Pan",
             ty: ParamType::Angle,
             default: ParamValue::Float(0.0),
             range: Some((-std::f32::consts::PI, std::f32::consts::PI)),

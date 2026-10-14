@@ -541,7 +541,7 @@ _Generated from the node registry. Do not hand-edit. 390 nodes registered, group
 | `ConcentricTunnel` | Concentric Tunnel | generator | Pattern | 6 |
 | `Cymatics` | Cymatics | generator | Pattern | 7 |
 | `DataMosh` | Data Mosh | effect | Stylize | 8 |
-| `DepthOfField` | Depth of Field | effect | Filmic | 10 |
+| `DepthOfField` | Depth of Field | effect | Filmic | 11 |
 | `DigitalDrift` | Digital Drift | effect | Stylize | 7 |
 | `DigitalPlants` | Digital Plants | generator | Geometry | 18 |
 | `Dither` | Dither | effect | Stylize | 2 |
@@ -574,7 +574,7 @@ _Generated from the node registry. Do not hand-edit. 390 nodes registered, group
 | `LED Strobe` | LED Strobe | generator | LED | 6 |
 | `LED Studio Light` | LED Studio Light | generator | LED | 3 |
 | `LED Studio Mask` | LED Studio Mask | generator | LED | 8 |
-| `Lantern` | Lantern | generator | Geometry | 374 |
+| `Lantern` | Lantern | generator | Geometry | 373 |
 | `Lightning` | Lightning | generator | Pattern | 7 |
 | `Lissajous` | Lissajous | generator | Geometry | 11 |
 | `MaskBlob` | Mask Blob Detector | effect | Spatial | 16 |
@@ -585,21 +585,21 @@ _Generated from the node registry. Do not hand-edit. 390 nodes registered, group
 | `MaskImage` | Mask Image | effect | Spatial | 3 |
 | `MaskLayer` | Mask Layer | effect | Spatial | 3 |
 | `MaskRectangle` | Mask Rectangle | effect | Spatial | 8 |
-| `MetallicGlass` | Metallic Glass | generator | Sim | 351 |
+| `MetallicGlass` | Metallic Glass | generator | Sim | 350 |
 | `Mirror` | Mirror | effect | Spatial | 2 |
 | `MotionMosh` | Motion Mosh | effect | Stylize | 7 |
 | `MriVolume` | MRI Volume | generator | Text & Media | 8 |
 | `NestedCubes` | Nested Cubes | generator | Geometry | 6 |
 | `Ocean` | Ocean | generator | Sim | 363 |
-| `OceanCliff` | Ocean Cliff | generator | Sim | 2352 |
+| `OceanCliff` | Ocean Cliff | generator | Sim | 2353 |
 | `OilyFluid` | Oily Fluid | generator | Sim | 14 |
 | `Oscilloscope` | Oscilloscope | generator | Audio | 11 |
 | `ParticleText` | Particle Text | generator | Text & Media | 15 |
-| `PhysicsBoxes` | Physics Boxes | generator | Geometry | 1338 |
-| `PhysicsSolids` | Physics Solids | generator | Geometry | 2003 |
+| `PhysicsBoxes` | Physics Boxes | generator | Geometry | 1337 |
+| `PhysicsSolids` | Physics Solids | generator | Geometry | 2002 |
 | `Plasma` | Plasma | generator | Pattern | 6 |
 | `QuadMirror` | Quad Mirror | effect | Spatial | 1 |
-| `Scene` | Scene | generator | Geometry | 372 |
+| `Scene` | Scene | generator | Geometry | 371 |
 | `SoftFocus` | Soft Focus | effect | Filmic | 2 |
 | `Spectrogram` | Spectrogram | generator | Audio | 6 |
 | `StarField` | Star Field | generator | Pattern | 8 |
@@ -611,11 +611,11 @@ _Generated from the node registry. Do not hand-edit. 390 nodes registered, group
 | `Transform` | Transform | effect | Spatial | 4 |
 | `VoronoiPrism` | Voronoi Prism | effect | Spatial | 3 |
 | `WaterDamBreakGpuFlip` | Water — Dam Break (GPU FLIP) | generator | Sim | 2052 |
-| `WaterDamBreakMatter` | Water — Dam Break (Live GPU) | generator | Sim | 1406 |
+| `WaterDamBreakMatter` | Water — Dam Break (Live GPU) | generator | Sim | 1405 |
 | `WaterDamBreakParticles` | Water — Dam Break (Particle View) | generator | Sim | 2007 |
-| `WaterFloatingBoxMatter` | Water — Floating Box (Live GPU) | generator | Sim | 1399 |
+| `WaterFloatingBoxMatter` | Water — Floating Box (Live GPU) | generator | Sim | 1398 |
 | `WaterSeaWallGpuFlip` | Water — Sea Wall (GPU FLIP) | generator | Sim | 2335 |
-| `WaterStillPoolMatter` | Water — Still Pool (Live GPU) | generator | Sim | 1074 |
+| `WaterStillPoolMatter` | Water — Still Pool (Live GPU) | generator | Sim | 1073 |
 | `Watercolor` | Watercolor | effect | Stylize | 4 |
 | `Wireframe` | Wireframe | generator | Geometry | 9 |
 | `WireframeDepth` | Wireframe Depth | effect | Stylize | 8 |

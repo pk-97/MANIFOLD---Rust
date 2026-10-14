@@ -648,6 +648,9 @@ pub const SLIDER_TRACK_PRESSED_C32: Color32 = Color32::new(8, 9, 13, 255);
 /// override this with the selected layer's hue.
 pub const SLIDER_FILL_C32: Color32 = Color32::new(89, 148, 235, 255);
 pub const SLIDER_THUMB_C32: Color32 = Color32::new(255, 255, 255, 255);
+/// The thumb when the value sits past the slider's end: pinned at the end,
+/// amber, while the readout shows the true value.
+pub const SLIDER_PAST_END_C32: Color32 = AMBER_ACTIVE;
 pub const SLIDER_TEXT_C32: Color32 = Color32::new(255, 255, 255, 255);
 
 // ── Bitmap Toggle / Accent ──────────────────────────────────────────
@@ -964,14 +967,6 @@ pub const INSPECTOR_GAP: f32 = 4.0;
 pub const DEFAULT_AUDIO_SETUP_WIDTH: f32 = 460.0;
 pub const MIN_AUDIO_SETUP_WIDTH: f32 = 340.0;
 pub const MAX_AUDIO_SETUP_WIDTH: f32 = 720.0;
-
-// ── Scene Setup dock (SCENE_SETUP_PANEL_DESIGN D2) ──
-// Cloned from the Audio Setup dock above: a fold-out column pinned to the
-// inspector's LEFT edge, mutually exclusive with the Audio Setup dock (only
-// one of the two utility columns is ever open at once).
-pub const DEFAULT_SCENE_SETUP_WIDTH: f32 = 400.0;
-pub const MIN_SCENE_SETUP_WIDTH: f32 = 320.0;
-pub const MAX_SCENE_SETUP_WIDTH: f32 = 640.0;
 
 // ── Group layout ────────────────────────────────────────────────────
 pub const GROUP_CHILD_INDENT_PX: f32 = 20.0;

@@ -18,10 +18,24 @@ fn build_scene_tree(ui: &mut crate::ui_root::UIRoot) -> manifold_ui::UITree {
 }
 
 fn tree_texts(tree: &manifold_ui::UITree) -> Vec<String> {
-    tree.nodes()
-        .iter()
+    tree.all_nodes()
         .filter_map(|node| node.text.clone())
         .collect()
+}
+
+/// The Scene tab tree's row names.
+fn tree_rows(tree: &manifold_ui::UITree) -> Vec<String> {
+    tree.all_nodes()
+        .filter(|node| tree.name_of(node.id) == Some("scene_tree.item"))
+        .filter_map(|node| node.text.clone())
+        .collect()
+}
+
+fn tree_row(tree: &manifold_ui::UITree, name: &str) -> manifold_ui::NodeId {
+    tree.all_nodes()
+        .find(|node| tree.name_of(node.id) == Some("scene_tree.item") && node.text.as_deref() == Some(name))
+        .unwrap()
+        .id
 }
 
 #[test]
@@ -36,8 +50,8 @@ fn water_family_group_toggle_expands_children_and_preserves_parent_controls() {
     assert_eq!(editing.take_rejection(), None);
     let (_, _state, mut ui, mut selection, _active_layer, _prefs) = dispatch_harness();
 
-    ui.scene_setup_panel.open();
     selection.select_layer(layer_id.clone());
+    selection.pin_scope(manifold_ui::InspectorTab::Scene);
     crate::ui_bridge::projection::inspector::sync_inspector_data(
         &mut ui,
         &project,
@@ -49,18 +63,18 @@ fn water_family_group_toggle_expands_children_and_preserves_parent_controls() {
 
     let mut collapsed_tree = build_scene_tree(&mut ui);
     let toggle_id = collapsed_tree
-        .nodes()
-        .iter()
+        .all_nodes()
         .find_map(|node| {
             (collapsed_tree.name_of(node.id) == Some("scene_setup.objects.group_toggle"))
                 .then_some(node.id)
         })
         .expect("Water parent group toggle");
     let collapsed_texts = tree_texts(&collapsed_tree);
-    assert!(collapsed_texts.iter().any(|text| text == "■ Water"));
-    for child in ["■ Foam", "■ Spray", "■ Bubbles"] {
+    let collapsed_rows = tree_rows(&collapsed_tree);
+    assert!(collapsed_rows.iter().any(|text| text == "Water"));
+    for child in ["Foam", "Spray", "Bubbles"] {
         assert!(
-            !collapsed_texts.iter().any(|text| text == child),
+            !collapsed_rows.iter().any(|text| text == child),
             "collapsed: {child}"
         );
     }
@@ -87,9 +101,9 @@ fn water_family_group_toggle_expands_children_and_preserves_parent_controls() {
 
     let expanded_tree = build_scene_tree(&mut ui);
     let expanded_texts = tree_texts(&expanded_tree);
-    for child in ["■ Foam", "■ Spray", "■ Bubbles"] {
+    for child in ["Foam", "Spray", "Bubbles"] {
         assert!(
-            expanded_texts.iter().any(|text| text == child),
+            tree_rows(&expanded_tree).iter().any(|text| text == child),
             "expanded: {child}"
         );
     }
@@ -120,17 +134,16 @@ fn water_family_group_toggle_expands_children_and_preserves_parent_controls() {
     // Selector lookup can find an offscreen node; pointer hit-testing cannot.
     assert!(ui.scene_setup_panel.handle_scroll(-10_000.0));
     let scrolled_tree = build_scene_tree(&mut ui);
-    let foam = scrolled_tree.nodes().iter().find(|node| node.text.as_deref() == Some("■ Foam")).unwrap();
-    let rect = scrolled_tree.get_bounds(foam.id);
+    let foam = tree_row(&scrolled_tree, "Foam");
+    let rect = scrolled_tree.get_bounds(foam);
     let center = manifold_ui::Vec2::new(rect.x + rect.width / 2.0, rect.y + rect.height / 2.0);
-    assert_ne!(scrolled_tree.hit_test(center), Some(foam.id), "clipped Foam cannot receive the click");
+    assert_ne!(scrolled_tree.hit_test(center), Some(foam), "clipped Foam cannot receive the click");
 
     for (name, size_id) in [("Foam", "foam_size"), ("Spray", "spray_size"), ("Bubbles", "bubble_size")] {
         // ScrollTo in the repaired flow brings the outliner target back into view.
         ui.scene_setup_panel.handle_scroll(10_000.0);
         let mut tree = build_scene_tree(&mut ui);
-        let label = format!("■ {name}");
-        let row = tree.nodes().iter().find(|node| node.text.as_deref() == Some(&label)).unwrap().id;
+        let row = tree_row(&tree, name);
         let rect = tree.get_bounds(row);
         let center = manifold_ui::Vec2::new(rect.x + rect.width / 2.0, rect.y + rect.height / 2.0);
         assert_eq!(tree.hit_test(center), Some(row), "{name} is reachable after scrolling");
@@ -139,13 +152,13 @@ fn water_family_group_toggle_expands_children_and_preserves_parent_controls() {
         }, &mut tree);
         assert!(consumed);
         let tree = build_scene_tree(&mut ui);
-        let header = tree.nodes().iter().find(|node| tree.name_of(node.id) == Some("scene_setup.properties.name_value")).unwrap();
+        let header = tree.all_nodes().find(|node| tree.name_of(node.id) == Some("scene_setup.properties.name_value")).unwrap();
         assert_eq!(header.text.as_deref(), Some(name));
         let suffix = format!("{size_id}.value");
-        let value = tree.nodes().iter().find(|node| tree.name_of(node.id).is_some_and(|id| id.ends_with(&suffix)))
+        let value = tree.all_nodes().find(|node| tree.name_of(node.id).is_some_and(|id| id.ends_with(&suffix)))
             .expect("selected look renders its manifest-backed Size in Properties");
         if name == "Foam" { assert_eq!(value.text.as_deref(), Some("0.01")); }
-        assert!(tree.nodes().iter().any(|node| node.text.as_deref() == Some("Size")));
-        assert!(!tree.nodes().iter().any(|node| node.text.as_deref() == Some("Whitewater Amount")));
+        assert!(tree.all_nodes().any(|node| node.text.as_deref() == Some("Size")));
+        assert!(!tree.all_nodes().any(|node| node.text.as_deref() == Some("Whitewater Amount")));
     }
 }

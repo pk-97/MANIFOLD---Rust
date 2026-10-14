@@ -334,15 +334,21 @@ impl DropdownPanel {
 
         // `UI_CLIP_AND_Z_OWNERSHIP_DESIGN.md` D1/D3: `open_at` eagerly mints
         // the dropdown's nodes here (so it's visible the instant it opens,
-        // not waiting for the next full `build_overlays()` cycle) — this runs
-        // from event-handling code, outside `UIRoot::build_overlays()`'s own
-        // `begin_region` bracket, so it needs its own. Content containment
-        // does NOT come from this region (the later rebuild path re-mints
-        // everything under build_overlays' full-screen region) — it comes
-        // from the shell container's CLIPS_CHILDREN (`popup_shell::build`)
-        // plus per-element viewport culling in `build_nodes`.
-        let region =
-            tree.begin_region(self.container_bounds, crate::tree::ZTier::Overlay, "dropdown", UIFlags::empty());
+        // not waiting for the next overlay build) — this runs from
+        // event-handling code, outside the overlay build's own region
+        // bracket, so it needs its own. It mints into the tree's overlay
+        // region, so that region's next rebuild replaces it
+        // (UI_INVALIDATION_DESIGN.md D7). Content containment does NOT come
+        // from this region — it comes from the shell container's
+        // CLIPS_CHILDREN (`popup_shell::build`) plus per-element viewport
+        // culling in `build_nodes`.
+        let region = tree.begin_region_in(
+            tree.overlay_region(),
+            self.container_bounds,
+            crate::tree::ZTier::Overlay,
+            "dropdown",
+            UIFlags::empty(),
+        );
         let region_start = tree.count();
         self.build_nodes(tree);
         tree.end_region(region, region_start);
@@ -388,6 +394,9 @@ impl DropdownPanel {
         );
         self.backdrop_id = Some(shell.backdrop);
         self.root_id = Some(shell.container);
+        // Lets automation pick an item by its label even when the same word
+        // shows elsewhere on screen.
+        tree.set_name(shell.container, "dropdown");
 
         // Build items — positions offset by scroll. Items outside the
         // viewport are created but hidden to preserve stable item_ids indices.
@@ -566,6 +575,7 @@ impl DropdownPanel {
                 if !visible {
                     tree.set_visible(id, false);
                 }
+                tree.set_name(id, format!("dropdown.colour.{i}"));
                 self.color_swatch_ids.push(id);
             }
         }

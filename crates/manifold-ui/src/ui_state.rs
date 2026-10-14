@@ -38,6 +38,18 @@ pub struct AutomationTimeSelection {
 /// selection). Cheap — no allocation beyond the existing `HashSet` clone.
 type SelectionIdentity = (Option<LayerId>, Option<ClipId>, HashSet<LayerId>);
 
+/// D14's three selection versions and the values they last saw. Each moves
+/// only when what it stands for changed, so a setter that leaves the
+/// selection as it was moves nothing.
+#[derive(Clone, Default)]
+struct SelectionVersions {
+    identity: u64,
+    visual: u64,
+    cursor: u64,
+    seen_identity: SelectionIdentity,
+    seen_cursor: (Option<Beats>, Option<LayerId>),
+}
+
 /// UI-owned automation clipboard. It deliberately contains no core types so
 /// copying remains a view operation; the app host converts these points back
 /// to `AutomationPoint`s when a paste command is built.
@@ -74,35 +86,41 @@ pub enum TimelineSelection {
     TimeRange(SelectionRegion),
 }
 
+#[derive(Clone)]
 pub struct UIState {
     // ── Selection (single authority — D1) ──
     /// Clip-set XOR time-range XOR nothing. Replaces the former
     /// `selected_clip_ids` field + `selection_region.is_active` flag pair.
     selection: TimelineSelection,
 
-    /// Monotonically increasing counter — bumped on every selection/hover change.
-    /// Used for cheap dirty-checking by viewport and layer headers.
-    pub selection_version: u64,
+    /// UI_INVALIDATION_DESIGN.md D14: the selection carries three versions
+    /// instead of one. `identity` moves only when `selection_identity()` or the
+    /// scope pin changes (the inspector's input); `visual` moves on any change
+    /// of a selection set (in-place timeline visuals); `cursor` moves when the
+    /// insert cursor moves. Every selection field is private so the versions
+    /// cannot be bypassed.
+    versions: SelectionVersions,
 
     /// Most recently selected clip ID (for footer info, property display).
-    pub primary_selected_clip_id: Option<ClipId>,
+    primary_selected_clip_id: Option<ClipId>,
 
     /// LayerId of the layer the primary selected clip is on.
-    pub selected_layer_id_for_clip: Option<LayerId>,
+    selected_layer_id_for_clip: Option<LayerId>,
 
     // ── Layer Selection (mutually exclusive with clip selection) ──
-    pub selected_layer_ids: HashSet<LayerId>,
+    selected_layer_ids: HashSet<LayerId>,
 
     /// Most recently selected layer ID (for inspector display).
-    pub primary_selected_layer_id: Option<LayerId>,
+    primary_selected_layer_id: Option<LayerId>,
 
-    // ── Cursor Position (updated on mouse move, used for paste target) ──
-    pub cursor_beat: f32,
-    pub cursor_layer_id: Option<LayerId>,
+    // ── Pointer position (updated on mouse move, used for paste target) ──
+    /// Displayed nowhere, so it carries no version.
+    cursor_beat: f32,
+    cursor_layer_id: Option<LayerId>,
 
     // ── Insert Cursor (set on click, persists until next click or region drag) ──
-    pub insert_cursor_beat: Option<Beats>,
-    pub insert_cursor_layer_id: Option<LayerId>,
+    insert_cursor_beat: Option<Beats>,
+    insert_cursor_layer_id: Option<LayerId>,
 
     // ── Hover ──
     pub hovered_clip_id: Option<ClipId>,
@@ -116,7 +134,7 @@ pub struct UIState {
     pub current_zoom_index: usize,
 
     // ── Marker Selection ──
-    pub selected_marker_ids: HashSet<MarkerId>,
+    selected_marker_ids: HashSet<MarkerId>,
 
     // ── Inspector scope ──
     /// The inspector scope the user pinned by clicking a tab, plus the
@@ -138,8 +156,9 @@ pub struct UIState {
     /// DOES change the Y-layout (a visible lane grows its track), so any
     /// toggle must also mark the app's structural-sync dirty flag; see
     /// `ui_bridge::transport::dispatch_transport`'s `PanelAction::
-    /// ToggleAutomationMode` arm.
-    pub automation_mode_visible: bool,
+    /// ToggleAutomationMode` arm. Private with the other lane-view fields:
+    /// their setters move `automation_view` only on a visible change (D19).
+    automation_mode_visible: bool,
 
     /// The single selected breakpoint, for the Delete key (P4 Unit A —
     /// marquee multi-select is a later unit; `docs/AUTOMATION_LANES_DESIGN.md`
@@ -187,21 +206,31 @@ pub struct UIState {
     /// `(target, param_id)`, so a stale entry here never double-draws.
     /// Never serialized — pure view state, same tier as
     /// `automation_mode_visible`.
-    pub chosen_automation_params: HashMap<LayerId, (UiGraphTarget, ParamId)>,
+    chosen_automation_params: HashMap<LayerId, (UiGraphTarget, ParamId)>,
 
     /// Session-only ordering for automation strips. New keys are appended by
     /// the projection; an existing placeholder keeps its rank when its first
     /// point materializes a real lane.
-    pub automation_lane_order: Vec<AutomationLaneKey>,
+    automation_lane_order: Vec<AutomationLaneKey>,
 
     /// Session-only lane visibility and pin state. Pinned lanes survive
     /// touch-to-select replacement and cannot be hidden accidentally.
-    pub hidden_automation_lanes: HashSet<AutomationLaneKey>,
-    pub pinned_automation_lanes: Vec<AutomationLaneKey>,
+    hidden_automation_lanes: HashSet<AutomationLaneKey>,
+    pinned_automation_lanes: Vec<AutomationLaneKey>,
 
     /// Session-only lane strip heights, keyed by the lane address. Values are
     /// clamped by `set_automation_lane_height` and never serialized.
-    pub automation_lane_heights: HashMap<(UiGraphTarget, ParamId), f32>,
+    automation_lane_heights: HashMap<(UiGraphTarget, ParamId), f32>,
+
+    /// D19: one version over mode visibility, lane order, hidden, pinned,
+    /// chosen params and the selected point's lane. Moves only on a change
+    /// the timeline shows.
+    automation_view: u64,
+    /// Lane heights, apart from `automation_view`: a resize lays the rows
+    /// out again in place and touches no lane list or inspector.
+    lane_heights_view: u64,
+    /// The selected point's lane last folded into `automation_view` (D8).
+    seen_point_lane: Option<AutomationLaneKey>,
 
     /// Session clipboard for automation breakpoints. Kept in UI state so it
     /// survives project switches and never becomes authoritative project data.
@@ -247,7 +276,7 @@ impl UIState {
     pub fn new() -> Self {
         Self {
             selection: TimelineSelection::None,
-            selection_version: 0,
+            versions: SelectionVersions::default(),
             primary_selected_clip_id: None,
             selected_layer_id_for_clip: None,
             selected_layer_ids: HashSet::new(),
@@ -271,6 +300,9 @@ impl UIState {
             hidden_automation_lanes: HashSet::new(),
             pinned_automation_lanes: Vec::new(),
             automation_lane_heights: HashMap::new(),
+            automation_view: 0,
+            lane_heights_view: 0,
+            seen_point_lane: None,
             automation_clipboard: None,
             automation_paste_context: None,
             automation_feedback: None,
@@ -285,10 +317,105 @@ impl UIState {
     }
 
     pub fn set_automation_lane_height(&mut self, target: UiGraphTarget, param_id: ParamId, height: f32) {
-        self.automation_lane_heights.insert(
-            (target, param_id),
-            height.clamp(64.0, 240.0),
-        );
+        let height = height.clamp(64.0, 240.0);
+        let previous = self.automation_lane_heights.insert((target, param_id), height);
+        if previous != Some(height) && self.automation_mode_visible {
+            self.lane_heights_view += 1;
+        }
+    }
+
+    /// Moves when a lane height the timeline shows changes.
+    pub fn lane_heights_view(&self) -> u64 {
+        self.lane_heights_view
+    }
+
+    pub fn automation_lane_heights(&self) -> &HashMap<(UiGraphTarget, ParamId), f32> {
+        &self.automation_lane_heights
+    }
+
+    /// Whether the automation lane strips show on the timeline.
+    pub fn automation_mode_visible(&self) -> bool {
+        self.automation_mode_visible
+    }
+
+    /// Showing or hiding the lanes moves `automation_view` once (D19).
+    pub fn set_automation_mode_visible(&mut self, visible: bool) {
+        if self.automation_mode_visible != visible {
+            self.automation_mode_visible = visible;
+            self.automation_view += 1;
+        }
+    }
+
+    pub fn chosen_automation_params(&self) -> &HashMap<LayerId, (UiGraphTarget, ParamId)> {
+        &self.chosen_automation_params
+    }
+
+    pub fn automation_lane_order(&self) -> &[AutomationLaneKey] {
+        &self.automation_lane_order
+    }
+
+    pub fn hidden_automation_lanes(&self) -> &HashSet<AutomationLaneKey> {
+        &self.hidden_automation_lanes
+    }
+
+    pub fn pinned_automation_lanes(&self) -> &[AutomationLaneKey] {
+        &self.pinned_automation_lanes
+    }
+
+    pub fn toggle_automation_mode_visible(&mut self) {
+        self.set_automation_mode_visible(!self.automation_mode_visible);
+    }
+
+    /// Swap two ranks in the lane order (the lane menu's move up / down).
+    pub fn swap_automation_lane_ranks(&mut self, a: usize, b: usize) {
+        if a != b && a < self.automation_lane_order.len() && b < self.automation_lane_order.len() {
+            self.automation_lane_order.swap(a, b);
+            self.note_lane_view_change();
+        }
+    }
+
+    /// Forget the chosen param of every layer that chose this lane (its lane
+    /// was removed).
+    pub fn unchoose_automation_lane(&mut self, target: &UiGraphTarget, param_id: &ParamId) {
+        let before = self.chosen_automation_params.len();
+        self.chosen_automation_params.retain(|_, (t, p)| t != target || p != param_id);
+        if self.chosen_automation_params.len() != before {
+            self.note_lane_view_change();
+        }
+    }
+
+    /// The projection ranks a lane it sees for the first time. Projection
+    /// bookkeeping, not a view change: the same pass draws the lane with this
+    /// rank, so it moves no version.
+    pub fn rank_automation_lane(&mut self, key: AutomationLaneKey) {
+        if !self.automation_lane_order.contains(&key) {
+            self.automation_lane_order.push(key);
+        }
+    }
+
+    /// D19's version, with the selected point's lane folded in (D8): the
+    /// inspector shows that lane as the chosen param, so reselecting a point
+    /// in another lane is a view change; moving one inside its lane is not.
+    pub fn automation_view(&mut self) -> u64 {
+        let lane = self
+            .selected_automation_point
+            .as_ref()
+            .map(|point| (point.target.clone(), point.param_id.clone()));
+        if lane != self.seen_point_lane {
+            self.seen_point_lane = lane;
+            if self.automation_mode_visible {
+                self.automation_view += 1;
+            }
+        }
+        self.automation_view
+    }
+
+    /// Lane order, visibility, pins and chosen params only show
+    /// while the lanes do; showing them bumps once (D19).
+    fn note_lane_view_change(&mut self) {
+        if self.automation_mode_visible {
+            self.automation_view += 1;
+        }
     }
 
     /// Touch-to-select (section 7 addendum): record `target`/`param_id` as the
@@ -303,10 +430,30 @@ impl UIState {
         param_id: ParamId,
     ) {
         let key = (target.clone(), param_id.clone());
+        let already_first = self.automation_lane_order.first() == Some(&key);
+        let chosen = (target, param_id);
+        if already_first && self.chosen_automation_params.get(&layer_id) == Some(&chosen) {
+            return;
+        }
         self.automation_lane_order.retain(|k| k != &key);
         self.automation_lane_order.insert(0, key);
-        self.chosen_automation_params
-            .insert(layer_id, (target, param_id));
+        self.chosen_automation_params.insert(layer_id, chosen);
+        self.note_lane_view_change();
+    }
+
+    /// Record `layer_id`'s chosen lane without moving the lane order.
+    pub fn choose_automation_param(&mut self, layer_id: LayerId, target: UiGraphTarget, param_id: ParamId) {
+        let chosen = (target, param_id);
+        if self.chosen_automation_params.get(&layer_id) != Some(&chosen) {
+            self.chosen_automation_params.insert(layer_id, chosen);
+            self.note_lane_view_change();
+        }
+    }
+
+    pub fn unhide_automation_lane(&mut self, target: UiGraphTarget, param_id: ParamId) {
+        if self.hidden_automation_lanes.remove(&(target, param_id)) {
+            self.note_lane_view_change();
+        }
     }
 
     pub fn automation_lane_is_hidden(&self, target: &UiGraphTarget, param_id: &ParamId) -> bool {
@@ -321,7 +468,9 @@ impl UIState {
     pub fn hide_automation_lane(&mut self, target: UiGraphTarget, param_id: ParamId) {
         let key = (target, param_id);
         if !self.pinned_automation_lanes.contains(&key) {
-            self.hidden_automation_lanes.insert(key.clone());
+            if self.hidden_automation_lanes.insert(key.clone()) {
+                self.note_lane_view_change();
+            }
             self.selected_automation_points.retain(|point| {
                 (point.target.clone(), point.param_id.clone()) != key
             });
@@ -345,6 +494,7 @@ impl UIState {
 
     pub fn toggle_automation_lane_pin(&mut self, target: UiGraphTarget, param_id: ParamId) -> bool {
         let key = (target, param_id);
+        self.note_lane_view_change();
         if let Some(index) = self.pinned_automation_lanes.iter().position(|candidate| candidate == &key) {
             self.pinned_automation_lanes.remove(index);
             false
@@ -356,7 +506,10 @@ impl UIState {
     }
 
     pub fn show_all_automation_lanes(&mut self) {
-        self.hidden_automation_lanes.clear();
+        if !self.hidden_automation_lanes.is_empty() {
+            self.hidden_automation_lanes.clear();
+            self.note_lane_view_change();
+        }
     }
 
     /// Move a lane by one slot in the stable order.
@@ -377,9 +530,12 @@ impl UIState {
             return false;
         }
         self.automation_lane_order.swap(index, other as usize);
+        self.note_lane_view_change();
         true
     }
 
+    /// Projection bookkeeping (drops keys of lanes that no longer exist, which
+    /// nothing draws), so it moves no version.
     pub fn prune_automation_lane_view(&mut self, live: &HashSet<AutomationLaneKey>) {
         self.hidden_automation_lanes.retain(|key| live.contains(key));
         self.pinned_automation_lanes.retain(|key| live.contains(key));
@@ -421,24 +577,117 @@ impl UIState {
     }
 
     /// Pin the inspector to a scope (a tab click) WITHOUT touching the timeline
-    /// selection. Bumps `selection_version` so the inspector rebuilds; the pin
-    /// is recorded against the current selection identity — see
+    /// selection. Moves the identity version so the inspector re-projects; the
+    /// pin is recorded against the current selection identity — see
     /// `pinned_scope()` for when it clears. Idempotent for the active scope.
     pub fn pin_scope(&mut self, tab: InspectorTab) {
         if self.pinned_scope() == Some(tab) {
             return;
         }
-        self.selection_version += 1;
         self.scope_pin = Some((tab, self.selection_identity()));
+        self.versions.identity += 1;
     }
 
     /// Release any scope pin without changing the timeline selection, so the
-    /// inspector falls back to the selection-derived scope. Bumps
-    /// `selection_version` (triggering a rebuild) only if a pin was set.
+    /// inspector falls back to the selection-derived scope. Moves the identity
+    /// version only if a pin was set.
     pub fn clear_scope_pin(&mut self) {
         if self.scope_pin.take().is_some() {
-            self.selection_version += 1;
+            self.versions.identity += 1;
         }
+    }
+
+    // ── Selection versions (D14) ─────────────────────────────────────
+
+    /// Moves when the primary layer, primary clip, layer set or scope pin
+    /// changed: the inspector's input.
+    pub fn selection_identity_version(&self) -> u64 {
+        self.versions.identity
+    }
+
+    /// Moves when any selection set changed: in-place timeline visuals.
+    pub fn selection_visual_version(&self) -> u64 {
+        self.versions.visual
+    }
+
+    /// Moves when the insert cursor moved.
+    pub fn cursor_version(&self) -> u64 {
+        self.versions.cursor
+    }
+
+    /// A selection set changed: the visual version moves, and the identity and
+    /// cursor versions move when what they stand for changed.
+    fn note_selection_change(&mut self) {
+        self.versions.visual += 1;
+        let identity = self.selection_identity();
+        if identity != self.versions.seen_identity {
+            self.versions.seen_identity = identity;
+            self.versions.identity += 1;
+        }
+        self.note_cursor_change();
+    }
+
+    fn note_cursor_change(&mut self) {
+        let cursor = (self.insert_cursor_beat, self.insert_cursor_layer_id.clone());
+        if cursor != self.versions.seen_cursor {
+            self.versions.seen_cursor = cursor;
+            self.versions.cursor += 1;
+        }
+    }
+
+    /// The automation point or time selection changed outside the clip and
+    /// layer sets (input-host selection commands): a visual change; the
+    /// selected point's lane folds into `automation_view` when it is read.
+    pub fn note_automation_selection_change(&mut self) {
+        self.versions.visual += 1;
+    }
+
+    // ── Selection reads ──────────────────────────────────────────────
+
+    pub fn primary_selected_clip_id(&self) -> Option<&ClipId> {
+        self.primary_selected_clip_id.as_ref()
+    }
+
+    pub fn selected_layer_id_for_clip(&self) -> Option<&LayerId> {
+        self.selected_layer_id_for_clip.as_ref()
+    }
+
+    pub fn selected_layer_ids(&self) -> &HashSet<LayerId> {
+        &self.selected_layer_ids
+    }
+
+    pub fn primary_selected_layer_id(&self) -> Option<&LayerId> {
+        self.primary_selected_layer_id.as_ref()
+    }
+
+    pub fn insert_cursor_beat(&self) -> Option<Beats> {
+        self.insert_cursor_beat
+    }
+
+    pub fn insert_cursor_layer_id(&self) -> Option<&LayerId> {
+        self.insert_cursor_layer_id.as_ref()
+    }
+
+    pub fn selected_marker_ids(&self) -> &HashSet<MarkerId> {
+        &self.selected_marker_ids
+    }
+
+    /// Clear the marker selection only.
+    pub fn clear_marker_selection(&mut self) {
+        if !self.selected_marker_ids.is_empty() {
+            self.selected_marker_ids.clear();
+            self.note_selection_change();
+        }
+    }
+
+    /// The pointer's timeline position (paste target). Displayed nowhere.
+    pub fn pointer_position(&self) -> (f32, Option<&LayerId>) {
+        (self.cursor_beat, self.cursor_layer_id.as_ref())
+    }
+
+    pub fn set_pointer_position(&mut self, beat: f32, layer_id: Option<LayerId>) {
+        self.cursor_beat = beat;
+        self.cursor_layer_id = layer_id;
     }
 
     // ── Clip Selection ──────────────────────────────────────────────
@@ -460,7 +709,7 @@ impl UIState {
         };
         self.primary_selected_clip_id = Some(clip_id);
         self.selected_layer_id_for_clip = Some(layer_id);
-        self.selection_version += 1;
+        self.note_selection_change();
     }
 
     /// Toggle a clip in/out of the selection set. Called on Ctrl+Click.
@@ -502,7 +751,7 @@ impl UIState {
                 anchor: self.primary_selected_clip_id.clone(),
             }
         };
-        self.selection_version += 1;
+        self.note_selection_change();
     }
 
     /// Clear all selection (clips, layers, markers, region, and insert cursor).
@@ -517,7 +766,7 @@ impl UIState {
         self.selected_marker_ids.clear();
         self.insert_cursor_beat = None;
         self.insert_cursor_layer_id = None;
-        self.selection_version += 1;
+        self.note_selection_change();
     }
 
     /// Select a set of clips as the whole selection (clears layers, region,
@@ -546,15 +795,14 @@ impl UIState {
             self.primary_selected_clip_id = primary;
             self.selected_layer_id_for_clip = None;
         }
-        self.selection_version += 1;
+        self.note_selection_change();
     }
 
     /// Remove clip ids from the current clip selection (e.g. after deleting
     /// them). No-op unless the current selection is `Clips`. If the primary or
     /// anchor was removed it is repointed at a survivor (or cleared). Mirrors
     /// the old open-coded "`selected_clip_ids.remove` + clear primary if
-    /// deleted" loop; deliberately does not bump `selection_version` (the
-    /// following structural sync + `prune_stale_references` handles that).
+    /// deleted" loop.
     pub fn deselect_clips(&mut self, remove: &[ClipId]) {
         if let TimelineSelection::Clips { ids, anchor } = &mut self.selection {
             for id in remove {
@@ -573,6 +821,7 @@ impl UIState {
         {
             self.primary_selected_clip_id = None;
         }
+        self.note_selection_change();
     }
 
     /// Check if a clip is in the selection set.
@@ -619,7 +868,7 @@ impl UIState {
         };
         self.primary_selected_clip_id = Some(primary);
         self.selected_layer_id_for_clip = Some(primary_layer_id);
-        self.selection_version += 1;
+        self.note_selection_change();
     }
 
     /// Check if a clip is hovered.
@@ -678,7 +927,7 @@ impl UIState {
         region.start_layer_id = layers.get(min).map(|l| l.layer_id.clone());
         region.end_layer_id = layers.get(max).map(|l| l.layer_id.clone());
         self.selection = TimelineSelection::TimeRange(region);
-        self.selection_version += 1;
+        self.note_selection_change();
     }
 
     /// Clear the region selection. Under D1 a region is the whole selection, so
@@ -687,7 +936,7 @@ impl UIState {
     pub fn clear_region(&mut self) {
         if matches!(self.selection, TimelineSelection::TimeRange(_)) {
             self.selection = TimelineSelection::None;
-            self.selection_version += 1;
+            self.note_selection_change();
         }
     }
 
@@ -726,13 +975,14 @@ impl UIState {
         self.selected_layer_id_for_clip = None;
         self.selected_layer_ids.clear(); // deselect layer headers (Ableton behavior)
         self.primary_selected_layer_id = None;
-        self.selection_version += 1;
+        self.note_selection_change();
     }
 
     /// Move the insert cursor beat without clearing selection (used during playhead scrub).
     /// Unity UIState.cs SetInsertCursorBeat (lines 125-130).
     pub fn set_insert_cursor_beat(&mut self, beat: Beats) {
         self.insert_cursor_beat = Some(beat);
+        self.note_cursor_change();
     }
 
     /// Clear insert cursor if active.
@@ -743,7 +993,7 @@ impl UIState {
         }
         self.insert_cursor_beat = None;
         self.insert_cursor_layer_id = None;
-        self.selection_version += 1;
+        self.note_selection_change();
     }
 
     /// Whether an insert cursor is placed.
@@ -765,7 +1015,7 @@ impl UIState {
         self.selected_layer_ids.clear();
         self.selected_layer_ids.insert(layer_id.clone());
         self.primary_selected_layer_id = Some(layer_id);
-        self.selection_version += 1;
+        self.note_selection_change();
     }
 
     /// Toggle a layer in/out of the selection set. Called on Cmd+Click.
@@ -787,7 +1037,7 @@ impl UIState {
             self.selected_layer_ids.insert(layer_id.clone());
             self.primary_selected_layer_id = Some(layer_id);
         }
-        self.selection_version += 1;
+        self.note_selection_change();
     }
 
     /// Select a range of layers from primary to target (Shift+Click).
@@ -824,7 +1074,7 @@ impl UIState {
                     self.selected_layer_ids.insert(layer.layer_id.clone());
                 }
                 // Keep primary as the anchor (first clicked), not the range end
-                self.selection_version += 1;
+                self.note_selection_change();
             }
             _ => {
                 self.select_layer(LayerId::new(target_layer_id));
@@ -966,7 +1216,7 @@ impl UIState {
         }
 
         if changed {
-            self.selection_version += 1;
+            self.note_selection_change();
         }
         changed
     }
@@ -984,7 +1234,7 @@ impl UIState {
         self.insert_cursor_layer_id = None;
         self.selected_marker_ids.clear();
         self.selected_marker_ids.insert(marker_id);
-        self.selection_version += 1;
+        self.note_selection_change();
     }
 
     /// Toggle a marker in/out of multi-selection (Shift+Click).
@@ -994,7 +1244,7 @@ impl UIState {
         } else {
             self.selected_marker_ids.insert(marker_id);
         }
-        self.selection_version += 1;
+        self.note_selection_change();
     }
 
     /// Whether a specific marker is selected.
@@ -1069,9 +1319,9 @@ mod tests {
     fn pinning_same_scope_twice_is_idempotent() {
         let mut s = UIState::new();
         s.pin_scope(InspectorTab::Master);
-        let v = s.selection_version;
+        let v = s.selection_identity_version();
         s.pin_scope(InspectorTab::Master); // already pinned — no extra churn
-        assert_eq!(s.selection_version, v);
+        assert_eq!(s.selection_identity_version(), v);
         assert_eq!(s.pinned_scope(), Some(InspectorTab::Master));
     }
 

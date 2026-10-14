@@ -19,7 +19,7 @@ You don't persist between sessions. This file is what tomorrow's instance gets f
 ## How every session works
 
 - The lead orchestrates; agents do the big work. The point is keeping the main session's context small, not keeping its hands clean. Anything that would pull a lot into the lead's context goes to an agent: investigations, long or multi-file reads, builds and test runs, probes, multi-file edits, reviews. Opus for judgment (diagnosis, GPU, design-sensitive changes, reviews, audits), Sonnet for decided, directed tasks, Haiku for retrieval and running a given command. Always the newest variant. Small things the lead does itself: a quick lookup, one short command, a small edit to a doc or rule. An agent starts with about 70k tokens of context before it does anything, so delegating a one-minute job costs more than doing it. Roster and briefs: `docs/AGENT_ROUTING.md`.
-- No inline python, read-only included: `python3 -c`, `python3 -` and heredocs are denied. Edit files with Edit/Write, read JSON with `jq`, run throwaway python as a scratchpad file (shebang, `chmod +x`) by its path.
+- No inline python, read-only included: `python3 -c`, `python3 -` and heredocs are denied (`inline_python_guard` in `preToolUseBash.py` is the spec). Edit files with Edit/Write, read JSON with `jq`, run throwaway python as a scratchpad file (shebang, `chmod +x`) by its path.
 - No `cd`, not even as a prefix (`cd /tmp;`, `cd /dev/null;`). Use absolute paths, `git -C`, `--manifest-path`, or a subshell (`(cd X && cmd)`).
 - Never wait in the foreground. Long commands run with `run_in_background`; follow gates and landings with `scripts/watch_land.py` and anything else with the Monitor tool. No sleep loops, `kill -0` polls or sleep-then-tail.
 - Before a lane's one commit: clippy `--tests` on the touched crates and their tests in one run. Nextest runs every test to the end, so one run shows every failure: fix them all, then rerun only the failures by name, never the full set again. Regenerate what you made stale (`dev.py node-catalog`, `dev.py docs-index`), then `scripts/landing_gate.py --repo "$WT" --cheap` once on the uncommitted tree. Its passes are reused at landing. Kill your background wait loops before you report.
@@ -31,7 +31,7 @@ Rationale and incident history live in `.claude/GIT_TREE_DISCIPLINE.md`, the poi
 
 - **Shell: no `cd`** — hook-denied (`persistent_cd_guard` in `preToolUseBash.py` is the spec). Different cargo target → `--manifest-path`; different repo → `git -C`.
 - **Shell: `preToolUseBash.py` decides what prompts.** Read it, don't re-derive it. Read-only compounds and normal git/cargo workflow writes auto-allow; destructive git, writes inside chains, and redirects to repo paths prompt (`/tmp/*` and `/dev/null` are fine). Spec: `.claude/GIT_TREE_DISCIPLINE.md`.
-- **Commit messages: no backticks or `$()` inside `-m "..."`** — hook-denied (`commit_substitution_guard`); single-quote or `-F - <<'EOF'`.
+- **Commit messages: no backticks or `$()` inside `-m "..."`** — hook-denied (`commit_substitution_guard` in `preToolUseBash.py` is the spec); single-quote or `-F - <<'EOF'`.
 - **Never add or widen a `permissions.allow` rule without `docs/PERMISSION_BOUNDARY.md` section 4.** The bar: can any argument the rule permits run code or destroy state the reviewer never sees in the command text? Auto mode silently ignores interpreter-prefixed rules (section 3) — invoke repo scripts directly (`scripts/x.py`), never via `python3`.
 - **No bare `#[allow(dead_code)]`.** Every suppression names what un-suppresses it, or the code gets deleted.
 - **No `#[ignore]` on tests** — hook-enforced (`ignored-test-guard.py` is the spec; ratchet at landing and nightly). A flaky test gets fixed (seed control) or deleted, never muted.
@@ -49,14 +49,14 @@ Rationale and incident history live in `.claude/GIT_TREE_DISCIPLINE.md`, the poi
 - **Shipping = supersession sweep, same session.** The steps and the lifecycle call inject on contact from `.claude/hooks/context-nudges/landing-protocol.md`.
 - **IDs carry names** — hook-enforced (`bare-id-guard.py` is the spec): in prose, `BUG-xxxx (short name)`, `FILE.md section N (section name)`, once per touched text; code blocks exempt.
 - **Memory is rules, not history** — hook-enforced (`memory-history-guard.py` is the spec): status goes to beads or the board, history stays in git; closed handoffs are deleted, not archived.
-- **Commit with a pathspec, never the index** — hook-denied (`index_add_guard`): `git add -- <paths>` for new files, `git commit -m '…' -- <paths>`. Mechanics: `.claude/GIT_TREE_DISCIPLINE.md` section 3b (Commit with a pathspec).
-- **`main` is the merge-based trunk.** Work on `wave/`/`lane/`/`feat/` branches; land with `scripts/land_branch.py` (fetch, merge main in, gate, no-ff merge, push). Never cherry-pick or re-commit content that exists on a live branch; never delete a branch until `git merge-base --is-ancestor <tip> origin/main` passes. Rewrites of main ask (hook); a manual merge, push or update-ref of an ungated tree to main is hook-denied (`land_pass_guard` is the spec; only `.beads/`+`docs/`+`.claude/hooks/` changes go direct). Protocol: `.claude/GIT_TREE_DISCIPLINE.md` section 2 (Landing protocol).
+- **Commit with a pathspec, never the index** — hook-denied (`index_add_guard` in `preToolUseBash.py` is the spec): `git add -- <paths>` for new files, `git commit -m '…' -- <paths>`. Mechanics: `.claude/GIT_TREE_DISCIPLINE.md` section 3b (Commit with a pathspec).
+- **`main` is the merge-based trunk.** Work on `wave/`/`lane/`/`feat/` branches; land with `scripts/land_branch.py` (its mechanics inject on contact from `.claude/hooks/context-nudges/landing-protocol.md`). Never cherry-pick or re-commit content that exists on a live branch; never delete a branch until `git merge-base --is-ancestor <tip> origin/main` passes. Rewrites of main ask (hook); a manual merge, push or update-ref of an ungated tree to main is hook-denied (`land_pass_guard` is the spec; only `.beads/`+`docs/`+`.claude/hooks/` changes go direct). Protocol: `.claude/GIT_TREE_DISCIPLINE.md` section 2 (Landing protocol).
 - **Agent worktrees come from the slot ring only** — hook-enforced (`worktree_add_guard` in `preToolUseBash.py` and `agent-worktree-isolation-guard.py` are the spec). `scripts/agent-worktree.py acquire <task-label> <branch>`, one per workstream; verify the base tip before working; release at session end; `POOL FULL` is a loud stop.
 - **One writer per worktree.** An agent that asked a question or reported "completed" may still be editing — check it has really stopped before launching another into that slot. A refused or unrun test is not a pass; report it as unverified.
 
 ## Two-thread model
 
-The content thread owns `PlaybackEngine`, `EditingService`, `ContentPipeline`, and the `Project`, and runs at project FPS (default 60). The UI thread (winit) renders, handles input, and presents GPU output. UI→content is `ContentCommand`; content→UI is `ContentState` snapshots; both channels are crossbeam unbounded with the consumer draining to latest — that is the backpressure. GPU output crosses via an IOSurface zero-copy triple buffer with an atomic front index.
+The content thread owns `PlaybackEngine`, `EditingService`, `ContentPipeline`, and the `Project`, and runs at project FPS (default 60). The UI thread (winit) renders, handles input, and presents GPU output. UI→content is `ContentCommand` on a crossbeam unbounded channel the content thread drains in full; commands are never dropped. Content→UI is `ContentState` through a one-slot handoff (`content_state::state_channel`) that holds only the newest state and folds a replaced one into it, so a stalled UI holds one state and loses no snapshot, stamp or export result. GPU output crosses via an IOSurface zero-copy triple buffer with an atomic front index.
 
 ## Crates
 
@@ -66,10 +66,11 @@ The crate table and the dependency graph live in `docs/DEVELOPMENT_REFERENCE.md`
 
 - Primary time model is **beats**. `Seconds` only for `in_point`, player time, delta_time, OSC, export. Signatures take `Beats`/`Seconds`/`Bpm` newtypes, never raw floats.
 - `sync_clips_to_time()` is the sole authority for playback state.
-- `EditingService` is the sole mutation gateway; mutations route through `UndoRedoManager` → `Command`. Undo stack capped at 200.
+- `EditingService` is the sole mutation gateway; mutations route through `UndoRedoManager` → `Command`. The undo stack cap is `MAX_UNDO_HISTORY` in `crates/manifold-editing/src/undo.rs`.
 - Overlap is a write-time invariant on `Layer` (`enforce_non_overlap()`).
 - Phantom clips: created on NoteOn, committed on NoteOff. 5ms time guard, same-channel filter.
 - Reading the past never changes it. Time already simulated keeps the settings that were live then. Sampling, rendering, or re-rendering never consumes a delivery; one named operation does, exactly once, whatever the frame rate or stall.
+- UI work is decided by the frame planner; never add an invalidation flag — add an input. Spec: `docs/UI_INVALIDATION_DESIGN.md`.
 
 ## Hot-path discipline
 

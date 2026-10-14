@@ -9,8 +9,14 @@
 mod compare;
 mod composite_resources;
 mod dump;
-mod fixtures;
+pub(crate) mod fixtures;
+#[cfg(test)]
+mod input_matrix;
 mod interact;
+#[cfg(test)]
+mod lookup_coverage;
+#[cfg(test)]
+mod order_golden;
 mod readback;
 mod render;
 mod script;
@@ -738,6 +744,7 @@ fn run_gltf_editor_add_scene_gesture(want_dump: bool, add_object: bool) {
         use manifold_node_engine::snapshot::{OuterParamRouting, OuterParamSource};
         let mut handle_by_id: std::collections::HashMap<&str, &str> = std::collections::HashMap::new();
         manifold_node_engine::load::loaded_preset_view::collect_node_handles(&d.nodes, &mut handle_by_id);
+        let mut declared = manifold_core::param_lookup::Declared::new(&d);
         rg_snap_after.outer_routings = meta
             .bindings
             .iter()
@@ -745,7 +752,7 @@ fn run_gltf_editor_add_scene_gesture(want_dump: bool, add_object: bool) {
                 BindingTarget::Node { node_id, param } => {
                     let handle = handle_by_id.get(node_id.as_str())?;
                     Some(OuterParamRouting {
-                        outer_label: b.label.clone(),
+                        outer_label: declared.as_mut().map(|x| x.name(&b.id)).unwrap_or_default(),
                         outer_param_id: b.id.clone(),
                         node_handle: handle.to_string(),
                         inner_param: param.clone(),
@@ -993,6 +1000,7 @@ fn sync_data(ui: &mut UIRoot, data: &fixtures::SceneData, zoom_ppb: f32) {
         &data.content.automation_latched_params,
         data.content.led_preview.as_ref(),
     );
+    crate::ui_bridge::sync_audio_dock(ui, &data.project);
     // Zoom so the fixture's clips fit the lane width (set before build so the
     // ruler ticks and the clip rects agree on px/beat).
     ui.viewport.set_zoom(zoom_ppb);
@@ -1128,12 +1136,13 @@ mod footer_leak_probe {
 
         // The inspector panel's node range, EXACTLY as `panel_cache_info` reports
         // it to the cache manager.
-        let infos = ui.panel_cache_info();
+        let (mut subs, mut infos) = (Vec::new(), Vec::new());
+        ui.panel_cache_info_into(&mut subs, &mut infos);
         let insp_info = infos
             .iter()
             .find(|i| i.slot == PanelSlot::Inspector)
             .expect("inspector panel in cache info");
-        let (start, end) = (insp_info.node_start, insp_info.node_end);
+        let (region, start, end) = (insp_info.region, insp_info.start, insp_info.end);
         let eps = 0.5_f32;
 
         // Sanity: the scroll must have pushed content so that some node's RAW
@@ -1141,7 +1150,7 @@ mod footer_leak_probe {
         // vacuous (nothing to clip). Mirrors the P1 tab-strip test's `any_above`.
         let straddling = (start..end)
             .filter(|&i| {
-                let n = ui.tree.get_node(ui.tree.id_at(i)).unwrap();
+                let n = ui.tree.get_node(ui.tree.id_in(region, i)).unwrap();
                 n.flags.contains(UIFlags::VISIBLE)
                     && n.bounds.width > 0.0
                     && n.bounds.height > 0.0
@@ -1161,7 +1170,7 @@ mod footer_leak_probe {
         // whose clipped paint crosses below the footer's top edge.
         let mut clip_stack: Vec<Rect> = Vec::new();
         let mut leaks: Vec<(usize, Rect, Option<Rect>, String)> = Vec::new();
-        ui.tree.traverse_flat_range(start, end, false, |ev| match ev {
+        ui.tree.traverse_flat_range(region, start, end, false, |ev| match ev {
             TraversalEvent::PushClip(r) => {
                 let clipped = clip_stack.last().map(|c| intersect(*c, r)).unwrap_or(r);
                 clip_stack.push(clipped);
@@ -1191,7 +1200,7 @@ mod footer_leak_probe {
                 };
                 if painted_bottom > footer_top + eps {
                     let text = n.text.clone().unwrap_or_default();
-                    leaks.push((n.id.index(), b, clip_stack.last().copied(), text));
+                    leaks.push((n.id.slot(), b, clip_stack.last().copied(), text));
                 }
             }
         });
@@ -1308,13 +1317,10 @@ mod cache_path_full_render {
     /// model with. `Signals`/`apply_decision`/`composite_frame` (P0's own
     /// transcriptions of app_render.rs) are gone — see the P1 phase report.
     ///
-    /// `scroll_dirty` is always `ScrollDirty::default()` here: this driver
-    /// scrolls via `try_inspector_scroll` + `scrolled_in_place`, never the
-    /// live app's `scroll_dirty` bitflag path, exactly as P0's `apply_
-    /// decision` never called `rebuild_scroll_panels` either — omitting it
-    /// changes nothing observable.
+    /// The signals are one frame's: they reset after each apply.
     fn apply_decision(ui: &mut UIRoot, cache: &mut UICacheManager, signals: &mut UiFrameSignals) {
         apply_ui_frame_invalidations(ui, Some(cache), signals);
+        *signals = UiFrameSignals::default();
     }
 
     // `CompositeResources` (the offscreen target + atlas/blit pipelines
@@ -1375,11 +1381,10 @@ mod cache_path_full_render {
 
     /// Click through the REAL input path (`pointer_event` -> `process_events`
     /// -> `crate::ui_bridge::dispatch`, the same real bridge call
-    /// `script.rs`'s Runner uses) and report whether any dispatched action
-    /// was structural — the ONLY signal this driver reads to decide
-    /// `needs_structural_sync`, never a hand-set flag. Per-gesture drag/undo
-    /// snapshots are scratch-local: this harness only ever clicks, never
-    /// drags, so they never carry state between calls.
+    /// `script.rs`'s Runner uses), then plan the frame from what the click
+    /// moved, as the App does: the plan's rebuild is the ONLY signal this
+    /// driver reads, never a hand-set flag. This harness only ever clicks,
+    /// never drags, so the scrub state carries nothing between calls.
     #[allow(clippy::too_many_arguments)]
     fn click(
         ui: &mut UIRoot,
@@ -1390,15 +1395,15 @@ mod cache_path_full_render {
         content_tx: &crossbeam_channel::Sender<crate::content_command::ContentCommand>,
         content_state: &ContentState,
         user_prefs: &mut UserPrefs,
-    ) -> bool {
+        frame: &mut PlannedFrame,
+    ) -> crate::frame_plan::RegionMask {
         ui.pointer_event(pos, PointerAction::Down, clock);
         ui.pointer_event(pos, PointerAction::Up, clock);
         let actions = ui.process_events();
-        let mut structural = false;
         let mut scrub = crate::ui_bridge::ScrubState::default();
         for action in &actions {
             let mut dctx = crate::ui_bridge::DispatchCtx {
-                project: &mut data.project,
+                project: crate::ui_bridge::ProjectRef::new(&mut data.project, &mut frame.edits, content_tx),
                 content_tx,
                 content_state,
                 ui: &mut *ui,
@@ -1409,10 +1414,44 @@ mod cache_path_full_render {
                 scrub: &mut scrub,
                 dialogs: Default::default(),
             };
-            let result = crate::ui_bridge::dispatch(action, &mut dctx);
-            structural |= result.structural_change;
+            crate::ui_bridge::dispatch(action, &mut dctx);
         }
-        structural
+        frame.rebuilds(ui, data, active_layer, content_state)
+    }
+
+    /// The planner and the UI ledgers this driver keeps across clicks.
+    #[derive(Default)]
+    struct PlannedFrame {
+        planner: crate::frame_plan::FramePlanner,
+        edits: crate::gesture_preview::UiEdits,
+    }
+
+    impl PlannedFrame {
+        /// Plan against the last frame's inputs; the regions the plan rebuilds.
+        fn rebuilds(
+            &mut self,
+            ui: &UIRoot,
+            data: &mut fixtures::SceneData,
+            active_layer: &Option<LayerId>,
+            content_state: &ContentState,
+        ) -> crate::frame_plan::RegionMask {
+            let automation_draw_mode = data.selection.automation_draw_mode;
+            let inputs = crate::ui_frame::gather_frame_inputs(
+                &mut self.planner,
+                ui,
+                &mut data.selection,
+                active_layer,
+                &self.edits,
+                content_state,
+                crate::frame_plan::ChromeSource {
+                    project: &data.project,
+                    is_dirty: false,
+                    project_path: None,
+                    automation_draw_mode,
+                },
+            );
+            self.planner.plan(inputs).rebuild
+        }
     }
 
     #[test]
@@ -1455,6 +1494,9 @@ mod cache_path_full_render {
         let mut clock = 0.0_f32;
         let mut tab_swap_fallback_used = false;
         let mut filmstrip: Vec<Vec<u8>> = Vec::new();
+        // The planner starts from the fixture's build.
+        let mut frame = PlannedFrame::default();
+        frame.rebuilds(&ui, &mut data, &active_layer, &content_state);
 
         // ── scroll to bottom ──
         let insp = ui.layout.inspector();
@@ -1468,40 +1510,30 @@ mod cache_path_full_render {
         composite_frame(&device, &mut ui_renderer, &mut cache, &mut ui, &res);
 
         // ── expand/collapse every armed drawer at once (the compact toggle
-        // "cog") — a real click, real dispatch, real structural result; the
+        // "cog") — a real click, real dispatch, a real planned rebuild; the
         // tween it starts is polled below exactly as app_render.rs:2942-2944
         // does. The click's own post-composite frame opens the filmstrip. ──
         let cog_text = manifold_ui::icons::Icon::Cog.text();
         let cog_pos =
             resolve_button_center(&ui, &cog_text).expect("compact-toggle (cog) button must resolve");
-        if click(&mut ui, &mut data, cog_pos, clock, &mut active_layer, &content_tx, &content_state, &mut user_prefs) {
-            signals.needs_structural_sync = true;
-        }
+        signals.rebuild = click(&mut ui, &mut data, cog_pos, clock, &mut active_layer, &content_tx, &content_state, &mut user_prefs, &mut frame);
         apply_decision(&mut ui, &mut cache, &mut signals);
         composite_frame(&device, &mut ui_renderer, &mut cache, &mut ui, &res);
         filmstrip.push(full_frame_bytes(&device, &res, atlas_w, atlas_h));
 
-        // ── poll the drawer tween to settlement, capturing a filmstrip tile
-        // after every stepped frame (D9a). `InspectorCompositePanel::update`'s
-        // `tick_drawers` derives dt from `Instant::now()`, not a fixed step
-        // (unlike script.rs's driver clock) — a real, small wall-clock sleep
-        // between polls is the honest way to advance it; see the report's
-        // Shortcuts note. MOTION_MED_MS is 160ms, so ~8 ticks at 25ms plus
-        // one settle frame comfortably covers it. ──
-        for i in 0..16 {
+        // ── run the drawer tween to settlement, capturing a filmstrip tile
+        // after every stepped frame (D9a). `InspectorCompositePanel::update`
+        // derives dt from `Instant::now()`, so a real wall-clock sleep
+        // advances it. MOTION_MED_MS is 160ms: ten ticks at 25ms settle it.
+        // The drawers move in place, so a frame plans no rebuild for them. ──
+        for _ in 0..10 {
             std::thread::sleep(Duration::from_millis(25));
             clock += 25.0 / 1000.0;
             ui.update();
-            let still_active = ui.inspector.drawer_anim_active();
-            if still_active {
-                signals.needs_rebuild = true;
-            }
+            signals.rebuild = frame.rebuilds(&ui, &mut data, &active_layer, &content_state);
             apply_decision(&mut ui, &mut cache, &mut signals);
             composite_frame(&device, &mut ui_renderer, &mut cache, &mut ui, &res);
             filmstrip.push(full_frame_bytes(&device, &res, atlas_w, atlas_h));
-            if !still_active && i > 0 {
-                break;
-            }
         }
 
         // ── scroll again ──
@@ -1521,9 +1553,7 @@ mod cache_path_full_render {
         for tab_text in ["Master", "Layer"] {
             match resolve_button_center(&ui, tab_text) {
                 Some(pos) => {
-                    if click(&mut ui, &mut data, pos, clock, &mut active_layer, &content_tx, &content_state, &mut user_prefs) {
-                        signals.needs_structural_sync = true;
-                    }
+                    signals.rebuild = click(&mut ui, &mut data, pos, clock, &mut active_layer, &content_tx, &content_state, &mut user_prefs, &mut frame);
                 }
                 None => {
                     tab_swap_fallback_used = true;
@@ -1536,7 +1566,7 @@ mod cache_path_full_render {
                         &[manifold_ui::InspectorTab::Layer, manifold_ui::InspectorTab::Master],
                         tab,
                     );
-                    signals.needs_structural_sync = true;
+                    signals.rebuild = frame.rebuilds(&ui, &mut data, &active_layer, &content_state);
                 }
             }
             apply_decision(&mut ui, &mut cache, &mut signals);
@@ -1594,23 +1624,20 @@ mod editor_window_harness {
     //! enumeration `render_graph_editor_to_png`'s `--dump` uses) and samples
     //! its center pixel against the window's clear color. A node whose
     //! declared rect doesn't actually paint — wrong topology, a dropped
-    //! render pass, a camera/viewport mismatch — fails this test; the atlas
-    //! differential (D4/D5) is deliberately not asked here, because there is
-    //! no cache path to have a stale pixel in.
+    //! render pass, a camera/viewport mismatch — fails this test. The panels
+    //! paint through the editor atlas on a first frame; the canvas does not.
 
     use manifold_gpu::{GpuDevice, GpuTextureFormat};
     use manifold_node_engine::gpu::render_target::RenderTarget;
     use manifold_ui_paint::ui_renderer::UIRenderer;
-    use manifold_ui::graph_canvas::{GraphCanvas, GraphCanvasTargets, Rect as CanvasRect};
+    use manifold_ui::graph_canvas::{GraphCanvas, GraphCanvasTargets};
     use manifold_ui::hit_targets::HitTargets;
-    use manifold_ui::panels::graph_editor::{
-        GraphEditorPanel, EDITOR_CARD_LANE_WIDTH, SIDEBAR_WIDTH,
-    };
-    use manifold_ui::Rect as UiRect;
+    use manifold_ui::panels::graph_editor::GraphEditorPanel;
 
     use super::*;
     use crate::editor_frame::{
-        build_editor_preview_column, composite_editor_frame, EditorMiniTimelineInputs,
+        build_editor_preview_column, composite_editor_frame, EditorAtlas, EditorLayout, EditorMiniTimelineInputs,
+        EditorRegion,
     };
 
     const FORMAT: GpuTextureFormat = manifold_compositor::presentation::UI_FORMAT;
@@ -1632,13 +1659,9 @@ mod editor_window_harness {
         let logical_w = LOGICAL_W;
         let logical_h = LOGICAL_H;
 
-        // Same geometry `render_graph_editor_to_png` computes.
+        // The live editor's geometry, as `render_graph_editor_to_png` takes it.
         let dock = manifold_ui::Dock::editor();
-        let dock_rects = dock.rects(UiRect::new(0.0, 0.0, logical_w, logical_h));
-        let canvas_x = SIDEBAR_WIDTH;
-        let canvas_width = (logical_w - SIDEBAR_WIDTH - EDITOR_CARD_LANE_WIDTH).max(0.0);
-        let canvas_height = dock_rects.canvas.height;
-        let card_x = canvas_x + canvas_width;
+        let layout = EditorLayout::compute(&dock, logical_w as u32, logical_h as u32, None);
 
         let device = GpuDevice::new_queued("ui-snap");
         let mut renderer = UIRenderer::new(&device, FORMAT);
@@ -1656,48 +1679,24 @@ mod editor_window_harness {
         };
         sync_project_data(&mut ui_root, &project, active_idx, &selection);
         sync_inspector_data(&mut ui_root, &project, active_idx, &selection, &[], None);
-        ui_root.build_inspector_in_rect(UiRect::new(
-            card_x,
-            0.0,
-            EDITOR_CARD_LANE_WIDTH,
-            canvas_height,
-        ));
-
-        let preview_pad = 8.0_f32;
-        let preview_title_h = 18.0_f32;
-        let monitor_aspect = 16.0_f32 / 9.0;
-        let avail_w = (SIDEBAR_WIDTH - 2.0 * preview_pad).max(1.0);
-        let max_body_h =
-            ((canvas_height - 3.0 * preview_pad - 2.0 * preview_title_h) * 0.5).max(1.0);
-        let width_bound_h = avail_w / monitor_aspect;
-        let (preview_w, preview_h) = if width_bound_h <= max_body_h {
-            (avail_w, width_bound_h)
-        } else {
-            (max_body_h * monitor_aspect, max_body_h)
-        };
-        let preview_x = (SIDEBAR_WIDTH - preview_w) * 0.5;
-        let pane_block_h = 2.0 * (preview_title_h + preview_h) + preview_pad;
-        let mut pane_y = ((canvas_height - pane_block_h) * 0.5).max(preview_pad);
-        let node_title_y = pane_y;
-        let node_img_y = node_title_y + preview_title_h;
-        pane_y = node_img_y + preview_h + preview_pad;
-        let master_title_y = pane_y;
+        crate::ui_bridge::sync_audio_dock(&mut ui_root, &project);
+        ui_root.build_inspector_in(EditorRegion::CardLane.id(), layout.card_viewport);
         let editor_panel = GraphEditorPanel::new();
         build_editor_preview_column(
             &mut ui_root.tree,
             &editor_panel,
-            SIDEBAR_WIDTH,
-            canvas_height,
-            preview_x,
-            preview_w,
-            preview_h,
-            node_title_y,
-            node_img_y,
-            master_title_y,
+            layout.preview_width,
+            layout.canvas.height,
+            layout.preview_x,
+            layout.preview_w,
+            layout.preview_h,
+            layout.node_title_y,
+            layout.node_img_y,
+            layout.master_title_y,
             false,
         );
 
-        let viewport = CanvasRect::new(canvas_x, 0.0, canvas_width, canvas_height);
+        let viewport = layout.canvas_rect();
         let mut canvas = GraphCanvas::new();
         canvas.set_default_expanded(true);
         canvas.set_snapshot(&gv_snap);
@@ -1722,7 +1721,6 @@ mod editor_window_harness {
             node_entry.rect.height,
         );
 
-        let editor_area = UiRect::new(0.0, 0.0, logical_w, logical_h);
         let (mini_clips, mini_layer_labels, mini_rows, mini_total, mini_bpb, mini_readout) =
             crate::app_render::mini_timeline_data(&project, 0.0);
         let mut popover = manifold_ui::graph_canvas::mapping_popover::MappingPopover::new();
@@ -1731,20 +1729,26 @@ mod editor_window_harness {
 
         // `EDITOR_WINDOW_UNIFICATION_DESIGN.md` P1: same driver the live
         // window and `render_graph_editor_to_png` use — no overlay is open
-        // here, so this only records `overlay_region_start == tree.count()`
-        // (D2's narrowed base render below still covers the whole tree).
+        // here, so this only records an empty `overlay_draw`
+        // (the base render below covers the default arena).
         ui_root.build_overlays_for_screen(logical_w, logical_h);
 
+        let res = super::composite_resources::CompositeResources::new(&device, tex_w, tex_h);
+        let mut cache = manifold_ui_paint::ui_cache_manager::UICacheManager::with_slots(
+            FORMAT,
+            1.0,
+            manifold_ui_paint::ui_cache_manager::EDITOR_SLOTS,
+        );
         composite_editor_frame(
             &device,
             Some(&mut renderer),
             &mut ui_root,
+            &layout,
             &dock,
-            editor_area,
             Some(&canvas),
-            viewport,
+            EditorAtlas { cache: &mut cache, pipeline: &res.atlas_pipeline, sampler: &res.atlas_sampler, scale_factor: 1.0 },
             EditorMiniTimelineInputs {
-                bottom_rect: dock_rects.bottom,
+                bottom_rect: layout.bottom,
                 show_bottom: dock.show_bottom,
                 total_beats: mini_total,
                 beats_per_bar: mini_bpb,
@@ -1760,8 +1764,6 @@ mod editor_window_harness {
             &text_input,
             &frame_timer,
             &target_tex.texture,
-            tex_w,
-            tex_h,
             1.0,
             None,
         );
@@ -1899,6 +1901,7 @@ mod overlay_fidelity_proof {
             "opening the Perf HUD must record an overlay range (build_overlays)"
         );
         let (start, end) = ui.overlay_draw[0];
+        let overlays = crate::frame_plan::MainRegion::Overlays.id();
         assert!(end > start, "overlay range must be non-empty ({start}..{end})");
         // The mechanism under test: the region root is at `start - 1`, outside
         // the recorded range. If this ever stops holding, the whole premise of
@@ -1926,9 +1929,9 @@ mod overlay_fidelity_proof {
             let before = readback(&device, &res.offscreen, w, h);
             renderer.begin_frame();
             if sub_region {
-                renderer.render_sub_region(&ui.tree, start, end, false);
+                renderer.render_sub_region(&ui.tree, overlays, start, end, false);
             } else {
-                renderer.render_tree_range(&ui.tree, start, end);
+                renderer.render_tree_range(&ui.tree, overlays, start, end);
             }
             if renderer.prepare(&device, w, h, 1.0) {
                 let mut enc = device.create_encoder("bug097-overlay-range");

@@ -4,7 +4,6 @@
 use manifold_core::LayerId;
 use manifold_core::PresetTypeId;
 use manifold_core::project::Project;
-use manifold_editing::command::Command;
 use manifold_ui::ProjectAction;
 
 use super::DispatchResult;
@@ -73,7 +72,7 @@ fn scene_object_source_identity(
 
 pub(super) fn dispatch_project(
     action: &ProjectAction,
-    project: &mut Project,
+    project: &mut crate::ui_bridge::ProjectRef<'_>,
     content_tx: &crossbeam_channel::Sender<crate::content_command::ContentCommand>,
     _content_state: &crate::content_state::ContentState,
     ui: &mut UIRoot,
@@ -89,9 +88,8 @@ pub(super) fn dispatch_project(
             let old_hdr = project.settings.export_hdr;
             let cmd = manifold_editing::commands::settings::ToggleExportHdrCommand::new(old_hdr);
             {
-                let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
-                boxed.execute(project);
-                ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+                let boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
+                project.execute(boxed);
             }
             log::info!("HDR export → {}", project.settings.export_hdr);
             DispatchResult::handled()
@@ -101,9 +99,8 @@ pub(super) fn dispatch_project(
             let cmd =
                 manifold_editing::commands::settings::ToggleSplitSectionsCommand::new(old_split);
             {
-                let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
-                boxed.execute(project);
-                ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+                let boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
+                project.execute(boxed);
             }
             log::info!(
                 "Split export at markers → {}",
@@ -142,13 +139,12 @@ pub(super) fn dispatch_project(
                     layer_id, old_note, *note,
                 );
                 {
-                    let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
+                    let boxed: Box<dyn manifold_editing::command::Command + Send> =
                         Box::new(cmd);
-                    boxed.execute(project);
-                    ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+                    project.execute(boxed);
                 }
             }
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
         ProjectAction::SetMidiChannel(id, channel) => {
             if let Some((_, layer)) = project.timeline.find_layer_by_id(id) {
@@ -160,13 +156,12 @@ pub(super) fn dispatch_project(
                     *channel,
                 );
                 {
-                    let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
+                    let boxed: Box<dyn manifold_editing::command::Command + Send> =
                         Box::new(cmd);
-                    boxed.execute(project);
-                    ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+                    project.execute(boxed);
                 }
             }
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
         ProjectAction::SetMidiDevice(id, device) => {
             if let Some((_, layer)) = project.timeline.find_layer_by_id(id) {
@@ -177,11 +172,10 @@ pub(super) fn dispatch_project(
                     old_device,
                     device.clone(),
                 );
-                let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
-                boxed.execute(project);
-                ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+                let boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
+                project.execute(boxed);
             }
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
         ProjectAction::MidiTriggerModeClicked(id) => {
             use manifold_core::types::MidiTriggerMode;
@@ -196,11 +190,10 @@ pub(super) fn dispatch_project(
                     manifold_editing::commands::settings::ChangeLayerMidiTriggerModeCommand::new(
                         layer_id, old_mode, new_mode,
                     );
-                let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
-                boxed.execute(project);
-                ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+                let boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
+                project.execute(boxed);
             }
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
         ProjectAction::SetMidiTriggerMode(id, new_mode) => {
             if let Some((_, layer)) = project.timeline.find_layer_by_id(id) {
@@ -212,11 +205,10 @@ pub(super) fn dispatch_project(
                         old_mode,
                         crate::ui_translate::midi_trigger_mode_to_core(*new_mode),
                     );
-                let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
-                boxed.execute(project);
-                ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+                let boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
+                project.execute(boxed);
             }
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
         ProjectAction::SetResolution(preset_idx) => {
             use manifold_core::types::ResolutionPreset;
@@ -263,15 +255,14 @@ pub(super) fn dispatch_project(
                     *new_settings,
                 );
                 {
-                    let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
+                    let boxed: Box<dyn manifold_editing::command::Command + Send> =
                         Box::new(cmd);
-                    boxed.execute(project);
-                    ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+                    project.execute(boxed);
                 }
             }
-            // The panel's tier labels are baked into the tree at build —
-            // structural so the overlay rebuilds and the click is visible.
-            DispatchResult::structural()
+            // The panel's tier labels are baked into the tree at build; the
+            // Settings stamp rebuilds it so the click is visible.
+            DispatchResult::handled()
         }
         ProjectAction::SetGenType(opt_layer_id, new_type) => {
             let new_type = crate::ui_translate::preset_type_id_to_core(new_type);
@@ -296,7 +287,7 @@ pub(super) fn dispatch_project(
                     );
                 }
             }
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
 
         // ── SCENE_SETUP_PANEL_DESIGN P1: the panel's fourth-surface writes ──
@@ -416,7 +407,7 @@ pub(super) fn dispatch_project(
                     ContentCommand::ExecuteOnContent(Box::new(cmd)),
                 );
             }
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
         ProjectAction::SceneSetupAddFog(layer_id, render_scene_node_id) => {
             if let Some(default) = generator_catalog_default(project, layer_id) {
@@ -436,7 +427,7 @@ pub(super) fn dispatch_project(
                     ContentCommand::ExecuteOnContent(Box::new(cmd)),
                 );
             }
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
 
         ProjectAction::SceneModifierApply(layer, preset) => {
@@ -608,7 +599,7 @@ pub(super) fn dispatch_project(
                     Box::new(cmd), crate::edit_selection::SelectAfterEdit::NewObject(layer_id.clone()),
                 ));
             }
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
         ProjectAction::SceneSetupAssignFluidRole {
             layer_id, render_scene_node_id, object_index, domain, role,
@@ -630,7 +621,7 @@ pub(super) fn dispatch_project(
                     ));
                 }
             }
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
         ProjectAction::SceneSetupRemoveFluidRole { layer_id, source_node_id }
         | ProjectAction::SceneSetupRetargetFluidRole { layer_id, source_node_id, .. } => {
@@ -665,7 +656,7 @@ pub(super) fn dispatch_project(
                     ));
                 }
             }
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
         ProjectAction::SceneSetupAddFluid(layer_id, render_scene_node_id) => {
             if let Some(default) = generator_catalog_default(project, layer_id) {
@@ -694,7 +685,7 @@ pub(super) fn dispatch_project(
                     crate::edit_selection::SelectAfterEdit::NewObject(layer_id.clone()),
                 ));
             }
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
         // BUG-hlw8 "+ Plane" button: mirrors `SceneSetupAddObject` above but
         // dispatches `AddSceneLayerPlaneCommand`, which builds a grouped plane
@@ -731,7 +722,7 @@ pub(super) fn dispatch_project(
                     Box::new(cmd), crate::edit_selection::SelectAfterEdit::NewObject(layer_id.clone()),
                 ));
             }
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
         ProjectAction::SceneSetupAddLight(layer_id, render_scene_node_id, next_index) => {
             if let Some(default) = generator_catalog_default(project, layer_id) {
@@ -750,7 +741,7 @@ pub(super) fn dispatch_project(
                 );
                 ContentCommand::send(content_tx, ContentCommand::ExecuteSelecting(Box::new(cmd), crate::edit_selection::SelectAfterEdit::NewLight(layer_id.clone())));
             }
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
         // BUG-193 per-row "✕": the inverse of SceneSetupAddObject/
         // SceneSetupAddLight above — `object_index`/`light_index` ride on
@@ -770,7 +761,7 @@ pub(super) fn dispatch_project(
                 ).with_expected_source(source);
                 ContentCommand::send(content_tx, ContentCommand::ExecuteOnContent(Box::new(cmd)));
             }
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
         ProjectAction::SceneSetupRemoveSubmesh(layer_id, render_scene_node_id, physical_index) => {
             if let Some(default) = generator_catalog_default(project, layer_id) {
@@ -783,7 +774,7 @@ pub(super) fn dispatch_project(
                 );
                 ContentCommand::send(content_tx, ContentCommand::ExecuteOnContent(Box::new(cmd)));
             }
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
         ProjectAction::SceneSetupRemoveLight(layer_id, render_scene_node_id, light_index) => {
             if let Some(default) = generator_catalog_default(project, layer_id) {
@@ -797,12 +788,12 @@ pub(super) fn dispatch_project(
                 );
                 ContentCommand::send(content_tx, ContentCommand::ExecuteOnContent(Box::new(cmd)));
             }
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
 
-        // P4b: Skin row source/target edits — same shape as the modifier-stack
-        // arms above: resolve `GraphTarget::Generator(layer_id)`, grab the
-        // catalog default, execute locally + send to content thread.
+        // Skin row source/target edits: content-owned like the other scene
+        // edits above; the snapshot brings them back (BUG-bo2mx (scene setup
+        // skin edits run against the UI snapshot)).
         ProjectAction::SceneSetupSkinSourceSet {
             layer_id,
             scope_path,
@@ -823,11 +814,9 @@ pub(super) fn dispatch_project(
                     source_string,
                     default,
                 );
-                let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
-                boxed.execute(project);
-                ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+                ContentCommand::send(content_tx, ContentCommand::ExecuteOnContent(Box::new(cmd)));
             }
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
         ProjectAction::SceneSetupSkinTargetMapSet {
             layer_id,
@@ -847,11 +836,9 @@ pub(super) fn dispatch_project(
                         map_skin_target_map(*target_map),
                         default,
                     );
-                let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
-                boxed.execute(project);
-                ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+                ContentCommand::send(content_tx, ContentCommand::ExecuteOnContent(Box::new(cmd)));
             }
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
 
         // Buttons and keyboard duplication use the same content-owned transfer.
@@ -860,7 +847,7 @@ pub(super) fn dispatch_project(
                 layer: layer_id.clone(), scene: *render_scene_node_id,
                 kind: crate::scene_item_transfer::SceneItemKind::Object, index: *source_index,
             }));
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
         ProjectAction::SceneSetupDuplicateSubmesh(layer_id, render_scene_node_id, physical_index) => {
             if let Some(mut default) = generator_catalog_default(project, layer_id) {
@@ -874,7 +861,7 @@ pub(super) fn dispatch_project(
                 );
                 ContentCommand::send(content_tx, ContentCommand::ExecuteOnContent(Box::new(cmd)));
             }
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
         ProjectAction::SceneSetupEnablePhysics(layer_id, render_scene_node_id, object_index)
         | ProjectAction::SceneSetupDisablePhysics(layer_id, render_scene_node_id, object_index) => {
@@ -907,7 +894,7 @@ pub(super) fn dispatch_project(
                 };
                 ContentCommand::send(content_tx, ContentCommand::ExecuteOnContent(cmd));
             }
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
         // scene-panel-ux: "Frame" button (Object selection). Reads the
         // effective def through the SAME SceneVm the panel builds, takes the
@@ -1047,7 +1034,7 @@ pub(super) fn dispatch_project(
                 content_tx,
                 ContentCommand::ExecuteOnContent(Box::new(composite)),
             );
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
 
         // P4 "Import Model…" button (D5): a native file dialog picks a
@@ -1107,17 +1094,17 @@ pub(super) fn dispatch_project(
                 plan.new_card_bindings,
                 plan.new_string_bindings,
                 default,
-            );
-            let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
-            boxed.execute(project);
-            ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+            )
+            .with_scene_bounds(plan.scene_bounds);
+            let boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
+            project.execute(boxed);
             if !plan.report_lines.is_empty() {
                 log::info!(
                     "[Scene Setup] Import Model… report: {}",
                     plan.report_lines.join("; ")
                 );
             }
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
         // ── SCENE_SETUP_PANEL_DESIGN P5: the modifier stack (D6) ──
         // All three resolve `GraphTarget::Generator(layer_id)` exactly like
@@ -1131,7 +1118,7 @@ pub(super) fn dispatch_project(
                     type_id: type_id.clone(), after: None,
                 },
             ));
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
         ProjectAction::SceneSetupRemoveModifier(layer_id, group_node_id, modifier_node_id) => {
             if let Some(default) = generator_catalog_default(project, layer_id) {
@@ -1145,7 +1132,7 @@ pub(super) fn dispatch_project(
                 );
                 ContentCommand::send(content_tx, ContentCommand::ExecuteOnContent(Box::new(cmd)));
             }
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
         ProjectAction::SceneSetupMoveModifier(
             layer_id,
@@ -1165,19 +1152,19 @@ pub(super) fn dispatch_project(
                 );
                 ContentCommand::send(content_tx, ContentCommand::ExecuteOnContent(Box::new(cmd)));
             }
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
         // Both scene actions resolve against authoritative content state.
         ProjectAction::SceneSetupPrepareCamera(layer_id) => {
             ContentCommand::send(content_tx, ContentCommand::SceneCameraSetup(layer_id.clone()));
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
         ProjectAction::SceneSetupNewScene(layer_id) => {
             ContentCommand::send(content_tx, ContentCommand::ChangeGeneratorType {
                 layer_id: layer_id.clone(),
                 new_type: PresetTypeId::new("Scene"),
             });
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
 
         // BUG-184: the automation-lane right-click context menu's two items
@@ -1187,17 +1174,16 @@ pub(super) fn dispatch_project(
         ProjectAction::ContextClearAutomationLane(target, param_id) => {
             ContentCommand::send(content_tx, ContentCommand::FinishAutomationRecording);
             let graph_target = crate::editing_host::to_graph_target(target);
-            let mut cmd = manifold_editing::commands::automation::ClearLaneCommand::new(
+            let cmd = manifold_editing::commands::automation::ClearLaneCommand::new(
                 graph_target,
                 param_id.as_ref(),
             );
-            cmd.execute(project);
-            ContentCommand::send(content_tx, ContentCommand::Execute(Box::new(cmd)));
-            DispatchResult::structural()
+            project.execute(Box::new(cmd));
+            DispatchResult::handled()
         }
         ProjectAction::ContextRemoveAutomationLane(target, param_id) => {
             remove_parameter_automation(project, content_tx, ui, _selection, target, param_id);
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
         ProjectAction::ContextRestoreAutomationLane(target, param_id) => {
             ContentCommand::send(
@@ -1209,93 +1195,15 @@ pub(super) fn dispatch_project(
             );
             DispatchResult::handled()
         }
-
-        // UX-P3a (SCENE_PANEL_UX_DESIGN.md D8, sizing amendment): expose the
-        // scene row's inner param on the layer's generator card via the SAME
-        // `ToggleNodeParamExposeCommand` the graph editor's expose glyph
-        // dispatches (`app_render.rs`'s `GraphEditCommand::ToggleNodeParamExpose`
-        // handling), constructed here instead of there because the scene
-        // panel never opens the graph editor's canvas (no `watched_graph_target`
-        // to piggyback on) — same "resolve `GraphTarget::Generator` + the
-        // bundled catalog default" shape as every other fourth-surface write
-        // in this file.
-        //
-        // One-way per P3a: if the param is ALREADY exposed (read via
-        // `scene_vm::is_param_exposed` — same "free read off the def" the
-        // panel's own `RowValue::exposed` uses), this is a no-op — a second
-        // click never un-exposes and never mints a second binding. The panel
-        // emits regardless of lit state (see the action's own doc), so this
-        // guard is the actual one-way enforcement point.
-        ProjectAction::SceneSetupExposeParam {
-            layer_id,
-            scope_path,
-            node_doc_id,
-            param_id,
-            object_label,
-            param_label,
-            min,
-            max,
-            default_value,
-            is_angle,
-        } => {
-            let Some(default) = generator_catalog_default(project, layer_id) else {
-                return DispatchResult::handled();
-            };
-            let effective_def = project
-                .timeline
-                .find_layer_by_id(layer_id)
-                .and_then(|(_, layer)| layer.generator_graph().cloned())
-                .unwrap_or_else(|| default.clone());
-            if manifold_nodes_scene::node_graph::scene_vm::is_param_exposed(
-                &effective_def,
-                *node_doc_id,
-                param_id,
-            ) {
-                return DispatchResult::handled();
-            }
-            let Some(node) = find_node_by_scope(&effective_def, scope_path, *node_doc_id) else {
-                return DispatchResult::handled();
-            };
-            let node_id = node.node_id.clone();
-            let node_handle = node
-                .handle
-                .clone()
-                .unwrap_or_else(|| format!("node{node_doc_id}"));
-            let target = manifold_core::GraphTarget::Generator(layer_id.clone());
-            let cmd = manifold_editing::commands::graph::ToggleNodeParamExposeCommand::new(
-                target,
-                node_id,
-                *node_doc_id,
-                node_handle,
-                param_id.clone(),
-                true,
-                default,
-                format!("{object_label} \u{b7} {param_label}"),
-                *min,
-                *max,
-                *default_value,
-                manifold_core::effects::ParamConvert::Float,
-                *is_angle,
-                Vec::new(),
-            )
-            .with_scope(scope_path.clone());
-            let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
-            boxed.execute(project);
-            ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
-            DispatchResult::structural()
-        }
     }
 }
 
 /// Find the `EffectGraphNode` with doc id `node_doc_id` at `scope_path`
 /// (a path of group-node doc ids to descend into, empty = document root) —
-/// the same addressing every graph command's `.with_scope` takes. Used by
-/// `SceneSetupExposeParam` to read the node's stable `node_id`/`handle`
-/// before constructing `ToggleNodeParamExposeCommand`, which (unlike every
-/// other fourth-surface command in this file) needs that identity as a
-/// constructor argument rather than resolving it internally. BUG-249:
-/// `pub(crate)` so `inspector.rs`'s scene modulation redirect can resolve
-/// the same identity when it materializes an exposure on first arm.
+/// the same addressing every graph command's `.with_scope` takes.
+/// `inspector.rs`'s scene modulation redirect reads the node's stable
+/// identity through it when it materializes an exposure on first arm
+/// (BUG-249 (scene modulation redirect)).
 pub(crate) fn find_node_by_scope<'a>(
     def: &'a manifold_core::effect_graph_def::EffectGraphDef,
     scope_path: &[u32],
@@ -1348,7 +1256,7 @@ pub(crate) fn scene_binding_id(
 /// frame-selected so a camera frame is one undo unit.
 /// `None` when the layer has no generator default or the bound value is
 /// unchanged (the epsilon no-change guard).
-fn apply_scene_param_write(
+pub(crate) fn apply_scene_param_write(
     project: &Project,
     layer_id: &LayerId,
     scope_path: Vec<u32>,
@@ -1419,7 +1327,7 @@ fn map_skin_target_map(
 
 /// Shared parameter/lane menu path: remove the envelope and its stale UI targets.
 pub(super) fn remove_parameter_automation(
-    project: &mut Project,
+    project: &mut crate::ui_bridge::ProjectRef<'_>,
     content_tx: &crossbeam_channel::Sender<crate::content_command::ContentCommand>,
     ui: &mut UIRoot,
     selection: &mut SelectionState,
@@ -1433,18 +1341,12 @@ pub(super) fn remove_parameter_automation(
         content_tx,
         crate::content_command::ContentCommand::FinishAutomationRecording,
     );
-    let mut command = manifold_editing::commands::automation::RemoveLaneCommand::for_param(
+    let command = manifold_editing::commands::automation::RemoveLaneCommand::for_param(
         graph_target,
         param_id.as_ref(),
     );
-    command.execute(project);
-    crate::content_command::ContentCommand::send(
-        content_tx,
-        crate::content_command::ContentCommand::Execute(Box::new(command)),
-    );
-    selection
-        .chosen_automation_params
-        .retain(|_, (t, p)| t != target || p != param_id);
+    project.execute(Box::new(command));
+    selection.unchoose_automation_lane(target, param_id);
     selection
         .selected_automation_points
         .retain(|point| point.target != *target || point.param_id != *param_id);
@@ -1582,6 +1484,7 @@ mod tests {
     use super::*;
     use crate::content_command::ContentCommand;
     use manifold_core::effect_graph_def::SerializedParamValue;
+    use manifold_editing::command::Command;
     use manifold_core::types::LayerType;
     mod water_family;
     mod water_family_actions;
@@ -1790,7 +1693,7 @@ mod tests {
             } else {
                 ProjectAction::SceneSetupDisablePhysics(layer_id.clone(), scene_id, 0)
             };
-            dispatch_project(&action, &mut project, &tx, &state, &mut ui,
+            dispatch_project(&action, &mut crate::ui_bridge::ProjectRef::new(&mut project, &mut Default::default(), &tx), &tx, &state, &mut ui,
                 &mut selection, &mut active_layer, &mut prefs, Default::default());
             assert!(effective_def(&project, &layer_id) == before_dispatch,
                 "UI dispatch waits for content");
@@ -1798,6 +1701,8 @@ mod tests {
                 panic!("toggle must send an undoable edit to content");
             };
             cmd.execute(&mut project);
+            assert!(cmd.touches().contains(manifold_core::change::Part::Effects),
+                "the toggle shows or hides the body rows, so the Scene tab re-projects");
             let current = body(&project);
             assert_eq!(current.enabled, enabled);
             assert_eq!(current.body_node_id, original.body_node_id);
@@ -1851,7 +1756,7 @@ mod tests {
                 render_scene_id,
                 object_index,
             ),
-            &mut project,
+            &mut crate::ui_bridge::ProjectRef::new(&mut project, &mut Default::default(), &tx),
             &tx,
             &state,
             &mut ui,
@@ -1918,8 +1823,8 @@ mod tests {
         // The projection uses the same eligibility helper as dispatch. Build
         // the real scene panel to keep the Physics property visible for the
         // fresh cube before it has a body.
-        ui.scene_setup_panel.open();
         selection.select_layer(layer_id.clone());
+        selection.pin_scope(manifold_ui::InspectorTab::Scene);
         super::super::projection::inspector::sync_inspector_data(
             &mut ui,
             &project,
@@ -1942,8 +1847,7 @@ mod tests {
             .build_docked(&mut tree, rect);
         tree.end_region(region, content_start);
         assert!(
-            tree.nodes()
-                .iter()
+            tree.all_nodes()
                 .any(|node| node.text.as_deref() == Some("Physics")),
             "fresh builtin cube exposes the Physics property"
         );
@@ -1954,7 +1858,7 @@ mod tests {
                 render_scene_id,
                 object_index,
             ),
-            &mut project,
+            &mut crate::ui_bridge::ProjectRef::new(&mut project, &mut Default::default(), &tx),
             &tx,
             &state,
             &mut ui,
@@ -2032,11 +1936,10 @@ mod tests {
         ui.scene_setup_panel.build_docked(&mut enabled_tree, enabled_rect);
         enabled_tree.end_region(enabled_region, enabled_content_start);
         let enabled_texts: Vec<&str> = enabled_tree
-            .nodes()
-            .iter()
+            .all_nodes()
             .filter_map(|node| node.text.as_deref())
             .collect();
-        assert!(enabled_texts.contains(&"Density (kg/m³)"));
+        assert!(enabled_texts.contains(&"Density"));
         assert!(!enabled_texts.contains(&"Shape"),
             "source-driven Physics hides the inactive body Shape control");
 
@@ -2108,7 +2011,7 @@ mod tests {
             let before_toggle = effective_def(&project, &layer_id);
             dispatch_project(
                 &action,
-                &mut project,
+                &mut crate::ui_bridge::ProjectRef::new(&mut project, &mut Default::default(), &tx),
                 &tx,
                 &state,
                 &mut ui,
@@ -2152,12 +2055,11 @@ mod tests {
         let (_, content_state, mut ui, mut selection, mut active_layer, mut user_prefs) =
             dispatch_harness();
         let (content_tx, content_rx) = crossbeam_channel::unbounded();
-        let result = dispatch_project(
+        dispatch_project(
             &ProjectAction::SceneSetupAddFluid(layer_id.clone(), render_scene_id),
-            &mut project, &content_tx, &content_state, &mut ui, &mut selection,
+            &mut crate::ui_bridge::ProjectRef::new(&mut project, &mut Default::default(), &content_tx), &content_tx, &content_state, &mut ui, &mut selection,
             &mut active_layer, &mut user_prefs, Default::default(),
         );
-        assert!(result.structural_change);
         assert_eq!(effective_def(&project, &layer_id), original,
             "UI dispatch must leave the project unchanged until content accepts the edit");
         let ContentCommand::ExecuteSelecting(mut command, request) =
@@ -2212,7 +2114,8 @@ mod tests {
         );
         let metadata = reloaded_def.preset_metadata.as_ref().unwrap();
         let world_sections = crate::ui_bridge::projection::scene::sections_for_nodes(
-            Some(&reloaded_def), &reloaded_vm.world_controls,
+            Some(&reloaded_def), &crate::ui_bridge::projection::scene::world_and_physics_nodes(
+                &manifold_nodes_scene::node_graph::scene_items::scene_items(&reloaded_def, &reloaded_vm)),
         );
         let world = reloaded_def.nodes.iter().find(|node| node.type_id == "node.physics_world").unwrap();
         for (param, label, default) in [
@@ -2332,7 +2235,9 @@ mod tests {
             let sections = crate::ui_bridge::projection::scene::sections_for_nodes(Some(def), &row.fluid_controls);
             assert!(sections.iter().any(|section| section.contains("Simulation")), "{step}: the water panel shows its dials");
             let camera = crate::ui_bridge::projection::scene::sections_for_nodes(
-                Some(def), &SceneVm::from_def(def).unwrap().camera_controls,
+                Some(def), crate::ui_bridge::projection::scene::owned_nodes(
+                    &manifold_nodes_scene::node_graph::scene_items::scene_items(def, &SceneVm::from_def(def).unwrap()),
+                    &manifold_nodes_scene::node_graph::scene_items::SceneItemId::Camera),
             );
             assert!(!camera.is_empty(), "{step}: the camera owns its dials");
             assert!(sections.iter().all(|section| !camera.contains(section)),
@@ -2355,7 +2260,7 @@ mod tests {
         let (content_tx, content_rx) = crossbeam_channel::unbounded();
         dispatch_project(
             &ProjectAction::SceneSetupAddLight(layer_id.clone(), render_scene_id, lights),
-            &mut project, &content_tx, &content_state, &mut ui, &mut selection,
+            &mut crate::ui_bridge::ProjectRef::new(&mut project, &mut Default::default(), &content_tx), &content_tx, &content_state, &mut ui, &mut selection,
             &mut active_layer, &mut user_prefs, Default::default(),
         );
         let ContentCommand::ExecuteSelecting(mut command, _) = content_rx.try_recv().expect("queued light insertion")
@@ -2395,7 +2300,7 @@ mod tests {
             ProjectAction::SceneSetupAddFluid(layer_id.clone(), render_scene_id),
             ProjectAction::SceneSetupAddObject(layer_id.clone(), render_scene_id, 0),
         ] {
-            dispatch_project(&action, &mut project, &tx, &state, &mut ui,
+            dispatch_project(&action, &mut crate::ui_bridge::ProjectRef::new(&mut project, &mut Default::default(), &tx), &tx, &state, &mut ui,
                 &mut selection, &mut active, &mut prefs, Default::default());
             let ContentCommand::ExecuteSelecting(mut command, _) = rx.try_recv().unwrap()
             else { panic!("insertion must execute on content"); };
@@ -2416,14 +2321,14 @@ mod tests {
         dispatch_project(&ProjectAction::SceneSetupAssignFluidRole {
             layer_id: layer_id.clone(), render_scene_node_id: render_scene_id,
             object_index: object.index as u32, domain: domains[0].node.clone(), role: 1,
-        }, &mut project, &tx, &state, &mut ui, &mut selection, &mut active, &mut prefs, Default::default());
+        }, &mut crate::ui_bridge::ProjectRef::new(&mut project, &mut Default::default(), &tx), &tx, &state, &mut ui, &mut selection, &mut active, &mut prefs, Default::default());
         assert_eq!(effective_def(&project, &layer_id), before, "UI must not edit project state");
         let ContentCommand::ExecuteOnContent(mut command) = rx.try_recv().unwrap()
         else { panic!("role assignment must execute on content"); };
         command.execute(&mut project);
         assert!(command.was_applied(), "{:?}", command.rejection_reason());
         let after = effective_def(&project, &layer_id);
-        let role_nodes = super::super::projection::scene::group_fluid_role_nodes(&after, group_id);
+        let role_nodes = manifold_nodes_scene::node_graph::scene_items::group_fluid_role_nodes(&after, group_id);
         assert_eq!(role_nodes.len(), 1);
         let group = after.nodes.iter().find(|node| Some(node.id) == group_id)
             .unwrap().group.as_ref().unwrap();
@@ -2459,7 +2364,7 @@ mod tests {
         assert_eq!(effective_def(&project, &layer_id), after, "redo chain preserves source and domain identity");
 
         dispatch_project(&ProjectAction::SceneSetupAddFluid(layer_id.clone(), render_scene_id),
-            &mut project, &tx, &state, &mut ui, &mut selection, &mut active, &mut prefs, Default::default());
+            &mut crate::ui_bridge::ProjectRef::new(&mut project, &mut Default::default(), &tx), &tx, &state, &mut ui, &mut selection, &mut active, &mut prefs, Default::default());
         let ContentCommand::ExecuteSelecting(mut second_fluid, _) = rx.try_recv().unwrap()
         else { panic!("second fluid insertion executes on content"); };
         second_fluid.execute(&mut project);
@@ -2470,7 +2375,7 @@ mod tests {
         let new_domain = manifold_core::SceneNodeRef::locate(&with_second, &domains[1].node).unwrap();
         dispatch_project(&ProjectAction::SceneSetupRetargetFluidRole {
             layer_id: layer_id.clone(), source_node_id: role.id, domain: domains[1].node.clone(),
-        }, &mut project, &tx, &state, &mut ui, &mut selection, &mut active, &mut prefs, Default::default());
+        }, &mut crate::ui_bridge::ProjectRef::new(&mut project, &mut Default::default(), &tx), &tx, &state, &mut ui, &mut selection, &mut active, &mut prefs, Default::default());
         assert_eq!(effective_def(&project, &layer_id), with_second, "retarget waits for content");
         let ContentCommand::ExecuteOnContent(mut retarget) = rx.try_recv().unwrap()
         else { panic!("retarget executes on content"); };
@@ -2483,14 +2388,14 @@ mod tests {
         assert_eq!(effective_def(&reloaded, &layer_id), retargeted);
         dispatch_project(&ProjectAction::SceneSetupRemoveFluidRole {
             layer_id: layer_id.clone(), source_node_id: role.id,
-        }, &mut project, &tx, &state, &mut ui, &mut selection, &mut active, &mut prefs, Default::default());
+        }, &mut crate::ui_bridge::ProjectRef::new(&mut project, &mut Default::default(), &tx), &tx, &state, &mut ui, &mut selection, &mut active, &mut prefs, Default::default());
         assert_eq!(effective_def(&project, &layer_id), retargeted, "removal waits for content");
         let ContentCommand::ExecuteOnContent(mut remove) = rx.try_recv().unwrap()
         else { panic!("removal executes on content"); };
         remove.execute(&mut project);
         assert!(remove.was_applied(), "{:?}", remove.rejection_reason());
         let removed = effective_def(&project, &layer_id);
-        assert!(super::super::projection::scene::group_fluid_role_nodes(&removed, group_id).is_empty());
+        assert!(manifold_nodes_scene::node_graph::scene_items::group_fluid_role_nodes(&removed, group_id).is_empty());
         remove.undo(&mut project);
         assert_eq!(effective_def(&project, &layer_id), retargeted);
         retarget.undo(&mut project);
@@ -2524,7 +2429,7 @@ mod tests {
             rect: Rect::new(0.0, 0.0, size.x, size.y), screen: Vec2::new(1280.0, 720.0),
         });
         tree.end_region(region, start);
-        let track = tree.nodes().iter().find(|node| node.tooltip.as_deref() == Some(
+        let track = tree.all_nodes().find(|node| node.tooltip.as_deref() == Some(
             "Simulation updates per second. Hits land up to one update late; kicks are read at this rate."
         ) && node.text.is_none() && node.flags.contains(manifold_ui::UIFlags::INTERACTIVE)).expect("shared slider track").bounds;
         let point = Vec2::new(track.x + track.width - 1.0, track.y + track.height * 0.5);
@@ -2534,7 +2439,7 @@ mod tests {
             if let OverlayResponse::Consumed(actions) = ui.settings_popup.on_event(&event, &mut tree) {
                 for action in actions {
                     if let PanelAction::Project(action) = action {
-                        dispatch_project(&action, &mut project, &tx, &state, &mut ui,
+                        dispatch_project(&action, &mut crate::ui_bridge::ProjectRef::new(&mut project, &mut Default::default(), &tx), &tx, &state, &mut ui,
                             &mut selection, &mut active, &mut prefs, Default::default());
                     }
                 }
@@ -2586,7 +2491,7 @@ mod tests {
                 screen: Vec2::new(1280.0, 720.0),
             });
             tree.end_region(region, content_start);
-            let bounds = tree.nodes().iter()
+            let bounds = tree.all_nodes()
                 .find(|node| node.text.as_deref() == Some(label))
                 .expect("settings control exists").bounds;
             let point = Vec2::new(bounds.x + bounds.width * 0.5, bounds.y + bounds.height * 0.5);
@@ -2599,7 +2504,7 @@ mod tests {
                             panic!("settings control emitted unexpected action");
                         };
                         dispatch_project(
-                            &action, &mut project, &content_tx, &content_state,
+                            &action, &mut crate::ui_bridge::ProjectRef::new(&mut project, &mut Default::default(), &content_tx), &content_tx, &content_state,
                             &mut ui, &mut selection, &mut active_layer, &mut user_prefs, Default::default(),
                         );
                     }
@@ -2673,9 +2578,9 @@ mod tests {
         let (content_tx, content_rx) = crossbeam_channel::unbounded();
 
         let action = ProjectAction::SceneSetupFrameSelected(layer_id.clone(), render_scene_id, object_node_id);
-        let result = dispatch_project(
+        dispatch_project(
             &action,
-            &mut project,
+            &mut crate::ui_bridge::ProjectRef::new(&mut project, &mut Default::default(), &content_tx),
             &content_tx,
             &content_state,
             &mut ui,
@@ -2683,10 +2588,6 @@ mod tests {
             &mut active_layer,
             &mut user_prefs,
             Default::default(),
-        );
-        assert!(
-            result.structural_change,
-            "framing the camera is a param write"
         );
         assert_eq!(
             (
@@ -2734,7 +2635,7 @@ mod tests {
         let add = ProjectAction::SceneSetupAddObject(layer_id.clone(), render_scene_id, before);
         dispatch_project(
             &add,
-            &mut project,
+            &mut crate::ui_bridge::ProjectRef::new(&mut project, &mut Default::default(), &content_tx),
             &content_tx,
             &content_state,
             &mut ui,
@@ -2772,7 +2673,7 @@ mod tests {
         );
         dispatch_project(
             &duplicate,
-            &mut project,
+            &mut crate::ui_bridge::ProjectRef::new(&mut project, &mut Default::default(), &content_tx),
             &content_tx,
             &content_state,
             &mut ui,
@@ -2840,7 +2741,7 @@ mod tests {
         );
         dispatch_project(
             &write,
-            &mut project,
+            &mut crate::ui_bridge::ProjectRef::new(&mut project, &mut Default::default(), &content_tx),
             &content_tx,
             &content_state,
             &mut ui,
@@ -2896,7 +2797,7 @@ mod tests {
         );
         dispatch_project(
             &duplicate,
-            &mut project,
+            &mut crate::ui_bridge::ProjectRef::new(&mut project, &mut Default::default(), &content_tx),
             &content_tx,
             &content_state,
             &mut ui,
@@ -2952,7 +2853,7 @@ mod tests {
         );
         dispatch_project(
             &write,
-            &mut project,
+            &mut crate::ui_bridge::ProjectRef::new(&mut project, &mut Default::default(), &content_tx),
             &content_tx,
             &content_state,
             &mut ui,
@@ -3101,7 +3002,7 @@ mod tests {
         let mut user_prefs = UserPrefs::for_test();
         dispatch_project(
             &action,
-            &mut project,
+            &mut crate::ui_bridge::ProjectRef::new(&mut project, &mut Default::default(), &content_tx),
             &content_tx,
             &content_state,
             &mut ui,
@@ -3187,7 +3088,7 @@ mod tests {
         let (content_tx, content_rx) = crossbeam_channel::unbounded();
         let result = dispatch_project(
             action,
-            project,
+            &mut crate::ui_bridge::ProjectRef::new(project, &mut Default::default(), &content_tx),
             &content_tx,
             &content_state,
             &mut ui,
@@ -3319,8 +3220,7 @@ mod tests {
             assert!(before >= 1.0, "{name}: Scene ships with at least one");
 
             let action = (case.action)(layer_id.clone(), render_scene_id, before as u32);
-            let (result, content_rx) = dispatch_once(&action, &mut project);
-            assert!(result.structural_change, "{name}: structural graph edit");
+            let (_, content_rx) = dispatch_once(&action, &mut project);
             assert_eq!(
                 (case.count)(&project, &layer_id, render_scene_id),
                 before,
@@ -3423,8 +3323,7 @@ mod tests {
                 case.param.to_string(),
                 case.value,
             );
-            let (result, content_rx) = dispatch_once(&action, &mut project);
-            assert!(!result.structural_change, "{name}: a param scrub is not structural");
+            let (_, content_rx) = dispatch_once(&action, &mut project);
             assert_ne!(
                 effective_scene_param_value(&project, &layer_id, node, case.param),
                 case.value,
@@ -3461,12 +3360,12 @@ mod tests {
         let (tx, rx) = crossbeam_channel::unbounded();
         dispatch_project(
             &ProjectAction::SceneSetupAddFluid(layer_id.clone(), render_scene_id),
-            &mut project, &tx, &state, &mut ui, &mut selection, &mut active_layer, &mut prefs, Default::default(),
+            &mut crate::ui_bridge::ProjectRef::new(&mut project, &mut Default::default(), &tx), &tx, &state, &mut ui, &mut selection, &mut active_layer, &mut prefs, Default::default(),
         );
         let add = rx.try_recv().expect("Add Fluid queued a content edit");
 
         let mut content = crate::headless_harness::headless_content_thread(project, W, H);
-        let (state_tx, _state_rx) = crossbeam_channel::unbounded();
+        let (state_tx, _state_rx) = crate::content_state::state_channel();
         content.handle_command(add);
         crate::scene_modifier_journey::warm_project(&mut content, &state_tx);
         let device = std::sync::Arc::clone(content.content_pipeline.native_gpu_for_tests().expect("native device"));

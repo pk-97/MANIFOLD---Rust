@@ -498,6 +498,43 @@ impl BitmapSlider {
         Slider { ids, reset }
     }
 
+    /// Move a built slider to `rect` in place, laid out exactly as [`Self::build`]
+    /// lays it out there, at `normalized_value`. `ids.track_span` follows the
+    /// track, so a holder that re-reads the ids maps drags to the new track.
+    pub fn relayout(tree: &mut UITree, ids: &mut SliderNodeIds, rect: Rect, label_width: f32, normalized_value: f32) {
+        let metrics = SliderMetrics {
+            label_width: if ids.label.is_some() { label_width } else { 0.0 },
+            value_box_w: VALUE_BOX_W,
+            gap: GAP,
+            value_gap: VALUE_GAP,
+        };
+        let z = Self::zones(rect, &metrics);
+        if let (Some(label), Some(label_rect)) = (ids.label, z.label) {
+            tree.set_bounds(label, label_rect);
+        }
+        tree.set_bounds(ids.track, z.track);
+        tree.set_bounds(ids.value_text, z.value_cell);
+        ids.track_span = TrackSpan::of(z.track);
+        let fill_w = compute_fill_width(z.track.width, normalized_value, FILL_INSET);
+        tree.set_bounds(
+            ids.fill,
+            Rect::new(z.track.x + FILL_INSET, z.track.y + FILL_INSET, fill_w, z.track.height - FILL_INSET * 2.0),
+        );
+        tree.set_bounds(ids.thumb, compute_thumb_rect(z.track, normalized_value, FILL_INSET, THUMB_WIDTH, THUMB_INSET));
+    }
+
+    /// Mark a value past the slider's end: the thumb, already pinned at the
+    /// end by the clamped position, turns amber. Only for sliders built with
+    /// the default thumb colour (param rows).
+    pub fn mark_past_end(tree: &mut UITree, ids: &SliderNodeIds, past_end: bool) {
+        let Some(node) = tree.get_node(ids.thumb) else { return };
+        let bg_color = if past_end { color::SLIDER_PAST_END_C32 } else { color::SLIDER_THUMB_C32 };
+        if node.style.bg_color != bg_color {
+            let style = UIStyle { bg_color, ..node.style };
+            tree.set_style(ids.thumb, style);
+        }
+    }
+
     /// Update fill width, thumb position, and value text.
     /// Call during drag or when data changes.
     pub fn update_value(
@@ -506,7 +543,7 @@ impl BitmapSlider {
         normalized_value: f32,
         value_text: &str,
     ) {
-        if ids.track.index() >= tree.count() {
+        if !tree.is_live(ids.track) {
             return;
         }
 

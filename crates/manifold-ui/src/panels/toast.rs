@@ -9,9 +9,9 @@
 //! steals input from whatever is under it; `SelfManaged` anchor, computed from
 //! the screen size the driver hands `build_at`) rather than a bespoke node —
 //! see `docs/OVERLAY_SYSTEM_DESIGN.md`. `is_open()` mirrors the `Transient`
-//! directly: once it finishes, the overlay driver's existing
-//! open/close-edge detection (`detect_overlay_open_change`) tears the toast's
-//! nodes down on the next overlay rebuild, exactly like every other overlay's
+//! directly: once it finishes, the open set in the overlays' view key changes
+//! and the frame planner rebuilds the overlay region without the toast's
+//! nodes, exactly like every other overlay's
 //! close path — no bespoke teardown code here.
 //!
 //! One slot, "latest wins" (the doc's explicit anti-queueing rule): calling

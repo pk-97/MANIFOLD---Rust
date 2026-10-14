@@ -268,13 +268,9 @@ impl PresetRuntime {
     /// `manifest` is the live per-instance [`ParamManifest`] (`Layer.gen_params
     /// .params`) when this build is a rebuild of an on-project generator, else
     /// `None` for a standalone build (thumbnails / `check_presets` /
-    /// `freeze_profile` / gltf import / freeze proofs). When present, each
-    /// param's reshape (min/max/curve/invert) is sourced from the manifest
-    /// `spec` — the single authority (D4) — instead of the graph's
-    /// `preset_metadata.params` shadow, which is only re-derived from the
-    /// manifest at serialize time (D12) and is therefore stale between a
-    /// calibration and the next save (BUG-078). `None` keeps reading the
-    /// shadow, correct for a fresh-from-disk def whose shadow is accurate.
+    /// `freeze_profile` / gltf import / freeze proofs). Either way the
+    /// reshape spans the declared range; the manifest only adds the user's
+    /// curve, invert and name (`binding_shape`, SCENE_SURFACES_DESIGN.md D15).
     pub fn from_def(
         doc: EffectGraphDef,
         registry: &PrimitiveRegistry,
@@ -374,42 +370,9 @@ manifold_core::testkit_visible! {
             .as_ref()
             .map(|m| m.bindings.clone())
             .unwrap_or_default();
-        // Per-param slider response (preset curve/invert/range), matching the
-        // effect path's `ResolvedBinding::from_static` no-note reshape. Identity
-        // for every shipped preset. `param_id -> (min, max, curve, invert)`.
-        //
-        // Base layer: the graph's `preset_metadata.params` shadow — correct for
-        // a standalone build (`manifest = None`), whose def is fresh-from-disk.
-        let mut param_reshape: ahash::AHashMap<
-            String,
-            (f32, f32, manifold_core::macro_bank::MacroCurve, bool),
-        > = doc
-            .preset_metadata
-            .as_ref()
-            .map(|m| {
-                m.params
-                    .iter()
-                    .map(|p| (p.id.clone(), (p.min, p.max, p.curve, p.invert)))
-                    .collect()
-            })
-            .unwrap_or_default();
-        // BUG-078: the shadow above is derived from the per-instance manifest
-        // only at serialize time (D12), so between a calibration and the next
-        // save it carries the pre-calibration range. When the live manifest is
-        // available (the generator_renderer rebuild path threads it here), its
-        // `spec` is the authority for each param's reshape (D4) — overlay it,
-        // manifest-wins-per-id, so a post-calibration structural rebuild honors
-        // the fresh range/curve/invert. The effect path already does this via
-        // `synth_user_binding` reading `self.params`; this is the generator's
-        // equivalent for its shared (stock + user) binding path.
-        if let Some(manifest) = manifest {
-            for p in manifest.iter() {
-                param_reshape.insert(
-                    p.spec.id.clone(),
-                    (p.spec.min, p.spec.max, p.spec.curve, p.spec.invert),
-                );
-            }
-        }
+        // Reshape over the declared range, curve and invert from the
+        // manifest, name from the manifest (SCENE_SURFACES_DESIGN.md D15).
+        let shapes = super::binding_shape::binding_shapes(&doc, manifest);
         let string_binding_specs: Vec<manifold_core::effect_graph_def::StringBindingDef> = doc
             .preset_metadata
             .as_ref()
@@ -505,16 +468,16 @@ manifold_core::testkit_visible! {
                             );
                             None
                         })?;
-                    let (rmin, rmax, rcurve, rinvert) = param_reshape
-                        .get(b.id.as_str())
-                        .copied()
+                    let shape = shapes.get(b.id.as_str());
+                    let (rmin, rmax, rcurve, rinvert) = shape
+                        .map(|s| (s.min, s.max, s.curve, s.invert))
                         .unwrap_or((0.0, 1.0, manifold_core::macro_bank::MacroCurve::Linear, false));
                     let reshape = crate::param_binding::Reshape::from_preset_response(
                         rmin, rmax, rcurve, rinvert, b.scale, b.offset,
                     );
                     Some(ResolvedBinding::assemble(
                         std::borrow::Cow::Owned(b.id.clone()),
-                        std::borrow::Cow::Owned(b.label.clone()),
+                        std::borrow::Cow::Owned(shape.map(|s| s.name.clone()).unwrap_or_default()),
                         b.default_value,
                         ResolvedTarget::Node {
                             node: inst_id,

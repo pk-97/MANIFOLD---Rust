@@ -1,25 +1,20 @@
-//! Scene Setup panel — the "add effects, for 3D" dock
-//! (`docs/SCENE_SETUP_PANEL_DESIGN.md`).
+//! The Scene tab of the inspector (SCENE_SURFACES_DESIGN.md D8 (Scene tab
+//! tree), D16 (the scene is a tab in the inspector)).
 //!
-//! A `ScreenLayout::scene_setup()` docked column, cloned from
-//! [`super::audio_setup_panel::AudioSetupPanel`] (D2): same fold-out /
-//! resize / snap-back / Escape-close mechanics, mutually exclusive with the
-//! Audio Setup dock. Self-contained like that panel — it builds `UITree`
-//! nodes from data handed in via [`ScenePanel::configure`] and maps clicks/
-//! drags to [`super::PanelAction`]. P1 scope: Header + Environment + Fog
-//! sections live, plus the D7 empty states. Objects/Lights/Camera land in
-//! later phases (P2/P3) — this panel never builds a generic param-tree
-//! renderer (D3's named wrong turn); every row here is a curated, named
-//! control.
-//!
-//! Every value this panel writes goes through [`super::PanelAction::SceneSetupParamChanged`]
-//! — the SAME `SetGraphNodeParamCommand` the graph editor's ordinary
-//! (unbound) node-face numeric row already dispatches per drag tick
-//! (`manifold-app/src/app_render.rs`'s `GraphEditCommand::SetGraphNodeParam`
-//! handling) — never a new mutation path. No direct project mutation and no
-//! shared-lock wrapper types appear anywhere in this file (section 4 negative gate).
+//! The tree of scene items sits on top (`outliner.rs`), the selected item's
+//! header below it (`item_header.rs`), then the item's controls grouped by
+//! control group. The panel builds `UITree` nodes from data handed in via
+//! [`ScenePanel::configure`] and maps clicks and drags to
+//! [`super::PanelAction`]; it never writes the project itself. Param rows
+//! are the shared card rows, dispatched through the same `RowHost` every
+//! card uses.
 
 mod camera;
+#[path = "scene_setup_panel/outliner.rs"]
+mod outliner;
+pub use outliner::SceneGroup;
+#[path = "scene_setup_panel/item_header.rs"]
+mod item_header;
 #[path = "scene_setup_panel/keyboard.rs"]
 mod keyboard;
 pub use keyboard::SceneItemAddress;
@@ -37,11 +32,13 @@ mod object_modifiers;
 mod forces;
 #[path = "scene_setup_panel/parameter_navigation.rs"]
 mod parameter_navigation;
+#[path = "scene_setup_panel/value_sync.rs"]
+mod value_sync;
 #[path = "scene_setup_panel/fluid_roles.rs"]
 mod fluid_roles;
 
 use crate::{ProjectAction, RootAction};
-use crate::chrome::{ChromeHost, Pad, Sizing, View};
+use crate::chrome::{ChromeHost, View};
 use crate::color;
 use crate::input::UIEvent;
 use crate::node::*;
@@ -57,31 +54,23 @@ use super::copy_to_clipboard_label::CopyToClipboardLabelState;
 use super::param_card::{ParamCardPanel, RowGeometry, RowMod};
 use super::param_slider_shared::{
     AudioRowState, ModTab, ParamModState, RowHost, RowInteraction, build_param_row,
-    ROW_ROLE_SECTION_HEADER, ROW_ROLE_TOGGLE, param_row_key_base,
+    ROW_ROLE_TOGGLE, param_row_key_base,
     build_toggle_trigger_row, toggle_btn_style, ToggleParamIds,
 };
 use crate::param_surface::{
     MaterialGroup, MaterialLook, MaterialMapFamily, MaterialParamRole, ObjectModifierCardInfo,
-    ModifierObjectRef, ModifierPickerEntry, ParamRow, ParamSurface, RgbChannel, RowMapping,
+    ModifierObjectRef, ModifierPickerEntry, ParamRow, ParamSurface, RowMapping,
     RowRole, RowSpec,
 };
 use crate::slider::GAP;
+use manifold_foundation::scene_surface::{ControlGroup, SurfaceRole};
 
 // ── Stable keys ──
 const KEY_BG: u64 = 80_001;
-const KEY_CLOSE: u64 = 80_002;
 const KEY_ADD_ENVIRONMENT: u64 = 80_010;
 const KEY_ADD_FOG: u64 = 80_011;
 const KEY_NEW_SCENE: u64 = 80_012;
 const KEY_OPEN_GRAPH_EDITOR: u64 = 80_013;
-// KEY_ADD_OBJECT / KEY_ADD_LIGHT / KEY_ADD_PLANE live in
-// `scene_setup_actions.rs` with the row they build (godfile ceiling).
-/// "Import Model…" (P4, D4/D5) — merges a second glb into this scene.
-const KEY_IMPORT_MODEL: u64 = 80_016;
-/// Outliner fold header keys: Lighting & Environment, Objects, Motion & Physics.
-const KEY_OUTLINER_LIGHTS: u64 = 80_018;
-const KEY_OUTLINER_OBJECTS: u64 = 80_019;
-const KEY_OUTLINER_FORCES: u64 = 80_023;
 const KEY_CAMERA_SETUP: u64 = 80_025;
 /// Frame button offset: use offset 33 to avoid collision with Remove (20), Duplicate (21), and mod buttons (22..32)
 const OBJ_OFF_FRAME: u64 = 33;
@@ -95,7 +84,6 @@ const OBJ_OFF_FLUID_ROLE_REMOVE: u64 = 39;
 /// Water-family child Hide button; unlike the outliner eye this is a
 /// one-way local write and is always present, including for hidden rows.
 const OBJ_OFF_HIDE: u64 = 40;
-const MATERIAL_SWATCH_KEY_BASE: u64 = 1;
 const MATERIAL_LOOK_KEY_BASE: u64 = 97_000;
 
 /// Per-object dynamic keys: `OBJ_KEY_BASE + index * OBJ_KEY_STRIDE + offset`.
@@ -178,7 +166,6 @@ const fn modifier_add_button_key(object_index: usize) -> u64 {
 }
 
 const PANEL_W_MIN: f32 = 320.0;
-const TITLE_H: f32 = 26.0;
 pub(crate) const ROW_H: f32 = 24.0;
 pub(crate) const ROW_GAP: f32 = 4.0;
 const PAD: f32 = 10.0;
@@ -211,38 +198,10 @@ pub struct RowValue {
     pub min: f32,
     pub max: f32,
     pub driven: bool,
-    /// UX-P3a (SCENE_PANEL_UX_DESIGN.md D8/sizing amendment): whether this
-    /// param is currently an exposed card param on the layer's generator
-    /// graph — `manifold_nodes::node_graph::scene_vm::is_param_exposed`'s
-    /// read off the SAME `EffectGraphDef` `SceneVm::from_def` already
-    /// walked, transcribed by `state_sync` like every other field on this
-    /// struct. Drives the row's mod-button lit state; NOT written by this
-    /// panel (exposure is a graph-side toggle via
-    /// `PanelAction::SceneSetupExposeParam`, never a direct field write).
+    /// Whether this param is an exposed card param on the layer's generator
+    /// graph (`scene_vm::is_param_exposed`). Read-only here: exposure is a
+    /// graph-editor toggle.
     pub exposed: bool,
-}
-
-/// The outliner row template's trailing affordance slot (D5 of
-/// SCENE_PANEL_UX_DESIGN.md): every row reserves the SAME width for this
-/// slot and renders EITHER a live eye toggle (Object rows, which carry a
-/// `visible` param) OR a dimmed, non-interactive eye glyph (Camera/World/
-/// Light rows, which don't) — never a different control. Uniformity is the
-/// point (`feedback_no_conditionally_visible_ui`): the slot's meaning never
-/// changes per row, only whether it's live.
-enum EyeSlot {
-    Live(RowValue),
-    /// C-P1c (SCENE_PANEL_CARD_CONVERGENCE_DESIGN.md eye-slot amendment,
-    /// closes BUG-238): Camera/World/Light rows carry no real visible/enable
-    /// param (`SceneLightVm`/`CameraVm`/`EnvironmentVm`/`AtmosphereVm` have
-    /// no visibility address) — the trailing slot renders truly empty, not a
-    /// dimmed glyph that looked like a dead control (the old `Dimmed`
-    /// variant, deleted — it drew a non-interactive eye glyph on rows that
-    /// could never toggle anything, which read as a bugged control rather
-    /// than "nothing here"). Object rows (which DO carry
-    /// `scene_object.visible`) keep `Live`; the slot's WIDTH stays reserved
-    /// either way (`feedback_no_conditionally_visible_ui`) — only the glyph
-    /// is gone.
-    Empty,
 }
 
 /// SCENE_PANEL_CARD_CONVERGENCE_DESIGN.md C-P1a (D3): the driver/envelope/
@@ -439,19 +398,6 @@ pub struct ObjectKnownRow {
     /// into unrecognized topology. `true` (even with an empty `modifiers`
     /// list) means the stack is well-formed and addable.
     pub modifiers_addable: bool,
-    /// P2 slice 2a (SCENE_PANEL_EXPOSURE_CONVERGENCE_DESIGN.md): the REAL P1
-    /// section strings covering this object — its transform node, its
-    /// material node, its own `scene_object` node, and every modifier in its
-    /// stack. Resolved once by `state_sync` via a doc-id cross-reference
-    /// against the layer's exposure metadata (never reconstructed from a
-    /// naming convention — creation-time and load-migration stamping produce
-    /// different strings for the same node kind). Filters the unified
-    /// properties card down to exactly this object's rows.
-    pub sections: Vec<String>,
-    /// Exact exposed parameter ids owned by this object and its scene-node
-    /// stack. This is the authoritative row filter when objects share a
-    /// section label; an empty list owns no rows.
-    pub parameter_ids: Vec<String>,
     /// P4b: the object's layer-skin row. `None` when no `node.layer_source`
     /// is wired into the object's material maps.
     pub skin: Option<SkinRowVm>,
@@ -480,22 +426,6 @@ impl LatticeReadout {
         let [x, y, z] = self.cells;
         let count = u64::from(x) * u64::from(y) * u64::from(z);
         format!("Lattice {x} × {y} × {z} · {:.1} cm cells · {count} cells", self.cell_size_m * 100.0)
-    }
-}
-
-/// Which rows of the matched sections a selection shows: all of them, or
-/// exactly the parameter ids the app resolved as owned by the selection.
-enum PropertyOwners<'a> {
-    All,
-    Parameters(&'a [String]),
-}
-
-impl PropertyOwners<'_> {
-    fn contains(&self, id: &str) -> bool {
-        match self {
-            Self::All => true,
-            Self::Parameters(ids) => ids.iter().any(|owned| owned == id),
-        }
     }
 }
 
@@ -564,10 +494,6 @@ pub struct LightKnownRow {
     pub cast_shadows: ModulatedEnumRow,
     pub shadow_softness: ModulatedEnumRow,
     pub light_size: ModulatedRow,
-    /// P2 slice 2a: this light's REAL P1 section string(s) (its own handle —
-    /// see `ObjectKnownRow::sections`'s doc comment for how these are
-    /// resolved). Usually a single entry.
-    pub sections: Vec<String>,
 }
 
 /// One Lights-section row.
@@ -655,14 +581,45 @@ pub struct SceneForceRowVm {
     pub title: String,
 }
 
+/// One item of the Scene tab tree (SCENE_SURFACES section 3.5 (scene
+/// items)), in the order `scene_items` lists them.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SceneItemVm {
+    pub kind: manifold_foundation::scene_surface::SceneItemKind,
+    pub selection: SceneSelection,
+    pub name: String,
+    /// The compound parent object a child object row sits under.
+    pub parent: Option<u32>,
+    /// The controls this item owns, in manifest order: every exposed control
+    /// whose primary binding targets one of the item's nodes.
+    pub parameter_ids: Vec<String>,
+}
+
+/// What one properties pass shows.
+pub(crate) struct PropertyRows<'a> {
+    /// The item's controls.
+    pub owned: &'a [String],
+    /// Controls another host draws (modifier cards).
+    pub excluded: &'a [String],
+    /// The group of a control the scene table does not describe.
+    pub fallback: ControlGroup,
+    /// The selected object, for its material block and physics facts.
+    pub object: Option<&'a ObjectKnownRow>,
+}
+
+impl<'a> PropertyRows<'a> {
+    pub(crate) fn new(owned: &'a [String], fallback: ControlGroup) -> Self {
+        Self { owned, excluded: &[], fallback, object: None }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct SceneSetupVm {
     pub layer_id: LayerId,
-    pub scene_name: String,
     pub multiple_scenes: bool,
+    /// Next object and light slot indices for the add actions.
     pub object_count: usize,
     pub light_count: usize,
-    pub shadow_caster_count: usize,
     /// `render_scene`'s own doc id — the target the "Add environment"/
     /// "Add fog"/"+ Object"/"+ Light" composites wire into.
     pub scene_root_node_id: u32,
@@ -681,18 +638,9 @@ pub struct SceneSetupVm {
     /// Whether this camera's post-processing effects need the one-time scene
     /// setup action before their controls can be used.
     pub camera_setup_needed: bool,
-    /// P2 slice 2a: the REAL P1 section string(s) covering the camera family
-    /// (the camera atom + its lens, if wired) — see `ObjectKnownRow::sections`.
-    pub camera_sections: Vec<String>,
-    /// Custom/loop cameras expose only their shared lens and cinematic tail:
-    /// the exact parameter ids those nodes own, since they share the
-    /// importer's "Camera" section with the camera atom. None shows the full
-    /// sections for ordinary camera sources.
-    pub camera_parameter_ids: Option<Vec<String>>,
-    /// P2 slice 2a: the REAL P1 section string(s) covering World (the
-    /// environment/bake node + the atmosphere/fog node, whichever are
-    /// wired) — see `ObjectKnownRow::sections`.
-    pub world_sections: Vec<String>,
+    /// Every item of the scene, in tree order: Camera, lights, objects,
+    /// forces, physics worlds, World.
+    pub items: Vec<SceneItemVm>,
     /// Scene bounds for translate-slider range derivation. `Some((min, max))`
     /// when bounds are available (stored import bounds or camera-distance proxy),
     /// used to compute scene-relative slider ranges (center ± 2×extent per axis).
@@ -708,7 +656,8 @@ pub struct SceneSetupVm {
 /// properties region shows. UI-local workspace state — like fold state,
 /// NEVER serialized (`rg -n "SceneSelection" crates/manifold-io
 /// crates/manifold-core` must stay 0 hits). Object/light `u32` payloads and
-/// force `NodeId` payloads are stable graph identities, unlike indices.
+/// force and physics `NodeId` payloads are stable graph identities, unlike
+/// indices.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SceneSelection {
     Object(u32),
@@ -716,10 +665,10 @@ pub enum SceneSelection {
     Force(FoundationNodeId),
     Camera,
     World,
-    Physics,
-    Rendering,
-    /// scene-panel-ux lane: outliner group fold toggle (Scene/Lights/Objects)
-    OutlinerFold(&'static str),
+    /// A physics world, by its node.
+    Physics(FoundationNodeId),
+    /// A tree group's fold toggle; selecting it changes no selection.
+    OutlinerFold(SceneGroup),
 }
 
 /// D7's four empty/live states for the selected layer.
@@ -968,10 +917,13 @@ fn placeholder_param_info() -> ParamRow {
             is_trigger: false,
             is_trigger_gate: false,
             value_labels: None,
+            unit: None,
             section: None,
         disabled: None,
         material_role: None,
         inactive_reason: None,
+        scene: None,
+        limit: Default::default(),
         },
         value: crate::param_surface::RowValue { base: 0.0, effective: 0.0, exposed: false, driven: false },
         audio: AudioRowState::default(),
@@ -999,7 +951,6 @@ pub struct ScenePanel {
     reveal_properties: bool,
     pub(crate) content_parent: NodeId,
     bg_id: NodeId,
-    close_id: NodeId,
     add_environment_id: Option<NodeId>,
     add_fog_id: Option<NodeId>,
     camera_setup_id: Option<NodeId>,
@@ -1040,16 +991,16 @@ pub struct ScenePanel {
     /// build time.
     full_params: Option<ParamSurface>,
     full_param_id_index: ahash::AHashMap<String, usize>,
+    /// The tree groups' add buttons: Objects opens the Objects menu, Lights
+    /// adds a light, Forces opens the force picker.
     add_object_id: Option<NodeId>,
     add_light_id: Option<NodeId>,
-    /// BUG-hlw8 "+ Plane" — dispatches `SceneSetupAddLayerPlane`.
-    add_plane_id: Option<NodeId>,
-    add_fluid_id: Option<NodeId>,
     add_force_id: Option<NodeId>,
-    /// "Import Model…" (P4) — dispatches `SceneSetupImportModelClicked`,
-    /// which opens the file dialog + merges on the app side (the panel
-    /// itself never touches the filesystem).
-    import_model_id: Option<NodeId>,
+    /// The empty Physics group's action: Enable Physics on this object index.
+    physics_enable_id: Option<(NodeId, usize)>,
+    /// The groups the tree drew this frame, in order.
+    tree_groups: Vec<SceneGroup>,
+    header_buttons: item_header::HeaderButtons,
     /// P5 (D7): the outliner selection, per layer — UI-local workspace
     /// state, like fold state, NEVER serialized. Missing entry = the
     /// default (first object, else World) — resolved by
@@ -1059,6 +1010,17 @@ pub struct ScenePanel {
     /// `BTreeMap` — is the map that actually compiles; same "keyed per
     /// layer, UI-local, never serialized" contract either way.
     selection: std::collections::HashMap<LayerId, SceneSelection>,
+    /// UI_INVALIDATION D14 for the Scene panel: moves when a noted selection
+    /// differs from the last noted one, or the selection write cleared a
+    /// reveal or modifier focus. Noted at the gesture's commit (click, menu,
+    /// external pick), never on press, so a press does not rebuild under a
+    /// drag.
+    selection_version: u64,
+    noted_selection: Option<(LayerId, Option<SceneSelection>)>,
+    /// Moves on a body scroll or a card tween frame: the planner rebuilds
+    /// the inspector region the docked body lives in (UI_INVALIDATION D6).
+    view_version: u64,
+    focus_cleared: bool,
     /// Every outliner row's click target this frame — `(node_id, what
     /// selecting it means)`.
     outliner_row_ids: Vec<(NodeId, SceneSelection)>,
@@ -1106,9 +1068,9 @@ pub struct ScenePanel {
     /// section NAME globally within the panel (folding "Material" folds it
     /// for every object). UI-local, never serialized. Missing entry = expanded.
     section_folded: ahash::AHashMap<String, bool>,
-    /// scene-panel-ux lane: fold state for outliner groups (Scene/Lights/Objects).
-    /// UI-local, never serialized. Missing entry = expanded.
-    outliner_folded: ahash::AHashMap<&'static str, bool>,
+    /// Fold state for tree groups. UI-local, never serialized. Missing entry =
+    /// expanded.
+    outliner_folded: ahash::AHashMap<SceneGroup, bool>,
     /// Expanded compound groups, keyed per bound layer and kept in UI state.
     expanded_groups: std::collections::HashMap<LayerId, ahash::AHashSet<u32>>,
     group_toggle_ids: Vec<(NodeId, u32)>,
@@ -1135,10 +1097,6 @@ pub struct ScenePanel {
     /// selected this frame — mirrors `object_name_ids`, backs
     /// `light_name_rect`.
     light_name_ids: Vec<(u32, NodeId, String)>,
-    /// Canonical material colour swatches built over the shared scalar row.
-    /// `(button, row, scalar ids)` is rebuilt with the live tree and never
-    /// used as a second value store.
-    material_swatch_ids: Vec<(NodeId, usize, [manifold_foundation::ParamId; 3], crate::param_surface::MaterialColour)>,
     /// Feature presence is captured on selection, never inferred during a drag.
     material_mode_ids: Vec<(NodeId, usize)>,
     material_feature_context: Option<(LayerId, ModifierObjectRef, ModifierObjectRef)>,
@@ -1157,12 +1115,21 @@ pub struct ScenePanel {
         ModifierObjectRef,
     )>,
     active_material_info: Option<MaterialInspectorInfo>,
+    /// The current properties pass's group for undescribed controls.
+    property_fallback_group: ControlGroup,
+    /// Where the current pass is in the material block: 0 not drawn, 1 its
+    /// header drawn, 2 closed with its actions.
+    material_block_stage: u8,
     panel_rect: Rect,
     /// Scrollable properties viewport used to validate object-card gestures.
     /// The title bar and neighbouring surfaces are outside this region.
     object_modifier_bounds: Rect,
     object_cards_animating: bool,
     object_cards_were_animating: bool,
+    /// Reused per frame: the drawer reflows the object cards report.
+    reflow_scratch: Vec<crate::scroll_container::Reflow>,
+    /// Object-card motion moved built nodes since the frame last asked.
+    moved_in_place: bool,
 }
 
 impl Default for ScenePanel {
@@ -1176,7 +1143,6 @@ impl Default for ScenePanel {
             reveal_properties: false,
             content_parent: NodeId::PLACEHOLDER,
             bg_id: NodeId::PLACEHOLDER,
-            close_id: NodeId::PLACEHOLDER,
             add_environment_id: None,
             add_fog_id: None,
             camera_setup_id: None,
@@ -1196,11 +1162,15 @@ impl Default for ScenePanel {
             full_param_id_index: ahash::AHashMap::new(),
             add_object_id: None,
             add_light_id: None,
-            add_plane_id: None,
-            add_fluid_id: None,
             add_force_id: None,
-            import_model_id: None,
+            physics_enable_id: None,
+            tree_groups: Vec::new(),
+            header_buttons: Default::default(),
             selection: std::collections::HashMap::new(),
+            selection_version: 0,
+            noted_selection: None,
+            view_version: 0,
+            focus_cleared: false,
             outliner_row_ids: Vec::new(),
             outliner_eye_ids: Vec::new(),
             object_hide_ids: Vec::new(),
@@ -1224,7 +1194,6 @@ impl Default for ScenePanel {
             skin_target_ids: Vec::new(),
             light_remove_ids: Vec::new(),
             light_name_ids: Vec::new(),
-            material_swatch_ids: Vec::new(),
             material_mode_ids: Vec::new(),
             material_feature_context: None,
             material_visible_features: ahash::AHashSet::new(),
@@ -1233,10 +1202,14 @@ impl Default for ScenePanel {
             material_look_ids: Vec::new(),
             material_feature_ids: Vec::new(),
             active_material_info: None,
+            property_fallback_group: ControlGroup::Transform,
+            material_block_stage: 0,
             panel_rect: Rect::new(0.0, 0.0, 0.0, 0.0),
             object_modifier_bounds: Rect::new(0.0, 0.0, 0.0, 0.0),
             object_cards_animating: false,
             object_cards_were_animating: false,
+            reflow_scratch: Vec::new(),
+            moved_in_place: false,
         }
     }
 }
@@ -1260,10 +1233,15 @@ impl ScenePanel {
     /// panel — the missing hookup was why scene-panel sliders had no
     /// right-click reset while every other slider in the app did.
     pub fn register_intents(&self, intents: &mut crate::intent::IntentRegistry) {
-        if !self.open || !matches!(self.state, SceneSetupState::Live(_)) {
+        let (true, SceneSetupState::Live(vm)) = (self.open, &self.state) else {
             return;
-        }
+        };
         self.properties_card.row_host.register_intents(intents);
+        // The one param menu, addressed at this panel's own layer (BUG-292).
+        let target = GraphParamTarget::GeneratorOf(vm.layer_id.clone());
+        self.properties_card
+            .row_host
+            .register_param_menus(&self.properties_card.rows, &target, intents, |_| false);
         for card in &self.object_modifier_cards {
             card.register_intents(intents);
         }
@@ -1301,8 +1279,8 @@ impl ScenePanel {
     /// THIS panel's bound layer — `live_layer_id()`, never `active_layer`:
     /// the panel edits the scene of its OWN docked layer, which can
     /// legitimately differ from the app's active layer (BUG-292). The
-    /// properties body filters this down to the selected item's sections at
-    /// build time — see `build_filtered_properties`.
+    /// properties body filters this down to the selected item's controls at
+    /// build time — see `build_item_properties`.
     pub fn configure_params(&mut self, config: Option<ParamSurface>) {
         self.full_param_id_index.clear();
         if let Some(surface) = config.as_ref() {
@@ -1327,129 +1305,8 @@ impl ScenePanel {
         }
     }
 
-    /// Per-frame VALUE sync (sibling of `ui_bridge::sync_card_values`): push
-    /// the unified properties card's row values from the layer's full generator
-    /// manifest, without a structural rebuild. `slots` is the id-keyed channel
-    /// `ui_translate::with_param_slots(&gp.params, …)` hands out for the SAME
-    /// layer `full_params` was built from. Each slot JOINS onto the built row
-    /// carrying the same id (BUG-313) via `row_id_index` — never by position,
-    /// so no retained-index list can drift. A manifest param the current
-    /// outliner selection isn't showing (not in this section's rows) simply
-    /// misses the join and is ignored; a built row with no manifest entry is
-    /// caught by the INV-6 coverage check.
-    pub fn sync_properties_values(
-        &mut self,
-        tree: &mut UITree,
-        slots: &mut dyn Iterator<Item = (&str, crate::view::UiParamSlot)>,
-    ) {
-        if !self.open {
-            return;
-        }
-        let target = self
-            .live_layer_id()
-            .cloned()
-            .map(GraphParamTarget::GeneratorOf);
-        let full_params = &mut self.full_params;
-        let full_param_id_index = &self.full_param_id_index;
-        let card = &mut self.properties_card;
-        card.row_value_synced.clear();
-        card.row_value_synced.resize(card.rows.len(), false);
-        for (id, slot) in slots {
-            if let Some(&full_index) = full_param_id_index.get(id)
-                && let Some(surface) = full_params.as_mut()
-                && let Some(row) = surface.rows.get_mut(full_index)
-            {
-                row.value.base = slot.base;
-                row.value.effective = slot.value;
-            }
-            let Some(&i) = card.row_id_index.get(id) else {
-                continue;
-            };
-            // Dirty-check on change only — same shape as
-            // `ParamCardPanel::sync_param_value` (param_card/render.rs): an
-            // unconditional push formats the value String and touches the
-            // tree for every row every frame, even when nothing moved. The
-            // key is `last_pushed_values` (single-writer, this sync only) —
-            // NOT `current_values`, which the drag/type-in paths write
-            // mid-gesture; gating on that skipped the post-commit push.
-            let value = target
-                .as_ref()
-                .and_then(|target| card.row_host.active_param_value(target, &card.rows[i].id))
-                .unwrap_or(slot.value);
-            let prev = card.last_pushed_values[i];
-            card.current_values[i] = value;
-            if value != prev || prev.is_nan() {
-                card.last_pushed_values[i] = value;
-                if card.rows[i].spec.is_toggle {
-                    if let Some(ids) = &card.row_host.toggle_ids[i] {
-                        let on = value > 0.5;
-                        tree.set_style(ids.button_id, toggle_btn_style(on));
-                        tree.set_text(ids.button_id, if on { "ON" } else { "OFF" });
-                    }
-                } else {
-                    card.row_host
-                        .push_slider_value(tree, i, value, &card.rows[i].spec, None);
-                }
-            }
-            if let Some(c) = card.row_value_synced.get_mut(i) {
-                *c = true;
-            }
-        }
-        // Object modifier cards share the same layer manifest channel. Their
-        // retained rows join by the unchanged ParamId; rebuilding a second
-        // value store here would let object-card order drift from the graph.
-        if let Some(surface) = full_params.as_ref() {
-            for card in &mut self.object_modifier_cards {
-                if card.node_count() == 0 { continue; }
-                let mut modifier_slots = surface.rows.iter().map(|row| {
-                    (
-                        row.id.as_ref(),
-                        crate::view::UiParamSlot {
-                            value: row.value.effective,
-                            base: row.value.base,
-                            exposed: row.value.exposed,
-                            min: row.spec.min,
-                            max: row.spec.max,
-                        },
-                    )
-                });
-                card.sync_values(tree, &mut modifier_slots);
-            }
-            for card in &mut self.force_cards {
-                if card.node_count() == 0 { continue; }
-                let mut force_slots = surface.rows.iter().map(|row| {
-                    (
-                        row.id.as_ref(),
-                        crate::view::UiParamSlot {
-                            value: row.value.effective,
-                            base: row.value.base,
-                            exposed: row.value.exposed,
-                            min: row.spec.min,
-                            max: row.spec.max,
-                        },
-                    )
-                });
-                card.sync_values(tree, &mut force_slots);
-            }
-        }
-        for &(node, slot) in &self.material_mode_ids {
-            let label = match card.current_values[slot].round() as i32 { 1 => "Off", 2 => "On", _ => "Auto" };
-            tree.set_text(node, label);
-        }
-        for (i, synced) in card.row_value_synced.iter().enumerate() {
-            if !*synced {
-                debug_assert!(
-                    false,
-                    "BUG-313/INV-6: built scene row {} (id {:?}) has no live manifest entry",
-                    i, card.rows[i].id,
-                );
-                crate::panels::param_slider_shared::warn_join_gap_once(card.rows[i].id.as_ref());
-            }
-        }
-        self.sync_material_swatches(tree);
-    }
-
-    /// (`ScreenLayout::scene_setup()`). No-op when closed.
+    /// Build into the inspector's Scene tab content rect
+    /// (`InspectorCompositePanel::scene_content_rect`). No-op when closed.
     pub fn build_docked(&mut self, tree: &mut UITree, rect: Rect) {
         if !self.open {
             return;
@@ -1471,35 +1328,12 @@ impl ScenePanel {
             .interactive()
             .inert()
             .key(KEY_BG)
-            .pad(Pad::all(PAD))
-            .child(
-                View::row(0.0)
-                    .fill_w()
-                    .h(Sizing::Fixed(TITLE_H))
-                    .child(
-                        View::label("Scene Setup")
-                            .fill_w()
-                            .fill_h()
-                            .font(color::FONT_BODY)
-                            .text_color(Color32::new(224, 224, 228, 255))
-                            .align_text(TextAlign::Left),
-                    )
-                    .child(
-                        View::button("\u{00D7}")
-                            .w(Sizing::Fixed(STEP_W))
-                            .fill_h()
-                            .style(btn_style())
-                            .inert()
-                            .key(KEY_CLOSE),
-                    ),
-            )
     }
 
     fn build_nodes(&mut self, tree: &mut UITree, x: f32, y: f32, panel_h: f32) {
         let chrome = self.chrome_view();
         self.host.build(tree, &chrome, Rect::new(x, y, self.panel_w, panel_h));
         self.bg_id = self.host.node_id_for_key(KEY_BG).unwrap_or(NodeId::PLACEHOLDER);
-        self.close_id = self.host.node_id_for_key(KEY_CLOSE).unwrap_or(NodeId::PLACEHOLDER);
         self.panel_rect = Rect::new(x, y, self.panel_w, panel_h);
         // Reset every dynamic control id — repopulated by whichever
         // `build_*` branch below actually builds this frame (state_sync
@@ -1511,10 +1345,10 @@ impl ScenePanel {
         self.open_graph_editor_id = None;
         self.add_object_id = None;
         self.add_light_id = None;
-        self.add_plane_id = None;
-        self.add_fluid_id = None;
         self.add_force_id = None;
-        self.import_model_id = None;
+        self.physics_enable_id = None;
+        self.tree_groups.clear();
+        self.header_buttons.clear();
         self.outliner_row_ids.clear();
         self.group_toggle_ids.clear();
         self.outliner_eye_ids.clear();
@@ -1534,7 +1368,6 @@ impl ScenePanel {
         self.skin_target_ids.clear();
         self.light_remove_ids.clear();
         self.light_name_ids.clear();
-        self.material_swatch_ids.clear();
         self.material_mode_ids.clear();
         self.material_look_ids.clear();
         self.material_feature_ids.clear();
@@ -1552,10 +1385,13 @@ impl ScenePanel {
         self.active_material_info = None;
         let inner_x = x + PAD;
         let inner_w = self.panel_w - PAD * 2.0;
-        let content_top = y + PAD + TITLE_H;
+        let content_top = y + PAD;
         let body_viewport = Rect::new(x, content_top, self.panel_w, (y + panel_h - PAD - content_top).max(0.0));
         self.object_modifier_bounds = body_viewport;
         let clip_id = self.scroll.begin(tree, body_viewport);
+        // The panel builds inside the inspector region (SCENE_SURFACES D16);
+        // this name keeps `under_name: "scene_setup"` selectors addressing it.
+        tree.set_name(clip_id, "scene_setup");
         self.content_parent = clip_id;
         let content_start = tree.count();
         let mut cy = content_top;
@@ -1642,15 +1478,8 @@ impl ScenePanel {
         cy + ROW_H + ROW_GAP
     }
 
-    /// D7: outliner (Camera · World · lights · objects, one row each) over a
-    /// single properties region showing the current selection's controls —
-    /// "select the object to use the tools" (Peter). Replaces v1's flat
-    /// per-section accordion (a 2-object scene already overflowed the
-    /// panel's window).
+    /// The tree over the selected item's header and controls (D8).
     fn build_live(&mut self, tree: &mut UITree, inner_x: f32, inner_w: f32, mut cy: f32, vm: &SceneSetupVm) -> f32 {
-        // ── Header ──
-        tree.add_label(Some(self.content_parent), inner_x, cy, inner_w, ROW_H, &vm.scene_name, header_label_style());
-        cy += ROW_H;
         if vm.multiple_scenes {
             tree.add_label(
                 Some(self.content_parent),
@@ -1658,24 +1487,11 @@ impl ScenePanel {
                 cy,
                 inner_w,
                 ROW_H,
-                "2+ scenes in this graph — showing the first",
+                "This layer has more than one scene; showing the first",
                 label_style(),
             );
-            cy += ROW_H;
+            cy += ROW_H + ROW_GAP;
         }
-        let counts = format!(
-            "{} object{} · {} light{} · {} shadow caster{}",
-            vm.object_count,
-            if vm.object_count == 1 { "" } else { "s" },
-            vm.light_count,
-            if vm.light_count == 1 { "" } else { "s" },
-            vm.shadow_caster_count,
-            if vm.shadow_caster_count == 1 { "" } else { "s" },
-        );
-        tree.add_label(Some(self.content_parent), inner_x, cy, inner_w, ROW_H, &counts, label_style());
-        cy += ROW_H + ROW_GAP * 2.0;
-
-        // ── Outliner ──
         let selected = self.resolve_selection(vm);
         cy = self.build_outliner(tree, inner_x, inner_w, cy, vm, &selected);
         cy += ROW_GAP * 2.0;
@@ -1688,17 +1504,45 @@ impl ScenePanel {
     /// object-pick sets the SAME UI-local `self.selection` map an outliner
     /// row click does (`handle_event`'s `SceneSetupSelectionChanged` arm) —
     /// one selection store for the whole app, not a second one that could
-    /// drift from the panel's own. The caller (the graph-editor window's
-    /// mouse-press handler) is responsible for redrawing/rebuilding
-    /// whatever reads this panel's Properties section afterward; this call
-    /// alone doesn't trigger one (it has no `PanelAction` dispatch loop to
-    /// push through, unlike `handle_event`'s click arm).
+    /// drift from the panel's own. A change moves the selection version, which
+    /// rebuilds the Properties section.
     pub fn set_selection(&mut self, layer_id: LayerId, sel: SceneSelection) {
+        self.clear_item_focus();
+        self.selection.insert(layer_id.clone(), sel);
+        self.reveal_properties = true;
+        self.note_selection(&layer_id);
+    }
+
+    /// The Scene panel's selection version (UI_INVALIDATION D14): the
+    /// planner re-runs the inspector projection when it moves.
+    pub fn selection_version(&self) -> u64 {
+        self.selection_version
+    }
+
+    /// A selection write drops any reveal and modifier focus; the next note
+    /// counts that as a change when something was focused.
+    fn clear_item_focus(&mut self) {
+        if self.pending_parameter_reveal.is_some()
+            || self.revealed_property.is_some()
+            || self.selected_object_modifier.is_some()
+        {
+            self.focus_cleared = true;
+        }
         self.pending_parameter_reveal = None;
         self.revealed_property = None;
         self.selected_object_modifier = None;
-        self.selection.insert(layer_id, sel);
-        self.reveal_properties = true;
+    }
+
+    /// Compare-before-bump: the version moves only when `layer_id`'s
+    /// selection differs from the last noted one, or a focus was cleared
+    /// since the last note.
+    pub(crate) fn note_selection(&mut self, layer_id: &LayerId) {
+        let current = (layer_id.clone(), self.selection.get(layer_id).cloned());
+        let cleared = std::mem::take(&mut self.focus_cleared);
+        if cleared || self.noted_selection.as_ref() != Some(&current) {
+            self.noted_selection = Some(current);
+            self.selection_version += 1;
+        }
     }
 
     /// Capture the destination before a keyboard shortcut can overtake the
@@ -1709,10 +1553,10 @@ impl ScenePanel {
         };
         if matches!(selection, SceneSelection::OutlinerFold(_)) { return false; }
         let SceneSetupState::Live(vm) = &self.state else { return false; };
-        self.pending_parameter_reveal = None;
-        self.revealed_property = None;
-        self.selected_object_modifier = None;
-        self.selection.insert(vm.layer_id.clone(), selection.clone());
+        let (layer_id, selection) = (vm.layer_id.clone(), selection.clone());
+        self.clear_item_focus();
+        self.selection.insert(layer_id, selection);
+        self.view_version += 1;
         true
     }
 
@@ -1727,25 +1571,19 @@ impl ScenePanel {
             Some(sel) if Self::selection_exists(vm, sel.clone()) => sel,
             _ => Self::default_selection(vm),
         };
+        // The build shows the fallback, so it is what the next note compares
+        // against: reselecting the vanished item after a redo is a change.
+        if let Some((layer, noted)) = self.noted_selection.as_mut()
+            && *layer == vm.layer_id
+        {
+            *noted = Some(resolved.clone());
+        }
         self.selection.insert(vm.layer_id.clone(), resolved.clone());
         resolved
     }
 
     fn selection_exists(vm: &SceneSetupVm, sel: SceneSelection) -> bool {
-        match sel {
-            SceneSelection::Camera
-            | SceneSelection::World
-            | SceneSelection::Physics
-            | SceneSelection::Rendering => true,
-            SceneSelection::OutlinerFold(_) => true, // Fold headers always exist
-            SceneSelection::Object(id) => {
-                vm.objects.iter().any(|o| matches!(o, ObjectRowVm::Known(r) if r.object_node_id == id))
-            }
-            SceneSelection::Light(id) => {
-                vm.lights.iter().any(|l| matches!(l, LightRowVm::Known(r) if r.node_doc_id == id))
-            }
-            SceneSelection::Force(id) => vm.forces.iter().any(|row| row.instance_id == id),
-        }
+        matches!(sel, SceneSelection::OutlinerFold(_)) || vm.items.iter().any(|item| item.selection == sel)
     }
 
     /// Water-family parents are water object rows whose children own the
@@ -1764,648 +1602,69 @@ impl ScenePanel {
             })
     }
 
-    /// D7's default: the first Known object, else World. A `Custom` row
-    /// carries no addressable node id (D12), so it can never be the default
-    /// target — it's still listed in the outliner, just not selectable.
+    /// The first object, else World. A custom object row has no address, so
+    /// it is listed but never selected.
     fn default_selection(vm: &SceneSetupVm) -> SceneSelection {
-        vm.objects
+        vm.items
             .iter()
-            .find_map(|o| match o {
-                ObjectRowVm::Known(r) => Some(SceneSelection::Object(r.object_node_id)),
-                ObjectRowVm::Custom { .. } => None,
-            })
-            .unwrap_or(SceneSelection::World)
+            .find(|item| matches!(item.selection, SceneSelection::Object(_)))
+            .map_or(SceneSelection::World, |item| item.selection.clone())
     }
 
-    /// The outliner keeps the scene's setup order stable: Camera, Lighting &
-    /// Environment, Objects, Motion & Physics, then Rendering. World remains
-    /// the environment selection; Physics and Rendering are separate views
-    /// over the existing world sections.
-    /// Every row (selectable or not) renders the same `[type icon | name |
-    /// trailing affordance]` template — flat, no nesting (D5; inherited from
-    /// REALTIME_3D "Decided — do not reopen" section 1).
-    fn build_outliner(
+    /// The selected item's controls (D8): the rows it owns, in manifest
+    /// order, grouped by control group in declaration order, one fold
+    /// section per group. Hidden rows are left out unless attached (D6).
+    /// Material rows keep the material inspector's own sections inside the
+    /// Material group, framed by its header and feature actions. Every row
+    /// goes through the shared `build_param_row`/`RowHost` core, and
+    /// `configure_from_filtered` builds the id join the per-frame value sync
+    /// resolves against (BUG-313).
+    pub(crate) fn build_item_properties(
         &mut self,
         tree: &mut UITree,
         inner_x: f32,
         inner_w: f32,
         mut cy: f32,
-        vm: &SceneSetupVm,
-        selected: &SceneSelection,
-    ) -> f32 {
-        cy = self.build_outliner_row(
-            tree, inner_x, inner_w, cy, "\u{1F4F7} Camera", SceneSelection::Camera, selected, EyeSlot::Empty,
-        );
-
-        // Lighting & Environment group: World is still the environment
-        // selection, followed by the scene's individual lights.
-        let lighting_folded = self.outliner_folded.get("Lighting & Environment").copied().unwrap_or(false);
-        cy = self.build_outliner_fold_header(
-            tree, inner_x, inner_w, cy, "Lighting & Environment", lighting_folded, KEY_OUTLINER_LIGHTS,
-        );
-        if !lighting_folded {
-            cy = self.build_outliner_row(
-                tree, inner_x, inner_w, cy, "\u{1F30D} World", SceneSelection::World, selected, EyeSlot::Empty,
-            );
-            for light in &vm.lights {
-                match light {
-                    LightRowVm::Known(row) => {
-                        let label = format!("\u{1F4A1} {}", row.name);
-                        cy = self.build_outliner_row(
-                            tree,
-                            inner_x,
-                            inner_w,
-                            cy,
-                            &label,
-                            SceneSelection::Light(row.node_doc_id),
-                            selected,
-                            EyeSlot::Empty,
-                        );
-                    }
-                    LightRowVm::Custom { index } => {
-                        // No addressable node id (D12/D3) — listed, never hidden,
-                        // but not a selectable target (nothing to show in
-                        // Properties beyond the same "custom" label). Same row
-                        // template as a selectable row (D5), minus the click.
-                        cy = self.build_outliner_row_static(
-                            tree,
-                            inner_x,
-                            inner_w,
-                            cy,
-                            &format!("\u{1F4A1} Light {index} — custom (edit in graph)"),
-                            false,
-                        );
-                    }
-                }
-            }
-        }
-
-        // Objects group header with Import Model button
-        let objects_folded = self.outliner_folded.get("Objects").copied().unwrap_or(false);
-        let (next_y, import_model) = self.build_outliner_fold_header_with_button(
-            tree,
-            inner_x,
-            inner_w,
-            cy,
-            "Objects",
-            objects_folded,
-            KEY_OUTLINER_OBJECTS,
-            KEY_IMPORT_MODEL,
-            "Import Model…",
-        );
-        cy = next_y;
-        self.import_model_id = Some(import_model);
-        if !objects_folded {
-            for obj in &vm.objects {
-                match obj {
-                    ObjectRowVm::Known(row) => {
-                        let label = format!("\u{25A0} {}", row.name);
-                        if row.is_group {
-                            let expanded = self
-                                .expanded_groups
-                                .get(&vm.layer_id)
-                                .is_some_and(|groups| groups.contains(&row.object_node_id));
-                            cy = self.build_group_outliner_row(
-                                tree,
-                                inner_x,
-                                inner_w,
-                                cy,
-                                &label,
-                                row.object_node_id,
-                                selected,
-                                expanded,
-                                EyeSlot::Live(row.visible.clone()),
-                            );
-                        } else if let Some(group_id) = row.parent_group_id {
-                            let expanded = self
-                                .expanded_groups
-                                .get(&vm.layer_id)
-                                .is_some_and(|groups| groups.contains(&group_id));
-                            if expanded {
-                                cy = self.build_child_outliner_row(
-                                    tree,
-                                    inner_x,
-                                    inner_w,
-                                    cy,
-                                    &format!("\u{25A0} {}", row.name),
-                                    SceneSelection::Object(row.object_node_id),
-                                    selected,
-                                    EyeSlot::Live(row.visible.clone()),
-                                );
-                            }
-                        } else {
-                            cy = self.build_outliner_row(
-                                tree,
-                                inner_x,
-                                inner_w,
-                                cy,
-                                &label,
-                                SceneSelection::Object(row.object_node_id),
-                                selected,
-                                EyeSlot::Live(row.visible.clone()),
-                            );
-                        }
-                    }
-                    ObjectRowVm::Custom { index } => {
-                        cy = self.build_outliner_row_static(
-                            tree,
-                            inner_x,
-                            inner_w,
-                            cy,
-                            &format!("\u{25A0} Object {index} — custom (edit in graph)"),
-                            true,
-                        );
-                    }
-                }
-            }
-        }
-
-        // Motion & Physics keeps the world physics controls ahead of the
-        // force cards. The header owns the typed recipe picker affordance.
-        let motion_folded = self.outliner_folded.get("Motion & Physics").copied().unwrap_or(false);
-        let (next_y, add_force) = self.build_outliner_fold_header_with_button(
-            tree,
-            inner_x,
-            inner_w,
-            cy,
-            "Motion & Physics",
-            motion_folded,
-            KEY_OUTLINER_FORCES,
-            KEY_OUTLINER_FORCES + 1,
-            "+ Force",
-        );
-        cy = next_y;
-        self.add_force_id = Some(add_force);
-        if !motion_folded {
-            cy = self.build_outliner_row(
-                tree, inner_x, inner_w, cy, "\u{2699} Physics", SceneSelection::Physics, selected, EyeSlot::Empty,
-            );
-            for force in &vm.forces {
-                cy = self.build_outliner_row(
-                    tree,
-                    inner_x,
-                    inner_w,
-                    cy,
-                    &format!("\u{26A1} {}", force.title),
-                    SceneSelection::Force(force.instance_id.clone()),
-                    selected,
-                    EyeSlot::Empty,
-                );
-            }
-        }
-        cy = self.build_outliner_row(
-            tree, inner_x, inner_w, cy, "\u{1F39E} Rendering", SceneSelection::Rendering, selected, EyeSlot::Empty,
-        );
-        cy += ROW_GAP;
-
-        // D6/BUG-hlw8: compact action row — built in `scene_setup_actions.rs`
-        // (this file is under the godfile line ceiling; the row's doc there
-        // explains the dead compact Import Model button it replaced).
-        let (ids, cy) = super::scene_setup_actions::build_add_action_row(
-            tree,
-            Some(self.content_parent),
-            inner_x,
-            inner_w,
-            cy,
-        );
-        self.add_object_id = Some(ids.object);
-        self.add_light_id = Some(ids.light);
-        self.add_plane_id = Some(ids.plane);
-        self.add_fluid_id = Some(ids.fluid);
-        cy
-    }
-
-    /// One selectable outliner row: a name button, plus the trailing
-    /// affordance slot (D5) — a live eye toggle (`EyeSlot::Live`) or nothing
-    /// at all (`EyeSlot::Empty` — C-P1c, BUG-238), always at the
-    /// same width and position so the slot's meaning never shifts per row
-    /// (`feedback_no_conditionally_visible_ui`). Selected-row styling per the
-    /// `layer_header.rs` precedent (`sel_accent_style`/`bg_style`): a tint
-    /// using the app-wide `SELECTED_LAYER_RING` colour, never a border box.
-    fn build_outliner_row(
-        &mut self,
-        tree: &mut UITree,
-        inner_x: f32,
-        inner_w: f32,
-        cy: f32,
-        label: &str,
-        sel: SceneSelection,
-        selected: &SceneSelection,
-        eye: EyeSlot,
-    ) -> f32 {
-        let is_selected = &sel == selected;
-        let row_id = tree.add_button_keyed(
-            Some(self.content_parent),
-            inner_x,
-            cy,
-            inner_w - STEP_W,
-            ROW_H,
-            outliner_row_style(is_selected),
-            label,
-            outliner_row_key(sel.clone()),
-        );
-        self.outliner_row_ids.push((row_id, sel.clone()));
-        match eye {
-            EyeSlot::Live(row) => {
-                let on = row.value > 0.5;
-                let object_node_id = match sel {
-                    SceneSelection::Object(id) => id,
-                    _ => 0,
-                };
-                let eye_id = tree.add_button_keyed(
-                    Some(self.content_parent),
-                    inner_x + inner_w - STEP_W,
-                    cy,
-                    STEP_W,
-                    ROW_H,
-                    if row.driven { driven_label_style() } else { btn_style() },
-                    if on { "\u{1F441}" } else { "\u{2013}" },
-                    outliner_eye_key(object_node_id),
-                );
-                if !row.driven {
-                    self.outliner_eye_ids.push((eye_id, row));
-                }
-            }
-            EyeSlot::Empty => {}
-        }
-        cy + ROW_H
-    }
-
-    /// A compound parent row: the chevron has its own hit target so folding
-    /// never changes selection, while the name remains a normal selectable
-    /// object row.
-    fn build_group_outliner_row(
-        &mut self,
-        tree: &mut UITree,
-        inner_x: f32,
-        inner_w: f32,
-        cy: f32,
-        label: &str,
-        group_id: u32,
-        selected: &SceneSelection,
-        expanded: bool,
-        eye: EyeSlot,
-    ) -> f32 {
-        let toggle_id = tree.add_button_keyed(
-            Some(self.content_parent),
-            inner_x,
-            cy,
-            STEP_W,
-            ROW_H,
-            btn_style(),
-            if expanded { "\u{25BE}" } else { "\u{25B8}" },
-            outliner_group_toggle_key(group_id),
-        );
-        self.group_toggle_ids.push((toggle_id, group_id));
-        tree.set_name(toggle_id, "scene_setup.objects.group_toggle");
-        let row_id = tree.add_button_keyed(
-            Some(self.content_parent),
-            inner_x + STEP_W,
-            cy,
-            inner_w - STEP_W * 2.0,
-            ROW_H,
-            outliner_row_style(&SceneSelection::Object(group_id) == selected),
-            label,
-            outliner_row_key(SceneSelection::Object(group_id)),
-        );
-        self.outliner_row_ids.push((row_id, SceneSelection::Object(group_id)));
-        if let EyeSlot::Live(row) = eye {
-            let eye_id = tree.add_button_keyed(
-                Some(self.content_parent),
-                inner_x + inner_w - STEP_W,
-                cy,
-                STEP_W,
-                ROW_H,
-                if row.driven { driven_label_style() } else { btn_style() },
-                if row.value > 0.5 { "\u{1F441}" } else { "\u{2013}" },
-                outliner_eye_key(group_id),
-            );
-            tree.set_name(eye_id, format!("scene_setup.object_eye.{}", row.addr.node_doc_id));
-            if !row.driven {
-                self.outliner_eye_ids.push((eye_id, row));
-            }
-        }
-        cy + ROW_H
-    }
-
-    /// Child rows are indented one level under their virtual parent. Their
-    /// controls keep the same trailing eye slot and selection semantics.
-    fn build_child_outliner_row(
-        &mut self,
-        tree: &mut UITree,
-        inner_x: f32,
-        inner_w: f32,
-        cy: f32,
-        label: &str,
-        sel: SceneSelection,
-        selected: &SceneSelection,
-        eye: EyeSlot,
-    ) -> f32 {
-        let indent = STEP_W;
-        let row_id = tree.add_button_keyed(
-            Some(self.content_parent),
-            inner_x + indent,
-            cy,
-            inner_w - STEP_W - indent,
-            ROW_H,
-            outliner_row_style(&sel == selected),
-            label,
-            outliner_row_key(sel.clone()),
-        );
-        self.outliner_row_ids.push((row_id, sel.clone()));
-        if let EyeSlot::Live(row) = eye {
-            let object_node_id = match sel {
-                SceneSelection::Object(id) => id,
-                _ => 0,
-            };
-            let eye_id = tree.add_button_keyed(
-                Some(self.content_parent),
-                inner_x + inner_w - STEP_W,
-                cy,
-                STEP_W,
-                ROW_H,
-                if row.driven { driven_label_style() } else { btn_style() },
-                if row.value > 0.5 { "\u{1F441}" } else { "\u{2013}" },
-                outliner_eye_key(object_node_id),
-            );
-            tree.set_name(eye_id, format!("scene_setup.object_eye.{}", row.addr.node_doc_id));
-            if !row.driven {
-                self.outliner_eye_ids.push((eye_id, row));
-            }
-        }
-        cy + ROW_H
-    }
-
-    /// A non-selectable outliner row (`Custom` object/light rows, D12/D3 —
-    /// no addressable node id) rendered in the SAME `[name | eye]` shape
-    /// `build_outliner_row` uses, minus the click target — the row template
-    /// is uniform across every row regardless of interactivity (D5).
-    /// `dimmed_eye`: `true` for a Custom OBJECT row (the family still has a
-    /// real `visible` param on Known rows — this instance just isn't
-    /// addressable — so the dimmed glyph reads as "reserved, not present
-    /// here" rather than "no such control exists"); `false` for a Custom
-    /// LIGHT row (Light carries no visibility param at all, C-P1c's eye-slot
-    /// amendment — BUG-238).
-    fn build_outliner_row_static(
-        &mut self,
-        tree: &mut UITree,
-        inner_x: f32,
-        inner_w: f32,
-        cy: f32,
-        label: &str,
-        dimmed_eye: bool,
-    ) -> f32 {
-        tree.add_label(Some(self.content_parent), inner_x, cy, inner_w - STEP_W, ROW_H, label, label_style());
-        if dimmed_eye {
-            tree.add_label(
-                Some(self.content_parent),
-                inner_x + inner_w - STEP_W,
-                cy,
-                STEP_W,
-                ROW_H,
-                "\u{1F441}",
-                driven_label_style(),
-            );
-        }
-        cy + ROW_H
-    }
-
-    /// Build a foldable outliner group header (Scene/Lights/Objects). Returns the
-    /// updated cy position.
-    fn build_outliner_fold_header(
-        &mut self,
-        tree: &mut UITree,
-        inner_x: f32,
-        inner_w: f32,
-        cy: f32,
-        name: &'static str,
-        folded: bool,
-        key: u64,
-    ) -> f32 {
-        let header_id = tree.add_button_keyed(
-            Some(self.content_parent),
-            inner_x,
-            cy,
-            inner_w,
-            ROW_H,
-            UIStyle {
-                bg_color: color::INSPECTOR_BG,
-                hover_bg_color: color::HOVER_OVERLAY,
-                pressed_bg_color: color::PRESS_OVERLAY,
-                corner_radius: color::SMALL_RADIUS,
-                ..UIStyle::default()
-            },
-            "",
-            key,
-        );
-        let triangle_w = 16.0;
-        let triangle = if folded { "\u{25B8}" } else { "\u{25BE}" }; // ▸ / ▾
-        tree.add_label(
-            Some(header_id),
-            inner_x + GAP,
-            cy,
-            triangle_w,
-            ROW_H,
-            triangle,
-            UIStyle {
-                text_color: color::TEXT_DIMMED_C32,
-                font_size: color::FONT_LABEL,
-                text_align: TextAlign::Center,
-                ..UIStyle::default()
-            },
-        );
-        tree.add_label(
-            Some(header_id),
-            inner_x + GAP + triangle_w,
-            cy,
-            (inner_w - 2.0 * GAP - triangle_w).max(0.0),
-            ROW_H,
-            name,
-            section_label_style(),
-        );
-        // Register outliner fold header for click routing
-        self.outliner_row_ids.push((header_id, SceneSelection::OutlinerFold(name)));
-        cy + ROW_H
-    }
-
-    /// Build a foldable outliner group header with a right-aligned button
-    /// Returns the updated cy position and the button's live node id.
-    fn build_outliner_fold_header_with_button(
-        &mut self,
-        tree: &mut UITree,
-        inner_x: f32,
-        inner_w: f32,
-        cy: f32,
-        name: &'static str,
-        folded: bool,
-        header_key: u64,
-        button_key: u64,
-        button_label: &str,
-    ) -> (f32, NodeId) {
-        let header_id = tree.add_button_keyed(
-            Some(self.content_parent),
-            inner_x,
-            cy,
-            inner_w,
-            ROW_H,
-            UIStyle {
-                bg_color: color::INSPECTOR_BG,
-                hover_bg_color: color::HOVER_OVERLAY,
-                pressed_bg_color: color::PRESS_OVERLAY,
-                corner_radius: color::SMALL_RADIUS,
-                ..UIStyle::default()
-            },
-            "",
-            header_key,
-        );
-        let triangle_w = 16.0;
-        let triangle = if folded { "\u{25B8}" } else { "\u{25BE}" }; // ▸ / ▾
-        tree.add_label(
-            Some(header_id),
-            inner_x + GAP,
-            cy,
-            triangle_w,
-            ROW_H,
-            triangle,
-            UIStyle {
-                text_color: color::TEXT_DIMMED_C32,
-                font_size: color::FONT_LABEL,
-                text_align: TextAlign::Center,
-                ..UIStyle::default()
-            },
-        );
-        // Measure button width
-        let btn_style = btn_style();
-        let button_w = tree.text_width(button_label, btn_style.font_size, crate::node::FontWeight::Regular) + 2.0 * GAP;
-        tree.add_label(
-            Some(header_id),
-            inner_x + GAP + triangle_w,
-            cy,
-            (inner_w - 2.0 * GAP - triangle_w - button_w - GAP).max(0.0),
-            ROW_H,
-            name,
-            section_label_style(),
-        );
-        let button_id = tree.add_button_keyed(
-            Some(header_id),
-            inner_x + inner_w - button_w,
-            cy,
-            button_w,
-            ROW_H,
-            btn_style,
-            button_label,
-            button_key,
-        );
-        // Register outliner fold header for click routing
-        self.outliner_row_ids.push((header_id, SceneSelection::OutlinerFold(name)));
-        (cy + ROW_H, button_id)
-    }
-
-    /// The panel's ONE param-row renderer (P2 slice 2a). Filters
-    /// `self.full_params` (the layer's real generator `ParamSurface`)
-    /// down to `sections` — an ORDERED list; rendered in that order, one
-    /// header per distinct section, rows within a section in the manifest's
-    /// own order (never re-sorted) — configures `self.properties_card` from
-    /// the filtered slice (real param ids, real modulation state, no
-    /// synthesis), and renders every retained row through the shared
-    /// `build_param_row`/`RowIndex`/`row_action` core `ParamCardPanel` uses
-    /// (section 5.6: one row component, no per-panel forks). `configure_from_filtered`
-    /// builds the id→row-index join map the per-frame value sync
-    /// (`sync_properties_values`) resolves against — no retained-index list
-    /// (BUG-313). Renders nothing when there's no config or no section
-    /// matches — callers render their own honest empty/custom messaging.
-    pub(crate) fn build_filtered_properties(
-        &mut self,
-        tree: &mut UITree,
-        inner_x: f32,
-        inner_w: f32,
-        cy: f32,
-        sections: &[String],
-    ) -> f32 {
-        self.build_filtered_properties_with_ownership(tree, inner_x, inner_w, cy, (sections, PropertyOwners::All, &[]))
-    }
-
-    fn build_filtered_properties_parameter_ids(
-        &mut self,
-        tree: &mut UITree,
-        inner_x: f32,
-        inner_w: f32,
-        cy: f32,
-        (sections, parameter_ids, excluded_ids): (&[String], &[String], &[String]),
-    ) -> f32 {
-        self.build_filtered_properties_with_ownership(
-            tree,
-            inner_x,
-            inner_w,
-            cy,
-            (sections, PropertyOwners::Parameters(parameter_ids), excluded_ids),
-        )
-    }
-
-    fn build_filtered_properties_with_ownership(
-        &mut self,
-        tree: &mut UITree,
-        inner_x: f32,
-        inner_w: f32,
-        mut cy: f32,
-        (sections, owners, excluded_ids): (&[String], PropertyOwners<'_>, &[String]),
+        rows: PropertyRows<'_>,
     ) -> f32 {
         let Some(config) = self.full_params.clone() else {
             self.properties_card.resize(0);
             return cy;
         };
-        // BUG-292: every row this pass builds must dispatch to the panel's
-        // OWN bound layer (`GeneratorOf`), never the active-layer-resolved
-        // plain `Generator` — `full_params` is only ever populated alongside
-        // `SceneSetupState::Live` (state_sync.rs's `configure`/
-        // `configure_params` call together), so `live_layer_id()` is always
-        // `Some` here in practice; guarded explicitly rather than assumed,
-        // mirroring the `full_params` guard above.
+        // BUG-292: rows dispatch to the panel's own bound layer.
         let Some(target) = self.live_layer_id().cloned().map(GraphParamTarget::GeneratorOf) else {
             self.properties_card.resize(0);
             return cy;
         };
-        let imported_selection = self.state.as_live().is_some_and(|vm| {
-            self.selection.get(&vm.layer_id).is_some_and(|selection| {
-                matches!(selection, SceneSelection::Object(id) if vm.objects.iter().any(|object|
-                    matches!(object, ObjectRowVm::Known(row) if row.object_node_id == *id && row.physics_imported)))
-            })
-        });
+        self.property_fallback_group = rows.fallback;
+        let imported_selection = rows.object.is_some_and(|object| object.physics_imported);
         let mut retained: Vec<usize> = Vec::new();
-        for section in sections {
-            for (i, p) in config.rows.iter().enumerate() {
-                // Scene exposure IDs are stamped as {owner_doc_id}_{param}.
-                let selected_material_id = p.spec.material_role.is_some()
-                    && self.active_material_info.as_ref().is_some_and(|info| {
-                        info.params.iter().any(|(_, id)| id == &p.id)
-                    });
-                let owned = selected_material_id || owners.contains(p.id.as_ref());
-                let excluded = !selected_material_id
-                    && excluded_ids.iter().any(|id| id == p.id.as_ref());
-                if p.spec.section.as_deref() == Some(section.as_str())
-                    && owned
-                    && !excluded
-                    && !(imported_selection && p.spec.name == "Shape")
-                    && (imported_selection || p.spec.name != "Collider Detail")
-                    && !retained.contains(&i)
-                    && self.material_param_selected(p)
-                    && (self.property_explicitly_revealed(p)
-                        || (self.material_row_feature(p).is_none_or(|feature| self.material_feature_visible(&config.rows, feature))
-                            && Self::material_panel_row_visible(p)))
-                {
-                    retained.push(i);
-                }
+        for (i, p) in config.rows.iter().enumerate() {
+            let selected_material_id = p.spec.material_role.is_some()
+                && self.active_material_info.as_ref().is_some_and(|info| {
+                    info.params.iter().any(|(_, id)| id == &p.id)
+                });
+            let owned = selected_material_id || rows.owned.iter().any(|id| id == p.id.as_ref());
+            let excluded = !selected_material_id && rows.excluded.iter().any(|id| id == p.id.as_ref());
+            let hidden = p.spec.scene.is_some_and(|scene| scene.role == SurfaceRole::Hidden)
+                && !p.is_attached()
+                && !self.property_explicitly_revealed(p);
+            // Imported bodies keep their own collider shape; only they offer
+            // the collider detail control.
+            let wrong_body_kind = if imported_selection { p.spec.name == "Shape" } else { p.spec.name == "Collider Detail" };
+            let shown = owned && !excluded && !hidden && !wrong_body_kind;
+            if shown
+                && self.material_param_selected(p)
+                && (self.property_explicitly_revealed(p)
+                    || (self.material_row_feature(p).is_none_or(|feature| self.material_feature_visible(&config.rows, feature))
+                        && Self::material_panel_row_visible(p)))
+            {
+                retained.push(i);
             }
         }
-        // The manifest remains authoritative for row order, but material
-        // presentation uses stable semantic buckets. Stable sorting only
-        // affects material rows; transform/object rows retain their positions.
-        if let Some(position) = retained.iter().position(|&index| self.material_object_gain(&config.rows[index])) {
-            let gain = retained.remove(position);
-            let position = retained.iter().position(|&index| config.rows[index].spec.material_role.is_some())
-                .unwrap_or(retained.len());
-            retained.insert(position, gain);
-        }
+        retained.sort_by_key(|&index| self.property_group(&config.rows[index]) as usize);
+        // Material rows use the material inspector's stable buckets, inside
+        // the Material group's positions.
         let material_positions: Vec<usize> = retained
             .iter()
             .enumerate()
@@ -2420,182 +1679,113 @@ impl ScenePanel {
         for (position, index) in material_positions.into_iter().zip(material_rows) {
             retained[position] = index;
         }
-        // Keep optional features directly above their Add controls.
-        retained.sort_by_key(|&index| self.material_row_feature(&config.rows[index]).is_some());
+        // Optional material features sit directly above their Add controls.
+        retained.sort_by_key(|&index| {
+            let row = &config.rows[index];
+            (self.property_group(row) as usize, self.material_row_feature(row).is_some())
+        });
         self.properties_card.configure_from_filtered(&config, &retained);
         self.prepare_pending_parameter_properties();
         self.properties_card.restore_live(&target);
 
-        if retained.is_empty() {
-            return cy;
-        }
-
         let RowGeometry { label_width, slider_w } = super::param_card::row_geometry(inner_w, false);
-
-        // Clear section header ids from previous build
         self.properties_card.row_host.section_header_ids.clear();
-
+        let material = rows.object.filter(|object| object.material_inspector.is_some());
+        self.material_block_stage = 0;
         let mut i = 0usize;
         while i < retained.len() {
-            let cur_section = self.material_section_name(&config.rows[retained[i]]);
-            if let Some(name) = &cur_section {
-                let feature = self.material_row_feature(&config.rows[retained[i]]);
-                let remove_mode = feature.and_then(|feature| config.rows.iter().find(|row|
-                    self.material_param_selected(row)
-                        && row.spec.material_role == Some(MaterialParamRole::FeatureMode(feature))
-                ).map(|row| (feature, row.id.clone())));
-                let header_w = if remove_mode.is_some() { inner_w - ROW_H - ROW_GAP } else { inner_w };
-                let folded = self.material_section_folded(name);
-                self.section_folded.entry(name.clone()).or_insert(folded);
-                // Build interactive section header row
-                let header_id = tree.add_button_keyed(
-                    Some(self.content_parent),
-                    inner_x,
-                    cy,
-                    header_w,
-                    ROW_H,
-                    UIStyle {
-                        bg_color: color::INSPECTOR_BG,
-                        hover_bg_color: color::HOVER_OVERLAY,
-                        pressed_bg_color: color::PRESS_OVERLAY,
-                        corner_radius: color::SMALL_RADIUS,
-                        ..UIStyle::default()
-                    },
-                    "",
-                    param_row_key_base(&config.rows[retained[i]].id) | ROW_ROLE_SECTION_HEADER,
+            let group = self.property_group(&config.rows[retained[i]]) as usize;
+            if let Some(object) = material {
+                cy = self.advance_material_block(tree, (inner_x, inner_w), cy, object, group);
+            }
+            let name = self.material_section_name(&config.rows[retained[i]]).unwrap_or_default();
+            let feature = self.material_row_feature(&config.rows[retained[i]]);
+            let remove_mode = feature.and_then(|feature| config.rows.iter().find(|row|
+                self.material_param_selected(row)
+                    && row.spec.material_role == Some(MaterialParamRole::FeatureMode(feature))
+            ).map(|row| (feature, row.id.clone())));
+            let header_w = if remove_mode.is_some() { inner_w - ROW_H - ROW_GAP } else { inner_w };
+            let folded = self.material_section_folded(&name);
+            self.section_folded.entry(name.clone()).or_insert(folded);
+            let run_end = (i..retained.len())
+                .find(|&j| self.material_section_name(&config.rows[retained[j]]).unwrap_or_default() != name)
+                .unwrap_or(retained.len());
+            let header_id = ParamCardPanel::build_section_header(
+                tree,
+                Some(self.content_parent),
+                Rect::new(inner_x, cy, header_w, ROW_H),
+                &name,
+                folded,
+                run_end - i,
+                param_row_key_base(&config.rows[retained[i]].id),
+            );
+            tree.set_name(header_id, format!("scene_setup.group.{name}"));
+            if config.rows[retained[i]].spec.material_role.is_some() {
+                tree.set_name(header_id, format!("material.section.{}", config.rows[retained[i]].id));
+            }
+            self.properties_card.row_host.section_header_ids.push((header_id, name.clone()));
+            self.properties_card.row_host.row_index.insert(tree.widget_of(header_id), i, RowRole::SectionHeader);
+            if let Some((feature, mode_id)) = remove_mode {
+                let remove = tree.add_button_keyed(
+                    Some(self.content_parent), inner_x + inner_w - ROW_H, cy,
+                    ROW_H, ROW_H, btn_style(), "×",
+                    MATERIAL_LOOK_KEY_BASE + 64 + feature as u64,
                 );
-                if config.rows[retained[i]].spec.material_role.is_some() {
-                    tree.set_name(
-                        header_id,
-                        format!("material.section.{}", config.rows[retained[i]].id),
-                    );
-                }
-                let triangle_w = 16.0;
-                let triangle = if folded { "\u{25B8}" } else { "\u{25BE}" }; // ▸ / ▾
-                tree.add_label(
-                    Some(header_id),
-                    inner_x + GAP,
-                    cy,
-                    triangle_w,
-                    ROW_H,
-                    triangle,
-                    UIStyle {
-                        text_color: crate::color::TEXT_DIMMED_C32,
-                        font_size: crate::color::FONT_LABEL,
-                        text_align: TextAlign::Center,
-                        ..UIStyle::default()
-                    },
-                );
-                tree.add_label(
-                    Some(header_id),
-                    inner_x + GAP + triangle_w,
-                    cy,
-                    (header_w - 2.0 * GAP - triangle_w).max(0.0),
-                    ROW_H,
-                    name,
-                    label_style(),
-                );
-                // Register header for click routing
-                self.properties_card.row_host.section_header_ids.push((header_id, name.clone()));
-                self.properties_card.row_host.row_index.insert(
-                    tree.widget_of(header_id),
-                    i,
-                    RowRole::SectionHeader,
-                );
-                if let Some((feature, mode_id)) = remove_mode {
-                    let remove = tree.add_button_keyed(
-                        Some(self.content_parent), inner_x + inner_w - ROW_H, cy,
-                        ROW_H, ROW_H, btn_style(), "×",
-                        MATERIAL_LOOK_KEY_BASE + 64 + feature as u64,
-                    );
-                    tree.set_name(remove, format!("material.feature.remove.{mode_id}"));
-                    self.material_remove_ids.push((remove, feature, mode_id));
-                }
-                cy += ROW_H;
-                // Skip folded section's rows
-                if folded {
-                    while i < retained.len() && self.material_section_name(&config.rows[retained[i]]) == cur_section {
-                        i += 1;
-                    }
-                    continue;
+                tree.set_name(remove, format!("material.feature.remove.{mode_id}"));
+                self.material_remove_ids.push((remove, feature, mode_id));
+            }
+            cy += ROW_H;
+            if !folded {
+                cy = self.build_material_section_sources(tree, inner_x, inner_w, cy, &name);
+                for row in i..run_end {
+                    cy = self.build_properties_row(tree, inner_x, cy, row, label_width, slider_w, target.clone());
                 }
             }
-            if let Some(name) = &cur_section {
-                cy = self.build_material_section_sources(tree, inner_x, inner_w, cy, name);
-            }
-            while i < retained.len() && self.material_section_name(&config.rows[retained[i]]) == cur_section {
-                cy = self.build_properties_row(tree, inner_x, cy, i, label_width, slider_w, target.clone());
-                i += 1;
-            }
+            i = run_end;
+        }
+        if let Some(object) = material {
+            cy = self.advance_material_block(tree, (inner_x, inner_w), cy, object, usize::MAX);
         }
         cy + ROW_GAP
     }
 
-    /// Light properties header: editable name (NEW, P5) + Remove (D11's
-    /// `RemoveSceneLightCommand`; lights have no Duplicate verb — D11 scopes
-    /// duplicate to objects only).
-    fn build_light_properties_header(
-        &mut self,
-        tree: &mut UITree,
-        inner_x: f32,
-        inner_w: f32,
-        cy: f32,
-        row: &LightKnownRow,
-    ) -> f32 {
-        let name_w = inner_w - STEP_W - 4.0;
-        let name_id = tree.add_button_keyed(
-            Some(self.content_parent),
-            inner_x,
-            cy,
-            name_w,
-            ROW_H,
-            drag_value_style(),
-            &row.name,
-            light_key(row.index, LIGHT_OFF_NAME),
-        );
-        self.light_name_ids.push((row.node_doc_id, name_id, row.name.clone()));
-        let remove_id = tree.add_button_keyed(
-            Some(self.content_parent),
-            inner_x + name_w + 4.0,
-            cy,
-            STEP_W,
-            ROW_H,
-            btn_style(),
-            "\u{2715}",
-            light_key(row.index, LIGHT_OFF_REMOVE),
-        );
-        self.light_remove_ids.push((remove_id, row.index));
-        cy + ROW_H + ROW_GAP
+    /// The group a properties row sorts and titles under: material rows
+    /// belong to Material, rows the scene table does not describe to the
+    /// item's own first group.
+    pub(super) fn property_group(&self, row: &ParamRow) -> ControlGroup {
+        if row.spec.material_role.is_some() || self.material_object_gain(row) {
+            return ControlGroup::Material;
+        }
+        row.spec.scene.map_or(self.property_fallback_group, |scene| scene.group)
     }
 
-    /// Light properties body: mode/color/intensity/pos/aim/cast_shadows/
-    /// shadow_softness + the always-present Light Size sub-row — the body
-    /// `build_light_row` used to render only when expanded; now always on.
-    /// P2 slice 2a: replaced the 13 hand-listed Mode/Color/Intensity/Pos/
-    /// Aim/Shadow/Light-Size rows with one `build_filtered_properties` pass
-    /// over `row.sections` (the light's own P1 section — see
-    /// `LightKnownRow::sections`'s doc comment).
-    fn build_light_properties_body(
+    /// Open the material block (look buttons) when the walk reaches the
+    /// Material group, and close it (optional features, textures) once the
+    /// walk passes it. `group` is the next row's group rank.
+    fn advance_material_block(
         &mut self,
         tree: &mut UITree,
-        inner_x: f32,
-        inner_w: f32,
-        cy: f32,
-        row: &LightKnownRow,
+        (inner_x, inner_w): (f32, f32),
+        mut cy: f32,
+        object: &ObjectKnownRow,
+        group: usize,
     ) -> f32 {
-        self.build_filtered_properties(tree, inner_x, inner_w, cy, &row.sections)
+        let Some(info) = object.material_inspector.clone() else { return cy };
+        let material = ControlGroup::Material as usize;
+        if self.material_block_stage == 0 && group >= material {
+            cy = self.build_material_header(tree, inner_x, inner_w, cy, &info);
+            self.material_block_stage = 1;
+        }
+        if self.material_block_stage == 1 && group > material {
+            cy = self.build_material_feature_actions(tree, inner_x, inner_w, cy, &info);
+            cy = self.build_material_inspector(tree, inner_x, inner_w, cy, object, object.skin.as_ref());
+            self.material_block_stage = 2;
+        }
+        cy
     }
 
-    /// World properties: Environment + Fog. P2 slice 2a: the numeric rows
-    /// (Intensity/Fill/Density/Height Falloff, plus Mode if the environment
-    /// atom exposes one — the old static "Mode: Softbox" chip is GONE,
-    /// finding #9 of the design doc's audit: "Environment Mode is a dead
-    /// chip... while the card exposes the same param as a working control")
-    /// now come from ONE `build_filtered_properties` pass over
-    /// `vm.world_sections` (the REAL "Environment"/"Atmosphere" section
-    /// strings, in that order — see `SceneSetupVm::world_sections`'s doc
-    /// comment). Structural fallback messaging (None/Custom + "+ Add …"
-    /// buttons) stays panel-shaped, unchanged, rendered around the pass.
+    /// World: the environment and fog structure (custom or missing), then
+    /// the World item's controls (Environment, Fog, Ray Tracing).
     fn build_world_properties(
         &mut self,
         tree: &mut UITree,
@@ -2603,82 +1793,37 @@ impl ScenePanel {
         inner_w: f32,
         mut cy: f32,
         vm: &SceneSetupVm,
+        owned: &[String],
     ) -> f32 {
         match &vm.environment {
             EnvironmentRowVm::Importer { hdri_file, .. } if !hdri_file.is_empty() => {
-                tree.add_label(
-                    Some(self.content_parent),
-                    inner_x,
-                    cy,
-                    inner_w,
-                    ROW_H,
-                    &format!("HDRI: {hdri_file}"),
-                    label_style(),
-                );
+                tree.add_label(Some(self.content_parent), inner_x, cy, inner_w, ROW_H, &format!("HDRI: {hdri_file}"), label_style());
                 cy += ROW_H;
             }
             EnvironmentRowVm::Custom => {
-                tree.add_label(
-                    Some(self.content_parent),
-                    inner_x,
-                    cy,
-                    inner_w,
-                    ROW_H,
-                    "Environment: Custom (edit in graph)",
-                    label_style(),
-                );
+                tree.add_label(Some(self.content_parent), inner_x, cy, inner_w, ROW_H, "Environment: Custom (edit in graph)", label_style());
                 cy += ROW_H;
             }
             EnvironmentRowVm::None => {
                 tree.add_label(Some(self.content_parent), inner_x, cy, inner_w, ROW_H, "Environment: None", label_style());
                 cy += ROW_H;
                 self.add_environment_id = Some(tree.add_button_keyed(
-                    Some(self.content_parent),
-                    inner_x,
-                    cy,
-                    inner_w,
-                    ROW_H,
-                    btn_style(),
-                    "+ Add Environment",
-                    KEY_ADD_ENVIRONMENT,
+                    Some(self.content_parent), inner_x, cy, inner_w, ROW_H, btn_style(), "+ Add Environment", KEY_ADD_ENVIRONMENT,
                 ));
                 cy += ROW_H;
             }
             EnvironmentRowVm::Importer { .. } | EnvironmentRowVm::Bare { .. } => {}
         }
-
-        let sections = world_sections_for(&vm.world_sections, &["Environment", "Atmosphere"]);
-        cy = self.build_filtered_properties(tree, inner_x, inner_w, cy, &sections);
-
+        cy = self.build_item_properties(tree, inner_x, inner_w, cy, PropertyRows::new(owned, ControlGroup::Environment));
         if matches!(vm.atmosphere, AtmosphereRowVm::None) {
             tree.add_label(Some(self.content_parent), inner_x, cy, inner_w, ROW_H, "Fog: None", label_style());
             cy += ROW_H;
             self.add_fog_id = Some(tree.add_button_keyed(
-                Some(self.content_parent),
-                inner_x,
-                cy,
-                inner_w,
-                ROW_H,
-                btn_style(),
-                "+ Add Fog",
-                KEY_ADD_FOG,
+                Some(self.content_parent), inner_x, cy, inner_w, ROW_H, btn_style(), "+ Add Fog", KEY_ADD_FOG,
             ));
             cy += ROW_H;
         }
         cy
-    }
-
-    pub(super) fn build_world_category_properties(
-        &mut self,
-        tree: &mut UITree,
-        inner_x: f32,
-        inner_w: f32,
-        cy: f32,
-        vm: &SceneSetupVm,
-        categories: &[&str],
-    ) -> f32 {
-        let sections = world_sections_for(&vm.world_sections, categories);
-        self.build_filtered_properties(tree, inner_x, inner_w, cy, &sections)
     }
 
     /// UX-P2 (D6 of SCENE_PANEL_UX_DESIGN.md): the single "+ Add Modifier"
@@ -2713,7 +1858,16 @@ impl ScenePanel {
 
     /// Mouse-wheel scroll for the docked body.
     pub fn handle_scroll(&mut self, delta: f32) -> bool {
-        self.scroll.apply_scroll_delta(delta)
+        let moved = self.scroll.apply_scroll_delta(delta);
+        if moved {
+            self.view_version += 1;
+        }
+        moved
+    }
+
+    /// The docked body's view version: scroll and card tween frames.
+    pub fn view_version(&self) -> u64 {
+        self.view_version
     }
 
     /// Whether a point lands inside the panel's own rect — for the app's
@@ -2737,26 +1891,12 @@ impl ScenePanel {
         }
         match event {
             UIEvent::RightClick { node_id: Some(node_id), .. } if self.select_outliner_node(*node_id) => {
+                if let Some(layer_id) = self.state.as_live().map(|vm| vm.layer_id.clone()) {
+                    self.note_selection(&layer_id);
+                }
                 (true, vec![PanelAction::Root(RootAction::SceneItemRightClicked)])
             }
             UIEvent::Click { node_id, .. } => {
-                if *node_id == self.close_id {
-                    // BUG-224: this used to call `self.close()` directly —
-                    // that only flips the panel-local `open` flag, so
-                    // `ui_root.layout.scene_setup_width` (the dock's actual
-                    // screen footprint) never reset to 0, no rebuild ever
-                    // fired (no `PanelAction` means `app_render.rs`'s
-                    // dispatch loop never runs), and the header toggle
-                    // button's highlight went stale — the × visibly did
-                    // nothing. `AudioSetupPanel::handle_event`'s close arm
-                    // (see its own doc comment) already has the correct
-                    // one-toggle-path pattern: emit the same
-                    // `PanelAction::OpenSceneSetup` the header button and
-                    // Escape use, so `ui.toggle_scene_dock()` runs through
-                    // the single owning path (width + open + rebuild +
-                    // header sync all in lockstep).
-                    return (true, vec![PanelAction::Root(RootAction::OpenSceneSetup)]);
-                }
                 if let Some((_, group_id)) = self.group_toggle_ids.iter().find(|(id, _)| *id == *node_id) {
                     let Some(vm) = self.state.as_live() else {
                         return (true, Vec::new());
@@ -2775,9 +1915,8 @@ impl ScenePanel {
                 }
                 // D7: an outliner row click sets the UI-local selection —
                 // no command, no undo unit, valid even before a `Live` state
-                // exists. D1 of SCENE_PANEL_UX_DESIGN.md: also emit
-                // `SceneSetupSelectionChanged` so the dispatch loop's
-                // `structural_change: true` rebuilds Properties THIS frame
+                // exists. D1 of SCENE_PANEL_UX_DESIGN.md: the noted
+                // selection version re-projects Properties THIS frame
                 // instead of waiting for the next unrelated sync.
                 if let Some((_, sel)) = self.outliner_row_ids.iter().find(|(id, _)| *id == *node_id) {
                     // scene-panel-ux lane: handle outliner fold toggles
@@ -2788,11 +1927,11 @@ impl ScenePanel {
                     }
                     // Normal selection change
                     if let SceneSetupState::Live(vm) = &self.state {
-                        self.pending_parameter_reveal = None;
-                        self.revealed_property = None;
-                        self.selected_object_modifier = None;
-                        self.selection.insert(vm.layer_id.clone(), sel.clone());
-                        return (true, vec![PanelAction::Root(RootAction::SceneSetupSelectionChanged(vm.layer_id.clone()))]);
+                        let (layer_id, sel) = (vm.layer_id.clone(), sel.clone());
+                        self.clear_item_focus();
+                        self.selection.insert(layer_id.clone(), sel);
+                        self.note_selection(&layer_id);
+                        return (true, vec![PanelAction::Root(RootAction::SceneSetupSelectionChanged(layer_id))]);
                     }
                     return (true, Vec::new());
                 }
@@ -2827,13 +1966,6 @@ impl ScenePanel {
                             writes: writes.clone(),
                             description: format!("Add {} feature", Self::material_feature_label(*feature)),
                         }));
-                    } else if let Some((_, _, members, _)) = self.material_swatch_ids.iter().find(|(id, _, _, _)| *id == *node_id) {
-                        return (true, vec![PanelAction::Root(RootAction::BeginMaterialColourTextInput {
-                            target: GraphParamTarget::GeneratorOf(vm.layer_id.clone()),
-                            param_ids: members.clone(),
-                            anchor: tree.get_bounds(*node_id),
-                            value: members.clone().map(|id| self.material_full_value(&id)),
-                        })]);
                     } else if let Some((_, look, object, material)) =
                         self.material_look_ids.iter().find(|(id, _, _, _)| *id == *node_id)
                     {
@@ -2942,24 +2074,11 @@ impl ScenePanel {
                         )));
                     } else if self.add_fog_id == Some(*node_id) {
                         actions.push(PanelAction::Project(ProjectAction::SceneSetupAddFog(vm.layer_id.clone(), vm.scene_root_node_id)));
-                    } else if let Some(act) = super::scene_setup_actions::add_row_click(
-                        self.add_object_id,
-                        self.add_light_id,
-                        self.add_plane_id,
-                        self.add_fluid_id,
-                        *node_id,
-                        vm,
-                    ) {
+                    } else if let Some(act) = self
+                        .outliner_click(*node_id, vm)
+                        .or_else(|| self.item_header_click(*node_id, vm))
+                    {
                         actions.push(act);
-                    } else if self.add_force_id == Some(*node_id) {
-                        actions.push(PanelAction::Root(RootAction::SceneSetupAddForceClicked(
-                            vm.layer_id.clone(),
-                        )));
-                    } else if self.import_model_id == Some(*node_id) {
-                        actions.push(PanelAction::Project(ProjectAction::SceneSetupImportModelClicked(
-                            vm.layer_id.clone(),
-                            vm.scene_root_node_id,
-                        )));
                     } else if let Some((group_node_id, _, current_name)) =
                         self.object_name_ids.iter().find(|(_, id, _)| *id == *node_id)
                     {
@@ -3058,7 +2177,7 @@ impl ScenePanel {
                     }
                     _ => {}
                 }
-                (!actions.is_empty() || *node_id == self.close_id, actions)
+                (!actions.is_empty(), actions)
             }
             // P4 (SCENE_OBJECT_AND_PANEL_V2_DESIGN.md D8): double-click on a
             // drag-armable value cell opens its type-in box. The unified
@@ -3173,10 +2292,8 @@ impl ScenePanel {
             // `UIEvent::Scroll` pipeline (same mechanism the dropdown uses) —
             // `window_input` already gated on `layout.scene_setup().contains(pos)`
             // before emitting this, so no further position check is needed here.
-            // `window_input.rs`'s dock-scroll branch also sets
-            // `needs_rebuild` so the next frame actually re-applies the
-            // new offset (BUG-223: it used to assume this happened for
-            // free every frame — it doesn't).
+            // The scroll moves the panel's view version, so the planner
+            // rebuilds the inspector region that hosts the body.
             UIEvent::Scroll { delta, .. } => {
                 self.handle_scroll(delta.y);
                 (true, Vec::new())
@@ -3207,76 +2324,6 @@ impl ScenePanel {
     pub fn light_name_rect(&self, tree: &UITree, light_node_id: u32) -> Option<Rect> {
         let (_, node_id, _) = self.light_name_ids.iter().find(|(id, _, _)| *id == light_node_id)?;
         Some(tree.get_bounds(*node_id))
-    }
-}
-
-/// Stable outliner-row key, derived from the selection identity itself
-/// (Camera/World are fixed; Light/Object key off the node's own doc id,
-/// which is stable across a rebuild — removal-stable, unlike an index).
-/// Placed well above every other range in this file (max ~130,000) so it
-/// can never collide.
-const OUTLINER_KEY_BASE: u64 = 90_000_000;
-const OUTLINER_EYE_KEY_BASE: u64 = 91_000_000;
-
-fn world_sections_for(sections: &[String], categories: &[&str]) -> Vec<String> {
-    sections
-        .iter()
-        .filter(|section| {
-            categories.iter().any(|category| {
-                section.as_str() == *category
-                    || section
-                        .strip_suffix(category)
-                        .is_some_and(|prefix| prefix.ends_with(" — "))
-            })
-        })
-        .cloned()
-        .collect()
-}
-
-fn outliner_row_key(sel: SceneSelection) -> u64 {
-    match sel {
-        SceneSelection::Camera => OUTLINER_KEY_BASE,
-        SceneSelection::World => OUTLINER_KEY_BASE + 1,
-        SceneSelection::Physics => OUTLINER_KEY_BASE + 2,
-        SceneSelection::Rendering => OUTLINER_KEY_BASE + 3,
-        SceneSelection::OutlinerFold(name) => match name {
-            "Lighting & Environment" => KEY_OUTLINER_LIGHTS,
-            "Motion & Physics" => KEY_OUTLINER_FORCES,
-            "Objects" => KEY_OUTLINER_OBJECTS,
-            _ => OUTLINER_KEY_BASE + 100, // fallback
-        },
-        SceneSelection::Light(id) => OUTLINER_KEY_BASE + 4 + (id as u64) * 2,
-        SceneSelection::Object(id) => OUTLINER_KEY_BASE + 5 + (id as u64) * 2,
-        SceneSelection::Force(id) => crate::param_surface::stable_key(&format!("scene.force.{id}")),
-    }
-}
-
-fn outliner_eye_key(object_node_id: u32) -> u64 {
-    OUTLINER_EYE_KEY_BASE + object_node_id as u64
-}
-
-fn outliner_group_toggle_key(group_id: u32) -> u64 {
-    (1_u64 << 62) | group_id as u64
-}
-
-/// Selected-row styling, transcribed from the `layer_header.rs` precedent
-/// (`sel_accent_style`/`bg_style`, verified 2026-07-17: `tree.rs` carries NO
-/// selection styling at all — this panel has no per-row identity colour to
-/// brighten, so the tint applies the app-wide `SELECTED_LAYER_RING` colour
-/// directly, at low alpha, as a background wash rather than a border box —
-/// same "never a border box" doctrine `bg_style`'s own comment states.
-fn outliner_row_style(selected: bool) -> UIStyle {
-    let ring = color::SELECTED_LAYER_RING;
-    let sel_bg = Color32::new(ring.r, ring.g, ring.b, 40);
-    let sel_hover = Color32::new(ring.r, ring.g, ring.b, 60);
-    UIStyle {
-        bg_color: if selected { sel_bg } else { Color32::TRANSPARENT },
-        hover_bg_color: if selected { sel_hover } else { Color32::new(255, 255, 255, 18) },
-        text_color: if selected { ring } else { Color32::new(200, 200, 208, 255) },
-        font_size: color::FONT_LABEL,
-        text_align: TextAlign::Left,
-        corner_radius: color::SMALL_RADIUS,
-        ..UIStyle::default()
     }
 }
 

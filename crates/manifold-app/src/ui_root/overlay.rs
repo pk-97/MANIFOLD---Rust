@@ -77,6 +77,10 @@ impl UIRoot {
         })
     }
 
+    pub(crate) fn any_overlay_open(&self) -> bool {
+        self.current_overlay_open_mask() != 0
+    }
+
     /// Live open-set as a bitmask, bit `i` = `OverlayId::Z_ORDER[i]` is open.
     /// Eight overlays fit in the `u8` snapshot.
     fn current_overlay_open_mask(&self) -> u8 {
@@ -89,14 +93,25 @@ impl UIRoot {
         mask
     }
 
-    /// True if the live overlay open-set differs from what `build_overlays` last
-    /// recorded — i.e. an overlay opened or closed (event-driven OR programmatic)
-    /// and the overlay region in the tree is now stale. The app calls this once
-    /// per frame and, on `true`, schedules a visual rebuild so the overlay region
-    /// is re-recorded into `overlay_draw` and the offscreen recomposites. Read
-    /// only; the snapshot updates when `build_overlays` actually runs.
-    pub fn detect_overlay_open_change(&self) -> bool {
-        self.built && self.current_overlay_open_mask() != self.overlay_open_snapshot
+    /// Overlay content changed: the overlays' view version moves, so the
+    /// planner rebuilds the overlay region. An open or close needs no call:
+    /// the open set rides in [`Self::overlays_version`].
+    pub fn mark_overlay_dirty(&mut self) {
+        self.overlay_version += 1;
+    }
+
+    /// Set the browser popup's search filter (a keystroke or a commit):
+    /// its result list is overlay content.
+    pub fn set_browser_filter(&mut self, filter: String) {
+        self.browser_popup.set_filter(filter);
+        self.mark_overlay_dirty();
+    }
+
+    /// The overlays' view key (UI_INVALIDATION D6): moves when content is
+    /// marked changed or an overlay opened or closed by any path. The open set
+    /// rides in the low byte, so the key is read without a write.
+    pub fn overlays_version(&self) -> u64 {
+        (self.overlay_version << 8) | u64::from(self.current_overlay_open_mask())
     }
 
     /// `EDITOR_WINDOW_UNIFICATION_DESIGN.md` D6: the redraw keepalive as ONE
@@ -131,21 +146,21 @@ impl UIRoot {
     /// legible over an open modal/dropdown, the same reason `Z_ORDER`
     /// already placed it last/topmost — D2/D3's "drag ghost/toast paths").
     /// `Z_ORDER`'s bottom→top loop order becomes insertion order WITHIN
-    /// each tier, so relative overlay stacking is unchanged. The region's
-    /// own root index is deliberately kept OUT of the `(start, end)` range
-    /// this records into `overlay_draw` — `app_render.rs`'s shadow-peek
-    /// heuristic (skip a leading full-screen scrim) reads `tree.id_at(start)`
-    /// expecting the first REAL overlay node, not a region wrapper — so
-    /// `app_render.rs` renders these ranges via `render_sub_region` (ancestor-
+    /// each tier, so relative overlay stacking is unchanged. Every overlay
+    /// mints into the Overlays arena (UI_INVALIDATION_DESIGN.md D7), and
+    /// `overlay_draw` holds that arena's slots. The region's own root is
+    /// deliberately kept OUT of the `(start, end)` range — the shadow-peek
+    /// heuristic in `tree_passes` (skip a leading full-screen scrim) reads the
+    /// node at `start` expecting the first REAL overlay node, not a region
+    /// wrapper — so these ranges render via `render_sub_region` (ancestor-
     /// aware: it walks the parent chain from `start` and picks up the
-    /// region's `CLIPS_CHILDREN` even though the region root itself sits
-    /// one index before `start`), not `render_tree_range`.
+    /// region's `CLIPS_CHILDREN`), not `render_tree_range`.
     pub(crate) fn build_overlays(&mut self) {
         let screen = Vec2::new(self.screen_width, self.screen_height);
         // Take the tree out so `overlay_mut` (which borrows all of self) can run
         // alongside tree writes — standard disjoint-borrow split.
         let mut tree = std::mem::replace(&mut self.tree, UITree::new());
-        let region_start = tree.count();
+        let overlays = crate::frame_plan::MainRegion::Overlays.id();
         let mut ranges: Vec<(usize, usize)> = Vec::new();
         let mut rects: Vec<(OverlayId, Rect)> = Vec::new();
         let full_screen = Rect::new(0.0, 0.0, screen.x, screen.y);
@@ -155,7 +170,7 @@ impl UIRoot {
                 continue;
             }
             let tier = if id == OverlayId::Toast { ZTier::Ghost } else { ZTier::Overlay };
-            let region = tree.begin_region(full_screen, tier, "overlay", UIFlags::empty());
+            let region = tree.begin_region_in(overlays, full_screen, tier, "overlay", UIFlags::empty());
             let start = tree.count();
             if let Modality::Modal {
                 dim_background: true,
@@ -184,17 +199,14 @@ impl UIRoot {
             };
             let rect = compute_overlay_rect(&anchor, size, screen, node_rect);
             ov.build_at(&mut tree, OverlayPlacement { rect, screen });
+            let end = tree.count();
             tree.end_region(region, start);
-            ranges.push((start, tree.count()));
+            ranges.push((start, end));
             rects.push((id, rect));
         }
         self.tree = tree;
-        self.overlay_region_start = region_start;
         self.overlay_draw = ranges;
         self.overlay_rects = rects;
-        // The tree's overlay region now matches the live open-set — record it so
-        // `detect_overlay_open_change` only fires on the next genuine open/close.
-        self.overlay_open_snapshot = self.current_overlay_open_mask();
     }
 
     /// `EDITOR_WINDOW_UNIFICATION_DESIGN.md` P1 (D2 precondition, fix-shape
@@ -206,8 +218,8 @@ impl UIRoot {
     /// layout/audio-setup dock/timeline viewport) via `self.layout`, which
     /// would stomp the editor's own per-frame tree build and inject
     /// main-window UI into the editor. `build_overlays` itself is safe
-    /// standalone: it only reads `screen_width`/`screen_height` and appends
-    /// to the tree tail based on which overlays are open on THIS instance —
+    /// standalone: it only reads `screen_width`/`screen_height` and mints
+    /// into the Overlays arena based on which overlays are open on THIS instance —
     /// no main-window-only state. The explicit size is load-bearing: the
     /// editor's `UIRoot` never receives `resize()` either (only `self.ws`
     /// does, and `resize()` itself calls `build()` — never usable for the
@@ -269,7 +281,7 @@ impl UIRoot {
         }
         self.tree = tree;
         if consumed {
-            self.overlay_dirty = true;
+            self.mark_overlay_dirty();
         }
         consumed
     }
@@ -351,10 +363,8 @@ impl UIRoot {
                     }
                 }
                 DropdownAction::ColorSelected(color_idx) => {
-                    if let Some(ctx) = self.dropdown_context.take()
-                        && let Some(action) = self.dropdown_color_to_action(ctx, color_idx)
-                    {
-                        actions.push(action);
+                    if let Some(ctx) = self.dropdown_context.take() {
+                        actions.extend(self.dropdown_color_to_action(ctx, color_idx));
                     }
                 }
                 DropdownAction::Dismissed => {

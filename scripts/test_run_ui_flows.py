@@ -143,7 +143,7 @@ class RunnerTests(unittest.TestCase):
             stack.enter_context(patch.object(run_ui_flows, "MANIFEST", str(self.flow_dir / "manifest.json")))
             stack.enter_context(patch.object(run_ui_flows, "BUILD_CMD", self.build_cmd(build_ok)))
             stack.enter_context(patch.object(run_ui_flows.gpu_queue, "hold", side_effect=recording_hold))
-            stack.enter_context(patch.object(sys, "argv", ["run_ui_flows.py", *argv]))
+            stack.enter_context(patch.object(sys, "argv", ["run_ui_flows.py", *(argv or ["--all"])]))
             stack.enter_context(patch.dict(os.environ, {
                 "FAKE_FLOWS": str(self.tmp / "behaviour.json"), "FAKE_LOG": str(self.log),
                 "FAKE_RELEASE": str(self.tmp / "release")}))
@@ -243,6 +243,19 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(events, [])
 
+    def test_bare_run_selects_only_touched_flows_and_all_selects_everything(self):
+        with patch.object(run_ui_flows, "filters_for_touched", return_value=([], {})) as touched, \
+                patch.object(run_ui_flows, "write_gate_marker"):
+            code, events, _ = self.exercise({"flow-a": "timeline"}, argv=["--build-only"])
+        self.assertEqual(code, 0)
+        self.assertEqual(events, [])
+        touched.assert_called_once_with("origin/main...HEAD", unittest.mock.ANY)
+        with patch.object(run_ui_flows, "filters_for_touched") as touched:
+            code, events, _ = self.exercise({"flow-a": "timeline"}, argv=["--all"])
+        self.assertEqual(code, 0)
+        touched.assert_not_called()
+        self.assertIn("build", events)
+
     def test_verdicts_reach_a_pipe_before_the_next_flow_starts(self):
         # Real process, real pipe: a caller that times out must already hold
         # every finished flow's line. flow-b blocks inside the batch until the
@@ -257,7 +270,7 @@ class RunnerTests(unittest.TestCase):
             run_ui_flows.FLOW_DIR = {str(self.flow_dir)!r}
             run_ui_flows.MANIFEST = {str(self.flow_dir / "manifest.json")!r}
             run_ui_flows.BUILD_CMD = {self.build_cmd()!r}
-            sys.argv = ["run_ui_flows.py"]
+            sys.argv = ["run_ui_flows.py", "--all"]
             sys.exit(run_ui_flows.main())
             """)
         env = dict(os.environ, MANIFOLD_GPU_QUEUE_DIR=str(self.tmp / "queue"),
@@ -306,7 +319,7 @@ class PathTriggerTests(unittest.TestCase):
         # BUG-vqpbi (flow gate builds for no-app landings): the lane/rule-drift diff.
         paths = (
             ".claude/GIT_TREE_DISCIPLINE.md", ".claude/hooks/preToolUseBash.py",
-            ".claude/hooks/enforcement-table.json", ".claude/hooks/context-nudges/test-scope.md",
+            ".claude/hooks/context-nudges/test-scope.md",
             "CLAUDE.md", "docs/AGENT_ROUTING.md", "scripts/TOOLS.md", "scripts/dev.py",
             "scripts/fleet_health.py", "scripts/land_branch.py", "scripts/run_ui_flows.py",
             "scripts/ui-flows/manifest.json", "scripts/ui-flows/work_ceilings.json",

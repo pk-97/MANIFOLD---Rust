@@ -106,7 +106,7 @@ Extend, don't redesign. Every piece below is shipped and load-bearing.
 | Headless harness (render + dump + one interaction) | `crates/manifold-app/src/ui_snapshot/` (feature `ui-snapshot`), entry `mod.rs:35` | SHIPPED (`docs/HEADLESS_UI_HARNESS.md`). Scenes: timeline/states/inspector/graph/editor/all. Real `UIRoot` + `state_sync` path. |
 | Tree dump | `ui_snapshot/dump.rs:12` (`dump_tree`) | SHIPPED. Emits per node: NodeId index/gen, parent, type, rect, style, text, flags, draw order. **Does NOT emit WidgetId or a component name** — the P1 gap. |
 | Interaction driver (seed) | `ui_snapshot/interact.rs:18` (`apply`) | SHIPPED, two verbs (`select:<layer>`, `open:settings`). Proves the seam: resolve rect from built tree → `UIRoot::pointer_event` Down+Up → `drain_events` → real `Panel::handle_event` dispatch. **Has a silent fallback on miss (`interact.rs:62-67`) — removed in P2 (section 6 seam brief).** |
-| UIRoot injection points | `crates/manifold-app/src/ui_root.rs:989` (`pointer_event`), `ui_root.rs:1011` (`key_event`) | SHIPPED. Take logical position / key + a caller-supplied `time: f32` — the clock is already a parameter, which is what makes deterministic scripting possible. |
+| UIRoot injection points | `crates/manifold-app/src/ui_root/mod.rs:989` (`pointer_event`), `ui_root.rs:1011` (`key_event`) | SHIPPED. Take logical position / key + a caller-supplied `time: f32` — the clock is already a parameter, which is what makes deterministic scripting possible. |
 | Live input dispatchers (one owner, both windows) | `crates/manifold-app/src/window_input.rs:103` (`input_cursor_moved`), `:118` (`input_mouse_input`), `:134` (`input_mouse_wheel`), `:1517` (`input_keyboard`) | SHIPPED. The single entry per winit event; window routing + scroll normalization + cursor projection live here. |
 | Custom hit-test surfaces | `crates/manifold-ui/src/graph_canvas/hit.rs:60` (`hit_test`) — nodes/ports/wires; timeline clips via `crates/manifold-ui/src/clip_hit_tester.rs` | SHIPPED. These targets are invisible to `UITree::hit_test` and to the dump — the P1 registration gap (section 5). |
 | Live sync primitives | `crates/manifold-app/src/content_state.rs:62` (`ContentState.data_version`), `crates/manifold-ui/src/tree.rs:56` (`structure_version`) | SHIPPED. The wait-condition substrate for the live door (section 7). |
@@ -114,7 +114,7 @@ Extend, don't redesign. Every piece below is shipped and load-bearing.
 | Request/reply channel shape | `docs/MCP_INTERFACE_DESIGN.md` section 3 (`McpRequest { kind, reply }`) | DESIGNED, not built. section 4 (Security model) reuses the *shape* (per-request bounded(1) reply channel), not the crate. |
 
 Re-derivation (run at any phase start; if counts differ from above, stop and re-inventory):
-`rg -n "fn hit_test" crates/manifold-ui/src/` · `rg -n "pointer_event|key_event" crates/manifold-app/src/ui_root.rs` · `rg -n "pub\(crate\) fn input_" crates/manifold-app/src/window_input.rs`
+`rg -n "fn hit_test" crates/manifold-ui/src/` · `rg -n "pointer_event|key_event" crates/manifold-app/src/ui_root/mod.rs` · `rg -n "pub\(crate\) fn input_" crates/manifold-app/src/window_input.rs`
 
 **Baseline-review addendum (2026-07-05, anchors spot-reverified):** all audited symbols
 still exist; line numbers have drifted (`pointer_event` 989→1106, `key_event` 1011→1128,

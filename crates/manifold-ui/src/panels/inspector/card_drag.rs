@@ -59,19 +59,12 @@ impl InspectorCompositePanel {
         self.card_drag_active
     }
 
-    /// First node ID of the drag ghost/indicator overlay (for render pass).
-    /// Returns None if no drag is active. Reports the wrapping `Ghost`-tier
-    /// region's root (not `card_drag_ghost_id`, the label node itself) —
-    /// the render pass's `render_tree_range(start, usize::MAX)` walks
-    /// registered regions, and the region root sits one index before the
-    /// label, so reporting the label's own index would make that walk miss
-    /// the region entirely.
-    pub fn card_drag_first_node(&self) -> Option<usize> {
-        if self.card_drag_active {
-            self.card_drag_region_root.map(|id| id.index())
-        } else {
-            None
-        }
+    /// The root of the drag ghost and indicator while a card drag is live,
+    /// minted first into the tree's ghost region (UI_INVALIDATION_DESIGN.md
+    /// D7): its region is what the ghost pass paints, and the frame refills
+    /// the region when it holds anything else.
+    pub fn card_drag_ghost_root(&self) -> Option<NodeId> {
+        if self.card_drag_active { self.card_drag_region_root } else { None }
     }
 
     /// Route drag events to the pressed sub-panel.
@@ -230,38 +223,42 @@ impl InspectorCompositePanel {
             self.card_drag_label = name;
             self.last_effect_tab = tab;
 
-            // Dim source card(s) border (Unity: SetDragDimmed(true))
-            // If dragged card is part of a multi-selection, dim all selected
-            match stack {
-                CardDragStack::Effects(tab) => {
-                    let dragged_id = self.cards_for_tab(tab).get(card_idx).map(|c| c.effect_id().clone());
-                    let sel = self.selection_set_mut(tab);
-                    let is_multi = dragged_id.as_ref().is_some_and(|id| sel.len() > 1 && sel.contains(id));
-                    let sel_ids = sel.clone();
-                    for (i, card) in self.cards_for_tab(tab).iter().enumerate() {
-                        if (is_multi && sel_ids.contains(card.effect_id())) || (!is_multi && i == card_idx) {
-                            card.set_drag_dimmed(tree, true);
-                        }
-                    }
-                }
-                CardDragStack::Modifiers => {
-                    let dragged_id = self.modifier_cards.get(card_idx).and_then(ParamCardPanel::modifier_info).map(|m| m.instance_id.clone());
-                    let is_multi = dragged_id.as_ref().is_some_and(|id| self.selected_modifier_ids.len() > 1 && self.selected_modifier_ids.contains(id));
-                    let selected = self.selected_modifier_ids.clone();
-                    for (i, card) in self.modifier_cards.iter().enumerate() {
-                        let selected_card = card.modifier_info().is_some_and(|m| selected.contains(&m.instance_id));
-                        if (is_multi && selected_card) || (!is_multi && i == card_idx) {
-                            card.set_drag_dimmed(tree, true);
-                        }
-                    }
-                }
-            }
-
+            self.dim_dragged_cards(tree);
             self.rebuild_card_drag_overlay(tree);
 
             return true;
         }
         false
+    }
+
+    /// Dim the dragged card(s) border (Unity: SetDragDimmed(true)); a card in
+    /// a multi-selection drags the whole selection. Called at the drag start
+    /// and after an inspector rebuild mid-drag re-mints the cards (D18): the
+    /// drag is held by card index and effect id, never by node id.
+    pub fn dim_dragged_cards(&self, tree: &mut UITree) {
+        if !self.card_drag_active {
+            return;
+        }
+        let card_idx = self.card_drag_source_index;
+        match self.card_drag_stack {
+            CardDragStack::Effects(tab) => {
+                for card in self.cards_for_tab(tab) {
+                    if self.card_drag_effect_ids.contains(card.effect_id()) {
+                        card.set_drag_dimmed(tree, true);
+                    }
+                }
+            }
+            CardDragStack::Modifiers => {
+                let dragged_id = self.modifier_cards.get(card_idx).and_then(ParamCardPanel::modifier_info).map(|m| m.instance_id.clone());
+                let is_multi = dragged_id.as_ref().is_some_and(|id| self.selected_modifier_ids.len() > 1 && self.selected_modifier_ids.contains(id));
+                for (i, card) in self.modifier_cards.iter().enumerate() {
+                    let selected_card = card.modifier_info().is_some_and(|m| self.selected_modifier_ids.contains(&m.instance_id));
+                    if (is_multi && selected_card) || (!is_multi && i == card_idx) {
+                        card.set_drag_dimmed(tree, true);
+                    }
+                }
+            }
+        }
     }
 
     /// Tree rebuilds replace every widget id, including the active drag overlay.
@@ -275,14 +272,15 @@ impl InspectorCompositePanel {
         // lifetime (`update_card_drag` below), so it must be able to
         // paint outside whatever rect it starts at and outside the
         // inspector's own region clip — the region mechanism's one
-        // sanctioned overflow case. `try_begin_card_drag` runs from an
-        // input event, not the panel's own `build()`, so this region is
-        // minted fresh per drag (there is no already-open region to
-        // nest under at this point) and torn down in `end_card_drag`.
+        // sanctioned overflow case. It mints into the tree's ghost region
+        // (UI_INVALIDATION_DESIGN.md D7): no atlas slot, refilled by the
+        // frame while the drag lives, so a ghost appears or moves without
+        // rebuilding the inspector.
         let col_x = self.viewport_rect.x + COLUMN_PAD;
         let col_w = (self.viewport_rect.width - COLUMN_PAD * 2.0).max(0.0);
         let ghost_w = (col_w - 24.0).min(160.0);
-        let region = tree.begin_region(
+        let region = tree.begin_region_in(
+            tree.ghost_region(),
             self.viewport_rect,
             ZTier::Ghost,
             "card_drag_ghost",

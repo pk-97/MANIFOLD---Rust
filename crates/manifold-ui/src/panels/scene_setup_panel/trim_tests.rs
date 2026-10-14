@@ -21,7 +21,7 @@ fn fixture(kind: TrimKind) -> (ScenePanel, UITree, ParamSurface) {
     }
     let mut panel = ScenePanel::new();
     panel.open();
-    panel.configure(SceneSetupState::Live(Box::new(vm)));
+    panel.configure(tests::live(vm));
     panel.configure_params(Some(surface.clone()));
     panel
         .selection
@@ -39,7 +39,7 @@ fn rebuild(panel: &mut ScenePanel) -> UITree {
 #[test]
 fn filtered_scene_config_keeps_audio_with_reordered_visible_rows() {
     let (mut vm, mut surface) = tests::world_transform_vm();
-    vm.world_sections = vec!["Environment".into()];
+    tests::set_item_ids(&mut vm, SceneSelection::World, &["second", "first"]);
     let mut hidden = surface.rows[0].clone();
     hidden.id = manifold_foundation::ParamId::from("hidden");
     hidden.spec.section = Some("Hidden".into());
@@ -59,7 +59,7 @@ fn filtered_scene_config_keeps_audio_with_reordered_visible_rows() {
     ];
     let mut panel = ScenePanel::new();
     panel.open();
-    panel.configure(SceneSetupState::Live(Box::new(vm)));
+    panel.configure(tests::live(vm));
     panel.configure_params(Some(surface));
     panel.selection.insert(LayerId::new("layer-1"), SceneSelection::World);
     let _tree = rebuild(&mut panel);
@@ -276,7 +276,7 @@ fn scene_trim_release_after_layer_change_commits_original_address() {
     press(&mut panel, &mut tree, trim.min_bar_id, kind);
     let (mut vm, _) = tests::world_transform_vm();
     vm.layer_id = LayerId::new("layer-2");
-    panel.configure(SceneSetupState::Live(Box::new(vm)));
+    panel.configure(tests::live(vm));
     panel.configure_params(Some(surface));
     panel
         .selection

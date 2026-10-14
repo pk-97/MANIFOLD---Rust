@@ -19,20 +19,20 @@ use super::resolve::{
 use crate::content_command::ContentCommand;
 
 pub(crate) fn dispatch_mapping(action: &MappingAction, ctx: &mut super::super::DispatchCtx) -> DispatchResult {
-    let (effective_tab, effective_active_layer) = super::editor_dispatch_context(ctx.editor_target, &*ctx.project, ctx.ui.inspector.last_effect_tab(), ctx.active_layer);
+    let (effective_tab, effective_active_layer) = super::editor_dispatch_context(ctx.editor_target, &ctx.project, ctx.ui.inspector.last_effect_tab(), ctx.active_layer);
     let active_layer = &effective_active_layer;
     match action {
         MappingAction::MapParamToMacro(gpt, param_id, macro_idx) => {
             use manifold_core::{MacroCurve, MacroMapping};
             let macro_idx = *macro_idx;
             if let Some(target) =
-                resolve_graph_target(gpt, ctx.editor_target, effective_tab, active_layer, ctx.selection, ctx.project)
+                resolve_graph_target(gpt, ctx.editor_target, effective_tab, active_layer, ctx.selection, &ctx.project)
                 && let Some(mapping_target) = macro_mapping_target(&target, param_id)
             {
                 // Graph-authority-first range so a generator's (or graph-backed
                 // effect's) true slider range isn't squashed to the registry's.
                 let (min, max) = ctx.project
-                    .with_preset_graph_mut(&target, |inst| resolve_param_range(inst, param_id.as_ref()))
+                    .with_preset_graph(&target, |inst| resolve_param_range(inst, param_id.as_ref()))
                     .unwrap_or((0.0, 1.0));
                 let mapping = MacroMapping {
                     target: mapping_target,
@@ -42,16 +42,9 @@ pub(crate) fn dispatch_mapping(action: &MappingAction, ctx: &mut super::super::D
                     legacy_param_index: None,
                     legacy_effect_addr: None,
                 };
-                ctx.project.settings.macro_bank.slots[macro_idx]
-                    .mappings
-                    .push(mapping.clone());
-                let mi = macro_idx;
-                ContentCommand::send(
-                    ctx.content_tx,
-                    ContentCommand::mutate(crate::content_command::touch::EFFECTS_SHAPES, Box::new(move |p| {
-                        p.settings.macro_bank.slots[mi].mappings.push(mapping);
-                    })),
-                );
+                ctx.mutate(crate::content_command::touch::EFFECTS_SHAPES, move |p| {
+                    p.settings.macro_bank.slots[macro_idx].mappings.push(mapping);
+                });
             }
             DispatchResult::handled()
         }
@@ -61,35 +54,23 @@ pub(crate) fn dispatch_mapping(action: &MappingAction, ctx: &mut super::super::D
         MappingAction::UnmapMacro(macro_idx, mapping_idx) => {
             let macro_idx = *macro_idx;
             let mapping_idx = *mapping_idx;
-            if macro_idx < manifold_core::MACRO_COUNT {
-                let slot = &mut ctx.project.settings.macro_bank.slots[macro_idx];
-                if mapping_idx < slot.mappings.len() {
-                    slot.mappings.remove(mapping_idx);
-                    ContentCommand::send(
-                        ctx.content_tx,
-                        ContentCommand::mutate(crate::content_command::touch::EFFECTS_SHAPES, Box::new(move |p| {
-                            let slot = &mut p.settings.macro_bank.slots[macro_idx];
-                            if mapping_idx < slot.mappings.len() {
-                                slot.mappings.remove(mapping_idx);
-                            }
-                        })),
-                    );
+            if macro_idx < manifold_core::MACRO_COUNT
+                && mapping_idx < ctx.project.settings.macro_bank.slots[macro_idx].mappings.len() {
+                    ctx.mutate(crate::content_command::touch::EFFECTS_SHAPES, move |p| {
+                        let slot = &mut p.settings.macro_bank.slots[macro_idx];
+                        if mapping_idx < slot.mappings.len() {
+                            slot.mappings.remove(mapping_idx);
+                        }
+                    });
                 }
-            }
             DispatchResult::handled()
         }
         MappingAction::ClearMacroMappings(macro_idx) => {
             let macro_idx = *macro_idx;
             if macro_idx < manifold_core::MACRO_COUNT {
-                ctx.project.settings.macro_bank.slots[macro_idx]
-                    .mappings
-                    .clear();
-                ContentCommand::send(
-                    ctx.content_tx,
-                    ContentCommand::mutate(crate::content_command::touch::EFFECTS_SHAPES, Box::new(move |p| {
-                        p.settings.macro_bank.slots[macro_idx].mappings.clear();
-                    })),
-                );
+                ctx.mutate(crate::content_command::touch::EFFECTS_SHAPES, move |p| {
+                    p.settings.macro_bank.slots[macro_idx].mappings.clear();
+                });
             }
             DispatchResult::handled()
         }
@@ -103,9 +84,9 @@ pub(crate) fn dispatch_mapping(action: &MappingAction, ctx: &mut super::super::D
         // only difference is AbletonMapParam (with address) vs AbletonUnmapParam.
         MappingAction::MapParamToAbleton(gpt, param_id, address) => {
             if let Some(target) =
-                resolve_graph_target(gpt, ctx.editor_target, effective_tab, active_layer, ctx.selection, ctx.project)
+                resolve_graph_target(gpt, ctx.editor_target, effective_tab, active_layer, ctx.selection, &ctx.project)
                 && let Some(mapping_target) =
-                    ableton_mapping_target(&target, effective_tab, active_layer, ctx.project, param_id)
+                    ableton_mapping_target(&target, effective_tab, active_layer, &ctx.project, param_id)
             {
                 ContentCommand::send(
                     ctx.content_tx,
@@ -119,9 +100,9 @@ pub(crate) fn dispatch_mapping(action: &MappingAction, ctx: &mut super::super::D
         }
         MappingAction::UnmapParamAbleton(gpt, param_id) => {
             if let Some(target) =
-                resolve_graph_target(gpt, ctx.editor_target, effective_tab, active_layer, ctx.selection, ctx.project)
+                resolve_graph_target(gpt, ctx.editor_target, effective_tab, active_layer, ctx.selection, &ctx.project)
                 && let Some(mapping_target) =
-                    ableton_mapping_target(&target, effective_tab, active_layer, ctx.project, param_id)
+                    ableton_mapping_target(&target, effective_tab, active_layer, &ctx.project, param_id)
             {
                 ContentCommand::send(
                     ctx.content_tx,
@@ -170,52 +151,33 @@ pub(crate) fn dispatch_mapping(action: &MappingAction, ctx: &mut super::super::D
         // (the retired `trim_snapshot` field's last reader).
         MappingAction::AbletonInvertToggle(gpt, param_id) => {
             if let Some(target) =
-                resolve_graph_target(gpt, ctx.editor_target, effective_tab, active_layer, ctx.selection, ctx.project)
+                resolve_graph_target(gpt, ctx.editor_target, effective_tab, active_layer, ctx.selection, &ctx.project)
                 && let Some(mapping_target) =
-                    ableton_mapping_target(&target, effective_tab, active_layer, ctx.project, param_id)
+                    ableton_mapping_target(&target, effective_tab, active_layer, &ctx.project, param_id)
             {
-                if let Some(ms) = ctx.project
-                    .ableton_param_mappings_mut(&mapping_target)
-                    .and_then(|opt| opt.as_mut())
-                    && let Some(m) = ms.iter_mut().find(|m| m.param_id == *param_id)
-                {
-                    m.inverted = !m.inverted;
-                }
                 let mt = mapping_target.clone();
                 let pid = param_id.clone();
-                ContentCommand::send(
-                    ctx.content_tx,
-                    ContentCommand::mutate(crate::content_command::touch::MAPPINGS, Box::new(move |p| {
-                        if let Some(ms) =
-                            p.ableton_param_mappings_mut(&mt).and_then(|opt| opt.as_mut())
-                            && let Some(m) = ms.iter_mut().find(|m| m.param_id == pid)
-                        {
-                            m.inverted = !m.inverted;
-                        }
-                    })),
-                );
+                ctx.mutate(crate::content_command::touch::MAPPINGS, move |p| {
+                    if let Some(ms) = p.ableton_param_mappings_mut(&mt).and_then(|opt| opt.as_mut())
+                        && let Some(m) = ms.iter_mut().find(|m| m.param_id == pid)
+                    {
+                        m.inverted = !m.inverted;
+                    }
+                });
             }
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
 
         MappingAction::AbletonMacroInvertToggle(slot_idx) => {
             let slot_idx = *slot_idx;
-            if let Some(slot) = ctx.project.settings.macro_bank.slots.get_mut(slot_idx)
-                && let Some(m) = &mut slot.ableton_mapping
-            {
-                m.inverted = !m.inverted;
-            }
-            ContentCommand::send(
-                ctx.content_tx,
-                ContentCommand::mutate(crate::content_command::touch::MAPPINGS, Box::new(move |p| {
-                    if let Some(slot) = p.settings.macro_bank.slots.get_mut(slot_idx)
-                        && let Some(m) = &mut slot.ableton_mapping
-                    {
-                        m.inverted = !m.inverted;
-                    }
-                })),
-            );
-            DispatchResult::structural()
+            ctx.mutate(crate::content_command::touch::MAPPINGS, move |p| {
+                if let Some(slot) = p.settings.macro_bank.slots.get_mut(slot_idx)
+                    && let Some(m) = &mut slot.ableton_mapping
+                {
+                    m.inverted = !m.inverted;
+                }
+            });
+            DispatchResult::handled()
         }
 
     }

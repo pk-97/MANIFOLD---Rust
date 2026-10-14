@@ -3,7 +3,7 @@
     "Pointer": {
       "target": {
         "Query": {
-          "text": "Scene"
+          "text": "Scene", "type": "Button", "under_name": "inspector"
         }
       },
       "gesture": {
@@ -54,7 +54,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "text": "Density (kg/m³)"
+          "text": "Density"
         }
       },
       "check": "Exists"
@@ -85,7 +85,8 @@
     "Assert": {
       "selector": {
         "Query": {
-          "text": "■ cc0_oomurasaki_azalea_r_x_pulchrum"
+          "name": "scene_tree.item",
+          "text": "cc0_oomurasaki_azalea_r_x_pulchrum"
         }
       },
       "check": {
@@ -102,6 +103,20 @@
       },
       "check": {
         "Count": 0
+      }
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "text": "Layer", "type": "Button", "under_name": "inspector"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
       }
     }
   },
@@ -295,10 +310,25 @@
     }
   },
   {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "text": "Scene", "type": "Button", "under_name": "inspector"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  {
     "Assert": {
       "selector": {
         "Query": {
-          "text": "■ cc0_oomurasaki_azalea_r_x_pulchrum"
+          "name": "scene_tree.item",
+          "text": "cc0_oomurasaki_azalea_r_x_pulchrum"
         }
       },
       "check": {
@@ -321,6 +351,20 @@
     }
   },
   {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "text": "Layer", "type": "Button", "under_name": "inspector"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  {
     "Assert": {
       "selector": {
         "Query": {
@@ -329,6 +373,20 @@
       },
       "check": {
         "Count": 0
+      }
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "text": "Scene", "type": "Button", "under_name": "inspector"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
       }
     }
   },
@@ -362,7 +420,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "text": "Density (kg/m³)"
+          "text": "Density"
         }
       },
       "check": {
@@ -400,7 +458,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "text": "Density (kg/m³)"
+          "text": "Density"
         }
       },
       "check": "Exists"
@@ -449,7 +507,8 @@
     "Pointer": {
       "target": {
         "Query": {
-          "text": "🌍 World"
+          "name": "scene_tree.item",
+          "text": "Physics"
         }
       },
       "gesture": {
@@ -473,7 +532,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "text": "Simulation Speed"
+          "text": "Speed"
         }
       },
       "check": "Exists"

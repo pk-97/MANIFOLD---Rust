@@ -23,6 +23,19 @@ mod card_drag;
 mod render;
 mod routing;
 
+/// A UI-only fold the inspector owns outside its effect cards. Toggled only
+/// through [`InspectorCompositePanel::toggle_fold`], which moves the view
+/// version, so the frame planner rebuilds the column with no project sync.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InspectorFold {
+    Macros,
+    MasterChrome,
+    LayerChrome,
+    ClipChrome,
+    Generator,
+    AudioTriggers,
+    AudioTriggerRow(usize),
+}
 
 // ── Layout constants ────────────────────────────────────────────
 // section 14.5 E — the container owns the inter-card gap (one owner): the canonical
@@ -277,6 +290,10 @@ pub struct InspectorCompositePanel {
     /// section 6b — global compact mode: hide every card's modulation config drawers
     /// (mods stay armed). UI-only, propagated to all cards each build.
     mods_compact: bool,
+    /// Bumped by the view setters only when a UI-only view value changes
+    /// (tab, compact, a card fold or mod tab). The frame planner keys the
+    /// inspector rebuild on it (UI_INVALIDATION_DESIGN.md D17).
+    view_version: u64,
 
     // Section visibility is derived from `active_tab` (the single source of
     // truth) via the master_visible() / layer_visible() / clip_visible()
@@ -303,6 +320,9 @@ pub struct InspectorCompositePanel {
     /// (PRESET_BROWSER_AUDITION D2); the app dispatch layer constructs the
     /// editing crate's EffectTarget from it at pick time.
     inspecting_layer_id: Option<LayerId>,
+    /// A row just put on the scene card from the Scene tab; it flashes the
+    /// next time the card is shown (SCENE_SURFACES_DESIGN.md D10).
+    pending_card_flash: Option<(LayerId, manifold_foundation::ParamId)>,
 
     // Scroll state — two independent columns via ScrollContainer
     master_scroll: ScrollContainer,
@@ -314,6 +334,9 @@ pub struct InspectorCompositePanel {
     columns_y: f32,
     /// Height available for columns (viewport height minus macros).
     columns_height: f32,
+    /// Where the Scene tab's panel builds: the column area below the tab
+    /// strip. `Rect::ZERO` unless the Scene tab is active.
+    scene_content_rect: Rect,
     dragging_scrollbar: bool,
     dragging_scrollbar_master: bool,
     /// Set whenever a scroll (wheel or scrollbar drag) offset the content nodes
@@ -356,30 +379,28 @@ pub struct InspectorCompositePanel {
     card_drag_indicator_id: Option<NodeId>,
     card_drag_label: String,
     /// The `Ghost`-tier region (`UI_CLIP_AND_Z_OWNERSHIP_DESIGN.md` D1–D3)
-    /// wrapping the ghost + indicator, minted fresh in
-    /// [`try_begin_card_drag`](Self::try_begin_card_drag) each time a drag
-    /// starts. Its root sits BEFORE `card_drag_ghost_id` in the tree, so
-    /// [`card_drag_first_node`](Self::card_drag_first_node) reports this
-    /// index (not the ghost label's own) — the render pass's
-    /// `render_tree_range(start, usize::MAX)` walks registered regions, not
-    /// a raw root scan, and would miss the region entirely otherwise.
+    /// wrapping the ghost + indicator, in the tree's ghost region; names the
+    /// root [`card_drag_ghost_root`](Self::card_drag_ghost_root) reports.
     card_drag_region_root: Option<NodeId>,
 
-    // Cache tracking
+    // Cache tracking: slots in `cache_region`'s arena.
+    cache_region: u8,
     cache_first_node: usize,
     cache_node_count: usize,
 
-    // ── P1 drawer motion ──
-    /// True while any card's drawer-height tween is in flight (or settled this
-    /// frame — see `update`). The app polls `drawer_anim_active()` after
-    /// `ui_root.update()` and forces a rebuild while it's true, so the
-    /// interpolated height re-lays-out and content below reflows.
+    // ── Card motion ──
+    /// True while a card's structural tween (collapse, spawn pop, delete
+    /// fade) is in flight, or settled this frame (see `update`); each such
+    /// frame moves the view version so the region rebuilds.
     drawer_anim_active: bool,
-    /// Whether any tween was advancing last frame — keeps `drawer_anim_active`
-    /// true for one extra frame after the last one settles, so the final (target)
-    /// value gets one build to render (the settling tick returns false, but its
-    /// new value still needs a rebuild to reach the screen).
+    /// Whether a structural tween was advancing last frame, so its settled
+    /// value gets one more build.
     drawer_anim_prev: bool,
+    /// Reused per frame: the drawer reflows the cards report.
+    reflow_scratch: Vec<crate::scroll_container::Reflow>,
+    /// Card motion moved built nodes since the frame last asked, so hover
+    /// under a still cursor is stale.
+    moved_in_place: bool,
     /// Wall-clock anchor for this frame's tween `dt_ms` — the inspector has no
     /// frame timer, so it measures its own delta (same pattern as the layer
     /// header's mute-chip motion). `None` until the first `update()` call, so
@@ -411,6 +432,11 @@ impl InspectorCompositePanel {
             .next()
             .unwrap_or(action)
     }
+    /// The region whose arena holds the inspector column's nodes.
+    pub fn region(&self) -> u8 {
+        self.cache_region
+    }
+
     pub fn audio_drawer_intent(
         &mut self, node: NodeId, target: GraphParamTarget,
         param_id: &manifold_foundation::ParamId, click: AudioDrawerClick,
@@ -418,7 +444,7 @@ impl InspectorCompositePanel {
         for card in self.effects.iter_mut().flatten()
             .chain(self.modifier_cards.iter_mut()).chain(self.gen_params.iter_mut())
         {
-            if in_range(node.index(), card.first_node(), card.node_count()) {
+            if card.owns_node(node) {
                 return card.audio_drawer_intent(target, param_id, click);
             }
         }
@@ -439,7 +465,7 @@ impl InspectorCompositePanel {
     fn scope_idx(tab: InspectorTab) -> usize {
         match tab {
             InspectorTab::Master => Self::SCOPE_MASTER,
-            InspectorTab::Layer | InspectorTab::Group | InspectorTab::Clip => Self::SCOPE_LAYER,
+            InspectorTab::Layer | InspectorTab::Group | InspectorTab::Clip | InspectorTab::Scene => Self::SCOPE_LAYER,
         }
     }
 
@@ -469,6 +495,7 @@ impl InspectorCompositePanel {
             collapse_all_btn_id: None,
             compact_toggle_btn_id: None,
             mods_compact: false,
+            view_version: 0,
             add_master_effect_btn: None,
             add_layer_effect_btn: None,
             group_add_modifier_btns: Vec::new(),
@@ -479,12 +506,14 @@ impl InspectorCompositePanel {
             // selected layer's id on every inspector rebuild (video layers
             // included — `config` is what goes None, not the id).
             inspecting_layer_id: None,
+            pending_card_flash: None,
             master_scroll: ScrollContainer::new(),
             layer_scroll: ScrollContainer::new(),
             viewport_rect: Rect::ZERO,
             column_split_x: 0.0,
             columns_y: 0.0,
             columns_height: 0.0,
+            scene_content_rect: Rect::ZERO,
             dragging_scrollbar: false,
             dragging_scrollbar_master: false,
             scrolled_in_place: false,
@@ -512,19 +541,20 @@ impl InspectorCompositePanel {
             card_drag_indicator_id: None,
             card_drag_label: String::new(),
             card_drag_region_root: None,
+            cache_region: crate::tree::DEFAULT_REGION,
             cache_first_node: usize::MAX,
             cache_node_count: 0,
             drawer_anim_active: false,
             drawer_anim_prev: false,
+            reflow_scratch: Vec::new(),
+            moved_in_place: false,
             motion_last_tick: None,
         }
     }
 
-    /// True while any inspector card's drawer open/close tween needs another
-    /// rebuild to advance (P1 motion). The app polls this after `ui_root.update()`
-    /// and forces `needs_rebuild` while true — mirrors the `is_dragging()` rebuild
-    /// poll. Reduced motion settles tweens instantly, so this returns false at
-    /// once (no per-frame rebuild churn).
+    /// True while a card's structural tween is in flight. Each such frame
+    /// moves the view version, so the planner rebuilds the region. Drawer
+    /// tweens move in place and never set it.
     pub fn drawer_anim_active(&self) -> bool {
         self.drawer_anim_active
     }
@@ -538,20 +568,70 @@ impl InspectorCompositePanel {
     /// needs to force a rebuild (drawer heights only take effect at the next
     /// `build()`) when this is `true`.
     pub fn skip_to_settled(&mut self, tree: &mut UITree) -> bool {
+        let mut structural = false;
         let mut any = false;
-        for card in self.effects.iter_mut().flatten() {
+        for card in self
+            .effects
+            .iter_mut()
+            .flatten()
+            .chain(self.gen_params.as_mut())
+            .chain(self.modifier_cards.iter_mut())
+        {
+            structural |= card.structural_motion();
             any |= card.skip_to_settled(tree);
         }
-        if let Some(gp) = self.gen_params.as_mut() {
-            any |= gp.skip_to_settled(tree);
-        }
-        for card in self.modifier_cards.iter_mut() {
-            any |= card.skip_to_settled(tree);
-        }
-        if any {
-            self.drawer_anim_active = false;
+        // Drawer heights and tab inks settle in place; only a structural
+        // tween needs the region rebuilt.
+        let moved = self.apply_card_motion(tree);
+        self.moved_in_place |= moved;
+        any |= moved;
+        self.drawer_anim_active = false;
+        self.drawer_anim_prev = false;
+        if structural {
+            self.view_version += 1;
         }
         any
+    }
+
+    /// Whether card motion moved built nodes since the last call.
+    pub fn take_moved_in_place(&mut self) -> bool {
+        std::mem::take(&mut self.moved_in_place)
+    }
+
+    /// Move each column's built cards to where their drawer and tab-ink
+    /// tweens are now, in place (decided item 10). Returns whether anything
+    /// moved.
+    fn apply_card_motion(&mut self, tree: &mut UITree) -> bool {
+        let mut moved = false;
+        let reflows = &mut self.reflow_scratch;
+        reflows.clear();
+        for card in self.effects[Self::SCOPE_MASTER].iter_mut().chain(self.master_dying.iter_mut()) {
+            card.take_motion(tree, reflows);
+        }
+        if !reflows.is_empty() {
+            for r in reflows.iter() {
+                moved |= self.master_scroll.reflow(tree, *r);
+            }
+            self.master_scroll.update_scrollbar(tree);
+        }
+        reflows.clear();
+        for card in self
+            .gen_params
+            .iter_mut()
+            .chain(self.modifier_cards.iter_mut())
+            .chain(self.effects[Self::SCOPE_LAYER].iter_mut())
+            .chain(self.layer_dying.iter_mut())
+            .chain(self.modifier_dying.iter_mut())
+        {
+            card.take_motion(tree, reflows);
+        }
+        if !reflows.is_empty() {
+            for r in reflows.iter() {
+                moved |= self.layer_scroll.reflow(tree, *r);
+            }
+            self.layer_scroll.update_scrollbar(tree);
+        }
+        moved
     }
 
     // ── Configuration ─────────────────────────────────────────────
@@ -572,6 +652,9 @@ impl InspectorCompositePanel {
     fn clip_visible(&self) -> bool {
         self.active_tab == InspectorTab::Clip
     }
+    fn scene_visible(&self) -> bool {
+        self.active_tab == InspectorTab::Scene
+    }
 
 
     /// Point the inspector at a single scope. `Group` shares the layer section.
@@ -579,9 +662,55 @@ impl InspectorCompositePanel {
         // Single source of truth — visibility is derived on read, not cached.
         if self.active_tab != tab {
             self.selected_modifier_ids.clear();
+            self.view_version += 1;
         }
         self.active_tab = tab;
         self.last_effect_tab = tab;
+    }
+
+    fn set_mods_compact(&mut self, compact: bool) {
+        if self.mods_compact != compact {
+            self.mods_compact = compact;
+            self.view_version += 1;
+        }
+    }
+
+    /// The inspector's UI-only view version (D17). Project-backed state
+    /// (collapse, group fold) rides the project parts instead.
+    pub fn view_version(&self) -> u64 {
+        self.view_version
+    }
+
+    /// Flip one inspector-owned fold; the view version moves only when the
+    /// state did.
+    pub fn toggle_fold(&mut self, fold: InspectorFold) {
+        let changed = match fold {
+            InspectorFold::Macros => { self.macros_panel.toggle_collapsed(); true }
+            InspectorFold::MasterChrome => { self.master_chrome.toggle_collapsed(); true }
+            InspectorFold::LayerChrome => { self.layer_chrome.toggle_collapsed(); true }
+            InspectorFold::ClipChrome => { self.clip_chrome.toggle_collapsed(); true }
+            InspectorFold::Generator => match self.gen_params.as_mut() {
+                Some(card) => { card.set_collapsed(!card.is_collapsed()); true }
+                None => false,
+            },
+            InspectorFold::AudioTriggers => { self.audio_trigger_section.toggle_collapsed(); true }
+            InspectorFold::AudioTriggerRow(index) => self.audio_trigger_section.toggle_row_expanded(index),
+        };
+        if changed {
+            self.view_version += 1;
+        }
+    }
+
+    /// A card or the Scene tab reports its own UI-only change (section fold,
+    /// mod-config tab) through the action it returns; it has already flipped
+    /// its state. The dispatch of that action calls this, whichever surface
+    /// raised it.
+    pub fn note_card_view_actions(&mut self, actions: &[PanelAction]) {
+        if actions.iter().any(|a| matches!(a,
+            PanelAction::Params(crate::ParamsAction::SectionFoldToggled | crate::ParamsAction::ModConfigTabChanged)))
+        {
+            self.view_version += 1;
+        }
     }
 
     /// Display label for a tab rung.
@@ -591,6 +720,7 @@ impl InspectorCompositePanel {
             InspectorTab::Layer => "Layer",
             InspectorTab::Group => "Group",
             InspectorTab::Master => "Master",
+            InspectorTab::Scene => "Scene",
         }
     }
 
@@ -846,6 +976,11 @@ impl InspectorCompositePanel {
     pub fn viewport_rect(&self) -> Rect {
         self.viewport_rect
     }
+    /// The rect the host builds the scene panel into while the Scene tab is
+    /// active (SCENE_SURFACES D16); `Rect::ZERO` otherwise.
+    pub fn scene_content_rect(&self) -> Rect {
+        self.scene_content_rect
+    }
     pub fn scroll_offset(&self) -> f32 {
         self.layer_scroll.scroll_offset()
     }
@@ -876,8 +1011,8 @@ impl InspectorCompositePanel {
     /// D6 fire meter (`AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md`
     /// P3c, BUG-082's fix): push this tick's live shaped-signal levels onto
     /// every open fire-mode drawer's Amount meter across the inspector — in
-    /// place, no rebuild (never gated behind `needs_structural_sync`; the
-    /// caller runs this every UI tick regardless, mirroring
+    /// place, no rebuild (never gated behind a projection; the caller runs
+    /// this every UI tick regardless, mirroring
     /// `AudioSetupPanel::update_meters`/the deleted `update_trigger_levels`).
     /// Walks every card that can host a fire-mode drawer: master effects,
     /// active-layer effects, the active layer's generator, and the layer's
@@ -1027,14 +1162,14 @@ impl InspectorCompositePanel {
     fn last_clicked_for_tab(&self, tab: InspectorTab) -> Option<&EffectId> {
         match tab {
             InspectorTab::Master => self.last_clicked_master.as_ref(),
-            InspectorTab::Layer | InspectorTab::Group | InspectorTab::Clip => self.last_clicked_layer.as_ref(),
+            InspectorTab::Layer | InspectorTab::Group | InspectorTab::Clip | InspectorTab::Scene => self.last_clicked_layer.as_ref(),
         }
     }
 
     fn set_last_clicked_for_tab(&mut self, tab: InspectorTab, id: Option<EffectId>) {
         match tab {
             InspectorTab::Master => self.last_clicked_master = id,
-            InspectorTab::Layer | InspectorTab::Group | InspectorTab::Clip => self.last_clicked_layer = id,
+            InspectorTab::Layer | InspectorTab::Group | InspectorTab::Clip | InspectorTab::Scene => self.last_clicked_layer = id,
         }
     }
 
@@ -1079,8 +1214,8 @@ impl InspectorCompositePanel {
     ///
     /// Takes `&mut UITree` so the card's `is_selected` flag and the tree's
     /// border style stay in lockstep. Decoupling them (set the flag now,
-    /// hope a rebuild lands later) silently breaks any caller that doesn't
-    /// trigger `needs_rebuild` — the cards keep their highlighted borders
+    /// hope a rebuild lands later) silently breaks any caller whose frame
+    /// rebuilds nothing — the cards keep their highlighted borders
     /// even though the selection set is empty, and the early-return in
     /// `update_selection_visual` then prevents future repaints from
     /// noticing the mismatch.
@@ -1137,6 +1272,7 @@ impl InspectorCompositePanel {
                 .is_some_and(|info| modifier_selection.contains(&info.instance_id));
             card.update_selection_visual(tree, selected);
         }
+        self.dim_dragged_cards(tree);
     }
 
 
@@ -1245,10 +1381,10 @@ impl Panel for InspectorCompositePanel {
         // The app layer calls sync methods like:
         //   inspector.master_chrome_mut().sync_opacity(&mut tree, 0.5);
 
-        // P1 drawer motion: advance every card's drawer-height tween. This only
-        // moves the tween *values*; the reflow they drive happens on the next
-        // build() (which the app's drawer_anim_active poll forces while a tween is
-        // live). No tree mutation here — build reads the advanced values.
+        // Card motion: advance every card's tweens. Drawer heights and tab
+        // inks move the built tree in place below (decided item 10); a
+        // structural tween (collapse, spawn pop, delete fade) moves the view
+        // version so the next plan rebuilds the region.
         let dt_ms = self
             .motion_last_tick
             .map(|t| (t.elapsed().as_secs_f32() * 1000.0).min(100.0))
@@ -1257,20 +1393,27 @@ impl Panel for InspectorCompositePanel {
         self.tick_card_drag_scroll(tree, dt_ms);
         let mut any = false;
         for card in self.effects.iter_mut().flatten() {
-            any |= card.tick_drawers(dt_ms);
-            // P2 value-change flash + D1 tab-ink slide's ink tween both live in
-            // this same per-param vocabulary; the flash needs `tree` (a style
-            // write, not a layout change), so unlike drawer/ink it never sets
-            // `any` — it doesn't need the forced-rebuild poll, only to run
-            // every frame, which this loop already does.
+            card.tick_drawers(dt_ms);
+            any |= card.structural_motion();
+            // The value-change flash is a style write on built nodes.
             card.tick_value_flash(tree, dt_ms);
         }
+        let card_shown = self.layer_visible();
         if let Some(gp) = self.gen_params.as_mut() {
-            any |= gp.tick_drawers(dt_ms);
+            if card_shown
+                && let Some((layer, param)) = self.pending_card_flash.as_ref()
+                && gp.owning_layer_id() == Some(layer)
+                && gp.flash_row(param.as_ref())
+            {
+                self.pending_card_flash = None;
+            }
+            gp.tick_drawers(dt_ms);
+            any |= gp.structural_motion();
             gp.tick_value_flash(tree, dt_ms);
         }
         for card in self.modifier_cards.iter_mut() {
-            any |= card.tick_drawers(dt_ms);
+            card.tick_drawers(dt_ms);
+            any |= card.structural_motion();
             card.tick_value_flash(tree, dt_ms);
         }
         // D17 "delete collapse" (exit-state pattern) — dying cards keep
@@ -1289,11 +1432,15 @@ impl Panel for InspectorCompositePanel {
         self.master_dying.retain(|c| !c.is_delete_finished());
         self.layer_dying.retain(|c| !c.is_delete_finished());
         self.modifier_dying.retain(|c| !c.is_delete_finished());
-        // Stay "active" one extra frame after the last tween settles so its final
-        // (target) value gets a build to render — the settling tick returns false
-        // but its new value hasn't reached the screen yet.
+        // Stay "active" one extra frame after the last structural tween
+        // settles so its final value gets a build: the settling tick reports
+        // nothing in flight, but its new value has not reached the tree yet.
         self.drawer_anim_active = any || self.drawer_anim_prev;
         self.drawer_anim_prev = any;
+        if self.drawer_anim_active {
+            self.view_version += 1;
+        }
+        self.moved_in_place |= self.apply_card_motion(tree);
     }
 
     fn handle_event(&mut self, event: &UIEvent, tree: &UITree) -> Vec<PanelAction> {
@@ -1429,6 +1576,28 @@ mod tests {
     use crate::panels::param_card::{ParamCardKind, RelightCardConfig, RowMod};
     use crate::tree::UITree;
 
+    /// INV-15: the inspector view version moves only when a view value changes.
+    #[test]
+    fn view_version_moves_only_on_change() {
+        let mut panel = InspectorCompositePanel::new();
+        let tab = panel.active_tab;
+        let v0 = panel.view_version();
+        panel.set_active_tab(tab);
+        panel.set_mods_compact(panel.mods_compact);
+        assert_eq!(panel.view_version(), v0, "re-setting a value is no change");
+        panel.set_active_tab(if tab == InspectorTab::Master { InspectorTab::Layer } else { InspectorTab::Master });
+        let v1 = panel.view_version();
+        assert!(v1 > v0);
+        panel.set_mods_compact(!panel.mods_compact);
+        assert!(panel.view_version() > v1);
+        let v2 = panel.view_version();
+        panel.note_card_view_actions(&[PanelAction::Params(crate::ParamsAction::SectionFoldToggled)]);
+        assert!(panel.view_version() > v2, "a card fold is a view change");
+        let v3 = panel.view_version();
+        panel.note_card_view_actions(&[PanelAction::Params(crate::ParamsAction::MacrosCollapseToggle)]);
+        assert_eq!(panel.view_version(), v3);
+    }
+
     fn inspector_layout() -> ScreenLayout {
         let mut layout = ScreenLayout::new(1920.0, 1080.0);
         layout.inspector_width = 280.0;
@@ -1514,6 +1683,25 @@ mod tests {
     }
 
     #[test]
+    fn select_effect_ids_moves_the_view_version_only_on_change() {
+        let mut panel = InspectorCompositePanel::new();
+        let configs: Vec<_> = (0..3).map(|i| mk_config(ParamCardKind::Effect, &format!("Card {i}"), 2)).collect();
+        panel.configure_master_effects(&configs);
+        panel.configure_tabs(&[InspectorTab::Master], InspectorTab::Master);
+        let ids = [configs[1].effect_id.clone()];
+        let v0 = panel.view_version();
+        panel.select_effect_ids(InspectorTab::Master, &ids);
+        let v1 = panel.view_version();
+        assert!(v1 > v0, "a new selection and reveal show at the next build");
+        panel.select_effect_ids(InspectorTab::Master, &ids);
+        assert_eq!(panel.view_version(), v1, "the same selection with its reveal still pending");
+        let mut tree = UITree::new();
+        panel.build_in_rect(&mut tree, Rect::new(0.0, 0.0, 400.0, 400.0));
+        panel.select_effect_ids(InspectorTab::Master, &ids);
+        assert!(panel.view_version() > v1, "a consumed reveal queued again is a change");
+    }
+
+    #[test]
     fn active_tab_drives_section_visibility() {
         let mut panel = InspectorCompositePanel::new();
 
@@ -1568,10 +1756,13 @@ mod tests {
                 is_trigger: false,
                 is_trigger_gate: false,
                 value_labels: None,
+                unit: None,
                 section: None,
                 disabled: None,
                 material_role: None,
                 inactive_reason: None,
+                scene: None,
+                limit: Default::default(),
             },
             value: RowValue { base: 0.5, effective: 0.5, exposed: true, driven: false },
             audio: crate::panels::param_slider_shared::AudioRowState::default(),
@@ -1680,7 +1871,7 @@ mod tests {
                 _ => None,
             }
         }).unwrap();
-        tree.offset_nodes(card.first_node(), card.node_count(), -37.0);
+        tree.offset_nodes(card.region(), card.first_node(), card.node_count(), -37.0);
         inspector.effects[0].push(card);
         let refreshed = inspector.refresh_driver_period_intent(button, &tree, action);
         assert!(matches!(refreshed, PanelAction::Root(RootAction::BeginDriverPeriodTextInput { anchor, value, .. })
@@ -2076,14 +2267,14 @@ mod tests {
         panel.build(&mut tree, &layout);
         tree.end_region(region, content_start);
 
-        let start = region.root.index();
+        let start = region.root.slot();
         let end = tree.count();
 
         // Collect node indices the full-render traversal actually visits.
         let mut visited = std::collections::HashSet::new();
-        tree.traverse_range(start, end, |ev| {
+        tree.traverse_range(crate::tree::DEFAULT_REGION, start, end, |ev| {
             if let TraversalEvent::Node(n) = ev {
-                visited.insert(n.id.index());
+                visited.insert(n.id.slot());
             }
         });
 
@@ -2123,7 +2314,7 @@ mod tests {
         let (gs, gc) = (genp.first_node(), genp.node_count());
         let mut clip_stack: Vec<Rect> = Vec::new();
         let mut culled: Vec<(usize, crate::node::Rect)> = Vec::new();
-        tree.traverse_range(start, end, |ev| match ev {
+        tree.traverse_range(crate::tree::DEFAULT_REGION, start, end, |ev| match ev {
             TraversalEvent::PushClip(r) => {
                 let clipped = clip_stack.last().map(|c| intersect(*c, r)).unwrap_or(r);
                 clip_stack.push(clipped);
@@ -2132,7 +2323,7 @@ mod tests {
                 clip_stack.pop();
             }
             TraversalEvent::Node(n) => {
-                let i = n.id.index();
+                let i = n.id.slot();
                 if i < gs || i >= gs + gc {
                     return;
                 }
@@ -2249,7 +2440,7 @@ mod tests {
         }
         let mut clip_stack: Vec<Rect> = Vec::new();
         let mut painted_over_tab_strip: Vec<(usize, Rect)> = Vec::new();
-        tree.traverse_range(start, end, |ev| match ev {
+        tree.traverse_range(crate::tree::DEFAULT_REGION, start, end, |ev| match ev {
             TraversalEvent::PushClip(r) => {
                 let clipped = clip_stack.last().map(|c| intersect(*c, r)).unwrap_or(r);
                 clip_stack.push(clipped);
@@ -2271,14 +2462,14 @@ mod tests {
                 let Some(c) = clip_stack.last() else {
                     // No active clip ancestor at all — definitely paints
                     // wherever its raw bounds say, tab strip included.
-                    painted_over_tab_strip.push((n.id.index(), b));
+                    painted_over_tab_strip.push((n.id.slot(), b));
                     return;
                 };
                 // Effective clip must not extend above columns_y — if it
                 // does, this node's visible (unclipped) portion still
                 // reaches above the tab strip's lower edge.
                 if c.y < columns_y - 0.01 {
-                    painted_over_tab_strip.push((n.id.index(), b));
+                    painted_over_tab_strip.push((n.id.slot(), b));
                 }
             }
         });
@@ -3328,7 +3519,7 @@ mod tests {
         let mut clip_stack: Vec<Rect> = Vec::new();
         let mut violations: Vec<String> = Vec::new();
         let mut checked = 0usize;
-        tree.traverse_flat_range(start, end, false, |ev| match ev {
+        tree.traverse_flat_range(crate::tree::DEFAULT_REGION, start, end, false, |ev| match ev {
             TraversalEvent::PushClip(r) => {
                 let clipped = clip_stack.last().map_or(r, |c| intersect(*c, r));
                 clip_stack.push(clipped);

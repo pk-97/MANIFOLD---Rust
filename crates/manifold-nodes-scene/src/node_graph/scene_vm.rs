@@ -48,6 +48,9 @@ use manifold_core::effect_graph_def::{
 use manifold_node_engine::scene::boundary_nodes::FINAL_OUTPUT_TYPE_ID;
 use manifold_core::fluid_domain::{FluidDomainLayout, domain_layout};
 
+mod item_nodes;
+use item_nodes::{camera_nodes, physics_nodes, world_nodes};
+
 /// `node.render_scene`'s own type_id string (curated vocabulary anchor).
 pub const RENDER_SCENE_TYPE_ID: &str = "node.render_scene";
 /// `node.scene_object`'s own type_id string — the sole `Object`-wire
@@ -121,14 +124,17 @@ pub struct SceneVm {
     pub objects: Vec<SceneObjectVm>,
     pub lights: Vec<SceneLightVm>,
     pub camera: CameraVm,
-    /// The camera item's controls: the camera atom (curated shapes only),
-    /// its lens and the cinematic tail.
-    pub camera_controls: Vec<NodeId>,
+    /// The camera item's nodes: the camera atom (curated shapes only), its
+    /// lens and the cinematic tail. Read through `scene_items`.
+    pub(crate) camera_nodes: Vec<NodeId>,
     pub environment: EnvironmentVm,
     pub atmosphere: AtmosphereVm,
-    /// The World item's controls: the render_scene root, physics worlds,
-    /// the environment and the atmosphere.
-    pub world_controls: Vec<NodeId>,
+    /// The World item's nodes: the render_scene root, the environment and
+    /// the atmosphere. Read through `scene_items`.
+    pub(crate) world_nodes: Vec<NodeId>,
+    /// Each physics world's nodes: the world, then the body it copies and
+    /// that body's transform. Read through `scene_items`.
+    pub(crate) physics_nodes: Vec<Vec<NodeId>>,
     /// Scene bounds for translate-slider range derivation. `Some((min, max))`
     /// when the graph stores import-time bounds (populated by the glTF importer
     /// from `GltfImportSummary`), read at VM-build time to compute scene-relative
@@ -411,9 +417,8 @@ pub struct LightRow {
     pub index: usize,
     pub node_doc_id: u32,
     pub node: NodeId,
-    /// P5: the light's display name — its own `handle`, falling back to
-    /// `"Light {k}"` (same convention as an object's name, D6). NEW: lights
-    /// didn't have an editable display name before this design.
+    /// Display name (SCENE_SURFACES D11 (Lights)): node `title`, else the
+    /// handle humanised, else `"Light N"`, 1-based like the add-light gesture.
     pub name: String,
 }
 
@@ -607,10 +612,11 @@ impl SceneVm {
             trace_objects(&root, scene_node, &layer_id_set, index.as_ref());
         let lights = trace_lights(&root, scene_node);
         let camera = trace_camera(&root, scene_node);
-        let camera_controls = camera_controls(&root, &camera, scene_node, index.as_ref());
+        let camera_nodes = camera_nodes(&root, &camera, scene_node, index.as_ref());
         let environment = trace_environment(&root, scene_node);
         let atmosphere = trace_atmosphere(&root, scene_node);
-        let world_controls = world_controls(&root, scene_node, &environment, &atmosphere);
+        let world_nodes = world_nodes(&root, scene_node, &environment, &atmosphere);
+        let physics_nodes = physics_nodes(&root);
         let object_count = objects.iter().filter(|row| !matches!(row, SceneObjectVm::Known(row) if row.parent_group_id.is_some())).count();
         let light_count = lights.len();
         let shadow_caster_count = lights.iter().filter(|l| light_casts_shadows(&root, l)).count();
@@ -667,62 +673,14 @@ impl SceneVm {
             objects,
             lights,
             camera,
-            camera_controls,
+            camera_nodes,
             environment,
             atmosphere,
-            world_controls,
+            world_nodes,
+            physics_nodes,
             scene_bounds,
         })
     }
-}
-
-/// Stable identities of `ids` in `level`; nodes without one own no controls.
-fn stable_ids(level: &Level, ids: impl IntoIterator<Item = u32>) -> Vec<NodeId> {
-    ids.into_iter()
-        .filter_map(|id| level.node(id))
-        .map(|node| node.node_id.clone())
-        .filter(|id| !id.is_empty())
-        .collect()
-}
-
-/// The camera atom, its lens, and the effects connected to this scene/camera.
-fn camera_controls(level: &Level, camera: &CameraVm, scene: &EffectGraphNode, index: Option<&FlatSceneIndex>) -> Vec<NodeId> {
-    let (atom, lens) = match camera {
-        CameraVm::Orbit(c) => (Some(c.node_doc_id), c.lens.as_ref()),
-        CameraVm::Free(c) => (Some(c.node_doc_id), c.lens.as_ref()),
-        CameraVm::LookAt(c) => (Some(c.node_doc_id), c.lens.as_ref()),
-        CameraVm::Loop(c) => (None, c.lens.as_ref()),
-        CameraVm::Custom { lens, .. } => (None, lens.as_ref()),
-        CameraVm::None => (None, None),
-    };
-    let mut controls = stable_ids(level, atom.into_iter().chain(lens.map(|lens| lens.node_doc_id)));
-    if let Some(index) = index {
-        controls.extend(super::scene_camera::camera_effect_controls(index, &SceneNodeRef {
-            scope: Vec::new(), node: scene.node_id.clone(),
-        }));
-    }
-    controls
-}
-
-/// The render_scene root (its Rendering toggles), every physics world, the
-/// environment and the atmosphere.
-fn world_controls(
-    level: &Level,
-    scene_node: &EffectGraphNode,
-    environment: &EnvironmentVm,
-    atmosphere: &AtmosphereVm,
-) -> Vec<NodeId> {
-    let mut ids = vec![scene_node.id];
-    ids.extend(level.nodes.iter().filter(|node| node.type_id == "node.physics_world").map(|node| node.id));
-    match environment {
-        EnvironmentVm::Importer(e) => ids.push(e.bake_node_id),
-        EnvironmentVm::Bare(e) => ids.push(e.node_doc_id),
-        EnvironmentVm::Custom { .. } | EnvironmentVm::None => {}
-    }
-    if let AtmosphereVm::Wired(a) = atmosphere {
-        ids.push(a.node_doc_id);
-    }
-    stable_ids(level, ids)
 }
 
 fn light_casts_shadows(level: &Level, light: &SceneLightVm) -> bool {
@@ -879,6 +837,9 @@ struct LiquidDomainAt<'a> {
     scope: Vec<u32>,
     node: &'a EffectGraphNode,
     stable: SceneNodeRef,
+    /// The level holding the group `level` is the body of, and that group's
+    /// doc id, so a domain input wired in from outside its group resolves.
+    parent: Option<(Level<'a>, u32)>,
     /// Whether the object's mesh walk should contribute display controls to
     /// the Water row. Particle View's display mesh is family dressing, not a
     /// simulation control.
@@ -1013,6 +974,7 @@ fn family_liquid_domain<'a>(
             scope: vec![group_node.node_id.clone()],
             node: node.node_id.clone(),
         },
+        parent: Some((Level { nodes: root.nodes, wires: root.wires }, group_id)),
         surface_controls: false,
     })
 }
@@ -1063,15 +1025,17 @@ fn slot_liquid_domain<'a>(
     let object = index.scene_object_at(&scene, slot as u32).ok()??;
     let domain = liquid_domain_of(index, &object).ok()??;
     let mut level = Level { nodes: root.nodes, wires: root.wires };
+    let mut parent = None;
     let mut scope = Vec::with_capacity(domain.scope.len());
     for group_id in &domain.scope {
         let group = level.nodes.iter().find(|node| &node.node_id == group_id)?;
         let body = group.group.as_deref()?;
         scope.push(group.id);
+        parent = Some((Level { nodes: level.nodes, wires: level.wires }, group.id));
         level = Level { nodes: &body.nodes, wires: &body.wires };
     }
     let node = level.nodes.iter().find(|node| node.node_id == domain.node)?;
-    Some(LiquidDomainAt { level, scope, node, stable: domain, surface_controls: true })
+    Some(LiquidDomainAt { level, scope, node, stable: domain, parent, surface_controls: true })
 }
 
 fn trace_objects(
@@ -1595,13 +1559,23 @@ fn trace_scene_object(
     };
     let liquid_domain = liquid.as_ref().map(|domain| domain.stable.clone());
     let surface_controls = liquid.as_ref().is_some_and(|domain| domain.surface_controls);
-    if let Some(LiquidDomainAt { level: domain_level, scope: domain_scope, node: n, .. }) = liquid {
+    if let Some(LiquidDomainAt { level: domain_level, scope: domain_scope, node: n, parent, .. }) = liquid {
         (fluid_domain, fluid_domain_transform) = trace_fluid_domain(&domain_level, &domain_scope, n);
         own(n);
         for port in ["domain", "emitter", "initial_volume"] {
-            if let Some((_, _, source, _)) = resolve_producer_through_group(&domain_level, n.id, port)
-                && source.type_id == "node.transform_3d"
-            {
+            let Some((_, _, source, source_port)) = resolve_producer_through_group(&domain_level, n.id, port) else {
+                continue;
+            };
+            // A volume wired into the domain's group from outside (Dam Break
+            // Matter's Initial Column) is the water's too.
+            let source = if source.type_id == manifold_core::effect_graph_def::GROUP_INPUT_TYPE_ID {
+                parent.as_ref().and_then(|(outer, group_id)| {
+                    outer.producer(*group_id, source_port).and_then(|(id, _)| outer.node(id))
+                })
+            } else {
+                Some(source)
+            };
+            if let Some(source) = source.filter(|source| source.type_id == "node.transform_3d") {
                 own(source);
             }
         }
@@ -1794,13 +1768,34 @@ fn trace_lights(level: &Level, scene_node: &EffectGraphNode) -> Vec<SceneLightVm
                         index: k,
                         node_doc_id: node_id,
                         node: node.node_id.clone(),
-                        name: node.handle.clone().unwrap_or_else(|| format!("Light {k}")),
+                        name: light_display_name(node, k),
                     }))
                 }
                 _ => SceneLightVm::Custom { index: k },
             }
         })
         .collect()
+}
+
+/// SCENE_SURFACES D11 (Lights): `title`, else the handle humanised
+/// (`fill_light` → "Fill Light"), else "Light N".
+fn light_display_name(node: &EffectGraphNode, k: usize) -> String {
+    if let Some(title) = node.title.as_deref().filter(|t| !t.is_empty()) {
+        return title.to_string();
+    }
+    let humanised = node
+        .handle
+        .as_deref()
+        .unwrap_or("")
+        .split(['_', ' '])
+        .filter(|w| !w.is_empty())
+        .map(|w| {
+            let mut c = w.chars();
+            c.next().map_or(String::new(), |f| f.to_uppercase().collect::<String>() + c.as_str())
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+    if humanised.is_empty() { format!("Light {}", k + 1) } else { humanised }
 }
 
 /// Builds a [`LensRow`] for `node.camera_lens` at `node_id` — identity only;
@@ -2871,7 +2866,7 @@ mod tests {
         match &vm.lights[0] {
             SceneLightVm::Known(row) => {
                 assert_eq!(row.node_doc_id, 8);
-                assert_eq!(row.name, "sun");
+                assert_eq!(row.name, "Sun", "D11: the handle humanised");
             }
             other => panic!("expected Known light, got {other:?}"),
         }
@@ -2988,7 +2983,7 @@ mod tests {
                 panic!("switch must retain shared lens: {:?}", vm.camera);
             };
             assert_eq!(lens.node_doc_id, 2);
-            assert_eq!(vm.camera_controls, ["n2", "n33", "n32"].map(NodeId::new), "the lens and connected tail, never the switch");
+            assert_eq!(vm.camera_nodes, ["n2", "n33", "n32"].map(NodeId::new), "the lens and connected tail, never the switch");
         }
     }
 

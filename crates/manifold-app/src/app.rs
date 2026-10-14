@@ -1,4 +1,3 @@
-use manifold_ui::{AudioSetupAction, ModulationAction, ProjectAction};
 use std::sync::Arc;
 
 use winit::application::ApplicationHandler;
@@ -10,7 +9,7 @@ use winit::window::WindowId;
 use manifold_core::layer::Layer;
 use manifold_core::project::Project;
 use manifold_core::types::LayerType;
-use manifold_core::{Bpm, LayerId};
+use manifold_core::LayerId;
 use manifold_editing::service::EditingService;
 use manifold_playback::engine::PlaybackEngine;
 use manifold_playback::percussion_orchestrator::PercussionImportOrchestrator;
@@ -96,9 +95,11 @@ pub struct Application {
     /// Last received project snapshot Arc. Used to skip redundant deep clones
     /// when the content thread sends the same Arc for modulation-only frames.
     pub(crate) last_snapshot_arc: Option<std::sync::Arc<manifold_core::project::Project>>,
-    /// Content stamps of the last accepted project snapshot: a move outside
-    /// the live scalars re-projects even when `data_version` did not move (D23).
-    pub(crate) accepted_stamps: manifold_core::change::PartStamps,
+    /// The UI's part stamps (folded from each accepted snapshot, D5) and the
+    /// in-flight gesture preview (D12), shared by every editing host.
+    pub(crate) ui_edits: crate::gesture_preview::UiEdits,
+    /// The main window's frame planner (D6).
+    pub(crate) frame_planner: crate::frame_plan::FramePlanner,
 
     /// After a local project load (open/new), suppress content thread snapshots
     /// until its data_version exceeds this value. Prevents the old project from
@@ -225,6 +226,13 @@ pub struct Application {
     /// `SetNodeAtlasVisible` command so it sends only when the visible scope
     /// (or topology) changes, not every frame. Empty = atlas off / editor closed.
     pub(crate) last_atlas_visible_sent: Vec<manifold_core::NodeId>,
+    /// The snapshot (held, compared by pointer) and scope path the visible-node set was
+    /// last computed from; it is recomputed only when either moves.
+    pub(crate) atlas_visible_snap: Option<std::sync::Arc<manifold_ui::graph_view::GraphSnapshot>>,
+    pub(crate) atlas_visible_scope: Vec<u32>,
+    /// The editor mini-timeline, rebuilt only when its key moves.
+    pub(crate) mini_timeline: crate::app_render::MiniTimelineCache,
+    pub(crate) editor_graph: crate::editor_graph_cache::EditorGraphCache,
     /// Single shared IOSurface + the UI-side texture imported from it for the
     /// clip-thumbnail atlas (section 24 5c, BUG-119: one surface, no rotation — see
     /// `crate::shared_texture::SharedAtlasSurface`).
@@ -239,6 +247,12 @@ pub struct Application {
     /// Reused per-frame scratch for the thumbnail quad list — no per-frame heap on
     /// the render hot path.
     pub(crate) clip_thumb_quad_scratch: Vec<manifold_ui_paint::clip_thumb_gpu::ThumbQuad>,
+    /// Each clip's captured filmstrip cells, re-indexed only when the layout moves.
+    pub(crate) clip_thumb_strips: crate::clip_filmstrip::ClipStrips,
+    /// Per-clip scratch for the thumbnail pass: captured cells with their x, and
+    /// the aspect-locked windows laid over the body.
+    pub(crate) clip_thumb_cells_scratch: Vec<(u32, f32)>,
+    pub(crate) clip_thumb_windows_scratch: Vec<(u32, f32, f32)>,
     pub(crate) blit_pipeline: Option<manifold_gpu::GpuRenderPipeline>,
     pub(crate) blit_sampler: Option<manifold_gpu::GpuSampler>,
     /// Audio Setup spectrogram waterfall renderer + its target texture, created
@@ -479,9 +493,6 @@ pub struct Application {
     /// double-click snaps the width back to its default, same shape as the
     /// inspector/split handles above.
     pub(crate) audio_setup_handle_last_click: Option<std::time::Instant>,
-    /// Double-click detect for the Scene Setup dock resize handle — mirror
-    /// of `audio_setup_handle_last_click` (SCENE_SETUP_PANEL_DESIGN D2).
-    pub(crate) scene_setup_handle_last_click: Option<std::time::Instant>,
 
     // Output window double-click fullscreen toggle.
     // Double-click fullscreen toggle for the output window.
@@ -512,15 +523,6 @@ pub struct Application {
     // split-borrow it alongside ui_root.viewport and create AppEditingHost.
     pub(crate) overlay: manifold_ui::interaction_overlay::InteractionOverlay,
 
-    // Pre-drag split commands — persists between AppEditingHost instances.
-    // Unity stores these on InteractionOverlay; Rust stores them here because
-    // the overlay can't depend on manifold-editing Command types.
-    // Populated by split_clips_for_region_move, prepended on commit_command_batch.
-    pub(crate) pre_drag_commands: Vec<Box<dyn manifold_editing::command::Command>>,
-    /// Per-layer bitmap invalidation targets from editing operations.
-    /// Drained in app_render.rs to call invalidate() on targeted layers only.
-    pub(crate) invalidate_layers: Vec<usize>,
-
     // Detected display resolutions: (width, height, label).
     // Populated from winit monitors at startup. Matches Unity Footer.CollectDisplayResolutions.
     pub(crate) display_resolutions: Vec<(u32, u32, String)>,
@@ -537,16 +539,6 @@ pub struct Application {
     pub(crate) pending_open_graph_editor: bool,
     /// Performance mode state — see `crate::perform_mode`.
     pub(crate) perform: crate::perform_mode::PerformModeState,
-    pub(crate) needs_rebuild: bool,
-    /// Fine-grained scroll dirty flags — tracks which axis changed to enable
-    /// skipping layer header rebuild on horizontal-only scroll.
-    pub(crate) scroll_dirty: crate::ui_root::ScrollDirty,
-    /// Set by keyboard shortcuts that mutate project data (undo, delete, etc.).
-    /// Consumed by tick_and_render to trigger sync_project_data + rebuild.
-    pub(crate) needs_structural_sync: bool,
-    /// Set by `AppEditingHost::request_automation_lane_resync`; consumed by
-    /// tick_and_render's lanes-only geometry resync.
-    pub(crate) automation_lanes_dirty: bool,
 }
 
 impl Application {
@@ -576,7 +568,8 @@ impl Application {
             content_state: ContentState::default(),
             local_project: default_project,
             last_snapshot_arc: None,
-            accepted_stamps: Default::default(),
+            ui_edits: Default::default(),
+            frame_planner: Default::default(),
             suppress_snapshot_until: 0,
             suppress_snapshot_set_at: 0,
             autosave: crate::autosave::AutosaveState::new(),
@@ -618,6 +611,10 @@ impl Application {
             #[cfg(target_os = "macos")]
             ui_node_atlas_textures: [None, None, None],
             last_atlas_visible_sent: Vec::new(),
+            atlas_visible_snap: None,
+            atlas_visible_scope: Vec::new(),
+            mini_timeline: Default::default(),
+            editor_graph: Default::default(),
             #[cfg(target_os = "macos")]
             clip_atlas_surface: None,
             #[cfg(target_os = "macos")]
@@ -625,6 +622,9 @@ impl Application {
             last_clip_atlas_visible_sent: Vec::new(),
             clip_thumb_gpu: None,
             clip_thumb_quad_scratch: Vec::new(),
+            clip_thumb_strips: Default::default(),
+            clip_thumb_cells_scratch: Vec::new(),
+            clip_thumb_windows_scratch: Vec::new(),
             blit_pipeline: None,
             blit_sampler: None,
             spectrogram: None,
@@ -728,7 +728,6 @@ impl Application {
             split_handle_last_click: None,
             inspector_handle_last_click: None,
             audio_setup_handle_last_click: None,
-            scene_setup_handle_last_click: None,
             output_last_click: None,
             output_saved_frame: None,
             current_project_path: None,
@@ -744,8 +743,6 @@ impl Application {
             overlay: manifold_ui::interaction_overlay::InteractionOverlay::new(
                 manifold_ui::color::CLIP_VERTICAL_PAD,
             ),
-            pre_drag_commands: Vec::new(),
-            invalidate_layers: Vec::new(),
             display_resolutions: Vec::new(),
             initialized: false,
             shutting_down: false,
@@ -754,10 +751,6 @@ impl Application {
             pending_close_output: false,
             pending_open_graph_editor: false,
             perform: crate::perform_mode::PerformModeState::new(),
-            needs_rebuild: false,
-            scroll_dirty: crate::ui_root::ScrollDirty::default(),
-            needs_structural_sync: false,
-            automation_lanes_dirty: false,
         }
     }
 
@@ -813,6 +806,15 @@ impl Application {
     pub(crate) fn send_content_cmd(&self, cmd: ContentCommand) {
         if let Some(ref tx) = self.content_tx {
             ContentCommand::send(tx, cmd);
+        }
+    }
+
+    /// An undoable edit from an app-level path (text commits): through
+    /// [`crate::ui_bridge::ProjectRef::execute`], which writes the local
+    /// project, stamps what the command touches and sends it (UI_INVALIDATION D5).
+    pub(crate) fn execute_local(&mut self, cmd: Box<dyn manifold_editing::command::Command>) {
+        if let Some(tx) = self.content_tx.as_ref() {
+            crate::ui_bridge::ProjectRef::new(&mut self.local_project, &mut self.ui_edits, tx).execute(cmd);
         }
     }
 
@@ -901,21 +903,6 @@ impl Application {
         }
         self.ws.ui_root.set_audio_setup_handle_idle();
 
-        // Priority 2c: Scene Setup dock resize edge hover — mirror of Audio
-        // Setup above (SCENE_SETUP_PANEL_DESIGN D2).
-        if self.ws.ui_root.scene_setup_resize_dragging
-            || self.ws.ui_root.is_near_scene_setup_edge(self.cursor_pos)
-        {
-            self.cursor_manager.set(TimelineCursor::ResizeHorizontal);
-            if self.ws.ui_root.scene_setup_resize_dragging {
-                self.ws.ui_root.set_scene_setup_handle_drag();
-            } else {
-                self.ws.ui_root.set_scene_setup_handle_hover();
-            }
-            return;
-        }
-        self.ws.ui_root.set_scene_setup_handle_idle();
-
         // Priority 2d (UX-P2, D3a of SCENE_PANEL_UX_DESIGN.md) — the Scene
         // Setup drag-armable value-cell cursor lookup — is DELETED
         // (SCENE_PANEL_CARD_CONVERGENCE_DESIGN.md C-P1d): Modifier, the
@@ -966,592 +953,45 @@ impl Application {
         self.cursor_manager.set_default();
     }
 
-    /// Handle committed text input value.
+    /// Commits a text session. The shared seam (`text_session::commit`) takes
+    /// every field the dispatch context can serve; the fields below read the
+    /// graph editor's watched graph, an automation lane or the GPU.
     pub(crate) fn handle_text_input_commit(
         &mut self,
         field: crate::text_input::TextInputField,
         text: &str,
     ) {
         use crate::text_input::TextInputField;
+        {
+            // Without a content thread (tests before one starts) edits go to a
+            // closed channel, as `send_content_cmd` drops them.
+            let closed;
+            let content_tx = match self.content_tx.as_ref() {
+                Some(tx) => tx,
+                None => {
+                    closed = crossbeam_channel::bounded(0).0;
+                    &closed
+                }
+            };
+            let mut cx = crate::ui_bridge::DispatchCtx {
+                project: crate::ui_bridge::ProjectRef::new(&mut self.local_project, &mut self.ui_edits, content_tx),
+                content_tx,
+                content_state: &self.content_state,
+                ui: &mut self.ws.ui_root,
+                selection: &mut self.selection,
+                active_layer: &mut self.active_layer_id,
+                user_prefs: &mut self.user_prefs,
+                editor_target: None,
+                scrub: &mut self.scrub,
+                dialogs: crate::file_dialogs::host(&self.window_registry, self.dialog_window_id, self.primary_window_id, self.current_project_path.as_deref()),
+            };
+            if crate::text_session::commit(&mut self.text_input, field, text, &mut cx) {
+                return;
+            }
+        }
         match field {
-            TextInputField::Bpm => {
-                if let Ok(new_bpm) = text.parse::<f32>() {
-                    let new_bpm = Bpm(new_bpm.clamp(20.0, 300.0));
-                    if let Some(project) = Some(&mut self.local_project) {
-                        let old_bpm = project.settings.bpm;
-                        // Unity: skip if approximately equal
-                        if (old_bpm.0 - new_bpm.0).abs() >= 0.01 {
-                            let cmd = manifold_editing::commands::settings::ChangeBpmCommand::master(
-                                project, new_bpm,
-                            );
-                            self.send_content_cmd(ContentCommand::ExecuteOnContent(Box::new(cmd)));
-                        }
-                    }
-                    self.needs_rebuild = true;
-                }
-            }
-            TextInputField::Fps => {
-                if let Ok(fps) = text.parse::<f32>() {
-                    let fps = fps.clamp(1.0, 240.0);
-                    if let Some(project) = Some(&mut self.local_project) {
-                        let cmd = manifold_editing::commands::settings::ChangeFrameRateCommand::new(
-                            project.settings.frame_rate,
-                            fps,
-                        );
-                        {
-                            let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
-                                Box::new(cmd);
-                            boxed.execute(project);
-                            self.send_content_cmd(ContentCommand::Execute(boxed));
-                        }
-                    }
-                    // Content thread renders at project FPS; UI always runs at display rate.
-                    self.send_content_cmd(ContentCommand::SetFrameRate(fps as f64));
-                    self.needs_rebuild = true;
-                }
-            }
-            TextInputField::InspectorParam | TextInputField::EditorInspectorParam => {
-                if let Some(ctx) = self.text_input.inspector_param.take() {
-                    // Lenient parse: keep only the numeric head so a value typed
-                    // with a unit suffix (e.g. an angle "45°") still commits.
-                    let cleaned: String = text
-                        .trim()
-                        .chars()
-                        .take_while(|c| c.is_ascii_digit() || matches!(c, '.' | '-' | '+'))
-                        .collect();
-                    if let Ok(parsed) = cleaned.parse::<f32>() {
-                        // PARAM_RANGE_CONTRACT_DESIGN.md D3: `ctx.min`/`ctx.max` are
-                        // the param's display hint (default slider travel), not a
-                        // restriction — a typed value is free to exceed it, exactly
-                        // like a card remap or modulation. No clamp here.
-                        // Angle rows type degrees; convert back to the stored
-                        // radians at the same boundary the prefill converted at.
-                        let mut v = crate::text_input::degrees_commit_value(parsed, ctx.degrees);
-                        if ctx.whole_numbers {
-                            v = v.round();
-                        }
-                        // Mirror the slider drag as one undoable step by driving
-                        // the SAME scrub wire (P-I / D4, the D8 direct-set
-                        // shape): Begin captures the old base as the undo
-                        // baseline, Move sets the new value live, Commit builds
-                        // the one undo entry (old base → typed value).
-                        let content_tx = self.content_tx.as_ref().unwrap().clone();
-                        use manifold_ui::panels::{PanelAction, ScrubPhase, ScrubValue, ValueRef};
-                        for act in [
-                            PanelAction::Scrub(
-                                ValueRef::Param(ctx.target.clone(), ctx.param_id.clone()),
-                                ScrubPhase::Begin,
-                            ),
-                            PanelAction::Scrub(
-                                ValueRef::Param(ctx.target.clone(), ctx.param_id.clone()),
-                                ScrubPhase::Move(ScrubValue::Scalar(v)),
-                            ),
-                            PanelAction::Scrub(
-                                ValueRef::Param(ctx.target, ctx.param_id.clone()),
-                                ScrubPhase::Commit,
-                            ),
-                        ] {
-                            let mut dctx = crate::ui_bridge::DispatchCtx {
-                                project: &mut self.local_project,
-                                content_tx: &content_tx,
-                                content_state: &self.content_state,
-                                ui: &mut self.ws.ui_root,
-                                selection: &mut self.selection,
-                                active_layer: &mut self.active_layer_id,
-                                user_prefs: &mut self.user_prefs,
-                                editor_target: None,
-                                scrub: &mut self.scrub,
-                                dialogs: crate::file_dialogs::host(&self.window_registry, self.dialog_window_id, self.primary_window_id, self.current_project_path.as_deref()),
-                            };
-                            let _ = crate::ui_bridge::dispatch(&act, &mut dctx);
-                        }
-                        self.needs_rebuild = true;
-                    }
-                }
-            }
-            TextInputField::MaterialColour => {
-                if let Some(ctx) = self.text_input.material_colour.take()
-                    && let Some(values) = crate::text_input::parse_material_colour_hex(text)
-                {
-                    // Use the same phased RGB scrub as the swatch drag. Begin
-                    // captures the live baseline, Move previews all channels
-                    // atomically, and Commit records one undo command.
-                    let content_tx = self.content_tx.as_ref().unwrap().clone();
-                    for action in crate::text_input::material_colour_scrub_actions(ctx, values) {
-                        let mut dctx = crate::ui_bridge::DispatchCtx {
-                            project: &mut self.local_project,
-                            content_tx: &content_tx,
-                            content_state: &self.content_state,
-                            ui: &mut self.ws.ui_root,
-                            selection: &mut self.selection,
-                            active_layer: &mut self.active_layer_id,
-                            user_prefs: &mut self.user_prefs,
-                            editor_target: None,
-                            scrub: &mut self.scrub,
-                            dialogs: crate::file_dialogs::host(&self.window_registry, self.dialog_window_id, self.primary_window_id, self.current_project_path.as_deref()),
-                        };
-                        let _ = crate::ui_bridge::dispatch(&action, &mut dctx);
-                    }
-                    self.needs_rebuild = true;
-                }
-            }
-            TextInputField::SceneNumericParam(node_doc_id) => {
-                // SCENE_OBJECT_AND_PANEL_V2_DESIGN.md P4, D8/D10. Lenient
-                // parse (same convention as InspectorParam): keep only the
-                // numeric head so a value typed with a trailing unit (e.g.
-                // "45°") still commits. NO clamp — PARAM_RANGE_CONTRACT P1.
-                if let Some(ctx) = self.text_input.scene_numeric_param.take()
-                    && let Some(parsed) = crate::text_input::parse_lenient_numeric(text)
-                {
-                    // D10: the panel boundary is the ONLY place a
-                    // degrees-typed value converts to the radians the
-                    // graph stores.
-                    let value = crate::text_input::degrees_commit_value(parsed, ctx.degrees);
-                    let content_tx = self.content_tx.as_ref().unwrap().clone();
-                    use manifold_ui::panels::PanelAction;
-                    // ONE dispatch = ONE undo unit — the exact write the
-                    // dock's own drag/steppers already use
-                    // (`SceneSetupParamChanged`), so type-in is not a
-                    // second mutation path.
-                    let act = PanelAction::Project(ProjectAction::SceneSetupParamChanged(
-                        ctx.layer_id,
-                        ctx.scope_path,
-                        node_doc_id,
-                        ctx.param_id,
-                        value,
-                    ));
-                    let mut dctx = crate::ui_bridge::DispatchCtx {
-                        project: &mut self.local_project,
-                        content_tx: &content_tx,
-                        content_state: &self.content_state,
-                        ui: &mut self.ws.ui_root,
-                        selection: &mut self.selection,
-                        active_layer: &mut self.active_layer_id,
-                        user_prefs: &mut self.user_prefs,
-                        editor_target: None,
-                        scrub: &mut self.scrub,
-                        dialogs: crate::file_dialogs::host(&self.window_registry, self.dialog_window_id, self.primary_window_id, self.current_project_path.as_deref()),
-                    };
-                    let _ = crate::ui_bridge::dispatch(&act, &mut dctx);
-                    self.needs_rebuild = true;
-                }
-            }
-            TextInputField::AudioSendGainParam => {
-                // P4 audio-dock sibling — same lenient-parse, no-clamp,
-                // one-dispatch shape as `SceneNumericParam` above.
-                if let Some(ctx) = self.text_input.audio_send_gain_param.take()
-                    && let Some(parsed) = crate::text_input::parse_lenient_numeric(text)
-                {
-                    let content_tx = self.content_tx.as_ref().unwrap().clone();
-                    use manifold_ui::panels::PanelAction;
-                    let act = PanelAction::AudioSetup(AudioSetupAction::AudioSendGainSetTyped(ctx.send_id, parsed));
-                    let mut dctx = crate::ui_bridge::DispatchCtx {
-                        project: &mut self.local_project,
-                        content_tx: &content_tx,
-                        content_state: &self.content_state,
-                        ui: &mut self.ws.ui_root,
-                        selection: &mut self.selection,
-                        active_layer: &mut self.active_layer_id,
-                        user_prefs: &mut self.user_prefs,
-                        editor_target: None,
-                        scrub: &mut self.scrub,
-                        dialogs: crate::file_dialogs::host(&self.window_registry, self.dialog_window_id, self.primary_window_id, self.current_project_path.as_deref()),
-                    };
-                    let _ = crate::ui_bridge::dispatch(&act, &mut dctx);
-                    self.needs_rebuild = true;
-                }
-            }
             TextInputField::AutomationPointValue | TextInputField::AutomationPointTime => {
                 crate::app::automation_point_input::commit(self, field, text);
-            }
-            TextInputField::DriverFreePeriod => {
-                if let Some(ctx) = self.text_input.driver_free_period.take() {
-                    // Lenient parse: keep the numeric head (so "3 b" still works).
-                    let cleaned: String = text
-                        .trim()
-                        .chars()
-                        .take_while(|c| c.is_ascii_digit() || matches!(c, '.' | '-' | '+'))
-                        .collect();
-                    // Only a positive period is meaningful; a zero/garbage entry
-                    // leaves the driver in its prior mode (no command issued).
-                    if let Ok(parsed) = cleaned.parse::<f32>()
-                        && parsed > 0.0
-                    {
-                        let content_tx = self.content_tx.as_ref().unwrap().clone();
-                        use manifold_ui::panels::{DriverConfigAction, PanelAction};
-                        let act = PanelAction::Modulation(ModulationAction::DriverConfig(
-                            ctx.target,
-                            ctx.param_id.clone(),
-                            DriverConfigAction::SetFreePeriod(parsed),
-                        ));
-                        let mut dctx = crate::ui_bridge::DispatchCtx {
-                            project: &mut self.local_project,
-                            content_tx: &content_tx,
-                            content_state: &self.content_state,
-                            ui: &mut self.ws.ui_root,
-                            selection: &mut self.selection,
-                            active_layer: &mut self.active_layer_id,
-                            user_prefs: &mut self.user_prefs,
-                            editor_target: None,
-                            scrub: &mut self.scrub,
-                            dialogs: crate::file_dialogs::host(&self.window_registry, self.dialog_window_id, self.primary_window_id, self.current_project_path.as_deref()),
-                        };
-                        let _ = crate::ui_bridge::dispatch(&act, &mut dctx);
-                        self.needs_rebuild = true;
-                    }
-                }
-            }
-            TextInputField::LayerName => {
-                // Resolved by id, not a baked-in index (BUG-031): a layer-list
-                // change between the double-click and this commit can't rename
-                // the wrong row.
-                if let Some(layer_id) = self.text_input.layer_id.take()
-                    && let Some((_, layer)) =
-                        self.local_project.timeline.find_layer_by_id(layer_id.as_str())
-                {
-                    let old_name = layer.name.clone();
-                    let new_name = text.to_string();
-                    if old_name != new_name {
-                        let cmd = manifold_editing::commands::layer::RenameLayerCommand::new(
-                            layer_id, old_name, new_name,
-                        );
-                        let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
-                            Box::new(cmd);
-                        boxed.execute(&mut self.local_project);
-                        self.send_content_cmd(ContentCommand::Execute(boxed));
-                    }
-                }
-                self.needs_rebuild = true;
-            }
-            TextInputField::ClipBpm => {
-                // Unity: ClipInspector.OnBitmapBpmCommit
-                // "auto" or empty → 0 (use project BPM), otherwise parse + clamp [20, 300]
-                let trimmed = text.trim();
-                let new_bpm = if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("auto") {
-                    0.0
-                } else if let Ok(v) = trimmed.parse::<f32>() {
-                    if v > 0.0 { v.clamp(20.0, 300.0) } else { 0.0 }
-                } else {
-                    return; // parse failed — silent no-op (matches Unity)
-                };
-                if let Some(clip_id) = &self.selection.primary_selected_clip_id {
-                    let clip_id = clip_id.clone();
-                    if let Some(project) = Some(&mut self.local_project) {
-                        let old_bpm = project
-                            .timeline
-                            .find_clip_by_id(&clip_id)
-                            .map(|c| c.recorded_bpm)
-                            .unwrap_or(0.0);
-                        let enabling = new_bpm > 0.0 && project.timeline.find_clip_by_id(&clip_id)
-                            .is_some_and(|clip| clip.is_audio() && (!clip.is_audio_warp_enabled() || clip.audio_bpm_automatic));
-                        if (old_bpm - new_bpm).abs() >= 0.01 || enabling {
-                            let cmd =
-                                manifold_editing::commands::clip::ChangeClipRecordedBpmCommand::new(
-                                    clip_id, old_bpm, new_bpm,
-                                );
-                            self.send_content_cmd(ContentCommand::ExecuteOnContent(Box::new(cmd)));
-                        }
-                    }
-                }
-                self.needs_rebuild = true;
-            }
-            TextInputField::MacroLabel(idx) => {
-                let new_label = text.trim().to_string();
-                if let Some(slot) = self.local_project.settings.macro_bank.slots.get(idx) {
-                    let old_label = slot.label.clone();
-                    if old_label != new_label {
-                        let cmd =
-                            manifold_editing::commands::settings::RenameMacroLabelCommand::new(
-                                idx, old_label, new_label,
-                            );
-                        let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
-                            Box::new(cmd);
-                        boxed.execute(&mut self.local_project);
-                        self.send_content_cmd(ContentCommand::Execute(boxed));
-                    }
-                }
-                self.needs_rebuild = true;
-            }
-            TextInputField::EffectParam(effect_idx, param_idx) => {
-                if let Ok(parsed) = text.parse::<f32>() {
-                    let tab = self.ws.ui_root.inspector.last_effect_tab();
-                    // Resolve effect instance and read its param (by card
-                    // index) ONCE from the live manifest — both the clamp
-                    // range and the stable id come off the same lookup, no
-                    // registry consultation (P5 registry containment).
-                    let effect_info = match tab {
-                        manifold_ui::InspectorTab::Master => self
-                            .local_project
-                            .settings
-                            .master_effects
-                            .get(effect_idx)
-                            .map(|fx| {
-                                let param = fx.params.iter().nth(param_idx);
-                                let old = param
-                                    .map(|p| if fx.base_tracked { p.base } else { p.value })
-                                    .unwrap_or(0.0);
-                                // PARAM_RANGE_CONTRACT_DESIGN.md D3: `p.spec.min`/`max`
-                                // are a display hint, not a restriction — a typed
-                                // value is free to exceed it. No clamp here.
-                                let new_val = parsed;
-                                let param_id = param.map(|p| p.id().to_string());
-                                (fx.id.clone(), old, new_val, param_id)
-                            }),
-                        manifold_ui::InspectorTab::Layer | manifold_ui::InspectorTab::Group => self
-                            .active_layer_id
-                            .as_ref()
-                            .and_then(|id| self.local_project.timeline.find_layer_by_id(id))
-                            .and_then(|(_, l)| l.effects.as_ref())
-                            .and_then(|e| e.get(effect_idx))
-                            .map(|fx| {
-                                let param = fx.params.iter().nth(param_idx);
-                                let old = param
-                                    .map(|p| if fx.base_tracked { p.base } else { p.value })
-                                    .unwrap_or(0.0);
-                                // PARAM_RANGE_CONTRACT_DESIGN.md D3: `p.spec.min`/`max`
-                                // are a display hint, not a restriction — a typed
-                                // value is free to exceed it. No clamp here.
-                                let new_val = parsed;
-                                let param_id = param.map(|p| p.id().to_string());
-                                (fx.id.clone(), old, new_val, param_id)
-                            }),
-                        manifold_ui::InspectorTab::Clip => self
-                            .selection
-                            .primary_selected_clip_id
-                            .as_ref()
-                            .and_then(|cid| self.local_project.timeline.find_clip_by_id(cid))
-                            .and_then(|c| c.effects.get(effect_idx))
-                            .map(|fx| {
-                                let param = fx.params.iter().nth(param_idx);
-                                let old = param
-                                    .map(|p| if fx.base_tracked { p.base } else { p.value })
-                                    .unwrap_or(0.0);
-                                // PARAM_RANGE_CONTRACT_DESIGN.md D3: `p.spec.min`/`max`
-                                // are a display hint, not a restriction — a typed
-                                // value is free to exceed it. No clamp here.
-                                let new_val = parsed;
-                                let param_id = param.map(|p| p.id().to_string());
-                                (fx.id.clone(), old, new_val, param_id)
-                            }),
-                    };
-                    if let Some((effect_id, old_val, new_val, param_id)) = effect_info
-                        && (old_val - new_val).abs() > f32::EPSILON
-                        && let Some(param_id) = param_id
-                    {
-                        let cmd =
-                            manifold_editing::commands::effects::ChangeGraphParamCommand::new(
-                                manifold_core::GraphTarget::Effect(effect_id),
-                                param_id,
-                                old_val,
-                                new_val,
-                            );
-                        let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
-                            Box::new(cmd);
-                        boxed.execute(&mut self.local_project);
-                        self.send_content_cmd(ContentCommand::Execute(boxed));
-                    }
-                }
-                self.needs_rebuild = true;
-            }
-            TextInputField::GenParam(param_idx) => {
-                if let Ok(parsed) = text.parse::<f32>()
-                    && let Some(layer_idx) = self
-                        .active_layer_id
-                        .as_ref()
-                        .and_then(|id| self.local_project.timeline.find_layer_index_by_id(id))
-                    && let Some(layer) = self.local_project.timeline.layers.get(layer_idx)
-                    && let Some(gp) = layer.gen_params()
-                {
-                    // Read the param (by card index) ONCE from the live
-                    // manifest — both the clamp range and the stable id
-                    // come off the same lookup, no registry consultation
-                    // (P5 registry containment).
-                    let param = gp.params.iter().nth(param_idx);
-                    let old_val = param
-                        .map(|p| if gp.base_tracked { p.base } else { p.value })
-                        .unwrap_or(0.0);
-                    // PARAM_RANGE_CONTRACT_DESIGN.md D3: `p.spec.min`/`max` are a
-                    // display hint, not a restriction — a typed value is free to
-                    // exceed it. No clamp here.
-                    let new_val = parsed;
-                    let param_id = param.map(|p| p.id().to_string());
-                    if (old_val - new_val).abs() > f32::EPSILON
-                        && let Some(param_id) = param_id
-                    {
-                        let lid = layer.layer_id.clone();
-                        let cmd =
-                            manifold_editing::commands::effects::ChangeGraphParamCommand::new(
-                                manifold_core::GraphTarget::Generator(lid),
-                                param_id,
-                                old_val,
-                                new_val,
-                            );
-                        let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
-                            Box::new(cmd);
-                        boxed.execute(&mut self.local_project);
-                        self.send_content_cmd(ContentCommand::Execute(boxed));
-                    }
-                }
-                self.needs_rebuild = true;
-            }
-            TextInputField::GenStringParam(sp_idx) => {
-                // Commit a generator string param change (e.g. text content).
-                // Look up the string_param_def key from the active layer's generator def,
-                // then find the active clip to get the old value.
-                if let Some(layer_idx) = self
-                    .active_layer_id
-                    .as_ref()
-                    .and_then(|id| self.local_project.timeline.find_layer_index_by_id(id))
-                    && let Some(layer) = self.local_project.timeline.layers.get(layer_idx)
-                {
-                    let gen_type = layer.generator_type();
-                    if let Some(def) =
-                        manifold_core::preset_definition_registry::try_get(gen_type)
-                        && let Some(sp_def) = def.string_param_defs.get(sp_idx)
-                    {
-                        let key = sp_def.key.to_string();
-                        let new_value: Option<String> = if text.is_empty() {
-                            None
-                        } else {
-                            Some(text.to_string())
-                        };
-
-                        // Find clip: selected clip on this layer, or first clip
-                        let clip = self
-                            .selection
-                            .primary_selected_clip_id
-                            .as_ref()
-                            .and_then(|sel_id| layer.clips.iter().find(|c| c.id == *sel_id))
-                            .or_else(|| layer.clips.first());
-                        let (clip_id, old_value) = clip
-                            .map(|c| {
-                                let old =
-                                    c.string_params.as_ref().and_then(|m| m.get(&key)).cloned();
-                                (c.id.clone(), old)
-                            })
-                            .unwrap_or_default();
-
-                        if old_value != new_value {
-                            let cmd =
-                                manifold_editing::commands::clip::SetClipStringParamCommand::new(
-                                    clip_id, key, old_value, new_value,
-                                );
-                            let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
-                                Box::new(cmd);
-                            boxed.execute(&mut self.local_project);
-                            self.send_content_cmd(ContentCommand::Execute(boxed));
-                        }
-                    }
-                }
-                self.needs_rebuild = true;
-            }
-            TextInputField::GroupRename(group_idx) => {
-                let new_name = text.trim().to_string();
-                if !new_name.is_empty() {
-                    let tab = self.ws.ui_root.inspector.last_effect_tab();
-                    // Find the group by index
-                    let group_info = match tab {
-                        manifold_ui::InspectorTab::Master => self
-                            .local_project
-                            .settings
-                            .master_effect_groups
-                            .as_ref()
-                            .and_then(|groups| groups.get(group_idx))
-                            .map(|g| (g.id.clone(), g.name.clone())),
-                        manifold_ui::InspectorTab::Layer | manifold_ui::InspectorTab::Group => self
-                            .active_layer_id
-                            .as_ref()
-                            .and_then(|id| self.local_project.timeline.find_layer_by_id(id))
-                            .and_then(|(_, l)| l.effect_groups.as_ref())
-                            .and_then(|g| g.get(group_idx))
-                            .map(|g| (g.id.clone(), g.name.clone())),
-                        manifold_ui::InspectorTab::Clip => self
-                            .selection
-                            .primary_selected_clip_id
-                            .as_ref()
-                            .and_then(|cid| self.local_project.timeline.find_clip_by_id(cid))
-                            .and_then(|c| c.effect_groups.as_ref())
-                            .and_then(|g| g.get(group_idx))
-                            .map(|g| (g.id.clone(), g.name.clone())),
-                    };
-                    if let Some((group_id, old_name)) = group_info
-                        && old_name != new_name
-                    {
-                        let target = match tab {
-                            manifold_ui::InspectorTab::Master => {
-                                manifold_editing::commands::effect_target::EffectTarget::Master
-                            }
-                            manifold_ui::InspectorTab::Layer
-                            | manifold_ui::InspectorTab::Group
-                            | manifold_ui::InspectorTab::Clip => {
-                                let layer_id = self.active_layer_id.clone().unwrap_or_default();
-                                manifold_editing::commands::effect_target::EffectTarget::Layer {
-                                    layer_id,
-                                }
-                            }
-                        };
-                        let cmd =
-                            manifold_editing::commands::effect_groups::RenameGroupCommand::new(
-                                target, group_id, old_name, new_name,
-                            );
-                        let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
-                            Box::new(cmd);
-                        boxed.execute(&mut self.local_project);
-                        self.send_content_cmd(ContentCommand::Execute(boxed));
-                    }
-                }
-                self.needs_rebuild = true;
-            }
-            TextInputField::SearchFilter => {
-                // Update browser popup filter — no undo command
-                self.ws
-                    .ui_root
-                    .browser_popup
-                    .set_filter(text.trim().to_string());
-                self.needs_rebuild = true;
-            }
-            TextInputField::MarkerName => {
-                if let Some(marker_id) = self.text_input.marker_id.take() {
-                    let new_name = text.to_string();
-                    let old_name = self
-                        .local_project
-                        .timeline
-                        .find_marker(&marker_id)
-                        .map(|m| m.name.clone())
-                        .unwrap_or_default();
-                    if old_name != new_name {
-                        let cmd = manifold_editing::commands::marker::RenameMarkerCommand::new(
-                            marker_id, old_name, new_name,
-                        );
-                        let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
-                            Box::new(cmd);
-                        boxed.execute(&mut self.local_project);
-                        self.send_content_cmd(ContentCommand::Execute(boxed));
-                    }
-                }
-                self.needs_rebuild = true;
-            }
-            TextInputField::AudioSendLabel => {
-                if let Some(send_id) = self.text_input.audio_send_id.take() {
-                    let new_label = text.trim().to_string();
-                    let old_label = self
-                        .local_project
-                        .audio_setup
-                        .find_send(&send_id)
-                        .map(|s| s.label.clone())
-                        .unwrap_or_default();
-                    if !new_label.is_empty() && old_label != new_label {
-                        let cmd =
-                            manifold_editing::commands::audio_setup::RenameAudioSendCommand::new(
-                                send_id, old_label, new_label,
-                            );
-                        let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
-                            Box::new(cmd);
-                        boxed.execute(&mut self.local_project);
-                        self.send_content_cmd(ContentCommand::Execute(boxed));
-                    }
-                }
-                self.needs_rebuild = true;
             }
             // ── Graph-editor fields ──────────────────────────────────────
             // The graph canvas renders from `content_state.active_graph_snapshot`
@@ -1578,65 +1018,6 @@ impl Application {
                         default,
                     );
                     self.send_content_cmd(ContentCommand::Execute(Box::new(cmd)));
-                }
-            }
-            // ── Scene Setup panel (SCENE_SETUP_PANEL_DESIGN.md P2) ───────
-            // The panel addresses the layer directly (no graph editor needs
-            // to be open — it's a fourth surface, not a canvas view), so this
-            // resolves its own catalog default via `generator_catalog_default`
-            // instead of `watched_graph_target`/`watched_catalog_default`.
-            TextInputField::SceneObjectRename(object_node_id) => {
-                // SCENE_OBJECT_AND_PANEL_V2_DESIGN.md D6/P3: dispatches
-                // RenameSceneObjectCommand now, not RenameGroupCommand — it
-                // extends the same walk (group handle + card-section sweep)
-                // but ALSO keeps the object's own `node.scene_object` handle
-                // in sync (D6's single-writer-of-both posture) and degrades
-                // cleanly for an ungrouped hand-built object. The panel
-                // supplies `object_node_id` unconditionally: imported
-                // compounds already use their group id, while Water and
-                // other family rows use the scene object's own id.
-                let new_handle = text.trim().to_string();
-                if !new_handle.is_empty()
-                    && let Some(layer_id) = self.text_input.scene_object_layer_id.take()
-                {
-                    if let Some(default) =
-                        crate::ui_bridge::generator_catalog_default(&self.local_project, &layer_id)
-                    {
-                        let target = manifold_core::GraphTarget::Generator(layer_id);
-                        let cmd = manifold_editing::commands::graph::RenameSceneObjectCommand::new(
-                            target,
-                            Vec::new(),
-                            object_node_id,
-                            new_handle,
-                            default,
-                        );
-                        self.send_content_cmd(ContentCommand::ExecuteOnContent(Box::new(cmd)));
-                    }
-                    self.needs_rebuild = true;
-                }
-            }
-            TextInputField::SceneLightRename(light_node_id) => {
-                // SCENE_OBJECT_AND_PANEL_V2_DESIGN.md D6/P5: a light's name
-                // is a plain `SetNodeHandleCommand` write — no group sweep
-                // (a light is never wrapped in a group, unlike an object).
-                let new_handle = text.trim().to_string();
-                if !new_handle.is_empty()
-                    && let Some(layer_id) = self.text_input.scene_object_layer_id.take()
-                {
-                    if let Some(default) =
-                        crate::ui_bridge::generator_catalog_default(&self.local_project, &layer_id)
-                    {
-                        let target = manifold_core::GraphTarget::Generator(layer_id);
-                        let cmd = manifold_editing::commands::graph::SetNodeHandleCommand::new(
-                            target,
-                            Vec::new(),
-                            light_node_id,
-                            new_handle,
-                            default,
-                        );
-                        self.send_content_cmd(ContentCommand::ExecuteOnContent(Box::new(cmd)));
-                    }
-                    self.needs_rebuild = true;
                 }
             }
             TextInputField::GraphStringParam(node_id) => {
@@ -1727,7 +1108,7 @@ impl Application {
                                 let content_tx = self.content_tx.as_ref().unwrap();
                                 let editor_target = self.watched_graph_target.as_ref();
                                 let mut dctx = crate::ui_bridge::DispatchCtx {
-                                    project: &mut self.local_project,
+                                    project: crate::ui_bridge::ProjectRef::new(&mut self.local_project, &mut self.ui_edits, content_tx),
                                     content_tx,
                                     content_state: &self.content_state,
                                     ui: &mut self.ws.ui_root,
@@ -1761,7 +1142,6 @@ impl Application {
                             .with_scope(scope);
                             self.send_content_cmd(ContentCommand::Execute(Box::new(cmd)));
                         }
-                        self.needs_rebuild = true;
                     }
                 }
             }
@@ -1861,55 +1241,13 @@ impl Application {
                                     manifold_editing::commands::preset::SaveToProjectCommand::new(
                                         ctx.kind, def,
                                     );
-                                let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
-                                    Box::new(cmd);
-                                boxed.execute(&mut self.local_project);
-                                self.send_content_cmd(ContentCommand::Execute(boxed));
+                                self.execute_local(Box::new(cmd));
                             }
                         }
                     }
                 }
-                self.needs_rebuild = true;
             }
-            TextInputField::RenamePreset => {
-                // Browser management-menu Rename commit (PRESET_LIBRARY_DESIGN
-                // P5, D6). MyLibrary is a plain file rewrite (no undo, matches
-                // `UserLibrary::rename`'s existing non-undoable precedent —
-                // Push to Library is the same shape); Project routes through
-                // the undoable `RenameEmbeddedPresetCommand`, same
-                // execute-locally-then-send-to-content-thread pattern as
-                // `SavePresetName`'s Project-destination arm above.
-                if let Some(ctx) = self.text_input.rename_preset.take() {
-                    let typed = text.trim();
-                    if typed.is_empty() {
-                        log::warn!("[preset] Rename cancelled: empty name");
-                    } else {
-                        use manifold_ui::panels::picker_core::Source;
-                        match ctx.source {
-                            Source::MyLibrary => {
-                                let lib = crate::user_library::UserLibrary::new();
-                                if let Err(e) = lib.rename(ctx.kind, &ctx.id, typed) {
-                                    log::error!("[preset] rename failed: {e}");
-                                }
-                            }
-                            Source::Project => {
-                                let cmd = manifold_editing::commands::preset::RenameEmbeddedPresetCommand::new(
-                                    ctx.id,
-                                    typed.to_string(),
-                                );
-                                let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
-                                    Box::new(cmd);
-                                boxed.execute(&mut self.local_project);
-                                self.send_content_cmd(ContentCommand::Execute(boxed));
-                            }
-                            Source::Factory => {
-                                log::error!("[preset] rename requested for a Factory id — unreachable");
-                            }
-                        }
-                    }
-                }
-                self.needs_rebuild = true;
-            }
+            _ => {}
         }
     }
 
@@ -2340,7 +1678,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         // Compositor output is shared via IOSurface — zero copy, GPU-to-GPU.
         {
             let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded::<ContentCommand>();
-            let (state_tx, state_rx) = crossbeam_channel::unbounded::<ContentState>();
+            let (state_tx, state_rx) = crate::content_state::state_channel();
 
             // Content thread uses its own native Metal device from manifold-gpu.
 
@@ -2603,6 +1941,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 cached_midi_clock_device: Arc::from(""),
                 cached_perc_message: Arc::from(""),
                 last_sent_midi_device_names: Arc::from([]),
+                last_sent_ableton_session: None,
                 reactions: Default::default(),
                 pending_undo_redo_event: None,
                 graph_edit_diagnostic: None,
@@ -2649,7 +1988,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         // Build UI at initial window size (logical pixels)
         let logical_w = size.width as f32 / scale as f32;
         let logical_h = size.height as f32 / scale as f32;
-        self.ws.ui_root.resize(logical_w, logical_h);
+        self.ws.ui_root.set_screen_size(logical_w, logical_h);
         #[cfg(target_os = "macos")]
         self.sync_workspace_preview_size();
 
@@ -2672,6 +2011,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             &self.content_state.automation_latched_params,
             self.content_state.led_preview.as_ref(),
         );
+        crate::ui_bridge::sync_audio_dock(&mut self.ws.ui_root, &self.local_project);
 
         // `--resume` boot fast path (GIG_RESILIENCE_DESIGN section 5.2): content
         // thread + GPU are up, so this is the earliest point that can load a
@@ -2772,7 +2112,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                         }
                         let logical_w = size.width as f32 / scale as f32;
                         let logical_h = size.height as f32 / scale as f32;
-                        self.ws.ui_root.resize(logical_w, logical_h);
+                        self.ws.ui_root.set_screen_size(logical_w, logical_h);
                     } else {
                         // Output window resized — update drawable.
                         self.send_content_cmd(ContentCommand::ResizeOutputSurface(
@@ -2799,7 +2139,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                         }
                         let logical_w = size.width as f32 / scale_factor as f32;
                         let logical_h = size.height as f32 / scale_factor as f32;
-                        self.ws.ui_root.resize(logical_w, logical_h);
+                        self.ws.ui_root.set_screen_size(logical_w, logical_h);
                         self.scale_factor = scale_factor;
                     }
                 }
@@ -2867,13 +2207,13 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                             self.ws.ui_root.end_inspector_resize();
                         }
                     }
-                    // Clear clip hover so bitmap doesn't stay painted in hover state
+                    // Clear clip hover so the clip pass stops drawing it
                     if self.selection.hovered_clip_id.is_some() {
                         self.selection.hovered_clip_id = None;
-                        self.scroll_dirty.visual = true;
+                        self.ws.offscreen_dirty = true;
                     }
                     if self.selection.automation_feedback.take().is_some() {
-                        self.scroll_dirty.visual = true;
+                        self.ws.offscreen_dirty = true;
                     }
                     // Keep the frame/present hover pass from re-deriving an
                     // automation affordance at the last in-window point.
@@ -2901,10 +2241,10 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                     if self.ws.ui_root.inspector_resize_dragging {
                         self.ws.ui_root.end_inspector_resize();
                     }
-                    // Clear clip hover so bitmap doesn't stay painted in hover state
+                    // Clear clip hover so the clip pass stops drawing it
                     if self.selection.hovered_clip_id.is_some() {
                         self.selection.hovered_clip_id = None;
-                        self.scroll_dirty.visual = true;
+                        self.ws.offscreen_dirty = true;
                     }
                 }
             }
@@ -3303,6 +2643,9 @@ impl Application {
             label: "UI Offscreen",
             mip_levels: 1,
         }));
+        // A new target holds nothing: the perform HUD, which keeps the frame
+        // it last drew while its inputs hold still, must draw again.
+        self.perform.shown = None;
     }
 
     /// (Re)create the graph editor's offscreen render target. Mirrors
@@ -3326,5 +2669,8 @@ impl Application {
             label: "Graph Editor Offscreen",
             mip_levels: 1,
         }));
+        // A new target holds nothing; the next pulse composites it whole.
+        ws.editor_frame.last_composite = None;
+        ws.offscreen_dirty = true;
     }
 }

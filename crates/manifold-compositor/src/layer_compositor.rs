@@ -597,6 +597,8 @@ pub struct LayerCompositor {
     led_group_bufs: AHashMap<LayerId, PingPong>,
     /// Per-LED-group-buf last-used frame counter for time-based pruning.
     led_group_buf_last_used_frame: AHashMap<LayerId, u64>,
+    /// `trim_excess_buffers`' set of this frame's layers, empty between frames.
+    alive_layers_scratch: ahash::AHashSet<LayerId>,
     /// Per-group LED effect chains, keyed by the group container's
     /// `LayerId`. Distinct field from `group_effect_chains` so
     /// temporal state on the LED path doesn't bleed into the screen
@@ -759,6 +761,7 @@ impl LayerCompositor {
             led_master_ec: None,
             led_group_bufs: AHashMap::default(),
             led_group_buf_last_used_frame: AHashMap::default(),
+            alive_layers_scratch: ahash::AHashSet::default(),
             led_group_effect_chains: AHashMap::default(),
             led_group_chain_last_used_frame: AHashMap::default(),
             led_black_tex: None,
@@ -1803,10 +1806,11 @@ impl LayerCompositor {
         // Build a set of LayerIds present in the project this frame.
         // Group layers are also `CompositeLayerDescriptor`s, so this set
         // covers both per-layer and per-group pool keys uniformly.
-        let mut alive: ahash::AHashSet<&LayerId> =
-            ahash::AHashSet::with_capacity(current_layers.len());
+        // Retained across frames so a steady frame allocates nothing.
+        let mut alive = std::mem::take(&mut self.alive_layers_scratch);
+        alive.clear();
         for l in current_layers {
-            alive.insert(l.layer_id);
+            alive.insert(l.layer_id.clone());
         }
 
         let now = self.frame_counter;
@@ -1846,6 +1850,8 @@ impl LayerCompositor {
             &mut self.led_group_bufs,
             &mut self.led_group_buf_last_used_frame,
         );
+        alive.clear();
+        self.alive_layers_scratch = alive;
     }
     }
 
@@ -1855,14 +1861,14 @@ impl LayerCompositor {
     /// The stale list `Vec` allocates zero bytes when nothing is stale.
     fn prune_pool<V>(
         now: u64,
-        alive: &ahash::AHashSet<&LayerId>,
+        alive: &ahash::AHashSet<LayerId>,
         pool: &mut AHashMap<LayerId, V>,
         last_used: &mut AHashMap<LayerId, u64>,
     ) {
         let stale: Vec<LayerId> = last_used
             .iter()
             .filter(|(id, last)| {
-                !alive.contains(id) || now.saturating_sub(**last) > CHAIN_GRACE_FRAMES
+                !alive.contains(*id) || now.saturating_sub(**last) > CHAIN_GRACE_FRAMES
             })
             .map(|(id, _)| id.clone())
             .collect();

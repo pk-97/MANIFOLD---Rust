@@ -24,7 +24,6 @@
 //! `offscreen_dirty` marking (the editor has no idle repaint loop) are preserved
 //! exactly — losing either would mis-hit-test or freeze the editor.
 
-use manifold_ui::{ParamsAction, ProjectAction};
 use winit::dpi::{PhysicalPosition, PhysicalSize};
 use winit::event::{ElementState, MouseButton, MouseScrollDelta};
 use winit::keyboard::{Key, NamedKey};
@@ -45,15 +44,6 @@ use crate::window_registry::WindowRole;
 /// every scroll consumer — primary timeline scroll, the open-dropdown scroll,
 /// and the editor's cursor-anchored zoom — so a notch means the same everywhere.
 pub(crate) const LINE_DELTA_PX: f32 = 20.0;
-
-/// A graph-editor UI press remains owned by the editor tree after the cursor
-/// crosses into the canvas. The hit region only chooses the owner on press;
-/// once a widget is pressed, the tree must keep receiving the threshold move
-/// and terminal release from anywhere in the window.
-#[inline]
-fn editor_ui_pointer_owned(in_panel: bool, pressed_widget: bool) -> bool {
-    in_panel || pressed_widget
-}
 
 /// Normalize a winit scroll delta to logical pixels `(dx, dy)`.
 ///
@@ -95,7 +85,6 @@ impl Application {
     pub(crate) fn input_modifiers(&mut self, modifiers: manifold_ui::input::Modifiers) {
         self.modifiers = modifiers;
         self.overlay.set_modifiers(modifiers);
-        self.needs_rebuild = true;
         self.ws.ui_root.input.set_modifiers(modifiers);
     }
     /// Physical→logical cursor position using `window_id`'s scale factor. The
@@ -141,112 +130,51 @@ impl Application {
     }
 
     // ── Text-edit session pointer routing (UI_WIDGET_UNIFICATION P5b/D16) ──
-    // A single `TextInputState` is shared by both windows (`begin_owned`
-    // tags which one), so one gate here covers both — mirrors the keyboard
-    // gate's shape (`self.text_input.active`) rather than duplicating a
-    // second one per window.
+    // One `TextInputState` serves both windows, so one gate covers both. The
+    // main tree measures for both (every tree carries an identical
+    // `CachedTextMeasure`); nothing measures before a renderer exists. The
+    // mechanics are the shared seam in `text_session.rs`.
 
-    /// Runs `f` on the text session with the main tree's measurer. Every
-    /// window's tree carries an identical `CachedTextMeasure`, so pointer and
-    /// arrow mapping match what the overlay draws. `None` before a renderer
-    /// exists (a session can't be visible then).
-    pub(crate) fn with_text_measure<R>(
-        &mut self,
-        f: impl FnOnce(&mut crate::text_input::TextInputState, &mut dyn FnMut(&str) -> f32) -> R,
-    ) -> Option<R> {
-        self.ui_renderer.as_ref()?;
-        let fs = self.text_input.font_size as u16;
-        let tree = &self.ws.ui_root.tree;
-        Some(f(&mut self.text_input, &mut |s| {
-            tree.text_width(s, fs, manifold_ui::FontWeight::Medium)
-        }))
-    }
-
-    /// Arrow keys in a text session, both windows. Left/Right step a char
-    /// (Option: a word); Cmd+Left/Right go to the visual line's start/end;
-    /// Up/Down move a visual line; Cmd+Up/Down go to the text's start/end.
-    /// Shift extends the selection throughout.
+    /// Arrow keys in a text session, both windows.
     pub(crate) fn text_input_arrow(&mut self, key: winit::keyboard::NamedKey) {
+        use crate::text_session::Arrow;
         use winit::keyboard::NamedKey;
-        let (select, word, cmd) = (self.modifiers.shift, self.modifiers.alt, self.modifiers.command);
-        match (key, cmd) {
-            (NamedKey::ArrowLeft, false) => self.text_input.move_left(select, word),
-            (NamedKey::ArrowRight, false) => self.text_input.move_right(select, word),
-            (NamedKey::ArrowUp, true) => self.text_input.move_home(select),
-            (NamedKey::ArrowDown, true) => self.text_input.move_end(select),
-            (NamedKey::ArrowLeft | NamedKey::ArrowRight, true) => {
-                let end = key == NamedKey::ArrowRight;
-                self.with_text_measure(|ti, m| ti.move_line_edge(end, select, m));
-            }
-            (NamedKey::ArrowUp | NamedKey::ArrowDown, false) => {
-                let down = key == NamedKey::ArrowDown;
-                self.with_text_measure(|ti, m| ti.move_vertical(down, select, m));
-            }
-            _ => {}
-        }
+        let arrow = match key {
+            NamedKey::ArrowLeft => Arrow::Left,
+            NamedKey::ArrowRight => Arrow::Right,
+            NamedKey::ArrowUp => Arrow::Up,
+            NamedKey::ArrowDown => Arrow::Down,
+            _ => return,
+        };
+        let tree = self.ui_renderer.as_ref().map(|_| &self.ws.ui_root.tree);
+        crate::text_session::arrow(&mut self.text_input, tree, arrow, self.modifiers);
     }
 
-    /// Byte offset under `pos`, mapped through the overlay's shared layout.
-    fn text_input_byte_at(&mut self, pos: Vec2) -> usize {
-        let len = self.text_input.text().len();
-        self.with_text_measure(|ti, m| ti.byte_at_point(pos.x, pos.y, m))
-            .unwrap_or(len)
-    }
-
-    /// A left-press anywhere while a text session is active. Inside the
-    /// field: places the caret (shift-click extends; a second press within
-    /// the double-click window/radius, I8, selects the word) and starts a
-    /// drag session — returns `true` (consumed, no further dispatch).
-    /// Outside the field: commits the session first (D16 blur-commit), then
-    /// returns `false` so the ORIGINAL press still reaches its normal
-    /// target — a click that both closes a rename box and clicks whatever
-    /// is under it.
+    /// A left press while a session may be up. True when the field consumed
+    /// it; a press outside commits first and returns false, so it still
+    /// reaches its normal target.
     pub(crate) fn text_input_pointer_down(&mut self, pos: Vec2) -> bool {
-        if !self.text_input.active {
-            return false;
+        use crate::text_session::PointerDown;
+        let tree = self.ui_renderer.as_ref().map(|_| &self.ws.ui_root.tree);
+        match crate::text_session::pointer_down(&mut self.text_input, tree, pos, self.time_since_start, self.modifiers.shift) {
+            PointerDown::Idle => false,
+            PointerDown::Inside => true,
+            PointerDown::Committed(field, text) => {
+                self.handle_text_input_commit(field, &text);
+                false
+            }
         }
-        let inside = self
-            .with_text_measure(|ti, m| ti.overlay_geometry(&mut Vec::new(), m).contains(pos.x, pos.y))
-            .unwrap_or(false);
-        if !inside {
-            let (field, text) = self.text_input.commit();
-            self.handle_text_input_commit(field, &text);
-            return false;
-        }
-        let byte = self.text_input_byte_at(pos);
-        let now = self.time_since_start;
-        let is_double_click = self.text_input.last_press.is_some_and(|(t, px, py)| {
-            (now - t) < manifold_ui::color::DOUBLE_CLICK_TIME_SEC
-                && (pos.x - px).powi(2) + (pos.y - py).powi(2)
-                    < manifold_ui::color::DOUBLE_CLICK_RADIUS_PX.powi(2)
-        });
-        self.text_input.last_press = Some((now, pos.x, pos.y));
-        if is_double_click {
-            self.text_input.select_word_at(byte);
-        } else {
-            self.text_input.caret_to(byte, self.modifiers.shift);
-        }
-        self.text_input.dragging = true;
-        true
     }
 
-    /// Pointer motion while a text session's drag is armed — extends the
-    /// selection toward the cursor (`drag_to`, anchor held at the press
-    /// position). A no-op (returns `false`) when no drag is in progress, so
-    /// the caller can fall through to normal hover handling.
+    /// Pointer motion extends an armed text drag; false when none is armed.
     pub(crate) fn text_input_pointer_move(&mut self, pos: Vec2) -> bool {
-        if !self.text_input.active || !self.text_input.dragging {
-            return false;
-        }
-        let byte = self.text_input_byte_at(pos);
-        self.text_input.drag_to(byte);
-        true
+        let tree = self.ui_renderer.as_ref().map(|_| &self.ws.ui_root.tree);
+        crate::text_session::pointer_move(&mut self.text_input, tree, pos)
     }
 
-    /// Ends a text-session drag on release. Idempotent — a no-op if no drag
-    /// was in progress (e.g. the button went up outside a session).
+    /// A release ends a text drag.
     pub(crate) fn text_input_pointer_up(&mut self) {
-        self.text_input.dragging = false;
+        crate::text_session::pointer_up(&mut self.text_input);
     }
 
     // ── Dispatchers: the single owner entry per winit input event ──────────
@@ -376,28 +304,15 @@ impl Application {
                 .layout
                 .update_split_from_drag(self.cursor_pos.y);
             self.cursor_manager.set(TimelineCursor::ResizeVertical);
-            self.needs_rebuild = true;
         }
         // Inspector resize drag takes next priority
         else if self.ws.ui_root.inspector_resize_dragging {
-            if self.ws.ui_root.update_inspector_resize(self.cursor_pos.x) {
-                self.needs_rebuild = true;
-            }
+            self.ws.ui_root.update_inspector_resize(self.cursor_pos.x);
             self.cursor_manager.set(TimelineCursor::ResizeHorizontal);
         }
         // Audio Setup dock resize drag (D1)
         else if self.ws.ui_root.audio_setup_resize_dragging {
-            if self.ws.ui_root.update_audio_setup_resize(self.cursor_pos.x) {
-                self.needs_rebuild = true;
-            }
-            self.cursor_manager.set(TimelineCursor::ResizeHorizontal);
-        }
-        // Scene Setup dock resize drag — mirror of the Audio Setup one above
-        // (SCENE_SETUP_PANEL_DESIGN D2).
-        else if self.ws.ui_root.scene_setup_resize_dragging {
-            if self.ws.ui_root.update_scene_setup_resize(self.cursor_pos.x) {
-                self.needs_rebuild = true;
-            }
+            self.ws.ui_root.update_audio_setup_resize(self.cursor_pos.x);
             self.cursor_manager.set(TimelineCursor::ResizeHorizontal);
         } else {
             self.ws.ui_root.pointer_event(
@@ -412,7 +327,7 @@ impl Application {
                 // cursor-shape feedback (split-handle, resize, etc.).
                 self.cursor_manager.set_default();
                 if self.selection.automation_feedback.take().is_some() {
-                    self.scroll_dirty.visual = true;
+                    self.ws.offscreen_dirty = true;
                 }
             } else {
                 // Route hover through InteractionOverlay (port of Unity OnPointerMove).
@@ -425,12 +340,8 @@ impl Application {
                         &self.content_state,
                         &mut self.cursor_manager,
                         &mut self.active_layer_id,
-                        &mut self.needs_rebuild,
-                        &mut self.needs_structural_sync,
-                        &mut self.automation_lanes_dirty,
-                        &mut self.scroll_dirty,
-                        &mut self.invalidate_layers,
-                        &mut self.pre_drag_commands,
+                                                &mut self.ws.offscreen_dirty,
+                        &mut self.ui_edits,
                     );
                     self.overlay.on_pointer_move(
                         self.cursor_pos,
@@ -455,7 +366,7 @@ impl Application {
         if ui.background_input_blocked() { return; }
         let in_inspector = ui.layout.inspector().contains(self.cursor_pos);
         let in_objects = ui.scene_setup_panel.is_open()
-            && ui.layout.scene_setup().contains(self.cursor_pos);
+            && ui.inspector.scene_content_rect().contains(self.cursor_pos);
         if !in_inspector && self.input_handler.inspector_has_focus {
             ui.inspector.clear_effect_selection(&mut ui.tree);
         }
@@ -492,10 +403,8 @@ impl Application {
                                 && let Some(node) = self.ws.ui_root.tree.hit_test(self.cursor_pos)
                             {
                                 let ui = &mut self.ws.ui_root;
-                                if ui.scene_setup_panel.select_outliner_node(node)
-                                    || ui.scene_setup_panel.select_object_modifier_node(node, &mut ui.tree)
-                                {
-                                    self.needs_rebuild = true;
+                                if !ui.scene_setup_panel.select_outliner_node(node) {
+                                    ui.scene_setup_panel.select_object_modifier_node(node, &mut ui.tree);
                                 }
                             }
 
@@ -541,7 +450,6 @@ impl Application {
                                 if self.is_double_click(self.split_handle_last_click) {
                                     self.split_handle_last_click = None;
                                     self.ws.ui_root.layout.reset_timeline_split();
-                                    self.needs_rebuild = true;
                                 } else {
                                     self.split_handle_last_click = Some(std::time::Instant::now());
                                     // Begin video/timeline split drag.
@@ -565,25 +473,10 @@ impl Application {
                                 if self.is_double_click(self.audio_setup_handle_last_click) {
                                     self.audio_setup_handle_last_click = None;
                                     self.ws.ui_root.layout.reset_audio_setup_width();
-                                    self.needs_rebuild = true;
                                 } else {
                                     self.audio_setup_handle_last_click = Some(std::time::Instant::now());
                                     self.ws.ui_root.begin_audio_setup_resize(self.cursor_pos.x);
                                     self.ws.ui_root.set_audio_setup_handle_drag();
-                                }
-                            } else if self.ws.ui_root.is_near_scene_setup_edge(self.cursor_pos)
-                                && !self.ws.ui_root.overlay_contains_point(self.cursor_pos)
-                            {
-                                // Scene Setup dock resize handle — mirror of
-                                // the Audio Setup one above (D2).
-                                if self.is_double_click(self.scene_setup_handle_last_click) {
-                                    self.scene_setup_handle_last_click = None;
-                                    self.ws.ui_root.layout.reset_scene_setup_width();
-                                    self.needs_rebuild = true;
-                                } else {
-                                    self.scene_setup_handle_last_click = Some(std::time::Instant::now());
-                                    self.ws.ui_root.begin_scene_setup_resize(self.cursor_pos.x);
-                                    self.ws.ui_root.set_scene_setup_handle_drag();
                                 }
                             } else if self.ws.ui_root.is_near_inspector_edge(self.cursor_pos)
                                 && !self.ws.ui_root.overlay_contains_point(self.cursor_pos)
@@ -593,7 +486,6 @@ impl Application {
                                 if self.is_double_click(self.inspector_handle_last_click) {
                                     self.inspector_handle_last_click = None;
                                     self.ws.ui_root.layout.reset_inspector_width();
-                                    self.needs_rebuild = true;
                                 } else {
                                     self.inspector_handle_last_click = Some(std::time::Instant::now());
                                     self.ws.ui_root.begin_inspector_resize(self.cursor_pos.x);
@@ -645,10 +537,6 @@ impl Application {
                                 self.ws.ui_root.end_audio_setup_resize();
                                 self.cursor_manager.set_default();
                                 self.ws.ui_root.set_audio_setup_handle_idle();
-                            } else if self.ws.ui_root.scene_setup_resize_dragging {
-                                self.ws.ui_root.end_scene_setup_resize();
-                                self.cursor_manager.set_default();
-                                self.ws.ui_root.set_scene_setup_handle_idle();
                             } else {
                                 self.ws.ui_root.pointer_event(
                                     self.cursor_pos,
@@ -785,29 +673,22 @@ impl Application {
             let inspector_rect = self.ws.ui_root.layout.inspector();
             let tracks_rect = self.ws.ui_root.layout.timeline_tracks();
 
-            // BUG-199/BUG-223: Audio Setup / Scene Setup docks — route
+            // BUG-199/BUG-223: the Audio Setup dock and the Scene tab — route
             // through the generic `UIEvent::Scroll` pipeline (same mechanism
             // the open-dropdown branch above uses) so the real app and the
             // headless `Gesture::Scroll` harness share one path. `contains()`
             // is already the open-check: a closed dock's rect is
             // `Rect::ZERO`. BUG-199's original fix assumed "the docks
-            // rebuild every frame" — false: `app_render.rs`'s
-            // `apply_ui_frame_invalidations` only rebuilds when
-            // `needs_rebuild`/`scroll_dirty` says so (BUG-223 escaped
-            // because the headless script harness always forces one rebuild
-            // on its first dispatched gesture, via `Inspector::
-            // skip_to_settled`'s `settled` flag — masking a scroll that
-            // updates internal offset state but never gets baked into node
-            // positions). Set `needs_rebuild` explicitly, same as the
-            // inspector branch below.
-            if self.ws.ui_root.layout.scene_setup().contains(pos)
+            // rebuild every frame" — they rebuild when their view or scroll input moves
+            // (UI_INVALIDATION P5a: the scene panel bumps its view version, the
+            // dock its scroll offset).
+            if self.ws.ui_root.inspector.scene_content_rect().contains(pos)
                 || self.ws.ui_root.layout.audio_setup().contains(pos)
             {
                 self.ws
                     .ui_root
                     .input
                     .process_scroll(self.cursor_pos, Vec2::new(dx, dy));
-                self.needs_rebuild = true;
                 return;
             }
 
@@ -821,7 +702,6 @@ impl Application {
                 // double-applies).
                 if !self.ws.ui_root.try_inspector_scroll(dy, pos.x) {
                     self.ws.ui_root.inspector.handle_scroll_at(dy, pos.x);
-                    self.needs_rebuild = true;
                 }
             } else if tracks_rect.contains(pos) {
                 if self.modifiers.alt {
@@ -838,14 +718,11 @@ impl Application {
                     let beat_delta = dy * manifold_ui::color::SCROLL_SENSITIVITY / ppb;
                     let new_x =
                         (self.ws.ui_root.viewport.scroll_x_beats().as_f32() - beat_delta).max(0.0);
-                    if self
+                    self
                         .ws
                         .ui_root
                         .viewport
-                        .set_scroll(new_x, self.ws.ui_root.viewport.scroll_y_px())
-                    {
-                        self.scroll_dirty.scroll_x = true;
-                    }
+                        .set_scroll(new_x, self.ws.ui_root.viewport.scroll_y_px());
                     // BUG-159: a direct user horizontal gesture — playhead-follow
                     // yields to it instead of fighting it (state_sync.rs
                     // check_auto_scroll).
@@ -853,14 +730,10 @@ impl Application {
                 } else {
                     // Plain scroll → vertical track scroll
                     let new_y = (self.ws.ui_root.viewport.scroll_y_px() - dy).max(0.0);
-                    if self.ws.ui_root.viewport.set_scroll(
+                    self.ws.ui_root.viewport.set_scroll(
                         self.ws.ui_root.viewport.scroll_x_beats().as_f32(),
                         new_y,
-                    ) {
-                        // Layer headers read the viewport's scroll_y_px live at
-                        // the next build/update — no separate push (D2).
-                        self.scroll_dirty.scroll_y = true;
-                    }
+                    );
                 }
                 // Native horizontal scroll (trackpad two-finger swipe)
                 if dx.abs() > 0.01 && !self.modifiers.alt {
@@ -868,14 +741,11 @@ impl Application {
                     let beat_delta = dx * manifold_ui::color::SCROLL_SENSITIVITY / ppb;
                     let new_x =
                         (self.ws.ui_root.viewport.scroll_x_beats().as_f32() - beat_delta).max(0.0);
-                    if self
+                    self
                         .ws
                         .ui_root
                         .viewport
-                        .set_scroll(new_x, self.ws.ui_root.viewport.scroll_y_px())
-                    {
-                        self.scroll_dirty.scroll_x = true;
-                    }
+                        .set_scroll(new_x, self.ws.ui_root.viewport.scroll_y_px());
                     // BUG-159: see the Shift+scroll site above.
                     self.ws.ui_root.viewport.note_user_scroll_x();
                 }
@@ -890,7 +760,6 @@ impl Application {
         let beat_at_cursor = self.ws.ui_root.viewport.pixel_to_beat(pos.x).as_f32();
         let new_ppb = self.ws.ui_root.viewport.zoom_continuous(factor);
         self.ws.ui_root.viewport.zoom_to(new_ppb, beat_at_cursor, pos.x);
-        self.scroll_dirty.zoom = true;
     }
 
     /// Trackpad pinch in any window. `magnification` is winit's per-event
@@ -924,281 +793,48 @@ impl Application {
         }
     }
 
-    /// `CursorMoved` in the editor window: update the canvas cursor + popovers,
-    /// and forward into the editor UITree only when the cursor is in a margin
-    /// (palette / sidebar) or the node picker is open.
+    /// This App's borrow for one editor-window event through the editor-input
+    /// seam (`editor_input.rs`). `None` when the editor is closed.
+    fn editor_pointer(&mut self, window_id: WindowId) -> Option<crate::editor_input::EditorPointer<'_>> {
+        let (w, h) = editor_logical_size(&self.window_registry, window_id);
+        Some(crate::editor_input::EditorPointer {
+            ws: self.graph_editor.as_mut()?,
+            canvas: self.graph_canvas.as_mut(),
+            mapping: &mut self.editor_mapping_popover,
+            area: manifold_ui::Rect::new(0.0, 0.0, w, h),
+            modifiers: self.modifiers,
+            time: self.time_since_start,
+            project: &self.local_project,
+            content_tx: self.content_tx.as_ref(),
+            is_playing: self.content_state.is_playing,
+            watched: self.watched_graph_target.as_ref(),
+            graph: self.content_state.active_graph_snapshot.as_deref(),
+            active_layer: &mut self.active_layer_id,
+            selection: &mut self.selection,
+        })
+    }
+
+    /// `CursorMoved` in the editor window, through the editor-input seam. The
+    /// window takes the dock's cursor; an armed gizmo drag takes the move.
     pub(crate) fn editor_cursor_moved(
         &mut self,
         window_id: WindowId,
         position: PhysicalPosition<f64>,
     ) {
-        let (scale, window_w, window_h) = self
-            .window_registry
-            .get(&window_id)
-            .map(|ws| {
-                let s = ws.window.scale_factor();
-                let sz = ws.window.inner_size();
-                (s, sz.width as f32 / s as f32, sz.height as f32 / s as f32)
-            })
-            .unwrap_or((1.0, 1.0, 1.0));
-        let logical_x = position.x as f32 / scale as f32;
-        let logical_y = position.y as f32 / scale as f32;
-        let area = manifold_ui::Rect::new(0.0, 0.0, window_w, window_h);
-        let pos = Vec2::new(logical_x, logical_y);
-
-        // Column-divider drag / hover takes precedence over the canvas +
-        // panels. A live drag resizes the dock and consumes the move; otherwise
-        // update the hover highlight (repaint only when it changes).
-        let mut dock_dragging = false;
-        let mut dock_cursor = TimelineCursor::Default;
-        if let Some(ed) = self.graph_editor.as_mut() {
-            if ed.dock.is_dragging() {
-                ed.dock.drag(area, pos);
-                ed.offscreen_dirty = true;
-                dock_dragging = true;
-            } else {
-                let before = ed.dock.highlighted();
-                ed.dock.set_hover_from(area, pos);
-                if ed.dock.highlighted() != before {
-                    ed.offscreen_dirty = true;
-                }
-            }
-            dock_cursor = ed.dock.cursor().unwrap_or(TimelineCursor::Default);
-        }
-        self.cursor_manager.set(dock_cursor);
+        let pos = self.logical_cursor(window_id, position);
+        let Some(mut cx) = self.editor_pointer(window_id) else { return };
+        let moved = crate::editor_input::cursor_moved(&mut cx, pos);
+        self.cursor_manager.set(moved.cursor);
         self.apply_pending_cursor(window_id);
-        if dock_dragging {
-            return;
-        }
-
-        // Mini-timeline scrub: a move while scrubbing seeks the playhead and
-        // consumes the move (the canvas + panels don't see it), mirroring the
-        // dock-drag precedence above.
-        if self.graph_editor.as_ref().is_some_and(|ed| ed.timeline_scrubbing) {
-            let bottom = self
-                .graph_editor
-                .as_ref()
-                .map(|ed| ed.dock.rects(area).bottom);
-            if let Some(bottom) = bottom {
-                let total = self.local_project.timeline.duration_beats().as_f32();
-                let beat = manifold_ui::MiniTimeline::beat_at_x(bottom, total, logical_x);
-                self.send_content_cmd(ContentCommand::SeekToBeat(
-                    manifold_core::Beats::from_f32(beat),
-                ));
-                if let Some(ed) = self.graph_editor.as_mut() {
-                    ed.offscreen_dirty = true;
-                }
-            }
-            return;
-        }
-
-        // P6 gizmo axis drag: claims the move outright, same precedence as
-        // the P5c orbit-drag block right below (an armed gizmo drag means
-        // `editor_mouse_input` deliberately did NOT arm `viewport_drag`, so
-        // this and that block are mutually exclusive per gesture).
-        if self.editor_viewport_gizmo_drag_move(logical_x, logical_y) {
-            return;
-        }
-
-        // P5c 3D viewport navigation: an active drag (started by a press
-        // inside `viewport_rect`, see `editor_mouse_input`) claims the move
-        // outright and routes it through `viewport_input` instead of canvas
-        // pan — same precedence tier as the dock-drag/timeline-scrub blocks
-        // above. The drag can leave the rect mid-gesture (fast mouse
-        // movement); it stays claimed until release, matching every other
-        // drag in this file.
-        if let Some(ed) = self.graph_editor.as_mut()
-            && let Some((button, last_x, last_y)) = ed.viewport_drag
-        {
-            let dx = logical_x - last_x;
-            let dy = logical_y - last_y;
-            ed.viewport_drag = Some((button, logical_x, logical_y));
-            let shift = self.modifiers.shift;
-            if let Some(session) = ed.viewport_session.as_mut()
-                && let Some(gesture) =
-                    crate::viewport_input::classify_mouse_drag(button, shift, dx, dy)
-            {
-                crate::viewport_input::apply(
-                    session.camera_mut(),
-                    gesture,
-                    &crate::viewport_input::ViewportInputSensitivity::default(),
-                );
-                ed.offscreen_dirty = true;
-            }
-            return;
-        }
-
-        // Preview sidebar on the left, card lane on the right (matches the main
-        // timeline's inspector docking right). Geometry from the same `Dock` the
-        // present pass reads, so the canvas viewport tracks the dragged columns.
-        let (preview_width, card_x, viewport) = self
-            .graph_editor
-            .as_ref()
-            .map(|ed| {
-                let r = ed.dock.rects(area);
-                (
-                    r.left.width,
-                    r.right.x,
-                    // Canvas viewport matches the render-time slice (offset by
-                    // preview_width); without this the canvas's `to_graph` would
-                    // treat screen x=0 as the canvas left edge and node
-                    // hit-tests would be off by `preview_width` to the left.
-                    crate::graph_canvas::Rect::new(
-                        r.canvas.x,
-                        r.canvas.y,
-                        r.canvas.width,
-                        r.canvas.height,
-                    ),
-                )
-            })
-            .unwrap_or_else(|| {
-                (0.0, window_w, crate::graph_canvas::Rect::new(0.0, 0.0, window_w, window_h))
-            });
-        // Always update canvas cursor — graph-space coords
-        // need it even for clicks that land in the sidebar.
-        if let Some(canvas) = self.graph_canvas.as_mut() {
-            canvas.on_pointer_move(viewport, logical_x, logical_y);
-            // Drive the mapping popover's live range drag /
-            // handle hover. No-op when the popover is closed.
-            canvas.popover_on_move(logical_x, logical_y);
-        }
-        // Same for the editor card's sideways mapping drawer (a
-        // separate popover anchored on the right-lane card row).
-        self.editor_mapping_popover.on_move(logical_x, logical_y);
-        // Forward into the editor's UITree only when the
-        // cursor sits in either margin (preview sidebar on the
-        // left or the card lane on the right). Move events from
-        // the canvas region would just cause spurious hover/exit
-        // on tree nodes — except when the node picker is open,
-        // which overlays the whole window and wants hover
-        // feedback on its cells everywhere.
-        let in_panel = logical_x < preview_width || logical_x >= card_x;
-        let picker_open = self
-            .graph_editor
-            .as_ref()
-            .is_some_and(|ed| ed.ui_root.browser_popup.is_open());
-        let ui_pointer_owned = self
-            .graph_editor
-            .as_ref()
-            .is_some_and(|ed| ed.ui_root.input.pressed_widget().is_some());
-        if (in_panel || picker_open || ui_pointer_owned)
-            && let Some(ed) = self.graph_editor.as_mut()
-        {
-            ed.ui_root.input.process_pointer(
-                &mut ed.ui_root.tree,
-                Vec2::new(logical_x, logical_y),
-                manifold_ui::input::PointerAction::Move,
-                self.time_since_start,
-            );
-        }
-        if let Some(ed) = self.graph_editor.as_mut() {
-            ed.offscreen_dirty = true;
+        if let Some(pos) = moved.gizmo_move {
+            self.editor_viewport_gizmo_drag_move(pos.x, pos.y);
         }
     }
 
-    /// Terminate every editor-owned pointer gesture when the OS withholds the
-    /// matching button release (focus loss) or Escape cancels the gesture.
-    ///
-    /// The editor tree gets a terminal `Up` even when the last cursor position
-    /// is outside its panels. A press that never crossed the drag threshold is
-    /// sent off-screen so cancellation cannot turn into an accidental click;
-    /// an active drag uses the real cursor position so its existing end path
-    /// can commit/finish normally. Canvas, mapping-popover, viewport, dock,
-    /// and pan cleanup then reuse the normal release APIs below.
+    /// Ends every editor-owned pointer gesture on focus loss or Escape
+    /// (`editor_input::cancel_capture`). True when something was cancelled.
     pub(crate) fn cancel_editor_pointer_capture(&mut self, window_id: WindowId) -> bool {
-        let Some(ed) = self.graph_editor.as_ref() else {
-            return false;
-        };
-        let ui_pressed = ed.ui_root.input.pressed_widget().is_some();
-        let ui_dragging = ed.ui_root.input.is_dragging();
-        let cursor = self
-            .graph_canvas
-            .as_ref()
-            .map(|canvas| {
-                let (x, y) = canvas.cursor();
-                Vec2::new(x, y)
-            })
-            .unwrap_or(Vec2::ZERO);
-        let had_mapping = self.editor_mapping_popover.is_open();
-        let had_canvas_popover = self
-            .graph_canvas
-            .as_ref()
-            .is_some_and(|canvas| canvas.popover_open());
-
-        // End the canvas-owned capture before routing synthetic button-up
-        // events through the normal host path. Wire, marquee, and pan are
-        // discarded; live node/value gestures use their existing terminal
-        // commit path. In particular, this prevents a stale cursor over an
-        // input port from turning Escape/focus loss into ConnectPorts.
-        let (window_w, window_h) = self
-            .window_registry
-            .get(&window_id)
-            .map(|ws| {
-                let scale = ws.window.scale_factor();
-                let size = ws.window.inner_size();
-                (size.width as f32 / scale as f32, size.height as f32 / scale as f32)
-            })
-            .unwrap_or((1.0, 1.0));
-        let area = manifold_ui::Rect::new(0.0, 0.0, window_w, window_h);
-        let viewport = self
-            .graph_editor
-            .as_ref()
-            .map(|ed| ed.dock.rects(area).canvas)
-            .unwrap_or(area);
-        let viewport = crate::graph_canvas::Rect::new(viewport.x, viewport.y, viewport.width, viewport.height);
-        let canvas_capture = self
-            .graph_canvas
-            .as_mut()
-            .is_some_and(|canvas| canvas.finish_pointer_capture(viewport));
-
-        // Escape and focus loss cancel open mapping surfaces before the normal
-        // release path, whose `on_release` would otherwise commit a live range
-        // scrub. The popover APIs are idempotent when no drag is active.
-        self.editor_mapping_popover.close();
-        // Domain motion has not touched the project yet: Escape/focus loss
-        // discards the draft instead of turning cancellation into a setup edit.
-        let cancelled_domain = self.graph_editor.as_mut().is_some_and(|ed| {
-            if ed.viewport_gizmo_drag.as_ref().is_some_and(|drag| drag.fluid_domain.is_some()) {
-                ed.viewport_gizmo_drag = None;
-                true
-            } else {
-                false
-            }
-        });
-        if let Some(canvas) = self.graph_canvas.as_mut()
-            && canvas.popover_open()
-        {
-            canvas.close_mapping_popover();
-        }
-
-        if ui_pressed
-            && let Some(ed) = self.graph_editor.as_mut()
-        {
-            let terminal_pos = if ui_dragging {
-                cursor
-            } else {
-                Vec2::new(-1.0, -1.0)
-            };
-            ed.ui_root.input.process_pointer(
-                &mut ed.ui_root.tree,
-                terminal_pos,
-                manifold_ui::input::PointerAction::Up,
-                self.time_since_start,
-            );
-        }
-
-        // These methods are the single existing terminal paths for canvas and
-        // viewport gestures; both are idempotent when no gesture is active.
-        self.editor_mouse_input(window_id, MouseButton::Left, ElementState::Released);
-        self.editor_mouse_input(window_id, MouseButton::Middle, ElementState::Released);
-
-        let capture_cancelled = canvas_capture || ui_pressed || had_mapping || had_canvas_popover || cancelled_domain;
-        if capture_cancelled
-            && let Some(ed) = self.graph_editor.as_mut()
-        {
-            ed.offscreen_dirty = true;
-        }
-        capture_cancelled
+        self.editor_pointer(window_id).is_some_and(|mut cx| crate::editor_input::cancel_capture(&mut cx))
     }
 
     /// P6 (`docs/REALTIME_3D_DESIGN.md` D7 Tier 2): a Left press inside the
@@ -1281,12 +917,16 @@ impl Application {
                     (0.0, 0.0),
                     catalog,
                 );
-                cmd.execute(&mut self.local_project);
-                if cmd.created_node_id().is_none() {
+                let created = self.content_tx.as_ref().and_then(|tx| {
+                    crate::ui_bridge::ProjectRef::new(&mut self.local_project, &mut self.ui_edits, tx).executed_by(|project| {
+                        cmd.execute(project);
+                        cmd.created_node_id()?;
+                        Some((Box::new(cmd) as Box<dyn manifold_editing::command::Command>, ()))
+                    })
+                });
+                if created.is_none() {
                     return true;
                 }
-                let boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
-                self.send_content_cmd(ContentCommand::Execute(boxed));
             }
             if let Some(ed) = self.graph_editor.as_mut() {
                 ed.viewport_gizmo_drag = Some(crate::workspace::GizmoDrag {
@@ -1440,9 +1080,7 @@ impl Application {
                     wires: Vec::new(),
                 },
             );
-            let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
-            boxed.execute(&mut self.local_project);
-            self.send_content_cmd(ContentCommand::Execute(boxed));
+            self.execute_local(Box::new(cmd));
         }
         if let Some(ed) = self.graph_editor.as_mut()
             && let Some(d) = ed.viewport_gizmo_drag.as_mut()
@@ -1454,524 +1092,35 @@ impl Application {
         true
     }
 
-    /// `MouseInput` in the editor window: node-picker-modal routing first, then
-    /// the canvas / popovers / palette-vs-sidebar split.
+    /// `MouseInput` in the editor window, through the editor-input seam. A
+    /// left press the seam hands back from the 3D viewport tries a gizmo grab
+    /// or object pick, else orbits.
     pub(crate) fn editor_mouse_input(
         &mut self,
         window_id: WindowId,
         button: MouseButton,
         state: ElementState,
     ) {
-        // Node picker is modal: when open it claims every click in
-        // the editor window. Route the press/release straight into
-        // the editor UITree (which holds the popup's backdrop +
-        // cells) and bypass the canvas / popover / in_panel split.
-        // The resulting Click event is drained + dispatched to the
-        // popup in `present_*` / the editor drain loop.
-        let picker_open = self
-            .graph_editor
-            .as_ref()
-            .is_some_and(|ed| ed.ui_root.browser_popup.is_open());
-        if picker_open {
-            // Cursor in editor-window logical coords. The canvas
-            // tracks it on CursorMoved; read it out before the
-            // mutable editor borrow.
-            let (cx, cy) = self
-                .graph_canvas
-                .as_ref()
-                .map(|c| c.cursor())
-                .unwrap_or((0.0, 0.0));
-            if button == MouseButton::Left
-                && let Some(ed) = self.graph_editor.as_mut()
-            {
-                let action = match state {
-                    ElementState::Pressed => {
-                        manifold_ui::input::PointerAction::Down
-                    }
-                    ElementState::Released => {
-                        manifold_ui::input::PointerAction::Up
-                    }
-                };
-                ed.ui_root.input.process_pointer(
-                    &mut ed.ui_root.tree,
-                    Vec2::new(cx, cy),
-                    action,
-                    self.time_since_start,
-                );
-                ed.offscreen_dirty = true;
-            }
-            return;
-        }
-        // Column-divider drag takes precedence over the canvas + panels: a
-        // press on a handle begins the drag, a release ends it. Handled on the
-        // `graph_editor` workspace (a field disjoint from `graph_canvas`), so
-        // the canvas never sees these clicks.
+        let Some(mut cx) = self.editor_pointer(window_id) else { return };
+        let out = crate::editor_input::button(&mut cx, button, state);
+        if let Some(pos) = out.viewport_press
+            && !self.editor_viewport_gizmo_press(pos.x, pos.y)
+            && let Some(ws) = self.graph_editor.as_mut()
         {
-            let (cx, cy) = self
-                .graph_canvas
-                .as_ref()
-                .map(|c| c.cursor())
-                .unwrap_or((0.0, 0.0));
-            let (ww, wh) = self
-                .window_registry
-                .get(&window_id)
-                .map(|ws| {
-                    let s = ws.window.scale_factor();
-                    let sz = ws.window.inner_size();
-                    (sz.width as f32 / s as f32, sz.height as f32 / s as f32)
-                })
-                .unwrap_or((1.0, 1.0));
-            let area = manifold_ui::Rect::new(0.0, 0.0, ww, wh);
-            if button == MouseButton::Left
-                && let Some(ed) = self.graph_editor.as_mut()
-            {
-                match state {
-                    ElementState::Pressed => {
-                        let press = Vec2::new(cx, cy);
-                        if let Some(edge) = ed.dock.hit_test(area, press) {
-                            ed.dock.begin(edge, press);
-                            ed.offscreen_dirty = true;
-                            return;
-                        }
-                    }
-                    ElementState::Released => {
-                        if ed.dock.is_dragging() {
-                            ed.dock.end();
-                            ed.offscreen_dirty = true;
-                            return;
-                        }
-                    }
-                }
-            }
-        }
-        // Bottom mini-timeline: a press in the strip body starts a scrub (and
-        // seeks immediately); a press on the play button toggles transport.
-        // Handled on the disjoint `graph_editor` workspace, before the canvas
-        // sees the click. The `bottom` rect is copied out so no borrow is held
-        // across the content-command sends.
-        if button == MouseButton::Left {
-            let (cx, cy) = self
-                .graph_canvas
-                .as_ref()
-                .map(|c| c.cursor())
-                .unwrap_or((0.0, 0.0));
-            let (ww, wh) = self
-                .window_registry
-                .get(&window_id)
-                .map(|ws| {
-                    let s = ws.window.scale_factor();
-                    let sz = ws.window.inner_size();
-                    (sz.width as f32 / s as f32, sz.height as f32 / s as f32)
-                })
-                .unwrap_or((1.0, 1.0));
-            let area = manifold_ui::Rect::new(0.0, 0.0, ww, wh);
-            let bottom = self
-                .graph_editor
-                .as_ref()
-                .filter(|ed| ed.dock.show_bottom)
-                .map(|ed| ed.dock.rects(area).bottom);
-            if let Some(bottom) = bottom {
-                let pos = Vec2::new(cx, cy);
-                match state {
-                    ElementState::Pressed => {
-                        if manifold_ui::MiniTimeline::hit_play(bottom, pos) {
-                            let cmd = if self.content_state.is_playing {
-                                ContentCommand::Pause
-                            } else {
-                                ContentCommand::Play
-                            };
-                            self.send_content_cmd(cmd);
-                            if let Some(ed) = self.graph_editor.as_mut() {
-                                ed.offscreen_dirty = true;
-                            }
-                            return;
-                        }
-                        // Gutter click: pick that row's layer (identify + choose,
-                        // same effect a main-timeline layer-header click has —
-                        // `active_layer_id` + `selection.select_layer`), so the
-                        // editor's mirrored inspector follows it too. Checked
-                        // before the scrub body since the gutter sits outside it.
-                        if let Some(row) = manifold_ui::MiniTimeline::row_at_y(
-                            bottom,
-                            self.local_project.timeline.layers.len(),
-                            pos,
-                        ) && let Some(layer) = self.local_project.timeline.layers.get(row)
-                        {
-                            let layer_id = layer.layer_id.clone();
-                            self.active_layer_id = Some(layer_id.clone());
-                            self.selection.select_layer(layer_id);
-                            self.needs_rebuild = true;
-                            if let Some(ed) = self.graph_editor.as_mut() {
-                                ed.offscreen_dirty = true;
-                            }
-                            return;
-                        }
-                        if manifold_ui::MiniTimeline::body_rect(bottom).contains(pos) {
-                            let total =
-                                self.local_project.timeline.duration_beats().as_f32();
-                            let beat =
-                                manifold_ui::MiniTimeline::beat_at_x(bottom, total, cx);
-                            self.send_content_cmd(ContentCommand::SeekToBeat(
-                                manifold_core::Beats::from_f32(beat),
-                            ));
-                            if let Some(ed) = self.graph_editor.as_mut() {
-                                ed.timeline_scrubbing = true;
-                                ed.offscreen_dirty = true;
-                            }
-                            return;
-                        }
-                    }
-                    ElementState::Released => {
-                        if let Some(ed) = self.graph_editor.as_mut()
-                            && std::mem::take(&mut ed.timeline_scrubbing)
-                        {
-                            ed.offscreen_dirty = true;
-                            return;
-                        }
-                    }
-                }
-            }
-        }
-        // P5c 3D viewport: a release always clears any in-flight viewport
-        // drag first (so a mouse-up outside the rect — the drag left it, or
-        // the button changed — still ends the gesture cleanly), then a press
-        // inside `viewport_rect` on a bound button (left orbit, middle pan)
-        // starts one. Both consume the event outright, same precedence tier
-        // as the dock-drag/mini-timeline blocks above — the canvas never
-        // sees clicks the viewport claims.
-        // P6: a release also clears any in-flight gizmo axis drag — same
-        // "release always clears first" precedence the orbit/pan drag uses.
-        if state == ElementState::Released
-            && button == MouseButton::Left
-            && let Some(drag) = self.graph_editor.as_mut().and_then(|ed| {
-                let drag = ed.viewport_gizmo_drag.take()?;
-                ed.offscreen_dirty = true;
-                Some(drag)
-            })
-        {
-            if let Some(domain) = drag.fluid_domain
-                && domain.changed()
-                && matches!(self.watched_graph_target.as_ref(), Some(manifold_core::GraphTarget::Generator(layer)) if layer == &domain.layer_id)
-                && self.graph_editor.as_ref().is_some_and(|ed| ed.viewport_selected_object == Some(domain.object_node_id))
-            {
-                self.send_content_cmd(ContentCommand::FluidDomainEdit(Box::new(domain)));
-            }
-            return;
-        }
-        if state == ElementState::Released
-            && let Some(ed) = self.graph_editor.as_mut()
-            && ed.viewport_drag.take().is_some()
-        {
-            ed.offscreen_dirty = true;
-            return;
-        }
-        if state == ElementState::Pressed
-            && matches!(button, MouseButton::Left | MouseButton::Middle)
-        {
-            let (cx, cy) = self
-                .graph_canvas
-                .as_ref()
-                .map(|c| c.cursor())
-                .unwrap_or((0.0, 0.0));
-            let in_viewport = self
-                .graph_editor
-                .as_ref()
-                .is_some_and(|ed| ed.viewport_session.is_some() && ed.viewport_rect.is_some_and(|r| r.contains(Vec2::new(cx, cy))));
-            if in_viewport {
-                // P6: Left tries a gizmo axis grab / object pick first — a
-                // hit consumes the press outright (no orbit-arm). Middle
-                // always pans (D7's binding), never gizmo.
-                if button == MouseButton::Left && self.editor_viewport_gizmo_press(cx, cy) {
-                    return;
-                }
-                if let Some(ed) = self.graph_editor.as_mut() {
-                    ed.viewport_drag = Some((button, cx, cy));
-                    ed.offscreen_dirty = true;
-                    return;
-                }
-            }
-        }
-        if let Some(canvas) = self.graph_canvas.as_mut() {
-            let window_size = self
-                .window_registry
-                .get(&window_id)
-                .map(|ws| {
-                    let s = ws.window.scale_factor();
-                    let sz = ws.window.inner_size();
-                    (sz.width as f32 / s as f32, sz.height as f32 / s as f32)
-                })
-                .unwrap_or((1.0, 1.0));
-            let (cx, cy) = canvas.cursor();
-            // Geometry from the same `Dock` the present pass reads, so column
-            // resizes move the canvas viewport + panel split in lockstep.
-            let area = manifold_ui::Rect::new(0.0, 0.0, window_size.0, window_size.1);
-            let (preview_width, card_x, viewport) = self
-                .graph_editor
-                .as_ref()
-                .map(|ed| {
-                    let r = ed.dock.rects(area);
-                    (
-                        r.left.width,
-                        r.right.x,
-                        // Canvas viewport matches the render-time slice: origin
-                        // at the left column, width is the center column. Passing
-                        // this (not the full window) is what makes `to_graph`
-                        // translate cursor coords correctly.
-                        crate::graph_canvas::Rect::new(
-                            r.canvas.x,
-                            r.canvas.y,
-                            r.canvas.width,
-                            r.canvas.height,
-                        ),
-                    )
-                })
-                .unwrap_or_else(|| {
-                    (
-                        0.0,
-                        window_size.0,
-                        crate::graph_canvas::Rect::new(0.0, 0.0, window_size.0, window_size.1),
-                    )
-                });
-            // The UITree spans the whole editor window — both the left preview
-            // sidebar and the right card lane live in it. Route any click in
-            // either margin to it; the canvas only sees clicks in the center.
-            let in_panel = cx < preview_width || cx >= card_x;
-            match (button, state) {
-                (MouseButton::Left, ElementState::Pressed) => {
-                    // The editor card's mapping drawer floats over
-                    // the canvas (anchored beside the right-lane
-                    // card), so it gets first crack. Consumed → done;
-                    // open-but-missed → close it and fall through.
-                    let mut consumed = false;
-                    if self.editor_mapping_popover.is_open() {
-                        if self.editor_mapping_popover.on_press(cx, cy) {
-                            consumed = true;
-                        } else {
-                            self.editor_mapping_popover.close();
-                        }
-                    }
-                    // The canvas popover (on-node rows) floats over
-                    // the canvas too — next crack. If neither popover
-                    // takes it, fall through to the panel/canvas path.
-                    if consumed {
-                        // handled by the editor mapping drawer
-                    } else if canvas.popover_open()
-                        && canvas.popover_on_left_press(cx, cy)
-                    {
-                        // consumed by the canvas popover
-                    } else if in_panel {
-                        // Right lane = the inspector column (left = preview
-                        // monitors): forward the press into its UITree. A card
-                        // click retargets the canvas via the
-                        // EffectCardClicked/GenCardClicked dispatch pass; sliders,
-                        // tabs, chrome and drags all resolve through the inspector.
-                        if let Some(ed) = self.graph_editor.as_mut() {
-                            ed.ui_root.input.process_pointer(
-                                &mut ed.ui_root.tree,
-                                Vec2::new(cx, cy),
-                                manifold_ui::input::PointerAction::Down,
-                                self.time_since_start,
-                            );
-                        }
-                    } else {
-                        canvas.on_left_button_down(
-                            viewport,
-                            cx,
-                            cy,
-                            self.time_since_start,
-                            self.modifiers.shift,
-                        );
-                    }
-                }
-                (MouseButton::Left, ElementState::Released) => {
-                    // Commit any in-progress drawer/popover drag.
-                    self.editor_mapping_popover.on_release();
-                    canvas.popover_on_left_release();
-                    let ui_pointer_owned = self
-                        .graph_editor
-                        .as_ref()
-                        .is_some_and(|ed| ed.ui_root.input.pressed_widget().is_some());
-                    if editor_ui_pointer_owned(in_panel, ui_pointer_owned)
-                        && let Some(ed) = self.graph_editor.as_mut()
-                    {
-                        ed.ui_root.input.process_pointer(
-                            &mut ed.ui_root.tree,
-                            Vec2::new(cx, cy),
-                            manifold_ui::input::PointerAction::Up,
-                            self.time_since_start,
-                        );
-                    }
-                    // The canvas owns its own captured drag state. Its release
-                    // API is idempotent, so always deliver the terminal event;
-                    // the drag may have crossed into the inspector column.
-                    canvas.on_left_button_up(viewport, cx, cy);
-                }
-                (MouseButton::Right, ElementState::Pressed) => {
-                    // Right-click an expanded param row that's
-                    // exposed as a card binding → open the
-                    // in-place mapping popover anchored on it.
-                    // The canvas resolves the row + anchor; the
-                    // app resolves the binding (needs the
-                    // project + snapshot the canvas can't see).
-                    if !in_panel
-                        && let Some((node_id, pi)) =
-                            canvas.on_right_button_down(viewport, cx, cy)
-                        && let Some(inner_param) = canvas.param_name_at(node_id, pi)
-                        && let Some((
-                            binding_id,
-                            label,
-                            min,
-                            max,
-                            invert,
-                            curve,
-                            scale,
-                            offset,
-                            range,
-                            is_angle,
-                            section,
-                        )) = crate::app_render::resolve_canvas_binding(
-                            self.content_state.active_graph_snapshot.as_deref(),
-                            self.watched_graph_target.as_ref(),
-                            &self.local_project,
-                            node_id,
-                            &inner_param,
-                        )
-                    {
-                        canvas.open_mapping_popover(
-                            crate::editing_host::to_ui_graph_target(self.watched_graph_target.as_ref().expect("resolved binding has a graph target")),
-                            viewport, node_id, pi, binding_id, label, min, max, invert,
-                            crate::ui_translate::macro_curve_to_ui(curve), scale, offset, range,
-                            is_angle, section,
-                        );
-                    }
-                }
-                (MouseButton::Middle, ElementState::Pressed) => {
-                    if !in_panel {
-                        canvas.on_pan_button_down(cx, cy);
-                    }
-                }
-                (MouseButton::Middle, ElementState::Released) => {
-                    // Pan capture survives crossing into a side pane.
-                    canvas.on_pan_button_up();
-                }
-                _ => {}
-            }
-            if let Some(ed) = self.graph_editor.as_mut() {
-                ed.offscreen_dirty = true;
-            }
+            crate::editor_input::arm_viewport_drag(ws, button, pos);
         }
     }
 
-    /// `MouseWheel` in the editor window: cursor-anchored canvas zoom. Returns
-    /// `true` when handled (a canvas is open); `false` falls through to the
-    /// primary path, matching the old `is_graph_editor && let Some(canvas)` gate.
-    pub(crate) fn editor_mouse_wheel(
-        &mut self,
-        window_id: WindowId,
-        delta: MouseScrollDelta,
-    ) -> bool {
-        // Right lane = the inspector column: a wheel over it scrolls the inspector
-        // (same `handle_scroll_at` convention as the main window), not the canvas.
-        // The editor rebuilds its tree every present, so updating the scroll offset
-        // here takes effect on the next build_inspector_in_rect. Cursor is tracked
-        // by the canvas; column geometry from the same `Dock` the present reads.
-        let (cx, cy) = self
-            .graph_canvas
-            .as_ref()
-            .map(|c| c.cursor())
-            .unwrap_or((0.0, 0.0));
-        // P5c 3D viewport dolly: scroll while hovering the viewport pane
-        // dollies the editor camera instead of zooming the canvas. Checked
-        // before the inspector-scroll/canvas-zoom branches below — the two
-        // rects (far-left preview column vs. right card lane vs. the canvas
-        // in between) never overlap, so precedence order is cosmetic, but
-        // this keeps the viewport's own `apply` call site together with its
-        // press/drag/release handling in `editor_mouse_input`/
-        // `editor_cursor_moved`.
-        if let Some(ed) = self.graph_editor.as_mut()
-            && let Some(rect) = ed.viewport_rect
-            && rect.contains(Vec2::new(cx, cy))
-            && let Some(session) = ed.viewport_session.as_mut()
-        {
-            // `LineDelta` is a physical mouse wheel notch → dolly. A trackpad
-            // reports `PixelDelta`: on macOS a pinch-to-zoom gesture arrives
-            // as a Ctrl-modified `PixelDelta` scroll (the OS-level pinch→
-            // scroll translation apps rely on absent a native magnify-gesture
-            // handler — this app has none), so Ctrl+PixelDelta is the pinch
-            // dolly and a bare PixelDelta is the two-finger trackpad pan.
-            let sens = crate::viewport_input::ViewportInputSensitivity::default();
-            let gesture = match delta {
-                MouseScrollDelta::LineDelta(_, y) => {
-                    Some(crate::viewport_input::classify_scroll(y * LINE_DELTA_PX))
-                }
-                MouseScrollDelta::PixelDelta(pos) if self.modifiers.ctrl => Some(
-                    crate::viewport_input::classify_trackpad_pinch_dolly(pos.y as f32),
-                ),
-                MouseScrollDelta::PixelDelta(pos) => Some(
-                    crate::viewport_input::classify_trackpad_pan(pos.x as f32, pos.y as f32),
-                ),
-            };
-            if let Some(gesture) = gesture {
-                crate::viewport_input::apply(session.camera_mut(), gesture, &sens);
-            }
-            ed.offscreen_dirty = true;
-            return true;
-        }
-        if self.editor_cursor_over_card_lane(window_id, cx) {
-            let (_dx, dy) = normalize_scroll_delta(delta);
-            if let Some(ed) = self.graph_editor.as_mut() {
-                ed.ui_root.inspector.handle_scroll_at(dy, cx);
-                ed.offscreen_dirty = true;
-            }
-            return true;
-        }
-        if let Some(canvas) = self.graph_canvas.as_mut() {
-            const LINE_DELTA_PX: f32 = 20.0;
-            let dy = match delta {
-                winit::event::MouseScrollDelta::LineDelta(_, y) => y * LINE_DELTA_PX,
-                winit::event::MouseScrollDelta::PixelDelta(pos) => pos.y as f32,
-            };
-            let (w, h) = editor_logical_size(&self.window_registry, window_id);
-            canvas.on_scroll(crate::graph_canvas::Rect::new(0.0, 0.0, w, h), dy);
-            if let Some(ed) = self.graph_editor.as_mut() {
-                ed.offscreen_dirty = true;
-            }
-            true
-        } else {
-            false
-        }
+    /// `MouseWheel` in the editor window. False when no canvas took it.
+    pub(crate) fn editor_mouse_wheel(&mut self, window_id: WindowId, delta: MouseScrollDelta) -> bool {
+        self.editor_pointer(window_id).is_some_and(|mut cx| crate::editor_input::wheel(&mut cx, delta))
     }
 
     /// Pinch in the editor window zooms the graph canvas around the cursor.
-    /// The 3D viewport pane and the right card lane ignore it.
     fn editor_pinch(&mut self, window_id: WindowId, magnification: f32) {
-        let Some((cx, cy)) = self.graph_canvas.as_ref().map(|c| c.cursor()) else {
-            return;
-        };
-        let over_viewport = self
-            .graph_editor
-            .as_ref()
-            .and_then(|ed| ed.viewport_rect)
-            .is_some_and(|rect| rect.contains(Vec2::new(cx, cy)));
-        if over_viewport || self.editor_cursor_over_card_lane(window_id, cx) {
-            return;
+        if let Some(mut cx) = self.editor_pointer(window_id) {
+            crate::editor_input::pinch(&mut cx, magnification);
         }
-        let (w, h) = editor_logical_size(&self.window_registry, window_id);
-        if let Some(canvas) = self.graph_canvas.as_mut() {
-            canvas.on_pinch(crate::graph_canvas::Rect::new(0.0, 0.0, w, h), magnification);
-        }
-        if let Some(ed) = self.graph_editor.as_mut() {
-            ed.offscreen_dirty = true;
-        }
-    }
-
-    /// Whether logical x `cx` sits in the editor's right card lane (the
-    /// inspector column), read from the same `Dock` the present lays out.
-    fn editor_cursor_over_card_lane(&self, window_id: WindowId, cx: f32) -> bool {
-        let (w, h) = editor_logical_size(&self.window_registry, window_id);
-        self.graph_editor.as_ref().is_some_and(|ed| {
-            cx >= ed.dock.rects(manifold_ui::Rect::new(0.0, 0.0, w, h)).right.x
-        })
     }
 
     /// All editor-window keyboard handling — popover/canvas text-field editing,
@@ -1986,59 +1135,14 @@ impl Application {
         is_graph_editor: bool,
         logical_key: Key,
     ) -> bool {
-        // Mapping drawer numeric entry: when a value field is active,
-        // keystrokes type into it (digits / `.` / `-` / Backspace),
-        // Enter commits, Esc cancels — ahead of any canvas shortcut
-        // (Backspace would otherwise delete the selected node). Plain
-        // chars only (no Cmd/Ctrl) so shortcuts still pass when not
-        // typing a value.
-        {
-            use winit::keyboard::{Key, NamedKey};
-            let typing = !self.modifiers.command && !self.modifiers.ctrl;
-            if self.editor_mapping_popover.is_editing() {
-                match &logical_key {
-                    Key::Named(NamedKey::Enter) => self.editor_mapping_popover.commit_edit(),
-                    Key::Named(NamedKey::Escape) => self.editor_mapping_popover.cancel_edit(),
-                    Key::Named(NamedKey::Backspace) => {
-                        self.editor_mapping_popover.on_backspace()
-                    }
-                    Key::Named(NamedKey::Space) if typing => {
-                        self.editor_mapping_popover.on_text_char(' ')
-                    }
-                    Key::Character(c) if typing => {
-                        for ch in c.chars() {
-                            self.editor_mapping_popover.on_text_char(ch);
-                        }
-                    }
-                    _ => {}
-                }
-                if let Some(ed) = self.graph_editor.as_mut() {
-                    ed.offscreen_dirty = true;
-                }
-                return true;
-            }
-            if let Some(canvas) = self.graph_canvas.as_mut()
-                && canvas.popover_is_editing()
-            {
-                match &logical_key {
-                    Key::Named(NamedKey::Enter) => canvas.popover_commit_edit(),
-                    Key::Named(NamedKey::Escape) => canvas.popover_cancel_edit(),
-                    Key::Named(NamedKey::Backspace) => canvas.popover_on_backspace(),
-                    Key::Named(NamedKey::Space) if typing => {
-                        canvas.popover_on_text_char(' ')
-                    }
-                    Key::Character(c) if typing => {
-                        for ch in c.chars() {
-                            canvas.popover_on_text_char(ch);
-                        }
-                    }
-                    _ => {}
-                }
-                if let Some(ed) = self.graph_editor.as_mut() {
-                    ed.offscreen_dirty = true;
-                }
-                return true;
-            }
+        if crate::editor_input::popover_key(
+            &mut self.editor_mapping_popover,
+            self.graph_canvas.as_mut(),
+            self.graph_editor.as_mut(),
+            crate::text_session::TextKey::from_winit(&logical_key),
+            self.modifiers,
+        ) {
+            return true;
         }
         if is_graph_editor && matches!(logical_key, Key::Named(NamedKey::Escape)) {
             let capture_cancelled = self
@@ -2141,7 +1245,7 @@ impl Application {
             if filter_changed {
                 let filter = self.text_input.text().trim().to_string();
                 if let Some(ed) = self.graph_editor.as_mut() {
-                    ed.ui_root.browser_popup.set_filter(filter);
+                    ed.ui_root.set_browser_filter(filter);
                 }
             }
             if let Some(ed) = self.graph_editor.as_mut() {
@@ -2581,56 +1685,6 @@ impl Application {
         let _ = scale_factor;
     }
 
-    /// Convert a `BrowserPopupAction::Selected` from the MAIN window's
-    /// browser popup (Effect/Generator only — Node mode is editor-only and
-    /// never reaches this path) into the equivalent `PanelAction` and stash
-    /// it on `pending_keyboard_actions` for `process_events` to dispatch next
-    /// frame. Mirrors the click-arm translation in `browser_popup.rs`'s
-    /// `Overlay::on_event` impl, just reached from a keyboard pick
-    /// (`OVERLAY_SESSIONS_AND_PICKER_DESIGN.md` section 5 P2 arrow/Enter nav)
-    /// instead of a mouse click.
-    fn stash_browser_popup_pick(
-        &mut self,
-        action: manifold_ui::panels::browser_popup::BrowserPopupAction,
-    ) {
-        use manifold_ui::panels::PanelAction;
-        use manifold_ui::panels::browser_popup::{BrowserPopupAction, BrowserPopupMode};
-        let action = match action {
-            BrowserPopupAction::ActionSelected(action) => {
-                self.ws.ui_root.pending_keyboard_actions.push(action);
-                return;
-            }
-            action => action,
-        };
-        if let BrowserPopupAction::Selected {
-            type_id,
-            mode,
-            tab,
-            layer_id,
-        } = action
-        {
-            let panel_action = match mode {
-                BrowserPopupMode::Effect => {
-                    PanelAction::Params(ParamsAction::AddEffect {
-                        tab,
-                        // The session's layer_id — captured at open from the
-                        // invoking button — rides the pick atomically
-                        // (PRESET_BROWSER_AUDITION D2); dispatch builds
-                        // EffectTarget from it.
-                        layer_id,
-                        preset: manifold_ui::types::PresetTypeId::from_string(type_id),
-                    })
-                }
-                BrowserPopupMode::Generator => PanelAction::Project(ProjectAction::SetGenType(
-                    layer_id,
-                    manifold_ui::types::PresetTypeId::from_string(type_id),
-                )),
-                BrowserPopupMode::Node | BrowserPopupMode::Actions => return,
-            };
-            self.ws.ui_root.pending_keyboard_actions.push(panel_action);
-        }
-    }
-
     /// `KeyboardInput` (a `Pressed` key) for any window. This is the one keyboard
     /// owner: perform-mode handoff, then the editor's keyboard ([`Self::
     /// editor_keyboard_input`], called unconditionally because its leading
@@ -2649,7 +1703,7 @@ impl Application {
                 && self.ws.ui_root.export_progress.request_cancel()
             {
                 self.send_content_cmd(crate::content_command::ContentCommand::CancelExport);
-                self.ws.ui_root.overlay_dirty = true;
+                self.ws.ui_root.mark_overlay_dirty();
             }
             return;
         }
@@ -2680,7 +1734,6 @@ impl Application {
         }
         // App-level shortcuts (handled before UI forwarding)
         let mut consumed = false;
-        let data_version_before = self.content_state.data_version;
         if is_primary {
             // Escape cancels an in-flight timeline clip or automation drag before any
             // other Escape handling — a live drag holds uncommitted model
@@ -2717,12 +1770,8 @@ impl Application {
                     &self.content_state,
                     &mut self.cursor_manager,
                     &mut self.active_layer_id,
-                    &mut self.needs_rebuild,
-                    &mut self.needs_structural_sync,
-                    &mut self.automation_lanes_dirty,
-                    &mut self.scroll_dirty,
-                    &mut self.invalidate_layers,
-                    &mut self.pre_drag_commands,
+                                        &mut self.ws.offscreen_dirty,
+                    &mut self.ui_edits,
                 );
                 self.overlay.cancel_drag(&mut host);
                 if automation_cancel {
@@ -2731,122 +1780,18 @@ impl Application {
                 return;
             }
 
-            // Text input mode: intercept all keys for text editing
-            if self.text_input.active {
-                let is_search_filter =
-                    self.text_input.field == crate::text_input::TextInputField::SearchFilter;
-                match &logical_key {
-                    Key::Named(NamedKey::Escape) => {
-                        self.text_input.cancel();
-                        // BUG-022: cancelling the search field alone left the
-                        // browser popup open (a second Escape was needed).
-                        // Close it here too, mirroring the editor window's
-                        // node-picker Escape branch, so one press dismisses
-                        // both. The closed-overlay pump then reconciles the
-                        // (already-cancelled) text session next frame.
-                        if is_search_filter {
-                            self.ws.ui_root.browser_popup.handle_escape();
-                        }
-                        consumed = true;
-                    }
-                    Key::Named(NamedKey::Enter) => {
-                        if self.text_input.multiline && self.modifiers.shift {
-                            self.text_input.insert_char('\n');
-                        } else if is_search_filter {
-                            // Type-and-enter fast path (P2): pick straight
-                            // from the picker instead of just committing
-                            // filter text (the reactive-search block below
-                            // already keeps that live on every keystroke).
-                            // If the popup closed as a result (a pick, or an
-                            // empty-filtered-list Escape-equivalent), the
-                            // closed-overlay pump cleans up this text
-                            // session next `process_events` — no manual
-                            // cancel needed here.
-                            if let Some(action) =
-                                self.ws.ui_root.browser_popup.handle_key_nav(manifold_ui::input::Key::Enter)
-                            {
-                                self.stash_browser_popup_pick(action);
-                            }
-                        } else {
-                            let (field, text) = self.text_input.commit();
-                            self.handle_text_input_commit(field, &text);
-                        }
-                        consumed = true;
-                    }
-                    Key::Named(NamedKey::Backspace) => {
-                        self.text_input.backspace();
-                        consumed = true;
-                    }
-                    Key::Named(NamedKey::Delete) => {
-                        self.text_input.delete();
-                        consumed = true;
-                    }
-                    // Picker keyboard nav (P2) — while the browser search
-                    // field owns the session, up/down move the pick.
-                    Key::Named(NamedKey::ArrowUp) if is_search_filter => {
-                        self.ws.ui_root.browser_popup.handle_key_nav(manifold_ui::input::Key::Up);
-                        consumed = true;
-                    }
-                    Key::Named(NamedKey::ArrowDown) if is_search_filter => {
-                        self.ws.ui_root.browser_popup.handle_key_nav(manifold_ui::input::Key::Down);
-                        consumed = true;
-                    }
-                    Key::Named(
-                        k @ (NamedKey::ArrowLeft
-                        | NamedKey::ArrowRight
-                        | NamedKey::ArrowUp
-                        | NamedKey::ArrowDown),
-                    ) => {
-                        self.text_input_arrow(*k);
-                        consumed = true;
-                    }
-                    Key::Named(NamedKey::Space) => {
-                        self.text_input.insert_char(' ');
-                        consumed = true;
-                    }
-                    Key::Character(c) => {
-                        // Cmd+A / Ctrl+A → select all
-                        if c == "a" && self.modifiers.command {
-                            self.text_input.select_all_text();
-                        } else if c == "z" && self.modifiers.command {
-                            self.text_input.undo_to_seed();
-                        } else if c == "c" && self.modifiers.command {
-                            let s = self.text_input.copy_selection();
-                            if !s.is_empty() {
-                                crate::macos_pasteboard::set_general_pasteboard_string(&s);
-                            }
-                        } else if c == "x" && self.modifiers.command {
-                            let s = self.text_input.cut_selection();
-                            if !s.is_empty() {
-                                crate::macos_pasteboard::set_general_pasteboard_string(&s);
-                            }
-                        } else if c == "v" && self.modifiers.command {
-                            if let Some(s) = crate::macos_pasteboard::general_pasteboard_string() {
-                                self.text_input.paste(&s);
-                            }
-                        } else {
-                            for ch in c.chars() {
-                                self.text_input.insert_char(ch);
-                            }
-                        }
-                        consumed = true;
-                    }
-                    _ => {
-                        consumed = true;
-                    } // Suppress all other keys
-                }
-                // Reactive search: push filter on every keystroke
-                if consumed
-                    && self.text_input.field == crate::text_input::TextInputField::SearchFilter
-                {
-                    self.ws
-                        .ui_root
-                        .browser_popup
-                        .set_filter(self.text_input.text().trim().to_string());
-                    self.needs_rebuild = true;
-                }
-                // Skip normal shortcut processing when text input consumed the key
-                if consumed {
+            // An active text session takes every key (`text_session.rs`).
+            match crate::text_session::main_window_key(
+                &mut self.text_input,
+                &mut self.ws.ui_root,
+                crate::text_session::TextKey::from_winit(&logical_key),
+                self.modifiers,
+                self.ui_renderer.is_some(),
+            ) {
+                crate::text_session::KeyOutcome::NotTyping => {}
+                crate::text_session::KeyOutcome::Consumed | crate::text_session::KeyOutcome::Filtered => return,
+                crate::text_session::KeyOutcome::Committed(field, text) => {
+                    self.handle_text_input_commit(field, &text);
                     return;
                 }
             }
@@ -2861,9 +1806,8 @@ impl Application {
                     ui_root: &mut self.ws.ui_root,
                     selection: &mut self.selection,
                     active_layer: &mut self.active_layer_id,
-                    needs_rebuild: &mut self.needs_rebuild,
-                    needs_structural_sync: &mut self.needs_structural_sync,
-                    scroll_dirty: &mut self.scroll_dirty,
+                    redraw: &mut self.ws.offscreen_dirty,
+                    edits: &mut self.ui_edits,
                     current_project_path: &self.current_project_path,
                     has_output_window: self.window_registry.has_output_window(),
                     pending_close_output: &mut self.pending_close_output,
@@ -2905,6 +1849,7 @@ impl Application {
                     Key::Character(c) if c.as_str() == "n" && m.is_command_only() => {
                         let project = Self::create_default_project();
                         self.local_project = project.clone();
+                        self.ui_edits.stamps.project_replaced();
                         self.suppress_snapshot_until = self.content_state.data_version + 1;
                         self.suppress_snapshot_set_at = self.frame_count;
                         self.send_content_cmd(ContentCommand::LoadProject(Box::new(project)));
@@ -2916,7 +1861,6 @@ impl Application {
                             .layers
                             .first()
                             .map(|l| l.layer_id.clone());
-                        self.needs_rebuild = true;
                         log::info!("New project created");
                         consumed = true;
                     }
@@ -2927,12 +1871,6 @@ impl Application {
         } // end if is_primary
 
         // All other shortcuts handled by InputHandler → AppInputHost.
-
-        // If any keyboard shortcut mutated project data, trigger structural sync
-        if self.content_state.data_version != data_version_before {
-            self.needs_structural_sync = true;
-            self.needs_rebuild = true;
-        }
 
         // Forward to UI input system (unless consumed by app shortcut)
         if is_primary
@@ -2961,7 +1899,7 @@ mod tests {
         let mut app = Application::new();
         let labels: Vec<String> = (0..100).map(|i| format!("Font {i:03}")).collect();
         let actions = labels.iter().map(|label| {
-            manifold_ui::PanelAction::Params(ParamsAction::GenStringParamSelected(0, label.clone()))
+            manifold_ui::PanelAction::Params(manifold_ui::ParamsAction::GenStringParamSelected(0, label.clone()))
         }).collect();
         app.ws.ui_root.open_action_list(
             labels,
@@ -2983,14 +1921,14 @@ mod tests {
             MouseScrollDelta::PixelDelta(PhysicalPosition::new(0.0, -45.0)),
         ] {
             let before = app.ws.ui_root.browser_popup.picker().unwrap().scroll.scroll_offset();
-            app.ws.ui_root.overlay_dirty = false;
+            let version = app.ws.ui_root.overlays_version();
             app.primary_mouse_wheel(true, delta);
             let events = app.ws.ui_root.input.drain_events();
             assert_eq!(events.len(), 1, "native scrolling must reach the popup");
             let mut actions = Vec::new();
             assert!(app.ws.ui_root.route_overlay_event(&events[0], &mut actions));
             assert!(actions.is_empty());
-            assert!(app.ws.ui_root.overlay_dirty, "scrolling must schedule a repaint");
+            assert_ne!(app.ws.ui_root.overlays_version(), version, "scrolling must rebuild the overlays");
             app.ws.ui_root.tree.clear();
             app.ws.ui_root.build_overlays_for_screen(1280.0, 800.0);
             assert!(app.ws.ui_root.browser_popup.picker().unwrap().scroll.scroll_offset() > before);
@@ -3015,12 +1953,5 @@ mod tests {
             normalize_scroll_delta(MouseScrollDelta::PixelDelta(PhysicalPosition::new(7.5, -4.25)));
         assert_eq!(dx, 7.5);
         assert_eq!(dy, -4.25);
-    }
-
-    #[test]
-    fn editor_ui_capture_survives_crossing_out_of_panel() {
-        assert!(editor_ui_pointer_owned(false, true));
-        assert!(editor_ui_pointer_owned(true, false));
-        assert!(!editor_ui_pointer_owned(false, false));
     }
 }

@@ -28,7 +28,7 @@ use manifold_core::effect_graph_def::{
     GroupDef, GroupInterface, InterfacePortDef, PresetMetadata, SerializedParamValue,
 };
 use manifold_core::project::Project;
-use manifold_core::scene_exposure::{SceneParamMetadata, stamp_scene_node_exposures_into};
+use manifold_core::scene_exposure::{NodeParamMetadata, stamp_scene_node_exposures_into};
 
 use crate::command::Command;
 
@@ -61,9 +61,9 @@ pub struct AddSceneLayerPlaneCommand {
     /// metadata_for_node_type` (this crate has no renderer dep) — `execute`
     /// stamps them into the def's top-level `preset_metadata` after minting
     /// the new nodes' ids.
-    material_metadata: Vec<SceneParamMetadata>,
-    transform_metadata: Vec<SceneParamMetadata>,
-    scene_object_metadata: Vec<SceneParamMetadata>,
+    material_metadata: Vec<NodeParamMetadata>,
+    transform_metadata: Vec<NodeParamMetadata>,
+    scene_object_metadata: Vec<NodeParamMetadata>,
     catalog_default: EffectGraphDef,
     /// The level's `(nodes, wires)` before this edit, plus the pre-edit
     /// whole-def `preset_metadata` (P1 exposure stamping lands there, outside
@@ -86,9 +86,9 @@ impl AddSceneLayerPlaneCommand {
         centroid: (f32, f32),
         width: f32,
         height: f32,
-        material_metadata: Vec<SceneParamMetadata>,
-        transform_metadata: Vec<SceneParamMetadata>,
-        scene_object_metadata: Vec<SceneParamMetadata>,
+        material_metadata: Vec<NodeParamMetadata>,
+        transform_metadata: Vec<NodeParamMetadata>,
+        scene_object_metadata: Vec<NodeParamMetadata>,
         catalog_default: EffectGraphDef,
     ) -> Self {
         Self {
@@ -119,11 +119,14 @@ fn layer_plane_tint(k: u32) -> manifold_core::Color {
 }
 
 impl Command for AddSceneLayerPlaneCommand {
+    fn touches(&self) -> manifold_core::change::ChangeSet {
+        crate::commands::graph_edit_touches(&self.target, crate::commands::GRAPH_AND_MANIFEST)
+    }
     fn graph_admission_targets(&self, targets: &mut Vec<GraphTarget>) {
         targets.push(self.target.clone());
     }
 
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         self.prev = None;
         self.rejection = None;
         let scope = self.scope_path.clone();
@@ -336,7 +339,6 @@ impl Command for AddSceneLayerPlaneCommand {
                     &mut meta.bindings,
                     mat_id,
                     &mat_node_id,
-                    "node.pbr_material",
                     &format!("{handle} — Material"),
                     &self.material_metadata,
                     &mat_node_params,
@@ -346,7 +348,6 @@ impl Command for AddSceneLayerPlaneCommand {
                     &mut meta.bindings,
                     transform_id,
                     &transform_node_id,
-                    "node.transform_3d",
                     &format!("{handle} — Transform"),
                     &self.transform_metadata,
                     &BTreeMap::new(),
@@ -356,7 +357,6 @@ impl Command for AddSceneLayerPlaneCommand {
                     &mut meta.bindings,
                     scene_object_id,
                     &scene_object_node_id,
-                    "node.scene_object",
                     &handle,
                     &self.scene_object_metadata,
                     &BTreeMap::new(),
@@ -370,7 +370,7 @@ impl Command for AddSceneLayerPlaneCommand {
         refresh_target_manifest(project, &self.target);
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         let Some((pn, pw, pmeta)) = self.prev.clone() else {
             return;
         };

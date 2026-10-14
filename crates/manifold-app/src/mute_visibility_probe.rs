@@ -15,7 +15,6 @@
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-use crossbeam_channel::{Receiver, Sender};
 
 use manifold_core::clip::TimelineClip;
 use manifold_core::layer::Layer;
@@ -24,7 +23,7 @@ use manifold_core::{Beats, Bpm, ClipId, LayerId, PresetTypeId};
 use manifold_media::still_exporter::StillFormat;
 
 use crate::content_command::ContentCommand;
-use crate::content_state::ContentState;
+use crate::content_state::StateTx;
 use crate::content_thread::ContentThread;
 use crate::headless_harness::headless_content_thread;
 
@@ -69,11 +68,7 @@ fn probe_project() -> (Project, LayerId, ClipId) {
     (project, top_layer_id, top_clip_id)
 }
 
-fn state_channel() -> (Sender<ContentState>, Receiver<ContentState>) {
-    crossbeam_channel::unbounded()
-}
-
-fn drive_frames(ct: &mut ContentThread, n: usize, state_tx: &Sender<ContentState>) {
+fn drive_frames(ct: &mut ContentThread, n: usize, state_tx: &StateTx) {
     for _ in 0..n {
         ct.tick_frame(state_tx);
     }
@@ -148,7 +143,7 @@ fn mute_visibility_pixel_probe() {
 
     let (project, top_layer_id, top_clip_id) = probe_project();
     let mut ct = headless_content_thread(project, W, H);
-    let (state_tx, _state_rx) = state_channel();
+    let (state_tx, _state_rx) = crate::content_state::state_channel();
 
     // Pin engine time to the frame count so wall-clock pauses between
     // assertions don't advance the beat or compress driver-based motion.
@@ -297,7 +292,7 @@ fn clip_mute_opaque_layer_pixel_probe() {
     project.timeline.layers.push(top);
 
     let mut ct = headless_content_thread(project, W, H);
-    let (state_tx, _state_rx) = state_channel();
+    let (state_tx, _state_rx) = crate::content_state::state_channel();
     ct.timer.set_frame_clocked(true);
     drive_frames(&mut ct, 10, &state_tx);
 

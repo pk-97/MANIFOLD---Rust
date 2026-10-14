@@ -1,4 +1,5 @@
 use crate::command::Command;
+use manifold_core::change::{ChangeSet, Part};
 use crate::commands::effect_target::{EffectTarget, with_effects, with_effects_mut};
 use manifold_core::effects::{
     ParamConvert, ParamEnvelope, ParamId, ParameterDriver, PresetInstance, RelightField,
@@ -67,7 +68,8 @@ impl AddEffectCommand {
 }
 
 impl Command for AddEffectCommand {
-    fn execute(&mut self, project: &mut Project) {
+    fn touches(&self) -> ChangeSet { crate::commands::WHOLE_INSTANCES }
+    fn do_execute(&mut self, project: &mut Project) {
         self.applied = false;
         self.rejection = None;
         with_effects_mut(project, &self.target, |effects, groups| {
@@ -92,7 +94,7 @@ impl Command for AddEffectCommand {
         });
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         if !self.applied {
             return;
         }
@@ -146,7 +148,8 @@ impl RemoveEffectCommand {
 }
 
 impl Command for RemoveEffectCommand {
-    fn execute(&mut self, project: &mut Project) {
+    fn touches(&self) -> ChangeSet { crate::commands::WHOLE_INSTANCES }
+    fn do_execute(&mut self, project: &mut Project) {
         self.applied = false;
         self.rejection = None;
         self.cleared_mask_groups.clear();
@@ -173,7 +176,7 @@ impl Command for RemoveEffectCommand {
         self.applied = true;
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         if !self.applied {
             return;
         }
@@ -234,7 +237,8 @@ impl ReorderEffectCommand {
 }
 
 impl Command for ReorderEffectCommand {
-    fn execute(&mut self, project: &mut Project) {
+    fn touches(&self) -> ChangeSet { crate::commands::WHOLE_INSTANCES }
+    fn do_execute(&mut self, project: &mut Project) {
         self.applied = false;
         self.rejection = None;
         let from = self.from_index;
@@ -298,7 +302,7 @@ impl Command for ReorderEffectCommand {
         });
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         if !self.applied {
             return;
         }
@@ -342,13 +346,14 @@ impl ToggleEffectCommand {
 }
 
 impl Command for ToggleEffectCommand {
-    fn execute(&mut self, project: &mut Project) {
+    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Effects]) }
+    fn do_execute(&mut self, project: &mut Project) {
         if let Some(effect) = project.find_effect_by_id_mut(&self.effect_id) {
             effect.enabled = self.new_enabled;
         }
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         if let Some(effect) = project.find_effect_by_id_mut(&self.effect_id) {
             effect.enabled = self.old_enabled;
         }
@@ -389,7 +394,8 @@ impl ReorderEffectGroupCommand {
 }
 
 impl Command for ReorderEffectGroupCommand {
-    fn execute(&mut self, project: &mut Project) {
+    fn touches(&self) -> ChangeSet { crate::commands::WHOLE_INSTANCES }
+    fn do_execute(&mut self, project: &mut Project) {
         self.applied = false;
         self.rejection = None;
         if self.old_effects.len() != self.new_effects.len() {
@@ -438,7 +444,7 @@ impl Command for ReorderEffectGroupCommand {
         self.applied = true;
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         if !self.applied {
             return;
         }
@@ -481,6 +487,10 @@ pub struct ChangeGraphParamCommand {
     old_value: f32,
     new_value: f32,
     rejection: Option<&'static str>,
+    /// The param turns a scene feature on or off, so its base value decides
+    /// which card rows exist (SCENE_SURFACES D12 (row sets follow authored
+    /// values)). Read from the project on every execute and undo.
+    sets_rows: bool,
 }
 
 impl ChangeGraphParamCommand {
@@ -496,22 +506,41 @@ impl ChangeGraphParamCommand {
             old_value,
             new_value,
             rejection: None,
+            sets_rows: false,
         }
+    }
+
+    fn note_sets_rows(&mut self, project: &Project) {
+        self.sets_rows = card_param_sets_rows(project, &self.target, self.param_id.as_ref());
     }
 }
 
+/// Whether the card param's base value decides which card, Scene tab or
+/// material inspector rows exist (`ParamSpecDef::row_fact`; SCENE_SURFACES D12
+/// (row sets follow authored values)). Every command that writes a card param,
+/// directly or through a node binding, asks this.
+pub(crate) fn card_param_sets_rows(project: &Project, target: &GraphTarget, param_id: &str) -> bool {
+    project
+        .preset_instance(target)
+        .and_then(|inst| inst.params.get(param_id))
+        .is_some_and(|param| param.spec.decides_rows())
+}
+
 impl Command for ChangeGraphParamCommand {
+    /// A plain value is Values. A scene-modifier param lives inside the
+    /// owner's graph definition, and a feature switch decides which rows
+    /// exist, so both are Effects too (UI_INVALIDATION D21, D22). Only valid
+    /// after `execute`, which reads the switch from the project.
     fn touches(&self) -> manifold_core::change::ChangeSet {
-        use manifold_core::change::{ChangeSet, Part};
-        // A scene-modifier param lives inside the owner's graph definition.
-        if matches!(self.target, GraphTarget::SceneModifier { .. }) {
+        if matches!(self.target, GraphTarget::SceneModifier { .. }) || self.sets_rows {
             ChangeSet::of(&[Part::Values, Part::Effects])
         } else {
             ChangeSet::of(&[Part::Values])
         }
     }
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         self.rejection = None;
+        self.note_sets_rows(project);
         if !matches!(self.target, GraphTarget::SceneModifier { .. })
             && let Some(graph) = project.graph_for_target(&self.target, None)
             && let Some(reason) = manifold_core::scene_modifier_preset::scene_modifier_macro_lock_reason(graph, self.param_id.as_ref())
@@ -526,7 +555,8 @@ impl Command for ChangeGraphParamCommand {
         });
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
+        self.note_sets_rows(project);
         let id = self.param_id.clone();
         let val = self.old_value;
         project.with_preset_graph_mut(&self.target, |host| {
@@ -579,14 +609,15 @@ impl ToggleRelightCommand {
 }
 
 impl Command for ToggleRelightCommand {
-    fn execute(&mut self, project: &mut Project) {
+    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Effects]) }
+    fn do_execute(&mut self, project: &mut Project) {
         if let Some(inst) = project.preset_instance_mut(&self.target) {
             inst.relight = self.new_relight;
             inst.bump_graph_structure_version();
         }
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         if let Some(inst) = project.preset_instance_mut(&self.target) {
             inst.relight = self.old_relight;
             inst.bump_graph_structure_version();
@@ -635,10 +666,9 @@ impl SetRelightParamCommand {
 
 impl Command for SetRelightParamCommand {
     fn touches(&self) -> manifold_core::change::ChangeSet {
-        use manifold_core::change::{ChangeSet, Part};
         ChangeSet::of(&[Part::Shapes])
     }
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         if let Some(inst) = project.preset_instance_mut(&self.target) {
             self.field.set(&mut inst.relight_params, self.new_value);
             // D8/P7: float knobs are live uniforms — no structure bump. The
@@ -646,7 +676,7 @@ impl Command for SetRelightParamCommand {
         }
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         if let Some(inst) = project.preset_instance_mut(&self.target) {
             self.field.set(&mut inst.relight_params, self.old_value);
         }
@@ -680,14 +710,15 @@ impl SetRelightHeightFromCommand {
 }
 
 impl Command for SetRelightHeightFromCommand {
-    fn execute(&mut self, project: &mut Project) {
+    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Effects, Part::Shapes]) }
+    fn do_execute(&mut self, project: &mut Project) {
         if let Some(inst) = project.preset_instance_mut(&self.target) {
             inst.relight_params.height_from = self.new_value;
             inst.bump_graph_structure_version();
         }
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         if let Some(inst) = project.preset_instance_mut(&self.target) {
             inst.relight_params.height_from = self.old_value;
             inst.bump_graph_structure_version();
@@ -861,7 +892,8 @@ impl ToggleEffectParamExposeCommand {
 }
 
 impl Command for ToggleEffectParamExposeCommand {
-    fn execute(&mut self, project: &mut Project) {
+    fn touches(&self) -> ChangeSet { crate::commands::WHOLE_INSTANCES }
+    fn do_execute(&mut self, project: &mut Project) {
         let node_id = self.node_id.clone();
         let node_handle = self.node_handle.clone();
         let inner_param = self.inner_param.clone();
@@ -999,7 +1031,7 @@ impl Command for ToggleEffectParamExposeCommand {
         self.reverse = reverse_out.unwrap_or_default();
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         let reverse = std::mem::take(&mut self.reverse);
         if let Some(effect) = project.find_effect_by_id_mut(&self.effect_id) {
             match reverse {
@@ -1086,7 +1118,8 @@ impl ToggleParamExposeCommand {
 }
 
 impl Command for ToggleParamExposeCommand {
-    fn execute(&mut self, project: &mut Project) {
+    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Effects]) }
+    fn do_execute(&mut self, project: &mut Project) {
         let id = self.param_id.as_ref();
         let new_v = self.new_exposed;
         self.prev_exposed = project.find_effect_by_id_mut(&self.effect_id).and_then(|effect| {
@@ -1102,7 +1135,7 @@ impl Command for ToggleParamExposeCommand {
         });
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         let Some(prev) = self.prev_exposed else {
             return;
         };
@@ -1199,6 +1232,47 @@ impl BindingMappingEdit {
         prev
     }
 
+    /// The part of this edit that lands on a control's spec: all of it for an
+    /// authored control, everything but the range for a described one.
+    fn spec_edit(&self, source: manifold_core::params::SpecSource) -> Self {
+        if source == manifold_core::params::SpecSource::Lookup {
+            Self { min: None, max: None, ..self.clone() }
+        } else {
+            self.clone()
+        }
+    }
+
+    /// Write the touched fields as user choices, read off the edited `spec`.
+    /// Same rule as the calibration wire: only a non-default curve or invert
+    /// is a choice, and a slider range equal to the declared range is none,
+    /// so save and reload is a fixed point. The range goes to the slider
+    /// choice alone; the spec keeps the declared range
+    /// (SCENE_SURFACES_DESIGN.md D15 (slider range and hard limit)).
+    fn apply_to_choices(
+        &self,
+        spec: &manifold_core::effect_graph_def::ParamSpecDef,
+        choices: &mut manifold_core::params::ParamChoices,
+    ) {
+        if let Some(label) = &self.label {
+            choices.rename = Some(label.clone());
+        }
+        if let Some(section) = &self.section {
+            choices.section = Some(section.clone());
+        }
+        if self.min.is_some() || self.max.is_some() {
+            let (lo, hi) = choices.slider.unwrap_or((spec.min, spec.max));
+            let span = (self.min.unwrap_or(lo), self.max.unwrap_or(hi));
+            choices.slider = (span != (spec.min, spec.max)).then_some(span);
+        }
+        if self.curve.is_some() {
+            choices.curve =
+                (!manifold_core::effects::curve_is_linear(&spec.curve)).then_some(spec.curve);
+        }
+        if self.invert.is_some() {
+            choices.invert = spec.invert.then_some(true);
+        }
+    }
+
     /// Apply the scale/offset fields onto the graph's live `BindingDef` — the
     /// ONLY home for them (no manifest field: scale/offset live on the
     /// binding recipe, which synth reads directly, per PARAM_STORAGE_DESIGN
@@ -1290,6 +1364,8 @@ pub struct EditParamMappingCommand {
     /// Pre-edit snapshot, captured on first execute for the single-shot path
     /// (when `explicit_reverse` is `None`).
     reverse: Option<MappingReverse>,
+    /// A lookup control's choices before the edit; undo puts them back.
+    prev_choices: Option<manifold_core::params::ParamChoices>,
 }
 
 impl EditParamMappingCommand {
@@ -1306,6 +1382,7 @@ impl EditParamMappingCommand {
             seed_def,
             explicit_reverse: None,
             reverse: None,
+            prev_choices: None,
         }
     }
 
@@ -1327,7 +1404,18 @@ impl EditParamMappingCommand {
             seed_def,
             explicit_reverse: Some(reverse),
             reverse: None,
+            prev_choices: None,
         }
+    }
+
+    fn restore_choices(&self, project: &mut Project) {
+        let Some(prev) = self.prev_choices.clone() else { return };
+        let binding_id = &self.binding_id;
+        project.with_preset_graph_mut(&self.target, |host| {
+            if let Some(p) = host.params.get_mut(binding_id) {
+                p.choices = prev;
+            }
+        });
     }
 }
 
@@ -1354,10 +1442,18 @@ fn apply_scale_offset_on_graph(
 
 impl Command for EditParamMappingCommand {
     fn touches(&self) -> manifold_core::change::ChangeSet {
-        use manifold_core::change::{ChangeSet, Part};
-        ChangeSet::of(&[Part::Overrides, Part::Shapes, Part::Values])
+        let live = ChangeSet::of(&[Part::Overrides, Part::Shapes, Part::Values]);
+        // A rename or section move decides labels and row layout, which only
+        // Effects reaches (UI_INVALIDATION D22). The drag-commit reverse can
+        // carry them too, so undo declares them as well.
+        let restructures = |e: &BindingMappingEdit| e.label.is_some() || e.section.is_some();
+        if restructures(&self.new) || self.explicit_reverse.as_ref().is_some_and(restructures) {
+            live.union(ChangeSet::of(&[Part::Effects]))
+        } else {
+            live
+        }
     }
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         let binding_id = self.binding_id.clone();
         let new = self.new.clone();
         let seed_def = self.seed_def.clone();
@@ -1412,30 +1508,48 @@ impl Command for EditParamMappingCommand {
                 // the exact dual-write P2 deletes, so this is the SOLE spec
                 // write.
                 let p = host.params.get_mut(&binding_id)?;
-                let spec_snap = new.apply_to_manifest_spec(&mut p.spec);
-                p.calibrated = true;
+                // A lookup control saves only its choices (D7), so the edit
+                // is written there; the spec is the in-memory join and moves
+                // with it, except the range, which stays declared. An
+                // authored control saves its spec: its range is the author's.
+                let spec_snap = new.spec_edit(p.source).apply_to_manifest_spec(&mut p.spec);
+                let prev_choices = (p.source == manifold_core::params::SpecSource::Lookup).then(|| {
+                    let prev = p.choices.clone();
+                    new.apply_to_choices(&p.spec, &mut p.choices);
+                    prev
+                });
 
-                Some(MappingReverse {
-                    spec: spec_snap,
-                    scale: prev_binding.map(|(s, _)| s),
-                    offset: prev_binding.map(|(_, o)| o),
-                })
+                Some((
+                    MappingReverse {
+                        spec: spec_snap,
+                        scale: prev_binding.map(|(s, _)| s),
+                        offset: prev_binding.map(|(_, o)| o),
+                    },
+                    prev_choices,
+                ))
             })
             .flatten();
+        let (snap, prev_choices) = snap.unzip();
+        self.prev_choices = prev_choices.flatten();
         if keep_snapshot {
             self.reverse = snap;
         }
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         let binding_id = self.binding_id.clone();
         // Drag-commit: apply the explicit pre-drag reverse edit (partial — only
         // the fields the drag moved), landing on the true pre-drag values.
         if let Some(reverse_edit) = self.explicit_reverse.clone() {
+            // The choices captured at commit already hold the live preview,
+            // so a lookup control takes the reverse as choices instead.
             project.with_preset_graph_mut(&self.target, |host| {
                 apply_scale_offset_on_graph(host, &binding_id, &reverse_edit);
                 if let Some(p) = host.params.get_mut(&binding_id) {
-                    reverse_edit.apply_to_manifest_spec(&mut p.spec);
+                    reverse_edit.spec_edit(p.source).apply_to_manifest_spec(&mut p.spec);
+                    if p.source == manifold_core::params::SpecSource::Lookup {
+                        reverse_edit.apply_to_choices(&p.spec, &mut p.choices);
+                    }
                 }
             });
             return;
@@ -1461,6 +1575,7 @@ impl Command for EditParamMappingCommand {
                 reverse.spec.restore(&mut p.spec);
             }
         });
+        self.restore_choices(project);
     }
 
     fn description(&self) -> &str {
@@ -1644,6 +1759,9 @@ pub(crate) mod tests {
                     section: None,
                     card_visible: true,
                     material_role: None,
+                    limit: Default::default(),
+                    unit: None,
+                    scene: None,
                 }],
                 bindings: vec![BindingDef {
                     id: param_id.to_string(),
@@ -1692,12 +1810,14 @@ pub(crate) mod tests {
         (spec.invert, spec.max, scale)
     }
 
-    /// Read a param's live `(invert, max)` off the MANIFEST — the sole
+    /// Read a param's live `(invert, slider max)` off the MANIFEST — the sole
     /// authority a card/renderer reads after a calibration edit
-    /// (PARAM_STORAGE_BOUNDARIES_DESIGN.md D4).
+    /// (PARAM_STORAGE_BOUNDARIES_DESIGN.md D4). The max is the user's slider
+    /// span, never the declared range (SCENE_SURFACES_DESIGN.md D15 (slider
+    /// range vs hard limit)).
     fn manifest_reshape(inst: &manifold_core::effects::PresetInstance, id: &str) -> (bool, f32) {
         let p = inst.params.get(id).expect("manifest entry present");
-        (p.spec.invert, p.spec.max)
+        (p.spec.invert, p.slider_span().1)
     }
 
     /// Manually seed `inst`'s manifest with a bundled [`Param`] matching
@@ -1730,6 +1850,9 @@ pub(crate) mod tests {
             section: None,
             card_visible: true,
             material_role: None,
+            limit: Default::default(),
+            unit: None,
+            scene: None,
         }));
     }
 
@@ -2033,19 +2156,18 @@ pub(crate) mod tests {
             "the plain graph-version bump still fires — the renderer's rehydrate signal",
         );
         let p = fx.params.get("amount").expect("manifest entry present");
-        assert_eq!(p.spec.min, 0.25);
-        assert_eq!(p.spec.max, 4.0);
+        assert_eq!(p.slider_span(), (0.25, 4.0));
+        assert_eq!((p.spec.min, p.spec.max), (0.0, 1.0), "the declared range never takes the user's span");
         assert!(p.spec.invert);
         assert_eq!(p.spec.curve, MacroCurve::Exponential);
-        assert!(p.calibrated);
+        assert!(p.choices.calibrated());
 
         // Undo restores the pre-edit spec exactly, still without an override.
         cmd.undo(&mut project);
         let fx = &project.settings.master_effects[0];
         assert!(fx.graph.is_none(), "undo must not materialize either");
         let p = fx.params.get("amount").expect("manifest entry present");
-        assert_eq!(p.spec.min, 0.0, "undo restores the seeded min");
-        assert_eq!(p.spec.max, 1.0, "undo restores the seeded max");
+        assert_eq!(p.slider_span(), (0.0, 1.0), "undo restores the seeded span");
         assert!(!p.spec.invert, "undo restores the seeded invert");
         assert_eq!(p.spec.curve, MacroCurve::Linear, "undo restores the seeded curve");
         assert_ne!(
@@ -2058,7 +2180,7 @@ pub(crate) mod tests {
         cmd.execute(&mut project);
         let fx = &project.settings.master_effects[0];
         assert!(fx.graph.is_none());
-        assert_eq!(fx.params.get("amount").unwrap().spec.max, 4.0);
+        assert_eq!(fx.params.get("amount").unwrap().slider_span().1, 4.0);
     }
 
     /// The generator twin of [`spec_only_edit_on_catalog_default_stays_unmaterialized`]:
@@ -2114,7 +2236,7 @@ pub(crate) mod tests {
             .and_then(|gp| gp.params.get("complexity"))
             .expect("manifest entry present");
         assert_eq!(p.spec.curve, MacroCurve::Exponential);
-        assert!(p.calibrated);
+        assert!(p.choices.calibrated());
 
         cmd.undo(&mut project);
         let layer = &project.timeline.layers[0];
@@ -2124,6 +2246,58 @@ pub(crate) mod tests {
             .and_then(|gp| gp.params.get("complexity"))
             .expect("manifest entry present");
         assert_eq!(p.spec.curve, MacroCurve::Linear, "undo restores the seeded curve");
+    }
+
+    /// Run one drawer edit on a lookup control through the gateway, where the
+    /// change audit panics on any part the command did not declare.
+    fn drawer_edit_through_gateway(edit: BindingMappingEdit) -> manifold_core::change::ChangeSet {
+        use manifold_core::PresetTypeId;
+        use manifold_core::layer::Layer;
+
+        let mut project = Project::default();
+        let layer = Layer::new_generator("Gen".into(), PresetTypeId::new("Plasma"), 0);
+        let layer_id = layer.layer_id.clone();
+        project.timeline.insert_layer(0, layer);
+        let cmd = EditParamMappingCommand::new(
+            GraphTarget::Generator(layer_id.clone()),
+            "complexity".to_string(),
+            edit,
+            Some(seed_def_with_param("complexity")),
+        );
+        let touches = cmd.touches();
+        let mut service = crate::service::EditingService::new();
+        service.execute(Box::new(cmd), &mut project);
+        assert!(service.undo(&mut project));
+        assert!(service.redo(&mut project));
+        touches
+    }
+
+    #[test]
+    fn drawer_rename_and_section_declare_effects() {
+        use manifold_core::change::Part;
+        let rename = drawer_edit_through_gateway(BindingMappingEdit {
+            label: Some("Detail".to_string()),
+            ..Default::default()
+        });
+        assert!(rename.contains(Part::Effects));
+        let section = drawer_edit_through_gateway(BindingMappingEdit {
+            section: Some(Some("Shape".to_string())),
+            ..Default::default()
+        });
+        assert!(section.contains(Part::Effects));
+    }
+
+    #[test]
+    fn drawer_slider_edit_declares_no_effects() {
+        use manifold_core::change::Part;
+        let slider = drawer_edit_through_gateway(BindingMappingEdit {
+            min: Some(0.25),
+            max: Some(0.75),
+            curve: Some(MacroCurve::Exponential),
+            invert: Some(true),
+            ..Default::default()
+        });
+        assert!(!slider.contains(Part::Effects));
     }
 
     /// Generator command: materialize the layer's `generator_graph` from the

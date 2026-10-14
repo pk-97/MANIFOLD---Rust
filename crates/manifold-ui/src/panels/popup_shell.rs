@@ -127,7 +127,7 @@ mod tests {
         assert_eq!(c.style.border_color, crate::color::MODAL_BORDER);
         assert_eq!(c.style.corner_radius, crate::color::POPUP_RADIUS);
         // Built scrim-first so the section 17 shadow skips it and lifts the container.
-        assert!(shell.backdrop.index() < shell.container.index());
+        assert!(shell.backdrop.slot() < shell.container.slot());
     }
 
     #[test]

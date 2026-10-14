@@ -30,7 +30,8 @@ const RULER_BEAT_TICK_H: f32 = 8.0;
 const RULER_BAR_TICK_H: f32 = 14.0;
 const RULER_LABEL_H: f32 = 14.0;
 const RULER_LABEL_W: f32 = 40.0;
-// Maximum nodes to allocate for ruler ticks (avoid unbounded allocation)
+// The ruler pool size: one fixed size whatever the zoom, so a zoom never
+// outgrows what a build allocated.
 const MAX_RULER_TICKS: usize = 1500;
 
 // ── Submodules (the god-panel split: model / coordinate / render / interaction) ──
@@ -134,6 +135,7 @@ pub struct TimelineViewportPanel {
     // only so the input system routes presses/drags here.
     scrollbar_h_rect: Rect,
     scrollbar_h_btn_id: Option<NodeId>,
+    tracks_overlay_id: Option<NodeId>,
     // insert_cursor_track_id: removed — painted into bitmap
     // selection_region_id: removed — painted into bitmap
 
@@ -147,9 +149,12 @@ pub struct TimelineViewportPanel {
     export_in_marker_id: Option<NodeId>,
     export_out_marker_id: Option<NodeId>,
 
-    // Node IDs — dynamic elements (rebuilt on scroll/zoom)
+    // The ruler pool: MAX_RULER_TICKS tick and label slots, laid out in
+    // place on scroll and zoom. The first `ruler_shown` slots are in use.
     ruler_tick_ids: Vec<NodeId>,
     ruler_label_ids: Vec<NodeId>,
+    ruler_shown: usize,
+    ruler_text: String,
     // grid_line_ids: removed — grid painted into bitmap
     track_bg_ids: Vec<NodeId>,
     track_bg_groups: Vec<TrackBgGroup>,
@@ -170,10 +175,6 @@ pub struct TimelineViewportPanel {
     /// sample-accurate scrubbing. Unity: `RulerScrubHandler.ShouldUseFreeScrub()`.
     scrub_free: bool,
 
-    // Dirty-checking fingerprint to skip unnecessary rebuilds.
-    // From Unity LayerBitmapRenderer dirty-checking (lines 99-186).
-    cached_fingerprint: u64,
-
     // Overview bitmap — CPU pixel buffer for the full-timeline minimap.
     // Replaces per-clip panel nodes with a single texture (no clip cap).
     // Two-layer design: cached clip layer + lightweight overlay compositing.
@@ -183,11 +184,17 @@ pub struct TimelineViewportPanel {
     overview_clip_pixels: Vec<Color32>,
     overview_tex_w: usize,
     overview_tex_h: usize,
-    overview_dirty: bool,
+    /// An input of the bitmap moved: repaint it.
+    overview_repaint: bool,
+    /// The bitmap changed or the strip was rebuilt: upload it. Only
+    /// `overview_bitmap` clears it; a runner that never uploads must not
+    /// keep the repaint going.
+    overview_upload: bool,
+    /// Content end from the last repaint, for keying the playhead on its pixel.
+    overview_max_beat: f32,
     /// True when clip data changed and clip layer needs full repaint.
     overview_clips_dirty: bool,
-    overview_last_clip_fingerprint: u64,
-    overview_last_playhead: f32,
+    overview_last_playhead_px: i32,
     overview_last_scroll_x: f32,
     overview_last_ppb: f32,
     overview_last_track_count: usize,
@@ -359,6 +366,7 @@ impl TimelineViewportPanel {
             insert_cursor_ruler_id: None,
             scrollbar_h_rect: Rect::ZERO,
             scrollbar_h_btn_id: None,
+            tracks_overlay_id: None,
             export_in_beat: Beats::ZERO,
             export_out_beat: Beats::ZERO,
             export_range_enabled: false,
@@ -367,6 +375,8 @@ impl TimelineViewportPanel {
             export_out_marker_id: None,
             ruler_tick_ids: Vec::new(),
             ruler_label_ids: Vec::new(),
+            ruler_shown: 0,
+            ruler_text: String::new(),
             track_bg_ids: Vec::new(),
             track_bg_groups: Vec::new(),
             active_track_index: None,
@@ -375,15 +385,15 @@ impl TimelineViewportPanel {
             node_count: 0,
             drag: DragController::new(),
             scrub_free: false,
-            cached_fingerprint: 0,
             overview_pixels: Vec::new(),
             overview_clip_pixels: Vec::new(),
             overview_tex_w: 0,
             overview_tex_h: 0,
-            overview_dirty: true,
+            overview_repaint: true,
+            overview_upload: true,
+            overview_max_beat: 0.0,
             overview_clips_dirty: true,
-            overview_last_clip_fingerprint: 0,
-            overview_last_playhead: 0.0,
+            overview_last_playhead_px: -1,
             overview_last_scroll_x: 0.0,
             overview_last_ppb: 0.0,
             overview_last_track_count: 0,
@@ -465,66 +475,6 @@ impl TimelineViewportPanel {
         self.layer_ids.get(i)
     }
 
-    /// Compute a fingerprint of the current viewport state.
-    /// If unchanged from cached, the tree rebuild can be skipped.
-    /// From Unity LayerBitmapRenderer.ComputeClipFingerprint (lines 332-344).
-    pub fn compute_fingerprint(&self) -> u64 {
-        let (min_beat, max_beat) = self.visible_beat_range();
-        let mut hash = self.total_clip_count() as u64;
-        hash = hash
-            .wrapping_mul(31)
-            .wrapping_add(self.mapper.pixels_per_beat().to_bits() as u64);
-        hash = hash
-            .wrapping_mul(31)
-            .wrapping_add(self.scroll_x_beats.as_f32().to_bits() as u64);
-        hash = hash
-            .wrapping_mul(31)
-            .wrapping_add(self.scroll_y_px.to_bits() as u64);
-        hash = hash.wrapping_mul(31).wrapping_add(self.tracks.len() as u64);
-        hash = hash
-            .wrapping_mul(31)
-            .wrapping_add(self.selected_clip_ids.len() as u64);
-        hash = hash.wrapping_mul(31).wrapping_add(
-            self.hovered_clip_id
-                .as_ref()
-                .map(|s| {
-                    let mut h = 0u64;
-                    for b in s.bytes() {
-                        h = h.wrapping_mul(31).wrapping_add(b as u64);
-                    }
-                    h
-                })
-                .unwrap_or(0),
-        );
-        // Per-visible-clip fingerprint
-        for clip in self.clips_by_layer.iter().flatten() {
-            let clip_end = (clip.start_beat + clip.duration_beats).as_f32();
-            if clip_end <= min_beat || clip.start_beat.as_f32() >= max_beat {
-                continue;
-            }
-            hash = hash
-                .wrapping_mul(31)
-                .wrapping_add(clip.start_beat.as_f32().to_bits() as u64);
-            hash = hash
-                .wrapping_mul(31)
-                .wrapping_add(clip_end.to_bits() as u64);
-            hash = hash.wrapping_mul(31).wrapping_add(clip.is_muted as u64);
-            hash = hash.wrapping_mul(31).wrapping_add(clip.is_locked as u64);
-        }
-        hash
-    }
-
-    /// Check if the viewport needs a full tree rebuild based on fingerprint.
-    /// Returns true if changed (needs rebuild), false if unchanged (skip).
-    pub fn needs_rebuild(&mut self) -> bool {
-        let fp = self.compute_fingerprint();
-        if fp == self.cached_fingerprint {
-            return false;
-        }
-        self.cached_fingerprint = fp;
-        true
-    }
-
     // ── Configuration ─────────────────────────────────────────────
 
     pub fn set_tracks(&mut self, tracks: Vec<TrackInfo>) {
@@ -584,6 +534,13 @@ impl TimelineViewportPanel {
     /// together.
     pub fn rebuild_mapper_layout(&mut self, layers: &[crate::view::UiLayer]) {
         self.mapper.rebuild_y_layout(layers);
+        // A lane resize moves track heights with no `set_tracks`: the grid
+        // bitmaps take the new heights here.
+        for (i, renderer) in self.bitmap_renderers.iter_mut().enumerate() {
+            if let Some(renderer) = renderer {
+                renderer.set_track_height(self.mapper.get_layer_height(i));
+            }
+        }
         self.set_scroll(self.scroll_x_beats.as_f32(), self.scroll_y_px);
         self.rebuild_automation_lane_screens();
     }
@@ -608,22 +565,10 @@ impl TimelineViewportPanel {
     }
 
     pub fn set_clips(&mut self, clips: Vec<ViewportClip>) {
-        // Compute clip fingerprint for overview dirty-checking (O(N) but only on clip change)
-        let mut clip_fp: u64 = clips.len() as u64;
-        for c in &clips {
-            clip_fp = clip_fp
-                .wrapping_mul(31)
-                .wrapping_add(c.start_beat.as_f32().to_bits() as u64);
-            clip_fp = clip_fp
-                .wrapping_mul(31)
-                .wrapping_add(c.duration_beats.as_f32().to_bits() as u64);
-            clip_fp = clip_fp.wrapping_mul(31).wrapping_add(c.layer_index as u64);
-        }
-        if clip_fp != self.overview_last_clip_fingerprint {
-            self.overview_clips_dirty = true;
-        }
-        self.overview_last_clip_fingerprint = clip_fp;
-        self.overview_dirty = true;
+        // Clip data moved (the frame plan projects clips only then): the
+        // overview repaints its clip layer.
+        self.overview_clips_dirty = true;
+        self.overview_repaint = true;
 
         // Bucket clips by layer — clear inner vecs (preserving capacity)
         // instead of dropping and reallocating them.
@@ -765,14 +710,6 @@ impl TimelineViewportPanel {
             current_scroll.clamp(min_scroll, max_scroll)
         };
         self.set_scroll(self.scroll_x_beats.as_f32(), desired_scroll)
-    }
-
-    /// Force a specific layer's bitmap to repaint on the next frame.
-    /// Used for per-layer invalidation from editing operations.
-    pub fn invalidate_layer_bitmap(&mut self, layer_index: usize) {
-        if let Some(Some(r)) = self.bitmap_renderers.get_mut(layer_index) {
-            r.invalidate();
-        }
     }
 
     pub fn set_render_scale(&mut self, scale: f32) {
@@ -1166,6 +1103,7 @@ impl TimelineViewportPanel {
                                 beat: p.beat,
                                 value_norm: p.value_norm,
                                 shape: p.shape,
+                                past_end: p.past_end,
                             }
                         })
                         .collect()
@@ -1667,7 +1605,7 @@ impl Panel for TimelineViewportPanel {
 
         // Overview strip bitmap — repainted in repaint_overview() each frame,
         // uploaded and rendered via the layer bitmap GPU path (index 1002).
-        self.overview_dirty = true;
+        self.overview_upload = true;
 
         // Ruler background — INTERACTIVE so clicks register for playhead scrubbing
         self.ruler_bg_id = Some(tree.add_button_keyed(
@@ -1702,7 +1640,7 @@ impl Panel for TimelineViewportPanel {
         // panel nodes (track backgrounds, grid lines) won't generate events.
         // Keyed so its widget id survives a rebuild between press and release;
         // otherwise the release misses the pressed widget and no Click fires.
-        tree.add_button_keyed(
+        self.tracks_overlay_id = Some(tree.add_button_keyed(
             None,
             self.tracks_rect.x,
             self.tracks_rect.y,
@@ -1714,7 +1652,7 @@ impl Panel for TimelineViewportPanel {
             },
             "",
             crate::param_surface::stable_key("viewport.tracks"),
-        );
+        ));
 
         // Horizontal scrollbar routing button (section 24 5e). Transparent — the track
         // and thumb are drawn as GPU rects in app.rs from `scrollbar_h_layout`
@@ -2481,8 +2419,8 @@ mod tests {
                 target: UiGraphTarget::Effect(EffectId::new("fx")),
                 label: "Fx: amount".into(),
                 points: vec![
-                    UiAutomationPoint { beat: Beats::from_f32(4.0), value_norm: 0.5, shape: UiSegmentShape::Linear },
-                    UiAutomationPoint { beat: Beats::from_f32(8.0), value_norm: 0.8, shape: UiSegmentShape::Linear },
+                    UiAutomationPoint { beat: Beats::from_f32(4.0), value_norm: 0.5, shape: UiSegmentShape::Linear, past_end: false },
+                    UiAutomationPoint { beat: Beats::from_f32(8.0), value_norm: 0.8, shape: UiSegmentShape::Linear, past_end: false },
                 ],
                 param_min: 0.0,
                 param_max: 1.0,

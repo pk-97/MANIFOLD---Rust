@@ -4,7 +4,7 @@
 //! overlay rendering helper. All methods are `impl Application` blocks that
 //! operate on the struct defined in app.rs.
 
-use manifold_ui::{ClipAction, EditingAction, LayerAction, MarkerAction, ParamsAction, ProjectAction, RootAction, TransportAction};
+use manifold_ui::{EditingAction, ParamsAction, ProjectAction, RootAction, TransportAction};
 use manifold_ui_paint::ui_renderer::UIRenderer;
 
 use manifold_ui::node::FontWeight;
@@ -196,25 +196,153 @@ mod preparation_inversion_tests {
 }
 
 impl Application {
+    /// Take the newest state from the content thread: its export notice, its
+    /// project snapshot and stamps, its modulation capture and spectrogram
+    /// columns, then the state itself. The one reader of the handoff, for the
+    /// normal frame and perform mode alike; the handoff folds any state the
+    /// UI never read into the one it holds, so one take per frame sees all.
+    pub(crate) fn intake_content_state(&mut self) {
+        let Some(state) = self.state_rx.as_ref().and_then(|rx| rx.try_recv().ok()) else {
+            return;
+        };
+        self.ws.ui_root.consume_export_notification(&state);
+        if state.is_bare_notice() {
+            return;
+        }
+        let drag_active = self.overlay.drag_mode()
+            != manifold_ui::interaction_overlay::DragMode::None
+            || self.overlay.has_pending_automation_press();
+        // Suppress snapshots until content thread catches up after a local project load.
+        // Safety net: timeout after 120 frames (~2s) to prevent indefinite suppression.
+        const MAX_SUPPRESS_FRAMES: u64 = 120;
+        let suppress_timed_out = self.suppress_snapshot_until > 0
+            && self
+                .frame_count
+                .saturating_sub(self.suppress_snapshot_set_at)
+                >= MAX_SUPPRESS_FRAMES;
+        if suppress_timed_out {
+            log::warn!("[UI] Snapshot suppression timed out — accepting snapshot");
+            self.suppress_snapshot_until = 0;
+        }
+        let suppressed = state.data_version < self.suppress_snapshot_until;
 
+        // Accept the project snapshot. A drag in flight lives in the
+        // gesture preview, which re-covers the fresh clone below, so
+        // no drag holds snapshots back (D12).
+        if let Some(snapshot) = state.project_snapshot
+            && !suppressed
+        {
+            // `ContentState` travels every tick, so only an accepted
+            // snapshot folds stamps, and a Values, Shapes or
+            // MappingRanges move alone never re-projects (D23).
+            let moved = self.ui_edits.stamps.fold_snapshot(&state.stamps);
+            let version_changed = state.data_version != self.content_state.data_version
+                || !moved.minus(manifold_core::change::ChangeSet::LIVE).is_empty();
+            // Only deep-clone from Arc when it's a different allocation
+            // (new data_version). Modulation-only frames send the same
+            // Arc pointer — skip the clone (values are 1 frame stale,
+            // imperceptible).
+            let is_new_arc = self
+                .last_snapshot_arc
+                .as_ref()
+                .is_none_or(|prev| !std::sync::Arc::ptr_eq(prev, &snapshot));
+            if is_new_arc {
+                manifold_core::work_count::record_work(manifold_core::work_count::WorkKind::ProjectClone);
+                self.local_project = (*snapshot).clone();
+                self.last_snapshot_arc = Some(snapshot);
+                // Re-cover the clone with the gesture in flight.
+                // With no drag live, a leftover preview is stale
+                // and drops with the content's truth.
+                if drag_active {
+                    self.ui_edits.preview.reapply(&mut self.local_project);
+                } else {
+                    drop(self.ui_edits.preview.take_clip_gesture());
+                    self.ui_edits.preview.clear_lanes();
+                }
+            } else {
+                // Same Arc — skip deep clone. Drop the Arc ref.
+                drop(snapshot);
+            }
+            // Restore the one actively-dragged gesture so a snapshot
+            // doesn't overwrite the value the user is manipulating —
+            // every family, panel-wired and frame-resident (the
+            // bound-node-param card scrub, BUG-281, whose live writes
+            // land in `local_project` every tick, is now a
+            // `ResolvedScrub::BoundNodeParam` in `active`).
+            self.scrub.restore_dragged(&mut self.local_project);
+            // Clear suppression once we've accepted a post-load snapshot
+            self.suppress_snapshot_until = 0;
 
+            // An edit snapshot: the stamp fold above already moved the
+            // parts the planner re-projects (D5 source a). Here only
+            // the selection drops references the edit removed.
+            if version_changed {
+                // Prune selection references to deleted clips/layers
+                let valid_clips: std::collections::HashSet<manifold_core::ClipId> =
+                    self.local_project
+                        .timeline
+                        .layers
+                        .iter()
+                        .flat_map(|l| l.clips.iter().map(|c| c.id.clone()))
+                        .collect();
+                let valid_layers: std::collections::HashSet<manifold_core::LayerId> =
+                    self.local_project
+                        .timeline
+                        .layers
+                        .iter()
+                        .map(|l| l.layer_id.clone())
+                        .collect();
+                self.selection
+                    .prune_stale_references(&valid_clips, &valid_layers);
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+                // Validate active_layer_id
+                if let Some(ref id) = self.active_layer_id
+                    && !valid_layers.contains(id)
+                {
+                    self.active_layer_id = self
+                        .local_project
+                        .timeline
+                        .layers
+                        .last()
+                        .map(|l| l.layer_id.clone());
+                }
+            }
+        }
+        // Apply lightweight modulation snapshot (param_values only)
+        // to local_project — no full Project clone needed.
+        if !suppressed
+            && let Some(ref mod_snap) = state.modulation_snapshot
+        {
+            mod_snap.apply(&mut self.local_project);
+            // Restore the one actively-dragged gesture so modulation
+            // doesn't overwrite the value the user is manipulating —
+            // every family, panel-wired and frame-resident (BUG-281's
+            // bound-node-param card scrub included, now in `active`).
+            self.scrub.restore_dragged(&mut self.local_project);
+        }
+        // The columns accumulate until the render path draws (clears)
+        // them; `content_state` keeps only the newest state. Perform mode
+        // draws no scope, so it keeps none.
+        if self.perform.active {
+            self.pending_spectrogram_columns.clear();
+            self.pending_spectrogram_scalars.clear();
+        } else {
+            crate::content_state::append_spectrogram(
+                &mut self.pending_spectrogram_columns,
+                &mut self.pending_spectrogram_scalars,
+                &state.spectrogram_columns,
+                &state.spectrogram_col_scalars,
+                state.spectrogram_num_bins,
+            );
+        }
+        self.content_state = ContentState {
+            project_snapshot: None,      // consumed above
+            modulation_snapshot: None,   // consumed above
+            spectrogram_columns: Vec::new(), // accumulated above
+            spectrogram_col_scalars: Vec::new(), // accumulated above
+            ..state
+        };
+    }
 
     pub(crate) fn tick_and_render(&mut self) {
         self.work_trace.frame("ui");
@@ -236,198 +364,16 @@ impl Application {
         let frame_t0 = std::time::Instant::now();
         let mut seg = frame_t0;
 
-        // 1. Drain state from content thread
-        if let Some(ref rx) = self.state_rx {
-            // Drain all pending states, keep the latest
-            while let Ok(state) = rx.try_recv() {
-                // Export messages are sparse notifications, not full playback
-                // snapshots. Consume every event before keeping the latest state.
-                if self.ws.ui_root.consume_export_notification(&state) {
-                    continue;
-                }
-                let drag_active = self.overlay.drag_mode()
-                    != manifold_ui::interaction_overlay::DragMode::None
-                    || self.overlay.has_pending_automation_press();
-                // Suppress snapshots until content thread catches up after a local project load.
-                // Safety net: timeout after 120 frames (~2s) to prevent indefinite suppression.
-                const MAX_SUPPRESS_FRAMES: u64 = 120;
-                let suppress_timed_out = self.suppress_snapshot_until > 0
-                    && self
-                        .frame_count
-                        .saturating_sub(self.suppress_snapshot_set_at)
-                        >= MAX_SUPPRESS_FRAMES;
-                if suppress_timed_out {
-                    log::warn!("[UI] Snapshot suppression timed out — accepting snapshot");
-                    self.suppress_snapshot_until = 0;
-                }
-                let suppressed = state.data_version < self.suppress_snapshot_until;
-
-                // Accept project snapshot if data_version changed (unless drag in progress)
-                if let Some(snapshot) = state.project_snapshot {
-                    // Inspector drags (slider/trim/target/ADSR) are safe to accept
-                    // snapshots through — handle_drag() writes the dragged value back
-                    // to local_project in the same tick (via dispatch()), so the
-                    // snapshot value is immediately overwritten. Accepting snapshots
-                    // during inspector drag lets modulation-driven slider animations
-                    // continue for non-dragged params.
-                    //
-                    // Overlay drags (clip move/trim in viewport) write clip positions
-                    // directly via the host — those would be overwritten by the
-                    // snapshot, so we still suppress for overlay drags.
-                    if !drag_active && !suppressed {
-                        // `ContentState` travels every tick, so only an accepted
-                        // snapshot compares stamps, and a Values, Shapes or
-                        // MappingRanges move alone never re-projects (D23).
-                        let version_changed = state.data_version != self.content_state.data_version
-                            || !state
-                                .stamps
-                                .moved_since(&self.accepted_stamps)
-                                .minus(manifold_core::change::ChangeSet::LIVE)
-                                .is_empty();
-                        self.accepted_stamps = state.stamps;
-                        // Only deep-clone from Arc when it's a different allocation
-                        // (new data_version). Modulation-only frames send the same
-                        // Arc pointer — skip the clone (values are 1 frame stale,
-                        // imperceptible).
-                        let is_new_arc = self
-                            .last_snapshot_arc
-                            .as_ref()
-                            .is_none_or(|prev| !std::sync::Arc::ptr_eq(prev, &snapshot));
-                        if is_new_arc {
-                            manifold_core::work_count::record_work(manifold_core::work_count::WorkKind::ProjectClone);
-                            self.local_project = (*snapshot).clone();
-                            self.last_snapshot_arc = Some(snapshot);
-                        } else {
-                            // Same Arc — skip deep clone. Drop the Arc ref.
-                            drop(snapshot);
-                        }
-                        // Restore the one actively-dragged gesture so a snapshot
-                        // doesn't overwrite the value the user is manipulating —
-                        // every family, panel-wired and frame-resident (the
-                        // bound-node-param card scrub, BUG-281, whose live writes
-                        // land in `local_project` every tick, is now a
-                        // `ResolvedScrub::BoundNodeParam` in `active`).
-                        self.scrub.restore_dragged(&mut self.local_project);
-                        // Clear suppression once we've accepted a post-load snapshot
-                        self.suppress_snapshot_until = 0;
-
-                        // Only trigger structural sync when data_version changed
-                        // (editing commands, undo/redo). Modulation-only snapshots
-                        // just update param_values — push_state() syncs sliders
-                        // every frame without needing a structural rebuild.
-                        if version_changed {
-                            // Prune selection references to deleted clips/layers
-                            let valid_clips: std::collections::HashSet<manifold_core::ClipId> =
-                                self.local_project
-                                    .timeline
-                                    .layers
-                                    .iter()
-                                    .flat_map(|l| l.clips.iter().map(|c| c.id.clone()))
-                                    .collect();
-                            let valid_layers: std::collections::HashSet<manifold_core::LayerId> =
-                                self.local_project
-                                    .timeline
-                                    .layers
-                                    .iter()
-                                    .map(|l| l.layer_id.clone())
-                                    .collect();
-                            self.selection
-                                .prune_stale_references(&valid_clips, &valid_layers);
-
-                            // Validate active_layer_id
-                            if let Some(ref id) = self.active_layer_id
-                                && !valid_layers.contains(id)
-                            {
-                                self.active_layer_id = self
-                                    .local_project
-                                    .timeline
-                                    .layers
-                                    .last()
-                                    .map(|l| l.layer_id.clone());
-                            }
-
-                            self.needs_structural_sync = true;
-                            self.needs_rebuild = true;
-                        }
-                    }
-                }
-                // The content clock can change BPM without a project edit. Keep
-                // the driver readout current without writing UI-side project state.
-                if !drag_active && !suppressed && state.bpm.is_finite() && state.bpm > 0.0 {
-                    let bpm = manifold_core::Bpm(state.bpm as f32);
-                    let changed = self.ws.ui_root.sync_driver_bpm(&self.local_project, bpm);
-                    if let Some(ed) = self.graph_editor.as_mut() {
-                        ed.ui_root.sync_driver_bpm(&self.local_project, bpm);
-                    }
-                    if changed {
-                        self.needs_structural_sync = true;
-                        self.needs_rebuild = true;
-                    }
-                }
-                // Apply lightweight modulation snapshot (param_values only)
-                // to local_project — no full Project clone needed.
-                if !drag_active
-                    && !suppressed
-                    && let Some(ref mod_snap) = state.modulation_snapshot
-                {
-                    mod_snap.apply(&mut self.local_project);
-                    // Restore the one actively-dragged gesture so modulation
-                    // doesn't overwrite the value the user is manipulating —
-                    // every family, panel-wired and frame-resident (BUG-281's
-                    // bound-node-param card scrub included, now in `active`).
-                    self.scrub.restore_dragged(&mut self.local_project);
-                }
-                // Accumulate VQT columns from EVERY drained snapshot — the
-                // assignment below keeps only the latest, so reading columns off
-                // `content_state` would drop those from earlier snapshots when
-                // several arrive in one UI frame, and re-push them on frames that
-                // drain none. The render path consumes (clears) this buffer.
-                self.pending_spectrogram_columns
-                    .extend_from_slice(&state.spectrogram_columns);
-                // Overlay records ride in lockstep (one ScopeColumn per column).
-                self.pending_spectrogram_scalars
-                    .extend_from_slice(&state.spectrogram_col_scalars);
-                // Bound it: never keep more than one screen-width of columns (a
-                // full sweep overwrites the rest anyway). 4096 = the max texture
-                // width clamp below, so an open scope never drops a column it
-                // could display; this only caps memory when the scope is closed
-                // but an audio mod keeps capture — and column production —
-                // running, since only the render path drains this buffer.
-                let nb = state.spectrogram_num_bins;
-                if nb > 0 {
-                    const MAX_PENDING_COLS: usize = 4096;
-                    let excess =
-                        self.pending_spectrogram_columns.len().saturating_sub(MAX_PENDING_COLS * nb);
-                    if excess > 0 {
-                        self.pending_spectrogram_columns.drain(0..excess);
-                        // Drop the matching overlay records (one per column).
-                        // (Pre-ScopeColumn this used a hand-tracked stride and
-                        // had drifted to a wrong literal, silently desyncing
-                        // the overlay under overflow — the record type makes
-                        // that unrepresentable.)
-                        let cols = (excess / nb).min(self.pending_spectrogram_scalars.len());
-                        self.pending_spectrogram_scalars.drain(0..cols);
-                    }
-                }
-                self.content_state = ContentState {
-                    project_snapshot: None,      // consumed above
-                    modulation_snapshot: None,   // consumed above
-                    spectrogram_columns: Vec::new(), // accumulated above
-                    spectrogram_col_scalars: Vec::new(), // accumulated above
-                    ..state
-                };
-            }
-        }
+        // 1. Take the newest state from the content thread.
+        self.intake_content_state();
         self.tick_sync_calibration();
 
-        if crate::edit_selection::apply_update(
+        // The applied selection moves its own versions.
+        crate::edit_selection::apply_update(
             &mut self.ws.ui_root, &self.local_project,
             self.content_state.edit_selection_update.as_deref(),
             &mut self.selection, &mut self.active_layer_id,
-        ) {
-            self.needs_structural_sync = true;
-            self.needs_rebuild = true;
-        }
+        );
 
         // 1a. Debounced background autosave (GIG_RESILIENCE_DESIGN section 6). Runs
         // after the drain so it sees the latest data_version + dirty flag;
@@ -467,25 +413,32 @@ impl Application {
         // audio clips and let the cache background-decode any new ones, drain
         // finished peaks, and evict departed clips. The peaks are attached to
         // each ViewportClip on the next sync. See docs/AUDIO_LAYER_DESIGN.md.
-        let audio_clips: Vec<(manifold_core::id::ClipId, String)> = self
-            .local_project
-            .timeline
-            .layers
-            .iter()
-            .filter(|l| l.is_audio())
-            .flat_map(|l| {
-                l.clips
-                    .iter()
-                    .filter(|c| c.is_audio())
-                    .map(|c| (c.id.clone(), c.audio_file_path.clone()))
-            })
-            .collect();
+        // The clip list is walked only when Clips or Layers moved (P4c).
+        let clips_key = self.ui_edits.stamps.parts().key(manifold_core::change::ChangeSet::of(&[
+            manifold_core::change::Part::Clips,
+            manifold_core::change::Part::Layers,
+        ]));
+        let project = &self.local_project;
+        let gather = || -> Vec<(manifold_core::id::ClipId, String)> {
+            project
+                .timeline
+                .layers
+                .iter()
+                .filter(|l| l.is_audio())
+                .flat_map(|l| {
+                    l.clips
+                        .iter()
+                        .filter(|c| c.is_audio())
+                        .map(|c| (c.id.clone(), c.audio_file_path.clone()))
+                })
+                .collect()
+        };
         // A decode that lands this frame must be attached now: the viewport clip
         // snapshot is only rebuilt on drag / structural change, so without this the
         // waveform would stay blank (and look like it "cleared" while scrolling)
         // until the next unrelated edit. Re-sync so the new renderer attaches; the
         // per-layer fingerprint (waveform.is_some()) then repaints the lane once.
-        if self.ws.ui_root.audio_waveforms.poll_and_request(&audio_clips) {
+        if self.ws.ui_root.audio_waveforms.drive(clips_key, gather) {
             crate::ui_bridge::sync_clip_positions(&mut self.ws.ui_root, &self.local_project);
         }
 
@@ -502,72 +455,28 @@ impl Application {
             .filter(|(_, h)| *h > 0)
             .map(|(w, h)| w as f32 / h as f32);
         let ui_snap = self.editor_ui_snapshot();
-        if let (Some(canvas), Some(ui_snap)) = (self.graph_canvas.as_mut(), ui_snap) {
-            if let Some(aspect) = preview_aspect {
-                canvas.set_preview_aspect(aspect);
-            }
-            // P2 motion (`UI_CRAFT_AND_MOTION_PLAN.md` D17): the one per-frame
-            // tick for the canvas's marquee-fade/connect-pop/error-shake
-            // tweens — no seam existed for this before (graph_canvas had no
-            // `tick`/`update` method at all); this is the natural insertion
-            // point, right beside the `set_snapshot`/`apply_live_values`
-            // calls that already run every frame the editor window is open,
-            // using the `dt` this function already computed above.
-            canvas.tick((dt * 1000.0) as f32);
-            canvas.set_snapshot(&ui_snap);
-            // Overlay this frame's live (modulated) node values on top of the
-            // just-pushed structural snapshot, so a driver / Ableton / envelope /
-            // card slider is seen moving each knob on the node face. Empty (and a
-            // no-op) whenever no editor is watching the content side.
-            canvas.apply_live_values(&self.content_state.live_node_params);
-            // Tell the canvas whether the watched effect is diverged
-            // from its bundled preset so the "Reset to Default" pill
-            // appears in the header only when there's something to
-            // revert. Polled each frame off `local_project`. Works
-            // for both effect and generator targets.
-            // "MODIFIED" must mean the graph diverges from its bundled preset
-            // in a way that changes what it renders — NOT that a node was
-            // nudged. Moving nodes materialises the per-instance override
-            // (editor_pos has nowhere else to persist), so `graph.is_some()`
-            // goes true after any drag. Compare against the cached catalog
-            // default *ignoring layout* so the badge only lights on a real edit.
-            let has_mod = self.watched_graph_target.as_ref().is_some_and(|target| {
-                let instance_graph = match target {
-                    manifold_core::GraphTarget::Effect(eid) => self
-                        .local_project
-                        .find_effect_by_id(eid)
-                        .and_then(|fx| fx.graph.as_ref()),
-                    manifold_core::GraphTarget::Generator(lid) => self
-                        .local_project
-                        .timeline
-                        .find_layer_by_id(lid)
-                        .and_then(|(_, l)| l.generator_graph()),
-                    manifold_core::GraphTarget::SceneModifier { .. } => self
-                        .local_project
-                        .graph_target_owner(target)
-                        .and_then(|owner| owner.graph.as_ref())
-                        .and_then(|graph| target.graph_in(graph)),
-                };
-                match (instance_graph, self.watched_catalog_default.as_ref().and_then(|base| target.graph_in(base))) {
-                    // Diverged from the bundled preset beyond mere layout.
-                    (Some(g), Some(base)) => g.diverges_ignoring_layout(base),
-                    // Override present but no catalog base to compare against —
-                    // can't prove it's layout-only, so treat as modified.
-                    (Some(_), None) => true,
-                    // Still on the catalog default: nothing to reset.
-                    (None, _) => false,
-                }
-            });
-            canvas.set_has_graph_mod(has_mod);
-            if let Some(ed) = self.graph_editor.as_mut() {
-                ed.offscreen_dirty = true;
-            }
+        if let (Some(canvas), Some(ui_snap), Some(ed)) =
+            (self.graph_canvas.as_mut(), ui_snap, self.graph_editor.as_mut())
+        {
+            // The "Reset to Default" pill shows only when the watched graph
+            // diverges from its bundled preset; keyed on its inputs.
+            let has_mod = self.editor_graph.has_graph_mod(
+                &self.local_project,
+                self.watched_graph_target.as_ref(),
+                self.watched_catalog_default.as_ref(),
+                &self.ui_edits.stamps.parts(),
+            );
+            // The canvas draws again only when its feed moved (D17).
+            ed.offscreen_dirty |= crate::editor_frame::feed_canvas(
+                canvas,
+                &mut ed.editor_frame.canvas,
+                &ui_snap,
+                preview_aspect,
+                (dt * 1000.0) as f32,
+                &self.content_state.live_node_params,
+                has_mod,
+            );
         }
-
-        // 1d. Percussion import runs on content thread — read status from content_state.
-        let was_importing = false; // previous frame state not tracked here
-        let is_importing = !self.ws.ui_root.export_progress.is_open()
-            && self.content_state.percussion_importing;
 
         // 1e. Sync percussion pipeline status to header panel
         // Port of Unity WorkspaceController.RefreshPercussionImportStatusLabel
@@ -588,16 +497,8 @@ impl Application {
                 },
                 show,
             );
-            // Force UI rebuild while pipeline is running (progress bar updates)
-            // and on completion (new clips/layers need to appear).
-            if is_importing {
-                self.needs_rebuild = true;
-            }
-            if was_importing && !is_importing {
-                // Pipeline just finished — structural sync to pick up new clips/layers.
-                self.needs_structural_sync = true;
-                self.needs_rebuild = true;
-            }
+            // The progress bar is a chrome input; the imported clips and layers
+            // arrive as an edit snapshot, whose stamps re-project them.
         }
 
         // Export owns its progress surface. Do not redraw a stale loading
@@ -610,7 +511,7 @@ impl Application {
             };
             if self.ws.ui_root.warmup != warmup {
                 self.ws.ui_root.warmup = warmup;
-                self.needs_rebuild = true;
+                self.ws.ui_root.mark_overlay_dirty();
             }
         }
 
@@ -631,71 +532,11 @@ impl Application {
         seg = std::time::Instant::now();
 
         // 2. Process UI events and dispatch actions
-        // Keep the Add-picker's embedded-preset list current (fingerprint-gated;
-        // rebuilds only when a fork/import/remove changed the set).
-        self.ws
-            .ui_root
-            .sync_embedded_presets(&self.local_project);
         let mut actions = self.ws.ui_root.process_events();
 
-        // Overlay-hosted text sessions (main window): cancel any session
-        // whose overlay just closed during the routing above — the app pump
-        // half of `OVERLAY_SESSIONS_AND_PICKER_DESIGN.md` section 3, D2. A no-op
-        // most frames (empty drain).
-        for id in self.ws.ui_root.take_closed_overlays() {
-            self.text_input
-                .cancel_if_owned_by(crate::text_input::TextSessionOwner::MainOverlay(id));
-        }
-
-        // Browser popup search session plumbing (PRESET_BROWSER_AUDITION F5,
-        // kept by STATIC_THUMBNAILS_DESIGN): the popup raised the request
-        // when it opened; take the owned search session exactly like the
-        // graph-editor Node picker does at open. The `MainOverlay(BrowserPopup)`
-        // owner tag is what the closed-overlay pump cancels by on every
-        // close path (backdrop, Escape, pick, perform-mode entry) — no
-        // orphaned SearchFilter session. The anchor is a zero placeholder:
-        // the popup tree isn't built yet this frame, and the re-anchor
-        // pass below pins the overlay over the popup's real search bar as
-        // soon as the tree exists. The dirty flag makes this once per
-        // open, not per frame.
-        {
-            if self.ws.ui_root.browser_popup.take_search_focus() {
-                self.text_input.begin_owned(
-                    crate::text_input::TextSessionOwner::MainOverlay(
-                        crate::ui_root::OverlayId::BrowserPopup,
-                    ),
-                    crate::text_input::TextInputField::SearchFilter,
-                    "",
-                    crate::text_input::AnchorRect::zero(),
-                    11.0,
-                );
-            }
-            // Re-anchor the popup's search session over the popup's real
-            // search bar on every frame the session is up. The open-time
-            // begin_owned can't know the bar rect (tree not built yet), and
-            // render_text_input_overlay paints a bordered box AT the anchor
-            // — left at the placeholder, the user sees a second input next
-            // to the popup's own search bar. The zero-rect guard skips the
-            // frame(s) before the tree exists; after a commit or a popup
-            // close the owner/field check is false and this is a no-op.
-            if self.text_input.owner
-                == Some(crate::text_input::TextSessionOwner::MainOverlay(
-                    crate::ui_root::OverlayId::BrowserPopup,
-                ))
-                && self.text_input.field == crate::text_input::TextInputField::SearchFilter
-            {
-                let r = self
-                    .ws
-                    .ui_root
-                    .browser_popup
-                    .search_bar_rect(&self.ws.ui_root.tree);
-                if r.width > 0.0 && r.height > 0.0 {
-                    self.text_input.update_anchor(crate::text_input::AnchorRect::new(
-                        r.x, r.y, r.width, r.height,
-                    ));
-                }
-            }
-        }
+        // A session dies with its overlay; the browser popup takes its search
+        // session and pins it over its search bar (`text_session.rs`).
+        crate::text_session::pump_main_window(&mut self.text_input, &mut self.ws.ui_root);
 
         // Native menu bar clicks → the same PanelAction dispatch as on-screen
         // chrome. Drain into an owned Vec first so the immutable borrow of
@@ -718,7 +559,6 @@ impl Application {
                 M::Open => actions.push(P::Project(ProjectAction::OpenProject)),
                 M::OpenRecentPath(path) => {
                     self.open_project_from_path(path);
-                    self.needs_structural_sync = true;
                 }
                 M::ClearRecentProjects => {
                     self.project_io.clear_recent_projects(&mut self.user_prefs);
@@ -771,7 +611,7 @@ impl Application {
                 M::Settings => self.pending_open_settings = true,
                 M::RtQuality => {
                     self.ws.ui_root.rt_quality_panel.open();
-                    self.ws.ui_root.overlay_dirty = true;
+                    self.ws.ui_root.mark_overlay_dirty();
                 }
             }
         }
@@ -780,199 +620,38 @@ impl Application {
         if std::mem::take(&mut self.pending_open_settings) {
             self.ws.ui_root.settings_popup.open();
             // Programmatic open: nudge the overlay driver to rebuild + draw it.
-            self.ws.ui_root.overlay_dirty = true;
+            self.ws.ui_root.mark_overlay_dirty();
         }
 
-        // An in-place inspector scroll (wheel in window_input, or a scrollbar
-        // drag handled inside process_events) offset the content nodes without a
-        // rebuild — re-render just the inspector's atlas slot. A full rebuild
-        // later this frame (needs_rebuild → invalidate_all) supersedes it
-        // harmlessly. One drain point for both scroll inputs. The actual
-        // `invalidate_inspector()` call now lives in
-        // `ui_frame::apply_ui_frame_invalidations` (P1, D3) — captured here as
-        // a signal so it fires in the same relative order as before (ahead of
-        // the rebuild/structural decision later this frame).
+        // An in-place inspector scroll (the wheel, or a scrollbar drag inside
+        // process_events) offset the content nodes without a rebuild; the
+        // frame seam re-renders just the inspector's atlas slot. One drain
+        // point for both scroll inputs.
         let scrolled_in_place = self.ws.ui_root.inspector.take_scrolled_in_place();
-        // Graph-editor edits (canvas + sidebar) accumulate here and dispatch
-        // through their own command vocabulary (`GraphEditCommand`), separately
-        // from the `PanelAction` loop — Phase 4.3.
-        let mut graph_edits: Vec<manifold_ui::GraphEditCommand> = Vec::new();
-
-        // Editor LEFT-LANE CARD actions are collected separately so they can be
-        // dispatched against the editor's watched graph identity: they carry the
-        // same PanelAction variants the inspector emits, but must resolve against
-        // the edited effect/generator, not the main window's active layer.
-        // Appended to `actions` after a recorded boundary so the dispatch loop
-        // can tell which segment they live in.
-        let mut editor_card_actions: Vec<manifold_ui::panels::PanelAction> = Vec::new();
-
-        // 2a. Drain the graph-editor window's UITree events. The editor
-        // doesn't go through `UIRoot::process_events` (its panel set is
-        // a single `GraphEditorPanel`, not the full main-window mix), so
-        // we route raw click events through the panel's own
-        // `handle_click` to translate them into `PanelAction::EffectParamExpose`.
-        // Resulting actions are appended to the main queue and dispatched
-        // through the same `ui_bridge::dispatch` arms as everything else.
-        if let Some(ed) = self.graph_editor.as_mut() {
-            let events = ed.ui_root.input.drain_events();
-            // When the node picker is open it's a modal — it claims every
-            // click in the editor window (the backdrop spans the whole
-            // surface). Route clicks to the popup and skip the palette +
-            // sidebar handlers entirely so a click on a cell doesn't also
-            // toggle a node behind it.
-            if ed.ui_root.browser_popup.is_open() {
-                use manifold_ui::input::UIEvent;
-                use manifold_ui::panels::browser_popup::BrowserPopupAction;
-                for event in events {
-                    if let UIEvent::Click { node_id, .. } = event {
-                        // Search bar → focus the search field (already
-                        // auto-focused on open, but a click re-focuses).
-                        if ed.ui_root.browser_popup.is_search_bar(node_id) {
-                            let r = ed.ui_root.browser_popup.search_bar_rect(&ed.ui_root.tree);
-                            self.text_input.begin_owned(
-                                crate::text_input::TextSessionOwner::EditorOverlay(
-                                    crate::ui_root::OverlayId::BrowserPopup,
-                                ),
-                                crate::text_input::TextInputField::SearchFilter,
-                                ed.ui_root.browser_popup.current_filter(),
-                                crate::text_input::AnchorRect::new(r.x, r.y, r.width, r.height),
-                                11.0,
-                            );
-                            ed.offscreen_dirty = true;
-                        } else {
-                            // This routes straight to `handle_click`, bypassing
-                            // the overlay driver's `route_overlay_event` — so a
-                            // close here (cell pick / backdrop) never reaches
-                            // `route_overlay_event`'s closed-overlay tracking.
-                            // Snapshot before/after and record it ourselves; the
-                            // per-frame pump below drains it and cancels this
-                            // popup's owned text session (no manual `cancel()`
-                            // needed here — that was the distributed-reset
-                            // pattern `OVERLAY_SESSIONS_AND_PICKER_DESIGN.md`
-                            // section 3 replaces).
-                            let was_open = ed.ui_root.browser_popup.is_open();
-                            if let Some(action) = ed.ui_root.browser_popup.handle_click(node_id) {
-                                ed.ui_root.note_overlay_closed_if(
-                                    crate::ui_root::OverlayId::BrowserPopup,
-                                    was_open,
-                                );
-                                // Dismissed, or Effect/Generator/Paste (which never
-                                // arise in Node mode from the editor popup), need
-                                // nothing further here — the text-session cancel
-                                // (if any) is handled by the closed-overlay pump.
-                                if let BrowserPopupAction::NodeSelected { type_id, graph_pos } =
-                                    action
-                                {
-                                    // Hand off to the layer-2 spawn handler.
-                                    // `graph_pos` is the palette-origin canvas
-                                    // position captured at open — pass it
-                                    // straight through, never recompute.
-                                    graph_edits.push(manifold_ui::GraphEditCommand::AddGraphNodeAt {
-                                        type_id,
-                                        graph_pos,
-                                    });
-                                }
-                                ed.offscreen_dirty = true;
-                            } else if ed.ui_root.browser_popup.contains_node(node_id) {
-                                ed.ui_root.note_overlay_closed_if(
-                                    crate::ui_root::OverlayId::BrowserPopup,
-                                    was_open,
-                                );
-                                // Internal click (category chip, background) —
-                                // consume so it doesn't leak to the canvas.
-                                ed.offscreen_dirty = true;
-                            }
-                        }
-                    }
-                }
-            } else {
-                use manifold_ui::input::UIEvent;
-                // Right lane = the full inspector column (this window's own
-                // `ws.ui_root.inspector`). The one non-inspector interaction left
-                // here is the left preview pane's "Smart preview" auto-gain toggle
-                // (a `GraphEditCommand`, not a `PanelAction`) — register its flip
-                // on the button id captured during the last render and resolve it
-                // off the raw events before the inspector router runs.
-                if !events.is_empty() {
-                    self.editor_sidebar_intents.clear();
-                    if let Some(id) = self.editor_smart_preview_toggle_id {
-                        self.editor_sidebar_intents.on(
-                            id,
-                            manifold_ui::intent::Gesture::Click,
-                            manifold_ui::GraphEditCommand::SetNodePreviewNormalize(
-                                !self.node_preview_normalize,
-                            ),
-                        );
-                    }
-                }
-                for event in &events {
-                    if let UIEvent::Click { node_id, .. } = event
-                        && let Some(cmd) = self.editor_sidebar_intents.resolve(
-                            &ed.ui_root.tree,
-                            Some(*node_id),
-                            manifold_ui::intent::Gesture::Click,
-                        )
-                    {
-                        graph_edits.push(cmd);
-                    }
-                }
-                // Route the rest through the shared inspector event path — the
-                // same intents + handle_event + drag/card-reorder + dropdown
-                // routing the main window's `process_events` uses — so tabs,
-                // cards, chrome, macros, sliders and drags all work identically.
-                // These actions dispatch against the EDITOR's UIRoot in the
-                // trailing `editor_card_actions` segment below.
-                editor_card_actions.extend(ed.ui_root.route_inspector_events(&events));
-            }
-            // Re-anchor the Node picker's search session over the popup's
-            // real search bar every frame (same pass as the main window's):
-            // the open-time begin_owned anchored at zero because the tree
-            // didn't exist yet, and render_text_input_overlay paints a
-            // bordered box AT the anchor. The zero-rect guard skips the
-            // frame(s) before the tree exists.
-            if self.text_input.owner
-                == Some(crate::text_input::TextSessionOwner::EditorOverlay(
-                    crate::ui_root::OverlayId::BrowserPopup,
-                ))
-                && self.text_input.field == crate::text_input::TextInputField::SearchFilter
-            {
-                let r = ed.ui_root.browser_popup.search_bar_rect(&ed.ui_root.tree);
-                if r.width > 0.0 && r.height > 0.0 {
-                    self.text_input.update_anchor(crate::text_input::AnchorRect::new(
-                        r.x, r.y, r.width, r.height,
-                    ));
-                }
-            }
-            // Overlay-hosted text sessions (editor window): same pump as the
-            // main window above, draining both the bespoke browser-popup
-            // click path (marked via `note_overlay_closed_if` in the branch
-            // above) and any close `route_inspector_events` observed through
-            // the normal overlay driver (e.g. an inspector dropdown).
-            for id in ed.ui_root.take_closed_overlays() {
-                self.text_input
-                    .cancel_if_owned_by(crate::text_input::TextSessionOwner::EditorOverlay(id));
-            }
-        }
-        // 2b. Drain editor-canvas actions (wire-drag completions,
-        // node-drag releases, delete-key requests). Bypasses the
-        // UITree event path because the canvas owns its own pointer
-        // state — see `GraphCanvas::drain_actions`.
-        if let Some(canvas) = self.graph_canvas.as_mut() {
-            graph_edits.extend(canvas.drain_edits());
-            actions.extend(canvas.drain_popover_actions());
-        }
-
-        // The editor mapping popover (canvas on-node rows) emits the same
-        // `EffectMapping*` actions the canvas popover does (range / scale / offset
-        // / invert / curve), carrying their captured target and binding id.
-        actions.extend(self.editor_mapping_popover.drain_actions());
+        // The editor window's tree, canvas and popovers (`editor_input.rs`).
+        // Canvas and sidebar edits dispatch through their own vocabulary
+        // (`GraphEditCommand`) below; card-lane actions dispatch against the
+        // editor's own tree after the main segment; the popovers' mapping
+        // actions carry their owner and join the main queue.
+        let editor_drain = crate::editor_input::drain(
+            self.graph_editor.as_mut(),
+            self.graph_canvas.as_mut(),
+            &mut self.editor_mapping_popover,
+            &mut self.text_input,
+            crate::editor_input::SmartPreviewToggle {
+                intents: &mut self.editor_sidebar_intents,
+                id: self.editor_smart_preview_toggle_id,
+                normalize: self.node_preview_normalize,
+            },
+        );
+        let graph_edits = editor_drain.graph_edits;
+        let editor_card_actions = editor_drain.card_actions;
+        actions.extend(editor_drain.actions);
 
         // 2a. Route viewport tracks-area events through InteractionOverlay.
         // These events were stashed by process_events() because the overlay
         // needs &mut TimelineEditingHost which UIRoot can't provide.
         {
-            let previous_automation_lane = self.selection.selected_automation_point.as_ref()
-                .map(|p| (p.target.clone(), p.param_id.clone()));
             let viewport_events = self.ws.ui_root.drain_viewport_events();
             if !viewport_events.is_empty() {
                 if viewport_events.iter().any(|event| matches!(event, manifold_ui::input::UIEvent::PointerDown { .. })) {
@@ -987,12 +666,8 @@ impl Application {
                     &self.content_state,
                     &mut self.cursor_manager,
                     &mut self.active_layer_id,
-                    &mut self.needs_rebuild,
-                    &mut self.needs_structural_sync,
-                    &mut self.automation_lanes_dirty,
-                    &mut self.scroll_dirty,
-                    &mut self.invalidate_layers,
-                    &mut self.pre_drag_commands,
+                    &mut self.ws.offscreen_dirty,
+                    &mut self.ui_edits,
                 );
                 for event in &viewport_events {
                     use manifold_ui::input::UIEvent;
@@ -1087,11 +762,8 @@ impl Application {
                 // (right-click context menus: ClipRightClicked, TrackRightClicked).
                 actions.append(&mut host.pending_actions);
             }
-            let current_automation_lane = self.selection.selected_automation_point.as_ref()
-                .map(|p| (p.target.clone(), p.param_id.clone()));
-            if previous_automation_lane != current_automation_lane {
-                self.needs_structural_sync = true;
-            }
+            // A selected point in another lane folds into `automation_view`
+            // when the planner reads it (D8).
         }
 
         // Overlay-generated right-click actions (TrackRightClicked, ClipRightClicked)
@@ -1107,12 +779,6 @@ impl Application {
             self.ws.ui_root.ableton_rediscovery_needed = false;
             self.send_content_cmd(ContentCommand::AbletonRediscover);
         }
-
-        // Consume deferred structural sync flag (set by keyboard shortcuts)
-        let mut needs_structural_sync = self.needs_structural_sync;
-        self.needs_structural_sync = false;
-        let prev_active_layer = self.active_layer_id.clone();
-        let prev_sel_version = self.selection.selection_version;
 
         // Append the editor inspector's actions as a trailing segment, recording
         // where it starts. Actions at or past `editor_card_seg_start` were emitted
@@ -1137,6 +803,15 @@ impl Application {
                 continue;
             }
             if self.dispatch_inspector_host_action(action, false) { continue; }
+            if crate::text_session::begin_for_action(
+                &mut self.text_input,
+                &mut self.ws.ui_root,
+                &self.local_project,
+                &self.selection,
+                action,
+            ) {
+                continue;
+            }
             if let PanelAction::Root(action) = action
                 && self.dispatch_mapping_action(action)
             {
@@ -1192,23 +867,12 @@ impl Application {
                     // two halves of "docked": `open` gates build/update/draw,
                     // the width is the geometry `content_area()` subtracts. Keep
                     // them in lockstep — set the width from the NEW open state so
-                    // this is a true toggle regardless of entry state. A
-                    // structural sync then rebuilds the whole tree at the new
-                    // geometry (preview + timeline shrink) and populates the
-                    // panel's device/send list via sync_inspector_data. The
-                    // toggle itself lives on UIRoot so the headless script
-                    // harness reaches the same one via ui_bridge::dispatch.
+                    // this is a true toggle regardless of entry state. The
+                    // dock's view version rebuilds the tree at the new
+                    // geometry and runs its device query. The toggle lives on
+                    // UIRoot so the headless script harness reaches the same
+                    // one via ui_bridge::dispatch.
                     self.ws.ui_root.toggle_audio_dock();
-                    needs_structural_sync = true;
-                    continue;
-                }
-                PanelAction::Root(RootAction::OpenSceneSetup) => {
-                    // Mirror of `OpenAudioSetup` above (SCENE_SETUP_PANEL_DESIGN
-                    // D2) — same lockstep `open`/`scene_setup_width` toggle,
-                    // same structural rebuild, same dual reachability (live app
-                    // here, headless harness via `ui_bridge::dispatch`).
-                    self.ws.ui_root.toggle_scene_dock();
-                    needs_structural_sync = true;
                     continue;
                 }
                 PanelAction::Root(RootAction::OpenRtQuality) => {
@@ -1216,7 +880,7 @@ impl Application {
                     // overlay (not a dock): open + dirty nudge, same shape as
                     // the pending_open_settings block below.
                     self.ws.ui_root.rt_quality_panel.open();
-                    self.ws.ui_root.overlay_dirty = true;
+                    self.ws.ui_root.mark_overlay_dirty();
                     continue;
                 }
                 PanelAction::Root(RootAction::PreviewSceneModifierObject(layer, modifier_id, object)) => {
@@ -1236,55 +900,22 @@ impl Application {
                     self.pending_open_graph_editor = true;
                     continue;
                 }
+                PanelAction::Root(RootAction::SceneSetupCopyViewportCamera(layer_id)) => {
+                    let view = self.graph_editor.as_ref().and_then(|ws| crate::scene_view_copy::live_view(ws, layer_id));
+                    if let Some(content_tx) = self.content_tx.as_ref() {
+                        crate::scene_view_copy::run(
+                            &mut self.local_project, content_tx, &mut self.ws.ui_root,
+                            &mut self.ui_edits.stamps, layer_id, view.as_ref(),
+                        );
+                    }
+                    continue;
+                }
                 PanelAction::Root(RootAction::SceneSetupOpenGraphEditor(layer_id)) => {
                     // D7 "Open Graph Editor" empty state — same mechanism as
                     // `OpenGeneratorGraphEditor` below, addressed explicitly by
                     // the panel's own layer instead of `active_layer_id`.
                     self.watch_generator_graph(layer_id.clone());
                     self.pending_open_graph_editor = true;
-                    continue;
-                }
-                PanelAction::Root(RootAction::SceneSetupRenameObjectClicked(layer_id, object_node_id, name)) => {
-                    // P2 object-name click — same shape as
-                    // `AudioSendLabelClicked` below: begin the shared inline
-                    // text-input session anchored over the row's own name
-                    // label. Commit routes to `RenameGroupCommand` addressed
-                    // directly at the layer (no graph editor needs to be
-                    // open — the panel is a fourth surface, not a canvas view).
-                    if let Some(r) = self
-                        .ws
-                        .ui_root
-                        .scene_setup_panel
-                        .object_name_rect(&self.ws.ui_root.tree, *object_node_id)
-                    {
-                        self.text_input.scene_object_layer_id = Some(layer_id.clone());
-                        self.text_input.begin(
-                            crate::text_input::TextInputField::SceneObjectRename(*object_node_id),
-                            name,
-                            crate::text_input::AnchorRect::new(r.x, r.y, r.width, r.height),
-                            11.0,
-                        );
-                    }
-                    continue;
-                }
-                PanelAction::Root(RootAction::SceneSetupRenameLightClicked(layer_id, light_node_id, name)) => {
-                    // P5 light-row/properties-header name click — same shape
-                    // as `SceneSetupRenameObjectClicked` above, addressed by
-                    // the light's own doc id (no group indirection).
-                    if let Some(r) = self
-                        .ws
-                        .ui_root
-                        .scene_setup_panel
-                        .light_name_rect(&self.ws.ui_root.tree, *light_node_id)
-                    {
-                        self.text_input.scene_object_layer_id = Some(layer_id.clone());
-                        self.text_input.begin(
-                            crate::text_input::TextInputField::SceneLightRename(*light_node_id),
-                            name,
-                            crate::text_input::AnchorRect::new(r.x, r.y, r.width, r.height),
-                            11.0,
-                        );
-                    }
                     continue;
                 }
                 PanelAction::Root(RootAction::OpenGeneratorGraphEditor) => {
@@ -1315,6 +946,7 @@ impl Application {
                         None => {
                             self.watched_graph_target = None;
                             self.watched_catalog_default = None;
+                            self.editor_graph.catalog_default_changed();
                         }
                     }
                     self.pending_open_graph_editor = true;
@@ -1349,69 +981,18 @@ impl Application {
                 }
                 PanelAction::Project(ProjectAction::OpenProject) => {
                     self.open_project();
-                    needs_structural_sync = true;
                     continue;
                 }
                 PanelAction::Project(ProjectAction::OpenRecent) => {
                     self.open_recent_project();
-                    needs_structural_sync = true;
                     continue;
                 }
                 PanelAction::Params(ParamsAction::PasteEffects) => {
                     self.edit_inspector_cards(manifold_ui::panels::actions::CardEditAction::Paste);
-                    needs_structural_sync = true;
                     continue;
                 }
                 PanelAction::Params(ParamsAction::EditCards(action)) => {
                     self.edit_inspector_cards(*action);
-                    needs_structural_sync = true;
-                    continue;
-                }
-                PanelAction::Params(ParamsAction::BrowserSearchClicked) => {
-                    let r = self
-                        .ws
-                        .ui_root
-                        .browser_popup
-                        .search_bar_rect(&self.ws.ui_root.tree);
-                    self.text_input.begin_owned(
-                        crate::text_input::TextSessionOwner::MainOverlay(
-                            crate::ui_root::OverlayId::BrowserPopup,
-                        ),
-                        crate::text_input::TextInputField::SearchFilter,
-                        self.ws.ui_root.browser_popup.current_filter(),
-                        crate::text_input::AnchorRect::new(r.x, r.y, r.width, r.height),
-                        11.0,
-                    );
-                    continue;
-                }
-                PanelAction::Transport(TransportAction::BpmFieldClicked) => {
-                    let bpm = Some(&self.local_project).map_or(120.0, |p| p.settings.bpm.0);
-                    let r = if let Some(id) = self.ws.ui_root.transport.bpm_field_id() {
-                        self.ws.ui_root.tree.get_bounds(id)
-                    } else {
-                        manifold_ui::node::Rect::new(100.0, 100.0, 120.0, 20.0)
-                    };
-                    self.text_input.begin(
-                        crate::text_input::TextInputField::Bpm,
-                        &format!("{:.1}", bpm),
-                        crate::text_input::AnchorRect::new(r.x, r.y, r.width, r.height),
-                        14.0,
-                    );
-                    continue;
-                }
-                PanelAction::Transport(TransportAction::FpsFieldClicked) => {
-                    let fps = Some(&self.local_project).map_or(60.0, |p| p.settings.frame_rate);
-                    let r = if let Some(id) = self.ws.ui_root.footer.fps_field_id() {
-                        self.ws.ui_root.tree.get_bounds(id)
-                    } else {
-                        manifold_ui::node::Rect::new(100.0, 100.0, 120.0, 20.0)
-                    };
-                    self.text_input.begin(
-                        crate::text_input::TextInputField::Fps,
-                        &format!("{:.0}", fps),
-                        crate::text_input::AnchorRect::new(r.x, r.y, r.width, r.height),
-                        11.0,
-                    );
                     continue;
                 }
                 PanelAction::Editing(EditingAction::AutomationPointEditValue(
@@ -1430,217 +1011,6 @@ impl Application {
                     value_norm,
                 )) => {
                     crate::app::automation_point_input::begin_time(self, target, param_id, *beat, *value_norm);
-                    continue;
-                }
-                PanelAction::Root(RootAction::BeginMaterialColourTextInput {
-                    target,
-                    param_ids,
-                    anchor,
-                    value,
-                }) => {
-                    let initial = crate::text_input::format_material_colour_hex(*value);
-                    self.text_input.begin(
-                        crate::text_input::TextInputField::MaterialColour,
-                        &initial,
-                        crate::text_input::AnchorRect::new(
-                            anchor.x,
-                            anchor.y,
-                            anchor.width,
-                            anchor.height,
-                        ),
-                        11.0,
-                    );
-                    self.text_input.material_colour =
-                        Some(crate::text_input::MaterialColourCtx {
-                            target: target.clone(),
-                            param_ids: param_ids.clone(),
-                        });
-                    continue;
-                }
-                PanelAction::Root(RootAction::SceneSetupBeginNumericTextInput {
-                    layer_id,
-                    scope_path,
-                    node_doc_id,
-                    param_id,
-                    value,
-                    cell_node_id,
-                    degrees,
-                }) => {
-                    // SCENE_OBJECT_AND_PANEL_V2_DESIGN.md P4, D8/D10: same
-                    // early-intercept shape as `BeginParamTextInput` above.
-                    // The panel has no `&UITree` in `handle_event`, so the
-                    // cell's anchor rect is resolved here from its own node
-                    // id. D10: degrees rows prefill in degrees (the panel
-                    // boundary is the ONLY place this conversion happens —
-                    // the stored `value` stays radians).
-                    let r = self.ws.ui_root.tree.get_bounds(*cell_node_id);
-                    let display = if *degrees { value.to_degrees() } else { *value };
-                    let initial = format!("{display:.3}");
-                    self.text_input.begin(
-                        crate::text_input::TextInputField::SceneNumericParam(*node_doc_id),
-                        &initial,
-                        crate::text_input::AnchorRect::new(r.x, r.y, r.width, r.height),
-                        11.0,
-                    );
-                    self.text_input.scene_numeric_param =
-                        Some(crate::text_input::SceneNumericParamCtx {
-                            layer_id: layer_id.clone(),
-                            scope_path: scope_path.clone(),
-                            param_id: param_id.clone(),
-                            degrees: *degrees,
-                        });
-                    continue;
-                }
-                PanelAction::Root(RootAction::AudioSendGainBeginTextInput(send_id, value, cell_node_id)) => {
-                    // P4 audio-dock sibling of `SceneSetupBeginNumericTextInput`.
-                    let r = self.ws.ui_root.tree.get_bounds(*cell_node_id);
-                    let initial = format!("{value:.1}");
-                    self.text_input.begin(
-                        crate::text_input::TextInputField::AudioSendGainParam,
-                        &initial,
-                        crate::text_input::AnchorRect::new(r.x, r.y, r.width, r.height),
-                        11.0,
-                    );
-                    self.text_input.audio_send_gain_param =
-                        Some(crate::text_input::AudioSendGainParamCtx { send_id: send_id.clone() });
-                    continue;
-                }
-                PanelAction::Root(RootAction::BeginDriverPeriodTextInput {
-                    target,
-                    param_id,
-                    anchor,
-                    value,
-                }) => {
-                    // Prefill with the current period in beats (whole numbers
-                    // without a decimal), select-all so the first keystroke
-                    // replaces it.
-                    let initial = if (value.fract()).abs() < 1e-3 {
-                        format!("{}", value.round() as i64)
-                    } else {
-                        format!("{value:.2}")
-                    };
-                    self.text_input.begin(
-                        crate::text_input::TextInputField::DriverFreePeriod,
-                        &initial,
-                        crate::text_input::AnchorRect::new(
-                            anchor.x,
-                            anchor.y,
-                            anchor.width,
-                            anchor.height,
-                        ),
-                        11.0,
-                    );
-                    self.text_input.driver_free_period =
-                        Some(crate::text_input::DriverFreePeriodCtx {
-                            target: target.clone(),
-                            param_id: param_id.clone(),
-                        });
-                    continue;
-                }
-                PanelAction::Layer(LayerAction::LayerDoubleClicked(id)) => {
-                    // Open text input for layer rename. The action carries a
-                    // stable LayerId, stored on `text_input.layer_id` and
-                    // re-resolved to the live row at commit time (BUG-031) —
-                    // `pos` here only sizes the anchor rect for THIS frame's
-                    // overlay, a read-only, open-time-only use.
-                    {
-                        let project = &self.local_project;
-                        if let Some((pos, layer)) = project.timeline.find_layer_by_id(id) {
-                            let r = if let Some(nid) =
-                                self.ws.ui_root.layer_headers.name_node_id(pos)
-                            {
-                                self.ws.ui_root.tree.get_bounds(nid)
-                            } else {
-                                manifold_ui::node::Rect::new(100.0, 100.0, 120.0, 20.0)
-                            };
-                            let name = layer.name.clone();
-                            self.text_input.begin(
-                                crate::text_input::TextInputField::LayerName,
-                                &name,
-                                crate::text_input::AnchorRect::new(r.x, r.y, r.width, r.height),
-                                11.0,
-                            );
-                            self.text_input.layer_id = Some(id.clone());
-                        }
-                    }
-                    continue;
-                }
-                PanelAction::Marker(MarkerAction::MarkerDoubleClicked(marker_id_str)) => {
-                    // Open text input for marker rename
-                    let marker_id = manifold_core::MarkerId::new(marker_id_str.as_str());
-                    if let Some(marker) = self.local_project.timeline.find_marker(&marker_id) {
-                        let beat = marker.beat;
-                        let name = marker.name.clone();
-                        // Anchor to marker flag position in the ruler
-                        let px = self.ws.ui_root.viewport.beat_to_pixel(beat);
-                        let ruler = self.ws.ui_root.viewport.ruler_rect();
-                        let flag_w = manifold_ui::color::MARKER_FLAG_WIDTH;
-                        let r = crate::text_input::AnchorRect::new(
-                            px + flag_w * 0.5 + 2.0,
-                            ruler.y,
-                            80.0,
-                            manifold_ui::color::MARKER_FLAG_HEIGHT,
-                        );
-                        self.text_input.begin(
-                            crate::text_input::TextInputField::MarkerName,
-                            &name,
-                            r,
-                            9.0,
-                        );
-                        self.text_input.marker_id = Some(marker_id);
-                    }
-                    continue;
-                }
-                PanelAction::Clip(ClipAction::ClipBpmClicked) => {
-                    // Open text input for clip recorded BPM editing.
-                    // Unity: ClipInspector.OnBitmapBpmClicked → BitmapTextInput.BeginEdit
-                    if let Some(clip_id) = &self.selection.primary_selected_clip_id {
-                        let bpm_text = Some(&self.local_project)
-                            .and_then(|p| {
-                                p.timeline
-                                    .layers
-                                    .iter()
-                                    .flat_map(|l| l.clips.iter())
-                                    .find(|c| c.id == *clip_id)
-                            })
-                            .map(|c| {
-                                if c.recorded_bpm > 0.0 {
-                                    format!("{:.1}", c.recorded_bpm)
-                                } else {
-                                    if c.is_audio() { "Unknown" } else { "Auto" }.to_string()
-                                }
-                            })
-                            .unwrap_or_else(|| "Auto".to_string());
-                        let r = self
-                            .ws
-                            .ui_root
-                            .inspector
-                            .clip_chrome_mut()
-                            .bpm_button_rect(&self.ws.ui_root.tree);
-                        self.text_input.begin(
-                            crate::text_input::TextInputField::ClipBpm,
-                            &bpm_text,
-                            crate::text_input::AnchorRect::new(r.x, r.y, r.width, r.height),
-                            10.0,
-                        );
-                    }
-                    continue;
-                }
-                PanelAction::Params(ParamsAction::GenStringParamClicked(sp_idx)) => {
-                    // Open text input for a generator string param.
-                    if let Some(gp) = self.ws.ui_root.inspector.gen_params()
-                        && let Some(sp) = gp.string_param(*sp_idx)
-                    {
-                        let current = sp.value.clone();
-                        if let Some(r) = gp.string_param_rect(&self.ws.ui_root.tree, *sp_idx) {
-                            self.text_input.begin(
-                                crate::text_input::TextInputField::GenStringParam(*sp_idx),
-                                &current,
-                                crate::text_input::AnchorRect::new(r.x, r.y, r.width, r.height),
-                                11.0,
-                            );
-                        }
-                    }
                     continue;
                 }
                 PanelAction::Params(ParamsAction::GenStringParamDropdownClicked(sp_idx)) => {
@@ -1712,46 +1082,9 @@ impl Application {
                     }
                     continue;
                 }
-                PanelAction::Root(RootAction::AudioSendLabelClicked(send_id)) => {
-                    if let Some(send) = self.local_project.audio_setup.find_send(send_id)
-                        && let Some(r) = self
-                            .ws
-                            .ui_root
-                            .audio_setup_panel
-                            .send_label_rect(&self.ws.ui_root.tree, send_id)
-                    {
-                        let label = send.label.clone();
-                        self.text_input.audio_send_id = Some(send_id.clone());
-                        self.text_input.begin(
-                            crate::text_input::TextInputField::AudioSendLabel,
-                            &label,
-                            crate::text_input::AnchorRect::new(r.x, r.y, r.width, r.height),
-                            11.0,
-                        );
-                    }
-                    continue;
-                }
-                PanelAction::Params(ParamsAction::MacroLabelRename(idx)) => {
-                    if let Some(slot) = self.local_project.settings.macro_bank.slots.get(*idx)
-                        && let Some(r) = self
-                            .ws
-                            .ui_root
-                            .inspector
-                            .macro_label_rect(&self.ws.ui_root.tree, *idx)
-                    {
-                        self.text_input.begin(
-                            crate::text_input::TextInputField::MacroLabel(*idx),
-                            &slot.label,
-                            crate::text_input::AnchorRect::new(r.x, r.y, r.width, r.height),
-                            11.0,
-                        );
-                    }
-                    continue;
-                }
                 PanelAction::Project(ProjectAction::NewProject) => {
                     let action = self.project_io.new_project();
                     self.apply_project_io_action(action);
-                    needs_structural_sync = true;
                     continue;
                 }
                 // Transport controller actions — intercept here for Application-level access
@@ -1774,7 +1107,6 @@ impl Application {
                 }
                 PanelAction::Transport(TransportAction::ResetBpm) => {
                     self.send_content_cmd(ContentCommand::ResetBpm);
-                    self.needs_rebuild = true;
                     continue;
                 }
                 // ── Selection-follows ──────────────────────────────────────
@@ -1812,7 +1144,7 @@ impl Application {
             }
             let content_tx = self.content_tx.as_ref().unwrap();
             let mut dctx = crate::ui_bridge::DispatchCtx {
-                project: &mut self.local_project,
+                project: crate::ui_bridge::ProjectRef::new(&mut self.local_project, &mut self.ui_edits, content_tx),
                 content_tx,
                 content_state: &self.content_state,
                 ui: &mut self.ws.ui_root,
@@ -1824,9 +1156,6 @@ impl Application {
                 dialogs: crate::file_dialogs::host(&self.window_registry, self.dialog_window_id, self.primary_window_id, self.current_project_path.as_deref()),
             };
             let result = crate::ui_bridge::dispatch(action, &mut dctx);
-            if result.structural_change {
-                needs_structural_sync = true;
-            }
             if let Some((kind, def, destination)) = result.begin_save_preset {
                 self.begin_save_preset_prompt(kind, def, destination);
             }
@@ -1836,26 +1165,12 @@ impl Application {
         }
 
         // ── Editor inspector segment ────────────────────────────────────────
-        // The graph-editor window hosts its OWN inspector instance
-        // (`ed.ui_root.inspector`), mirroring the main window's selection /
-        // active-layer. Its actions dispatch against the editor's UIRoot with
-        // `editor_target = None` (mirror) so param edits resolve identically and
-        // only the editor's transient tree visuals (collapse, selection
-        // highlight, card-drag) land on the editor tree. Card clicks additionally
-        // retarget the canvas to that card's graph. Card-click retargets are
-        // collected and applied after the editor-workspace borrow drops (they call
-        // `self.watch_*`). See docs/GRAPH_EDITOR_INSPECTOR_UNIFICATION.md.
+        // The graph-editor window hosts its OWN inspector instance, mirroring
+        // the main window's selection and active layer; its actions dispatch
+        // against the editor's tree (`editor_input::dispatch_card_lane`). Card
+        // clicks also retarget the canvas to that card's graph, once the
+        // editor borrow drops. See docs/GRAPH_EDITOR_INSPECTOR_UNIFICATION.md.
         if !self.ws.ui_root.export_progress.is_open() && actions.len() > editor_card_seg_start {
-            let mut retarget_effect: Option<usize> = None;
-            let mut retarget_generator = false;
-            // Deferred like the retargets above: `self.begin_save_preset_prompt`
-            // needs `&mut self`, which would conflict with `ed`'s live borrow of
-            // `self.graph_editor` for the loop's duration.
-            let mut pending_save_preset: Option<(
-                manifold_core::preset_def::PresetKind,
-                manifold_core::effect_graph_def::EffectGraphDef,
-                crate::text_input::SavePresetDestination,
-            )> = None;
             let (screen_w, screen_h) = self
                 .graph_editor_window_id
                 .and_then(|wid| self.window_registry.get(&wid))
@@ -1865,53 +1180,51 @@ impl Application {
                     (sz.width as f32 / s as f32, sz.height as f32 / s as f32)
                 })
                 .unwrap_or((1280.0, 720.0));
-            for action in &actions[editor_card_seg_start..] {
-                if self.dispatch_inspector_host_action(action, true) { continue; }
-                if let PanelAction::Root(RootAction::OpenCardMapping { target, param_id, anchor_node_id }) = action {
-                    self.open_card_mapping(target, param_id.as_ref(), *anchor_node_id,
-                        manifold_ui::graph_canvas::Rect::new(0.0, 0.0, screen_w, screen_h));
-                }
+            let card_actions = &actions[editor_card_seg_start..];
+            let mappings = match self.graph_editor.as_mut() {
+                Some(ed) => crate::editor_input::card_lane_entries(
+                    &mut self.text_input,
+                    ed,
+                    &self.local_project,
+                    &self.selection,
+                    &self.active_layer_id,
+                    card_actions,
+                ),
+                None => Vec::new(),
+            };
+            for (target, param_id, anchor_node_id) in mappings {
+                self.open_card_mapping(target, param_id, anchor_node_id,
+                    manifold_ui::graph_canvas::Rect::new(0.0, 0.0, screen_w, screen_h));
             }
-            if let Some(ed) = self.graph_editor.as_mut() {
-                let content_tx = self.content_tx.as_ref().unwrap();
-                for action in &actions[editor_card_seg_start..] {
-                    match action {
-                        PanelAction::Params(ParamsAction::EffectCardClicked(ei)) => retarget_effect = Some(*ei),
-                        PanelAction::Params(ParamsAction::GenCardClicked) => retarget_generator = true,
-                        _ => {}
-                    }
-                    let mut dctx = crate::ui_bridge::DispatchCtx {
+            let outcome = match (self.graph_editor.as_mut(), self.content_tx.as_ref()) {
+                (Some(ed), Some(content_tx)) => crate::editor_input::dispatch_card_lane(
+                    crate::editor_input::CardLane {
+                        ws: ed,
                         project: &mut self.local_project,
+                        edits: &mut self.ui_edits,
                         content_tx,
                         content_state: &self.content_state,
-                        ui: &mut ed.ui_root,
                         selection: &mut self.selection,
                         active_layer: &mut self.active_layer_id,
                         user_prefs: &mut self.user_prefs,
-                        editor_target: None,
                         scrub: &mut self.scrub,
                         dialogs: crate::file_dialogs::host(&self.window_registry, self.dialog_window_id, self.primary_window_id, self.current_project_path.as_deref()),
-                    };
-                    let result = crate::ui_bridge::dispatch(action, &mut dctx);
-                    if result.structural_change {
-                        needs_structural_sync = true;
-                    }
-                    if result.begin_save_preset.is_some() {
-                        pending_save_preset = result.begin_save_preset;
-                    }
-                }
-            }
-            if let Some((kind, def, destination)) = pending_save_preset {
+                    },
+                    card_actions,
+                ),
+                _ => Default::default(),
+            };
+            if let Some((kind, def, destination)) = outcome.save_preset {
                 self.begin_save_preset_prompt(kind, def, destination);
             }
             // Retarget the canvas to the clicked card's graph (opening the window
             // stays a deliberate cog action, so only retarget when it's open).
             if self.graph_editor_window_id.is_some() {
-                if let Some(ei) = retarget_effect {
+                if let Some(ei) = outcome.retarget_effect {
                     if let Some(eid) = self.resolve_effect_card_id(ei) {
                         self.watch_effect_graph(eid);
                     }
-                } else if retarget_generator
+                } else if outcome.retarget_generator
                     && let Some(lid) = self.active_layer_id.clone()
                 {
                     self.watch_generator_graph(lid);
@@ -2660,7 +1973,7 @@ impl Application {
                         let content_tx = self.content_tx.as_ref().unwrap();
                         let editor_target = self.watched_graph_target.as_ref();
                         let mut dctx = crate::ui_bridge::DispatchCtx {
-                            project: &mut self.local_project,
+                            project: crate::ui_bridge::ProjectRef::new(&mut self.local_project, &mut self.ui_edits, content_tx),
                             content_tx,
                             content_state: &self.content_state,
                             ui: &mut self.ws.ui_root,
@@ -3026,16 +2339,30 @@ impl Application {
             }
         }
 
-        // 2-4. The projection pass (`ui_frame::run_projection_pass`, shared
-        // with the script runner): selection, structural and active-layer
-        // projection, drag polling, auto-scroll, the rebuild decision,
-        // `push_state`, then the drag-time clip and lane re-projection.
-        let changes = crate::ui_frame::ProjectionChanges {
-            structural: needs_structural_sync,
-            selection_changed: self.selection.selection_version != prev_sel_version,
-            active_layer_changed: self.active_layer_id != prev_active_layer,
-            scrolled_in_place,
-        };
+        // 2-4. Plan the frame, then apply it (`ui_frame::apply_frame_plan`,
+        // shared with the script runner): projections, drag polling, the
+        // planned region work, the `push_state` pieces, then the drag-time
+        // clip and lane re-projection. The overlay intake and playhead follow
+        // run first, so the plan sees what they move as inputs.
+        crate::ui_bridge::intake_overlay_state(&mut self.ws.ui_root, &self.content_state);
+        crate::ui_bridge::check_auto_scroll(&mut self.ws.ui_root, &self.content_state);
+        let automation_draw_mode = self.selection.automation_draw_mode;
+        let inputs = crate::ui_frame::gather_frame_inputs(
+            &mut self.frame_planner,
+            &self.ws.ui_root,
+            &mut self.selection,
+            &self.active_layer_id,
+            &self.ui_edits,
+            &self.content_state,
+            crate::frame_plan::ChromeSource {
+                project: &self.local_project,
+                is_dirty: self.content_state.editing_is_dirty,
+                project_path: self.current_project_path.as_deref(),
+                automation_draw_mode,
+            },
+        );
+        let plan = self.frame_planner.plan(inputs);
+        let changes = crate::ui_frame::ProjectionChanges { scrolled_in_place };
 
         // Deferred export (keyboard shortcut sets the flag, processed here
         // where Application has full access for the file dialog).
@@ -3049,23 +2376,18 @@ impl Application {
         let cursor_pos = self.cursor_pos;
         let content_state = &self.content_state;
         let cursor_manager = &mut self.cursor_manager;
-        let deferred_structural = &mut self.needs_structural_sync;
-        let pre_drag_commands = &mut self.pre_drag_commands;
+        let ui_edits = &mut self.ui_edits;
         let ui_profile = &mut self.ui_profile;
         let seg_ref = &mut seg;
-        crate::ui_frame::run_projection_pass(
+        crate::ui_frame::apply_frame_plan(
             &mut self.ws.ui_root,
             self.graph_editor.as_mut().map(|ed| &mut ed.ui_root),
             self.ui_cache_manager.as_mut(),
             &mut self.local_project,
             &mut self.selection,
             &mut self.active_layer_id,
-            crate::ui_frame::FrameFlagsMut {
-                needs_rebuild: &mut self.needs_rebuild,
-                automation_lanes_dirty: &mut self.automation_lanes_dirty,
-                scroll_dirty: &mut self.scroll_dirty,
-                invalidate_layers: &mut self.invalidate_layers,
-            },
+            &mut self.ws.offscreen_dirty,
+            &plan,
             changes,
             crate::ui_frame::PushInputs {
                 content_state,
@@ -3073,7 +2395,7 @@ impl Application {
                 project_path: self.current_project_path.as_deref(),
                 transport_cache: &mut self.transport_cache,
             },
-            |ui_root, project, selection, active_layer, flags| {
+            |ui_root, project, selection, active_layer, redraw| {
                 // Per-frame drag polling with auto-scroll (move/trim/rubber-band).
                 // Continues edge autoscroll when the mouse is stationary; also
                 // drives the live readout, which must reflect the post-poll
@@ -3090,12 +2412,8 @@ impl Application {
                         content_state,
                         cursor_manager,
                         active_layer,
-                        &mut *flags.needs_rebuild,
-                        deferred_structural,
-                        &mut *flags.automation_lanes_dirty,
-                        &mut *flags.scroll_dirty,
-                        &mut *flags.invalidate_layers,
-                        pre_drag_commands,
+                        redraw,
+                        ui_edits,
                     );
                     overlay.poll_drag(cursor_pos, &mut host, selection, &mut ui_root.viewport);
                     let readout = overlay
@@ -3154,30 +2472,13 @@ impl Application {
 
         // 6·drag-motion. P2 drag-visual tweens (`UI_CRAFT_AND_MOTION_PLAN.md`
         // D15/D17: grab lift, duplicate ghost, grid settle, landing-line
-        // flash, error shake). The GPU clip-body pass (Pass 4b below) already
-        // re-emits every frame unconditionally, so ticking here is enough —
-        // no `needs_rebuild` flag to set, unlike the UITree-driven panels.
-        self.overlay.tick((dt * 1000.0) as f32);
-
-        // 6·motion. P1 drawer open/close tween: while any inspector drawer-height
-        // tween is in flight, force a rebuild each frame so the interpolated height
-        // re-lays-out and the content below reflows. Mirrors the is_dragging()
-        // rebuild poll above (a panel bool read after update → needs_rebuild). The
-        // forced rebuild's own invalidate_all repaints the inspector, so no
-        // separate invalidate is needed here. Reduced motion settles instantly, so
-        // this is false at once — no per-frame rebuild churn.
-        if self.ws.ui_root.inspector.drawer_anim_active()
-            || self.ws.ui_root.scene_setup_panel.object_cards_animating()
-        {
-            self.needs_rebuild = true;
-        }
-
-        // P2 "panel-split snap-back" (D15): while a double-click-reset tween
-        // on either main split is in flight, force a rebuild each frame so
-        // every panel re-lays-out from the eased ratio/width — same poll
-        // shape as `drawer_anim_active` just above.
-        if self.ws.ui_root.layout.is_split_reset_animating() {
-            self.needs_rebuild = true;
+        // flash, error shake). The clip-body pass draws them at paint time, so
+        // a live tween only asks for a repaint (D8). The drawer and object-card
+        // tweens need nothing here: they move their nodes in place in the
+        // panel update. The split tween moves the layout rects, which the next
+        // plan lays out in place.
+        if self.overlay.tick((dt * 1000.0) as f32) {
+            self.ws.offscreen_dirty = true;
         }
 
         // 6·motion. `EDITOR_WINDOW_UNIFICATION_DESIGN.md` D6: the redraw
@@ -3371,8 +2672,7 @@ impl Application {
             // text, slider drags, etc.). Overlay nodes (perf HUD, dropdowns,
             // popups) are excluded — they render every frame via the overlay
             // pass and don't need the full offscreen re-render.
-            let panel_end = self.ws.ui_root.overlay_region_start;
-            if self.ws.ui_root.tree.has_dirty_in_range(0, panel_end) {
+            if self.ws.ui_root.atlas_dirty() {
                 self.ws.offscreen_dirty = true;
             }
             // The Audio Setup scope is a live waterfall: force a full redraw each
@@ -3444,6 +2744,46 @@ impl Application {
 /// each clip a coloured bar via the shared `get_clip_color` (so the strip
 /// matches the main timeline). Shared by the live present pass and the
 /// headless snapshot so both draw the same strip.
+/// The editor mini-timeline, keyed on what it reads: the Clips, Layers and
+/// Settings stamps and the bar and beat the readout shows. A steady frame
+/// rebuilds nothing (P4c).
+#[derive(Default)]
+pub(crate) struct MiniTimelineCache {
+    key: Option<(u64, i64, i64)>,
+    data: (Vec<manifold_ui::MiniClip>, Vec<manifold_ui::MiniLayerLabel>, usize, f32, f32, String),
+}
+
+impl MiniTimelineCache {
+    pub(crate) fn get(
+        &mut self,
+        project: &manifold_core::project::Project,
+        current_beat: f32,
+        parts: &manifold_core::change::PartStamps,
+    ) -> &(Vec<manifold_ui::MiniClip>, Vec<manifold_ui::MiniLayerLabel>, usize, f32, f32, String) {
+        use manifold_core::change::{ChangeSet, Part};
+        let bpb = project.settings.time_signature_numerator.max(1) as f32;
+        let bar = (current_beat / bpb).floor() as i64 + 1;
+        let beat_in_bar = (current_beat - (bar - 1) as f32 * bpb).floor() as i64 + 1;
+        let key = (parts.key(ChangeSet::of(&[Part::Clips, Part::Layers, Part::Settings])), bar, beat_in_bar);
+        if self.key != Some(key) {
+            self.key = Some(key);
+            self.data = mini_timeline_data(project, current_beat);
+        }
+        &self.data
+    }
+
+    /// What the cached strip was built from: the clip, layer and settings
+    /// stamps and the shown bar and beat. A window keys its redraw on it.
+    pub(crate) fn key(&self) -> Option<(u64, i64, i64)> {
+        self.key
+    }
+
+    /// The strip as the last [`Self::get`] left it.
+    pub(crate) fn data(&self) -> &(Vec<manifold_ui::MiniClip>, Vec<manifold_ui::MiniLayerLabel>, usize, f32, f32, String) {
+        &self.data
+    }
+}
+
 pub(crate) fn mini_timeline_data(
     project: &manifold_core::project::Project,
     current_beat: f32,
@@ -3635,6 +2975,9 @@ mod bound_node_param_drag_tests {
             section: None,
             card_visible: true,
             material_role: None,
+            limit: Default::default(),
+            unit: None,
+            scene: None,
         }));
         project.settings.master_effects.push(fx);
         (project, GraphTarget::Effect(effect_id))
@@ -3813,8 +3156,7 @@ mod live_sim_hud_flow_tests {
 
     fn hud_texts(root: &UIRoot) -> Vec<String> {
         root.tree
-            .nodes()
-            .iter()
+            .all_nodes()
             .filter_map(|node| node.text.clone())
             .collect()
     }

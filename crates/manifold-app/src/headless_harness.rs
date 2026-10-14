@@ -121,16 +121,12 @@ pub(crate) fn headless_content_thread(project: Project, w: u32, h: u32) -> Conte
         node_preview_normalize: false,
         cached_graph_snapshot: None,
         mod_scratch: crate::content_state::ModulationSnapshot::empty(),
-        audio_mod_runtime: {
-            let runtime = crate::audio_mod_runtime::AudioModRuntime::default();
-            #[cfg(test)]
-            let runtime = runtime.without_device_capture();
-            runtime
-        },
+        audio_mod_runtime: crate::audio_mod_runtime::AudioModRuntime::default(),
         cached_midi_clock_position: Arc::from(""),
         cached_midi_clock_device: Arc::from(""),
         cached_perc_message: Arc::from(""),
         last_sent_midi_device_names: Arc::from([]),
+        last_sent_ableton_session: None,
         reactions: Default::default(),
         pending_undo_redo_event: None,
         graph_edit_diagnostic: None,

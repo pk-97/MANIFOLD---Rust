@@ -1,0 +1,14 @@
+[
+  { "Pointer": { "target": { "Query": { "text": "+ Add Effect", "type": "Button" } }, "gesture": { "Click": { "modifiers": {} } } } },
+  { "Assert": { "selector": { "Query": { "text": "Mirror", "type": "Label", "under_name": "overlay" } }, "check": "Exists" } },
+  "ResetWork",
+  { "Text": { "text": "blo" } },
+  { "AssertWork": { "window": "type_query" } },
+  { "Assert": { "selector": { "Query": { "text": "Bloom", "type": "Label", "under_name": "overlay" } }, "check": "Exists" } },
+  { "Assert": { "selector": { "Query": { "text": "Mirror", "type": "Label", "under_name": "overlay" } }, "check": { "Count": 0 } } },
+  "AssertFresh",
+  "Snapshot",
+  { "Key": { "key": "Escape", "modifiers": {} } },
+  { "Assert": { "selector": { "Query": { "text": "Bloom", "type": "Label", "under_name": "overlay" } }, "check": { "Count": 0 } } },
+  "AssertFresh"
+]

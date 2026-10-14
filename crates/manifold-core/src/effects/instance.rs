@@ -6,7 +6,7 @@
 use super::*;
 use super::automation::{prune_automation_by_ids, take_automation_by_ids};
 use super::instance_serde::{
-    build_param_manifest, template_known_for, GraphWithDerivedParams, ManifestSer,
+    build_param_manifest, normalize_meta_params, template_known_for, GraphWithDerivedParams, ManifestSer,
     ParamEntryWire,
 };
 
@@ -150,6 +150,13 @@ pub struct PresetInstance {
     /// into the compiled graph, not whether they exist. Same custom-impl
     /// note as `relight` above.
     pub relight_params: RelightParams,
+    /// Card section titles the user folded (SCENE_SURFACES_DESIGN.md D7 (one
+    /// saved choice set)). View state; skipped on the wire when empty.
+    pub folded_sections: Vec<String>,
+    /// Card section titles the user unfolded. Only a section that folds by
+    /// default (D11 (lights): Lighting past eight lights) needs this; a title
+    /// in neither list takes its default.
+    pub unfolded_sections: Vec<String>,
 }
 
 
@@ -191,6 +198,12 @@ impl PresetInstance {
         if !self.relight_params.is_default() {
             field_count += 1;
         }
+        if !self.folded_sections.is_empty() {
+            field_count += 1;
+        }
+        if !self.unfolded_sections.is_empty() {
+            field_count += 1;
+        }
 
         let mut s = serializer.serialize_struct("PresetInstance", field_count)?;
         s.serialize_field("generatorType", &self.effect_type)?;
@@ -223,7 +236,7 @@ impl PresetInstance {
             // (D12) — see `GraphWithDerivedParams`.
             s.serialize_field(
                 "graph",
-                &GraphWithDerivedParams { graph: g, manifest: &self.params },
+                &GraphWithDerivedParams { preset: &self.effect_type, graph: g, manifest: &self.params, joined: true },
             )?;
         }
         if let Some(v) = self.legacy_param_version {
@@ -234,6 +247,12 @@ impl PresetInstance {
         }
         if !self.relight_params.is_default() {
             s.serialize_field("relightParams", &self.relight_params)?;
+        }
+        if !self.folded_sections.is_empty() {
+            s.serialize_field("foldedSections", &self.folded_sections)?;
+        }
+        if !self.unfolded_sections.is_empty() {
+            s.serialize_field("unfoldedSections", &self.unfolded_sections)?;
         }
         s.end()
     }
@@ -322,6 +341,8 @@ impl PresetInstance {
             legacy_param_version: None,
             relight: false,
             relight_params: RelightParams::default(),
+            folded_sections: Vec::new(),
+            unfolded_sections: Vec::new(),
         }
     }
 
@@ -354,6 +375,8 @@ impl PresetInstance {
             legacy_param_version: None,
             relight: false,
             relight_params: RelightParams::default(),
+            folded_sections: Vec::new(),
+            unfolded_sections: Vec::new(),
         };
         s.init_defaults();
         s
@@ -378,6 +401,7 @@ impl PresetInstance {
         };
         let (params, base_tracked) =
             build_param_manifest(self.is_generator(), &self.effect_type, &self.graph, Some(wire), true);
+        normalize_meta_params(&mut self.graph, &params);
         self.params = params;
         self.base_tracked = base_tracked;
         if template_known_for(self.is_generator(), &self.effect_type, &self.graph) {
@@ -418,6 +442,7 @@ impl PresetInstance {
             .collect();
         let (params, base_tracked) =
             build_param_manifest(self.is_generator(), &self.effect_type, &self.graph, Some(wire), false);
+        normalize_meta_params(&mut self.graph, &params);
         self.params = params;
         self.base_tracked = base_tracked;
     }
@@ -738,7 +763,13 @@ impl PresetInstance {
         let spec = param.map(|p| &p.spec);
         Some(UserParamBinding {
             id: b.id.clone(),
-            label: spec.map(|s| s.name.clone()).unwrap_or_else(|| b.label.clone()),
+            label: spec.map(|s| s.name.clone()).unwrap_or_else(|| {
+                self.graph
+                    .as_ref()
+                    .and_then(crate::param_lookup::Declared::new)
+                    .map(|mut d| d.name(&b.id))
+                    .unwrap_or_default()
+            }),
             node_id,
             legacy_node_handle: None,
             inner_param,
@@ -875,7 +906,7 @@ impl PresetInstance {
     /// sibling user bindings keep their slot indices.
     pub fn restore_user_binding_at(
         &mut self,
-        binding: UserParamBinding,
+        removed: UserParamBinding,
         position: usize,
         param: crate::params::Param,
     ) {
@@ -923,23 +954,23 @@ impl PresetInstance {
             .map(|(i, _)| i)
             .unwrap_or(meta.bindings.len());
         let whole_numbers = matches!(
-            binding.convert,
+            removed.convert,
             ParamConvert::IntRound | ParamConvert::EnumRound | ParamConvert::Trigger
         );
         meta.bindings.insert(
             abs_binding_idx,
             BindingDef {
-                id: binding.id.clone(),
-                label: binding.label.clone(),
-                default_value: binding.default_value,
+                id: removed.id.clone(),
+                label: removed.label.clone(),
+                default_value: removed.default_value,
                 target: BindingTarget::Node {
-                    node_id: binding.node_id.clone(),
-                    param: binding.inner_param.clone(),
+                    node_id: removed.node_id.clone(),
+                    param: removed.inner_param.clone(),
                 },
-                convert: binding.convert,
+                convert: removed.convert,
                 user_added: true,
-                scale: binding.scale,
-                offset: binding.offset,
+                scale: removed.scale,
+                offset: removed.offset,
                 default_mirrors_node_param: false,
             },
         );
@@ -948,22 +979,22 @@ impl PresetInstance {
         // is keyed by id).
         meta.params.push(ParamSpecDef {
             tooltip: None,
-            id: binding.id.clone(),
-            name: binding.label.clone(),
-            min: binding.min,
-            max: binding.max,
-            default_value: binding.default_value,
+            id: removed.id.clone(),
+            name: removed.label.clone(),
+            min: removed.min,
+            max: removed.max,
+            default_value: removed.default_value,
             whole_numbers,
-            is_toggle: matches!(binding.convert, ParamConvert::BoolThreshold),
-            is_trigger: matches!(binding.convert, ParamConvert::Trigger),
-            value_labels: binding.value_labels.clone(),
+            is_toggle: matches!(removed.convert, ParamConvert::BoolThreshold),
+            is_trigger: matches!(removed.convert, ParamConvert::Trigger),
+            value_labels: removed.value_labels.clone(),
             format_string: None,
             osc_suffix: String::new(),
-            curve: binding.curve,
-            invert: binding.invert,
+            curve: removed.curve,
+            invert: removed.invert,
             // Position-aware reinstate (undo of an unexpose): preserve the
             // angle flag off the captured binding, same as `append_user_binding`.
-            is_angle: binding.is_angle,
+            is_angle: removed.is_angle,
             is_trigger_gate: false,
             wraps: false,
             // Same carry-through as `append_user_binding` — this shadow entry
@@ -971,9 +1002,12 @@ impl PresetInstance {
             // manifest at serialize time), but keeping it consistent avoids a
             // misleading `None` sitting next to a real section value on the
             // manifest entry `self.params.insert_at` restores below.
-            section: binding.section.clone(),
+            section: removed.section.clone(),
             card_visible: true,
             material_role: None,
+            limit: Default::default(),
+            unit: None,
+            scene: None,
         });
 
         // Re-insert the manifest entry at its original display position among
@@ -1393,21 +1427,11 @@ impl PresetInstance {
             return;
         }
         self.ensure_base_values();
-        // Collect the ids of params with an active driver or envelope first
-        // (disjoint from the `self.params` mutation below).
-        let mut ids: Vec<String> = Vec::new();
-        for d in self.drivers.iter().flatten() {
-            if d.enabled {
-                ids.push(d.param_id.to_string());
-            }
-        }
-        for e in self.envelopes.iter().flatten() {
-            if e.enabled {
-                ids.push(e.param_id.to_string());
-            }
-        }
-        for id in ids {
-            if let Some(p) = self.params.get_mut(&id) {
+        // Every frame, for every generator: no allocation.
+        let driven = self.drivers.iter().flatten().filter(|d| d.enabled).map(|d| &d.param_id);
+        let enveloped = self.envelopes.iter().flatten().filter(|e| e.enabled).map(|e| &e.param_id);
+        for id in driven.chain(enveloped) {
+            if let Some(p) = self.params.get_mut(id) {
                 p.value = p.base;
             }
         }
@@ -1436,11 +1460,9 @@ impl PresetInstance {
             self.effect_type = gen_type;
             // Seed the manifest whole from the registry template; each bundled
             // Param seeds base = value = default.
-            let entries = def
-                .param_defs
-                .iter()
-                .map(|pd| crate::params::Param::bundled(pd.spec.clone()))
-                .collect();
+            let mut specs: Vec<_> = def.param_defs.iter().map(|pd| pd.spec.clone()).collect();
+            crate::param_lookup::fill_template_scene_facts(&self.effect_type, &mut specs);
+            let entries = specs.into_iter().map(crate::params::Param::bundled).collect();
             self.params = crate::params::ParamManifest::from_params(entries);
             self.base_tracked = true;
         }
@@ -1743,7 +1765,7 @@ mod tests {
             p.spec.min = 10.0;
             p.spec.max = 20.0;
             p.spec.name = "Recalibrated Amount".to_string();
-            p.calibrated = true;
+            p.choices.slider = Some((10.0, 20.0));
         }
         // The graph's own shadow copy — STALE template range (0..1, "Amount").
         // Nothing after this construction ever writes to it directly; only
@@ -1784,6 +1806,9 @@ mod tests {
                     section: None,
                     card_visible: true,
                     material_role: None,
+                    limit: Default::default(),
+                    unit: None,
+                    scene: None,
                 }],
                 bindings: vec![BindingDef {
                     id: "amount".to_string(),
@@ -1838,12 +1863,11 @@ mod tests {
             "the derived meta.params entry must be byte-identical to the manifest's own spec",
         );
 
-        // Round trip: reload and confirm the manifest — the card's
-        // authority — carries the calibrated range through, not just the
-        // one-shot JSON snapshot above.
+        // Round trip: the user's range comes back as the slider span. The
+        // declared range is rebuilt from the catalog, never from the user's
+        // choice (SCENE_SURFACES_DESIGN.md D15 (slider range vs hard limit)).
         let back: PresetInstance = serde_json::from_str(&json).unwrap();
-        assert_eq!(back.params.get("amount").unwrap().spec.min, 10.0);
-        assert_eq!(back.params.get("amount").unwrap().spec.max, 20.0);
+        assert_eq!(back.params.get("amount").unwrap().slider_span(), (10.0, 20.0));
     }
 
     #[test]

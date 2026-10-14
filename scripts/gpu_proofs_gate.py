@@ -559,8 +559,13 @@ def write_timings_md(path: Path, timings: list, n: int = 25) -> None:
     path.write_text("\n".join(rows) + "\n")
 
 
-def write_times_json(path: Path, timings: list, *, merge=False, learned=False) -> str:
-    """Write successful allowances keyed by package, target, and test."""
+def write_times_json(path: Path, timings: list, *, merge=False, learned=False,
+                     complete=False) -> str:
+    """Write successful allowances keyed by package, target, and test.
+
+    `complete` means the run executed every GPU proof (unfiltered `--all`), so
+    a merged key it did not produce names a deleted or renamed test and is
+    dropped."""
     if any(timing_fields(entry)[4] == "FAILED" for entry in timings):
         return "GPU test times not written: a failed proof cannot export allowances"
     old = gpu_scope.read_times(gpu_scope.TIMES_PATH)
@@ -582,7 +587,10 @@ def write_times_json(path: Path, timings: list, *, merge=False, learned=False) -
             if status != "ok":
                 new.pop(timing_key(_package, _target, name), None)
                 new.pop(name, None)
-    sha = subprocess.run(["git", "-C", str(Path(__file__).resolve().parent), "rev-parse", "HEAD"],
+        if complete:
+            ran = {timing_key(*timing_fields(entry)[:3]) for entry in timings}
+            new = {key: secs for key, secs in new.items() if key in ran}
+    sha =subprocess.run(["git", "-C", str(Path(__file__).resolve().parent), "rev-parse", "HEAD"],
                          capture_output=True, text=True).stdout.strip()
     entries = new
     if learned:
@@ -1225,7 +1233,8 @@ def _main() -> int:
                      and not any(timing_fields(entry)[4] == "FAILED"
                                  for entry in recorded_timings))
     if args.record_times and functional_ok:
-        print(write_times_json(args.record_times, recorded_timings, merge=True))
+        print(write_times_json(args.record_times, recorded_timings, merge=True,
+                               complete=args.all_tests and not args.filter and not args.skip))
     timing_red = [] if args.all_tests or args.record_times else unmeasured_heavy(all_timings)
     if timing_red and functional_ok and not args.all_tests and not args.record_times:
         fresh = rerun_timing_red(timing_red, runs, passes, run_records, manifest_path,

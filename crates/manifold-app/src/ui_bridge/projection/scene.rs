@@ -1,4 +1,4 @@
-//! Scene-panel projection: the Scene Setup dock's per-frame row value sync
+//! Scene tab projection: the Scene tab's per-frame row value sync
 //! and the exposure-section doc-id resolver. Moved from state_sync.rs (P-P,
 //! UI_FUNNEL_DECOMPOSITION_DESIGN.md).
 
@@ -75,65 +75,70 @@ pub(crate) fn fluid_role_rows(
     })
 }
 
-/// The fluid role sources anywhere inside an object's group.
-pub(crate) fn group_fluid_role_nodes(
-    def: &manifold_core::effect_graph_def::EffectGraphDef,
-    group_id: Option<u32>,
-) -> Vec<manifold_core::NodeId> {
-    fn collect(nodes: &[manifold_core::effect_graph_def::EffectGraphNode], ids: &mut Vec<manifold_core::NodeId>) {
-        for node in nodes {
-            if node.type_id == "node.fluid_role_source" && !node.node_id.is_empty() {
-                ids.push(node.node_id.clone());
-            }
-            if let Some(group) = node.group.as_deref() {
-                collect(&group.nodes, ids);
-            }
-        }
-    }
-    let Some(group) = group_id.and_then(|id| def.nodes.iter().find(|node| node.id == id))
-        .and_then(|node| node.group.as_deref()) else { return Vec::new(); };
-    let mut ids = Vec::new();
-    collect(&group.nodes, &mut ids);
-    ids
+/// The nodes scene item `id` owns (SCENE_SURFACES_DESIGN.md D3 (one scene
+/// item list)); empty when the scene has no such item.
+pub(crate) fn owned_nodes<'a>(
+    items: &'a [manifold_nodes_scene::node_graph::scene_items::SceneItem],
+    id: &manifold_nodes_scene::node_graph::scene_items::SceneItemId,
+) -> &'a [manifold_core::NodeId] {
+    items.iter().find(|item| &item.id == id).map_or(&[], |item| item.owned_nodes.as_slice())
 }
 
-/// The nodes whose controls an object's panel shows: its scene_object, its
-/// liquid, its enabled body, transform, material and every modifier.
-/// Shared transforms and modifiers belong to their first consuming object
-/// in scene order. Materials deliberately remain visible on every consumer.
-pub(crate) fn object_controls(
-    def: Option<&manifold_core::effect_graph_def::EffectGraphDef>,
-    row: &manifold_nodes_scene::node_graph::scene_vm::SceneObjectKnownRow,
-    objects: &[manifold_nodes_scene::node_graph::scene_vm::SceneObjectVm],
+/// The nodes of the World and every physics world, for tests that read
+/// their stored section strings.
+#[cfg(test)]
+pub(crate) fn world_and_physics_nodes(
+    items: &[manifold_nodes_scene::node_graph::scene_items::SceneItem],
 ) -> Vec<manifold_core::NodeId> {
-    let mut owned = vec![row.object.clone()];
-    owned.extend_from_slice(&row.fluid_controls);
-    owned.extend(row.look_mesh.iter().cloned());
-    if row.parent_group_id.is_none() && let Some(def) = def {
-        owned.extend(group_fluid_role_nodes(def, row.group_node_id));
-    }
-    if let Some(physics) = row.physics.as_ref().filter(|physics| physics.enabled) {
-        owned.push(physics.body.clone());
-    }
-    if let Some(transform) = &row.transform {
-        owned.push(transform.node.clone());
-    }
-    if let manifold_nodes_scene::node_graph::scene_vm::MaterialVm::Known(material) = &row.material {
-        owned.push(material.node.clone());
-    }
-    owned.extend(row.modifier_chain.iter().map(|modifier| modifier.node.clone()));
-    owned.extend(row.transform_chain.iter().map(|modifier| modifier.node.clone()));
-    for object in objects {
-        let manifold_nodes_scene::node_graph::scene_vm::SceneObjectVm::Known(other) = object else { continue; };
-        if other.object == row.object && other.index == row.index { break; }
-        for node in other.transform.iter().map(|transform| &transform.node)
-            .chain(other.modifier_chain.iter().map(|modifier| &modifier.node))
-            .chain(other.transform_chain.iter().map(|modifier| &modifier.node))
-        {
-            owned.retain(|owned_node| owned_node != node);
-        }
-    }
-    owned
+    use manifold_core::scene_surface::SceneItemKind;
+    items
+        .iter()
+        .filter(|item| matches!(item.kind, SceneItemKind::World | SceneItemKind::Physics))
+        .flat_map(|item| item.owned_nodes.iter().cloned())
+        .collect()
+}
+
+/// The Scene tab tree's items (SCENE_SURFACES D8) from the scene items and
+/// the panel rows already projected from the same `SceneVm`. Lights and
+/// objects pair with their Known rows in order, since `scene_items` lists
+/// exactly those, in that order. `object_ids` are each Known object's
+/// filtered control ids; every other item owns its nodes' controls.
+pub(crate) fn scene_item_vms(
+    def: Option<&manifold_core::effect_graph_def::EffectGraphDef>,
+    items: &[manifold_nodes_scene::node_graph::scene_items::SceneItem],
+    objects: &[manifold_ui::panels::scene_setup_panel::ObjectRowVm],
+    lights: &[manifold_ui::panels::scene_setup_panel::LightRowVm],
+    object_ids: Vec<Vec<String>>,
+) -> Vec<manifold_ui::panels::scene_setup_panel::SceneItemVm> {
+    use manifold_nodes_scene::node_graph::scene_items::SceneItemId;
+    use manifold_ui::panels::scene_setup_panel::{LightRowVm, ObjectRowVm, SceneItemVm, SceneSelection};
+    let mut known_objects = objects.iter().filter_map(|object| match object {
+        ObjectRowVm::Known(row) => Some((row.object_node_id, row.parent_group_id)),
+        ObjectRowVm::Custom { .. } => None,
+    });
+    let mut known_lights = lights.iter().filter_map(|light| match light {
+        LightRowVm::Known(row) => Some(row.node_doc_id),
+        LightRowVm::Custom { .. } => None,
+    });
+    let mut object_ids = object_ids.into_iter();
+    items
+        .iter()
+        .filter_map(|item| {
+            let owned = || parameter_ids_for_nodes(def, &item.owned_nodes);
+            let (selection, parent, parameter_ids) = match &item.id {
+                SceneItemId::Camera => (SceneSelection::Camera, None, owned()),
+                SceneItemId::World => (SceneSelection::World, None, owned()),
+                SceneItemId::Light(_) => (SceneSelection::Light(known_lights.next()?), None, owned()),
+                SceneItemId::Object(_) => {
+                    let (id, parent) = known_objects.next()?;
+                    (SceneSelection::Object(id), parent, object_ids.next()?)
+                }
+                SceneItemId::Force(id) => (SceneSelection::Force(id.clone()), None, Vec::new()),
+                SceneItemId::Physics(id) => (SceneSelection::Physics(id.clone()), None, owned()),
+            };
+            Some(SceneItemVm { kind: item.kind, selection, name: item.name.clone(), parent, parameter_ids })
+        })
+        .collect()
 }
 
 /// Family eyes and look rows use the existing manifest, with one visible
@@ -156,7 +161,7 @@ pub(crate) fn filter_family_parameter_ids(
     });
 }
 
-/// Per-frame VALUE sync for the Scene Setup dock's rows — the scene-row
+/// Per-frame VALUE sync for the Scene tab's rows — the scene-row
 /// sibling of [`sync_card_values`]: push each built row's CURRENT value from
 /// `project` (the layer's generator graph def, instance override or bundled
 /// default) onto the already-built panel, so rows track OSC / command /
@@ -194,6 +199,44 @@ pub fn sync_scene_row_values(ui: &mut UIRoot, project: &Project) {
     }
 }
 
+/// The outliner eyes' in-place push (D22, planned as `SceneEyes`): each eye
+/// reads its write address the way the scene projection does, the binding's
+/// instance slot for a bound row, else the def's node param (default on).
+/// Edit-rate only: the binding lookup allocates.
+pub fn sync_scene_outliner_eyes(ui: &mut UIRoot, project: &Project) {
+    if !ui.scene_setup_panel.is_open() {
+        return;
+    }
+    let Some(layer_id) = ui.scene_setup_panel.live_layer_id().cloned() else {
+        return;
+    };
+    let Some((_, layer)) = project.timeline.find_layer_by_id(layer_id.as_str()) else {
+        return;
+    };
+    let bundled;
+    let def = match layer.generator_graph() {
+        Some(def) => def,
+        None => {
+            bundled = manifold_nodes::bundled_presets::bundled_preset_def(layer.generator_type());
+            let Some(def) = bundled.as_deref() else { return };
+            def
+        }
+    };
+    let inst = layer.gen_params();
+    let mut value_of = |addr: &manifold_ui::panels::scene_setup_panel::RowAddr| {
+        let (scope, node, param) = (addr.scope_path.as_slice(), addr.node_doc_id, addr.param_id.as_str());
+        if let Some(inst) = inst
+            && let Some(id) = crate::ui_bridge::project::scene_binding_id(def, scope, node, param)
+            && inst.params.contains(id.as_str())
+        {
+            return Some(inst.get_base_param(id.as_str()));
+        }
+        let node = crate::ui_bridge::project::find_node_by_scope(def, scope, node)?;
+        Some(node.params.get(param).and_then(crate::editor_bridge::serialized_value_as_f32).unwrap_or(1.0))
+    };
+    ui.scene_setup_panel.sync_outliner_eyes(&mut ui.tree, &mut value_of);
+}
+
 /// The real section strings (SCENE_PANEL_EXPOSURE_CONVERGENCE_DESIGN.md P2
 /// slice 2a) of every exposed control owned by `nodes`, read off the def's
 /// exposure metadata: creation-time and load-time stamping name the same
@@ -202,6 +245,9 @@ pub fn sync_scene_row_values(ui: &mut UIRoot, project: &Project) {
 ///
 /// Deliberately does NOT filter by `spec.card_visible`: that flag gates the
 /// generator's outer card, never the scene panel.
+/// The Scene tab partitions by item ownership now; tests still read the
+/// stored strings to check what the importers stamp.
+#[cfg(test)]
 pub(crate) fn sections_for_nodes(
     def: Option<&manifold_core::effect_graph_def::EffectGraphDef>,
     nodes: &[manifold_core::NodeId],
@@ -538,31 +584,44 @@ mod ownership_tests {
         assert_eq!(parameter_ids_for_nodes(Some(&def), &ids(&["grouped_domain"])), vec!["1_intensity"]);
     }
 
-    /// Every control the scene panel shows belongs to one item: an object, a
-    /// light, the camera or the world. The one sharing allowed is a material
+    /// Every scene item with the nodes it owns (`scene_items`), and the
+    /// material it may share.
+    fn scene_items(def: &EffectGraphDef) -> Vec<(String, Vec<NodeId>, Option<NodeId>)> {
+        use manifold_nodes_scene::node_graph::scene_items::SceneItemId;
+        use manifold_nodes_scene::node_graph::scene_vm::{MaterialVm, SceneObjectVm, SceneVm};
+        let vm = SceneVm::from_def(def).expect("a scene");
+        manifold_nodes_scene::node_graph::scene_items::scene_items(def, &vm)
+            .into_iter()
+            .map(|item| {
+                let material = vm.objects.iter().find_map(|object| match (object, &item.id) {
+                    (SceneObjectVm::Known(row), SceneItemId::Object(id)) if &row.object == id => match &row.material {
+                        MaterialVm::Known(m) => Some(m.node.clone()),
+                        _ => None,
+                    },
+                    _ => None,
+                });
+                (format!("{:?} {}", item.kind, item.name), item.owned_nodes, material)
+            })
+            .collect()
+    }
+
+    /// The nodes an object's scene item owns.
+    fn object_nodes(def: &EffectGraphDef, row: &manifold_nodes_scene::node_graph::scene_vm::SceneObjectKnownRow) -> Vec<NodeId> {
+        let vm = manifold_nodes_scene::node_graph::scene_vm::SceneVm::from_def(def).expect("a scene");
+        let items = manifold_nodes_scene::node_graph::scene_items::scene_items(def, &vm);
+        owned_nodes(&items, &manifold_nodes_scene::node_graph::scene_items::SceneItemId::Object(row.object.clone())).to_vec()
+    }
+
+    /// Every control the scene panel shows belongs to one item: the camera, a
+    /// light, an object, a physics world or the world. The one sharing allowed is a material
     /// wired into several objects, which each of them shows. Returns the
     /// camera's controls. Doc ids collide across group levels (Dam Break
     /// Matter's domain and its orbit camera are both doc id 1; every grouped
     /// glTF object numbers its own level), so this fails the moment
     /// ownership reads them.
     fn assert_one_owner(name: &str, def: &EffectGraphDef) -> Vec<String> {
-        use manifold_nodes_scene::node_graph::scene_vm::{MaterialVm, SceneLightVm, SceneObjectVm, SceneVm};
-        let vm = SceneVm::from_def(def).unwrap_or_else(|| panic!("{name} is a scene"));
-        // (item, its nodes, the material it may share)
-        let mut items: Vec<(String, Vec<NodeId>, Option<NodeId>)> = Vec::new();
-        for object in &vm.objects {
-            if let SceneObjectVm::Known(row) = object {
-                let material = match &row.material { MaterialVm::Known(m) => Some(m.node.clone()), _ => None };
-                items.push((format!("object {}", row.name), object_controls(Some(def), row, &vm.objects), material));
-            }
-        }
-        for light in &vm.lights {
-            if let SceneLightVm::Known(row) = light {
-                items.push((format!("light {}", row.name), vec![row.node.clone()], None));
-            }
-        }
-        items.push(("camera".into(), vm.camera_controls.clone(), None));
-        items.push(("world".into(), vm.world_controls.clone(), None));
+        assert!(manifold_nodes_scene::node_graph::scene_vm::SceneVm::from_def(def).is_some(), "{name} is a scene");
+        let items = scene_items(def);
         let mut owner: BTreeMap<String, usize> = BTreeMap::new();
         for (index, (item, nodes, material)) in items.iter().enumerate() {
             for id in parameter_ids_for_nodes(Some(def), nodes) {
@@ -575,23 +634,70 @@ mod ownership_tests {
                     "{name}: control {id} shows under both {} and {item}", items[other].0);
             }
         }
-        parameter_ids_for_nodes(Some(def), &vm.camera_controls)
+        let camera = items.iter().find(|(item, _, _)| item == "Camera Camera").expect("camera item");
+        parameter_ids_for_nodes(Some(def), &camera.1)
     }
 
+    /// SCENE_SURFACES_DESIGN.md P3 gate: every control of a bundled scene
+    /// bound to one scene-vocabulary node param has exactly one owning item
+    /// (`assert_one_owner`) and exactly one role, read from the joined
+    /// manifest the scene table feeds.
     #[test]
-    fn every_bundled_scene_control_has_one_owner() {
+    fn every_bundled_scene_row_has_one_owner_and_one_role() {
+        use manifold_nodes_scene::node_graph::scene_exposure::is_scene_setup_node;
+        fn node_types(nodes: &[manifold_core::effect_graph_def::EffectGraphNode], out: &mut std::collections::HashMap<NodeId, String>) {
+            for node in nodes {
+                out.insert(node.node_id.clone(), node.type_id.clone());
+                if let Some(body) = node.group.as_deref() {
+                    node_types(&body.nodes, out);
+                }
+            }
+        }
+        let mut checked = 0;
         let mut scenes = Vec::new();
+        let mut failures = Vec::new();
+        let mut ownerless = std::collections::BTreeSet::new();
         for preset in manifold_nodes::bundled_presets::bundled_preset_type_ids(
             manifold_core::preset_def::PresetKind::Generator,
         ) {
             let def = manifold_nodes::bundled_presets::bundled_preset_def(&preset).unwrap();
-            if manifold_nodes_scene::node_graph::scene_vm::SceneVm::from_def(def.as_ref()).is_some() {
-                assert_one_owner(preset.as_str(), def.as_ref());
-                scenes.push(preset.as_str().to_string());
+            if manifold_nodes_scene::node_graph::scene_vm::SceneVm::from_def(def.as_ref()).is_none() {
+                continue;
+            }
+            assert_one_owner(preset.as_str(), def.as_ref());
+            scenes.push(preset.as_str().to_string());
+            let owned: std::collections::BTreeSet<String> = scene_items(def.as_ref())
+                .iter()
+                .flat_map(|(_, nodes, _)| parameter_ids_for_nodes(Some(def.as_ref()), nodes))
+                .collect();
+            let mut fx = manifold_core::effects::PresetInstance::new_generator(preset.clone());
+            fx.init_defaults();
+            fx.graph = Some(def.as_ref().clone());
+            fx.refresh_manifest_from_graph();
+            let mut types = std::collections::HashMap::new();
+            node_types(&def.nodes, &mut types);
+            let meta = def.preset_metadata.as_ref().unwrap();
+            for spec in &meta.params {
+                let mut bound = meta.bindings.iter().filter(|b| b.id == spec.id);
+                let (Some(binding), None) = (bound.next(), bound.next()) else { continue };
+                let BindingTarget::Node { node_id, .. } = &binding.target else { continue };
+                if binding.user_added || !types.get(node_id).is_some_and(|ty| is_scene_setup_node(ty)) {
+                    continue;
+                }
+                checked += 1;
+                if !owned.contains(&spec.id) {
+                    ownerless.insert(format!("{} {}", preset.as_str(), spec.id));
+                }
+                if fx.params.get(&spec.id).is_none_or(|p| p.spec.scene.is_none()) {
+                    failures.push(format!("{preset:?} {}: no role", spec.id));
+                }
             }
         }
         assert!(scenes.iter().any(|scene| scene == "WaterDamBreakMatter"), "{scenes:?}");
         assert!(scenes.iter().any(|scene| scene == "WaterDamBreakGpuFlip"), "{scenes:?}");
+        assert!(checked > 100, "only {checked} controls checked");
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+        assert!(ownerless.is_empty(), "vocabulary rows no scene item owns: {ownerless:?}");
     }
 
     #[test]
@@ -666,7 +772,7 @@ mod ownership_tests {
             let vm = SceneVm::from_def(&def).unwrap();
             for object in &vm.objects {
                 let SceneObjectVm::Known(row) = object else { panic!("known object"); };
-                let controls = parameter_ids_for_nodes(Some(&def), &object_controls(Some(&def), row, &vm.objects));
+                let controls = parameter_ids_for_nodes(Some(&def), &object_nodes(&def, row));
                 let expected = match row.index {
                     0 => vec!["position", "shake_amount", "bend_angle", "roughness"],
                     1 => vec!["roughness"],
@@ -694,7 +800,7 @@ mod ownership_tests {
             SceneObjectVm::Known(row) if row.liquid_domain.is_some() => Some(row),
             _ => None,
         }).expect("the water is a scene object");
-        let sections = sections_for_nodes(Some(def.as_ref()), &object_controls(Some(def.as_ref()), water, &vm.objects));
+        let sections = sections_for_nodes(Some(def.as_ref()), &object_nodes(def.as_ref(), water));
         assert!(sections.iter().any(|section| section.contains("Simulation")), "{sections:?}");
         assert!(sections.iter().all(|section| !section.contains("Camera")), "{sections:?}");
     }
@@ -752,7 +858,7 @@ mod ownership_tests {
         let roles = fluid_role_rows(&def, obstacle.group_node_id, &fluid_domains(&vm)).unwrap();
         assert_eq!(roles.len(), 1, "the Fluid Role panel keeps the collider");
         assert_eq!(roles[0].target_label, "Target: Water");
-        assert!(object_controls(Some(&def), obstacle, &vm.objects).contains(&NodeId::new("obstacle_collider")));
+        assert!(object_nodes(&def, obstacle).contains(&NodeId::new("obstacle_collider")));
     }
 
     /// The GPU water's panel carries its whitewater switch, amount and
@@ -767,7 +873,7 @@ mod ownership_tests {
             SceneObjectVm::Known(row) if row.liquid_domain.is_some() => Some(row),
             _ => None,
         }).expect("the water is a scene object");
-        let owned = object_controls(Some(def.as_ref()), water, &vm.objects);
+        let owned = object_nodes(def.as_ref(), water);
         let ids = parameter_ids_for_nodes(Some(def.as_ref()), &owned);
         assert!(ids.iter().any(|id| id == "whitewater_capacity"), "missing whitewater budget");
         for param in ["enabled", "amount"] {
@@ -806,7 +912,7 @@ mod ownership_tests {
             _ => None,
         }).collect();
         let showing: Vec<_> = rows.iter().filter(|row| {
-            let owned = object_controls(Some(def.as_ref()), row, &vm.objects);
+            let owned = object_nodes(def.as_ref(), row);
             let mut ids = parameter_ids_for_nodes(Some(def.as_ref()), &owned);
             filter_family_parameter_ids(Some(def.as_ref()), row, &mut ids);
             ids.iter().any(|id| id == "physics_view")
@@ -832,7 +938,7 @@ mod ownership_tests {
 
             // Collapsing or expanding the family leaves the parent's own
             // simulation and shared gate controls intact.
-            let parent_owned = object_controls(Some(def.as_ref()), water, &vm.objects);
+            let parent_owned = object_nodes(def.as_ref(), water);
             let mut parent_ids = parameter_ids_for_nodes(Some(def.as_ref()), &parent_owned);
             filter_family_parameter_ids(Some(def.as_ref()), water, &mut parent_ids);
             assert!(parent_ids.contains(&"parent_visible".to_string()), "{preset}: parent gate");
@@ -850,7 +956,7 @@ mod ownership_tests {
             for dots in dots {
                 // Its switches belong to Water's Physics View card; the dots
                 // row shows only its material.
-                let owned = object_controls(Some(def.as_ref()), dots, &vm.objects);
+                let owned = object_nodes(def.as_ref(), dots);
                 let mut ids = parameter_ids_for_nodes(Some(def.as_ref()), &owned);
                 filter_family_parameter_ids(Some(def.as_ref()), dots, &mut ids);
                 let MaterialVm::Known(material) = &dots.material else { panic!("{preset}: dots material") };
@@ -869,7 +975,7 @@ mod ownership_tests {
                     MaterialVm::None => panic!("{preset}: {} has no material", child.name),
                 };
                 let mesh = child.look_mesh.clone().expect("look mesh");
-                let owned = object_controls(Some(def.as_ref()), child, &vm.objects);
+                let owned = object_nodes(def.as_ref(), child);
                 assert!(owned.contains(&child.object));
                 assert!(owned.contains(&mesh));
                 assert!(owned.contains(&material));
@@ -910,7 +1016,7 @@ mod ownership_tests {
             SceneObjectVm::Known(row) if row.liquid_domain.is_some() => Some(row),
             _ => None,
         }).expect("water object");
-        let owned = object_controls(Some(def.as_ref()), water, &vm.objects);
+        let owned = object_nodes(def.as_ref(), water);
         let specs: Vec<_> = owned_specs(Some(def.as_ref()), &owned).collect();
         let meta = def.preset_metadata.as_ref().unwrap();
         let mut instance = manifold_core::effects::PresetInstance::new(PresetTypeId::new("WaterDamBreakGpuFlip"));
@@ -1287,7 +1393,7 @@ mod ownership_tests {
         for grouped in [false, true] {
             let def = fluid_role_projection_fixture(grouped, true);
             let group_id = grouped.then_some(40);
-            assert_eq!(group_fluid_role_nodes(&def, group_id), if grouped { ids(&["role"]) } else { Vec::new() });
+            assert_eq!(manifold_nodes_scene::node_graph::scene_items::group_fluid_role_nodes(&def, group_id), if grouped { ids(&["role"]) } else { Vec::new() });
             let mut parameter_ids = parameter_ids_for_nodes(Some(&def), &ids(&["role", "mesh"]));
             filter_inactive_fluid_role_parameter_ids(Some(&def), group_id, &mut parameter_ids);
             assert_eq!(parameter_ids, expected_ids);

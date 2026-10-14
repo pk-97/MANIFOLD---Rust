@@ -1,0 +1,26 @@
+[
+  {
+    "Pointer": {
+      "target": { "Query": { "name": "param_card.graph_editor.Plasma" } },
+      "gesture": { "Click": { "modifiers": {} } }
+    }
+  },
+  { "Focus": { "window": "GraphEditor" } },
+  { "Step": { "frames": 2 } },
+  { "Assert": { "selector": { "Query": { "name": "param_row.complexity.value" } }, "check": { "TextEquals": "0.50" } } },
+  "ResetWork",
+  {
+    "Pointer": {
+      "target": { "Query": { "name": "param_row.complexity.slider" } },
+      "gesture": { "DragFrames": { "to": { "Query": { "name": "param_row.complexity.value" } }, "steps": 8 } }
+    }
+  },
+  { "AssertWork": { "window": "card_lane_drag" } },
+  { "Assert": { "selector": { "Query": { "name": "param_row.complexity.value" } }, "check": { "TextEquals": "1.00" } } },
+  "AssertFresh",
+  "Snapshot",
+  { "Key": { "key": "Z", "modifiers": { "command": true } } },
+  { "Step": { "frames": 1 } },
+  { "Assert": { "selector": { "Query": { "name": "param_row.complexity.value" } }, "check": { "TextEquals": "0.50" } } },
+  "AssertFresh"
+]

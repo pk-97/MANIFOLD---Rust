@@ -341,29 +341,6 @@ pub enum ProjectAction {
         source_node_id: Option<u32>,
         target_map: crate::panels::scene_setup_panel::SkinTargetMap,
     },
-    /// UX-P3a (SCENE_PANEL_UX_DESIGN.md D8, sizing amendment): click on a
-    /// scene row's mod button — expose this inner param on the layer's
-    /// generator card via the SAME `ToggleNodeParamExposeCommand` the graph
-    /// editor's expose glyph uses, one undo unit, named `<object_label> ·
-    /// <param_label>`. One-way in P3a: the panel emits this on every click
-    /// of a live (non-driven) mod button regardless of its current lit
-    /// state — the app dispatch handler is the one that no-ops when the
-    /// param is ALREADY exposed, so a second click never un-exposes and
-    /// never mints a duplicate binding. Un-exposing a param that may
-    /// already carry drivers/envelopes is a footgun from this panel (D8's
-    /// own text) — that stays a graph-editor-only affordance.
-    SceneSetupExposeParam {
-        layer_id: LayerId,
-        scope_path: Vec<u32>,
-        node_doc_id: u32,
-        param_id: String,
-        object_label: String,
-        param_label: String,
-        min: f32,
-        max: f32,
-        default_value: f32,
-        is_angle: bool,
-    },
     MidiTriggerModeClicked(LayerId),
     /// "Clear points" context-menu item: empties the lane's points,
     /// keeping the (now-empty) lane — `ClearLaneCommand`.
@@ -536,6 +513,23 @@ pub enum ParamsAction {
     /// unfolded rows repaint; carries no payload and mutates no model (fold
     /// state is workspace-local, never serialized).
     SectionFoldToggled,
+    /// A scene card section header's fold triangle was clicked; the card
+    /// already flipped its own state. The app saves the choice in the
+    /// instance's fold lists (SCENE_SURFACES_DESIGN.md D7 (user choices)).
+    CardSectionFolded { target: GraphParamTarget, section: String, folded: bool },
+    /// Show on Card / Remove from Card; `None` hands the row back to its
+    /// role (D10 (cross-surface gestures)).
+    SetCardPin(GraphParamTarget, ParamId, Option<manifold_foundation::scene_surface::CardPin>),
+    /// Set slider range / Reset slider range: the user's slider span for one
+    /// control, `None` to clear it (SCENE_SURFACES_DESIGN.md D15 (slider range
+    /// and hard limit)). Display only; the value is never moved.
+    SetSliderRange(GraphParamTarget, ParamId, Option<(f32, f32)>),
+    /// Show in Scene tab: switch the inspector to the Scene tab and reveal
+    /// the item that owns this row.
+    RevealInSceneTab(GraphParamTarget, ParamId),
+    /// A scene card section title was clicked; carries the section's rows in
+    /// card order. The Scene tab picks which one to reveal (D10).
+    RevealSectionInSceneTab(GraphParamTarget, Vec<ParamId>),
     /// section 6b — the global "hide mod settings" (compact) toggle was clicked. The
     /// inspector already flipped its own UI-only flag; this routes to a
     /// structural rebuild so every card's drawers hide/show. No model mutation.
@@ -918,10 +912,9 @@ pub enum RootAction {
     /// Opened from the Settings popup; a floating overlay, not a dock.
     OpenRtQuality,
     /// Scene Setup outliner selection moved (D1 of SCENE_PANEL_UX_DESIGN.md).
-    /// The panel has already updated its UI-local selection; this action's
-    /// only job is to ride the dispatch loop back as `structural_change:
-    /// true` so `sync_inspector_data` rebuilds the panel this same frame —
-    /// same-frame Properties update, no polling, no per-frame rebuild.
+    /// The panel has already updated its UI-local selection and moved its
+    /// selection version, which re-runs `sync_inspector_data` this same
+    /// frame — same-frame Properties update, no polling, no per-frame rebuild.
     /// Payload: the layer whose selection moved (the panel key) — the
     /// selection itself stays panel-internal (D7 of SCENE_SETUP_PANEL).
     SceneSetupSelectionChanged(LayerId),
@@ -932,6 +925,10 @@ pub enum RootAction {
     /// D7 "Open Graph Editor" empty-state action for a generator layer with
     /// no `render_scene` — reuses the existing open-editor action.
     SceneSetupOpenGraphEditor(LayerId),
+    /// The Camera header's "Use this view" (SCENE_SURFACES D14): copy the
+    /// editor viewport's view into this layer's scene camera. The app owns
+    /// the viewport camera, so it resolves the pose and builds the command.
+    SceneSetupCopyViewportCamera(LayerId),
     /// P2 object-name click: `(layer_id, group_node_id, current_name)` — opens
     /// the shared inline text-input session (same mechanics as
     /// `AudioSendLabelClicked`); commit dispatches `RenameGroupCommand` (the
@@ -958,6 +955,9 @@ pub enum RootAction {
     /// selected recipe from the panel's `force_picker` snapshot and applies
     /// the existing scene modifier command.
     SceneSetupAddForceClicked(LayerId),
+    /// The Scene tab Objects group's "+": the app opens the Objects menu
+    /// (`scene_setup_actions::add_object_menu`) at the clicked button.
+    SceneSetupAddObjectMenuClicked(LayerId),
     SceneSetupFluidRoleClicked {
         layer_id: LayerId,
         render_scene_node_id: u32,
@@ -1093,10 +1093,24 @@ pub enum RootAction {
         whole_numbers: bool,
         degrees: bool,
     },
-    /// Click on a material colour swatch opens the shared inline hex editor.
-    /// The three channel ids remain the authoritative scalar storage and are
-    /// committed through the existing atomic `ParamRgb` scrub path.
-    BeginMaterialColourTextInput {
+    /// "Set slider range…" in the param menu: open the shared type-in at
+    /// `anchor`, prefilled with the row's slider range ("min to max").
+    BeginSliderRangeInput {
+        target: GraphParamTarget,
+        param_id: ParamId,
+        anchor: Rect,
+    },
+    /// Click on a row's colour swatch: open the colour menu (a hex entry
+    /// item over the colour grid) at the swatch. Picking a colour is one
+    /// atomic `ParamRgb` write to the three channel ids.
+    OpenColourMenu {
+        target: GraphParamTarget,
+        param_ids: [ParamId; 3],
+        value: [f32; 3],
+    },
+    /// The colour menu's hex item: open the inline hex editor over the
+    /// swatch. The commit rides the same atomic `ParamRgb` write.
+    BeginColourTextInput {
         target: GraphParamTarget,
         param_ids: [ParamId; 3],
         anchor: Rect,

@@ -4,7 +4,7 @@
 
 ## Slots and effort
 
-Slot names reach the Claude models directly: `fable` is Fable 5.1, `opus` is Opus 5.5, `sonnet` is Sonnet 5.5, `haiku` is Haiku. The agent-launch guard prints the live map on every deny (`live map: …`); trust that over this page if they disagree.
+Slot names (`fable`, `opus`, `sonnet`, `haiku`) reach Claude models directly. Which model each resolves to is the agent-launch guard's live map (`.claude/hooks/agent-launch-guard.py`, read from the session env and printed on every deny as `live map: …`); this page names no versions.
 
 **Effort:** agents run at medium effort by default and at high for hard judgment work (diagnosis, GPU, design, reviews, audits). Never pin an agent to low.
 
@@ -12,7 +12,7 @@ Slot names reach the Claude models directly: `fable` is Fable 5.1, `opus` is Opu
 
 | Seat | Model | Work |
 |---|---|---|
-| Lead | Opus 5.5, or Fable 5.1 for the hardest design sessions | Design, judgment, briefs, review, landing. Owns every decision and every landed diff. The only orchestrator and the only seat that lands. |
+| Lead | Opus, or Fable for the hardest design sessions | Design, judgment, briefs, review, landing. Owns every decision and every landed diff. The only orchestrator and the only seat that lands. |
 | Opus lane | `opus` | Physics, GPU solvers and shaders, diagnosis, audits, anything that can hard-lock the Mac. |
 | Fable lane | `fable` | Hard whole-system root-cause work. |
 | Sonnet lane | `sonnet` | Fully decided work: app and UI wiring, tooling scripts, doc sweeps, test and flow runs, mechanical code moves. |
@@ -45,7 +45,7 @@ within five minutes.
 
 - **A judgment-tier model is the only orchestrator.** The lead. Never a lane model over lane models, at any depth.
 - **The lead steers before the lane spawns.** Every brief names the existing system the work rides on (the reuse target) and the conviction test that must fail before the fix. Building a parallel path is a brief violation.
-- **Lanes make exactly ONE commit, then STOP and report.** The lead reviews that commit before the lane continues. Wrong direction always shows in the first diff. A lane kept for a planned follow-up follows the same rule per continuation: one commit, stop, report.
+- **Lanes make exactly ONE commit, then STOP and report.** The lead skims that commit before the lane continues; wrong direction always shows in the first diff. The adversarial agent review runs once per landing, not per commit (section Reviews and the consult seat). A lane kept for a planned follow-up follows the same rule per continuation: one commit, stop, report.
 - **A lane's report is its final text turn, never a SendMessage.** The harness delivers that turn to the lead; a SendMessage copy doubles it. SendMessage is for mid-flight questions and for the lead's continuations.
 - **Lanes have no landing rights.** Lane branches are safe to abandon.
 - **Lanes never spawn agents.** Only the lead spawns.
@@ -75,7 +75,11 @@ The default reviewer is the lead, with `opus` agents for the reading and the adv
 2. **Debug ladder step 2.** A fresh strong read when the lead's seam review stalls.
 3. **Pre-wave sanity check.** Attack the brief set for wrong fix shapes, non-disjoint lanes, over-deletion.
 
-Contract: read-and-discuss only. No Edit/Write, no spawns, no commits. An `opus` agent, or for a very complex review a Fable fork or `model: "fable"` agent, told it is read-only. Every review brief carries a hard budget and a partial-report checkpoint at half budget; output past budget is discarded, not awaited. The lead integrates and owns the call.
+Contract: read-and-discuss only. No Edit/Write, no spawns, no commits. An `opus` agent, or for a very complex review a Fable fork or `model: "fable"` agent, told it is read-only. The lead integrates and owns the call.
+
+**One adversarial review per landing.** A lane builds a phase as small commits the lead skims one by one; one `opus` adversarial review covers the whole batch before it lands. Instrumentation-only changes and changes that never touch playback get no separate agent review.
+
+**Budgets bound wandering, never coverage.** Every review brief carries a hard budget and a partial-report checkpoint at half budget, because an open-ended reviewer can read indefinitely and ignore stop messages. Every report, partial or final, lists what it did not read. Anything it did not read is unreviewed, not passed: it gets its own follow-up review, scoped to just that part, before the branch lands.
 
 ## The brief contract
 
@@ -83,7 +87,7 @@ Slow flows come from agents re-deriving what the lead already knows. Every lane 
 
 - **Established findings** with file:line anchors. Never send an agent exploring for what the lead already knows.
 - **Exact scope**: the files it may touch; read-only profile for investigations.
-- **The gate commands** it must run and what "done" means. Lanes run each check once to the end, fix every failure it shows, then rerun only those failures by name; still red after that → stop and report verbatim. No repeated full runs; the one `--cheap` gate run is reused at landing.
+- **The gate commands** it must run and what "done" means. Lanes run each check once to the end, fix every failure it shows, then rerun only those failures by name; still red after that → stop and report verbatim. No repeated full runs; the one `--cheap` gate run is reused at landing. UI flows: a lane runs only the flows its change adds or edits, by name, never a family (`scene`) or the full suite; the landing gate runs the mapped set once. A flow red on main sits in the manifest's `expected_fail` with its bead, so it never forces a named-red rerun.
 - **Prescriptive imperatives** ("Run `cargo clippy -p manifold-ui -- -D warnings`", "Read `path:line`"), not "check X". Sonnet skips tool calls on soft phrasing.
 - **The reference to port from**, when one exists, and the instruction to name every deviation.
 - **The source and everything made from it.** Name the file that defines the contract and every file generated from or checked against it: builder, shipped JSON, catalog, UI flows, goldens. Regenerate from the source. A golden is refreshed only for a change the brief names, never because it fails.

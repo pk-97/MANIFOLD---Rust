@@ -182,6 +182,16 @@ impl InspectorCompositePanel {
         self.set_active_tab(active);
     }
 
+    /// Remove the Scene rung, showing Layer in its place when it was active.
+    /// For hosts that do not build the scene panel (the graph editor's
+    /// mirrored column).
+    pub fn drop_scene_tab(&mut self) {
+        self.available_tabs.retain(|t| *t != InspectorTab::Scene);
+        if self.active_tab == InspectorTab::Scene {
+            self.set_active_tab(InspectorTab::Layer);
+        }
+    }
+
     /// Build the tab strip: one button per available rung, the active one
     /// highlighted. Records node ids for click routing.
     fn build_tab_strip(&mut self, tree: &mut UITree, rect: Rect) {
@@ -286,7 +296,7 @@ impl InspectorCompositePanel {
     }
 
     /// Sub-region node ranges for incremental cache re-rendering.
-    /// Returns (node_start, node_end) for each sub-panel: chrome panels,
+    /// Fills `ranges` with (node_start, node_end) for each sub-panel: chrome panels,
     /// effect cards, gen params. Used by the cache manager to detect which
     /// parts of the inspector changed and only re-render those.
     ///
@@ -295,50 +305,51 @@ impl InspectorCompositePanel {
     /// `build`, and `push` drops `(usize::MAX, 0)` — so the cache is fed exactly
     /// what was actually built. No `*_visible()` gate; the node range is the
     /// single source of truth for "live this frame".
-    pub fn sub_region_ranges(&self) -> Vec<(usize, usize)> {
-        let mut ranges = Vec::with_capacity(
-            4 + self.effects[Self::SCOPE_MASTER].len()
-                + self.effects[Self::SCOPE_LAYER].len()
-                + self.modifier_cards.len()
-                + 1,
-        );
+    pub fn sub_region_ranges_into(&self, ranges: &mut Vec<(usize, usize)>) {
+        ranges.clear();
         let push = |ranges: &mut Vec<(usize, usize)>, first: usize, count: usize| {
             if first != usize::MAX && count > 0 {
                 ranges.push((first, first + count));
             }
         };
         push(
-            &mut ranges,
+            ranges,
             self.macros_panel.first_node(),
             self.macros_panel.node_count(),
         );
         push(
-            &mut ranges,
+            ranges,
             self.master_chrome.first_node(),
             self.master_chrome.node_count(),
         );
         for card in &self.effects[Self::SCOPE_MASTER] {
-            push(&mut ranges, card.first_node(), card.node_count());
+            push(ranges, card.first_node(), card.node_count());
         }
         push(
-            &mut ranges,
+            ranges,
             self.layer_chrome.first_node(),
             self.layer_chrome.node_count(),
         );
         if let Some(ref gp) = self.gen_params {
-            push(&mut ranges, gp.first_node(), gp.node_count());
+            push(ranges, gp.first_node(), gp.node_count());
         }
         for card in &self.modifier_cards {
-            push(&mut ranges, card.first_node(), card.node_count());
+            push(ranges, card.first_node(), card.node_count());
         }
         for card in &self.effects[Self::SCOPE_LAYER] {
-            push(&mut ranges, card.first_node(), card.node_count());
+            push(ranges, card.first_node(), card.node_count());
         }
         push(
-            &mut ranges,
+            ranges,
             self.clip_chrome.first_node(),
             self.clip_chrome.node_count(),
         );
+    }
+
+    #[cfg(test)]
+    pub fn sub_region_ranges(&self) -> Vec<(usize, usize)> {
+        let mut ranges = Vec::new();
+        self.sub_region_ranges_into(&mut ranges);
         ranges
     }
 
@@ -420,6 +431,37 @@ impl InspectorCompositePanel {
             panel.set_led_preview(self.led_preview.clone());
             panel
         });
+    }
+
+    /// Load the generator card's scene-card state (see
+    /// `ParamCardPanel::set_scene_sections`). Call after `configure_gen_params`.
+    pub fn set_gen_scene_sections(&mut self, folded: Option<&[String]>) {
+        if let Some(card) = self.gen_params.as_mut() {
+            card.set_scene_sections(folded);
+        }
+    }
+
+    /// The scene card's row for `param`, when the generator card is `layer`'s
+    /// scene card.
+    pub fn scene_card_row(&self, layer: &LayerId, param: &str) -> Option<&crate::ParamRow> {
+        self.scene_card_of(layer)?.row(param)
+    }
+
+    /// The generator card, when it is `layer`'s scene card.
+    pub fn scene_card_of(&self, layer: &LayerId) -> Option<&ParamCardPanel> {
+        self.gen_params
+            .as_ref()
+            .filter(|card| card.is_scene_card() && card.owning_layer_id() == Some(layer))
+    }
+
+    /// The generator card's layer, when it is a scene card.
+    pub fn scene_card_layer(&self) -> Option<&LayerId> {
+        self.gen_params.as_ref().filter(|card| card.is_scene_card())?.owning_layer_id()
+    }
+
+    /// Flash `param`'s row the next time `layer`'s card is shown.
+    pub fn flash_card_row_when_shown(&mut self, layer: LayerId, param: manifold_foundation::ParamId) {
+        self.pending_card_flash = Some((layer, param));
     }
 
     // ── LED composite preview (LED_STRIPS_DESIGN MVP-P4, D24) ──
@@ -670,6 +712,7 @@ impl InspectorCompositePanel {
     /// wrapper that passes `layout.inspector()`.
     pub fn build_in_rect(&mut self, tree: &mut UITree, rect: Rect) {
         self.cache_first_node = tree.count();
+        self.cache_region = tree.building_region();
 
         // Add-effect button ids are reassigned by node index every rebuild, but
         // each is only *set* inside its `!collapsed` build branch. Clear them up
@@ -709,6 +752,7 @@ impl InspectorCompositePanel {
             card.clear_nodes();
         }
 
+        self.scene_content_rect = Rect::ZERO;
         if rect.width <= 0.0 {
             return;
         }
@@ -756,8 +800,12 @@ impl InspectorCompositePanel {
         let tab_h = TAB_STRIP_HEIGHT;
         let tab_y = macros_y + macros_h + 2.0; // 2px gap below macros
         self.build_tab_strip(tree, Rect::new(col_x, tab_y, content_w, tab_h));
+        // The Scene tab hosts the scene panel (built by the caller into
+        // `scene_content_rect`), so both columns collapse to zero width.
         let (master_col_w, layer_col_w) = if self.master_visible() {
             (full_col_w, 0.0)
+        } else if self.scene_visible() {
+            (0.0, 0.0)
         } else {
             (0.0, full_col_w)
         };
@@ -765,7 +813,7 @@ impl InspectorCompositePanel {
         let left_x = col_x;
         let right_x = col_x;
         let left_content_w = if self.master_visible() { content_w } else { 0.0 };
-        let right_content_w = if self.master_visible() { 0.0 } else { content_w };
+        let right_content_w = if self.master_visible() || self.scene_visible() { 0.0 } else { content_w };
         self.column_split_x = if self.master_visible() {
             rect.x + rect.width
         } else {
@@ -777,6 +825,11 @@ impl InspectorCompositePanel {
         let columns_h = (rect.y + rect.height - columns_y).max(0.0);
         self.columns_y = columns_y;
         self.columns_height = columns_h;
+        self.scene_content_rect = if self.scene_visible() {
+            Rect::new(col_x, columns_y, full_col_w, columns_h)
+        } else {
+            Rect::ZERO
+        };
 
         // `UI_CLIP_AND_Z_OWNERSHIP_DESIGN.md` P1 stopgap removal: this used to
         // be a bespoke, root-parented `ClipRegion` (`content_clip_id`) — the

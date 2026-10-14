@@ -3,7 +3,7 @@
     "Pointer": {
       "target": {
         "Query": {
-          "text": "Scene"
+          "text": "Scene", "type": "Button", "under_name": "inspector"
         }
       },
       "gesture": {
@@ -28,7 +28,7 @@
     "Pointer": {
       "target": {
         "Query": {
-          "text": "💡 sun"
+          "name": "scene_tree.item", "text": "Sun"
         }
       },
       "gesture": {
@@ -95,6 +95,20 @@
     }
   },
   {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "text": "Layer", "type": "Button", "under_name": "inspector"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  {
     "Assert": {
       "selector": {
         "Query": {
@@ -102,8 +116,20 @@
           "text": "0.00"
         }
       },
-      "check": {
-        "Count": 2
+      "check": "Exists"
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "text": "Scene", "type": "Button", "under_name": "inspector"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
       }
     }
   },
@@ -121,11 +147,49 @@
       "selector": {
         "Query": {
           "name": "param_row.7_intensity.value",
+          "under_name": "scene_setup",
           "text": "3.50"
         }
       },
-      "check": {
-        "Count": 2
+      "check": "Exists"
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "text": "Layer", "type": "Button", "under_name": "inspector"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "name": "param_row.7_intensity.value",
+          "text": "3.50"
+        }
+      },
+      "check": "Exists"
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "text": "Scene", "type": "Button", "under_name": "inspector"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
       }
     }
   },

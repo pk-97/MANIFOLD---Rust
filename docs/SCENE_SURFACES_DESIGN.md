@@ -1,6 +1,7 @@
 # Scene Surfaces — the scene card and the Scene tab as one system
 
-**Status:** APPROVED · 2026-10-14 · Peter, with D16 (Scene tab) and D17 (one scene per layer). P0–P10 not started. Beads: BUG-pmbd3 (3D scene inspector panel upgrades), children mapped in section 5.
+**Status:** SHIPPED · 2026-10-14 · all phases P0–P10 on main; kept as the contract for the param lookup (D2, D22–D24), the scene table and D15. Owed: BUG-hnucw (Use this view button on the graph editor viewport), BUG-k7ket (New 3D Scene empty state, decision), BUG-tly4a (slider range popover).
+**Lifecycle: contract**
 **Prerequisites:** none.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs) through section 6 (Seam briefs) before starting any phase.
 
@@ -14,7 +15,7 @@ Peter, 2026-10-13, on the split and the order: "Camera first, most useful contro
 
 **Binding constraints** (docs/DESIGN_AUTHORING.md section 1 (the intake)): *hot path* — none; the lookup runs when a manifest is built (load, structural edit), both projections run on the structural sync path, and the per-frame value channel is untouched (id join, WIDGET_TREE INV-6). *Thread residency* — projection on the UI thread from `Arc<Project>` snapshots; every mutation through `EditingService` or `MutateProject`. *Time model* — not involved. *Persistence* — yes, and the largest change here: saved projects stop carrying names, ranges and roles for any control the lookup can describe, and carry the user's choices (rename, slider range, curve, invert, section, pin, fold) per control instead. The canonical fixture (`Liveschool Live Show V6 LEDS.manifold`) is pre-3D, its controls already track their templates, and it must load and save byte-identically. Param ids never change, so mappings, automation lanes, OSC addresses and macros survive every phase. *Performance surface* — the card is the performance surface; MIDI, OSC, Ableton and automation rows are part of every phase that touches it.
 
-Companions: docs/SCENE_PANEL_EXPOSURE_CONVERGENCE_DESIGN.md (the predecessor; its section 5 (Decisions — resolved by Peter) binds here except where D2 and D13 say otherwise). docs/PARAM_STORAGE_DESIGN.md (bundled params already track their template; D2 here finishes that model for graph-local exposures). docs/WIDGET_TREE_DESIGN.md section 5b (agent contract and enforcement) (the row recipe every row change follows). docs/MATERIAL_INSPECTOR_DESIGN.md (its D3 classification table is the shape of the scene table here). docs/SCENE_SETUP_PANEL_DESIGN.md (outliner and structural verbs, still standing).
+Companions: docs/SCENE_PANEL_EXPOSURE_CONVERGENCE_DESIGN.md (the predecessor; its section 5 (Decisions — resolved by Peter) binds here except where D2 and D13 say otherwise). docs/archive/PARAM_STORAGE_DESIGN.md (bundled params already track their template; D2 here finishes that model for graph-local exposures). docs/WIDGET_TREE_DESIGN.md section 5b (agent contract and enforcement) (the row recipe every row change follows). docs/MATERIAL_INSPECTOR_DESIGN.md (its D3 classification table is the shape of the scene table here). docs/SCENE_SETUP_PANEL_DESIGN.md (outliner and structural verbs, still standing).
 
 ---
 
@@ -31,7 +32,7 @@ Extend, don't redesign. Every row below was read in the tree on 2026-10-13.
 | Kept-extra filter ignores modulation | `scene_performance.rs:394-426` | the live bug BUG-pmbd3.7 (card hides mapped rows); fixed P0 |
 | Card-visibility table | core `scene_exposure.rs:66-111` `card_visible_for` | replaced by the scene table (P3) |
 | Stamp-time param filters (which params get exposed at all) | `manifold-nodes-scene/src/node_graph/scene_exposure.rs:115-130`; liquid dial lists `manifold_core::liquid_domain::liquid_dial_params` | replaced by `SurfaceRole::Hidden` (P3) |
-| Section naming | `nodes-scene scene_exposure.rs:421-462` `section_name_for_node`; persisted into `ParamSpecDef.section`, never refreshed on load | scene surfaces stop reading it (P4, P6) |
+| Section naming | `nodes-scene scene_exposure.rs:421-462` `section_name_for_node`; persisted into `ParamSpecDef.section`, never refreshed on load | scene surfaces stop reading it (P4, P6b) |
 | Bundled params already follow the DAW model | `manifold-core/src/params.rs:28` `ParamOrigin::Bundled` ("tracks the template"); the wire entry is value, exposed, base, calibration, clip trigger (`effects/instance_serde.rs:47-63`) | extended to every control the lookup describes (P1) |
 | Where graph-local copies come from | generators with a per-instance graph take `meta.params` as "the full ordered descriptor authority" (`instance_serde.rs:272-300` `gather_known_params`); graph-local auto exposures inline their spec (`:135-145`); `meta.params` is re-derived from the manifest on save (`:155-196`) | the copies D2 removes |
 | Load refresh of the copies | core `scene_exposure.rs:432-690` (passes 1–4); pass 2 rewrites `card_visible` (`:529-563`); pass 4 rewrites label, range, angle and value labels of exact auto-stamps, because "range/label tweaks in code never reached already-saved projects" (`:598-687`). Called on project load (`manifold-app/src/project_io.rs:538`) and bundled-preset cache build (`manifold-nodes/src/bundled_presets.rs:86`) | passes 2 and 4 deleted (P2); passes 1 and 3 (structural) stay |
@@ -46,15 +47,15 @@ Extend, don't redesign. Every row below was read in the tree on 2026-10-13.
 | Primary-binding ownership rule (fan-outs keep one owner) | `projection/scene.rs:229-248` `owned_specs`; tests `:494-512`, `:957-1012` | becomes the ownership rule for both surfaces |
 | Scene discovery | `nodes-scene node_graph/scene_vm.rs:113-138` (`objects`, `lights`, `camera_controls`, `world_controls`); light name is the raw handle at `:1797` | extended with `scene_items` (P4) |
 | Panel item selection | `manifold-ui/src/panels/scene_setup_panel.rs:713-723` `SceneSelection` (Object, Light, Force, Camera, World, Physics, Rendering) | exists |
-| Panel outliner | `scene_setup_panel.rs:1787-1976`: Camera loose row, "Lighting & Environment" fold (World + lights), Objects fold with "Import Model…", "Motion & Physics" fold with "+ Force", Rendering loose row, then a separate add row (`scene_setup_actions.rs` `build_add_action_row`); emoji glyphs, one `■` for every object | rebuilt (P6) |
-| Panel stats line | `scene_setup_panel.rs:1652-1675` | deleted (P6) |
+| Panel outliner | `scene_setup_panel.rs:1787-1976`: Camera loose row, "Lighting & Environment" fold (World + lights), Objects fold with "Import Model…", "Motion & Physics" fold with "+ Force", Rendering loose row, then a separate add row (`scene_setup_actions.rs` `build_add_action_row`); emoji glyphs, one `■` for every object | rebuilt (P6b) |
+| Panel stats line | `scene_setup_panel.rs:1652-1675` | deleted (P6b) |
 | Card → panel navigation | `scene_setup_panel/parameter_navigation.rs:56-130` `reveal_clip_response` (requires a clip trigger, `:64-72`); lights and world matched by section string `:28-50` | generalised to ids (P7) |
 | Card section header | `param_card/render.rs:1140-1166`, one fold button; fold state UI-local, never saved (`param_card/mod.rs:388-396`) | extended (P7) |
 | Param right-click menu | `manifold-app/src/ui_root/dropdowns.rs:1666-1731`; scene panel rows never emit it (comment `:1716`) | extended (P7, P8) |
 | Panel expose action | `ui_bridge/project.rs:1223-1255` `SceneSetupExposeParam` — no-op when already exposed; nothing in `manifold-ui` sends it | superseded by pins (P7) |
 | Non-undoable view-state write precedent | `ui_bridge/dispatch/params.rs:337-374` (`EffectCollapseToggle` via `MutateProject`) | precedent for fold persistence |
 | RGB swatch | only in the panel's material inspector: `scene_setup_panel/material_inspector.rs:853`, `:911`; `RowRole::ColourSwatch(MaterialColour)` at `param_surface.rs:409`; `rgb_members` set only by `projection/material.rs:432` | moved into the shared row host (P9) |
-| Atlas icon vocabulary | `manifold-ui/src/icons.rs:19-41` | extended with scene item icons (P6) |
+| Atlas icon vocabulary | `manifold-ui/src/icons.rs:19-41` | extended with scene item icons (P6b) |
 | Item commands | `RemoveSceneObjectCommand` (`commands/graph/scene.rs:980`), `DuplicateSceneObjectCommand` (`graph/scene/duplicate.rs:18`), `RemoveSceneLightCommand` (`scene.rs:1847`), `DeleteSceneModifierCommand` / `DuplicateSceneModifiersCommand` (`graph/modifier_stack.rs:167`, `:275`); no light duplicate | exist |
 | Viewport camera | `nodes-scene node_graph/viewport_session.rs:1-27` (isolated from the project), camera at `:226`, moves at `:256-274` | read by P10 |
 | `ParamDef` | `manifold-node-engine/src/parameters.rs:233-253`: name, label, ty, default, range, enum_values; 1,891 struct literals in 339 files (`rg -c 'ParamDef \{' crates/`) | labels edited in place (P5); no new fields |
@@ -95,7 +96,7 @@ A control resolves by the first key that answers: template first, then its prima
 *How WIDGET_TREE INV-1 changes.* The words "rows are sourced ONLY from the manifest walk — no registry re-reads, no hand tables" stay true. What changes is what the manifest is. Each entry is the saved control (id, value, choices) joined with the live lookup, inside core, when the manifest is built. Projections still read only the manifest and stay pure functions of it, so WIDGET_TREE D8a's registry-free projection tests still work: they build manifests directly. P2 adds that one sentence to WIDGET_TREE INV-1.
 
 *Old projects.*
-- On load, a saved name, range, angle flag, value labels, `card_visible` or section copy on a control the lookup describes is ignored.
+- On load, a saved name, range, angle flag, value labels, `card_visible` or section copy on a control the lookup describes is ignored. Which controls the lookup names: D24.
 - One case is converted instead. A user-added exposure (`user.*`) whose saved label or range differs from the lookup becomes a rename or slider-range choice, once. That is the only place a user rename could live in old files.
 - Auto stamps lose nothing. Pass 4 already overwrites their saved labels and ranges on every load.
 - A drawer rename of a bundled preset's curated control in an old per-instance graph goes back to the template's label. This is rare, and it is the same rule pass 4 already applies to auto stamps.
@@ -146,7 +147,7 @@ Camera translate: Target Height (`look_y`) is the only translate the orbit camer
 
 **D6 — Attached rows are always shown.** A row with a driver, envelope, audio mod, Ableton mapping, macro mapping or automation lane builds on the card whatever its role, its pin or its gate, and builds in the panel even when its role is Hidden. "Remove from card" is disabled on it, reason "Mapped — unmap to remove". Fixes BUG-pmbd3.7 (card hides mapped rows) as a class.
 
-**D7 — User choices are the only per-control display state a project saves.** `ParamChoices` (section 3.4) holds rename, slider range, curve, invert, section and card pin. They are written only by commands the user triggers: `SetCardPinCommand`, `SetSliderRangeCommand`, `EditParamMappingCommand`. The join never writes them. The pin is `Option<CardPin>` (`Shown` / `Removed`); `None` follows the role. Card section fold state is saved as `PresetInstance.folded_sections`, written through `MutateProject` like `EffectCollapseToggle` (not undoable, because it is view state). Rejected: pinning through `card_visible`, a lookup output that is no longer saved. Rejected: pinning through `user_added`, because un-exposing a user binding deletes it (`expose.rs` `unexpose_user_binding_freezes_effective_value_into_def_slot`). Rejected: pinning through `SceneSetupExposeParam`, a no-op on an exposed param, which every scene param is.
+**D7 — User choices are the only per-control display state a project saves.** `ParamChoices` (section 3.4) holds rename, slider range, curve, invert, section and card pin. They are written only by commands the user triggers: `SetCardPinCommand`, `SetSliderRangeCommand`, `EditParamMappingCommand`, and the scene-object and group renames (`RenameSceneObjectCommand`, `RenameGroupCommand`), which record the new section as a section choice through `Param::choose_section`. The join never writes them. The pin is `Option<CardPin>` (`Shown` / `Removed`); `None` follows the role. Card section fold state is saved as `PresetInstance.folded_sections` and `unfolded_sections` (a title in neither takes its default, so an unfold of the D11 default-folded Lighting holds), written through `MutateProject` like `EffectCollapseToggle` (not undoable, because it is view state). Rejected: pinning through `card_visible`, a lookup output that is no longer saved. Rejected: pinning through `user_added`, because un-exposing a user binding deletes it (`expose.rs` `unexpose_user_binding_freezes_effective_value_into_def_slot`). Rejected: pinning through `SceneSetupExposeParam`, a no-op on an exposed param, which every scene param is.
 
 **D8 — Scene tab tree.** The tree sits at the top of the Scene tab (D16). Fixed groups in this order: **Camera, Lights, Objects, Forces, Physics, World** (Peter: physics is its own group). A group with no items is not drawn, except Lights and Objects, which always show so their add button is reachable. Each row: type icon, readable name, eye toggle where the item has `visible`. Each group owns its own add button: Lights "+" adds a light; Objects "+" opens one menu (Object, Plane, Water, Import Model…); Forces "+" opens the force picker. World holds Environment, Fog and Ray Tracing (the old Rendering row). Below the tree, the selected item's header shows its name once (click to rename where a rename command exists), its kind, and copy and delete where commands exist: objects copy and delete, forces copy and delete, lights delete only, Camera, Physics and World neither. Sections under the header follow the item's `ControlGroup`s in declaration order. The stats line is deleted.
 
@@ -176,33 +177,35 @@ Camera translate: Target Height (`look_y`) is the only translate the orbit camer
 
 FLIP Fluids' own terms stay (Sheet Fill Rate). Re-derivation for any row: `rg -n '"<current label>"' crates/ -g '*.rs' -g '*.json'`; a label not found as a literal is composed — find its parts, never guess. Where a card label today differs from the target primitive's label only because an io migration or the importer authored it, the primitive's label is the one home (the migration's label is inert after D2).
 
-**D10 — Cross-surface gestures.** Right-click on any row in either surface opens the one param menu (`dropdowns.rs:1666`). It gains **Show on Card** (on a panel row whose card state is off), **Remove from Card** (on a card row; disabled on attached rows, D6), **Show in Scene tab** (on a card row), and **Set slider range…** / **Reset slider range** (D15). Show in Scene tab, and clicking a card section's title (not its fold triangle, revealing the section's first row), switch the inspector to the Scene tab, select the item that owns the row and scroll the row into view. Show on Card from the Scene tab flashes a brief highlight on that card row the next time the card is shown. All navigation is by `(GraphParamTarget, ParamId)` against the Scene tab's full surface, never by section string. Rejected: a second menu for scene rows (one menu, WIDGET_TREE section 5b).
+**D10 — Cross-surface gestures.** Right-click on any row in either surface opens the one param menu (`dropdowns.rs:1666`). It gains **Show on Card** (on a panel row whose card state is off), **Remove from Card** (on a card row; disabled on attached rows, D6), **Show in Scene tab** (on a card row), and **Set slider range…** / **Reset slider range** (D15). Show in Scene tab, and clicking a card section's title (not its fold triangle), switch the inspector to the Scene tab, select the item that owns the row and scroll the row into view. A section title reveals the section's first row owned by a light, object or force item, and its first row only when none is, so Lighting opens the first light and Camera or Look opens Camera. Show on Card from the Scene tab flashes a brief highlight on that card row the next time the card is shown. All navigation is by `(GraphParamTarget, ParamId)` against the Scene tab's full surface, never by section string. Rejected: a second menu for scene rows (one menu, WIDGET_TREE section 5b).
 
 **D11 — Lights.** Display name: node `title`, else the handle humanised (`fill_light` → "Fill Light"), else "Light N". The importer writes the GLB light name into `title`; a load rung copies it into `title` for already-imported lights whose intensity stamp's section string differs from the handle. The title is the imported scene's own data, not a display copy. Every light gets a card row; no cap. The Lighting section starts folded when it holds more than eight light rows; the user's fold choice then persists (D7). Rejected: a light-count cap ("never add a size rule").
 
 **D12 — Row sets follow authored values.** Which Look detail rows exist depends on the switch's base value at structural projection, never the per-frame effective value — a driver flickering depth of field does not rebuild the card. Precedent: MATERIAL_INSPECTOR D4 ("layout uses the authored mode/attachments, never the per-frame sample").
+- Membership: `ChangeGraphParamCommand::touches` returns Values|Effects when the target spec has `scene.switch` or a gate, so a base-value edit that changes the row set rebuilds it; every other param edit stays Values (agreed with UI_INVALIDATION_DESIGN.md).
 
 **D13 — Migration shrinks to structure.** Predecessor section 5 (Decisions — resolved by Peter) item 5 kept load-time idempotent migration, and that stays for structure only.
 - `migrate_scene_exposures` keeps pass 1 (stamp missing exposures: binding id and target) and pass 3 (`default_mirrors_node_param`).
 - It loses pass 2 and pass 4, because the join replaces them. The stamp stops writing specs beyond an id stub.
 - It gains the light-title rung (D11).
+- The default re-seed pass (BUG-303 stamped-default repair) stays until P3 moves defaults into the scene table.
 - It never writes `ParamChoices`, `folded_sections` or user-added bindings.
 - Section strings no longer decide anything on scene surfaces, so the predecessor's "named collapsed sections per scene item" become display data the projections ignore.
 - Water graphs follow the decision-log rule ("Water changes need no old-project upgrades"): water presets are regenerated, no water rungs.
 
-**D14 — "Use this view" copies the viewport camera into the scene camera** as one undoable command. Free scene camera: copy position, pan, tilt, field of view. Orbit scene camera: Target Height = height where the view ray passes closest to the vertical axis through the origin; Distance = eye to that point; Orbit = `atan2(x, z)` of the eye about the axis; Tilt = elevation angle; Field of View copied. A view ray parallel to the axis keeps the current Target Height. Look-at and loop cameras: button disabled with reason "Not supported for this camera type".
+**D14 — "Use this view" copies the viewport camera into the scene camera** as one undoable command. Free scene camera: copy position, pan, tilt, field of view. Orbit scene camera: Target Height = height where the view ray passes closest to the vertical axis through the origin; Distance = eye to that point; Orbit = `atan2(z, x)` of the eye about the axis (the eye formula in `camera_orbit.rs`); Tilt = elevation angle; Roll = 0, since the viewport never rolls; Field of View copied. A view ray parallel to the axis keeps the current Target Height. Look-at and loop cameras: button disabled with reason "Not supported for this camera type".
 
 **D15 — Slider range and hard limit are two facts.** Today one min/max both sets the slider span and caps the value (`constrain_to_range`, `params.rs:167`), so ranges are either huge or limiting. Following Blender (soft and hard limits), Houdini and TouchDesigner (slider range vs clamp), every control's description in the lookup carries:
 - a **slider range**: what the slider spans. Today's min/max, and today's scene-scaled bands, widened to include the control's default as the stamp rule does now.
-- a **hard limit**: what the value may never pass. `HardLimit::{Slider, Unlimited, AtLeast(x), AtMost(x), Between(a, b)}`. `Slider` means the limit equals the declared slider range. It is the default for every param the tables do not mention, so nothing changes behaviour until a table declares a limit. Toggles, triggers, enums and whole-number indices are always `Slider`.
+- a **hard limit**: what the value may never pass. `HardLimit::{Slider, Unlimited, AtLeast(x), AtMost(x), Between(a, b)}`. `Slider` is the default for every param the tables do not mention: drags stop at the declared range, and typed and OSC values stay free, since a range hint never restricts what a user enters (PARAM_RANGE_CONTRACT_DESIGN.md D3 (hints never restrict)). Toggles, triggers, enums and whole-number indices are always `Slider`.
 
 The scene table declares limits for scene params, for example positions `Unlimited`, distances and intensities `AtLeast(0)`, field of view `Between(1, 179)`. Preset JSON can declare `limit` for template params.
 
 Behaviour:
-- Typing a value clamps only to the hard limit.
+- Typing a value clamps only to a declared limit (`Unlimited`, `AtLeast`, `AtMost`, `Between`); under `Slider` it is unclamped.
 - Dragging is relative to where the press started, so it carries on past the slider end until the hard limit. The slider shows its thumb pinned at the end with an overflow mark, and the readout shows the true value.
-- Automation and modulation clamp to the hard limit. Modulation depth is measured over the slider range.
-- OSC and MIDI 0–1 values map over the slider range (the user's, if set), as calibration does today.
+- Automation and modulation (LFOs, drivers, envelopes, audio) stay inside the slider range: the user's when one is set, else the declared range, and never past a declared limit. Only a hand drag or a typed value goes past the slider's ends. Modulation depth is measured over the slider range.
+- OSC and MIDI 0–1 values map over the slider range (the user's, if set), as calibration does today, and clamp only to a declared limit; an OSC value outside 0–1 on an exact 0–1 range passes through raw as it does today.
 - Wrapping params wrap over the declared slider range, never the user's.
 - The card-to-node reshape (invert and curve) normalises over the declared slider range, never the user's, so a user's slider range never changes what reaches the node.
 
@@ -223,6 +226,20 @@ Rejected: keeping the dock beside the inspector. It costs width on a laptop on s
 - Projects that already hold two load unchanged (CLAUDE.md invariant: reading the past never changes it). No migration deletes nodes. The Scene tab shows the lowest-id one, as `scene_vm.rs:113-118` does today, with a one-line notice in the tab ("This layer has more than one scene; showing the first").
 
 Rejected: deleting extra scenes on load (rewrites the past). Rejected: a scene picker in the tab (supports a shape Peter ruled out).
+
+**D18 — The lookup's sources register at link time.** The node source (`param_lookup::NodeParamSource`, from `manifold-nodes-scene`) and the template-graph source (`param_lookup::TemplateGraphSource`, from `manifold-nodes`) are `inventory` submissions, not an `install()` into a `OnceLock`. A binary that links the crates has the lookup with no start-up call, and nothing can run before it is installed. Lead ruling, 2026-10-14.
+
+**D19 — The metadata renames wait for P3.** `SceneExposureMetadataProvider` / `SceneParamMetadata` keep their names, and `NodeParamMetadata` gains `scene`, `unit` and `limit` in P3, where the scene filters move into the scene table. P1 reads the existing types unchanged. Lead ruling, 2026-10-14.
+
+**D20 — Stubs bump the project version to 1.21.0.** An older build reads a stub as a nameless 0..0 control and could save that back; refusing the newer file is the safe failure. The rung is a structural no-op. One radius per graph: an import or merge saves `meta.scene_bounds` (the target's own win, else the incoming asset's) and the lookup scales node ranges by it.
+
+**D21 — Which names the lookup supplies.** D24 decides which controls take the lookup's name; P5 changes the declared labels themselves.
+
+**D22 — A fan-out is described by its first binding.** A control with several bindings under one id takes range, flags and scene scaling from its first binding's target in authored order, as the import range stamp did; everything else stays authored. If that target cannot be described, the control stays authored. Lead ruling, 2026-10-14.
+
+**D23 — Scene facts follow the bound node.** A template control bound to exactly one node target takes that target's scene placement, unit and limit from the scene table wherever the template declares none. Section 3.3's defaults apply only when neither declares. Fan-outs and user-added controls keep their own. Lead ruling, 2026-10-14.
+
+**D24 — Who owns a control's name.** The lookup names a control only when it is a template control or an exact auto-stamp (id `{doc_id}_{param}`, not user-added, targeting that node's param); those save without a name. Every other node-bound control (curated ids, fan-outs, `user.*`) owns its name: authored, saved, never replaced by the node's label. Range, flags and scaling still come from the lookup (D22).
 
 **Consequences, stated honestly:**
 1. Scene projects get smaller on disk: no names or ranges per control. A file saved after P1 shows placeholders in an older build (format version bump, P1).
@@ -332,7 +349,8 @@ pub struct ParamChoices {                 // the only per-control display state 
 }
 pub enum SpecSource { Lookup, Authored, Unresolved }
 // Param: + choices: ParamChoices, + source: SpecSource; - calibrated (now choices.slider/curve/invert.is_some())
-// Param.spec = describe(key) joined with choices — the one in-memory answer every reader reads.
+// Param.spec = describe(key) joined with choices, except the slider range: spec.min/max stay the
+// declared range (wraps, the Slider limit, the reshape); Param::slider_span() is the user's span.
 
 // effect_graph_def.rs, on ParamSpecDef (all #[serde(default, skip_serializing_if = …)]):
 pub limit: HardLimit,                    // saved only on Authored specs; Slider by default
@@ -345,6 +363,7 @@ pub scene: Option<SceneParamDesc>,       // saved only on Authored specs
 
 // effects/instance.rs, on PresetInstance (#[serde(default, skip_serializing_if = "Vec::is_empty")]):
 pub folded_sections: Vec<String>,        // card section titles the user folded
+pub unfolded_sections: Vec<String>,      // titles the user unfolded; only a default-folded section (D11) needs it
 ```
 
 On save, `ManifestSer` and `GraphWithDerivedParams` write `{"id": …}` for `Lookup` entries, the full spec for `Authored`, and the saved entry word for word for `Unresolved`. `BindingDef.label` is written only for `Composite` targets. `RowSpec` (`param_surface.rs:140`) gains `unit: Option<Unit>` and `limit: HardLimit`; `format_param_value` (`param_slider_shared/state.rs:462`) appends `unit.suffix()`. Material roles keep their own field and become a lookup output too.
@@ -399,8 +418,8 @@ Every reader below either already reads the joined manifest (no change) or reads
 | Card projection | `projection/cards.rs:432-495` | `Param.spec` name, range, section, card_visible, material role | none (the join) |
 | Scene panel | `projection/scene.rs:211` | `spec.section` | none; ownership moves to items (P4) |
 | Automation lane names | `projection/timeline.rs:363`, `:386` | `spec.name` | none |
-| Automation playback | `manifold-playback/src/automation.rs:267`, `:361`, `:454` | `spec.min/max` clamp | clamp to hard limit (P8) |
-| Modulation | `manifold-playback/src/modulation/composition.rs:214` | `spec.min/max` clamp | hard limit; depth over slider range (P8) |
+| Automation playback | `manifold-playback/src/automation.rs:267`, `:361`, `:454` | `spec.min/max` clamp | slider range, else declared; wraps on declared (P8) |
+| Modulation | `manifold-playback/src/modulation/composition.rs:214` | `spec.min/max` clamp | slider range, else declared; depth over slider range (P8) |
 | OSC router | `osc_param_router.rs:137`, `:187`, `:213` (ranges); `:91`, `:150`, `:258` (routing by id) | `spec.min/max` | 0–1 over slider range, clamp to hard limit (P8) |
 | OSC addresses | `preset_definition_registry.rs:401-422` | type `osc_prefix`, layer id, param id | none — no label in any address |
 | Value formatting | `preset_definition_registry.rs:377` `format_value` | template spec | none (already the template) |
@@ -423,14 +442,14 @@ Every reader below either already reads the joined manifest (no change) or reads
 
 | Gesture | Action (manifold-ui `actions.rs`) | Command / write | Precedent |
 |---|---|---|---|
-| Show on Card / Remove from Card | `ParamsAction::SetCardPin(GraphParamTarget, ParamId, Option<UiCardPin>)` | `SetCardPinCommand { target, param_id, pin, previous }` in `manifold-editing/src/commands/graph/card_pin.rs`; writes `Param.choices.pin`; undoable | `ToggleNodeParamExposeCommand` (`graph/expose.rs:41`) for target resolution |
+| Show on Card / Remove from Card | `ParamsAction::SetCardPin(GraphParamTarget, ParamId, Option<CardPin>)` | `SetCardPinCommand { target, param_id, pin, previous }` in `manifold-editing/src/commands/graph/card_pin.rs`; writes `Param.choices.pin`; undoable | `ToggleNodeParamExposeCommand` (`graph/expose.rs:41`) for target resolution |
 | Set slider range… / Reset slider range | `ParamsAction::SetSliderRange(GraphParamTarget, ParamId, Option<(f32, f32)>)` | `SetSliderRangeCommand` writes `Param.choices.slider`, re-joins the spec; undoable | `EditParamMappingCommand` (`effects.rs:1263`) |
 | Show in Scene tab | `ParamsAction::RevealInSceneTab(GraphParamTarget, ParamId)` | UI-only: switch the inspector to the Scene tab, `reveal_param` | `reveal_clip_response` (`parameter_navigation.rs:56`) |
-| Section title click | `ParamsAction::RevealSectionInSceneTab(GraphParamTarget, ParamId)` (first row of the section) | same | same |
+| Section title click | `ParamsAction::RevealSectionInSceneTab(GraphParamTarget, Vec<ParamId>)` (the section's rows) | same, through `reveal_section` (D10 row choice) | same |
 | Section fold | existing fold toggle, plus `MutateProject` write of `folded_sections` | non-undoable | `EffectCollapseToggle` (`dispatch/params.rs:337`) |
 | Use this view | `SceneSetupAction::CopyViewportCamera(LayerId)` | `CopyViewportCameraCommand` — one undo unit setting the D14 params | `SetGraphNodeParamCommand::with_previous` batching |
 
-`reveal_param(target, param) -> bool` is `reveal_clip_response` with the clip-trigger requirement removed and the section-string matching (`parameter_navigation.rs:28-50`) replaced by `items` ownership. `UiCardPin` lives in `manifold-ui` (`ui` cannot see core); the app maps it exhaustively. The slider-range popover is the mapping drawer's min/max editor, reused through the shared row recipe. ⚠ VERIFY-AT-IMPL (P8): which shared popover the drawer's range fields use (`rg -n 'fn .*range' crates/manifold-ui/src/panels/drawer.rs`).
+`reveal_param(target, param) -> bool` reveals by id with no clip-trigger requirement and no section-string matching: ownership is the Scene tab's `items`. `CardPin` lives in foundation, so the UI action carries it directly. The slider-range popover is the mapping drawer's min/max editor, reused through the shared row recipe. ⚠ VERIFY-AT-IMPL (P8): which shared popover the drawer's range fields use (`rg -n 'fn .*range' crates/manifold-ui/src/panels/drawer.rs`).
 
 ### 3.10 Seam brief — what deletes (old → new)
 
@@ -447,7 +466,7 @@ Every reader below either already reads the joined manifest (no change) or reads
 | `SceneVm.camera_controls`, `world_controls`, `object_controls` | `SceneItem.owned_nodes` | `rg -n 'camera_controls|world_controls|object_controls' crates/` |
 | `property_selection_for_row` section matching, `reveal_clip_response` | `reveal_param` by item ownership | `rg -n 'reveal_clip_response|property_selection_for_row' crates/` |
 | `SceneSelection::Rendering`, `OutlinerFold("Motion & Physics")`, `"Lighting & Environment"` | D8 groups | `rg -n 'Rendering|Motion & Physics|Lighting & Environment' crates/manifold-ui/src/panels/scene_setup_panel*` |
-| `constrain_to_range(v, spec.min, spec.max, wraps)` | `spec.clamp_value(v)` (hard limit; wraps over the declared slider range) | `rg -n 'constrain_to_range\(' crates/ -g '*.rs'` (4 non-test sites) |
+| `constrain_to_range(v, spec.min, spec.max, wraps)` | `param.driven_value(v)` (slider range, else declared; never past a declared limit; wraps over the declared range) | `rg -n 'constrain_to_range\(' crates/ -g '*.rs'` (4 non-test sites) |
 
 Compiler-driven: delete the old symbol first; the errors are the checklist. Re-run each command at execution time; if the count differs from what the phase brief recorded, stop and list the new sites first.
 
@@ -466,7 +485,7 @@ Off the per-frame path. The lookup runs once per control when a manifest is buil
 | INV-S1 Every param of every vocabulary type is classified exactly once | `scene_surface::tests::every_vocabulary_param_is_classified` — iterates `SCENE_VOCABULARY` × `PrimitiveRegistry` `parameters()`, fails on `None` (P3) |
 | INV-S2 Only the join calls the lookup; scene surfaces read the manifest | negative gate: `rg -n 'param_lookup::describe|scene_param_facts' crates/ -g '!crates/manifold-core/src/effects/instance_serde.rs' -g '!crates/manifold-core/src/param_lookup.rs' -g '!crates/manifold-nodes-scene/src/node_graph/scene_*'` → 0 (P1 onward) |
 | INV-S3 One curation decider | negative gate: `rg -n 'card_visible_for|StandardTarget|scene_performance' crates/` → 0 (P4) |
-| INV-S4 Card and panel partition rows identically | `scene_items::tests::card_and_panel_agree_on_owners` over gltfscene, physicsscene, waterdambreak, waterdambreakmatter, oceanscene fixtures (P4) |
+| INV-S4 Card and panel partition rows identically | `scene_card::tests::card_and_panel_agree_on_owners` (ui-snapshot feature, it reads the headless fixtures) over gltfscene, physicsscene, waterdambreak, waterdambreakmatter, oceanscene fixtures (P4) |
 | INV-S5 Attached rows always on the card | `scene_card::tests::attached_rows_stay_on_card` — driver, envelope, audio, Ableton, macro, automation, each on a Setup and a Hidden row (written P0, kept green through P4) |
 | INV-S6 The join never writes user choices | `param_lookup::tests::join_preserves_choices_and_user_bindings` plus `migrate_twice_is_noop` (P1) |
 | INV-S7 Row set follows base values | `scene_card::tests::look_rows_follow_base_not_effective` (P4) |
@@ -474,19 +493,21 @@ Off the per-frame path. The lookup runs once per control when a manifest is buil
 | INV-S9 No units in scene labels | `scene_surface::tests::no_unit_in_scene_labels` — vocabulary `ParamDef` labels, recipe and bundled scene preset names: no `(` and no unit suffix tokens (P5) |
 | INV-S10 Navigation by id only | negative gate: `rg -n 'spec\.section' crates/manifold-ui/src/panels/scene_setup_panel/parameter_navigation.rs` → 0 (P7) |
 | INV-S11 No private id schemes on scene surfaces | negative gate: `rg -n 'scene_performance\.' crates/` → 0 (P4) |
-| INV-S12 Godfiles do not regrow | `godfile_regrowth::no_register_listed_file_regrows` with ceilings added at current size for `scene_vm.rs`, core `scene_exposure.rs`, `projection/cards.rs`, `scene_setup_panel/material_inspector.rs` (P3), and `scene_setup_panel.rs` lowered to its post-P6 size (P6) |
+| INV-S12 Godfiles do not regrow | `godfile_regrowth::no_register_listed_file_regrows` with ceilings added at current size for `scene_vm.rs`, core `scene_exposure.rs`, `projection/cards.rs`, `scene_setup_panel/material_inspector.rs` (P3), and `scene_setup_panel.rs` lowered to its post-P6b size (P6b) |
 | INV-S13 Card header title never overlaps its controls | `param_card` geometry test `generator_title_clears_header_controls` (P4) |
 | INV-S14 Saved files carry no copies of what the lookup describes | `instance_serde::tests::saved_scene_has_id_only_lookup_entries` — save gltfscene and physicsscene; every `Lookup` entry in `meta.params` has only `id`; no `label` on non-composite bindings (P1) |
 | INV-S15 Unresolved controls survive | `instance_serde::tests::unresolved_control_round_trips_verbatim` — lookup missing a type: load, save, bytes of that entry unchanged; install it, reload, the control resolves with its value and choices (P1) |
 | INV-S16 No reader goes around the join | negative gate: `rg -n 'binding\.label|b\.label\b' crates/manifold-node-engine/src crates/manifold-app/src/content_thread.rs crates/manifold-app/src/ui_snapshot crates/manifold-core/src/effects/instance.rs` → 0 outside `Composite` arms (P2) |
 | INV-S17 A rename never moves an OSC address | `osc_param_router::tests::rename_keeps_address` — rename a control via `choices.rename` and via a `ParamDef.label` change; address and routing unchanged (P2) |
-| INV-S18 Values pass the slider end, never the hard limit | `params::tests::{typed_value_clamps_to_limit_not_slider, drag_past_slider_end_reaches_limit, automation_clamps_to_limit, wraps_use_declared_range}`; `reshape_ignores_user_slider_range` (P8) |
+| INV-S18 Values pass the slider end, never the hard limit | `params::tests::{typed_value_clamps_to_limit_not_slider, drag_past_slider_end_reaches_limit, automation_respects_the_slider_range, wraps_use_declared_range}`; `lfo_stays_inside_the_user_slider_range`; `reshape_ignores_user_slider_range` (P8) |
 
 ---
 
 ## 5. Phasing
 
-Phased by layer. P1 is the saved-control format and the lookup, P2 moves every reader onto it, and P3 adds the scene table. P4 is the card projection and the first visible phase, running model → manifest → projection → card pixels end to end. P0 also ships D17 (one scene per layer). P5 is the words and P6 the Scene tab. P7 adds the gestures between the two surfaces. P8 is slider range against hard limit, through the shared row widget. P9 and P10 are two small new affordances.
+Phased by layer. P1 is the saved-control format and the lookup, P2 moves every reader onto it, and P3 adds the scene table. P4 is the card projection and the first visible phase, running model → manifest → projection → card pixels end to end. P0 also ships D17 (one scene per layer). P5 is the words and P6 the Scene tab: P6a moves the panel into the inspector as a tab, P6b builds the tree and item header. P7 adds the gestures between the two surfaces.
+
+Sequencing with UI_INVALIDATION_DESIGN.md: P7 and P9 wait for its P4b (the planner core) and P8 waits for its P4c (live push), so every new dispatch arm is written once, against the new contracts. P8 is slider range against hard limit, through the shared row widget. P9 and P10 are two small new affordances.
 
 Every child of BUG-pmbd3 (3D scene inspector panel upgrades) lands in a phase:
 
@@ -506,28 +527,29 @@ Every child of BUG-pmbd3 (3D scene inspector panel upgrades) lands in a phase:
 | .12 dim controls that do nothing | P4 |
 | .13 remember card fold state | P1 (field), P7 (behaviour) |
 | .14 Use this view | P10 |
-| .15 scene panel tree | P6 |
+| .15 scene panel tree | P6b |
 | .16 card header name/Opacity collision (bug) | P4 (INV-S13) |
 | .17 naming pass | P5 |
 | .18 one live lookup | P1, P2 |
 | .19 slider range vs hard limit | P8 (P1 carries the `limit` field and the choice) |
 | D17 one scene per layer (no child bead yet; the lead files one) | P0 |
-| D16 Scene tab in the inspector (no child bead yet; the lead files one) | P6 (host), P7 (navigation) |
+| .21 Scene tab in the inspector (D16) | P6a (host), P7 (navigation) |
 
 Common to every phase. **Entry:** the status line reads APPROVED; `git -C "/Users/peterkiemann/MANIFOLD - Rust" log --oneline -1 origin/main`; re-run the section 1 anchors the phase names. **Forbidden in every phase:** type ids or param names in `scene_card.rs` or the panel tree; a label map anywhere outside the declarations; a lookup call outside the join; saving a name, range or role for a control the lookup describes; bespoke rows, sliders or swatches (WIDGET_TREE section 5b (agent contract and enforcement)); new `Arc<Mutex>`; per-frame work; silently dropping an unresolved control on load or save; widening scope into material inspector internals. **GPU:** none in this design; land with `--skip-gpu`. **Reports** carry `Shortcuts taken:` and `Demo artifact:`.
 
 ### P0 — Baseline and the live bug
 - **Entry:** `ls scripts/ui-flows | rg -c scene` = 22 (the set `run_ui_flows.py scene` selects) (stop if not; list the new ones).
 - **Read-back:** this doc's sections 1, D6; `scene_performance.rs` whole; `scripts/run_ui_flows.py` docstring. Restate D6 and the forbidden list.
-- **Deliverables:** (1) run every scene flow (`.claude/scripts/with-build-lock.sh scripts/run_ui_flows.py scene`) and file one typed bead per red, with the flow name and failing step. (2) `scripts/ui-flows/scene-surfaces-clickthrough.json` (gltfscene) and `-physics.json` (physicsscene): select every outliner item in turn and assert its properties header text and at least one `param_row.*` under it; every failing step is a bead, not a fix. (3) **Named stopgap** for BUG-pmbd3.7 (card hides mapped rows): `is_retained_extra` keeps any row whose modulation, audio, mapping or automation facts are set. Deleted with the function in P4. (4) `attached_rows_stay_on_card` test (INV-S5), shaped to survive P4. (5) D17 (one scene per layer): the `validate_def` check; the add, paste, duplicate and import refusal with "This layer already has a scene", before undo; the lowest-id pick plus the one-line notice for old two-scene projects (shown in the dock until P6 moves it into the Scene tab).
+- **Deliverables:** (1) run every scene flow (`.claude/scripts/with-build-lock.sh scripts/run_ui_flows.py scene`) and file one typed bead per red, with the flow name and failing step. (2) `scripts/ui-flows/scene-surfaces-clickthrough.json` (gltfscene) and `-physics.json` (physicsscene): select every outliner item in turn and assert its properties header text and at least one `param_row.*` under it; every failing step is a bead, not a fix. (3) **Named stopgap** for BUG-pmbd3.7 (card hides mapped rows): `is_retained_extra` keeps any row whose modulation, audio, mapping or automation facts are set. Deleted with the function in P4. (4) `attached_rows_stay_on_card` test (INV-S5), shaped to survive P4. (5) D17 (one scene per layer): the `validate_def` check; the add, paste, duplicate and import refusal with "This layer already has a scene", before undo; the lowest-id pick plus the one-line notice for old two-scene projects (shown in the dock until P6a moves it into the Scene tab).
 - **Gate:** positive — `cargo nextest run -p manifold-app scene_performance` green; INV-S5 test fails on the pre-fix code (show it red first) and passes after; D17 tests `validate_rejects_two_render_scenes`, `every_bundled_preset_has_at_most_one_scene`, `add_paste_duplicate_import_second_scene_refused_graph_and_undo_unchanged`, `two_scene_project_loads_unchanged_and_shows_notice`; flow counts reported as `N pass / M fail / 22 total + 2 new`. Negative — none.
 - **Demo:** L3 — the two click-through flows; their failures are the bug list. Performer gesture: map a light's position to an LFO, check it stays on the card.
 - **Forbidden:** fixing anything the click-through finds (beads only); inventing bugs not observed in a flow run; a D17 migration that deletes or rewires nodes.
 - **Test scope:** `-p manifold-app -p manifold-node-engine -p manifold-editing`, plus the flow suite filtered to `scene`.
 
 ### P1 — The live lookup and the saved-control format (core, io, registration; no visible change)
+P1 and P2 land together as one batch: P1 does not land until P2 moves the drawer (`EditParamMappingCommand`) onto `ParamChoices`, so no build drops a drawer rename on reload.
 - **Entry:** P0 landed. Anchors: `instance_serde.rs:34`, `:47-63`, `:135-145`, `:155-196`, `:272-300`, `:356`; `params.rs:62-94`, `:167`; core `scene_exposure.rs:22-48`, `:381`; `preset_definition_registry.rs:340`; `effects/instance.rs:375`, `:413`; `manifold-app/src/bin/project_tool.rs`.
-- **Read-back:** D2, D7, D13, sections 3.2, 3.4, 3.8; docs/PARAM_STORAGE_DESIGN.md D6 (calibration). Restate where the join runs, what is saved per control, and the three old-project rules.
+- **Read-back:** D2, D7, D13, sections 3.2, 3.4, 3.8; docs/archive/PARAM_STORAGE_DESIGN.md D6 (calibration). Restate where the join runs, what is saved per control, and the three old-project rules.
 - **Deliverables:**
   - foundation `param_range.rs` and the `CardPin` enum (3.1).
   - core `param_lookup.rs` (3.2): `NodeParamProvider` is the renamed `SceneExposureMetadataProvider`, installed by `manifold-nodes` registration beside the `PRESET_DEFINITIONS` fill.
@@ -593,6 +615,11 @@ Common to every phase. **Entry:** the status line reads APPROVED; `git -C "/User
   - Force rows from recipe `scene` fields (Kick, Kick Size); light rows named per D11; camera rows per camera type; Look switches; no-physics dim.
   - The card header title truncates with an ellipsis before the Opacity control, fixing BUG-pmbd3.16 (card header name/Opacity collision) (INV-S13).
   - The water preset builder (`manifold-nodes-water/src/presets/gpu_flip.rs`) gives its mesher controls an authored Setup `scene` field, and the water presets are regenerated.
+  - Matter's stiffness, cohesion and liveliness become Performance in the scene table (asserted by `matter_card_bands`).
+  - Bokeh `max_radius` gets a role so D4's depth of field Max Blur row builds (the table marks it Hidden, after the stamp filter).
+  - Open question, decided before rows are built: the GPU FLIP card controls the table marks Hidden (`solve_level`, `max_iterations`, `sheet_fill_rate`, `particle_capacity`). Under D5 they would also build no row in the Scene tab.
+  - Ruling: those four are Setup, not Hidden. They show in the Scene tab and stay off the card.
+  - The physics-world item owns its copy body and that body's transform (PhysicsBoxes), and Matter's `initial_column` transform gets an owner, emptying `OWNERLESS_UNTIL_P4` in `projection/scene.rs`.
   - `oceanscene` fixture (`physics_scene("Ocean", "Ocean")` in `fixtures.rs`).
 - **Gate:** positive — INV-S4, S5, S7, S8, S13 tests; `scene_card::tests::{orbit_card_order, free_camera_card_order, physics_card_bands, water_card_bands, matter_card_bands, three_lights_three_named_rows, absent_dof_builds_no_row}`. Negative — INV-S3, INV-S11; `rg -n '"node\.|"orbit"|"intensity"' crates/manifold-app/src/ui_bridge/projection/scene_card.rs` → 0.
 - **Demo:** L3 — `scripts/ui-flows/scene-card-bands.json` on physicsscene (assert section titles Camera, Physics, Lighting, Look in order, a "Count" row, no "Main Light"), `scene-card-free-camera.json` on oceanscene (Pan, Tilt present; no Distance), `scene-card-dof-switch.json` on gltfscene (click Depth of Field on, assert F-Stop appears; off, assert gone). Performer gesture: drag Orbit and Field of View, then fire a force's Kick.
@@ -602,33 +629,44 @@ Common to every phase. **Entry:** the status line reads APPROVED; `git -C "/User
 ### P5 — The naming pass (labels and units)
 - **Entry:** P4 landed. Re-derive each D9 row with its command and record the hit count.
 - **Read-back:** D1, D9; INV-S8, INV-S9. Restate: labels change where declared, nowhere else, and no rung is needed.
-- **Deliverables:** every D9 label edit in `ParamDef`s, recipe JSON and bundled scene presets; units moved to `unit` (in the table for primitives, in the authored spec for JSON); "Max Iterations" kept; INV-S9 test; regenerate water presets (no water rungs, D13). For BUG-pmbd3.17 (naming pass).
+- **Deliverables:** every D9 label edit in `ParamDef`s, recipe JSON and bundled scene presets; units moved to `unit` (in the table for primitives, in the authored spec for JSON); "Max Iterations" kept; INV-S9 test; regenerate water presets (no water rungs, D13); White Furnace (`bake_environment` `uniform`) and RT Denoise Feed become Hidden in the scene table (their D9 role). For BUG-pmbd3.17 (naming pass).
 - **Gate:** positive — INV-S8, INV-S9; Liveschool tests unchanged. Negative — `rg -n '"(FOV Y|Look Y|Exposure \(EV\)|Light Size|Copy Count|Simulation Speed|Initial Fill Height|Particle Capacity|RT Enabled|Appearance Gain|Azimuth Variation)"' crates/ -g '*.rs' -g '*.json'` → 0 outside `migrations/` history rungs.
 - **Round trip:** a gltfscene project saved before P5 loads with new labels on card, panel and automation lane, with no migration; its OSC address and Ableton mapping still resolve.
 - **Demo:** L3 — `scene-naming.json` on gltfscene: assert "Field of View", "Target Height", "Exposure" and value text ending " EV". Performer gesture: read the card at arm's length — no truncated label on a default-width card.
 - **Forbidden:** a display-name map; renaming any `ParamDef.name` (the wire key); a label rung.
 - **Test scope:** `-p manifold-nodes-scene -p manifold-water-gpu-flip -p manifold-water-gpu-mpm -p manifold-water-rigid -p manifold-nodes-image -p manifold-nodes -p manifold-app` (labels are declared across these crates).
 
-### P6 — Scene tab: tree, item header, inspector host
-- **Entry:** P4 landed (items exist). `wc -l crates/manifold-ui/src/panels/scene_setup_panel.rs` recorded; `rg -n 'toggle_scene_dock|scene_setup_width|set_dock_toggle_state' crates/` recorded.
+### P6a — Scene tab host (shipped)
+- **Scope:** the host move only; the panel content is unchanged. This is BUG-pmbd3.21 (Scene tab in the inspector replaces the Scene Setup dock).
+- **Shipped:**
+  - `InspectorTab::Scene`, placed after Layer, present only when the D16 layer is a generator whose graph holds a `render_scene` (`projection/inspector.rs` `inspector_tabs`); otherwise the inspector falls back to Layer. Once showing, the tab stays when the selection moves to another scene layer, as the dock did.
+  - The panel builds into the inspector column below the tab strip (`InspectorCompositePanel::scene_content_rect`), inside the Inspector region. Its scroll clip keeps the name `scene_setup` for `under_name` selectors.
+  - Deleted: the dock region, `layout.scene_setup_width` and its tween, the dock resize handle, `toggle_scene_dock`, the audio/scene dock exclusion, and the `DEFAULT/MIN/MAX_SCENE_SETUP_WIDTH` constants.
+  - The Scene menu item, the header Scene button, the panel's close button and Escape toggle between the Scene and Layer tabs. A trigger response that lives in the scene panel and the `edit_selection.rs` light and object selection writes open the Scene tab.
+  - The D17 notice reads "This layer has more than one scene; showing the first".
+  - Every flow that opened the dock clicks the Scene tab (a "Scene" button under the `inspector` region). `scene-setup-empty-states` now asserts that non-scene layers have no Scene tab; the "New 3D Scene" empty state is unreachable from the tab.
+- **Gate:** `scene_tab_present_only_for_scene_layer`, `scene_tab_falls_back_to_layer`, `two_scene_layer_shows_one_line_notice`; scene flows equal to the P0 reds. Negative — `rg -n 'toggle_scene_dock|scene_setup_width' crates/` → 0.
+
+### P6b — Scene tab: tree, item header, groups
+- **Entry:** P4 and P6a landed (items exist). `wc -l crates/manifold-ui/src/panels/scene_setup_panel.rs` recorded.
 - **Read-back:** D8, D16, D17, section 3.7; SCENE_SETUP_PANEL_DESIGN.md section 7 (Decided — do not reopen) for outliner verbs still standing; P0's bead list for this panel.
 - **Deliverables:**
-  - `InspectorTab::Scene`, present only when the D16 layer holds a `render_scene`; fallback to Layer when it does not. The dock region, `scene_setup_width`, `toggle_scene_dock` and its three callers, and the header's scene dock toggle are deleted. `edit_selection.rs` selection writes switch to the Scene tab. The D17 two-scene notice moves into the tab.
   - `outliner.rs`, `item_header.rs`; icons; per-group add buttons with the Objects menu.
   - Physics group; World with Ray Tracing. `SceneSelection::Rendering` deleted; stats line deleted.
   - Item header with rename, kind, and copy and delete per D8. The force item header owns the name; the force card's own header keeps only enable, targets and trigger chips.
   - Properties grouped by `ControlGroup`; Hidden rows omitted unless attached (D6).
+  - The panel's own "Scene Setup" title row and close button, and the header's Scene button, are removed or kept by decision here (section 3.7 deletes the header toggle).
   - `scene_setup_panel.rs` ceiling lowered.
-  - Every scene flow that asserted the old tree, or opened the dock, is rewritten to select the layer and open the Scene tab.
+  - Every scene flow that asserted the old tree is rewritten.
 
   This is BUG-pmbd3.15 (scene panel tree).
-- **Gate:** positive — `scene_setup_panel::tests::tree_groups_in_fixed_order`, `add_buttons_one_per_group`, `header_names_item_once`; `scene_tab_present_only_for_scene_layer`, `scene_tab_falls_back_to_layer`; full scene flow suite green with the P0 count reconciled (every flow on disk accounted for). Negative — `rg -n 'Motion & Physics|Lighting & Environment|SceneSelection::Rendering|\\u\{1F4F7\}|\\u\{25A0\}' crates/manifold-ui/src` → 0; `rg -n 'toggle_scene_dock|scene_setup_width' crates/` → 0.
-- **Demo:** L3 — `scene-panel-tree.json` on gltfscene and physicsscene: select the layer, open the Scene tab, assert group order, select a light, assert header text equals its readable name once; select a non-scene layer, assert no Scene tab. Performer gesture: add a light from the Lights "+", rename it, see the new name on its card row.
-- **Forbidden:** a new row or header widget outside the shared builders; keeping the old add row "for now"; keeping the dock beside the tab.
-- **Test scope:** `-p manifold-ui -p manifold-app`; scene flows.
+- **Gate:** positive — `scene_setup_panel::tests::tree_groups_in_fixed_order`, `add_buttons_one_per_group`, `header_names_item_once`; the flows the phase adds or edits, run by name, green. Negative — `rg -n 'Motion & Physics|Lighting & Environment|SceneSelection::Rendering|\\u\{1F4F7\}|\\u\{25A0\}' crates/manifold-ui/src` → 0.
+- **Demo:** L3 — `scene-panel-tree.json` on gltfscene and physicsscene: select the layer, open the Scene tab, assert group order, select a light, assert header text equals its readable name once. Performer gesture: add a light from the Lights "+", rename it, see the new name on its card row.
+- **Forbidden:** a new row or header widget outside the shared builders; keeping the old add row "for now".
+- **Test scope:** `-p manifold-ui -p manifold-app`; only the flows the phase adds or edits, by name.
 
 ### P7 — Cross-surface gestures and fold persistence
-- **Entry:** P4 and P6 landed.
+- **Entry:** P4 and P6b landed, and UI_INVALIDATION P4b landed.
 - **Read-back:** D6, D7, D10, section 3.9; `dropdowns.rs:1666-1731`; `parameter_navigation.rs` whole.
 - **Deliverables:** scene panel rows emit `ParamLabelRightClick`; menu items Show on Card, Remove from Card (disabled on attached rows), Show in Scene tab; `SetCardPinCommand` with undo; section title click and Show in Scene tab switch the inspector to the Scene tab and reveal the owning item; the brief card-row highlight after Show on Card; `reveal_param`; `folded_sections` persistence and the D11 default fold; delete `reveal_clip_response`, `property_selection_for_row`, the `SceneSetupExposeParam` action and arm.
 - **Gate:** positive — `card_pin::tests::{pin_unpin_undo_redo, remove_disabled_on_mapped_row}`, `reveal_param_selects_owning_item_for_light_object_force_world`. Negative — INV-S10; `rg -n 'SceneSetupExposeParam|reveal_clip_response' crates/` → 0.
@@ -638,7 +676,7 @@ Common to every phase. **Entry:** the status line reads APPROVED; `git -C "/User
 - **Test scope:** `-p manifold-editing -p manifold-ui -p manifold-app`.
 
 ### P8 — Slider range vs hard limit
-- **Entry:** P7 landed (both surfaces emit the shared right-click). `rg -n 'constrain_to_range\(' crates/ -g '*.rs'` → 4 non-test sites recorded.
+- **Entry:** P7 landed (both surfaces emit the shared right-click), and UI_INVALIDATION P4c landed. `rg -n 'constrain_to_range\(' crates/ -g '*.rs'` → 4 non-test sites recorded.
 - **Read-back:** D15, sections 3.1 (`HardLimit`), 3.8 (range rows), 3.9; docs/WIDGET_TREE_DESIGN.md section 5b (agent contract and enforcement). Restate the five behaviours (typing, drag, automation and modulation, OSC and MIDI, wraps and reshape).
 - **Deliverables:**
   - `ParamSpecDef::clamp_value` replaces `constrain_to_range` at every site.
@@ -666,7 +704,7 @@ Common to every phase. **Entry:** the status line reads APPROVED; `git -C "/User
 - **Test scope:** `-p manifold-ui -p manifold-app`.
 
 ### P10 — Use this view
-- **Entry:** P6 landed. ⚠ VERIFY-AT-IMPL: where the app's live viewport camera pose is readable from the UI thread (`rg -n 'SceneViewportPass' crates/manifold-app/src`); `viewport_session.rs:226` is the headless twin.
+- **Entry:** P6b landed. ⚠ VERIFY-AT-IMPL: where the app's live viewport camera pose is readable from the UI thread (`rg -n 'SceneViewportPass' crates/manifold-app/src`); `viewport_session.rs:226` is the headless twin.
 - **Read-back:** D14; `viewport_session.rs:1-27`.
 - **Deliverables:** "Use this view" button in the Camera item header; `CopyViewportCameraCommand`; the orbit mapping as a pure function `orbit_from_view(eye, forward, current_look_y) -> OrbitParams` with tests.
 - **Gate:** positive — `orbit_from_view` round trip: orbit params → eye/forward → back, equal within 1e-4; free-camera copy exact; one undo restores all params. Negative — none.

@@ -104,7 +104,7 @@ manifold_node_engine::primitive! {
     params: [
         ParamDef {
             name: Cow::Borrowed("max_radius"),
-            label: "Max Radius",
+            label: "Max Blur",
             ty: ParamType::Float,
             default: ParamValue::Float(24.0),
             range: Some((1.0, 64.0)),

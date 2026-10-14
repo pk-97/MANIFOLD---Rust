@@ -824,7 +824,8 @@ impl WaterScene {
             "bindings":bindings
         })).expect("family visibility metadata"));
         let metadata = def.preset_metadata.as_mut().expect("family metadata");
-        let look_metadata = manifold_node_engine::scene::exposure_source::look_metadata();
+        let look_metadata: Vec<_> = manifold_node_engine::scene::exposure_source::metadata_for_node_type("node.platonic_solid_mesh")
+            .into_iter().filter(|param| param.name == "radius").collect();
         let visible_metadata: Vec<_> = manifold_node_engine::scene::exposure_source::metadata_for_node_type("node.scene_object")
             .into_iter().filter(|param| param.name == "visible").collect();
         for (kind, section) in [("foam", "Foam"), ("spray", "Spray"), ("bubble", "Bubbles")] {
@@ -837,12 +838,17 @@ impl WaterScene {
                 let mut params = Vec::new();
                 let mut bindings = Vec::new();
                 manifold_core::scene_exposure::stamp_scene_node_exposures_into(
-                    &mut params, &mut bindings, node.id, &node.node_id, &node.type_id,
+                    &mut params, &mut bindings, node.id, &node.node_id,
                     section, descriptors, &node.params,
                 );
                 assert_eq!(params.len(), 1, "one authored look control");
                 for param in &mut params { param.id = param_id.clone(); }
                 for binding in &mut bindings { binding.id = param_id.clone(); }
+                // The look size is this preset's own control, named here.
+                if suffix == "mesh" {
+                    for param in &mut params { param.name = "Size".into(); }
+                    for binding in &mut bindings { binding.label = "Size".into(); }
+                }
                 metadata.params.extend(params);
                 metadata.bindings.extend(bindings);
             }
@@ -930,8 +936,46 @@ pub fn render_def(scene: WaterScene) -> EffectGraphDef {
             metadata.params.push(spec);
         }
     }
+    author_mesher_scene(&mut metadata.params);
     def.preset_metadata = Some(metadata);
     def
+}
+
+/// The water mesher's controls and the scene group each joins. They shape
+/// how the surface is built, set once per scene: the Scene tab shows them,
+/// the card does not (SCENE_SURFACES_DESIGN.md section 3.6 (card
+/// projection), the Scene band's setup-role mesher row).
+pub const MESHER_CONTROLS: [(&str, manifold_foundation::scene_surface::ControlGroup); 8] = {
+    use manifold_foundation::scene_surface::ControlGroup::{Look, Whitewater};
+    [
+        ("surface_detail", Look),
+        ("surface_particle_scale", Look),
+        ("mesh_relaxation", Look),
+        ("surface_smoothing_iterations", Look),
+        ("surface_stretch", Look),
+        ("surface_centre_smoothing", Look),
+        ("surface_fill_pits", Look),
+        ("whitewater_capacity", Whitewater),
+    ]
+};
+
+#[cfg(any(test, feature = "testkit", feature = "gpu-proofs"))]
+fn author_mesher_scene(params: &mut [manifold_core::effect_graph_def::ParamSpecDef]) {
+    use manifold_foundation::scene_surface::{CardLabel, SceneParamDesc, SurfaceRole};
+    for param in params {
+        if let Some((_, group)) = MESHER_CONTROLS.iter().find(|(id, _)| *id == param.id) {
+            param.scene = Some(SceneParamDesc {
+                role: SurfaceRole::Setup,
+                group: *group,
+                band: None,
+                card_order: 0,
+                card_label: CardLabel::Param,
+                gate: None,
+                switch: None,
+                colour: None,
+            });
+        }
+    }
 }
 
 /// The obstacle remains an external scene object; its one transform drives

@@ -89,7 +89,7 @@ manifold_node_engine::primitive! {
         },
         ParamDef {
             name: Cow::Borrowed("fov_y"),
-            label: "FOV Y",
+            label: "Field of View",
             ty: ParamType::Angle,
             default: ParamValue::Float(0.9),
             range: Some((0.05, 2.5)),
@@ -97,7 +97,7 @@ manifold_node_engine::primitive! {
         },
         ParamDef {
             name: Cow::Borrowed("look_y"),
-            label: "Look Y",
+            label: "Target Height",
             ty: ParamType::Float,
             default: ParamValue::Float(0.0),
             range: Some((-10.0, 10.0)),
@@ -113,7 +113,7 @@ manifold_node_engine::primitive! {
         },
         ParamDef {
             name: Cow::Borrowed("near"),
-            label: "Near",
+            label: "Near Clip",
             ty: ParamType::Float,
             default: ParamValue::Float(DEFAULT_NEAR),
             // Max mirrors `far`'s 10_000 ceiling: glTF import scales `near`
@@ -126,7 +126,7 @@ manifold_node_engine::primitive! {
         },
         ParamDef {
             name: Cow::Borrowed("far"),
-            label: "Far",
+            label: "Far Clip",
             ty: ParamType::Float,
             default: ParamValue::Float(DEFAULT_FAR),
             range: Some((1.0, 10000.0)),

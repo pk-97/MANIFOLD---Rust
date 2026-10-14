@@ -246,6 +246,10 @@ pub struct UiAutomationPoint {
     pub beat: Beats,
     pub value_norm: f32,
     pub shape: UiSegmentShape,
+    /// The point's value lies past the lane's slider range: `value_norm`
+    /// is pinned at the edge and the lane marks it (SCENE_SURFACES_DESIGN.md
+    /// D15 (slider range and hard limit)).
+    pub past_end: bool,
 }
 
 /// UI-local mirror of `manifold_core::GraphTarget` — kept local because
@@ -426,7 +430,7 @@ mod automation_lane_tests {
     }
 
     fn pt(beat: f64, value_norm: f32, shape: UiSegmentShape) -> UiAutomationPoint {
-        UiAutomationPoint { beat: Beats(beat), value_norm, shape }
+        UiAutomationPoint { beat: Beats(beat), value_norm, shape, past_end: false }
     }
 
     #[test]

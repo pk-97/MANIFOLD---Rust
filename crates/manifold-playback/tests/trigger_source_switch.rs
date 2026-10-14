@@ -664,10 +664,11 @@ fn numeric_trigger_source_roundtrip_assignment_disconnect_and_undo() {
 }
 
 /// Apply or revert a command through the gateway, as the content thread would.
+/// A command may learn its parts while it runs, so the gateway stamps what
+/// `execute` or `undo` reports, never a set read beforehand.
 fn run(engine: &mut PlaybackEngine, command: &mut dyn Command, undo: bool) {
-    let touches = command.touches();
     let edit = engine.project_edit().expect("project");
-    manifold_editing::service::EditingService::new().mutate(touches, edit, |p| {
-        if undo { command.undo(p) } else { command.execute(p) }
+    manifold_editing::service::EditingService::new().mutate_with_history(edit, |p, _| {
+        ((), if undo { command.undo(p) } else { command.execute(p) })
     });
 }

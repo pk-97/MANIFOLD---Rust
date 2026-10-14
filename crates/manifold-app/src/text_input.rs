@@ -52,6 +52,12 @@ pub enum TextInputField {
     InspectorParam,
     /// The same inspector value entry, hosted by the graph-editor window.
     EditorInspectorParam,
+    /// "Set slider range…" type-in ("min to max"; empty resets). The target
+    /// and id ride on [`TextInputState::inspector_param`]. Commit dispatches
+    /// `SetSliderRange` (SCENE_SURFACES_DESIGN.md D15 (slider range and hard limit)).
+    SliderRange,
+    /// The same slider range entry, hosted by the graph-editor window.
+    EditorSliderRange,
     /// Material RGB swatch hex type-in. The target + channel ids ride on
     /// [`TextInputState::material_colour`]. Commit routes through the atomic
     /// `ParamRgb` scrub path so the edit has one undo entry.
@@ -107,13 +113,13 @@ pub enum TextInputField {
     /// `UserLibrary::rename` (My Library) or executes
     /// `RenameEmbeddedPresetCommand` (Project).
     RenamePreset,
-    /// Scene Setup panel Objects-row rename (SCENE_SETUP_PANEL_DESIGN.md P2).
+    /// Scene tab object rename (SCENE_SETUP_PANEL_DESIGN.md P2).
     /// Carries the object's group node id; the target layer rides on
     /// `TextInputState::scene_object_layer_id` (`LayerId` not `Copy`). Commit
     /// routes to `RenameGroupCommand`, addressed at the layer directly (no
     /// graph editor needs to be open — the panel is a fourth surface).
     SceneObjectRename(u32),
-    /// Scene Setup panel light-row rename (SCENE_OBJECT_AND_PANEL_V2_DESIGN.md
+    /// Scene tab light rename (SCENE_OBJECT_AND_PANEL_V2_DESIGN.md
     /// P5). Carries the light node's own doc id; the target layer rides on
     /// `TextInputState::scene_object_layer_id` (shared with
     /// `SceneObjectRename` — the two sessions are mutually exclusive, only
@@ -121,13 +127,13 @@ pub enum TextInputField {
     /// plain `SetNodeHandleCommand` (no group sweep — a light is never
     /// wrapped in a group).
     SceneLightRename(u32),
-    /// Scene Setup dock numeric value-cell type-in
+    /// Scene tab numeric value-cell type-in
     /// (`SCENE_OBJECT_AND_PANEL_V2_DESIGN.md` P4, D8's `EditValue` target).
     /// Carries the target node's doc id (mirrors `GraphNumericParam`'s
     /// shape); the rest (layer, scope_path, param_id, D10's `degrees` flag)
     /// rides on [`TextInputState::scene_numeric_param`] (not `Copy`). Commit
     /// parses f32 (degrees rows convert to radians), dispatches the SAME
-    /// `PanelAction::SceneSetupParamChanged` write the dock's drag/steppers
+    /// `PanelAction::SceneSetupParamChanged` write the tab's drag/steppers
     /// already use — ONE undo unit, no clamp (PARAM_RANGE_CONTRACT P1).
     SceneNumericParam(u32),
     /// Audio Setup dock gain-stepper value-cell type-in (P4's audio-dock
@@ -154,6 +160,7 @@ impl TextInputField {
             self,
             TextInputField::GraphGroupRename(_)
                 | TextInputField::EditorInspectorParam
+                | TextInputField::EditorSliderRange
                 | TextInputField::GraphStringParam(_)
                 | TextInputField::GraphWgsl(_)
                 | TextInputField::GraphNodeSearch
@@ -226,12 +233,12 @@ pub struct GraphNumericParamCtx {
     pub outer_param_id: Option<String>,
 }
 
-/// Context for an in-flight Scene Setup dock numeric type-in — set when the
+/// Context for an in-flight Scene tab numeric type-in — set when the
 /// box opens ([`TextInputField::SceneNumericParam`]) and read on commit
 /// (`SCENE_OBJECT_AND_PANEL_V2_DESIGN.md` P4, D8). Mirrors `InspectorParamCtx`'s
-/// shape; the write address is the dock's own `(scope_path, node_doc_id,
+/// shape; the write address is the tab's own `(scope_path, node_doc_id,
 /// param_id)` (`PanelAction::SceneSetupParamChanged`'s tuple), not a
-/// `ParamId` — the dock addresses graph nodes directly, not effect/generator
+/// `ParamId` — the tab addresses graph nodes directly, not effect/generator
 /// param slots. No `old_value` here (unlike `InspectorParamCtx`): commit
 /// reads the live project value as the undo baseline directly — nothing else
 /// can write this field while the single-session type-in box is open.
@@ -830,6 +837,22 @@ pub fn parse_lenient_numeric(text: &str) -> Option<f32> {
     cleaned.parse::<f32>().ok()
 }
 
+/// Parse a "Set slider range…" entry: two numbers separated by spaces, a
+/// comma, "to" or "..", in either order. Empty text means reset (`Some(None)`);
+/// anything else unparseable is `None` (the entry is dropped).
+pub fn parse_slider_range(text: &str) -> Option<Option<(f32, f32)>> {
+    let text = text.trim();
+    if text.is_empty() {
+        return Some(None);
+    }
+    let spaced = text.replace("..", " ").replace(" to ", " ").replace([',', ';', '\u{2013}', '\u{2014}'], " ");
+    let numbers: Vec<f32> = spaced.split_whitespace().map(parse_lenient_numeric).collect::<Option<_>>()?;
+    match numbers.as_slice() {
+        [a, b] if a != b => Some(Some((a.min(*b), a.max(*b)))),
+        _ => None,
+    }
+}
+
 /// Degrees→radians commit-side conversion for angle rows — the panel
 /// boundary's other half (the display side lives in the row formatters).
 /// Shared by `SceneNumericParam` (D10) and `InspectorParam` (camera card
@@ -896,6 +919,17 @@ pub fn material_colour_scrub_actions(
 #[cfg(test)]
 mod parse_tests {
     use super::*;
+
+    #[test]
+    fn slider_range_parses_two_numbers_any_separator() {
+        for text in ["-1 to 1", "-1, 1", "-1..1", "1 -1", " -1   1 "] {
+            assert_eq!(parse_slider_range(text), Some(Some((-1.0, 1.0))), "{text}");
+        }
+        assert_eq!(parse_slider_range(""), Some(None), "empty resets");
+        assert_eq!(parse_slider_range("3"), None);
+        assert_eq!(parse_slider_range("2 to 2"), None);
+        assert_eq!(parse_slider_range("a to b"), None);
+    }
 
     #[test]
     fn lenient_parse_keeps_only_the_numeric_head() {

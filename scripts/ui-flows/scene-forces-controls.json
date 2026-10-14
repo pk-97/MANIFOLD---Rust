@@ -3,7 +3,7 @@
     "Pointer": {
       "target": {
         "Query": {
-          "text": "Scene"
+          "text": "Scene", "type": "Button", "under_name": "inspector"
         }
       },
       "gesture": {
@@ -17,7 +17,7 @@
     "Pointer": {
       "target": {
         "Query": {
-          "text": "+ Force"
+          "name": "scene_tree.add.Forces"
         }
       },
       "gesture": {
@@ -45,7 +45,7 @@
     "Pointer": {
       "target": {
         "Query": {
-          "text": "\u26a1 Uniform Force"
+          "name": "scene_tree.item", "text": "Uniform Force"
         }
       },
       "gesture": {
@@ -59,7 +59,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "text": "Strength (m/s\u00b2)"
+          "text": "Strength"
         }
       },
       "check": "Exists"
@@ -73,7 +73,7 @@
         }
       },
       "check": {
-        "TextEquals": "1.00"
+        "TextEquals": "1.00 m/s\u00b2"
       }
     }
   },
@@ -97,7 +97,7 @@
         "Drag": {
           "to": {
             "Query": {
-              "text": "Strength (m/s\u00b2)"
+              "text": "Strength"
             }
           },
           "steps": 8
@@ -110,7 +110,7 @@
       "selector": {
         "Query": {
           "name_suffix": "\"strength\"].value",
-          "text": "1.00"
+          "text": "1.00 m/s\u00b2"
         }
       },
       "check": {
@@ -134,7 +134,7 @@
         }
       },
       "check": {
-        "TextEquals": "1.00"
+        "TextEquals": "1.00 m/s\u00b2"
       }
     }
   },
@@ -189,7 +189,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "text": "\u26a1 Uniform Force"
+          "name": "scene_tree.item", "text": "Uniform Force"
         }
       },
       "check": "Exists"
@@ -203,7 +203,7 @@
         }
       },
       "check": {
-        "TextEquals": "1.00"
+        "TextEquals": "1.00 m/s\u00b2"
       }
     }
   },
@@ -239,7 +239,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "text": "Impulse (m/s)"
+          "text": "Kick Size"
         }
       },
       "check": "Exists"
@@ -253,7 +253,7 @@
         }
       },
       "check": {
-        "TextEquals": "2.00"
+        "TextEquals": "2.00 m/s"
       }
     }
   },
@@ -317,9 +317,7 @@
     "Pointer": {
       "target": {
         "Query": {
-          "text": "\u00d7",
-          "under_name": "scene_setup",
-          "type": "Button"
+          "text": "Layer", "type": "Button", "under_name": "inspector"
         }
       },
       "gesture": {
@@ -402,7 +400,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "text": "Physics Solids / Uniform Force / Strength (m/s\u00b2)",
+          "text": "Physics Solids / Uniform Force / Strength",
           "type": "Button"
         }
       },
@@ -413,7 +411,7 @@
     "Pointer": {
       "target": {
         "Query": {
-          "text": "Physics Solids / Uniform Force / Strength (m/s\u00b2)",
+          "text": "Physics Solids / Uniform Force / Strength",
           "type": "Button"
         }
       },
@@ -428,7 +426,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "text": "\u2713 Physics Solids / Uniform Force / Strength (m/s\u00b2)",
+          "text": "\u2713 Physics Solids / Uniform Force / Strength",
           "type": "Button"
         }
       },
@@ -455,7 +453,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "text": "\u26a1 Uniform Force",
+          "name": "scene_tree.item", "text": "Uniform Force",
           "type": "Button"
         }
       },
@@ -473,9 +471,9 @@
       },
       "check": {
         "RectWithin": {
-          "x": 624.0,
-          "y": 733.0,
-          "width": 288.0,
+          "x": 1028.0,
+          "y": 685.0,
+          "width": 480.0,
           "height": 22.0
         }
       }
@@ -494,9 +492,9 @@
       },
       "check": {
         "RectWithin": {
-          "x": 624.0,
-          "y": 733.0,
-          "width": 288.0,
+          "x": 1028.0,
+          "y": 685.0,
+          "width": 480.0,
           "height": 22.0
         }
       }

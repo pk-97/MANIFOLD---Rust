@@ -20,8 +20,8 @@ use crate::ui_root::UIRoot;
 
 pub(super) struct CompositeResources {
     pub(super) offscreen: GpuTexture,
-    atlas_pipeline: manifold_gpu::GpuRenderPipeline,
-    atlas_sampler: manifold_gpu::GpuSampler,
+    pub(super) atlas_pipeline: manifold_gpu::GpuRenderPipeline,
+    pub(super) atlas_sampler: manifold_gpu::GpuSampler,
     // `pub(super)`, not private: `render.rs`'s `render_ui_to_png` also needs
     // these to call `crate::ui_frame::render_main_ui_passes` (`inputs.
     // blit_pipeline`/`blit_sampler`, the VQT-blit resources — `None`/absent

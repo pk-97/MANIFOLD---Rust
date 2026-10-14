@@ -3,7 +3,7 @@
     "Pointer": {
       "target": {
         "Query": {
-          "text": "Scene"
+          "text": "Scene", "type": "Button", "under_name": "inspector"
         }
       },
       "gesture": {
@@ -17,33 +17,7 @@
     "Pointer": {
       "target": {
         "Query": {
-          "text": "📷 Camera"
-        }
-      },
-      "gesture": {
-        "Click": {
-          "modifiers": {}
-        }
-      }
-    }
-  },
-  {
-    "Assert": {
-      "selector": {
-        "Query": {
-          "name_suffix": ".value",
-          "nth": 0
-        }
-      },
-      "check": "Exists"
-    }
-  },
-  "Snapshot",
-  {
-    "Pointer": {
-      "target": {
-        "Query": {
-          "text": "🌍 World"
+          "name": "scene_tree.item", "text": "Camera"
         }
       },
       "gesture": {
@@ -69,7 +43,7 @@
     "Pointer": {
       "target": {
         "Query": {
-          "text": "💡 sun"
+          "name": "scene_tree.item", "text": "World"
         }
       },
       "gesture": {
@@ -95,7 +69,7 @@
     "Pointer": {
       "target": {
         "Query": {
-          "text": "💡 fill_light"
+          "name": "scene_tree.item", "text": "Sun"
         }
       },
       "gesture": {
@@ -121,7 +95,33 @@
     "Pointer": {
       "target": {
         "Query": {
-          "text": "■ Ground"
+          "name": "scene_tree.item", "text": "Fill Light"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "name_suffix": ".value",
+          "nth": 0
+        }
+      },
+      "check": "Exists"
+    }
+  },
+  "Snapshot",
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "name": "scene_tree.item", "text": "Ground"
         }
       },
       "gesture": {
@@ -158,7 +158,7 @@
     "Pointer": {
       "target": {
         "Query": {
-          "text": "■ Tetrahedron"
+          "name": "scene_tree.item", "text": "Tetrahedron"
         }
       },
       "gesture": {
@@ -195,7 +195,7 @@
     "Pointer": {
       "target": {
         "Query": {
-          "text": "■ Cube"
+          "name": "scene_tree.item", "text": "Cube"
         }
       },
       "gesture": {
@@ -232,7 +232,7 @@
     "Pointer": {
       "target": {
         "Query": {
-          "text": "■ Octahedron"
+          "name": "scene_tree.item", "text": "Octahedron"
         }
       },
       "gesture": {
@@ -269,7 +269,7 @@
     "Pointer": {
       "target": {
         "Query": {
-          "text": "■ Icosahedron"
+          "name": "scene_tree.item", "text": "Icosahedron"
         }
       },
       "gesture": {
@@ -306,7 +306,7 @@
     "Pointer": {
       "target": {
         "Query": {
-          "text": "■ Dodecahedron"
+          "name": "scene_tree.item", "text": "Dodecahedron"
         }
       },
       "gesture": {
@@ -343,7 +343,7 @@
     "Pointer": {
       "target": {
         "Query": {
-          "text": "⚙ Physics"
+          "name": "scene_tree.item", "text": "Physics"
         }
       },
       "gesture": {
@@ -369,7 +369,7 @@
     "Pointer": {
       "target": {
         "Query": {
-          "text": "🎞 Rendering"
+          "name": "scene_tree.item", "text": "World"
         }
       },
       "gesture": {
@@ -383,8 +383,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "name_suffix": ".value",
-          "nth": 0
+          "name_suffix": "_rt_enabled"
         }
       },
       "check": "Exists"

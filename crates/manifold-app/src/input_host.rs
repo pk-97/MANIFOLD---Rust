@@ -35,9 +35,11 @@ pub struct AppInputHost<'a> {
     pub ui_root: &'a mut UIRoot,
     pub selection: &'a mut UIState,
     pub active_layer: &'a mut Option<LayerId>,
-    pub needs_rebuild: &'a mut bool,
-    pub needs_structural_sync: &'a mut bool,
-    pub scroll_dirty: &'a mut crate::ui_root::ScrollDirty,
+    /// The main window repaints next frame (UI_INVALIDATION D8).
+    pub redraw: &'a mut bool,
+    /// The UI's stamps and gesture preview: a local write goes through
+    /// [`Self::project_ref`], which stamps what it touches (UI_INVALIDATION D5).
+    pub edits: &'a mut crate::gesture_preview::UiEdits,
     #[cfg_attr(not(feature = "profiling"), allow(dead_code))]
     pub current_project_path: &'a Option<std::path::PathBuf>,
     pub has_output_window: bool,
@@ -67,7 +69,6 @@ impl TimelineInputHost for AppInputHost<'_> {
 
     fn toggle_performance_hud(&mut self) {
         self.ui_root.perf_hud.toggle();
-        *self.needs_rebuild = true;
 
         // When profiling feature is enabled, toggling the perf HUD also
         // starts/stops a profiling session on the content thread.
@@ -112,10 +113,6 @@ impl TimelineInputHost for AppInputHost<'_> {
         *self.pending_close_output = true;
     }
 
-    fn request_rebuild(&mut self) {
-        *self.needs_rebuild = true;
-    }
-
     fn on_undo_redo(&mut self) {
         // Unity WorkspaceController lines 378-386:
         //   needsRebuild = true; RefreshAllInspectors();
@@ -130,21 +127,13 @@ impl TimelineInputHost for AppInputHost<'_> {
         // Unity calls ApplyProjectResolutionFromFooter() and ApplyProjectFpsFromFooter()
         // to sync render pipeline with potentially changed settings.
         // Requires PlaybackEngine.set_resolution()/set_fps() (not yet ported).
-
-        *self.needs_structural_sync = true;
-        *self.needs_rebuild = true;
     }
 
     fn on_selection_cleared(&mut self) {
-        // Unity WorkspaceController.OnSelectionCleared (lines 388-393):
-        //   InvalidateAllLayerBitmaps();
-        //   ResetAllInspectors();
-        //   masterInspector?.Show();
         let ui = &mut self.ui_root;
+        // The cleared timeline selection moved its versions; the card
+        // highlights clear in place.
         ui.inspector.clear_effect_selection(&mut ui.tree);
-        *self.needs_rebuild = true;
-        *self.needs_structural_sync = true;
-        self.scroll_dirty.visual = true;
     }
 
     fn mark_compositor_dirty(&mut self) {
@@ -152,10 +141,6 @@ impl TimelineInputHost for AppInputHost<'_> {
             self.content_tx,
             crate::content_command::ContentCommand::MarkCompositorDirty,
         );
-    }
-
-    fn invalidate_all_layer_bitmaps(&mut self) {
-        self.scroll_dirty.visual = true;
     }
 
     fn update_zoom_label(&mut self) {
@@ -180,9 +165,8 @@ impl TimelineInputHost for AppInputHost<'_> {
         if bpm > 0.0 { 60.0 / bpm } else { 0.5 }
     }
 
-    fn on_clip_selected(&mut self, _clip_id: &str) {
-        *self.needs_structural_sync = true;
-    }
+    /// The selection setters already moved the selection versions.
+    fn on_clip_selected(&mut self, _clip_id: &str) {}
 
     // ── Effect keyboard shortcuts (Unity EffectSelectionManager) ──
 
@@ -250,8 +234,6 @@ impl TimelineInputHost for AppInputHost<'_> {
 
             let ui = &mut self.ui_root;
             ui.inspector.clear_effect_selection(&mut ui.tree);
-            *self.needs_structural_sync = true;
-            *self.needs_rebuild = true;
             return true;
         }
 
@@ -276,8 +258,6 @@ impl TimelineInputHost for AppInputHost<'_> {
                             ),
                         ),
                     );
-                    *self.needs_structural_sync = true;
-                    *self.needs_rebuild = true;
                 }
                 Err(reason) => ContentCommand::send(
                     self.content_tx,
@@ -309,8 +289,6 @@ impl TimelineInputHost for AppInputHost<'_> {
                         ),
                     ),
                 );
-                *self.needs_structural_sync = true;
-                *self.needs_rebuild = true;
             }
             return true;
         }
@@ -324,8 +302,6 @@ impl TimelineInputHost for AppInputHost<'_> {
                 ContentCommand::send(self.content_tx, ContentCommand::SceneModifier(
                     crate::scene_modifier_edit::SceneModifierAction::Duplicate(layer, self.ui_root.inspector.selected_modifier_ids()),
                 ));
-                *self.needs_structural_sync = true;
-                *self.needs_rebuild = true;
             }
             return true;
         }
@@ -349,8 +325,6 @@ impl TimelineInputHost for AppInputHost<'_> {
                 let ids = self.ui_root.inspector.selected_modifier_ids();
                 ContentCommand::send(self.content_tx, ContentCommand::SceneModifier(
                     crate::scene_modifier_edit::SceneModifierAction::RemoveMany(layer, ids)));
-                *self.needs_structural_sync = true;
-                *self.needs_rebuild = true;
             }
             return true;
         }
@@ -378,8 +352,6 @@ impl TimelineInputHost for AppInputHost<'_> {
 
         let ui = &mut self.ui_root;
         ui.inspector.clear_effect_selection(&mut ui.tree);
-        *self.needs_structural_sync = true;
-        *self.needs_rebuild = true;
         true
     }
 
@@ -400,7 +372,6 @@ impl TimelineInputHost for AppInputHost<'_> {
             self.content_tx,
             crate::content_command::ContentCommand::ExecuteOnContent(boxed),
         );
-        *self.needs_rebuild = true;
         true
     }
 
@@ -416,8 +387,6 @@ impl TimelineInputHost for AppInputHost<'_> {
         }).unwrap_or_default();
         if !commands.is_empty() {
             ContentCommand::send(self.content_tx, ContentCommand::ExecuteBatch(commands, "Ungroup effects".into()));
-            *self.needs_structural_sync = true;
-            *self.needs_rebuild = true;
         }
         true
     }
@@ -425,7 +394,6 @@ impl TimelineInputHost for AppInputHost<'_> {
     fn clear_effect_selection(&mut self) {
         let ui = &mut self.ui_root;
         ui.inspector.clear_effect_selection(&mut ui.tree);
-        *self.needs_rebuild = true;
     }
 
     fn show_toast(&mut self, message: &str) {
@@ -525,9 +493,6 @@ impl TimelineInputHost for AppInputHost<'_> {
             let target = beat.as_f32();
             if target < start || target > end {
                 viewport.zoom_to(viewport.pixels_per_beat(), target, tracks.x);
-                if viewport.scroll_x_beats() != before {
-                    self.scroll_dirty.scroll_x = true;
-                }
             }
         }
     }
@@ -553,7 +518,6 @@ impl TimelineInputHost for AppInputHost<'_> {
                 .collect();
             self.selection.select_clips(ids);
         }
-        *self.needs_structural_sync = true;
     }
 
     fn copy_clips(&mut self, clip_ids: &[ClipId]) {
@@ -619,7 +583,6 @@ impl TimelineInputHost for AppInputHost<'_> {
             self.selection,
             &mut self.ui_root.toast,
         );
-        *self.needs_structural_sync = true;
     }
 
     fn duplicate_clips(&mut self, clip_ids: &[ClipId]) {
@@ -642,20 +605,12 @@ impl TimelineInputHost for AppInputHost<'_> {
                 .flat_map(|l| l.clips.iter().map(|c| c.id.clone()))
                 .collect();
             let region_core = crate::ui_translate::selection_region_to_core(&region);
-            let mut commands =
+            let commands =
                 EditingService::duplicate_clips(project, clip_ids, &region_core);
             if !commands.is_empty() {
-                // Execute locally for read-back (need new clip IDs for selection).
-                for c in commands.iter_mut() {
-                    c.execute(project);
-                }
-                ContentCommand::send(
-                    self.content_tx,
-                    crate::content_command::ContentCommand::ExecuteBatch(
-                        commands,
-                        "Duplicate clips".into(),
-                    ),
-                );
+                // Executed locally for read-back (need new clip IDs for selection).
+                self.project_ref().execute_batch(commands, "Duplicate clips".into());
+                let project = &*self.project;
 
                 // Find newly created clips and select them
                 let new_ids: Vec<ClipId> = project
@@ -694,7 +649,6 @@ impl TimelineInputHost for AppInputHost<'_> {
                 // set — D1 no longer synthesises a bounding region from it.
             }
         }
-        *self.needs_structural_sync = true;
     }
 
     fn delete_clips(&mut self, clip_ids: &[ClipId], has_region: bool) {
@@ -718,7 +672,6 @@ impl TimelineInputHost for AppInputHost<'_> {
                 );
             }
         }
-        *self.needs_structural_sync = true;
     }
 
     fn delete_layer(&mut self, layer_index: usize) {
@@ -733,7 +686,6 @@ impl TimelineInputHost for AppInputHost<'_> {
                 crate::content_command::ContentCommand::Execute(Box::new(cmd)),
             );
         }
-        *self.needs_rebuild = true;
     }
 
     fn split_clips_at_playhead(&mut self, clip_ids: &[ClipId]) {
@@ -812,7 +764,6 @@ impl TimelineInputHost for AppInputHost<'_> {
                 );
             }
         }
-        *self.needs_structural_sync = true;
     }
 
     fn move_selection_across_layers(&mut self, clip_ids: &[ClipId], layer_delta: i32) {
@@ -826,7 +777,6 @@ impl TimelineInputHost for AppInputHost<'_> {
                 );
             }
         }
-        *self.needs_structural_sync = true;
     }
 
     fn toggle_mute_clips(&mut self, clip_ids: &[ClipId]) {
@@ -876,8 +826,6 @@ impl TimelineInputHost for AppInputHost<'_> {
             self.content_tx,
             crate::content_command::ContentCommand::MarkCompositorDirty,
         );
-        *self.needs_structural_sync = true;
-        *self.needs_rebuild = true;
     }
 
     fn group_selected_layers(&mut self) {
@@ -888,7 +836,7 @@ impl TimelineInputHost for AppInputHost<'_> {
         }
 
         let selected_ids: Vec<LayerId> =
-            self.selection.selected_layer_ids.iter().cloned().collect();
+            self.selection.selected_layer_ids().iter().cloned().collect();
 
         if let Some(project) = Some(&mut *self.project) {
             // Validate: none are nested (have parent) or group layers
@@ -911,12 +859,7 @@ impl TimelineInputHost for AppInputHost<'_> {
                 layers_to_group,
                 original_order,
             );
-            let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
-            boxed.execute(project);
-            ContentCommand::send(
-                self.content_tx,
-                crate::content_command::ContentCommand::Execute(boxed),
-            );
+            self.project_ref().execute(Box::new(cmd));
         }
 
         self.selection.clear_selection();
@@ -924,8 +867,6 @@ impl TimelineInputHost for AppInputHost<'_> {
             self.content_tx,
             crate::content_command::ContentCommand::MarkCompositorDirty,
         );
-        *self.needs_rebuild = true;
-        *self.needs_structural_sync = true;
     }
 
     fn ungroup_selected_layers(&mut self) {
@@ -933,7 +874,7 @@ impl TimelineInputHost for AppInputHost<'_> {
         if self.selection.layer_selection_count() != 1 {
             return;
         }
-        let selected_id = self.selection.selected_layer_ids.iter().next().cloned();
+        let selected_id = self.selection.selected_layer_ids().iter().next().cloned();
         if let Some(id) = selected_id
             && let Some(project) = Some(&mut *self.project)
         {
@@ -959,12 +900,7 @@ impl TimelineInputHost for AppInputHost<'_> {
                 child_ids,
                 original_order,
             );
-            let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
-            boxed.execute(project);
-            ContentCommand::send(
-                self.content_tx,
-                crate::content_command::ContentCommand::Execute(boxed),
-            );
+            self.project_ref().execute(Box::new(cmd));
         }
 
         self.selection.clear_selection();
@@ -972,8 +908,6 @@ impl TimelineInputHost for AppInputHost<'_> {
             self.content_tx,
             crate::content_command::ContentCommand::MarkCompositorDirty,
         );
-        *self.needs_rebuild = true;
-        *self.needs_structural_sync = true;
     }
 
     fn delete_selected_layers(&mut self) {
@@ -984,7 +918,7 @@ impl TimelineInputHost for AppInputHost<'_> {
         }
 
         let selected_ids: Vec<LayerId> =
-            self.selection.selected_layer_ids.iter().cloned().collect();
+            self.selection.selected_layer_ids().iter().cloned().collect();
 
         if let Some(project) = Some(&mut *self.project) {
             // Find indices to delete (in reverse order for safe removal)
@@ -1031,8 +965,6 @@ impl TimelineInputHost for AppInputHost<'_> {
             self.content_tx,
             crate::content_command::ContentCommand::MarkCompositorDirty,
         );
-        *self.needs_rebuild = true;
-        *self.needs_structural_sync = true;
     }
 
     fn duplicate_selected_layers(&mut self) {
@@ -1040,20 +972,10 @@ impl TimelineInputHost for AppInputHost<'_> {
             return;
         }
         let selected_ids: Vec<manifold_core::LayerId> =
-            self.selection.selected_layer_ids.iter().cloned().collect();
+            self.selection.selected_layer_ids().iter().cloned().collect();
         if let Some(cmd) = EditingService::duplicate_layers(self.project, &selected_ids) {
-            let mut boxed: Box<dyn manifold_editing::command::Command> = cmd;
-            boxed.execute(self.project);
-            ContentCommand::send(
-                self.content_tx,
-                crate::content_command::ContentCommand::ExecuteBatch(
-                    vec![boxed],
-                    "Duplicate Layers".to_string(),
-                ),
-            );
+            self.project_ref().execute_batch(vec![cmd], "Duplicate Layers".to_string());
         }
-        *self.needs_rebuild = true;
-        *self.needs_structural_sync = true;
     }
 
     fn layer_count(&self) -> usize {
@@ -1069,106 +991,41 @@ impl TimelineInputHost for AppInputHost<'_> {
     }
 
     fn set_export_in_at_playhead(&mut self) {
-        let bpb = self.project.settings.time_signature_numerator.max(1) as u32;
-        let snapped = self
-            .ui_root
-            .viewport
-            .mapper()
-            .snap_beat_to_grid(self.content_state.current_beat, bpb);
-        self.project.timeline.export_in_beat = snapped;
-        self.project.timeline.export_range_enabled = true;
-        // Push to viewport immediately so build() sees it this frame
-        self.ui_root.viewport.set_export_range(
-            self.project.timeline.export_in_beat,
-            self.project.timeline.export_out_beat,
-            true,
-        );
-        *self.needs_rebuild = true;
-        ContentCommand::send(
-            self.content_tx,
-            ContentCommand::mutate(crate::content_command::touch::MARKERS, Box::new(move |p| {
-                p.timeline.export_in_beat = snapped;
-                p.timeline.export_range_enabled = true;
-            })),
-        );
+        let snapped = self.playhead_on_grid();
+        self.project_ref().mutate(crate::content_command::touch::MARKERS, move |p| {
+            p.timeline.export_in_beat = snapped;
+            p.timeline.export_range_enabled = true;
+        });
+        self.push_export_range();
     }
 
     fn set_export_out_at_playhead(&mut self) {
-        let bpb = self.project.settings.time_signature_numerator.max(1) as u32;
-        let snapped = self
-            .ui_root
-            .viewport
-            .mapper()
-            .snap_beat_to_grid(self.content_state.current_beat, bpb);
-        self.project.timeline.export_out_beat = snapped;
-        self.project.timeline.export_range_enabled = true;
-        self.ui_root.viewport.set_export_range(
-            self.project.timeline.export_in_beat,
-            self.project.timeline.export_out_beat,
-            true,
-        );
-        *self.needs_rebuild = true;
-        ContentCommand::send(
-            self.content_tx,
-            ContentCommand::mutate(crate::content_command::touch::MARKERS, Box::new(move |p| {
-                p.timeline.export_out_beat = snapped;
-                p.timeline.export_range_enabled = true;
-            })),
-        );
+        let snapped = self.playhead_on_grid();
+        self.project_ref().mutate(crate::content_command::touch::MARKERS, move |p| {
+            p.timeline.export_out_beat = snapped;
+            p.timeline.export_range_enabled = true;
+        });
+        self.push_export_range();
     }
 
     fn clear_export_in(&mut self) {
         let has_out = self.project.timeline.export_out_beat > self.project.timeline.export_in_beat;
-        if !has_out {
-            self.project.timeline.export_in_beat = manifold_core::Beats::ZERO;
-            self.project.timeline.export_out_beat = manifold_core::Beats::ZERO;
-            self.project.timeline.export_range_enabled = false;
-            ContentCommand::send(
-                self.content_tx,
-                ContentCommand::mutate(crate::content_command::touch::MARKERS, Box::new(|p| {
-                    p.timeline.export_in_beat = manifold_core::Beats::ZERO;
-                    p.timeline.export_out_beat = manifold_core::Beats::ZERO;
-                    p.timeline.export_range_enabled = false;
-                })),
-            );
+        if has_out {
+            self.project_ref().mutate(crate::content_command::touch::MARKERS, |p| {
+                p.timeline.export_in_beat = manifold_core::Beats::ZERO;
+            });
         } else {
-            self.project.timeline.export_in_beat = manifold_core::Beats::ZERO;
-            ContentCommand::send(
-                self.content_tx,
-                ContentCommand::mutate(crate::content_command::touch::MARKERS, Box::new(|p| {
-                    p.timeline.export_in_beat = manifold_core::Beats::ZERO;
-                })),
-            );
+            self.project_ref().mutate(crate::content_command::touch::MARKERS, clear_export_range);
         }
-        self.ui_root.viewport.set_export_range(
-            self.project.timeline.export_in_beat,
-            self.project.timeline.export_out_beat,
-            self.project.timeline.export_range_enabled,
-        );
-        *self.needs_rebuild = true;
+        self.push_export_range();
     }
 
     fn clear_export_out(&mut self) {
         if !self.project.timeline.export_range_enabled {
             return;
         }
-        self.project.timeline.export_in_beat = manifold_core::Beats::ZERO;
-        self.project.timeline.export_out_beat = manifold_core::Beats::ZERO;
-        self.project.timeline.export_range_enabled = false;
-        self.ui_root.viewport.set_export_range(
-            manifold_core::Beats::ZERO,
-            manifold_core::Beats::ZERO,
-            false,
-        );
-        *self.needs_rebuild = true;
-        ContentCommand::send(
-            self.content_tx,
-            ContentCommand::mutate(crate::content_command::touch::MARKERS, Box::new(|p| {
-                p.timeline.export_in_beat = manifold_core::Beats::ZERO;
-                p.timeline.export_out_beat = manifold_core::Beats::ZERO;
-                p.timeline.export_range_enabled = false;
-            })),
-        );
+        self.project_ref().mutate(crate::content_command::touch::MARKERS, clear_export_range);
+        self.push_export_range();
     }
 
     fn start_export(&mut self) {
@@ -1219,7 +1076,7 @@ impl TimelineInputHost for AppInputHost<'_> {
         // Step 4f: read cursor position from UIState (not viewport scroll)
         let current_beat = self
             .selection
-            .insert_cursor_beat
+            .insert_cursor_beat()
             .unwrap_or(self.content_state.current_beat)
             .as_f32();
         let active_idx = self
@@ -1228,7 +1085,7 @@ impl TimelineInputHost for AppInputHost<'_> {
             .and_then(|id| self.project.timeline.find_layer_index_by_id(id));
         let insert_cursor_idx = self
             .selection
-            .insert_cursor_layer_id
+            .insert_cursor_layer_id()
             .as_ref()
             .and_then(|id| self.project.timeline.find_layer_index_by_id(id));
         let current_layer = insert_cursor_idx.or(active_idx).unwrap_or(0);
@@ -1287,9 +1144,6 @@ impl TimelineInputHost for AppInputHost<'_> {
             }
             cursor_nav::NavResult::NoChange => {}
         }
-
-        *self.needs_rebuild = true;
-        self.scroll_dirty.visual = true;
     }
 
     // ── UIState delegation ──────────────────────────────────────
@@ -1319,12 +1173,12 @@ impl TimelineInputHost for AppInputHost<'_> {
     }
 
     fn insert_cursor_beat(&self) -> Option<f32> {
-        self.selection.insert_cursor_beat.map(|beat| beat.as_f32())
+        self.selection.insert_cursor_beat().map(|beat| beat.as_f32())
     }
 
     fn insert_cursor_layer_index(&self) -> Option<usize> {
         self.selection
-            .insert_cursor_layer_id
+            .insert_cursor_layer_id()
             .as_ref()
             .and_then(|id| self.project.timeline.find_layer_index_by_id(id))
     }
@@ -1369,7 +1223,6 @@ impl TimelineInputHost for AppInputHost<'_> {
                 manifold_ui::color::ZOOM_LEVELS[manifold_ui::color::DEFAULT_ZOOM_INDEX],
             );
             self.ui_root.viewport.set_scroll(0.0, 0.0);
-            self.scroll_dirty.zoom = true;
             return;
         }
 
@@ -1391,8 +1244,6 @@ impl TimelineInputHost for AppInputHost<'_> {
         let center_pixel = center_beat * ideal_ppb;
         let scroll_beat = ((center_pixel - viewport_width * 0.5) / ideal_ppb).max(0.0);
         self.ui_root.viewport.set_scroll(scroll_beat, 0.0);
-
-        self.scroll_dirty.zoom = true;
     }
 
     /// B14 `Z` — frame the current selection (`Clips` or `TimeRange`) with
@@ -1448,8 +1299,6 @@ impl TimelineInputHost for AppInputHost<'_> {
             selection_fit_zoom(min_beat, max_beat, viewport_width, max_ppb);
         self.ui_root.viewport.set_zoom(ideal_ppb);
         self.ui_root.viewport.set_scroll(scroll_beat, 0.0);
-
-        self.scroll_dirty.zoom = true;
     }
 
     /// B14 `Shift+Z` — restore the view captured by the last
@@ -1458,7 +1307,6 @@ impl TimelineInputHost for AppInputHost<'_> {
         if let Some((ppb, scroll_x, scroll_y)) = self.ui_root.viewport.recall_zoom_back() {
             self.ui_root.viewport.set_zoom(ppb);
             self.ui_root.viewport.set_scroll(scroll_x.as_f32(), scroll_y);
-            self.scroll_dirty.zoom = true;
         }
     }
 
@@ -1472,29 +1320,21 @@ impl TimelineInputHost for AppInputHost<'_> {
         use manifold_editing::commands::marker::DeleteMarkerCommand;
 
         let ids: Vec<manifold_core::MarkerId> =
-            self.selection.selected_marker_ids.iter().cloned().collect();
+            self.selection.selected_marker_ids().iter().cloned().collect();
         if ids.is_empty() {
             return;
         }
 
-        let mut commands: Vec<Box<dyn manifold_editing::command::Command>> = Vec::new();
-        for id in &ids {
-            let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
-                Box::new(DeleteMarkerCommand::new(id.clone()));
-            boxed.execute(self.project);
-            commands.push(boxed);
-        }
-        ContentCommand::send(
-            self.content_tx,
-            ContentCommand::ExecuteBatch(commands, "Delete Markers".into()),
-        );
-
-        self.selection.selected_marker_ids.clear();
-        *self.needs_rebuild = true;
+        let commands: Vec<Box<dyn manifold_editing::command::Command>> = ids
+            .iter()
+            .map(|id| Box::new(DeleteMarkerCommand::new(id.clone())) as Box<dyn manifold_editing::command::Command>)
+            .collect();
+        self.project_ref().execute_batch(commands, "Delete Markers".into());
+        self.selection.clear_marker_selection();
     }
 
     fn has_selected_markers(&self) -> bool {
-        !self.selection.selected_marker_ids.is_empty()
+        !self.selection.selected_marker_ids().is_empty()
     }
 
     // ── Automation lane editing ──────────────────────────────────
@@ -1519,24 +1359,20 @@ impl TimelineInputHost for AppInputHost<'_> {
                     .and_then(|lane| {
                         let param = inst.params.get(param_id_str)?;
                         lane.points.iter().position(|p| {
-                            let range = (param.spec.max - param.spec.min).abs().max(f32::EPSILON);
-                            let norm = ((p.value - param.spec.min) / range).clamp(0.0, 1.0);
+                            let range = (param.slider_span().1 - param.slider_span().0).abs().max(f32::EPSILON);
+                            let norm = ((p.value - param.slider_span().0) / range).clamp(0.0, 1.0);
                             p.beat == point_ref.beat && norm == point_ref.value_norm
                         })
                     })
             })
         });
         self.selection.selected_automation_point = None;
+        *self.redraw = true;
         let Some(index) = index else {
             return;
         };
-        let mut cmd = RemoveAutomationPointCommand::new(target, param_id_str, index);
-        cmd.execute(self.project);
-        ContentCommand::send(
-            self.content_tx,
-            ContentCommand::Execute(Box::new(cmd)),
-        );
-        *self.needs_rebuild = true;
+        let cmd = RemoveAutomationPointCommand::new(target, param_id_str, index);
+        self.project_ref().execute(Box::new(cmd));
     }
 
     // ── Automation lane editing — marquee + draw mode (P4 Unit B) ─────
@@ -1553,10 +1389,11 @@ impl TimelineInputHost for AppInputHost<'_> {
     }
 
     fn select_all_automation(&mut self) -> bool {
-        if !self.selection.automation_mode_visible { return false; }
+        if !self.selection.automation_mode_visible() { return false; }
         let Some((target, param_id)) = self.selection.automation_paste_context.clone() else { return false; };
         automation::select_all_in_lane(self.project, self.selection, &target, &param_id);
-        *self.needs_rebuild = true;
+        // Point selection is drawn at paint time (UI_INVALIDATION D8).
+        *self.redraw = true;
         true
     }
 
@@ -1565,11 +1402,11 @@ impl TimelineInputHost for AppInputHost<'_> {
     }
 
     fn cut_selected_automation(&mut self) {
+        self.edits.stamps.bump(crate::content_command::touch::AUTOMATION);
         automation::cut_selected(
             self.project,
             self.selection,
             self.content_tx,
-            self.needs_rebuild,
         );
     }
 
@@ -1586,54 +1423,48 @@ impl TimelineInputHost for AppInputHost<'_> {
             .map(|range| range.start)
             .or(self.selection.automation_insert_beat)
             .unwrap_or_else(|| Beats::from_f32(target_beat));
+        self.edits.stamps.bump(crate::content_command::touch::AUTOMATION);
         automation::paste(
             self.project,
             self.selection,
             self.content_tx,
             target_beat,
-            self.needs_rebuild,
         );
     }
 
     fn duplicate_selected_automation(&mut self) {
+        self.edits.stamps.bump(crate::content_command::touch::AUTOMATION);
         automation::duplicate_selected(
             self.project,
             self.selection,
             self.content_tx,
             self.ui_root.viewport.grid_step(),
-            self.needs_rebuild,
         );
     }
 
     fn delete_selected_automation_points(&mut self) {
+        self.edits.stamps.bump(crate::content_command::touch::AUTOMATION);
         automation::delete_selected(
             self.project,
             self.selection,
             self.content_tx,
-            self.needs_rebuild,
         );
     }
 
     fn toggle_automation_draw_mode(&mut self) {
         self.selection.automation_draw_mode = !self.selection.automation_draw_mode;
-        self.selection.automation_mode_visible = true;
-        *self.needs_structural_sync = true;
-        *self.needs_rebuild = true;
+        self.selection.set_automation_mode_visible(true);
     }
 
     fn automation_mode_visible(&self) -> bool {
-        self.selection.automation_mode_visible
+        self.selection.automation_mode_visible()
     }
 
     fn toggle_automation_mode_visible(&mut self) {
-        // Mirrors `PanelAction::ToggleAutomationMode` (ui_bridge/transport.rs)
-        // exactly — same view-state flip, same `DispatchResult::structural()`
-        // semantics: it changes the Y-layout (lane strips appear/disappear),
-        // so both dirty flags are needed, not just `needs_rebuild`.
-        self.selection.automation_mode_visible = !self.selection.automation_mode_visible;
+        // Mirrors `PanelAction::ToggleAutomationMode` (ui_bridge/transport.rs):
+        // the `automation_view` version runs the project sync.
+        self.selection.toggle_automation_mode_visible();
         self.selection.clear_automation_selection();
-        *self.needs_rebuild = true;
-        *self.needs_structural_sync = true;
     }
 
     // ── D4/D5 Finder-paste arbitration (docs/TIMELINE_INGEST_DESIGN.md section 2) ──
@@ -1698,9 +1529,12 @@ impl TimelineInputHost for AppInputHost<'_> {
             self.project,
             spb,
         );
-        if action.needs_clip_sync {
-            *self.needs_rebuild = true;
-        }
+        // The importer already ran these on the local project; stamp them.
+        let touches = action
+            .record_commands
+            .iter()
+            .fold(manifold_core::change::ChangeSet::NONE, |t, cmd| t.union(cmd.touches()));
+        self.edits.stamps.bump(touches);
         if !action.record_commands.is_empty() {
             if action.record_commands.len() == 1 {
                 let cmd = action.record_commands.into_iter().next().unwrap();
@@ -1716,6 +1550,29 @@ impl TimelineInputHost for AppInputHost<'_> {
 }
 
 impl AppInputHost<'_> {
+    /// The local project as a stamping writer (UI_INVALIDATION D5).
+    fn project_ref(&mut self) -> crate::ui_bridge::ProjectRef<'_> {
+        crate::ui_bridge::ProjectRef::new(self.project, self.edits, self.content_tx)
+    }
+
+    fn playhead_on_grid(&self) -> manifold_core::Beats {
+        let bpb = self.project.settings.time_signature_numerator.max(1) as u32;
+        self.ui_root
+            .viewport
+            .mapper()
+            .snap_beat_to_grid(self.content_state.current_beat, bpb)
+    }
+
+    /// The viewport keeps its own copy of the export range for drawing.
+    fn push_export_range(&mut self) {
+        let timeline = &self.project.timeline;
+        self.ui_root.viewport.set_export_range(
+            timeline.export_in_beat,
+            timeline.export_out_beat,
+            timeline.export_range_enabled,
+        );
+    }
+
     /// D4: record the general pasteboard's current changeCount as the
     /// baseline for "how recent is the internal clipboard". Called after
     /// every internal copy/cut — never after paste, which doesn't change
@@ -1734,20 +1591,15 @@ impl AppInputHost<'_> {
         use manifold_core::marker::TimelineMarker;
         use manifold_editing::commands::marker::AddMarkerCommand;
 
-        let bpb = self.project.settings.time_signature_numerator.max(1) as u32;
-        let snapped = self
-            .ui_root
-            .viewport
-            .mapper()
-            .snap_beat_to_grid(self.content_state.current_beat, bpb);
-        let marker = TimelineMarker::new(snapped);
-
-        let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
-            Box::new(AddMarkerCommand::new(marker));
-        boxed.execute(self.project);
-        ContentCommand::send(self.content_tx, ContentCommand::Execute(boxed));
-        *self.needs_rebuild = true;
+        let marker = TimelineMarker::new(self.playhead_on_grid());
+        self.project_ref().execute(Box::new(AddMarkerCommand::new(marker)));
     }
+}
+
+fn clear_export_range(p: &mut manifold_core::project::Project) {
+    p.timeline.export_in_beat = manifold_core::Beats::ZERO;
+    p.timeline.export_out_beat = manifold_core::Beats::ZERO;
+    p.timeline.export_range_enabled = false;
 }
 
 #[allow(dead_code, unreachable_patterns)]
@@ -1785,7 +1637,7 @@ fn resolve_effect_target(
 ) -> EffectTarget {
     match tab {
         InspectorTab::Master => EffectTarget::Master,
-        InspectorTab::Layer | InspectorTab::Group | InspectorTab::Clip => {
+        InspectorTab::Layer | InspectorTab::Group | InspectorTab::Clip | InspectorTab::Scene => {
             let layer_id = active_layer.clone().unwrap_or_default();
             EffectTarget::Layer { layer_id }
         }
@@ -1879,9 +1731,8 @@ mod automation_clipboard_host_tests {
         ui_root: UIRoot,
         selection: UIState,
         active_layer: Option<LayerId>,
-        needs_rebuild: bool,
-        needs_structural_sync: bool,
-        scroll_dirty: crate::ui_root::ScrollDirty,
+        redraw: bool,
+        edits: crate::gesture_preview::UiEdits,
         current_project_path: Option<std::path::PathBuf>,
         pending_close_output: bool,
         pending_export: bool,
@@ -1924,8 +1775,8 @@ mod automation_clipboard_host_tests {
             project.settings.master_effects.push(effect);
             Self {
                 project, tx, rx, content_state: Default::default(), ui_root: UIRoot::new(),
-                selection: UIState::new(), active_layer: None, needs_rebuild: false,
-                needs_structural_sync: false, scroll_dirty: Default::default(),
+                selection: UIState::new(), active_layer: None, redraw: false,
+                edits: Default::default(),
                 current_project_path: None, pending_close_output: false, pending_export: false,
                 project_io: crate::project_io::ProjectIOService::new(&crate::user_prefs::UserPrefs::in_memory()),
                 #[cfg(target_os = "macos")]
@@ -1940,9 +1791,8 @@ mod automation_clipboard_host_tests {
                 project: &mut self.project, content_tx: &self.tx,
                 content_state: &self.content_state, ui_root: &mut self.ui_root,
                 selection: &mut self.selection, active_layer: &mut self.active_layer,
-                needs_rebuild: &mut self.needs_rebuild,
-                needs_structural_sync: &mut self.needs_structural_sync,
-                scroll_dirty: &mut self.scroll_dirty,
+                redraw: &mut self.redraw,
+                edits: &mut self.edits,
                 current_project_path: &self.current_project_path, has_output_window: false,
                 pending_close_output: &mut self.pending_close_output,
                 pending_export: &mut self.pending_export,
@@ -1990,7 +1840,7 @@ mod automation_clipboard_host_tests {
         )
         .expect("Water preset").as_ref().clone();
         h.selection.select_layer(layer_id.clone());
-        h.ui_root.scene_setup_panel.open();
+        h.selection.pin_scope(manifold_ui::InspectorTab::Scene);
         crate::ui_bridge::sync_inspector_data(
             &mut h.ui_root,
             &h.project,
@@ -2586,8 +2436,7 @@ mod automation_clipboard_host_tests {
         let target = UiGraphTarget::Effect(h.effect_id());
         let mut authoritative = h.project.clone();
         automation::insert_shape(&mut h.project, &mut h.selection, &h.tx, &target,
-            &"amount".into(), Beats(5.0), manifold_ui::panels::actions::AutomationShape::Triangle,
-            &mut h.needs_rebuild);
+            &"amount".into(), Beats(5.0), manifold_ui::panels::actions::AutomationShape::Triangle);
         assert_eq!(points(&h.project, "amount"), vec![(5.0, 0.0), (6.5, 1.0), (8.0, 0.0)]);
         let ContentCommand::Execute(command) = h.rx.try_recv().unwrap() else { panic!("one undoable shape"); };
         let mut service = EditingService::new();
@@ -2632,7 +2481,7 @@ mod automation_clipboard_host_tests {
         layer.gen_params_or_init().refresh_manifest_from_graph();
         h.project.timeline.layers.push(layer);
         h.selection.select_layer(layer_id.clone());
-        h.ui_root.scene_setup_panel.open();
+        h.selection.pin_scope(manifold_ui::InspectorTab::Scene);
         crate::ui_bridge::sync_inspector_data(&mut h.ui_root, &h.project, Some(0), &h.selection, &[], None);
         h.ui_root.object_cards_have_focus = true;
         let before = serde_json::to_value(h.project.timeline.layers[0].gen_params().unwrap()).unwrap();

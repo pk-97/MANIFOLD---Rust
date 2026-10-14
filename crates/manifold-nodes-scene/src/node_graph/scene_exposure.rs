@@ -10,12 +10,14 @@
 use manifold_core::effect_graph_def::EffectGraphDef;
 mod compound;
 mod fluid_objects;
-use manifold_core::liquid_domain::{LIQUID_DOMAIN_TYPE_IDS, is_liquid_domain, liquid_dial_params};
-use manifold_core::scene_exposure::{SceneExposureMetadataProvider, SceneParamMetadata};
+use manifold_core::liquid_domain::{LIQUID_DOMAIN_TYPE_IDS, is_liquid_domain};
+use manifold_core::scene_exposure::{NodeParamProvider, NodeParamMetadata};
 
 use manifold_node_engine::parameters::ParamType;
 use manifold_node_engine::persistence::PrimitiveRegistry;
 use crate::node_graph::material_inspector::material_param_role;
+use crate::node_graph::scene_surface::scene_param_facts;
+use manifold_foundation::scene_surface::SurfaceRole;
 
 static SCENE_EXPOSURE_REGISTRY: std::sync::LazyLock<PrimitiveRegistry> =
     std::sync::LazyLock::new(PrimitiveRegistry::with_builtin);
@@ -59,14 +61,10 @@ const SCENE_VOCABULARY_TYPE_IDS: &[&str] = &[
     "node.push_mesh",
     "node.morph_mesh",
     "node.rotate_3d",
-    // RAYTRACING_DESIGN.md D14/section 5.2: the scene-level RT toggles live on the
-    // `node.render_scene` root. Curated to the RT subset in
-    // `metadata_for_node_type` — the root node's other params (sun, env,
-    // counts) stay hand-curated exposures, never auto-stamped.
+    // The scene-level RT toggles live on the `node.render_scene` root; the
+    // scene table hides its other params.
     "node.render_scene",
-    // The liquid's whitewater: its on/off and amount join the water's
-    // Simulation controls (BUG-ejcb); its rates and budget stay graph-side
-    // or hand-curated.
+    // The liquid's whitewater joins the water's Simulation controls (BUG-ejcb).
     "node.whitewater_step",
 ];
 
@@ -76,59 +74,39 @@ pub fn is_scene_setup_node(type_id: &str) -> bool {
     SCENE_VOCABULARY.contains(&type_id)
 }
 
-/// The curated `node.render_scene` auto-stamp subset (see the vocabulary
-/// entry above): the per-scene RT toggle (D14), the MetalFX temporal
-/// quality toggle (P4), the per-scene reflection toggle (section 9 RD9),
-/// the per-scene ML-denoiser feed toggle (RAYTRACING_DESIGN.md section
-/// 17 DN4), and the per-term RT toggles (shadows/AO/GI — the hybrid-split
-/// levers). Everything else on the root node is deliberately NOT auto-stamped.
-const RENDER_SCENE_STAMPED_PARAMS: &[&str] = &[
-    "rt_enabled",
-    "temporal_upscale",
-    "rt_reflections",
-    "rt_shadows",
-    "rt_ao",
-    "rt_gi",
-    "rt_denoise_feed",
-];
-
-/// Return the full param manifest for `type_id` from the primitive registry,
-/// converting `ParamDef` metadata into the crate-neutral `SceneParamMetadata`
-/// shape. Empty when the type is unknown.
-pub fn metadata_for_node_type(type_id: &str) -> Vec<SceneParamMetadata> {
-    metadata_for_node_type_with_registry(&SCENE_EXPOSURE_REGISTRY, type_id, None)
+/// The params `type_id` stamps, from the primitive registry: every param
+/// except those the scene table marks Hidden, each carrying its scene facts.
+/// Empty when the type is unknown.
+pub fn metadata_for_node_type(type_id: &str) -> Vec<NodeParamMetadata> {
+    node_params(type_id, false)
 }
 
-manifold_core::testkit_visible! {
-/// Convert one registry node's descriptors to scene metadata. Proofs may pass
-/// an explicit dial list for a retired solver whose product controls are no
-/// longer exposed by `manifold-core`.
-pub(crate) fn metadata_for_node_type_with_registry(
-    registry: &PrimitiveRegistry,
-    type_id: &str,
-    dial_whitelist: Option<&[&str]>,
-) -> Vec<SceneParamMetadata> {
-    let Some(node) = registry.construct(type_id) else {
+/// Every param `type_id` declares, Hidden ones included: the node half of
+/// the live param lookup (`manifold_core::param_lookup`). A control may
+/// target a param the stamp skips (an authored exposure), and it still needs
+/// its description.
+pub fn all_params_for_node_type(type_id: &str) -> Vec<NodeParamMetadata> {
+    node_params(type_id, true)
+}
+
+inventory::submit! {
+    manifold_core::param_lookup::NodeParamSource {
+        params_for_type: all_params_for_node_type,
+    }
+}
+
+fn node_params(type_id: &str, with_hidden: bool) -> Vec<NodeParamMetadata> {
+    let Some(node) = SCENE_EXPOSURE_REGISTRY.construct(type_id) else {
         return Vec::new();
     };
-    let dials = dial_whitelist.or_else(|| liquid_dial_params(type_id));
     node.parameters()
         .iter()
-        .filter(|pd| {
-            (type_id != "node.render_scene"
-                || RENDER_SCENE_STAMPED_PARAMS.contains(&pd.name.as_ref()))
-                && (type_id != "node.bokeh_gather"
-                    || matches!(pd.name.as_ref(), "enabled" | "aperture" | "quality"))
+        .filter_map(|pd| {
+            let facts = scene_param_facts(type_id, pd.name.as_ref());
+            let hidden = facts.is_some_and(|f| f.desc.role == SurfaceRole::Hidden);
+            (with_hidden || !hidden).then_some((pd, facts))
         })
-        .filter(|pd| type_id != "node.rigid_body" || matches!(pd.name.as_ref(), "shape" | "motion" | "density" | "friction" | "bounce" | "collider_parts"))
-        .filter(|pd| type_id != "node.scene_object" || pd.name.as_ref() != "parent_visible")
-        .filter(|pd| dials.is_none_or(|dials| dials.contains(&pd.name.as_ref())))
-        .filter(|pd| type_id != "node.whitewater_step" || matches!(pd.name.as_ref(), "enabled" | "amount" | "wavecrest_emission" | "turbulence_emission" | "min_turbulence" | "max_turbulence" | "inside_emission" | "dust_emission" | "boundary_dust" | "dust_rate" | "spray_speed" | "generation_rate" | "influence_base" | "influence_decay"))
-        .filter(|pd| type_id != "node.fluid_role_source" || matches!(pd.name.as_ref(),
-            "role" | "enabled" | "geometry" | "shape" | "radius"
-                | "velocity_x" | "velocity_y" | "velocity_z" | "inherit_motion"
-                | "friction" | "collider_parts"))
-        .map(|pd| {
+        .map(|(pd, facts)| {
             let (min, max) = pd.range.unwrap_or({
                 if matches!(pd.ty, ParamType::Angle) {
                     UNBOUNDED_ANGLE_EXPOSURE_RANGE
@@ -142,14 +120,9 @@ pub(crate) fn metadata_for_node_type_with_registry(
             let whole_numbers = matches!(pd.ty, ParamType::Int | ParamType::Enum);
             let is_toggle = matches!(pd.ty, ParamType::Bool);
             let is_trigger = matches!(pd.ty, ParamType::Trigger);
-            // R2 (SCENE_PANEL_EXPOSURE_CONVERGENCE_DESIGN.md): display labels
-            // aren't Enum-exclusive — a modulatable `Float` threshold param
-            // (e.g. `node.light`'s `cast_shadows`, kept `Float` on purpose so
-            // it stays LFO/trigger-modulatable) can declare `enum_values` as
-            // display-only text for the outer-card slider
-            // (`format_param_value` substitutes by index regardless of the
-            // param's real type). Read straight off whatever the primitive
-            // declared, not gated by `ty`.
+            // Display labels aren't Enum-exclusive: a modulatable `Float`
+            // threshold (`node.light`'s `cast_shadows`) can declare
+            // `enum_values` as display text, read whatever the type.
             let value_labels = pd.enum_values.iter().map(|s| s.to_string()).collect();
             let convert = match pd.ty {
                 ParamType::Bool => manifold_core::effects::ParamConvert::BoolThreshold,
@@ -158,7 +131,7 @@ pub(crate) fn metadata_for_node_type_with_registry(
                 ParamType::Trigger => manifold_core::effects::ParamConvert::Trigger,
                 _ => manifold_core::effects::ParamConvert::Float,
             };
-            SceneParamMetadata {
+            NodeParamMetadata {
                 name: pd.name.to_string(),
                 label: pd.label.to_string(),
                 min,
@@ -174,17 +147,11 @@ pub(crate) fn metadata_for_node_type_with_registry(
                 value_labels,
                 convert,
                 material_role: material_param_role(type_id, pd.name.as_ref()),
+                scene: facts.map(|f| f.desc),
+                unit: facts.and_then(|f| f.unit),
+                limit: facts.map(|f| f.limit).unwrap_or_default(),
             }
         })
-        .collect()
-}
-}
-
-/// Explicit Water-look exposure metadata, never part of load-time vocabulary.
-pub fn look_metadata() -> Vec<SceneParamMetadata> {
-    metadata_for_node_type("node.platonic_solid_mesh").into_iter()
-        .filter(|metadata| metadata.name == "radius")
-        .map(|mut metadata| { metadata.label = "Size".into(); metadata })
         .collect()
 }
 
@@ -207,12 +174,48 @@ pub fn migrate_scene_exposures(def: &mut EffectGraphDef) -> bool {
         &provider,
     );
     let bokeh_source_migrated = migrate_bokeh_source_coc(def);
+    let light_titles = migrate_light_titles(def);
     compound
+        || light_titles
         || fluid_objects
         || material_migrated
         || repaired
         || migrated
         || bokeh_source_migrated
+}
+
+/// SCENE_SURFACES D11 (Lights) load rung: a light imported before the
+/// importer wrote `title` carries its readable GLB name only as the section
+/// string of its intensity stamp. Copy that into `title` when it differs from
+/// the section the stamp pass would write for the untitled light today (its
+/// handle, else the "Scene" fallback), which is no name at all. Idempotent: a
+/// light with a title is never touched.
+fn migrate_light_titles(def: &mut EffectGraphDef) -> bool {
+    use manifold_core::effect_graph_def::BindingTarget;
+    let Some(meta) = def.preset_metadata.as_ref() else {
+        return false;
+    };
+    let mut changed = false;
+    for node in def.nodes.iter_mut().filter(|n| n.type_id == "node.light" && n.title.is_none()) {
+        let section = meta
+            .bindings
+            .iter()
+            .find(|b| matches!(&b.target, BindingTarget::Node { node_id, param }
+                if *node_id == node.node_id && param == "intensity"))
+            .and_then(|b| meta.params.iter().find(|p| p.id == b.id))
+            .and_then(|p| p.section.as_deref())
+            .filter(|s| !s.is_empty() && *s != section_name_for_node(node));
+        if let Some(section) = section {
+            node.title = Some(section.to_string());
+            changed = true;
+        }
+    }
+    changed
+}
+
+#[cfg(test)]
+pub(crate) fn migrate_light_titles_for_test(def: &mut EffectGraphDef) -> bool {
+    migrate_light_titles(def)
 }
 
 /// The layered gather consumes the original signed CoC and computes its own
@@ -462,12 +465,12 @@ fn section_name_for_node(node: &manifold_core::effect_graph_def::EffectGraphNode
 }
 
 /// Zero-sized provider backed by the lazy static registry. Commands in
-/// `manifold_editing` store a `Box<dyn SceneExposureMetadataProvider>` and call
+/// `manifold_editing` store a `Box<dyn NodeParamProvider>` and call
 /// this at execute time.
 pub struct PrimitiveRegistrySceneExposureProvider;
 
-impl SceneExposureMetadataProvider for PrimitiveRegistrySceneExposureProvider {
-    fn metadata_for_type(&self, type_id: &str) -> Vec<SceneParamMetadata> {
+impl NodeParamProvider for PrimitiveRegistrySceneExposureProvider {
+    fn params_for_type(&self, type_id: &str) -> Vec<NodeParamMetadata> {
         metadata_for_node_type(type_id)
     }
 }
@@ -476,7 +479,6 @@ impl SceneExposureMetadataProvider for PrimitiveRegistrySceneExposureProvider {
 inventory::submit! {
     manifold_node_engine::scene::exposure_source::SceneExposureSource {
         metadata: metadata_for_node_type,
-        look: look_metadata,
     }
 }
 
@@ -484,7 +486,6 @@ inventory::submit! {
 mod exposure_source_tests {
     #[test]
     fn scene_exposure_registration_preserves_metadata() {
-        assert_eq!(super::look_metadata(), manifold_node_engine::scene::exposure_source::look_metadata());
         for type_id in ["node.scene_object", "node.pbr_material", "node.camera", "missing"] {
             assert_eq!(super::metadata_for_node_type(type_id),
                 manifold_node_engine::scene::exposure_source::metadata_for_node_type(type_id));

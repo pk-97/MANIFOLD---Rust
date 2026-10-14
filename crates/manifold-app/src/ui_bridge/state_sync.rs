@@ -13,9 +13,10 @@ use crate::ui_root::UIRoot;
 use crate::ui_bridge::projection::cards::describe_macro_mapping;
 
 pub use crate::ui_bridge::projection::cards::sync_card_values;
-pub use crate::ui_bridge::projection::inspector::sync_inspector_data;
-pub use crate::ui_bridge::projection::scene::sync_scene_row_values;
-pub use crate::ui_bridge::projection::timeline::{sync_automation_lane_geometry, sync_clip_positions, sync_project_data};
+pub use crate::ui_bridge::projection::driver_readouts::sync_driver_readouts;
+pub use crate::ui_bridge::projection::inspector::{sync_audio_dock, sync_inspector_data};
+pub use crate::ui_bridge::projection::scene::{sync_scene_outliner_eyes, sync_scene_row_values};
+pub use crate::ui_bridge::projection::timeline::{sync_automation_lane_geometry, sync_clip_positions, sync_markers, sync_project_data, sync_track_layout};
 pub use crate::ui_bridge::projection::transport::{TransportDisplayCache, check_auto_scroll};
 
 // Transport colors for play state.
@@ -44,8 +45,12 @@ fn trigger_delivery_diagnostic_toast(
     Some(failure.to_string())
 }
 
-/// Push engine state into UI panels (called once per frame, AFTER build).
-/// Syncs all data-model state into tree nodes so the renderer shows current values.
+/// Push engine state into UI panels (called once per frame, AFTER build):
+/// the event drain, the chrome push, the selection push and the live push
+/// in that order (UI_INVALIDATION_DESIGN.md D15). The frame seam calls the
+/// pieces itself so the selection push runs only on its inputs.
+#[cfg(feature = "ui-snapshot")]
+#[allow(clippy::too_many_arguments)]
 pub fn push_state(
     ui: &mut UIRoot,
     project: &Project,
@@ -56,7 +61,143 @@ pub fn push_state(
     project_path: Option<&std::path::Path>,
     transport_cache: &mut TransportDisplayCache,
 ) {
-    manifold_core::work_count::record_work(manifold_core::work_count::WorkKind::ValuePush);
+    intake_overlay_state(ui, content_state);
+    drain_events(ui, content_state);
+    push_chrome(ui, project, content_state, selection, is_dirty, project_path, transport_cache);
+    push_clock(ui, project, content_state, transport_cache);
+    push_selection(ui, project, active_layer, selection);
+    push_frame(ui, project, content_state, active_layer);
+    push_live(ui, project, content_state, active_layer, LiveGroups { values: true, shapes: true });
+}
+
+/// One-shot events keyed on their own sequences: toasts and content-driven
+/// selections. Runs every frame, after the build, since the selections find
+/// cards this frame's projection made.
+pub fn drain_events(ui: &mut UIRoot, content_state: &crate::content_state::ContentState) {
+    let tree = &mut ui.tree;
+
+    // D11 undo/redo toast (`UI_CRAFT_AND_MOTION_PLAN.md` P2) — real command
+    // label instead of the generic "Undo"/"Redo" the M::Undo/M::Redo menu
+    // handlers used to show directly (`app_render.rs`). Keyed on
+    // `data_version` (bumped by every
+    // undo/redo) rather than the description, so undoing the same command
+    // twice in a row (rare, but possible via redo-then-undo) still fires.
+    if let Some(ev) = &content_state.undo_redo_event {
+        let key = content_state.data_version;
+        if ui.last_undo_redo_toast_key != Some(key) {
+            let verb = if ev.is_redo { "Redo" } else { "Undo" };
+            ui.toast.show(format!("{verb}: {}", ev.description));
+            ui.last_undo_redo_toast_key = Some(key);
+        }
+    }
+
+    // Rejected graph edits do not change project data, so they carry an
+    // independent sequence. Keep the diagnostic persistent in the content
+    // snapshot and show each sequence exactly once.
+    if let Some((sequence, message)) = graph_edit_diagnostic_toast(
+        ui.last_graph_edit_diagnostic_sequence,
+        content_state.graph_edit_diagnostic.as_deref(),
+    ) {
+        ui.toast.show_with_accent(message.to_owned(), color::RED_BASE);
+        ui.last_graph_edit_diagnostic_sequence = Some(sequence);
+    }
+
+    if let Some(message) = trigger_delivery_diagnostic_toast(
+        &mut ui.last_trigger_delivery_failure,
+        content_state.trigger_delivery_failure,
+    ) {
+        ui.toast.show_with_accent(message, color::RED_BASE);
+    }
+
+    if let Some(update) = &content_state.modifier_selection_update {
+        if ui.last_modifier_selection_sequence != Some(update.sequence) {
+            if let Some(id) = update.ids.iter().rev().find(|id| {
+                ui.scene_setup_panel.force_card_info(id)
+                    .is_some_and(|info| info.layer_id == update.layer_id)
+            }) {
+                ui.scene_setup_panel.set_selection(update.layer_id.clone(),
+                    manifold_ui::panels::scene_setup_panel::SceneSelection::Force(id.clone()));
+            }
+            ui.inspector.select_modifier_ids(&update.layer_id, &update.ids);
+            ui.inspector.apply_selection_visuals(tree);
+            ui.inspector.reveal_pending_selection(tree);
+            ui.last_modifier_selection_sequence = Some(update.sequence);
+        }
+    } else {
+        ui.last_modifier_selection_sequence = None;
+    }
+
+    if let Some(update) = &content_state.object_modifier_selection_update {
+        if ui.last_object_modifier_selection_sequence != Some(update.sequence) {
+            ui.scene_setup_panel.select_object_modifier_by_address(
+                &update.layer_id, update.owner_id, update.node_doc_id, tree,
+            );
+            ui.last_object_modifier_selection_sequence = Some(update.sequence);
+        }
+    } else {
+        ui.last_object_modifier_selection_sequence = None;
+    }
+}
+
+/// Content-driven overlay state, taken before the frame is planned so a
+/// changed overlay moves the overlays' view key this frame (UI_INVALIDATION
+/// D6). Taken after the build it would show one frame late.
+pub fn intake_overlay_state(ui: &mut UIRoot, content_state: &crate::content_state::ContentState) {
+    // MIDI device names and the Ableton session, taken by pointer.
+    let session_changed = ui.intake_shared(content_state);
+
+    // A new Ableton session refreshes the open picker.
+    if session_changed
+        && ui.ableton_picker.is_open()
+        && let Some(session) = ui.ableton_session.clone()
+    {
+        ui.ableton_picker
+            .update_session(crate::ui_root::build_picker_session(&session));
+        ui.mark_overlay_dirty();
+    }
+
+    // Runtime-only presentation state rides every ContentState, including
+    // paused command snapshots; it must not wait for a project-version change.
+    if let Some(sdr_preview) = content_state.sdr_preview
+        && ui.settings_popup.set_sdr_preview(sdr_preview)
+    {
+        ui.mark_overlay_dirty();
+    }
+}
+
+/// The header clock: time first, then bar.beat.sixteenth. Writes its label in
+/// place without allocating while the shown digits move; the digits are
+/// `frame_plan::clock_digits`, the planner's key for this push.
+pub fn push_clock(
+    ui: &mut UIRoot,
+    project: &Project,
+    content_state: &crate::content_state::ContentState,
+    transport_cache: &mut TransportDisplayCache,
+) {
+    let beat = content_state.current_beat.as_f32();
+    let t = content_state.current_time.0;
+    let mins = (t / 60.0).floor() as i32;
+    let secs = (t % 60.0).floor() as i32;
+    let tenths = ((t * 10.0) % 10.0).floor() as i32;
+    let bpb = (project.settings.time_signature_numerator.max(1)) as f32;
+    let bar = (beat / bpb).floor() as i32 + 1;
+    let beat_in_bar = (beat % bpb).floor() as i32 + 1;
+    let sixteenth = ((beat % 1.0) * 4.0).floor() as i32 + 1;
+    let display = transport_cache.time_display(mins, secs, tenths, bar, beat_in_bar, sixteenth);
+    ui.header.set_time_display(&mut ui.tree, display);
+}
+
+/// Transport, sync, header, footer, settings and layer-header chrome.
+#[allow(clippy::too_many_arguments)]
+pub fn push_chrome(
+    ui: &mut UIRoot,
+    project: &Project,
+    content_state: &crate::content_state::ContentState,
+    selection: &SelectionState,
+    is_dirty: bool,
+    project_path: Option<&std::path::Path>,
+    transport_cache: &mut TransportDisplayCache,
+) {
     let tree = &mut ui.tree;
 
     // Transport state — three visual states matching Unity TransportPanel
@@ -72,10 +213,6 @@ pub fn push_state(
     };
     ui.transport.set_play_state(play_text, play_color);
 
-    // Time display + BPM
-    let beat = content_state.current_beat.as_f32();
-    let time = content_state.current_time;
-
     {
         // When clock authority is Internal, use project.settings.bpm (the local
         // project) — it's updated immediately by handle_text_input_commit, so
@@ -89,20 +226,6 @@ pub fn push_state(
             content_state.bpm as f32
         };
 
-        // Unity FormatTime: "{minutes:D2}:{seconds:D2}.{tenths}"
-        // Time first, then bar.beat.sixteenth — matches Unity exactly
-        let t = time.0;
-        let mins = (t / 60.0).floor() as i32;
-        let secs = (t % 60.0).floor() as i32;
-        let tenths = ((t * 10.0) % 10.0).floor() as i32;
-        // Beat display uses time_signature_numerator (not hardcoded 4)
-        let bpb = (project.settings.time_signature_numerator.max(1)) as f32;
-        let bar = (beat / bpb).floor() as i32 + 1;
-        let beat_in_bar = (beat % bpb).floor() as i32 + 1;
-        let sixteenth = ((beat % 1.0) * 4.0).floor() as i32 + 1;
-
-        let display = transport_cache.time_display(mins, secs, tenths, bar, beat_in_bar, sixteenth);
-        ui.header.set_time_display(display);
         let bpm_str = transport_cache.bpm_display(bpm);
         ui.transport.set_bpm_text(bpm_str);
 
@@ -117,86 +240,6 @@ pub fn push_state(
         };
         ui.transport
             .set_clock_authority(auth.transport_label(), auth_color);
-
-        // Cache MIDI device names for dropdown
-        if ui.midi_device_names[..] != content_state.midi_device_names[..] {
-            ui.midi_device_names.clear();
-            ui.midi_device_names
-                .extend_from_slice(&content_state.midi_device_names);
-        }
-
-        // D11 undo/redo toast (`UI_CRAFT_AND_MOTION_PLAN.md` P2) — real command
-        // label instead of the generic "Undo"/"Redo" the M::Undo/M::Redo menu
-        // handlers used to show directly (`app_render.rs`). Keyed on
-        // `data_version` (bumped by every
-        // undo/redo) rather than the description, so undoing the same command
-        // twice in a row (rare, but possible via redo-then-undo) still fires.
-        if let Some(ev) = &content_state.undo_redo_event {
-            let key = content_state.data_version;
-            if ui.last_undo_redo_toast_key != Some(key) {
-                let verb = if ev.is_redo { "Redo" } else { "Undo" };
-                ui.toast.show(format!("{verb}: {}", ev.description));
-                ui.last_undo_redo_toast_key = Some(key);
-            }
-        }
-
-        // Rejected graph edits do not change project data, so they carry an
-        // independent sequence. Keep the diagnostic persistent in the content
-        // snapshot and show each sequence exactly once.
-        if let Some((sequence, message)) = graph_edit_diagnostic_toast(
-            ui.last_graph_edit_diagnostic_sequence,
-            content_state.graph_edit_diagnostic.as_ref(),
-        ) {
-            ui.toast.show_with_accent(message.to_owned(), color::RED_BASE);
-            ui.last_graph_edit_diagnostic_sequence = Some(sequence);
-        }
-
-        if let Some(message) = trigger_delivery_diagnostic_toast(
-            &mut ui.last_trigger_delivery_failure,
-            content_state.trigger_delivery_failure,
-        ) {
-            ui.toast.show_with_accent(message, color::RED_BASE);
-        }
-
-        if let Some(update) = &content_state.modifier_selection_update {
-            if ui.last_modifier_selection_sequence != Some(update.sequence) {
-                if let Some(id) = update.ids.iter().rev().find(|id| {
-                    ui.scene_setup_panel.force_card_info(id)
-                        .is_some_and(|info| info.layer_id == update.layer_id)
-                }) {
-                    ui.scene_setup_panel.set_selection(update.layer_id.clone(),
-                        manifold_ui::panels::scene_setup_panel::SceneSelection::Force(id.clone()));
-                }
-                ui.inspector.select_modifier_ids(&update.layer_id, &update.ids);
-                ui.inspector.apply_selection_visuals(tree);
-                ui.inspector.reveal_pending_selection(tree);
-                ui.last_modifier_selection_sequence = Some(update.sequence);
-            }
-        } else {
-            ui.last_modifier_selection_sequence = None;
-        }
-
-        if let Some(update) = &content_state.object_modifier_selection_update {
-            if ui.last_object_modifier_selection_sequence != Some(update.sequence) {
-                ui.scene_setup_panel.select_object_modifier_by_address(
-                    &update.layer_id, update.owner_id, update.node_doc_id, tree,
-                );
-                ui.last_object_modifier_selection_sequence = Some(update.sequence);
-            }
-        } else {
-            ui.last_object_modifier_selection_sequence = None;
-        }
-
-        // Cache Ableton session for parameter mapping dropdown
-        if let Some(session) = &content_state.ableton_session {
-            ui.ableton_session = Some(std::sync::Arc::clone(session));
-            // If the picker is open, refresh it with the updated session data.
-            if ui.ableton_picker.is_open() {
-                ui.ableton_picker
-                    .update_session(crate::ui_root::build_picker_session(session));
-                ui.overlay_dirty = true;
-            }
-        }
 
         // Sync source status — driven by content_state from transport controller
         // Link
@@ -340,7 +383,7 @@ pub fn push_state(
         );
         // LANES button (view-only toggle, no content-thread state behind it).
         ui.transport
-            .set_automation_mode_visible(selection.automation_mode_visible);
+            .set_automation_mode_visible(selection.automation_mode_visible());
         ui.transport.set_automation_draw_mode(selection.automation_draw_mode);
 
         // Save dirty state is shown by the "•" in the window/header project name
@@ -413,17 +456,6 @@ pub fn push_state(
         ui.rt_quality_panel.configure(project.settings.rt_quality);
     }
 
-    // Runtime-only presentation state rides every ContentState, including
-    // paused command snapshots; it must not wait for a project-version change.
-    if let Some(sdr_preview) = content_state.sdr_preview
-        && ui.settings_popup.set_sdr_preview(sdr_preview)
-    {
-        // The runtime preview does not bump the project version. Request the
-        // established overlay visual rebuild so its segment active styling
-        // reflects the new snapshot even while paused.
-        ui.overlay_dirty = true;
-    }
-
     // Footer stats
     {
         let layers = project.timeline.layers.len();
@@ -432,59 +464,6 @@ pub fn push_state(
         ui.footer.set_selection_info(&info);
     }
 
-    // Playhead + playing state
-    let playhead_beat = content_state.current_beat.as_f32();
-    ui.viewport.set_playhead(Beats::from_f32(playhead_beat));
-    ui.viewport.set_playing(content_state.is_playing);
-
-    // Selection → viewport (version-gated to avoid per-frame Vec allocation).
-    // The panel's `selected_clip_ids` is a pure render cache fed from the enum
-    // here — never an independent authority.
-    ui.viewport.sync_selection(
-        selection.selection_version,
-        || selection.get_selected_clip_ids(),
-        || selection.selected_marker_ids.iter().cloned().collect(),
-    );
-    if let Some(beat) = selection.insert_cursor_beat {
-        ui.viewport.set_insert_cursor(beat);
-    }
-
-    // Region → viewport (sync from UIState so clearing via set_insert_cursor
-    // propagates). Only a `TimeRange` selection has a region; a `Clips`
-    // selection pushes `None`, so no band draws behind a clip selection (D1).
-    if let Some(r) = selection.current_region() {
-        let ui_layers = crate::ui_translate::layers_to_ui(&project.timeline.layers);
-        let (start_layer, end_layer) = r.layer_index_range(&ui_layers).unwrap_or((0, 0));
-        ui.viewport
-            .set_selection_region(Some(manifold_ui::panels::viewport::SelectionRegion {
-                start_beat: r.start_beat,
-                end_beat: r.end_beat,
-                start_layer,
-                end_layer,
-            }));
-    } else {
-        ui.viewport.set_selection_region(None);
-    }
-
-    // Layer highlighting via UIState.is_layer_active (unified check across 4 paths):
-    // explicit layer selection, clip selection, insert cursor, region.
-    {
-        let active_flags: Vec<bool> = project
-            .timeline
-            .layers
-            .iter()
-            .map(|l| selection.is_layer_active(&l.layer_id))
-            .collect();
-        ui.layer_headers.set_active_layers(&active_flags);
-    }
-    // Also set single active_layer for backward compat (inspector routing)
-    let active_layer_id = active_layer
-        .and_then(|i| project.timeline.layers.get(i))
-        .map(|l| l.layer_id.clone());
-    ui.layer_headers.set_active_layer(active_layer_id);
-    // section 19 timeline echo: the focused lane lifts in the viewport body too (track
-    // index == layer index, the `tracks` vec is built 1:1 from project layers).
-    ui.viewport.set_active_track_index(active_layer);
     {
         for (i, layer) in project.timeline.layers.iter().enumerate() {
             ui.layer_headers.set_mute_state(tree, i, layer.is_muted);
@@ -533,136 +512,6 @@ pub fn push_state(
         }
     }
 
-    // Macro slider values + labels/mapping counts for context menus
-    let macro_vals: Vec<f32> = project
-        .settings
-        .macro_bank
-        .slots
-        .iter()
-        .map(|s| s.value)
-        .collect();
-    // Display labels include [ABL] suffix — used for slider display only.
-    // Raw slot.label is stored separately in ui.macro_labels for dropdown menus.
-    let macro_display_labels: Vec<String> = project
-        .settings
-        .macro_bank
-        .slots
-        .iter()
-        .enumerate()
-        .map(|(i, slot)| {
-            let base = if slot.label.is_empty() {
-                format!("M{}", i + 1)
-            } else {
-                slot.label.clone()
-            };
-            if let Some(mapping) = &slot.ableton_mapping {
-                use manifold_core::ableton_mapping::AbletonMappingStatus;
-                let suffix = match mapping.status {
-                    AbletonMappingStatus::Active => "[ABL]",
-                    AbletonMappingStatus::Dormant => "[ABL-]",
-                    AbletonMappingStatus::Ambiguous => "[ABL?]",
-                };
-                format!("{base} {suffix}")
-            } else {
-                base
-            }
-        })
-        .collect();
-    // Set Ableton display data + trim ranges before sync so build can use them.
-    let macro_abl_displays: Vec<Option<AbletonMappingDisplay>> = project
-        .settings
-        .macro_bank
-        .slots
-        .iter()
-        .map(|slot| {
-            slot.ableton_mapping
-                .as_ref()
-                .map(|m| AbletonMappingDisplay {
-                    macro_name: m.address.macro_name.clone(),
-                    track_name: m.address.track_name.clone(),
-                    device_name: m.address.device_name.clone(),
-                    status: crate::ui_translate::ableton_mapping_status_to_ui(m.status),
-                    inverted: m.inverted,
-                })
-        })
-        .collect();
-    ui.inspector
-        .macros_panel_mut()
-        .set_ableton_displays(&macro_abl_displays);
-    let macro_abl_ranges: Vec<Option<(f32, f32)>> = project
-        .settings
-        .macro_bank
-        .slots
-        .iter()
-        .map(|slot| {
-            slot.ableton_mapping
-                .as_ref()
-                .map(|m| (m.range_min, m.range_max))
-        })
-        .collect();
-    ui.inspector
-        .macros_panel_mut()
-        .set_ableton_ranges(&macro_abl_ranges);
-    ui.inspector
-        .macros_panel_mut()
-        .sync_values(tree, &macro_vals, &macro_display_labels);
-    for (i, slot) in project.settings.macro_bank.slots.iter().enumerate() {
-        if i < manifold_core::MACRO_COUNT {
-            ui.macro_labels[i].clone_from(&slot.label);
-            ui.macro_mapping_descs[i] = slot
-                .mappings
-                .iter()
-                .map(|m| describe_macro_mapping(&m.target, project))
-                .collect();
-            ui.macro_ableton_mapped[i] = slot.ableton_mapping.is_some();
-        }
-    }
-
-    // Sync active layer opacity to inspector chrome
-    if let Some(idx) = active_layer {
-        {
-            if let Some(layer) = project.timeline.layers.get(idx) {
-                ui.inspector
-                    .layer_chrome_mut()
-                    .sync_opacity(tree, layer.opacity);
-                ui.inspector.layer_chrome_mut().sync_name(tree, &layer.name);
-            }
-            // Master opacity + LED brightness
-            ui.inspector
-                .master_chrome_mut()
-                .sync_opacity(tree, project.settings.master_opacity);
-            ui.inspector
-                .master_chrome_mut()
-                .sync_led_brightness(tree, project.settings.led_brightness);
-            ui.inspector
-                .master_chrome_mut()
-                .sync_led_enabled(tree, content_state.led_enabled);
-
-            // LED composite preview (LED_STRIPS_DESIGN MVP-P4): per-frame
-            // content — Black↔Frame transitions + version bumps land without a
-            // rebuild; the structural presence rides sync_inspector_data.
-            {
-                let is_dmx = active_layer
-                    .and_then(|i| project.timeline.layers.get(i))
-                    .is_some_and(|l| l.layer_type == manifold_core::types::LayerType::Dmx);
-                let band = super::projection::inspector::map_led_preview(
-                    content_state.led_preview.as_ref(),
-                    is_dmx,
-                );
-                ui.inspector.sync_led_preview(tree, band.as_ref());
-            }
-
-            // LED exit path label + cached effect names for dropdown
-            let exit_label = super::led_exit_path_label(
-                project.settings.led_exit_index,
-                &project.settings.master_effects,
-            );
-            ui.inspector
-                .master_chrome_mut()
-                .sync_exit_path(tree, &exit_label);
-        }
-    }
-
     // Cache master effect names for the LED exit path dropdown
     {
         use manifold_core::preset_type_registry;
@@ -679,7 +528,7 @@ pub fn push_state(
     // Mode (has_clip, is_video, is_gen, is_looping) is set in sync_inspector_data
     // BEFORE build so the tree layout is correct. Here we only sync text/values
     // into the already-built nodes.
-    if let Some(clip_id) = &selection.primary_selected_clip_id {
+    if let Some(clip_id) = selection.primary_selected_clip_id() {
         let clip = project
             .timeline
             .layers
@@ -741,6 +590,226 @@ pub fn push_state(
             }
         }
     }
+}
+
+/// Insert cursor, selection band, selected clips and layer highlight. Runs
+/// when the selection, cursor or active layer moved, or after a projection
+/// or rebuild replaced the nodes it writes.
+pub fn push_selection(
+    ui: &mut UIRoot,
+    project: &Project,
+    active_layer: Option<usize>,
+    selection: &SelectionState,
+) {
+    // Selection → viewport (version-gated to avoid per-frame Vec allocation).
+    // The panel's `selected_clip_ids` is a pure render cache fed from the enum
+    // here — never an independent authority.
+    ui.viewport.sync_selection(
+        selection.selection_visual_version(),
+        || selection.get_selected_clip_ids(),
+        || selection.selected_marker_ids().iter().cloned().collect(),
+    );
+    if let Some(beat) = selection.insert_cursor_beat() {
+        ui.viewport.set_insert_cursor(beat);
+    }
+
+    // Region → viewport (sync from UIState so clearing via set_insert_cursor
+    // propagates). Only a `TimeRange` selection has a region; a `Clips`
+    // selection pushes `None`, so no band draws behind a clip selection (D1).
+    if let Some(r) = selection.current_region() {
+        let ui_layers = crate::ui_translate::layers_to_ui(&project.timeline.layers);
+        let (start_layer, end_layer) = r.layer_index_range(&ui_layers).unwrap_or((0, 0));
+        ui.viewport
+            .set_selection_region(Some(manifold_ui::panels::viewport::SelectionRegion {
+                start_beat: r.start_beat,
+                end_beat: r.end_beat,
+                start_layer,
+                end_layer,
+            }));
+    } else {
+        ui.viewport.set_selection_region(None);
+    }
+
+    // Layer highlighting via UIState.is_layer_active (unified check across 4 paths):
+    // explicit layer selection, clip selection, insert cursor, region.
+    {
+        let active_flags: Vec<bool> = project
+            .timeline
+            .layers
+            .iter()
+            .map(|l| selection.is_layer_active(&l.layer_id))
+            .collect();
+        ui.layer_headers.set_active_layers(&active_flags);
+    }
+    // Also set single active_layer for backward compat (inspector routing)
+    let active_layer_id = active_layer
+        .and_then(|i| project.timeline.layers.get(i))
+        .map(|l| l.layer_id.clone());
+    ui.layer_headers.set_active_layer(active_layer_id);
+    // section 19 timeline echo: the focused lane lifts in the viewport body too (track
+    // index == layer index, the `tracks` vec is built 1:1 from project layers).
+    ui.viewport.set_active_track_index(active_layer);
+}
+
+/// Every frame: the playhead and playing state (immediate-pass inputs) and
+/// the LED composite preview band, whose card compares the readback version
+/// itself; the structural presence rides `sync_inspector_data`.
+pub fn push_frame(
+    ui: &mut UIRoot,
+    project: &Project,
+    content_state: &crate::content_state::ContentState,
+    active_layer: Option<usize>,
+) {
+    let playhead_beat = content_state.current_beat.as_f32();
+    ui.viewport.set_playhead(Beats::from_f32(playhead_beat));
+    ui.viewport.set_playing(content_state.is_playing);
+    if let Some(layer) = active_layer.and_then(|i| project.timeline.layers.get(i)) {
+        let is_dmx = layer.layer_type == manifold_core::types::LayerType::Dmx;
+        let band = super::projection::inspector::map_led_preview(content_state.led_preview.as_ref(), is_dmx);
+        ui.inspector.sync_led_preview(&mut ui.tree, band.as_ref());
+    }
+}
+
+/// Which groups of the live push run (D22). Values displays follow the values
+/// sequence and the Values stamp; drawers, handles, gains and range bands
+/// follow the Shapes and MappingRanges stamps, so modulated playback never
+/// touches them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LiveGroups {
+    pub values: bool,
+    pub shapes: bool,
+}
+
+impl LiveGroups {
+    pub fn any(self) -> bool {
+        self.values || self.shapes
+    }
+}
+
+/// The live push (D15 piece 1, D22): every display of a live scalar, in
+/// place. The frame planner runs each group when its inputs moved, and both
+/// after a projection or rebuild.
+pub fn push_live(
+    ui: &mut UIRoot,
+    project: &Project,
+    content_state: &crate::content_state::ContentState,
+    active_layer: Option<usize>,
+    groups: LiveGroups,
+) {
+    manifold_core::work_count::record_work(manifold_core::work_count::WorkKind::ValuePush);
+    if groups.values {
+        push_live_values(ui, project, content_state, active_layer);
+    }
+    if groups.shapes {
+        crate::ui_bridge::projection::live_shapes::sync_live_shapes(ui, project, active_layer);
+    }
+}
+
+/// Values displays: macro, opacity and LED values, card and scene-row values.
+fn push_live_values(
+    ui: &mut UIRoot,
+    project: &Project,
+    content_state: &crate::content_state::ContentState,
+    active_layer: Option<usize>,
+) {
+    let tree = &mut ui.tree;
+
+    // Macro slider values + labels/mapping counts for context menus
+    let macro_vals: Vec<f32> = project
+        .settings
+        .macro_bank
+        .slots
+        .iter()
+        .map(|s| s.value)
+        .collect();
+    // Display labels include [ABL] suffix — used for slider display only.
+    // Raw slot.label is stored separately in ui.macro_labels for dropdown menus.
+    let macro_display_labels: Vec<String> = project
+        .settings
+        .macro_bank
+        .slots
+        .iter()
+        .enumerate()
+        .map(|(i, slot)| {
+            let base = if slot.label.is_empty() {
+                format!("M{}", i + 1)
+            } else {
+                slot.label.clone()
+            };
+            if let Some(mapping) = &slot.ableton_mapping {
+                use manifold_core::ableton_mapping::AbletonMappingStatus;
+                let suffix = match mapping.status {
+                    AbletonMappingStatus::Active => "[ABL]",
+                    AbletonMappingStatus::Dormant => "[ABL-]",
+                    AbletonMappingStatus::Ambiguous => "[ABL?]",
+                };
+                format!("{base} {suffix}")
+            } else {
+                base
+            }
+        })
+        .collect();
+    // Set Ableton display data before sync so build can use them.
+    let macro_abl_displays: Vec<Option<AbletonMappingDisplay>> = project
+        .settings
+        .macro_bank
+        .slots
+        .iter()
+        .map(|slot| {
+            slot.ableton_mapping
+                .as_ref()
+                .map(|m| AbletonMappingDisplay {
+                    macro_name: m.address.macro_name.clone(),
+                    track_name: m.address.track_name.clone(),
+                    device_name: m.address.device_name.clone(),
+                    status: crate::ui_translate::ableton_mapping_status_to_ui(m.status),
+                    inverted: m.inverted,
+                })
+        })
+        .collect();
+    ui.inspector
+        .macros_panel_mut()
+        .set_ableton_displays(&macro_abl_displays);
+    ui.inspector
+        .macros_panel_mut()
+        .sync_values(tree, &macro_vals, &macro_display_labels);
+    for (i, slot) in project.settings.macro_bank.slots.iter().enumerate() {
+        if i < manifold_core::MACRO_COUNT {
+            ui.macro_labels[i].clone_from(&slot.label);
+            ui.macro_mapping_descs[i] = slot
+                .mappings
+                .iter()
+                .map(|m| describe_macro_mapping(&m.target, project))
+                .collect();
+            ui.macro_ableton_mapped[i] = slot.ableton_mapping.is_some();
+        }
+    }
+
+    // Active layer opacity and name in the layer chrome.
+    if let Some(layer) = active_layer.and_then(|idx| project.timeline.layers.get(idx)) {
+        ui.inspector
+            .layer_chrome_mut()
+            .sync_opacity(tree, layer.opacity);
+        ui.inspector.layer_chrome_mut().sync_name(tree, &layer.name);
+    }
+    // The master chrome shows with or without an active layer.
+    ui.inspector
+        .master_chrome_mut()
+        .sync_opacity(tree, project.settings.master_opacity);
+    ui.inspector
+        .master_chrome_mut()
+        .sync_led_brightness(tree, project.settings.led_brightness);
+    ui.inspector
+        .master_chrome_mut()
+        .sync_led_enabled(tree, content_state.led_enabled);
+    // LED exit path label + cached effect names for dropdown
+    let exit_label = super::led_exit_path_label(
+        project.settings.led_exit_index,
+        &project.settings.master_effects,
+    );
+    ui.inspector
+        .master_chrome_mut()
+        .sync_exit_path(tree, &exit_label);
 
     // Sync effect card values (master, layer, clip)
     sync_card_values(ui, project, active_layer);

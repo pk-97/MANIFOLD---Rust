@@ -3,6 +3,7 @@
 //! paths. See `docs/TIMELINE_API_DESIGN.md` section 3.6.
 
 use super::*;
+use std::fmt::Write as _;
 
 impl TimelineViewportPanel {
     /// Update insert cursor ruler marker position without rebuilding.
@@ -43,9 +44,16 @@ impl TimelineViewportPanel {
         let ppb = self.mapper.pixels_per_beat();
         let scroll_x = self.scroll_x_beats.as_f32();
         let playhead = self.playhead_beat.as_f32();
-        if !self.overview_dirty
+        // The playhead keys on the pixel it lands on, not the beat: playback
+        // moves the beat every frame but the strip pixel rarely.
+        let playhead_px = if self.overview_max_beat > 0.0 {
+            ((playhead / self.overview_max_beat) * tex_w as f32).round().clamp(0.0, tex_w as f32) as i32
+        } else {
+            -1
+        };
+        if !self.overview_repaint
             && !self.overview_clips_dirty
-            && self.overview_last_playhead == playhead
+            && self.overview_last_playhead_px == playhead_px
             && self.overview_last_scroll_x == scroll_x
             && self.overview_last_ppb == ppb
             && self.overview_last_track_count == self.tracks.len()
@@ -63,7 +71,7 @@ impl TimelineViewportPanel {
             || size_changed
             || self.overview_last_track_count != self.tracks.len();
 
-        self.overview_last_playhead = playhead;
+        self.overview_repaint = false;
         self.overview_last_scroll_x = scroll_x;
         self.overview_last_ppb = ppb;
         self.overview_last_track_count = self.tracks.len();
@@ -76,7 +84,9 @@ impl TimelineViewportPanel {
         if self.total_clip_count() == 0 || self.tracks.is_empty() {
             self.overview_pixels.resize(total, Color32::TRANSPARENT);
             self.overview_pixels.fill(Color32::TRANSPARENT);
-            self.overview_dirty = true;
+            self.overview_upload = true;
+            self.overview_max_beat = 0.0;
+            self.overview_last_playhead_px = -1;
             return;
         }
 
@@ -88,10 +98,13 @@ impl TimelineViewportPanel {
                 max_beat = end;
             }
         }
+        self.overview_max_beat = max_beat;
         if max_beat <= 0.0 {
             self.overview_pixels.resize(total, Color32::TRANSPARENT);
             self.overview_pixels.fill(Color32::TRANSPARENT);
-            self.overview_dirty = true;
+            self.overview_upload = true;
+            self.overview_max_beat = 0.0;
+            self.overview_last_playhead_px = -1;
             return;
         }
 
@@ -182,6 +195,7 @@ impl TimelineViewportPanel {
         // Playhead (red line, 1-2px)
         let ph_norm = playhead / max_beat;
         let ph_x = (ph_norm * tex_w as f32).round().clamp(0.0, tex_w as f32) as i32;
+        self.overview_last_playhead_px = ph_x;
         let ph_w = (1.0 * scale).round().max(1.0) as i32;
         bitmap_painter::fill_rect(
             &mut self.overview_pixels,
@@ -194,13 +208,13 @@ impl TimelineViewportPanel {
             color::OVERVIEW_PLAYHEAD,
         );
 
-        self.overview_dirty = true;
+        self.overview_upload = true;
     }
 
     /// Overview bitmap data for GPU upload. Returns (pixels, w, h) if dirty.
     pub fn overview_bitmap(&mut self) -> Option<(&[Color32], usize, usize)> {
-        if self.overview_dirty && self.overview_tex_w > 0 && self.overview_tex_h > 0 {
-            self.overview_dirty = false;
+        if self.overview_upload && self.overview_tex_w > 0 && self.overview_tex_h > 0 {
+            self.overview_upload = false;
             Some((
                 &self.overview_pixels,
                 self.overview_tex_w,
@@ -467,10 +481,39 @@ impl TimelineViewportPanel {
     // build_grid_lines: REMOVED — grid lines are now painted into per-layer bitmaps
     // by LayerBitmapRenderer.paint_grid_lines() (matching Unity exactly).
 
+    /// The ruler draws from one fixed pool of MAX_RULER_TICKS slots, a tick
+    /// and its label each, so a scroll or zoom lays it out in place whatever
+    /// the tick count. A slot is the tick's paint position, so a label paints
+    /// just after its own tick as it always has.
     pub(super) fn build_ruler(&mut self, tree: &mut UITree) {
         self.ruler_tick_ids.clear();
         self.ruler_label_ids.clear();
+        for _ in 0..MAX_RULER_TICKS {
+            let tick = tree.add_panel(self.viewport_clip_id, 0.0, 0.0, 0.0, 0.0, UIStyle::default());
+            tree.set_visible(tick, false);
+            self.ruler_tick_ids.push(tick);
+            let label = tree.add_label(self.viewport_clip_id, 0.0, 0.0, 0.0, 0.0, "", Self::ruler_label_style(false));
+            tree.set_visible(label, false);
+            self.ruler_label_ids.push(label);
+        }
+        self.ruler_shown = 0;
+        self.layout_ruler(tree);
+    }
 
+    fn ruler_label_style(is_bar: bool) -> UIStyle {
+        UIStyle {
+            text_color: if is_bar { color::TEXT_NORMAL } else { color::TEXT_DIMMED },
+            font_size: RULER_FONT_SIZE,
+            text_align: TextAlign::Left,
+            ..UIStyle::default()
+        }
+    }
+
+    /// Lay the ruler pool out for the current scroll and zoom: the shared
+    /// writer of a build and of every in-place move. A slot no tick uses
+    /// goes back to the state a build leaves it in (hidden, no text, the
+    /// pool style), so an in-place layout and a fresh build are one tree.
+    fn layout_ruler(&mut self, tree: &mut UITree) {
         let (min_beat, max_beat) = self.visible_beat_range();
         let bpb = self.beats_per_bar as f32;
         let ppb = self.mapper.pixels_per_beat();
@@ -483,15 +526,13 @@ impl TimelineViewportPanel {
             1.0 / grid_policy.subdivisions_per_beat as f32
         };
 
-        // ── Label step (adaptive — ensures labels never overlap) ──
-        // Find the smallest musically-meaningful interval where labels
-        // are at least MIN_LABEL_SPACING pixels apart.
+        // ── Label step: the smallest musical interval whose labels sit at
+        // least MIN_LABEL_SPACING pixels apart ──
         const MIN_LABEL_SPACING: f32 = 50.0;
         let label_step: f32 = if ppb >= MIN_LABEL_SPACING {
-            // Enough room for per-beat labels (bar.beat format)
+            // Per-beat labels (bar.beat format)
             1.0
         } else if bpb * ppb >= MIN_LABEL_SPACING {
-            // Enough room for per-bar labels
             bpb
         } else {
             // Skip bars — double until labels fit
@@ -505,9 +546,11 @@ impl TimelineViewportPanel {
 
         let bar_skip = grid_policy.bar_skip;
         let start = (min_beat / tick_step).floor() * tick_step;
+        let ruler_bottom = self.ruler_rect.y + self.ruler_rect.height;
+        let label_y = self.ruler_rect.y + 2.0;
+        let mut text = std::mem::take(&mut self.ruler_text);
         let mut beat = start;
         let mut count = 0;
-        let ruler_bottom = self.ruler_rect.y + self.ruler_rect.height;
 
         while beat <= max_beat && count < MAX_RULER_TICKS {
             let px = self.beat_to_pixel(Beats::from_f32(beat));
@@ -535,7 +578,6 @@ impl TimelineViewportPanel {
                 } else {
                     4.0
                 };
-
                 let tick_color = if is_label_beat && is_bar {
                     color::TEXT_NORMAL
                 } else if is_bar {
@@ -545,21 +587,14 @@ impl TimelineViewportPanel {
                 };
 
                 // Tick mark (bottom-aligned)
-                let id = tree.add_panel(
-                    self.viewport_clip_id,
-                    px,
-                    ruler_bottom - tick_h,
-                    RULER_TICK_W,
-                    tick_h,
-                    UIStyle {
-                        bg_color: tick_color,
-                        ..UIStyle::default()
-                    },
-                );
-                self.ruler_tick_ids.push(id);
+                let tick = self.ruler_tick_ids[count];
+                tree.set_bounds(tick, Rect::new(px, ruler_bottom - tick_h, RULER_TICK_W, tick_h));
+                tree.set_style(tick, UIStyle { bg_color: tick_color, ..UIStyle::default() });
+                tree.set_visible(tick, true);
 
-                // Label (only at label_step intervals to prevent overlap)
-                // Skip labels at beats where a marker exists — markers take priority.
+                // Labels sit at label_step intervals; a named marker's beat
+                // shows the marker's label instead.
+                let label = self.ruler_label_ids[count];
                 let has_marker_at_beat = self
                     .markers
                     .iter()
@@ -567,38 +602,41 @@ impl TimelineViewportPanel {
                 if is_label_beat && !has_marker_at_beat {
                     let bar_num = (beat / bpb).floor() as i32 + 1;
                     let beat_in_bar = ((beat % bpb) + 0.001).floor() as i32 + 1;
-                    let label = if is_bar {
-                        format!("{}", bar_num)
+                    text.clear();
+                    if is_bar {
+                        let _ = write!(text, "{bar_num}");
                     } else {
-                        format!("{}.{}", bar_num, beat_in_bar)
-                    };
-
-                    let label_y = self.ruler_rect.y + 2.0;
-                    let id = tree.add_label(
-                        self.viewport_clip_id,
-                        px + 2.0,
-                        label_y,
-                        RULER_LABEL_W,
-                        RULER_LABEL_H,
-                        &label,
-                        UIStyle {
-                            text_color: if is_bar {
-                                color::TEXT_NORMAL
-                            } else {
-                                color::TEXT_DIMMED
-                            },
-                            font_size: RULER_FONT_SIZE,
-                            text_align: TextAlign::Left,
-                            ..UIStyle::default()
-                        },
-                    );
-                    self.ruler_label_ids.push(id);
+                        let _ = write!(text, "{bar_num}.{beat_in_bar}");
+                    }
+                    tree.set_bounds(label, Rect::new(px + 2.0, label_y, RULER_LABEL_W, RULER_LABEL_H));
+                    tree.set_text(label, &text);
+                    tree.set_style(label, Self::ruler_label_style(is_bar));
+                    tree.set_visible(label, true);
+                } else {
+                    Self::park_ruler_label(tree, label);
                 }
 
                 count += 1;
             }
             beat += tick_step;
         }
+        self.ruler_text = text;
+
+        for slot in count..self.ruler_shown {
+            let tick = self.ruler_tick_ids[slot];
+            tree.set_visible(tick, false);
+            tree.set_bounds(tick, Rect::ZERO);
+            tree.set_style(tick, UIStyle::default());
+            Self::park_ruler_label(tree, self.ruler_label_ids[slot]);
+        }
+        self.ruler_shown = count;
+    }
+
+    fn park_ruler_label(tree: &mut UITree, label: NodeId) {
+        tree.set_visible(label, false);
+        tree.set_bounds(label, Rect::ZERO);
+        tree.set_text(label, "");
+        tree.set_style(label, Self::ruler_label_style(false));
     }
 
     // build_clips: REMOVED — clips are now painted into per-layer bitmaps
@@ -858,185 +896,17 @@ impl TimelineViewportPanel {
 
     // ── Update-in-place (Phase 1: horizontal scroll) ───────────
 
-    /// Try to update ruler ticks, labels, markers, and export markers in-place
-    /// for a horizontal-only scroll. Returns `true` if successful, `false` if
-    /// a full rebuild is needed (count mismatch or never built).
+    /// Update the ruler, markers and export markers in place for a
+    /// horizontal scroll or a zoom. False only before the first build or
+    /// when the marker count no longer matches; the caller rebuilds then.
     pub fn try_update_horizontal_scroll(&mut self, tree: &mut UITree) -> bool {
-        // Guard: must have been built at least once
-        if self.ruler_tick_ids.is_empty() {
+        if self.ruler_tick_ids.len() != MAX_RULER_TICKS {
             return false;
         }
-
-        // ── Recompute ruler parameters (same logic as build_ruler) ──
-
-        let (min_beat, max_beat) = self.visible_beat_range();
-        let bpb = self.beats_per_bar as f32;
-        let ppb = self.mapper.pixels_per_beat();
-        let grid_policy = crate::bitmap_renderer::timing_grid_policy(ppb, bpb);
-
-        let tick_step = if !grid_policy.show_beat_lines && grid_policy.subdivisions_per_beat == 1 {
-            bpb
-        } else {
-            1.0 / grid_policy.subdivisions_per_beat as f32
-        };
-
-        const MIN_LABEL_SPACING: f32 = 50.0;
-        let label_step: f32 = if ppb >= MIN_LABEL_SPACING {
-            1.0
-        } else if bpb * ppb >= MIN_LABEL_SPACING {
-            bpb
-        } else {
-            let bar_px = bpb * ppb;
-            let mut n_bars = 2.0_f32;
-            while n_bars * bar_px < MIN_LABEL_SPACING && n_bars <= 1024.0 {
-                n_bars *= 2.0;
-            }
-            bpb * n_bars
-        };
-
-        let bar_skip = grid_policy.bar_skip;
-        let ruler_bottom = self.ruler_rect.y + self.ruler_rect.height;
-        let start = (min_beat / tick_step).floor() * tick_step;
-        let label_y = self.ruler_rect.y + 2.0;
-
-        // ── Count ticks and labels, collect update data ──
-
-        let mut tick_count = 0usize;
-        let mut label_count = 0usize;
-        let mut beat = start;
-
-        // First pass: count only (to compare with existing)
-        while beat <= max_beat && tick_count < MAX_RULER_TICKS {
-            let px = self.beat_to_pixel(Beats::from_f32(beat));
-            if px >= self.ruler_rect.x && px <= self.ruler_rect.x_max() {
-                let is_bar = (beat % bpb).abs() < 0.001;
-
-                // Skip intermediate bars at extreme zoom-out
-                if is_bar && bar_skip > 1 {
-                    let bar_num = (beat / bpb).round() as u32;
-                    if !bar_num.is_multiple_of(bar_skip) {
-                        beat += tick_step;
-                        continue;
-                    }
-                }
-
-                tick_count += 1;
-
-                if (beat % label_step).abs() < 0.001
-                    && !self
-                        .markers
-                        .iter()
-                        .any(|m| (m.beat.as_f32() - beat).abs() < 0.001 && !m.name.is_empty())
-                {
-                    label_count += 1;
-                }
-            }
-            beat += tick_step;
-        }
-
-        // Count mismatch → fallback to full rebuild
-        if tick_count != self.ruler_tick_ids.len() || label_count != self.ruler_label_ids.len() {
-            return false;
-        }
-
-        // Marker count changed → fallback
         if self.marker_groups.len() != self.markers.len() {
             return false;
         }
-
-        // ── Second pass: update tick and label nodes in-place ──
-
-        let mut tick_idx = 0usize;
-        let mut label_idx = 0usize;
-        beat = start;
-
-        while beat <= max_beat && tick_idx < tick_count {
-            let px = self.beat_to_pixel(Beats::from_f32(beat));
-            if px >= self.ruler_rect.x && px <= self.ruler_rect.x_max() {
-                let is_bar = (beat % bpb).abs() < 0.001;
-
-                // Skip intermediate bars at extreme zoom-out
-                if is_bar && bar_skip > 1 {
-                    let bar_num = (beat / bpb).round() as u32;
-                    if !bar_num.is_multiple_of(bar_skip) {
-                        beat += tick_step;
-                        continue;
-                    }
-                }
-
-                let is_beat = (beat % 1.0).abs() < 0.001;
-                let is_label_beat = (beat % label_step).abs() < 0.001;
-
-                let tick_h = if is_label_beat && is_bar {
-                    RULER_BAR_TICK_H + 4.0
-                } else if is_bar {
-                    RULER_BAR_TICK_H
-                } else if is_beat {
-                    RULER_BEAT_TICK_H
-                } else {
-                    4.0
-                };
-
-                let tick_color = if is_label_beat && is_bar {
-                    color::TEXT_NORMAL
-                } else if is_bar {
-                    color::TEXT_SUBTLE
-                } else {
-                    color::TEXT_FAINT
-                };
-
-                let id = self.ruler_tick_ids[tick_idx];
-                tree.set_bounds(
-                    id,
-                    Rect::new(px, ruler_bottom - tick_h, RULER_TICK_W, tick_h),
-                );
-                tree.set_style(
-                    id,
-                    UIStyle {
-                        bg_color: tick_color,
-                        ..UIStyle::default()
-                    },
-                );
-                tick_idx += 1;
-
-                // Update label
-                let has_marker_at_beat = self
-                    .markers
-                    .iter()
-                    .any(|m| (m.beat.as_f32() - beat).abs() < 0.001 && !m.name.is_empty());
-                if is_label_beat && !has_marker_at_beat && label_idx < label_count {
-                    let bar_num = (beat / bpb).floor() as i32 + 1;
-                    let beat_in_bar = ((beat % bpb) + 0.001).floor() as i32 + 1;
-                    let label = if is_bar {
-                        format!("{}", bar_num)
-                    } else {
-                        format!("{}.{}", bar_num, beat_in_bar)
-                    };
-
-                    let lid = self.ruler_label_ids[label_idx];
-                    tree.set_bounds(
-                        lid,
-                        Rect::new(px + 2.0, label_y, RULER_LABEL_W, RULER_LABEL_H),
-                    );
-                    tree.set_text(lid, &label);
-                    tree.set_style(
-                        lid,
-                        UIStyle {
-                            text_color: if is_bar {
-                                color::TEXT_NORMAL
-                            } else {
-                                color::TEXT_DIMMED
-                            },
-                            font_size: RULER_FONT_SIZE,
-                            text_align: TextAlign::Left,
-                            ..UIStyle::default()
-                        },
-                    );
-                    label_idx += 1;
-                }
-            }
-            beat += tick_step;
-        }
+        self.layout_ruler(tree);
 
         // ── Update export markers in-place ──
 
@@ -1165,6 +1035,19 @@ impl TimelineViewportPanel {
                         color::MARKER_LABEL_HEIGHT,
                     ),
                 );
+                // A drag past a neighbour re-sorts the list, so the marker at
+                // this index may not be the one the label was built for.
+                tree.set_text(group.label_id, &marker.name);
+                tree.set_style(
+                    group.label_id,
+                    UIStyle {
+                        bg_color: color::MARKER_LABEL_BG,
+                        text_color: mc,
+                        font_size: RULER_FONT_SIZE,
+                        text_align: TextAlign::Left,
+                        ..UIStyle::default()
+                    },
+                );
             }
         }
 
@@ -1231,5 +1114,48 @@ impl TimelineViewportPanel {
         }
 
         true
+    }
+
+    /// Lay the built viewport out again in place for a new rect or new track
+    /// heights: the fixed strips take their new rects, then the ruler,
+    /// markers and track rows lay out as on a scroll. False when the build
+    /// left the viewport empty or a count no longer matches; the caller
+    /// rebuilds then.
+    pub fn try_relayout(&mut self, tree: &mut UITree, layout: &ScreenLayout) -> bool {
+        let body = layout.timeline_body();
+        if self.node_count == 0
+            || self.drag_readout_label_id.is_some()
+            || body.width <= 0.0
+            || body.height <= 0.0
+            || layout.timeline_tracks().width <= 0.0
+            || self.track_bg_groups.len() != self.tracks.len()
+            || self.track_bg_groups.is_empty()
+        {
+            return false;
+        }
+        let overview = self.overview_rect;
+        self.prepare_layout(layout);
+        self.overview_rect = Rect::new(
+            self.tracks_rect.x,
+            body.y,
+            self.tracks_rect.width,
+            color::OVERVIEW_STRIP_HEIGHT,
+        );
+        if self.overview_rect != overview {
+            self.overview_upload = true;
+        }
+        for (id, rect) in [
+            (self.bg_panel_id, self.viewport_rect),
+            (self.overview_btn_id, self.overview_rect),
+            (self.ruler_bg_id, self.ruler_rect),
+            (self.viewport_clip_id, self.viewport_rect),
+            (self.tracks_overlay_id, self.tracks_rect),
+            (self.scrollbar_h_btn_id, self.scrollbar_h_rect),
+        ] {
+            if let Some(id) = id {
+                tree.set_bounds(id, rect);
+            }
+        }
+        self.try_update_horizontal_scroll(tree) && self.try_update_vertical_scroll(tree)
     }
 }

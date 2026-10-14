@@ -193,10 +193,10 @@ fn project_fixture() -> (Project, LayerId, LayerId, LayerId, String, String) {
             .expect("generator owner")
             .params
             .get(&alias)
-            .expect("public UniformForce Fire parameter");
-        assert!(param.spec.is_trigger, "UniformForce Fire must be a trigger");
+            .expect("public UniformForce Kick parameter");
+        assert!(param.spec.is_trigger, "UniformForce Kick must be a trigger");
         assert_eq!(
-            param.spec.name, "Fire",
+            param.spec.name, "Kick",
             "force trigger keeps its exposed name"
         );
     }

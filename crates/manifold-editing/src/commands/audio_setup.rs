@@ -8,6 +8,7 @@
 //! (id minted at construction) so execute/undo are deterministic.
 
 use crate::command::Command;
+use manifold_core::change::{ChangeSet, Part};
 use manifold_core::audio_setup::{AudioDeviceRef, AudioSend, SendAnalysisConfig};
 use manifold_core::id::{AudioSendId, LayerId};
 use manifold_core::project::Project;
@@ -26,11 +27,12 @@ impl SetAudioInputDeviceCommand {
 }
 
 impl Command for SetAudioInputDeviceCommand {
-    fn execute(&mut self, project: &mut Project) {
+    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::AudioSetup]) }
+    fn do_execute(&mut self, project: &mut Project) {
         project.audio_setup.device = self.new.clone();
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         project.audio_setup.device = self.old.clone();
     }
 
@@ -52,11 +54,12 @@ impl AddAudioSendCommand {
 }
 
 impl Command for AddAudioSendCommand {
-    fn execute(&mut self, project: &mut Project) {
+    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::AudioSetup, Part::Shapes]) }
+    fn do_execute(&mut self, project: &mut Project) {
         project.audio_setup.sends.push(self.send.clone());
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         let id = self.send.id.clone();
         project.audio_setup.sends.retain(|s| s.id != id);
     }
@@ -85,7 +88,8 @@ impl RemoveAudioSendCommand {
 }
 
 impl Command for RemoveAudioSendCommand {
-    fn execute(&mut self, project: &mut Project) {
+    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::AudioSetup, Part::Shapes]) }
+    fn do_execute(&mut self, project: &mut Project) {
         let sends = &mut project.audio_setup.sends;
         if let Some(pos) = sends.iter().position(|s| s.id == self.id) {
             let send = sends.remove(pos);
@@ -93,7 +97,7 @@ impl Command for RemoveAudioSendCommand {
         }
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         if let Some((pos, send)) = self.removed.take() {
             let sends = &mut project.audio_setup.sends;
             let at = pos.min(sends.len());
@@ -121,13 +125,14 @@ impl RenameAudioSendCommand {
 }
 
 impl Command for RenameAudioSendCommand {
-    fn execute(&mut self, project: &mut Project) {
+    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::AudioSetup]) }
+    fn do_execute(&mut self, project: &mut Project) {
         if let Some(s) = project.audio_setup.find_send_mut(&self.id) {
             s.label = self.new_label.clone();
         }
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         if let Some(s) = project.audio_setup.find_send_mut(&self.id) {
             s.label = self.old_label.clone();
         }
@@ -153,13 +158,14 @@ impl SetAudioSendChannelsCommand {
 }
 
 impl Command for SetAudioSendChannelsCommand {
-    fn execute(&mut self, project: &mut Project) {
+    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::AudioSetup]) }
+    fn do_execute(&mut self, project: &mut Project) {
         if let Some(s) = project.audio_setup.find_send_mut(&self.id) {
             s.channels = self.new.clone();
         }
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         if let Some(s) = project.audio_setup.find_send_mut(&self.id) {
             s.channels = self.old.clone();
         }
@@ -187,16 +193,15 @@ impl SetAudioSendGainCommand {
 
 impl Command for SetAudioSendGainCommand {
     fn touches(&self) -> manifold_core::change::ChangeSet {
-        use manifold_core::change::{ChangeSet, Part};
         ChangeSet::of(&[Part::Shapes])
     }
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         if let Some(s) = project.audio_setup.find_send_mut(&self.id) {
             s.gain_db = self.new_db;
         }
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         if let Some(s) = project.audio_setup.find_send_mut(&self.id) {
             s.gain_db = self.old_db;
         }
@@ -225,13 +230,14 @@ impl SetAudioSendFloorCommand {
 }
 
 impl Command for SetAudioSendFloorCommand {
-    fn execute(&mut self, project: &mut Project) {
+    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::AudioSetup]) }
+    fn do_execute(&mut self, project: &mut Project) {
         if let Some(s) = project.audio_setup.find_send_mut(&self.id) {
             s.floor_db = self.new_db;
         }
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         if let Some(s) = project.audio_setup.find_send_mut(&self.id) {
             s.floor_db = self.old_db;
         }
@@ -261,15 +267,14 @@ impl SetAudioCrossoversCommand {
 
 impl Command for SetAudioCrossoversCommand {
     fn touches(&self) -> manifold_core::change::ChangeSet {
-        use manifold_core::change::{ChangeSet, Part};
         ChangeSet::of(&[Part::Shapes])
     }
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         project.audio_setup.low_hz = self.new.0;
         project.audio_setup.mid_hz = self.new.1;
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         project.audio_setup.low_hz = self.old.0;
         project.audio_setup.mid_hz = self.old.1;
     }
@@ -294,13 +299,14 @@ impl SetAudioSendAnalysisCommand {
 }
 
 impl Command for SetAudioSendAnalysisCommand {
-    fn execute(&mut self, project: &mut Project) {
+    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::AudioSetup]) }
+    fn do_execute(&mut self, project: &mut Project) {
         if let Some(s) = project.audio_setup.find_send_mut(&self.id) {
             s.analysis = self.new.clone();
         }
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         if let Some(s) = project.audio_setup.find_send_mut(&self.id) {
             s.analysis = self.old.clone();
         }
@@ -338,7 +344,8 @@ impl SetLayerAudioSendCommand {
 }
 
 impl Command for SetLayerAudioSendCommand {
-    fn execute(&mut self, project: &mut Project) {
+    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::AudioSetup]) }
+    fn do_execute(&mut self, project: &mut Project) {
         let setup = &mut project.audio_setup;
         if !self.captured {
             self.old_send = setup.send_for_layer(&self.layer).map(|s| s.id.clone());
@@ -353,7 +360,7 @@ impl Command for SetLayerAudioSendCommand {
         }
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         let setup = &mut project.audio_setup;
         match &self.old_send {
             Some(send) => {
@@ -476,6 +483,25 @@ mod tests {
                 name: "rename",
                 build: |p| Box::new(RenameAudioSendCommand::new(send(p).id.clone(), "Old".into(), "New".into())),
                 applied: |p| send(p).label == "New",
+            },
+            SetterCase {
+                name: "channels",
+                build: |p| Box::new(SetAudioSendChannelsCommand::new(send(p).id.clone(), send(p).channels.clone(), vec![2, 3])),
+                applied: |p| send(p).channels == [2, 3],
+            },
+            SetterCase {
+                name: "analysis",
+                build: |p| {
+                    let old = send(p).analysis.clone();
+                    let new = SendAnalysisConfig { onset: old.onset, pitch: !old.pitch };
+                    Box::new(SetAudioSendAnalysisCommand::new(send(p).id.clone(), old, new))
+                },
+                applied: |p| send(p).analysis.pitch,
+            },
+            SetterCase {
+                name: "input device",
+                build: |p| Box::new(SetAudioInputDeviceCommand::new(p.audio_setup.device.clone(), Some(AudioDeviceRef::new("uid-1", "Mic")))),
+                applied: |p| p.audio_setup.device.as_ref().is_some_and(|d| d.uid == "uid-1"),
             },
         ]);
     }

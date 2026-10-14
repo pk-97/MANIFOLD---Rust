@@ -6,6 +6,7 @@
 //! and are reached here via `super` (see queue S4 note).
 
 use manifold_core::GraphTarget;
+use manifold_core::change::ChangeSet;
 use manifold_core::effect_graph_def::{EffectGraphDef, EffectGraphNode, EffectGraphWire};
 use manifold_core::project::Project;
 
@@ -54,11 +55,12 @@ impl GroupNodesCommand {
 }
 
 impl Command for GroupNodesCommand {
+    fn touches(&self) -> ChangeSet { crate::commands::GRAPH_EDIT }
     fn graph_admission_targets(&self, targets: &mut Vec<GraphTarget>) {
         targets.push(self.target.clone());
     }
 
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         let scope = self.scope_path.clone();
         let selected: std::collections::BTreeSet<u32> = self.selected.iter().copied().collect();
         let handle = self.handle.clone();
@@ -88,7 +90,7 @@ impl Command for GroupNodesCommand {
         self.prev = result.flatten();
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         let Some((pn, pw)) = self.prev.clone() else {
             return;
         };
@@ -135,11 +137,12 @@ impl UngroupNodeCommand {
 }
 
 impl Command for UngroupNodeCommand {
+    fn touches(&self) -> ChangeSet { crate::commands::GRAPH_EDIT }
     fn graph_admission_targets(&self, targets: &mut Vec<GraphTarget>) {
         targets.push(self.target.clone());
     }
 
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         let scope = self.scope_path.clone();
         let group_node_id = self.group_node_id;
         let result =
@@ -165,7 +168,7 @@ impl Command for UngroupNodeCommand {
         self.prev = result.flatten();
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         let Some((pn, pw)) = self.prev.clone() else {
             return;
         };
@@ -222,7 +225,8 @@ impl SetGroupTintCommand {
 }
 
 impl Command for SetGroupTintCommand {
-    fn execute(&mut self, project: &mut Project) {
+    fn touches(&self) -> ChangeSet { crate::commands::GRAPH_EDIT }
+    fn do_execute(&mut self, project: &mut Project) {
         let scope = self.scope_path.clone();
         let id = self.group_node_id;
         let tint = self.tint;
@@ -242,7 +246,7 @@ impl Command for SetGroupTintCommand {
         }
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         let Some(prev) = self.prev else {
             return;
         };
@@ -289,6 +293,8 @@ pub struct RenameGroupCommand {
     /// matched, or on a rejected/no-op rename. A hand-edited section (any
     /// other string) never lands here — it's untouched by the sweep.
     swept: Vec<(String, Option<String>)>,
+    /// `(param_id, prior section choice)` for each swept described control.
+    swept_choices: Vec<(String, Option<Option<String>>)>,
 }
 
 impl RenameGroupCommand {
@@ -307,11 +313,13 @@ impl RenameGroupCommand {
             catalog_default,
             prev: None,
             swept: Vec::new(),
+            swept_choices: Vec::new(),
         }
     }
 }
 impl Command for RenameGroupCommand {
-    fn execute(&mut self, project: &mut Project) {
+    fn touches(&self) -> ChangeSet { crate::commands::GRAPH_EDIT }
+    fn do_execute(&mut self, project: &mut Project) {
         let scope = self.scope_path.clone();
         let id = self.group_node_id;
         let new_handle = self.new_handle.clone();
@@ -401,23 +409,31 @@ impl Command for RenameGroupCommand {
             })
             .unwrap_or_default();
         self.swept.clear();
+        self.swept_choices.clear();
         for param_id in target_ids {
             if let Some(p) = inst.params.get_mut(&param_id)
                 && p.spec.section.as_deref() == Some(old_name.as_str())
             {
-                self.swept.push((param_id, p.spec.section.clone()));
-                p.spec.section = Some(new_handle.clone());
+                self.swept.push((param_id.clone(), p.spec.section.clone()));
+                if let Some(prior) = p.choose_section(Some(new_handle.clone())) {
+                    self.swept_choices.push((param_id, prior));
+                }
             }
         }
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         if !self.swept.is_empty()
             && let Some(inst) = resolve_target_instance(&self.target, project)
         {
             for (param_id, prev_section) in self.swept.drain(..) {
                 if let Some(p) = inst.params.get_mut(&param_id) {
                     p.spec.section = prev_section;
+                }
+            }
+            for (param_id, prior) in self.swept_choices.drain(..) {
+                if let Some(p) = inst.params.get_mut(&param_id) {
+                    p.choices.section = prior;
                 }
             }
         }

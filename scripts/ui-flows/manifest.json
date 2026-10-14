@@ -3,11 +3,19 @@
   "_path_triggers_comment": "Landing flow gate (BUG-313 postmortem): `scripts/run_ui_flows.py --touched <git-range>` diffs the range, matches each touched path against these prefixes, and runs the union of the mapped flows. Row entries are EXACT flow names, never families or substrings (a family is expanded to its flows when the row is written); only the positional CLI filter keeps substring matching. Test-only paths (/tests/, tests.rs, test.rs, _tests.rs, _test.rs) select nothing. A touched scripts/ui-flows/<flow>.json always runs that flow. No prefix match = exit 0, nothing run. Keep prefixes on the UI value-path surfaces flows actually exercise; a new panel/projection file with flow coverage gets a row here in the same commit.",
   "path_triggers": {
     "crates/manifold-app/src/ui_bridge/dispatch/params.rs": [
-      "trigger-lane-assignment"
+      "trigger-lane-assignment",
+      "scene-slider-range"
     ],
     "crates/manifold-app/src/ui_root/dropdowns.rs": [
       "trigger-lane-assignment",
-      "water-family-controls"
+      "water-family-controls",
+      "scene-pin-roundtrip",
+      "scene-slider-range"
+    ],
+    "crates/manifold-app/src/ui_root/card_pin.rs": [
+      "scene-pin-roundtrip",
+      "scene-card-to-tab",
+      "scene-slider-range"
     ],
     "crates/manifold-app/src/ui_bridge/projection/trigger_routing.rs": [
       "trigger-lane-assignment"
@@ -66,6 +74,12 @@
       "drag-automation-point",
       "toggle-lanes"
     ],
+    "crates/manifold-app/src/scene_view_copy.rs": [
+      "scene-use-this-view"
+    ],
+    "crates/manifold-ui/src/panels/scene_setup_panel/item_header.rs": [
+      "scene-use-this-view"
+    ],
     "crates/manifold-ui/src/panels/scene_setup_panel/": [
       "scene-setup-add-object",
       "scene-setup-light-intensity-drag",
@@ -105,6 +119,15 @@
     ],
     "crates/manifold-nodes-scene/src/node_graph/scene_vm.rs": [
       "water-family-preset"
+    ],
+    "crates/manifold-app/src/ui_bridge/projection/scene_card.rs": [
+      "scene-card-bands",
+      "scene-card-free-camera",
+      "scene-card-dof-switch",
+      "scene-naming",
+      "scene-pin-roundtrip",
+      "scene-card-to-tab",
+      "render-mode-solid"
     ],
     "crates/manifold-app/src/ui_bridge/projection/scene.rs": [
       "scene-setup-add-object",
@@ -149,7 +172,8 @@
       "set-param-layer-opacity",
       "calibrated-param-card-reads-manifest",
       "param-step-action",
-      "scene-card-convergence-c-p1d-roughness-scrub-drawer-undo"
+      "scene-card-convergence-c-p1d-roughness-scrub-drawer-undo",
+      "scene-slider-range"
     ],
     "crates/manifold-ui/src/panels/browser_popup.rs": [
       "effect-browser-open"
@@ -203,6 +227,39 @@
       "material-inspector-groups",
       "material-inspector-looks",
       "material-inspector-textures"
+    ],
+    "crates/manifold-app/src/editor_frame.rs": [
+      "work-editor-open",
+      "work-editor-idle",
+      "work-node-param-drag",
+      "work-mapping-drawer"
+    ],
+    "crates/manifold-app/src/editor_input.rs": [
+      "work-editor-open",
+      "work-node-param-drag",
+      "work-mapping-drawer"
+    ],
+    "crates/manifold-app/src/editor_bridge.rs": [
+      "work-editor-open",
+      "work-editor-idle",
+      "work-node-param-drag",
+      "work-mapping-drawer"
+    ],
+    "crates/manifold-app/src/graph_snapshot.rs": [
+      "work-editor-open",
+      "work-editor-idle",
+      "work-node-param-drag"
+    ],
+    "crates/manifold-ui/src/graph_canvas/mapping_popover.rs": [
+      "work-mapping-drawer"
+    ],
+    "crates/manifold-app/src/perform_mode/": [
+      "work-perform-idle",
+      "work-perform-exit"
+    ],
+    "crates/manifold-app/src/text_session.rs": [
+      "work-browser-search",
+      "work-text-commit"
     ]
   },
   "flows": {
@@ -217,6 +274,7 @@
     "work-automation-point-drag": "automation",
     "work-lane-resize": "automation",
     "work-marquee": "timeline",
+    "work-region-move": "timeline",
     "work-split-drag": "timeline",
     "work-inspector-resize": "inspector",
     "work-modifier": "timeline",
@@ -240,14 +298,10 @@
     "work-scrollbar-drag": "timeline",
     "work-layer-reorder": "timeline",
     "work-drawer-tween": "envmod",
+    "work-modulated-step": "inspector",
+    "work-fold-toggle": "inspector",
     "water-family-controls": "scene-setup",
-    "scene-fluid-authoring": "fluidauthoring",
-    "scene-fluid-template": "fluidauthoring",
     "scene-fluid-dam-break-controls": "waterdambreak",
-    "scene-physics-duplicate-paused": "physicsscene",
-    "scene-physics-controls": "physicsscene",
-    "scene-imported-physics": "gltfscene",
-    "rt-dynamic-modifier": "mushroomscene",
     "automation-clipboard-shapes": "automation",
     "automation-time-selection": "automation",
     "automation-lane-management": "automation",
@@ -262,19 +316,19 @@
     "automation-placeholder-first-click": "automationplaceholder",
     "drag-automation-point": "automation",
     "drag-clip": "timeline",
+    "drag-survives-rebuild": "inspector",
     "led-layer-create": "timeline",
     "led-inspector-preview": "dmxcard",
     "envelope-modulation": "envmod",
     "trigger-lane-assignment": "envmod",
     "t-drawer-step": "envmod",
     "gltf-clip-scrub-retrigger": "gltfanimscene",
-    "gltf-import-card-sections": "gltfscene",
     "inspector-card-drag-reorder": "inspector",
     "inspector-blob-mask": "inspector",
     "inspector-modifier-group": "modifiergroup",
     "audio-visualizer-source": "audiovisualizers",
     "scene-setup-add-object": "gltfscene",
-    "scene-setup-empty-states": "timeline",
+    "scene-setup-empty-states": "audiovisualizers",
     "scene-setup-heldout-merge-snapshot": "gltfscene",
     "scene-setup-light-intensity-drag": "gltfscene",
     "scene-setup-modifier-stack": "gltfscene",
@@ -287,29 +341,55 @@
     "toggle-lanes": "automation",
     "trim-clip-left": "timeline",
     "param-step-action": "inspector",
-    "audio-clip-trigger-add": "inspector",
     "audio-dock-toggle": "inspector",
     "calibrated-param-card-reads-manifest": "inspector",
     "drag-clip-release-over-inspector": "timeline",
     "effect-browser-open": "inspector",
     "scene-card-convergence-c-p1d-roughness-scrub-drawer-undo": "gltfscene",
+    "scene-card-bands": "physicsscene",
+    "scene-card-free-camera": "oceanscene",
+    "scene-card-dof-switch": "gltfscene",
+    "scene-naming": "gltfscene",
     "rt-quality-panel-demo": "rtquality",
     "scene-modifier-preset": "mushroomscene",
-    "render-mode-wireframe": "gltfscene",
-    "render-mode-solid": "gltfscene",
-    "render-mode-points": "gltfscene",
     "material-inspector-groups": "gltfscene",
     "material-inspector-colour": "gltfscene",
     "material-inspector-features": "gltfscene",
     "material-inspector-looks": "gltfscene",
     "material-inspector-textures": "gltfscene",
-    "physics-box-count": "physicsboxes",
     "scene-setup-add-fog-drag": "gltfscene",
     "scene-fluid-role-lifecycle": "fluidauthoring",
     "water-family-preset": "scene-setup",
     "scene-forces-controls": "physicsscene",
     "scene-surfaces-clickthrough": "gltfscene",
-    "scene-surfaces-clickthrough-physics": "physicsscene"
+    "scene-surfaces-clickthrough-physics": "physicsscene",
+    "scene-panel-tree": "gltfscene",
+    "scene-panel-tree-physics": "physicsscene",
+    "scene-pin-roundtrip": "gltfscene",
+    "scene-card-to-tab": "gltfscene",
+    "scene-slider-range": "gltfscene",
+    "scene-use-this-view": "gltfscene",
+    "scene-light-swatch": "gltfscene",
+    "work-editor-open": "paramsteps",
+    "work-editor-idle": "paramsteps",
+    "work-node-param-drag": "paramsteps",
+    "work-mapping-drawer": "paramsteps",
+    "work-perform-idle": "timeline",
+    "scene-fluid-authoring": "fluidauthoring",
+    "scene-fluid-template": "fluidauthoring",
+    "scene-physics-controls": "physicsscene",
+    "scene-physics-duplicate-paused": "physicsscene",
+    "scene-imported-physics": "gltfscene",
+    "render-mode-solid": "gltfscene",
+    "render-mode-points": "gltfscene",
+    "render-mode-wireframe": "gltfscene",
+    "gltf-import-card-sections": "gltfscene",
+    "physics-box-count": "physicsboxes",
+    "audio-clip-trigger-add": "inspector",
+    "rt-dynamic-modifier": "mushroomscene",
+    "work-browser-search": "inspector",
+    "work-text-commit": "inspector",
+    "work-perform-exit": "timeline"
   },
   "expected_fail": {},
   "unresolved": {}

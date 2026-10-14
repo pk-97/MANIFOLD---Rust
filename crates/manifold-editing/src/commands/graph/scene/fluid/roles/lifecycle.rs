@@ -8,6 +8,7 @@ pub(in crate::commands::graph::scene) use object_routes::{
 pub use object_routes::restore_scene_object_fluid_roles;
 
 use std::collections::HashSet;
+use manifold_core::change::ChangeSet;
 
 use manifold_core::GraphTarget;
 use manifold_core::NodeId;
@@ -193,11 +194,12 @@ impl RetargetSceneFluidRoleCommand {
 }
 
 impl Command for RemoveSceneFluidRoleCommand {
+    fn touches(&self) -> ChangeSet { crate::commands::WHOLE_INSTANCES }
     fn graph_admission_targets(&self, targets: &mut Vec<GraphTarget>) {
         targets.push(self.target.clone());
     }
 
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         execute_lifecycle(
             project,
             &self.target,
@@ -213,7 +215,7 @@ impl Command for RemoveSceneFluidRoleCommand {
         );
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         undo_lifecycle(
             project,
             &self.target,
@@ -235,11 +237,12 @@ impl Command for RemoveSceneFluidRoleCommand {
 }
 
 impl Command for RetargetSceneFluidRoleCommand {
+    fn touches(&self) -> ChangeSet { crate::commands::WHOLE_INSTANCES }
     fn graph_admission_targets(&self, targets: &mut Vec<GraphTarget>) {
         targets.push(self.target.clone());
     }
 
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         let source = self.source.clone();
         let domain = self.domain.clone();
         execute_lifecycle(
@@ -257,7 +260,7 @@ impl Command for RetargetSceneFluidRoleCommand {
         );
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         undo_lifecycle(
             project,
             &self.target,

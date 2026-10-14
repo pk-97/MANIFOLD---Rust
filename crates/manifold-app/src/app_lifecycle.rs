@@ -140,7 +140,7 @@ impl Application {
         match rx.recv_timeout(std::time::Duration::from_secs(5)) {
             Ok(Some((project, version))) => {
                 self.local_project = project;
-                self.needs_structural_sync = true;
+                self.ui_edits.stamps.project_replaced();
                 Some(version)
             }
             result => {
@@ -328,8 +328,7 @@ impl Application {
         self.ws.ui_root.export_progress.begin(
             path.file_name().map(|name| name.to_string_lossy()).as_deref().unwrap_or("Video"),
         );
-        self.ws.ui_root.overlay_dirty = true;
-        self.needs_rebuild = true;
+        self.ws.ui_root.mark_overlay_dirty();
         self.send_content_cmd(ContentCommand::StartExport(Box::new(config)));
     }
 
@@ -836,13 +835,16 @@ impl Application {
                 insert_index,
                 None,
             );
-        layer_cmd.execute(&mut self.local_project);
-        let Some(layer_id) = layer_cmd.inserted_layer_id() else {
+        let mut local = crate::ui_bridge::ProjectRef::new(&mut self.local_project, &mut self.ui_edits, &content_tx);
+        let inserted = local.executed_by(|project| {
+            layer_cmd.execute(project);
+            let layer_id = layer_cmd.inserted_layer_id()?;
+            Some((Box::new(layer_cmd) as Box<dyn Command>, layer_id))
+        });
+        let Some(layer_id) = inserted else {
             log::error!("[Import] layer command produced no layer id — aborting clip add");
             return;
         };
-        let layer_boxed: Box<dyn Command + Send> = Box::new(layer_cmd);
-        let _ = content_tx.send(ContentCommand::Execute(layer_boxed));
 
         // 2. A default generator clip on that layer, so the model renders at
         //    once. The clip is a bare time-span; the layer's graph drives the
@@ -853,11 +855,7 @@ impl Application {
             manifold_core::Beats::from_f32(drop_beat.max(0.0)),
             manifold_core::Beats::from_f32(DEFAULT_MODEL_DURATION_BEATS),
         );
-        let mut clip_cmd =
-            manifold_editing::commands::clip::AddClipCommand::new(clip, layer_id);
-        clip_cmd.execute(&mut self.local_project);
-        let clip_boxed: Box<dyn Command + Send> = Box::new(clip_cmd);
-        let _ = content_tx.send(ContentCommand::Execute(clip_boxed));
+        local.execute(Box::new(manifold_editing::commands::clip::AddClipCommand::new(clip, layer_id)));
     }
 
     /// Open. Delegates to ProjectIOService.open_project.
@@ -932,6 +930,7 @@ impl Application {
             // Update local_project BEFORE sending to content thread so UI
             // can rebuild the timeline in this same frame.
             self.local_project = project.clone();
+            self.ui_edits.stamps.project_replaced();
             // Sync the global preset overlay to THIS project's embedded
             // presets on every apply — open, snapshot restore, and New
             // Project all pass here, so a previous project's forks never
@@ -971,7 +970,6 @@ impl Application {
                 .layers
                 .first()
                 .map(|l| l.layer_id.clone());
-            self.needs_rebuild = true;
 
             // Content thread renders at project FPS; UI always runs at display rate.
             // Don't sync UI frame timer to project FPS — that couples UI to render cadence.
@@ -991,11 +989,6 @@ impl Application {
             };
         }
 
-        // Structural sync
-        if action.needs_structural_sync {
-            self.needs_structural_sync = true;
-        }
-
         // Non-blocking load-repair notice (BUG-063,
         // `docs/PROJECT_FILE_INTEGRITY_DESIGN.md` section 3.6). Never a blocking
         // modal — that's D1's `alerts::error` refusal path for a too-new file.
@@ -1011,6 +1004,12 @@ impl Application {
         // Send record_commands to content thread so clips exist on both sides.
         // Without this, clips added directly to local_project (e.g. MIDI import)
         // are invisible to the content thread and vanish on next sync.
+        // They already ran on local_project, so stamp what they touch.
+        let touches = action
+            .record_commands
+            .iter()
+            .fold(manifold_core::change::ChangeSet::NONE, |t, cmd| t.union(cmd.touches()));
+        self.ui_edits.stamps.bump(touches);
         if !action.record_commands.is_empty() {
             if action.record_commands.len() == 1 {
                 let cmd = action.record_commands.into_iter().next().unwrap();
@@ -1021,11 +1020,6 @@ impl Application {
                     "Drop clips".to_string(),
                 ));
             }
-        }
-
-        // Clip sync
-        if action.needs_clip_sync {
-            self.needs_rebuild = true;
         }
 
         // A load/save may have changed the recent-projects list — refresh the
@@ -1107,7 +1101,6 @@ impl Application {
                 log::info!("[ProjectIO] Restored history snapshot {hash}");
                 self.apply_project_io_action(ProjectIOAction {
                     apply_project: Some(project),
-                    needs_structural_sync: true,
                     ..Default::default()
                 });
             }
@@ -1140,7 +1133,6 @@ impl Application {
                 log::info!("[ProjectIO] Opened history snapshot {hash} as a copy");
                 self.apply_project_io_action(ProjectIOAction {
                     apply_project: Some(project),
-                    needs_structural_sync: true,
                     // Empty path → apply_project_io_action clears
                     // current_project_path (untitled).
                     set_project_path: Some(std::path::PathBuf::new()),
@@ -1374,11 +1366,11 @@ impl Application {
             .map(|ws| {
                 let s = ws.window.inner_size();
                 let sf = ws.window.scale_factor();
-                (
-                    ((s.width as f64 / sf) * 0.75) as u32,
-                    ((s.height as f64 / sf) * 0.75) as u32,
-                    sf,
-                )
+                let (w, h) = crate::editor_frame::first_open_logical_size(
+                    s.width as f64 / sf,
+                    s.height as f64 / sf,
+                );
+                (w, h, sf)
             })
             .unwrap_or((960, 540, 1.0));
 
@@ -1454,40 +1446,29 @@ impl Application {
             },
         );
 
-        let mut ws = crate::workspace::Workspace::new(crate::workspace::WorkspaceKind::GraphEditor);
-        ws.ui_offscreen = Some(offscreen);
+        // The window-free half of the open, shared with the ui-snap script
+        // runner (`editor_frame.rs`): the workspace, the canvas and the
+        // inspector column projected from the same snapshot the main window
+        // reads (docs/GRAPH_EDITOR_INSPECTOR_UNIFICATION.md).
+        let active_idx = self
+            .active_layer_id
+            .as_ref()
+            .and_then(|id| self.local_project.timeline.find_layer_index_by_id(id));
+        #[cfg_attr(not(target_os = "macos"), allow(unused_mut))]
+        let (mut ws, canvas) = crate::editor_frame::open_editor_workspace(
+            Some(offscreen),
+            &self.local_project,
+            active_idx,
+            &self.selection,
+            &self.content_state,
+        );
         #[cfg(target_os = "macos")]
         {
             ws.ui_display_link = Some(crate::display_link::UiDisplayLink::new(window));
         }
         self.graph_editor = Some(ws);
         self.graph_editor_window_id = Some(wid);
-        self.graph_canvas = Some(crate::graph_canvas::GraphCanvas::new());
-
-        // Populate the editor's own inspector column immediately so it isn't
-        // blank until the next selection change. Same snapshot the main window's
-        // inspector reads; kept in lockstep thereafter by the tick's gated
-        // re-sync. See docs/GRAPH_EDITOR_INSPECTOR_UNIFICATION.md.
-        let active_idx = self
-            .active_layer_id
-            .as_ref()
-            .and_then(|id| self.local_project.timeline.find_layer_index_by_id(id));
-        if let Some(ed) = self.graph_editor.as_mut() {
-            crate::ui_bridge::sync_project_data(
-                &mut ed.ui_root,
-                &self.local_project,
-                active_idx,
-                &self.selection,
-            );
-            crate::ui_bridge::sync_inspector_data(
-                &mut ed.ui_root,
-                &self.local_project,
-                active_idx,
-                &self.selection,
-                &self.content_state.automation_latched_params,
-                self.content_state.led_preview.as_ref(),
-            );
-        }
+        self.graph_canvas = Some(canvas);
 
         log::info!(
             "[GraphEditor] Opened ({}x{} logical, scale {:.2})",
@@ -1534,6 +1515,8 @@ impl Application {
             self.send_content_cmd(ContentCommand::SetNodeAtlasVisible(Vec::new()));
             self.last_atlas_visible_sent.clear();
         }
+        self.atlas_visible_snap = None;
+        self.atlas_visible_scope.clear();
         // Clear the Phase 4 caches alongside — `watched_graph_target`
         // is the gate for the palette being active and the sole identity
         // for every editor-card edit, so a stale value would let the user
@@ -1541,6 +1524,7 @@ impl Application {
         // reopened the window on a different one.
         self.watched_graph_target = None;
         self.watched_catalog_default = None;
+        self.editor_graph.catalog_default_changed();
         // Tell the content thread to stop snapshotting any graph —
         // saves the per-frame walk while no editor is open. Cover
         // both the effect-graph and generator-graph watchers since

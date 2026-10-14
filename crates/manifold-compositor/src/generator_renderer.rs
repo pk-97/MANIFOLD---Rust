@@ -96,6 +96,8 @@ pub struct GeneratorRenderer {
     /// Per-clip render info: (layer_index, clip_index, trigger_count, anim_progress).
     /// Parallel to render_scratch — avoids LayerId/PresetTypeId clones in render loop.
     render_info_scratch: Vec<(i32, u32, u32, f32)>,
+    /// The per-frame override-version sweep's snapshot of active layer ids.
+    layer_id_scratch: Vec<manifold_core::LayerId>,
     /// Shared-memory uniform arena for generator uniform data.
     /// Eliminates per-generator queue.write_buffer() calls.
     #[cfg(not(any(test, feature = "testkit")))]
@@ -189,6 +191,7 @@ impl GeneratorRenderer {
             available_rts,
             render_scratch: Vec::with_capacity(16),
             render_info_scratch: Vec::with_capacity(16),
+            layer_id_scratch: Vec::new(),
             uniform_arena,
             last_structure_key: u64::MAX, // force scan on first frame
             preview_layer: None,
@@ -759,17 +762,11 @@ impl GeneratorRenderer {
         // Iterate over a snapshot of active layer ids and compare
         // each layer's `generator_graph_version` against the version
         // captured in `LayerGeneratorState.override_version`; rebuild
-        // on mismatch, preserving `trigger_count`.
-        //
-        // Allocates a tiny `Vec<LayerId>` per frame (one entry per
-        // active layer, typically 1-5). Acceptable for this rebuild
-        // path since the alternative would require restructuring
-        // `layer_generators` for split borrows.
-        let layer_ids_to_check: Vec<manifold_core::LayerId> = self
-            .layer_generators
-            .keys()
-            .cloned()
-            .collect();
+        // on mismatch, preserving `trigger_count`. The snapshot lives in a
+        // retained scratch list, so a steady frame allocates nothing.
+        let mut layer_ids_to_check = std::mem::take(&mut self.layer_id_scratch);
+        layer_ids_to_check.clear();
+        layer_ids_to_check.extend(self.layer_generators.keys().cloned());
         for layer_id in &layer_ids_to_check {
             let Some(layer) = layers.iter().find(|l| &l.layer_id == layer_id) else {
                 continue;
@@ -855,6 +852,8 @@ impl GeneratorRenderer {
                 current_relight_params,
             );
         }
+        layer_ids_to_check.clear();
+        self.layer_id_scratch = layer_ids_to_check;
 
         // Captures are valid only for a runtime that is actually rendered on
         // this frame. Skipped layers must not retain the previous frame's

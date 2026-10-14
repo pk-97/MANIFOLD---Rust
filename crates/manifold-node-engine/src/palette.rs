@@ -107,16 +107,16 @@ pub fn palette_atoms() -> Vec<PaletteAtom> {
             })
         })
         .collect();
-    atoms.sort_by(|a, b| {
+    atoms.sort_by(|x, y| {
         let cat_order = |c: PaletteCategory| {
             PaletteCategory::ORDER
                 .iter()
                 .position(|&v| v == c)
                 .unwrap_or(usize::MAX)
         };
-        cat_order(a.category)
-            .cmp(&cat_order(b.category))
-            .then_with(|| a.label.cmp(&b.label))
+        cat_order(x.category)
+            .cmp(&cat_order(y.category))
+            .then_with(|| x.label.cmp(&y.label))
     });
     atoms
 }

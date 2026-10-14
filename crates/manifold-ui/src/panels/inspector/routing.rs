@@ -31,26 +31,48 @@ impl InspectorCompositePanel {
         }
     }
 
+    /// Select exactly `ids` on `tab` and queue a reveal of the first. The
+    /// selected cards and the reveal show at the next inspector build, so the
+    /// view version moves, but only when the selection or the reveal changed.
     pub fn select_effect_ids(&mut self, tab: InspectorTab, ids: &[EffectId]) {
+        let reveal = ids.first().cloned().map(|id| (id, None));
+        let wanted: HashSet<EffectId> = ids.iter().cloned().collect();
+        let (shown, other) = if Self::scope_idx(tab) == Self::SCOPE_MASTER {
+            (&self.selected_master_ids, &self.selected_layer_ids)
+        } else {
+            (&self.selected_layer_ids, &self.selected_master_ids)
+        };
+        let unchanged = *shown == wanted
+            && other.is_empty()
+            && self.selected_modifier_ids.is_empty()
+            && self.last_effect_tab == tab
+            && self.pending_reveal == reveal;
         self.selected_master_ids.clear();
         self.selected_layer_ids.clear();
         self.selected_modifier_ids.clear();
         self.selection_set_mut(tab).extend(ids.iter().cloned());
         self.last_effect_tab = tab;
-        self.pending_reveal = ids.first().cloned().map(|id| (id, None));
+        self.pending_reveal = reveal;
+        if !unchanged {
+            self.view_version += 1;
+        }
     }
 
-    /// Open the existing response drawer and reuse the inspector's reveal path.
-    pub fn reveal_clip_response(&mut self, target: &crate::view::UiGraphTarget, param: &manifold_foundation::ParamId) -> bool {
+    /// Open the existing response drawer of the card routing this trigger
+    /// and reuse the inspector's reveal path.
+    pub fn reveal_trigger_response(&mut self, target: &crate::view::UiGraphTarget, param: &manifold_foundation::ParamId) -> bool {
         let id = self.effects[Self::SCOPE_LAYER].iter_mut()
             .chain(self.gen_params.iter_mut()).chain(self.modifier_cards.iter_mut())
-            .find_map(|card| card.reveal_clip_response(target, param).then(|| card.effect_id().clone()));
+            .find(|card| card.routes_clip_trigger(target, param))
+            .and_then(|card| card.reveal_param(param).then(|| card.effect_id().clone()));
         let Some(id) = id else { return false; };
         for group in &mut self.rack_groups[Self::SCOPE_LAYER] {
             if group.member_ids.contains(&id) { group.collapsed = false; }
         }
         self.pending_reveal = Some((id, Some(param.clone())));
-        self.mods_compact = false;
+        // The card unfolded its section and switched its mod tab.
+        self.view_version += 1;
+        self.set_mods_compact(false);
         self.apply_mods_compact();
         true
     }
@@ -108,7 +130,7 @@ impl InspectorCompositePanel {
     pub(super) fn selection_for_tab(&self, tab: InspectorTab) -> (&HashSet<EffectId>, &[ParamCardPanel]) {
         let set = match tab {
             InspectorTab::Master => &self.selected_master_ids,
-            InspectorTab::Layer | InspectorTab::Group | InspectorTab::Clip => &self.selected_layer_ids,
+            InspectorTab::Layer | InspectorTab::Group | InspectorTab::Clip | InspectorTab::Scene => &self.selected_layer_ids,
         };
         (set, self.cards_for_tab(tab))
     }
@@ -116,7 +138,7 @@ impl InspectorCompositePanel {
     pub(super) fn selection_set_mut(&mut self, tab: InspectorTab) -> &mut HashSet<EffectId> {
         match tab {
             InspectorTab::Master => &mut self.selected_master_ids,
-            InspectorTab::Layer | InspectorTab::Group | InspectorTab::Clip => &mut self.selected_layer_ids,
+            InspectorTab::Layer | InspectorTab::Group | InspectorTab::Clip | InspectorTab::Scene => &mut self.selected_layer_ids,
         }
     }
 
@@ -422,7 +444,12 @@ impl InspectorCompositePanel {
     }
 
     pub(super) fn find_target_for_node(&self, node_id: NodeId) -> Option<PressedTarget> {
-        let idx = node_id.index();
+        // Every press target below is an inspector node; slots compare only
+        // inside the inspector's own arena.
+        if node_id.region() != self.cache_region {
+            return None;
+        }
+        let idx = node_id.slot();
         // Macros panel (above both columns)
         if self.macros_panel.owns_node(node_id) {
             return Some(PressedTarget::Macros);
@@ -534,7 +561,7 @@ impl InspectorCompositePanel {
         // here and return a structural no-op so the inspector rebuilds with the
         // new state propagated to every card.
         if self.compact_toggle_btn_id == Some(node_id) {
-            self.mods_compact = !self.mods_compact;
+            self.set_mods_compact(!self.mods_compact);
             return vec![PanelAction::Params(ParamsAction::ModsCompactToggled)];
         }
         // Add Effect buttons. The action carries the invocation context

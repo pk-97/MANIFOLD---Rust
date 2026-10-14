@@ -6,22 +6,6 @@
 use crate::app::Application;
 use crate::content_command::ContentCommand;
 use manifold_editing::commands::effects::BindingMappingEdit;
-use crate::app_render::mini_timeline_data;
-
-/// Apply live values after rebuilding: construction seeds rows from the last
-/// structural configuration and would otherwise overwrite the current readouts.
-fn rebuild_editor_inspector(
-    ui: &mut crate::ui_root::UIRoot,
-    project: &manifold_core::project::Project,
-    active_layer: Option<usize>,
-    viewport: manifold_ui::Rect,
-) {
-    manifold_core::work_count::record_work(manifold_core::work_count::WorkKind::EditorTreeBuild);
-    ui.tree.clear();
-    ui.build_inspector_in_rect(viewport);
-    crate::ui_bridge::sync_card_values(ui, project, active_layer);
-    crate::ui_bridge::sync_scene_row_values(ui, project);
-}
 
 /// Build the reshape-edit command for the watched graph target — one
 /// [`manifold_editing::commands::effects::EditParamMappingCommand`] for
@@ -118,7 +102,9 @@ fn full_reshape_from_instance(
     f32,
 )> {
     let meta = def.preset_metadata.as_ref()?;
-    let spec = &instance.params.get(param_id)?.spec;
+    let param = instance.params.get(param_id)?;
+    let spec = &param.spec;
+    let (span_min, span_max) = param.slider_span();
     let (scale, offset) = meta
         .bindings
         .iter()
@@ -127,8 +113,8 @@ fn full_reshape_from_instance(
         .unwrap_or((1.0, 0.0));
     Some((
         spec.name.clone(),
-        spec.min,
-        spec.max,
+        span_min,
+        span_max,
         spec.invert,
         spec.curve,
         scale,
@@ -190,11 +176,13 @@ fn binding_for_node_param(
         }
         BindingTarget::Composite { .. } | BindingTarget::SceneModifier { .. } => false,
     })?;
-    let spec = &params.get(&binding.id)?.spec;
+    let param = params.get(&binding.id)?;
+    let spec = &param.spec;
+    let (span_min, span_max) = param.slider_span();
     Some((
         binding.id.clone(),
-        spec.min,
-        spec.max,
+        span_min,
+        span_max,
         spec.invert,
         spec.curve,
         binding.scale,
@@ -560,9 +548,11 @@ pub(crate) fn resolve_canvas_binding(
             target,
             &outer.id,
             |outer| {
-                let spec = owner.params.get(&outer.id)?.spec.clone();
+                let param = owner.params.get(&outer.id)?;
+                let (span_min, span_max) = param.slider_span();
+                let spec = param.spec.clone();
                 Some((
-                    outer.id.clone(), outer.label.clone(), spec.min, spec.max,
+                    outer.id.clone(), outer.label.clone(), span_min, span_max,
                     spec.invert, spec.curve, outer.scale, outer.offset,
                     range, is_angle, spec.section,
                 ))
@@ -634,107 +624,290 @@ fn modifier_binding_for_node_param(
         .find(|binding| matches!(&binding.target,
             manifold_core::effect_graph_def::BindingTarget::SceneModifier { modifier_id: id, param_id }
                 if id == modifier_id && param_id == &local_binding.id))?;
-    let spec = &owner.params.get(&owner_binding.id)?.spec;
+    let param = owner.params.get(&owner_binding.id)?;
+    let spec = &param.spec;
+    let (span_min, span_max) = param.slider_span();
     Some((
-        owner_binding.id.clone(), spec.min, spec.max, spec.invert, spec.curve,
+        owner_binding.id.clone(), span_min, span_max, spec.invert, spec.curve,
         owner_binding.scale * local_binding.scale,
         owner_binding.offset * local_binding.scale + local_binding.offset,
     ))
 }
 
-impl Application {
-    /// Window-hosted actions shared by both instances of the inspector.
-    /// The action already captures its parameter/mask identity; only the text
-    /// overlay and keyboard ownership depend on the emitting window.
-    pub(crate) fn dispatch_inspector_host_action(
-        &mut self,
-        action: &manifold_ui::panels::PanelAction,
-        in_editor: bool,
-    ) -> bool {
-        use manifold_ui::panels::{PanelAction, RootAction};
-        use crate::text_input::{AnchorRect, InspectorParamCtx, TextInputField};
-        match action {
-            PanelAction::Root(RootAction::BeginParamTextInput {
-                target, param_id, anchor, value, whole_numbers, degrees, ..
-            }) => {
-                let display = if *degrees { value.to_degrees() } else { *value };
-                let initial = if *whole_numbers {
-                    format!("{}", display.round() as i64)
-                } else {
-                    format!("{display:.3}")
-                };
-                self.text_input.begin(
-                    if in_editor { TextInputField::EditorInspectorParam } else { TextInputField::InspectorParam },
-                    &initial,
-                    AnchorRect::new(anchor.x, anchor.y, anchor.width, anchor.height),
-                    11.0,
-                );
-                self.text_input.inspector_param = Some(InspectorParamCtx {
-                    target: target.clone(), param_id: param_id.clone(),
-                    whole_numbers: *whole_numbers, degrees: *degrees,
-                });
-                if in_editor && let Some(editor) = self.graph_editor.as_mut() {
-                    editor.offscreen_dirty = true;
-                }
-            }
-            _ => return false,
-        }
-        true
+/// Points the graph editor at `target`: both mapping popovers close when the
+/// target changes (closing cancels an unfinished gesture; events already
+/// queued keep their captured owner), the catalog default the edit commands
+/// seed from resolves, and the content side starts snapshotting it. False,
+/// and nothing changes, when the target has no host and so never resolves.
+pub(crate) fn watch_editor_graph(
+    project: &manifold_core::project::Project,
+    target: &manifold_core::GraphTarget,
+    watched: &mut Option<manifold_core::GraphTarget>,
+    catalog_default: &mut Option<manifold_core::effect_graph_def::EffectGraphDef>,
+    mapping: &mut crate::mapping_popover::MappingPopover,
+    canvas: Option<&mut crate::graph_canvas::GraphCanvas>,
+    content_tx: Option<&crossbeam_channel::Sender<ContentCommand>>,
+) -> bool {
+    if target.host_target().is_none() {
+        return false;
     }
+    if watched.as_ref() != Some(target) {
+        mapping.close();
+        if let Some(canvas) = canvas {
+            canvas.close_mapping_popover();
+        }
+    }
+    *catalog_default = crate::graph_target::catalog_default(project, target);
+    if let Some(tx) = content_tx {
+        ContentCommand::send(tx, ContentCommand::WatchGraphTarget(Some(target.clone())));
+    }
+    *watched = Some(target.clone());
+    true
+}
 
-    /// Open from the emitting card using the shared target resolver and its
-    /// clicked node geometry. Canvas selection is not an input.
-    pub(crate) fn open_card_mapping(
-        &mut self,
-        target: &manifold_ui::GraphParamTarget,
-        param_id: &str,
-        anchor_node_id: manifold_ui::node::NodeId,
-        clip: manifold_ui::graph_canvas::Rect,
-    ) -> bool {
-        let Some(ed) = self.graph_editor.as_ref() else { return false; };
-        let Some(resolved_owner) = crate::ui_bridge::resolve_graph_target(
-            target, None, ed.ui_root.inspector.last_effect_tab(),
-            &self.active_layer_id, &self.selection, &self.local_project,
-        ) else { return false; };
-        let owner = self
-            .watched_graph_target
+/// An effect card's stable id from its row index in an inspector tab, keyed
+/// by instance id and tab-aware (Master, Layer or Group, Clip). Takes the
+/// project mutably only because the Clip-tab lookup self-heals its location
+/// cache.
+pub(crate) fn effect_card_id(
+    tab: manifold_ui::InspectorTab,
+    project: &mut manifold_core::project::Project,
+    active_layer: Option<&manifold_core::LayerId>,
+    selection: &crate::app::SelectionState,
+    ei: usize,
+) -> Option<manifold_core::EffectId> {
+    match tab {
+        manifold_ui::InspectorTab::Master => project.settings.master_effects.get(ei).map(|e| e.id.clone()),
+        manifold_ui::InspectorTab::Layer | manifold_ui::InspectorTab::Group | manifold_ui::InspectorTab::Scene => active_layer
+            .and_then(|id| project.timeline.find_layer_by_id(id))
+            .and_then(|(_, l)| l.effects.as_ref())
+            .and_then(|effects| effects.get(ei))
+            .map(|e| e.id.clone()),
+        manifold_ui::InspectorTab::Clip => selection
+            .primary_selected_clip_id()
             .as_ref()
-            .filter(|watched| watched.host_target() == Some(&resolved_owner))
-            .cloned()
-            .unwrap_or(resolved_owner);
-        let Some((label, min, max, invert, curve, scale, offset)) = self.target_full_reshape(&owner, param_id)
-        else { return false; };
-        let is_angle = self.local_project
-            .graph_target_owner(&owner)
-            .and_then(|instance| instance.params.get(param_id))
-            .is_some_and(|param| param.spec.is_angle);
-        if ed.ui_root.tree.get_node(anchor_node_id).is_none() { return false; }
-        let anchor = ed.ui_root.tree.get_bounds(anchor_node_id);
-        let section = self.local_project.graph_target_owner(&owner)
-            .and_then(|inst| inst.params.get(param_id)).and_then(|p| p.spec.section.clone());
-        // Modifiers have no card selection-follow action. Bring their graph
-        // into view through the same watched-target path as other cards.
-        if self.watched_graph_target.as_ref() != Some(&owner) {
-            self.watch_graph_target(owner.clone());
-        }
-        self.editor_mapping_popover.open(
-            crate::editing_host::to_ui_graph_target(&owner), param_id.to_owned(), label,
-            min, max, invert, crate::ui_translate::macro_curve_to_ui(curve),
-            scale, offset, None, is_angle, section,
-            manifold_ui::graph_canvas::Rect::new(anchor.x, anchor.y, anchor.width, anchor.height), clip,
+            .and_then(|cid| project.timeline.find_clip_by_id(cid))
+            .and_then(|c| c.effects.get(ei))
+            .map(|e| e.id.clone()),
+    }
+}
+
+/// Mapping controls resolve their captured owner, independently of canvas selection.
+pub(crate) fn target_full_reshape(
+    project: &manifold_core::project::Project,
+    target: &manifold_core::GraphTarget,
+    param_id: &str,
+) -> Option<(String, f32, f32, bool, manifold_core::macro_bank::MacroCurve, f32, f32)> {
+    if matches!(target, manifold_core::GraphTarget::SceneModifier { .. }) {
+        let owner = project.graph_target_owner(target)?;
+        let binding = crate::graph_target::modifier_host_binding(
+            project,
+            target,
+            param_id,
+            |binding| (binding.scale, binding.offset),
+        )?;
+        let param = owner.params.get(param_id)?;
+        let spec = &param.spec;
+        let (span_min, span_max) = param.slider_span();
+        return Some((
+            spec.name.clone(), span_min, span_max, spec.invert, spec.curve,
+            binding.0, binding.1,
+        ));
+    }
+    let instance = project.preset_instance(target)?;
+    if let Some(def) = instance.graph.as_ref() {
+        return full_reshape_from_instance(instance, def, param_id);
+    }
+    let view = manifold_node_engine::load::loaded_preset_view::loaded_preset_view_by_id(instance.effect_type())?;
+    full_reshape_from_instance(instance, view.canonical_def.as_ref(), param_id)
+}
+
+/// Mapping controls on a modifier are read through the local snapshot but
+/// always write the owning generator's public manifest. Validate the local
+/// binding first so stale or preparation-only rows cannot materialize an
+/// unrelated host graph.
+fn mapping_write_target(
+    project: &manifold_core::project::Project,
+    target: &manifold_core::GraphTarget,
+    param_id: &str,
+) -> Option<manifold_core::GraphTarget> {
+    if matches!(target, manifold_core::GraphTarget::SceneModifier { .. }) {
+        target_full_reshape(project, target, param_id)?;
+        return Some(target.host_target()?.clone());
+    }
+    Some(target.clone())
+}
+
+/// A card's mapping drawer, resolved from the emitting card and ready to open.
+pub(crate) struct CardMapping {
+    /// The graph the drawer edits; the caller watches it first.
+    pub owner: manifold_core::GraphTarget,
+    param_id: String,
+    label: String,
+    min: f32,
+    max: f32,
+    invert: bool,
+    curve: manifold_core::macro_bank::MacroCurve,
+    scale: f32,
+    offset: f32,
+    is_angle: bool,
+    section: Option<String>,
+    anchor: manifold_ui::graph_canvas::Rect,
+    clip: manifold_ui::graph_canvas::Rect,
+}
+
+impl CardMapping {
+    pub(crate) fn open(self, popover: &mut crate::mapping_popover::MappingPopover) {
+        popover.open(
+            crate::editing_host::to_ui_graph_target(&self.owner), self.param_id, self.label,
+            self.min, self.max, self.invert, crate::ui_translate::macro_curve_to_ui(self.curve),
+            self.scale, self.offset, None, self.is_angle, self.section, self.anchor, self.clip,
         );
-        true
+    }
+}
+
+/// Resolves the mapping drawer an editor card row asks for: the shared target
+/// resolver, the watched graph when it is the same host, and the clicked
+/// row's geometry. `None` when the param has no reshape or the row is gone.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn resolve_card_mapping(
+    editor: &crate::ui_root::UIRoot,
+    project: &manifold_core::project::Project,
+    active_layer: &Option<manifold_core::LayerId>,
+    selection: &crate::app::SelectionState,
+    watched: Option<&manifold_core::GraphTarget>,
+    target: &manifold_ui::GraphParamTarget,
+    param_id: &str,
+    anchor_node_id: manifold_ui::node::NodeId,
+    clip: manifold_ui::graph_canvas::Rect,
+) -> Option<CardMapping> {
+    let resolved_owner = crate::ui_bridge::resolve_graph_target(
+        target, None, editor.inspector.last_effect_tab(), active_layer, selection, project,
+    )?;
+    let owner = watched
+        .filter(|watched| watched.host_target() == Some(&resolved_owner))
+        .cloned()
+        .unwrap_or(resolved_owner);
+    let (label, min, max, invert, curve, scale, offset) = target_full_reshape(project, &owner, param_id)?;
+    let param = project.graph_target_owner(&owner).and_then(|instance| instance.params.get(param_id));
+    let is_angle = param.is_some_and(|param| param.spec.is_angle);
+    let section = param.and_then(|p| p.spec.section.clone());
+    editor.tree.get_node(anchor_node_id)?;
+    let anchor = editor.tree.get_bounds(anchor_node_id);
+    Some(CardMapping {
+        owner,
+        param_id: param_id.to_owned(),
+        label, min, max, invert, curve, scale, offset, is_angle, section,
+        anchor: manifold_ui::graph_canvas::Rect::new(anchor.x, anchor.y, anchor.width, anchor.height),
+        clip,
+    })
+}
+
+/// What a mapping action left for the caller.
+pub(crate) enum MappingDispatch {
+    NotMapping,
+    Done,
+    /// Navigate the canvas to the node this binding is exposed from
+    /// ([`goto_mapped_node`]).
+    GotoNode(manifold_core::GraphTarget, String),
+}
+
+/// Centres the canvas on the node a binding is exposed from. A snapshot
+/// belongs to the watched graph, so a same-named binding in another graph is
+/// never navigated.
+pub(crate) fn goto_mapped_node(
+    watched: Option<&manifold_core::GraphTarget>,
+    snapshot: Option<&std::sync::Arc<manifold_ui::graph_view::GraphSnapshot>>,
+    canvas: Option<&mut crate::graph_canvas::GraphCanvas>,
+    target: &manifold_core::GraphTarget,
+    binding_id: &str,
+) {
+    if watched == Some(target)
+        && let Some(snapshot) = snapshot
+        && let Some(node_id) = crate::graph_canvas::resolve_card_param_node_id(snapshot, binding_id)
+        && let Some(canvas) = canvas
+    {
+        canvas.focus_node(snapshot, &node_id);
+    }
+}
+
+/// What the mapping actions read and write. The App and the ui-snap runner
+/// build one from their own state.
+pub(crate) struct MappingHost<'a> {
+    pub project: &'a mut manifold_core::project::Project,
+    pub edits: &'a mut crate::gesture_preview::UiEdits,
+    pub content_tx: Option<&'a crossbeam_channel::Sender<ContentCommand>>,
+    pub scrub: &'a mut crate::ui_bridge::ScrubState,
+}
+
+impl MappingHost<'_> {
+    /// Live-drag preview: apply the partial edit to the watched param's
+    /// reshape store on BOTH the local project (immediate card UI) and the
+    /// content thread (smooth canvas + survives the next snapshot sync),
+    /// WITHOUT recording undo — the commit records the single undo entry.
+    /// Reuses the edit command's own apply logic (it picks user-binding vs
+    /// note + seeds copy-on-write), so the preview can never diverge from
+    /// the commit.
+    fn preview(&mut self, target: &manifold_core::GraphTarget, param_id: &str, edit: BindingMappingEdit) {
+        let Some(target) = mapping_write_target(self.project, target, param_id) else { return; };
+        let seed_def = seed_def_for_project(self.project, &target);
+        // A reshape is a live scalar (Shapes, no reaction); the first tick may
+        // also materialize the graph override (D21).
+        let graph_absent = self
+            .project
+            .preset_instance(&target)
+            .is_some_and(|inst| inst.graph.is_none());
+        let Some(tx) = self.content_tx else { return; };
+        let pid = param_id.to_string();
+        crate::ui_bridge::ProjectRef::new(self.project, self.edits, tx).mutate(
+            crate::content_command::touch::shapes_first_move(graph_absent),
+            move |p| {
+                build_mapping_command(&target, &pid, edit, seed_def).execute(p);
+            },
+        );
     }
 
-    /// The existing mapping action handler, shared by both modal entry points.
-    /// Every event carries the owner captured at open; selection is irrelevant.
-    pub(crate) fn dispatch_mapping_action(&mut self, action: &manifold_ui::RootAction) -> bool {
+    fn send(&self, cmd: ContentCommand) {
+        if let Some(tx) = self.content_tx {
+            ContentCommand::send(tx, cmd);
+        }
+    }
+
+    /// Commit / single-shot: send the reshape edit as one undoable command.
+    /// Self-captures the reverse (correct for single-shot — nothing mutated
+    /// the store first).
+    fn commit(&self, target: &manifold_core::GraphTarget, param_id: &str, edit: BindingMappingEdit) {
+        let Some(target) = mapping_write_target(self.project, target, param_id) else { return; };
+        let seed_def = seed_def_for_project(self.project, &target);
+        self.send(ContentCommand::Execute(build_mapping_command(&target, param_id, edit, seed_def)));
+    }
+
+    /// Drag commit: one undoable command carrying the explicit pre-drag
+    /// reverse, so undo restores the pre-drag values rather than the
+    /// preview-mutated ones.
+    fn commit_with_reverse(
+        &self,
+        target: &manifold_core::GraphTarget,
+        param_id: &str,
+        new: BindingMappingEdit,
+        reverse: BindingMappingEdit,
+    ) {
+        let Some(target) = mapping_write_target(self.project, target, param_id) else { return; };
+        let seed_def = seed_def_for_project(self.project, &target);
+        self.send(ContentCommand::Execute(build_mapping_command_with_reverse(
+            &target, param_id, new, reverse, seed_def,
+        )));
+    }
+
+    /// The mapping action handler, shared by both modal entry points. Every
+    /// event carries the owner captured at open; selection is irrelevant.
+    pub(crate) fn dispatch(&mut self, action: &manifold_ui::RootAction) -> MappingDispatch {
         use manifold_ui::RootAction;
         use crate::ui_bridge::scrub::ResolvedScrub;
         match action {
             RootAction::EffectMappingRangeSnapshot { target, binding_id } => {
                 let target = &crate::editing_host::to_graph_target(target);
-                if let Some(shape) = self.target_full_reshape(target, binding_id) {
+                if let Some(shape) = target_full_reshape(self.project, target, binding_id) {
                     self.scrub.check_single_active_on_begin("mapping-range");
                     self.scrub.active = Some(ResolvedScrub::MappingRange {
                         target: target.clone(), param_id: binding_id.clone(),
@@ -748,7 +921,7 @@ impl Application {
                     && owner == target && param_id == binding_id
                 {
                     *live = (*min, *max);
-                    self.preview_mapping(target, binding_id, BindingMappingEdit {
+                    self.preview(target, binding_id, BindingMappingEdit {
                         min: Some(*min), max: Some(*max), ..Default::default()
                     });
                 }
@@ -761,7 +934,7 @@ impl Application {
                     && let Some(ResolvedScrub::MappingRange { baseline, live, .. }) = self.scrub.active.take()
                     && ((baseline.0 - live.0).abs() > f32::EPSILON || (baseline.1 - live.1).abs() > f32::EPSILON)
                 {
-                    self.commit_mapping_with_reverse(target, binding_id,
+                    self.commit_with_reverse(target, binding_id,
                         BindingMappingEdit { min: Some(live.0), max: Some(live.1), ..Default::default() },
                         BindingMappingEdit { min: Some(baseline.0), max: Some(baseline.1), ..Default::default() },
                     );
@@ -769,7 +942,7 @@ impl Application {
             }
             RootAction::EffectMappingAffineSnapshot { target, binding_id } => {
                 let target = &crate::editing_host::to_graph_target(target);
-                if let Some(shape) = self.target_full_reshape(target, binding_id) {
+                if let Some(shape) = target_full_reshape(self.project, target, binding_id) {
                     self.scrub.check_single_active_on_begin("mapping-affine");
                     self.scrub.active = Some(ResolvedScrub::MappingAffine {
                         target: target.clone(), param_id: binding_id.clone(),
@@ -783,7 +956,7 @@ impl Application {
                     && owner == target && param_id == binding_id
                 {
                     *live = (*scale, *offset);
-                    self.preview_mapping(target, binding_id, BindingMappingEdit {
+                    self.preview(target, binding_id, BindingMappingEdit {
                         scale: Some(*scale), offset: Some(*offset), ..Default::default()
                     });
                 }
@@ -796,7 +969,7 @@ impl Application {
                     && let Some(ResolvedScrub::MappingAffine { baseline, live, .. }) = self.scrub.active.take()
                     && ((baseline.0 - live.0).abs() > f32::EPSILON || (baseline.1 - live.1).abs() > f32::EPSILON)
                 {
-                    self.commit_mapping_with_reverse(target, binding_id,
+                    self.commit_with_reverse(target, binding_id,
                         BindingMappingEdit { scale: Some(live.0), offset: Some(live.1), ..Default::default() },
                         BindingMappingEdit { scale: Some(baseline.0), offset: Some(baseline.1), ..Default::default() },
                     );
@@ -804,39 +977,30 @@ impl Application {
             }
             RootAction::EffectMappingLabel { target, binding_id, label } => {
                 let target = &crate::editing_host::to_graph_target(target);
-                self.commit_mapping(target, binding_id, BindingMappingEdit {
+                self.commit(target, binding_id, BindingMappingEdit {
                     label: Some(label.clone()), ..Default::default()
                 });
             }
             RootAction::EffectMappingSection { target, binding_id, section } => {
                 let target = &crate::editing_host::to_graph_target(target);
-                self.commit_mapping(target, binding_id, BindingMappingEdit {
+                self.commit(target, binding_id, BindingMappingEdit {
                     section: Some(section.clone()), ..Default::default()
                 });
             }
             RootAction::EffectMappingInvert { target, binding_id, invert } => {
                 let target = &crate::editing_host::to_graph_target(target);
-                self.commit_mapping(target, binding_id, BindingMappingEdit {
+                self.commit(target, binding_id, BindingMappingEdit {
                     invert: Some(*invert), ..Default::default()
                 });
             }
             RootAction::EffectMappingCurve { target, binding_id, curve } => {
                 let target = &crate::editing_host::to_graph_target(target);
-                self.commit_mapping(target, binding_id, BindingMappingEdit {
+                self.commit(target, binding_id, BindingMappingEdit {
                     curve: Some(crate::ui_translate::macro_curve_to_core(*curve)), ..Default::default()
                 });
             }
             RootAction::EffectMappingGotoNode { target, binding_id } => {
-                let target = &crate::editing_host::to_graph_target(target);
-                // A snapshot belongs to the watched graph. Never navigate a
-                // same-named binding in a different graph.
-                if self.watched_graph_target.as_ref() == Some(target)
-                    && let Some(snapshot) = self.editor_ui_snapshot()
-                    && let Some(node_id) = crate::graph_canvas::resolve_card_param_node_id(&snapshot, binding_id)
-                    && let Some(canvas) = self.graph_canvas.as_mut()
-                {
-                    canvas.focus_node(&snapshot, &node_id);
-                }
+                return MappingDispatch::GotoNode(crate::editing_host::to_graph_target(target), binding_id.clone());
             }
             RootAction::EffectMappingCancel { target, binding_id } => {
                 let target = &crate::editing_host::to_graph_target(target);
@@ -851,12 +1015,86 @@ impl Application {
                 };
                 if let Some(reverse) = reverse {
                     self.scrub.active = None;
-                    self.preview_mapping(target, binding_id, reverse);
+                    self.preview(target, binding_id, reverse);
                 }
             }
-            _ => return false,
+            _ => return MappingDispatch::NotMapping,
+        }
+        MappingDispatch::Done
+    }
+}
+
+impl Application {
+    /// Window-hosted actions shared by both instances of the inspector.
+    /// The action already captures its parameter/mask identity; only the text
+    /// overlay and keyboard ownership depend on the emitting window.
+    pub(crate) fn dispatch_inspector_host_action(
+        &mut self,
+        action: &manifold_ui::panels::PanelAction,
+        in_editor: bool,
+    ) -> bool {
+        let tab = match self.graph_editor.as_ref() {
+            Some(ed) if in_editor => ed.ui_root.inspector.last_effect_tab(),
+            _ => self.ws.ui_root.inspector.last_effect_tab(),
+        };
+        if !crate::text_session::begin_inspector_entry(
+            &mut self.text_input,
+            action,
+            in_editor,
+            tab,
+            &self.active_layer_id,
+            &self.selection,
+            &self.local_project,
+        ) {
+            return false;
+        }
+        if in_editor && let Some(editor) = self.graph_editor.as_mut() {
+            editor.offscreen_dirty = true;
         }
         true
+    }
+
+    /// Open from the emitting card using the shared target resolver and its
+    /// clicked node geometry. Canvas selection is not an input.
+    pub(crate) fn open_card_mapping(
+        &mut self,
+        target: &manifold_ui::GraphParamTarget,
+        param_id: &str,
+        anchor_node_id: manifold_ui::node::NodeId,
+        clip: manifold_ui::graph_canvas::Rect,
+    ) -> bool {
+        let Some(ed) = self.graph_editor.as_ref() else { return false; };
+        let Some(open) = resolve_card_mapping(
+            &ed.ui_root, &self.local_project, &self.active_layer_id, &self.selection,
+            self.watched_graph_target.as_ref(), target, param_id, anchor_node_id, clip,
+        ) else { return false; };
+        // Modifiers have no card selection-follow action. Bring their graph
+        // into view through the same watched-target path as other cards.
+        if self.watched_graph_target.as_ref() != Some(&open.owner) {
+            self.watch_graph_target(open.owner.clone());
+        }
+        open.open(&mut self.editor_mapping_popover);
+        true
+    }
+
+    /// The mapping action handler both modal entry points share
+    /// ([`MappingHost::dispatch`]). False when `action` is not a mapping action.
+    pub(crate) fn dispatch_mapping_action(&mut self, action: &manifold_ui::RootAction) -> bool {
+        let outcome = self.mapping_host().dispatch(action);
+        if let MappingDispatch::GotoNode(target, binding_id) = &outcome {
+            let snapshot = self.editor_ui_snapshot();
+            goto_mapped_node(self.watched_graph_target.as_ref(), snapshot.as_ref(), self.graph_canvas.as_mut(), target, binding_id);
+        }
+        !matches!(outcome, MappingDispatch::NotMapping)
+    }
+
+    fn mapping_host(&mut self) -> MappingHost<'_> {
+        MappingHost {
+            project: &mut self.local_project,
+            edits: &mut self.ui_edits,
+            content_tx: self.content_tx.as_ref(),
+            scrub: &mut self.scrub,
+        }
     }
 
     /// Cursor position over the audio scope's waterfall, if inside it:
@@ -880,38 +1118,10 @@ impl Application {
         Some((ux, uy, freq))
     }
 
-    /// Mapping controls resolve their captured owner, independently of canvas selection.
-    pub(crate) fn target_full_reshape(
-        &self,
-        target: &manifold_core::GraphTarget,
-        param_id: &str,
-    ) -> Option<(String, f32, f32, bool, manifold_core::macro_bank::MacroCurve, f32, f32)> {
-        if matches!(target, manifold_core::GraphTarget::SceneModifier { .. }) {
-            let owner = self.local_project.graph_target_owner(target)?;
-            let binding = crate::graph_target::modifier_host_binding(
-                &self.local_project,
-                target,
-                param_id,
-                |binding| (binding.scale, binding.offset),
-            )?;
-            let spec = &owner.params.get(param_id)?.spec;
-            return Some((
-                spec.name.clone(), spec.min, spec.max, spec.invert, spec.curve,
-                binding.0, binding.1,
-            ));
-        }
-        let instance = self.local_project.preset_instance(target)?;
-        if let Some(def) = instance.graph.as_ref() {
-            return full_reshape_from_instance(instance, def, param_id);
-        }
-        let view = manifold_node_engine::load::loaded_preset_view::loaded_preset_view_by_id(instance.effect_type())?;
-        full_reshape_from_instance(instance, view.canonical_def.as_ref(), param_id)
-    }
-
     /// The card binding (if any) governing `(node_id, param_name)` on the
     /// watched graph at `scope_path` — BUG-158 write-back's binding lookup
     /// (D1). Same override-then-canonical fallback as
-    /// [`Self::target_full_reshape`]: most bound params are still on the
+    /// [`target_full_reshape`]: most bound params are still on the
     /// bundled/canonical def (never diverged), so the instance's own
     /// per-instance `graph` override alone would miss them.
     pub(crate) fn watched_binding_for_node_param(
@@ -973,19 +1183,6 @@ impl Application {
         };
         crate::graph_target::resolve(&self.local_project, target)
             .is_some_and(|def| node_param_is_wired(&def, scope_path, node_id, param_name))
-    }
-
-    /// The catalog graph def to seed the instance's per-instance graph
-    /// override when a reshape edit hits an instance still on the catalog
-    /// default. Effects start on the catalog default (`graph: None`), so they
-    /// need the seed; a generator layer always carries its authoring
-    /// `generator_graph`, so the seed is only a safety net. `None` when the
-    /// instance has already diverged (no seed needed) or can't be resolved.
-    fn seed_def_for(
-        &self,
-        target: &manifold_core::GraphTarget,
-    ) -> Option<manifold_core::effect_graph_def::EffectGraphDef> {
-        seed_def_for_project(&self.local_project, target)
     }
 
     /// The graph def the editor currently shows for the watched target — the
@@ -1058,115 +1255,19 @@ impl Application {
             == rfd::MessageDialogResult::Yes
     }
 
-    /// Live-drag preview: apply the partial edit to the watched param's
-    /// reshape store on BOTH the local project (immediate card UI) and the
-    /// content thread (smooth canvas + survives the next snapshot sync),
-    /// WITHOUT recording undo — the commit records the single undo entry.
-    /// Reuses the edit command's own apply logic (it picks user-binding vs
-    /// note + seeds copy-on-write), so the preview can never diverge from
-    /// the commit.
-    pub(crate) fn preview_mapping(
-        &mut self,
-        target: &manifold_core::GraphTarget,
-        param_id: &str,
-        edit: BindingMappingEdit,
-    ) {
-        let Some(target) = self.mapping_write_target(target, param_id) else { return; };
-        let seed_def = self.seed_def_for(&target);
-        // A reshape is a live scalar (Shapes, no reaction); the first tick may
-        // also materialize the graph override (D21).
-        let graph_absent = self
-            .local_project
-            .preset_instance(&target)
-            .is_some_and(|inst| inst.graph.is_none());
-        build_mapping_command(&target, param_id, edit.clone(), seed_def.clone())
-            .execute(&mut self.local_project);
-        let pid = param_id.to_string();
-        self.send_content_cmd(ContentCommand::mutate(
-            crate::content_command::touch::shapes_first_move(graph_absent),
-            Box::new(move |p| {
-                build_mapping_command(&target, &pid, edit, seed_def).execute(p);
-            }),
-        ));
-    }
-
-    /// Commit / single-shot: send the reshape edit as one undoable command.
-    /// Self-captures the reverse (correct for single-shot — nothing mutated
-    /// the store first).
-    pub(crate) fn commit_mapping(
-        &mut self,
-        target: &manifold_core::GraphTarget,
-        param_id: &str,
-        edit: BindingMappingEdit,
-    ) {
-        let Some(target) = self.mapping_write_target(target, param_id) else { return; };
-        let seed_def = self.seed_def_for(&target);
-        self.send_content_cmd(ContentCommand::Execute(build_mapping_command(
-            &target, param_id, edit, seed_def,
-        )));
-    }
-
-    /// Drag commit: one undoable command carrying the explicit pre-drag
-    /// reverse, so undo restores the pre-drag values rather than the
-    /// preview-mutated ones.
-    pub(crate) fn commit_mapping_with_reverse(
-        &mut self,
-        target: &manifold_core::GraphTarget,
-        param_id: &str,
-        new: BindingMappingEdit,
-        reverse: BindingMappingEdit,
-    ) {
-        let Some(target) = self.mapping_write_target(target, param_id) else { return; };
-        let seed_def = self.seed_def_for(&target);
-        self.send_content_cmd(ContentCommand::Execute(build_mapping_command_with_reverse(
-            &target, param_id, new, reverse, seed_def,
-        )));
-    }
-
-    /// Mapping controls on a modifier are read through the local snapshot but
-    /// always write the owning generator's public manifest. Validate the local
-    /// binding first so stale or preparation-only rows cannot materialize an
-    /// unrelated host graph.
-    fn mapping_write_target(
-        &self,
-        target: &manifold_core::GraphTarget,
-        param_id: &str,
-    ) -> Option<manifold_core::GraphTarget> {
-        if matches!(target, manifold_core::GraphTarget::SceneModifier { .. }) {
-            self.target_full_reshape(target, param_id)?;
-            return Some(target.host_target()?.clone());
-        }
-        Some(target.clone())
-    }
-
     /// Resolve an effect card's row index (in the active inspector tab) to its
     /// stable [`EffectId`]. Mirrors the cog's `OpenGraphEditor` resolution:
     /// keyed by instance id, tab-aware (Master / Layer|Group / Clip). Takes
     /// `&mut self` only because the Clip-tab lookup runs through
     /// `Timeline::find_clip_by_id`, which self-heals its location cache.
     pub(crate) fn resolve_effect_card_id(&mut self, ei: usize) -> Option<manifold_core::EffectId> {
-        match self.ws.ui_root.inspector.last_effect_tab() {
-            manifold_ui::InspectorTab::Master => self
-                .local_project
-                .settings
-                .master_effects
-                .get(ei)
-                .map(|e| e.id.clone()),
-            manifold_ui::InspectorTab::Layer | manifold_ui::InspectorTab::Group => self
-                .active_layer_id
-                .as_ref()
-                .and_then(|id| self.local_project.timeline.find_layer_by_id(id))
-                .and_then(|(_, l)| l.effects.as_ref())
-                .and_then(|effects| effects.get(ei))
-                .map(|e| e.id.clone()),
-            manifold_ui::InspectorTab::Clip => self
-                .selection
-                .primary_selected_clip_id
-                .as_ref()
-                .and_then(|cid| self.local_project.timeline.find_clip_by_id(cid))
-                .and_then(|c| c.effects.get(ei))
-                .map(|e| e.id.clone()),
-        }
+        effect_card_id(
+            self.ws.ui_root.inspector.last_effect_tab(),
+            &mut self.local_project,
+            self.active_layer_id.as_ref(),
+            &self.selection,
+            ei,
+        )
     }
 
     /// Point the graph editor at an effect instance: push the watched identity
@@ -1183,32 +1284,27 @@ impl Application {
     }
 
     pub(crate) fn watch_graph_target(&mut self, target: manifold_core::GraphTarget) {
-        if target.host_target().is_none() { return; }
-        self.close_mapping_on_target_change(&target);
+        if !watch_editor_graph(
+            &self.local_project,
+            &target,
+            &mut self.watched_graph_target,
+            &mut self.watched_catalog_default,
+            &mut self.editor_mapping_popover,
+            self.graph_canvas.as_mut(),
+            self.content_tx.as_ref(),
+        ) {
+            return;
+        }
         if self.modifier_preview_object.as_ref().is_some_and(|(owner, _)| owner != &target) {
             self.modifier_preview_object = None;
         }
-        self.watched_catalog_default = crate::graph_target::catalog_default(&self.local_project, &target);
+        self.editor_graph.catalog_default_changed();
         // The content thread clears both preview requests when the watched
         // target changes; drop the dedup caches with it so a same-named node
         // in the next graph is sent again rather than leaving stale output.
         self.last_preview_node = None;
         self.last_modifier_preview_context = None;
         self.last_modifier_preview_selection = None;
-        self.send_content_cmd(ContentCommand::WatchGraphTarget(Some(target.clone())));
-        self.watched_graph_target = Some(target);
-    }
-
-    fn close_mapping_on_target_change(&mut self, target: &manifold_core::GraphTarget) {
-        if self.watched_graph_target.as_ref() == Some(target) {
-            return;
-        }
-        // Closing cancels an unfinished gesture. Already queued events retain
-        // their captured owner and are drained normally on the next tick.
-        self.editor_mapping_popover.close();
-        if let Some(canvas) = self.graph_canvas.as_mut() {
-            canvas.close_mapping_popover();
-        }
     }
 
     /// Open the shared Save to Library / Save to Project name-prompt text
@@ -1299,21 +1395,7 @@ impl Application {
     pub(crate) fn editor_ui_snapshot(
         &mut self,
     ) -> Option<std::sync::Arc<manifold_ui::graph_view::GraphSnapshot>> {
-        if self.content_state.active_graph_target.as_deref() != self.watched_graph_target.as_ref() {
-            return None;
-        }
-        let src = self.content_state.active_graph_snapshot.as_ref()?;
-        let fresh =
-            matches!(&self.editor_ui_graph, Some((cached, _)) if std::sync::Arc::ptr_eq(cached, src));
-        if !fresh {
-            let mut ui = crate::ui_translate::graph_snapshot_to_ui(src);
-            if let Some(target @ manifold_core::GraphTarget::SceneModifier { .. }) = self.watched_graph_target.as_ref()
-                && let Some(local) = crate::graph_target::resolve(&self.local_project, target) {
-                annotate_preparation_controls(&mut ui.nodes, &local);
-            }
-            self.editor_ui_graph = Some((src.clone(), std::sync::Arc::new(ui)));
-        }
-        self.editor_ui_graph.as_ref().map(|(_, ui)| ui.clone())
+        editor_ui_graph(&mut self.editor_ui_graph, &self.content_state, self.watched_graph_target.as_ref(), &self.local_project)
     }
 
     pub(crate) fn present_graph_editor_window(&mut self, dt: f32) {
@@ -1399,10 +1481,10 @@ impl Application {
                 .is_some_and(|n| n.type_id == "node.render_scene")
         });
         let viewport_open = self.graph_editor.as_ref().is_some_and(|ed| ed.viewport_open);
-        let mut viewport_def = if viewport_is_scene_node && viewport_open {
-            self.watched_def_cloned()
+        let viewport_def = if viewport_is_scene_node && viewport_open {
+            self.editor_graph.viewport_def(&self.local_project, self.watched_graph_target.as_ref(), &self.ui_edits.stamps.parts())
         } else {
-            None
+            crate::editor_graph_cache::ViewportDef::default()
         };
 
         // Send the canvas's currently-visible nodes (deduped) so the content
@@ -1410,37 +1492,54 @@ impl Application {
         // off-scope / collapsed-group nodes cost nothing. The set is the whole
         // current scope level (what the atlas shows), so it changes only on a
         // scope descend/ascend or a topology edit, not on pan/zoom.
-        manifold_core::work_count::record_work(manifold_core::work_count::WorkKind::EditorProjection);
-        let visible_nodes: Vec<manifold_core::NodeId> = match (
-            self.graph_canvas.as_ref(),
-            editor_ui_snap.as_deref(),
-        ) {
-            (Some(canvas), Some(snap)) => {
-                let (nodes, _) =
-                    crate::graph_canvas::resolve_level(snap, canvas.scope_path())
-                        .unwrap_or((&snap.nodes, &snap.wires));
-                nodes
-                    .iter()
-                    .filter_map(crate::graph_canvas::node_preview_target)
-                    .collect()
-            }
-            _ => Vec::new(),
+        // Keyed on the snapshot it reads (by Arc identity) and the scope path:
+        // a steady frame walks and allocates nothing (P4c).
+        let same_snap = match (&editor_ui_snap, &self.atlas_visible_snap) {
+            (Some(a), Some(b)) => std::sync::Arc::ptr_eq(a, b),
+            (None, None) => true,
+            _ => false,
         };
-        if visible_nodes != self.last_atlas_visible_sent {
-            self.send_content_cmd(
-                crate::content_command::ContentCommand::SetNodeAtlasVisible(visible_nodes.clone()),
-            );
-            self.last_atlas_visible_sent = visible_nodes;
+        let scope: &[u32] = self.graph_canvas.as_ref().map_or(&[], |c| c.scope_path());
+        if !same_snap || scope != self.atlas_visible_scope.as_slice() {
+            self.atlas_visible_snap = editor_ui_snap.clone();
+            self.atlas_visible_scope.clear();
+            self.atlas_visible_scope.extend_from_slice(scope);
+            manifold_core::work_count::record_work(manifold_core::work_count::WorkKind::EditorProjection);
+            let visible_nodes: Vec<manifold_core::NodeId> = match (
+                self.graph_canvas.as_ref(),
+                editor_ui_snap.as_deref(),
+            ) {
+                (Some(canvas), Some(snap)) => {
+                    let (nodes, _) =
+                        crate::graph_canvas::resolve_level(snap, canvas.scope_path())
+                            .unwrap_or((&snap.nodes, &snap.wires));
+                    nodes
+                        .iter()
+                        .filter_map(crate::graph_canvas::node_preview_target)
+                        .collect()
+                }
+                _ => Vec::new(),
+            };
+            if visible_nodes != self.last_atlas_visible_sent {
+                self.send_content_cmd(
+                    crate::content_command::ContentCommand::SetNodeAtlasVisible(visible_nodes.clone()),
+                );
+                self.last_atlas_visible_sent = visible_nodes;
+            }
         }
 
         // ── Mini-timeline data ────────────────────────────────────────
         // Built from the UI project mirror + playhead BEFORE the disjoint `ws`
         // borrow below. Cheap: walks the clip list once, off the per-node hot
-        // path. Shared with the headless snapshot path via `mini_timeline_data`.
+        // path. Shared with the headless snapshot path via `mini_timeline_data`;
+        // keyed so a steady frame rebuilds nothing.
         let mini_current_beat = self.content_state.current_beat.as_f32();
         let mini_is_playing = self.content_state.is_playing;
-        let (mini_clips, mini_layer_labels, mini_rows, mini_total_beats, mini_beats_per_bar, mini_readout) =
-            mini_timeline_data(&self.local_project, mini_current_beat);
+        let parts = self.ui_edits.stamps.parts();
+        self.mini_timeline.get(&self.local_project, mini_current_beat, &parts);
+        let mini_key = self.mini_timeline.key();
+        let &(ref mini_clips, ref mini_layer_labels, mini_rows, mini_total_beats, mini_beats_per_bar, ref mini_readout) =
+            self.mini_timeline.data();
 
         let Some(gpu) = &self.gpu else { return };
         let Some(wid) = self.graph_editor_window_id else {
@@ -1460,16 +1559,9 @@ impl Application {
             return;
         };
 
-        // `EDITOR_WINDOW_UNIFICATION_DESIGN.md` D6: the same aggregate the
-        // main window ORs into its own `offscreen_dirty` above (tick_and_
-        // render's step 6·motion) — one predicate, both windows, no per-
-        // window keepalive list. This window's own `UIRoot` never opens the
-        // toast today (only `self.ws.ui_root.toast.show()` is ever called),
-        // so this is currently a no-op read, kept for when it does — and
-        // this window recomposites every vsync pulse regardless (D5,
-        // cacheless), so `offscreen_dirty` isn't a redraw gate here the way
-        // it is on the main window; this OR keeps the two windows' policy
-        // identical rather than special-casing the editor's redraw path.
+        // `EDITOR_WINDOW_UNIFICATION_DESIGN.md` D6: the same keepalive the
+        // main window ORs into its own `offscreen_dirty`, one predicate for
+        // both windows.
         if ws.ui_root.overlay_redraw_needed() {
             ws.offscreen_dirty = true;
         }
@@ -1510,88 +1602,38 @@ impl Application {
         let logical_h = (surface_h as f64 / scale).max(1.0) as u32;
 
         // ── Editor window layout ──────────────────────────────────────
-        // Left preview sidebar (monitors) + center canvas + right card lane
-        // (param expose) — card on the right, same convention as the main
-        // timeline's inspector (`inspector_width` docks at `screen_width -
-        // inspector_width`). Built BEFORE rendering so the tree's nodes
-        // (panels + buttons + labels) are ready to draw alongside the canvas.
-        // Column geometry comes from the workspace's resizable `Dock` (left
-        // preview column + right card lane). One `rects()` call feeds render,
-        // `editor_canvas_viewport`, and the pointer handlers alike, so the
-        // canvas origin and click hit-testing stay in lockstep no matter how
-        // the user drags the dividers.
-        let editor_area = manifold_ui::Rect::new(0.0, 0.0, logical_w as f32, logical_h as f32);
-        let dock = ws.dock.rects(editor_area);
-        let preview_width = dock.left.width;
-        let card_width = dock.right.width;
-        let canvas_x = dock.canvas.x;
-        let canvas_width = dock.canvas.width;
-        // Canvas height is short of the window by the bottom mini-timeline strip
-        // (via the same `dock` the input pass reads, so hit-testing tracks it).
-        let canvas_height = dock.canvas.height;
-        let card_x = dock.right.x;
-        // When a node is being previewed, the preview pane occupies the top of
-        // the sidebar; the expose/param rows start below it so they don't
-        // overlap. Logical units; the present pass draws the pane to match.
-        let preview_pad = 8.0_f32;
-        let preview_title_h = 18.0_f32;
-        // Monitors take the project aspect ratio (a portrait show → portrait
-        // monitors), fit to the column width and clamped in height so the two
-        // stacked panes always fit the editor window, never spilling onto the
-        // chrome below. Landscape stays full-width (unchanged); portrait is
-        // narrower and centred in the column.
-        let monitor_aspect = self
+        // One `EditorLayout` (the workspace's resizable `Dock` plus the two
+        // stacked monitors) feeds the tree build, the composite and the
+        // monitor blits; the pointer handlers read the same `Dock`, so
+        // hit-testing tracks whatever the user dragged the columns to.
+        let output_aspect = self
             .content_pipeline_output
             .as_ref()
             .map(|p| p.get_dimensions())
             .filter(|(_, h)| *h > 0)
-            .map(|(w, h)| w as f32 / h as f32)
-            .unwrap_or(16.0 / 9.0);
-        let avail_w = (preview_width - 2.0 * preview_pad).max(1.0);
-        // Height budget so 2×(title + body) + 3 pads fits the column vertically.
-        // `canvas_height` (not the full window) — the column stops above the
-        // full-width mini-timeline strip.
-        let max_body_h =
-            ((canvas_height - 3.0 * preview_pad - 2.0 * preview_title_h) * 0.5).max(1.0);
-        let width_bound_h = avail_w / monitor_aspect;
-        let (preview_w, preview_h) = if width_bound_h <= max_body_h {
-            (avail_w, width_bound_h)
-        } else {
-            (max_body_h * monitor_aspect, max_body_h)
-        };
-        let preview_x = (preview_width - preview_w) * 0.5;
-        // The left column is monitors-only now — the inner-node param list moved
-        // under the right card. Two equal stacked 16:9 monitors (the selected
-        // node's output on top, the master compositor output below), each a
-        // titled pane (title row + body). The pair is centred vertically in the
-        // column so it reads as intentional rather than top-pinned with a void
-        // beneath. The node pane's body shows the node's image, or — for a
-        // control / math / envelope node with no image — its value inspector text
-        // in place of the image, or a placeholder when nothing is selected. The
-        // master pane always shows what the live show is putting out.
+            .map(|(w, h)| w as f32 / h as f32);
+        let layout = crate::editor_frame::EditorLayout::compute(&ws.dock, logical_w, logical_h, output_aspect);
+        let monitor_aspect = layout.monitor_aspect;
+        let canvas_x = layout.canvas.x;
+        let canvas_width = layout.canvas.width;
+        let (preview_x, preview_w, preview_h) = (layout.preview_x, layout.preview_w, layout.preview_h);
+        let (node_img_y, master_img_y) = (layout.node_img_y, layout.master_img_y);
+        // The node pane's body shows the selected node's image, or its value
+        // inspector text for a node with no image, or a placeholder; the
+        // master pane always shows the live output.
         let mut node_preview_info = self.content_state.node_preview_info.clone();
         let preview_has_image = node_preview_info
             .as_ref()
             .map(|i| i.has_image)
             .unwrap_or(false);
         let mut show_image = self.last_preview_node.is_some() && preview_has_image;
-        let pane_block_h = 2.0 * (preview_title_h + preview_h) + preview_pad;
-        let mut pane_y = ((canvas_height - pane_block_h) * 0.5).max(preview_pad);
-        // Node-output monitor: title row + project-aspect body.
-        let node_title_y = pane_y;
-        let node_img_y = node_title_y + preview_title_h;
-        pane_y = node_img_y + preview_h + preview_pad;
-        // Master-out monitor: just below the node pane.
-        let master_title_y = pane_y;
-        let master_img_y = master_title_y + preview_title_h;
-        let card_viewport = manifold_ui::Rect::new(card_x, 0.0, card_width, canvas_height);
 
         #[cfg(target_os = "macos")]
         let mut bridge_leases: crate::shared_texture::BridgeLeaseBatch = Vec::new();
         let viewport_scale = scale as f32;
         let viewport_tex_w = ((preview_w * viewport_scale).round() as u32).clamp(64, 4096);
         let viewport_tex_h = ((preview_h * viewport_scale).round() as u32).clamp(64, 4096);
-        if viewport_def.is_some()
+        if viewport_def.resolved
             && let Some(target) = self.watched_graph_target.as_ref()
             && let Some(node) = self.last_preview_node.as_ref()
         {
@@ -1662,18 +1704,13 @@ impl Application {
             if let Some(frame) = session.displayed.as_ref().filter(|frame| frame.has_image()) {
                 ws.viewport_fluid_domains.extend(frame.domains.iter().cloned());
             }
-            if let Some(def) = viewport_def.as_mut()
-                && let Some(target) = self.watched_graph_target.as_ref()
-                && crate::fluid_domain_edit::project_authored_params(def, &self.local_project, target).is_none()
-            {
-                viewport_def = None;
-            }
             // P6: gizmo handle geometry for the current selection/mode,
             // built against THIS frame's def and editor camera — see
             // `viewport_gizmo` and the `ws.viewport_selected_object`/
             // `ws.viewport_gizmo_mode` doc comments (`workspace.rs`).
             let mut scene = viewport_def
-                .as_ref()
+                .authored
+                .as_deref()
                 .and_then(manifold_nodes_scene::node_graph::scene_vm::SceneVm::from_def);
             if let Some(scene) = scene.as_mut() {
                 crate::fluid_domain_edit::apply_runtime_domains(scene, &ws.viewport_fluid_domains);
@@ -1756,109 +1793,34 @@ impl Application {
             });
         self.graph_editor_panel.set_node_inspector(node_inspector);
 
-        // Right lane = the WHOLE main-window inspector column (master/layer/clip
-        // tabs, every effect card, generator params, macros, chrome). Same panel
-        // type as the main window, this window's own `ws.ui_root.inspector`
-        // instance, driven by the same `Arc<Project>` snapshot — configured in the
-        // main tick in lockstep with `self.ws`'s inspector, so here we only lay it
-        // out into the right lane. Selecting a card retargets the canvas; edits
-        // mirror both windows next snapshot. Replaces the single watched
-        // `editor_card`. See docs/GRAPH_EDITOR_INSPECTOR_UNIFICATION.md (Change 3).
-
-        // Tick parity (`GRAPH_EDITOR_INSPECTOR_UNIFICATION.md` Change 4, D4):
-        // the editor's `UIRoot` never sets `built`, so its own `update()`
-        // early-returns and would otherwise never advance drawer-height
-        // tweens / value-flash / fire meters — the card frame would sit at
-        // a stale height while the rows below build at their true size and
-        // overflow it (BUG-160). `tick_inspector` runs before the rebuild
-        // below so the advanced values are what this frame's `build_...`
-        // reads (mirrors the main window: `self.ws.ui_root.update()` then
-        // its own rebuild-on-dirty poll). `update_fire_meters` mirrored
-        // alongside it, same as the main window's call
-        // (`self.ws.ui_root.update_fire_meters`, above in this function's
-        // caller) — this also retires BUG-157's inspector half.
-        ws.ui_root.tick_inspector();
-        ws.ui_root.update_fire_meters(&self.content_state.fire_meters, dt);
-
-        // Per-frame card VALUE sync for the editor's inspector column — the
-        // same call `push_state` makes for the main window (step 4 of the
-        // main tick), against the same `local_project` + active layer, so a
-        // driver / mapping / envelope moving a knob is seen on this window's
-        // card sliders this frame instead of freezing until the next
-        // structural sync. Drag safety rides on the shared guard: the
-        // snapshot drain already restored the actively-dragged field into
-        // `local_project`, so this writes the user's own value straight back.
+        // Right lane = the whole main-window inspector column, this window's
+        // own `ws.ui_root.inspector` instance, configured in the main tick in
+        // lockstep with the main window's (docs/GRAPH_EDITOR_INSPECTOR_UNIFICATION.md
+        // Change 3). The tree build is shared with the ui-snap script runner
+        // (`editor_frame.rs`, BUG-12iyh (UI runner drives editor window,
+        // perform mode and text input)).
         let editor_active_idx = self
             .active_layer_id
             .as_ref()
             .and_then(|id| self.local_project.timeline.find_layer_index_by_id(id));
-        // Rebuild the editor's UITree from scratch each frame: tree state
-        // is small, so a clear + rebuild is cheaper than dirty-tracking and
-        // means stale rows can never linger after the target changes.
-        rebuild_editor_inspector(
-            &mut ws.ui_root, &self.local_project, editor_active_idx, card_viewport,
-        );
-        let _ = (card_x, card_width);
-
-        // Pinned preview monitors in the left column: a backing panel, the two pane
-        // titles, and — for a non-image node — the value inspector text in the
-        // node pane. Added to the editor tree so they composite into the
-        // offscreen; the monitor images blit onto the drawable below each title
-        // in the present pass.
-        // Shared with the headless editor harness (`editor_frame.rs`,
-        // `UI_HARNESS_UNIFICATION_DESIGN.md` P3) — see that module's doc for
-        // why threading the already-configured `graph_editor_panel` (not the
-        // raw content-state fields feeding it) is the non-entangled cut.
-        self.editor_smart_preview_toggle_id = crate::editor_frame::build_editor_preview_column(
-            &mut ws.ui_root.tree,
+        let editor_out = crate::editor_frame::run_editor_frame(
+            &mut ws.ui_root,
+            &mut ws.editor_frame,
             &self.graph_editor_panel,
-            preview_width,
-            canvas_height,
-            preview_x,
-            preview_w,
-            preview_h,
-            node_title_y,
-            node_img_y,
-            master_title_y,
-            show_image,
+            self.graph_canvas.as_mut(),
+            &layout,
+            crate::editor_frame::EditorFrameInputs {
+                project: &self.local_project,
+                content_state: &self.content_state,
+                active_layer: editor_active_idx,
+                live: self.frame_planner.last.live(),
+                dt,
+                show_image,
+            },
+            false,
         );
-
-        // Overlays (node picker + any other top-level overlay open on this
-        // window's `UIRoot`) build at the tail of the tree via the SAME
-        // driver the main window uses — `build_overlays_for_screen`
-        // sets `screen_width`/`screen_height` (this `UIRoot` never gets
-        // `resize()`) then runs `build_overlays()`, which records
-        // `overlay_draw`/`overlay_region_start` for real.
-        // Built last, same as before, so its nodes sit on top of
-        // palette/sidebar/preview column.
-        ws.ui_root.build_overlays_for_screen(logical_w as f32, logical_h as f32);
-        // The editor root is cacheless and never runs the main-window
-        // `UIRoot::update()` path. Push the already-shared metric snapshot
-        // into the freshly-built HUD nodes before this frame is presented.
-        ws.ui_root.tick_editor_perf_hud();
-
-        // The editor rebuilt its whole tree above, clearing every node's flags.
-        // Re-apply HOVERED / PRESSED from the input system's durable widget state
-        // so interaction visuals (button hover/press) persist across the per-frame
-        // rebuild instead of flickering off until the next pointer move.
-        {
-            let ui_root = &mut ws.ui_root;
-            ui_root.input.apply_interaction_flags(&mut ui_root.tree);
-        }
-
-        // A pending jump-to-node centres now that `set_snapshot` has laid the
-        // canvas out for this frame's scope (no-op until the target is present).
-        if let Some(canvas) = self.graph_canvas.as_mut() {
-            let vp = crate::graph_canvas::Rect::new(canvas_x, 0.0, canvas_width, canvas_height);
-            canvas.resolve_pending_focus(vp);
-            // Frame the whole level on editor open / scope change (camera only).
-            canvas.apply_pending_fit(vp);
-            // D17 "wire→port magnetize": needs `vp` (port screen positions),
-            // which the main `canvas.tick(dt_ms)` call site (section 1c above)
-            // doesn't have — ticked here instead, right before the draw
-            // pass that reads it.
-            canvas.tick_wire_magnet(vp);
-        }
+        self.editor_smart_preview_toggle_id = editor_out.smart_preview_toggle;
+        ws.offscreen_dirty |= editor_out.canvas_moved;
 
         // ── Node output previews (BUG-027): register the current atlas front
         // under a fixed handle and hand each visible node its cell UV, so the
@@ -1869,7 +1831,9 @@ impl Application {
         // BUG-xaw4: bridge read leases taken below at each front read;
         // all retired on the final present encoder's completion (or a
         // marker buffer on the early returns).
-
+        // Node previews change with every content frame, so the canvas draws
+        // each frame while any shows (D17).
+        let mut previews_visible = false;
         #[cfg(target_os = "macos")]
         {
             let atlas_handle =
@@ -1919,6 +1883,7 @@ impl Application {
                 None
             };
             if let Some((atlas_tex, map)) = prepared {
+                previews_visible = !map.is_empty();
                 if let Some(ui) = self.ui_renderer.as_mut() {
                     ui.register_external_texture(atlas_handle, atlas_tex);
                 }
@@ -1928,44 +1893,74 @@ impl Application {
             }
         }
 
-        // ── Build frame: clear, then draw the canvas + sidebar ──
-        // Shared with the headless editor harness — see `editor_frame.rs`
-        // module doc (P3). `composite_editor_frame` owns the encoder
-        // create+commit internally, mirroring `ui_frame::composite_main_ui_frame`.
-        crate::editor_frame::composite_editor_frame(
-            &gpu.device,
-            self.ui_renderer.as_mut(),
-            &mut ws.ui_root,
-            &ws.dock,
-            editor_area,
-            self.graph_canvas.as_ref(),
-            crate::graph_canvas::Rect::new(canvas_x, 0.0, canvas_width, canvas_height),
-            crate::editor_frame::EditorMiniTimelineInputs {
-                bottom_rect: dock.bottom,
-                show_bottom: ws.dock.show_bottom,
-                total_beats: mini_total_beats,
-                beats_per_bar: mini_beats_per_bar,
-                current_beat: mini_current_beat,
-                row_count: mini_rows,
-                clips: &mini_clips,
-                layer_labels: &mini_layer_labels,
-                readout: &mini_readout,
-                is_playing: mini_is_playing,
+        // ── Composite the offscreen, only when something on it moved ──
+        // Shared with the headless editor harness (`editor_frame.rs`). The
+        // drawable still gets the offscreen and the monitors every pulse.
+        let viewport_image = ws.viewport_session.as_ref()
+            .and_then(|session| session.displayed.as_ref())
+            .is_some_and(|frame| frame.has_image());
+        let key = crate::editor_frame::CompositeKey {
+            size: [logical_w, logical_h],
+            dock: ws.dock.draw_key(),
+            mini: mini_key,
+            playhead: mini_current_beat.to_bits(),
+            playing: mini_is_playing,
+            live: crate::editor_frame::LiveSurfaces {
+                node_previews: previews_visible,
+                viewport_image,
+                popover: self.editor_mapping_popover.is_open(),
+                text_input: self.text_input.is_owned_by_editor(),
             },
-            &mut self.editor_mapping_popover,
-            popover_live_value,
-            &self.text_input,
-            &self.frame_timer,
-            offscreen,
-            logical_w,
-            logical_h,
-            scale,
-            ws.viewport_session.as_ref().and_then(|session| session.displayed.as_ref())
-                .filter(|frame| frame.has_image())
-                .zip(ws.viewport_rect)
-                .map(|(frame, rect)| crate::scene_viewport::SceneViewportPaint { rect, frame, lines: &ws.viewport_overlay_lines }),
-        );
-        ws.offscreen_dirty = false;
+        };
+        let redraw = crate::editor_frame::needs_composite(&mut ws.editor_frame, &ws.ui_root, ws.offscreen_dirty, key);
+        let cache = ws.editor_frame.cache.get_or_insert_with(|| {
+            manifold_ui_paint::ui_cache_manager::UICacheManager::with_slots(
+                manifold_compositor::presentation::UI_FORMAT,
+                scale,
+                manifold_ui_paint::ui_cache_manager::EDITOR_SLOTS,
+            )
+        });
+        if redraw
+            && let (Some(atlas_pipeline), Some(atlas_sampler)) = (&self.atlas_pipeline, &self.atlas_sampler)
+        {
+            crate::editor_frame::composite_editor_frame(
+                &gpu.device,
+                self.ui_renderer.as_mut(),
+                &mut ws.ui_root,
+                &layout,
+                &ws.dock,
+                self.graph_canvas.as_ref(),
+                crate::editor_frame::EditorAtlas {
+                    cache,
+                    pipeline: atlas_pipeline,
+                    sampler: atlas_sampler,
+                    scale_factor: scale,
+                },
+                crate::editor_frame::EditorMiniTimelineInputs {
+                    bottom_rect: layout.bottom,
+                    show_bottom: ws.dock.show_bottom,
+                    total_beats: mini_total_beats,
+                    beats_per_bar: mini_beats_per_bar,
+                    current_beat: mini_current_beat,
+                    row_count: mini_rows,
+                    clips: mini_clips,
+                    layer_labels: mini_layer_labels,
+                    readout: mini_readout,
+                    is_playing: mini_is_playing,
+                },
+                &mut self.editor_mapping_popover,
+                popover_live_value,
+                &self.text_input,
+                &self.frame_timer,
+                offscreen,
+                scale,
+                ws.viewport_session.as_ref().and_then(|session| session.displayed.as_ref())
+                    .filter(|frame| frame.has_image())
+                    .zip(ws.viewport_rect)
+                    .map(|(frame, rect)| crate::scene_viewport::SceneViewportPaint { rect, frame, lines: &ws.viewport_overlay_lines }),
+            );
+            ws.offscreen_dirty = false;
+        }
 
         // Skip drawable acquisition on the resize frame — drawable pool
         // may still be reconfiguring.
@@ -2348,6 +2343,9 @@ mod binding_reroute_tests {
                     section: None,
                     card_visible: true,
             material_role: None,
+                    limit: Default::default(),
+                    unit: None,
+                    scene: None,
                 }],
                 bindings: vec![BindingDef {
                     id: "amount".into(),
@@ -2403,7 +2401,8 @@ mod binding_reroute_tests {
     }
 
     #[test]
-    fn editor_inspector_rebuild_preserves_live_parameter_readouts() {
+    fn editor_card_lane_shows_live_values_without_rebuilding() {
+        use manifold_ui::panels::Panel;
         // Effect cards require a registered preset definition. Keep the real
         // Bloom identity and add a parameter, as the projection tests do.
         let mut project = manifold_core::project::Project::default();
@@ -2418,15 +2417,54 @@ mod binding_reroute_tests {
             &mut ui, &project, None,
             &crate::app::SelectionState::default(), &[], None,
         );
-        let viewport = manifold_ui::Rect::new(0.0, 0.0, 640.0, 2000.0);
-        // Structural configuration stays unchanged while snapshots update values.
-        // Repeat a value to also cover an unchanged snapshot on the next frame.
-        for (value, expected) in [(0.0, "0.00"), (0.3, "0.30"), (0.3, "0.30"), (0.8, "0.80")] {
+        let mut state = crate::editor_frame::EditorFrameState::default();
+        let panel = manifold_ui::panels::graph_editor::GraphEditorPanel::new();
+        let layout = crate::editor_frame::EditorLayout::compute(&manifold_ui::Dock::editor(), 1600, 2000, None);
+        let content_state = crate::content_state::ContentState::default();
+        let mut live = crate::frame_plan::LiveInputs::default();
+        let mut run = |ui: &mut crate::ui_root::UIRoot, project: &manifold_core::project::Project, live| {
+            let start = manifold_core::work_count::thread_work_snapshot();
+            crate::editor_frame::run_editor_frame(
+                ui,
+                &mut state,
+                &panel,
+                None,
+                &layout,
+                crate::editor_frame::EditorFrameInputs {
+                    project,
+                    content_state: &content_state,
+                    active_layer: None,
+                    live,
+                    dt: 1.0 / 60.0,
+                    show_image: false,
+                },
+                false,
+            );
+            manifold_core::work_count::thread_work_snapshot()
+                .since(&start)
+                .get(manifold_core::work_count::WorkKind::EditorTreeBuild)
+        };
+        // The card lane is built on the first frame; once its spawn tweens
+        // settle, values reach it through the live push alone. A repeated
+        // value is an unchanged frame.
+        let mut last = None;
+        for (frame, (value, expected)) in [(0.0, "0.00"), (0.3, "0.30"), (0.3, "0.30"), (0.8, "0.80")].into_iter().enumerate() {
             project.settings.master_effects[0]
                 .params.get_mut("amount").unwrap().value = value;
-            super::rebuild_editor_inspector(&mut ui, &project, None, viewport);
-            assert!(ui.tree.nodes().iter().any(|node| node.text.as_deref() == Some(expected)),
-                "rebuilt inspector must show live value {expected}");
+            if last != Some(value) {
+                live.values += 1;
+            }
+            last = Some(value);
+            let built_before = ui.inspector.first_node();
+            let rebuilt = run(&mut ui, &project, live);
+            assert_eq!(rebuilt > 0, frame == 0);
+            assert!(frame == 0 || built_before == ui.inspector.first_node());
+            assert!(ui.tree.all_nodes().any(|node| node.text.as_deref() == Some(expected)),
+                "the card lane must show live value {expected}");
+            if frame == 0 {
+                ui.inspector.skip_to_settled(&mut ui.tree);
+                run(&mut ui, &project, live);
+            }
         }
     }
 
@@ -2568,8 +2606,8 @@ mod binding_reroute_tests {
             target: crate::editing_host::to_ui_graph_target(&other), binding_id: "amount".into(),
         });
         assert!(app.scrub.active.is_some());
-        assert_eq!(app.target_full_reshape(&owner, "amount").unwrap().2, 7.0);
-        assert_eq!(app.target_full_reshape(&other, "amount").unwrap().2, 1.0);
+        assert_eq!(super::target_full_reshape(&app.local_project, &owner, "amount").unwrap().2, 7.0);
+        assert_eq!(super::target_full_reshape(&app.local_project, &other, "amount").unwrap().2, 1.0);
         app.dispatch_mapping_action(&RootAction::EffectMappingRangeCommit { target, binding_id: "amount".into() });
         assert!(app.scrub.active.is_none());
         let mut undo = UndoRedoManager::new();
@@ -2583,11 +2621,11 @@ mod binding_reroute_tests {
             }
         }
         assert_eq!(undo.undo_count(), 1);
-        assert_eq!(content_project.preset_instance(&owner).unwrap().params.get("amount").unwrap().spec.max, 7.0);
+        assert_eq!(content_project.preset_instance(&owner).unwrap().params.get("amount").unwrap().slider_span().1, 7.0);
         assert!(undo.undo(&mut content_project));
-        assert_eq!(content_project.preset_instance(&owner).unwrap().params.get("amount").unwrap().spec.max, 1.0);
+        assert_eq!(content_project.preset_instance(&owner).unwrap().params.get("amount").unwrap().slider_span().1, 1.0);
         assert!(undo.redo(&mut content_project));
-        assert_eq!(content_project.preset_instance(&owner).unwrap().params.get("amount").unwrap().spec.max, 7.0);
+        assert_eq!(content_project.preset_instance(&owner).unwrap().params.get("amount").unwrap().slider_span().1, 7.0);
     }
 
     #[test]
@@ -2600,11 +2638,11 @@ mod binding_reroute_tests {
         app.dispatch_mapping_action(&RootAction::EffectMappingAffineSnapshot { target: target.clone(), binding_id: "amount".into() });
         app.watched_graph_target = Some(other.clone());
         app.dispatch_mapping_action(&RootAction::EffectMappingAffineChanged { target: target.clone(), binding_id: "amount".into(), scale: 9.0, offset: 4.0 });
-        assert_eq!(app.target_full_reshape(&owner, "amount").unwrap().5, 9.0);
+        assert_eq!(super::target_full_reshape(&app.local_project, &owner, "amount").unwrap().5, 9.0);
         app.dispatch_mapping_action(&RootAction::EffectMappingCancel { target, binding_id: "amount".into() });
         assert!(app.scrub.active.is_none());
-        assert_eq!(app.target_full_reshape(&owner, "amount").unwrap().5, 2.0);
-        assert_eq!(app.target_full_reshape(&other, "amount").unwrap().5, 2.0);
+        assert_eq!(super::target_full_reshape(&app.local_project, &owner, "amount").unwrap().5, 2.0);
+        assert_eq!(super::target_full_reshape(&app.local_project, &other, "amount").unwrap().5, 2.0);
         assert!(rx.try_iter().all(|cmd| matches!(cmd, ContentCommand::MutateProject { touches, .. } if touches.minus(crate::content_command::touch::OVERRIDES_SHAPES).is_empty())));
     }
 
@@ -2622,10 +2660,10 @@ mod binding_reroute_tests {
         app.local_project = project.clone();
         // The mapping surface edits the public macro affine once; node-face
         // inversion above alone uses the composed leaf affine.
-        assert_eq!(app.target_full_reshape(&target, "macro").unwrap().5, 3.0);
+        assert_eq!(super::target_full_reshape(&app.local_project, &target, "macro").unwrap().5, 3.0);
         let (tx, rx) = crossbeam_channel::unbounded();
         app.content_tx = Some(tx);
-        app.commit_mapping(&target, "macro", BindingMappingEdit {
+        app.mapping_host().commit(&target, "macro", BindingMappingEdit {
             max: Some(7.0), scale: Some(4.0), ..Default::default()
         });
         let mut content_project = project;
@@ -2638,10 +2676,10 @@ mod binding_reroute_tests {
             .expect("valid local mapping queues a host command");
         let mut undo = manifold_editing::undo::UndoRedoManager::new();
         undo.execute(command, &mut content_project);
-        assert_eq!(content_project.graph_target_owner(&target).unwrap().params.get("macro").unwrap().spec.max, 7.0);
+        assert_eq!(content_project.graph_target_owner(&target).unwrap().params.get("macro").unwrap().slider_span().1, 7.0);
         assert_eq!(super::modifier_binding_for_node_param(&content_project, &target, &[], 1, "amount").unwrap().5, 8.0);
         assert!(undo.undo(&mut content_project));
-        assert_eq!(content_project.graph_target_owner(&target).unwrap().params.get("macro").unwrap().spec.max, 1.0);
+        assert_eq!(content_project.graph_target_owner(&target).unwrap().params.get("macro").unwrap().slider_span().1, 1.0);
     }
 
     #[test]
@@ -2665,7 +2703,7 @@ mod binding_reroute_tests {
         app.local_project = project;
         let (tx, rx) = crossbeam_channel::unbounded();
         app.content_tx = Some(tx);
-        app.commit_mapping(&target, "macro", BindingMappingEdit {
+        app.mapping_host().commit(&target, "macro", BindingMappingEdit {
             max: Some(9.0), ..Default::default()
         });
         assert!(rx.try_iter().next().is_none(), "invalid local mapping must be atomic");
@@ -2703,7 +2741,7 @@ mod binding_reroute_tests {
             max: Some(7.0), ..Default::default()
         }, None).execute(&mut project);
         let fx = &project.settings.master_effects[0];
-        assert_eq!(fx.params.get("amount").unwrap().spec.max, 7.0, "production edit landed");
+        assert_eq!(fx.params.get("amount").unwrap().slider_span().1, 7.0, "production edit landed");
         let after = super::full_reshape_from_instance(fx, fx.graph.as_ref().unwrap(), "amount").unwrap();
         eprintln!("AUDIT: before max={}, live manifest max=7, editor reader max={}; range commit detects change={}", before.2, after.2, (before.2-after.2).abs() > f32::EPSILON);
         assert_eq!(after.2, 7.0, "mapping opener and commit reader must see the live edit");
@@ -2763,6 +2801,39 @@ mod binding_reroute_tests {
         assert!(node_param_is_wired(&def, &[], 1, "amount"));
         assert!(!node_param_is_wired(&def, &[], 1, "other_param"));
     }
+}
+
+/// The renderer snapshot's UI translation, cached by `Arc` identity.
+pub(crate) type EditorUiGraph = Option<(
+    std::sync::Arc<manifold_node_engine::snapshot::GraphSnapshot>,
+    std::sync::Arc<manifold_ui::graph_view::GraphSnapshot>,
+)>;
+
+/// The watched graph as the UI-local view-model the canvas reads,
+/// translating the content state's renderer snapshot once per new snapshot.
+/// `None` while the snapshot belongs to another target (a retarget the
+/// content side has not answered yet) or nothing is watched.
+pub(crate) fn editor_ui_graph(
+    cache: &mut EditorUiGraph,
+    content_state: &crate::content_state::ContentState,
+    watched: Option<&manifold_core::GraphTarget>,
+    project: &manifold_core::project::Project,
+) -> Option<std::sync::Arc<manifold_ui::graph_view::GraphSnapshot>> {
+    if content_state.active_graph_target.as_deref() != watched {
+        return None;
+    }
+    let src = content_state.active_graph_snapshot.as_ref()?;
+    let fresh = matches!(cache, Some((cached, _)) if std::sync::Arc::ptr_eq(cached, src));
+    if !fresh {
+        let mut ui = crate::ui_translate::graph_snapshot_to_ui(src);
+        if let Some(target @ manifold_core::GraphTarget::SceneModifier { .. }) = watched
+            && let Some(local) = crate::graph_target::resolve(project, target)
+        {
+            annotate_preparation_controls(&mut ui.nodes, &local);
+        }
+        *cache = Some((src.clone(), std::sync::Arc::new(ui)));
+    }
+    cache.as_ref().map(|(_, ui)| ui.clone())
 }
 
 /// Preparation controls keep the shared numeric editor, with an explicit

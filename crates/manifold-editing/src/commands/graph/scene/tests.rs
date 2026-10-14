@@ -10,7 +10,7 @@ use manifold_core::effect_graph_def::{
     InterfacePortDef, ParamSpecDef, PresetMetadata, StringBindingDef,
 };
 use manifold_core::layer::Layer;
-use manifold_core::scene_exposure::SceneParamMetadata;
+use manifold_core::scene_exposure::NodeParamMetadata;
 use manifold_core::types::LayerType;
 
 mod force_targets;
@@ -661,7 +661,7 @@ fn compound_parent_rename_keeps_each_child_name_and_duplicate_fans_out_parent_vi
     assert!(visible_bindings.iter().all(|binding| binding.id == "compound_parent_visible"));
 }
 
-fn body_params() -> Vec<SceneParamMetadata> {
+fn body_params() -> Vec<NodeParamMetadata> {
     vec![scene_param_meta("density", "Density"), scene_param_meta("friction", "Friction"), scene_param_meta("bounce", "Bounce")]
 }
 
@@ -891,7 +891,7 @@ fn enable_physics_writes_no_mass() {
 fn imported_physics_split_sets_matching_source_and_body_fragments() {
     let mut graph = imported_group_scene_graph();
     let meta = graph.preset_metadata.as_mut().unwrap();
-    manifold_core::scene_exposure::stamp_scene_node_exposures_into(&mut meta.params, &mut meta.bindings, 11, &NodeId::new("import_transform"), "node.transform_3d", "Imported — Transform", &[scene_param_meta("pos_y", "Position Y")], &BTreeMap::new());
+    manifold_core::scene_exposure::stamp_scene_node_exposures_into(&mut meta.params, &mut meta.bindings, 11, &NodeId::new("import_transform"), "Imported — Transform", &[scene_param_meta("pos_y", "Position Y")], &BTreeMap::new());
     let (mut project, fx) = project_with_graph(graph.clone());
     let target = GraphTarget::Effect(fx.clone());
     let mut enable = EnableSceneObjectPhysicsCommand::new(target.clone(), 0, 0, body_params(), graph.clone());
@@ -4082,6 +4082,9 @@ fn import_model_into_scene_command_extends_card_metadata_and_undo_restores() {
         section: Some("MergedGlass".to_string()),
         card_visible: true,
         material_role: None,
+        limit: Default::default(),
+        unit: None,
+        scene: None,
     };
     let new_binding = BindingDef {
         id: "opacity_1".to_string(),
@@ -4483,4 +4486,94 @@ fn scene_item_add_commands_spawn_node_and_wire_port() {
         cmd.undo(&mut project);
         assert_eq!(graph_of(&project, &fx), &before, "{}: undo restores the graph exactly", case.name);
     }
+}
+
+/// BUG-pmbd3.26 (merged sliders missing until reload): the merged model's
+/// controls reach the layer's live manifest on execute and leave it on undo,
+/// with no reload.
+#[test]
+fn import_model_into_scene_refreshes_generator_manifest_on_execute_and_undo() {
+    let mut base = render_scene_graph(1, 0);
+    base.preset_metadata = Some(PresetMetadata {
+        id: manifold_core::PresetTypeId::from_string("Existing".to_string()),
+        display_name: "Existing".to_string(),
+        category: "Geometry".to_string(),
+        osc_prefix: "existing".to_string(),
+        legacy_discriminant: None,
+        scene_modifier: None,
+        scene_bounds: None,
+        available: true,
+        is_line_based: false,
+        layer_types: None,
+        // One control already on the card, so the undone graph still names
+        // its controls and the manifest is rebuilt rather than kept.
+        params: vec![ParamSpecDef { id: "existing".to_string(), name: "Existing".to_string(), max: 1.0, ..ParamSpecDef::default() }],
+        bindings: vec![],
+        param_aliases: Vec::new(),
+        value_aliases: Vec::new(),
+        string_params: Vec::new(),
+        string_bindings: Vec::new(),
+    });
+    let (mut project, layer_id) = project_with_generator_graph(base);
+    // A typed generator: an untyped instance has no manifest to refresh.
+    {
+        let layer = project.timeline.layers.last_mut().unwrap();
+        let graph = layer.gen_params_or_init().graph.take();
+        let fx = layer.gen_params_or_init();
+        *fx = manifold_core::effects::PresetInstance::new_generator(
+            manifold_core::PresetTypeId::from_string("Existing".to_string()),
+        );
+        fx.graph = graph;
+    }
+    let new_param = ParamSpecDef {
+        id: "opacity_1".to_string(),
+        name: "Opacity".to_string(),
+        max: 1.0,
+        default_value: 1.0,
+        section: Some("MergedGlass".to_string()),
+        card_visible: true,
+        ..ParamSpecDef::default()
+    };
+    let new_binding = BindingDef {
+        id: "opacity_1".to_string(),
+        label: "Opacity".to_string(),
+        default_value: 1.0,
+        target: manifold_core::effect_graph_def::BindingTarget::Node {
+            node_id: manifold_core::NodeId::new("mat_1"),
+            param: "color_a".to_string(),
+        },
+        convert: manifold_core::effects::ParamConvert::Float,
+        user_added: false,
+        scale: 1.0,
+        offset: 0.0,
+        default_mirrors_node_param: false,
+    };
+    let mut cmd = ImportModelIntoSceneCommand::new(
+        GraphTarget::Generator(layer_id.clone()),
+        vec![],
+        0,
+        vec![plain_merge_node(50, "MergedGlass", GROUP_TYPE_ID)],
+        vec![EffectGraphWire {
+            from_node: 50,
+            from_port: "vertices".to_string(),
+            to_node: 0,
+            to_port: "mesh_1".to_string(),
+        }],
+        2,
+        vec![new_param],
+        vec![new_binding],
+        Vec::new(),
+        mirror_catalog_default(),
+    );
+    let in_manifest = |project: &Project| {
+        project
+            .timeline
+            .find_layer_by_id(&layer_id)
+            .and_then(|(_, layer)| layer.gen_params())
+            .is_some_and(|fx| fx.params.get("opacity_1").is_some())
+    };
+    cmd.execute(&mut project);
+    assert!(in_manifest(&project), "merged control in the live manifest after execute");
+    cmd.undo(&mut project);
+    assert!(!in_manifest(&project), "merged control gone from the live manifest after undo");
 }

@@ -316,8 +316,8 @@ fn layer_fp(fp: &mut Fp, layer: &Layer) {
     fp.put(Part::Layers, &(video_folder_path, relative_video_folder_path));
     fp.put(Part::Layers, &(midi_note, midi_channel, midi_device, midi_trigger_mode, duration_mode, source_clip_ids));
     for trigger in clip_triggers {
-        let crate::audio_trigger::LayerClipTrigger { enabled, source, shape, .. } = trigger;
-        fp.put(Part::Effects, &(enabled, source));
+        let crate::audio_trigger::LayerClipTrigger { enabled, source, shape, one_shot_beats } = trigger;
+        fp.put(Part::Effects, &(enabled, source, one_shot_beats));
         fp.put(Part::Shapes, shape);
     }
     fp.put(Part::Layers, &(legacy_generator_type, legacy_gen_param_values, legacy_gen_drivers, legacy_gen_param_version));
@@ -333,14 +333,17 @@ fn mapping_fp(fp: &mut Fp, m: &crate::ableton_mapping::AbletonParamMapping) {
 }
 
 fn instance_fp(fp: &mut Fp, inst: &PresetInstance) {
-    fp.put(Part::Effects, &(&inst.kind, &inst.id, inst.effect_type(), inst.enabled, inst.collapsed));
+    fp.put(Part::Effects, &(&inst.kind, &inst.id, inst.effect_type(), inst.enabled, inst.collapsed, &inst.folded_sections, &inst.unfolded_sections));
     // First base write latches base tracking; it rides with the values it tracks.
     fp.put(Part::Values, &inst.base_tracked);
     for p in inst.params.iter() {
         let mut structural = p.spec.clone();
-        // Mapping reshape (range, curve, invert, label) is a live scalar.
-        fp.put(Part::Shapes, &(&structural.name, structural.min, structural.max, &structural.curve, structural.invert, p.calibrated));
-        structural.name = String::new();
+        // Mapping reshape (range, curve, invert) is a live scalar.
+        fp.put(Part::Shapes, &(structural.min, structural.max, &structural.curve, structural.invert, p.choices.slider, &p.choices.curve, p.choices.invert));
+        // The label and the committed choices that decide labels or which rows
+        // exist and where are discrete, never dragged; the live Shapes push
+        // writes no labels (UI_INVALIDATION D22), so they rebuild through Effects.
+        fp.put(Part::Effects, &(&p.choices.rename, &p.choices.section, &p.choices.pin));
         structural.min = 0.0;
         structural.max = 0.0;
         structural.curve = Default::default();
@@ -349,21 +352,27 @@ fn instance_fp(fp: &mut Fp, inst: &PresetInstance) {
         // A runtime cache the tick re-derives from Clips and Effects.
         unowned(&p.clip_control_digest);
         fp.put(Part::Values, &(p.value, p.base, p.touched));
+        // Values are in-place, but a value that decides which rows exist is
+        // membership too (D21): only its row fact, so a drag that keeps the
+        // same rows stays a value.
+        if let Some(fact) = p.spec.row_fact(p.base) {
+            fp.put(Part::Effects, &(&p.spec.id, fact));
+        }
     }
     for d in inst.drivers.iter().flatten() {
         fp.put(Part::Effects, &d.param_id);
         fp.put(Part::Shapes, d);
     }
     for e in inst.envelopes.iter().flatten() {
-        fp.put(Part::Effects, &e.param_id);
+        fp.put(Part::Effects, &(&e.param_id, action_rows(e.action)));
         fp.put(Part::Shapes, e);
     }
     for m in inst.ableton_mappings.iter().flatten() {
         mapping_fp(fp, m);
     }
     for m in inst.audio_mods.iter().flatten() {
-        fp.put(Part::Effects, &(&m.param_id, m.enabled, &m.source));
-        fp.put(Part::Shapes, &m.shape);
+        fp.put(Part::Effects, &(&m.param_id, m.enabled, &m.source, m.trigger_mode, action_rows(m.action)));
+        fp.put(Part::Shapes, &(&m.shape, m.action));
         fp.put(Part::Values, &m.smoothed);
     }
     fp.put(Part::Automation, &inst.automation_lanes);
@@ -373,10 +382,7 @@ fn instance_fp(fp: &mut Fp, inst: &PresetInstance) {
     fp.put(Part::Overrides, &inst.graph.is_some());
     if let Some(graph) = &inst.graph {
         let mut structural = graph.clone();
-        for node in &mut structural.nodes {
-            fp.put(Part::Shapes, &node.params);
-            node.params.clear();
-        }
+        strip_node_params(fp, &mut structural.nodes);
         // Binding reshape values (range, curve, invert, scale, offset) are
         // live scalars; which bindings and params exist, and where they point,
         // is membership and stays with the graph contents.
@@ -403,6 +409,29 @@ fn instance_fp(fp: &mut Fp, inst: &PresetInstance) {
     fp.put(Part::Effects, &(inst.legacy_param0, inst.legacy_param1, inst.legacy_param2, inst.legacy_param3, inst.legacy_param_version));
     fp.put(Part::Effects, &inst.relight);
     fp.put(Part::Shapes, &inst.relight_params);
+}
+
+/// The part of a fire action that decides which drawer rows exist and which
+/// segment is lit: its kind and wrap mode. The step amount is a live scalar.
+fn action_rows(action: crate::audio_mod::TriggerAction) -> (u8, Option<crate::audio_mod::WrapMode>) {
+    use crate::audio_mod::TriggerAction;
+    match action {
+        TriggerAction::Continuous => (0, None),
+        TriggerAction::Step { wrap, .. } => (1, Some(wrap)),
+        TriggerAction::Random => (2, None),
+    }
+}
+
+/// Unbound node param values are Shapes at every depth (D21): group bodies
+/// hold nodes too. What is left is the graph's structure.
+fn strip_node_params(fp: &mut Fp, nodes: &mut [crate::effect_graph_def::EffectGraphNode]) {
+    for node in nodes {
+        fp.put(Part::Shapes, &node.params);
+        node.params.clear();
+        if let Some(body) = node.group.as_deref_mut() {
+            strip_node_params(fp, &mut body.nodes);
+        }
+    }
 }
 
 /// The parts whose fingerprint differs. A graph structure change counts as

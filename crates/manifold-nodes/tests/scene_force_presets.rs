@@ -19,8 +19,8 @@ use manifold_node_engine::{exec::effect_node::EffectNode, exec::effect_node::Eff
 const PHYSICS_SOLIDS: &str = include_str!("../assets/generator-presets/PhysicsSolids.json");
 
 const RECIPES: [(&str, &str, &str); 3] = [
-    ("UniformForce", "node.uniform_vector_field", "Vector X"),
-    ("RadialForce", "node.radial_vector_field", "Center X"),
+    ("UniformForce", "node.uniform_vector_field", "Direction X"),
+    ("RadialForce", "node.radial_vector_field", "Centre X"),
     ("VortexForce", "node.vortex_vector_field", "Axis X"),
 ];
 
@@ -141,7 +141,7 @@ fn force_recipes_validate_and_expose_finite_controls() {
             .iter()
             .find(|binding| binding.id == "impulse_strength")
             .expect("impulse strength binding");
-        assert_eq!(impulse_binding.label, "Impulse (m/s)");
+        assert_eq!(impulse_binding.label, "Kick Size");
         assert!(matches!(
             &impulse_binding.target,
             manifold_core::effect_graph_def::BindingTarget::Node { node_id, param }

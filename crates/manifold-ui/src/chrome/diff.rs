@@ -260,6 +260,20 @@ impl ChromeHost {
                 tree.clear_flag(id, UIFlags::DISABLED);
             }
         }
+        // A materialised slider sits on top of its slot, outside the laid
+        // nodes; it moves with the slot. Holders re-read `slider_ids`.
+        for i in 0..self.scratch.len() {
+            let (Some(spec), Some(key)) = (self.scratch[i].slider.as_ref(), self.scratch[i].key) else {
+                continue;
+            };
+            let rect = self.scratch[i].rect;
+            if self.laid[i].rect == rect {
+                continue;
+            }
+            if let Some((_, ids, _)) = self.slider_ids.iter_mut().find(|(k, _, _)| *k == key) {
+                BitmapSlider::relayout(tree, ids, rect, spec.label_width, spec.value);
+            }
+        }
 
         std::mem::swap(&mut self.laid, &mut self.scratch);
         Reconcile::Updated
@@ -287,7 +301,7 @@ impl ChromeHost {
 
     /// Return the retained click intent for a materialised node.
     pub fn click_action(&self, node: NodeId) -> Option<&PanelAction> {
-        let i = node.index().checked_sub(self.first_node)?;
+        let i = node.slot().checked_sub(self.first_node)?;
         (self.ids.get(i) == Some(&node))
             .then(|| self.laid.get(i)?.intent.click.as_ref())
             .flatten()
@@ -323,6 +337,33 @@ impl ChromeHost {
             .iter()
             .position(|n| n.key == Some(key))
             .and_then(|i| self.ids.get(i).copied())
+    }
+
+    /// Write the text of the node built under `key` in place, without laying
+    /// the panel out: a live value in a fixed-size slot, like a slider's
+    /// value. The panel keeps the value its next description shows, so a
+    /// later update or rebuild writes the same text. No-op before the build
+    /// or for an unknown key. Allocates nothing once the text has its
+    /// length.
+    pub fn set_text_by_key(&mut self, tree: &mut UITree, key: u64, text: &str) {
+        if !self.built {
+            return;
+        }
+        let Some(i) = self.laid.iter().position(|n| n.key == Some(key)) else {
+            return;
+        };
+        let laid = &mut self.laid[i].text;
+        if laid.as_deref() == Some(text) {
+            return;
+        }
+        match laid {
+            Some(t) => {
+                t.clear();
+                t.push_str(text);
+            }
+            None => *laid = Some(text.to_owned()),
+        }
+        tree.set_text(self.ids[i], text);
     }
 
     /// The materialised [`BitmapSlider`] ids for the slot built under `key`
@@ -425,8 +466,8 @@ mod tests {
 
         assert_eq!(host.first_node(), 1);
         assert_eq!(host.node_count(), 3); // column, label, button
-        assert_eq!(host.node_id(0).map(|n| n.index()), Some(1));
-        assert_eq!(host.node_id(2).map(|n| n.index()), Some(3));
+        assert_eq!(host.node_id(0).map(|n| n.slot()), Some(1));
+        assert_eq!(host.node_id(2).map(|n| n.slot()), Some(3));
         assert_eq!(t.count(), 4);
     }
 
@@ -452,7 +493,7 @@ mod tests {
     }
 
     #[test]
-    fn structural_change_reports_needs_rebuild_without_mutating() {
+    fn shape_change_reports_a_rebuild_without_mutating() {
         let mut t = tree();
         let mut host = ChromeHost::new();
         host.build(&mut t, &card("1.0"), rect());
@@ -499,14 +540,13 @@ mod tests {
     }
 
     #[test]
-    fn intents_reject_node_id_after_partial_rebuild() {
+    fn intents_reject_node_id_after_region_rebuild() {
         let mut t = tree();
         let mut host = ChromeHost::new();
         host.build(&mut t, &card("1.0"), rect());
         let old_button = host.node_id(2).unwrap();
-        let start = host.first_node();
 
-        t.truncate_from(start);
+        t.clear_region(old_button.region());
         host.build(&mut t, &card("2.0"), rect());
 
         let mut reg = IntentRegistry::new();
@@ -531,6 +571,44 @@ mod tests {
             .child(View::label("gone").h(Sizing::Fixed(16.0)));
         assert_eq!(host.update(&mut t, &shown, rect()), Reconcile::Updated);
         assert!(t.has_flag(hidden_id, UIFlags::VISIBLE));
+    }
+
+    // A row whose slider slot starts after a label of variable width.
+    fn slider_row(name: &str) -> View {
+        let spec = crate::chrome::view::SliderSpec {
+            label: Some("Opacity".to_string()),
+            value: 0.5,
+            default: 1.0,
+            value_text: "0.50".to_string(),
+            colors: crate::slider::SliderColors::default_slider(),
+            font_size: 12,
+            label_width: 40.0,
+            reset: PanelAction::Transport(TransportAction::Stop),
+        };
+        View::row(4.0)
+            .fill_w()
+            .h(Sizing::Fixed(20.0))
+            .child(View::label(name))
+            .child(View::slider_row(spec).fill_w().h(Sizing::Fixed(20.0)).key(7))
+    }
+
+    #[test]
+    fn an_in_place_update_moves_a_slider_with_its_slot() {
+        let bounds = |t: &UITree, ids: SliderNodeIds| {
+            [ids.label.map(|l| t.get_bounds(l)), Some(t.get_bounds(ids.track)), Some(t.get_bounds(ids.value_text))]
+        };
+        let mut fresh_tree = tree();
+        let mut fresh = ChromeHost::new();
+        fresh.build(&mut fresh_tree, &slider_row("a longer name"), rect());
+        let want = bounds(&fresh_tree, fresh.slider_ids(7).unwrap());
+
+        let mut t = tree();
+        let mut host = ChromeHost::new();
+        host.build(&mut t, &slider_row("ab"), rect());
+        assert_eq!(host.update(&mut t, &slider_row("a longer name"), rect()), Reconcile::Updated);
+        let ids = host.slider_ids(7).unwrap();
+        assert_eq!(bounds(&t, ids), want);
+        assert_eq!(ids.track_span, fresh.slider_ids(7).unwrap().track_span);
     }
 
     #[test]

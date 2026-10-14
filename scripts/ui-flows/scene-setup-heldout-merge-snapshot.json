@@ -1,7 +1,7 @@
 [
   {
     "Pointer": {
-      "target": { "Query": { "text": "Scene" } },
+      "target": { "Query": { "text": "Scene", "type": "Button", "under_name": "inspector" } },
       "gesture": { "Click": { "modifiers": {} } }
     }
   },

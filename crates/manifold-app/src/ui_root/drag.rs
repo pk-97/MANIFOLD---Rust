@@ -35,7 +35,7 @@ impl UIRoot {
                 if !inside {
                     self.dropdown.close(&mut tree);
                     self.closed_overlays.push(OverlayId::Dropdown);
-                    self.overlay_dirty = true;
+                    self.mark_overlay_dirty();
                     continue;
                 }
                 owner = Some(DragOwner::Overlay(OverlayId::Dropdown));
@@ -467,18 +467,14 @@ mod drag_capture_tests {
     // `three_pixel_wiggle_without_immediate_drag_still_resolves_to_click` and
     // `request_immediate_drag_allows_one_pixel_move_to_begin_drag` there.
 
-    /// One app frame's post-process rebuild: `overlay_dirty` (set whenever an
-    /// overlay consumes an event) drives a VISUAL `rebuild_scroll_panels` — the
-    /// exact path `app_render.rs` takes, which re-runs `build_overlays` and
-    /// re-mints the Audio Setup chrome.
+    /// A rebuild between press and release through the frame seam the app
+    /// runs: the overlays and the Audio Setup dock both re-mint, the worst
+    /// case a consumed press can cause.
     fn settle(ui: &mut UIRoot) {
-        if ui.overlay_dirty {
-            ui.overlay_dirty = false;
-            ui.rebuild_scroll_panels(ScrollDirty {
-                visual: true,
-                ..ScrollDirty::default()
-            });
-        }
+        let mut signals = crate::ui_frame::UiFrameSignals::default();
+        signals.rebuild.insert(crate::frame_plan::MainRegion::Overlays);
+        signals.rebuild.insert(crate::frame_plan::MainRegion::AudioDock);
+        crate::ui_frame::apply_ui_frame_invalidations(ui, None, &mut signals);
     }
 
     fn open_audio_panel_with_send(ui: &mut UIRoot) {
@@ -514,7 +510,7 @@ mod drag_capture_tests {
     /// Root cause it guards: the Audio Setup panel is the only overlay that
     /// consumes `PointerDown` (BUG-059 leak stopgap), so a press on one of its
     /// buttons marks the overlay dirty and rebuilds the tree BETWEEN press and
-    /// release. `rebuild_scroll_panels` → `UITree::truncate_from` used to
+    /// release. A partial rebuild through `UITree::truncate_from` used to
     /// recompute `root_count` from the current root-parented survivors, which
     /// undercounts once a root has been reparented (the inspector wraps its
     /// subpanels under a ClipRegion) — so the rebuilt overlay chrome root got a

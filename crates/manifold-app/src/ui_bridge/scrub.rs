@@ -625,7 +625,7 @@ pub(crate) fn dispatch_scrub(
     // wins over the main window's selection.
     let (effective_tab, effective_active_layer) = super::editor_dispatch_context(
         ctx.editor_target,
-        &*ctx.project,
+        &ctx.project,
         ctx.ui.inspector.last_effect_tab(),
         ctx.active_layer,
     );
@@ -638,10 +638,10 @@ pub(crate) fn dispatch_scrub(
             effective_tab,
             active_layer,
             ctx.selection,
-            ctx.project,
+            &ctx.project,
         )
         && let Some(reason) = crate::scene_modifier_edit::macro_parameter_lock_reason(
-            ctx.project,
+            &ctx.project,
             &target,
             param_id.as_ref(),
         )
@@ -670,7 +670,7 @@ pub(crate) fn dispatch_scrub(
                 effective_tab,
                 active_layer,
                 ctx.selection,
-                ctx.project,
+                &ctx.project,
             );
             dispatch_rgb_scrub(target, ids, phase, ctx)
         }
@@ -682,11 +682,11 @@ pub(crate) fn dispatch_scrub(
                     effective_tab,
                     active_layer,
                     ctx.selection,
-                    ctx.project,
+                    &ctx.project,
                 ) {
                     let val = ctx
                         .project
-                        .with_preset_graph_mut(&target, |inst| {
+                        .with_preset_graph(&target, |inst| {
                             inst.params
                                 .contains(param_id.as_ref())
                                 .then(|| inst.get_base_param(param_id.as_ref()))
@@ -699,7 +699,7 @@ pub(crate) fn dispatch_scrub(
                         if effective_tab.is_layer_scope()
                             && let Some(layer_id) =
                                 super::dispatch::params::automation_owner_layer_id(
-                                    ctx.project,
+                                    &ctx.project,
                                     &target,
                                 )
                         {
@@ -728,25 +728,28 @@ pub(crate) fn dispatch_scrub(
                         effective_tab,
                         active_layer,
                         ctx.selection,
-                        ctx.project,
+                        &ctx.project,
                     ),
                 ) {
-                    ctx.project.with_preset_graph_mut(&target, |inst| {
-                        inst.set_base_param(param_id.as_ref(), val);
-                    });
+                    // A typed or dragged value stops only at a declared hard
+                    // limit (SCENE_SURFACES_DESIGN.md D15 (slider range and hard limit)).
+                    let val = ctx
+                        .project
+                        .with_preset_graph(&target, |inst| {
+                            inst.params.get(param_id.as_ref()).map(|p| p.spec.clamp_input(val))
+                        })
+                        .flatten()
+                        .unwrap_or(val);
                     if let Some(ResolvedScrub::Param { live, .. }) = &mut ctx.scrub.active {
                         *live = val;
                     }
                     let pid = param_id.clone();
                     let t = target.clone();
-                    ContentCommand::send(
-                        ctx.content_tx,
-                        ContentCommand::mutate(crate::content_command::touch::VALUES, Box::new(move |p| {
-                            p.with_preset_graph_mut(&t, |inst| {
-                                inst.set_base_param(pid.as_ref(), val);
-                            });
-                        })),
-                    );
+                    ctx.mutate(crate::content_command::touch::VALUES, move |p| {
+                        p.with_preset_graph_mut(&t, |inst| {
+                            inst.set_base_param(pid.as_ref(), val);
+                        });
+                    });
                 }
                 DispatchResult::handled()
             }
@@ -766,12 +769,12 @@ pub(crate) fn dispatch_scrub(
                         effective_tab,
                         active_layer,
                         ctx.selection,
-                        ctx.project,
+                        &ctx.project,
                     )
                 {
                     let new_val = ctx
                         .project
-                        .with_preset_graph_mut(&target, |inst| {
+                        .with_preset_graph(&target, |inst| {
                             inst.params
                                 .contains(param_id.as_ref())
                                 .then(|| inst.get_base_param(param_id.as_ref()))
@@ -808,16 +811,12 @@ pub(crate) fn dispatch_scrub(
             }
             ScrubPhase::Move(sv) => {
                 if let Some(v) = sv.scalar() {
-                    ctx.project.settings.master_opacity = v;
                     if let Some(ResolvedScrub::MasterOpacity { live, .. }) = &mut ctx.scrub.active {
                         *live = v;
                     }
-                    ContentCommand::send(
-                        ctx.content_tx,
-                        ContentCommand::mutate(crate::content_command::touch::VALUES, Box::new(move |p| {
-                            p.settings.master_opacity = v;
-                        })),
-                    );
+                    ctx.mutate(crate::content_command::touch::VALUES, move |p| {
+                        p.settings.master_opacity = v;
+                    });
                 }
                 DispatchResult::handled()
             }
@@ -849,18 +848,14 @@ pub(crate) fn dispatch_scrub(
             }
             ScrubPhase::Move(sv) => {
                 if let Some(v) = sv.scalar() {
-                    ctx.project.settings.led_brightness = v;
                     if let Some(ResolvedScrub::LedBrightness { live, .. }) = &mut ctx.scrub.active {
                         *live = v;
                     }
                     // LED brightness lands via a plain (non-Live) mutation, as
                     // the retired `LedBrightnessChanged` did.
-                    ContentCommand::send(
-                        ctx.content_tx,
-                        ContentCommand::mutate(crate::content_command::touch::VALUES, Box::new(move |p| {
-                            p.settings.led_brightness = v;
-                        })),
-                    );
+                    ctx.mutate(crate::content_command::touch::VALUES, move |p| {
+                        p.settings.led_brightness = v;
+                    });
                 }
                 DispatchResult::handled()
             }
@@ -883,7 +878,7 @@ pub(crate) fn dispatch_scrub(
 
         ValueRef::LayerOpacity => match phase {
             ScrubPhase::Begin => {
-                if let Some(idx) = super::resolve_active_layer_index(active_layer, ctx.project)
+                if let Some(idx) = super::resolve_active_layer_index(active_layer, &ctx.project)
                     && let Some(layer) = ctx.project.timeline.layers.get(idx)
                 {
                     ctx.scrub.active = Some(ResolvedScrub::LayerOpacity {
@@ -897,23 +892,17 @@ pub(crate) fn dispatch_scrub(
             ScrubPhase::Move(sv) => {
                 if let (Some(v), Some(idx)) = (
                     sv.scalar(),
-                    super::resolve_active_layer_index(active_layer, ctx.project),
+                    super::resolve_active_layer_index(active_layer, &ctx.project),
                 ) {
-                    if let Some(layer) = ctx.project.timeline.layers.get_mut(idx) {
-                        layer.opacity = v;
-                    }
                     if let Some(ResolvedScrub::LayerOpacity { live, .. }) = &mut ctx.scrub.active {
                         *live = v;
                     }
-                    let layer_id = active_layer.clone().unwrap_or_default();
-                    ContentCommand::send(
-                        ctx.content_tx,
-                        ContentCommand::mutate(crate::content_command::touch::VALUES, Box::new(move |p| {
-                            if let Some((_, layer)) = p.timeline.find_layer_by_id_mut(&layer_id) {
-                                layer.opacity = v;
-                            }
-                        })),
-                    );
+                    let layer_id = ctx.project.timeline.layers[idx].layer_id.clone();
+                    ctx.mutate(crate::content_command::touch::VALUES, move |p| {
+                        if let Some((_, layer)) = p.timeline.find_layer_by_id_mut(&layer_id) {
+                            layer.opacity = v;
+                        }
+                    });
                 }
                 DispatchResult::handled()
             }
@@ -923,7 +912,7 @@ pub(crate) fn dispatch_scrub(
                     _ => None,
                 };
                 if let Some(old_val) = baseline
-                    && let Some(idx) = super::resolve_active_layer_index(active_layer, ctx.project)
+                    && let Some(idx) = super::resolve_active_layer_index(active_layer, &ctx.project)
                     && let Some(layer) = ctx.project.timeline.layers.get(idx)
                 {
                     let layer_id = layer.layer_id.clone();
@@ -963,13 +952,9 @@ pub(crate) fn dispatch_scrub(
                         {
                             *live = v;
                         }
-                        manifold_core::macro_bank::MacroBank::apply_macro(ctx.project, idx, v);
-                        ContentCommand::send(
-                            ctx.content_tx,
-                            ContentCommand::mutate(crate::content_command::touch::VALUES, Box::new(move |p| {
-                                manifold_core::macro_bank::MacroBank::apply_macro(p, idx, v);
-                            })),
-                        );
+                        ctx.mutate(crate::content_command::touch::VALUES, move |p| {
+                            manifold_core::macro_bank::MacroBank::apply_macro(p, idx, v);
+                        });
                     }
                     DispatchResult::handled()
                 }
@@ -1010,22 +995,18 @@ pub(crate) fn dispatch_scrub(
             }
             ScrubPhase::Move(sv) => {
                 if let Some(v) = sv.scalar()
-                    && let Some((_, layer)) = ctx.project.timeline.find_layer_by_id_mut(id)
+                    && ctx.project.timeline.find_layer_by_id(id).is_some()
                 {
-                    layer.audio_gain_db = v;
                     if let Some(ResolvedScrub::LayerAudioGain { live, .. }) = &mut ctx.scrub.active
                     {
                         *live = v;
                     }
                     let id = id.clone();
-                    ContentCommand::send(
-                        ctx.content_tx,
-                        ContentCommand::mutate(crate::content_command::touch::SHAPES, Box::new(move |p| {
-                            if let Some((_, l)) = p.timeline.find_layer_by_id_mut(&id) {
-                                l.audio_gain_db = v;
-                            }
-                        })),
-                    );
+                    ctx.mutate(crate::content_command::touch::SHAPES, move |p| {
+                        if let Some((_, l)) = p.timeline.find_layer_by_id_mut(&id) {
+                            l.audio_gain_db = v;
+                        }
+                    });
                 }
                 DispatchResult::handled()
             }
@@ -1067,11 +1048,11 @@ pub(crate) fn dispatch_scrub(
                         effective_tab,
                         active_layer,
                         ctx.selection,
-                        ctx.project,
+                        &ctx.project,
                     ) {
                         let baseline = ctx
                             .project
-                            .with_preset_graph_mut(&target, |inst| f.get(&inst.relight_params));
+                            .with_preset_graph(&target, |inst| f.get(&inst.relight_params));
                         if let Some(baseline) = baseline {
                             ctx.scrub.active = Some(ResolvedScrub::RelightParam {
                                 target,
@@ -1092,7 +1073,7 @@ pub(crate) fn dispatch_scrub(
                             effective_tab,
                             active_layer,
                             ctx.selection,
-                            ctx.project,
+                            &ctx.project,
                         ),
                     ) {
                         if let Some(ResolvedScrub::RelightParam { live, .. }) =
@@ -1102,18 +1083,12 @@ pub(crate) fn dispatch_scrub(
                         }
                         // Live drag: float knobs are per-frame uniforms — no
                         // structure-version bump (D8/P7).
-                        ctx.project.with_preset_graph_mut(&target, |inst| {
-                            f.set(&mut inst.relight_params, v);
-                        });
                         let t = target.clone();
-                        ContentCommand::send(
-                            ctx.content_tx,
-                            ContentCommand::mutate(crate::content_command::touch::SHAPES, Box::new(move |p| {
-                                p.with_preset_graph_mut(&t, |inst| {
-                                    f.set(&mut inst.relight_params, v);
-                                });
-                            })),
-                        );
+                        ctx.mutate(crate::content_command::touch::SHAPES, move |p| {
+                            p.with_preset_graph_mut(&t, |inst| {
+                                f.set(&mut inst.relight_params, v);
+                            });
+                        });
                     }
                     DispatchResult::handled()
                 }
@@ -1129,12 +1104,12 @@ pub(crate) fn dispatch_scrub(
                             effective_tab,
                             active_layer,
                             ctx.selection,
-                            ctx.project,
+                            &ctx.project,
                         )
                     {
                         let new_val = ctx
                             .project
-                            .with_preset_graph_mut(&target, |inst| f.get(&inst.relight_params));
+                            .with_preset_graph(&target, |inst| f.get(&inst.relight_params));
                         if let Some(new_val) = new_val
                             && (old_val - new_val).abs() > f32::EPSILON
                         {
@@ -1161,7 +1136,7 @@ pub(crate) fn dispatch_scrub(
                         effective_tab,
                         active_layer,
                         ctx.selection,
-                        ctx.project,
+                        &ctx.project,
                     ) {
                         // The ValueRef→resolved mapping done ONCE, at Begin (FORK
                         // 1): resolve the Ableton mapping target for the restore
@@ -1173,7 +1148,7 @@ pub(crate) fn dispatch_scrub(
                                     &target,
                                     effective_tab,
                                     active_layer,
-                                    ctx.project,
+                                    &ctx.project,
                                     param_id,
                                 )
                             })
@@ -1181,7 +1156,7 @@ pub(crate) fn dispatch_scrub(
                         let baseline = match kind {
                             TrimKind::Driver => ctx
                                 .project
-                                .with_preset_graph_mut(&target, |inst| {
+                                .with_preset_graph(&target, |inst| {
                                     inst.drivers
                                         .as_ref()
                                         .and_then(|ds| ds.iter().find(|d| d.param_id == *param_id))
@@ -1190,7 +1165,7 @@ pub(crate) fn dispatch_scrub(
                                 .flatten(),
                             TrimKind::Audio => ctx
                                 .project
-                                .with_preset_graph_mut(&target, |inst| {
+                                .with_preset_graph(&target, |inst| {
                                     inst.audio_mods
                                         .as_ref()
                                         .and_then(|ms| ms.iter().find(|a| a.param_id == *param_id))
@@ -1227,7 +1202,7 @@ pub(crate) fn dispatch_scrub(
                             effective_tab,
                             active_layer,
                             ctx.selection,
-                            ctx.project,
+                            &ctx.project,
                         ),
                     ) {
                         if let Some(ResolvedScrub::Trim { live, .. }) = &mut ctx.scrub.active {
@@ -1239,8 +1214,7 @@ pub(crate) fn dispatch_scrub(
                         match kind {
                             TrimKind::Driver => {
                                 graph_driver_dual_edit(
-                                    ctx.project,
-                                    ctx.content_tx,
+                                    &mut ctx.project,
                                     &target,
                                     param_id.clone(),
                                     move |d| {
@@ -1251,8 +1225,7 @@ pub(crate) fn dispatch_scrub(
                             }
                             TrimKind::Audio => {
                                 graph_audio_mod_dual_edit(
-                                    ctx.project,
-                                    ctx.content_tx,
+                                    &mut ctx.project,
                                     &target,
                                     param_id.clone(),
                                     move |m| {
@@ -1266,37 +1239,24 @@ pub(crate) fn dispatch_scrub(
                                     &target,
                                     effective_tab,
                                     active_layer,
-                                    ctx.project,
+                                    &ctx.project,
                                     param_id,
                                 ) {
                                     // Local edit + content sync route through the
                                     // shared locate-fork so they can't split.
-                                    if let Some(ms) = ctx
-                                        .project
-                                        .ableton_param_mappings_mut(&mapping_target)
-                                        .and_then(|opt| opt.as_mut())
-                                        && let Some(m) =
-                                            ms.iter_mut().find(|m| m.param_id == *param_id)
-                                    {
-                                        m.range_min = mn;
-                                        m.range_max = mx;
-                                    }
                                     let mt = mapping_target.clone();
                                     let pid = param_id.clone();
-                                    ContentCommand::send(
-                                        ctx.content_tx,
-                                        ContentCommand::mutate(crate::content_command::touch::MAPPING_RANGES, Box::new(move |p| {
-                                            if let Some(ms) = p
-                                                .ableton_param_mappings_mut(&mt)
-                                                .and_then(|opt| opt.as_mut())
-                                                && let Some(m) =
-                                                    ms.iter_mut().find(|m| m.param_id == pid)
-                                            {
-                                                m.range_min = mn;
-                                                m.range_max = mx;
-                                            }
-                                        })),
-                                    );
+                                    ctx.mutate(crate::content_command::touch::MAPPING_RANGES, move |p| {
+                                        if let Some(ms) = p
+                                            .ableton_param_mappings_mut(&mt)
+                                            .and_then(|opt| opt.as_mut())
+                                            && let Some(m) =
+                                                ms.iter_mut().find(|m| m.param_id == pid)
+                                        {
+                                            m.range_min = mn;
+                                            m.range_max = mx;
+                                        }
+                                    });
                                 }
                             }
                         }
@@ -1315,14 +1275,14 @@ pub(crate) fn dispatch_scrub(
                             effective_tab,
                             active_layer,
                             ctx.selection,
-                            ctx.project,
+                            &ctx.project,
                         )
                     {
                         match kind {
                             TrimKind::Driver => {
                                 let info = ctx
                                     .project
-                                    .with_preset_graph_mut(&target, |inst| {
+                                    .with_preset_graph(&target, |inst| {
                                         inst.drivers
                                             .as_ref()
                                             .and_then(|ds| {
@@ -1355,7 +1315,7 @@ pub(crate) fn dispatch_scrub(
                             TrimKind::Audio => {
                                 let new_shape = ctx
                                     .project
-                                    .with_preset_graph_mut(&target, |inst| {
+                                    .with_preset_graph(&target, |inst| {
                                         inst.audio_mods
                                             .as_ref()
                                             .and_then(|ms| {
@@ -1388,7 +1348,7 @@ pub(crate) fn dispatch_scrub(
                                     &target,
                                     effective_tab,
                                     active_layer,
-                                    ctx.project,
+                                    &ctx.project,
                                     param_id,
                                 ) {
                                     let new = ctx
@@ -1427,11 +1387,11 @@ pub(crate) fn dispatch_scrub(
                     effective_tab,
                     active_layer,
                     ctx.selection,
-                    ctx.project,
+                    &ctx.project,
                 ) {
                     let baseline = ctx
                         .project
-                        .with_preset_graph_mut(&target, |inst| {
+                        .with_preset_graph(&target, |inst| {
                             inst.envelopes
                                 .as_ref()
                                 .and_then(|es| es.iter().find(|e| e.param_id == *param_id))
@@ -1458,7 +1418,7 @@ pub(crate) fn dispatch_scrub(
                         effective_tab,
                         active_layer,
                         ctx.selection,
-                        ctx.project,
+                        &ctx.project,
                     ),
                 ) {
                     if let Some(ResolvedScrub::EnvelopeTarget { live, .. }) = &mut ctx.scrub.active
@@ -1466,8 +1426,7 @@ pub(crate) fn dispatch_scrub(
                         *live = v;
                     }
                     graph_env_dual_edit(
-                        ctx.project,
-                        ctx.content_tx,
+                        &mut ctx.project,
                         &target,
                         param_id.clone(),
                         move |env| {
@@ -1489,12 +1448,12 @@ pub(crate) fn dispatch_scrub(
                         effective_tab,
                         active_layer,
                         ctx.selection,
-                        ctx.project,
+                        &ctx.project,
                     )
                 {
                     let info = ctx
                         .project
-                        .with_preset_graph_mut(&target, |inst| {
+                        .with_preset_graph(&target, |inst| {
                             inst.envelopes
                                 .as_ref()
                                 .and_then(|es| es.iter().position(|e| e.param_id == *param_id))
@@ -1527,11 +1486,11 @@ pub(crate) fn dispatch_scrub(
                     effective_tab,
                     active_layer,
                     ctx.selection,
-                    ctx.project,
+                    &ctx.project,
                 ) {
                     let baseline = ctx
                         .project
-                        .with_preset_graph_mut(&target, |inst| {
+                        .with_preset_graph(&target, |inst| {
                             inst.envelopes
                                 .as_ref()
                                 .and_then(|es| es.iter().find(|e| e.param_id == *param_id))
@@ -1558,15 +1517,14 @@ pub(crate) fn dispatch_scrub(
                         effective_tab,
                         active_layer,
                         ctx.selection,
-                        ctx.project,
+                        &ctx.project,
                     ),
                 ) {
                     if let Some(ResolvedScrub::EnvDecay { live, .. }) = &mut ctx.scrub.active {
                         *live = v;
                     }
                     graph_env_dual_edit(
-                        ctx.project,
-                        ctx.content_tx,
+                        &mut ctx.project,
                         &target,
                         param_id.clone(),
                         move |env| {
@@ -1588,12 +1546,12 @@ pub(crate) fn dispatch_scrub(
                         effective_tab,
                         active_layer,
                         ctx.selection,
-                        ctx.project,
+                        &ctx.project,
                     )
                 {
                     let info = ctx
                         .project
-                        .with_preset_graph_mut(&target, |inst| {
+                        .with_preset_graph(&target, |inst| {
                             inst.envelopes
                                 .as_ref()
                                 .and_then(|es| es.iter().position(|e| e.param_id == *param_id))
@@ -1624,14 +1582,14 @@ pub(crate) fn dispatch_scrub(
                     effective_tab,
                     active_layer,
                     ctx.selection,
-                    ctx.project,
+                    &ctx.project,
                 ) {
                     // Capture the WHOLE pre-drag shape as the undo baseline (the
                     // restore path re-stamps all three scalars, so a stomp on a
                     // one-scalar drag can't revert the others).
                     let baseline = ctx
                         .project
-                        .with_preset_graph_mut(&target, |inst| {
+                        .with_preset_graph(&target, |inst| {
                             inst.audio_mods
                                 .as_ref()
                                 .and_then(|ms| ms.iter().find(|a| a.param_id == *param_id))
@@ -1658,7 +1616,7 @@ pub(crate) fn dispatch_scrub(
                         effective_tab,
                         active_layer,
                         ctx.selection,
-                        ctx.project,
+                        &ctx.project,
                     ),
                 ) {
                     let which = *which;
@@ -1670,8 +1628,7 @@ pub(crate) fn dispatch_scrub(
                         }
                     }
                     graph_audio_mod_dual_edit(
-                        ctx.project,
-                        ctx.content_tx,
+                        &mut ctx.project,
                         &target,
                         param_id.clone(),
                         move |m| match which {
@@ -1698,12 +1655,12 @@ pub(crate) fn dispatch_scrub(
                         effective_tab,
                         active_layer,
                         ctx.selection,
-                        ctx.project,
+                        &ctx.project,
                     )
                 {
                     let new_shape = ctx
                         .project
-                        .with_preset_graph_mut(&target, |inst| {
+                        .with_preset_graph(&target, |inst| {
                             inst.audio_mods
                                 .as_ref()
                                 .and_then(|ms| ms.iter().find(|a| a.param_id == *param_id))
@@ -1713,15 +1670,14 @@ pub(crate) fn dispatch_scrub(
                     if let Some(new_shape) = new_shape
                         && new_shape != old_shape
                     {
-                        let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
+                        let boxed: Box<dyn manifold_editing::command::Command + Send> =
                             Box::new(SetAudioModShapeCommand::new(
                                 DriverTarget::from(&target),
                                 param_id.clone(),
                                 old_shape,
                                 new_shape,
                             ));
-                        boxed.execute(ctx.project);
-                        ContentCommand::send(ctx.content_tx, ContentCommand::Execute(boxed));
+                        ctx.execute(boxed);
                     }
                 }
                 DispatchResult::handled()
@@ -1736,14 +1692,14 @@ pub(crate) fn dispatch_scrub(
                     effective_tab,
                     active_layer,
                     ctx.selection,
-                    ctx.project,
+                    &ctx.project,
                 ) {
                     // Capture the WHOLE pre-drag action as the undo baseline (the
                     // commit diffs it against the new action); the restore path
                     // re-stamps only the live amount, preserving wrap.
                     let baseline = ctx
                         .project
-                        .with_preset_graph_mut(&target, |inst| {
+                        .with_preset_graph(&target, |inst| {
                             inst.find_audio_mod(param_id.as_ref()).map(|m| m.action)
                         })
                         .flatten();
@@ -1771,7 +1727,7 @@ pub(crate) fn dispatch_scrub(
                         effective_tab,
                         active_layer,
                         ctx.selection,
-                        ctx.project,
+                        &ctx.project,
                     ),
                 ) {
                     if let Some(ResolvedScrub::AudioModStepAmount { live_amount, .. }) =
@@ -1782,8 +1738,7 @@ pub(crate) fn dispatch_scrub(
                     // Re-stamp the Step action preserving the current wrap — the
                     // same dual-edit the retired `AudioModStepAmountChanged` arm ran.
                     graph_audio_mod_dual_edit(
-                        ctx.project,
-                        ctx.content_tx,
+                        &mut ctx.project,
                         &target,
                         param_id.clone(),
                         move |m| {
@@ -1813,27 +1768,26 @@ pub(crate) fn dispatch_scrub(
                         effective_tab,
                         active_layer,
                         ctx.selection,
-                        ctx.project,
+                        &ctx.project,
                     )
                 {
                     let new_action = ctx
                         .project
-                        .with_preset_graph_mut(&target, |inst| {
+                        .with_preset_graph(&target, |inst| {
                             inst.find_audio_mod(param_id.as_ref()).map(|m| m.action)
                         })
                         .flatten();
                     if let Some(new_action) = new_action
                         && new_action != old_action
                     {
-                        let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
+                        let boxed: Box<dyn manifold_editing::command::Command + Send> =
                             Box::new(SetAudioModActionCommand::new(
                                 DriverTarget::from(&target),
                                 param_id.clone(),
                                 old_action,
                                 new_action,
                             ));
-                        boxed.execute(ctx.project);
-                        ContentCommand::send(ctx.content_tx, ContentCommand::Execute(boxed));
+                        ctx.execute(boxed);
                     }
                 }
                 DispatchResult::handled()
@@ -1848,11 +1802,11 @@ pub(crate) fn dispatch_scrub(
                     effective_tab,
                     active_layer,
                     ctx.selection,
-                    ctx.project,
+                    &ctx.project,
                 ) {
                     let baseline = ctx
                         .project
-                        .with_preset_graph_mut(&target, |inst| {
+                        .with_preset_graph(&target, |inst| {
                             inst.envelopes
                                 .as_ref()
                                 .and_then(|es| es.iter().find(|e| e.param_id == *param_id))
@@ -1883,7 +1837,7 @@ pub(crate) fn dispatch_scrub(
                         effective_tab,
                         active_layer,
                         ctx.selection,
-                        ctx.project,
+                        &ctx.project,
                     ),
                 ) {
                     if let Some(ResolvedScrub::EnvelopeStepAmount { live_amount, .. }) =
@@ -1892,8 +1846,7 @@ pub(crate) fn dispatch_scrub(
                         *live_amount = v;
                     }
                     graph_env_dual_edit(
-                        ctx.project,
-                        ctx.content_tx,
+                        &mut ctx.project,
                         &target,
                         param_id.clone(),
                         move |env| {
@@ -1920,12 +1873,12 @@ pub(crate) fn dispatch_scrub(
                         effective_tab,
                         active_layer,
                         ctx.selection,
-                        ctx.project,
+                        &ctx.project,
                     )
                 {
                     let info = ctx
                         .project
-                        .with_preset_graph_mut(&target, |inst| {
+                        .with_preset_graph(&target, |inst| {
                             inst.envelopes
                                 .as_ref()
                                 .and_then(|es| es.iter().position(|e| e.param_id == *param_id))
@@ -1935,12 +1888,11 @@ pub(crate) fn dispatch_scrub(
                     if let Some((env_idx, new_action)) = info
                         && new_action != old_action
                     {
-                        let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
+                        let boxed: Box<dyn manifold_editing::command::Command + Send> =
                             Box::new(SetEnvelopeActionCommand::new(
                                 target, env_idx, old_action, new_action,
                             ));
-                        boxed.execute(ctx.project);
-                        ContentCommand::send(ctx.content_tx, ContentCommand::Execute(boxed));
+                        ctx.execute(boxed);
                     }
                 }
                 DispatchResult::handled()
@@ -1955,7 +1907,7 @@ pub(crate) fn dispatch_scrub(
                 let baseline = ctx
                     .project
                     .timeline
-                    .find_layer_by_id_mut(layer_id)
+                    .find_layer_by_id(layer_id)
                     .and_then(|(_, l)| l.clip_triggers.get(*index))
                     .map(|t| t.shape);
                 if let Some(baseline) = baseline {
@@ -1981,8 +1933,7 @@ pub(crate) fn dispatch_scrub(
                         }
                     }
                     clip_trigger_shape_dual_edit(
-                        ctx.project,
-                        ctx.content_tx,
+                        &mut ctx.project,
                         layer_id,
                         *index,
                         move |shape| match which {
@@ -2007,22 +1958,21 @@ pub(crate) fn dispatch_scrub(
                     let current = ctx
                         .project
                         .timeline
-                        .find_layer_by_id_mut(layer_id)
+                        .find_layer_by_id(layer_id)
                         .and_then(|(_, l)| l.clip_triggers.get(*index).cloned());
                     if let Some(current) = current
                         && current.shape != old_shape
                     {
                         let mut old = current.clone();
                         old.shape = old_shape;
-                        let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
+                        let boxed: Box<dyn manifold_editing::command::Command + Send> =
                             Box::new(SetLayerClipTriggerCommand::new(
                                 layer_id.clone(),
                                 *index,
                                 old,
                                 current,
                             ));
-                        boxed.execute(ctx.project);
-                        ContentCommand::send(ctx.content_tx, ContentCommand::Execute(boxed));
+                        ctx.execute(boxed);
                     }
                 }
                 DispatchResult::handled()
@@ -2057,18 +2007,12 @@ pub(crate) fn dispatch_scrub(
                     if let Some(ResolvedScrub::AudioSendGain { live, .. }) = &mut ctx.scrub.active {
                         *live = clamped;
                     }
-                    if let Some(s) = ctx.project.audio_setup.find_send_mut(send_id) {
-                        s.gain_db = clamped;
-                    }
                     let id = send_id.clone();
-                    ContentCommand::send(
-                        ctx.content_tx,
-                        ContentCommand::mutate(crate::content_command::touch::SHAPES, Box::new(move |p| {
-                            if let Some(s) = p.audio_setup.find_send_mut(&id) {
-                                s.gain_db = clamped;
-                            }
-                        })),
-                    );
+                    ctx.mutate(crate::content_command::touch::SHAPES, move |p| {
+                        if let Some(s) = p.audio_setup.find_send_mut(&id) {
+                            s.gain_db = clamped;
+                        }
+                    });
                 }
                 DispatchResult::handled()
             }
@@ -2090,8 +2034,7 @@ pub(crate) fn dispatch_scrub(
                         .unwrap_or(old);
                     if (new - old).abs() > f32::EPSILON {
                         return audio_setup_command(
-                            ctx.project,
-                            ctx.content_tx,
+                            &mut ctx.project,
                             Box::new(SetAudioSendGainCommand::new(send_id.clone(), old, new)),
                         );
                     }
@@ -2134,15 +2077,10 @@ pub(crate) fn dispatch_scrub(
                     {
                         *live = (low, mid);
                     }
-                    ctx.project.audio_setup.low_hz = low;
-                    ctx.project.audio_setup.mid_hz = mid;
-                    ContentCommand::send(
-                        ctx.content_tx,
-                        ContentCommand::mutate(crate::content_command::touch::SHAPES, Box::new(move |p| {
-                            p.audio_setup.low_hz = low;
-                            p.audio_setup.mid_hz = mid;
-                        })),
-                    );
+                    ctx.mutate(crate::content_command::touch::SHAPES, move |p| {
+                        p.audio_setup.low_hz = low;
+                        p.audio_setup.mid_hz = mid;
+                    });
                 }
                 DispatchResult::handled()
             }
@@ -2161,8 +2099,7 @@ pub(crate) fn dispatch_scrub(
                     );
                     if new != old {
                         return audio_setup_command(
-                            ctx.project,
-                            ctx.content_tx,
+                            &mut ctx.project,
                             Box::new(SetAudioCrossoversCommand::new(old, new)),
                         );
                     }
@@ -2205,32 +2142,18 @@ pub(crate) fn dispatch_scrub(
                     {
                         *live = (min, max);
                     }
-                    if let Some(m) = ctx
-                        .project
-                        .settings
-                        .macro_bank
-                        .slots
-                        .get_mut(slot_idx)
-                        .and_then(|s| s.ableton_mapping.as_mut())
-                    {
-                        m.range_min = min;
-                        m.range_max = max;
-                    }
-                    ContentCommand::send(
-                        ctx.content_tx,
-                        ContentCommand::mutate(crate::content_command::touch::MAPPING_RANGES, Box::new(move |p| {
-                            if let Some(m) = p
-                                .settings
-                                .macro_bank
-                                .slots
-                                .get_mut(slot_idx)
-                                .and_then(|s| s.ableton_mapping.as_mut())
-                            {
-                                m.range_min = min;
-                                m.range_max = max;
-                            }
-                        })),
-                    );
+                    ctx.mutate(crate::content_command::touch::MAPPING_RANGES, move |p| {
+                        if let Some(m) = p
+                            .settings
+                            .macro_bank
+                            .slots
+                            .get_mut(slot_idx)
+                            .and_then(|s| s.ableton_mapping.as_mut())
+                        {
+                            m.range_min = min;
+                            m.range_max = max;
+                        }
+                    });
                 }
                 DispatchResult::handled()
             }
@@ -2284,7 +2207,7 @@ fn dispatch_rgb_scrub(
     match phase {
         ScrubPhase::Begin => {
             if let Some(target) = target {
-                if rgb_editable(ctx.project, &target, ids) {
+                if rgb_editable(&ctx.project, &target, ids) {
                     let inst = ctx
                         .project
                         .preset_instance(&target)
@@ -2324,36 +2247,28 @@ fn dispatch_rgb_scrub(
                                     .is_some_and(|p| *value >= p.spec.min && *value <= p.spec.max)
                             })
                     })
-                    || !rgb_editable(ctx.project, captured, param_ids)
+                    || !rgb_editable(&ctx.project, captured, param_ids)
                 {
                     return DispatchResult::handled();
                 }
                 let values = *values;
                 *live = values;
-                ctx.project.with_preset_graph_mut(captured, |inst| {
-                    for (id, value) in param_ids.iter().zip(values) {
-                        inst.set_base_param(id, value);
-                    }
-                });
                 let t = captured.clone();
                 let pids = param_ids.clone();
                 let preset = preset.clone();
-                ContentCommand::send(
-                    ctx.content_tx,
-                    ContentCommand::mutate(crate::content_command::touch::VALUES, Box::new(move |project| {
-                        if project
-                            .preset_instance(&t)
-                            .is_some_and(|inst| inst.effect_type() == &preset)
-                            && rgb_editable(project, &t, &pids)
-                        {
-                            project.with_preset_graph_mut(&t, |inst| {
-                                for (id, value) in pids.iter().zip(values) {
-                                    inst.set_base_param(id, value);
-                                }
-                            });
-                        }
-                    })),
-                );
+                ctx.project.mutate(crate::content_command::touch::VALUES, move |project| {
+                    if project
+                        .preset_instance(&t)
+                        .is_some_and(|inst| inst.effect_type() == &preset)
+                        && rgb_editable(project, &t, &pids)
+                    {
+                        project.with_preset_graph_mut(&t, |inst| {
+                            for (id, value) in pids.iter().zip(values) {
+                                inst.set_base_param(id, value);
+                            }
+                        });
+                    }
+                });
             }
         }
         ScrubPhase::Move(_) => {}

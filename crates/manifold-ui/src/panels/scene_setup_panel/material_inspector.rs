@@ -54,17 +54,14 @@ impl ScenePanel {
         })]
     }
 
-    /// Material descriptors provide the user-facing grouping while ordinary
-    /// scene rows continue to use their stamped manifest section verbatim.
+    /// Material descriptors title the material inspector's sections; every
+    /// other row is titled by its control group (SCENE_SURFACES D8).
     pub(super) fn material_section_name(&self, row: &ParamRow) -> Option<String> {
         if self.material_object_gain(row) {
             return Some("Emission".to_string());
         }
         let Some(role) = row.spec.material_role else {
-            return match row.spec.section.as_deref() {
-                Some("Material") => Some("Advanced".to_string()),
-                _ => row.spec.section.clone(),
-            };
+            return Some(self.property_group(row).title().to_string());
         };
         let name = match role {
             MaterialParamRole::Placement(family, ..) | MaterialParamRole::Sampler(family, ..) => {
@@ -278,13 +275,6 @@ impl ScenePanel {
         )
     }
 
-    fn material_rgb_colour(row: &ParamRow) -> Option<crate::param_surface::MaterialColour> {
-        match row.spec.material_role {
-            Some(MaterialParamRole::Colour(_, colour, RgbChannel::R)) => Some(colour),
-            _ => None,
-        }
-    }
-
     fn material_rgb_members_for_param(
         &self,
         param_id: &manifold_foundation::ParamId,
@@ -292,6 +282,7 @@ impl ScenePanel {
         self.properties_card.rows.iter().find_map(|row| {
             row.rgb_members
                 .as_ref()
+                .map(|members| &members.ids)
                 .filter(|members| members.contains(param_id))
                 .cloned()
         })
@@ -695,18 +686,6 @@ impl ScenePanel {
             self.material_mode_ids.push((id, slot));
             return cy + ROW_H + ROW_GAP;
         }
-        let mut row_cy = cy;
-        if info.rgb_members.is_some() && Self::material_rgb_colour(&info).is_some() {
-            row_cy = self.build_material_swatch_header(
-                tree,
-                inner_x,
-                cy,
-                slot,
-                label_width,
-                slider_w,
-                &info,
-            );
-        }
 
         // Boolean and trigger parameters use the shared button/dispatch path.
         if info.spec.is_toggle || info.spec.is_trigger {
@@ -721,7 +700,7 @@ impl ScenePanel {
                 tree,
                 Some(self.content_parent),
                 inner_x,
-                row_cy,
+                cy,
                 slider_w,
                 &info,
                 &self.properties_card.mod_state,
@@ -769,7 +748,7 @@ impl ScenePanel {
             tree,
             Some(self.content_parent),
             inner_x,
-            row_cy,
+            cy,
             slider_w,
             &info,
             &self.properties_card.mod_state,
@@ -813,106 +792,7 @@ impl ScenePanel {
             .clamp(0.0, 1.0)
     }
 
-    pub(super) fn sync_material_swatches(&self, tree: &mut UITree) {
-        for (node, _, ids, _) in &self.material_swatch_ids {
-            let rgb: [u8; 3] = std::array::from_fn(|index| {
-                (self.material_full_value(&ids[index]) * 255.0).round() as u8
-            });
-            let colour = Color32::new(rgb[0], rgb[1], rgb[2], 255); // design-token-exempt: displays authored material RGB, not a UI theme colour
-            let Some(current) = tree.get_node(*node) else {
-                continue;
-            };
-            if current.style.bg_color == colour {
-                continue;
-            }
-            let mut style = current.style;
-            style.bg_color = colour;
-            style.text_color = if rgb.iter().map(|v| *v as u32).sum::<u32>() > 421 {
-                Color32::BLACK
-            } else {
-                Color32::WHITE
-            };
-            tree.set_style(*node, style);
-            tree.set_text(
-                *node,
-                &format!("#{:02X}{:02X}{:02X}", rgb[0], rgb[1], rgb[2]),
-            );
-        }
-    }
-
-    fn build_material_swatch_header(
-        &mut self,
-        tree: &mut UITree,
-        inner_x: f32,
-        cy: f32,
-        slot: usize,
-        label_width: f32,
-        slider_w: f32,
-        info: &ParamRow,
-    ) -> f32 {
-        let Some(rgb_members) = info.rgb_members.clone() else {
-            return cy;
-        };
-        let Some(colour) = Self::material_rgb_colour(info) else {
-            return cy;
-        };
-        let rgb = rgb_members.clone().map(|id| self.material_full_value(&id));
-        let to_byte = |value: f32| (value * 255.0).round() as u8;
-        let label = format!(
-            "#{:02X}{:02X}{:02X}",
-            to_byte(rgb[0]),
-            to_byte(rgb[1]),
-            to_byte(rgb[2])
-        );
-        tree.add_label(
-            Some(self.content_parent),
-            inner_x,
-            cy,
-            label_width,
-            ROW_H,
-            match colour {
-                crate::param_surface::MaterialColour::Base => "Base colour",
-                crate::param_surface::MaterialColour::Specular => "Specular tint",
-                crate::param_surface::MaterialColour::Emission => "Emission colour",
-                crate::param_surface::MaterialColour::Sheen => "Sheen colour",
-                crate::param_surface::MaterialColour::Attenuation => "Attenuation colour",
-                crate::param_surface::MaterialColour::VolumeScattering => "Volume scattering colour",
-                crate::param_surface::MaterialColour::Subsurface => "Scattering colour",
-                crate::param_surface::MaterialColour::Translucency => "Translucency colour",
-            },
-            label_style(),
-        );
-        let swatch_id = tree.add_button_keyed(
-            Some(self.content_parent),
-            inner_x + label_width,
-            cy,
-            (slider_w - label_width).max(0.0),
-            ROW_H,
-            UIStyle {
-                bg_color: Color32::new(to_byte(rgb[0]), to_byte(rgb[1]), to_byte(rgb[2]), 255), // design-token-exempt: displays authored material RGB, not a UI theme colour
-                text_color: if rgb.iter().copied().sum::<f32>() > 1.65 {
-                    Color32::BLACK
-                } else {
-                    Color32::WHITE
-                },
-                font_size: color::FONT_LABEL,
-                corner_radius: color::SMALL_RADIUS,
-                ..drag_value_style()
-            },
-            &label,
-            param_row_key_base(info.id.as_ref()) | MATERIAL_SWATCH_KEY_BASE,
-        );
-        tree.set_name(swatch_id, format!("material.swatch.{}", info.id));
-        self.material_swatch_ids
-            .push((swatch_id, slot, rgb_members, colour));
-        self.properties_card.row_host.row_index.insert(
-            tree.widget_of(swatch_id),
-            slot,
-            RowRole::ColourSwatch(colour),
-        );
-        cy + ROW_H + ROW_GAP
-    }
-
+    /// The selected item's header over its controls (D8).
     pub(super) fn build_properties(
         &mut self,
         tree: &mut UITree,
@@ -922,16 +802,11 @@ impl ScenePanel {
         vm: &SceneSetupVm,
         selected: SceneSelection,
     ) -> f32 {
-        tree.add_label(
-            Some(self.content_parent),
-            inner_x,
-            cy,
-            inner_w,
-            ROW_H,
-            "Properties",
-            section_label_style(),
-        );
-        cy += ROW_H;
+        let Some(item) = vm.items.iter().find(|item| item.selection == selected) else {
+            return cy;
+        };
+        cy = self.build_item_header(tree, (inner_x, inner_w), cy, vm, item);
+        let owned = item.parameter_ids.as_slice();
         match selected {
             SceneSelection::Object(id) => {
                 let Some(row) = vm.objects.iter().find_map(|o| match o {
@@ -940,144 +815,19 @@ impl ScenePanel {
                 }) else {
                     return cy;
                 };
-                cy = self.build_object_properties_header(tree, inner_x, inner_w, cy, row);
-                self.build_object_properties_body(tree, inner_x, inner_w, cy, row)
+                self.build_object_properties_body(tree, inner_x, inner_w, cy, (row, owned))
             }
-            SceneSelection::Light(id) => {
-                let Some(row) = vm.lights.iter().find_map(|l| match l {
-                    LightRowVm::Known(r) if r.node_doc_id == id => Some(r.as_ref()),
-                    _ => None,
-                }) else {
-                    return cy;
-                };
-                cy = self.build_light_properties_header(tree, inner_x, inner_w, cy, row);
-                self.build_light_properties_body(tree, inner_x, inner_w, cy, row)
+            SceneSelection::Light(_) => {
+                self.build_item_properties(tree, inner_x, inner_w, cy, PropertyRows::new(owned, ControlGroup::Light))
             }
-            SceneSelection::Camera => self.build_camera_section(tree, inner_x, inner_w, cy, vm),
-            SceneSelection::World => self.build_world_properties(tree, inner_x, inner_w, cy, vm),
-            SceneSelection::Physics => self.build_world_category_properties(
-                tree, inner_x, inner_w, cy, vm, &["Physics"],
-            ),
-            SceneSelection::Rendering => self.build_world_category_properties(
-                tree, inner_x, inner_w, cy, vm, &["Rendering"],
-            ),
+            SceneSelection::Physics(_) => {
+                self.build_item_properties(tree, inner_x, inner_w, cy, PropertyRows::new(owned, ControlGroup::PhysicsWorld))
+            }
+            SceneSelection::Camera => self.build_camera_section(tree, (inner_x, inner_w), cy, vm, owned),
+            SceneSelection::World => self.build_world_properties(tree, inner_x, inner_w, cy, vm, owned),
             SceneSelection::Force(id) => self.build_force_card(tree, inner_x, inner_w, cy, &id),
-            SceneSelection::OutlinerFold(_) => cy, // Fold headers don't have properties
+            SceneSelection::OutlinerFold(_) => cy,
         }
-    }
-
-    /// Object properties header: editable name (click to rename — same
-    /// single-click-opens-text-input UX the outliner/graph rename affordance
-    /// already uses) + Frame, with a permanent child Hide action or the
-    /// regular object's Duplicate + Remove actions (D11).
-    fn build_object_properties_header(
-        &mut self,
-        tree: &mut UITree,
-        inner_x: f32,
-        inner_w: f32,
-        cy: f32,
-        row: &ObjectKnownRow,
-    ) -> f32 {
-        // Frame needs two icon-cell widths for its five-letter label. Keep the
-        // existing total header budget so the name and action cells retain
-        // their established positions and remain reachable.
-        let frame_w = STEP_W * 2.0;
-        let family_parent = self.is_family_parent(row);
-        let show_hide = row.look_mesh.is_some();
-        let show_duplicate = row.look_mesh.is_none() && !family_parent;
-        let show_remove = row.look_mesh.is_none();
-        let btn_w = frame_w
-            + frame_w * (show_hide as u8) as f32
-            + STEP_W * (show_duplicate as u8 + show_remove as u8) as f32;
-        let name_w = inner_w - btn_w - 8.0;
-        let name_id = tree.add_button_keyed(
-            Some(self.content_parent),
-            inner_x,
-            cy,
-            name_w,
-            ROW_H,
-            drag_value_style(),
-            &row.name,
-            obj_key(row.object_node_id as usize, OBJ_OFF_NAME),
-        );
-        // Stable automation name (UX-P1): `scripts/ui-flows/` selects the
-        // Properties header's name text by NAME, not raw text, so a flow can
-        // assert "the header text changed" without hard-coding which object
-        // it changed to.
-        tree.set_name(name_id, "scene_setup.properties.name_value");
-        self.object_name_ids
-            .push((row.object_node_id, name_id, row.name.clone()));
-
-        // Frame button (scene-panel-ux lane)
-        let frame_id = tree.add_button_keyed(
-            Some(self.content_parent),
-            inner_x + name_w + 4.0,
-            cy,
-            frame_w,
-            ROW_H,
-            btn_style(),
-            "Frame",
-            obj_key(row.object_node_id as usize, OBJ_OFF_FRAME),
-        );
-        self.object_frame_ids.push((frame_id, row.object_node_id));
-        tree.set_name(frame_id, "scene_setup.properties.frame");
-
-        let mut action_x = inner_x + name_w + 4.0 + frame_w;
-        if show_hide {
-            let hide_id = tree.add_button_keyed(
-                Some(self.content_parent),
-                action_x,
-                cy,
-                frame_w,
-                ROW_H,
-                if row.visible.driven { driven_label_style() } else { btn_style() },
-                "Hide",
-                obj_key(row.object_node_id as usize, OBJ_OFF_HIDE),
-            );
-            tree.set_name(hide_id, "scene_setup.properties.hide");
-            if !row.visible.driven {
-                self.object_hide_ids.push((hide_id, row.visible.clone()));
-            }
-            action_x += frame_w;
-        }
-        if show_duplicate {
-            let dup_id = tree.add_button_keyed(
-                Some(self.content_parent),
-                action_x,
-                cy,
-                STEP_W,
-                ROW_H,
-                btn_style(),
-                "\u{29C9}",
-                obj_key(row.object_node_id as usize, OBJ_OFF_REMOVE) + 1,
-            );
-            tree.set_name(dup_id, "scene_setup.properties.duplicate");
-            if row.parent_group_id.is_some() && !row.is_group {
-                self.submesh_duplicate_ids.push((dup_id, row.index));
-            } else {
-                self.object_duplicate_ids.push((dup_id, row.index));
-            }
-            action_x += STEP_W;
-        }
-        if show_remove {
-            let remove_id = tree.add_button_keyed(
-                Some(self.content_parent),
-                action_x,
-                cy,
-                STEP_W,
-                ROW_H,
-                btn_style(),
-                "\u{2715}",
-                obj_key(row.object_node_id as usize, OBJ_OFF_REMOVE),
-            );
-            tree.set_name(remove_id, "scene_setup.properties.remove");
-            if row.parent_group_id.is_some() && !row.is_group {
-                self.submesh_remove_ids.push((remove_id, row.index));
-            } else {
-                self.object_remove_ids.push((remove_id, row.index));
-            }
-        }
-        cy + ROW_H + ROW_GAP
     }
 
     fn build_object_physics_properties(
@@ -1128,39 +878,26 @@ impl ScenePanel {
         self.build_fluid_role_action(tree, inner_x, inner_w, cy + ROW_GAP, row)
     }
 
-    /// Object properties body: transform/material rows followed by the
-    /// selected object's shared modifier cards. The body is always rendered
-    /// (there is no fold state left — the outliner IS the fold).
-    /// P2 slice 2a: replaced the transform-triplet/material/metallic/
-    /// roughness row builders with one `build_filtered_properties` pass over
-    /// `row.sections` while excluding modifier owners. Each modifier's full
-    /// parameter rows then live inside its own shared card, in stack order;
-    /// the add control remains the one structural affordance beneath them.
+    /// Object controls grouped by `ControlGroup`, with the material block
+    /// inside the Material group, then the modifier cards and their add
+    /// control, then physics and fluid actions. Modifier rows live only in
+    /// their cards, so every modifier id in the scene is excluded here: a
+    /// copied modifier can still be owned by another object's nodes.
     fn build_object_properties_body(
         &mut self,
         tree: &mut UITree,
         inner_x: f32,
         inner_w: f32,
         mut cy: f32,
-        row: &ObjectKnownRow,
+        (row, owned): (&ObjectKnownRow, &[String]),
     ) -> f32 {
         if row.is_group && row.material_inspector.is_none() {
             self.active_material_info = None;
-            cy = self.build_filtered_properties_parameter_ids(
-                tree,
-                inner_x,
-                inner_w,
-                cy,
-                (&row.sections, &row.parameter_ids, &[]),
-            );
+            // The row still goes in: its physics facts pick the body controls.
+            let rows = PropertyRows { object: Some(row), ..PropertyRows::new(owned, ControlGroup::Transform) };
+            cy = self.build_item_properties(tree, inner_x, inner_w, cy, rows);
             return self.build_object_physics_properties(tree, inner_x, inner_w, cy, row);
         }
-        // Modifier rows are rendered only inside their retained shared cards;
-        // keep transform/object/material rows in the ordinary properties
-        // surface and exclude every known modifier id across the scene. A
-        // copied modifier can retain the source object's section name, so
-        // filtering only this selected row would leak another object's card
-        // controls as loose properties.
         let modifier_ids: Vec<String> = match &self.state {
             SceneSetupState::Live(vm) => vm
                 .objects
@@ -1169,12 +906,7 @@ impl ScenePanel {
                     ObjectRowVm::Known(row) => Some(row.as_ref()),
                     ObjectRowVm::Custom { .. } => None,
                 })
-                .flat_map(|object| {
-                    object
-                        .modifiers
-                        .iter()
-                        .flat_map(|modifier| modifier.parameter_ids.iter().cloned())
-                })
+                .flat_map(|object| object.modifiers.iter().flat_map(|modifier| modifier.parameter_ids.iter().cloned()))
                 .collect(),
             _ => Vec::new(),
         };
@@ -1196,35 +928,15 @@ impl ScenePanel {
                 self.material_feature_context = context;
             }
             self.sync_material_feature_order();
-            cy = self.build_material_header(tree, inner_x, inner_w, cy, &material);
-            cy = self.build_filtered_properties_parameter_ids(
-                tree,
-                inner_x,
-                inner_w,
-                cy,
-                (&row.sections, &row.parameter_ids, &modifier_ids),
-            );
-            cy = self.build_material_feature_actions(tree, inner_x, inner_w, cy, &material);
-            cy = self.build_material_inspector(tree, inner_x, inner_w, cy, row, row.skin.as_ref());
-        } else if let Some(skin) = &row.skin {
+        }
+        let rows = PropertyRows { owned, excluded: &modifier_ids, fallback: ControlGroup::Transform, object: Some(row) };
+        cy = self.build_item_properties(tree, inner_x, inner_w, cy, rows);
+        if row.material_inspector.is_none()
+            && let Some(skin) = &row.skin
+        {
             // Non-PBR materials still expose their layer-skin control, but
             // there is no material drawer to host it.
-            cy = self.build_filtered_properties_parameter_ids(
-                tree,
-                inner_x,
-                inner_w,
-                cy,
-                (&row.sections, &row.parameter_ids, &modifier_ids),
-            );
             cy = self.build_skin_row(tree, inner_x, inner_w, cy, row, skin);
-        } else {
-            cy = self.build_filtered_properties_parameter_ids(
-                tree,
-                inner_x,
-                inner_w,
-                cy,
-                (&row.sections, &row.parameter_ids, &modifier_ids),
-            );
         }
         cy = self.build_object_modifier_cards(tree, inner_x, inner_w, cy, row.object_node_id);
         if row.modifiers_addable {
@@ -1253,9 +965,9 @@ impl ScenePanel {
 
     /// Material-specific structural affordances that sit beside the ordinary
     /// manifest rows: scope notice, starter looks, and texture ownership.
-    /// Numeric factors and placement remain in `build_filtered_properties` so
+    /// Numeric factors and placement remain in `build_item_properties` so
     /// they retain the shared row host, stable ids, and modulation drawers.
-    fn build_material_header(
+    pub(super) fn build_material_header(
         &mut self,
         tree: &mut UITree,
         inner_x: f32,
@@ -1336,7 +1048,7 @@ impl ScenePanel {
         cy + ROW_H + ROW_GAP
     }
 
-    fn build_material_feature_actions(
+    pub(super) fn build_material_feature_actions(
         &mut self,
         tree: &mut UITree,
         inner_x: f32,
@@ -1399,7 +1111,7 @@ impl ScenePanel {
         cy + feature_count.div_ceil(3) as f32 * (ROW_H + ROW_GAP)
     }
 
-    fn build_material_inspector(
+    pub(super) fn build_material_inspector(
         &mut self,
         tree: &mut UITree,
         inner_x: f32,
@@ -1568,6 +1280,15 @@ impl ScenePanel {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::param_surface::RgbChannel;
+
+    fn base_members(ids: [manifold_foundation::ParamId; 3]) -> crate::param_surface::RgbMembers {
+        crate::param_surface::RgbMembers {
+            group: crate::param_surface::ColourGroup::Material(crate::param_surface::MaterialColour::Base),
+            ids,
+            values: [1.0; 3],
+        }
+    }
 
     fn material_test_row(id: &str, role: MaterialParamRole, base: f32, default: f32) -> ParamRow {
         let mut row = placeholder_param_info();
@@ -1809,7 +1530,7 @@ mod tests {
     }
 
     #[test]
-    fn material_inspector_rgb_sliders_preview_before_release_and_sync_hex() {
+    fn material_inspector_rgb_sliders_preview_before_release_and_on_the_swatch() {
         let mut panel = ScenePanel::new();
         panel.properties_card.resize(3);
         let ids =
@@ -1831,7 +1552,7 @@ mod tests {
             row.spec.min = 0.0;
             row.spec.max = 1.0;
             if index == 0 {
-                row.rgb_members = Some(ids.clone());
+                row.rgb_members = Some(base_members(ids.clone()));
             }
             panel
                 .properties_card
@@ -1855,7 +1576,8 @@ mod tests {
                 .iter()
                 .all(Option::is_some)
         );
-        assert_eq!(panel.material_swatch_ids.len(), 1);
+        let swatch = panel.properties_card.row_host.swatch_ids[0].expect("the R row carries the shared swatch").0;
+        assert!(panel.properties_card.row_host.swatch_ids[1..].iter().all(Option::is_none));
         let track = panel.properties_card.row_host.slider_ids[0]
             .as_ref()
             .unwrap()
@@ -1883,15 +1605,9 @@ mod tests {
         assert!(
             matches!(moved.as_slice(), [PanelAction::Scrub(ValueRef::ParamRgb(_, members), ScrubPhase::Move(ScrubValue::Rgb(rgb)))] if members == &ids && rgb[0] < 1.0 && rgb[1..] == [1.0, 1.0])
         );
-        panel.sync_material_swatches(&mut tree);
-        let hex = tree
-            .get_node(panel.material_swatch_ids[0].0)
-            .unwrap()
-            .text
-            .as_deref()
-            .unwrap();
-        assert_ne!(hex, "#FFFFFF");
-        assert!(hex.ends_with("FFFF"));
+        panel.sync_swatch_values(&mut tree);
+        let shown = tree.get_node(swatch).unwrap().style.bg_color;
+        assert!(shown.r < 255 && shown.g == 255 && shown.b == 255, "the swatch previews the drag: {shown:?}");
         let release = panel.properties_card.row_host.handle_drag_end();
         assert!(matches!(
             panel.rewrite_material_rgb_actions(release).as_slice(),
@@ -2039,7 +1755,7 @@ mod tests {
             0.2,
             0.0,
         );
-        red.rgb_members = Some([r.clone(), g.clone(), b.clone()]);
+        red.rgb_members = Some(base_members([r.clone(), g.clone(), b.clone()]));
         let green = material_test_row(
             "51_base_color_g",
             MaterialParamRole::Colour(
@@ -2108,10 +1824,6 @@ mod tests {
             0.0,
         );
         row.value.driven = true;
-        assert_eq!(
-            ScenePanel::material_rgb_colour(&row),
-            Some(crate::param_surface::MaterialColour::Specular)
-        );
         let mut panel = ScenePanel::new();
         panel.properties_card.rows = vec![row.clone()];
         panel.properties_card.current_values = vec![0.5];
@@ -2252,7 +1964,7 @@ mod tests {
             crate::param_surface::MaterialColour::Base,
             RgbChannel::B,
         ));
-        red.rgb_members = Some([red.id.clone(), green.id.clone(), blue.id.clone()]);
+        red.rgb_members = Some(base_members([red.id.clone(), green.id.clone(), blue.id.clone()]));
         surface.rows = vec![red.clone(), green, blue];
         let mut panel = ScenePanel::new();
         panel.full_params = Some(surface);
@@ -2291,7 +2003,7 @@ mod tests {
             0.2,
             0.0,
         );
-        primary.rgb_members = Some([r.clone(), g.clone(), b.clone()]);
+        primary.rgb_members = Some(base_members([r.clone(), g.clone(), b.clone()]));
         let green = material_test_row(
             g.as_ref(),
             MaterialParamRole::Colour(

@@ -557,7 +557,7 @@ fn lane_param_range(data: &SceneData, layer_id: &str, param_id: &str) -> Option<
     let effects = layer.effects.as_ref()?;
     for fx in effects {
         if let Some(param) = fx.params.get(param_id) {
-            return Some((param.spec.min, param.spec.max));
+            return Some(param.slider_span());
         }
     }
     None

@@ -122,8 +122,9 @@ mod scene_card_convergence_tests {
         }
 
         fn dispatch(&mut self, action: &PanelAction, project: &mut Project) -> DispatchResult {
+            let mut edits = crate::gesture_preview::UiEdits::default();
             let mut ctx = crate::ui_bridge::DispatchCtx {
-                project,
+                project: crate::ui_bridge::ProjectRef::new(project, &mut edits, &self.content_tx),
                 content_tx: &self.content_tx,
                 content_state: &self.content_state,
                 ui: &mut self.ui,
@@ -158,8 +159,9 @@ mod scene_card_convergence_tests {
             project: &mut Project,
             editor_target: Option<&manifold_core::GraphTarget>,
         ) -> DispatchResult {
+            let mut edits = crate::gesture_preview::UiEdits::default();
             let mut ctx = crate::ui_bridge::DispatchCtx {
-                project,
+                project: crate::ui_bridge::ProjectRef::new(project, &mut edits, &self.content_tx),
                 content_tx: &self.content_tx,
                 content_state: &self.content_state,
                 ui: &mut self.ui,
@@ -455,6 +457,87 @@ mod scene_card_convergence_tests {
         assert!(!command.was_applied());
         let inst = project.preset_instance(&target).unwrap();
         assert_eq!(ids.each_ref().map(|id| inst.get_base_param(id)), newer);
+    }
+
+    /// SCENE_SURFACES P9 gate: the card's light row carries its light's
+    /// three colour ids; the swatch opens the colour menu; a picked colour
+    /// reaches the content thread as exactly one undoable RGB write that
+    /// touches only Values, and one undo restores all three channels.
+    #[test]
+    fn light_swatch_pick_is_one_undoable_rgb_write() {
+        use crate::ui_bridge::projection::cards::{SurfaceVisibility, gen_params_to_surface};
+        use manifold_editing::service::EditingService;
+        let mut project = Project::default();
+        project.timeline.add_layer("Lights", LayerType::Generator, PresetTypeId::new("PhysicsSolids"));
+        project.reconcile_param_manifests();
+        let layer = &project.timeline.layers[0];
+        let layer_id = layer.layer_id.clone();
+        let rows = gen_params_to_surface(
+            layer.gen_params().unwrap(),
+            layer_id.as_str(),
+            None,
+            &[],
+            SurfaceVisibility::CuratedCard,
+            (manifold_core::Bpm(120.0), 60.0),
+        )
+        .rows;
+        let light_rows: Vec<_> = rows
+            .iter()
+            .filter(|row| row.rgb_members.as_ref().is_some_and(|m| m.group == manifold_ui::ColourGroup::Light))
+            .collect();
+        assert!(!light_rows.is_empty(), "a light's card row carries its colour swatch");
+        assert!(
+            light_rows.iter().all(|row| row.spec.section.as_deref() == Some("Lighting")),
+            "only light faders carry a light swatch"
+        );
+        let members = light_rows[0].rgb_members.clone().unwrap();
+        let target = manifold_core::GraphTarget::Generator(layer_id.clone());
+        let baseline = members.ids.each_ref().map(|id| project.preset_instance(&target).unwrap().get_base_param(id));
+        assert_eq!(members.values, baseline);
+
+        let mut h = Harness::new(Some(layer_id.clone()));
+        let open = PanelAction::Root(manifold_ui::RootAction::OpenColourMenu {
+            target: manifold_ui::GraphParamTarget::GeneratorOf(layer_id.clone()),
+            param_ids: members.ids.clone(),
+            value: members.values,
+        });
+        assert!(h.ui.try_open_dropdown(&open, None), "the swatch opens the colour menu");
+        assert!(h.ui.dropdown.is_open());
+        let picked = manifold_ui::color::COLOR_GRID[3];
+        let picked = [picked.r, picked.g, picked.b].map(|c| f32::from(c) / 255.0);
+        let actions = h.ui.dropdown_color_to_action(
+            crate::ui_root::DropdownContext::Colour {
+                target: manifold_ui::GraphParamTarget::GeneratorOf(layer_id.clone()),
+                param_ids: members.ids.clone(),
+            },
+            3,
+        );
+        let mut content_project = project.clone();
+        for action in &actions {
+            h.dispatch(action, &mut project);
+        }
+        let mut service = EditingService::new();
+        let mut writes = 0;
+        for command in h.drain() {
+            match command {
+                ContentCommand::MutateProject { f, .. } => f(&mut content_project),
+                ContentCommand::Execute(command) => {
+                    assert_eq!(
+                        command.touches(),
+                        manifold_core::change::ChangeSet::of(&[manifold_core::change::Part::Values])
+                    );
+                    service.execute(command, &mut content_project);
+                    writes += 1;
+                }
+                ContentCommand::GraphEditRejected(reason) => panic!("the pick was refused: {reason}"),
+                _ => {}
+            }
+        }
+        assert_eq!(writes, 1, "one pick is one undoable write");
+        let values = |p: &Project| members.ids.each_ref().map(|id| p.preset_instance(&target).unwrap().get_base_param(id));
+        assert_eq!(values(&content_project), picked);
+        assert!(service.undo(&mut content_project));
+        assert_eq!(values(&content_project), baseline, "one undo restores all three channels");
     }
 
     /// Undo-race repro (param-feed regression, 2026-07-18): since
@@ -885,9 +968,9 @@ mod scene_card_convergence_tests {
                 )),
                 &mut project,
             );
-            assert!(h.selection.automation_mode_visible);
+            assert!(h.selection.automation_mode_visible());
             assert_eq!(
-                h.selection.chosen_automation_params.get(&layer_a),
+                h.selection.chosen_automation_params().get(&layer_a),
                 Some(&(manifold_ui::view::UiGraphTarget::Generator(layer_a), pid,))
             );
             assert_eq!(serde_json::to_value(&project).unwrap(), before);
@@ -942,7 +1025,7 @@ mod scene_card_convergence_tests {
                     .unwrap()
                     .is_empty()
             );
-            assert!(!h.selection.chosen_automation_params.contains_key(&layer_a));
+            assert!(!h.selection.chosen_automation_params().contains_key(&layer_a));
             assert!(h.ui.pending_automation_reveal.is_none());
             let mut commands = h.drain();
             assert_eq!(commands.len(), 2);
@@ -1000,14 +1083,17 @@ mod scene_card_convergence_tests {
                 )),
                 &mut project,
             );
+            // The expansion is a stamped local write; the content thread gets
+            // the same closure.
             assert!(
-                project
+                !project
                     .timeline
                     .find_layer_by_id(&layer_id)
                     .unwrap()
                     .1
                     .is_collapsed
             );
+            project.timeline.find_layer_by_id_mut(&layer_id).unwrap().1.is_collapsed = true;
             let commands = h.drain();
             assert_eq!(commands.len(), 1);
             for command in commands {
@@ -2335,12 +2421,8 @@ mod scene_card_convergence_tests {
             content_state: crate::content_state::ContentState,
             cursor: manifold_ui::cursors::CursorManager,
             active_layer: Option<LayerId>,
-            needs_rebuild: bool,
-            needs_structural_sync: bool,
-            automation_lanes_dirty: bool,
-            scroll_dirty: crate::ui_root::ScrollDirty,
-            invalidate: Vec<usize>,
-            pre_drag: Vec<Box<dyn manifold_editing::command::Command>>,
+            redraw: bool,
+            edits: crate::gesture_preview::UiEdits,
         }
 
         impl ClipRig {
@@ -2353,12 +2435,8 @@ mod scene_card_convergence_tests {
                     content_state: crate::content_state::ContentState::default(),
                     cursor: manifold_ui::cursors::CursorManager::default(),
                     active_layer: None,
-                    needs_rebuild: false,
-                    needs_structural_sync: false,
-                    automation_lanes_dirty: false,
-                    scroll_dirty: crate::ui_root::ScrollDirty::default(),
-                    invalidate: Vec::new(),
-                    pre_drag: Vec::new(),
+                    redraw: false,
+                    edits: Default::default(),
                 }
             }
 
@@ -2369,12 +2447,8 @@ mod scene_card_convergence_tests {
                     &self.content_state,
                     &mut self.cursor,
                     &mut self.active_layer,
-                    &mut self.needs_rebuild,
-                    &mut self.needs_structural_sync,
-                    &mut self.automation_lanes_dirty,
-                    &mut self.scroll_dirty,
-                    &mut self.invalidate,
-                    &mut self.pre_drag,
+                    &mut self.redraw,
+                    &mut self.edits,
                 )
             }
 
@@ -2742,7 +2816,7 @@ mod scene_card_convergence_tests {
             let mut prefs = crate::user_prefs::UserPrefs::for_test();
             crate::ui_bridge::editing::dispatch_editing(
                 &EditingAction::ContextDeleteClip(clip_id.to_string()),
-                &mut rig.project,
+                &mut crate::ui_bridge::ProjectRef::new(&mut rig.project, &mut Default::default(), &rig.tx),
                 &rig.tx,
                 &rig.content_state,
                 &mut ui,
@@ -3507,10 +3581,10 @@ mod scene_card_convergence_tests {
             // What add-effect's behind-the-scenes selection touch looks like
             // at the ui_state level: re-selecting the SAME layer bumps
             // `selection_version` without changing WHICH layer is selected.
-            let before = selection.selection_version;
+            let before = selection.selection_visual_version();
             selection.select_layer(layer_id.clone());
             assert!(
-                selection.selection_version > before,
+                selection.selection_visual_version() > before,
                 "sanity: version must actually bump"
             );
             assert_eq!(

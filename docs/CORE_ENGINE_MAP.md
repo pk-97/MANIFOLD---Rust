@@ -324,8 +324,9 @@ project clone).
 
 - Content thread: `THREAD_TIME_CONSTRAINT_POLICY` (real-time, 75% computation
   budget), QoS fallback. Owns engine + project + all controllers.
-- UI → content: bounded(64) `ContentCommand`; content → UI: `ContentState`
-  (unbounded, never drops). Seeks coalesce in the drain loop.
+- UI → content: unbounded `ContentCommand`, drained in full; content → UI: a
+  one-slot `ContentState` handoff that folds a replaced state into the newest.
+  Seeks coalesce in the drain loop.
 - midir note callback → mpsc → drained in-tick. MIDI Clock state → atomic CAS,
   no queue. OSC UDP → background thread → mutex'd latest-per-address map →
   main-thread dispatch (intermediate values per address are dropped by

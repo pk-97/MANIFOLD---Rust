@@ -5,7 +5,6 @@
 //! directly); a `_ => unhandled()` fall-through lets the chain advance.
 
 use super::super::DispatchResult;
-use crate::content_command::ContentCommand;
 use manifold_ui::BrowserAction;
 
 /// `manifold_ui::panels::browser_popup::BrowserPopupMode` stands in for
@@ -101,11 +100,10 @@ pub(crate) fn dispatch_browser(action: &BrowserAction, ctx: &mut super::super::D
                 }
                 Source::Project => {
                     let cmd = manifold_editing::commands::preset::DeleteEmbeddedPresetCommand::new(id);
-                    let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
-                    boxed.execute(ctx.project);
-                    ContentCommand::send(ctx.content_tx, ContentCommand::Execute(boxed));
+                    let boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
+                    ctx.execute(boxed);
                     ctx.ui.browser_popup.close();
-                    DispatchResult::structural()
+                    DispatchResult::handled()
                 }
                 Source::Factory => unreachable!("returned above"),
             }

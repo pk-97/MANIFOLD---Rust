@@ -31,12 +31,8 @@ use manifold_node_engine::gpu::context::GpuContext;
 
 use crate::content_command::ContentCommand;
 use crate::content_pipeline::ContentPipeline;
-use crate::content_state::ContentState;
+use crate::content_state::{ContentState, StateTx};
 use crate::frame_timer::FrameTimer;
-
-/// Undrained states past which the UI counts as stalled (about half a second
-/// at 60 fps). A healthy UI keeps the queue at one or two.
-const UI_STATE_BACKLOG: usize = 32;
 
 /// The follower row for an authority (D6): Link and MIDI clock are fast and
 /// clean, AbletonOSC and timecode slow and coarse; Internal follows the map.
@@ -68,28 +64,6 @@ impl IssuedPresents {
         let slot = self.ring.iter_mut().find(|e| e.is_some_and(|(id, _)| id == drawable_id))?;
         slot.take().map(|(_, deadline)| deadline)
     }
-}
-
-/// Cache entry for the watched editor-canvas snapshot (effect OR generator).
-/// Holds the snapshot inside an `Arc` so the per-frame
-/// `ContentState::active_graph_snapshot` field can clone the refcount
-/// (no deep copy). At most one entry — only one canvas is visible at a time.
-///
-/// Invalidated when any of the snapshot's inputs change:
-/// - `target` — the watched instance changed (canvas swap).
-/// - `preset_type` — the instance's preset type changed in place
-///   (effect/generator type swap via the picker while watched).
-/// - `version` — the instance's `graph_version` bumped (a graph-editor edit
-///   landed on it).
-/// - `fingerprint` — the EmbeddedPresets stamp: the catalog overlay was reinstalled
-///   (a fork or recalibrate), which can change the compositor-sourced
-///   routings / default graph even when `version` didn't move.
-pub struct CachedGraphSnapshot {
-    pub target: Arc<manifold_core::GraphTarget>,
-    pub preset_type: manifold_core::PresetTypeId,
-    pub version: u32,
-    pub fingerprint: u64,
-    pub snapshot: Arc<manifold_node_engine::snapshot::GraphSnapshot>,
 }
 
 /// An in-flight "export current frame" request. Captured across two content
@@ -221,12 +195,10 @@ pub struct ContentThread {
     pub node_preview_normalize: bool,
     /// Cached editor-canvas snapshot for the watched effect or generator.
     ///
-    /// Built lazily by [`Self::graph_snapshot`] and invalidated per the
-    /// key documented on [`CachedGraphSnapshot`]. Avoids the per-content-tick
-    /// rebuild (re-parse of the bundled preset JSON / compositor lookup) the
-    /// non-cached paths used to do every state push the editor was open.
+    /// Built lazily by [`crate::graph_snapshot::active_graph`] and invalidated
+    /// per the key documented on [`crate::graph_snapshot::CachedGraphSnapshot`].
     /// Holds at most one entry: only one canvas is visible at a time.
-    pub cached_graph_snapshot: Option<CachedGraphSnapshot>,
+    pub cached_graph_snapshot: Option<crate::graph_snapshot::CachedGraphSnapshot>,
 
     // ── Reusable modulation scratch (flat buffer — zero alloc after first frame) ──
     pub mod_scratch: crate::content_state::ModulationSnapshot,
@@ -243,6 +215,8 @@ pub struct ContentThread {
     pub cached_perc_message: Arc<str>,
     /// Last-sent MIDI device names — only reallocated when the list changes.
     pub last_sent_midi_device_names: Arc<[String]>,
+    /// Last-sent Ableton session; sent every tick, replaced only when the session changes, so the UI can compare by pointer.
+    pub last_sent_ableton_session: Option<Arc<manifold_playback::ableton_bridge::AbletonSession>>,
 
     /// Stamps the reaction pass last reacted to, and what it retains between
     /// passes (docs/UI_INVALIDATION_DESIGN.md D4).
@@ -258,88 +232,18 @@ pub struct ContentThread {
     pub pending_undo_redo_event: Option<crate::content_state::UndoRedoEvent>,
     /// Most recent rejected graph edit, retained until a newer rejection so
     /// every regular snapshot carries the diagnostic to the UI.
-    pub graph_edit_diagnostic: Option<crate::content_state::GraphEditDiagnostic>,
+    pub graph_edit_diagnostic: Option<Arc<crate::content_state::GraphEditDiagnostic>>,
     /// Most recent content-authoritative selection update for newly created
     /// scene modifiers, retained until a newer update.
     pub edit_selection_update: Option<Arc<crate::edit_selection::EditSelectionUpdate>>,
-    pub modifier_selection_update: Option<crate::content_state::ModifierSelectionUpdate>,
+    pub modifier_selection_update: Option<Arc<crate::content_state::ModifierSelectionUpdate>>,
     pub object_modifier_selection_update:
-        Option<crate::content_state::ObjectModifierSelectionUpdate>,
+        Option<Arc<crate::content_state::ObjectModifierSelectionUpdate>>,
 
     // ── Profiling ──
     /// Active profiling session (only present when feature = "profiling").
     #[cfg(feature = "profiling")]
     pub profiler: Option<manifold_profiler::ProfileSession>,
-}
-
-/// D4 (`docs/PARAM_TWO_WAY_BINDING_DESIGN.md`): overlay the EFFECTIVE
-/// (forward-reshaped) value onto every card-bound node-face row, instead of
-/// the raw `def.nodes[..].params` value `GraphSnapshot::from_def` reads —
-/// which may hold a stale node-face write `apply_bindings` stomps on the
-/// next rebuild (BUG-158's snap-back). Walks `def.preset_metadata.bindings`;
-/// for each `Node` target, reads the outer card's live value off
-/// `instance.params` and pushes it through `apply_card_reshape` before
-/// overwriting the matching row's `current_value`. A no-op for every unbound
-/// param (no metadata, or no binding targets it) and for a binding whose
-/// outer id isn't in the manifest (an authoring-time gap, not a user state).
-fn apply_effective_bound_values(
-    snap: &mut manifold_node_engine::snapshot::GraphSnapshot,
-    def: &manifold_core::effect_graph_def::EffectGraphDef,
-    instance: &manifold_core::effects::PresetInstance,
-) {
-    use manifold_core::effect_graph_def::BindingTarget;
-    let Some(meta) = def.preset_metadata.as_ref() else {
-        return;
-    };
-    for binding in &meta.bindings {
-        let BindingTarget::Node { node_id, param } = &binding.target else {
-            continue;
-        };
-        if node_id.is_empty() {
-            continue;
-        }
-        let Some(spec) = meta.params.iter().find(|p| p.id == binding.id) else {
-            continue;
-        };
-        let Some(card_value) = instance.params.get(&binding.id).map(|p| p.value) else {
-            continue;
-        };
-        let effective = manifold_core::effects::apply_card_reshape(
-            card_value,
-            spec.min,
-            spec.max,
-            spec.invert,
-            spec.curve,
-            binding.scale,
-            binding.offset,
-        );
-        if let Some(row) = find_node_param_row_mut(&mut snap.nodes, node_id, param) {
-            row.current_value = effective;
-        }
-    }
-}
-
-/// Find the `ParamSnapshot` for `(node_id, param)` anywhere in `nodes`,
-/// recursing into group bodies — a bound node can live inside a group
-/// (BUG-103's glTF per-object case).
-fn find_node_param_row_mut<'a>(
-    nodes: &'a mut [manifold_node_engine::snapshot::NodeSnapshot],
-    node_id: &manifold_core::NodeId,
-    param: &str,
-) -> Option<&'a mut manifold_node_engine::snapshot::ParamSnapshot> {
-    for node in nodes.iter_mut() {
-        if &node.node_id == node_id
-            && let Some(row) = node.parameters.iter_mut().find(|p| p.name == param)
-        {
-            return Some(row);
-        }
-        if let Some(group) = node.group.as_mut()
-            && let Some(row) = find_node_param_row_mut(&mut group.nodes, node_id, param)
-        {
-            return Some(row);
-        }
-    }
-    None
 }
 
 impl ContentThread {
@@ -349,7 +253,7 @@ impl ContentThread {
         cmd: ContentCommand,
         cmd_rx: &Receiver<ContentCommand>,
         cmd_tx: &Sender<ContentCommand>,
-        state_tx: &Sender<ContentState>,
+        state_tx: &StateTx,
     ) -> bool {
         match cmd {
             ContentCommand::LoadProject(project) =>
@@ -363,7 +267,7 @@ impl ContentThread {
         mut self,
         cmd_tx: crossbeam_channel::Sender<ContentCommand>,
         cmd_rx: Receiver<ContentCommand>,
-        state_tx: Sender<ContentState>,
+        state_tx: StateTx,
     ) {
         log::info!("[ContentThread] started");
 
@@ -394,7 +298,7 @@ impl ContentThread {
         &mut self,
         cmd_tx: &Sender<ContentCommand>,
         cmd_rx: &Receiver<ContentCommand>,
-        state_tx: &Sender<ContentState>,
+        state_tx: &StateTx,
     ) -> bool {
         let mut pending_seek: Option<ContentCommand> = None;
         loop {
@@ -470,7 +374,7 @@ impl ContentThread {
         &mut self,
         cmd_tx: &Sender<ContentCommand>,
         cmd_rx: &Receiver<ContentCommand>,
-        state_tx: &Sender<ContentState>,
+        state_tx: &StateTx,
     ) -> bool {
         // Wait for GPU surface, draining commands while waiting.
         // In the common case (99%+) this returns immediately — the GPU
@@ -518,7 +422,7 @@ impl ContentThread {
         &mut self,
         cmd_tx: &crossbeam_channel::Sender<ContentCommand>,
         cmd_rx: &crossbeam_channel::Receiver<ContentCommand>,
-        state_tx: &Sender<ContentState>,
+        state_tx: &StateTx,
     ) -> bool {
         // Fast path: surface already ready (99%+ of frames).
         if self.content_pipeline.is_surface_ready(self.frame_count) {
@@ -630,7 +534,7 @@ impl ContentThread {
     /// `self.timer.wait_for_deadline()` between calls, same as `run()`'s own
     /// loop) instead of going through the command channel — no behavior
     /// change to this function itself.
-    pub(crate) fn tick_frame(&mut self, state_tx: &Sender<ContentState>) {
+    pub(crate) fn tick_frame(&mut self, state_tx: &StateTx) {
         self.tick_frame_at(std::time::Instant::now(), state_tx);
     }
 
@@ -638,7 +542,7 @@ impl ContentThread {
     /// real content thread through a chosen press phase, jitter and stalls
     /// (docs/FRAME_EXACT_TRANSPORT_DESIGN.md section 3.4). Only the timer's
     /// tick reads `now`; wall telemetry stays on the real clock (D13).
-    pub(crate) fn tick_frame_at(&mut self, now: std::time::Instant, state_tx: &Sender<ContentState>) {
+    pub(crate) fn tick_frame_at(&mut self, now: std::time::Instant, state_tx: &StateTx) {
         let _frame_start = std::time::Instant::now();
         // Reactions to commands handled outside a drain loop (tests, the
         // headless harness); a no-op when the drain already reacted.
@@ -1276,25 +1180,11 @@ impl ContentThread {
     /// Build and send a `ContentState` snapshot to the UI. Gated by
     /// `data_version` for the heavy `Arc<Project>` clone; lightweight
     /// modulation/transport fields are sent every call.
-    fn send_state(&mut self, state_tx: &Sender<ContentState>) {
+    fn send_state(&mut self, state_tx: &StateTx) {
         let version = self.editing_service.data_version();
         // D23: today's rule (every edit, undo, redo, record, load) plus a
         // content-originated write outside the live scalars.
         let version_changed = version != self.last_data_version || self.reactions.publish_pending;
-        // The UI drains to the latest state every frame. When it stops — a
-        // native dialog or alert holds the main thread for as long as the
-        // user leaves it open — per-tick states would queue without limit and
-        // be replayed one by one on return. Past a short backlog, send only
-        // states that carry something the UI must not miss: a project edit or
-        // an undo/redo event. Everything else is superseded by the next tick.
-        if state_tx.len() >= UI_STATE_BACKLOG
-            && !version_changed
-            && self.pending_undo_redo_event.is_none()
-        {
-            self.audio_mod_runtime.drain_spectrogram_columns(|_| {});
-            self.audio_mod_runtime.drain_spectrogram_scalars(|_| {});
-            return;
-        }
         if version_changed {
             self.last_data_version = version;
             self.reactions.publish_pending = false;
@@ -1343,12 +1233,13 @@ impl ContentThread {
         } else {
             None
         };
-        let ableton_session = if self.ableton_bridge.session_changed() {
+        // Sent every tick as the retained Arc: a coalesced UI drain keeps only
+        // the latest state, so a one-shot Some would be lost.
+        if self.ableton_bridge.session_changed() {
             self.reactions.runtime.ableton_session += 1;
-            Some(Arc::new(self.ableton_bridge.session().clone()))
-        } else {
-            None
-        };
+            self.last_sent_ableton_session = Some(Arc::new(self.ableton_bridge.session().clone()));
+        }
+        let ableton_session = self.last_sent_ableton_session.clone();
         let runtime = self.track_runtime_seqs();
 
         // Update cached Arc<str> only when underlying values change.
@@ -1381,15 +1272,14 @@ impl ContentThread {
         let perc_show = self.percussion_orchestrator.show_progress_bar()
             && !self.cached_perc_message.is_empty();
 
-        // Resolve the editor-canvas graph snapshot once. Effect path
-        // returns a plain `GraphSnapshot` (cheap to construct, no
-        // cache needed); generator path returns a cached `Arc` clone
-        // (avoids re-parsing the bundled JSON every state push when
-        // the canvas is open). One target, one snapshot path (fork #10).
-        let active_graph_snapshot_arc = self
-            .watched_graph_target
-            .clone()
-            .and_then(|t| self.graph_snapshot(&t));
+        // The editor canvas's graph snapshot, rebuilt only when its inputs
+        // move (`graph_snapshot.rs`).
+        let (active_graph_target, active_graph_snapshot_arc) = crate::graph_snapshot::active_graph(
+            &mut self.cached_graph_snapshot,
+            self.engine.project(),
+            self.watched_graph_target.as_ref(),
+            self.editing_service.stamps().get(Part::EmbeddedPresets),
+        );
 
         // Per-send audio levels for the Audio Setup meters — the full-band
         // amplitude (overall loudness, 0..1).
@@ -1473,6 +1363,7 @@ impl ContentThread {
                 .project()
                 .map_or(4, |p| p.settings.time_signature_numerator),
             sdr_preview: Some(self.content_pipeline.sdr_preview()),
+            body: true,
             rt_quality: self
                 .engine
                 .project()
@@ -1518,7 +1409,6 @@ impl ContentThread {
             spectrogram_mid_hz,
             spectrogram_features,
             osc_sender_enabled: self.transport_controller.osc_sender_enabled,
-            percussion_importing: self.percussion_orchestrator.is_import_in_progress(),
             percussion_status_message: self.cached_perc_message.clone(),
             percussion_progress: if perc_progress < 0.0 {
                 0.0
@@ -1575,8 +1465,12 @@ impl ContentThread {
             // progress, so these are always the "not exporting" values.
             is_exporting: false,
             export_progress: 0.0,
-            export_status: Arc::from(""),
-            export_finished: None,
+            export_status: {
+                // One shared empty status: building it per tick allocated.
+                static EMPTY: std::sync::LazyLock<Arc<str>> = std::sync::LazyLock::new(|| Arc::from(""));
+                EMPTY.clone()
+            },
+            export_finished: Vec::new(),
             export_run_finished: false,
             warmup: None,
             undo_redo_event: self.pending_undo_redo_event.take(),
@@ -1595,14 +1489,13 @@ impl ContentThread {
                 .map_or(OscSyncMode::M4L, |p| p.settings.osc_sync_mode),
             project_snapshot: snapshot,
             modulation_snapshot,
-            active_graph_target: active_graph_snapshot_arc.as_ref()
-                .and_then(|_| self.cached_graph_snapshot.as_ref().map(|cache| Arc::clone(&cache.target))),
+            active_graph_target,
             active_graph_snapshot: active_graph_snapshot_arc,
             node_preview_info: self.content_pipeline.node_preview_info(),
             scene_viewport_frames: self.content_pipeline.scene_viewport_frames().clone(),
             live_node_params: self.content_pipeline.live_node_params(),
             node_atlas_layout: self.content_pipeline.node_atlas_layout().to_vec(),
-            clip_atlas_layout: self.content_pipeline.clip_atlas_layout().to_vec(),
+            clip_atlas_layout: self.content_pipeline.clip_atlas_layout().clone(),
             automation_latched_params: self
                 .engine
                 .automation_latches()
@@ -1613,16 +1506,13 @@ impl ContentThread {
             sync_offsets: self.calibration.offsets(),
         };
 
-        // Send state to UI. Unbounded channel — never drops snapshots.
-        if let Err(e) = state_tx.send(state) {
-            log::error!("[ContentThread] State channel disconnected: {e}");
-        }
+        state_tx.publish(state);
     }
 
     /// Send a `ContentState` snapshot only if the project has mutated since
     /// the last publish. Used outside the render tick so the UI confirms
     /// edits while the GPU is behind. Coalesces: one publish per drain pass.
-    fn publish_snapshot_if_dirty(&mut self, state_tx: &Sender<ContentState>) {
+    fn publish_snapshot_if_dirty(&mut self, state_tx: &StateTx) {
         // The drain pass is over: react once to everything it moved (D4).
         self.run_reactions();
         if self.editing_service.data_version() != self.last_data_version
@@ -1630,177 +1520,6 @@ impl ContentThread {
         {
             self.send_state(state_tx);
         }
-    }
-
-    /// Build (or return cached) the editor canvas's graph snapshot for the
-    /// currently-watched preset instance — effect or generator (fork #10).
-    ///
-    /// Two paths per kind, mirrored:
-    /// - The instance has `graph: Some(def)` → build directly from the
-    ///   per-instance override (renders what the user saved). Effects fill
-    ///   `outer_routings` from the compositor (the outer→inner map is static
-    ///   per type); generators project routings from the override's own
-    ///   (bundle-grafted) `preset_metadata`, which also captures user-added
-    ///   bindings.
-    /// - The instance has `graph: None` → the type-keyed view: effects use the
-    ///   compositor's `graph_snapshot_for`, generators the unified
-    ///   `LoadedPresetView` via `snapshot_for_view` (#4 gave generators views).
-    ///
-    /// Cached behind `cached_graph_snapshot`, keyed by (target, preset_type,
-    /// graph_version, catalog fingerprint) so the rebuild runs once per edit,
-    /// not once per content tick. Returns `None` if the target no longer
-    /// resolves, the generator has no type, or the type has no JSON preset.
-    fn graph_snapshot(
-        &mut self,
-        target: &manifold_core::GraphTarget,
-    ) -> Option<Arc<manifold_node_engine::snapshot::GraphSnapshot>> {
-        use manifold_core::GraphTarget;
-        let fingerprint = self.editing_service.stamps().get(manifold_core::change::Part::EmbeddedPresets);
-        let project = self.engine.project()?;
-
-        // Resolve the instance's preset type + graph version for the cache key.
-        let (preset_type, version) = match target {
-            GraphTarget::Effect(eid) => {
-                let inst = project.find_effect_by_id(eid)?;
-                (inst.effect_type().clone(), inst.graph_version)
-            }
-            GraphTarget::Generator(lid) => {
-                let (_, layer) = project.timeline.find_layer_by_id(lid)?;
-                let gp = layer.gen_params()?;
-                if gp.generator_type().is_none() {
-                    return None;
-                }
-                (gp.generator_type().clone(), gp.graph_version)
-            }
-            GraphTarget::SceneModifier { .. } => {
-                let owner = project.graph_target_owner(target)?;
-                (project.instance_preset_id(target)?, owner.graph_version)
-            }
-        };
-
-        // Cache hit: identical target / type / version / catalog → clone Arc.
-        if let Some(cache) = self.cached_graph_snapshot.as_ref()
-            && cache.target.as_ref() == target
-            && cache.preset_type == preset_type
-            && cache.version == version
-            && cache.fingerprint == fingerprint
-        {
-            return Some(Arc::clone(&cache.snapshot));
-        }
-
-        // Cache miss: rebuild the snapshot for this kind.
-        let snap = match target {
-            GraphTarget::Effect(eid) => {
-                let instance = project.find_effect_by_id(eid)?;
-                if let Some(def) = instance.graph.as_ref() {
-                    // Per-card override: `from_def` has no live effect, so its
-                    // outer_routings come out empty. The compositor's per-type
-                    // routings are authoritative — fill them in here.
-                    let mut snap = manifold_node_engine::snapshot::GraphSnapshot::from_def(def)?;
-                    snap.outer_routings = self
-                        .content_pipeline
-                        .outer_routings_for(instance.effect_type());
-                    apply_effective_bound_values(&mut snap, def, instance);
-                    snap
-                } else {
-                    self.content_pipeline
-                        .graph_snapshot_for(instance.effect_type())?
-                }
-            }
-            GraphTarget::Generator(lid) => {
-                let (_, layer) = project.timeline.find_layer_by_id(lid)?;
-                let gen_type = layer.generator_type();
-                if let Some(override_def) = layer.generator_graph() {
-                    // Per-instance override: exposure state lives on the
-                    // layer's graph, so build from the override (grafting
-                    // bundled metadata back if edits dropped it) and project
-                    // routings from the override def's own metadata — captures
-                    // user-added bindings the compositor's type view wouldn't.
-                    let mut d = override_def.clone();
-                    manifold_nodes::registry::graft_preset_metadata_from_bundle(
-                        &mut d, gen_type,
-                    );
-                    let mut snap = manifold_node_engine::snapshot::GraphSnapshot::from_def(&d)?;
-                    if let Some(meta) = d.preset_metadata.as_ref() {
-                        use manifold_core::effect_graph_def::BindingTarget;
-                        use manifold_node_engine::snapshot::{OuterParamRouting, OuterParamSource};
-                        // Recurse into group bodies (BUG-103): a binding whose
-                        // target lives inside a group — the glTF importer's
-                        // per-object knobs on `mat_k` nodes inside each object's
-                        // box — is dropped by a top-level-only handle map, so a
-                        // diverged imported scene loses its group-face rows the
-                        // same way the pristine path did. Shared helper so both
-                        // arms resolve handles identically.
-                        let mut handle_by_id: std::collections::HashMap<&str, &str> =
-                            std::collections::HashMap::new();
-                        manifold_node_engine::load::loaded_preset_view::collect_node_handles(
-                            &d.nodes,
-                            &mut handle_by_id,
-                        );
-                        snap.outer_routings = meta
-                            .bindings
-                            .iter()
-                            .filter_map(|b| match &b.target {
-                                BindingTarget::Node { node_id, param } => {
-                                    let handle = handle_by_id.get(node_id.as_str())?;
-                                    Some(OuterParamRouting {
-                                        outer_label: b.label.clone(),
-                                        outer_param_id: b.id.clone(),
-                                        node_handle: handle.to_string(),
-                                        inner_param: param.clone(),
-                                        source: OuterParamSource::Static,
-                                    })
-                                }
-                                BindingTarget::Composite { .. } | BindingTarget::SceneModifier { .. } => None,
-                            })
-                            .collect();
-                    }
-                    if let Some(gp) = layer.gen_params() {
-                        apply_effective_bound_values(&mut snap, &d, gp);
-                    }
-                    snap
-                } else {
-                    // Pristine layer: the unified LoadedPresetView. Generators
-                    // got views in #4, so this mirrors the effect pristine path
-                    // — `snapshot_for_view` does `from_def(canonical_def)` +
-                    // `outer_routings_from_view`.
-                    let view = manifold_node_engine::load::loaded_preset_view::loaded_preset_view_by_id(gen_type)?;
-                    manifold_node_engine::load::loaded_preset_view::snapshot_for_view(&view)?
-                }
-            }
-            GraphTarget::SceneModifier { .. } => {
-                let local = crate::graph_target::resolve(project, target)?;
-                let owner = project.graph_target_owner(target)?;
-                let mut snap = manifold_node_engine::snapshot::GraphSnapshot::from_def(&local)?;
-                let mut projection = (*local).clone();
-                let metadata = projection.preset_metadata.as_mut()?;
-                metadata.bindings = crate::graph_target::modifier_bindings(project, target)?;
-                metadata.params = owner.params.iter().map(|param|param.spec.clone()).collect();
-                let mut handles = std::collections::HashMap::new();
-                manifold_node_engine::load::loaded_preset_view::collect_node_handles(&local.nodes, &mut handles);
-                snap.outer_routings = metadata.bindings.iter().filter_map(|binding| {
-                    let manifold_core::effect_graph_def::BindingTarget::Node { node_id, param } = &binding.target else { return None; };
-                    Some(manifold_node_engine::snapshot::OuterParamRouting {
-                        outer_label: binding.label.clone(), outer_param_id: binding.id.clone(),
-                        node_handle: handles.get(node_id.as_str())?.to_string(), inner_param:param.clone(),
-                        source: if binding.user_added { manifold_node_engine::snapshot::OuterParamSource::User }
-                            else { manifold_node_engine::snapshot::OuterParamSource::Static },
-                    })
-                }).collect();
-                apply_effective_bound_values(&mut snap, &projection, owner);
-                snap
-            }
-        };
-
-        let arc = Arc::new(snap);
-        self.cached_graph_snapshot = Some(CachedGraphSnapshot {
-            target: Arc::new(target.clone()),
-            preset_type,
-            version,
-            fingerprint,
-            snapshot: Arc::clone(&arc),
-        });
-        Some(arc)
     }
 
     /// Tick all sync controllers once per frame. Called before engine tick.
@@ -2539,7 +2258,7 @@ mod tests {
         project.tempo_map.add_or_replace_point(Beats::ZERO, Bpm(120.0), TempoPointSource::Unknown, 0.001);
         let mut thread = headless_content_thread(project, 64, 64);
         thread.timer.set_frame_clocked(true);
-        let (state_tx, _state_rx) = crossbeam_channel::unbounded();
+        let (state_tx, _state_rx) = crate::content_state::state_channel();
         let mut link = LinkSyncController::new();
         let session = SimulatedLink { at: std::time::Instant::now(), beat: 0.0, tempo: 128.0, peers: 1, playing: false };
         link.simulate(session);
@@ -2579,7 +2298,7 @@ mod tests {
         project.settings.bpm = Bpm(120.0);
         project.tempo_map.add_or_replace_point(Beats::ZERO, Bpm(120.0), TempoPointSource::Unknown, 0.001);
         let mut thread = headless_content_thread(project, 64, 64);
-        let (state_tx, _state_rx) = crossbeam_channel::unbounded();
+        let (state_tx, _state_rx) = crate::content_state::state_channel();
         let step = Duration::from_secs_f64(1.0 / 60.0);
         let anchor = std::time::Instant::now() + step;
         let at = |k: u32| anchor + step * k + step.mul_f64(0.3);
@@ -2623,7 +2342,7 @@ mod tests {
         use manifold_playback::midi_input::{MidiNoteEvent, MidiNoteEventType};
         let mut thread = headless_content_thread(one_layer(manifold_core::types::LayerType::Trigger), 64, 64);
         thread.timer.set_frame_clocked(true);
-        let (state_tx, state_rx) = crossbeam_channel::unbounded();
+        let (state_tx, state_rx) = crate::content_state::state_channel();
         thread.handle_command(ContentCommand::SetRecording(true));
         thread.handle_command(ContentCommand::Play);
         let note = |event_type, sequence| MidiNoteEvent {
@@ -2659,7 +2378,7 @@ mod tests {
         trigger.layer_id = project.timeline.layers[0].layer_id.clone();
         project.timeline.layers[0].clips.push(trigger);
         let mut thread = headless_content_thread(project, 64, 64);
-        let (state_tx, state_rx) = crossbeam_channel::unbounded();
+        let (state_tx, state_rx) = crate::content_state::state_channel();
         thread.tick_frame(&state_tx);
         let _ = last_snapshot(&state_rx);
         let before = thread.editing_service.stamps();
@@ -2676,7 +2395,7 @@ mod tests {
     #[test]
     fn mutation_publishes_snapshot_without_a_tick() {
         let mut thread = headless_content_thread(Project::default(), 1280, 720);
-        let (state_tx, state_rx) = crossbeam_channel::unbounded();
+        let (state_tx, state_rx) = crate::content_state::state_channel();
         assert!(!thread.handle_command(ContentCommand::SetProject));
         thread.publish_snapshot_if_dirty(&state_tx);
         let state = state_rx.try_recv().expect("snapshot published");
@@ -2686,33 +2405,13 @@ mod tests {
     #[test]
     fn sdr_preview_publishes_runtime_snapshot_without_a_tick() {
         let mut thread = headless_content_thread(Project::default(), 64, 64);
-        let (state_tx, state_rx) = crossbeam_channel::unbounded();
+        let (state_tx, state_rx) = crate::content_state::state_channel();
         assert!(!thread.handle_command(ContentCommand::SetSdrPreview(true)));
         thread.publish_snapshot_if_dirty(&state_tx);
         let state = state_rx.try_recv().expect("runtime preview snapshot published");
         assert_eq!(state.sdr_preview, Some(true));
         assert_eq!(state.data_version, 0, "preview must not create an edit");
         assert!(!state.editing_is_dirty, "preview must not dirty the project");
-    }
-
-    #[test]
-    fn stalled_ui_gets_only_states_it_must_not_miss() {
-        let mut thread = headless_content_thread(Project::default(), 64, 64);
-        let (state_tx, state_rx) = crossbeam_channel::unbounded();
-        for _ in 0..super::UI_STATE_BACKLOG {
-            state_tx.send(crate::content_state::ContentState::default()).unwrap();
-        }
-        thread.send_state(&state_tx);
-        assert_eq!(state_rx.len(), super::UI_STATE_BACKLOG, "per-tick state queued behind a stalled UI");
-
-        assert!(!thread.handle_command(ContentCommand::SetProject));
-        thread.send_state(&state_tx);
-        assert_eq!(state_rx.len(), super::UI_STATE_BACKLOG + 1, "project edit dropped behind a stalled UI");
-        let edit = state_rx.try_iter().last().expect("queued");
-        assert!(edit.project_snapshot.is_some());
-
-        thread.send_state(&state_tx);
-        assert_eq!(state_rx.len(), 1, "drained UI gets per-tick states again");
     }
 
     /// FRAME_EXACT_TRANSPORT_DESIGN D10: the project setting is the only fps.
@@ -2722,7 +2421,7 @@ mod tests {
     fn timer_and_clock_follow_project_fps() {
         use manifold_editing::commands::settings::ChangeFrameRateCommand;
         let mut thread = headless_content_thread(Project::default(), 64, 64);
-        let (state_tx, _state_rx) = crossbeam_channel::unbounded();
+        let (state_tx, _state_rx) = crate::content_state::state_channel();
         let tick_and_check = |thread: &mut super::ContentThread, fps: f32, after: &str| {
             let give_up = std::time::Instant::now() + std::time::Duration::from_secs(5);
             while !thread.content_pipeline.is_surface_ready(thread.frame_count) {
@@ -2753,7 +2452,7 @@ mod tests {
     fn presents_inside_a_scrub_burst_leave_one_seek() {
         let mut thread = headless_content_thread(Project::default(), 64, 64);
         let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded();
-        let (state_tx, _state_rx) = crossbeam_channel::unbounded();
+        let (state_tx, _state_rx) = crate::content_state::state_channel();
         let epoch = thread.engine.transport_epoch();
         let now = std::time::Instant::now();
         for (id, seconds) in [(1u64, 1.0), (2, 2.0), (3, 3.0)] {

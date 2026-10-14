@@ -16,7 +16,6 @@ use crate::content_command::ContentCommand;
 use manifold_core::effects::PresetInstance;
 use manifold_core::effect_graph_def::SerializedParamValue;
 use manifold_core::GraphTarget;
-use manifold_editing::command::Command;
 use manifold_editing::commands::effect_target::EffectTarget;
 use manifold_editing::commands::effects::{
     ChangeGraphParamCommand, RemoveEffectCommand, ReorderEffectCommand, ReorderEffectGroupCommand,
@@ -24,9 +23,10 @@ use manifold_editing::commands::effects::{
 };
 use manifold_editing::commands::settings::{ChangeMacroCommand, PasteGeneratorCommand};
 use manifold_ui::{InspectorTab, PanelAction, ParamsAction};
+use manifold_ui::panels::inspector::InspectorFold;
 
 use super::super::DispatchResult;
-use super::{resolve_effects_mut, resolve_effects_read};
+use super::resolve_effects_read;
 use super::resolve::{resolve_graph_target, resolve_preset_target};
 
 fn find_effect_string_node(
@@ -72,13 +72,13 @@ fn string_binding_target(
 }
 
 pub(crate) fn dispatch_params(action: &ParamsAction, ctx: &mut super::super::DispatchCtx) -> DispatchResult {
-    let (effective_tab, effective_active_layer) = super::editor_dispatch_context(ctx.editor_target, &*ctx.project, ctx.ui.inspector.last_effect_tab(), ctx.active_layer);
+    let (effective_tab, effective_active_layer) = super::editor_dispatch_context(ctx.editor_target, &ctx.project, ctx.ui.inspector.last_effect_tab(), ctx.active_layer);
     let active_layer = &effective_active_layer;
     if let ParamsAction::ParamEnumSet(gpt, param_id, _)
         | ParamsAction::ParamToggle(gpt, param_id) = action
         && let Some(target) = resolve_graph_target(gpt, ctx.editor_target, effective_tab,
-            active_layer, ctx.selection, ctx.project)
-        && let Some(reason) = crate::scene_modifier_edit::macro_parameter_lock_reason(ctx.project, &target, param_id.as_ref())
+            active_layer, ctx.selection, &ctx.project)
+        && let Some(reason) = crate::scene_modifier_edit::macro_parameter_lock_reason(&ctx.project, &target, param_id.as_ref())
     {
         ContentCommand::send(ctx.content_tx, ContentCommand::GraphEditRejected(reason.into()));
         return DispatchResult::handled();
@@ -99,15 +99,13 @@ pub(crate) fn dispatch_params(action: &ParamsAction, ctx: &mut super::super::Dis
             expand_layer_ancestors(&owner_id, ctx);
             ctx.selection.select_layer(owner_id.clone());
             *ctx.active_layer = Some(owner_id);
-            if crate::ui_bridge::projection::trigger_routing::response_uses_scene_panel(ctx.project, &address, param_id.as_ref())
-                && !ctx.ui.scene_setup_panel.is_open()
-            {
-                ctx.ui.toggle_scene_dock();
+            if crate::ui_bridge::projection::trigger_routing::response_uses_scene_panel(&ctx.project, &address, param_id.as_ref()) {
+                ctx.selection.pin_scope(InspectorTab::Scene);
             }
-            ctx.ui.pending_trigger_response_reveal = Some((target.clone(), param_id.clone()));
-            // Card/rack folding is presentation state, using the existing
-            // content-thread mutation path; the source and response stay intact.
-            ContentCommand::send(ctx.content_tx, ContentCommand::mutate(crate::content_command::touch::EFFECTS, Box::new(move |project| {
+            ctx.ui.request_trigger_response_reveal(target.clone(), param_id.clone());
+            // Card/rack folding is presentation state, not an undo step; the
+            // source and response stay intact.
+            ctx.mutate(crate::content_command::touch::EFFECTS, move |project| {
                 let group = project.graph_target_owner_mut(&address).and_then(|instance| {
                     instance.collapsed = false;
                     instance.group_id.clone()
@@ -119,8 +117,8 @@ pub(crate) fn dispatch_params(action: &ParamsAction, ctx: &mut super::super::Dis
                         }
                     }
                 }
-            })));
-            DispatchResult::structural()
+            });
+            DispatchResult::handled()
         }
         ParamsAction::OpenClipTriggerSource(..) | ParamsAction::OpenTriggerTargets(_) => {
             DispatchResult::handled()
@@ -128,7 +126,7 @@ pub(crate) fn dispatch_params(action: &ParamsAction, ctx: &mut super::super::Dis
         ParamsAction::AssignClipTriggerSource(target, param_id, source) => {
             let target = crate::editing_host::to_graph_target(target);
             if let Some(reason) = crate::scene_modifier_edit::macro_parameter_lock_reason(
-                ctx.project, &target, param_id.as_ref(),
+                &ctx.project, &target, param_id.as_ref(),
             ) {
                 ContentCommand::send(ctx.content_tx, ContentCommand::GraphEditRejected(reason.into()));
                 return DispatchResult::handled();
@@ -139,7 +137,7 @@ pub(crate) fn dispatch_params(action: &ParamsAction, ctx: &mut super::super::Dis
             );
             if let manifold_ui::view::UiClipTriggerSource::Lane(id) = source {
                 expand_layer_ancestors(id, ctx);
-                ctx.ui.pending_layer_reveal = Some(id.clone());
+                ctx.ui.request_layer_reveal(id.clone());
             }
             ContentCommand::send(ctx.content_tx, ContentCommand::ExecuteOnContent(Box::new(command)));
             DispatchResult::handled()
@@ -149,7 +147,7 @@ pub(crate) fn dispatch_params(action: &ParamsAction, ctx: &mut super::super::Dis
                 (crate::editing_host::to_graph_target(target), param.clone())
             });
             if let Some(command) = manifold_editing::service::EditingService::create_trigger_lane(
-                ctx.project, owner, assignment,
+                &ctx.project, owner, assignment,
             ) {
                 expand_layer_ancestors(owner, ctx);
                 ContentCommand::send(ctx.content_tx, ContentCommand::ExecuteSelecting(
@@ -160,18 +158,18 @@ pub(crate) fn dispatch_params(action: &ParamsAction, ctx: &mut super::super::Dis
         }
         ParamsAction::ClearAutomation(gpt, param_id) => {
             if let Some(target) = resolve_graph_target(
-                gpt, ctx.editor_target, effective_tab, active_layer, ctx.selection, ctx.project,
+                gpt, ctx.editor_target, effective_tab, active_layer, ctx.selection, &ctx.project,
             ) {
                 let target = crate::editing_host::to_ui_graph_target(&target);
                 super::super::project::remove_parameter_automation(
-                    ctx.project, ctx.content_tx, ctx.ui, ctx.selection, &target, param_id,
+                    &mut ctx.project, ctx.content_tx, ctx.ui, ctx.selection, &target, param_id,
                 );
             }
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
         ParamsAction::ShowAutomation(gpt, param_id) => {
             let Some(target) = resolve_graph_target(
-                gpt, ctx.editor_target, effective_tab, active_layer, ctx.selection, ctx.project,
+                gpt, ctx.editor_target, effective_tab, active_layer, ctx.selection, &ctx.project,
             ) else {
                 return DispatchResult::handled();
             };
@@ -190,8 +188,8 @@ pub(crate) fn dispatch_params(action: &ParamsAction, ctx: &mut super::super::Dis
         }
         // ── Macros panel collapse ─────────────────────────────────
         ParamsAction::MacrosCollapseToggle => {
-            ctx.ui.inspector.macros_panel_mut().toggle_collapsed();
-            DispatchResult::structural()
+            ctx.ui.inspector.toggle_fold(InspectorFold::Macros);
+            DispatchResult::handled()
         }
 
         // ── Macro sliders ─────────────────────────────────────────
@@ -203,9 +201,7 @@ pub(crate) fn dispatch_params(action: &ParamsAction, ctx: &mut super::super::Dis
             if idx < manifold_core::macro_bank::MACRO_COUNT {
                 let old = ctx.project.settings.macro_bank.slots[idx].value;
                 if old.abs() > f32::EPSILON {
-                    manifold_core::macro_bank::MacroBank::apply_macro(ctx.project, idx, 0.0);
-                    let cmd = ChangeMacroCommand::new(idx, old, 0.0);
-                    ContentCommand::send(ctx.content_tx, ContentCommand::Execute(Box::new(cmd)));
+                    ctx.execute(Box::new(ChangeMacroCommand::new(idx, old, 0.0)));
                 }
             }
             DispatchResult::handled()
@@ -217,8 +213,8 @@ pub(crate) fn dispatch_params(action: &ParamsAction, ctx: &mut super::super::Dis
         // Layer audio-gain scrub trio migrated to `PanelAction::Scrub`
         // (`ValueRef::LayerAudioGain`, P-I / D4).
         ParamsAction::MasterCollapseToggle => {
-            ctx.ui.inspector.master_chrome_mut().toggle_collapsed();
-            DispatchResult::structural()
+            ctx.ui.inspector.toggle_fold(InspectorFold::MasterChrome);
+            DispatchResult::handled()
         }
         ParamsAction::MasterExitPathClicked => {
             // Handled by try_open_dropdown in ui_root.rs — opens exit path dropdown.
@@ -226,14 +222,10 @@ pub(crate) fn dispatch_params(action: &ParamsAction, ctx: &mut super::super::Dis
         }
         ParamsAction::SetLedExitIndex(idx) => {
             let idx = *idx;
-            ctx.project.settings.led_exit_index = idx;
-            // Push to content thread so the LED pipeline picks it up
-            ContentCommand::send(
-                ctx.content_tx,
-                ContentCommand::mutate(crate::content_command::touch::LED, Box::new(move |p| {
-                    p.settings.led_exit_index = idx;
-                })),
-            );
+            // Locally and on the content thread, so the LED pipeline picks it up.
+            ctx.mutate(crate::content_command::touch::LED, move |p: &mut manifold_core::project::Project| {
+                p.settings.led_exit_index = idx;
+            });
             DispatchResult::handled()
         }
         // ── LED enabled toggle ───────────────────────────────────
@@ -241,13 +233,9 @@ pub(crate) fn dispatch_params(action: &ParamsAction, ctx: &mut super::super::Dis
             let new_enabled = !ctx.content_state.led_enabled;
             // Persist the new ON/OFF state in project settings so the LED
             // pipeline auto-initialises on project load.
-            ctx.project.settings.led_enabled = new_enabled;
-            ContentCommand::send(
-                ctx.content_tx,
-                ContentCommand::mutate(crate::content_command::touch::LED, Box::new(move |p| {
-                    p.settings.led_enabled = new_enabled;
-                })),
-            );
+            ctx.mutate(crate::content_command::touch::LED, move |p| {
+                p.settings.led_enabled = new_enabled;
+            });
             if new_enabled {
                 let settings = manifold_led::LedSettings {
                     enabled: true,
@@ -267,8 +255,8 @@ pub(crate) fn dispatch_params(action: &ParamsAction, ctx: &mut super::super::Dis
         // Layer-opacity scrub trio migrated to `PanelAction::Scrub`
         // (`ValueRef::LayerOpacity`, P-I / D4).
         ParamsAction::LayerChromeCollapseToggle => {
-            ctx.ui.inspector.layer_chrome_mut().toggle_collapsed();
-            DispatchResult::structural()
+            ctx.ui.inspector.toggle_fold(InspectorFold::LayerChrome);
+            DispatchResult::handled()
         }
 
         // ── Effect operations ──────────────────────────────────────
@@ -287,7 +275,7 @@ pub(crate) fn dispatch_params(action: &ParamsAction, ctx: &mut super::super::Dis
                 tab,
                 active_layer,
                 ctx.selection,
-                ctx.project,
+                &ctx.project,
                 *fx_idx,
             )
             .and_then(|eid| ctx.project.find_effect_by_id(&eid).map(|fx| !fx.enabled))
@@ -303,7 +291,7 @@ pub(crate) fn dispatch_params(action: &ParamsAction, ctx: &mut super::super::Dis
                         tab,
                         active_layer,
                         ctx.selection,
-                        ctx.project,
+                        &ctx.project,
                         idx,
                     )?;
                     let enabled = ctx.project.find_effect_by_id(&eid)?.enabled;
@@ -320,17 +308,8 @@ pub(crate) fn dispatch_params(action: &ParamsAction, ctx: &mut super::super::Dis
                     )));
                 }
             }
-            // Apply locally for immediate visual feedback.
-            for (eid, _) in &targets {
-                if let Some(fx) = ctx.project.find_effect_by_id_mut(eid) {
-                    fx.enabled = new_enabled;
-                }
-            }
             if !commands.is_empty() {
-                ContentCommand::send(
-                    ctx.content_tx,
-                    ContentCommand::ExecuteBatch(commands, "Toggle effects".into()),
-                );
+                ctx.project.execute_batch(commands, "Toggle effects".into());
             }
             DispatchResult::handled()
         }
@@ -343,98 +322,112 @@ pub(crate) fn dispatch_params(action: &ParamsAction, ctx: &mut super::super::Dis
             } else {
                 vec![*fx_idx]
             };
-            let new_collapsed;
-            {
-                let (effects_mut, _target) =
-                    resolve_effects_mut(tab, ctx.project, active_layer, ctx.selection);
-                if let Some(effects) = effects_mut {
-                    new_collapsed = effects.get(*fx_idx).map(|fx| !fx.collapsed).unwrap_or(true);
+            let new_collapsed = resolve_effects_read(tab, &ctx.project, active_layer, ctx.selection)
+                .0
+                .and_then(|effects| effects.get(*fx_idx).map(|fx| !fx.collapsed))
+                .unwrap_or(true);
+            let target = super::resolve_effect_target(tab, active_layer, &ctx.project);
+            ctx.mutate(crate::content_command::touch::EFFECTS, move |p| {
+                let effects = match &target {
+                    EffectTarget::Master => Some(&mut p.settings.master_effects),
+                    EffectTarget::Layer { layer_id } => p
+                        .timeline
+                        .find_layer_by_id_mut(layer_id)
+                        .map(|(_, l)| l.effects_mut()),
+                };
+                if let Some(effects) = effects {
                     for &idx in &indices {
                         if let Some(fx) = effects.get_mut(idx) {
                             fx.collapsed = new_collapsed;
                         }
                     }
-                } else {
-                    new_collapsed = true;
                 }
-            }
-            // Send to content thread so snapshot sync doesn't overwrite
-            let target = super::resolve_effect_target(tab, active_layer, ctx.project);
-            let indices_owned = indices;
-            ContentCommand::send(
-                ctx.content_tx,
-                ContentCommand::mutate(crate::content_command::touch::EFFECTS, Box::new(move |p| {
-                    let effects = match &target {
-                        EffectTarget::Master => Some(&mut p.settings.master_effects),
-                        EffectTarget::Layer { layer_id } => p
-                            .timeline
-                            .find_layer_by_id_mut(layer_id)
-                            .map(|(_, l)| l.effects_mut()),
-                    };
-                    if let Some(effects) = effects {
-                        for &idx in &indices_owned {
-                            if let Some(fx) = effects.get_mut(idx) {
-                                fx.collapsed = new_collapsed;
-                            }
-                        }
-                    }
-                })),
-            );
-            DispatchResult::structural()
+            });
+            DispatchResult::handled()
         }
         ParamsAction::SetAllCardsCollapsed { collapsed } => {
             // Collapse/expand every effect card in the active column at once.
-            // Mirrors EffectCollapseToggle's two-write pattern (snapshot now,
-            // MutateProject so the content thread's snapshot doesn't overwrite).
             let tab = effective_tab;
             let collapsed = *collapsed;
-            {
-                let (effects_mut, _target) =
-                    resolve_effects_mut(tab, ctx.project, active_layer, ctx.selection);
-                if let Some(effects) = effects_mut {
+            let target = super::resolve_effect_target(tab, active_layer, &ctx.project);
+            ctx.mutate(crate::content_command::touch::EFFECTS, move |p| {
+                let effects = match &target {
+                    EffectTarget::Master => Some(&mut p.settings.master_effects),
+                    EffectTarget::Layer { layer_id } => p
+                        .timeline
+                        .find_layer_by_id_mut(layer_id)
+                        .map(|(_, l)| l.effects_mut()),
+                };
+                if let Some(effects) = effects {
                     for fx in effects.iter_mut() {
                         fx.collapsed = collapsed;
                     }
                 }
+            });
+            DispatchResult::handled()
+        }
+        ParamsAction::ModConfigTabChanged | ParamsAction::SectionFoldToggled => {
+            // The card or Scene tab already flipped its own UI-only state (D5:
+            // fold state is workspace-local, never serialized); the view
+            // version rebuilds the column.
+            ctx.ui.inspector.note_card_view_actions(&[PanelAction::Params(action.clone())]);
+            DispatchResult::handled()
+        }
+        ParamsAction::CardSectionFolded { target, section, folded } => {
+            // A scene card fold is a saved view choice (SCENE_SURFACES_DESIGN.md
+            // D7), not an undo step: written to the local project so the
+            // rebuild sees it, and through MutateProject so the next snapshot
+            // keeps it, like EffectCollapseToggle.
+            let Some(target) = resolve_graph_target(target, ctx.editor_target, effective_tab, active_layer, ctx.selection, &ctx.project) else {
+                return DispatchResult::handled();
+            };
+            let (section, folded) = (section.clone(), *folded);
+            let write = move |instance: &mut PresetInstance| {
+                instance.folded_sections.retain(|title| *title != section);
+                instance.unfolded_sections.retain(|title| *title != section);
+                if folded {
+                    instance.folded_sections.push(section.clone());
+                } else {
+                    instance.unfolded_sections.push(section.clone());
+                }
+            };
+            ctx.mutate(crate::content_command::touch::EFFECTS, move |project| {
+                project.with_preset_graph_mut(&target, write);
+            });
+            DispatchResult::handled()
+        }
+        ParamsAction::SetCardPin(gpt, param_id, pin) => {
+            let Some(target) = resolve_graph_target(gpt, ctx.editor_target, effective_tab, active_layer, ctx.selection, &ctx.project) else {
+                return DispatchResult::handled();
+            };
+            if let (GraphTarget::Generator(layer), Some(manifold_core::scene_surface::CardPin::Shown)) = (&target, pin) {
+                ctx.ui.inspector.flash_card_row_when_shown(layer.clone(), param_id.clone());
             }
-            let target = super::resolve_effect_target(tab, active_layer, ctx.project);
-            ContentCommand::send(
-                ctx.content_tx,
-                ContentCommand::mutate(crate::content_command::touch::EFFECTS, Box::new(move |p| {
-                    let effects = match &target {
-                        EffectTarget::Master => Some(&mut p.settings.master_effects),
-                        EffectTarget::Layer { layer_id } => p
-                            .timeline
-                            .find_layer_by_id_mut(layer_id)
-                            .map(|(_, l)| l.effects_mut()),
-                    };
-                    if let Some(effects) = effects {
-                        for fx in effects.iter_mut() {
-                            fx.collapsed = collapsed;
-                        }
-                    }
-                })),
-            );
-            DispatchResult::structural()
+            let command = manifold_editing::commands::graph::SetCardPinCommand::new(target, param_id.to_string(), *pin);
+            ContentCommand::send(ctx.content_tx, ContentCommand::ExecuteOnContent(Box::new(command)));
+            DispatchResult::handled()
         }
-        ParamsAction::ModConfigTabChanged => {
-            // The card already switched its own active-tab UI state in
-            // handle_click; this just forces a rebuild so the drawer repaints
-            // with the newly-selected config. No model mutation.
-            DispatchResult::structural()
+        ParamsAction::SetSliderRange(gpt, param_id, range) => {
+            let Some(target) = resolve_graph_target(gpt, ctx.editor_target, effective_tab, active_layer, ctx.selection, &ctx.project) else {
+                return DispatchResult::handled();
+            };
+            ctx.execute(Box::new(manifold_editing::commands::graph::SetSliderRangeCommand::new(
+                target,
+                param_id.to_string(),
+                *range,
+            )));
+            DispatchResult::handled()
         }
-        ParamsAction::SectionFoldToggled => {
-            // D5 — the card already flipped its own `section_folded` UI-only
-            // state in handle_click; this just forces a rebuild so the
-            // folded/unfolded rows repaint. No model mutation (fold state is
-            // workspace-local, never serialized).
-            DispatchResult::structural()
+        ParamsAction::RevealInSceneTab(gpt, param_id) => {
+            reveal_in_scene_tab(gpt, vec![param_id.clone()], effective_tab, active_layer, ctx)
+        }
+        ParamsAction::RevealSectionInSceneTab(gpt, section) => {
+            reveal_in_scene_tab(gpt, section.clone(), effective_tab, active_layer, ctx)
         }
         ParamsAction::ModsCompactToggled => {
-            // section 6b — the inspector already flipped its own compact flag in
-            // route_click; rebuild so every card hides/shows its mod drawers.
-            // No model mutation.
-            DispatchResult::structural()
+            // section 6b — the inspector flipped its compact flag in route_click
+            // through its view-version setter.
+            DispatchResult::handled()
         }
         ParamsAction::EffectCardClicked(_) | ParamsAction::EffectSelectionChanged => {
             // Deselect generator card when an effect card is clicked
@@ -458,10 +451,10 @@ pub(crate) fn dispatch_params(action: &ParamsAction, ctx: &mut super::super::Dis
         // shape, exactly as `ParamChanged`/`ParamToggle` already do.
         ParamsAction::ParamEnumSet(gpt, param_id, new_val) => {
             if let Some(target) =
-                resolve_graph_target(gpt, ctx.editor_target, effective_tab, active_layer, ctx.selection, ctx.project)
+                resolve_graph_target(gpt, ctx.editor_target, effective_tab, active_layer, ctx.selection, &ctx.project)
             {
                 let old_val = ctx.project
-                    .with_preset_graph_mut(&target, |inst| {
+                    .with_preset_graph(&target, |inst| {
                         inst.params
                             .contains(param_id.as_ref())
                             .then(|| inst.get_base_param(param_id.as_ref()))
@@ -470,11 +463,8 @@ pub(crate) fn dispatch_params(action: &ParamsAction, ctx: &mut super::super::Dis
                 if let Some(old_val) = old_val
                     && (old_val - *new_val).abs() > f32::EPSILON
                 {
-                    ctx.project.with_preset_graph_mut(&target, |inst| {
-                        inst.set_base_param(param_id.as_ref(), *new_val);
-                    });
                     let cmd = ChangeGraphParamCommand::new(target, param_id.clone(), old_val, *new_val);
-                    ContentCommand::send(ctx.content_tx, ContentCommand::Execute(Box::new(cmd)));
+                    ctx.execute(Box::new(cmd));
                 }
             }
             DispatchResult::handled()
@@ -494,7 +484,7 @@ pub(crate) fn dispatch_params(action: &ParamsAction, ctx: &mut super::super::Dis
         ParamsAction::BrowserSearchClicked => DispatchResult::handled(),
         ParamsAction::RemoveEffect(fx_idx) => {
             let tab = effective_tab;
-            let (effects_ref, target) = resolve_effects_read(tab, ctx.project, active_layer, ctx.selection);
+            let (effects_ref, target) = resolve_effects_read(tab, &ctx.project, active_layer, ctx.selection);
             if let Some(effects) = effects_ref
                 && let Some(fx) = effects.get(*fx_idx)
             {
@@ -503,7 +493,7 @@ pub(crate) fn dispatch_params(action: &ParamsAction, ctx: &mut super::super::Dis
                     ContentCommand::send(ctx.content_tx, ContentCommand::ExecuteOnContent(Box::new(cmd)));
                 }
             }
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
         ParamsAction::EffectMove { tab, layer_id, ids, before, destination_group, preserve_groups } => {
             let target = match tab {
@@ -514,7 +504,7 @@ pub(crate) fn dispatch_params(action: &ParamsAction, ctx: &mut super::super::Dis
                 target, ids.clone(), before.clone(), destination_group.clone(), *preserve_groups,
             );
             ContentCommand::send(ctx.content_tx, ContentCommand::ExecuteOnContent(Box::new(command)));
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
         ParamsAction::EffectGroupCollapsed { tab, layer_id, group_id, collapsed } => {
             let target = match tab {
@@ -523,17 +513,17 @@ pub(crate) fn dispatch_params(action: &ParamsAction, ctx: &mut super::super::Dis
             };
             let command = manifold_editing::commands::effect_groups::SetGroupCollapsedCommand::new(target, group_id.clone(), *collapsed);
             ContentCommand::send(ctx.content_tx, ContentCommand::ExecuteOnContent(Box::new(command)));
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
         ParamsAction::EffectReorder(from_idx, to_idx) => {
             let tab = effective_tab;
-            let target = super::resolve_effect_target(tab, active_layer, ctx.project);
+            let target = super::resolve_effect_target(tab, active_layer, &ctx.project);
             let cmd = ReorderEffectCommand::new(target, *from_idx, *to_idx);
             {
                 ContentCommand::send(ctx.content_tx, ContentCommand::ExecuteOnContent(Box::new(cmd)));
             }
             // Selection follows automatically (ID-based, no remapping needed)
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
         // `ParamsAction::ToggleNodeParamExpose` is handled in
         // `app_render.rs` alongside the other graph commands so it can
@@ -543,8 +533,8 @@ pub(crate) fn dispatch_params(action: &ParamsAction, ctx: &mut super::super::Dis
         ParamsAction::EffectReorderGroup(source_indices, target_idx) => {
             // Multi-select reorder: move a group of effects to the target position.
             let tab = effective_tab;
-            let target = super::resolve_effect_target(tab, active_layer, ctx.project);
-            let (effects_ref, _target) = resolve_effects_read(tab, ctx.project, active_layer, ctx.selection);
+            let target = super::resolve_effect_target(tab, active_layer, &ctx.project);
+            let (effects_ref, _target) = resolve_effects_read(tab, &ctx.project, active_layer, ctx.selection);
             if let Some(original) = effects_ref {
                 let mut effects = original.to_vec();
                 // Snapshot before
@@ -579,7 +569,7 @@ pub(crate) fn dispatch_params(action: &ParamsAction, ctx: &mut super::super::Dis
                 ContentCommand::send(ctx.content_tx, ContentCommand::ExecuteOnContent(boxed));
             }
             // Selection follows automatically (ID-based, no remapping needed)
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
 
         // ── Generator card actions ─────────────────────────────────
@@ -632,7 +622,7 @@ pub(crate) fn dispatch_params(action: &ParamsAction, ctx: &mut super::super::Dis
         ParamsAction::EffectStringParamSelected(effect_id, binding_id, selected_value) => {
             let target = GraphTarget::Effect(effect_id.clone());
             let Some((node_id, param_name, scope_path, catalog_default)) =
-                string_binding_target(ctx.project, &target, binding_id)
+                string_binding_target(&ctx.project, &target, binding_id)
             else {
                 return DispatchResult::handled();
             };
@@ -647,7 +637,7 @@ pub(crate) fn dispatch_params(action: &ParamsAction, ctx: &mut super::super::Dis
             )
             .with_scope(scope_path);
             ContentCommand::send(ctx.content_tx, ContentCommand::ExecuteOnContent(Box::new(cmd)));
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
         ParamsAction::GenStringParamClicked(_) | ParamsAction::GenStringParamDropdownClicked(_) => {
             // Intercepted in app_render.rs to open text input / dropdown.
@@ -656,7 +646,7 @@ pub(crate) fn dispatch_params(action: &ParamsAction, ctx: &mut super::super::Dis
         ParamsAction::GenStringParamSelected(sp_idx, selected_value) => {
             // A dropdown string param was selected (e.g. font family).
             // Commit it as a SetClipStringParamCommand.
-            let layer_idx = super::resolve_active_layer_index(active_layer, ctx.project);
+            let layer_idx = super::resolve_active_layer_index(active_layer, &ctx.project);
             if let Some(layer_idx) = layer_idx
                 && let Some(layer) = ctx.project.timeline.layers.get(layer_idx)
             {
@@ -667,7 +657,7 @@ pub(crate) fn dispatch_params(action: &ParamsAction, ctx: &mut super::super::Dis
                     if sp_def.key == "audioSend" {
                         let target = GraphTarget::Generator(layer.layer_id.clone());
                         let Some((node_id, param_name, scope_path, catalog_default)) =
-                            string_binding_target(ctx.project, &target, sp_def.key)
+                            string_binding_target(&ctx.project, &target, sp_def.key)
                         else {
                             return DispatchResult::handled();
                         };
@@ -685,7 +675,7 @@ pub(crate) fn dispatch_params(action: &ParamsAction, ctx: &mut super::super::Dis
                             ctx.content_tx,
                             ContentCommand::ExecuteOnContent(Box::new(cmd)),
                         );
-                        return DispatchResult::structural();
+                        return DispatchResult::handled();
                     }
                     let key = sp_def.key.to_string();
                     let new_value: Option<String> = if selected_value.is_empty() {
@@ -696,9 +686,9 @@ pub(crate) fn dispatch_params(action: &ParamsAction, ctx: &mut super::super::Dis
 
                     // Find clip: selected clip on this layer, or first clip
                     let clip = ctx.selection
-                        .primary_selected_clip_id
+                        .primary_selected_clip_id()
                         .as_ref()
-                        .and_then(|sel_id| layer.clips.iter().find(|c| c.id == *sel_id))
+                        .and_then(|sel_id| layer.clips.iter().find(|c| c.id == **sel_id))
                         .or_else(|| layer.clips.first());
                     if let Some(c) = clip {
                         let old_value = c.string_params.as_ref().and_then(|m| m.get(&key)).cloned();
@@ -719,11 +709,8 @@ pub(crate) fn dispatch_params(action: &ParamsAction, ctx: &mut super::super::Dis
             DispatchResult::handled()
         }
         ParamsAction::GenCollapseToggle => {
-            if let Some(gp) = ctx.ui.inspector.gen_params_mut() {
-                let new_val = !gp.is_collapsed();
-                gp.set_collapsed(new_val);
-            }
-            DispatchResult::structural()
+            ctx.ui.inspector.toggle_fold(InspectorFold::Generator);
+            DispatchResult::handled()
         }
         ParamsAction::GenCardClicked => {
             // Select the generator card (blue highlight border), deselect effect cards
@@ -758,7 +745,7 @@ pub(crate) fn dispatch_params(action: &ParamsAction, ctx: &mut super::super::Dis
                 group_id.clone(),
             );
             ContentCommand::send(ctx.content_tx, ContentCommand::ExecuteOnContent(Box::new(cmd)));
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
         ParamsAction::AddMask { preset_id, source_layer, .. }
         | ParamsAction::AddEffectGroupMask { preset_id, source_layer, .. } => {
@@ -779,13 +766,13 @@ pub(crate) fn dispatch_params(action: &ParamsAction, ctx: &mut super::super::Dis
                 }
                 ParamsAction::AddMask { target: gpt, .. } => {
                     let Some(GraphTarget::Effect(_)) = resolve_graph_target(
-                        gpt, ctx.editor_target, effective_tab, active_layer, ctx.selection, ctx.project,
+                        gpt, ctx.editor_target, effective_tab, active_layer, ctx.selection, &ctx.project,
                     ) else {
                         return DispatchResult::handled();
                     };
                     match effective_tab {
                         InspectorTab::Master => EffectTarget::Master,
-                        InspectorTab::Layer | InspectorTab::Group => {
+                        InspectorTab::Layer | InspectorTab::Group | InspectorTab::Scene => {
                             let Some(layer_id) = active_layer.clone() else {
                                 return DispatchResult::handled();
                             };
@@ -822,10 +809,10 @@ pub(crate) fn dispatch_params(action: &ParamsAction, ctx: &mut super::super::Dis
                 _ => unreachable!(),
             };
             ContentCommand::send(ctx.content_tx, ContentCommand::ExecuteOnContent(Box::new(cmd)));
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
         ParamsAction::CopyGenerator => {
-            let layer_idx = super::resolve_active_layer_index(active_layer, ctx.project);
+            let layer_idx = super::resolve_active_layer_index(active_layer, &ctx.project);
             if let Some(layer_idx) = layer_idx
                 && let Some(layer) = ctx.project.timeline.layers.get(layer_idx)
                 && let Some(gp) = layer.gen_params()
@@ -836,7 +823,7 @@ pub(crate) fn dispatch_params(action: &ParamsAction, ctx: &mut super::super::Dis
         }
         ParamsAction::PasteGenerator => {
             if let Some(snapshot) = ctx.ui.gen_clipboard.get_paste_snapshot() {
-                let layer_idx = super::resolve_active_layer_index(active_layer, ctx.project);
+                let layer_idx = super::resolve_active_layer_index(active_layer, &ctx.project);
                 if let Some(layer_idx) = layer_idx
                     && let Some(layer) = ctx.project.timeline.layers.get(layer_idx)
                     && let Some(gp) = layer.gen_params()
@@ -858,47 +845,46 @@ pub(crate) fn dispatch_params(action: &ParamsAction, ctx: &mut super::super::Dis
                         snapshot.drivers,
                         snapshot.envelopes,
                     );
-                    let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
+                    let boxed: Box<dyn manifold_editing::command::Command + Send> =
                         Box::new(cmd);
-                    boxed.execute(ctx.project);
-                    ContentCommand::send(ctx.content_tx, ContentCommand::Execute(boxed));
+                    ctx.execute(boxed);
                 }
             }
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
         ParamsAction::MakePresetUnique(gpt) => {
             let target = resolve_preset_target(gpt, ctx.editor_target, effective_tab,
-                active_layer, ctx.selection, ctx.project);
+                active_layer, ctx.selection, &ctx.project);
             super::presets::dispatch_preset(target, manifold_ui::panels::actions::PresetActionKind::MakeUnique, ctx)
         }
         ParamsAction::ExportPreset(gpt) => {
             let target = resolve_preset_target(gpt, ctx.editor_target, effective_tab,
-                active_layer, ctx.selection, ctx.project);
+                active_layer, ctx.selection, &ctx.project);
             super::presets::dispatch_preset(target, manifold_ui::panels::actions::PresetActionKind::Export, ctx)
         }
         ParamsAction::ImportPreset(gpt) => {
             let target = resolve_preset_target(gpt, ctx.editor_target, effective_tab,
-                active_layer, ctx.selection, ctx.project);
+                active_layer, ctx.selection, &ctx.project);
             super::presets::dispatch_preset(target, manifold_ui::panels::actions::PresetActionKind::Import, ctx)
         }
         ParamsAction::SaveToLibrary(gpt) => {
             let target = resolve_preset_target(gpt, ctx.editor_target, effective_tab,
-                active_layer, ctx.selection, ctx.project);
+                active_layer, ctx.selection, &ctx.project);
             super::presets::dispatch_preset(target, manifold_ui::panels::actions::PresetActionKind::SaveToLibrary, ctx)
         }
         ParamsAction::SaveToProject(gpt) => {
             let target = resolve_preset_target(gpt, ctx.editor_target, effective_tab,
-                active_layer, ctx.selection, ctx.project);
+                active_layer, ctx.selection, &ctx.project);
             super::presets::dispatch_preset(target, manifold_ui::panels::actions::PresetActionKind::SaveToProject, ctx)
         }
         ParamsAction::RevertToLibrary(gpt) => {
             let target = resolve_preset_target(gpt, ctx.editor_target, effective_tab,
-                active_layer, ctx.selection, ctx.project);
+                active_layer, ctx.selection, &ctx.project);
             super::presets::dispatch_preset(target, manifold_ui::panels::actions::PresetActionKind::RevertToLibrary, ctx)
         }
         ParamsAction::PushToLibrary(gpt) => {
             let target = resolve_preset_target(gpt, ctx.editor_target, effective_tab,
-                active_layer, ctx.selection, ctx.project);
+                active_layer, ctx.selection, &ctx.project);
             super::presets::dispatch_preset(target, manifold_ui::panels::actions::PresetActionKind::PushToLibrary, ctx)
         }
         ParamsAction::PresetAction(target, kind) => super::presets::dispatch_preset(
@@ -918,10 +904,10 @@ pub(crate) fn dispatch_params(action: &ParamsAction, ctx: &mut super::super::Dis
         // old value and writes the new one in the same arm.
         ParamsAction::ParamToggle(gpt, param_id) => {
             if let Some(target) =
-                resolve_graph_target(gpt, ctx.editor_target, effective_tab, active_layer, ctx.selection, ctx.project)
+                resolve_graph_target(gpt, ctx.editor_target, effective_tab, active_layer, ctx.selection, &ctx.project)
             {
                 let old_val = ctx.project
-                    .with_preset_graph_mut(&target, |inst| {
+                    .with_preset_graph(&target, |inst| {
                         inst.params
                             .contains(param_id.as_ref())
                             .then(|| inst.get_base_param(param_id.as_ref()))
@@ -929,18 +915,15 @@ pub(crate) fn dispatch_params(action: &ParamsAction, ctx: &mut super::super::Dis
                     .flatten();
                 if let Some(old_val) = old_val {
                     let new_val = if old_val > 0.5 { 0.0 } else { 1.0 };
-                    ctx.project.with_preset_graph_mut(&target, |inst| {
-                        inst.set_base_param(param_id.as_ref(), new_val);
-                    });
                     let cmd = ChangeGraphParamCommand::new(target, param_id.clone(), old_val, new_val);
-                    ContentCommand::send(ctx.content_tx, ContentCommand::Execute(Box::new(cmd)));
+                    ctx.execute(Box::new(cmd));
                 }
             }
             DispatchResult::handled()
         }
         ParamsAction::ParamFire(gpt, param_id) => {
             if let Some(target) =
-                resolve_graph_target(gpt, ctx.editor_target, effective_tab, active_layer, ctx.selection, ctx.project)
+                resolve_graph_target(gpt, ctx.editor_target, effective_tab, active_layer, ctx.selection, &ctx.project)
             {
                 ContentCommand::send(
                     ctx.content_tx,
@@ -954,36 +937,33 @@ pub(crate) fn dispatch_params(action: &ParamsAction, ctx: &mut super::super::Dis
         }
 
         // ── "3D Shading" relight (docs/DEPTH_RELIGHT_DESIGN.md D8/P7) ─────
-        // The toggle and `height_from` change template topology, so they stay
-        // structural. The D3 float knobs are now live uniforms written per
-        // frame, so a drag updates the local project + the content thread via
-        // `MutateProject` (Values or Shapes) and returns `handled()` — no chain rebuild.
+        // The toggle and `height_from` change template topology: undoable
+        // commands whose stamps rebuild the inspector. The D3 float knobs are
+        // live uniforms: a drag is a Shapes write, pushed in place.
         ParamsAction::RelightToggle(gpt) => {
             if let Some(target) =
-                resolve_graph_target(gpt, ctx.editor_target, effective_tab, active_layer, ctx.selection, ctx.project)
+                resolve_graph_target(gpt, ctx.editor_target, effective_tab, active_layer, ctx.selection, &ctx.project)
             {
-                let old = ctx.project.with_preset_graph_mut(&target, |inst| inst.relight).unwrap_or(false);
-                let mut cmd = ToggleRelightCommand::new(target, old, !old);
-                cmd.execute(ctx.project);
-                ContentCommand::send(ctx.content_tx, ContentCommand::Execute(Box::new(cmd)));
+                let old = ctx.project.with_preset_graph(&target, |inst| inst.relight).unwrap_or(false);
+                let cmd = ToggleRelightCommand::new(target, old, !old);
+                ctx.execute(Box::new(cmd));
             }
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
         // Relight-knob scrub trio migrated to `PanelAction::Scrub`
         // (`ValueRef::RelightParam`, P-I / D4).
         ParamsAction::RelightHeightFromChanged(gpt, height_from) => {
             if let Some(target) =
-                resolve_graph_target(gpt, ctx.editor_target, effective_tab, active_layer, ctx.selection, ctx.project)
+                resolve_graph_target(gpt, ctx.editor_target, effective_tab, active_layer, ctx.selection, &ctx.project)
             {
                 let old = ctx.project
-                    .with_preset_graph_mut(&target, |inst| inst.relight_params.height_from)
+                    .with_preset_graph(&target, |inst| inst.relight_params.height_from)
                     .unwrap_or_default();
                 let new = crate::ui_translate::relight_height_from_to_core(*height_from);
-                let mut cmd = SetRelightHeightFromCommand::new(target, old, new);
-                cmd.execute(ctx.project);
-                ContentCommand::send(ctx.content_tx, ContentCommand::Execute(Box::new(cmd)));
+                let cmd = SetRelightHeightFromCommand::new(target, old, new);
+                ctx.execute(Box::new(cmd));
             }
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
 
         ParamsAction::AddEffect {
@@ -1006,7 +986,7 @@ pub(crate) fn dispatch_params(action: &ParamsAction, ctx: &mut super::super::Dis
             // a layer's "+ Add Effect" (master opens carry `None`).
             let target = match tab {
                 InspectorTab::Master => EffectTarget::Master,
-                InspectorTab::Layer | InspectorTab::Group => {
+                InspectorTab::Layer | InspectorTab::Group | InspectorTab::Scene => {
                     let Some(layer_id) = layer_id else {
                         return DispatchResult::handled();
                     };
@@ -1034,11 +1014,10 @@ pub(crate) fn dispatch_params(action: &ParamsAction, ctx: &mut super::super::Dis
                 target, effect, insert_idx,
             );
             {
-                let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
-                boxed.execute(ctx.project);
-                ContentCommand::send(ctx.content_tx, ContentCommand::Execute(boxed));
+                let boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
+                ctx.execute(boxed);
             }
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
 
         ParamsAction::PasteEffects | ParamsAction::EditCards(_) | ParamsAction::EffectGroupRightClicked(_) => DispatchResult::handled(),
@@ -1086,14 +1065,12 @@ fn show_automation_target(
     if !instance.params.contains(param_id.as_ref()) {
         return DispatchResult::handled();
     }
-    let Some(owner_id) = automation_owner_layer_id(ctx.project, target) else {
+    let Some(owner_id) = automation_owner_layer_id(&ctx.project, target) else {
         return DispatchResult::handled();
     };
     expand_layer_ancestors(&owner_id, ctx);
     let ui_target = crate::editing_host::to_ui_graph_target(target);
-    ctx.selection
-        .hidden_automation_lanes
-        .remove(&(ui_target.clone(), param_id.clone()));
+    ctx.selection.unhide_automation_lane(ui_target.clone(), param_id.clone());
     let min_height = ctx.ui.layout.track_header_height()
         + manifold_ui::color::AUTOMATION_LANE_STRIP_HEIGHT + 60.0;
     if ctx.ui.layout.timeline_body().height < min_height {
@@ -1102,13 +1079,13 @@ fn show_automation_target(
     }
     ctx.ui.pending_automation_reveal = Some((ui_target.clone(), param_id.clone()));
     ctx.selection.set_chosen_automation_param(owner_id, ui_target, param_id.clone());
-    ctx.selection.automation_mode_visible = true;
+    ctx.selection.set_automation_mode_visible(true);
     ctx.selection.clear_automation_selection();
-    DispatchResult::structural()
+    DispatchResult::handled()
 }
 
-/// Revealing a control lane expands its owner chain through the content thread,
-/// using the same presentation state as manual layer expansion.
+/// Revealing a control lane expands its owner chain, using the same
+/// presentation state as manual layer expansion.
 fn expand_layer_ancestors(id: &manifold_core::LayerId, ctx: &mut super::super::DispatchCtx) {
     let mut expand = Vec::new();
     let mut next = Some(id.clone());
@@ -1119,14 +1096,33 @@ fn expand_layer_ancestors(id: &manifold_core::LayerId, ctx: &mut super::super::D
         next = layer.parent_layer_id.clone();
     }
     if !expand.is_empty() {
-        ContentCommand::send(ctx.content_tx, ContentCommand::mutate(crate::content_command::touch::LAYERS, Box::new(move |project| {
-            for id in expand {
-                if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(&id) {
+        ctx.mutate(crate::content_command::touch::LAYERS, move |project| {
+            for id in &expand {
+                if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(id) {
                     layer.is_collapsed = false;
                 }
             }
-        })));
+        });
     }
+}
+
+/// Switch the inspector to the Scene tab and queue a reveal of `params`
+/// (one row, or a card section's rows for the Scene tab to choose from).
+fn reveal_in_scene_tab(
+    gpt: &manifold_ui::GraphParamTarget,
+    params: Vec<manifold_core::effects::ParamId>,
+    effective_tab: InspectorTab,
+    active_layer: &Option<manifold_core::LayerId>,
+    ctx: &mut super::super::DispatchCtx,
+) -> DispatchResult {
+    let Some(GraphTarget::Generator(layer)) =
+        resolve_graph_target(gpt, ctx.editor_target, effective_tab, active_layer, ctx.selection, &ctx.project)
+    else {
+        return DispatchResult::handled();
+    };
+    ctx.selection.pin_scope(InspectorTab::Scene);
+    ctx.ui.request_scene_reveal(manifold_ui::view::UiGraphTarget::Generator(layer), params);
+    DispatchResult::handled()
 }
 
 #[cfg(test)]
@@ -1178,9 +1174,10 @@ mod audio_send_dispatch_tests {
             "send-2".to_string(),
         ));
 
-        let result = {
+        {
+            let mut edits = crate::gesture_preview::UiEdits::default();
             let mut ctx = crate::ui_bridge::DispatchCtx {
-                project: &mut project,
+                project: crate::ui_bridge::ProjectRef::new(&mut project, &mut edits, &content_tx),
                 content_tx: &content_tx,
                 content_state: &content_state,
                 ui: &mut ui,
@@ -1193,7 +1190,6 @@ mod audio_send_dispatch_tests {
             };
             crate::ui_bridge::dispatch(&action, &mut ctx)
         };
-        assert!(result.structural_change);
 
         let command = match content_rx.try_recv().expect("selection queues a command") {
             crate::content_command::ContentCommand::ExecuteOnContent(command) => command,
@@ -1208,6 +1204,58 @@ mod audio_send_dispatch_tests {
         assert_eq!(waveform_send(&project, &target), None);
         assert!(service.redo(&mut project));
         assert_eq!(waveform_send(&project, &target).as_deref(), Some("send-2"));
+    }
+}
+
+#[cfg(test)]
+mod view_fold_dispatch_tests {
+    use crate::frame_plan::{plan_frame, FrameInputs, MainRegion, Projection};
+    use manifold_ui::{PanelAction, ParamsAction};
+
+    /// A fold moves only the inspector view version: the plan rebuilds the
+    /// inspector and runs no project or inspector sync.
+    #[test]
+    fn fold_toggles_are_view_changes_not_structural_syncs() {
+        let mut project = manifold_core::project::Project::default();
+        let (content_tx, content_rx) = crossbeam_channel::unbounded();
+        let content_state = crate::content_state::ContentState::default();
+        let mut ui = crate::ui_root::UIRoot::new();
+        let mut selection = manifold_ui::UIState::new();
+        let mut active_layer = None;
+        let mut user_prefs = crate::user_prefs::UserPrefs::in_memory();
+        let mut scrub = crate::ui_bridge::ScrubState::default();
+        let mut edits = crate::gesture_preview::UiEdits::default();
+        let mut last = FrameInputs { inspector_view: ui.inspector.view_version(), ..Default::default() };
+
+        for action in [ParamsAction::MacrosCollapseToggle, ParamsAction::MasterCollapseToggle, ParamsAction::SectionFoldToggled] {
+            let was_collapsed = ui.inspector.macros_panel().is_collapsed();
+            {
+                let mut ctx = crate::ui_bridge::DispatchCtx {
+                    project: crate::ui_bridge::ProjectRef::new(&mut project, &mut edits, &content_tx),
+                    content_tx: &content_tx,
+                    content_state: &content_state,
+                    ui: &mut ui,
+                    selection: &mut selection,
+                    active_layer: &mut active_layer,
+                    user_prefs: &mut user_prefs,
+                    editor_target: None,
+                    scrub: &mut scrub,
+                    dialogs: Default::default(),
+                };
+                crate::ui_bridge::dispatch(&PanelAction::Params(action.clone()), &mut ctx)
+            };
+            assert!(content_rx.try_recv().is_err(), "{action:?} sends nothing");
+            if matches!(action, ParamsAction::MacrosCollapseToggle) {
+                assert_ne!(ui.inspector.macros_panel().is_collapsed(), was_collapsed);
+            }
+            let next = FrameInputs { inspector_view: ui.inspector.view_version(), ..Default::default() };
+            assert_ne!(next.inspector_view, last.inspector_view, "{action:?} moves the view version");
+            let plan = plan_frame(&last, &next);
+            assert!(plan.rebuild.contains(MainRegion::Inspector), "{action:?}");
+            assert!(!plan.projections.contains(Projection::ProjectSync), "{action:?}");
+            assert!(!plan.projections.contains(Projection::InspectorSync), "{action:?}");
+            last = next;
+        }
     }
 }
 
@@ -1259,10 +1307,10 @@ mod trigger_dispatch_tests {
             UiClipTriggerSource::Lane(lane_id.clone()),
         ));
 
-        let result = crate::ui_bridge::dispatch(
+        crate::ui_bridge::dispatch(
             &action,
             &mut crate::ui_bridge::DispatchCtx {
-                project: &mut project,
+                project: crate::ui_bridge::ProjectRef::new(&mut project, &mut Default::default(), &content_tx),
                 content_tx: &content_tx,
                 content_state: &content_state,
                 ui: &mut ui,
@@ -1274,9 +1322,8 @@ mod trigger_dispatch_tests {
                 dialogs: Default::default(),
             },
         );
-        assert!(!result.structural_change, "snapshot projection waits for the content receipt");
         assert_eq!(serde_json::to_value(&project).unwrap(), before);
-        assert_eq!(ui.pending_layer_reveal.as_ref(), Some(&lane_id));
+        assert_eq!(ui.pending_layer_reveal(), Some(&lane_id));
         assert_eq!(active_layer, Some(project.timeline.layers[2].layer_id.clone()));
 
         let ContentCommand::ExecuteOnContent(command) = content_rx.try_recv().unwrap() else {
@@ -1305,6 +1352,7 @@ mod trigger_dispatch_tests {
         let owner_id = project.timeline.layers[0].layer_id.clone();
         project.graph_target_owner_mut(&target).unwrap().collapsed = true;
         let before = serde_json::to_value(&project).unwrap();
+        let mut content = project.clone();
         let (content_tx, content_rx) = crossbeam_channel::unbounded();
         let content_state = crate::content_state::ContentState::default();
         let mut ui = crate::ui_root::UIRoot::new();
@@ -1314,28 +1362,28 @@ mod trigger_dispatch_tests {
         let mut user_prefs = crate::user_prefs::UserPrefs::in_memory();
         let mut scrub = crate::ui_bridge::ScrubState::default();
         let ui_target = crate::editing_host::to_ui_graph_target(&target);
-        let result = crate::ui_bridge::dispatch(
+        crate::ui_bridge::dispatch(
             &PanelAction::Params(ParamsAction::ShowClipTriggerResponse(ui_target.clone(), "amount".into())),
             &mut crate::ui_bridge::DispatchCtx {
-                project: &mut project, content_tx: &content_tx, content_state: &content_state,
+                project: crate::ui_bridge::ProjectRef::new(&mut project, &mut Default::default(), &content_tx), content_tx: &content_tx, content_state: &content_state,
                 ui: &mut ui, selection: &mut selection, active_layer: &mut active_layer,
                 user_prefs: &mut user_prefs, editor_target: None, scrub: &mut scrub, dialogs: Default::default(),
             },
         );
-        assert!(result.structural_change);
         assert_eq!(active_layer, Some(owner_id.clone()));
-        assert_eq!(selection.primary_selected_layer_id, Some(owner_id));
-        assert_eq!(ui.pending_trigger_response_reveal, Some((ui_target, "amount".into())));
-        assert_eq!(serde_json::to_value(&project).unwrap(), before, "UI snapshot is read-only");
+        assert_eq!(selection.primary_selected_layer_id(), Some(&owner_id));
+        assert_eq!(ui.pending_trigger_response_reveal(), Some(&(ui_target, "amount".into())));
+        // The card expands locally, and the content thread gets the same write.
+        assert!(!project.graph_target_owner(&target).unwrap().collapsed);
         for command in content_rx.try_iter() {
             let ContentCommand::MutateProject { f: presentation, .. } = command else {
                 panic!("navigation must not author an assignment or response");
             };
-            presentation(&mut project);
+            presentation(&mut content);
         }
-        assert!(!project.graph_target_owner(&target).unwrap().collapsed);
+        assert_eq!(serde_json::to_value(&content).unwrap(), serde_json::to_value(&project).unwrap());
         project.graph_target_owner_mut(&target).unwrap().collapsed = true;
-        assert_eq!(serde_json::to_value(&project).unwrap(), before);
+        assert_eq!(serde_json::to_value(&project).unwrap(), before, "only presentation state moved");
     }
 
     #[test]
@@ -1360,10 +1408,10 @@ mod trigger_dispatch_tests {
             )),
         });
 
-        let result = crate::ui_bridge::dispatch(
+        crate::ui_bridge::dispatch(
             &action,
             &mut crate::ui_bridge::DispatchCtx {
-                project: &mut project,
+                project: crate::ui_bridge::ProjectRef::new(&mut project, &mut Default::default(), &content_tx),
                 content_tx: &content_tx,
                 content_state: &content_state,
                 ui: &mut ui,
@@ -1375,11 +1423,14 @@ mod trigger_dispatch_tests {
                 dialogs: Default::default(),
             },
         );
-        assert!(!result.structural_change, "snapshot projection waits for the content receipt");
+        // The parent expands locally (a stamped presentation write); the lane
+        // itself waits for the content receipt.
+        assert!(!project.timeline.layers[0].is_collapsed);
+        project.timeline.layers[0].is_collapsed = true;
         assert_eq!(serde_json::to_value(&project).unwrap(), before);
 
         let ContentCommand::MutateProject { f: expand, .. } = content_rx.try_recv().unwrap() else {
-            panic!("expected content-owned parent expansion")
+            panic!("expected the same parent expansion on the content thread")
         };
         expand(&mut project);
         assert!(!project.timeline.layers[0].is_collapsed);
@@ -1435,5 +1486,72 @@ mod automation_owner_tests {
             modifier_id: "m".into(),
         };
         assert_eq!(automation_owner_layer_id(&project, &modifier), None);
+    }
+}
+
+#[cfg(test)]
+mod reveal_dispatch_tests {
+    use crate::frame_plan::{plan_frame, FrameInputs, MainRegion, Projection};
+    use manifold_core::types::LayerType;
+    use manifold_core::PresetTypeId;
+    use manifold_ui::{InspectorTab, PanelAction, ParamsAction};
+
+    /// Show in Scene tab with the inspector already pinned to Scene: the pin
+    /// moves nothing, so the reveal's own version is what runs the inspector
+    /// projection that takes it. Asking again while it is pending moves
+    /// nothing.
+    #[test]
+    fn scene_reveal_moves_its_version_when_the_tab_is_already_pinned() {
+        let mut project = manifold_core::project::Project::default();
+        let idx = project.timeline.add_layer("Scene", LayerType::Generator, PresetTypeId::NONE);
+        let layer_id = project.timeline.layers[idx].layer_id.clone();
+        let (content_tx, content_rx) = crossbeam_channel::unbounded();
+        let content_state = crate::content_state::ContentState::default();
+        let mut ui = crate::ui_root::UIRoot::new();
+        let mut selection = manifold_ui::UIState::new();
+        selection.pin_scope(InspectorTab::Scene);
+        let mut active_layer = Some(layer_id.clone());
+        let mut user_prefs = crate::user_prefs::UserPrefs::in_memory();
+        let mut scrub = crate::ui_bridge::ScrubState::default();
+        let mut edits = crate::gesture_preview::UiEdits::default();
+        let inputs = |ui: &crate::ui_root::UIRoot, selection: &manifold_ui::UIState| FrameInputs {
+            inspector_reveal: ui.inspector_reveal_version(),
+            selection_identity: selection.selection_identity_version(),
+            ..Default::default()
+        };
+        let action = PanelAction::Params(ParamsAction::RevealInSceneTab(
+            manifold_ui::GraphParamTarget::GeneratorOf(layer_id.clone()),
+            "amount".into(),
+        ));
+        let mut last = inputs(&ui, &selection);
+        for pass in 0..2 {
+            {
+                let mut ctx = crate::ui_bridge::DispatchCtx {
+                    project: crate::ui_bridge::ProjectRef::new(&mut project, &mut edits, &content_tx),
+                    content_tx: &content_tx,
+                    content_state: &content_state,
+                    ui: &mut ui,
+                    selection: &mut selection,
+                    active_layer: &mut active_layer,
+                    user_prefs: &mut user_prefs,
+                    editor_target: None,
+                    scrub: &mut scrub,
+                    dialogs: Default::default(),
+                };
+                crate::ui_bridge::dispatch(&action, &mut ctx);
+            }
+            assert!(content_rx.try_recv().is_err(), "a reveal sends nothing");
+            let next = inputs(&ui, &selection);
+            assert_eq!(next.selection_identity, last.selection_identity, "already pinned to Scene");
+            let plan = plan_frame(&last, &next);
+            if pass == 0 {
+                assert!(plan.projections.contains(Projection::InspectorSync));
+                assert!(plan.rebuild.contains(MainRegion::Inspector));
+                assert!(!plan.projections.contains(Projection::ProjectSync));
+            } else {
+                assert!(plan.is_empty(), "the same reveal still pending moves nothing");
+            }
+            last = next;
+        }
     }
 }

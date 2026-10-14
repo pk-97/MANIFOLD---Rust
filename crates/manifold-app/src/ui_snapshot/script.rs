@@ -30,17 +30,32 @@
 //! empty, host-independent, never the user's file.
 //!
 //! Every frame the runner advances runs `Runner::live_frame`: the live App's
-//! per-frame order, through `crate::ui_frame::run_projection_pass` (projection,
+//! per-frame order, through `crate::ui_frame::apply_frame_plan` (projection,
 //! rebuild decision, `push_state`, drag-time re-projection) and, when pixels
 //! are read, `composite_main_ui_frame`. The runner holds no projection or
 //! rebuild logic of its own; it differs from the App only in what inputs are
-//! present (no content thread, no drag polling, no editor window).
+//! present (no content thread, no drag polling, no OS window). A flow that
+//! clicks a card's graph-editor button opens the editor window through
+//! `editor_frame::open_editor_workspace`; every later frame builds its tree
+//! through `editor_frame::run_editor_frame`, the functions the App calls.
+//! `Dump`, `Assert` and `AssertFresh` read that tree too. A `Menu` step for
+//! View > Perform enters perform mode through `perform_mode::frame::enter`;
+//! every later frame is a perform frame through the same `perform_mode::frame`
+//! functions `tick_perform_mode` calls, drawn into the runner's offscreen, and
+//! `AssertFresh` compares what the perform screen shows. After a `Focus` step
+//! for the graph editor, pointer steps go into the editor window through
+//! `editor_input.rs`, the seam `window_input`'s editor handlers call, and its
+//! card lane, canvas edits and mapping drawer drain and dispatch through the
+//! same seam `app_render.rs` calls. The editor's canvas draws the watched
+//! graph: the runner absorbs the watch commands the App sends and publishes
+//! the snapshot into its content state through `graph_snapshot.rs`, as the
+//! content thread does.
 
 use std::path::PathBuf;
 use std::time::Duration;
 
 use manifold_core::LayerId;
-use manifold_editing::command::{Command, CompositeCommand};
+use manifold_editing::command::{CompositeCommand};
 use manifold_editing::undo::UndoRedoManager;
 use manifold_gpu::GpuDevice;
 use manifold_ui_paint::ui_cache_manager::UICacheManager;
@@ -61,7 +76,6 @@ use super::fixtures::SceneData;
 use crate::content_command::ContentCommand;
 use crate::content_state::ContentState;
 use crate::editing_host::AppEditingHost;
-use crate::ui_frame::UiFrameFlags;
 use crate::ui_root::UIRoot;
 
 /// Fixed per-`Step` delta — the fixture's project runs at 60 fps default
@@ -222,6 +236,12 @@ fn run_flow(
         || scene == "mushroomscene"
         || scene == "physicsscene"
         || scene == "physicsboxes"
+        // The Scene tab lives in the inspector (SCENE_SURFACES D16).
+        || scene == "fluidauthoring"
+        || scene == "scene-setup"
+        || scene == "waterdambreak"
+        || scene == "waterdambreakmatter"
+        || scene == "oceanscene"
         || scene == "gltfanimscene"
         || scene == "bug047"
         || scene == "envmod"
@@ -254,7 +274,7 @@ fn run_flow(
     // dropdown → ChangeRtQualityCommand → state-sync path.
     if scene == "rtquality" {
         ui.rt_quality_panel.open();
-        ui.overlay_dirty = true;
+        ui.mark_overlay_dirty();
     }
     super::sync_build(&mut ui, &data, zoom_ppb);
 
@@ -273,6 +293,8 @@ fn run_flow(
     let mut runner = Runner::new();
     runner.work.record = record_work;
     runner.work.flow = stem.to_string();
+    // The fixture's values are what the content thread captured last.
+    runner.values_capture.capture_into(&data.project);
     // BUG-296: `resolve_effect_target` falls back to `timeline.layers.first()`
     // when `Runner.active_layer` is None, silently mutating the wrong layer's
     // effect chain for structural PanelActions dispatched before any
@@ -282,23 +304,33 @@ fn run_flow(
     runner.active_layer = data
         .active
         .and_then(|i| data.project.timeline.layers.get(i).map(|l| l.layer_id.clone()));
-    // `sync_build` already projected this state.
-    runner.seen_selection_version = data.selection.selection_version;
-    runner.seen_active_layer = runner.active_layer.clone();
-    // The App's first frame after a load is a structural one; `sync_build`
-    // is the fixture's build, not that frame, so run it once here.
-    runner.flags.structural = true;
+    // `sync_build` already projected this state: the planner starts from it.
+    let automation_draw_mode = data.selection.automation_draw_mode;
+    let seed = crate::ui_frame::gather_frame_inputs(
+        &mut runner.planner,
+        &ui,
+        &mut data.selection,
+        &runner.active_layer,
+        &runner.edits,
+        &data.content,
+        crate::frame_plan::ChromeSource { project: &data.project, is_dirty: false, project_path: None, automation_draw_mode },
+    );
+    runner.planner.plan(seed);
+    // The App's first frame after a load moves every part; `sync_build` is
+    // the fixture's build, not that frame, so run it once here.
+    runner.edits.stamps.project_replaced();
     runner.live_frame(&mut ui, &mut data, &mut render, false, true);
     let mut results = Vec::with_capacity(actions.len());
     let mut ok = true;
 
     for (index, action) in actions.iter().enumerate() {
-        if reads_composite(action) {
+        // The main window is not drawn in perform mode.
+        if reads_composite(action) && !runner.perform.active {
             render.flush_composite(&mut ui);
         }
         let outcome = runner.step(&mut ui, &mut data, index, action, &out_dir, &mut render);
         let failed = outcome.status == "fail";
-        results.push(outcome);
+        harness_work(&mut runner.work.excluded, || results.push(outcome));
         if failed {
             ok = false;
             break;
@@ -438,18 +470,23 @@ struct Runner {
     content_state: ContentState,
     cursor_manager: manifold_ui::cursors::CursorManager,
     active_layer: Option<LayerId>,
-    /// The per-frame flags input handlers and the editing host set, consumed
-    /// by `ui_frame::run_projection_pass` exactly as the live App consumes
-    /// its own.
-    flags: UiFrameFlags,
-    /// The selection version and active layer the last frame saw.
-    seen_selection_version: u64,
-    seen_active_layer: Option<LayerId>,
+    /// A repaint request (UI_INVALIDATION D8), set where the App sets its
+    /// `offscreen_dirty`. The runner paints every frame, so nothing reads it.
+    redraw: bool,
+    /// The frame planner, as the App owns its own (D6).
+    planner: crate::frame_plan::FramePlanner,
+    /// The content thread's part stamps, modelled: every absorbed command
+    /// bumps its parts here, and the next frame folds them into the UI's
+    /// stamps as the App folds an accepted snapshot (D5).
+    content_stamps: manifold_core::change::PartStamps,
     transport_cache: crate::ui_bridge::TransportDisplayCache,
     /// Commands recorded at the end of a frame: the App sees them as a new
     /// snapshot next frame.
     echo_pending: bool,
-    pre_drag_commands: Vec<Box<dyn Command>>,
+    /// `AssertFresh` asked for its reference frame: the next frame runs every
+    /// projection (D10). Test oracle only; the App has no such input.
+    fresh_reference: bool,
+    edits: crate::gesture_preview::UiEdits,
     // BUG-198: the harness had no undo stack at all — commands executed
     // straight against `data.project` via `AppEditingHost`/`ui_bridge` and
     // were never recorded anywhere, so a headless `Key Z` step was a pure
@@ -483,7 +520,65 @@ struct Runner {
     last_gesture_points: Vec<Vec2>,
     // Persistent headless engine: scripted controls use production clip sync.
     modulation_engine: manifold_playback::engine::PlaybackEngine,
+    /// The content thread's value capture (D15): after each engine tick it
+    /// compares the live values and moves `values_seq` only when one changed,
+    /// so the tick's writes reach the widgets through the live push, as the
+    /// App's value snapshot does.
+    values_capture: crate::content_state::ModulationSnapshot,
     work: WorkWindow,
+    /// The headless stand-in for the graph editor's viewport: the layer it
+    /// shows and its navigation camera, moved by `ViewportOrbit`.
+    viewport: Option<(LayerId, manifold_node_engine::scene::viewport_camera::ViewportCamera)>,
+    /// The graph editor window, once a flow opens it.
+    editor: Option<RunnerEditor>,
+    /// Perform mode, as the App holds it.
+    perform: crate::perform_mode::PerformModeState,
+    /// The inline text session, as the App holds it (`text_session.rs`).
+    text_input: crate::text_input::TextInputState,
+    /// Where pointer and key steps go (`AutomationAction::Focus`).
+    focus: manifold_ui::automation::FlowWindow,
+    /// The graph the editor shows and the catalog default its edits seed
+    /// from, as the App's `watched_graph_target` and `watched_catalog_default`.
+    watched: Option<manifold_core::GraphTarget>,
+    catalog_default: Option<manifold_core::effect_graph_def::EffectGraphDef>,
+    /// The App's `editor_graph`: the reset pill's input cache.
+    editor_graph: crate::editor_graph_cache::EditorGraphCache,
+    /// The card lane's mapping drawer, as the App's `editor_mapping_popover`.
+    editor_mapping: crate::mapping_popover::MappingPopover,
+    /// What the content thread holds for the canvas: the watched target the
+    /// absorbed watch commands set, and its snapshot cache.
+    content_watched: Option<manifold_core::GraphTarget>,
+    graph_snapshot: Option<crate::graph_snapshot::CachedGraphSnapshot>,
+}
+
+/// The graph editor window as the App holds it (`graph_editor`,
+/// `graph_canvas`, `graph_editor_panel`), opened and built through the
+/// `editor_frame.rs` seams. No window exists, so no offscreen, and the window
+/// keeps the size a first open gives it.
+struct RunnerEditor {
+    ws: crate::workspace::Workspace,
+    canvas: manifold_ui::graph_canvas::GraphCanvas,
+    panel: manifold_ui::panels::graph_editor::GraphEditorPanel,
+    logical_w: u32,
+    logical_h: u32,
+    /// The renderer snapshot's UI translation, as the App's `editor_ui_graph`.
+    ui_graph: crate::editor_bridge::EditorUiGraph,
+    /// The preview column's smart-preview toggle: its intent registry, the
+    /// button the last build drew and the value it holds.
+    intents: manifold_ui::intent::IntentRegistry<manifold_ui::GraphEditCommand>,
+    smart_preview_toggle: Option<manifold_ui::node::NodeId>,
+    node_preview_normalize: bool,
+}
+
+impl RunnerEditor {
+    /// The tree dump `Dump` and `AssertFresh` read for this window, with the surfaces a
+    /// pointer step resolves against (canvas, mapping drawer).
+    fn dump(&self, mapping: &crate::mapping_popover::MappingPopover) -> serde_json::Value {
+        let layout = crate::editor_frame::EditorLayout::compute(&self.ws.dock, self.logical_w, self.logical_h, None);
+        let canvas = manifold_ui::graph_canvas::GraphCanvasTargets { canvas: &self.canvas, viewport: layout.canvas_rect() };
+        let surfaces: Vec<&dyn HitTargets> = vec![&canvas, mapping];
+        super::dump::dump_tree_ex(&self.ws.ui_root.tree, &surfaces)
+    }
 }
 
 /// The count gate's state for one flow (UI_INVALIDATION_DESIGN.md D10, D11).
@@ -502,6 +597,15 @@ struct WorkWindow {
     flow: String,
 }
 
+/// Runs the harness's own bookkeeping (step labels, result strings) and
+/// removes what it counted from the work window: the App has no steps.
+fn harness_work<T>(excluded: &mut manifold_core::work_count::WorkSnapshot, f: impl FnOnce() -> T) -> T {
+    let start = manifold_core::work_count::thread_work_snapshot();
+    let out = f();
+    *excluded = excluded.plus(&manifold_core::work_count::thread_work_snapshot().since(&start));
+    out
+}
+
 /// Committed ceilings, read and written relative to the repo root (flows run
 /// with the repo root as cwd).
 pub(crate) const WORK_CEILINGS_PATH: &str = "scripts/ui-flows/work_ceilings.json";
@@ -518,12 +622,13 @@ impl Runner {
             content_state: ContentState::default(),
             cursor_manager: manifold_ui::cursors::CursorManager::default(),
             active_layer: None,
-            flags: UiFrameFlags::default(),
-            seen_selection_version: 0,
-            seen_active_layer: None,
+            redraw: false,
+            planner: Default::default(),
+            content_stamps: Default::default(),
             transport_cache: crate::ui_bridge::TransportDisplayCache::new(),
             echo_pending: false,
-            pre_drag_commands: Vec::new(),
+            fresh_reference: false,
+            edits: Default::default(),
             undo: UndoRedoManager::new(),
             clock: 0.0,
             modifiers: manifold_ui::input::Modifiers::NONE,
@@ -532,8 +637,168 @@ impl Runner {
             filmstrip: Vec::new(),
             last_gesture_points: Vec::new(),
             modulation_engine,
+            values_capture: crate::content_state::ModulationSnapshot::empty(),
             work: WorkWindow::default(),
+            viewport: None,
+            editor: None,
+            perform: crate::perform_mode::PerformModeState::new(),
+            text_input: crate::text_input::TextInputState::new(),
+            focus: Default::default(),
+            watched: None,
+            catalog_default: None,
+            editor_graph: Default::default(),
+            editor_mapping: crate::mapping_popover::MappingPopover::new(),
+            content_watched: None,
+            graph_snapshot: None,
         }
+    }
+
+    /// `open_graph_editor` without a window: the same workspace, canvas and
+    /// projected inspector column. A second open is a no-op here; live it
+    /// only brings the window to the front.
+    fn open_editor(&mut self, data: &SceneData) -> bool {
+        if self.editor.is_some() {
+            return false;
+        }
+        let active = self.active_layer.as_ref().and_then(|id| data.project.timeline.find_layer_index_by_id(id));
+        let (ws, canvas) = crate::editor_frame::open_editor_workspace(
+            None,
+            &data.project,
+            active,
+            &data.selection,
+            &data.content,
+        );
+        let (logical_w, logical_h) =
+            crate::editor_frame::first_open_logical_size(f64::from(super::LOGICAL_W), f64::from(super::LOGICAL_H));
+        self.editor = Some(RunnerEditor {
+            ws,
+            canvas,
+            panel: manifold_ui::panels::graph_editor::GraphEditorPanel::new(),
+            logical_w,
+            logical_h,
+            ui_graph: None,
+            intents: manifold_ui::intent::IntentRegistry::new(),
+            smart_preview_toggle: None,
+            node_preview_normalize: false,
+        });
+        true
+    }
+
+    /// The App's `watch_graph_target`: point the editor at `target` through
+    /// the shared watch.
+    fn watch(&mut self, data: &SceneData, target: manifold_core::GraphTarget) {
+        if crate::editor_bridge::watch_editor_graph(
+            &data.project,
+            &target,
+            &mut self.watched,
+            &mut self.catalog_default,
+            &mut self.editor_mapping,
+            self.editor.as_mut().map(|ed| &mut ed.canvas),
+            Some(&self.content_tx),
+        ) {
+            self.editor_graph.catalog_default_changed();
+        }
+    }
+
+    /// The watch each open-editor action makes in the App's action loop.
+    fn watch_for_open(&mut self, ui: &UIRoot, data: &mut SceneData, action: &manifold_ui::RootAction) {
+        use manifold_core::GraphTarget;
+        use manifold_ui::RootAction;
+        match action {
+            RootAction::PreviewSceneModifierObject(layer, modifier_id, _) => self.watch(data, GraphTarget::SceneModifier {
+                owner: Box::new(GraphTarget::Generator(layer.clone())),
+                modifier_id: modifier_id.clone(),
+            }),
+            RootAction::OpenGraphTarget(target) => self.watch(data, crate::editing_host::to_graph_target(target)),
+            RootAction::SceneSetupOpenGraphEditor(layer) => self.watch(data, GraphTarget::Generator(layer.clone())),
+            RootAction::OpenGeneratorGraphEditor => {
+                if let Some(layer) = self.active_layer.clone() {
+                    self.watch(data, GraphTarget::Generator(layer));
+                }
+            }
+            RootAction::OpenGraphEditor(ei) => {
+                let tab = ui.inspector.last_effect_tab();
+                match crate::editor_bridge::effect_card_id(tab, &mut data.project, self.active_layer.as_ref(), &data.selection, *ei) {
+                    Some(eid) => self.watch(data, GraphTarget::Effect(eid)),
+                    None => {
+                        self.watched = None;
+                        self.catalog_default = None;
+                        self.editor_graph.catalog_default_changed();
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// The App's `open_card_mapping`: resolve the drawer the card row asks
+    /// for, watch its graph, open it.
+    fn open_card_mapping(
+        &mut self,
+        data: &SceneData,
+        target: &manifold_ui::GraphParamTarget,
+        param_id: &str,
+        anchor_node_id: manifold_ui::node::NodeId,
+    ) {
+        let Some(ed) = self.editor.as_ref() else { return };
+        let clip = manifold_ui::graph_canvas::Rect::new(0.0, 0.0, ed.logical_w as f32, ed.logical_h as f32);
+        let Some(open) = crate::editor_bridge::resolve_card_mapping(
+            &ed.ws.ui_root, &data.project, &self.active_layer, &data.selection, self.watched.as_ref(),
+            target, param_id, anchor_node_id, clip,
+        ) else {
+            return;
+        };
+        if self.watched.as_ref() != Some(&open.owner) {
+            self.watch(data, open.owner.clone());
+        }
+        open.open(&mut self.editor_mapping);
+    }
+
+    /// The editor window's frame, after the main window's as in the App
+    /// (`present_graph_editor_window` runs after `present_all_windows`). No
+    /// content thread publishes a node preview or a pipeline size, so the
+    /// node monitor shows no image and the monitors take the default aspect.
+    fn editor_frame(&mut self, data: &SceneData, fresh: bool) {
+        let Some(ed) = self.editor.as_mut() else { return };
+        // The canvas takes the watched graph as the App's tick pushes it; no
+        // pipeline publishes an output aspect.
+        let graph = crate::editor_bridge::editor_ui_graph(&mut ed.ui_graph, &data.content, self.watched.as_ref(), &data.project);
+        if let Some(graph) = graph {
+            let has_mod = self.editor_graph.has_graph_mod(
+                &data.project,
+                self.watched.as_ref(),
+                self.catalog_default.as_ref(),
+                &self.edits.stamps.parts(),
+            );
+            crate::editor_frame::feed_canvas(
+                &mut ed.canvas,
+                &mut ed.ws.editor_frame.canvas,
+                &graph,
+                None,
+                DT * 1000.0,
+                &data.content.live_node_params,
+                has_mod,
+            );
+        }
+        let layout = crate::editor_frame::EditorLayout::compute(&ed.ws.dock, ed.logical_w, ed.logical_h, None);
+        let active = self.active_layer.as_ref().and_then(|id| data.project.timeline.find_layer_index_by_id(id));
+        ed.smart_preview_toggle = crate::editor_frame::run_editor_frame(
+            &mut ed.ws.ui_root,
+            &mut ed.ws.editor_frame,
+            &ed.panel,
+            Some(&mut ed.canvas),
+            &layout,
+            crate::editor_frame::EditorFrameInputs {
+                project: &data.project,
+                content_state: &data.content,
+                active_layer: active,
+                live: self.planner.last.live(),
+                dt: DT,
+                show_image: false,
+            },
+            fresh,
+        )
+        .smart_preview_toggle;
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -546,8 +811,45 @@ impl Runner {
         out_dir: &std::path::Path,
         render: &mut RenderState,
     ) -> StepResult {
-        let action_desc = format!("{action:?}");
-        let outcome = match action {
+        let action_desc = harness_work(&mut self.work.excluded, || format!("{action:?}"));
+        // In perform mode window input goes to the perform screen
+        // (`perform_mode/input.rs`), never the frozen main window.
+        if self.perform.active {
+            match action {
+                AutomationAction::Pointer { target, gesture } => {
+                    return self.perform_pointer(ui, data, index, action_desc, target, gesture, out_dir, render);
+                }
+                AutomationAction::Key { .. } if crate::perform_mode::frame::takes_keys(&self.perform) => {
+                    self.live_frame(ui, data, render, false, true);
+                    return StepResult {
+                        index,
+                        action: action_desc,
+                        status: "ok",
+                        detail: "dropped: perform mode takes every key".into(),
+                        artifact: None,
+                    };
+                }
+                AutomationAction::ScrollTo { .. }
+                | AutomationAction::TrackWheel { .. }
+                | AutomationAction::ResizeDrag { .. }
+                | AutomationAction::Modifiers { .. } => {
+                    return self.fail(index, action_desc, ui, out_dir, "perform mode drops this input; only the exit button responds".into());
+                }
+                _ => {}
+            }
+        }
+        // An active text session takes every key, as `input_keyboard` gives it them.
+        if self.text_input.active && matches!(action, AutomationAction::Key { .. } | AutomationAction::Text { .. }) {
+            return self.type_into_session(ui, data, index, action_desc, action, out_dir, render);
+        }
+        // After `Focus` on the graph editor, pointer and key steps go into
+        // that window, as the OS routes input to the window under the mouse.
+        let editor_outcome = if self.focus == manifold_ui::automation::FlowWindow::GraphEditor {
+            self.editor_step(ui, data, index, &action_desc, action, out_dir, render)
+        } else {
+            None
+        };
+        let outcome = if let Some(outcome) = editor_outcome { outcome } else { match action {
             AutomationAction::Step { frames } => {
                 // Each stepped frame ticks the engine, then runs one live
                 // frame. Outside a work window tweens run on the wall clock
@@ -573,6 +875,9 @@ impl Runner {
                     // delivery queue that this harness never renders.
                     self.modulation_engine.with_trigger_pulses(|_, _, _| ());
                     assert!(self.modulation_engine.swap_project(&mut data.project), "initialized engine");
+                    if self.values_capture.capture_into(&data.project) {
+                        data.content.values_seq += 1;
+                    }
                     // The live App ticks the engine on the content thread.
                     let engine_work = manifold_core::work_count::thread_work_snapshot().since(&engine_work);
                     self.work.excluded = self.work.excluded.plus(&engine_work);
@@ -583,18 +888,15 @@ impl Runner {
                     if !tile {
                         continue;
                     }
-                    if render.gate.step_frame() {
+                    // A perform frame composites itself.
+                    if !self.perform.active && render.gate.step_frame() {
                         render.composite_now(ui);
                     }
                     self.filmstrip.push(render.readback_linear());
                 }
-                StepResult {
-                    index,
-                    action: action_desc,
-                    status: "ok",
-                    detail: format!("clock -> {:.3}s ({frames} filmstrip tile(s))", self.clock),
-                    artifact: None,
-                }
+                let clock = self.clock;
+                let detail = harness_work(&mut self.work.excluded, || format!("clock -> {clock:.3}s ({frames} filmstrip tile(s))"));
+                StepResult { index, action: action_desc, status: "ok", detail, artifact: None }
             }
             AutomationAction::Dump => {
                 let path = out_dir.join(format!("{index:02}.tree.json"));
@@ -627,7 +929,7 @@ impl Runner {
                     Ok(project) => {
                         data.project = project;
                         self.undo = UndoRedoManager::new();
-                        self.flags.structural = true;
+                        self.edits.stamps.project_replaced();
                         self.live_frame(ui, data, render, false, true);
                         StepResult { index, action: action_desc, status: "ok",
                             detail: "saved and reloaded through project IO".into(), artifact: Some(path.display().to_string()) }
@@ -648,12 +950,12 @@ impl Runner {
                 // of falling through, mirroring the `Text` arm's fail.
                 // Plain unmodified keys keep the existing `key_event` path.
                 if modifiers.is_command_only() && *key == Key::Z {
+                    // As `EditingService::undo`: the undone command's parts.
+                    let touches = self.undo.peek_undo_touches();
                     let undone = self.undo.undo(&mut data.project);
-                    // Undo can add/remove nodes, layers, clips — always
-                    // force a structural resync rather than guessing per
-                    // command (same conservative call `commit_command_batch`
-                    // makes for a completed drag).
-                    self.flags.structural = true;
+                    if undone {
+                        self.content_stamps.bump(touches);
+                    }
                     self.live_frame(ui, data, render, false, true);
                     StepResult {
                         index,
@@ -663,8 +965,11 @@ impl Runner {
                         artifact: None,
                     }
                 } else if modifiers.is_command_shift() && *key == Key::Z {
+                    let touches = self.undo.peek_redo_touches();
                     let redone = self.undo.redo(&mut data.project);
-                    self.flags.structural = true;
+                    if redone {
+                        self.content_stamps.bump(touches);
+                    }
                     self.live_frame(ui, data, render, false, true);
                     StepResult {
                         index,
@@ -720,14 +1025,9 @@ impl Runner {
                     }
                 }
             }
+            // An active session took `Text` above; without one nothing types.
             AutomationAction::Text { .. } => {
-                // No headless injection seam exists yet: text editing lives
-                // entirely in `Application::text_input` (manifold-app), which
-                // `UIRoot` can't reach (no `pub fn text_event` on `UIRoot` —
-                // re-derived while building this driver). Fails loudly (D6)
-                // rather than silently no-op-ing; section 7's live door is the
-                // precedent for wiring this once P3 has a live Application.
-                self.fail(index, action_desc, ui, out_dir, "no headless seam for AutomationAction::Text (Application::text_input only; see UI_AUTOMATION_DESIGN.md section 7)".into())
+                self.fail(index, action_desc, ui, out_dir, "no text field is focused: open one first (click a search bar, double-click a value)".into())
             }
             AutomationAction::Pointer { target, gesture } => {
                 self.pointer(ui, data, index, action_desc, target, gesture, out_dir, render)
@@ -741,24 +1041,32 @@ impl Runner {
             AutomationAction::SetParam { param, value } => {
                 self.set_param(ui, data, index, action_desc, param, *value, render)
             }
+            AutomationAction::SetSliderRange { param, range } => match flow_value_ref(data, param) {
+                Ok((manifold_ui::panels::ValueRef::Param(target, id), _)) => {
+                    let action = PanelAction::Params(manifold_ui::panels::ParamsAction::SetSliderRange(target, id, *range));
+                    self.apply_panel_actions(ui, data, &[action]);
+                    self.live_frame(ui, data, render, false, true);
+                    StepResult { index, action: action_desc, status: "ok", detail: format!("slider range {range:?} through dispatch"), artifact: None }
+                }
+                Ok(_) => StepResult { index, action: action_desc, status: "fail", detail: "SetSliderRange needs a card param".into(), artifact: None },
+                Err(e) => StepResult { index, action: action_desc, status: "fail", detail: e, artifact: None },
+            },
             AutomationAction::ScrubDrag { param, from, to, steps } => {
                 self.scrub_drag(ui, data, index, action_desc, param, (*from, *to), *steps, out_dir, render)
             }
             AutomationAction::PlayingStep { frames, bpm, wobble } => {
                 self.playing_step(ui, data, *frames, *bpm, *wobble, render);
-                StepResult {
-                    index,
-                    action: action_desc,
-                    status: "ok",
-                    detail: format!("{frames} playing frame(s) at {bpm} bpm, beat -> {:.3}", data.content.current_beat.0),
-                    artifact: None,
-                }
+                // The step's own label is harness work, as `action_desc` is.
+                let beat = data.content.current_beat.0;
+                let detail = harness_work(&mut self.work.excluded, || {
+                    format!("{frames} playing frame(s) at {bpm} bpm, beat -> {beat:.3}")
+                });
+                StepResult { index, action: action_desc, status: "ok", detail, artifact: None }
             }
             AutomationAction::Modifiers { modifiers } => {
-                // `window_input::input_modifiers`: store, forward, rebuild.
+                // `window_input::input_modifiers`: store and forward.
                 self.modifiers = *modifiers;
                 self.overlay.set_modifiers(*modifiers);
-                self.flags.rebuild = true;
                 ui.input.set_modifiers(*modifiers);
                 self.live_frame(ui, data, render, false, true);
                 StepResult { index, action: action_desc, status: "ok", detail: "modifiers set".into(), artifact: None }
@@ -774,18 +1082,58 @@ impl Runner {
                 }
                 StepResult { index, action: action_desc, status: "ok", detail: format!("{steps} wheel notch(es)"), artifact: None }
             }
+            AutomationAction::ViewportOrbit { dx, dy } => match ui.scene_setup_panel.live_layer_id().cloned() {
+                Some(layer) => {
+                    let camera = match self.viewport.take() {
+                        Some((shown, camera)) if shown == layer => camera,
+                        _ => Default::default(),
+                    };
+                    let mut camera = camera;
+                    crate::viewport_input::apply(
+                        &mut camera,
+                        crate::viewport_input::ViewportGesture::Orbit { dx: *dx, dy: *dy },
+                        &crate::viewport_input::ViewportInputSensitivity::default(),
+                    );
+                    self.viewport = Some((layer, camera));
+                    StepResult { index, action: action_desc, status: "ok", detail: format!("viewport yaw {:.3} pitch {:.3}", camera.yaw, camera.pitch), artifact: None }
+                }
+                None => self.fail(index, action_desc, ui, out_dir, "ViewportOrbit needs the Scene tab open on a scene layer".into()),
+            },
+            // The App's menu drain turns View > Perform into this action.
+            AutomationAction::Menu { item: manifold_ui::automation::MenuItem::Perform } => {
+                let action = PanelAction::Project(manifold_ui::panels::ProjectAction::EnterPerformMode);
+                self.apply_panel_actions(ui, data, &[action]);
+                self.live_frame(ui, data, render, false, true);
+                let detail = if self.perform.active { "perform mode entered" } else { "perform mode not entered" };
+                StepResult { index, action: action_desc, status: if self.perform.active { "ok" } else { "fail" }, detail: detail.into(), artifact: None }
+            }
             AutomationAction::ResetWork => {
                 // Settle whatever setup left pending, so the window counts
                 // only the gesture that follows.
                 self.work.open = true;
                 self.live_frame(ui, data, render, false, true);
+                let result = StepResult { index, action: action_desc, status: "ok", detail: "work window started".into(), artifact: None };
                 self.work.start = manifold_core::work_count::thread_work_snapshot();
                 self.work.excluded = manifold_core::work_count::WorkSnapshot::default();
-                StepResult { index, action: action_desc, status: "ok", detail: "work window started".into(), artifact: None }
+                result
             }
             AutomationAction::AssertWork { window } => self.assert_work(ui, index, action_desc, window, out_dir),
             AutomationAction::AssertFresh => self.assert_fresh(ui, data, render, index, action_desc, out_dir),
-        };
+            AutomationAction::Focus { window } => {
+                if *window == manifold_ui::automation::FlowWindow::GraphEditor && self.editor.is_none() {
+                    self.fail(index, action_desc, ui, out_dir, "Focus GraphEditor needs the editor open first".into())
+                } else {
+                    self.focus = *window;
+                    StepResult { index, action: action_desc, status: "ok", detail: format!("input goes to {window:?}"), artifact: None }
+                }
+            }
+            AutomationAction::ExternalEdit => {
+                use manifold_core::change::{ChangeSet, Part};
+                self.content_stamps.bump(ChangeSet::of(&[Part::Layers, Part::Effects]));
+                self.live_frame(ui, data, render, false, true);
+                StepResult { index, action: action_desc, status: "ok", detail: "layers and effects stamps moved".into(), artifact: None }
+            }
+        } };
         // BUG-198: whatever this step just sent over `content_tx` (via
         // `AppEditingHost`/`ui_bridge::dispatch`) has already been applied
         // directly to `data.project` — record it into the harness's own
@@ -800,11 +1148,11 @@ impl Runner {
 
     /// The overlay half of a cursor move (`window_input` cursor-moved): every
     /// move, pressed or not, runs `InteractionOverlay::on_pointer_move` with the
-    /// App's own flags, unless a modal blocks background input.
+    /// App's own repaint request, unless a modal blocks background input.
     fn overlay_hover(&mut self, ui: &mut UIRoot, data: &mut SceneData, pos: Vec2) {
         if ui.background_input_blocked() {
             if data.selection.automation_feedback.take().is_some() {
-                self.flags.scroll.visual = true;
+                self.redraw = true;
             }
             return;
         }
@@ -814,31 +1162,26 @@ impl Runner {
             &self.content_state,
             &mut self.cursor_manager,
             &mut self.active_layer,
-            &mut self.flags.rebuild,
-            &mut self.flags.structural,
-            &mut self.flags.automation_lanes,
-            &mut self.flags.scroll,
-            &mut self.flags.invalidated_layers,
-            &mut self.pre_drag_commands,
+            &mut self.redraw,
+            &mut self.edits,
         );
         self.overlay.on_pointer_move(pos, &mut host, &mut data.selection, &ui.viewport);
     }
 
     /// Drain and record what the step sent (see `record_executed_commands`);
-    /// when that changed the project, apply the selection update and ask for a
-    /// structural sync. True when it did.
+    /// when that changed the project, apply the selection update; the commands
+    /// bumped `content_stamps`, which the next frame folds. True when it did.
     fn absorb_commands(&mut self, ui: &mut UIRoot, data: &mut SceneData) -> bool {
         if !self.record_executed_commands(data) {
             return false;
         }
         crate::edit_selection::apply_update(ui, &data.project, data.content.edit_selection_update.as_deref(), &mut data.selection, &mut self.active_layer);
         data.active = self.active_layer.as_ref().and_then(|id| data.project.timeline.find_layer_index_by_id(id));
-        self.flags.structural = true;
         true
     }
 
     /// One UI frame in the live App's order (`app_render.rs` `tick_and_render`):
-    /// consume the deferred structural flag, then `ui_frame::run_projection_pass`
+    /// fold the content echo, plan, then `ui_frame::apply_frame_plan`
     /// (the same function the App calls), then the tween polls and the CPU half
     /// of the grid and overview repaints. No forced zoom. With `settle_tweens`
     /// a tween settles in the frame after it starts, as under reduced motion,
@@ -852,31 +1195,75 @@ impl Runner {
         scrolled_in_place: bool,
         settle_tweens: bool,
     ) {
-        ui.sync_embedded_presets(&data.project);
-        if data.content.bpm.is_finite() && data.content.bpm > 0.0 {
-            let bpm = manifold_core::Bpm(data.content.bpm as f32);
-            if ui.sync_driver_bpm(&data.project, bpm) {
-                self.flags.structural = true;
-                self.flags.rebuild = true;
+        // Perform mode replaces the whole UI frame, as `tick_and_render`
+        // hands off to `tick_perform_mode`: the main and editor trees stay
+        // frozen and nothing projects.
+        if self.perform.active {
+            self.perform_frame(ui, data, render);
+            return;
+        }
+        crate::text_session::pump_main_window(&mut self.text_input, ui);
+        // The watched graph's snapshot, as the content thread publishes it in
+        // every state push (`graph_snapshot.rs`). Content-thread work, so it
+        // stays out of the UI's counts.
+        let before = manifold_core::work_count::thread_work_snapshot();
+        let (target, snapshot) = crate::graph_snapshot::active_graph(
+            &mut self.graph_snapshot,
+            Some(&data.project),
+            self.content_watched.as_ref(),
+            self.content_stamps.get(manifold_core::change::Part::EmbeddedPresets),
+        );
+        data.content.active_graph_target = target;
+        data.content.active_graph_snapshot = snapshot;
+        let content_work = manifold_core::work_count::thread_work_snapshot().since(&before);
+        self.work.excluded = self.work.excluded.plus(&content_work);
+        // The snapshot echo of what the last frame sent, folded as the App
+        // folds an accepted snapshot.
+        self.edits.stamps.fold_snapshot(&self.content_stamps);
+        // Settled drawers move in place; a settled structural tween (collapse,
+        // spawn, delete) moves its panel's view version, so this frame's plan
+        // rebuilds the settled layout.
+        if settle_tweens {
+            ui.inspector.skip_to_settled(&mut ui.tree);
+            ui.scene_setup_panel.skip_cards_to_settled(&mut ui.tree);
+            if let Some(ed) = self.editor.as_mut() {
+                let ed_ui = &mut ed.ws.ui_root;
+                ed_ui.inspector.skip_to_settled(&mut ed_ui.tree);
             }
         }
-        let changes = crate::ui_frame::ProjectionChanges {
-            structural: std::mem::take(&mut self.flags.structural),
-            selection_changed: data.selection.selection_version != self.seen_selection_version,
-            active_layer_changed: self.active_layer != self.seen_active_layer,
-            scrolled_in_place,
-        };
-        let overlay = &self.overlay;
-        let seen_selection_version = &mut self.seen_selection_version;
-        let seen_active_layer = &mut self.seen_active_layer;
-        crate::ui_frame::run_projection_pass(
+        crate::ui_bridge::intake_overlay_state(ui, &data.content);
+        crate::ui_bridge::check_auto_scroll(ui, &data.content);
+        let automation_draw_mode = data.selection.automation_draw_mode;
+        let inputs = crate::ui_frame::gather_frame_inputs(
+            &mut self.planner,
             ui,
-            None,
+            &mut data.selection,
+            &self.active_layer,
+            &self.edits,
+            &data.content,
+            crate::frame_plan::ChromeSource {
+                project: &data.project,
+                is_dirty: false,
+                project_path: None,
+                automation_draw_mode,
+            },
+        );
+        let mut plan = self.planner.plan(inputs);
+        let fresh = std::mem::take(&mut self.fresh_reference);
+        if fresh {
+            plan = plan.with_every_projection();
+        }
+        let changes = crate::ui_frame::ProjectionChanges { scrolled_in_place };
+        let overlay = &self.overlay;
+        crate::ui_frame::apply_frame_plan(
+            ui,
+            self.editor.as_mut().map(|ed| &mut ed.ws.ui_root),
             Some(&mut render.cache),
             &mut data.project,
             &mut data.selection,
             &mut self.active_layer,
-            self.flags.as_mut(),
+            &mut self.redraw,
+            &plan,
             changes,
             crate::ui_frame::PushInputs {
                 content_state: &data.content,
@@ -884,31 +1271,16 @@ impl Runner {
                 project_path: None,
                 transport_cache: &mut self.transport_cache,
             },
-            |ui, _, selection, active_layer, flags| {
-                // What the next frame compares against, read where the App
-                // reads its own (before this frame's later passes).
-                *seen_selection_version = selection.selection_version;
-                seen_active_layer.clone_from(active_layer);
-                if settle_tweens
-                    && (ui.inspector.skip_to_settled(&mut ui.tree)
-                        | ui.scene_setup_panel.skip_cards_to_settled(&mut ui.tree))
-                {
-                    *flags.needs_rebuild = true;
-                }
+            |_, _, _, _, _| {
                 use manifold_ui::interaction_overlay::DragMode;
                 matches!(overlay.drag_mode(), DragMode::Move | DragMode::TrimLeft | DragMode::TrimRight)
             },
         );
         data.active = self.active_layer.as_ref().and_then(|id| data.project.timeline.find_layer_index_by_id(id));
         ui.update();
-        if ui.inspector.drawer_anim_active()
-            || ui.scene_setup_panel.object_cards_animating()
-            || ui.layout.is_split_reset_animating()
-        {
-            self.flags.rebuild = true;
-        }
         ui.viewport.repaint_dirty_layers();
         ui.viewport.repaint_overview();
+        self.editor_frame(data, fresh);
         render.gate.mark();
         // What this frame sent reaches the App's next frame as a content
         // snapshot; record it now (a long gesture sends a command per move
@@ -916,14 +1288,544 @@ impl Runner {
         self.echo_pending |= self.absorb_commands(ui, data);
     }
 
+    /// `tick_perform_mode` without a window: the same intake, HUD derivation
+    /// and composite, at the fixture's logical size into the runner's
+    /// offscreen. No output window to poll, no preview bridge, no drawable.
+    fn perform_frame(&mut self, ui: &mut UIRoot, data: &SceneData, render: &mut RenderState) {
+        use crate::perform_mode::frame;
+        // A fresh reference redraws the HUD from its inputs.
+        let force = std::mem::take(&mut self.fresh_reference);
+        let layout = frame::begin_perform_frame(
+            &mut self.perform,
+            ui,
+            &data.content,
+            super::LOGICAL_W as u32,
+            super::LOGICAL_H as u32,
+        );
+        let inputs = frame::PerformHudInputs::derive(
+            &self.perform,
+            &data.content,
+            ui.ableton_session.as_deref(),
+            self.edits.stamps.parts().key(frame::HUD_PROJECT_PARTS),
+            &layout,
+            frame::preview_aspect(None),
+        );
+        if !frame::hud_moved(&self.perform, &inputs, force) {
+            return;
+        }
+        let session = ui.ableton_session.clone();
+        let hud = frame::PerformHud::derive(&data.content, session.as_deref(), &data.project);
+        let mut encoder = render.device.create_encoder("Perform Frame");
+        frame::composite_perform_frame(
+            render.device,
+            &mut encoder,
+            Some(&mut render.ui_renderer),
+            ui.tree.measurer(),
+            &layout,
+            &hud,
+            self.perform.exit_button_hover,
+            &render.composite.offscreen,
+            f64::from(super::SCALE),
+        );
+        encoder.commit();
+        self.perform.shown = Some(inputs);
+    }
+
+    /// Window input in perform mode, as `perform_mode/input.rs` takes it: the
+    /// exit button follows hover and a release over it asks to leave; every
+    /// other press is dropped. Then the exit `about_to_wait` applies, and one
+    /// frame.
+    #[allow(clippy::too_many_arguments)]
+    fn perform_pointer(
+        &mut self,
+        ui: &mut UIRoot,
+        data: &mut SceneData,
+        index: usize,
+        action_desc: String,
+        target: &AutomationTarget,
+        gesture: &Gesture,
+        out_dir: &std::path::Path,
+        render: &mut RenderState,
+    ) -> StepResult {
+        use crate::perform_mode::frame;
+        let rect = match self.resolve(ui, target) {
+            Ok(r) => r,
+            Err(e) => return self.fail(index, action_desc, ui, out_dir, e),
+        };
+        let center = Vec2::new(rect.x + rect.width * 0.5, rect.y + rect.height * 0.5);
+        self.last_gesture_points.clear();
+        self.last_gesture_points.push(center);
+        match gesture {
+            Gesture::Hover | Gesture::Press { .. } => {
+                frame::pointer_moved(&mut self.perform, center);
+            }
+            Gesture::Release => frame::pointer_released(&mut self.perform, center),
+            Gesture::Click { .. } => {
+                frame::pointer_moved(&mut self.perform, center);
+                frame::pointer_released(&mut self.perform, center);
+            }
+            _ => {
+                return self.fail(index, action_desc, ui, out_dir, "perform mode takes hover, press, release and click".into());
+            }
+        }
+        let exited = frame::take_pending_exit(&mut self.perform, ui, Some(&mut render.cache));
+        if exited {
+            self.redraw = true;
+        }
+        self.live_frame(ui, data, render, false, true);
+        let detail = if exited {
+            "perform mode exited".to_string()
+        } else {
+            format!("perform input at ({:.1},{:.1}), exit hover {}", center.x, center.y, self.perform.exit_button_hover)
+        };
+        StepResult { index, action: action_desc, status: "ok", detail, artifact: None }
+    }
+
+    /// `Key` and `Text` while a session is up, through the main window's text
+    /// key handler. `Text` types each character as its own key with no
+    /// modifiers held, as the live door sends it.
+    #[allow(clippy::too_many_arguments)]
+    fn type_into_session(
+        &mut self,
+        ui: &mut UIRoot,
+        data: &mut SceneData,
+        index: usize,
+        action_desc: String,
+        action: &AutomationAction,
+        out_dir: &std::path::Path,
+        render: &mut RenderState,
+    ) -> StepResult {
+        use crate::text_session::KeyOutcome;
+        let keys = step_keys(action);
+        let mut committed = None;
+        for (chars, key, mods) in &keys {
+            self.modifiers = *mods;
+            ui.input.set_modifiers(*mods);
+            let text_key = text_key(chars, *key);
+            match crate::text_session::main_window_key(&mut self.text_input, ui, text_key, *mods, true) {
+                KeyOutcome::NotTyping => {
+                    return self.fail(index, action_desc, ui, out_dir, "the text session ended before every key was typed".into());
+                }
+                KeyOutcome::Consumed | KeyOutcome::Filtered => {}
+                KeyOutcome::Committed(field, text) => {
+                    if !self.commit_text(ui, data, field, &text) {
+                        return self.fail(index, action_desc, ui, out_dir, format!(
+                            "{field:?} commits on Application (graph editor, automation point or preset save), not reached headless"
+                        ));
+                    }
+                    committed = Some((field, text));
+                }
+            }
+        }
+        // A keyboard pick from the browser dispatches next frame, through
+        // `process_events`.
+        if !ui.pending_keyboard_actions.is_empty() {
+            self.drain_and_dispatch(ui, data);
+        }
+        self.live_frame(ui, data, render, false, true);
+        let detail = match committed {
+            Some((field, text)) => format!("committed {field:?} {text:?}"),
+            None if self.text_input.active => format!("{:?} reads {:?}", self.text_input.field, self.text_input.text()),
+            None => "text session closed".into(),
+        };
+        StepResult { index, action: action_desc, status: "ok", detail, artifact: None }
+    }
+
+    /// Commits a session through the shared seam with the runner's dispatch
+    /// context. False for a field only `Application` commits.
+    fn commit_text(&mut self, ui: &mut UIRoot, data: &mut SceneData, field: crate::text_input::TextInputField, text: &str) -> bool {
+        let mut dctx = crate::ui_bridge::DispatchCtx {
+            project: crate::ui_bridge::ProjectRef::new(&mut data.project, &mut self.edits, &self.content_tx),
+            content_tx: &self.content_tx,
+            content_state: &self.content_state,
+            ui: &mut *ui,
+            selection: &mut data.selection,
+            active_layer: &mut self.active_layer,
+            user_prefs: &mut self.user_prefs,
+            editor_target: None,
+            scrub: &mut self.scrub,
+            dialogs: Default::default(),
+        };
+        let handled = crate::text_session::commit(&mut self.text_input, field, text, &mut dctx);
+        data.active = self.active_layer.as_ref().and_then(|lid| data.project.timeline.find_layer_index_by_id(lid));
+        println!("ui-snap --script: commit {field:?} {text:?} -> {}", if handled { "seam" } else { "not reached" });
+        handled
+    }
+
+    /// One step in the graph editor window. `None` hands the step to the
+    /// main window's handling: undo and redo, which reach the content thread
+    /// from either window, and every non-input step.
+    #[allow(clippy::too_many_arguments)]
+    fn editor_step(
+        &mut self,
+        ui: &mut UIRoot,
+        data: &mut SceneData,
+        index: usize,
+        action_desc: &str,
+        action: &AutomationAction,
+        out_dir: &std::path::Path,
+        render: &mut RenderState,
+    ) -> Option<StepResult> {
+        let desc = action_desc.to_string();
+        match action {
+            AutomationAction::Pointer { target, gesture } => {
+                Some(self.editor_pointer(ui, data, index, desc, target, gesture, out_dir, render))
+            }
+            AutomationAction::Key { .. } | AutomationAction::Text { .. } if self.text_input.active => None,
+            AutomationAction::Key { .. } | AutomationAction::Text { .. } => {
+                let typing = self.editor_mapping.is_editing()
+                    || self.editor.as_ref().is_some_and(|ed| ed.canvas.popover_is_editing());
+                if !typing {
+                    if let AutomationAction::Key { key: Key::Z, modifiers } = action
+                        && (modifiers.is_command_only() || modifiers.is_command_shift())
+                    {
+                        return None;
+                    }
+                    return Some(self.fail(index, desc, ui, out_dir,
+                        "this editor-window key stays on Application (editor_keyboard_input); only a mapping field being typed into and undo are reached".into()));
+                }
+                for (chars, key, modifiers) in step_keys(action) {
+                    self.modifiers = modifiers;
+                    let (canvas, ws) = match self.editor.as_mut() {
+                        Some(ed) => (Some(&mut ed.canvas), Some(&mut ed.ws)),
+                        None => (None, None),
+                    };
+                    if !crate::editor_input::popover_key(&mut self.editor_mapping, canvas, ws, text_key(&chars, key), modifiers) {
+                        return Some(self.fail(index, desc, ui, out_dir, "the mapping field closed before every key was typed".into()));
+                    }
+                }
+                if let Err(e) = self.editor_drain_and_dispatch(ui, data) {
+                    return Some(self.fail(index, desc, ui, out_dir, e));
+                }
+                self.live_frame(ui, data, render, false, true);
+                let detail = if self.editor_mapping.is_editing() { "typed into the mapping field" } else { "mapping field closed" };
+                Some(StepResult { index, action: desc, status: "ok", detail: detail.into(), artifact: None })
+            }
+            AutomationAction::ScrollTo { .. } | AutomationAction::TrackWheel { .. } | AutomationAction::ResizeDrag { .. } => {
+                Some(self.fail(index, desc, ui, out_dir, "a main-window input: Focus Main first".into()))
+            }
+            _ => None,
+        }
+    }
+
+    /// The editor-input seam's borrow of this runner for one editor event, as
+    /// the App's `editor_pointer` borrows the App.
+    fn editor_cx<'s>(&'s mut self, data: &'s mut SceneData) -> Option<crate::editor_input::EditorPointer<'s>> {
+        let ed = self.editor.as_mut()?;
+        Some(crate::editor_input::EditorPointer {
+            area: manifold_ui::Rect::new(0.0, 0.0, ed.logical_w as f32, ed.logical_h as f32),
+            ws: &mut ed.ws,
+            canvas: Some(&mut ed.canvas),
+            mapping: &mut self.editor_mapping,
+            modifiers: self.modifiers,
+            time: self.clock,
+            project: &data.project,
+            content_tx: Some(&self.content_tx),
+            is_playing: data.content.is_playing,
+            watched: self.watched.as_ref(),
+            graph: data.content.active_graph_snapshot.as_deref(),
+            active_layer: &mut self.active_layer,
+            selection: &mut data.selection,
+        })
+    }
+
+    /// A cursor move into the editor window: an armed text drag takes it,
+    /// else the seam (`window_input`'s cursor-moved order).
+    fn editor_move(&mut self, ui: &UIRoot, data: &mut SceneData, pos: Vec2) {
+        self.last_gesture_points.push(pos);
+        if crate::text_session::pointer_move(&mut self.text_input, Some(&ui.tree), pos) {
+            return;
+        }
+        if let Some(mut cx) = self.editor_cx(data) {
+            // No viewport session opens here, so no gizmo drag arms.
+            let _ = crate::editor_input::cursor_moved(&mut cx, pos);
+        }
+    }
+
+    /// A button press at the cursor: the text gate first for the left
+    /// button, then the seam.
+    fn editor_press(&mut self, ui: &mut UIRoot, data: &mut SceneData, button: winit::event::MouseButton) -> Result<(), String> {
+        let pos = self.last_gesture_points.last().copied().unwrap_or(Vec2::ZERO);
+        if button == winit::event::MouseButton::Left && self.text_press(ui, data, pos, self.modifiers.shift) {
+            return Ok(());
+        }
+        let Some(mut cx) = self.editor_cx(data) else { return Ok(()) };
+        let out = crate::editor_input::button(&mut cx, button, winit::event::ElementState::Pressed);
+        if out.viewport_press.is_some() {
+            return Err("a 3D viewport press needs the App's scene projection; the runner's editor has no viewport".into());
+        }
+        Ok(())
+    }
+
+    fn editor_release(&mut self, data: &mut SceneData, button: winit::event::MouseButton) {
+        if button == winit::event::MouseButton::Left {
+            crate::text_session::pointer_up(&mut self.text_input);
+        }
+        if let Some(mut cx) = self.editor_cx(data) {
+            crate::editor_input::button(&mut cx, button, winit::event::ElementState::Released);
+        }
+    }
+
+    /// The editor window's per-frame drain, in the App's order: the
+    /// popovers' mapping actions join the main queue, the card lane
+    /// dispatches against the editor's tree, then the canvas and sidebar
+    /// edits. A graph edit only `app_render`'s loop dispatches fails loudly.
+    fn editor_drain_and_dispatch(&mut self, ui: &mut UIRoot, data: &mut SceneData) -> Result<usize, String> {
+        use manifold_ui::GraphEditCommand;
+        let Some(ed) = self.editor.as_mut() else { return Ok(0) };
+        let drain = crate::editor_input::drain(
+            Some(&mut ed.ws),
+            Some(&mut ed.canvas),
+            &mut self.editor_mapping,
+            &mut self.text_input,
+            crate::editor_input::SmartPreviewToggle {
+                intents: &mut ed.intents,
+                id: ed.smart_preview_toggle,
+                normalize: ed.node_preview_normalize,
+            },
+        );
+        let handled = drain.actions.len() + drain.card_actions.len() + drain.graph_edits.len();
+        self.apply_panel_actions(ui, data, &drain.actions);
+        if !drain.card_actions.is_empty() {
+            let mappings = match self.editor.as_mut() {
+                Some(ed) => crate::editor_input::card_lane_entries(
+                    &mut self.text_input, &mut ed.ws, &data.project, &data.selection, &self.active_layer, &drain.card_actions,
+                ),
+                None => Vec::new(),
+            };
+            for (target, param_id, anchor_node_id) in mappings {
+                self.open_card_mapping(data, target, param_id, anchor_node_id);
+            }
+            let Some(ed) = self.editor.as_mut() else { return Ok(handled) };
+            let outcome = crate::editor_input::dispatch_card_lane(
+                crate::editor_input::CardLane {
+                    ws: &mut ed.ws,
+                    project: &mut data.project,
+                    edits: &mut self.edits,
+                    content_tx: &self.content_tx,
+                    content_state: &self.content_state,
+                    selection: &mut data.selection,
+                    active_layer: &mut self.active_layer,
+                    user_prefs: &mut self.user_prefs,
+                    scrub: &mut self.scrub,
+                    dialogs: Default::default(),
+                },
+                &drain.card_actions,
+            );
+            println!("ui-snap --script: editor card lane dispatched {:?}", drain.card_actions);
+            data.active = self.active_layer.as_ref().and_then(|lid| data.project.timeline.find_layer_index_by_id(lid));
+            if outcome.save_preset.is_some() {
+                return Err("Save preset opens its name prompt on Application, not reached headless".into());
+            }
+            let tab = ui.inspector.last_effect_tab();
+            if let Some(ei) = outcome.retarget_effect {
+                if let Some(eid) = crate::editor_bridge::effect_card_id(tab, &mut data.project, self.active_layer.as_ref(), &data.selection, ei) {
+                    self.watch(data, manifold_core::GraphTarget::Effect(eid));
+                }
+            } else if outcome.retarget_generator
+                && let Some(layer) = self.active_layer.clone()
+            {
+                self.watch(data, manifold_core::GraphTarget::Generator(layer));
+            }
+        }
+        for edit in drain.graph_edits {
+            match edit {
+                // Preview-only display preference: the UI mirror flips; the
+                // content side's node-preview blit has no headless consumer.
+                GraphEditCommand::SetNodePreviewNormalize(on) => {
+                    if let Some(ed) = self.editor.as_mut() {
+                        ed.node_preview_normalize = on;
+                    }
+                }
+                other => {
+                    return Err(format!("{other:?} dispatches in app_render's graph-edit loop on Application, not reached headless"));
+                }
+            }
+        }
+        Ok(handled)
+    }
+
+    /// A pointer step into the editor window. Targets resolve against the
+    /// editor's tree, its canvas and its mapping drawer. Every gesture starts
+    /// with a move, since winit gives button and wheel events no position and
+    /// the editor reads the cursor its canvas tracked.
+    #[allow(clippy::too_many_arguments)]
+    fn editor_pointer(
+        &mut self,
+        ui: &mut UIRoot,
+        data: &mut SceneData,
+        index: usize,
+        action_desc: String,
+        target: &AutomationTarget,
+        gesture: &Gesture,
+        out_dir: &std::path::Path,
+        render: &mut RenderState,
+    ) -> StepResult {
+        use winit::event::MouseButton;
+        let center_of = |r: Rect| Vec2::new(r.x + r.width * 0.5, r.y + r.height * 0.5);
+        let center = match self.resolve_editor(target) {
+            Ok(r) => center_of(r),
+            Err(e) => return self.fail(index, action_desc, ui, out_dir, e),
+        };
+        self.last_gesture_points.clear();
+        let mut pressed = Ok(());
+        match gesture {
+            Gesture::Press { modifiers } => {
+                self.modifiers = *modifiers;
+                self.editor_move(ui, data, center);
+                pressed = self.editor_press(ui, data, MouseButton::Left);
+            }
+            Gesture::Release => {
+                self.editor_move(ui, data, center);
+                self.editor_release(data, MouseButton::Left);
+            }
+            Gesture::Click { modifiers } => {
+                self.modifiers = *modifiers;
+                self.editor_move(ui, data, center);
+                pressed = self.editor_press(ui, data, MouseButton::Left);
+                self.editor_release(data, MouseButton::Left);
+            }
+            Gesture::DoubleClick => {
+                self.editor_move(ui, data, center);
+                for _ in 0..2 {
+                    pressed = pressed.and(self.editor_press(ui, data, MouseButton::Left));
+                    self.editor_release(data, MouseButton::Left);
+                }
+            }
+            Gesture::RightClick => {
+                self.editor_move(ui, data, center);
+                pressed = self.editor_press(ui, data, MouseButton::Right);
+                self.editor_release(data, MouseButton::Right);
+            }
+            Gesture::Hover => self.editor_move(ui, data, center),
+            Gesture::Scroll { delta } => {
+                self.editor_move(ui, data, center);
+                let delta = winit::event::MouseScrollDelta::PixelDelta(winit::dpi::PhysicalPosition::new(
+                    f64::from(delta.x),
+                    f64::from(delta.y),
+                ));
+                if let Some(mut cx) = self.editor_cx(data) {
+                    crate::editor_input::wheel(&mut cx, delta);
+                }
+            }
+            Gesture::Drag { to, steps } => {
+                let to_center = match self.resolve_editor(to) {
+                    Ok(r) => center_of(r),
+                    Err(e) => return self.fail(index, action_desc, ui, out_dir, e),
+                };
+                self.editor_move(ui, data, center);
+                pressed = self.editor_press(ui, data, MouseButton::Left);
+                for pt in automation::interpolate_drag(center, to_center, *steps) {
+                    self.editor_move(ui, data, pt);
+                }
+                self.editor_move(ui, data, to_center);
+                self.editor_release(data, MouseButton::Left);
+            }
+            Gesture::DragFrames { to, steps } | Gesture::Sweep { to, steps } => {
+                let to_center = match self.resolve_editor(to) {
+                    Ok(r) => center_of(r),
+                    Err(e) => return self.fail(index, action_desc, ui, out_dir, e),
+                };
+                let held = matches!(gesture, Gesture::DragFrames { .. });
+                self.editor_move(ui, data, center);
+                if held {
+                    pressed = self.editor_press(ui, data, MouseButton::Left);
+                }
+                let mut frame = |runner: &mut Self, ui: &mut UIRoot, data: &mut SceneData| -> Result<(), String> {
+                    runner.editor_drain_and_dispatch(ui, data)?;
+                    runner.live_frame(ui, data, render, false, true);
+                    Ok(())
+                };
+                let mut moved = frame(self, ui, data);
+                for pt in automation::interpolate_drag(center, to_center, *steps) {
+                    self.clock += DT;
+                    self.editor_move(ui, data, pt);
+                    moved = moved.and(frame(self, ui, data));
+                }
+                self.clock += DT;
+                self.editor_move(ui, data, to_center);
+                if held {
+                    self.editor_release(data, MouseButton::Left);
+                }
+                if let Err(e) = moved {
+                    return self.fail(index, action_desc, ui, out_dir, e);
+                }
+            }
+        }
+        if let Err(e) = pressed.and(self.editor_drain_and_dispatch(ui, data).map(|_| ())) {
+            return self.fail(index, action_desc, ui, out_dir, e);
+        }
+        self.live_frame(ui, data, render, false, true);
+        StepResult {
+            index,
+            action: action_desc,
+            status: "ok",
+            detail: format!("editor window: acted at ({:.1},{:.1})", center.x, center.y),
+            artifact: None,
+        }
+    }
+
+    /// The editor window's hit-test surfaces: its canvas at this frame's
+    /// viewport and its mapping drawer.
+    fn editor_matches(&self, target: &AutomationTarget) -> Option<(Vec<MatchInfo>, String)> {
+        let ed = self.editor.as_ref()?;
+        let layout = crate::editor_frame::EditorLayout::compute(&ed.ws.dock, ed.logical_w, ed.logical_h, None);
+        let canvas = manifold_ui::graph_canvas::GraphCanvasTargets { canvas: &ed.canvas, viewport: layout.canvas_rect() };
+        let surfaces: Vec<&dyn HitTargets> = vec![&canvas, &self.editor_mapping];
+        Some(automation::resolve_all(&ed.ws.ui_root.tree, &surfaces, target))
+    }
+
+    fn resolve_editor(&self, target: &AutomationTarget) -> Result<Rect, String> {
+        let ed = self.editor.as_ref().ok_or("the graph editor is not open")?;
+        let layout = crate::editor_frame::EditorLayout::compute(&ed.ws.dock, ed.logical_w, ed.logical_h, None);
+        let canvas = manifold_ui::graph_canvas::GraphCanvasTargets { canvas: &ed.canvas, viewport: layout.canvas_rect() };
+        let surfaces: Vec<&dyn HitTargets> = vec![&canvas, &self.editor_mapping];
+        automation::resolve(&ed.ws.ui_root.tree, &surfaces, target).map(|r| r.rect).map_err(|e| e.to_string())
+    }
+
+    /// The App's text gate ahead of a left press (`window_input`'s
+    /// `input_mouse_input`): true when the field took the press. A press
+    /// outside commits first and still reaches its target.
+    fn text_press(&mut self, ui: &mut UIRoot, data: &mut SceneData, pos: Vec2, shift: bool) -> bool {
+        use crate::text_session::PointerDown;
+        match crate::text_session::pointer_down(&mut self.text_input, Some(&ui.tree), pos, self.clock, shift) {
+            PointerDown::Idle => false,
+            PointerDown::Inside => true,
+            PointerDown::Committed(field, text) => {
+                self.commit_text(ui, data, field, &text);
+                false
+            }
+        }
+    }
+
+    /// A left press through the text gate, then the tree, as the App routes it.
+    fn press(&mut self, ui: &mut UIRoot, data: &mut SceneData, pos: Vec2) {
+        if !self.text_press(ui, data, pos, self.modifiers.shift) {
+            ui.pointer_event(pos, PointerAction::Down, self.clock);
+        }
+    }
+
+    /// A left release: it ends a text drag, then reaches the tree.
+    fn release(&mut self, ui: &mut UIRoot, pos: Vec2) {
+        crate::text_session::pointer_up(&mut self.text_input);
+        ui.pointer_event(pos, PointerAction::Up, self.clock);
+    }
+
+    /// Pointer motion: an armed text drag takes it, else the tree.
+    fn move_to(&mut self, ui: &mut UIRoot, pos: Vec2) {
+        if !crate::text_session::pointer_move(&mut self.text_input, Some(&ui.tree), pos) {
+            ui.pointer_event(pos, PointerAction::Move, self.clock);
+        }
+    }
+
     /// What a frame shows that the tree dump cannot see: the inputs of the
     /// immediate passes (playhead, insert cursor, selection band, markers,
-    /// the clip draw list, automation lanes, overview strip) and the pending
-    /// toast. The perform HUD is absent here: the runner has no perform mode.
+    /// the clip draw list, automation lanes, overview strip), the pending
+    /// toast and, in perform mode, everything the perform screen shows.
     fn immediate_inputs(&self, ui: &UIRoot, data: &SceneData) -> Vec<String> {
         let insert_layer = data
             .selection
-            .insert_cursor_layer_id
+            .insert_cursor_layer_id()
             .as_ref()
             .and_then(|id| data.project.timeline.find_layer_index_by_id(id));
         let mut markers = Vec::new();
@@ -938,6 +1840,18 @@ impl Runner {
         ];
         out.extend(clip_rects.iter().map(|c| format!("clip {c:?}")));
         out.extend(automation_lanes.iter().map(|l| format!("lane {l:?}")));
+        if self.perform.active {
+            let session = ui.ableton_session.clone();
+            let hud = crate::perform_mode::frame::PerformHud::derive(&data.content, session.as_deref(), &data.project);
+            out.push(format!("perform {hud:?}"));
+            // What the HUD on screen was drawn from: a missed input leaves it
+            // behind the inputs a fresh frame derives.
+            out.push(format!("perform shown {:?}", self.perform.shown));
+            out.push(format!(
+                "perform exit {:?} hover {}",
+                self.perform.exit_button_rect, self.perform.exit_button_hover
+            ));
+        }
         out
     }
 
@@ -959,17 +1873,35 @@ impl Runner {
             let surfaces: Vec<&dyn HitTargets> = vec![&clip_targets, &automation_targets];
             super::dump::dump_tree_ex(&ui.tree, &surfaces)
         };
+        // A tween the last frame started (the value-change flash after an
+        // undo) settles in the next frame; compare settled frames only.
+        let editor_settled = self.editor.as_mut().is_some_and(|ed| {
+            let ed_ui = &mut ed.ws.ui_root;
+            ed_ui.inspector.skip_to_settled(&mut ed_ui.tree)
+        });
+        if ui.inspector.skip_to_settled(&mut ui.tree) | ui.scene_setup_panel.skip_cards_to_settled(&mut ui.tree) | editor_settled {
+            self.live_frame(ui, data, render, false, true);
+        }
         let tree_before = surfaces_dump(self, ui);
         let immediate_before = self.immediate_inputs(ui, data);
+        let editor_before = self.editor.as_ref().map(|ed| ed.dump(&self.editor_mapping));
 
-        self.flags.structural = true;
-        self.flags.rebuild = true;
+        self.fresh_reference = true;
         self.live_frame(ui, data, render, false, true);
 
         let tree_after = surfaces_dump(self, ui);
         let immediate_after = self.immediate_inputs(ui, data);
+        let editor_after = self.editor.as_ref().map(|ed| ed.dump(&self.editor_mapping));
 
-        let (tree_lines, tree_differs) = super::readback::diff_trees(&tree_before, &tree_after);
+        let (mut tree_lines, mut tree_differs) = super::readback::diff_trees(&tree_before, &tree_after);
+        // The editor window's tree must equal its own full build too.
+        if let (Some(before), Some(after)) = (&editor_before, &editor_after) {
+            let (lines, differs) = super::readback::diff_trees(before, after);
+            if differs {
+                tree_differs = true;
+                tree_lines.extend(lines.into_iter().map(|line| format!("editor: {line}")));
+            }
+        }
         let immediate_diff: Vec<String> = immediate_before
             .iter()
             .zip(immediate_after.iter())
@@ -981,7 +1913,12 @@ impl Runner {
             )
             .collect();
         if !tree_differs && immediate_diff.is_empty() {
-            return StepResult { index, action: action_desc, status: "ok", detail: "fresh".into(), artifact: None };
+            let detail = match (self.perform.active, editor_before.is_some()) {
+                (true, _) => "fresh (perform screen, frozen main tree)",
+                (false, true) => "fresh (main and editor windows)",
+                (false, false) => "fresh",
+            };
+            return StepResult { index, action: action_desc, status: "ok", detail: detail.into(), artifact: None };
         }
         let path = out_dir.join(format!("{index:02}.stale.txt"));
         let report: Vec<String> = immediate_diff.iter().cloned().chain(tree_lines).collect();
@@ -1092,19 +2029,14 @@ impl Runner {
             let beat_at_cursor = viewport.pixel_to_beat(pos.x).as_f32();
             let new_ppb = viewport.zoom_continuous(factor);
             viewport.zoom_to(new_ppb, beat_at_cursor, pos.x);
-            self.flags.scroll.zoom = true;
         } else if self.modifiers.shift {
             let beat_delta = dy * manifold_ui::color::SCROLL_SENSITIVITY / viewport.pixels_per_beat();
             let new_x = (viewport.scroll_x_beats().as_f32() - beat_delta).max(0.0);
-            if viewport.set_scroll(new_x, viewport.scroll_y_px()) {
-                self.flags.scroll.scroll_x = true;
-            }
+            viewport.set_scroll(new_x, viewport.scroll_y_px());
             viewport.note_user_scroll_x();
         } else {
             let new_y = (viewport.scroll_y_px() - dy).max(0.0);
-            if viewport.set_scroll(viewport.scroll_x_beats().as_f32(), new_y) {
-                self.flags.scroll.scroll_y = true;
-            }
+            viewport.set_scroll(viewport.scroll_x_beats().as_f32(), new_y);
         }
     }
 
@@ -1129,12 +2061,9 @@ impl Runner {
             match handle {
                 ResizeHandle::TimelineSplit => {
                     ui.layout.update_split_from_drag(pos);
-                    self.flags.rebuild = true;
                 }
                 ResizeHandle::InspectorWidth => {
-                    if ui.update_inspector_resize(pos) {
-                        self.flags.rebuild = true;
-                    }
+                    ui.update_inspector_resize(pos);
                 }
             }
             self.live_frame(ui, data, render, false, true);
@@ -1158,6 +2087,13 @@ impl Runner {
     fn record_executed_commands(&mut self, data: &mut SceneData) -> bool {
         let mut changed = false;
         while let Ok(cmd) = self._content_rx.try_recv() {
+            // The content thread watches what the editor asks for; its next
+            // state push carries the snapshot.
+            if let Some(target) = crate::graph_snapshot::watch_command_target(&cmd) {
+                self.content_watched = target;
+                changed = true;
+                continue;
+            }
             let cmd = match cmd {
                 ContentCommand::FireParameter { target, param_id } => {
                     ContentCommand::ExecuteOnContent(Box::new(
@@ -1203,11 +2139,12 @@ impl Runner {
             match cmd {
                 ContentCommand::ExecuteSelecting(command, request) => {
                     let pending = request.capture(&data.project);
+                    self.content_stamps.bump(command.touches());
                     let applied = self.undo.execute(crate::scene_modifier_edit::with_admission(command), &mut data.project);
                     changed |= applied;
                     if let Some(message) = self.undo.take_rejection() {
                         let sequence = data.content.graph_edit_diagnostic.as_ref().map_or(1, |old| old.sequence.wrapping_add(1));
-                        data.content.graph_edit_diagnostic = Some(crate::content_state::GraphEditDiagnostic { sequence, message });
+                        data.content.graph_edit_diagnostic = Some(std::sync::Arc::new(crate::content_state::GraphEditDiagnostic { sequence, message }));
                     } else if applied && let Some(selection) = pending.resolve(&data.project) {
                         let sequence = data.content.edit_selection_update.as_ref().map_or(1, |old| old.sequence.wrapping_add(1));
                         data.content.edit_selection_update = Some(std::sync::Arc::new(crate::edit_selection::EditSelectionUpdate { sequence, selection }));
@@ -1216,6 +2153,7 @@ impl Runner {
                 ContentCommand::SceneModifier(action) => {
                     let error = match crate::scene_modifier_edit::build_action(&data.project, action) {
                         Ok(command) => {
+                            self.content_stamps.bump(command.touches());
                             changed |= self.undo.execute(crate::scene_modifier_edit::with_admission(command), &mut data.project);
                             self.undo.take_rejection()
                         }
@@ -1223,30 +2161,37 @@ impl Runner {
                     };
                     if let Some(message) = error {
                         let sequence = data.content.graph_edit_diagnostic.as_ref().map_or(1, |old| old.sequence.wrapping_add(1));
-                        data.content.graph_edit_diagnostic = Some(crate::content_state::GraphEditDiagnostic { sequence, message });
+                        data.content.graph_edit_diagnostic = Some(std::sync::Arc::new(crate::content_state::GraphEditDiagnostic { sequence, message }));
                         changed = true;
                     }
                 }
                 ContentCommand::GraphEditRejected(message) => {
                     let sequence = data.content.graph_edit_diagnostic.as_ref().map_or(1, |old| old.sequence.wrapping_add(1));
-                    data.content.graph_edit_diagnostic = Some(crate::content_state::GraphEditDiagnostic { sequence, message });
+                    data.content.graph_edit_diagnostic = Some(std::sync::Arc::new(crate::content_state::GraphEditDiagnostic { sequence, message }));
                     changed = true;
                 }
                 // The App gets these back as a snapshot with a new data
                 // version, which re-projects; this is that echo.
                 ContentCommand::Execute(cmd) => {
+                    self.content_stamps.bump(cmd.touches());
                     self.undo.record(cmd);
                     changed = true;
                 }
                 ContentCommand::ExecuteOnContent(cmd) => {
-                    changed |= self.undo.execute(crate::scene_modifier_edit::with_admission(cmd), &mut data.project);
+                    let applied = self.undo.execute(crate::scene_modifier_edit::with_admission(cmd), &mut data.project);
+                    if applied {
+                        // After execute, as EditingService reads it.
+                        self.content_stamps.bump(self.undo.peek_undo_touches());
+                    }
+                    changed |= applied;
                     if let Some(message) = self.undo.take_rejection() {
                         let sequence = data.content.graph_edit_diagnostic.as_ref().map_or(1, |old| old.sequence.wrapping_add(1));
-                        data.content.graph_edit_diagnostic = Some(crate::content_state::GraphEditDiagnostic { sequence, message });
+                        data.content.graph_edit_diagnostic = Some(std::sync::Arc::new(crate::content_state::GraphEditDiagnostic { sequence, message }));
                         changed = true;
                     }
                 }
                 ContentCommand::ExecuteBatch(cmds, desc) => {
+                    self.content_stamps.bump(crate::gesture_preview::touches_of(&cmds));
                     self.undo.record(Box::new(CompositeCommand::new(cmds, desc)));
                     changed = true;
                 }
@@ -1271,7 +2216,12 @@ impl Runner {
         let (clip_rects, automation_lanes) = self.surfaces_owned(ui);
         let clip_targets = ClipHitTargets(&clip_rects);
         let automation_targets = AutomationHitTargets(&automation_lanes);
-        let surfaces: Vec<&dyn HitTargets> = vec![&clip_targets, &automation_targets];
+        // The perform screen's exit button is a surface only while it shows.
+        let perform_targets = crate::perform_mode::frame::PerformHitTargets(self.perform.exit_button_rect);
+        let mut surfaces: Vec<&dyn HitTargets> = vec![&clip_targets, &automation_targets];
+        if self.perform.active {
+            surfaces.push(&perform_targets);
+        }
         automation::resolve(&ui.tree, &surfaces, target)
             .map(|r| r.rect)
             .map_err(|e| e.to_string())
@@ -1285,8 +2235,27 @@ impl Runner {
         let (clip_rects, automation_lanes) = self.surfaces_owned(ui);
         let clip_targets = ClipHitTargets(&clip_rects);
         let automation_targets = AutomationHitTargets(&automation_lanes);
-        let surfaces: Vec<&dyn HitTargets> = vec![&clip_targets, &automation_targets];
-        automation::resolve_all(&ui.tree, &surfaces, target)
+        // The perform screen's exit button is a surface only while it shows.
+        let perform_targets = crate::perform_mode::frame::PerformHitTargets(self.perform.exit_button_rect);
+        let mut surfaces: Vec<&dyn HitTargets> = vec![&clip_targets, &automation_targets];
+        if self.perform.active {
+            surfaces.push(&perform_targets);
+        }
+        // The focused window answers first; a selector nothing there matches
+        // is looked up in the other open window, so a flow can assert on
+        // what either window shows.
+        let main = || automation::resolve_all(&ui.tree, &surfaces, target);
+        if self.focus == manifold_ui::automation::FlowWindow::GraphEditor
+            && let Some((matches, query)) = self.editor_matches(target)
+            && !matches.is_empty()
+        {
+            return (matches, query);
+        }
+        let (matches, query) = main();
+        match self.editor_matches(target) {
+            Some((editor_matches, _)) if matches.is_empty() => (editor_matches, query),
+            _ => (matches, query),
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1317,29 +2286,29 @@ impl Runner {
                 self.modifiers = *modifiers;
                 ui.input.set_modifiers(*modifiers);
                 self.last_gesture_points.push(center);
-                ui.pointer_event(center, PointerAction::Down, self.clock);
+                self.press(ui, data, center);
                 self.drain_and_dispatch(ui, data);
             }
             Gesture::Release => {
                 self.last_gesture_points.push(center);
-                ui.pointer_event(center, PointerAction::Up, self.clock);
+                self.release(ui, center);
                 self.drain_and_dispatch(ui, data);
             }
             Gesture::Click { modifiers } => {
                 self.modifiers = *modifiers;
                 ui.input.set_modifiers(*modifiers);
                 self.last_gesture_points.push(center);
-                ui.pointer_event(center, PointerAction::Down, self.clock);
-                ui.pointer_event(center, PointerAction::Up, self.clock);
+                self.press(ui, data, center);
+                self.release(ui, center);
                 self.drain_and_dispatch(ui, data);
             }
             Gesture::DoubleClick => {
                 ui.input.set_modifiers(self.modifiers);
                 self.last_gesture_points.push(center);
-                ui.pointer_event(center, PointerAction::Down, self.clock);
-                ui.pointer_event(center, PointerAction::Up, self.clock);
-                ui.pointer_event(center, PointerAction::Down, self.clock);
-                ui.pointer_event(center, PointerAction::Up, self.clock);
+                self.press(ui, data, center);
+                self.release(ui, center);
+                self.press(ui, data, center);
+                self.release(ui, center);
                 self.drain_and_dispatch(ui, data);
             }
             Gesture::RightClick => {
@@ -1349,7 +2318,7 @@ impl Runner {
             }
             Gesture::Hover => {
                 self.last_gesture_points.push(center);
-                ui.pointer_event(center, PointerAction::Move, self.clock);
+                self.move_to(ui, center);
                 self.drain_and_dispatch(ui, data);
             }
             Gesture::Scroll { delta } => {
@@ -1363,13 +2332,13 @@ impl Runner {
                 let to_center = Vec2::new(to_rect.x + to_rect.width * 0.5, to_rect.y + to_rect.height * 0.5);
                 ui.input.set_modifiers(self.modifiers);
                 self.last_gesture_points.push(center);
-                ui.pointer_event(center, PointerAction::Down, self.clock);
+                self.press(ui, data, center);
                 for pt in automation::interpolate_drag(center, to_center, *steps) {
                     self.last_gesture_points.push(pt);
-                    ui.pointer_event(pt, PointerAction::Move, self.clock);
+                    self.move_to(ui, pt);
                 }
                 self.last_gesture_points.push(to_center);
-                ui.pointer_event(to_center, PointerAction::Up, self.clock);
+                self.release(ui, to_center);
                 self.drain_and_dispatch(ui, data);
             }
             Gesture::DragFrames { to, steps } | Gesture::Sweep { to, steps } => {
@@ -1382,9 +2351,9 @@ impl Runner {
                 ui.input.set_modifiers(self.modifiers);
                 self.last_gesture_points.push(center);
                 if pressed {
-                    ui.pointer_event(center, PointerAction::Down, self.clock);
+                    self.press(ui, data, center);
                 } else {
-                    ui.pointer_event(center, PointerAction::Move, self.clock);
+                    self.move_to(ui, center);
                     self.overlay_hover(ui, data, center);
                 }
                 self.drain_and_dispatch(ui, data);
@@ -1392,7 +2361,7 @@ impl Runner {
                 for pt in automation::interpolate_drag(center, to_center, *steps) {
                     self.clock += DT;
                     self.last_gesture_points.push(pt);
-                    ui.pointer_event(pt, PointerAction::Move, self.clock);
+                    self.move_to(ui, pt);
                     self.overlay_hover(ui, data, pt);
                     self.drain_and_dispatch(ui, data);
                     self.live_frame(ui, data, render, false, true);
@@ -1400,9 +2369,9 @@ impl Runner {
                 self.clock += DT;
                 self.last_gesture_points.push(to_center);
                 if pressed {
-                    ui.pointer_event(to_center, PointerAction::Up, self.clock);
+                    self.release(ui, to_center);
                 } else {
-                    ui.pointer_event(to_center, PointerAction::Move, self.clock);
+                    self.move_to(ui, to_center);
                     self.overlay_hover(ui, data, to_center);
                 }
                 self.drain_and_dispatch(ui, data);
@@ -1428,18 +2397,19 @@ impl Runner {
     /// generic pipeline and ask for the rebuild that bakes the offset in
     /// (BUG-294); anything else routes the generic pipeline. Returns whether the inspector handled the scroll in place.
     fn scroll_once(&mut self, ui: &mut UIRoot, data: &mut SceneData, center: Vec2, delta: Vec2) -> bool {
-        if ui.layout.inspector().contains(center) {
+        // The Scene tab sits inside the inspector rect, so it is tested first,
+        // in the same order as `window_input::primary_mouse_wheel`.
+        if ui.inspector.scene_content_rect().contains(center) || ui.layout.audio_setup().contains(center) {
+            // `window_input::primary_mouse_wheel`'s dock branch: the generic
+            // scroll pipeline; the moved offset is a planner input.
+            ui.input.process_scroll(center, delta);
+            self.drain_and_dispatch(ui, data);
+        } else if ui.layout.inspector().contains(center) {
             if ui.try_inspector_scroll(delta.y, center.x) {
                 return ui.inspector.take_scrolled_in_place();
             }
             // Nothing built yet — the real handler's same fallback.
             ui.inspector.handle_scroll_at(delta.y, center.x);
-        } else if ui.layout.scene_setup().contains(center) || ui.layout.audio_setup().contains(center) {
-            // `window_input::primary_mouse_wheel`'s dock branch: the generic
-            // scroll pipeline, then a rebuild that bakes the offset in.
-            ui.input.process_scroll(center, delta);
-            self.drain_and_dispatch(ui, data);
-            self.flags.rebuild = true;
         } else {
             ui.input.process_scroll(center, delta);
             self.drain_and_dispatch(ui, data);
@@ -1487,12 +2457,12 @@ impl Runner {
         };
         let cx = rect0.x + rect0.width * 0.5;
         let insp = ui.layout.inspector();
-        let scene = ui.layout.scene_setup();
+        let scene = ui.inspector.scene_content_rect();
         let in_x = |r: Rect| r.width > 0.0 && cx >= r.x && cx < r.x + r.width;
-        let container_is_inspector = if in_x(insp) {
-            true
-        } else if ui.scene_setup_panel.is_open() && in_x(scene) {
+        let container_is_inspector = if ui.scene_setup_panel.is_open() && in_x(scene) {
             false
+        } else if in_x(insp) {
+            true
         } else {
             return self.fail(
                 index,
@@ -1624,12 +2594,8 @@ impl Runner {
             &self.content_state,
             &mut self.cursor_manager,
             &mut self.active_layer,
-            &mut self.flags.rebuild,
-            &mut self.flags.structural,
-            &mut self.flags.automation_lanes,
-            &mut self.flags.scroll,
-            &mut self.flags.invalidated_layers,
-            &mut self.pre_drag_commands,
+            &mut self.redraw,
+            &mut self.edits,
         );
         for event in &viewport_events {
             if let UIEvent::PointerDown { modifiers, .. }
@@ -1731,6 +2697,94 @@ impl Runner {
     /// any host, `save()` diverted to the temp dir.
     fn apply_panel_actions(&mut self, ui: &mut UIRoot, data: &mut SceneData, actions: &[PanelAction]) {
         for action in actions {
+            // The live action loop answers these by watching the graph and
+            // opening the editor window (`open_graph_editor`).
+            if let PanelAction::Root(
+                root @ (manifold_ui::RootAction::OpenGraphEditor(_)
+                | manifold_ui::RootAction::OpenGeneratorGraphEditor
+                | manifold_ui::RootAction::OpenGraphTarget(_)
+                | manifold_ui::RootAction::SceneSetupOpenGraphEditor(_)
+                | manifold_ui::RootAction::PreviewSceneModifierObject(..)),
+            ) = action
+            {
+                self.watch_for_open(ui, data, root);
+                let opened = self.open_editor(data);
+                println!("ui-snap --script: {action:?} -> graph editor {}", if opened { "opened" } else { "already open" });
+                continue;
+            }
+            // The live action loop defers this to `handle_perform_mode_pending`,
+            // which enters once an output window exists. The runner has no
+            // output window to open, so it enters at once.
+            if let PanelAction::Project(manifold_ui::panels::ProjectAction::EnterPerformMode) = action {
+                if !self.perform.active {
+                    crate::perform_mode::frame::enter(&mut self.perform, ui, &mut self.text_input, None);
+                }
+                continue;
+            }
+            // The App's action loop opens text sessions before the bridge.
+            if crate::text_session::begin_inspector_entry(
+                &mut self.text_input,
+                action,
+                false,
+                ui.inspector.last_effect_tab(),
+                &self.active_layer,
+                &data.selection,
+                &data.project,
+            ) || crate::text_session::begin_for_action(&mut self.text_input, ui, &data.project, &data.selection, action)
+            {
+                println!("ui-snap --script: {action:?} -> text session {:?}", self.text_input.field);
+                continue;
+            }
+            // Mapping-drawer actions carry their owner; the App's action loop
+            // hands them to the shared mapping handler before the bridge.
+            if let PanelAction::Root(root) = action {
+                let outcome = crate::editor_bridge::MappingHost {
+                    project: &mut data.project,
+                    edits: &mut self.edits,
+                    content_tx: Some(&self.content_tx),
+                    scrub: &mut self.scrub,
+                }
+                .dispatch(root);
+                match outcome {
+                    crate::editor_bridge::MappingDispatch::NotMapping => {}
+                    crate::editor_bridge::MappingDispatch::Done => {
+                        println!("ui-snap --script: dispatched mapping {action:?}");
+                        continue;
+                    }
+                    crate::editor_bridge::MappingDispatch::GotoNode(target, binding_id) => {
+                        if let Some(ed) = self.editor.as_mut() {
+                            let graph = crate::editor_bridge::editor_ui_graph(&mut ed.ui_graph, &data.content, self.watched.as_ref(), &data.project);
+                            crate::editor_bridge::goto_mapped_node(self.watched.as_ref(), graph.as_ref(), Some(&mut ed.canvas), &target, &binding_id);
+                        }
+                        continue;
+                    }
+                }
+            }
+            // A main-window card click retargets an open editor to that card's
+            // graph, then still dispatches for the card's own selection.
+            if self.editor.is_some() {
+                match action {
+                    PanelAction::Params(manifold_ui::ParamsAction::EffectCardClicked(ei)) => {
+                        let tab = ui.inspector.last_effect_tab();
+                        if let Some(eid) = crate::editor_bridge::effect_card_id(tab, &mut data.project, self.active_layer.as_ref(), &data.selection, *ei) {
+                            self.watch(data, manifold_core::GraphTarget::Effect(eid));
+                        }
+                    }
+                    PanelAction::Params(manifold_ui::ParamsAction::GenCardClicked) => {
+                        if let Some(layer) = self.active_layer.clone() {
+                            self.watch(data, manifold_core::GraphTarget::Generator(layer));
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            // The live app resolves this in `app_render.rs` from its graph
+            // editor's viewport; here the runner's viewport stands in.
+            if let PanelAction::Root(manifold_ui::RootAction::SceneSetupCopyViewportCamera(layer)) = action {
+                let view = self.viewport.as_ref().filter(|(shown, _)| shown == layer).map(|(_, camera)| *camera);
+                crate::scene_view_copy::run(&mut data.project, &self.content_tx, ui, &mut self.edits.stamps, layer, view.as_ref());
+                continue;
+            }
             if let PanelAction::Params(manifold_ui::ParamsAction::EditCards(edit)) = action {
                 // Use the live input host: treating this app-intercepted action
                 // as a bridge no-op loses clipboard state while reporting success.
@@ -1745,7 +2799,8 @@ impl Runner {
                     &mut *ui,
                     &mut data.selection,
                     &mut self.active_layer,
-                    &mut self.flags,
+                    &mut self.redraw,
+                    &mut self.edits,
                     &mut scratch,
                     &mut project_io,
                     #[cfg(target_os = "macos")]
@@ -1794,7 +2849,7 @@ impl Runner {
                 continue;
             }
             let mut dctx = crate::ui_bridge::DispatchCtx {
-                project: &mut data.project,
+                project: crate::ui_bridge::ProjectRef::new(&mut data.project, &mut self.edits, &self.content_tx),
                 content_tx: &self.content_tx,
                 content_state: &self.content_state,
                 ui: &mut *ui,
@@ -1805,11 +2860,8 @@ impl Runner {
                 scrub: &mut self.scrub,
                 dialogs: Default::default(),
             };
-            let result = crate::ui_bridge::dispatch(action, &mut dctx);
-            println!("ui-snap --script: dispatched {action:?} (structural={})", result.structural_change);
-            if result.structural_change {
-                self.flags.structural = true;
-            }
+            crate::ui_bridge::dispatch(action, &mut dctx);
+            println!("ui-snap --script: dispatched {action:?}");
             // The fixture's active-layer INDEX feeds `sync_build`'s inspector
             // sync; derive it from the id the real bridge maintains (the old
             // mirrored arm set it directly).
@@ -2023,6 +3075,14 @@ impl Runner {
         let json = super::dump::dump_tree_ex(&ui.tree, &surfaces);
         std::fs::write(path, serde_json::to_string_pretty(&json).expect("serialize dump"))
             .expect("write dump json");
+        // An open editor window's tree lands beside it: `NN.tree.json` ->
+        // `NN.editor.tree.json`.
+        if let Some(ed) = self.editor.as_ref() {
+            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("tree.json");
+            let editor_path = path.with_file_name(name.replacen("tree.json", "editor.tree.json", 1));
+            std::fs::write(&editor_path, serde_json::to_string_pretty(&ed.dump(&self.editor_mapping)).expect("serialize dump"))
+                .expect("write editor dump json");
+        }
     }
 
     /// P2 (D3): reads back the offscreen `live_frame`/the `Step` loop
@@ -2037,6 +3097,20 @@ impl Runner {
     /// frame or the P0 differential shelf tool. No thumbnails here (this
     /// driver never opted into `--thumbs`, matching the old call's `false`).
     fn write_png(&mut self, ui: &mut UIRoot, data: &mut SceneData, render: &mut RenderState, path: &std::path::Path) {
+        // The perform screen replaces the main window's passes, as in the
+        // App; its last frame is already in the offscreen.
+        if !self.perform.active {
+            self.paint_main_passes(ui, data, render);
+        }
+        let (tex_w, tex_h) = (render.tex_w, render.tex_h);
+        let mut linear = render.readback_linear();
+        for pt in self.last_gesture_points.drain(..) {
+            stamp_crosshair(&mut linear, tex_w, tex_h, pt);
+        }
+        super::render::save_ui_png(&linear, tex_w, tex_h, path);
+    }
+
+    fn paint_main_passes(&mut self, ui: &mut UIRoot, data: &mut SceneData, render: &mut RenderState) {
         let (tex_w, tex_h) = (render.tex_w, render.tex_h);
         let mut clip_rects = Vec::new();
         ui.viewport.visible_clip_rects(&mut clip_rects);
@@ -2063,7 +3137,6 @@ impl Runner {
             self.overlay.refresh_automation_feedback(position, ui.viewport.automation_lane_screens(),
                 &mut data.selection, &ui.viewport);
         }
-        let text_input = crate::text_input::TextInputState::new();
         let frame_timer = crate::frame_timer::FrameTimer::new(60.0);
         // LED composite preview band (LED_STRIPS_DESIGN MVP-P4): a real
         // panel-bitmap instance so the band's quad paints in flow snapshots
@@ -2089,7 +3162,7 @@ impl Runner {
                 automation_latched: &data.content.automation_latched_params,
                 automation_selection: Some(&data.selection),
                 cursor_pos: manifold_ui::node::Vec2::ZERO,
-                text_input: &text_input,
+                text_input: &self.text_input,
                 frame_timer: &frame_timer,
                 vqt: None,
                 blit_pipeline: &render.composite.blit_pipeline,
@@ -2097,11 +3170,38 @@ impl Runner {
                 gpu_sink: None,
             },
         );
-        let mut linear = render.readback_linear();
-        for pt in self.last_gesture_points.drain(..) {
-            stamp_crosshair(&mut linear, tex_w, tex_h, pt);
+    }
+}
+
+/// The keys a `Key` or `Text` step types: each character of `Text` as its own
+/// key with no modifiers held, as the live door sends it; a letter key
+/// carries its character, as winit reports it.
+fn step_keys(action: &AutomationAction) -> Vec<(String, Option<Key>, manifold_ui::input::Modifiers)> {
+    match action {
+        AutomationAction::Text { text } => {
+            text.chars().map(|c| (c.to_string(), None, manifold_ui::input::Modifiers::NONE)).collect()
         }
-        super::render::save_ui_png(&linear, tex_w, tex_h, path);
+        AutomationAction::Key { key, modifiers } => vec![(format!("{key:?}").to_lowercase(), Some(*key), *modifiers)],
+        _ => unreachable!("only Key and Text type"),
+    }
+}
+
+/// One step key as a text field reads it.
+fn text_key(chars: &str, key: Option<Key>) -> crate::text_session::TextKey<'_> {
+    use crate::text_session::{Arrow, TextKey};
+    match key {
+        None => TextKey::Chars(chars),
+        Some(Key::Escape) => TextKey::Escape,
+        Some(Key::Enter) => TextKey::Enter,
+        Some(Key::Backspace) => TextKey::Backspace,
+        Some(Key::Delete) => TextKey::Delete,
+        Some(Key::Left) => TextKey::Arrow(Arrow::Left),
+        Some(Key::Right) => TextKey::Arrow(Arrow::Right),
+        Some(Key::Up) => TextKey::Arrow(Arrow::Up),
+        Some(Key::Down) => TextKey::Arrow(Arrow::Down),
+        Some(Key::Space) => TextKey::Space,
+        Some(_) if chars.len() == 1 => TextKey::Chars(chars),
+        Some(_) => TextKey::Other,
     }
 }
 

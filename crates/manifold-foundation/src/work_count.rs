@@ -17,10 +17,9 @@ use std::sync::OnceLock;
 pub enum WorkKind {
     /// `UIRoot::build`: the whole main-window tree.
     FullBuild,
-    /// A partial rebuild of one or more regions (`rebuild_scroll_panels`, the
-    /// overlay-only rebuild).
+    /// One region cleared and rebuilt alone in its own arena (D7).
     RegionRebuild,
-    /// A region moved without rebuilding. No site until per-region storage (P4e).
+    /// A region moved in place without rebuilding (D7).
     RegionTranslate,
     /// Existing nodes updated in place (scroll and similar).
     InPlaceUpdate,
@@ -68,8 +67,6 @@ pub enum WorkKind {
     OscRouteRebuild,
     /// Project preset overlay install.
     PresetOverlayInstall,
-    /// `embedded_presets_fingerprint`, on either thread.
-    PresetFingerprint,
     /// Audio modulation runtime reconcile.
     AudioReconcile,
     /// A CoreAudio device or process query.
@@ -86,7 +83,7 @@ pub enum WorkKind {
     FrameAlloc,
 }
 
-pub const WORK_KIND_COUNT: usize = 34;
+pub const WORK_KIND_COUNT: usize = 33;
 
 impl WorkKind {
     pub const ALL: [WorkKind; WORK_KIND_COUNT] = [
@@ -116,7 +113,6 @@ impl WorkKind {
         WorkKind::ListenerRangeRefresh,
         WorkKind::OscRouteRebuild,
         WorkKind::PresetOverlayInstall,
-        WorkKind::PresetFingerprint,
         WorkKind::AudioReconcile,
         WorkKind::DeviceQuery,
         WorkKind::ClipBindingReconcile,
@@ -159,7 +155,6 @@ impl WorkKind {
             WorkKind::ListenerRangeRefresh => "ListenerRangeRefresh",
             WorkKind::OscRouteRebuild => "OscRouteRebuild",
             WorkKind::PresetOverlayInstall => "PresetOverlayInstall",
-            WorkKind::PresetFingerprint => "PresetFingerprint",
             WorkKind::AudioReconcile => "AudioReconcile",
             WorkKind::DeviceQuery => "DeviceQuery",
             WorkKind::ClipBindingReconcile => "ClipBindingReconcile",

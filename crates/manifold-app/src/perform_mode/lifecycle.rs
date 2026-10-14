@@ -31,22 +31,9 @@ impl Application {
                     self.open_output_window(event_loop, "Output", display_index, false);
                 }
                 if self.window_registry.has_output_window() {
-                    // Quiesce in-flight UI state so nothing is left dangling
-                    // when we resume normal mode on exit.
-                    self.text_input.cancel();
-                    self.ws.ui_root.dropdown.close(&mut self.ws.ui_root.tree);
-                    self.ws.ui_root.browser_popup.close();
-                    self.ws.ui_root.ableton_picker.close();
-                    if self.mouse_pressed {
-                        self.ws.ui_root.pointer_event(
-                            self.cursor_pos,
-                            manifold_ui::input::PointerAction::Up,
-                            self.time_since_start,
-                        );
-                        self.mouse_pressed = false;
-                    }
-                    self.perform.exit_button_hover = false;
-                    self.perform.active = true;
+                    let held_pointer = self.mouse_pressed.then_some((self.cursor_pos, self.time_since_start));
+                    super::frame::enter(&mut self.perform, &mut self.ws.ui_root, &mut self.text_input, held_pointer);
+                    self.mouse_pressed = false;
                     self.ws.offscreen_dirty = true;
                     log::info!("[Perform] Entered performance mode");
                 } else {
@@ -57,25 +44,11 @@ impl Application {
             }
         }
 
-        // Exit performance mode: restore normal UI. Output window is left
-        // open intentionally — if the user exited by accident mid-show the
-        // audience never goes black.
-        if self.perform.pending_exit {
-            self.perform.pending_exit = false;
-            if self.perform.active {
-                self.perform.active = false;
-                self.perform.exit_button_hover = false;
-                // Force a full UI rebuild on the next frame so panels resync
-                // from the latest content snapshot.
-                self.needs_rebuild = true;
-                self.needs_structural_sync = true;
-                self.ws.ui_root.tree.mark_all_dirty();
-                if let Some(cm) = &mut self.ui_cache_manager {
-                    cm.invalidate_all();
-                }
-                self.ws.offscreen_dirty = true;
-                log::info!("[Perform] Exited performance mode");
-            }
+        if super::frame::take_pending_exit(&mut self.perform, &mut self.ws.ui_root, self.ui_cache_manager.as_mut()) {
+            // The planner compares against the last normal frame's inputs,
+            // so whatever moved during the set re-projects on the first frame back.
+            self.ws.offscreen_dirty = true;
+            log::info!("[Perform] Exited performance mode");
         }
     }
 }

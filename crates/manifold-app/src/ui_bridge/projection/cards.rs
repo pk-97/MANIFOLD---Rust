@@ -33,9 +33,9 @@ pub(crate) enum SurfaceVisibility {
     /// macros, drivers all still resolve it by id) — it just never becomes a
     /// card row.
     CuratedCard,
-    /// Every manifest param becomes a row. The Scene Setup dock's full
-    /// generator surface uses this so scale/material rows reach the panel; the
-    /// panel then filters by SECTION, not by `card_visible`.
+    /// Every manifest param becomes a row. The Scene tab's full generator
+    /// surface uses this so scale/material rows reach the panel; the panel
+    /// then filters by item ownership, not by `card_visible`.
     All,
 }
 
@@ -410,10 +410,10 @@ fn param_surface(
     // Which params become rows is the caller's explicit `visibility` choice
     // (scene-panel exposure convergence, card-visibility follow-up).
     // `CuratedCard` hides a scene-vocabulary auto-stamped param the curated
-    // table marks `card_visible: false` (`scene_exposure::card_visible_for`) —
+    // table marks `card_visible: false` (any role but performance) —
     // it stays a real, fully addressable manifest entry (OSC, Ableton, macros,
     // drivers all still resolve it by id), it just never becomes a CARD row.
-    // `All` keeps every param (the Scene Setup dock's full generator surface).
+    // `All` keeps every param (the Scene tab's full generator surface).
     // The per-frame value push no longer mirrors this filter: `sync_card_values`
     // hands the FULL manifest as an id-keyed channel and the card JOINS by id
     // (BUG-313), so a hidden param simply finds no row — there is no second
@@ -482,8 +482,8 @@ fn param_surface(
                 spec: RowSpec {
                     tooltip: p.spec.tooltip.clone(),
                     name: p.spec.name.clone(),
-                    min: p.spec.min,
-                    max: p.spec.max,
+                    min: p.slider_span().0,
+                    max: p.slider_span().1,
                     default: p.spec.default_value,
                     whole_numbers: p.spec.whole_numbers,
                     is_angle: p.spec.is_angle,
@@ -491,9 +491,12 @@ fn param_surface(
                     is_trigger: p.spec.is_trigger,
                     is_trigger_gate: p.spec.is_trigger_gate,
                     value_labels,
+                    unit: p.spec.unit,
                     section: p.spec.section.clone(),
                     material_role: p.spec.material_role.map(super::material::role),
                     inactive_reason: None,
+                    scene: p.spec.scene,
+                    limit: p.drag_limit(),
                     disabled: None,
                 },
                 // D7: display-value resolution decided here — base/effective
@@ -535,7 +538,7 @@ fn param_surface(
     }
 
     if let Some(def) = scene_graph {
-        super::scene_performance::curate_scene_rows(&mut rows, inst, def);
+        super::scene_card::scene_card_rows(&mut rows, inst, def);
     }
 
     // String params are sourced from the registry def. Graph-backed audio-send
@@ -681,6 +684,18 @@ pub(crate) fn gen_params_to_surface(
     .expect("generator param_surface always yields a config");
     surface.layer_id = Some(manifold_core::LayerId::new(layer_id));
     surface
+}
+
+/// The folded section titles of a curated generator card when it is a scene
+/// card, read from the same graph its curation read; `None` otherwise.
+pub(crate) fn scene_card_folds(gp: &manifold_core::effects::PresetInstance, card: &ParamSurface) -> Option<Vec<String>> {
+    let catalog = gp
+        .graph
+        .is_none()
+        .then(|| manifold_nodes::bundled_presets::bundled_preset_def(gp.effect_type()))
+        .flatten();
+    let def = gp.graph.as_ref().or(catalog.as_deref())?;
+    super::scene_card::folded_sections(gp, def, &card.rows)
 }
 
 fn scene_ref_for_vm(
@@ -864,7 +879,7 @@ pub(crate) fn modifier_surfaces(
         for row in &mut rows { row.scene_addr = None; }
         Some(ParamSurface {
             kind: ParamCardKind::Effect,
-            title: scene_modifier_display_name(def, instance)
+            title: manifold_nodes_scene::node_graph::scene_items::scene_modifier_display_name(def, instance)
                 .unwrap_or_else(|| metadata.display_name.clone()),
             rows,
             string_params: vec![],
@@ -905,31 +920,6 @@ pub(crate) fn modifier_surfaces(
             relight: crate::ui_translate::relight_card_config_from(gp),
         })
     }).collect()
-}
-
-/// Return the display name shared by modifier cards and trigger target groups.
-/// Duplicate recipe names get an occurrence suffix only when the stack needs
-/// disambiguation; a single instance keeps its existing title unchanged.
-pub(crate) fn scene_modifier_display_name(
-    def: &manifold_core::effect_graph_def::EffectGraphDef,
-    instance: &manifold_core::scene_modifier_preset::SceneModifierInstanceDef,
-) -> Option<String> {
-    let base = instance.graph.preset_metadata.as_ref()?.display_name.clone();
-    let same_name = def.scene_modifiers.iter().filter(|candidate| {
-        candidate.graph.preset_metadata.as_ref().is_some_and(|metadata| {
-            metadata.display_name == base
-        })
-    });
-    let count = same_name.count();
-    if count <= 1 {
-        return Some(base);
-    }
-    let occurrence = def.scene_modifiers.iter().take_while(|candidate| candidate.id != instance.id)
-        .filter(|candidate| candidate.graph.preset_metadata.as_ref().is_some_and(|metadata| {
-            metadata.display_name == base
-        }))
-        .count() + 1;
-    Some(format!("{base} #{occurrence}"))
 }
 
 
@@ -1116,6 +1106,9 @@ mod param_label_tests {
             section: None,
             card_visible: true,
             material_role: None,
+            limit: Default::default(),
+            unit: None,
+            scene: None,
         }
     }
 
@@ -1543,13 +1536,15 @@ mod sync_card_values_tests {
             section: None,
             card_visible: true,
             material_role: None,
+            limit: Default::default(),
+            unit: None,
+            scene: None,
         }
     }
 
     fn tree_has_text(ui: &UIRoot, needle: &str) -> bool {
         ui.tree
-            .nodes()
-            .iter()
+            .all_nodes()
             .any(|n| n.text.as_deref() == Some(needle))
     }
 

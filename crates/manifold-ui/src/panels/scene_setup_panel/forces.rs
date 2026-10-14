@@ -1,9 +1,10 @@
 //! Shared parameter-card hosting for scene forces.
 //!
-//! Forces are ordinary scene modifier surfaces with a dedicated outliner and
-//! selection. Their rows stay on [`ParamCardPanel`], so modulation, drawers,
-//! type-in, mapping, and right-click lifecycle use the same host as every
-//! other modifier card.
+//! Forces are ordinary scene modifier surfaces with their own tree group and
+//! selection. The item header above the card owns the name, copy and delete;
+//! the card header keeps enable, targets and trigger chips. Its rows stay on
+//! [`ParamCardPanel`], so modulation, drawers, type-in, mapping, and
+//! right-click lifecycle use the same host as every other modifier card.
 
 use super::*;
 use crate::param_surface::{ModifierCardInfo, ModifierPickerEntry};
@@ -30,6 +31,7 @@ impl ScenePanel {
                 .unwrap_or_else(ParamCardPanel::new);
             let collapsed = index.is_some() && card.is_collapsed();
             card.configure(config);
+            card.set_item_hosted(true);
             if collapsed {
                 card.set_collapsed(true);
             }
@@ -115,11 +117,7 @@ impl ScenePanel {
     }
 
     pub(crate) fn force_card_index_for_node(&self, node_id: NodeId) -> Option<usize> {
-        let index = node_id.index();
-        self.force_cards.iter().position(|card| {
-            let first = card.first_node();
-            card.node_count() > 0 && index >= first && index < first + card.node_count()
-        })
+        self.force_cards.iter().position(|card| card.owns_node(node_id))
     }
 
     pub(crate) fn force_card_click(
@@ -144,6 +142,7 @@ impl ScenePanel {
                 PanelAction::Params(ParamsAction::ModifierCardClicked(_))
             )
         }) {
+            self.note_selection(&info.layer_id);
             return Some(vec![PanelAction::Root(
                 RootAction::SceneSetupSelectionChanged(info.layer_id),
             )]);
@@ -255,10 +254,13 @@ mod tests {
                     is_trigger: false,
                     is_trigger_gate: false,
                     value_labels: None,
+                    unit: None,
                     section: None,
                     disabled: None,
                     material_role: None,
                     inactive_reason: None,
+                    scene: None,
+                    limit: Default::default(),
                 },
                 value: RowValue {
                     base: 0.25,
@@ -303,7 +305,7 @@ mod tests {
     }
 
     #[test]
-    fn reveal_clip_response_selects_reordered_force_and_preserves_authored_state() {
+    fn reveal_param_selects_reordered_force_and_preserves_authored_state() {
         let target = crate::view::UiGraphTarget::Generator(LayerId::new("layer-a"));
         let mut first = force_surface("layer-a", "first");
         first.rows[0].modulation.envelope_active = true;
@@ -318,14 +320,14 @@ mod tests {
         });
         let mut panel = ScenePanel::new();
         panel.open();
-        panel.configure(SceneSetupState::Live(Box::new(force_vm(first.clone()))));
+        panel.configure(super::super::tests::live(force_vm(first.clone())));
         panel.configure_params(Some(first.clone()));
         panel.configure_force_cards(&[first.clone(), second.clone()]);
         panel.configure_force_cards(&[second, first]);
         panel.force_cards[1].set_collapsed(true);
 
         let param: manifold_foundation::ParamId = "first_strength".into();
-        assert!(panel.reveal_clip_response(&target, &param));
+        assert!(panel.reveal_param(&target, &param));
         assert_eq!(
             panel.selection.get(&LayerId::new("layer-a")),
             Some(&SceneSelection::Force(manifold_foundation::NodeId::new("first")))
@@ -347,7 +349,7 @@ mod tests {
     }
 
     #[test]
-    fn reveal_clip_response_rejects_missing_target_without_selection_change() {
+    fn reveal_param_rejects_missing_target_without_selection_change() {
         let target = crate::view::UiGraphTarget::Generator(LayerId::new("layer-a"));
         let mut surface = force_surface("layer-a", "force");
         surface.rows[0].clip_trigger = Some(ClipTriggerRow {
@@ -360,7 +362,7 @@ mod tests {
 
         let wrong_target = crate::view::UiGraphTarget::Generator(LayerId::new("other"));
         let param: manifold_foundation::ParamId = "force_strength".into();
-        assert!(!panel.reveal_clip_response(&wrong_target, &param));
+        assert!(!panel.reveal_param(&wrong_target, &param));
         assert_eq!(
             panel.selection.get(&LayerId::new("layer-a")),
             Some(&SceneSelection::World)
@@ -371,7 +373,7 @@ mod tests {
     fn force_card_routes_target_and_strength_gestures_to_its_own_layer() {
         let mut panel = ScenePanel::new();
         let surface = force_surface("layer-a", "force");
-        panel.configure(SceneSetupState::Live(Box::new(force_vm(surface.clone()))));
+        panel.configure(super::super::tests::live(force_vm(surface.clone())));
         panel.configure_force_cards(&[surface]);
         let mut tree = UITree::new();
         panel.force_cards[0].build(&mut tree, Rect::new(0.0, 0.0, 320.0, 300.0));
@@ -382,8 +384,7 @@ mod tests {
                 if layer.as_str() == "layer-a" && id.as_str() == "force")
         );
         let named_node = |name: &str| {
-            tree.nodes()
-                .iter()
+            tree.all_nodes()
                 .find(|node| tree.name_of(node.id) == Some(name))
                 .unwrap()
                 .id
@@ -412,11 +413,9 @@ mod tests {
     fn force_vm(surface: ParamSurface) -> SceneSetupVm {
         SceneSetupVm {
             layer_id: LayerId::new("layer-a"),
-            scene_name: "Scene".into(),
             multiple_scenes: false,
             object_count: 0,
             light_count: 0,
-            shadow_caster_count: 0,
             scene_root_node_id: 0,
             environment: EnvironmentRowVm::None,
             atmosphere: AtmosphereRowVm::None,
@@ -434,9 +433,7 @@ mod tests {
             }],
             camera: CameraRowVm::None,
             camera_setup_needed: false,
-            camera_sections: Vec::new(),
-            camera_parameter_ids: None,
-            world_sections: Vec::new(),
+            items: Vec::new(),
             scene_bounds: None,
         }
     }
@@ -447,7 +444,7 @@ mod tests {
         let force_id = manifold_foundation::NodeId::new("force");
         let mut panel = ScenePanel::new();
         panel.open();
-        panel.configure(SceneSetupState::Live(Box::new(force_vm(surface.clone()))));
+        panel.configure(super::super::tests::live(force_vm(surface.clone())));
         panel.configure_force_cards(&[surface]);
         let mut tree = UITree::new();
         panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
@@ -487,10 +484,10 @@ mod tests {
             Some((LayerId::new("layer-a"), force_id))
         );
 
-        panel.configure(SceneSetupState::Live(Box::new(force_vm(force_surface(
+        panel.configure(super::super::tests::live(force_vm(force_surface(
             "layer-a",
             "replacement",
-        )))));
+        ))));
         assert!(panel.selected_force().is_none());
     }
 }

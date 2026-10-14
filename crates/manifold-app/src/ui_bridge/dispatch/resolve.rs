@@ -13,165 +13,95 @@ use super::super::DispatchResult;
 use crate::app::SelectionState;
 use crate::ui_root::UIRoot;
 
-/// Apply `edit` to the envelope matched by `param_id` on `target`, in both the
-/// local UI project and the content thread (the next snapshot must not stomp
-/// the live tweak). Edits the existing envelope only — no create. The unified
-/// non-undoable live-drag envelope helper, for effects and generators alike:
-/// the kind fork lives entirely inside `with_preset_graph_mut`.
+/// Live (non-undo) edit of the envelope matched by `param_id` on `target`,
+/// locally and on the content thread, so the next snapshot does not stomp the
+/// drag. Edits an existing envelope only; the undo step lands on commit.
 pub(crate) fn graph_env_dual_edit<F>(
-    project: &mut Project,
-    content_tx: &crossbeam_channel::Sender<crate::content_command::ContentCommand>,
+    project: &mut crate::ui_bridge::ProjectRef<'_>,
     target: &manifold_core::GraphTarget,
     param_id: manifold_core::effects::ParamId,
     edit: F,
 ) where
     F: Fn(&mut ParamEnvelope) + Clone + Send + 'static,
 {
-    use crate::content_command::ContentCommand;
-    project.with_preset_graph_mut(target, |inst| {
-        if let Some(env) = inst
-            .envelopes
-            .as_mut()
-            .and_then(|es| es.iter_mut().find(|e| e.param_id == param_id))
-        {
-            edit(env);
-        }
-    });
-    let edit2 = edit.clone();
-    let pid = param_id.clone();
     let t = target.clone();
-    ContentCommand::send(
-        content_tx,
-        ContentCommand::mutate(crate::content_command::touch::SHAPES, Box::new(move |p| {
-            p.with_preset_graph_mut(&t, |inst| {
-                if let Some(env) = inst
-                    .envelopes
-                    .as_mut()
-                    .and_then(|es| es.iter_mut().find(|e| e.param_id == pid))
-                {
-                    edit2(env);
-                }
-            });
-        })),
-    );
+    project.mutate(crate::content_command::touch::SHAPES, move |p| {
+        p.with_preset_graph_mut(&t, |inst| {
+            if let Some(env) = inst
+                .envelopes
+                .as_mut()
+                .and_then(|es| es.iter_mut().find(|e| e.param_id == param_id))
+            {
+                edit(env);
+            }
+        });
+    });
 }
 
-/// Driver twin of [`graph_env_dual_edit`]: apply `edit` to the driver matched
-/// by `param_id` on `target`, locally and on the content thread.
+/// Driver twin of [`graph_env_dual_edit`].
 pub(crate) fn graph_driver_dual_edit<F>(
-    project: &mut Project,
-    content_tx: &crossbeam_channel::Sender<crate::content_command::ContentCommand>,
+    project: &mut crate::ui_bridge::ProjectRef<'_>,
     target: &manifold_core::GraphTarget,
     param_id: manifold_core::effects::ParamId,
     edit: F,
 ) where
     F: Fn(&mut ParameterDriver) + Clone + Send + 'static,
 {
-    use crate::content_command::ContentCommand;
-    project.with_preset_graph_mut(target, |inst| {
-        if let Some(driver) = inst
-            .drivers
-            .as_mut()
-            .and_then(|ds| ds.iter_mut().find(|d| d.param_id == param_id))
-        {
-            edit(driver);
-        }
-    });
-    let edit2 = edit.clone();
-    let pid = param_id.clone();
     let t = target.clone();
-    ContentCommand::send(
-        content_tx,
-        ContentCommand::mutate(crate::content_command::touch::SHAPES, Box::new(move |p| {
-            p.with_preset_graph_mut(&t, |inst| {
-                if let Some(driver) = inst
-                    .drivers
-                    .as_mut()
-                    .and_then(|ds| ds.iter_mut().find(|d| d.param_id == pid))
-                {
-                    edit2(driver);
-                }
-            });
-        })),
-    );
+    project.mutate(crate::content_command::touch::SHAPES, move |p| {
+        p.with_preset_graph_mut(&t, |inst| {
+            if let Some(driver) = inst
+                .drivers
+                .as_mut()
+                .and_then(|ds| ds.iter_mut().find(|d| d.param_id == param_id))
+            {
+                edit(driver);
+            }
+        });
+    });
 }
 
-/// Live dual-edit of one audio modulation, mirroring [`graph_driver_dual_edit`]
-/// for the green trim-handle drag: applies `edit` to the matching
-/// `ParameterAudioMod` on both the UI-thread project mirror and (via
-/// `MutateProject` (Values or Shapes)) the content thread, so the handle tracks under the
-/// cursor without an undo entry per frame (the undo command lands on commit).
+/// Audio-modulation twin of [`graph_env_dual_edit`], for the trim-handle drag.
 pub(crate) fn graph_audio_mod_dual_edit<F>(
-    project: &mut Project,
-    content_tx: &crossbeam_channel::Sender<crate::content_command::ContentCommand>,
+    project: &mut crate::ui_bridge::ProjectRef<'_>,
     target: &manifold_core::GraphTarget,
     param_id: manifold_core::effects::ParamId,
     edit: F,
 ) where
     F: Fn(&mut manifold_core::audio_mod::ParameterAudioMod) + Clone + Send + 'static,
 {
-    use crate::content_command::ContentCommand;
-    project.with_preset_graph_mut(target, |inst| {
-        if let Some(m) = inst
-            .audio_mods
-            .as_mut()
-            .and_then(|ms| ms.iter_mut().find(|a| a.param_id == param_id))
-        {
-            edit(m);
-        }
-    });
-    let edit2 = edit.clone();
-    let pid = param_id.clone();
     let t = target.clone();
-    ContentCommand::send(
-        content_tx,
-        ContentCommand::mutate(crate::content_command::touch::SHAPES, Box::new(move |p| {
-            p.with_preset_graph_mut(&t, |inst| {
-                if let Some(m) = inst
-                    .audio_mods
-                    .as_mut()
-                    .and_then(|ms| ms.iter_mut().find(|a| a.param_id == pid))
-                {
-                    edit2(m);
-                }
-            });
-        })),
-    );
+    project.mutate(crate::content_command::touch::SHAPES, move |p| {
+        p.with_preset_graph_mut(&t, |inst| {
+            if let Some(m) = inst
+                .audio_mods
+                .as_mut()
+                .and_then(|ms| ms.iter_mut().find(|a| a.param_id == param_id))
+            {
+                edit(m);
+            }
+        });
+    });
 }
 
-/// Live (non-undo) edit of one `LayerClipTrigger`'s shape, mirroring
-/// `graph_audio_mod_dual_edit` — applies `edit` to the UI-side `project`
-/// snapshot immediately AND queues the same edit onto the content thread's
-/// live project via `MutateProject` (Values or Shapes), so a drag reads back correctly on
-/// both sides without an undo entry per frame (the commit, on drag-end,
-/// records the one undo step).
+/// Live (non-undo) edit of one `LayerClipTrigger`'s shape, the clip-trigger
+/// twin of [`graph_audio_mod_dual_edit`].
 pub(crate) fn clip_trigger_shape_dual_edit<F>(
-    project: &mut Project,
-    content_tx: &crossbeam_channel::Sender<crate::content_command::ContentCommand>,
+    project: &mut crate::ui_bridge::ProjectRef<'_>,
     layer_id: &LayerId,
     index: usize,
     edit: F,
 ) where
     F: Fn(&mut manifold_core::audio_mod::AudioModShape) + Clone + Send + 'static,
 {
-    use crate::content_command::ContentCommand;
-    if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(layer_id)
-        && let Some(t) = layer.clip_triggers.get_mut(index)
-    {
-        edit(&mut t.shape);
-    }
-    let edit2 = edit.clone();
     let lid = layer_id.clone();
-    ContentCommand::send(
-        content_tx,
-        ContentCommand::mutate(crate::content_command::touch::SHAPES, Box::new(move |p| {
-            if let Some((_, layer)) = p.timeline.find_layer_by_id_mut(&lid)
-                && let Some(t) = layer.clip_triggers.get_mut(index)
-            {
-                edit2(&mut t.shape);
-            }
-        })),
-    );
+    project.mutate(crate::content_command::touch::SHAPES, move |p| {
+        if let Some((_, layer)) = p.timeline.find_layer_by_id_mut(&lid)
+            && let Some(t) = layer.clip_triggers.get_mut(index)
+        {
+            edit(&mut t.shape);
+        }
+    });
 }
 
 /// Resolve a `GraphParamTarget` (the card's effect-row index or generator
@@ -237,7 +167,7 @@ pub(crate) fn resolve_graph_target(
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn resolve_mod_target(
     _ui: &UIRoot,
-    project: &mut Project,
+    project: &Project,
     _content_tx: &crossbeam_channel::Sender<crate::content_command::ContentCommand>,
     gpt: &GraphParamTarget,
     param_id: &manifold_core::effects::ParamId,
@@ -283,7 +213,7 @@ pub(crate) fn ableton_mapping_target(
                     effect_type,
                     param_id: param_id.clone(),
                 }),
-                InspectorTab::Layer | InspectorTab::Group => Some(T::LayerEffect {
+                InspectorTab::Layer | InspectorTab::Group | InspectorTab::Scene => Some(T::LayerEffect {
                     layer_id: active_layer.clone()?,
                     effect_type,
                     param_id: param_id.clone(),
@@ -322,18 +252,12 @@ pub(crate) fn macro_mapping_target(
     }
 }
 
-/// The `(min, max)` range for `param_id` on `inst`, graph-authority-first:
-/// the per-instance graph `preset_metadata` (where graph-backed presets —
-/// notably generators — carry their authoritative ranges) takes precedence
-/// over the registry, falling back to [`PresetInstance::resolve_param`] (and
-/// `(0.0, 1.0)` if unresolved). Unifies the old per-kind range lookups.
+/// The slider range of `param_id` on `inst` (the user's choice, else the
+/// declared range), or `(0.0, 1.0)` when the id is unknown.
 pub(crate) fn resolve_param_range(inst: &PresetInstance, param_id: &str) -> (f32, f32) {
-    // The manifest entry is the single range authority: calibration edits
-    // `spec.min`/`spec.max` in place (D6), so the old override-then-catalog
-    // lookup collapses to reading the `Param.spec`.
     inst.params
         .get(param_id)
-        .map(|p| (p.spec.min, p.spec.max))
+        .map(|p| p.slider_span())
         .unwrap_or((0.0, 1.0))
 }
 
@@ -387,16 +311,11 @@ pub(crate) fn resolve_preset_target(
 /// content thread. The shared tail for every Audio Setup action (they all
 /// mutate `project.audio_setup` and need no target resolution).
 pub(crate) fn audio_setup_command(
-    project: &mut Project,
-    content_tx: &crossbeam_channel::Sender<crate::content_command::ContentCommand>,
-    mut cmd: Box<dyn manifold_editing::command::Command + Send>,
+    project: &mut crate::ui_bridge::ProjectRef<'_>,
+    cmd: Box<dyn manifold_editing::command::Command + Send>,
 ) -> DispatchResult {
-    cmd.execute(project);
-    crate::content_command::ContentCommand::send(
-        content_tx,
-        crate::content_command::ContentCommand::Execute(cmd),
-    );
-    DispatchResult::structural()
+    project.execute(cmd);
+    DispatchResult::handled()
 }
 
 #[cfg(test)]
@@ -492,7 +411,7 @@ mod tests {
 
     #[test]
     fn scene_modifier_editor_owner_rejects_invalid_and_dangling_controls() {
-        let (mut project, target, _, layer_b) = project_with_modifier();
+        let (project, target, _, layer_b) = project_with_modifier();
         let selection = SelectionState::default();
         let invalid = GraphTarget::SceneModifier {
             owner: Box::new(target.host_target().unwrap().clone()),
@@ -513,7 +432,7 @@ mod tests {
         let param = manifold_core::effects::ParamId::from("a_gain");
         assert!(resolve_mod_target(
             &ui,
-            &mut project,
+            &project,
             &tx,
             &GraphParamTarget::Generator,
             &param,
@@ -527,7 +446,7 @@ mod tests {
         let prep_only = manifold_core::effects::ParamId::from("enabled");
         assert!(resolve_mod_target(
             &ui,
-            &mut project,
+            &project,
             &tx,
             &GraphParamTarget::Generator,
             &prep_only,

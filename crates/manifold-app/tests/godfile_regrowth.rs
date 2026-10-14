@@ -34,7 +34,10 @@ const CEILINGS: &[(&str, usize)] = &[
     ("crates/manifold-core/src/effects/bindings.rs", 600),
     ("crates/manifold-core/src/effects/relight.rs", 300),
     ("crates/manifold-core/src/effects/instance.rs", 2550),
-    ("crates/manifold-core/src/effects/instance_serde.rs", 1550),
+    // Tightened 1550 → 1100 (2026-10-14): the tests moved to a sibling file
+    // when the SCENE_SURFACES_DESIGN.md D2 (one live lookup) join grew it.
+    ("crates/manifold-core/src/effects/instance_serde.rs", 1100),
+    ("crates/manifold-core/src/effects/instance_serde_tests.rs", 800),
     ("crates/manifold-core/src/effects/group.rs", 150),
     ("crates/manifold-core/src/effects/driver.rs", 800),
     ("crates/manifold-core/src/effects/envelope.rs", 400),
@@ -110,10 +113,15 @@ const CEILINGS: &[(&str, usize)] = &[
     ("crates/manifold-ui/src/panels/param_card.rs", 8000),
     ("crates/manifold-ui/src/panels/inspector.rs", 4900),
     ("crates/manifold-ui/src/panels/param_slider_shared.rs", 3650),
-    // Bumped 4150 → 4300 (2026-09-15): the properties-sync dirty-check added
-    // the last_pushed cache + id carry-over (+62). Split tracked: BUG-9cy
-    // (decompose scene_setup_panel).
-    ("crates/manifold-ui/src/panels/scene_setup_panel.rs", 4300),
+    // SCENE_SURFACES P6b moved the tree and item header into their own
+    // modules; capped at the size that left.
+    ("crates/manifold-ui/src/panels/scene_setup_panel.rs", 2477),
+    // SCENE_SURFACES_DESIGN.md INV-S12 (godfiles do not regrow): scene
+    // surface files capped at their size when the scene table landed.
+    ("crates/manifold-nodes-scene/src/node_graph/scene_vm.rs", 3320),
+    ("crates/manifold-core/src/scene_exposure.rs", 1509),
+    ("crates/manifold-app/src/ui_bridge/projection/cards.rs", 1807),
+    ("crates/manifold-ui/src/panels/scene_setup_panel/material_inspector.rs", 2148),
 ];
 
 #[test]

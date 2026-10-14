@@ -129,6 +129,8 @@ manifold-nodes-water = { path = "../manifold-nodes-water", features = ["testkit"
 manifold-water-rigid = { path = "../manifold-water-rigid", features = ["testkit"] }
 manifold-water-liquid = { path = "../manifold-water-liquid", features = ["testkit"] }
 sha2 = "0.10"
+# Every command a test runs is held to its declared parts (D10).
+manifold-editing = { path = "../manifold-editing", features = ["change-audit"] }
 
 [lints]
 workspace = true

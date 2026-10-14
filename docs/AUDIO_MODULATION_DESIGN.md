@@ -51,7 +51,7 @@ The headline use is **pitch as motion**: with a monophonic source (a bassline on
 
 ### 3.1 Input — already solved
 
-`manifold-audio::capture::AudioCaptureDevice` ([crates/manifold-audio/src/capture.rs](../crates/manifold-audio/src/capture.rs)) already:
+`manifold-audio::capture::AudioCaptureDevice` ([crates/manifold-audio/src/capture/mod.rs](../crates/manifold-audio/src/capture/mod.rs)) already:
 - Enumerates CoreAudio input devices (`AudioDeviceInfo`, default flag) — a device picker is free.
 - Opens a device at its **native sample rate and channel count**.
 - Streams **Float32 interleaved** samples into a lock-free SPSC ring buffer (2 s capacity).
@@ -145,7 +145,7 @@ Cost: synchrosqueezing is heavier than a plain FFT (FFT + reassignment), but it 
 
 ## 7. Modulation model — slots beside drivers and envelopes
 
-`PresetInstance` ([crates/manifold-core/src/effects.rs](../crates/manifold-core/src/effects.rs)) already stores per-parameter modulation sources as parallel vectors, **all keyed by `ParamId`**:
+`PresetInstance` ([crates/manifold-core/src/effects/mod.rs](../crates/manifold-core/src/effects/mod.rs)) already stores per-parameter modulation sources as parallel vectors, **all keyed by `ParamId`**:
 
 ```rust
 pub param_values: Vec<ParamSlot>,                              // base + effective per slot
@@ -201,7 +201,7 @@ cpal RT thread ─push→ analysis ring ─drain→ audio worker ─frames→ pl
 
 ## 10. UI — the drawer
 
-The drawer parallels the existing envelope/driver drawers built on `param_slider_shared` ([crates/manifold-ui/src/panels/param_slider_shared.rs](../crates/manifold-ui/src/panels/param_slider_shared.rs)):
+The drawer parallels the existing envelope/driver drawers built on `param_slider_shared` ([crates/manifold-ui/src/panels/param_slider_shared/mod.rs](../crates/manifold-ui/src/panels/param_slider_shared/mod.rs)):
 
 - A third modulation button on the slider opens the Audio drawer downward.
 - Rows (top to bottom), each with a leading label that lines up with the sliders:
@@ -226,7 +226,7 @@ The drawer is authoring UI. It does not need to be perform-time minimal; it need
 
 The matrix (section 5) shipped, but the analysis was assigned blind. Three pieces made it legible, all on the **Audio Setup spectrogram** (per tapped send). All decoupled from the modulation hot path. Built draggable-bands first (it also positions the per-band meters), then meters, then the scrolling traces.
 
-1. **Draggable band boundaries.** The Low/Mid/High crossovers were `LOW_HZ`/`MID_HZ` **consts** in `analysis.rs`; they're now `low_hz`/`mid_hz` on `AudioSetup` (serde-default 250/2000, global to all sends), threaded to the worker via a lock-free `CrossoverBank` (mirrors `GainBank`) that re-splits `band_bins` live each drain — no capture restart. The shader draws the two lines from the editable values; a press near a line in the scope arms a drag (`AudioSetupPanel::on_event`), live-edits via `MutateProjectLive`, and commits one `SetAudioCrossoversCommand`. `AudioSetup::clamp_crossovers` keeps low<mid in 20..18k.
+1. **Draggable band boundaries.** The Low/Mid/High crossovers were `LOW_HZ`/`MID_HZ` **consts** in `analysis.rs`; they're now `low_hz`/`mid_hz` on `AudioSetup` (serde-default 250/2000, global to all sends), threaded to the worker via a lock-free `CrossoverBank` (mirrors `GainBank`) that re-splits `band_bins` live each drain — no capture restart. The shader draws the two lines from the editable values; a press near a line in the scope arms a drag (`AudioSetupPanel::on_event`), live-edits via `MutateProject` declaring `Shapes`, and commits one `SetAudioCrossoversCommand`. `AudioSetup::clamp_crossovers` keeps low<mid in 20..18k.
 
 2. **Per-band level meters.** Low/Mid/High amplitude bars in a reserved right margin, each at the geometric centre of its band slab so it lines up with the frequency axis and follows the crossovers as they drag. The tapped send's `SendFeatures` ride `ContentState` (the runtime exposes the resolved tapped-send index); the panel repositions + fills the bars in place each frame.
 

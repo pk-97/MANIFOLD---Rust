@@ -26,10 +26,12 @@ pub(crate) use projection::trigger_routing::{TriggerRoutingCatalog, TriggerSourc
 // directly — they open the one `ScrubState.active` slot without going through
 // the `PanelAction::Scrub` wire (P-I, Fork-2).
 pub(crate) mod scrub;
+#[cfg(test)]
+mod selection_dispatch_tests;
 mod state_sync;
 mod transport;
 
-pub(crate) use context::DispatchCtx;
+pub(crate) use context::{DispatchCtx, ProjectRef};
 pub(crate) use scrub::ScrubState;
 
 /// Re-exported so `Application::handle_text_input_commit`'s
@@ -50,8 +52,6 @@ use crate::ui_root::UIRoot;
 
 /// Result of dispatching a panel action.
 pub struct DispatchResult {
-    /// True if the action changed project structure (needs sync_project_data).
-    pub structural_change: bool,
     /// Set by the `SaveToLibrary`/`SaveToProject` card-menu actions
     /// (PRESET_LIBRARY_DESIGN D4, P3): the resolved kind + current effective
     /// definition + destination, for the caller to open the shared
@@ -81,14 +81,6 @@ pub struct DispatchResult {
 impl DispatchResult {
     pub(crate) fn handled() -> Self {
         Self {
-            structural_change: false,
-            begin_save_preset: None,
-            begin_rename_preset: None,
-        }
-    }
-    pub(crate) fn structural() -> Self {
-        Self {
-            structural_change: true,
             begin_save_preset: None,
             begin_rename_preset: None,
         }
@@ -97,7 +89,6 @@ impl DispatchResult {
     /// documentation for unclaimed variants — identical to `handled()`.
     pub(crate) fn unhandled() -> Self {
         Self {
-            structural_change: false,
             begin_save_preset: None,
             begin_rename_preset: None,
         }
@@ -123,15 +114,15 @@ fn inspector_select_tab(
     // tab repoints `active_layer` relative to this; the selection itself is
     // never changed.
     let sel_layer = selection
-        .selected_layer_id_for_clip
-        .clone()
-        .or_else(|| selection.primary_selected_layer_id.clone());
+        .selected_layer_id_for_clip()
+        .or(selection.primary_selected_layer_id())
+        .cloned();
     match tab {
         // Master needs no layer focus; just pin the scope.
         InspectorTab::Master => selection.pin_scope(InspectorTab::Master),
-        // Clip / Layer both focus the selection's own layer (clip chrome + gen
-        // params + that layer's effects).
-        InspectorTab::Clip | InspectorTab::Layer => {
+        // Clip / Layer / Scene focus the selection's own layer (clip chrome +
+        // gen params + that layer's effects, or that layer's scene).
+        InspectorTab::Clip | InspectorTab::Layer | InspectorTab::Scene => {
             if let Some(lid) = sel_layer.or_else(|| active_layer.clone()) {
                 *active_layer = Some(lid);
             }
@@ -175,7 +166,7 @@ pub fn dispatch(action: &PanelAction, ctx: &mut DispatchCtx) -> DispatchResult {
     match action {
         PanelAction::Transport(a) => transport::dispatch_transport(
             a,
-            ctx.project,
+            &mut ctx.project,
             ctx.content_tx,
             ctx.content_state,
             ctx.ui,
@@ -183,7 +174,7 @@ pub fn dispatch(action: &PanelAction, ctx: &mut DispatchCtx) -> DispatchResult {
         ),
         PanelAction::Editing(a) => editing::dispatch_editing(
             a,
-            ctx.project,
+            &mut ctx.project,
             ctx.content_tx,
             ctx.content_state,
             ctx.ui,
@@ -194,7 +185,7 @@ pub fn dispatch(action: &PanelAction, ctx: &mut DispatchCtx) -> DispatchResult {
         ),
         PanelAction::Layer(a) => layer::dispatch_layer(
             a,
-            ctx.project,
+            &mut ctx.project,
             ctx.content_tx,
             ctx.content_state,
             ctx.ui,
@@ -203,7 +194,7 @@ pub fn dispatch(action: &PanelAction, ctx: &mut DispatchCtx) -> DispatchResult {
         ),
         PanelAction::Marker(a) => marker::dispatch_marker(
             a,
-            ctx.project,
+            &mut ctx.project,
             ctx.content_tx,
             ctx.ui,
             ctx.selection,
@@ -211,7 +202,7 @@ pub fn dispatch(action: &PanelAction, ctx: &mut DispatchCtx) -> DispatchResult {
         ),
         PanelAction::Project(a) => project::dispatch_project(
             a,
-            ctx.project,
+            &mut ctx.project,
             ctx.content_tx,
             ctx.content_state,
             ctx.ui,
@@ -237,16 +228,19 @@ pub fn dispatch(action: &PanelAction, ctx: &mut DispatchCtx) -> DispatchResult {
                 dispatch(changed, ctx);
                 dispatch(commit, ctx)
             }
-            // Inspector tab strip — mirrors the timeline selection.
+            // Inspector tab strip — mirrors the timeline selection. The scope
+            // pin and active layer are planner inputs.
             RootAction::SelectInspectorTab(tab) => {
-                inspector_select_tab(*tab, ctx.project, ctx.selection, ctx.active_layer, ctx.ui);
-                DispatchResult::structural()
+                inspector_select_tab(*tab, &ctx.project, ctx.selection, ctx.active_layer, ctx.ui);
+                DispatchResult::handled()
             }
             // Opened at the Application layer (app_render) / ui_root before
             // dispatch; these arms only keep the match exhaustive and no-op if
             // reached (e.g. via the headless script harness).
             RootAction::BeginParamTextInput { .. }
-            | RootAction::BeginMaterialColourTextInput { .. }
+            | RootAction::BeginSliderRangeInput { .. }
+            | RootAction::BeginColourTextInput { .. }
+            | RootAction::OpenColourMenu { .. }
             | RootAction::BeginDriverPeriodTextInput { .. }
             | RootAction::SceneSetupBeginNumericTextInput { .. }
             | RootAction::SceneSetupEnumClicked { .. }
@@ -256,6 +250,7 @@ pub fn dispatch(action: &PanelAction, ctx: &mut DispatchCtx) -> DispatchResult {
             | RootAction::OpenRtQualityDenoiseDropdown { .. }
             | RootAction::SceneSetupAddModifierClicked(..)
             | RootAction::SceneSetupAddForceClicked(..)
+            | RootAction::SceneSetupAddObjectMenuClicked(..)
             | RootAction::SceneSetupFluidRoleClicked { .. }
             | RootAction::SceneSetupFluidRoleTargetClicked { .. }
             | RootAction::SceneSetupFluidDomainClicked { .. }
@@ -271,6 +266,7 @@ pub fn dispatch(action: &PanelAction, ctx: &mut DispatchCtx) -> DispatchResult {
             | RootAction::OpenCardMapping { .. }
             | RootAction::OpenGeneratorGraphEditor
             | RootAction::SceneSetupOpenGraphEditor(_)
+            | RootAction::SceneSetupCopyViewportCamera(_)
             | RootAction::EffectMappingRangeSnapshot { .. }
             | RootAction::EffectMappingRangeChanged { .. }
             | RootAction::EffectMappingRangeCommit { .. }
@@ -289,9 +285,9 @@ pub fn dispatch(action: &PanelAction, ctx: &mut DispatchCtx) -> DispatchResult {
             | RootAction::AudioSendClicked(_)
             | RootAction::AudioDrawerClick(..)
             | RootAction::ClipTriggerDrawerClick(..) => DispatchResult::handled(),
-            // Panel already updated its UI-local selection; ride
-            // `structural_change: true` back so Properties follows this frame.
-            RootAction::SceneItemRightClicked => DispatchResult::structural(),
+            // The panel already updated its UI-local selection; its selection
+            // version rebuilds Properties this frame.
+            RootAction::SceneItemRightClicked => DispatchResult::handled(),
             RootAction::SceneItemMove(delta) => {
                 if let Some(item) = ctx.ui.scene_setup_panel.selected_scene_item() {
                     ContentCommand::send(ctx.content_tx, ContentCommand::SceneItem(crate::scene_item_transfer::SceneItemAction::Move {
@@ -299,32 +295,42 @@ pub fn dispatch(action: &PanelAction, ctx: &mut DispatchCtx) -> DispatchResult {
                         kind: if item.is_light { crate::scene_item_transfer::SceneItemKind::Light } else { crate::scene_item_transfer::SceneItemKind::Object },
                     }));
                 }
-                DispatchResult::structural()
+                DispatchResult::handled()
             }
             RootAction::SceneItemRename | RootAction::SceneItemFrame => {
                 let action = if matches!(a, RootAction::SceneItemRename) {
                     ctx.ui.scene_setup_panel.rename_selection_action()
                 } else { ctx.ui.scene_setup_panel.frame_selection_action() };
+                // The queued action's own dispatch decides its work.
                 if let Some(action) = action { ctx.ui.pending_keyboard_actions.push(action); }
-                DispatchResult::structural()
+                DispatchResult::handled()
             }
-            RootAction::SceneSetupSelectionChanged(_) => DispatchResult::structural(),
-            // Audio/Scene Setup dock toggles (headless-harness path; the live
-            // app toggles in app_render). Structural: geometry changes.
+            RootAction::SceneSetupSelectionChanged(_) => DispatchResult::handled(),
+            // Audio Setup dock toggle (headless-harness path; the live app
+            // toggles in app_render). The dock's view version moves the
+            // rebuild and its device query.
             RootAction::OpenAudioSetup => {
                 ctx.ui.toggle_audio_dock();
-                DispatchResult::structural()
+                DispatchResult::handled()
             }
+            // Menu, header button, the panel's close button and Escape all
+            // toggle the inspector's Scene tab (SCENE_SURFACES D16).
             RootAction::OpenSceneSetup => {
-                ctx.ui.toggle_scene_dock();
-                DispatchResult::structural()
+                let tab = if ctx.ui.inspector.active_tab() == InspectorTab::Scene {
+                    InspectorTab::Layer
+                } else {
+                    InspectorTab::Scene
+                };
+                inspector_select_tab(tab, &ctx.project, ctx.selection, ctx.active_layer, ctx.ui);
+                DispatchResult::handled()
             }
             // RT Quality overlay (headless-harness path; the live app opens it
-            // in app_render's PanelAction loop). Structural: overlay geometry.
+            // in app_render's PanelAction loop). The overlay open set is a
+            // planner input.
             RootAction::OpenRtQuality => {
                 ctx.ui.rt_quality_panel.open();
-                ctx.ui.overlay_dirty = true;
-                DispatchResult::structural()
+                ctx.ui.mark_overlay_dirty();
+                DispatchResult::handled()
             }
             // Dropdown/picker opens intercepted earlier in ui_root/app_render.
             // The pre-decomposition router routed these through the inspector
@@ -355,13 +361,13 @@ pub(crate) fn select_region_to_with_project(
 
     let anchor: Option<(manifold_core::Beats, usize)> = if selection.has_insert_cursor() {
         let anchor_idx = selection
-            .insert_cursor_layer_id
+            .insert_cursor_layer_id()
             .as_ref()
             .and_then(|id| project.timeline.find_layer_index_by_id(id))
             .unwrap_or(0);
         Some((
             selection
-                .insert_cursor_beat
+                .insert_cursor_beat()
                 .unwrap_or(manifold_core::Beats::ZERO),
             anchor_idx,
         ))
@@ -371,7 +377,7 @@ pub(crate) fn select_region_to_with_project(
             .map(|(lo, _)| lo)
             .unwrap_or(0);
         Some((r.start_beat, start_idx))
-    } else if let Some(ref clip_id) = selection.primary_selected_clip_id.clone() {
+    } else if let Some(ref clip_id) = selection.primary_selected_clip_id().cloned() {
         project
             .timeline
             .layers
@@ -538,7 +544,7 @@ pub(crate) fn resolve_effect_target(
 ) -> EffectTarget {
     match tab {
         InspectorTab::Master => EffectTarget::Master,
-        InspectorTab::Layer | InspectorTab::Group | InspectorTab::Clip => {
+        InspectorTab::Layer | InspectorTab::Group | InspectorTab::Clip | InspectorTab::Scene => {
             let layer_id = active_layer.clone().unwrap_or_else(|| {
                 project
                     .timeline
@@ -561,7 +567,7 @@ pub(crate) fn resolve_effects_read<'a>(
 ) -> (Option<&'a [PresetInstance]>, EffectTarget) {
     match tab {
         InspectorTab::Master => (Some(&project.settings.master_effects), EffectTarget::Master),
-        InspectorTab::Layer | InspectorTab::Group => {
+        InspectorTab::Layer | InspectorTab::Group | InspectorTab::Scene => {
             let target = resolve_effect_target(tab, active_layer, project);
             let effects = resolve_active_layer_index(active_layer, project)
                 .and_then(|idx| project.timeline.layers.get(idx))
@@ -570,7 +576,7 @@ pub(crate) fn resolve_effects_read<'a>(
         }
         InspectorTab::Clip => {
             let target = resolve_effect_target(tab, active_layer, project);
-            let effects = selection.primary_selected_clip_id.as_ref().and_then(|cid| {
+            let effects = selection.primary_selected_clip_id().and_then(|cid| {
                 project
                     .timeline
                     .layers
@@ -592,55 +598,6 @@ pub(crate) fn resolve_effects_ref<'a>(
     selection: &SelectionState,
 ) -> Option<&'a [PresetInstance]> {
     resolve_effects_read(tab, project, active_layer, selection).0
-}
-
-/// Get a mutable reference to the effects list and EffectTarget.
-pub(crate) fn resolve_effects_mut<'a>(
-    tab: InspectorTab,
-    project: &'a mut Project,
-    active_layer: &Option<LayerId>,
-    selection: &SelectionState,
-) -> (Option<&'a mut Vec<PresetInstance>>, EffectTarget) {
-    match tab {
-        InspectorTab::Master => {
-            let effects = &mut project.settings.master_effects;
-            (Some(effects), EffectTarget::Master)
-        }
-        InspectorTab::Layer | InspectorTab::Group => {
-            let layer_id = active_layer.clone().unwrap_or_else(|| {
-                project
-                    .timeline
-                    .layers
-                    .first()
-                    .map(|l| l.layer_id.clone())
-                    .unwrap_or_default()
-            });
-            let target = EffectTarget::Layer { layer_id };
-            let effects = resolve_active_layer_index(active_layer, project)
-                .and_then(move |idx| project.timeline.layers.get_mut(idx))
-                .map(|l| l.effects_mut());
-            (effects, target)
-        }
-        InspectorTab::Clip => {
-            let layer_id = active_layer.clone().unwrap_or_else(|| {
-                project
-                    .timeline
-                    .layers
-                    .first()
-                    .map(|l| l.layer_id.clone())
-                    .unwrap_or_default()
-            });
-            let target = EffectTarget::Layer { layer_id };
-            let clip_id = selection.primary_selected_clip_id.clone();
-            let effects = clip_id.and_then(|cid| {
-                project
-                    .timeline
-                    .find_clip_by_id_mut(&cid)
-                    .map(|c| &mut c.effects)
-            });
-            (effects, target)
-        }
-    }
 }
 
 /// Resolve "which effect instance" a single-effect card edit targets, as a
@@ -752,11 +709,14 @@ pub(crate) fn led_exit_path_label(
 
 // Re-export public functions from sub-modules
 pub use state_sync::{
-    TransportDisplayCache, check_auto_scroll, push_state, sync_automation_lane_geometry,
-    sync_card_values, sync_clip_positions,
-    sync_scene_row_values,
-    sync_inspector_data, sync_project_data,
+    LiveGroups, TransportDisplayCache, check_auto_scroll, drain_events, intake_overlay_state, push_chrome, push_clock, push_frame, push_live, push_selection,
+    sync_automation_lane_geometry,
+    sync_clip_positions, sync_driver_readouts, sync_markers,
+    sync_scene_outliner_eyes,
+    sync_audio_dock, sync_inspector_data, sync_project_data, sync_track_layout,
 };
+#[cfg(feature = "ui-snapshot")]
+pub use state_sync::push_state;
 
 #[cfg(test)]
 mod d2_d3_tests {
@@ -930,5 +890,124 @@ mod d2_d3_tests {
             "a TimeRange selection must still dispatch today's region-duplicate mode"
         );
         assert!(!commands.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod command_site_plan_tests {
+    //! UI_INVALIDATION P4d batch a: a command site returns `handled()` and the
+    //! planner follows the stamps its write moved, one test per write kind.
+    use super::*;
+    use crate::content_command::ContentCommand;
+    use crate::frame_plan::{plan_frame, FrameInputs, Projection, UiStamps};
+    use manifold_core::change::PartStamps;
+    use manifold_ui::{LayerAction, ProjectAction};
+
+    /// Dispatch `action` against `project` with fresh stamps; the result, the
+    /// stamps it left and what it sent.
+    fn dispatch_stamped(
+        action: &PanelAction,
+        project: &mut Project,
+    ) -> (DispatchResult, UiStamps, Vec<ContentCommand>) {
+        let (content_tx, content_rx) = crossbeam_channel::unbounded();
+        let content_state = crate::content_state::ContentState::default();
+        let mut ui = UIRoot::new();
+        let mut selection = manifold_ui::UIState::new();
+        let mut active_layer = project.timeline.layers.first().map(|l| l.layer_id.clone());
+        let mut user_prefs = crate::user_prefs::UserPrefs::in_memory();
+        let mut scrub = ScrubState::default();
+        let mut edits = crate::gesture_preview::UiEdits::default();
+        let result = dispatch(action, &mut DispatchCtx {
+            project: ProjectRef::new(project, &mut edits, &content_tx),
+            content_tx: &content_tx,
+            content_state: &content_state,
+            ui: &mut ui,
+            selection: &mut selection,
+            active_layer: &mut active_layer,
+            user_prefs: &mut user_prefs,
+            editor_target: None,
+            scrub: &mut scrub,
+            dialogs: Default::default(),
+        });
+        (result, edits.stamps, content_rx.try_iter().collect())
+    }
+
+    fn plan_after(stamps: &UiStamps) -> crate::frame_plan::FramePlan {
+        plan_frame(&FrameInputs::default(), &FrameInputs { parts: stamps.parts(), ..Default::default() })
+    }
+
+    #[test]
+    fn execute_site_projects_from_its_stamps() {
+        let mut project = Project::default();
+        project.timeline.add_layer_default();
+        let (_, stamps, sent) =
+            dispatch_stamped(&PanelAction::Layer(LayerAction::AddLayerClicked), &mut project);
+        assert_eq!(project.timeline.layers.len(), 2, "executed locally");
+        assert!(matches!(sent.as_slice(), [ContentCommand::Execute(_)]));
+        let plan = plan_after(&stamps);
+        assert!(plan.projections.contains(Projection::ProjectSync));
+        assert!(plan.projections.contains(Projection::InspectorSync));
+    }
+
+    #[test]
+    fn mutate_site_projects_from_its_stamps() {
+        let mut project = Project::default();
+        project.timeline.add_layer_default();
+        let id = project.timeline.layers[0].layer_id.clone();
+        let collapsed = project.timeline.layers[0].is_collapsed;
+        let (_, stamps, sent) =
+            dispatch_stamped(&PanelAction::Layer(LayerAction::ChevronClicked(id)), &mut project);
+        assert_ne!(project.timeline.layers[0].is_collapsed, collapsed, "written locally");
+        assert!(matches!(sent.as_slice(), [ContentCommand::MutateProject { .. }]));
+        let plan = plan_after(&stamps);
+        assert!(plan.projections.contains(Projection::ProjectSync));
+        assert!(plan.projections.contains(Projection::ClipPositions));
+    }
+
+    /// BUG-bo2mx (scene setup skin edits run against the UI snapshot): the
+    /// skin edit is content-owned. Dispatch leaves the UI project and stamps
+    /// untouched; the content receipt's stamps drive the projection.
+    #[test]
+    fn execute_on_content_site_waits_for_the_receipt() {
+        let mut project = Project::default();
+        let idx = project.timeline.add_layer(
+            "Scene",
+            manifold_core::types::LayerType::Generator,
+            manifold_core::PresetTypeId::from_string("Scene".to_string()),
+        );
+        let layer_id = project.timeline.layers[idx].layer_id.clone();
+        let before = serde_json::to_value(&project).unwrap();
+        for action in [
+            ProjectAction::SceneSetupSkinSourceSet {
+                layer_id: layer_id.clone(),
+                scope_path: Vec::new(),
+                scene_object_id: 1,
+                source_node_id: None,
+                target_map: manifold_ui::panels::scene_setup_panel::SkinTargetMap::Emissive,
+                source: None,
+            },
+            ProjectAction::SceneSetupSkinTargetMapSet {
+                layer_id: layer_id.clone(),
+                scope_path: Vec::new(),
+                scene_object_id: 1,
+                source_node_id: None,
+                target_map: manifold_ui::panels::scene_setup_panel::SkinTargetMap::BaseColor,
+            },
+        ] {
+            let (_, stamps, sent) = dispatch_stamped(&PanelAction::Project(action.clone()), &mut project);
+            assert_eq!(serde_json::to_value(&project).unwrap(), before, "{action:?}: UI snapshot untouched");
+            assert!(plan_after(&stamps).projections == Default::default(), "{action:?}: nothing to project yet");
+            let [ContentCommand::ExecuteOnContent(command)] = sent.as_slice() else {
+                panic!("{action:?}: expected one content-owned edit");
+            };
+            // The receipt: the content thread stamps what the command touches
+            // and the accepted snapshot folds those stamps in.
+            let mut content = PartStamps::default();
+            content.bump(command.touches());
+            let mut folded = stamps;
+            folded.fold_snapshot(&content);
+            let plan = plan_after(&folded);
+            assert!(plan.projections.contains(Projection::InspectorSync), "{action:?}");
+        }
     }
 }

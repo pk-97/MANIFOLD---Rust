@@ -185,28 +185,13 @@ pub trait TimelineEditingHost {
     // owner), called from the overlay's drag handlers — no host indirection
     // needed since the viewport already owns the scroll state.
 
-    // ── Bitmap invalidation ─────────────────────────────────────────
+    // ── Repaint ─────────────────────────────────────────────────────
 
-    /// Invalidate a specific layer's bitmap. Unity: InvalidateLayerBitmap(int).
-    fn invalidate_layer_bitmap(&mut self, layer_index: usize);
-
-    /// Invalidate all layer bitmaps. Unity: InvalidateAllLayerBitmaps().
-    fn invalidate_all_layer_bitmaps(&mut self);
-
-    /// The project structure changed: forces a full UI tree rebuild and a
-    /// project-data resync. Expensive — never call it per pointer move or for
-    /// state the paint pass already reads every frame.
-    fn mark_dirty(&mut self);
-
-    /// Visual-only: repaint the next frame, no rebuild and no resync. For
-    /// hover feedback, selection and marquee changes the paint pass reads
-    /// straight from `UIState`.
-    fn request_redraw(&mut self);
-
-    /// Automation lane points were previewed or restored in the local
-    /// project: re-project lane geometry only (no clip resync, no rebuild)
-    /// and repaint.
-    fn request_automation_lane_resync(&mut self);
+    /// Repaint the next frame; never touches the tree (UI_INVALIDATION D8).
+    /// For hover feedback, marquee and time selection, which the immediate
+    /// passes read straight from `UIState`. Edits and previews need no call:
+    /// the frame planner sees their stamps and preview versions.
+    fn redraw(&mut self);
 
     // ── Cursor ──────────────────────────────────────────────────────
 

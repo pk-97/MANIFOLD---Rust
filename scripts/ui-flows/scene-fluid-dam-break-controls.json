@@ -3,8 +3,7 @@
     "Pointer": {
       "target": {
         "Query": {
-          "text": "Scene",
-          "type": "Button"
+          "text": "Scene", "type": "Button", "under_name": "inspector"
         }
       },
       "gesture": {
@@ -18,7 +17,7 @@
     "Pointer": {
       "target": {
         "Query": {
-          "text": "\u25a0 Water"
+          "name": "scene_tree.item", "text": "Water"
         }
       },
       "gesture": {

@@ -1,0 +1,11 @@
+[
+  {"Assert": {"selector": {"Query": {"text": "Camera"}}, "check": {"Above": {"text": "Physics"}}}},
+  {"Assert": {"selector": {"Query": {"text": "Physics"}}, "check": {"Above": {"text": "Lighting"}}}},
+  {"Assert": {"selector": {"Query": {"text": "Lighting"}}, "check": {"Above": {"text": "Look"}}}},
+  {"Assert": {"selector": {"Query": {"text": "Count"}}, "check": "Exists"}},
+  {"Assert": {"selector": {"Query": {"text": "Sun"}}, "check": "Exists"}},
+  {"Assert": {"selector": {"Query": {"text": "Fill Light"}}, "check": "Exists"}},
+  {"Assert": {"selector": {"Query": {"text": "Main Light Intensity"}}, "check": {"Count": 0}}},
+  {"Assert": {"selector": {"Query": {"text": "Scene Controls"}}, "check": {"Count": 0}}},
+  "Snapshot"
+]

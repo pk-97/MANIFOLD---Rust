@@ -39,12 +39,13 @@ impl GraphCanvas {
     /// it exists at the current level. No-op when nothing is pending or the
     /// target isn't laid out yet (a scope rebuild is still in flight — retried
     /// next frame). Called by the editor present path, which has the viewport.
-    pub fn resolve_pending_focus(&mut self, viewport: Rect) {
+    /// Returns whether the view moved.
+    pub fn resolve_pending_focus(&mut self, viewport: Rect) -> bool {
         let Some(rid) = self.pending_focus else {
-            return;
+            return false;
         };
         let Some(node) = self.nodes.iter().find(|n| n.id == rid) else {
-            return;
+            return false;
         };
         let node_cx = node.pos_graph.0 + NODE_WIDTH * 0.5;
         let node_cy = node.pos_graph.1 + node.height() * 0.5;
@@ -55,23 +56,27 @@ impl GraphCanvas {
         self.pan.0 = content_cx / self.zoom - node_cx;
         self.pan.1 = (content_cy - HEADER_HEIGHT) / self.zoom - node_cy;
         self.pending_focus = None;
+        true
     }
 
     /// Apply a pending zoom-to-fit (set on editor open / scope change) once the
     /// level is laid out. A pending jump-to-node wins — it's an explicit target,
     /// so we drop the fit rather than fight it. Called by the editor present path
-    /// alongside [`Self::resolve_pending_focus`]; no-op until then.
-    pub fn apply_pending_fit(&mut self, viewport: Rect) {
+    /// alongside [`Self::resolve_pending_focus`]; no-op until then. Returns
+    /// whether the view moved.
+    pub fn apply_pending_fit(&mut self, viewport: Rect) -> bool {
         if !self.fit_pending {
-            return;
+            return false;
         }
         if self.pending_focus.is_some() {
             self.fit_pending = false;
-            return;
+            return false;
         }
         if self.zoom_to_fit(viewport) {
             self.fit_pending = false;
+            return true;
         }
+        false
     }
 
     /// Frame every laid-out node in the viewport: the largest zoom whose node

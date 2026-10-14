@@ -1,0 +1,76 @@
+//! The nodes each scene item owns, read off the traced scene
+//! (SCENE_SURFACES_DESIGN.md section 3.5 (scene items)). `scene_items`
+//! turns these lists into items; nothing else reads them.
+
+use manifold_core::scene_index::FlatSceneIndex;
+use manifold_core::{NodeId, SceneNodeRef};
+use manifold_core::effect_graph_def::EffectGraphNode;
+
+use super::{AtmosphereVm, CameraVm, EnvironmentVm, Level};
+
+/// Stable identities of `ids` in `level`; nodes without one own no controls.
+fn stable_ids(level: &Level, ids: impl IntoIterator<Item = u32>) -> Vec<NodeId> {
+    ids.into_iter()
+        .filter_map(|id| level.node(id))
+        .map(|node| node.node_id.clone())
+        .filter(|id| !id.is_empty())
+        .collect()
+}
+
+/// The camera atom, its lens, and the effects connected to this scene/camera.
+pub(super) fn camera_nodes(level: &Level, camera: &CameraVm, scene: &EffectGraphNode, index: Option<&FlatSceneIndex>) -> Vec<NodeId> {
+    let (atom, lens) = match camera {
+        CameraVm::Orbit(c) => (Some(c.node_doc_id), c.lens.as_ref()),
+        CameraVm::Free(c) => (Some(c.node_doc_id), c.lens.as_ref()),
+        CameraVm::LookAt(c) => (Some(c.node_doc_id), c.lens.as_ref()),
+        CameraVm::Loop(c) => (None, c.lens.as_ref()),
+        CameraVm::Custom { lens, .. } => (None, lens.as_ref()),
+        CameraVm::None => (None, None),
+    };
+    let mut controls = stable_ids(level, atom.into_iter().chain(lens.map(|lens| lens.node_doc_id)));
+    if let Some(index) = index {
+        controls.extend(super::super::scene_camera::camera_effect_controls(index, &SceneNodeRef {
+            scope: Vec::new(), node: scene.node_id.clone(),
+        }));
+    }
+    controls
+}
+
+/// The render_scene root (its Rendering toggles), the environment and the
+/// atmosphere.
+pub(super) fn world_nodes(
+    level: &Level,
+    scene_node: &EffectGraphNode,
+    environment: &EnvironmentVm,
+    atmosphere: &AtmosphereVm,
+) -> Vec<NodeId> {
+    let mut ids = vec![scene_node.id];
+    match environment {
+        EnvironmentVm::Importer(e) => ids.push(e.bake_node_id),
+        EnvironmentVm::Bare(e) => ids.push(e.node_doc_id),
+        EnvironmentVm::Custom { .. } | EnvironmentVm::None => {}
+    }
+    if let AtmosphereVm::Wired(a) = atmosphere {
+        ids.push(a.node_doc_id);
+    }
+    stable_ids(level, ids)
+}
+
+/// Each physics world with the body it copies (wired into `copies`) and that
+/// body's transform: the copy body draws no object of its own, so its
+/// controls are the world's (Physics Boxes' box shape and spawn transform).
+pub(super) fn physics_nodes(level: &Level) -> Vec<Vec<NodeId>> {
+    level
+        .nodes
+        .iter()
+        .filter(|node| node.type_id == "node.physics_world")
+        .map(|world| {
+            let mut ids = vec![world.id];
+            if let Some((body, _)) = level.producer(world.id, "copies") {
+                ids.push(body);
+                ids.extend(level.producer(body, "transform").map(|(transform, _)| transform));
+            }
+            stable_ids(level, ids)
+        })
+        .collect()
+}

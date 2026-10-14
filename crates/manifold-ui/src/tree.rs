@@ -1,14 +1,11 @@
 use crate::node::*;
 use crate::text::{HeuristicTextMeasure, TextMeasure};
 
-/// Stacking tier for a top-level [`UITree::begin_region`] root —
-/// `UI_CLIP_AND_Z_OWNERSHIP_DESIGN.md` D2. Render order is `(tier,
-/// insertion)`: regions of a lower tier paint first (further back); within a
-/// tier, insertion order breaks ties, matching today's build-order behavior.
-/// So a `Chrome` region (the transport/header/footer frame) always wins over
-/// a `Base` region (timeline/viewport/inspector) regardless of which one
-/// built first this frame — "the footer can never lose to the inspector
-/// again regardless of who builds first" (D2).
+/// Stacking tier for a region root — `UI_CLIP_AND_Z_OWNERSHIP_DESIGN.md` D2.
+/// Paint order is `(tier, region rank, local insertion)`: a lower tier paints
+/// first (further back). So a `Chrome` region (the transport/header/footer
+/// frame) always wins over a `Base` region (timeline/viewport/inspector)
+/// regardless of which one built first.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub enum ZTier {
     /// Timeline, viewport, inspector — the main content surfaces.
@@ -23,154 +20,218 @@ pub enum ZTier {
     Ghost = 3,
 }
 
-/// A region minted by [`UITree::begin_region`] — the token its content builds
-/// under. `root` is the container node's id; pass `Some(token.root)` as the
-/// parent for content built directly under it, or capture `tree.count()`
-/// before calling the panel's existing (unchanged) `None`-rooted build and
-/// sweep the result under `token.root` via
-/// [`end_region`](UITree::end_region)/[`reparent_root_nodes`](UITree::reparent_root_nodes) —
-/// the same idiom the inspector's own `ClipRegion` already uses.
+const TIERS: [ZTier; 4] = [ZTier::Base, ZTier::Chrome, ZTier::Overlay, ZTier::Ghost];
+
+/// Region arenas per tree (UI_INVALIDATION_DESIGN.md D7). A region id is the
+/// window's region discriminant (`MainRegion` in the main window), and it is
+/// also the region's paint rank inside a tier.
+pub const MAX_REGIONS: usize = 16;
+
+/// The arena for content no named region owns: trees built whole in tests, and
+/// windows that still rebuild their whole tree (the graph editor). Ranks last.
+pub const DEFAULT_REGION: u8 = (MAX_REGIONS - 1) as u8;
+
+/// A region opened by [`UITree::begin_region`] or
+/// [`UITree::begin_region_in`] — the token its content builds under. `root` is
+/// the container node's id; pass `Some(token.root)` as the parent for content
+/// built directly under it, or capture `tree.count()` before calling the
+/// panel's `None`-rooted build and sweep the result under `token.root` with
+/// [`end_region`](UITree::end_region).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct RegionToken {
     pub root: NodeId,
+    /// The arena parentless nodes minted into before this region opened.
+    outer: u8,
 }
 
-/// Flat indexed node storage for the bitmap UI system.
+/// One `begin_region` inside an arena: its tier and its root. The sub-region
+/// owns the slots from its root up to the next sub-region's root.
+#[derive(Clone, Copy)]
+struct SubRegion {
+    tier: ZTier,
+    root: NodeId,
+}
+
+/// One region's nodes: the structure-of-arrays storage, slot-indexed.
 ///
 /// INVARIANTS:
-///   - id == index: node IDs are sequential from 0, equal to their array index.
-///   - Structural operations (add_node) occur only during panel build phase.
-///     Interaction frames use only set_* mutations (O(1), no allocation).
+///   - Structural operations (mint) occur only while the region builds;
+///     interaction frames use only set_* mutations (O(1), no allocation).
 ///   - Traversal order: depth-first pre-order matches insertion order.
-///   - Clipping: hierarchical push/pop following the tree structure.
-///
-/// STORAGE LAYOUT (SoA):
-///   nodes[]        — node data (style, bounds, flags, text)
-///   parent_index[] — parent node (`None` for roots)
-///   first_child[]  — first child (`None` if leaf)
-///   next_sibling[] — next sibling (`None` if last)
-///   last_child[]   — last child (`None` if leaf), for O(1) appending
-pub struct UITree {
+///   - Every parent link stays inside the arena, so clearing one arena can
+///     never leave another holding a dangling link.
+#[derive(Default)]
+struct RegionArena {
     nodes: Vec<UINode>,
     parent_index: Vec<Option<NodeId>>,
     first_child: Vec<Option<NodeId>>,
     next_sibling: Vec<Option<NodeId>>,
     last_child: Vec<Option<NodeId>>,
-    /// Generation stamp per slot, parallel to `nodes`. Bumped from `gen_counter`
-    /// each time a slot is minted, so a slot reused after truncate/clear+rebuild
-    /// carries a fresh generation and ids minted against the old occupant no
-    /// longer validate. See [`NodeId`].
+    /// Generation stamp per slot, minted from the tree's `gen_counter`, so a
+    /// slot reused after a clear carries a fresh generation and ids minted
+    /// against the old occupant no longer validate.
     generations: Vec<u32>,
+    /// Durable [`WidgetId`] per slot: the parent's id mixed with a stable
+    /// sibling salt, so the same logical widget gets the same id on every
+    /// rebuild of a structurally stable build.
+    widget_ids: Vec<WidgetId>,
+    /// Durable component name per slot (`UI_AUTOMATION_DESIGN.md` D8);
+    /// `None` for most nodes.
+    names: Vec<Option<Box<str>>>,
+    /// Per-slot count of children added so far: the auto sibling salt for
+    /// the next child.
+    child_counts: Vec<u32>,
+    /// Parentless nodes minted so far: the auto salt for the next root. Each
+    /// arena counts from zero, seeded by its region id, so a region rebuilt
+    /// alone reproduces its own root salts and never collides with another
+    /// region's.
+    root_count: u32,
+    has_dirty: bool,
+    sub_regions: Vec<SubRegion>,
+}
+
+impl RegionArena {
+    fn len(&self) -> usize {
+        self.nodes.len()
+    }
+
+    /// Drop every node, keeping capacity.
+    fn clear(&mut self) {
+        self.nodes.clear();
+        self.parent_index.clear();
+        self.first_child.clear();
+        self.next_sibling.clear();
+        self.last_child.clear();
+        self.generations.clear();
+        self.widget_ids.clear();
+        self.names.clear();
+        self.child_counts.clear();
+        self.root_count = 0;
+        self.has_dirty = false;
+        self.sub_regions.clear();
+    }
+
+    /// Slot span `[root, next sub-region root)` of sub-region `i`.
+    fn sub_span(&self, i: usize) -> (usize, usize) {
+        let start = self.sub_regions[i].root.slot();
+        let end = self.sub_regions.get(i + 1).map_or(self.len(), |s| s.root.slot());
+        (start, end.max(start))
+    }
+
+    fn recompute_dirty(&mut self) {
+        self.has_dirty = self.nodes.iter().any(|n| n.flags.contains(UIFlags::DIRTY));
+    }
+}
+
+/// Node storage for the bitmap UI system: one arena per region
+/// (UI_INVALIDATION_DESIGN.md D7, section 3). Rebuilding a region clears and
+/// refills its own arena only, so the other regions' nodes, ids and atlas
+/// pixels stay untouched.
+///
+/// A [`NodeId`] names its region and its slot in that region's arena. Slot
+/// numbers, `count()` captures and node ranges are region-local.
+///
+/// Paint order runs over every sub-region of every arena by (tier, region
+/// rank, local insertion); hit order is the reverse. Region rank is the region
+/// id, which the main window assigns in its full-build order, so the order
+/// equals the old flat tree's.
+pub struct UITree {
+    arenas: [RegionArena; MAX_REGIONS],
     /// Monotonic source of generation stamps. Starts at 1 — generation 0 is the
     /// reserved "no live node" stamp ([`NodeId::PLACEHOLDER`]), so it is never
     /// minted.
     gen_counter: u32,
-    /// Durable [`WidgetId`] per slot, parallel to `nodes`. Unlike the generational
-    /// `NodeId`, a node's `WidgetId` is the *same on every rebuild* as long as the
-    /// build is structurally stable, so it survives the editor's per-frame
-    /// clear+rebuild. Derived from the parent's `WidgetId` mixed with a stable
-    /// sibling salt (the sibling index, or an explicit key). Used for hierarchy
-    /// (a child salts off its parent's id) and for [`widget_of`](UITree::widget_of).
-    widget_ids: Vec<WidgetId>,
-    /// Durable component name per slot, parallel to `nodes`/`widget_ids`
-    /// (`UI_AUTOMATION_DESIGN.md` D8/section 3). `&'static str` only — panels register a
-    /// literal like `"layer_header.mute"` via [`set_name`](UITree::set_name)
-    /// right after building the node; *which row* it's on comes from the
-    /// selector's structural query (`under_text`), never a per-row `String`
-    /// allocation (the editor rebuilds its tree every frame, so that would be a
-    /// per-frame alloc on the UI thread). `None` for the overwhelming majority
-    /// of nodes — the automation dump (section 3) reaches unnamed nodes via
-    /// text/type/structure instead.
-    names: Vec<Option<Box<str>>>,
-    /// Per-slot count of children added so far, parallel to `nodes`. The auto
-    /// sibling salt for the next child of a node — so siblings get 0, 1, 2, … in
-    /// build order, deterministically reproduced on rebuild.
-    child_counts: Vec<u32>,
-    /// Count of root-level (parentless) nodes added so far — the auto salt source
-    /// for roots, mirroring `child_counts` for a virtual root parent.
-    root_count: u32,
-    /// Per-slot flag: was this node *minted* as a root (parent_id `None`)?
-    /// Parallel to `nodes`. Set once at mint and NEVER changed by
-    /// [`reparent_root_nodes`](UITree::reparent_root_nodes) — so it records the
-    /// root salt a node actually consumed, which [`truncate_from`](UITree::truncate_from)
-    /// needs to continue the root-salt sequence correctly. Counting current
-    /// `parent_index.is_none()` instead undercounts once a root has been
-    /// reparented (the inspector wraps built subpanels under a ClipRegion),
-    /// which made a partial rebuild re-issue an already-consumed root salt →
-    /// two nodes deriving the same `WidgetId` (a silent widget→node map
-    /// corruption in release; the double-click / mis-target that surfaced).
-    root_minted: Vec<bool>,
-    /// Reverse index: durable [`WidgetId`] → its live [`NodeId`] in the *current*
-    /// build, for the interactive nodes only (the ones the input system can target
-    /// for press / hover / focus). Rebuilt alongside the tree, so a lookup always
-    /// returns a live id. This is how the input system resolves an identity it has
-    /// held across frames back to a node it can act on.
+    /// Reverse index: durable [`WidgetId`] → its live [`NodeId`], for the
+    /// interactive nodes only (the ones press / hover / focus can target).
+    /// Widget ids are unique across regions (INV-18), so one map serves all.
     widget_to_node: ahash::AHashMap<WidgetId, NodeId>,
-    count: usize,
-    has_dirty: bool,
-    /// Monotonic counter bumped on every *structural* change (add_node, clear,
-    /// truncate_from) — never on in-place set_* mutations. Consumers that cache
-    /// per-node-id data (e.g. the intent registry) repopulate only when this
-    /// changes, so they stay correct across partial rebuilds without paying a
-    /// per-frame cost. Cannot go stale: it lives at the mutation layer, so no
-    /// structural change can bypass it.
+    /// Bumped on every *structural* change (mint, clear, clear_region) —
+    /// never on in-place set_* mutations. Consumers that cache per-node-id
+    /// data (the intent registry) repopulate only when this changes.
     structure_version: u64,
-    /// Text measurement available to the *build* path, so a panel can size a
-    /// cell to its text while building (not just guess a fixed width). Defaults
-    /// to the GPU-free [`HeuristicTextMeasure`] so the tree can always answer;
-    /// the app installs a CoreText-accurate measurer via [`set_text_measure`].
-    ///
-    /// [`set_text_measure`]: UITree::set_text_measure
+    /// Text measurement available to the *build* path. Defaults to the
+    /// GPU-free [`HeuristicTextMeasure`]; the app installs a CoreText-accurate
+    /// measurer via [`set_text_measure`](UITree::set_text_measure).
     text_measure: Box<dyn TextMeasure>,
-    /// Every region minted by [`begin_region`](UITree::begin_region), in the
-    /// order it was minted — `(tier, root)`. The render walk
-    /// ([`traverse`](UITree::traverse), [`traverse_range`](UITree::traverse_range))
-    /// visits these instead of scanning for root-parented nodes directly, in
-    /// `(tier, insertion)` order — `UI_CLIP_AND_Z_OWNERSHIP_DESIGN.md` D1/D2.
-    /// Pruned in [`truncate_from`](UITree::truncate_from) and
-    /// [`clear`](UITree::clear) alongside the other per-node Vecs.
-    regions: Vec<(ZTier, NodeId)>,
-    /// Depth counter: >0 while a [`begin_region`](UITree::begin_region) call's
-    /// subtree is still being built (before its matching
-    /// [`end_region`](UITree::end_region) reparents it). While open, `mint`
-    /// permits a `parent_id: None` node — the sanctioned "build flat, then
-    /// sweep under the region" idiom already used by the inspector's own
-    /// `ClipRegion` (`reparent_root_nodes`'s doc comment) — generalized here
-    /// instead of hand-rolled per panel. A counter, not a bool, because two
-    /// regions can be open sequentially without interleaving inside one build
-    /// pass; nesting (a region opened while another is still open) is safe too.
+    /// Depth of open `begin_region` brackets. While open, `mint` permits a
+    /// `parent_id: None` node — the "build flat, then sweep under the region"
+    /// idiom [`end_region`](UITree::end_region) closes.
     open_regions: u32,
+    /// The arena a parentless node mints into: the innermost open region's,
+    /// else [`DEFAULT_REGION`]. A node with a parent always mints into its
+    /// parent's arena.
+    building: u8,
+    /// Where an overlay minted at event time (a dropdown opening) goes, so
+    /// the overlay region's next rebuild replaces it.
+    overlay_region: u8,
+    /// The card-drag ghost's arena (D7): no atlas slot.
+    ghost_region: u8,
 }
 
 const INITIAL_CAPACITY: usize = 512;
 
 impl UITree {
+    /// High bit set on an explicit-key salt so it can never collide with an auto
+    /// sibling-index salt (sibling indices are small, well under 2^62).
+    const EXPLICIT_KEY_FLAG: u64 = 1 << 63;
+    /// Mixed into each arena's root seed with its region id (INV-18): two
+    /// region roots can never share a `WidgetId`.
+    const REGION_SALT_FLAG: u64 = 1 << 62;
+
     pub fn new() -> Self {
         Self {
-            nodes: Vec::with_capacity(INITIAL_CAPACITY),
-            parent_index: Vec::with_capacity(INITIAL_CAPACITY),
-            first_child: Vec::with_capacity(INITIAL_CAPACITY),
-            next_sibling: Vec::with_capacity(INITIAL_CAPACITY),
-            last_child: Vec::with_capacity(INITIAL_CAPACITY),
-            generations: Vec::with_capacity(INITIAL_CAPACITY),
+            arenas: std::array::from_fn(|_| RegionArena::default()),
             gen_counter: 1,
-            widget_ids: Vec::with_capacity(INITIAL_CAPACITY),
-            names: Vec::with_capacity(INITIAL_CAPACITY),
-            child_counts: Vec::with_capacity(INITIAL_CAPACITY),
-            root_count: 0,
-            root_minted: Vec::with_capacity(INITIAL_CAPACITY),
             widget_to_node: ahash::AHashMap::with_capacity(INITIAL_CAPACITY),
-            count: 0,
-            has_dirty: false,
             structure_version: 0,
             text_measure: Box::new(HeuristicTextMeasure),
-            regions: Vec::with_capacity(16),
             open_regions: 0,
+            building: DEFAULT_REGION,
+            overlay_region: DEFAULT_REGION,
+            ghost_region: DEFAULT_REGION,
         }
     }
 
+    /// Slots minted so far in the arena being built ([`DEFAULT_REGION`]
+    /// outside any region). Region-local: capture it inside a build to mark a
+    /// panel's range in its own arena.
     pub fn count(&self) -> usize {
-        self.count
+        self.arenas[self.building as usize].len()
+    }
+
+    /// The arena parentless nodes mint into right now.
+    pub fn building_region(&self) -> u8 {
+        self.building
+    }
+
+    /// Nodes in `region`'s arena.
+    pub fn region_len(&self, region: u8) -> usize {
+        self.arenas[region as usize].len()
+    }
+
+    /// The slot range of `region`'s arena, `(0, len)`.
+    pub fn region_range(&self, region: u8) -> (usize, usize) {
+        (0, self.region_len(region))
+    }
+
+    /// Nodes across every arena.
+    pub fn total_count(&self) -> usize {
+        self.arenas.iter().map(RegionArena::len).sum()
+    }
+
+    /// Route event-time overlay mints (`begin_region_in(tree.overlay_region(), …)`)
+    /// and the card-drag ghost into the window's overlay and ghost regions.
+    pub fn set_region_roles(&mut self, overlay: u8, ghost: u8) {
+        self.overlay_region = overlay;
+        self.ghost_region = ghost;
+    }
+
+    pub fn overlay_region(&self) -> u8 {
+        self.overlay_region
+    }
+
+    pub fn ghost_region(&self) -> u8 {
+        self.ghost_region
     }
 
     // ── Text measurement (build path) ───────────────────────────────
@@ -203,7 +264,7 @@ impl UITree {
     }
 
     pub fn has_dirty(&self) -> bool {
-        self.has_dirty
+        self.arenas.iter().any(|a| a.has_dirty)
     }
 
     /// Current structural generation — see [`UITree::structure_version`].
@@ -252,10 +313,6 @@ impl UITree {
         )
     }
 
-    /// High bit set on an explicit-key salt so it can never collide with an auto
-    /// sibling-index salt (sibling indices are small, well under 2^63).
-    const EXPLICIT_KEY_FLAG: u64 = 1 << 63;
-
     #[allow(clippy::too_many_arguments)]
     fn mint(
         &mut self,
@@ -269,23 +326,13 @@ impl UITree {
     ) -> NodeId {
         // D4 — the only sanctioned way to root a top-level (parent: None)
         // subtree is inside an open `begin_region`/`end_region` bracket
-        // (`open_regions > 0`): either `begin_region`'s own mint of the
-        // region container, or a panel building its (still `None`-rooted)
-        // content in between, later swept under the region by `end_region`.
-        // A `None`-parented node minted with no region open is exactly the
-        // per-panel hand-clip bug class `UI_CLIP_AND_Z_OWNERSHIP_DESIGN.md`
-        // D1 exists to kill — see that doc before adding one back.
+        // (`open_regions > 0`). A `None`-parented node minted with no region
+        // open is the per-panel hand-clip bug class
+        // `UI_CLIP_AND_Z_OWNERSHIP_DESIGN.md` D1 exists to kill.
         //
-        // `cfg(not(test))`: gated out of `manifold-ui`'s OWN unit tests, which
-        // legitimately build a panel on a bare `UITree::new()` in isolation
-        // (never touching `begin_region` — that wrapping is `ui_root.rs`'s
-        // job, one layer up). `cfg(test)` is per-compilation-unit, so this
-        // still fires for `manifold-app` — the real app (debug build) and
-        // its own test/gate-scene binaries, where every panel DOES build
-        // through the now-fully-migrated `UIRoot::build()`. The D4
-        // structural unit test (`manifold-ui`, walking a *built* tree after
-        // the fact) is the enforcement that still applies inside
-        // `manifold-ui`'s own suite.
+        // `cfg(not(test))`: `manifold-ui`'s own unit tests build panels on a
+        // bare `UITree::new()`; the D4 structural test (`all_roots_are_regions`)
+        // is the enforcement inside this crate's suite.
         #[cfg(not(test))]
         debug_assert!(
             parent_id.is_some() || self.open_regions > 0,
@@ -293,34 +340,40 @@ impl UITree {
              UI_CLIP_AND_Z_OWNERSHIP_DESIGN.md D1/D4. Wrap this subtree's build \
              in begin_region(...)/end_region(...) instead of rooting it at the tree."
         );
-        // Mint a fresh generation for this slot. `gen_counter` never yields 0
-        // (reserved for PLACEHOLDER); skip it on the wrap.
+        // `gen_counter` never yields 0 (reserved for PLACEHOLDER); skip it on
+        // the wrap.
         let generation = self.gen_counter;
         self.gen_counter = self.gen_counter.wrapping_add(1);
         if self.gen_counter == 0 {
             self.gen_counter = 1;
         }
-        let id = NodeId::from_parts(self.count as u32, generation);
+        let region = match parent_id {
+            Some(p) => p.region(),
+            None => self.building,
+        };
+        let arena = &mut self.arenas[region as usize];
+        let slot = arena.len();
+        debug_assert!(slot < 1 << NodeId::SLOT_BITS, "region {region} arena overflow");
+        let id = NodeId::from_parts(region, slot as u32, generation);
 
         // Durable WidgetId: the parent's id mixed with a stable salt. An explicit
         // key (namespaced by EXPLICIT_KEY_FLAG) overrides the sibling index, so the
         // same logical widget resolves to the same WidgetId across rebuilds.
         let parent_widget = match parent_id {
-            Some(p) => self.widget_ids[p.index()],
-            None => WidgetId::ROOT,
+            Some(p) => arena.widget_ids[p.slot()],
+            None => WidgetId::ROOT.with(Self::REGION_SALT_FLAG | u64::from(region)),
         };
         let salt = match key {
             Some(k) => Self::EXPLICIT_KEY_FLAG | k,
             None => match parent_id {
                 Some(p) => {
-                    let pi = p.index();
-                    let s = self.child_counts[pi] as u64;
-                    self.child_counts[pi] += 1;
+                    let s = arena.child_counts[p.slot()] as u64;
+                    arena.child_counts[p.slot()] += 1;
                     s
                 }
                 None => {
-                    let s = self.root_count as u64;
-                    self.root_count += 1;
+                    let s = arena.root_count as u64;
+                    arena.root_count += 1;
                     s
                 }
             },
@@ -339,24 +392,23 @@ impl UITree {
             texture: None,
             uv: [0.0, 0.0, 1.0, 1.0],
             font_family: None,
-            draw_order: self.count as i32,
+            draw_order: slot as i32,
         };
 
-        self.nodes.push(node);
-        self.parent_index.push(parent_id);
-        self.first_child.push(None);
-        self.next_sibling.push(None);
-        self.last_child.push(None);
-        self.generations.push(generation);
-        self.widget_ids.push(widget_id);
-        self.names.push(None);
-        self.child_counts.push(0);
-        self.root_minted.push(parent_id.is_none());
+        arena.nodes.push(node);
+        arena.parent_index.push(parent_id);
+        arena.first_child.push(None);
+        arena.next_sibling.push(None);
+        arena.last_child.push(None);
+        arena.generations.push(generation);
+        arena.widget_ids.push(widget_id);
+        arena.names.push(None);
+        arena.child_counts.push(0);
+        arena.has_dirty = true;
 
         // Only interactive nodes are ever the target of press / hover / focus, so
-        // only they need a reverse lookup. Keeping the map interactive-only also
-        // makes a collision meaningful — two interactive widgets sharing an id is a
-        // real bug (a duplicate explicit key), caught here in debug.
+        // only they need a reverse lookup. Two interactive widgets sharing an id
+        // is a real bug (a duplicate explicit key), caught here in debug.
         if extra_flags.contains(UIFlags::INTERACTIVE) {
             let prev = self.widget_to_node.insert(widget_id, id);
             debug_assert!(
@@ -367,8 +419,6 @@ impl UITree {
         }
 
         self.link_child(id, parent_id);
-        self.count += 1;
-        self.has_dirty = true;
         self.structure_version = self.structure_version.wrapping_add(1);
         id
     }
@@ -377,14 +427,16 @@ impl UITree {
         let Some(parent) = parent_id else {
             return;
         };
-        let pid = parent.index();
-        if self.first_child[pid].is_none() {
-            self.first_child[pid] = Some(child_id);
+        debug_assert_eq!(child_id.region(), parent.region(), "a parent link never crosses regions");
+        let arena = &mut self.arenas[parent.region() as usize];
+        let pid = parent.slot();
+        if arena.first_child[pid].is_none() {
+            arena.first_child[pid] = Some(child_id);
         } else {
-            let last = self.last_child[pid].expect("last_child set when first_child set").index();
-            self.next_sibling[last] = Some(child_id);
+            let last = arena.last_child[pid].expect("last_child set when first_child set").slot();
+            arena.next_sibling[last] = Some(child_id);
         }
-        self.last_child[pid] = Some(child_id);
+        arena.last_child[pid] = Some(child_id);
     }
 
     /// Add a panel node (non-interactive rect).
@@ -457,13 +509,9 @@ impl UITree {
 
     /// Add a non-interactive image node (PRESET_LIBRARY_DESIGN P6, D7):
     /// draws `texture` — a handle the renderer resolves against its
-    /// registered-image cache (populated once, off the per-frame path, by
-    /// decoding a saved thumbnail PNG) — filling the rect, rounded to
-    /// `corner_radius`. `UINodeType::Image` and `UINode.texture` existed as
-    /// dead Unity-port scaffolding (zero consumers) until this; see
-    /// `ui_renderer.rs`'s tree walk for the drawing side. Non-interactive by
-    /// design — an interactive sibling (e.g. the browser cell's own button)
-    /// drawn in the same rect keeps click/hover handling unchanged.
+    /// registered-image cache — filling the rect, rounded to `corner_radius`.
+    /// Non-interactive by design — an interactive sibling drawn in the same
+    /// rect keeps click/hover handling unchanged.
     pub fn add_image(
         &mut self,
         parent_id: Option<NodeId>,
@@ -485,16 +533,15 @@ impl UITree {
             None,
             UIFlags::empty(),
         );
-        self.nodes[id.index()].texture = Some(texture);
+        if let Some(node) = self.get_node_mut(id) {
+            node.texture = Some(texture);
+        }
         id
     }
 
     /// Add a non-interactive image node that samples a `uv` sub-rect
     /// (`[u0, v0, u1, v1]`) of `texture` instead of the whole texture — one
     /// cell of a shared atlas (the graph canvas's node-preview atlas).
-    /// Identical
-    /// to [`Self::add_image`] in every other respect; the default `uv` on
-    /// `add_image` is the full `[0, 0, 1, 1]` rect.
     #[allow(clippy::too_many_arguments)]
     pub fn add_image_uv(
         &mut self,
@@ -508,7 +555,9 @@ impl UITree {
         uv: [f32; 4],
     ) -> NodeId {
         let id = self.add_image(parent_id, x, y, w, h, corner_radius, texture);
-        self.nodes[id.index()].uv = uv;
+        if let Some(node) = self.get_node_mut(id) {
+            node.uv = uv;
+        }
         id
     }
 
@@ -556,96 +605,96 @@ impl UITree {
 
     // ── Node access (O(1)) ──────────────────────────────────────────
 
-    /// The current id for a slot index — index plus the slot's live generation.
-    /// The way external code (and internal index-based passes) turn a raw index
-    /// into a validatable id. Returns [`NodeId::PLACEHOLDER`] for an out-of-range
-    /// index, so the result never matches a live node.
+    /// The live id at `slot` of the arena being built — for build-time
+    /// captures (`let start = tree.count(); …; tree.id_at(start)`) and
+    /// single-arena trees. Code that walks a stored range after the build
+    /// names its region with [`id_in`](Self::id_in).
     #[inline]
-    pub fn id_at(&self, index: usize) -> NodeId {
-        match self.generations.get(index) {
-            Some(&generation) => NodeId::from_parts(index as u32, generation),
+    pub fn id_at(&self, slot: usize) -> NodeId {
+        self.id_in(self.building, slot)
+    }
+
+    /// The live id at `slot` of `region`'s arena, or [`NodeId::PLACEHOLDER`]
+    /// for an out-of-range slot, so the result never matches a live node.
+    #[inline]
+    pub fn id_in(&self, region: u8, slot: usize) -> NodeId {
+        match self.arenas.get(region as usize).and_then(|a| a.generations.get(slot)) {
+            Some(&generation) => NodeId::from_parts(region, slot as u32, generation),
             None => NodeId::PLACEHOLDER,
         }
     }
 
-    /// Whether `id` refers to a live node: its index is in range AND the slot's
-    /// generation matches. A stale id (slot reused since the id was minted) fails
-    /// here, which is what turns every accessor below into a safe no-op for it.
+    /// Whether `id` refers to a live node: its slot is in its arena's range
+    /// AND the slot's generation matches. A stale id fails here, which turns
+    /// every accessor below into a safe no-op for it.
     #[inline]
     pub fn is_live(&self, id: NodeId) -> bool {
-        let idx = id.index();
-        idx < self.count && self.generations[idx] == id.generation()
+        self.arenas
+            .get(id.region() as usize)
+            .and_then(|a| a.generations.get(id.slot()))
+            .is_some_and(|&g| g == id.generation())
     }
 
-    /// `None` if `id` is stale or invalid — the same inertness every other
-    /// accessor here gives a stale id (`get_bounds` → `ZERO`, `set_style` →
-    /// no-op). Callers that cache a `NodeId` across a rebuild must handle
-    /// `None`; a stale id must never be able to reach `&self.nodes[..]`.
+    /// `None` if `id` is stale or invalid. Callers that cache a `NodeId`
+    /// across a rebuild must handle `None`.
     pub fn get_node(&self, id: NodeId) -> Option<&UINode> {
-        self.is_live(id).then(|| &self.nodes[id.index()])
+        self.is_live(id).then(|| &self.arenas[id.region() as usize].nodes[id.slot()])
     }
 
-    /// Read-only view of every node in insertion order (`NodeId` == index).
-    /// For headless inspection (the UI snapshot harness' tree dump); the
-    /// renderer and hit-test use the typed accessors above.
-    pub fn nodes(&self) -> &[UINode] {
-        &self.nodes
+    /// Every node, arena by arena in region order, slot order inside each.
+    /// For headless inspection (the snapshot dump, test lookups); the
+    /// renderer and hit test use the typed accessors.
+    pub fn all_nodes(&self) -> impl DoubleEndedIterator<Item = &UINode> + Clone {
+        self.arenas.iter().flat_map(|a| a.nodes.iter())
+    }
+
+    /// `region`'s nodes in slot order.
+    pub fn region_nodes(&self, region: u8) -> &[UINode] {
+        &self.arenas[region as usize].nodes
     }
 
     /// `None` if `id` is stale or invalid — see [`Self::get_node`].
     pub fn get_node_mut(&mut self, id: NodeId) -> Option<&mut UINode> {
-        self.is_live(id).then(|| &mut self.nodes[id.index()])
+        if !self.is_live(id) {
+            return None;
+        }
+        Some(&mut self.arenas[id.region() as usize].nodes[id.slot()])
     }
 
     pub fn get_bounds(&self, id: NodeId) -> Rect {
+        self.get_node(id).map_or(Rect::ZERO, |n| n.bounds)
+    }
+
+    /// The live node behind `id` with its arena, for the in-place setters.
+    fn live_mut(&mut self, id: NodeId) -> Option<(&mut RegionArena, usize)> {
         if !self.is_live(id) {
-            return Rect::ZERO;
+            return None;
         }
-        self.nodes[id.index()].bounds
+        Some((&mut self.arenas[id.region() as usize], id.slot()))
     }
 
     // ── Batch offset (composite panel build) ────────────────────────
 
-    /// Offset Y position of a range of nodes by array index.
-    /// Called during initial build to position sub-panels.
-    pub fn offset_nodes(&mut self, from_index: usize, count: usize, dy: f32) {
-        let end = (from_index + count).min(self.count);
-        for i in from_index..end {
-            self.nodes[i].bounds.y += dy;
+    /// Offset Y of `count` slots of `region`'s arena from `from`.
+    pub fn offset_nodes(&mut self, region: u8, from: usize, count: usize, dy: f32) {
+        let arena = &mut self.arenas[region as usize];
+        let end = (from + count).min(arena.len());
+        for n in &mut arena.nodes[from.min(end)..end] {
+            n.bounds.y += dy;
         }
     }
 
-    // ── Regions (UI_CLIP_AND_Z_OWNERSHIP_DESIGN.md D1–D4) ────────────
+    // ── Regions (UI_CLIP_AND_Z_OWNERSHIP_DESIGN.md D1–D4, D7) ────────
 
-    /// The ONLY sanctioned way to root a top-level subtree. Mints a container
-    /// node at `rect` carrying `CLIPS_CHILDREN` by construction — unless
-    /// `extra_flags` carries `ALLOW_OVERFLOW` (D3), the `Ghost`-tier
-    /// drag-ghost/toast escape hatch — and registers `(tier, root)` in the
-    /// tree's region list, which the render walk
-    /// ([`traverse`](Self::traverse), [`traverse_range`](Self::traverse_range))
-    /// visits instead of scanning for root-parented nodes directly.
+    /// Open a sub-region of the arena being built ([`DEFAULT_REGION`] outside
+    /// any build): a container node at `rect` carrying `CLIPS_CHILDREN` by
+    /// construction — unless `extra_flags` carries `ALLOW_OVERFLOW` (D3), the
+    /// `Ghost`-tier escape hatch — registered with its tier. A dropdown built
+    /// by the panel that owns it is a sub-region of that panel's arena.
     ///
-    /// `label` names the region for debugging/automation (`set_name`) — not
-    /// currently read by any consumer, kept `&'static str` (not `String`) so
-    /// a future one costs nothing on the per-frame rebuild path.
-    ///
-    /// `extra_flags` is normally `UIFlags::empty()`; pass `ALLOW_OVERFLOW`
-    /// for the `Ghost`-tier escape hatch (D3) — the design doc's committed
-    /// signature (section 3) omits this parameter but its own doc comment on
-    /// `begin_region` requires it ("unless ALLOW_OVERFLOW is passed in
-    /// extra_flags"), and D3's opt-out cannot exist without it. Resolved
-    /// here in the 4-param direction the doc's own prose specifies; see the
-    /// P1 report.
-    ///
-    /// Opens the `open_regions` bracket so the panel content built between
-    /// this call and the matching [`end_region`](Self::end_region) may itself
-    /// mint `None`-parented nodes without tripping `mint`'s D4 debug
-    /// assertion — capture `tree.count()` right after this call, build the
-    /// panel exactly as before (still `None`-rooted internally), then call
-    /// `end_region(token, that_start)` to sweep it under `token.root`. This
-    /// generalizes the inspector's own pre-existing `ClipRegion` +
-    /// `reparent_root_nodes` idiom into the one mechanism every top-level
-    /// panel uses.
+    /// Capture `tree.count()` right after this call, build the panel
+    /// (`None`-rooted internally), then `end_region(token, that_start)` sweeps
+    /// it under `token.root`.
     pub fn begin_region(
         &mut self,
         rect: Rect,
@@ -653,6 +702,24 @@ impl UITree {
         label: &'static str,
         extra_flags: UIFlags,
     ) -> RegionToken {
+        self.begin_region_in(self.building, rect, tier, label, extra_flags)
+    }
+
+    /// Open a sub-region of `region`'s arena; parentless nodes mint there
+    /// until the matching [`end_region`](Self::end_region). A window's
+    /// top-level panel build names its region here, after
+    /// [`clear_region`](Self::clear_region) when it rebuilds.
+    pub fn begin_region_in(
+        &mut self,
+        region: u8,
+        rect: Rect,
+        tier: ZTier,
+        label: &'static str,
+        extra_flags: UIFlags,
+    ) -> RegionToken {
+        debug_assert!((region as usize) < MAX_REGIONS, "region {region} out of range");
+        let outer = self.building;
+        self.building = region;
         self.open_regions += 1;
         let clips = if extra_flags.contains(UIFlags::ALLOW_OVERFLOW) {
             extra_flags
@@ -661,155 +728,154 @@ impl UITree {
         };
         let root = self.mint(None, rect, UINodeType::ClipRegion, UIStyle::default(), None, clips, None);
         self.set_name(root, label);
-        self.regions.push((tier, root));
-        RegionToken { root }
+        self.arenas[region as usize].sub_regions.push(SubRegion { tier, root });
+        RegionToken { root, outer }
     }
 
-    /// Close the bracket [`begin_region`](Self::begin_region) opened: sweeps
-    /// every still-`None`-parented node in `[content_start, tree.count())`
-    /// under `token.root` (via [`reparent_root_nodes`](Self::reparent_root_nodes) —
-    /// a no-op for any node a nested region already claimed) and closes the
-    /// `open_regions` bracket. `content_start` is `tree.count()` captured
-    /// right after the matching `begin_region` call, so the region's own
-    /// container node (minted before that capture) is never re-swept.
+    /// Close the bracket `begin_region` opened: sweeps every still-
+    /// `None`-parented node in `[content_start, count)` of the region's arena
+    /// under `token.root` (a no-op for any node a nested region already
+    /// claimed) and returns parentless minting to the outer arena.
+    /// `content_start` is `tree.count()` captured right after `begin_region`.
     pub fn end_region(&mut self, token: RegionToken, content_start: usize) {
-        let count = self.count.saturating_sub(content_start);
+        let count = self.region_len(token.root.region()).saturating_sub(content_start);
         self.reparent_root_nodes(content_start, count, token.root);
         self.open_regions = self.open_regions.saturating_sub(1);
+        self.building = token.outer;
     }
 
-    /// D4's second enforcement leg: true iff every root-parented node
-    /// (`parent_index[i].is_none()`) is a registered region — i.e. no
-    /// top-level subtree escaped `begin_region`. `mint`'s debug assertion
-    /// (the first leg) catches this at the moment a stray root is minted,
-    /// but only in non-test builds of a `manifold-ui` dependency
-    /// (`UI_CLIP_AND_Z_OWNERSHIP_DESIGN.md` D4); this walks a tree AFTER
-    /// the fact, unconditionally, so both `manifold-ui`'s own suite and
-    /// `manifold-app`'s can assert it directly against a real, fully-built
-    /// tree.
+    /// D4's second enforcement leg: true iff every root-parented node is a
+    /// registered region root — no top-level subtree escaped `begin_region`.
     pub fn all_roots_are_regions(&self) -> bool {
-        (0..self.count).all(|i| {
-            self.parent_index[i].is_some() || self.regions.iter().any(|&(_, root)| root.index() == i)
+        self.arenas.iter().all(|a| {
+            (0..a.len()).all(|i| a.parent_index[i].is_some() || a.sub_regions.iter().any(|s| s.root.slot() == i))
         })
     }
 
-    /// Reparent all root-level nodes (parent_id == -1) in the index range
-    /// [from_index..from_index+count) under the given parent.
-    /// Used by the inspector to wrap built sub-panel nodes under a ClipRegion.
-    pub fn reparent_root_nodes(&mut self, from_index: usize, count: usize, new_parent: NodeId) {
-        let end = (from_index + count).min(self.count);
-        for i in from_index..end {
-            if self.parent_index[i].is_none() {
-                self.parent_index[i] = Some(new_parent);
-                self.link_child(self.id_at(i), Some(new_parent));
+    /// Reparent all root-level nodes in slots `[from, from + count)` of
+    /// `new_parent`'s arena under `new_parent`.
+    pub fn reparent_root_nodes(&mut self, from: usize, count: usize, new_parent: NodeId) {
+        let region = new_parent.region();
+        let end = (from + count).min(self.region_len(region));
+        for i in from..end {
+            let arena = &mut self.arenas[region as usize];
+            if arena.parent_index[i].is_none() && i != new_parent.slot() {
+                arena.parent_index[i] = Some(new_parent);
+                let child = self.id_in(region, i);
+                self.link_child(child, Some(new_parent));
             }
         }
     }
 
     /// Offset the Y position of node `id` and all its descendants by `dy`.
-    /// Uses the existing first_child / next_sibling linked list — no allocation.
-    /// Nesting depth is bounded by tree depth (max ~2 in practice).
+    /// Uses the first_child / next_sibling links — no allocation.
     pub fn offset_node_and_children(&mut self, id: NodeId, dy: f32) {
-        if !self.is_live(id) {
+        let Some((arena, slot)) = self.live_mut(id) else {
             return;
-        }
-        let idx = id.index();
-        self.nodes[idx].bounds.y += dy;
-        self.nodes[idx].flags |= UIFlags::DIRTY;
-        self.has_dirty = true;
+        };
+        Self::offset_subtree(arena, slot, dy);
+    }
 
-        let mut child = self.first_child[idx];
+    fn offset_subtree(arena: &mut RegionArena, slot: usize, dy: f32) {
+        arena.nodes[slot].bounds.y += dy;
+        arena.nodes[slot].flags |= UIFlags::DIRTY;
+        arena.has_dirty = true;
+        let mut child = arena.first_child[slot];
         while let Some(c) = child {
-            self.offset_node_and_children(c, dy);
-            child = self.next_sibling[c.index()];
+            Self::offset_subtree(arena, c.slot(), dy);
+            child = arena.next_sibling[c.slot()];
         }
     }
 
     // ── Mutation (O(1), marks dirty) ────────────────────────────────
 
     pub fn set_bounds(&mut self, id: NodeId, bounds: Rect) {
-        if !self.is_live(id) {
+        let Some((arena, slot)) = self.live_mut(id) else {
+            return;
+        };
+        let node = &mut arena.nodes[slot];
+        if node.bounds == bounds {
             return;
         }
-        let idx = id.index();
-        if self.nodes[idx].bounds == bounds {
-            return;
-        }
-        self.nodes[idx].bounds = bounds;
-        self.nodes[idx].flags |= UIFlags::DIRTY;
-        self.has_dirty = true;
+        node.bounds = bounds;
+        node.flags |= UIFlags::DIRTY;
+        arena.has_dirty = true;
     }
 
     pub fn set_style(&mut self, id: NodeId, style: UIStyle) {
-        if !self.is_live(id) {
+        let Some((arena, slot)) = self.live_mut(id) else {
+            return;
+        };
+        let node = &mut arena.nodes[slot];
+        if node.style == style {
             return;
         }
-        let idx = id.index();
-        if self.nodes[idx].style == style {
-            return;
-        }
-        self.nodes[idx].style = style;
-        self.nodes[idx].flags |= UIFlags::DIRTY;
-        self.has_dirty = true;
+        node.style = style;
+        node.flags |= UIFlags::DIRTY;
+        arena.has_dirty = true;
     }
 
     pub fn set_text(&mut self, id: NodeId, text: &str) {
-        if !self.is_live(id) {
+        let Some((arena, slot)) = self.live_mut(id) else {
+            return;
+        };
+        let node = &mut arena.nodes[slot];
+        if node.text.as_deref() == Some(text) {
             return;
         }
-        let idx = id.index();
-        if self.nodes[idx].text.as_deref() == Some(text) {
-            return;
+        // In-place updates (a clock, a readout) reuse the node's buffer.
+        match &mut node.text {
+            Some(t) => {
+                t.clear();
+                t.push_str(text);
+            }
+            None => node.text = Some(text.to_owned()),
         }
-        self.nodes[idx].text = Some(text.to_string());
-        self.nodes[idx].flags |= UIFlags::DIRTY;
-        self.has_dirty = true;
+        node.flags |= UIFlags::DIRTY;
+        arena.has_dirty = true;
     }
 
     /// Draw this node's text in an installed font (see `UINode::font_family`).
     pub fn set_font_family(&mut self, id: NodeId, family: &str) {
-        if !self.is_live(id) {
+        let Some((arena, slot)) = self.live_mut(id) else {
+            return;
+        };
+        let node = &mut arena.nodes[slot];
+        if node.font_family.as_deref() == Some(family) {
             return;
         }
-        let idx = id.index();
-        if self.nodes[idx].font_family.as_deref() == Some(family) {
-            return;
-        }
-        self.nodes[idx].font_family = Some(family.to_string());
-        self.nodes[idx].flags |= UIFlags::DIRTY;
-        self.has_dirty = true;
+        node.font_family = Some(family.to_string());
+        node.flags |= UIFlags::DIRTY;
+        arena.has_dirty = true;
     }
 
     pub fn set_flag(&mut self, id: NodeId, flag: UIFlags) {
-        if !self.is_live(id) {
+        let Some((arena, slot)) = self.live_mut(id) else {
+            return;
+        };
+        let node = &mut arena.nodes[slot];
+        if node.flags.contains(flag) {
             return;
         }
-        let idx = id.index();
-        if self.nodes[idx].flags.contains(flag) {
-            return;
-        }
-        self.nodes[idx].flags |= flag | UIFlags::DIRTY;
-        self.has_dirty = true;
+        node.flags |= flag | UIFlags::DIRTY;
+        arena.has_dirty = true;
     }
 
     pub fn clear_flag(&mut self, id: NodeId, flag: UIFlags) {
-        if !self.is_live(id) {
+        let Some((arena, slot)) = self.live_mut(id) else {
+            return;
+        };
+        let node = &mut arena.nodes[slot];
+        if !node.flags.intersects(flag) {
             return;
         }
-        let idx = id.index();
-        if !self.nodes[idx].flags.intersects(flag) {
-            return;
-        }
-        self.nodes[idx].flags.remove(flag);
-        self.nodes[idx].flags |= UIFlags::DIRTY;
-        self.has_dirty = true;
+        node.flags.remove(flag);
+        node.flags |= UIFlags::DIRTY;
+        arena.has_dirty = true;
     }
 
     pub fn has_flag(&self, id: NodeId, flag: UIFlags) -> bool {
-        if !self.is_live(id) {
-            return false;
-        }
-        self.nodes[id.index()].flags.contains(flag)
+        self.get_node(id).is_some_and(|n| n.flags.contains(flag))
     }
 
     pub fn set_visible(&mut self, id: NodeId, visible: bool) {
@@ -820,24 +886,62 @@ impl UITree {
         }
     }
 
+    // ── Paint order (D7) ─────────────────────────────────────────────
+
+    /// Visit every sub-region in paint order: tier ascending, then region
+    /// rank (the region id), then local insertion. Fixed-size loops over a
+    /// handful of entries; no sort, no allocation.
+    fn for_each_sub_region(&self, mut f: impl FnMut(u8, usize)) {
+        for tier in TIERS {
+            for (r, arena) in self.arenas.iter().enumerate() {
+                for (i, sub) in arena.sub_regions.iter().enumerate() {
+                    if sub.tier == tier {
+                        f(r as u8, i);
+                    }
+                }
+            }
+        }
+    }
+
     // ── Hit testing (O(n × depth)) ─────────────────────────────────
 
     /// Find the topmost interactive, visible, non-disabled node at `pos`.
-    /// Returns `None` if nothing hit. Walk reverse insertion order.
+    /// Walks sub-regions in reverse paint order (tier descending, then region
+    /// rank descending, then local insertion descending) and, inside one,
+    /// reverse slot order — so an overlay, ghost or dropdown is hit before the
+    /// panel it covers. Slots no sub-region owns (bare roots in a test tree)
+    /// come last, arena by arena in reverse.
     pub fn hit_test(&self, pos: Vec2) -> Option<NodeId> {
-        for i in (0..self.count).rev() {
-            let n = &self.nodes[i];
-            let required = UIFlags::VISIBLE | UIFlags::INTERACTIVE;
-            if !n.flags.contains(required) {
+        for tier in TIERS.into_iter().rev() {
+            for arena in self.arenas.iter().rev() {
+                for i in (0..arena.sub_regions.len()).rev() {
+                    if arena.sub_regions[i].tier != tier {
+                        continue;
+                    }
+                    let (start, end) = arena.sub_span(i);
+                    if let Some(hit) = Self::hit_span(arena, start, end, pos) {
+                        return Some(hit);
+                    }
+                }
+            }
+        }
+        for arena in self.arenas.iter().rev() {
+            let unowned = arena.sub_regions.first().map_or(arena.len(), |s| s.root.slot());
+            if let Some(hit) = Self::hit_span(arena, 0, unowned, pos) {
+                return Some(hit);
+            }
+        }
+        None
+    }
+
+    fn hit_span(arena: &RegionArena, start: usize, end: usize, pos: Vec2) -> Option<NodeId> {
+        let required = UIFlags::VISIBLE | UIFlags::INTERACTIVE;
+        for i in (start..end).rev() {
+            let n = &arena.nodes[i];
+            if !n.flags.contains(required) || n.flags.contains(UIFlags::DISABLED) || !n.bounds.contains(pos) {
                 continue;
             }
-            if n.flags.contains(UIFlags::DISABLED) {
-                continue;
-            }
-            if !n.bounds.contains(pos) {
-                continue;
-            }
-            if !self.is_inside_clip_ancestors(i, pos) {
+            if !Self::is_inside_clip_ancestors(arena, i, pos) {
                 continue;
             }
             return Some(n.id);
@@ -847,16 +951,14 @@ impl UITree {
 
     /// Walk up the parent chain to verify the point is inside all
     /// ClipsChildren ancestor bounds.
-    fn is_inside_clip_ancestors(&self, index: usize, pos: Vec2) -> bool {
-        let mut pid = self.parent_index[index];
+    fn is_inside_clip_ancestors(arena: &RegionArena, slot: usize, pos: Vec2) -> bool {
+        let mut pid = arena.parent_index[slot];
         while let Some(p) = pid {
-            let p = p.index();
-            if self.nodes[p].flags.contains(UIFlags::CLIPS_CHILDREN)
-                && !self.nodes[p].bounds.contains(pos)
-            {
+            let p = p.slot();
+            if arena.nodes[p].flags.contains(UIFlags::CLIPS_CHILDREN) && !arena.nodes[p].bounds.contains(pos) {
                 return false;
             }
-            pid = self.parent_index[p];
+            pid = arena.parent_index[p];
         }
         true
     }
@@ -864,150 +966,128 @@ impl UITree {
     // ── Dirty tracking ─────────────────────────────────────────────
 
     pub fn mark_all_dirty(&mut self) {
-        for i in 0..self.count {
-            self.nodes[i].flags |= UIFlags::DIRTY;
+        for arena in &mut self.arenas {
+            for n in &mut arena.nodes {
+                n.flags |= UIFlags::DIRTY;
+            }
+            arena.has_dirty = !arena.nodes.is_empty();
         }
-        self.has_dirty = true;
     }
 
     pub fn clear_dirty(&mut self) {
-        for i in 0..self.count {
-            self.nodes[i].flags.remove(UIFlags::DIRTY);
-        }
-        self.has_dirty = false;
-    }
-
-    /// Check if any node in [start, end) has the DIRTY flag.
-    pub fn has_dirty_in_range(&self, start: usize, end: usize) -> bool {
-        let end = end.min(self.count);
-        for i in start..end {
-            if self.nodes[i].flags.contains(UIFlags::DIRTY) {
-                return true;
+        for arena in &mut self.arenas {
+            for n in &mut arena.nodes {
+                n.flags.remove(UIFlags::DIRTY);
             }
+            arena.has_dirty = false;
         }
-        false
     }
 
-    /// True if any DIRTY node in [start, end) lies OUTSIDE every range in
-    /// `covered`. The panel cache uses this to spot dirt in a panel's chrome —
-    /// nodes (tab strip, cog/Collapse, scrollbar) that sit in no sub-region and
-    /// so are invisible to the incremental sub-region repaint path. `covered`
-    /// is small (one range per card/chrome sub-panel) and the scan short-circuits
-    /// on the first uncovered dirty node, so this is the same order as the
-    /// per-frame `has_dirty_in_range` scans it sits beside.
+    /// Whether any node in `region`'s arena is dirty.
+    pub fn has_dirty_in_region(&self, region: u8) -> bool {
+        self.arenas[region as usize].has_dirty
+    }
+
+    /// Check if any node in slots `[start, end)` of `region` has the DIRTY flag.
+    pub fn has_dirty_in_range(&self, region: u8, start: usize, end: usize) -> bool {
+        let nodes = &self.arenas[region as usize].nodes;
+        let end = end.min(nodes.len());
+        nodes[start.min(end)..end].iter().any(|n| n.flags.contains(UIFlags::DIRTY))
+    }
+
+    /// True if any DIRTY node in slots `[start, end)` of `region` lies OUTSIDE
+    /// every range in `covered`. The panel cache uses this to spot dirt in a
+    /// panel's chrome — nodes (tab strip, cog/Collapse, scrollbar) that sit in
+    /// no sub-region and so are invisible to the incremental sub-region
+    /// repaint path.
     pub fn has_dirty_outside_ranges(
         &self,
+        region: u8,
         start: usize,
         end: usize,
         covered: &[(usize, usize)],
     ) -> bool {
-        let end = end.min(self.count);
-        for i in start..end {
-            if self.nodes[i].flags.contains(UIFlags::DIRTY)
-                && !covered.iter().any(|&(s, e)| i >= s && i < e)
-            {
-                return true;
-            }
-        }
-        false
+        let nodes = &self.arenas[region as usize].nodes;
+        let end = end.min(nodes.len());
+        (start.min(end)..end).any(|i| {
+            nodes[i].flags.contains(UIFlags::DIRTY) && !covered.iter().any(|&(s, e)| i >= s && i < e)
+        })
     }
 
-    /// Clear DIRTY flag on nodes in [start, end) and recompute global has_dirty.
-    pub fn clear_dirty_range(&mut self, start: usize, end: usize) {
-        let end = end.min(self.count);
-        for i in start..end {
-            self.nodes[i].flags.remove(UIFlags::DIRTY);
+    /// Clear DIRTY on slots `[start, end)` of `region` and recompute the
+    /// region's dirty flag.
+    pub fn clear_dirty_range(&mut self, region: u8, start: usize, end: usize) {
+        let arena = &mut self.arenas[region as usize];
+        let end = end.min(arena.len());
+        for n in &mut arena.nodes[start.min(end)..end] {
+            n.flags.remove(UIFlags::DIRTY);
         }
-        self.has_dirty = (0..self.count).any(|i| self.nodes[i].flags.contains(UIFlags::DIRTY));
+        arena.recompute_dirty();
     }
 
     // ── Rendering traversal (recursive DFS) ─────────────────────────
 
-    /// Walk the tree in DFS order and call the visitor for each visible node.
-    /// The visitor receives: (node, push_clip, pop_clip) signals.
-    ///
-    /// Root-level order is `(tier, insertion)` over the registered region
-    /// list (`UI_CLIP_AND_Z_OWNERSHIP_DESIGN.md` D1/D2), not raw array
-    /// index — a `Chrome` region always paints after (on top of) a `Base`
-    /// region regardless of which one built first this frame. Post-D4
-    /// migration every root IS a region, so this and the old "scan for
-    /// `parent_index[i].is_none()`" behavior agree on WHICH nodes are
-    /// visited; they differ only in order, and only across tiers.
+    /// Walk the tree in paint order and call the visitor for each visible
+    /// node, with push/pop clip signals: every sub-region of every arena by
+    /// (tier, region rank, local insertion) — `UI_CLIP_AND_Z_OWNERSHIP_DESIGN.md`
+    /// D2, UI_INVALIDATION_DESIGN.md D7.
     pub fn traverse<F>(&self, mut visitor: F)
     where
         F: FnMut(TraversalEvent),
     {
-        self.traverse_regions(0, usize::MAX, &mut visitor);
+        self.for_each_sub_region(|r, i| {
+            let arena = &self.arenas[r as usize];
+            Self::traverse_subtree(arena, arena.sub_regions[i].root.slot(), &mut visitor);
+        });
     }
 
-    /// Walk only region roots in `[start, end)` and their subtrees, in
-    /// `(tier, insertion)` order. Used for overlay rendering and per-panel
-    /// cache re-render — avoids traversing the entire tree when only a small
-    /// range of nodes needs to be drawn. See [`traverse`](Self::traverse)'s
-    /// doc for the ordering rationale.
-    pub fn traverse_range<F>(&self, start: usize, end: usize, mut visitor: F)
+    /// Walk only `region`'s sub-regions whose roots sit in slots
+    /// `[start, end)`, and their subtrees, in tier order. Used for overlay
+    /// and ghost rendering and the editor's base-content scan.
+    pub fn traverse_range<F>(&self, region: u8, start: usize, end: usize, mut visitor: F)
     where
         F: FnMut(TraversalEvent),
     {
-        self.traverse_regions(start, end, &mut visitor);
-    }
-
-    /// Shared implementation of [`traverse`](Self::traverse) and
-    /// [`traverse_range`](Self::traverse_range): visit every registered
-    /// region whose root index falls in `[start, end)`, tier-ascending
-    /// (`Base` first / furthest back, `Ghost` last / topmost), insertion
-    /// order breaking ties within a tier. Four linear passes over the
-    /// (small, ~10-entry) region list — no sort, no allocation, per the
-    /// hot-path discipline the design commits to (section 3).
-    fn traverse_regions<F>(&self, start: usize, end: usize, visitor: &mut F)
-    where
-        F: FnMut(TraversalEvent),
-    {
-        let end = end.min(self.count);
-        for tier in [ZTier::Base, ZTier::Chrome, ZTier::Overlay, ZTier::Ghost] {
-            for &(t, root) in &self.regions {
-                if t != tier {
-                    continue;
-                }
-                let idx = root.index();
-                if idx >= start && idx < end && self.is_live(root) {
-                    self.traverse_subtree(idx, visitor);
+        let arena = &self.arenas[region as usize];
+        for tier in TIERS {
+            for sub in arena.sub_regions.iter().filter(|s| s.tier == tier) {
+                let slot = sub.root.slot();
+                if slot >= start && slot < end {
+                    Self::traverse_subtree(arena, slot, &mut visitor);
                 }
             }
         }
     }
 
-    /// Flat sequential iteration over `[start, end)` — visits ALL visible nodes
-    /// regardless of parent_index. Nodes are stored in DFS pre-order (insertion
-    /// order), so sequential iteration produces correct draw order.
+    /// Flat sequential iteration over slots `[start, end)` of `region` —
+    /// visits ALL visible nodes regardless of parentage. Nodes are stored in
+    /// DFS pre-order (insertion order), so sequential iteration produces
+    /// correct draw order.
     ///
-    /// Handles clip regions by tracking which CLIPS_CHILDREN ancestors are active.
-    /// Used for sub-region rendering where nodes have been reparented and
-    /// `traverse_range` (which requires parent == -1) would skip them.
+    /// Handles clip regions by tracking which CLIPS_CHILDREN ancestors are
+    /// active, and pre-pushes the clips of ancestors outside the range, so a
+    /// sub-panel (one effect card) draws inside its scroll container.
     ///
     /// When `dirty_only` is true, only emits `Node` events for dirty nodes,
     /// but always processes clip push/pop for correct clipping of dirty children.
-    pub fn traverse_flat_range<F>(&self, start: usize, end: usize, dirty_only: bool, mut visitor: F)
+    pub fn traverse_flat_range<F>(&self, region: u8, start: usize, end: usize, dirty_only: bool, mut visitor: F)
     where
         F: FnMut(TraversalEvent),
     {
-        let end = end.min(self.count);
-        // Stack of (node_index, bounds) for active CLIPS_CHILDREN ancestors.
+        let arena = &self.arenas[region as usize];
+        let end = end.min(arena.len());
+        // Stack of (slot, bounds) for active CLIPS_CHILDREN ancestors.
         let mut clip_stack: Vec<(usize, Rect)> = Vec::new();
 
-        // Pre-push ancestor clip regions that are outside this range.
-        // Without this, sub-region rendering (e.g. a single effect card)
-        // misses the parent ClipRegion node and draws without clip context,
-        // causing content to render outside its scroll container.
-        if start < self.count {
+        if start < arena.len() {
             let mut ancestors: Vec<(usize, Rect)> = Vec::new();
-            let mut idx = self.parent_index[start];
+            let mut idx = arena.parent_index[start];
             while let Some(node_id) = idx {
-                let node = &self.nodes[node_id.index()];
+                let node = &arena.nodes[node_id.slot()];
                 if node.flags.contains(UIFlags::CLIPS_CHILDREN) {
-                    ancestors.push((node_id.index(), node.bounds));
+                    ancestors.push((node_id.slot(), node.bounds));
                 }
-                idx = self.parent_index[node_id.index()];
+                idx = arena.parent_index[node_id.slot()];
             }
             // Push outermost first (reverse order of discovery).
             for &(ci, bounds) in ancestors.iter().rev() {
@@ -1017,63 +1097,54 @@ impl UITree {
         }
 
         for i in start..end {
-            let node = &self.nodes[i];
+            let node = &arena.nodes[i];
             if !node.flags.contains(UIFlags::VISIBLE) {
                 continue;
             }
 
             // Pop clip regions for ancestors we've moved past.
-            // A clip owner at index `c` is still active if `i` is a descendant.
-            // Check by walking the parent chain of `i` — if no parent leads to
-            // `c`, we've left `c`'s subtree.
             while let Some(&(clip_idx, _)) = clip_stack.last() {
-                if self.is_ancestor_of(clip_idx, i) {
+                if Self::is_ancestor_of(arena, clip_idx, i) {
                     break;
                 }
                 clip_stack.pop();
                 visitor(TraversalEvent::PopClip);
             }
 
-            // Emit the node (skip non-dirty in dirty_only mode).
             if !dirty_only || node.flags.contains(UIFlags::DIRTY) {
                 visitor(TraversalEvent::Node(node));
             }
 
-            // Push clip if this node clips children.
             if node.flags.contains(UIFlags::CLIPS_CHILDREN) {
                 visitor(TraversalEvent::PushClip(node.bounds));
                 clip_stack.push((i, node.bounds));
             }
         }
 
-        // Pop remaining clip regions.
         for _ in &clip_stack {
             visitor(TraversalEvent::PopClip);
         }
     }
 
-    /// Check if `ancestor` is an ancestor of `descendant` by walking the parent chain.
-    /// Returns false if `ancestor == descendant`.
-    fn is_ancestor_of(&self, ancestor: usize, descendant: usize) -> bool {
-        let mut current = self.parent_index[descendant];
+    /// Check if `ancestor` is an ancestor of `descendant` (both slots of one
+    /// arena) by walking the parent chain. False if they are equal.
+    fn is_ancestor_of(arena: &RegionArena, ancestor: usize, descendant: usize) -> bool {
+        let mut current = arena.parent_index[descendant];
         while let Some(c) = current {
-            if c.index() == ancestor {
+            if c.slot() == ancestor {
                 return true;
             }
-            current = self.parent_index[c.index()];
+            current = arena.parent_index[c.slot()];
         }
         false
     }
 
-    fn traverse_subtree<F>(&self, index: usize, visitor: &mut F)
+    fn traverse_subtree<F>(arena: &RegionArena, slot: usize, visitor: &mut F)
     where
         F: FnMut(TraversalEvent),
     {
-        let node = &self.nodes[index];
-        let visible = node.flags.contains(UIFlags::VISIBLE);
-
-        // If this node is invisible, skip it AND all its children.
-        if !visible {
+        let node = &arena.nodes[slot];
+        if !node.flags.contains(UIFlags::VISIBLE) {
             return;
         }
 
@@ -1084,10 +1155,10 @@ impl UITree {
             visitor(TraversalEvent::PushClip(node.bounds));
         }
 
-        let mut child = self.first_child[index];
+        let mut child = arena.first_child[slot];
         while let Some(c) = child {
-            self.traverse_subtree(c.index(), visitor);
-            child = self.next_sibling[c.index()];
+            Self::traverse_subtree(arena, c.slot(), visitor);
+            child = arena.next_sibling[c.slot()];
         }
 
         if clipping {
@@ -1095,12 +1166,12 @@ impl UITree {
         }
     }
 
-    /// Get the parent of a node, or `None` for a root / stale / out-of-range id.
+    /// Get the parent of a node, or `None` for a root / stale id.
     pub fn parent_of(&self, id: NodeId) -> Option<NodeId> {
         if !self.is_live(id) {
             return None;
         }
-        self.parent_index[id.index()]
+        self.arenas[id.region() as usize].parent_index[id.slot()]
     }
 
     // ── Durable widget identity ─────────────────────────────────────
@@ -1112,13 +1183,12 @@ impl UITree {
         if !self.is_live(id) {
             return WidgetId::NONE;
         }
-        self.widget_ids[id.index()]
+        self.arenas[id.region() as usize].widget_ids[id.slot()]
     }
 
     /// The live [`NodeId`] that carries `widget` in the *current* build, if any
-    /// interactive node does. This is how a held `WidgetId` (press / hover /
-    /// focus, captured in an earlier frame) resolves back to a node the input
-    /// system can emit against or mutate — always a fresh, live id.
+    /// interactive node does — how a held `WidgetId` (press / hover / focus)
+    /// resolves back to a node the input system can act on.
     pub fn node_for_widget(&self, widget: WidgetId) -> Option<NodeId> {
         if widget == WidgetId::NONE {
             return None;
@@ -1129,27 +1199,19 @@ impl UITree {
     // ── Automation component names (D8, section 3) ──────────────────────────
 
     /// Register `id`'s durable component name (e.g. `"layer_header.mute"`) —
-    /// the automation selector surface's `name` field. Call once, right after
-    /// the builder that minted `id` returns, at a high-value interaction point
-    /// (section 3's naming-pass scope) — most nodes stay unnamed and stay reachable via
-    /// text/type/structure. A no-op (debug-asserts) on a stale/invalid id.
-    ///
-    /// Accepts both `&'static str` literals (the mute/solo-chip style: one
-    /// static name shared across every instance, disambiguated by `under_text`)
-    /// and owned `String`s (the per-row identity style: param-id-derived names
-    /// on converged card rows, `WIDGET_TREE_DESIGN.md` section 5 — a row's own name IS
-    /// its selector because `under_text` can't reach a control past the value
-    /// cell in a flat row). Owned names live in the tree's `names` vec and die
-    /// with the rebuild — no leak, no global interner.
+    /// the automation selector surface's `name` field. Accepts `&'static str`
+    /// literals and owned `String`s (per-row identity names); owned names die
+    /// with the rebuild. A no-op (debug-asserts) on a stale/invalid id.
     pub fn set_name(&mut self, id: NodeId, name: impl Into<Box<str>>) {
         debug_assert!(
             self.is_live(id),
-            "set_name on a stale/invalid NodeId (index {} gen {})",
-            id.index(),
+            "set_name on a stale/invalid NodeId (region {} slot {} gen {})",
+            id.region(),
+            id.slot(),
             id.generation()
         );
-        if self.is_live(id) {
-            self.names[id.index()] = Some(name.into());
+        if let Some((arena, slot)) = self.live_mut(id) {
+            arena.names[slot] = Some(name.into());
         }
     }
 
@@ -1159,96 +1221,57 @@ impl UITree {
         if !self.is_live(id) {
             return None;
         }
-        self.names[id.index()].as_deref()
+        self.arenas[id.region() as usize].names[id.slot()].as_deref()
     }
 
     // ── Clear ───────────────────────────────────────────────────────
 
+    /// Drop every region's nodes. `gen_counter` keeps climbing, so ids minted
+    /// after this never collide with ids from before it.
     pub fn clear(&mut self) {
-        self.nodes.clear();
-        self.parent_index.clear();
-        self.first_child.clear();
-        self.next_sibling.clear();
-        self.last_child.clear();
-        // Drop the slot generations but keep `gen_counter` climbing, so ids minted
-        // after this clear never collide with ids from before it (the slots are
-        // reused from index 0, but with fresh, higher generations).
-        self.generations.clear();
-        self.widget_ids.clear();
-        self.names.clear();
-        self.child_counts.clear();
-        self.root_minted.clear();
-        self.root_count = 0;
+        for arena in &mut self.arenas {
+            arena.clear();
+        }
         // Retain the map's capacity — the editor clears+refills it every frame.
         self.widget_to_node.clear();
-        self.regions.clear();
-        // `open_regions` is NOT reset here: a `clear()` mid-build (none exist
-        // today) would otherwise silently drop the bracket a caller is still
-        // holding a token for. Normal usage always pairs begin/end within one
-        // build pass, so this is zero-cost in practice and fails loud (the D4
-        // assertion) instead of silent if that assumption is ever broken.
-        self.count = 0;
-        self.has_dirty = false;
+        // `open_regions` and `building` are NOT reset: a `clear()` mid-build
+        // would otherwise silently drop the bracket a caller still holds a
+        // token for.
         self.structure_version = self.structure_version.wrapping_add(1);
     }
 
-    /// Truncate the tree to `from_index` nodes, removing everything at and
-    /// after that index. Used for partial rebuilds: panels before `from_index`
-    /// keep their nodes intact; panels at/after are rebuilt from scratch.
-    ///
-    /// SAFETY: `from_index` must be a panel boundary — no remaining node
-    /// may have children, siblings, or parents at index >= from_index.
-    /// This is guaranteed when panels are self-contained subtrees built
-    /// sequentially (each panel's nodes are contiguous).
-    pub fn truncate_from(&mut self, from_index: usize) {
-        if from_index >= self.count {
-            return;
-        }
-        // Drop the reverse-lookup entries for the interactive nodes being removed,
-        // before their rows go. Surviving nodes (< from_index) keep their entries
-        // and their still-live ids untouched.
-        for i in from_index..self.count {
-            if self.nodes[i].flags.contains(UIFlags::INTERACTIVE) {
-                self.widget_to_node.remove(&self.widget_ids[i]);
+    /// Drop `region`'s nodes only (D7): every other region keeps its nodes,
+    /// ids and widget entries. Its next build reproduces the same slots and
+    /// root salts, so its `WidgetId`s are stable across the rebuild.
+    pub fn clear_region(&mut self, region: u8) {
+        let arena = &mut self.arenas[region as usize];
+        for (n, w) in arena.nodes.iter().zip(&arena.widget_ids) {
+            if n.flags.contains(UIFlags::INTERACTIVE) {
+                self.widget_to_node.remove(w);
             }
         }
-        self.nodes.truncate(from_index);
-        self.parent_index.truncate(from_index);
-        self.first_child.truncate(from_index);
-        self.next_sibling.truncate(from_index);
-        self.last_child.truncate(from_index);
-        // Drop the truncated slots' generations; `gen_counter` keeps climbing, so
-        // the rebuilt tail gets fresh generations and ids minted against the old
-        // tail (e.g. a panel that didn't re-capture after a partial rebuild) no
-        // longer validate.
-        self.generations.truncate(from_index);
-        self.widget_ids.truncate(from_index);
-        self.names.truncate(from_index);
-        self.child_counts.truncate(from_index);
-        // Surviving parents keep their child_counts (a partial rebuild's safety
-        // invariant guarantees their children all survived), so the rebuilt tail
-        // re-salts correctly. Only `root_count` needs recomputing — the rebuilt
-        // tail's roots must continue the surviving roots' salt sequence.
-        //
-        // Count roots by `root_minted` (mint-time parentage), NOT current
-        // `parent_index.is_none()`: a survivor minted as a root but later
-        // reparented (the inspector wraps subpanels under a ClipRegion) still
-        // consumed its root salt, and undercounting it here re-issued that salt
-        // to a rebuilt root → a `WidgetId` collision (see `root_minted`).
-        self.root_count = self.root_minted[..from_index]
-            .iter()
-            .filter(|&&r| r)
-            .count() as u32;
-        self.root_minted.truncate(from_index);
-        // Drop region entries whose root node was truncated away — a partial
-        // rebuild that re-enters the same range mints a fresh region via a
-        // fresh `begin_region` call, so a stale entry here would leave a dead
-        // NodeId in the tier-sorted render walk (harmless — `is_live` filters
-        // it — but keeps the region list bounded and honest).
-        self.regions.retain(|&(_, root)| root.index() < from_index);
-        self.count = from_index;
-        self.has_dirty = true;
+        arena.clear();
         self.structure_version = self.structure_version.wrapping_add(1);
+    }
+
+    /// Give a region's root clip a new rect, for a region its panel laid out
+    /// again in place at a new rect.
+    pub fn set_region_rect(&mut self, region: u8, rect: Rect) {
+        if let Some(root) = self.arenas[region as usize].sub_regions.first().map(|s| s.root) {
+            self.set_bounds(root, rect);
+        }
+    }
+
+    /// Move every node of `region` by `(dx, dy)` in place (D7): a region whose
+    /// rect moved but kept its size is translated, never rebuilt.
+    pub fn translate_region(&mut self, region: u8, dx: f32, dy: f32) {
+        let arena = &mut self.arenas[region as usize];
+        for n in &mut arena.nodes {
+            n.bounds.x += dx;
+            n.bounds.y += dy;
+            n.flags |= UIFlags::DIRTY;
+        }
+        arena.has_dirty = !arena.nodes.is_empty();
     }
 }
 
@@ -1279,11 +1302,12 @@ mod tests {
         assert_eq!(tree.count(), 0);
 
         let root = tree.add_panel(None, 0.0, 0.0, 800.0, 600.0, default_style());
-        assert_eq!(root.index(), 0);
+        assert_eq!(root.slot(), 0);
+        assert_eq!(root.region(), DEFAULT_REGION);
         assert_eq!(tree.count(), 1);
 
         let child = tree.add_button(Some(root), 10.0, 10.0, 100.0, 30.0, default_style(), "OK");
-        assert_eq!(child.index(), 1);
+        assert_eq!(child.slot(), 1);
         assert_eq!(tree.count(), 2);
     }
 
@@ -1322,16 +1346,17 @@ mod tests {
         // In-place set_* mutations must NOT bump it (intent ids stay valid).
         tree.set_flag(btn, UIFlags::PRESSED);
         tree.set_text(btn, "B");
+        tree.translate_region(DEFAULT_REGION, 3.0, 4.0);
         assert_eq!(
             tree.structure_version(),
             v1,
-            "set_* mutations must not bump structure_version"
+            "set_* mutations and translation must not bump structure_version"
         );
 
-        // truncate + clear are structural.
-        tree.truncate_from(0);
+        // clear_region + clear are structural.
+        tree.clear_region(DEFAULT_REGION);
         let v2 = tree.structure_version();
-        assert!(v2 > v1, "truncate_from must bump structure_version");
+        assert!(v2 > v1, "clear_region must bump structure_version");
         tree.clear();
         assert!(tree.structure_version() > v2, "clear must bump structure_version");
     }
@@ -1396,10 +1421,7 @@ mod tests {
 
     #[test]
     fn traversal_order() {
-        // Post-D1/D4: `traverse()` visits registered regions, not a raw
-        // root scan — build this fixture the way `ui_root.rs` now does
-        // (`begin_region`, build content, `end_region`) instead of a bare
-        // `add_panel(None, ...)`.
+        // `traverse()` visits registered regions, not a raw root scan.
         let mut tree = UITree::new();
         let region = tree.begin_region(
             Rect::new(0.0, 0.0, 800.0, 600.0),
@@ -1419,14 +1441,11 @@ mod tests {
             }
         });
 
-        let indices: Vec<usize> = order.iter().map(|n| n.index()).collect();
-        assert_eq!(indices, vec![0, 1, 2]); // DFS pre-order: region root, A, B
+        let slots: Vec<usize> = order.iter().map(|n| n.slot()).collect();
+        assert_eq!(slots, vec![0, 1, 2]); // DFS pre-order: region root, A, B
     }
 
-    /// D4's second enforcement leg (`all_roots_are_regions`), positive case:
-    /// a tree built entirely through `begin_region`/`end_region` — several
-    /// regions, several tiers, some with multi-node content swept under them
-    /// — has every root accounted for.
+    /// D4's second enforcement leg (`all_roots_are_regions`), positive case.
     #[test]
     fn all_roots_are_regions_holds_for_a_properly_regioned_tree() {
         let mut tree = UITree::new();
@@ -1437,7 +1456,7 @@ mod tests {
         tree.add_panel(None, 0.0, 20.0, 100.0, 20.0, default_style());
         tree.end_region(chrome, start);
 
-        let base = tree.begin_region(Rect::new(0.0, 40.0, 800.0, 500.0), ZTier::Base, "base", UIFlags::empty());
+        let base = tree.begin_region_in(2, Rect::new(0.0, 40.0, 800.0, 500.0), ZTier::Base, "base", UIFlags::empty());
         let start = tree.count();
         tree.add_panel(None, 0.0, 40.0, 200.0, 200.0, default_style());
         tree.end_region(base, start);
@@ -1455,12 +1474,8 @@ mod tests {
         assert!(tree.all_roots_are_regions());
     }
 
-    /// D4's second enforcement leg, negative case: a stray root-parented
-    /// node created with no `begin_region` bracket open at all (the exact
-    /// per-panel hand-clip shape D1 forbids) is caught by
-    /// `all_roots_are_regions` even though `mint`'s debug assertion is
-    /// `cfg(not(test))`-gated and stays silent inside this crate's own
-    /// suite (`tree.rs`'s `mint` doc comment).
+    /// D4's second enforcement leg, negative case: a stray root-parented node
+    /// created with no `begin_region` bracket open is caught.
     #[test]
     fn all_roots_are_regions_catches_a_stray_root() {
         let mut tree = UITree::new();
@@ -1489,9 +1504,9 @@ mod tests {
         assert_eq!(tree.count(), 0);
         assert!(!tree.has_dirty());
 
-        // Can re-add after clear — indices restart from 0 (generation differs)
+        // Can re-add after clear — slots restart from 0 (generation differs)
         let id = tree.add_panel(None, 0.0, 0.0, 100.0, 100.0, default_style());
-        assert_eq!(id.index(), 0);
+        assert_eq!(id.slot(), 0);
     }
 
     #[test]
@@ -1501,93 +1516,154 @@ mod tests {
         tree.add_panel(None, 0.0, 20.0, 100.0, 20.0, default_style());
         tree.add_panel(None, 0.0, 40.0, 100.0, 20.0, default_style());
 
-        tree.offset_nodes(1, 2, 100.0);
+        tree.offset_nodes(DEFAULT_REGION, 1, 2, 100.0);
 
         assert_eq!(tree.get_bounds(tree.id_at(0)).y, 0.0);
         assert_eq!(tree.get_bounds(tree.id_at(1)).y, 120.0);
         assert_eq!(tree.get_bounds(tree.id_at(2)).y, 140.0);
     }
 
-    #[test]
-    fn truncate_from_preserves_earlier_nodes() {
-        let mut tree = UITree::new();
-        // Panel A: root + child
-        let a_root = tree.add_panel(None, 0.0, 0.0, 100.0, 50.0, default_style());
-        let _a_child = tree.add_label(Some(a_root), 10.0, 10.0, 80.0, 20.0, "A", default_style());
-        let boundary = tree.count(); // = 2
-
-        // Panel B: root + child
-        let b_root = tree.add_panel(None, 0.0, 50.0, 100.0, 50.0, default_style());
-        let _b_child = tree.add_label(Some(b_root), 10.0, 60.0, 80.0, 20.0, "B", default_style());
-        assert_eq!(tree.count(), 4);
-
-        // Truncate at panel B boundary
-        tree.truncate_from(boundary);
-        assert_eq!(tree.count(), 2);
-        assert!(tree.has_dirty());
-
-        // Panel A nodes intact
-        assert_eq!(tree.get_bounds(tree.id_at(0)).y, 0.0);
-        assert_eq!(tree.get_node(tree.id_at(1)).unwrap().text.as_deref(), Some("A"));
-
-        // Can re-add after truncation — indices continue from the truncation point
-        let new_id = tree.add_panel(None, 0.0, 100.0, 100.0, 50.0, default_style());
-        assert_eq!(new_id.index(), 2);
-        assert_eq!(tree.count(), 3);
-    }
-
-    #[test]
-    fn truncate_from_beyond_count_is_noop() {
-        let mut tree = UITree::new();
-        tree.add_panel(None, 0.0, 0.0, 100.0, 100.0, default_style());
-        tree.clear_dirty();
-
-        tree.truncate_from(5);
-        assert_eq!(tree.count(), 1);
-        assert!(!tree.has_dirty());
-    }
-
-    /// Regression (the Audio Setup double-click root cause): a partial rebuild
-    /// must re-issue the SAME root salt a node had before the rebuild, even when
-    /// an earlier root was REPARENTED (the inspector wraps its subpanels under a
-    /// ClipRegion). Pre-fix, `truncate_from` recomputed `root_count` from the
-    /// current root-parented survivors — undercounting the reparented roots that
-    /// had already consumed a salt — so the rebuilt root got a lower salt: its
-    /// `WidgetId` churned AND collided with the surviving reparented root (a
-    /// press+release then resolved to different widgets → the dead first click).
-    #[test]
-    fn truncate_from_reproduces_root_salt_after_reparent() {
-        let mut tree = UITree::new();
-
-        // A "static region" that mimics the inspector: a container plus three
-        // interactive roots that get wrapped under it. They consume root salts
-        // 1, 2, 3 at mint, then stop being roots.
-        let container = tree.add_panel(None, 0.0, 0.0, 100.0, 100.0, default_style());
+    /// Build a region the way a window's panel build does: clear it, open it,
+    /// build content flat, sweep it under the root. Returns the button ids.
+    fn build_region(tree: &mut UITree, region: u8, tier: ZTier, x: f32) -> Vec<NodeId> {
+        tree.clear_region(region);
+        let token = tree.begin_region_in(region, Rect::new(x, 0.0, 100.0, 100.0), tier, "r", UIFlags::empty());
         let start = tree.count();
-        tree.add_button(None, 0.0, 0.0, 10.0, 10.0, default_style(), "a");
-        tree.add_button(None, 0.0, 10.0, 10.0, 10.0, default_style(), "b");
-        tree.add_button(None, 0.0, 20.0, 10.0, 10.0, default_style(), "c");
-        tree.reparent_root_nodes(start, 3, container);
+        let row = tree.add_panel(None, x, 0.0, 100.0, 20.0, default_style());
+        let a = tree.add_button(Some(row), x, 0.0, 50.0, 20.0, default_style(), "a");
+        let b = tree.add_button(None, x, 40.0, 50.0, 20.0, default_style(), "b");
+        tree.end_region(token, start);
+        vec![a, b]
+    }
 
-        // A "scroll region" interactive root, built after the static boundary —
-        // its identity must survive a partial rebuild (the overlay-chrome case).
-        let boundary = tree.count();
-        let scroll_btn = tree.add_button(None, 0.0, 40.0, 10.0, 10.0, default_style(), "scroll");
-        let w_before = tree.widget_of(scroll_btn);
+    /// INV-14: rebuilding one region touches only its own arena. The other
+    /// regions' ids stay live, their nodes keep their state, and their widget
+    /// entries still resolve.
+    #[test]
+    fn clear_region_keeps_other_regions_live() {
+        let mut tree = UITree::new();
+        let left = build_region(&mut tree, 0, ZTier::Base, 0.0);
+        let mid = build_region(&mut tree, 1, ZTier::Base, 200.0);
+        let right = build_region(&mut tree, 2, ZTier::Chrome, 400.0);
+        tree.set_text(left[0], "kept");
+        tree.clear_dirty();
+        let v = tree.structure_version();
 
-        // Partial rebuild from the boundary (mid-click overlay rebuild).
-        tree.truncate_from(boundary);
-        let scroll_btn2 = tree.add_button(None, 0.0, 40.0, 10.0, 10.0, default_style(), "scroll");
-        let w_after = tree.widget_of(scroll_btn2);
+        let rebuilt = build_region(&mut tree, 1, ZTier::Base, 200.0);
 
-        assert_eq!(
-            w_before, w_after,
-            "a rebuilt root must reproduce its salt across a partial rebuild — \
-             reparented roots still consumed their salt, so the count must include them"
-        );
-        // The reparented roots keep distinct WidgetIds from the rebuilt one (no
-        // collision — the debug_assert in `mint` would also catch this).
-        assert_ne!(w_after, tree.widget_of(container));
+        assert!(tree.structure_version() > v);
+        for &id in left.iter().chain(&right) {
+            assert!(tree.is_live(id), "a region rebuild left {id:?} in another region alone");
+            assert_eq!(tree.node_for_widget(tree.widget_of(id)), Some(id));
+        }
+        assert_eq!(tree.get_node(left[0]).unwrap().text.as_deref(), Some("kept"));
+        assert!(!tree.has_dirty_in_region(0), "an untouched region stays clean");
+        assert!(!tree.has_dirty_in_region(2));
+        for &id in &mid {
+            assert!(!tree.is_live(id), "the rebuilt region's old ids are stale");
+        }
+        for (&old, &new) in mid.iter().zip(&rebuilt) {
+            assert_eq!(tree.node_for_widget(tree.widget_of(new)), Some(new));
+            assert_eq!(old.slot(), new.slot(), "a region rebuild reproduces its slots");
+        }
+        assert_eq!(tree.region_len(1), 4, "root, row and two buttons");
+        assert!(tree.all_roots_are_regions());
+    }
+
+    /// Salts are seeded by region id and counted per arena, so a region
+    /// rebuilt alone reproduces every `WidgetId` it had (BUG-bluz6 (per-region
+    /// UI tree storage)), including after an earlier root was reparented —
+    /// the case that once re-issued a consumed root salt.
+    #[test]
+    fn region_rebuild_keeps_widget_ids() {
+        let mut tree = UITree::new();
+        let _chrome = build_region(&mut tree, 0, ZTier::Chrome, 0.0);
+        let before = build_region(&mut tree, 3, ZTier::Base, 200.0);
+        let _after = build_region(&mut tree, 6, ZTier::Base, 400.0);
+        let widgets: Vec<_> = before.iter().map(|&id| tree.widget_of(id)).collect();
+
+        for _ in 0..3 {
+            let rebuilt = build_region(&mut tree, 3, ZTier::Base, 200.0);
+            let again: Vec<_> = rebuilt.iter().map(|&id| tree.widget_of(id)).collect();
+            assert_eq!(widgets, again, "a region rebuild must reproduce its widget ids");
+        }
+        // A full rebuild in the same order gives the same ids too.
+        tree.clear();
+        build_region(&mut tree, 0, ZTier::Chrome, 0.0);
+        let full = build_region(&mut tree, 3, ZTier::Base, 200.0);
+        assert_eq!(widgets, full.iter().map(|&id| tree.widget_of(id)).collect::<Vec<_>>());
+    }
+
+    /// INV-18: identical builds in different regions never share a `WidgetId`,
+    /// before or after one region rebuilds.
+    #[test]
+    fn widget_ids_unique_across_regions() {
+        let mut tree = UITree::new();
+        for region in 0..MAX_REGIONS as u8 {
+            build_region(&mut tree, region, ZTier::Base, 0.0);
+        }
+        let unique = |tree: &UITree| {
+            let mut ids: Vec<_> = tree.all_nodes().map(|n| tree.widget_of(n.id)).collect();
+            let total = ids.len();
+            ids.sort();
+            ids.dedup();
+            ids.len() == total
+        };
+        assert!(unique(&tree), "two live nodes share a WidgetId across regions");
+        build_region(&mut tree, 7, ZTier::Base, 0.0);
+        assert!(unique(&tree), "a region rebuild re-issued another region's WidgetId");
+    }
+
+    /// The hit-order rule: reverse paint order — tier descending, then region
+    /// rank descending, then local insertion descending — whatever order the
+    /// regions were built or rebuilt in.
+    #[test]
+    fn hit_test_follows_region_paint_order() {
+        let mut tree = UITree::new();
+        // Built out of rank order: rank 5 Base, rank 2 Chrome, rank 1 Base.
+        let base_hi = build_region(&mut tree, 5, ZTier::Base, 0.0);
+        let chrome = build_region(&mut tree, 2, ZTier::Chrome, 0.0);
+        let base_lo = build_region(&mut tree, 1, ZTier::Base, 0.0);
+        let at = Vec2::new(10.0, 10.0);
+        assert_eq!(tree.hit_test(at), Some(chrome[0]), "Chrome tier beats Base regardless of rank");
+
+        tree.clear_region(2);
+        assert_eq!(tree.hit_test(at), Some(base_hi[0]), "higher rank wins inside a tier");
+
+        tree.clear_region(5);
+        assert_eq!(tree.hit_test(at), Some(base_lo[0]));
+
+        // Two sub-regions in one arena: the later insertion is on top.
+        let token = tree.begin_region_in(1, Rect::new(0.0, 0.0, 100.0, 100.0), ZTier::Base, "late", UIFlags::empty());
+        let start = tree.count();
+        let late = tree.add_button(None, 0.0, 0.0, 50.0, 20.0, default_style(), "late");
+        tree.end_region(token, start);
+        assert_eq!(tree.hit_test(at), Some(late));
+
+        // Paint order matches: the walk visits rank 1 sub-regions in insertion order.
+        let mut texts = Vec::new();
+        tree.traverse(|ev| {
+            if let TraversalEvent::Node(n) = ev
+                && let Some(t) = n.text.as_deref()
+            {
+                texts.push(t.to_string());
+            }
+        });
+        assert_eq!(texts, ["a", "b", "late"]);
+    }
+
+    #[test]
+    fn translate_region_moves_only_that_region() {
+        let mut tree = UITree::new();
+        let a = build_region(&mut tree, 0, ZTier::Base, 0.0);
+        let b = build_region(&mut tree, 1, ZTier::Base, 200.0);
+        tree.clear_dirty();
+        tree.translate_region(1, 5.0, -3.0);
+        assert_eq!(tree.get_bounds(a[0]).x, 0.0);
+        assert_eq!(tree.get_bounds(b[0]).x, 205.0);
+        assert_eq!(tree.get_bounds(b[0]).y, -3.0);
+        assert!(tree.has_dirty_in_region(1) && !tree.has_dirty_in_region(0));
+        assert!(tree.is_live(b[0]), "translation keeps ids");
     }
 
     #[test]
@@ -1639,33 +1715,31 @@ mod tests {
         let mut tree = UITree::new();
         assert!(!tree.is_live(NodeId::PLACEHOLDER));
         tree.add_panel(None, 0.0, 0.0, 10.0, 10.0, default_style());
-        // Even with a node at index 0, the placeholder (generation 0) doesn't match.
+        // Even with a node at slot 0, the placeholder (generation 0) doesn't match.
         assert!(!tree.is_live(NodeId::PLACEHOLDER));
     }
 
     #[test]
-    fn ids_at_same_index_differ_by_generation_across_clear() {
+    fn ids_at_same_slot_differ_by_generation_across_clear() {
         let mut tree = UITree::new();
         let before = tree.add_panel(None, 0.0, 0.0, 10.0, 10.0, default_style());
         tree.clear();
         let after = tree.add_panel(None, 0.0, 0.0, 10.0, 10.0, default_style());
-        assert_eq!(before.index(), after.index(), "both reuse slot 0");
+        assert_eq!(before.slot(), after.slot(), "both reuse slot 0");
         assert_ne!(before, after, "but the generation must differ");
         assert!(!tree.is_live(before), "the pre-clear id is stale");
         assert!(tree.is_live(after));
     }
 
     #[test]
-    fn stale_id_after_truncate_is_inert() {
+    fn stale_id_after_clear_region_is_inert() {
         let mut tree = UITree::new();
-        let keep = tree.add_panel(None, 0.0, 0.0, 10.0, 10.0, default_style());
-        let boundary = tree.count();
-        let doomed = tree.add_label(None, 0.0, 20.0, 10.0, 10.0, "old", default_style());
-
-        tree.truncate_from(boundary);
+        let keep = build_region(&mut tree, 0, ZTier::Base, 0.0)[0];
+        let doomed = build_region(&mut tree, 1, ZTier::Base, 0.0)[0];
         // The slot is reused by a different node.
-        let reused = tree.add_label(None, 0.0, 20.0, 10.0, 10.0, "new", default_style());
-        assert_eq!(doomed.index(), reused.index(), "slot reused");
+        let reused = build_region(&mut tree, 1, ZTier::Base, 0.0)[0];
+        assert_eq!(doomed.slot(), reused.slot(), "slot reused");
+        tree.set_text(reused, "new");
 
         // Reads through the stale id are inert — never the new occupant.
         assert!(!tree.is_live(doomed));
@@ -1676,26 +1750,23 @@ mod tests {
         tree.set_text(doomed, "hijacked");
         assert_eq!(tree.get_node(reused).unwrap().text.as_deref(), Some("new"));
         tree.set_bounds(doomed, Rect::new(99.0, 99.0, 1.0, 1.0));
-        assert_eq!(tree.get_bounds(reused).y, 20.0);
+        assert_eq!(tree.get_bounds(reused).y, 0.0);
 
-        // The untouched earlier node still validates.
+        // The other region's node still validates.
         assert!(tree.is_live(keep));
     }
 
     /// `get_node`/`get_node_mut` are the accessors a cached `NodeId` field
-    /// goes through (e.g. `ToastPanel::bg_id`/`text_id` repainted every frame
-    /// while animating). They must
-    /// give the same `None`/no-op inertness as every other accessor here.
+    /// goes through. They must give the same `None`/no-op inertness as every
+    /// other accessor here.
     #[test]
     fn get_node_on_stale_id_is_none_not_a_panic() {
         let mut tree = UITree::new();
-        let boundary = 0;
         let doomed = tree.add_label(None, 0.0, 0.0, 10.0, 10.0, "old", default_style());
-        tree.truncate_from(boundary);
+        tree.clear_region(DEFAULT_REGION);
 
         assert!(tree.get_node(doomed).is_none());
         assert!(tree.get_node_mut(doomed).is_none());
-        // Also out-of-range entirely (index never minted) — same inertness.
         assert!(tree.get_node(NodeId::PLACEHOLDER).is_none());
 
         let live = tree.add_label(None, 0.0, 0.0, 10.0, 10.0, "new", default_style());
@@ -1708,9 +1779,10 @@ mod tests {
         let a = tree.add_panel(None, 0.0, 0.0, 10.0, 10.0, default_style());
         let b = tree.add_panel(None, 0.0, 10.0, 10.0, 10.0, default_style());
         assert_eq!(tree.id_at(0), a);
-        assert_eq!(tree.id_at(1), b);
+        assert_eq!(tree.id_in(DEFAULT_REGION, 1), b);
         // Out of range → placeholder (never live).
         assert_eq!(tree.id_at(99), NodeId::PLACEHOLDER);
+        assert_eq!(tree.id_in(3, 0), NodeId::PLACEHOLDER);
     }
 
     // ── WidgetId (durable identity) ──────────────────────────────────

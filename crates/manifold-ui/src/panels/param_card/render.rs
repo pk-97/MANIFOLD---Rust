@@ -180,6 +180,7 @@ impl ParamCardPanel {
         self.copied_flash.clear();
         self.row_host.resize(0);
         self.row_host.resize(n);
+        self.row_host.index_swatches(&config.rows);
         self.base_values = vec![0.0; n];
         // Preserve the per-param tab choice across rebuilds (UI state); only grow
         // for new params. resolve_active_tab clamps stale choices at build time.
@@ -285,6 +286,7 @@ impl ParamCardPanel {
                     continue;
                 }
                 h += ROW_HEIGHT + ROW_SPACING;
+                h += self.inactive_reason_height(i);
                 // A plain toggle never gets a drawer (nothing to modulate) — zero
                 // lane, zero height, unconditionally. `is_trigger` and ordinary
                 // sliders both go through the general `active_mod_tabs`-driven
@@ -346,6 +348,7 @@ impl ParamCardPanel {
                 }
                 for i in start..start + len {
                     h += ROW_HEIGHT + ROW_SPACING;
+                    h += self.inactive_reason_height(i);
                     // Same rule as `effect_body_natural_height`: only a plain
                     // toggle forces zero drawer height. `is_trigger` reaches the
                     // audio-mod drawer (D5b), `is_trigger_gate` reaches the
@@ -366,6 +369,12 @@ impl ParamCardPanel {
         h + CARD_BOTTOM_MARGIN
     }
 
+    /// The dimmed reason line a row draws under itself when it does nothing
+    /// right now (`build_inactive_reason`).
+    fn inactive_reason_height(&self, i: usize) -> f32 {
+        if self.rows[i].spec.inactive_reason.is_some() { ROW_HEIGHT + ROW_SPACING } else { 0.0 }
+    }
+
     /// section 6b — set compact mode (hide all modulation config drawers on this card).
     /// Driven by the inspector's global "hide mod settings" toggle.
     pub fn set_compact(&mut self, compact: bool) {
@@ -374,6 +383,13 @@ impl ParamCardPanel {
 
     pub fn build(&mut self, tree: &mut UITree, rect: Rect) {
         self.row_host.row_index.clear();
+        let n = self.rows.len();
+        self.drawer_shown.clear();
+        self.drawer_shown.resize(n, f32::NAN);
+        self.drawer_clips.clear();
+        self.drawer_clips.resize(n, None);
+        self.mod_tab_ink_ids.clear();
+        self.mod_tab_ink_ids.resize(n, None);
         match self.kind {
             ParamCardKind::Effect => self.build_effect(tree, rect),
             ParamCardKind::Generator => self.build_generator(tree, rect),
@@ -601,7 +617,7 @@ impl ParamCardPanel {
                 .h(Sizing::Fixed(16.0))
                 .key(KEY_NAME_CLIP)
                 .child(
-                    View::label(self.name.as_str())
+                    View::label(if self.item_hosted { "" } else { self.name.as_str() })
                         .fill_w()
                         .fill_h()
                         .font(HEADER_FONT_SIZE)
@@ -640,6 +656,10 @@ impl ParamCardPanel {
                         .inert()
                         .key(KEY_MODIFIER_OBJECTS),
                 );
+        }
+        if self.item_hosted {
+            // The item header above owns delete.
+        } else if self.modifier.is_some() && show_object_targets {
             // Remove × — structural inverse through the generic remove command;
             // the delete-collapse exit animation rides the existing machinery.
             row = row.child(
@@ -714,6 +734,7 @@ impl ParamCardPanel {
 
     fn build_effect(&mut self, tree: &mut UITree, rect: Rect) {
         self.first_node = tree.count();
+        self.region = tree.building_region();
         // Stacking/hit-test position stays at the UNSCALED rect — only the
         // drawn geometry below pops; a card mid-pop must not jitter its
         // neighbors' reflow or its own drag-reorder hit test.
@@ -869,6 +890,9 @@ impl ParamCardPanel {
         self.relight_btn_id = self.host.node_id_for_key(KEY_RELIGHT);
         self.chevron_btn_id = self.host.node_id_for_key(KEY_CHEVRON);
         self.cog_btn_id = self.host.node_id_for_key(KEY_COG);
+        if let Some(cog) = self.cog_btn_id {
+            tree.set_name(cog, format!("param_card.graph_editor.{}", self.name));
+        }
         self.modifier_remove_btn_id = self.host.node_id_for_key(KEY_MODIFIER_REMOVE);
         self.modifier_objects_btn_id = self.host.node_id_for_key(KEY_MODIFIER_OBJECTS);
         // Naming pass (UI_AUTOMATION_DESIGN.md D8/section 3): the modifier
@@ -1137,24 +1161,40 @@ impl ParamCardPanel {
     /// to the section without a second lookup. Fold state itself lives in
     /// `section_folded` (UI-local workspace state, not serialized — see its
     /// doc comment); this fn only reads `folded`, it does not toggle it.
-    fn build_section_header(
-        &mut self,
+    /// The Scene tab builds its control-group headers with it too.
+    pub(crate) fn build_section_header(
         tree: &mut UITree,
         parent: Option<NodeId>,
-        x: f32,
-        y: f32,
-        w: f32,
+        rect: Rect,
         name: &str,
         folded: bool,
         row_count: usize,
         key_base: u64,
     ) -> NodeId {
+        Self::build_section_header_with_title(tree, parent, rect, name, folded, row_count, key_base, false).0
+    }
+
+    /// `build_section_header`, plus, when `title_navigates`, the title as its
+    /// own button sized to the text (`card_section.title`): the fold
+    /// triangle and the bar's empty space still fold, the title opens the
+    /// Scene tab (SCENE_SURFACES_DESIGN.md D10).
+    pub(crate) fn build_section_header_with_title(
+        tree: &mut UITree,
+        parent: Option<NodeId>,
+        rect: Rect,
+        name: &str,
+        folded: bool,
+        row_count: usize,
+        key_base: u64,
+        title_navigates: bool,
+    ) -> (NodeId, Option<NodeId>) {
+        let Rect { x, y, width: w, height: row_h } = rect;
         let header_id = tree.add_button_keyed(
             parent,
             x,
             y,
             w,
-            ROW_HEIGHT,
+            row_h,
             UIStyle {
                 bg_color: color::INSPECTOR_BG,
                 hover_bg_color: color::HOVER_OVERLAY,
@@ -1172,7 +1212,7 @@ impl ParamCardPanel {
             x + GAP,
             y,
             triangle_w,
-            ROW_HEIGHT,
+            row_h,
             triangle,
             UIStyle {
                 text_color: color::TEXT_DIMMED_C32,
@@ -1182,27 +1222,45 @@ impl ParamCardPanel {
             },
         );
         let count_w = if folded { 40.0 } else { 0.0 };
-        tree.add_label(
-            Some(header_id),
-            x + GAP + triangle_w,
-            y,
-            (w - GAP * 2.0 - triangle_w - count_w).max(0.0),
-            ROW_HEIGHT,
-            name,
-            UIStyle {
-                text_color: color::TEXT_WHITE_C32,
-                font_size: FONT_SIZE,
-                text_align: TextAlign::Left,
-                ..UIStyle::default()
-            },
-        );
+        let title_x = x + GAP + triangle_w;
+        let title_room = (w - GAP * 2.0 - triangle_w - count_w).max(0.0);
+        let title_style = UIStyle {
+            text_color: color::TEXT_WHITE_C32,
+            font_size: FONT_SIZE,
+            text_align: TextAlign::Left,
+            ..UIStyle::default()
+        };
+        let mut title_id = None;
+        if title_navigates {
+            tree.set_name(header_id, "card_section.header");
+            let text_w = tree.text_width(name, FONT_SIZE, title_style.font_weight);
+            let id = tree.add_button_keyed(
+                Some(header_id),
+                title_x,
+                y,
+                (text_w + GAP).min(title_room),
+                row_h,
+                UIStyle {
+                    hover_bg_color: color::HOVER_OVERLAY,
+                    pressed_bg_color: color::PRESS_OVERLAY,
+                    corner_radius: color::SMALL_RADIUS,
+                    ..title_style
+                },
+                name,
+                key_base | ROW_ROLE_SECTION_TITLE,
+            );
+            tree.set_name(id, "card_section.title");
+            title_id = Some(id);
+        } else {
+            tree.add_label(Some(header_id), title_x, y, title_room, row_h, name, title_style);
+        }
         if folded {
             tree.add_label(
                 Some(header_id),
                 x + w - GAP - count_w,
                 y,
                 count_w,
-                ROW_HEIGHT,
+                row_h,
                 &format!("({row_count})"),
                 UIStyle {
                     text_color: color::TEXT_DIMMED_C32,
@@ -1212,7 +1270,7 @@ impl ParamCardPanel {
                 },
             );
         }
-        header_id
+        (header_id, title_id)
     }
 
     /// Reset every per-index interactive-id slot for row `i` to "nothing
@@ -1268,12 +1326,10 @@ impl ParamCardPanel {
         for (start, len, section) in runs {
             if let Some(name) = &section {
                 let folded = self.section_folded.get(name).copied().unwrap_or(false);
-                let header_id = self.build_section_header(
+                let header_id = Self::build_section_header(
                     tree,
                     Some(parent),
-                    x + PADDING,
-                    cy,
-                    w - PADDING * 2.0,
+                    Rect::new(x + PADDING, cy, w - PADDING * 2.0, ROW_HEIGHT),
                     name,
                     folded,
                     len,
@@ -1315,6 +1371,7 @@ impl ParamCardPanel {
                 // slider rows do, so an `is_trigger` row's lone "A" button
                 // still lands in the same column.
                 let has_osc = self.osc_addresses.get(i).and_then(|a| a.as_ref()).is_some();
+                let reveal = self.reveal_for_build(i);
                 let row = build_toggle_trigger_row(
                     tree,
                     Some(parent),
@@ -1329,13 +1386,9 @@ impl ParamCardPanel {
                     self.supports_envelopes,
                     has_osc,
                     Some(param_row_key_base(&info.id)),
-                    // P1 drawer tween: supply the interpolated height only while in
-                    // flight; settled rows pass None → the natural (unclipped) layout.
-                    self.drawer_height_anim
-                        .get(i)
-                        .filter(|a| a.is_animating())
-                        .map(|a| a.value()),
+                    reveal,
                 );
+                self.drawer_clips[i] = row.drawer_clip;
                 self.row_host.toggle_ids[i] = Some(ToggleParamIds {
                     label_id: row.label_id,
                     button_id: row.button_id,
@@ -1354,6 +1407,7 @@ impl ParamCardPanel {
             // core. Effects nest rows under `parent` (the inner-bg panel), use
             // the default slider palette + caption-size driver-config font, and
             // gate the `E` button on `supports_envelopes`.
+            let reveal = self.reveal_for_build(i);
             let row = build_param_row(
                 tree,
                 Some(parent),
@@ -1371,16 +1425,12 @@ impl ParamCardPanel {
                 self.mod_active_tab.get(i).copied().unwrap_or(ModTab::Driver),
                 !self.compact,
                 Some(param_row_key_base(&info.id)),
-                // P1 drawer tween: supply the interpolated height only while in
-                // flight; settled rows pass None → the natural (unclipped) layout.
-                self.drawer_height_anim
-                    .get(i)
-                    .filter(|a| a.is_animating())
-                    .map(|a| a.value()),
+                reveal,
                 // Persistent card: the sync pushes every change unconditionally,
                 // so rows build showing the default as before.
                 None,
             );
+            self.drawer_clips[i] = row.drawer_clip;
             let new_cy = self.row_host.install_row(tree, i, row);
             self.sync_mod_tab_ink(tree, i);
             // Mapping-drawer chevron at the row's right edge (Author + mappable).
@@ -1655,6 +1705,7 @@ impl ParamCardPanel {
 
     fn build_generator(&mut self, tree: &mut UITree, rect: Rect) {
         self.first_node = tree.count();
+        self.region = tree.building_region();
         self.param_cache.iter_mut().for_each(|v| *v = f32::NAN);
         self.toggle_cache.iter_mut().for_each(|v| *v = false);
         self.label_cache.iter_mut().for_each(|v| *v = None);
@@ -1680,6 +1731,7 @@ impl ParamCardPanel {
         self.chevron_btn_id = self.host.node_id_for_key(KEY_CHEVRON);
         self.cog_btn_id = self.host.node_id_for_key(KEY_COG);
         if let Some(cog) = self.cog_btn_id {
+            tree.set_name(cog, format!("param_card.graph_editor.{}", self.name));
             self.add_cog_dots(tree, cog);
         }
 
@@ -1748,19 +1800,21 @@ impl ParamCardPanel {
             for (start, len, section) in runs {
                 if let Some(name) = &section {
                     let folded = self.section_folded.get(name).copied().unwrap_or(false);
-                    let header_id = self.build_section_header(
+                    let (header_id, title_id) = Self::build_section_header_with_title(
                         tree,
                         None,
-                        cx,
-                        cy,
-                        content_w,
+                        Rect::new(cx, cy, content_w, ROW_HEIGHT),
                         name,
                         folded,
                         len,
                         param_row_key_base(&self.rows[start].id),
+                        self.scene_sections,
                     );
                     self.row_host.section_header_ids.push((header_id, name.clone()));
-                self.row_host.row_index.insert(tree.widget_of(header_id), start, RowRole::SectionHeader);
+                    self.row_host.row_index.insert(tree.widget_of(header_id), start, RowRole::SectionHeader);
+                    if let Some(title_id) = title_id {
+                        self.row_host.row_index.insert(tree.widget_of(title_id), start, RowRole::SectionTitle);
+                    }
                     cy += ROW_HEIGHT + ROW_SPACING;
                     if folded {
                         // See the effect-card twin of this branch for why
@@ -1784,6 +1838,7 @@ impl ParamCardPanel {
                     // "A" button + drawer (D5b). Click handler dispatches
                     // differently (toggle vs fire) based on the is_trigger flag.
                     let has_osc = self.osc_addresses.get(i).and_then(|a| a.as_ref()).is_some();
+                    let reveal = self.reveal_for_build(i);
                     let row = build_toggle_trigger_row(
                         tree,
                         None,
@@ -1798,13 +1853,9 @@ impl ParamCardPanel {
                         true, // generators always reserve the driver-column gap
                         has_osc,
                         Some(param_row_key_base(&info.id)),
-                        // P1 drawer tween: supply the interpolated height only while in
-                        // flight; settled rows pass None → the natural (unclipped) layout.
-                        self.drawer_height_anim
-                            .get(i)
-                            .filter(|a| a.is_animating())
-                            .map(|a| a.value()),
+                        reveal,
                     );
+                    self.drawer_clips[i] = row.drawer_clip;
                     self.row_host.toggle_ids[i] = Some(ToggleParamIds {
                         label_id: row.label_id,
                         button_id: row.button_id,
@@ -1821,6 +1872,7 @@ impl ParamCardPanel {
                     // the body-size driver-config font, and always show the `E`
                     // button (generators always support envelopes).
                     let row_y = cy;
+                    let reveal = self.reveal_for_build(i);
                     let row = build_param_row(
                         tree,
                         None,
@@ -1838,15 +1890,12 @@ impl ParamCardPanel {
                         self.mod_active_tab.get(i).copied().unwrap_or(ModTab::Driver),
                         !self.compact,
                         Some(param_row_key_base(&info.id)),
-                        // P1 drawer tween: interpolated height while in flight only.
-                        self.drawer_height_anim
-                            .get(i)
-                            .filter(|a| a.is_animating())
-                            .map(|a| a.value()),
+                        reveal,
                         // Persistent card: the sync pushes every change
                         // unconditionally, so rows build showing the default.
                         None,
                     );
+                    self.drawer_clips[i] = row.drawer_clip;
                     let new_cy = self.row_host.install_row(tree, i, row);
                     self.sync_mod_tab_ink(tree, i);
                     // Mapping-drawer chevron at the row's right edge (Author +
@@ -1875,6 +1924,9 @@ impl ParamCardPanel {
                             "\u{203A}", // ›
                             param_row_key_base(&info.id) | ROW_ROLE_CHEVRON,
                         ));
+                        if let Some(id) = self.row_host.mapping_chevron_ids[i] {
+                            tree.set_name(id, "inspector.param_card.mapping_chevron");
+                        }
                     }
                     self.row_host.reindex_row(tree, i);
                     cy = new_cy;
@@ -1970,6 +2022,8 @@ impl ParamCardPanel {
         self.row_value_synced.clear();
         self.row_value_synced.resize(self.rows.len(), false);
         for (id, slot) in slots {
+            // A colour swatch's channels are usually not rows of this card.
+            self.row_host.feed_swatch_channel(id, slot.base);
             let Some(&i) = self.row_id_index.get(id) else {
                 continue;
             };
@@ -1983,6 +2037,7 @@ impl ParamCardPanel {
                 *c = true;
             }
         }
+        self.row_host.paint_swatches(tree);
         for (i, synced) in self.row_value_synced.iter().enumerate() {
             // Unavailable presentation rows deliberately have no parameter
             // address. Real controls still require the manifest join.
@@ -2211,12 +2266,15 @@ impl ParamCardPanel {
             *cached_max = max;
         }
 
-        // Update the built row's spec to reflect the new range
-        // This only affects future value syncs — the current spec is used for normalization
-        // We need to update the spec in the rows array so subsequent syncs use the new range
         if let Some(row) = self.rows.get_mut(i) {
             row.spec.min = min;
             row.spec.max = max;
+        }
+        // The fill and thumb sit at the value's place in the span, so a new
+        // span re-places them even when the value itself did not move. NaN
+        // is the resync mark: it skips the value-change flash.
+        if let Some(cached) = self.param_cache.get_mut(i) {
+            *cached = f32::NAN;
         }
     }
 
@@ -2263,8 +2321,14 @@ impl ParamCardPanel {
     }
 
     pub fn sync_effect_name(&mut self, tree: &mut UITree, name: &str) {
-        self.name = name.into();
-        if let Some(name_label_id) = self.name_label_id {
+        // Runs on every live push, so the stored name is replaced only on change.
+        if self.name != name {
+            self.name.clear();
+            self.name.push_str(name);
+        }
+        if let Some(name_label_id) = self.name_label_id
+            && !self.item_hosted
+        {
             tree.set_text(name_label_id, name);
         }
     }
@@ -2285,7 +2349,11 @@ impl ParamCardPanel {
     }
 
     pub fn sync_gen_type_name(&mut self, tree: &mut UITree, name: &str) {
-        self.name = name.into();
+        // Runs on every live push, so the stored name is replaced only on change.
+        if self.name != name {
+            self.name.clear();
+            self.name.push_str(name);
+        }
         if let Some(name_label_id) = self.name_label_id {
             tree.set_text(name_label_id, name);
         }

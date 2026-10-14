@@ -174,7 +174,7 @@ pub fn emit_automation_lanes(
     latched: &[(EffectId, ParamId)],
 ) {
     if lanes.is_empty() {
-        if selection.is_some_and(|s| s.automation_mode_visible) {
+        if selection.is_some_and(|s| s.automation_mode_visible()) {
             ui.push_immediate_clip(tracks.x, tracks.y, tracks.width, tracks.height);
             ui.draw_text(
                 tracks.x + 12.0,
@@ -368,6 +368,11 @@ pub fn emit_automation_lanes(
             });
             if hot {
                 dot(ui, point.x, point.y, 8.0, Color32::new(91, 190, 220, 75));
+            }
+            // A value past the slider range sits pinned at the lane's edge;
+            // an amber ring marks it, as the row's thumb does.
+            if point.past_end {
+                dot(ui, point.x, point.y, 5.5, color::SLIDER_PAST_END_C32);
             }
             dot(
                 ui,

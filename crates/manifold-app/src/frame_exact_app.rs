@@ -24,7 +24,6 @@ use manifold_core::{Beats, Bpm, PresetTypeId};
 use manifold_playback::frame_grid::FrameGrid;
 
 use crate::content_command::ContentCommand;
-use crate::content_state::ContentState;
 use crate::content_thread::ContentThread;
 use crate::headless_harness::headless_content_thread;
 
@@ -183,7 +182,7 @@ fn wait_for_surface(ct: &ContentThread) {
 /// grid timer, anchored where the schedule's grid is, counts each tick's
 /// frames; the index is the engine clock's.
 fn drive(ct: &mut ContentThread, anchor: Instant, events: &[Event], mut on_frame: impl FnMut(&ContentThread, i64)) {
-    let (state_tx, state_rx) = crossbeam_channel::unbounded::<ContentState>();
+    let (state_tx, state_rx) = crate::content_state::state_channel();
     ct.timer.reanchor_grid_at(anchor);
     let mut presented = 0u64;
     for event in events {

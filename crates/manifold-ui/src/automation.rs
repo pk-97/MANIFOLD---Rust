@@ -76,6 +76,14 @@ pub enum AutomationAction {
         param: FlowScrubTarget,
         value: f32,
     },
+    /// Set or clear a card or Scene tab param's slider range through the real
+    /// dispatch (`ParamsAction::SetSliderRange`), the commit of "Set slider
+    /// range…" (SCENE_SURFACES_DESIGN.md D15). Headless runs have no type-in
+    /// seam, so this is the flow's way to the same write.
+    SetSliderRange {
+        param: FlowScrubTarget,
+        range: Option<(f32, f32)>,
+    },
     /// A continuous scrub as the live app sees it: `Scrub(Begin)`, then
     /// `steps` evenly spaced `Move`s from `from` to `to` with one UI frame
     /// each, then `Commit` — all through the real dispatch.
@@ -115,6 +123,26 @@ pub enum AutomationAction {
         delta_y: f32,
         steps: u32,
     },
+    /// Orbit the 3D viewport camera by a left-drag of `(dx, dy)` pixels,
+    /// through the same `viewport_input::apply` a viewport drag runs. Headless
+    /// only: the runner's editor window has no 3D viewport, so this viewport
+    /// shows the scene the Scene tab shows, opened at the default framing on
+    /// first use.
+    ViewportOrbit {
+        dx: f32,
+        dy: f32,
+    },
+    /// Pick a native menu-bar item, which sits outside the widget tree. The
+    /// runner dispatches the panel action the App's menu drain makes of it.
+    Menu {
+        item: MenuItem,
+    },
+    /// Send the following pointer and key steps to `window`, as the OS sends
+    /// input to the window under the mouse or holding focus. `Assert` and
+    /// `AssertFresh` read every open window either way.
+    Focus {
+        window: FlowWindow,
+    },
     /// Start a work-count window (UI_INVALIDATION_DESIGN.md D10).
     ResetWork,
     /// Compare the work counted since the last `ResetWork` against the
@@ -129,6 +157,28 @@ pub enum AutomationAction {
     /// fail on any difference. Generations, node slots and input-state flags
     /// are ignored.
     AssertFresh,
+    /// An edit the UI did not make lands (an OSC or MIDI write while a
+    /// gesture is live): the content echo moves the layers and effects
+    /// stamps, so the next frame rebuilds the inspector, layer headers and
+    /// viewport under whatever press or drag is held (UI_INVALIDATION D18).
+    ExternalEdit,
+}
+
+/// A native menu-bar item a flow can pick. Items join as flows need them.
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
+pub enum MenuItem {
+    /// View > Perform: enter performance mode.
+    Perform,
+}
+
+/// A window a flow's input can go to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+pub enum FlowWindow {
+    /// The timeline and inspector window.
+    #[default]
+    Main,
+    /// The graph editor window; a flow opens it first.
+    GraphEditor,
 }
 
 /// A raw resize handle `window_input` drags outside the widget tree.
@@ -359,13 +409,11 @@ pub fn resolve(
 }
 
 fn all_widget_matches(tree: &UITree, raw: u64) -> (Vec<MatchInfo>, String) {
-    let nodes = tree.nodes();
     let query = format!("widget({raw:016x})");
-    let matches = nodes
-        .iter()
-        .enumerate()
-        .filter(|(_, n)| n.flags.contains(crate::node::UIFlags::INTERACTIVE) && tree.widget_of(n.id).raw() == raw)
-        .map(|(i, _)| node_match_info(tree, nodes, i))
+    let matches = tree
+        .all_nodes()
+        .filter(|n| n.flags.contains(crate::node::UIFlags::INTERACTIVE) && tree.widget_of(n.id).raw() == raw)
+        .map(|n| node_match_info(tree, tree.region_nodes(n.id.region()), n.id.slot()))
         .collect();
     (matches, query)
 }
@@ -397,13 +445,17 @@ fn all_surface_matches(
 }
 
 fn all_query_matches(tree: &UITree, q: &SelectorQuery) -> (Vec<MatchInfo>, String) {
-    let nodes = tree.nodes();
-    let hits: Vec<usize> = (0..nodes.len()).filter(|&i| node_matches(tree, nodes, i, q)).collect();
+    // Region order, slot order inside each region: the main window's full
+    // build order, so `nth` counts the way it did on the flat tree.
+    let hits: Vec<(&[crate::node::UINode], usize)> = (0..crate::tree::MAX_REGIONS as u8)
+        .map(|r| tree.region_nodes(r))
+        .flat_map(|nodes| (0..nodes.len()).filter(|&i| node_matches(tree, nodes, i, q)).map(move |i| (nodes, i)))
+        .collect();
     let query = describe_query(q);
 
     if let Some(nth) = q.nth {
         return match hits.get(nth).copied() {
-            Some(i) => (vec![node_match_info(tree, nodes, i)], format!("{query} [nth={nth}]")),
+            Some((nodes, i)) => (vec![node_match_info(tree, nodes, i)], format!("{query} [nth={nth}]")),
             None => (
                 Vec::new(),
                 format!("{query} [nth={nth} of {} candidates]", hits.len()),
@@ -411,7 +463,7 @@ fn all_query_matches(tree: &UITree, q: &SelectorQuery) -> (Vec<MatchInfo>, Strin
         };
     }
 
-    let matches = hits.iter().map(|&i| node_match_info(tree, nodes, i)).collect();
+    let matches = hits.iter().map(|&(nodes, i)| node_match_info(tree, nodes, i)).collect();
     (matches, query)
 }
 
@@ -508,7 +560,7 @@ fn under_text_matches(nodes: &[crate::node::UINode], i: usize, under: &str) -> b
         // Literal-ancestor case: the enclosing container itself carries
         // `under` as its own text.
         if let Some(p) = parent
-            && nodes[p.index()].text.as_deref() == Some(under)
+            && nodes[p.slot()].text.as_deref() == Some(under)
         {
             return true;
         }
@@ -520,7 +572,7 @@ fn under_text_matches(nodes: &[crate::node::UINode], i: usize, under: &str) -> b
             return nodes[found].text.as_deref() == Some(under);
         }
         match parent {
-            Some(p) => level = p.index(),
+            Some(p) => level = p.slot(),
             None => return false,
         }
     }
@@ -552,8 +604,9 @@ fn describe_query(q: &SelectorQuery) -> String {
 fn describe_node(tree: &UITree, nodes: &[crate::node::UINode], i: usize) -> String {
     let n = &nodes[i];
     format!(
-        "#{} {:?} name={:?} text={:?} rect=({:.0},{:.0} {:.0}x{:.0})",
-        n.id.index(),
+        "#{}.{} {:?} name={:?} text={:?} rect=({:.0},{:.0} {:.0}x{:.0})",
+        n.id.region(),
+        n.id.slot(),
         n.node_type,
         tree.name_of(n.id),
         n.text,
@@ -652,7 +705,7 @@ mod tests {
         let second = button(&mut tree, "Row");
         let q = SelectorQuery { text: Some("Row".into()), nth: Some(1), ..Default::default() };
         let resolved = resolve(&tree, &[], &AutomationTarget::Query(q)).expect("resolves");
-        let expected = tree.nodes()[second.index()].bounds;
+        let expected = tree.get_node(second).unwrap().bounds;
         assert_eq!(resolved.rect, expected);
     }
 
@@ -709,7 +762,7 @@ mod tests {
             ..Default::default()
         };
         let resolved = resolve(&tree, &[], &AutomationTarget::Query(q)).expect("resolves");
-        assert_eq!(resolved.rect, tree.nodes()[mute_a.index()].bounds);
+        assert_eq!(resolved.rect, tree.get_node(mute_a).unwrap().bounds);
     }
 
     /// `under_text_walks_ancestors` (above) only covers the
@@ -774,7 +827,7 @@ mod tests {
             ..Default::default()
         };
         let resolved = resolve(&tree, &[], &AutomationTarget::Query(q)).expect("resolves");
-        assert_eq!(resolved.rect, tree.nodes()[slider_a.index()].bounds);
+        assert_eq!(resolved.rect, tree.get_node(slider_a).unwrap().bounds);
 
         // Cross-row: row 2's slider must NOT resolve under row 1's label —
         // "stop at the first node carrying ANY text" is what keeps two
@@ -829,7 +882,7 @@ mod tests {
             ..Default::default()
         };
         let resolved = resolve(&tree, &[], &AutomationTarget::Query(q)).expect("resolves");
-        assert_eq!(resolved.rect, tree.nodes()[mute_a.index()].bounds);
+        assert_eq!(resolved.rect, tree.get_node(mute_a).unwrap().bounds);
     }
 
     #[test]

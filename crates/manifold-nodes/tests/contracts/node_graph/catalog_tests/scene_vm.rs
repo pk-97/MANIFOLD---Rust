@@ -1,4 +1,5 @@
 use manifold_nodes_scene::node_graph::scene_vm::{SceneVm, SceneObjectVm, MaterialVm};
+use manifold_nodes_scene::node_graph::scene_items::SceneItemId;
 use manifold_core::{SceneNodeRef, effect_graph_def::EffectGraphDef};
 use manifold_nodes_scene::node_graph::scene_vm::testkit::ORBIT_CAMERA_TYPE_ID;
 
@@ -69,8 +70,10 @@ use manifold_nodes_scene::node_graph::scene_vm::testkit::ORBIT_CAMERA_TYPE_ID;
         // The domain shares its group-local doc id with the root camera.
         let camera = def.nodes.iter().find(|node| node.type_id == ORBIT_CAMERA_TYPE_ID).unwrap();
         assert!(!water[0].fluid_controls.contains(&camera.node_id));
-        assert_eq!(vm.camera_controls.first(), Some(&camera.node_id));
-        assert!(!vm.camera_controls.contains(&domain.node));
+        let items = manifold_nodes_scene::node_graph::scene_items::scene_items(&def, &vm);
+        let camera_nodes = &items.iter().find(|item| item.id == SceneItemId::Camera).expect("camera item").owned_nodes;
+        assert_eq!(camera_nodes.first(), Some(&camera.node_id));
+        assert!(!camera_nodes.contains(&domain.node));
     }
     #[test]
     fn water_family_row_ownership() {

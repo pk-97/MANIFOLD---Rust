@@ -172,7 +172,7 @@ Two changes, independent, shippable in order:
 ## What is forked (the target)
 
 - **Main inspector:** `ParamCard` + `param_slider_shared`
-  (`crates/manifold-ui/src/panels/param_card.rs`). Rich: sliders, scrub,
+  (`crates/manifold-ui/src/panels/param_card/mod.rs`). Rich: sliders, scrub,
   T/~/A modulation drawers, audio card state, badges, mapping chevron.
   One implementation already serves BOTH effect and generator kinds
   (`sync_values_effect` / `sync_values_generator`), and has a `CardContext`
@@ -371,11 +371,11 @@ mechanism table, read from code:
 
 | Piece | Where | Fact |
 |---|---|---|
-| Context flag | `crates/manifold-ui/src/panels/param_card.rs:89` `CardContext { Perform, Author }`; set for the editor at `crates/manifold-app/src/workspace.rs:92` (BUG-121 (graph-editor-effect-card-missing-mapping-drawer-…) fix) | Author = editor cards. |
+| Context flag | `crates/manifold-ui/src/panels/param_card/mod.rs:89` `CardContext { Perform, Author }`; set for the editor at `crates/manifold-app/src/workspace.rs:92` (BUG-121 (graph-editor-effect-card-missing-mapping-drawer-…) fix) | Author = editor cards. |
 | **Geometry forks on context** | `param_card.rs:2469` and `:2702` — `chevron_lane = if author { MAP_CHEVRON_W + DE_BUTTON_GAP } else { 0.0 }`, subtracted from `slider_w` | The SAME card lays out differently per window. This is the structural violation of "identical". Two row builders duplicate the lane math — they can drift from each other too. |
 | Label column | `param_card.rs:2477` `label_width_for_row(w - PADDING*2)` | Label width ignores the chevron lane; at the editor's 340px lane (Dock::editor() right_range default) long labels collide/clip. |
 | **Motion forks on context** | `param_card.rs:830` (`eases = context != Author`), `:1080-1090` ("Author context which nothing ticks") | Author cards SNAP drawer heights because the editor's `UIRoot` is never ticked — a workaround for the missing tick, not a design. |
-| Missing tick | `crates/manifold-app/src/ui_root.rs:2994` `update()` early-returns on `!built`; editor root is permanently `!built`; `app_render.rs:3146` ticks only `self.ws.ui_root`; `update_fire_meters` (`:3198`) also main-only | Same mechanism BUG-157 (editor-perf-hud-never-ticked-shows-dashes-foreve…) documented. Inspector drawer tweens/value-flash/dying-card collapse never advance in the editor; fire meters never move there. |
+| Missing tick | `crates/manifold-app/src/ui_root/mod.rs:2994` `update()` early-returns on `!built`; editor root is permanently `!built`; `app_render.rs:3146` ticks only `self.ws.ui_root`; `update_fire_meters` (`:3198`) also main-only | Same mechanism BUG-157 (editor-perf-hud-never-ticked-shows-dashes-foreve…) documented. Inspector drawer tweens/value-flash/dying-card collapse never advance in the editor; fire meters never move there. |
 | Shared build path (already unified — do not touch) | `inspector.rs:2070` `build_in_rect` (both windows), `sync_inspector_data` mirrored to the editor instance at `app_render.rs:2943-2957` | Build + sync are already single-path; Change 4 closes the two remaining forks (geometry, tick) and pins the invariant with machine checks. |
 
 ### Decisions
@@ -448,7 +448,7 @@ mechanism table, read from code:
   (new, `manifold-ui`), the D5 test — this is the "fundamentally not possible to
   drift" check; any future context-gated rect breaks it by construction.
 - **No inline lane arithmetic outside the helper.** Enforcement: negative gate
-  `rg -n "MAP_CHEVRON_W" crates/manifold-ui/src/panels/param_card.rs` — hits only
+  `rg -n "MAP_CHEVRON_W" crates/manifold-ui/src/panels/param_card/mod.rs` — hits only
   the const def + the D2 helper (exact expected-hit list pinned in the phase gate).
 - **Every element fits its card at every legal width (the primary invariant).**
   Enforcement: `inspector_rows_fit_card_bounds_across_widths` (new): build the
@@ -493,7 +493,7 @@ strip (Peter's Stylized Feedback screenshot) and the Fluid Sim 2D enum/toggle ro
 byte-diff missed the regression). Gate: both new tests green;
 `cargo test -p manifold-ui --lib`; negative: the `MAP_CHEVRON_W` rg gate; no
 geometry read of `CardContext` outside the helper (`rg -n "context == CardContext"
-crates/manifold-ui/src/panels/param_card.rs` — expected-hit list = glyph sites only,
+crates/manifold-ui/src/panels/param_card/mod.rs` — expected-hit list = glyph sites only,
 pinned at execution). Demo: `ui-snap editor` PNG attached to the landing report
 (L2 — for Peter's eyes, NOT the gate; the tests are the gate). Performer gesture:
 in the editor, every label on the Fluid Sim 2D card reads un-clipped at the default

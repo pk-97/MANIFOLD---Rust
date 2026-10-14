@@ -42,7 +42,7 @@
         }
       },
       "check": {
-        "TextEquals": "4096"
+        "TextEquals": "4000"
       }
     }
   },
@@ -85,7 +85,7 @@
         }
       },
       "check": {
-        "TextEquals": "4096"
+        "TextEquals": "4000"
       }
     }
   },

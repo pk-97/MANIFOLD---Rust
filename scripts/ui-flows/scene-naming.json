@@ -1,0 +1,9 @@
+[
+  {"Assert": {"selector": {"Query": {"text": "Field of View"}}, "check": "Exists"}},
+  {"Assert": {"selector": {"Query": {"text": "Target Height"}}, "check": "Exists"}},
+  {"Assert": {"selector": {"Query": {"text": "Exposure"}}, "check": "Exists"}},
+  {"Assert": {"selector": {"Query": {"text": "0.00 EV"}}, "check": {"Count": 1}}},
+  {"Assert": {"selector": {"Query": {"text": "FOV Y"}}, "check": {"Count": 0}}},
+  {"Assert": {"selector": {"Query": {"text": "Exposure (EV)"}}, "check": {"Count": 0}}},
+  "Snapshot"
+]

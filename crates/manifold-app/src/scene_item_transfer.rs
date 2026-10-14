@@ -345,12 +345,63 @@ fn transfer_metadata(
     Ok(remaps.into_iter().collect())
 }
 
+/// How the copied item is named.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CopyNaming {
+    /// Every copied handle takes the clone helper's free `_N` suffix.
+    Deduped,
+    /// Duplicate (SCENE_OBJECT_AND_PANEL_V2_DESIGN D11): the item is named
+    /// "<name> N", the first free N from 2, as the importer and Water do.
+    Numbered,
+}
+
+/// Rename the copied item's root to "<source name> N". A grouped item's
+/// inner `scene_object` carries the same name (D6): it is the name the Scene
+/// tab shows.
+fn name_duplicate(
+    clipboard: &SceneItemClipboard,
+    doc_ids: &HashMap<u32, u32>,
+    added: &mut [EffectGraphNode],
+    handles: &mut HashSet<String>,
+) {
+    let Some(base) = clipboard
+        .graph
+        .nodes
+        .iter()
+        .find(|node| node.id == clipboard.root)
+        .and_then(|node| node.handle.clone())
+    else {
+        return;
+    };
+    let Some(root) = doc_ids
+        .get(&clipboard.root)
+        .and_then(|id| added.iter_mut().find(|node| node.id == *id))
+    else {
+        return;
+    };
+    let name = (2..)
+        .map(|n| format!("{base} {n}"))
+        .find(|candidate| !handles.contains(candidate))
+        .expect("an unbounded range always finds a free name");
+    handles.insert(name.clone());
+    // Capture refuses groups with several objects, so a group root holds one.
+    if let Some(inner) = root
+        .group
+        .as_deref_mut()
+        .and_then(|group| group.nodes.iter_mut().find(|node| node.type_id == "node.scene_object"))
+    {
+        inner.handle = Some(name.clone());
+    }
+    root.handle = Some(name);
+}
+
 fn paste(
     project: &Project,
     layer: LayerId,
     scene: u32,
     clipboard: SceneItemClipboard,
     description: &'static str,
+    naming: CopyNaming,
 ) -> Result<Box<dyn Command>, String> {
     let target = GraphTarget::Generator(layer.clone());
     let before = project
@@ -439,6 +490,9 @@ fn paste(
         );
         doc_ids.insert(source.id, clone.id);
         added.push(clone);
+    }
+    if naming == CopyNaming::Numbered {
+        name_duplicate(&clipboard, &doc_ids, &mut added, &mut handles);
     }
     let node_id_map = node_ids;
     let stable: HashMap<_, _> = node_id_map.iter().cloned().collect();
@@ -586,7 +640,7 @@ pub(crate) fn build_action(
             layer,
             scene,
             clipboard,
-        } => paste(project, layer, scene, *clipboard, "Paste Scene Item"),
+        } => paste(project, layer, scene, *clipboard, "Paste Scene Item", CopyNaming::Deduped),
         SceneItemAction::Duplicate {
             layer,
             scene,
@@ -594,7 +648,7 @@ pub(crate) fn build_action(
             index,
         } => {
             let clipboard = SceneItemClipboard::capture(project, &layer, scene, kind, index)?;
-            paste(project, layer, scene, clipboard, "Duplicate Scene Item")
+            paste(project, layer, scene, clipboard, "Duplicate Scene Item", CopyNaming::Numbered)
         }
         SceneItemAction::Move {
             layer,
@@ -1010,6 +1064,33 @@ mod tests {
         let result = SceneItemClipboard::capture(&project, &layer, 1, SceneItemKind::Object, 0);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("ambiguous"));
+    }
+
+    /// D11: Duplicate names the copy "<name> N", the first free N from 2;
+    /// Paste keeps the clone helper's `_N` names.
+    #[test]
+    fn duplicate_names_the_copy_with_the_next_free_number() {
+        let mut project = Project::default();
+        let layer = add_transfer_layer(&mut project, "Scene", "dup", false);
+        let mut editing = EditingService::new();
+        for _ in 0..2 {
+            let action = SceneItemAction::Duplicate { layer: layer.clone(), scene: 1, kind: SceneItemKind::Object, index: 0 };
+            editing.execute(build_action(&project, action).unwrap(), &mut project);
+            assert!(editing.take_rejection().is_none());
+        }
+        let clipboard = SceneItemClipboard::capture(&project, &layer, 1, SceneItemKind::Object, 0).unwrap();
+        let paste = SceneItemAction::Paste { layer: layer.clone(), scene: 1, clipboard: Box::new(clipboard) };
+        editing.execute(build_action(&project, paste).unwrap(), &mut project);
+        assert!(editing.take_rejection().is_none());
+        let graph = project.graph_target_owner(&GraphTarget::Generator(layer)).unwrap().graph.clone().unwrap();
+        let mut objects: Vec<_> = graph
+            .nodes
+            .iter()
+            .filter(|node| node.type_id == "node.scene_object")
+            .filter_map(|node| node.handle.clone())
+            .collect();
+        objects.sort();
+        assert_eq!(objects, ["Object 0", "Object 0 2", "Object 0 3", "Object 0_2"]);
     }
 
     #[test]

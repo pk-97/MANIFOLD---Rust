@@ -85,13 +85,14 @@ pub(crate) fn render_tree_overlay_passes(
     }
 
     // Top-level overlays (perf HUD, dropdown, modals, browser popup) — built
-    // by the overlay driver at the tail of the tree, drawn here in z-order.
+    // by the overlay driver into the Overlays arena, drawn here in z-order.
     // One source (overlay_draw, recorded at build) for build and draw, so
     // they cannot drift. overlay_draw is in Z_ORDER (bottom→top), so each
     // overlay's depth is OVERLAY + its stack index: a later-opened overlay
     // (e.g. a dropdown over the Audio Setup modal) paints over an earlier
     // one, text included. Each range gets its own push/pop for scissor
     // isolation.
+    let overlays = crate::frame_plan::MainRegion::Overlays.id();
     for (i, &(start, end)) in ui_root.overlay_draw.iter().enumerate() {
         ui_renderer.push_depth(Depth::OVERLAY.above(i as i32));
         // Soft drop-shadow under the floating panel (section 17). Drawn first so it
@@ -100,12 +101,12 @@ pub(crate) fn render_tree_overlay_passes(
         // panel, not the whole screen.
         if start < end && manifold_ui::color::SHADOWS_ENABLED {
             let tree = &ui_root.tree;
-            let mut r = tree.get_bounds(tree.id_at(start));
+            let mut r = tree.get_bounds(tree.id_in(overlays, start));
             if r.width >= logical_w as f32 - 1.0
                 && r.height >= logical_h as f32 - 1.0
                 && start + 1 < end
             {
-                r = tree.get_bounds(tree.id_at(start + 1));
+                r = tree.get_bounds(tree.id_in(overlays, start + 1));
             }
             ui_renderer.draw_shadow(
                 r.x,
@@ -129,7 +130,7 @@ pub(crate) fn render_tree_overlay_passes(
         // pick the wrong one (this design's D2 closes BUG-151 the same way:
         // the editor stops rendering overlay nodes through its root scan at
         // all, rather than picking the wrong call by hand a second time).
-        ui_renderer.render_sub_region(&ui_root.tree, start, end, false);
+        ui_renderer.render_sub_region(&ui_root.tree, overlays, start, end, false);
         ui_renderer.pop_depth();
     }
 
@@ -150,8 +151,8 @@ pub(crate) fn render_tree_overlay_passes(
             manifold_ui::node::Color32::new(28, 28, 32, 250), 4.0);
         ui_renderer.draw_text(x + 7.0, y + 7.0, help, 11.0, [235, 235, 240, 255]);
     }
-    if let Some(start) = ui_root.inspector.card_drag_first_node() {
-        ui_renderer.render_tree_range(&ui_root.tree, start, usize::MAX);
+    if let Some(root) = ui_root.inspector.card_drag_ghost_root() {
+        ui_renderer.render_tree_range(&ui_root.tree, root.region(), 0, usize::MAX);
     }
     // Text input overlay — last, so it tops everything. `Some` only when the
     // caller resolved this window as the session's owner (D4) — the
@@ -162,14 +163,13 @@ pub(crate) fn render_tree_overlay_passes(
     }
     ui_renderer.pop_depth();
 
-    // Clear the overlay region's dirty flags. Overlay nodes (HUD, playhead,
-    // popups) live at `[overlay_region_start, count)` and are never in a
-    // panel-cache's atlas ranges, so they would otherwise keep `has_dirty`
-    // permanently true and defeat the idle fast path (main window) or just
-    // accumulate uselessly (editor, which has no cache to defeat — D5). See
-    // module doc deviation 1 for why this runs here rather than after the
-    // caller's flush/commit.
-    let overlay_start = ui_root.overlay_region_start;
-    let node_count = ui_root.tree.count();
-    ui_root.tree.clear_dirty_range(overlay_start, node_count);
+    // Clear the Overlays and Ghosts arenas' dirty flags. Their nodes (HUD,
+    // popups, the drag ghost) are never in a panel-cache's atlas ranges, so
+    // they would otherwise keep `has_dirty` permanently true and defeat the
+    // idle fast path (main window) or just accumulate uselessly (editor,
+    // which has no cache to defeat — D5). See module doc deviation 1 for why
+    // this runs here rather than after the caller's flush/commit.
+    for region in [crate::frame_plan::MainRegion::Overlays, crate::frame_plan::MainRegion::Ghosts] {
+        ui_root.tree.clear_dirty_range(region.id(), 0, usize::MAX);
+    }
 }

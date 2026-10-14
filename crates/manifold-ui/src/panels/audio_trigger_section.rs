@@ -158,10 +158,11 @@ impl AudioTriggerSection {
         self.collapsed = Some(!self.is_collapsed());
     }
 
-    pub fn toggle_row_expanded(&mut self, index: usize) {
-        if let Some(e) = self.expanded.get_mut(index) {
-            *e = !*e;
-        }
+    /// Returns whether a row was there to toggle.
+    pub fn toggle_row_expanded(&mut self, index: usize) -> bool {
+        let Some(e) = self.expanded.get_mut(index) else { return false };
+        *e = !*e;
+        true
     }
 
     /// Open one row's drawer without toggling — the Add flow uses this so a
@@ -223,6 +224,29 @@ impl AudioTriggerSection {
                 });
         self.mod_state.rebuild(n);
         self.mod_state.sync_audio(audio_rows, &config.sends);
+    }
+
+    /// Rewrite each row's Sensitivity slider in place (UI_INVALIDATION D22).
+    /// `sensitivities` walks `layer`'s clip triggers in order; a different
+    /// layer waits for the rebuild.
+    pub fn sync_sensitivities(&mut self, tree: &mut UITree, layer: &LayerId, sensitivities: &mut dyn Iterator<Item = f32>) {
+        if self.layer_id.as_ref() != Some(layer) {
+            return;
+        }
+        let which = AudioShapeParam::Sensitivity;
+        for (i, (row, value)) in self.mod_state.audio_rows.iter_mut().zip(sensitivities).enumerate() {
+            if row.sensitivity == value {
+                continue;
+            }
+            row.sensitivity = value;
+            if let Some((drawer, _)) = self.audio_configs.get(i).and_then(Option::as_ref)
+                && let Some(slider) = drawer.sliders.first()
+            {
+                let norm = value / super::param_slider_shared::AUDIO_SENS_MAX;
+                let text = super::param_slider_shared::audio_shape_value_text(which, value);
+                BitmapSlider::update_value(tree, slider, norm, &text);
+            }
+        }
     }
 
     /// Total height this section occupies at the top of the layer column.
@@ -406,7 +430,7 @@ impl AudioTriggerSection {
             }
         }
 
-        let first = self.first_node.map_or(0, |id| id.index());
+        let first = self.first_node.map_or(0, |id| id.slot());
         self.node_count = tree.count() - first;
     }
 
@@ -414,8 +438,8 @@ impl AudioTriggerSection {
         let Some(first) = self.first_node else {
             return false;
         };
-        let id = node_id.index();
-        id >= first.index() && id < first.index() + self.node_count
+        let id = node_id.slot();
+        node_id.region() == first.region() && id >= first.slot() && id < first.slot() + self.node_count
     }
 
     // ── Click resolution ─────────────────────────────────────────────

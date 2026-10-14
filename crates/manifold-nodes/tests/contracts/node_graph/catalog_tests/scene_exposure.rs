@@ -1,18 +1,121 @@
-use manifold_nodes_scene::node_graph::scene_exposure::{look_metadata, testkit::SCENE_VOCABULARY_TYPE_IDS};
+use manifold_nodes_scene::node_graph::scene_exposure::testkit::SCENE_VOCABULARY_TYPE_IDS;
 
+    /// The Water look's "Size" is the water preset's own control, not a
+    /// vocabulary stamp, so no other shipped preset acquires it on load.
     #[test]
-    fn water_look_metadata_exposes_only_size() {
-        let metadata = look_metadata();
-        assert_eq!(metadata.len(), 1);
-        assert_eq!(metadata[0].name, "radius");
-        assert_eq!(metadata[0].label, "Size");
+    fn water_look_size_is_not_a_vocabulary_stamp() {
         assert!(!SCENE_VOCABULARY_TYPE_IDS.contains(&"node.platonic_solid_mesh"));
         for preset in ["PhysicsSolids", "PhysicsBoxes", "WaterFloatingBoxMatter"] {
             let def = manifold_nodes::bundled_presets::bundled_preset_def(&manifold_core::PresetTypeId::new(preset))
                 .expect("shipped preset");
-            assert!(def.preset_metadata.as_ref().unwrap().params.iter().all(|spec| spec.name != "Size"),
+            assert!(def.preset_metadata.as_ref().unwrap().params.iter()
+                .all(|spec| !matches!(spec.id.as_str(), "foam_size" | "spray_size" | "bubble_size")),
                 "{preset} must not acquire Water look controls on load");
         }
+    }
+
+    /// INV-S1 (SCENE_SURFACES_DESIGN.md section 4 (invariants)): every param
+    /// of every scene-vocabulary type carries exactly one scene-table
+    /// classification, and a performance row always names its band. Read
+    /// through the node param source, where every primitive crate is linked.
+    #[test]
+    fn every_vocabulary_param_is_classified() {
+        use manifold_core::liquid_domain::LIQUID_DOMAIN_TYPE_IDS;
+        use manifold_foundation::scene_surface::SurfaceRole;
+        use manifold_nodes_scene::node_graph::scene_exposure::all_params_for_node_type;
+        let registry = manifold_node_engine::persistence::PrimitiveRegistry::with_builtin();
+        let mut missing = Vec::new();
+        let mut checked = 0;
+        for &type_id in SCENE_VOCABULARY_TYPE_IDS.iter().chain(LIQUID_DOMAIN_TYPE_IDS) {
+            // A retired domain stays a liquid domain for saved graphs, with
+            // no constructor and so no params.
+            if !registry.contains(type_id) {
+                assert!(LIQUID_DOMAIN_TYPE_IDS.contains(&type_id), "{type_id} is not registered");
+                continue;
+            }
+            let params = all_params_for_node_type(type_id);
+            assert!(!params.is_empty(), "{type_id} declares no params");
+            for param in params {
+                checked += 1;
+                match param.scene {
+                    None => missing.push(format!("{type_id}.{}", param.name)),
+                    Some(scene) => assert_eq!(
+                        scene.band.is_some(),
+                        scene.role == SurfaceRole::Performance,
+                        "{type_id}.{}: a band iff the performance role",
+                        param.name
+                    ),
+                }
+            }
+        }
+        assert!(checked > 500, "only {checked} params checked");
+        assert!(missing.is_empty(), "unclassified scene params:\n{}", missing.join("\n"));
+    }
+
+    /// INV-S9 (SCENE_SURFACES_DESIGN.md section 4 (invariants)): a scene
+    /// label never carries its unit; the unit is declared once and the value
+    /// readout shows it. Covers every scene-vocabulary param label, every
+    /// recipe control and every control of a bundled preset that holds a scene.
+    #[test]
+    fn no_unit_in_scene_labels() {
+        use manifold_core::liquid_domain::LIQUID_DOMAIN_TYPE_IDS;
+        use manifold_core::preset_def::PresetKind;
+        use manifold_foundation::scene_surface::Unit;
+        use manifold_nodes_scene::node_graph::scene_exposure::all_params_for_node_type;
+
+        const UNITS: [Unit; 10] = [
+            Unit::Metres, Unit::MetresPerSecond, Unit::MetresPerSecondSquared,
+            Unit::KilogramsPerCubicMetre, Unit::Ev, Unit::Pixels, Unit::MillionCells,
+            Unit::Seconds, Unit::Nanometres, Unit::Beats,
+        ];
+        // A new unit must join UNITS before this compiles.
+        fn _every_unit_listed(unit: Unit) {
+            match unit {
+                Unit::Metres | Unit::MetresPerSecond | Unit::MetresPerSecondSquared
+                | Unit::KilogramsPerCubicMetre | Unit::Ev | Unit::Pixels | Unit::MillionCells
+                | Unit::Seconds | Unit::Nanometres | Unit::Beats => {}
+            }
+        }
+        let carries_unit = |label: &str| {
+            label.contains('(')
+                || UNITS.iter().any(|unit| {
+                    let suffix = unit.suffix();
+                    label.ends_with(suffix) || label.split_whitespace().any(|word| word == suffix.trim())
+                })
+        };
+
+        let mut offenders = Vec::new();
+        let mut checked = 0;
+        for &type_id in SCENE_VOCABULARY_TYPE_IDS.iter().chain(LIQUID_DOMAIN_TYPE_IDS) {
+            for param in all_params_for_node_type(type_id) {
+                checked += 1;
+                if carries_unit(&param.label) {
+                    offenders.push(format!("{type_id}.{}: {:?}", param.name, param.label));
+                }
+            }
+        }
+        let mut check_metadata = |owner: &str, metadata: &serde_json::Value| {
+            let names = metadata["params"].as_array().into_iter().flatten().map(|p| &p["name"]);
+            let labels = metadata["bindings"].as_array().into_iter().flatten().map(|b| &b["label"]);
+            for text in names.chain(labels).filter_map(serde_json::Value::as_str) {
+                checked += 1;
+                if carries_unit(text) {
+                    offenders.push(format!("{owner}: {text:?}"));
+                }
+            }
+        };
+        for kind in [PresetKind::Generator, PresetKind::SceneModifier] {
+            for preset in manifold_nodes::bundled_presets::bundled_preset_type_ids(kind) {
+                let json = manifold_nodes::bundled_presets::bundled_preset_json(&preset).expect("bundled json");
+                if kind == PresetKind::Generator && !json.contains("\"node.render_scene\"") {
+                    continue;
+                }
+                let doc: serde_json::Value = serde_json::from_str(&json).expect("bundled preset parses");
+                check_metadata(preset.as_str(), &doc["presetMetadata"]);
+            }
+        }
+        assert!(checked > 1000, "only {checked} labels checked");
+        assert!(offenders.is_empty(), "scene labels carrying a unit:\n{}", offenders.join("\n"));
     }
 
     use manifold_nodes_scene::node_graph::scene_exposure::{metadata_for_node_type, migrate_scene_exposures};
@@ -184,13 +287,16 @@ use manifold_nodes_scene::node_graph::scene_exposure::{look_metadata, testkit::S
         .unwrap();
         assert!(migrate_scene_exposures(&mut def));
         let metadata = def.preset_metadata.as_ref().unwrap();
-        for name in ["enabled", "aperture", "quality"] {
+        // Max Radius is the depth of field Max Blur row (SCENE_SURFACES D4).
+        for name in ["enabled", "aperture", "quality", "max_radius"] {
             assert!(metadata.bindings.iter().any(|b| matches!(&b.target,
                 manifold_core::effect_graph_def::BindingTarget::Node { node_id, param }
                 if node_id.as_str() == "bokeh" && param == name)));
         }
-        assert!(!metadata.bindings.iter().any(|b| matches!(&b.target,
-            manifold_core::effect_graph_def::BindingTarget::Node { param, .. } if param == "max_radius")));
+        assert_eq!(
+            def.nodes[0].params["max_radius"],
+            manifold_core::effect_graph_def::SerializedParamValue::Float { value: 16.0 }
+        );
         assert_eq!(
             def.nodes[0].params["enabled"],
             manifold_core::effect_graph_def::SerializedParamValue::Bool { value: false }
@@ -348,7 +454,6 @@ use manifold_nodes_scene::node_graph::scene_exposure::{look_metadata, testkit::S
             &mut bindings,
             1,
             &node_id,
-            "node.light",
             "Light 1",
             &light_metadata,
             &std::collections::BTreeMap::new(),
@@ -418,16 +523,15 @@ use manifold_nodes_scene::node_graph::scene_exposure::{look_metadata, testkit::S
                 "rt_shadows",
                 "rt_ao",
                 "rt_gi",
-                "rt_denoise_feed"
             ],
-            "exactly the seven RT toggles, nothing else from the root node"
+            "exactly the six RT toggles; the Hidden denoise feed is never stamped, nothing else from the root node"
         );
         for spec in &meta.params {
             assert_eq!(spec.section.as_deref(), Some("Rendering"));
             assert!(spec.is_toggle, "{} must surface as a toggle row", spec.name);
             assert!(
-                spec.card_visible,
-                "{} must be card-visible (the curated inspector card shows ALL stamped RT toggles)",
+                !spec.card_visible,
+                "{} has the setup role, so it is no card-visible stamp",
                 spec.name,
             );
         }

@@ -517,7 +517,7 @@ mod tests {
     fn preview_styles(tree: &UITree) -> (UIStyle, UIStyle) {
         let mut display = None;
         let mut sdr = None;
-        for node in tree.nodes() {
+        for node in tree.all_nodes() {
             match node.text.as_deref() {
                 Some("Display") => display = Some(node.style),
                 Some("SDR") => sdr = Some(node.style),

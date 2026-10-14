@@ -1,6 +1,7 @@
 //! Physics scene command helpers extracted from `scene.rs`.
 
 use super::*;
+use manifold_core::change::ChangeSet;
 
 pub(super) fn split_capacity_value(value: &SerializedParamValue) -> SerializedParamValue {
     let raw = match value {
@@ -64,8 +65,8 @@ pub struct SplitSceneObjectCommand {
     target: GraphTarget,
     render_scene_node_id: u32,
     object_index: u32,
-    body_metadata: Vec<SceneParamMetadata>,
-    world_metadata: Option<Vec<SceneParamMetadata>>,
+    body_metadata: Vec<NodeParamMetadata>,
+    world_metadata: Option<Vec<NodeParamMetadata>>,
     catalog_default: EffectGraphDef,
     prev: Option<(
         Vec<EffectGraphNode>,
@@ -80,7 +81,7 @@ impl SplitSceneObjectCommand {
         target: GraphTarget,
         render_scene_node_id: u32,
         object_index: u32,
-        body_metadata: Vec<SceneParamMetadata>,
+        body_metadata: Vec<NodeParamMetadata>,
         catalog_default: EffectGraphDef,
     ) -> Self {
         Self {
@@ -95,18 +96,19 @@ impl SplitSceneObjectCommand {
         }
     }
 
-    pub fn with_world_metadata(mut self, metadata: Vec<SceneParamMetadata>) -> Self {
+    pub fn with_world_metadata(mut self, metadata: Vec<NodeParamMetadata>) -> Self {
         self.world_metadata = Some(metadata);
         self
     }
 }
 
 impl Command for SplitSceneObjectCommand {
+    fn touches(&self) -> ChangeSet { crate::commands::graph_edit_touches(&self.target, crate::commands::GRAPH_AND_MANIFEST) }
     fn graph_admission_targets(&self, targets: &mut Vec<GraphTarget>) {
         targets.push(self.target.clone());
     }
 
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         self.prev = None;
         self.rejection = None;
         let Some(def) = project.graph_for_target(&self.target, Some(&self.catalog_default)) else {
@@ -513,7 +515,6 @@ impl Command for SplitSceneObjectCommand {
                         &mut meta.bindings,
                         *body_id,
                         body_node_id,
-                        "node.rigid_body",
                         &format!("{} Piece {} — Physics", parts.object_handle, index + 1),
                         &self.body_metadata,
                         params,
@@ -532,7 +533,6 @@ impl Command for SplitSceneObjectCommand {
                     &mut meta.bindings,
                     world.id,
                     &world.node_id,
-                    "node.physics_world",
                     "Physics World",
                     world_metadata,
                     &world.params,
@@ -553,7 +553,7 @@ impl Command for SplitSceneObjectCommand {
         }
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         let Some((nodes, wires, metadata)) = self.prev.take() else {
             return;
         };

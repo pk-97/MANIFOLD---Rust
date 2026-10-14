@@ -496,6 +496,12 @@ impl AbletonBridge {
             return;
         }
 
+        // Outside the live app the bridge stays disconnected: no fixed port, and
+        // nothing is ever sent to a running Live set.
+        if !manifold_core::device_guard::allowed(manifold_core::device_guard::RealDevice::AbletonBridge) {
+            return;
+        }
+
         // Bind send socket to ephemeral port, connect to Ableton
         match UdpSocket::bind("0.0.0.0:0") {
             Ok(sock) => {
@@ -2162,7 +2168,7 @@ impl AbletonBridge {
                     let Some(param) = fx.params.get(mapping.param_id.as_ref()) else {
                         continue;
                     };
-                    let (pmin, pmax) = (param.spec.min, param.spec.max);
+                    let (pmin, pmax) = param.slider_span();
                     let (abl_min, abl_max) = self.ableton_param_range(
                         mapping.address.track_id,
                         mapping.address.device_id,
@@ -2212,7 +2218,7 @@ impl AbletonBridge {
                             else {
                                 continue;
                             };
-                            let (pmin, pmax) = (param.spec.min, param.spec.max);
+                            let (pmin, pmax) = param.slider_span();
                             let (abl_min, abl_max) = self.ableton_param_range(
                                 mapping.address.track_id,
                                 mapping.address.device_id,
@@ -2258,7 +2264,7 @@ impl AbletonBridge {
                     let Some(param) = gp.params.get(mapping.param_id.as_ref()) else {
                         continue;
                     };
-                    let (pmin, pmax) = (param.spec.min, param.spec.max);
+                    let (pmin, pmax) = param.slider_span();
                     let (abl_min, abl_max) = self.ableton_param_range(
                         mapping.address.track_id,
                         mapping.address.device_id,
@@ -2990,6 +2996,9 @@ mod tests {
             section: None,
             card_visible: true,
             material_role: None,
+            limit: Default::default(),
+            unit: None,
+            scene: None,
         }
     }
 

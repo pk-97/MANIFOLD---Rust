@@ -97,6 +97,7 @@ impl MidiClockReceiver {
 
     /// Open a midir connection to the port at `source_index`.
     fn start(&mut self, source_index: i32) {
+        manifold_core::device_guard::require(manifold_core::device_guard::RealDevice::Midi);
         let midi_in = match midir::MidiInput::new("manifold-clock") {
             Ok(m) => m,
             Err(e) => {
@@ -172,6 +173,9 @@ impl MidiClockReceiver {
 
     /// Number of available MIDI input ports.
     fn source_count() -> usize {
+        if !manifold_core::device_guard::allowed(manifold_core::device_guard::RealDevice::Midi) {
+            return 0;
+        }
         match midir::MidiInput::new("manifold-clock-scan") {
             Ok(m) => m.ports().len(),
             Err(_) => 0,
@@ -180,6 +184,9 @@ impl MidiClockReceiver {
 
     /// Display name of the MIDI port at `index`.
     fn source_name(index: i32) -> String {
+        if !manifold_core::device_guard::allowed(manifold_core::device_guard::RealDevice::Midi) {
+            return format!("Port {}", index);
+        }
         let midi_in = match midir::MidiInput::new("manifold-clock-scan") {
             Ok(m) => m,
             Err(_) => return format!("Port {}", index),

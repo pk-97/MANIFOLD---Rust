@@ -1,0 +1,8 @@
+[
+  { "Menu": { "item": "Perform" } },
+  "ResetWork",
+  { "Step": { "frames": 120 } },
+  { "AssertWork": { "window": "idle_2s" } },
+  "AssertFresh",
+  "Snapshot"
+]

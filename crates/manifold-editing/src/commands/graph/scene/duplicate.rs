@@ -1,6 +1,7 @@
 //! Undoable scene-object duplication and owned graph cloning.
 
 use super::*;
+use manifold_core::change::ChangeSet;
 
 /// The duplicate-object gesture (D11): one undoable composite edit that
 /// deep-clones the source object's `scene_object` (+ its enclosing group,
@@ -68,11 +69,12 @@ impl DuplicateSceneObjectCommand {
 }
 
 impl Command for DuplicateSceneObjectCommand {
+    fn touches(&self) -> ChangeSet { crate::commands::graph_edit_touches(&self.target, crate::commands::GRAPH_AND_MANIFEST) }
     fn graph_admission_targets(&self, targets: &mut Vec<GraphTarget>) {
         targets.push(self.target.clone());
     }
 
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         self.rejection = None;
         self.applied = false;
         let scope = self.scope_path.clone();
@@ -527,7 +529,7 @@ impl Command for DuplicateSceneObjectCommand {
         self.applied = true;
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         let Some(previous_graph) = self.prev_graph.clone() else {
             return;
         };

@@ -327,6 +327,9 @@ pub struct ParamCardPanel {
     /// the effect row renderer but deliberately has slimmer chrome: object
     /// enable/target/relight controls belong to the owning object card.
     object_modifier: Option<crate::param_surface::ObjectModifierCardInfo>,
+    /// The card sits under a Scene tab item header that owns its name and
+    /// delete (SCENE_SURFACES D8), so its own header shows neither.
+    item_hosted: bool,
     modifier_remove_btn_id: Option<NodeId>,
     modifier_objects_btn_id: Option<NodeId>,
 
@@ -374,6 +377,13 @@ pub struct ParamCardPanel {
     /// positioned yet" — snap instead of ease so a tab strip appearing for the
     /// first time doesn't visibly slide in from x=0.
     mod_tab_ink: Vec<AnimF32>,
+    /// Per row, the drawer height the built tree shows (`NaN` for a row not
+    /// built) and the clip the drawer reveals through, so the tween moves the
+    /// tree in place instead of rebuilding it (`take_motion`).
+    drawer_shown: Vec<f32>,
+    drawer_clips: Vec<Option<NodeId>>,
+    /// Per row, the tab-ink node, moved in place as `mod_tab_ink` slides.
+    mod_tab_ink_ids: Vec<Option<NodeId>>,
     /// section 6b compact mode — when true, every modulation config drawer on this card
     /// is hidden (mods stay armed; arm buttons + slider track overlays still
     /// show). Driven globally by the inspector's "hide mod settings" toggle.
@@ -386,13 +396,14 @@ pub struct ParamCardPanel {
     osc_addresses: Vec<Option<String>>,
 
     /// D5 card-section fold state (SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md
-    /// section 2), keyed by section name. UI-local workspace state — same home as
-    /// the graph canvas's `GraphCanvas::collapsed` (survives rebuilds of
-    /// this panel instance, never serialized to the project; folds reset on
-    /// app restart, persistence Deferred). Missing entry = unfolded
-    /// (default). A section not present in the current `rows` is
-    /// simply never consulted — no pruning needed.
+    /// section 2), keyed by section name. Missing entry = unfolded. On a
+    /// scene card it mirrors the instance's saved fold choices
+    /// (`set_scene_sections`); elsewhere it is UI-local and resets on
+    /// restart.
     section_folded: ahash::AHashMap<String, bool>,
+    /// A scene card: section folds are saved choices and a section title
+    /// opens the Scene tab (SCENE_SURFACES_DESIGN.md D10).
+    scene_sections: bool,
 
     copied_flash: CopyToClipboardLabelState,
 
@@ -460,7 +471,8 @@ pub struct ParamCardPanel {
     /// in release.
     row_value_synced: Vec<bool>,
 
-    // Node range
+    // Node range: slots in `region`'s arena.
+    region: u8,
     first_node: usize,
     node_count: usize,
 
@@ -523,6 +535,7 @@ impl ParamCardPanel {
             led_band_version: 0,
             modifier: None,
             object_modifier: None,
+            item_hosted: false,
             modifier_remove_btn_id: None,
             modifier_objects_btn_id: None,
             cached_enabled: true,
@@ -535,10 +548,14 @@ impl ParamCardPanel {
             mod_active_tab: Vec::new(),
             drawer_height_anim: Vec::new(),
             mod_tab_ink: Vec::new(),
+            drawer_shown: Vec::new(),
+            drawer_clips: Vec::new(),
+            mod_tab_ink_ids: Vec::new(),
             compact: false,
             string_param_btn_ids: Vec::new(),
             osc_addresses: Vec::new(),
             section_folded: ahash::AHashMap::new(),
+            scene_sections: false,
             copied_flash: CopyToClipboardLabelState::default(),
             relight_drag: ScrubGesture::new(),
             param_cache: Vec::new(),
@@ -551,6 +568,7 @@ impl ParamCardPanel {
             delete_fade: None,
             row_id_index: ahash::AHashMap::new(),
             row_value_synced: Vec::new(),
+            region: crate::tree::DEFAULT_REGION,
             first_node: 0,
             node_count: 0,
         }
@@ -804,6 +822,19 @@ impl ParamCardPanel {
         self.node_count
     }
 
+    /// The region whose arena holds this card's nodes.
+    pub fn region(&self) -> u8 {
+        self.region
+    }
+
+    /// Whether `id` is one of the nodes this card built this frame.
+    pub fn owns_node(&self, id: NodeId) -> bool {
+        self.is_live()
+            && id.region() == self.region
+            && id.slot() >= self.first_node
+            && id.slot() < self.first_node + self.node_count
+    }
+
     /// D9 widget catalog — enumerate this card's sanctioned row affordances by
     /// walking its own node range and resolving each interactive node through
     /// the SAME [`RowIndex`](crate::param_surface::RowIndex) routing uses,
@@ -821,7 +852,7 @@ impl ParamCardPanel {
         if self.is_live() {
             let end = self.first_node.saturating_add(self.node_count);
             for idx in self.first_node..end {
-                let node_id = tree.id_at(idx);
+                let node_id = tree.id_in(self.region, idx);
                 let widget = tree.widget_of(node_id);
                 if let Some((row, role)) = self.row_host.row_index.get(widget) {
                     affordances.push(CatalogAffordance {
@@ -919,6 +950,53 @@ impl ParamCardPanel {
             BORDER_W * 2.0 + LED_BAND_MAX_H + HEADER_BODY_GAP
         } else {
             0.0
+        }
+    }
+
+    /// Rewrite each frame-aligned driver's period readout in place (D20).
+    /// `rate_of` answers for a row's param id.
+    pub fn sync_driver_frame_rates(
+        &mut self,
+        tree: &mut UITree,
+        rate_of: &mut dyn FnMut(&str) -> Option<(u32, f32)>,
+    ) {
+        for (row, param) in self.rows.iter_mut().enumerate() {
+            if !self.state.mod_state.driver_frame_aligned.get(row).copied().unwrap_or(false) {
+                continue;
+            }
+            let rate = rate_of(param.id.as_ref());
+            // The row model too, so a later build from these rows agrees.
+            param.modulation.driver_frame_rate = rate;
+            self.row_host.sync_driver_frame_rate(tree, &mut self.state.mod_state, row, rate);
+        }
+    }
+
+    /// Rewrite every row's live-scalar handles and drawer readouts in place
+    /// (UI_INVALIDATION D22). `shapes_of` answers for a row's param id.
+    pub fn sync_live_shapes(
+        &mut self,
+        tree: &mut UITree,
+        shapes_of: &mut dyn FnMut(&str) -> crate::panels::param_slider_shared::RowShapes,
+    ) {
+        for (row, param) in self.rows.iter_mut().enumerate() {
+            let shapes = shapes_of(param.id.as_ref());
+            self.row_host.sync_row_shapes(tree, &mut self.state.mod_state, param, row, &shapes);
+        }
+    }
+
+    /// Rewrite the six "3D Shading" knobs in place (UI_INVALIDATION D22).
+    /// The toggle and Height From are discrete and rebuild.
+    pub fn sync_relight_values(&mut self, tree: &mut UITree, relight: &RelightCardConfig) {
+        for (i, spec) in RELIGHT_FIELD_SPECS.iter().enumerate() {
+            let value = relight.value(spec.field);
+            if self.relight.value(spec.field) == value {
+                continue;
+            }
+            self.relight.set_value(spec.field, value);
+            if let Some(ids) = self.relight_slider_ids[i].as_ref() {
+                let norm = crate::slider::BitmapSlider::value_to_normalized(value, spec.min, spec.max);
+                crate::slider::BitmapSlider::update_value(tree, ids, norm, &format!("{value:.2}"));
+            }
         }
     }
 
@@ -1200,6 +1278,40 @@ impl ParamCardPanel {
     pub fn section_header_ids(&self) -> &[(NodeId, String)] {
         &self.row_host.section_header_ids
     }
+
+    /// Mark this card a scene card and load its saved fold state: `Some`
+    /// lists the folded section titles (saved choices with the D11 default
+    /// already applied by the projection); `None` makes it an ordinary card
+    /// whose folds stay UI-local.
+    pub fn set_scene_sections(&mut self, folded: Option<&[String]>) {
+        self.scene_sections = folded.is_some();
+        if let Some(folded) = folded {
+            self.section_folded.clear();
+            for title in folded {
+                self.section_folded.insert(title.clone(), true);
+            }
+        }
+    }
+
+    pub fn is_scene_card(&self) -> bool {
+        self.scene_sections
+    }
+
+    pub fn row(&self, param_id: &str) -> Option<&ParamRow> {
+        self.rows.iter().find(|row| row.id == param_id)
+    }
+
+    /// Flash the value readout of a built row; `false` when the row is not
+    /// on this card or not built this frame (folded or scrolled away).
+    pub fn flash_row(&mut self, param_id: &str) -> bool {
+        let Some(index) = self.rows.iter().position(|row| row.id == param_id) else { return false };
+        if self.row_host.slider_ids.get(index).is_none_or(|ids| ids.is_none()) {
+            return false;
+        }
+        let Some(flash) = self.value_flash.get_mut(index) else { return false };
+        flash.fire(color::MOTION_SLOW_MS * 2.0);
+        true
+    }
 }
 
 impl Default for ParamCardPanel {
@@ -1246,10 +1358,13 @@ pub(super) mod tests {
                         is_trigger: false,
                         is_trigger_gate: false,
                         value_labels: None,
+                        unit: None,
                         section: None,
                         disabled: None,
                         material_role: None,
                         inactive_reason: None,
+                        scene: None,
+                        limit: Default::default(),
                     },
                     value: RowValue { base: 10.0, effective: 10.0, exposed: true, driven: false },
                     audio: AudioRowState::default(),
@@ -1279,10 +1394,13 @@ pub(super) mod tests {
                         is_trigger: false,
                         is_trigger_gate: false,
                         value_labels: None,
+                        unit: None,
                         section: None,
                         disabled: None,
                         material_role: None,
                         inactive_reason: None,
+                        scene: None,
+                        limit: Default::default(),
                     },
                     value: RowValue { base: 0.5, effective: 0.5, exposed: true, driven: false },
                     audio: AudioRowState::default(),
@@ -1325,10 +1443,13 @@ pub(super) mod tests {
                 is_trigger: false,
                 is_trigger_gate: false,
                 value_labels: None,
+                unit: None,
                 section: None,
                 disabled: None,
                 material_role: None,
                 inactive_reason: None,
+                scene: None,
+                limit: Default::default(),
             },
             value: RowValue { base: 0.0, effective: 0.0, exposed: true, driven: false },
             audio: AudioRowState::default(),
@@ -1358,10 +1479,13 @@ pub(super) mod tests {
                 is_trigger: true,
                 is_trigger_gate: false,
                 value_labels: None,
+                unit: None,
                 section: None,
                 disabled: None,
                 material_role: None,
                 inactive_reason: None,
+                scene: None,
+                limit: Default::default(),
             },
             value: RowValue { base: 0.0, effective: 0.0, exposed: true, driven: false },
             audio: AudioRowState::default(),
@@ -1572,10 +1696,13 @@ pub(super) mod tests {
                 is_trigger: false,
                 is_trigger_gate: true,
                 value_labels: None,
+                unit: None,
                 section: None,
                 disabled: None,
                 material_role: None,
                 inactive_reason: None,
+                scene: None,
+                limit: Default::default(),
             },
             value: RowValue { base: 0.0, effective: 0.0, exposed: true, driven: false },
             audio: AudioRowState::default(),
@@ -1708,8 +1835,7 @@ pub(super) mod tests {
             let mut tree = UITree::new();
             panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 500.0));
             assert!(!tree
-                .nodes()
-                .iter()
+                .all_nodes()
                 .any(|node| node.text.as_deref() == Some("Owner lane")));
         }
     }
@@ -1971,7 +2097,7 @@ pub(super) mod tests {
         let mut tree = UITree::new();
         panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 400.0));
         let clips_midflight =
-            tree.nodes().iter().filter(|n| n.node_type == UINodeType::ClipRegion).count();
+            tree.all_nodes().filter(|n| n.node_type == UINodeType::ClipRegion).count();
         assert!(clips_midflight >= 1, "an animating trigger-gate drawer builds under a clip region");
         // The drawer still builds (not skipped) — just clipped to the reveal.
         assert!(panel.row_host.audio_configs[gi].is_some());
@@ -1986,11 +2112,10 @@ pub(super) mod tests {
         );
         let mut tree2 = UITree::new();
         panel.build(&mut tree2, Rect::new(0.0, 0.0, 280.0, 400.0));
-        let clips_settled =
-            tree2.nodes().iter().filter(|n| n.node_type == UINodeType::ClipRegion).count();
+        let clip = panel.drawer_clips[gi].expect("the settled trigger-gate drawer keeps its reveal clip");
         assert!(
-            clips_settled < clips_midflight,
-            "settled build drops the trigger-gate drawer clip: settled={clips_settled} midflight={clips_midflight}"
+            (tree2.get_bounds(clip).height - full_target).abs() < 0.1,
+            "the settled clip shows the whole trigger-gate drawer"
         );
     }
 
@@ -2208,7 +2333,7 @@ pub(super) mod tests {
         let mut panel = ParamCardPanel::new();
         panel.configure(&config);
         panel.build(&mut tree, Rect::new(0.0, 0.0, 340.0, 200.0));
-        assert!(tree.nodes().iter().any(|node| {
+        assert!(tree.all_nodes().any(|node| {
             node.flags.contains(UIFlags::INTERACTIVE)
                 && node.tooltip.as_deref() == Some("Shape the surface.")
         }));
@@ -2289,6 +2414,23 @@ pub(super) mod tests {
         assert!(tree.has_dirty());
     }
 
+    /// A mapping-drawer range edit changes the span but not the value: the
+    /// fill must still move to the value's place in the new span.
+    #[test]
+    fn sync_values_range_change_replaces_fill_at_same_value() {
+        let mut tree = UITree::new();
+        let mut panel = ParamCardPanel::new();
+        panel.configure(&effect_config());
+        panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 200.0));
+        let slot = |min: f32, max: f32| crate::view::UiParamSlot { min, max, ..crate::view::UiParamSlot::exposed(50.0) };
+        panel.sync_values(&mut tree, &mut [("radius", slot(0.0, 100.0)), ("strength", slot(0.0, 1.0))].into_iter());
+        let fill = panel.row_host.slider_ids[0].as_ref().unwrap().fill;
+        let wide = tree.get_bounds(fill).width;
+        panel.sync_values(&mut tree, &mut [("radius", slot(0.0, 75.0)), ("strength", slot(0.0, 1.0))].into_iter());
+        let narrow_span = tree.get_bounds(fill).width;
+        assert!(narrow_span > wide + 1.0, "fill {wide} -> {narrow_span}: the span shrank, so 50 sits further along");
+    }
+
     #[test]
     fn unavailable_placeholder_needs_no_manifest_slot() {
         let mut tree = UITree::new();
@@ -2340,6 +2482,46 @@ pub(super) mod tests {
             Some("0.25"),
             "strength must show its own value — NOT the hidden param's 999 a positional join would have shifted onto it"
         );
+    }
+
+    /// SCENE_SURFACES P9: a light row's swatch lives in the shared row
+    /// builder, opens the colour menu with its three channel ids, and
+    /// follows the channels' live values even though they are not rows.
+    #[test]
+    fn light_row_swatch_opens_the_colour_menu_and_tracks_its_channels() {
+        use crate::param_surface::{ColourGroup, RgbMembers};
+        use crate::view::UiParamSlot as ParamSlot;
+        let ids = ["7_color_r", "7_color_g", "7_color_b"].map(manifold_foundation::ParamId::from);
+        let mut config = gen_config();
+        config.rows[0].rgb_members = Some(RgbMembers { group: ColourGroup::Light, ids: ids.clone(), values: [1.0, 0.5, 0.25] });
+        let mut tree = UITree::new();
+        let mut panel = ParamCardPanel::new();
+        panel.configure(&config);
+        panel.build(&mut tree, Rect::new(0.0, 0.0, 340.0, 400.0));
+
+        let (swatch, group) = panel.row_host.swatch_ids[0].expect("the light row builds a swatch");
+        assert_eq!(group, ColourGroup::Light);
+        assert!(panel.row_host.swatch_ids[1..].iter().all(Option::is_none), "only the swatch row gets one");
+        assert_eq!(tree.get_node(swatch).unwrap().style.bg_color, crate::panels::param_slider_shared::swatch_colour([1.0, 0.5, 0.25]));
+        assert_eq!(panel.row_host.row_index.get(tree.widget_of(swatch)), Some((0, RowRole::ColourSwatch(ColourGroup::Light))));
+        let track_x = |row: usize| tree.get_bounds(panel.row_host.slider_ids[row].as_ref().unwrap().track).x;
+        let plain = (1..panel.rows.len()).find(|&row| panel.row_host.slider_ids[row].is_some()).expect("a plain slider row");
+        assert_eq!(track_x(0), track_x(plain), "the swatch takes label space, never track space");
+
+        let actions = panel.handle_click(swatch, &tree);
+        assert!(
+            matches!(actions.as_slice(), [PanelAction::Root(RootAction::OpenColourMenu { target: GraphParamTarget::Generator, param_ids, value })]
+                if param_ids == &ids && *value == [1.0, 0.5, 0.25]),
+            "{actions:?}"
+        );
+
+        let row_ids: Vec<String> = panel.rows.iter().map(|row| row.id.to_string()).collect();
+        let mut slots: Vec<(&str, ParamSlot)> = row_ids.iter().map(|id| (id.as_str(), ParamSlot::exposed(1.0))).collect();
+        slots.push((ids[1].as_ref(), ParamSlot::exposed(0.0)));
+        panel.sync_values(&mut tree, &mut slots.into_iter());
+        assert_eq!(tree.get_node(swatch).unwrap().style.bg_color, crate::panels::param_slider_shared::swatch_colour([1.0, 0.0, 0.25]));
+        let actions = panel.handle_click(swatch, &tree);
+        assert!(matches!(actions.as_slice(), [PanelAction::Root(RootAction::OpenColourMenu { value, .. })] if *value == [1.0, 0.0, 0.25]));
     }
 
     #[test]
@@ -2768,8 +2950,7 @@ pub(super) mod tests {
         let mut tree = UITree::new();
         panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 300.0));
         let clips_midflight = tree
-            .nodes()
-            .iter()
+            .all_nodes()
             .filter(|n| n.node_type == UINodeType::ClipRegion)
             .count();
         assert!(clips_midflight >= 1, "an animating card collapse builds its body under a clip region");
@@ -2784,8 +2965,7 @@ pub(super) mod tests {
         let mut tree2 = UITree::new();
         panel.build(&mut tree2, Rect::new(0.0, 0.0, 280.0, 300.0));
         let clips_settled = tree2
-            .nodes()
-            .iter()
+            .all_nodes()
             .filter(|n| n.node_type == UINodeType::ClipRegion)
             .count();
         assert_eq!(clips_settled, 0, "settled collapsed card has no leftover clip region");
@@ -2891,13 +3071,13 @@ pub(super) mod tests {
         let mut tree = UITree::new();
         panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 400.0));
         let clips_midflight = tree
-            .nodes()
-            .iter()
+            .all_nodes()
             .filter(|n| n.node_type == UINodeType::ClipRegion)
             .count();
         assert!(clips_midflight >= 1, "an animating drawer builds under a clip region");
 
-        // Run the tween to completion → settled at full height, no drawer clip.
+        // Run the tween to completion: settled at full height, the drawer
+        // clip kept at full height for the next tween to move in place.
         for _ in 0..20 {
             panel.tick_drawers(20.0);
         }
@@ -2908,14 +3088,10 @@ pub(super) mod tests {
         );
         let mut tree2 = UITree::new();
         panel.build(&mut tree2, Rect::new(0.0, 0.0, 280.0, 400.0));
-        let clips_settled = tree2
-            .nodes()
-            .iter()
-            .filter(|n| n.node_type == UINodeType::ClipRegion)
-            .count();
+        let clip = panel.drawer_clips[0].expect("the settled drawer keeps its reveal clip");
         assert!(
-            clips_settled < clips_midflight,
-            "settled build drops the drawer clip: settled={clips_settled} midflight={clips_midflight}"
+            (tree2.get_bounds(clip).height - full_target).abs() < 0.1,
+            "the settled clip shows the whole drawer"
         );
         assert!(panel.row_host.driver_config_ids[0].is_some(), "driver config built (unclipped) when settled");
     }
@@ -3414,10 +3590,13 @@ pub(super) mod tests {
                         is_trigger: false,
                         is_trigger_gate: false,
                         value_labels: None,
+                        unit: None,
                         section: None,
                         disabled: None,
                         material_role: None,
                         inactive_reason: None,
+                        scene: None,
+                        limit: Default::default(),
                     },
                     value: RowValue { base: 1.0, effective: 1.0, exposed: true, driven: false },
                     audio: AudioRowState::default(),
@@ -3447,10 +3626,13 @@ pub(super) mod tests {
                         is_trigger: false,
                         is_trigger_gate: false,
                         value_labels: None,
+                        unit: None,
                         section: None,
                         disabled: None,
                         material_role: None,
                         inactive_reason: None,
+                        scene: None,
+                        limit: Default::default(),
                     },
                     value: RowValue { base: 0.0, effective: 0.0, exposed: true, driven: false },
                     audio: AudioRowState::default(),
@@ -3480,10 +3662,13 @@ pub(super) mod tests {
                         is_trigger: false,
                         is_trigger_gate: false,
                         value_labels: None,
+                        unit: None,
                         section: None,
                         disabled: None,
                         material_role: None,
                         inactive_reason: None,
+                        scene: None,
+                        limit: Default::default(),
                     },
                     value: RowValue { base: 1.0, effective: 1.0, exposed: true, driven: false },
                     audio: AudioRowState::default(),

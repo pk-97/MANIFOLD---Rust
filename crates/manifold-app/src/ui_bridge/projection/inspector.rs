@@ -17,9 +17,8 @@ use crate::ui_root::UIRoot;
 
 use super::cards::{
     OscScope, SurfaceVisibility, attach_project_sources, audio_send_choices, effects_to_surfaces,
-    gen_params_to_surface, modifier_surfaces,
+    gen_params_to_surface, modifier_surfaces, scene_card_folds,
 };
-use super::scene::sections_for_nodes;
 
 fn mark_selected_automation_row(surface: &mut ParamSurface, layer_id: &manifold_core::LayerId, target: &UiGraphTarget, param_id: &manifold_core::effects::ParamId) {
     let surface_target = match (surface.kind, surface.modifier.is_some()) {
@@ -114,142 +113,21 @@ pub fn sync_inspector_data(
             .collect(),
     );
     let selected_automation = |layer_id: &manifold_core::LayerId| {
-        if !selection.automation_mode_visible { return None; }
+        if !selection.automation_mode_visible() { return None; }
         selection.selected_automation_point.as_ref().map(|point| (&point.target, &point.param_id))
-            .or_else(|| selection.chosen_automation_params.get(layer_id).map(|(target, param_id)| (target, param_id)))
+            .or_else(|| selection.chosen_automation_params().get(layer_id).map(|(target, param_id)| (target, param_id)))
     };
-    // Audio Setup modal — refresh its current device + send list while it's
-    // open. Resolving the device through the directory once per sync (only while
-    // the modal is up) gives each send row its real channel name, grouped or
-    // not, instead of a bare index.
-    if ui.audio_setup_panel.is_open() {
-        use manifold_core::AudioSourceKind;
-        use manifold_ui::panels::audio_setup_panel::AudioSendRow;
-        manifold_core::work_count::record_work(manifold_core::work_count::WorkKind::DeviceQuery);
-        let dir = manifold_audio::directory::system_directory();
-        // Only a hardware input device resolves to a DeviceInfo. Tap sources
-        // (system / app output) don't live in the input-device list, and "none"
-        // (no capture) has nothing to resolve — a tap's liveness is checked
-        // separately below.
-        let device = match &project.audio_setup.device {
-            Some(d) if d.kind == AudioSourceKind::InputDevice => {
-                dir.resolve(d.uid_opt(), Some(&d.name))
-            }
-            Some(_) => None, // a tap or "none" — no DeviceInfo
-            None => dir.list_input_devices().into_iter().find(|d| d.is_default),
-        };
-        let sends = project
-            .audio_setup
-            .sends
-            .iter()
-            .map(|s| {
-                // Read-only source view: the full routing lines (capture device +
-                // each feeding layer) for the Inputs section. Routing is edited
-                // elsewhere — layers from the layer header; channels are always
-                // stereo now, so there is no per-send channel control to resolve.
-                let cap = s.has_capture();
-                let layer_name = |lid: &manifold_core::LayerId| {
-                    project
-                        .timeline
-                        .layers
-                        .iter()
-                        .find(|l| &l.layer_id == lid)
-                        .map(|l| l.name.clone())
-                        .unwrap_or_else(|| {
-                            manifold_ui::panels::audio_setup_panel::MISSING_LAYER_LABEL.to_string()
-                        })
-                };
-                // Full routing lines for the read-only Inputs section. A
-                // capture-fed send is always stereo, so its line reads
-                // "Capture • Stereo" rather than naming individual channels.
-                let mut routings: Vec<String> = Vec::new();
-                if cap {
-                    routings.push("Capture \u{2022} Stereo".to_string());
-                }
-                for lid in s.layers() {
-                    routings.push(format!("Layer \u{2022} {}", layer_name(lid)));
-                }
-                // Consumers section: named audio mods (param gate/continuous
-                // cards) plus enabled layer-owned `LayerClipTrigger` configs
-                // (P3, D2 — the matrix's per-band route walk is gone; clip
-                // triggers are authored on the layer only). Both are purely
-                // navigational rows (D3): click selects the owning layer.
-                let clip_triggers = project.clip_trigger_consumers(&s.id);
-                let has_clip_triggers = !clip_triggers.is_empty();
-                let consumers: Vec<manifold_ui::panels::audio_setup_panel::SendConsumerRow> =
-                    project
-                        .audio_mod_consumers(&s.id)
-                        .into_iter()
-                        .chain(clip_triggers)
-                        .map(|(layer_id, label)| {
-                            manifold_ui::panels::audio_setup_panel::SendConsumerRow { label, layer_id }
-                        })
-                        .collect();
-                // Inputs section: audio layers feeding this send (id + name).
-                let feeding_layers: Vec<(manifold_core::LayerId, String)> =
-                    s.layers().iter().map(|lid| (lid.clone(), layer_name(lid))).collect();
+    ui.inspector
+        .macros_panel_mut()
+        .set_ableton_ranges(&super::live_shapes::macro_ableton_ranges(project));
+    // Tabs first: the Scene tab decides whether the scene panel is open.
+    configure_inspector_tabs(ui, project, active_layer, selection);
 
-                AudioSendRow {
-                    id: s.id.clone(),
-                    label: s.label.clone(),
-                    channels: s.channels.clone(),
-                    gain_db: s.gain_db,
-                    floor_db: s.floor_db,
-                    driven_count: project.audio_send_usage_count(&s.id),
-                    routings,
-                    has_clip_triggers,
-                    feeding_layers,
-                    consumers,
-                }
-            })
-            .collect();
-
-        // Surface a reliability warning: a chosen source that can't capture right
-        // now — a device that won't resolve / reads offline, a tap on an OS that
-        // can't tap, an app that isn't running — else a blocked mic permission.
-        let status_warning = match &project.audio_setup.device {
-            Some(d) => match d.kind {
-                AudioSourceKind::InputDevice => match &device {
-                    None => Some(format!("\u{26A0} \"{}\" is offline or unplugged", d.name)),
-                    Some(info) if !info.is_alive => {
-                        Some(format!("\u{26A0} \"{}\" is offline", info.name))
-                    }
-                    _ => None,
-                },
-                // No capture is a deliberate choice, not a warning.
-                AudioSourceKind::None => None,
-                AudioSourceKind::SystemAudio => (!dir.tap_capabilities().system_audio)
-                    .then(|| "\u{26A0} System audio capture needs macOS 14.4+".to_string()),
-                AudioSourceKind::App => dir
-                    .resolve_app(d.uid_opt().unwrap_or(""))
-                    .is_none()
-                    .then(|| format!("\u{26A0} \"{}\" isn't running", d.name)),
-            },
-            None => None,
-        }
-        .or_else(|| {
-            (!manifold_audio::permission::status().is_usable())
-                .then(|| "\u{26A0} Microphone access blocked — check System Settings".to_string())
-        });
-
-        ui.audio_setup_panel.configure(
-            project
-                .audio_setup
-                .device
-                .as_ref()
-                .map(crate::ui_translate::audio_device_ref_to_ui),
-            sends,
-            status_warning,
-        );
-
-    }
-
-    // ── Scene Setup panel (SCENE_SETUP_PANEL_DESIGN.md) ──
-    // Rebuilt from scratch every sync while the dock is open — no cached/
-    // staged copy anywhere (D1: "no rotting, no staleness"). Selection
-    // scoping mirrors the inspector-tab rung derivation just below (section 1 VERIFY
-    // marker, resolved): the selection's own layer, falling back to
-    // `active_layer`.
+    // ── Scene tab (SCENE_SURFACES D16) ──
+    // Rebuilt from scratch every sync while the tab is active — no cached/
+    // staged copy anywhere (D1: "no rotting, no staleness"). Bound to the
+    // same layer as the tab rungs: the selection's own layer, falling back
+    // to `active_layer`.
     if ui.scene_setup_panel.is_open() {
         use manifold_nodes_scene::node_graph::scene_vm::{SceneVm, is_param_driven, is_param_exposed};
         use manifold_ui::panels::scene_setup_panel::{
@@ -258,9 +136,8 @@ pub fn sync_inspector_data(
         };
 
         let sel_layer_idx = selection
-            .selected_layer_id_for_clip
-            .as_ref()
-            .or(selection.primary_selected_layer_id.as_ref())
+            .selected_layer_id_for_clip()
+            .or(selection.primary_selected_layer_id())
             .and_then(|id| project.timeline.find_layer_index_by_id(id))
             .or(active_layer);
         let layer = sel_layer_idx.and_then(|i| project.timeline.layers.get(i));
@@ -290,6 +167,9 @@ pub fn sync_inspector_data(
                     match def.as_ref().and_then(|d| SceneVm::from_def_with_layers(d, &layer_ids)) {
                         None => SceneSetupState::NoScene { layer_id },
                         Some(vm) => {
+                            let items = def.as_ref().map(|def| {
+                                manifold_nodes_scene::node_graph::scene_items::scene_items(def, &vm)
+                            }).unwrap_or_default();
                             let fluid_domains = super::scene::fluid_domains(&vm);
                             // Ranges transcribed from each primitive's own
                             // `ParamDef::range` (`bake_environment`'s
@@ -559,6 +439,7 @@ pub fn sync_inspector_data(
                                         ObjectMaterialVm::None
                                     }
                                 };
+                            let mut object_ids: Vec<Vec<String>> = Vec::new();
                             let objects: Vec<ObjectRowVm> = vm
                                 .objects
                                 .iter()
@@ -602,8 +483,9 @@ pub fn sync_inspector_data(
                                                     None => (false, None),
                                                 }
                                             };
-                                        let owned = super::scene::object_controls(def.as_ref(), known, &vm.objects);
-                                        let sections = sections_for_nodes(def.as_ref(), &owned);
+                                        let owned = super::scene::owned_nodes(
+                                            &items, &manifold_nodes_scene::node_graph::scene_items::SceneItemId::Object(known.object.clone()),
+                                        ).to_vec();
                                         let mut parameter_ids = super::scene::parameter_ids_for_nodes(
                                             def.as_ref(), &owned,
                                         );
@@ -614,6 +496,7 @@ pub fn sync_inspector_data(
                                         super::scene::filter_inactive_fluid_role_parameter_ids(
                                             def.as_ref(), *group_node_id, &mut parameter_ids,
                                         );
+                                        object_ids.push(parameter_ids);
                                         // P4b: every Known object gets a Skin
                                         // row, even when no `node.layer_source`
                                         // exists yet — `source_node_id: None`
@@ -673,8 +556,6 @@ pub fn sync_inspector_data(
                                                 material_inspector: def.as_ref().and_then(|d| super::material::inspector_info(project, d, known)),
                                                 modifiers: object_modifier_rows(def.as_ref(), modifier_chain, &owned),
                                                 modifiers_addable: known.look_mesh.is_none() && *modifier_chain_parseable,
-                                                sections,
-                                                parameter_ids,
                                                 skin: if known.look_mesh.is_some() { None } else { skin },
                                                 physics_enabled: physics.as_ref().is_some_and(|body| body.enabled),
                                                 physics_available,
@@ -789,10 +670,6 @@ pub fn sync_inspector_data(
                                                     0.0,
                                                     20.0,
                                                 )),
-                                                // P2 slice 2a: see
-                                                // `ObjectKnownRow::sections`'s
-                                                // doc comment.
-                                                sections: sections_for_nodes(def.as_ref(), std::slice::from_ref(&r.node)),
                                             },
                                         ))
                                     }
@@ -898,26 +775,8 @@ pub fn sync_inspector_data(
                             // (moved there C-P1b so `transform_row`/
                             // `material_row` can reuse them too) — reused
                             // here unchanged.
-                            // P2 slice 2a: the real P1 section string(s)
-                            // covering the camera atom (+ lens, if wired)
-                            // and World (environment/atmosphere) — see
-                            // `SceneSetupVm::camera_sections`/
-                            // `world_sections`'s doc comments. Computed from
-                            // `vm.camera`/`vm.environment`/`vm.atmosphere`
-                            // BEFORE the consuming matches below (reads the
-                            // VM's own case analysis, never re-derives graph
-                            // topology).
-                            // Custom and loop cameras share the "Camera"
-                            // section with an atom the panel doesn't drive,
-                            // so they show exactly the lens and tail's own
-                            // controls.
-                            let camera_sections = sections_for_nodes(def.as_ref(), &vm.camera_controls);
-                            let camera_parameter_ids = Some(super::scene::parameter_ids_for_nodes(
-                                def.as_ref(), &vm.camera_controls,
-                            ));
                             let camera_setup_needed = def.as_ref().is_some_and(|graph|
                                 crate::scene_camera_edit::needs_setup(graph, vm.scene_root_node_id));
-                            let world_sections = sections_for_nodes(def.as_ref(), &vm.world_controls);
                             let environment = match vm.environment {
                                 manifold_nodes_scene::node_graph::scene_vm::EnvironmentVm::Importer(e) => {
                                     EnvironmentRowVm::Importer {
@@ -1052,13 +911,13 @@ pub fn sync_inspector_data(
                                 if let Some(d) = def.as_ref() { super::material::enrich_surface(&mut surface, gp, d); }
                                 surface
                             });
+                            let tree_items =
+                                super::scene::scene_item_vms(def.as_ref(), &items, &objects, &lights, object_ids);
                             SceneSetupState::Live(Box::new(SceneSetupVm {
                                 layer_id,
-                                scene_name: l.name.clone(),
                                 multiple_scenes: vm.multiple_scenes,
                                 object_count: vm.header.object_count,
                                 light_count: vm.header.light_count,
-                                shadow_caster_count: vm.header.shadow_caster_count,
                                 scene_root_node_id: vm.scene_root_node_id,
                                 environment,
                                 atmosphere,
@@ -1068,10 +927,8 @@ pub fn sync_inspector_data(
                                 force_picker,
                                 lights,
                                 camera,
-                                camera_sections,
-                                camera_parameter_ids,
+                                items: tree_items,
                                 camera_setup_needed,
-                                world_sections,
                                 // SCENE_MODIFIER_FRAMEWORK P3 (D4): the Scene
                                 // Loop's panel surface is deleted — the loop
                                 // lives on the inspector's modifier card now.
@@ -1085,65 +942,6 @@ pub fn sync_inspector_data(
         ui.scene_setup_panel.configure(state);
         ui.scene_setup_panel.configure_params(full_params);
         ui.scene_setup_panel.configure_force_cards(&force_surfaces);
-    }
-
-    // ── Inspector tabs: the selection's ownership rungs (local→global) ──
-    // The rung set is derived from the SELECTION's own layer (the clip's layer
-    // or the selected layer), NOT `active_layer` — which now follows the active
-    // tab (e.g. it points at the group when the Group rung is pinned). Deriving
-    // from the stable selection keeps the full chain available no matter which
-    // rung you're viewing. The active rung is the pin if one is set (a tab
-    // click), else the selection-derived default.
-    {
-        use manifold_core::types::LayerType;
-        use manifold_ui::InspectorTab;
-        let has_clip = selection.primary_selected_clip_id.is_some();
-        let sel_layer_idx = selection
-            .selected_layer_id_for_clip
-            .as_ref()
-            .or(selection.primary_selected_layer_id.as_ref())
-            .and_then(|id| project.timeline.find_layer_index_by_id(id))
-            .or(active_layer);
-        let layer = sel_layer_idx.and_then(|i| project.timeline.layers.get(i));
-        let layer_is_group = layer.is_some_and(|l| l.layer_type == LayerType::Group);
-        let has_group_parent =
-            sel_layer_idx.is_some_and(|i| project.timeline.find_group_parent(i).is_some());
-
-        let mut tabs: Vec<InspectorTab> = Vec::new();
-        if has_clip {
-            tabs.push(InspectorTab::Clip);
-        }
-        if let Some(l) = layer {
-            if l.layer_type == LayerType::Group {
-                tabs.push(InspectorTab::Group);
-            } else {
-                tabs.push(InspectorTab::Layer);
-                if has_group_parent {
-                    tabs.push(InspectorTab::Group);
-                }
-            }
-        }
-        tabs.push(InspectorTab::Master);
-
-        let active = selection
-            .pinned_scope()
-            .filter(|t| tabs.contains(t))
-            .unwrap_or_else(|| {
-                // Default to the LAYER scope on any selection — the layer (its
-                // generator, effects, macros) is the persistent thing you tune,
-                // so landing there is less jarring than the per-clip view. The
-                // Clip tab is still one click away whenever a clip is selected.
-                if layer_is_group {
-                    InspectorTab::Group
-                } else if layer.is_some() {
-                    InspectorTab::Layer
-                } else if has_clip {
-                    InspectorTab::Clip
-                } else {
-                    InspectorTab::Master
-                }
-            });
-        ui.inspector.configure_tabs(&tabs, active);
     }
 
     // Master effects → inspector (envelopes ride on each instance)
@@ -1231,9 +1029,9 @@ pub fn sync_inspector_data(
             // Generator params — find clip's string_params for text fields.
             // Use selected clip if on this layer, otherwise first clip.
             let clip_string_params = selection
-                .primary_selected_clip_id
+                .primary_selected_clip_id()
                 .as_ref()
-                .and_then(|sel_id| layer.clips.iter().find(|c| c.id == *sel_id))
+                .and_then(|sel_id| layer.clips.iter().find(|c| c.id == **sel_id))
                 .or_else(|| layer.clips.first())
                 .and_then(|c| c.string_params.as_ref());
             let mut gen_config = layer
@@ -1257,8 +1055,10 @@ pub fn sync_inspector_data(
                 attach_project_sources(std::slice::from_mut(c), project);
             }
             let layer_id = layer.layer_id.clone();
+            let scene_folds = gen_config.as_ref().zip(layer.gen_params()).and_then(|(card, gp)| scene_card_folds(gp, card));
             ui.inspector
                 .configure_gen_params(gen_config.as_ref(), Some(layer_id));
+            ui.inspector.set_gen_scene_sections(scene_folds.as_deref());
 
             // Stable instances own cards; the catalog supplies the picker.
             {
@@ -1325,7 +1125,7 @@ pub fn sync_inspector_data(
     }
 
     // Clip chrome → inspector (per-clip effects removed)
-    if let Some(clip_id) = &selection.primary_selected_clip_id {
+    if let Some(clip_id) = selection.primary_selected_clip_id() {
         let clip = project
             .timeline
             .layers
@@ -1410,10 +1210,13 @@ pub fn sync_inspector_data(
             .clip_chrome_mut()
             .set_mode(false, false, false, false, false);
     }
-    if let Some((target, param)) = ui.pending_trigger_response_reveal.take()
-        && !ui.inspector.reveal_clip_response(&target, &param)
+    if let Some((target, param)) = ui.take_trigger_response_reveal()
+        && !ui.inspector.reveal_trigger_response(&target, &param)
     {
-        ui.scene_setup_panel.reveal_clip_response(&target, &param);
+        ui.scene_setup_panel.reveal_param(&target, &param);
+    }
+    if let Some((target, params)) = ui.take_scene_reveal() {
+        ui.scene_setup_panel.reveal_section(&target, &params);
     }
 }
 
@@ -1444,6 +1247,110 @@ pub fn sync_inspector_data(
 /// and the card disagreed about a generator's identity even though both
 /// ultimately read the same real, freshly-synthesized `EffectId` (see
 /// `manifold_playback::automation`'s `AutomationLatches` doc comment).
+/// Configure the inspector's tab rungs and open the scene panel exactly when
+/// the Scene tab is the active one (SCENE_SURFACES D16).
+fn configure_inspector_tabs(
+    ui: &mut UIRoot,
+    project: &Project,
+    active_layer: Option<usize>,
+    selection: &SelectionState,
+) {
+    let (tabs, active) = inspector_tabs(project, active_layer, selection, ui.inspector.active_tab());
+    ui.inspector.configure_tabs(&tabs, active);
+    let scene = active == manifold_ui::InspectorTab::Scene;
+    if scene {
+        ui.scene_setup_panel.open();
+    } else {
+        ui.scene_setup_panel.close();
+    }
+    let audio = ui.audio_setup_panel.is_open();
+    ui.header.set_audio_dock_open(audio);
+}
+
+/// The selection's ownership rungs (local→global) and the active one.
+///
+/// The rung set is derived from the SELECTION's own layer (the clip's layer
+/// or the selected layer), NOT `active_layer` — which follows the active tab
+/// (it points at the group when the Group rung is pinned). Deriving from the
+/// stable selection keeps the full chain available no matter which rung you
+/// are viewing. The active rung is the pin if one is set (a tab click), else
+/// the selection-derived default. The Scene rung exists only when that layer
+/// is a generator whose graph holds a `node.render_scene`; once showing, it
+/// stays across a selection change to another scene layer, as the old dock did.
+pub(crate) fn inspector_tabs(
+    project: &Project,
+    active_layer: Option<usize>,
+    selection: &SelectionState,
+    current: manifold_ui::InspectorTab,
+) -> (Vec<manifold_ui::InspectorTab>, manifold_ui::InspectorTab) {
+    use manifold_ui::InspectorTab;
+    let has_clip = selection.primary_selected_clip_id().is_some();
+    let sel_layer_idx = selection
+        .selected_layer_id_for_clip()
+        .or(selection.primary_selected_layer_id())
+        .and_then(|id| project.timeline.find_layer_index_by_id(id))
+        .or(active_layer);
+    let layer = sel_layer_idx.and_then(|i| project.timeline.layers.get(i));
+    let layer_is_group = layer.is_some_and(|l| l.layer_type == LayerType::Group);
+    let has_group_parent =
+        sel_layer_idx.is_some_and(|i| project.timeline.find_group_parent(i).is_some());
+
+    let mut tabs: Vec<InspectorTab> = Vec::new();
+    if has_clip {
+        tabs.push(InspectorTab::Clip);
+    }
+    if let Some(l) = layer {
+        if l.layer_type == LayerType::Group {
+            tabs.push(InspectorTab::Group);
+        } else {
+            tabs.push(InspectorTab::Layer);
+            if layer_has_scene(l) {
+                tabs.push(InspectorTab::Scene);
+            }
+            if has_group_parent {
+                tabs.push(InspectorTab::Group);
+            }
+        }
+    }
+    tabs.push(InspectorTab::Master);
+
+    let active = selection
+        .pinned_scope()
+        .filter(|t| tabs.contains(t))
+        .unwrap_or_else(|| {
+            // Default to the LAYER scope on any selection — the layer (its
+            // generator, effects, macros) is the persistent thing you tune,
+            // so landing there is less jarring than the per-clip view. The
+            // Clip tab is still one click away whenever a clip is selected.
+            if current == InspectorTab::Scene && tabs.contains(&InspectorTab::Scene) {
+                InspectorTab::Scene
+            } else if layer_is_group {
+                InspectorTab::Group
+            } else if layer.is_some() {
+                InspectorTab::Layer
+            } else if has_clip {
+                InspectorTab::Clip
+            } else {
+                InspectorTab::Master
+            }
+        });
+    (tabs, active)
+}
+
+/// A generator layer whose graph (its own, or its bundled preset's) holds a
+/// `node.render_scene` (SCENE_SURFACES D16).
+fn layer_has_scene(layer: &manifold_core::layer::Layer) -> bool {
+    use manifold_core::effect_graph_def::render_scene_count;
+    if layer.layer_type != LayerType::Generator {
+        return false;
+    }
+    match layer.generator_graph() {
+        Some(def) => render_scene_count(&def.nodes) > 0,
+        None => manifold_nodes::bundled_presets::bundled_preset_def(layer.generator_type())
+            .is_some_and(|def| render_scene_count(&def.nodes) > 0),
+    }
+}
+
 pub(crate) fn build_card_modulation(
     inst: &PresetInstance,
     n: usize,
@@ -1971,7 +1878,8 @@ fn object_modifier_rows(
 #[cfg(test)]
 mod modifier_card_ownership_tests {
     use super::object_modifier_rows;
-    use crate::ui_bridge::projection::scene::{object_controls, parameter_ids_for_nodes};
+    use crate::ui_bridge::projection::scene::{owned_nodes, parameter_ids_for_nodes};
+    use manifold_nodes_scene::node_graph::scene_items::{SceneItemId, scene_items};
     use manifold_core::effect_graph_def::EffectGraphDef;
     use manifold_nodes_scene::node_graph::scene_vm::{SceneObjectVm, SceneVm};
     use std::collections::BTreeSet;
@@ -2016,11 +1924,12 @@ mod modifier_card_ownership_tests {
 
         let assert_cards = |def: &EffectGraphDef, expected_owner| {
             let vm = SceneVm::from_def(def).unwrap();
+            let items = scene_items(def, &vm);
             let mut before = BTreeSet::new();
             let mut after = BTreeSet::new();
             for object in &vm.objects {
                 let SceneObjectVm::Known(row) = object else { panic!("known object"); };
-                let owned = object_controls(Some(def), row, &vm.objects);
+                let owned = owned_nodes(&items, &SceneItemId::Object(row.object.clone())).to_vec();
                 let cards = object_modifier_rows(Some(def), &row.modifier_chain, &owned);
                 assert_eq!(cards.len(), 1);
                 let card = &cards[0];
@@ -2343,4 +2252,199 @@ mod fire_meter_roundtrip_tests {
             );
         }
     }
+}
+
+#[cfg(test)]
+mod scene_tab_tests {
+    use super::sync_inspector_data;
+    use crate::ui_root::UIRoot;
+    use manifold_core::{LayerId, PresetTypeId, layer::Layer, project::Project};
+    use manifold_ui::InspectorTab;
+
+    /// Layer 0 holds the bundled Scene preset (a `node.render_scene`); layer 1
+    /// is a plain Plasma generator; layer 2 is a second scene layer.
+    fn project() -> (Project, LayerId, LayerId, LayerId) {
+        let mut project = Project::default();
+        let scene = Layer::new_generator("Scene".into(), PresetTypeId::new("Scene"), 0);
+        let plain = Layer::new_generator("Plasma".into(), PresetTypeId::new("Plasma"), 1);
+        let other = Layer::new_generator("Scene 2".into(), PresetTypeId::new("Scene"), 2);
+        let ids = (scene.layer_id.clone(), plain.layer_id.clone(), other.layer_id.clone());
+        project.timeline.layers.extend([scene, plain, other]);
+        (project, ids.0, ids.1, ids.2)
+    }
+
+    fn sync(ui: &mut UIRoot, project: &Project, selection: &manifold_ui::UIState) {
+        sync_inspector_data(ui, project, None, selection, &[], None);
+    }
+
+    #[test]
+    fn scene_tab_present_only_for_scene_layer() {
+        let (project, scene, plain, _) = project();
+        let mut selection = manifold_ui::UIState::new();
+        selection.select_layer(scene);
+        let (tabs, _) = super::inspector_tabs(&project, None, &selection, InspectorTab::Layer);
+        assert_eq!(tabs, [InspectorTab::Layer, InspectorTab::Scene, InspectorTab::Master]);
+
+        selection.select_layer(plain);
+        let (tabs, _) = super::inspector_tabs(&project, None, &selection, InspectorTab::Layer);
+        assert_eq!(tabs, [InspectorTab::Layer, InspectorTab::Master]);
+    }
+
+    #[test]
+    fn scene_tab_falls_back_to_layer() {
+        let (project, scene, plain, other) = project();
+        let mut ui = UIRoot::new();
+        let mut selection = manifold_ui::UIState::new();
+        selection.select_layer(scene);
+        selection.pin_scope(InspectorTab::Scene);
+        sync(&mut ui, &project, &selection);
+        assert_eq!(ui.inspector.active_tab(), InspectorTab::Scene);
+        assert!(ui.scene_setup_panel.is_open(), "the Scene tab hosts the scene panel");
+
+        // Another scene layer keeps the Scene tab, as the old dock stayed open.
+        selection.select_layer(other.clone());
+        sync(&mut ui, &project, &selection);
+        assert_eq!(ui.inspector.active_tab(), InspectorTab::Scene);
+        assert_eq!(ui.scene_setup_panel.live_layer_id(), Some(&other));
+
+        // A layer without a scene falls back to the Layer tab and closes the panel.
+        selection.select_layer(plain);
+        sync(&mut ui, &project, &selection);
+        assert_eq!(ui.inspector.active_tab(), InspectorTab::Layer);
+        assert!(!ui.scene_setup_panel.is_open());
+
+        // A pinned Scene tab with no scene on the layer is ignored.
+        selection.pin_scope(InspectorTab::Scene);
+        sync(&mut ui, &project, &selection);
+        assert_eq!(ui.inspector.active_tab(), InspectorTab::Layer);
+        assert!(!ui.scene_setup_panel.is_open());
+    }
+}
+
+/// The Audio Setup dock: current device, send rows and the reliability
+/// warning, while it is open. Queries the audio directory, so it runs only
+/// when the planner keys it (AudioSetup, Layers, Effects, the directory
+/// version, or the dock opening).
+pub fn sync_audio_dock(ui: &mut UIRoot, project: &Project) {
+    if !ui.audio_setup_panel.is_open() {
+        return;
+    }
+    use manifold_core::AudioSourceKind;
+    use manifold_ui::panels::audio_setup_panel::AudioSendRow;
+    manifold_core::work_count::record_work(manifold_core::work_count::WorkKind::DeviceQuery);
+    let dir = manifold_audio::directory::system_directory();
+    // Only a hardware input device resolves to a DeviceInfo. Tap sources
+    // (system / app output) don't live in the input-device list, and "none"
+    // (no capture) has nothing to resolve — a tap's liveness is checked
+    // separately below.
+    let device = match &project.audio_setup.device {
+        Some(d) if d.kind == AudioSourceKind::InputDevice => {
+            dir.resolve(d.uid_opt(), Some(&d.name))
+        }
+        Some(_) => None, // a tap or "none" — no DeviceInfo
+        None => dir.list_input_devices().into_iter().find(|d| d.is_default),
+    };
+    let sends = project
+        .audio_setup
+        .sends
+        .iter()
+        .map(|s| {
+            // Read-only source view: the full routing lines (capture device +
+            // each feeding layer) for the Inputs section. Routing is edited
+            // elsewhere — layers from the layer header; channels are always
+            // stereo now, so there is no per-send channel control to resolve.
+            let cap = s.has_capture();
+            let layer_name = |lid: &manifold_core::LayerId| {
+                project
+                    .timeline
+                    .layers
+                    .iter()
+                    .find(|l| &l.layer_id == lid)
+                    .map(|l| l.name.clone())
+                    .unwrap_or_else(|| {
+                        manifold_ui::panels::audio_setup_panel::MISSING_LAYER_LABEL.to_string()
+                    })
+            };
+            // Full routing lines for the read-only Inputs section. A
+            // capture-fed send is always stereo, so its line reads
+            // "Capture • Stereo" rather than naming individual channels.
+            let mut routings: Vec<String> = Vec::new();
+            if cap {
+                routings.push("Capture \u{2022} Stereo".to_string());
+            }
+            for lid in s.layers() {
+                routings.push(format!("Layer \u{2022} {}", layer_name(lid)));
+            }
+            // Consumers section: named audio mods (param gate/continuous
+            // cards) plus enabled layer-owned `LayerClipTrigger` configs
+            // (P3, D2 — the matrix's per-band route walk is gone; clip
+            // triggers are authored on the layer only). Both are purely
+            // navigational rows (D3): click selects the owning layer.
+            let clip_triggers = project.clip_trigger_consumers(&s.id);
+            let has_clip_triggers = !clip_triggers.is_empty();
+            let consumers: Vec<manifold_ui::panels::audio_setup_panel::SendConsumerRow> =
+                project
+                    .audio_mod_consumers(&s.id)
+                    .into_iter()
+                    .chain(clip_triggers)
+                    .map(|(layer_id, label)| {
+                        manifold_ui::panels::audio_setup_panel::SendConsumerRow { label, layer_id }
+                    })
+                    .collect();
+            // Inputs section: audio layers feeding this send (id + name).
+            let feeding_layers: Vec<(manifold_core::LayerId, String)> =
+                s.layers().iter().map(|lid| (lid.clone(), layer_name(lid))).collect();
+
+            AudioSendRow {
+                id: s.id.clone(),
+                label: s.label.clone(),
+                channels: s.channels.clone(),
+                gain_db: s.gain_db,
+                floor_db: s.floor_db,
+                driven_count: project.audio_send_usage_count(&s.id),
+                routings,
+                has_clip_triggers,
+                feeding_layers,
+                consumers,
+            }
+        })
+        .collect();
+
+    // Surface a reliability warning: a chosen source that can't capture right
+    // now — a device that won't resolve / reads offline, a tap on an OS that
+    // can't tap, an app that isn't running — else a blocked mic permission.
+    let status_warning = match &project.audio_setup.device {
+        Some(d) => match d.kind {
+            AudioSourceKind::InputDevice => match &device {
+                None => Some(format!("\u{26A0} \"{}\" is offline or unplugged", d.name)),
+                Some(info) if !info.is_alive => {
+                    Some(format!("\u{26A0} \"{}\" is offline", info.name))
+                }
+                _ => None,
+            },
+            // No capture is a deliberate choice, not a warning.
+            AudioSourceKind::None => None,
+            AudioSourceKind::SystemAudio => (!dir.tap_capabilities().system_audio)
+                .then(|| "\u{26A0} System audio capture needs macOS 14.4+".to_string()),
+            AudioSourceKind::App => dir
+                .resolve_app(d.uid_opt().unwrap_or(""))
+                .is_none()
+                .then(|| format!("\u{26A0} \"{}\" isn't running", d.name)),
+        },
+        None => None,
+    }
+    .or_else(|| {
+        (!manifold_audio::permission::status().is_usable())
+            .then(|| "\u{26A0} Microphone access blocked — check System Settings".to_string())
+    });
+
+    ui.audio_setup_panel.configure(
+        project
+            .audio_setup
+            .device
+            .as_ref()
+            .map(crate::ui_translate::audio_device_ref_to_ui),
+        sends,
+        status_warning,
+    );
 }

@@ -26,12 +26,12 @@ Extend, don't redesign. Every piece below was read this session.
 
 | Piece | Where | State |
 |---|---|---|
-| Forward reshape (single definition) | `crates/manifold-core/src/effects.rs:489` `apply_card_reshape(value, min, max, invert, curve, scale, offset)` | Two stages: slider response (normalize → invert → curve, clamped 0..1) then unclamped affine `v*scale+offset`. Shared by runtime + popover preview by design ("the two can never drift"). |
+| Forward reshape (single definition) | `crates/manifold-core/src/effects/mod.rs:489` `apply_card_reshape(value, min, max, invert, curve, scale, offset)` | Two stages: slider response (normalize → invert → curve, clamped 0..1) then unclamped affine `v*scale+offset`. Shared by runtime + popover preview by design ("the two can never drift"). |
 | Curve vocabulary | `crates/manifold-core/src/macro_bank.rs:22` `MacroCurve { Linear, Exponential (t²), Logarithmic (√t), SCurve (3t²−2t³) }` | **All four are strictly monotonic on [0,1] — every curve is invertible.** No `inverse()` exists yet. |
 | Binding apply loop | `crates/manifold-node-engine/src/param_binding.rs:566` `apply_bindings` | Unconditionally re-writes each binding's target graph param from the manifest value each rebuild (with `LastAppliedCache` skip). This is the stomp that produces the card-half of the snap-back. |
 | Wire resolution order | `crates/manifold-node-engine/src/exec/effect_node.rs:358` `scalar_or_param` | A wired scalar input resolves before the param unconditionally — the wire-half of the snap-back. Deliberate design (`control-wires-port-shadows-param` memory); NOT to be changed. |
-| Node-face edit path | `crates/manifold-app/src/app_render.rs:2480` `GraphEditCommand::SetGraphNodeParam` → `:2489` `SetGraphNodeParamCommand::new` (`crates/manifold-editing/src/commands/graph.rs:792`) | Writes `def.nodes[..].params` successfully; the write is then shadowed (wire) or stomped (binding). This dispatch arm is the interception seam. |
-| Card param write path | `crates/manifold-app/src/ui_bridge/inspector.rs:1083/1119/1145` `PanelAction::ParamSnapshot` / `ParamChanged` / `ParamCommit` | The full drag lifecycle for outer card params: snapshot → live `set_base_param` + `MutateProjectLive` → undoable commit. Rerouted node-face gestures emit exactly these. |
+| Node-face edit path | `crates/manifold-app/src/app_render.rs:2480` `GraphEditCommand::SetGraphNodeParam` → `:2489` `SetGraphNodeParamCommand::new` (`crates/manifold-editing/src/commands/graph/mod.rs:792`) | Writes `def.nodes[..].params` successfully; the write is then shadowed (wire) or stomped (binding). This dispatch arm is the interception seam. |
+| Card param write path | `crates/manifold-app/src/ui_bridge/inspector.rs:1083/1119/1145` `PanelAction::ParamSnapshot` / `ParamChanged` / `ParamCommit` | The full drag lifecycle for outer card params: snapshot → live `set_base_param` + `MutateProject` declaring `Values` → undoable commit. Rerouted node-face gestures emit exactly these. |
 | Binding metadata (inner target → outer param) | `crates/manifold-core/src/effect_graph_def.rs` `BindingDef` in `preset_metadata.bindings`; reshape fields on `ParamSpecDef` + `UserParamBinding` (`effects.rs:442..458`) | The lookup "is (node_id, param_id) bound, and to which outer `source_id` with which reshape" is derivable from the instance. Fan-out (one source, N targets) is already handled id-keyed (`param_binding.rs:545` doc). |
 | Angle wrap | `param_binding.rs:268` `wraps_angle` (set for `ParamType::Angle`, `:425`) | Angle targets wrap; a raw inverse across periods is ill-defined. |
 | Node-face driven-dim | `crates/manifold-ui/src/graph_canvas/render.rs` (`NodeRow::Param` block; see GRAPH_EDITOR_INSPECTOR_UNIFICATION.md "Shipped 2026-07-01") | Wire-driven rows already dim text (`TEXT_DIMMED_C32`). The driven *treatment* (D5) extends this; detection plumbing exists. |
@@ -50,7 +50,7 @@ Extend, don't redesign. Every piece below was read this session.
   two authorities that drift, and a cache bypass. Rejected: writing the graph param
   and marking the binding dirty — inverts authority for one frame, flickers.
 - **D2 — `invert_card_reshape` lives beside the forward function.** In
-  `crates/manifold-core/src/effects.rs`, directly under `apply_card_reshape`, so
+  `crates/manifold-core/src/effects/mod.rs`, directly under `apply_card_reshape`, so
   forward/preview/inverse share one home and can't drift:
   ```rust
   /// Exact inverse of [`apply_card_reshape`] where one exists.
@@ -129,7 +129,7 @@ dispatch arm (`app_render.rs:2480`). New resolution order there, for the gesture
    `invert_card_reshape(gesture_value, …binding's reshape…)`; on `Some(card_value)`,
    emit the `ParamSnapshot`(once, at gesture start)/`ParamChanged`(per move)/
    `ParamCommit`(at release) lifecycle against the outer param id — the same arms at
-   `ui_bridge/inspector.rs:1083/1119/1145`, so live preview (`MutateProjectLive`)
+   `ui_bridge/inspector.rs:1083/1119/1145`, so live preview (`MutateProject` declaring `Values`)
    and undo shape are identical to a card drag. On `None` (degenerate scale): treat
    as read-only — no write, row shows the bound badge (an authoring-time data error,
    not a user state).
@@ -164,7 +164,7 @@ The reroute is a dispatch-layer concern where both vocabularies already meet.
 ## 5. Phasing
 
 ### P1 — Inverse machinery + reroute (one session)
-**Entry state:** `rg -n "fn apply_card_reshape" crates/manifold-core/src/effects.rs`
+**Entry state:** `rg -n "fn apply_card_reshape" crates/manifold-core/src/effects/mod.rs`
 hits `:489`; `rg -n "SetGraphNodeParam" crates/manifold-app/src/app_render.rs` hits
 the `:2480` arm; re-verify both anchors.
 **Read-back:** this doc section 2–section 4 whole; restate D1, D2's signature, the two forbidden
@@ -177,7 +177,7 @@ D9's freeze-on-unmap in the binding-removal command; integration test
 the gesture actions, assert manifest moved + def slot unchanged + render value
 followed via the forward path).
 **Gate (positive):** named tests above green; `cargo test -p manifold-core -p manifold-editing -p manifold-app --lib`.
-**Gate (negative):** `rg -n "set_base_param" crates/manifold-editing/src/commands/graph.rs`
+**Gate (negative):** `rg -n "set_base_param" crates/manifold-editing/src/commands/graph/mod.rs`
 returns zero hits (the editing crate gained no binding knowledge); no new
 `Arc<Mutex|RwLock>` anywhere in the diff.
 **Round-trip gate:** save a project with a bound param mid-edited value → reload →

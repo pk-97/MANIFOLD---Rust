@@ -74,11 +74,23 @@ pub enum MaterialColour {
     Translucency,
 }
 
+pub use manifold_foundation::scene_surface::RgbChannel;
+
+/// Which colour a swatch edits: a material colour, or a light's colour.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum RgbChannel {
-    R,
-    G,
-    B,
+pub enum ColourGroup {
+    Material(MaterialColour),
+    Light,
+}
+
+/// The three scalar params one swatch writes as a single RGB edit, and the
+/// colour they held at projection time (the swatch's first paint; live
+/// values arrive through the value sync).
+#[derive(Debug, Clone, PartialEq)]
+pub struct RgbMembers {
+    pub group: ColourGroup,
+    pub ids: [ParamId; 3],
+    pub values: [f32; 3],
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -155,9 +167,11 @@ pub struct RowSpec {
     pub is_trigger_gate: bool,
     /// Named value labels for discrete params; shown instead of the number.
     pub value_labels: Option<Vec<String>>,
+    /// Shown after the number in the value readout (" m", " EV").
+    pub unit: Option<manifold_foundation::scene_surface::Unit>,
     /// Card-bundling section name; contiguous `Some(name)` runs share one
-    /// collapsible header. Usually from the manifest; scene performance
-    /// projection uses stable role-based categories without changing IDs.
+    /// collapsible header. Usually from the manifest; the scene card titles
+    /// sections by band and item without changing ids.
     pub section: Option<String>,
     /// `None` = the row is interactive. `Some(reason)` = the row renders
     /// greyed with the reason appended to its label (the modifier-picker
@@ -173,6 +187,14 @@ pub struct RowSpec {
     /// This is presentation state; `disabled` remains reserved for controls
     /// that cannot be edited at all.
     pub inactive_reason: Option<String>,
+    /// The control's scene descriptor (role and control group) when the
+    /// lookup has one. The Scene tab groups and filters its rows by it.
+    pub scene: Option<manifold_foundation::scene_surface::SceneParamDesc>,
+    /// What a drag may reach past the slider's end (SCENE_SURFACES_DESIGN.md
+    /// D15 (slider range and hard limit)). The projection resolves `Slider`
+    /// to the declared range, so `min`/`max` (the slider range) only set the
+    /// drag's speed; a hand-built row left at `Slider` clamps to its span.
+    pub limit: manifold_foundation::param_range::HardLimit,
 }
 
 /// Value state at projection time. Per-frame effective values keep riding
@@ -312,13 +334,27 @@ pub struct ParamRow {
     /// gestures turn it into `SceneSetupParamChanged` instead of a plain
     /// manifest-param toggle.
     pub scene_addr: Option<SceneRowAddr>,
-    /// The canonical RGB row keeps the three existing scalar identities so a
-    /// swatch can make one gesture while advanced rows retain their bindings.
-    pub rgb_members: Option<[ParamId; 3]>,
+    /// A row with a colour swatch: the three scalar params it writes as one
+    /// gesture. The channels keep their own rows and bindings.
+    pub rgb_members: Option<RgbMembers>,
     /// An authored external attachment (wire, automation, or host mapping)
     /// that remains meaningful even when the current frame flags are dormant.
     /// Material feature visibility and seed writes use this projection fact.
     pub material_attached: bool,
+}
+
+impl ParamRow {
+    /// A driver, envelope, automation lane, audio mod or Ableton mapping on
+    /// the row. Hiding such a row hides a live control from the performer, so
+    /// both scene surfaces show it whatever its role (SCENE_SURFACES D6
+    /// (attached rows are always shown)).
+    pub fn is_attached(&self) -> bool {
+        self.modulation.driver_active
+            || self.modulation.envelope_active
+            || self.modulation.automation_active
+            || self.audio.active
+            || self.mapping.ableton_display.is_some()
+    }
 }
 
 /// The complete queryable description of one manifest-backed param surface.
@@ -398,6 +434,9 @@ pub enum RowRole {
     MappingChevron,
     /// D5 section fold header (row = first row of the section).
     SectionHeader,
+    /// A scene card section's title (row = first row of the section): opens
+    /// the Scene tab on the item that owns that row.
+    SectionTitle,
     /// Relight: header toggle ("3D Shading") — row is unused (card-level).
     RelightToggle,
     /// Relight: one of the Height From option buttons (0..3; index resolved
@@ -405,8 +444,8 @@ pub enum RowRole {
     RelightHeightBtn,
     /// Relight: one of the six knob slider bundles.
     RelightSlider,
-    /// Shared RGB swatch over the three existing scalar parameter slots.
-    ColourSwatch(MaterialColour),
+    /// Colour swatch over the row's `rgb_members`: opens the colour menu.
+    ColourSwatch(ColourGroup),
     /// Optional material feature header/toggle.
     MaterialFeatureToggle(MaterialFeature),
     /// Friendly material placement control backed by the six matrix rows.

@@ -86,8 +86,6 @@ impl AppInputHost<'_> {
                 );
             }
         }
-        *self.needs_structural_sync = true;
-        *self.needs_rebuild = true;
         true
     }
 
@@ -118,11 +116,11 @@ impl AppInputHost<'_> {
                     }),
                 );
             }
+            // The content edit's snapshot re-projects the outliner.
         } else if let Some(action) = self.ui_root.scene_setup_panel.navigate_selection(delta) {
+            // The panel's selection version rebuilds Properties.
             self.ui_root.pending_keyboard_actions.push(action);
         }
-        *self.needs_structural_sync = true;
-        *self.needs_rebuild = true;
         true
     }
 
@@ -144,7 +142,6 @@ impl AppInputHost<'_> {
         if let Some(action) = action {
             self.ui_root.pending_keyboard_actions.push(action);
         }
-        *self.needs_rebuild = true;
         true
     }
 }

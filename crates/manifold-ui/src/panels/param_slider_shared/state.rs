@@ -311,6 +311,40 @@ pub struct AudioRowState {
     pub wrap_idx: i32,
 }
 
+/// The live scalars one row's drawers and handles show (UI_INVALIDATION D22):
+/// Shapes and MappingRanges values of modulators that already exist. The live
+/// push writes them in place; a `None` group means the row has no such
+/// modulator, which is membership and reaches the row through a rebuild.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct RowShapes {
+    /// The enabled driver's trim range.
+    pub driver_trim: Option<(f32, f32)>,
+    pub envelope: Option<EnvelopeShape>,
+    pub audio: Option<AudioShape>,
+    /// The Ableton mapping's trim range.
+    pub ableton_range: Option<(f32, f32)>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct EnvelopeShape {
+    pub target_norm: f32,
+    pub decay: f32,
+    /// The Step action's amount; `None` unless the action is Step.
+    pub step_amount: Option<f32>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct AudioShape {
+    pub range_min: f32,
+    pub range_max: f32,
+    pub sensitivity: f32,
+    pub attack_ms: f32,
+    pub release_ms: f32,
+    pub invert: bool,
+    /// The Step action's amount; `None` unless the action is Step.
+    pub step_amount: Option<f32>,
+}
+
 /// One available audio send. Labels and ids travel together so send reorder
 /// cannot route a click to a different id.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -465,6 +499,7 @@ pub(crate) fn format_param_value(
     whole_numbers: bool,
     is_angle: bool,
     value_labels: Option<&[String]>,
+    unit: Option<manifold_foundation::scene_surface::Unit>,
 ) -> String {
     if let Some(labels) = value_labels {
         let idx = ((val - min).round() as i32).clamp(0, labels.len() as i32 - 1) as usize;
@@ -472,11 +507,13 @@ pub(crate) fn format_param_value(
     }
     if is_angle {
         // `val` is radians; the user always sees and edits degrees.
-        format!("{:.0}°", val.to_degrees())
-    } else if whole_numbers {
-        format!("{}", val.round() as i32)
+        return format!("{:.0}°", val.to_degrees());
+    }
+    let suffix = unit.map_or("", |unit| unit.suffix());
+    if whole_numbers {
+        format!("{}{suffix}", val.round() as i32)
     } else {
-        format!("{:.2}", val)
+        format!("{:.2}{suffix}", val)
     }
 }
 
@@ -490,14 +527,15 @@ pub(crate) fn format_param_value(
 /// px since grab. A drag converts `dx` px to `dx * range / track_width` value
 /// units at full sensitivity (mathematically identical to absolute-position
 /// tracking for a non-fine drag, since `base` is the grab value); the fine
-/// factor scales that to a tenth. Clamped to `[min, max]` so a fine drag past
-/// the track edge can't overshoot the param's own range.
+/// factor scales that to a tenth. `[min, max]` is the slider range, which sets
+/// the speed only: the value carries on past the slider's end and stops at
+/// `limit` (SCENE_SURFACES_DESIGN.md D15 (slider range and hard limit)).
 pub(crate) fn fine_scrub_value(
     base: f32,
     dx: f32,
     track_width: f32,
-    min: f32,
-    max: f32,
+    (min, max): (f32, f32),
+    limit: manifold_foundation::param_range::HardLimit,
     fine: bool,
 ) -> f32 {
     let sensitivity = if fine { 0.1 } else { 1.0 };
@@ -505,7 +543,13 @@ pub(crate) fn fine_scrub_value(
     if track_width > 0.0 {
         value += dx * (max - min) / track_width * sensitivity;
     }
-    value.clamp(min, max)
+    limit.clamp(value, (min, max))
+}
+
+/// True when `value` sits past either end of the row's slider range, so the
+/// thumb is pinned at the end and marked.
+pub(crate) fn past_slider_end(value: f32, spec: &crate::param_surface::RowSpec) -> bool {
+    value < spec.min.min(spec.max) || value > spec.max.max(spec.min)
 }
 
 
@@ -552,6 +596,12 @@ pub(crate) struct ParamRowIds {
     /// when fewer than two configs are active (no strip drawn). The caller stores
     /// these to route tab clicks to the active-tab switch.
     pub(crate) mod_tabs: Vec<(NodeId, ModTab)>,
+    /// The colour swatch in the label lane, when the row has `rgb_members`.
+    pub(crate) swatch: Option<(NodeId, crate::param_surface::ColourGroup)>,
+    /// The clip the drawer reveals through, when the row was handed a reveal
+    /// height and has a drawer. The card moves it in place as the drawer
+    /// tween runs.
+    pub(crate) drawer_clip: Option<NodeId>,
     /// `y` after this row's slider + its modulation config drawer — the caller
     /// continues the next row from here.
     pub(crate) new_cy: f32,
@@ -604,12 +654,15 @@ pub(crate) struct ToggleTriggerRowIds {
     /// `ClipEdge` mode) by the caller from the live `mod_state` — see
     /// `build_toggle_trigger_row`.
     pub(crate) mode_badge_id: Option<NodeId>,
+    /// The audio drawer's reveal clip, as [`ParamRowIds::drawer_clip`].
+    pub(crate) drawer_clip: Option<NodeId>,
     pub(crate) new_cy: f32,
 }
 
 #[cfg(test)]
 mod fine_scrub_tests {
     use super::*;
+    use manifold_foundation::param_range::HardLimit::Slider;
 
     /// D8: the pure sensitivity contract — 1 px of pointer travel maps to
     /// `range / track_width` value units, a tenth of that under Shift (fine).
@@ -619,10 +672,10 @@ mod fine_scrub_tests {
     fn shift_fine_scales_sensitivity_by_a_tenth() {
         // Full sensitivity: 10 px of travel over a 200 px track on a 200-unit
         // range = 10 units.
-        let coarse = fine_scrub_value(50.0, 10.0, 200.0, 0.0, 200.0, false);
+        let coarse = fine_scrub_value(50.0, 10.0, 200.0, (0.0, 200.0), Slider, false);
         assert!((coarse - 60.0).abs() < 1e-4, "coarse: {coarse}");
         // Shift (fine): the same 10 px is a tenth — 1 unit.
-        let fine = fine_scrub_value(50.0, 10.0, 200.0, 0.0, 200.0, true);
+        let fine = fine_scrub_value(50.0, 10.0, 200.0, (0.0, 200.0), Slider, true);
         assert!((fine - 51.0).abs() < 1e-4, "fine: {fine}");
     }
 
@@ -631,17 +684,28 @@ mod fine_scrub_tests {
     /// param's own range, not the raw delta.
     #[test]
     fn fine_scrub_clamps_to_the_param_range() {
-        let clamped = fine_scrub_value(0.0, 2000.0, 200.0, -100.0, 100.0, true);
+        let clamped = fine_scrub_value(0.0, 2000.0, 200.0, (-100.0, 100.0), Slider, true);
         assert!((clamped - 100.0).abs() < 1e-4, "clamped: {clamped}");
-        let clamped_neg = fine_scrub_value(0.0, -2000.0, 200.0, -100.0, 100.0, true);
+        let clamped_neg = fine_scrub_value(0.0, -2000.0, 200.0, (-100.0, 100.0), Slider, true);
         assert!((clamped_neg + 100.0).abs() < 1e-4, "clamped neg: {clamped_neg}");
+    }
+
+    /// INV-S18: past the slider's end a drag keeps going to the hard limit.
+    #[test]
+    fn drag_past_slider_end_reaches_limit() {
+        let past = fine_scrub_value(0.0, 400.0, 200.0, (-1.0, 1.0), manifold_foundation::param_range::HardLimit::Between(-5.0, 5.0), false);
+        assert!((past - 4.0).abs() < 1e-4, "past the end: {past}");
+        let stopped = fine_scrub_value(0.0, 4000.0, 200.0, (-1.0, 1.0), manifold_foundation::param_range::HardLimit::Between(-5.0, 5.0), false);
+        assert!((stopped - 5.0).abs() < 1e-4, "stops at the limit: {stopped}");
+        let free = fine_scrub_value(0.0, 4000.0, 200.0, (-1.0, 1.0), manifold_foundation::param_range::HardLimit::Unlimited, false);
+        assert!((free - 40.0).abs() < 1e-3, "unlimited: {free}");
     }
 
     /// A zero-width track (a degenerate layout) must not divide by zero — the
     /// value stays at the grab, regardless of the fine flag.
     #[test]
     fn fine_scrub_zero_width_track_is_a_no_op() {
-        assert_eq!(fine_scrub_value(25.0, 40.0, 0.0, 0.0, 100.0, false), 25.0);
-        assert_eq!(fine_scrub_value(25.0, 40.0, 0.0, 0.0, 100.0, true), 25.0);
+        assert_eq!(fine_scrub_value(25.0, 40.0, 0.0, (0.0, 100.0), Slider, false), 25.0);
+        assert_eq!(fine_scrub_value(25.0, 40.0, 0.0, (0.0, 100.0), Slider, true), 25.0);
     }
 }

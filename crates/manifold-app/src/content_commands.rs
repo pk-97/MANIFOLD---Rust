@@ -10,7 +10,7 @@ use manifold_compositor::generator_renderer::GeneratorRenderer;
 use manifold_playback::renderer::ClipRenderer;
 
 use crate::content_command::ContentCommand;
-use crate::content_state::ContentState;
+use crate::content_state::{ContentState, StateTx};
 use crate::content_thread::ContentThread;
 use crossbeam_channel::{Receiver, Sender};
 
@@ -222,7 +222,7 @@ impl ContentThread {
         project: Box<manifold_core::project::Project>,
         cmd_rx: &Receiver<ContentCommand>,
         cmd_tx: &Sender<ContentCommand>,
-        state_tx: &Sender<ContentState>,
+        state_tx: &StateTx,
     ) -> ProjectLoadReport {
         let start = std::time::Instant::now();
         let previous_diagnostic = self.graph_edit_diagnostic.as_ref().map(|event| event.sequence);
@@ -246,7 +246,7 @@ impl ContentThread {
         &mut self,
         cmd_rx: &Receiver<ContentCommand>,
         cmd_tx: &Sender<ContentCommand>,
-        state_tx: &Sender<ContentState>,
+        state_tx: &StateTx,
     ) -> WarmupReport {
         let start = std::time::Instant::now();
         // Warmup precedes render_content: install the new project's live
@@ -367,7 +367,8 @@ impl ContentThread {
             let run = pass.layer(_layer_id, layer_start);
             let mut layer_completed = true;
             let label = format!("Loading {}...", layer_name.as_str());
-            let _ = state_tx.send(ContentState {
+            state_tx.publish(ContentState {
+                body: true,
                 warmup: Some(manifold_core::WarmupProgress {
                     done: done as u32,
                     total,
@@ -527,7 +528,8 @@ impl ContentThread {
         // Clear progress and re-clear trigger latches so warmup frames don't
         // pollute the first live frame's sample_and_hold / clip_trigger_cycle
         // state (WARMUP_DESIGN.md 3.2 step 5).
-        let _ = state_tx.send(ContentState {
+        state_tx.publish(ContentState {
+            body: true,
             warmup: None,
             ..ContentState::default()
         });
@@ -726,7 +728,7 @@ impl ContentThread {
     fn report_graph_edit_rejection(&mut self, message: String) {
         log::warn!("{message}");
         let sequence = self.graph_edit_diagnostic.as_ref().map_or(1, |event| event.sequence.wrapping_add(1));
-        self.graph_edit_diagnostic = Some(crate::content_state::GraphEditDiagnostic { sequence, message });
+        self.graph_edit_diagnostic = Some(std::sync::Arc::new(crate::content_state::GraphEditDiagnostic { sequence, message }));
     }
 
     fn publish_modifier_selection(&mut self, layer_id: LayerId, ids: Vec<NodeId>) {
@@ -734,12 +736,12 @@ impl ContentThread {
             .modifier_selection_update
             .as_ref()
             .map_or(1, |event| event.sequence.wrapping_add(1));
-        self.modifier_selection_update = Some(
+        self.modifier_selection_update = Some(std::sync::Arc::new(
             crate::content_state::ModifierSelectionUpdate {
                 sequence,
                 layer_id,
                 ids,
-            },
+            }),
         );
     }
 
@@ -753,13 +755,13 @@ impl ContentThread {
             .object_modifier_selection_update
             .as_ref()
             .map_or(1, |event| event.sequence.wrapping_add(1));
-        self.object_modifier_selection_update = Some(
+        self.object_modifier_selection_update = Some(std::sync::Arc::new(
             crate::content_state::ObjectModifierSelectionUpdate {
                 sequence,
                 layer_id,
                 owner_id,
                 node_doc_id,
-            },
+            }),
         );
     }
 
@@ -794,23 +796,13 @@ impl ContentThread {
             ContentCommand::ExecuteSelecting(..) => unreachable!("selection request normalized above"),
             ContentCommand::Shutdown => return true,
 
-            ContentCommand::WatchEffectGraph(effect_id) => {
+            ContentCommand::WatchEffectGraph(_)
+            | ContentCommand::WatchGeneratorGraph(_)
+            | ContentCommand::WatchGraphTarget(_) => {
                 self.content_pipeline.set_scene_viewport_request(None);
                 // One unified watched target; only one canvas active at a time.
-                self.watched_graph_target = effect_id.map(manifold_core::GraphTarget::Effect);
+                self.watched_graph_target = crate::graph_snapshot::watch_command_target(&cmd).flatten();
                 // Switching what's watched invalidates any node preview.
-                self.preview_graph_node = None;
-                self.modifier_preview_context = None;
-            }
-            ContentCommand::WatchGeneratorGraph(layer_id) => {
-                self.content_pipeline.set_scene_viewport_request(None);
-                self.watched_graph_target = layer_id.map(manifold_core::GraphTarget::Generator);
-                self.preview_graph_node = None;
-                self.modifier_preview_context = None;
-            }
-            ContentCommand::WatchGraphTarget(target) => {
-                self.content_pipeline.set_scene_viewport_request(None);
-                self.watched_graph_target = target.filter(|target|target.host_target().is_some());
                 self.preview_graph_node = None;
                 self.modifier_preview_context = None;
             }

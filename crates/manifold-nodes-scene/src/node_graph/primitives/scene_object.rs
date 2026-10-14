@@ -115,7 +115,7 @@ manifold_node_engine::primitive! {
         },
         ParamDef {
             name: Cow::Borrowed("gain"),
-            label: "Appearance Gain",
+            label: "Level",
             ty: ParamType::Float,
             default: ParamValue::Float(1.0),
             range: Some((0.0, 4.0)),

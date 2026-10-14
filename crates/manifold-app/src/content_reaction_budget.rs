@@ -164,8 +164,9 @@ impl UiSide {
 
     /// Dispatch through the real bridge; return what it sent the content thread.
     fn dispatch(&mut self, action: PanelAction) -> Vec<ContentCommand> {
+        let mut edits = crate::gesture_preview::UiEdits::default();
         let mut ctx = crate::ui_bridge::DispatchCtx {
-            project: &mut self.project,
+            project: crate::ui_bridge::ProjectRef::new(&mut self.project, &mut edits, &self.tx),
             content_tx: &self.tx,
             content_state: &self.state,
             ui: &mut self.ui,
@@ -183,7 +184,7 @@ impl UiSide {
 
 struct Bench {
     content: ContentThread,
-    state_tx: Sender<ContentState>,
+    state_tx: crate::content_state::StateTx,
     state_rx: Receiver<ContentState>,
     ui: UiSide,
 }
@@ -193,7 +194,7 @@ impl Bench {
         let project = budget_project();
         let mut content = crate::headless_harness::headless_content_thread(project.clone(), 64, 64);
         content.timer.set_frame_clocked(true);
-        let (state_tx, state_rx) = crossbeam_channel::unbounded();
+        let (state_tx, state_rx) = crate::content_state::state_channel();
         let mut bench = Self { content, state_tx, state_rx, ui: UiSide::new(project) };
         bench.ticks(5);
         bench
@@ -472,7 +473,7 @@ fn tempo_ramp_matches_today() {
     project.settings.bpm = Bpm(120.0);
     let mut content = crate::headless_harness::headless_content_thread(project, 64, 64);
     content.timer.set_frame_clocked(true);
-    let (state_tx, _state_rx) = crossbeam_channel::unbounded::<ContentState>();
+    let (state_tx, _state_rx) = crate::content_state::state_channel();
     content.handle_command(ContentCommand::SetRecording(true));
     content.handle_command(ContentCommand::Play);
     const TICKS: usize = 120;
@@ -519,7 +520,7 @@ fn clock_wobble_is_not_an_edit() {
     project.settings.bpm = Bpm(120.0);
     let mut content = crate::headless_harness::headless_content_thread(project, 64, 64);
     content.timer.set_frame_clocked(true);
-    let (state_tx, state_rx) = crossbeam_channel::unbounded::<ContentState>();
+    let (state_tx, state_rx) = crate::content_state::state_channel();
     content.handle_command(ContentCommand::Play);
     content.tick_frame(&state_tx);
     let _ = state_rx.try_iter().count();

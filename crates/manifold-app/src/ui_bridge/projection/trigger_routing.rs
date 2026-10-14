@@ -89,12 +89,12 @@ pub(crate) fn modifier_label_for_param(
         }
     })?;
     graph.scene_modifiers.iter().find(|modifier| modifier.id == *modifier_id)
-        .and_then(|modifier| super::cards::scene_modifier_display_name(graph, modifier))
+        .and_then(|modifier| manifold_nodes_scene::node_graph::scene_items::scene_modifier_display_name(graph, modifier))
 }
 
-/// Resolve the exact scene item that owns each generator control. This uses the
-/// same SceneVm ownership helpers as Scene Setup, including first-owner rules
-/// for shared transforms and modifiers, and is built once per generator.
+/// The scene item that owns each generator control, by the one ownership
+/// rule the card and the Scene tab use (`scene_items::owner_of`). Built once
+/// per generator.
 fn scene_item_group_labels(
     instance: &manifold_core::effects::PresetInstance,
 ) -> Option<ahash::AHashMap<String, String>> {
@@ -102,26 +102,13 @@ fn scene_item_group_labels(
         .then(|| manifold_nodes::bundled_presets::bundled_preset_def(instance.generator_type()))
         .flatten();
     let graph = instance.graph.as_ref().or(catalog.as_deref())?;
+    use manifold_nodes_scene::node_graph::scene_items::{owner_of, scene_items};
     let vm = manifold_nodes_scene::node_graph::scene_vm::SceneVm::from_def(graph)?;
-    let mut labels = ahash::AHashMap::new();
-    let mut assign = |label: &str, nodes: &[manifold_core::NodeId]| {
-        for id in super::scene::parameter_ids_for_nodes(Some(graph), nodes) {
-            labels.entry(id).or_insert_with(|| label.to_owned());
-        }
-    };
-    for object in &vm.objects {
-        let manifold_nodes_scene::node_graph::scene_vm::SceneObjectVm::Known(row) = object else { continue; };
-        let nodes = super::scene::object_controls(Some(graph), row, &vm.objects);
-        assign(&row.name, &nodes);
-    }
-    for light in &vm.lights {
-        if let manifold_nodes_scene::node_graph::scene_vm::SceneLightVm::Known(row) = light {
-            assign(&row.name, std::slice::from_ref(&row.node));
-        }
-    }
-    assign("Camera", &vm.camera_controls);
-    assign("World", &vm.world_controls);
-    Some(labels)
+    let meta = graph.preset_metadata.as_ref()?;
+    let items = scene_items(graph, &vm);
+    Some(meta.params.iter().filter_map(|spec| {
+        owner_of(&items, meta, &spec.id).map(|owner| (spec.id.clone(), items[owner].name.clone()))
+    }).collect())
 }
 
 fn source_label(project: &Project, target: &GraphTarget, param_id: &str, source: &ClipTriggerSource) -> String {
@@ -356,19 +343,25 @@ pub(crate) mod tests {
             let manifold_nodes_scene::node_graph::scene_vm::SceneObjectVm::Known(row) = object else { return None; };
             let ids = super::super::scene::parameter_ids_for_nodes(
                 Some(&graph),
-                &super::super::scene::object_controls(Some(&graph), row, &vm.objects),
+                super::super::scene::owned_nodes(
+                    &manifold_nodes_scene::node_graph::scene_items::scene_items(&graph, &vm),
+                    &manifold_nodes_scene::node_graph::scene_items::SceneItemId::Object(row.object.clone()),
+                ),
             );
             (!ids.is_empty()).then_some((row.name.clone(), ids))
         }).take(2).collect();
         assert_eq!(object_ids.len(), 2, "PhysicsSolids fixture must expose two scene objects");
         let shared_ids: std::collections::HashSet<_> = object_ids.iter()
             .flat_map(|(_, ids)| ids.iter().cloned()).collect();
-        for spec in &mut graph.preset_metadata.as_mut().unwrap().params {
-            if shared_ids.contains(&spec.id) {
-                spec.section = Some("Shared object section".into());
+        generator.graph = Some(graph);
+        generator.refresh_manifest_from_graph();
+        // A section override is the user's choice on the control (D7), laid
+        // over whatever the lookup describes.
+        for param in generator.params.iter_mut() {
+            if shared_ids.contains(param.id()) {
+                param.choices.section = Some(Some("Shared object section".into()));
             }
         }
-        generator.graph = Some(graph);
         generator.refresh_manifest_from_graph();
         let mut project = Project::default();
         let mut layer = Layer::new_generator(

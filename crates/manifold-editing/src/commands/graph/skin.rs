@@ -8,6 +8,7 @@
 //! mutating and restores it verbatim on undo.
 
 use std::collections::BTreeMap;
+use manifold_core::change::ChangeSet;
 
 use manifold_core::GraphTarget;
 use manifold_core::effect_graph_def::{
@@ -510,7 +511,8 @@ fn apply_skin_source(
 }
 
 impl Command for SetSceneObjectSkinSourceCommand {
-    fn execute(&mut self, project: &mut Project) {
+    fn touches(&self) -> ChangeSet { crate::commands::graph_edit_touches(&self.target, crate::commands::GRAPH_AND_MANIFEST) }
+    fn do_execute(&mut self, project: &mut Project) {
         let source = self.source.clone();
         let target_map = self.target_map;
         let scene_object_id = self.scene_object_id;
@@ -541,7 +543,7 @@ impl Command for SetSceneObjectSkinSourceCommand {
         refresh_target_manifest(project, &self.target);
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         let Some((pn, pw)) = self.prev.clone() else {
             return;
         };
@@ -565,7 +567,8 @@ impl Command for SetSceneObjectSkinSourceCommand {
 }
 
 impl Command for SetSceneObjectSkinTargetMapCommand {
-    fn execute(&mut self, project: &mut Project) {
+    fn touches(&self) -> ChangeSet { crate::commands::graph_edit_touches(&self.target, crate::commands::GRAPH_AND_MANIFEST) }
+    fn do_execute(&mut self, project: &mut Project) {
         let target_map = self.target_map;
         let scene_object_id = self.scene_object_id;
         let source_node_id = self.source_node_id;
@@ -676,7 +679,7 @@ impl Command for SetSceneObjectSkinTargetMapCommand {
         refresh_target_manifest(project, &self.target);
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         let Some((pn, pw)) = self.prev.clone() else {
             return;
         };

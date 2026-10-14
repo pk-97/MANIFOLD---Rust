@@ -587,7 +587,7 @@ impl UIRoot {
     pub(crate) fn open_dropdown_typed(&mut self, items: Vec<DropdownItem>, trigger: Rect) {
         self.dropdown_context = None;
         self.dropdown.open(items, trigger, 120.0, &mut self.tree);
-        self.overlay_dirty = true;
+        self.mark_overlay_dirty();
     }
 
     /// Open the searchable one-column list picker below `trigger`: typing
@@ -628,19 +628,13 @@ impl UIRoot {
             actions,
             list,
         );
-        self.overlay_dirty = true;
+        self.mark_overlay_dirty();
     }
 
     /// Refresh the embedded-preset list surfaced into the Add pickers from the
-    /// project snapshot. Change-gated by the embedded-preset fingerprint so the
-    /// Vec rebuilds only when a fork / import / remove actually changed the set,
-    /// not every frame. Called from the per-frame UI sync before event routing.
+    /// project. The frame planner runs it when the EmbeddedPresets stamp moved
+    /// (UI_INVALIDATION_DESIGN.md section 4).
     pub fn sync_embedded_presets(&mut self, project: &manifold_core::project::Project) {
-        let fp = crate::project_io::embedded_presets_fingerprint(project);
-        if fp == self.embedded_presets_fingerprint {
-            return;
-        }
-        self.embedded_presets_fingerprint = fp;
         manifold_core::work_count::record_work(manifold_core::work_count::WorkKind::PresetListProjection);
         self.embedded_presets = project
             .embedded_presets
@@ -819,7 +813,7 @@ impl UIRoot {
     pub(crate) fn try_open_dropdown(&mut self, action: &PanelAction, click_node: Option<NodeId>) -> bool {
         let opened = self.try_open_dropdown_inner(action, click_node);
         if opened {
-            self.overlay_dirty = true;
+            self.mark_overlay_dirty();
         }
         opened
     }
@@ -833,6 +827,30 @@ impl UIRoot {
         };
 
         match action {
+            PanelAction::Root(RootAction::OpenColourMenu { target, param_ids, value }) => {
+                // The hex item edits over the swatch; the grid writes the
+                // picked colour as one RGB edit (`dropdown_color_to_action`).
+                let items = vec![DropdownItem::new("Hex\u{2026}").with_action(PanelAction::Root(
+                    RootAction::BeginColourTextInput {
+                        target: target.clone(),
+                        param_ids: param_ids.clone(),
+                        anchor: trigger,
+                        value: *value,
+                    },
+                ))];
+                self.dropdown_context = Some(DropdownContext::Colour {
+                    target: target.clone(),
+                    param_ids: param_ids.clone(),
+                });
+                self.dropdown.open_context_with_colors(
+                    items,
+                    manifold_ui::color::COLOR_GRID.to_vec(),
+                    manifold_ui::color::COLOR_GRID_COLS,
+                    Vec2::new(trigger.x, trigger.y + trigger.height),
+                    &mut self.tree,
+                );
+                true
+            }
             PanelAction::Layer(LayerAction::BlendModeClicked(idx)) => {
                 use manifold_core::types::BlendMode;
                 // Typed dropdown (2b.11): each item carries its own SetBlendMode
@@ -1001,6 +1019,16 @@ impl UIRoot {
                 self.open_dropdown_typed(items, trigger);
                 true
             }
+            PanelAction::Root(RootAction::SceneSetupAddObjectMenuClicked(layer_id)) => {
+                if self.scene_setup_panel.live_layer_id() != Some(layer_id) {
+                    return true;
+                }
+                let items = self.scene_setup_panel.add_object_menu().into_iter()
+                    .map(|(label, action)| DropdownItem::new(label).with_action(action))
+                    .collect();
+                self.open_dropdown_typed(items, trigger);
+                true
+            }
             PanelAction::Root(RootAction::SceneSetupAddForceClicked(layer_id)) => {
                 if self.scene_setup_panel.live_layer_id() != Some(layer_id) {
                     return true;
@@ -1093,7 +1121,7 @@ impl UIRoot {
                     keep_open: true,
                     ..Default::default()
                 });
-                self.overlay_dirty = true;
+                self.mark_overlay_dirty();
                 true
             }
             PanelAction::Params(ParamsAction::AddEffectClicked { tab, layer_id }) => {
@@ -1666,7 +1694,32 @@ impl UIRoot {
                 true
             }
             PanelAction::Params(ParamsAction::ParamLabelRightClick(gpt, param_id)) => {
-                let mut items = Vec::with_capacity(manifold_core::MACRO_COUNT + 3);
+                let mut items = Vec::with_capacity(manifold_core::MACRO_COUNT + 6);
+                // The inspector shows one tab at a time, so the tab says which
+                // surface the row was right-clicked on.
+                let pin_surface = if self.inspector.active_tab() == manifold_ui::InspectorTab::Scene {
+                    match gpt {
+                        GraphParamTarget::GeneratorOf(layer)
+                            if self.scene_setup_panel.scene_layer_with(param_id) == Some(layer) =>
+                        {
+                            let on_card = self.inspector.scene_card_row(layer, param_id.as_ref()).is_some();
+                            Some(super::card_pin::PinSurface::SceneTab { on_card })
+                        }
+                        _ => None,
+                    }
+                } else if matches!(gpt, GraphParamTarget::Generator) {
+                    self.inspector
+                        .scene_card_layer()
+                        .and_then(|layer| self.inspector.scene_card_row(layer, param_id.as_ref()))
+                        .map(super::card_pin::PinSurface::Card)
+                } else {
+                    None
+                };
+                if let Some(surface) = pin_surface {
+                    items.extend(super::card_pin::scene_items(gpt, param_id, surface));
+                }
+                let range_anchor = manifold_ui::Rect::new(right_click_pos.x, right_click_pos.y, 140.0, 20.0);
+                items.extend(super::card_pin::slider_range_items(gpt, param_id, range_anchor));
                 if self.inspector.last_effect_tab().is_layer_scope()
                     || matches!(gpt, GraphParamTarget::GeneratorOf(_))
                 {
@@ -1711,13 +1764,8 @@ impl UIRoot {
                         *fx_idx,
                         param_id.as_ref(),
                     ),
-                    // `is_gen_ableton_mapped` reads the perform inspector's
-                    // OWN generator card state (layer-agnostic — no `LayerId`
-                    // param) — `GeneratorOf` never actually reaches this arm
-                    // in practice (only card-shaped actions like
-                    // `ParamLabelRightClick` land here, and the scene panel's
-                    // `GeneratorOf` rows never emit them), but the same query
-                    // applies if it ever does.
+                    // `is_gen_ableton_mapped` reads the inspector's own
+                    // generator card, which shows the Scene tab's layer too.
                     GraphParamTarget::Generator | GraphParamTarget::GeneratorOf(_) => {
                         self.inspector.is_gen_ableton_mapped(param_id.as_ref())
                     }
@@ -1971,7 +2019,7 @@ impl UIRoot {
                     });
                     self.ableton_picker
                         .open(build_picker_session(session), right_click_pos);
-                    self.overlay_dirty = true;
+                    self.mark_overlay_dirty();
                     self.ableton_rediscovery_needed = true;
                 }
                 true
@@ -1984,16 +2032,16 @@ impl UIRoot {
                     });
                     self.ableton_picker
                         .open(build_picker_session(session), right_click_pos);
-                    self.overlay_dirty = true;
+                    self.mark_overlay_dirty();
                     self.ableton_rediscovery_needed = true;
                 }
                 true
             }
             // SCENE_OBJECT_AND_PANEL_V2_DESIGN.md P4, D9: click on a 3+-label
-            // enum value cell in the Scene Setup dock opens the shared
+            // enum value cell in the Scene tab opens the shared
             // dropdown — items = the row's label set, checked at the current
             // index, each carrying the SAME `SceneSetupParamChanged` write
-            // the dock's steppers already dispatch (no new mutation path).
+            // the tab's steppers already dispatch (no new mutation path).
             // `cell_node_id` resolves the anchor directly (the panel has no
             // `&UITree` in `handle_event` to compute it itself).
             PanelAction::Root(RootAction::SceneSetupEnumClicked {
@@ -2211,17 +2259,26 @@ impl UIRoot {
         }
     }
 
-    /// Convert a color swatch selection into the appropriate PanelAction.
+    /// Convert a color swatch selection into the actions it fires.
     pub(crate) fn dropdown_color_to_action(
         &self,
         ctx: DropdownContext,
         color_idx: usize,
-    ) -> Option<PanelAction> {
+    ) -> Vec<PanelAction> {
+        let Some(color) = manifold_ui::color::COLOR_GRID.get(color_idx) else {
+            return Vec::new();
+        };
         match ctx {
             DropdownContext::LayerContext(layer_id) => {
-                let color = manifold_ui::color::COLOR_GRID.get(color_idx)?;
-                Some(PanelAction::Editing(EditingAction::ContextSetLayerColor(layer_id, *color)))
+                vec![PanelAction::Editing(EditingAction::ContextSetLayerColor(layer_id, *color))]
             }
+            // The same Begin, Move, Commit transaction the hex entry commits:
+            // one undoable write to all three channels.
+            DropdownContext::Colour { target, param_ids } => crate::text_input::material_colour_scrub_actions(
+                crate::text_input::MaterialColourCtx { target, param_ids },
+                [color.r, color.g, color.b].map(|channel| f32::from(channel) / 255.0),
+            )
+            .into(),
         }
     }
 }
@@ -2424,6 +2481,9 @@ mod led_browser_scoped_open_tests {
 
 impl UIRoot {
     /// Called only when a new project snapshot updates the derived catalog.
+    /// No version bump: this runs inside the project projection, after the
+    /// frame was planned, and the planner already rebuilds an open overlay
+    /// with that projection.
     pub(crate) fn refresh_trigger_target_picker(&mut self) {
         let Some(source) = self.browser_popup.persistent_actions_layer().cloned() else { return; };
         if !self.trigger_routing.sources.iter().any(|item| item.id == source) {
@@ -2432,6 +2492,5 @@ impl UIRoot {
             let picker = trigger_target_picker_items(&source, &self.trigger_routing.targets);
             self.browser_popup.refresh_actions(picker.items, picker.categories, picker.actions, picker.secondary_actions);
         }
-        self.overlay_dirty = true;
     }
 }

@@ -1,26 +1,23 @@
-//! Edge-triggered export notifications share the normal content channel, but
-//! must not replace the full playback snapshot with their default fields.
+//! Export notifications share the content handoff. A bare notice carries no
+//! engine state, so it must not replace the full playback snapshot.
 
 use super::UIRoot;
 use crate::content_state::ContentState;
 use manifold_ui::color;
 
 impl UIRoot {
-    /// Consume each export notification exactly once while draining the channel.
+    /// Show the export notice a state carries, once per state taken.
     /// Returns false for normal playback snapshots. Per-file results may arrive
     /// between sections; only the run terminal closes the modal.
     pub(crate) fn consume_export_notification(&mut self, state: &ContentState) -> bool {
-        let notification =
-            state.is_exporting || state.export_finished.is_some() || state.export_run_finished;
-        if !notification {
+        if !state.is_export_notice() {
             return false;
         }
-        if state.is_exporting {
-            self.overlay_dirty |= self
-                .export_progress
-                .update(&state.export_status, state.export_progress);
-        }
-        if let Some(event) = &state.export_finished {
+        if state.is_exporting
+            && self.export_progress.update(&state.export_status, state.export_progress) {
+                self.mark_overlay_dirty();
+            }
+        for event in &state.export_finished {
             if event.success {
                 let filename = std::path::Path::new(&event.output_path)
                     .file_name()
@@ -34,11 +31,12 @@ impl UIRoot {
                 self.toast
                     .show_with_accent(event.message.clone(), color::RED_BASE);
             }
-            self.overlay_dirty = true;
+            self.mark_overlay_dirty();
         }
-        if state.export_run_finished {
-            self.overlay_dirty |= self.export_progress.finish();
-        }
+        if state.export_run_finished
+            && self.export_progress.finish() {
+                self.mark_overlay_dirty();
+            }
         true
     }
 }
@@ -71,11 +69,11 @@ mod tests {
         );
         assert!(ui.consume_export_notification(&progress("section 1 of 2")));
         let section = ContentState {
-            export_finished: Some(ExportFinishedEvent {
+            export_finished: vec![ExportFinishedEvent {
                 success: true,
                 message: "Export complete: 12 frames".into(),
                 output_path: "show--one.mp4".into(),
-            }),
+            }],
             ..ContentState::default()
         };
         assert!(ui.consume_export_notification(&section));
@@ -131,15 +129,14 @@ mod tests {
         });
         ui.export_progress.begin("show.mp4");
         ui.resize(1280.0, 720.0);
-        assert!(!ui.tree.nodes().iter().any(|node| {
+        assert!(!ui.tree.all_nodes().any(|node| {
             node.text
                 .as_deref()
                 .is_some_and(|text| text.contains("Warming project"))
         }));
         let button = ui
             .tree
-            .nodes()
-            .iter()
+            .all_nodes()
             .find(|node| node.text.as_deref() == Some("Cancel export"))
             .expect("modal cancel button")
             .bounds;
@@ -162,11 +159,11 @@ mod tests {
     fn still_export_result_does_not_open_a_video_modal() {
         let mut ui = UIRoot::new();
         assert!(ui.consume_export_notification(&ContentState {
-            export_finished: Some(ExportFinishedEvent {
+            export_finished: vec![ExportFinishedEvent {
                 success: true,
                 message: "Frame exported".into(),
                 output_path: "frame.png".into(),
-            }),
+            }],
             ..ContentState::default()
         }));
         assert!(!ui.export_progress.is_open());

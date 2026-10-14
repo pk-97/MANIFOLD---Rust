@@ -41,6 +41,7 @@ mod app_lifecycle;
 mod app_render;
 mod frame;
 mod editor_bridge;
+mod editor_graph_cache;
 mod audio_mod_runtime;
 mod audio_visualization;
 mod autosave;
@@ -65,8 +66,11 @@ mod drag_interpose;
 mod editing_host;
 mod edit_selection;
 mod editor_frame;
+mod editor_input;
 mod edr_surface;
+mod frame_plan;
 mod frame_timer;
+mod gesture_preview;
 // The graph canvas + its mapping popover moved into `manifold-ui` (Phase 8 of
 // `docs/UI_ARCHITECTURE_OVERHAUL.md`). Re-export under the historic `crate::`
 // paths so the editor-window glue keeps resolving `crate::graph_canvas::*` and
@@ -74,12 +78,14 @@ mod frame_timer;
 pub(crate) use manifold_ui::graph_canvas;
 pub(crate) use manifold_ui::graph_canvas::mapping_popover;
 mod graph_dump;
+mod graph_snapshot;
 mod graph_target;
 mod fluid_domain_edit;
 mod scene_modifier_edit;
 mod scene_modifier_transfer;
 mod scene_item_transfer;
 mod scene_camera_edit;
+mod scene_view_copy;
 mod object_modifier_transfer;
 mod generator_change;
 mod modifier_preset;
@@ -148,6 +154,7 @@ mod shared_texture;
 #[cfg(target_os = "macos")]
 mod texture_pane;
 mod text_input;
+mod text_session;
 mod ui_bridge;
 mod tree_passes;
 mod ui_frame;
@@ -285,6 +292,9 @@ fn main() {
             std::process::exit(2);
         }
     }
+    // Only the live GUI opens real devices. Every headless subcommand has
+    // branched off above, and tests never reach `main`.
+    manifold_core::device_guard::allow_real_devices();
     // --- `--resume <breadcrumb-path>` (GIG_RESILIENCE_DESIGN section 5.2) ---
     // The crash-recovery relaunch path: `manifold --resume <path>` skips
     // everything that isn't pixels. Parsed here (no other CLI arg parsing

@@ -400,14 +400,7 @@ pub(crate) fn build_driver_config(
     row3_buttons.push(DrawerButton::new("Invert", is_reversed, PanelAction::Modulation(ModulationAction::DriverConfig(target.clone(), param_id.clone(), DriverConfigAction::Invert))));
 
     let frame_aligned = mod_state.driver_frame_aligned[param_idx];
-    let frame_label = if frame_aligned {
-        match mod_state.driver_frame_rate[param_idx] {
-            Some((frames, hz)) => format!("Frame align: {frames} frames/cycle · {hz:.2} Hz"),
-            None => "Frame align: invalid timing".to_string(),
-        }
-    } else {
-        "Frame align (release beat sync)".to_string()
-    };
+    let frame_label = driver_frame_label(frame_aligned, mod_state.driver_frame_rate[param_idx]);
     let spec = DrawerSpec {
         rows: vec![
             DrawerRow::Buttons {
@@ -430,6 +423,19 @@ pub(crate) fn build_driver_config(
     drawer::build(tree, parent, x, y, w, &spec, key)
 }
 
+
+/// The driver drawer's frame-align button text. It is the last button, so the
+/// period readout can be rewritten in place (UI_INVALIDATION D20).
+pub(crate) fn driver_frame_label(frame_aligned: bool, rate: Option<(u32, f32)>) -> String {
+    if frame_aligned {
+        match rate {
+            Some((frames, hz)) => format!("Frame align: {frames} frames/cycle · {hz:.2} Hz"),
+            None => "Frame align: invalid timing".to_string(),
+        }
+    } else {
+        "Frame align (release beat sync)".to_string()
+    }
+}
 
 /// Format a free LFO period (beats) for the Free field label. Whole numbers show
 /// without a decimal ("3"); fractional values keep two places ("1.5", "0.38").
@@ -828,10 +834,39 @@ pub(crate) fn build_ableton_config(
 }
 
 
+/// The modulation configs active on one param, at most one of each tab. A
+/// fixed array: the drawer height is read on every inspector tick, which must
+/// not allocate.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct ActiveModTabs {
+    tabs: [ModTab; 4],
+    len: usize,
+}
+
+impl Default for ActiveModTabs {
+    fn default() -> Self {
+        Self { tabs: [ModTab::Driver; 4], len: 0 }
+    }
+}
+
+impl ActiveModTabs {
+    fn push(&mut self, tab: ModTab) {
+        self.tabs[self.len] = tab;
+        self.len += 1;
+    }
+}
+
+impl std::ops::Deref for ActiveModTabs {
+    type Target = [ModTab];
+    fn deref(&self) -> &[ModTab] {
+        &self.tabs[..self.len]
+    }
+}
+
 /// The modulation configs active on param `i`, in tab display order (E, →, A,
 /// ABL). Drives both the build and the height calc, so they can't drift.
-pub(crate) fn active_mod_tabs(mod_state: &ParamModState, info: &ParamRow, i: usize) -> Vec<ModTab> {
-    let mut v = Vec::new();
+pub(crate) fn active_mod_tabs(mod_state: &ParamModState, info: &ParamRow, i: usize) -> ActiveModTabs {
+    let mut v = ActiveModTabs::default();
     if mod_state.envelope_expanded.get(i).copied().unwrap_or(false) {
         v.push(ModTab::Envelope);
     }
@@ -1032,6 +1067,51 @@ pub(crate) const ROW_ROLE_DRAWER_CLIP: u64 = 13 << 4;
 
 pub(crate) const ROW_ROLE_TOGGLE_LABEL: u64 = 14 << 4;
 
+/// A scene card section header's clickable title.
+pub(crate) const ROW_ROLE_SECTION_TITLE: u64 = 15 << 4;
+
+/// The row's colour swatch. Role nibble 0 is free; sub-tag 1 keeps the
+/// key the material swatch had before it moved here.
+pub(crate) const ROW_ROLE_SWATCH: u64 = 1;
+
+/// Side of the square colour swatch at the left of a row's label lane.
+pub(crate) const SWATCH_SIZE: f32 = 14.0;
+const SWATCH_GAP: f32 = 4.0;
+
+/// The swatch's fill for an `[r, g, b]` in 0–1.
+pub(crate) fn swatch_colour(rgb: [f32; 3]) -> Color32 {
+    let [r, g, b] = rgb.map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8);
+    Color32::new(r, g, b, 255) // design-token-exempt: shows the authored colour, not a theme colour
+}
+
+/// A row's colour swatch: a square chip showing the colour its
+/// `rgb_members` hold, at the left of the label lane. A click opens the
+/// colour menu (`RowRole::ColourSwatch`).
+fn build_colour_swatch(
+    tree: &mut UITree,
+    parent: Option<NodeId>,
+    x: f32,
+    cy: f32,
+    info: &ParamRow,
+    row_key_base: Option<u64>,
+) -> Option<(NodeId, crate::param_surface::ColourGroup)> {
+    let members = info.rgb_members.as_ref()?;
+    let rect = Rect::new(x, cy + (ROW_HEIGHT - SWATCH_SIZE) * 0.5, SWATCH_SIZE, SWATCH_SIZE);
+    let style = UIStyle {
+        bg_color: swatch_colour(members.values),
+        border_color: color::BORDER,
+        border_width: 1.0,
+        corner_radius: color::SMALL_RADIUS,
+        ..UIStyle::default()
+    };
+    let flags = UIFlags::VISIBLE | UIFlags::INTERACTIVE;
+    let id = match row_key_base {
+        Some(base) => tree.add_node_keyed(parent, rect, UINodeType::Button, style, None, flags, base | ROW_ROLE_SWATCH),
+        None => tree.add_node(parent, rect, UINodeType::Button, style, None, flags),
+    };
+    tree.set_name(id, format!("param_row.{}.swatch", info.id));
+    Some((id, members.group))
+}
 
 /// A row's identity-derived key base (D4): every interactive node the row
 /// builds flat-parented (siblings of every other row's controls, under the
@@ -1591,10 +1671,21 @@ pub(crate) fn build_audio_mod_drawer(
         rows,
         btn_font_size: config_font,
         slider_font_size: FONT_SIZE,
-        theme: Theme::INSPECTOR.with_accent(AUDIO_MOD_ACTIVE_C32).tinted(),
+        theme: audio_drawer_theme(),
     };
     let dids = drawer::build(tree, parent, x, cy, w, &spec, key);
     (dids, send_count)
+}
+
+/// A Step amount's value cell text.
+pub(crate) fn step_amount_text(amount: f32, whole_numbers: bool) -> String {
+    if whole_numbers { format!("{amount:.0}") } else { format!("{amount:.2}") }
+}
+
+/// The audio-mod drawer's theme, shared by the build and the live push that
+/// restyles its Invert toggle in place.
+pub(crate) fn audio_drawer_theme() -> Theme {
+    Theme::INSPECTOR.with_accent(AUDIO_MOD_ACTIVE_C32).tinted()
 }
 
 
@@ -1635,10 +1726,7 @@ pub(crate) fn build_toggle_trigger_row(
     build_env_button: bool,
     has_osc: bool,
     row_key_base: Option<u64>,
-    // P1 drawer tween: supplied only while a height tween is in flight
-    // (mirrors `build_param_row`'s `drawer_reveal`) — the drawer then
-    // builds under a clip region of that height instead of its natural
-    // one, so mid-tween or bottom-straddling paint never escapes it.
+    // The drawer's reveal height, as `build_param_row`'s `drawer_reveal`.
     drawer_reveal: Option<f32>,
 ) -> ToggleTriggerRowIds {
     if mod_state.automation_selected.get(i).copied().unwrap_or(false) {
@@ -1724,6 +1812,7 @@ pub(crate) fn build_toggle_trigger_row(
     let mut cy = cy + ROW_HEIGHT + ROW_SPACING;
     let mut audio_btn = None;
     let mut audio_config = None;
+    let mut drawer_clip = None;
     let mut mode_badge_id = None;
 
     // is_trigger (D5b) and is_trigger_gate (section 9) both reach the standard
@@ -1757,15 +1846,14 @@ pub(crate) fn build_toggle_trigger_row(
             let drawer_x = x + DRAWER_INDENT;
             let row_right = audio_btn_x + DE_BUTTON_SIZE;
             let drawer_w = (row_right - drawer_x).max(1.0);
-            // P1 drawer tween parity with `build_param_row` (:2089-2101): when a
-            // reveal height is supplied, the drawer builds under a clip region of
-            // that height (revealing top-down) instead of `parent` directly.
+            // Drawer reveal, as `build_param_row`: with a reveal height the
+            // drawer builds at full size under a clip of that height.
             let drawer_top = cy;
             let animate_drawer = drawer_reveal.is_some();
             let drawer_parent: Option<NodeId> = if animate_drawer {
                 let reveal = drawer_reveal.unwrap_or(0.0).max(0.0);
                 let rect = Rect::new(x, drawer_top, (row_right - x).max(1.0), reveal);
-                Some(match row_key_base {
+                let clip = match row_key_base {
                     Some(base) => tree.add_node_keyed(
                         parent,
                         rect,
@@ -1783,7 +1871,9 @@ pub(crate) fn build_toggle_trigger_row(
                         None,
                         UIFlags::VISIBLE | UIFlags::CLIPS_CHILDREN,
                     ),
-                })
+                };
+                drawer_clip = Some(clip);
+                Some(clip)
             } else {
                 parent
             };
@@ -1862,6 +1952,7 @@ pub(crate) fn build_toggle_trigger_row(
         audio_btn,
         audio_config,
         mode_badge_id,
+        drawer_clip,
         new_cy: cy,
     }
 }
@@ -1898,13 +1989,11 @@ pub(crate) fn build_param_row(
     // editor card (Author context) passes `Some(param_index << 8)`; the perform
     // inspector passes `None` and is unchanged. See `docs/INPUT_IDENTITY_UNIFICATION.md`.
     row_key_base: Option<u64>,
-    // P1 drawer open/close tween (`UI_CRAFT_AND_MOTION_PLAN.md`): while a reveal
-    // height is supplied, the modulation-drawer block builds under a clip region
-    // sized to that height and the row reserves exactly that height, so the drawer
-    // grows/shrinks and everything below reflows in lockstep. `None` = settled /
-    // no animation → the drawer builds directly under `parent` and reserves its
-    // natural height, byte-identical to the pre-motion layout (so the golden card
-    // tests, which build settled, are unaffected).
+    // The drawer's reveal height. `Some` builds the drawer at full size under
+    // a clip of that height and reserves exactly that height; the param cards
+    // always pass it (the animated height, equal to the natural one once
+    // settled), so their tween moves the clip in place. `None` builds the
+    // drawer directly under `parent` at its natural height.
     drawer_reveal: Option<f32>,
     // Value to DRAW this build (fill + thumb + value text), for cards whose
     // per-frame sync dirty-checks its pushes: the tree is minted fresh every
@@ -1945,6 +2034,8 @@ pub(crate) fn build_param_row(
         ableton_config: None,
         audio_config: None,
         mod_tabs: Vec::new(),
+        swatch: None,
+        drawer_clip: None,
         new_cy: cy,
     };
     let mut cy = cy;
@@ -1957,6 +2048,7 @@ pub(crate) fn build_param_row(
         info.spec.whole_numbers,
         info.spec.is_angle,
         info.spec.value_labels.as_deref(),
+        info.spec.unit,
     );
     let default_norm = BitmapSlider::value_to_normalized(info.spec.default, info.spec.min, info.spec.max);
     let slider_rect = Rect::new(x, cy, slider_w, ROW_HEIGHT);
@@ -1987,7 +2079,7 @@ pub(crate) fn build_param_row(
     let active_tabs = if show_drawer {
         active_mod_tabs(mod_state, info, i)
     } else {
-        Vec::new()
+        ActiveModTabs::default()
     };
     let shown_tab = resolve_active_tab(&active_tabs, active_tab);
 
@@ -2050,6 +2142,9 @@ pub(crate) fn build_param_row(
         ),
     };
 
+    // A swatch sits at the right end of the label lane, beside the name; the
+    // track stays where every other row has it.
+    ids.swatch = build_colour_swatch(tree, parent, x + label_width - SWATCH_SIZE, cy, info, row_key_base);
     let slider = build_row_slider(
         tree,
         parent,
@@ -2070,6 +2165,12 @@ pub(crate) fn build_param_row(
     // Make label interactive for click-to-copy OSC address + Ableton mapping.
     if let Some(label_id) = slider.label {
         tree.set_flag(label_id, UIFlags::INTERACTIVE);
+        // The right-aligned name ends just before the swatch.
+        if ids.swatch.is_some() {
+            let mut lane = tree.get_bounds(label_id);
+            lane.width = (lane.width - SWATCH_SIZE - SWATCH_GAP).max(0.0);
+            tree.set_bounds(label_id, lane);
+        }
     }
 
     // "Automated" indicator (P4 section 7 last bullet, Live's red dot): a small,
@@ -2166,6 +2267,7 @@ pub(crate) fn build_param_row(
             node.tooltip.clone_from(&info.spec.tooltip);
         }
     }
+    BitmapSlider::mark_past_end(tree, &slider, super::state::past_slider_end(shown_value, &info.spec));
     ids.slider = Some(slider);
 
     // D/E buttons (right of the slider row), at the column x's computed up top.
@@ -2251,21 +2353,18 @@ pub(crate) fn build_param_row(
 
     cy += ROW_HEIGHT + ROW_SPACING;
 
-    // P1 drawer tween: top of the modulation-drawer block. When a reveal height is
-    // supplied AND this row actually has a drawer, the whole block builds under a
-    // clip region of that height (revealing top-down as it grows) and `new_cy`
-    // reserves exactly that height so content below reflows with it. Otherwise the
-    // block builds under `parent` and reserves its natural height as before.
+    // Drawer reveal (UI_INVALIDATION_DESIGN.md decided item 10): with a reveal
+    // height and a drawer to show, the drawer builds once at its full size
+    // under a clip of the reveal height, and `new_cy` reserves exactly that
+    // height. The open/close tween then moves the clip and what sits below it
+    // in place (`ScrollContainer::reflow`). Without a reveal height the
+    // drawer builds under `parent` at its natural height.
     let drawer_top = cy;
-    // A reveal height only matters when this row actually has a drawer (active
-    // config); a row with no active config stays on the natural path.
     let animate_drawer = drawer_reveal.is_some() && !active_tabs.is_empty();
-    // When animating, every drawer node parents to a clip region of the reveal
-    // height (revealing top-down); otherwise they parent to `parent` unchanged.
     let drawer_parent: Option<NodeId> = if animate_drawer {
         let reveal = drawer_reveal.unwrap_or(0.0).max(0.0);
         let rect = Rect::new(x, drawer_top, (row_right - x).max(1.0), reveal);
-        Some(match row_key_base {
+        let clip = match row_key_base {
             Some(base) => tree.add_node_keyed(
                 parent,
                 rect,
@@ -2283,7 +2382,9 @@ pub(crate) fn build_param_row(
                 None,
                 UIFlags::VISIBLE | UIFlags::CLIPS_CHILDREN,
             ),
-        })
+        };
+        ids.drawer_clip = Some(clip);
+        Some(clip)
     } else {
         parent
     };

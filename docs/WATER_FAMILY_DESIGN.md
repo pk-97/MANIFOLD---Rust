@@ -135,9 +135,9 @@ unambiguous simulation owner; reuse `SceneNodeRef`, not fixed IDs or handles.
 Imported compound behaviour stays intact. Add one row field,
 `look_mesh: Option<NodeId>`, populated only for family children. Include it in
 `object_controls` (`projection/scene.rs:102–123`). Filter
-`node.platonic_solid_mesh` metadata to `radius` in `scene_exposure.rs`'s filter
-chain (precedent `:107`); label it **Size** through
-`SceneParamMetadata.label` (`crates/manifold-core/src/scene_exposure.rs:24`).
+`node.platonic_solid_mesh` metadata to `radius`; the water preset names its
+own control **Size** where it builds the family metadata
+(`manifold-nodes-water/src/presets/gpu_flip.rs`).
 There is no second stored size. Suppress child transform, physics, skin and
 modifier affordances.
 

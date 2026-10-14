@@ -50,7 +50,7 @@ impl Command for ChangeAbletonMappingCommand {
         use manifold_core::change::{ChangeSet, Part};
         ChangeSet::of(&[Part::Mappings, Part::MappingRanges, Part::Values, Part::Effects])
     }
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         apply_mapping(project, &self.target, &self.new_mapping);
         if let AbletonMappingTarget::MacroSlot { slot_index } = &self.target
             && let Some(ref label) = self.new_macro_label
@@ -60,7 +60,7 @@ impl Command for ChangeAbletonMappingCommand {
         }
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         apply_mapping(project, &self.target, &self.old_mapping);
         if let AbletonMappingTarget::MacroSlot { slot_index } = &self.target
             && let Some(ref label) = self.old_macro_label
@@ -114,11 +114,11 @@ impl Command for ChangeAbletonTrimCommand {
         use manifold_core::change::{ChangeSet, Part};
         ChangeSet::of(&[Part::MappingRanges])
     }
-    fn execute(&mut self, project: &mut Project) {
+    fn do_execute(&mut self, project: &mut Project) {
         set_trim(project, &self.target, self.new_min, self.new_max);
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         set_trim(project, &self.target, self.old_min, self.old_max);
     }
 
@@ -256,6 +256,32 @@ mod tests {
                     let m = &master_bloom(p).ableton_mappings.as_ref().unwrap()[0];
                     (m.range_min, m.range_max) == (0.25, 0.75)
                 },
+            },
+            SetterCase {
+                name: "map macro slot",
+                build: |p| Box::new(ChangeAbletonMappingCommand::map(
+                    AbletonMappingTarget::MacroSlot { slot_index: 0 },
+                    mapping("macro", 0.0, 1.0),
+                    None,
+                    Some(p.settings.macro_bank.slots[0].label.clone()),
+                    Some("Filter".into()),
+                )),
+                applied: |p| p.settings.macro_bank.slots[0].ableton_mapping.is_some(),
+            },
+            SetterCase {
+                name: "unmap master effect",
+                build: |p| {
+                    let mut fx = PresetInstance::new(PresetTypeId::new("Bloom"));
+                    fx.id = EffectId::new("fx-1");
+                    fx.ableton_mappings = Some(vec![mapping("amount", 0.0, 1.0)]);
+                    p.settings.master_effects.push(fx);
+                    let target = AbletonMappingTarget::MasterEffect {
+                        effect_type: PresetTypeId::new("Bloom"),
+                        param_id: Cow::Borrowed("amount"),
+                    };
+                    Box::new(ChangeAbletonMappingCommand::unmap(target, mapping("amount", 0.0, 1.0)))
+                },
+                applied: |p| master_bloom(p).ableton_mappings.as_ref().is_none_or(|m| m.is_empty()),
             },
         ]);
     }

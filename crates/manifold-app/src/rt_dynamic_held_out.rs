@@ -25,7 +25,6 @@ use manifold_node_engine::runtime::frame_status::FrameRenderStatus;
 use serde_json::{Value, json};
 
 use crate::content_command::ContentCommand;
-use crate::content_state::ContentState;
 use crate::headless_harness::headless_content_thread;
 use crate::scene_modifier_edit::SceneModifierAction;
 
@@ -142,7 +141,7 @@ fn set_generator_param(
     }
     ct.graph_edit_diagnostic
         .take()
-        .map_or(Ok(()), |diagnostic| Err(diagnostic.message))
+        .map_or(Ok(()), |diagnostic| Err(diagnostic.message.clone()))
 }
 
 fn ensure_surface_waves_driver(
@@ -240,11 +239,11 @@ fn reference_project() -> (Project, LayerId, String, u64) {
         "oscPrefix": "rt_dynamic_reference",
         "params": [
             {"id": "phase", "name": "Phase", "min": -100.0, "max": 100.0, "defaultValue": 0.0},
-            {"id": "rt_enabled", "name": "RT Enabled", "min": 0.0, "max": 1.0, "defaultValue": 1.0}
+            {"id": "rt_enabled", "name": "Ray Tracing", "min": 0.0, "max": 1.0, "defaultValue": 1.0}
         ],
         "bindings": [
             {"id": "phase", "label": "Phase", "defaultValue": 0.0, "target": {"kind": "node", "nodeId": "wave", "param": "phase"}},
-            {"id": "rt_enabled", "label": "RT Enabled", "defaultValue": 1.0, "target": {"kind": "node", "nodeId": "scene", "param": "rt_enabled"}}
+            {"id": "rt_enabled", "label": "Ray Tracing", "defaultValue": 1.0, "target": {"kind": "node", "nodeId": "scene", "param": "rt_enabled"}}
         ]
     });
     let graph: EffectGraphDef =
@@ -310,7 +309,7 @@ fn measure_project(
         .ok()
         .and_then(source_triangles);
     let mut ct = headless_content_thread(project, WIDTH, HEIGHT);
-    let (state_tx, state_rx) = crossbeam_channel::unbounded::<ContentState>();
+    let (state_tx, state_rx) = crate::content_state::state_channel();
     let drain = std::thread::Builder::new()
         .name("rt-dynamic-content-drain".into())
         .spawn(move || while state_rx.recv().is_ok() {})

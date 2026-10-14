@@ -46,7 +46,7 @@ mod gpu {
                 param_id.to_owned(),
                 value,
             ),
-            &mut project,
+            &mut crate::ui_bridge::ProjectRef::new(&mut project, &mut Default::default(), &tx),
             &tx,
             &state,
             &mut ui,
@@ -201,7 +201,7 @@ mod gpu {
         let (tx, rx) = crossbeam_channel::unbounded();
         dispatch_project(
             &ProjectAction::SceneSetupAddFluid(layer_id.clone(), render_scene_node_id),
-            &mut project,
+            &mut crate::ui_bridge::ProjectRef::new(&mut project, &mut Default::default(), &tx),
             &tx,
             &state,
             &mut ui,
@@ -214,7 +214,7 @@ mod gpu {
         assert!(matches!(&add, ContentCommand::ExecuteSelecting(_, _)));
 
         let mut content = crate::headless_harness::headless_content_thread(project, W, H);
-        let (state_tx, _state_rx) = crossbeam_channel::unbounded();
+        let (state_tx, _state_rx) = crate::content_state::state_channel();
         content.handle_command(add);
         crate::scene_modifier_journey::warm_project(&mut content, &state_tx);
 

@@ -7,6 +7,7 @@
 //! to avoid borrowing the entire Application — this lets the overlay
 //! simultaneously borrow ui_root and selection from Application.
 use manifold_ui::{EditingAction};
+use manifold_core::change::{ChangeSet, Part};
 use manifold_core::{Beats, ClipId, GraphTarget, LayerId, Seconds};
 use std::collections::HashSet;
 
@@ -94,22 +95,15 @@ pub struct AppEditingHost<'a> {
     pub content_state: &'a crate::content_state::ContentState,
     pub cursor_manager: &'a mut CursorManager,
     pub active_layer: &'a mut Option<LayerId>,
-    pub needs_rebuild: &'a mut bool,
-    pub needs_structural_sync: &'a mut bool,
-    /// Lane geometry must be re-projected from the local project (a point
-    /// preview or restore). Drained by app_render.rs's lanes-only resync.
-    pub automation_lanes_dirty: &'a mut bool,
-    pub scroll_dirty: &'a mut crate::ui_root::ScrollDirty,
-    /// Per-layer bitmap invalidation targets. Drained in app_render.rs.
-    pub invalidate_layers: &'a mut Vec<usize>,
+    /// The main window repaints next frame (UI_INVALIDATION D8).
+    pub redraw: &'a mut bool,
 
     // Command batch accumulator (for begin_command_batch / commit_command_batch)
     command_batch: Vec<Box<dyn Command>>,
 
-    // Pre-drag split commands — persists at Application level across host instances.
-    // Unity: InteractionOverlay.preDragSplitCommands (lines 69, 430-433).
-    // Populated by split_clips_for_region_move, prepended on commit_command_batch.
-    pub pre_drag_commands: &'a mut Vec<Box<dyn Command>>,
+    /// The UI's part stamps and the gesture preview (D5, D12); both outlive
+    /// one host instance. Committing methods stamp; preview writes record.
+    pub edits: &'a mut crate::gesture_preview::UiEdits,
 
     /// PanelActions generated during overlay processing (e.g. right-click context menus).
     /// Drained by app.rs after the overlay event loop.
@@ -133,9 +127,11 @@ impl<'a> AppEditingHost<'a> {
             .find(|c| c.id.as_ref() == clip_id)
     }
 
-    /// Send the edited envelope once per input event, leaving the content
-    /// project's authoritative points available to the undoable commit.
-    fn send_automation_preview(&self, target: &GraphTarget, param_id: &str) {
+    /// Record the edited envelope in the gesture preview and send it once per
+    /// input event, leaving the content project's authoritative points
+    /// available to the undoable commit.
+    fn send_automation_preview(&mut self, target: &GraphTarget, param_id: &str) {
+        self.edits.preview.record_lane(self.project, target, param_id);
         let Some(lane) = self.project.preset_instance(target)
             .and_then(|inst| inst.automation_lanes.as_ref())
             .and_then(|lanes| lanes.iter().find(|lane| lane.param_id == param_id))
@@ -156,12 +152,8 @@ impl<'a> AppEditingHost<'a> {
         content_state: &'a crate::content_state::ContentState,
         cursor_manager: &'a mut CursorManager,
         active_layer: &'a mut Option<LayerId>,
-        needs_rebuild: &'a mut bool,
-        needs_structural_sync: &'a mut bool,
-        automation_lanes_dirty: &'a mut bool,
-        scroll_dirty: &'a mut crate::ui_root::ScrollDirty,
-        invalidate_layers: &'a mut Vec<usize>,
-        pre_drag_commands: &'a mut Vec<Box<dyn Command>>,
+        redraw: &'a mut bool,
+        edits: &'a mut crate::gesture_preview::UiEdits,
     ) -> Self {
         Self {
             project,
@@ -169,13 +161,9 @@ impl<'a> AppEditingHost<'a> {
             content_state,
             cursor_manager,
             active_layer,
-            needs_rebuild,
-            needs_structural_sync,
-            automation_lanes_dirty,
-            scroll_dirty,
-            invalidate_layers,
+            redraw,
             command_batch: Vec::new(),
-            pre_drag_commands,
+            edits,
             pending_actions: Vec::new(),
             ui_layers: std::cell::OnceCell::new(),
         }
@@ -342,7 +330,8 @@ impl TimelineEditingHost for AppEditingHost<'_> {
                 EditingService::create_clip_at_position(project, beat, layer, duration)?;
             {
                 let mut cmd = cmd;
-                cmd.execute(project);
+                let wrote = cmd.execute(project);
+                self.edits.stamps.bump(wrote);
                 crate::content_command::ContentCommand::send(
                     self.content_tx,
                     crate::content_command::ContentCommand::Execute(cmd),
@@ -350,7 +339,6 @@ impl TimelineEditingHost for AppEditingHost<'_> {
             }
             id
         };
-        *self.needs_structural_sync = true;
         Some(clip_id)
     }
 
@@ -389,6 +377,7 @@ impl TimelineEditingHost for AppEditingHost<'_> {
                     project.timeline.layers[target_layer].restore_clip(clip);
                 }
                 project.timeline.mark_clip_lookup_dirty();
+                self.edits.preview.record_clip(project, &clip_id);
             }
         }
     }
@@ -406,7 +395,6 @@ impl TimelineEditingHost for AppEditingHost<'_> {
         }
         if new_layer != *self.active_layer {
             *self.active_layer = new_layer;
-            *self.needs_structural_sync = true;
         }
     }
 
@@ -441,32 +429,13 @@ impl TimelineEditingHost for AppEditingHost<'_> {
             .map(|l| l.layer_id.clone());
         if new_layer != *self.active_layer {
             *self.active_layer = new_layer;
-            *self.needs_structural_sync = true;
         }
     }
 
-    // ── Bitmap invalidation ─────────────────────────────────────
+    // ── Repaint ─────────────────────────────────────────────────
 
-    fn invalidate_layer_bitmap(&mut self, layer_index: usize) {
-        self.invalidate_layers.push(layer_index);
-    }
-
-    fn invalidate_all_layer_bitmaps(&mut self) {
-        self.scroll_dirty.visual = true;
-    }
-
-    fn mark_dirty(&mut self) {
-        *self.needs_rebuild = true;
-        *self.needs_structural_sync = true;
-    }
-
-    fn request_redraw(&mut self) {
-        self.scroll_dirty.visual = true;
-    }
-
-    fn request_automation_lane_resync(&mut self) {
-        *self.automation_lanes_dirty = true;
-        self.scroll_dirty.visual = true;
+    fn redraw(&mut self) {
+        *self.redraw = true;
     }
 
     // ── Cursor ──────────────────────────────────────────────────
@@ -539,7 +508,7 @@ impl TimelineEditingHost for AppEditingHost<'_> {
     fn split_clips_for_region_move(&mut self, region: &UiSelectionRegion) -> RegionSplitResult {
         // Port of Unity EditingService.SplitClipsForRegionMove.
         // 1. Split clips at region boundaries (executed immediately)
-        // 2. Store split commands in pre_drag_commands for composite undo
+        // 2. Hold the split commands in the gesture preview for composite undo
         //    (Unity: preDragSplitCommands, lines 69, 430-433)
         // 3. Return interior clips (the drag set)
         let region = crate::ui_translate::selection_region_to_core(region);
@@ -557,17 +526,17 @@ impl TimelineEditingHost for AppEditingHost<'_> {
         };
         let split_count = split_cmds.len();
 
-        // Step 2: Execute split commands immediately, store in pre_drag_commands
-        // (not command_batch — these persist across host instances and get prepended
-        // on commit so CompositeCommand.Undo() reverses them AFTER undoing the move)
+        // Step 2: Execute split commands for display and hold them in the
+        // gesture preview (not command_batch — they persist across host
+        // instances, replay over a mid-drag snapshot, and lead the commit so
+        // CompositeCommand.Undo() reverses them AFTER undoing the move).
         if !split_cmds.is_empty() {
-            self.pre_drag_commands.clear();
-            if let Some(project) = Some(&mut *self.project) {
-                for mut cmd in split_cmds {
-                    cmd.execute(project);
-                    self.pre_drag_commands.push(cmd);
-                }
+            let mut splits = Vec::with_capacity(split_cmds.len());
+            for mut cmd in split_cmds {
+                cmd.execute(self.project);
+                splits.push(cmd);
             }
+            self.edits.preview.set_splits(splits);
         }
 
         // Step 3: Get clips now fully inside region (immutable borrow)
@@ -654,17 +623,18 @@ impl TimelineEditingHost for AppEditingHost<'_> {
         {
             // Apply to the local mirror now (the copy appears immediately) and
             // push into the batch so it commits as part of the move's one undo
-            // entry and reaches the content thread via ExecuteBatch.
+            // entry and reaches the content thread via ExecuteBatch; the
+            // batch commit stamps it.
             cmd.execute(project);
             self.command_batch.push(cmd);
         }
-        *self.needs_structural_sync = true;
     }
 
     fn commit_command_batch(&mut self, description: &str) {
         // Unity lines 428-434: prepend pre-drag split commands so
         // CompositeCommand.Undo() reverses them AFTER undoing the move.
-        let pre_cmds: Vec<Box<dyn Command>> = self.pre_drag_commands.drain(..).collect();
+        // The gesture ends here, committed or cancelled: the preview clears.
+        let pre_cmds = self.edits.preview.take_clip_gesture();
         let batch_cmds: Vec<Box<dyn Command>> = self.command_batch.drain(..).collect();
 
         let mut commands = Vec::with_capacity(pre_cmds.len() + batch_cmds.len());
@@ -674,6 +644,7 @@ impl TimelineEditingHost for AppEditingHost<'_> {
         if commands.is_empty() {
             return;
         }
+        self.edits.stamps.bump(crate::gesture_preview::touches_of(&commands));
         // Commands are already applied (drag mutated data live).
         // Use record() not execute() — just push to undo stack.
         if commands.len() == 1 {
@@ -689,7 +660,6 @@ impl TimelineEditingHost for AppEditingHost<'_> {
                 crate::content_command::ContentCommand::Execute(Box::new(composite)),
             );
         }
-        *self.needs_structural_sync = true;
     }
 
     // ── Live clip mutation ──────────────────────────────────────
@@ -708,6 +678,7 @@ impl TimelineEditingHost for AppEditingHost<'_> {
                 layer.mark_clips_unsorted();
             }
             project.timeline.mark_clip_lookup_dirty();
+            self.edits.preview.record_clip(project, clip_id);
         }
     }
 
@@ -736,6 +707,7 @@ impl TimelineEditingHost for AppEditingHost<'_> {
                 layer.mark_clips_unsorted();
             }
             project.timeline.mark_clip_lookup_dirty();
+            self.edits.preview.record_clip(project, clip_id);
         }
     }
 
@@ -782,12 +754,12 @@ impl TimelineEditingHost for AppEditingHost<'_> {
             shape: to_segment_shape(shape),
         };
         let mut cmd = AddAutomationPointCommand::new(target, param_id.as_ref(), point);
-        cmd.execute(self.project);
+        let wrote = cmd.execute(self.project);
+        self.edits.stamps.bump(wrote);
         crate::content_command::ContentCommand::send(
             self.content_tx,
             crate::content_command::ContentCommand::Execute(Box::new(cmd)),
         );
-        self.mark_dirty();
     }
 
     fn insert_automation_point_on_curve(
@@ -815,10 +787,11 @@ impl TimelineEditingHost for AppEditingHost<'_> {
             param_id_str,
             beat,
         );
-        local_cmd.execute(self.project);
+        let wrote = local_cmd.execute(self.project);
         if !local_cmd.was_applied() {
             return None;
         }
+        self.edits.stamps.bump(wrote);
         let value = self
             .project
             .preset_instance(&graph_target)
@@ -829,9 +802,6 @@ impl TimelineEditingHost for AppEditingHost<'_> {
             self.content_tx,
             crate::content_command::ContentCommand::Execute(Box::new(local_cmd)),
         );
-        if value.is_some() {
-            self.mark_dirty();
-        }
         value
     }
 
@@ -884,6 +854,7 @@ impl TimelineEditingHost for AppEditingHost<'_> {
         // The UI already displays the draft, but content still owns the original
         // lane. Execute captures that complete lane for collision-safe undo.
         let cmd = MoveAutomationPointCommand::new(graph_target, param_id.as_ref(), old_point, new_point);
+        self.edits.stamps.bump(cmd.touches());
         crate::content_command::ContentCommand::send(
             self.content_tx,
             crate::content_command::ContentCommand::Execute(Box::new(cmd)),
@@ -900,7 +871,7 @@ impl TimelineEditingHost for AppEditingHost<'_> {
                     .iter()
                     .find(|l| l.param_id.as_ref() == param_id_str)
                     .and_then(|lane| lane.points.iter().position(|p| {
-                        let norm = manifold_ui::slider::BitmapSlider::value_to_normalized(p.value, param.spec.min, param.spec.max);
+                        let norm = manifold_ui::slider::BitmapSlider::value_to_normalized(p.value, param.slider_span().0, param.slider_span().1);
                         p.beat == beat && norm == value_norm
                     }))
             })
@@ -909,12 +880,12 @@ impl TimelineEditingHost for AppEditingHost<'_> {
             return;
         };
         let mut cmd = RemoveAutomationPointCommand::new(graph_target, param_id.as_ref(), index);
-        cmd.execute(self.project);
+        let wrote = cmd.execute(self.project);
+        self.edits.stamps.bump(wrote);
         crate::content_command::ContentCommand::send(
             self.content_tx,
             crate::content_command::ContentCommand::Execute(Box::new(cmd)),
         );
-        self.mark_dirty();
     }
 
     // ── Automation lane editing — segment gestures (P4 Unit B) ───────
@@ -992,6 +963,7 @@ impl TimelineEditingHost for AppEditingHost<'_> {
             make(left.0, left.1, left.2, left.3),
             make(right.0, right.1, right.2, right.3),
         ];
+        self.edits.stamps.bump(crate::gesture_preview::touches_of(&commands));
         crate::content_command::ContentCommand::send(
             self.content_tx,
             crate::content_command::ContentCommand::ExecuteBatch(
@@ -1026,10 +998,11 @@ impl TimelineEditingHost for AppEditingHost<'_> {
                 lanes.push((target, movement.param_id, vec![pair]));
             }
         }
-        let commands = lanes.into_iter().map(|(target, param_id, points)| {
+        let commands: Vec<Box<dyn Command>> = lanes.into_iter().map(|(target, param_id, points)| {
             Box::new(MoveAutomationPointCommand::for_group(target, param_id.as_ref(), points))
                 as Box<dyn Command>
         }).collect();
+        self.edits.stamps.bump(crate::gesture_preview::touches_of(&commands));
         crate::content_command::ContentCommand::send(
             self.content_tx,
             crate::content_command::ContentCommand::ExecuteBatch(
@@ -1069,6 +1042,7 @@ impl TimelineEditingHost for AppEditingHost<'_> {
     }
 
     fn clear_automation_previews(&mut self) {
+        self.edits.preview.clear_lanes();
         crate::content_command::ContentCommand::send(
             self.content_tx,
             crate::content_command::ContentCommand::ClearAutomationPreviews,
@@ -1092,8 +1066,9 @@ impl TimelineEditingHost for AppEditingHost<'_> {
                 mutated = lanes.len() != old_len;
                 if mutated && lanes.is_empty() { inst.automation_lanes = None; }
             }
+            // A lane appearing or vanishing is a shape change; it stamps like a commit.
             if mutated {
-                self.mark_dirty();
+                self.edits.stamps.bump(ChangeSet::of(&[Part::Automation]));
             }
             return;
         };
@@ -1129,7 +1104,7 @@ impl TimelineEditingHost for AppEditingHost<'_> {
             }
         }
         if created {
-            self.mark_dirty();
+            self.edits.stamps.bump(ChangeSet::of(&[Part::Automation]));
         }
     }
 
@@ -1154,6 +1129,7 @@ impl TimelineEditingHost for AppEditingHost<'_> {
         // Install the draft on content using the same undoable lane replacement
         // as recording; the runtime preview left the original lane untouched.
         let cmd = CommitRecordedGestureCommand::new(graph_target, param_id_str, new_converted, old_converted);
+        self.edits.stamps.bump(cmd.touches());
         crate::content_command::ContentCommand::send(
             self.content_tx,
             crate::content_command::ContentCommand::Execute(Box::new(cmd)),

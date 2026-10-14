@@ -385,6 +385,7 @@ pub mod touch {
     pub const MAPPINGS: ChangeSet = ChangeSet::of(&[Part::Mappings]);
     pub const LAYERS: ChangeSet = ChangeSet::of(&[Part::Layers]);
     pub const MARKERS: ChangeSet = ChangeSet::of(&[Part::Markers]);
+    pub const AUTOMATION: ChangeSet = ChangeSet::of(&[Part::Automation]);
     pub const EFFECTS: ChangeSet = ChangeSet::of(&[Part::Effects]);
     /// Adding or removing a macro mapping also moves its range (Shapes).
     pub const EFFECTS_SHAPES: ChangeSet = ChangeSet::of(&[Part::Effects, Part::Shapes]);

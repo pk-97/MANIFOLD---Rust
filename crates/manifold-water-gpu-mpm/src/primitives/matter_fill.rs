@@ -80,7 +80,7 @@ manifold_node_engine::primitive! {
         ParamDef { name: Cow::Borrowed("column_y1"), label: "Box Max Y (cell)", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0, 4096.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("column_z0"), label: "Box Min Z (cell)", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0, 4096.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("column_z1"), label: "Box Max Z (cell)", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0, 4096.0)), enum_values: &[] },
-        ParamDef { name: Cow::Borrowed("points_per_cell"), label: "Points per Cell", ty: ParamType::Int, default: ParamValue::Float(8.0), range: Some((8.0, 27.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("points_per_cell"), label: "Particles per Cell", ty: ParamType::Int, default: ParamValue::Float(8.0), range: Some((8.0, 27.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("seed"), label: "Seed", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0, 16_777_215.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("body_count"), label: "Bodies", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0, MAX_FLUID_ROLES as f32)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("epoch"), label: "Epoch", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0, 16_777_215.0)), enum_values: &[] },
@@ -120,7 +120,7 @@ pub(crate) fn fill_count(cells: [u32; 3], pool: u32, column: [[u32; 2]; 3], poin
     match u32::try_from(count) {
         Ok(count) if count <= EXACT_F32_COUNT => Ok(count),
         _ => Err(format!(
-            "Matter fill: {count} points exceeds the exact f32 range of the count wire ({EXACT_F32_COUNT}). Lower Resolution, Points per Cell or the fill."
+            "Matter fill: {count} points exceeds the exact f32 range of the count wire ({EXACT_F32_COUNT}). Lower Resolution, Particles per Cell or the fill."
         )),
     }
 }

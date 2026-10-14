@@ -1195,6 +1195,44 @@ impl Default for MappingPopover {
     }
 }
 
+/// The automation mirror of `on_press`'s hit regions (`UI_AUTOMATION_DESIGN.md`
+/// D5): every field, button and curve cell of the open drawer, by label.
+/// Empty while closed.
+impl crate::hit_targets::HitTargets for MappingPopover {
+    fn surface_id(&self) -> &'static str {
+        "mapping_drawer"
+    }
+
+    fn enumerate(&self, out: &mut Vec<crate::hit_targets::HitTargetEntry>) {
+        if !self.open {
+            return;
+        }
+        let mut push = |kind: &'static str, label: &str, r: Rect| {
+            out.push(crate::hit_targets::HitTargetEntry {
+                kind,
+                label: label.to_string(),
+                rect: crate::node::Rect::new(r.x, r.y, r.w, r.h),
+                payload: format!("binding={}", self.binding_id),
+            });
+        };
+        push("field", "Label", self.header_rect());
+        for (label, which) in [
+            ("Min", DragTarget::Min),
+            ("Max", DragTarget::Max),
+            ("Scale", DragTarget::Scale),
+            ("Offset", DragTarget::Offset),
+        ] {
+            push("field", label, self.value_field_rect(which));
+        }
+        push("field", "Section", self.section_field_rect());
+        push("button", "Invert", self.invert_btn_rect());
+        push("button", "Go to node", self.goto_btn_rect());
+        for (idx, &curve) in CURVES.iter().enumerate() {
+            push("curve", curve_label(curve), self.curve_cell_rect(idx));
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

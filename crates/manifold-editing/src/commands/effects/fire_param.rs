@@ -71,7 +71,11 @@ impl FireGraphParamCommand {
 }
 
 impl Command for FireGraphParamCommand {
-    fn execute(&mut self, project: &mut Project) {
+    /// The resolved param write's set; before it resolves nothing was written.
+    fn touches(&self) -> manifold_core::change::ChangeSet {
+        self.resolved.as_ref().map_or(manifold_core::change::ChangeSet::NONE, |c| c.touches())
+    }
+    fn do_execute(&mut self, project: &mut Project) {
         self.applied = false;
         self.rejection = None;
 
@@ -117,7 +121,7 @@ impl Command for FireGraphParamCommand {
         self.applied = true;
     }
 
-    fn undo(&mut self, project: &mut Project) {
+    fn do_undo(&mut self, project: &mut Project) {
         if !self.applied {
             return;
         }

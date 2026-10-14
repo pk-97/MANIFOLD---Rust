@@ -275,6 +275,10 @@ enum AudioSetupDrag {
 
 /// The Audio Setup modal panel.
 pub struct AudioSetupPanel {
+    /// Bumped only by the view setters below, and only when the value changes
+    /// (open, selected send, armed delete). The frame planner keys the dock
+    /// rebuild on it (UI_INVALIDATION_DESIGN.md D17, panel view versions).
+    view_version: u64,
     open: bool,
     // Configured data.
     current_device: Option<AudioDeviceRef>,
@@ -293,6 +297,9 @@ pub struct AudioSetupPanel {
     /// Screen-space rect of the waterfall image (logical units), set by `build`.
     /// The present pass blits the spectrogram texture here. `None` when closed.
     scope_rect: Option<Rect>,
+    /// Scroll offset the built body nodes sit at, so an in-place scroll
+    /// moves them by the difference.
+    shown_scroll: f32,
     /// Resolved panel width and waterfall height, set by
     /// [`AudioSetupPanel::build_docked`] from the dock rect (D1). The width is
     /// the dock column; the scope takes a fixed fraction of the height so the
@@ -373,6 +380,7 @@ pub struct AudioSetupPanel {
 impl Default for AudioSetupPanel {
     fn default() -> Self {
         Self {
+            view_version: 0,
             open: false,
             current_device: None,
             sends: Vec::new(),
@@ -380,6 +388,7 @@ impl Default for AudioSetupPanel {
             delete_armed: None,
             selected_send: None,
             scope_rect: None,
+            shown_scroll: 0.0,
             panel_w: 0.0,
             scope_h: 0.0,
             host: ChromeHost::new(),
@@ -424,20 +433,45 @@ impl AudioSetupPanel {
         self.open
     }
 
+    pub fn view_version(&self) -> u64 {
+        self.view_version
+    }
+
+    fn set_open(&mut self, open: bool) {
+        if self.open != open {
+            self.open = open;
+            self.view_version += 1;
+        }
+    }
+
+    fn set_delete_armed(&mut self, armed: Option<AudioSendId>) {
+        if self.delete_armed != armed {
+            self.delete_armed = armed;
+            self.view_version += 1;
+        }
+    }
+
+    fn set_selected_send(&mut self, send: Option<AudioSendId>) {
+        if self.selected_send != send {
+            self.selected_send = send;
+            self.view_version += 1;
+        }
+    }
+
     /// Open the modal (idempotent) — the headless harness's `open:audio_setup`
     /// interact verb uses this so a repeated call can't accidentally close it,
     /// unlike [`Self::toggle`].
     pub fn open(&mut self) {
-        self.open = true;
+        self.set_open(true);
     }
 
     pub fn toggle(&mut self) {
-        self.open = !self.open;
+        self.set_open(!self.open);
     }
 
     pub fn close(&mut self) {
-        self.open = false;
-        self.delete_armed = None;
+        self.set_open(false);
+        self.set_delete_armed(None);
     }
 
     /// The currently selected input device (`None` = system default). The app
@@ -479,7 +513,8 @@ impl AudioSetupPanel {
     /// [`configure`]: Self::configure
     fn normalize_selection(&mut self) {
         if !self.sends.iter().any(|s| Some(&s.id) == self.selected_send.as_ref()) {
-            self.selected_send = self.sends.first().map(|s| s.id.clone());
+            let first = self.sends.first().map(|s| s.id.clone());
+            self.set_selected_send(first);
         }
     }
 
@@ -523,11 +558,36 @@ impl AudioSetupPanel {
         self.build_nodes(tree, rect.x, rect.y, rect.height);
     }
 
-    /// Mouse-wheel scroll for the docked body. Returns true if the offset moved
-    /// (caller schedules a rebuild so the offset is re-applied). Sign convention
+    /// Mouse-wheel scroll for the docked body. Returns true if the offset moved;
+    /// the planner sees the offset ([`Self::scroll_px`]) and the frame moves
+    /// the built body to it ([`Self::scroll_in_place`]). Sign convention
     /// matches the inspector's wheel handler (positive `delta` = wheel up).
     pub fn handle_scroll(&mut self, delta: f32) -> bool {
         self.scroll.apply_scroll_delta(delta)
+    }
+
+    /// Move the built body to the current scroll offset in place: the
+    /// content nodes, the scope rect and the scrollbar. False when nothing
+    /// is built to move; the caller rebuilds the dock then.
+    pub fn scroll_in_place(&mut self, tree: &mut UITree) -> bool {
+        let delta = self.scroll.scroll_offset() - self.shown_scroll;
+        if delta == 0.0 {
+            return true;
+        }
+        if !self.scroll.offset_content(tree, -delta) {
+            return false;
+        }
+        if let Some(r) = self.scope_rect.as_mut() {
+            r.y -= delta;
+        }
+        self.scroll.update_scrollbar(tree);
+        self.shown_scroll = self.scroll.scroll_offset();
+        true
+    }
+
+    /// The docked body's scroll offset, a planner input.
+    pub fn scroll_px(&self) -> f32 {
+        self.scroll.scroll_offset()
     }
 
     /// The modal chrome as a host `View`: the hit-testable background (it must
@@ -1147,6 +1207,7 @@ impl AudioSetupPanel {
         self.scroll.reparent_content(tree, content_start);
         // Apply the current scroll offset by shifting the reparented content up.
         let offset = self.scroll.scroll_offset();
+        self.shown_scroll = offset;
         if offset != 0.0 {
             self.scroll.offset_content(tree, -offset);
             // `scope_rect` isn't a tree node — it's plain geometry the present
@@ -1457,6 +1518,21 @@ impl AudioSetupPanel {
         }
     }
 
+    /// Rewrite each send row's gain readout in place (UI_INVALIDATION D22).
+    /// `gains` walks the project's sends in this panel's order as
+    /// `(send id, gain dB)`; a row whose id differs waits for the rebuild.
+    pub fn sync_send_gains(&mut self, tree: &mut UITree, gains: &mut dyn Iterator<Item = (&AudioSendId, f32)>) {
+        for (i, (send, (id, db))) in self.sends.iter_mut().zip(gains).enumerate() {
+            if &send.id != id || send.gain_db == db {
+                continue;
+            }
+            send.gain_db = db;
+            if let Some(ids) = self.send_ids.get(i) {
+                tree.set_text(ids.gain_value, &format_gain_db(db));
+            }
+        }
+    }
+
     /// Send id + current gain (dB) for a gain-value label node, if `id` is
     /// one — arms the D7 gain drag on `PointerDown`.
     fn gain_drag_target(&self, id: NodeId) -> Option<(AudioSendId, f32)> {
@@ -1665,7 +1741,7 @@ impl AudioSetupPanel {
     /// after toggling closed) so the caller just dispatches the action.
     pub fn handle_click(&mut self, id: NodeId) -> Option<PanelAction> {
         if id == self.close_id {
-            self.open = false;
+            self.set_open(false);
             return None;
         }
         self.handle_click_inner(id)
@@ -1673,17 +1749,17 @@ impl AudioSetupPanel {
 
     fn handle_click_inner(&mut self, id: NodeId) -> Option<PanelAction> {
         if id == self.device_dropdown_id {
-            self.delete_armed = None;
+            self.set_delete_armed(None);
             // App opens the device dropdown anchored to this trigger.
             return Some(PanelAction::Root(RootAction::AudioSetupDeviceClicked));
         }
         if id == self.add_send_id {
-            self.delete_armed = None;
+            self.set_delete_armed(None);
             return Some(PanelAction::AudioSetup(AudioSetupAction::AudioAddSend));
         }
         // Pre-analysis floor stepper (the spectrogram squelch) for the selected send.
         if self.floor_minus_id == Some(id) || self.floor_plus_id == Some(id) {
-            self.delete_armed = None;
+            self.set_delete_armed(None);
             let send = self.selected_send.clone()?;
             let delta = if self.floor_plus_id == Some(id) { 6.0 } else { -6.0 };
             return Some(PanelAction::AudioSetup(AudioSetupAction::AudioSendFloorStep(send, delta)));
@@ -1695,7 +1771,7 @@ impl AudioSetupPanel {
         // Consumers section: navigate to the owning layer — read-only, no
         // edit (D3).
         if let Some(i) = self.consumer_row_ids.iter().position(|&r| r == id) {
-            self.delete_armed = None;
+            self.set_delete_armed(None);
             let consumers = self
                 .selected_send
                 .as_ref()
@@ -1731,20 +1807,20 @@ impl AudioSetupPanel {
             RowControl::Select => {
                 // Pure UI state — the app reads `selected_send()` each frame to
                 // drive the scope + worker. Swallow (no command).
-                self.delete_armed = None;
-                self.selected_send = Some(send_id);
+                self.set_delete_armed(None);
+                self.set_selected_send(Some(send_id));
                 None
             }
             RowControl::Label => {
-                self.delete_armed = None;
+                self.set_delete_armed(None);
                 Some(PanelAction::Root(RootAction::AudioSendLabelClicked(send_id)))
             }
             RowControl::GainDown => {
-                self.delete_armed = None;
+                self.set_delete_armed(None);
                 Some(PanelAction::AudioSetup(AudioSetupAction::AudioSendGainStep(send_id, -1.0)))
             }
             RowControl::GainUp => {
-                self.delete_armed = None;
+                self.set_delete_armed(None);
                 Some(PanelAction::AudioSetup(AudioSetupAction::AudioSendGainStep(send_id, 1.0)))
             }
             RowControl::Delete => {
@@ -1754,10 +1830,10 @@ impl AudioSetupPanel {
                 if self.sends[i].driven_count == 0
                     || self.delete_armed.as_ref() == Some(&send_id)
                 {
-                    self.delete_armed = None;
+                    self.set_delete_armed(None);
                     Some(PanelAction::AudioSetup(AudioSetupAction::AudioRemoveSend(send_id)))
                 } else {
-                    self.delete_armed = Some(send_id);
+                    self.set_delete_armed(Some(send_id));
                     None
                 }
             }
@@ -1961,9 +2037,7 @@ impl AudioSetupPanel {
             // `UIEvent::Scroll` pipeline (same mechanism the dropdown uses) —
             // `window_input` already gated on `layout.audio_setup().contains(pos)`
             // before emitting this, so no further position check is needed here.
-            // `window_input.rs`'s dock-scroll branch also sets
-            // `needs_rebuild` so the next frame actually re-applies the
-            // new offset.
+            // The frame planner sees the new offset and rebuilds the dock.
             UIEvent::Scroll { delta, .. } => {
                 self.handle_scroll(delta.y);
                 (true, Vec::new())
@@ -2049,6 +2123,22 @@ fn dropdown_trigger_style() -> UIStyle {
 #[cfg(test)]
 pub(super) mod tests {
     use super::*;
+
+    /// INV-15: the dock view version moves only when a view value changes.
+    #[test]
+    fn view_version_moves_only_on_change() {
+        let mut panel = AudioSetupPanel::new();
+        let v0 = panel.view_version();
+        panel.close();
+        assert_eq!(panel.view_version(), v0, "closing a closed dock is no change");
+        panel.open();
+        let v1 = panel.view_version();
+        assert!(v1 > v0);
+        panel.open();
+        assert_eq!(panel.view_version(), v1, "opening an open dock is no change");
+        panel.toggle();
+        assert!(panel.view_version() > v1);
+    }
 
     /// The docked column rect for a 1280×720 screen with the default inspector
     /// (500) + dock (460): x = 1280 - 500 - 460 = 320, full content height

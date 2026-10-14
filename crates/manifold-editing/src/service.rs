@@ -1,3 +1,4 @@
+use crate::audit;
 use crate::command::{Command, CompositeCommand};
 use crate::commands::clip::*;
 use crate::commands::layer::DuplicateLayersCommand;
@@ -53,46 +54,6 @@ pub struct EditingService {
     saved_at_version: u64,
     /// One stamp per project part, bumped by every edit (D1).
     stamps: PartStamps,
-}
-
-/// Change audit (D10): fingerprint every part before an edit, and after it
-/// fail on any part that changed without being declared.
-#[cfg(any(test, feature = "change-audit"))]
-mod audit {
-    use manifold_core::change::{ChangeSet, audit};
-    use manifold_core::project::Project;
-
-    pub(super) struct Window(audit::Fingerprint);
-
-    pub(super) fn open(project: &Project) -> Window {
-        Window(audit::fingerprint(project))
-    }
-
-    pub(super) fn close(window: Window, project: &Project, declared: ChangeSet, what: &str) {
-        let undeclared = audit::changed(&window.0, &audit::fingerprint(project)).minus(declared);
-        assert!(
-            undeclared.is_empty(),
-            "change audit: {what} changed undeclared parts {:?} (declared {:?})",
-            undeclared.parts().collect::<Vec<_>>(),
-            declared.parts().collect::<Vec<_>>(),
-        );
-    }
-}
-
-#[cfg(not(any(test, feature = "change-audit")))]
-mod audit {
-    use manifold_core::change::ChangeSet;
-    use manifold_core::project::Project;
-
-    pub(super) struct Window;
-
-    #[inline(always)]
-    pub(super) fn open(_: &Project) -> Window {
-        Window
-    }
-
-    #[inline(always)]
-    pub(super) fn close(_: Window, _: &Project, _: ChangeSet, _: &str) {}
 }
 
 impl EditingService {
@@ -173,9 +134,11 @@ impl EditingService {
 
     pub fn execute<'p>(&mut self, command: Box<dyn Command>, project: impl Into<ProjectEdit<'p>>) {
         let project = project.into().into_mut();
-        let touches = command.touches();
         let window = audit::open(project);
         if !self.undo_manager.execute(command, project) { return; }
+        // Read after execute: a command may learn what it touches from the
+        // project it ran on (a scene feature switch).
+        let touches = self.undo_manager.last_written();
         audit::close(window, project, touches, "execute");
         self.data_version += 1;
         self.stamps.bump(touches);
@@ -199,7 +162,6 @@ impl EditingService {
         F: FnMut(&Project) -> Result<(), String>,
     {
         let project = project.into().into_mut();
-        let touches = command.touches();
         let window = audit::open(project);
         if !self
             .undo_manager
@@ -207,6 +169,7 @@ impl EditingService {
         {
             return false;
         }
+        let touches = self.undo_manager.last_written();
         audit::close(window, project, touches, "execute");
         self.data_version += 1;
         self.stamps.bump(touches);
@@ -256,9 +219,9 @@ impl EditingService {
         F: FnMut(&Project) -> Result<(), String>,
     {
         let project = project.into().into_mut();
-        let touches = self.undo_manager.peek_undo_touches();
         let window = audit::open(project);
         if self.undo_manager.undo_with_validation(project, validate) {
+            let touches = self.undo_manager.last_written();
             audit::close(window, project, touches, "undo");
             self.data_version += 1;
             self.stamps.bump(touches);
@@ -284,9 +247,9 @@ impl EditingService {
         F: FnMut(&Project) -> Result<(), String>,
     {
         let project = project.into().into_mut();
-        let touches = self.undo_manager.peek_redo_touches();
         let window = audit::open(project);
         if self.undo_manager.redo_with_validation(project, validate) {
+            let touches = self.undo_manager.last_written();
             audit::close(window, project, touches, "redo");
             self.data_version += 1;
             self.stamps.bump(touches);

@@ -3,7 +3,7 @@
     "Pointer": {
       "target": {
         "Query": {
-          "text": "Scene"
+          "text": "Scene", "type": "Button", "under_name": "inspector"
         }
       },
       "gesture": {
@@ -31,7 +31,7 @@
     "Pointer": {
       "target": {
         "Query": {
-          "text": "■ QS1694-W02-1-1"
+          "name": "scene_tree.item", "text": "QS1694-W02-1-1"
         }
       },
       "gesture": {
@@ -248,7 +248,7 @@
         }
       },
       "check": {
-        "TextEquals": "-0.02"
+        "TextEquals": "-0.02 m"
       }
     }
   },
@@ -289,7 +289,7 @@
         "Query": {
           "name": "param_row.23_pos_x.value",
           "under_name": "scene_setup",
-          "text": "0.00"
+          "text": "0.00 m"
         }
       },
       "check": {
@@ -314,17 +314,26 @@
         }
       },
       "check": {
-        "TextEquals": "-0.02"
+        "TextEquals": "-0.02 m"
       }
     }
   },
   "Snapshot",
   "Snapshot",
   {
+    "ScrollTo": {
+      "target": {
+        "Query": {
+          "name": "scene_tree.item", "text": "Sun"
+        }
+      }
+    }
+  },
+  {
     "Pointer": {
       "target": {
         "Query": {
-          "text": "💡 sun"
+          "name": "scene_tree.item", "text": "Sun"
         }
       },
       "gesture": {
@@ -391,6 +400,20 @@
     }
   },
   {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "text": "Layer", "type": "Button", "under_name": "inspector"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  {
     "Assert": {
       "selector": {
         "Query": {
@@ -398,8 +421,20 @@
           "text": "0.00"
         }
       },
-      "check": {
-        "Count": 2
+      "check": "Exists"
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "text": "Scene", "type": "Button", "under_name": "inspector"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
       }
     }
   },
@@ -416,11 +451,49 @@
       "selector": {
         "Query": {
           "name": "param_row.7_intensity.value",
+          "under_name": "scene_setup",
           "text": "3.50"
         }
       },
-      "check": {
-        "Count": 2
+      "check": "Exists"
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "text": "Layer", "type": "Button", "under_name": "inspector"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "name": "param_row.7_intensity.value",
+          "text": "3.50"
+        }
+      },
+      "check": "Exists"
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "text": "Scene", "type": "Button", "under_name": "inspector"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
       }
     }
   },

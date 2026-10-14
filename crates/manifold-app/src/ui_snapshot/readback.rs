@@ -169,12 +169,14 @@ pub(super) fn normalize_dump(dump: &Value) -> Value {
 }
 
 /// `UIFlags(VISIBLE | HOVERED)` → `VISIBLE`: the flag names minus the volatile ones.
+/// An empty set prints as `UIFlags(0x0)`, so `0x0` is dropped too: it must
+/// match a set that held only volatile flags.
 fn strip_volatile_flags(flags: &str) -> String {
     let inner = flags.strip_prefix("UIFlags(").and_then(|s| s.strip_suffix(')')).unwrap_or(flags);
     inner
         .split('|')
         .map(str::trim)
-        .filter(|f| !f.is_empty() && !VOLATILE_FLAGS.contains(f))
+        .filter(|f| !f.is_empty() && *f != "0x0" && !VOLATILE_FLAGS.contains(f))
         .collect::<Vec<_>>()
         .join(" | ")
 }
@@ -435,6 +437,14 @@ mod tests {
             { "id": 90, "gen": 7, "parent": null, "flags": "UIFlags(VISIBLE)", "rect": [0.0, 0.0, 10.0, 10.0] },
             { "id": 91, "gen": 7, "parent": 90, "flags": "UIFlags(VISIBLE | PRESSED | FOCUSED)", "rect": [1.0, 1.0, 5.0, 5.0] },
         ]));
+        let (lines, differs) = diff_trees(&a, &b);
+        assert!(!differs, "lines: {lines:?}");
+    }
+
+    #[test]
+    fn an_empty_flag_set_matches_a_volatile_only_one() {
+        let a = dump(json!([{ "id": 1, "parent": null, "flags": "UIFlags(0x0)" }]));
+        let b = dump(json!([{ "id": 1, "parent": null, "flags": "UIFlags(DIRTY)" }]));
         let (lines, differs) = diff_trees(&a, &b);
         assert!(!differs, "lines: {lines:?}");
     }

@@ -726,13 +726,15 @@ impl GraphCanvas {
     /// should track the pointer 1:1 except for the deliberate magnet pull).
     /// A no-op outside a `WireFrom` drag. Call once per frame from
     /// `present_graph_editor_window`, which already resolves `viewport` for
-    /// the draw pass this feeds.
-    pub fn tick_wire_magnet(&mut self, viewport: Rect) {
+    /// the draw pass this feeds. Returns whether the ghost wire's endpoint
+    /// moved, so an ease toward a port keeps drawing under a still cursor.
+    pub fn tick_wire_magnet(&mut self, viewport: Rect) -> bool {
         let Some(CanvasDrag::WireFrom { .. }) = self.drag.payload() else {
             self.wire_magnet_live = false;
             self.wire_magnet_last_tick = None;
-            return;
+            return false;
         };
+        let before = self.wire_ghost_endpoint();
 
         let (cx, cy) = self.cursor;
         let magnet_target = self.port_under(viewport, cx, cy).and_then(|hit| {
@@ -766,6 +768,7 @@ impl GraphCanvas {
                 self.wire_magnet_y.snap(cy);
             }
         }
+        self.wire_ghost_endpoint() != before
     }
 
     /// The ghost wire's endpoint this frame (`draw_ghost_wire`'s use) —

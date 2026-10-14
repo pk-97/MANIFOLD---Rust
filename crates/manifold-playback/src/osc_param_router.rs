@@ -46,6 +46,26 @@ enum OscParamTarget {
     },
 }
 
+/// What an incoming 0–1 value maps over and what may cap it
+/// (SCENE_SURFACES_DESIGN.md D15 (slider range and hard limit)): 0–1 spans the
+/// slider range, the user's when set; only a declared limit clamps.
+#[derive(Clone, Copy)]
+struct OscRange {
+    span: (f32, f32),
+    /// The input clamp as bounds; infinite on a side no limit declares.
+    bounds: (f32, f32),
+}
+
+impl OscRange {
+    const UNIT: Self = Self { span: (0.0, 1.0), bounds: (f32::NEG_INFINITY, f32::INFINITY) };
+
+    fn of(p: &manifold_core::params::Param) -> Self {
+        // The input clamp is monotonic, so its image of the infinities is its bounds.
+        let bounds = (p.spec.clamp_input(f32::NEG_INFINITY), p.spec.clamp_input(f32::INFINITY));
+        Self { span: p.slider_span(), bounds }
+    }
+}
+
 /// A pending parameter write from an OSC message.
 #[derive(Clone)]
 struct PendingWrite {
@@ -104,8 +124,7 @@ impl OscParamRouter {
                 receiver,
                 &addr,
                 OscParamTarget::Macro { index: i },
-                0.0,
-                1.0,
+                OscRange::UNIT,
             );
         }
 
@@ -114,8 +133,7 @@ impl OscParamRouter {
             receiver,
             "/master/opacity",
             OscParamTarget::MasterOpacity,
-            0.0,
-            1.0,
+            OscRange::UNIT,
         );
 
         // Master effects — iterate the LIVE manifest (P4): every param on the
@@ -135,8 +153,7 @@ impl OscParamRouter {
                         effect_type: fx.effect_type().clone(),
                         param_id: p.id().to_string(),
                     },
-                    p.spec.min,
-                    p.spec.max,
+                    OscRange::of(p),
                 );
             }
         }
@@ -160,8 +177,7 @@ impl OscParamRouter {
             OscParamTarget::LayerOpacity {
                 layer_id: lid.clone(),
             },
-            0.0,
-            1.0,
+            OscRange::UNIT,
         );
 
         // Layer effects
@@ -185,8 +201,7 @@ impl OscParamRouter {
                             effect_type: fx.effect_type().clone(),
                             param_id: p.id().to_string(),
                         },
-                        p.spec.min,
-                        p.spec.max,
+                        OscRange::of(p),
                     );
                 }
             }
@@ -211,8 +226,7 @@ impl OscParamRouter {
                         layer_id: lid.clone(),
                         param_id: p.id().to_string(),
                     },
-                    p.spec.min,
-                    p.spec.max,
+                    OscRange::of(p),
                 );
             }
         }
@@ -226,11 +240,11 @@ impl OscParamRouter {
         receiver: &mut OscReceiver,
         address: &str,
         target: OscParamTarget,
-        min: f32,
-        max: f32,
+        range: OscRange,
     ) {
         let pending = self.pending.clone();
         let target_clone = target.clone();
+        let (min, max) = range.span;
         let is_direct = (min - 0.0).abs() < f32::EPSILON && (max - 1.0).abs() < f32::EPSILON;
 
         receiver.subscribe(
@@ -243,6 +257,7 @@ impl OscParamRouter {
                         // Unity: Mathf.Lerp(min, max, v) — clamps t to 0-1
                         min + (max - min) * v.clamp(0.0, 1.0)
                     };
+                    let mapped = mapped.clamp(range.bounds.0, range.bounds.1);
                     pending.lock().push(PendingWrite {
                         target: target_clone.clone(),
                         value: mapped,
@@ -355,6 +370,9 @@ mod tests {
             section: None,
             card_visible: true,
             material_role: None,
+            limit: Default::default(),
+            unit: None,
+            scene: None,
         }
     }
 
@@ -465,5 +483,69 @@ mod tests {
             .unwrap()
             .value;
         assert!((v - 0.42).abs() < 1e-6, "dispatch must write user param by id; got {v}");
+    }
+
+    /// D15: a full 0–1 controller sweep covers the user's slider range, past
+    /// the declared range; only a declared hard limit caps it.
+    #[test]
+    fn osc_full_sweep_covers_user_slider_range() {
+        use manifold_core::param_range::HardLimit;
+        let (ty, prefix) = effect_with_osc_prefix();
+        let mut free = Param::user_added(user_spec("user_glow"));
+        free.choices.slider = Some((-2.0, 3.0));
+        let mut limited =
+            Param::user_added(ParamSpecDef { limit: HardLimit::AtLeast(0.0), ..user_spec("user_lim") });
+        limited.choices.slider = Some((-2.0, 3.0));
+        let mut fx = PresetInstance::new(ty);
+        fx.params = ParamManifest::from_params(vec![free, limited]);
+        let mut project = project_with_master(fx);
+
+        let mut receiver = OscReceiver::new();
+        let mut router = OscParamRouter::new();
+        router.rebuild(&project, &mut receiver);
+        for step in 0..=10 {
+            let v = step as f32 / 10.0;
+            receiver.inject(&format!("/master/{prefix}/user_glow"), &[v]);
+            receiver.inject(&format!("/master/{prefix}/user_lim"), &[v]);
+            receiver.update();
+            router.apply(&mut project);
+            let params = &project.settings.master_effects[0].params;
+            let want = -2.0 + 5.0 * v;
+            let got = params.get("user_glow").unwrap().value;
+            assert!((got - want).abs() < 1e-5, "sweep {v}: got {got}, want {want}");
+            let capped = params.get("user_lim").unwrap().value;
+            assert!((capped - want.max(0.0)).abs() < 1e-5, "limited sweep {v}: got {capped}");
+        }
+    }
+
+    /// INV-S17 (a rename never moves an OSC address): renaming a control as a
+    /// user choice, or by a code label change, leaves every address and the
+    /// id it routes to unchanged (the address is built from the id).
+    #[test]
+    fn rename_keeps_address() {
+        let (ty, _) = effect_with_osc_prefix();
+        let defaults = manifold_core::preset_definition_registry::get_defaults(&ty);
+        let id = defaults[0].id().to_string();
+        let addresses = |fx: &PresetInstance| {
+            let project = project_with_master(fx.clone());
+            let mut receiver = OscReceiver::new();
+            let mut router = OscParamRouter::new();
+            router.rebuild(&project, &mut receiver);
+            let mut a = router.registered_addresses.clone();
+            a.sort();
+            a
+        };
+        let mut fx = PresetInstance::new(ty.clone());
+        fx.params = ParamManifest::from_params(defaults);
+        let before = addresses(&fx);
+
+        let p = fx.params.get_mut(&id).unwrap();
+        p.choices.rename = Some("Renamed By User".into());
+        let choices = p.choices.clone();
+        choices.apply(&mut p.spec);
+        assert_eq!(addresses(&fx), before, "a rename choice must not move an address");
+
+        fx.params.get_mut(&id).unwrap().spec.name = "Renamed In Code".into();
+        assert_eq!(addresses(&fx), before, "a code label change must not move an address");
     }
 }

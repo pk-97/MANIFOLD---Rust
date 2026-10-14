@@ -32,6 +32,67 @@ pub enum ParamOrigin {
     UserAdded,
 }
 
+/// Where a param's spec came from (SCENE_SURFACES_DESIGN.md D2 (one live
+/// lookup)). In memory only: the join sets it when the manifest is built.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SpecSource {
+    /// The live lookup described it; the code is the authority.
+    #[default]
+    Lookup,
+    /// No template or node declares it (composite, fan-out, graph-local or
+    /// user-added), so its saved spec is the user's own.
+    Authored,
+    /// A lookup key exists but did not answer (type missing, registry not
+    /// filled yet). The saved spec is kept word for word until it resolves.
+    Unresolved,
+}
+
+/// Per-control display choices a project saves (SCENE_SURFACES_DESIGN.md D7
+/// (one saved choice set)). The calibration wire block loads into `slider`,
+/// `curve` and `invert`.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ParamChoices {
+    pub rename: Option<String>,
+    /// The user's slider span. Display only (D15): never the reshape or the
+    /// wrap period.
+    pub slider: Option<(f32, f32)>,
+    pub curve: Option<crate::macro_bank::MacroCurve>,
+    pub invert: Option<bool>,
+    /// `Some(None)` clears the section the lookup gives.
+    pub section: Option<Option<String>>,
+    pub pin: Option<manifold_foundation::scene_surface::CardPin>,
+}
+
+impl ParamChoices {
+    pub fn is_empty(&self) -> bool {
+        *self == Self::default()
+    }
+
+    /// True when the user set a slider range, curve or invert.
+    pub fn calibrated(&self) -> bool {
+        self.slider.is_some() || self.curve.is_some() || self.invert.is_some()
+    }
+
+    /// Lay these choices over a described spec. The slider range is not laid
+    /// over it: `spec.min`/`max` stay the declared range, which wraps, the
+    /// `Slider` hard limit and the reshape read (D15). Span readers use
+    /// [`Param::slider_span`].
+    pub fn apply(&self, spec: &mut ParamSpecDef) {
+        if let Some(name) = &self.rename {
+            spec.name = name.clone();
+        }
+        if let Some(section) = &self.section {
+            spec.section = section.clone();
+        }
+        if let Some(curve) = self.curve {
+            spec.curve = curve;
+        }
+        if let Some(invert) = self.invert {
+            spec.invert = invert;
+        }
+    }
+}
+
 /// Which layer supplies clip-trigger events for this parameter.
 ///
 /// `OwnLayer` is the default and means that the parameter follows the layer
@@ -61,14 +122,14 @@ impl ClipTriggerSource {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Param {
     /// Descriptor — reuses the existing wire struct ([`ParamSpecDef`]).
-    /// Calibration edits `spec.min`/`spec.max`/`spec.curve`/`spec.invert` in
-    /// place and sets [`Param::calibrated`] (D6).
+    /// The joined spec with [`Param::choices`] applied on top.
     pub spec: ParamSpecDef,
     pub origin: ParamOrigin,
-    /// True once calibration has diverged this param's `spec` from the
-    /// template. Serialization gate for the `calibration` wire block; cleared
-    /// by a calibration reset (which re-reads the template range).
-    pub calibrated: bool,
+    /// Where `spec` came from; never serialized.
+    pub source: SpecSource,
+    /// The user's display choices on this control (SCENE_SURFACES_DESIGN.md
+    /// D7 (one saved choice set)). Already applied to `spec`.
+    pub choices: ParamChoices,
     /// Effective (post-modulation) value — what the renderer reads.
     pub value: f32,
     /// User-intended base (pre-modulation) value. Modulation reads `base`,
@@ -94,6 +155,16 @@ pub struct Param {
 }
 
 impl Param {
+    /// A user's section edit. On a control the lookup describes, the saved
+    /// section is ignored on load, so the edit is kept as a section choice
+    /// (SCENE_SURFACES_DESIGN.md D7 (one saved choice set)). Returns the prior
+    /// choice when one was recorded, for undo.
+    pub fn choose_section(&mut self, section: Option<String>) -> Option<Option<Option<String>>> {
+        self.spec.section = section.clone();
+        (self.source == SpecSource::Lookup)
+            .then(|| self.choices.section.replace(section))
+    }
+
     /// A bundled (template-seeded) param, value + base at the spec default,
     /// exposed, untouched, uncalibrated.
     pub fn bundled(spec: ParamSpecDef) -> Self {
@@ -110,7 +181,11 @@ impl Param {
         Self {
             spec,
             origin,
-            calibrated: false,
+            source: match origin {
+                ParamOrigin::Bundled => SpecSource::Lookup,
+                ParamOrigin::UserAdded => SpecSource::Authored,
+            },
+            choices: ParamChoices::default(),
             value: default,
             base: default,
             exposed: true,
@@ -134,10 +209,44 @@ impl Param {
         self.spec.whole_numbers || !self.spec.value_labels.is_empty()
     }
 
-    /// True when this param is periodic (BUG-039) — modulation constrains
-    /// its effective value with [`constrain_to_range`]'s wrap arm instead of
-    /// clamping. Reads straight off `spec.wraps` (D1: the spec is the single
-    /// authority), mirroring [`Self::whole_numbers`]'s shape.
+    /// The slider range: the user's choice when one is saved, else the
+    /// declared range. What the slider spans, what OSC, MIDI and Ableton 0–1
+    /// map over, and what modulation depth is measured over. Never a limit,
+    /// the reshape or the wrap period (SCENE_SURFACES_DESIGN.md D15 (slider
+    /// range and hard limit)).
+    #[inline]
+    pub fn slider_span(&self) -> (f32, f32) {
+        self.choices.slider.unwrap_or((self.spec.min, self.spec.max))
+    }
+
+    /// The value automation and modulation may write (SCENE_SURFACES_DESIGN.md
+    /// D15 (slider range and hard limit)). A periodic param wraps over the
+    /// declared range. Otherwise the output stays inside the user's slider
+    /// range when one is set, else the declared range: only a hand drag or a
+    /// typed value goes past the slider's ends.
+    #[inline]
+    pub fn driven_value(&self, v: f32) -> f32 {
+        match self.choices.slider {
+            Some((a, b)) if !(self.spec.wraps && self.spec.max > self.spec.min) => {
+                self.spec.clamp_input(v.clamp(a.min(b), a.max(b)))
+            }
+            _ => self.spec.clamp_value(v),
+        }
+    }
+
+    /// The hard limit with `Slider` read as the declared range: what a drag
+    /// may reach past the slider's end.
+    pub fn drag_limit(&self) -> manifold_foundation::param_range::HardLimit {
+        use manifold_foundation::param_range::HardLimit;
+        match self.spec.limit {
+            HardLimit::Slider => HardLimit::Between(self.spec.min, self.spec.max),
+            limit => limit,
+        }
+    }
+
+    /// True when this param is periodic (BUG-039) — modulation wraps its
+    /// effective value over the declared range
+    /// ([`ParamSpecDef::clamp_value`]) instead of clamping.
     #[inline]
     pub fn wraps(&self) -> bool {
         self.spec.wraps
@@ -150,25 +259,6 @@ impl Param {
     #[inline]
     pub fn card_visible(&self) -> bool {
         self.spec.card_visible
-    }
-}
-
-/// Constrain a modulation-computed value to a param's `[min, max]` range —
-/// the single post-process point every driver/automation write funnels
-/// through (BUG-039). `wraps` params rem_euclid back into range instead of
-/// clamping, so a saw LFO or an automation ramp sweeping past `max` (or
-/// below `min`) continues spinning instead of hitching at the rail:
-/// `min + (value - min).rem_euclid(max - min)`. `rem_euclid` (not `%`) so a
-/// downward-sweeping (negative) saw still lands on the geometrically
-/// correct in-range value rather than a negative one. Falls back to a plain
-/// clamp when `wraps` is false, or when the range is degenerate
-/// (`max <= min`, nothing to wrap around).
-#[inline]
-pub fn constrain_to_range(value: f32, min: f32, max: f32, wraps: bool) -> f32 {
-    if wraps && max > min {
-        min + (value - min).rem_euclid(max - min)
-    } else {
-        value.clamp(min, max)
     }
 }
 
@@ -209,8 +299,8 @@ impl ParamManifest {
         self.entries.iter().find(|p| p.spec.id == id)
     }
 
-    /// Value/state writes only (value, base, exposed, touched, in-place
-    /// calibration of `spec.min`/`max`). Does NOT bump topology.
+    /// Value/state writes only (value, base, exposed, touched, choices).
+    /// Does NOT bump topology.
     pub fn get_mut(&mut self, id: &str) -> Option<&mut Param> {
         self.entries.iter_mut().find(|p| p.spec.id == id)
     }
@@ -321,6 +411,9 @@ mod tests {
             section: None,
             card_visible: true,
             material_role: None,
+            limit: Default::default(),
+            unit: None,
+            scene: None,
         }
     }
 
@@ -335,7 +428,7 @@ mod tests {
         assert_eq!(p.base, 0.7);
         assert!(p.exposed);
         assert!(!p.touched);
-        assert!(!p.calibrated);
+        assert!(!p.choices.calibrated());
         assert_eq!(p.clip_trigger_source, ClipTriggerSource::OwnLayer);
         assert_eq!(p.id(), "amount");
         assert_eq!(p.origin, ParamOrigin::Bundled);
@@ -444,56 +537,94 @@ mod tests {
         assert!(Param::bundled(s).wraps());
     }
 
-    // ─── constrain_to_range (BUG-039) ──────────────────────────────────
+    // ─── Slider range and hard limit (D15, BUG-039 wraps) ──────────────
+
+    fn ranged(min: f32, max: f32, wraps: bool, limit: HardLimit) -> ParamSpecDef {
+        ParamSpecDef { min, max, wraps, limit, ..spec("p", min) }
+    }
+
+    use manifold_foundation::param_range::HardLimit;
 
     #[test]
-    fn constrain_to_range_clamps_when_not_wrapping() {
-        assert_eq!(constrain_to_range(400.0, 0.0, 360.0, false), 360.0);
-        assert_eq!(constrain_to_range(-10.0, 0.0, 360.0, false), 0.0);
-        assert_eq!(constrain_to_range(180.0, 0.0, 360.0, false), 180.0);
+    fn clamp_value_clamps_to_the_declared_range_under_slider() {
+        let s = ranged(0.0, 360.0, false, HardLimit::Slider);
+        assert_eq!(s.clamp_value(400.0), 360.0);
+        assert_eq!(s.clamp_value(-10.0), 0.0);
+        assert_eq!(s.clamp_value(180.0), 180.0);
     }
 
     #[test]
-    fn constrain_to_range_wraps_a_positive_saw_past_max() {
-        // A saw LFO / automation ramp overshooting max continues spinning
-        // instead of plateauing at the rail.
-        assert_eq!(constrain_to_range(370.0, 0.0, 360.0, true), 10.0);
-        assert_eq!(constrain_to_range(360.0, 0.0, 360.0, true), 0.0);
-        assert_eq!(constrain_to_range(720.0, 0.0, 360.0, true), 0.0);
-        assert_eq!(constrain_to_range(725.0, 0.0, 360.0, true), 5.0);
+    fn clamp_value_wraps_a_saw_both_ways() {
+        let s = ranged(0.0, 360.0, true, HardLimit::Slider);
+        assert_eq!(s.clamp_value(370.0), 10.0);
+        assert_eq!(s.clamp_value(360.0), 0.0);
+        assert_eq!(s.clamp_value(725.0), 5.0);
+        assert_eq!(s.clamp_value(-10.0), 350.0);
+        assert_eq!(s.clamp_value(-370.0), 350.0);
+        assert_eq!(s.clamp_value(90.0), 90.0);
+        let offset = ranged(-180.0, 180.0, true, HardLimit::Slider);
+        assert_eq!(offset.clamp_value(190.0), -170.0);
+        assert_eq!(offset.clamp_value(-190.0), 170.0);
     }
 
     #[test]
-    fn constrain_to_range_wraps_a_negative_saw_below_min() {
-        // A downward-sweeping saw (or a reversed automation ramp) must land
-        // on the geometrically correct in-range value, not a negative one —
-        // this is exactly why the fix uses `rem_euclid`, not `%`.
-        assert_eq!(constrain_to_range(-10.0, 0.0, 360.0, true), 350.0);
-        assert_eq!(constrain_to_range(-360.0, 0.0, 360.0, true), 0.0);
-        assert_eq!(constrain_to_range(-370.0, 0.0, 360.0, true), 350.0);
-    }
-
-    #[test]
-    fn constrain_to_range_wraps_an_offset_range() {
-        // min != 0 (e.g. a -180..180 rotation card) still wraps correctly.
-        assert_eq!(constrain_to_range(190.0, -180.0, 180.0, true), -170.0);
-        assert_eq!(constrain_to_range(-190.0, -180.0, 180.0, true), 170.0);
-    }
-
-    #[test]
-    fn constrain_to_range_in_range_value_is_untouched() {
-        // No-op for values already inside range, wrapping or not — existing
-        // shows stay byte-identical.
-        assert_eq!(constrain_to_range(90.0, 0.0, 360.0, true), 90.0);
-        assert_eq!(constrain_to_range(90.0, 0.0, 360.0, false), 90.0);
-    }
-
-    #[test]
-    fn constrain_to_range_degenerate_range_falls_back_to_clamp() {
-        // max <= min: nothing to wrap around, must not divide by zero / NaN.
-        let v = constrain_to_range(5.0, 3.0, 3.0, true);
+    fn clamp_value_degenerate_range_falls_back_to_clamp() {
+        let v = ranged(3.0, 3.0, true, HardLimit::Slider).clamp_value(5.0);
         assert_eq!(v, 3.0);
-        assert!(v.is_finite());
+    }
+
+    /// INV-S18: typing passes the slider end; only a declared limit stops it.
+    #[test]
+    fn typed_value_clamps_to_limit_not_slider() {
+        let mut p = Param::bundled(ranged(0.0, 10.0, false, HardLimit::AtLeast(0.0)));
+        p.choices.slider = Some((0.0, 1.0));
+        assert_eq!(p.spec.clamp_input(25.0), 25.0, "past the user's slider and the declared range");
+        assert_eq!(p.spec.clamp_input(-3.0), 0.0, "the declared limit holds");
+        let hint = ranged(0.0, 1.0, false, HardLimit::Slider);
+        assert_eq!(hint.clamp_input(7.0), 7.0, "a range hint never restricts typing");
+    }
+
+    /// INV-S18: a drag carries past the slider end up to the hard limit.
+    #[test]
+    fn drag_past_slider_end_reaches_limit() {
+        let mut p = Param::bundled(ranged(-5.0, 5.0, false, HardLimit::Slider));
+        p.choices.slider = Some((-1.0, 1.0));
+        assert_eq!(p.slider_span(), (-1.0, 1.0));
+        assert_eq!(p.drag_limit().clamp(3.0, (p.spec.min, p.spec.max)), 3.0, "past the user's slider end");
+        assert_eq!(p.drag_limit().clamp(9.0, (p.spec.min, p.spec.max)), 5.0, "stops at the declared range");
+        p.spec.limit = HardLimit::Unlimited;
+        assert_eq!(p.drag_limit().clamp(900.0, (p.spec.min, p.spec.max)), 900.0);
+    }
+
+    /// INV-S18: modulation and automation clamp to the hard limit, never the
+    /// user's slider range.
+    #[test]
+    fn automation_respects_the_slider_range() {
+        let mut p = Param::bundled(ranged(0.0, 1.0, false, HardLimit::Between(0.0, 4.0)));
+        assert_eq!(p.driven_value(3.0), 3.0, "no user range: the hard limit");
+        assert_eq!(p.driven_value(6.0), 4.0);
+        p.choices.slider = Some((0.0, 0.5));
+        assert_eq!(p.driven_value(0.8), 0.5, "the user's slider range caps a driven value");
+        assert_eq!(p.driven_value(-1.0), 0.0);
+        let mut wide = Param::bundled(ranged(0.0, 1.0, false, HardLimit::AtMost(2.0)));
+        wide.choices.slider = Some((0.0, 3.0));
+        assert_eq!(wide.driven_value(5.0), 2.0, "a declared limit still wins over a wider slider");
+        let mut spin = Param::bundled(ranged(0.0, 360.0, true, HardLimit::Slider));
+        spin.choices.slider = Some((0.0, 90.0));
+        assert_eq!(spin.driven_value(370.0), 10.0, "wraps stay on the declared range");
+    }
+
+    /// INV-S18: wraps use the declared range, never the user's slider.
+    #[test]
+    fn wraps_use_declared_range() {
+        let mut spec = ranged(0.0, 360.0, true, HardLimit::Slider);
+        let choices = ParamChoices { slider: Some((0.0, 90.0)), ..ParamChoices::default() };
+        choices.apply(&mut spec);
+        let mut p = Param::bundled(spec);
+        p.choices = choices;
+        assert_eq!((p.spec.min, p.spec.max), (0.0, 360.0), "the choice never lands in the spec");
+        assert_eq!(p.slider_span(), (0.0, 90.0));
+        assert_eq!(p.spec.clamp_value(370.0), 10.0);
     }
 
     /// New-storage replacement for the deleted `bench_old_resolve_param_in_baseline`
