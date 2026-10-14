@@ -104,12 +104,12 @@ class PreflightTests(unittest.TestCase):
         self.assertEqual(exams, ['snare-old'])
 
     def test_dirty_tree_mps_and_disk_fail(self):
-        self.probe.dirty, self.probe.mps_ok, self.probe.free = [' M a.py'], (False, 'no MPS'), 10e9
+        self.probe.dirty, self.probe.mps_ok, self.probe.free = [' M a.py'], (False, 'no MPS'), 10 * 2 ** 30
         rows = self.rows()
         self.assertEqual(self.verdicts(rows)[:3], [False] * 3)
         self.assertEqual(rows[0][3], [' M a.py'])
         self.assertIn('no MPS', rows[1][2])
-        self.assertIn('10 GB free', rows[2][2])
+        self.assertIn('10 GiB free', rows[2][2])
 
     def test_unresolvable_config_fails_check_4_and_is_not_inspected(self):
         self.probe.broken = {'snare_b': 'no such config'}

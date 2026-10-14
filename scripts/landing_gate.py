@@ -67,10 +67,11 @@ def build_environment(cmd, cwd):
     admission. Setting the absolute target also prevents a Cargo config file
     from silently redirecting a gate build to an unmanaged directory.
     """
+    flow_gate = any(Path(arg).name == "run_ui_flows.py" for arg in cmd[:2])
     builds = ((Path(cmd[0]).name == "cargo" and len(cmd) > 1
                and cmd[1] in {"clippy", "nextest", "test", "check", "build", "run"})
-              or any(Path(arg).name in {"gpu_proofs_gate.py", "run_ui_flows.py"}
-                     for arg in cmd[:2]))
+              or any(Path(arg).name == "gpu_proofs_gate.py" for arg in cmd[:2])
+              or (flow_gate and flow_gate_builds(cmd, cwd)))
     if not builds:
         return None, None
     from storage_budget import check_build
@@ -96,6 +97,30 @@ def build_environment(cmd, cwd):
         return None, "Storage admission refused: " + admission.reason + note
     environment["CARGO_TARGET_DIR"] = str(admission.target)
     return environment, None
+
+
+def touched_flow_filters(cwd, range_spec):
+    """The flows `run_ui_flows.py --touched range_spec` selects in `cwd`."""
+    import run_ui_flows
+    previous = run_ui_flows.ROOT
+    try:
+        run_ui_flows.ROOT = str(cwd)
+        manifest = json.loads((Path(cwd) / 'scripts/ui-flows/manifest.json').read_text())
+        return run_ui_flows.filters_for_touched(range_spec, manifest)[0]
+    finally:
+        run_ui_flows.ROOT = previous
+
+
+def flow_gate_builds(cmd, cwd):
+    """A `--touched` flow run that selects no flow exits before building, so
+    it needs no storage admission; a docs/hooks/scripts landing must not be
+    refused on the reserve for an app build nobody runs. Any doubt builds."""
+    if "--touched" not in cmd or cmd.index("--touched") + 1 >= len(cmd):
+        return True
+    try:
+        return bool(touched_flow_filters(cwd, cmd[cmd.index("--touched") + 1]))
+    except (OSError, ValueError, SystemExit):
+        return True
 
 
 def reclaim_landed_caches(reserve_bytes):
@@ -311,11 +336,10 @@ def run_check(label, cmd, cwd, timeout, passed=None):
     if passed and passed.reused():
         if label == 'flow-gate':
             import run_ui_flows
+            filters = touched_flow_filters(cwd, cmd[-1])
             previous = run_ui_flows.ROOT
             try:
                 run_ui_flows.ROOT = str(cwd)
-                manifest = json.loads((Path(cwd) / 'scripts/ui-flows/manifest.json').read_text())
-                filters, _ = run_ui_flows.filters_for_touched(cmd[-1], manifest)
                 run_ui_flows.write_gate_marker(cmd[-1], filters, True)
             finally:
                 run_ui_flows.ROOT = previous

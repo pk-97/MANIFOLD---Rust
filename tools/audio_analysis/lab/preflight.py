@@ -5,7 +5,7 @@ writes nothing.
 
   1  tools/audio_analysis has no uncommitted change (release.py refuses a dirty tree)
   2  torch reports MPS here (run.py refuses to train a net on the CPU)
-  3  the home volume has at least 50 GB free
+  3  the home volume has the build free-space reserve (storage_budget.MAINTENANCE_GOAL_BYTES) free
   4  every config in a run, compare or release step resolves: run.py --plan prints its run id
   5  every snare-family config: its exam and holdout songs are in the kick verdict store (lab/kick_verdict.py)
   6  every --exam-of RUN_ID has a meta.json with an exam list
@@ -35,7 +35,7 @@ LAB = ROOT / 'tools/audio_analysis/lab'
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / 'scripts'))
 
-MIN_FREE_GB = 50
+from storage_budget import GIB, MAINTENANCE_GOAL_BYTES as MIN_FREE_BYTES  # noqa: E402
 SHOWN = 12   # misses listed under a failed check
 
 
@@ -198,9 +198,9 @@ def check(plan_path, probe, load_plan):
     except Exception as e:
         add(False, 'MPS available', f'torch import failed: {e}')
 
-    free = probe.free_bytes() / 1e9
-    add(free >= MIN_FREE_GB, 'free disk', f'{free:.0f} GB free on the home volume'
-        + ('' if free >= MIN_FREE_GB else f', need {MIN_FREE_GB}'))
+    free = probe.free_bytes()
+    add(free >= MIN_FREE_BYTES, 'free disk', f'{free / GIB:.0f} GiB free on the home volume'
+        + ('' if free >= MIN_FREE_BYTES else f', need {MIN_FREE_BYTES // GIB}'))
 
     try:
         plan_name, steps = load_plan(plan_path)
