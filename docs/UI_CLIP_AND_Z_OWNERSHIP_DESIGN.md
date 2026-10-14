@@ -182,7 +182,7 @@ is the hot path only in the weak sense above (no per-frame work added).
   existing overlay driver → `Overlay`, drag ghost/toast paths → `Ghost` +
   `ALLOW_OVERFLOW`); D4's debug assertion + structural unit test.
 - **Seam brief:** `panel.build(&mut tree, &layout)` sites in `ui_root.rs`
-  (~10; re-derive: `rg -n '\.build\(&mut self\.tree' crates/manifold-app/src/ui_root.rs`
+  (~10; re-derive: `rg -n '\.build\(&mut self\.tree' crates/manifold-app/src/ui_root/mod.rs`
   — if the count differs from what you find, stop and list before touching).
   All mechanical: wrap each call's subtree in `begin_region`; one worked
   example in the first commit. Compiler-driven where the build signature

@@ -141,7 +141,7 @@ Fix: persist the **UID**, keep the name as display + fallback match. On load, re
 
 ## 7. The audio-settings UX
 
-The Audio Setup panel ([crates/manifold-ui/src/panels/audio_setup_panel.rs](../crates/manifold-ui/src/panels/audio_setup_panel.rs)) is a **non-dimming overlay anchored to the viewport's right edge** (~38% width, full height, `Modality::Modeless`, outside clicks pass through) — shipped 2026-07-06 by `AUDIO_SENDS_UX_DESIGN.md` D6/P3, superseding this section's original "stays modal" call. That call predated the trigger matrix and calibration drags growing in here: gain, floor, sensitivity, and crossovers are tuned against live output, which a show-dimming modal made impossible. The dropdown machinery is in [crates/manifold-app/src/ui_root.rs](../crates/manifold-app/src/ui_root.rs#L1236-L1268). **Superseded again (approved, not yet built): `AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md` (2026-07-09) moves the panel off the overlay driver entirely into a `ScreenLayout` workspace column — the overlay still occludes the inspector, which is the next thing this UX needs to stop doing (coherence audit F12, 2026-07-10).**
+The Audio Setup panel ([crates/manifold-ui/src/panels/audio_setup_panel.rs](../crates/manifold-ui/src/panels/audio_setup_panel.rs)) is a **non-dimming overlay anchored to the viewport's right edge** (~38% width, full height, `Modality::Modeless`, outside clicks pass through) — shipped 2026-07-06 by `AUDIO_SENDS_UX_DESIGN.md` D6/P3, superseding this section's original "stays modal" call. That call predated the trigger matrix and calibration drags growing in here: gain, floor, sensitivity, and crossovers are tuned against live output, which a show-dimming modal made impossible. The dropdown machinery is in [crates/manifold-app/src/ui_root/mod.rs](../crates/manifold-app/src/ui_root/mod.rs#L1236-L1268). **Superseded again (approved, not yet built): `AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md` (2026-07-09) moves the panel off the overlay driver entirely into a `ScreenLayout` workspace column — the overlay still occludes the inspector, which is the next thing this UX needs to stop doing (coherence audit F12, 2026-07-10).**
 
 The organizing idea: **a send is the vocabulary the rest of the instrument speaks in.** Anything that makes a send legible pays off everywhere it's referenced (notably the modulation drawer).
 
@@ -185,7 +185,7 @@ Sequenced by dependency. **Critical path: 1 → 2 → (3 ∥ 4).** Phase 3's sav
 - **1.3 Verify**: unit-test decode helpers; manually diff output against your aggregate in Audio MIDI Setup.
 
 ### Phase 2 — Names into the UI
-- **2.1** Plumb `DeviceInfo` to the app; replace the `list_devices`/`device_channels` call sites in [ui_root.rs:1236-1268](../crates/manifold-app/src/ui_root.rs#L1236-L1268); cache the selected device's info.
+- **2.1** Plumb `DeviceInfo` to the app; replace the `list_devices`/`device_channels` call sites in [ui_root.rs:1236-1268](../crates/manifold-app/src/ui_root/mod.rs#L1236-L1268); cache the selected device's info.
 - **2.2** Channel dropdown + send row show channel **names** (fallback "Channel N").
 - **2.3** Group the dropdown by subdevice (needs subdevice list in `DeviceInfo`; defer if scope tightens).
 

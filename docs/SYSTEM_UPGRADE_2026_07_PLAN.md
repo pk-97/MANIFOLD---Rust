@@ -23,7 +23,7 @@ The 2026-07 overnight Sonnet waves failed the same way everywhere: agents built 
 2. CLAUDE.md rewrite: rules kept, incident stories stripped to pointers (~35KB → ~10KB).
 3. MEMORY.md → true index (no status phrasing).
 4. AGENT_ROUTING.md + FLEET_ORCHESTRATION.md: fold in the operating model above.
-5. BUG_BACKLOG.md split: closed entries → `docs/BUG_ARCHIVE.md` (solo because every lane writes to the backlog — not laneable).
+5. BUG_BACKLOG.md split: closed entries → `docs/archive/BUG_BACKLOG_CLOSED.md` (solo because every lane writes to the backlog — not laneable).
 6. Hook trim: DEFERRED to its own careful pass — behavior changes under live protocol are riskier than the bloat.
 
 ## Wave 1 — lanes (COMPLETE 2026-07-20 — all four landed same day: W1-A `e8f066de`, W1-C `43c9d3d1`, W1-D `726de5a0`, W1-B `7915d4f3`. Full gpu-proofs suite green post-parity-removal. First wave under the steering model: 4/4 briefs executed to the letter, zero improvised mechanisms; lane reports caught one orchestrator-table error, adversarial pass caught 2 blockers pre-spawn.)

@@ -17,7 +17,7 @@ Companion docs: `AUDIO_MODULATION_DESIGN.md` (the feature this UX fronts), `AUDI
 | `AudioSetup` / `AudioSend` model, sends vec, gain, floor, crossovers | `crates/manifold-core/src/audio_setup.rs:327` | Shipped |
 | Audio Setup panel: device row, send rows (swatch/label/source-chip/channels/gain-stepper/stereo/delete), scope, trigger matrix | `crates/manifold-ui/src/panels/audio_setup_panel.rs` | Shipped, **dimming modal**, 80%×80% viewport (`PANEL_W_FRAC` line 39) |
 | `AudioSendRow` view-model incl. `driven_count`, `source_label`, `routings`, `triggers` | `audio_setup_panel.rs:54-87`, built by `ui_bridge/state_sync.rs` | Shipped — routings/consumers are **read-only strings**, no jump |
-| Per-slider audio drawer ("A" button; send/feature/band/toggles/amount/attack/release — 7 uniform rows) | `crates/manifold-ui/src/panels/param_slider_shared.rs:94-100`, `param_card.rs:2272-2322` | Shipped |
+| Per-slider audio drawer ("A" button; send/feature/band/toggles/amount/attack/release — 7 uniform rows) | `crates/manifold-ui/src/panels/param_slider_shared/mod.rs:94-100`, `param_card.rs:2272-2322` | Shipped |
 | Layer→send routing (audio layer picks the send it feeds) | `crates/manifold-ui/src/panels/layer_header.rs:654-658`, `PanelAction::AudioSendClicked` | Shipped — the ONLY place layer feeds are edited |
 | Per-send analyzers on the **content thread**, one `StreamingSendAnalyzer` per send | `crates/manifold-app/src/audio_mod_runtime.rs:127-129`, loop at `:258` | Shipped. Capture gate is **global** (any mod ∨ any enabled trigger ∨ scope open, `:231`); once up, **every send** is analyzed every tick |
 | Measured cost (release, M-series, probe 2026-07-04) | — | 16 sends ≈ **0.96 ms mean / 1.27 ms worst per tick** (~60 µs/send) against the 16.6 ms tick; `MAX_SENDS = 16` hard cap (`analysis.rs:56`) |
@@ -150,7 +150,7 @@ One new `DrawerControl::Segmented` row in the audio `DrawerSpec`; click maps to 
 
 Folded from `docs/landings/2026-07-06-audio-sends-ux.md` 2026-07-28; the report stays as history, this is the live part.
 
-Owed — Peter's in-app pass (VD-011 P1 trace-count, VD-012 P3 drag feel; `docs/VERIFICATION_DEBT.md`), ≤2 minutes:
+Owed — Peter's in-app pass (VD-011 P1 trace-count, VD-012 P3 drag feel; `docs/archive/VERIFICATION_DEBT.md`), ≤2 minutes:
 
 1. Cmd+Shift+A — Audio Setup docks right (~38%), show visible and undimmed behind it; outside clicks pass through, Escape closes.
 2. Click a source's swatch — "Inputs — X", "Spectrogram — X", "Triggers — X", "Consumers — X" sections for that source.

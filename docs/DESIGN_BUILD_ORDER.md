@@ -20,65 +20,42 @@ prerequisites aren't shipped, stop.
 
 ## 1. The corpus (approved, not built)
 
-> **Status source = the DESIGN STATUS BOARD** (`python3 .claude/hooks/design_status.py`,
-> auto-injected each session from the design docs' status lines). The status notes in
-> this table are navigational and can lag — trust the board for state; trust this table
-> for the dependency/ordering columns, which is its real job.
+State lives on the DESIGN STATUS BOARD (`.claude/hooks/design_status.py`, built from each design doc's status line). This table carries only what to build before what.
 
-| Design doc | Hard prerequisites | Hardening level (section DESIGN_DOC_STANDARD section 9) |
+| Design doc | Hard prerequisites | Hardening level (DESIGN_DOC_STANDARD section 9) |
 |---|---|---|
-| GIG_RESILIENCE_DESIGN (P1–P2 SHIPPED 2026-07-03; P3–P4 remain) | P3 after PERFORM_SURFACE P1 (see section 3) | full |
-| MULTI_DISPLAY_DESIGN (P1 ✅; section 6.1a resolved 2026-07-06 — **P2 RE-ISSUABLE**; P3–P5 remain) | none | full |
-| SESSION_MODE_DESIGN (P1–P3 ✅; P4 grid UI = Peter feel-review; P5 recording) | none | full |
-| MEDIA_BACKEND_DESIGN (section 3a resolved 2026-07-06 — **P1 RE-ISSUABLE**) | none for P1–P3; section 6 pairs with VULKAN section 8 | full |
-| PERFORM_SURFACE_DESIGN | none for P1; P2 needs SESSION_MODE **through P4's ContentState plumbing** (the session snapshot fields are greenfield P4 work per its 2026-07-05 baseline review) | full |
+| GIG_RESILIENCE_DESIGN | P3 after PERFORM_SURFACE P1 (see section 3) | full |
+| MULTI_DISPLAY_DESIGN | none | full |
+| SESSION_MODE_DESIGN | none | full |
+| MEDIA_BACKEND_DESIGN | none for P1–P3; section 6 pairs with VULKAN section 8 | full |
+| PERFORM_SURFACE_DESIGN | none for P1; P2 needs SESSION_MODE through P4's ContentState plumbing | full |
 | LED_STRIPS_DESIGN | none for P1; P2 needs MULTI_DISPLAY P1–P3 | conformance |
 | PROJECTION_MAPPING_DESIGN | MULTI_DISPLAY P1–P3 | conformance |
-| ABLETON_SHOW_SYNC_DESIGN | none. Brief-time note (audit F9): its D16 lanes deferral trigger has FIRED (AUTOMATION_LANES shipped) — decide fold-in vs keep-deferred at brief | conformance |
-| COMPONENT_LIBRARY_DESIGN | VOCAB apply ✅; C3 after node-groups canvas | conformance |
-| MCP_INTERFACE_DESIGN | VOCAB apply ✅; wants COMPONENT_LIBRARY (its authoring surface) | conformance |
+| ABLETON_SHOW_SYNC_DESIGN | none; at brief time, decide whether its D16 lanes deferral folds in (AUTOMATION_LANES is built) | conformance |
+| COMPONENT_LIBRARY_DESIGN | VOCAB apply; C3 after node-groups canvas | conformance |
+| MCP_INTERFACE_DESIGN | VOCAB apply; wants COMPONENT_LIBRARY (its authoring surface) | conformance |
 | ML_NODES_DESIGN | none for Vision/CoreML tier; ONNX tier needs VULKAN | conformance |
-| VULKAN_BACKEND_DESIGN | none (Phase 0 scaffold shipped 0c5dde17) | conformance |
-| REALTIME_3D_DESIGN (P0/P1/P2/P3/P4/section 9 ✅; P5–P7 remain) | **P2 shadows + P3 fog SHIPPED 2026-07-11** (`bf0e1a5d`; gpu-proofs `render_scene_shadows`+`render_scene_fog`, PNG-verified; F2 caster policy built as specified); P6 needs SCENE_BUILD P2 (amended D3/D8) | full |
-| SIMULATIONS_DESIGN | REALTIME_3D P1 ✅ | full |
-| WATER_SIMULATION_DESIGN / WATER_IMPLEMENTATION_PLAN | Existing scene/material/Metal infrastructure; independent of cloth and baked import. Start S1 numerical proof, then bounded graph substeps. | full |
-| IMPORT_FIDELITY_DESIGN (added 2026-07-15) | none — all prereqs in-tree (MATERIAL M1–M6, REALTIME_3D P1–P3/P8/P9, shipped glTF assembler); **outranks IMPORT_DESIGN P1-remaining** (Peter: "really critical infra"); PROPOSED — Peter's read pending | full |
-| IMPORT_DESIGN | **P1: scope re-cut first per coherence audit F5** (reality note understates the shipped `build_import_graph` scene importer); **P1-remaining now orders AFTER IMPORT_FIDELITY (2026-07-15), whose F-P4 absorbs section 8's normal-map report scope**; P1–P3 prereqs (REALTIME_3D P1 + MATERIAL M6) ✅; P5 needs SESSION_MODE + MEDIA_BACKEND P2; P6 agent half needs MCP | full |
-| COMMERCIALIZATION_DESIGN | none hard; P4 telemetry rides GIG_RESILIENCE P1–P2 ✅; AUDIO_ANALYSIS_ACCURACY P2+P6 (BUG-069 (shipping-license-audit)) before launch | conformance |
+| VULKAN_BACKEND_DESIGN | none | conformance |
+| REALTIME_3D_DESIGN | P6 needs SCENE_BUILD P2 (amended D3/D8) | full |
+| SIMULATIONS_DESIGN | REALTIME_3D P1 | full |
+| WATER_SIMULATION_DESIGN / WATER_IMPLEMENTATION_PLAN | existing scene/material/Metal infrastructure; independent of cloth and baked import. Start S1 numerical proof, then bounded graph substeps. | full |
+| IMPORT_DESIGN | P1: scope re-cut first (coherence audit F5); P1-remaining orders after IMPORT_FIDELITY, whose F-P4 absorbs section 8's normal-map report scope; P1–P3 need REALTIME_3D P1 + MATERIAL M6; P5 needs SESSION_MODE + MEDIA_BACKEND P2; P6 agent half needs MCP | full |
+| COMMERCIALIZATION_DESIGN | none hard; P4 telemetry rides GIG_RESILIENCE P1–P2; AUDIO_ANALYSIS_ACCURACY P2+P6 (BUG-069 (shipping-license-audit)) before launch | conformance |
 | DJ_PERFORMANCE_DESIGN | ABLETON_SHOW_SYNC; PERFORM_SURFACE P1; MEDIA_BACKEND P1 | conformance |
-| PRO_DJ_LINK_DESIGN | PERFORM_SURFACE P1; sync-source seam (re-derive anchors — ABLETON_TRANSPORT_SYNC landed 2026-07-07) | conformance |
-| UI_AUTOMATION_DESIGN (P1–P3 ✅; initial P4 live flows verified) | none; UI_HARNESS P2 rewrites the shipped Runner — re-derive anchors (audit F18) | full (P1–P3) / conformance (P4 extensions) |
-| TIMELINE_INGEST_DESIGN (P3–P5 ✅) | P1/P2 PARKED on BUG-028 (file-drop-targeting-cant-read-live-pointer-durin…) | full |
-| GAUSSIAN_SPLATS_DESIGN | none hard (P4 consumes shipped `render_scene`); D10 re-anchor owed before P3 (audit F4) | full |
-| SCENE_BUILD_AND_GROUP_PARAMS_DESIGN ✅ **WAVE COMPLETE 2026-07-10** (P1–P5 all shipped: Transform port+atom, render_scene port swap+v1.12.0 migration+importer, card sections, group-face rows, add-object/light+ribbons) — Peter L4 feel-pass on P5 gestures owed | (satisfied) REALTIME_3D P6 now unblocked (its P2 dep landed) | full |
+| PRO_DJ_LINK_DESIGN | PERFORM_SURFACE P1; sync-source seam (re-derive anchors against ABLETON_TRANSPORT_SYNC) | conformance |
+| UI_AUTOMATION_DESIGN | none | full (P1–P3) / conformance (P4 extensions) |
+| TIMELINE_INGEST_DESIGN | P1/P2 wait on BUG-028 (file-drop-targeting-cant-read-live-pointer-durin…) | full |
+| GAUSSIAN_SPLATS_DESIGN | none hard (P4 consumes `render_scene`); D10 re-anchor before P3 (audit F4) | full |
 | APP_SHELL_DESIGN | none for P1–P3; its section 8 slots bind their own waves | full (P1–P3) / conformance (section 8 slots) |
-| VIDEO_IO_DESIGN (added 2026-07-09) | none for P1–P2; P3–P4 need the NDI SDK verify (D8; Peter if ambiguous) | full |
-| UI_HARNESS_UNIFICATION_DESIGN (added 2026-07-09) | none unbuilt (UI_AUTOMATION P1–P2 + UI_CLIP_AND_Z P1 shipped) | full |
-| PERF_BUDGET_GATE_DESIGN (added 2026-07-09) | none (UI_HARNESS P0 improves the numbers, doesn't block) | conformance |
-| LIVE_RECORDING_PROOFS_DESIGN (added 2026-07-09; **release-gating**, owns BUG-053 (hdr-live-recording-structural)) | none | full |
-| BOX3D_PHYSICS_DESIGN (added 2026-07-09) | none for P1–P3; P4 wants depth-estimate (shipped) | full |
-| AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN (added 2026-07-09) | none | full |
-| AUDIO_ANALYSIS_ACCURACY_DESIGN (added 2026-07-08; = section 3 item 13g) | none; P2+P6 gate COMMERCIALIZATION (BUG-069) | full |
-| MESH_DEFORM_AND_CURVE_GEOMETRY_DESIGN (added 2026-07-10) | none hard (`render_scene` + SCENE_BUILD P1–P3 ✅, `triangulate_grid` shipped); release-content authoring (scanned-flowers pieces); glTF *animation* explicitly deferred to its own future design | full |
-| RENDER_SCENE_UNBOUNDED_LIGHTS_DESIGN (✅ BUILT + LANDED 2026-07-10; single phase) | none — see the section 2 render_scene same-file note; anchors now MOVED, re-derive before SCENE_BUILD P2 / GAUSSIAN P4 | full |
-| AUDIO_OBJECT_TRACKING_DESIGN (P1–P4 ✅ 2026-07-06; **P5 scope overlay + BUG-045 (gap-ring-down-chase) remain**) | none; P5 re-derives scope anchors (ScopeColumn typed-overlay refactor landed 2026-07-07) | full |
-| AUDIO_OBJECT_INGEST_DESIGN | OBJECT_TRACKING P0–P2 ✅; P1 blocked on Peter (labeled clips) **and on the F10 reconciliation with ANALYSIS_ACCURACY's eval harness** | conformance |
-| KICK_REALTIME_DESIGN (✅ SHIPPED 2026-10-10; replaced the archived KICK_SWEEP_EVENT_DESIGN) | none | full |
-| CAMERA_AND_LENS_DESIGN (added 2026-07-12) | none (REALTIME_3D P1–P3 ✅); its P1 oracle gates GBUFFER P1's conformance test | full |
-| GBUFFER_DESIGN (added 2026-07-12; the RENDERING_INFRA_V2 section 2 keystone) | CAMERA_AND_LENS P1 (oracle) for its P1 gate; PERF_BUDGET_GATE measures its bandwidth line but does NOT block (lazy rule is the cost control until then) | full |
-| CINEMATIC_POST_DESIGN (added 2026-07-12) | P1/P2 need CAMERA_AND_LENS P1–P2 + GBUFFER P1; P3 needs GBUFFER P2 | full |
-| REALTIME_3D section 11 P9 PCSS (added 2026-07-12) | none (P2 shadows ✅); independent of the three docs above | full |
+| VIDEO_IO_DESIGN | none for P1–P2; P3–P4 need the NDI SDK verify (D8; Peter if ambiguous) | full |
+| BOX3D_PHYSICS_DESIGN | none for P1–P3; P4 wants depth-estimate | full |
+| AUDIO_ANALYSIS_ACCURACY_DESIGN (= section 3 item 13g) | none; P2+P6 gate COMMERCIALIZATION (BUG-069 (shipping-license-audit)) | full |
+| MESH_DEFORM_AND_CURVE_GEOMETRY_DESIGN | none hard (`render_scene`, SCENE_BUILD P1–P3, `triangulate_grid`); glTF animation deferred to its own future design | full |
+| AUDIO_OBJECT_TRACKING_DESIGN | none; P5 re-derives scope anchors | full |
+| AUDIO_OBJECT_INGEST_DESIGN | OBJECT_TRACKING P0–P2; P1 needs Peter's labeled clips and the F10 reconciliation with ANALYSIS_ACCURACY's eval harness | conformance |
+| REALTIME_3D section 11 P9 PCSS | REALTIME_3D P2 shadows | full |
 
-Directions, pre-queue (not designed to STANDARD, no rows): MAPPING_GRAMMAR (first
-card = future Peter discussion) · AUTO_POPULATE (Opus design owed; gated on the
-BUG-069 rework).
-
-Rows removed as SHIPPED per section 5 (2026-07-10 coherence audit): AUTOMATION_LANES ·
-MATERIAL_SYSTEM · OVERLAY_SESSIONS_AND_PICKER · PRESET_LIBRARY · PARAM_STORAGE
-(P1–P5; Peter's one-time library re-save remains, not a build item) ·
-PARAM_STORAGE_BOUNDARIES.
-Not in the queue: **LIVE_AUDIO_TRIGGERS** is SHIPPED (phases 0–7, proven live,
-branch merged). **COMPETITIVE_STEAL_PASS** is a closed record.
+Directions, pre-queue (not designed to STANDARD, no rows): MAPPING_GRAMMAR · AUTO_POPULATE (gated on the BUG-069 (shipping-license-audit) rework).
 
 ## 2. Hard dependency edges
 

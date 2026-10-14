@@ -185,7 +185,7 @@ per-frame.
   **scope path** so it targets the right sub-graph.
 
 ### 5.3 Commands — scope-aware mutation + restructuring
-`crates/manifold-editing/src/commands/graph.rs`:
+`crates/manifold-editing/src/commands/graph/mod.rs`:
 - Existing commands gain a `scope_path: Vec<u32>`; their `apply` descends to that sub-graph of the
   `EffectGraphDef` before mutating. (Root path `[]` = today's behaviour, so this is backward
   compatible.)
@@ -339,7 +339,7 @@ around it.
 - `crates/manifold-core/src/lib.rs` — `pub mod group_edit;`.
 - `crates/manifold-node-engine/src/snapshot.rs` — `GroupSnapshot`/`InterfaceSnapshot`,
   `NodeSnapshot.group`, `from_def` recursion + boundary-port synthesis.
-- `crates/manifold-editing/src/commands/graph.rs` — `scope_path` on existing commands;
+- `crates/manifold-editing/src/commands/graph/mod.rs` — `scope_path` on existing commands;
   `GroupNodesCommand`, `UngroupNodeCommand`, `RenameGroupCommand`, `AddInterfacePortCommand`,
   `RenameInterfacePortCommand`.
 - `crates/manifold-ui/src/panels/mod.rs` — new `PanelAction`s + `scope_path` on existing ones.

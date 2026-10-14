@@ -351,7 +351,7 @@ landing in the main checkout, landing reports per DESIGN_DOC_STANDARD section 8.
 - **Deliverables:** Objects section — per-object collapsible row: editable name → rename
   command; transform triplets; material quick knobs per D3; remove (delete-group + decrement
   composite, the existing path — ⚠ VERIFY-AT-IMPL: the exact existing removal command,
-  `rg -n "delete.*group\|RemoveScene" crates/manifold-editing/src/commands/graph.rs`);
+  `rg -n "delete.*group\|RemoveScene" crates/manifold-editing/src/commands/graph/mod.rs`);
   "+ Object"/"+ Light" buttons dispatching the existing commands; custom-object degraded
   rows; header counts row (objects/lights/vertices/shadow casters from the Vm).
 - **Gate.** *Positive:* Vm + panel unit tests (rows for the azalea-shaped synthetic def;

@@ -200,10 +200,10 @@ echo ""
 echo "--- P2 Test 1: pre-wave against live fleet ---"
 OUT=$("$GATE_RUNNER" pre-wave 2>&1) && RC=$? || RC=$?
 if [ "$RC" -eq 0 ]; then ok "pre-wave exit 0"; else fail "pre-wave exit $RC (expected 0): $(echo "$OUT" | tail -3)"; fi
-# Must print five check lines (goldens, wave base, hooks registered, hooks fire, enforcement manifest)
+# Must print four check lines (goldens, wave base, hooks registered, hooks fire)
 CHECK_COUNT=$(echo "$OUT" | grep -cE '^\s+\[(PASS|FAIL|WARN)\]' || true)
-if [ "$CHECK_COUNT" -eq 5 ]; then ok "pre-wave prints 5 check lines"; else fail "pre-wave prints $CHECK_COUNT check lines (expected 5)"; fi
-echo "$OUT" | grep -qE 'pre-wave: [0-9]+/5 checks passed' && ok "pre-wave summary line" || fail "pre-wave missing summary line"
+if [ "$CHECK_COUNT" -eq 4 ]; then ok "pre-wave prints 4 check lines"; else fail "pre-wave prints $CHECK_COUNT check lines (expected 4)"; fi
+echo "$OUT" | grep -qE 'pre-wave: [0-9]+/4 checks passed' && ok "pre-wave summary line" || fail "pre-wave missing summary line"
 echo ""
 
 # Clean up the pre-wave verdict from live run so induced-failure test starts clean
@@ -238,7 +238,7 @@ assert v['schema'] == 1, 'schema != 1'
 assert v['phase'] == 'pre-wave', 'phase != pre-wave'
 assert v['kind'] == 'gate', 'kind != gate'
 assert 'preflight' in v['runner'], 'runner missing preflight'
-assert len(v['gates']) == 5, f'expected 5 gates, got {len(v[\"gates\"])}'
+assert len(v['gates']) == 4, f'expected 4 gates, got {len(v[\"gates\"])}'
 # At least one gate must be failure (the wave base one)
 assert not v['pass'], 'verdict should not pass with a bad wave base'
 print('schema validation: OK')
