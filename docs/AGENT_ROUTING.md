@@ -55,7 +55,7 @@ within five minutes.
 - **Work items are beads.** Briefs reference bead ids.
 - **Lane health is the lead's job, never Peter's.** `scripts/fleet_health.py` checks orphaned slot edits, disk, the GPU lock and the nightly; it does not see Claude lanes (BUG-7eep8 (Claude-lane stall detection)). The lead watches Claude lanes through their completion notifications. Two consecutive idle checks with no report = stalled: message once, then stop the lane and escalate.
 - **A failing lane is respawned once, never taken over.** Stop it, carry what it learned into a fresh brief, respawn. A second failure means the task was shaped wrong: the lead re-shapes it (with an Opus review agent if stuck). The lead does not grind lane work itself.
-- **Briefs restate the invariants every time:** one commit then stop, pathspec commits, no landing, worktree via the slot ring, explicit `model`, effort (medium, high for hard judgment work), and the CLAUDE.md section How every session works rules (no inline python, no `cd`, never wait in the foreground, pre-commit checks including the `--cheap` gate before the commit, never gate a slot still being written).
+- **Briefs restate the invariants every time:** one commit then stop, pathspec commits, no landing, worktree via the slot ring, explicit `model`, effort (medium, high for hard judgment work), and the CLAUDE.md section How every session works rules (no inline python, no `cd`, wait on your own builds and tests in the foreground and never end your turn while they run, pre-commit checks including the `--cheap` gate before the commit, never gate a slot still being written).
 - **Launch defects are one deny that spells the corrected call** (`agent-launch-guard.py`). Names are `<slot>-<descriptive-task>`.
 
 ## Lead token economy
