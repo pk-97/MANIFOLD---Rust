@@ -216,7 +216,6 @@ impl OscSyncController {
 
         self.was_receiving = false;
         self.is_osc_enabled = true;
-        // ExternalTimeSync is managed per-frame based on is_receiving_timecode (not just enabled)
         true
     }
 
@@ -240,8 +239,13 @@ impl OscSyncController {
         self.has_new_timecode = false;
         *self.pending_osc_message.lock() = None;
 
-        // syncArbiter?.ClearExternalTimeSync() — caller must forward this.
         log::info!("[OscSync] Disabled");
+    }
+
+    /// While timecode arrives: its song seconds and the content-thread time
+    /// they were drained at.
+    pub fn last_timecode(&self) -> Option<(Seconds, Seconds)> {
+        self.is_receiving_timecode.then_some((self.current_timecode_seconds, self.last_timecode_received_time))
     }
 
     pub fn toggle_osc(&mut self, receiver: &mut OscReceiver) {
@@ -368,10 +372,6 @@ impl OscSyncController {
         let receiving = (now - self.last_timecode_received_time).0 < self.transport_timeout as f64;
         self.is_receiving_timecode = receiving;
 
-        // STOPGAP(frame-exact P3): the clock stops advancing on its own only
-        // while OSC is the selected authority and timecode is arriving.
-        arbiter.set_external_time_sync(ClockAuthority::Osc, authority, arb_target, receiving);
-
         // Transport detection: timecode arriving = play, timecode stopped = pause.
         if self.follow_transport {
             if receiving && !self.was_receiving {
@@ -410,7 +410,7 @@ impl OscSyncController {
         authority: ClockAuthority,
     ) {
         let osc_time = self.current_timecode_seconds;
-        let current_time = sync_target.current_time();
+        let current_time = sync_target.position_time();
         let delta = (osc_time - current_time).abs();
 
         if delta.0 < 0.001 {
@@ -418,12 +418,9 @@ impl OscSyncController {
         } // identical
 
         if sync_target.is_playing() {
-            if delta.0 < 0.5 {
-                // Normal sync: set time directly. No threshold — apply every OSC frame
-                // so drift never accumulates. ExternalTimeSync prevents deltaTime from
-                // fighting this, so the playhead advances purely from OSC timecode.
-                arbiter.nudge_time(ClockAuthority::Osc, authority, arb_target, osc_time);
-            } else {
+            // Inside 0.5 s the follower trims the beat from this tick's
+            // sample (D6); a larger error seeks.
+            if delta.0 >= 0.5 {
                 // Large jump during playback: full Seek (rebuilds clip state).
                 arbiter.seek(ClockAuthority::Osc, authority, arb_target, osc_time);
 
@@ -593,7 +590,7 @@ mod tests {
         assert!((secs - expected).abs() < 1e-4);
     }
 
-    // ── Nudge-vs-seek + transport-follow ─────────────────────────────────
+    // ── Seek-or-trim + transport-follow ─────────────────────────────────
 
     struct FakeSyncTarget {
         state: PlaybackState,
@@ -605,7 +602,7 @@ mod tests {
         fn current_state(&self) -> PlaybackState {
             self.state
         }
-        fn current_time(&self) -> Seconds {
+        fn position_time(&self) -> Seconds {
             self.time
         }
         fn is_playing(&self) -> bool {
@@ -621,10 +618,8 @@ mod tests {
 
     #[derive(Default)]
     struct FakeArbTarget {
-        external_time_sync: bool,
         played: bool,
         paused: bool,
-        nudge_count: u32,
         seek_count: u32,
     }
 
@@ -632,30 +627,21 @@ mod tests {
         fn current_project(&self) -> Option<&Project> {
             None
         }
-        fn external_time_sync(&self) -> bool {
-            self.external_time_sync
-        }
-        fn set_external_time_sync(&mut self, value: bool) {
-            self.external_time_sync = value;
-        }
         fn play(&mut self) {
             self.played = true;
         }
         fn pause(&mut self, _clear_recording: bool) {
             self.paused = true;
         }
-        fn nudge_time(&mut self, _time: Seconds) {
-            self.nudge_count += 1;
-        }
         fn seek(&mut self, _time: Seconds) {
             self.seek_count += 1;
         }
     }
 
-    /// section 11 OSC nudge/seek split = 0.5s: while playing, a small position
-    /// error nudges every message rather than hard-seeking.
+    /// section 11 OSC seek threshold = 0.5s: while playing, a small position
+    /// error is left to the follower's trim, never seeked.
     #[test]
-    fn osc_sync_nudges_when_playing_delta_under_threshold() {
+    fn osc_sync_leaves_small_errors_to_the_follower() {
         let ctrl = OscSyncController {
             current_timecode_seconds: Seconds(5.2),
             ..OscSyncController::new()
@@ -670,7 +656,6 @@ mod tests {
 
         ctrl.sync_timecode_to_playback(&sync_target, &mut arbiter, &mut arb_target, ClockAuthority::Osc);
 
-        assert_eq!(arb_target.nudge_count, 1);
         assert_eq!(arb_target.seek_count, 0);
     }
 
@@ -691,7 +676,6 @@ mod tests {
         ctrl.sync_timecode_to_playback(&sync_target, &mut arbiter, &mut arb_target, ClockAuthority::Osc);
 
         assert_eq!(arb_target.seek_count, 1);
-        assert_eq!(arb_target.nudge_count, 0);
     }
 
     #[test]
@@ -710,7 +694,6 @@ mod tests {
 
         ctrl.sync_timecode_to_playback(&sync_target, &mut arbiter, &mut arb_target, ClockAuthority::Osc);
 
-        assert_eq!(arb_target.nudge_count, 0);
         assert_eq!(arb_target.seek_count, 0);
     }
 
@@ -752,7 +735,6 @@ mod tests {
         ctrl.sync_timecode_to_playback(&sync_target, &mut arbiter, &mut arb_target, ClockAuthority::Osc);
 
         assert_eq!(arb_target.seek_count, 0);
-        assert_eq!(arb_target.nudge_count, 0);
     }
 
     /// section 7: "timecode arriving = play, 0.5s silence = pause."

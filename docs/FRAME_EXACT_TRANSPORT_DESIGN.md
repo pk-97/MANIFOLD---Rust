@@ -717,6 +717,8 @@ Anchors on f32e3c5fd.
 | AbletonOSC relay | NudgeBeats or SeekBeats actions per report (`transport_sync.rs:302-324`, `content_thread.rs:1933-1954`); stamped at drain (`ableton_bridge.rs:641-662`) | Arrival stamped on the receive thread; `sample_at(R)` with RTT/2 and Live's tempo, `SLOW` profile (D7, D8). SeekBeats unchanged (2 s); NudgeBeats is deleted. |
 | Arbiter | `SyncArbiterTarget::nudge_time`, `set_external_time_sync` (`sync.rs:23-27`, `:181-228`) | Both deleted. Samples come only from the authority's own source, so the authority match is the gate. `seek` keeps its gate and calls `seek_external`. The gate-matrix tests for the two deleted calls (`sync.rs:318-357`) are deleted; the play, pause and seek matrices stay. |
 
+The sources' own seek thresholds (2 s for CLK, 0.5 s for timecode) compare against `SyncTarget::position_time`, the map time of the beat on screen, not the grid time: under the follower the grid time drifts from the map with Live's tempo (about 4 s a minute at 128 over a 120 map) and would trip the 2 s seek, while the beat does not drift.
+
 ### 3.6 Edge cases
 
 | Case | Behaviour after |

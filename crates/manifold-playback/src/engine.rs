@@ -12,7 +12,7 @@ use crate::live_clip_manager::LiveClipManager;
 use crate::renderer::ClipRenderer;
 use crate::scheduler::{ActiveClipRef, ClipScheduler};
 use crate::session_state::SessionRuntime;
-use crate::external_follow::ExternalFollower;
+use crate::external_follow::{ExternalFollower, ExternalSample, FollowEvent, FollowProfile};
 use crate::transport_clock::TransportClock;
 
 use ahash::{AHashMap, AHashSet};
@@ -170,10 +170,12 @@ pub struct PlaybackEngine {
     /// Active clips' start beats and latched start times (D8). Reserved at
     /// load to the clip count; inserts only at activation.
     clip_starts: AHashMap<ClipId, (Beats, Option<Seconds>)>,
+    /// This tick's sample from the authority's source (D7). Every placement
+    /// drops it; the tick consumes it after the advance.
+    external_sample: Option<ExternalSample>,
+    /// The converter export suspends, restored at its end as a seed point (D22).
+    export_tempo: Option<TempoSource>,
     is_recording: bool,
-    // STOPGAP(frame-exact P3): while set, live ticks don't advance the clock
-    // and the external source places it. P3 replaces this with corrections.
-    external_time_sync: bool,
 
     // Project reference
     project: Option<Project>,
@@ -359,8 +361,9 @@ impl PlaybackEngine {
                 Bpm(120.0),
             ),
             clip_starts: AHashMap::with_capacity(32),
+            external_sample: None,
+            export_tempo: None,
             is_recording: false,
-            external_time_sync: false,
             project: None,
             renderers,
             active_clip_renderers: AHashMap::with_capacity(32),
@@ -512,8 +515,15 @@ impl PlaybackEngine {
     pub fn is_recording(&self) -> bool {
         self.is_recording
     }
-    pub fn external_time_sync(&self) -> bool {
-        self.external_time_sync
+    /// Whether the follow segment is the converter (an external authority).
+    pub fn follows_external(&self) -> bool {
+        self.tempo == TempoSource::Follow
+    }
+    pub fn tempo_source(&self) -> TempoSource {
+        self.tempo
+    }
+    pub fn follower(&self) -> &ExternalFollower {
+        &self.follower
     }
     pub fn is_export_mode(&self) -> bool {
         self.is_export_mode
@@ -759,8 +769,20 @@ impl PlaybackEngine {
         self.transport_epoch = self.transport_epoch.wrapping_add(1);
         self.pending_pauses.clear();
         // Anchor at the current frame and advance normally from it (D4): the
-        // paused frame is already on screen, so nothing repeats.
-        self.clock.locate(self.clock.time());
+        // paused frame is already on screen, so nothing repeats. A hand-back
+        // offset ends here: the beat stays and the frame moves to its map time.
+        match self.tempo {
+            TempoSource::Map { beat_offset } if beat_offset != 0.0 => {
+                let t = self.beat_to_timeline_time(Beats(self.frame_beat));
+                self.tempo = TempoSource::Map { beat_offset: 0.0 };
+                self.place(|clock| clock.locate(t));
+            }
+            _ => self.place(|clock| clock.locate(clock.time())),
+        }
+        // Play is a seed point: the next fresh sample sets the segment (D22).
+        if self.tempo == TempoSource::Follow {
+            self.follower.reseed();
+        }
 
         // Sync clips at current position (start clips that should be active)
         self.sync_clips_to_time();
@@ -795,8 +817,15 @@ impl PlaybackEngine {
         // launches (Ableton behavior). session_override is NOT cleared —
         // layers stay detached until an explicit Back to Arrangement (section 4).
         self.session_runtime.on_transport_stop();
-        self.clock.reset();
-        self.refresh_beat();
+        // Stop clears a hand-back offset and the follower (D22).
+        if let TempoSource::Map { .. } = self.tempo {
+            self.tempo = TempoSource::Map { beat_offset: 0.0 };
+        }
+        self.place(TransportClock::reset);
+        self.anchor_follower_on_map();
+        if self.tempo == TempoSource::Follow {
+            self.follower.reseed();
+        }
         self.compositor_dirty_deadline = 0.0; // Force one more compositor update
     }
 
@@ -809,47 +838,97 @@ impl PlaybackEngine {
         self.transport_epoch = self.transport_epoch.wrapping_add(1);
         // Pause only seekable clips (generators render procedurally each frame)
         self.pause_active_clips();
+        // Pause clears the follower: it seeds again on the next Play (D22).
+        if self.tempo == TempoSource::Follow {
+            self.follower.reseed();
+        }
     }
 
     /// Move the transport to the first frame at or after `t`, with no hold
-    /// (D4): play, resume, a paused seek, a tempo edit. Non-finite `t` is
-    /// ignored (D18).
+    /// (D4): resume, a paused seek, a tempo edit. Non-finite `t` is ignored
+    /// (D18). A hand-back offset ends here.
     pub fn locate(&mut self, t: Seconds) {
         self.reconcile_clip_control_bindings();
-        self.clock.locate(t);
-        self.refresh_beat();
+        if let TempoSource::Map { .. } = self.tempo {
+            self.tempo = TempoSource::Map { beat_offset: 0.0 };
+        }
+        self.place(|clock| clock.locate(t));
+        self.anchor_follower_on_map();
         self.relatch_clip_starts();
     }
 
-    /// STOPGAP(frame-exact P3): an external source (Link, MIDI clock) places
-    /// the transport on the frame nearest its beat, as today's per-frame beat
-    /// copy did, rounded to the grid. P3 replaces it with `observe_external`.
-    pub fn follow_external_beat(&mut self, beat: Beats) {
-        if let Some(project) = &mut self.project {
-            let t = TempoMapConverter::beat_to_seconds(&mut project.tempo_map, beat, project.settings.bpm);
-            self.follow_external_time(t);
+    /// This tick's sample from the authority's source, read at the shown
+    /// frame's instant (D7). The tick observes it after the advance; any
+    /// placement before then drops it. Ignored under the map.
+    pub fn set_external_sample(&mut self, sample: ExternalSample) {
+        self.external_sample = Some(sample);
+    }
+
+    /// A seed point the caller decides (D22): the next fresh sample sets the
+    /// segment, so the beat moves to the source's with no seek.
+    pub fn reseed_follower(&mut self) {
+        if self.tempo == TempoSource::Follow {
+            self.follower.reseed();
         }
     }
 
-    /// STOPGAP(frame-exact P3): Link's beat copy and every nudge land here.
-    /// While the grid advances on its own (playing, not under
-    /// `external_time_sync`), the position waits for this tick's advance and
-    /// only moves the grid past ¾ frame (`TransportClock::follow_external`),
-    /// so a source with sub-frame jitter never holds or skips a frame. Any
-    /// placement before that tick (seek, stop, load, tempo edit) drops the
-    /// target. A frozen grid or a stopped transport goes to the nearest frame now.
-    fn follow_external_time(&mut self, t: Seconds) {
-        if !t.0.is_finite() {
+    /// An authority change swaps the converter (D6, D8). From Internal the
+    /// segment starts at the frame's own beat, hand-back offset included;
+    /// between sources it hands over bumplessly; back to Internal the time
+    /// and beat are kept, with a beat offset that lasts until the next Stop,
+    /// seek, Play or tempo edit. During an export the change waits: the
+    /// content thread repeats it once the follower state disagrees.
+    pub fn set_follow_authority(&mut self, profile: Option<FollowProfile>) {
+        if self.export_clock {
             return;
         }
-        let t = Seconds(t.0.max(0.0));
-        if self.is_playing() && !self.external_time_sync && !self.is_export_mode {
-            self.clock.defer_external(t);
-            return;
+        self.external_sample = None;
+        match (self.tempo, profile) {
+            (TempoSource::Map { beat_offset }, Some(profile)) => {
+                // Clips started under the map keep their map start times, so
+                // no video moves when the converter changes.
+                if let Some(p) = &self.project {
+                    for (start, latch) in self.clip_starts.values_mut() {
+                        latch.get_or_insert_with(|| {
+                            TempoMapConverter::beat_to_seconds_immut(&p.tempo_map, Beats(start.0 - beat_offset), p.settings.bpm)
+                        });
+                    }
+                }
+                let t = self.clock.time();
+                let map_beat = self.map_beat_at(t);
+                let bpm = self.map_bpm_at_beat(Beats(map_beat));
+                self.follower = ExternalFollower::starting_at(profile, t, Beats(self.frame_beat), bpm);
+                self.tempo = TempoSource::Follow;
+            }
+            (TempoSource::Follow, Some(profile)) => self.follower.hand_over(profile),
+            (TempoSource::Follow, None) => {
+                let map_beat = self.map_beat_at(self.clock.time());
+                self.tempo = TempoSource::Map { beat_offset: self.frame_beat - map_beat };
+            }
+            (TempoSource::Map { .. }, None) => {}
         }
-        self.reconcile_clip_control_bindings();
-        self.clock.locate_nearest(t);
         self.refresh_beat();
+    }
+
+    /// The seek under an external authority (D6): the arbiter's and the
+    /// follower's own. The frame nearest the beat's map time, no hold (D4),
+    /// with the segment on the beat and its integral kept. Under the map it
+    /// is an ordinary seek to the beat's time.
+    pub fn seek_external(&mut self, beat: Beats) -> f32 {
+        if !beat.0.is_finite() {
+            return 0.0;
+        }
+        let t = self.beat_to_timeline_time(beat);
+        if self.tempo != TempoSource::Follow {
+            return self.seek_to(t);
+        }
+        let old_beat = self.begin_seek();
+        let t = Seconds(t.0.max(0.0));
+        self.place(|clock| clock.locate_nearest(t));
+        let bpm = self.follower.base_bpm();
+        self.follower.seek_to(self.clock.time(), beat, bpm);
+        self.refresh_beat();
+        self.finish_seek(old_beat)
     }
 
     /// The tempo map changed under the current frame and time is the master:
@@ -860,13 +939,12 @@ impl PlaybackEngine {
 
     /// Editing the tempo changes the time of the current musical position,
     /// not the position itself: the index moves to the first frame at or
-    /// after the position's new time, with no hold (D11).
+    /// after the position's new time, with no hold (D11). A hand-back offset
+    /// ends here, the beat kept. Under the follower the source's tempo drives
+    /// the beat, so the map edit moves nothing (D8).
     pub fn reconcile_tempo_edit(&mut self, old_map: &manifold_core::tempo::TempoMap, old_bpm: Bpm) {
         manifold_core::work_count::record_work(manifold_core::work_count::WorkKind::TempoReconcile);
-        // STOPGAP(frame-exact P3): the external source keeps placing the frame.
-        if self.external_time_sync {
-            return;
-        }
+        let TempoSource::Map { beat_offset } = self.tempo else { return };
         let Some(project) = &mut self.project else { return };
         if project.tempo_map.same_timing_as(old_map) && project.settings.bpm == old_bpm {
             return;
@@ -874,17 +952,12 @@ impl PlaybackEngine {
         // The frame's exact time, not the D14 sample instant: the round trip
         // through an unchanged stretch of the map must land on the same frame.
         let mut old_map = old_map.clone();
-        let beat = TempoMapConverter::seconds_to_beat_f64(&mut old_map, self.clock.time().0, old_bpm);
+        let beat = TempoMapConverter::seconds_to_beat_f64(&mut old_map, self.clock.time().0, old_bpm) + beat_offset;
         let t = TempoMapConverter::beat_to_seconds(&mut project.tempo_map, Beats(beat), project.settings.bpm);
-        self.clock.locate(Seconds(t.0.max(0.0)));
-        self.refresh_beat();
+        self.tempo = TempoSource::Map { beat_offset: 0.0 };
+        self.place(|clock| clock.locate(Seconds(t.0.max(0.0))));
         self.relatch_clip_starts();
         self.sync_project_bpm_from_current_beat();
-    }
-
-    // STOPGAP(frame-exact P3): deleted with the flag.
-    pub fn set_external_time_sync(&mut self, value: bool) {
-        self.external_time_sync = value;
     }
 
     pub fn set_recording(&mut self, value: bool) {
@@ -929,10 +1002,15 @@ impl PlaybackEngine {
     /// 0 (D9, D17). Call before the first export seek, so the seeks, warm-up
     /// ticks and frames all land on the export grid.
     pub fn begin_export_clock(&mut self, fps: f32) {
-        self.clock.begin_export(fps);
+        // Export renders map beats on the export grid; the follower waits (D22).
+        if !self.export_clock {
+            self.export_tempo = Some(self.tempo);
+        }
+        self.tempo = TempoSource::Map { beat_offset: 0.0 };
+        self.place(|clock| clock.begin_export(fps));
         self.export_clock = true;
         self.export_first_index = None;
-        self.refresh_beat();
+        self.relatch_clip_starts();
     }
 
     /// Call with the transport parked at the export start, right before the
@@ -949,9 +1027,17 @@ impl PlaybackEngine {
             return;
         }
         self.export_first_index = None;
+        // Export end is a seed point (D22); a hand-back offset does not survive it.
+        if let Some(TempoSource::Follow) = self.export_tempo.take() {
+            self.tempo = TempoSource::Follow;
+        }
         let fps = self.project.as_ref().map_or(self.clock.fps(), |p| p.settings.frame_rate);
-        self.clock.end_export(fps);
-        self.refresh_beat();
+        self.place(|clock| clock.end_export(fps));
+        self.anchor_follower_on_map();
+        if self.tempo == TempoSource::Follow {
+            self.follower.reseed();
+        }
+        self.relatch_clip_starts();
     }
 
     /// Where the transport goes back to after an export: the frame's exact
@@ -1009,23 +1095,34 @@ impl PlaybackEngine {
 
     /// Seek. Snaps forward to the grid; while playing it also holds one
     /// advance, so the next tick renders the target frame (D4). Non-finite
-    /// times are ignored (D18).
+    /// times are ignored (D18). A hand-back offset ends here; under the
+    /// follower the segment goes to the map's beat at the target.
     pub fn seek_to(&mut self, time: Seconds) -> f32 {
         if !time.0.is_finite() {
             return 0.0;
         }
+        let old_beat = self.begin_seek();
+        if let TempoSource::Map { .. } = self.tempo {
+            self.tempo = TempoSource::Map { beat_offset: 0.0 };
+        }
+        let time = Seconds(time.0.max(0.0));
+        let playing = self.is_playing();
+        self.place(|clock| if playing { clock.seek_playing(time) } else { clock.locate(time) });
+        self.anchor_follower_on_map();
+        self.finish_seek(old_beat)
+    }
+
+    /// A seek's boundary effects before the placement; returns the old beat.
+    fn begin_seek(&mut self) -> f64 {
         self.transport_epoch = self.transport_epoch.wrapping_add(1);
         self.reset_trigger_delivery();
         self.queue_finished_automation();
-        let old_beat = self.current_beat;
         self.reconcile_clip_control_bindings();
-        let time = Seconds(time.0.max(0.0));
-        if self.is_playing() {
-            self.clock.seek_playing(time);
-        } else {
-            self.clock.locate(time);
-        }
-        self.refresh_beat();
+        self.current_beat
+    }
+
+    /// A seek's effects after the placement: latches, clips, session launches.
+    fn finish_seek(&mut self, old_beat: f64) -> f32 {
         self.relatch_clip_starts();
         self.sync_project_bpm_from_current_beat();
 
@@ -1112,6 +1209,7 @@ impl PlaybackEngine {
             let before = self.clock.fps();
             self.clock.set_fps(project.settings.frame_rate);
             if self.clock.fps() != before {
+                self.external_sample = None;
                 self.refresh_beat();
             }
         }
@@ -1136,10 +1234,10 @@ impl PlaybackEngine {
         self.check_preparing_clips();
 
         // ── Phase 4: Branch on playback state ──
-        // A target deferred for this tick applies only to it (STOPGAP(frame-exact P3)).
-        let external = self.clock.take_pending_external();
+        // This tick's sample applies only to it.
+        let sample = self.external_sample.take();
         let mut result = if self.current_state == PlaybackState::Playing {
-            self.tick_playing(ctx, external)
+            self.tick_playing(ctx, sample)
         } else {
             self.tick_non_playing(ctx)
         };
@@ -1225,37 +1323,29 @@ impl PlaybackEngine {
     }
 
     /// Playing-state tick. Matches C# PlaybackController.Update lines 1135-1218.
-    fn tick_playing(&mut self, ctx: TickContext, external: Option<Seconds>) -> TickResult {
+    fn tick_playing(&mut self, ctx: TickContext, sample: Option<ExternalSample>) -> TickResult {
         // Direct state transitions (including export) need the same initial
         // membership as play(), before advancing past a short first clip.
         if self.clip_control_cursor.is_none() {
             self.sync_clips_to_time();
         }
-        // 1. Step the transport. Export sets the frame exactly and always
-        //    advances, external sync or not (D9); live play steps the grid
-        //    frames the content tick counted (D2).
-        let stepped = if let Some(first) = self.export_first_index {
+        // 1. Step the transport. Export sets the frame exactly (D9); live
+        //    play steps the grid frames the content tick counted (D2). Then
+        //    the follower measures this tick's sample against the shown
+        //    frame; a lasting error past the row's bound is a seek (D6).
+        if let Some(first) = self.export_first_index {
             self.clock.set_export_frame(first, u32::try_from(ctx.frame_count).unwrap_or(u32::MAX));
-            true
-        } else if self.is_export_mode || !self.external_time_sync {
-            // STOPGAP(frame-exact P3): while an external source is the clock
-            // authority, live ticks leave the frame where it put it.
-            self.clock.advance(ctx.frames);
-            // STOPGAP(frame-exact P3): the source was read as this tick
-            // began, and this tick shows the frame after; the stopgap always
-            // showed it one frame on. Its advance already moved the grid, so
-            // only a gap past ¾ frame moves it again.
-            if let Some(target) = external {
-                self.clock.follow_external(target + self.clock.step());
-            }
-            true
         } else {
-            false
-        };
-        if stepped {
-            self.refresh_beat();
-            self.sync_project_bpm_from_current_beat();
+            self.clock.advance(ctx.frames);
+            if self.tempo == TempoSource::Follow
+                && let Some(sample) = sample
+                && let FollowEvent::Seek { beat } = self.follower.observe(self.clock.time(), sample)
+            {
+                self.seek_external(beat);
+            }
         }
+        self.refresh_beat();
+        self.sync_project_bpm_from_current_beat();
         let tick_dt = self.tick_dt();
 
         // 3b. Live audio triggers — fire one-shot clips from incoming transients
@@ -2463,6 +2553,43 @@ impl PlaybackEngine {
         }
     }
 
+    /// Every placement goes through here. This tick's sample was read for
+    /// the old frame, so it is dropped; the beat cache follows the clock.
+    fn place(&mut self, move_clock: impl FnOnce(&mut TransportClock)) {
+        self.external_sample = None;
+        move_clock(&mut self.clock);
+        self.refresh_beat();
+    }
+
+    /// The map's beat at `t`, without any hand-back offset.
+    fn map_beat_at(&mut self, t: Seconds) -> f64 {
+        self.project
+            .as_mut()
+            .map_or(t.0 * 2.0, |p| TempoMapConverter::seconds_to_beat_f64(&mut p.tempo_map, t.0, p.settings.bpm))
+    }
+
+    fn map_bpm_at_beat(&mut self, beat: Beats) -> Bpm {
+        self.project.as_mut().map_or(Bpm::DEFAULT, |p| p.tempo_map.get_bpm_at_beat(beat, p.settings.bpm))
+    }
+
+    /// Under the follower, a placement the source didn't make (a user seek,
+    /// Stop, a locate) puts the segment on the map's beat at the new frame,
+    /// the integral kept (D6). The source's next sample measures from there;
+    /// a seed already due stays due.
+    fn anchor_follower_on_map(&mut self) {
+        if self.tempo == TempoSource::Follow {
+            let t = self.clock.time();
+            let beat = self.map_beat_at(t);
+            let bpm = self.follower.base_bpm();
+            let seed_due = self.follower.awaiting_seed();
+            self.follower.seek_to(t, Beats(beat), bpm);
+            if seed_due {
+                self.follower.reseed();
+            }
+            self.refresh_beat();
+        }
+    }
+
     pub fn time_to_timeline_beat(&mut self, time_seconds: Seconds) -> Beats {
         if let Some(project) = &mut self.project {
             TempoMapConverter::seconds_to_beat(
@@ -3595,8 +3722,8 @@ impl crate::sync::SyncTarget for PlaybackEngine {
     fn current_state(&self) -> PlaybackState {
         self.current_state
     }
-    fn current_time(&self) -> Seconds {
-        self.clock.time()
+    fn position_time(&self) -> Seconds {
+        self.beat_to_timeline_time_immut(Beats(self.frame_beat))
     }
     fn is_playing(&self) -> bool {
         self.current_state == PlaybackState::Playing
@@ -3619,14 +3746,6 @@ impl crate::sync::SyncArbiterTarget for PlaybackEngine {
     fn current_project(&self) -> Option<&Project> {
         self.project.as_ref()
     }
-    // STOPGAP(frame-exact P3): the flag and its setter go in P3.
-    fn external_time_sync(&self) -> bool {
-        self.external_time_sync
-    }
-    fn set_external_time_sync(&mut self, value: bool) {
-        self.external_time_sync = value;
-    }
-
     fn play(&mut self) {
         self.play();
     }
@@ -3638,14 +3757,15 @@ impl crate::sync::SyncArbiterTarget for PlaybackEngine {
         }
     }
 
-    /// STOPGAP(frame-exact P3): a nudge follows the external time with the
-    /// same ¾-frame hysteresis as Link; P3 makes it a phase-lock observation.
-    fn nudge_time(&mut self, time: Seconds) {
-        self.follow_external_time(time);
-    }
-
+    /// Under an external authority a source's seek is the follower's seek
+    /// to the map beat of `time` (D6).
     fn seek(&mut self, time: Seconds) {
-        self.seek_to(time);
+        if self.tempo == TempoSource::Follow {
+            let beat = self.map_beat_at(time);
+            self.seek_external(Beats(beat));
+        } else {
+            self.seek_to(time);
+        }
     }
 }
 
@@ -3957,7 +4077,7 @@ mod tests {
     }
 
     #[test]
-    fn trigger_delivery_pause_resume_and_clock_nudges_preserve_pending_input() {
+    fn trigger_delivery_pause_resume_and_external_samples_preserve_pending_input() {
         let mut engine = PlaybackEngine::new(Vec::new());
         engine.initialize(trigger_delivery_project());
         engine.play();
@@ -3967,8 +4087,8 @@ mod tests {
         assert_eq!(captured.len(), 1);
         let scratch_capacity = engine.modulation_trigger_scratch.capacity();
         engine.pause();
-        crate::sync::SyncArbiterTarget::nudge_time(&mut engine, Seconds(0.1));
-        engine.follow_external_beat(Beats(0.2));
+        engine.set_follow_authority(Some(FollowProfile::FAST));
+        engine.set_external_sample(ExternalSample { beat: 0.2, bpm: 120.0, fresh: true, exact: false });
         trigger_delivery_tick(&mut engine);
         assert_eq!(engine.trigger_delivery.as_slice(), captured);
         engine.play();
@@ -4034,12 +4154,17 @@ mod tests {
     }
 
     #[test]
-    fn transport_epoch_tracks_small_seeks_but_not_clock_nudges() {
+    fn transport_epoch_tracks_small_seeks_but_not_external_samples() {
         let mut engine = PlaybackEngine::new(Vec::new());
         engine.initialize(Project::default());
+        engine.set_follow_authority(Some(FollowProfile::FAST));
         engine.play();
         let running = engine.transport_epoch();
-        crate::sync::SyncArbiterTarget::nudge_time(&mut engine, Seconds(0.1));
+        for beat in [0.2, 0.25] {
+            engine.set_external_sample(ExternalSample { beat, bpm: 120.0, fresh: true, exact: false });
+            let result = engine.tick(TickContext { frames: 1, realtime_now: Seconds::ZERO, frame_count: 0 });
+            engine.reclaim_tick_result(result);
+        }
         assert_eq!(engine.transport_epoch(), running);
         engine.seek_to(Seconds(0.11));
         assert_ne!(engine.transport_epoch(), running);
@@ -4509,5 +4634,28 @@ mod audio_tempo_edit_tests {
             engine.reconcile_tempo_edit(&old_map, Bpm(120.0));
             assert_eq!(engine.transport_frame(), frame);
         }
+    }
+
+    /// D8: under the follower a clip's duration and loop length are its beat
+    /// difference at the segment's rate, even for a clip that started long
+    /// before the segment's anchor; nothing converts its distant start beat
+    /// through the segment.
+    #[test]
+    fn durations_use_beat_differences() {
+        let mut engine = PlaybackEngine::new(Vec::new());
+        engine.initialize(Project::default());
+        engine.set_follow_authority(Some(FollowProfile::FAST));
+        engine.play();
+        engine.set_external_sample(ExternalSample { beat: 200.0, bpm: 128.0, fresh: true, exact: true });
+        let result = engine.tick(TickContext { frames: 1, realtime_now: Seconds::ZERO, frame_count: 0 });
+        engine.reclaim_tick_result(result);
+        assert!((engine.frame_beat().0 - 200.0).abs() < 1e-9, "seeded at the source's beat");
+
+        let mut clip = TimelineClip::new_trigger(Beats(0.0), Beats(8.0));
+        clip.loop_duration_beats = Beats(2.0);
+        let duration = engine.get_clip_duration_seconds(&clip).0;
+        assert!((duration - 8.0 * 60.0 / 128.0).abs() < 1e-9, "duration {duration}");
+        let loop_len = f64::from(engine.get_clip_loop_duration_seconds(&clip));
+        assert!((loop_len - 2.0 * 60.0 / 128.0).abs() < 1e-6, "loop {loop_len}");
     }
 }

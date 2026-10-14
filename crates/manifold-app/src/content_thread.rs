@@ -14,6 +14,7 @@ use manifold_core::work_count::{record_work, WorkKind};
 use manifold_editing::service::EditingService;
 use manifold_playback::clip_launcher::ClipLauncher;
 use manifold_playback::engine::{PlaybackEngine, TickContext};
+use manifold_playback::external_follow::{ExternalSample, FollowProfile};
 use manifold_playback::midi_input::MidiInputController;
 use manifold_playback::osc_receiver::OscReceiver;
 use manifold_playback::osc_sender::OscPositionSender;
@@ -33,6 +34,16 @@ use crate::frame_timer::FrameTimer;
 /// Undrained states past which the UI counts as stalled (about half a second
 /// at 60 fps). A healthy UI keeps the queue at one or two.
 const UI_STATE_BACKLOG: usize = 32;
+
+/// The follower row for an authority (D6): Link and MIDI clock are fast and
+/// clean, AbletonOSC and timecode slow and coarse; Internal follows the map.
+fn follow_profile(authority: ClockAuthority) -> Option<FollowProfile> {
+    match authority {
+        ClockAuthority::Internal => None,
+        ClockAuthority::Link | ClockAuthority::MidiClock => Some(FollowProfile::FAST),
+        ClockAuthority::Osc => Some(FollowProfile::SLOW),
+    }
+}
 
 /// Cache entry for the watched editor-canvas snapshot (effect OR generator).
 /// Holds the snapshot inside an `Arc` so the per-frame
@@ -127,6 +138,9 @@ pub struct ContentThread {
     /// Link's cumulative beat counter keeps the offset valid across BPM changes.
     /// Port of C# PlaybackController.linkBeatOffset field (line 74).
     pub link_beat_offset: f64,
+    /// The MIDI clock beat last handed to the follower: a sample is fresh
+    /// only when a clock tick moved it.
+    pub last_clk_beat: f64,
     /// A tempo source for tests that stand in for Link or MIDI clock: it
     /// delivers this tempo every tick, where a real source would (D21).
     #[cfg(test)]
@@ -658,7 +672,7 @@ impl ContentThread {
             .engine
             .project()
             .map_or(ClockAuthority::Internal, |p| p.settings.clock_authority);
-        self.derive_external_beat(authority);
+        self.hand_external_sample(authority);
         self.update_recording_session_state(authority);
         self.apply_resolved_tempo(authority);
 
@@ -1759,8 +1773,8 @@ impl ContentThread {
         // Auto-determine clock authority BEFORE sync controllers run.
         // Uses previous frame's receiving/peer state (updated by sync controllers
         // last frame). This ensures the SyncArbiter gates are consistent with
-        // the authority — prevents one-frame mismatch where external_time_sync
-        // or transport commands are incorrectly rejected.
+        // the authority — prevents one-frame mismatch where samples or
+        // transport commands are incorrectly rejected.
         let osc_sync_mode = self
             .engine
             .project()
@@ -1798,7 +1812,16 @@ impl ContentThread {
             } else {
                 ClockAuthority::Internal
             };
+            let previous = self.engine.project().map_or(ClockAuthority::Internal, |p| p.settings.clock_authority);
             manifold_playback::transport_controller::write_clock_authority(&mut self.engine, auto);
+            // An authority change swaps the engine's converter before any
+            // source acts on it this tick (D6, D8). The second test catches a
+            // change an export deferred and a project loaded with a saved
+            // external authority.
+            let profile = follow_profile(auto);
+            if auto != previous || self.engine.follows_external() != profile.is_some() {
+                self.engine.set_follow_authority(profile);
+            }
             auto
         };
 
@@ -1972,16 +1995,19 @@ impl ContentThread {
                             time,
                         );
                     }
+                    // One per fresh report under the relay's own gates: the
+                    // reported beat, stamped at drain as today, is this
+                    // tick's sample (D7). C7 replaces it with the projection
+                    // at the read instant.
                     EngineAction::NudgeBeats(beat) => {
-                        let time = self
-                            .engine
-                            .beat_to_timeline_time(Beats::from_f32(beat));
-                        self.sync_arbiter.nudge_time(
-                            ClockAuthority::Osc,
-                            ClockAuthority::Osc,
-                            &mut self.engine,
-                            time,
-                        );
+                        if authority == ClockAuthority::Osc {
+                            self.engine.set_external_sample(ExternalSample {
+                                beat: f64::from(beat),
+                                bpm: f64::from(self.ableton_bridge.ableton_tempo()),
+                                fresh: true,
+                                exact: false,
+                            });
+                        }
                     }
                 }
             }
@@ -2030,55 +2056,79 @@ impl ContentThread {
     // Port of C# PlaybackController.Update lines 1064-1096.
     // ═══════════════════════════════════════════════════════════════
 
-    /// When playing with an external beat authority (Link or MidiClock),
-    /// override the engine's beat from the sync controller's current position.
-    fn derive_external_beat(&mut self, authority: ClockAuthority) {
-        if self.engine.current_state() != PlaybackState::Playing {
+    /// This tick's sample from the authority's own source, after every
+    /// transport action the sources took this tick (D7): a placement drops
+    /// the sample, so it is handed over last. Today's gates stay in front.
+    /// The AbletonOSC relay hands its sample from its action loop.
+    fn hand_external_sample(&mut self, authority: ClockAuthority) {
+        if self.engine.current_state() != PlaybackState::Playing || !self.engine.follows_external() {
             return;
         }
-
-        match authority {
+        let sample = match authority {
             ClockAuthority::Link => {
-                // Link only provides BPM — block position override when Manifold
-                // owns transport (prevents brief authority-falls-to-Link glitches
-                // during MIDI Clock gaps).
+                // Block while MANIFOLD owns transport (prevents brief
+                // authority-falls-to-Link glitches during MIDI Clock gaps).
+                // Link's beat is exact at this frame's deadline (D15).
                 if !self.sync_arbiter.manifold_owns_playback
                     && let Some(ref link) = self.transport_controller.link_sync
                     && link.is_link_enabled()
                     && link.has_active_peers()
                     && !self.link_beat_offset.is_nan()
                 {
-                    // STOPGAP(frame-exact P3): Link's beat at this frame's
-                    // deadline (D15), followed past ¾ frame; P3 observes it.
-                    self.engine
-                        .follow_external_beat(Beats(link.current_beat.0 - self.link_beat_offset));
+                    Some(ExternalSample {
+                        beat: link.current_beat.0 - self.link_beat_offset,
+                        bpm: link.link_tempo,
+                        fresh: true,
+                        exact: true,
+                    })
+                } else {
+                    None
                 }
             }
             ClockAuthority::MidiClock => {
-                // MIDI Clock always drives position when active — suppressed
-                // during the seek cooldown (user scrub, M4L path) AND while
-                // an AbletonOSC transport command awaits its ack
-                // (ABLETON_TRANSPORT_SYNC_DESIGN D5). The missing ack gate
-                // here was the play-from-cursor drag-back: the cooldown
-                // expired on a wall clock while Ableton's clock still
-                // reported the old position, and it pulled the playhead back.
-                if !self
-                    .sync_arbiter
-                    .is_seek_cooldown_active(self.time_since_start)
+                // Suppressed during the seek cooldown (user scrub, M4L path)
+                // AND while an AbletonOSC transport command awaits its ack
+                // (ABLETON_TRANSPORT_SYNC_DESIGN D5): what Ableton's clock
+                // reports then is the old position. Fresh only when a clock
+                // tick moved the beat; C6 projects it to the read instant.
+                if !self.sync_arbiter.is_seek_cooldown_active(self.time_since_start)
                     && !self.ableton_bridge.transport_sync_pending()
                     && let Some(ref clk) = self.transport_controller.midi_clock_sync
                     && clk.is_midi_clock_enabled()
                     && clk.is_receiving_clock()
                 {
-                    // STOPGAP(frame-exact P3): nearest frame to the last
-                    // clock tick's beat; P3 projects it to the deadline.
-                    self.engine
-                        .follow_external_beat(Beats::from_f32(clk.current_clock_beat()));
+                    let beat = f64::from(clk.current_clock_beat());
+                    let fresh = beat != self.last_clk_beat;
+                    self.last_clk_beat = beat;
+                    Some(ExternalSample { beat, bpm: f64::from(clk.current_clock_bpm()), fresh, exact: false })
+                } else {
+                    None
                 }
-                // else: the engine's clock steps the frame
             }
-            // ClockAuthority::Internal | Osc: the engine's clock steps the frame
-            _ => {}
+            ClockAuthority::Osc => {
+                // M4L timecode: song seconds through the map, fresh on the
+                // tick it was drained. C7 projects it to the read instant.
+                let mode = self.engine.project().map_or(OscSyncMode::M4L, |p| p.settings.osc_sync_mode);
+                match self.osc_sync.last_timecode() {
+                    Some((seconds, at)) if mode == OscSyncMode::M4L => {
+                        let beat = self.engine.time_to_timeline_beat(seconds);
+                        let bpm = self.engine.project().map_or(Bpm::DEFAULT, |p| {
+                            p.tempo_map.get_bpm_at_beat_immut(beat, p.settings.bpm)
+                        });
+                        Some(ExternalSample {
+                            beat: beat.0,
+                            bpm: f64::from(bpm.0),
+                            fresh: at == self.time_since_start,
+                            exact: false,
+                        })
+                    }
+                    _ => None,
+                }
+            }
+            ClockAuthority::Internal => None,
+        };
+        if let Some(sample) = sample {
+            self.engine.set_external_sample(sample);
         }
     }
 
@@ -2088,11 +2138,9 @@ impl ContentThread {
     pub(crate) fn cache_link_beat_offset(&mut self) {
         if let Some(ref link) = self.transport_controller.link_sync {
             if link.is_link_enabled() {
-                let manifold_beat = self
-                    .engine
-                    .time_to_timeline_beat(self.engine.current_time())
-                    .0;
-                self.link_beat_offset = link.current_beat.0 - manifold_beat;
+                // The frame's own beat: under the follower or a hand-back
+                // offset it is not the map's beat at the frame's time (D8).
+                self.link_beat_offset = link.current_beat.0 - self.engine.frame_beat().0;
             } else {
                 self.link_beat_offset = 0.0;
             }

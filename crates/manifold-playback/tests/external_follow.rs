@@ -97,9 +97,14 @@ fn settle(live: &Live, mut reader: impl Reader, at: f64, secs: f64, sign: f64) -
     driver.engine.play();
     let mut meter = Meter::default();
     let (mut last_over, mut overshoot) = (at, 0.0f64);
+    let mut before_jump = true;
     while driver.wall() < secs {
         let shown = driver.step(Some(&mut reader), 0);
         let truth = live.beat(shown.deadline);
+        if before_jump && shown.deadline >= at {
+            before_jump = false;
+            meter.music_jumped();
+        }
         meter.observe(shown, truth, live.bpm(shown.deadline), shown.deadline >= WARM);
         if shown.deadline >= at {
             let err_ms = (truth - shown.beat) * 60.0 / live.bpm(shown.deadline) * 1000.0;

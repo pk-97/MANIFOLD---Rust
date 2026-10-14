@@ -591,19 +591,6 @@ impl MidiClockSyncController {
             is_playing,
         );
 
-        // STOPGAP(frame-exact P3): the clock stops advancing on its own while
-        // CLK is the active authority and playing.
-        // Not gated on manifold_owns — MIDI Clock always drives timing when active.
-        // Gated on the clock-plane suppress — during scrubs and in-flight
-        // AbletonOSC commands, the engine advances internally until Ableton
-        // confirms the new state.
-        arbiter.set_external_time_sync(
-            ClockAuthority::MidiClock,
-            authority,
-            arb_target,
-            has_recent_clock_activity && is_playing && !suppress_clock_plane,
-        );
-
         // Transport sync — gated by arbiter authority check (port of C# lines 256-279).
         // Also held while the clock plane is suppressed: during an in-flight
         // play-from-cursor, Ableton's clock still says "stopped" — relaying
@@ -784,19 +771,12 @@ impl MidiClockSyncController {
             self.last_transport_absolute_tick = absolute_tick;
         }
 
-        let current_time = sync_target.current_time();
-        let delta = (clock_time - current_time).abs();
+        let delta = (clock_time - sync_target.position_time()).abs();
 
         if sync_target.is_playing() {
-            if !is_transport_jump && delta < Seconds(2.0) {
-                // NudgeTime for smooth per-frame tracking (port of C# line 407).
-                // Threshold widened from 0.5s to 2.0s to absorb tempo ramps
-                // without triggering hard seeks. SPP jumps and transport
-                // restarts are already caught by is_transport_jump (tick-delta
-                // range check), so this threshold only needs to catch genuine
-                // position errors — not continuous drift from tempo automation.
-                arbiter.nudge_time(ClockAuthority::MidiClock, authority, arb_target, clock_time);
-            } else {
+            // Inside 2 s the follower trims the beat from this tick's sample
+            // (D6); a Song Position Pointer, a restart or a larger error seeks.
+            if is_transport_jump || delta >= Seconds(2.0) {
                 // Large jump via full Seek (port of C# lines 412-419).
                 self.hard_seek_count += 1;
                 self.last_hard_seek_delta_seconds = delta.as_f32();
@@ -988,7 +968,7 @@ mod tests {
         );
     }
 
-    // ── Nudge-vs-seek position sync ─────────────────────────────────────
+    // ── Seek-or-trim position sync ─────────────────────────────────────
 
     struct FakeSyncTarget {
         state: PlaybackState,
@@ -1001,7 +981,7 @@ mod tests {
         fn current_state(&self) -> PlaybackState {
             self.state
         }
-        fn current_time(&self) -> Seconds {
+        fn position_time(&self) -> Seconds {
             self.time
         }
         fn is_playing(&self) -> bool {
@@ -1017,8 +997,6 @@ mod tests {
 
     #[derive(Default)]
     struct FakeArbTarget {
-        external_time_sync: bool,
-        nudge_count: u32,
         seek_count: u32,
     }
 
@@ -1026,26 +1004,17 @@ mod tests {
         fn current_project(&self) -> Option<&Project> {
             None
         }
-        fn external_time_sync(&self) -> bool {
-            self.external_time_sync
-        }
-        fn set_external_time_sync(&mut self, value: bool) {
-            self.external_time_sync = value;
-        }
         fn play(&mut self) {}
         fn pause(&mut self, _clear_recording: bool) {}
-        fn nudge_time(&mut self, _time: Seconds) {
-            self.nudge_count += 1;
-        }
         fn seek(&mut self, _time: Seconds) {
             self.seek_count += 1;
         }
     }
 
-    /// section 11 CLK nudge/seek split = 2.0s: while playing, a small position
-    /// error nudges rather than hard-seeking.
+    /// section 11 CLK seek threshold = 2.0s: while playing, a small position
+    /// error is left to the follower's trim, never seeked.
     #[test]
-    fn clk_position_sync_nudges_when_playing_within_threshold() {
+    fn clk_position_sync_leaves_small_errors_to_the_follower() {
         let bpm = 150.0;
         // beat 25 @ 150 BPM = 10.0s exactly -> matches current_time -> delta 0.
         let sync_target = FakeSyncTarget {
@@ -1067,11 +1036,10 @@ mod tests {
             ClockAuthority::MidiClock,
         );
 
-        assert_eq!(arb_target.nudge_count, 1);
         assert_eq!(arb_target.seek_count, 0);
     }
 
-    /// Delta >= 2.0s forces a full seek instead of a nudge.
+    /// Delta >= 2.0s forces a full seek.
     #[test]
     fn clk_position_sync_hard_seeks_when_playing_beyond_threshold() {
         let bpm = 150.0;
@@ -1085,7 +1053,7 @@ mod tests {
         let mut arbiter = SyncArbiter::new();
         let mut ctrl = MidiClockSyncController::new();
 
-        // beat 25 @ 150 BPM = 10.0s away from current_time(0.0) -> delta > 2.0s.
+        // beat 25 @ 150 BPM = 10.0s away from position_time(0.0) -> delta > 2.0s.
         ctrl.sync_position_to_playback(
             100,
             0,
@@ -1096,13 +1064,12 @@ mod tests {
         );
 
         assert_eq!(arb_target.seek_count, 1);
-        assert_eq!(arb_target.nudge_count, 0);
     }
 
     /// section 11 CLK tick-delta sanity = 0..=384: a transport restart (position
     /// snaps back to 0, e.g. MIDI Start) is a large *negative* tick delta —
     /// outside the sane range — and must force a hard seek even when the
-    /// resulting time delta alone would look nudge-sized.
+    /// resulting time delta alone would stay under the seek threshold.
     #[test]
     fn clk_position_sync_transport_restart_forces_seek_despite_small_delta() {
         let bpm = 150.0;
@@ -1125,16 +1092,12 @@ mod tests {
             &sync_target_anchor,
             ClockAuthority::MidiClock,
         );
-        assert_eq!(arb_target.nudge_count, 1);
-        assert_eq!(
-            arb_target.seek_count, 0,
-            "anchor call should nudge, not seek"
-        );
+        assert_eq!(arb_target.seek_count, 0, "anchor call should not seek");
 
         // Restart: position resets to 0 (absolute_tick 0, delta -600 —
         // outside 0..=384). MANIFOLD's own current_time is still near the
         // pre-restart value (0.02s): a small time delta, but the tick-jump
-        // guard must win over the 2.0s nudge threshold.
+        // guard must win over the 2.0s threshold.
         let sync_target_restart = FakeSyncTarget {
             state: PlaybackState::Playing,
             time: Seconds(0.02),
@@ -1153,10 +1116,6 @@ mod tests {
         assert_eq!(
             arb_target.seek_count, 1,
             "transport restart must hard-seek even though |Δtime| < 2.0s"
-        );
-        assert_eq!(
-            arb_target.nudge_count, 1,
-            "nudge count must not have grown on the restart call"
         );
     }
 

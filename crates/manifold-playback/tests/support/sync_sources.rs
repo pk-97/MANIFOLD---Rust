@@ -14,6 +14,7 @@ use manifold_core::project::Project;
 use manifold_core::types::TempoPointSource;
 use manifold_core::{Beats, Bpm, Seconds};
 use manifold_playback::engine::{PlaybackEngine, TickContext};
+use manifold_playback::external_follow::{ExternalSample, FollowProfile};
 use manifold_playback::frame_grid::FrameGrid;
 use manifold_playback::renderer::StubRenderer;
 
@@ -243,22 +244,33 @@ pub fn clock_arrivals(live: &Live, until: f64, seed: u64, stalls: &[(f64, f64)],
 }
 
 /// MIDI clock, read the way the content thread reads it today: every tick
-/// counts from the Start, and the beat is the last tick's.
+/// counts from the Start, the beat is the last tick's, and the tempo is the
+/// mean of the last 24 tick intervals.
 pub struct ClkReader {
     arrivals: Vec<(f64, ClockMsg)>,
     next: usize,
     ticks: i64,
     running: bool,
+    /// Arrival times of the last 25 ticks, oldest first once full.
+    recent: std::collections::VecDeque<f64>,
     pub link: Option<LinkReader>,
 }
 
 impl ClkReader {
     pub fn new(arrivals: Vec<(f64, ClockMsg)>) -> Self {
-        Self { arrivals, next: 0, ticks: 0, running: false, link: None }
+        Self { arrivals, next: 0, ticks: 0, running: false, recent: std::collections::VecDeque::with_capacity(25), link: None }
     }
     pub fn with_link(mut self, link: LinkReader) -> Self {
         self.link = Some(link);
         self
+    }
+    fn bpm(&self) -> f64 {
+        match (self.recent.front(), self.recent.back()) {
+            (Some(first), Some(last)) if self.recent.len() >= 2 && last > first => {
+                60.0 / ((last - first) / (self.recent.len() - 1) as f64 * 24.0)
+            }
+            _ => 0.0,
+        }
     }
 }
 
@@ -273,17 +285,22 @@ impl Reader for ClkReader {
                 ClockMsg::Start => {
                     self.running = true;
                     self.ticks = 0;
+                    self.recent.clear();
                 }
                 ClockMsg::Tick => {
                     if self.running {
                         self.ticks += 1;
                         fresh = true;
+                        if self.recent.len() == 25 {
+                            self.recent.pop_front();
+                        }
+                        self.recent.push_back(self.arrivals[self.next].0);
                     }
                 }
             }
             self.next += 1;
         }
-        self.running.then_some(Sample { beat: self.ticks as f64 / 24.0, bpm: 0.0, fresh, exact: false })
+        self.running.then_some(Sample { beat: self.ticks as f64 / 24.0, bpm: self.bpm(), fresh, exact: false })
     }
 }
 
@@ -407,12 +424,20 @@ impl Reader for TimecodeReader {
 
 /// The authority as the engine sees it.
 pub fn set_authority(engine: &mut PlaybackEngine, kind: Option<Kind>) {
-    engine.set_external_time_sync(matches!(kind, Some(Kind::Clk | Kind::Timecode)));
+    engine.set_follow_authority(kind.map(|kind| match kind {
+        Kind::Link | Kind::Clk => FollowProfile::FAST,
+        Kind::Osc | Kind::Timecode => FollowProfile::SLOW,
+    }));
 }
 
 /// This tick's sample, before the engine tick, as the content thread hands it over.
 pub fn feed(engine: &mut PlaybackEngine, sample: Sample) {
-    engine.follow_external_beat(Beats(sample.beat));
+    engine.set_external_sample(ExternalSample {
+        beat: sample.beat,
+        bpm: sample.bpm,
+        fresh: sample.fresh,
+        exact: sample.exact,
+    });
 }
 
 /// An engine on a one-point map at `bpm`, with the stub renderers.
@@ -538,6 +563,12 @@ impl Meter {
         } else {
             self.prev = Some((shown, truth, f64::NAN));
         }
+    }
+
+    /// The music itself jumped (a relocation in Live): the next frame's
+    /// increment is not a speed, so it starts a fresh measurement.
+    pub fn music_jumped(&mut self) {
+        self.prev = None;
     }
 
     pub fn report(&self) -> String {
