@@ -883,6 +883,9 @@ impl ParamCardPanel {
         self.relight_btn_id = self.host.node_id_for_key(KEY_RELIGHT);
         self.chevron_btn_id = self.host.node_id_for_key(KEY_CHEVRON);
         self.cog_btn_id = self.host.node_id_for_key(KEY_COG);
+        if let Some(cog) = self.cog_btn_id {
+            tree.set_name(cog, format!("param_card.graph_editor.{}", self.name));
+        }
         self.modifier_remove_btn_id = self.host.node_id_for_key(KEY_MODIFIER_REMOVE);
         self.modifier_objects_btn_id = self.host.node_id_for_key(KEY_MODIFIER_OBJECTS);
         // Naming pass (UI_AUTOMATION_DESIGN.md D8/section 3): the modifier
@@ -1727,6 +1730,7 @@ impl ParamCardPanel {
         self.chevron_btn_id = self.host.node_id_for_key(KEY_CHEVRON);
         self.cog_btn_id = self.host.node_id_for_key(KEY_COG);
         if let Some(cog) = self.cog_btn_id {
+            tree.set_name(cog, format!("param_card.graph_editor.{}", self.name));
             self.add_cog_dots(tree, cog);
         }
 

@@ -227,6 +227,10 @@
       "material-inspector-groups",
       "material-inspector-looks",
       "material-inspector-textures"
+    ],
+    "crates/manifold-app/src/editor_frame.rs": [
+      "work-editor-open",
+      "work-editor-idle"
     ]
   },
   "flows": {
@@ -335,6 +339,13 @@
     "scene-slider-range": "gltfscene",
     "scene-use-this-view": "gltfscene",
     "scene-light-swatch": "gltfscene",
+    "work-editor-open": "paramsteps",
+    "work-editor-idle": "paramsteps",
+    "scene-fluid-authoring": "fluidauthoring",
+    "scene-fluid-template": "fluidauthoring",
+    "scene-physics-controls": "physicsscene",
+    "scene-physics-duplicate-paused": "physicsscene",
+    "scene-imported-physics": "gltfscene",
     "render-mode-solid": "gltfscene",
     "render-mode-points": "gltfscene",
     "render-mode-wireframe": "gltfscene",
@@ -344,31 +355,6 @@
     "rt-dynamic-modifier": "mushroomscene"
   },
   "expected_fail": {
-    "scene-imported-physics": {
-      "scene": "gltfscene",
-      "bug": "BUG-8a7uq",
-      "reason": "red on main"
-    },
-    "scene-fluid-authoring": {
-      "scene": "fluidauthoring",
-      "bug": "BUG-pmbd3.24",
-      "reason": "fluid flows hardcode node id 24; fluid body is now node 31"
-    },
-    "scene-fluid-template": {
-      "scene": "fluidauthoring",
-      "bug": "BUG-pmbd3.24",
-      "reason": "fluid flows hardcode node id 24; fluid body is now node 31"
-    },
-    "scene-physics-controls": {
-      "scene": "physicsscene",
-      "bug": "BUG-kpl2",
-      "reason": "two Reset rows; World no longer shows Gravity Y (BUG-pmbd3.22)"
-    },
-    "scene-physics-duplicate-paused": {
-      "scene": "physicsscene",
-      "bug": "BUG-pmbd3.23",
-      "reason": "duplicate names Ground_2, flow expects Ground 2"
-    }
   },
   "unresolved": {}
 }

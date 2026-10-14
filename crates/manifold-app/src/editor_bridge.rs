@@ -9,7 +9,7 @@ use manifold_editing::commands::effects::BindingMappingEdit;
 
 /// Apply live values after rebuilding: construction seeds rows from the last
 /// structural configuration and would otherwise overwrite the current readouts.
-fn rebuild_editor_inspector(
+pub(crate) fn rebuild_editor_inspector(
     ui: &mut crate::ui_root::UIRoot,
     project: &manifold_core::project::Project,
     active_layer: Option<usize>,
@@ -1563,81 +1563,33 @@ impl Application {
         let logical_h = (surface_h as f64 / scale).max(1.0) as u32;
 
         // ── Editor window layout ──────────────────────────────────────
-        // Left preview sidebar (monitors) + center canvas + right card lane
-        // (param expose) — card on the right, same convention as the main
-        // timeline's inspector (`inspector_width` docks at `screen_width -
-        // inspector_width`). Built BEFORE rendering so the tree's nodes
-        // (panels + buttons + labels) are ready to draw alongside the canvas.
-        // Column geometry comes from the workspace's resizable `Dock` (left
-        // preview column + right card lane). One `rects()` call feeds render,
-        // `editor_canvas_viewport`, and the pointer handlers alike, so the
-        // canvas origin and click hit-testing stay in lockstep no matter how
-        // the user drags the dividers.
-        let editor_area = manifold_ui::Rect::new(0.0, 0.0, logical_w as f32, logical_h as f32);
-        let dock = ws.dock.rects(editor_area);
-        let preview_width = dock.left.width;
-        let card_width = dock.right.width;
-        let canvas_x = dock.canvas.x;
-        let canvas_width = dock.canvas.width;
-        // Canvas height is short of the window by the bottom mini-timeline strip
-        // (via the same `dock` the input pass reads, so hit-testing tracks it).
-        let canvas_height = dock.canvas.height;
-        let card_x = dock.right.x;
-        // When a node is being previewed, the preview pane occupies the top of
-        // the sidebar; the expose/param rows start below it so they don't
-        // overlap. Logical units; the present pass draws the pane to match.
-        let preview_pad = 8.0_f32;
-        let preview_title_h = 18.0_f32;
-        // Monitors take the project aspect ratio (a portrait show → portrait
-        // monitors), fit to the column width and clamped in height so the two
-        // stacked panes always fit the editor window, never spilling onto the
-        // chrome below. Landscape stays full-width (unchanged); portrait is
-        // narrower and centred in the column.
-        let monitor_aspect = self
+        // One `EditorLayout` (the workspace's resizable `Dock` plus the two
+        // stacked monitors) feeds the tree build, the composite and the
+        // monitor blits; the pointer handlers read the same `Dock`, so
+        // hit-testing tracks whatever the user dragged the columns to.
+        let output_aspect = self
             .content_pipeline_output
             .as_ref()
             .map(|p| p.get_dimensions())
             .filter(|(_, h)| *h > 0)
-            .map(|(w, h)| w as f32 / h as f32)
-            .unwrap_or(16.0 / 9.0);
-        let avail_w = (preview_width - 2.0 * preview_pad).max(1.0);
-        // Height budget so 2×(title + body) + 3 pads fits the column vertically.
-        // `canvas_height` (not the full window) — the column stops above the
-        // full-width mini-timeline strip.
-        let max_body_h =
-            ((canvas_height - 3.0 * preview_pad - 2.0 * preview_title_h) * 0.5).max(1.0);
-        let width_bound_h = avail_w / monitor_aspect;
-        let (preview_w, preview_h) = if width_bound_h <= max_body_h {
-            (avail_w, width_bound_h)
-        } else {
-            (max_body_h * monitor_aspect, max_body_h)
-        };
-        let preview_x = (preview_width - preview_w) * 0.5;
-        // The left column is monitors-only now — the inner-node param list moved
-        // under the right card. Two equal stacked 16:9 monitors (the selected
-        // node's output on top, the master compositor output below), each a
-        // titled pane (title row + body). The pair is centred vertically in the
-        // column so it reads as intentional rather than top-pinned with a void
-        // beneath. The node pane's body shows the node's image, or — for a
-        // control / math / envelope node with no image — its value inspector text
-        // in place of the image, or a placeholder when nothing is selected. The
-        // master pane always shows what the live show is putting out.
+            .map(|(w, h)| w as f32 / h as f32);
+        let layout = crate::editor_frame::EditorLayout::compute(&ws.dock, logical_w, logical_h, output_aspect);
+        let monitor_aspect = layout.monitor_aspect;
+        let editor_area = layout.area;
+        let canvas_x = layout.canvas.x;
+        let canvas_width = layout.canvas.width;
+        let canvas_height = layout.canvas.height;
+        let (preview_x, preview_w, preview_h) = (layout.preview_x, layout.preview_w, layout.preview_h);
+        let (node_img_y, master_img_y) = (layout.node_img_y, layout.master_img_y);
+        // The node pane's body shows the selected node's image, or its value
+        // inspector text for a node with no image, or a placeholder; the
+        // master pane always shows the live output.
         let mut node_preview_info = self.content_state.node_preview_info.clone();
         let preview_has_image = node_preview_info
             .as_ref()
             .map(|i| i.has_image)
             .unwrap_or(false);
         let mut show_image = self.last_preview_node.is_some() && preview_has_image;
-        let pane_block_h = 2.0 * (preview_title_h + preview_h) + preview_pad;
-        let mut pane_y = ((canvas_height - pane_block_h) * 0.5).max(preview_pad);
-        // Node-output monitor: title row + project-aspect body.
-        let node_title_y = pane_y;
-        let node_img_y = node_title_y + preview_title_h;
-        pane_y = node_img_y + preview_h + preview_pad;
-        // Master-out monitor: just below the node pane.
-        let master_title_y = pane_y;
-        let master_img_y = master_title_y + preview_title_h;
-        let card_viewport = manifold_ui::Rect::new(card_x, 0.0, card_width, canvas_height);
 
         #[cfg(target_os = "macos")]
         let mut bridge_leases: crate::shared_texture::BridgeLeaseBatch = Vec::new();
@@ -1804,109 +1756,29 @@ impl Application {
             });
         self.graph_editor_panel.set_node_inspector(node_inspector);
 
-        // Right lane = the WHOLE main-window inspector column (master/layer/clip
-        // tabs, every effect card, generator params, macros, chrome). Same panel
-        // type as the main window, this window's own `ws.ui_root.inspector`
-        // instance, driven by the same `Arc<Project>` snapshot — configured in the
-        // main tick in lockstep with `self.ws`'s inspector, so here we only lay it
-        // out into the right lane. Selecting a card retargets the canvas; edits
-        // mirror both windows next snapshot. Replaces the single watched
-        // `editor_card`. See docs/GRAPH_EDITOR_INSPECTOR_UNIFICATION.md (Change 3).
-
-        // Tick parity (`GRAPH_EDITOR_INSPECTOR_UNIFICATION.md` Change 4, D4):
-        // the editor's `UIRoot` never sets `built`, so its own `update()`
-        // early-returns and would otherwise never advance drawer-height
-        // tweens / value-flash / fire meters — the card frame would sit at
-        // a stale height while the rows below build at their true size and
-        // overflow it (BUG-160). `tick_inspector` runs before the rebuild
-        // below so the advanced values are what this frame's `build_...`
-        // reads (mirrors the main window: `self.ws.ui_root.update()` then
-        // its own rebuild-on-dirty poll). `update_fire_meters` mirrored
-        // alongside it, same as the main window's call
-        // (`self.ws.ui_root.update_fire_meters`, above in this function's
-        // caller) — this also retires BUG-157's inspector half.
-        ws.ui_root.tick_inspector();
-        ws.ui_root.update_fire_meters(&self.content_state.fire_meters, dt);
-
-        // Per-frame card VALUE sync for the editor's inspector column — the
-        // same call `push_state` makes for the main window (step 4 of the
-        // main tick), against the same `local_project` + active layer, so a
-        // driver / mapping / envelope moving a knob is seen on this window's
-        // card sliders this frame instead of freezing until the next
-        // structural sync. Drag safety rides on the shared guard: the
-        // snapshot drain already restored the actively-dragged field into
-        // `local_project`, so this writes the user's own value straight back.
+        // Right lane = the whole main-window inspector column, this window's
+        // own `ws.ui_root.inspector` instance, configured in the main tick in
+        // lockstep with the main window's (docs/GRAPH_EDITOR_INSPECTOR_UNIFICATION.md
+        // Change 3). The tree build is shared with the ui-snap script runner
+        // (`editor_frame.rs`, BUG-12iyh (UI runner drives editor window,
+        // perform mode and text input)).
         let editor_active_idx = self
             .active_layer_id
             .as_ref()
             .and_then(|id| self.local_project.timeline.find_layer_index_by_id(id));
-        // Rebuild the editor's UITree from scratch each frame: tree state
-        // is small, so a clear + rebuild is cheaper than dirty-tracking and
-        // means stale rows can never linger after the target changes.
-        rebuild_editor_inspector(
-            &mut ws.ui_root, &self.local_project, editor_active_idx, card_viewport,
-        );
-        let _ = (card_x, card_width);
-
-        // Pinned preview monitors in the left column: a backing panel, the two pane
-        // titles, and — for a non-image node — the value inspector text in the
-        // node pane. Added to the editor tree so they composite into the
-        // offscreen; the monitor images blit onto the drawable below each title
-        // in the present pass.
-        // Shared with the headless editor harness (`editor_frame.rs`,
-        // `UI_HARNESS_UNIFICATION_DESIGN.md` P3) — see that module's doc for
-        // why threading the already-configured `graph_editor_panel` (not the
-        // raw content-state fields feeding it) is the non-entangled cut.
-        self.editor_smart_preview_toggle_id = crate::editor_frame::build_editor_preview_column(
-            &mut ws.ui_root.tree,
+        self.editor_smart_preview_toggle_id = crate::editor_frame::build_editor_tree(
+            &mut ws.ui_root,
             &self.graph_editor_panel,
-            preview_width,
-            canvas_height,
-            preview_x,
-            preview_w,
-            preview_h,
-            node_title_y,
-            node_img_y,
-            master_title_y,
-            show_image,
+            self.graph_canvas.as_mut(),
+            &layout,
+            crate::editor_frame::EditorTreeInputs {
+                project: &self.local_project,
+                active_layer: editor_active_idx,
+                fire_meters: &self.content_state.fire_meters,
+                dt,
+                show_image,
+            },
         );
-
-        // Overlays (node picker + any other top-level overlay open on this
-        // window's `UIRoot`) build into the Overlays arena via the SAME
-        // driver the main window uses — `build_overlays_for_screen`
-        // sets `screen_width`/`screen_height` (this `UIRoot` never gets
-        // `resize()`) then runs `build_overlays()`, which records
-        // `overlay_draw`.
-        // Built last, same as before, so its nodes sit on top of
-        // palette/sidebar/preview column.
-        ws.ui_root.build_overlays_for_screen(logical_w as f32, logical_h as f32);
-        // The editor root is cacheless and never runs the main-window
-        // `UIRoot::update()` path. Push the already-shared metric snapshot
-        // into the freshly-built HUD nodes before this frame is presented.
-        ws.ui_root.tick_editor_perf_hud();
-
-        // The editor rebuilt its whole tree above, clearing every node's flags.
-        // Re-apply HOVERED / PRESSED from the input system's durable widget state
-        // so interaction visuals (button hover/press) persist across the per-frame
-        // rebuild instead of flickering off until the next pointer move.
-        {
-            let ui_root = &mut ws.ui_root;
-            ui_root.input.apply_interaction_flags(&mut ui_root.tree);
-        }
-
-        // A pending jump-to-node centres now that `set_snapshot` has laid the
-        // canvas out for this frame's scope (no-op until the target is present).
-        if let Some(canvas) = self.graph_canvas.as_mut() {
-            let vp = crate::graph_canvas::Rect::new(canvas_x, 0.0, canvas_width, canvas_height);
-            canvas.resolve_pending_focus(vp);
-            // Frame the whole level on editor open / scope change (camera only).
-            canvas.apply_pending_fit(vp);
-            // D17 "wire→port magnetize": needs `vp` (port screen positions),
-            // which the main `canvas.tick(dt_ms)` call site (section 1c above)
-            // doesn't have — ticked here instead, right before the draw
-            // pass that reads it.
-            canvas.tick_wire_magnet(vp);
-        }
 
         // ── Node output previews (BUG-027): register the current atlas front
         // under a fixed handle and hand each visible node its cell UV, so the
@@ -1989,7 +1861,7 @@ impl Application {
             self.graph_canvas.as_ref(),
             crate::graph_canvas::Rect::new(canvas_x, 0.0, canvas_width, canvas_height),
             crate::editor_frame::EditorMiniTimelineInputs {
-                bottom_rect: dock.bottom,
+                bottom_rect: layout.bottom,
                 show_bottom: ws.dock.show_bottom,
                 total_beats: mini_total_beats,
                 beats_per_bar: mini_beats_per_bar,

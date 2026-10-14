@@ -1096,6 +1096,35 @@
         }
     }
 
+    /// An imported model keeps its own collider shape: the body shows
+    /// Collider Detail instead of Shape, also when the model is a group
+    /// with no material block of its own.
+    #[test]
+    fn imported_group_body_shows_collider_detail_not_shape() {
+        use manifold_foundation::scene_surface::ControlGroup;
+        let (mut vm, mut surface) = world_transform_vm();
+        let ObjectRowVm::Known(row) = &mut vm.objects[0] else { unreachable!() };
+        row.is_group = true;
+        row.physics_imported = true;
+        row.physics_enabled = true;
+        row.physics_available = true;
+        set_item_ids(&mut vm, SceneSelection::Object(40), &["41_shape", "41_collider_parts"]);
+        let template = surface.rows[0].clone();
+        let mut shape = scene_row(&template, "41_shape", ControlGroup::Body);
+        shape.spec.name = "Shape".into();
+        let mut detail = scene_row(&template, "41_collider_parts", ControlGroup::Body);
+        detail.spec.name = "Collider Detail".into();
+        surface.rows = vec![shape, detail];
+        let mut panel = ScenePanel::new();
+        panel.open();
+        panel.configure(live(vm));
+        panel.configure_params(Some(surface));
+        panel.selection.insert(LayerId::new("layer-1"), SceneSelection::Object(40));
+        let mut tree = UITree::new();
+        panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 1000.0));
+        assert_eq!(panel.properties_card.rows.iter().map(|row| row.id.as_ref()).collect::<Vec<_>>(), vec!["41_collider_parts"]);
+    }
+
     /// D6: a Hidden control stays out of the Scene tab unless something is
     /// attached to it.
     #[test]

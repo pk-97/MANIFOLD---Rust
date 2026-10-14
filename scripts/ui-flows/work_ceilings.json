@@ -196,6 +196,28 @@
         "ValuePush": 61
       }
     },
+    "work-editor-idle": {
+      "idle_2s": {
+        "ChromeLayout": 360,
+        "EditorTreeBuild": 120,
+        "FrameAlloc": 81368
+      }
+    },
+    "work-editor-open": {
+      "after_open_half_second": {
+        "ChromeLayout": 90,
+        "EditorTreeBuild": 30,
+        "FrameAlloc": 20349
+      },
+      "open_click": {
+        "ChromeLayout": 3,
+        "EditorTreeBuild": 1,
+        "FrameAlloc": 1445,
+        "InspectorSync": 1,
+        "ProjectSync": 1,
+        "TextMeasureMiss": 7
+      }
+    },
     "work-envelope-drag": {
       "drag_1s": {
         "ChromeLayout": 189,
