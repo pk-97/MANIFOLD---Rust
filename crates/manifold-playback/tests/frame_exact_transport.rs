@@ -782,13 +782,24 @@ enum Source {
     Nudge,
 }
 
+/// Where the content thread reads Link on a tick that wakes late.
+#[derive(Clone, Copy, Debug)]
+enum Read {
+    /// At the frame's deadline, whenever the tick wakes (D15).
+    AtDeadline,
+    /// When the tick wakes: lateness becomes source position.
+    AtWake,
+}
+
 /// Held and skipped frames over one simulated minute at 120 BPM, 60 fps.
 /// The source is read as each tick begins: `phase` frames off the grid,
 /// plus uniform jitter of ±`jitter` frames, plus `step` frames from tick
 /// `step_at` on. Every 97th tick misses a deadline and every 1,013th misses
-/// two; the source has moved on by the same frames. A hold or a skip is a
-/// tick whose index moved less or more than the frames it counted.
-fn follow_minute(source: Source, phase: f64, jitter: f64, step: f64, step_at: usize, seed: u64) -> (usize, usize) {
+/// two; the source has moved on by the same frames. Every 5th other tick
+/// wakes `wake.0` frames late, under a frame, which the source shows only if
+/// read at the wake. A hold or a skip is a tick whose index moved less or
+/// more than the frames it counted.
+fn follow_minute(source: Source, phase: f64, jitter: f64, step: f64, step_at: usize, seed: u64, wake: (f64, Read)) -> (usize, usize) {
     let mut engine = engine_with(constant_tempo(120.0, FPS, &[]));
     let step_s = engine.transport_clock().step().0;
     let mut rng = Rng(seed);
@@ -801,7 +812,11 @@ fn follow_minute(source: Source, phase: f64, jitter: f64, step: f64, step_at: us
         let shift = if n >= step_at { step } else { 0.0 };
         // One frame behind the frame this tick shows, as a source read when
         // the tick starts is.
-        let position = (deadline - 1) as f64 + phase + shift + (rng.unit() * 2.0 - 1.0) * jitter;
+        let late = match wake {
+            (lateness, Read::AtWake) if frames == 1 && n % 5 == 0 => lateness,
+            _ => 0.0,
+        };
+        let position = (deadline - 1) as f64 + phase + shift + late + (rng.unit() * 2.0 - 1.0) * jitter;
         let time = Seconds(position * step_s);
         // Before the source acts: a re-place made on the follow call itself
         // counts as much as one made inside the tick.
@@ -829,7 +844,7 @@ fn external_follow_never_holds_or_skips_without_drift() {
         for i in 0..64 {
             let phase = f64::from(i) / 64.0;
             let nearest = phase - phase.round();
-            let (holds, skips) = follow_minute(source, nearest, 0.15, 0.0, usize::MAX, SEED ^ i as u64);
+            let (holds, skips) = follow_minute(source, nearest, 0.15, 0.0, usize::MAX, SEED ^ i as u64, (0.0, Read::AtDeadline));
             assert_eq!((holds, skips), (0, 0), "{source:?} phase {phase}: holds and skips in a minute");
         }
     }
@@ -841,8 +856,57 @@ fn external_follow_never_holds_or_skips_without_drift() {
 fn external_follow_corrects_a_real_frame_of_drift() {
     for source in [Source::LinkBeat, Source::Nudge] {
         for (phase, step, expected) in [(0.0, 1.0, (0, 1)), (0.0, -1.0, (1, 0)), (0.3, 1.0, (0, 1)), (-0.3, -1.0, (1, 0))] {
-            let got = follow_minute(source, phase, 0.15, step, 1_800, SEED);
+            let got = follow_minute(source, phase, 0.15, step, 1_800, SEED, (0.0, Read::AtDeadline));
             assert_eq!(got, expected, "{source:?} phase {phase} step {step}: (holds, skips)");
+        }
+    }
+}
+
+/// Ticks that wake up to 0.9 frame late, at phases across a frame: Link read
+/// at the frame's deadline gives no held or skipped frame in a minute. Read
+/// at the wake, the lateness reads as a source ahead of the grid: a standing
+/// phase plus a late wake crosses ¾ frame, and each crossing is a skip and
+/// then a hold. AbletonOSC nudges are not covered (P3 timestamps them).
+#[test]
+fn link_read_at_the_deadline_ignores_late_wakes() {
+    for lateness in [0.3, 0.6, 0.8, 0.9] {
+        for i in 0..16 {
+            let phase = f64::from(i) / 16.0;
+            let nearest = phase - phase.round();
+            let got = follow_minute(Source::LinkBeat, nearest, 0.15, 0.0, usize::MAX, SEED ^ i as u64, (lateness, Read::AtDeadline));
+            assert_eq!(got, (0, 0), "phase {phase} lateness {lateness}: (holds, skips) in a minute");
+        }
+    }
+    let (holds, skips) = follow_minute(Source::LinkBeat, 0.0, 0.0, 0.0, usize::MAX, SEED, (0.8, Read::AtWake));
+    assert!(holds > 0 && skips > 0, "read at the wake, late ticks flap: {holds} holds, {skips} skips");
+}
+
+/// An external target read before a placement in the same tick (AbletonOSC
+/// drains a nudge and then a seek in one loop) never pulls the transport back
+/// to where the source was: every placement drops the deferred target.
+#[test]
+fn placement_after_an_external_target_wins_the_tick() {
+    type Place = fn(&mut PlaybackEngine);
+    let places: [(&str, Place, i64); 3] = [
+        ("seek while playing (held)", |e| { e.seek_to(Seconds(10.0)); }, 600),
+        ("locate", |e| e.locate(Seconds(10.0)), 601),
+        ("stop then play", |e| { e.stop(); e.play(); }, 1),
+    ];
+    for source in [Source::LinkBeat, Source::Nudge] {
+        for (name, place, expected) in places {
+            let mut engine = engine_with(constant_tempo(120.0, FPS, &[]));
+            engine.play();
+            for _ in 0..60 {
+                tick(&mut engine, 1);
+            }
+            let here = engine.transport_clock().time();
+            match source {
+                Source::LinkBeat => engine.follow_external_beat(Beats(here.0 * 2.0)),
+                Source::Nudge => SyncArbiterTarget::nudge_time(&mut engine, here),
+            }
+            place(&mut engine);
+            tick(&mut engine, 1);
+            assert_eq!(engine.transport_frame(), expected, "{source:?} then {name}");
         }
     }
 }

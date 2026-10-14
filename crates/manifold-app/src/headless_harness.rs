@@ -86,6 +86,7 @@ pub(crate) fn headless_content_thread(project: Project, w: u32, h: u32) -> Conte
         gpu: manifold_node_engine::gpu::context::GpuContext::new_for_tests("app headless harness"),
         frame_count: 0,
         time_since_start: Seconds::ZERO,
+        link_sample_at: std::time::Instant::now(),
         last_data_version: 0,
         midi_input,
         clip_launcher: manifold_playback::clip_launcher::ClipLauncher::new(),

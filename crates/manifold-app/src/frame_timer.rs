@@ -435,6 +435,12 @@ impl FrameTimer {
         }
     }
 
+    /// The deadline of the frame the last content tick consumed, not when it
+    /// woke; external clocks are read there (D15). `None` on the UI timer.
+    pub fn tick_deadline(&self) -> Option<Instant> {
+        self.grid.as_ref().map(FrameGrid::consumed_deadline)
+    }
+
     /// Wall bookkeeping shared by both consume paths: returns the wall
     /// interval and the free-running dt (fixed when `frame_clocked`).
     fn record_tick(&mut self, now: Instant) -> (f64, f64) {

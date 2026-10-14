@@ -37,6 +37,11 @@ impl FrameGrid {
         self.anchor + Duration::from_secs_f64(n.clamp(0, MAX_GRID_FRAMES) as f64 * self.step)
     }
 
+    /// When the frame the last tick consumed is due, whenever the tick woke.
+    pub fn consumed_deadline(&self) -> Instant {
+        self.deadline(self.consumed)
+    }
+
     /// What the timer waits for before the next tick.
     pub fn next_deadline(&self) -> Instant {
         self.deadline(self.consumed.saturating_add(1))
@@ -97,8 +102,10 @@ mod tests {
             let mut grid = FrameGrid::new(fps, anchor);
             for _ in 0..20_000 {
                 // Production wakes at or after the deadline, late by under a frame.
-                let now = grid.next_deadline() + secs(rng.unit() * 0.95 * step);
+                let deadline = grid.next_deadline();
+                let now = deadline + secs(rng.unit() * 0.95 * step);
                 assert_eq!(grid.consume_at(now), 1, "{fps}");
+                assert_eq!(grid.consumed_deadline(), deadline, "{fps}: the frame's deadline, not the wake");
             }
             // A harness waking up to 40% early still counts one frame per tick.
             for _ in 0..20_000 {
@@ -106,6 +113,7 @@ mod tests {
                 let deadline = grid.next_deadline();
                 let now = if offset >= 0.0 { deadline + secs(offset) } else { deadline - secs(-offset) };
                 assert_eq!(grid.consume_at(now), 1, "{fps} early or late wake");
+                assert_eq!(grid.consumed_deadline(), deadline, "{fps}: early or late wake");
             }
         }
     }
@@ -118,6 +126,7 @@ mod tests {
             let mut grid = FrameGrid::new(fps, anchor);
             assert_eq!(grid.consume_at(grid.deadline(1)), 1);
             assert_eq!(grid.consume_at(grid.deadline(4) + secs(0.2 * step)), 3);
+            assert_eq!(grid.consumed_deadline(), grid.deadline(4), "{fps}: the last missed deadline");
             // A 5 s stall, then an hour asleep.
             let stall = grid.deadline(4) + secs(5.0);
             let due = (5.0 * fps as f64).floor() as u32;

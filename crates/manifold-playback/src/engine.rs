@@ -140,9 +140,6 @@ pub struct PlaybackEngine {
     // STOPGAP(frame-exact P3): while set, live ticks don't advance the clock
     // and the external source places it. P3 replaces this with corrections.
     external_time_sync: bool,
-    // STOPGAP(frame-exact P3): the last external position read before this
-    // tick, while the grid advances on its own; applied after the advance.
-    external_follow: Option<Seconds>,
 
     // Project reference
     project: Option<Project>,
@@ -324,7 +321,6 @@ impl PlaybackEngine {
             tick_frames: 0,
             is_recording: false,
             external_time_sync: false,
-            external_follow: None,
             project: None,
             renderers,
             active_clip_renderers: AHashMap::with_capacity(32),
@@ -774,15 +770,16 @@ impl PlaybackEngine {
     /// While the grid advances on its own (playing, not under
     /// `external_time_sync`), the position waits for this tick's advance and
     /// only moves the grid past ¾ frame (`TransportClock::follow_external`),
-    /// so a source with sub-frame jitter never holds or skips a frame. A
-    /// frozen grid or a stopped transport goes to the nearest frame now.
+    /// so a source with sub-frame jitter never holds or skips a frame. Any
+    /// placement before that tick (seek, stop, load, tempo edit) drops the
+    /// target. A frozen grid or a stopped transport goes to the nearest frame now.
     fn follow_external_time(&mut self, t: Seconds) {
         if !t.0.is_finite() {
             return;
         }
         let t = Seconds(t.0.max(0.0));
         if self.is_playing() && !self.external_time_sync && !self.is_export_mode {
-            self.external_follow = Some(t);
+            self.clock.defer_external(t);
             return;
         }
         self.reconcile_clip_control_bindings();
@@ -1070,7 +1067,8 @@ impl PlaybackEngine {
         self.check_preparing_clips();
 
         // ── Phase 4: Branch on playback state ──
-        let external = self.external_follow.take();
+        // A target deferred for this tick applies only to it (STOPGAP(frame-exact P3)).
+        let external = self.clock.take_pending_external();
         let mut result = if self.current_state == PlaybackState::Playing {
             self.tick_playing(ctx, external)
         } else {

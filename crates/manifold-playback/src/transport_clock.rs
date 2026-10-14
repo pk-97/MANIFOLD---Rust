@@ -218,6 +218,10 @@ pub struct TransportClock {
     lock: PhaseLock,
     /// Net frames the index moved on the last advance.
     last_advance: i64,
+    /// STOPGAP(frame-exact P3): an external target waiting for this tick's
+    /// advance (`defer_external`). Any placement drops it, so a stale target
+    /// never undoes a later seek, stop or load.
+    pending_external: Option<Seconds>,
 }
 
 impl TransportClock {
@@ -230,6 +234,7 @@ impl TransportClock {
             hold_next: false,
             lock: PhaseLock::default(),
             last_advance: 0,
+            pending_external: None,
         }
     }
 
@@ -319,16 +324,32 @@ impl TransportClock {
         self.index != before
     }
 
+    /// STOPGAP(frame-exact P3): hold an external target for this tick's
+    /// `follow_external`; the latest wins. A placement before the tick drops
+    /// it. Non-finite is ignored.
+    pub fn defer_external(&mut self, target: Seconds) {
+        if target.0.is_finite() {
+            self.pending_external = Some(target);
+        }
+    }
+
+    /// STOPGAP(frame-exact P3): the deferred target, once.
+    pub fn take_pending_external(&mut self) -> Option<Seconds> {
+        self.pending_external.take()
+    }
+
     /// Stop, initialize: index 0, no hold, lock cleared.
     pub fn reset(&mut self) {
         self.index = 0;
         self.reanchored();
     }
 
+    /// Every placement ends here: it clears what belonged to the old anchor.
     fn reanchored(&mut self) {
         self.hold_next = false;
         self.lock.clear();
         self.last_advance = 0;
+        self.pending_external = None;
     }
 
     /// Once per playing tick: the seek hold, then `frames`, then at most one

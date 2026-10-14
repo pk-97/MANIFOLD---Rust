@@ -2550,6 +2550,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 gpu: GpuContext::new(),
                 frame_count: 0,
                 time_since_start: manifold_core::Seconds::ZERO,
+                link_sample_at: std::time::Instant::now(),
                 last_data_version: 0,
                 midi_input,
                 clip_launcher: manifold_playback::clip_launcher::ClipLauncher::new(),

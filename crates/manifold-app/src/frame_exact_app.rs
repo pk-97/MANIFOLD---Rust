@@ -194,6 +194,8 @@ fn drive(ct: &mut ContentThread, anchor: Instant, events: &[Event], mut on_frame
         wait_for_surface(ct);
         let playing = ct.engine.is_playing();
         ct.tick_frame_at(now, &state_tx);
+        // D15: Link is read at the frame's deadline, not when the tick woke.
+        assert_eq!(Some(ct.link_sample_at), ct.timer.tick_deadline(), "Link sample instant is the tick's deadline");
         while state_rx.try_recv().is_ok() {}
         // D5: graphs get the tick's grid frames as dt, never wall time.
         let grid_dt = f64::from(ct.engine.tick_frames()) * ct.engine.transport_clock().step().0;

@@ -87,6 +87,8 @@ pub struct ContentThread {
     pub gpu: GpuContext,
     pub frame_count: u64,
     pub time_since_start: Seconds,
+    /// The deadline of the frame this tick shows; Link is read there (D15).
+    pub(crate) link_sample_at: std::time::Instant,
     pub last_data_version: u64,
     /// MIDI device input — routes hardware note events to ClipLauncher.
     pub midi_input: MidiInputController,
@@ -582,6 +584,7 @@ impl ContentThread {
     pub(crate) fn tick_frame_at(&mut self, now: std::time::Instant, state_tx: &Sender<ContentState>) {
         let _frame_start = std::time::Instant::now();
         let frames = self.timer.consume_frames_at(now).frames;
+        self.link_sample_at = self.timer.tick_deadline().unwrap_or(now);
         let realtime = self.timer.realtime_since_start();
         self.time_since_start = Seconds(realtime);
 
@@ -1755,7 +1758,7 @@ impl ContentThread {
 
         // Link sync — poll beat/phase/tempo from Ableton Link network.
         let link_has_tempo = if let Some(ref mut link) = self.transport_controller.link_sync {
-            link.update(&mut self.sync_arbiter, &mut self.engine, authority);
+            link.update(&mut self.sync_arbiter, &mut self.engine, authority, self.link_sample_at);
             // Link provides the most accurate BPM when peers are connected.
             if link.is_link_enabled() && link.has_active_peers() {
                 self.engine.set_live_external_tempo(
@@ -1946,8 +1949,8 @@ impl ContentThread {
                     && link.has_active_peers()
                     && !self.link_beat_offset.is_nan()
                 {
-                    // STOPGAP(frame-exact P3): nearest frame to Link's beat;
-                    // P3 observes it at the frame deadline instead.
+                    // STOPGAP(frame-exact P3): Link's beat at this frame's
+                    // deadline (D15), followed past ¾ frame; P3 observes it.
                     self.engine
                         .follow_external_beat(Beats(link.current_beat.0 - self.link_beat_offset));
                 }
