@@ -38,7 +38,11 @@
 //! clicks a card's graph-editor button opens the editor window through
 //! `editor_frame::open_editor_workspace`; every later frame builds its tree
 //! through `editor_frame::build_editor_tree`, the functions the App calls.
-//! `Dump`, `Assert` and `AssertFresh` read that tree too.
+//! `Dump`, `Assert` and `AssertFresh` read that tree too. A `Menu` step for
+//! View > Perform enters perform mode through `perform_mode::frame::enter`;
+//! every later frame is a perform frame through the same `perform_mode::frame`
+//! functions `tick_perform_mode` calls, drawn into the runner's offscreen, and
+//! `AssertFresh` compares what the perform screen shows.
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -312,7 +316,8 @@ fn run_flow(
     let mut ok = true;
 
     for (index, action) in actions.iter().enumerate() {
-        if reads_composite(action) {
+        // The main window is not drawn in perform mode.
+        if reads_composite(action) && !runner.perform.active {
             render.flush_composite(&mut ui);
         }
         let outcome = runner.step(&mut ui, &mut data, index, action, &out_dir, &mut render);
@@ -514,6 +519,8 @@ struct Runner {
     viewport: Option<(LayerId, manifold_node_engine::scene::viewport_camera::ViewportCamera)>,
     /// The graph editor window, once a flow opens it.
     editor: Option<RunnerEditor>,
+    /// Perform mode, as the App holds it.
+    perform: crate::perform_mode::PerformModeState,
 }
 
 /// The graph editor window as the App holds it (`graph_editor`,
@@ -585,6 +592,7 @@ impl Runner {
             work: WorkWindow::default(),
             viewport: None,
             editor: None,
+            perform: crate::perform_mode::PerformModeState::new(),
         }
     }
 
@@ -649,6 +657,22 @@ impl Runner {
         render: &mut RenderState,
     ) -> StepResult {
         let action_desc = format!("{action:?}");
+        // In perform mode the App routes window input to the exit button
+        // (`perform_mode/input.rs`), still on `Application`; fail rather than
+        // drive the frozen main window.
+        if self.perform.active
+            && matches!(
+                action,
+                AutomationAction::Pointer { .. }
+                    | AutomationAction::Key { .. }
+                    | AutomationAction::ScrollTo { .. }
+                    | AutomationAction::TrackWheel { .. }
+                    | AutomationAction::ResizeDrag { .. }
+                    | AutomationAction::Modifiers { .. }
+            )
+        {
+            return self.fail(index, action_desc, ui, out_dir, "perform-mode window input is not reached headless".into());
+        }
         let outcome = match action {
             AutomationAction::Step { frames } => {
                 // Each stepped frame ticks the engine, then runs one live
@@ -685,7 +709,8 @@ impl Runner {
                     if !tile {
                         continue;
                     }
-                    if render.gate.step_frame() {
+                    // A perform frame composites itself.
+                    if !self.perform.active && render.gate.step_frame() {
                         render.composite_now(ui);
                     }
                     self.filmstrip.push(render.readback_linear());
@@ -906,6 +931,14 @@ impl Runner {
                 }
                 None => self.fail(index, action_desc, ui, out_dir, "ViewportOrbit needs the Scene tab open on a scene layer".into()),
             },
+            // The App's menu drain turns View > Perform into this action.
+            AutomationAction::Menu { item: manifold_ui::automation::MenuItem::Perform } => {
+                let action = PanelAction::Project(manifold_ui::panels::ProjectAction::EnterPerformMode);
+                self.apply_panel_actions(ui, data, &[action]);
+                self.live_frame(ui, data, render, false, true);
+                let detail = if self.perform.active { "perform mode entered" } else { "perform mode not entered" };
+                StepResult { index, action: action_desc, status: if self.perform.active { "ok" } else { "fail" }, detail: detail.into(), artifact: None }
+            }
             AutomationAction::ResetWork => {
                 // Settle whatever setup left pending, so the window counts
                 // only the gesture that follows.
@@ -982,6 +1015,13 @@ impl Runner {
         scrolled_in_place: bool,
         settle_tweens: bool,
     ) {
+        // Perform mode replaces the whole UI frame, as `tick_and_render`
+        // hands off to `tick_perform_mode`: the main and editor trees stay
+        // frozen and nothing projects.
+        if self.perform.active {
+            self.perform_frame(ui, data, render);
+            return;
+        }
         // The snapshot echo of what the last frame sent, folded as the App
         // folds an accepted snapshot.
         self.edits.stamps.fold_snapshot(&self.content_stamps);
@@ -1051,10 +1091,40 @@ impl Runner {
         self.echo_pending |= self.absorb_commands(ui, data);
     }
 
+    /// `tick_perform_mode` without a window: the same intake, HUD derivation
+    /// and composite, at the fixture's logical size into the runner's
+    /// offscreen. No output window to poll, no preview bridge, no drawable.
+    fn perform_frame(&mut self, ui: &mut UIRoot, data: &SceneData, render: &mut RenderState) {
+        // A perform frame has no projections for a fresh reference to force.
+        self.fresh_reference = false;
+        let layout = crate::perform_mode::frame::begin_perform_frame(
+            &mut self.perform,
+            ui,
+            &data.content,
+            super::LOGICAL_W as u32,
+            super::LOGICAL_H as u32,
+        );
+        let session = ui.ableton_session.clone();
+        let hud = crate::perform_mode::frame::PerformHud::derive(&data.content, session.as_deref(), &data.project);
+        let mut encoder = render.device.create_encoder("Perform Frame");
+        crate::perform_mode::frame::composite_perform_frame(
+            render.device,
+            &mut encoder,
+            Some(&mut render.ui_renderer),
+            ui.tree.measurer(),
+            &layout,
+            &hud,
+            self.perform.exit_button_hover,
+            &render.composite.offscreen,
+            f64::from(super::SCALE),
+        );
+        encoder.commit();
+    }
+
     /// What a frame shows that the tree dump cannot see: the inputs of the
     /// immediate passes (playhead, insert cursor, selection band, markers,
-    /// the clip draw list, automation lanes, overview strip) and the pending
-    /// toast. The perform HUD is absent here: the runner has no perform mode.
+    /// the clip draw list, automation lanes, overview strip), the pending
+    /// toast and, in perform mode, everything the perform screen shows.
     fn immediate_inputs(&self, ui: &UIRoot, data: &SceneData) -> Vec<String> {
         let insert_layer = data
             .selection
@@ -1073,6 +1143,15 @@ impl Runner {
         ];
         out.extend(clip_rects.iter().map(|c| format!("clip {c:?}")));
         out.extend(automation_lanes.iter().map(|l| format!("lane {l:?}")));
+        if self.perform.active {
+            let session = ui.ableton_session.clone();
+            let hud = crate::perform_mode::frame::PerformHud::derive(&data.content, session.as_deref(), &data.project);
+            out.push(format!("perform {hud:?}"));
+            out.push(format!(
+                "perform exit {:?} hover {}",
+                self.perform.exit_button_rect, self.perform.exit_button_hover
+            ));
+        }
         out
     }
 
@@ -1132,7 +1211,11 @@ impl Runner {
             )
             .collect();
         if !tree_differs && immediate_diff.is_empty() {
-            let detail = if editor_before.is_some() { "fresh (main and editor windows)" } else { "fresh" };
+            let detail = match (self.perform.active, editor_before.is_some()) {
+                (true, _) => "fresh (perform screen, frozen main tree)",
+                (false, true) => "fresh (main and editor windows)",
+                (false, false) => "fresh",
+            };
             return StepResult { index, action: action_desc, status: "ok", detail: detail.into(), artifact: None };
         }
         let path = out_dir.join(format!("{index:02}.stale.txt"));
@@ -1918,6 +2001,16 @@ impl Runner {
                 println!("ui-snap --script: {action:?} -> graph editor {}", if opened { "opened" } else { "already open" });
                 continue;
             }
+            // The live action loop defers this to `handle_perform_mode_pending`,
+            // which enters once an output window exists. The runner has no
+            // output window to open, so it enters at once.
+            if let PanelAction::Project(manifold_ui::panels::ProjectAction::EnterPerformMode) = action {
+                if !self.perform.active {
+                    let mut text_input = crate::text_input::TextInputState::new();
+                    crate::perform_mode::frame::enter(&mut self.perform, ui, &mut text_input, None);
+                }
+                continue;
+            }
             // The live app resolves this in `app_render.rs` from its graph
             // editor's viewport; here the runner's viewport stands in.
             if let PanelAction::Root(manifold_ui::RootAction::SceneSetupCopyViewportCamera(layer)) = action {
@@ -2237,6 +2330,20 @@ impl Runner {
     /// frame or the P0 differential shelf tool. No thumbnails here (this
     /// driver never opted into `--thumbs`, matching the old call's `false`).
     fn write_png(&mut self, ui: &mut UIRoot, data: &mut SceneData, render: &mut RenderState, path: &std::path::Path) {
+        // The perform screen replaces the main window's passes, as in the
+        // App; its last frame is already in the offscreen.
+        if !self.perform.active {
+            self.paint_main_passes(ui, data, render);
+        }
+        let (tex_w, tex_h) = (render.tex_w, render.tex_h);
+        let mut linear = render.readback_linear();
+        for pt in self.last_gesture_points.drain(..) {
+            stamp_crosshair(&mut linear, tex_w, tex_h, pt);
+        }
+        super::render::save_ui_png(&linear, tex_w, tex_h, path);
+    }
+
+    fn paint_main_passes(&mut self, ui: &mut UIRoot, data: &mut SceneData, render: &mut RenderState) {
         let (tex_w, tex_h) = (render.tex_w, render.tex_h);
         let mut clip_rects = Vec::new();
         ui.viewport.visible_clip_rects(&mut clip_rects);
@@ -2297,11 +2404,6 @@ impl Runner {
                 gpu_sink: None,
             },
         );
-        let mut linear = render.readback_linear();
-        for pt in self.last_gesture_points.drain(..) {
-            stamp_crosshair(&mut linear, tex_w, tex_h, pt);
-        }
-        super::render::save_ui_png(&linear, tex_w, tex_h, path);
     }
 }
 

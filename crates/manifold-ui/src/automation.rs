@@ -132,6 +132,11 @@ pub enum AutomationAction {
         dx: f32,
         dy: f32,
     },
+    /// Pick a native menu-bar item, which sits outside the widget tree. The
+    /// runner dispatches the panel action the App's menu drain makes of it.
+    Menu {
+        item: MenuItem,
+    },
     /// Start a work-count window (UI_INVALIDATION_DESIGN.md D10).
     ResetWork,
     /// Compare the work counted since the last `ResetWork` against the
@@ -146,6 +151,13 @@ pub enum AutomationAction {
     /// fail on any difference. Generations, node slots and input-state flags
     /// are ignored.
     AssertFresh,
+}
+
+/// A native menu-bar item a flow can pick. Items join as flows need them.
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
+pub enum MenuItem {
+    /// View > Perform: enter performance mode.
+    Perform,
 }
 
 /// A raw resize handle `window_input` drags outside the widget tree.

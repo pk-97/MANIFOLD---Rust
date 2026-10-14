@@ -373,6 +373,12 @@
         "ValuePush": 4
       }
     },
+    "work-perform-idle": {
+      "idle_2s": {
+        "FrameAlloc": 19994,
+        "PerformHudBuild": 120
+      }
+    },
     "work-playback": {
       "play_2s": {
         "ChromeLayout": 360,
