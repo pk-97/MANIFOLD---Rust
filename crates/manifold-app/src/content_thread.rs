@@ -1861,10 +1861,9 @@ impl ContentThread {
             if auto != previous || self.engine.follows_external() != profile.is_some() {
                 self.engine.set_follow_authority(profile);
             }
-            // Link becoming the authority while MANIFOLD plays: the exact
-            // offset, so the beat does not move (D15).
+            // Link becoming the authority while MANIFOLD plays (D15).
             if auto != previous && auto == ClockAuthority::Link && self.engine.is_playing() {
-                self.link_offset.request(OffsetTake::Exact);
+                self.link_offset.link_became_authority();
             }
             auto
         };

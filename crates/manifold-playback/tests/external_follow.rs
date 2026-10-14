@@ -18,6 +18,7 @@ use manifold_core::{Beats, Bpm, Seconds};
 use manifold_playback::external_follow::{ExternalFollower, ExternalSample, FollowEvent, FollowProfile};
 use manifold_playback::engine::PlaybackEngine;
 use manifold_playback::renderer::{ClipRenderer, StubRenderer};
+use manifold_playback::external_sync::{LinkOffset, OffsetTake};
 use manifold_playback::sync_calibration::CalibratedSource;
 use support::sync_sources::*;
 
@@ -648,4 +649,86 @@ fn clip_counts(engine: &PlaybackEngine, ids: &[String; 2]) -> [(usize, usize); 2
 
 fn stub_video(engine: &PlaybackEngine) -> &StubRenderer {
     engine.renderers()[1].as_any().downcast_ref::<StubRenderer>().expect("renderer 1 is the video stub")
+}
+
+/// Link through the content thread's offset (D15): MANIFOLD's beat is
+/// Link's beat less the offset, once one is taken.
+struct OffsetLink<'a> {
+    link: &'a LinkReader,
+    offset: &'a LinkOffset,
+}
+
+impl Reader for OffsetLink<'_> {
+    fn kind(&self) -> Kind {
+        Kind::Link
+    }
+    fn read(&mut self, r: f64, _now: f64) -> Option<Sample> {
+        let beat = self.offset.beat(self.link.beat_at(r))?;
+        Some(Sample { beat, bpm: self.link.tempo_at(r), fresh: true, exact: true })
+    }
+}
+
+/// Test 18: Link drops out for 1 s and returns: the offset taken at the start
+/// is kept, so MANIFOLD's bar returns to Live's (D15). MIDI clock with Link's
+/// tempo latched: a Link dropout moves neither position nor bars, and the
+/// tempo stays CLK's own estimate, never the map's (D21).
+#[test]
+fn link_dropout_keeps_bars_and_tempo() {
+    // Map 120, Link 128. MANIFOLD parked mid-bar at beat 2; Link starts the play.
+    let live = Live::new(Tempo::constant(128.0));
+    let link = LinkReader::new(live.clone(), 181);
+    let mut offset = LinkOffset::new();
+    let mut driver = Driver::new(engine_with_map(120.0, None), 18);
+    driver.engine.seek_to(Seconds(1.0));
+    set_authority(&mut driver.engine, Some(Kind::Link));
+    driver.engine.play();
+    offset.request(OffsetTake::Quantum);
+    let (gap_from, gap_to) = (10.0, 11.0);
+    let (mut in_gap, mut worst_ms) = (false, 0.0f64);
+    while driver.wall() < 20.0 {
+        // The next frame's deadline, as the content thread reads it.
+        let r = driver.wall() + STEP;
+        let gap = r >= gap_from && r < gap_to;
+        if gap != in_gap {
+            in_gap = gap;
+            if gap {
+                set_authority(&mut driver.engine, None);
+            } else {
+                set_authority(&mut driver.engine, Some(Kind::Link));
+                offset.link_became_authority();
+            }
+        }
+        if !gap && offset.is_due() {
+            offset.take(link.beat_at(r), driver.engine.upcoming_frame_beat(1).0, 4.0);
+        }
+        let shown = if gap { driver.step(None, 0) } else { driver.step(Some(&mut OffsetLink { link: &link, offset: &offset }), 0) };
+        if shown.deadline > gap_to + 3.0 {
+            let o = offset.get().expect("an offset");
+            worst_ms = worst_ms.max(((live.beat(shown.deadline) - o - shown.beat) * 60.0 / 128.0).abs() * 1000.0);
+        }
+    }
+    let o = offset.get().expect("an offset");
+    assert!((o / 4.0 - (o / 4.0).round()).abs() < 1e-9, "the Link start lines up the bar: offset {o}");
+    assert!(worst_ms <= 1.0, "after a 1 s Link gap MANIFOLD's bar is {worst_ms:.1} ms off Live's");
+
+    // MIDI clock carries the position with Link's tempo latched; Link's
+    // session is gone for one second.
+    let live = Live::new(Tempo::constant(128.0));
+    let mut clk = ClkReader::new(clock_arrivals(&live, 30.0, 182, &[], 0.0))
+        .with_link(LinkReader::new(live.clone(), 183))
+        .with_link_gap(15.0, 16.0);
+    let mut driver = Driver::new(engine_with_map(120.0, None), 19);
+    set_authority(&mut driver.engine, Some(Kind::Clk));
+    driver.engine.play();
+    let (mut meter, mut worst_tempo) = (Meter::default(), 0.0f64);
+    while driver.wall() < 30.0 {
+        let shown = driver.step(Some(&mut clk), 0);
+        meter.observe(shown, live.beat(shown.deadline), 128.0, shown.deadline >= WARM);
+        if (14.0..18.0).contains(&shown.deadline) {
+            let bpm = f64::from(driver.engine.follower().base_bpm().0);
+            worst_tempo = worst_tempo.max((bpm / 128.0 - 1.0).abs());
+        }
+    }
+    assert_bounds("CLK through a Link dropout", &meter, 1.5, 0.003, 0.0008);
+    assert!(worst_tempo <= 0.003, "the tempo left CLK's 128 by {:.2}% around the Link gap", worst_tempo * 100.0);
 }

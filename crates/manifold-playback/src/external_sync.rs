@@ -55,6 +55,16 @@ impl LinkOffset {
         self.due = Some(take);
     }
 
+    /// Link became the authority while MANIFOLD plays. With no offset yet,
+    /// the exact one, so the beat does not move. Returning after a dropout,
+    /// the offset is kept: the follower trims or seeks the gap's drift back,
+    /// so MANIFOLD's bar returns to Link's (D15).
+    pub fn link_became_authority(&mut self) {
+        if self.offset.is_none() {
+            self.request(OffsetTake::Exact);
+        }
+    }
+
     pub fn is_due(&self) -> bool {
         self.due.is_some()
     }

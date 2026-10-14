@@ -104,8 +104,12 @@ fn link_start_rounds_the_offset_to_the_quantum() {
     offset.request(OffsetTake::Exact);
     offset.take(41.0, 12.5, 4.0);
     assert_eq!(offset.beat(41.0), Some(12.5), "MANIFOLD's own start keeps its beat");
+    offset.link_became_authority();
+    assert!(!offset.is_due(), "Link returning after a dropout keeps the offset (D15)");
     offset.clear();
     assert_eq!((offset.get(), offset.is_due()), (None, false));
+    offset.link_became_authority();
+    assert!(offset.is_due(), "Link becoming the authority with no offset takes the exact one");
 }
 
 #[test]
@@ -114,6 +118,7 @@ fn live_tempo_follows_the_authority_and_the_guard() {
     assert_eq!(live_tempo(ClockAuthority::Link, Some(128.0), None, false), Some((128.0, TempoPointSource::Link)));
     assert_eq!(live_tempo(ClockAuthority::MidiClock, Some(128.0), clk, false), clk);
     assert_eq!(live_tempo(ClockAuthority::MidiClock, Some(128.0), clk, true), Some((128.0, TempoPointSource::Link)));
+    assert_eq!(live_tempo(ClockAuthority::MidiClock, None, clk, true), clk, "Link gone: CLK's own tempo, never the map's");
     assert_eq!(live_tempo(ClockAuthority::Osc, None, None, false), None, "timecode reports the map's");
     assert_eq!(live_tempo(ClockAuthority::Internal, Some(128.0), clk, true), None);
 }

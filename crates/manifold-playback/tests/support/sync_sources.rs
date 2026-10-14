@@ -290,16 +290,26 @@ pub struct ClkReader {
     next: usize,
     tracker: ClockTracker,
     pub link: Option<LinkReader>,
+    /// Wall seconds (from, to) Link's session is gone.
+    link_gap: Option<(f64, f64)>,
     guard: LinkTempoGuard,
 }
 
 impl ClkReader {
     pub fn new(arrivals: Vec<(f64, ClockMsg)>) -> Self {
-        Self { arrivals, next: 0, tracker: ClockTracker::new(), link: None, guard: LinkTempoGuard::new() }
+        Self { arrivals, next: 0, tracker: ClockTracker::new(), link: None, link_gap: None, guard: LinkTempoGuard::new() }
     }
     pub fn with_link(mut self, link: LinkReader) -> Self {
         self.link = Some(link);
         self
+    }
+    pub fn with_link_gap(mut self, from: f64, to: f64) -> Self {
+        self.link_gap = Some((from, to));
+        self
+    }
+    /// Link as the content thread sees it at `t`: absent inside the gap.
+    fn link_live(&self, t: f64) -> Option<&LinkReader> {
+        self.link.as_ref().filter(|_| !self.link_gap.is_some_and(|(a, b)| t >= a && t < b))
     }
 }
 
@@ -308,7 +318,7 @@ impl Reader for ClkReader {
         Kind::Clk
     }
     fn link_at(&self, r: f64) -> Option<(f64, f64)> {
-        self.link.as_ref().map(|l| (l.beat_at(r), l.tempo_at(r)))
+        self.link_live(r).map(|l| (l.beat_at(r), l.tempo_at(r)))
     }
     fn read(&mut self, r: f64, now: f64) -> Option<Sample> {
         while self.next < self.arrivals.len() && self.arrivals[self.next].0 <= now {
@@ -319,16 +329,20 @@ impl Reader for ClkReader {
                 ClockMsg::Position(p) => ClockKind::SongPosition(p),
                 ClockMsg::Tick => ClockKind::Tick,
             };
-            let latched = self.link.as_ref().filter(|_| self.guard.latched()).map(|l| l.tempo_at(at));
+            if self.link.is_some() && self.link_live(at).is_none() {
+                // No Link session: the guard lets go at once (D21).
+                self.guard.release();
+            }
+            let latched = self.link_live(at).filter(|_| self.guard.latched()).map(|l| l.tempo_at(at));
             self.tracker.set_link_tempo(latched);
             // The map every proof plays over is at 120 BPM.
             self.tracker.event(kind, at, 120.0);
-            if let (Some(link), Some((k, t))) = (&self.link, self.tracker.last_landed()) {
+            if let (Some(link), Some((k, t))) = (self.link_live(at), self.tracker.last_landed()) {
                 self.guard.observe_clock(at, t, k, link.beat_at(t));
             }
             self.next += 1;
         }
-        let latched = self.link.as_ref().filter(|_| self.guard.latched()).map(|l| l.tempo_at(r));
+        let latched = self.link_live(r).filter(|_| self.guard.latched()).map(|l| l.tempo_at(r));
         self.tracker.sample_at(r).map(|s| Sample { beat: s.beat, bpm: latched.unwrap_or(s.bpm), fresh: true, exact: false })
     }
 }
