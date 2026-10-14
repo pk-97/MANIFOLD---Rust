@@ -16,5 +16,6 @@
       "selector": { "Surface": { "surface": "timeline_clips", "kind": "clip", "label": "Plasma 1" } },
       "check": { "RectWithin": { "x": -3126.4, "y": 618.08, "width": 6029.38, "height": 188.0 } }
     }
-  }
+  },
+  "AssertFresh"
 ]

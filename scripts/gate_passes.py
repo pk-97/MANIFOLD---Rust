@@ -200,7 +200,7 @@ def host_inputs(repo, cargo=False):
     # Agent session/IPC identities do not configure Rust or libtest. Keeping
     # them would prevent sharing between a worker and its landing lead.
     # Python tooling can inspect those variables, so it retains them.
-    agent_prefixes = ('CLAUDE_', 'CODEX_', 'ANTHROPIC_', 'OPENAI_') if cargo else ()
+    agent_prefixes = ('CLAUDE_', 'ANTHROPIC_') if cargo else ()
     if cargo:
         ignored.update({'CLAUDECODE', 'CLAUDE_PID', 'AI_AGENT', 'BAGGAGE'})
     env = {k: v for k, v in os.environ.items()

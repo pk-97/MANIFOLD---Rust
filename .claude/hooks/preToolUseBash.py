@@ -20,8 +20,9 @@
 1.  ALLOW pre-approved commands outright, including compounds the static
     `permissions.allow` matcher cannot express — pipes, `;` chains, for/while
     loops, `$(...)`. That matcher only matches a command that STARTS with an
-    allowlisted token, so `rg foo | head` or `git add . && git commit -m ...`
-    reads as an unmatched compound and prompts. This hook parses the whole
+    allowlisted token, so `rg foo | head` or
+    `git add -- <paths> && git commit -m ... -- <paths>` reads as an unmatched
+    compound and prompts. This hook parses the whole
     command and allows only if EVERY command-position is pre-approved: a known
     read-only tool, a normal git/cargo workflow write (CLAUDE.md durably
     authorizes committing and pushing clean work), or a non-git segment that
@@ -113,19 +114,6 @@ GIT_WRITE_SUB = {
 # cargo subcommands that only read metadata (no compile / run / fetch).
 CARGO_READ_SUB = {
     "metadata", "tree", "verify-project", "locate-project", "pkgid",
-}
-
-# cc-fleet subcommands safe to auto-allow: read-only inspection plus the
-# durably-authorized K3 lane workflow (spawning/polling headless subagents —
-# Peter's 2026-07-18 routing directive, approved in-session: K3-low via the
-# `kimi` provider is the default lane agent, and prompt friction
-# defeats the policy; spend is bounded by the Kimi membership plan).
-# Provider mutation (add/edit/remove/import/default), key material (keyget),
-# interactive/tmux modes (run/spawn/teardown/hide/show), and
-# uninstall/update deliberately still prompt.
-CC_FLEET_SUB = {
-    "list", "models", "doctor", "ps", "subagent", "subagent-status",
-    "subagent-gc", "refresh", "help", "completion",
 }
 
 # Shell keywords. `for`/`select`/`case`/`in`/`function` introduce a data
@@ -454,10 +442,6 @@ def segment_is_allowed(seg: str) -> bool:
         sub = toks[i] if i < len(toks) else ""
         return sub in CARGO_READ_SUB or matches_settings_allow(toks)
 
-    if head in ("cc-fleet", "ccf"):
-        sub = next((t for t in toks[1:] if not t.startswith("-")), "")
-        return sub in CC_FLEET_SUB
-
     if head == "sed":
         # `-i` / `--in-place` edits the file. Reject any short-flag cluster
         # containing `i`, or `--in-place`. (The script's `w` command is the
@@ -665,19 +649,15 @@ def _shlex_segments(cmd):
 
 
 # ---------------------------------------------------------------------------
-# Landing-protocol guard (.claude/GIT_TREE_DISCIPLINE.md §1b / §2)
+# Landing-protocol guard (.claude/GIT_TREE_DISCIPLINE.md section 2)
 #
-# The ff-only "main = last-known-good pointer" model (old §2) assumed one
-# integrator lands at a time. Under concurrent orchestrator sessions a clean
-# fast-forward was never actually possible, so every finishing session
-# improvised its own landing — producing twin commits (same content, two
-# lineages, different SHAs; see the incident log in GIT_TREE_DISCIPLINE.md
-# and the `git-landing-protocol` memory). Main is now a merge-based trunk:
-# land via fetch -> merge origin/main -> gate -> merge --no-ff -> push. This
-# guard (a) unconditionally asks before a force-rewrite of main, since that's
-# simply wrong now, not just concurrency-unsafe, and (b) attaches a
-# deterministic reminder of the protocol to an otherwise-normal push/merge
-# that lands on main. Scoped to the main checkout only, same as §1.
+# Main is a merge-based trunk; code lands only through scripts/land_branch.py
+# (fetch, merge origin/main in, gate, no-ff merge, push, bead close). A
+# force-rewrite of main can drop commits another session landed, so this
+# guard (a) unconditionally asks before one, and (b) attaches a reminder to an
+# otherwise-normal push or merge that lands on main. Merging main or
+# origin/main itself ships nothing and gets no reminder. Scoped to the main
+# checkout; worktrees are never main.
 # ---------------------------------------------------------------------------
 
 _MAIN_REF_TOKENS = ("main", "refs/heads/main")
@@ -740,18 +720,17 @@ def _branch_force_targets_main(rest_toks):
 
 
 LANDING_PROTOCOL_REMINDER = (
-    "Landing on main. Protocol (.claude/GIT_TREE_DISCIPLINE.md §2): fetch, "
-    "merge current origin/main into your branch, run `scripts/landing_gate.py` "
-    "(touched-crate clippy + nextest, deny bans, UI flow gate, docs/design "
-    "status, GPU proofs when GPU paths touched), `git merge --no-ff` into "
-    "main, push — if rejected because someone landed first, repeat. The "
-    "workspace sweep is NOT a landing item; it runs nightly via "
-    "scripts/trunk_health.py. Twin-killers: never cherry-pick/re-commit "
-    "content that already exists as commits on a live branch (merge it "
-    "instead, so SHAs stay shared); never delete a branch until `git "
-    "merge-base --is-ancestor <tip> origin/main` confirms its commits are on "
-    "main."
+    "Landing on main. Code lands through `scripts/land_branch.py <branch> "
+    "--worktree <path> --message '...'` (.claude/GIT_TREE_DISCIPLINE.md "
+    "section 2): it merges origin/main in, gates, merges --no-ff, pushes and "
+    "closes beads, and retries when main moved. Only .beads/, docs/ and "
+    ".claude/hooks/ changes go to main directly. Never cherry-pick or "
+    "re-commit content that already exists as commits on a live branch "
+    "(merge it, so SHAs stay shared); never delete a branch until `git "
+    "merge-base --is-ancestor <tip> origin/main` passes."
 )
+
+_TRUNK_SOURCES = {"main", "origin/main", "refs/heads/main", "refs/remotes/origin/main"}
 
 
 def landing_protocol_guard(cmd, cwd):
@@ -775,10 +754,10 @@ def landing_protocol_guard(cmd, cwd):
             if sub == "branch" and _branch_force_targets_main(rest):
                 return (
                     "`git branch -f main ...` force-moves the main pointer. "
-                    "Main is a merge-based trunk now, not a fast-forward "
-                    "target (.claude/GIT_TREE_DISCIPLINE.md §2) — this "
+                    "Main is a merge-based trunk "
+                    "(.claude/GIT_TREE_DISCIPLINE.md section 2) — this "
                     "can drop commits that aren't ancestors of <tip>. Land "
-                    "via the merge protocol instead.",
+                    "with scripts/land_branch.py instead.",
                     None,
                 )
 
@@ -786,16 +765,18 @@ def landing_protocol_guard(cmd, cwd):
                 if _push_has_force_flag(rest) and _push_targets_main(rest, target_dir):
                     return (
                         "Force-push targeting main. Main is a merge-based "
-                        "trunk now (.claude/GIT_TREE_DISCIPLINE.md §2) — "
+                        "trunk (.claude/GIT_TREE_DISCIPLINE.md section 2) — "
                         "a force-push can drop commits another session "
-                        "landed. Use the merge protocol (fetch, merge "
-                        "origin/main, gate, merge --no-ff, push) instead.",
+                        "landed. Land with scripts/land_branch.py instead.",
                         None,
                     )
                 if _push_targets_main(rest, target_dir):
                     return None, LANDING_PROTOCOL_REMINDER
 
             if sub == "merge" and _current_branch(target_dir) == "main":
+                sources = _positionals(rest, _MERGE_VALUE_FLAGS)
+                if sources and all(s in _TRUNK_SOURCES for s in sources):
+                    continue  # syncing main with itself ships nothing
                 return None, LANDING_PROTOCOL_REMINDER
 
         return None, None
@@ -1055,9 +1036,9 @@ def detect_unverified_compound_landing_merge(cmd, cwd):
                         "branch-mutating step (checkout/switch/merge) with no "
                         "`git branch --show-current` in between — HEAD can change "
                         "between a shared checkout's compound steps "
-                        "(GIT_TREE_DISCIPLINE.md §3b). Run the landing "
-                        "`git merge --no-ff` as its OWN command, re-verifying "
-                        "`git branch --show-current` immediately before it.")
+                        "(GIT_TREE_DISCIPLINE.md section 3b). Land with "
+                        "scripts/land_branch.py; a manual landing merge runs as "
+                        "its OWN command, right after `git branch --show-current`.")
             if _is_branch_verify_sub(sub, rest):
                 unverified_mutation = False
             elif _is_branch_switch_sub(sub, rest):

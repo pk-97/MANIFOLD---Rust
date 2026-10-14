@@ -145,13 +145,16 @@ impl TempoMap {
         Arc::make_mut(&mut self.points)
             .retain(|p| (p.beat - beat).abs() > Beats::from_f32(epsilon));
 
-        Arc::make_mut(&mut self.points).push(TempoPoint {
-            beat,
-            bpm,
-            source,
-            recorded_at_seconds,
-        });
-        self.is_sorted = false;
+        // Kept sorted at write time, so readers can take a shared borrow (D13).
+        let points = Arc::make_mut(&mut self.points);
+        let point = TempoPoint { beat, bpm, source, recorded_at_seconds };
+        if self.is_sorted || points.is_empty() {
+            let at = points.partition_point(|p| p.beat < beat);
+            points.insert(at, point);
+            self.is_sorted = true;
+        } else {
+            points.push(point);
+        }
     }
 
     pub fn ensure_default_at_beat_zero(&mut self, fallback_bpm: Bpm, source: TempoPointSource) {
@@ -497,14 +500,13 @@ mod tests {
         map.add_or_replace_point(Beats(8.0), Bpm(180.0), TempoPointSource::Manual, 0.001);
         map.add_or_replace_point(Beats(0.0), Bpm(120.0), TempoPointSource::Manual, 0.001);
 
+        // Writes keep the map sorted, so a snapshot sorts nothing and keeps
+        // sharing storage.
         let mut sorted_snapshot = map.clone();
         assert!(map.shares_points(&sorted_snapshot));
         sorted_snapshot.ensure_sorted();
-        assert!(!map.shares_points(&sorted_snapshot));
-        assert_eq!(
-            map.points()[0].beat,
-            BeatQuantizer::quantize_beat(Beats(8.0))
-        );
+        assert!(map.shares_points(&sorted_snapshot));
+        assert_eq!(map.points()[0].beat, Beats::ZERO);
         assert_eq!(sorted_snapshot.points()[0].beat, Beats::ZERO);
 
         let mut added = map.clone();
@@ -636,10 +638,9 @@ mod tests {
             empty_map.get_bpm_at_beat_immut(Beats(4.0), fallback)
         );
 
-        // Test with genuinely unsorted map (built via add_or_replace_point in non-monotonic order)
+        // Points written in non-monotonic order; the write keeps them sorted.
         let mut unsorted_map = TempoMap::default();
         // Add points in non-monotonic beat order: 8, then 0, then 4
-        // This leaves is_sorted = false, so &mut version will sort on first call
         unsorted_map.add_or_replace_point(Beats(8.0), Bpm(180.0), TempoPointSource::Manual, 0.001);
         unsorted_map.add_or_replace_point(Beats(0.0), Bpm(120.0), TempoPointSource::Manual, 0.001);
         unsorted_map.add_or_replace_point(Beats(4.0), Bpm(60.0), TempoPointSource::Manual, 0.001);

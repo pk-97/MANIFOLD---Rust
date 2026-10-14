@@ -254,6 +254,11 @@ impl OscParamRouter {
         self.registered_addresses.push(address.to_string());
     }
 
+    /// OSC writes are waiting for `apply`.
+    pub fn has_pending(&self) -> bool {
+        !self.pending.lock().is_empty()
+    }
+
     /// Apply all pending OSC parameter writes to the project.
     /// Call immediately after `osc_receiver.update()` in the content thread tick.
     pub fn apply(&self, project: &mut Project) {

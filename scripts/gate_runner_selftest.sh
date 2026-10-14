@@ -263,8 +263,6 @@ cat > "$BRIEF_BROKEN" << 'EOF'
 
 An anchor to a non-existent file: crates/nonexistent/src/lib.rs:42
 
-A lane named glm47-bogus-slot appears here.
-
 No Gate section, so gate check fails (I3).
 No BUG id anywhere in this file.
 EOF
@@ -272,10 +270,7 @@ OUT=$("$GATE_RUNNER" pre-dispatch --brief "$BRIEF_BROKEN" 2>&1) && RC=$? || RC=$
 if [ "$RC" -eq 1 ]; then ok "broken brief exit 1"; else fail "broken brief exit $RC (expected 1)"; fi
 echo "$OUT" | grep -q "FAIL.*anchor" && ok "broken brief names anchor FAIL" || fail "broken brief missing anchor FAIL"
 echo "$OUT" | grep -q "FAIL.*gate" && ok "broken brief names gate FAIL" || fail "broken brief missing gate FAIL"
-echo "$OUT" | grep -q "FAIL.*slot" && ok "broken brief names slot FAIL" || fail "broken brief missing slot FAIL"
 echo "$OUT" | grep -q "FAIL.*bead" && ok "broken brief names bead FAIL" || fail "broken brief missing bead FAIL"
-# Verify the slot failure mentions glm47 or the VALID_SLOTS list
-echo "$OUT" | grep -qE "glm47|VALID_SLOTS" && ok "broken brief names the bogus slot" || fail "broken brief missing bogus slot detail"
 echo "$OUT" | grep -q "I3" && ok "broken brief gate failure mentions I3" || fail "broken brief missing I3 mention"
 rm -f "$BRIEF_BROKEN"
 echo ""
@@ -301,7 +296,6 @@ OUT=$("$GATE_RUNNER" pre-dispatch --brief "$BRIEF_GOOD" 2>&1) && RC=$? || RC=$?
 if [ "$RC" -eq 0 ]; then ok "good brief exit 0"; else fail "good brief exit $RC (expected 0): $(echo "$OUT" | tail -3)"; fi
 echo "$OUT" | grep -q "PASS.*anchor" && ok "good brief anchor PASS" || fail "good brief missing anchor PASS"
 echo "$OUT" | grep -q "PASS.*gate" && ok "good brief gate PASS" || fail "good brief missing gate PASS"
-echo "$OUT" | grep -q "PASS.*slot" && ok "good brief slot PASS" || fail "good brief missing slot PASS"
 echo "$OUT" | grep -q "PASS.*bead" && ok "good brief bead PASS" || fail "good brief missing bead PASS"
 echo "$OUT" | grep -q "BUG-lint" && ok "good brief output mentions detected BUG id" || fail "good brief missing BUG id in output"
 rm -f "$BRIEF_GOOD" "$TMP_RS"

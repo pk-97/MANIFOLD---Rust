@@ -332,7 +332,7 @@ Test names below are **required new tests**, not checks already run. Prefix them
 
 ## 8. Phasing
 
-Each phase ends at a committable state; it is not a delivery-time estimate. The lead owns design/read-back and pins any changed public seam before a mechanical worker receives it. Follow current AGENTS.md worker preparation and diff-based check selection. No phase authorises landing.
+Each phase ends at a committable state; it is not a delivery-time estimate. The lead owns design/read-back and pins any changed public seam before a mechanical worker receives it. Follow current CLAUDE.md briefs and diff-based check selection (`scripts/codex_checks.py`). No phase authorises landing.
 
 Shared entry check for every phase: inspect the worktree diff, verify the recorded base/dependency commits, re-run `rg -n` for that phase's named symbols below and read their definitions. Restate its binding decisions and forbidden moves before editing. A moved API is a conformance update to this plan, not permission for a parallel implementation.
 

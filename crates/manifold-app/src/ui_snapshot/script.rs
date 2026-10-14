@@ -29,27 +29,12 @@
 //! Determinism (D7) holds because prefs are `UserPrefs::in_memory()` —
 //! empty, host-independent, never the user's file.
 //!
-//! `Runner` no longer reimplements the
-//! App's invalidate/rebuild decision and no longer renders through
-//! `render_ui_to_png`'s full-repaint lookalike. It now owns a persistent
-//! [`RenderState`] (one `UICacheManager` + composited offscreen for the
-//! whole script run) and drives every frame through
-//! `crate::ui_frame::apply_ui_frame_invalidations` +
-//! `crate::ui_frame::composite_main_ui_frame` — the SAME two functions the
-//! live App and the P0 differential (`ui_snapshot::mod::cache_path_full_render`)
-//! call. One update+composite path, three callers.
-//!
-//! `AppEditingHost` (`editing_host.rs`) writes two signals this seam's
-//! `UiFrameSignals` has no field for (see [`Runner::drain_and_dispatch`]):
-//! a completed structural drag sets the seam's OWN one-shot rebuild flag
-//! (the field `UiFrameSignals` clears after consuming, not
-//! `needs_structural_sync`) — but that flag and `needs_structural_sync` OR
-//! into the identical full-rebuild branch of `apply_ui_frame_invalidations`,
-//! so this module folds the drag signal into `needs_structural_sync` instead
-//! (exactly equivalent, never named by its own identifier here). Per-layer
-//! bitmap invalidation is drained into the viewport only inside a work window
-//! (`ResetWork`), where frames run the live order to count its repaints;
-//! outside one it is dropped, since no flow reads grid pixels.
+//! Every frame the runner advances runs `Runner::live_frame`: the live App's
+//! per-frame order, through `crate::ui_frame::run_projection_pass` (projection,
+//! rebuild decision, `push_state`, drag-time re-projection) and, when pixels
+//! are read, `composite_main_ui_frame`. The runner holds no projection or
+//! rebuild logic of its own; it differs from the App only in what inputs are
+//! present (no content thread, no drag polling, no editor window).
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -76,8 +61,8 @@ use super::fixtures::SceneData;
 use crate::content_command::ContentCommand;
 use crate::content_state::ContentState;
 use crate::editing_host::AppEditingHost;
-use crate::ui_frame::{apply_ui_frame_invalidations, UiFrameSignals};
-use crate::ui_root::{ScrollDirty, UIRoot};
+use crate::ui_frame::UiFrameFlags;
+use crate::ui_root::UIRoot;
 
 /// Fixed per-`Step` delta — the fixture's project runs at 60 fps default
 /// (`CLAUDE.md`); the driver's clock only advances on `Step` (D7), never a
@@ -297,6 +282,13 @@ fn run_flow(
     runner.active_layer = data
         .active
         .and_then(|i| data.project.timeline.layers.get(i).map(|l| l.layer_id.clone()));
+    // `sync_build` already projected this state.
+    runner.seen_selection_version = data.selection.selection_version;
+    runner.seen_active_layer = runner.active_layer.clone();
+    // The App's first frame after a load is a structural one; `sync_build`
+    // is the fixture's build, not that frame, so run it once here.
+    runner.flags.structural = true;
+    runner.live_frame(&mut ui, &mut data, &mut render, false, true);
     let mut results = Vec::with_capacity(actions.len());
     let mut ok = true;
 
@@ -304,7 +296,7 @@ fn run_flow(
         if reads_composite(action) {
             render.flush_composite(&mut ui);
         }
-        let outcome = runner.step(&mut ui, &mut data, zoom_ppb, index, action, &out_dir, &mut render);
+        let outcome = runner.step(&mut ui, &mut data, index, action, &out_dir, &mut render);
         let failed = outcome.status == "fail";
         results.push(outcome);
         if failed {
@@ -446,17 +438,17 @@ struct Runner {
     content_state: ContentState,
     cursor_manager: manifold_ui::cursors::CursorManager,
     active_layer: Option<LayerId>,
-    // P2: the Runner's persistent halves of `UiFrameSignals` (D3) — folded
-    // into a fresh `UiFrameSignals` at each seam call (`advance_frame` /
-    // the `Step` loop) and written back afterward. No standalone one-shot
-    // rebuild field here (see the module doc): a completed structural drag
-    // folds into `needs_structural_sync` instead, which the seam treats
-    // identically.
-    needs_structural_sync: bool,
-    /// Mirrors `Application::automation_lanes_dirty`: a lanes-only geometry
-    /// resync requested by the overlay, honored right after dispatch.
-    automation_lanes_dirty: bool,
-    scroll_dirty: ScrollDirty,
+    /// The per-frame flags input handlers and the editing host set, consumed
+    /// by `ui_frame::run_projection_pass` exactly as the live App consumes
+    /// its own.
+    flags: UiFrameFlags,
+    /// The selection version and active layer the last frame saw.
+    seen_selection_version: u64,
+    seen_active_layer: Option<LayerId>,
+    transport_cache: crate::ui_bridge::TransportDisplayCache,
+    /// Commands recorded at the end of a frame: the App sees them as a new
+    /// snapshot next frame.
+    echo_pending: bool,
     pre_drag_commands: Vec<Box<dyn Command>>,
     // BUG-198: the harness had no undo stack at all — commands executed
     // straight against `data.project` via `AppEditingHost`/`ui_bridge` and
@@ -491,21 +483,15 @@ struct Runner {
     last_gesture_points: Vec<Vec2>,
     // Persistent headless engine: scripted controls use production clip sync.
     modulation_engine: manifold_playback::engine::PlaybackEngine,
-    /// The live App's own `needs_rebuild` (modifier keys, resize drags, tween
-    /// polls): a tree rebuild with no projection.
-    needs_rebuild: bool,
-    /// Layer grid bitmaps the host invalidated, drained each live frame.
-    invalidated_layers: Vec<usize>,
     work: WorkWindow,
 }
 
 /// The count gate's state for one flow (UI_INVALIDATION_DESIGN.md D10, D11).
-/// After the first `ResetWork`, every frame runs [`Runner::live_frame`], the
-/// live App's per-frame order, so counts measure what a performer's frame does.
 #[derive(Default)]
 struct WorkWindow {
-    /// Set by the first `ResetWork`; frames are live frames from then on.
-    live_frames: bool,
+    /// Set by the first `ResetWork`. Inside a window a `Step` frame skips its
+    /// filmstrip composite, which is harness work the App never does.
+    open: bool,
     start: manifold_core::work_count::WorkSnapshot,
     /// Work this thread did that the live App does on the content thread (the
     /// harness's own engine tick), removed from every reading.
@@ -514,9 +500,6 @@ struct WorkWindow {
     record: bool,
     /// The flow's file stem: its key in the ceilings file.
     flow: String,
-    /// The selection version and active layer the last live frame saw.
-    seen_selection_version: u64,
-    seen_active_layer: Option<LayerId>,
 }
 
 /// Committed ceilings, read and written relative to the repo root (flows run
@@ -535,9 +518,11 @@ impl Runner {
             content_state: ContentState::default(),
             cursor_manager: manifold_ui::cursors::CursorManager::default(),
             active_layer: None,
-            needs_structural_sync: false,
-            automation_lanes_dirty: false,
-            scroll_dirty: ScrollDirty::default(),
+            flags: UiFrameFlags::default(),
+            seen_selection_version: 0,
+            seen_active_layer: None,
+            transport_cache: crate::ui_bridge::TransportDisplayCache::new(),
+            echo_pending: false,
             pre_drag_commands: Vec::new(),
             undo: UndoRedoManager::new(),
             clock: 0.0,
@@ -547,8 +532,6 @@ impl Runner {
             filmstrip: Vec::new(),
             last_gesture_points: Vec::new(),
             modulation_engine,
-            needs_rebuild: false,
-            invalidated_layers: Vec::new(),
             work: WorkWindow::default(),
         }
     }
@@ -558,7 +541,6 @@ impl Runner {
         &mut self,
         ui: &mut UIRoot,
         data: &mut SceneData,
-        zoom_ppb: f32,
         index: usize,
         action: &AutomationAction,
         out_dir: &std::path::Path,
@@ -567,74 +549,40 @@ impl Runner {
         let action_desc = format!("{action:?}");
         let outcome = match action {
             AutomationAction::Step { frames } => {
-                // P2 (D3, D9a): each stepped frame drives the REAL seam —
-                // `ui.update()` (advances any wall-clock-driven tween, e.g.
-                // the inspector drawer) → the rebuild/cache-invalidate
-                // decision → composite — then captures a filmstrip tile.
-                // Mirrors `cache_path_full_render`'s own drawer-tween loop
-                // (P0), generalized to any script's `Step` action.
+                // Each stepped frame ticks the engine, then runs one live
+                // frame. Outside a work window tweens run on the wall clock
+                // (a real sleep per frame) and each frame is a filmstrip tile
+                // (D9a).
                 for _ in 0..*frames {
                     self.clock += DT;
                     std::thread::sleep(Duration::from_secs_f32(DT));
-                    if !self.work.live_frames {
-                        ui.update();
-                        if ui.inspector.drawer_anim_active() || ui.scene_setup_panel.object_cards_animating() {
-                            self.needs_structural_sync = true;
-                        }
-                    }
                     let engine_work = manifold_core::work_count::thread_work_snapshot();
                     // Editing owns the fixture between steps. Temporarily lend
                     // that same project to the engine, preserving runtime state
                     // and avoiding a second scheduler in the UI harness.
-                    std::mem::swap(
-                        &mut data.project,
-                        self.modulation_engine.project_mut().expect("initialized engine"),
-                    );
+                    assert!(self.modulation_engine.swap_project(&mut data.project), "initialized engine");
                     self.modulation_engine.locate(manifold_core::Seconds(self.clock as f64));
                     let result = self.modulation_engine.tick(manifold_playback::engine::TickContext {
                         frames: 1,
                         realtime_now: manifold_core::Seconds(self.clock as f64),
                         ..Default::default()
                     });
-                    // In the live App modulated values arrive by value
-                    // snapshot, not a structural sync.
-                    if result.modulation_active && !self.work.live_frames {
-                        self.needs_structural_sync = true;
-                    }
                     self.modulation_engine.reclaim_tick_result(result);
                     // This runner renders UI only and has no scene consumers.
                     // Consume the frame so Fire controls cannot fill a retained
                     // delivery queue that this harness never renders.
                     self.modulation_engine.with_trigger_pulses(|_, _, _| ());
-                    std::mem::swap(
-                        &mut data.project,
-                        self.modulation_engine.project_mut().expect("initialized engine"),
-                    );
+                    assert!(self.modulation_engine.swap_project(&mut data.project), "initialized engine");
                     // The live App ticks the engine on the content thread.
                     let engine_work = manifold_core::work_count::thread_work_snapshot().since(&engine_work);
                     self.work.excluded = self.work.excluded.plus(&engine_work);
-                    if self.work.live_frames {
-                        self.live_frame(ui, data, render);
+                    // Modulated values reach the widgets through `push_state`,
+                    // as the App's value snapshot does.
+                    let tile = !self.work.open;
+                    self.live_frame(ui, data, render, false, !tile);
+                    if !tile {
                         continue;
                     }
-                    let mut signals = UiFrameSignals {
-                        needs_structural_sync: self.needs_structural_sync,
-                        scroll_dirty: self.scroll_dirty,
-                        ..Default::default()
-                    };
-                    apply_ui_frame_invalidations(ui, Some(&mut render.cache), &mut signals);
-                    self.needs_structural_sync = signals.needs_structural_sync;
-                    self.scroll_dirty = signals.scroll_dirty;
-                    // BUG-234 cont'd: `apply_ui_frame_invalidations` only
-                    // decides whether to rebuild STRUCTURE; the already-built
-                    // widgets' VALUE text (the slider fill/label
-                    // `push_state`/`UiParamSlot::value` writes) is only
-                    // refreshed by `reconcile_state`, same as every other
-                    // per-frame caller (`advance_frame` above calls both, in
-                    // this same order). Without this, `evaluate_modulation`'s
-                    // write into `data.project`'s param `effective` value
-                    // never reaches the widget tree a `Dump`/`Snapshot` reads.
-                    super::reconcile_state(ui, data);
                     if render.gate.step_frame() {
                         render.composite_now(ui);
                     }
@@ -679,8 +627,8 @@ impl Runner {
                     Ok(project) => {
                         data.project = project;
                         self.undo = UndoRedoManager::new();
-                        self.needs_structural_sync = true;
-                        self.advance_frame(ui, data, zoom_ppb, render, false);
+                        self.flags.structural = true;
+                        self.live_frame(ui, data, render, false, true);
                         StepResult { index, action: action_desc, status: "ok",
                             detail: "saved and reloaded through project IO".into(), artifact: Some(path.display().to_string()) }
                     }
@@ -705,8 +653,8 @@ impl Runner {
                     // force a structural resync rather than guessing per
                     // command (same conservative call `commit_command_batch`
                     // makes for a completed drag).
-                    self.needs_structural_sync = true;
-                    self.advance_frame(ui, data, zoom_ppb, render, false);
+                    self.flags.structural = true;
+                    self.live_frame(ui, data, render, false, true);
                     StepResult {
                         index,
                         action: action_desc,
@@ -716,8 +664,8 @@ impl Runner {
                     }
                 } else if modifiers.is_command_shift() && *key == Key::Z {
                     let redone = self.undo.redo(&mut data.project);
-                    self.needs_structural_sync = true;
-                    self.advance_frame(ui, data, zoom_ppb, render, false);
+                    self.flags.structural = true;
+                    self.live_frame(ui, data, render, false, true);
                     StepResult {
                         index,
                         action: action_desc,
@@ -747,7 +695,7 @@ impl Runner {
                             ),
                         )
                     } else {
-                        self.advance_frame(ui, data, zoom_ppb, render, false);
+                        self.live_frame(ui, data, render, false, true);
                         StepResult {
                             index,
                             action: action_desc,
@@ -762,7 +710,7 @@ impl Runner {
                     // actions were resolved and then dropped on the floor (the
                     // same dormant seam as the pre-2026-07-07 apply_panel_actions).
                     self.drain_and_dispatch(ui, data);
-                    self.advance_frame(ui, data, zoom_ppb, render, false);
+                    self.live_frame(ui, data, render, false, true);
                     StepResult {
                         index,
                         action: action_desc,
@@ -782,22 +730,22 @@ impl Runner {
                 self.fail(index, action_desc, ui, out_dir, "no headless seam for AutomationAction::Text (Application::text_input only; see UI_AUTOMATION_DESIGN.md section 7)".into())
             }
             AutomationAction::Pointer { target, gesture } => {
-                self.pointer(ui, data, zoom_ppb, index, action_desc, target, gesture, out_dir, render)
+                self.pointer(ui, data, index, action_desc, target, gesture, out_dir, render)
             }
             AutomationAction::Assert { selector, check } => {
                 self.assert(ui, index, action_desc, selector, check, out_dir)
             }
             AutomationAction::ScrollTo { target } => {
-                self.scroll_to(ui, data, zoom_ppb, index, action_desc, target, out_dir, render)
+                self.scroll_to(ui, data, index, action_desc, target, out_dir, render)
             }
             AutomationAction::SetParam { param, value } => {
-                self.set_param(ui, data, zoom_ppb, index, action_desc, param, *value, render)
+                self.set_param(ui, data, index, action_desc, param, *value, render)
             }
             AutomationAction::ScrubDrag { param, from, to, steps } => {
-                self.scrub_drag(ui, data, zoom_ppb, index, action_desc, param, (*from, *to), *steps, out_dir, render)
+                self.scrub_drag(ui, data, index, action_desc, param, (*from, *to), *steps, out_dir, render)
             }
             AutomationAction::PlayingStep { frames, bpm, wobble } => {
-                self.playing_step(ui, data, zoom_ppb, *frames, *bpm, *wobble, render);
+                self.playing_step(ui, data, *frames, *bpm, *wobble, render);
                 StepResult {
                     index,
                     action: action_desc,
@@ -810,34 +758,33 @@ impl Runner {
                 // `window_input::input_modifiers`: store, forward, rebuild.
                 self.modifiers = *modifiers;
                 self.overlay.set_modifiers(*modifiers);
-                self.needs_rebuild = true;
+                self.flags.rebuild = true;
                 ui.input.set_modifiers(*modifiers);
-                self.advance_frame(ui, data, zoom_ppb, render, false);
+                self.live_frame(ui, data, render, false, true);
                 StepResult { index, action: action_desc, status: "ok", detail: "modifiers set".into(), artifact: None }
             }
             AutomationAction::ResizeDrag { handle, from, to, steps } => {
-                self.resize_drag(ui, data, zoom_ppb, *handle, (*from, *to), *steps, render);
+                self.resize_drag(ui, data, *handle, (*from, *to), *steps, render);
                 StepResult { index, action: action_desc, status: "ok", detail: format!("{steps} resize move(s)"), artifact: None }
             }
             AutomationAction::TrackWheel { at, delta_y, steps } => {
                 for _ in 0..*steps {
                     self.track_wheel(ui, *at, *delta_y);
-                    self.advance_frame(ui, data, zoom_ppb, render, false);
+                    self.live_frame(ui, data, render, false, true);
                 }
                 StepResult { index, action: action_desc, status: "ok", detail: format!("{steps} wheel notch(es)"), artifact: None }
             }
             AutomationAction::ResetWork => {
                 // Settle whatever setup left pending, so the window counts
                 // only the gesture that follows.
-                self.work.live_frames = true;
-                self.work.seen_selection_version = data.selection.selection_version;
-                self.work.seen_active_layer = self.active_layer.clone();
-                self.live_frame(ui, data, render);
+                self.work.open = true;
+                self.live_frame(ui, data, render, false, true);
                 self.work.start = manifold_core::work_count::thread_work_snapshot();
                 self.work.excluded = manifold_core::work_count::WorkSnapshot::default();
                 StepResult { index, action: action_desc, status: "ok", detail: "work window started".into(), artifact: None }
             }
             AutomationAction::AssertWork { window } => self.assert_work(ui, index, action_desc, window, out_dir),
+            AutomationAction::AssertFresh => self.assert_fresh(ui, data, render, index, action_desc, out_dir),
         };
         // BUG-198: whatever this step just sent over `content_tx` (via
         // `AppEditingHost`/`ui_bridge::dispatch`) has already been applied
@@ -845,8 +792,8 @@ impl Runner {
         // undo stack so `Key`'s Cmd+Z/Cmd+Shift+Z arm has something real to
         // act on. Every step drains unconditionally (most steps sent
         // nothing, so this is a no-op `try_recv` miss).
-        if self.absorb_commands(ui, data) {
-            self.advance_frame(ui, data, zoom_ppb, render, false);
+        if self.absorb_commands(ui, data) || std::mem::take(&mut self.echo_pending) {
+            self.live_frame(ui, data, render, false, true);
         }
         outcome
     }
@@ -857,7 +804,7 @@ impl Runner {
     fn overlay_hover(&mut self, ui: &mut UIRoot, data: &mut SceneData, pos: Vec2) {
         if ui.background_input_blocked() {
             if data.selection.automation_feedback.take().is_some() {
-                self.scroll_dirty.visual = true;
+                self.flags.scroll.visual = true;
             }
             return;
         }
@@ -867,11 +814,11 @@ impl Runner {
             &self.content_state,
             &mut self.cursor_manager,
             &mut self.active_layer,
-            &mut self.needs_rebuild,
-            &mut self.needs_structural_sync,
-            &mut self.automation_lanes_dirty,
-            &mut self.scroll_dirty,
-            &mut self.invalidated_layers,
+            &mut self.flags.rebuild,
+            &mut self.flags.structural,
+            &mut self.flags.automation_lanes,
+            &mut self.flags.scroll,
+            &mut self.flags.invalidated_layers,
             &mut self.pre_drag_commands,
         );
         self.overlay.on_pointer_move(pos, &mut host, &mut data.selection, &ui.viewport);
@@ -886,105 +833,169 @@ impl Runner {
         }
         crate::edit_selection::apply_update(ui, &data.project, data.content.edit_selection_update.as_deref(), &mut data.selection, &mut self.active_layer);
         data.active = self.active_layer.as_ref().and_then(|id| data.project.timeline.find_layer_index_by_id(id));
-        self.needs_structural_sync = true;
+        self.flags.structural = true;
         true
     }
 
     /// One UI frame in the live App's order (`app_render.rs` `tick_and_render`):
-    /// consume the deferred structural flag, re-project on a selection or
-    /// active-layer change, auto-scroll, the rebuild decision, `push_state`,
-    /// the drag-time clip and lane re-projection, layer-bitmap invalidation, the
-    /// tween polls, then the CPU half of the grid and overview repaints. No
-    /// forced zoom. Tweens settle at once, as under reduced motion, so counts
-    /// do not depend on machine speed.
-    fn live_frame(&mut self, ui: &mut UIRoot, data: &mut SceneData, render: &mut RenderState) {
-        // A long gesture sends a command per move; the harness channel is bounded.
-        self.absorb_commands(ui, data);
+    /// consume the deferred structural flag, then `ui_frame::run_projection_pass`
+    /// (the same function the App calls), then the tween polls and the CPU half
+    /// of the grid and overview repaints. No forced zoom. With `settle_tweens`
+    /// a tween settles in the frame after it starts, as under reduced motion,
+    /// so counts and asserts do not depend on machine speed; a `Step` frame
+    /// outside a work window lets tweens run on the wall clock instead.
+    fn live_frame(
+        &mut self,
+        ui: &mut UIRoot,
+        data: &mut SceneData,
+        render: &mut RenderState,
+        scrolled_in_place: bool,
+        settle_tweens: bool,
+    ) {
         ui.sync_embedded_presets(&data.project);
         if data.content.bpm.is_finite() && data.content.bpm > 0.0 {
             let bpm = manifold_core::Bpm(data.content.bpm as f32);
             if ui.sync_driver_bpm(&data.project, bpm) {
-                self.needs_structural_sync = true;
-                self.needs_rebuild = true;
+                self.flags.structural = true;
+                self.flags.rebuild = true;
             }
         }
-        let mut structural = std::mem::take(&mut self.needs_structural_sync);
-        let active = data.active;
-        if data.selection.selection_version != self.work.seen_selection_version && !structural {
-            crate::ui_bridge::sync_inspector_data(
-                ui, &data.project, active, &data.selection,
-                &data.content.automation_latched_params, data.content.led_preview.as_ref(),
-            );
-            structural = true;
-        }
-        if structural || self.active_layer != self.work.seen_active_layer {
-            crate::ui_bridge::sync_automation_lane_order(&data.project, &mut data.selection);
-            crate::ui_bridge::sync_project_data(ui, &data.project, active, &data.selection);
-            crate::ui_bridge::sync_inspector_data(
-                ui, &data.project, active, &data.selection,
-                &data.content.automation_latched_params, data.content.led_preview.as_ref(),
-            );
-            structural = true;
-        }
-        self.work.seen_selection_version = data.selection.selection_version;
-        self.work.seen_active_layer = self.active_layer.clone();
-
-        if crate::ui_bridge::check_auto_scroll(ui, &data.content, &data.project) {
-            self.scroll_dirty.scroll_x = true;
-        }
-        if std::mem::take(&mut ui.overlay_dirty) || ui.detect_overlay_open_change() {
-            self.scroll_dirty.visual = true;
-        }
-        // Tweens run on wall-clock time, so how many frames one spans depends
-        // on machine speed. Counts must not, so work windows run with
-        // reduced motion: a tween settles in the frame after it starts.
-        if ui.inspector.skip_to_settled(&mut ui.tree) | ui.scene_setup_panel.skip_cards_to_settled(&mut ui.tree) {
-            self.needs_rebuild = true;
-        }
-        let scroll_dirty = std::mem::take(&mut self.scroll_dirty);
-        let mut signals = UiFrameSignals {
-            needs_rebuild: self.needs_rebuild,
-            needs_structural_sync: structural,
-            scroll_dirty,
-            scrolled_in_place: false,
+        let changes = crate::ui_frame::ProjectionChanges {
+            structural: std::mem::take(&mut self.flags.structural),
+            selection_changed: data.selection.selection_version != self.seen_selection_version,
+            active_layer_changed: self.active_layer != self.seen_active_layer,
+            scrolled_in_place,
         };
-        apply_ui_frame_invalidations(ui, Some(&mut render.cache), &mut signals);
-        self.needs_rebuild = signals.needs_rebuild;
-
-        super::reconcile_state(ui, data);
-
-        let clip_drag = matches!(
-            self.overlay.drag_mode(),
-            manifold_ui::interaction_overlay::DragMode::Move
-                | manifold_ui::interaction_overlay::DragMode::TrimLeft
-                | manifold_ui::interaction_overlay::DragMode::TrimRight
+        let overlay = &self.overlay;
+        let seen_selection_version = &mut self.seen_selection_version;
+        let seen_active_layer = &mut self.seen_active_layer;
+        crate::ui_frame::run_projection_pass(
+            ui,
+            None,
+            Some(&mut render.cache),
+            &mut data.project,
+            &mut data.selection,
+            &mut self.active_layer,
+            self.flags.as_mut(),
+            changes,
+            crate::ui_frame::PushInputs {
+                content_state: &data.content,
+                is_dirty: false,
+                project_path: None,
+                transport_cache: &mut self.transport_cache,
+            },
+            |ui, _, selection, active_layer, flags| {
+                // What the next frame compares against, read where the App
+                // reads its own (before this frame's later passes).
+                *seen_selection_version = selection.selection_version;
+                seen_active_layer.clone_from(active_layer);
+                if settle_tweens
+                    && (ui.inspector.skip_to_settled(&mut ui.tree)
+                        | ui.scene_setup_panel.skip_cards_to_settled(&mut ui.tree))
+                {
+                    *flags.needs_rebuild = true;
+                }
+                use manifold_ui::interaction_overlay::DragMode;
+                matches!(overlay.drag_mode(), DragMode::Move | DragMode::TrimLeft | DragMode::TrimRight)
+            },
         );
-        if structural || clip_drag {
-            crate::ui_bridge::sync_clip_positions(ui, &data.project);
-        }
-        if structural || std::mem::take(&mut self.automation_lanes_dirty) {
-            crate::ui_bridge::sync_automation_lane_geometry(
-                ui,
-                &data.project,
-                data.selection.automation_mode_visible,
-                &data.selection.chosen_automation_params,
-                &data.selection.automation_lane_order,
-                &data.selection.hidden_automation_lanes,
-                &data.selection.pinned_automation_lanes,
-            );
-        }
-        for layer_idx in self.invalidated_layers.drain(..) {
-            ui.viewport.invalidate_layer_bitmap(layer_idx);
-        }
+        data.active = self.active_layer.as_ref().and_then(|id| data.project.timeline.find_layer_index_by_id(id));
+        ui.update();
         if ui.inspector.drawer_anim_active()
             || ui.scene_setup_panel.object_cards_animating()
             || ui.layout.is_split_reset_animating()
         {
-            self.needs_rebuild = true;
+            self.flags.rebuild = true;
         }
         ui.viewport.repaint_dirty_layers();
         ui.viewport.repaint_overview();
         render.gate.mark();
+        // What this frame sent reaches the App's next frame as a content
+        // snapshot; record it now (a long gesture sends a command per move
+        // and the harness channel is bounded) and re-project next frame.
+        self.echo_pending |= self.absorb_commands(ui, data);
+    }
+
+    /// What a frame shows that the tree dump cannot see: the inputs of the
+    /// immediate passes (playhead, insert cursor, selection band, markers,
+    /// the clip draw list, automation lanes, overview strip) and the pending
+    /// toast. The perform HUD is absent here: the runner has no perform mode.
+    fn immediate_inputs(&self, ui: &UIRoot, data: &SceneData) -> Vec<String> {
+        let insert_layer = data
+            .selection
+            .insert_cursor_layer_id
+            .as_ref()
+            .and_then(|id| data.project.timeline.find_layer_index_by_id(id));
+        let mut markers = Vec::new();
+        let overlays = ui.viewport.timeline_overlays(insert_layer, data.selection.has_insert_cursor(), &mut markers);
+        let (clip_rects, automation_lanes) = self.surfaces_owned(ui);
+        let mut out = vec![
+            format!("playhead {:?}", ui.viewport.playhead_pixel()),
+            format!("overlays {overlays:?}"),
+            format!("markers {markers:?}"),
+            format!("overview {:?}", ui.viewport.overview_rect()),
+            format!("toast {:?}", ui.toast.pending()),
+        ];
+        out.extend(clip_rects.iter().map(|c| format!("clip {c:?}")));
+        out.extend(automation_lanes.iter().map(|l| format!("lane {l:?}")));
+        out
+    }
+
+    /// `AssertFresh` (UI_INVALIDATION_DESIGN.md D10, INV-4): the incremental
+    /// frame must equal a full projection and build from the same inputs.
+    fn assert_fresh(
+        &mut self,
+        ui: &mut UIRoot,
+        data: &mut SceneData,
+        render: &mut RenderState,
+        index: usize,
+        action_desc: String,
+        out_dir: &std::path::Path,
+    ) -> StepResult {
+        let surfaces_dump = |runner: &Self, ui: &UIRoot| {
+            let (clip_rects, automation_lanes) = runner.surfaces_owned(ui);
+            let clip_targets = ClipHitTargets(&clip_rects);
+            let automation_targets = AutomationHitTargets(&automation_lanes);
+            let surfaces: Vec<&dyn HitTargets> = vec![&clip_targets, &automation_targets];
+            super::dump::dump_tree_ex(&ui.tree, &surfaces)
+        };
+        let tree_before = surfaces_dump(self, ui);
+        let immediate_before = self.immediate_inputs(ui, data);
+
+        self.flags.structural = true;
+        self.flags.rebuild = true;
+        self.live_frame(ui, data, render, false, true);
+
+        let tree_after = surfaces_dump(self, ui);
+        let immediate_after = self.immediate_inputs(ui, data);
+
+        let (tree_lines, tree_differs) = super::readback::diff_trees(&tree_before, &tree_after);
+        let immediate_diff: Vec<String> = immediate_before
+            .iter()
+            .zip(immediate_after.iter())
+            .filter(|(a, b)| a != b)
+            .map(|(a, b)| format!("immediate: {a} -> {b}"))
+            .chain(
+                (immediate_before.len() != immediate_after.len())
+                    .then(|| format!("immediate: {} -> {} entries", immediate_before.len(), immediate_after.len())),
+            )
+            .collect();
+        if !tree_differs && immediate_diff.is_empty() {
+            return StepResult { index, action: action_desc, status: "ok", detail: "fresh".into(), artifact: None };
+        }
+        let path = out_dir.join(format!("{index:02}.stale.txt"));
+        let report: Vec<String> = immediate_diff.iter().cloned().chain(tree_lines).collect();
+        let _ = std::fs::write(&path, report.join("\n"));
+        StepResult {
+            index,
+            action: action_desc,
+            status: "fail",
+            detail: format!(
+                "incremental frame differs from a full rebuild: {}",
+                report.iter().take(6).map(String::as_str).collect::<Vec<_>>().join(" | ")
+            ),
+            artifact: Some(path.display().to_string()),
+        }
     }
 
     fn assert_work(
@@ -1053,7 +1064,6 @@ impl Runner {
         &mut self,
         ui: &mut UIRoot,
         data: &mut SceneData,
-        zoom_ppb: f32,
         frames: u32,
         bpm: f32,
         wobble: f32,
@@ -1066,7 +1076,7 @@ impl Runner {
             data.content.current_beat =
                 manifold_core::Beats(data.content.current_beat.0 + bpm as f64 / 60.0 * DT as f64);
             self.clock += DT;
-            self.advance_frame(ui, data, zoom_ppb, render, false);
+            self.live_frame(ui, data, render, false, true);
         }
     }
 
@@ -1082,18 +1092,18 @@ impl Runner {
             let beat_at_cursor = viewport.pixel_to_beat(pos.x).as_f32();
             let new_ppb = viewport.zoom_continuous(factor);
             viewport.zoom_to(new_ppb, beat_at_cursor, pos.x);
-            self.scroll_dirty.zoom = true;
+            self.flags.scroll.zoom = true;
         } else if self.modifiers.shift {
             let beat_delta = dy * manifold_ui::color::SCROLL_SENSITIVITY / viewport.pixels_per_beat();
             let new_x = (viewport.scroll_x_beats().as_f32() - beat_delta).max(0.0);
             if viewport.set_scroll(new_x, viewport.scroll_y_px()) {
-                self.scroll_dirty.scroll_x = true;
+                self.flags.scroll.scroll_x = true;
             }
             viewport.note_user_scroll_x();
         } else {
             let new_y = (viewport.scroll_y_px() - dy).max(0.0);
             if viewport.set_scroll(viewport.scroll_x_beats().as_f32(), new_y) {
-                self.scroll_dirty.scroll_y = true;
+                self.flags.scroll.scroll_y = true;
             }
         }
     }
@@ -1104,7 +1114,6 @@ impl Runner {
         &mut self,
         ui: &mut UIRoot,
         data: &mut SceneData,
-        zoom_ppb: f32,
         handle: manifold_ui::automation::ResizeHandle,
         (from, to): (f32, f32),
         steps: u32,
@@ -1120,15 +1129,15 @@ impl Runner {
             match handle {
                 ResizeHandle::TimelineSplit => {
                     ui.layout.update_split_from_drag(pos);
-                    self.needs_rebuild = true;
+                    self.flags.rebuild = true;
                 }
                 ResizeHandle::InspectorWidth => {
                     if ui.update_inspector_resize(pos) {
-                        self.needs_rebuild = true;
+                        self.flags.rebuild = true;
                     }
                 }
             }
-            self.advance_frame(ui, data, zoom_ppb, render, false);
+            self.live_frame(ui, data, render, false, true);
         }
         ui.end_inspector_resize();
     }
@@ -1223,7 +1232,12 @@ impl Runner {
                     data.content.graph_edit_diagnostic = Some(crate::content_state::GraphEditDiagnostic { sequence, message });
                     changed = true;
                 }
-                ContentCommand::Execute(cmd) => self.undo.record(cmd),
+                // The App gets these back as a snapshot with a new data
+                // version, which re-projects; this is that echo.
+                ContentCommand::Execute(cmd) => {
+                    self.undo.record(cmd);
+                    changed = true;
+                }
                 ContentCommand::ExecuteOnContent(cmd) => {
                     changed |= self.undo.execute(crate::scene_modifier_edit::with_admission(cmd), &mut data.project);
                     if let Some(message) = self.undo.take_rejection() {
@@ -1234,6 +1248,7 @@ impl Runner {
                 }
                 ContentCommand::ExecuteBatch(cmds, desc) => {
                     self.undo.record(Box::new(CompositeCommand::new(cmds, desc)));
+                    changed = true;
                 }
                 _ => {}
             }
@@ -1279,7 +1294,6 @@ impl Runner {
         &mut self,
         ui: &mut UIRoot,
         data: &mut SceneData,
-        zoom_ppb: f32,
         index: usize,
         action_desc: String,
         target: &AutomationTarget,
@@ -1374,14 +1388,14 @@ impl Runner {
                     self.overlay_hover(ui, data, center);
                 }
                 self.drain_and_dispatch(ui, data);
-                self.advance_frame(ui, data, zoom_ppb, render, false);
+                self.live_frame(ui, data, render, false, true);
                 for pt in automation::interpolate_drag(center, to_center, *steps) {
                     self.clock += DT;
                     self.last_gesture_points.push(pt);
                     ui.pointer_event(pt, PointerAction::Move, self.clock);
                     self.overlay_hover(ui, data, pt);
                     self.drain_and_dispatch(ui, data);
-                    self.advance_frame(ui, data, zoom_ppb, render, false);
+                    self.live_frame(ui, data, render, false, true);
                 }
                 self.clock += DT;
                 self.last_gesture_points.push(to_center);
@@ -1395,7 +1409,7 @@ impl Runner {
             }
         }
 
-        self.advance_frame(ui, data, zoom_ppb, render, scrolled_in_place);
+        self.live_frame(ui, data, render, scrolled_in_place, true);
         StepResult {
             index,
             action: action_desc,
@@ -1410,9 +1424,9 @@ impl Runner {
     /// dispatch the live mouse wheel does (`window_input.rs`). `center` picks the
     /// container exactly as the real handler does: the inspector scrolls in place
     /// (synchronous node-offset, returns whether it handled it so the caller can
-    /// set `scrolled_in_place`); the Scene dock sets its offset and forces the
-    /// rebuild that bakes it in (BUG-294); anything else routes the generic
-    /// pipeline. Returns whether the inspector handled the scroll in place.
+    /// set `scrolled_in_place`); the Scene and Audio Setup docks route the
+    /// generic pipeline and ask for the rebuild that bakes the offset in
+    /// (BUG-294); anything else routes the generic pipeline. Returns whether the inspector handled the scroll in place.
     fn scroll_once(&mut self, ui: &mut UIRoot, data: &mut SceneData, center: Vec2, delta: Vec2) -> bool {
         if ui.layout.inspector().contains(center) {
             if ui.try_inspector_scroll(delta.y, center.x) {
@@ -1420,13 +1434,12 @@ impl Runner {
             }
             // Nothing built yet — the real handler's same fallback.
             ui.inspector.handle_scroll_at(delta.y, center.x);
-        } else if ui.scene_setup_panel.is_open() && ui.layout.scene_setup().contains(center) {
-            // BUG-294: direct offset setter + forced structural sync, because the
-            // generic `UIEvent::Scroll` pipeline alone never rebuilds the Scene
-            // dock's built node positions (`window_input.rs` sets `needs_rebuild`
-            // right after routing scene-dock scroll; this mirrors it).
-            ui.scene_setup_panel.handle_scroll(delta.y);
-            self.needs_structural_sync = true;
+        } else if ui.layout.scene_setup().contains(center) || ui.layout.audio_setup().contains(center) {
+            // `window_input::primary_mouse_wheel`'s dock branch: the generic
+            // scroll pipeline, then a rebuild that bakes the offset in.
+            ui.input.process_scroll(center, delta);
+            self.drain_and_dispatch(ui, data);
+            self.flags.rebuild = true;
         } else {
             ui.input.process_scroll(center, delta);
             self.drain_and_dispatch(ui, data);
@@ -1447,7 +1460,6 @@ impl Runner {
         &mut self,
         ui: &mut UIRoot,
         data: &mut SceneData,
-        zoom_ppb: f32,
         index: usize,
         action_desc: String,
         target: &AutomationTarget,
@@ -1531,7 +1543,7 @@ impl Runner {
             let sc = Vec2::new(cx.clamp(vis.x + 1.0, vis.x + vis.width - 1.0), vis.y + vis.height * 0.5);
             let prev_y = rect.y;
             let sip = self.scroll_once(ui, data, sc, Vec2::new(0.0, dir * sign * step));
-            self.advance_frame(ui, data, zoom_ppb, render, sip);
+            self.live_frame(ui, data, render, sip, true);
             let moved = match self.resolve(ui, target) {
                 Ok(r) => r.y - prev_y,
                 Err(_) => 0.0,
@@ -1606,23 +1618,17 @@ impl Runner {
         if viewport_events.iter().any(|event| matches!(event, UIEvent::PointerDown { .. })) {
             crate::ui_bridge::sync_automation_lane_order(&data.project, &mut data.selection);
         }
-        // Local, call-scoped sinks for the two `AppEditingHost` outputs the
-        // P2 seam doesn't consume by name (see the module doc): a completed
-        // structural drag folds into `needs_structural_sync` below (the seam
-        // ORs the two identically); per-layer bitmap invalidation lands in
-        // `invalidated_layers` (see the module doc).
-        let mut rebuild_flag = false;
         let mut host = AppEditingHost::new(
             &mut data.project,
             &self.content_tx,
             &self.content_state,
             &mut self.cursor_manager,
             &mut self.active_layer,
-            &mut rebuild_flag,
-            &mut self.needs_structural_sync,
-            &mut self.automation_lanes_dirty,
-            &mut self.scroll_dirty,
-            &mut self.invalidated_layers,
+            &mut self.flags.rebuild,
+            &mut self.flags.structural,
+            &mut self.flags.automation_lanes,
+            &mut self.flags.scroll,
+            &mut self.flags.invalidated_layers,
             &mut self.pre_drag_commands,
         );
         for event in &viewport_events {
@@ -1709,21 +1715,6 @@ impl Runner {
         drop(host);
         // Match the live application pass for overlay-generated context menus.
         ui.intercept_overlay_actions(&mut pending);
-        if rebuild_flag {
-            self.needs_structural_sync = true;
-        }
-        // Same lanes-only resync the live frame runs (app_render.rs step 4b).
-        if std::mem::take(&mut self.automation_lanes_dirty) {
-            crate::ui_bridge::sync_automation_lane_geometry(
-                ui,
-                &data.project,
-                data.selection.automation_mode_visible,
-                &data.selection.chosen_automation_params,
-                &data.selection.automation_lane_order,
-                &data.selection.hidden_automation_lanes,
-                &data.selection.pinned_automation_lanes,
-            );
-        }
         self.apply_panel_actions(ui, data, &pending);
         n_actions + pending.len()
     }
@@ -1743,30 +1734,24 @@ impl Runner {
             if let PanelAction::Params(manifold_ui::ParamsAction::EditCards(edit)) = action {
                 // Use the live input host: treating this app-intercepted action
                 // as a bridge no-op loses clipboard state while reporting success.
-                let mut rebuild = false;
-                let mut close_output = false;
-                let mut export = false;
+                let mut scratch = [false; 2];
                 let mut project_io = crate::project_io::ProjectIOService::new(&self.user_prefs);
-                let mut host = crate::input_host::AppInputHost {
-                    project: &mut data.project,
-                    content_tx: &self.content_tx,
-                    content_state: &self.content_state,
-                    ui_root: ui,
-                    selection: &mut data.selection,
-                    active_layer: &mut self.active_layer,
-                    needs_rebuild: &mut rebuild,
-                    needs_structural_sync: &mut self.needs_structural_sync,
-                    scroll_dirty: &mut self.scroll_dirty,
-                    current_project_path: &None,
-                    has_output_window: false,
-                    pending_close_output: &mut close_output,
-                    pending_export: &mut export,
-                    project_io: &mut project_io,
+                #[cfg(target_os = "macos")]
+                let mut clipboard_change_count = None;
+                let mut host = crate::input_host::AppInputHost::detached(
+                    &mut data.project,
+                    &self.content_tx,
+                    &self.content_state,
+                    &mut *ui,
+                    &mut data.selection,
+                    &mut self.active_layer,
+                    &mut self.flags,
+                    &mut scratch,
+                    &mut project_io,
                     #[cfg(target_os = "macos")]
-                    internal_clipboard_change_count: &mut None,
-                };
+                    &mut clipboard_change_count,
+                );
                 host.edit_cards(*edit);
-                self.needs_structural_sync |= rebuild;
                 let pending = std::mem::take(&mut ui.pending_keyboard_actions);
                 self.apply_panel_actions(ui, data, &pending);
                 continue;
@@ -1823,7 +1808,7 @@ impl Runner {
             let result = crate::ui_bridge::dispatch(action, &mut dctx);
             println!("ui-snap --script: dispatched {action:?} (structural={})", result.structural_change);
             if result.structural_change {
-                self.needs_structural_sync = true;
+                self.flags.structural = true;
             }
             // The fixture's active-layer INDEX feeds `sync_build`'s inspector
             // sync; derive it from the id the real bridge maintains (the old
@@ -1844,7 +1829,6 @@ impl Runner {
         &mut self,
         ui: &mut UIRoot,
         data: &mut SceneData,
-        zoom_ppb: f32,
         index: usize,
         action_desc: String,
         param: &manifold_ui::automation::FlowScrubTarget,
@@ -1862,7 +1846,7 @@ impl Runner {
             PanelAction::Scrub(value_ref, ScrubPhase::Commit),
         ];
         self.apply_panel_actions(ui, data, &actions);
-        self.advance_frame(ui, data, zoom_ppb, render, false);
+        self.live_frame(ui, data, render, false, true);
         StepResult {
             index,
             action: action_desc,
@@ -1879,7 +1863,6 @@ impl Runner {
         &mut self,
         ui: &mut UIRoot,
         data: &mut SceneData,
-        zoom_ppb: f32,
         index: usize,
         action_desc: String,
         param: &manifold_ui::automation::FlowScrubTarget,
@@ -1895,7 +1878,7 @@ impl Runner {
         };
         let steps = steps.max(1);
         self.apply_panel_actions(ui, data, &[PanelAction::Scrub(value_ref.clone(), ScrubPhase::Begin)]);
-        self.advance_frame(ui, data, zoom_ppb, render, false);
+        self.live_frame(ui, data, render, false, true);
         for i in 1..=steps {
             let value = from + (to - from) * i as f32 / steps as f32;
             self.apply_panel_actions(
@@ -1903,10 +1886,10 @@ impl Runner {
                 data,
                 &[PanelAction::Scrub(value_ref.clone(), ScrubPhase::Move(scrub_value(range, value)))],
             );
-            self.advance_frame(ui, data, zoom_ppb, render, false);
+            self.live_frame(ui, data, render, false, true);
         }
         self.apply_panel_actions(ui, data, &[PanelAction::Scrub(value_ref, ScrubPhase::Commit)]);
-        self.advance_frame(ui, data, zoom_ppb, render, false);
+        self.live_frame(ui, data, render, false, true);
         StepResult {
             index,
             action: action_desc,
@@ -1914,80 +1897,6 @@ impl Runner {
             detail: format!("{steps} scrub move(s) {from} -> {to} through dispatch"),
             artifact: None,
         }
-    }
-
-    /// Drives one frame through the shared seam (P2, D3): re-sync `ui` from
-    /// `data` (the Runner's own responsibility headless — no
-    /// continuously-running content thread to do it every tick), gate the
-    /// rebuild/cache-invalidation decision through
-    /// `apply_ui_frame_invalidations` using the REAL structural/scroll
-    /// signals `drain_and_dispatch`/`AppEditingHost` already collected,
-    /// reconcile display state, THEN composite — matching `sync_build`'s own
-    /// order (`ui.build()` before `push_state`/`ui.update()`) and the live
-    /// tick's order (the invalidation decision before `present_all_windows`,
-    /// which is the actual atlas paint).
-    fn advance_frame(
-        &mut self,
-        ui: &mut UIRoot,
-        data: &mut SceneData,
-        zoom_ppb: f32,
-        render: &mut RenderState,
-        scrolled_in_place: bool,
-    ) {
-        if self.work.live_frames {
-            if scrolled_in_place {
-                render.cache.invalidate_inspector();
-            }
-            return self.live_frame(ui, data, render);
-        }
-        self.invalidated_layers.clear();
-        crate::ui_bridge::sync_automation_lane_order(&data.project, &mut data.selection);
-        if self.needs_structural_sync {
-            super::sync_data(ui, data, zoom_ppb);
-        } else {
-            // Configuring inspector cards clears their row widget IDs. The
-            // live app only does that before a structural rebuild; doing it
-            // on a value-only frame leaves push_state unable to repaint the
-            // existing toggle/slider widgets.
-            super::sync_project_data(ui, &data.project, data.active, &data.selection);
-            ui.viewport.set_zoom(zoom_ppb);
-            ui.rt_quality_panel.configure(data.project.settings.rt_quality);
-        }
-        // BUG-073 fix shape (b): this driver has no per-frame timer, so a
-        // tween a dispatch just armed (e.g. a newly-armed drawer growing a
-        // card's row count) would otherwise sit at its t=0 state forever —
-        // `Snapshot`/`Dump` don't rebuild, they just read whatever THIS call
-        // last produced, so settling has to happen here, before the rebuild
-        // decision below. Only forces a rebuild when something was actually
-        // mid-flight, so a script with nothing armed keeps the same
-        // cache-hit behavior it had before this fix.
-        let settled = ui.inspector.skip_to_settled(&mut ui.tree)
-            | ui.scene_setup_panel.skip_cards_to_settled(&mut ui.tree);
-        // Mirror app_render.rs's per-frame overlay translation: opening an
-        // overlay (browser popup, dropdown) via `try_open_dropdown` consumes
-        // the action and only sets `overlay_dirty` — no dispatched action
-        // marks structural, so without this fold the overlay region is never
-        // re-minted and a flow's click that opens the browser popup asserts
-        // against a tree with no popup nodes.
-        let overlay_changed = ui.overlay_dirty;
-        ui.overlay_dirty = false;
-        let mut signals = UiFrameSignals {
-            needs_structural_sync: self.needs_structural_sync || settled,
-            scroll_dirty: self.scroll_dirty,
-            scrolled_in_place,
-            ..Default::default()
-        };
-        if overlay_changed {
-            signals.scroll_dirty.visual = true;
-        }
-        apply_ui_frame_invalidations(ui, Some(&mut render.cache), &mut signals);
-        self.needs_structural_sync = signals.needs_structural_sync;
-        self.scroll_dirty = signals.scroll_dirty;
-        // The visual bit is one-shot (consumed by the rebuild decision above),
-        // same as the live driver's per-frame `scroll_dirty.clear()`.
-        self.scroll_dirty.visual = false;
-        super::reconcile_state(ui, data);
-        render.gate.mark();
     }
 
     fn assert(
@@ -2116,7 +2025,7 @@ impl Runner {
             .expect("write dump json");
     }
 
-    /// P2 (D3): reads back the offscreen `advance_frame`/the `Step` loop
+    /// P2 (D3): reads back the offscreen `live_frame`/the `Step` loop
     /// already composited through the shared seam — no fresh device/cache is
     /// built here (that was `render_ui_to_png`'s old, always-full-clear
     /// shape; see `render.rs`'s module doc). Draws the SAME

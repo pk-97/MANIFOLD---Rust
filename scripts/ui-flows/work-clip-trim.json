@@ -6,5 +6,6 @@
       "gesture": { "DragFrames": { "to": { "Point": { "x": 400.0, "y": 712.08 } }, "steps": 60 } }
     }
   },
-  { "AssertWork": { "window": "trim_1s" } }
+  { "AssertWork": { "window": "trim_1s" } },
+  "AssertFresh"
 ]

@@ -880,7 +880,7 @@ P1 and P2 land together as one merge. That merge keeps today's external-sync beh
   - `crates/manifold-playback/src/frame_grid.rs`, the D2 deadline grid that P2's `FrameTimer` wraps;
   - `pub mod transport_clock;` and `pub mod frame_grid;` in `crates/manifold-playback/src/lib.rs`;
   - the `transport_clock` tests named in section 4.
-- **Gate:** `CARGO_BUILD_JOBS=4 cargo nextest run -p manifold-playback transport_clock`; `cargo clippy -p manifold-playback -- -D warnings`. Negative: `rg -n 'Instant|SystemTime' crates/manifold-playback/src/transport_clock.rs` = 0.
+- **Gate:** `cargo nextest run -p manifold-playback transport_clock`; `cargo clippy -p manifold-playback -- -D warnings`. Negative: `rg -n 'Instant|SystemTime' crates/manifold-playback/src/transport_clock.rs` = 0.
 - **Forbidden:** wiring into the engine; a rational fps type; an `f64` time field in the clock.
 - **Size:** about 350 lines plus 350 of tests. **Demo:** none (L1). **Test scope:** manifold-playback.
 

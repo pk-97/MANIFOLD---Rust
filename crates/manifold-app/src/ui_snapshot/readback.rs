@@ -111,6 +111,74 @@ fn surface_target_count(surfaces: &Value) -> usize {
         .unwrap_or(0)
 }
 
+/// Flags that record input state or paint bookkeeping, not what the tree shows.
+const VOLATILE_FLAGS: [&str; 4] = ["DIRTY", "FOCUSED", "HOVERED", "PRESSED"];
+
+/// A dump with rebuild bookkeeping removed, so a rebuild that reproduces the
+/// same tree compares equal: nodes are keyed by their position in a canonical
+/// order (not their slot index), parents point at positions, the per-node generation
+/// and mint counter (`draw_order`) are dropped, input-state flags are
+/// stripped, and a hidden node's rect is ignored.
+pub(super) fn normalize_dump(dump: &Value) -> Value {
+    let Some(nodes) = dump.get("nodes").and_then(Value::as_array) else {
+        return dump.clone();
+    };
+    // Canonical order: by what the node shows, so an in-place node pool (the
+    // ruler ticks) that reuses slots in a different order than a fresh build
+    // still compares equal. Ties keep dump order.
+    let sort_key = |n: &Value| {
+        let field = |k: &str| n.get(k).map(Value::to_string).unwrap_or_default();
+        let visible = n.get("flags").and_then(Value::as_str).is_none_or(|f| f.contains("VISIBLE"));
+        let rect = if visible { field("rect") } else { String::new() };
+        [field("type"), rect, field("text"), field("bg"), field("name")].join("|")
+    };
+    let mut order: Vec<usize> = (0..nodes.len()).collect();
+    order.sort_by_cached_key(|&i| sort_key(&nodes[i]));
+    let nodes: Vec<&Value> = order.iter().map(|&i| &nodes[i]).collect();
+    let position: std::collections::HashMap<u64, usize> =
+        nodes.iter().enumerate().filter_map(|(i, n)| node_id(n).map(|id| (id, i))).collect();
+    let nodes: Vec<Value> = nodes
+        .iter()
+        .enumerate()
+        .map(|(i, &n)| {
+            let mut n = n.clone();
+            if let Some(obj) = n.as_object_mut() {
+                obj.remove("gen");
+                // `draw_order` is the mint counter, read by nothing that paints.
+                obj.remove("draw_order");
+                obj.insert("id".into(), Value::from(i as u64));
+                let parent = obj.get("parent").and_then(Value::as_u64).and_then(|p| position.get(&p).copied());
+                obj.insert("parent".into(), parent.map_or(Value::Null, |p| Value::from(p as u64)));
+                if let Some(flags) = obj.get("flags").and_then(Value::as_str) {
+                    let kept = strip_volatile_flags(flags);
+                    // A hidden node draws nothing, so where it sits is not shown.
+                    if !kept.split(" | ").any(|f| f == "VISIBLE") {
+                        obj.remove("rect");
+                    }
+                    obj.insert("flags".into(), Value::from(kept));
+                }
+            }
+            n
+        })
+        .collect();
+    let mut out = dump.clone();
+    if let Some(obj) = out.as_object_mut() {
+        obj.insert("nodes".into(), Value::from(nodes));
+    }
+    out
+}
+
+/// `UIFlags(VISIBLE | HOVERED)` → `VISIBLE`: the flag names minus the volatile ones.
+fn strip_volatile_flags(flags: &str) -> String {
+    let inner = flags.strip_prefix("UIFlags(").and_then(|s| s.strip_suffix(')')).unwrap_or(flags);
+    inner
+        .split('|')
+        .map(str::trim)
+        .filter(|f| !f.is_empty() && !VOLATILE_FLAGS.contains(f))
+        .collect::<Vec<_>>()
+        .join(" | ")
+}
+
 /// Node-level diff between two tree dumps (schema: `dump::dump_tree_ex` —
 /// top-level `{node_count, nodes: [...], custom_surfaces: [...]}`). Matches
 /// nodes by `id`; `custom_surfaces` is compared for raw equality (a one-line
@@ -118,7 +186,8 @@ fn surface_target_count(surfaces: &Value) -> usize {
 /// passing as "identical"). Returns the report as printable lines (one per
 /// added/removed/changed node, a summary line last) plus whether anything
 /// differed.
-fn diff_trees(a: &Value, b: &Value) -> (Vec<String>, bool) {
+pub(super) fn diff_trees(a: &Value, b: &Value) -> (Vec<String>, bool) {
+    let (a, b) = (&normalize_dump(a), &normalize_dump(b));
     static EMPTY: Vec<Value> = Vec::new();
     let a_nodes = a.get("nodes").and_then(Value::as_array).unwrap_or(&EMPTY);
     let b_nodes = b.get("nodes").and_then(Value::as_array).unwrap_or(&EMPTY);
@@ -187,7 +256,8 @@ fn diff_trees(a: &Value, b: &Value) -> (Vec<String>, bool) {
 }
 
 /// `cargo xtask ui-snap diff <a.json> <b.json>` — load two tree-dump JSON
-/// files, print the node-level diff report to stdout, and exit: `0` if the
+/// files, print the node-level diff report to stdout (rebuild bookkeeping
+/// ignored, see [`normalize_dump`]), and exit: `0` if the
 /// dumps are identical, `1` if anything differs, `2` on a read/parse error.
 pub fn cmd_diff(a_path: &str, b_path: &str) {
     let read = |path: &str| -> String {
@@ -335,20 +405,49 @@ mod tests {
         let b = dump(json!([{ "id": 42, "rect": [10.0, 20.0, 100.0, 30.0], "bg": "#38383cff" }]));
         let (lines, differs) = diff_trees(&a, &b);
         assert!(differs);
-        assert!(lines[0].starts_with("node 42 "), "unexpected line: {}", lines[0]);
+        assert!(lines[0].starts_with("node 0 "), "unexpected line: {}", lines[0]);
         assert!(lines[0].contains("bg #2a2a2dff -> #38383cff"), "unexpected line: {}", lines[0]);
         assert_eq!(lines.last().unwrap(), "0 added, 0 removed, 1 changed, 0 unchanged");
     }
 
     #[test]
     fn added_and_removed_nodes_are_detected() {
-        let a = dump(json!([{ "id": 1, "rect": [0.0, 0.0, 10.0, 10.0] }]));
-        let b = dump(json!([{ "id": 2, "rect": [0.0, 0.0, 10.0, 10.0] }]));
+        let one = json!({ "id": 1, "rect": [0.0, 0.0, 10.0, 10.0] });
+        let two = json!({ "id": 2, "rect": [5.0, 0.0, 10.0, 10.0] });
+        let a = dump(json!([one.clone()]));
+        let b = dump(json!([one, two]));
         let (lines, differs) = diff_trees(&a, &b);
         assert!(differs);
-        assert!(lines.iter().any(|l| l == "node 1 [-]: removed"));
-        assert!(lines.iter().any(|l| l == "node 2 [-]: added"));
-        assert_eq!(lines.last().unwrap(), "1 added, 1 removed, 0 changed, 0 unchanged");
+        assert!(lines.iter().any(|l| l == "node 1 [-]: added"), "lines: {lines:?}");
+        let (lines, _) = diff_trees(&b, &a);
+        assert!(lines.iter().any(|l| l == "node 1 [-]: removed"), "lines: {lines:?}");
+    }
+
+    #[test]
+    fn rebuild_bookkeeping_is_ignored() {
+        // A rebuild re-mints every node: new generations, new slots, and the
+        // hover or press it was under. The same tree must still compare equal.
+        let a = dump(json!([
+            { "id": 3, "gen": 1, "parent": null, "flags": "UIFlags(VISIBLE | HOVERED)", "rect": [0.0, 0.0, 10.0, 10.0] },
+            { "id": 4, "gen": 1, "parent": 3, "flags": "UIFlags(VISIBLE | DIRTY)", "rect": [1.0, 1.0, 5.0, 5.0] },
+        ]));
+        let b = dump(json!([
+            { "id": 90, "gen": 7, "parent": null, "flags": "UIFlags(VISIBLE)", "rect": [0.0, 0.0, 10.0, 10.0] },
+            { "id": 91, "gen": 7, "parent": 90, "flags": "UIFlags(VISIBLE | PRESSED | FOCUSED)", "rect": [1.0, 1.0, 5.0, 5.0] },
+        ]));
+        let (lines, differs) = diff_trees(&a, &b);
+        assert!(!differs, "lines: {lines:?}");
+    }
+
+    #[test]
+    fn reparenting_is_still_a_change() {
+        let a = dump(json!([
+            { "id": 1, "parent": null }, { "id": 2, "parent": null }, { "id": 3, "parent": 1 },
+        ]));
+        let b = dump(json!([
+            { "id": 1, "parent": null }, { "id": 2, "parent": null }, { "id": 3, "parent": 2 },
+        ]));
+        assert!(diff_trees(&a, &b).1);
     }
 
     #[test]

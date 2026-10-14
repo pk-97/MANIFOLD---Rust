@@ -234,6 +234,185 @@ pub(crate) fn apply_ui_frame_invalidations(
     }
 }
 
+/// The per-frame UI flags that outlive one frame: what input handlers and the
+/// editing host set, and what [`run_projection_pass`] consumes. The live App
+/// keeps these as its own fields; the script runner owns one of these.
+#[cfg(feature = "ui-snapshot")]
+#[derive(Default)]
+pub(crate) struct UiFrameFlags {
+    /// A tree rebuild with no projection (modifier keys, resize drags, tweens).
+    pub rebuild: bool,
+    /// Re-project the project and inspector and rebuild, next frame.
+    pub structural: bool,
+    /// A lanes-only automation geometry resync.
+    pub automation_lanes: bool,
+    pub scroll: ScrollDirty,
+    /// Layer grid bitmaps the editing host invalidated.
+    pub invalidated_layers: Vec<usize>,
+}
+
+/// Borrowed view of the flags [`run_projection_pass`] reads and writes back.
+pub(crate) struct FrameFlagsMut<'a> {
+    pub needs_rebuild: &'a mut bool,
+    pub automation_lanes_dirty: &'a mut bool,
+    pub scroll_dirty: &'a mut ScrollDirty,
+    pub invalidate_layers: &'a mut Vec<usize>,
+}
+
+#[cfg(feature = "ui-snapshot")]
+impl UiFrameFlags {
+    pub(crate) fn as_mut(&mut self) -> FrameFlagsMut<'_> {
+        FrameFlagsMut {
+            needs_rebuild: &mut self.rebuild,
+            automation_lanes_dirty: &mut self.automation_lanes,
+            scroll_dirty: &mut self.scroll,
+            invalidate_layers: &mut self.invalidated_layers,
+        }
+    }
+}
+
+/// What moved since the last frame, decided by the caller exactly as
+/// `tick_and_render` decides it: the structural flag it consumed this frame,
+/// and whether the selection version or the active layer changed.
+pub(crate) struct ProjectionChanges {
+    pub structural: bool,
+    pub selection_changed: bool,
+    pub active_layer_changed: bool,
+    pub scrolled_in_place: bool,
+}
+
+/// The `push_state` inputs that are not project, selection or active layer.
+pub(crate) struct PushInputs<'a> {
+    pub content_state: &'a crate::content_state::ContentState,
+    pub is_dirty: bool,
+    pub project_path: Option<&'a std::path::Path>,
+    pub transport_cache: &'a mut crate::ui_bridge::TransportDisplayCache,
+}
+
+/// The projection pass, called by the live App (`tick_and_render`) and the
+/// script runner: selection, structural and active-layer projection (mirrored
+/// onto the editor window's inspector when one is open), then `between` (the
+/// caller's per-frame work that sits between projection and rebuild in the
+/// App: drag polling; returns whether a clip move or trim drag is live),
+/// auto-scroll, overlay open/close, the rebuild decision, `push_state`, and the
+/// drag-time clip and lane re-projection. Moved from `tick_and_render`, not
+/// rewritten; no decision changed (UI_INVALIDATION_DESIGN.md P4a).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn run_projection_pass(
+    ui_root: &mut UIRoot,
+    editor_ui_root: Option<&mut UIRoot>,
+    cache: Option<&mut UICacheManager>,
+    project: &mut manifold_core::project::Project,
+    selection: &mut manifold_ui::UIState,
+    active_layer: &mut Option<manifold_core::LayerId>,
+    flags: FrameFlagsMut<'_>,
+    changes: ProjectionChanges,
+    push: PushInputs<'_>,
+    between: impl FnOnce(
+        &mut UIRoot,
+        &mut manifold_core::project::Project,
+        &mut manifold_ui::UIState,
+        &mut Option<manifold_core::LayerId>,
+        &mut FrameFlagsMut<'_>,
+    ) -> bool,
+) {
+    let mut flags = flags;
+    let mut needs_structural_sync = changes.structural;
+    let latched = &push.content_state.automation_latched_params;
+    let led_preview = push.content_state.led_preview.as_ref();
+    let active_idx = |project: &manifold_core::project::Project, id: &Option<manifold_core::LayerId>| {
+        id.as_ref().and_then(|id| project.timeline.find_layer_index_by_id(id))
+    };
+
+    // Selection version change → sync inspector so it shows the newly selected clip
+    if changes.selection_changed && !needs_structural_sync {
+        let idx = active_idx(project, active_layer);
+        crate::ui_bridge::sync_inspector_data(ui_root, project, idx, selection, latched, led_preview);
+        needs_structural_sync = true;
+    }
+
+    if needs_structural_sync || changes.active_layer_changed {
+        let idx = active_idx(project, active_layer);
+        crate::ui_bridge::sync_automation_lane_order(project, selection);
+        crate::ui_bridge::sync_project_data(ui_root, project, idx, selection);
+        crate::ui_bridge::sync_inspector_data(ui_root, project, idx, selection, latched, led_preview);
+        // Inspector content changed — needs rebuild.
+        needs_structural_sync = true;
+    }
+    // Mirror the inspector sync onto the editor window's own inspector so its
+    // column stays in lockstep with the main one; reconfigure (which resets
+    // transient card state) fires only when it does for the main window.
+    if needs_structural_sync && let Some(ed) = editor_ui_root {
+        let idx = active_idx(project, active_layer);
+        crate::ui_bridge::sync_inspector_data(ed, project, idx, selection, latched, led_preview);
+    }
+
+    let clip_drag = between(ui_root, project, selection, active_layer, &mut flags);
+
+    // Auto-scroll during playback is horizontal-only, and runs before the
+    // build so a rebuild includes the new scroll.
+    if crate::ui_bridge::check_auto_scroll(ui_root, push.content_state, project) {
+        flags.scroll_dirty.scroll_x = true;
+    }
+    // Overlays (dropdown, pickers, Audio Setup) record into `overlay_draw` at
+    // build. Opening one flags `overlay_dirty`; a close by any path only flips
+    // `is_open`, so the open-set comparison catches both and feeds the visual
+    // rebuild that re-records the overlay region.
+    if std::mem::take(&mut ui_root.overlay_dirty) {
+        flags.scroll_dirty.visual = true;
+    }
+    if ui_root.detect_overlay_open_change() {
+        flags.scroll_dirty.visual = true;
+    }
+    let scroll_dirty = std::mem::take(flags.scroll_dirty);
+
+    let mut signals = UiFrameSignals {
+        needs_rebuild: *flags.needs_rebuild,
+        needs_structural_sync,
+        scroll_dirty,
+        scrolled_in_place: changes.scrolled_in_place,
+    };
+    apply_ui_frame_invalidations(ui_root, cache, &mut signals);
+    *flags.needs_rebuild = signals.needs_rebuild;
+
+    // Push engine state AFTER build so new nodes get state.
+    let idx = active_idx(project, active_layer);
+    crate::ui_bridge::push_state(
+        ui_root,
+        project,
+        push.content_state,
+        idx,
+        selection,
+        push.is_dirty,
+        push.project_path,
+        push.transport_cache,
+    );
+
+    // Re-project clips and automation lanes only when their source moved: a
+    // clip move/trim drag writes clip data into the project each frame; a
+    // point preview or restore asks for a lanes-only resync.
+    if needs_structural_sync || clip_drag {
+        crate::ui_bridge::sync_clip_positions(ui_root, project);
+    }
+    if needs_structural_sync || *flags.automation_lanes_dirty {
+        crate::ui_bridge::sync_automation_lane_geometry(
+            ui_root,
+            project,
+            selection.automation_mode_visible,
+            &selection.chosen_automation_params,
+            &selection.automation_lane_order,
+            &selection.hidden_automation_lanes,
+            &selection.pinned_automation_lanes,
+        );
+    }
+    *flags.automation_lanes_dirty = false;
+
+    // Per-layer bitmap invalidation from editing operations.
+    for layer_idx in flags.invalidate_layers.drain(..) {
+        ui_root.viewport.invalidate_layer_bitmap(layer_idx);
+    }
+}
+
 /// Composites the main-window UI for one frame into `offscreen`:
 /// `render_dirty_panels` (atlas, LoadOp::Load) + clear-to-black +
 /// full-atlas blit + optional video-band blit. Does NOT acquire or present a

@@ -231,6 +231,9 @@ pub struct AudioModRuntime {
     _process_sub: manifold_audio::directory::Subscription,
     /// Whether we've already triggered the one-time mic permission prompt.
     mic_access_requested: bool,
+    /// False in headless tests: the room microphone must never drive a
+    /// test value, so no capture device is opened.
+    device_capture: bool,
     /// Send the Audio Setup scope is showing, if open. The tapped send's analyzer
     /// buffers scope columns; the per-band meters read its snapshot slot.
     spec_send: Option<AudioSendId>,
@@ -309,6 +312,7 @@ impl Default for AudioModRuntime {
             _hotplug_sub: sub,
             _process_sub: process_sub,
             mic_access_requested: false,
+            device_capture: true,
             spec_send: None,
             spec_dirty: false,
             analyzers: AHashMap::new(),
@@ -887,7 +891,7 @@ impl AudioModRuntime {
             || self.spec_send.is_some()
             || project.has_active_clip_triggers()
             || !self.visual_consumed.is_empty();
-        let gate = any_capture && needs_analysis && !project.audio_setup.sends.is_empty();
+        let gate = self.device_capture && any_capture && needs_analysis && !project.audio_setup.sends.is_empty();
         if !gate {
             if self.capture.is_some() {
                 log::info!("[AudioMod] Stopping capture — no capture-fed send needs the device");
@@ -1017,6 +1021,13 @@ const RECONCILE_PARTS: manifold_core::change::ChangeSet = manifold_core::change:
 impl AudioModRuntime {
     pub fn directory_version(&self) -> u64 {
         self.directory_version
+    }
+
+    /// Never open a capture device (headless tests).
+    #[cfg(test)]
+    pub(crate) fn without_device_capture(mut self) -> Self {
+        self.device_capture = false;
+        self
     }
 
     /// The Shapes reaction row (D25): send gain lives in the capture's

@@ -3,5 +3,6 @@
   { "ScrubDrag": { "param": "LayerOpacity", "from": 1.0, "to": 1.0, "steps": 1 } },
   { "ScrubDrag": { "param": { "EffectParam": { "effect": 0, "param": "amount" } }, "from": 0.5, "to": 0.5, "steps": 1 } },
   { "ScrubDrag": { "param": { "EffectParam": { "effect": 1, "param": "amount" } }, "from": 0.5, "to": 0.5, "steps": 1 } },
-  { "AssertWork": { "window": "three_grabs_lanes_hidden" } }
+  { "AssertWork": { "window": "three_grabs_lanes_hidden" } },
+  "AssertFresh"
 ]

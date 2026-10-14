@@ -29,7 +29,44 @@ impl crate::app::Application {
     }
 }
 
-impl AppInputHost<'_> {
+impl<'a> AppInputHost<'a> {
+    /// A host with no output window, pending export or saved project path, its
+    /// flags landing in `flags` (the script runner's card edits).
+    #[cfg(feature = "ui-snapshot")]
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn detached(
+        project: &'a mut manifold_core::project::Project,
+        content_tx: &'a crossbeam_channel::Sender<crate::content_command::ContentCommand>,
+        content_state: &'a crate::content_state::ContentState,
+        ui_root: &'a mut UIRoot,
+        selection: &'a mut UIState,
+        active_layer: &'a mut Option<LayerId>,
+        flags: &'a mut crate::ui_frame::UiFrameFlags,
+        scratch: &'a mut [bool; 2],
+        project_io: &'a mut crate::project_io::ProjectIOService,
+        #[cfg(target_os = "macos")] clipboard_change_count: &'a mut Option<i64>,
+    ) -> Self {
+        let [pending_close_output, pending_export] = scratch;
+        Self {
+            project,
+            content_tx,
+            content_state,
+            ui_root,
+            selection,
+            active_layer,
+            needs_rebuild: &mut flags.rebuild,
+            needs_structural_sync: &mut flags.structural,
+            scroll_dirty: &mut flags.scroll,
+            current_project_path: &None,
+            has_output_window: false,
+            pending_close_output,
+            pending_export,
+            project_io,
+            #[cfg(target_os = "macos")]
+            internal_clipboard_change_count: clipboard_change_count,
+        }
+    }
+
     /// Shared by live menus and the rendered interaction harness.
     pub(crate) fn edit_cards(&mut self, action: CardEditAction) -> bool {
         match action {

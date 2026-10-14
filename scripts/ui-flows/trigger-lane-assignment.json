@@ -137,7 +137,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "text": "\u2713 GLOW / Bloom / Amount",
+          "text": "✓ GLOW / Bloom / Amount",
           "type": "Button"
         }
       },
@@ -149,7 +149,7 @@
     "Pointer": {
       "target": {
         "Query": {
-          "text": "\u2713 GLOW / Bloom / Amount",
+          "text": "✓ GLOW / Bloom / Amount",
           "type": "Button"
         }
       },
@@ -190,7 +190,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "text": "\u2713 GLOW / Bloom / Amount",
+          "text": "✓ GLOW / Bloom / Amount",
           "type": "Button"
         }
       },
@@ -201,7 +201,7 @@
     "Pointer": {
       "target": {
         "Query": {
-          "text": "\u2713 GLOW / Bloom / Amount",
+          "text": "✓ GLOW / Bloom / Amount",
           "type": "Button"
         }
       },
@@ -254,7 +254,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "text": "Assign\u2026",
+          "text": "Assign…",
           "type": "Button"
         }
       },
@@ -350,7 +350,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "text": "Assign\u2026",
+          "text": "Assign…",
           "type": "Button"
         }
       },
@@ -445,7 +445,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "text": "Assign\u2026",
+          "text": "Assign…",
           "type": "Button"
         }
       },
@@ -512,6 +512,21 @@
   },
   "Snapshot",
   "SaveReloadProject",
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "text": "GLOW",
+          "type": "Button"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
   {
     "Assert": {
       "selector": {

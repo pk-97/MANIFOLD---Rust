@@ -76,7 +76,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/hook_telemetry.py\" preToolUseBash.py closes-trailer-guard.py context-nudge.py"
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/hook_telemetry.py\" preToolUseBash.py context-nudge.py"
           }
         ]
       },

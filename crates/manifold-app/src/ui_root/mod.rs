@@ -120,9 +120,6 @@ impl ScrollDirty {
         (self.scroll_x || self.scroll_y) && !self.zoom && !self.visual
     }
 
-    pub fn clear(&mut self) {
-        *self = Self::default();
-    }
 }
 
 /// A project-embedded ("forked") preset surfaced into the Add pickers. Carries

@@ -79,6 +79,12 @@ impl TempoRecorder {
     // SESSION STATE
     // =================================================================
 
+    /// Arm a recording session. Writes nothing to the project.
+    pub fn start_session(&mut self) {
+        self.session_active = true;
+        self.reset_tracking();
+    }
+
     /// Called each frame from the update loop. Transitions recording session
     /// active/inactive based on transport state.
     /// Port of Unity TempoRecorder.cs UpdateSessionState lines 51-65.

@@ -1,10 +1,10 @@
 # Scene modifier RT — one evaluated geometry for raster and rays
 
-<!-- index: Implementation contract for automatic ray tracing of scene-modified meshes: geometry revisions, fusion, ordered BLAS updates, emissive sampling, export, and K3 phase briefs. -->
+<!-- index: Implementation contract for automatic ray tracing of scene-modified meshes: geometry revisions, fusion, ordered BLAS updates, emissive sampling, export, and phase briefs. -->
 
 **Status:** IN PROGRESS · 2026-09-18 · P0–P4b landed; P5–P8 production implementation is complete in `0e95bb5dd` and `d7e054595`. Current-frame, refit, catalog, export and bounded performance evidence is in acceptance §A11. Full acceptance remains open for the listed qualification gaps and Peter’s L4 review.
 **Prerequisites:** existing scene-modifier foundation and native Metal RT on main. Work item: `BUG-e3p6.4`.
-**Execution contract:** [DESIGN_DOC_STANDARD.md](DESIGN_DOC_STANDARD.md), sections 5–6 and 8; repository `AGENTS.md` takes precedence over older workflow guidance.
+**Execution contract:** [DESIGN_DOC_STANDARD.md](DESIGN_DOC_STANDARD.md), sections 5–6 and 8; repository `CLAUDE.md` takes precedence over older workflow guidance.
 
 Peter: “I want to get RT working as a ‘trait’ of our scene modifiers so it ‘just works’ for all current and future scene modifiers.” This design makes that a geometry-output contract. **Raster and RT consume the same final mesh, instances, appearance, and material state for the same evaluated frame.** Modifier recipes never implement ray tracing. Geometry primitives describe changes; the graph preserves that description; the renderer performs one shared update policy for live playback and export.
 
@@ -419,7 +419,7 @@ Exact fixtures, numerical thresholds, commands and failure interpretation are in
 
 ## 7. Phasing — execution briefs
 
-All phases: fresh session, read back this phase's decisions/forbidden moves before coding; use the existing slot ring from a verified `origin/main` tip. Lead owns diagnosis/review/landing; workers do not delegate or land. Re-run the inventory commands; a count/site change requires a written delta review before edits. Use `scripts/codex_prepare.py` for worker briefs and `scripts/codex_checks.py` for changed-file checks. No Claude configuration changes are part of this design.
+All phases: fresh session, read back this phase's decisions/forbidden moves before coding; use the existing slot ring from a verified `origin/main` tip. Lead owns diagnosis/review/landing; workers do not delegate or land. Re-run the inventory commands; a count/site change requires a written delta review before edits. Use `scripts/codex_checks.py` for changed-file checks. No Claude configuration changes are part of this design.
 
 Checks below use an absolute shell variable `RT_WORKTREE` for the acquired slot. No app implementation is performed by this design-authoring task. Each phase updates its marker and this header when actually landed. No phase may claim acceptance from its own report alone: the lead reviews code and gate output, runs the required landing gate, and owns Peter's demo handoff.
 

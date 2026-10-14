@@ -1,8 +1,9 @@
 use crate::command::{Command, CompositeCommand};
 use crate::commands::clip::*;
 use crate::commands::layer::DuplicateLayersCommand;
+use crate::edit::ProjectEdit;
 use crate::undo::UndoRedoManager;
-use manifold_core::change::{ChangeSet, PartStamps};
+use manifold_core::change::{ChangeSet, Part, PartStamps};
 use manifold_core::clip::TimelineClip;
 use manifold_core::layer::Layer;
 use manifold_core::project::Project;
@@ -113,11 +114,54 @@ impl EditingService {
     /// A non-undoable project write that declares the parts it touches (D3).
     /// Stamps `touches`; never bumps `data_version` (D23). An empty set is a
     /// no-op stamp, for writes that found nothing to change.
-    pub fn mutate(&mut self, touches: ChangeSet, project: &mut Project, f: impl FnOnce(&mut Project)) {
+    pub fn mutate<'p>(&mut self, touches: ChangeSet, project: impl Into<ProjectEdit<'p>>, f: impl FnOnce(&mut Project)) {
+        let project = project.into().into_mut();
         let window = audit::open(project);
         f(project);
         audit::close(window, project, touches, "mutate");
         self.stamps.bump(touches);
+    }
+
+    /// A write whose later steps read earlier ones, so it cannot be built as
+    /// one command up front (offline imports, detection). `f` gets the
+    /// project and this service; whatever it executes or records goes to
+    /// history as usual, and `f` returns the parts it changed outside
+    /// history (none when it found nothing to change). The whole pass is one
+    /// audit window.
+    pub fn mutate_with_history<'p, R>(
+        &mut self,
+        project: impl Into<ProjectEdit<'p>>,
+        f: impl FnOnce(&mut Project, &mut Self) -> (R, ChangeSet),
+    ) -> R {
+        let project = project.into().into_mut();
+        let before = self.stamps;
+        let window = audit::open(project);
+        let (out, touches) = f(project, self);
+        let declared = touches.union(self.stamps.moved_since(&before));
+        audit::close(window, project, declared, "mutate_with_history");
+        self.stamps.bump(touches);
+        out
+    }
+
+    /// Paste the clipboard as one undo step. A paste below the last layer
+    /// adds the missing layers first, outside history, as today.
+    pub fn paste_clips_into<'p>(
+        &mut self,
+        project: impl Into<ProjectEdit<'p>>,
+        target_beat: Beats,
+        target_layer: i32,
+    ) -> PasteResult {
+        self.mutate_with_history(project, |p, service| {
+            let layers_before = p.timeline.layers.len();
+            let mut result = service.paste_clips(p, target_beat, target_layer);
+            let added_layers = p.timeline.layers.len() != layers_before;
+            let commands = std::mem::take(&mut result.commands);
+            if !commands.is_empty() {
+                service.execute_batch(commands, "Paste clips".into(), &mut *p);
+            }
+            let touches = if added_layers { ChangeSet::of(&[Part::Layers]) } else { ChangeSet::NONE };
+            (result, touches)
+        })
     }
 
     // ─── Mutation gateway ───
@@ -127,7 +171,8 @@ impl EditingService {
         self.undo_manager.take_rejection()
     }
 
-    pub fn execute(&mut self, command: Box<dyn Command>, project: &mut Project) {
+    pub fn execute<'p>(&mut self, command: Box<dyn Command>, project: impl Into<ProjectEdit<'p>>) {
+        let project = project.into().into_mut();
         let touches = command.touches();
         let window = audit::open(project);
         if !self.undo_manager.execute(command, project) { return; }
@@ -144,15 +189,16 @@ impl EditingService {
     /// Execute a command and validate the resulting project before publishing
     /// it to history. Validation failures roll the command back and preserve
     /// the data version and both history stacks.
-    pub fn execute_with_validation<F>(
+    pub fn execute_with_validation<'p, F>(
         &mut self,
         command: Box<dyn Command>,
-        project: &mut Project,
+        project: impl Into<ProjectEdit<'p>>,
         validate: F,
     ) -> bool
     where
         F: FnMut(&Project) -> Result<(), String>,
     {
+        let project = project.into().into_mut();
         let touches = command.touches();
         let window = audit::open(project);
         if !self
@@ -198,17 +244,18 @@ impl EditingService {
 
     /// Undo the most recent command.
     #[must_use]
-    pub fn undo(&mut self, project: &mut Project) -> bool {
+    pub fn undo<'p>(&mut self, project: impl Into<ProjectEdit<'p>>) -> bool {
         self.undo_with_validation(project, |_| Ok(()))
     }
 
     /// Undo and validate the resulting project before publishing the history
     /// move. A failed validation restores the command and leaves the service
     /// version unchanged.
-    pub fn undo_with_validation<F>(&mut self, project: &mut Project, validate: F) -> bool
+    pub fn undo_with_validation<'p, F>(&mut self, project: impl Into<ProjectEdit<'p>>, validate: F) -> bool
     where
         F: FnMut(&Project) -> Result<(), String>,
     {
+        let project = project.into().into_mut();
         let touches = self.undo_manager.peek_undo_touches();
         let window = audit::open(project);
         if self.undo_manager.undo_with_validation(project, validate) {
@@ -225,17 +272,18 @@ impl EditingService {
 
     /// Redo the most recently undone command.
     #[must_use]
-    pub fn redo(&mut self, project: &mut Project) -> bool {
+    pub fn redo<'p>(&mut self, project: impl Into<ProjectEdit<'p>>) -> bool {
         self.redo_with_validation(project, |_| Ok(()))
     }
 
     /// Redo and validate the resulting project before publishing the history
     /// move. A failed validation restores the command and leaves the service
     /// version unchanged.
-    pub fn redo_with_validation<F>(&mut self, project: &mut Project, validate: F) -> bool
+    pub fn redo_with_validation<'p, F>(&mut self, project: impl Into<ProjectEdit<'p>>, validate: F) -> bool
     where
         F: FnMut(&Project) -> Result<(), String>,
     {
+        let project = project.into().into_mut();
         let touches = self.undo_manager.peek_redo_touches();
         let window = audit::open(project);
         if self.undo_manager.redo_with_validation(project, validate) {

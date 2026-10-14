@@ -15,6 +15,7 @@
 //! (`testdata/tempo_ramp_today.json`, same env var to re-record).
 
 use crossbeam_channel::{Receiver, Sender};
+use manifold_core::change::{ChangeSet, Part};
 use manifold_core::effects::{AutomationLane, AutomationPoint, ParamEnvelope, ParameterDriver, SegmentShape};
 use manifold_core::project::Project;
 use manifold_core::types::{BeatDivision, DriverWaveform, LayerType, TempoPointSource};
@@ -475,6 +476,7 @@ fn tempo_ramp_matches_today() {
     content.handle_command(ContentCommand::SetRecording(true));
     content.handle_command(ContentCommand::Play);
     const TICKS: usize = 120;
+    let start = content.editing_service.stamps();
     let mut rows = Vec::with_capacity(TICKS);
     for i in 0..TICKS {
         let bpm = 120.0 + 20.0 * i as f32 / (TICKS - 1) as f32;
@@ -482,7 +484,13 @@ fn tempo_ramp_matches_today() {
         content.tick_frame(&state_tx);
         rows.push([content.engine.current_beat().0, content.engine.current_time().0]);
     }
+    // The session's in-tick writes moved no stamp; its end is one Settings stamp.
+    let session = content.editing_service.stamps();
+    assert_eq!(session, start, "in-session tempo points and BPM are audited tick writes");
     content.handle_command(ContentCommand::Pause);
+    let ended = content.editing_service.stamps();
+    assert_eq!(ended.moved_since(&session), ChangeSet::of(&[Part::Settings]), "session end stamps Settings only");
+    assert_eq!(ended.get(Part::Settings), session.get(Part::Settings) + 1, "session end stamps Settings once");
     let points = content.engine.project().map_or(0, |p| p.tempo_map.point_count());
     let observed = serde_json::json!({ "rows": rows, "tempo_points_after_session": points });
     if recording() {
@@ -502,6 +510,32 @@ fn tempo_ramp_matches_today() {
     }
 }
 
+/// INV-22: a clock wobble is not an edit. A followed tempo that wobbles by
+/// ±0.01 BPM, outside a recording session, moves no stamp, publishes no
+/// snapshot and clones no project.
+#[test]
+fn clock_wobble_is_not_an_edit() {
+    let mut project = budget_project();
+    project.settings.bpm = Bpm(120.0);
+    let mut content = crate::headless_harness::headless_content_thread(project, 64, 64);
+    content.timer.set_frame_clocked(true);
+    let (state_tx, state_rx) = crossbeam_channel::unbounded::<ContentState>();
+    content.handle_command(ContentCommand::Play);
+    content.tick_frame(&state_tx);
+    let _ = state_rx.try_iter().count();
+    let before = content.editing_service.stamps();
+    let work = thread_work_snapshot();
+    for i in 0..120 {
+        let wobble = if i % 2 == 0 { 0.01 } else { -0.01 };
+        content.engine.set_live_external_tempo(true, Bpm(120.0 + wobble), TempoPointSource::Link);
+        content.tick_frame(&state_tx);
+    }
+    let work = thread_work_snapshot().since(&work);
+    assert_eq!(content.editing_service.stamps(), before, "a wobble moved a stamp");
+    assert_eq!(state_rx.try_iter().filter(|s| s.project_snapshot.is_some()).count(), 0, "a wobble published a snapshot");
+    assert_eq!(work.get(WorkKind::ProjectClone), 0, "a wobble cloned the project");
+}
+
 /// INV-20: perturb every Values and Shapes field `LIVE_SCALAR_CONSUMERS` lists,
 /// through the same `MutateProject` a live drag sends, and prove its consumer
 /// sees the new value on the next tick: read fresh from the project the tick
@@ -510,7 +544,7 @@ fn tempo_ramp_matches_today() {
 #[test]
 fn shapes_fields_reach_consumers() {
     use crate::content_command::touch;
-    use manifold_core::change::{LIVE_SCALAR_CONSUMERS, Part};
+    use manifold_core::change::LIVE_SCALAR_CONSUMERS;
     let mut bench = Bench::new();
     let fx_id = |b: &Bench, i: usize| b.content.engine.project().unwrap().timeline.layers[0].effects.as_ref().unwrap()[i].id.clone();
     fn glow(p: &mut Project) -> &mut manifold_core::layer::Layer {

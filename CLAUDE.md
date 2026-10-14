@@ -18,12 +18,12 @@ You don't persist between sessions. This file is what tomorrow's instance gets f
 
 ## How every session works
 
-- The lead orchestrates; agents do the work (Peter, 2026-10-13). The main session talks with Peter, decides, briefs, reviews and lands. Every edit, investigation, long read, probe and command run goes to an agent: Opus for judgment (diagnosis, GPU, design-sensitive changes, reviews, audits), Sonnet for decided, directed tasks, Haiku for retrieval and running a given command. Always the newest variant. The lead reads only to review. Roster and briefs: `docs/AGENT_ROUTING.md`.
+- The lead orchestrates; agents do the big work. The point is keeping the main session's context small, not keeping its hands clean. Anything that would pull a lot into the lead's context goes to an agent: investigations, long or multi-file reads, builds and test runs, probes, multi-file edits, reviews. Opus for judgment (diagnosis, GPU, design-sensitive changes, reviews, audits), Sonnet for decided, directed tasks, Haiku for retrieval and running a given command. Always the newest variant. Small things the lead does itself: a quick lookup, one short command, a small edit to a doc or rule. An agent starts with about 70k tokens of context before it does anything, so delegating a one-minute job costs more than doing it. Roster and briefs: `docs/AGENT_ROUTING.md`.
 - No inline python, read-only included: `python3 -c`, `python3 -` and heredocs are denied. Edit files with Edit/Write, read JSON with `jq`, run throwaway python as a scratchpad file (shebang, `chmod +x`) by its path.
 - No `cd`, not even as a prefix (`cd /tmp;`, `cd /dev/null;`). Use absolute paths, `git -C`, `--manifest-path`, or a subshell (`(cd X && cmd)`).
 - Never wait in the foreground. Long commands run with `run_in_background`; follow gates and landings with `scripts/watch_land.py` and anything else with the Monitor tool. No sleep loops, `kill -0` polls or sleep-then-tail.
-- Before a lane's one commit: clippy `--tests` on the touched crates, scoped nextest, and regenerate what you made stale (`dev.py node-catalog`, `dev.py docs-index`). After the commit, lanes run `scripts/landing_gate.py --repo "$WT" --cheap`.
-- Never gate or land a slot whose agent or Astra job may still be writing. A completed report does not prove it stopped; check first.
+- Before a lane's one commit: clippy `--tests` on the touched crates and their tests in one run. Nextest runs every test to the end, so one run shows every failure: fix them all, then rerun only the failures by name, never the full set again. Regenerate what you made stale (`dev.py node-catalog`, `dev.py docs-index`), then `scripts/landing_gate.py --repo "$WT" --cheap` once on the uncommitted tree. Its passes are reused at landing. Kill your background wait loops before you report.
+- Never gate or land a slot whose agent may still be writing. A completed report does not prove it stopped; check first.
 
 ## Hard rules
 
@@ -51,7 +51,7 @@ Rationale and incident history live in `.claude/GIT_TREE_DISCIPLINE.md`, the poi
 - **Memory is rules, not history** — hook-enforced (`memory-history-guard.py` is the spec): status goes to beads or the board, history stays in git; closed handoffs are deleted, not archived.
 - **Commit with a pathspec, never the index** — hook-denied (`index_add_guard`): `git add -- <paths>` for new files, `git commit -m '…' -- <paths>`. Mechanics: `.claude/GIT_TREE_DISCIPLINE.md` section 3b (Commit with a pathspec).
 - **`main` is the merge-based trunk.** Work on `wave/`/`lane/`/`feat/` branches; land with `scripts/land_branch.py` (fetch, merge main in, gate, no-ff merge, push). Never cherry-pick or re-commit content that exists on a live branch; never delete a branch until `git merge-base --is-ancestor <tip> origin/main` passes. Rewrites of main ask (hook); a manual merge, push or update-ref of an ungated tree to main is hook-denied (`land_pass_guard` is the spec; only `.beads/`+`docs/`+`.claude/hooks/` changes go direct). Protocol: `.claude/GIT_TREE_DISCIPLINE.md` section 2 (Landing protocol).
-- **Agent worktrees come from the slot ring only** — hook-enforced (`worktree-guard.py` is the spec). `scripts/agent-worktree.py acquire <task-label> <branch>`, one per workstream; verify the base tip before working; release at session end; `POOL FULL` is a loud stop.
+- **Agent worktrees come from the slot ring only** — hook-enforced (`worktree_add_guard` in `preToolUseBash.py` and `agent-worktree-isolation-guard.py` are the spec). `scripts/agent-worktree.py acquire <task-label> <branch>`, one per workstream; verify the base tip before working; release at session end; `POOL FULL` is a loud stop.
 - **One writer per worktree.** An agent that asked a question or reported "completed" may still be editing — check it has really stopped before launching another into that slot. A refused or unrun test is not a pass; report it as unverified.
 
 ## Two-thread model
@@ -77,7 +77,7 @@ No per-frame allocations on hot paths (engine tick, sync, rendering). Pre-alloca
 
 ## Voice
 
-Write like a person talking: short plain sentences, everyday words, technical terms explained once, never invented labels or acronyms. Lead with the outcome. No hedging, no narration, no prose history — history lives in git. Comments state a why or an invariant only; delete comments that restate the code. Docs state rules and contracts, not stories; provenance is one dated line only where the why isn't derivable. Never imitate legacy verbose prose when touching a file — strip it.
+Write like a person talking: short plain sentences, everyday words, technical terms explained once, never invented labels or acronyms. Lead with the outcome. No hedging, no narration, no prose history — history lives in git. Comments state a why or an invariant only; delete comments that restate the code. Docs state rules and contracts, not stories: no attribution of who said a rule or when, and provenance is one dated line only where the why isn't derivable — hook-enforced on added text (`memory-history-guard.py` is the spec). Never imitate legacy verbose prose when touching a file — strip it.
 
 ## Choosing your next move — oracle discipline
 
@@ -98,7 +98,7 @@ Verify one level closer to the stage than where you changed things — compiles 
 - **`scripts/TOOLS.md` is the tool inventory** (`scripts/dev.py --help` prints the same; `dev.py <verb>` runs it). Read it before writing any script, probe, or renderer: every verb names a tool that exists. A new `scripts/*` file gets a verb in `dev.py` (test-enforced); one-offs live in the scratchpad.
 - `rg` not `grep`, `fd` not `find`, `ast-grep` for code-shape queries. No rust-analyzer in agent sessions: it costs 3 GB and a re-index per branch switch on the cores cargo needs.
 - Runtime bugs: printlns, reproduce, read logs. Static analysis is for compile errors.
-- **Parallel lanes share one GPU and 14 cores.** Solve on the CPU first: small CPU reference tests that run in seconds. A GPU proof or an app render only confirms a finished stage, one run, through `scripts/gpu_queue.py`. Order the work in stages: edit, check, CPU proof, commit. Cargo runs one command at a time with `CARGO_BUILD_JOBS=4`. Codex can't take the GPU lock, so it writes GPU proofs and the lead runs them.
+- **Parallel lanes share one GPU and 14 cores.** Solve on the CPU first: small CPU reference tests that run in seconds. A GPU proof or an app render only confirms a finished stage, one run, through `scripts/gpu_queue.py`. Order the work in stages: edit, check, CPU proof, commit. Cargo uses every core by default; concurrent builds share them.
 - **Tests are scoped by default.** `cargo nextest run -p <touched crate> [filter]`; the landing gate maps changed Rust files to their module filtersets, sibling test modules, and named integration binaries. Comment/blank-only and docs-only diffs add no build, clippy, test, or GPU work. A `--workspace` sweep is justified only at a multi-crate landing or when blast radius genuinely crosses crates — say why in one line. Config: `.config/nextest.toml`. Adding or renaming a doc requires `scripts/gen_docs_index.py` (a freshness test enforces it).
 - **Clippy before every commit.** Worktree: `cargo clippy -p <touched> -- -D warnings`. Land with `scripts/land_branch.py`. Never blanket `cargo fmt` (the repo is not rustfmt-clean).
 - **GPU proofs** run through `scripts/gpu_proofs_gate.py`: always `cargo test`, never nextest (process-per-test defeats the device lock).
@@ -110,7 +110,7 @@ Verify one level closer to the stage than where you changed things — compiles 
 
 ## Agents
 
-**Routing policy: [docs/AGENT_ROUTING.md](docs/AGENT_ROUTING.md) is authoritative** — the roster, which model each slot reaches per launch profile, and the landing seat live there, not here. A judgment lead owns every decision and landed diff; lanes make one commit then stop for review and never land; review throughput caps parallelism. All agents obey every rule in this file.
+**Routing policy: [docs/AGENT_ROUTING.md](docs/AGENT_ROUTING.md) is authoritative** — the roster, which model each slot reaches, and agent effort live there, not here. A judgment lead owns every decision and landed diff; lanes make one commit then stop for review and never land; review throughput caps parallelism. All agents obey every rule in this file.
 
 ## Reference docs (read on demand)
 

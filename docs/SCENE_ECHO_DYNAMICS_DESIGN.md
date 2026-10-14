@@ -2,7 +2,7 @@
 
 <!-- index: Analytic echoes, reversible attraction and bounded recorded-transform history, with explicit seek and simulation boundaries. -->
 
-**Status:** IN PROGRESS · 2026-09-12 · Codex lead. Spatial Echoes is the approved bounded analytic-copy slice; recorded history and dynamics remain proposed.
+**Status:** IN PROGRESS · 2026-09-12. Spatial Echoes is the approved bounded analytic-copy slice; recorded history and dynamics remain proposed.
 **Prerequisites:** Existing unified modifier attachment, preparation and modulation infrastructure in the worktree. Foundation validation debt remains in the foundation plan; this bounded slice does not complete the entire contract.
 **Execution contract:** [DESIGN_DOC_STANDARD](DESIGN_DOC_STANDARD.md) sections 5–6 and 8. Conformance treatment; state-store and buffer lifecycle signatures must be re-derived before E3. Analytic echoes are the next proposed family; recorded history remains a separately gated later phase.
 
