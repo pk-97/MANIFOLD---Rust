@@ -483,6 +483,28 @@ impl PresetRuntime {
     /// chain position (docs/CHAIN_FUSION_DESIGN.md section 5). `None` on first build;
     /// skipped automatically when dimensions changed.
     pub fn try_build(inputs: ChainBuildInputs<'_>, prior: Option<&mut Self>) -> Option<Self> {
+        Self::build(inputs, prior).ok().flatten()
+    }
+
+    /// [`Self::try_build`] that tells "nothing to build" (`Ok(None)`: no
+    /// active effect) apart from a failed build (`Err`, with the structured
+    /// errors the build recorded; empty when the failing step only logged).
+    pub fn build(
+        inputs: ChainBuildInputs<'_>,
+        prior: Option<&mut Self>,
+    ) -> Result<Option<Self>, Vec<ChainError>> {
+        if !has_chain_active_effects(inputs.effects, inputs.groups) {
+            return Ok(None);
+        }
+        let mut errors = Vec::new();
+        Self::build_into(inputs, prior, &mut errors).map(Some).ok_or(errors)
+    }
+
+    fn build_into(
+        inputs: ChainBuildInputs<'_>,
+        prior: Option<&mut Self>,
+        errors: &mut Vec<ChainError>,
+    ) -> Option<Self> {
         let ChainBuildInputs {
             effects,
             groups,
@@ -540,12 +562,6 @@ impl PresetRuntime {
         let source_node = graph.add_node(Box::new(Source::new()));
         let mut effect_nodes: Vec<EffectSlot> = Vec::with_capacity(active_effects.len());
         let mut group_mix_nodes: Vec<(EffectGroupId, NodeInstanceId)> = Vec::new();
-        // Structured error accumulator. Moves into `PresetRuntime::errors`
-        // at the end of this function; mid-build failures push here so
-        // the editor (and the consistent `[chain-error]` terminal log)
-        // can show them tied to the affected effect.
-        let mut errors: Vec<ChainError> = Vec::new();
-
         let mut prev_node: NodeInstanceId = source_node;
         let mut prev_out_port: &'static str = "out";
 
@@ -707,7 +723,7 @@ impl PresetRuntime {
                             match ResolvedBinding::from_static(b, &node_map) {
                                 Some(rb) => bindings.push(rb),
                                 None => record_chain_error(
-                                    &mut errors,
+                                    errors,
                                     ChainError::StaticBindingHandleMissing {
                                         effect_type: base_view.type_id.clone(),
                                         binding_id: b.id.to_string(),
@@ -735,7 +751,7 @@ impl PresetRuntime {
                             match ResolvedBinding::from_user(&c, &graph, &node_map) {
                                 Some(rb) => bindings.push(rb),
                                 None => record_chain_error(
-                                    &mut errors,
+                                    errors,
                                     ChainError::UserBindingResolveFailed {
                                         effect_id: fx.id.clone(),
                                         effect_type: fx.effect_type().clone(),
@@ -758,7 +774,7 @@ impl PresetRuntime {
                             Some(prefix.as_str()),
                         ) {
                             record_chain_error(
-                                &mut errors,
+                                errors,
                                 ChainError::CardBindingShadowsDefParam {
                                     effect_type: Some(fx.effect_type().clone()),
                                     finding,
@@ -955,7 +971,7 @@ impl PresetRuntime {
                 (fx.graph.is_some() || fused_view.is_some())
                     .then(|| (fx.id.clone(), fx.effect_type().clone())),
                 preserve_authored_cpu_flip_graph,
-                &mut errors,
+                errors,
             )?;
             let SpliceResult {
                 output,
@@ -1076,7 +1092,7 @@ impl PresetRuntime {
                         bindings.push(rb);
                     }
                     None => record_chain_error(
-                        &mut errors,
+                        errors,
                         ChainError::StaticBindingHandleMissing {
                             effect_type: view.type_id.clone(),
                             binding_id: b.id.to_string(),
@@ -1112,7 +1128,7 @@ impl PresetRuntime {
                 match ResolvedBinding::from_user(resolve_core, &graph, &node_map) {
                     Some(rb) => bindings.push(rb),
                     None => record_chain_error(
-                        &mut errors,
+                        errors,
                         ChainError::UserBindingResolveFailed {
                             effect_id: fx.id.clone(),
                             effect_type: fx.effect_type().clone(),
@@ -1141,7 +1157,7 @@ impl PresetRuntime {
                 None,
             ) {
                 record_chain_error(
-                    &mut errors,
+                    errors,
                     ChainError::CardBindingShadowsDefParam {
                         effect_type: Some(fx.effect_type().clone()),
                         finding,
@@ -1322,7 +1338,7 @@ impl PresetRuntime {
             crate::load::graph_loader::pre_allocate_resources(&mut graph, &plan, device, &mut backend)
         {
             record_chain_error(
-                &mut errors,
+                errors,
                 ChainError::PreAllocationFailed {
                     reason: e.to_string(),
                 },
@@ -1376,7 +1392,7 @@ impl PresetRuntime {
             built_fused_effect_generation:
                 crate::freeze::install::fused_effect_generation(),
             state_store: StateStore::new(),
-            errors,
+            errors: std::mem::take(errors),
             preview_encoding: crate::preview_encoding::PreviewEncoding::default(),
             type_id: None,
             target_format: None,

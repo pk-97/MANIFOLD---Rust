@@ -6,7 +6,7 @@ fn resolution_resize_is_atomic_and_retryable() {
     let project = math_view_project();
     let original = (project.settings.output_width as u32, project.settings.output_height as u32);
     let mut ct = headless_content_thread(Project::default(), original.0, original.1);
-    let (state_tx, _state_rx) = crossbeam_channel::unbounded::<ContentState>();
+    let (state_tx, _state_rx) = crate::content_state::state_channel();
     ct.handle_command(ContentCommand::LoadProject(Box::new(project)));
     ct.timer.set_frame_clocked(true);
     warm_project(&mut ct, &state_tx);

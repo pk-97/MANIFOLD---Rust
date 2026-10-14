@@ -191,7 +191,7 @@ fn run_export(
     let faults_before = manifold_gpu::gpu_fault::fault_count();
     let mut content = headless_content_thread(project, cfg.width, cfg.height);
     let (cmd_tx, cmd_rx) = unbounded();
-    let (state_tx, state_rx) = unbounded();
+    let (state_tx, state_rx) = crate::content_state::state_channel();
     // Match app/project-load and export-repro preparation. Async imported
     // sources must be ready before entering the one-evaluation-per-frame
     // export loop; the observer deliberately excludes this preparation.
@@ -216,7 +216,7 @@ fn run_export(
     let states: Vec<ContentState> = state_rx.try_iter().collect();
     let output = states
         .iter()
-        .find_map(|state| state.export_finished.as_ref())
+        .find_map(|state| state.export_finished.first())
         .filter(|event| event.success)
         .map(|event| PathBuf::from(&event.output_path));
     let frames = observation_rx.try_iter().collect();
@@ -387,9 +387,9 @@ fn rt_dynamic_export_first_frame_and_state_steps() {
         observation
             .states
             .iter()
-            .any(|state| state.export_finished.is_some())
+            .any(|state| !state.export_finished.is_empty())
     );
-    assert!(observation.states.iter().any(|state| state.is_exporting));
+    assert!(observation.states.iter().any(|state| state.export_run_finished));
     assert_eq!(observation.frames.len(), 12);
     for (index, frame) in observation.frames.iter().enumerate() {
         assert_eq!(frame.frame_idx as usize, index);
@@ -559,8 +559,8 @@ fn rt_dynamic_export_fault_before_encode() {
         assert!(observation.states.iter().any(|state| {
             state
                 .export_finished
-                .as_ref()
-                .is_some_and(|event| !event.success)
+                .iter()
+                .any(|event| !event.success)
         }));
         assert!(
             !path.exists(),
@@ -646,7 +646,7 @@ fn rt_dynamic_export_hang_retries_exhausted_fails_cleanly() {
     let event = observation
         .states
         .iter()
-        .find_map(|state| state.export_finished.as_ref())
+        .find_map(|state| state.export_finished.first())
         .expect("failure is reported to the UI");
     assert!(!event.success);
     assert!(event.message.contains("frame 2"), "{}", event.message);
@@ -827,7 +827,7 @@ fn rt_dynamic_export_stateful_scene_loop() {
             observation
                 .states
                 .iter()
-                .filter_map(|state| state.export_finished.as_ref())
+                .flat_map(|state| &state.export_finished)
                 .collect::<Vec<_>>()
         );
         assert_video(&path, WIDTH, HEIGHT, 12);

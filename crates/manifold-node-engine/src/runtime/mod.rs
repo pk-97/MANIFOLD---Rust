@@ -64,7 +64,7 @@ pub use build::chain_topology_hash;
 use build::{assign_texture2d_slots, compute_topology_hash};
 
 mod groups;
-use groups::{chain_active_effects, close_mix_group, validate_mask_groups, OpenGroup};
+use groups::{chain_active_effects, close_mix_group, has_chain_active_effects, validate_mask_groups, OpenGroup};
 mod convert_heal;
 mod lifecycle;
 pub mod extensions;

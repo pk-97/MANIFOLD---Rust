@@ -32,7 +32,7 @@ use manifold_node_engine::gpu::headless_readback::{encode_rgba8_png, linear_to_s
 use manifold_nodes_scene::node_graph::gltf_import::assemble_import_graph;
 
 use crate::content_command::ContentCommand;
-use crate::content_state::ContentState;
+use crate::content_state::StateTx;
 use crate::headless_harness::headless_content_thread;
 use crate::scene_modifier_edit::SceneModifierAction;
 
@@ -283,7 +283,7 @@ fn send_modifier(ct: &mut crate::content_thread::ContentThread, action: SceneMod
 /// bounded warmup. Calling handle_command alone skips asynchronous GLB decode.
 pub(super) fn warm_project(
     ct: &mut crate::content_thread::ContentThread,
-    state_tx: &crossbeam_channel::Sender<ContentState>,
+    state_tx: &StateTx,
 ) {
     let (command_tx, command_rx) = crossbeam_channel::unbounded();
     ct.run_warmup(&command_rx, &command_tx, state_tx);
@@ -348,7 +348,7 @@ fn capture_output(ct: &crate::content_thread::ContentThread, path: &Path) -> (Ve
 /// geometry; the strict assert still fires when nothing ever shows.
 fn capture_output_when_ready(
     ct: &mut crate::content_thread::ContentThread,
-    state_tx: &crossbeam_channel::Sender<ContentState>,
+    state_tx: &StateTx,
     path: &Path,
 ) -> (Vec<u8>, usize) {
     let mut frame = Vec::new();
@@ -426,7 +426,7 @@ fn f8_playing_photoscan_lfo_reorder_save_reopen_journey() {
     );
     reset_cold_touch_counts();
     let mut ct = headless_content_thread(journey_project(), 320, 180);
-    let (state_tx, _state_rx) = crossbeam_channel::unbounded::<ContentState>();
+    let (state_tx, _state_rx) = crate::content_state::state_channel();
     let mushroom_id = LayerId::new("journey-mushroom");
     ct.watched_graph_target = Some(manifold_core::GraphTarget::Generator(mushroom_id.clone()));
 
@@ -627,7 +627,7 @@ fn math_view_grid_app_control_journey() {
     std::fs::create_dir_all(&output_dir).expect("math grid artifact directory");
     let layer_id = LayerId::new("math-grid");
     let mut ct = headless_content_thread(Project::default(), 320, 180);
-    let (state_tx, _state_rx) = crossbeam_channel::unbounded::<ContentState>();
+    let (state_tx, _state_rx) = crate::content_state::state_channel();
     ct.handle_command(ContentCommand::LoadProject(Box::new(math_view_project())));
     assert!(
         ct.graph_edit_diagnostic.is_none(),
@@ -977,7 +977,7 @@ fn legacy_math_view_migration_journey() {
 
     // The migrated project drives the runtime: Math mode renders the diagram.
     let mut ct = headless_content_thread(Project::default(), 320, 180);
-    let (state_tx, _state_rx) = crossbeam_channel::unbounded::<ContentState>();
+    let (state_tx, _state_rx) = crate::content_state::state_channel();
     ct.handle_command(ContentCommand::LoadProject(Box::new(reopened)));
     assert!(
         ct.graph_edit_diagnostic.is_none(),
@@ -1312,7 +1312,7 @@ fn legacy_math_view_multi_carrier_migration_journey() {
 
     // The migrated project drives the runtime: both views render.
     let mut ct = headless_content_thread(Project::default(), 320, 180);
-    let (state_tx, _state_rx) = crossbeam_channel::unbounded::<ContentState>();
+    let (state_tx, _state_rx) = crate::content_state::state_channel();
     ct.handle_command(ContentCommand::LoadProject(Box::new(reopened)));
     assert!(
         ct.graph_edit_diagnostic.is_none(),

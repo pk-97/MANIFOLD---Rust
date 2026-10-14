@@ -3365,7 +3365,7 @@ mod tests {
         let add = rx.try_recv().expect("Add Fluid queued a content edit");
 
         let mut content = crate::headless_harness::headless_content_thread(project, W, H);
-        let (state_tx, _state_rx) = crossbeam_channel::unbounded();
+        let (state_tx, _state_rx) = crate::content_state::state_channel();
         content.handle_command(add);
         crate::scene_modifier_journey::warm_project(&mut content, &state_tx);
         let device = std::sync::Arc::clone(content.content_pipeline.native_gpu_for_tests().expect("native device"));

@@ -34,6 +34,57 @@ fn fmt_opacity(v: f32) -> String {
     format!("{:.2}", v)
 }
 
+const NOTICE_LINE_H: f32 = 15.0;
+
+/// Red rows under a chrome header saying why the chain's effects are bypassed.
+/// The message wraps to the width the chrome builds at, so the inspector must
+/// call [`Self::wrap`] before it reads the chrome's height.
+#[derive(Default)]
+pub(crate) struct ChainErrorNotice {
+    message: Option<String>,
+    lines: Vec<String>,
+    wrapped_at: Option<f32>,
+}
+
+impl ChainErrorNotice {
+    pub(crate) fn set(&mut self, message: Option<&str>) {
+        if self.message.as_deref() != message {
+            self.message = message.map(str::to_owned);
+            self.wrapped_at = None;
+        }
+    }
+
+    pub(crate) fn wrap(&mut self, measurer: &dyn crate::text::TextMeasure, chrome_width: f32) {
+        let width = chrome_width - 2.0 * PAD_H;
+        if width <= 0.0 || self.wrapped_at == Some(width) {
+            return;
+        }
+        self.wrapped_at = Some(width);
+        self.lines = match &self.message {
+            Some(m) => crate::text::wrap_to_width(measurer, m, color::FONT_BODY, FontWeight::Regular, width),
+            None => Vec::new(),
+        };
+    }
+
+    pub(crate) fn height(&self) -> f32 {
+        self.lines.len() as f32 * NOTICE_LINE_H
+    }
+
+    pub(crate) fn add_rows(&self, mut column: View) -> View {
+        for line in &self.lines {
+            column = column.child(
+                View::label(line.as_str())
+                    .font(color::FONT_BODY)
+                    .text_color(color::STATUS_BAD)
+                    .align_text(TextAlign::Left)
+                    .fill_w()
+                    .h(Sizing::Fixed(NOTICE_LINE_H)),
+            );
+        }
+        column
+    }
+}
+
 // ── LayerChromePanel ─────────────────────────────────────────────
 
 pub struct LayerChromePanel {
@@ -47,6 +98,7 @@ pub struct LayerChromePanel {
     show_opacity: bool,
     cached_header_text: String,
     cached_name: String,
+    chain_error: ChainErrorNotice,
 
     first_node: usize,
     node_count: usize,
@@ -63,6 +115,7 @@ impl LayerChromePanel {
             show_opacity: true,
             cached_header_text: "Layer".into(),
             cached_name: String::new(),
+            chain_error: ChainErrorNotice::default(),
             first_node: 0,
             node_count: 0,
         }
@@ -71,8 +124,18 @@ impl LayerChromePanel {
     pub fn compute_height(&self) -> f32 {
         // section 6d: name + chevron + opacity are merged onto one row, so the chrome is
         // a single row — constant whether collapsed (opacity hidden in-place) or
-        // expanded.
-        PAD_V + HEADER_ROW_H + PAD_V
+        // expanded. A failed chain's notice sits below it either way.
+        PAD_V + HEADER_ROW_H + self.chain_error.height() + PAD_V
+    }
+
+    /// Show (or clear) why this layer's effects are bypassed. Takes effect at
+    /// the inspector's next build.
+    pub fn set_chain_error(&mut self, message: Option<&str>) {
+        self.chain_error.set(message);
+    }
+
+    pub(crate) fn wrap_chain_error(&mut self, measurer: &dyn crate::text::TextMeasure, width: f32) {
+        self.chain_error.wrap(measurer, width);
     }
 
     pub fn first_node(&self) -> usize {
@@ -183,10 +246,11 @@ impl LayerChromePanel {
             );
         }
 
-        View::column(0.0)
+        let column = View::column(0.0)
             .fill()
             .pad(Pad { l: PAD_H, t: PAD_V, r: PAD_H, b: PAD_V })
-            .child(header)
+            .child(header);
+        self.chain_error.add_rows(column)
     }
 
     // ── Build ────────────────────────────────────────────────────
@@ -380,6 +444,28 @@ pub(super) mod tests {
             "name {name:?} runs into the chevron {chevron:?}");
         assert!(chevron.x + chevron.width <= opacity.x + 0.01);
         assert!(opacity.width >= OPACITY_MIN_W - 0.01, "the opacity slider keeps its width: {opacity:?}");
+    }
+
+    #[test]
+    fn chain_error_wraps_under_the_header_in_red() {
+        let mut tree = UITree::new();
+        let mut panel = LayerChromePanel::new();
+        let base = panel.compute_height();
+        let message = "The effects could not get their GPU memory, so they are bypassed. The scene needs 900 MB.";
+        panel.set_chain_error(Some(message));
+        panel.wrap_chain_error(tree.measurer(), 280.0);
+        assert!(panel.compute_height() > base + NOTICE_LINE_H, "a long reason wraps to several rows");
+        panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, panel.compute_height()));
+        let red: Vec<String> = (panel.first_node()..panel.first_node() + panel.node_count())
+            .filter_map(|i| tree.get_node(tree.id_at(i)))
+            .filter(|n| n.style.text_color == color::STATUS_BAD)
+            .filter_map(|n| n.text.clone())
+            .collect();
+        assert_eq!(red.join(" "), message);
+
+        panel.set_chain_error(None);
+        panel.wrap_chain_error(tree.measurer(), 280.0);
+        assert_eq!(panel.compute_height(), base);
     }
 
     pub(crate) fn right_click_resets() -> Vec<crate::panels::contract_tests::ResetCase> {

@@ -1675,7 +1675,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         // Compositor output is shared via IOSurface — zero copy, GPU-to-GPU.
         {
             let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded::<ContentCommand>();
-            let (state_tx, state_rx) = crossbeam_channel::unbounded::<ContentState>();
+            let (state_tx, state_rx) = crate::content_state::state_channel();
 
             // Content thread uses its own native Metal device from manifold-gpu.
 

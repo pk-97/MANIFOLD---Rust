@@ -18,7 +18,7 @@ use manifold_profiler::FrameRecord;
 use sha2::{Digest, Sha256};
 
 use crate::content_command::ContentCommand;
-use crate::content_state::ContentState;
+use crate::content_state::StateTx;
 use crate::content_thread::ContentThread;
 use crate::headless_harness::headless_content_thread;
 
@@ -379,7 +379,7 @@ pub(crate) struct PreparedProject {
     pub(crate) ct: ContentThread,
     pub(crate) cmd_tx: crossbeam_channel::Sender<ContentCommand>,
     pub(crate) cmd_rx: crossbeam_channel::Receiver<ContentCommand>,
-    pub(crate) state_tx: crossbeam_channel::Sender<ContentState>,
+    pub(crate) state_tx: StateTx,
     pub(crate) drain: std::thread::JoinHandle<()>,
     pub(crate) project_path: PathBuf,
     pub(crate) width: u32,
@@ -424,7 +424,7 @@ pub(crate) fn prepare_project_edited(
 
     // Set up the progress channel before entering the shared warmup. The
     // drain keeps the unbounded state queue bounded during long fixture loads.
-    let (state_tx, state_rx) = crossbeam_channel::unbounded::<ContentState>();
+    let (state_tx, state_rx) = crate::content_state::state_channel();
     let drain = std::thread::Builder::new()
         .name("perf-soak-load-drain".into())
         .spawn(move || while state_rx.recv().is_ok() {})
@@ -613,6 +613,17 @@ fn run_work_idle(project_path_str: &str, seconds: f64, start_beats: Option<f64>)
         if summary.is_empty() { "" } else { ": " },
         summary.join(" "),
     );
+    // Idle pool textures still count as device allocation, which is what a
+    // chain's memory admission reads.
+    let memory = ct.content_pipeline.native_device().and_then(|d| d.modifier_memory_snapshot());
+    if let (Some(m), Some((count, bytes))) = (memory, ct.content_pipeline.cached_texture_memory()) {
+        eprintln!(
+            "perf-soak --work-idle: device {} MB allocated of {} MB recommended; free texture pool {count} textures, {} MB",
+            m.current_allocated_bytes >> 20,
+            m.recommended_max_working_set_bytes >> 20,
+            bytes >> 20,
+        );
+    }
     Ok(busy == 0)
 }
 

@@ -475,6 +475,7 @@ pub(crate) fn apply_frame_plan<P: std::borrow::Borrow<manifold_core::project::Pr
     }
     if inspector_sync {
         let idx = active_idx(project, active_layer);
+        ui_root.chain_failures = push.content_state.chain_failures.clone();
         crate::ui_bridge::sync_inspector_data(ui_root, project, idx, selection, latched, led_preview);
     }
     // A marker drag moved the dragged marker; the viewport lays the new list
@@ -492,6 +493,7 @@ pub(crate) fn apply_frame_plan<P: std::borrow::Borrow<manifold_core::project::Pr
     // transient card state) fires only when it does for the main window.
     if inspector_sync && let Some(ed) = editor_ui_root.as_deref_mut() {
         let idx = active_idx(project, active_layer);
+        ed.chain_failures = push.content_state.chain_failures.clone();
         project_editor_inspector(ed, project, idx, selection, latched, led_preview);
     }
 
