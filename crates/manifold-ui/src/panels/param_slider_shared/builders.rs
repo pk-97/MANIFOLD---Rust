@@ -1957,6 +1957,7 @@ pub(crate) fn build_param_row(
         info.spec.whole_numbers,
         info.spec.is_angle,
         info.spec.value_labels.as_deref(),
+        info.spec.unit,
     );
     let default_norm = BitmapSlider::value_to_normalized(info.spec.default, info.spec.min, info.spec.max);
     let slider_rect = Rect::new(x, cy, slider_w, ROW_HEIGHT);

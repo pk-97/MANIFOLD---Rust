@@ -891,6 +891,7 @@
                     is_trigger: false,
                     is_trigger_gate: false,
                     value_labels: None,
+                    unit: None,
                     section: Some("Environment".to_string()),
                     disabled: None,
                     material_role: None,

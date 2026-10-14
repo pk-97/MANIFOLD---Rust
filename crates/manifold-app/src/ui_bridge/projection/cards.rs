@@ -491,6 +491,7 @@ fn param_surface(
                     is_trigger: p.spec.is_trigger,
                     is_trigger_gate: p.spec.is_trigger_gate,
                     value_labels,
+                    unit: p.spec.unit,
                     section: p.spec.section.clone(),
                     material_role: p.spec.material_role.map(super::material::role),
                     inactive_reason: None,
@@ -535,7 +536,7 @@ fn param_surface(
     }
 
     if let Some(def) = scene_graph {
-        super::scene_performance::curate_scene_rows(&mut rows, inst, def);
+        super::scene_card::scene_card_rows(&mut rows, inst, def);
     }
 
     // String params are sourced from the registry def. Graph-backed audio-send
@@ -864,7 +865,7 @@ pub(crate) fn modifier_surfaces(
         for row in &mut rows { row.scene_addr = None; }
         Some(ParamSurface {
             kind: ParamCardKind::Effect,
-            title: scene_modifier_display_name(def, instance)
+            title: manifold_nodes_scene::node_graph::scene_items::scene_modifier_display_name(def, instance)
                 .unwrap_or_else(|| metadata.display_name.clone()),
             rows,
             string_params: vec![],
@@ -905,31 +906,6 @@ pub(crate) fn modifier_surfaces(
             relight: crate::ui_translate::relight_card_config_from(gp),
         })
     }).collect()
-}
-
-/// Return the display name shared by modifier cards and trigger target groups.
-/// Duplicate recipe names get an occurrence suffix only when the stack needs
-/// disambiguation; a single instance keeps its existing title unchanged.
-pub(crate) fn scene_modifier_display_name(
-    def: &manifold_core::effect_graph_def::EffectGraphDef,
-    instance: &manifold_core::scene_modifier_preset::SceneModifierInstanceDef,
-) -> Option<String> {
-    let base = instance.graph.preset_metadata.as_ref()?.display_name.clone();
-    let same_name = def.scene_modifiers.iter().filter(|candidate| {
-        candidate.graph.preset_metadata.as_ref().is_some_and(|metadata| {
-            metadata.display_name == base
-        })
-    });
-    let count = same_name.count();
-    if count <= 1 {
-        return Some(base);
-    }
-    let occurrence = def.scene_modifiers.iter().take_while(|candidate| candidate.id != instance.id)
-        .filter(|candidate| candidate.graph.preset_metadata.as_ref().is_some_and(|metadata| {
-            metadata.display_name == base
-        }))
-        .count() + 1;
-    Some(format!("{base} #{occurrence}"))
 }
 
 

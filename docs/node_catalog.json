@@ -2017,7 +2017,7 @@
         },
         {
           "default": "0.12",
-          "label": "Azimuth Variation",
+          "label": "Brightness Variation",
           "name": "azimuth_variation",
           "range": [
             "0",
@@ -2153,7 +2153,7 @@
         },
         {
           "default": "false",
-          "label": "Uniform (White Furnace)",
+          "label": "White Furnace",
           "name": "uniform",
           "type": "bool"
         }
@@ -3343,7 +3343,7 @@
       "params": [
         {
           "default": "24",
-          "label": "Max Radius",
+          "label": "Max Blur",
           "name": "max_radius",
           "range": [
             "1",
@@ -3541,7 +3541,7 @@
         },
         {
           "default": "0",
-          "label": "Exposure (EV)",
+          "label": "Exposure",
           "name": "exposure_ev",
           "range": [
             "-8",
@@ -3876,7 +3876,7 @@
         },
         {
           "default": "4",
-          "label": "Cel Bands",
+          "label": "Bands",
           "name": "cel_bands",
           "range": [
             "2",
@@ -12102,7 +12102,7 @@
       "params": [
         {
           "default": "0",
-          "label": "Pos X",
+          "label": "Position X",
           "name": "pos_x",
           "range": [
             "-1000",
@@ -12112,7 +12112,7 @@
         },
         {
           "default": "0",
-          "label": "Pos Y",
+          "label": "Position Y",
           "name": "pos_y",
           "range": [
             "-1000",
@@ -12122,7 +12122,7 @@
         },
         {
           "default": "-3",
-          "label": "Pos Z",
+          "label": "Position Z",
           "name": "pos_z",
           "range": [
             "-1000",
@@ -12132,7 +12132,7 @@
         },
         {
           "default": "0",
-          "label": "Yaw",
+          "label": "Pan",
           "name": "yaw",
           "range": [
             "-6.2831855",
@@ -12142,7 +12142,7 @@
         },
         {
           "default": "0",
-          "label": "Pitch",
+          "label": "Tilt",
           "name": "pitch",
           "range": [
             "-1.5",
@@ -12162,7 +12162,7 @@
         },
         {
           "default": "0.9",
-          "label": "FOV Y",
+          "label": "Field of View",
           "name": "fov_y",
           "range": [
             "0.05",
@@ -12172,7 +12172,7 @@
         },
         {
           "default": "0.05",
-          "label": "Near",
+          "label": "Near Clip",
           "name": "near",
           "range": [
             "0.001",
@@ -12182,7 +12182,7 @@
         },
         {
           "default": "200",
-          "label": "Far",
+          "label": "Far Clip",
           "name": "far",
           "range": [
             "1",
@@ -14119,7 +14119,7 @@
         },
         {
           "default": "0",
-          "label": "Solve Level",
+          "label": "Coarse Solve",
           "name": "solve_level",
           "range": [
             "0",
@@ -14159,7 +14159,7 @@
         },
         {
           "default": "0.4",
-          "label": "Initial Fill Height",
+          "label": "Fill Height",
           "name": "fill_height",
           "range": [
             "0",
@@ -14199,7 +14199,7 @@
         },
         {
           "default": "1",
-          "label": "Simulation Speed",
+          "label": "Speed",
           "name": "speed",
           "range": [
             "0",
@@ -14219,43 +14219,43 @@
         },
         {
           "default": "true",
-          "label": "Closed −X",
+          "label": "Left Wall",
           "name": "closed_neg_x",
           "type": "bool"
         },
         {
           "default": "true",
-          "label": "Closed +X",
+          "label": "Right Wall",
           "name": "closed_pos_x",
           "type": "bool"
         },
         {
           "default": "true",
-          "label": "Closed Bottom",
+          "label": "Floor",
           "name": "closed_neg_y",
           "type": "bool"
         },
         {
           "default": "true",
-          "label": "Closed Top",
+          "label": "Ceiling",
           "name": "closed_pos_y",
           "type": "bool"
         },
         {
           "default": "true",
-          "label": "Closed −Z",
+          "label": "Back Wall",
           "name": "closed_neg_z",
           "type": "bool"
         },
         {
           "default": "true",
-          "label": "Closed +Z",
+          "label": "Front Wall",
           "name": "closed_pos_z",
           "type": "bool"
         },
         {
           "default": "0",
-          "label": "Particle Capacity",
+          "label": "Max Particles",
           "name": "particle_capacity",
           "type": "int"
         }
@@ -15511,7 +15511,7 @@
         },
         {
           "default": "0",
-          "label": "Liveliness",
+          "label": "FLIP Ratio",
           "name": "liveliness",
           "range": [
             "0",
@@ -18240,7 +18240,7 @@
             "Point",
             "Spot"
           ],
-          "label": "Mode",
+          "label": "Type",
           "name": "mode",
           "range": [
             "0",
@@ -18284,7 +18284,7 @@
         },
         {
           "default": "0",
-          "label": "Aim X",
+          "label": "Target X",
           "name": "aim_x",
           "range": [
             "-100",
@@ -18295,7 +18295,7 @@
         },
         {
           "default": "0",
-          "label": "Aim Y",
+          "label": "Target Y",
           "name": "aim_y",
           "range": [
             "-100",
@@ -18306,7 +18306,7 @@
         },
         {
           "default": "0",
-          "label": "Aim Z",
+          "label": "Target Z",
           "name": "aim_z",
           "range": [
             "-100",
@@ -18460,7 +18460,7 @@
         },
         {
           "default": "1",
-          "label": "Light Size",
+          "label": "Size",
           "name": "light_size",
           "range": [
             "0",
@@ -19192,7 +19192,7 @@
         },
         {
           "default": "0",
-          "label": "Particle Capacity",
+          "label": "Max Particles",
           "name": "particle_capacity",
           "range": [
             "0",
@@ -20124,7 +20124,7 @@
       "params": [
         {
           "default": "0",
-          "label": "Pos X",
+          "label": "Position X",
           "name": "pos_x",
           "range": [
             "-1000",
@@ -20134,7 +20134,7 @@
         },
         {
           "default": "0",
-          "label": "Pos Y",
+          "label": "Position Y",
           "name": "pos_y",
           "range": [
             "-1000",
@@ -20144,7 +20144,7 @@
         },
         {
           "default": "-3",
-          "label": "Pos Z",
+          "label": "Position Z",
           "name": "pos_z",
           "range": [
             "-1000",
@@ -20184,7 +20184,7 @@
         },
         {
           "default": "0.9",
-          "label": "FOV Y",
+          "label": "Field of View",
           "name": "fov_y",
           "range": [
             "0.05",
@@ -20194,7 +20194,7 @@
         },
         {
           "default": "0.05",
-          "label": "Near",
+          "label": "Near Clip",
           "name": "near",
           "range": [
             "0.001",
@@ -20204,7 +20204,7 @@
         },
         {
           "default": "200",
-          "label": "Far",
+          "label": "Far Clip",
           "name": "far",
           "range": [
             "1",
@@ -20311,7 +20311,7 @@
         },
         {
           "default": "0.9",
-          "label": "FOV Y",
+          "label": "Field of View",
           "name": "fov_y",
           "range": [
             "0.05",
@@ -20321,7 +20321,7 @@
         },
         {
           "default": "0.05",
-          "label": "Near",
+          "label": "Near Clip",
           "name": "near",
           "range": [
             "0.001",
@@ -20331,7 +20331,7 @@
         },
         {
           "default": "200",
-          "label": "Far",
+          "label": "Far Clip",
           "name": "far",
           "range": [
             "1",
@@ -20351,7 +20351,7 @@
         },
         {
           "default": "0",
-          "label": "Pitch",
+          "label": "Tilt",
           "name": "pitch",
           "range": [
             "-3.1415927",
@@ -20361,7 +20361,7 @@
         },
         {
           "default": "0",
-          "label": "Yaw",
+          "label": "Pan",
           "name": "yaw",
           "range": [
             "-3.1415927",
@@ -22075,7 +22075,7 @@
         },
         {
           "default": "8",
-          "label": "Grid Budget (M cells)",
+          "label": "Grid Budget",
           "name": "grid_budget_mcells",
           "range": [
             "0.01",
@@ -22095,43 +22095,43 @@
         },
         {
           "default": "true",
-          "label": "Closed −X",
+          "label": "Left Wall",
           "name": "closed_neg_x",
           "type": "bool"
         },
         {
           "default": "true",
-          "label": "Closed +X",
+          "label": "Right Wall",
           "name": "closed_pos_x",
           "type": "bool"
         },
         {
           "default": "true",
-          "label": "Closed Bottom",
+          "label": "Floor",
           "name": "closed_neg_y",
           "type": "bool"
         },
         {
           "default": "true",
-          "label": "Closed Top",
+          "label": "Ceiling",
           "name": "closed_pos_y",
           "type": "bool"
         },
         {
           "default": "true",
-          "label": "Closed −Z",
+          "label": "Back Wall",
           "name": "closed_neg_z",
           "type": "bool"
         },
         {
           "default": "true",
-          "label": "Closed +Z",
+          "label": "Front Wall",
           "name": "closed_pos_z",
           "type": "bool"
         },
         {
           "default": "0.4",
-          "label": "Initial Fill Height",
+          "label": "Fill Height",
           "name": "fill_height",
           "range": [
             "0",
@@ -22171,7 +22171,7 @@
         },
         {
           "default": "1",
-          "label": "Simulation Speed",
+          "label": "Speed",
           "name": "speed",
           "range": [
             "0",
@@ -22195,7 +22195,7 @@
             "8",
             "27"
           ],
-          "label": "Points per Cell",
+          "label": "Particles per Cell",
           "name": "points_per_cell",
           "range": [
             "0",
@@ -22225,7 +22225,7 @@
         },
         {
           "default": "0",
-          "label": "Liveliness",
+          "label": "FLIP Ratio",
           "name": "liveliness",
           "range": [
             "0",
@@ -22608,7 +22608,7 @@
         },
         {
           "default": "8",
-          "label": "Points per Cell",
+          "label": "Particles per Cell",
           "name": "points_per_cell",
           "range": [
             "8",
@@ -25406,7 +25406,7 @@
       "params": [
         {
           "default": "32",
-          "label": "Max Blur (px)",
+          "label": "Max Blur",
           "name": "max_blur_px",
           "range": [
             "0",
@@ -27073,7 +27073,7 @@
         },
         {
           "default": "0.9",
-          "label": "FOV Y",
+          "label": "Field of View",
           "name": "fov_y",
           "range": [
             "0.05",
@@ -27084,7 +27084,7 @@
         },
         {
           "default": "0",
-          "label": "Look Y",
+          "label": "Target Height",
           "name": "look_y",
           "range": [
             "-10",
@@ -27106,7 +27106,7 @@
         },
         {
           "default": "0.05",
-          "label": "Near",
+          "label": "Near Clip",
           "name": "near",
           "range": [
             "0.001",
@@ -27117,7 +27117,7 @@
         },
         {
           "default": "200",
-          "label": "Far",
+          "label": "Far Clip",
           "name": "far",
           "range": [
             "1",
@@ -28395,7 +28395,7 @@
         },
         {
           "default": "1",
-          "label": "Normal Scale",
+          "label": "Normal Strength",
           "name": "normal_scale",
           "range": [
             "-1",
@@ -28624,7 +28624,7 @@
         },
         {
           "default": "100",
-          "label": "Iridescence Thickness Min (nm)",
+          "label": "Iridescence Thickness Min",
           "name": "iridescence_thickness_min",
           "range": [
             "0",
@@ -28634,7 +28634,7 @@
         },
         {
           "default": "400",
-          "label": "Iridescence Thickness Max (nm)",
+          "label": "Iridescence Thickness Max",
           "name": "iridescence_thickness_max",
           "range": [
             "0",
@@ -33030,7 +33030,7 @@
         },
         {
           "default": "1",
-          "label": "Simulation Speed",
+          "label": "Speed",
           "name": "speed",
           "range": [
             "0",
@@ -33050,7 +33050,7 @@
         },
         {
           "default": "100",
-          "label": "Copy Count",
+          "label": "Count",
           "name": "copy_count",
           "range": [
             "0",
@@ -33060,7 +33060,7 @@
         },
         {
           "default": "1.25",
-          "label": "Copy Spacing",
+          "label": "Spacing",
           "name": "copy_spacing",
           "range": [
             "0.01",
@@ -33070,7 +33070,7 @@
         },
         {
           "default": "16",
-          "label": "Copy Columns",
+          "label": "Columns",
           "name": "copy_columns",
           "range": [
             "1",
@@ -33084,7 +33084,7 @@
             "Grid",
             "Pile"
           ],
-          "label": "Copy Layout",
+          "label": "Arrangement",
           "name": "copy_layout",
           "range": [
             "0",
@@ -36584,7 +36584,7 @@
         },
         {
           "default": "false",
-          "label": "RT Enabled",
+          "label": "Ray Tracing",
           "name": "rt_enabled",
           "type": "bool"
         },
@@ -36596,25 +36596,25 @@
         },
         {
           "default": "true",
-          "label": "RT Reflections",
+          "label": "Reflections",
           "name": "rt_reflections",
           "type": "bool"
         },
         {
           "default": "true",
-          "label": "RT Shadows",
+          "label": "Shadows",
           "name": "rt_shadows",
           "type": "bool"
         },
         {
           "default": "true",
-          "label": "RT Ambient Occlusion",
+          "label": "Ambient Occlusion",
           "name": "rt_ao",
           "type": "bool"
         },
         {
           "default": "true",
-          "label": "RT Global Illumination",
+          "label": "Global Illumination",
           "name": "rt_gi",
           "type": "bool"
         },
@@ -37893,7 +37893,7 @@
       "params": [
         {
           "default": "true",
-          "label": "Physics",
+          "label": "Enabled",
           "name": "enabled",
           "type": "bool"
         },
@@ -37921,7 +37921,7 @@
             "Moving",
             "Animated"
           ],
-          "label": "Motion",
+          "label": "Body Type",
           "name": "motion",
           "range": [
             "0",
@@ -37931,7 +37931,7 @@
         },
         {
           "default": "600",
-          "label": "Density (kg/m³)",
+          "label": "Density",
           "name": "density",
           "range": [
             "1",
@@ -37961,7 +37961,7 @@
         },
         {
           "default": "0",
-          "label": "Release",
+          "label": "Break Apart",
           "name": "release_count",
           "range": [
             "0",
@@ -40133,7 +40133,7 @@
         },
         {
           "default": "1",
-          "label": "Appearance Gain",
+          "label": "Level",
           "name": "gain",
           "range": [
             "0",
@@ -52418,6 +52418,13 @@
           "name": "Aperture"
         },
         {
+          "default": "16",
+          "id": "40_max_radius",
+          "max": "64",
+          "min": "1",
+          "name": "Max Blur"
+        },
+        {
           "default": "1",
           "id": "40_enabled",
           "max": "1",
@@ -52594,7 +52601,7 @@
           "id": "37_look_y",
           "max": "10",
           "min": "-10",
-          "name": "Look Y"
+          "name": "Target Height"
         },
         {
           "default": "0",
@@ -52608,14 +52615,14 @@
           "id": "37_near",
           "max": "10000",
           "min": "0.001",
-          "name": "Near"
+          "name": "Near Clip"
         },
         {
           "default": "500",
           "id": "37_far",
           "max": "10000",
           "min": "1",
-          "name": "Far"
+          "name": "Far Clip"
         }
       ]
     },
@@ -53070,28 +53077,28 @@
           "id": "2_fov_y",
           "max": "2.5",
           "min": "0.05",
-          "name": "FOV Y"
+          "name": "Field of View"
         },
         {
           "default": "0",
           "id": "2_look_y",
           "max": "10",
           "min": "-10",
-          "name": "Look Y"
+          "name": "Target Height"
         },
         {
           "default": "0.05",
           "id": "2_near",
           "max": "10000",
           "min": "0.001",
-          "name": "Near"
+          "name": "Near Clip"
         },
         {
           "default": "200",
           "id": "2_far",
           "max": "10000",
           "min": "1",
-          "name": "Far"
+          "name": "Far Clip"
         }
       ]
     },
@@ -54006,7 +54013,7 @@
           "id": "1_azimuth_variation",
           "max": "1",
           "min": "0",
-          "name": "Azimuth Variation"
+          "name": "Brightness Variation"
         },
         {
           "default": "1",
@@ -54118,14 +54125,14 @@
           "id": "5_fov_y",
           "max": "2.5",
           "min": "0.05",
-          "name": "FOV Y"
+          "name": "Field of View"
         },
         {
           "default": "0",
           "id": "5_look_y",
           "max": "10",
           "min": "-10",
-          "name": "Look Y"
+          "name": "Target Height"
         },
         {
           "default": "0",
@@ -54139,14 +54146,14 @@
           "id": "5_near",
           "max": "10000",
           "min": "0.001",
-          "name": "Near"
+          "name": "Near Clip"
         },
         {
           "default": "200",
           "id": "5_far",
           "max": "10000",
           "min": "1",
-          "name": "Far"
+          "name": "Far Clip"
         },
         {
           "default": "33.366093",
@@ -54174,14 +54181,14 @@
           "id": "6_exposure_ev",
           "max": "8",
           "min": "-8",
-          "name": "Exposure (EV)"
+          "name": "Exposure"
         },
         {
           "default": "0",
           "id": "7_mode",
           "max": "2",
           "min": "0",
-          "name": "Mode"
+          "name": "Type"
         },
         {
           "default": "5",
@@ -54209,21 +54216,21 @@
           "id": "7_aim_x",
           "max": "100",
           "min": "-100",
-          "name": "Aim X"
+          "name": "Target X"
         },
         {
           "default": "0",
           "id": "7_aim_y",
           "max": "100",
           "min": "-100",
-          "name": "Aim Y"
+          "name": "Target Y"
         },
         {
           "default": "0",
           "id": "7_aim_z",
           "max": "100",
           "min": "-100",
-          "name": "Aim Z"
+          "name": "Target Z"
         },
         {
           "default": "1",
@@ -54293,14 +54300,14 @@
           "id": "7_light_size",
           "max": "20",
           "min": "0",
-          "name": "Light Size"
+          "name": "Size"
         },
         {
           "default": "0",
           "id": "8_rt_enabled",
           "max": "1",
           "min": "0",
-          "name": "RT Enabled"
+          "name": "Ray Tracing"
         },
         {
           "default": "0",
@@ -54314,7 +54321,7 @@
           "id": "8_rt_reflections",
           "max": "1",
           "min": "0",
-          "name": "RT Reflections"
+          "name": "Reflections"
         },
         {
           "default": "1",
@@ -54503,14 +54510,14 @@
           "id": "10_iridescence_thickness_min",
           "max": "1000",
           "min": "0",
-          "name": "Iridescence Thickness Min (nm)"
+          "name": "Iridescence Thickness Min"
         },
         {
           "default": "400",
           "id": "10_iridescence_thickness_max",
           "max": "1000",
           "min": "0",
-          "name": "Iridescence Thickness Max (nm)"
+          "name": "Iridescence Thickness Max"
         },
         {
           "default": "0",
@@ -55011,13 +55018,6 @@
         },
         {
           "default": "0",
-          "id": "1_uniform",
-          "max": "1",
-          "min": "0",
-          "name": "Uniform (White Furnace)"
-        },
-        {
-          "default": "0",
           "id": "7_falloff",
           "max": "1",
           "min": "0",
@@ -55042,7 +55042,7 @@
           "id": "10_normal_scale",
           "max": "1",
           "min": "-1",
-          "name": "Normal Scale"
+          "name": "Normal Strength"
         },
         {
           "default": "1",
@@ -56533,35 +56533,35 @@
           "id": "11_gain",
           "max": "4",
           "min": "0",
-          "name": "Appearance Gain"
+          "name": "Level"
         },
         {
           "default": "1",
           "id": "8_rt_shadows",
           "max": "1",
           "min": "0",
-          "name": "RT Shadows"
+          "name": "Shadows"
         },
         {
           "default": "1",
           "id": "8_rt_ao",
           "max": "1",
           "min": "0",
-          "name": "RT Ambient Occlusion"
+          "name": "Ambient Occlusion"
         },
         {
           "default": "1",
           "id": "8_rt_gi",
           "max": "1",
           "min": "0",
-          "name": "RT Global Illumination"
+          "name": "Global Illumination"
         },
         {
-          "default": "0",
-          "id": "8_rt_denoise_feed",
-          "max": "1",
-          "min": "0",
-          "name": "RT Denoise Feed"
+          "default": "24",
+          "id": "29_max_radius",
+          "max": "64",
+          "min": "1",
+          "name": "Max Blur"
         },
         {
           "default": "0",
@@ -56589,7 +56589,7 @@
           "id": "32_max_blur_px",
           "max": "128",
           "min": "0",
-          "name": "Max Blur (px)"
+          "name": "Max Blur"
         },
         {
           "default": "0",
@@ -57437,7 +57437,7 @@
           "id": "look_y",
           "max": "2",
           "min": "-2",
-          "name": "Look Y"
+          "name": "Target Height"
         },
         {
           "default": "1",
@@ -57535,7 +57535,7 @@
           "id": "32_azimuth_variation",
           "max": "1",
           "min": "0",
-          "name": "Azimuth Variation"
+          "name": "Brightness Variation"
         },
         {
           "default": "0",
@@ -57608,13 +57608,6 @@
           "name": "Sun Disc Size"
         },
         {
-          "default": "0",
-          "id": "32_uniform",
-          "max": "1",
-          "min": "0",
-          "name": "Uniform (White Furnace)"
-        },
-        {
           "default": "0.8",
           "id": "62_color_r",
           "max": "1",
@@ -57661,7 +57654,7 @@
           "id": "62_normal_scale",
           "max": "1",
           "min": "-1",
-          "name": "Normal Scale"
+          "name": "Normal Strength"
         },
         {
           "default": "1",
@@ -57815,14 +57808,14 @@
           "id": "62_iridescence_thickness_min",
           "max": "1000",
           "min": "0",
-          "name": "Iridescence Thickness Min (nm)"
+          "name": "Iridescence Thickness Min"
         },
         {
           "default": "400",
           "id": "62_iridescence_thickness_max",
           "max": "1000",
           "min": "0",
-          "name": "Iridescence Thickness Max (nm)"
+          "name": "Iridescence Thickness Max"
         },
         {
           "default": "0",
@@ -59691,28 +59684,28 @@
           "id": "63_mode",
           "max": "2",
           "min": "0",
-          "name": "Mode"
+          "name": "Type"
         },
         {
           "default": "0",
           "id": "63_aim_x",
           "max": "100",
           "min": "-100",
-          "name": "Aim X"
+          "name": "Target X"
         },
         {
           "default": "0",
           "id": "63_aim_y",
           "max": "100",
           "min": "-100",
-          "name": "Aim Y"
+          "name": "Target Y"
         },
         {
           "default": "0",
           "id": "63_aim_z",
           "max": "100",
           "min": "-100",
-          "name": "Aim Z"
+          "name": "Target Z"
         },
         {
           "default": "30",
@@ -59761,7 +59754,7 @@
           "id": "63_light_size",
           "max": "20",
           "min": "0",
-          "name": "Light Size"
+          "name": "Size"
         },
         {
           "default": "500",
@@ -59796,14 +59789,14 @@
           "id": "43_near",
           "max": "10000",
           "min": "0.001",
-          "name": "Near"
+          "name": "Near Clip"
         },
         {
           "default": "50",
           "id": "43_far",
           "max": "10000",
           "min": "1",
-          "name": "Far"
+          "name": "Far Clip"
         }
       ]
     },
@@ -60058,35 +60051,35 @@
           "id": "1_pos_x",
           "max": "1000",
           "min": "-1000",
-          "name": "Pos X"
+          "name": "Position X"
         },
         {
           "default": "4",
           "id": "1_pos_y",
           "max": "1000",
           "min": "-1000",
-          "name": "Pos Y"
+          "name": "Position Y"
         },
         {
           "default": "0",
           "id": "1_pos_z",
           "max": "1000",
           "min": "-1000",
-          "name": "Pos Z"
+          "name": "Position Z"
         },
         {
           "default": "-2.05",
           "id": "1_yaw",
           "max": "6.2831855",
           "min": "-6.2831855",
-          "name": "Yaw"
+          "name": "Pan"
         },
         {
           "default": "-0.04",
           "id": "1_pitch",
           "max": "1.5",
           "min": "-1.5",
-          "name": "Pitch"
+          "name": "Tilt"
         },
         {
           "default": "0",
@@ -60100,21 +60093,21 @@
           "id": "1_fov_y",
           "max": "2.5",
           "min": "0.05",
-          "name": "FOV Y"
+          "name": "Field of View"
         },
         {
           "default": "0.3",
           "id": "1_near",
           "max": "10",
           "min": "0.001",
-          "name": "Near"
+          "name": "Near Clip"
         },
         {
           "default": "30000",
           "id": "1_far",
           "max": "30000",
           "min": "1",
-          "name": "Far"
+          "name": "Far Clip"
         },
         {
           "default": "300",
@@ -60142,7 +60135,7 @@
           "id": "2_exposure_ev",
           "max": "8",
           "min": "-8",
-          "name": "Exposure (EV)"
+          "name": "Exposure"
         },
         {
           "default": "1",
@@ -60198,7 +60191,7 @@
           "id": "12_normal_scale",
           "max": "1",
           "min": "-1",
-          "name": "Normal Scale"
+          "name": "Normal Strength"
         },
         {
           "default": "1",
@@ -60352,14 +60345,14 @@
           "id": "12_iridescence_thickness_min",
           "max": "1000",
           "min": "0",
-          "name": "Iridescence Thickness Min (nm)"
+          "name": "Iridescence Thickness Min"
         },
         {
           "default": "400",
           "id": "12_iridescence_thickness_max",
           "max": "1000",
           "min": "0",
-          "name": "Iridescence Thickness Max (nm)"
+          "name": "Iridescence Thickness Max"
         },
         {
           "default": "0",
@@ -62249,14 +62242,14 @@
           "id": "13_gain",
           "max": "4",
           "min": "0",
-          "name": "Appearance Gain"
+          "name": "Level"
         },
         {
           "default": "0",
           "id": "14_mode",
           "max": "2",
           "min": "0",
-          "name": "Mode"
+          "name": "Type"
         },
         {
           "default": "80.86",
@@ -62284,21 +62277,21 @@
           "id": "14_aim_x",
           "max": "100",
           "min": "-100",
-          "name": "Aim X"
+          "name": "Target X"
         },
         {
           "default": "0",
           "id": "14_aim_y",
           "max": "100",
           "min": "-100",
-          "name": "Aim Y"
+          "name": "Target Y"
         },
         {
           "default": "0",
           "id": "14_aim_z",
           "max": "100",
           "min": "-100",
-          "name": "Aim Z"
+          "name": "Target Z"
         },
         {
           "default": "1",
@@ -62389,14 +62382,14 @@
           "id": "14_light_size",
           "max": "20",
           "min": "0",
-          "name": "Light Size"
+          "name": "Size"
         },
         {
           "default": "0",
           "id": "19_rt_enabled",
           "max": "1",
           "min": "0",
-          "name": "RT Enabled"
+          "name": "Ray Tracing"
         },
         {
           "default": "0",
@@ -62410,35 +62403,28 @@
           "id": "19_rt_reflections",
           "max": "1",
           "min": "0",
-          "name": "RT Reflections"
+          "name": "Reflections"
         },
         {
           "default": "1",
           "id": "19_rt_shadows",
           "max": "1",
           "min": "0",
-          "name": "RT Shadows"
+          "name": "Shadows"
         },
         {
           "default": "1",
           "id": "19_rt_ao",
           "max": "1",
           "min": "0",
-          "name": "RT Ambient Occlusion"
+          "name": "Ambient Occlusion"
         },
         {
           "default": "1",
           "id": "19_rt_gi",
           "max": "1",
           "min": "0",
-          "name": "RT Global Illumination"
-        },
-        {
-          "default": "0",
-          "id": "19_rt_denoise_feed",
-          "max": "1",
-          "min": "0",
-          "name": "RT Denoise Feed"
+          "name": "Global Illumination"
         },
         {
           "default": "0.62",
@@ -62518,6 +62504,13 @@
           "name": "Shaft Quality"
         },
         {
+          "default": "24",
+          "id": "22_max_radius",
+          "max": "64",
+          "min": "1",
+          "name": "Max Blur"
+        },
+        {
           "default": "1",
           "id": "22_enabled",
           "max": "1",
@@ -62543,7 +62536,7 @@
           "id": "23_max_blur_px",
           "max": "128",
           "min": "0",
-          "name": "Max Blur (px)"
+          "name": "Max Blur"
         },
         {
           "default": "1",
@@ -62615,7 +62608,7 @@
           "id": "solve_level",
           "max": "4",
           "min": "0",
-          "name": "Solve Level"
+          "name": "Coarse Solve"
         },
         {
           "default": "900",
@@ -62748,7 +62741,7 @@
           "id": "0_fill_height",
           "max": "20",
           "min": "0",
-          "name": "Initial Fill Height"
+          "name": "Fill Height"
         },
         {
           "default": "0",
@@ -62776,42 +62769,49 @@
           "id": "0_closed_neg_x",
           "max": "1",
           "min": "0",
-          "name": "Closed −X"
+          "name": "Left Wall"
         },
         {
           "default": "1",
           "id": "0_closed_pos_x",
           "max": "1",
           "min": "0",
-          "name": "Closed +X"
+          "name": "Right Wall"
         },
         {
           "default": "1",
           "id": "0_closed_neg_y",
           "max": "1",
           "min": "0",
-          "name": "Closed Bottom"
+          "name": "Floor"
         },
         {
           "default": "0",
           "id": "0_closed_pos_y",
           "max": "1",
           "min": "0",
-          "name": "Closed Top"
+          "name": "Ceiling"
         },
         {
           "default": "1",
           "id": "0_closed_neg_z",
           "max": "1",
           "min": "0",
-          "name": "Closed −Z"
+          "name": "Back Wall"
         },
         {
           "default": "1",
           "id": "0_closed_pos_z",
           "max": "1",
           "min": "0",
-          "name": "Closed +Z"
+          "name": "Front Wall"
+        },
+        {
+          "default": "0",
+          "id": "0_particle_capacity",
+          "max": "1",
+          "min": "0",
+          "name": "Max Particles"
         },
         {
           "default": "1",
@@ -62867,7 +62867,7 @@
           "id": "441_normal_scale",
           "max": "1",
           "min": "-1",
-          "name": "Normal Scale"
+          "name": "Normal Strength"
         },
         {
           "default": "1",
@@ -63021,14 +63021,14 @@
           "id": "441_iridescence_thickness_min",
           "max": "1000",
           "min": "0",
-          "name": "Iridescence Thickness Min (nm)"
+          "name": "Iridescence Thickness Min"
         },
         {
           "default": "400",
           "id": "441_iridescence_thickness_max",
           "max": "1000",
           "min": "0",
-          "name": "Iridescence Thickness Max (nm)"
+          "name": "Iridescence Thickness Max"
         },
         {
           "default": "0",
@@ -64904,7 +64904,7 @@
           "id": "442_gain",
           "max": "4",
           "min": "0",
-          "name": "Appearance Gain"
+          "name": "Level"
         },
         {
           "default": "1",
@@ -65058,7 +65058,7 @@
           "id": "477_normal_scale",
           "max": "1",
           "min": "-1",
-          "name": "Normal Scale"
+          "name": "Normal Strength"
         },
         {
           "default": "1",
@@ -65212,14 +65212,14 @@
           "id": "477_iridescence_thickness_min",
           "max": "1000",
           "min": "0",
-          "name": "Iridescence Thickness Min (nm)"
+          "name": "Iridescence Thickness Min"
         },
         {
           "default": "400",
           "id": "477_iridescence_thickness_max",
           "max": "1000",
           "min": "0",
-          "name": "Iridescence Thickness Max (nm)"
+          "name": "Iridescence Thickness Max"
         },
         {
           "default": "0",
@@ -67109,7 +67109,7 @@
           "id": "478_gain",
           "max": "4",
           "min": "0",
-          "name": "Appearance Gain"
+          "name": "Level"
         },
         {
           "default": "0.95",
@@ -67165,7 +67165,7 @@
           "id": "480_normal_scale",
           "max": "1",
           "min": "-1",
-          "name": "Normal Scale"
+          "name": "Normal Strength"
         },
         {
           "default": "1",
@@ -67319,14 +67319,14 @@
           "id": "480_iridescence_thickness_min",
           "max": "1000",
           "min": "0",
-          "name": "Iridescence Thickness Min (nm)"
+          "name": "Iridescence Thickness Min"
         },
         {
           "default": "400",
           "id": "480_iridescence_thickness_max",
           "max": "1000",
           "min": "0",
-          "name": "Iridescence Thickness Max (nm)"
+          "name": "Iridescence Thickness Max"
         },
         {
           "default": "0",
@@ -69209,7 +69209,7 @@
           "id": "481_gain",
           "max": "4",
           "min": "0",
-          "name": "Appearance Gain"
+          "name": "Level"
         },
         {
           "default": "0.95",
@@ -69265,7 +69265,7 @@
           "id": "483_normal_scale",
           "max": "1",
           "min": "-1",
-          "name": "Normal Scale"
+          "name": "Normal Strength"
         },
         {
           "default": "1",
@@ -69419,14 +69419,14 @@
           "id": "483_iridescence_thickness_min",
           "max": "1000",
           "min": "0",
-          "name": "Iridescence Thickness Min (nm)"
+          "name": "Iridescence Thickness Min"
         },
         {
           "default": "400",
           "id": "483_iridescence_thickness_max",
           "max": "1000",
           "min": "0",
-          "name": "Iridescence Thickness Max (nm)"
+          "name": "Iridescence Thickness Max"
         },
         {
           "default": "0",
@@ -71316,7 +71316,7 @@
           "id": "484_gain",
           "max": "4",
           "min": "0",
-          "name": "Appearance Gain"
+          "name": "Level"
         },
         {
           "default": "0.95",
@@ -71372,7 +71372,7 @@
           "id": "503_normal_scale",
           "max": "1",
           "min": "-1",
-          "name": "Normal Scale"
+          "name": "Normal Strength"
         },
         {
           "default": "1",
@@ -71526,14 +71526,14 @@
           "id": "503_iridescence_thickness_min",
           "max": "1000",
           "min": "0",
-          "name": "Iridescence Thickness Min (nm)"
+          "name": "Iridescence Thickness Min"
         },
         {
           "default": "400",
           "id": "503_iridescence_thickness_max",
           "max": "1000",
           "min": "0",
-          "name": "Iridescence Thickness Max (nm)"
+          "name": "Iridescence Thickness Max"
         },
         {
           "default": "0",
@@ -73423,7 +73423,7 @@
           "id": "504_gain",
           "max": "4",
           "min": "0",
-          "name": "Appearance Gain"
+          "name": "Level"
         },
         {
           "default": "0",
@@ -73500,35 +73500,35 @@
           "id": "1001_pos_x",
           "max": "1000",
           "min": "-1000",
-          "name": "Pos X"
+          "name": "Position X"
         },
         {
           "default": "2.8",
           "id": "1001_pos_y",
           "max": "1000",
           "min": "-1000",
-          "name": "Pos Y"
+          "name": "Position Y"
         },
         {
           "default": "9.5",
           "id": "1001_pos_z",
           "max": "1000",
           "min": "-1000",
-          "name": "Pos Z"
+          "name": "Position Z"
         },
         {
           "default": "0.33929262",
           "id": "1001_yaw",
           "max": "6.2831855",
           "min": "-6.2831855",
-          "name": "Yaw"
+          "name": "Pan"
         },
         {
           "default": "-0.19709946",
           "id": "1001_pitch",
           "max": "1.5",
           "min": "-1.5",
-          "name": "Pitch"
+          "name": "Tilt"
         },
         {
           "default": "0",
@@ -73542,21 +73542,21 @@
           "id": "1001_fov_y",
           "max": "2.5",
           "min": "0.05",
-          "name": "FOV Y"
+          "name": "Field of View"
         },
         {
           "default": "0.3",
           "id": "1001_near",
           "max": "10",
           "min": "0.001",
-          "name": "Near"
+          "name": "Near Clip"
         },
         {
           "default": "30000",
           "id": "1001_far",
           "max": "30000",
           "min": "1",
-          "name": "Far"
+          "name": "Far Clip"
         },
         {
           "default": "9.191844",
@@ -73584,7 +73584,7 @@
           "id": "1002_exposure_ev",
           "max": "8",
           "min": "-8",
-          "name": "Exposure (EV)"
+          "name": "Exposure"
         },
         {
           "default": "1",
@@ -73640,7 +73640,7 @@
           "id": "1012_normal_scale",
           "max": "1",
           "min": "-1",
-          "name": "Normal Scale"
+          "name": "Normal Strength"
         },
         {
           "default": "1",
@@ -73794,14 +73794,14 @@
           "id": "1012_iridescence_thickness_min",
           "max": "1000",
           "min": "0",
-          "name": "Iridescence Thickness Min (nm)"
+          "name": "Iridescence Thickness Min"
         },
         {
           "default": "400",
           "id": "1012_iridescence_thickness_max",
           "max": "1000",
           "min": "0",
-          "name": "Iridescence Thickness Max (nm)"
+          "name": "Iridescence Thickness Max"
         },
         {
           "default": "0",
@@ -75691,14 +75691,14 @@
           "id": "1013_gain",
           "max": "4",
           "min": "0",
-          "name": "Appearance Gain"
+          "name": "Level"
         },
         {
           "default": "0",
           "id": "1014_mode",
           "max": "2",
           "min": "0",
-          "name": "Mode"
+          "name": "Type"
         },
         {
           "default": "80.86",
@@ -75726,21 +75726,21 @@
           "id": "1014_aim_x",
           "max": "100",
           "min": "-100",
-          "name": "Aim X"
+          "name": "Target X"
         },
         {
           "default": "0",
           "id": "1014_aim_y",
           "max": "100",
           "min": "-100",
-          "name": "Aim Y"
+          "name": "Target Y"
         },
         {
           "default": "0",
           "id": "1014_aim_z",
           "max": "100",
           "min": "-100",
-          "name": "Aim Z"
+          "name": "Target Z"
         },
         {
           "default": "1",
@@ -75831,14 +75831,14 @@
           "id": "1014_light_size",
           "max": "20",
           "min": "0",
-          "name": "Light Size"
+          "name": "Size"
         },
         {
           "default": "0",
           "id": "1019_rt_enabled",
           "max": "1",
           "min": "0",
-          "name": "RT Enabled"
+          "name": "Ray Tracing"
         },
         {
           "default": "0",
@@ -75852,35 +75852,28 @@
           "id": "1019_rt_reflections",
           "max": "1",
           "min": "0",
-          "name": "RT Reflections"
+          "name": "Reflections"
         },
         {
           "default": "1",
           "id": "1019_rt_shadows",
           "max": "1",
           "min": "0",
-          "name": "RT Shadows"
+          "name": "Shadows"
         },
         {
           "default": "1",
           "id": "1019_rt_ao",
           "max": "1",
           "min": "0",
-          "name": "RT Ambient Occlusion"
+          "name": "Ambient Occlusion"
         },
         {
           "default": "1",
           "id": "1019_rt_gi",
           "max": "1",
           "min": "0",
-          "name": "RT Global Illumination"
-        },
-        {
-          "default": "0",
-          "id": "1019_rt_denoise_feed",
-          "max": "1",
-          "min": "0",
-          "name": "RT Denoise Feed"
+          "name": "Global Illumination"
         },
         {
           "default": "0.62",
@@ -75960,6 +75953,13 @@
           "name": "Shaft Quality"
         },
         {
+          "default": "24",
+          "id": "1022_max_radius",
+          "max": "64",
+          "min": "1",
+          "name": "Max Blur"
+        },
+        {
           "default": "1",
           "id": "1022_enabled",
           "max": "1",
@@ -75985,7 +75985,7 @@
           "id": "1023_max_blur_px",
           "max": "128",
           "min": "0",
-          "name": "Max Blur (px)"
+          "name": "Max Blur"
         },
         {
           "default": "1",
@@ -76412,7 +76412,7 @@
           "id": "2010_normal_scale",
           "max": "1",
           "min": "-1",
-          "name": "Normal Scale"
+          "name": "Normal Strength"
         },
         {
           "default": "1",
@@ -76566,14 +76566,14 @@
           "id": "2010_iridescence_thickness_min",
           "max": "1000",
           "min": "0",
-          "name": "Iridescence Thickness Min (nm)"
+          "name": "Iridescence Thickness Min"
         },
         {
           "default": "400",
           "id": "2010_iridescence_thickness_max",
           "max": "1000",
           "min": "0",
-          "name": "Iridescence Thickness Max (nm)"
+          "name": "Iridescence Thickness Max"
         },
         {
           "default": "0",
@@ -78463,7 +78463,7 @@
           "id": "2011_gain",
           "max": "4",
           "min": "0",
-          "name": "Appearance Gain"
+          "name": "Level"
         },
         {
           "default": "6.6",
@@ -78561,7 +78561,7 @@
           "id": "2014_gain",
           "max": "4",
           "min": "0",
-          "name": "Appearance Gain"
+          "name": "Level"
         },
         {
           "default": "3",
@@ -78666,7 +78666,7 @@
           "id": "2017_gain",
           "max": "4",
           "min": "0",
-          "name": "Appearance Gain"
+          "name": "Level"
         },
         {
           "default": "3",
@@ -78841,7 +78841,7 @@
           "id": "2021_gain",
           "max": "4",
           "min": "0",
-          "name": "Appearance Gain"
+          "name": "Level"
         },
         {
           "default": "3",
@@ -78946,7 +78946,7 @@
           "id": "2024_gain",
           "max": "4",
           "min": "0",
-          "name": "Appearance Gain"
+          "name": "Level"
         },
         {
           "default": "3",
@@ -79346,7 +79346,7 @@
           "id": "40_copy_count",
           "max": "4000",
           "min": "0",
-          "name": "Copy Count"
+          "name": "Count"
         },
         {
           "default": "0",
@@ -79381,28 +79381,28 @@
           "id": "40_speed",
           "max": "4",
           "min": "0",
-          "name": "Simulation Speed"
+          "name": "Speed"
         },
         {
           "default": "1.85",
           "id": "40_copy_spacing",
           "max": "100",
           "min": "0.01",
-          "name": "Copy Spacing"
+          "name": "Spacing"
         },
         {
           "default": "24",
           "id": "40_copy_columns",
           "max": "64",
           "min": "1",
-          "name": "Copy Columns"
+          "name": "Columns"
         },
         {
           "default": "1",
           "id": "40_copy_layout",
           "max": "1",
           "min": "0",
-          "name": "Copy Layout"
+          "name": "Arrangement"
         },
         {
           "default": "0.55",
@@ -79430,14 +79430,14 @@
           "id": "1_fov_y",
           "max": "2.5",
           "min": "0.05",
-          "name": "FOV Y"
+          "name": "Field of View"
         },
         {
           "default": "18",
           "id": "1_look_y",
           "max": "18",
           "min": "-10",
-          "name": "Look Y"
+          "name": "Target Height"
         },
         {
           "default": "0",
@@ -79451,14 +79451,14 @@
           "id": "1_near",
           "max": "10000",
           "min": "0.001",
-          "name": "Near"
+          "name": "Near Clip"
         },
         {
           "default": "200",
           "id": "1_far",
           "max": "10000",
           "min": "1",
-          "name": "Far"
+          "name": "Far Clip"
         },
         {
           "default": "512",
@@ -79486,7 +79486,7 @@
           "id": "3_azimuth_variation",
           "max": "1",
           "min": "0",
-          "name": "Azimuth Variation"
+          "name": "Brightness Variation"
         },
         {
           "default": "1",
@@ -79574,17 +79574,10 @@
         },
         {
           "default": "0",
-          "id": "3_uniform",
-          "max": "1",
-          "min": "0",
-          "name": "Uniform (White Furnace)"
-        },
-        {
-          "default": "0",
           "id": "4_mode",
           "max": "2",
           "min": "0",
-          "name": "Mode"
+          "name": "Type"
         },
         {
           "default": "-12",
@@ -79612,21 +79605,21 @@
           "id": "4_aim_x",
           "max": "100",
           "min": "-100",
-          "name": "Aim X"
+          "name": "Target X"
         },
         {
           "default": "0",
           "id": "4_aim_y",
           "max": "100",
           "min": "-100",
-          "name": "Aim Y"
+          "name": "Target Y"
         },
         {
           "default": "0",
           "id": "4_aim_z",
           "max": "100",
           "min": "-100",
-          "name": "Aim Z"
+          "name": "Target Z"
         },
         {
           "default": "1",
@@ -79717,14 +79710,14 @@
           "id": "4_light_size",
           "max": "20",
           "min": "0",
-          "name": "Light Size"
+          "name": "Size"
         },
         {
           "default": "0",
           "id": "30_rt_enabled",
           "max": "1",
           "min": "0",
-          "name": "RT Enabled"
+          "name": "Ray Tracing"
         },
         {
           "default": "0",
@@ -79738,35 +79731,28 @@
           "id": "30_rt_reflections",
           "max": "1",
           "min": "0",
-          "name": "RT Reflections"
+          "name": "Reflections"
         },
         {
           "default": "1",
           "id": "30_rt_shadows",
           "max": "1",
           "min": "0",
-          "name": "RT Shadows"
+          "name": "Shadows"
         },
         {
           "default": "1",
           "id": "30_rt_ao",
           "max": "1",
           "min": "0",
-          "name": "RT Ambient Occlusion"
+          "name": "Ambient Occlusion"
         },
         {
           "default": "1",
           "id": "30_rt_gi",
           "max": "1",
           "min": "0",
-          "name": "RT Global Illumination"
-        },
-        {
-          "default": "0",
-          "id": "30_rt_denoise_feed",
-          "max": "1",
-          "min": "0",
-          "name": "RT Denoise Feed"
+          "name": "Global Illumination"
         },
         {
           "default": "1",
@@ -79780,14 +79766,14 @@
           "id": "101_motion",
           "max": "2",
           "min": "0",
-          "name": "Motion"
+          "name": "Body Type"
         },
         {
           "default": "600",
           "id": "101_density",
           "max": "25000",
           "min": "1",
-          "name": "Density (kg/m³)"
+          "name": "Density"
         },
         {
           "default": "0.6",
@@ -79934,7 +79920,7 @@
           "id": "103_normal_scale",
           "max": "1",
           "min": "-1",
-          "name": "Normal Scale"
+          "name": "Normal Strength"
         },
         {
           "default": "1",
@@ -80088,14 +80074,14 @@
           "id": "103_iridescence_thickness_min",
           "max": "1000",
           "min": "0",
-          "name": "Iridescence Thickness Min (nm)"
+          "name": "Iridescence Thickness Min"
         },
         {
           "default": "400",
           "id": "103_iridescence_thickness_max",
           "max": "1000",
           "min": "0",
-          "name": "Iridescence Thickness Max (nm)"
+          "name": "Iridescence Thickness Max"
         },
         {
           "default": "0",
@@ -81985,7 +81971,7 @@
           "id": "104_gain",
           "max": "4",
           "min": "0",
-          "name": "Appearance Gain"
+          "name": "Level"
         },
         {
           "default": "1",
@@ -81999,14 +81985,14 @@
           "id": "121_motion",
           "max": "2",
           "min": "0",
-          "name": "Motion"
+          "name": "Body Type"
         },
         {
           "default": "600",
           "id": "121_density",
           "max": "25000",
           "min": "1",
-          "name": "Density (kg/m³)"
+          "name": "Density"
         },
         {
           "default": "0.25",
@@ -82153,7 +82139,7 @@
           "id": "123_normal_scale",
           "max": "1",
           "min": "-1",
-          "name": "Normal Scale"
+          "name": "Normal Strength"
         },
         {
           "default": "1",
@@ -82307,14 +82293,14 @@
           "id": "123_iridescence_thickness_min",
           "max": "1000",
           "min": "0",
-          "name": "Iridescence Thickness Min (nm)"
+          "name": "Iridescence Thickness Min"
         },
         {
           "default": "400",
           "id": "123_iridescence_thickness_max",
           "max": "1000",
           "min": "0",
-          "name": "Iridescence Thickness Max (nm)"
+          "name": "Iridescence Thickness Max"
         },
         {
           "default": "0",
@@ -84204,7 +84190,7 @@
           "id": "124_gain",
           "max": "4",
           "min": "0",
-          "name": "Appearance Gain"
+          "name": "Level"
         },
         {
           "default": "-4",
@@ -84288,14 +84274,14 @@
           "id": "141_motion",
           "max": "2",
           "min": "0",
-          "name": "Motion"
+          "name": "Body Type"
         },
         {
           "default": "600",
           "id": "141_density",
           "max": "25000",
           "min": "1",
-          "name": "Density (kg/m³)"
+          "name": "Density"
         },
         {
           "default": "0.2",
@@ -84372,7 +84358,7 @@
           "id": "143_normal_scale",
           "max": "1",
           "min": "-1",
-          "name": "Normal Scale"
+          "name": "Normal Strength"
         },
         {
           "default": "1",
@@ -84526,14 +84512,14 @@
           "id": "143_iridescence_thickness_min",
           "max": "1000",
           "min": "0",
-          "name": "Iridescence Thickness Min (nm)"
+          "name": "Iridescence Thickness Min"
         },
         {
           "default": "400",
           "id": "143_iridescence_thickness_max",
           "max": "1000",
           "min": "0",
-          "name": "Iridescence Thickness Max (nm)"
+          "name": "Iridescence Thickness Max"
         },
         {
           "default": "0",
@@ -86423,7 +86409,7 @@
           "id": "144_gain",
           "max": "4",
           "min": "0",
-          "name": "Appearance Gain"
+          "name": "Level"
         },
         {
           "default": "4",
@@ -86507,14 +86493,14 @@
           "id": "161_motion",
           "max": "2",
           "min": "0",
-          "name": "Motion"
+          "name": "Body Type"
         },
         {
           "default": "600",
           "id": "161_density",
           "max": "25000",
           "min": "1",
-          "name": "Density (kg/m³)"
+          "name": "Density"
         },
         {
           "default": "0.2",
@@ -86591,7 +86577,7 @@
           "id": "163_normal_scale",
           "max": "1",
           "min": "-1",
-          "name": "Normal Scale"
+          "name": "Normal Strength"
         },
         {
           "default": "1",
@@ -86745,14 +86731,14 @@
           "id": "163_iridescence_thickness_min",
           "max": "1000",
           "min": "0",
-          "name": "Iridescence Thickness Min (nm)"
+          "name": "Iridescence Thickness Min"
         },
         {
           "default": "400",
           "id": "163_iridescence_thickness_max",
           "max": "1000",
           "min": "0",
-          "name": "Iridescence Thickness Max (nm)"
+          "name": "Iridescence Thickness Max"
         },
         {
           "default": "0",
@@ -88642,7 +88628,7 @@
           "id": "164_gain",
           "max": "4",
           "min": "0",
-          "name": "Appearance Gain"
+          "name": "Level"
         },
         {
           "default": "100",
@@ -88670,7 +88656,14 @@
           "id": "165_exposure_ev",
           "max": "8",
           "min": "-8",
-          "name": "Exposure (EV)"
+          "name": "Exposure"
+        },
+        {
+          "default": "24",
+          "id": "168_max_radius",
+          "max": "64",
+          "min": "1",
+          "name": "Max Blur"
         },
         {
           "default": "0",
@@ -88698,7 +88691,7 @@
           "id": "171_max_blur_px",
           "max": "128",
           "min": "0",
-          "name": "Max Blur (px)"
+          "name": "Max Blur"
         },
         {
           "default": "0",
@@ -88742,7 +88735,7 @@
           "id": "40_speed",
           "max": "4",
           "min": "0",
-          "name": "Simulation Speed"
+          "name": "Speed"
         },
         {
           "default": "0",
@@ -88756,28 +88749,28 @@
           "id": "40_copy_count",
           "max": "4000",
           "min": "0",
-          "name": "Copy Count"
+          "name": "Count"
         },
         {
           "default": "1.25",
           "id": "40_copy_spacing",
           "max": "100",
           "min": "0.01",
-          "name": "Copy Spacing"
+          "name": "Spacing"
         },
         {
           "default": "16",
           "id": "40_copy_columns",
           "max": "64",
           "min": "1",
-          "name": "Copy Columns"
+          "name": "Columns"
         },
         {
           "default": "0",
           "id": "40_copy_layout",
           "max": "1",
           "min": "0",
-          "name": "Copy Layout"
+          "name": "Arrangement"
         },
         {
           "default": "0.3",
@@ -88805,14 +88798,14 @@
           "id": "1_fov_y",
           "max": "2.5",
           "min": "0.05",
-          "name": "FOV Y"
+          "name": "Field of View"
         },
         {
           "default": "1.5",
           "id": "1_look_y",
           "max": "10",
           "min": "-10",
-          "name": "Look Y"
+          "name": "Target Height"
         },
         {
           "default": "0",
@@ -88826,14 +88819,14 @@
           "id": "1_near",
           "max": "10000",
           "min": "0.001",
-          "name": "Near"
+          "name": "Near Clip"
         },
         {
           "default": "200",
           "id": "1_far",
           "max": "10000",
           "min": "1",
-          "name": "Far"
+          "name": "Far Clip"
         },
         {
           "default": "0.5",
@@ -88938,7 +88931,7 @@
           "id": "3_azimuth_variation",
           "max": "1",
           "min": "0",
-          "name": "Azimuth Variation"
+          "name": "Brightness Variation"
         },
         {
           "default": "1",
@@ -89026,17 +89019,10 @@
         },
         {
           "default": "0",
-          "id": "3_uniform",
-          "max": "1",
-          "min": "0",
-          "name": "Uniform (White Furnace)"
-        },
-        {
-          "default": "0",
           "id": "4_mode",
           "max": "2",
           "min": "0",
-          "name": "Mode"
+          "name": "Type"
         },
         {
           "default": "0",
@@ -89064,21 +89050,21 @@
           "id": "4_aim_x",
           "max": "100",
           "min": "-100",
-          "name": "Aim X"
+          "name": "Target X"
         },
         {
           "default": "0",
           "id": "4_aim_y",
           "max": "100",
           "min": "-100",
-          "name": "Aim Y"
+          "name": "Target Y"
         },
         {
           "default": "0",
           "id": "4_aim_z",
           "max": "100",
           "min": "-100",
-          "name": "Aim Z"
+          "name": "Target Z"
         },
         {
           "default": "1",
@@ -89169,14 +89155,14 @@
           "id": "4_light_size",
           "max": "20",
           "min": "0",
-          "name": "Light Size"
+          "name": "Size"
         },
         {
           "default": "1",
           "id": "5_mode",
           "max": "2",
           "min": "0",
-          "name": "Mode"
+          "name": "Type"
         },
         {
           "default": "-4",
@@ -89204,21 +89190,21 @@
           "id": "5_aim_x",
           "max": "100",
           "min": "-100",
-          "name": "Aim X"
+          "name": "Target X"
         },
         {
           "default": "0",
           "id": "5_aim_y",
           "max": "100",
           "min": "-100",
-          "name": "Aim Y"
+          "name": "Target Y"
         },
         {
           "default": "0",
           "id": "5_aim_z",
           "max": "100",
           "min": "-100",
-          "name": "Aim Z"
+          "name": "Target Z"
         },
         {
           "default": "0.75",
@@ -89309,14 +89295,14 @@
           "id": "5_light_size",
           "max": "20",
           "min": "0",
-          "name": "Light Size"
+          "name": "Size"
         },
         {
           "default": "0",
           "id": "30_rt_enabled",
           "max": "1",
           "min": "0",
-          "name": "RT Enabled"
+          "name": "Ray Tracing"
         },
         {
           "default": "0",
@@ -89330,35 +89316,28 @@
           "id": "30_rt_reflections",
           "max": "1",
           "min": "0",
-          "name": "RT Reflections"
+          "name": "Reflections"
         },
         {
           "default": "1",
           "id": "30_rt_shadows",
           "max": "1",
           "min": "0",
-          "name": "RT Shadows"
+          "name": "Shadows"
         },
         {
           "default": "1",
           "id": "30_rt_ao",
           "max": "1",
           "min": "0",
-          "name": "RT Ambient Occlusion"
+          "name": "Ambient Occlusion"
         },
         {
           "default": "1",
           "id": "30_rt_gi",
           "max": "1",
           "min": "0",
-          "name": "RT Global Illumination"
-        },
-        {
-          "default": "0",
-          "id": "30_rt_denoise_feed",
-          "max": "1",
-          "min": "0",
-          "name": "RT Denoise Feed"
+          "name": "Global Illumination"
         },
         {
           "default": "1",
@@ -89372,14 +89351,14 @@
           "id": "101_motion",
           "max": "2",
           "min": "0",
-          "name": "Motion"
+          "name": "Body Type"
         },
         {
           "default": "600",
           "id": "101_density",
           "max": "25000",
           "min": "1",
-          "name": "Density (kg/m³)"
+          "name": "Density"
         },
         {
           "default": "0.55",
@@ -89526,7 +89505,7 @@
           "id": "103_normal_scale",
           "max": "1",
           "min": "-1",
-          "name": "Normal Scale"
+          "name": "Normal Strength"
         },
         {
           "default": "1",
@@ -89680,14 +89659,14 @@
           "id": "103_iridescence_thickness_min",
           "max": "1000",
           "min": "0",
-          "name": "Iridescence Thickness Min (nm)"
+          "name": "Iridescence Thickness Min"
         },
         {
           "default": "400",
           "id": "103_iridescence_thickness_max",
           "max": "1000",
           "min": "0",
-          "name": "Iridescence Thickness Max (nm)"
+          "name": "Iridescence Thickness Max"
         },
         {
           "default": "0",
@@ -91577,7 +91556,7 @@
           "id": "104_gain",
           "max": "4",
           "min": "0",
-          "name": "Appearance Gain"
+          "name": "Level"
         },
         {
           "default": "0",
@@ -91591,14 +91570,14 @@
           "id": "111_motion",
           "max": "2",
           "min": "0",
-          "name": "Motion"
+          "name": "Body Type"
         },
         {
           "default": "600",
           "id": "111_density",
           "max": "25000",
           "min": "1",
-          "name": "Density (kg/m³)"
+          "name": "Density"
         },
         {
           "default": "0.55",
@@ -91745,7 +91724,7 @@
           "id": "113_normal_scale",
           "max": "1",
           "min": "-1",
-          "name": "Normal Scale"
+          "name": "Normal Strength"
         },
         {
           "default": "1",
@@ -91899,14 +91878,14 @@
           "id": "113_iridescence_thickness_min",
           "max": "1000",
           "min": "0",
-          "name": "Iridescence Thickness Min (nm)"
+          "name": "Iridescence Thickness Min"
         },
         {
           "default": "400",
           "id": "113_iridescence_thickness_max",
           "max": "1000",
           "min": "0",
-          "name": "Iridescence Thickness Max (nm)"
+          "name": "Iridescence Thickness Max"
         },
         {
           "default": "0",
@@ -93796,7 +93775,7 @@
           "id": "114_gain",
           "max": "4",
           "min": "0",
-          "name": "Appearance Gain"
+          "name": "Level"
         },
         {
           "default": "1",
@@ -93810,14 +93789,14 @@
           "id": "121_motion",
           "max": "2",
           "min": "0",
-          "name": "Motion"
+          "name": "Body Type"
         },
         {
           "default": "600",
           "id": "121_density",
           "max": "25000",
           "min": "1",
-          "name": "Density (kg/m³)"
+          "name": "Density"
         },
         {
           "default": "0.55",
@@ -93964,7 +93943,7 @@
           "id": "123_normal_scale",
           "max": "1",
           "min": "-1",
-          "name": "Normal Scale"
+          "name": "Normal Strength"
         },
         {
           "default": "1",
@@ -94118,14 +94097,14 @@
           "id": "123_iridescence_thickness_min",
           "max": "1000",
           "min": "0",
-          "name": "Iridescence Thickness Min (nm)"
+          "name": "Iridescence Thickness Min"
         },
         {
           "default": "400",
           "id": "123_iridescence_thickness_max",
           "max": "1000",
           "min": "0",
-          "name": "Iridescence Thickness Max (nm)"
+          "name": "Iridescence Thickness Max"
         },
         {
           "default": "0",
@@ -96015,7 +95994,7 @@
           "id": "124_gain",
           "max": "4",
           "min": "0",
-          "name": "Appearance Gain"
+          "name": "Level"
         },
         {
           "default": "2",
@@ -96029,14 +96008,14 @@
           "id": "131_motion",
           "max": "2",
           "min": "0",
-          "name": "Motion"
+          "name": "Body Type"
         },
         {
           "default": "600",
           "id": "131_density",
           "max": "25000",
           "min": "1",
-          "name": "Density (kg/m³)"
+          "name": "Density"
         },
         {
           "default": "0.55",
@@ -96183,7 +96162,7 @@
           "id": "133_normal_scale",
           "max": "1",
           "min": "-1",
-          "name": "Normal Scale"
+          "name": "Normal Strength"
         },
         {
           "default": "1",
@@ -96337,14 +96316,14 @@
           "id": "133_iridescence_thickness_min",
           "max": "1000",
           "min": "0",
-          "name": "Iridescence Thickness Min (nm)"
+          "name": "Iridescence Thickness Min"
         },
         {
           "default": "400",
           "id": "133_iridescence_thickness_max",
           "max": "1000",
           "min": "0",
-          "name": "Iridescence Thickness Max (nm)"
+          "name": "Iridescence Thickness Max"
         },
         {
           "default": "0",
@@ -98234,7 +98213,7 @@
           "id": "134_gain",
           "max": "4",
           "min": "0",
-          "name": "Appearance Gain"
+          "name": "Level"
         },
         {
           "default": "3",
@@ -98248,14 +98227,14 @@
           "id": "141_motion",
           "max": "2",
           "min": "0",
-          "name": "Motion"
+          "name": "Body Type"
         },
         {
           "default": "600",
           "id": "141_density",
           "max": "25000",
           "min": "1",
-          "name": "Density (kg/m³)"
+          "name": "Density"
         },
         {
           "default": "0.55",
@@ -98402,7 +98381,7 @@
           "id": "143_normal_scale",
           "max": "1",
           "min": "-1",
-          "name": "Normal Scale"
+          "name": "Normal Strength"
         },
         {
           "default": "1",
@@ -98556,14 +98535,14 @@
           "id": "143_iridescence_thickness_min",
           "max": "1000",
           "min": "0",
-          "name": "Iridescence Thickness Min (nm)"
+          "name": "Iridescence Thickness Min"
         },
         {
           "default": "400",
           "id": "143_iridescence_thickness_max",
           "max": "1000",
           "min": "0",
-          "name": "Iridescence Thickness Max (nm)"
+          "name": "Iridescence Thickness Max"
         },
         {
           "default": "0",
@@ -100453,7 +100432,7 @@
           "id": "144_gain",
           "max": "4",
           "min": "0",
-          "name": "Appearance Gain"
+          "name": "Level"
         },
         {
           "default": "4",
@@ -100467,14 +100446,14 @@
           "id": "151_motion",
           "max": "2",
           "min": "0",
-          "name": "Motion"
+          "name": "Body Type"
         },
         {
           "default": "600",
           "id": "151_density",
           "max": "25000",
           "min": "1",
-          "name": "Density (kg/m³)"
+          "name": "Density"
         },
         {
           "default": "0.55",
@@ -100621,7 +100600,7 @@
           "id": "153_normal_scale",
           "max": "1",
           "min": "-1",
-          "name": "Normal Scale"
+          "name": "Normal Strength"
         },
         {
           "default": "1",
@@ -100775,14 +100754,14 @@
           "id": "153_iridescence_thickness_min",
           "max": "1000",
           "min": "0",
-          "name": "Iridescence Thickness Min (nm)"
+          "name": "Iridescence Thickness Min"
         },
         {
           "default": "400",
           "id": "153_iridescence_thickness_max",
           "max": "1000",
           "min": "0",
-          "name": "Iridescence Thickness Max (nm)"
+          "name": "Iridescence Thickness Max"
         },
         {
           "default": "0",
@@ -102672,7 +102651,7 @@
           "id": "154_gain",
           "max": "4",
           "min": "0",
-          "name": "Appearance Gain"
+          "name": "Level"
         },
         {
           "default": "12",
@@ -102700,7 +102679,14 @@
           "id": "155_exposure_ev",
           "max": "8",
           "min": "-8",
-          "name": "Exposure (EV)"
+          "name": "Exposure"
+        },
+        {
+          "default": "24",
+          "id": "158_max_radius",
+          "max": "64",
+          "min": "1",
+          "name": "Max Blur"
         },
         {
           "default": "0",
@@ -102728,7 +102714,7 @@
           "id": "161_max_blur_px",
           "max": "128",
           "min": "0",
-          "name": "Max Blur (px)"
+          "name": "Max Blur"
         },
         {
           "default": "0",
@@ -102839,14 +102825,14 @@
           "id": "1_fov_y",
           "max": "2.5",
           "min": "0.05",
-          "name": "FOV Y"
+          "name": "Field of View"
         },
         {
           "default": "0.5",
           "id": "1_look_y",
           "max": "10",
           "min": "-10",
-          "name": "Look Y"
+          "name": "Target Height"
         },
         {
           "default": "0",
@@ -102860,14 +102846,14 @@
           "id": "1_near",
           "max": "10000",
           "min": "0.001",
-          "name": "Near"
+          "name": "Near Clip"
         },
         {
           "default": "200",
           "id": "1_far",
           "max": "10000",
           "min": "1",
-          "name": "Far"
+          "name": "Far Clip"
         },
         {
           "default": "512",
@@ -102895,7 +102881,7 @@
           "id": "3_azimuth_variation",
           "max": "1",
           "min": "0",
-          "name": "Azimuth Variation"
+          "name": "Brightness Variation"
         },
         {
           "default": "1",
@@ -102983,17 +102969,10 @@
         },
         {
           "default": "0",
-          "id": "3_uniform",
-          "max": "1",
-          "min": "0",
-          "name": "Uniform (White Furnace)"
-        },
-        {
-          "default": "0",
           "id": "4_mode",
           "max": "2",
           "min": "0",
-          "name": "Mode"
+          "name": "Type"
         },
         {
           "default": "0",
@@ -103021,21 +103000,21 @@
           "id": "4_aim_x",
           "max": "100",
           "min": "-100",
-          "name": "Aim X"
+          "name": "Target X"
         },
         {
           "default": "0",
           "id": "4_aim_y",
           "max": "100",
           "min": "-100",
-          "name": "Aim Y"
+          "name": "Target Y"
         },
         {
           "default": "0",
           "id": "4_aim_z",
           "max": "100",
           "min": "-100",
-          "name": "Aim Z"
+          "name": "Target Z"
         },
         {
           "default": "1",
@@ -103126,7 +103105,7 @@
           "id": "4_light_size",
           "max": "20",
           "min": "0",
-          "name": "Light Size"
+          "name": "Size"
         },
         {
           "default": "0.85",
@@ -103182,7 +103161,7 @@
           "id": "12_normal_scale",
           "max": "1",
           "min": "-1",
-          "name": "Normal Scale"
+          "name": "Normal Strength"
         },
         {
           "default": "1",
@@ -103336,14 +103315,14 @@
           "id": "12_iridescence_thickness_min",
           "max": "1000",
           "min": "0",
-          "name": "Iridescence Thickness Min (nm)"
+          "name": "Iridescence Thickness Min"
         },
         {
           "default": "400",
           "id": "12_iridescence_thickness_max",
           "max": "1000",
           "min": "0",
-          "name": "Iridescence Thickness Max (nm)"
+          "name": "Iridescence Thickness Max"
         },
         {
           "default": "0",
@@ -105303,14 +105282,14 @@
           "id": "22_gain",
           "max": "4",
           "min": "0",
-          "name": "Appearance Gain"
+          "name": "Level"
         },
         {
           "default": "0",
           "id": "20_rt_enabled",
           "max": "1",
           "min": "0",
-          "name": "RT Enabled"
+          "name": "Ray Tracing"
         },
         {
           "default": "0",
@@ -105324,35 +105303,28 @@
           "id": "20_rt_reflections",
           "max": "1",
           "min": "0",
-          "name": "RT Reflections"
+          "name": "Reflections"
         },
         {
           "default": "1",
           "id": "20_rt_shadows",
           "max": "1",
           "min": "0",
-          "name": "RT Shadows"
+          "name": "Shadows"
         },
         {
           "default": "1",
           "id": "20_rt_ao",
           "max": "1",
           "min": "0",
-          "name": "RT Ambient Occlusion"
+          "name": "Ambient Occlusion"
         },
         {
           "default": "1",
           "id": "20_rt_gi",
           "max": "1",
           "min": "0",
-          "name": "RT Global Illumination"
-        },
-        {
-          "default": "0",
-          "id": "20_rt_denoise_feed",
-          "max": "1",
-          "min": "0",
-          "name": "RT Denoise Feed"
+          "name": "Global Illumination"
         },
         {
           "default": "5",
@@ -105380,7 +105352,14 @@
           "id": "23_exposure_ev",
           "max": "8",
           "min": "-8",
-          "name": "Exposure (EV)"
+          "name": "Exposure"
+        },
+        {
+          "default": "24",
+          "id": "26_max_radius",
+          "max": "64",
+          "min": "1",
+          "name": "Max Blur"
         },
         {
           "default": "0",
@@ -105408,7 +105387,7 @@
           "id": "29_max_blur_px",
           "max": "128",
           "min": "0",
-          "name": "Max Blur (px)"
+          "name": "Max Blur"
         },
         {
           "default": "0",
@@ -105969,7 +105948,7 @@
           "id": "solve_level",
           "max": "4",
           "min": "0",
-          "name": "Solve Level"
+          "name": "Coarse Solve"
         },
         {
           "default": "900",
@@ -106165,14 +106144,14 @@
           "id": "434_fov_y",
           "max": "2.5",
           "min": "0.05",
-          "name": "FOV Y"
+          "name": "Field of View"
         },
         {
           "default": "1.2",
           "id": "434_look_y",
           "max": "10",
           "min": "-10",
-          "name": "Look Y"
+          "name": "Target Height"
         },
         {
           "default": "0",
@@ -106186,14 +106165,14 @@
           "id": "434_near",
           "max": "10000",
           "min": "0.001",
-          "name": "Near"
+          "name": "Near Clip"
         },
         {
           "default": "2000",
           "id": "434_far",
           "max": "10000",
           "min": "1",
-          "name": "Far"
+          "name": "Far Clip"
         },
         {
           "default": "1024",
@@ -106221,7 +106200,7 @@
           "id": "435_azimuth_variation",
           "max": "1",
           "min": "0",
-          "name": "Azimuth Variation"
+          "name": "Brightness Variation"
         },
         {
           "default": "0.7",
@@ -106309,17 +106288,10 @@
         },
         {
           "default": "0",
-          "id": "435_uniform",
-          "max": "1",
-          "min": "0",
-          "name": "Uniform (White Furnace)"
-        },
-        {
-          "default": "0",
           "id": "436_mode",
           "max": "2",
           "min": "0",
-          "name": "Mode"
+          "name": "Type"
         },
         {
           "default": "-2",
@@ -106347,21 +106319,21 @@
           "id": "436_aim_x",
           "max": "100",
           "min": "-100",
-          "name": "Aim X"
+          "name": "Target X"
         },
         {
           "default": "0",
           "id": "436_aim_y",
           "max": "100",
           "min": "-100",
-          "name": "Aim Y"
+          "name": "Target Y"
         },
         {
           "default": "0",
           "id": "436_aim_z",
           "max": "100",
           "min": "-100",
-          "name": "Aim Z"
+          "name": "Target Z"
         },
         {
           "default": "1",
@@ -106452,7 +106424,7 @@
           "id": "436_light_size",
           "max": "20",
           "min": "0",
-          "name": "Light Size"
+          "name": "Size"
         },
         {
           "default": "0.035",
@@ -106508,7 +106480,7 @@
           "id": "447_normal_scale",
           "max": "1",
           "min": "-1",
-          "name": "Normal Scale"
+          "name": "Normal Strength"
         },
         {
           "default": "1",
@@ -106662,14 +106634,14 @@
           "id": "447_iridescence_thickness_min",
           "max": "1000",
           "min": "0",
-          "name": "Iridescence Thickness Min (nm)"
+          "name": "Iridescence Thickness Min"
         },
         {
           "default": "400",
           "id": "447_iridescence_thickness_max",
           "max": "1000",
           "min": "0",
-          "name": "Iridescence Thickness Max (nm)"
+          "name": "Iridescence Thickness Max"
         },
         {
           "default": "0",
@@ -108629,7 +108601,7 @@
           "id": "449_gain",
           "max": "4",
           "min": "0",
-          "name": "Appearance Gain"
+          "name": "Level"
         },
         {
           "default": "0",
@@ -108727,7 +108699,7 @@
           "id": "452_gain",
           "max": "4",
           "min": "0",
-          "name": "Appearance Gain"
+          "name": "Level"
         },
         {
           "default": "-2.04",
@@ -108825,7 +108797,7 @@
           "id": "455_gain",
           "max": "4",
           "min": "0",
-          "name": "Appearance Gain"
+          "name": "Level"
         },
         {
           "default": "2.04",
@@ -108923,14 +108895,14 @@
           "id": "458_gain",
           "max": "4",
           "min": "0",
-          "name": "Appearance Gain"
+          "name": "Level"
         },
         {
           "default": "0",
           "id": "463_rt_enabled",
           "max": "1",
           "min": "0",
-          "name": "RT Enabled"
+          "name": "Ray Tracing"
         },
         {
           "default": "0",
@@ -108944,42 +108916,35 @@
           "id": "463_rt_reflections",
           "max": "1",
           "min": "0",
-          "name": "RT Reflections"
+          "name": "Reflections"
         },
         {
           "default": "1",
           "id": "463_rt_shadows",
           "max": "1",
           "min": "0",
-          "name": "RT Shadows"
+          "name": "Shadows"
         },
         {
           "default": "1",
           "id": "463_rt_ao",
           "max": "1",
           "min": "0",
-          "name": "RT Ambient Occlusion"
+          "name": "Ambient Occlusion"
         },
         {
           "default": "1",
           "id": "463_rt_gi",
           "max": "1",
           "min": "0",
-          "name": "RT Global Illumination"
-        },
-        {
-          "default": "0",
-          "id": "463_rt_denoise_feed",
-          "max": "1",
-          "min": "0",
-          "name": "RT Denoise Feed"
+          "name": "Global Illumination"
         },
         {
           "default": "0",
           "id": "466_mode",
           "max": "2",
           "min": "0",
-          "name": "Mode"
+          "name": "Type"
         },
         {
           "default": "4",
@@ -109007,21 +108972,21 @@
           "id": "466_aim_x",
           "max": "100",
           "min": "-100",
-          "name": "Aim X"
+          "name": "Target X"
         },
         {
           "default": "0.4",
           "id": "466_aim_y",
           "max": "100",
           "min": "-100",
-          "name": "Aim Y"
+          "name": "Target Y"
         },
         {
           "default": "0",
           "id": "466_aim_z",
           "max": "100",
           "min": "-100",
-          "name": "Aim Z"
+          "name": "Target Z"
         },
         {
           "default": "0.57",
@@ -109112,7 +109077,7 @@
           "id": "466_light_size",
           "max": "20",
           "min": "0",
-          "name": "Light Size"
+          "name": "Size"
         },
         {
           "default": "4",
@@ -109126,7 +109091,7 @@
           "id": "0_fill_height",
           "max": "20",
           "min": "0",
-          "name": "Initial Fill Height"
+          "name": "Fill Height"
         },
         {
           "default": "0",
@@ -109154,42 +109119,49 @@
           "id": "0_closed_neg_x",
           "max": "1",
           "min": "0",
-          "name": "Closed −X"
+          "name": "Left Wall"
         },
         {
           "default": "1",
           "id": "0_closed_pos_x",
           "max": "1",
           "min": "0",
-          "name": "Closed +X"
+          "name": "Right Wall"
         },
         {
           "default": "1",
           "id": "0_closed_neg_y",
           "max": "1",
           "min": "0",
-          "name": "Closed Bottom"
+          "name": "Floor"
         },
         {
           "default": "1",
           "id": "0_closed_pos_y",
           "max": "1",
           "min": "0",
-          "name": "Closed Top"
+          "name": "Ceiling"
         },
         {
           "default": "1",
           "id": "0_closed_neg_z",
           "max": "1",
           "min": "0",
-          "name": "Closed −Z"
+          "name": "Back Wall"
         },
         {
           "default": "1",
           "id": "0_closed_pos_z",
           "max": "1",
           "min": "0",
-          "name": "Closed +Z"
+          "name": "Front Wall"
+        },
+        {
+          "default": "0",
+          "id": "0_particle_capacity",
+          "max": "1",
+          "min": "0",
+          "name": "Max Particles"
         },
         {
           "default": "-1.25",
@@ -109413,7 +109385,7 @@
           "id": "18_normal_scale",
           "max": "1",
           "min": "-1",
-          "name": "Normal Scale"
+          "name": "Normal Strength"
         },
         {
           "default": "1",
@@ -109567,14 +109539,14 @@
           "id": "18_iridescence_thickness_min",
           "max": "1000",
           "min": "0",
-          "name": "Iridescence Thickness Min (nm)"
+          "name": "Iridescence Thickness Min"
         },
         {
           "default": "400",
           "id": "18_iridescence_thickness_max",
           "max": "1000",
           "min": "0",
-          "name": "Iridescence Thickness Max (nm)"
+          "name": "Iridescence Thickness Max"
         },
         {
           "default": "0",
@@ -111450,7 +111422,7 @@
           "id": "19_gain",
           "max": "4",
           "min": "0",
-          "name": "Appearance Gain"
+          "name": "Level"
         },
         {
           "default": "0.95",
@@ -111506,7 +111478,7 @@
           "id": "22_normal_scale",
           "max": "1",
           "min": "-1",
-          "name": "Normal Scale"
+          "name": "Normal Strength"
         },
         {
           "default": "1",
@@ -111660,14 +111632,14 @@
           "id": "22_iridescence_thickness_min",
           "max": "1000",
           "min": "0",
-          "name": "Iridescence Thickness Min (nm)"
+          "name": "Iridescence Thickness Min"
         },
         {
           "default": "400",
           "id": "22_iridescence_thickness_max",
           "max": "1000",
           "min": "0",
-          "name": "Iridescence Thickness Max (nm)"
+          "name": "Iridescence Thickness Max"
         },
         {
           "default": "0",
@@ -113550,7 +113522,7 @@
           "id": "23_gain",
           "max": "4",
           "min": "0",
-          "name": "Appearance Gain"
+          "name": "Level"
         },
         {
           "default": "0.95",
@@ -113606,7 +113578,7 @@
           "id": "27_normal_scale",
           "max": "1",
           "min": "-1",
-          "name": "Normal Scale"
+          "name": "Normal Strength"
         },
         {
           "default": "1",
@@ -113760,14 +113732,14 @@
           "id": "27_iridescence_thickness_min",
           "max": "1000",
           "min": "0",
-          "name": "Iridescence Thickness Min (nm)"
+          "name": "Iridescence Thickness Min"
         },
         {
           "default": "400",
           "id": "27_iridescence_thickness_max",
           "max": "1000",
           "min": "0",
-          "name": "Iridescence Thickness Max (nm)"
+          "name": "Iridescence Thickness Max"
         },
         {
           "default": "0",
@@ -115650,7 +115622,7 @@
           "id": "28_gain",
           "max": "4",
           "min": "0",
-          "name": "Appearance Gain"
+          "name": "Level"
         },
         {
           "default": "0.95",
@@ -115706,7 +115678,7 @@
           "id": "32_normal_scale",
           "max": "1",
           "min": "-1",
-          "name": "Normal Scale"
+          "name": "Normal Strength"
         },
         {
           "default": "1",
@@ -115860,14 +115832,14 @@
           "id": "32_iridescence_thickness_min",
           "max": "1000",
           "min": "0",
-          "name": "Iridescence Thickness Min (nm)"
+          "name": "Iridescence Thickness Min"
         },
         {
           "default": "400",
           "id": "32_iridescence_thickness_max",
           "max": "1000",
           "min": "0",
-          "name": "Iridescence Thickness Max (nm)"
+          "name": "Iridescence Thickness Max"
         },
         {
           "default": "0",
@@ -117743,7 +117715,7 @@
           "id": "33_gain",
           "max": "4",
           "min": "0",
-          "name": "Appearance Gain"
+          "name": "Level"
         },
         {
           "default": "0.37254903",
@@ -118002,7 +117974,7 @@
           "id": "42_gain",
           "max": "4",
           "min": "0",
-          "name": "Appearance Gain"
+          "name": "Level"
         },
         {
           "default": "9.35",
@@ -118030,7 +118002,14 @@
           "id": "481_exposure_ev",
           "max": "8",
           "min": "-8",
-          "name": "Exposure (EV)"
+          "name": "Exposure"
+        },
+        {
+          "default": "24",
+          "id": "484_max_radius",
+          "max": "64",
+          "min": "1",
+          "name": "Max Blur"
         },
         {
           "default": "0",
@@ -118058,7 +118037,7 @@
           "id": "487_max_blur_px",
           "max": "128",
           "min": "0",
-          "name": "Max Blur (px)"
+          "name": "Max Blur"
         },
         {
           "default": "0",
@@ -118268,7 +118247,7 @@
           "id": "479_normal_scale",
           "max": "1",
           "min": "-1",
-          "name": "Normal Scale"
+          "name": "Normal Strength"
         },
         {
           "default": "1",
@@ -118422,14 +118401,14 @@
           "id": "479_iridescence_thickness_min",
           "max": "1000",
           "min": "0",
-          "name": "Iridescence Thickness Min (nm)"
+          "name": "Iridescence Thickness Min"
         },
         {
           "default": "400",
           "id": "479_iridescence_thickness_max",
           "max": "1000",
           "min": "0",
-          "name": "Iridescence Thickness Max (nm)"
+          "name": "Iridescence Thickness Max"
         },
         {
           "default": "0",
@@ -120319,7 +120298,7 @@
           "id": "480_gain",
           "max": "4",
           "min": "0",
-          "name": "Appearance Gain"
+          "name": "Level"
         }
       ]
     },
@@ -120370,14 +120349,14 @@
           "id": "liveliness",
           "max": "1",
           "min": "0",
-          "name": "Liveliness"
+          "name": "FLIP Ratio"
         },
         {
           "default": "0",
           "id": "points_per_cell",
           "max": "1",
           "min": "0",
-          "name": "Points per Cell"
+          "name": "Particles per Cell"
         },
         {
           "default": "0",
@@ -120468,14 +120447,14 @@
           "id": "1_fov_y",
           "max": "2.5",
           "min": "0.05",
-          "name": "FOV Y"
+          "name": "Field of View"
         },
         {
           "default": "1.2",
           "id": "1_look_y",
           "max": "10",
           "min": "-10",
-          "name": "Look Y"
+          "name": "Target Height"
         },
         {
           "default": "0",
@@ -120489,14 +120468,14 @@
           "id": "1_near",
           "max": "10000",
           "min": "0.001",
-          "name": "Near"
+          "name": "Near Clip"
         },
         {
           "default": "2000",
           "id": "1_far",
           "max": "10000",
           "min": "1",
-          "name": "Far"
+          "name": "Far Clip"
         },
         {
           "default": "1024",
@@ -120524,7 +120503,7 @@
           "id": "2_azimuth_variation",
           "max": "1",
           "min": "0",
-          "name": "Azimuth Variation"
+          "name": "Brightness Variation"
         },
         {
           "default": "0.7",
@@ -120612,17 +120591,10 @@
         },
         {
           "default": "0",
-          "id": "2_uniform",
-          "max": "1",
-          "min": "0",
-          "name": "Uniform (White Furnace)"
-        },
-        {
-          "default": "0",
           "id": "3_mode",
           "max": "2",
           "min": "0",
-          "name": "Mode"
+          "name": "Type"
         },
         {
           "default": "-2",
@@ -120650,21 +120622,21 @@
           "id": "3_aim_x",
           "max": "100",
           "min": "-100",
-          "name": "Aim X"
+          "name": "Target X"
         },
         {
           "default": "0",
           "id": "3_aim_y",
           "max": "100",
           "min": "-100",
-          "name": "Aim Y"
+          "name": "Target Y"
         },
         {
           "default": "0",
           "id": "3_aim_z",
           "max": "100",
           "min": "-100",
-          "name": "Aim Z"
+          "name": "Target Z"
         },
         {
           "default": "1",
@@ -120755,7 +120727,7 @@
           "id": "3_light_size",
           "max": "20",
           "min": "0",
-          "name": "Light Size"
+          "name": "Size"
         },
         {
           "default": "0.035",
@@ -120811,7 +120783,7 @@
           "id": "14_normal_scale",
           "max": "1",
           "min": "-1",
-          "name": "Normal Scale"
+          "name": "Normal Strength"
         },
         {
           "default": "1",
@@ -120965,14 +120937,14 @@
           "id": "14_iridescence_thickness_min",
           "max": "1000",
           "min": "0",
-          "name": "Iridescence Thickness Min (nm)"
+          "name": "Iridescence Thickness Min"
         },
         {
           "default": "400",
           "id": "14_iridescence_thickness_max",
           "max": "1000",
           "min": "0",
-          "name": "Iridescence Thickness Max (nm)"
+          "name": "Iridescence Thickness Max"
         },
         {
           "default": "0",
@@ -122932,7 +122904,7 @@
           "id": "16_gain",
           "max": "4",
           "min": "0",
-          "name": "Appearance Gain"
+          "name": "Level"
         },
         {
           "default": "0",
@@ -123030,7 +123002,7 @@
           "id": "19_gain",
           "max": "4",
           "min": "0",
-          "name": "Appearance Gain"
+          "name": "Level"
         },
         {
           "default": "-2.04",
@@ -123128,7 +123100,7 @@
           "id": "22_gain",
           "max": "4",
           "min": "0",
-          "name": "Appearance Gain"
+          "name": "Level"
         },
         {
           "default": "2.04",
@@ -123226,14 +123198,14 @@
           "id": "25_gain",
           "max": "4",
           "min": "0",
-          "name": "Appearance Gain"
+          "name": "Level"
         },
         {
           "default": "0",
           "id": "30_rt_enabled",
           "max": "1",
           "min": "0",
-          "name": "RT Enabled"
+          "name": "Ray Tracing"
         },
         {
           "default": "0",
@@ -123247,35 +123219,28 @@
           "id": "30_rt_reflections",
           "max": "1",
           "min": "0",
-          "name": "RT Reflections"
+          "name": "Reflections"
         },
         {
           "default": "1",
           "id": "30_rt_shadows",
           "max": "1",
           "min": "0",
-          "name": "RT Shadows"
+          "name": "Shadows"
         },
         {
           "default": "1",
           "id": "30_rt_ao",
           "max": "1",
           "min": "0",
-          "name": "RT Ambient Occlusion"
+          "name": "Ambient Occlusion"
         },
         {
           "default": "1",
           "id": "30_rt_gi",
           "max": "1",
           "min": "0",
-          "name": "RT Global Illumination"
-        },
-        {
-          "default": "0",
-          "id": "30_rt_denoise_feed",
-          "max": "1",
-          "min": "0",
-          "name": "RT Denoise Feed"
+          "name": "Global Illumination"
         },
         {
           "default": "-1.25",
@@ -123352,7 +123317,7 @@
           "id": "33_mode",
           "max": "2",
           "min": "0",
-          "name": "Mode"
+          "name": "Type"
         },
         {
           "default": "4",
@@ -123380,21 +123345,21 @@
           "id": "33_aim_x",
           "max": "100",
           "min": "-100",
-          "name": "Aim X"
+          "name": "Target X"
         },
         {
           "default": "0.4",
           "id": "33_aim_y",
           "max": "100",
           "min": "-100",
-          "name": "Aim Y"
+          "name": "Target Y"
         },
         {
           "default": "0",
           "id": "33_aim_z",
           "max": "100",
           "min": "-100",
-          "name": "Aim Z"
+          "name": "Target Z"
         },
         {
           "default": "0.57",
@@ -123485,7 +123450,7 @@
           "id": "33_light_size",
           "max": "20",
           "min": "0",
-          "name": "Light Size"
+          "name": "Size"
         },
         {
           "default": "0.003",
@@ -123541,7 +123506,7 @@
           "id": "35_normal_scale",
           "max": "1",
           "min": "-1",
-          "name": "Normal Scale"
+          "name": "Normal Strength"
         },
         {
           "default": "1",
@@ -123695,14 +123660,14 @@
           "id": "35_iridescence_thickness_min",
           "max": "1000",
           "min": "0",
-          "name": "Iridescence Thickness Min (nm)"
+          "name": "Iridescence Thickness Min"
         },
         {
           "default": "400",
           "id": "35_iridescence_thickness_max",
           "max": "1000",
           "min": "0",
-          "name": "Iridescence Thickness Max (nm)"
+          "name": "Iridescence Thickness Max"
         },
         {
           "default": "0",
@@ -125662,14 +125627,14 @@
           "id": "37_gain",
           "max": "4",
           "min": "0",
-          "name": "Appearance Gain"
+          "name": "Level"
         },
         {
           "default": "8",
           "id": "1_grid_budget_mcells",
           "max": "512",
           "min": "0.01",
-          "name": "Grid Budget (M cells)"
+          "name": "Grid Budget"
         },
         {
           "default": "4",
@@ -125683,49 +125648,49 @@
           "id": "1_closed_neg_x",
           "max": "1",
           "min": "0",
-          "name": "Closed −X"
+          "name": "Left Wall"
         },
         {
           "default": "1",
           "id": "1_closed_pos_x",
           "max": "1",
           "min": "0",
-          "name": "Closed +X"
+          "name": "Right Wall"
         },
         {
           "default": "1",
           "id": "1_closed_neg_y",
           "max": "1",
           "min": "0",
-          "name": "Closed Bottom"
+          "name": "Floor"
         },
         {
           "default": "1",
           "id": "1_closed_pos_y",
           "max": "1",
           "min": "0",
-          "name": "Closed Top"
+          "name": "Ceiling"
         },
         {
           "default": "1",
           "id": "1_closed_neg_z",
           "max": "1",
           "min": "0",
-          "name": "Closed −Z"
+          "name": "Back Wall"
         },
         {
           "default": "1",
           "id": "1_closed_pos_z",
           "max": "1",
           "min": "0",
-          "name": "Closed +Z"
+          "name": "Front Wall"
         },
         {
           "default": "0.16",
           "id": "1_fill_height",
           "max": "20",
           "min": "0",
-          "name": "Initial Fill Height"
+          "name": "Fill Height"
         },
         {
           "default": "0",
@@ -125802,7 +125767,7 @@
           "id": "61_normal_scale",
           "max": "1",
           "min": "-1",
-          "name": "Normal Scale"
+          "name": "Normal Strength"
         },
         {
           "default": "1",
@@ -125956,14 +125921,14 @@
           "id": "61_iridescence_thickness_min",
           "max": "1000",
           "min": "0",
-          "name": "Iridescence Thickness Min (nm)"
+          "name": "Iridescence Thickness Min"
         },
         {
           "default": "400",
           "id": "61_iridescence_thickness_max",
           "max": "1000",
           "min": "0",
-          "name": "Iridescence Thickness Max (nm)"
+          "name": "Iridescence Thickness Max"
         },
         {
           "default": "0",
@@ -127853,7 +127818,7 @@
           "id": "62_gain",
           "max": "4",
           "min": "0",
-          "name": "Appearance Gain"
+          "name": "Level"
         },
         {
           "default": "9.35",
@@ -127881,7 +127846,14 @@
           "id": "69_exposure_ev",
           "max": "8",
           "min": "-8",
-          "name": "Exposure (EV)"
+          "name": "Exposure"
+        },
+        {
+          "default": "24",
+          "id": "72_max_radius",
+          "max": "64",
+          "min": "1",
+          "name": "Max Blur"
         },
         {
           "default": "0",
@@ -127909,7 +127881,7 @@
           "id": "75_max_blur_px",
           "max": "128",
           "min": "0",
-          "name": "Max Blur (px)"
+          "name": "Max Blur"
         },
         {
           "default": "0",
@@ -128119,7 +128091,7 @@
           "id": "67_normal_scale",
           "max": "1",
           "min": "-1",
-          "name": "Normal Scale"
+          "name": "Normal Strength"
         },
         {
           "default": "1",
@@ -128273,14 +128245,14 @@
           "id": "67_iridescence_thickness_min",
           "max": "1000",
           "min": "0",
-          "name": "Iridescence Thickness Min (nm)"
+          "name": "Iridescence Thickness Min"
         },
         {
           "default": "400",
           "id": "67_iridescence_thickness_max",
           "max": "1000",
           "min": "0",
-          "name": "Iridescence Thickness Max (nm)"
+          "name": "Iridescence Thickness Max"
         },
         {
           "default": "0",
@@ -130170,7 +130142,7 @@
           "id": "68_gain",
           "max": "4",
           "min": "0",
-          "name": "Appearance Gain"
+          "name": "Level"
         }
       ]
     },
@@ -130193,7 +130165,7 @@
           "id": "solve_level",
           "max": "4",
           "min": "0",
-          "name": "Solve Level"
+          "name": "Coarse Solve"
         },
         {
           "default": "900",
@@ -130333,14 +130305,14 @@
           "id": "434_fov_y",
           "max": "2.5",
           "min": "0.05",
-          "name": "FOV Y"
+          "name": "Field of View"
         },
         {
           "default": "1.2",
           "id": "434_look_y",
           "max": "10",
           "min": "-10",
-          "name": "Look Y"
+          "name": "Target Height"
         },
         {
           "default": "0",
@@ -130354,14 +130326,14 @@
           "id": "434_near",
           "max": "10000",
           "min": "0.001",
-          "name": "Near"
+          "name": "Near Clip"
         },
         {
           "default": "2000",
           "id": "434_far",
           "max": "10000",
           "min": "1",
-          "name": "Far"
+          "name": "Far Clip"
         },
         {
           "default": "1024",
@@ -130389,7 +130361,7 @@
           "id": "435_azimuth_variation",
           "max": "1",
           "min": "0",
-          "name": "Azimuth Variation"
+          "name": "Brightness Variation"
         },
         {
           "default": "0.7",
@@ -130477,17 +130449,10 @@
         },
         {
           "default": "0",
-          "id": "435_uniform",
-          "max": "1",
-          "min": "0",
-          "name": "Uniform (White Furnace)"
-        },
-        {
-          "default": "0",
           "id": "436_mode",
           "max": "2",
           "min": "0",
-          "name": "Mode"
+          "name": "Type"
         },
         {
           "default": "-2",
@@ -130515,21 +130480,21 @@
           "id": "436_aim_x",
           "max": "100",
           "min": "-100",
-          "name": "Aim X"
+          "name": "Target X"
         },
         {
           "default": "0",
           "id": "436_aim_y",
           "max": "100",
           "min": "-100",
-          "name": "Aim Y"
+          "name": "Target Y"
         },
         {
           "default": "0",
           "id": "436_aim_z",
           "max": "100",
           "min": "-100",
-          "name": "Aim Z"
+          "name": "Target Z"
         },
         {
           "default": "1",
@@ -130620,7 +130585,7 @@
           "id": "436_light_size",
           "max": "20",
           "min": "0",
-          "name": "Light Size"
+          "name": "Size"
         },
         {
           "default": "0.035",
@@ -130676,7 +130641,7 @@
           "id": "447_normal_scale",
           "max": "1",
           "min": "-1",
-          "name": "Normal Scale"
+          "name": "Normal Strength"
         },
         {
           "default": "1",
@@ -130830,14 +130795,14 @@
           "id": "447_iridescence_thickness_min",
           "max": "1000",
           "min": "0",
-          "name": "Iridescence Thickness Min (nm)"
+          "name": "Iridescence Thickness Min"
         },
         {
           "default": "400",
           "id": "447_iridescence_thickness_max",
           "max": "1000",
           "min": "0",
-          "name": "Iridescence Thickness Max (nm)"
+          "name": "Iridescence Thickness Max"
         },
         {
           "default": "0",
@@ -132797,7 +132762,7 @@
           "id": "449_gain",
           "max": "4",
           "min": "0",
-          "name": "Appearance Gain"
+          "name": "Level"
         },
         {
           "default": "0",
@@ -132895,7 +132860,7 @@
           "id": "452_gain",
           "max": "4",
           "min": "0",
-          "name": "Appearance Gain"
+          "name": "Level"
         },
         {
           "default": "-2.04",
@@ -132993,7 +132958,7 @@
           "id": "455_gain",
           "max": "4",
           "min": "0",
-          "name": "Appearance Gain"
+          "name": "Level"
         },
         {
           "default": "2.04",
@@ -133091,14 +133056,14 @@
           "id": "458_gain",
           "max": "4",
           "min": "0",
-          "name": "Appearance Gain"
+          "name": "Level"
         },
         {
           "default": "0",
           "id": "463_rt_enabled",
           "max": "1",
           "min": "0",
-          "name": "RT Enabled"
+          "name": "Ray Tracing"
         },
         {
           "default": "0",
@@ -133112,42 +133077,35 @@
           "id": "463_rt_reflections",
           "max": "1",
           "min": "0",
-          "name": "RT Reflections"
+          "name": "Reflections"
         },
         {
           "default": "1",
           "id": "463_rt_shadows",
           "max": "1",
           "min": "0",
-          "name": "RT Shadows"
+          "name": "Shadows"
         },
         {
           "default": "1",
           "id": "463_rt_ao",
           "max": "1",
           "min": "0",
-          "name": "RT Ambient Occlusion"
+          "name": "Ambient Occlusion"
         },
         {
           "default": "1",
           "id": "463_rt_gi",
           "max": "1",
           "min": "0",
-          "name": "RT Global Illumination"
-        },
-        {
-          "default": "0",
-          "id": "463_rt_denoise_feed",
-          "max": "1",
-          "min": "0",
-          "name": "RT Denoise Feed"
+          "name": "Global Illumination"
         },
         {
           "default": "0",
           "id": "466_mode",
           "max": "2",
           "min": "0",
-          "name": "Mode"
+          "name": "Type"
         },
         {
           "default": "4",
@@ -133175,21 +133133,21 @@
           "id": "466_aim_x",
           "max": "100",
           "min": "-100",
-          "name": "Aim X"
+          "name": "Target X"
         },
         {
           "default": "0.4",
           "id": "466_aim_y",
           "max": "100",
           "min": "-100",
-          "name": "Aim Y"
+          "name": "Target Y"
         },
         {
           "default": "0",
           "id": "466_aim_z",
           "max": "100",
           "min": "-100",
-          "name": "Aim Z"
+          "name": "Target Z"
         },
         {
           "default": "0.57",
@@ -133280,7 +133238,7 @@
           "id": "466_light_size",
           "max": "20",
           "min": "0",
-          "name": "Light Size"
+          "name": "Size"
         },
         {
           "default": "4",
@@ -133294,7 +133252,7 @@
           "id": "0_fill_height",
           "max": "20",
           "min": "0",
-          "name": "Initial Fill Height"
+          "name": "Fill Height"
         },
         {
           "default": "0",
@@ -133322,42 +133280,49 @@
           "id": "0_closed_neg_x",
           "max": "1",
           "min": "0",
-          "name": "Closed −X"
+          "name": "Left Wall"
         },
         {
           "default": "1",
           "id": "0_closed_pos_x",
           "max": "1",
           "min": "0",
-          "name": "Closed +X"
+          "name": "Right Wall"
         },
         {
           "default": "1",
           "id": "0_closed_neg_y",
           "max": "1",
           "min": "0",
-          "name": "Closed Bottom"
+          "name": "Floor"
         },
         {
           "default": "1",
           "id": "0_closed_pos_y",
           "max": "1",
           "min": "0",
-          "name": "Closed Top"
+          "name": "Ceiling"
         },
         {
           "default": "1",
           "id": "0_closed_neg_z",
           "max": "1",
           "min": "0",
-          "name": "Closed −Z"
+          "name": "Back Wall"
         },
         {
           "default": "1",
           "id": "0_closed_pos_z",
           "max": "1",
           "min": "0",
-          "name": "Closed +Z"
+          "name": "Front Wall"
+        },
+        {
+          "default": "0",
+          "id": "0_particle_capacity",
+          "max": "1",
+          "min": "0",
+          "name": "Max Particles"
         },
         {
           "default": "-1.25",
@@ -133581,7 +133546,7 @@
           "id": "18_normal_scale",
           "max": "1",
           "min": "-1",
-          "name": "Normal Scale"
+          "name": "Normal Strength"
         },
         {
           "default": "1",
@@ -133735,14 +133700,14 @@
           "id": "18_iridescence_thickness_min",
           "max": "1000",
           "min": "0",
-          "name": "Iridescence Thickness Min (nm)"
+          "name": "Iridescence Thickness Min"
         },
         {
           "default": "400",
           "id": "18_iridescence_thickness_max",
           "max": "1000",
           "min": "0",
-          "name": "Iridescence Thickness Max (nm)"
+          "name": "Iridescence Thickness Max"
         },
         {
           "default": "0",
@@ -135618,7 +135583,7 @@
           "id": "19_gain",
           "max": "4",
           "min": "0",
-          "name": "Appearance Gain"
+          "name": "Level"
         },
         {
           "default": "0.95",
@@ -135674,7 +135639,7 @@
           "id": "22_normal_scale",
           "max": "1",
           "min": "-1",
-          "name": "Normal Scale"
+          "name": "Normal Strength"
         },
         {
           "default": "1",
@@ -135828,14 +135793,14 @@
           "id": "22_iridescence_thickness_min",
           "max": "1000",
           "min": "0",
-          "name": "Iridescence Thickness Min (nm)"
+          "name": "Iridescence Thickness Min"
         },
         {
           "default": "400",
           "id": "22_iridescence_thickness_max",
           "max": "1000",
           "min": "0",
-          "name": "Iridescence Thickness Max (nm)"
+          "name": "Iridescence Thickness Max"
         },
         {
           "default": "0",
@@ -137718,7 +137683,7 @@
           "id": "23_gain",
           "max": "4",
           "min": "0",
-          "name": "Appearance Gain"
+          "name": "Level"
         },
         {
           "default": "0.95",
@@ -137774,7 +137739,7 @@
           "id": "27_normal_scale",
           "max": "1",
           "min": "-1",
-          "name": "Normal Scale"
+          "name": "Normal Strength"
         },
         {
           "default": "1",
@@ -137928,14 +137893,14 @@
           "id": "27_iridescence_thickness_min",
           "max": "1000",
           "min": "0",
-          "name": "Iridescence Thickness Min (nm)"
+          "name": "Iridescence Thickness Min"
         },
         {
           "default": "400",
           "id": "27_iridescence_thickness_max",
           "max": "1000",
           "min": "0",
-          "name": "Iridescence Thickness Max (nm)"
+          "name": "Iridescence Thickness Max"
         },
         {
           "default": "0",
@@ -139818,7 +139783,7 @@
           "id": "28_gain",
           "max": "4",
           "min": "0",
-          "name": "Appearance Gain"
+          "name": "Level"
         },
         {
           "default": "0.95",
@@ -139874,7 +139839,7 @@
           "id": "32_normal_scale",
           "max": "1",
           "min": "-1",
-          "name": "Normal Scale"
+          "name": "Normal Strength"
         },
         {
           "default": "1",
@@ -140028,14 +139993,14 @@
           "id": "32_iridescence_thickness_min",
           "max": "1000",
           "min": "0",
-          "name": "Iridescence Thickness Min (nm)"
+          "name": "Iridescence Thickness Min"
         },
         {
           "default": "400",
           "id": "32_iridescence_thickness_max",
           "max": "1000",
           "min": "0",
-          "name": "Iridescence Thickness Max (nm)"
+          "name": "Iridescence Thickness Max"
         },
         {
           "default": "0",
@@ -141911,7 +141876,7 @@
           "id": "33_gain",
           "max": "4",
           "min": "0",
-          "name": "Appearance Gain"
+          "name": "Level"
         },
         {
           "default": "9.35",
@@ -141939,7 +141904,14 @@
           "id": "481_exposure_ev",
           "max": "8",
           "min": "-8",
-          "name": "Exposure (EV)"
+          "name": "Exposure"
+        },
+        {
+          "default": "24",
+          "id": "484_max_radius",
+          "max": "64",
+          "min": "1",
+          "name": "Max Blur"
         },
         {
           "default": "0",
@@ -141967,7 +141939,7 @@
           "id": "487_max_blur_px",
           "max": "128",
           "min": "0",
-          "name": "Max Blur (px)"
+          "name": "Max Blur"
         },
         {
           "default": "0",
@@ -142177,7 +142149,7 @@
           "id": "479_normal_scale",
           "max": "1",
           "min": "-1",
-          "name": "Normal Scale"
+          "name": "Normal Strength"
         },
         {
           "default": "1",
@@ -142331,14 +142303,14 @@
           "id": "479_iridescence_thickness_min",
           "max": "1000",
           "min": "0",
-          "name": "Iridescence Thickness Min (nm)"
+          "name": "Iridescence Thickness Min"
         },
         {
           "default": "400",
           "id": "479_iridescence_thickness_max",
           "max": "1000",
           "min": "0",
-          "name": "Iridescence Thickness Max (nm)"
+          "name": "Iridescence Thickness Max"
         },
         {
           "default": "0",
@@ -144228,7 +144200,7 @@
           "id": "480_gain",
           "max": "4",
           "min": "0",
-          "name": "Appearance Gain"
+          "name": "Level"
         }
       ]
     },
@@ -144279,14 +144251,14 @@
           "id": "liveliness",
           "max": "1",
           "min": "0",
-          "name": "Liveliness"
+          "name": "FLIP Ratio"
         },
         {
           "default": "0",
           "id": "points_per_cell",
           "max": "1",
           "min": "0",
-          "name": "Points per Cell"
+          "name": "Particles per Cell"
         },
         {
           "default": "0",
@@ -144384,14 +144356,14 @@
           "id": "1_fov_y",
           "max": "2.5",
           "min": "0.05",
-          "name": "FOV Y"
+          "name": "Field of View"
         },
         {
           "default": "1.2",
           "id": "1_look_y",
           "max": "10",
           "min": "-10",
-          "name": "Look Y"
+          "name": "Target Height"
         },
         {
           "default": "0",
@@ -144405,14 +144377,14 @@
           "id": "1_near",
           "max": "10000",
           "min": "0.001",
-          "name": "Near"
+          "name": "Near Clip"
         },
         {
           "default": "2000",
           "id": "1_far",
           "max": "10000",
           "min": "1",
-          "name": "Far"
+          "name": "Far Clip"
         },
         {
           "default": "1024",
@@ -144440,7 +144412,7 @@
           "id": "2_azimuth_variation",
           "max": "1",
           "min": "0",
-          "name": "Azimuth Variation"
+          "name": "Brightness Variation"
         },
         {
           "default": "0.7",
@@ -144528,17 +144500,10 @@
         },
         {
           "default": "0",
-          "id": "2_uniform",
-          "max": "1",
-          "min": "0",
-          "name": "Uniform (White Furnace)"
-        },
-        {
-          "default": "0",
           "id": "3_mode",
           "max": "2",
           "min": "0",
-          "name": "Mode"
+          "name": "Type"
         },
         {
           "default": "-2",
@@ -144566,21 +144531,21 @@
           "id": "3_aim_x",
           "max": "100",
           "min": "-100",
-          "name": "Aim X"
+          "name": "Target X"
         },
         {
           "default": "0",
           "id": "3_aim_y",
           "max": "100",
           "min": "-100",
-          "name": "Aim Y"
+          "name": "Target Y"
         },
         {
           "default": "0",
           "id": "3_aim_z",
           "max": "100",
           "min": "-100",
-          "name": "Aim Z"
+          "name": "Target Z"
         },
         {
           "default": "1",
@@ -144671,7 +144636,7 @@
           "id": "3_light_size",
           "max": "20",
           "min": "0",
-          "name": "Light Size"
+          "name": "Size"
         },
         {
           "default": "0.035",
@@ -144727,7 +144692,7 @@
           "id": "14_normal_scale",
           "max": "1",
           "min": "-1",
-          "name": "Normal Scale"
+          "name": "Normal Strength"
         },
         {
           "default": "1",
@@ -144881,14 +144846,14 @@
           "id": "14_iridescence_thickness_min",
           "max": "1000",
           "min": "0",
-          "name": "Iridescence Thickness Min (nm)"
+          "name": "Iridescence Thickness Min"
         },
         {
           "default": "400",
           "id": "14_iridescence_thickness_max",
           "max": "1000",
           "min": "0",
-          "name": "Iridescence Thickness Max (nm)"
+          "name": "Iridescence Thickness Max"
         },
         {
           "default": "0",
@@ -146848,7 +146813,7 @@
           "id": "16_gain",
           "max": "4",
           "min": "0",
-          "name": "Appearance Gain"
+          "name": "Level"
         },
         {
           "default": "0",
@@ -146946,7 +146911,7 @@
           "id": "19_gain",
           "max": "4",
           "min": "0",
-          "name": "Appearance Gain"
+          "name": "Level"
         },
         {
           "default": "-2.04",
@@ -147044,7 +147009,7 @@
           "id": "22_gain",
           "max": "4",
           "min": "0",
-          "name": "Appearance Gain"
+          "name": "Level"
         },
         {
           "default": "2.04",
@@ -147142,14 +147107,14 @@
           "id": "25_gain",
           "max": "4",
           "min": "0",
-          "name": "Appearance Gain"
+          "name": "Level"
         },
         {
           "default": "0",
           "id": "30_rt_enabled",
           "max": "1",
           "min": "0",
-          "name": "RT Enabled"
+          "name": "Ray Tracing"
         },
         {
           "default": "0",
@@ -147163,42 +147128,35 @@
           "id": "30_rt_reflections",
           "max": "1",
           "min": "0",
-          "name": "RT Reflections"
+          "name": "Reflections"
         },
         {
           "default": "1",
           "id": "30_rt_shadows",
           "max": "1",
           "min": "0",
-          "name": "RT Shadows"
+          "name": "Shadows"
         },
         {
           "default": "1",
           "id": "30_rt_ao",
           "max": "1",
           "min": "0",
-          "name": "RT Ambient Occlusion"
+          "name": "Ambient Occlusion"
         },
         {
           "default": "1",
           "id": "30_rt_gi",
           "max": "1",
           "min": "0",
-          "name": "RT Global Illumination"
-        },
-        {
-          "default": "0",
-          "id": "30_rt_denoise_feed",
-          "max": "1",
-          "min": "0",
-          "name": "RT Denoise Feed"
+          "name": "Global Illumination"
         },
         {
           "default": "0",
           "id": "33_mode",
           "max": "2",
           "min": "0",
-          "name": "Mode"
+          "name": "Type"
         },
         {
           "default": "4",
@@ -147226,21 +147184,21 @@
           "id": "33_aim_x",
           "max": "100",
           "min": "-100",
-          "name": "Aim X"
+          "name": "Target X"
         },
         {
           "default": "0.4",
           "id": "33_aim_y",
           "max": "100",
           "min": "-100",
-          "name": "Aim Y"
+          "name": "Target Y"
         },
         {
           "default": "0",
           "id": "33_aim_z",
           "max": "100",
           "min": "-100",
-          "name": "Aim Z"
+          "name": "Target Z"
         },
         {
           "default": "0.57",
@@ -147331,7 +147289,7 @@
           "id": "33_light_size",
           "max": "20",
           "min": "0",
-          "name": "Light Size"
+          "name": "Size"
         },
         {
           "default": "0.003",
@@ -147387,7 +147345,7 @@
           "id": "35_normal_scale",
           "max": "1",
           "min": "-1",
-          "name": "Normal Scale"
+          "name": "Normal Strength"
         },
         {
           "default": "1",
@@ -147541,14 +147499,14 @@
           "id": "35_iridescence_thickness_min",
           "max": "1000",
           "min": "0",
-          "name": "Iridescence Thickness Min (nm)"
+          "name": "Iridescence Thickness Min"
         },
         {
           "default": "400",
           "id": "35_iridescence_thickness_max",
           "max": "1000",
           "min": "0",
-          "name": "Iridescence Thickness Max (nm)"
+          "name": "Iridescence Thickness Max"
         },
         {
           "default": "0",
@@ -149508,14 +149466,14 @@
           "id": "37_gain",
           "max": "4",
           "min": "0",
-          "name": "Appearance Gain"
+          "name": "Level"
         },
         {
           "default": "8",
           "id": "1_grid_budget_mcells",
           "max": "512",
           "min": "0.01",
-          "name": "Grid Budget (M cells)"
+          "name": "Grid Budget"
         },
         {
           "default": "4",
@@ -149529,49 +149487,49 @@
           "id": "1_closed_neg_x",
           "max": "1",
           "min": "0",
-          "name": "Closed −X"
+          "name": "Left Wall"
         },
         {
           "default": "1",
           "id": "1_closed_pos_x",
           "max": "1",
           "min": "0",
-          "name": "Closed +X"
+          "name": "Right Wall"
         },
         {
           "default": "1",
           "id": "1_closed_neg_y",
           "max": "1",
           "min": "0",
-          "name": "Closed Bottom"
+          "name": "Floor"
         },
         {
           "default": "1",
           "id": "1_closed_pos_y",
           "max": "1",
           "min": "0",
-          "name": "Closed Top"
+          "name": "Ceiling"
         },
         {
           "default": "1",
           "id": "1_closed_neg_z",
           "max": "1",
           "min": "0",
-          "name": "Closed −Z"
+          "name": "Back Wall"
         },
         {
           "default": "1",
           "id": "1_closed_pos_z",
           "max": "1",
           "min": "0",
-          "name": "Closed +Z"
+          "name": "Front Wall"
         },
         {
           "default": "0.5",
           "id": "1_fill_height",
           "max": "20",
           "min": "0",
-          "name": "Initial Fill Height"
+          "name": "Fill Height"
         },
         {
           "default": "0",
@@ -149648,7 +149606,7 @@
           "id": "61_normal_scale",
           "max": "1",
           "min": "-1",
-          "name": "Normal Scale"
+          "name": "Normal Strength"
         },
         {
           "default": "1",
@@ -149802,14 +149760,14 @@
           "id": "61_iridescence_thickness_min",
           "max": "1000",
           "min": "0",
-          "name": "Iridescence Thickness Min (nm)"
+          "name": "Iridescence Thickness Min"
         },
         {
           "default": "400",
           "id": "61_iridescence_thickness_max",
           "max": "1000",
           "min": "0",
-          "name": "Iridescence Thickness Max (nm)"
+          "name": "Iridescence Thickness Max"
         },
         {
           "default": "0",
@@ -151699,7 +151657,7 @@
           "id": "62_gain",
           "max": "4",
           "min": "0",
-          "name": "Appearance Gain"
+          "name": "Level"
         },
         {
           "default": "0",
@@ -151734,28 +151692,28 @@
           "id": "70_copy_count",
           "max": "4000",
           "min": "0",
-          "name": "Copy Count"
+          "name": "Count"
         },
         {
           "default": "1.25",
           "id": "70_copy_spacing",
           "max": "100",
           "min": "0.01",
-          "name": "Copy Spacing"
+          "name": "Spacing"
         },
         {
           "default": "16",
           "id": "70_copy_columns",
           "max": "64",
           "min": "1",
-          "name": "Copy Columns"
+          "name": "Columns"
         },
         {
           "default": "0",
           "id": "70_copy_layout",
           "max": "1",
           "min": "0",
-          "name": "Copy Layout"
+          "name": "Arrangement"
         },
         {
           "default": "0.2",
@@ -151839,7 +151797,7 @@
           "id": "72_motion",
           "max": "2",
           "min": "0",
-          "name": "Motion"
+          "name": "Body Type"
         },
         {
           "default": "0.4",
@@ -151916,7 +151874,7 @@
           "id": "74_normal_scale",
           "max": "1",
           "min": "-1",
-          "name": "Normal Scale"
+          "name": "Normal Strength"
         },
         {
           "default": "1",
@@ -152070,14 +152028,14 @@
           "id": "74_iridescence_thickness_min",
           "max": "1000",
           "min": "0",
-          "name": "Iridescence Thickness Min (nm)"
+          "name": "Iridescence Thickness Min"
         },
         {
           "default": "400",
           "id": "74_iridescence_thickness_max",
           "max": "1000",
           "min": "0",
-          "name": "Iridescence Thickness Max (nm)"
+          "name": "Iridescence Thickness Max"
         },
         {
           "default": "0",
@@ -153967,7 +153925,7 @@
           "id": "75_gain",
           "max": "4",
           "min": "0",
-          "name": "Appearance Gain"
+          "name": "Level"
         },
         {
           "default": "9.35",
@@ -153995,7 +153953,14 @@
           "id": "77_exposure_ev",
           "max": "8",
           "min": "-8",
-          "name": "Exposure (EV)"
+          "name": "Exposure"
+        },
+        {
+          "default": "24",
+          "id": "80_max_radius",
+          "max": "64",
+          "min": "1",
+          "name": "Max Blur"
         },
         {
           "default": "0",
@@ -154023,7 +153988,7 @@
           "id": "83_max_blur_px",
           "max": "128",
           "min": "0",
-          "name": "Max Blur (px)"
+          "name": "Max Blur"
         },
         {
           "default": "0",
@@ -154053,7 +154018,7 @@
           "id": "solve_level",
           "max": "4",
           "min": "0",
-          "name": "Solve Level"
+          "name": "Coarse Solve"
         },
         {
           "default": "900",
@@ -154193,7 +154158,7 @@
           "id": "0_fill_height",
           "max": "20",
           "min": "0",
-          "name": "Initial Fill Height"
+          "name": "Fill Height"
         },
         {
           "default": "0",
@@ -154221,42 +154186,49 @@
           "id": "0_closed_neg_x",
           "max": "1",
           "min": "0",
-          "name": "Closed −X"
+          "name": "Left Wall"
         },
         {
           "default": "1",
           "id": "0_closed_pos_x",
           "max": "1",
           "min": "0",
-          "name": "Closed +X"
+          "name": "Right Wall"
         },
         {
           "default": "1",
           "id": "0_closed_neg_y",
           "max": "1",
           "min": "0",
-          "name": "Closed Bottom"
+          "name": "Floor"
         },
         {
           "default": "1",
           "id": "0_closed_pos_y",
           "max": "1",
           "min": "0",
-          "name": "Closed Top"
+          "name": "Ceiling"
         },
         {
           "default": "1",
           "id": "0_closed_neg_z",
           "max": "1",
           "min": "0",
-          "name": "Closed −Z"
+          "name": "Back Wall"
         },
         {
           "default": "1",
           "id": "0_closed_pos_z",
           "max": "1",
           "min": "0",
-          "name": "Closed +Z"
+          "name": "Front Wall"
+        },
+        {
+          "default": "0",
+          "id": "0_particle_capacity",
+          "max": "1",
+          "min": "0",
+          "name": "Max Particles"
         },
         {
           "default": "-3.3",
@@ -154354,7 +154326,7 @@
           "id": "435_azimuth_variation",
           "max": "1",
           "min": "0",
-          "name": "Azimuth Variation"
+          "name": "Brightness Variation"
         },
         {
           "default": "0.7",
@@ -154442,17 +154414,10 @@
         },
         {
           "default": "0",
-          "id": "435_uniform",
-          "max": "1",
-          "min": "0",
-          "name": "Uniform (White Furnace)"
-        },
-        {
-          "default": "0",
           "id": "436_mode",
           "max": "2",
           "min": "0",
-          "name": "Mode"
+          "name": "Type"
         },
         {
           "default": "-2",
@@ -154480,21 +154445,21 @@
           "id": "436_aim_x",
           "max": "100",
           "min": "-100",
-          "name": "Aim X"
+          "name": "Target X"
         },
         {
           "default": "0",
           "id": "436_aim_y",
           "max": "100",
           "min": "-100",
-          "name": "Aim Y"
+          "name": "Target Y"
         },
         {
           "default": "0",
           "id": "436_aim_z",
           "max": "100",
           "min": "-100",
-          "name": "Aim Z"
+          "name": "Target Z"
         },
         {
           "default": "1",
@@ -154585,7 +154550,7 @@
           "id": "436_light_size",
           "max": "20",
           "min": "0",
-          "name": "Light Size"
+          "name": "Size"
         },
         {
           "default": "0.37254903",
@@ -154641,7 +154606,7 @@
           "id": "441_normal_scale",
           "max": "1",
           "min": "-1",
-          "name": "Normal Scale"
+          "name": "Normal Strength"
         },
         {
           "default": "1",
@@ -154795,14 +154760,14 @@
           "id": "441_iridescence_thickness_min",
           "max": "1000",
           "min": "0",
-          "name": "Iridescence Thickness Min (nm)"
+          "name": "Iridescence Thickness Min"
         },
         {
           "default": "400",
           "id": "441_iridescence_thickness_max",
           "max": "1000",
           "min": "0",
-          "name": "Iridescence Thickness Max (nm)"
+          "name": "Iridescence Thickness Max"
         },
         {
           "default": "0",
@@ -156678,7 +156643,7 @@
           "id": "442_gain",
           "max": "4",
           "min": "0",
-          "name": "Appearance Gain"
+          "name": "Level"
         },
         {
           "default": "0.035",
@@ -156734,7 +156699,7 @@
           "id": "447_normal_scale",
           "max": "1",
           "min": "-1",
-          "name": "Normal Scale"
+          "name": "Normal Strength"
         },
         {
           "default": "1",
@@ -156888,14 +156853,14 @@
           "id": "447_iridescence_thickness_min",
           "max": "1000",
           "min": "0",
-          "name": "Iridescence Thickness Min (nm)"
+          "name": "Iridescence Thickness Min"
         },
         {
           "default": "400",
           "id": "447_iridescence_thickness_max",
           "max": "1000",
           "min": "0",
-          "name": "Iridescence Thickness Max (nm)"
+          "name": "Iridescence Thickness Max"
         },
         {
           "default": "0",
@@ -158855,7 +158820,7 @@
           "id": "449_gain",
           "max": "4",
           "min": "0",
-          "name": "Appearance Gain"
+          "name": "Level"
         },
         {
           "default": "0",
@@ -158953,7 +158918,7 @@
           "id": "452_gain",
           "max": "4",
           "min": "0",
-          "name": "Appearance Gain"
+          "name": "Level"
         },
         {
           "default": "-4.04",
@@ -159051,7 +159016,7 @@
           "id": "455_gain",
           "max": "4",
           "min": "0",
-          "name": "Appearance Gain"
+          "name": "Level"
         },
         {
           "default": "4.04",
@@ -159149,14 +159114,14 @@
           "id": "458_gain",
           "max": "4",
           "min": "0",
-          "name": "Appearance Gain"
+          "name": "Level"
         },
         {
           "default": "0",
           "id": "463_rt_enabled",
           "max": "1",
           "min": "0",
-          "name": "RT Enabled"
+          "name": "Ray Tracing"
         },
         {
           "default": "0",
@@ -159170,42 +159135,35 @@
           "id": "463_rt_reflections",
           "max": "1",
           "min": "0",
-          "name": "RT Reflections"
+          "name": "Reflections"
         },
         {
           "default": "1",
           "id": "463_rt_shadows",
           "max": "1",
           "min": "0",
-          "name": "RT Shadows"
+          "name": "Shadows"
         },
         {
           "default": "1",
           "id": "463_rt_ao",
           "max": "1",
           "min": "0",
-          "name": "RT Ambient Occlusion"
+          "name": "Ambient Occlusion"
         },
         {
           "default": "1",
           "id": "463_rt_gi",
           "max": "1",
           "min": "0",
-          "name": "RT Global Illumination"
-        },
-        {
-          "default": "0",
-          "id": "463_rt_denoise_feed",
-          "max": "1",
-          "min": "0",
-          "name": "RT Denoise Feed"
+          "name": "Global Illumination"
         },
         {
           "default": "0",
           "id": "466_mode",
           "max": "2",
           "min": "0",
-          "name": "Mode"
+          "name": "Type"
         },
         {
           "default": "6",
@@ -159233,21 +159191,21 @@
           "id": "466_aim_x",
           "max": "100",
           "min": "-100",
-          "name": "Aim X"
+          "name": "Target X"
         },
         {
           "default": "1",
           "id": "466_aim_y",
           "max": "100",
           "min": "-100",
-          "name": "Aim Y"
+          "name": "Target Y"
         },
         {
           "default": "0",
           "id": "466_aim_z",
           "max": "100",
           "min": "-100",
-          "name": "Aim Z"
+          "name": "Target Z"
         },
         {
           "default": "1",
@@ -159338,7 +159296,7 @@
           "id": "466_light_size",
           "max": "20",
           "min": "0",
-          "name": "Light Size"
+          "name": "Size"
         },
         {
           "default": "1",
@@ -159492,7 +159450,7 @@
           "id": "477_normal_scale",
           "max": "1",
           "min": "-1",
-          "name": "Normal Scale"
+          "name": "Normal Strength"
         },
         {
           "default": "1",
@@ -159646,14 +159604,14 @@
           "id": "477_iridescence_thickness_min",
           "max": "1000",
           "min": "0",
-          "name": "Iridescence Thickness Min (nm)"
+          "name": "Iridescence Thickness Min"
         },
         {
           "default": "400",
           "id": "477_iridescence_thickness_max",
           "max": "1000",
           "min": "0",
-          "name": "Iridescence Thickness Max (nm)"
+          "name": "Iridescence Thickness Max"
         },
         {
           "default": "0",
@@ -161543,7 +161501,7 @@
           "id": "478_gain",
           "max": "4",
           "min": "0",
-          "name": "Appearance Gain"
+          "name": "Level"
         },
         {
           "default": "0.95",
@@ -161599,7 +161557,7 @@
           "id": "480_normal_scale",
           "max": "1",
           "min": "-1",
-          "name": "Normal Scale"
+          "name": "Normal Strength"
         },
         {
           "default": "1",
@@ -161753,14 +161711,14 @@
           "id": "480_iridescence_thickness_min",
           "max": "1000",
           "min": "0",
-          "name": "Iridescence Thickness Min (nm)"
+          "name": "Iridescence Thickness Min"
         },
         {
           "default": "400",
           "id": "480_iridescence_thickness_max",
           "max": "1000",
           "min": "0",
-          "name": "Iridescence Thickness Max (nm)"
+          "name": "Iridescence Thickness Max"
         },
         {
           "default": "0",
@@ -163643,7 +163601,7 @@
           "id": "481_gain",
           "max": "4",
           "min": "0",
-          "name": "Appearance Gain"
+          "name": "Level"
         },
         {
           "default": "0.95",
@@ -163699,7 +163657,7 @@
           "id": "483_normal_scale",
           "max": "1",
           "min": "-1",
-          "name": "Normal Scale"
+          "name": "Normal Strength"
         },
         {
           "default": "1",
@@ -163853,14 +163811,14 @@
           "id": "483_iridescence_thickness_min",
           "max": "1000",
           "min": "0",
-          "name": "Iridescence Thickness Min (nm)"
+          "name": "Iridescence Thickness Min"
         },
         {
           "default": "400",
           "id": "483_iridescence_thickness_max",
           "max": "1000",
           "min": "0",
-          "name": "Iridescence Thickness Max (nm)"
+          "name": "Iridescence Thickness Max"
         },
         {
           "default": "0",
@@ -165750,7 +165708,7 @@
           "id": "484_gain",
           "max": "4",
           "min": "0",
-          "name": "Appearance Gain"
+          "name": "Level"
         },
         {
           "default": "0.95",
@@ -165806,7 +165764,7 @@
           "id": "503_normal_scale",
           "max": "1",
           "min": "-1",
-          "name": "Normal Scale"
+          "name": "Normal Strength"
         },
         {
           "default": "1",
@@ -165960,14 +165918,14 @@
           "id": "503_iridescence_thickness_min",
           "max": "1000",
           "min": "0",
-          "name": "Iridescence Thickness Min (nm)"
+          "name": "Iridescence Thickness Min"
         },
         {
           "default": "400",
           "id": "503_iridescence_thickness_max",
           "max": "1000",
           "min": "0",
-          "name": "Iridescence Thickness Max (nm)"
+          "name": "Iridescence Thickness Max"
         },
         {
           "default": "0",
@@ -167857,7 +167815,7 @@
           "id": "504_gain",
           "max": "4",
           "min": "0",
-          "name": "Appearance Gain"
+          "name": "Level"
         },
         {
           "default": "0",
@@ -167934,35 +167892,35 @@
           "id": "518_pos_x",
           "max": "1000",
           "min": "-1000",
-          "name": "Pos X"
+          "name": "Position X"
         },
         {
           "default": "0.6",
           "id": "518_pos_y",
           "max": "1000",
           "min": "-1000",
-          "name": "Pos Y"
+          "name": "Position Y"
         },
         {
           "default": "3.6",
           "id": "518_pos_z",
           "max": "1000",
           "min": "-1000",
-          "name": "Pos Z"
+          "name": "Position Z"
         },
         {
           "default": "-0.711",
           "id": "518_yaw",
           "max": "6.2831855",
           "min": "-6.2831855",
-          "name": "Yaw"
+          "name": "Pan"
         },
         {
           "default": "0.084",
           "id": "518_pitch",
           "max": "1.5",
           "min": "-1.5",
-          "name": "Pitch"
+          "name": "Tilt"
         },
         {
           "default": "0",
@@ -167976,21 +167934,21 @@
           "id": "518_fov_y",
           "max": "2.5",
           "min": "0.05",
-          "name": "FOV Y"
+          "name": "Field of View"
         },
         {
           "default": "0.05",
           "id": "518_near",
           "max": "10",
           "min": "0.001",
-          "name": "Near"
+          "name": "Near Clip"
         },
         {
           "default": "2000",
           "id": "518_far",
           "max": "10000",
           "min": "1",
-          "name": "Far"
+          "name": "Far Clip"
         },
         {
           "default": "4.77",
@@ -168018,7 +167976,7 @@
           "id": "519_exposure_ev",
           "max": "8",
           "min": "-8",
-          "name": "Exposure (EV)"
+          "name": "Exposure"
         },
         {
           "default": "0.42",
@@ -168098,6 +168056,13 @@
           "name": "Shaft Quality"
         },
         {
+          "default": "24",
+          "id": "522_max_radius",
+          "max": "64",
+          "min": "1",
+          "name": "Max Blur"
+        },
+        {
           "default": "1",
           "id": "522_enabled",
           "max": "1",
@@ -168123,7 +168088,7 @@
           "id": "523_max_blur_px",
           "max": "128",
           "min": "0",
-          "name": "Max Blur (px)"
+          "name": "Max Blur"
         },
         {
           "default": "1",
@@ -168333,7 +168298,7 @@
           "id": "515_normal_scale",
           "max": "1",
           "min": "-1",
-          "name": "Normal Scale"
+          "name": "Normal Strength"
         },
         {
           "default": "1",
@@ -168487,14 +168452,14 @@
           "id": "515_iridescence_thickness_min",
           "max": "1000",
           "min": "0",
-          "name": "Iridescence Thickness Min (nm)"
+          "name": "Iridescence Thickness Min"
         },
         {
           "default": "400",
           "id": "515_iridescence_thickness_max",
           "max": "1000",
           "min": "0",
-          "name": "Iridescence Thickness Max (nm)"
+          "name": "Iridescence Thickness Max"
         },
         {
           "default": "0",
@@ -170384,7 +170349,7 @@
           "id": "516_gain",
           "max": "4",
           "min": "0",
-          "name": "Appearance Gain"
+          "name": "Level"
         }
       ]
     },
@@ -170435,14 +170400,14 @@
           "id": "liveliness",
           "max": "1",
           "min": "0",
-          "name": "Liveliness"
+          "name": "FLIP Ratio"
         },
         {
           "default": "0",
           "id": "points_per_cell",
           "max": "1",
           "min": "0",
-          "name": "Points per Cell"
+          "name": "Particles per Cell"
         },
         {
           "default": "0",
@@ -170533,14 +170498,14 @@
           "id": "1_fov_y",
           "max": "2.5",
           "min": "0.05",
-          "name": "FOV Y"
+          "name": "Field of View"
         },
         {
           "default": "1.2",
           "id": "1_look_y",
           "max": "10",
           "min": "-10",
-          "name": "Look Y"
+          "name": "Target Height"
         },
         {
           "default": "0",
@@ -170554,14 +170519,14 @@
           "id": "1_near",
           "max": "10000",
           "min": "0.001",
-          "name": "Near"
+          "name": "Near Clip"
         },
         {
           "default": "2000",
           "id": "1_far",
           "max": "10000",
           "min": "1",
-          "name": "Far"
+          "name": "Far Clip"
         },
         {
           "default": "1024",
@@ -170589,7 +170554,7 @@
           "id": "2_azimuth_variation",
           "max": "1",
           "min": "0",
-          "name": "Azimuth Variation"
+          "name": "Brightness Variation"
         },
         {
           "default": "0.7",
@@ -170677,17 +170642,10 @@
         },
         {
           "default": "0",
-          "id": "2_uniform",
-          "max": "1",
-          "min": "0",
-          "name": "Uniform (White Furnace)"
-        },
-        {
-          "default": "0",
           "id": "3_mode",
           "max": "2",
           "min": "0",
-          "name": "Mode"
+          "name": "Type"
         },
         {
           "default": "-2",
@@ -170715,21 +170673,21 @@
           "id": "3_aim_x",
           "max": "100",
           "min": "-100",
-          "name": "Aim X"
+          "name": "Target X"
         },
         {
           "default": "0",
           "id": "3_aim_y",
           "max": "100",
           "min": "-100",
-          "name": "Aim Y"
+          "name": "Target Y"
         },
         {
           "default": "0",
           "id": "3_aim_z",
           "max": "100",
           "min": "-100",
-          "name": "Aim Z"
+          "name": "Target Z"
         },
         {
           "default": "1",
@@ -170820,7 +170778,7 @@
           "id": "3_light_size",
           "max": "20",
           "min": "0",
-          "name": "Light Size"
+          "name": "Size"
         },
         {
           "default": "0.035",
@@ -170876,7 +170834,7 @@
           "id": "14_normal_scale",
           "max": "1",
           "min": "-1",
-          "name": "Normal Scale"
+          "name": "Normal Strength"
         },
         {
           "default": "1",
@@ -171030,14 +170988,14 @@
           "id": "14_iridescence_thickness_min",
           "max": "1000",
           "min": "0",
-          "name": "Iridescence Thickness Min (nm)"
+          "name": "Iridescence Thickness Min"
         },
         {
           "default": "400",
           "id": "14_iridescence_thickness_max",
           "max": "1000",
           "min": "0",
-          "name": "Iridescence Thickness Max (nm)"
+          "name": "Iridescence Thickness Max"
         },
         {
           "default": "0",
@@ -172997,7 +172955,7 @@
           "id": "16_gain",
           "max": "4",
           "min": "0",
-          "name": "Appearance Gain"
+          "name": "Level"
         },
         {
           "default": "0",
@@ -173095,7 +173053,7 @@
           "id": "19_gain",
           "max": "4",
           "min": "0",
-          "name": "Appearance Gain"
+          "name": "Level"
         },
         {
           "default": "-2.04",
@@ -173193,7 +173151,7 @@
           "id": "22_gain",
           "max": "4",
           "min": "0",
-          "name": "Appearance Gain"
+          "name": "Level"
         },
         {
           "default": "2.04",
@@ -173291,14 +173249,14 @@
           "id": "25_gain",
           "max": "4",
           "min": "0",
-          "name": "Appearance Gain"
+          "name": "Level"
         },
         {
           "default": "0",
           "id": "30_rt_enabled",
           "max": "1",
           "min": "0",
-          "name": "RT Enabled"
+          "name": "Ray Tracing"
         },
         {
           "default": "0",
@@ -173312,42 +173270,35 @@
           "id": "30_rt_reflections",
           "max": "1",
           "min": "0",
-          "name": "RT Reflections"
+          "name": "Reflections"
         },
         {
           "default": "1",
           "id": "30_rt_shadows",
           "max": "1",
           "min": "0",
-          "name": "RT Shadows"
+          "name": "Shadows"
         },
         {
           "default": "1",
           "id": "30_rt_ao",
           "max": "1",
           "min": "0",
-          "name": "RT Ambient Occlusion"
+          "name": "Ambient Occlusion"
         },
         {
           "default": "1",
           "id": "30_rt_gi",
           "max": "1",
           "min": "0",
-          "name": "RT Global Illumination"
-        },
-        {
-          "default": "0",
-          "id": "30_rt_denoise_feed",
-          "max": "1",
-          "min": "0",
-          "name": "RT Denoise Feed"
+          "name": "Global Illumination"
         },
         {
           "default": "0",
           "id": "33_mode",
           "max": "2",
           "min": "0",
-          "name": "Mode"
+          "name": "Type"
         },
         {
           "default": "4",
@@ -173375,21 +173326,21 @@
           "id": "33_aim_x",
           "max": "100",
           "min": "-100",
-          "name": "Aim X"
+          "name": "Target X"
         },
         {
           "default": "0.4",
           "id": "33_aim_y",
           "max": "100",
           "min": "-100",
-          "name": "Aim Y"
+          "name": "Target Y"
         },
         {
           "default": "0",
           "id": "33_aim_z",
           "max": "100",
           "min": "-100",
-          "name": "Aim Z"
+          "name": "Target Z"
         },
         {
           "default": "0.57",
@@ -173480,7 +173431,7 @@
           "id": "33_light_size",
           "max": "20",
           "min": "0",
-          "name": "Light Size"
+          "name": "Size"
         },
         {
           "default": "0.003",
@@ -173536,7 +173487,7 @@
           "id": "35_normal_scale",
           "max": "1",
           "min": "-1",
-          "name": "Normal Scale"
+          "name": "Normal Strength"
         },
         {
           "default": "1",
@@ -173690,14 +173641,14 @@
           "id": "35_iridescence_thickness_min",
           "max": "1000",
           "min": "0",
-          "name": "Iridescence Thickness Min (nm)"
+          "name": "Iridescence Thickness Min"
         },
         {
           "default": "400",
           "id": "35_iridescence_thickness_max",
           "max": "1000",
           "min": "0",
-          "name": "Iridescence Thickness Max (nm)"
+          "name": "Iridescence Thickness Max"
         },
         {
           "default": "0",
@@ -175657,14 +175608,14 @@
           "id": "37_gain",
           "max": "4",
           "min": "0",
-          "name": "Appearance Gain"
+          "name": "Level"
         },
         {
           "default": "8",
           "id": "1_grid_budget_mcells",
           "max": "512",
           "min": "0.01",
-          "name": "Grid Budget (M cells)"
+          "name": "Grid Budget"
         },
         {
           "default": "4",
@@ -175678,49 +175629,49 @@
           "id": "1_closed_neg_x",
           "max": "1",
           "min": "0",
-          "name": "Closed −X"
+          "name": "Left Wall"
         },
         {
           "default": "1",
           "id": "1_closed_pos_x",
           "max": "1",
           "min": "0",
-          "name": "Closed +X"
+          "name": "Right Wall"
         },
         {
           "default": "1",
           "id": "1_closed_neg_y",
           "max": "1",
           "min": "0",
-          "name": "Closed Bottom"
+          "name": "Floor"
         },
         {
           "default": "1",
           "id": "1_closed_pos_y",
           "max": "1",
           "min": "0",
-          "name": "Closed Top"
+          "name": "Ceiling"
         },
         {
           "default": "1",
           "id": "1_closed_neg_z",
           "max": "1",
           "min": "0",
-          "name": "Closed −Z"
+          "name": "Back Wall"
         },
         {
           "default": "1",
           "id": "1_closed_pos_z",
           "max": "1",
           "min": "0",
-          "name": "Closed +Z"
+          "name": "Front Wall"
         },
         {
           "default": "0.5",
           "id": "1_fill_height",
           "max": "20",
           "min": "0",
-          "name": "Initial Fill Height"
+          "name": "Fill Height"
         },
         {
           "default": "0",
@@ -175797,7 +175748,7 @@
           "id": "61_normal_scale",
           "max": "1",
           "min": "-1",
-          "name": "Normal Scale"
+          "name": "Normal Strength"
         },
         {
           "default": "1",
@@ -175951,14 +175902,14 @@
           "id": "61_iridescence_thickness_min",
           "max": "1000",
           "min": "0",
-          "name": "Iridescence Thickness Min (nm)"
+          "name": "Iridescence Thickness Min"
         },
         {
           "default": "400",
           "id": "61_iridescence_thickness_max",
           "max": "1000",
           "min": "0",
-          "name": "Iridescence Thickness Max (nm)"
+          "name": "Iridescence Thickness Max"
         },
         {
           "default": "0",
@@ -177848,7 +177799,7 @@
           "id": "62_gain",
           "max": "4",
           "min": "0",
-          "name": "Appearance Gain"
+          "name": "Level"
         },
         {
           "default": "9.35",
@@ -177876,7 +177827,14 @@
           "id": "63_exposure_ev",
           "max": "8",
           "min": "-8",
-          "name": "Exposure (EV)"
+          "name": "Exposure"
+        },
+        {
+          "default": "24",
+          "id": "66_max_radius",
+          "max": "64",
+          "min": "1",
+          "name": "Max Blur"
         },
         {
           "default": "0",
@@ -177904,7 +177862,7 @@
           "id": "69_max_blur_px",
           "max": "128",
           "min": "0",
-          "name": "Max Blur (px)"
+          "name": "Max Blur"
         },
         {
           "default": "0",

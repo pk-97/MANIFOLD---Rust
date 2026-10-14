@@ -65,7 +65,7 @@ manifold_node_engine::primitive! {
     params: [
         ParamDef {
             name: Cow::Borrowed("mode"),
-            label: "Mode",
+            label: "Type",
             ty: ParamType::Enum,
             default: ParamValue::Enum(0), // Sun
             range: Some((0.0, (LIGHT_MODES.len() - 1) as f32)),
@@ -97,7 +97,7 @@ manifold_node_engine::primitive! {
         },
         ParamDef {
             name: Cow::Borrowed("aim_x"),
-            label: "Aim X",
+            label: "Target X",
             ty: ParamType::Float,
             default: ParamValue::Float(0.0),
             range: Some((-100.0, 100.0)),
@@ -105,7 +105,7 @@ manifold_node_engine::primitive! {
         },
         ParamDef {
             name: Cow::Borrowed("aim_y"),
-            label: "Aim Y",
+            label: "Target Y",
             ty: ParamType::Float,
             default: ParamValue::Float(0.0),
             range: Some((-100.0, 100.0)),
@@ -113,7 +113,7 @@ manifold_node_engine::primitive! {
         },
         ParamDef {
             name: Cow::Borrowed("aim_z"),
-            label: "Aim Z",
+            label: "Target Z",
             ty: ParamType::Float,
             default: ParamValue::Float(0.0),
             range: Some((-100.0, 100.0)),
@@ -225,7 +225,7 @@ manifold_node_engine::primitive! {
         },
         ParamDef {
             name: Cow::Borrowed("light_size"),
-            label: "Light Size",
+            label: "Size",
             ty: ParamType::Float,
             default: ParamValue::Float(1.0),
             range: Some((0.0, 20.0)),

@@ -193,7 +193,7 @@ use serde_json::{Value, json};
         domain.params.insert("resolution".into(), manifold_core::effect_graph_def::SerializedParamValue::Int { value: 256 });
         match walk(&def, false) {
             Err(ExtentError::Refused { node, reason }) => {
-                assert!(node.starts_with("domain") && reason.contains("Resolution") && reason.contains("Initial Fill Height"), "{node}: {reason}");
+                assert!(node.starts_with("domain") && reason.contains("Resolution") && reason.contains("Fill Height"), "{node}: {reason}");
             }
             other => panic!("expected the domain to refuse 256³, got {other:?}"),
         }

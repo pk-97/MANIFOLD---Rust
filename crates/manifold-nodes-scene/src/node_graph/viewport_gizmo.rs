@@ -602,10 +602,11 @@ mod tests {
             objects,
             lights: Vec::new(),
             camera: crate::node_graph::scene_vm::CameraVm::None,
-            camera_controls: Vec::new(),
+            camera_nodes: Vec::new(),
             environment: crate::node_graph::scene_vm::EnvironmentVm::None,
             atmosphere: crate::node_graph::scene_vm::AtmosphereVm::None,
-            world_controls: Vec::new(),
+            world_nodes: Vec::new(),
+            physics_nodes: Vec::new(),
             scene_bounds: None,
         }
     }

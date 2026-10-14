@@ -77,7 +77,7 @@ manifold_node_engine::primitive! {
         },
         ParamDef {
             name: Cow::Borrowed("cel_bands"),
-            label: "Cel Bands",
+            label: "Bands",
             ty: ParamType::Int,
             default: ParamValue::Float(4.0),
             range: Some((2.0, 16.0)),

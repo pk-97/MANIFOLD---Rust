@@ -2707,7 +2707,7 @@
         "defaultMirrorsNodeParam": true,
         "defaultValue": 0.0,
         "id": "solve_level",
-        "label": "Solve Level",
+        "label": "Coarse Solve",
         "target": {
           "kind": "node",
           "nodeId": "domain",
@@ -3001,7 +3001,7 @@
         "isTrigger": false,
         "max": 4.0,
         "min": 0.0,
-        "name": "Solve Level",
+        "name": "Coarse Solve",
         "section": "Fluid",
         "wholeNumbers": true
       },
@@ -3124,6 +3124,15 @@
         "max": 250000.0,
         "min": 1000.0,
         "name": "Whitewater Budget",
+        "scene": {
+          "band": null,
+          "cardLabel": "param",
+          "cardOrder": 0,
+          "gate": null,
+          "group": "whitewater",
+          "role": "setup",
+          "switch": null
+        },
         "section": "Water Detail",
         "wholeNumbers": true
       },

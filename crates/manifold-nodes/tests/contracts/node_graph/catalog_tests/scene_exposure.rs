@@ -8,7 +8,8 @@ use manifold_nodes_scene::node_graph::scene_exposure::testkit::SCENE_VOCABULARY_
         for preset in ["PhysicsSolids", "PhysicsBoxes", "WaterFloatingBoxMatter"] {
             let def = manifold_nodes::bundled_presets::bundled_preset_def(&manifold_core::PresetTypeId::new(preset))
                 .expect("shipped preset");
-            assert!(def.preset_metadata.as_ref().unwrap().params.iter().all(|spec| spec.name != "Size"),
+            assert!(def.preset_metadata.as_ref().unwrap().params.iter()
+                .all(|spec| !matches!(spec.id.as_str(), "foam_size" | "spray_size" | "bubble_size")),
                 "{preset} must not acquire Water look controls on load");
         }
     }
@@ -49,6 +50,72 @@ use manifold_nodes_scene::node_graph::scene_exposure::testkit::SCENE_VOCABULARY_
         }
         assert!(checked > 500, "only {checked} params checked");
         assert!(missing.is_empty(), "unclassified scene params:\n{}", missing.join("\n"));
+    }
+
+    /// INV-S9 (SCENE_SURFACES_DESIGN.md section 4 (invariants)): a scene
+    /// label never carries its unit; the unit is declared once and the value
+    /// readout shows it. Covers every scene-vocabulary param label, every
+    /// recipe control and every control of a bundled preset that holds a scene.
+    #[test]
+    fn no_unit_in_scene_labels() {
+        use manifold_core::liquid_domain::LIQUID_DOMAIN_TYPE_IDS;
+        use manifold_core::preset_def::PresetKind;
+        use manifold_foundation::scene_surface::Unit;
+        use manifold_nodes_scene::node_graph::scene_exposure::all_params_for_node_type;
+
+        const UNITS: [Unit; 10] = [
+            Unit::Metres, Unit::MetresPerSecond, Unit::MetresPerSecondSquared,
+            Unit::KilogramsPerCubicMetre, Unit::Ev, Unit::Pixels, Unit::MillionCells,
+            Unit::Seconds, Unit::Nanometres, Unit::Beats,
+        ];
+        // A new unit must join UNITS before this compiles.
+        fn _every_unit_listed(unit: Unit) {
+            match unit {
+                Unit::Metres | Unit::MetresPerSecond | Unit::MetresPerSecondSquared
+                | Unit::KilogramsPerCubicMetre | Unit::Ev | Unit::Pixels | Unit::MillionCells
+                | Unit::Seconds | Unit::Nanometres | Unit::Beats => {}
+            }
+        }
+        let carries_unit = |label: &str| {
+            label.contains('(')
+                || UNITS.iter().any(|unit| {
+                    let suffix = unit.suffix();
+                    label.ends_with(suffix) || label.split_whitespace().any(|word| word == suffix.trim())
+                })
+        };
+
+        let mut offenders = Vec::new();
+        let mut checked = 0;
+        for &type_id in SCENE_VOCABULARY_TYPE_IDS.iter().chain(LIQUID_DOMAIN_TYPE_IDS) {
+            for param in all_params_for_node_type(type_id) {
+                checked += 1;
+                if carries_unit(&param.label) {
+                    offenders.push(format!("{type_id}.{}: {:?}", param.name, param.label));
+                }
+            }
+        }
+        let mut check_metadata = |owner: &str, metadata: &serde_json::Value| {
+            let names = metadata["params"].as_array().into_iter().flatten().map(|p| &p["name"]);
+            let labels = metadata["bindings"].as_array().into_iter().flatten().map(|b| &b["label"]);
+            for text in names.chain(labels).filter_map(serde_json::Value::as_str) {
+                checked += 1;
+                if carries_unit(text) {
+                    offenders.push(format!("{owner}: {text:?}"));
+                }
+            }
+        };
+        for kind in [PresetKind::Generator, PresetKind::SceneModifier] {
+            for preset in manifold_nodes::bundled_presets::bundled_preset_type_ids(kind) {
+                let json = manifold_nodes::bundled_presets::bundled_preset_json(&preset).expect("bundled json");
+                if kind == PresetKind::Generator && !json.contains("\"node.render_scene\"") {
+                    continue;
+                }
+                let doc: serde_json::Value = serde_json::from_str(&json).expect("bundled preset parses");
+                check_metadata(preset.as_str(), &doc["presetMetadata"]);
+            }
+        }
+        assert!(checked > 1000, "only {checked} labels checked");
+        assert!(offenders.is_empty(), "scene labels carrying a unit:\n{}", offenders.join("\n"));
     }
 
     use manifold_nodes_scene::node_graph::scene_exposure::{metadata_for_node_type, migrate_scene_exposures};
@@ -220,13 +287,16 @@ use manifold_nodes_scene::node_graph::scene_exposure::testkit::SCENE_VOCABULARY_
         .unwrap();
         assert!(migrate_scene_exposures(&mut def));
         let metadata = def.preset_metadata.as_ref().unwrap();
-        for name in ["enabled", "aperture", "quality"] {
+        // Max Radius is the depth of field Max Blur row (SCENE_SURFACES D4).
+        for name in ["enabled", "aperture", "quality", "max_radius"] {
             assert!(metadata.bindings.iter().any(|b| matches!(&b.target,
                 manifold_core::effect_graph_def::BindingTarget::Node { node_id, param }
                 if node_id.as_str() == "bokeh" && param == name)));
         }
-        assert!(!metadata.bindings.iter().any(|b| matches!(&b.target,
-            manifold_core::effect_graph_def::BindingTarget::Node { param, .. } if param == "max_radius")));
+        assert_eq!(
+            def.nodes[0].params["max_radius"],
+            manifold_core::effect_graph_def::SerializedParamValue::Float { value: 16.0 }
+        );
         assert_eq!(
             def.nodes[0].params["enabled"],
             manifold_core::effect_graph_def::SerializedParamValue::Bool { value: false }
@@ -453,9 +523,8 @@ use manifold_nodes_scene::node_graph::scene_exposure::testkit::SCENE_VOCABULARY_
                 "rt_shadows",
                 "rt_ao",
                 "rt_gi",
-                "rt_denoise_feed"
             ],
-            "exactly the seven RT toggles, nothing else from the root node"
+            "exactly the six RT toggles; the Hidden denoise feed is never stamped, nothing else from the root node"
         );
         for spec in &meta.params {
             assert_eq!(spec.section.as_deref(), Some("Rendering"));

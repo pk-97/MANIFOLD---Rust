@@ -110,7 +110,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "text": "Density (kg/m³)"
+          "text": "Density"
         }
       },
       "check": "Exists"

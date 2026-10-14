@@ -94,7 +94,7 @@ manifold_node_engine::primitive! {
         },
         ParamDef {
             name: Cow::Borrowed("azimuth_variation"),
-            label: "Azimuth Variation",
+            label: "Brightness Variation",
             ty: ParamType::Float,
             default: ParamValue::Float(0.12),
             range: Some((0.0, 1.0)),
@@ -216,7 +216,7 @@ manifold_node_engine::primitive! {
         },
         ParamDef {
             name: Cow::Borrowed("uniform"),
-            label: "Uniform (White Furnace)",
+            label: "White Furnace",
             ty: ParamType::Bool,
             // A closed-form environment for correctness testing: on, the
             // baked equirect (and every derived irradiance/prefiltered mip)

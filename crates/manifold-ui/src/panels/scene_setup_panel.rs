@@ -968,6 +968,7 @@ fn placeholder_param_info() -> ParamRow {
             is_trigger: false,
             is_trigger_gate: false,
             value_labels: None,
+            unit: None,
             section: None,
         disabled: None,
         material_role: None,

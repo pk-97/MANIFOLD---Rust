@@ -482,7 +482,7 @@ Off the per-frame path. The lookup runs once per control when a manifest is buil
 | INV-S1 Every param of every vocabulary type is classified exactly once | `scene_surface::tests::every_vocabulary_param_is_classified` — iterates `SCENE_VOCABULARY` × `PrimitiveRegistry` `parameters()`, fails on `None` (P3) |
 | INV-S2 Only the join calls the lookup; scene surfaces read the manifest | negative gate: `rg -n 'param_lookup::describe|scene_param_facts' crates/ -g '!crates/manifold-core/src/effects/instance_serde.rs' -g '!crates/manifold-core/src/param_lookup.rs' -g '!crates/manifold-nodes-scene/src/node_graph/scene_*'` → 0 (P1 onward) |
 | INV-S3 One curation decider | negative gate: `rg -n 'card_visible_for|StandardTarget|scene_performance' crates/` → 0 (P4) |
-| INV-S4 Card and panel partition rows identically | `scene_items::tests::card_and_panel_agree_on_owners` over gltfscene, physicsscene, waterdambreak, waterdambreakmatter, oceanscene fixtures (P4) |
+| INV-S4 Card and panel partition rows identically | `scene_card::tests::card_and_panel_agree_on_owners` (ui-snapshot feature, it reads the headless fixtures) over gltfscene, physicsscene, waterdambreak, waterdambreakmatter, oceanscene fixtures (P4) |
 | INV-S5 Attached rows always on the card | `scene_card::tests::attached_rows_stay_on_card` — driver, envelope, audio, Ableton, macro, automation, each on a Setup and a Hidden row (written P0, kept green through P4) |
 | INV-S6 The join never writes user choices | `param_lookup::tests::join_preserves_choices_and_user_bindings` plus `migrate_twice_is_noop` (P1) |
 | INV-S7 Row set follows base values | `scene_card::tests::look_rows_follow_base_not_effective` (P4) |
@@ -615,6 +615,7 @@ P1 and P2 land together as one batch: P1 does not land until P2 moves the drawer
   - Matter's stiffness, cohesion and liveliness become Performance in the scene table (asserted by `matter_card_bands`).
   - Bokeh `max_radius` gets a role so D4's depth of field Max Blur row builds (the table marks it Hidden, after the stamp filter).
   - Open question, decided before rows are built: the GPU FLIP card controls the table marks Hidden (`solve_level`, `max_iterations`, `sheet_fill_rate`, `particle_capacity`). Under D5 they would also build no row in the Scene tab.
+  - Ruling: those four are Setup, not Hidden. They show in the Scene tab and stay off the card.
   - The physics-world item owns its copy body and that body's transform (PhysicsBoxes), and Matter's `initial_column` transform gets an owner, emptying `OWNERLESS_UNTIL_P4` in `projection/scene.rs`.
   - `oceanscene` fixture (`physics_scene("Ocean", "Ocean")` in `fixtures.rs`).
 - **Gate:** positive — INV-S4, S5, S7, S8, S13 tests; `scene_card::tests::{orbit_card_order, free_camera_card_order, physics_card_bands, water_card_bands, matter_card_bands, three_lights_three_named_rows, absent_dof_builds_no_row}`. Negative — INV-S3, INV-S11; `rg -n '"node\.|"orbit"|"intensity"' crates/manifold-app/src/ui_bridge/projection/scene_card.rs` → 0.

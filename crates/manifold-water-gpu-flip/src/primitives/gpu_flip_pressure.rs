@@ -86,7 +86,7 @@ pub(crate) fn max_solve_level(lattice: [u32; 3]) -> usize {
 /// Why `level` is refused at `lattice`, or None.
 pub(crate) fn level_refusal(lattice: [u32; 3], level: usize) -> Option<String> {
     let max = max_solve_level(lattice);
-    (level > max).then(|| format!("Solve Level must be 0 to {max} on a {lattice:?} lattice, not {level}"))
+    (level > max).then(|| format!("Coarse Solve must be 0 to {max} on a {lattice:?} lattice, not {level}"))
 }
 
 fn cells(n: [u32; 3]) -> u64 {

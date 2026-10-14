@@ -9,7 +9,7 @@
 mod compare;
 mod composite_resources;
 mod dump;
-mod fixtures;
+pub(crate) mod fixtures;
 #[cfg(test)]
 mod input_matrix;
 mod interact;
