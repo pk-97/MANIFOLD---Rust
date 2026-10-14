@@ -99,10 +99,8 @@ pub(crate) fn dispatch_params(action: &ParamsAction, ctx: &mut super::super::Dis
             expand_layer_ancestors(&owner_id, ctx);
             ctx.selection.select_layer(owner_id.clone());
             *ctx.active_layer = Some(owner_id);
-            if crate::ui_bridge::projection::trigger_routing::response_uses_scene_panel(ctx.project, &address, param_id.as_ref())
-                && !ctx.ui.scene_setup_panel.is_open()
-            {
-                ctx.ui.toggle_scene_dock();
+            if crate::ui_bridge::projection::trigger_routing::response_uses_scene_panel(ctx.project, &address, param_id.as_ref()) {
+                ctx.selection.pin_scope(InspectorTab::Scene);
             }
             ctx.ui.pending_trigger_response_reveal = Some((target.clone(), param_id.clone()));
             // Card/rack folding is presentation state, using the existing
@@ -785,7 +783,7 @@ pub(crate) fn dispatch_params(action: &ParamsAction, ctx: &mut super::super::Dis
                     };
                     match effective_tab {
                         InspectorTab::Master => EffectTarget::Master,
-                        InspectorTab::Layer | InspectorTab::Group => {
+                        InspectorTab::Layer | InspectorTab::Group | InspectorTab::Scene => {
                             let Some(layer_id) = active_layer.clone() else {
                                 return DispatchResult::handled();
                             };
@@ -1006,7 +1004,7 @@ pub(crate) fn dispatch_params(action: &ParamsAction, ctx: &mut super::super::Dis
             // a layer's "+ Add Effect" (master opens carry `None`).
             let target = match tab {
                 InspectorTab::Master => EffectTarget::Master,
-                InspectorTab::Layer | InspectorTab::Group => {
+                InspectorTab::Layer | InspectorTab::Group | InspectorTab::Scene => {
                     let Some(layer_id) = layer_id else {
                         return DispatchResult::handled();
                     };

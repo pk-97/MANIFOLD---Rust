@@ -274,7 +274,7 @@
     "inspector-modifier-group": "modifiergroup",
     "audio-visualizer-source": "audiovisualizers",
     "scene-setup-add-object": "gltfscene",
-    "scene-setup-empty-states": "timeline",
+    "scene-setup-empty-states": "audiovisualizers",
     "scene-setup-heldout-merge-snapshot": "gltfscene",
     "scene-setup-light-intensity-drag": "gltfscene",
     "scene-setup-modifier-stack": "gltfscene",

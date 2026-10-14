@@ -182,6 +182,16 @@ impl InspectorCompositePanel {
         self.set_active_tab(active);
     }
 
+    /// Remove the Scene rung, showing Layer in its place when it was active.
+    /// For hosts that do not build the scene panel (the graph editor's
+    /// mirrored column).
+    pub fn drop_scene_tab(&mut self) {
+        self.available_tabs.retain(|t| *t != InspectorTab::Scene);
+        if self.active_tab == InspectorTab::Scene {
+            self.set_active_tab(InspectorTab::Layer);
+        }
+    }
+
     /// Build the tab strip: one button per available rung, the active one
     /// highlighted. Records node ids for click routing.
     fn build_tab_strip(&mut self, tree: &mut UITree, rect: Rect) {
@@ -709,6 +719,7 @@ impl InspectorCompositePanel {
             card.clear_nodes();
         }
 
+        self.scene_content_rect = Rect::ZERO;
         if rect.width <= 0.0 {
             return;
         }
@@ -756,8 +767,12 @@ impl InspectorCompositePanel {
         let tab_h = TAB_STRIP_HEIGHT;
         let tab_y = macros_y + macros_h + 2.0; // 2px gap below macros
         self.build_tab_strip(tree, Rect::new(col_x, tab_y, content_w, tab_h));
+        // The Scene tab hosts the scene panel (built by the caller into
+        // `scene_content_rect`), so both columns collapse to zero width.
         let (master_col_w, layer_col_w) = if self.master_visible() {
             (full_col_w, 0.0)
+        } else if self.scene_visible() {
+            (0.0, 0.0)
         } else {
             (0.0, full_col_w)
         };
@@ -765,7 +780,7 @@ impl InspectorCompositePanel {
         let left_x = col_x;
         let right_x = col_x;
         let left_content_w = if self.master_visible() { content_w } else { 0.0 };
-        let right_content_w = if self.master_visible() { 0.0 } else { content_w };
+        let right_content_w = if self.master_visible() || self.scene_visible() { 0.0 } else { content_w };
         self.column_split_x = if self.master_visible() {
             rect.x + rect.width
         } else {
@@ -777,6 +792,11 @@ impl InspectorCompositePanel {
         let columns_h = (rect.y + rect.height - columns_y).max(0.0);
         self.columns_y = columns_y;
         self.columns_height = columns_h;
+        self.scene_content_rect = if self.scene_visible() {
+            Rect::new(col_x, columns_y, full_col_w, columns_h)
+        } else {
+            Rect::ZERO
+        };
 
         // `UI_CLIP_AND_Z_OWNERSHIP_DESIGN.md` P1 stopgap removal: this used to
         // be a bespoke, root-parented `ClipRegion` (`content_clip_id`) — the

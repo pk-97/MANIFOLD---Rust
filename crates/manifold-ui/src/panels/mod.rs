@@ -238,13 +238,17 @@ pub enum SyncSource {
 /// The scope an inspector tab addresses — a rung in the selection's ownership
 /// hierarchy (clip → layer → group → master). `Group` is a group *layer*
 /// (`LayerType::Group`), so internally it renders through the same column as
-/// `Layer`; only the tab label and which layer the app feeds differ.
+/// `Layer`; only the tab label and which layer the app feeds differ. `Scene`
+/// is the selected layer's 3D scene setup (SCENE_SURFACES D16), present only
+/// when that layer's generator graph holds a `node.render_scene`; the
+/// inspector hosts the scene panel in its column instead of its own sections.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InspectorTab {
     Master,
     Layer,
     Group,
     Clip,
+    Scene,
 }
 
 impl InspectorTab {

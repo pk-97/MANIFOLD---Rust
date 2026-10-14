@@ -24,14 +24,6 @@ pub struct ScreenLayout {
     /// right-anchored. One rule at every width: content shrinks, no overlay
     /// fallback (`AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md` D1).
     pub audio_setup_width: f32,
-    /// Scene Setup dock width (SCENE_SETUP_PANEL_DESIGN D2). 0.0 = closed. A
-    /// fold-out column pinned to the inspector's LEFT edge — the exact same
-    /// mechanism as `audio_setup_width` above, cloned per D2. The two utility
-    /// columns are mutually exclusive (opening one animates the other closed);
-    /// that toggle policy lives at the call site (`ui_root`/`app_render`), not
-    /// here — `ScreenLayout` only knows how to lay out whatever widths it's
-    /// given, same separation of concerns as the audio dock.
-    pub scene_setup_width: f32,
     /// Timeline height as fraction of content area. 0.30 = bottom 30%.
     /// Clamped to [0.15, 0.70] by resize handle.
     pub timeline_split_ratio: f32,
@@ -57,9 +49,6 @@ pub struct ScreenLayout {
     /// straight back into `audio_setup_width` every animating frame, so every
     /// layout consumer sees the settling position with no call-site change.
     audio_setup_width_anim: AnimF32,
-    /// D15 snap-back mirror for the Scene Setup dock width — same mirror-field
-    /// pattern as `audio_setup_width_anim` above.
-    scene_setup_width_anim: AnimF32,
 }
 
 impl ScreenLayout {
@@ -73,15 +62,12 @@ impl ScreenLayout {
             inspector_width: color::DEFAULT_INSPECTOR_WIDTH,
             effect_browser_width: 0.0,
             audio_setup_width: 0.0,
-            scene_setup_width: 0.0,
             timeline_split_ratio: color::DEFAULT_TIMELINE_SPLIT_RATIO,
             inspector_width_anim: AnimF32::new(color::DEFAULT_INSPECTOR_WIDTH, color::MOTION_MED_MS)
                 .with_curve(crate::anim::Curve::Snap),
             timeline_split_anim: AnimF32::new(color::DEFAULT_TIMELINE_SPLIT_RATIO, color::MOTION_MED_MS)
                 .with_curve(crate::anim::Curve::Snap),
             audio_setup_width_anim: AnimF32::new(color::DEFAULT_AUDIO_SETUP_WIDTH, color::MOTION_MED_MS)
-                .with_curve(crate::anim::Curve::Snap),
-            scene_setup_width_anim: AnimF32::new(color::DEFAULT_SCENE_SETUP_WIDTH, color::MOTION_MED_MS)
                 .with_curve(crate::anim::Curve::Snap),
         }
     }
@@ -116,22 +102,9 @@ impl ScreenLayout {
     pub fn content_area(&self) -> Rect {
         let top = self.transport_bar_height;
         let left = self.effect_browser_width;
-        // The inspector (right column) AND whichever utility dock is open —
-        // Audio Setup or Scene Setup, the two fold-out columns just left of
-        // the inspector — bound the content on the right. Subtracting both
-        // widths unconditionally is safe even though the two docks are meant
-        // to be mutually exclusive (SCENE_SETUP_PANEL_DESIGN D2): the toggle
-        // policy lives at the call site, not here, so `content_area` stays a
-        // pure function of whatever widths it's handed — the same reasoning
-        // that keeps this the whole reason preview + timeline shrink when a
-        // dock opens (D1); `top_region`/`timeline_area`/`video_area` all read
-        // `content_area()`, so they inherit it.
-        let w = (self.screen_width
-            - left
-            - self.inspector_width
-            - self.audio_setup_width
-            - self.scene_setup_width)
-            .max(0.0);
+        // The inspector and the Audio Setup dock bound the content on the
+        // right; preview and timeline shrink when the dock opens (D1).
+        let w = (self.screen_width - left - self.inspector_width - self.audio_setup_width).max(0.0);
         let h = (self.screen_height - top - self.footer_height).max(0.0);
         Rect::new(left, top, w, h)
     }
@@ -216,22 +189,6 @@ impl ScreenLayout {
         let x = self.screen_width - self.inspector_width - self.audio_setup_width;
         let h = (self.screen_height - top - self.footer_height).max(0.0);
         Rect::new(x, top, self.audio_setup_width, h)
-    }
-
-    /// Scene Setup dock: a FULL-HEIGHT column pinned to the inspector's LEFT
-    /// edge (SCENE_SETUP_PANEL_DESIGN D2) — cloned from [`Self::audio_setup`].
-    /// Same slot: the two utility docks are mutually exclusive by construction
-    /// at the call site (only one of `audio_setup_width`/`scene_setup_width`
-    /// is ever non-zero at once), so pinning both to the inspector's left edge
-    /// never produces an overlap in practice. `Rect::ZERO` when closed.
-    pub fn scene_setup(&self) -> Rect {
-        if self.scene_setup_width <= 0.0 {
-            return Rect::ZERO;
-        }
-        let top = self.transport_bar_height;
-        let x = self.screen_width - self.inspector_width - self.scene_setup_width;
-        let h = (self.screen_height - top - self.footer_height).max(0.0);
-        Rect::new(x, top, self.scene_setup_width, h)
     }
 
     /// Effect browser: leftmost sidebar.
@@ -381,26 +338,12 @@ impl ScreenLayout {
         self.audio_setup_width_anim.set_target(target);
     }
 
-    /// Same as [`Self::reset_audio_setup_width`], for the Scene Setup dock
-    /// width.
-    pub fn reset_scene_setup_width(&mut self) {
-        let from = self.scene_setup_width;
-        let target = color::DEFAULT_SCENE_SETUP_WIDTH;
-        if from == target {
-            return;
-        }
-        self.scene_setup_width = target;
-        self.scene_setup_width_anim.snap(from);
-        self.scene_setup_width_anim.set_target(target);
-    }
-
     /// Whether any split-reset tween is still in flight — for tests /
     /// automation harnesses driving the gesture headlessly.
     pub fn is_split_reset_animating(&self) -> bool {
         self.inspector_width_anim.is_animating()
             || self.timeline_split_anim.is_animating()
             || self.audio_setup_width_anim.is_animating()
-            || self.scene_setup_width_anim.is_animating()
     }
 
     /// Advance both split-reset tweens by `dt_ms`; call once per frame
@@ -429,15 +372,7 @@ impl ScreenLayout {
         if audio_setup_was_animating {
             self.audio_setup_width = self.audio_setup_width_anim.value();
         }
-        let scene_setup_was_animating = self.scene_setup_width_anim.is_animating();
-        let scene_setup_still_animating = self.scene_setup_width_anim.tick(dt_ms);
-        if scene_setup_was_animating {
-            self.scene_setup_width = self.scene_setup_width_anim.value();
-        }
-        inspector_still_animating
-            || timeline_still_animating
-            || audio_setup_still_animating
-            || scene_setup_still_animating
+        inspector_still_animating || timeline_still_animating || audio_setup_still_animating
     }
 }
 
@@ -556,29 +491,6 @@ mod tests {
         assert!(!layout.is_split_reset_animating(), "no-op reset never starts a tween");
     }
 
-    #[test]
-    fn audio_and_scene_setup_docks_are_mutually_exclusive_at_the_layout_level() {
-        // ScreenLayout itself doesn't own the toggle policy (that lives at
-        // the call site — D2), but both docks pin to the SAME slot (just
-        // left of the inspector). With only one non-zero at a time (the
-        // exclusive-toggle call site's actual invariant), content_area
-        // narrows by exactly that dock's width — proving the geometry never
-        // silently double-subtracts or overlaps across a toggle sequence.
-        let mut layout = ScreenLayout::new(1920.0, 1080.0);
-        let base_content = layout.content_area().width;
-
-        layout.audio_setup_width = color::DEFAULT_AUDIO_SETUP_WIDTH;
-        let with_audio = layout.content_area().width;
-        assert!((base_content - with_audio - color::DEFAULT_AUDIO_SETUP_WIDTH).abs() < 0.01);
-
-        // Toggle: audio closes, scene opens (the exclusive-toggle call site's
-        // actual sequence).
-        layout.audio_setup_width = 0.0;
-        layout.scene_setup_width = color::DEFAULT_SCENE_SETUP_WIDTH;
-        let with_scene = layout.content_area().width;
-        assert!((base_content - with_scene - color::DEFAULT_SCENE_SETUP_WIDTH).abs() < 0.01);
-    }
-
     // ── Docks and split resets ───────────────────────────────────────
 
     struct DockCase {
@@ -601,13 +513,6 @@ mod tests {
                 width: |l| l.audio_setup_width,
                 rect: |l| l.audio_setup(),
                 default: color::DEFAULT_AUDIO_SETUP_WIDTH,
-            },
-            DockCase {
-                name: "scene setup",
-                open: |l| l.scene_setup_width = color::DEFAULT_SCENE_SETUP_WIDTH,
-                width: |l| l.scene_setup_width,
-                rect: |l| l.scene_setup(),
-                default: color::DEFAULT_SCENE_SETUP_WIDTH,
             },
         ];
         for d in &docks {
@@ -672,14 +577,6 @@ mod tests {
                 reset: ScreenLayout::reset_audio_setup_width,
                 dragged: 640.0,
                 default: color::DEFAULT_AUDIO_SETUP_WIDTH,
-            },
-            ResetCase {
-                name: "scene setup",
-                set: |l, v| l.scene_setup_width = v,
-                get: |l| l.scene_setup_width,
-                reset: ScreenLayout::reset_scene_setup_width,
-                dragged: 600.0,
-                default: color::DEFAULT_SCENE_SETUP_WIDTH,
             },
         ];
         for s in &splits {

@@ -391,14 +391,6 @@ impl Application {
                 self.needs_rebuild = true;
             }
             self.cursor_manager.set(TimelineCursor::ResizeHorizontal);
-        }
-        // Scene Setup dock resize drag — mirror of the Audio Setup one above
-        // (SCENE_SETUP_PANEL_DESIGN D2).
-        else if self.ws.ui_root.scene_setup_resize_dragging {
-            if self.ws.ui_root.update_scene_setup_resize(self.cursor_pos.x) {
-                self.needs_rebuild = true;
-            }
-            self.cursor_manager.set(TimelineCursor::ResizeHorizontal);
         } else {
             self.ws.ui_root.pointer_event(
                 self.cursor_pos,
@@ -455,7 +447,7 @@ impl Application {
         if ui.background_input_blocked() { return; }
         let in_inspector = ui.layout.inspector().contains(self.cursor_pos);
         let in_objects = ui.scene_setup_panel.is_open()
-            && ui.layout.scene_setup().contains(self.cursor_pos);
+            && ui.inspector.scene_content_rect().contains(self.cursor_pos);
         if !in_inspector && self.input_handler.inspector_has_focus {
             ui.inspector.clear_effect_selection(&mut ui.tree);
         }
@@ -571,20 +563,6 @@ impl Application {
                                     self.ws.ui_root.begin_audio_setup_resize(self.cursor_pos.x);
                                     self.ws.ui_root.set_audio_setup_handle_drag();
                                 }
-                            } else if self.ws.ui_root.is_near_scene_setup_edge(self.cursor_pos)
-                                && !self.ws.ui_root.overlay_contains_point(self.cursor_pos)
-                            {
-                                // Scene Setup dock resize handle — mirror of
-                                // the Audio Setup one above (D2).
-                                if self.is_double_click(self.scene_setup_handle_last_click) {
-                                    self.scene_setup_handle_last_click = None;
-                                    self.ws.ui_root.layout.reset_scene_setup_width();
-                                    self.needs_rebuild = true;
-                                } else {
-                                    self.scene_setup_handle_last_click = Some(std::time::Instant::now());
-                                    self.ws.ui_root.begin_scene_setup_resize(self.cursor_pos.x);
-                                    self.ws.ui_root.set_scene_setup_handle_drag();
-                                }
                             } else if self.ws.ui_root.is_near_inspector_edge(self.cursor_pos)
                                 && !self.ws.ui_root.overlay_contains_point(self.cursor_pos)
                             {
@@ -645,10 +623,6 @@ impl Application {
                                 self.ws.ui_root.end_audio_setup_resize();
                                 self.cursor_manager.set_default();
                                 self.ws.ui_root.set_audio_setup_handle_idle();
-                            } else if self.ws.ui_root.scene_setup_resize_dragging {
-                                self.ws.ui_root.end_scene_setup_resize();
-                                self.cursor_manager.set_default();
-                                self.ws.ui_root.set_scene_setup_handle_idle();
                             } else {
                                 self.ws.ui_root.pointer_event(
                                     self.cursor_pos,
@@ -785,7 +759,7 @@ impl Application {
             let inspector_rect = self.ws.ui_root.layout.inspector();
             let tracks_rect = self.ws.ui_root.layout.timeline_tracks();
 
-            // BUG-199/BUG-223: Audio Setup / Scene Setup docks — route
+            // BUG-199/BUG-223: the Audio Setup dock and the Scene tab — route
             // through the generic `UIEvent::Scroll` pipeline (same mechanism
             // the open-dropdown branch above uses) so the real app and the
             // headless `Gesture::Scroll` harness share one path. `contains()`
@@ -800,7 +774,7 @@ impl Application {
             // updates internal offset state but never gets baked into node
             // positions). Set `needs_rebuild` explicitly, same as the
             // inspector branch below.
-            if self.ws.ui_root.layout.scene_setup().contains(pos)
+            if self.ws.ui_root.inspector.scene_content_rect().contains(pos)
                 || self.ws.ui_root.layout.audio_setup().contains(pos)
             {
                 self.ws

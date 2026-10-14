@@ -244,12 +244,14 @@ pub fn sync_inspector_data(
 
     }
 
-    // ── Scene Setup panel (SCENE_SETUP_PANEL_DESIGN.md) ──
-    // Rebuilt from scratch every sync while the dock is open — no cached/
-    // staged copy anywhere (D1: "no rotting, no staleness"). Selection
-    // scoping mirrors the inspector-tab rung derivation just below (section 1 VERIFY
-    // marker, resolved): the selection's own layer, falling back to
-    // `active_layer`.
+    // Tabs first: the Scene tab decides whether the scene panel is open.
+    configure_inspector_tabs(ui, project, active_layer, selection);
+
+    // ── Scene tab (SCENE_SURFACES D16) ──
+    // Rebuilt from scratch every sync while the tab is active — no cached/
+    // staged copy anywhere (D1: "no rotting, no staleness"). Bound to the
+    // same layer as the tab rungs: the selection's own layer, falling back
+    // to `active_layer`.
     if ui.scene_setup_panel.is_open() {
         use manifold_nodes_scene::node_graph::scene_vm::{SceneVm, is_param_driven, is_param_exposed};
         use manifold_ui::panels::scene_setup_panel::{
@@ -1087,65 +1089,6 @@ pub fn sync_inspector_data(
         ui.scene_setup_panel.configure_force_cards(&force_surfaces);
     }
 
-    // ── Inspector tabs: the selection's ownership rungs (local→global) ──
-    // The rung set is derived from the SELECTION's own layer (the clip's layer
-    // or the selected layer), NOT `active_layer` — which now follows the active
-    // tab (e.g. it points at the group when the Group rung is pinned). Deriving
-    // from the stable selection keeps the full chain available no matter which
-    // rung you're viewing. The active rung is the pin if one is set (a tab
-    // click), else the selection-derived default.
-    {
-        use manifold_core::types::LayerType;
-        use manifold_ui::InspectorTab;
-        let has_clip = selection.primary_selected_clip_id.is_some();
-        let sel_layer_idx = selection
-            .selected_layer_id_for_clip
-            .as_ref()
-            .or(selection.primary_selected_layer_id.as_ref())
-            .and_then(|id| project.timeline.find_layer_index_by_id(id))
-            .or(active_layer);
-        let layer = sel_layer_idx.and_then(|i| project.timeline.layers.get(i));
-        let layer_is_group = layer.is_some_and(|l| l.layer_type == LayerType::Group);
-        let has_group_parent =
-            sel_layer_idx.is_some_and(|i| project.timeline.find_group_parent(i).is_some());
-
-        let mut tabs: Vec<InspectorTab> = Vec::new();
-        if has_clip {
-            tabs.push(InspectorTab::Clip);
-        }
-        if let Some(l) = layer {
-            if l.layer_type == LayerType::Group {
-                tabs.push(InspectorTab::Group);
-            } else {
-                tabs.push(InspectorTab::Layer);
-                if has_group_parent {
-                    tabs.push(InspectorTab::Group);
-                }
-            }
-        }
-        tabs.push(InspectorTab::Master);
-
-        let active = selection
-            .pinned_scope()
-            .filter(|t| tabs.contains(t))
-            .unwrap_or_else(|| {
-                // Default to the LAYER scope on any selection — the layer (its
-                // generator, effects, macros) is the persistent thing you tune,
-                // so landing there is less jarring than the per-clip view. The
-                // Clip tab is still one click away whenever a clip is selected.
-                if layer_is_group {
-                    InspectorTab::Group
-                } else if layer.is_some() {
-                    InspectorTab::Layer
-                } else if has_clip {
-                    InspectorTab::Clip
-                } else {
-                    InspectorTab::Master
-                }
-            });
-        ui.inspector.configure_tabs(&tabs, active);
-    }
-
     // Master effects → inspector (envelopes ride on each instance)
     let mut master_configs = effects_to_surfaces(
         &project.settings.master_effects,
@@ -1444,6 +1387,111 @@ pub fn sync_inspector_data(
 /// and the card disagreed about a generator's identity even though both
 /// ultimately read the same real, freshly-synthesized `EffectId` (see
 /// `manifold_playback::automation`'s `AutomationLatches` doc comment).
+/// Configure the inspector's tab rungs and open the scene panel exactly when
+/// the Scene tab is the active one (SCENE_SURFACES D16).
+fn configure_inspector_tabs(
+    ui: &mut UIRoot,
+    project: &Project,
+    active_layer: Option<usize>,
+    selection: &SelectionState,
+) {
+    let (tabs, active) = inspector_tabs(project, active_layer, selection, ui.inspector.active_tab());
+    ui.inspector.configure_tabs(&tabs, active);
+    let scene = active == manifold_ui::InspectorTab::Scene;
+    if scene {
+        ui.scene_setup_panel.open();
+    } else {
+        ui.scene_setup_panel.close();
+    }
+    let audio = ui.audio_setup_panel.is_open();
+    ui.header.set_dock_toggle_state(audio, scene);
+}
+
+/// The selection's ownership rungs (local→global) and the active one.
+///
+/// The rung set is derived from the SELECTION's own layer (the clip's layer
+/// or the selected layer), NOT `active_layer` — which follows the active tab
+/// (it points at the group when the Group rung is pinned). Deriving from the
+/// stable selection keeps the full chain available no matter which rung you
+/// are viewing. The active rung is the pin if one is set (a tab click), else
+/// the selection-derived default. The Scene rung exists only when that layer
+/// is a generator whose graph holds a `node.render_scene`; once showing, it
+/// stays across a selection change to another scene layer, as the old dock did.
+pub(crate) fn inspector_tabs(
+    project: &Project,
+    active_layer: Option<usize>,
+    selection: &SelectionState,
+    current: manifold_ui::InspectorTab,
+) -> (Vec<manifold_ui::InspectorTab>, manifold_ui::InspectorTab) {
+    use manifold_ui::InspectorTab;
+    let has_clip = selection.primary_selected_clip_id.is_some();
+    let sel_layer_idx = selection
+        .selected_layer_id_for_clip
+        .as_ref()
+        .or(selection.primary_selected_layer_id.as_ref())
+        .and_then(|id| project.timeline.find_layer_index_by_id(id))
+        .or(active_layer);
+    let layer = sel_layer_idx.and_then(|i| project.timeline.layers.get(i));
+    let layer_is_group = layer.is_some_and(|l| l.layer_type == LayerType::Group);
+    let has_group_parent =
+        sel_layer_idx.is_some_and(|i| project.timeline.find_group_parent(i).is_some());
+
+    let mut tabs: Vec<InspectorTab> = Vec::new();
+    if has_clip {
+        tabs.push(InspectorTab::Clip);
+    }
+    if let Some(l) = layer {
+        if l.layer_type == LayerType::Group {
+            tabs.push(InspectorTab::Group);
+        } else {
+            tabs.push(InspectorTab::Layer);
+            if layer_has_scene(l) {
+                tabs.push(InspectorTab::Scene);
+            }
+            if has_group_parent {
+                tabs.push(InspectorTab::Group);
+            }
+        }
+    }
+    tabs.push(InspectorTab::Master);
+
+    let active = selection
+        .pinned_scope()
+        .filter(|t| tabs.contains(t))
+        .unwrap_or_else(|| {
+            // Default to the LAYER scope on any selection — the layer (its
+            // generator, effects, macros) is the persistent thing you tune,
+            // so landing there is less jarring than the per-clip view. The
+            // Clip tab is still one click away whenever a clip is selected.
+            if current == InspectorTab::Scene && tabs.contains(&InspectorTab::Scene) {
+                InspectorTab::Scene
+            } else if layer_is_group {
+                InspectorTab::Group
+            } else if layer.is_some() {
+                InspectorTab::Layer
+            } else if has_clip {
+                InspectorTab::Clip
+            } else {
+                InspectorTab::Master
+            }
+        });
+    (tabs, active)
+}
+
+/// A generator layer whose graph (its own, or its bundled preset's) holds a
+/// `node.render_scene` (SCENE_SURFACES D16).
+fn layer_has_scene(layer: &manifold_core::layer::Layer) -> bool {
+    use manifold_core::effect_graph_def::render_scene_count;
+    if layer.layer_type != LayerType::Generator {
+        return false;
+    }
+    match layer.generator_graph() {
+        Some(def) => render_scene_count(&def.nodes) > 0,
+        None => manifold_nodes::bundled_presets::bundled_preset_def(layer.generator_type())
+            .is_some_and(|def| render_scene_count(&def.nodes) > 0),
+    }
+}
+
 pub(crate) fn build_card_modulation(
     inst: &PresetInstance,
     n: usize,
@@ -2342,5 +2390,72 @@ mod fire_meter_roundtrip_tests {
                  evaluators disagree about this instance's identity"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod scene_tab_tests {
+    use super::sync_inspector_data;
+    use crate::ui_root::UIRoot;
+    use manifold_core::{LayerId, PresetTypeId, layer::Layer, project::Project};
+    use manifold_ui::InspectorTab;
+
+    /// Layer 0 holds the bundled Scene preset (a `node.render_scene`); layer 1
+    /// is a plain Plasma generator; layer 2 is a second scene layer.
+    fn project() -> (Project, LayerId, LayerId, LayerId) {
+        let mut project = Project::default();
+        let scene = Layer::new_generator("Scene".into(), PresetTypeId::new("Scene"), 0);
+        let plain = Layer::new_generator("Plasma".into(), PresetTypeId::new("Plasma"), 1);
+        let other = Layer::new_generator("Scene 2".into(), PresetTypeId::new("Scene"), 2);
+        let ids = (scene.layer_id.clone(), plain.layer_id.clone(), other.layer_id.clone());
+        project.timeline.layers.extend([scene, plain, other]);
+        (project, ids.0, ids.1, ids.2)
+    }
+
+    fn sync(ui: &mut UIRoot, project: &Project, selection: &manifold_ui::UIState) {
+        sync_inspector_data(ui, project, None, selection, &[], None);
+    }
+
+    #[test]
+    fn scene_tab_present_only_for_scene_layer() {
+        let (project, scene, plain, _) = project();
+        let mut selection = manifold_ui::UIState::new();
+        selection.select_layer(scene);
+        let (tabs, _) = super::inspector_tabs(&project, None, &selection, InspectorTab::Layer);
+        assert_eq!(tabs, [InspectorTab::Layer, InspectorTab::Scene, InspectorTab::Master]);
+
+        selection.select_layer(plain);
+        let (tabs, _) = super::inspector_tabs(&project, None, &selection, InspectorTab::Layer);
+        assert_eq!(tabs, [InspectorTab::Layer, InspectorTab::Master]);
+    }
+
+    #[test]
+    fn scene_tab_falls_back_to_layer() {
+        let (project, scene, plain, other) = project();
+        let mut ui = UIRoot::new();
+        let mut selection = manifold_ui::UIState::new();
+        selection.select_layer(scene);
+        selection.pin_scope(InspectorTab::Scene);
+        sync(&mut ui, &project, &selection);
+        assert_eq!(ui.inspector.active_tab(), InspectorTab::Scene);
+        assert!(ui.scene_setup_panel.is_open(), "the Scene tab hosts the scene panel");
+
+        // Another scene layer keeps the Scene tab, as the old dock stayed open.
+        selection.select_layer(other.clone());
+        sync(&mut ui, &project, &selection);
+        assert_eq!(ui.inspector.active_tab(), InspectorTab::Scene);
+        assert_eq!(ui.scene_setup_panel.live_layer_id(), Some(&other));
+
+        // A layer without a scene falls back to the Layer tab and closes the panel.
+        selection.select_layer(plain);
+        sync(&mut ui, &project, &selection);
+        assert_eq!(ui.inspector.active_tab(), InspectorTab::Layer);
+        assert!(!ui.scene_setup_panel.is_open());
+
+        // A pinned Scene tab with no scene on the layer is ignored.
+        selection.pin_scope(InspectorTab::Scene);
+        sync(&mut ui, &project, &selection);
+        assert_eq!(ui.inspector.active_tab(), InspectorTab::Layer);
+        assert!(!ui.scene_setup_panel.is_open());
     }
 }

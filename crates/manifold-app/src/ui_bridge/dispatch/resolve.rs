@@ -283,7 +283,7 @@ pub(crate) fn ableton_mapping_target(
                     effect_type,
                     param_id: param_id.clone(),
                 }),
-                InspectorTab::Layer | InspectorTab::Group => Some(T::LayerEffect {
+                InspectorTab::Layer | InspectorTab::Group | InspectorTab::Scene => Some(T::LayerEffect {
                     layer_id: active_layer.clone()?,
                     effect_type,
                     param_id: param_id.clone(),

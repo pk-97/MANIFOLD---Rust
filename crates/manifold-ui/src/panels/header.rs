@@ -53,9 +53,8 @@ pub struct HeaderPanel {
     import_progress_visible: bool,
     time_display: String,
     zoom_label: String,
-    /// Whether the Audio Setup / Scene Setup docks are open — drives the two
-    /// header toggle buttons' active-state highlight (D2: "beside the Audio
-    /// button", mutually exclusive so at most one is ever true).
+    /// Whether the Audio Setup dock is open and whether the inspector shows
+    /// the Scene tab — drives the two header buttons' active highlight.
     audio_setup_open: bool,
     scene_setup_open: bool,
 }
@@ -426,14 +425,11 @@ mod tests {
     /// clock loses a single character.
     #[test]
     fn clock_survives_open_docks_at_1920() {
-        for (audio, scene) in [(true, false), (false, true)] {
+        for audio in [false, true] {
             let mut tree = UITree::new();
             let mut layout = ScreenLayout::new(1920.0, 1080.0);
             if audio {
                 layout.audio_setup_width = color::DEFAULT_AUDIO_SETUP_WIDTH;
-            }
-            if scene {
-                layout.scene_setup_width = color::DEFAULT_SCENE_SETUP_WIDTH;
             }
             let mut panel = HeaderPanel::new();
             panel.build(&mut tree, &layout);
@@ -451,7 +447,7 @@ mod tests {
     fn narrow_content_keeps_zoom_cluster_inside_header() {
         let mut tree = UITree::new();
         let mut layout = ScreenLayout::new(1440.0, 900.0);
-        layout.scene_setup_width = color::DEFAULT_SCENE_SETUP_WIDTH;
+        layout.audio_setup_width = color::DEFAULT_AUDIO_SETUP_WIDTH;
         let header = layout.header();
         let mut panel = HeaderPanel::new();
         panel.build(&mut tree, &layout);
