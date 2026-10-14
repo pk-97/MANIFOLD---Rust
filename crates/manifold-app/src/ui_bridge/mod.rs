@@ -26,6 +26,8 @@ pub(crate) use projection::trigger_routing::{TriggerRoutingCatalog, TriggerSourc
 // directly — they open the one `ScrubState.active` slot without going through
 // the `PanelAction::Scrub` wire (P-I, Fork-2).
 pub(crate) mod scrub;
+#[cfg(test)]
+mod selection_dispatch_tests;
 mod state_sync;
 mod transport;
 
@@ -237,10 +239,11 @@ pub fn dispatch(action: &PanelAction, ctx: &mut DispatchCtx) -> DispatchResult {
                 dispatch(changed, ctx);
                 dispatch(commit, ctx)
             }
-            // Inspector tab strip — mirrors the timeline selection.
+            // Inspector tab strip — mirrors the timeline selection. The scope
+            // pin and active layer are planner inputs.
             RootAction::SelectInspectorTab(tab) => {
                 inspector_select_tab(*tab, &ctx.project, ctx.selection, ctx.active_layer, ctx.ui);
-                DispatchResult::structural()
+                DispatchResult::handled()
             }
             // Opened at the Application layer (app_render) / ui_root before
             // dispatch; these arms only keep the match exhaustive and no-op if
@@ -292,9 +295,9 @@ pub fn dispatch(action: &PanelAction, ctx: &mut DispatchCtx) -> DispatchResult {
             | RootAction::AudioSendClicked(_)
             | RootAction::AudioDrawerClick(..)
             | RootAction::ClipTriggerDrawerClick(..) => DispatchResult::handled(),
-            // Panel already updated its UI-local selection; ride
-            // `structural_change: true` back so Properties follows this frame.
-            RootAction::SceneItemRightClicked => DispatchResult::structural(),
+            // The panel already updated its UI-local selection; its selection
+            // version rebuilds Properties this frame.
+            RootAction::SceneItemRightClicked => DispatchResult::handled(),
             RootAction::SceneItemMove(delta) => {
                 if let Some(item) = ctx.ui.scene_setup_panel.selected_scene_item() {
                     ContentCommand::send(ctx.content_tx, ContentCommand::SceneItem(crate::scene_item_transfer::SceneItemAction::Move {
@@ -308,10 +311,11 @@ pub fn dispatch(action: &PanelAction, ctx: &mut DispatchCtx) -> DispatchResult {
                 let action = if matches!(a, RootAction::SceneItemRename) {
                     ctx.ui.scene_setup_panel.rename_selection_action()
                 } else { ctx.ui.scene_setup_panel.frame_selection_action() };
+                // The queued action's own dispatch decides its work.
                 if let Some(action) = action { ctx.ui.pending_keyboard_actions.push(action); }
-                DispatchResult::structural()
+                DispatchResult::handled()
             }
-            RootAction::SceneSetupSelectionChanged(_) => DispatchResult::structural(),
+            RootAction::SceneSetupSelectionChanged(_) => DispatchResult::handled(),
             // Audio Setup dock toggle (headless-harness path; the live app
             // toggles in app_render). The dock's view version moves the
             // rebuild and its device query.
@@ -328,7 +332,7 @@ pub fn dispatch(action: &PanelAction, ctx: &mut DispatchCtx) -> DispatchResult {
                     InspectorTab::Scene
                 };
                 inspector_select_tab(tab, &ctx.project, ctx.selection, ctx.active_layer, ctx.ui);
-                DispatchResult::structural()
+                DispatchResult::handled()
             }
             // RT Quality overlay (headless-harness path; the live app opens it
             // in app_render's PanelAction loop). The overlay open set is a

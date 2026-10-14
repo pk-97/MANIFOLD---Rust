@@ -68,16 +68,17 @@
       "point_drag_1s": {
         "ChromeLayout": 189,
         "ClipProjection": 3,
-        "FrameAlloc": 36014,
+        "FrameAlloc": 35620,
         "FullBuild": 3,
         "GridBitmapRepaint": 22,
         "InspectorSync": 3,
         "LaneProjection": 64,
-        "OverviewRepaint": 63,
+        "OverviewRepaint": 3,
+        "PresetListProjection": 2,
         "ProjectSync": 3,
         "RegionRebuild": 59,
         "SlotInvalidate": 139,
-        "ValuePush": 63
+        "ValuePush": 62
       }
     },
     "work-band-split": {
@@ -99,36 +100,36 @@
     },
     "work-clip-drag": {
       "drag_2s": {
-        "ChromeLayout": 370,
+        "ChromeLayout": 369,
         "ClipProjection": 120,
-        "FrameAlloc": 68441,
-        "FullBuild": 3,
+        "FrameAlloc": 67792,
+        "FullBuild": 4,
         "GridBitmapRepaint": 22,
         "InspectorSync": 3,
         "LaneProjection": 7,
-        "OverviewRepaint": 123,
+        "OverviewRepaint": 120,
+        "PresetListProjection": 2,
         "ProjectSync": 3,
-        "RegionRebuild": 119,
-        "SlotInvalidate": 259,
-        "TextMeasureMiss": 1,
-        "ValuePush": 123
+        "RegionRebuild": 118,
+        "SlotInvalidate": 264,
+        "ValuePush": 122
       }
     },
     "work-clip-trim": {
       "trim_1s": {
-        "ChromeLayout": 190,
+        "ChromeLayout": 189,
         "ClipProjection": 61,
-        "FrameAlloc": 35704,
-        "FullBuild": 3,
+        "FrameAlloc": 35414,
+        "FullBuild": 4,
         "GridBitmapRepaint": 22,
         "InspectorSync": 3,
         "LaneProjection": 7,
-        "OverviewRepaint": 63,
+        "OverviewRepaint": 61,
+        "PresetListProjection": 2,
         "ProjectSync": 3,
-        "RegionRebuild": 59,
-        "SlotInvalidate": 139,
-        "TextMeasureMiss": 1,
-        "ValuePush": 63
+        "RegionRebuild": 58,
+        "SlotInvalidate": 144,
+        "ValuePush": 62
       }
     },
     "work-clock-jitter": {
@@ -142,18 +143,17 @@
     },
     "work-cursor-nav": {
       "four_cursor_moves": {
-        "ChromeLayout": 13,
+        "ChromeLayout": 12,
         "ClipProjection": 1,
-        "FrameAlloc": 2104,
-        "FullBuild": 1,
+        "FrameAlloc": 2440,
+        "FullBuild": 2,
         "GridBitmapRepaint": 7,
         "InspectorSync": 1,
         "LaneProjection": 6,
-        "OverviewRepaint": 4,
+        "OverviewRepaint": 1,
         "ProjectSync": 1,
-        "SlotInvalidate": 7,
-        "TextMeasureMiss": 1,
-        "ValuePush": 4
+        "SlotInvalidate": 14,
+        "ValuePush": 2
       }
     },
     "work-dock-scroll": {
@@ -312,19 +312,19 @@
     },
     "work-marquee": {
       "marquee_1s": {
-        "ChromeLayout": 190,
+        "ChromeLayout": 189,
         "ClipProjection": 62,
-        "FrameAlloc": 35846,
-        "FullBuild": 3,
+        "FrameAlloc": 35555,
+        "FullBuild": 4,
         "GridBitmapRepaint": 21,
         "InspectorSync": 3,
         "LaneProjection": 7,
-        "OverviewRepaint": 63,
+        "OverviewRepaint": 62,
+        "PresetListProjection": 2,
         "ProjectSync": 3,
-        "RegionRebuild": 59,
-        "SlotInvalidate": 139,
-        "TextMeasureMiss": 1,
-        "ValuePush": 63
+        "RegionRebuild": 58,
+        "SlotInvalidate": 144,
+        "ValuePush": 62
       }
     },
     "work-modifier": {
@@ -338,18 +338,17 @@
     },
     "work-paused-cursor": {
       "cursor_select_cursor_paused": {
-        "ChromeLayout": 100,
+        "ChromeLayout": 99,
         "ClipProjection": 3,
-        "FrameAlloc": 8371,
-        "FullBuild": 3,
+        "FrameAlloc": 6811,
+        "FullBuild": 4,
         "GridBitmapRepaint": 21,
         "InspectorSync": 3,
         "LaneProjection": 9,
-        "OverviewRepaint": 33,
+        "OverviewRepaint": 3,
         "ProjectSync": 3,
-        "SlotInvalidate": 21,
-        "TextMeasureMiss": 1,
-        "ValuePush": 33
+        "SlotInvalidate": 28,
+        "ValuePush": 4
       }
     },
     "work-playback": {
@@ -410,18 +409,16 @@
     },
     "work-select-click": {
       "select_clip": {
-        "ChromeLayout": 4,
+        "ChromeLayout": 3,
         "ClipProjection": 1,
-        "FrameAlloc": 1308,
+        "FrameAlloc": 1253,
         "FullBuild": 1,
         "GridBitmapRepaint": 7,
         "InspectorSync": 1,
         "LaneProjection": 3,
         "OverviewRepaint": 1,
-        "PresetListProjection": 1,
         "ProjectSync": 1,
         "SlotInvalidate": 7,
-        "TextMeasureMiss": 1,
         "ValuePush": 1
       }
     },

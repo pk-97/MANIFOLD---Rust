@@ -146,6 +146,7 @@ impl ScenePanel {
                 PanelAction::Params(ParamsAction::ModifierCardClicked(_))
             )
         }) {
+            self.note_selection(&info.layer_id);
             return Some(vec![PanelAction::Root(
                 RootAction::SceneSetupSelectionChanged(info.layer_id),
             )]);

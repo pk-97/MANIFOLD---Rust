@@ -252,6 +252,8 @@ pub(crate) struct FrameInputs {
     /// The overview strip's playhead only.
     pub playhead_px: i32,
     pub inspector_view: u64,
+    /// The Scene panel's outliner selection (its Properties body).
+    pub scene_selection: u64,
     pub inspector_scroll_px: i32,
     pub dock_view: u64,
     pub dock_scroll_px: i32,
@@ -522,6 +524,7 @@ fn plan_regions(
     if size(inspector)
         || projections.contains(Projection::InspectorSync)
         || last.inspector_view != next.inspector_view
+        || last.scene_selection != next.scene_selection
     {
         rebuild.insert(inspector);
     } else if origin(inspector) {
@@ -1000,6 +1003,13 @@ mod tests {
         let mut next = base();
         next.inspector_view = 1;
         assert!(plan(next).rebuild.contains(r));
+        // The Scene panel's selection rebuilds its Properties body, no sync.
+        let mut next = base();
+        next.scene_selection = 1;
+        let p = plan(next);
+        assert!(p.rebuild.contains(r));
+        assert!(!p.projections.contains(Projection::InspectorSync));
+        assert!(!p.projections.contains(Projection::ProjectSync));
         assert!(plan(moved(r)).translate.contains(r));
         let mut next = base();
         next.inspector_scroll_px = 12;

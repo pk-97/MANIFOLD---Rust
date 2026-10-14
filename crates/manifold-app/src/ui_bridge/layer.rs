@@ -152,7 +152,7 @@ pub(super) fn dispatch_layer(
                 }
             }
 
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
         LayerAction::LayerDoubleClicked(_id) => {
             // Intercepted by app.rs — opens text input for layer rename
