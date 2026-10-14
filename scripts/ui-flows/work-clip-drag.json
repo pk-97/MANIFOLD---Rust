@@ -12,5 +12,6 @@
       "selector": { "Surface": { "surface": "timeline_clips", "kind": "clip", "label": "Plasma 1" } },
       "check": "Exists"
     }
-  }
+  },
+  "AssertFresh"
 ]

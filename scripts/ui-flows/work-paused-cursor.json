@@ -11,5 +11,6 @@
   { "Step": { "frames": 10 } },
   { "Pointer": { "target": { "Point": { "x": 1440.0, "y": 700.0 } }, "gesture": { "Click": { "modifiers": {} } } } },
   { "Step": { "frames": 10 } },
-  { "AssertWork": { "window": "cursor_select_cursor_paused" } }
+  { "AssertWork": { "window": "cursor_select_cursor_paused" } },
+  "AssertFresh"
 ]
