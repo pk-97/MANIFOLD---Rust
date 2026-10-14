@@ -21,6 +21,9 @@ for entry in table:
     if not os.path.exists(snippet):
         failures.append(f"{entry['topic']}: snippet missing ({entry['snippet']})")
     for g in entry.get("globs", []):
+        # Scratchpad files live outside the repo by design, so nothing tracked can match.
+        if "/scratchpad/" in g:
+            continue
         # hook matches absolute paths; ls-files is repo-relative — test with a slash prefix
         if not any(fnmatch.fnmatch("/" + f, g) for f in files):
             failures.append(f"{entry['topic']}: glob matches no tracked file ({g})")

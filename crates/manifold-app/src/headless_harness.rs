@@ -102,6 +102,7 @@ pub(crate) fn headless_content_thread(project: Project, w: u32, h: u32) -> Conte
         link_beat_offset: f64::NAN,
         #[cfg(test)]
         test_tempo_source: None,
+        rig_probe: crate::sync_rig_log::TickProbe::default(),
         led_controller: None,
         led_preview: crate::content_state::LedPreview::None,
         led_preview_version: 0,

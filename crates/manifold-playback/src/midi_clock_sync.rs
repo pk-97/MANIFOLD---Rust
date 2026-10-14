@@ -131,10 +131,18 @@ impl MidiClockReceiver {
         let connection = match midi_in.connect(
             port,
             "manifold-clock-conn",
-            move |_timestamp_us: u64, message: &[u8], state_arc: &mut Arc<AtomicClockState>| {
+            move |timestamp_us: u64, message: &[u8], state_arc: &mut Arc<AtomicClockState>| {
                 if message.is_empty() {
                     return;
                 }
+                // Rig log (C0): every message with midir's stamp and ours.
+                crate::rig_log::emit(crate::rig_log::RigRecord::ClkByte {
+                    at_ns: crate::rig_log::now_ns(),
+                    midir_us: timestamp_us,
+                    status: message[0],
+                    d1: message.get(1).copied().unwrap_or(0),
+                    d2: message.get(2).copied().unwrap_or(0),
+                });
 
                 let status = message[0];
 
