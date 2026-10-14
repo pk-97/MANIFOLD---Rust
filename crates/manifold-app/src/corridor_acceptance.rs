@@ -978,7 +978,7 @@ fn modifier_live_scrub_keeps_runtime_couplings_through_undo_redo() {
                 crate::ui_bridge::dispatch(
                     &action,
                     &mut crate::ui_bridge::DispatchCtx {
-                        project: &mut local,
+                        project: crate::ui_bridge::ProjectRef::new(&mut local, &mut Default::default(), &content_tx),
                         content_tx: &content_tx,
                         content_state: &state,
                         ui: &mut ui,
@@ -987,7 +987,6 @@ fn modifier_live_scrub_keeps_runtime_couplings_through_undo_redo() {
                         user_prefs: &mut prefs,
                         editor_target: None,
                         scrub: &mut scrub,
-                        stamps: &mut Default::default(),
                         dialogs: Default::default(),
                     },
                 );

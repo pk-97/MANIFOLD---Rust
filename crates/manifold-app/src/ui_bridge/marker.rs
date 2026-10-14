@@ -1,7 +1,6 @@
 //! Marker-related dispatch: click, drag, delete, rename.
 use manifold_core::Beats;
 use manifold_core::MarkerId;
-use manifold_core::project::Project;
 use manifold_editing::commands::marker::{DeleteMarkerCommand, MoveMarkerCommand};
 use manifold_ui::MarkerAction;
 
@@ -13,8 +12,8 @@ use crate::ui_root::UIRoot;
 
 pub(super) fn dispatch_marker(
     action: &MarkerAction,
-    project: &mut Project,
-    content_tx: &crossbeam_channel::Sender<ContentCommand>,
+    project: &mut crate::ui_bridge::ProjectRef<'_>,
+    _content_tx: &crossbeam_channel::Sender<ContentCommand>,
     _ui: &mut UIRoot,
     selection: &mut SelectionState,
     scrub: &mut ScrubState,
@@ -60,10 +59,13 @@ pub(super) fn dispatch_marker(
         // ── Drag move: update marker position for live preview ─
         MarkerAction::MarkerDragMoved(marker_id_str, new_beat) => {
             let marker_id = MarkerId::new(marker_id_str.as_str());
-            if let Some(marker) = project.timeline.find_marker_mut(&marker_id) {
-                marker.beat = Beats::from_f32(*new_beat);
-            }
-            project.timeline.sort_markers();
+            let beat = Beats::from_f32(*new_beat);
+            project.preview(|p| {
+                if let Some(marker) = p.timeline.find_marker_mut(&marker_id) {
+                    marker.beat = beat;
+                }
+                p.timeline.sort_markers();
+            });
             if let Some(ResolvedScrub::Marker { live, .. }) = &mut scrub.active {
                 *live = *new_beat;
             }
@@ -82,19 +84,20 @@ pub(super) fn dispatch_marker(
                 // Only commit if the marker actually moved
                 if (old_beat - *final_beat).abs() > 0.001 {
                     // Undo the live preview mutation first — the command will redo it
-                    if let Some(marker) = project.timeline.find_marker_mut(&marker_id) {
-                        marker.beat = Beats::from_f32(old_beat);
-                    }
-                    project.timeline.sort_markers();
+                    project.preview(|p| {
+                        if let Some(marker) = p.timeline.find_marker_mut(&marker_id) {
+                            marker.beat = Beats::from_f32(old_beat);
+                        }
+                        p.timeline.sort_markers();
+                    });
 
-                    let mut cmd: Box<dyn manifold_editing::command::Command + Send> =
+                    let cmd: Box<dyn manifold_editing::command::Command + Send> =
                         Box::new(MoveMarkerCommand::new(
                             marker_id,
                             Beats::from_f32(old_beat),
                             Beats::from_f32(*final_beat),
                         ));
-                    cmd.execute(project);
-                    ContentCommand::send(content_tx, ContentCommand::Execute(cmd));
+                    project.execute(cmd);
                 }
             }
             DispatchResult::structural()
@@ -115,15 +118,11 @@ pub(super) fn dispatch_marker(
 
             let mut commands: Vec<Box<dyn manifold_editing::command::Command>> = Vec::new();
             for id in &ids {
-                let mut cmd: Box<dyn manifold_editing::command::Command + Send> =
+                let cmd: Box<dyn manifold_editing::command::Command + Send> =
                     Box::new(DeleteMarkerCommand::new(id.clone()));
-                cmd.execute(project);
                 commands.push(cmd);
             }
-            ContentCommand::send(
-                content_tx,
-                ContentCommand::ExecuteBatch(commands, "Delete Markers".into()),
-            );
+            project.execute_batch(commands, "Delete Markers".into());
             selection.clear_marker_selection();
             DispatchResult::structural()
         }

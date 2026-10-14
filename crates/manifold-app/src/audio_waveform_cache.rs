@@ -50,6 +50,8 @@ pub struct AudioWaveformCache {
     next_request_id: u64,
     tx: Sender<DecodeCompletion>,
     rx: Receiver<DecodeCompletion>,
+    /// The Clips/Layers stamp key the clip list was last walked at.
+    clips_key: Option<u64>,
 }
 
 impl Default for AudioWaveformCache {
@@ -61,6 +63,7 @@ impl Default for AudioWaveformCache {
             next_request_id: 0,
             tx,
             rx,
+            clips_key: None,
         }
     }
 }
@@ -71,6 +74,36 @@ impl AudioWaveformCache {
     pub fn renderer(&self, clip_id: &ClipId) -> Option<Arc<WaveformRenderer>> {
         let source = self.clips.get(clip_id)?.source.as_ref();
         self.sources.get(source)?.renderer.clone()
+    }
+
+    /// Per-frame driver keyed on the Clips/Layers stamps: finished decodes
+    /// drain every frame, but the clip list is gathered (and requests and
+    /// eviction run) only when `clips_key` moved, so a steady frame walks and
+    /// allocates nothing. Eviction grace therefore counts clip-list changes.
+    #[must_use]
+    pub fn drive(
+        &mut self,
+        clips_key: u64,
+        gather: impl FnOnce() -> Vec<(ClipId, String)>,
+    ) -> bool {
+        if self.clips_key == Some(clips_key) {
+            return self.drain_completions();
+        }
+        self.clips_key = Some(clips_key);
+        self.poll_and_request(&gather())
+    }
+
+    fn drain_completions(&mut self) -> bool {
+        let mut changed = false;
+        while let Ok(completion) = self.rx.try_recv() {
+            if let Some(source) = self.sources.get_mut(completion.source.as_ref())
+                && source.request_id == completion.request_id
+            {
+                source.renderer = Some(Arc::new(completion.renderer));
+                changed = true;
+            }
+        }
+        changed
     }
 
     /// Drive the cache using the production background decoder.
@@ -95,15 +128,7 @@ impl AudioWaveformCache {
     where
         F: FnMut(&Sender<DecodeCompletion>, Arc<str>, u64),
     {
-        let mut changed = false;
-        while let Ok(completion) = self.rx.try_recv() {
-            if let Some(source) = self.sources.get_mut(completion.source.as_ref())
-                && source.request_id == completion.request_id
-            {
-                source.renderer = Some(Arc::new(completion.renderer));
-                changed = true;
-            }
-        }
+        let mut changed = self.drain_completions();
 
         // Increment first, then reset entries seen in this poll. This keeps
         // the steady path allocation-free and avoids temporary live-ID sets.
@@ -223,6 +248,20 @@ impl AudioWaveformCache {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// P4c: the clip list is gathered only when the Clips/Layers key moves.
+    #[test]
+    fn drive_gathers_only_when_the_key_moves() {
+        let mut cache = AudioWaveformCache::default();
+        let mut walks = 0;
+        for key in [1, 1, 1, 2, 2] {
+            let _ = cache.drive(key, || {
+                walks += 1;
+                Vec::new()
+            });
+        }
+        assert_eq!(walks, 2);
+    }
 
     fn ready_renderer() -> WaveformRenderer {
         let mut renderer = WaveformRenderer::new();

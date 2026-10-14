@@ -826,6 +826,41 @@ fn change_effect_param_undo_roundtrip() {
     );
 }
 
+/// UI_INVALIDATION D21/D22: a plain value declares Values; a scene feature
+/// switch also decides which rows exist, so it declares Effects too, read from
+/// the project at execute and undo.
+#[test]
+fn change_graph_param_switch_declares_effects() {
+    use manifold_core::change::{ChangeSet, Part};
+    use manifold_editing::command::Command;
+    use manifold_core::scene_surface::{CardLabel, ControlGroup, Feature, SceneParamDesc, SurfaceRole};
+    let mut project = make_test_project();
+    let mut fx = PresetInstance::new(PresetTypeId::BLOOM);
+    let mut switch = slot("dof_on", 0.0, true);
+    switch.spec.scene = Some(SceneParamDesc {
+        role: SurfaceRole::Setup,
+        group: ControlGroup::DepthOfField,
+        band: None,
+        card_order: 0,
+        card_label: CardLabel::Param,
+        gate: None,
+        switch: Some(Feature::DepthOfField),
+    });
+    fx.params = manifold_core::params::ParamManifest::from_params(vec![slot("amount", 0.5, true), switch]);
+    fx.base_tracked = true;
+    project.settings.master_effects.push(fx);
+    let target = manifold_core::GraphTarget::Effect(project.settings.master_effects[0].id.clone());
+
+    let mut plain = ChangeGraphParamCommand::new(target.clone(), "amount", 0.5, 0.9);
+    plain.execute(&mut project);
+    assert_eq!(plain.touches(), ChangeSet::of(&[Part::Values]));
+    let mut flip = ChangeGraphParamCommand::new(target, "dof_on", 0.0, 1.0);
+    flip.execute(&mut project);
+    assert_eq!(flip.touches(), ChangeSet::of(&[Part::Values, Part::Effects]));
+    flip.undo(&mut project);
+    assert_eq!(flip.touches(), ChangeSet::of(&[Part::Values, Part::Effects]));
+}
+
 #[test]
 fn change_effect_param_unknown_id_is_no_op() {
     // An undo entry that targets a param id which has been dropped

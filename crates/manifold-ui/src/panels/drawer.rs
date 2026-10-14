@@ -375,6 +375,11 @@ impl DrawerIds {
         }
     }
 
+    /// The last button in flat order.
+    pub fn last_button(&self) -> Option<NodeId> {
+        self.button_ids.last().copied()
+    }
+
     /// Number of addressable buttons.
     pub fn button_count(&self) -> usize {
         self.button_ids.len()

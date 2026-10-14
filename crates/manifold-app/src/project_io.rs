@@ -126,32 +126,6 @@ pub(crate) fn snapshot_and_prune_embedded_presets(project: &mut Project) {
     project.prune_stale_snapshots(&referenced_ids);
 }
 
-/// A cheap fingerprint of a project's embedded ("forked") presets, used by the
-/// content thread to decide whether an editing command changed the fork set and
-/// the catalog overlay must be re-derived. `0` when there are no forks (the
-/// common case) so the per-edit check is a single integer compare; with forks
-/// present it hashes each preset's id + serialized def, which catches both a
-/// new fork and an in-place recalibration of an existing one.
-pub(crate) fn embedded_presets_fingerprint(project: &Project) -> u64 {
-    manifold_core::work_count::record_work(manifold_core::work_count::WorkKind::PresetFingerprint);
-    use std::hash::{Hash, Hasher};
-    if project.embedded_presets.is_empty() {
-        return 0;
-    }
-    let mut h = ahash::AHasher::default();
-    for p in &project.embedded_presets {
-        if let Some(id) = p.id() {
-            id.as_str().hash(&mut h);
-        }
-        if let Ok(json) = serde_json::to_string(&p.def) {
-            json.hash(&mut h);
-        }
-    }
-    // Never collide with the empty-set sentinel.
-    let f = h.finish();
-    if f == 0 { 1 } else { f }
-}
-
 // ── Constants — Unity ProjectIOService lines 25-28 ──────────────────
 
 const FILE_DROP_DEFAULT_DURATION_BEATS: f32 = 4.0;

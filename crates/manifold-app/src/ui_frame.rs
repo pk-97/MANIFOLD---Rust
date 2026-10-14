@@ -295,8 +295,8 @@ pub(crate) struct PushInputs<'a> {
 }
 
 /// This frame's planner inputs (D6), read from the UI's own state. Region
-/// rects, panel view versions, overlay and chrome display keys stay at their
-/// defaults until the phases that make them live (P4c, P4e).
+/// rects stay at their defaults until per-region storage makes them live
+/// (P4e).
 pub(crate) fn gather_frame_inputs(
     planner: &mut crate::frame_plan::FramePlanner,
     ui_root: &UIRoot,
@@ -304,6 +304,7 @@ pub(crate) fn gather_frame_inputs(
     active_layer: &Option<manifold_core::LayerId>,
     edits: &crate::gesture_preview::UiEdits,
     content_state: &crate::content_state::ContentState,
+    chrome: crate::frame_plan::ChromeSource<'_>,
 ) -> crate::frame_plan::FrameInputs {
     crate::frame_plan::FrameInputs {
         parts: edits.stamps.parts(),
@@ -313,13 +314,19 @@ pub(crate) fn gather_frame_inputs(
         cursor: selection.cursor_version(),
         active_layer: planner.active_layer_version(active_layer),
         automation_view: selection.automation_view(),
+        chrome: planner.chrome_inputs(content_state, &chrome),
         scroll_x_px: ui_root.viewport.beat_to_pixel(Beats::ZERO).round() as i32,
         scroll_y_px: ui_root.viewport.scroll_y_px().round() as i32,
         zoom_bits: ui_root.viewport.pixels_per_beat().to_bits(),
         playhead_px: ui_root.viewport.playhead_pixel().map_or(i32::MIN, |px| px.round() as i32),
+        inspector_view: ui_root.inspector.view_version(),
+        dock_view: ui_root.audio_setup_panel.view_version(),
+        overlays: ui_root.overlays_version(),
         audio_directory: content_state.audio_directory_version,
         values: content_state.values_seq,
         runtime: content_state.runtime,
+        driver_period_key: content_state.bpm.to_bits(),
+        led_enabled: content_state.led_enabled,
         ..Default::default()
     }
 }
@@ -360,8 +367,27 @@ pub(crate) fn apply_frame_plan(
         id.as_ref().and_then(|id| project.timeline.find_layer_index_by_id(id))
     };
 
-    let project_sync = changes.structural || projections.contains(Projection::ProjectSync);
+    let structural = changes.structural;
+    let project_sync = structural || projections.contains(Projection::ProjectSync);
     let inspector_sync = project_sync || projections.contains(Projection::InspectorSync);
+    if structural || projections.contains(Projection::PresetList) {
+        ui_root.sync_embedded_presets(project);
+    }
+    // The content clock's bpm, before the inspector projection reads it. A
+    // moved frame-aligned period is rewritten in place after the build
+    // (D20), never a structural sync.
+    let mut driver_periods_moved = false;
+    let mut editor_ui_root = editor_ui_root;
+    if (structural || projections.contains(Projection::DriverReadout))
+        && push.content_state.bpm.is_finite()
+        && push.content_state.bpm > 0.0
+    {
+        let bpm = manifold_core::Bpm(push.content_state.bpm as f32);
+        driver_periods_moved = ui_root.sync_driver_bpm(project, bpm);
+        if let Some(ed) = editor_ui_root.as_deref_mut() {
+            ed.sync_driver_bpm(project, bpm);
+        }
+    }
     if project_sync {
         let idx = active_idx(project, active_layer);
         crate::ui_bridge::sync_automation_lane_order(project, selection);
@@ -371,12 +397,17 @@ pub(crate) fn apply_frame_plan(
         let idx = active_idx(project, active_layer);
         crate::ui_bridge::sync_inspector_data(ui_root, project, idx, selection, latched, led_preview);
     }
+    // The dock's device query keys on its own inputs, not on every inspector
+    // sync (P4c).
+    if structural || projections.contains(Projection::AudioDevices) {
+        crate::ui_bridge::sync_audio_dock(ui_root, project);
+    }
     // A projection rewrote the inspector or the timeline lists: rebuild.
     let needs_structural_sync = inspector_sync;
     // Mirror the inspector sync onto the editor window's own inspector so its
     // column stays in lockstep with the main one; reconfigure (which resets
     // transient card state) fires only when it does for the main window.
-    if inspector_sync && let Some(ed) = editor_ui_root {
+    if inspector_sync && let Some(ed) = editor_ui_root.as_deref_mut() {
         let idx = active_idx(project, active_layer);
         crate::ui_bridge::sync_inspector_data(ed, project, idx, selection, latched, led_preview);
         // The editor column hosts no scene panel (SCENE_SURFACES D16).
@@ -395,7 +426,7 @@ pub(crate) fn apply_frame_plan(
     // build. Opening one flags `overlay_dirty`; a close by any path only flips
     // `is_open`, so the open-set comparison catches both and feeds the visual
     // rebuild that re-records the overlay region.
-    if std::mem::take(&mut ui_root.overlay_dirty) {
+    if ui_root.take_overlay_dirty() {
         flags.scroll_dirty.visual = true;
     }
     if ui_root.detect_overlay_open_change() {
@@ -422,24 +453,39 @@ pub(crate) fn apply_frame_plan(
     let rebuilt = apply_ui_frame_invalidations(ui_root, cache, &mut signals);
     *flags.needs_rebuild = signals.needs_rebuild;
 
-    // Push engine state AFTER build so new nodes get state. The selection
-    // push runs on its inputs, or when a projection or rebuild replaced the
-    // nodes and lists it writes.
+    // Push engine state AFTER build so new nodes get state. Each push runs on
+    // its own inputs, or when a projection or rebuild replaced the nodes and
+    // lists it writes.
     let idx = active_idx(project, active_layer);
+    let replaced = rebuilt || inspector_sync;
     crate::ui_bridge::drain_events(ui_root, push.content_state);
-    crate::ui_bridge::push_chrome(
-        ui_root,
-        project,
-        push.content_state,
-        selection,
-        push.is_dirty,
-        push.project_path,
-        push.transport_cache,
-    );
-    if rebuilt || project_sync || projections.contains(Projection::SelectionPush) {
+    if replaced || projections.contains(Projection::ChromePush) {
+        crate::ui_bridge::push_chrome(
+            ui_root,
+            project,
+            push.content_state,
+            selection,
+            push.is_dirty,
+            push.project_path,
+            push.transport_cache,
+        );
+    }
+    if replaced || projections.contains(Projection::SelectionPush) {
         crate::ui_bridge::push_selection(ui_root, project, idx, selection);
     }
-    crate::ui_bridge::push_live(ui_root, project, push.content_state, idx);
+    crate::ui_bridge::push_frame(ui_root, project, push.content_state, idx);
+    let live = projections.contains(Projection::LiveValues)
+        || projections.contains(Projection::LiveShapes)
+        || projections.contains(Projection::LiveRanges);
+    if replaced || live {
+        crate::ui_bridge::push_live(ui_root, project, push.content_state, idx);
+    }
+    if driver_periods_moved {
+        crate::ui_bridge::sync_driver_readouts(ui_root, project, idx);
+        if let Some(ed) = editor_ui_root {
+            crate::ui_bridge::sync_driver_readouts(ed, project, idx);
+        }
+    }
 
     // Re-project clips and automation lanes only when their source moved: a
     // committed edit, a drag preview, or the old drag flags.

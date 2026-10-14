@@ -197,6 +197,8 @@ pub struct ContentThread {
     pub cached_perc_message: Arc<str>,
     /// Last-sent MIDI device names — only reallocated when the list changes.
     pub last_sent_midi_device_names: Arc<[String]>,
+    /// Last-sent Ableton session; sent every tick, replaced only when the session changes, so the UI can compare by pointer.
+    pub last_sent_ableton_session: Option<Arc<manifold_playback::ableton_bridge::AbletonSession>>,
 
     /// Stamps the reaction pass last reacted to, and what it retains between
     /// passes (docs/UI_INVALIDATION_DESIGN.md D4).
@@ -1280,12 +1282,13 @@ impl ContentThread {
         } else {
             None
         };
-        let ableton_session = if self.ableton_bridge.session_changed() {
+        // Sent every tick as the retained Arc: a coalesced UI drain keeps only
+        // the latest state, so a one-shot Some would be lost.
+        if self.ableton_bridge.session_changed() {
             self.reactions.runtime.ableton_session += 1;
-            Some(Arc::new(self.ableton_bridge.session().clone()))
-        } else {
-            None
-        };
+            self.last_sent_ableton_session = Some(Arc::new(self.ableton_bridge.session().clone()));
+        }
+        let ableton_session = self.last_sent_ableton_session.clone();
         let runtime = self.track_runtime_seqs();
 
         // Update cached Arc<str> only when underlying values change.

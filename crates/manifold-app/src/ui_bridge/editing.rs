@@ -1,11 +1,9 @@
 //! Editing-related dispatch: clip interaction, context menus, drag actions.
 use manifold_core::PresetTypeId;
-use manifold_core::project::Project;
 use manifold_core::types::LayerType;
 use manifold_core::{Beats, ClipId, LayerId};
 use manifold_core::effects::{AutomationPoint, SegmentShape};
 use manifold_editing::commands::automation::MoveAutomationPointCommand;
-use manifold_editing::command::Command;
 use manifold_editing::commands::layer::{AddLayerCommand, DeleteLayerCommand};
 use manifold_editing::service::EditingService;
 use manifold_ui::EditingAction;
@@ -18,7 +16,7 @@ use crate::input_host::automation;
 
 pub(super) fn dispatch_editing(
     action: &EditingAction,
-    project: &mut Project,
+    project: &mut crate::ui_bridge::ProjectRef<'_>,
     content_tx: &crossbeam_channel::Sender<crate::content_command::ContentCommand>,
     content_state: &crate::content_state::ContentState,
     ui: &mut UIRoot,
@@ -110,14 +108,9 @@ pub(super) fn dispatch_editing(
             let snapped = manifold_ui::snap::floor_beat_to_grid(Beats::from_f32(*beat), grid_step);
             {
                 // AddClipCommand enforces non-overlap internally.
-                if let Some((cmd, clip_id)) = EditingService::create_clip_at_position(
-                    project,
-                    snapped,
-                    *layer,
-                    Beats::from_f32(4.0),
-                ) {
-                    ContentCommand::send(content_tx, ContentCommand::Execute(cmd));
-
+                if let Some(clip_id) = project.executed_by(|p| {
+                    EditingService::create_clip_at_position(p, snapped, *layer, Beats::from_f32(4.0))
+                }) {
                     // Select the newly created clip
                     let new_lid = project
                         .timeline
@@ -179,7 +172,7 @@ pub(super) fn dispatch_editing(
             {
                 // Calculate region from the single clip for proper offset
                 let mut region = manifold_core::selection::SelectionRegion::default();
-                if let Some(clip) = project.timeline.find_clip_by_id(&clip_id) {
+                if let Some(clip) = project.find_clip_by_id(&clip_id) {
                     region.start_beat = clip.start_beat;
                     region.end_beat = clip.start_beat + clip.duration_beats;
                     region.is_active = true;
@@ -222,10 +215,9 @@ pub(super) fn dispatch_editing(
                     let cmd =
                         AddLayerCommand::new(name, LayerType::Video, PresetTypeId::NONE, idx, None);
                     {
-                        let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
+                        let boxed: Box<dyn manifold_editing::command::Command + Send> =
                             Box::new(cmd);
-                        boxed.execute(project);
-                        ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+                        project.execute(boxed);
                     }
                 }
             }
@@ -269,10 +261,9 @@ pub(super) fn dispatch_editing(
                         None,
                     );
                     {
-                        let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
+                        let boxed: Box<dyn manifold_editing::command::Command + Send> =
                             Box::new(cmd);
-                        boxed.execute(project);
-                        ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+                        project.execute(boxed);
                     }
                 }
             }
@@ -286,10 +277,9 @@ pub(super) fn dispatch_editing(
                     let cmd =
                         AddLayerCommand::new(name, LayerType::Audio, PresetTypeId::NONE, idx, None);
                     {
-                        let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
+                        let boxed: Box<dyn manifold_editing::command::Command + Send> =
                             Box::new(cmd);
-                        boxed.execute(project);
-                        ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+                        project.execute(boxed);
                     }
                 }
             }
@@ -304,10 +294,9 @@ pub(super) fn dispatch_editing(
                     let layer = layer.clone();
                     let cmd = DeleteLayerCommand::new(layer);
                     {
-                        let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
+                        let boxed: Box<dyn manifold_editing::command::Command + Send> =
                             Box::new(cmd);
-                        boxed.execute(project);
-                        ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+                        project.execute(boxed);
                     }
                 }
             }
@@ -328,12 +317,8 @@ pub(super) fn dispatch_editing(
                     } else {
                         vec![layer_id.clone()]
                     };
-                    if let Some(mut cmd) = EditingService::duplicate_layers(project, &ids) {
-                        cmd.execute(project);
-                        ContentCommand::send(
-                            content_tx,
-                            ContentCommand::ExecuteBatch(vec![cmd], "Duplicate Layers".to_string()),
-                        );
+                    if let Some(cmd) = EditingService::duplicate_layers(project, &ids) {
+                        project.execute_batch(vec![cmd], "Duplicate Layers".to_string());
                     }
                 }
             }
@@ -348,25 +333,29 @@ pub(super) fn dispatch_editing(
         EditingAction::ContextAutomationCut(target, param_id, _beat) => {
             automation::set_lane_context(selection, target, param_id);
             let mut needs_rebuild = false;
-            automation::cut_selected(project, selection, content_tx, &mut needs_rebuild);
+            project.with_sent(crate::content_command::touch::AUTOMATION, |p| {
+                automation::cut_selected(p, selection, content_tx, &mut needs_rebuild)
+            });
             DispatchResult::structural()
         }
         EditingAction::ContextAutomationPaste(target, param_id, beat) => {
             automation::set_lane_context(selection, target, param_id);
             let mut needs_rebuild = false;
-            automation::paste(project, selection, content_tx, *beat, &mut needs_rebuild);
+            project.with_sent(crate::content_command::touch::AUTOMATION, |p| {
+                automation::paste(p, selection, content_tx, *beat, &mut needs_rebuild)
+            });
             DispatchResult::structural()
         }
         EditingAction::ContextAutomationDuplicate(target, param_id, _beat) => {
             automation::set_lane_context(selection, target, param_id);
             let mut needs_rebuild = false;
-            automation::duplicate_selected(
-                project,
+            project.with_sent(crate::content_command::touch::AUTOMATION, |p| automation::duplicate_selected(
+                p,
                 selection,
                 content_tx,
                 ui.viewport.grid_step(),
                 &mut needs_rebuild,
-            );
+            ));
             DispatchResult::structural()
         }
         EditingAction::ContextSelectAllAutomation(target, param_id) => {
@@ -376,13 +365,15 @@ pub(super) fn dispatch_editing(
         EditingAction::ContextDeleteSelectedAutomation(target, param_id) => {
             automation::set_lane_context(selection, target, param_id);
             let mut needs_rebuild = false;
-            automation::delete_selected(project, selection, content_tx, &mut needs_rebuild);
+            project.with_sent(crate::content_command::touch::AUTOMATION, |p| {
+                automation::delete_selected(p, selection, content_tx, &mut needs_rebuild)
+            });
             DispatchResult::structural()
         }
         EditingAction::ContextInsertAutomationShape(target, param_id, beat, shape) => {
             let mut needs_rebuild = false;
-            automation::insert_shape(
-                project,
+            project.with_sent(crate::content_command::touch::AUTOMATION, |p| automation::insert_shape(
+                p,
                 selection,
                 content_tx,
                 target,
@@ -390,7 +381,7 @@ pub(super) fn dispatch_editing(
                 *beat,
                 *shape,
                 &mut needs_rebuild,
-            );
+            ));
             DispatchResult::structural()
         }
         EditingAction::ContextAutomationSetShape(target, param_id, beat, value_norm, shape) => {
@@ -424,14 +415,10 @@ pub(super) fn dispatch_editing(
                 }
             };
             let new_point = AutomationPoint { shape: new_shape, ..old_point };
-            let mut local = MoveAutomationPointCommand::new(
+            let local = MoveAutomationPointCommand::new(
                 graph_target.clone(), param_id.as_ref(), old_point, new_point,
             );
-            local.execute(project);
-            ContentCommand::send(
-                content_tx,
-                ContentCommand::Execute(Box::new(local)),
-            );
+            project.execute(Box::new(local));
             DispatchResult::structural()
         }
         EditingAction::AutomationPointEditValue(_, _, _, _)
@@ -507,19 +494,23 @@ pub(super) fn dispatch_editing(
                 if !notes.is_empty() {
                     // `layer_id` is already the stable target — no index resolution needed.
                     let target_layer_id = layer_id.clone();
-                    let result = manifold_playback::midi_import::MidiImportService::import_to_layer(
-                        &notes,
-                        &target_layer_id,
-                        0.0,
-                        project,
-                    );
-                    if result.success {
-                        if let Some(undo_cmd) = result.undo_command {
-                            ContentCommand::send(content_tx, ContentCommand::Execute(undo_cmd));
+                    let added = project.executed_by(|p| {
+                        let result = manifold_playback::midi_import::MidiImportService::import_to_layer(
+                            &notes,
+                            &target_layer_id,
+                            0.0,
+                            p,
+                        );
+                        if !result.success {
+                            return None;
                         }
+                        let added = result.added_clips;
+                        result.undo_command.map(|cmd| (cmd, added))
+                    });
+                    if let Some(added) = added {
                         log::info!(
                             "Imported {} clips from MIDI to layer '{}'",
-                            result.added_clips,
+                            added,
                             target_layer_id
                         );
                     }
@@ -546,10 +537,9 @@ pub(super) fn dispatch_editing(
                         original_order,
                     );
                     {
-                        let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
+                        let boxed: Box<dyn manifold_editing::command::Command + Send> =
                             Box::new(cmd);
-                        boxed.execute(project);
-                        ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+                        project.execute(boxed);
                     }
                     selection.clear_selection();
                 }
@@ -577,10 +567,9 @@ pub(super) fn dispatch_editing(
                     original_order,
                 );
                 {
-                    let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
+                    let boxed: Box<dyn manifold_editing::command::Command + Send> =
                         Box::new(cmd);
-                    boxed.execute(project);
-                    ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+                    project.execute(boxed);
                 }
             }
             ContentCommand::send(content_tx, ContentCommand::MarkCompositorDirty);
@@ -588,27 +577,18 @@ pub(super) fn dispatch_editing(
         }
 
         EditingAction::ContextSetLayerColor(layer_id, color) => {
-            use crate::content_command::ContentCommand;
+            
             let r = color.r as f32 / 255.0;
             let g = color.g as f32 / 255.0;
             let b = color.b as f32 / 255.0;
             let a = color.a as f32 / 255.0;
-            // Local project mutation — resolved by id, not a baked-in index (BUG-031).
-            if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(layer_id.as_str()) {
-                layer.layer_color = manifold_core::color::Color { r, g, b, a };
-            }
-            // Mirror to content thread — this closure runs later, on a different
-            // thread, so it re-resolves the id there too rather than capturing
-            // an index that may be stale by the time it executes.
+            // Resolved by id on each side, never a baked-in index (BUG-031 (stale layer index)).
             let layer_id = layer_id.clone();
-            ContentCommand::send(
-                content_tx,
-                ContentCommand::mutate(crate::content_command::touch::LAYERS, Box::new(move |p| {
-                    if let Some((_, layer)) = p.timeline.find_layer_by_id_mut(layer_id.as_str()) {
-                        layer.layer_color = manifold_core::color::Color { r, g, b, a };
-                    }
-                })),
-            );
+            project.mutate(crate::content_command::touch::LAYERS, move |p| {
+                if let Some((_, layer)) = p.timeline.find_layer_by_id_mut(layer_id.as_str()) {
+                    layer.layer_color = manifold_core::color::Color { r, g, b, a };
+                }
+            });
             DispatchResult::structural()
         }
 

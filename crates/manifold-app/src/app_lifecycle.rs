@@ -328,7 +328,7 @@ impl Application {
         self.ws.ui_root.export_progress.begin(
             path.file_name().map(|name| name.to_string_lossy()).as_deref().unwrap_or("Video"),
         );
-        self.ws.ui_root.overlay_dirty = true;
+        self.ws.ui_root.mark_overlay_dirty();
         self.needs_rebuild = true;
         self.send_content_cmd(ContentCommand::StartExport(Box::new(config)));
     }
@@ -1534,6 +1534,8 @@ impl Application {
             self.send_content_cmd(ContentCommand::SetNodeAtlasVisible(Vec::new()));
             self.last_atlas_visible_sent.clear();
         }
+        self.atlas_visible_snap = None;
+        self.atlas_visible_scope.clear();
         // Clear the Phase 4 caches alongside — `watched_graph_target`
         // is the gate for the palette being active and the sole identity
         // for every editor-card edit, so a stale value would let the user

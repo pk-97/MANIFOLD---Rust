@@ -1,6 +1,6 @@
 //! Transport-related dispatch: Play/Pause/Stop/Seek/BPM/Recording/Clock/Zoom.
 
-use manifold_core::{Beats, project::Project};
+use manifold_core::Beats;
 use manifold_editing::commands::settings::ChangeQuantizeModeCommand;
 use manifold_ui::TransportAction;
 
@@ -10,7 +10,7 @@ use crate::ui_root::UIRoot;
 
 pub(super) fn dispatch_transport(
     action: &TransportAction,
-    project: &mut Project,
+    project: &mut crate::ui_bridge::ProjectRef<'_>,
     content_tx: &crossbeam_channel::Sender<crate::content_command::ContentCommand>,
     content_state: &crate::content_state::ContentState,
     ui: &mut UIRoot,
@@ -151,10 +151,9 @@ pub(super) fn dispatch_transport(
                 let new = old.next();
                 let cmd = ChangeQuantizeModeCommand::new(old, new);
                 {
-                    let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
+                    let boxed: Box<dyn manifold_editing::command::Command + Send> =
                         Box::new(cmd);
-                    boxed.execute(project);
-                    ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+                    project.execute(boxed);
                 }
             }
             DispatchResult::handled()

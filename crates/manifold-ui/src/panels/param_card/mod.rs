@@ -928,6 +928,24 @@ impl ParamCardPanel {
         }
     }
 
+    /// Rewrite each frame-aligned driver's period readout in place (D20).
+    /// `rate_of` answers for a row's param id.
+    pub fn sync_driver_frame_rates(
+        &mut self,
+        tree: &mut UITree,
+        rate_of: &mut dyn FnMut(&str) -> Option<(u32, f32)>,
+    ) {
+        for (row, param) in self.rows.iter_mut().enumerate() {
+            if !self.state.mod_state.driver_frame_aligned.get(row).copied().unwrap_or(false) {
+                continue;
+            }
+            let rate = rate_of(param.id.as_ref());
+            // The row model too, so a later build from these rows agrees.
+            param.modulation.driver_frame_rate = rate;
+            self.row_host.sync_driver_frame_rate(tree, &mut self.state.mod_state, row, rate);
+        }
+    }
+
     /// Per-frame content sync (push_state — after build). Black↔Frame
     /// transitions and new readback versions update the band in place; a
     /// `None` payload hides the chrome without waiting for a rebuild (the

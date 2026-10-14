@@ -6,7 +6,6 @@
 use crate::app::Application;
 use crate::content_command::ContentCommand;
 use manifold_editing::commands::effects::BindingMappingEdit;
-use crate::app_render::mini_timeline_data;
 
 /// Apply live values after rebuilding: construction seeds rows from the last
 /// structural configuration and would otherwise overwrite the current readouts.
@@ -1410,37 +1409,52 @@ impl Application {
         // off-scope / collapsed-group nodes cost nothing. The set is the whole
         // current scope level (what the atlas shows), so it changes only on a
         // scope descend/ascend or a topology edit, not on pan/zoom.
-        manifold_core::work_count::record_work(manifold_core::work_count::WorkKind::EditorProjection);
-        let visible_nodes: Vec<manifold_core::NodeId> = match (
-            self.graph_canvas.as_ref(),
-            editor_ui_snap.as_deref(),
-        ) {
-            (Some(canvas), Some(snap)) => {
-                let (nodes, _) =
-                    crate::graph_canvas::resolve_level(snap, canvas.scope_path())
-                        .unwrap_or((&snap.nodes, &snap.wires));
-                nodes
-                    .iter()
-                    .filter_map(crate::graph_canvas::node_preview_target)
-                    .collect()
-            }
-            _ => Vec::new(),
+        // Keyed on the snapshot it reads (by Arc identity) and the scope path:
+        // a steady frame walks and allocates nothing (P4c).
+        let same_snap = match (&editor_ui_snap, &self.atlas_visible_snap) {
+            (Some(a), Some(b)) => std::sync::Arc::ptr_eq(a, b),
+            (None, None) => true,
+            _ => false,
         };
-        if visible_nodes != self.last_atlas_visible_sent {
-            self.send_content_cmd(
-                crate::content_command::ContentCommand::SetNodeAtlasVisible(visible_nodes.clone()),
-            );
-            self.last_atlas_visible_sent = visible_nodes;
+        let scope: &[u32] = self.graph_canvas.as_ref().map_or(&[], |c| c.scope_path());
+        if !same_snap || scope != self.atlas_visible_scope.as_slice() {
+            self.atlas_visible_snap = editor_ui_snap.clone();
+            self.atlas_visible_scope.clear();
+            self.atlas_visible_scope.extend_from_slice(scope);
+            manifold_core::work_count::record_work(manifold_core::work_count::WorkKind::EditorProjection);
+            let visible_nodes: Vec<manifold_core::NodeId> = match (
+                self.graph_canvas.as_ref(),
+                editor_ui_snap.as_deref(),
+            ) {
+                (Some(canvas), Some(snap)) => {
+                    let (nodes, _) =
+                        crate::graph_canvas::resolve_level(snap, canvas.scope_path())
+                            .unwrap_or((&snap.nodes, &snap.wires));
+                    nodes
+                        .iter()
+                        .filter_map(crate::graph_canvas::node_preview_target)
+                        .collect()
+                }
+                _ => Vec::new(),
+            };
+            if visible_nodes != self.last_atlas_visible_sent {
+                self.send_content_cmd(
+                    crate::content_command::ContentCommand::SetNodeAtlasVisible(visible_nodes.clone()),
+                );
+                self.last_atlas_visible_sent = visible_nodes;
+            }
         }
 
         // ── Mini-timeline data ────────────────────────────────────────
         // Built from the UI project mirror + playhead BEFORE the disjoint `ws`
         // borrow below. Cheap: walks the clip list once, off the per-node hot
-        // path. Shared with the headless snapshot path via `mini_timeline_data`.
+        // path. Shared with the headless snapshot path via `mini_timeline_data`;
+        // keyed so a steady frame rebuilds nothing.
         let mini_current_beat = self.content_state.current_beat.as_f32();
         let mini_is_playing = self.content_state.is_playing;
-        let (mini_clips, mini_layer_labels, mini_rows, mini_total_beats, mini_beats_per_bar, mini_readout) =
-            mini_timeline_data(&self.local_project, mini_current_beat);
+        let parts = self.ui_edits.stamps.parts();
+        let &(ref mini_clips, ref mini_layer_labels, mini_rows, mini_total_beats, mini_beats_per_bar, ref mini_readout) =
+            self.mini_timeline.get(&self.local_project, mini_current_beat, &parts);
 
         let Some(gpu) = &self.gpu else { return };
         let Some(wid) = self.graph_editor_window_id else {
@@ -1947,9 +1961,9 @@ impl Application {
                 beats_per_bar: mini_beats_per_bar,
                 current_beat: mini_current_beat,
                 row_count: mini_rows,
-                clips: &mini_clips,
-                layer_labels: &mini_layer_labels,
-                readout: &mini_readout,
+                clips: mini_clips,
+                layer_labels: mini_layer_labels,
+                readout: mini_readout,
                 is_playing: mini_is_playing,
             },
             &mut self.editor_mapping_popover,

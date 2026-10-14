@@ -99,6 +99,30 @@ impl UIRoot {
         self.built && self.current_overlay_open_mask() != self.overlay_open_snapshot
     }
 
+    /// Overlay content changed: the frame seam rebuilds the overlay region
+    /// and the overlays' view version moves.
+    pub fn mark_overlay_dirty(&mut self) {
+        self.overlay_dirty = true;
+        self.overlay_version += 1;
+    }
+
+    /// Consume the content-changed mark.
+    pub fn take_overlay_dirty(&mut self) -> bool {
+        std::mem::take(&mut self.overlay_dirty)
+    }
+
+    #[cfg(test)]
+    pub fn overlay_dirty(&self) -> bool {
+        self.overlay_dirty
+    }
+
+    /// The overlays' view key (UI_INVALIDATION D6): moves when content is
+    /// marked changed or an overlay opened or closed by any path. The open set
+    /// rides in the low byte, so the key is read without a write.
+    pub fn overlays_version(&self) -> u64 {
+        (self.overlay_version << 8) | u64::from(self.current_overlay_open_mask())
+    }
+
     /// `EDITOR_WINDOW_UNIFICATION_DESIGN.md` D6: the redraw keepalive as ONE
     /// aggregate predicate, OR-ed into each window's own `offscreen_dirty` by
     /// its caller (never a per-window keepalive list).
@@ -269,7 +293,7 @@ impl UIRoot {
         }
         self.tree = tree;
         if consumed {
-            self.overlay_dirty = true;
+            self.mark_overlay_dirty();
         }
         consumed
     }

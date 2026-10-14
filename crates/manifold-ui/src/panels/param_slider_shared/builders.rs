@@ -400,14 +400,7 @@ pub(crate) fn build_driver_config(
     row3_buttons.push(DrawerButton::new("Invert", is_reversed, PanelAction::Modulation(ModulationAction::DriverConfig(target.clone(), param_id.clone(), DriverConfigAction::Invert))));
 
     let frame_aligned = mod_state.driver_frame_aligned[param_idx];
-    let frame_label = if frame_aligned {
-        match mod_state.driver_frame_rate[param_idx] {
-            Some((frames, hz)) => format!("Frame align: {frames} frames/cycle · {hz:.2} Hz"),
-            None => "Frame align: invalid timing".to_string(),
-        }
-    } else {
-        "Frame align (release beat sync)".to_string()
-    };
+    let frame_label = driver_frame_label(frame_aligned, mod_state.driver_frame_rate[param_idx]);
     let spec = DrawerSpec {
         rows: vec![
             DrawerRow::Buttons {
@@ -430,6 +423,19 @@ pub(crate) fn build_driver_config(
     drawer::build(tree, parent, x, y, w, &spec, key)
 }
 
+
+/// The driver drawer's frame-align button text. It is the last button, so the
+/// period readout can be rewritten in place (UI_INVALIDATION D20).
+pub(crate) fn driver_frame_label(frame_aligned: bool, rate: Option<(u32, f32)>) -> String {
+    if frame_aligned {
+        match rate {
+            Some((frames, hz)) => format!("Frame align: {frames} frames/cycle · {hz:.2} Hz"),
+            None => "Frame align: invalid timing".to_string(),
+        }
+    } else {
+        "Frame align (release beat sync)".to_string()
+    }
+}
 
 /// Format a free LFO period (beats) for the Free field label. Whole numbers show
 /// without a decimal ("3"); fractional values keep two places ("1.5", "0.38").
