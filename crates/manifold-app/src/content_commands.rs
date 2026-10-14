@@ -874,12 +874,7 @@ impl ContentThread {
             // loop re-checks is_surface_ready() after handling.
             #[cfg(target_os = "macos")]
             ContentCommand::SurfaceReady => {}
-            ContentCommand::FramePresented { drawable_id, at } => {
-                if let Some(deadline) = self.issued_presents.take(drawable_id) {
-                    let delay = manifold_playback::sync_projection::seconds_between(deadline, at);
-                    self.calibration.presented(delay, self.time_since_start.0);
-                }
-            }
+            ContentCommand::FramePresented { drawable_id, at } => self.frame_presented(drawable_id, at),
 
             // ── Sync calibration (D19) ─────────────────────────────
             ContentCommand::SetSyncCalibration { extra_delay_ms, offsets_ms } => {

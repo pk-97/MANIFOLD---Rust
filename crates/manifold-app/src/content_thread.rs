@@ -373,78 +373,8 @@ impl ContentThread {
         let mut work_trace = manifold_core::work_count::WorkTrace::new();
         loop {
             work_trace.frame("content");
-            // 1. Drain ALL pending commands, coalescing consecutive seeks.
-            // During scrubbing the UI sends a SeekTo/SeekToBeat per mouse-move
-            // event — at high polling rates this floods the channel. Only the
-            // final seek in a burst matters, so we defer it and overwrite.
-            let mut pending_seek: Option<ContentCommand> = None;
-            loop {
-                match cmd_rx.try_recv() {
-                    Ok(ContentCommand::StartExport(config)) => {
-                        self.engine.clear_automation_previews();
-                        // Stop any active live recording before entering export.
-                        #[cfg(target_os = "macos")]
-                        if let Some(session) = self.content_pipeline.recording_session.take() {
-                            log::warn!(
-                                "[ContentThread] Stopping active recording \
-                                 before export"
-                            );
-                            let _ = session.stop();
-                        }
-                        // Flush any pending seek before entering export.
-                        if let Some(seek) = pending_seek.take() {
-                            let _ = self.handle_command(seek);
-                        }
-                        self.run_export(*config, &cmd_rx, &state_tx);
-                    }
-                    Ok(ContentCommand::LoadProject(project)) => {
-                        // Flush any pending seek before the load.
-                        if let Some(seek) = pending_seek.take()
-                            && self.handle_command(seek)
-                        {
-                            log::info!("[ContentThread] shutdown received");
-                            return;
-                        }
-                        let report = self.load_project_and_warmup(project, &cmd_rx, &cmd_tx, &state_tx);
-                        if report.warmup.interrupted {
-                            return;
-                        }
-                    }
-                    Ok(cmd @ ContentCommand::SeekTo(_))
-                    | Ok(cmd @ ContentCommand::SeekToBeat(_)) => {
-                        // Coalesce: overwrite previous pending seek.
-                        pending_seek = Some(cmd);
-                    }
-                    // SurfaceReady is a no-op GPU event — don't flush pending
-                    // seeks, as that would break coalescing during scrubbing.
-                    #[cfg(target_os = "macos")]
-                    Ok(ContentCommand::SurfaceReady) => {}
-                    Ok(cmd) => {
-                        // Flush any pending seek before a non-seek command
-                        // to preserve ordering (e.g. Seek then Play).
-                        if let Some(seek) = pending_seek.take()
-                            && self.handle_command(seek)
-                        {
-                            log::info!("[ContentThread] shutdown received");
-                            return;
-                        }
-                        if self.handle_command(cmd) {
-                            log::info!("[ContentThread] shutdown received");
-                            return;
-                        }
-                    }
-                    Err(crossbeam_channel::TryRecvError::Empty) => break,
-                    Err(crossbeam_channel::TryRecvError::Disconnected) => {
-                        log::info!("[ContentThread] command channel disconnected, shutting down");
-                        return;
-                    }
-                }
-            }
-            // Apply the final coalesced seek (if any).
-            if let Some(seek) = pending_seek.take()
-                && self.handle_command(seek)
-            {
-                log::info!("[ContentThread] shutdown received");
+            // 1. Drain every pending command, coalescing consecutive seeks.
+            if self.drain_commands(&cmd_tx, &cmd_rx, &state_tx) {
                 return;
             }
             self.publish_snapshot_if_dirty(&state_tx);
@@ -453,6 +383,84 @@ impl ContentThread {
                 return;
             }
         }
+    }
+
+    /// Drains every queued command, coalescing consecutive seeks. During
+    /// scrubbing the UI sends a SeekTo/SeekToBeat per mouse move; only the
+    /// last seek of a burst matters, so it waits and is overwritten. GPU
+    /// events (SurfaceReady, FramePresented) never flush it. Returns true on
+    /// shutdown.
+    pub(crate) fn drain_commands(
+        &mut self,
+        cmd_tx: &Sender<ContentCommand>,
+        cmd_rx: &Receiver<ContentCommand>,
+        state_tx: &Sender<ContentState>,
+    ) -> bool {
+        let mut pending_seek: Option<ContentCommand> = None;
+        loop {
+            match cmd_rx.try_recv() {
+                Ok(ContentCommand::StartExport(config)) => {
+                    self.engine.clear_automation_previews();
+                    // Stop any active live recording before entering export.
+                    #[cfg(target_os = "macos")]
+                    if let Some(session) = self.content_pipeline.recording_session.take() {
+                        log::warn!("[ContentThread] Stopping active recording before export");
+                        let _ = session.stop();
+                    }
+                    // Flush any pending seek before entering export.
+                    if let Some(seek) = pending_seek.take() {
+                        let _ = self.handle_command(seek);
+                    }
+                    self.run_export(*config, cmd_rx, state_tx);
+                }
+                Ok(ContentCommand::LoadProject(project)) => {
+                    // Flush any pending seek before the load.
+                    if let Some(seek) = pending_seek.take()
+                        && self.handle_command(seek)
+                    {
+                        log::info!("[ContentThread] shutdown received");
+                        return true;
+                    }
+                    let report = self.load_project_and_warmup(project, cmd_rx, cmd_tx, state_tx);
+                    if report.warmup.interrupted {
+                        return true;
+                    }
+                }
+                Ok(cmd @ ContentCommand::SeekTo(_)) | Ok(cmd @ ContentCommand::SeekToBeat(_)) => {
+                    pending_seek = Some(cmd);
+                }
+                #[cfg(target_os = "macos")]
+                Ok(ContentCommand::SurfaceReady) => {}
+                Ok(ContentCommand::FramePresented { drawable_id, at }) => self.frame_presented(drawable_id, at),
+                Ok(cmd) => {
+                    // Flush any pending seek before a non-seek command
+                    // to preserve ordering (e.g. Seek then Play).
+                    if let Some(seek) = pending_seek.take()
+                        && self.handle_command(seek)
+                    {
+                        log::info!("[ContentThread] shutdown received");
+                        return true;
+                    }
+                    if self.handle_command(cmd) {
+                        log::info!("[ContentThread] shutdown received");
+                        return true;
+                    }
+                }
+                Err(crossbeam_channel::TryRecvError::Empty) => break,
+                Err(crossbeam_channel::TryRecvError::Disconnected) => {
+                    log::info!("[ContentThread] command channel disconnected, shutting down");
+                    return true;
+                }
+            }
+        }
+        // Apply the final coalesced seek (if any).
+        if let Some(seek) = pending_seek.take()
+            && self.handle_command(seek)
+        {
+            log::info!("[ContentThread] shutdown received");
+            return true;
+        }
+        false
     }
 
     /// One production-paced frame shared by the app and headless profiler.
@@ -558,6 +566,7 @@ impl ContentThread {
                 Ok(ContentCommand::SurfaceReady) => {
                     // GPU wake signal — loop back to check is_surface_ready().
                 }
+                Ok(ContentCommand::FramePresented { drawable_id, at }) => self.frame_presented(drawable_id, at),
                 Ok(cmd @ ContentCommand::SeekTo(_)) | Ok(cmd @ ContentCommand::SeekToBeat(_)) => {
                     pending_seek = Some(cmd);
                 }
@@ -575,6 +584,7 @@ impl ContentThread {
                     while let Ok(cmd) = cmd_rx.try_recv() {
                         match cmd {
                             ContentCommand::SurfaceReady => {}
+                            ContentCommand::FramePresented { drawable_id, at } => self.frame_presented(drawable_id, at),
                             cmd @ ContentCommand::SeekTo(_)
                             | cmd @ ContentCommand::SeekToBeat(_) => {
                                 pending_seek = Some(cmd);
@@ -2228,6 +2238,16 @@ impl ContentThread {
         Some(ExternalSample { beat, bpm, fresh: true, exact: false })
     }
 
+    /// Metal reported a stage frame on screen: its delay after the deadline
+    /// it was rendered for feeds the screen delay (D19). Never a transport
+    /// boundary, so it never flushes a coalesced seek.
+    pub(crate) fn frame_presented(&mut self, drawable_id: u64, at: std::time::Instant) {
+        if let Some(deadline) = self.issued_presents.take(drawable_id) {
+            let delay = manifold_playback::sync_projection::seconds_between(deadline, at);
+            self.calibration.presented(delay, self.time_since_start.0);
+        }
+    }
+
     /// The operating log's view of this tick, after the engine's tick.
     fn log_sync(&mut self, authority: ClockAuthority) {
         let mode = self.engine.project().map_or(OscSyncMode::M4L, |p| p.settings.osc_sync_mode);
@@ -2725,5 +2745,26 @@ mod tests {
         tick_and_check(&mut thread, 24.0, "undo");
         assert!(!thread.handle_command(ContentCommand::Redo));
         tick_and_check(&mut thread, 30.0, "redo");
+    }
+
+    /// Metal's presents arrive between a scrub's seeks: they feed the screen
+    /// delay without flushing the coalesced seek, so a burst is one seek.
+    #[test]
+    fn presents_inside_a_scrub_burst_leave_one_seek() {
+        let mut thread = headless_content_thread(Project::default(), 64, 64);
+        let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded();
+        let (state_tx, _state_rx) = crossbeam_channel::unbounded();
+        let epoch = thread.engine.transport_epoch();
+        let now = std::time::Instant::now();
+        for (id, seconds) in [(1u64, 1.0), (2, 2.0), (3, 3.0)] {
+            cmd_tx.send(ContentCommand::SeekTo(manifold_core::Seconds(seconds))).expect("send");
+            thread.issued_presents.record(id, now);
+            let at = now + std::time::Duration::from_millis(25);
+            cmd_tx.send(ContentCommand::FramePresented { drawable_id: id, at }).expect("send");
+        }
+        assert!(!thread.drain_commands(&cmd_tx, &cmd_rx, &state_tx), "no shutdown");
+        assert_eq!(thread.engine.transport_epoch(), epoch.wrapping_add(1), "one seek for the burst");
+        assert!((thread.engine.current_time().0 - 3.0).abs() < 1.0 / 60.0, "the burst's last seek wins");
+        assert!(thread.issued_presents.take(1).is_none(), "the presents reached the calibration");
     }
 }
