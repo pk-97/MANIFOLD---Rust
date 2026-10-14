@@ -69,6 +69,17 @@ impl HeaderPanel {
         self.rect = rect;
     }
 
+    /// Lay the bar out in place at its rect and values. `NeedsRebuild` when
+    /// its structure changed; the caller rebuilds the bar then.
+    pub fn relayout(&mut self, tree: &mut UITree) -> Reconcile {
+        if !self.host.is_built() {
+            return Reconcile::Updated;
+        }
+        let (view, clock_w) = self.view();
+        self.clock_w = clock_w;
+        self.host.update(tree, &view, self.rect)
+    }
+
     /// The rect the bar last laid out at.
     pub fn rect(&self) -> Rect {
         self.rect
@@ -333,17 +344,7 @@ impl Panel for HeaderPanel {
     }
 
     fn update(&mut self, tree: &mut UITree) {
-        if !self.host.is_built() {
-            return;
-        }
-        let (view, clock_w) = self.view();
-        self.clock_w = clock_w;
-        let reconcile = self.host.update(tree, &view, self.rect);
-        debug_assert_eq!(
-            reconcile,
-            Reconcile::Updated,
-            "header structure is invariant per frame — value/visibility changes update in place"
-        );
+        let _ = self.relayout(tree);
     }
 
     /// Header is fully intent-dispatched (see `register_intents`). Required no-op.

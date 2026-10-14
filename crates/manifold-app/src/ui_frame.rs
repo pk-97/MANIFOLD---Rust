@@ -437,7 +437,7 @@ pub(crate) fn gather_frame_inputs(
 pub(crate) fn apply_frame_plan(
     ui_root: &mut UIRoot,
     editor_ui_root: Option<&mut UIRoot>,
-    cache: Option<&mut UICacheManager>,
+    mut cache: Option<&mut UICacheManager>,
     project: &mut manifold_core::project::Project,
     selection: &mut manifold_ui::UIState,
     active_layer: &mut Option<manifold_core::LayerId>,
@@ -528,7 +528,7 @@ pub(crate) fn apply_frame_plan(
         viewport: plan.viewport,
         rects_moved: plan.rects_moved,
     };
-    let rebuilt = apply_ui_frame_invalidations(ui_root, cache, &mut signals);
+    let rebuilt = apply_ui_frame_invalidations(ui_root, cache.as_deref_mut(), &mut signals);
     *redraw |= plan.redraw;
 
     // Push engine state AFTER build so new nodes get state. Each push runs on
@@ -562,7 +562,10 @@ pub(crate) fn apply_frame_plan(
             .into_iter()
             .any(|r| plan.in_place.contains(r))
     {
-        ui_root.lay_out_chrome();
+        // A bar resized to a new shape cannot lay out in place: it rebuilds,
+        // from the values the pushes just wrote.
+        let stale = ui_root.lay_out_chrome();
+        rebuild_regions(ui_root, cache, stale);
     }
     crate::ui_bridge::push_frame(ui_root, project, push.content_state, idx);
     let live = crate::ui_bridge::LiveGroups {

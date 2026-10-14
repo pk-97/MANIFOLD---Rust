@@ -759,8 +759,8 @@ impl UIRoot {
 
     /// Give a resized region its new rect in place: a chrome bar takes the
     /// rect and the frame's chrome layout lays it out there (the planner
-    /// marks a resized bar in place; its structure does not depend on its
-    /// size), the split handle takes it. False for a region with no in-place
+    /// marks a resized bar in place, and a bar whose shape changed rebuilds
+    /// there), the split handle takes it. False for a region with no in-place
     /// path; the caller rebuilds it then. Only regions the planner resizes
     /// have an arm (`frame_plan::plan_regions`).
     pub(crate) fn follow_resize(&mut self, region: MainRegion) -> bool {
@@ -1547,11 +1547,23 @@ impl UIRoot {
 
     /// Lay the three chrome bars out at the values they hold, in place
     /// (section 4 region table: the bars' in-place column). The frame plan
-    /// runs it only when a shown value moved, never per frame.
-    pub fn lay_out_chrome(&mut self) {
-        self.transport.update(&mut self.tree);
-        self.header.update(&mut self.tree);
-        self.footer.update(&mut self.tree);
+    /// runs it only when a shown value moved, never per frame. Returns the
+    /// bars whose structure changed (a resize to a new shape); the caller
+    /// rebuilds those.
+    #[must_use]
+    pub fn lay_out_chrome(&mut self) -> crate::frame_plan::RegionMask {
+        use manifold_ui::chrome::Reconcile;
+        let mut stale = crate::frame_plan::RegionMask::NONE;
+        for (region, reconcile) in [
+            (MainRegion::Transport, self.transport.relayout(&mut self.tree)),
+            (MainRegion::Header, self.header.relayout(&mut self.tree)),
+            (MainRegion::Footer, self.footer.relayout(&mut self.tree)),
+        ] {
+            if reconcile == Reconcile::NeedsRebuild {
+                stale.insert(region);
+            }
+        }
+        stale
     }
 
     /// Per-frame update — push state changes to panels.
