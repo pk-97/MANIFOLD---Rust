@@ -111,20 +111,7 @@ impl Resolver {
         nodes: &NodeTypes,
         scene_radius: Option<f32>,
     ) -> ParamSpecDef {
-        let stamp = bindings.iter().find_map(|b| match &b.target {
-            BindingTarget::Node { node_id, param }
-                if !b.user_added
-                    && b.id == spec.id
-                    && nodes
-                        .doc_ids
-                        .get(node_id.as_str())
-                        .is_some_and(|doc| b.id == format!("{doc}_{param}")) =>
-            {
-                Some((nodes.nodes.get(node_id.as_str())?, param))
-            }
-            _ => None,
-        });
-        let Some((type_id, param)) = stamp else {
+        let Some((type_id, param)) = exact_stamp(&spec.id, bindings, nodes) else {
             return spec;
         };
         let Some(d) = self.describe(ParamKey::Node { type_id, param, scene_radius }) else {
@@ -138,6 +125,24 @@ impl Resolver {
         spec.max = max;
         spec
     }
+}
+
+/// The node type and param of an exact auto-stamp: id `{doc_id}_{param}`,
+/// not user-added, targeting that node's param.
+fn exact_stamp<'n>(id: &str, bindings: &'n [BindingDef], nodes: &'n NodeTypes) -> Option<(&'n str, &'n str)> {
+    bindings.iter().find_map(|b| match &b.target {
+        BindingTarget::Node { node_id, param }
+            if !b.user_added
+                && b.id == id
+                && nodes
+                    .doc_ids
+                    .get(node_id.as_str())
+                    .is_some_and(|doc| b.id == format!("{doc}_{param}")) =>
+        {
+            Some((nodes.nodes.get(node_id.as_str())?.as_str(), param.as_str()))
+        }
+        _ => None,
+    })
 }
 
 /// A preset's controls as the lookup declares them, for readers of the
@@ -288,13 +293,8 @@ impl<'a> Join<'a> {
         saved: &ParamSpecDef,
     ) -> (ParamSpecDef, SpecSource, ParamChoices) {
         let none = ParamChoices::default();
-        let mut matching = self.bindings.iter().filter(|b| b.id == saved.id);
-        let single = match (matching.next(), matching.next()) {
-            (Some(b), None) => Some(b),
-            _ => None,
-        };
-        let template_ok = single.is_none_or(|b| template_answers(self.preset, b, &self.nodes));
-        if template_ok && let Some(template) = template_spec(self.preset, &saved.id) {
+        let single = self.single_binding(&saved.id);
+        if let Some(template) = self.template_for(&saved.id) {
             // The default is the instance's own stamp (a material's authored
             // factor, re-seeded from the node), not the template's, as on the
             // node path.
@@ -325,7 +325,33 @@ impl<'a> Join<'a> {
         let Some(described) = self.resolver.describe(key) else {
             return (saved.clone(), unresolved, none);
         };
-        (overlay(saved, described, binding.default_value, fan_out), SpecSource::Lookup, none)
+        let name_from_lookup = !fan_out && exact_stamp(&saved.id, self.bindings, &self.nodes).is_some();
+        (overlay(saved, described, binding.default_value, name_from_lookup), SpecSource::Lookup, none)
+    }
+
+    fn single_binding(&self, id: &str) -> Option<&'a BindingDef> {
+        let mut matching = self.bindings.iter().filter(|b| b.id == id);
+        match (matching.next(), matching.next()) {
+            (Some(b), None) => Some(b),
+            _ => None,
+        }
+    }
+
+    /// The template's entry when the template answers this control.
+    fn template_for(&self, id: &str) -> Option<ParamSpecDef> {
+        let template_ok = self
+            .single_binding(id)
+            .is_none_or(|b| template_answers(self.preset, b, &self.nodes));
+        template_ok.then(|| template_spec(self.preset, id)).flatten()
+    }
+
+    /// Whether the lookup supplies this control's name, so a save writes it
+    /// without one: a template control, or a lone exact auto-stamp. Every
+    /// other control owns its name (SCENE_SURFACES_DESIGN.md D24 (who owns a
+    /// control's name)).
+    pub(crate) fn lookup_names(&self, id: &str) -> bool {
+        self.template_for(id).is_some()
+            || (self.single_binding(id).is_some() && exact_stamp(id, self.bindings, &self.nodes).is_some())
     }
 
     /// A user-exposed control keeps its saved spec. A saved label that
@@ -382,6 +408,12 @@ impl<'a> Declared<'a> {
     pub fn name(&mut self, id: &str) -> String {
         self.spec(id).map(|s| s.name).unwrap_or_default()
     }
+
+    /// Whether the lookup supplies this control's name (D24 (who owns a
+    /// control's name)).
+    pub fn lookup_names(&self, id: &str) -> bool {
+        self.join.lookup_names(id)
+    }
 }
 
 /// The declared slider range, widened so a seeded default outside the band
@@ -394,13 +426,14 @@ fn widen_to(d: &ParamSpecDef, default: f32) -> (f32, f32) {
 }
 
 /// A node or modifier description laid over the saved control. The lookup
-/// owns name, range and flags, and the section where it declares one (a
-/// node declares none yet, so its saved section stays). A fan-out keeps its
-/// authored name (D22). Identity, default, card visibility, curve, invert,
-/// tooltip and periodicity stay as saved.
-fn overlay(saved: &ParamSpecDef, d: ParamSpecDef, binding_default: f32, fan_out: bool) -> ParamSpecDef {
+/// owns range and flags, and the section where it declares one (a node
+/// declares none yet, so its saved section stays). The name is the lookup's
+/// only for an exact auto-stamp; every other control owns its name (D24),
+/// and an empty one takes the lookup's. Identity, default, card visibility,
+/// curve, invert, tooltip and periodicity stay as saved.
+fn overlay(saved: &ParamSpecDef, d: ParamSpecDef, binding_default: f32, name_from_lookup: bool) -> ParamSpecDef {
     let (min, max) = widen_to(&d, binding_default);
-    let keep_name = fan_out && !saved.name.is_empty();
+    let keep_name = !name_from_lookup && !saved.name.is_empty();
     ParamSpecDef {
         name: if keep_name { saved.name.clone() } else { d.name },
         section: if d.section.is_some() { d.section } else { saved.section.clone() },
@@ -544,6 +577,24 @@ mod tests {
         assert_eq!(spec.default_value, 12.0);
         assert_eq!(spec.section.as_deref(), Some("Key Light"));
         assert!(!spec.card_visible);
+    }
+
+    /// D24: a curated control on a generic node keeps its authored name and
+    /// saves it; only the exact auto-stamp takes the node's label.
+    #[test]
+    fn curated_control_owns_its_name() {
+        let def = graph(vec![
+            binding("1_intensity", lamp("intensity"), 12.0),
+            binding("key", lamp("intensity"), 12.0),
+        ]);
+        let preset = def.preset_metadata.as_ref().unwrap().id.clone();
+        let mut join = Join::new(&preset, &def);
+        let (curated, source, _) = join.join_control(&saved("key"));
+        assert_eq!((curated.name.as_str(), source), ("Stale Copy", SpecSource::Lookup));
+        assert_eq!((curated.min, curated.max), (0.0, 12.0), "range still comes from the lookup");
+        assert_eq!(join.join_control(&saved("1_intensity")).0.name, "Intensity");
+        assert!(join.lookup_names("1_intensity"));
+        assert!(!join.lookup_names("key"));
     }
 
     /// A bundled template's exact auto-stamp shows its node's name, range,

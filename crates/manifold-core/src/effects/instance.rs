@@ -229,7 +229,7 @@ impl PresetInstance {
             // (D12) — see `GraphWithDerivedParams`.
             s.serialize_field(
                 "graph",
-                &GraphWithDerivedParams { graph: g, manifest: &self.params, joined: true },
+                &GraphWithDerivedParams { preset: &self.effect_type, graph: g, manifest: &self.params, joined: true },
             )?;
         }
         if let Some(v) = self.legacy_param_version {

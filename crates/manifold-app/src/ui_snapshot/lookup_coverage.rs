@@ -426,12 +426,22 @@ fn saved_scene_has_id_only_lookup_entries() {
                     assert!(entry.get("min").is_none() && entry.get("max").is_none(), "{scene} {id} saved a copy: {entry}");
                 }
             }
+            // D24: only a control whose name the lookup supplies saves without
+            // one; every other control keeps its authored label.
+            let graph = fx.graph.as_ref().unwrap();
+            let declared = manifold_core::param_lookup::Declared::new(graph).unwrap();
             for b in meta["bindings"].as_array().into_iter().flatten() {
                 let id = b["id"].as_str().unwrap();
                 if fx.params.get(id).is_some_and(|p| p.source == SpecSource::Lookup)
                     && b["target"]["kind"] != "composite"
                 {
-                    assert!(b.get("label").is_none(), "{scene} {id} saved a label: {b}");
+                    let authored = graph.preset_metadata.as_ref().unwrap().bindings.iter()
+                        .find(|x| x.id == id).is_some_and(|x| !x.label.is_empty());
+                    if declared.lookup_names(id) {
+                        assert!(b.get("label").is_none(), "{scene} {id} saved a label: {b}");
+                    } else if authored {
+                        assert!(b.get("label").is_some(), "{scene} {id} lost its authored label: {b}");
+                    }
                 }
             }
         }
