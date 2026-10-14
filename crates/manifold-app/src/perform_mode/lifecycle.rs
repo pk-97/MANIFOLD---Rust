@@ -31,22 +31,9 @@ impl Application {
                     self.open_output_window(event_loop, "Output", display_index, false);
                 }
                 if self.window_registry.has_output_window() {
-                    // Quiesce in-flight UI state so nothing is left dangling
-                    // when we resume normal mode on exit.
-                    self.text_input.cancel();
-                    self.ws.ui_root.dropdown.close(&mut self.ws.ui_root.tree);
-                    self.ws.ui_root.browser_popup.close();
-                    self.ws.ui_root.ableton_picker.close();
-                    if self.mouse_pressed {
-                        self.ws.ui_root.pointer_event(
-                            self.cursor_pos,
-                            manifold_ui::input::PointerAction::Up,
-                            self.time_since_start,
-                        );
-                        self.mouse_pressed = false;
-                    }
-                    self.perform.exit_button_hover = false;
-                    self.perform.active = true;
+                    let held_pointer = self.mouse_pressed.then_some((self.cursor_pos, self.time_since_start));
+                    super::frame::enter(&mut self.perform, &mut self.ws.ui_root, &mut self.text_input, held_pointer);
+                    self.mouse_pressed = false;
                     self.ws.offscreen_dirty = true;
                     log::info!("[Perform] Entered performance mode");
                 } else {

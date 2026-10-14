@@ -9,6 +9,7 @@
 //! Module layout:
 //! - [`state`] — `PerformModeState` struct (one field on `Application`).
 //! - [`render`] — main window render path (`tick_perform_mode`).
+//! - [`frame`] — the entry and per-frame seam the App and the ui-snap runner share.
 //! - [`lifecycle`] — entry / exit deferred-action handlers.
 //! - [`input`] — input gating helpers called from `app.rs` event handlers.
 //!
@@ -19,6 +20,7 @@
 //! - Quiesce in-flight UI state on entry; force full rebuild on exit.
 
 pub(crate) mod cue;
+pub(crate) mod frame;
 pub(crate) mod input;
 pub(crate) mod lifecycle;
 pub(crate) mod macros;

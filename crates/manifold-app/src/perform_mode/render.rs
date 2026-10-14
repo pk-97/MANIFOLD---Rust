@@ -1,25 +1,16 @@
-//! Perform-mode rendering — minimal main-window draw path.
-
-use std::sync::Arc;
+//! Perform-mode rendering — minimal main-window draw path. The frame's
+//! intake, derivation and composite are the shared seam in `frame.rs`; this
+//! file holds the live window's half (drain, liveness, preview blit, present)
+//! and the HUD's draw helpers.
 
 use manifold_core::types::ClockAuthority;
 use manifold_ui::text::TextMeasure;
 use manifold_ui_paint::ui_renderer::UIRenderer;
-use manifold_ui::node::{Color32, FontWeight};
+use manifold_ui::node::{Color32, FontWeight, Rect};
 
 use crate::app::Application;
-use crate::perform_mode::{cue, macros as perform_macros, tracks};
-
-/// Read-only sync status snapshot for the perform HUD.
-struct SyncStatus {
-    authority: ClockAuthority,
-    link_enabled: bool,
-    link_peers: i32,
-    midi_clock_enabled: bool,
-    midi_clock_receiving: bool,
-    midi_clock_position_display: Arc<str>,
-    midi_clock_device_name: Arc<str>,
-}
+use crate::perform_mode::frame::{PerformHud, SyncStatus};
+use crate::perform_mode::{cue, frame, macros as perform_macros};
 
 impl Application {
     /// Performance mode tick: drains content state, polls output window
@@ -31,14 +22,10 @@ impl Application {
         //    on backpressure. We keep the latest state for the HUD readout
         //    (BPM, current beat, Ableton session) but DO NOT push anything
         //    to panels — the normal UI is frozen.
-        //
-        // The event drain, which takes the Ableton session, does not run in
-        // perform mode, so the session is taken here by pointer.
         if let Some(ref rx) = self.state_rx {
             while let Ok(state) = rx.try_recv() {
                 self.content_state = state;
             }
-            self.ws.ui_root.intake_shared(&self.content_state);
         }
 
         // 1a. Breadcrumb sidecar (GIG_RESILIENCE_DESIGN section 5.1) — this is the
@@ -75,102 +62,18 @@ impl Application {
 
         let logical_w = (surface_w as f64 / scale) as u32;
         let logical_h = (surface_h as f64 / scale) as u32;
-        let lw = logical_w as f32;
-        let lh = logical_h as f32;
-
-        // Exit button — small and intentionally hard to hit accidentally.
-        // Bottom-center with generous padding above. Tighter dimensions
-        // and smaller font; the click target is still finger-sized but
-        // it does NOT dominate the screen the way an emergency button
-        // might (which would invite accidental presses during a show).
-        let btn_w = 180.0_f32;
-        let btn_h = 36.0_f32;
-        let btn_x = (lw - btn_w) * 0.5;
-        let btn_y = lh - btn_h - 24.0;
-        self.perform.exit_button_rect = manifold_ui::node::Rect::new(btn_x, btn_y, btn_w, btn_h);
-
-        // Snapshot HUD inputs from content_state + persistent ui_root cache.
-        let current_beat = self.content_state.current_beat.0;
-        let bpm = self.content_state.bpm;
-        let beats_per_bar = self.content_state.time_signature_numerator.max(1) as u32;
-        let is_playing = self.content_state.is_playing;
-        let ableton_connected = self.content_state.ableton_connected;
-        let sync_status = SyncStatus {
-            authority: self.content_state.clock_authority,
-            link_enabled: self.content_state.link_enabled,
-            link_peers: self.content_state.link_peers,
-            midi_clock_enabled: self.content_state.midi_clock_enabled,
-            midi_clock_receiving: self.content_state.midi_clock_receiving,
-            midi_clock_position_display: self.content_state.midi_clock_position_display.clone(),
-            midi_clock_device_name: self.content_state.midi_clock_device_name.clone(),
-        };
-        // Snapshot the session Arc (atomic refcount bump, zero data copy).
-        // All cue/track/macro reads below borrow from this snapshot, avoiding
-        // per-frame clones of cue_points, track names, etc.
+        let layout = frame::begin_perform_frame(
+            &mut self.perform,
+            &mut self.ws.ui_root,
+            &self.content_state,
+            logical_w,
+            logical_h,
+        );
+        let (lw, lh) = (logical_w as f32, logical_h as f32);
+        // The session Arc is snapshotted (a refcount bump) so the HUD's cue
+        // and track names borrow from it, not from `ui_root`.
         let session_snapshot = self.ws.ui_root.ableton_session.clone();
-        let cue_points: &[manifold_playback::ableton_bridge::CuePoint] = session_snapshot
-            .as_ref()
-            .map(|s| s.cue_points.as_slice())
-            .unwrap_or(&[]);
-        let analysis = cue::analyze(cue_points, current_beat);
-        let current_name = analysis.current.map(|c| c.name.as_str()).unwrap_or("—");
-        let next_name = analysis.next.map(|c| c.name.as_str()).unwrap_or("—");
-        let countdown = analysis
-            .beats_to_next
-            .map(|b| cue::format_countdown(b, beats_per_bar));
-        let section_progress = cue::section_progress(analysis.current, analysis.next, current_beat);
-        let bar_beat = cue::format_bar_beat(current_beat, beats_per_bar);
-
-        // Tracks playing in the *current* section: any non-muted clip
-        // overlapping `[current.time, next.time)` (variant (a)).
-        let now_section_tracks: Vec<&str> = if let Some(cur_cue) = analysis.current {
-            let section_end = analysis.next.map(|c| c.time).unwrap_or(f64::INFINITY);
-            session_snapshot
-                .as_ref()
-                .and_then(|s| s.play_group.as_ref())
-                .map(|g| {
-                    g.tracks
-                        .iter()
-                        .filter(|t| tracks::plays_in_range(t, cur_cue.time, section_end))
-                        .map(|t| t.name.as_str())
-                        .collect()
-                })
-                .unwrap_or_default()
-        } else {
-            Vec::new()
-        };
-
-        // Tracks playing in the *next* section (variant (a): any non-muted
-        // clip overlapping `[next.time, section_end)`, including straddlers).
-        // Section end = the cue after `next`, or +∞ if `next` is the last.
-        let next_section_tracks: Vec<&str> = if let Some(next_cue) = analysis.next {
-            let section_end = cue_points
-                .iter()
-                .find(|c| c.time > next_cue.time)
-                .map(|c| c.time)
-                .unwrap_or(f64::INFINITY);
-            session_snapshot
-                .as_ref()
-                .and_then(|s| s.play_group.as_ref())
-                .map(|g| {
-                    g.tracks
-                        .iter()
-                        .filter(|t| tracks::plays_in_range(t, next_cue.time, section_end))
-                        .map(|t| t.name.as_str())
-                        .collect()
-                })
-                .unwrap_or_default()
-        } else {
-            Vec::new()
-        };
-
-        // Macros: snapshot mapped Ableton macros for the left column.
-        // Top-N for now to avoid overflowing tall projects with many macros.
-        const MACRO_DISPLAY_LIMIT: usize = 12;
-        let macros_snapshot: Vec<perform_macros::MacroDisplay> = session_snapshot
-            .as_ref()
-            .map(|s| perform_macros::snapshot(&self.local_project, s, MACRO_DISPLAY_LIMIT))
-            .unwrap_or_default();
+        let hud = PerformHud::derive(&self.content_state, session_snapshot.as_deref(), &self.local_project);
 
         // Skip drawable acquisition on resize frames (same rule as the
         // normal present path).
@@ -180,54 +83,17 @@ impl Application {
         }
 
         let mut encoder = gpu.device.create_encoder("Perform Frame");
-        // Clear the offscreen to pure black.
-        encoder.clear_texture(offscreen, 0.0, 0.0, 0.0, 1.0);
-
-        // Build immediate-mode draws into the UIRenderer.
-        if let Some(ui) = &mut self.ui_renderer {
-            let tm = self.ws.ui_root.tree.measurer();
-            ui.begin_frame();
-
-            manifold_core::work_count::record_work(manifold_core::work_count::WorkKind::PerformHudBuild);
-            draw_cue_hud(
-                ui,
-                tm,
-                lw,
-                lh,
-                current_name,
-                next_name,
-                countdown.as_ref(),
-                section_progress,
-                &bar_beat,
-                &now_section_tracks,
-                &next_section_tracks,
-                bpm,
-                is_playing,
-                ableton_connected,
-                cue_points.is_empty(),
-            );
-
-            draw_sync_indicators(ui, tm, &sync_status);
-
-            if !macros_snapshot.is_empty() {
-                draw_macros_column(ui, lh, &macros_snapshot);
-            }
-
-            draw_exit_button(
-                ui,
-                tm,
-                btn_x,
-                btn_y,
-                btn_w,
-                btn_h,
-                self.perform.exit_button_hover,
-            );
-
-            // Flush.
-            if ui.prepare(&gpu.device, logical_w, logical_h, scale) {
-                ui.render(&mut encoder, offscreen, manifold_gpu::GpuLoadAction::Load);
-            }
-        }
+        frame::composite_perform_frame(
+            &gpu.device,
+            &mut encoder,
+            self.ui_renderer.as_mut(),
+            self.ws.ui_root.tree.measurer(),
+            &layout,
+            &hud,
+            self.perform.exit_button_hover,
+            offscreen,
+            scale,
+        );
 
         // Blit compositor output preview into the right column, vertically
         // centered. Reads the latest frame from the preview IOSurface bridge
@@ -440,7 +306,7 @@ fn numeric_text_width(tm: &dyn TextMeasure, text: &str, font_size: u16) -> f32 {
 ///   SRC:CLK   LINK  ● 1 peer   CLK  IAC Driver Bus 1  ● 121.2.2
 ///
 /// Read-only — no click handling in perform mode.
-fn draw_sync_indicators(ui: &mut UIRenderer, tm: &dyn TextMeasure, sync: &SyncStatus) {
+pub(super) fn draw_sync_indicators(ui: &mut UIRenderer, tm: &dyn TextMeasure, sync: &SyncStatus) {
     // Color palette — matches transport bar exactly. sRGB `Color32`; the draw
     // API converts to linear once at the boundary.
     let link_orange_bg = Color32::new(191, 122, 20, 255);
@@ -608,15 +474,8 @@ fn draw_numeric_text(
 /// be clicked accidentally during a performance — the cue HUD is the
 /// primary visual, and the exit affordance is deliberate-only.
 /// Caller must have already called `ui.begin_frame()`.
-fn draw_exit_button(
-    ui: &mut UIRenderer,
-    tm: &dyn TextMeasure,
-    btn_x: f32,
-    btn_y: f32,
-    btn_w: f32,
-    btn_h: f32,
-    hover: bool,
-) {
+pub(super) fn draw_exit_button(ui: &mut UIRenderer, tm: &dyn TextMeasure, button: Rect, hover: bool) {
+    let (btn_x, btn_y, btn_w, btn_h) = (button.x, button.y, button.width, button.height);
     // Muted bg by default; brighter on hover so the user gets visual
     // confirmation they're aiming at it before pressing.
     let bg = if hover {
@@ -645,24 +504,14 @@ fn draw_exit_button(
 /// BEAT, since bar.beat replaces it).
 ///
 /// Caller must have already called `ui.begin_frame()`.
-#[allow(clippy::too_many_arguments)]
-fn draw_cue_hud(
-    ui: &mut UIRenderer,
-    tm: &dyn TextMeasure,
-    lw: f32,
-    lh: f32,
-    current_name: &str,
-    next_name: &str,
-    countdown: Option<&cue::CountdownDisplay>,
-    section_progress: Option<f64>,
-    bar_beat: &cue::BarBeatDisplay,
-    now_section_tracks: &[&str],
-    next_section_tracks: &[&str],
-    bpm: f64,
-    is_playing: bool,
-    ableton_connected: bool,
-    cues_empty: bool,
-) {
+pub(super) fn draw_cue_hud(ui: &mut UIRenderer, tm: &dyn TextMeasure, lw: f32, lh: f32, hud: &PerformHud<'_>) {
+    let (current_name, next_name) = (hud.current_name, hud.next_name);
+    let countdown: Option<&cue::CountdownDisplay> = hud.countdown.as_ref();
+    let section_progress = hud.section_progress;
+    let bar_beat = &hud.bar_beat;
+    let (now_section_tracks, next_section_tracks) = (&hud.now_section_tracks, &hud.next_section_tracks);
+    let (bpm, is_playing, ableton_connected, cues_empty) =
+        (hud.bpm, hud.is_playing, hud.ableton_connected, hud.cues_empty);
     // Color palette.
     let dim = [140u8, 140u8, 145u8, 255u8];
     let white = [240u8, 240u8, 240u8, 255u8];
@@ -967,7 +816,7 @@ fn draw_cue_hud(
 /// caller when the snapshot is empty (no macros mapped).
 ///
 /// Caller must have already called `ui.begin_frame()`.
-fn draw_macros_column(ui: &mut UIRenderer, lh: f32, macros: &[perform_macros::MacroDisplay]) {
+pub(super) fn draw_macros_column(ui: &mut UIRenderer, lh: f32, macros: &[perform_macros::MacroDisplay]) {
     let dim = [140u8, 140u8, 145u8, 255u8];
     let white = [240u8, 240u8, 240u8, 255u8];
     // Ableton purple — matches the macro accent used elsewhere in the

@@ -231,6 +231,9 @@
     "crates/manifold-app/src/editor_frame.rs": [
       "work-editor-open",
       "work-editor-idle"
+    ],
+    "crates/manifold-app/src/perform_mode/": [
+      "work-perform-idle"
     ]
   },
   "flows": {
@@ -341,6 +344,7 @@
     "scene-light-swatch": "gltfscene",
     "work-editor-open": "paramsteps",
     "work-editor-idle": "paramsteps",
+    "work-perform-idle": "timeline",
     "scene-fluid-authoring": "fluidauthoring",
     "scene-fluid-template": "fluidauthoring",
     "scene-physics-controls": "physicsscene",
