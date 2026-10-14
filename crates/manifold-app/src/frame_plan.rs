@@ -249,6 +249,9 @@ pub(crate) struct FrameInputs {
     pub scroll_x_px: i32,
     pub scroll_y_px: i32,
     pub zoom_bits: u32,
+    /// The exact scroll, so a sub-pixel move still updates the scroll panels.
+    pub scroll_x_bits: u32,
+    pub scroll_y_bits: u32,
     /// The overview strip's playhead only.
     pub playhead_px: i32,
     pub inspector_view: u64,
@@ -326,6 +329,16 @@ pub(crate) struct FramePlan {
     /// Atlas slots to repaint.
     pub repaint: RegionMask,
     pub redraw: bool,
+    /// Which timeline view axes moved. Applied as the scroll-panel update, so
+    /// a scroll or zoom from any input path needs no structural sync.
+    pub viewport: ViewportMoves,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct ViewportMoves {
+    pub scroll_x: bool,
+    pub scroll_y: bool,
+    pub zoom: bool,
 }
 
 #[cfg(test)]
@@ -472,6 +485,11 @@ pub(crate) fn plan_frame(last: &FrameInputs, next: &FrameInputs) -> FramePlan {
         p.insert(Projection::SelectionPush);
     }
 
+    plan.viewport = ViewportMoves {
+        scroll_x: last.scroll_x_bits != next.scroll_x_bits,
+        scroll_y: last.scroll_y_bits != next.scroll_y_bits,
+        zoom: last.zoom_bits != next.zoom_bits,
+    };
     plan_regions(&mut plan, last, next, selection_visual, cursor, active_layer, automation_view, preview);
     plan.redraw = true;
     plan
@@ -555,6 +573,7 @@ fn plan_regions(
         translate.insert(headers);
     }
     if last.scroll_y_px != next.scroll_y_px
+        || plan.viewport.scroll_y
         || height(headers)
         || selection_visual
         || active_layer
@@ -575,6 +594,8 @@ fn plan_regions(
     if last.scroll_x_px != next.scroll_x_px
         || last.scroll_y_px != next.scroll_y_px
         || last.zoom_bits != next.zoom_bits
+        || plan.viewport.scroll_x
+        || plan.viewport.scroll_y
         || height(viewport)
         || selection_visual
         || cursor
@@ -1083,6 +1104,38 @@ mod tests {
         let mut next = base();
         next.preview.clips = 1;
         assert!(!plan(next).rebuild.contains(r), "a drag preview never rebuilds");
+    }
+
+    #[test]
+    fn row_viewport_scroll_and_zoom() {
+        let mut next = base();
+        next.scroll_x_bits = 0.3f32.to_bits();
+        let p = plan(next);
+        assert_eq!(p.viewport, ViewportMoves { scroll_x: true, ..Default::default() }, "a sub-pixel scroll");
+        assert!(p.in_place.contains(MainRegion::Viewport));
+
+        let mut next = base();
+        next.scroll_y_bits = 12.0f32.to_bits();
+        let p = plan(next);
+        assert_eq!(p.viewport, ViewportMoves { scroll_y: true, ..Default::default() });
+        assert!(p.in_place.contains(MainRegion::LayerHeaders));
+
+        let mut next = base();
+        next.zoom_bits = 2;
+        assert_eq!(plan(next).viewport, ViewportMoves { zoom: true, ..Default::default() });
+
+        for edit in [
+            |i: &mut FrameInputs| i.scroll_x_bits = 1,
+            |i: &mut FrameInputs| i.scroll_y_bits = 1,
+            |i: &mut FrameInputs| i.zoom_bits = 1,
+        ] {
+            let mut next = base();
+            edit(&mut next);
+            let p = plan(next);
+            assert!(!runs(&p, Projection::ProjectSync), "a view move never projects");
+            assert!(!runs(&p, Projection::InspectorSync));
+            assert!(p.rebuild.is_empty(), "a view move never rebuilds a region");
+        }
     }
 
     #[test]
