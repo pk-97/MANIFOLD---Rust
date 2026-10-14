@@ -1449,7 +1449,8 @@ impl ScenePanel {
         self.sync_material_swatches(tree);
     }
 
-    /// (`ScreenLayout::scene_setup()`). No-op when closed.
+    /// Build into the inspector's Scene tab content rect
+    /// (`InspectorCompositePanel::scene_content_rect`). No-op when closed.
     pub fn build_docked(&mut self, tree: &mut UITree, rect: Rect) {
         if !self.open {
             return;
@@ -1556,6 +1557,9 @@ impl ScenePanel {
         let body_viewport = Rect::new(x, content_top, self.panel_w, (y + panel_h - PAD - content_top).max(0.0));
         self.object_modifier_bounds = body_viewport;
         let clip_id = self.scroll.begin(tree, body_viewport);
+        // The panel builds inside the inspector region (SCENE_SURFACES D16);
+        // this name keeps `under_name: "scene_setup"` selectors addressing it.
+        tree.set_name(clip_id, "scene_setup");
         self.content_parent = clip_id;
         let content_start = tree.count();
         let mut cy = content_top;
@@ -1658,7 +1662,7 @@ impl ScenePanel {
                 cy,
                 inner_w,
                 ROW_H,
-                "2+ scenes in this graph — showing the first",
+                "This layer has more than one scene; showing the first",
                 label_style(),
             );
             cy += ROW_H;
@@ -2741,20 +2745,10 @@ impl ScenePanel {
             }
             UIEvent::Click { node_id, .. } => {
                 if *node_id == self.close_id {
-                    // BUG-224: this used to call `self.close()` directly —
-                    // that only flips the panel-local `open` flag, so
-                    // `ui_root.layout.scene_setup_width` (the dock's actual
-                    // screen footprint) never reset to 0, no rebuild ever
-                    // fired (no `PanelAction` means `app_render.rs`'s
-                    // dispatch loop never runs), and the header toggle
-                    // button's highlight went stale — the × visibly did
-                    // nothing. `AudioSetupPanel::handle_event`'s close arm
-                    // (see its own doc comment) already has the correct
-                    // one-toggle-path pattern: emit the same
-                    // `PanelAction::OpenSceneSetup` the header button and
-                    // Escape use, so `ui.toggle_scene_dock()` runs through
-                    // the single owning path (width + open + rebuild +
-                    // header sync all in lockstep).
+                    // The one toggle path the header button and Escape use:
+                    // the inspector leaves the Scene tab, and the projection
+                    // closes this panel (BUG-224 (scene setup close button
+                    // bypasses shared toggle action)).
                     return (true, vec![PanelAction::Root(RootAction::OpenSceneSetup)]);
                 }
                 if let Some((_, group_id)) = self.group_toggle_ids.iter().find(|(id, _)| *id == *node_id) {

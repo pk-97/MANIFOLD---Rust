@@ -479,9 +479,6 @@ pub struct Application {
     /// double-click snaps the width back to its default, same shape as the
     /// inspector/split handles above.
     pub(crate) audio_setup_handle_last_click: Option<std::time::Instant>,
-    /// Double-click detect for the Scene Setup dock resize handle — mirror
-    /// of `audio_setup_handle_last_click` (SCENE_SETUP_PANEL_DESIGN D2).
-    pub(crate) scene_setup_handle_last_click: Option<std::time::Instant>,
 
     // Output window double-click fullscreen toggle.
     // Double-click fullscreen toggle for the output window.
@@ -726,7 +723,6 @@ impl Application {
             split_handle_last_click: None,
             inspector_handle_last_click: None,
             audio_setup_handle_last_click: None,
-            scene_setup_handle_last_click: None,
             output_last_click: None,
             output_saved_frame: None,
             current_project_path: None,
@@ -897,21 +893,6 @@ impl Application {
             return;
         }
         self.ws.ui_root.set_audio_setup_handle_idle();
-
-        // Priority 2c: Scene Setup dock resize edge hover — mirror of Audio
-        // Setup above (SCENE_SETUP_PANEL_DESIGN D2).
-        if self.ws.ui_root.scene_setup_resize_dragging
-            || self.ws.ui_root.is_near_scene_setup_edge(self.cursor_pos)
-        {
-            self.cursor_manager.set(TimelineCursor::ResizeHorizontal);
-            if self.ws.ui_root.scene_setup_resize_dragging {
-                self.ws.ui_root.set_scene_setup_handle_drag();
-            } else {
-                self.ws.ui_root.set_scene_setup_handle_hover();
-            }
-            return;
-        }
-        self.ws.ui_root.set_scene_setup_handle_idle();
 
         // Priority 2d (UX-P2, D3a of SCENE_PANEL_UX_DESIGN.md) — the Scene
         // Setup drag-armable value-cell cursor lookup — is DELETED
@@ -1294,7 +1275,7 @@ impl Application {
                                 let param_id = param.map(|p| p.id().to_string());
                                 (fx.id.clone(), old, new_val, param_id)
                             }),
-                        manifold_ui::InspectorTab::Layer | manifold_ui::InspectorTab::Group => self
+                        manifold_ui::InspectorTab::Layer | manifold_ui::InspectorTab::Group | manifold_ui::InspectorTab::Scene => self
                             .active_layer_id
                             .as_ref()
                             .and_then(|id| self.local_project.timeline.find_layer_by_id(id))
@@ -1455,7 +1436,7 @@ impl Application {
                             .as_ref()
                             .and_then(|groups| groups.get(group_idx))
                             .map(|g| (g.id.clone(), g.name.clone())),
-                        manifold_ui::InspectorTab::Layer | manifold_ui::InspectorTab::Group => self
+                        manifold_ui::InspectorTab::Layer | manifold_ui::InspectorTab::Group | manifold_ui::InspectorTab::Scene => self
                             .active_layer_id
                             .as_ref()
                             .and_then(|id| self.local_project.timeline.find_layer_by_id(id))
@@ -1480,7 +1461,8 @@ impl Application {
                             }
                             manifold_ui::InspectorTab::Layer
                             | manifold_ui::InspectorTab::Group
-                            | manifold_ui::InspectorTab::Clip => {
+                            | manifold_ui::InspectorTab::Clip
+                            | manifold_ui::InspectorTab::Scene => {
                                 let layer_id = self.active_layer_id.clone().unwrap_or_default();
                                 manifold_editing::commands::effect_target::EffectTarget::Layer {
                                     layer_id,

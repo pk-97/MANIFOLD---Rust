@@ -222,6 +222,11 @@ fn run_flow(
         || scene == "mushroomscene"
         || scene == "physicsscene"
         || scene == "physicsboxes"
+        // The Scene tab lives in the inspector (SCENE_SURFACES D16).
+        || scene == "fluidauthoring"
+        || scene == "scene-setup"
+        || scene == "waterdambreak"
+        || scene == "waterdambreakmatter"
         || scene == "gltfanimscene"
         || scene == "bug047"
         || scene == "envmod"
@@ -1434,18 +1439,20 @@ impl Runner {
     /// generic pipeline and ask for the rebuild that bakes the offset in
     /// (BUG-294); anything else routes the generic pipeline. Returns whether the inspector handled the scroll in place.
     fn scroll_once(&mut self, ui: &mut UIRoot, data: &mut SceneData, center: Vec2, delta: Vec2) -> bool {
-        if ui.layout.inspector().contains(center) {
-            if ui.try_inspector_scroll(delta.y, center.x) {
-                return ui.inspector.take_scrolled_in_place();
-            }
-            // Nothing built yet — the real handler's same fallback.
-            ui.inspector.handle_scroll_at(delta.y, center.x);
-        } else if ui.layout.scene_setup().contains(center) || ui.layout.audio_setup().contains(center) {
+        // The Scene tab sits inside the inspector rect, so it is tested first,
+        // in the same order as `window_input::primary_mouse_wheel`.
+        if ui.inspector.scene_content_rect().contains(center) || ui.layout.audio_setup().contains(center) {
             // `window_input::primary_mouse_wheel`'s dock branch: the generic
             // scroll pipeline, then a rebuild that bakes the offset in.
             ui.input.process_scroll(center, delta);
             self.drain_and_dispatch(ui, data);
             self.flags.rebuild = true;
+        } else if ui.layout.inspector().contains(center) {
+            if ui.try_inspector_scroll(delta.y, center.x) {
+                return ui.inspector.take_scrolled_in_place();
+            }
+            // Nothing built yet — the real handler's same fallback.
+            ui.inspector.handle_scroll_at(delta.y, center.x);
         } else {
             ui.input.process_scroll(center, delta);
             self.drain_and_dispatch(ui, data);
@@ -1493,12 +1500,12 @@ impl Runner {
         };
         let cx = rect0.x + rect0.width * 0.5;
         let insp = ui.layout.inspector();
-        let scene = ui.layout.scene_setup();
+        let scene = ui.inspector.scene_content_rect();
         let in_x = |r: Rect| r.width > 0.0 && cx >= r.x && cx < r.x + r.width;
-        let container_is_inspector = if in_x(insp) {
-            true
-        } else if ui.scene_setup_panel.is_open() && in_x(scene) {
+        let container_is_inspector = if ui.scene_setup_panel.is_open() && in_x(scene) {
             false
+        } else if in_x(insp) {
+            true
         } else {
             return self.fail(
                 index,

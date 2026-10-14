@@ -1,5 +1,5 @@
 [
-  { "Pointer": { "target": { "Query": { "text": "Scene" } }, "gesture": { "Click": { "modifiers": {} } } } },
+  { "Pointer": { "target": { "Query": { "text": "Scene", "type": "Button", "under_name": "inspector" } }, "gesture": { "Click": { "modifiers": {} } } } },
   { "Assert": { "selector": { "Query": { "name": "scene_setup.properties.name_value", "text": "Ground" } }, "check": "Exists" } },
   { "Pointer": { "target": { "Query": { "text": "⧉" } }, "gesture": { "Click": { "modifiers": {} } } } },
   { "Pointer": { "target": { "Query": { "text": "■ Ground 2" } }, "gesture": { "Click": { "modifiers": {} } } } },

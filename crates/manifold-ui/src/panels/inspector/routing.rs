@@ -108,7 +108,7 @@ impl InspectorCompositePanel {
     pub(super) fn selection_for_tab(&self, tab: InspectorTab) -> (&HashSet<EffectId>, &[ParamCardPanel]) {
         let set = match tab {
             InspectorTab::Master => &self.selected_master_ids,
-            InspectorTab::Layer | InspectorTab::Group | InspectorTab::Clip => &self.selected_layer_ids,
+            InspectorTab::Layer | InspectorTab::Group | InspectorTab::Clip | InspectorTab::Scene => &self.selected_layer_ids,
         };
         (set, self.cards_for_tab(tab))
     }
@@ -116,7 +116,7 @@ impl InspectorCompositePanel {
     pub(super) fn selection_set_mut(&mut self, tab: InspectorTab) -> &mut HashSet<EffectId> {
         match tab {
             InspectorTab::Master => &mut self.selected_master_ids,
-            InspectorTab::Layer | InspectorTab::Group | InspectorTab::Clip => &mut self.selected_layer_ids,
+            InspectorTab::Layer | InspectorTab::Group | InspectorTab::Clip | InspectorTab::Scene => &mut self.selected_layer_ids,
         }
     }
 

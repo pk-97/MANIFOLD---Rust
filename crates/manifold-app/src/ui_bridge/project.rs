@@ -1918,8 +1918,8 @@ mod tests {
         // The projection uses the same eligibility helper as dispatch. Build
         // the real scene panel to keep the Physics property visible for the
         // fresh cube before it has a body.
-        ui.scene_setup_panel.open();
         selection.select_layer(layer_id.clone());
+        selection.pin_scope(manifold_ui::InspectorTab::Scene);
         super::super::projection::inspector::sync_inspector_data(
             &mut ui,
             &project,

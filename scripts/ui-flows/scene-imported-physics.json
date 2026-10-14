@@ -3,7 +3,7 @@
     "Pointer": {
       "target": {
         "Query": {
-          "text": "Scene"
+          "text": "Scene", "type": "Button", "under_name": "inspector"
         }
       },
       "gesture": {
@@ -102,6 +102,20 @@
       },
       "check": {
         "Count": 0
+      }
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "text": "Layer", "type": "Button", "under_name": "inspector"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
       }
     }
   },
@@ -295,6 +309,20 @@
     }
   },
   {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "text": "Scene", "type": "Button", "under_name": "inspector"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  {
     "Assert": {
       "selector": {
         "Query": {
@@ -321,6 +349,20 @@
     }
   },
   {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "text": "Layer", "type": "Button", "under_name": "inspector"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  {
     "Assert": {
       "selector": {
         "Query": {
@@ -329,6 +371,20 @@
       },
       "check": {
         "Count": 0
+      }
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "text": "Scene", "type": "Button", "under_name": "inspector"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
       }
     }
   },
