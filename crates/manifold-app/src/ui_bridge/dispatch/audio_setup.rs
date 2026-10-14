@@ -19,6 +19,7 @@ use manifold_editing::commands::layer::{
     AddLayerClipTriggerCommand, RemoveLayerClipTriggerCommand, SetLayerClipTriggerCommand,
 };
 use manifold_ui::AudioSetupAction;
+use manifold_ui::panels::inspector::InspectorFold;
 
 use super::super::DispatchResult;
 use super::resolve::audio_setup_command;
@@ -41,12 +42,12 @@ pub(crate) fn dispatch_audio_setup(action: &AudioSetupAction, ctx: &mut super::s
         // Add/Remove/SetLayerClipTriggerCommand — whole-value-replace, same
         // shape as `SetAudioModTriggerModeCommand`.
         AudioSetupAction::AudioTriggerSectionToggle => {
-            ctx.ui.inspector.audio_trigger_section_mut().toggle_collapsed();
-            DispatchResult::structural()
+            ctx.ui.inspector.toggle_fold(InspectorFold::AudioTriggers);
+            DispatchResult::handled()
         }
         AudioSetupAction::AudioTriggerRowExpandToggle(_layer_id, index) => {
-            ctx.ui.inspector.audio_trigger_section_mut().toggle_row_expanded(*index);
-            DispatchResult::structural()
+            ctx.ui.inspector.toggle_fold(InspectorFold::AudioTriggerRow(*index));
+            DispatchResult::handled()
         }
         AudioSetupAction::AudioTriggerAdd(layer_id) => {
             // One click = a firing trigger: enabled, listening to the first

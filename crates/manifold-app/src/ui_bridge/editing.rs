@@ -429,11 +429,11 @@ pub(super) fn dispatch_editing(
 
         EditingAction::AutomationLaneHide(target, param_id) => {
             selection.hide_automation_lane(target.clone(), param_id.clone());
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
         EditingAction::AutomationLanePinToggle(target, param_id) => {
             selection.toggle_automation_lane_pin(target.clone(), param_id.clone());
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
         EditingAction::AutomationLaneMove(target, param_id, direction) => {
             super::sync_automation_lane_order(project, selection);
@@ -454,11 +454,11 @@ pub(super) fn dispatch_editing(
                 }
                 break;
             }
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
         EditingAction::ShowAllAutomationLanes => {
             selection.show_all_automation_lanes();
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
 
         EditingAction::LayerHeaderRightClicked(_) => {
