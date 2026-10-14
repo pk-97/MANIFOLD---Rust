@@ -333,7 +333,7 @@ fn mapping_fp(fp: &mut Fp, m: &crate::ableton_mapping::AbletonParamMapping) {
 }
 
 fn instance_fp(fp: &mut Fp, inst: &PresetInstance) {
-    fp.put(Part::Effects, &(&inst.kind, &inst.id, inst.effect_type(), inst.enabled, inst.collapsed, &inst.folded_sections));
+    fp.put(Part::Effects, &(&inst.kind, &inst.id, inst.effect_type(), inst.enabled, inst.collapsed, &inst.folded_sections, &inst.unfolded_sections));
     // First base write latches base tracking; it rides with the values it tracks.
     fp.put(Part::Values, &inst.base_tracked);
     for p in inst.params.iter() {

@@ -216,6 +216,16 @@ impl ParamCardPanel {
                 )];
             }
             let target = self.param_target();
+            // A scene card's fold is a saved choice (SCENE_SURFACES_DESIGN.md
+            // D7): flip it here and let the app save it.
+            if role == RowRole::SectionHeader
+                && self.scene_sections
+                && let Some(section) = self.row_host.section_header_ids.iter().find(|(hid, _)| *hid == id).map(|(_, name)| name.clone())
+            {
+                let folded = !self.section_folded.get(&section).copied().unwrap_or(false);
+                self.section_folded.insert(section.clone(), folded);
+                return vec![PanelAction::Params(ParamsAction::CardSectionFolded { target, section, folded })];
+            }
             return self.row_host.row_action(
                 target,
                 row,
@@ -404,46 +414,11 @@ impl ParamCardPanel {
             }
         }
 
-        // Per-param perform-mapping menu.
-        for (pi, slider) in self.row_host.slider_ids.iter().enumerate() {
-            // Generator toggle/trigger rows have no map gesture — they fall
-            // through to the card claim like any other dead zone.
-            if matches!(self.kind, ParamCardKind::Generator)
-                && self
-                    .rows
-                    .get(pi)
-                    .map(|i| i.spec.is_toggle || i.spec.is_trigger)
-                    .unwrap_or(false)
-            {
-                continue;
-            }
-            let Some(ids) = slider else { continue };
-
-            // Rest of the row → parameter menu, including Show Automation.
-            // Author and Perform share this explicit lane-entry action. Registered on
-            // both the interactive label and the full-row catcher behind the
-            // value cell + gaps, so a right-click anywhere on the row that isn't
-            // the track reliably opens the param menu — no narrow-target lottery.
-            {
-                let menu = PanelAction::Params(ParamsAction::ParamLabelRightClick(target.clone(), self.rows[pi].id.clone()));
-                // Label registration goes through the contract (P3/D14).
-                BitmapSlider::register_label_mapping(ids, &menu, intents);
-                // The row catcher is a second node carrying the SAME action
-                // — host-attached chrome, not a contract zone (it's a
-                // full-row dead-zone catcher behind the value cell + gaps,
-                // no `SliderZone` of its own), so it stays hand-registered.
-                if let Some(Some(catcher)) = self.row_host.row_catcher_ids.get(pi).copied() {
-                    intents.claim_area(catcher);
-                    intents.on(catcher, RightClick, menu.clone());
-                }
-                // The value cell carries the same menu: it wins the hit-test
-                // over the catcher (BUG-250's fix made it interactive per its
-                // zone contract), and `ValueCell + RightClick` is a contract
-                // dead stop hosts may bind (D13) — binding it keeps the
-                // pre-fix "right-click anywhere off-track opens the menu"
-                // behavior instead of degrading to the card menu.
-                intents.on(ids.value_text, RightClick, menu);
-            }
-        }
+        // Per-param menu. Generator toggle/trigger rows have no map gesture —
+        // they fall through to the card claim like any other dead zone.
+        let generator = matches!(self.kind, ParamCardKind::Generator);
+        self.row_host.register_param_menus(&self.rows, &target, intents, |row| {
+            generator && (row.spec.is_toggle || row.spec.is_trigger)
+        });
     }
 }

@@ -12,10 +12,10 @@ impl ScenePanel {
         matches!(target, UiGraphTarget::Generator(layer) if self.live_layer_id() == Some(layer))
     }
 
-    /// The item that owns `row`: the item whose controls list it, or the
-    /// object whose material drawer holds it.
-    fn property_selection_for_row(vm: &SceneSetupVm, row: &ParamRow) -> Option<SceneSelection> {
-        let id = row.id.as_ref();
+    /// The item that owns param `id`: the item whose projected controls list
+    /// it (`scene_items::owner_of`, app-side), or the object whose material
+    /// drawer holds it.
+    fn owner_selection(vm: &SceneSetupVm, id: &str) -> Option<SceneSelection> {
         if let Some(object) = vm.objects.iter().find_map(|object| {
             let ObjectRowVm::Known(object) = object else { return None; };
             object.material_inspector.as_ref().is_some_and(|material| {
@@ -31,37 +31,29 @@ impl ScenePanel {
             .map(|item| item.selection.clone())
     }
 
-    /// Select and open the response drawer for a projected scene parameter.
-    /// Card hosts own response matching; ordinary properties only unfold the
-    /// existing projected section and choose an already-active response tab.
-    pub fn reveal_clip_response(
-        &mut self,
-        target: &UiGraphTarget,
-        param: &manifold_foundation::ParamId,
-    ) -> bool {
-        if !self.target_matches_scene(target) {
+    fn has_param(&self, param: &manifold_foundation::ParamId) -> bool {
+        self.full_params.as_ref().is_some_and(|surface| surface.rows.iter().any(|row| row.id == *param))
+    }
+
+    /// The layer whose scene this tab shows, when it holds `param`.
+    pub fn scene_layer_with(&self, param: &manifold_foundation::ParamId) -> Option<&LayerId> {
+        self.live_layer_id().filter(|_| self.has_param(param))
+    }
+
+    /// Show `param` in the Scene tab: select the item that owns it, unfold
+    /// its group, open an active response tab and scroll it into view on the
+    /// next build. Ownership comes from the projected item list, never a
+    /// section string (SCENE_SURFACES_DESIGN.md D10). Changes no authored
+    /// state; `false` leaves the selection as it was.
+    pub fn reveal_param(&mut self, target: &UiGraphTarget, param: &manifold_foundation::ParamId) -> bool {
+        if !self.target_matches_scene(target) || !self.has_param(param) {
             return false;
         }
-        let Some(full_row_index) = self.full_params.as_ref().and_then(|surface| {
-            surface.rows.iter().position(|row| {
-                row.id == *param
-                    && row
-                        .clip_trigger
-                        .as_ref()
-                        .is_some_and(|source| source.target == *target)
-            })
-        }) else {
-            return false;
-        };
         let Some(layer_id) = self.live_layer_id().cloned() else {
             return false;
         };
 
-        if let Some(index) = self
-            .force_cards
-            .iter_mut()
-            .position(|card| card.reveal_clip_response(target, param))
-        {
+        if let Some(index) = self.force_cards.iter_mut().position(|card| card.reveal_param(param)) {
             let Some(info) = self.force_cards[index].modifier_info().cloned() else {
                 return false;
             };
@@ -73,11 +65,7 @@ impl ScenePanel {
             return true;
         }
 
-        if let Some(index) = self
-            .object_modifier_cards
-            .iter_mut()
-            .position(|card| card.reveal_clip_response(target, param))
-        {
+        if let Some(index) = self.object_modifier_cards.iter_mut().position(|card| card.reveal_param(param)) {
             let Some(info) = self.object_modifier_cards[index]
                 .object_modifier_info()
                 .cloned()
@@ -93,23 +81,30 @@ impl ScenePanel {
             return true;
         }
 
-        let Some(vm) = self.state.as_live() else {
-            return false;
-        };
-        let Some(full_row) = self
-            .full_params
-            .as_ref()
-            .and_then(|surface| surface.rows.get(full_row_index))
-        else {
-            return false;
-        };
-        let Some(selection) = Self::property_selection_for_row(vm, full_row) else {
+        let Some(selection) = self.state.as_live().and_then(|vm| Self::owner_selection(vm, param.as_ref())) else {
             return false;
         };
         self.set_selection(layer_id, selection);
         self.revealed_property = Some((target.clone(), param.clone()));
         self.pending_parameter_reveal = Some((target.clone(), param.clone()));
         true
+    }
+
+    /// A card section title's reveal (SCENE_SURFACES_DESIGN.md D10): the
+    /// section's first row owned by a light, object or force item, else its
+    /// first row. So Lighting opens a light even when a camera row leads it.
+    pub fn reveal_section(&mut self, target: &UiGraphTarget, params: &[manifold_foundation::ParamId]) -> bool {
+        let item_owned = |panel: &Self, param: &manifold_foundation::ParamId| {
+            panel.force_cards.iter().chain(&panel.object_modifier_cards).any(|card| card.row(param.as_ref()).is_some())
+                || panel.state.as_live().is_some_and(|vm| {
+                    matches!(
+                        Self::owner_selection(vm, param.as_ref()),
+                        Some(SceneSelection::Light(_) | SceneSelection::Object(_) | SceneSelection::Force(_))
+                    )
+                })
+        };
+        let pick = params.iter().find(|param| item_owned(self, param)).or(params.first()).cloned();
+        pick.is_some_and(|param| self.reveal_param(target, &param))
     }
 
     pub(super) fn property_explicitly_revealed(&self, row: &ParamRow) -> bool {
@@ -201,14 +196,10 @@ impl ScenePanel {
         }
         let Some((target, param)) = self.pending_parameter_reveal.as_ref() else { return; };
         let valid = self.target_matches_scene(target)
-            && self.full_params.as_ref().and_then(|surface| surface.rows.iter().find(|row|
-                row.id == *param && row.clip_trigger.as_ref().is_some_and(|source| source.target == *target)))
-                .is_some_and(|row| {
-                    self.force_cards.iter().chain(self.object_modifier_cards.iter()).any(|card|
-                        card.rows.iter().any(|row| row.id == *param))
-                        || self.state.as_live().is_some_and(|vm|
-                            Self::property_selection_for_row(vm, row).is_some())
-                });
+            && self.has_param(param)
+            && (self.force_cards.iter().chain(self.object_modifier_cards.iter())
+                .any(|card| card.rows.iter().any(|row| row.id == *param))
+                || self.state.as_live().is_some_and(|vm| Self::owner_selection(vm, param.as_ref()).is_some()));
         if !valid { self.pending_parameter_reveal = None; }
     }
 
@@ -218,14 +209,6 @@ impl ScenePanel {
 mod tests {
     use super::super::tests::world_transform_vm;
     use super::*;
-    use crate::param_surface::ClipTriggerRow;
-
-    fn arm(row: &mut ParamRow, target: &UiGraphTarget) {
-        row.clip_trigger = Some(ClipTriggerRow {
-            target: target.clone(),
-            source_label: "Main lane".into(),
-        });
-    }
 
     #[test]
     fn shared_object_section_uses_exact_parameter_owner() {
@@ -266,15 +249,12 @@ mod tests {
 
         let mut row_a = surface.rows[0].clone();
         row_a.id = "shared_a".into();
-        row_a.spec.section = Some("Shared".into());
-        arm(&mut row_a, &target);
         let mut row_b = row_a.clone();
         row_b.id = "shared_b".into();
         row_b.spec.material_role = role;
         row_b.value.base = 0.75;
         row_b.value.effective = 0.75;
         row_b.modulation.envelope_active = true;
-        arm(&mut row_b, &target);
         surface.rows = vec![row_a, row_b];
         surface.supports_envelopes = true;
 
@@ -283,7 +263,7 @@ mod tests {
         panel.configure(super::super::tests::live(vm));
         panel.configure_params(Some(surface));
         let param: manifold_foundation::ParamId = "shared_b".into();
-        assert!(panel.reveal_clip_response(&target, &param));
+        assert!(panel.reveal_param(&target, &param));
         assert_eq!(
             panel.selection.get(&LayerId::new("layer-1")),
             Some(&SceneSelection::Object(41))
@@ -301,61 +281,117 @@ mod tests {
         assert!(panel.properties_card.row_id_index.contains_key("shared_b"), "response must remain reachable after the reveal frame");
         panel.set_selection(LayerId::new("layer-1"), SceneSelection::Object(40));
         assert!(panel.revealed_property.is_none());
-        assert!(panel.reveal_clip_response(&target, &param));
+        assert!(panel.reveal_param(&target, &param));
         panel.configure_params(None);
         assert!(panel.revealed_property.is_none());
     }
 
+    /// Every scene row reveals its owning item by id alone: no clip trigger,
+    /// no section title. A force row reveals through its force card.
     #[test]
-    fn camera_light_world_navigation_uses_projected_ownership() {
+    fn reveal_param_selects_owning_item_for_light_object_force_world() {
         let (mut vm, template) = world_transform_vm();
-        let target = UiGraphTarget::Generator(vm.layer_id.clone());
-        vm.objects = vec![ObjectRowVm::Custom { index: 0 }];
+        let layer = vm.layer_id.clone();
+        let target = UiGraphTarget::Generator(layer.clone());
+        let object = vm
+            .objects
+            .iter()
+            .find_map(|object| match object {
+                ObjectRowVm::Known(row) => Some(row.object_node_id),
+                ObjectRowVm::Custom { .. } => None,
+            })
+            .expect("fixture object");
+        let force = manifold_foundation::NodeId::new("gravity");
+        vm.forces.push(SceneForceRowVm { instance_id: force.clone(), title: "Gravity".into() });
         let physics = SceneSelection::Physics(manifold_foundation::NodeId::new("world"));
         for (selection, ids) in [
             (SceneSelection::Camera, &["camera_param"][..]),
             (SceneSelection::Light(60), &["light_param"]),
-            (SceneSelection::World, &["world_param", "render_param"]),
+            (SceneSelection::Object(object), &["object_param"]),
+            (SceneSelection::World, &["world_param", "ray_tracing_param"]),
             (physics.clone(), &["physics_param"]),
         ] {
             super::super::tests::set_item_ids(&mut vm, selection, ids);
         }
-        let rows = [
-            ("camera_param", "Camera"),
-            ("light_param", "Light"),
-            ("world_param", "Environment"),
-            ("physics_param", "Physics"),
-            ("render_param", "Rendering"),
-        ]
-        .into_iter()
-        .map(|(id, section)| {
+        let row = |id: &str| {
             let mut row = template.rows[0].clone();
-            row.id = id.into();
-            row.spec.section = Some(section.into());
-            arm(&mut row, &target);
+            row.id = id.to_string().into();
             row
-        })
-        .collect();
-        let mut surface = template;
-        surface.rows = rows;
+        };
+        let ids = ["camera_param", "light_param", "object_param", "world_param", "ray_tracing_param", "physics_param", "force_strength"];
+        let mut surface = template.clone();
+        surface.rows = ids.iter().map(|id| row(id)).collect();
+        let mut force_card = template.clone();
+        force_card.kind = crate::panels::param_card::ParamCardKind::Effect;
+        force_card.effect_id = manifold_foundation::EffectId::new("force-gravity");
+        force_card.modifier = Some(crate::param_surface::ModifierCardInfo {
+            instance_id: force.clone(),
+            layer_id: layer.clone(),
+            params_owner: Default::default(),
+            enabled_label: "Enabled".into(),
+            stack_index: 0,
+            stack_len: 1,
+            targets_all: true,
+            objects: Vec::new(),
+        });
+        force_card.rows = vec![row("force_strength")];
 
         let mut panel = ScenePanel::new();
+        panel.open();
         panel.configure(super::super::tests::live(vm));
         panel.configure_params(Some(surface));
+        panel.configure_force_cards(&[force_card]);
+        panel.force_cards[0].set_collapsed(true);
         for (id, expected) in [
             ("camera_param", SceneSelection::Camera),
             ("light_param", SceneSelection::Light(60)),
+            ("object_param", SceneSelection::Object(object)),
             ("world_param", SceneSelection::World),
+            ("ray_tracing_param", SceneSelection::World),
             ("physics_param", physics.clone()),
-            ("render_param", SceneSelection::World),
+            ("force_strength", SceneSelection::Force(force.clone())),
         ] {
             let param: manifold_foundation::ParamId = id.into();
-            assert!(panel.reveal_clip_response(&target, &param), "{id}");
-            assert_eq!(
-                panel.selection.get(&LayerId::new("layer-1")),
-                Some(&expected)
-            );
+            assert!(panel.reveal_param(&target, &param), "{id}");
+            assert_eq!(panel.selection.get(&layer), Some(&expected), "{id}");
         }
+        assert!(!panel.force_cards[0].is_collapsed(), "the force card unfolds to show its row");
+        assert!(!panel.reveal_param(&target, &"nobody_owns_this".into()));
+        assert_eq!(panel.selection.get(&layer), Some(&SceneSelection::Force(force)), "a miss keeps the selection");
+    }
+
+    /// D10: a section title opens the first light, object or force row's
+    /// owner; a section with none of those opens its first row's owner.
+    #[test]
+    fn reveal_section_prefers_light_object_force_owner_over_first_row() {
+        let (mut vm, template) = world_transform_vm();
+        let layer = vm.layer_id.clone();
+        let target = UiGraphTarget::Generator(layer.clone());
+        super::super::tests::set_item_ids(&mut vm, SceneSelection::Camera, &["exposure", "orbit"]);
+        super::super::tests::set_item_ids(&mut vm, SceneSelection::Light(60), &["sun_intensity"]);
+        let mut surface = template.clone();
+        surface.rows = ["exposure", "orbit", "sun_intensity"]
+            .iter()
+            .map(|id| {
+                let mut row = template.rows[0].clone();
+                row.id = id.to_string().into();
+                row
+            })
+            .collect();
+        let mut panel = ScenePanel::new();
+        panel.open();
+        panel.configure(super::super::tests::live(vm));
+        panel.configure_params(Some(surface));
+
+        let lighting: Vec<manifold_foundation::ParamId> = vec!["exposure".into(), "sun_intensity".into()];
+        assert!(panel.reveal_section(&target, &lighting));
+        assert_eq!(panel.selection.get(&layer), Some(&SceneSelection::Light(60)), "Lighting opens the light");
+
+        let camera: Vec<manifold_foundation::ParamId> = vec!["exposure".into(), "orbit".into()];
+        assert!(panel.reveal_section(&target, &camera));
+        assert_eq!(panel.selection.get(&layer), Some(&SceneSelection::Camera), "no item-owned row: first row");
+
+        assert!(!panel.reveal_section(&target, &[]));
     }
 
     #[test]
@@ -367,7 +403,7 @@ mod tests {
         panel.set_selection(LayerId::new("layer-1"), SceneSelection::World);
         let wrong_target = UiGraphTarget::Generator(LayerId::new("other"));
         let param: manifold_foundation::ParamId = "translate_x".into();
-        assert!(!panel.reveal_clip_response(&wrong_target, &param));
+        assert!(!panel.reveal_param(&wrong_target, &param));
         assert_eq!(
             panel.selection.get(&LayerId::new("layer-1")),
             Some(&SceneSelection::World)

@@ -919,11 +919,13 @@ mod tests {
     fn migrate_twice_is_noop() {
         let mut fx = load(&scene_json(chosen_params(), "Lamp Power"));
         fx.folded_sections = vec!["Key Light".into()];
+        fx.unfolded_sections = vec!["Lighting".into()];
         let first = save(&fx);
         let second = save(&load(&first));
         assert_eq!(first, second);
         let wire: serde_json::Value = serde_json::from_str(&first).unwrap();
         assert_eq!(wire["foldedSections"], serde_json::json!(["Key Light"]));
+        assert_eq!(wire["unfoldedSections"], serde_json::json!(["Lighting"]));
         // A described binding saves no label; composite and user ones keep it.
         let labels: Vec<_> = wire["graph"]["presetMetadata"]["bindings"]
             .as_array()
@@ -939,7 +941,9 @@ mod tests {
         let lamp = &back.graph.as_ref().unwrap().preset_metadata.as_ref().unwrap().bindings[0];
         assert_eq!(lamp.label, "Key", "a load names the binding from the join");
         fx.folded_sections.clear();
+        fx.unfolded_sections.clear();
         assert!(!save(&fx).contains("foldedSections"));
+        assert!(!save(&fx).contains("unfoldedSections"));
     }
 
     /// INV-S16 (no reader goes around the join): the runtime, the editor

@@ -1159,6 +1159,23 @@ impl ParamCardPanel {
         row_count: usize,
         key_base: u64,
     ) -> NodeId {
+        Self::build_section_header_with_title(tree, parent, rect, name, folded, row_count, key_base, false).0
+    }
+
+    /// `build_section_header`, plus, when `title_navigates`, the title as its
+    /// own button sized to the text (`card_section.title`): the fold
+    /// triangle and the bar's empty space still fold, the title opens the
+    /// Scene tab (SCENE_SURFACES_DESIGN.md D10).
+    pub(crate) fn build_section_header_with_title(
+        tree: &mut UITree,
+        parent: Option<NodeId>,
+        rect: Rect,
+        name: &str,
+        folded: bool,
+        row_count: usize,
+        key_base: u64,
+        title_navigates: bool,
+    ) -> (NodeId, Option<NodeId>) {
         let Rect { x, y, width: w, height: row_h } = rect;
         let header_id = tree.add_button_keyed(
             parent,
@@ -1193,20 +1210,38 @@ impl ParamCardPanel {
             },
         );
         let count_w = if folded { 40.0 } else { 0.0 };
-        tree.add_label(
-            Some(header_id),
-            x + GAP + triangle_w,
-            y,
-            (w - GAP * 2.0 - triangle_w - count_w).max(0.0),
-            row_h,
-            name,
-            UIStyle {
-                text_color: color::TEXT_WHITE_C32,
-                font_size: FONT_SIZE,
-                text_align: TextAlign::Left,
-                ..UIStyle::default()
-            },
-        );
+        let title_x = x + GAP + triangle_w;
+        let title_room = (w - GAP * 2.0 - triangle_w - count_w).max(0.0);
+        let title_style = UIStyle {
+            text_color: color::TEXT_WHITE_C32,
+            font_size: FONT_SIZE,
+            text_align: TextAlign::Left,
+            ..UIStyle::default()
+        };
+        let mut title_id = None;
+        if title_navigates {
+            tree.set_name(header_id, "card_section.header");
+            let text_w = tree.text_width(name, FONT_SIZE, title_style.font_weight);
+            let id = tree.add_button_keyed(
+                Some(header_id),
+                title_x,
+                y,
+                (text_w + GAP).min(title_room),
+                row_h,
+                UIStyle {
+                    hover_bg_color: color::HOVER_OVERLAY,
+                    pressed_bg_color: color::PRESS_OVERLAY,
+                    corner_radius: color::SMALL_RADIUS,
+                    ..title_style
+                },
+                name,
+                key_base | ROW_ROLE_SECTION_TITLE,
+            );
+            tree.set_name(id, "card_section.title");
+            title_id = Some(id);
+        } else {
+            tree.add_label(Some(header_id), title_x, y, title_room, row_h, name, title_style);
+        }
         if folded {
             tree.add_label(
                 Some(header_id),
@@ -1223,7 +1258,7 @@ impl ParamCardPanel {
                 },
             );
         }
-        header_id
+        (header_id, title_id)
     }
 
     /// Reset every per-index interactive-id slot for row `i` to "nothing
@@ -1757,7 +1792,7 @@ impl ParamCardPanel {
             for (start, len, section) in runs {
                 if let Some(name) = &section {
                     let folded = self.section_folded.get(name).copied().unwrap_or(false);
-                    let header_id = Self::build_section_header(
+                    let (header_id, title_id) = Self::build_section_header_with_title(
                         tree,
                         None,
                         Rect::new(cx, cy, content_w, ROW_HEIGHT),
@@ -1765,9 +1800,13 @@ impl ParamCardPanel {
                         folded,
                         len,
                         param_row_key_base(&self.rows[start].id),
+                        self.scene_sections,
                     );
                     self.row_host.section_header_ids.push((header_id, name.clone()));
-                self.row_host.row_index.insert(tree.widget_of(header_id), start, RowRole::SectionHeader);
+                    self.row_host.row_index.insert(tree.widget_of(header_id), start, RowRole::SectionHeader);
+                    if let Some(title_id) = title_id {
+                        self.row_host.row_index.insert(tree.widget_of(title_id), start, RowRole::SectionTitle);
+                    }
                     cy += ROW_HEIGHT + ROW_SPACING;
                     if folded {
                         // See the effect-card twin of this branch for why

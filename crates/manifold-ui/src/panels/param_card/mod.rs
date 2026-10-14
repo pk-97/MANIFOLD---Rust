@@ -389,13 +389,14 @@ pub struct ParamCardPanel {
     osc_addresses: Vec<Option<String>>,
 
     /// D5 card-section fold state (SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md
-    /// section 2), keyed by section name. UI-local workspace state — same home as
-    /// the graph canvas's `GraphCanvas::collapsed` (survives rebuilds of
-    /// this panel instance, never serialized to the project; folds reset on
-    /// app restart, persistence Deferred). Missing entry = unfolded
-    /// (default). A section not present in the current `rows` is
-    /// simply never consulted — no pruning needed.
+    /// section 2), keyed by section name. Missing entry = unfolded. On a
+    /// scene card it mirrors the instance's saved fold choices
+    /// (`set_scene_sections`); elsewhere it is UI-local and resets on
+    /// restart.
     section_folded: ahash::AHashMap<String, bool>,
+    /// A scene card: section folds are saved choices and a section title
+    /// opens the Scene tab (SCENE_SURFACES_DESIGN.md D10).
+    scene_sections: bool,
 
     copied_flash: CopyToClipboardLabelState,
 
@@ -543,6 +544,7 @@ impl ParamCardPanel {
             string_param_btn_ids: Vec::new(),
             osc_addresses: Vec::new(),
             section_folded: ahash::AHashMap::new(),
+            scene_sections: false,
             copied_flash: CopyToClipboardLabelState::default(),
             relight_drag: ScrubGesture::new(),
             param_cache: Vec::new(),
@@ -1221,6 +1223,40 @@ impl ParamCardPanel {
     /// private `section_header_ids` field directly).
     pub fn section_header_ids(&self) -> &[(NodeId, String)] {
         &self.row_host.section_header_ids
+    }
+
+    /// Mark this card a scene card and load its saved fold state: `Some`
+    /// lists the folded section titles (saved choices with the D11 default
+    /// already applied by the projection); `None` makes it an ordinary card
+    /// whose folds stay UI-local.
+    pub fn set_scene_sections(&mut self, folded: Option<&[String]>) {
+        self.scene_sections = folded.is_some();
+        if let Some(folded) = folded {
+            self.section_folded.clear();
+            for title in folded {
+                self.section_folded.insert(title.clone(), true);
+            }
+        }
+    }
+
+    pub fn is_scene_card(&self) -> bool {
+        self.scene_sections
+    }
+
+    pub fn row(&self, param_id: &str) -> Option<&ParamRow> {
+        self.rows.iter().find(|row| row.id == param_id)
+    }
+
+    /// Flash the value readout of a built row; `false` when the row is not
+    /// on this card or not built this frame (folded or scrolled away).
+    pub fn flash_row(&mut self, param_id: &str) -> bool {
+        let Some(index) = self.rows.iter().position(|row| row.id == param_id) else { return false };
+        if self.row_host.slider_ids.get(index).is_none_or(|ids| ids.is_none()) {
+            return false;
+        }
+        let Some(flash) = self.value_flash.get_mut(index) else { return false };
+        flash.fire(color::MOTION_SLOW_MS * 2.0);
+        true
     }
 }
 

@@ -16,6 +16,7 @@ use manifold_ui::*;
 mod events;
 mod export;
 
+mod card_pin;
 mod dropdowns;
 // `build_picker_session` is called by `ui_bridge/state_sync.rs` at the historical
 // `crate::ui_root::build_picker_session` path; the re-export preserves it after
@@ -322,6 +323,10 @@ pub struct UIRoot {
     pub(crate) automation_chooser_candidates: Vec<AutomationChooserCandidate>,
     pub(crate) trigger_routing: crate::ui_bridge::TriggerRoutingCatalog,
     pub(crate) pending_trigger_response_reveal: Option<(manifold_ui::view::UiGraphTarget, manifold_core::effects::ParamId)>,
+    /// Show in Scene tab / a card section title: revealed once the Scene tab
+    /// is projected (SCENE_SURFACES_DESIGN.md D10). A section carries all its
+    /// rows; the Scene tab picks which to reveal.
+    pub(crate) pending_scene_reveal: Option<(manifold_ui::view::UiGraphTarget, Vec<manifold_core::effects::ParamId>)>,
     pub(crate) pinned_automation_lanes: Vec<manifold_ui::ui_state::AutomationLaneKey>,
 
     /// Cached macro slot labels for context menu display.
@@ -533,6 +538,7 @@ impl UIRoot {
             automation_chooser_candidates: Vec::new(),
             trigger_routing: Default::default(),
             pending_trigger_response_reveal: None,
+            pending_scene_reveal: None,
             pinned_automation_lanes: Vec::new(),
             macro_labels: std::array::from_fn(|_| String::new()),
             macro_mapping_descs: std::array::from_fn(|_| Vec::new()),

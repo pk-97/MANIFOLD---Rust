@@ -685,6 +685,18 @@ pub(crate) fn gen_params_to_surface(
     surface
 }
 
+/// The folded section titles of a curated generator card when it is a scene
+/// card, read from the same graph its curation read; `None` otherwise.
+pub(crate) fn scene_card_folds(gp: &manifold_core::effects::PresetInstance, card: &ParamSurface) -> Option<Vec<String>> {
+    let catalog = gp
+        .graph
+        .is_none()
+        .then(|| manifold_nodes::bundled_presets::bundled_preset_def(gp.effect_type()))
+        .flatten();
+    let def = gp.graph.as_ref().or(catalog.as_deref())?;
+    super::scene_card::folded_sections(gp, def, &card.rows)
+}
+
 fn scene_ref_for_vm(
     nodes: &[manifold_core::effect_graph_def::EffectGraphNode],
     scene_doc_id: u32,

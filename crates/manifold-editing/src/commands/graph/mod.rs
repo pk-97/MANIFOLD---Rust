@@ -28,6 +28,8 @@ use manifold_core::effect_graph_def::{
 use manifold_core::project::Project;
 
 mod card_owned_write;
+mod card_pin;
+pub use card_pin::SetCardPinCommand;
 mod node_edit;
 mod param_sections;
 pub use node_edit::*;

@@ -631,6 +631,9 @@ impl Serialize for PresetInstance {
         if !self.folded_sections.is_empty() {
             field_count += 1;
         }
+        if !self.unfolded_sections.is_empty() {
+            field_count += 1;
+        }
 
         let mut s = serializer.serialize_struct("PresetInstance", field_count)?;
         s.serialize_field("id", &self.id)?;
@@ -699,6 +702,9 @@ impl Serialize for PresetInstance {
         }
         if !self.folded_sections.is_empty() {
             s.serialize_field("foldedSections", &self.folded_sections)?;
+        }
+        if !self.unfolded_sections.is_empty() {
+            s.serialize_field("unfoldedSections", &self.unfolded_sections)?;
         }
         s.end()
     }
@@ -797,6 +803,8 @@ impl<'de> Deserialize<'de> for PresetInstance {
             relight_params: RelightParams,
             #[serde(default)]
             folded_sections: Vec<String>,
+            #[serde(default)]
+            unfolded_sections: Vec<String>,
         }
 
         let raw = Raw::deserialize(deserializer)?;
@@ -843,6 +851,7 @@ impl<'de> Deserialize<'de> for PresetInstance {
             relight: raw.relight,
             relight_params: raw.relight_params,
             folded_sections: raw.folded_sections,
+            unfolded_sections: raw.unfolded_sections,
         })
     }
 }
@@ -888,6 +897,8 @@ struct GeneratorInstanceRaw {
     relight_params: RelightParams,
     #[serde(default)]
     folded_sections: Vec<String>,
+    #[serde(default)]
+    unfolded_sections: Vec<String>,
 }
 
 impl GeneratorInstanceRaw {
@@ -930,6 +941,7 @@ impl GeneratorInstanceRaw {
             relight: self.relight,
             relight_params: self.relight_params,
             folded_sections: self.folded_sections,
+            unfolded_sections: self.unfolded_sections,
         }
     }
 }

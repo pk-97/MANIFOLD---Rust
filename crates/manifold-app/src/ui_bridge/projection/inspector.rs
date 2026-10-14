@@ -17,7 +17,7 @@ use crate::ui_root::UIRoot;
 
 use super::cards::{
     OscScope, SurfaceVisibility, attach_project_sources, audio_send_choices, effects_to_surfaces,
-    gen_params_to_surface, modifier_surfaces,
+    gen_params_to_surface, modifier_surfaces, scene_card_folds,
 };
 
 fn mark_selected_automation_row(surface: &mut ParamSurface, layer_id: &manifold_core::LayerId, target: &UiGraphTarget, param_id: &manifold_core::effects::ParamId) {
@@ -1052,8 +1052,10 @@ pub fn sync_inspector_data(
                 attach_project_sources(std::slice::from_mut(c), project);
             }
             let layer_id = layer.layer_id.clone();
+            let scene_folds = gen_config.as_ref().zip(layer.gen_params()).and_then(|(card, gp)| scene_card_folds(gp, card));
             ui.inspector
                 .configure_gen_params(gen_config.as_ref(), Some(layer_id));
+            ui.inspector.set_gen_scene_sections(scene_folds.as_deref());
 
             // Stable instances own cards; the catalog supplies the picker.
             {
@@ -1206,9 +1208,12 @@ pub fn sync_inspector_data(
             .set_mode(false, false, false, false, false);
     }
     if let Some((target, param)) = ui.pending_trigger_response_reveal.take()
-        && !ui.inspector.reveal_clip_response(&target, &param)
+        && !ui.inspector.reveal_trigger_response(&target, &param)
     {
-        ui.scene_setup_panel.reveal_clip_response(&target, &param);
+        ui.scene_setup_panel.reveal_param(&target, &param);
+    }
+    if let Some((target, params)) = ui.pending_scene_reveal.take() {
+        ui.scene_setup_panel.reveal_section(&target, &params);
     }
 }
 

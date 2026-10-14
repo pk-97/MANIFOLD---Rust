@@ -1005,6 +1005,35 @@ impl RowHost {
         crate::slider::BitmapSlider::update_value(tree, ids, display_norm_override.unwrap_or(norm), &text);
     }
 
+    /// The one param menu (`ParamLabelRightClick`) on every built slider row
+    /// whose row `skip` does not exclude: the label, the full-row catcher
+    /// behind the value cell and gaps, and the value cell itself, so a
+    /// right-click anywhere off the track opens it. Both the param card and
+    /// the Scene tab register their rows here (SCENE_SURFACES_DESIGN.md D10).
+    pub(crate) fn register_param_menus(
+        &self,
+        rows: &[ParamRow],
+        target: &GraphParamTarget,
+        intents: &mut crate::intent::IntentRegistry,
+        skip: impl Fn(&ParamRow) -> bool,
+    ) {
+        use crate::intent::Gesture::RightClick;
+        use crate::slider::BitmapSlider;
+        for (pi, slider) in self.slider_ids.iter().enumerate() {
+            let (Some(ids), Some(row)) = (slider, rows.get(pi)) else { continue };
+            if skip(row) {
+                continue;
+            }
+            let menu = PanelAction::Params(ParamsAction::ParamLabelRightClick(target.clone(), row.id.clone()));
+            BitmapSlider::register_label_mapping(ids, &menu, intents);
+            if let Some(Some(catcher)) = self.row_catcher_ids.get(pi).copied() {
+                intents.claim_area(catcher);
+                intents.on(catcher, RightClick, menu.clone());
+            }
+            intents.on(ids.value_text, RightClick, menu);
+        }
+    }
+
     /// Replay every materialised slider's `Track + RightClick → reset` intent —
     /// main rows AND every drawer slider (audio-shape Amount/Attack/Release,
     /// envelope Decay). This is the ROW half of the card's intent
@@ -1382,6 +1411,17 @@ impl RowHost {
                 *folded = !*folded;
                 vec![PanelAction::Params(ParamsAction::SectionFoldToggled)]
             }
+            RowRole::SectionTitle => rows
+                .get(row)
+                .map(|first| {
+                    let section = rows[row..]
+                        .iter()
+                        .take_while(|r| r.spec.section == first.spec.section)
+                        .map(|r| r.id.clone())
+                        .collect();
+                    vec![PanelAction::Params(ParamsAction::RevealSectionInSceneTab(target, section))]
+                })
+                .unwrap_or_default(),
             RowRole::RelightToggle | RowRole::RelightHeightBtn | RowRole::RelightSlider => {
                 // Never inserted into `row_index` (relight has no `rows` slot) —
                 // the top-of-`handle_click` checks own these. Kept here only for

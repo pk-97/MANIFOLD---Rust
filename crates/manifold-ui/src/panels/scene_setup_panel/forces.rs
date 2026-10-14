@@ -307,7 +307,7 @@ mod tests {
     }
 
     #[test]
-    fn reveal_clip_response_selects_reordered_force_and_preserves_authored_state() {
+    fn reveal_param_selects_reordered_force_and_preserves_authored_state() {
         let target = crate::view::UiGraphTarget::Generator(LayerId::new("layer-a"));
         let mut first = force_surface("layer-a", "first");
         first.rows[0].modulation.envelope_active = true;
@@ -329,7 +329,7 @@ mod tests {
         panel.force_cards[1].set_collapsed(true);
 
         let param: manifold_foundation::ParamId = "first_strength".into();
-        assert!(panel.reveal_clip_response(&target, &param));
+        assert!(panel.reveal_param(&target, &param));
         assert_eq!(
             panel.selection.get(&LayerId::new("layer-a")),
             Some(&SceneSelection::Force(manifold_foundation::NodeId::new("first")))
@@ -351,7 +351,7 @@ mod tests {
     }
 
     #[test]
-    fn reveal_clip_response_rejects_missing_target_without_selection_change() {
+    fn reveal_param_rejects_missing_target_without_selection_change() {
         let target = crate::view::UiGraphTarget::Generator(LayerId::new("layer-a"));
         let mut surface = force_surface("layer-a", "force");
         surface.rows[0].clip_trigger = Some(ClipTriggerRow {
@@ -364,7 +364,7 @@ mod tests {
 
         let wrong_target = crate::view::UiGraphTarget::Generator(LayerId::new("other"));
         let param: manifold_foundation::ParamId = "force_strength".into();
-        assert!(!panel.reveal_clip_response(&wrong_target, &param));
+        assert!(!panel.reveal_param(&wrong_target, &param));
         assert_eq!(
             panel.selection.get(&LayerId::new("layer-a")),
             Some(&SceneSelection::World)
