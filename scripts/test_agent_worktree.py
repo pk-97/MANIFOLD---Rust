@@ -825,7 +825,7 @@ def test_list_exposes_cache_budgets(repo):
         aw.cmd_list(SimpleNamespace())
     text = out.getvalue()
     check("list exposes cap incremental age and reserve", all(word in text for word in
-          ("/slot", "60m", "50G", "incremental", "OVER")), text)
+          ("/slot", "60m", f"reserve {aw.MAINTENANCE_GOAL_BYTES / 2**30:g}G", "incremental", "OVER")), text)
 
 
 TESTS.append(test_list_exposes_cache_budgets)

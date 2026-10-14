@@ -31,6 +31,9 @@ import time
 from datetime import datetime
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from storage_budget import GIB, MAINTENANCE_GOAL_BYTES as DISK_FLOOR  # noqa: E402  the build guard refuses below it
+
 REPO = Path(__file__).resolve().parent.parent
 MAIN_CHECKOUT = Path("/Users/peterkiemann/MANIFOLD - Rust")
 WORKTREES = MAIN_CHECKOUT / ".claude/worktrees"
@@ -39,8 +42,6 @@ CODEX_SESSIONS = Path.home() / ".codex/sessions"
 CACHE = Path.home() / ".cache/manifold"
 SEEN_FILE = CACHE / "fleet-health.json"
 
-GIB = 2 ** 30
-DISK_FLOOR = 50 * GIB  # storage_budget.MAINTENANCE_GOAL_BYTES; the build guard refuses below it
 DISK_WARN_MARGIN = 15 * GIB
 STALL_MINUTES = 20
 ORPHAN_MINUTES = 30
