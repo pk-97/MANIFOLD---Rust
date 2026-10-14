@@ -40,8 +40,8 @@ fn link_follows_with_steady_beat_speed() {
 /// Test 2: MIDI clock at 120 and 174, with Link's tempo latched and alone.
 #[test]
 fn clk_follows_without_stair_steps() {
-    for bpm in [120.0, 174.0] {
-        for with_link in [true, false] {
+    for with_link in [false, true] {
+        for bpm in [120.0, 174.0] {
             let live = Live::new(Tempo::constant(bpm));
             let mut clk = ClkReader::new(clock_arrivals(&live, 600.0, 21, &[], 0.0));
             if with_link {
@@ -72,9 +72,9 @@ fn clk_tempo_change_follows_through_the_estimate() {
         ("ramp 120 -> 174 over 8 s", Tempo::constant(120.0).ramp(10.0, 8.0, 174.0), 8.0, 20.0),
         ("ramp 174 -> 120 over 4 s", Tempo::constant(174.0).ramp(10.0, 4.0, 120.0), 8.0, 20.0),
     ];
-    for (label, tempo, latched_bound, alone_bound) in cases {
-        for seed in 0..9u64 {
-            for with_link in [true, false] {
+    for with_link in [false, true] {
+        for (label, tempo, latched_bound, alone_bound) in cases.iter().cloned() {
+            for seed in 0..9u64 {
                 let live = Live::new(tempo.clone());
                 let mut clk = ClkReader::new(clock_arrivals(&live, 30.0, 100 + seed, &[], 0.0));
                 if with_link {

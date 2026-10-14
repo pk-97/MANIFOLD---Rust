@@ -138,9 +138,6 @@ pub struct ContentThread {
     /// Link's cumulative beat counter keeps the offset valid across BPM changes.
     /// Port of C# PlaybackController.linkBeatOffset field (line 74).
     pub link_beat_offset: f64,
-    /// The MIDI clock beat last handed to the follower: a sample is fresh
-    /// only when a clock tick moved it.
-    pub last_clk_beat: f64,
     /// A tempo source for tests that stand in for Link or MIDI clock: it
     /// delivers this tempo every tick, where a real source would (D21).
     #[cfg(test)]
@@ -2089,18 +2086,16 @@ impl ContentThread {
                 // Suppressed during the seek cooldown (user scrub, M4L path)
                 // AND while an AbletonOSC transport command awaits its ack
                 // (ABLETON_TRANSPORT_SYNC_DESIGN D5): what Ableton's clock
-                // reports then is the old position. Fresh only when a clock
-                // tick moved the beat; C6 projects it to the read instant.
+                // reports then is the old position. The tick filter's beat at
+                // this frame's read instant (D20).
                 if !self.sync_arbiter.is_seek_cooldown_active(self.time_since_start)
                     && !self.ableton_bridge.transport_sync_pending()
                     && let Some(ref clk) = self.transport_controller.midi_clock_sync
                     && clk.is_midi_clock_enabled()
                     && clk.is_receiving_clock()
                 {
-                    let beat = f64::from(clk.current_clock_beat());
-                    let fresh = beat != self.last_clk_beat;
-                    self.last_clk_beat = beat;
-                    Some(ExternalSample { beat, bpm: f64::from(clk.current_clock_bpm()), fresh, exact: false })
+                    clk.sample_at(self.link_sample_at)
+                        .map(|s| ExternalSample { beat: s.beat, bpm: s.bpm, fresh: true, exact: false })
                 } else {
                     None
                 }

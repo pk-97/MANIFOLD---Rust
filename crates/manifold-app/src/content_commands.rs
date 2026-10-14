@@ -3,7 +3,6 @@
 //! to the appropriate subsystem on the content thread.
 
 use manifold_core::change::{ChangeSet, Part};
-use manifold_core::types::ClockAuthority;
 use manifold_core::{Beats, LayerId, NodeId, Seconds};
 use manifold_playback::transport_controller::TransportController;
 use manifold_compositor::generator_renderer::GeneratorRenderer;
@@ -891,25 +890,8 @@ impl ContentThread {
                     // pull the playhead back to the wrong beat.
                     self.sync_arbiter.set_user_seek_time(self.time_since_start);
                 }
-                // Align transport to active external beat source BEFORE
-                // the first sync pass. Port of C# PlaybackController.Play() lines 631-643.
-                let authority = self
-                    .engine
-                    .project()
-                    .map_or(ClockAuthority::Internal, |p| p.settings.clock_authority);
-                if authority == ClockAuthority::MidiClock
-                    && !self.sync_arbiter.manifold_owns_playback
-                    && let Some(ref clk) = self.transport_controller.midi_clock_sync
-                    && clk.is_midi_clock_enabled()
-                {
-                    // STOPGAP(frame-exact P3): first frame at or after the
-                    // clock's beat; P3 locates to the nearest frame at the
-                    // beat projected to the deadline.
-                    let midi_beat = Beats::from_f32(clk.current_clock_beat());
-                    let time = self.engine.beat_to_timeline_time(midi_beat);
-                    crate::sync_rig_log::user_transport(manifold_playback::rig_log::TransportKind::LocateToClock, time.0.max(0.0));
-                    self.engine.locate(Seconds(time.0.max(0.0)));
-                }
+                // Under MIDI clock the follower seeds on the first tick at the
+                // armed position (D20, D22): nothing is located here.
                 crate::sync_rig_log::user_transport(manifold_playback::rig_log::TransportKind::Play, f64::NAN);
                 self.engine.play();
                 self.cache_link_beat_offset();

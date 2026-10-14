@@ -16,6 +16,7 @@ use manifold_core::{Beats, Bpm, Seconds};
 use manifold_playback::engine::{PlaybackEngine, TickContext};
 use manifold_playback::external_follow::{ExternalSample, FollowProfile};
 use manifold_playback::frame_grid::FrameGrid;
+use manifold_playback::midi_clock_sync::tick_filter::{ClockKind, ClockTracker};
 use manifold_playback::renderer::StubRenderer;
 
 pub const FPS: f32 = 60.0;
@@ -236,41 +237,32 @@ pub fn clock_arrivals(live: &Live, until: f64, seed: u64, stalls: &[(f64, f64)],
                 at = from + len + (k % 100) as f64 * 1e-6;
             }
         }
-        out.push((at, ClockMsg::Tick));
+        // MIDI is one ordered stream: nothing arrives before what was sent
+        // ahead of it, so jitter never puts a tick before the Start.
+        let previous = out.last().map_or(f64::NEG_INFINITY, |m| m.0);
+        out.push((at.max(previous), ClockMsg::Tick));
         k += 1;
     }
-    out.sort_by(|a, b| a.0.total_cmp(&b.0));
     out
 }
 
-/// MIDI clock, read the way the content thread reads it today: every tick
-/// counts from the Start, the beat is the last tick's, and the tempo is the
-/// mean of the last 24 tick intervals.
+/// MIDI clock through the real position rules and tick filter (D20): each
+/// arrival goes to `ClockTracker` stamped as it arrived, and the beat is the
+/// filter's at the read instant.
 pub struct ClkReader {
     arrivals: Vec<(f64, ClockMsg)>,
     next: usize,
-    ticks: i64,
-    running: bool,
-    /// Arrival times of the last 25 ticks, oldest first once full.
-    recent: std::collections::VecDeque<f64>,
+    tracker: ClockTracker,
     pub link: Option<LinkReader>,
 }
 
 impl ClkReader {
     pub fn new(arrivals: Vec<(f64, ClockMsg)>) -> Self {
-        Self { arrivals, next: 0, ticks: 0, running: false, recent: std::collections::VecDeque::with_capacity(25), link: None }
+        Self { arrivals, next: 0, tracker: ClockTracker::new(), link: None }
     }
     pub fn with_link(mut self, link: LinkReader) -> Self {
         self.link = Some(link);
         self
-    }
-    fn bpm(&self) -> f64 {
-        match (self.recent.front(), self.recent.back()) {
-            (Some(first), Some(last)) if self.recent.len() >= 2 && last > first => {
-                60.0 / ((last - first) / (self.recent.len() - 1) as f64 * 24.0)
-            }
-            _ => 0.0,
-        }
     }
 }
 
@@ -278,29 +270,18 @@ impl Reader for ClkReader {
     fn kind(&self) -> Kind {
         Kind::Clk
     }
-    fn read(&mut self, _r: f64, now: f64) -> Option<Sample> {
-        let mut fresh = false;
+    fn read(&mut self, r: f64, now: f64) -> Option<Sample> {
         while self.next < self.arrivals.len() && self.arrivals[self.next].0 <= now {
-            match self.arrivals[self.next].1 {
-                ClockMsg::Start => {
-                    self.running = true;
-                    self.ticks = 0;
-                    self.recent.clear();
-                }
-                ClockMsg::Tick => {
-                    if self.running {
-                        self.ticks += 1;
-                        fresh = true;
-                        if self.recent.len() == 25 {
-                            self.recent.pop_front();
-                        }
-                        self.recent.push_back(self.arrivals[self.next].0);
-                    }
-                }
-            }
+            let (at, msg) = self.arrivals[self.next];
+            let kind = match msg {
+                ClockMsg::Start => ClockKind::Start,
+                ClockMsg::Tick => ClockKind::Tick,
+            };
+            // The map every proof plays over is at 120 BPM.
+            self.tracker.event(kind, at, 120.0);
             self.next += 1;
         }
-        self.running.then_some(Sample { beat: self.ticks as f64 / 24.0, bpm: self.bpm(), fresh, exact: false })
+        self.tracker.sample_at(r).map(|s| Sample { beat: s.beat, bpm: s.bpm, fresh: true, exact: false })
     }
 }
 
