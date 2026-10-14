@@ -36,6 +36,8 @@ pub(crate) struct ReactionState {
     pub runtime: crate::content_state::RuntimeSeqs,
     /// What `runtime` last saw, compared each publish.
     runtime_seen: RuntimeSeen,
+    /// The failed chain builds last published; replaced only when they change.
+    pub chain_failures: crate::content_state::ChainFailures,
 }
 
 /// The last-published value behind each runtime sequence.
@@ -45,6 +47,7 @@ struct RuntimeSeen {
     latches_key: u64,
     led_present: bool,
     sdr_preview: bool,
+    chain_failures_key: (usize, u64),
 }
 
 impl ContentThread {
@@ -54,11 +57,17 @@ impl ContentThread {
         let latches = self.engine.automation_latches();
         let hasher = ahash::RandomState::with_seeds(1, 2, 3, 4);
         let latches_key = latches.keys().map(|k| hasher.hash_one(k)).fold(0u64, u64::wrapping_add);
+        let mut chain_failures_key = (0usize, 0u64);
+        self.content_pipeline.visit_chain_failures(&mut |owner, message| {
+            chain_failures_key.0 += 1;
+            chain_failures_key.1 = chain_failures_key.1.wrapping_add(hasher.hash_one((owner, &**message)));
+        });
         let seen = RuntimeSeen {
             latches_len: latches.len(),
             latches_key,
             led_present: !matches!(self.led_preview, crate::content_state::LedPreview::None),
             sdr_preview: self.content_pipeline.sdr_preview(),
+            chain_failures_key,
         };
         let last = &self.reactions.runtime_seen;
         let runtime = &mut self.reactions.runtime;
@@ -70,6 +79,14 @@ impl ContentThread {
         }
         if seen.sdr_preview != last.sdr_preview {
             runtime.sdr_preview += 1;
+        }
+        if seen.chain_failures_key != last.chain_failures_key {
+            runtime.chain_failures += 1;
+            let mut failures = Vec::with_capacity(seen.chain_failures_key.0);
+            self.content_pipeline.visit_chain_failures(&mut |owner, message| {
+                failures.push((owner.cloned(), message.clone()));
+            });
+            self.reactions.chain_failures = failures.into();
         }
         self.reactions.runtime_seen = seen;
         self.reactions.runtime

@@ -64,6 +64,7 @@ pub struct MasterChromePanel {
     is_collapsed: bool,
     cached_exit_path: String,
     cached_led_enabled: bool,
+    chain_error: super::layer_chrome::ChainErrorNotice,
 
     // Node range for ownership checking (host chrome + slider nodes).
     first_node: usize,
@@ -80,19 +81,31 @@ impl MasterChromePanel {
             is_collapsed: false,
             cached_exit_path: "Default".into(),
             cached_led_enabled: false,
+            chain_error: Default::default(),
             first_node: 0,
             node_count: 0,
         }
     }
 
     pub fn compute_height(&self) -> f32 {
+        let notice = self.chain_error.height();
         if self.is_collapsed {
-            PAD_V + HEADER_ROW_H + PAD_V
+            PAD_V + HEADER_ROW_H + notice + PAD_V
         } else {
             // section 6d: opacity is now inline on the header row; only the LED row
             // stays below it.
-            PAD_V + HEADER_ROW_H + DIVIDER_H + EXIT_PATH_ROW_H + DIVIDER_H + PAD_V
+            PAD_V + HEADER_ROW_H + notice + DIVIDER_H + EXIT_PATH_ROW_H + DIVIDER_H + PAD_V
         }
+    }
+
+    /// Show (or clear) why the master effects are bypassed. Takes effect at the
+    /// inspector's next build.
+    pub fn set_chain_error(&mut self, message: Option<&str>) {
+        self.chain_error.set(message);
+    }
+
+    pub(crate) fn wrap_chain_error(&mut self, measurer: &dyn crate::text::TextMeasure, width: f32) {
+        self.chain_error.wrap(measurer, width);
     }
 
     pub fn first_node(&self) -> usize {
@@ -265,6 +278,7 @@ impl MasterChromePanel {
             .fill()
             .pad(Pad { l: PAD_H, t: PAD_V, r: PAD_H, b: PAD_V })
             .child(self.header_row());
+        let root = self.chain_error.add_rows(root);
         if self.is_collapsed {
             return root;
         }

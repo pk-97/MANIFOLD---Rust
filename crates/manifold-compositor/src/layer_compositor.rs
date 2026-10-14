@@ -1,7 +1,6 @@
-use manifold_node_engine::runtime::chain_dispatch::{clear_chain_state, dispatch_chain, dispatch_chain_with_scene_viewport};
+use manifold_node_engine::runtime::chain_dispatch::{ChainSlot, clear_chain_state, dispatch_chain, dispatch_chain_with_scene_viewport};
 use crate::compositor::{CompositeLayerDescriptor, Compositor, CompositorFrame};
 use manifold_node_engine::runtime::effect::PostProcessEffect;
-use manifold_node_engine::runtime::PresetRuntime;
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
 use manifold_node_engine::runtime::preset_context::PresetContext;
 use manifold_node_engine::gpu::render_target::RenderTarget;
@@ -488,9 +487,9 @@ pub struct LayerCompositor {
     /// Type-level invariant: the key is `LayerId`, not `usize`, so
     /// iteration-counter indexing won't compile.
     #[cfg(not(any(test, feature = "testkit")))]
-    effect_chains: AHashMap<LayerId, Option<PresetRuntime>>,
+    effect_chains: AHashMap<LayerId, ChainSlot>,
     #[cfg(any(test, feature = "testkit"))]
-    pub effect_chains: AHashMap<LayerId, Option<PresetRuntime>>,
+    pub effect_chains: AHashMap<LayerId, ChainSlot>,
     /// Per-chain last-used frame counter. Parallel to `effect_chains`;
     /// updated each frame the chain is touched. Trimmed once stale.
     #[cfg(not(any(test, feature = "testkit")))]
@@ -520,9 +519,9 @@ pub struct LayerCompositor {
     /// bytes of idle struct space when unused and zero CPU when
     /// no master effects are present.
     #[cfg(not(any(test, feature = "testkit")))]
-    master_effect_chain: Option<PresetRuntime>,
+    master_effect_chain: ChainSlot,
     #[cfg(any(test, feature = "testkit"))]
-    pub master_effect_chain: Option<PresetRuntime>,
+    pub master_effect_chain: ChainSlot,
     /// Plugin warmup processors — held for the process lifetime so
     /// background FFI workers (BlobDetector, DepthEstimator,
     /// WireframeDepth) stay alive. The compositor forwards `resize`
@@ -560,7 +559,7 @@ pub struct LayerCompositor {
     /// Per-group effect chains, keyed by the group container's
     /// `LayerId`. Same structural invariant as `effect_chains`:
     /// the key is stable, iteration-counter indexing won't compile.
-    group_effect_chains: AHashMap<LayerId, Option<PresetRuntime>>,
+    group_effect_chains: AHashMap<LayerId, ChainSlot>,
     /// Per-group-chain last-used frame counter for time-based pruning.
     group_chain_last_used_frame: AHashMap<LayerId, u64>,
     /// Pre-allocated scratch for child layer indices during group folding.
@@ -585,9 +584,9 @@ pub struct LayerCompositor {
     /// Uses owner_key `LED_MASTER_OWNER_KEY` to keep temporal state separate
     /// from the main master chain.
     #[cfg(not(any(test, feature = "testkit")))]
-    led_master_ec: Option<Option<PresetRuntime>>,
+    led_master_ec: Option<ChainSlot>,
     #[cfg(any(test, feature = "testkit"))]
-    pub led_master_ec: Option<Option<PresetRuntime>>,
+    pub led_master_ec: Option<ChainSlot>,
 
     /// Per-group LED scratch buffers at LED grid resolution, keyed
     /// by the group container's `LayerId`. One per group whose
@@ -606,7 +605,7 @@ pub struct LayerCompositor {
     /// are different fields, even though both use `LayerId` keys.
     /// Lazy-allocates at LED grid resolution via the `PresetContext`
     /// passed to `apply_effects`.
-    led_group_effect_chains: AHashMap<LayerId, Option<PresetRuntime>>,
+    led_group_effect_chains: AHashMap<LayerId, ChainSlot>,
     /// Per-LED-group-chain last-used frame counter for time-based pruning.
     led_group_chain_last_used_frame: AHashMap<LayerId, u64>,
 
@@ -745,7 +744,7 @@ impl LayerCompositor {
             frame_counter: 0,
             active_layer_ids_scratch: Vec::new(),
             active_layer_buf_ids_scratch: Vec::new(),
-            master_effect_chain: None,
+            master_effect_chain: ChainSlot::default(),
             plugin_warmups: manifold_node_engine::runtime::plugin_prewarm::prewarm_all(device),
             tonemap: TonemapPipeline::new(device, width, height),
             layer_outputs_scratch: Vec::new(),
@@ -791,7 +790,7 @@ impl LayerCompositor {
         let viewport_request = self.scene_viewport_request.clone();
         let mut viewport_applied = false;
         let mut viewport_error = None;
-        let mut apply = |chain: &mut Option<PresetRuntime>| {
+        let mut apply = |chain: &mut ChainSlot| {
             if let Some(cg) = chain.as_mut() {
                 if let Some((effect_id, node_id, config)) = &viewport_request {
                     match cg.set_scene_viewport(effect_id, node_id, *config) {
@@ -1157,7 +1156,7 @@ impl LayerCompositor {
         // One scratch slot for every topology: `dispatch_chain` hands the
         // outgoing runtime to the next build as the state-harvest donor, so
         // reuse here matches production's rebuild handoff.
-        let mut slot: Option<PresetRuntime> = None;
+        let mut slot = ChainSlot::default();
         let mut any_failure: Option<WarmupOutcome> = None;
         let mut covered = 0usize;
 
@@ -1346,7 +1345,7 @@ impl LayerCompositor {
     /// its async work quiesces or the per-layer budget is exhausted.
     fn pump_chain_warmup(
         uniform_arena: &mut UniformArena,
-        chain: &mut Option<PresetRuntime>,
+        chain: &mut ChainSlot,
         device: &GpuDevice,
         input_texture: &GpuTexture,
         effects: &[PresetInstance],
@@ -1512,7 +1511,7 @@ impl LayerCompositor {
             self.led_main = Some(PingPong::new(device, pool, led_w, led_h, "LED Composite"));
         }
         if self.led_master_ec.is_none() {
-            self.led_master_ec = Some(None);
+            self.led_master_ec = Some(ChainSlot::default());
         }
 
         let led_ec = self.led_master_ec.as_mut().expect("inserted above");
@@ -1783,7 +1782,7 @@ impl LayerCompositor {
         }
 
         if has_enabled_effects(&project.settings.master_effects) && self.led_master_ec.is_none() {
-            self.led_master_ec = Some(None);
+            self.led_master_ec = Some(ChainSlot::default());
         }
 
         WarmupOutcome::Quiescent
@@ -1913,18 +1912,18 @@ impl LayerCompositor {
             // same-id pool slot so an old owner cannot retain an obsolete
             // runtime after the authored effect slice is removed.
             if let Some(chain) = self.effect_chains.get_mut(layer.layer_id) {
-                *chain = None;
+                chain.clear();
             }
             if let Some(chain) = self.group_effect_chains.get_mut(layer.layer_id) {
-                *chain = None;
+                chain.clear();
             }
             if let Some(chain) = self.led_group_effect_chains.get_mut(layer.layer_id) {
-                *chain = None;
+                chain.clear();
             }
         }
 
         if master_effects.is_empty() {
-            self.master_effect_chain = None;
+            self.master_effect_chain.clear();
             self.led_master_ec = None;
         }
     }
@@ -1983,7 +1982,7 @@ impl LayerCompositor {
     /// if any effects were applied, or None if the input should be used as-is.
     #[allow(clippy::too_many_arguments)]
     fn apply_effects<'a>(
-        effect_chain: &'a mut Option<PresetRuntime>,
+        effect_chain: &'a mut ChainSlot,
         gpu: &mut GpuEncoder,
         input_texture: &'a GpuTexture,
         effects: &[PresetInstance],
@@ -2021,7 +2020,7 @@ impl LayerCompositor {
     /// from missing the request on the frame it is created.
     #[allow(clippy::too_many_arguments)]
     fn apply_effects_with_scene_viewport<'a>(
-        effect_chain: &'a mut Option<PresetRuntime>,
+        effect_chain: &'a mut ChainSlot,
         gpu: &mut GpuEncoder,
         input_texture: &'a GpuTexture,
         effects: &[PresetInstance],
@@ -2628,7 +2627,7 @@ impl LayerCompositor {
                             .led_group_effect_chains
                             .get_mut(group.layer_id)
                             .expect("ensured above")
-                            as *mut Option<PresetRuntime>;
+                            as *mut ChainSlot;
                         let group_buf = unsafe { &mut *group_buf_ptr };
                         let group_ec = unsafe { &mut *group_ec_ptr };
 
@@ -3042,6 +3041,17 @@ impl LayerCompositor {
 }
 
 impl Compositor for LayerCompositor {
+    fn visit_chain_failures(&self, visit: &mut dyn FnMut(Option<&LayerId>, &std::sync::Arc<str>)) {
+        for (id, slot) in self.effect_chains.iter().chain(self.group_effect_chains.iter()) {
+            if let Some(failure) = slot.failure() {
+                visit(Some(id), failure.message());
+            }
+        }
+        if let Some(failure) = self.master_effect_chain.failure() {
+            visit(None, failure.message());
+        }
+    }
+
     /// section 24 5c with-effects thumbnails — the post-effect output for a sole-clip
     /// layer (that clip's full look). `None` for multi-clip layers; valid only for
     /// the frame just rendered. See the trait default for the contract.
@@ -3277,7 +3287,7 @@ impl Compositor for LayerCompositor {
             cg.set_profiling(on);
             cg.set_profile_scope("master");
         }
-        if let Some(Some(cg)) = self.led_master_ec.as_mut() {
+        if let Some(cg) = self.led_master_ec.as_mut().and_then(ChainSlot::as_mut) {
             cg.set_profiling(on);
             cg.set_profile_scope("led:master");
         }
@@ -3285,19 +3295,19 @@ impl Compositor for LayerCompositor {
 
     fn take_step_profiles(&mut self) -> Vec<manifold_node_engine::exec::execution::StepProfile> {
         let mut out = Vec::new();
-        for chain in self.effect_chains.values_mut().flatten() {
+        for chain in self.effect_chains.values_mut().filter_map(ChainSlot::as_mut) {
             out.extend(chain.take_step_profiles());
         }
-        for chain in self.group_effect_chains.values_mut().flatten() {
+        for chain in self.group_effect_chains.values_mut().filter_map(ChainSlot::as_mut) {
             out.extend(chain.take_step_profiles());
         }
-        for chain in self.led_group_effect_chains.values_mut().flatten() {
+        for chain in self.led_group_effect_chains.values_mut().filter_map(ChainSlot::as_mut) {
             out.extend(chain.take_step_profiles());
         }
         if let Some(cg) = self.master_effect_chain.as_mut() {
             out.extend(cg.take_step_profiles());
         }
-        if let Some(Some(cg)) = self.led_master_ec.as_mut() {
+        if let Some(cg) = self.led_master_ec.as_mut().and_then(ChainSlot::as_mut) {
             out.extend(cg.take_step_profiles());
         }
         out
@@ -3548,7 +3558,7 @@ impl Compositor for LayerCompositor {
             let width = width.max(1);
             let height = height.max(1);
 
-            let led_ec = self.led_master_ec.get_or_insert_with(Option::<PresetRuntime>::default);
+            let led_ec = self.led_master_ec.get_or_insert_with(ChainSlot::default);
 
             let ctx = PresetContext {
                 time: frame.time,
@@ -3651,7 +3661,7 @@ impl Compositor for LayerCompositor {
         let groups = self.group_bufs.keys().map(|id| Ok((id.clone(), PingPong::try_new(device, width, height)?)))
             .collect::<Result<_, String>>()?;
         let tonemap = RenderTarget::try_new(device, width, height, self.tonemap.output.format, "resize-tonemap")?;
-        let prepare_chains = |chains: &AHashMap<LayerId, Option<PresetRuntime>>| {
+        let prepare_chains = |chains: &AHashMap<LayerId, ChainSlot>| {
             chains.iter().filter_map(|(id, chain)| chain.as_ref().map(|chain| (id, chain)))
                 .map(|(id, chain)| chain.prepare_resize(device, width, height)
                     .map(|prepared| (id.clone(), prepared)).map_err(|error| error.to_string()))
@@ -3674,11 +3684,11 @@ impl Compositor for LayerCompositor {
         self.group_bufs = prepared.groups;
         self.tonemap.output = prepared.tonemap;
         for (id, candidate) in prepared.layer_chains {
-            self.effect_chains.get_mut(&id).and_then(Option::as_mut)
+            self.effect_chains.get_mut(&id).and_then(ChainSlot::as_mut)
                 .expect("resize chain owner unchanged").commit_resize(candidate);
         }
         for (id, candidate) in prepared.group_chains {
-            self.group_effect_chains.get_mut(&id).and_then(Option::as_mut)
+            self.group_effect_chains.get_mut(&id).and_then(ChainSlot::as_mut)
                 .expect("resize chain owner unchanged").commit_resize(candidate);
         }
         if let Some(candidate) = prepared.master_chain {

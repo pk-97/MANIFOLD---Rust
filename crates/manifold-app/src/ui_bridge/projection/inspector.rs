@@ -972,6 +972,17 @@ pub fn sync_inspector_data(
             .set_led_preview(map_led_preview(led_preview, is_dmx));
     }
 
+    // A failed effect-chain build shows under its layer's or the master's header.
+    {
+        let failures = std::sync::Arc::clone(&ui.chain_failures);
+        let failure = |owner: Option<&manifold_core::LayerId>| {
+            failures.iter().find(|(o, _)| o.as_ref() == owner).map(|(_, message)| &**message)
+        };
+        let layer_id = active_layer.and_then(|i| project.timeline.layers.get(i)).map(|l| &l.layer_id);
+        ui.inspector.layer_chrome_mut().set_chain_error(layer_id.and_then(|id| failure(Some(id))));
+        ui.inspector.master_chrome_mut().set_chain_error(failure(None));
+    }
+
     // Active layer effects + gen params → inspector
     if let Some(idx) = active_layer {
         if let Some(layer) = project.timeline.layers.get(idx) {

@@ -814,6 +814,10 @@ impl InspectorCompositePanel {
         let right_x = col_x;
         let left_content_w = if self.master_visible() { content_w } else { 0.0 };
         let right_content_w = if self.master_visible() || self.scene_visible() { 0.0 } else { content_w };
+        // The chrome notices wrap to the width they build at, before any
+        // column height below reads them.
+        self.master_chrome.wrap_chain_error(tree.measurer(), left_content_w - SECTION_INSET * 2.0);
+        self.layer_chrome.wrap_chain_error(tree.measurer(), right_content_w - SECTION_INSET * 2.0);
         self.column_split_x = if self.master_visible() {
             rect.x + rect.width
         } else {

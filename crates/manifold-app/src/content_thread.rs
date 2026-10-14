@@ -1457,6 +1457,7 @@ impl ContentThread {
                 .cloned()
                 .collect(),
             automation_armed: self.engine.automation_armed(),
+            chain_failures: self.reactions.chain_failures.clone(),
         };
 
         // Send state to UI. Unbounded channel — never drops snapshots.
