@@ -300,15 +300,16 @@ fn mapping_fp(fp: &mut Fp, m: &crate::ableton_mapping::AbletonParamMapping) {
 }
 
 fn instance_fp(fp: &mut Fp, inst: &PresetInstance) {
-    fp.put(Part::Effects, &(&inst.kind, &inst.id, inst.effect_type(), inst.enabled, inst.collapsed));
+    fp.put(Part::Effects, &(&inst.kind, &inst.id, inst.effect_type(), inst.enabled, inst.collapsed, &inst.folded_sections));
     // First base write latches base tracking; it rides with the values it tracks.
     fp.put(Part::Values, &inst.base_tracked);
     for p in inst.params.iter() {
         let mut structural = p.spec.clone();
         // Mapping reshape (range, curve, invert, label) is a live scalar.
-        fp.put(Part::Shapes, &(&structural.name, structural.min, structural.max, &structural.curve, structural.invert, &p.choices.rename, p.choices.slider, &p.choices.curve, p.choices.invert));
-        // Section and pin move the card, which is a reshape of the surface.
-        fp.put(Part::Effects, &(&p.choices.section, &p.choices.pin));
+        fp.put(Part::Shapes, &(&structural.name, structural.min, structural.max, &structural.curve, structural.invert, p.choices.slider, &p.choices.curve, p.choices.invert));
+        // Committed choices that decide labels or which rows exist and where are
+        // never dragged, and the live Shapes push writes no labels (UI_INVALIDATION D22).
+        fp.put(Part::Effects, &(&p.choices.rename, &p.choices.section, &p.choices.pin));
         structural.name = String::new();
         structural.min = 0.0;
         structural.max = 0.0;

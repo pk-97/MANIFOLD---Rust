@@ -1395,7 +1395,16 @@ fn apply_scale_offset_on_graph(
 impl Command for EditParamMappingCommand {
     fn touches(&self) -> manifold_core::change::ChangeSet {
         use manifold_core::change::{ChangeSet, Part};
-        ChangeSet::of(&[Part::Overrides, Part::Shapes, Part::Values])
+        let live = ChangeSet::of(&[Part::Overrides, Part::Shapes, Part::Values]);
+        // A rename or section move decides labels and row layout, which only
+        // Effects reaches (UI_INVALIDATION D22). The drag-commit reverse can
+        // carry them too, so undo declares them as well.
+        let restructures = |e: &BindingMappingEdit| e.label.is_some() || e.section.is_some();
+        if restructures(&self.new) || self.explicit_reverse.as_ref().is_some_and(restructures) {
+            live.union(ChangeSet::of(&[Part::Effects]))
+        } else {
+            live
+        }
     }
     fn execute(&mut self, project: &mut Project) {
         let binding_id = self.binding_id.clone();
@@ -2184,6 +2193,58 @@ pub(crate) mod tests {
             .and_then(|gp| gp.params.get("complexity"))
             .expect("manifest entry present");
         assert_eq!(p.spec.curve, MacroCurve::Linear, "undo restores the seeded curve");
+    }
+
+    /// Run one drawer edit on a lookup control through the gateway, where the
+    /// change audit panics on any part the command did not declare.
+    fn drawer_edit_through_gateway(edit: BindingMappingEdit) -> manifold_core::change::ChangeSet {
+        use manifold_core::PresetTypeId;
+        use manifold_core::layer::Layer;
+
+        let mut project = Project::default();
+        let layer = Layer::new_generator("Gen".into(), PresetTypeId::new("Plasma"), 0);
+        let layer_id = layer.layer_id.clone();
+        project.timeline.insert_layer(0, layer);
+        let cmd = EditParamMappingCommand::new(
+            GraphTarget::Generator(layer_id.clone()),
+            "complexity".to_string(),
+            edit,
+            Some(seed_def_with_param("complexity")),
+        );
+        let touches = cmd.touches();
+        let mut service = crate::service::EditingService::new();
+        service.execute(Box::new(cmd), &mut project);
+        assert!(service.undo(&mut project));
+        assert!(service.redo(&mut project));
+        touches
+    }
+
+    #[test]
+    fn drawer_rename_and_section_declare_effects() {
+        use manifold_core::change::Part;
+        let rename = drawer_edit_through_gateway(BindingMappingEdit {
+            label: Some("Detail".to_string()),
+            ..Default::default()
+        });
+        assert!(rename.contains(Part::Effects));
+        let section = drawer_edit_through_gateway(BindingMappingEdit {
+            section: Some(Some("Shape".to_string())),
+            ..Default::default()
+        });
+        assert!(section.contains(Part::Effects));
+    }
+
+    #[test]
+    fn drawer_slider_edit_declares_no_effects() {
+        use manifold_core::change::Part;
+        let slider = drawer_edit_through_gateway(BindingMappingEdit {
+            min: Some(0.25),
+            max: Some(0.75),
+            curve: Some(MacroCurve::Exponential),
+            invert: Some(true),
+            ..Default::default()
+        });
+        assert!(!slider.contains(Part::Effects));
     }
 
     /// Generator command: materialize the layer's `generator_graph` from the
