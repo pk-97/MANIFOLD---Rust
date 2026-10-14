@@ -485,6 +485,12 @@ impl AbletonBridge {
             return;
         }
 
+        // Outside the live app the bridge stays disconnected: no fixed port, and
+        // nothing is ever sent to a running Live set.
+        if !manifold_core::device_guard::allowed(manifold_core::device_guard::RealDevice::AbletonBridge) {
+            return;
+        }
+
         // Bind send socket to ephemeral port, connect to Ableton
         match UdpSocket::bind("0.0.0.0:0") {
             Ok(sock) => {

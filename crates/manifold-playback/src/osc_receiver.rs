@@ -135,7 +135,13 @@ impl OscReceiver {
             return;
         }
 
-        let addr = format!("0.0.0.0:{}", self.listen_port);
+        // Outside the live app, listen on an ephemeral loopback port so a test
+        // never takes the app's fixed port or hears the network.
+        let addr = if manifold_core::device_guard::allowed(manifold_core::device_guard::RealDevice::OscListen) {
+            format!("0.0.0.0:{}", self.listen_port)
+        } else {
+            "127.0.0.1:0".to_string()
+        };
         let socket = match std::net::UdpSocket::bind(&addr) {
             Ok(s) => s,
             Err(e) => {

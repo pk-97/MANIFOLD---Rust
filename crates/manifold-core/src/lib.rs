@@ -131,5 +131,6 @@ pub use warmup::{WarmupBudget, WarmupCap, WarmupOutcome, WarmupPass, WarmupProgr
 // Foundation modules manifold-app reaches through `manifold_core`; the
 // layering test forbids a direct app -> foundation dependency.
 pub use manifold_foundation::cold_touch;
+pub use manifold_foundation::device_guard;
 pub use manifold_foundation::work_count;
 pub use manifold_foundation::scene_surface;

@@ -62,6 +62,7 @@ impl LinkSyncController {
         if self.is_link_enabled {
             return;
         }
+        manifold_core::device_guard::require(manifold_core::device_guard::RealDevice::Link);
         let link = rusty_link::AblLink::new(initial_bpm);
         link.enable(true);
         if self.enable_start_stop_sync {

@@ -17,6 +17,7 @@
 
 pub mod audio_shape;
 pub mod cold_touch;
+pub mod device_guard;
 pub mod feature_flags;
 pub mod fonts;
 pub mod hash;

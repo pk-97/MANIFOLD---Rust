@@ -20,6 +20,9 @@ struct MidirSourceScanner {
 
 impl SourceScanner for MidirSourceScanner {
     fn scan(&mut self) -> Result<Vec<String>, String> {
+        if !manifold_core::device_guard::allowed(manifold_core::device_guard::RealDevice::Midi) {
+            return Ok(Vec::new());
+        }
         // Client construction can be as slow as enumeration. Both happen on
         // the worker, and a transient creation failure is retried next pass.
         if self.midi_input.is_none() {

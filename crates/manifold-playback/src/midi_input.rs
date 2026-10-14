@@ -402,6 +402,9 @@ impl MidiInputController {
     /// Scan available midir ports and register any that match the filter.
     /// Port of the device enumeration loop in Unity OnEnable / SetDeviceFilter.
     fn scan_and_register_devices(&mut self) {
+        if !manifold_core::device_guard::allowed(manifold_core::device_guard::RealDevice::Midi) {
+            return;
+        }
         let midi_in = match midir::MidiInput::new("manifold-scan") {
             Ok(m) => m,
             Err(e) => {
@@ -443,6 +446,7 @@ impl MidiInputController {
     /// Open a single midir port and register it.
     /// Port of C# MidiInputController.RegisterDevice.
     fn register_port(&mut self, port_index: usize, port_name: &str) {
+        manifold_core::device_guard::require(manifold_core::device_guard::RealDevice::Midi);
         let midi_in = match midir::MidiInput::new(&format!("manifold-{}", port_index)) {
             Ok(m) => m,
             Err(e) => {
