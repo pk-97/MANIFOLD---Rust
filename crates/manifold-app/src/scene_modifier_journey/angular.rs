@@ -13,7 +13,6 @@ use super::{
     warm_project,
 };
 use crate::content_command::ContentCommand;
-use crate::content_state::ContentState;
 use crate::headless_harness::headless_content_thread;
 
 fn difference(a: &[u8], b: &[u8]) -> f32 {
@@ -114,7 +113,7 @@ fn scene_modifier_angular_wrap_journey() {
         }
 
         let mut ct = headless_content_thread(Project::default(), 320, 180);
-        let (tx, _rx) = crossbeam_channel::unbounded::<ContentState>();
+        let (tx, _rx) = crate::content_state::state_channel();
         ct.watched_graph_target = Some(target.clone());
         ct.handle_command(ContentCommand::LoadProject(Box::new(project)));
         assert!(

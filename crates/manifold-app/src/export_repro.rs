@@ -6,7 +6,6 @@ use crossbeam_channel::unbounded;
 use manifold_media::export_config::ExportConfig;
 
 use crate::content_command::ContentCommand;
-use crate::content_state::ContentState;
 use crate::headless_harness::headless_content_thread;
 
 #[derive(Debug, PartialEq)]
@@ -106,14 +105,14 @@ fn run_export(args: &ExportReproArgs) -> Result<(), String> {
     .map_err(|e| format!("failed to load project '{}': {e}", args.project.display()))?;
     let empty = manifold_core::project::Project::default();
     let mut ct = headless_content_thread(empty, args.width, args.height);
-    let (state_tx, state_rx) = unbounded::<ContentState>();
+    let (state_tx, state_rx) = crate::content_state::state_channel();
     let output = args.output.clone();
     let drain = std::thread::Builder::new()
         .name("export-repro-drain".into())
         .spawn(move || {
             let mut finished = None;
             while let Ok(state) = state_rx.recv() {
-                if let Some(event) = state.export_finished {
+                if let Some(event) = state.export_finished.into_iter().next() {
                     finished = Some(event);
                     break;
                 }

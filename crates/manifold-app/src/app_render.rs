@@ -196,25 +196,147 @@ mod preparation_inversion_tests {
 }
 
 impl Application {
+    /// Take the newest state from the content thread: its export notice, its
+    /// project snapshot and stamps, its modulation capture and spectrogram
+    /// columns, then the state itself. The one reader of the handoff, for the
+    /// normal frame and perform mode alike; the handoff folds any state the
+    /// UI never read into the one it holds, so one take per frame sees all.
+    pub(crate) fn intake_content_state(&mut self) {
+        let Some(state) = self.state_rx.as_ref().and_then(|rx| rx.try_recv().ok()) else {
+            return;
+        };
+        self.ws.ui_root.consume_export_notification(&state);
+        if state.is_bare_notice() {
+            return;
+        }
+        let drag_active = self.overlay.drag_mode()
+            != manifold_ui::interaction_overlay::DragMode::None
+            || self.overlay.has_pending_automation_press();
+        // Suppress snapshots until content thread catches up after a local project load.
+        // Safety net: timeout after 120 frames (~2s) to prevent indefinite suppression.
+        const MAX_SUPPRESS_FRAMES: u64 = 120;
+        let suppress_timed_out = self.suppress_snapshot_until > 0
+            && self
+                .frame_count
+                .saturating_sub(self.suppress_snapshot_set_at)
+                >= MAX_SUPPRESS_FRAMES;
+        if suppress_timed_out {
+            log::warn!("[UI] Snapshot suppression timed out — accepting snapshot");
+            self.suppress_snapshot_until = 0;
+        }
+        let suppressed = state.data_version < self.suppress_snapshot_until;
 
+        // Accept the project snapshot. A drag in flight lives in the
+        // gesture preview, which re-covers the fresh clone below, so
+        // no drag holds snapshots back (D12).
+        if let Some(snapshot) = state.project_snapshot
+            && !suppressed
+        {
+            // `ContentState` travels every tick, so only an accepted
+            // snapshot folds stamps, and a Values, Shapes or
+            // MappingRanges move alone never re-projects (D23).
+            let moved = self.ui_edits.stamps.fold_snapshot(&state.stamps);
+            let version_changed = state.data_version != self.content_state.data_version
+                || !moved.minus(manifold_core::change::ChangeSet::LIVE).is_empty();
+            // Only deep-clone from Arc when it's a different allocation
+            // (new data_version). Modulation-only frames send the same
+            // Arc pointer — skip the clone (values are 1 frame stale,
+            // imperceptible).
+            let is_new_arc = self
+                .last_snapshot_arc
+                .as_ref()
+                .is_none_or(|prev| !std::sync::Arc::ptr_eq(prev, &snapshot));
+            if is_new_arc {
+                manifold_core::work_count::record_work(manifold_core::work_count::WorkKind::ProjectClone);
+                self.local_project = (*snapshot).clone();
+                self.last_snapshot_arc = Some(snapshot);
+                // Re-cover the clone with the gesture in flight.
+                // With no drag live, a leftover preview is stale
+                // and drops with the content's truth.
+                if drag_active {
+                    self.ui_edits.preview.reapply(&mut self.local_project);
+                } else {
+                    drop(self.ui_edits.preview.take_clip_gesture());
+                    self.ui_edits.preview.clear_lanes();
+                }
+            } else {
+                // Same Arc — skip deep clone. Drop the Arc ref.
+                drop(snapshot);
+            }
+            // Restore the one actively-dragged gesture so a snapshot
+            // doesn't overwrite the value the user is manipulating —
+            // every family, panel-wired and frame-resident (the
+            // bound-node-param card scrub, BUG-281, whose live writes
+            // land in `local_project` every tick, is now a
+            // `ResolvedScrub::BoundNodeParam` in `active`).
+            self.scrub.restore_dragged(&mut self.local_project);
+            // Clear suppression once we've accepted a post-load snapshot
+            self.suppress_snapshot_until = 0;
 
+            // An edit snapshot: the stamp fold above already moved the
+            // parts the planner re-projects (D5 source a). Here only
+            // the selection drops references the edit removed.
+            if version_changed {
+                // Prune selection references to deleted clips/layers
+                let valid_clips: std::collections::HashSet<manifold_core::ClipId> =
+                    self.local_project
+                        .timeline
+                        .layers
+                        .iter()
+                        .flat_map(|l| l.clips.iter().map(|c| c.id.clone()))
+                        .collect();
+                let valid_layers: std::collections::HashSet<manifold_core::LayerId> =
+                    self.local_project
+                        .timeline
+                        .layers
+                        .iter()
+                        .map(|l| l.layer_id.clone())
+                        .collect();
+                self.selection
+                    .prune_stale_references(&valid_clips, &valid_layers);
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+                // Validate active_layer_id
+                if let Some(ref id) = self.active_layer_id
+                    && !valid_layers.contains(id)
+                {
+                    self.active_layer_id = self
+                        .local_project
+                        .timeline
+                        .layers
+                        .last()
+                        .map(|l| l.layer_id.clone());
+                }
+            }
+        }
+        // Apply lightweight modulation snapshot (param_values only)
+        // to local_project — no full Project clone needed.
+        if !suppressed
+            && let Some(ref mod_snap) = state.modulation_snapshot
+        {
+            mod_snap.apply(&mut self.local_project);
+            // Restore the one actively-dragged gesture so modulation
+            // doesn't overwrite the value the user is manipulating —
+            // every family, panel-wired and frame-resident (BUG-281's
+            // bound-node-param card scrub included, now in `active`).
+            self.scrub.restore_dragged(&mut self.local_project);
+        }
+        // The columns accumulate until the render path draws (clears)
+        // them; `content_state` keeps only the newest state.
+        crate::content_state::append_spectrogram(
+            &mut self.pending_spectrogram_columns,
+            &mut self.pending_spectrogram_scalars,
+            &state.spectrogram_columns,
+            &state.spectrogram_col_scalars,
+            state.spectrogram_num_bins,
+        );
+        self.content_state = ContentState {
+            project_snapshot: None,      // consumed above
+            modulation_snapshot: None,   // consumed above
+            spectrogram_columns: Vec::new(), // accumulated above
+            spectrogram_col_scalars: Vec::new(), // accumulated above
+            ..state
+        };
+    }
 
     pub(crate) fn tick_and_render(&mut self) {
         self.work_trace.frame("ui");
@@ -236,167 +358,8 @@ impl Application {
         let frame_t0 = std::time::Instant::now();
         let mut seg = frame_t0;
 
-        // 1. Drain state from content thread
-        if let Some(ref rx) = self.state_rx {
-            // Drain all pending states, keep the latest
-            while let Ok(state) = rx.try_recv() {
-                // Export messages are sparse notifications, not full playback
-                // snapshots. Consume every event before keeping the latest state.
-                if self.ws.ui_root.consume_export_notification(&state) {
-                    continue;
-                }
-                let drag_active = self.overlay.drag_mode()
-                    != manifold_ui::interaction_overlay::DragMode::None
-                    || self.overlay.has_pending_automation_press();
-                // Suppress snapshots until content thread catches up after a local project load.
-                // Safety net: timeout after 120 frames (~2s) to prevent indefinite suppression.
-                const MAX_SUPPRESS_FRAMES: u64 = 120;
-                let suppress_timed_out = self.suppress_snapshot_until > 0
-                    && self
-                        .frame_count
-                        .saturating_sub(self.suppress_snapshot_set_at)
-                        >= MAX_SUPPRESS_FRAMES;
-                if suppress_timed_out {
-                    log::warn!("[UI] Snapshot suppression timed out — accepting snapshot");
-                    self.suppress_snapshot_until = 0;
-                }
-                let suppressed = state.data_version < self.suppress_snapshot_until;
-
-                // Accept the project snapshot. A drag in flight lives in the
-                // gesture preview, which re-covers the fresh clone below, so
-                // no drag holds snapshots back (D12).
-                if let Some(snapshot) = state.project_snapshot
-                    && !suppressed
-                {
-                    // `ContentState` travels every tick, so only an accepted
-                    // snapshot folds stamps, and a Values, Shapes or
-                    // MappingRanges move alone never re-projects (D23).
-                    let moved = self.ui_edits.stamps.fold_snapshot(&state.stamps);
-                    let version_changed = state.data_version != self.content_state.data_version
-                        || !moved.minus(manifold_core::change::ChangeSet::LIVE).is_empty();
-                    // Only deep-clone from Arc when it's a different allocation
-                    // (new data_version). Modulation-only frames send the same
-                    // Arc pointer — skip the clone (values are 1 frame stale,
-                    // imperceptible).
-                    let is_new_arc = self
-                        .last_snapshot_arc
-                        .as_ref()
-                        .is_none_or(|prev| !std::sync::Arc::ptr_eq(prev, &snapshot));
-                    if is_new_arc {
-                        manifold_core::work_count::record_work(manifold_core::work_count::WorkKind::ProjectClone);
-                        self.local_project = (*snapshot).clone();
-                        self.last_snapshot_arc = Some(snapshot);
-                        // Re-cover the clone with the gesture in flight.
-                        // With no drag live, a leftover preview is stale
-                        // and drops with the content's truth.
-                        if drag_active {
-                            self.ui_edits.preview.reapply(&mut self.local_project);
-                        } else {
-                            drop(self.ui_edits.preview.take_clip_gesture());
-                            self.ui_edits.preview.clear_lanes();
-                        }
-                    } else {
-                        // Same Arc — skip deep clone. Drop the Arc ref.
-                        drop(snapshot);
-                    }
-                    // Restore the one actively-dragged gesture so a snapshot
-                    // doesn't overwrite the value the user is manipulating —
-                    // every family, panel-wired and frame-resident (the
-                    // bound-node-param card scrub, BUG-281, whose live writes
-                    // land in `local_project` every tick, is now a
-                    // `ResolvedScrub::BoundNodeParam` in `active`).
-                    self.scrub.restore_dragged(&mut self.local_project);
-                    // Clear suppression once we've accepted a post-load snapshot
-                    self.suppress_snapshot_until = 0;
-
-                    // An edit snapshot: the stamp fold above already moved the
-                    // parts the planner re-projects (D5 source a). Here only
-                    // the selection drops references the edit removed.
-                    if version_changed {
-                        // Prune selection references to deleted clips/layers
-                        let valid_clips: std::collections::HashSet<manifold_core::ClipId> =
-                            self.local_project
-                                .timeline
-                                .layers
-                                .iter()
-                                .flat_map(|l| l.clips.iter().map(|c| c.id.clone()))
-                                .collect();
-                        let valid_layers: std::collections::HashSet<manifold_core::LayerId> =
-                            self.local_project
-                                .timeline
-                                .layers
-                                .iter()
-                                .map(|l| l.layer_id.clone())
-                                .collect();
-                        self.selection
-                            .prune_stale_references(&valid_clips, &valid_layers);
-
-                        // Validate active_layer_id
-                        if let Some(ref id) = self.active_layer_id
-                            && !valid_layers.contains(id)
-                        {
-                            self.active_layer_id = self
-                                .local_project
-                                .timeline
-                                .layers
-                                .last()
-                                .map(|l| l.layer_id.clone());
-                        }
-                    }
-                }
-                // Apply lightweight modulation snapshot (param_values only)
-                // to local_project — no full Project clone needed.
-                if !suppressed
-                    && let Some(ref mod_snap) = state.modulation_snapshot
-                {
-                    mod_snap.apply(&mut self.local_project);
-                    // Restore the one actively-dragged gesture so modulation
-                    // doesn't overwrite the value the user is manipulating —
-                    // every family, panel-wired and frame-resident (BUG-281's
-                    // bound-node-param card scrub included, now in `active`).
-                    self.scrub.restore_dragged(&mut self.local_project);
-                }
-                // Accumulate VQT columns from EVERY drained snapshot — the
-                // assignment below keeps only the latest, so reading columns off
-                // `content_state` would drop those from earlier snapshots when
-                // several arrive in one UI frame, and re-push them on frames that
-                // drain none. The render path consumes (clears) this buffer.
-                self.pending_spectrogram_columns
-                    .extend_from_slice(&state.spectrogram_columns);
-                // Overlay records ride in lockstep (one ScopeColumn per column).
-                self.pending_spectrogram_scalars
-                    .extend_from_slice(&state.spectrogram_col_scalars);
-                // Bound it: never keep more than one screen-width of columns (a
-                // full sweep overwrites the rest anyway). 4096 = the max texture
-                // width clamp below, so an open scope never drops a column it
-                // could display; this only caps memory when the scope is closed
-                // but an audio mod keeps capture — and column production —
-                // running, since only the render path drains this buffer.
-                let nb = state.spectrogram_num_bins;
-                if nb > 0 {
-                    const MAX_PENDING_COLS: usize = 4096;
-                    let excess =
-                        self.pending_spectrogram_columns.len().saturating_sub(MAX_PENDING_COLS * nb);
-                    if excess > 0 {
-                        self.pending_spectrogram_columns.drain(0..excess);
-                        // Drop the matching overlay records (one per column).
-                        // (Pre-ScopeColumn this used a hand-tracked stride and
-                        // had drifted to a wrong literal, silently desyncing
-                        // the overlay under overflow — the record type makes
-                        // that unrepresentable.)
-                        let cols = (excess / nb).min(self.pending_spectrogram_scalars.len());
-                        self.pending_spectrogram_scalars.drain(0..cols);
-                    }
-                }
-                self.content_state = ContentState {
-                    project_snapshot: None,      // consumed above
-                    modulation_snapshot: None,   // consumed above
-                    spectrogram_columns: Vec::new(), // accumulated above
-                    spectrogram_col_scalars: Vec::new(), // accumulated above
-                    ..state
-                };
-            }
-        }
+        // 1. Take the newest state from the content thread.
+        self.intake_content_state();
 
         // The applied selection moves its own versions.
         crate::edit_selection::apply_update(

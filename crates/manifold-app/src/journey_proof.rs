@@ -78,7 +78,7 @@ fn run_headless_export_states(
 
     let (cmd_tx, cmd_rx): (Sender<ContentCommand>, Receiver<ContentCommand>) =
         crossbeam_channel::unbounded();
-    let (state_tx, state_rx) = crossbeam_channel::unbounded::<ContentState>();
+    let (state_tx, state_rx) = crate::content_state::state_channel();
 
     if let Some(command) = queued_command {
         cmd_tx.send(command).expect("queue export command");
@@ -199,7 +199,7 @@ fn run_headless_export_with_options(
     );
     let (cmd_tx, cmd_rx): (Sender<ContentCommand>, Receiver<ContentCommand>) =
         crossbeam_channel::unbounded();
-    let (state_tx, state_rx) = crossbeam_channel::unbounded::<ContentState>();
+    let (state_tx, state_rx) = crate::content_state::state_channel();
     let (observation_tx, observation_rx) = crossbeam_channel::unbounded();
     let _observation_guard = if capture_sdr_readback || capture_hdr_readback {
         Some(crate::content_export::install_export_observer_with_export_readbacks(
@@ -231,7 +231,7 @@ fn run_headless_export_with_options(
                         state.export_status
                     );
                 }
-                if let Some(ev) = state.export_finished {
+                if let Some(ev) = state.export_finished.into_iter().next() {
                     finished.get_or_insert(ev);
                 }
                 if state.export_run_finished {
@@ -1220,7 +1220,7 @@ mod tests {
         );
         let cancel_finished: Vec<_> = cancel_states
             .iter()
-            .filter_map(|state| state.export_finished.as_ref())
+            .flat_map(|state| &state.export_finished)
             .collect();
         assert_eq!(cancel_finished.len(), 1, "cancellation must emit one terminal file result");
         assert!(!cancel_finished[0].success);
@@ -1254,7 +1254,7 @@ mod tests {
         );
         let batch_finished: Vec<_> = batch_states
             .iter()
-            .filter_map(|state| state.export_finished.as_ref())
+            .flat_map(|state| &state.export_finished)
             .collect();
         assert_eq!(batch_finished.len(), 2, "one interior marker must produce two file results");
         assert!(batch_finished.iter().all(|event| event.success));
@@ -1273,14 +1273,12 @@ mod tests {
         for state in &batch_states {
             let terminal = state.export_run_finished;
             assert!(batch_ui.consume_export_notification(state));
-            if state.export_finished.is_some() {
-                per_file_results += 1;
-                assert!(!terminal);
-                assert!(batch_ui.export_progress.is_open(), "per-file result must leave modal open");
-            }
-            if terminal {
-                assert!(!batch_ui.export_progress.is_open());
-            }
+            per_file_results += state.export_finished.len();
+            assert_eq!(
+                batch_ui.export_progress.is_open(),
+                !terminal,
+                "per-file results leave the modal open; only the run terminal closes it"
+            );
         }
         assert_eq!(per_file_results, 2);
 
@@ -1296,7 +1294,7 @@ mod tests {
         );
         let invalid_finished: Vec<_> = invalid_states
             .iter()
-            .filter_map(|state| state.export_finished.as_ref())
+            .flat_map(|state| &state.export_finished)
             .collect();
         assert_eq!(invalid_finished.len(), 1);
         assert!(!invalid_finished[0].success);

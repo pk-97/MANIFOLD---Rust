@@ -10,7 +10,7 @@ use manifold_compositor::generator_renderer::GeneratorRenderer;
 use manifold_playback::renderer::ClipRenderer;
 
 use crate::content_command::ContentCommand;
-use crate::content_state::ContentState;
+use crate::content_state::{ContentState, StateTx};
 use crate::content_thread::ContentThread;
 use crossbeam_channel::{Receiver, Sender};
 
@@ -222,7 +222,7 @@ impl ContentThread {
         project: Box<manifold_core::project::Project>,
         cmd_rx: &Receiver<ContentCommand>,
         cmd_tx: &Sender<ContentCommand>,
-        state_tx: &Sender<ContentState>,
+        state_tx: &StateTx,
     ) -> ProjectLoadReport {
         let start = std::time::Instant::now();
         let previous_diagnostic = self.graph_edit_diagnostic.as_ref().map(|event| event.sequence);
@@ -246,7 +246,7 @@ impl ContentThread {
         &mut self,
         cmd_rx: &Receiver<ContentCommand>,
         cmd_tx: &Sender<ContentCommand>,
-        state_tx: &Sender<ContentState>,
+        state_tx: &StateTx,
     ) -> WarmupReport {
         let start = std::time::Instant::now();
         // Warmup precedes render_content: install the new project's live
@@ -367,7 +367,7 @@ impl ContentThread {
             let run = pass.layer(_layer_id, layer_start);
             let mut layer_completed = true;
             let label = format!("Loading {}...", layer_name.as_str());
-            let _ = state_tx.send(ContentState {
+            state_tx.publish(ContentState {
                 warmup: Some(manifold_core::WarmupProgress {
                     done: done as u32,
                     total,
@@ -527,7 +527,7 @@ impl ContentThread {
         // Clear progress and re-clear trigger latches so warmup frames don't
         // pollute the first live frame's sample_and_hold / clip_trigger_cycle
         // state (WARMUP_DESIGN.md 3.2 step 5).
-        let _ = state_tx.send(ContentState {
+        state_tx.publish(ContentState {
             warmup: None,
             ..ContentState::default()
         });

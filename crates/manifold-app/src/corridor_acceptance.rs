@@ -356,7 +356,7 @@ fn mean_alpha(rgba: [f64; 4]) -> f64 {
 
 fn drive_and_sample(
     ct: &mut ContentThread,
-    state_tx: &crossbeam_channel::Sender<ContentState>,
+    state_tx: &crate::content_state::StateTx,
     ticks: usize,
     clip_id: &str,
     loop_ticks: usize,
@@ -652,7 +652,7 @@ fn corridor_acceptance_stone_effects_wrap_metric() {
         );
 
         let mut ct: ContentThread = headless_content_thread(project, 320, 180);
-        let (state_tx, _rx) = crossbeam_channel::unbounded::<ContentState>();
+        let (state_tx, _rx) = crate::content_state::state_channel();
         ct.timer.set_frame_clocked(true);
         ct.handle_command(ContentCommand::SeekToBeat(Beats(0.0)));
         ct.handle_command(ContentCommand::Play);
@@ -836,7 +836,7 @@ fn corridor_acceptance_crossing_spike_gate() {
     project.timeline.layers.push(layer);
 
     let mut ct = headless_content_thread(project, 320, 180);
-    let (state_tx, _state_rx) = crossbeam_channel::unbounded();
+    let (state_tx, _state_rx) = crate::content_state::state_channel();
     ct.timer.set_frame_clocked(true);
     ct.handle_command(ContentCommand::Play);
 
@@ -902,7 +902,7 @@ fn modifier_live_scrub_keeps_runtime_couplings_through_undo_redo() {
         let spacing_id = local_binding_id(instance_graph, "loop_camera", "cell_size").unwrap();
         let pattern_id = local_binding_id(instance_graph, "scene_array", "pattern_length").unwrap();
         let mut ct = headless_content_thread(local.clone(), 320, 180);
-        let (state_tx, _state_rx) = crossbeam_channel::unbounded();
+        let (state_tx, _state_rx) = crate::content_state::state_channel();
         ct.timer.set_frame_clocked(true);
         ct.handle_command(ContentCommand::SeekToBeat(Beats(1.0)));
         ct.handle_command(ContentCommand::Play);

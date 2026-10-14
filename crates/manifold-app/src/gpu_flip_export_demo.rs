@@ -84,7 +84,7 @@ fn export(fps: u32, dir: &Path) -> Vec<u8> {
     };
     let mut content = headless_content_thread(project(), WIDTH, HEIGHT);
     let (cmd_tx, cmd_rx) = unbounded();
-    let (state_tx, state_rx) = unbounded();
+    let (state_tx, state_rx) = crate::content_state::state_channel();
     crate::scene_modifier_journey::warm_project(&mut content, &state_tx);
     let (observation_tx, observation_rx) = unbounded();
     let _observer = crate::content_export::install_export_observer(observation_tx, None);
@@ -94,7 +94,7 @@ fn export(fps: u32, dir: &Path) -> Vec<u8> {
     let took = started.elapsed();
     drop(cmd_tx);
     drop(state_tx);
-    let finished = state_rx.try_iter().find_map(|state| state.export_finished).expect("the export finished");
+    let finished = state_rx.try_iter().find_map(|state| state.export_finished.into_iter().next()).expect("the export finished");
     assert!(finished.success, "{fps} fps export failed: {}", finished.message);
     let observed: Vec<_> = observation_rx.try_iter().collect();
     assert_eq!(observed.len(), frames as usize, "{fps} fps export frame count");
@@ -160,7 +160,7 @@ fn liquid_presets_play_without_pipeline_compiles() {
     let mut failures = Vec::new();
     for preset in [PRESET, "WaterDamBreakMatter", "WaterFloatingBoxMatter", "WaterStillPoolMatter"] {
         let mut content = headless_content_thread(project_of(preset), WIDTH, HEIGHT);
-        let (state_tx, _state_rx) = unbounded();
+        let (state_tx, _state_rx) = crate::content_state::state_channel();
         crate::scene_modifier_journey::warm_project(&mut content, &state_tx);
         let before = cold_touch_count(ColdTouchKind::PipelineCompile);
         content.handle_command(ContentCommand::Play);
@@ -180,7 +180,7 @@ fn liquid_presets_play_without_pipeline_compiles() {
 fn gpu_flip_dam_break_paused_live_frames_hold() {
     let dir = out_dir();
     let mut content = headless_content_thread(project(), WIDTH, HEIGHT);
-    let (state_tx, _state_rx) = unbounded();
+    let (state_tx, _state_rx) = crate::content_state::state_channel();
     crate::scene_modifier_journey::warm_project(&mut content, &state_tx);
     let device = std::sync::Arc::clone(content.content_pipeline.native_gpu_for_tests().expect("native device"));
     let grab = |content: &crate::content_thread::ContentThread| {
@@ -229,7 +229,7 @@ fn small_exports(runs: usize, frames: u32, dir: &Path, tag: &str) -> Vec<Vec<u8>
     project.settings.output_height = H as i32;
     let layer_id = project.timeline.layers[0].layer_id.clone();
     let mut content = headless_content_thread(project, W, H);
-    let (state_tx, state_rx) = unbounded();
+    let (state_tx, state_rx) = crate::content_state::state_channel();
     crate::scene_modifier_journey::set_generator_param(&mut content, &layer_id, "resolution", 32.0);
     crate::scene_modifier_journey::warm_project(&mut content, &state_tx);
     (0..runs)
@@ -253,7 +253,7 @@ fn small_exports(runs: usize, frames: u32, dir: &Path, tag: &str) -> Vec<Vec<u8>
             crate::content_export::capture_export_sdr_frame(frames - 1);
             content.run_export(cfg, &cmd_rx, &state_tx);
             drop(cmd_tx);
-            let finished = state_rx.try_iter().find_map(|state| state.export_finished).expect("the export finished");
+            let finished = state_rx.try_iter().find_map(|state| state.export_finished.into_iter().next()).expect("the export finished");
             assert!(finished.success, "{tag} run {run} failed: {}", finished.message);
             let observed: Vec<_> = observation_rx.try_iter().collect();
             assert_eq!(observed.len(), frames as usize, "{tag} run {run} frame count");

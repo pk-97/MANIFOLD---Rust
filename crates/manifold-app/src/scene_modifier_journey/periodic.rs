@@ -7,7 +7,6 @@ use manifold_core::{Beats, LayerId, NodeId};
 use manifold_core::project::Project;
 
 use crate::content_command::ContentCommand;
-use crate::content_state::ContentState;
 use crate::headless_harness::headless_content_thread;
 
 use super::{
@@ -197,7 +196,7 @@ fn scene_modifier_periodic_app_control_journey() {
     assert_eq!(original_driver.id.as_str(), phase_binding.as_str());
 
     let mut ct = headless_content_thread(Project::default(), WIDTH, HEIGHT);
-    let (state_tx, _state_rx) = crossbeam_channel::unbounded::<ContentState>();
+    let (state_tx, _state_rx) = crate::content_state::state_channel();
     ct.watched_graph_target = Some(manifold_core::GraphTarget::Generator(layer_id.clone()));
     ct.handle_command(ContentCommand::LoadProject(Box::new(project)));
     assert!(

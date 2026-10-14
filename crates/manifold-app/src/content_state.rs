@@ -105,8 +105,9 @@ pub struct ObjectModifierSelectionUpdate {
     pub node_doc_id: u32,
 }
 
-/// State snapshot sent from the content thread to the UI thread.
-/// The UI thread drains these from a bounded channel and uses the latest.
+/// State snapshot sent from the content thread to the UI thread through a
+/// one-slot handoff ([`state_channel`]); a replaced state folds into its
+/// replacement ([`ContentState::absorb_replaced`]).
 ///
 /// Orphan enforcement (UI_PROJECTION_LAYER_DESIGN.md P0): manifold-app is a
 /// bin crate, so rustc's dead_code lint sees every read site — a field written
@@ -255,8 +256,9 @@ pub struct ContentState {
     pub export_progress: f32,
     /// Export status text (e.g. "Exporting 120/600 (20%)"). BUG-083.
     pub export_status: Arc<str>,
-    /// Per-file result (success, failure or cancellation), including still exports.
-    pub export_finished: Option<ExportFinishedEvent>,
+    /// Per-file results (success, failure or cancellation) since the UI last
+    /// read, oldest first, including still exports.
+    pub export_finished: Vec<ExportFinishedEvent>,
     /// Set once when the entire export run finishes, after all sections and
     /// playback restoration have completed.
     pub export_run_finished: bool,
@@ -600,7 +602,7 @@ impl Default for ContentState {
             is_exporting: false,
             export_progress: 0.0,
             export_status: Arc::from(""),
-            export_finished: None,
+            export_finished: Vec::new(),
             export_run_finished: false,
             warmup: None,
             undo_redo_event: None,
@@ -631,6 +633,139 @@ impl Default for ContentState {
     }
 }
 
+/// Spectrogram columns the UI has not drawn yet, capped at one screen width.
+/// 4096 is the scope's maximum texture width, so an open scope never loses a
+/// column it could show; the cap only bounds memory while nobody draws them.
+const MAX_PENDING_SPECTROGRAM_COLS: usize = 4096;
+
+/// Append `cols` (and their per-column overlay records) to the pending
+/// spectrogram, dropping the oldest past [`MAX_PENDING_SPECTROGRAM_COLS`].
+pub(crate) fn append_spectrogram(
+    pending_cols: &mut Vec<f32>,
+    pending_scalars: &mut Vec<manifold_spectral::ScopeColumn>,
+    cols: &[f32],
+    scalars: &[manifold_spectral::ScopeColumn],
+    num_bins: usize,
+) {
+    pending_cols.extend_from_slice(cols);
+    pending_scalars.extend_from_slice(scalars);
+    if num_bins == 0 {
+        return;
+    }
+    let excess = pending_cols.len().saturating_sub(MAX_PENDING_SPECTROGRAM_COLS * num_bins);
+    if excess > 0 {
+        pending_cols.drain(0..excess);
+        let records = (excess / num_bins).min(pending_scalars.len());
+        pending_scalars.drain(0..records);
+    }
+}
+
+/// The content-to-UI handoff: one slot holding the newest state. Publishing
+/// never blocks and never allocates; a state the UI has not taken yet is
+/// folded into its replacement, so nothing the UI must see is lost and a
+/// stalled UI (a native dialog, a window drag) holds one state, not a queue.
+pub(crate) fn state_channel() -> (StateTx, crossbeam_channel::Receiver<ContentState>) {
+    let (tx, rx) = crossbeam_channel::bounded(1);
+    (StateTx { tx, slot: rx.clone() }, rx)
+}
+
+/// The publishing end of [`state_channel`]. Cloned to every thread that
+/// publishes (the content thread and the still-export encoder).
+#[derive(Clone)]
+pub(crate) struct StateTx {
+    tx: crossbeam_channel::Sender<ContentState>,
+    /// The slot's own receiver, used only to take back a state the UI has
+    /// not read so it can fold into the next one.
+    slot: crossbeam_channel::Receiver<ContentState>,
+}
+
+impl StateTx {
+    pub(crate) fn publish(&self, mut state: ContentState) {
+        // Only an empty slot accepts a send, and whatever is taken back is
+        // folded, so concurrent publishers and the UI's read lose nothing.
+        // A race can fold a newer state in as the older one; only the content
+        // thread publishes engine state and the encoder publishes bare
+        // notices, which fold the same in either order.
+        loop {
+            if let Ok(older) = self.slot.try_recv() {
+                state.absorb_replaced(older);
+            }
+            match self.tx.try_send(state) {
+                Ok(()) => return,
+                Err(crossbeam_channel::TrySendError::Full(back)) => state = back,
+                // The slot's own receiver keeps the channel connected.
+                Err(crossbeam_channel::TrySendError::Disconnected(_)) => return,
+            }
+        }
+    }
+}
+
+impl ContentState {
+    /// An export notice: progress, a finished file or the finished run.
+    pub(crate) fn is_export_notice(&self) -> bool {
+        self.is_exporting || !self.export_finished.is_empty() || self.export_run_finished
+    }
+
+    /// An export notice built from `Default` with no engine state behind it.
+    /// Only the per-tick publish sets `sdr_preview` (see its doc), so a notice
+    /// that later folded into a full state is not bare.
+    pub(crate) fn is_bare_notice(&self) -> bool {
+        self.is_export_notice() && self.sdr_preview.is_none()
+    }
+
+    /// Fold `older`, a state the UI never read, into this newer one so the UI
+    /// sees what reading both in order would have shown it: the newest values;
+    /// the older project snapshot, with the stamps and version that describe
+    /// it, and the older modulation capture and undo toast when this state has
+    /// none of its own; every spectrogram column and export file result.
+    pub(crate) fn absorb_replaced(&mut self, mut older: ContentState) {
+        if self.is_bare_notice() && !older.is_bare_notice() {
+            // A bare notice carries no engine state: the older state stays the
+            // body and the notice lands on it.
+            let mut notice = std::mem::replace(self, older);
+            self.export_finished.append(&mut notice.export_finished);
+            self.export_run_finished |= notice.export_run_finished;
+            self.is_exporting = notice.is_exporting;
+            self.export_progress = notice.export_progress;
+            self.export_status = notice.export_status;
+            return;
+        }
+        if self.project_snapshot.is_none() && older.project_snapshot.is_some() {
+            self.project_snapshot = older.project_snapshot.take();
+            self.stamps = older.stamps;
+            self.data_version = older.data_version;
+        }
+        if self.modulation_snapshot.is_none() {
+            self.modulation_snapshot = older.modulation_snapshot.take();
+        }
+        if self.undo_redo_event.is_none() {
+            self.undo_redo_event = older.undo_redo_event.take();
+        }
+        if !older.spectrogram_columns.is_empty() {
+            append_spectrogram(
+                &mut older.spectrogram_columns,
+                &mut older.spectrogram_col_scalars,
+                &self.spectrogram_columns,
+                &self.spectrogram_col_scalars,
+                self.spectrogram_num_bins,
+            );
+            self.spectrogram_columns = older.spectrogram_columns;
+            self.spectrogram_col_scalars = older.spectrogram_col_scalars;
+        }
+        // Export progress belongs to the newest notice; a per-tick state
+        // carries none of its own.
+        if !self.is_export_notice() {
+            self.is_exporting = older.is_exporting;
+            self.export_progress = older.export_progress;
+            self.export_status = older.export_status;
+        }
+        if !older.export_finished.is_empty() {
+            older.export_finished.append(&mut self.export_finished);
+            self.export_finished = older.export_finished;
+        }
+        self.export_run_finished |= older.export_run_finished;
+    }
+}
 
 /// A block owner by reference, so an unchanged capture clones no id.
 enum BlockOwnerRef<'a> {
@@ -1001,5 +1136,137 @@ mod modulation_topology_guard_tests {
                 "tick {tick}: values must cover macros + master fx + layer fx"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod handoff_tests {
+    use super::*;
+    use manifold_core::change::{ChangeSet, Part, PartStamps};
+
+    /// A per-tick state at `beat`, as `send_state` builds one.
+    fn tick(beat: f64) -> ContentState {
+        ContentState {
+            current_beat: Beats(beat),
+            sdr_preview: Some(false),
+            ..ContentState::default()
+        }
+    }
+
+    fn finished(message: &str) -> ContentState {
+        ContentState {
+            export_finished: vec![ExportFinishedEvent {
+                success: true,
+                message: message.into(),
+                output_path: String::new(),
+            }],
+            ..ContentState::default()
+        }
+    }
+
+    /// BUG-8wmor (state channel allocates a block every 31 frames): a state
+    /// the UI never read folds into its replacement, so the edit's snapshot,
+    /// the parts it moved, its undo toast and its scope columns all arrive.
+    #[test]
+    fn replaced_snapshot_keeps_its_change_set() {
+        let (tx, rx) = state_channel();
+        let base = PartStamps::default();
+        let mut edited = base;
+        edited.bump(ChangeSet::of(&[Part::Clips]));
+        let snapshot = Arc::new(Project::default());
+        tx.publish(ContentState {
+            project_snapshot: Some(snapshot.clone()),
+            stamps: edited,
+            data_version: 3,
+            undo_redo_event: Some(UndoRedoEvent { is_redo: false, description: "Move Clip".into() }),
+            spectrogram_columns: vec![1.0, 2.0],
+            spectrogram_num_bins: 2,
+            ..tick(1.0)
+        });
+        tx.publish(ContentState {
+            stamps: edited,
+            data_version: 3,
+            spectrogram_columns: vec![3.0, 4.0],
+            spectrogram_num_bins: 2,
+            ..tick(2.0)
+        });
+
+        let state = rx.try_recv().expect("one state waits");
+        assert!(rx.try_recv().is_err(), "the handoff holds one state");
+        assert_eq!(state.current_beat, Beats(2.0), "the newest values win");
+        assert!(Arc::ptr_eq(state.project_snapshot.as_ref().expect("snapshot kept"), &snapshot));
+        let mut ui = crate::frame_plan::UiStamps::default();
+        ui.fold_snapshot(&base);
+        assert_eq!(ui.fold_snapshot(&state.stamps), ChangeSet::of(&[Part::Clips]));
+        assert_eq!(state.data_version, 3);
+        assert_eq!(state.undo_redo_event.map(|e| e.description).as_deref(), Some("Move Clip"));
+        assert_eq!(state.spectrogram_columns, [1.0, 2.0, 3.0, 4.0]);
+    }
+
+    /// A newer snapshot replaces an older one with its own stamps.
+    #[test]
+    fn newer_snapshot_wins() {
+        let (tx, rx) = state_channel();
+        let older = Arc::new(Project::default());
+        let newer = Arc::new(Project::default());
+        tx.publish(ContentState { project_snapshot: Some(older), data_version: 1, ..tick(1.0) });
+        tx.publish(ContentState { project_snapshot: Some(newer.clone()), data_version: 2, ..tick(2.0) });
+        let state = rx.try_recv().expect("one state waits");
+        assert!(Arc::ptr_eq(state.project_snapshot.as_ref().unwrap(), &newer));
+        assert_eq!(state.data_version, 2);
+    }
+
+    /// An export notice carries no engine state: folded either way with a
+    /// tick, the UI gets the tick's body and the notice's event.
+    #[test]
+    fn export_notice_and_tick_fold_both_ways() {
+        let (tx, rx) = state_channel();
+        tx.publish(tick(1.0));
+        tx.publish(finished("Exported"));
+        let state = rx.try_recv().expect("one state waits");
+        assert!(!state.is_bare_notice(), "the tick's body survives a newer notice");
+        assert_eq!(state.current_beat, Beats(1.0));
+        assert_eq!(state.export_finished.len(), 1);
+
+        tx.publish(finished("Exported"));
+        tx.publish(tick(2.0));
+        let state = rx.try_recv().expect("one state waits");
+        assert!(!state.is_bare_notice());
+        assert_eq!(state.current_beat, Beats(2.0));
+        assert_eq!(state.export_finished.len(), 1, "the notice survives a newer tick");
+    }
+
+    /// Two notices: the newest progress, the older file result, the run end.
+    #[test]
+    fn export_notices_fold() {
+        let (tx, rx) = state_channel();
+        tx.publish(finished("Section 1"));
+        tx.publish(ContentState { export_run_finished: true, ..ContentState::default() });
+        tx.publish(ContentState {
+            is_exporting: true,
+            export_progress: 0.5,
+            ..ContentState::default()
+        });
+        let state = rx.try_recv().expect("one state waits");
+        assert!(state.is_bare_notice());
+        assert_eq!(state.export_finished[0].message, "Section 1");
+        assert!(state.export_run_finished);
+        assert!(state.is_exporting);
+        assert_eq!(state.export_progress, 0.5);
+    }
+
+    /// Publishing from two threads with no reader loses no event.
+    #[test]
+    fn concurrent_publishers_lose_nothing() {
+        let (tx, rx) = state_channel();
+        let notices = tx.clone();
+        let encoder = std::thread::spawn(move || notices.publish(finished("Still")));
+        for beat in 0..1000 {
+            tx.publish(tick(f64::from(beat)));
+        }
+        encoder.join().unwrap();
+        let state = rx.try_recv().expect("one state waits");
+        assert_eq!(state.current_beat, Beats(999.0));
+        assert_eq!(state.export_finished.len(), 1);
     }
 }

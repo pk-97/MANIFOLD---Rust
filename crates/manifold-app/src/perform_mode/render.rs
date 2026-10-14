@@ -1,6 +1,6 @@
 //! Perform-mode rendering — minimal main-window draw path. The frame's
 //! intake, derivation and composite are the shared seam in `frame.rs`; this
-//! file holds the live window's half (drain, liveness, preview blit, present)
+//! file holds the live window's half (state intake, liveness, preview blit, present)
 //! and the HUD's draw helpers.
 
 use manifold_core::types::ClockAuthority;
@@ -13,20 +13,15 @@ use crate::perform_mode::frame::{PerformHud, SyncStatus};
 use crate::perform_mode::{cue, frame, macros as perform_macros};
 
 impl Application {
-    /// Performance mode tick: drains content state, polls output window
+    /// Performance mode tick: takes the content state, polls output window
     /// liveness, processes only the exit button, and renders the perform
     /// HUD on the main window. The content thread and output window are
     /// completely untouched.
     pub(crate) fn tick_perform_mode(&mut self) {
-        // 1. Drain content state channel so the content thread isn't blocked
-        //    on backpressure. We keep the latest state for the HUD readout
-        //    (BPM, current beat, Ableton session) but DO NOT push anything
-        //    to panels — the normal UI is frozen.
-        if let Some(ref rx) = self.state_rx {
-            while let Ok(state) = rx.try_recv() {
-                self.content_state = state;
-            }
-        }
+        // 1. The same intake as the normal frame, so a project snapshot
+        //    published here is in `local_project` on exit. Nothing is pushed
+        //    to panels; the normal UI is frozen.
+        self.intake_content_state();
 
         // 1a. Breadcrumb sidecar (GIG_RESILIENCE_DESIGN section 5.1) — this is the
         // path that matters most: perform mode IS the live show. Unlike
@@ -876,5 +871,35 @@ pub(super) fn draw_macros_column(ui: &mut UIRenderer, lh: f32, macros: &[perform
         if fill_w > 1.0 {
             ui.draw_rounded_rect(left_pad, bar_y, fill_w, bar_h, macro_fill, bar_h * 0.5);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::app::Application;
+    use crate::content_state::{state_channel, ContentState};
+    use std::sync::Arc;
+
+    /// BUG-znzgo (project snapshot published during perform mode lost on
+    /// exit): perform mode takes the state through the normal intake, so a
+    /// project edit published while it runs is in `local_project` on exit.
+    #[test]
+    fn perform_mode_accepts_project_snapshots() {
+        let mut app = Application::new();
+        let (tx, rx) = state_channel();
+        app.state_rx = Some(rx);
+        app.perform.active = true;
+        let mut project = app.local_project.clone();
+        project.settings.frame_rate = 24.0;
+        assert_ne!(app.local_project.settings.frame_rate, 24.0);
+        tx.publish(ContentState {
+            project_snapshot: Some(Arc::new(project)),
+            data_version: 1,
+            sdr_preview: Some(false),
+            ..ContentState::default()
+        });
+        app.tick_perform_mode();
+        assert_eq!(app.local_project.settings.frame_rate, 24.0);
+        assert_eq!(app.content_state.data_version, 1);
     }
 }

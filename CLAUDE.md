@@ -56,7 +56,7 @@ Rationale and incident history live in `.claude/GIT_TREE_DISCIPLINE.md`, the poi
 
 ## Two-thread model
 
-The content thread owns `PlaybackEngine`, `EditingService`, `ContentPipeline`, and the `Project`, and runs at project FPS (default 60). The UI thread (winit) renders, handles input, and presents GPU output. UI→content is `ContentCommand`; content→UI is `ContentState` snapshots; both channels are crossbeam unbounded with the consumer draining to latest — that is the backpressure. GPU output crosses via an IOSurface zero-copy triple buffer with an atomic front index.
+The content thread owns `PlaybackEngine`, `EditingService`, `ContentPipeline`, and the `Project`, and runs at project FPS (default 60). The UI thread (winit) renders, handles input, and presents GPU output. UI→content is `ContentCommand` on a crossbeam unbounded channel the content thread drains in full; commands are never dropped. Content→UI is `ContentState` through a one-slot handoff (`content_state::state_channel`) that holds only the newest state and folds a replaced one into it, so a stalled UI holds one state and loses no snapshot, stamp or export result. GPU output crosses via an IOSurface zero-copy triple buffer with an atomic front index.
 
 ## Crates
 

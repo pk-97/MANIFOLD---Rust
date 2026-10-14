@@ -16,7 +16,7 @@ Presents GPU output                   ContentPipeline (generators + effects)
     ContentCommand ─────────────►     Sync (MIDI/OSC/Link)
     (crossbeam unbounded)
                                       ContentState ──────────────►
-                                      (crossbeam unbounded, UI drains to latest)
+                                      (one-slot handoff, newest state wins)
     GPU output ◄─────────────────     IOSurface triple-buffer
     (atomic front_index)              (zero-copy kernel memory)
 ```
@@ -89,7 +89,7 @@ ContentCommand::mutate(touch::VALUES, Box::new(|project: &mut Project| { ... }))
 ```
 UI click → DispatchCtx::execute / mutate (local write + stamp) → send ContentCommand
 Content thread drains all → EditingService → stamps move → reactions run once per drain
-Content thread publishes ContentState (UI drains all + keeps latest)
+Content thread publishes ContentState (one slot; a replaced state folds into the newest)
 UI accepts the snapshot → moved parts bump its own stamps → the frame planner
 projects, rebuilds or pushes in place from its inputs
 ```
@@ -143,6 +143,6 @@ manifold-app/src/ui_bridge/
 | Direction | Type | Channel | Notes |
 |-----------|------|---------|-------|
 | UI→Content | ContentCommand | crossbeam unbounded | logs on disconnect |
-| Content→UI | ContentState | crossbeam unbounded | UI drains all, keeps latest |
+| Content→UI | ContentState | one-slot handoff (`state_channel`) | UI takes one per frame; a replaced state folds into the newest |
 | GPU output | IOSurface | Triple-buffer | Atomic front_index, zero-copy |
 | OSC→Content | PendingWrite | Arc<Mutex<Vec>> | Only shared mutable state |

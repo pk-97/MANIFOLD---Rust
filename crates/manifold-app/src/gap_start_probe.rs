@@ -1,20 +1,11 @@
 //! Real-rendering regression for clip starts after short gaps.
 #![cfg(all(test, target_os = "macos"))]
 
-use crossbeam_channel::Sender;
 use manifold_core::{Beats, PresetTypeId};
 use manifold_gpu::GpuTexture;
 
-use crate::content_state::ContentState;
 use crate::content_thread::ContentThread;
 use crate::headless_harness::headless_content_thread;
-
-fn state_channel() -> (
-    Sender<ContentState>,
-    crossbeam_channel::Receiver<ContentState>,
-) {
-    crossbeam_channel::unbounded()
-}
 
 fn readback_mean_rgb(device: &manifold_gpu::GpuDevice, tex: &GpuTexture) -> [f64; 3] {
     assert_eq!(tex.format, manifold_gpu::GpuTextureFormat::Rgba16Float);
@@ -66,7 +57,7 @@ fn generated_project() -> manifold_core::project::Project {
 #[test]
 fn gap_start_black_frame_probe() {
     let mut ct: ContentThread = headless_content_thread(generated_project(), 320, 180);
-    let (state_tx, _state_rx) = state_channel();
+    let (state_tx, _state_rx) = crate::content_state::state_channel();
     ct.timer.set_frame_clocked(true);
     ct.handle_command(crate::content_command::ContentCommand::SeekToBeat(
         Beats::ZERO,
