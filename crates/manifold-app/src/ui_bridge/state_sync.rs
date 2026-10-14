@@ -65,7 +65,7 @@ pub fn push_state(
     push_chrome(ui, project, content_state, selection, is_dirty, project_path, transport_cache);
     push_selection(ui, project, active_layer, selection);
     push_frame(ui, project, content_state, active_layer);
-    push_live(ui, project, content_state, active_layer);
+    push_live(ui, project, content_state, active_layer, LiveGroups { values: true, shapes: true });
 }
 
 /// One-shot events keyed on their own sequences: toasts, content-driven
@@ -660,16 +660,48 @@ pub fn push_frame(
     }
 }
 
-/// The live push (D15 piece 1, D22): macro, opacity and LED values, card and
-/// scene-row values. The frame planner runs it when a live value, a live
-/// stamp or the active layer moved, or after a projection or rebuild.
+/// Which groups of the live push run (D22). Values displays follow the values
+/// sequence and the Values stamp; drawers, handles, gains and range bands
+/// follow the Shapes and MappingRanges stamps, so modulated playback never
+/// touches them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LiveGroups {
+    pub values: bool,
+    pub shapes: bool,
+}
+
+impl LiveGroups {
+    pub fn any(self) -> bool {
+        self.values || self.shapes
+    }
+}
+
+/// The live push (D15 piece 1, D22): every display of a live scalar, in
+/// place. The frame planner runs each group when its inputs moved, and both
+/// after a projection or rebuild.
 pub fn push_live(
     ui: &mut UIRoot,
     project: &Project,
     content_state: &crate::content_state::ContentState,
     active_layer: Option<usize>,
+    groups: LiveGroups,
 ) {
     manifold_core::work_count::record_work(manifold_core::work_count::WorkKind::ValuePush);
+    if groups.values {
+        push_live_values(ui, project, content_state, active_layer);
+    }
+    if groups.shapes {
+        crate::ui_bridge::projection::live_shapes::sync_live_shapes(ui, project, active_layer);
+    }
+}
+
+/// Values displays: macro, opacity and LED values, card and scene-row values.
+fn push_live_values(
+    ui: &mut UIRoot,
+    project: &Project,
+    content_state: &crate::content_state::ContentState,
+    active_layer: Option<usize>,
+) {
     let tree = &mut ui.tree;
 
     // Macro slider values + labels/mapping counts for context menus
@@ -707,7 +739,7 @@ pub fn push_live(
             }
         })
         .collect();
-    // Set Ableton display data + trim ranges before sync so build can use them.
+    // Set Ableton display data before sync so build can use them.
     let macro_abl_displays: Vec<Option<AbletonMappingDisplay>> = project
         .settings
         .macro_bank
@@ -728,20 +760,6 @@ pub fn push_live(
     ui.inspector
         .macros_panel_mut()
         .set_ableton_displays(&macro_abl_displays);
-    let macro_abl_ranges: Vec<Option<(f32, f32)>> = project
-        .settings
-        .macro_bank
-        .slots
-        .iter()
-        .map(|slot| {
-            slot.ableton_mapping
-                .as_ref()
-                .map(|m| (m.range_min, m.range_max))
-        })
-        .collect();
-    ui.inspector
-        .macros_panel_mut()
-        .set_ableton_ranges(&macro_abl_ranges);
     ui.inspector
         .macros_panel_mut()
         .sync_values(tree, &macro_vals, &macro_display_labels);
@@ -757,36 +775,31 @@ pub fn push_live(
         }
     }
 
-    // Sync active layer opacity to inspector chrome
-    if let Some(idx) = active_layer {
-        {
-            if let Some(layer) = project.timeline.layers.get(idx) {
-                ui.inspector
-                    .layer_chrome_mut()
-                    .sync_opacity(tree, layer.opacity);
-                ui.inspector.layer_chrome_mut().sync_name(tree, &layer.name);
-            }
-            // Master opacity + LED brightness
-            ui.inspector
-                .master_chrome_mut()
-                .sync_opacity(tree, project.settings.master_opacity);
-            ui.inspector
-                .master_chrome_mut()
-                .sync_led_brightness(tree, project.settings.led_brightness);
-            ui.inspector
-                .master_chrome_mut()
-                .sync_led_enabled(tree, content_state.led_enabled);
-
-            // LED exit path label + cached effect names for dropdown
-            let exit_label = super::led_exit_path_label(
-                project.settings.led_exit_index,
-                &project.settings.master_effects,
-            );
-            ui.inspector
-                .master_chrome_mut()
-                .sync_exit_path(tree, &exit_label);
-        }
+    // Active layer opacity and name in the layer chrome.
+    if let Some(layer) = active_layer.and_then(|idx| project.timeline.layers.get(idx)) {
+        ui.inspector
+            .layer_chrome_mut()
+            .sync_opacity(tree, layer.opacity);
+        ui.inspector.layer_chrome_mut().sync_name(tree, &layer.name);
     }
+    // The master chrome shows with or without an active layer.
+    ui.inspector
+        .master_chrome_mut()
+        .sync_opacity(tree, project.settings.master_opacity);
+    ui.inspector
+        .master_chrome_mut()
+        .sync_led_brightness(tree, project.settings.led_brightness);
+    ui.inspector
+        .master_chrome_mut()
+        .sync_led_enabled(tree, content_state.led_enabled);
+    // LED exit path label + cached effect names for dropdown
+    let exit_label = super::led_exit_path_label(
+        project.settings.led_exit_index,
+        &project.settings.master_effects,
+    );
+    ui.inspector
+        .master_chrome_mut()
+        .sync_exit_path(tree, &exit_label);
 
     // Sync effect card values (master, layer, clip)
     sync_card_values(ui, project, active_layer);

@@ -946,6 +946,35 @@ impl ParamCardPanel {
         }
     }
 
+    /// Rewrite every row's live-scalar handles and drawer readouts in place
+    /// (UI_INVALIDATION D22). `shapes_of` answers for a row's param id.
+    pub fn sync_live_shapes(
+        &mut self,
+        tree: &mut UITree,
+        shapes_of: &mut dyn FnMut(&str) -> crate::panels::param_slider_shared::RowShapes,
+    ) {
+        for (row, param) in self.rows.iter_mut().enumerate() {
+            let shapes = shapes_of(param.id.as_ref());
+            self.row_host.sync_row_shapes(tree, &mut self.state.mod_state, param, row, &shapes);
+        }
+    }
+
+    /// Rewrite the six "3D Shading" knobs in place (UI_INVALIDATION D22).
+    /// The toggle and Height From are discrete and rebuild.
+    pub fn sync_relight_values(&mut self, tree: &mut UITree, relight: &RelightCardConfig) {
+        for (i, spec) in RELIGHT_FIELD_SPECS.iter().enumerate() {
+            let value = relight.value(spec.field);
+            if self.relight.value(spec.field) == value {
+                continue;
+            }
+            self.relight.set_value(spec.field, value);
+            if let Some(ids) = self.relight_slider_ids[i].as_ref() {
+                let norm = crate::slider::BitmapSlider::value_to_normalized(value, spec.min, spec.max);
+                crate::slider::BitmapSlider::update_value(tree, ids, norm, &format!("{value:.2}"));
+            }
+        }
+    }
+
     /// Per-frame content sync (push_state — after build). Black↔Frame
     /// transitions and new readback versions update the band in place; a
     /// `None` payload hides the chrome without waiting for a rebuild (the

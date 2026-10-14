@@ -1617,8 +1617,6 @@ impl TimelineInputHost for AppInputHost<'_> {
     fn toggle_automation_draw_mode(&mut self) {
         self.selection.automation_draw_mode = !self.selection.automation_draw_mode;
         self.selection.set_automation_mode_visible(true);
-        *self.needs_structural_sync = true;
-        *self.needs_rebuild = true;
     }
 
     fn automation_mode_visible(&self) -> bool {

@@ -165,6 +165,22 @@ impl MacrosPanel {
             self.ableton_ranges[i] = *r;
         }
     }
+    /// Set the Ableton trim ranges and move the built trim handles in place
+    /// (UI_INVALIDATION D22). Gaining or losing a mapping is membership and
+    /// reaches the handles through the next build.
+    pub fn sync_ableton_ranges(&mut self, tree: &mut UITree, ranges: &[Option<(f32, f32)>]) {
+        for (i, &range) in ranges.iter().enumerate().take(MACRO_COUNT) {
+            if self.ableton_ranges[i] == range {
+                continue;
+            }
+            self.ableton_ranges[i] = range;
+            if let (Some((lo, hi)), Some(trim), Some(ids)) = (range, &self.ableton_trim_ids[i], self.sliders[i].ids()) {
+                let track = tree.get_bounds(ids.track);
+                reposition_trim_bars(tree, track, trim, lo, hi);
+            }
+        }
+    }
+
     pub fn node_count(&self) -> usize {
         self.node_count
     }

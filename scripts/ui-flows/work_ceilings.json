@@ -42,15 +42,16 @@
       "drag_1s": {
         "ChromeLayout": 189,
         "ClipProjection": 1,
-        "FrameAlloc": 11458,
+        "FrameAlloc": 8034,
         "FullBuild": 1,
         "GridBitmapRepaint": 3,
         "InspectorSync": 1,
         "LaneProjection": 2,
-        "OverviewRepaint": 63,
+        "OverviewRepaint": 1,
+        "PresetListProjection": 1,
         "ProjectSync": 1,
         "SlotInvalidate": 7,
-        "ValuePush": 63
+        "ValuePush": 61
       }
     },
     "work-automation-hover": {
@@ -84,15 +85,16 @@
         "ChromeLayout": 189,
         "ClipProjection": 2,
         "DeviceQuery": 2,
-        "FrameAlloc": 17201,
+        "FrameAlloc": 9875,
         "FullBuild": 2,
         "GridBitmapRepaint": 54,
         "InspectorSync": 2,
         "LaneProjection": 4,
-        "OverviewRepaint": 63,
+        "OverviewRepaint": 2,
+        "PresetListProjection": 2,
         "ProjectSync": 2,
         "SlotInvalidate": 14,
-        "ValuePush": 63
+        "ValuePush": 62
       }
     },
     "work-clip-drag": {
@@ -133,7 +135,7 @@
       "jitter_2s": {
         "ChromeLayout": 360,
         "DriverScan": 120,
-        "FrameAlloc": 11984,
+        "FrameAlloc": 11504,
         "OverviewRepaint": 120,
         "TextMeasureMiss": 17
       }
@@ -183,30 +185,32 @@
       "drag_1s": {
         "ChromeLayout": 189,
         "ClipProjection": 1,
-        "FrameAlloc": 11457,
+        "FrameAlloc": 8033,
         "FullBuild": 1,
         "GridBitmapRepaint": 3,
         "InspectorSync": 1,
         "LaneProjection": 2,
-        "OverviewRepaint": 63,
+        "OverviewRepaint": 1,
+        "PresetListProjection": 1,
         "ProjectSync": 1,
         "SlotInvalidate": 7,
-        "ValuePush": 63
+        "ValuePush": 61
       }
     },
     "work-envelope-drag": {
       "drag_1s": {
         "ChromeLayout": 189,
         "ClipProjection": 1,
-        "FrameAlloc": 9241,
+        "FrameAlloc": 6623,
         "FullBuild": 1,
         "GridBitmapRepaint": 1,
         "InspectorSync": 1,
         "LaneProjection": 2,
-        "OverviewRepaint": 63,
+        "OverviewRepaint": 1,
+        "PresetListProjection": 1,
         "ProjectSync": 1,
         "SlotInvalidate": 7,
-        "ValuePush": 63
+        "ValuePush": 61
       }
     },
     "work-fold-toggle": {
@@ -244,7 +248,7 @@
     "work-idle": {
       "idle_2s": {
         "ChromeLayout": 360,
-        "FrameAlloc": 11408
+        "FrameAlloc": 10928
       }
     },
     "work-inspector-resize": {
@@ -279,15 +283,16 @@
       "drag_1s": {
         "ChromeLayout": 189,
         "ClipProjection": 1,
-        "FrameAlloc": 11274,
+        "FrameAlloc": 7850,
         "FullBuild": 1,
         "GridBitmapRepaint": 3,
         "InspectorSync": 1,
         "LaneProjection": 2,
-        "OverviewRepaint": 63,
+        "OverviewRepaint": 1,
+        "PresetListProjection": 1,
         "ProjectSync": 1,
         "SlotInvalidate": 7,
-        "ValuePush": 63
+        "ValuePush": 61
       }
     },
     "work-layer-reorder": {
@@ -350,7 +355,7 @@
     "work-playback": {
       "play_2s": {
         "ChromeLayout": 360,
-        "FrameAlloc": 12188,
+        "FrameAlloc": 11708,
         "OverviewRepaint": 120,
         "TextMeasureMiss": 17
       }
@@ -375,15 +380,16 @@
       "drag_1s": {
         "ChromeLayout": 189,
         "ClipProjection": 1,
-        "FrameAlloc": 11274,
+        "FrameAlloc": 7850,
         "FullBuild": 1,
         "GridBitmapRepaint": 3,
         "InspectorSync": 1,
         "LaneProjection": 2,
-        "OverviewRepaint": 63,
+        "OverviewRepaint": 1,
+        "PresetListProjection": 1,
         "ProjectSync": 1,
         "SlotInvalidate": 7,
-        "ValuePush": 63
+        "ValuePush": 61
       }
     },
     "work-scrollbar-drag": {
@@ -422,9 +428,8 @@
     "work-send-gain": {
       "drag_1s": {
         "ChromeLayout": 186,
-        "FrameAlloc": 13152,
-        "OverviewRepaint": 62,
-        "ValuePush": 62
+        "FrameAlloc": 5786,
+        "ValuePush": 60
       }
     },
     "work-slider-drag": {

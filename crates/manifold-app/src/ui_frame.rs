@@ -474,11 +474,14 @@ pub(crate) fn apply_frame_plan(
         crate::ui_bridge::push_selection(ui_root, project, idx, selection);
     }
     crate::ui_bridge::push_frame(ui_root, project, push.content_state, idx);
-    let live = projections.contains(Projection::LiveValues)
-        || projections.contains(Projection::LiveShapes)
-        || projections.contains(Projection::LiveRanges);
-    if replaced || live {
-        crate::ui_bridge::push_live(ui_root, project, push.content_state, idx);
+    let live = crate::ui_bridge::LiveGroups {
+        values: replaced || projections.contains(Projection::LiveValues),
+        shapes: replaced
+            || projections.contains(Projection::LiveShapes)
+            || projections.contains(Projection::LiveRanges),
+    };
+    if live.any() {
+        crate::ui_bridge::push_live(ui_root, project, push.content_state, idx, live);
     }
     if driver_periods_moved {
         crate::ui_bridge::sync_driver_readouts(ui_root, project, idx);

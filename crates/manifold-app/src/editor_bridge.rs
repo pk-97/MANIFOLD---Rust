@@ -1188,6 +1188,7 @@ impl Application {
             self.modifier_preview_object = None;
         }
         self.watched_catalog_default = crate::graph_target::catalog_default(&self.local_project, &target);
+        self.editor_graph.catalog_default_changed();
         // The content thread clears both preview requests when the watched
         // target changes; drop the dedup caches with it so a same-named node
         // in the next graph is sent again rather than leaving stale output.
@@ -1398,10 +1399,10 @@ impl Application {
                 .is_some_and(|n| n.type_id == "node.render_scene")
         });
         let viewport_open = self.graph_editor.as_ref().is_some_and(|ed| ed.viewport_open);
-        let mut viewport_def = if viewport_is_scene_node && viewport_open {
-            self.watched_def_cloned()
+        let viewport_def = if viewport_is_scene_node && viewport_open {
+            self.editor_graph.viewport_def(&self.local_project, self.watched_graph_target.as_ref(), &self.ui_edits.stamps.parts())
         } else {
-            None
+            crate::editor_graph_cache::ViewportDef::default()
         };
 
         // Send the canvas's currently-visible nodes (deduped) so the content
@@ -1605,7 +1606,7 @@ impl Application {
         let viewport_scale = scale as f32;
         let viewport_tex_w = ((preview_w * viewport_scale).round() as u32).clamp(64, 4096);
         let viewport_tex_h = ((preview_h * viewport_scale).round() as u32).clamp(64, 4096);
-        if viewport_def.is_some()
+        if viewport_def.resolved
             && let Some(target) = self.watched_graph_target.as_ref()
             && let Some(node) = self.last_preview_node.as_ref()
         {
@@ -1676,18 +1677,13 @@ impl Application {
             if let Some(frame) = session.displayed.as_ref().filter(|frame| frame.has_image()) {
                 ws.viewport_fluid_domains.extend(frame.domains.iter().cloned());
             }
-            if let Some(def) = viewport_def.as_mut()
-                && let Some(target) = self.watched_graph_target.as_ref()
-                && crate::fluid_domain_edit::project_authored_params(def, &self.local_project, target).is_none()
-            {
-                viewport_def = None;
-            }
             // P6: gizmo handle geometry for the current selection/mode,
             // built against THIS frame's def and editor camera — see
             // `viewport_gizmo` and the `ws.viewport_selected_object`/
             // `ws.viewport_gizmo_mode` doc comments (`workspace.rs`).
             let mut scene = viewport_def
-                .as_ref()
+                .authored
+                .as_deref()
                 .and_then(manifold_nodes_scene::node_graph::scene_vm::SceneVm::from_def);
             if let Some(scene) = scene.as_mut() {
                 crate::fluid_domain_edit::apply_runtime_domains(scene, &ws.viewport_fluid_domains);
