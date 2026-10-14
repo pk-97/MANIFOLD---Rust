@@ -407,6 +407,17 @@ pub(crate) fn dispatch_params(action: &ParamsAction, ctx: &mut super::super::Dis
             ContentCommand::send(ctx.content_tx, ContentCommand::ExecuteOnContent(Box::new(command)));
             DispatchResult::handled()
         }
+        ParamsAction::SetSliderRange(gpt, param_id, range) => {
+            let Some(target) = resolve_graph_target(gpt, ctx.editor_target, effective_tab, active_layer, ctx.selection, &ctx.project) else {
+                return DispatchResult::handled();
+            };
+            ctx.execute(Box::new(manifold_editing::commands::graph::SetSliderRangeCommand::new(
+                target,
+                param_id.to_string(),
+                *range,
+            )));
+            DispatchResult::structural()
+        }
         ParamsAction::RevealInSceneTab(gpt, param_id) => {
             reveal_in_scene_tab(gpt, vec![param_id.clone()], effective_tab, active_layer, ctx)
         }

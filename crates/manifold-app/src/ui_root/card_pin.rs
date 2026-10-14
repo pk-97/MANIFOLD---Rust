@@ -1,10 +1,12 @@
 //! The scene items of the one param menu (SCENE_SURFACES_DESIGN.md D10
 //! (cross-surface gestures)): Show on Card from the Scene tab, Remove from
-//! Card and Show in Scene tab from the scene card.
+//! Card and Show in Scene tab from the scene card; and the slider range items
+//! every param row carries, on both surfaces (D15 (slider range and hard
+//! limit)).
 
 use manifold_core::effects::ParamId;
 use manifold_core::scene_surface::CardPin;
-use manifold_ui::{DropdownItem, GraphParamTarget, PanelAction, ParamRow, ParamsAction};
+use manifold_ui::{DropdownItem, GraphParamTarget, PanelAction, ParamRow, ParamsAction, Rect, RootAction};
 
 /// Shown in place of an action on a mapped row (D6 (attached rows)).
 pub(crate) const MAPPED_REASON: &str = "Mapped \u{2014} unmap to remove";
@@ -44,6 +46,21 @@ pub(crate) fn scene_items(target: &GraphParamTarget, param: &ParamId, surface: P
     }
 }
 
+/// Set slider range… and Reset slider range. `anchor` is where the type-in
+/// opens: under the right-click.
+pub(crate) fn slider_range_items(target: &GraphParamTarget, param: &ParamId, anchor: Rect) -> [DropdownItem; 2] {
+    [
+        DropdownItem::new("Set slider range\u{2026}").with_action(PanelAction::Root(RootAction::BeginSliderRangeInput {
+            target: target.clone(),
+            param_id: param.clone(),
+            anchor,
+        })),
+        DropdownItem::new("Reset slider range")
+            .with_action(PanelAction::Params(ParamsAction::SetSliderRange(target.clone(), param.clone(), None)))
+            .with_separator(),
+    ]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -68,6 +85,7 @@ mod tests {
                 material_role: None,
                 inactive_reason: None,
                 scene: None,
+                limit: Default::default(),
                 disabled: None,
             },
             value: manifold_ui::RowValue { base: 1.0, effective: 1.0, exposed: true, driven: false },

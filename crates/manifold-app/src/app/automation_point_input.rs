@@ -33,8 +33,8 @@ pub(crate) fn begin_value(
         param_id: param_id.clone(),
         original_beat: beat,
         original_value_norm: value_norm,
-        param_min: param.spec.min,
-        param_max: param.spec.max,
+        param_min: param.slider_span().0,
+        param_max: param.slider_span().1,
         whole_numbers: param.whole_numbers(),
         beats_per_bar: beats_per_bar(app),
     };
@@ -74,8 +74,8 @@ pub(crate) fn begin_time(
         param_id: param_id.clone(),
         original_beat: beat,
         original_value_norm: value_norm,
-        param_min: param.spec.min,
-        param_max: param.spec.max,
+        param_min: param.slider_span().0,
+        param_max: param.slider_span().1,
         whole_numbers: param.whole_numbers(),
         beats_per_bar: bpb,
     };
@@ -181,7 +181,7 @@ fn point_and_param<'a>(
     let param = inst.params.get(param_id.as_ref())?;
     let point = lane.points.iter().find(|point| {
         point.beat == beat
-            && BitmapSlider::value_to_normalized(point.value, param.spec.min, param.spec.max) == value_norm
+            && BitmapSlider::value_to_normalized(point.value, param.slider_span().0, param.slider_span().1) == value_norm
     })?;
     Some((point, param))
 }
@@ -202,7 +202,7 @@ fn find_point(
         .find(|lane| lane.param_id.as_ref() == param_id.as_ref())?
         .points
         .iter()
-        .find(|point| point.beat == beat && BitmapSlider::value_to_normalized(point.value, param.spec.min, param.spec.max) == value_norm)
+        .find(|point| point.beat == beat && BitmapSlider::value_to_normalized(point.value, param.slider_span().0, param.slider_span().1) == value_norm)
         .copied()
 }
 

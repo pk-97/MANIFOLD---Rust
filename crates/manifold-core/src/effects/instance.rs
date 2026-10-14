@@ -1873,12 +1873,11 @@ mod tests {
             "the derived meta.params entry must be byte-identical to the manifest's own spec",
         );
 
-        // Round trip: reload and confirm the manifest — the card's
-        // authority — carries the calibrated range through, not just the
-        // one-shot JSON snapshot above.
+        // Round trip: the user's range comes back as the slider span. The
+        // declared range is rebuilt from the catalog, never from the user's
+        // choice (SCENE_SURFACES_DESIGN.md D15 (slider range vs hard limit)).
         let back: PresetInstance = serde_json::from_str(&json).unwrap();
-        assert_eq!(back.params.get("amount").unwrap().spec.min, 10.0);
-        assert_eq!(back.params.get("amount").unwrap().spec.max, 20.0);
+        assert_eq!(back.params.get("amount").unwrap().slider_span(), (10.0, 20.0));
     }
 
     #[test]

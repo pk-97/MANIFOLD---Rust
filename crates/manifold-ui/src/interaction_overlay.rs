@@ -4583,8 +4583,8 @@ mod p1_4_gesture_integrity_tests {
         use crate::view::UiAutomationPoint;
         build_viewport_with_lane(
             vec![
-                UiAutomationPoint { beat: Beats::from_f32(4.0), value_norm: 0.5, shape: UiSegmentShape::Linear },
-                UiAutomationPoint { beat: Beats::from_f32(8.0), value_norm: 0.8, shape: UiSegmentShape::Linear },
+                UiAutomationPoint { beat: Beats::from_f32(4.0), value_norm: 0.5, shape: UiSegmentShape::Linear, past_end: false },
+                UiAutomationPoint { beat: Beats::from_f32(8.0), value_norm: 0.8, shape: UiSegmentShape::Linear, past_end: false },
             ],
             false,
         )
@@ -4661,11 +4661,13 @@ mod p1_4_gesture_integrity_tests {
                         beat: Beats::from_f32(4.0),
                         value_norm: BitmapSlider::value_to_normalized(first_value, param_min, param_max),
                         shape: UiSegmentShape::Linear,
+                        past_end: false,
                     },
                     UiAutomationPoint {
                         beat: Beats::from_f32(4.0),
                         value_norm: BitmapSlider::value_to_normalized(second_value, param_min, param_max),
                         shape: UiSegmentShape::Linear,
+                        past_end: false,
                     },
                 ],
                 param_min,
@@ -5237,7 +5239,7 @@ mod p1_4_gesture_integrity_tests {
     fn automation_first_click_on_empty_lane_uses_current_value() {
         use crate::view::UiAutomationPoint;
         let panel = build_viewport_with_lane(
-            vec![UiAutomationPoint { beat: Beats::ZERO, value_norm: 0.25, shape: UiSegmentShape::Linear }],
+            vec![UiAutomationPoint { beat: Beats::ZERO, value_norm: 0.25, shape: UiSegmentShape::Linear, past_end: false }],
             true,
         );
         let mut host = GestureTestHost::new(&["layer-0"]);
@@ -5345,8 +5347,8 @@ mod p1_4_gesture_integrity_tests {
                 target: UiGraphTarget::Effect(EffectId::new(effect)),
                 label: format!("{effect}: {param}"),
                 points: vec![
-                    UiAutomationPoint { beat: Beats::from_f32(4.0), value_norm: 0.5, shape: UiSegmentShape::Linear },
-                    UiAutomationPoint { beat: Beats::from_f32(8.0), value_norm: 0.8, shape: UiSegmentShape::Linear },
+                    UiAutomationPoint { beat: Beats::from_f32(4.0), value_norm: 0.5, shape: UiSegmentShape::Linear, past_end: false },
+                    UiAutomationPoint { beat: Beats::from_f32(8.0), value_norm: 0.8, shape: UiSegmentShape::Linear, past_end: false },
                 ],
                 param_min: 0.0,
                 param_max: 1.0,

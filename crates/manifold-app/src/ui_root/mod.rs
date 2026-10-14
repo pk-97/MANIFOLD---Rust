@@ -1836,6 +1836,7 @@ mod tick_parity_tests {
                     material_role: None,
                     inactive_reason: None,
                     scene: None,
+                    limit: Default::default(),
                     disabled: None,
                 },
                 value: manifold_ui::RowValue { base: 0.5, effective: 0.5, exposed: true, driven: false },

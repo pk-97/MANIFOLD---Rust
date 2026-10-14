@@ -283,12 +283,7 @@ pub fn evaluate_automation_previews(
             }
 
             let raw = preview.lane.value_at(current_beat);
-            let value = manifold_core::params::constrain_to_range(
-                raw,
-                param.spec.min,
-                param.spec.max,
-                param.spec.wraps,
-            );
+            let value = param.driven_value(raw);
             let changed = param.base != value || param.value != value;
             fx.set_base_param_from_automation(param_id.as_ref(), value);
             changed
@@ -377,12 +372,7 @@ fn evaluate_instance_automation_inspection(
         }
 
         let raw = lane.value_at(current_beat);
-        let value = manifold_core::params::constrain_to_range(
-            raw,
-            param.spec.min,
-            param.spec.max,
-            param.spec.wraps,
-        );
+        let value = param.driven_value(raw);
         let Some(param) = fx.params.get_mut(lane.param_id.as_ref()) else {
             continue;
         };
@@ -472,12 +462,7 @@ fn evaluate_instance_automation(
             // plateauing at the rail — the stored `points` are untouched,
             // only this per-frame interpretation changes.
             let raw = lane.value_at(current_beat);
-            let value = manifold_core::params::constrain_to_range(
-                raw,
-                p.spec.min,
-                p.spec.max,
-                p.spec.wraps,
-            );
+            let value = p.driven_value(raw);
             to_write.push((lane.param_id.clone(), value));
         }
     }

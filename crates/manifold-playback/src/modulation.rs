@@ -133,7 +133,7 @@ fn apply_instance_envelopes(
         let Some(p) = params.get_mut(env.param_id.as_ref()) else {
             continue;
         };
-        let (min, max, whole_numbers) = (p.spec.min, p.spec.max, p.spec.whole_numbers);
+        let ((min, max), whole_numbers) = (p.slider_span(), p.spec.whole_numbers);
         match env.action {
             TriggerAction::Continuous => {}
             TriggerAction::Step { amount, wrap } => {
@@ -893,7 +893,7 @@ struct AudioParamInfo {
 impl From<&manifold_core::params::Param> for AudioParamInfo {
     fn from(p: &manifold_core::params::Param) -> Self {
         Self {
-            min: p.spec.min, max: p.spec.max, is_trigger: p.spec.is_trigger,
+            min: p.slider_span().0, max: p.slider_span().1, is_trigger: p.spec.is_trigger,
             is_trigger_gate: p.spec.is_trigger_gate, whole_numbers: p.whole_numbers(), base: p.base,
         }
     }
@@ -3003,16 +3003,10 @@ mod tests {
         assert_eq!(fx.params.get("amount").unwrap().value, 0.0);
     }
 
-    /// Recalibrate a STOCK param's range in place on the instance's own
-    /// manifest entry — exactly what the chevron popover writes (D6:
-    /// calibration edits `spec.min`/`spec.max` in place and sets
-    /// the slider choice; there is no separate graph/`preset_metadata`
-    /// overlay to resolve through anymore — `p.spec` on the manifest entry
-    /// IS the effective range).
+    /// Set a STOCK param's slider range on the instance's own manifest
+    /// entry, as the chevron popover and "Set slider range…" do.
     fn override_stock_param_range(inst: &mut PresetInstance, param_id: &str, min: f32, max: f32) {
         let p = inst.params.get_mut(param_id).expect("param must exist on the manifest");
-        p.spec.min = min;
-        p.spec.max = max;
         p.choices.slider = Some((min, max));
     }
 

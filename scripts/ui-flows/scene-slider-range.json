@@ -1,0 +1,19 @@
+[
+  {"Pointer":{"target":{"Query":{"text":"Scene","type":"Button","under_name":"inspector"}},"gesture":{"Click":{"modifiers":{}}}}},
+  {"Pointer":{"target":{"Query":{"name":"scene_setup.objects.group_toggle"}},"gesture":{"Click":{"modifiers":{}}}}},
+  {"Pointer":{"target":{"Query":{"name":"scene_tree.item","text":"QS1694-W02-1-1"}},"gesture":{"Click":{"modifiers":{}}}}},
+  {"Pointer":{"target":{"Query":{"name":"param_row.23_pos_x.value","under_name":"scene_setup"}},"gesture":"RightClick"}},
+  {"Assert":{"selector":{"Query":{"text":"Set slider range…"}},"check":"Exists"}},
+  {"Assert":{"selector":{"Query":{"text":"Reset slider range"}},"check":"Exists"}},
+  "Snapshot",
+  {"Key":{"key":"Escape","modifiers":{}}},
+  {"Assert":{"selector":{"Query":{"text":"Set slider range…"}},"check":{"Count":0}}},
+  {"SetSliderRange":{"param":{"GeneratorParam":{"param":"23_pos_x"}},"range":[-1.0,1.0]}},
+  {"Pointer":{"target":{"Query":{"name":"param_row.23_pos_x.slider","under_name":"scene_setup"}},"gesture":{"DragFrames":{"to":{"Point":{"x":1700.0,"y":464.0}},"steps":8}}}},
+  {"Assert":{"selector":{"Query":{"name":"param_row.23_pos_x.value","under_name":"scene_setup"}},"check":{"TextEquals":"2.97 m"}}},
+  "Snapshot",
+  {"Pointer":{"target":{"Query":{"name":"param_row.23_pos_x.value","under_name":"scene_setup"}},"gesture":"RightClick"}},
+  {"Pointer":{"target":{"Query":{"text":"Reset slider range"}},"gesture":{"Click":{"modifiers":{}}}}},
+  {"Assert":{"selector":{"Query":{"name":"param_row.23_pos_x.value","under_name":"scene_setup"}},"check":{"TextEquals":"2.97 m"}}},
+  "Snapshot"
+]

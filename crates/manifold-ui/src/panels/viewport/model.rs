@@ -379,6 +379,8 @@ pub struct AutomationDotScreen {
     pub beat: Beats,
     pub value_norm: f32,
     pub shape: crate::view::UiSegmentShape,
+    /// Copied from the point: its value lies past the lane's slider range.
+    pub past_end: bool,
 }
 
 /// Build the automation stroke from segment geometry rather than a fixed
@@ -611,11 +613,13 @@ mod automation_lane_geometry_tests {
                 beat: Beats(1.0),
                 value_norm: 0.2,
                 shape: UiSegmentShape::Hold,
+                past_end: false,
             },
             UiAutomationPoint {
                 beat: Beats(3.0),
                 value_norm: 0.8,
                 shape: UiSegmentShape::Linear,
+                past_end: false,
             },
         ]);
         let points = build_automation_polyline(
@@ -643,9 +647,9 @@ mod automation_lane_geometry_tests {
     #[test]
     fn automation_polyline_connects_both_sides_of_same_time_points() {
         let lane = ui_lane(vec![
-            UiAutomationPoint { beat: Beats(1.0), value_norm: 0.2, shape: UiSegmentShape::Linear },
-            UiAutomationPoint { beat: Beats(1.0), value_norm: 0.8, shape: UiSegmentShape::Linear },
-            UiAutomationPoint { beat: Beats(3.0), value_norm: 0.8, shape: UiSegmentShape::Linear },
+            UiAutomationPoint { beat: Beats(1.0), value_norm: 0.2, shape: UiSegmentShape::Linear, past_end: false },
+            UiAutomationPoint { beat: Beats(1.0), value_norm: 0.8, shape: UiSegmentShape::Linear, past_end: false },
+            UiAutomationPoint { beat: Beats(3.0), value_norm: 0.8, shape: UiSegmentShape::Linear, past_end: false },
         ]);
         for min in [0.0, 1.0] {
             let points = build_automation_polyline(&lane, min, 4.0, 0.0, 200.0,
@@ -662,8 +666,8 @@ mod automation_lane_geometry_tests {
         for bend in [-1.0, -0.2, 0.2, 1.0] {
             for width in [12.0, 1200.0] {
                 let lane = ui_lane(vec![
-                    UiAutomationPoint { beat: Beats(0.0), value_norm: 0.0, shape: UiSegmentShape::Curved(bend) },
-                    UiAutomationPoint { beat: Beats(4.0), value_norm: 1.0, shape: UiSegmentShape::Linear },
+                    UiAutomationPoint { beat: Beats(0.0), value_norm: 0.0, shape: UiSegmentShape::Curved(bend), past_end: false },
+                    UiAutomationPoint { beat: Beats(4.0), value_norm: 1.0, shape: UiSegmentShape::Linear, past_end: false },
                 ]);
                 let points = build_automation_polyline(&lane, 0.0, 4.0, 0.0, width,
                     Rect::new(0.0, 0.0, width, 160.0), width / 4.0);

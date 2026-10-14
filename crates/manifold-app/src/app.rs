@@ -1001,6 +1001,34 @@ impl Application {
                     self.needs_rebuild = true;
                 }
             }
+            TextInputField::SliderRange | TextInputField::EditorSliderRange => {
+                if let Some(ctx) = self.text_input.inspector_param.take()
+                    && let Some(range) = crate::text_input::parse_slider_range(text)
+                {
+                    let range = range.map(|(lo, hi)| {
+                        let stored = |v| crate::text_input::degrees_commit_value(v, ctx.degrees);
+                        (stored(lo), stored(hi))
+                    });
+                    let action = manifold_ui::panels::PanelAction::Params(
+                        manifold_ui::panels::ParamsAction::SetSliderRange(ctx.target, ctx.param_id, range),
+                    );
+                    let content_tx = self.content_tx.as_ref().unwrap().clone();
+                    let mut dctx = crate::ui_bridge::DispatchCtx {
+                        project: crate::ui_bridge::ProjectRef::new(&mut self.local_project, &mut self.ui_edits.stamps, &content_tx),
+                        content_tx: &content_tx,
+                        content_state: &self.content_state,
+                        ui: &mut self.ws.ui_root,
+                        selection: &mut self.selection,
+                        active_layer: &mut self.active_layer_id,
+                        user_prefs: &mut self.user_prefs,
+                        editor_target: None,
+                        scrub: &mut self.scrub,
+                        dialogs: crate::file_dialogs::host(&self.window_registry, self.dialog_window_id, self.primary_window_id, self.current_project_path.as_deref()),
+                    };
+                    let _ = crate::ui_bridge::dispatch(&action, &mut dctx);
+                    self.needs_rebuild = true;
+                }
+            }
             TextInputField::InspectorParam | TextInputField::EditorInspectorParam => {
                 if let Some(ctx) = self.text_input.inspector_param.take() {
                     // Lenient parse: keep only the numeric head so a value typed

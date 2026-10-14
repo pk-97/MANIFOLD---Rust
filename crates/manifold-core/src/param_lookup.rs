@@ -860,7 +860,7 @@ mod tests {
         let p = fx.params.get("1_intensity").unwrap();
         assert_eq!(p.choices.slider, Some((2.0, 4.0)));
         assert_eq!(p.choices.invert, Some(true));
-        assert_eq!((p.spec.min, p.spec.max, p.spec.invert), (2.0, 4.0, true));
+        assert_eq!((p.slider_span(), p.spec.invert), ((2.0, 4.0), true));
         let wire: serde_json::Value = serde_json::from_str(&save(&fx)).unwrap();
         assert_eq!(
             wire["params"]["1_intensity"]["calibration"],
@@ -888,7 +888,7 @@ mod tests {
         let fx = load(&scene_json(chosen_params(), "Lamp Power"));
         let p = fx.params.get("user.lamp").unwrap();
         assert_eq!(p.choices.slider, Some((0.0, 1.0)));
-        assert_eq!((p.spec.min, p.spec.max), (0.0, 1.0));
+        assert_eq!(p.slider_span(), (0.0, 1.0));
         let again = load(&save(&fx));
         assert_eq!(again.params.get("user.lamp").unwrap().choices, p.choices);
         assert_eq!(save(&again), save(&fx), "the conversion happens once");
