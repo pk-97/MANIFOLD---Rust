@@ -165,7 +165,7 @@ fn mute_visibility_pixel_probe() {
 
     // B: mute the top layer.
     let top_layer_id_mute = top_layer_id.clone();
-    ct.handle_command(ContentCommand::MutateProject(Box::new(move |p| {
+    ct.handle_command(ContentCommand::mutate(crate::content_command::touch::LAYERS, Box::new(move |p| {
         if let Some((_, layer)) = p.timeline.find_layer_by_id_mut(&top_layer_id_mute) {
             layer.is_muted = true;
         }
@@ -177,7 +177,7 @@ fn mute_visibility_pixel_probe() {
 
     // C: remove the top layer's clip entirely.
     let top_layer_id2 = top_layer_id.clone();
-    ct.handle_command(ContentCommand::MutateProject(Box::new(move |p| {
+    ct.handle_command(ContentCommand::mutate(manifold_core::change::ChangeSet::of(&[manifold_core::change::Part::Clips]), Box::new(move |p| {
         if let Some((_, layer)) = p.timeline.find_layer_by_id_mut(&top_layer_id2) {
             layer.clips.retain(|c| c.id != top_clip_id);
         }
@@ -309,7 +309,7 @@ fn clip_mute_opaque_layer_pixel_probe() {
     // E: mute the top layer's CLIP.
     let id = top_layer_id.clone();
     let cid = top_clip_id.clone();
-    ct.handle_command(ContentCommand::MutateProject(Box::new(move |p| {
+    ct.handle_command(ContentCommand::mutate(manifold_core::change::ChangeSet::of(&[manifold_core::change::Part::Clips]), Box::new(move |p| {
         if let Some((_, layer)) = p.timeline.find_layer_by_id_mut(&id) {
             for c in &mut layer.clips {
                 if c.id == cid {
@@ -325,7 +325,7 @@ fn clip_mute_opaque_layer_pixel_probe() {
 
     // F: delete the top clip outright.
     let id2 = top_layer_id.clone();
-    ct.handle_command(ContentCommand::MutateProject(Box::new(move |p| {
+    ct.handle_command(ContentCommand::mutate(manifold_core::change::ChangeSet::of(&[manifold_core::change::Part::Clips]), Box::new(move |p| {
         if let Some((_, layer)) = p.timeline.find_layer_by_id_mut(&id2) {
             layer.clips.retain(|c| c.id != top_clip_id);
         }

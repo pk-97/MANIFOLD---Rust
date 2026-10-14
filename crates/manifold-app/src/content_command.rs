@@ -3,6 +3,7 @@
 //! The UI thread communicates with the content thread via a bounded
 //! crossbeam channel. Each variant represents an action that must
 //! execute on the content thread where PlaybackEngine and EditingService live.
+use manifold_core::change::ChangeSet;
 use manifold_core::project::Project;
 use manifold_core::{Beats, ClipId, EffectId, LayerId, SceneId, Seconds};
 use manifold_editing::command::Command;
@@ -169,42 +170,16 @@ pub enum ContentCommand {
     },
 
     // ── Direct project mutation ────────────────────────────────────
-    /// Closure runs on the content thread with &mut Project access.
-    ///
-    /// After running the closure the handler re-syncs the renderer caches
-    /// (video library), Ableton listeners, and the forked-preset overlay —
-    /// the structural maintenance a closure that adds clips / forks a preset /
-    /// recalibrates a mapping needs. Use this when the mutation may change
-    /// anything beyond a live scalar value.
-    MutateProject(Box<dyn FnOnce(&mut Project) + Send>),
-
-    /// Maintenance-free twin of [`MutateProject`] for the live-performance
-    /// instrument: per-mouse-move scalar writes from card-slider / opacity /
-    /// macro drags. The closure runs and nothing else does — no renderer
-    /// re-notify, no Ableton listener rebuild, no preset-overlay fingerprint.
-    ///
-    /// Those writes only touch `param_values` / settings scalars, which every
-    /// consumer already reads fresh each frame, so none of that bookkeeping
-    /// applies. Keeping it off this path means a slider drag costs exactly the
-    /// value write, never project-scale work on the render tick. A mutation that
-    /// changes structure (clips, forks, mappings, video library) must use
-    /// [`MutateProject`] instead so the caches stay in sync.
-    MutateProjectLive(Box<dyn FnOnce(&mut Project) + Send>),
-
-    /// Lean [`MutateProject`] for the per-tick PREVIEW of an in-flight
-    /// mapping-drawer drag: the closure runs, the forked-preset overlay
-    /// refresh stays (fingerprint-gated, cheap — the drawer's recalibration
-    /// guarantee), and the compositor is marked dirty so the preview shows
-    /// while paused. The two project-scale arms are skipped:
-    ///
-    /// - Renderer re-notify (`on_project_loaded`) syncs the video library —
-    ///   a mapping reshape never touches it.
-    /// - Ableton `rebuild_listeners` caches each mapped param's range into
-    ///   its `WriteTarget`s. A range preview leaves that cache stale for the
-    ///   duration of the drag; the commit (`Execute`) rebuilds it. A sender
-    ///   whose mutation must take effect on listeners mid-gesture (the
-    ///   Ableton trim drags) must keep [`MutateProject`].
-    MutateProjectPreview(Box<dyn FnOnce(&mut Project) + Send>),
+    /// A non-undoable write through `EditingService::mutate` (D3). `touches`
+    /// names every part the closure writes; the reaction pass reacts to it
+    /// once per drain. A live value write declares `Values`; a live drag of a
+    /// modulator, gain, crossover or mapping shape declares `Shapes`; neither
+    /// part has reactions (D21). A closure that cannot name its parts should
+    /// be a command.
+    MutateProject {
+        touches: ChangeSet,
+        f: Box<dyn FnOnce(&mut Project) + Send>,
+    },
 
     // ── Percussion ─────────────────────────────────────────────────
     /// Run per-clip detection on an existing audio clip (audio-clip-detection).
@@ -387,11 +362,43 @@ pub enum ContentCommand {
     Shutdown,
 }
 
+/// The change sets `MutateProject` senders declare, named once.
+pub mod touch {
+    use manifold_core::change::{ChangeSet, Part};
+    pub const VALUES: ChangeSet = ChangeSet::of(&[Part::Values]);
+    pub const SHAPES: ChangeSet = ChangeSet::of(&[Part::Shapes]);
+    /// A live graph edit: a node param or mapping reshape (Shapes), which a
+    /// card-owned param redirects to the card value (Values).
+    pub const GRAPH_LIVE: ChangeSet = ChangeSet::of(&[Part::Shapes, Part::Values]);
+    /// The first move of that edit may also materialize the override (D21).
+    pub const OVERRIDES_SHAPES: ChangeSet = ChangeSet::of(&[Part::Overrides, Part::Shapes, Part::Values]);
+    pub const MAPPING_RANGES: ChangeSet = ChangeSet::of(&[Part::MappingRanges]);
+    pub const MAPPINGS: ChangeSet = ChangeSet::of(&[Part::Mappings]);
+    pub const LAYERS: ChangeSet = ChangeSet::of(&[Part::Layers]);
+    pub const MARKERS: ChangeSet = ChangeSet::of(&[Part::Markers]);
+    pub const EFFECTS: ChangeSet = ChangeSet::of(&[Part::Effects]);
+    /// Adding or removing a macro mapping also moves its range (Shapes).
+    pub const EFFECTS_SHAPES: ChangeSet = ChangeSet::of(&[Part::Effects, Part::Shapes]);
+    pub const LED: ChangeSet = ChangeSet::of(&[Part::Led]);
+    pub const MEDIA: ChangeSet = ChangeSet::of(&[Part::Media]);
+
+    /// `OVERRIDES_SHAPES` when `graph_absent` (the write may materialize the
+    /// override), else `GRAPH_LIVE`.
+    pub fn shapes_first_move(graph_absent: bool) -> ChangeSet {
+        if graph_absent { OVERRIDES_SHAPES } else { GRAPH_LIVE }
+    }
+}
+
 impl ContentCommand {
     /// Send a command to the content thread. Logs on failure (channel disconnected = shutdown).
     pub fn send(tx: &crossbeam_channel::Sender<ContentCommand>, cmd: ContentCommand) {
         if let Err(e) = tx.send(cmd) {
             log::error!("[UI] Content command channel disconnected: {e}");
         }
+    }
+
+    /// A `MutateProject` writing `touches`.
+    pub fn mutate(touches: ChangeSet, f: Box<dyn FnOnce(&mut Project) + Send>) -> Self {
+        ContentCommand::MutateProject { touches, f }
     }
 }

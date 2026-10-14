@@ -278,7 +278,7 @@ fn attach_driver(
         })
         .ok_or_else(|| "scene modifier has no numeric host binding for driver".to_string())?;
     let driver_layer_id = layer_id.clone();
-    ct.handle_command(ContentCommand::MutateProject(Box::new(move |project| {
+    ct.handle_command(ContentCommand::mutate(crate::content_command::touch::EFFECTS_SHAPES, Box::new(move |project| {
         let owner = project
             .graph_target_owner_mut(&manifold_core::GraphTarget::Generator(driver_layer_id))
             .expect("driver generator owner");

@@ -2,6 +2,7 @@ use crate::command::{Command, CompositeCommand};
 use crate::commands::clip::*;
 use crate::commands::layer::DuplicateLayersCommand;
 use crate::undo::UndoRedoManager;
+use manifold_core::change::{ChangeSet, PartStamps};
 use manifold_core::clip::TimelineClip;
 use manifold_core::layer::Layer;
 use manifold_core::project::Project;
@@ -46,8 +47,51 @@ pub struct PasteResult {
 pub struct EditingService {
     undo_manager: UndoRedoManager,
     clipboard: Vec<ClipboardEntry>,
+    /// "Publish a snapshot" and "unsaved". Not a change detector: stamps are.
     data_version: u64,
     saved_at_version: u64,
+    /// One stamp per project part, bumped by every edit (D1).
+    stamps: PartStamps,
+}
+
+/// Change audit (D10): fingerprint every part before an edit, and after it
+/// fail on any part that changed without being declared.
+#[cfg(any(test, feature = "change-audit"))]
+mod audit {
+    use manifold_core::change::{ChangeSet, audit};
+    use manifold_core::project::Project;
+
+    pub(super) struct Window(audit::Fingerprint);
+
+    pub(super) fn open(project: &Project) -> Window {
+        Window(audit::fingerprint(project))
+    }
+
+    pub(super) fn close(window: Window, project: &Project, declared: ChangeSet, what: &str) {
+        let undeclared = audit::changed(&window.0, &audit::fingerprint(project)).minus(declared);
+        assert!(
+            undeclared.is_empty(),
+            "change audit: {what} changed undeclared parts {:?} (declared {:?})",
+            undeclared.parts().collect::<Vec<_>>(),
+            declared.parts().collect::<Vec<_>>(),
+        );
+    }
+}
+
+#[cfg(not(any(test, feature = "change-audit")))]
+mod audit {
+    use manifold_core::change::ChangeSet;
+    use manifold_core::project::Project;
+
+    pub(super) struct Window;
+
+    #[inline(always)]
+    pub(super) fn open(_: &Project) -> Window {
+        Window
+    }
+
+    #[inline(always)]
+    pub(super) fn close(_: Window, _: &Project, _: ChangeSet, _: &str) {}
 }
 
 impl EditingService {
@@ -57,7 +101,23 @@ impl EditingService {
             clipboard: Vec::new(),
             data_version: 0,
             saved_at_version: 0,
+            stamps: PartStamps::default(),
         }
+    }
+
+    /// The content stamps, published in `ContentState` (D1).
+    pub fn stamps(&self) -> PartStamps {
+        self.stamps
+    }
+
+    /// A non-undoable project write that declares the parts it touches (D3).
+    /// Stamps `touches`; never bumps `data_version` (D23). An empty set is a
+    /// no-op stamp, for writes that found nothing to change.
+    pub fn mutate(&mut self, touches: ChangeSet, project: &mut Project, f: impl FnOnce(&mut Project)) {
+        let window = audit::open(project);
+        f(project);
+        audit::close(window, project, touches, "mutate");
+        self.stamps.bump(touches);
     }
 
     // ─── Mutation gateway ───
@@ -68,8 +128,12 @@ impl EditingService {
     }
 
     pub fn execute(&mut self, command: Box<dyn Command>, project: &mut Project) {
+        let touches = command.touches();
+        let window = audit::open(project);
         if !self.undo_manager.execute(command, project) { return; }
+        audit::close(window, project, touches, "execute");
         self.data_version += 1;
+        self.stamps.bump(touches);
 
         #[cfg(debug_assertions)]
         Self::warn_overlapping_clips(&project.timeline.layers);
@@ -89,13 +153,17 @@ impl EditingService {
     where
         F: FnMut(&Project) -> Result<(), String>,
     {
+        let touches = command.touches();
+        let window = audit::open(project);
         if !self
             .undo_manager
             .execute_with_validation(command, project, validate)
         {
             return false;
         }
+        audit::close(window, project, touches, "execute");
         self.data_version += 1;
+        self.stamps.bump(touches);
 
         #[cfg(debug_assertions)]
         Self::warn_overlapping_clips(&project.timeline.layers);
@@ -122,21 +190,16 @@ impl EditingService {
     /// Record an already-executed command (e.g., end of drag).
     pub fn record(&mut self, command: Box<dyn Command>) {
         if !command.was_applied() { return; }
+        let touches = command.touches();
         self.undo_manager.record(command);
         self.data_version += 1;
+        self.stamps.bump(touches);
     }
 
     /// Undo the most recent command.
     #[must_use]
     pub fn undo(&mut self, project: &mut Project) -> bool {
-        if self.undo_manager.undo(project) {
-            self.data_version += 1;
-            #[cfg(debug_assertions)]
-            project.timeline.debug_assert_tree_order();
-            true
-        } else {
-            false
-        }
+        self.undo_with_validation(project, |_| Ok(()))
     }
 
     /// Undo and validate the resulting project before publishing the history
@@ -146,8 +209,12 @@ impl EditingService {
     where
         F: FnMut(&Project) -> Result<(), String>,
     {
+        let touches = self.undo_manager.peek_undo_touches();
+        let window = audit::open(project);
         if self.undo_manager.undo_with_validation(project, validate) {
+            audit::close(window, project, touches, "undo");
             self.data_version += 1;
+            self.stamps.bump(touches);
             #[cfg(debug_assertions)]
             project.timeline.debug_assert_tree_order();
             true
@@ -159,14 +226,7 @@ impl EditingService {
     /// Redo the most recently undone command.
     #[must_use]
     pub fn redo(&mut self, project: &mut Project) -> bool {
-        if self.undo_manager.redo(project) {
-            self.data_version += 1;
-            #[cfg(debug_assertions)]
-            project.timeline.debug_assert_tree_order();
-            true
-        } else {
-            false
-        }
+        self.redo_with_validation(project, |_| Ok(()))
     }
 
     /// Redo and validate the resulting project before publishing the history
@@ -176,8 +236,12 @@ impl EditingService {
     where
         F: FnMut(&Project) -> Result<(), String>,
     {
+        let touches = self.undo_manager.peek_redo_touches();
+        let window = audit::open(project);
         if self.undo_manager.redo_with_validation(project, validate) {
+            audit::close(window, project, touches, "redo");
             self.data_version += 1;
+            self.stamps.bump(touches);
             #[cfg(debug_assertions)]
             project.timeline.debug_assert_tree_order();
             true
@@ -199,6 +263,16 @@ impl EditingService {
         self.undo_manager.peek_redo_description()
     }
 
+    /// Parts the next `undo()` writes.
+    pub fn peek_undo_touches(&self) -> ChangeSet {
+        self.undo_manager.peek_undo_touches()
+    }
+
+    /// Parts the next `redo()` writes.
+    pub fn peek_redo_touches(&self) -> ChangeSet {
+        self.undo_manager.peek_redo_touches()
+    }
+
     pub fn can_undo(&self) -> bool {
         self.undo_manager.can_undo()
     }
@@ -210,11 +284,13 @@ impl EditingService {
     /// Bumps data_version (rather than resetting to 0) so the content thread's
     /// first post-load snapshot exceeds the app's suppress_snapshot_until
     /// threshold — allowing modulation snapshots to flow immediately.
+    /// A load moves every part (INV-8).
     pub fn set_project(&mut self) {
         self.undo_manager.clear();
         self.data_version += 1;
         self.saved_at_version = self.data_version;
         self.clipboard.clear();
+        self.stamps.bump(ChangeSet::ALL);
     }
 
     /// Mark current state as saved.
@@ -229,13 +305,6 @@ impl EditingService {
 
     pub fn data_version(&self) -> u64 {
         self.data_version
-    }
-
-    /// Bump data_version for external mutations that bypass the undo system
-    /// (e.g. Ableton bridge mapping changes). This notifies the UI that the
-    /// project structure changed without creating an undo entry.
-    pub fn notify_external_change(&mut self) {
-        self.data_version += 1;
     }
 
     // ─── Clip lookup ───
@@ -1541,6 +1610,107 @@ impl EditingService {
 impl Default for EditingService {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod stamp_tests {
+    use super::*;
+    use manifold_core::change::Part;
+
+    /// INV-8: a load moves every part.
+    #[test]
+    fn load_moves_every_part() {
+        let mut service = EditingService::new();
+        let before = service.stamps();
+        service.set_project();
+        assert_eq!(service.stamps().moved_since(&before), ChangeSet::ALL);
+    }
+
+    /// `mutate` stamps what it declares and leaves `data_version` alone (D3).
+    #[test]
+    fn mutate_stamps_without_an_edit() {
+        let mut service = EditingService::new();
+        let mut project = Project::default();
+        let before = service.stamps();
+        service.mutate(ChangeSet::of(&[Part::Values]), &mut project, |p| p.settings.master_opacity = 0.5);
+        assert_eq!(service.stamps().moved_since(&before), ChangeSet::of(&[Part::Values]));
+        assert_eq!(service.data_version(), 0);
+    }
+
+    /// The change audit catches a write outside the declared set.
+    #[test]
+    #[should_panic(expected = "change audit")]
+    fn audit_rejects_an_undeclared_part() {
+        let mut service = EditingService::new();
+        let mut project = Project::default();
+        service.mutate(ChangeSet::of(&[Part::Values]), &mut project, |p| p.settings.frame_rate = 30.0);
+    }
+
+    /// Materializing an override under `Overrides | Shapes` passes, but a
+    /// structural graph edit declared that way fails: the override's presence
+    /// and the graph's contents are fingerprinted apart.
+    #[test]
+    fn override_presence_is_its_own_part() {
+        let mut fx = manifold_core::effects::PresetInstance::new(manifold_core::PresetTypeId::new("AuditTest"));
+        fx.graph = None;
+        let mut project = Project::default();
+        project.settings.master_effects.push(fx);
+        let mut service = EditingService::new();
+        let materialize = ChangeSet::of(&[Part::Overrides, Part::Shapes]);
+        service.mutate(materialize, &mut project, |p| {
+            p.settings.master_effects[0].graph = Some(manifold_core::effect_graph_def::EffectGraphDef {
+                version: 1,
+                name: None,
+                description: None,
+                preset_metadata: None,
+                scene_modifiers: Vec::new(),
+                nodes: Vec::new(),
+                wires: Vec::new(),
+            });
+        });
+        let structural = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            service.mutate(materialize, &mut project, |p| {
+                p.settings.master_effects[0].graph.as_mut().unwrap().name = Some("renamed".into());
+            });
+        }));
+        assert!(structural.is_err(), "a structural graph edit must declare Effects");
+    }
+
+    /// A binding's reshape values are Shapes; which bindings exist is
+    /// membership (Effects). Adding one under Shapes fails the audit.
+    #[test]
+    fn binding_membership_is_effects_not_shapes() {
+        let mut fx = manifold_core::effects::PresetInstance::new(manifold_core::PresetTypeId::new("AuditTest"));
+        fx.graph = Some(crate::commands::effects::tests::seed_def_with_param("amount"));
+        let mut project = Project::default();
+        project.settings.master_effects.push(fx);
+        let mut service = EditingService::new();
+        let shapes = ChangeSet::of(&[Part::Shapes]);
+        fn meta(p: &mut Project) -> &mut manifold_core::effect_graph_def::PresetMetadata {
+            p.settings.master_effects[0].graph.as_mut().unwrap().preset_metadata.as_mut().unwrap()
+        }
+        service.mutate(shapes, &mut project, |p| {
+            let m = meta(p);
+            m.bindings[0].scale = 2.0;
+            m.bindings[0].offset = 0.5;
+            m.params[0].max = 4.0;
+        });
+        let added = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            service.mutate(shapes, &mut project, |p| {
+                let m = meta(p);
+                let mut extra = m.bindings[0].clone();
+                extra.id = "amount_2".into();
+                m.bindings.push(extra);
+            });
+        }));
+        assert!(added.is_err(), "adding a binding must declare Effects");
+        let removed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            service.mutate(shapes, &mut project, |p| {
+                meta(p).bindings.clear();
+            });
+        }));
+        assert!(removed.is_err(), "removing a binding must declare Effects");
     }
 }
 

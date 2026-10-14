@@ -164,9 +164,11 @@ fn reparenting_rechecks_group_source_scope_without_changing_saved_assignment() {
     // Mutate only hierarchy here: this isolates playback scope validation
     // from the separately tested editing command and undo machinery.
     engine.project_mut().unwrap().timeline.layers[owner_index].parent_layer_id = None;
+    engine.mark_clip_bindings_stale(); // the content reaction pass does this after an edit
     tick_n(&mut engine, 1, 30);
     assert_eq!(envelope_step_value_of(&engine, owner_index), Some(1.0));
     engine.project_mut().unwrap().timeline.layers[owner_index].parent_layer_id = Some(group_id);
+    engine.mark_clip_bindings_stale(); // the content reaction pass does this after an edit
     tick_n(&mut engine, 1, 30);
     assert_eq!(envelope_step_value_of(&engine, owner_index), Some(2.0));
     assert_eq!(engine.project().unwrap().timeline.layers[owner_index].gen_params().unwrap()
@@ -286,6 +288,7 @@ fn deleting_a_source_cancels_its_unconsumed_start() {
     engine.locate(Seconds(2.25));
     engine.sync_clips_to_time();
     engine.project_mut().unwrap().timeline.remove_layer(1);
+    engine.mark_clip_bindings_stale(); // the content reaction pass does this after an edit
     tick_n(&mut engine, 1, 1);
     assert_eq!(envelope_step_value_of(&engine, 0), None);
 }

@@ -197,6 +197,10 @@ impl PartStamps {
 | Midi | `midi_config` |
 | Session | `session` |
 | ViewPrefs | persisted view fields: `inspector_width`, `timeline_height_percent`, browser width/open, `viewport_*`, `*_collapsed` |
+| Settings (added at P3a) | `project_name`, `project_version`; the load-only `legacy_perc_*`, `legacy_imported_stem_paths` and legacy master-effect scalars on settings and timeline (read once at upgrade, never by a tick) |
+| ViewPrefs (added at P3a) | `saved_playhead_time` (restored on load, never read by a consumer after) |
+| Layers (added at P3a) | the load-only `legacy_gen_*` fields on a layer |
+| Effects (added at P3a) | the load-only `legacy_param0..3`, `legacy_param_version` on an instance, `legacy_effect_addr` on a macro mapping. Binding membership in a materialized graph (which bindings and params exist, their ids and targets) is Effects; their reshape values (spec min, max, curve, invert, binding scale, offset, `calibrated`) are Shapes, and the audit fingerprints the two apart |
 
 `⚠ VERIFY-AT-IMPL (P3a): re-derive this table against the struct definitions (project/mod.rs :73, settings.rs, timeline.rs, layer.rs, the Ableton mapping struct). A field that fits no row, or a Values or Shapes field that some consumer reads only on change, is an escalation. The live drags in section 1 are the worked examples: each writes only Shapes or Values fields.`
 
@@ -444,7 +448,7 @@ The input matrix (D10, INV-16) checks this table: it perturbs each input and rec
 | Moved | Reaction |
 |---|---|
 | Layers, Effects, Mappings | OSC route rebuild |
-| Layers, Effects, Mappings | Ableton listener rebuild (when connected) |
+| Layers, Effects, Mappings | Ableton listener rebuild, connected or not: the write targets it builds must exist before the first inbound value (decided at P3a) |
 | MappingRanges | refresh cached ranges on existing `WriteTarget`s in place (no OSC, no allocation) |
 | Layers, Clips, Effects, Session | `engine.mark_clip_bindings_stale()`; the next reconcile walks once (BUG-6ompp (content tick re-hashes every clip)) |
 | Layers, Clips, Effects | `render_all`'s `structure_key` moves: layer-index refresh, string params dirty, eviction |
@@ -452,7 +456,7 @@ The input matrix (D10, INV-16) checks this table: it perturbs each input and rec
 | Settings | `reconcile_tempo_edit` against the tempo map and BPM retained at the last reaction; the retained copy updates here, never per command |
 | Media | `on_project_loaded` on each renderer (only `VideoRenderer` overrides it, `video_renderer.rs` :687) |
 | EmbeddedPresets | install the project preset overlay; the `graph_snapshot` cache key moves |
-| AudioSetup | audio reconcile (plus the existing device and process flags) |
+| AudioSetup, Effects, Layers | audio reconcile (plus the existing device and process flags). Effects and Layers because the consumed sends follow audio mods, clip triggers and visualizers; no worse than the old every-`data_version` key (decided at P3a) |
 | any part | `mark_compositor_dirty_now` |
 | Shapes | in-place, allocation-free syncs for consumers that cache a live scalar (D25): `sync_gains` into the capture `GainBank` (`audio_mod_runtime.rs` :993); any further cached consumer the INV-20 table lists |
 | Values, Overrides, Led, Markers, Automation, Midi, ViewPrefs | nothing beyond the above (Overrides: the graph structure version already rebuilds the renderer) |
@@ -582,6 +586,7 @@ Order: P1 → P2 → P3a → P3b → P4a → P4b → P4c → P4d → P4e → P5a
 - **Performer gesture:** drag LED brightness hard during playback, then trim an Ableton range; the output must not hitch and the trace shows no reaction work beyond the range refresh.
 - **Forbidden moves:** keeping `MutateProjectLive` "for speed" · a closure declaring `ALL` to dodge the audit · reactions left inside command arms · bumping `data_version` from `mutate` · keeping `data_version` as a key anywhere on the content side except publish and autosave.
 - **Test scope:** `manifold-core`, `manifold-editing`, `manifold-playback`, `manifold-compositor`, `manifold-app` focused; clippy on those five.
+- **Decided at implementation:** `ChangeGraphParamCommand` declares Values for a card param and Values | Effects for a `SceneModifier` target, whose params live inside the owner's graph definition. Audio reconcile and the listener rebuild keys are in the section 4 reaction table.
 
 ### P3b — The content side doors close
 
@@ -613,6 +618,7 @@ Order: P1 → P2 → P3a → P3b → P4a → P4b → P4c → P4d → P4e → P5a
 - **Deliverables:** `UiStamps` with the snapshot fold; `FrameInputs`, `plan_frame`, `apply_frame_plan`; `DispatchCtx::{mutate, execute}`; host committing methods stamp; `GesturePreview` and `TimelineEditingHost::set_preview`, with clip move/trim, region-move splits and every automation drag writing previews instead of stamped writes, the snapshot hold deleted, and the overview and mini timeline reading the preview (BUG-w3csc (clip and automation drags would rebuild per mouse move)); `UIState` selection fields private, `selection_identity`, `selection_visual` and `cursor` versions (D14); `push_state` split into its four pieces with the selection push and event drain on their inputs (D15); `drag_preview_moves_no_stamp` (INV-12); a `plan_frame` unit test per row of the projection table (pure, no GPU); `projection_input_matrix` (INV-16), which must pass against the section 4 table before this phase lands.
 - **Gate:** `AssertFresh` passes in every flow; `plan_frame` tests green; `work-clip-drag`, `work-clip-trim` and `work-automation-point-drag` show zero `ProjectSync` and one `ClipProjection` or `LaneProjection` of the dragged item per frame; `work-cursor-nav` zero `InspectorSync`; `work-paused-cursor` passes `AssertFresh` with the cursor, band and highlight current while paused; `work-region-move` zero `ProjectSync` per move and no snapshot hold; `work-idle`, `work-playback` and `work-modifier` show zero projections; ceilings re-recorded; demo L3.
 - **Performer gesture:** drag a clip across four bars during playback, then nudge the insert cursor with the arrow keys; neither costs a projection.
+- **Runtime sequences:** `RuntimeSeqs` does not yet bump `warmup` or `export_progress` (their states arrive on separate senders); bump both before any consumer keys on them.
 - **Forbidden moves:** a new flag under another name · a subscription or callback from model to panel · stamping a preview write · `ctx.mutate` with a non-`Clone` closure worked around by boxing (escalate) · re-adding a hash of project content as a key · deleting old sites in this phase.
 - **Test scope:** `manifold-ui`, `manifold-app` focused; work flows locally.
 

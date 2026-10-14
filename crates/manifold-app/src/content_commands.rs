@@ -2,6 +2,7 @@
 //! Contains the `handle_command` method which routes `ContentCommand` variants
 //! to the appropriate subsystem on the content thread.
 
+use manifold_core::change::Part;
 use manifold_core::types::ClockAuthority;
 use manifold_core::{Beats, LayerId, NodeId, Seconds};
 use manifold_playback::transport_controller::TransportController;
@@ -196,25 +197,6 @@ impl ContentThread {
         {
             None
         }
-    }
-
-    /// Re-install the renderer's project-preset catalog overlay if an editing
-    /// command changed the project's embedded ("forked") presets — a fork mint
-    /// or an in-place recalibration of an embedded preset. Guarded by a cheap
-    /// fingerprint so the catalog rebuild (and core-registry re-derive) is paid
-    /// only when the fork set actually moved, not on every unrelated edit.
-    /// Without this, a forked/edited preset wouldn't resolve in the renderer
-    /// until the next project load.
-    fn refresh_preset_overlay_if_changed(&mut self) {
-        let Some(project) = self.engine.project() else {
-            return;
-        };
-        let fingerprint = crate::project_io::embedded_presets_fingerprint(project);
-        if fingerprint == self.embedded_presets_fingerprint {
-            return;
-        }
-        crate::project_io::install_project_preset_overlay(project);
-        self.embedded_presets_fingerprint = fingerprint;
     }
 
     /// BUG-104: walk every registered `ClipRenderer`, and for the
@@ -788,13 +770,19 @@ impl ContentThread {
 
     /// Handle a single command. Returns true if Shutdown.
     pub(crate) fn handle_command(&mut self, cmd: ContentCommand) -> bool {
-        let tempo_before = if matches!(&cmd,
-            ContentCommand::Execute(_) | ContentCommand::ExecuteOnContent(_)
-            | ContentCommand::ExecuteSelecting(..) | ContentCommand::ExecuteBatch(..)
-            | ContentCommand::Undo | ContentCommand::Redo | ContentCommand::ResetBpm
-        ) {
-            self.engine.project().map(|p| (p.tempo_map.clone(), p.settings.bpm))
-        } else { None };
+        let settings_edit = match &cmd {
+            ContentCommand::Execute(c) | ContentCommand::ExecuteOnContent(c)
+            | ContentCommand::ExecuteSelecting(c, _) => c.touches().contains(Part::Settings),
+            ContentCommand::ExecuteBatch(cs, _) => cs.iter().any(|c| c.touches().contains(Part::Settings)),
+            ContentCommand::Undo => self.editing_service.peek_undo_touches().contains(Part::Settings),
+            ContentCommand::Redo => self.editing_service.peek_redo_touches().contains(Part::Settings),
+            ContentCommand::MutateProject { touches, .. } => touches.contains(Part::Settings),
+            ContentCommand::ResetBpm => true,
+            _ => false,
+        };
+        if settings_edit {
+            self.retain_tempo_for_reaction();
+        }
         let (cmd, pending_selection) = match cmd {
             ContentCommand::ExecuteSelecting(command, request) => {
                 let pending = self.engine.project().map(|project| request.capture(project));
@@ -1240,18 +1228,6 @@ impl ContentThread {
                     let sequence = self.edit_selection_update.as_ref().map_or(1, |update| update.sequence.wrapping_add(1));
                     self.edit_selection_update = Some(std::sync::Arc::new(crate::edit_selection::EditSelectionUpdate { sequence, selection }));
                 }
-                // Refresh the compositor even while paused: a blend-mode change,
-                // effect edit, or reorder that doesn't alter clip membership
-                // won't be picked up by the sync path alone.
-                self.engine.mark_compositor_dirty_now();
-                // Rebuild OSC routes — command may have added/removed layers or effects.
-                if let Some(p) = self.engine.project() {
-                    self.osc_param_router.rebuild(p, &mut self.osc_receiver);
-                    self.ableton_bridge.rebuild_listeners(p);
-                }
-                // A fork / embedded-preset recalibration must reach the renderer
-                // catalog before the next frame resolves the affected card.
-                self.refresh_preset_overlay_if_changed();
             }
             ContentCommand::ExecuteBatch(cmds, desc) => {
                 let budget_device = self.modifier_budget_device();
@@ -1289,11 +1265,6 @@ impl ContentThread {
                     );
                 }
                 if let Some(message) = self.editing_service.take_rejection() { self.report_graph_edit_rejection(message); return false; }
-                self.engine.mark_compositor_dirty_now();
-                if let Some(p) = self.engine.project() {
-                    self.osc_param_router.rebuild(p, &mut self.osc_receiver);
-                }
-                self.refresh_preset_overlay_if_changed();
             }
             ContentCommand::Undo => {
                 self.commit_automation_recording(true);
@@ -1347,9 +1318,6 @@ impl ContentThread {
                     self.report_graph_edit_rejection(message);
                     return false;
                 }
-                if undone {
-                    self.engine.mark_compositor_dirty_now();
-                }
                 // Apply resolution changes if the undo altered project settings.
                 let post = self.engine.project().map(|p| {
                     (
@@ -1363,11 +1331,6 @@ impl ContentThread {
                 {
                     self.graph_edit_diagnostic = None;
                 }
-                if let Some(p) = self.engine.project() {
-                    self.osc_param_router.rebuild(p, &mut self.osc_receiver);
-                    self.ableton_bridge.rebuild_listeners(p);
-                }
-                self.refresh_preset_overlay_if_changed();
             }
             ContentCommand::Redo => {
                 self.commit_automation_recording(true);
@@ -1416,9 +1379,6 @@ impl ContentThread {
                     self.report_graph_edit_rejection(message);
                     return false;
                 }
-                if redone {
-                    self.engine.mark_compositor_dirty_now();
-                }
                 // Apply resolution changes if the redo altered project settings.
                 let post = self.engine.project().map(|p| {
                     (
@@ -1432,14 +1392,13 @@ impl ContentThread {
                 {
                     self.graph_edit_diagnostic = None;
                 }
-                if let Some(p) = self.engine.project() {
-                    self.osc_param_router.rebuild(p, &mut self.osc_receiver);
-                    self.ableton_bridge.rebuild_listeners(p);
-                }
-                self.refresh_preset_overlay_if_changed();
             }
             ContentCommand::SetProject => {
+                // Follows LoadProject, whose load path already ran every
+                // reaction (routes, listeners, overlay, renderers), so the
+                // reaction pass starts from here rather than repeating them.
                 self.editing_service.set_project();
+                self.reactions.reacted = self.editing_service.stamps();
             }
             ContentCommand::PrepareProjectSave(result_tx) => {
                 let snapshot = prepare_project_save(&mut self.engine, &mut self.editing_service);
@@ -1546,14 +1505,8 @@ impl ContentThread {
                     ctrl.shutdown();
                     self.led_controller = None;
                 }
-                // The app installed this project's preset overlay before sending
-                // the load command; seed the fingerprint to match so the first
-                // edit doesn't trigger a redundant catalog rebuild.
-                self.embedded_presets_fingerprint = self
-                    .engine
-                    .project()
-                    .map(crate::project_io::embedded_presets_fingerprint)
-                    .unwrap_or(0);
+                // A load starts a new tempo history: nothing to reconcile against.
+                self.reactions.tempo_retained = None;
             }
             // ── Settings ───────────────────────────────────────────
             ContentCommand::SetResolution(new_preset) => {
@@ -1689,76 +1642,11 @@ impl ContentThread {
             }
 
             // ── Direct project mutation ────────────────────────────
-            ContentCommand::MutateProject(f) => {
+            // Reactions run once per drain pass from the stamps (D4).
+            ContentCommand::MutateProject { touches, f } => {
                 if let Some(p) = self.engine.project_mut() {
-                    f(p);
+                    self.editing_service.mutate(touches, p, f);
                 }
-                // Re-notify renderers so caches (e.g. VideoRenderer's VideoLibrary)
-                // stay in sync with the mutated project. Split-borrow the renderers
-                // and the project so the live `&Project` is passed straight through —
-                // never a clone. This handler runs on EVERY MutateProject, including
-                // the per-mouse-move closures the live param / opacity / macro drags
-                // send, so a `project.clone()` here was deep-copying the whole
-                // timeline (every layer, clip, effect) each drag tick and stalling
-                // the content thread — the slider-drag render stutter. The mutation
-                // already happened above, so the reference reflects the same state a
-                // clone would have.
-                let (renderers, project) = self.engine.split_renderer_project();
-                if let Some(p) = project {
-                    for renderer in renderers.iter_mut() {
-                        manifold_core::work_count::record_work(manifold_core::work_count::WorkKind::RendererReload);
-                        renderer.on_project_loaded(p);
-                    }
-                }
-                // Rebuild Ableton listeners so trim range changes take effect
-                // immediately (WriteTarget caches range_min/range_max).
-                if self.ableton_bridge.is_connected()
-                    && let Some(p) = self.engine.project()
-                {
-                    self.ableton_bridge.rebuild_listeners(p);
-                }
-                // The mapping-drawer live preview forks/recalibrates through a
-                // MutateProject closure, so refresh the overlay here too.
-                self.refresh_preset_overlay_if_changed();
-                // Force at least one fresh composite so the change shows even
-                // while paused — mute/solo/blend toggles land here and would
-                // otherwise wait for playback to advance time.
-                self.engine.mark_compositor_dirty_now();
-            }
-
-            // ── Mapping-drag preview (lean structural maintenance) ──
-            ContentCommand::MutateProjectPreview(f) => {
-                // The mapping drawer's per-tick preview lands here. The
-                // closure runs; the renderer re-notify (video-library sync —
-                // a reshape never touches it) and the Ableton listener rebuild
-                // (refreshed at commit via the `Execute` arm) are skipped, so a
-                // drag tick costs the edit, never project-scale work. The
-                // overlay refresh stays: it's fingerprint-gated (free when the
-                // fork set didn't move) and the drawer can recalibrate a forked
-                // preset's card. See the variant's doc on `ContentCommand`.
-                if let Some(p) = self.engine.project_mut() {
-                    f(p);
-                }
-                self.refresh_preset_overlay_if_changed();
-                self.engine.mark_compositor_dirty_now();
-            }
-
-            // ── Live value write (no structural maintenance) ───────
-            ContentCommand::MutateProjectLive(f) => {
-                // Card-slider / opacity / macro drags land here, once per
-                // mouse-move event. They write only `param_values` / settings
-                // scalars — read fresh each frame by every consumer — so the
-                // renderer re-notify, Ableton listener rebuild, and preset
-                // overlay refresh the structural `MutateProject` arm runs are
-                // all dead weight here. Skipping them keeps a slider drag at the
-                // cost of the value write, never project-scale work on the tick.
-                if let Some(p) = self.engine.project_mut() {
-                    f(p);
-                }
-                // Same paused-refresh guarantee as the structural arm: opacity /
-                // macro / card-slider drags must update the preview while paused.
-                // A single deadline write — never the project-scale work above.
-                self.engine.mark_compositor_dirty_now();
             }
 
             // ── Clipboard ─────────────────────────────────────────
@@ -1863,7 +1751,6 @@ impl ContentThread {
                         new_label,
                     );
                     self.editing_service.execute(Box::new(cmd), p);
-                    self.ableton_bridge.rebuild_listeners(p);
                     p.settings.ableton_set_context = Some(self.ableton_bridge.build_set_context());
                 }
             }
@@ -1874,7 +1761,6 @@ impl ContentThread {
                 {
                     let cmd = ChangeAbletonMappingCommand::unmap(target, old);
                     self.editing_service.execute(Box::new(cmd), p);
-                    self.ableton_bridge.rebuild_listeners(p);
                 }
             }
             ContentCommand::AbletonRediscover => {
@@ -2208,11 +2094,7 @@ impl ContentThread {
                 self.profiler = None;
             }
         }
-        if let Some((map, bpm)) = tempo_before {
-            self.engine.reconcile_tempo_edit(&map, bpm);
-        }
         self.commit_automation_recording(false);
-        self.engine.reconcile_clip_control_bindings();
         false
     }
 }

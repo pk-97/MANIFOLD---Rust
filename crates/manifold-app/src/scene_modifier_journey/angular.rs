@@ -189,7 +189,7 @@ fn scene_modifier_angular_wrap_journey() {
             PI
         );
 
-        ct.handle_command(ContentCommand::MutateProject(Box::new({
+        ct.handle_command(ContentCommand::mutate(crate::content_command::touch::SHAPES, Box::new({
             let target = target.clone();
             let binding = binding.clone();
             move |project| {

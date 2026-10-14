@@ -644,6 +644,10 @@ impl ChangeLayerOpacityCommand {
 }
 
 impl Command for ChangeLayerOpacityCommand {
+    fn touches(&self) -> manifold_core::change::ChangeSet {
+        use manifold_core::change::{ChangeSet, Part};
+        ChangeSet::of(&[Part::Values])
+    }
     fn execute(&mut self, project: &mut Project) {
         if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(&self.layer_id) {
             layer.opacity = self.new_opacity;
@@ -845,6 +849,10 @@ impl ChangeMasterOpacityCommand {
 }
 
 impl Command for ChangeMasterOpacityCommand {
+    fn touches(&self) -> manifold_core::change::ChangeSet {
+        use manifold_core::change::{ChangeSet, Part};
+        ChangeSet::of(&[Part::Values])
+    }
     fn execute(&mut self, project: &mut Project) {
         project.settings.master_opacity = self.new_opacity;
     }
@@ -875,6 +883,10 @@ impl ChangeLedBrightnessCommand {
 }
 
 impl Command for ChangeLedBrightnessCommand {
+    fn touches(&self) -> manifold_core::change::ChangeSet {
+        use manifold_core::change::{ChangeSet, Part};
+        ChangeSet::of(&[Part::Values])
+    }
     fn execute(&mut self, project: &mut Project) {
         project.settings.led_brightness = self.new_brightness;
     }
@@ -1323,6 +1335,10 @@ impl ChangeMacroCommand {
 }
 
 impl Command for ChangeMacroCommand {
+    fn touches(&self) -> manifold_core::change::ChangeSet {
+        use manifold_core::change::{ChangeSet, Part};
+        ChangeSet::of(&[Part::Values])
+    }
     fn execute(&mut self, project: &mut Project) {
         manifold_core::macro_bank::MacroBank::apply_macro(project, self.index, self.new_value);
     }

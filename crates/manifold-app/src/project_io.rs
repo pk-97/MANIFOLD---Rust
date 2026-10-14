@@ -27,9 +27,8 @@ use crate::user_prefs::UserPrefs;
 /// catalog overlay, so each resolves by id through the same path as stock/user
 /// presets. Called on every project load (with the project's list, possibly
 /// empty) so a previous project's forks are cleared/replaced — the overlay is
-/// global, but only one project is live at a time. Also re-invoked from the
-/// content thread whenever an editing command forks a preset or recalibrates an
-/// embedded one (see `ContentThread::refresh_preset_overlay_if_changed`).
+/// global, but only one project is live at a time. Also re-invoked by the
+/// content reaction pass when the EmbeddedPresets stamp moves (a fork or recalibrate).
 pub(crate) fn install_project_preset_overlay(project: &Project) {
     manifold_core::work_count::record_work(manifold_core::work_count::WorkKind::PresetOverlayInstall);
     install_embedded_presets(&project.embedded_presets);

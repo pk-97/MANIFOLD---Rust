@@ -334,6 +334,12 @@ type ClipAtlasPendingLayout = (Vec<(manifold_core::ClipId, u32, u32)>, u64);
 /// `last_clip_atlas_layout` while still carrying this sentinel.
 const CLIP_ATLAS_LAYOUT_UNSTAMPED: u64 = u64::MAX;
 
+use manifold_core::change::{ChangeSet, Part};
+/// `render_all`'s structure key: layer index, string params, eviction (section 4).
+const GENERATOR_STRUCTURE_PARTS: ChangeSet = ChangeSet::of(&[Part::Layers, Part::Clips, Part::Effects]);
+/// Trigger targets resolve owners from layers and instances (section 4).
+const TRIGGER_TARGET_PARTS: ChangeSet = ChangeSet::of(&[Part::Layers, Part::Effects, Part::AudioSetup]);
+
 /// Aspect-fit viewport `(x, y, w, h)` for atlas cell `i`, letterboxing a source
 /// of `src_w`×`src_h` inside its 16:9 cell so the thumbnail keeps the source's
 /// true aspect (the atlas is cleared transparent first, so the letterbox bars
@@ -2184,7 +2190,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
         tick_result: &TickResult,
         frame_count: u64,
         export_mode: bool,
-        data_version: u64,
+        stamps: manifold_core::change::PartStamps,
         audio_visuals: Option<&manifold_core::audio_visual::AudioVisualRegistry>,
     ) {
         // Prioritize accurate physics work before drawing, retaining any debt.
@@ -2269,7 +2275,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
                 _t_frame,
                 _poll_ms,
                 export_mode,
-                data_version,
+                stamps,
                 audio_visuals,
             );
         }
@@ -2308,7 +2314,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
         _t_frame: std::time::Instant,
         _poll_ms: f64,
         export_mode: bool,
-        data_version: u64,
+        stamps: manifold_core::change::PartStamps,
         audio_visuals: Option<&manifold_core::audio_visual::AudioVisualRegistry>,
     ) {
         // One-shot graph dump: consume the request as a local so the borrow of
@@ -2374,7 +2380,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
         // the content snapshot exposes the failure and export rejects it.
         engine.with_trigger_pulses(|pulses, renderers, project| {
             if let Some(first) = pulses.first() {
-                self.trigger_targets.refresh(project, data_version, first.epoch);
+                self.trigger_targets.refresh(project, stamps.key(TRIGGER_TARGET_PARTS), first.epoch);
             }
             Self::apply_trigger_pulses(&mut self.master_trigger_count, &self.trigger_targets, pulses, renderers, project);
         });
@@ -2544,7 +2550,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
                             beat_f64,
                             dt as f32,
                             layers,
-                            data_version,
+                            stamps.key(GENERATOR_STRUCTURE_PARTS),
                             &self.render_skip_scratch,
                             project_tempo.as_ref(),
                         );

@@ -104,6 +104,10 @@ impl AddAutomationPointCommand {
 }
 
 impl Command for AddAutomationPointCommand {
+    fn touches(&self) -> manifold_core::change::ChangeSet {
+        use manifold_core::change::{ChangeSet, Part};
+        ChangeSet::of(&[Part::Automation])
+    }
     fn execute(&mut self, project: &mut Project) {
         self.previous_lane = None;
         self.previous_lane_index = None;
@@ -294,6 +298,10 @@ impl MoveAutomationPointCommand {
 }
 
 impl Command for MoveAutomationPointCommand {
+    fn touches(&self) -> manifold_core::change::ChangeSet {
+        use manifold_core::change::{ChangeSet, Part};
+        ChangeSet::of(&[Part::Automation])
+    }
     fn execute(&mut self, project: &mut Project) {
         self.previous_lane = None;
         self.previous_lane_index = None;
@@ -372,6 +380,10 @@ impl RemoveAutomationPointCommand {
 }
 
 impl Command for RemoveAutomationPointCommand {
+    fn touches(&self) -> manifold_core::change::ChangeSet {
+        use manifold_core::change::{ChangeSet, Part};
+        ChangeSet::of(&[Part::Automation])
+    }
     fn execute(&mut self, project: &mut Project) {
         let param_id = self.param_id.clone();
         let idx = self.point_index;

@@ -296,7 +296,7 @@ pub enum ResolvedScrub {
     BoundNodeParam(Box<crate::app_render::BoundNodeParamDrag>),
     /// An unbound graph-node-face param scrub (`UnboundNodeParamDrag`, BUG-282).
     /// The mirror of `BoundNodeParam` for the un-rerouted path — but its live
-    /// writes go through `MutateProjectLive` only (never a synchronous
+    /// writes go through `MutateProject` (Values or Shapes) only (never a synchronous
     /// `local_project` write), so a snapshot stomp has nothing local to revert:
     /// the restore is a deliberate no-op. Held here purely so the ONE
     /// undo-worthy commit on `EndGraphNodeParamScrub` and the single-active
@@ -604,7 +604,7 @@ impl ResolvedScrub {
             ResolvedScrub::BoundNodeParam(drag) => {
                 drag.apply(project);
             }
-            // Unbound: live writes go through `MutateProjectLive` only, so a
+            // Unbound: live writes go through `MutateProject` (Values or Shapes) only, so a
             // stomp has nothing local to revert — deliberate no-op (BUG-282).
             ResolvedScrub::UnboundNodeParam(_) => {}
         }
@@ -741,7 +741,7 @@ pub(crate) fn dispatch_scrub(
                     let t = target.clone();
                     ContentCommand::send(
                         ctx.content_tx,
-                        ContentCommand::MutateProjectLive(Box::new(move |p| {
+                        ContentCommand::mutate(crate::content_command::touch::VALUES, Box::new(move |p| {
                             p.with_preset_graph_mut(&t, |inst| {
                                 inst.set_base_param(pid.as_ref(), val);
                             });
@@ -814,7 +814,7 @@ pub(crate) fn dispatch_scrub(
                     }
                     ContentCommand::send(
                         ctx.content_tx,
-                        ContentCommand::MutateProjectLive(Box::new(move |p| {
+                        ContentCommand::mutate(crate::content_command::touch::VALUES, Box::new(move |p| {
                             p.settings.master_opacity = v;
                         })),
                     );
@@ -857,7 +857,7 @@ pub(crate) fn dispatch_scrub(
                     // the retired `LedBrightnessChanged` did.
                     ContentCommand::send(
                         ctx.content_tx,
-                        ContentCommand::MutateProject(Box::new(move |p| {
+                        ContentCommand::mutate(crate::content_command::touch::VALUES, Box::new(move |p| {
                             p.settings.led_brightness = v;
                         })),
                     );
@@ -908,7 +908,7 @@ pub(crate) fn dispatch_scrub(
                     let layer_id = active_layer.clone().unwrap_or_default();
                     ContentCommand::send(
                         ctx.content_tx,
-                        ContentCommand::MutateProjectLive(Box::new(move |p| {
+                        ContentCommand::mutate(crate::content_command::touch::VALUES, Box::new(move |p| {
                             if let Some((_, layer)) = p.timeline.find_layer_by_id_mut(&layer_id) {
                                 layer.opacity = v;
                             }
@@ -966,7 +966,7 @@ pub(crate) fn dispatch_scrub(
                         manifold_core::macro_bank::MacroBank::apply_macro(ctx.project, idx, v);
                         ContentCommand::send(
                             ctx.content_tx,
-                            ContentCommand::MutateProjectLive(Box::new(move |p| {
+                            ContentCommand::mutate(crate::content_command::touch::VALUES, Box::new(move |p| {
                                 manifold_core::macro_bank::MacroBank::apply_macro(p, idx, v);
                             })),
                         );
@@ -1020,7 +1020,7 @@ pub(crate) fn dispatch_scrub(
                     let id = id.clone();
                     ContentCommand::send(
                         ctx.content_tx,
-                        ContentCommand::MutateProjectLive(Box::new(move |p| {
+                        ContentCommand::mutate(crate::content_command::touch::SHAPES, Box::new(move |p| {
                             if let Some((_, l)) = p.timeline.find_layer_by_id_mut(&id) {
                                 l.audio_gain_db = v;
                             }
@@ -1108,7 +1108,7 @@ pub(crate) fn dispatch_scrub(
                         let t = target.clone();
                         ContentCommand::send(
                             ctx.content_tx,
-                            ContentCommand::MutateProjectLive(Box::new(move |p| {
+                            ContentCommand::mutate(crate::content_command::touch::SHAPES, Box::new(move |p| {
                                 p.with_preset_graph_mut(&t, |inst| {
                                     f.set(&mut inst.relight_params, v);
                                 });
@@ -1285,7 +1285,7 @@ pub(crate) fn dispatch_scrub(
                                     let pid = param_id.clone();
                                     ContentCommand::send(
                                         ctx.content_tx,
-                                        ContentCommand::MutateProject(Box::new(move |p| {
+                                        ContentCommand::mutate(crate::content_command::touch::MAPPING_RANGES, Box::new(move |p| {
                                             if let Some(ms) = p
                                                 .ableton_param_mappings_mut(&mt)
                                                 .and_then(|opt| opt.as_mut())
@@ -2063,7 +2063,7 @@ pub(crate) fn dispatch_scrub(
                     let id = send_id.clone();
                     ContentCommand::send(
                         ctx.content_tx,
-                        ContentCommand::MutateProjectLive(Box::new(move |p| {
+                        ContentCommand::mutate(crate::content_command::touch::SHAPES, Box::new(move |p| {
                             if let Some(s) = p.audio_setup.find_send_mut(&id) {
                                 s.gain_db = clamped;
                             }
@@ -2138,7 +2138,7 @@ pub(crate) fn dispatch_scrub(
                     ctx.project.audio_setup.mid_hz = mid;
                     ContentCommand::send(
                         ctx.content_tx,
-                        ContentCommand::MutateProjectLive(Box::new(move |p| {
+                        ContentCommand::mutate(crate::content_command::touch::SHAPES, Box::new(move |p| {
                             p.audio_setup.low_hz = low;
                             p.audio_setup.mid_hz = mid;
                         })),
@@ -2198,7 +2198,7 @@ pub(crate) fn dispatch_scrub(
                     // Live edit (no per-frame undo): write both edges locally and
                     // to the content thread so the mapping tracks the cursor (the
                     // retired `AbletonMacroTrimChanged` — `MutateProject`, not
-                    // `MutateProjectLive`).
+                    // `MutateProject` (Values or Shapes)).
                     let slot_idx = *slot_idx;
                     if let Some(ResolvedScrub::AbletonMacroTrim { live, .. }) =
                         &mut ctx.scrub.active
@@ -2218,7 +2218,7 @@ pub(crate) fn dispatch_scrub(
                     }
                     ContentCommand::send(
                         ctx.content_tx,
-                        ContentCommand::MutateProject(Box::new(move |p| {
+                        ContentCommand::mutate(crate::content_command::touch::MAPPING_RANGES, Box::new(move |p| {
                             if let Some(m) = p
                                 .settings
                                 .macro_bank
@@ -2340,7 +2340,7 @@ fn dispatch_rgb_scrub(
                 let preset = preset.clone();
                 ContentCommand::send(
                     ctx.content_tx,
-                    ContentCommand::MutateProjectLive(Box::new(move |project| {
+                    ContentCommand::mutate(crate::content_command::touch::VALUES, Box::new(move |project| {
                         if project
                             .preset_instance(&t)
                             .is_some_and(|inst| inst.effect_type() == &preset)

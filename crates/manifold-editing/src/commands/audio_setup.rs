@@ -186,6 +186,10 @@ impl SetAudioSendGainCommand {
 }
 
 impl Command for SetAudioSendGainCommand {
+    fn touches(&self) -> manifold_core::change::ChangeSet {
+        use manifold_core::change::{ChangeSet, Part};
+        ChangeSet::of(&[Part::Shapes])
+    }
     fn execute(&mut self, project: &mut Project) {
         if let Some(s) = project.audio_setup.find_send_mut(&self.id) {
             s.gain_db = self.new_db;
@@ -256,6 +260,10 @@ impl SetAudioCrossoversCommand {
 }
 
 impl Command for SetAudioCrossoversCommand {
+    fn touches(&self) -> manifold_core::change::ChangeSet {
+        use manifold_core::change::{ChangeSet, Part};
+        ChangeSet::of(&[Part::Shapes])
+    }
     fn execute(&mut self, project: &mut Project) {
         project.audio_setup.low_hz = self.new.0;
         project.audio_setup.mid_hz = self.new.1;

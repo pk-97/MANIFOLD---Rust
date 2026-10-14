@@ -174,7 +174,7 @@ fn spawn_background_content_thread() -> Arc<AtomicBool> {
                 &tick_result,
                 frame,
                 false,
-                ct.editing_service.data_version(),
+                ct.editing_service.stamps(),
                 None, // no audio-visual registry in this verify harness
             );
             frame += 1;

@@ -1051,7 +1051,7 @@ impl ContentThread {
             &tick_result,
             frame_idx as u64,
             true,
-            self.editing_service.data_version(),
+            self.editing_service.stamps(),
             offline_audio_mod.as_deref().map(|driver| driver.visuals()),
         );
 

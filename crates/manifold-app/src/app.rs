@@ -96,6 +96,9 @@ pub struct Application {
     /// Last received project snapshot Arc. Used to skip redundant deep clones
     /// when the content thread sends the same Arc for modulation-only frames.
     pub(crate) last_snapshot_arc: Option<std::sync::Arc<manifold_core::project::Project>>,
+    /// Content stamps of the last accepted project snapshot: a move outside
+    /// the live scalars re-projects even when `data_version` did not move (D23).
+    pub(crate) accepted_stamps: manifold_core::change::PartStamps,
 
     /// After a local project load (open/new), suppress content thread snapshots
     /// until its data_version exceeds this value. Prevents the old project from
@@ -571,6 +574,7 @@ impl Application {
             content_state: ContentState::default(),
             local_project: default_project,
             last_snapshot_arc: None,
+            accepted_stamps: Default::default(),
             suppress_snapshot_until: 0,
             suppress_snapshot_set_at: 0,
             autosave: crate::autosave::AutosaveState::new(),
@@ -2588,8 +2592,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 cached_midi_clock_device: Arc::from(""),
                 cached_perc_message: Arc::from(""),
                 last_sent_midi_device_names: Arc::from([]),
-                // No project is live at construction, so no forks yet.
-                embedded_presets_fingerprint: 0,
+                reactions: Default::default(),
                 pending_undo_redo_event: None,
                 graph_edit_diagnostic: None,
                 edit_selection_update: None,

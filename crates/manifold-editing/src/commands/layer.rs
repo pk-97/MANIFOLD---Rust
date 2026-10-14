@@ -856,6 +856,10 @@ impl SetLayerAudioGainCommand {
 }
 
 impl Command for SetLayerAudioGainCommand {
+    fn touches(&self) -> manifold_core::change::ChangeSet {
+        use manifold_core::change::{ChangeSet, Part};
+        ChangeSet::of(&[Part::Shapes])
+    }
     fn execute(&mut self, project: &mut Project) {
         if let Some(layer) = project
             .timeline
