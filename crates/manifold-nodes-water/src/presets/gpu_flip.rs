@@ -824,7 +824,8 @@ impl WaterScene {
             "bindings":bindings
         })).expect("family visibility metadata"));
         let metadata = def.preset_metadata.as_mut().expect("family metadata");
-        let look_metadata = manifold_node_engine::scene::exposure_source::look_metadata();
+        let look_metadata: Vec<_> = manifold_node_engine::scene::exposure_source::metadata_for_node_type("node.platonic_solid_mesh")
+            .into_iter().filter(|param| param.name == "radius").collect();
         let visible_metadata: Vec<_> = manifold_node_engine::scene::exposure_source::metadata_for_node_type("node.scene_object")
             .into_iter().filter(|param| param.name == "visible").collect();
         for (kind, section) in [("foam", "Foam"), ("spray", "Spray"), ("bubble", "Bubbles")] {
@@ -837,12 +838,17 @@ impl WaterScene {
                 let mut params = Vec::new();
                 let mut bindings = Vec::new();
                 manifold_core::scene_exposure::stamp_scene_node_exposures_into(
-                    &mut params, &mut bindings, node.id, &node.node_id, &node.type_id,
+                    &mut params, &mut bindings, node.id, &node.node_id,
                     section, descriptors, &node.params,
                 );
                 assert_eq!(params.len(), 1, "one authored look control");
                 for param in &mut params { param.id = param_id.clone(); }
                 for binding in &mut bindings { binding.id = param_id.clone(); }
+                // The look size is this preset's own control, named here.
+                if suffix == "mesh" {
+                    for param in &mut params { param.name = "Size".into(); }
+                    for binding in &mut bindings { binding.label = "Size".into(); }
+                }
                 metadata.params.extend(params);
                 metadata.bindings.extend(bindings);
             }

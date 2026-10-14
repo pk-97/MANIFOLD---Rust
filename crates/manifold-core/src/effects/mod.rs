@@ -43,7 +43,7 @@ pub use relight::{RelightField, RelightHeightFrom, RelightParams};
 
 
 /// serde `skip_serializing_if` for [`crate::effect_graph_def::ParamSpecDef::curve`].
-pub(crate) fn curve_is_linear(c: &crate::macro_bank::MacroCurve) -> bool {
+pub fn curve_is_linear(c: &crate::macro_bank::MacroCurve) -> bool {
     matches!(c, crate::macro_bank::MacroCurve::Linear)
 }
 

@@ -289,6 +289,8 @@ pub struct RenameGroupCommand {
     /// matched, or on a rejected/no-op rename. A hand-edited section (any
     /// other string) never lands here — it's untouched by the sweep.
     swept: Vec<(String, Option<String>)>,
+    /// `(param_id, prior section choice)` for each swept described control.
+    swept_choices: Vec<(String, Option<Option<String>>)>,
 }
 
 impl RenameGroupCommand {
@@ -307,6 +309,7 @@ impl RenameGroupCommand {
             catalog_default,
             prev: None,
             swept: Vec::new(),
+            swept_choices: Vec::new(),
         }
     }
 }
@@ -401,12 +404,15 @@ impl Command for RenameGroupCommand {
             })
             .unwrap_or_default();
         self.swept.clear();
+        self.swept_choices.clear();
         for param_id in target_ids {
             if let Some(p) = inst.params.get_mut(&param_id)
                 && p.spec.section.as_deref() == Some(old_name.as_str())
             {
-                self.swept.push((param_id, p.spec.section.clone()));
-                p.spec.section = Some(new_handle.clone());
+                self.swept.push((param_id.clone(), p.spec.section.clone()));
+                if let Some(prior) = p.choose_section(Some(new_handle.clone())) {
+                    self.swept_choices.push((param_id, prior));
+                }
             }
         }
     }
@@ -418,6 +424,11 @@ impl Command for RenameGroupCommand {
             for (param_id, prev_section) in self.swept.drain(..) {
                 if let Some(p) = inst.params.get_mut(&param_id) {
                     p.spec.section = prev_section;
+                }
+            }
+            for (param_id, prior) in self.swept_choices.drain(..) {
+                if let Some(p) = inst.params.get_mut(&param_id) {
+                    p.choices.section = prior;
                 }
             }
         }

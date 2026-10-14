@@ -538,17 +538,11 @@ mod ownership_tests {
         assert_eq!(parameter_ids_for_nodes(Some(&def), &ids(&["grouped_domain"])), vec!["1_intensity"]);
     }
 
-    /// Every control the scene panel shows belongs to one item: an object, a
-    /// light, the camera or the world. The one sharing allowed is a material
-    /// wired into several objects, which each of them shows. Returns the
-    /// camera's controls. Doc ids collide across group levels (Dam Break
-    /// Matter's domain and its orbit camera are both doc id 1; every grouped
-    /// glTF object numbers its own level), so this fails the moment
-    /// ownership reads them.
-    fn assert_one_owner(name: &str, def: &EffectGraphDef) -> Vec<String> {
+    /// Every scene item with the nodes it owns under today's ownership rule
+    /// (`owned_specs`), and the material it may share.
+    fn scene_items(def: &EffectGraphDef) -> Vec<(String, Vec<NodeId>, Option<NodeId>)> {
         use manifold_nodes_scene::node_graph::scene_vm::{MaterialVm, SceneLightVm, SceneObjectVm, SceneVm};
-        let vm = SceneVm::from_def(def).unwrap_or_else(|| panic!("{name} is a scene"));
-        // (item, its nodes, the material it may share)
+        let vm = SceneVm::from_def(def).expect("a scene");
         let mut items: Vec<(String, Vec<NodeId>, Option<NodeId>)> = Vec::new();
         for object in &vm.objects {
             if let SceneObjectVm::Known(row) = object {
@@ -563,6 +557,19 @@ mod ownership_tests {
         }
         items.push(("camera".into(), vm.camera_controls.clone(), None));
         items.push(("world".into(), vm.world_controls.clone(), None));
+        items
+    }
+
+    /// Every control the scene panel shows belongs to one item: an object, a
+    /// light, the camera or the world. The one sharing allowed is a material
+    /// wired into several objects, which each of them shows. Returns the
+    /// camera's controls. Doc ids collide across group levels (Dam Break
+    /// Matter's domain and its orbit camera are both doc id 1; every grouped
+    /// glTF object numbers its own level), so this fails the moment
+    /// ownership reads them.
+    fn assert_one_owner(name: &str, def: &EffectGraphDef) -> Vec<String> {
+        assert!(manifold_nodes_scene::node_graph::scene_vm::SceneVm::from_def(def).is_some(), "{name} is a scene");
+        let items = scene_items(def);
         let mut owner: BTreeMap<String, usize> = BTreeMap::new();
         for (index, (item, nodes, material)) in items.iter().enumerate() {
             for id in parameter_ids_for_nodes(Some(def), nodes) {
@@ -575,23 +582,83 @@ mod ownership_tests {
                     "{name}: control {id} shows under both {} and {item}", items[other].0);
             }
         }
-        parameter_ids_for_nodes(Some(def), &vm.camera_controls)
+        let camera = items.iter().find(|(item, _, _)| item == "camera").expect("camera item");
+        parameter_ids_for_nodes(Some(def), &camera.1)
     }
 
+    /// Vocabulary rows no scene item owns yet: the physics world's copy body
+    /// and its transform, and Matter's initial volume transform. P4's
+    /// physics-world item owns them and empties this list.
+    const OWNERLESS_UNTIL_P4: &[(&str, u32, &[&str])] = &[
+        ("PhysicsBoxes", 121, &["shape", "motion", "density", "friction", "bounce", "collider_parts"]),
+        ("PhysicsBoxes", 120, &["pos_x", "pos_y", "pos_z", "rot_x", "rot_y", "rot_z", "scale_x", "scale_y", "scale_z", "billboard"]),
+        ("WaterDamBreakMatter", 32, &["pos_x", "pos_y", "pos_z", "rot_x", "rot_y", "rot_z", "scale_x", "scale_y", "scale_z", "billboard"]),
+    ];
+
+    /// SCENE_SURFACES_DESIGN.md P3 gate: every control of a bundled scene
+    /// bound to one scene-vocabulary node param has at most one owning item
+    /// under today's ownership rule (`assert_one_owner`) and exactly one
+    /// role, read from the joined manifest the scene table feeds. Rows with
+    /// no owner are pinned in `OWNERLESS_UNTIL_P4`.
     #[test]
-    fn every_bundled_scene_control_has_one_owner() {
+    fn every_bundled_scene_row_has_one_owner_and_one_role() {
+        use manifold_nodes_scene::node_graph::scene_exposure::is_scene_setup_node;
+        fn node_types(nodes: &[manifold_core::effect_graph_def::EffectGraphNode], out: &mut std::collections::HashMap<NodeId, String>) {
+            for node in nodes {
+                out.insert(node.node_id.clone(), node.type_id.clone());
+                if let Some(body) = node.group.as_deref() {
+                    node_types(&body.nodes, out);
+                }
+            }
+        }
+        let mut checked = 0;
         let mut scenes = Vec::new();
+        let mut failures = Vec::new();
+        let mut ownerless = std::collections::BTreeSet::new();
         for preset in manifold_nodes::bundled_presets::bundled_preset_type_ids(
             manifold_core::preset_def::PresetKind::Generator,
         ) {
             let def = manifold_nodes::bundled_presets::bundled_preset_def(&preset).unwrap();
-            if manifold_nodes_scene::node_graph::scene_vm::SceneVm::from_def(def.as_ref()).is_some() {
-                assert_one_owner(preset.as_str(), def.as_ref());
-                scenes.push(preset.as_str().to_string());
+            if manifold_nodes_scene::node_graph::scene_vm::SceneVm::from_def(def.as_ref()).is_none() {
+                continue;
+            }
+            assert_one_owner(preset.as_str(), def.as_ref());
+            scenes.push(preset.as_str().to_string());
+            let owned: std::collections::BTreeSet<String> = scene_items(def.as_ref())
+                .iter()
+                .flat_map(|(_, nodes, _)| parameter_ids_for_nodes(Some(def.as_ref()), nodes))
+                .collect();
+            let mut fx = manifold_core::effects::PresetInstance::new_generator(preset.clone());
+            fx.init_defaults();
+            fx.graph = Some(def.as_ref().clone());
+            fx.refresh_manifest_from_graph();
+            let mut types = std::collections::HashMap::new();
+            node_types(&def.nodes, &mut types);
+            let meta = def.preset_metadata.as_ref().unwrap();
+            for spec in &meta.params {
+                let mut bound = meta.bindings.iter().filter(|b| b.id == spec.id);
+                let (Some(binding), None) = (bound.next(), bound.next()) else { continue };
+                let BindingTarget::Node { node_id, .. } = &binding.target else { continue };
+                if binding.user_added || !types.get(node_id).is_some_and(|ty| is_scene_setup_node(ty)) {
+                    continue;
+                }
+                checked += 1;
+                if !owned.contains(&spec.id) {
+                    ownerless.insert(format!("{} {}", preset.as_str(), spec.id));
+                }
+                if fx.params.get(&spec.id).is_none_or(|p| p.spec.scene.is_none()) {
+                    failures.push(format!("{preset:?} {}: no role", spec.id));
+                }
             }
         }
         assert!(scenes.iter().any(|scene| scene == "WaterDamBreakMatter"), "{scenes:?}");
         assert!(scenes.iter().any(|scene| scene == "WaterDamBreakGpuFlip"), "{scenes:?}");
+        assert!(checked > 100, "only {checked} controls checked");
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+        let pinned: std::collections::BTreeSet<String> = OWNERLESS_UNTIL_P4.iter()
+            .flat_map(|(preset, doc, params)| params.iter().map(move |param| format!("{preset} {doc}_{param}")))
+            .collect();
+        assert_eq!(ownerless, pinned, "ownerless vocabulary rows only shrink (P4 empties the list)");
     }
 
     #[test]

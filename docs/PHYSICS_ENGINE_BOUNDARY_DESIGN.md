@@ -338,7 +338,7 @@ pub fn insert_scene_template(
     graph: &EffectGraphDef,
     scene: &SceneNodeRef,
     template: &SceneTemplate,
-    metadata: &dyn SceneExposureMetadataProvider,
+    metadata: &dyn NodeParamProvider,
 ) -> Result<SceneGraphEdit, SceneGraphEditError>;
 ```
 
@@ -353,7 +353,7 @@ impl InsertSceneTemplateCommand {
     pub fn new(
         project: &Project, target: GraphTarget, scene: SceneNodeRef,
         template: SceneTemplate, catalog_default: &EffectGraphDef,
-        metadata: &dyn SceneExposureMetadataProvider,
+        metadata: &dyn NodeParamProvider,
     ) -> Result<Self, SceneGraphEditError>;
 }
 ```

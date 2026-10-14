@@ -820,6 +820,9 @@ mod tests {
             section: Some("Camera".to_string()),
             card_visible: true,
             material_role: None,
+            limit: Default::default(),
+            unit: None,
+            scene: None,
         };
         let seeded = RegistryParamDef {
             spec: spec.clone(),
@@ -936,6 +939,9 @@ mod tests {
                 section: None,
                 card_visible: true,
                 material_role: None,
+                limit: Default::default(),
+                unit: None,
+                scene: None,
             }],
             bindings: vec![BindingDef {
                 id: "amount".to_string(),
@@ -1034,6 +1040,9 @@ mod tests {
                 section: None,
                 card_visible: true,
                 material_role: None,
+                limit: Default::default(),
+                unit: None,
+                scene: None,
             }],
             bindings: Vec::new(),
             param_aliases: Vec::new(),

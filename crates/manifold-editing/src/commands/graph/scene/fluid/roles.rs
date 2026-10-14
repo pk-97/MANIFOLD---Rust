@@ -10,7 +10,7 @@ use manifold_core::effect_graph_def::{
 };
 use manifold_core::liquid_domain::{is_liquid_domain, liquid_domains_in};
 use manifold_core::project::Project;
-use manifold_core::scene_exposure::{SceneParamMetadata, stamp_scene_node_exposures_into};
+use manifold_core::scene_exposure::{NodeParamMetadata, stamp_scene_node_exposures_into};
 use manifold_core::scene_modifier_preset::SceneNodeRef;
 
 use crate::command::Command;
@@ -37,7 +37,7 @@ pub struct AssignSceneFluidRoleCommand {
     object_index: u32,
     domain: SceneNodeRef,
     role: u32,
-    role_metadata: Vec<SceneParamMetadata>,
+    role_metadata: Vec<NodeParamMetadata>,
     catalog_default: EffectGraphDef,
     prev: Option<EffectGraphDef>,
     after: Option<EffectGraphDef>,
@@ -55,7 +55,7 @@ impl AssignSceneFluidRoleCommand {
         object_index: u32,
         domain: SceneNodeRef,
         role: u32,
-        role_metadata: Vec<SceneParamMetadata>,
+        role_metadata: Vec<NodeParamMetadata>,
         catalog_default: EffectGraphDef,
     ) -> Self {
         Self {
@@ -222,7 +222,7 @@ fn build_assignment(
     object_index: u32,
     domain: &SceneNodeRef,
     role: u32,
-    role_metadata: &[SceneParamMetadata],
+    role_metadata: &[NodeParamMetadata],
 ) -> Result<(), String> {
     if role >= 4 {
         return Err(
@@ -597,7 +597,7 @@ fn stamp_role_metadata(
     role_id: u32,
     role_node_id: &NodeId,
     role_params: &BTreeMap<String, SerializedParamValue>,
-    role_metadata: &[SceneParamMetadata],
+    role_metadata: &[NodeParamMetadata],
     handle: &str,
 ) {
     let meta = def.preset_metadata.get_or_insert_with(empty_scene_metadata);
@@ -606,7 +606,6 @@ fn stamp_role_metadata(
         &mut meta.bindings,
         role_id,
         role_node_id,
-        ROLE_SOURCE_TYPE_ID,
         handle,
         role_metadata,
         role_params,

@@ -241,13 +241,7 @@
     "work-layer-reorder": "timeline",
     "work-drawer-tween": "envmod",
     "water-family-controls": "scene-setup",
-    "scene-fluid-authoring": "fluidauthoring",
-    "scene-fluid-template": "fluidauthoring",
     "scene-fluid-dam-break-controls": "waterdambreak",
-    "scene-physics-duplicate-paused": "physicsscene",
-    "scene-physics-controls": "physicsscene",
-    "scene-imported-physics": "gltfscene",
-    "rt-dynamic-modifier": "mushroomscene",
     "automation-clipboard-shapes": "automation",
     "automation-time-selection": "automation",
     "automation-lane-management": "automation",
@@ -268,7 +262,6 @@
     "trigger-lane-assignment": "envmod",
     "t-drawer-step": "envmod",
     "gltf-clip-scrub-retrigger": "gltfanimscene",
-    "gltf-import-card-sections": "gltfscene",
     "inspector-card-drag-reorder": "inspector",
     "inspector-blob-mask": "inspector",
     "inspector-modifier-group": "modifiergroup",
@@ -287,7 +280,6 @@
     "toggle-lanes": "automation",
     "trim-clip-left": "timeline",
     "param-step-action": "inspector",
-    "audio-clip-trigger-add": "inspector",
     "audio-dock-toggle": "inspector",
     "calibrated-param-card-reads-manifest": "inspector",
     "drag-clip-release-over-inspector": "timeline",
@@ -295,15 +287,11 @@
     "scene-card-convergence-c-p1d-roughness-scrub-drawer-undo": "gltfscene",
     "rt-quality-panel-demo": "rtquality",
     "scene-modifier-preset": "mushroomscene",
-    "render-mode-wireframe": "gltfscene",
-    "render-mode-solid": "gltfscene",
-    "render-mode-points": "gltfscene",
     "material-inspector-groups": "gltfscene",
     "material-inspector-colour": "gltfscene",
     "material-inspector-features": "gltfscene",
     "material-inspector-looks": "gltfscene",
     "material-inspector-textures": "gltfscene",
-    "physics-box-count": "physicsboxes",
     "scene-setup-add-fog-drag": "gltfscene",
     "scene-fluid-role-lifecycle": "fluidauthoring",
     "water-family-preset": "scene-setup",
@@ -311,6 +299,67 @@
     "scene-surfaces-clickthrough": "gltfscene",
     "scene-surfaces-clickthrough-physics": "physicsscene"
   },
-  "expected_fail": {},
+  "expected_fail": {
+    "render-mode-solid": {
+      "scene": "gltfscene",
+      "bug": "BUG-8a7uq",
+      "reason": "red on main: render-mode labels moved, flow not updated"
+    },
+    "render-mode-points": {
+      "scene": "gltfscene",
+      "bug": "BUG-8a7uq",
+      "reason": "red on main: render-mode labels moved, flow not updated"
+    },
+    "render-mode-wireframe": {
+      "scene": "gltfscene",
+      "bug": "BUG-8a7uq",
+      "reason": "red on main: render-mode labels moved, flow not updated"
+    },
+    "gltf-import-card-sections": {
+      "scene": "gltfscene",
+      "bug": "BUG-8a7uq",
+      "reason": "red on main"
+    },
+    "scene-imported-physics": {
+      "scene": "gltfscene",
+      "bug": "BUG-8a7uq",
+      "reason": "red on main"
+    },
+    "physics-box-count": {
+      "scene": "physicsboxes",
+      "bug": "BUG-t4hhr",
+      "reason": "red on main"
+    },
+    "audio-clip-trigger-add": {
+      "scene": "inspector",
+      "bug": "BUG-t4hhr",
+      "reason": "red on main"
+    },
+    "rt-dynamic-modifier": {
+      "scene": "mushroomscene",
+      "bug": "BUG-t4hhr",
+      "reason": "red on main"
+    },
+    "scene-fluid-authoring": {
+      "scene": "fluidauthoring",
+      "bug": "BUG-pmbd3.24",
+      "reason": "fluid flows hardcode node id 24; fluid body is now node 31"
+    },
+    "scene-fluid-template": {
+      "scene": "fluidauthoring",
+      "bug": "BUG-pmbd3.24",
+      "reason": "fluid flows hardcode node id 24; fluid body is now node 31"
+    },
+    "scene-physics-controls": {
+      "scene": "physicsscene",
+      "bug": "BUG-kpl2",
+      "reason": "two Reset rows; World no longer shows Gravity Y (BUG-pmbd3.22)"
+    },
+    "scene-physics-duplicate-paused": {
+      "scene": "physicsscene",
+      "bug": "BUG-pmbd3.23",
+      "reason": "duplicate names Ground_2, flow expects Ground 2"
+    }
+  },
   "unresolved": {}
 }

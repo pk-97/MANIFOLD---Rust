@@ -41,7 +41,7 @@ Paths below are repository-relative. Symbol anchors are intentional: executors m
 | Parameter types | `crates/manifold-node-engine/src/parameters.rs` (`ParamType`, `ParamDef`) | Color and vector types exist. PBR nevertheless stores colours as separate scalar channels. `ParamDef` lacks semantic grouping and dependencies. |
 | Runtime material | `crates/manifold-node-engine/src/scene/material.rs` (`Material`); `primitives/pbr_material.rs` (`run`) | CPU material output carries factors, five transforms and five samplers. Baked Look emits Unlit. No new GPU material kind is needed for the inspector. |
 | Texture ownership | `crates/manifold-nodes-scene/src/node_graph/primitives/scene_object.rs:35` (`primitive!` inputs; generated `SceneObjectNode::INPUTS`) | 17 texture input slots belong to the scene object, not the material node. A material can be shared while object maps differ. |
-| Descriptor projection | `crates/manifold-nodes-scene/src/node_graph/scene_exposure.rs` (`metadata_for_node_type`, `migrate_scene_exposures`); `crates/manifold-core/src/scene_exposure.rs` (`SceneParamMetadata`, `stamp_scene_node_exposures`) | Registry ranges/types/defaults are stamped into exposed metadata. Existing bindings are preserved. Material rows are hidden on the curated outer card but available to the Scene dock. |
+| Descriptor projection | `crates/manifold-nodes-scene/src/node_graph/scene_exposure.rs` (`metadata_for_node_type`, `migrate_scene_exposures`); `crates/manifold-core/src/scene_exposure.rs` (`NodeParamMetadata`, `stamp_scene_node_exposures`) | Registry ranges/types/defaults are stamped into exposed metadata. Existing bindings are preserved. Material rows are hidden on the curated outer card but available to the Scene dock. |
 | Unified UI surface | `crates/manifold-ui/src/param_surface.rs` (`RowSpec`, `ParamRow`, `ParamSurface`); `crates/manifold-app/src/ui_bridge/projection/cards.rs` (`param_surface`) | Real ParamIds, modulation/audio/mapping facts and section metadata already have one projection. `disabled` blocks all gestures; it is unsuitable for merely inactive features. |
 | Scene panel | `crates/manifold-ui/src/panels/scene_setup_panel.rs` (`build_object_properties_body`); `crates/manifold-app/src/ui_bridge/projection/scene.rs` (`sync_scene_row_values`, `sections_for_nodes`) | Shared row builders and id-keyed value sync exist. A separate Skin row and emission-strength suffix handling need convergence, not another panel layered over them. |
 | Material and source identity | `crates/manifold-nodes-scene/src/node_graph/scene_vm.rs` (`MaterialColorRow`, `trace_scene_object`, `resolve_producer_through_group`) | Material VM currently carries node ID/scope/is-PBR, not feature or map state. Producer resolution supports a direct producer and one group-output traversal, not arbitrary nested graphs. |
@@ -140,7 +140,7 @@ pub enum MaterialParamRole {
     Sampler(MaterialMapFamily, SamplerComponent),
 }
 
-// New field on SceneParamMetadata and ParamSpecDef:
+// New field on NodeParamMetadata and ParamSpecDef:
 pub material_role: Option<MaterialParamRole>,
 
 // manifold-nodes::node_graph::material_inspector
@@ -316,12 +316,12 @@ rg -n 'SetGraphNodeParamCommand::new' crates
 rg -n 'ChangeGraphParamCommand::new' crates
 rg -n 'SetSceneObjectSkinSourceCommand::new' crates
 rg -n 'SetSceneObjectSkinTargetMapCommand::new' crates
-rg -n 'ParamSpecDef \{|SceneParamMetadata \{|RowSpec \{' crates
+rg -n 'ParamSpecDef \{|NodeParamMetadata \{|RowSpec \{' crates
 rg -n 'ObjectMaterialVm|MaterialColorRow|SceneSetupParamChanged' crates
 rg -n 'ValueRef::|ScrubValue::|ResolvedScrub::|GraphBuildError::' crates/manifold-app/src crates/manifold-ui/src
 ```
 
-First four counts at audit: 29, 18, 11, 4. Literal/declaration inventories: `ParamSpecDef {` has 106 occurrences in 50 files; `SceneParamMetadata {` has 10 in 3; `RowSpec {` has 15 in 7. Constructors using Default may require no edit. Consequences: this is broader than a panel-only change; adapt constructors mechanically and do not alter their defaults. Only changed literal constructors and exhaustive matches need adaptation; do not refactor all command callers. Old scalar IDs, section ownership and `SurfaceVisibility::All` remain. Remove the old material quick-row/flat duplication and emission suffix detour only once their replacements have dispatch coverage.
+First four counts at audit: 29, 18, 11, 4. Literal/declaration inventories: `ParamSpecDef {` has 106 occurrences in 50 files; `NodeParamMetadata {` has 10 in 3; `RowSpec {` has 15 in 7. Constructors using Default may require no edit. Consequences: this is broader than a panel-only change; adapt constructors mechanically and do not alter their defaults. Only changed literal constructors and exhaustive matches need adaptation; do not refactor all command callers. Old scalar IDs, section ownership and `SurfaceVisibility::All` remain. Remove the old material quick-row/flat duplication and emission suffix detour only once their replacements have dispatch coverage.
 
 ### P1 — Descriptors and safe grouping
 

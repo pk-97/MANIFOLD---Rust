@@ -51,6 +51,9 @@ fn add_whole_number_param(inst: &mut PresetInstance, id: &str, max: f32) {
         section: None,
         card_visible: true,
         material_role: None,
+        limit: Default::default(),
+        unit: None,
+        scene: None,
     }));
 }
 

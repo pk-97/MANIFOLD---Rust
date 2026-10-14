@@ -16,6 +16,8 @@ final-status-level = "slow"
 # Flag any test slower than this so we notice perf creep before it
 # dominates the suite. Warn-only here; the `ci` profile kills stuck tests.
 slow-timeout = "30s"
+# Run every test to the end so one run shows all failures; fix them all, rerun by name.
+fail-fast = false
 
 [profile.default.junit]
 # Emit JUnit XML for future CI integration. Currently unused — the dead

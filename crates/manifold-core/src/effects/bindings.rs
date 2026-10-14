@@ -217,6 +217,9 @@ impl UserParamBinding {
             // only for the scene-vocabulary auto-stamping path.
             card_visible: true,
             material_role: None,
+            limit: Default::default(),
+            unit: None,
+            scene: None,
         }
     }
 

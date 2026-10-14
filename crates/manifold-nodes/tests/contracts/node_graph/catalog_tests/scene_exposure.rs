@@ -1,11 +1,9 @@
-use manifold_nodes_scene::node_graph::scene_exposure::{look_metadata, testkit::SCENE_VOCABULARY_TYPE_IDS};
+use manifold_nodes_scene::node_graph::scene_exposure::testkit::SCENE_VOCABULARY_TYPE_IDS;
 
+    /// The Water look's "Size" is the water preset's own control, not a
+    /// vocabulary stamp, so no other shipped preset acquires it on load.
     #[test]
-    fn water_look_metadata_exposes_only_size() {
-        let metadata = look_metadata();
-        assert_eq!(metadata.len(), 1);
-        assert_eq!(metadata[0].name, "radius");
-        assert_eq!(metadata[0].label, "Size");
+    fn water_look_size_is_not_a_vocabulary_stamp() {
         assert!(!SCENE_VOCABULARY_TYPE_IDS.contains(&"node.platonic_solid_mesh"));
         for preset in ["PhysicsSolids", "PhysicsBoxes", "WaterFloatingBoxMatter"] {
             let def = manifold_nodes::bundled_presets::bundled_preset_def(&manifold_core::PresetTypeId::new(preset))
@@ -13,6 +11,44 @@ use manifold_nodes_scene::node_graph::scene_exposure::{look_metadata, testkit::S
             assert!(def.preset_metadata.as_ref().unwrap().params.iter().all(|spec| spec.name != "Size"),
                 "{preset} must not acquire Water look controls on load");
         }
+    }
+
+    /// INV-S1 (SCENE_SURFACES_DESIGN.md section 4 (invariants)): every param
+    /// of every scene-vocabulary type carries exactly one scene-table
+    /// classification, and a performance row always names its band. Read
+    /// through the node param source, where every primitive crate is linked.
+    #[test]
+    fn every_vocabulary_param_is_classified() {
+        use manifold_core::liquid_domain::LIQUID_DOMAIN_TYPE_IDS;
+        use manifold_foundation::scene_surface::SurfaceRole;
+        use manifold_nodes_scene::node_graph::scene_exposure::all_params_for_node_type;
+        let registry = manifold_node_engine::persistence::PrimitiveRegistry::with_builtin();
+        let mut missing = Vec::new();
+        let mut checked = 0;
+        for &type_id in SCENE_VOCABULARY_TYPE_IDS.iter().chain(LIQUID_DOMAIN_TYPE_IDS) {
+            // A retired domain stays a liquid domain for saved graphs, with
+            // no constructor and so no params.
+            if !registry.contains(type_id) {
+                assert!(LIQUID_DOMAIN_TYPE_IDS.contains(&type_id), "{type_id} is not registered");
+                continue;
+            }
+            let params = all_params_for_node_type(type_id);
+            assert!(!params.is_empty(), "{type_id} declares no params");
+            for param in params {
+                checked += 1;
+                match param.scene {
+                    None => missing.push(format!("{type_id}.{}", param.name)),
+                    Some(scene) => assert_eq!(
+                        scene.band.is_some(),
+                        scene.role == SurfaceRole::Performance,
+                        "{type_id}.{}: a band iff the performance role",
+                        param.name
+                    ),
+                }
+            }
+        }
+        assert!(checked > 500, "only {checked} params checked");
+        assert!(missing.is_empty(), "unclassified scene params:\n{}", missing.join("\n"));
     }
 
     use manifold_nodes_scene::node_graph::scene_exposure::{metadata_for_node_type, migrate_scene_exposures};
@@ -348,7 +384,6 @@ use manifold_nodes_scene::node_graph::scene_exposure::{look_metadata, testkit::S
             &mut bindings,
             1,
             &node_id,
-            "node.light",
             "Light 1",
             &light_metadata,
             &std::collections::BTreeMap::new(),
@@ -426,8 +461,8 @@ use manifold_nodes_scene::node_graph::scene_exposure::{look_metadata, testkit::S
             assert_eq!(spec.section.as_deref(), Some("Rendering"));
             assert!(spec.is_toggle, "{} must surface as a toggle row", spec.name);
             assert!(
-                spec.card_visible,
-                "{} must be card-visible (the curated inspector card shows ALL stamped RT toggles)",
+                !spec.card_visible,
+                "{} has the setup role, so it is no card-visible stamp",
                 spec.name,
             );
         }

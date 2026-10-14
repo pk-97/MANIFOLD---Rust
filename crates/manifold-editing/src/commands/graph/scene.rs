@@ -16,7 +16,7 @@ use manifold_core::effect_graph_def::{
     InterfacePortDef, ParamSpecDef, PresetMetadata, SerializedParamValue, StringBindingDef,
 };
 use manifold_core::project::Project;
-use manifold_core::scene_exposure::{SceneParamMetadata, stamp_scene_node_exposures_into};
+use manifold_core::scene_exposure::{NodeParamMetadata, stamp_scene_node_exposures_into};
 
 use crate::command::Command;
 
@@ -107,14 +107,14 @@ pub struct AddSceneObjectCommand {
     /// metadata_for_node_type` (this crate has no renderer dep) — `execute`
     /// stamps them into the def's top-level `preset_metadata` after minting
     /// the new nodes' ids.
-    material_metadata: Vec<SceneParamMetadata>,
-    transform_metadata: Vec<SceneParamMetadata>,
-    scene_object_metadata: Vec<SceneParamMetadata>,
+    material_metadata: Vec<NodeParamMetadata>,
+    transform_metadata: Vec<NodeParamMetadata>,
+    scene_object_metadata: Vec<NodeParamMetadata>,
     /// When present, Add Object also creates a loose physics object in the
     /// one Physics World in the current scope. The renderer metadata is kept
     /// caller supplied because editing has no renderer dependency.
-    physics_body_metadata: Option<Vec<SceneParamMetadata>>,
-    physics_material_metadata: Option<Vec<SceneParamMetadata>>,
+    physics_body_metadata: Option<Vec<NodeParamMetadata>>,
+    physics_material_metadata: Option<Vec<NodeParamMetadata>>,
     catalog_default: EffectGraphDef,
     /// The level's `(nodes, wires)` before this edit, plus the pre-edit
     /// whole-def `preset_metadata` (P1 exposure stamping lands there, outside
@@ -136,9 +136,9 @@ impl AddSceneObjectCommand {
         render_scene_node_id: u32,
         _next_index: u32,
         centroid: (f32, f32),
-        material_metadata: Vec<SceneParamMetadata>,
-        transform_metadata: Vec<SceneParamMetadata>,
-        scene_object_metadata: Vec<SceneParamMetadata>,
+        material_metadata: Vec<NodeParamMetadata>,
+        transform_metadata: Vec<NodeParamMetadata>,
+        scene_object_metadata: Vec<NodeParamMetadata>,
         catalog_default: EffectGraphDef,
     ) -> Self {
         Self {
@@ -170,8 +170,8 @@ impl AddSceneObjectCommand {
     /// A scope with more than one world is rejected rather than guessing.
     pub fn with_physics_world(
         mut self,
-        rigid_body_metadata: Vec<SceneParamMetadata>,
-        pbr_material_metadata: Vec<SceneParamMetadata>,
+        rigid_body_metadata: Vec<NodeParamMetadata>,
+        pbr_material_metadata: Vec<NodeParamMetadata>,
     ) -> Self {
         self.physics_body_metadata = Some(rigid_body_metadata);
         self.physics_material_metadata = Some(pbr_material_metadata);
@@ -275,7 +275,6 @@ impl AddSceneObjectCommand {
                     &mut meta.bindings,
                     added.material_id,
                     &added.material_node_id,
-                    "node.pbr_material",
                     &format!("{} — Material", added.handle),
                     material_metadata,
                     &added.material_params,
@@ -285,7 +284,6 @@ impl AddSceneObjectCommand {
                     &mut meta.bindings,
                     added.transform_id,
                     &added.transform_node_id,
-                    "node.transform_3d",
                     &format!("{} — Transform", added.handle),
                     &self.transform_metadata,
                     &added.transform_params,
@@ -296,7 +294,6 @@ impl AddSceneObjectCommand {
                         &mut meta.bindings,
                         body_id,
                         &body_node_id,
-                        "node.rigid_body",
                         &format!("{} — Rigid Body", added.handle),
                         body_metadata,
                         &body_params,
@@ -307,7 +304,6 @@ impl AddSceneObjectCommand {
                     &mut meta.bindings,
                     added.scene_object_id,
                     &added.scene_object_node_id,
-                    "node.scene_object",
                     &added.handle,
                     &self.scene_object_metadata,
                     &BTreeMap::new(),
@@ -590,7 +586,6 @@ impl Command for AddSceneObjectCommand {
                     &mut meta.bindings,
                     mat_id,
                     &mat_node_id,
-                    "node.pbr_material",
                     &format!("{handle} — Material"),
                     &self.material_metadata,
                     &mat_node_params,
@@ -600,7 +595,6 @@ impl Command for AddSceneObjectCommand {
                     &mut meta.bindings,
                     transform_id,
                     &transform_node_id,
-                    "node.transform_3d",
                     &format!("{handle} — Transform"),
                     &self.transform_metadata,
                     &BTreeMap::new(),
@@ -610,7 +604,6 @@ impl Command for AddSceneObjectCommand {
                     &mut meta.bindings,
                     scene_object_id,
                     &scene_object_node_id,
-                    "node.scene_object",
                     &handle,
                     &self.scene_object_metadata,
                     &BTreeMap::new(),
@@ -741,7 +734,7 @@ pub struct AddSceneLightCommand {
     /// param manifest, computed by the app-side caller via
     /// `manifold_nodes::node_graph::scene_exposure::metadata_for_node_type("node.light")`
     /// (this crate has no renderer dep).
-    light_metadata: Vec<SceneParamMetadata>,
+    light_metadata: Vec<NodeParamMetadata>,
     catalog_default: EffectGraphDef,
     /// The level's `(nodes, wires)` before this edit, plus the pre-edit
     /// whole-def `preset_metadata`. Set on execute.
@@ -759,7 +752,7 @@ impl AddSceneLightCommand {
         render_scene_node_id: u32,
         next_index: u32,
         pos: (f32, f32),
-        light_metadata: Vec<SceneParamMetadata>,
+        light_metadata: Vec<NodeParamMetadata>,
         catalog_default: EffectGraphDef,
     ) -> Self {
         Self {
@@ -894,7 +887,6 @@ impl Command for AddSceneLightCommand {
                     &mut meta.bindings,
                     light_id,
                     &light_node_id,
-                    "node.light",
                     &section,
                     &self.light_metadata,
                     &light_node_params,
@@ -2194,7 +2186,7 @@ pub struct AddSceneEnvironmentCommand {
     /// caller via `manifold_nodes::node_graph::scene_exposure::
     /// metadata_for_node_type("node.bake_environment")` (this crate has no
     /// renderer dep) — same convention `AddSceneLightCommand` uses.
-    env_metadata: Vec<SceneParamMetadata>,
+    env_metadata: Vec<NodeParamMetadata>,
     catalog_default: EffectGraphDef,
     /// The level's `(nodes, wires)` before this edit, plus the pre-edit
     /// whole-def `preset_metadata`. Set on execute.
@@ -2211,7 +2203,7 @@ impl AddSceneEnvironmentCommand {
         scope_path: Vec<u32>,
         render_scene_node_id: u32,
         pos: (f32, f32),
-        env_metadata: Vec<SceneParamMetadata>,
+        env_metadata: Vec<NodeParamMetadata>,
         catalog_default: EffectGraphDef,
     ) -> Self {
         Self {
@@ -2305,7 +2297,6 @@ impl Command for AddSceneEnvironmentCommand {
                     &mut meta.bindings,
                     env_id,
                     &env_node_id,
-                    "node.bake_environment",
                     "Environment",
                     &self.env_metadata,
                     &env_node_params,
@@ -2353,7 +2344,7 @@ pub struct AddSceneFogCommand {
     /// caller via `manifold_nodes::node_graph::scene_exposure::
     /// metadata_for_node_type("node.atmosphere")` (this crate has no
     /// renderer dep) — same convention `AddSceneLightCommand` uses.
-    fog_metadata: Vec<SceneParamMetadata>,
+    fog_metadata: Vec<NodeParamMetadata>,
     catalog_default: EffectGraphDef,
     /// The level's `(nodes, wires)` before this edit, plus the pre-edit
     /// whole-def `preset_metadata`. Set on execute.
@@ -2370,7 +2361,7 @@ impl AddSceneFogCommand {
         scope_path: Vec<u32>,
         render_scene_node_id: u32,
         pos: (f32, f32),
-        fog_metadata: Vec<SceneParamMetadata>,
+        fog_metadata: Vec<NodeParamMetadata>,
         catalog_default: EffectGraphDef,
     ) -> Self {
         Self {
@@ -2459,7 +2450,6 @@ impl Command for AddSceneFogCommand {
                     &mut meta.bindings,
                     fog_id,
                     &fog_node_id,
-                    "node.atmosphere",
                     "Atmosphere",
                     &self.fog_metadata,
                     &BTreeMap::new(),
@@ -2673,6 +2663,10 @@ pub struct ImportModelIntoSceneCommand {
     new_card_params: Vec<ParamSpecDef>,
     new_card_bindings: Vec<BindingDef>,
     new_string_bindings: Vec<StringBindingDef>,
+    /// The scene's bounds the merged card ranges were scaled by, written to
+    /// `meta.scene_bounds` when the graph has none so the live param lookup
+    /// reads the same radius (SCENE_SURFACES_DESIGN.md D2 (one live lookup)).
+    scene_bounds: Option<([f32; 3], [f32; 3])>,
     catalog_default: EffectGraphDef,
     /// Pre-edit `(nodes, wires)` at `scope_path`, plus the pre-edit
     /// `preset_metadata` (whole-def field, outside the scoped level) — set
@@ -2708,9 +2702,15 @@ impl ImportModelIntoSceneCommand {
             new_card_params,
             new_card_bindings,
             new_string_bindings,
+            scene_bounds: None,
             catalog_default,
             prev: None,
         }
+    }
+
+    pub fn with_scene_bounds(mut self, bounds: ([f32; 3], [f32; 3])) -> Self {
+        self.scene_bounds = Some(bounds);
+        self
     }
 }
 
@@ -2728,9 +2728,15 @@ impl Command for ImportModelIntoSceneCommand {
         let new_card_params = self.new_card_params.clone();
         let new_card_bindings = self.new_card_bindings.clone();
         let new_string_bindings = self.new_string_bindings.clone();
+        let scene_bounds = self.scene_bounds;
         let result =
             with_target_graph_mut(project, &self.target, &self.catalog_default, true, |def| {
                 let prev_metadata = def.preset_metadata.clone();
+                if let (Some(bounds), Some(meta)) = (scene_bounds, def.preset_metadata.as_mut())
+                    && meta.scene_bounds.is_none()
+                {
+                    meta.scene_bounds = Some(bounds);
+                }
 
                 // Card-spec additions land on the WHOLE def's preset_metadata
                 // (not the scoped level) — done before descending into scope so
@@ -2788,6 +2794,7 @@ impl Command for ImportModelIntoSceneCommand {
         if let Some((pnw, pmeta)) = result.flatten() {
             self.prev = Some((pnw.0, pnw.1, pmeta));
         }
+        refresh_target_manifest(project, &self.target);
     }
 
     fn undo(&mut self, project: &mut Project) {
@@ -2802,6 +2809,7 @@ impl Command for ImportModelIntoSceneCommand {
                 *wires = pw;
             }
         });
+        refresh_target_manifest(project, &self.target);
     }
 
     fn description(&self) -> &str {
@@ -2896,6 +2904,8 @@ pub struct RenameSceneObjectCommand {
     /// scene_object has no group name for a card section to have followed).
     swept: Vec<(String, Option<String>)>,
     swept_metadata: Vec<(String, Option<String>)>,
+    /// `(param_id, prior section choice)` for each swept described control.
+    swept_choices: Vec<(String, Option<Option<String>>)>,
 }
 
 impl RenameSceneObjectCommand {
@@ -2916,6 +2926,7 @@ impl RenameSceneObjectCommand {
             nested_scope: None,
             swept: Vec::new(),
             swept_metadata: Vec::new(),
+            swept_choices: Vec::new(),
         }
     }
 }
@@ -3090,6 +3101,7 @@ impl Command for RenameSceneObjectCommand {
         };
         self.swept.clear();
         self.swept_metadata.clear();
+        self.swept_choices.clear();
         // Shared bindings repeat ids. Preserve both live and authored sections.
         let target_ids: std::collections::HashSet<_> = target_ids.into_iter().collect();
         for param_id in &target_ids {
@@ -3097,7 +3109,9 @@ impl Command for RenameSceneObjectCommand {
                 && let Some(section) = renamed_section(&p.spec.section)
             {
                 self.swept.push((param_id.clone(), p.spec.section.clone()));
-                p.spec.section = Some(section);
+                if let Some(prior) = p.choose_section(Some(section)) {
+                    self.swept_choices.push((param_id.clone(), prior));
+                }
             }
         }
         if let Some(meta) = inst.graph.as_mut().and_then(|graph| graph.preset_metadata.as_mut()) {
@@ -3128,6 +3142,11 @@ impl Command for RenameSceneObjectCommand {
             for (param_id, prev_section) in self.swept.drain(..) {
                 if let Some(p) = inst.params.get_mut(&param_id) {
                     p.spec.section = prev_section;
+                }
+            }
+            for (param_id, prior) in self.swept_choices.drain(..) {
+                if let Some(p) = inst.params.get_mut(&param_id) {
+                    p.choices.section = prior;
                 }
             }
         }

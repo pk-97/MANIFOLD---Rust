@@ -3006,14 +3006,14 @@ mod tests {
     /// Recalibrate a STOCK param's range in place on the instance's own
     /// manifest entry — exactly what the chevron popover writes (D6:
     /// calibration edits `spec.min`/`spec.max` in place and sets
-    /// `Param::calibrated`; there is no separate graph/`preset_metadata`
+    /// the slider choice; there is no separate graph/`preset_metadata`
     /// overlay to resolve through anymore — `p.spec` on the manifest entry
     /// IS the effective range).
     fn override_stock_param_range(inst: &mut PresetInstance, param_id: &str, min: f32, max: f32) {
         let p = inst.params.get_mut(param_id).expect("param must exist on the manifest");
         p.spec.min = min;
         p.spec.max = max;
-        p.calibrated = true;
+        p.choices.slider = Some((min, max));
     }
 
     #[test]
@@ -3178,6 +3178,9 @@ mod tests {
             section: None,
             card_visible: true,
             material_role: None,
+            limit: Default::default(),
+            unit: None,
+            scene: None,
         }));
     }
 

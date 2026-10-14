@@ -186,7 +186,7 @@ pub(super) fn expand_bindings_with_sources(
             for node_id in generated {
                 bindings.push(BindingDef {
                     id: binding.id.clone(),
-                    label: binding.label.clone(),
+                    label: String::new(),
                     default_value: binding.default_value,
                     target: BindingTarget::Node {
                         node_id: node_id.clone(),
@@ -258,7 +258,7 @@ pub(super) fn expand_bindings_with_sources(
             for node_id in generated {
                 string_bindings.push(StringBindingDef {
                     id: binding.id.clone(),
-                    label: binding.label.clone(),
+                    label: String::new(),
                     default_value: binding.default_value.clone(),
                     target: BindingTarget::Node {
                         node_id: node_id.clone(),

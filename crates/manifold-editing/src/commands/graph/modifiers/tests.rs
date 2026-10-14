@@ -842,6 +842,9 @@ fn remove_modifier_prunes_exposure_side_wire_and_automation_atomically() {
         let graph = owner.graph.as_mut().unwrap();
         graph.nodes.push(plain_node(300, "side", "node.value"));
         graph.wires.push(scene_build_wire(300, "value", inserted.id, "aux"));
+        // Build the manifest through the join, as load does, so the undo
+        // comparison below sees the spec source the join gives.
+        owner.refresh_manifest_from_graph();
     }
     let before_remove = graph_of(&project, &fx).clone();
     let before_params = project.graph_target_owner(&target).unwrap().params.clone();
