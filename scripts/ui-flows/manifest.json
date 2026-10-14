@@ -320,9 +320,9 @@
     "scene-surfaces-clickthrough-physics": "physicsscene",
     "scene-panel-tree": "gltfscene",
     "scene-panel-tree-physics": "physicsscene",
-    "scene-use-this-view": "gltfscene",
     "scene-pin-roundtrip": "gltfscene",
-    "scene-card-to-tab": "gltfscene"
+    "scene-card-to-tab": "gltfscene",
+    "scene-use-this-view": "gltfscene"
   },
   "expected_fail": {
     "render-mode-solid": {
