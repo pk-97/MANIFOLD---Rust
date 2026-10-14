@@ -150,6 +150,7 @@ mod shared_texture;
 #[cfg(target_os = "macos")]
 mod texture_pane;
 mod text_input;
+mod text_session;
 mod ui_bridge;
 mod tree_passes;
 mod ui_frame;

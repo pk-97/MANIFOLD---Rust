@@ -4,7 +4,7 @@
 //! overlay rendering helper. All methods are `impl Application` blocks that
 //! operate on the struct defined in app.rs.
 
-use manifold_ui::{ClipAction, EditingAction, LayerAction, MarkerAction, ParamsAction, ProjectAction, RootAction, TransportAction};
+use manifold_ui::{EditingAction, ParamsAction, ProjectAction, RootAction, TransportAction};
 use manifold_ui_paint::ui_renderer::UIRenderer;
 
 use manifold_ui::node::FontWeight;
@@ -583,64 +583,9 @@ impl Application {
         // 2. Process UI events and dispatch actions
         let mut actions = self.ws.ui_root.process_events();
 
-        // Overlay-hosted text sessions (main window): cancel any session
-        // whose overlay just closed during the routing above — the app pump
-        // half of `OVERLAY_SESSIONS_AND_PICKER_DESIGN.md` section 3, D2. A no-op
-        // most frames (empty drain).
-        for id in self.ws.ui_root.take_closed_overlays() {
-            self.text_input
-                .cancel_if_owned_by(crate::text_input::TextSessionOwner::MainOverlay(id));
-        }
-
-        // Browser popup search session plumbing (PRESET_BROWSER_AUDITION F5,
-        // kept by STATIC_THUMBNAILS_DESIGN): the popup raised the request
-        // when it opened; take the owned search session exactly like the
-        // graph-editor Node picker does at open. The `MainOverlay(BrowserPopup)`
-        // owner tag is what the closed-overlay pump cancels by on every
-        // close path (backdrop, Escape, pick, perform-mode entry) — no
-        // orphaned SearchFilter session. The anchor is a zero placeholder:
-        // the popup tree isn't built yet this frame, and the re-anchor
-        // pass below pins the overlay over the popup's real search bar as
-        // soon as the tree exists. The dirty flag makes this once per
-        // open, not per frame.
-        {
-            if self.ws.ui_root.browser_popup.take_search_focus() {
-                self.text_input.begin_owned(
-                    crate::text_input::TextSessionOwner::MainOverlay(
-                        crate::ui_root::OverlayId::BrowserPopup,
-                    ),
-                    crate::text_input::TextInputField::SearchFilter,
-                    "",
-                    crate::text_input::AnchorRect::zero(),
-                    11.0,
-                );
-            }
-            // Re-anchor the popup's search session over the popup's real
-            // search bar on every frame the session is up. The open-time
-            // begin_owned can't know the bar rect (tree not built yet), and
-            // render_text_input_overlay paints a bordered box AT the anchor
-            // — left at the placeholder, the user sees a second input next
-            // to the popup's own search bar. The zero-rect guard skips the
-            // frame(s) before the tree exists; after a commit or a popup
-            // close the owner/field check is false and this is a no-op.
-            if self.text_input.owner
-                == Some(crate::text_input::TextSessionOwner::MainOverlay(
-                    crate::ui_root::OverlayId::BrowserPopup,
-                ))
-                && self.text_input.field == crate::text_input::TextInputField::SearchFilter
-            {
-                let r = self
-                    .ws
-                    .ui_root
-                    .browser_popup
-                    .search_bar_rect(&self.ws.ui_root.tree);
-                if r.width > 0.0 && r.height > 0.0 {
-                    self.text_input.update_anchor(crate::text_input::AnchorRect::new(
-                        r.x, r.y, r.width, r.height,
-                    ));
-                }
-            }
-        }
+        // A session dies with its overlay; the browser popup takes its search
+        // session and pins it over its search bar (`text_session.rs`).
+        crate::text_session::pump_main_window(&mut self.text_input, &mut self.ws.ui_root);
 
         // Native menu bar clicks → the same PanelAction dispatch as on-screen
         // chrome. Drain into an owned Vec first so the immutable borrow of
@@ -1069,6 +1014,15 @@ impl Application {
                 continue;
             }
             if self.dispatch_inspector_host_action(action, false) { continue; }
+            if crate::text_session::begin_for_action(
+                &mut self.text_input,
+                &mut self.ws.ui_root,
+                &self.local_project,
+                &self.selection,
+                action,
+            ) {
+                continue;
+            }
             if let PanelAction::Root(action) = action
                 && self.dispatch_mapping_action(action)
             {
@@ -1175,49 +1129,6 @@ impl Application {
                     self.pending_open_graph_editor = true;
                     continue;
                 }
-                PanelAction::Root(RootAction::SceneSetupRenameObjectClicked(layer_id, object_node_id, name)) => {
-                    // P2 object-name click — same shape as
-                    // `AudioSendLabelClicked` below: begin the shared inline
-                    // text-input session anchored over the row's own name
-                    // label. Commit routes to `RenameGroupCommand` addressed
-                    // directly at the layer (no graph editor needs to be
-                    // open — the panel is a fourth surface, not a canvas view).
-                    if let Some(r) = self
-                        .ws
-                        .ui_root
-                        .scene_setup_panel
-                        .object_name_rect(&self.ws.ui_root.tree, *object_node_id)
-                    {
-                        self.text_input.scene_object_layer_id = Some(layer_id.clone());
-                        self.text_input.begin(
-                            crate::text_input::TextInputField::SceneObjectRename(*object_node_id),
-                            name,
-                            crate::text_input::AnchorRect::new(r.x, r.y, r.width, r.height),
-                            11.0,
-                        );
-                    }
-                    continue;
-                }
-                PanelAction::Root(RootAction::SceneSetupRenameLightClicked(layer_id, light_node_id, name)) => {
-                    // P5 light-row/properties-header name click — same shape
-                    // as `SceneSetupRenameObjectClicked` above, addressed by
-                    // the light's own doc id (no group indirection).
-                    if let Some(r) = self
-                        .ws
-                        .ui_root
-                        .scene_setup_panel
-                        .light_name_rect(&self.ws.ui_root.tree, *light_node_id)
-                    {
-                        self.text_input.scene_object_layer_id = Some(layer_id.clone());
-                        self.text_input.begin(
-                            crate::text_input::TextInputField::SceneLightRename(*light_node_id),
-                            name,
-                            crate::text_input::AnchorRect::new(r.x, r.y, r.width, r.height),
-                            11.0,
-                        );
-                    }
-                    continue;
-                }
                 PanelAction::Root(RootAction::OpenGeneratorGraphEditor) => {
                     // Ask the content thread to snapshot the active layer's
                     // generator graph and set the unified watched_graph_target
@@ -1295,53 +1206,6 @@ impl Application {
                     self.edit_inspector_cards(*action);
                     continue;
                 }
-                PanelAction::Params(ParamsAction::BrowserSearchClicked) => {
-                    let r = self
-                        .ws
-                        .ui_root
-                        .browser_popup
-                        .search_bar_rect(&self.ws.ui_root.tree);
-                    self.text_input.begin_owned(
-                        crate::text_input::TextSessionOwner::MainOverlay(
-                            crate::ui_root::OverlayId::BrowserPopup,
-                        ),
-                        crate::text_input::TextInputField::SearchFilter,
-                        self.ws.ui_root.browser_popup.current_filter(),
-                        crate::text_input::AnchorRect::new(r.x, r.y, r.width, r.height),
-                        11.0,
-                    );
-                    continue;
-                }
-                PanelAction::Transport(TransportAction::BpmFieldClicked) => {
-                    let bpm = Some(&self.local_project).map_or(120.0, |p| p.settings.bpm.0);
-                    let r = if let Some(id) = self.ws.ui_root.transport.bpm_field_id() {
-                        self.ws.ui_root.tree.get_bounds(id)
-                    } else {
-                        manifold_ui::node::Rect::new(100.0, 100.0, 120.0, 20.0)
-                    };
-                    self.text_input.begin(
-                        crate::text_input::TextInputField::Bpm,
-                        &format!("{:.1}", bpm),
-                        crate::text_input::AnchorRect::new(r.x, r.y, r.width, r.height),
-                        14.0,
-                    );
-                    continue;
-                }
-                PanelAction::Transport(TransportAction::FpsFieldClicked) => {
-                    let fps = Some(&self.local_project).map_or(60.0, |p| p.settings.frame_rate);
-                    let r = if let Some(id) = self.ws.ui_root.footer.fps_field_id() {
-                        self.ws.ui_root.tree.get_bounds(id)
-                    } else {
-                        manifold_ui::node::Rect::new(100.0, 100.0, 120.0, 20.0)
-                    };
-                    self.text_input.begin(
-                        crate::text_input::TextInputField::Fps,
-                        &format!("{:.0}", fps),
-                        crate::text_input::AnchorRect::new(r.x, r.y, r.width, r.height),
-                        11.0,
-                    );
-                    continue;
-                }
                 PanelAction::Editing(EditingAction::AutomationPointEditValue(
                     target,
                     param_id,
@@ -1358,217 +1222,6 @@ impl Application {
                     value_norm,
                 )) => {
                     crate::app::automation_point_input::begin_time(self, target, param_id, *beat, *value_norm);
-                    continue;
-                }
-                PanelAction::Root(RootAction::BeginColourTextInput {
-                    target,
-                    param_ids,
-                    anchor,
-                    value,
-                }) => {
-                    let initial = crate::text_input::format_material_colour_hex(*value);
-                    self.text_input.begin(
-                        crate::text_input::TextInputField::MaterialColour,
-                        &initial,
-                        crate::text_input::AnchorRect::new(
-                            anchor.x,
-                            anchor.y,
-                            anchor.width,
-                            anchor.height,
-                        ),
-                        11.0,
-                    );
-                    self.text_input.material_colour =
-                        Some(crate::text_input::MaterialColourCtx {
-                            target: target.clone(),
-                            param_ids: param_ids.clone(),
-                        });
-                    continue;
-                }
-                PanelAction::Root(RootAction::SceneSetupBeginNumericTextInput {
-                    layer_id,
-                    scope_path,
-                    node_doc_id,
-                    param_id,
-                    value,
-                    cell_node_id,
-                    degrees,
-                }) => {
-                    // SCENE_OBJECT_AND_PANEL_V2_DESIGN.md P4, D8/D10: same
-                    // early-intercept shape as `BeginParamTextInput` above.
-                    // The panel has no `&UITree` in `handle_event`, so the
-                    // cell's anchor rect is resolved here from its own node
-                    // id. D10: degrees rows prefill in degrees (the panel
-                    // boundary is the ONLY place this conversion happens —
-                    // the stored `value` stays radians).
-                    let r = self.ws.ui_root.tree.get_bounds(*cell_node_id);
-                    let display = if *degrees { value.to_degrees() } else { *value };
-                    let initial = format!("{display:.3}");
-                    self.text_input.begin(
-                        crate::text_input::TextInputField::SceneNumericParam(*node_doc_id),
-                        &initial,
-                        crate::text_input::AnchorRect::new(r.x, r.y, r.width, r.height),
-                        11.0,
-                    );
-                    self.text_input.scene_numeric_param =
-                        Some(crate::text_input::SceneNumericParamCtx {
-                            layer_id: layer_id.clone(),
-                            scope_path: scope_path.clone(),
-                            param_id: param_id.clone(),
-                            degrees: *degrees,
-                        });
-                    continue;
-                }
-                PanelAction::Root(RootAction::AudioSendGainBeginTextInput(send_id, value, cell_node_id)) => {
-                    // P4 audio-dock sibling of `SceneSetupBeginNumericTextInput`.
-                    let r = self.ws.ui_root.tree.get_bounds(*cell_node_id);
-                    let initial = format!("{value:.1}");
-                    self.text_input.begin(
-                        crate::text_input::TextInputField::AudioSendGainParam,
-                        &initial,
-                        crate::text_input::AnchorRect::new(r.x, r.y, r.width, r.height),
-                        11.0,
-                    );
-                    self.text_input.audio_send_gain_param =
-                        Some(crate::text_input::AudioSendGainParamCtx { send_id: send_id.clone() });
-                    continue;
-                }
-                PanelAction::Root(RootAction::BeginDriverPeriodTextInput {
-                    target,
-                    param_id,
-                    anchor,
-                    value,
-                }) => {
-                    // Prefill with the current period in beats (whole numbers
-                    // without a decimal), select-all so the first keystroke
-                    // replaces it.
-                    let initial = if (value.fract()).abs() < 1e-3 {
-                        format!("{}", value.round() as i64)
-                    } else {
-                        format!("{value:.2}")
-                    };
-                    self.text_input.begin(
-                        crate::text_input::TextInputField::DriverFreePeriod,
-                        &initial,
-                        crate::text_input::AnchorRect::new(
-                            anchor.x,
-                            anchor.y,
-                            anchor.width,
-                            anchor.height,
-                        ),
-                        11.0,
-                    );
-                    self.text_input.driver_free_period =
-                        Some(crate::text_input::DriverFreePeriodCtx {
-                            target: target.clone(),
-                            param_id: param_id.clone(),
-                        });
-                    continue;
-                }
-                PanelAction::Layer(LayerAction::LayerDoubleClicked(id)) => {
-                    // Open text input for layer rename. The action carries a
-                    // stable LayerId, stored on `text_input.layer_id` and
-                    // re-resolved to the live row at commit time (BUG-031) —
-                    // `pos` here only sizes the anchor rect for THIS frame's
-                    // overlay, a read-only, open-time-only use.
-                    {
-                        let project = &self.local_project;
-                        if let Some((pos, layer)) = project.timeline.find_layer_by_id(id) {
-                            let r = if let Some(nid) =
-                                self.ws.ui_root.layer_headers.name_node_id(pos)
-                            {
-                                self.ws.ui_root.tree.get_bounds(nid)
-                            } else {
-                                manifold_ui::node::Rect::new(100.0, 100.0, 120.0, 20.0)
-                            };
-                            let name = layer.name.clone();
-                            self.text_input.begin(
-                                crate::text_input::TextInputField::LayerName,
-                                &name,
-                                crate::text_input::AnchorRect::new(r.x, r.y, r.width, r.height),
-                                11.0,
-                            );
-                            self.text_input.layer_id = Some(id.clone());
-                        }
-                    }
-                    continue;
-                }
-                PanelAction::Marker(MarkerAction::MarkerDoubleClicked(marker_id_str)) => {
-                    // Open text input for marker rename
-                    let marker_id = manifold_core::MarkerId::new(marker_id_str.as_str());
-                    if let Some(marker) = self.local_project.timeline.find_marker(&marker_id) {
-                        let beat = marker.beat;
-                        let name = marker.name.clone();
-                        // Anchor to marker flag position in the ruler
-                        let px = self.ws.ui_root.viewport.beat_to_pixel(beat);
-                        let ruler = self.ws.ui_root.viewport.ruler_rect();
-                        let flag_w = manifold_ui::color::MARKER_FLAG_WIDTH;
-                        let r = crate::text_input::AnchorRect::new(
-                            px + flag_w * 0.5 + 2.0,
-                            ruler.y,
-                            80.0,
-                            manifold_ui::color::MARKER_FLAG_HEIGHT,
-                        );
-                        self.text_input.begin(
-                            crate::text_input::TextInputField::MarkerName,
-                            &name,
-                            r,
-                            9.0,
-                        );
-                        self.text_input.marker_id = Some(marker_id);
-                    }
-                    continue;
-                }
-                PanelAction::Clip(ClipAction::ClipBpmClicked) => {
-                    // Open text input for clip recorded BPM editing.
-                    // Unity: ClipInspector.OnBitmapBpmClicked → BitmapTextInput.BeginEdit
-                    if let Some(clip_id) = self.selection.primary_selected_clip_id() {
-                        let bpm_text = Some(&self.local_project)
-                            .and_then(|p| {
-                                p.timeline
-                                    .layers
-                                    .iter()
-                                    .flat_map(|l| l.clips.iter())
-                                    .find(|c| c.id == *clip_id)
-                            })
-                            .map(|c| {
-                                if c.recorded_bpm > 0.0 {
-                                    format!("{:.1}", c.recorded_bpm)
-                                } else {
-                                    if c.is_audio() { "Unknown" } else { "Auto" }.to_string()
-                                }
-                            })
-                            .unwrap_or_else(|| "Auto".to_string());
-                        let r = self
-                            .ws
-                            .ui_root
-                            .inspector
-                            .clip_chrome_mut()
-                            .bpm_button_rect(&self.ws.ui_root.tree);
-                        self.text_input.begin(
-                            crate::text_input::TextInputField::ClipBpm,
-                            &bpm_text,
-                            crate::text_input::AnchorRect::new(r.x, r.y, r.width, r.height),
-                            10.0,
-                        );
-                    }
-                    continue;
-                }
-                PanelAction::Params(ParamsAction::GenStringParamClicked(sp_idx)) => {
-                    // Open text input for a generator string param.
-                    if let Some(gp) = self.ws.ui_root.inspector.gen_params()
-                        && let Some(sp) = gp.string_param(*sp_idx)
-                    {
-                        let current = sp.value.clone();
-                        if let Some(r) = gp.string_param_rect(&self.ws.ui_root.tree, *sp_idx) {
-                            self.text_input.begin(
-                                crate::text_input::TextInputField::GenStringParam(*sp_idx),
-                                &current,
-                                crate::text_input::AnchorRect::new(r.x, r.y, r.width, r.height),
-                                11.0,
-                            );
-                        }
-                    }
                     continue;
                 }
                 PanelAction::Params(ParamsAction::GenStringParamDropdownClicked(sp_idx)) => {
@@ -1637,42 +1290,6 @@ impl Application {
                                 self.ws.ui_root.open_dropdown_typed(items, trigger);
                             }
                         }
-                    }
-                    continue;
-                }
-                PanelAction::Root(RootAction::AudioSendLabelClicked(send_id)) => {
-                    if let Some(send) = self.local_project.audio_setup.find_send(send_id)
-                        && let Some(r) = self
-                            .ws
-                            .ui_root
-                            .audio_setup_panel
-                            .send_label_rect(&self.ws.ui_root.tree, send_id)
-                    {
-                        let label = send.label.clone();
-                        self.text_input.audio_send_id = Some(send_id.clone());
-                        self.text_input.begin(
-                            crate::text_input::TextInputField::AudioSendLabel,
-                            &label,
-                            crate::text_input::AnchorRect::new(r.x, r.y, r.width, r.height),
-                            11.0,
-                        );
-                    }
-                    continue;
-                }
-                PanelAction::Params(ParamsAction::MacroLabelRename(idx)) => {
-                    if let Some(slot) = self.local_project.settings.macro_bank.slots.get(*idx)
-                        && let Some(r) = self
-                            .ws
-                            .ui_root
-                            .inspector
-                            .macro_label_rect(&self.ws.ui_root.tree, *idx)
-                    {
-                        self.text_input.begin(
-                            crate::text_input::TextInputField::MacroLabel(*idx),
-                            &slot.label,
-                            crate::text_input::AnchorRect::new(r.x, r.y, r.width, r.height),
-                            11.0,
-                        );
                     }
                     continue;
                 }

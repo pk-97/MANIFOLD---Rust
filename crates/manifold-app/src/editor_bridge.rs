@@ -658,62 +658,23 @@ impl Application {
         action: &manifold_ui::panels::PanelAction,
         in_editor: bool,
     ) -> bool {
-        use manifold_ui::panels::{PanelAction, RootAction};
-        use crate::text_input::{AnchorRect, InspectorParamCtx, TextInputField};
-        match action {
-            PanelAction::Root(RootAction::BeginParamTextInput {
-                target, param_id, anchor, value, whole_numbers, degrees, ..
-            }) => {
-                let display = if *degrees { value.to_degrees() } else { *value };
-                let initial = if *whole_numbers {
-                    format!("{}", display.round() as i64)
-                } else {
-                    format!("{display:.3}")
-                };
-                self.text_input.begin(
-                    if in_editor { TextInputField::EditorInspectorParam } else { TextInputField::InspectorParam },
-                    &initial,
-                    AnchorRect::new(anchor.x, anchor.y, anchor.width, anchor.height),
-                    11.0,
-                );
-                self.text_input.inspector_param = Some(InspectorParamCtx {
-                    target: target.clone(), param_id: param_id.clone(),
-                    whole_numbers: *whole_numbers, degrees: *degrees,
-                });
-                if in_editor && let Some(editor) = self.graph_editor.as_mut() {
-                    editor.offscreen_dirty = true;
-                }
-            }
-            PanelAction::Root(RootAction::BeginSliderRangeInput { target, param_id, anchor }) => {
-                let tab = if in_editor {
-                    self.graph_editor.as_ref().map(|ed| ed.ui_root.inspector.last_effect_tab())
-                } else {
-                    Some(self.ws.ui_root.inspector.last_effect_tab())
-                };
-                let param = tab
-                    .and_then(|tab| crate::ui_bridge::resolve_graph_target(
-                        target, None, tab, &self.active_layer_id, &self.selection, &self.local_project,
-                    ))
-                    .and_then(|owner| self.local_project.graph_target_owner(&owner)?.params.get(param_id.as_ref()).cloned());
-                let Some(param) = param else { return true };
-                let degrees = param.spec.is_angle;
-                let (lo, hi) = param.slider_span();
-                let shown = |v: f32| if degrees { v.to_degrees() } else { v };
-                self.text_input.begin(
-                    if in_editor { TextInputField::EditorSliderRange } else { TextInputField::SliderRange },
-                    &format!("{} to {}", shown(lo), shown(hi)),
-                    AnchorRect::new(anchor.x, anchor.y, anchor.width, anchor.height),
-                    11.0,
-                );
-                self.text_input.inspector_param = Some(InspectorParamCtx {
-                    target: target.clone(), param_id: param_id.clone(),
-                    whole_numbers: false, degrees,
-                });
-                if in_editor && let Some(editor) = self.graph_editor.as_mut() {
-                    editor.offscreen_dirty = true;
-                }
-            }
-            _ => return false,
+        let tab = match self.graph_editor.as_ref() {
+            Some(ed) if in_editor => ed.ui_root.inspector.last_effect_tab(),
+            _ => self.ws.ui_root.inspector.last_effect_tab(),
+        };
+        if !crate::text_session::begin_inspector_entry(
+            &mut self.text_input,
+            action,
+            in_editor,
+            tab,
+            &self.active_layer_id,
+            &self.selection,
+            &self.local_project,
+        ) {
+            return false;
+        }
+        if in_editor && let Some(editor) = self.graph_editor.as_mut() {
+            editor.offscreen_dirty = true;
         }
         true
     }

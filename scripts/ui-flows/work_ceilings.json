@@ -97,6 +97,15 @@
         "ValuePush": 62
       }
     },
+    "work-browser-search": {
+      "type_query": {
+        "ChromeLayout": 3,
+        "FrameAlloc": 1859,
+        "FullBuild": 1,
+        "SlotInvalidate": 8,
+        "ValuePush": 1
+      }
+    },
     "work-clip-drag": {
       "drag_2s": {
         "ChromeLayout": 369,
@@ -373,6 +382,15 @@
         "ValuePush": 4
       }
     },
+    "work-perform-exit": {
+      "exit_and_settle": {
+        "ChromeLayout": 93,
+        "FrameAlloc": 3269,
+        "FullBuild": 1,
+        "SlotInvalidate": 16,
+        "ValuePush": 1
+      }
+    },
     "work-perform-idle": {
       "idle_2s": {
         "FrameAlloc": 19994,
@@ -493,6 +511,15 @@
         "FullBuild": 60,
         "SlotInvalidate": 480,
         "ValuePush": 60
+      }
+    },
+    "work-text-commit": {
+      "type_and_commit": {
+        "ChromeLayout": 6,
+        "FrameAlloc": 1663,
+        "FullBuild": 1,
+        "SlotInvalidate": 8,
+        "ValuePush": 1
       }
     },
     "work-trigger-shape": {

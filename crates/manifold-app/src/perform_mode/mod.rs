@@ -15,8 +15,8 @@
 //!
 //! See `CLAUDE.md` and the `feedback_*` memories for the safety rules:
 //! - Content thread is never touched.
-//! - Triple-redundant exit detection (button + Escape + output-window
-//!   close hooks + per-frame poll).
+//! - Redundant exit detection (button + output-window close hooks +
+//!   per-frame poll); no key exits, so a stray key cannot drop the HUD.
 //! - Quiesce in-flight UI state on entry; force full rebuild on exit.
 
 pub(crate) mod cue;

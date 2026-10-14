@@ -9,15 +9,20 @@
 //! (entry aborts without one), a surface-sized offscreen, the preview bridge
 //! and a drawable to present; the runner has none of them, so it enters
 //! directly, draws at the fixture's logical size and reads the offscreen back
-//! instead of presenting it.
+//! instead of presenting it. Window input and exit run through the same
+//! handlers: the App from winit events and `about_to_wait`, the runner from
+//! its script.
 
 use std::sync::Arc;
 
 use manifold_core::types::ClockAuthority;
 use manifold_gpu::{GpuDevice, GpuEncoder, GpuLoadAction, GpuTexture};
 use manifold_playback::ableton_bridge::AbletonSession;
+#[cfg(feature = "ui-snapshot")]
+use manifold_ui::hit_targets::{HitTargetEntry, HitTargets};
 use manifold_ui::node::{Rect, Vec2};
 use manifold_ui::text::TextMeasure;
+use manifold_ui_paint::ui_cache_manager::UICacheManager;
 use manifold_ui_paint::ui_renderer::UIRenderer;
 
 use super::{cue, macros as perform_macros, render, tracks, PerformModeState};
@@ -48,6 +53,74 @@ pub(crate) fn enter(
     }
     perform.exit_button_hover = false;
     perform.active = true;
+}
+
+/// Leaves perform mode when an exit is pending (the exit button, or the
+/// output window closing): the frozen tree repaints whole on the first frame
+/// back. The output window stays open, so the audience never goes black. True
+/// when it exited; the caller then rebuilds. The planner compares against the
+/// last normal frame's inputs, so whatever moved during the set re-projects.
+pub(crate) fn take_pending_exit(
+    perform: &mut PerformModeState,
+    ui_root: &mut UIRoot,
+    cache: Option<&mut UICacheManager>,
+) -> bool {
+    if !std::mem::take(&mut perform.pending_exit) || !perform.active {
+        return false;
+    }
+    perform.active = false;
+    perform.exit_button_hover = false;
+    ui_root.tree.mark_all_dirty();
+    if let Some(cm) = cache {
+        cm.invalidate_all();
+    }
+    true
+}
+
+/// The cursor moved over the perform screen: the exit button's hover follows
+/// it. True when the hover changed and the screen must redraw.
+pub(crate) fn pointer_moved(perform: &mut PerformModeState, pos: Vec2) -> bool {
+    let hover = perform.exit_button_rect.contains(pos);
+    let changed = hover != perform.exit_button_hover;
+    perform.exit_button_hover = hover;
+    changed
+}
+
+/// The cursor left the window. True when that cleared the hover.
+pub(crate) fn pointer_left(perform: &mut PerformModeState) -> bool {
+    std::mem::take(&mut perform.exit_button_hover)
+}
+
+/// A left-button release: over the exit button it asks to leave. Every other
+/// click is dropped.
+pub(crate) fn pointer_released(perform: &mut PerformModeState, pos: Vec2) {
+    if perform.exit_button_rect.contains(pos) {
+        perform.pending_exit = true;
+    }
+}
+
+/// Whether perform mode takes (and drops) every key. Hardware controllers and
+/// OSC drive the show, and only the on-screen button exits, so a stray key,
+/// Escape included, cannot drop the HUD mid-set.
+pub(crate) fn takes_keys(perform: &PerformModeState) -> bool {
+    perform.active
+}
+
+/// The exit button as a hit-test surface the automation dump can address
+/// (`UI_AUTOMATION_DESIGN.md` D5). It is drawn immediate-mode, outside any tree.
+/// The ui-snap runner is its one reader.
+#[cfg(feature = "ui-snapshot")]
+pub(crate) struct PerformHitTargets(pub Rect);
+
+#[cfg(feature = "ui-snapshot")]
+impl HitTargets for PerformHitTargets {
+    fn surface_id(&self) -> &'static str {
+        "perform"
+    }
+
+    fn enumerate(&self, out: &mut Vec<HitTargetEntry>) {
+        out.push(HitTargetEntry { kind: "button", label: "Exit".into(), rect: self.0, payload: "exit".into() });
+    }
 }
 
 /// The perform screen's geometry for one frame.
