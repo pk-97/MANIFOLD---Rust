@@ -3,6 +3,7 @@ use crate::ui_renderer::UIRenderer;
 use manifold_ui::automation_hit_tester::AutomationOperation;
 use manifold_ui::bitmap_renderer::timing_grid_lines;
 use manifold_ui::node::{Color32, FontWeight, Rect};
+use manifold_ui::text::TextMeasure;
 use manifold_ui::panels::viewport::AutomationLaneScreen;
 use manifold_ui::{UIState, color};
 use manifold_foundation::{EffectId, ParamId};
@@ -11,10 +12,10 @@ use std::io::Write;
 /// Shortens the END of `text` with "…" until it fits `max_w`; returns the
 /// text to draw and its measured width. A label that fits is borrowed, so the
 /// per-frame paint allocates only when it has to shorten.
-fn elide_end<'a>(ui: &mut UIRenderer, text: &'a str, max_w: f32) -> (std::borrow::Cow<'a, str>, f32) {
+fn elide_end<'a>(measure: &dyn TextMeasure, text: &'a str, max_w: f32) -> (std::borrow::Cow<'a, str>, f32) {
     let size = color::FONT_LABEL;
     let weight = FontWeight::Medium;
-    let w = ui.measure_text_cached(text, size, weight).x;
+    let w = measure.measure_text(text, size, weight).x;
     if w <= max_w {
         return (std::borrow::Cow::Borrowed(text), w);
     }
@@ -22,7 +23,7 @@ fn elide_end<'a>(ui: &mut UIRenderer, text: &'a str, max_w: f32) -> (std::borrow
     while !chars.is_empty() {
         chars.pop();
         let cand: String = chars.iter().collect::<String>() + "…";
-        let w = ui.measure_text_cached(&cand, size, weight).x;
+        let w = measure.measure_text(&cand, size, weight).x;
         if w <= max_w {
             return (std::borrow::Cow::Owned(cand), w);
         }
@@ -166,6 +167,7 @@ fn draw_timing_grid(ui: &mut UIRenderer, lane: &AutomationLaneScreen, graph: Rec
 
 pub fn emit_automation_lanes(
     ui: &mut UIRenderer,
+    measure: &dyn TextMeasure,
     lanes: &[AutomationLaneScreen],
     tracks: Rect,
     selection: Option<&UIState>,
@@ -259,7 +261,7 @@ pub fn emit_automation_lanes(
                 lane.label.as_str().into()
             };
             let avail = (header.width - 16.0).max(0.0);
-            let (shown, shown_w) = elide_end(ui, &full_label, avail);
+            let (shown, shown_w) = elide_end(measure, &full_label, avail);
             ui.draw_text(
                 header.x + header.width - 8.0 - shown_w,
                 r.y + 3.0,
@@ -458,8 +460,8 @@ pub fn emit_automation_lanes(
                     f.value,
                     lane.whole_numbers,
                 );
-                let text_w = ui
-                    .measure_text_cached(readout_text, color::AUTOMATION_LABEL_FONT, FontWeight::Medium)
+                let text_w = measure
+                    .measure_text(readout_text, color::AUTOMATION_LABEL_FONT, FontWeight::Medium)
                     .x;
                 let bubble_w = (text_w + 12.0).min(r.width);
                 let bubble_h = 20.0;

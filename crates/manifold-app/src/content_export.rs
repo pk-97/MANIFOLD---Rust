@@ -10,7 +10,7 @@ use std::cell::{Cell, RefCell};
 use crossbeam_channel::{Receiver, Sender};
 
 use manifold_core::{Beats, Seconds};
-use manifold_playback::engine::TickContext;
+use manifold_playback::engine::PlaybackEngine;
 
 use crate::content_command::ContentCommand;
 use crate::content_state::{ContentState, ExportFinishedEvent};
@@ -47,7 +47,7 @@ fn request_conservative_rt_tiles(_pipeline: &mut crate::content_pipeline::Conten
 pub(crate) struct ExportFrameObservation {
     pub frame_idx: u32,
     pub time_seconds: f64,
-    pub dt_seconds: f64,
+    pub tick_dt: f64,
     pub status: manifold_node_engine::runtime::frame_status::FrameRenderStatus,
     pub rt_updates: manifold_gpu::raytrace::RtAccelUpdate,
     pub rt_dispatches: u32,
@@ -418,9 +418,7 @@ impl ContentThread {
 
         self.commit_automation_recording(true);
         // 1. Save playback state for restore
-        let saved_state = self.engine.current_state();
-        let was_playing = self.engine.is_playing();
-        let saved_beat = self.engine.current_beat();
+        let restore = self.engine.export_restore_point();
 
         // 2. Resolve export range
         let Some(project) = self.engine.project() else {
@@ -488,15 +486,7 @@ impl ContentThread {
             1.0,
         ) {
             log::error!("[ContentThread] Export resize failed: {message}");
-            self.engine.stop();
-            let restore_time = self.engine.beat_to_timeline_time(saved_beat);
-            self.engine.seek_to(restore_time);
-            if was_playing {
-                self.engine.play();
-            } else {
-                self.engine.set_state(saved_state);
-            }
-            self.engine.set_export_mode(false);
+            self.engine.end_export_run(restore);
             self.send_export_finished(
                 state_tx,
                 false,
@@ -558,12 +548,7 @@ impl ContentThread {
             );
             return;
         }
-        self.engine.stop();
-        let restore_time = self.engine.beat_to_timeline_time(saved_beat);
-        self.engine.seek_to(restore_time);
-        if was_playing { self.engine.play(); }
-        else { self.engine.set_state(saved_state); }
-        self.engine.set_export_mode(false);
+        self.engine.end_export_run(restore);
     }
 
     #[cfg(target_os = "macos")]
@@ -780,14 +765,6 @@ impl ContentThread {
             log::warn!("[Export] {resets}. Further GPU hangs are likely until a reboot; reboot before a long export.");
         }
 
-        // Seek to start (export mode was entered and the pipeline resized once
-        // by the caller, before the section loop).
-        let start_time = self
-            .engine
-            .beat_to_timeline_time(Beats(start_beat));
-        self.engine.seek_to(start_time);
-        self.engine.play();
-
         // 4. Create export session (initializes native Metal encoder).
         //    Share the content pipeline's Metal device to avoid cross-device GPU sync.
         let device_ptr = self.content_pipeline.native_device_ptr();
@@ -822,49 +799,33 @@ impl ContentThread {
             }
         };
 
-        // 4b. Wait for video decoders to produce their first frame.
-        // Only ticks the engine (which drives pre_render → decode result drain).
-        // No GPU rendering — we re-seek afterward, clearing all temporal state.
-        // Skipped for generator-only projects (no video decoders to wait for).
-        if !generator_only {
+        // 4b. Seek to start (export mode was entered and the pipeline resized
+        // once by the caller, before the section loop) on the export grid:
+        // frame 0 is the first export-grid frame at or after the start
+        // (FRAME_EXACT_TRANSPORT_DESIGN D9, D17). Video projects first tick
+        // until the decoders have a frame (pre_render drains decode results),
+        // with no GPU rendering; the engine then re-seeks to the start.
+        let start_time = self.engine.beat_to_timeline_time(Beats(start_beat));
+        self.engine.begin_export_run(export_config.fps, start_time, |engine| {
+            if generator_only {
+                return false;
+            }
             const MAX_WARMUP_TICKS: u32 = 120;
             for warmup_i in 0..MAX_WARMUP_TICKS {
-                let warmup_ctx = TickContext {
-                    dt_seconds: Seconds(frame_dt),
-                    realtime_now: Seconds::ZERO,
-                    pre_render_dt: Seconds(frame_dt),
-                    frame_count: u64::MAX,
-                    // Zero: warm-up uses the accumulating clock. The absolute
-                    // export clock (origin + frame_count * dt) starts at the
-                    // frame loop, after the re-seek below.
-                    export_fixed_dt: Seconds::ZERO,
-                };
-                let warmup_result = self.engine.tick(warmup_ctx);
-                self.engine.reclaim_tick_result(warmup_result);
-
-                if self.engine.all_active_clips_ready() {
+                if engine.export_warm_up_tick() {
                     break;
                 }
                 if warmup_i % 30 == 29 {
-                    log::warn!(
-                        "[Export] Still waiting for decoders after {} warmup ticks",
-                        warmup_i + 1,
-                    );
+                    log::warn!("[Export] Still waiting for decoders after {} warmup ticks", warmup_i + 1);
                 }
                 std::thread::sleep(std::time::Duration::from_millis(1));
             }
-            // Re-seek to start — warmup ticks advanced the engine
-            let start_time = self
-                .engine
-                .beat_to_timeline_time(Beats(start_beat));
-            self.engine.seek_to(start_time);
-        }
+            true
+        });
 
         // 5. Export frame loop.
-        //    The engine is parked at the export start; pin that as the clock
-        //    origin so each frame's tick sets time absolutely
-        //    (origin + frame_idx * frame_dt) instead of accumulating dt.
-        self.engine.set_export_origin(start_time);
+        //    The engine is parked on the export start's grid frame; export
+        //    frame k is that frame + k, set exactly whatever the sync state.
         // Project warmup can evaluate a variable number of frames while
         // imported assets load. Restart simulation and RT sampling once per
         // section so those preparation frames cannot affect exported pixels.
@@ -1026,20 +987,12 @@ impl ContentThread {
         generator_only: bool,
         mut offline_audio_mod: Option<&mut crate::offline_audio_mod::OfflineAudioModDriver>,
     ) -> Option<ExportFrameFailure> {
-        // Frame k samples the timeline at export_start + k * frame_dt via the
-        // engine's absolute export clock (origin pinned before the loop), so
-        // frame 0 renders the exact export start and the export spans
-        // [start, end) like the live compositor. dt-driven effect state does
-        // not integrate on the first frame — it renders the state at the
-        // export start, then advances one frame per output frame.
-        let this_dt = if frame_idx == 0 { 0.0 } else { frame_dt };
-        let ctx = TickContext {
-            dt_seconds: Seconds(this_dt),
-            realtime_now: Seconds(frame_idx as f64 * frame_dt),
-            pre_render_dt: Seconds(this_dt),
-            frame_count: frame_idx as u64,
-            export_fixed_dt: Seconds(frame_dt),
-        };
+        // Frame k is the export start's grid frame + k on the song-time-0
+        // export grid, so it samples the same time live play does. dt-driven
+        // effect state does not integrate on the first frame (frames 0): it
+        // renders the state at the export start, then advances one frame per
+        // output frame.
+        let ctx = PlaybackEngine::export_frame_context(frame_idx, Seconds(frame_idx as f64 * frame_dt));
         // P2 (docs/OFFLINE_AUDIO_REACTIVE_EXPORT_DESIGN.md): feed this frame's
         // export-rendered audio through the analyzer chain and write the
         // resulting features into the engine's audio snapshot BEFORE the
@@ -1096,7 +1049,6 @@ impl ContentThread {
             &self.gpu,
             &mut self.engine,
             &tick_result,
-            this_dt,
             frame_idx as u64,
             true,
             self.editing_service.stamps(),
@@ -1251,7 +1203,7 @@ impl ContentThread {
             observe_export_frame(ExportFrameObservation {
                 frame_idx,
                 time_seconds: frame_idx as f64 * frame_dt,
-                dt_seconds: this_dt,
+                tick_dt: self.engine.tick_dt().0,
                 status: manifold_node_engine::runtime::frame_status::FrameRenderStatus::Complete,
                 rt_updates,
                 rt_dispatches,

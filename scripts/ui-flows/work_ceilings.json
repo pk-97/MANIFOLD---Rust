@@ -43,7 +43,6 @@
         "OverviewRepaint": 62,
         "PresetFingerprint": 62,
         "SlotInvalidate": 7,
-        "TextMeasureMiss": 5094,
         "ValuePush": 62
       }
     },
@@ -56,7 +55,6 @@
         "PresetFingerprint": 122,
         "RegionRebuild": 122,
         "SlotInvalidate": 244,
-        "TextMeasureMiss": 11102,
         "ValuePush": 122
       }
     },
@@ -74,7 +72,6 @@
         "ProjectSync": 1,
         "RegionRebuild": 60,
         "SlotInvalidate": 127,
-        "TextMeasureMiss": 5711,
         "ValuePush": 62
       }
     },
@@ -92,7 +89,6 @@
         "PresetFingerprint": 62,
         "ProjectSync": 1,
         "SlotInvalidate": 14,
-        "TextMeasureMiss": 5192,
         "ValuePush": 62
       }
     },
@@ -110,7 +106,6 @@
         "ProjectSync": 2,
         "RegionRebuild": 119,
         "SlotInvalidate": 252,
-        "TextMeasureMiss": 11251,
         "ValuePush": 122
       }
     },
@@ -128,7 +123,6 @@
         "ProjectSync": 2,
         "RegionRebuild": 59,
         "SlotInvalidate": 132,
-        "TextMeasureMiss": 5791,
         "ValuePush": 62
       }
     },
@@ -136,12 +130,12 @@
       "jitter_2s": {
         "ChromeLayout": 360,
         "DriverScan": 120,
-        "FrameAlloc": 19908,
+        "FrameAlloc": 19925,
         "FullBuild": 1,
         "OverviewRepaint": 120,
         "PresetFingerprint": 120,
         "SlotInvalidate": 7,
-        "TextMeasureMiss": 9734,
+        "TextMeasureMiss": 17,
         "ValuePush": 120
       }
     },
@@ -158,7 +152,6 @@
         "PresetFingerprint": 4,
         "ProjectSync": 4,
         "SlotInvalidate": 28,
-        "TextMeasureMiss": 684,
         "ValuePush": 4
       }
     },
@@ -170,7 +163,6 @@
         "OverviewRepaint": 4,
         "PresetFingerprint": 4,
         "SlotInvalidate": 7,
-        "TextMeasureMiss": 436,
         "ValuePush": 4
       }
     },
@@ -187,7 +179,6 @@
         "PresetFingerprint": 31,
         "ProjectSync": 1,
         "SlotInvalidate": 14,
-        "TextMeasureMiss": 2698,
         "ValuePush": 31
       }
     },
@@ -199,7 +190,6 @@
         "OverviewRepaint": 62,
         "PresetFingerprint": 62,
         "SlotInvalidate": 7,
-        "TextMeasureMiss": 5094,
         "ValuePush": 62
       }
     },
@@ -211,7 +201,6 @@
         "OverviewRepaint": 62,
         "PresetFingerprint": 62,
         "SlotInvalidate": 7,
-        "TextMeasureMiss": 5069,
         "ValuePush": 62
       }
     },
@@ -219,13 +208,13 @@
       "follow_2s": {
         "ChromeLayout": 360,
         "DriverScan": 1,
-        "FrameAlloc": 18648,
+        "FrameAlloc": 18768,
         "GridBitmapRepaint": 7,
         "OverviewRepaint": 120,
         "PresetFingerprint": 120,
         "RegionRebuild": 1,
         "SlotInvalidate": 2,
-        "TextMeasureMiss": 9600,
+        "TextMeasureMiss": 120,
         "ValuePush": 120
       }
     },
@@ -238,7 +227,6 @@
         "PresetFingerprint": 122,
         "RegionRebuild": 122,
         "SlotInvalidate": 244,
-        "TextMeasureMiss": 11102,
         "ValuePush": 122
       }
     },
@@ -248,7 +236,6 @@
         "FrameAlloc": 18488,
         "OverviewRepaint": 120,
         "PresetFingerprint": 120,
-        "TextMeasureMiss": 9600,
         "ValuePush": 120
       }
     },
@@ -261,7 +248,6 @@
         "OverviewRepaint": 60,
         "PresetFingerprint": 60,
         "SlotInvalidate": 420,
-        "TextMeasureMiss": 12840,
         "ValuePush": 60
       }
     },
@@ -279,7 +265,6 @@
         "ProjectSync": 60,
         "RegionRebuild": 1,
         "SlotInvalidate": 422,
-        "TextMeasureMiss": 10431,
         "ValuePush": 62
       }
     },
@@ -291,7 +276,6 @@
         "OverviewRepaint": 62,
         "PresetFingerprint": 62,
         "SlotInvalidate": 7,
-        "TextMeasureMiss": 5094,
         "ValuePush": 62
       }
     },
@@ -308,7 +292,6 @@
         "PresetFingerprint": 62,
         "ProjectSync": 1,
         "SlotInvalidate": 7,
-        "TextMeasureMiss": 5051,
         "ValuePush": 62
       }
     },
@@ -326,7 +309,6 @@
         "ProjectSync": 2,
         "RegionRebuild": 59,
         "SlotInvalidate": 132,
-        "TextMeasureMiss": 5791,
         "ValuePush": 62
       }
     },
@@ -338,7 +320,6 @@
         "OverviewRepaint": 4,
         "PresetFingerprint": 4,
         "SlotInvalidate": 28,
-        "TextMeasureMiss": 684,
         "ValuePush": 4
       }
     },
@@ -355,17 +336,16 @@
         "PresetFingerprint": 33,
         "ProjectSync": 3,
         "SlotInvalidate": 21,
-        "TextMeasureMiss": 2913,
         "ValuePush": 33
       }
     },
     "work-playback": {
       "play_2s": {
         "ChromeLayout": 360,
-        "FrameAlloc": 18506,
+        "FrameAlloc": 18523,
         "OverviewRepaint": 120,
         "PresetFingerprint": 120,
-        "TextMeasureMiss": 9600,
+        "TextMeasureMiss": 17,
         "ValuePush": 120
       }
     },
@@ -377,7 +357,6 @@
         "OverviewRepaint": 62,
         "PresetFingerprint": 62,
         "SlotInvalidate": 7,
-        "TextMeasureMiss": 5094,
         "ValuePush": 62
       }
     },
@@ -394,7 +373,6 @@
         "PresetFingerprint": 62,
         "ProjectSync": 60,
         "SlotInvalidate": 420,
-        "TextMeasureMiss": 10420,
         "ValuePush": 62
       }
     },
@@ -411,7 +389,6 @@
         "PresetFingerprint": 1,
         "ProjectSync": 1,
         "SlotInvalidate": 7,
-        "TextMeasureMiss": 171,
         "ValuePush": 1
       }
     },
@@ -423,7 +400,6 @@
         "OverviewRepaint": 62,
         "PresetFingerprint": 62,
         "SlotInvalidate": 7,
-        "TextMeasureMiss": 5076,
         "ValuePush": 62
       }
     },
@@ -435,7 +411,6 @@
         "OverviewRepaint": 122,
         "PresetFingerprint": 122,
         "SlotInvalidate": 427,
-        "TextMeasureMiss": 17934,
         "ValuePush": 122
       }
     },
@@ -447,7 +422,6 @@
         "OverviewRepaint": 9,
         "PresetFingerprint": 9,
         "SlotInvalidate": 21,
-        "TextMeasureMiss": 1122,
         "ValuePush": 9
       }
     },
@@ -459,7 +433,6 @@
         "OverviewRepaint": 60,
         "PresetFingerprint": 60,
         "SlotInvalidate": 420,
-        "TextMeasureMiss": 10260,
         "ValuePush": 60
       }
     },
@@ -471,7 +444,6 @@
         "OverviewRepaint": 62,
         "PresetFingerprint": 62,
         "SlotInvalidate": 7,
-        "TextMeasureMiss": 5094,
         "ValuePush": 62
       }
     },
@@ -488,7 +460,6 @@
         "PresetFingerprint": 1,
         "ProjectSync": 1,
         "SlotInvalidate": 7,
-        "TextMeasureMiss": 214,
         "ValuePush": 1
       }
     },
@@ -505,20 +476,19 @@
         "PresetFingerprint": 1,
         "ProjectSync": 1,
         "SlotInvalidate": 7,
-        "TextMeasureMiss": 214,
         "ValuePush": 1
       }
     },
     "work-zoom": {
       "zoom_30_notches": {
         "ChromeLayout": 90,
-        "FrameAlloc": 9577,
+        "FrameAlloc": 9594,
         "GridBitmapRepaint": 119,
         "OverviewRepaint": 30,
         "PresetFingerprint": 30,
         "RegionRebuild": 30,
         "SlotInvalidate": 60,
-        "TextMeasureMiss": 2730,
+        "TextMeasureMiss": 17,
         "ValuePush": 30
       }
     }

@@ -146,18 +146,19 @@ impl Application {
     // gate's shape (`self.text_input.active`) rather than duplicating a
     // second one per window.
 
-    /// Runs `f` on the text session with the live `UIRenderer`'s measurer —
-    /// the same one the overlay draws with, so pointer and arrow mapping
-    /// match what is on screen. `None` before a renderer exists (a session
-    /// can't be visible then).
+    /// Runs `f` on the text session with the main tree's measurer. Every
+    /// window's tree carries an identical `CachedTextMeasure`, so pointer and
+    /// arrow mapping match what the overlay draws. `None` before a renderer
+    /// exists (a session can't be visible then).
     pub(crate) fn with_text_measure<R>(
         &mut self,
         f: impl FnOnce(&mut crate::text_input::TextInputState, &mut dyn FnMut(&str) -> f32) -> R,
     ) -> Option<R> {
+        self.ui_renderer.as_ref()?;
         let fs = self.text_input.font_size as u16;
-        let r = self.ui_renderer.as_mut()?;
+        let tree = &self.ws.ui_root.tree;
         Some(f(&mut self.text_input, &mut |s| {
-            r.measure_text_cached(s, fs, manifold_ui::FontWeight::Medium).x
+            tree.text_width(s, fs, manifold_ui::FontWeight::Medium)
         }))
     }
 

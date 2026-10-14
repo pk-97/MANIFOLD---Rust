@@ -424,12 +424,12 @@ impl UIRoot {
     pub fn new() -> Self {
         Self {
             // Give the build path real glyph-width measurement (size-to-content)
-            // instead of the heuristic fallback. CoreTextMeasure is GPU-free, so
+            // instead of the heuristic fallback. CachedTextMeasure is GPU-free, so
             // it installs here at construction; both windows' UIRoots get it.
             tree: {
                 let mut tree = UITree::new();
                 tree.set_text_measure(Box::new(
-                    manifold_ui_paint::native_text::CoreTextMeasure::new(),
+                    manifold_ui_paint::native_text::CachedTextMeasure::new(),
                 ));
                 tree
             },

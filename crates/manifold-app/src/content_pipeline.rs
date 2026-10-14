@@ -922,6 +922,10 @@ pub struct ContentPipeline {
     /// The last live `render_content` call's wall time in milliseconds; with
     /// the fence wait, the load that caps live physics intervals.
     last_render_work_ms: f64,
+    /// The dt the last `render_content` handed every graph (D5), for the
+    /// frame-exact app test.
+    #[cfg(test)]
+    last_render_dt: f64,
     /// SCENE_MODIFIER_RT_DESIGN.md section 5.4 (P5): the merged validity of
     /// the last rendered frame — reset at the top of `render_content`, then
     /// merged from the generator wrapper before it drops and the compositor
@@ -1214,6 +1218,8 @@ impl ContentPipeline {
             surface_signal_values: [0; crate::shared_texture::SURFACE_COUNT],
             last_fence_wait_ms: 0.0,
             last_render_work_ms: 0.0,
+            #[cfg(test)]
+            last_render_dt: 0.0,
             last_frame_status: manifold_node_engine::runtime::frame_status::FrameRenderStatus::Complete,
             last_rt_updates: Default::default(),
             last_rt_dispatches: 0,
@@ -1862,6 +1868,11 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
         self.last_render_work_ms = ms;
     }
 
+    #[cfg(test)]
+    pub(crate) fn last_render_dt(&self) -> f64 {
+        self.last_render_dt
+    }
+
     /// Current output resolution (post-upscale).
     pub fn output_dimensions(&self) -> (u32, u32) {
         (self.output_w, self.output_h)
@@ -2177,7 +2188,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
         gpu: &manifold_node_engine::gpu::context::GpuContext,
         engine: &mut PlaybackEngine,
         tick_result: &TickResult,
-        dt: f64,
         frame_count: u64,
         export_mode: bool,
         stamps: manifold_core::change::PartStamps,
@@ -2240,6 +2250,14 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
         // round-trip — so beat phase stays exact over a long show.
         let time_f64 = engine.current_time_double();
         let beat_f64 = engine.current_beat_f64();
+        // The tick's grid frames times one frame, in every transport state
+        // (FRAME_EXACT_TRANSPORT_DESIGN D5). Read here, never passed in, so
+        // no caller can hand graphs a wall-clock dt.
+        let dt = engine.tick_dt().0;
+        #[cfg(test)]
+        {
+            self.last_render_dt = dt;
+        }
 
         // === NATIVE METAL PATH ===
         // When manifold-gpu is initialized, use raw Metal encoding.
