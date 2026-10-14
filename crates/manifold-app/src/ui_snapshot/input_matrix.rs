@@ -44,8 +44,8 @@ const REBUILD: [Projection; 5] = [
 ];
 /// `LiveShapes` stands for the live push's Shapes group, which the planner
 /// runs on the Shapes or the MappingRanges stamp.
-const PUSHES: [Projection; 4] =
-    [Projection::SelectionPush, Projection::ChromePush, Projection::LiveValues, Projection::LiveShapes];
+const PUSHES: [Projection; 5] =
+    [Projection::SelectionPush, Projection::ChromePush, Projection::LiveValues, Projection::LiveShapes, Projection::SceneEyes];
 
 fn planned(plan: &crate::frame_plan::FramePlan, p: Projection) -> bool {
     plan.projections.contains(p)
@@ -123,6 +123,7 @@ fn push(ui: &mut UIRoot, data: &SceneData, which: Projection) {
             data.active,
             LiveGroups { values: false, shapes: true },
         ),
+        Projection::SceneEyes => crate::ui_bridge::sync_scene_outliner_eyes(ui, &data.project),
         other => unreachable!("{other:?} is not a push"),
     }
 }

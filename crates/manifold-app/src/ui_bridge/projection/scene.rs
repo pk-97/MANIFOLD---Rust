@@ -199,6 +199,44 @@ pub fn sync_scene_row_values(ui: &mut UIRoot, project: &Project) {
     }
 }
 
+/// The outliner eyes' in-place push (D22, planned as `SceneEyes`): each eye
+/// reads its write address the way the scene projection does, the binding's
+/// instance slot for a bound row, else the def's node param (default on).
+/// Edit-rate only: the binding lookup allocates.
+pub fn sync_scene_outliner_eyes(ui: &mut UIRoot, project: &Project) {
+    if !ui.scene_setup_panel.is_open() {
+        return;
+    }
+    let Some(layer_id) = ui.scene_setup_panel.live_layer_id().cloned() else {
+        return;
+    };
+    let Some((_, layer)) = project.timeline.find_layer_by_id(layer_id.as_str()) else {
+        return;
+    };
+    let bundled;
+    let def = match layer.generator_graph() {
+        Some(def) => def,
+        None => {
+            bundled = manifold_nodes::bundled_presets::bundled_preset_def(layer.generator_type());
+            let Some(def) = bundled.as_deref() else { return };
+            def
+        }
+    };
+    let inst = layer.gen_params();
+    let mut value_of = |addr: &manifold_ui::panels::scene_setup_panel::RowAddr| {
+        let (scope, node, param) = (addr.scope_path.as_slice(), addr.node_doc_id, addr.param_id.as_str());
+        if let Some(inst) = inst
+            && let Some(id) = crate::ui_bridge::project::scene_binding_id(def, scope, node, param)
+            && inst.params.contains(id.as_str())
+        {
+            return Some(inst.get_base_param(id.as_str()));
+        }
+        let node = crate::ui_bridge::project::find_node_by_scope(def, scope, node)?;
+        Some(node.params.get(param).and_then(crate::editor_bridge::serialized_value_as_f32).unwrap_or(1.0))
+    };
+    ui.scene_setup_panel.sync_outliner_eyes(&mut ui.tree, &mut value_of);
+}
+
 /// The real section strings (SCENE_PANEL_EXPOSURE_CONVERGENCE_DESIGN.md P2
 /// slice 2a) of every exposed control owned by `nodes`, read off the def's
 /// exposure metadata: creation-time and load-time stamping name the same

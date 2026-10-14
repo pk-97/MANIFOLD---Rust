@@ -308,6 +308,8 @@ pub(crate) enum Projection {
     LiveShapes,
     /// Live push, Ableton range bands.
     LiveRanges,
+    /// The Scene outliner eyes, in place.
+    SceneEyes,
     /// Insert cursor, selection band, layer highlight, selected clips.
     SelectionPush,
     /// Transport, sync, settings and macro label displays.
@@ -402,6 +404,9 @@ const DRIVER_READOUT_PARTS: ChangeSet = ChangeSet::of(&[Part::Effects]);
 const PRESET_LIST_PARTS: ChangeSet = ChangeSet::of(&[Part::EmbeddedPresets]);
 const OVERVIEW_PARTS: ChangeSet = ChangeSet::of(&[Part::Clips, Part::Layers]);
 const WAVEFORM_PARTS: ChangeSet = ChangeSet::of(&[Part::Clips]);
+// An eye shows a base value, which only an edit moves. Playback moves the
+// values sequence alone, so the eye push never runs per frame.
+const SCENE_EYE_PARTS: ChangeSet = ChangeSet::of(&[Part::Values, Part::Shapes]);
 
 /// Decide the frame's work from what moved (D6). Pure; equal inputs give an
 /// empty plan.
@@ -478,6 +483,9 @@ pub(crate) fn plan_frame(last: &FrameInputs, next: &FrameInputs) -> FramePlan {
     }
     if moved.contains(Part::MappingRanges) {
         p.insert(Projection::LiveRanges);
+    }
+    if moved.intersects(SCENE_EYE_PARTS) {
+        p.insert(Projection::SceneEyes);
     }
     // The push writes the active layer as well as the selection sets.
     if selection_visual || cursor || active_layer {
@@ -560,7 +568,8 @@ fn plan_regions(
     let mut in_place = RegionMask::NONE;
     let live = projections.contains(Projection::LiveValues)
         || projections.contains(Projection::LiveShapes)
-        || projections.contains(Projection::LiveRanges);
+        || projections.contains(Projection::LiveRanges)
+        || projections.contains(Projection::SceneEyes);
 
     for chrome in [MainRegion::Transport, MainRegion::Header, MainRegion::Footer] {
         if size(chrome) {
@@ -882,6 +891,12 @@ mod tests {
         assert!(runs(&plan(with_parts(&[Part::Values])), Projection::LiveValues));
         assert!(runs(&plan(with_parts(&[Part::Shapes])), Projection::LiveShapes));
         assert!(runs(&plan(with_parts(&[Part::MappingRanges])), Projection::LiveRanges));
+        // The eyes follow base-value edits, not the playback values sequence.
+        assert!(runs(&plan(with_parts(&[Part::Values])), Projection::SceneEyes));
+        assert!(runs(&plan(with_parts(&[Part::Shapes])), Projection::SceneEyes));
+        let mut playback = base();
+        playback.values = 1;
+        assert!(!runs(&plan(playback), Projection::SceneEyes));
         assert!(runs(&plan(with_parts(&[Part::Layers])), Projection::LiveValues));
         let mut next = base();
         next.active_layer = 1;
@@ -1281,6 +1296,7 @@ mod tests {
             Projection::LiveValues,
             Projection::LiveShapes,
             Projection::LiveRanges,
+            Projection::SceneEyes,
             Projection::SelectionPush,
             Projection::ChromePush,
             Projection::DriverReadout,

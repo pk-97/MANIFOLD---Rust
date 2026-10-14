@@ -495,6 +495,10 @@ pub(crate) fn apply_frame_plan(
     if live.any() {
         crate::ui_bridge::push_live(ui_root, project, push.content_state, idx, live);
     }
+    // The inspector projection already built the eyes from the project.
+    if projections.contains(Projection::SceneEyes) && !inspector_sync {
+        crate::ui_bridge::sync_scene_outliner_eyes(ui_root, project);
+    }
     if driver_periods_moved {
         crate::ui_bridge::sync_driver_readouts(ui_root, project, idx);
         if let Some(ed) = editor_ui_root {
