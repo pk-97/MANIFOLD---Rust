@@ -949,6 +949,23 @@ impl PlaybackEngine {
         self.finish_seek(old_beat)
     }
 
+    /// A seed set the segment from the source (D22), so it is a placement
+    /// (D8). A move over half a frame takes a seek's boundary effects: clips
+    /// start and stop at the new beat and video resyncs to it. A smaller one
+    /// re-latches the clip starts only.
+    fn seeded(&mut self, before: f64) {
+        let after = self.follower.beat_at(self.clock.time()).0;
+        let moved = self.follower.duration(Beats(before.min(after)), Beats(before.max(after)));
+        if moved.0 > 0.5 * self.clock.step().0 {
+            let old_beat = self.begin_seek();
+            self.refresh_beat();
+            self.finish_seek(old_beat);
+        } else {
+            self.refresh_beat();
+            self.relatch_clip_starts();
+        }
+    }
+
     /// The tempo map changed under the current frame and time is the master:
     /// keep the frame, take the beat from the new map.
     pub fn rederive_beat(&mut self) {
@@ -1359,9 +1376,14 @@ impl PlaybackEngine {
             if self.tempo == TempoSource::Follow
                 && let Some(sample) = sample
             {
+                let before = self.follower.beat_at(self.clock.time()).0;
                 self.follow_event = self.follower.observe(self.clock.time(), sample);
-                if let FollowEvent::Seek { beat, .. } = self.follow_event {
-                    self.seek_external(beat);
+                match self.follow_event {
+                    FollowEvent::Seek { beat, .. } => {
+                        self.seek_external(beat);
+                    }
+                    FollowEvent::Seeded => self.seeded(before),
+                    FollowEvent::None => {}
                 }
             }
         }
@@ -4181,12 +4203,24 @@ mod tests {
         engine.set_follow_authority(Some(FollowProfile::FAST));
         engine.play();
         let running = engine.transport_epoch();
-        for beat in [0.2, 0.25] {
+        let tick_with = |engine: &mut PlaybackEngine, beat: f64| {
             engine.set_external_sample(ExternalSample { beat, bpm: 120.0, fresh: true, exact: false });
             let result = engine.tick(TickContext { frames: 1, realtime_now: Seconds::ZERO, frame_count: 0 });
             engine.reclaim_tick_result(result);
+        };
+        // The seed lands on the frame's own beat (one frame at 120 BPM), then
+        // ordinary samples follow: no epoch bump.
+        for beat in [1.0 / 30.0, 0.07] {
+            tick_with(&mut engine, beat);
         }
         assert_eq!(engine.transport_epoch(), running);
+        // A seed that moves the beat is a placement (D8): one bump.
+        engine.pause();
+        engine.play();
+        let replayed = engine.transport_epoch();
+        tick_with(&mut engine, 5.0);
+        assert_eq!(engine.transport_epoch(), replayed.wrapping_add(1), "a seed that moves the beat bumps the epoch once");
+        let running = engine.transport_epoch();
         engine.seek_to(Seconds(0.11));
         assert_ne!(engine.transport_epoch(), running);
         let sought = engine.transport_epoch();

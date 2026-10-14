@@ -14,7 +14,7 @@ use manifold_core::project::Project;
 use manifold_core::types::TempoPointSource;
 use manifold_core::{Beats, Bpm, Seconds};
 use manifold_playback::engine::{PlaybackEngine, TickContext};
-use manifold_playback::external_follow::{ExternalSample, FollowProfile};
+use manifold_playback::external_follow::{ExternalSample, FollowEvent, FollowProfile};
 use manifold_playback::external_sync::LinkTempoGuard;
 use manifold_playback::frame_grid::FrameGrid;
 use manifold_playback::midi_clock_sync::tick_filter::{ClockKind, ClockTracker};
@@ -225,6 +225,9 @@ impl Reader for LinkReader {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ClockMsg {
     Start,
+    Continue,
+    /// Song Position Pointer, in sixteenths.
+    Position(u16),
     Tick,
 }
 
@@ -254,6 +257,25 @@ pub fn clock_arrivals(live: &Live, until: f64, seed: u64, stalls: &[(f64, f64)],
         let previous = out.last().map_or(f64::NEG_INFINITY, |m| m.0);
         out.push((at.max(previous), ClockMsg::Tick));
         k += 1;
+    }
+    out
+}
+
+/// Live continuing from `beat` (a whole sixteenth): Song Position Pointer,
+/// Continue, then ticks from that beat, with `clock_arrivals`' jitter.
+pub fn continue_arrivals(live: &Live, until: f64, seed: u64, beat: f64) -> Vec<(f64, ClockMsg)> {
+    let mut rng = Rng(seed | 1);
+    let first = (beat * 24.0).round() as u64;
+    let sent = live.wall_of_beat(beat);
+    let mut out = vec![(sent - 0.002, ClockMsg::Position((beat * 4.0).round() as u16)), (sent - 0.001, ClockMsg::Continue)];
+    for k in first.. {
+        let sent = live.wall_of_beat(k as f64 / 24.0);
+        if sent > until {
+            break;
+        }
+        let at = sent + rng.range(-0.001, 0.001) + rng.gauss(0.0003);
+        let previous = out.last().map_or(f64::NEG_INFINITY, |m| m.0);
+        out.push((at.max(previous), ClockMsg::Tick));
     }
     out
 }
@@ -293,6 +315,8 @@ impl Reader for ClkReader {
             let (at, msg) = self.arrivals[self.next];
             let kind = match msg {
                 ClockMsg::Start => ClockKind::Start,
+                ClockMsg::Continue => ClockKind::Continue,
+                ClockMsg::Position(p) => ClockKind::SongPosition(p),
                 ClockMsg::Tick => ClockKind::Tick,
             };
             let latched = self.link.as_ref().filter(|_| self.guard.latched()).map(|l| l.tempo_at(at));
@@ -483,6 +507,8 @@ pub struct Shown {
     pub beat: f64,
     /// The index moved by something other than `frames`, or the epoch bumped.
     pub jumped: bool,
+    /// A seed set the follower this tick (a placement, not a D6 seek).
+    pub seeded: bool,
     pub epoch: u64,
 }
 
@@ -566,6 +592,7 @@ impl Driver {
             time: self.engine.current_time().0,
             beat: self.engine.frame_beat().0,
             jumped: playing && (index - before != i64::from(frames) || self.engine.transport_epoch() != epoch),
+            seeded: self.engine.follow_event() == FollowEvent::Seeded,
             epoch: self.engine.transport_epoch(),
         }
     }
@@ -586,6 +613,11 @@ impl Meter {
     /// `truth` is the music's beat at the frame's screen instant; `warm`
     /// gates the phase and speed bounds (seeks and backward frames always count).
     pub fn observe(&mut self, shown: Shown, truth: f64, bpm: f64, warm: bool) {
+        // A seed is a placement: the next increment starts a fresh measurement.
+        if shown.seeded {
+            self.prev = None;
+            return;
+        }
         if shown.jumped {
             self.seeks.push(shown.deadline);
             self.prev = None;

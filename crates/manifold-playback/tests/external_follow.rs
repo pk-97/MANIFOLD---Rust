@@ -16,6 +16,8 @@ use manifold_core::project::Project;
 use manifold_core::types::LayerType;
 use manifold_core::{Beats, Bpm, Seconds};
 use manifold_playback::external_follow::{ExternalFollower, ExternalSample, FollowEvent, FollowProfile};
+use manifold_playback::engine::PlaybackEngine;
+use manifold_playback::renderer::{ClipRenderer, StubRenderer};
 use manifold_playback::sync_calibration::CalibratedSource;
 use support::sync_sources::*;
 
@@ -578,4 +580,72 @@ fn no_false_seeks_or_catch_up_in_an_hour() {
         assert_eq!((seeks, opens), (0, 0), "{report}");
         assert!(max_phase_ms <= bound_ms, "{report}");
     }
+}
+
+/// Test 17: A seed that moves the beat is a placement (D8): timecode 0.3 s
+/// off the parked position, Link-started play with MANIFOLD parked mid-bar,
+/// MIDI clock Continue mid-song. Each active clip's video time matches its
+/// beat, and no clip stops and restarts in one tick.
+#[test]
+fn a_seed_that_moves_the_beat_relatches_clips() {
+    let starts = [4.0, 17.0];
+    // Live 0.3 s ahead of MANIFOLD parked at 8 s.
+    let tc_live = Live { start: -8.3, ..Live::new(Tempo::constant(120.0)) };
+    // Live on Link at beat 16, a bar line; MANIFOLD parked mid-bar at beat 18.
+    let link_live = Live { start: -16.0 * 60.0 / 128.0, ..Live::new(Tempo::constant(128.0)) };
+    // Live continues from beat 32, where MANIFOLD is parked.
+    let clk_live = Live { start: -16.0, ..Live::new(Tempo::constant(120.0)) };
+    let cases: [(&str, Box<dyn Reader>, &Live, f64); 3] = [
+        ("timecode 0.3 s ahead", Box::new(TimecodeReader::new(timecode_arrivals(&tc_live, 5.0, 171, 0.040, 0.0, false), 120.0)), &tc_live, 8.0),
+        ("Link-started play, parked mid-bar", Box::new(LinkReader::new(link_live.clone(), 172)), &link_live, 9.0),
+        ("CLK Continue mid-song", Box::new(ClkReader::new(continue_arrivals(&clk_live, 5.0, 173, 32.0))), &clk_live, 16.0),
+    ];
+    let mut failures = Vec::new();
+    for (what, mut reader, live, parked) in cases {
+        let mut driver = Driver::new(engine_with_map(120.0, Some(video_project(&starts))), 17);
+        set_authority(&mut driver.engine, Some(reader.kind()));
+        driver.engine.seek_to(Seconds(parked));
+        driver.engine.play();
+        let ids: [String; 2] = [0, 1].map(|i| driver.engine.project().expect("project").timeline.layers[i].clips[0].id.to_string());
+        let mut counts = clip_counts(&driver.engine, &ids);
+        let (mut worst, mut measured) = (0.0f64, 0u32);
+        while driver.wall() < 2.0 {
+            let shown = driver.step(Some(reader.as_mut()), 0);
+            let now = clip_counts(&driver.engine, &ids);
+            for (i, (before, after)) in counts.iter().zip(&now).enumerate() {
+                if after.0 > before.0 && after.1 > before.1 {
+                    failures.push(format!("{what}: clip {i} stopped and restarted in one tick at {:.3} s", shown.deadline));
+                }
+            }
+            counts = now;
+            let bpm = live.bpm(shown.deadline);
+            for (i, start) in starts.iter().enumerate() {
+                if !stub_video(&driver.engine).is_active(&ids[i]) {
+                    continue;
+                }
+                let clip = driver.engine.project().expect("project").timeline.layers[i].clips[0].clone();
+                let elapsed = driver.engine.get_clip_source_elapsed_seconds(&clip).0;
+                let truth = (shown.beat - start) * 60.0 / bpm;
+                worst = worst.max((elapsed - truth).abs());
+                measured += 1;
+            }
+        }
+        if measured == 0 {
+            failures.push(format!("{what}: no clip was active"));
+        }
+        if worst > STEP / 2.0 {
+            failures.push(format!("{what}: video time off its beat by {:.1} ms", worst * 1000.0));
+        }
+    }
+    assert!(failures.is_empty(), "{failures:#?}");
+}
+
+/// (starts, stops) per clip on the video stub.
+fn clip_counts(engine: &PlaybackEngine, ids: &[String; 2]) -> [(usize, usize); 2] {
+    let stub = stub_video(engine);
+    [0, 1].map(|i| (stub.start_count_for(&ids[i]), stub.stop_count_for(&ids[i])))
+}
+
+fn stub_video(engine: &PlaybackEngine) -> &StubRenderer {
+    engine.renderers()[1].as_any().downcast_ref::<StubRenderer>().expect("renderer 1 is the video stub")
 }
