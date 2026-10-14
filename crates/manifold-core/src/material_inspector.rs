@@ -93,13 +93,7 @@ pub enum MaterialColour {
     Translucency,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub enum RgbChannel {
-    R,
-    G,
-    B,
-}
+pub use manifold_foundation::scene_surface::RgbChannel;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

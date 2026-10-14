@@ -180,6 +180,7 @@ impl ParamCardPanel {
         self.copied_flash.clear();
         self.row_host.resize(0);
         self.row_host.resize(n);
+        self.row_host.index_swatches(&config.rows);
         self.base_values = vec![0.0; n];
         // Preserve the per-param tab choice across rebuilds (UI state); only grow
         // for new params. resolve_active_tab clamps stale choices at build time.
@@ -2016,6 +2017,8 @@ impl ParamCardPanel {
         self.row_value_synced.clear();
         self.row_value_synced.resize(self.rows.len(), false);
         for (id, slot) in slots {
+            // A colour swatch's channels are usually not rows of this card.
+            self.row_host.feed_swatch_channel(id, slot.base);
             let Some(&i) = self.row_id_index.get(id) else {
                 continue;
             };
@@ -2029,6 +2032,7 @@ impl ParamCardPanel {
                 *c = true;
             }
         }
+        self.row_host.paint_swatches(tree);
         for (i, synced) in self.row_value_synced.iter().enumerate() {
             // Unavailable presentation rows deliberately have no parameter
             // address. Real controls still require the manifest join.

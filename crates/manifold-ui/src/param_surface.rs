@@ -74,11 +74,23 @@ pub enum MaterialColour {
     Translucency,
 }
 
+pub use manifold_foundation::scene_surface::RgbChannel;
+
+/// Which colour a swatch edits: a material colour, or a light's colour.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum RgbChannel {
-    R,
-    G,
-    B,
+pub enum ColourGroup {
+    Material(MaterialColour),
+    Light,
+}
+
+/// The three scalar params one swatch writes as a single RGB edit, and the
+/// colour they held at projection time (the swatch's first paint; live
+/// values arrive through the value sync).
+#[derive(Debug, Clone, PartialEq)]
+pub struct RgbMembers {
+    pub group: ColourGroup,
+    pub ids: [ParamId; 3],
+    pub values: [f32; 3],
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -317,9 +329,9 @@ pub struct ParamRow {
     /// gestures turn it into `SceneSetupParamChanged` instead of a plain
     /// manifest-param toggle.
     pub scene_addr: Option<SceneRowAddr>,
-    /// The canonical RGB row keeps the three existing scalar identities so a
-    /// swatch can make one gesture while advanced rows retain their bindings.
-    pub rgb_members: Option<[ParamId; 3]>,
+    /// A row with a colour swatch: the three scalar params it writes as one
+    /// gesture. The channels keep their own rows and bindings.
+    pub rgb_members: Option<RgbMembers>,
     /// An authored external attachment (wire, automation, or host mapping)
     /// that remains meaningful even when the current frame flags are dormant.
     /// Material feature visibility and seed writes use this projection fact.
@@ -427,8 +439,8 @@ pub enum RowRole {
     RelightHeightBtn,
     /// Relight: one of the six knob slider bundles.
     RelightSlider,
-    /// Shared RGB swatch over the three existing scalar parameter slots.
-    ColourSwatch(MaterialColour),
+    /// Colour swatch over the row's `rgb_members`: opens the colour menu.
+    ColourSwatch(ColourGroup),
     /// Optional material feature header/toggle.
     MaterialFeatureToggle(MaterialFeature),
     /// Friendly material placement control backed by the six matrix rows.

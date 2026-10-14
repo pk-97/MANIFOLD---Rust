@@ -93,6 +93,11 @@ pub(crate) enum DragOwner {
 #[derive(Debug, Clone)]
 pub enum DropdownContext {
     LayerContext(manifold_core::LayerId), // survives only for its color swatches (text items are typed)
+    /// A row's colour menu: a picked colour is one RGB write to these ids.
+    Colour {
+        target: manifold_ui::panels::GraphParamTarget,
+        param_ids: [manifold_core::effects::ParamId; 3],
+    },
 }
 
 /// Fine-grained tracking of what scroll-related state changed.

@@ -972,6 +972,7 @@ fn author_mesher_scene(params: &mut [manifold_core::effect_graph_def::ParamSpecD
                 card_label: CardLabel::Param,
                 gate: None,
                 switch: None,
+                colour: None,
             });
         }
     }

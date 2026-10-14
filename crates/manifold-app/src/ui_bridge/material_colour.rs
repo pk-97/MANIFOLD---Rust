@@ -1,4 +1,5 @@
-//! Guard the already-previewed RGB transaction at the content-thread boundary.
+//! Guard the already-previewed RGB transaction (a material or light colour)
+//! at the content-thread boundary.
 use manifold_core::{GraphTarget, PresetTypeId, effects::ParamId, project::Project};
 use manifold_editing::{
     command::{Command, CompositeCommand},
@@ -42,7 +43,7 @@ impl ChangeMaterialColourCommand {
             baseline,
             live,
             expected: live,
-            inner: CompositeCommand::new(commands, "Change material colour".into()),
+            inner: CompositeCommand::new(commands, "Change colour".into()),
             rejected: false,
         }
     }
@@ -100,14 +101,18 @@ impl Command for ChangeMaterialColourCommand {
         self.inner.undo(project);
     }
     fn description(&self) -> &str {
-        "Change material colour"
+        "Change colour"
+    }
+    /// Three base values, on execute, rollback and undo alike.
+    fn touches(&self) -> manifold_core::change::ChangeSet {
+        manifold_core::change::ChangeSet::of(&[manifold_core::change::Part::Values])
     }
     fn was_applied(&self) -> bool {
         !self.rejected && self.inner.was_applied()
     }
     fn rejection_reason(&self) -> Option<&str> {
         if self.rejected {
-            Some("Material colour or its ownership changed during the gesture")
+            Some("Colour or its ownership changed during the gesture")
         } else {
             self.inner.rejection_reason()
         }

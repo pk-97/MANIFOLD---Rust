@@ -194,4 +194,28 @@ pub struct SceneParamDesc {
     pub gate: Option<Gate>,
     /// This row turns the feature on and off.
     pub switch: Option<Feature>,
+    /// One channel of its item's colour. The card's colour swatch writes
+    /// the item's three channels as one edit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub colour: Option<RgbChannel>,
+}
+
+/// One channel of an RGB colour stored as three scalar params.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RgbChannel {
+    R,
+    G,
+    B,
+}
+
+impl RgbChannel {
+    /// Position in an `[r, g, b]` triple.
+    pub fn index(self) -> usize {
+        match self {
+            Self::R => 0,
+            Self::G => 1,
+            Self::B => 2,
+        }
+    }
 }
