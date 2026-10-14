@@ -83,7 +83,7 @@ Slow flows come from agents re-deriving what the lead already knows. Every lane 
 
 - **Established findings** with file:line anchors. Never send an agent exploring for what the lead already knows.
 - **Exact scope**: the files it may touch; read-only profile for investigations.
-- **The gate commands** it must run and what "done" means. Lanes run each check once to the end, fix every failure it shows, then rerun only those failures by name; still red after that → stop and report verbatim. No repeated full runs; the one `--cheap` gate run is reused at landing.
+- **The gate commands** it must run and what "done" means. Lanes run each check once to the end, fix every failure it shows, then rerun only those failures by name; still red after that → stop and report verbatim. No repeated full runs; the one `--cheap` gate run is reused at landing. UI flows: a lane runs only the flows its change adds or edits, by name, never a family (`scene`) or the full suite; the landing gate runs the mapped set once. A flow red on main sits in the manifest's `expected_fail` with its bead, so it never forces a named-red rerun.
 - **Prescriptive imperatives** ("Run `cargo clippy -p manifold-ui -- -D warnings`", "Read `path:line`"), not "check X". Sonnet skips tool calls on soft phrasing.
 - **The reference to port from**, when one exists, and the instruction to name every deviation.
 - **The source and everything made from it.** Name the file that defines the contract and every file generated from or checked against it: builder, shipped JSON, catalog, UI flows, goldens. Regenerate from the source. A golden is refreshed only for a change the brief names, never because it fails.
