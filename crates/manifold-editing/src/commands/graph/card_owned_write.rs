@@ -312,6 +312,67 @@ mod tests {
         );
     }
 
+    /// UI_INVALIDATION D21/D22, BUG-z8kla (row-deciding node params): a
+    /// continuous value declares Values only; a discrete value (a body's
+    /// `enabled`) or a value bound to a card switch decides which rows exist,
+    /// so it declares Effects too. Execute and undo agree.
+    #[test]
+    fn row_deciding_node_param_declares_effects() {
+        use manifold_core::change::{ChangeSet, Part};
+        use manifold_core::scene_surface::{
+            CardLabel, ControlGroup, Feature, SceneParamDesc, SurfaceRole,
+        };
+        let plain_set = ChangeSet::of(&[Part::Overrides, Part::Shapes, Part::Values]);
+        let rows_set = ChangeSet::of(&[Part::Overrides, Part::Shapes, Part::Values, Part::Effects]);
+        let (mut project, fx) = project_with_card_owned(false, true);
+        let set = |name: &str, value| {
+            SetGraphNodeParamCommand::new(
+                GraphTarget::Effect(fx.clone()),
+                1,
+                name.to_string(),
+                value,
+                card_owned_def(false),
+            )
+        };
+
+        let mut plain = set("amount", SerializedParamValue::Float { value: 0.5 });
+        plain.execute(&mut project);
+        assert_eq!(plain.touches(), plain_set, "a plain bound value");
+        plain.undo(&mut project);
+        assert_eq!(plain.touches(), plain_set, "undo agrees");
+
+        let mut unbound = set("radius", SerializedParamValue::Float { value: 0.5 });
+        unbound.execute(&mut project);
+        assert_eq!(unbound.touches(), plain_set, "a plain unbound value");
+
+        let mut flag = set("enabled", SerializedParamValue::Bool { value: false });
+        flag.execute(&mut project);
+        assert_eq!(flag.touches(), rows_set, "a flag decides rows");
+        flag.undo(&mut project);
+        assert_eq!(flag.touches(), rows_set, "undo agrees");
+
+        let mut choice = set("select", SerializedParamValue::Enum { value: 1 });
+        choice.execute(&mut project);
+        assert_eq!(choice.touches(), rows_set, "a switch selection decides rows");
+
+        project.find_effect_by_id_mut(&fx).unwrap().params.get_mut("amount").unwrap().spec.scene =
+            Some(SceneParamDesc {
+                role: SurfaceRole::Setup,
+                group: ControlGroup::DepthOfField,
+                band: None,
+                card_order: 0,
+                card_label: CardLabel::Param,
+                gate: None,
+                switch: Some(Feature::DepthOfField),
+                colour: None,
+            });
+        let mut switch = set("amount", SerializedParamValue::Float { value: 0.5 });
+        switch.execute(&mut project);
+        assert_eq!(switch.touches(), rows_set, "bound to a card feature switch");
+        switch.undo(&mut project);
+        assert_eq!(switch.touches(), rows_set, "undo agrees");
+    }
+
     /// BUG-1l7f: the write-site warning fires exactly for a param a card
     /// binding owns with an AUTHORED default — not for mirrored defaults
     /// (BUG-ji6q: they don't plant, the node write stands), not for

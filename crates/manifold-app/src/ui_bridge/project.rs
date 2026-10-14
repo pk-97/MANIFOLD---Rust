@@ -882,7 +882,7 @@ pub(super) fn dispatch_project(
                         target, physics.body_node_id, "enabled".into(),
                         manifold_core::effect_graph_def::SerializedParamValue::Bool { value: enabled },
                         default,
-                    ).with_scope(physics.body_scope_path).with_sets_rows())
+                    ).with_scope(physics.body_scope_path))
                 } else if enabled {
                     Box::new(manifold_editing::commands::graph::EnableSceneObjectPhysicsCommand::new(
                         target, *render_scene_node_id, *object_index,
