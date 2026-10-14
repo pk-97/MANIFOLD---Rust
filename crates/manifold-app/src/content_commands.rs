@@ -794,23 +794,13 @@ impl ContentThread {
             ContentCommand::ExecuteSelecting(..) => unreachable!("selection request normalized above"),
             ContentCommand::Shutdown => return true,
 
-            ContentCommand::WatchEffectGraph(effect_id) => {
+            ContentCommand::WatchEffectGraph(_)
+            | ContentCommand::WatchGeneratorGraph(_)
+            | ContentCommand::WatchGraphTarget(_) => {
                 self.content_pipeline.set_scene_viewport_request(None);
                 // One unified watched target; only one canvas active at a time.
-                self.watched_graph_target = effect_id.map(manifold_core::GraphTarget::Effect);
+                self.watched_graph_target = crate::graph_snapshot::watch_command_target(&cmd).flatten();
                 // Switching what's watched invalidates any node preview.
-                self.preview_graph_node = None;
-                self.modifier_preview_context = None;
-            }
-            ContentCommand::WatchGeneratorGraph(layer_id) => {
-                self.content_pipeline.set_scene_viewport_request(None);
-                self.watched_graph_target = layer_id.map(manifold_core::GraphTarget::Generator);
-                self.preview_graph_node = None;
-                self.modifier_preview_context = None;
-            }
-            ContentCommand::WatchGraphTarget(target) => {
-                self.content_pipeline.set_scene_viewport_request(None);
-                self.watched_graph_target = target.filter(|target|target.host_target().is_some());
                 self.preview_graph_node = None;
                 self.modifier_preview_context = None;
             }

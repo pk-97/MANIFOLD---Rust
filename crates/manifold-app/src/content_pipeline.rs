@@ -4356,31 +4356,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
     pub fn last_gpu_poll_ms(&self) -> f64 {
         self.gpu_poll_ms
     }
-
-    /// Snapshot of the catalog-default graph for an effect type — the
-    /// fallback path when an [`PresetInstance`] has no per-card
-    /// override (`instance.graph` is `None`). Delegates to the
-    /// compositor's `graph_snapshot_for`, which walks the live
-    /// processors and returns the first matching one's
-    /// `graph_snapshot()`. Per-card divergence is handled higher up in
-    /// [`ContentThread::graph_snapshot`].
-    pub fn graph_snapshot_for(
-        &self,
-        type_id: &manifold_core::PresetTypeId,
-    ) -> Option<manifold_node_engine::snapshot::GraphSnapshot> {
-        self.compositor.graph_snapshot_for(type_id)
-    }
-
-    /// Outer-card → inner-node routings for the given effect type.
-    /// Used to populate `GraphSnapshot::outer_routings` on the
-    /// per-card (`from_def`) path, where the snapshot doesn't go
-    /// through `graph_snapshot_for`.
-    pub fn outer_routings_for(
-        &self,
-        type_id: &manifold_core::PresetTypeId,
-    ) -> Vec<manifold_node_engine::snapshot::OuterParamRouting> {
-        self.compositor.outer_routings_for(type_id)
-    }
 }
 
 #[cfg(test)]

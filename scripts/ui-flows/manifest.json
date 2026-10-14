@@ -230,7 +230,28 @@
     ],
     "crates/manifold-app/src/editor_frame.rs": [
       "work-editor-open",
-      "work-editor-idle"
+      "work-editor-idle",
+      "work-node-param-drag",
+      "work-mapping-drawer"
+    ],
+    "crates/manifold-app/src/editor_input.rs": [
+      "work-editor-open",
+      "work-node-param-drag",
+      "work-mapping-drawer"
+    ],
+    "crates/manifold-app/src/editor_bridge.rs": [
+      "work-editor-open",
+      "work-editor-idle",
+      "work-node-param-drag",
+      "work-mapping-drawer"
+    ],
+    "crates/manifold-app/src/graph_snapshot.rs": [
+      "work-editor-open",
+      "work-editor-idle",
+      "work-node-param-drag"
+    ],
+    "crates/manifold-ui/src/graph_canvas/mapping_popover.rs": [
+      "work-mapping-drawer"
     ],
     "crates/manifold-app/src/perform_mode/": [
       "work-perform-idle",
@@ -350,6 +371,8 @@
     "scene-light-swatch": "gltfscene",
     "work-editor-open": "paramsteps",
     "work-editor-idle": "paramsteps",
+    "work-node-param-drag": "paramsteps",
+    "work-mapping-drawer": "paramsteps",
     "work-perform-idle": "timeline",
     "scene-fluid-authoring": "fluidauthoring",
     "scene-fluid-template": "fluidauthoring",
