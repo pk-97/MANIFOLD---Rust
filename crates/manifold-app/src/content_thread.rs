@@ -2321,6 +2321,56 @@ mod tests {
         );
     }
 
+    /// BUG-0u1al (Link-initiated Play never caches the Link beat offset),
+    /// FRAME_EXACT_TRANSPORT_DESIGN P3 test 9: after a Stop, MANIFOLD sits at
+    /// beat 10 and Link starts playing at its beat 37.3. The offset rounds to
+    /// Link's quantum, so MANIFOLD's bar lines up with Link's, and Link then
+    /// steers for a minute within Link's 1 ms bound (D15).
+    #[test]
+    fn link_started_play_aligns_to_the_bar_and_steers() {
+        use manifold_core::types::{ClockAuthority, TempoPointSource};
+        use manifold_core::{Beats, Bpm};
+        use manifold_playback::link_sync::{LinkSyncController, SimulatedLink};
+        use std::time::Duration;
+        let mut project = Project::default();
+        project.settings.bpm = Bpm(120.0);
+        project.tempo_map.add_or_replace_point(Beats::ZERO, Bpm(120.0), TempoPointSource::Unknown, 0.001);
+        let mut thread = headless_content_thread(project, 64, 64);
+        let (state_tx, _state_rx) = crossbeam_channel::unbounded();
+        let step = Duration::from_secs_f64(1.0 / 60.0);
+        let anchor = std::time::Instant::now() + step;
+        let at = |k: u32| anchor + step * k + step.mul_f64(0.3);
+        // Link's beat is 37.3 when it starts playing, 600 frames in.
+        let session = SimulatedLink { at: anchor, beat: 37.3 - 10.0 * 2.0, tempo: 120.0, peers: 1, playing: false };
+        let mut link = LinkSyncController::new();
+        link.simulate(session);
+        thread.transport_controller.link_sync = Some(link);
+        thread.handle_command(ContentCommand::Stop);
+        thread.handle_command(ContentCommand::SeekToBeat(Beats(10.0)));
+        let mut k = 0;
+        while k < 600 {
+            thread.tick_frame_at(at(k), &state_tx);
+            k += 1;
+        }
+        assert!(!thread.engine.is_playing(), "MANIFOLD waits at beat 10");
+        thread.transport_controller.link_sync.as_mut().unwrap().simulate(SimulatedLink { playing: true, ..session });
+        let mut worst_ms: f64 = 0.0;
+        for _ in 0..3_600 {
+            thread.tick_frame_at(at(k), &state_tx);
+            k += 1;
+            assert_eq!(thread.engine.project().unwrap().settings.clock_authority, ClockAuthority::Link);
+            if k < 600 + 300 {
+                continue;
+            }
+            assert!(thread.engine.is_playing(), "Link's play started MANIFOLD");
+            let link_beat = session.beat_at(thread.link_sample_at);
+            let diff = link_beat - thread.engine.frame_beat().0;
+            let folded = (diff + 2.0).rem_euclid(4.0) - 2.0;
+            worst_ms = worst_ms.max(folded.abs() * 60.0 / 120.0 * 1000.0);
+        }
+        assert!(worst_ms <= 1.0, "MANIFOLD's bar is {worst_ms:.2} ms off Link's (mod 4 beats)");
+    }
+
     /// BUG-mmct0.5 (MIDI recording commits bypass EditingService): a recorded
     /// take commits through the gateway, so the UI receives it and Cmd+Z
     /// removes it.
