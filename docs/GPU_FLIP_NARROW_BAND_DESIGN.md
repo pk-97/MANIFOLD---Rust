@@ -153,7 +153,7 @@ slot session, so compile success cannot establish conservation or performance.
 
 Each stage follows edit → cargo check → small CPU proof → clippy `-D warnings`
 → lead review. Peter's current instruction leaves S2/S3 uncommitted and forbids
-pushes from this session. Every cargo command has `CARGO_BUILD_JOBS=4`; tests have
+pushes from this session. Tests have
 a filter. Never run GPU tests or the app in this session.
 
 **S1 — independent math and isolated passes (committed, GPU-green per Peter).** Entry: verify branch and base,
@@ -181,7 +181,7 @@ exercise sorter compaction. These new GPU proofs have not been executed here.
 Run the compiled GPU proofs only on a GPU-capable lane, from slot-4:
 
 ```sh
-CARGO_BUILD_JOBS=4 RUSTC_WRAPPER= scripts/gpu_queue.py --label gpu-flip-narrow-band -- cargo test --manifest-path '/Users/peterkiemann/MANIFOLD - Rust/.claude/worktrees/slot-4/Cargo.toml' -p manifold-nodes --lib --features gpu-proofs narrow_band -- --test-threads=1
+RUSTC_WRAPPER= scripts/gpu_queue.py --label gpu-flip-narrow-band -- cargo test --manifest-path '/Users/peterkiemann/MANIFOLD - Rust/.claude/worktrees/slot-4/Cargo.toml' -p manifold-nodes --lib --features gpu-proofs narrow_band -- --test-threads=1
 ```
 
 **S2 — step integration.** Entry: S1 gates passed; re-read `StepState::encode`

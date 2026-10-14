@@ -190,7 +190,7 @@ These are required implementation checks, not claims of passes here.
 ## 5. Phasing
 
 Each phase rechecks its cited anchors and section 3's inventory. Use
-`CARGO_BUILD_JOBS=4`, one cargo command at a time, focused check/clippy/module
+one cargo command at a time, focused check/clippy/module
 tests and the standard landing gate. Compile outside the GPU lock; serialize
 GPU execution through `scripts/gpu_queue.py` or the owning proof gate. No
 whole-crate sweep. Every persistent phase verifies save/reload and bindings.

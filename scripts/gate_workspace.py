@@ -197,7 +197,7 @@ class Workspace:
             command = ['cargo', 'metadata', '--no-deps', '--format-version', '1',
                        '--manifest-path', str(self.repo / 'Cargo.toml')]
             result = subprocess.run(command, capture_output=True, text=True, timeout=30,
-                                    env=dict(os.environ, CARGO_BUILD_JOBS='4', RUSTC_WRAPPER=''))
+                                    env=dict(os.environ, RUSTC_WRAPPER=''))
             if result.returncode:
                 raise ValueError('cargo metadata failed: ' + result.stderr.strip())
             metadata = json.loads(result.stdout)

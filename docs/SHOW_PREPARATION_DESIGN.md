@@ -142,7 +142,7 @@ Each phase requires a separate implementation brief with exact signatures, curre
 
 **P6 — Release acceptance at show scale.** Entry: all features above and meaningful instrumentation. Deliver bounded automated long-show scheduling tests plus real release transition measurements for Corrosion and a held-out large show. Include first load, cache reuse and forced eviction in the automated fixture suite; verify every scheduled boundary, not only the opening minute. A real-time duration rehearsal remains necessary evidence for sustained streaming/thermal behavior; accelerated boundary coverage does not replace it. No claim of zero hitches until observed. L3 automated target and Peter's L4 performance acceptance.
 
-For each implementation phase run focused clippy/tests once after changes, the GPU proof gate for GPU paths, and required landing checks through `scripts/land_branch.py`. Test fixture design must bound GPU executions under AGENTS.md. No broad rendering or repeated manual crash reproduction is authorized by this draft. Draft validation itself requires references and diff checks, no app build.
+For each implementation phase run focused clippy/tests once after changes, the GPU proof gate for GPU paths, and required landing checks through `scripts/land_branch.py`. Test fixture design must bound GPU executions under CLAUDE.md. No broad rendering or repeated manual crash reproduction is authorized by this draft. Draft validation itself requires references and diff checks, no app build.
 
 ## 9. Decided direction — preserve in implementation briefs
 

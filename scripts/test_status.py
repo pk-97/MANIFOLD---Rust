@@ -12,9 +12,9 @@ import status
 
 class BlockTests(unittest.TestCase):
     def test_lanes_block_caps_lines_and_keeps_summary(self):
-        out = "\n".join(f"WARN item {i}" for i in range(10)) + "\nfleet-health: 2 Astra running, 10 item(s)\n"
+        out = "\n".join(f"WARN item {i}" for i in range(10)) + "\nfleet-health: 10 item(s)\n"
         lines = status.lanes_block(lambda cmd, t: out)
-        self.assertEqual(lines[0], "lanes: fleet-health: 2 Astra running, 10 item(s)")
+        self.assertEqual(lines[0], "lanes: fleet-health: 10 item(s)")
         self.assertLessEqual(len(lines), 1 + status.MAX_DETAIL)
 
     def test_gpu_block_first_line(self):

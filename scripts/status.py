@@ -32,7 +32,7 @@ def run(cmd, timeout):
 
 
 def lanes_block(runner=run):
-    lines = runner([sys.executable, str(HERE / "fleet_health.py"), "--no-mark"], SOURCE_TIMEOUT).splitlines()
+    lines = runner([sys.executable, str(HERE / "fleet_health.py")], SOURCE_TIMEOUT).splitlines()
     lines = [l for l in lines if l.strip()]
     if not lines:
         return ["lanes: no output"]

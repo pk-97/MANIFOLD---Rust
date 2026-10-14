@@ -17,7 +17,7 @@ from gate_workspace import Workspace
 class PlannerTests(unittest.TestCase):
     def test_worktree_safety_checks_are_selected(self):
         repo = Path(__file__).resolve().parents[1]
-        for path in ("scripts/agent-worktree.py", "scripts/codex_brokers.py", "scripts/test_agent_worktree.py"):
+        for path in ("scripts/agent-worktree.py", "scripts/test_agent_worktree.py"):
             checks = codex_checks.tooling_checks(repo, [path])
             self.assertEqual([c["name"] for c in checks],
                              ["scripts/test_agent_worktree.py", "scripts/test_dev.py"])
@@ -110,9 +110,9 @@ class PlannerTests(unittest.TestCase):
         self.assertNotIn('--no-fail-fast', build['argv'])
         self.assertIn('--no-fail-fast', run['argv'])
         self.assertNotIn('--no-run', run['argv'])
-        self.assertEqual(run['argv'][:5], ['env', 'CARGO_BUILD_JOBS=4', 'python3',
+        self.assertEqual(run['argv'][:3], ['python3',
                                          str(Path(__file__).resolve().parent / 'gpu_queue.py'), '--'])
-        self.assertEqual(build['argv'][:3], ['env', 'CARGO_BUILD_JOBS=4', 'cargo'])
+        self.assertEqual(build['argv'][0], 'cargo')
         self.assertLess([c['name'] for c in checks].index(build['name']),
                         [c['name'] for c in checks].index(run['name']))
 
@@ -131,9 +131,9 @@ class PlannerTests(unittest.TestCase):
 
     def test_real_package_and_tooling_scopes(self):
         repo = Path(__file__).resolve().parents[1]
-        plan = codex_checks.build_plan(repo, ["scripts/codex_usage.py"])
+        plan = codex_checks.build_plan(repo, ["scripts/fleet_health.py"])
         self.assertEqual([Path(c["argv"][-1]).name for c in plan["checks"]],
-                         ["test_codex_usage.py", "test_dev.py"])
+                         ["test_dev.py", "test_fleet_health.py"])
         plan = codex_checks.build_plan(repo, ["crates/manifold-ui/src/param_surface.rs"])
         self.assertIn("manifold-ui", plan["packages"])
         self.assertTrue(all("--manifest-path" in c["argv"] for c in plan["checks"] if "cargo" in c["argv"]))
