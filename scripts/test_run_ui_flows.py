@@ -302,6 +302,25 @@ class PathTriggerTests(unittest.TestCase):
     def test_project_rs_selects_nothing(self):
         self.assertEqual(self.select("crates/manifold-app/src/ui_bridge/project.rs"), [])
 
+    def test_non_app_paths_select_nothing(self):
+        # BUG-vqpbi (flow gate builds for no-app landings): the lane/rule-drift diff.
+        paths = (
+            ".claude/GIT_TREE_DISCIPLINE.md", ".claude/hooks/preToolUseBash.py",
+            ".claude/hooks/enforcement-table.json", ".claude/hooks/context-nudges/test-scope.md",
+            "CLAUDE.md", "docs/AGENT_ROUTING.md", "scripts/TOOLS.md", "scripts/dev.py",
+            "scripts/fleet_health.py", "scripts/land_branch.py", "scripts/run_ui_flows.py",
+            "scripts/ui-flows/manifest.json", "scripts/ui-flows/work_ceilings.json",
+            "tools/audio_analysis/lab/preflight.py", ".beads/issues.jsonl",
+        )
+        self.assertEqual(self.select(*paths), [])
+
+    def test_triggers_are_app_source_only(self):
+        for prefix in self.manifest["path_triggers"]:
+            self.assertTrue(prefix.startswith("crates/"), prefix)
+
+    def test_touched_flow_file_selects_itself(self):
+        self.assertEqual(self.select("scripts/ui-flows/drag-clip.json"), ["drag-clip"])
+
     def test_test_only_paths_select_nothing(self):
         for path in (
             "crates/manifold-ui/src/panels/scene_setup_panel/tests/a.rs",

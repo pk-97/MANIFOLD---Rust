@@ -18,7 +18,7 @@ You don't persist between sessions. This file is what tomorrow's instance gets f
 
 ## How every session works
 
-- The lead orchestrates; agents do the work (Peter, 2026-10-13). The main session talks with Peter, decides, briefs, reviews and lands. Every edit, investigation, long read, probe and command run goes to an agent: Opus for judgment (diagnosis, GPU, design-sensitive changes, reviews, audits), Sonnet for decided, directed tasks, Haiku for retrieval and running a given command. Always the newest variant. The lead reads only to review. Roster and briefs: `docs/AGENT_ROUTING.md`.
+- The lead orchestrates; agents do the big work. The point is keeping the main session's context small, not keeping its hands clean. Anything that would pull a lot into the lead's context goes to an agent: investigations, long or multi-file reads, builds and test runs, probes, multi-file edits, reviews. Opus for judgment (diagnosis, GPU, design-sensitive changes, reviews, audits), Sonnet for decided, directed tasks, Haiku for retrieval and running a given command. Always the newest variant. Small things the lead does itself: a quick lookup, one short command, a small edit to a doc or rule. An agent starts with about 70k tokens of context before it does anything, so delegating a one-minute job costs more than doing it. Roster and briefs: `docs/AGENT_ROUTING.md`.
 - No inline python, read-only included: `python3 -c`, `python3 -` and heredocs are denied. Edit files with Edit/Write, read JSON with `jq`, run throwaway python as a scratchpad file (shebang, `chmod +x`) by its path.
 - No `cd`, not even as a prefix (`cd /tmp;`, `cd /dev/null;`). Use absolute paths, `git -C`, `--manifest-path`, or a subshell (`(cd X && cmd)`).
 - Never wait in the foreground. Long commands run with `run_in_background`; follow gates and landings with `scripts/watch_land.py` and anything else with the Monitor tool. No sleep loops, `kill -0` polls or sleep-then-tail.
@@ -51,7 +51,7 @@ Rationale and incident history live in `.claude/GIT_TREE_DISCIPLINE.md`, the poi
 - **Memory is rules, not history** — hook-enforced (`memory-history-guard.py` is the spec): status goes to beads or the board, history stays in git; closed handoffs are deleted, not archived.
 - **Commit with a pathspec, never the index** — hook-denied (`index_add_guard`): `git add -- <paths>` for new files, `git commit -m '…' -- <paths>`. Mechanics: `.claude/GIT_TREE_DISCIPLINE.md` section 3b (Commit with a pathspec).
 - **`main` is the merge-based trunk.** Work on `wave/`/`lane/`/`feat/` branches; land with `scripts/land_branch.py` (fetch, merge main in, gate, no-ff merge, push). Never cherry-pick or re-commit content that exists on a live branch; never delete a branch until `git merge-base --is-ancestor <tip> origin/main` passes. Rewrites of main ask (hook); a manual merge, push or update-ref of an ungated tree to main is hook-denied (`land_pass_guard` is the spec; only `.beads/`+`docs/`+`.claude/hooks/` changes go direct). Protocol: `.claude/GIT_TREE_DISCIPLINE.md` section 2 (Landing protocol).
-- **Agent worktrees come from the slot ring only** — hook-enforced (`worktree-guard.py` is the spec). `scripts/agent-worktree.py acquire <task-label> <branch>`, one per workstream; verify the base tip before working; release at session end; `POOL FULL` is a loud stop.
+- **Agent worktrees come from the slot ring only** — hook-enforced (`worktree_add_guard` in `preToolUseBash.py` and `agent-worktree-isolation-guard.py` are the spec). `scripts/agent-worktree.py acquire <task-label> <branch>`, one per workstream; verify the base tip before working; release at session end; `POOL FULL` is a loud stop.
 - **One writer per worktree.** An agent that asked a question or reported "completed" may still be editing — check it has really stopped before launching another into that slot. A refused or unrun test is not a pass; report it as unverified.
 
 ## Two-thread model
@@ -77,7 +77,7 @@ No per-frame allocations on hot paths (engine tick, sync, rendering). Pre-alloca
 
 ## Voice
 
-Write like a person talking: short plain sentences, everyday words, technical terms explained once, never invented labels or acronyms. Lead with the outcome. No hedging, no narration, no prose history — history lives in git. Comments state a why or an invariant only; delete comments that restate the code. Docs state rules and contracts, not stories; provenance is one dated line only where the why isn't derivable. Never imitate legacy verbose prose when touching a file — strip it.
+Write like a person talking: short plain sentences, everyday words, technical terms explained once, never invented labels or acronyms. Lead with the outcome. No hedging, no narration, no prose history — history lives in git. Comments state a why or an invariant only; delete comments that restate the code. Docs state rules and contracts, not stories: no attribution of who said a rule or when, and provenance is one dated line only where the why isn't derivable — hook-enforced on added text (`memory-history-guard.py` is the spec). Never imitate legacy verbose prose when touching a file — strip it.
 
 ## Choosing your next move — oracle discipline
 
@@ -110,7 +110,7 @@ Verify one level closer to the stage than where you changed things — compiles 
 
 ## Agents
 
-**Routing policy: [docs/AGENT_ROUTING.md](docs/AGENT_ROUTING.md) is authoritative** — the roster, which model each slot reaches per launch profile, and the landing seat live there, not here. A judgment lead owns every decision and landed diff; lanes make one commit then stop for review and never land; review throughput caps parallelism. All agents obey every rule in this file.
+**Routing policy: [docs/AGENT_ROUTING.md](docs/AGENT_ROUTING.md) is authoritative** — the roster, which model each slot reaches, and agent effort live there, not here. A judgment lead owns every decision and landed diff; lanes make one commit then stop for review and never land; review throughput caps parallelism. All agents obey every rule in this file.
 
 ## Reference docs (read on demand)
 
