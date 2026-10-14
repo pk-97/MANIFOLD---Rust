@@ -52,6 +52,12 @@ pub enum TextInputField {
     InspectorParam,
     /// The same inspector value entry, hosted by the graph-editor window.
     EditorInspectorParam,
+    /// "Set slider range…" type-in ("min to max"; empty resets). The target
+    /// and id ride on [`TextInputState::inspector_param`]. Commit dispatches
+    /// `SetSliderRange` (SCENE_SURFACES_DESIGN.md D15 (slider range and hard limit)).
+    SliderRange,
+    /// The same slider range entry, hosted by the graph-editor window.
+    EditorSliderRange,
     /// Material RGB swatch hex type-in. The target + channel ids ride on
     /// [`TextInputState::material_colour`]. Commit routes through the atomic
     /// `ParamRgb` scrub path so the edit has one undo entry.
@@ -154,6 +160,7 @@ impl TextInputField {
             self,
             TextInputField::GraphGroupRename(_)
                 | TextInputField::EditorInspectorParam
+                | TextInputField::EditorSliderRange
                 | TextInputField::GraphStringParam(_)
                 | TextInputField::GraphWgsl(_)
                 | TextInputField::GraphNodeSearch
@@ -830,6 +837,22 @@ pub fn parse_lenient_numeric(text: &str) -> Option<f32> {
     cleaned.parse::<f32>().ok()
 }
 
+/// Parse a "Set slider range…" entry: two numbers separated by spaces, a
+/// comma, "to" or "..", in either order. Empty text means reset (`Some(None)`);
+/// anything else unparseable is `None` (the entry is dropped).
+pub fn parse_slider_range(text: &str) -> Option<Option<(f32, f32)>> {
+    let text = text.trim();
+    if text.is_empty() {
+        return Some(None);
+    }
+    let spaced = text.replace("..", " ").replace(" to ", " ").replace([',', ';', '\u{2013}', '\u{2014}'], " ");
+    let numbers: Vec<f32> = spaced.split_whitespace().map(parse_lenient_numeric).collect::<Option<_>>()?;
+    match numbers.as_slice() {
+        [a, b] if a != b => Some(Some((a.min(*b), a.max(*b)))),
+        _ => None,
+    }
+}
+
 /// Degrees→radians commit-side conversion for angle rows — the panel
 /// boundary's other half (the display side lives in the row formatters).
 /// Shared by `SceneNumericParam` (D10) and `InspectorParam` (camera card
@@ -896,6 +919,17 @@ pub fn material_colour_scrub_actions(
 #[cfg(test)]
 mod parse_tests {
     use super::*;
+
+    #[test]
+    fn slider_range_parses_two_numbers_any_separator() {
+        for text in ["-1 to 1", "-1, 1", "-1..1", "1 -1", " -1   1 "] {
+            assert_eq!(parse_slider_range(text), Some(Some((-1.0, 1.0))), "{text}");
+        }
+        assert_eq!(parse_slider_range(""), Some(None), "empty resets");
+        assert_eq!(parse_slider_range("3"), None);
+        assert_eq!(parse_slider_range("2 to 2"), None);
+        assert_eq!(parse_slider_range("a to b"), None);
+    }
 
     #[test]
     fn lenient_parse_keeps_only_the_numeric_head() {

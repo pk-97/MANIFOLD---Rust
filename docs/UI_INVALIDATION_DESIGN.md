@@ -1,6 +1,6 @@
 # UI Invalidation — work runs only when its inputs change
 
-**Status:** APPROVED · 2026-10-14 · Opus 5.5 · P4e built on lane/ui-inval-p4e · Peter approved on condition that an independent adversarial review finds no perf, UI or UX regression; five review rounds ran, the last found text gaps only, fixed here.
+**Status:** IN PROGRESS · 2026-10-14 · Opus 5.5 · P1 through P4e built, P5a next · Peter approved on condition that an independent adversarial review finds no perf, UI or UX regression; five review rounds ran, the last found text gaps only, fixed here.
 **Prerequisites:** none.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs) and section 6 (Seam briefs — refactors and API changes) before starting any phase.
 
@@ -261,8 +261,8 @@ impl ProjectRef<'_> {
     pub fn executed_by<R>(&mut self, f: impl FnOnce(&mut Project) -> Option<(Box<dyn Command>, R)>) -> Option<R>;
     pub fn with_sent<R>(&mut self, touches: ChangeSet, f: impl FnOnce(&mut Project) -> R) -> R;
                                          // helpers shared with the keyboard path that send their own command
-    pub fn preview<R>(&mut self, f: impl FnOnce(&mut Project) -> R) -> R;
-                                         // local-only gesture preview (marker drag), unstamped, until D12 covers it
+    pub fn preview_marker<R>(&mut self, f: impl FnOnce(&mut Project) -> R) -> R;
+                                         // marker drag preview: local-only, unstamped, moves PreviewVersions.markers (D12)
 }
 // DispatchCtx::{mutate, execute} delegate to ctx.project.
 
@@ -270,7 +270,7 @@ impl ProjectRef<'_> {
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
 pub(crate) struct FrameInputs {
     pub parts: PartStamps,               // UiStamps.parts
-    pub preview: u64,                    // D12 gesture preview version
+    pub preview: PreviewVersions,        // D12 gesture preview versions: clips, lanes, markers
     pub selection_identity: u64,         // D14
     pub selection_visual: u64,           // D14
     pub cursor: u64,                     // D14: insert cursor and cursor_beat
@@ -282,6 +282,9 @@ pub(crate) struct FrameInputs {
     pub scroll_x_px: i32, pub scroll_y_px: i32, pub zoom_bits: u32,
     pub playhead_px: i32,                // overview strip only
     pub inspector_view: u64, pub inspector_scroll_px: i32,
+    pub scene_selection: u64,            // the Scene panel's outliner selection
+    pub inspector_reveal: u64,           // a queued Scene-tab or trigger-response reveal
+    pub layer_reveal: u64,               // a queued timeline layer reveal
     pub dock_view: u64, pub dock_scroll_px: i32,   // Audio dock only
     pub overlays: u64,
     pub audio_directory: u64,
@@ -417,12 +420,14 @@ These are the contract. If the freshness check fails, the missing input is added
 
 | Projection | Runs when these inputs move |
 |---|---|
-| `sync_project_data` | Layers, Clips, Automation, Markers, Settings (time signature, `projection/timeline.rs` :345); selection identity; active layer; automation view |
-| `sync_inspector_data` | Layers, Effects, Mappings, Clips, Automation (the lane dot :1505 and `external_attachment`, `projection/material.rs` :294, which keeps mapped rows on the scene card: BUG-pmbd3.7 (Scene card hides mapped rows) under BUG-pmbd3 (3D scene surfaces epic)), Led, AudioSetup, EmbeddedPresets, Settings (bpm and frame rate for driver timing, `projection/inspector.rs` :101); selection identity; active layer; automation view (includes the selected point's lane, :116); runtime latch and LED-presence sequences |
+| `sync_project_data` | Layers, Clips, Automation, Markers, Settings (time signature, `projection/timeline.rs` :345); selection identity; active layer; automation view; queued layer reveal |
+| `sync_inspector_data` | Layers, Effects, Mappings, Clips, Automation (the lane dot :1505 and `external_attachment`, `projection/material.rs` :294, which keeps mapped rows on the scene card: BUG-pmbd3.7 (Scene card hides mapped rows) under BUG-pmbd3 (3D scene surfaces epic)), Led, AudioSetup, EmbeddedPresets, Settings (bpm and frame rate for driver timing, `projection/inspector.rs` :101); selection identity; active layer; automation view (includes the selected point's lane, :116); runtime latch and LED-presence sequences; Scene selection; queued Scene-tab and trigger-response reveals |
 | Audio Setup device list (`sync_audio_dock`, only while the dock is open) | AudioSetup, Layers (send rows name their feeding layers), Effects (consumer rows list the audio mods); audio directory version; dock view (opening fills it) — the CoreAudio query runs only then |
 | `sync_clip_positions` | Clips, Layers (all clips); preview (dragged clips and split pieces only, in place) |
 | `sync_automation_lane_geometry`, `sync_automation_lane_order` | Automation, Effects, Layers; automation view; preview (dragged lane only) |
+| Marker list (`sync_markers`) | marker drag preview; a committed marker edit rides `sync_project_data` |
 | Live push (`push_state` piece 1; D22) — every display of a live scalar, both windows, in place | Values displays: values sequence, UI Values stamp, Layers and active layer (the active layer's name and opacity), LED enabled, Ableton session sequence (macro Ableton status). Shapes displays: UI Shapes stamp. Range bands (the Ableton range on cards, `projection/cards.rs` :474, and macro trim ranges): UI MappingRanges stamp. Two groups: values (`push_live_values`) and shapes (`projection/live_shapes.rs`, run on Shapes or MappingRanges), so modulated playback writes no drawer. The shapes group writes driver trim handles, the envelope target, decay and step, the audio-mod range, sensitivity, attack, release, Invert and step, card and macro Ableton range bands, relight knobs, the scene properties, object-modifier and force cards, layer-header audio gains, Audio Setup send gains and clip-trigger sensitivities. Crossover handles already read `ContentState` every frame |
+| Scene outliner eyes (`sync_scene_outliner_eyes`, in place) | UI Values or Shapes stamp: an eye shows a base value, which only an edit moves; never the playback values sequence (the lookup allocates) |
 | Selection push (`push_state` piece 2) | selection visual; cursor (includes `cursor_beat`); active layer |
 | Event drain (`push_state` piece 3) | every frame, O(1): undo/redo key, diagnostic sequences, modifier-selection sequences, Ableton session and MIDI device names taken as `Arc` (pointer compare, no copy) |
 | Chrome push (`push_state` piece 4) | Settings, Mappings, Layers, Clips (footer and header clip counts), Effects (LED exit path names); `ChromeInputs` (BPM tenths, time digits and draw mode, which repaints the DRAW button, included); automation view (lanes toggle); selection identity (primary clip chrome); zoom (zoom label) |
@@ -449,7 +454,7 @@ The input matrix (D10, INV-16) checks this table: it perturbs each input and rec
 | Audio dock | own rect size; its projection ran; dock view | own rect origin | dock scroll |
 | Split handles | own rect size | own rect origin | — |
 | Layer headers | own rect width; project projection ran | own rect origin | scroll y; own rect height; selection visual; active layer; lane heights |
-| Viewport | own rect width; project projection ran; lane projection changed the lane count; Markers | own rect origin | scroll x, scroll y, zoom (pooled ruler); own rect height; selection visual; cursor; preview; lane heights |
+| Viewport | own rect width; project projection ran; lane projection changed the lane count; Markers; marker drag preview (marker flags have no in-place path until P5b) | own rect origin | scroll x, scroll y, zoom (pooled ruler); own rect height; selection visual; cursor; preview; lane heights |
 | Overlays | overlays version | — | warmup and export progress; Ableton picker session refresh |
 | Ghosts (no atlas slot) | refilled each frame a card-drag ghost exists; empty → no work | — | — |
 
@@ -541,7 +546,7 @@ The output-resize validator is not a row: it runs inside `execute_with_validatio
 | INV-3 An idle frame does zero work, on every window | Work flows `work-idle`, `work-editor-idle`, `work-perform-idle`: every counter zero, `FrameAlloc` included; content test `idle_tick_does_no_reaction_work` (zero `ClipBindingReconcile`, `ModSnapshotCopy`, `GeneratorStructureRefresh`) |
 | INV-4 Incremental UI equals a full rebuild from the same inputs, including what immediate passes draw and what toasts show | `AssertFresh` closes every work flow; it diffs the tree dump (ignoring generations, node slots and input-state flags), the `ImmediateInputs` record and the pending toast queue |
 | INV-5 Only the planner builds, rebuilds, translates or invalidates | `only_the_frame_planner_builds` test: source scan (shaped like `no_bespoke_row_infra`) fails on `UIRoot::build`, `clear_region`, `translate_region`, `invalidate_slot` outside `ui_frame.rs` and `editor_frame.rs` |
-| INV-6 No hand-set invalidation flags and no hash keys | P5a negative gate: `rg 'needs_rebuild\|needs_structural_sync\|ScrollDirty\|automation_lanes_dirty\|structural_change\|fn mark_dirty\|request_automation_lane_resync\|invalidate_layer_bitmap\|invalidate_all_layer_bitmaps\|invalidate_layers\|compute_fingerprint\|overview_last_clip_fingerprint\|embedded_presets_fingerprint' crates/` → 0 |
+| INV-6 No hand-set invalidation flags and no hash keys | P5a negative gate: `rg 'needs_rebuild\|needs_structural_sync\|ScrollDirty\|automation_lanes_dirty\|\bstructural_change\b\|fn mark_dirty\|request_automation_lane_resync\|invalidate_layer_bitmap\|invalidate_all_layer_bitmaps\|invalidate_layers\|compute_fingerprint\|overview_last_clip_fingerprint\|embedded_presets_fingerprint' crates/` → 0 |
 | INV-7 One text measurer, cached | `rg 'impl TextMeasure for' crates/ -g '!*test*'` → `CachedTextMeasure` and `HeuristicTextMeasure` only; `measure_text_ct` called only from the cache-miss path |
 | INV-8 Stamps never serialize; load moves every part | `load_moves_every_part` test; `rg 'PartStamps' crates/manifold-io` → 0 |
 | INV-9 Ceilings rise only by explicit record | The flow runner and content test fail on any count above its ceiling; unlisted kinds have ceiling zero |
@@ -652,10 +657,11 @@ Order: P1 → P2 → P3a → P3b → P4a → P4b → P4c → P4d → P4e → P5a
 
 - **Entry:** P4c landed. Re-run: `rg -F 'needs_structural_sync = true' crates -g '*.rs' | wc -l` (68), `rg -F 'DispatchResult::structural()' crates -g '*.rs' | wc -l` (165) and the local-execute count `rg 'execute\(&mut (self\.)?local_project|\.execute\(project\)|execute\(ctx\.project|execute\(&mut \*ctx' crates/manifold-app/src -g '*.rs' | wc -l` (100). A different count: list the new sites before touching any.
 - **Seam brief:** four batches by site kind, each landing alone. (a) It sent a command or closure: local writes move to `ctx.execute`, `ctx.mutate` or the host committing method; return `handled()`. Examples: rack expand (`dispatch/params.rs` :123) → `ctx.mutate`; the text-commit arms (`app.rs` :1210–1544) → `ctx.execute`; scene skin edits → `ExecuteOnContent` (closes BUG-bo2mx (scene setup skin edits run against the UI snapshot)). (b) It changed panel view state: the setter already bumps the view version; `handled()`. Example: `MacrosCollapseToggle` (:194). (c) It changed timeline scroll or zoom: the planner sees the pixel value; `handled()`. Example: `TimelineScrollbarH` (`ui_bridge/transport.rs` :89). (d) It changed selection: the selection versions already move; delete. The last batch makes `DispatchCtx.project` `&Project`, and deletes the `needs_structural_sync` field and `DispatchResult::structural_change`. A site fitting no kind is an escalation.
-- **Gate per batch:** `AssertFresh` in every flow; ceilings re-recorded down (batch c: `work-scrollbar-drag` zero project and inspector syncs; batch d: `work-select-click` one inspector sync). **Last batch negative:** `rg 'needs_structural_sync|structural_change' crates/` → 0; INV-11 rg.
+- **Gate per batch:** `AssertFresh` in every flow; ceilings re-recorded down (batch c: `work-scrollbar-drag` zero project and inspector syncs; batch d: `work-select-click` one inspector sync). **Last batch negative:** `rg 'needs_structural_sync|\bstructural_change\b' crates/` → 0 (word bounds: `structural_changed` in the render-scene RT code is unrelated); INV-11 rg.
 - **Demo:** L3. **Performer gesture:** click between three clips quickly mid-playback; one inspector sync per click.
 - **Forbidden moves:** converting a site whose kind the planner does not yet cover · deleting the field before the last batch · a fourth write helper. Half the sites converted is fine while the planner covers them; the field goes last.
 - **Test scope:** `manifold-ui`, `manifold-app` focused; work flows locally.
+- **As built (lane/ui-inval-p4d-final):** `needs_structural_sync`, `DispatchResult::structural_change` and the runner's `UiFrameFlags.structural` are gone; the planner alone decides projections. Each last site maps to an input: an accepted snapshot is the stamp fold (D5 source a); a wholesale replace of the local project (open, new, Cmd+N, snapshot restore, the content's save snapshot) calls `UiStamps::project_replaced`, which moves every part (D1, INV-8), and the runner's fixture load and save-reload do the same; undo and redo in the runner ride the content stamps; card edits, outliner reorder and the scene item edits are content-only, so their snapshot re-projects them; `duplicate_clip_to` runs at drop inside the move's batch, which the batch commit stamps; perform-mode exit compares against the last normal frame's inputs. New versions, each compare-before-bump: `FrameInputs.layer_reveal` (key of `sync_project_data`) and `FrameInputs.inspector_reveal` (Scene-tab and trigger-response reveals, key of `sync_inspector_data`), written only through `UIRoot::request_*`; `select_effect_ids` moves the inspector view version when the card selection or its reveal changed; `PreviewVersions.markers`, moved by `ProjectRef::preview_marker`, runs `sync_markers` and rebuilds the viewport per marker drag move (no in-place path for marker flags until P5b), down from a full project and inspector sync. `ProjectRef` holds `UiEdits`. `AssertFresh` asks the planner for `with_every_projection`, a runner-only reference frame. The unstamped app-level local writes INV-11 named (model import, gizmo transform and drag, mapping reshape preview) go through `ProjectRef`. `UiFrameSignals.projected` carries "a projection ran" into the rebuild block. `AssertFresh` first lets a tween the last frame started settle (the value-change flash an undo now fires). Ceilings re-recorded down: `work-values-undo` and `work-trim-undo` undo is one `ValuePush` (no `FullBuild`, project or inspector sync; FrameAlloc 2162 to 125 and 2161 to 101); `work-automation-point-drag` drops the hand-set `PresetListProjection`. The outliner eye showed a base value no push owned (the old per-snapshot sync hid it); the `SceneEyes` push re-reads each eye at its write address on a Values or Shapes edit.
 
 ### P4e — Per-region tree storage
 

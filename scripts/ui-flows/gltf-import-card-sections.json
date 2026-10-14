@@ -3,61 +3,75 @@
   "Dump",
   {
     "Assert": {
-      "selector": {
-        "Query": {
-          "text": "QS1694-W02-1-1 — Transform",
-          "type": "Label"
-        }
-      },
+      "selector": { "Query": { "name": "card_section.title", "text": "Camera" } },
       "check": "Exists"
     }
   },
   {
     "Assert": {
-      "selector": {
-        "Query": {
-          "text": "Environment",
-          "type": "Label"
-        }
-      },
+      "selector": { "Query": { "name": "card_section.title", "text": "cc0__oomurasaki_azalea_r._x_pulchrum" } },
       "check": "Exists"
     }
   },
   {
     "Assert": {
-      "selector": {
-        "Query": {
-          "text": "Camera",
-          "type": "Label"
-        }
-      },
+      "selector": { "Query": { "name": "card_section.title", "text": "Lighting" } },
       "check": "Exists"
     }
   },
   {
     "Assert": {
-      "selector": {
-        "Query": {
-          "text": "Sun",
-          "type": "Label"
-        }
-      },
+      "selector": { "Query": { "name": "card_section.title", "text": "Look" } },
+      "check": "Exists"
+    }
+  },
+  {
+    "Assert": {
+      "selector": { "Query": { "text": "Environment", "type": "Label" } },
+      "check": "Exists"
+    }
+  },
+  {
+    "Assert": {
+      "selector": { "Query": { "text": "Sun", "type": "Label" } },
+      "check": "Exists"
+    }
+  },
+  {
+    "Assert": {
+      "selector": { "Query": { "text": "F-Stop", "type": "Label" } },
       "check": "Exists"
     }
   },
   {
     "Pointer": {
-      "target": {
-        "Query": {
-          "text": "QS1694-W02-1-1 — Transform",
-          "type": "Label"
-        }
-      },
-      "gesture": {
-        "Click": {
-          "modifiers": {}
-        }
-      }
+      "target": { "Query": { "name": "card_section.header", "nth": 3 } },
+      "gesture": { "Click": { "modifiers": {} } }
+    }
+  },
+  "Snapshot",
+  {
+    "Assert": {
+      "selector": { "Query": { "text": "F-Stop", "type": "Label" } },
+      "check": { "Count": 0 }
+    }
+  },
+  {
+    "Assert": {
+      "selector": { "Query": { "name": "card_section.title", "text": "Look" } },
+      "check": "Exists"
+    }
+  },
+  {
+    "Pointer": {
+      "target": { "Query": { "name": "card_section.header", "nth": 3 } },
+      "gesture": { "Click": { "modifiers": {} } }
+    }
+  },
+  {
+    "Assert": {
+      "selector": { "Query": { "text": "F-Stop", "type": "Label" } },
+      "check": "Exists"
     }
   },
   "Snapshot",

@@ -152,8 +152,6 @@ pub struct ProjectIOAction {
     pub(crate) material_upgrade_applied: bool,
     /// Whether the editing service should be marked clean.
     pub mark_clean: bool,
-    /// Whether the UI needs a structural sync (rebuild tree).
-    pub needs_structural_sync: bool,
     /// Whether clip sync is needed (replaces host.MarkNeedsClipSync).
     pub needs_clip_sync: bool,
     /// New project path to set as current (for window title, save, etc.).
@@ -669,7 +667,6 @@ impl ProjectIOService {
 
         ProjectIOAction {
             apply_project: Some(new_project),
-            needs_structural_sync: true,
             set_project_path: Some(PathBuf::new()), // Clear current path
             ..Default::default()
         }
@@ -815,7 +812,6 @@ impl ProjectIOService {
                 ProjectIOAction {
                     apply_project: Some(project),
                     material_upgrade_applied: true,
-                    needs_structural_sync: true,
                     set_project_path: Some(path.to_path_buf()),
                     notice,
                     ..Default::default()
@@ -1778,6 +1774,98 @@ mod tests {
             "self-containment snapshot alone grew the file by {isolated_delta} bytes (>5MB) — \
              escalate per PRESET_LIBRARY_DESIGN P2 gate"
         );
+    }
+
+    /// SCENE_SURFACES_DESIGN.md D15: moving the OSC 0–1 mapping onto the
+    /// slider range and the limit leaves the live show's OSC response alone.
+    /// Every OSC-addressable param in Liveschool is swept 0–1 through the
+    /// router; each write must equal the old mapping (0–1 over the param's old
+    /// range, the user's calibration when set, raw on an exact 0–1 range).
+    #[test]
+    fn liveschool_osc_sweep_unchanged_by_slider_range_split() {
+        use manifold_core::preset_definition_registry::{get_osc_address_by_id, get_osc_address_for_layer_by_id};
+        use manifold_playback::osc_param_router::OscParamRouter;
+        use manifold_playback::osc_receiver::OscReceiver;
+        let mut fixture = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        fixture.push("../../tests/fixtures/Liveschool Live Show V6 LEDS.manifold");
+        if !fixture.exists() {
+            return;
+        }
+        let mut project = manifold_io::loader::load_project_with(&fixture, install_embedded_presets)
+            .expect("load Liveschool fixture");
+
+        // (address, which instance, param id, old range). The router writes
+        // the first instance of an effect type, so only that one is swept.
+        #[derive(Clone)]
+        enum Owner { Master(usize), Effect(usize, usize), Gen(usize) }
+        let mut swept: Vec<(String, Owner, String, (f32, f32))> = Vec::new();
+        let first_of_type = |list: &[manifold_core::effects::PresetInstance], i: usize| {
+            list.iter().position(|f| f.effect_type() == list[i].effect_type()) == Some(i)
+        };
+        let calibrated = |p: &manifold_core::params::Param| p.choices.slider.is_some();
+        let mut calibrated_count = 0;
+        let old_range = |p: &manifold_core::params::Param| p.choices.slider.unwrap_or((p.spec.min, p.spec.max));
+        let fx = &project.settings.master_effects;
+        for (i, effect) in fx.iter().enumerate().filter(|(i, _)| first_of_type(fx, *i)) {
+            for p in effect.params.iter() {
+                calibrated_count += usize::from(calibrated(p));
+                if let Some(addr) = get_osc_address_by_id(effect.effect_type(), p.id()) {
+                    swept.push((addr, Owner::Master(i), p.id().to_string(), old_range(p)));
+                }
+            }
+        }
+        for (li, layer) in project.timeline.layers.iter().enumerate() {
+            let lid = layer.layer_id.as_str();
+            if let Some(effects) = &layer.effects {
+                for (i, effect) in effects.iter().enumerate().filter(|(i, _)| first_of_type(effects, *i)) {
+                    for p in effect.params.iter() {
+                        calibrated_count += usize::from(calibrated(p));
+                        if let Some(addr) = get_osc_address_for_layer_by_id(effect.effect_type(), lid, p.id()) {
+                            swept.push((addr, Owner::Effect(li, i), p.id().to_string(), old_range(p)));
+                        }
+                    }
+                }
+            }
+            if let Some(gp) = layer.gen_params() {
+                for p in gp.params.iter() {
+                    calibrated_count += usize::from(calibrated(p));
+                    if let Some(addr) = get_osc_address_for_layer_by_id(gp.generator_type(), lid, p.id()) {
+                        swept.push((addr, Owner::Gen(li), p.id().to_string(), old_range(p)));
+                    }
+                }
+            }
+        }
+        assert!(swept.len() > 100, "Liveschool must expose a real OSC surface; got {}", swept.len());
+        eprintln!("[D15 OSC sweep] {} addresses, {} calibrated params", swept.len(), calibrated_count);
+
+        let mut receiver = OscReceiver::new();
+        let mut router = OscParamRouter::new();
+        router.rebuild(&project, &mut receiver);
+        let mut checked = 0usize;
+        for step in 0..=20 {
+            let v = step as f32 / 20.0;
+            for (addr, ..) in &swept {
+                receiver.inject(addr, &[v]);
+            }
+            receiver.update();
+            router.apply(&mut project);
+            for (addr, owner, id, (min, max)) in &swept {
+                let inst = match owner {
+                    Owner::Master(i) => &project.settings.master_effects[*i],
+                    Owner::Effect(li, i) => &project.timeline.layers[*li].effects.as_ref().unwrap()[*i],
+                    Owner::Gen(li) => project.timeline.layers[*li].gen_params().unwrap(),
+                };
+                let old = if (min - 0.0).abs() < f32::EPSILON && (max - 1.0).abs() < f32::EPSILON {
+                    v
+                } else {
+                    min + (max - min) * v
+                };
+                let got = inst.params.get(id).unwrap().base;
+                assert_eq!(got.to_bits(), old.to_bits(), "{addr} at {v}: got {got}, old mapping {old}");
+                checked += 1;
+            }
+        }
+        eprintln!("[D15 OSC sweep] {checked} writes identical");
     }
 
     // ── PROJECT_FOLDERS_DESIGN.md P3 — save semantics + folder layout ──

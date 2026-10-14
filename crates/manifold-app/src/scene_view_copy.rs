@@ -65,8 +65,7 @@ fn current_value(project: &Project, layer_id: &LayerId, def: &EffectGraphDef, no
     }
 }
 
-/// The click: copy the view, or say why not. Returns whether the project
-/// changed.
+/// The click: copy the view, or say why not. A copy stamps what it touches.
 pub(crate) fn run(
     project: &mut Project,
     content_tx: &crossbeam_channel::Sender<ContentCommand>,
@@ -74,24 +73,20 @@ pub(crate) fn run(
     stamps: &mut crate::frame_plan::UiStamps,
     layer_id: &LayerId,
     view: Option<&ViewportCamera>,
-) -> bool {
+) {
     let Some(view) = view else {
         ui.toast.show(NO_VIEWPORT);
-        return false;
+        return;
     };
     match build(project, layer_id, view) {
-        Ok(command) if command.is_empty() => false,
+        Ok(command) if command.is_empty() => {}
         Ok(command) => {
             let mut command: Box<dyn Command> = Box::new(command);
             command.execute(project);
             stamps.bump(command.touches());
             ContentCommand::send(content_tx, ContentCommand::Execute(command));
-            true
         }
-        Err(reason) => {
-            ui.toast.show(reason);
-            false
-        }
+        Err(reason) => ui.toast.show(reason),
     }
 }
 

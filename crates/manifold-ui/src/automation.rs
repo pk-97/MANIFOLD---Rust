@@ -76,6 +76,14 @@ pub enum AutomationAction {
         param: FlowScrubTarget,
         value: f32,
     },
+    /// Set or clear a card or Scene tab param's slider range through the real
+    /// dispatch (`ParamsAction::SetSliderRange`), the commit of "Set slider
+    /// range…" (SCENE_SURFACES_DESIGN.md D15). Headless runs have no type-in
+    /// seam, so this is the flow's way to the same write.
+    SetSliderRange {
+        param: FlowScrubTarget,
+        range: Option<(f32, f32)>,
+    },
     /// A continuous scrub as the live app sees it: `Scrub(Begin)`, then
     /// `steps` evenly spaced `Move`s from `from` to `to` with one UI frame
     /// each, then `Commit` — all through the real dispatch.

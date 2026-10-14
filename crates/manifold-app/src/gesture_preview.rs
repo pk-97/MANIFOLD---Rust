@@ -42,12 +42,13 @@ struct LanePreview {
     points: Vec<AutomationPoint>,
 }
 
-/// Separate clip and lane versions, so a clip drag never re-projects lanes
-/// and a point drag never re-projects clips.
+/// Separate clip, lane and marker versions, so a clip drag never re-projects
+/// lanes and a point drag never re-projects clips.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct PreviewVersions {
     pub clips: u64,
     pub lanes: u64,
+    pub markers: u64,
 }
 
 #[derive(Default)]
@@ -122,6 +123,13 @@ impl GesturePreview {
             }),
         }
         self.version.lanes += 1;
+    }
+
+    /// A marker drag wrote the dragged beat into the local project. The
+    /// snapshot accept re-covers it through the scrub restore, so only the
+    /// version is kept here.
+    pub(crate) fn record_marker(&mut self) {
+        self.version.markers += 1;
     }
 
     /// The clip side ends (commit or cancel): hand back the splits.
@@ -234,7 +242,6 @@ mod tests {
         cursor: manifold_ui::cursors::CursorManager,
         active_layer: Option<LayerId>,
         needs_rebuild: bool,
-        needs_structural_sync: bool,
         automation_lanes_dirty: bool,
         scroll_dirty: crate::ui_root::ScrollDirty,
         invalidate: Vec<usize>,
@@ -252,7 +259,6 @@ mod tests {
                 cursor: Default::default(),
                 active_layer: None,
                 needs_rebuild: false,
-                needs_structural_sync: false,
                 automation_lanes_dirty: false,
                 scroll_dirty: Default::default(),
                 invalidate: Vec::new(),
@@ -268,7 +274,6 @@ mod tests {
                 &mut self.cursor,
                 &mut self.active_layer,
                 &mut self.needs_rebuild,
-                &mut self.needs_structural_sync,
                 &mut self.automation_lanes_dirty,
                 &mut self.scroll_dirty,
                 &mut self.invalidate,
@@ -393,8 +398,8 @@ mod tests {
                     target,
                     label: "Mirror: amount".into(),
                     points: vec![
-                        UiAutomationPoint { beat: Beats(4.0), value_norm: 0.5, shape: UiSegmentShape::Linear },
-                        UiAutomationPoint { beat: Beats(8.0), value_norm: 0.8, shape: UiSegmentShape::Linear },
+                        UiAutomationPoint { beat: Beats(4.0), value_norm: 0.5, shape: UiSegmentShape::Linear, past_end: false },
+                        UiAutomationPoint { beat: Beats(8.0), value_norm: 0.8, shape: UiSegmentShape::Linear, past_end: false },
                     ],
                     param_min: 0.0,
                     param_max: 1.0,

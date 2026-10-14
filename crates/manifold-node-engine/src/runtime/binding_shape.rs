@@ -100,6 +100,26 @@ mod tests {
         }
     }
 
+    /// INV-S18: the user's slider range never reaches the reshape, while the
+    /// user's curve and invert do.
+    #[test]
+    fn reshape_ignores_user_slider_range() {
+        let doc = doc();
+        let choices = ParamChoices {
+            slider: Some((-3.0, 7.0)),
+            invert: Some(true),
+            ..ParamChoices::default()
+        };
+        let mut spec = doc.preset_metadata.as_ref().unwrap().params[0].clone();
+        choices.apply(&mut spec);
+        let mut param = Param::bundled(spec);
+        param.choices = choices;
+        assert_eq!(param.slider_span(), (-3.0, 7.0));
+        let built = binding_shapes(&doc, Some(&ParamManifest::from_params(vec![param])));
+        assert_eq!((built["amount"].min, built["amount"].max), (0.0, 1.0));
+        assert!(built["amount"].invert, "invert is the user's choice and reaches the reshape");
+    }
+
     /// A user's slider range is display only: the manifest build reshapes
     /// over the declared range, exactly as the standalone build does.
     #[test]

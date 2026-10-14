@@ -434,6 +434,14 @@
         let mut tree = UITree::new();
         panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
         let (eye_id_2, _) = panel.outliner_eye_ids[0].clone();
+        assert_eq!(tree.get_node(eye_id_2).unwrap().text.as_deref(), Some("\u{2013}"));
+
+        // The in-place push turns the built eye back on and keeps the stored
+        // row, so the next click flips from the pushed value.
+        panel.sync_outliner_eyes(&mut tree, &mut |addr| (addr.param_id == "visible").then_some(1.0));
+        assert_eq!(tree.get_node(eye_id_2).unwrap().text.as_deref(), Some("\u{1F441}"));
+        assert_eq!(panel.outliner_eye_ids[0].1.value, 1.0);
+        panel.sync_outliner_eyes(&mut tree, &mut |_| Some(0.0));
 
         let (consumed_2, actions_2) = panel.handle_event(&UIEvent::Click {
             node_id: eye_id_2,
@@ -969,6 +977,7 @@
                     material_role: None,
                     inactive_reason: None,
                     scene: None,
+                    limit: Default::default(),
                 },
                 value: crate::param_surface::RowValue {
                     base: 0.0,

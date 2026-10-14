@@ -731,6 +731,15 @@ pub(crate) fn dispatch_scrub(
                         &ctx.project,
                     ),
                 ) {
+                    // A typed or dragged value stops only at a declared hard
+                    // limit (SCENE_SURFACES_DESIGN.md D15 (slider range and hard limit)).
+                    let val = ctx
+                        .project
+                        .with_preset_graph(&target, |inst| {
+                            inst.params.get(param_id.as_ref()).map(|p| p.spec.clamp_input(val))
+                        })
+                        .flatten()
+                        .unwrap_or(val);
                     if let Some(ResolvedScrub::Param { live, .. }) = &mut ctx.scrub.active {
                         *live = val;
                     }

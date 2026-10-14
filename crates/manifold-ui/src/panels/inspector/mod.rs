@@ -959,8 +959,8 @@ impl InspectorCompositePanel {
     /// D6 fire meter (`AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md`
     /// P3c, BUG-082's fix): push this tick's live shaped-signal levels onto
     /// every open fire-mode drawer's Amount meter across the inspector — in
-    /// place, no rebuild (never gated behind `needs_structural_sync`; the
-    /// caller runs this every UI tick regardless, mirroring
+    /// place, no rebuild (never gated behind a projection; the caller runs
+    /// this every UI tick regardless, mirroring
     /// `AudioSetupPanel::update_meters`/the deleted `update_trigger_levels`).
     /// Walks every card that can host a fire-mode drawer: master effects,
     /// active-layer effects, the active layer's generator, and the layer's
@@ -1627,6 +1627,25 @@ mod tests {
     }
 
     #[test]
+    fn select_effect_ids_moves_the_view_version_only_on_change() {
+        let mut panel = InspectorCompositePanel::new();
+        let configs: Vec<_> = (0..3).map(|i| mk_config(ParamCardKind::Effect, &format!("Card {i}"), 2)).collect();
+        panel.configure_master_effects(&configs);
+        panel.configure_tabs(&[InspectorTab::Master], InspectorTab::Master);
+        let ids = [configs[1].effect_id.clone()];
+        let v0 = panel.view_version();
+        panel.select_effect_ids(InspectorTab::Master, &ids);
+        let v1 = panel.view_version();
+        assert!(v1 > v0, "a new selection and reveal show at the next build");
+        panel.select_effect_ids(InspectorTab::Master, &ids);
+        assert_eq!(panel.view_version(), v1, "the same selection with its reveal still pending");
+        let mut tree = UITree::new();
+        panel.build_in_rect(&mut tree, Rect::new(0.0, 0.0, 400.0, 400.0));
+        panel.select_effect_ids(InspectorTab::Master, &ids);
+        assert!(panel.view_version() > v1, "a consumed reveal queued again is a change");
+    }
+
+    #[test]
     fn active_tab_drives_section_visibility() {
         let mut panel = InspectorCompositePanel::new();
 
@@ -1687,6 +1706,7 @@ mod tests {
                 material_role: None,
                 inactive_reason: None,
                 scene: None,
+                limit: Default::default(),
             },
             value: RowValue { base: 0.5, effective: 0.5, exposed: true, driven: false },
             audio: crate::panels::param_slider_shared::AudioRowState::default(),

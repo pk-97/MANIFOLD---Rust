@@ -520,6 +520,10 @@ pub enum ParamsAction {
     /// Show on Card / Remove from Card; `None` hands the row back to its
     /// role (D10 (cross-surface gestures)).
     SetCardPin(GraphParamTarget, ParamId, Option<manifold_foundation::scene_surface::CardPin>),
+    /// Set slider range / Reset slider range: the user's slider span for one
+    /// control, `None` to clear it (SCENE_SURFACES_DESIGN.md D15 (slider range
+    /// and hard limit)). Display only; the value is never moved.
+    SetSliderRange(GraphParamTarget, ParamId, Option<(f32, f32)>),
     /// Show in Scene tab: switch the inspector to the Scene tab and reveal
     /// the item that owns this row.
     RevealInSceneTab(GraphParamTarget, ParamId),
@@ -908,10 +912,9 @@ pub enum RootAction {
     /// Opened from the Settings popup; a floating overlay, not a dock.
     OpenRtQuality,
     /// Scene Setup outliner selection moved (D1 of SCENE_PANEL_UX_DESIGN.md).
-    /// The panel has already updated its UI-local selection; this action's
-    /// only job is to ride the dispatch loop back as `structural_change:
-    /// true` so `sync_inspector_data` rebuilds the panel this same frame —
-    /// same-frame Properties update, no polling, no per-frame rebuild.
+    /// The panel has already updated its UI-local selection and moved its
+    /// selection version, which re-runs `sync_inspector_data` this same
+    /// frame — same-frame Properties update, no polling, no per-frame rebuild.
     /// Payload: the layer whose selection moved (the panel key) — the
     /// selection itself stays panel-internal (D7 of SCENE_SETUP_PANEL).
     SceneSetupSelectionChanged(LayerId),
@@ -1089,6 +1092,13 @@ pub enum RootAction {
         max: f32,
         whole_numbers: bool,
         degrees: bool,
+    },
+    /// "Set slider range…" in the param menu: open the shared type-in at
+    /// `anchor`, prefilled with the row's slider range ("min to max").
+    BeginSliderRangeInput {
+        target: GraphParamTarget,
+        param_id: ParamId,
+        anchor: Rect,
     },
     /// Click on a row's colour swatch: open the colour menu (a hex entry
     /// item over the colour grid) at the swatch. Picking a colour is one

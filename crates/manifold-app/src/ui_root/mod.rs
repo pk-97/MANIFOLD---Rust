@@ -203,7 +203,10 @@ pub struct UIRoot {
     pub last_graph_edit_diagnostic_sequence: Option<u64>,
     pub last_trigger_delivery_failure: Option<manifold_playback::engine::trigger_delivery::TriggerDeliveryFailure>,
     pub last_edit_selection_sequence: Option<u64>,
-    pub pending_layer_reveal: Option<manifold_core::LayerId>,
+    /// Queued layer reveal, taken by the project projection. Written only
+    /// through [`Self::request_layer_reveal`], which moves its version.
+    pending_layer_reveal: Option<manifold_core::LayerId>,
+    layer_reveal_version: u64,
     pub last_modifier_selection_sequence: Option<u64>,
     pub last_object_modifier_selection_sequence: Option<u64>,
 
@@ -315,11 +318,14 @@ pub struct UIRoot {
     pub(crate) pending_automation_reveal: Option<(manifold_ui::view::UiGraphTarget, manifold_core::effects::ParamId)>,
     pub(crate) automation_chooser_candidates: Vec<AutomationChooserCandidate>,
     pub(crate) trigger_routing: crate::ui_bridge::TriggerRoutingCatalog,
-    pub(crate) pending_trigger_response_reveal: Option<(manifold_ui::view::UiGraphTarget, manifold_core::effects::ParamId)>,
+    /// Queued inspector reveals, taken by the inspector projection. Written
+    /// only through the `request_*` setters, which move `inspector_reveal_version`.
+    pending_trigger_response_reveal: Option<(manifold_ui::view::UiGraphTarget, manifold_core::effects::ParamId)>,
     /// Show in Scene tab / a card section title: revealed once the Scene tab
     /// is projected (SCENE_SURFACES_DESIGN.md D10). A section carries all its
     /// rows; the Scene tab picks which to reveal.
-    pub(crate) pending_scene_reveal: Option<(manifold_ui::view::UiGraphTarget, Vec<manifold_core::effects::ParamId>)>,
+    pending_scene_reveal: Option<(manifold_ui::view::UiGraphTarget, Vec<manifold_core::effects::ParamId>)>,
+    inspector_reveal_version: u64,
     pub(crate) pinned_automation_lanes: Vec<manifold_ui::ui_state::AutomationLaneKey>,
 
     /// Cached macro slot labels for context menu display.
@@ -404,6 +410,81 @@ pub struct UIRoot {
 }
 
 impl UIRoot {
+    /// Queue a timeline layer reveal. Compare-before-bump: re-queueing the
+    /// pending one moves nothing.
+    pub(crate) fn request_layer_reveal(&mut self, id: manifold_core::LayerId) {
+        if self.pending_layer_reveal.as_ref() != Some(&id) {
+            self.pending_layer_reveal = Some(id);
+            self.layer_reveal_version += 1;
+        }
+    }
+
+    pub(crate) fn take_layer_reveal(&mut self) -> Option<manifold_core::LayerId> {
+        self.pending_layer_reveal.take()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn pending_layer_reveal(&self) -> Option<&manifold_core::LayerId> {
+        self.pending_layer_reveal.as_ref()
+    }
+
+    /// `FrameInputs.layer_reveal`.
+    pub(crate) fn layer_reveal_version(&self) -> u64 {
+        self.layer_reveal_version
+    }
+
+    /// Queue a Scene tab reveal of `params` (one row, or a card section's
+    /// rows). Compare-before-bump.
+    pub(crate) fn request_scene_reveal(
+        &mut self,
+        target: manifold_ui::view::UiGraphTarget,
+        params: Vec<manifold_core::effects::ParamId>,
+    ) {
+        let next = Some((target, params));
+        if self.pending_scene_reveal != next {
+            self.pending_scene_reveal = next;
+            self.inspector_reveal_version += 1;
+        }
+    }
+
+    /// Queue a reveal of the card or Scene row that routes this trigger's
+    /// response. Compare-before-bump.
+    pub(crate) fn request_trigger_response_reveal(
+        &mut self,
+        target: manifold_ui::view::UiGraphTarget,
+        param: manifold_core::effects::ParamId,
+    ) {
+        let next = Some((target, param));
+        if self.pending_trigger_response_reveal != next {
+            self.pending_trigger_response_reveal = next;
+            self.inspector_reveal_version += 1;
+        }
+    }
+
+    pub(crate) fn take_scene_reveal(
+        &mut self,
+    ) -> Option<(manifold_ui::view::UiGraphTarget, Vec<manifold_core::effects::ParamId>)> {
+        self.pending_scene_reveal.take()
+    }
+
+    pub(crate) fn take_trigger_response_reveal(
+        &mut self,
+    ) -> Option<(manifold_ui::view::UiGraphTarget, manifold_core::effects::ParamId)> {
+        self.pending_trigger_response_reveal.take()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn pending_trigger_response_reveal(
+        &self,
+    ) -> Option<&(manifold_ui::view::UiGraphTarget, manifold_core::effects::ParamId)> {
+        self.pending_trigger_response_reveal.as_ref()
+    }
+
+    /// `FrameInputs.inspector_reveal`.
+    pub(crate) fn inspector_reveal_version(&self) -> u64 {
+        self.inspector_reveal_version
+    }
+
     /// Take the content thread's shared lists by pointer: each is compared
     /// against the Arc this root retains, never element by element
     /// (UI_INVALIDATION_DESIGN.md section 3). True when the Ableton session
@@ -491,6 +572,7 @@ impl UIRoot {
             last_trigger_delivery_failure: None,
             last_edit_selection_sequence: None,
             pending_layer_reveal: None,
+            layer_reveal_version: 0,
             last_modifier_selection_sequence: None,
             last_object_modifier_selection_sequence: None,
             embedded_presets: Vec::new(),
@@ -530,6 +612,7 @@ impl UIRoot {
             trigger_routing: Default::default(),
             pending_trigger_response_reveal: None,
             pending_scene_reveal: None,
+            inspector_reveal_version: 0,
             pinned_automation_lanes: Vec::new(),
             macro_labels: std::array::from_fn(|_| String::new()),
             macro_mapping_descs: std::array::from_fn(|_| Vec::new()),
@@ -1609,6 +1692,7 @@ mod tick_parity_tests {
                     material_role: None,
                     inactive_reason: None,
                     scene: None,
+                    limit: Default::default(),
                     disabled: None,
                 },
                 value: manifold_ui::RowValue { base: 0.5, effective: 0.5, exposed: true, driven: false },

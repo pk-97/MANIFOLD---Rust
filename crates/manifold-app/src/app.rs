@@ -540,9 +540,6 @@ pub struct Application {
     /// Fine-grained scroll dirty flags — tracks which axis changed to enable
     /// skipping layer header rebuild on horizontal-only scroll.
     pub(crate) scroll_dirty: crate::ui_root::ScrollDirty,
-    /// Set by keyboard shortcuts that mutate project data (undo, delete, etc.).
-    /// Consumed by tick_and_render to trigger sync_project_data + rebuild.
-    pub(crate) needs_structural_sync: bool,
     /// Set by `AppEditingHost::request_automation_lane_resync`; consumed by
     /// tick_and_render's lanes-only geometry resync.
     pub(crate) automation_lanes_dirty: bool,
@@ -757,7 +754,6 @@ impl Application {
             perform: crate::perform_mode::PerformModeState::new(),
             needs_rebuild: false,
             scroll_dirty: crate::ui_root::ScrollDirty::default(),
-            needs_structural_sync: false,
             automation_lanes_dirty: false,
         }
     }
@@ -822,7 +818,7 @@ impl Application {
     /// project, stamps what the command touches and sends it (UI_INVALIDATION D5).
     pub(crate) fn execute_local(&mut self, cmd: Box<dyn manifold_editing::command::Command>) {
         if let Some(tx) = self.content_tx.as_ref() {
-            crate::ui_bridge::ProjectRef::new(&mut self.local_project, &mut self.ui_edits.stamps, tx).execute(cmd);
+            crate::ui_bridge::ProjectRef::new(&mut self.local_project, &mut self.ui_edits, tx).execute(cmd);
         }
     }
 
@@ -1005,6 +1001,34 @@ impl Application {
                     self.needs_rebuild = true;
                 }
             }
+            TextInputField::SliderRange | TextInputField::EditorSliderRange => {
+                if let Some(ctx) = self.text_input.inspector_param.take()
+                    && let Some(range) = crate::text_input::parse_slider_range(text)
+                {
+                    let range = range.map(|(lo, hi)| {
+                        let stored = |v| crate::text_input::degrees_commit_value(v, ctx.degrees);
+                        (stored(lo), stored(hi))
+                    });
+                    let action = manifold_ui::panels::PanelAction::Params(
+                        manifold_ui::panels::ParamsAction::SetSliderRange(ctx.target, ctx.param_id, range),
+                    );
+                    let content_tx = self.content_tx.as_ref().unwrap().clone();
+                    let mut dctx = crate::ui_bridge::DispatchCtx {
+                        project: crate::ui_bridge::ProjectRef::new(&mut self.local_project, &mut self.ui_edits, &content_tx),
+                        content_tx: &content_tx,
+                        content_state: &self.content_state,
+                        ui: &mut self.ws.ui_root,
+                        selection: &mut self.selection,
+                        active_layer: &mut self.active_layer_id,
+                        user_prefs: &mut self.user_prefs,
+                        editor_target: None,
+                        scrub: &mut self.scrub,
+                        dialogs: crate::file_dialogs::host(&self.window_registry, self.dialog_window_id, self.primary_window_id, self.current_project_path.as_deref()),
+                    };
+                    let _ = crate::ui_bridge::dispatch(&action, &mut dctx);
+                    self.needs_rebuild = true;
+                }
+            }
             TextInputField::InspectorParam | TextInputField::EditorInspectorParam => {
                 if let Some(ctx) = self.text_input.inspector_param.take() {
                     // Lenient parse: keep only the numeric head so a value typed
@@ -1047,7 +1071,7 @@ impl Application {
                             ),
                         ] {
                             let mut dctx = crate::ui_bridge::DispatchCtx {
-                                project: crate::ui_bridge::ProjectRef::new(&mut self.local_project, &mut self.ui_edits.stamps, &content_tx),
+                                project: crate::ui_bridge::ProjectRef::new(&mut self.local_project, &mut self.ui_edits, &content_tx),
                                 content_tx: &content_tx,
                                 content_state: &self.content_state,
                                 ui: &mut self.ws.ui_root,
@@ -1074,7 +1098,7 @@ impl Application {
                     let content_tx = self.content_tx.as_ref().unwrap().clone();
                     for action in crate::text_input::material_colour_scrub_actions(ctx, values) {
                         let mut dctx = crate::ui_bridge::DispatchCtx {
-                            project: crate::ui_bridge::ProjectRef::new(&mut self.local_project, &mut self.ui_edits.stamps, &content_tx),
+                            project: crate::ui_bridge::ProjectRef::new(&mut self.local_project, &mut self.ui_edits, &content_tx),
                             content_tx: &content_tx,
                             content_state: &self.content_state,
                             ui: &mut self.ws.ui_root,
@@ -1116,7 +1140,7 @@ impl Application {
                         value,
                     ));
                     let mut dctx = crate::ui_bridge::DispatchCtx {
-                        project: crate::ui_bridge::ProjectRef::new(&mut self.local_project, &mut self.ui_edits.stamps, &content_tx),
+                        project: crate::ui_bridge::ProjectRef::new(&mut self.local_project, &mut self.ui_edits, &content_tx),
                         content_tx: &content_tx,
                         content_state: &self.content_state,
                         ui: &mut self.ws.ui_root,
@@ -1141,7 +1165,7 @@ impl Application {
                     use manifold_ui::panels::PanelAction;
                     let act = PanelAction::AudioSetup(AudioSetupAction::AudioSendGainSetTyped(ctx.send_id, parsed));
                     let mut dctx = crate::ui_bridge::DispatchCtx {
-                        project: crate::ui_bridge::ProjectRef::new(&mut self.local_project, &mut self.ui_edits.stamps, &content_tx),
+                        project: crate::ui_bridge::ProjectRef::new(&mut self.local_project, &mut self.ui_edits, &content_tx),
                         content_tx: &content_tx,
                         content_state: &self.content_state,
                         ui: &mut self.ws.ui_root,
@@ -1180,7 +1204,7 @@ impl Application {
                             DriverConfigAction::SetFreePeriod(parsed),
                         ));
                         let mut dctx = crate::ui_bridge::DispatchCtx {
-                            project: crate::ui_bridge::ProjectRef::new(&mut self.local_project, &mut self.ui_edits.stamps, &content_tx),
+                            project: crate::ui_bridge::ProjectRef::new(&mut self.local_project, &mut self.ui_edits, &content_tx),
                             content_tx: &content_tx,
                             content_state: &self.content_state,
                             ui: &mut self.ws.ui_root,
@@ -1699,7 +1723,7 @@ impl Application {
                                 let content_tx = self.content_tx.as_ref().unwrap();
                                 let editor_target = self.watched_graph_target.as_ref();
                                 let mut dctx = crate::ui_bridge::DispatchCtx {
-                                    project: crate::ui_bridge::ProjectRef::new(&mut self.local_project, &mut self.ui_edits.stamps, content_tx),
+                                    project: crate::ui_bridge::ProjectRef::new(&mut self.local_project, &mut self.ui_edits, content_tx),
                                     content_tx,
                                     content_state: &self.content_state,
                                     ui: &mut self.ws.ui_root,

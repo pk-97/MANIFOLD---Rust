@@ -107,7 +107,7 @@ pub(crate) fn select_all_in_lane(
             target: target.clone(),
             param_id: param_id.clone(),
             beat: point.beat,
-            value_norm: normalized_value(point.value, param.spec.min, param.spec.max),
+            value_norm: normalized_value(point.value, param.slider_span().0, param.slider_span().1),
         })
         .collect();
     selection.selected_automation_point = selection.selected_automation_points.first().cloned();
@@ -258,10 +258,10 @@ fn copy_time_selection(
                 target: target.clone(),
                 param_id: param_id.clone(),
                 beat_offset: point.beat - start,
-                value_norm: normalized_value(point.value, param.spec.min, param.spec.max),
+                value_norm: normalized_value(point.value, param.slider_span().0, param.slider_span().1),
                 value: point.value,
-                source_min: param.spec.min,
-                source_max: param.spec.max,
+                source_min: param.slider_span().0,
+                source_max: param.slider_span().1,
                 shape: from_core_shape(point.shape),
             });
         }
@@ -312,7 +312,7 @@ pub(crate) fn copy_selected(
         let Some(point) = lane
             .points
             .iter()
-            .find(|point| point_matches_ref(point, &point_ref, param.spec.min, param.spec.max))
+            .find(|point| point_matches_ref(point, &point_ref, param.slider_span().0, param.slider_span().1))
             .copied()
         else {
             continue;
@@ -320,9 +320,9 @@ pub(crate) fn copy_selected(
         let Some(param) = instance.params.get(point_ref.param_id.as_ref()) else {
             continue;
         };
-        let range = param.spec.max - param.spec.min;
+        let range = param.slider_span().1 - param.slider_span().0;
         let value_norm = if range.abs() > f32::EPSILON {
-            (point.value - param.spec.min) / range
+            (point.value - param.slider_span().0) / range
         } else {
             0.0
         };
@@ -334,8 +334,8 @@ pub(crate) fn copy_selected(
             beat_offset: point.beat,
             value_norm: value_norm.clamp(0.0, 1.0),
             value: point.value,
-            source_min: param.spec.min,
-            source_max: param.spec.max,
+            source_min: param.slider_span().0,
+            source_max: param.slider_span().1,
             shape: from_core_shape(point.shape),
         });
     }
@@ -465,7 +465,7 @@ pub(crate) fn delete_selected(
         let Some(param) = inst.params.get(&param_id) else { continue; };
         let mut indices: Vec<usize> = refs
             .iter()
-            .filter_map(|point_ref| lane.points.iter().position(|point| point_matches_ref(point, point_ref, param.spec.min, param.spec.max)))
+            .filter_map(|point_ref| lane.points.iter().position(|point| point_matches_ref(point, point_ref, param.slider_span().0, param.slider_span().1)))
             .collect();
         indices.sort_unstable_by(|a, b| b.cmp(a));
         indices.dedup();
@@ -561,7 +561,7 @@ pub(crate) fn paste(
             return;
         };
         let (param_min, param_max, whole_numbers) =
-            (param.spec.min, param.spec.max, param.whole_numbers());
+            (param.slider_span().0, param.slider_span().1, param.whole_numbers());
         let mut phrase: Vec<_> = clipboard
             .points
             .iter()
@@ -791,7 +791,7 @@ pub(crate) fn insert_shape(
     let Some(param) = instance.params.get(param_id.as_ref()) else {
         return;
     };
-    let (param_min, param_max, whole_numbers) = (param.spec.min, param.spec.max, param.whole_numbers());
+    let (param_min, param_max, whole_numbers) = (param.slider_span().0, param.slider_span().1, param.whole_numbers());
     let lane_points = instance
         .automation_lanes
         .as_ref()

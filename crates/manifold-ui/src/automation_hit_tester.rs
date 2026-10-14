@@ -319,6 +319,7 @@ mod tests {
             beat: Beats(x as f64),
             value_norm: 0.5,
             shape: UiSegmentShape::Linear,
+            past_end: false,
         }
     }
 
@@ -373,6 +374,7 @@ mod tests {
             beat: Beats(x as f64),
             value_norm,
             shape,
+            past_end: false,
         }
     }
 
