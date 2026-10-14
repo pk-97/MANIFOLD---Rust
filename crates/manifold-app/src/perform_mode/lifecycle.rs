@@ -65,10 +65,9 @@ impl Application {
             if self.perform.active {
                 self.perform.active = false;
                 self.perform.exit_button_hover = false;
-                // Rebuild the frozen tree. The planner compares against the
+                // Repaint the frozen tree. The planner compares against the
                 // last normal frame's inputs, so whatever moved during the
                 // set re-projects on the first frame back.
-                self.needs_rebuild = true;
                 self.ws.ui_root.tree.mark_all_dirty();
                 if let Some(cm) = &mut self.ui_cache_manager {
                     cm.invalidate_all();

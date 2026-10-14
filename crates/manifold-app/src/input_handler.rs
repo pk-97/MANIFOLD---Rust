@@ -567,11 +567,9 @@ mod b14_keyboard_layer_tests {
             false
         }
         fn close_output_window(&mut self) {}
-        fn request_rebuild(&mut self) {}
         fn on_undo_redo(&mut self) {}
         fn on_selection_cleared(&mut self) {}
         fn mark_compositor_dirty(&mut self) {}
-        fn invalidate_all_layer_bitmaps(&mut self) {}
         fn update_zoom_label(&mut self) {}
         fn get_playhead_viewport_x(&self) -> f32 {
             0.0

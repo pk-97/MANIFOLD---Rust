@@ -196,6 +196,7 @@ impl ScenePanel {
         for (card_index, card) in self.object_modifier_cards.iter_mut().enumerate() {
             card.update_selection_visual(tree, card_index == index);
         }
+        self.view_version += 1;
         true
     }
 
@@ -488,6 +489,9 @@ impl ScenePanel {
         }
         self.object_cards_animating = any || self.object_cards_were_animating;
         self.object_cards_were_animating = any;
+        if self.object_cards_animating {
+            self.view_version += 1;
+        }
         if let Some(pos) = self.object_modifier_drag.as_ref().and_then(|drag| drag.pointer) {
             let bounds = self.object_modifier_bounds;
             if bounds.contains(pos) {
@@ -515,6 +519,9 @@ impl ScenePanel {
         }
         self.object_cards_animating = false;
         self.object_cards_were_animating = false;
+        if any {
+            self.view_version += 1;
+        }
         any
     }
 

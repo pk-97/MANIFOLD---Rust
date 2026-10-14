@@ -516,10 +516,6 @@ pub struct Application {
     // split-borrow it alongside ui_root.viewport and create AppEditingHost.
     pub(crate) overlay: manifold_ui::interaction_overlay::InteractionOverlay,
 
-    /// Per-layer bitmap invalidation targets from editing operations.
-    /// Drained in app_render.rs to call invalidate() on targeted layers only.
-    pub(crate) invalidate_layers: Vec<usize>,
-
     // Detected display resolutions: (width, height, label).
     // Populated from winit monitors at startup. Matches Unity Footer.CollectDisplayResolutions.
     pub(crate) display_resolutions: Vec<(u32, u32, String)>,
@@ -536,13 +532,6 @@ pub struct Application {
     pub(crate) pending_open_graph_editor: bool,
     /// Performance mode state — see `crate::perform_mode`.
     pub(crate) perform: crate::perform_mode::PerformModeState,
-    pub(crate) needs_rebuild: bool,
-    /// Fine-grained scroll dirty flags — tracks which axis changed to enable
-    /// skipping layer header rebuild on horizontal-only scroll.
-    pub(crate) scroll_dirty: crate::ui_root::ScrollDirty,
-    /// Set by `AppEditingHost::request_automation_lane_resync`; consumed by
-    /// tick_and_render's lanes-only geometry resync.
-    pub(crate) automation_lanes_dirty: bool,
 }
 
 impl Application {
@@ -743,7 +732,6 @@ impl Application {
             overlay: manifold_ui::interaction_overlay::InteractionOverlay::new(
                 manifold_ui::color::CLIP_VERTICAL_PAD,
             ),
-            invalidate_layers: Vec::new(),
             display_resolutions: Vec::new(),
             initialized: false,
             shutting_down: false,
@@ -752,9 +740,6 @@ impl Application {
             pending_close_output: false,
             pending_open_graph_editor: false,
             perform: crate::perform_mode::PerformModeState::new(),
-            needs_rebuild: false,
-            scroll_dirty: crate::ui_root::ScrollDirty::default(),
-            automation_lanes_dirty: false,
         }
     }
 
@@ -978,7 +963,6 @@ impl Application {
                             self.send_content_cmd(ContentCommand::ExecuteOnContent(Box::new(cmd)));
                         }
                     }
-                    self.needs_rebuild = true;
                 }
             }
             TextInputField::Fps => {
@@ -998,7 +982,6 @@ impl Application {
                     }
                     // Content thread renders at project FPS; UI always runs at display rate.
                     self.send_content_cmd(ContentCommand::SetFrameRate(fps as f64));
-                    self.needs_rebuild = true;
                 }
             }
             TextInputField::SliderRange | TextInputField::EditorSliderRange => {
@@ -1026,7 +1009,6 @@ impl Application {
                         dialogs: crate::file_dialogs::host(&self.window_registry, self.dialog_window_id, self.primary_window_id, self.current_project_path.as_deref()),
                     };
                     let _ = crate::ui_bridge::dispatch(&action, &mut dctx);
-                    self.needs_rebuild = true;
                 }
             }
             TextInputField::InspectorParam | TextInputField::EditorInspectorParam => {
@@ -1084,7 +1066,6 @@ impl Application {
                             };
                             let _ = crate::ui_bridge::dispatch(&act, &mut dctx);
                         }
-                        self.needs_rebuild = true;
                     }
                 }
             }
@@ -1111,7 +1092,6 @@ impl Application {
                         };
                         let _ = crate::ui_bridge::dispatch(&action, &mut dctx);
                     }
-                    self.needs_rebuild = true;
                 }
             }
             TextInputField::SceneNumericParam(node_doc_id) => {
@@ -1152,7 +1132,6 @@ impl Application {
                         dialogs: crate::file_dialogs::host(&self.window_registry, self.dialog_window_id, self.primary_window_id, self.current_project_path.as_deref()),
                     };
                     let _ = crate::ui_bridge::dispatch(&act, &mut dctx);
-                    self.needs_rebuild = true;
                 }
             }
             TextInputField::AudioSendGainParam => {
@@ -1177,7 +1156,6 @@ impl Application {
                         dialogs: crate::file_dialogs::host(&self.window_registry, self.dialog_window_id, self.primary_window_id, self.current_project_path.as_deref()),
                     };
                     let _ = crate::ui_bridge::dispatch(&act, &mut dctx);
-                    self.needs_rebuild = true;
                 }
             }
             TextInputField::AutomationPointValue | TextInputField::AutomationPointTime => {
@@ -1216,7 +1194,6 @@ impl Application {
                             dialogs: crate::file_dialogs::host(&self.window_registry, self.dialog_window_id, self.primary_window_id, self.current_project_path.as_deref()),
                         };
                         let _ = crate::ui_bridge::dispatch(&act, &mut dctx);
-                        self.needs_rebuild = true;
                     }
                 }
             }
@@ -1237,7 +1214,6 @@ impl Application {
                         self.execute_local(Box::new(cmd));
                     }
                 }
-                self.needs_rebuild = true;
             }
             TextInputField::ClipBpm => {
                 // Unity: ClipInspector.OnBitmapBpmCommit
@@ -1269,7 +1245,6 @@ impl Application {
                         }
                     }
                 }
-                self.needs_rebuild = true;
             }
             TextInputField::MacroLabel(idx) => {
                 let new_label = text.trim().to_string();
@@ -1283,7 +1258,6 @@ impl Application {
                         self.execute_local(Box::new(cmd));
                     }
                 }
-                self.needs_rebuild = true;
             }
             TextInputField::EffectParam(effect_idx, param_idx) => {
                 if let Ok(parsed) = text.parse::<f32>() {
@@ -1361,7 +1335,6 @@ impl Application {
                         self.execute_local(Box::new(cmd));
                     }
                 }
-                self.needs_rebuild = true;
             }
             TextInputField::GenParam(param_idx) => {
                 if let Ok(parsed) = text.parse::<f32>()
@@ -1399,7 +1372,6 @@ impl Application {
                         self.execute_local(Box::new(cmd));
                     }
                 }
-                self.needs_rebuild = true;
             }
             TextInputField::GenStringParam(sp_idx) => {
                 // Commit a generator string param change (e.g. text content).
@@ -1447,7 +1419,6 @@ impl Application {
                         }
                     }
                 }
-                self.needs_rebuild = true;
             }
             TextInputField::GroupRename(group_idx) => {
                 let new_name = text.trim().to_string();
@@ -1502,15 +1473,10 @@ impl Application {
                         self.execute_local(Box::new(cmd));
                     }
                 }
-                self.needs_rebuild = true;
             }
             TextInputField::SearchFilter => {
                 // Update browser popup filter — no undo command
-                self.ws
-                    .ui_root
-                    .browser_popup
-                    .set_filter(text.trim().to_string());
-                self.needs_rebuild = true;
+                self.ws.ui_root.set_browser_filter(text.trim().to_string());
             }
             TextInputField::MarkerName => {
                 if let Some(marker_id) = self.text_input.marker_id.take() {
@@ -1528,7 +1494,6 @@ impl Application {
                         self.execute_local(Box::new(cmd));
                     }
                 }
-                self.needs_rebuild = true;
             }
             TextInputField::AudioSendLabel => {
                 if let Some(send_id) = self.text_input.audio_send_id.take() {
@@ -1547,7 +1512,6 @@ impl Application {
                         self.execute_local(Box::new(cmd));
                     }
                 }
-                self.needs_rebuild = true;
             }
             // ── Graph-editor fields ──────────────────────────────────────
             // The graph canvas renders from `content_state.active_graph_snapshot`
@@ -1594,21 +1558,18 @@ impl Application {
                 let new_handle = text.trim().to_string();
                 if !new_handle.is_empty()
                     && let Some(layer_id) = self.text_input.scene_object_layer_id.take()
-                {
-                    if let Some(default) =
+                    && let Some(default) =
                         crate::ui_bridge::generator_catalog_default(&self.local_project, &layer_id)
-                    {
-                        let target = manifold_core::GraphTarget::Generator(layer_id);
-                        let cmd = manifold_editing::commands::graph::RenameSceneObjectCommand::new(
-                            target,
-                            Vec::new(),
-                            object_node_id,
-                            new_handle,
-                            default,
-                        );
-                        self.send_content_cmd(ContentCommand::ExecuteOnContent(Box::new(cmd)));
-                    }
-                    self.needs_rebuild = true;
+                {
+                    let target = manifold_core::GraphTarget::Generator(layer_id);
+                    let cmd = manifold_editing::commands::graph::RenameSceneObjectCommand::new(
+                        target,
+                        Vec::new(),
+                        object_node_id,
+                        new_handle,
+                        default,
+                    );
+                    self.send_content_cmd(ContentCommand::ExecuteOnContent(Box::new(cmd)));
                 }
             }
             TextInputField::SceneLightRename(light_node_id) => {
@@ -1618,21 +1579,18 @@ impl Application {
                 let new_handle = text.trim().to_string();
                 if !new_handle.is_empty()
                     && let Some(layer_id) = self.text_input.scene_object_layer_id.take()
-                {
-                    if let Some(default) =
+                    && let Some(default) =
                         crate::ui_bridge::generator_catalog_default(&self.local_project, &layer_id)
-                    {
-                        let target = manifold_core::GraphTarget::Generator(layer_id);
-                        let cmd = manifold_editing::commands::graph::SetNodeHandleCommand::new(
-                            target,
-                            Vec::new(),
-                            light_node_id,
-                            new_handle,
-                            default,
-                        );
-                        self.send_content_cmd(ContentCommand::ExecuteOnContent(Box::new(cmd)));
-                    }
-                    self.needs_rebuild = true;
+                {
+                    let target = manifold_core::GraphTarget::Generator(layer_id);
+                    let cmd = manifold_editing::commands::graph::SetNodeHandleCommand::new(
+                        target,
+                        Vec::new(),
+                        light_node_id,
+                        new_handle,
+                        default,
+                    );
+                    self.send_content_cmd(ContentCommand::ExecuteOnContent(Box::new(cmd)));
                 }
             }
             TextInputField::GraphStringParam(node_id) => {
@@ -1757,7 +1715,6 @@ impl Application {
                             .with_scope(scope);
                             self.send_content_cmd(ContentCommand::Execute(Box::new(cmd)));
                         }
-                        self.needs_rebuild = true;
                     }
                 }
             }
@@ -1862,7 +1819,6 @@ impl Application {
                         }
                     }
                 }
-                self.needs_rebuild = true;
             }
             TextInputField::RenamePreset => {
                 // Browser management-menu Rename commit (PRESET_LIBRARY_DESIGN
@@ -1898,7 +1854,6 @@ impl Application {
                         }
                     }
                 }
-                self.needs_rebuild = true;
             }
         }
     }
@@ -2628,7 +2583,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         // Build UI at initial window size (logical pixels)
         let logical_w = size.width as f32 / scale as f32;
         let logical_h = size.height as f32 / scale as f32;
-        self.ws.ui_root.resize(logical_w, logical_h);
+        self.ws.ui_root.set_screen_size(logical_w, logical_h);
         #[cfg(target_os = "macos")]
         self.sync_workspace_preview_size();
 
@@ -2752,7 +2707,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                         }
                         let logical_w = size.width as f32 / scale as f32;
                         let logical_h = size.height as f32 / scale as f32;
-                        self.ws.ui_root.resize(logical_w, logical_h);
+                        self.ws.ui_root.set_screen_size(logical_w, logical_h);
                     } else {
                         // Output window resized — update drawable.
                         self.send_content_cmd(ContentCommand::ResizeOutputSurface(
@@ -2779,7 +2734,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                         }
                         let logical_w = size.width as f32 / scale_factor as f32;
                         let logical_h = size.height as f32 / scale_factor as f32;
-                        self.ws.ui_root.resize(logical_w, logical_h);
+                        self.ws.ui_root.set_screen_size(logical_w, logical_h);
                         self.scale_factor = scale_factor;
                     }
                 }
@@ -2847,13 +2802,13 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                             self.ws.ui_root.end_inspector_resize();
                         }
                     }
-                    // Clear clip hover so bitmap doesn't stay painted in hover state
+                    // Clear clip hover so the clip pass stops drawing it
                     if self.selection.hovered_clip_id.is_some() {
                         self.selection.hovered_clip_id = None;
-                        self.scroll_dirty.visual = true;
+                        self.ws.offscreen_dirty = true;
                     }
                     if self.selection.automation_feedback.take().is_some() {
-                        self.scroll_dirty.visual = true;
+                        self.ws.offscreen_dirty = true;
                     }
                     // Keep the frame/present hover pass from re-deriving an
                     // automation affordance at the last in-window point.
@@ -2881,10 +2836,10 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                     if self.ws.ui_root.inspector_resize_dragging {
                         self.ws.ui_root.end_inspector_resize();
                     }
-                    // Clear clip hover so bitmap doesn't stay painted in hover state
+                    // Clear clip hover so the clip pass stops drawing it
                     if self.selection.hovered_clip_id.is_some() {
                         self.selection.hovered_clip_id = None;
-                        self.scroll_dirty.visual = true;
+                        self.ws.offscreen_dirty = true;
                     }
                 }
             }

@@ -65,7 +65,6 @@ use super::fixtures::SceneData;
 use crate::content_command::ContentCommand;
 use crate::content_state::ContentState;
 use crate::editing_host::AppEditingHost;
-use crate::ui_frame::UiFrameFlags;
 use crate::ui_root::UIRoot;
 
 /// Fixed per-`Step` delta — the fixture's project runs at 60 fps default
@@ -457,10 +456,9 @@ struct Runner {
     content_state: ContentState,
     cursor_manager: manifold_ui::cursors::CursorManager,
     active_layer: Option<LayerId>,
-    /// The per-frame flags input handlers and the editing host set, consumed
-    /// by `ui_frame::apply_frame_plan` exactly as the live App consumes
-    /// its own.
-    flags: UiFrameFlags,
+    /// A repaint request (UI_INVALIDATION D8), set where the App sets its
+    /// `offscreen_dirty`. The runner paints every frame, so nothing reads it.
+    redraw: bool,
     /// The frame planner, as the App owns its own (D6).
     planner: crate::frame_plan::FramePlanner,
     /// The content thread's part stamps, modelled: every absorbed command
@@ -567,7 +565,7 @@ impl Runner {
             content_state: ContentState::default(),
             cursor_manager: manifold_ui::cursors::CursorManager::default(),
             active_layer: None,
-            flags: UiFrameFlags::default(),
+            redraw: false,
             planner: Default::default(),
             content_stamps: Default::default(),
             transport_cache: crate::ui_bridge::TransportDisplayCache::new(),
@@ -870,10 +868,9 @@ impl Runner {
                 }
             }
             AutomationAction::Modifiers { modifiers } => {
-                // `window_input::input_modifiers`: store, forward, rebuild.
+                // `window_input::input_modifiers`: store and forward.
                 self.modifiers = *modifiers;
                 self.overlay.set_modifiers(*modifiers);
-                self.flags.rebuild = true;
                 ui.input.set_modifiers(*modifiers);
                 self.live_frame(ui, data, render, false, true);
                 StepResult { index, action: action_desc, status: "ok", detail: "modifiers set".into(), artifact: None }
@@ -917,6 +914,12 @@ impl Runner {
             }
             AutomationAction::AssertWork { window } => self.assert_work(ui, index, action_desc, window, out_dir),
             AutomationAction::AssertFresh => self.assert_fresh(ui, data, render, index, action_desc, out_dir),
+            AutomationAction::ExternalEdit => {
+                use manifold_core::change::{ChangeSet, Part};
+                self.content_stamps.bump(ChangeSet::of(&[Part::Layers, Part::Effects]));
+                self.live_frame(ui, data, render, false, true);
+                StepResult { index, action: action_desc, status: "ok", detail: "layers and effects stamps moved".into(), artifact: None }
+            }
         };
         // BUG-198: whatever this step just sent over `content_tx` (via
         // `AppEditingHost`/`ui_bridge::dispatch`) has already been applied
@@ -932,11 +935,11 @@ impl Runner {
 
     /// The overlay half of a cursor move (`window_input` cursor-moved): every
     /// move, pressed or not, runs `InteractionOverlay::on_pointer_move` with the
-    /// App's own flags, unless a modal blocks background input.
+    /// App's own repaint request, unless a modal blocks background input.
     fn overlay_hover(&mut self, ui: &mut UIRoot, data: &mut SceneData, pos: Vec2) {
         if ui.background_input_blocked() {
             if data.selection.automation_feedback.take().is_some() {
-                self.flags.scroll.visual = true;
+                self.redraw = true;
             }
             return;
         }
@@ -946,10 +949,7 @@ impl Runner {
             &self.content_state,
             &mut self.cursor_manager,
             &mut self.active_layer,
-            &mut self.flags.rebuild,
-            &mut self.flags.automation_lanes,
-            &mut self.flags.scroll,
-            &mut self.flags.invalidated_layers,
+            &mut self.redraw,
             &mut self.edits,
         );
         self.overlay.on_pointer_move(pos, &mut host, &mut data.selection, &ui.viewport);
@@ -985,6 +985,13 @@ impl Runner {
         // The snapshot echo of what the last frame sent, folded as the App
         // folds an accepted snapshot.
         self.edits.stamps.fold_snapshot(&self.content_stamps);
+        // Settling a tween moves its panel's view version, so this frame's
+        // plan rebuilds the settled layout.
+        if settle_tweens {
+            ui.inspector.skip_to_settled(&mut ui.tree);
+            ui.scene_setup_panel.skip_cards_to_settled(&mut ui.tree);
+        }
+        crate::ui_bridge::check_auto_scroll(ui, &data.content, &data.project);
         let automation_draw_mode = data.selection.automation_draw_mode;
         let inputs = crate::ui_frame::gather_frame_inputs(
             &mut self.planner,
@@ -1013,7 +1020,7 @@ impl Runner {
             &mut data.project,
             &mut data.selection,
             &mut self.active_layer,
-            self.flags.as_mut(),
+            &mut self.redraw,
             &plan,
             changes,
             crate::ui_frame::PushInputs {
@@ -1022,25 +1029,13 @@ impl Runner {
                 project_path: None,
                 transport_cache: &mut self.transport_cache,
             },
-            |ui, _, _, _, flags| {
-                if settle_tweens
-                    && (ui.inspector.skip_to_settled(&mut ui.tree)
-                        | ui.scene_setup_panel.skip_cards_to_settled(&mut ui.tree))
-                {
-                    *flags.needs_rebuild = true;
-                }
+            |_, _, _, _, _| {
                 use manifold_ui::interaction_overlay::DragMode;
                 matches!(overlay.drag_mode(), DragMode::Move | DragMode::TrimLeft | DragMode::TrimRight)
             },
         );
         data.active = self.active_layer.as_ref().and_then(|id| data.project.timeline.find_layer_index_by_id(id));
         ui.update();
-        if ui.inspector.drawer_anim_active()
-            || ui.scene_setup_panel.object_cards_animating()
-            || ui.layout.is_split_reset_animating()
-        {
-            self.flags.rebuild = true;
-        }
         ui.viewport.repaint_dirty_layers();
         ui.viewport.repaint_overview();
         self.editor_frame(data);
@@ -1097,7 +1092,6 @@ impl Runner {
         // A tween the last frame started (the value-change flash after an
         // undo) settles in the next frame; compare settled frames only.
         if ui.inspector.skip_to_settled(&mut ui.tree) | ui.scene_setup_panel.skip_cards_to_settled(&mut ui.tree) {
-            self.flags.rebuild = true;
             self.live_frame(ui, data, render, false, true);
         }
         let tree_before = surfaces_dump(self, ui);
@@ -1105,7 +1099,6 @@ impl Runner {
         let editor_before = self.editor.as_ref().map(RunnerEditor::dump);
 
         self.fresh_reference = true;
-        self.flags.rebuild = true;
         self.live_frame(ui, data, render, false, true);
 
         let tree_after = surfaces_dump(self, ui);
@@ -1244,19 +1237,14 @@ impl Runner {
             let beat_at_cursor = viewport.pixel_to_beat(pos.x).as_f32();
             let new_ppb = viewport.zoom_continuous(factor);
             viewport.zoom_to(new_ppb, beat_at_cursor, pos.x);
-            self.flags.scroll.zoom = true;
         } else if self.modifiers.shift {
             let beat_delta = dy * manifold_ui::color::SCROLL_SENSITIVITY / viewport.pixels_per_beat();
             let new_x = (viewport.scroll_x_beats().as_f32() - beat_delta).max(0.0);
-            if viewport.set_scroll(new_x, viewport.scroll_y_px()) {
-                self.flags.scroll.scroll_x = true;
-            }
+            viewport.set_scroll(new_x, viewport.scroll_y_px());
             viewport.note_user_scroll_x();
         } else {
             let new_y = (viewport.scroll_y_px() - dy).max(0.0);
-            if viewport.set_scroll(viewport.scroll_x_beats().as_f32(), new_y) {
-                self.flags.scroll.scroll_y = true;
-            }
+            viewport.set_scroll(viewport.scroll_x_beats().as_f32(), new_y);
         }
     }
 
@@ -1281,12 +1269,9 @@ impl Runner {
             match handle {
                 ResizeHandle::TimelineSplit => {
                     ui.layout.update_split_from_drag(pos);
-                    self.flags.rebuild = true;
                 }
                 ResizeHandle::InspectorWidth => {
-                    if ui.update_inspector_resize(pos) {
-                        self.flags.rebuild = true;
-                    }
+                    ui.update_inspector_resize(pos);
                 }
             }
             self.live_frame(ui, data, render, false, true);
@@ -1602,10 +1587,9 @@ impl Runner {
         // in the same order as `window_input::primary_mouse_wheel`.
         if ui.inspector.scene_content_rect().contains(center) || ui.layout.audio_setup().contains(center) {
             // `window_input::primary_mouse_wheel`'s dock branch: the generic
-            // scroll pipeline, then a rebuild that bakes the offset in.
+            // scroll pipeline; the moved offset is a planner input.
             ui.input.process_scroll(center, delta);
             self.drain_and_dispatch(ui, data);
-            self.flags.rebuild = true;
         } else if ui.layout.inspector().contains(center) {
             if ui.try_inspector_scroll(delta.y, center.x) {
                 return ui.inspector.take_scrolled_in_place();
@@ -1796,10 +1780,7 @@ impl Runner {
             &self.content_state,
             &mut self.cursor_manager,
             &mut self.active_layer,
-            &mut self.flags.rebuild,
-            &mut self.flags.automation_lanes,
-            &mut self.flags.scroll,
-            &mut self.flags.invalidated_layers,
+            &mut self.redraw,
             &mut self.edits,
         );
         for event in &viewport_events {
@@ -1939,7 +1920,7 @@ impl Runner {
                     &mut *ui,
                     &mut data.selection,
                     &mut self.active_layer,
-                    &mut self.flags,
+                    &mut self.redraw,
                     &mut self.edits,
                     &mut scratch,
                     &mut project_io,

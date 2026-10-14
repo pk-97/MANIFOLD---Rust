@@ -1458,7 +1458,6 @@ impl ContentThread {
             spectrogram_mid_hz,
             spectrogram_features,
             osc_sender_enabled: self.transport_controller.osc_sender_enabled,
-            percussion_importing: self.percussion_orchestrator.is_import_in_progress(),
             percussion_status_message: self.cached_perc_message.clone(),
             percussion_progress: if perc_progress < 0.0 {
                 0.0

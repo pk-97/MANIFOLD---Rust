@@ -7,6 +7,7 @@
 //! to avoid borrowing the entire Application — this lets the overlay
 //! simultaneously borrow ui_root and selection from Application.
 use manifold_ui::{EditingAction};
+use manifold_core::change::{ChangeSet, Part};
 use manifold_core::{Beats, ClipId, GraphTarget, LayerId, Seconds};
 use std::collections::HashSet;
 
@@ -94,13 +95,8 @@ pub struct AppEditingHost<'a> {
     pub content_state: &'a crate::content_state::ContentState,
     pub cursor_manager: &'a mut CursorManager,
     pub active_layer: &'a mut Option<LayerId>,
-    pub needs_rebuild: &'a mut bool,
-    /// Lane geometry must be re-projected from the local project (a point
-    /// preview or restore). Drained by app_render.rs's lanes-only resync.
-    pub automation_lanes_dirty: &'a mut bool,
-    pub scroll_dirty: &'a mut crate::ui_root::ScrollDirty,
-    /// Per-layer bitmap invalidation targets. Drained in app_render.rs.
-    pub invalidate_layers: &'a mut Vec<usize>,
+    /// The main window repaints next frame (UI_INVALIDATION D8).
+    pub redraw: &'a mut bool,
 
     // Command batch accumulator (for begin_command_batch / commit_command_batch)
     command_batch: Vec<Box<dyn Command>>,
@@ -156,10 +152,7 @@ impl<'a> AppEditingHost<'a> {
         content_state: &'a crate::content_state::ContentState,
         cursor_manager: &'a mut CursorManager,
         active_layer: &'a mut Option<LayerId>,
-        needs_rebuild: &'a mut bool,
-        automation_lanes_dirty: &'a mut bool,
-        scroll_dirty: &'a mut crate::ui_root::ScrollDirty,
-        invalidate_layers: &'a mut Vec<usize>,
+        redraw: &'a mut bool,
         edits: &'a mut crate::gesture_preview::UiEdits,
     ) -> Self {
         Self {
@@ -168,10 +161,7 @@ impl<'a> AppEditingHost<'a> {
             content_state,
             cursor_manager,
             active_layer,
-            needs_rebuild,
-            automation_lanes_dirty,
-            scroll_dirty,
-            invalidate_layers,
+            redraw,
             command_batch: Vec::new(),
             edits,
             pending_actions: Vec::new(),
@@ -442,29 +432,10 @@ impl TimelineEditingHost for AppEditingHost<'_> {
         }
     }
 
-    // ── Bitmap invalidation ─────────────────────────────────────
+    // ── Repaint ─────────────────────────────────────────────────
 
-    fn invalidate_layer_bitmap(&mut self, layer_index: usize) {
-        self.invalidate_layers.push(layer_index);
-    }
-
-    fn invalidate_all_layer_bitmaps(&mut self) {
-        self.scroll_dirty.visual = true;
-    }
-
-    // No projection flag: every caller follows a committing method (which
-    // stamps) or an automation-view change, and the planner keys on both.
-    fn mark_dirty(&mut self) {
-        *self.needs_rebuild = true;
-    }
-
-    fn request_redraw(&mut self) {
-        self.scroll_dirty.visual = true;
-    }
-
-    fn request_automation_lane_resync(&mut self) {
-        *self.automation_lanes_dirty = true;
-        self.scroll_dirty.visual = true;
+    fn redraw(&mut self) {
+        *self.redraw = true;
     }
 
     // ── Cursor ──────────────────────────────────────────────────
@@ -789,7 +760,6 @@ impl TimelineEditingHost for AppEditingHost<'_> {
             self.content_tx,
             crate::content_command::ContentCommand::Execute(Box::new(cmd)),
         );
-        self.mark_dirty();
     }
 
     fn insert_automation_point_on_curve(
@@ -832,9 +802,6 @@ impl TimelineEditingHost for AppEditingHost<'_> {
             self.content_tx,
             crate::content_command::ContentCommand::Execute(Box::new(local_cmd)),
         );
-        if value.is_some() {
-            self.mark_dirty();
-        }
         value
     }
 
@@ -919,7 +886,6 @@ impl TimelineEditingHost for AppEditingHost<'_> {
             self.content_tx,
             crate::content_command::ContentCommand::Execute(Box::new(cmd)),
         );
-        self.mark_dirty();
     }
 
     // ── Automation lane editing — segment gestures (P4 Unit B) ───────
@@ -1100,8 +1066,9 @@ impl TimelineEditingHost for AppEditingHost<'_> {
                 mutated = lanes.len() != old_len;
                 if mutated && lanes.is_empty() { inst.automation_lanes = None; }
             }
+            // A lane appearing or vanishing is a shape change; it stamps like a commit.
             if mutated {
-                self.mark_dirty();
+                self.edits.stamps.bump(ChangeSet::of(&[Part::Automation]));
             }
             return;
         };
@@ -1137,7 +1104,7 @@ impl TimelineEditingHost for AppEditingHost<'_> {
             }
         }
         if created {
-            self.mark_dirty();
+            self.edits.stamps.bump(ChangeSet::of(&[Part::Automation]));
         }
     }
 

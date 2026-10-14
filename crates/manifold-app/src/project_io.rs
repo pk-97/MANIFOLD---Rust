@@ -152,8 +152,6 @@ pub struct ProjectIOAction {
     pub(crate) material_upgrade_applied: bool,
     /// Whether the editing service should be marked clean.
     pub mark_clean: bool,
-    /// Whether clip sync is needed (replaces host.MarkNeedsClipSync).
-    pub needs_clip_sync: bool,
     /// New project path to set as current (for window title, save, etc.).
     pub set_project_path: Option<PathBuf>,
     /// Flash the save button (visual feedback).
@@ -981,9 +979,6 @@ impl ProjectIOService {
             {
                 let midi_action =
                     self.process_dropped_midi_file(fp, drop_beat, drop_layer_index, project);
-                if midi_action.needs_clip_sync {
-                    action.needs_clip_sync = true;
-                }
                 action.record_commands.extend(midi_action.record_commands);
             }
         }
@@ -1178,7 +1173,6 @@ impl ProjectIOService {
                 None => Box::new(add_clip),
             };
             action.record_commands.push(cmd);
-            action.needs_clip_sync = true;
             audio_imported += 1;
         }
         if audio_imported > 0 {
@@ -1202,8 +1196,6 @@ impl ProjectIOService {
                     .record_commands
                     .push(Box::new(CompositeCommand::new(drop_commands, description)));
             }
-
-            action.needs_clip_sync = true;
             log::info!(
                 "[ProjectIO] Dropped {} file(s) at beat {:.2}, layer {}",
                 imported_count,
@@ -1249,10 +1241,7 @@ impl ProjectIOService {
         );
 
         if result.success {
-            let mut action = ProjectIOAction {
-                needs_clip_sync: true,
-                ..Default::default()
-            };
+            let mut action = ProjectIOAction::default();
             if let Some(cmd) = result.undo_command {
                 action.record_commands.push(cmd);
             }
@@ -1482,7 +1471,7 @@ mod tests {
             0.5,
         );
 
-        assert!(action.needs_clip_sync);
+        assert!(!action.record_commands.is_empty());
         assert_eq!(project.timeline.layers[0].clips.len(), 1);
         assert!(!project.timeline.layers[0].has_overlapping_clips());
 

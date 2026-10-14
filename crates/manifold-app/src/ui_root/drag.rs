@@ -467,18 +467,14 @@ mod drag_capture_tests {
     // `three_pixel_wiggle_without_immediate_drag_still_resolves_to_click` and
     // `request_immediate_drag_allows_one_pixel_move_to_begin_drag` there.
 
-    /// One app frame's post-process rebuild: `overlay_dirty` (set whenever an
-    /// overlay consumes an event) drives a VISUAL scroll rebuild through the
-    /// frame seam the app runs, which rebuilds the Overlays region and
-    /// re-mints the Audio Setup chrome.
+    /// A rebuild between press and release through the frame seam the app
+    /// runs: the overlays and the Audio Setup dock both re-mint, the worst
+    /// case a consumed press can cause.
     fn settle(ui: &mut UIRoot) {
-        if ui.take_overlay_dirty() {
-            let mut signals = crate::ui_frame::UiFrameSignals {
-                scroll_dirty: ScrollDirty { visual: true, ..ScrollDirty::default() },
-                ..Default::default()
-            };
-            crate::ui_frame::apply_ui_frame_invalidations(ui, None, &mut signals);
-        }
+        let mut signals = crate::ui_frame::UiFrameSignals::default();
+        signals.rebuild.insert(crate::frame_plan::MainRegion::Overlays);
+        signals.rebuild.insert(crate::frame_plan::MainRegion::AudioDock);
+        crate::ui_frame::apply_ui_frame_invalidations(ui, None, &mut signals);
     }
 
     fn open_audio_panel_with_send(ui: &mut UIRoot) {

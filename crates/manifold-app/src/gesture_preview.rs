@@ -241,10 +241,7 @@ mod tests {
         content_state: crate::content_state::ContentState,
         cursor: manifold_ui::cursors::CursorManager,
         active_layer: Option<LayerId>,
-        needs_rebuild: bool,
-        automation_lanes_dirty: bool,
-        scroll_dirty: crate::ui_root::ScrollDirty,
-        invalidate: Vec<usize>,
+        redraw: bool,
         edits: UiEdits,
     }
 
@@ -258,10 +255,7 @@ mod tests {
                 content_state: Default::default(),
                 cursor: Default::default(),
                 active_layer: None,
-                needs_rebuild: false,
-                automation_lanes_dirty: false,
-                scroll_dirty: Default::default(),
-                invalidate: Vec::new(),
+                redraw: false,
                 edits: UiEdits::default(),
             }
         }
@@ -273,10 +267,7 @@ mod tests {
                 &self.content_state,
                 &mut self.cursor,
                 &mut self.active_layer,
-                &mut self.needs_rebuild,
-                &mut self.automation_lanes_dirty,
-                &mut self.scroll_dirty,
-                &mut self.invalidate,
+                &mut self.redraw,
                 &mut self.edits,
             )
         }

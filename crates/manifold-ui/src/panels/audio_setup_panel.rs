@@ -554,11 +554,17 @@ impl AudioSetupPanel {
         self.build_nodes(tree, rect.x, rect.y, rect.height);
     }
 
-    /// Mouse-wheel scroll for the docked body. Returns true if the offset moved
-    /// (caller schedules a rebuild so the offset is re-applied). Sign convention
-    /// matches the inspector's wheel handler (positive `delta` = wheel up).
+    /// Mouse-wheel scroll for the docked body. Returns true if the offset moved;
+    /// the planner sees the offset ([`Self::scroll_px`]) and rebuilds the dock.
+    /// Sign convention matches the inspector's wheel handler (positive
+    /// `delta` = wheel up).
     pub fn handle_scroll(&mut self, delta: f32) -> bool {
         self.scroll.apply_scroll_delta(delta)
+    }
+
+    /// The docked body's scroll offset, a planner input.
+    pub fn scroll_px(&self) -> f32 {
+        self.scroll.scroll_offset()
     }
 
     /// The modal chrome as a host `View`: the hit-testable background (it must
@@ -2007,9 +2013,7 @@ impl AudioSetupPanel {
             // `UIEvent::Scroll` pipeline (same mechanism the dropdown uses) —
             // `window_input` already gated on `layout.audio_setup().contains(pos)`
             // before emitting this, so no further position check is needed here.
-            // `window_input.rs`'s dock-scroll branch also sets
-            // `needs_rebuild` so the next frame actually re-applies the
-            // new offset.
+            // The frame planner sees the new offset and rebuilds the dock.
             UIEvent::Scroll { delta, .. } => {
                 self.handle_scroll(delta.y);
                 (true, Vec::new())

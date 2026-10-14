@@ -70,7 +70,6 @@ impl AppInputHost<'_> {
                 ));
             }
         }
-        *self.needs_rebuild = true;
         true
     }
 
@@ -109,7 +108,6 @@ impl AppInputHost<'_> {
             }
         };
         ContentCommand::send(self.content_tx, ContentCommand::SceneModifier(edit));
-        *self.needs_rebuild = true;
         true
     }
 }

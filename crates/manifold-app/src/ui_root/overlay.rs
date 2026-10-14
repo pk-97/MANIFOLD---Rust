@@ -89,31 +89,18 @@ impl UIRoot {
         mask
     }
 
-    /// True if the live overlay open-set differs from what `build_overlays` last
-    /// recorded — i.e. an overlay opened or closed (event-driven OR programmatic)
-    /// and the overlay region in the tree is now stale. The app calls this once
-    /// per frame and, on `true`, schedules a visual rebuild so the overlay region
-    /// is re-recorded into `overlay_draw` and the offscreen recomposites. Read
-    /// only; the snapshot updates when `build_overlays` actually runs.
-    pub fn detect_overlay_open_change(&self) -> bool {
-        self.built && self.current_overlay_open_mask() != self.overlay_open_snapshot
-    }
-
-    /// Overlay content changed: the frame seam rebuilds the overlay region
-    /// and the overlays' view version moves.
+    /// Overlay content changed: the overlays' view version moves, so the
+    /// planner rebuilds the overlay region. An open or close needs no call:
+    /// the open set rides in [`Self::overlays_version`].
     pub fn mark_overlay_dirty(&mut self) {
-        self.overlay_dirty = true;
         self.overlay_version += 1;
     }
 
-    /// Consume the content-changed mark.
-    pub fn take_overlay_dirty(&mut self) -> bool {
-        std::mem::take(&mut self.overlay_dirty)
-    }
-
-    #[cfg(test)]
-    pub fn overlay_dirty(&self) -> bool {
-        self.overlay_dirty
+    /// Set the browser popup's search filter (a keystroke or a commit):
+    /// its result list is overlay content.
+    pub fn set_browser_filter(&mut self, filter: String) {
+        self.browser_popup.set_filter(filter);
+        self.mark_overlay_dirty();
     }
 
     /// The overlays' view key (UI_INVALIDATION D6): moves when content is
@@ -216,9 +203,6 @@ impl UIRoot {
         self.tree = tree;
         self.overlay_draw = ranges;
         self.overlay_rects = rects;
-        // The tree's overlay region now matches the live open-set — record it so
-        // `detect_overlay_open_change` only fires on the next genuine open/close.
-        self.overlay_open_snapshot = self.current_overlay_open_mask();
     }
 
     /// `EDITOR_WINDOW_UNIFICATION_DESIGN.md` P1 (D2 precondition, fix-shape

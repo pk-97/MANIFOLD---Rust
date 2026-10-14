@@ -146,6 +146,11 @@ pub enum AutomationAction {
     /// fail on any difference. Generations, node slots and input-state flags
     /// are ignored.
     AssertFresh,
+    /// An edit the UI did not make lands (an OSC or MIDI write while a
+    /// gesture is live): the content echo moves the layers and effects
+    /// stamps, so the next frame rebuilds the inspector, layer headers and
+    /// viewport under whatever press or drag is held (UI_INVALIDATION D18).
+    ExternalEdit,
 }
 
 /// A raw resize handle `window_input` drags outside the widget tree.

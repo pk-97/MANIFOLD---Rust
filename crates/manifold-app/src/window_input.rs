@@ -95,7 +95,6 @@ impl Application {
     pub(crate) fn input_modifiers(&mut self, modifiers: manifold_ui::input::Modifiers) {
         self.modifiers = modifiers;
         self.overlay.set_modifiers(modifiers);
-        self.needs_rebuild = true;
         self.ws.ui_root.input.set_modifiers(modifiers);
     }
     /// Physical→logical cursor position using `window_id`'s scale factor. The
@@ -376,20 +375,15 @@ impl Application {
                 .layout
                 .update_split_from_drag(self.cursor_pos.y);
             self.cursor_manager.set(TimelineCursor::ResizeVertical);
-            self.needs_rebuild = true;
         }
         // Inspector resize drag takes next priority
         else if self.ws.ui_root.inspector_resize_dragging {
-            if self.ws.ui_root.update_inspector_resize(self.cursor_pos.x) {
-                self.needs_rebuild = true;
-            }
+            self.ws.ui_root.update_inspector_resize(self.cursor_pos.x);
             self.cursor_manager.set(TimelineCursor::ResizeHorizontal);
         }
         // Audio Setup dock resize drag (D1)
         else if self.ws.ui_root.audio_setup_resize_dragging {
-            if self.ws.ui_root.update_audio_setup_resize(self.cursor_pos.x) {
-                self.needs_rebuild = true;
-            }
+            self.ws.ui_root.update_audio_setup_resize(self.cursor_pos.x);
             self.cursor_manager.set(TimelineCursor::ResizeHorizontal);
         } else {
             self.ws.ui_root.pointer_event(
@@ -404,7 +398,7 @@ impl Application {
                 // cursor-shape feedback (split-handle, resize, etc.).
                 self.cursor_manager.set_default();
                 if self.selection.automation_feedback.take().is_some() {
-                    self.scroll_dirty.visual = true;
+                    self.ws.offscreen_dirty = true;
                 }
             } else {
                 // Route hover through InteractionOverlay (port of Unity OnPointerMove).
@@ -417,10 +411,7 @@ impl Application {
                         &self.content_state,
                         &mut self.cursor_manager,
                         &mut self.active_layer_id,
-                        &mut self.needs_rebuild,
-                        &mut self.automation_lanes_dirty,
-                        &mut self.scroll_dirty,
-                        &mut self.invalidate_layers,
+                                                &mut self.ws.offscreen_dirty,
                         &mut self.ui_edits,
                     );
                     self.overlay.on_pointer_move(
@@ -483,10 +474,8 @@ impl Application {
                                 && let Some(node) = self.ws.ui_root.tree.hit_test(self.cursor_pos)
                             {
                                 let ui = &mut self.ws.ui_root;
-                                if ui.scene_setup_panel.select_outliner_node(node)
-                                    || ui.scene_setup_panel.select_object_modifier_node(node, &mut ui.tree)
-                                {
-                                    self.needs_rebuild = true;
+                                if !ui.scene_setup_panel.select_outliner_node(node) {
+                                    ui.scene_setup_panel.select_object_modifier_node(node, &mut ui.tree);
                                 }
                             }
 
@@ -532,7 +521,6 @@ impl Application {
                                 if self.is_double_click(self.split_handle_last_click) {
                                     self.split_handle_last_click = None;
                                     self.ws.ui_root.layout.reset_timeline_split();
-                                    self.needs_rebuild = true;
                                 } else {
                                     self.split_handle_last_click = Some(std::time::Instant::now());
                                     // Begin video/timeline split drag.
@@ -556,7 +544,6 @@ impl Application {
                                 if self.is_double_click(self.audio_setup_handle_last_click) {
                                     self.audio_setup_handle_last_click = None;
                                     self.ws.ui_root.layout.reset_audio_setup_width();
-                                    self.needs_rebuild = true;
                                 } else {
                                     self.audio_setup_handle_last_click = Some(std::time::Instant::now());
                                     self.ws.ui_root.begin_audio_setup_resize(self.cursor_pos.x);
@@ -570,7 +557,6 @@ impl Application {
                                 if self.is_double_click(self.inspector_handle_last_click) {
                                     self.inspector_handle_last_click = None;
                                     self.ws.ui_root.layout.reset_inspector_width();
-                                    self.needs_rebuild = true;
                                 } else {
                                     self.inspector_handle_last_click = Some(std::time::Instant::now());
                                     self.ws.ui_root.begin_inspector_resize(self.cursor_pos.x);
@@ -764,15 +750,9 @@ impl Application {
             // headless `Gesture::Scroll` harness share one path. `contains()`
             // is already the open-check: a closed dock's rect is
             // `Rect::ZERO`. BUG-199's original fix assumed "the docks
-            // rebuild every frame" — false: `app_render.rs`'s
-            // `apply_ui_frame_invalidations` only rebuilds when
-            // `needs_rebuild`/`scroll_dirty` says so (BUG-223 escaped
-            // because the headless script harness always forces one rebuild
-            // on its first dispatched gesture, via `Inspector::
-            // skip_to_settled`'s `settled` flag — masking a scroll that
-            // updates internal offset state but never gets baked into node
-            // positions). Set `needs_rebuild` explicitly, same as the
-            // inspector branch below.
+            // rebuild every frame" — they rebuild when their view or scroll input moves
+            // (UI_INVALIDATION P5a: the scene panel bumps its view version, the
+            // dock its scroll offset).
             if self.ws.ui_root.inspector.scene_content_rect().contains(pos)
                 || self.ws.ui_root.layout.audio_setup().contains(pos)
             {
@@ -780,7 +760,6 @@ impl Application {
                     .ui_root
                     .input
                     .process_scroll(self.cursor_pos, Vec2::new(dx, dy));
-                self.needs_rebuild = true;
                 return;
             }
 
@@ -794,7 +773,6 @@ impl Application {
                 // double-applies).
                 if !self.ws.ui_root.try_inspector_scroll(dy, pos.x) {
                     self.ws.ui_root.inspector.handle_scroll_at(dy, pos.x);
-                    self.needs_rebuild = true;
                 }
             } else if tracks_rect.contains(pos) {
                 if self.modifiers.alt {
@@ -811,14 +789,11 @@ impl Application {
                     let beat_delta = dy * manifold_ui::color::SCROLL_SENSITIVITY / ppb;
                     let new_x =
                         (self.ws.ui_root.viewport.scroll_x_beats().as_f32() - beat_delta).max(0.0);
-                    if self
+                    self
                         .ws
                         .ui_root
                         .viewport
-                        .set_scroll(new_x, self.ws.ui_root.viewport.scroll_y_px())
-                    {
-                        self.scroll_dirty.scroll_x = true;
-                    }
+                        .set_scroll(new_x, self.ws.ui_root.viewport.scroll_y_px());
                     // BUG-159: a direct user horizontal gesture — playhead-follow
                     // yields to it instead of fighting it (state_sync.rs
                     // check_auto_scroll).
@@ -826,14 +801,10 @@ impl Application {
                 } else {
                     // Plain scroll → vertical track scroll
                     let new_y = (self.ws.ui_root.viewport.scroll_y_px() - dy).max(0.0);
-                    if self.ws.ui_root.viewport.set_scroll(
+                    self.ws.ui_root.viewport.set_scroll(
                         self.ws.ui_root.viewport.scroll_x_beats().as_f32(),
                         new_y,
-                    ) {
-                        // Layer headers read the viewport's scroll_y_px live at
-                        // the next build/update — no separate push (D2).
-                        self.scroll_dirty.scroll_y = true;
-                    }
+                    );
                 }
                 // Native horizontal scroll (trackpad two-finger swipe)
                 if dx.abs() > 0.01 && !self.modifiers.alt {
@@ -841,14 +812,11 @@ impl Application {
                     let beat_delta = dx * manifold_ui::color::SCROLL_SENSITIVITY / ppb;
                     let new_x =
                         (self.ws.ui_root.viewport.scroll_x_beats().as_f32() - beat_delta).max(0.0);
-                    if self
+                    self
                         .ws
                         .ui_root
                         .viewport
-                        .set_scroll(new_x, self.ws.ui_root.viewport.scroll_y_px())
-                    {
-                        self.scroll_dirty.scroll_x = true;
-                    }
+                        .set_scroll(new_x, self.ws.ui_root.viewport.scroll_y_px());
                     // BUG-159: see the Shift+scroll site above.
                     self.ws.ui_root.viewport.note_user_scroll_x();
                 }
@@ -863,7 +831,6 @@ impl Application {
         let beat_at_cursor = self.ws.ui_root.viewport.pixel_to_beat(pos.x).as_f32();
         let new_ppb = self.ws.ui_root.viewport.zoom_continuous(factor);
         self.ws.ui_root.viewport.zoom_to(new_ppb, beat_at_cursor, pos.x);
-        self.scroll_dirty.zoom = true;
     }
 
     /// Trackpad pinch in any window. `magnification` is winit's per-event
@@ -1575,7 +1542,6 @@ impl Application {
                             let layer_id = layer.layer_id.clone();
                             self.active_layer_id = Some(layer_id.clone());
                             self.selection.select_layer(layer_id);
-                            self.needs_rebuild = true;
                             if let Some(ed) = self.graph_editor.as_mut() {
                                 ed.offscreen_dirty = true;
                             }
@@ -2691,10 +2657,7 @@ impl Application {
                     &self.content_state,
                     &mut self.cursor_manager,
                     &mut self.active_layer_id,
-                    &mut self.needs_rebuild,
-                    &mut self.automation_lanes_dirty,
-                    &mut self.scroll_dirty,
-                    &mut self.invalidate_layers,
+                                        &mut self.ws.offscreen_dirty,
                     &mut self.ui_edits,
                 );
                 self.overlay.cancel_drag(&mut host);
@@ -2812,11 +2775,7 @@ impl Application {
                 if consumed
                     && self.text_input.field == crate::text_input::TextInputField::SearchFilter
                 {
-                    self.ws
-                        .ui_root
-                        .browser_popup
-                        .set_filter(self.text_input.text().trim().to_string());
-                    self.needs_rebuild = true;
+                    self.ws.ui_root.set_browser_filter(self.text_input.text().trim().to_string());
                 }
                 // Skip normal shortcut processing when text input consumed the key
                 if consumed {
@@ -2834,9 +2793,8 @@ impl Application {
                     ui_root: &mut self.ws.ui_root,
                     selection: &mut self.selection,
                     active_layer: &mut self.active_layer_id,
-                    needs_rebuild: &mut self.needs_rebuild,
+                    redraw: &mut self.ws.offscreen_dirty,
                     edits: &mut self.ui_edits,
-                    scroll_dirty: &mut self.scroll_dirty,
                     current_project_path: &self.current_project_path,
                     has_output_window: self.window_registry.has_output_window(),
                     pending_close_output: &mut self.pending_close_output,
@@ -2890,7 +2848,6 @@ impl Application {
                             .layers
                             .first()
                             .map(|l| l.layer_id.clone());
-                        self.needs_rebuild = true;
                         log::info!("New project created");
                         consumed = true;
                     }
@@ -2951,14 +2908,14 @@ mod tests {
             MouseScrollDelta::PixelDelta(PhysicalPosition::new(0.0, -45.0)),
         ] {
             let before = app.ws.ui_root.browser_popup.picker().unwrap().scroll.scroll_offset();
-            app.ws.ui_root.take_overlay_dirty();
+            let version = app.ws.ui_root.overlays_version();
             app.primary_mouse_wheel(true, delta);
             let events = app.ws.ui_root.input.drain_events();
             assert_eq!(events.len(), 1, "native scrolling must reach the popup");
             let mut actions = Vec::new();
             assert!(app.ws.ui_root.route_overlay_event(&events[0], &mut actions));
             assert!(actions.is_empty());
-            assert!(app.ws.ui_root.overlay_dirty(), "scrolling must schedule a repaint");
+            assert_ne!(app.ws.ui_root.overlays_version(), version, "scrolling must rebuild the overlays");
             app.ws.ui_root.tree.clear();
             app.ws.ui_root.build_overlays_for_screen(1280.0, 800.0);
             assert!(app.ws.ui_root.browser_popup.picker().unwrap().scroll.scroll_offset() > before);
