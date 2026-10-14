@@ -99,6 +99,61 @@ impl Resolver {
             }
         }
     }
+
+    /// An exact auto-stamp (`{doc_id}_{param}`, not user-added, on that
+    /// node's param) is a copy of its node's declaration, so the node owns
+    /// its name, range, value labels and angle flag, the range widened to the
+    /// default. Anything else comes back unchanged.
+    fn stamp_overlay(
+        &mut self,
+        mut spec: ParamSpecDef,
+        bindings: &[BindingDef],
+        nodes: &NodeTypes,
+        scene_radius: Option<f32>,
+    ) -> ParamSpecDef {
+        let stamp = bindings.iter().find_map(|b| match &b.target {
+            BindingTarget::Node { node_id, param }
+                if !b.user_added
+                    && b.id == spec.id
+                    && nodes
+                        .doc_ids
+                        .get(node_id.as_str())
+                        .is_some_and(|doc| b.id == format!("{doc}_{param}")) =>
+            {
+                Some((nodes.nodes.get(node_id.as_str())?, param))
+            }
+            _ => None,
+        });
+        let Some((type_id, param)) = stamp else {
+            return spec;
+        };
+        let Some(d) = self.describe(ParamKey::Node { type_id, param, scene_radius }) else {
+            return spec;
+        };
+        let (min, max) = widen_to(&ParamSpecDef { min: d.min, max: d.max, ..spec.clone() }, spec.default_value);
+        spec.name = d.name;
+        spec.is_angle = d.is_angle;
+        spec.value_labels = d.value_labels;
+        spec.min = min;
+        spec.max = max;
+        spec
+    }
+}
+
+/// A preset's controls as the lookup declares them, for readers of the
+/// template itself (the node catalog): each exact auto-stamp takes its node's
+/// declaration, as the join does.
+pub fn template_params(def: &EffectGraphDef) -> Vec<ParamSpecDef> {
+    let Some(meta) = def.preset_metadata.as_ref() else {
+        return Vec::new();
+    };
+    let nodes = NodeTypes::from_graph(def);
+    let radius = meta.scene_bounds.map(scene_radius_from_bounds);
+    let mut resolver = Resolver::default();
+    meta.params
+        .iter()
+        .map(|p| resolver.stamp_overlay(p.clone(), &meta.bindings, &nodes, radius))
+        .collect()
 }
 
 fn template_spec(preset: &PresetTypeId, id: &str) -> Option<ParamSpecDef> {
@@ -111,21 +166,29 @@ fn template_spec(preset: &PresetTypeId, id: &str) -> Option<ParamSpecDef> {
 #[derive(Debug, Default)]
 pub struct NodeTypes {
     nodes: AHashMap<String, String>,
+    /// Document ids, which name auto-stamps (`{doc_id}_{param}`).
+    doc_ids: AHashMap<String, u32>,
     modifiers: AHashMap<String, PresetTypeId>,
 }
 
 impl NodeTypes {
     pub fn from_graph(def: &EffectGraphDef) -> Self {
-        fn walk(nodes: &[EffectGraphNode], out: &mut AHashMap<String, String>) {
+        fn walk(
+            nodes: &[EffectGraphNode],
+            out: &mut AHashMap<String, String>,
+            doc_ids: &mut AHashMap<String, u32>,
+        ) {
             for node in nodes {
                 out.insert(node.node_id.as_str().to_string(), node.type_id.clone());
+                doc_ids.insert(node.node_id.as_str().to_string(), node.id);
                 if let Some(body) = node.group.as_deref() {
-                    walk(&body.nodes, out);
+                    walk(&body.nodes, out, doc_ids);
                 }
             }
         }
         let mut nodes = AHashMap::new();
-        walk(&def.nodes, &mut nodes);
+        let mut doc_ids = AHashMap::new();
+        walk(&def.nodes, &mut nodes, &mut doc_ids);
         let modifiers = def
             .scene_modifiers
             .iter()
@@ -134,7 +197,7 @@ impl NodeTypes {
                 Some((m.id.as_str().to_string(), recipe))
             })
             .collect();
-        Self { nodes, modifiers }
+        Self { nodes, doc_ids, modifiers }
     }
 }
 
@@ -217,8 +280,9 @@ impl<'a> Join<'a> {
 
     /// The joined spec and where it came from. `saved` is the graph's
     /// `meta.params` entry.
-    /// The choices are the user's old in-copy edits on a template control,
-    /// converted once (SCENE_SURFACES_DESIGN.md D7 (one saved choice set)).
+    /// The returned choices are always empty: a saved copy that differs from
+    /// the lookup is ignored, never converted (only user-added exposures
+    /// convert, in [`Self::user_choices`]).
     pub(crate) fn join_control(
         &mut self,
         saved: &ParamSpecDef,
@@ -230,19 +294,17 @@ impl<'a> Join<'a> {
             _ => None,
         };
         let template_ok = single.is_none_or(|b| template_answers(self.preset, b, &self.nodes));
-        if template_ok && let Some(spec) = template_spec(self.preset, &saved.id) {
-            let choices = ParamChoices {
-                rename: (!saved.name.is_empty() && saved.name != spec.name)
-                    .then(|| saved.name.clone()),
-                section: (saved.section != spec.section).then(|| saved.section.clone()),
-                ..ParamChoices::default()
-            };
+        if template_ok && let Some(template) = template_spec(self.preset, &saved.id) {
             // The default is the instance's own stamp (a material's authored
             // factor, re-seeded from the node), not the template's, as on the
             // node path.
-            let (min, max) = widen_to(&spec, saved.default_value);
-            let spec = ParamSpecDef { default_value: saved.default_value, min, max, ..spec };
-            return (spec, SpecSource::Lookup, choices);
+            let (min, max) = widen_to(&template, saved.default_value);
+            let base = ParamSpecDef { default_value: saved.default_value, min, max, ..template.clone() };
+            let spec = self.resolver.stamp_overlay(base, self.bindings, &self.nodes, self.scene_radius);
+            // A saved name or section that differs is an old copy, ignored,
+            // never converted into a choice: a later label fix must not read
+            // as a user rename (D2 (one live lookup), old projects).
+            return (spec, SpecSource::Lookup, none);
         }
         // A fan-out (several bindings under one id) is described by its first
         // binding's target, in authored order (D22).
@@ -263,7 +325,7 @@ impl<'a> Join<'a> {
         let Some(described) = self.resolver.describe(key) else {
             return (saved.clone(), unresolved, none);
         };
-        (overlay(saved, described, binding.default_value), SpecSource::Lookup, none)
+        (overlay(saved, described, binding.default_value, fan_out), SpecSource::Lookup, none)
     }
 
     /// A user-exposed control keeps its saved spec. A saved label that
@@ -332,15 +394,16 @@ fn widen_to(d: &ParamSpecDef, default: f32) -> (f32, f32) {
 }
 
 /// A node or modifier description laid over the saved control. The lookup
-/// owns range and flags. Identity, default and the fields that become lookup
-/// outputs or user choices in later phases (name, section, card visibility,
-/// curve, invert, tooltip, periodicity) stay as saved for now. The name waits
-/// for the label rules, so recipe and importer labels (a look's "Size") are
-/// not renamed before then; an empty saved name takes the lookup's.
-fn overlay(saved: &ParamSpecDef, d: ParamSpecDef, binding_default: f32) -> ParamSpecDef {
+/// owns name, range and flags, and the section where it declares one (a
+/// node declares none yet, so its saved section stays). A fan-out keeps its
+/// authored name (D22). Identity, default, card visibility, curve, invert,
+/// tooltip and periodicity stay as saved.
+fn overlay(saved: &ParamSpecDef, d: ParamSpecDef, binding_default: f32, fan_out: bool) -> ParamSpecDef {
     let (min, max) = widen_to(&d, binding_default);
+    let keep_name = fan_out && !saved.name.is_empty();
     ParamSpecDef {
-        name: if saved.name.is_empty() { d.name } else { saved.name.clone() },
+        name: if keep_name { saved.name.clone() } else { d.name },
+        section: if d.section.is_some() { d.section } else { saved.section.clone() },
         min,
         max,
         whole_numbers: d.whole_numbers,
@@ -471,11 +534,9 @@ mod tests {
         let mut join = Join::new(&preset, &def);
         let (spec, source, _) = join.join_control(&saved("1_intensity"));
         assert_eq!(source, SpecSource::Lookup);
-        // The name stays as saved until the label rules land; an empty one
-        // takes the lookup's.
-        assert_eq!(spec.name, "Stale Copy");
-        let unnamed = ParamSpecDef { name: String::new(), ..saved("1_intensity") };
-        assert_eq!(join.join_control(&unnamed).0.name, "Intensity");
+        // A saved name is an old copy: the lookup's wins, and it is no choice.
+        let (_, _, choices) = join.join_control(&saved("1_intensity"));
+        assert_eq!((spec.name.as_str(), choices), ("Intensity", ParamChoices::default()));
         // The declared band widens to keep the binding's seeded value on it.
         assert_eq!((spec.min, spec.max), (0.0, 12.0));
         // Identity, default and the fields later phases move stay as saved.
@@ -483,6 +544,26 @@ mod tests {
         assert_eq!(spec.default_value, 12.0);
         assert_eq!(spec.section.as_deref(), Some("Key Light"));
         assert!(!spec.card_visible);
+    }
+
+    /// A bundled template's exact auto-stamp shows its node's name, range,
+    /// value labels and angle flag, as the old load-time refresh gave it.
+    #[test]
+    fn template_auto_stamp_takes_its_node_declaration() {
+        let user = BindingDef { user_added: true, ..binding("1_intensity", lamp("intensity"), 12.0) };
+        let mut def = graph(vec![
+            binding("1_intensity", lamp("intensity"), 12.0),
+            binding("key", lamp("intensity"), 12.0),
+        ]);
+        def.preset_metadata.as_mut().unwrap().params = vec![saved("1_intensity"), saved("key")];
+        let params = template_params(&def);
+        assert_eq!(params[0].name, "Intensity");
+        assert_eq!((params[0].min, params[0].max), (0.0, 12.0), "widened to the default");
+        assert_eq!((params[0].default_value, params[0].section.as_deref()), (12.0, Some("Key Light")));
+        assert_eq!(params[1], saved("key"), "a curated id stays authored");
+
+        def.preset_metadata.as_mut().unwrap().bindings = vec![user];
+        assert_eq!(template_params(&def)[0], saved("1_intensity"), "a user exposure stays authored");
     }
 
     #[test]

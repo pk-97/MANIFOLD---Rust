@@ -173,8 +173,14 @@ fn template_answers_only_its_own_node_type() {
 }
 
 #[test]
-fn old_template_copy_section_becomes_a_choice_once() {
+fn old_template_copy_section_is_ignored_and_the_template_wins() {
+    // D2 (one live lookup), old projects: a saved section that differs from
+    // the lookup is an old copy, ignored and never converted into a choice,
+    // so a later section fix is never read as a user choice.
     let (mut graph, id, _) = template_node_control();
+    let template_section = graph.preset_metadata.as_ref().unwrap().params.iter()
+        .find(|spec| spec.id == id).unwrap().section.clone();
+    assert_ne!(template_section.as_deref(), Some("Old Section"));
     for spec in &mut graph.preset_metadata.as_mut().unwrap().params {
         if spec.id == id {
             spec.section = Some("Old Section".into());
@@ -182,9 +188,9 @@ fn old_template_copy_section_becomes_a_choice_once() {
     }
     let fx = physics_solids(graph);
     let p = fx.params.get(&id).unwrap();
-    assert_eq!(p.choices.section, Some(Some("Old Section".into())));
-    assert_eq!(p.spec.section.as_deref(), Some("Old Section"));
-    // Save and reload: the choice rides the entry; the stub converts nothing new.
+    assert_eq!(p.choices.section, None);
+    assert_eq!(p.spec.section, template_section);
+    // Save and reload: nothing is converted later either.
     let mut project = manifold_core::project::Project::default();
     let mut layer = manifold_core::layer::Layer::new_generator(
         "Physics Solids".into(),
