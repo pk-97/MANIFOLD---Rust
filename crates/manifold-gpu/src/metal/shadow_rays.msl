@@ -1211,7 +1211,40 @@ static float luma(float3 c) { return dot(c, float3(0.2126, 0.7152, 0.0722)); }
 // candidate so the query commits its true CLOSEST accepted hit (primary
 // visibility + the GI ray's own hit need real shading data, not just
 // "something's there").
-static bool walk_with_alpha_test(
+//
+// BUG-k1n2w (RT trace hangs GPU on alpha-masked foliage): every walk tests at
+// most RT_WALK_MAX_CANDIDATES candidates. Dense see-through foliage hands one
+// ray hundreds of nonopaque candidates, each an alpha texture test, and one
+// command buffer then outlives the GPU watchdog. Past the cap the walk stops:
+// any-hit rays report blocked; closest-hit rays keep the nearest hit committed
+// so far, or commit the current candidate when none is. 64 is several times
+// the deepest stack an ordinary frame produces, so ordinary pixels never
+// change (gpu proof rt_alpha_walk_bound). Proofs override it by defining the
+// macro before this file.
+#ifndef RT_WALK_MAX_CANDIDATES
+#define RT_WALK_MAX_CANDIDATES 64u
+#endif
+
+// True once a walk has tested its quota: commits the stopping candidate when
+// nothing is committed yet and ends traversal. The committed state is then the
+// walk's answer.
+static bool rt_walk_exhausted(
+    thread intersection_query<triangle_data, instancing>& q, thread uint& tested)
+{
+    if (tested < RT_WALK_MAX_CANDIDATES) {
+        tested += 1u;
+        return false;
+    }
+    if (q.get_committed_intersection_type() == intersection_type::none
+        && q.get_candidate_intersection_type() == intersection_type::triangle) {
+        q.commit_triangle_intersection();
+    }
+    q.abort();
+    return true;
+}
+
+// `out_tested` reports the candidates tested, for the debug ray query.
+static bool walk_with_alpha_test_counted(
     thread intersection_query<triangle_data, instancing>& q,
     device RtNormalSource* normal_sources,
     array<texture2d<float>, MAX_RT_MATERIAL_TEXTURES> material_textures,
@@ -1224,10 +1257,13 @@ static bool walk_with_alpha_test(
     uint2 tid,
     uint frame,
     uint ray_seed,
-    thread float& out_brightness)
+    thread float& out_brightness,
+    thread uint& out_tested)
 {
     out_brightness = 1.0f;
+    out_tested = 0u;
     while (q.next()) {
+        if (rt_walk_exhausted(q, out_tested)) break;
         if (q.get_candidate_intersection_type() != intersection_type::triangle) continue;
         uint iid = q.get_candidate_instance_id();
         device RtNormalSource& src = normal_sources[iid];
@@ -1274,6 +1310,21 @@ static bool walk_with_alpha_test(
     return true;
 }
 
+static bool walk_with_alpha_test(
+    thread intersection_query<triangle_data, instancing>& q,
+    device RtNormalSource* normal_sources,
+    array<texture2d<float>, MAX_RT_MATERIAL_TEXTURES> material_textures,
+    bool any_hit,
+    uint2 tid,
+    uint frame,
+    uint ray_seed,
+    thread float& out_brightness)
+{
+    uint tested;
+    return walk_with_alpha_test_counted(q, normal_sources, material_textures, any_hit,
+        tid, frame, ray_seed, out_brightness, tested);
+}
+
 // RT-TL-B (RAYTRACING_DESIGN.md section 16 TL4): visibility rays transmit,
 // geometry rays block. The SAME candidate walk as `walk_with_alpha_test`
 // with a third outcome per accepted hit:
@@ -1291,7 +1342,8 @@ static bool walk_with_alpha_test(
 // the flat `GiMaterial.albedo` is the no-texture fallback. Bounded:
 // RT_TRANSMISSION_MAX_HITS accepted translucent hits per ray (a hit past
 // the cap blocks — conservative-dark, reached only in dense stacked
-// canopy) plus a luma early-out at 1/256. Side-agnostic like the binary
+// canopy), RT_WALK_MAX_CANDIDATES tested candidates (past it the ray
+// blocks), plus a luma early-out at 1/256. Side-agnostic like the binary
 // walk it extends: the intersector reports both facings as candidates and
 // transmission attenuates either way, matching the gather/raster paths'
 // two-sided convention (the RS-C one-sided-emission lesson). No new ray
@@ -1320,7 +1372,10 @@ static float3 walk_with_transmission(
 {
     float3 tint = float3(1.0);
     uint transmitted = 0u;
+    uint tested = 0u;
     while (q.next()) {
+        // Past the shared candidate cap a shadow ray reads as blocked.
+        if (rt_walk_exhausted(q, tested)) return float3(0.0);
         if (q.get_candidate_intersection_type() != intersection_type::triangle) continue;
         uint iid = q.get_candidate_instance_id();
         device RtNormalSource& src = normal_sources[iid];
@@ -4127,7 +4182,7 @@ struct DebugRayQueryHit {
     float coverage;      // P4b: the accepted hit's appearance coverage (clamp(gain*weight,0,1)); 1.0 with no appearance wired, 0 on miss
     float brightness;    // P4b: the accepted hit's appearance brightness (max(gain*weight,1)); 1.0 with no appearance wired, 0 on miss
     packed_float3 normal; // production interpolated vertex normal; (0,0,0) on miss
-    float pad1;
+    uint candidates;     // candidates the walk tested, at most RT_WALK_MAX_CANDIDATES
     packed_float2 uv;    // production interpolated UV; (0,0) on miss
     packed_float2 pad2;  // Rust repr(C) keeps the struct at 68 bytes; a plain float2 here aligns to 8 and makes the MSL stride 72, desyncing hits[i]
 };
@@ -4170,7 +4225,8 @@ kernel void debug_ray_query(
     // P4b: the fractional acceptance draw keys on (seed_base, ray index)
     // via the shared helper — the ray index rides the ray-seed slot.
     float hit_brightness = 1.0f;
-    if (walk_with_alpha_test(q, slot_sources, material_textures, false, tid2, p.seed_base, tid, hit_brightness)) {
+    uint tested = 0u;
+    if (walk_with_alpha_test_counted(q, slot_sources, material_textures, false, tid2, p.seed_base, tid, hit_brightness, tested)) {
         uint iid = q.get_committed_instance_id();
         uint pid = q.get_committed_primitive_id();
         float2 bary = q.get_committed_triangle_barycentric_coord();
@@ -4184,7 +4240,7 @@ kernel void debug_ray_query(
         out.coverage = cov_bri.x;
         out.brightness = cov_bri.y;
         out.normal = packed_float3(fetch_interpolated_normal(slot_sources, iid, pid, bary));
-        out.pad1 = 0.0;
+        out.candidates = tested;
         out.uv = packed_float2(fetch_interpolated_uv(slot_sources, iid, pid, bary));
         out.pad2 = float2(0.0);
     } else {
@@ -4197,7 +4253,7 @@ kernel void debug_ray_query(
         out.coverage = 0.0;
         out.brightness = 0.0;
         out.normal = packed_float3(0.0);
-        out.pad1 = 0.0;
+        out.candidates = tested;
         out.uv = packed_float2(0.0);
         out.pad2 = float2(0.0);
     }

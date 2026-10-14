@@ -4,6 +4,7 @@
 
 use manifold_core::project::Project;
 use manifold_core::types::LayerType;
+use manifold_core::work_count::{record_work, WorkKind};
 #[cfg(test)]
 use manifold_core::Beats;
 use manifold_ui::panels::layer_header::LayerInfo;
@@ -17,6 +18,7 @@ use super::trigger_routing::TriggerRoutingCatalog;
 /// Remember strip positions while placeholders still have their pre-edit
 /// location. This is session UI state; creating a lane never changes its rank.
 pub fn sync_automation_lane_order(project: &Project, selection: &mut SelectionState) {
+    record_work(WorkKind::LaneProjection);
     use std::collections::HashSet;
     let mut live = HashSet::new();
     for layer in &project.timeline.layers {
@@ -99,6 +101,7 @@ pub fn sync_project_data(
     active_layer: Option<usize>,
     selection: &SelectionState,
 ) {
+    record_work(WorkKind::ProjectSync);
     // Keep the chooser catalog beside the manifest projection. It is rebuilt
     // only with structural project data, so opening/searching the popup does
     // not walk or allocate from the project on the input hot path.
@@ -493,6 +496,7 @@ fn clip_base_color(
 /// lanes — only clip data and markers. The bitmap fingerprint will detect if
 /// positions actually changed and skip repaint when nothing moved.
 pub fn sync_clip_positions(ui: &mut UIRoot, project: &Project) {
+    record_work(WorkKind::ClipProjection);
     use manifold_ui::panels::viewport::ViewportClip;
     let mut viewport_clips = Vec::new();
     for (i, layer) in project.timeline.layers.iter().enumerate() {
@@ -548,6 +552,7 @@ pub fn sync_automation_lane_geometry(
     hidden_lanes: &std::collections::HashSet<manifold_ui::ui_state::AutomationLaneKey>,
     pinned_lanes: &[manifold_ui::ui_state::AutomationLaneKey],
 ) {
+    record_work(WorkKind::LaneProjection);
     if !automation_visible {
         return;
     }

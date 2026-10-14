@@ -191,6 +191,7 @@ impl Application {
         if let Some(ui) = &mut self.ui_renderer {
             ui.begin_frame();
 
+            manifold_core::work_count::record_work(manifold_core::work_count::WorkKind::PerformHudBuild);
             draw_cue_hud(
                 ui,
                 lw,

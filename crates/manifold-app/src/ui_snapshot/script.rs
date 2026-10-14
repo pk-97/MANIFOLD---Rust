@@ -46,9 +46,10 @@
 //! `needs_structural_sync`) — but that flag and `needs_structural_sync` OR
 //! into the identical full-rebuild branch of `apply_ui_frame_invalidations`,
 //! so this module folds the drag signal into `needs_structural_sync` instead
-//! (exactly equivalent, never named by its own identifier here); per-layer
-//! bitmap invalidation is a live-app-only Pass-4c mechanism this headless
-//! harness never renders, so it's a dead sink, same as it always was.
+//! (exactly equivalent, never named by its own identifier here). Per-layer
+//! bitmap invalidation is drained into the viewport only inside a work window
+//! (`ResetWork`), where frames run the live order to count its repaints;
+//! outside one it is dropped, since no flow reads grid pixels.
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -115,9 +116,9 @@ fn setup_error(message: String) -> FlowOutcome {
 /// Run `script_path`'s `AutomationAction` array against `scene`. Exits the
 /// process: 0 if every step succeeded, 1 otherwise (D6/D10 — no partial
 /// pass), 2 on a setup error.
-pub fn run(scene: &str, script_path: &str) {
+pub fn run(scene: &str, script_path: &str, record_work: bool) {
     let mut device = None;
-    match run_flow(scene, script_path, &mut device, None) {
+    match run_flow(scene, script_path, &mut device, &mut super::fixtures::FixtureCache::default(), None, record_work) {
         FlowOutcome::Done { code: 0, .. } => {}
         FlowOutcome::Done { code, .. } => std::process::exit(code),
         FlowOutcome::Requeue(_) => unreachable!("requeue needs a batch context"),
@@ -130,8 +131,9 @@ const BATCH_RECORD: &str = "@@ui-snap-batch@@";
 
 /// `ui-snap batch <scene> <script> [<scene> <script> ...]`: run many flows in
 /// one process, sharing only the `GpuDevice` (and with it the one GPU-lock
-/// acquisition and process start-up). Every flow still builds its own
-/// fixture, `UIRoot`, `UIRenderer`, cache and offscreen exactly as a solo run
+/// acquisition and process start-up) and the parsed GLBs of imported-glTF
+/// scenes ([`super::fixtures::FixtureCache`]). Every flow still builds its own
+/// fixture `Project` from scratch, `UIRoot`, `UIRenderer`, cache and offscreen exactly as a solo run
 /// does, and writes the same artifacts.
 ///
 /// Each flow prints `@@ui-snap-batch@@ {"begin": index}` on stdout, then one
@@ -149,17 +151,18 @@ const BATCH_RECORD: &str = "@@ui-snap-batch@@";
 /// that finds the catalog generation already moved gets `rerun` instead of
 /// running against the wrong registry — a stale list costs speed, never
 /// correctness.
-pub fn run_batch(flows: &[(String, String)]) {
+pub fn run_batch(flows: &[(String, String)], record_work: bool) {
     let mut order: Vec<usize> = (0..flows.len()).collect();
     order.sort_by_key(|&i| super::fixtures::installs_preset_overlay(&flows[i].0));
     let fresh_generation = manifold_node_engine::load::preset_loader::catalog_generation();
     let mut device = None;
+    let mut fixtures = super::fixtures::FixtureCache::default();
     for index in order {
         let (scene, script) = &flows[index];
         println!("{BATCH_RECORD} {}", serde_json::json!({"begin": index}));
         let start = std::time::Instant::now();
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            run_flow(scene, script, &mut device, Some(fresh_generation))
+            run_flow(scene, script, &mut device, &mut fixtures, Some(fresh_generation), record_work)
         }));
         let record = match &outcome {
             Ok(FlowOutcome::Done { code, tail }) => serde_json::json!({
@@ -183,10 +186,12 @@ fn run_flow(
     scene: &str,
     script_path: &str,
     device: &mut Option<GpuDevice>,
+    fixtures: &mut super::fixtures::FixtureCache,
     batch_generation: Option<u64>,
+    record_work: bool,
 ) -> FlowOutcome {
     let generation_before = manifold_node_engine::load::preset_loader::catalog_generation();
-    let Some(mut data) = super::fixtures::build(scene) else {
+    let Some(mut data) = super::fixtures::build_cached(scene, fixtures) else {
         return setup_error(format!(
             "ui-snap --script: unknown scene '{scene}' (known: timeline, states, inspector, dmxcard, \
              paramsteps, scrollshrink, hairlineclips, automation, selectionclips, gltfscene, \
@@ -276,17 +281,13 @@ fn run_flow(
     let tex_w = (super::LOGICAL_W * super::SCALE) as u32;
     let tex_h = (super::LOGICAL_H * super::SCALE) as u32;
     let device = device.get_or_insert_with(|| GpuDevice::new_queued("ui-snap script"));
+    // The seed composite is deferred like every other one: the first
+    // `Snapshot` paints it (the cache starts fully invalidated).
     let mut render = RenderState::new(device, tex_w, tex_h);
-    composite_frame(
-        render.device,
-        &mut render.ui_renderer,
-        &mut render.cache,
-        &mut ui,
-        &render.composite,
-        1.0,
-    );
 
     let mut runner = Runner::new();
+    runner.work.record = record_work;
+    runner.work.flow = stem.to_string();
     // BUG-296: `resolve_effect_target` falls back to `timeline.layers.first()`
     // when `Runner.active_layer` is None, silently mutating the wrong layer's
     // effect chain for structural PanelActions dispatched before any
@@ -300,6 +301,9 @@ fn run_flow(
     let mut ok = true;
 
     for (index, action) in actions.iter().enumerate() {
+        if reads_composite(action) {
+            render.flush_composite(&mut ui);
+        }
         let outcome = runner.step(&mut ui, &mut data, zoom_ppb, index, action, &out_dir, &mut render);
         let failed = outcome.status == "fail";
         results.push(outcome);
@@ -309,10 +313,7 @@ fn run_flow(
         }
     }
 
-    // D9a: a contact sheet of every frame a `Step` action advanced. Most
-    // flows carry no `Step` (the two shipped flows don't), so most runs
-    // write nothing here — this is additive, not a new requirement on every
-    // script.
+    // D9a: a contact sheet of every frame a `Step` action advanced.
     if !runner.filmstrip.is_empty() {
         let cols = (runner.filmstrip.len() as u32).clamp(1, 4);
         let filmstrip_path = out_dir.join("filmstrip.png");
@@ -357,6 +358,44 @@ struct RenderState<'d> {
     composite: CompositeResources,
     tex_w: u32,
     tex_h: u32,
+    gate: CompositeGate,
+}
+
+/// Composites are deferred until something reads pixels. No flow asserts on
+/// pixels and the UI never reads GPU state back, so the only readers are
+/// `write_png` (a `Snapshot`) and the filmstrip tile of each `Step` frame. Painting is incremental over dirty panels and
+/// the tree's dirty flags accumulate until a composite clears them, so one
+/// composite at the `Snapshot` paints the same atlas as compositing after
+/// every frame in between.
+#[derive(Default)]
+struct CompositeGate {
+    pending: bool,
+    composites: usize,
+}
+
+impl CompositeGate {
+    fn mark(&mut self) {
+        self.pending = true;
+    }
+
+    /// True when a composite is owed; counts it.
+    fn take(&mut self) -> bool {
+        let owed = std::mem::take(&mut self.pending);
+        self.composites += usize::from(owed);
+        owed
+    }
+
+    /// A `Step` frame owes its filmstrip tile a composite (D9a), so it pays
+    /// at once. True when the caller must composite.
+    fn step_frame(&mut self) -> bool {
+        self.mark();
+        self.take()
+    }
+}
+
+/// The only step type whose behaviour depends on a composited frame.
+fn reads_composite(action: &AutomationAction) -> bool {
+    matches!(action, AutomationAction::Snapshot)
 }
 
 impl<'d> RenderState<'d> {
@@ -369,13 +408,24 @@ impl<'d> RenderState<'d> {
         cache.ensure_atlas(device, tex_w, tex_h);
         cache.invalidate_all();
         let composite = CompositeResources::new(device, tex_w, tex_h);
-        Self { device, ui_renderer, cache, composite, tex_w, tex_h }
+        let mut gate = CompositeGate::default();
+        gate.mark();
+        Self { device, ui_renderer, cache, composite, tex_w, tex_h, gate }
     }
 
-    /// Read back the CURRENTLY composited offscreen — raw linear UI bytes (the
-    /// seam's own format). Does not re-composite; callers drive that
-    /// separately (`composite_frame`, called from `Runner::advance_frame` /
-    /// the `Step` loop).
+    /// Composite now if any frame since the last composite changed the UI.
+    fn flush_composite(&mut self, ui: &mut UIRoot) {
+        if self.gate.take() {
+            self.composite_now(ui);
+        }
+    }
+
+    fn composite_now(&mut self, ui: &mut UIRoot) {
+        composite_frame(self.device, &mut self.ui_renderer, &mut self.cache, ui, &self.composite, 1.0);
+    }
+
+    /// Read back the offscreen as last composited — raw linear UI bytes (the
+    /// seam's own format). Callers flush first (`flush_composite`).
     fn readback_linear(&self) -> Vec<u8> {
         super::render::readback(self.device, &self.composite.offscreen, self.tex_w, self.tex_h)
     }
@@ -432,7 +482,8 @@ struct Runner {
     scrub: crate::ui_bridge::ScrubState,
     // D9a: every composited frame a `Step` action advanced, in order —
     // assembled into one contact-sheet PNG at the end of `run` when
-    // non-empty. D9b: the most recent `Pointer` gesture's synthesized
+    // non-empty. D9b: the most
+    // recent `Pointer` gesture's synthesized
     // point(s) (center, interpolated drag path, drag end) — consumed
     // (drained) by the next `Snapshot`, which stamps a crosshair at each
     // one on the readback COPY only.
@@ -440,7 +491,37 @@ struct Runner {
     last_gesture_points: Vec<Vec2>,
     // Persistent headless engine: scripted controls use production clip sync.
     modulation_engine: manifold_playback::engine::PlaybackEngine,
+    /// The live App's own `needs_rebuild` (modifier keys, resize drags, tween
+    /// polls): a tree rebuild with no projection.
+    needs_rebuild: bool,
+    /// Layer grid bitmaps the host invalidated, drained each live frame.
+    invalidated_layers: Vec<usize>,
+    work: WorkWindow,
 }
+
+/// The count gate's state for one flow (UI_INVALIDATION_DESIGN.md D10, D11).
+/// After the first `ResetWork`, every frame runs [`Runner::live_frame`], the
+/// live App's per-frame order, so counts measure what a performer's frame does.
+#[derive(Default)]
+struct WorkWindow {
+    /// Set by the first `ResetWork`; frames are live frames from then on.
+    live_frames: bool,
+    start: manifold_core::work_count::WorkSnapshot,
+    /// Work this thread did that the live App does on the content thread (the
+    /// harness's own engine tick), removed from every reading.
+    excluded: manifold_core::work_count::WorkSnapshot,
+    /// `--record-work`: `AssertWork` writes the observed counts as ceilings.
+    record: bool,
+    /// The flow's file stem: its key in the ceilings file.
+    flow: String,
+    /// The selection version and active layer the last live frame saw.
+    seen_selection_version: u64,
+    seen_active_layer: Option<LayerId>,
+}
+
+/// Committed ceilings, read and written relative to the repo root (flows run
+/// with the repo root as cwd).
+pub(crate) const WORK_CEILINGS_PATH: &str = "scripts/ui-flows/work_ceilings.json";
 
 impl Runner {
     fn new() -> Self {
@@ -466,6 +547,9 @@ impl Runner {
             filmstrip: Vec::new(),
             last_gesture_points: Vec::new(),
             modulation_engine,
+            needs_rebuild: false,
+            invalidated_layers: Vec::new(),
+            work: WorkWindow::default(),
         }
     }
 
@@ -492,10 +576,13 @@ impl Runner {
                 for _ in 0..*frames {
                     self.clock += DT;
                     std::thread::sleep(Duration::from_secs_f32(DT));
-                    ui.update();
-                    if ui.inspector.drawer_anim_active() || ui.scene_setup_panel.object_cards_animating() {
-                        self.needs_structural_sync = true;
+                    if !self.work.live_frames {
+                        ui.update();
+                        if ui.inspector.drawer_anim_active() || ui.scene_setup_panel.object_cards_animating() {
+                            self.needs_structural_sync = true;
+                        }
                     }
+                    let engine_work = manifold_core::work_count::thread_work_snapshot();
                     // Editing owns the fixture between steps. Temporarily lend
                     // that same project to the engine, preserving runtime state
                     // and avoiding a second scheduler in the UI harness.
@@ -509,7 +596,9 @@ impl Runner {
                         realtime_now: manifold_core::Seconds(self.clock as f64),
                         ..Default::default()
                     });
-                    if result.modulation_active {
+                    // In the live App modulated values arrive by value
+                    // snapshot, not a structural sync.
+                    if result.modulation_active && !self.work.live_frames {
                         self.needs_structural_sync = true;
                     }
                     self.modulation_engine.reclaim_tick_result(result);
@@ -521,6 +610,13 @@ impl Runner {
                         &mut data.project,
                         self.modulation_engine.project_mut().expect("initialized engine"),
                     );
+                    // The live App ticks the engine on the content thread.
+                    let engine_work = manifold_core::work_count::thread_work_snapshot().since(&engine_work);
+                    self.work.excluded = self.work.excluded.plus(&engine_work);
+                    if self.work.live_frames {
+                        self.live_frame(ui, data, render);
+                        continue;
+                    }
                     let mut signals = UiFrameSignals {
                         needs_structural_sync: self.needs_structural_sync,
                         scroll_dirty: self.scroll_dirty,
@@ -539,14 +635,9 @@ impl Runner {
                     // write into `data.project`'s param `effective` value
                     // never reaches the widget tree a `Dump`/`Snapshot` reads.
                     super::reconcile_state(ui, data);
-                    composite_frame(
-                        render.device,
-                        &mut render.ui_renderer,
-                        &mut render.cache,
-                        ui,
-                        &render.composite,
-                        1.0,
-                    );
+                    if render.gate.step_frame() {
+                        render.composite_now(ui);
+                    }
                     self.filmstrip.push(render.readback_linear());
                 }
                 StepResult {
@@ -702,6 +793,51 @@ impl Runner {
             AutomationAction::SetParam { param, value } => {
                 self.set_param(ui, data, zoom_ppb, index, action_desc, param, *value, render)
             }
+            AutomationAction::ScrubDrag { param, from, to, steps } => {
+                self.scrub_drag(ui, data, zoom_ppb, index, action_desc, param, (*from, *to), *steps, out_dir, render)
+            }
+            AutomationAction::PlayingStep { frames, bpm, wobble } => {
+                self.playing_step(ui, data, zoom_ppb, *frames, *bpm, *wobble, render);
+                StepResult {
+                    index,
+                    action: action_desc,
+                    status: "ok",
+                    detail: format!("{frames} playing frame(s) at {bpm} bpm, beat -> {:.3}", data.content.current_beat.0),
+                    artifact: None,
+                }
+            }
+            AutomationAction::Modifiers { modifiers } => {
+                // `window_input::input_modifiers`: store, forward, rebuild.
+                self.modifiers = *modifiers;
+                self.overlay.set_modifiers(*modifiers);
+                self.needs_rebuild = true;
+                ui.input.set_modifiers(*modifiers);
+                self.advance_frame(ui, data, zoom_ppb, render, false);
+                StepResult { index, action: action_desc, status: "ok", detail: "modifiers set".into(), artifact: None }
+            }
+            AutomationAction::ResizeDrag { handle, from, to, steps } => {
+                self.resize_drag(ui, data, zoom_ppb, *handle, (*from, *to), *steps, render);
+                StepResult { index, action: action_desc, status: "ok", detail: format!("{steps} resize move(s)"), artifact: None }
+            }
+            AutomationAction::TrackWheel { at, delta_y, steps } => {
+                for _ in 0..*steps {
+                    self.track_wheel(ui, *at, *delta_y);
+                    self.advance_frame(ui, data, zoom_ppb, render, false);
+                }
+                StepResult { index, action: action_desc, status: "ok", detail: format!("{steps} wheel notch(es)"), artifact: None }
+            }
+            AutomationAction::ResetWork => {
+                // Settle whatever setup left pending, so the window counts
+                // only the gesture that follows.
+                self.work.live_frames = true;
+                self.work.seen_selection_version = data.selection.selection_version;
+                self.work.seen_active_layer = self.active_layer.clone();
+                self.live_frame(ui, data, render);
+                self.work.start = manifold_core::work_count::thread_work_snapshot();
+                self.work.excluded = manifold_core::work_count::WorkSnapshot::default();
+                StepResult { index, action: action_desc, status: "ok", detail: "work window started".into(), artifact: None }
+            }
+            AutomationAction::AssertWork { window } => self.assert_work(ui, index, action_desc, window, out_dir),
         };
         // BUG-198: whatever this step just sent over `content_tx` (via
         // `AppEditingHost`/`ui_bridge::dispatch`) has already been applied
@@ -709,13 +845,292 @@ impl Runner {
         // undo stack so `Key`'s Cmd+Z/Cmd+Shift+Z arm has something real to
         // act on. Every step drains unconditionally (most steps sent
         // nothing, so this is a no-op `try_recv` miss).
-        if self.record_executed_commands(data) {
-            crate::edit_selection::apply_update(ui, &data.project, data.content.edit_selection_update.as_deref(), &mut data.selection, &mut self.active_layer);
-            data.active = self.active_layer.as_ref().and_then(|id| data.project.timeline.find_layer_index_by_id(id));
-            self.needs_structural_sync = true;
+        if self.absorb_commands(ui, data) {
             self.advance_frame(ui, data, zoom_ppb, render, false);
         }
         outcome
+    }
+
+    /// The overlay half of a cursor move (`window_input` cursor-moved): every
+    /// move, pressed or not, runs `InteractionOverlay::on_pointer_move` with the
+    /// App's own flags, unless a modal blocks background input.
+    fn overlay_hover(&mut self, ui: &mut UIRoot, data: &mut SceneData, pos: Vec2) {
+        if ui.background_input_blocked() {
+            if data.selection.automation_feedback.take().is_some() {
+                self.scroll_dirty.visual = true;
+            }
+            return;
+        }
+        let mut host = AppEditingHost::new(
+            &mut data.project,
+            &self.content_tx,
+            &self.content_state,
+            &mut self.cursor_manager,
+            &mut self.active_layer,
+            &mut self.needs_rebuild,
+            &mut self.needs_structural_sync,
+            &mut self.automation_lanes_dirty,
+            &mut self.scroll_dirty,
+            &mut self.invalidated_layers,
+            &mut self.pre_drag_commands,
+        );
+        self.overlay.on_pointer_move(pos, &mut host, &mut data.selection, &ui.viewport);
+    }
+
+    /// Drain and record what the step sent (see `record_executed_commands`);
+    /// when that changed the project, apply the selection update and ask for a
+    /// structural sync. True when it did.
+    fn absorb_commands(&mut self, ui: &mut UIRoot, data: &mut SceneData) -> bool {
+        if !self.record_executed_commands(data) {
+            return false;
+        }
+        crate::edit_selection::apply_update(ui, &data.project, data.content.edit_selection_update.as_deref(), &mut data.selection, &mut self.active_layer);
+        data.active = self.active_layer.as_ref().and_then(|id| data.project.timeline.find_layer_index_by_id(id));
+        self.needs_structural_sync = true;
+        true
+    }
+
+    /// One UI frame in the live App's order (`app_render.rs` `tick_and_render`):
+    /// consume the deferred structural flag, re-project on a selection or
+    /// active-layer change, auto-scroll, the rebuild decision, `push_state`,
+    /// the drag-time clip and lane re-projection, layer-bitmap invalidation, the
+    /// tween polls, then the CPU half of the grid and overview repaints. No
+    /// forced zoom. Tweens settle at once, as under reduced motion, so counts
+    /// do not depend on machine speed.
+    fn live_frame(&mut self, ui: &mut UIRoot, data: &mut SceneData, render: &mut RenderState) {
+        // A long gesture sends a command per move; the harness channel is bounded.
+        self.absorb_commands(ui, data);
+        ui.sync_embedded_presets(&data.project);
+        if data.content.bpm.is_finite() && data.content.bpm > 0.0 {
+            let bpm = manifold_core::Bpm(data.content.bpm as f32);
+            if ui.sync_driver_bpm(&data.project, bpm) {
+                self.needs_structural_sync = true;
+                self.needs_rebuild = true;
+            }
+        }
+        let mut structural = std::mem::take(&mut self.needs_structural_sync);
+        let active = data.active;
+        if data.selection.selection_version != self.work.seen_selection_version && !structural {
+            crate::ui_bridge::sync_inspector_data(
+                ui, &data.project, active, &data.selection,
+                &data.content.automation_latched_params, data.content.led_preview.as_ref(),
+            );
+            structural = true;
+        }
+        if structural || self.active_layer != self.work.seen_active_layer {
+            crate::ui_bridge::sync_automation_lane_order(&data.project, &mut data.selection);
+            crate::ui_bridge::sync_project_data(ui, &data.project, active, &data.selection);
+            crate::ui_bridge::sync_inspector_data(
+                ui, &data.project, active, &data.selection,
+                &data.content.automation_latched_params, data.content.led_preview.as_ref(),
+            );
+            structural = true;
+        }
+        self.work.seen_selection_version = data.selection.selection_version;
+        self.work.seen_active_layer = self.active_layer.clone();
+
+        if crate::ui_bridge::check_auto_scroll(ui, &data.content, &data.project) {
+            self.scroll_dirty.scroll_x = true;
+        }
+        if std::mem::take(&mut ui.overlay_dirty) || ui.detect_overlay_open_change() {
+            self.scroll_dirty.visual = true;
+        }
+        // Tweens run on wall-clock time, so how many frames one spans depends
+        // on machine speed. Counts must not, so work windows run with
+        // reduced motion: a tween settles in the frame after it starts.
+        if ui.inspector.skip_to_settled(&mut ui.tree) | ui.scene_setup_panel.skip_cards_to_settled(&mut ui.tree) {
+            self.needs_rebuild = true;
+        }
+        let scroll_dirty = std::mem::take(&mut self.scroll_dirty);
+        let mut signals = UiFrameSignals {
+            needs_rebuild: self.needs_rebuild,
+            needs_structural_sync: structural,
+            scroll_dirty,
+            scrolled_in_place: false,
+        };
+        apply_ui_frame_invalidations(ui, Some(&mut render.cache), &mut signals);
+        self.needs_rebuild = signals.needs_rebuild;
+
+        super::reconcile_state(ui, data);
+
+        let clip_drag = matches!(
+            self.overlay.drag_mode(),
+            manifold_ui::interaction_overlay::DragMode::Move
+                | manifold_ui::interaction_overlay::DragMode::TrimLeft
+                | manifold_ui::interaction_overlay::DragMode::TrimRight
+        );
+        if structural || clip_drag {
+            crate::ui_bridge::sync_clip_positions(ui, &data.project);
+        }
+        if structural || std::mem::take(&mut self.automation_lanes_dirty) {
+            crate::ui_bridge::sync_automation_lane_geometry(
+                ui,
+                &data.project,
+                data.selection.automation_mode_visible,
+                &data.selection.chosen_automation_params,
+                &data.selection.automation_lane_order,
+                &data.selection.hidden_automation_lanes,
+                &data.selection.pinned_automation_lanes,
+            );
+        }
+        for layer_idx in self.invalidated_layers.drain(..) {
+            ui.viewport.invalidate_layer_bitmap(layer_idx);
+        }
+        if ui.inspector.drawer_anim_active()
+            || ui.scene_setup_panel.object_cards_animating()
+            || ui.layout.is_split_reset_animating()
+        {
+            self.needs_rebuild = true;
+        }
+        ui.viewport.repaint_dirty_layers();
+        ui.viewport.repaint_overview();
+        render.gate.mark();
+    }
+
+    fn assert_work(
+        &mut self,
+        ui: &UIRoot,
+        index: usize,
+        action_desc: String,
+        window: &str,
+        out_dir: &std::path::Path,
+    ) -> StepResult {
+        use manifold_core::work_count::{thread_work_snapshot, WorkKind};
+        let counts = thread_work_snapshot().since(&self.work.start).minus(&self.work.excluded);
+        let observed: Vec<(WorkKind, u64)> = counts.nonzero().collect();
+        let mut ceilings = read_work_ceilings();
+        let observed_text = || {
+            observed.iter().map(|(k, n)| format!("{}={n}", k.name())).collect::<Vec<_>>().join(" ")
+        };
+        if self.work.record {
+            let entry = ceilings
+                .as_object_mut()
+                .expect("ceilings file is an object")
+                .entry("flows")
+                .or_insert_with(|| serde_json::json!({}))
+                .as_object_mut()
+                .expect("flows is an object")
+                .entry(self.work.flow.clone())
+                .or_insert_with(|| serde_json::json!({}));
+            let mut window_counts = serde_json::Map::new();
+            for (kind, n) in &observed {
+                window_counts.insert(kind.name().to_string(), serde_json::json!(n));
+            }
+            entry
+                .as_object_mut()
+                .expect("flow entry is an object")
+                .insert(window.to_string(), serde_json::Value::Object(window_counts));
+            write_work_ceilings(&ceilings);
+            println!("ui-snap --script: recorded work ceilings {}/{window}: {}", self.work.flow, observed_text());
+            return StepResult { index, action: action_desc, status: "ok", detail: format!("recorded {}", observed_text()), artifact: None };
+        }
+        let ceiling = |kind: WorkKind| {
+            ceilings
+                .pointer(&format!("/flows/{}/{window}/{}", self.work.flow, kind.name()))
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0)
+        };
+        let over: Vec<String> = observed
+            .iter()
+            .filter(|&&(k, n)| n > ceiling(k))
+            .map(|&(k, n)| format!("{}={n} > {}", k.name(), ceiling(k)))
+            .collect();
+        if over.is_empty() {
+            StepResult { index, action: action_desc, status: "ok", detail: format!("within ceilings: {}", observed_text()), artifact: None }
+        } else {
+            self.fail(index, action_desc, ui, out_dir, format!(
+                "work over ceiling in {}/{window}: {} (re-record only by `scripts/run_ui_flows.py --record-work`)",
+                self.work.flow,
+                over.join(", "),
+            ))
+        }
+    }
+
+    /// `PlayingStep`: the content clock as the UI sees it. Each frame moves
+    /// `ContentState`'s beat at `bpm` and alternates its BPM by `wobble`.
+    #[allow(clippy::too_many_arguments)]
+    fn playing_step(
+        &mut self,
+        ui: &mut UIRoot,
+        data: &mut SceneData,
+        zoom_ppb: f32,
+        frames: u32,
+        bpm: f32,
+        wobble: f32,
+        render: &mut RenderState,
+    ) {
+        data.content.is_playing = true;
+        for frame in 0..frames {
+            let sign = if frame % 2 == 0 { 1.0 } else { -1.0 };
+            data.content.bpm = (bpm + sign * wobble) as f64;
+            data.content.current_beat =
+                manifold_core::Beats(data.content.current_beat.0 + bpm as f64 / 60.0 * DT as f64);
+            self.clock += DT;
+            self.advance_frame(ui, data, zoom_ppb, render, false);
+        }
+    }
+
+    /// One wheel notch over the tracks: `window_input::primary_mouse_wheel`'s
+    /// tracks branch and `zoom_timeline_at_cursor`, with the held modifiers.
+    fn track_wheel(&mut self, ui: &mut UIRoot, pos: Vec2, dy: f32) {
+        if !ui.layout.timeline_tracks().contains(pos) {
+            return;
+        }
+        let viewport = &mut ui.viewport;
+        if self.modifiers.alt {
+            let factor = manifold_ui::color::ZOOM_WHEEL_STEP_PER_NOTCH.powf(dy / crate::window_input::LINE_DELTA_PX);
+            let beat_at_cursor = viewport.pixel_to_beat(pos.x).as_f32();
+            let new_ppb = viewport.zoom_continuous(factor);
+            viewport.zoom_to(new_ppb, beat_at_cursor, pos.x);
+            self.scroll_dirty.zoom = true;
+        } else if self.modifiers.shift {
+            let beat_delta = dy * manifold_ui::color::SCROLL_SENSITIVITY / viewport.pixels_per_beat();
+            let new_x = (viewport.scroll_x_beats().as_f32() - beat_delta).max(0.0);
+            if viewport.set_scroll(new_x, viewport.scroll_y_px()) {
+                self.scroll_dirty.scroll_x = true;
+            }
+            viewport.note_user_scroll_x();
+        } else {
+            let new_y = (viewport.scroll_y_px() - dy).max(0.0);
+            if viewport.set_scroll(viewport.scroll_x_beats().as_f32(), new_y) {
+                self.scroll_dirty.scroll_y = true;
+            }
+        }
+    }
+
+    /// `ResizeDrag`: `window_input`'s raw split and inspector-width drags.
+    #[allow(clippy::too_many_arguments)]
+    fn resize_drag(
+        &mut self,
+        ui: &mut UIRoot,
+        data: &mut SceneData,
+        zoom_ppb: f32,
+        handle: manifold_ui::automation::ResizeHandle,
+        (from, to): (f32, f32),
+        steps: u32,
+        render: &mut RenderState,
+    ) {
+        use manifold_ui::automation::ResizeHandle;
+        let steps = steps.max(1);
+        if matches!(handle, ResizeHandle::InspectorWidth) {
+            ui.begin_inspector_resize(from);
+        }
+        for i in 1..=steps {
+            let pos = from + (to - from) * i as f32 / steps as f32;
+            match handle {
+                ResizeHandle::TimelineSplit => {
+                    ui.layout.update_split_from_drag(pos);
+                    self.needs_rebuild = true;
+                }
+                ResizeHandle::InspectorWidth => {
+                    if ui.update_inspector_resize(pos) {
+                        self.needs_rebuild = true;
+                    }
+                }
+            }
+            self.advance_frame(ui, data, zoom_ppb, render, false);
+        }
+        ui.end_inspector_resize();
     }
 
     /// Drains every `ContentCommand` this step's `AppEditingHost`/
@@ -943,6 +1358,41 @@ impl Runner {
                 ui.pointer_event(to_center, PointerAction::Up, self.clock);
                 self.drain_and_dispatch(ui, data);
             }
+            Gesture::DragFrames { to, steps } | Gesture::Sweep { to, steps } => {
+                let to_rect = match self.resolve(ui, to) {
+                    Ok(r) => r,
+                    Err(e) => return self.fail(index, action_desc, ui, out_dir, e),
+                };
+                let to_center = Vec2::new(to_rect.x + to_rect.width * 0.5, to_rect.y + to_rect.height * 0.5);
+                let pressed = matches!(gesture, Gesture::DragFrames { .. });
+                ui.input.set_modifiers(self.modifiers);
+                self.last_gesture_points.push(center);
+                if pressed {
+                    ui.pointer_event(center, PointerAction::Down, self.clock);
+                } else {
+                    ui.pointer_event(center, PointerAction::Move, self.clock);
+                    self.overlay_hover(ui, data, center);
+                }
+                self.drain_and_dispatch(ui, data);
+                self.advance_frame(ui, data, zoom_ppb, render, false);
+                for pt in automation::interpolate_drag(center, to_center, *steps) {
+                    self.clock += DT;
+                    self.last_gesture_points.push(pt);
+                    ui.pointer_event(pt, PointerAction::Move, self.clock);
+                    self.overlay_hover(ui, data, pt);
+                    self.drain_and_dispatch(ui, data);
+                    self.advance_frame(ui, data, zoom_ppb, render, false);
+                }
+                self.clock += DT;
+                self.last_gesture_points.push(to_center);
+                if pressed {
+                    ui.pointer_event(to_center, PointerAction::Up, self.clock);
+                } else {
+                    ui.pointer_event(to_center, PointerAction::Move, self.clock);
+                    self.overlay_hover(ui, data, to_center);
+                }
+                self.drain_and_dispatch(ui, data);
+            }
         }
 
         self.advance_frame(ui, data, zoom_ppb, render, scrolled_in_place);
@@ -1159,11 +1609,9 @@ impl Runner {
         // Local, call-scoped sinks for the two `AppEditingHost` outputs the
         // P2 seam doesn't consume by name (see the module doc): a completed
         // structural drag folds into `needs_structural_sync` below (the seam
-        // ORs the two identically); per-layer bitmap invalidation is a
-        // live-app-only Pass-4c mechanism this harness never renders, so
-        // it's a dead sink here exactly as it always was.
+        // ORs the two identically); per-layer bitmap invalidation lands in
+        // `invalidated_layers` (see the module doc).
         let mut rebuild_flag = false;
-        let mut layer_bitmap_scratch: Vec<usize> = Vec::new();
         let mut host = AppEditingHost::new(
             &mut data.project,
             &self.content_tx,
@@ -1174,7 +1622,7 @@ impl Runner {
             &mut self.needs_structural_sync,
             &mut self.automation_lanes_dirty,
             &mut self.scroll_dirty,
-            &mut layer_bitmap_scratch,
+            &mut self.invalidated_layers,
             &mut self.pre_drag_commands,
         );
         for event in &viewport_events {
@@ -1194,7 +1642,7 @@ impl Runner {
                     );
                 }
                 UIEvent::PointerUp { .. } => {
-                    self.overlay.on_pointer_up(&mut host);
+                    self.overlay.on_pointer_up(&mut host, &mut data.selection);
                 }
                 UIEvent::Click { pos, modifiers, .. } => {
                     self.overlay.on_pointer_click(
@@ -1403,25 +1851,14 @@ impl Runner {
         value: f32,
         render: &mut RenderState,
     ) -> StepResult {
-        use manifold_ui::automation::FlowScrubTarget;
-        use manifold_ui::panels::{GraphParamTarget, ScrubPhase, ScrubValue, ValueRef};
-        let value_ref = match param {
-            FlowScrubTarget::MasterOpacity => ValueRef::MasterOpacity,
-            FlowScrubTarget::LedBrightness => ValueRef::LedBrightness,
-            FlowScrubTarget::LayerOpacity => ValueRef::LayerOpacity,
-            FlowScrubTarget::Macro(idx) => ValueRef::Macro(*idx),
-            FlowScrubTarget::EffectParam { effect, param } => ValueRef::Param(
-                GraphParamTarget::Effect(*effect),
-                std::borrow::Cow::Owned(param.clone()),
-            ),
-            FlowScrubTarget::GeneratorParam { param } => ValueRef::Param(
-                GraphParamTarget::Generator,
-                std::borrow::Cow::Owned(param.clone()),
-            ),
+        use manifold_ui::panels::ScrubPhase;
+        let (value_ref, range) = match flow_value_ref(data, param) {
+            Ok(v) => v,
+            Err(e) => return StepResult { index, action: action_desc, status: "fail", detail: e, artifact: None },
         };
         let actions = vec![
             PanelAction::Scrub(value_ref.clone(), ScrubPhase::Begin),
-            PanelAction::Scrub(value_ref.clone(), ScrubPhase::Move(ScrubValue::Scalar(value))),
+            PanelAction::Scrub(value_ref.clone(), ScrubPhase::Move(scrub_value(range, value))),
             PanelAction::Scrub(value_ref, ScrubPhase::Commit),
         ];
         self.apply_panel_actions(ui, data, &actions);
@@ -1431,6 +1868,50 @@ impl Runner {
             action: action_desc,
             status: "ok",
             detail: format!("set {param:?} = {value} (Begin/Move/Commit through dispatch)"),
+            artifact: None,
+        }
+    }
+
+    /// `ScrubDrag`: Begin, `steps` Moves with a frame each, Commit — the scrub a
+    /// held mouse produces, through the same dispatch as `set_param`.
+    #[allow(clippy::too_many_arguments)]
+    fn scrub_drag(
+        &mut self,
+        ui: &mut UIRoot,
+        data: &mut SceneData,
+        zoom_ppb: f32,
+        index: usize,
+        action_desc: String,
+        param: &manifold_ui::automation::FlowScrubTarget,
+        (from, to): (f32, f32),
+        steps: u32,
+        out_dir: &std::path::Path,
+        render: &mut RenderState,
+    ) -> StepResult {
+        use manifold_ui::panels::ScrubPhase;
+        let (value_ref, range) = match flow_value_ref(data, param) {
+            Ok(v) => v,
+            Err(e) => return self.fail(index, action_desc, ui, out_dir, e),
+        };
+        let steps = steps.max(1);
+        self.apply_panel_actions(ui, data, &[PanelAction::Scrub(value_ref.clone(), ScrubPhase::Begin)]);
+        self.advance_frame(ui, data, zoom_ppb, render, false);
+        for i in 1..=steps {
+            let value = from + (to - from) * i as f32 / steps as f32;
+            self.apply_panel_actions(
+                ui,
+                data,
+                &[PanelAction::Scrub(value_ref.clone(), ScrubPhase::Move(scrub_value(range, value)))],
+            );
+            self.advance_frame(ui, data, zoom_ppb, render, false);
+        }
+        self.apply_panel_actions(ui, data, &[PanelAction::Scrub(value_ref, ScrubPhase::Commit)]);
+        self.advance_frame(ui, data, zoom_ppb, render, false);
+        StepResult {
+            index,
+            action: action_desc,
+            status: "ok",
+            detail: format!("{steps} scrub move(s) {from} -> {to} through dispatch"),
             artifact: None,
         }
     }
@@ -1453,6 +1934,13 @@ impl Runner {
         render: &mut RenderState,
         scrolled_in_place: bool,
     ) {
+        if self.work.live_frames {
+            if scrolled_in_place {
+                render.cache.invalidate_inspector();
+            }
+            return self.live_frame(ui, data, render);
+        }
+        self.invalidated_layers.clear();
         crate::ui_bridge::sync_automation_lane_order(&data.project, &mut data.selection);
         if self.needs_structural_sync {
             super::sync_data(ui, data, zoom_ppb);
@@ -1499,14 +1987,7 @@ impl Runner {
         // same as the live driver's per-frame `scroll_dirty.clear()`.
         self.scroll_dirty.visual = false;
         super::reconcile_state(ui, data);
-        composite_frame(
-            render.device,
-            &mut render.ui_renderer,
-            &mut render.cache,
-            ui,
-            &render.composite,
-            1.0,
-        );
+        render.gate.mark();
     }
 
     fn assert(
@@ -1715,6 +2196,64 @@ impl Runner {
     }
 }
 
+/// The real `ValueRef` a flow's scrub address names, and whether its Moves
+/// carry a `(min, max)` range rather than a scalar.
+fn flow_value_ref(
+    data: &SceneData,
+    param: &manifold_ui::automation::FlowScrubTarget,
+) -> Result<(manifold_ui::panels::ValueRef, bool), String> {
+    use manifold_ui::automation::FlowScrubTarget as F;
+    use manifold_ui::panels::{GraphParamTarget, ValueRef};
+    let target = |effect: &Option<usize>| match effect {
+        Some(i) => GraphParamTarget::Effect(*i),
+        None => GraphParamTarget::Generator,
+    };
+    let pid = |p: &String| std::borrow::Cow::Owned(p.clone());
+    let layer = |i: usize| {
+        data.project.timeline.layers.get(i).map(|l| l.layer_id.clone())
+            .ok_or_else(|| format!("scrub address names layer {i}; the fixture has {}", data.project.timeline.layers.len()))
+    };
+    Ok(match param {
+        F::MasterOpacity => (ValueRef::MasterOpacity, false),
+        F::LedBrightness => (ValueRef::LedBrightness, false),
+        F::LayerOpacity => (ValueRef::LayerOpacity, false),
+        F::Macro(idx) => (ValueRef::Macro(*idx), false),
+        F::EffectParam { effect, param } => (ValueRef::Param(GraphParamTarget::Effect(*effect), pid(param)), false),
+        F::GeneratorParam { param } => (ValueRef::Param(GraphParamTarget::Generator, pid(param)), false),
+        F::Trim { kind, effect, param } => (ValueRef::Trim(*kind, target(effect), pid(param)), true),
+        F::EnvelopeTarget { effect, param } => (ValueRef::EnvelopeTarget(target(effect), pid(param)), false),
+        F::AudioModShape { effect, param, shape } => (ValueRef::AudioModShape(target(effect), pid(param), *shape), false),
+        F::AudioTriggerShape { layer: l, index, shape } => (ValueRef::AudioTriggerShape(layer(*l)?, *index, *shape), false),
+        F::LayerAudioGain { layer: l } => (ValueRef::LayerAudioGain(layer(*l)?), false),
+        F::Relight { effect, field } => (ValueRef::RelightParam(target(effect), *field), false),
+        F::AudioSendGain { send } => {
+            let id = data.project.audio_setup.sends.get(*send).map(|s| s.id.clone())
+                .ok_or_else(|| format!("scrub address names send {send}; the fixture has {}", data.project.audio_setup.sends.len()))?;
+            (ValueRef::AudioSendGain(id), false)
+        }
+        F::Crossover(divider) => (ValueRef::AudioCrossover(*divider), false),
+        F::AbletonMacroTrim(slot) => (ValueRef::AbletonMacroTrim(*slot), true),
+    })
+}
+
+fn scrub_value(range: bool, value: f32) -> manifold_ui::panels::ScrubValue {
+    use manifold_ui::panels::ScrubValue;
+    if range { ScrubValue::Range(0.0, value) } else { ScrubValue::Scalar(value) }
+}
+
+/// The committed ceilings file, or an empty one when it does not exist yet.
+fn read_work_ceilings() -> serde_json::Value {
+    std::fs::read_to_string(WORK_CEILINGS_PATH)
+        .ok()
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or_else(|| serde_json::json!({ "flows": {} }))
+}
+
+fn write_work_ceilings(ceilings: &serde_json::Value) {
+    let text = serde_json::to_string_pretty(ceilings).expect("serialize work ceilings") + "\n";
+    std::fs::write(WORK_CEILINGS_PATH, text).expect("write work ceilings");
+}
+
 /// D9b: draw a small crosshair (~11px, opaque red) centered at `pt` (logical
 /// == texel here — the harness is always scale factor 1.0, D8) directly into
 /// linear Rgba16Float bytes of stride `tex_w * 8`. CPU-side only; never called
@@ -1771,4 +2310,80 @@ pub(super) fn click_by_text(ui: &mut UIRoot, data: &mut SceneData, text: &str) -
 /// branch (no `Runner`/script run in progress there).
 pub(super) fn write_fail_dump(ui: &UIRoot, path: &std::path::Path) {
     Runner::new().write_dump(ui, path);
+}
+
+#[cfg(test)]
+mod composite_gate_tests {
+    use super::*;
+
+    fn flow(name: &str) -> Vec<AutomationAction> {
+        let path = format!("{}/../../scripts/ui-flows/{name}.json", env!("CARGO_MANIFEST_DIR"));
+        serde_json::from_str(&std::fs::read_to_string(path).expect("read flow")).expect("parse flow")
+    }
+
+    /// Mirrors `run_flow`: flush before a reader, a `Step` composites and
+    /// tiles every frame, a `Snapshot` advances nothing, every other step
+    /// advances one frame. Returns (composites, filmstrip tiles).
+    fn composites_for(actions: &[AutomationAction]) -> (usize, usize) {
+        let mut gate = CompositeGate::default();
+        gate.mark();
+        let mut tiles = 0;
+        for action in actions {
+            if reads_composite(action) {
+                gate.take();
+            }
+            match action {
+                AutomationAction::Step { frames } => {
+                    for _ in 0..*frames {
+                        gate.step_frame();
+                        tiles += 1;
+                    }
+                }
+                AutomationAction::Snapshot => {}
+                _ => gate.mark(),
+            }
+        }
+        (gate.composites, tiles)
+    }
+
+    #[test]
+    fn step_composites_and_tiles_every_frame() {
+        let actions = [AutomationAction::Dump, AutomationAction::Step { frames: 5 }];
+        // Seed + the Dump frame are owed but folded into the first Step frame.
+        assert_eq!(composites_for(&actions), (5, 5));
+        let actions = [AutomationAction::Step { frames: 3 }, AutomationAction::Step { frames: 2 }];
+        assert_eq!(composites_for(&actions), (5, 5));
+    }
+
+    #[test]
+    fn run_without_snapshot_steps_never_composites() {
+        let mut actions = flow("water-family-preset");
+        actions.retain(|a| !matches!(a, AutomationAction::Step { .. }));
+        let snapshots = actions.iter().filter(|a| reads_composite(a)).count();
+        assert!(snapshots > 0, "fixture flow should carry Snapshot steps");
+        assert_eq!(composites_for(&actions).0, snapshots);
+        actions.retain(|a| !reads_composite(a));
+        assert!(actions.len() > 20);
+        assert_eq!(composites_for(&actions).0, 0);
+    }
+
+    #[test]
+    fn only_snapshot_reads_the_composite() {
+        let non_readers = [
+            AutomationAction::Dump,
+            AutomationAction::Step { frames: 3 },
+            AutomationAction::SaveReloadProject,
+        ];
+        assert!(non_readers.iter().all(|a| !reads_composite(a)));
+        assert!(reads_composite(&AutomationAction::Snapshot));
+    }
+
+    #[test]
+    fn back_to_back_snapshots_composite_once() {
+        let mut gate = CompositeGate::default();
+        gate.mark();
+        assert!(gate.take());
+        assert!(!gate.take());
+        assert_eq!(gate.composites, 1);
+    }
 }

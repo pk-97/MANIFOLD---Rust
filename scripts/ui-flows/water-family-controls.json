@@ -66,7 +66,5 @@
   {"Assert":{"selector":{"Query":{"name":"scene_setup.object_eye.19","text":"👁"}},"check":{"Count":1}}},
   {"ScrollTo":{"target":{"Query":{"name_suffix":"_amount.driver_btn"}}}},
   {"Pointer":{"target":{"Query":{"name_suffix":"_amount.driver_btn"}},"gesture":{"Click":{"modifiers":{}}}}},
-  {"Assert":{"selector":{"Query":{"text":"Straight","type":"Button","nth":0}},"check":{"Count":1}}},
-  {"Step":{"frames":8}},
-  "Snapshot"
+  {"Assert":{"selector":{"Query":{"text":"Straight","type":"Button","nth":0}},"check":{"Count":1}}}
 ]

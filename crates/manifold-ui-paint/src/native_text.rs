@@ -1721,6 +1721,9 @@ fn measure_text_ct(
     if text.is_empty() {
         return Vec2::new(0.0, font_size);
     }
+    manifold_foundation::work_count::record_work(
+        manifold_foundation::work_count::WorkKind::TextMeasureMiss,
+    );
     let ct_font = font_mgr.get_ct_font(font_size, weight);
     let line = make_ct_line(ct_font, text);
     let bounds = line.get_typographic_bounds();

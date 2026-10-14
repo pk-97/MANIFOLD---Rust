@@ -1,0 +1,10 @@
+[
+  "ResetWork",
+  {
+    "Pointer": {
+      "target": { "Surface": { "surface": "timeline_clips", "kind": "clip", "label": "Plasma 1" } },
+      "gesture": { "Click": { "modifiers": {} } }
+    }
+  },
+  { "AssertWork": { "window": "select_clip" } }
+]

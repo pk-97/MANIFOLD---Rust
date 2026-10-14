@@ -17,7 +17,7 @@ Slot names reach the Claude models directly: `fable` is Fable 5.1, `opus` is Opu
 | Landing seat | `sonnet` | Runs the landing protocol on a lead-approved branch. See section The landing seat. |
 | Consult | Fable fork | Read-and-discuss only. See section The consult seat. |
 
-Haiku: Haiku 4.5 is not used for lanes (Peter, 2026-07-29: it stalls and needs nudges). Haiku 5.5 may be used where it makes sense once it releases (Peter, 2026-10-01).
+Haiku: the newest Haiku runs retrieval and given commands, never judgment or edits (Peter, 2026-10-13).
 
 Never to Sonnet lanes: graph semantics, GPU and kernel work, undo and lifecycle, design judgment, anything whose fix shape isn't decided. That work goes to the lead, or to an Opus or Fable lane under a written brief. Design calls stay with the lead either way.
 
@@ -32,7 +32,7 @@ There is no dispatcher seat. The clerical loop (pop queue, run gates, park failu
 
 The happy path of a landing is mechanical: fetch, merge `origin/main` into the branch, `scripts/landing_gate.py --repo <worktree path>` (agents cannot cd, and HEAD on main's checkout is the base, so the gate refuses there), `git merge --no-ff` to main with a `Closes:` trailer, push, close the beads. Sonnet does that fine. What it can't be trusted with is judging whether a failure is simple, so it never judges:
 
-- **Several ready branches land as one batch**, not one gate each (the gate is 30-60 minutes): `scripts/land_wave.py --batch <branch>[@<tip>] ...` merges them in queue order, gates once, drops a red culprit by name, and lands one merge listing every branch and tip. A single ready branch still lands alone. Protocol: `.claude/GIT_TREE_DISCIPLINE.md` section 2 (Landing protocol).
+- **Several ready branches land as one batch**, not one gate each: `scripts/land_wave.py --batch <branch>[@<tip>] ...` merges them in queue order, gates once, drops a red culprit by name, and lands one merge listing every branch and tip. A single ready branch still lands alone. Protocol: `.claude/GIT_TREE_DISCIPLINE.md` section 2 (Landing protocol).
 - It lands only a branch the lead has reviewed and named in the brief.
 - **Any non-zero exit, merge conflict, hook deny, or output it doesn't recognise → stop and report verbatim. No fix attempts, no retries with variations.** The lead takes it from there.
 - It never force-pushes, never `branch -f`, never edits code.
@@ -57,14 +57,14 @@ blockers; the watcher and fleet scripts define the reports.
 - **Work items are beads.** Briefs reference bead ids.
 - **Lane health is scheduled, never Peter's job.** `scripts/fleet_health.py` is the automated check for stalled, blocked and unreviewed agent work; the lead reads its report, not the lanes. Two consecutive idle checks with no report = stalled: message once, then stop the lane and escalate.
 - **A failing lane is respawned once, never taken over.** Stop it, carry what it learned into a fresh brief, respawn. A second failure means the task was shaped wrong: the lead re-shapes it (with the consult seat if stuck). The lead does not grind lane work itself.
-- **Briefs restate the invariants every time:** one commit then stop, pathspec commits, no landing, worktree via the slot ring, explicit `model`, LOW effort.
+- **Briefs restate the invariants every time:** one commit then stop, pathspec commits, no landing, worktree via the slot ring, explicit `model`, LOW effort, and the CLAUDE.md section How every session works rules (no inline python, no `cd`, never wait in the foreground, pre-commit checks plus `--cheap` gate, never gate a slot still being written).
 - **Launch defects are one deny that spells the corrected call** (`agent-launch-guard.py`). Names are `<slot>-<descriptive-task>`.
 
 ## Lead token economy
 
-Lead context is the scarcest resource in the rig. Reach for cheap seats before doing bulk searching and reading yourself: Sonnet lanes for tool-using recon and bounded mechanical asks.
+Lead context is the scarcest resource in the rig. The lead does no hands-on work and reads only to review; agents do every search, read, edit and run.
 
-What never delegates: verification of evidence the lead acts on. A weaker model's omissions are invisible in its own summary, so the lead spot-checks the underlying code or data. **Visual verification: judgment-tier seats only.** Opus 5.5 workers render and judge their own headless stills as part of their gate (Peter re-approved 2026-09-29: "Opus 5.5 has strong visual skills now"); the lead looks at the same frames before anything lands and is the final call. Sonnet lanes never run headless-PNG or screenshot loops: briefs name the expected visual outcome and the lead renders and looks after the commit. Obsolete when: Sonnet-tier lanes show real visual judgment and Peter re-approves.
+What never delegates: verification of evidence the lead acts on. A weaker model's omissions are invisible in its own summary, so the lead spot-checks the underlying code or data. **Visual verification: judgment-tier seats only.** Opus 5.5 workers render and judge their own headless stills as part of their gate (Peter re-approved 2026-09-29: "Opus 5.5 has strong visual skills now"); the lead looks at the same frames before anything lands and is the final call. Sonnet lanes never run headless-PNG or screenshot loops: briefs name the expected visual outcome, an Opus lane renders after the commit, and the lead looks. Obsolete when: Sonnet-tier lanes show real visual judgment and Peter re-approves.
 
 **Debug escalation ladder.** For "this looks wrong and it's not obvious why": (1) lead semantic review of the seam first, the cheapest oracle and the strongest against this codebase's wiring bugs; (2) still stuck → the consult seat, a Fable fork reading the seam fresh, read-and-discuss only; (3) instrument probe loops last, delegated to an Opus diagnosis lane with the evidence table in the brief, never lead-run. Three probes without a written evidence table is the signal to step back to (1).
 

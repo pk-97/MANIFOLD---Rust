@@ -22,8 +22,14 @@ that gate also ran every check and went red on exactly the same check labels;
 anything else stops. --named-red requests the complete gate run.
 After verified landing, slot detachment, release and branch deletion are cleanup:
 failures are notes, not landing failures. Unlanded branches are never deleted.
-Every attempt, cancelled ones included, appends one row to
-.claude/orchestration/landing-runs.jsonl in the main checkout.
+Before merging it records the gated tree as a land pass in the git common dir
+(land-passes-v1/<tree>.json); the Bash hook denies a manual merge or push to
+main of any tree without one (preToolUseBash.py land_pass_guard).
+Before any fetch it refuses a slot that is not the named branch's tip, is
+dirty, or is not quiet (a busy Codex job or a write in the last 120s), and
+exits 0 with no row when the tip is already on origin/main.
+Every attempt past argument parsing, refused and cancelled ones included,
+appends one row to .claude/orchestration/landing-runs.jsonl in the main checkout.
 
 Usage:
   scripts/land_branch.py <branch> --worktree <path> --message '<merge msg>' \
@@ -53,6 +59,7 @@ from landing_gate import (CHECKS_RED, record_incomplete,
 MAIN = Path("/Users/peterkiemann/MANIFOLD - Rust")
 LOCK_NAME = "manifold-landing.lock"
 RUNS_LOG = ".claude/orchestration/landing-runs.jsonl"
+LAND_PASS_DIR = "land-passes-v1"  # reader: land_pass_guard in .claude/hooks/preToolUseBash.py
 ATTEMPT = None  # this attempt's landing-runs.jsonl row, set by main()
 
 
@@ -172,6 +179,21 @@ def landing_lock(path, holder):
             fcntl.flock(handle, fcntl.LOCK_UN)
 
 
+def record_land_pass(tree, commit, branch, named_red):
+    """Record that `tree` passed the landing gate, in the git common dir next to
+    gate-passes-v1. The bash hook denies a manual merge or push of any other
+    tree to main. Written just before the merge, so a crash leaves a harmless
+    record, never an unrecorded landing."""
+    directory = lock_path().parent / LAND_PASS_DIR
+    directory.mkdir(parents=True, exist_ok=True)
+    record = {'schema': 1, 'tree': tree, 'commit': commit, 'branch': branch,
+              'named_red': named_red or None,
+              'time': datetime.now(timezone.utc).isoformat()}
+    tmp = directory / f'.{tree}.tmp'
+    tmp.write_text(json.dumps(record) + '\n')
+    os.replace(tmp, directory / f'{tree}.json')
+
+
 def stop(outcome, message):
     ATTEMPT['outcome'] = outcome
     print(f'[land] {message}', file=sys.stderr)
@@ -192,6 +214,7 @@ def land_gated(a, worktree, base, gated_commit, verdict):
                 check=False).returncode:
             stop('error', 'local main has commits origin/main lacks; push or drop them first.')
     gated = git_out('gated tree', ['git', 'rev-parse', f'{gated_commit}^{{tree}}'], worktree)
+    record_land_pass(gated, gated_commit, a.branch, a.named_red if verdict else None)
     merged = step('merge --no-ff to main',
                   ['git', 'merge', '--no-ff', '--no-commit', gated_commit, '-m', a.message], MAIN,
                   check=False)
@@ -249,29 +272,84 @@ def write_attempt(attempt):
         print(f'[land] WARN: landing log not written: {error}', file=sys.stderr)
 
 
-def main():
-    global ATTEMPT
-    ATTEMPT = new_attempt(sys.argv[1] if len(sys.argv) > 1 else None)
-    try:
-        with cancellation_signals():
-            result = _main()
-        ATTEMPT['outcome'] = 'landed'
-        return result
-    except Cancelled as error:
-        ATTEMPT['outcome'] = 'cancelled'
-        repo = Path(sys.argv[sys.argv.index('--worktree') + 1]) if '--worktree' in sys.argv else Path.cwd()
-        return record_incomplete(repo, error)
-    except SystemExit:
-        ATTEMPT['outcome'] = ATTEMPT['outcome'] or 'error'
-        raise
-    except BaseException:
-        ATTEMPT['outcome'] = 'error'
-        raise
-    finally:
-        write_attempt(ATTEMPT)
+QUIET_S = 120  # a file written this recently means a writer may still be at work
+QUIET_SKIP = {'.git', 'target', '__pycache__'}  # bytecode writes come from running tests, not authors
 
 
-def _main():
+class Refused(Exception):
+    """A start check failed; the message names the reason and the rerun."""
+
+
+def probe(args, cwd):
+    """Read-only git query for the start checks: (exit code, stripped stdout)."""
+    r = subprocess.run(['git', *args], cwd=str(cwd), capture_output=True, text=True)
+    return r.returncode, r.stdout.strip()
+
+
+def recent_write(wt, now, window=QUIET_S):
+    """A file under the worktree, outside target/ and .git, modified in the window."""
+    for root, dirs, files in os.walk(wt):
+        dirs[:] = [d for d in dirs if d not in QUIET_SKIP]
+        for name in (f for f in files if f not in QUIET_SKIP and not f.endswith('.pyc')):
+            path = Path(root) / name
+            try:
+                if now - path.lstat().st_mtime < window:
+                    return path
+            except OSError:
+                continue
+    return None
+
+
+def codex_busy(wt):
+    """Why a Codex job may still be writing in this slot (codex_brokers.busy_reason), or None."""
+    import codex_brokers
+    for state_dir in codex_brokers.state_dirs(wt):
+        why = codex_brokers.busy_reason(state_dir)
+        if why:
+            return why
+    return None
+
+
+def start_checks(branch, wt, now=None):
+    """Before any fetch or gate: is this slot really the named branch, done and quiet?
+
+    Returns True when the branch's own commits are already on origin/main,
+    checked only after the slot proves clean and quiet. Raises Refused
+    otherwise-unsafe. A lease or a live holder pid is never evidence either
+    way: a subagent's holder is its lead's process."""
+    q = f'git -C "{wt}"'
+    if not wt.exists():
+        raise Refused(f'worktree {wt} missing. Check: ls "{wt}"')
+    code, tip = probe(['rev-parse', '--verify', '-q', f'refs/heads/{branch}^{{commit}}'], wt)
+    if code or not tip:
+        raise Refused(f'branch {branch} does not exist. Check: {q} rev-parse --verify refs/heads/{branch}')
+    code, head = probe(['rev-parse', 'HEAD'], wt)
+    if code or head != tip:
+        raise Refused(f'worktree HEAD {head[:9] or "?"} is not the tip {tip[:9]} of {branch}; '
+                      f'the slot holds other work. Check: {q} rev-parse HEAD {branch}')
+    code, dirty = probe(['status', '--porcelain'], wt)
+    if code or dirty:
+        raise Refused(f'worktree is not clean; commit or remove the changes. Check: {q} status --short')
+    why = codex_busy(wt)
+    if why:
+        raise Refused(f'a Codex job may still be writing in this slot ({why}). '
+                      f'Check: scripts/codex_brokers.py --dry-run "{wt}"')
+    fresh = recent_write(wt, time.time() if now is None else now)
+    if fresh:
+        raise Refused(f'{fresh} was modified in the last {QUIET_S}s; a writer may still be at work. '
+                      f'Wait until the slot is quiet, then rerun the land command.')
+    if probe(['merge-base', '--is-ancestor', tip, 'origin/main'], wt)[0] != 0:
+        return False
+    # On main's first-parent line means the branch never had commits of its own;
+    # a landed branch's tip arrives through a merge's second parent.
+    code, trunk = probe(['rev-list', '--first-parent', 'origin/main'], wt)
+    if code or tip in trunk.split():
+        raise Refused(f'nothing to land: {branch} has no commits beyond origin/main. '
+                      f'Check: {q} log --oneline origin/main..{branch}')
+    return True
+
+
+def parse_args(argv):
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     p.add_argument("branch")
     p.add_argument("--worktree", required=True)
@@ -283,12 +361,52 @@ def _main():
     p.add_argument("--close-bead", action="append", default=[])
     p.add_argument("--close-reason", default="")
     p.add_argument("--lead", default="k3 (lead)")
-    a = p.parse_args()
-    ATTEMPT['branch'] = a.branch
+    return p.parse_args(argv)
 
-    wt = Path(a.worktree)
-    assert wt.exists(), f"worktree {wt} missing"
+
+def main():
+    global ATTEMPT
+    # --help and argument errors exit here, before any landing-runs row exists.
+    a = parse_args(sys.argv[1:])
     assert a.branch != "main", "land a branch, never main itself"
+    wt = Path(a.worktree)
+    ATTEMPT = new_attempt(a.branch)
+    try:
+        landed = start_checks(a.branch, wt)
+    except Refused as why:
+        ATTEMPT['outcome'] = 'refused'
+        write_attempt(ATTEMPT)
+        print(f'[land] REFUSED: {why}', file=sys.stderr)
+        return 1
+    except Exception as error:  # fail closed: a broken check never lets a landing start
+        ATTEMPT['outcome'] = 'error'
+        write_attempt(ATTEMPT)
+        print(f'[land] REFUSED: start checks failed ({type(error).__name__}: {error}). '
+              f'Fix the check, then rerun the land command.', file=sys.stderr)
+        return 1
+    if landed:
+        print(f'[land] already landed: {a.branch} tip is on origin/main; nothing to do.')
+        return 0
+    try:
+        with cancellation_signals():
+            result = _main(a)
+        ATTEMPT['outcome'] = 'landed'
+        return result
+    except Cancelled as error:
+        ATTEMPT['outcome'] = 'cancelled'
+        return record_incomplete(wt, error)
+    except SystemExit:
+        ATTEMPT['outcome'] = ATTEMPT['outcome'] or 'error'
+        raise
+    except BaseException:
+        ATTEMPT['outcome'] = 'error'
+        raise
+    finally:
+        write_attempt(ATTEMPT)
+
+
+def _main(a):
+    wt = Path(a.worktree)
 
     step("fetch", ["git", "fetch", "origin", "main"], MAIN)
     base = git_out("origin/main", ["git", "rev-parse", "origin/main"], MAIN)

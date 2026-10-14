@@ -846,7 +846,566 @@ def test_xargs_gated_on_its_command():
           not hook.is_preapproved_command("cat list | xargs"))
 
 
+def _git(repo, *args):
+    import subprocess
+    out = subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True)
+    assert out.returncode == 0, (args, out.stderr)
+    return out.stdout.strip()
+
+
+def _land_repo(td):
+    """Bare origin + clone on main; branch feat/code changes src/, feat/docs
+    changes docs/ only. origin/main is current."""
+    origin, repo = Path(td) / "origin.git", Path(td) / "repo"
+    _git(td, "init", "-q", "--bare", "-b", "main", str(origin))
+    _git(td, "clone", "-q", str(origin), str(repo))
+    for k, v in (("user.email", "t@t"), ("user.name", "t")):
+        _git(repo, "config", k, v)
+    _git(repo, "checkout", "-q", "-b", "main")
+    (repo / "src").mkdir()
+    (repo / "docs").mkdir()
+    (repo / "src/a.rs").write_text("a\n")
+    (repo / "docs/d.md").write_text("d\n")
+    _git(repo, "add", "--", "src", "docs")
+    _git(repo, "commit", "-q", "-m", "base", "--", "src", "docs")
+    _git(repo, "push", "-q", "origin", "main")
+    _git(repo, "checkout", "-q", "-b", "feat/code")
+    (repo / "src/a.rs").write_text("b\n")
+    _git(repo, "commit", "-q", "-m", "code", "--", "src/a.rs")
+    _git(repo, "checkout", "-q", "main")
+    _git(repo, "checkout", "-q", "-b", "feat/docs")
+    (repo / "docs/d.md").write_text("e\n")
+    _git(repo, "commit", "-q", "-m", "docs", "--", "docs/d.md")
+    _git(repo, "checkout", "-q", "main")
+    return repo
+
+
+def _record_pass(repo, tree):
+    common = (repo / _git(repo, "rev-parse", "--git-common-dir")).resolve()
+    (common / hook.LAND_PASS_DIR).mkdir(exist_ok=True)
+    (common / hook.LAND_PASS_DIR / f"{tree}.json").write_text("{}")
+
+
+def test_land_pass_guard_denies_bypass_shapes():
+    with tempfile.TemporaryDirectory() as td:
+        repo = _land_repo(td)
+        other = Path(td) / "elsewhere"
+        other.mkdir()
+        shapes = {
+            "git merge while on main": ("git merge feat/code", str(repo)),
+            "git merge --no-ff while on main": ("git merge --no-ff -m 'x y' feat/code", str(repo)),
+            "git -C <path> merge": (f'git -C "{repo}" merge feat/code', str(other)),
+            "checkout main && merge": ("git checkout feat/code && git checkout main && git merge feat/code", str(repo)),
+            "push origin HEAD:main": ("git push origin HEAD:main", None),
+            "push origin <branch>:main": ("git push origin feat/code:main", str(repo)),
+            "push origin <branch>:refs/heads/main": ("git push origin feat/code:refs/heads/main", str(repo)),
+            "git -C <path> push <br>:main": (f'git -C "{repo}" push origin feat/code:main', str(other)),
+            "gh pr merge": ("gh pr merge 12 --squash", str(repo)),
+            "update-ref main": ("git update-ref refs/heads/main feat/code", str(repo)),
+        }
+        for name, (cmd, cwd) in shapes.items():
+            if name == "push origin HEAD:main":
+                _git(repo, "checkout", "-q", "feat/code")
+                cwd = str(repo)
+            reason = hook.land_pass_guard(cmd, cwd)
+            check(f"land pass: {name} -> denied", reason is not None, reason)
+            if name == "push origin HEAD:main":
+                _git(repo, "checkout", "-q", "main")
+        _git(repo, "checkout", "-q", "feat/code")
+        check("land pass: bare push on main denied",
+              hook.land_pass_guard("git push", str(repo)) is None, "feat branch bare push is not main")
+        _git(repo, "checkout", "-q", "main")
+        _git(repo, "merge", "-q", "--ff-only", "feat/code")
+        check("land pass: push --all with unpassed main commits denied",
+              hook.land_pass_guard("git push --all origin", str(repo)) is not None)
+        check("land pass: bare push on main with unpassed commits denied",
+              hook.land_pass_guard("git push", str(repo)) is not None)
+
+
+def test_land_pass_guard_allowed_paths():
+    with tempfile.TemporaryDirectory() as td:
+        repo = _land_repo(td)
+        c = str(repo)
+        check("land pass: merge of a docs-only branch allowed",
+              hook.land_pass_guard("git merge --no-ff feat/docs", c) is None)
+        check("land pass: push of a docs-only branch to main allowed",
+              hook.land_pass_guard("git push origin feat/docs:main", c) is None)
+        check("land pass: merge on a feature branch allowed",
+              hook.land_pass_guard("git checkout feat/docs && git merge main", c) is None)
+        check("land pass: push of a feature branch to itself allowed",
+              hook.land_pass_guard("git push origin feat/code", c) is None)
+        check("land pass: merge --abort allowed",
+              hook.land_pass_guard("git merge --abort", c) is None)
+        check("land pass: push of main already on origin allowed",
+              hook.land_pass_guard("git push origin main", c) is None)
+        check("land pass: unrelated git commands untouched",
+              hook.land_pass_guard("git status && git log -3", c) is None)
+        # a recorded pass for the merged tree opens exactly that merge and push
+        tree = _git(repo, "rev-parse", "feat/code^{tree}")
+        check("land pass: unrecorded code push denied first",
+              hook.land_pass_guard("git push origin feat/code:main", c) is not None)
+        _record_pass(repo, tree)
+        check("land pass: recorded tree push allowed",
+              hook.land_pass_guard("git push origin feat/code:main", c) is None)
+        check("land pass: recorded tree merge allowed (ff result tree matches)",
+              hook.land_pass_guard("git merge feat/code", c) is None)
+        check("land pass: recorded tree update-ref allowed",
+              hook.land_pass_guard("git update-ref refs/heads/main feat/code", c) is None)
+
+
+def test_land_pass_guard_reads_land_branch_record():
+    """The writer in scripts/land_branch.py and this reader agree on the format."""
+    land_spec = importlib.util.spec_from_file_location(
+        "land_branch", HOOK_PATH.parents[2] / "scripts" / "land_branch.py")
+    sys.path.insert(0, str(HOOK_PATH.parents[2] / "scripts"))
+    try:
+        land = importlib.util.module_from_spec(land_spec)
+        land_spec.loader.exec_module(land)
+    finally:
+        sys.path.pop(0)
+    check("land pass: writer and reader share the directory name",
+          land.LAND_PASS_DIR == hook.LAND_PASS_DIR, (land.LAND_PASS_DIR, hook.LAND_PASS_DIR))
+    with tempfile.TemporaryDirectory() as td:
+        repo = _land_repo(td)
+        tree = _git(repo, "rev-parse", "feat/code^{tree}")
+        common = (repo / _git(repo, "rev-parse", "--git-common-dir")).resolve()
+        land.lock_path = lambda: common / land.LOCK_NAME
+        land.record_land_pass(tree, "abc", "feat/code", None)
+        check("land pass: record written by land_branch opens the push",
+              hook.land_pass_guard("git push origin feat/code:main", str(repo)) is None)
+
+
+def test_land_pass_tamper_guard():
+    d = ".git/land-passes-v1"
+    for name, cmd in {
+        "redirect": f"echo {{}} > {d}/abc.json",
+        "append": f"echo x >> {d}/abc.json",
+        "cp": f"cp /tmp/x {d}/abc.json",
+        "mv": f"mv /tmp/x {d}/abc.json",
+        "tee": f"echo x | tee {d}/abc.json",
+        "touch": f"touch {d}/abc.json",
+        "mkdir": f"mkdir -p {d}",
+        "sed -i": f"sed -i s/a/b/ {d}/abc.json",
+        "python": f"/tmp/w.py {d}/abc.json",
+        "redirect after cat": f"cat {d}/x > /tmp/y; echo a > {d}/z",
+    }.items():
+        check(f"land pass tamper: {name} -> denied", hook.land_pass_tamper_guard(cmd) is not None, cmd)
+    for cmd in (f"ls {d}", f"cat {d}/abc.json", f"rg tree {d}", "scripts/land_branch.py feat/x --worktree /w --message m"):
+        check(f"land pass tamper: read allowed: {cmd[:30]}", hook.land_pass_tamper_guard(cmd) is None, cmd)
+
+
+# BUG-zezjf.21 (python heredoc edited settings.json): the lane's command,
+# shortened. The apostrophe in the body made shlex raise, the old guard read
+# that as "no segments" and let it through.
+ZEZJF21_BYPASS = (
+    'S="/Users/peterkiemann/MANIFOLD - Rust/.claude/worktrees/slot-5"; '
+    "/usr/bin/python3 - \"$S\" <<'EOF'\n"
+    "import sys,pathlib\n"
+    "S=pathlib.Path(sys.argv[1])\n"
+    "p=S/\".claude/settings.json\"; t=p.read_text()\n"
+    "a='      \"Bash(scripts/gpu_queue.py -- scripts/landing_gate.py *)\",\\n'\n"
+    "t=t.replace(a,a+'      \"Bash(scripts/land_branch.py *)\",\\n'); p.write_text(t)\n"
+    "new='''def g(cmd):\n"
+    "    \"\"\"both stay Peter's call every time\"\"\"'''\n"
+    "EOF"
+)
+
+
+def test_zezjf21_bypass_denied():
+    import shlex as _shlex
+    try:
+        _shlex.split(ZEZJF21_BYPASS)
+        unparseable = False
+    except ValueError:
+        unparseable = True
+    check("zezjf.21: bypass body still breaks plain shlex (repro is faithful)", unparseable)
+    check("zezjf.21: exact bypass denied as inline python",
+          hook.inline_python_guard(ZEZJF21_BYPASS) is not None)
+    check("zezjf.21: exact bypass also flagged as a config write",
+          hook.config_write_guard(ZEZJF21_BYPASS) is not None)
+    out = run_hook_main({"tool_input": {"command": ZEZJF21_BYPASS}, "cwd": MAIN_CWD,
+                         "permission_mode": "auto"})
+    check("zezjf.21: main() denies the bypass in auto mode", '"deny"' in out, out)
+
+
+def test_inline_python_spellings_denied():
+    for cmd in (
+        "true;python3 -c 'print(1)'",
+        "rg -n x f&&python3 -c 'print(1)'",
+        "echo hi\npython3 -c 'print(1)'",
+        "python3.12 -c 'print(1)'",
+        "/opt/homebrew/bin/python3.13 -c 'print(1)'",
+        "\"python3\" -c 'print(1)'",
+        "env PYTHONPATH=x python3 -c 'print(1)'",
+        "nice -n 10 python3 - <<'EOF'\nprint('it''s')\nEOF",
+        "timeout 30 python3 -c 'print(1)'",
+        "uv run --with rich python -c 'print(1)'",
+        "printf 'print(1)' | python3",
+        "python3 <<'EOF'\nprint(\"Peter's\")\nEOF",
+        "python3 /dev/stdin <<'EOF'\nprint(1)\nEOF",
+        "python3 <<< 'print(1)'",
+        "cat <<'EOF' | python3\nprint(\"don't\")\nEOF",
+        "bash -c \"python3 -c 'print(1)'\"",
+        "bash <<'EOF'\npython3 -c 'print(1)'\nEOF",
+        "eval \"python3 -c 'print(1)'\"",
+        "(python3 -c 'print(1)')",
+        "echo \"$(python3 -c 'print(1)')\"",
+        "P=/usr/bin/python3; $P -c 'print(1)'",
+        "$(command -v python3) -c 'print(1)'",
+        "scripts/gpu_queue.py -- python3 -c 'print(1)'",
+        "find . -name x -exec python3 -c 'print(1)' \\;",
+        "python3 -c 'print(1)'; echo \"unbalanced",
+    ):
+        check(f"inline python spelling denied: {cmd[:60]!r}",
+              hook.inline_python_guard(cmd) is not None, cmd)
+
+
+def test_inline_python_reads_allowed():
+    for cmd in (
+        "python3 .claude/hooks/test_preToolUseBash.py",
+        "nice -n 10 python3 \"$S/.claude/hooks/test_preToolUseBash.py\" 2>&1 | rg 'FAIL|passed'",
+        "rg -n 'python3 -c' .claude/hooks/preToolUseBash.py",
+        "echo python3 -c x",
+        "command -v python3",
+        "which python3",
+        "git log --oneline -- python3",
+        "git commit -q -F - -- a.py <<'EOF'\nDeny python3 -c and Peter's heredocs\nEOF",
+        "cat <<'EOF' > /tmp/x.py\nprint('hi')\nEOF",
+        "find . -name '*.py' -exec python3 {} \\;",
+        "scripts/gpu_queue.py -- cargo test -p x",
+    ):
+        check(f"inline python guard silent: {cmd[:60]!r}",
+              hook.inline_python_guard(cmd) is None, cmd)
+
+
+def test_config_writes_ask():
+    for cmd in (
+        "cat <<'EOF' > .claude/settings.json\n{}\nEOF",
+        "cat > .claude/settings.json <<'EOF'\n{\"it's\": 1}\nEOF",
+        "echo x >> \"$S/.claude/hooks/preToolUseBash.py\"",
+        "printf '{}' | tee .claude/settings.local.json",
+        "cp /tmp/settings.json \"/Users/peterkiemann/MANIFOLD - Rust/.claude/settings.json\"",
+        "cp /tmp/x/settings.json .claude/",
+        "cp -R /tmp/work/.claude \"/Users/peterkiemann/MANIFOLD - Rust/\"",
+        "install -m 755 /tmp/h.py .claude/hooks/h.py",
+        "mv .claude/hooks/preToolUseBash.py /tmp/",
+        "ln -sf /tmp/evil.json ~/.claude/settings.json",
+        "rm -rf .claude/hooks",
+        "chmod -x .claude/hooks/preToolUseBash.py",
+        "dd if=/tmp/x of=.claude/settings.json",
+        "sed -i '' 's/a/b/' .claude/settings.json",
+        "perl -pi -e 's/a/b/' .claude/hooks/preToolUseBash.py",
+        "node -e \"require('fs').writeFileSync('.claude/settings.json','{}')\"",
+        "awk '{print > \".claude/settings.json\"}' /tmp/in",
+        "bash <<'EOF'\necho '{}' > .claude/settings.json\nEOF",
+        "git checkout origin/main -- .claude/settings.json",
+        "git -C .claude/worktrees/slot-5 restore .claude/hooks/x.py",
+        "scripts/x.py --out .claude/settings.json",
+        "S=/repo; cp /tmp/x \"$S/.claude/hooks/y.py\"",
+        "true;cp /tmp/x .claude/settings.json",
+    ):
+        check(f"config write asks: {cmd[:60]!r}",
+              hook.config_write_guard(cmd) is not None, cmd)
+
+
+def test_config_reads_silent():
+    for cmd in (
+        "rg -n '\"allow\"' .claude/settings.json .claude/settings.local.json",
+        "sed -n 1,12p \"$S/.claude/settings.json\"",
+        "jq .permissions .claude/settings.json",
+        "cat .claude/settings.json | head",
+        "ls -la .claude/hooks/",
+        "diff .claude/settings.json /tmp/s.json",
+        "git diff -- .claude/settings.json",
+        "git -C /w show origin/main:.claude/settings.json > /tmp/s.json",
+        "cp .claude/settings.json /tmp/s.json",
+        "D=/private/tmp/x; cp -R \"/repo/.claude\" $D/work/",
+        "git add -- .claude/hooks/x.py",
+        "git commit -m 'Hook: tighten' -- .claude/hooks/preToolUseBash.py",
+        "git restore --staged .claude/hooks/x.py",
+        ".claude/hooks/test_preToolUseBash.py 2>&1 | tail -4",
+        "nice -n 10 \"$S/.claude/hooks/permissions_sync_check.py\" 2>&1 | tail -3",
+        ".claude/hooks/design_status_check.py origin/main HEAD",
+        "python3 .claude/hooks/design_status.py --lifecycle-check",
+        "echo x > /tmp/w/.claude/settings.json",
+        "rg -n 'tee .claude/settings.json' docs/",
+        "rm -rf .claude/worktrees/slot-5/target/tmp",
+    ):
+        check(f"config read silent: {cmd[:60]!r}",
+              hook.config_write_guard(cmd) is None, cmd)
+
+
+def test_config_write_asks_in_every_mode():
+    for mode in ("default", "auto", "bypassPermissions", "acceptEdits"):
+        out = run_hook_main({"tool_input": {"command": "cat .claude/settings.json > .claude/settings.local.json"},
+                             "cwd": MAIN_CWD, "permission_mode": mode})
+        check(f"config write asks in {mode} mode", '"ask"' in out, out)
+
+
+def test_heredoc_tail_redirect_not_preapproved():
+    check("cat heredoc with a tail redirect to a repo path is NOT pre-approved",
+          not hook.is_preapproved_command("cat <<'EOF' > /Users/x/repo/f.rs\nfn x() {}\nEOF"))
+    check("commit heredoc with an apostrophe still pre-approved",
+          hook.is_preapproved_command("git commit -q -F - -- a.py <<'EOF'\nPeter's call\nEOF"))
+
+
+# BUG-zezjf.21 review: a heredoc fed to a shell is a program, a delimiter is a
+# whole shell word, an unreadable heredoc fails closed, and $'...' is quoting.
+def _decision(cmd, mode):
+    out = run_hook_main({"tool_input": {"command": cmd}, "cwd": MAIN_CWD,
+                         "permission_mode": mode})
+    if not out:
+        return None, ""
+    d = json.loads(out).get("hookSpecificOutput", {})
+    return d.get("permissionDecision"), d.get("permissionDecisionReason", "")
+
+
+WORKTREE_DENY = "git worktree add"
+INDEX_DENY = "Staging the whole index"
+PY_DENY = "Inline python"
+
+
+def test_heredoc_shell_program_keeps_denies():
+    for cmd, want in (
+        ("bash <<'EOF'\ntrue && git worktree add -b x ../y HEAD\nEOF", WORKTREE_DENY),
+        ("bash <<'EOF'\ngit worktree add -b x ../y HEAD\nEOF", WORKTREE_DENY),
+        ("bash <<'EOF'\ntrue && git add -A\nEOF", INDEX_DENY),
+        ("bash <<'EOF'\ntrue && python3 -c 'print(1)'\nEOF", PY_DENY),
+        ("cat <<EOF | bash\ntrue && git add -A\nEOF", INDEX_DENY),
+        ("cat <<'EOF' | bash\ntrue && python3 -c 'print(1)'\nEOF", PY_DENY),
+        ("cat <<'EOF' | bash\npython3 -c 'print(1)'\nEOF", PY_DENY),
+        ("cat <<EOF | sed s/a/b/ | sh\ntrue && git add -A\nEOF", INDEX_DENY),
+        ("env bash -o pipefail <<'EOF'\ngit add -A\nEOF", INDEX_DENY),
+        ("cat <<EOF > /tmp/x\n$(python3 -c 'print(1)')\nEOF", PY_DENY),
+    ):
+        for mode in ("default", "auto"):
+            dec, why = _decision(cmd, mode)
+            check(f"heredoc program ({mode}) denied: {cmd[:50]!r}",
+                  dec == "deny" and want in why, (dec, why[:80]))
+    for cmd in (
+        "sh <<'EOF'\ntrue && git push --force origin main\nEOF",
+        "bash -s <<'EOF'\ntrue && git push --force origin main\nEOF",
+        "cat <<EOF | sh\ntrue && git push --force origin main\nEOF",
+    ):
+        plain = _decision("git push --force origin main", "auto")
+        for mode in ("default", "auto"):
+            dec, why = _decision(cmd, mode)
+            check(f"heredoc force-push ({mode}) decided like the plain push: {cmd[:50]!r}",
+                  (dec, why) == plain, ((dec, why[:60]), plain[0]))
+
+
+def test_heredoc_data_is_not_a_program():
+    for cmd in (
+        "git commit -q -F - -- a.rs <<'EOF'\ngit add -A\npython3 -c 'x'\nEOF",
+        "cat <<'EOF' > /tmp/notes.md\ngit worktree add -b x ../y HEAD\nEOF",
+        "bash scripts/x.sh <<'EOF'\ngit add -A\nEOF",
+        "bash -c 'echo hi' <<'EOF'\ngit add -A\nEOF",
+        "cat <<'EOF' > /tmp/x\n$(python3 -c 'print(1)')\nEOF",
+    ):
+        for mode in ("default", "auto"):
+            dec, why = _decision(cmd, mode)
+            check(f"heredoc data ({mode}) not denied: {cmd[:50]!r}", dec != "deny", why[:80])
+
+
+def test_heredoc_delimiter_is_a_whole_word():
+    for cmd, want in (
+        ("cat <<EOF.x\ndata\nEOF.x\ntrue && python3 -c 'print(1)'", PY_DENY),
+        ("cat <<EOF.x\ndata\nEOF.x\npython3 -c 'print(1)'", PY_DENY),
+        ("cat <<EOF.x\ndata\nEOF.x\ntrue && git worktree add -b x ../y HEAD", WORKTREE_DENY),
+        ("cat <<EOF-1\ndata\nEOF-1\ntrue && git add -A", INDEX_DENY),
+        ("cat <<'EOF'x\ndata\nEOFx\ntrue && git add -A", INDEX_DENY),
+        ("cat <<\"E\"O'F'-1\ndata\nEOF-1\ntrue && git add -A", INDEX_DENY),
+        ("cat <<EOF\ndata\n  EOF\ntrue && git add -A\nEOF", INDEX_DENY),
+        ("echo $((a<<b))\ntrue && git add -A\nb", INDEX_DENY),
+        ("git commit -F - -- a.rs <<'MSG.txt'\nit's\nMSG.txt\ntrue && git add -A", INDEX_DENY),
+        ("cat <<END_OF_MSG\nhi\nEND_OF_MSG\ngit add -A", INDEX_DENY),
+    ):
+        for mode in ("default", "auto"):
+            dec, why = _decision(cmd, mode)
+            check(f"heredoc delimiter ({mode}) read whole: {cmd[:50]!r}",
+                  dec == "deny" and want in why, (dec, why[:80]))
+    cmd = "cat <<E\\OF\ndata\nEOF\ntrue && git push --force origin main"
+    dec, _ = _decision(cmd, "auto")
+    check("heredoc delimiter E\\OF reads as EOF; the push after it is seen", dec in ("ask", "deny"), dec)
+    for opener, delim in (("<<EOF.x", "EOF.x"), ("<<'EOF'x", "EOFx"), ("<<E\\OF", "EOF"),
+                          ("<<-EOF", "EOF"), ("<< \"A B\"", "A B"), ("<<EOF-1", "EOF-1")):
+        res = hook._split_heredocs(f"cat {opener}\nbody\n{delim}\n")
+        bodies, ok = res[1], len(res) > 2 and res[2]
+        check(f"heredoc opener {opener} -> delimiter {delim!r}", ok and bodies == ["body\n"], (ok, bodies))
+
+
+SETTINGS_WRITE_PY = ("/usr/bin/python3 - <<'EOF'\nimport pathlib; "
+                     "pathlib.Path(\".claude/settings.json\").write_text(\"{}\")\nEOF")
+
+
+def test_heredoc_unreadable_fails_closed():
+    for cmd in (
+        "true <<EOF.\nEOF.\n" + SETTINGS_WRITE_PY,
+        "cat <<EOF-1\ndata\nEOF-1\n" + SETTINGS_WRITE_PY,
+    ):
+        for mode in ("default", "auto", "bypassPermissions", "acceptEdits"):
+            dec, why = _decision(cmd, mode)
+            check(f"settings write after a dotted heredoc ({mode}) denied: {cmd[:30]!r}",
+                  dec == "deny" and PY_DENY in why, (dec, why[:80]))
+    dec, _ = _decision("cat <<EOF-1\ndata\nEOF-1\necho '{}' > .claude/settings.json", "auto")
+    check("settings redirect after a dashed heredoc asks", dec == "ask", dec)
+    for cmd in (
+        "cat <<EOF\nit's data\ntrue && git add -A",
+        "cat <<'EOF\nit's data\nEOF\ngit add -A",
+        "cat <<EOF",
+    ):
+        for mode in ("default", "auto", "bypassPermissions"):
+            dec, why = _decision(cmd, mode)
+            check(f"unreadable heredoc ({mode}) fails closed: {cmd[:40]!r}",
+                  dec in ("ask", "deny"), (dec, why[:80]))
+        check(f"unreadable heredoc is not pre-approved: {cmd[:40]!r}",
+              not hook.is_preapproved_command(cmd))
+
+
+def test_ansi_c_quoting_is_text():
+    note = ("bd create -t chore -p 3 -l low,open -d $'Peter\\'s hooks note: python3 -c is denied "
+            "in .claude/hooks/preToolUseBash.py' 'hook note'")
+    for mode in ("default", "auto"):
+        dec, why = _decision(note, mode)
+        # bd is pre-approved on main, so "allow" is also correct here.
+        check(f"$'...' note text ({mode}) is not a command", dec in (None, "allow"), (dec, why[:80]))
+    check("$'...' note: inline python guard silent", hook.inline_python_guard(note) is None)
+    check("$'...' note: config guard silent", hook.config_write_guard(note) is None)
+    for cmd in ("echo $'it\\'s' && python3 -c 'print(1)'", "echo $'a\\'b'\npython3 -c 'x'"):
+        dec, why = _decision(cmd, "auto")
+        check(f"python after $'...' still denied: {cmd[:40]!r}",
+              dec == "deny" and PY_DENY in why, (dec, why[:80]))
+    dec, why = _decision("echo $'it\\'s' ; git add -A", "auto")
+    check("git add -A after $'...' still denied", dec == "deny" and INDEX_DENY in why, (dec, why[:80]))
+
+
+# BUG-zezjf.15 (one status screen): foreground wait loops are denied; the
+# same command with run_in_background passes this guard.
+WAIT_DENY = "Foreground wait"
+
+
+def _wait_decision(cmd, mode, background=False):
+    tool_input = {"command": cmd}
+    if background:
+        tool_input["run_in_background"] = True
+    out = run_hook_main({"tool_input": tool_input, "cwd": MAIN_CWD,
+                         "permission_mode": mode})
+    if not out:
+        return None, ""
+    d = json.loads(out).get("hookSpecificOutput", {})
+    return d.get("permissionDecision"), d.get("permissionDecisionReason", "")
+
+
+WAIT_LOOPS = (
+    "while kill -0 12345 2>/dev/null; do sleep 10; done; echo finished",
+    "until rg -q 'landing gate:' /tmp/gate.log; do sleep 15; done",
+    "while true; do if [ -f /tmp/done ]; then break; fi; sleep 30; done",
+    "while pgrep -f landing_gate >/dev/null\ndo\n  sleep 20\ndone\ntail -5 /tmp/gate.log",
+    'PID=123; while kill -0 "$PID" 2>/dev/null; do sleep 5; done && tail -5 /tmp/log',
+    "while kill -0 4242; do :; done",
+    "until ! kill -0 4242 2>/dev/null; do echo waiting; done",
+    "timeout 600 bash -c 'until test -f /tmp/done; do sleep 5; done'",
+    "bash <<'EOF'\nwhile kill -0 4242; do sleep 10; done\nEOF",
+    "while :; do sleep 1; done",
+    "sleep 60; tail -20 /tmp/gate.log",
+    "sleep 120 && cat /tmp/out.txt",
+    'sleep 30 ; tail -n 50 "/Users/peterkiemann/MANIFOLD - Rust/target/gate.log"',
+    "sleep 300",
+    "sleep 2m; tail /tmp/x",
+    "sleep 5 5 5; cat /tmp/x",
+    "sleep 11",
+    'sleep "$WAIT"; cat /tmp/x',
+)
+
+
+def test_wait_loops_denied_in_foreground():
+    for cmd in WAIT_LOOPS:
+        for mode in ("default", "auto"):
+            dec, why = _wait_decision(cmd, mode)
+            check(f"wait loop ({mode}) denies: {cmd[:50]!r}",
+                  dec == "deny" and WAIT_DENY in why, (dec, why[:80]))
+    _, why = _wait_decision("sleep 300", "auto")
+    check("wait deny names watch_land.py and Monitor",
+          "scripts/watch_land.py" in why and "Monitor" in why, why)
+
+
+def test_wait_loops_silent_in_background():
+    for cmd in WAIT_LOOPS:
+        dec, why = _wait_decision(cmd, "auto", background=True)
+        check(f"wait loop in background passes: {cmd[:50]!r}",
+              WAIT_DENY not in why, (dec, why[:80]))
+
+
+def test_short_waits_and_non_polls_silent():
+    for cmd in (
+        "scripts/dev.py status && sleep 1 && tail -5 /tmp/dev.log",
+        "sleep 5",
+        "sleep 10",
+        "( target/debug/deps/x --list >/dev/null 2>&1 & pid=$!; sleep 6; kill $pid )",
+        "sleep 0.5; cat /tmp/x",
+        "sleep 3s && rg -n ready /tmp/server.log",
+        "sleep 600 &",
+        "kill -0 1234 && echo alive",
+        "while read -r f; do echo \"$f\"; done < /tmp/list",
+        "for f in a b c; do echo $f; sleep 1; done",
+    ):
+        for mode in ("default", "auto"):
+            dec, why = _wait_decision(cmd, mode)
+            check(f"short wait / non-poll silent ({mode}): {cmd[:50]!r}",
+                  WAIT_DENY not in why, (dec, why[:80]))
+
+
+EVERYDAY = (
+    'git -C "/Users/peterkiemann/MANIFOLD - Rust" status --short',
+    "git -C /w log --oneline -5",
+    'cargo check --manifest-path "/Users/peterkiemann/MANIFOLD - Rust/crates/manifold-core/Cargo.toml"',
+    "cargo nextest run -p manifold-core --manifest-path /w/Cargo.toml sync",
+    "rg -n 'sleep' crates/manifold-playback/src",
+    'rg -n "while true; do sleep" .claude/hooks',
+    "jq '.hooks' .claude/settings.json",
+    "bd show BUG-zezjf.15",
+    "bd create -t bug -p 2 -l minor,open -d 'wait loop: while kill -0 PID; do sleep 5; done blocked the lane'",
+    "scripts/landing_gate.py --cheap",
+    "scripts/watch_land.py --pid 4242 --log /tmp/gate.log",
+    "scripts/gpu_queue.py -- cargo test -p manifold-gpu --features gpu-proofs",
+    "git commit -F - -- .claude/hooks/x.py <<'EOF'\nDeny foreground wait loops\n\n"
+    "A lane ran sleep 300; tail -20 gate.log and blocked for five minutes.\n"
+    "while kill -0 $PID; do sleep 5; done is the other shape.\nEOF",
+    "gh pr create --title 'Wait-loop guard' --body \"$(cat <<'EOF'\n"
+    "Denies foreground while loops that sleep, e.g.\nuntil test -f done; do sleep 10; done\nEOF\n)\"",
+    "git -C /w diff --stat origin/main...HEAD && cargo clippy --manifest-path /w/Cargo.toml -p manifold-ui -- -D warnings",
+    "ps -p 4242 -o pid,etime,command",
+    "git commit -m 'hook: deny sleep 60 polls' -- .claude/hooks/preToolUseBash.py",
+)
+
+
+def test_everyday_commands_unchanged():
+    check("everyday corpus has at least 15 commands", len(EVERYDAY) >= 15, len(EVERYDAY))
+    for cmd in EVERYDAY:
+        for mode in ("default", "auto"):
+            fg = _wait_decision(cmd, mode)
+            bg = _wait_decision(cmd, mode, background=True)
+            check(f"everyday unchanged ({mode}): {cmd[:50]!r}",
+                  fg == bg and WAIT_DENY not in fg[1], (fg[0], fg[1][:80], bg[0]))
+
+
 def main():
+    test_wait_loops_denied_in_foreground()
+    test_wait_loops_silent_in_background()
+    test_short_waits_and_non_polls_silent()
+    test_everyday_commands_unchanged()
+    test_heredoc_shell_program_keeps_denies()
+    test_heredoc_data_is_not_a_program()
+    test_heredoc_delimiter_is_a_whole_word()
+    test_heredoc_unreadable_fails_closed()
+    test_ansi_c_quoting_is_text()
+    test_zezjf21_bypass_denied()
+    test_inline_python_spellings_denied()
+    test_inline_python_reads_allowed()
+    test_config_writes_ask()
+    test_config_reads_silent()
+    test_config_write_asks_in_every_mode()
+    test_heredoc_tail_redirect_not_preapproved()
     test_sed_guard_ignores_quoted_shell_variable()
     test_xargs_gated_on_its_command()
     test_pgrep_and_command_prefix_pre_approved()
@@ -920,10 +1479,16 @@ def main():
     test_inline_python_dash_c_denied()
     test_inline_python_script_path_unaffected()
 
+    test_land_pass_guard_denies_bypass_shapes()
+    test_land_pass_guard_allowed_paths()
+    test_land_pass_guard_reads_land_branch_record()
+    test_land_pass_tamper_guard()
+
     test_index_add_denied_all_modes()
     test_pathspec_add_and_commit_unaffected()
     test_commit_message_substitution_denied()
     test_commit_message_quoted_safely_unaffected()
+
 
     for name in PASS:
         print(f"PASS: {name}")

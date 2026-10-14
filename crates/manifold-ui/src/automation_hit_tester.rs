@@ -299,6 +299,7 @@ mod tests {
             param_min: 0.0,
             param_max: 1.0,
             whole_numbers: false,
+            placeholder_value: None,
         }
     }
 

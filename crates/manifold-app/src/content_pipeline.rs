@@ -4126,14 +4126,15 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
 
     /// Export must never encode an unfinished or GPU-failed render target.
     #[cfg(target_os = "macos")]
-    pub fn wait_for_export_complete(&self, initial_faults: u64) -> Result<(), String> {
-        let event = self.native_event.as_ref().ok_or("Export GPU completion event missing")?;
+    pub fn wait_for_export_complete(&self, since: &manifold_gpu::gpu_fault::FaultMark) -> Result<(), crate::content_export::ExportGpuFailure> {
+        let event = self.native_event.as_ref().ok_or_else(|| crate::content_export::ExportGpuFailure { message: "Export GPU completion event missing".into(), kinds: Default::default() })?;
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         loop {
             if let Some(result) = crate::content_export::export_gpu_completion(
                 event.is_done(self.native_signal_value),
-                initial_faults,
+                since.total(),
                 manifold_gpu::gpu_fault::fault_count(),
+                since.kinds_since(),
                 manifold_gpu::gpu_fault::submissions_ignored(),
                 std::time::Instant::now() >= deadline,
             ) {

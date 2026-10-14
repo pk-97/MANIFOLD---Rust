@@ -130,5 +130,324 @@
         "TextEquals": "1.00"
       }
     }
-  }
+  },
+  "Snapshot",
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "name": "scene_setup.properties.name_value",
+          "under_name": "scene_setup",
+          "text": "QS1694-W02-1-1"
+        }
+      },
+      "check": "Exists"
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "name": "param_row.10_roughness.value",
+          "under_name": "scene_setup"
+        }
+      },
+      "check": "Exists"
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "name": "param_row.10_roughness.slider",
+          "under_name": "scene_setup"
+        }
+      },
+      "gesture": {
+        "Drag": {
+          "to": {
+            "Query": {
+              "text": "Roughness",
+              "under_name": "scene_setup"
+            }
+          },
+          "steps": 8
+        }
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "name": "param_row.10_roughness.value",
+          "under_name": "scene_setup",
+          "text": "1.00"
+        }
+      },
+      "check": {
+        "Count": 0
+      }
+    }
+  },
+  {
+    "Key": {
+      "key": "Z",
+      "modifiers": {
+        "command": true
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "name": "param_row.10_roughness.value",
+          "under_name": "scene_setup"
+        }
+      },
+      "check": {
+        "TextEquals": "1.00"
+      }
+    }
+  },
+  "Snapshot",
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "name": "param_row.10_roughness.driver_btn",
+          "under_name": "scene_setup"
+        }
+      },
+      "check": "Exists"
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "name": "param_row.10_roughness.driver_btn",
+          "under_name": "scene_setup"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  "Snapshot",
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "name": "param_row.23_pos_x.value",
+          "under_name": "scene_setup"
+        }
+      },
+      "check": {
+        "TextEquals": "-0.02"
+      }
+    }
+  },
+  {
+    "ScrollTo": {
+      "target": {
+        "Query": {
+          "name": "param_row.23_pos_x.slider",
+          "under_name": "scene_setup"
+        }
+      }
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "name": "param_row.23_pos_x.slider",
+          "under_name": "scene_setup"
+        }
+      },
+      "gesture": {
+        "Drag": {
+          "to": {
+            "Query": {
+              "name": "param_row.23_pos_x.value",
+              "under_name": "scene_setup"
+            }
+          },
+          "steps": 8
+        }
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "name": "param_row.23_pos_x.value",
+          "under_name": "scene_setup",
+          "text": "0.00"
+        }
+      },
+      "check": {
+        "Count": 0
+      }
+    }
+  },
+  {
+    "Key": {
+      "key": "Z",
+      "modifiers": {
+        "command": true
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "name": "param_row.23_pos_x.value",
+          "under_name": "scene_setup"
+        }
+      },
+      "check": {
+        "TextEquals": "-0.02"
+      }
+    }
+  },
+  "Snapshot",
+  "Snapshot",
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "text": "💡 sun"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  "Snapshot",
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "name": "param_row.7_intensity",
+          "under_name": "scene_setup"
+        }
+      },
+      "check": "Exists"
+    }
+  },
+  {
+    "ScrollTo": {
+      "target": {
+        "Query": {
+          "name": "param_row.7_intensity.slider",
+          "under_name": "scene_setup"
+        }
+      }
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "name": "param_row.7_intensity.slider",
+          "under_name": "scene_setup"
+        }
+      },
+      "gesture": {
+        "Drag": {
+          "to": {
+            "Query": {
+              "text": "Intensity",
+              "under_name": "scene_setup"
+            }
+          },
+          "steps": 8
+        }
+      }
+    }
+  },
+  "Snapshot",
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "name": "param_row.7_intensity.value",
+          "under_name": "scene_setup",
+          "text": "0.00"
+        }
+      },
+      "check": "Exists"
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "name": "param_row.7_intensity.value",
+          "text": "0.00"
+        }
+      },
+      "check": {
+        "Count": 2
+      }
+    }
+  },
+  {
+    "Key": {
+      "key": "Z",
+      "modifiers": {
+        "command": true
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "name": "param_row.7_intensity.value",
+          "text": "3.50"
+        }
+      },
+      "check": {
+        "Count": 2
+      }
+    }
+  },
+  {
+    "ScrollTo": {
+      "target": {
+        "Query": {
+          "name": "param_row.7_intensity.driver_btn",
+          "under_name": "scene_setup"
+        }
+      }
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "name": "param_row.7_intensity.driver_btn",
+          "under_name": "scene_setup"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  "Snapshot"
 ]

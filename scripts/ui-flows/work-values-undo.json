@@ -1,0 +1,6 @@
+[
+  { "SetParam": { "param": { "EffectParam": { "effect": 1, "param": "amount" } }, "value": 0.7 } },
+  "ResetWork",
+  { "Key": { "key": "Z", "modifiers": { "command": true } } },
+  { "AssertWork": { "window": "undo" } }
+]

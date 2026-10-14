@@ -545,6 +545,7 @@ impl PlaybackEngine {
         // frame's beat, so the cutoff is the same hair before the frame (D14).
         let frame_floor = self.clock.frame_floor_time().0;
         if let Some(project) = &mut self.project {
+            manifold_core::work_count::record_work(manifold_core::work_count::WorkKind::ClipBindingReconcile);
             let floor_beat = Beats(TempoMapConverter::seconds_to_beat_f64(
                 &mut project.tempo_map,
                 frame_floor,
@@ -647,6 +648,7 @@ impl PlaybackEngine {
         // Port of C# PlaybackController.LoadProject → renderer.OnProjectLoaded().
         if let Some(ref project) = self.project {
             for renderer in &mut self.renderers {
+                manifold_core::work_count::record_work(manifold_core::work_count::WorkKind::RendererReload);
                 renderer.on_project_loaded(project);
             }
         }
@@ -797,6 +799,7 @@ impl PlaybackEngine {
     /// not the position itself: the index moves to the first frame at or
     /// after the position's new time, with no hold (D11).
     pub fn reconcile_tempo_edit(&mut self, old_map: &manifold_core::tempo::TempoMap, old_bpm: Bpm) {
+        manifold_core::work_count::record_work(manifold_core::work_count::WorkKind::TempoReconcile);
         // STOPGAP(frame-exact P3): the external source keeps placing the frame.
         if self.external_time_sync {
             return;

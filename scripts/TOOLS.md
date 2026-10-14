@@ -40,7 +40,7 @@ Render and measure:
   node-catalog            regenerate docs/NODE_CATALOG.md from the primitive registry  [cargo run -p manifold-nodes --bin gen_node_catalog --]  (cost: focused)
   thumbnails              regenerate preset picker thumbnails  [scripts/gpu_queue.py -- cargo run -p manifold-app --bin generate-preset-thumbnails --]  (cost: broad)
   freeze-profile          profile the freeze compiler's fused kernels  [scripts/gpu_queue.py -- cargo run -p manifold-nodes --bin freeze-profile --]  (cost: broad)
-  project-tool            .manifold files: info, json, project new, layer add, tempo show|set|at, clip add-audio|add-bulk|list, marker add-bulk|list, scene set-model (never hand-edit the ZIP)  [cargo run -p manifold-io --bin project_tool --]  (cost: focused)
+  project-tool            .manifold files: info, json, project new, layer add, tempo show|set|at, clip add-audio|add-bulk|list, marker add-bulk|list, scene set-model (never hand-edit the ZIP)  [cargo run -p manifold-app --bin project_tool --]  (cost: focused)
   rt-toggle-matrix        one rt-capture per RT toggle; the RT A/B harness  [scripts/rt_toggle_matrix.py]  (cost: broad)
   rt-quality-matrix       RT quality oracle against the committed baseline  [scripts/rt_quality_matrix.py]  (cost: broad)
   rt-region-probe         region-mean probe for the multi-bounce GI gate  [scripts/rt_region_probe.py]  (cost: unit)
@@ -79,6 +79,7 @@ Live UI (opt-in connection to a running app):
 
 Process, beads, usage:
   fleet-health            stalls and blockers across lanes (the lead's cron)  [scripts/fleet_health.py]  (cost: unit)
+  status                  one screen: lanes, GPU holder, worktree slots, running gate with ETA  [scripts/status.py]  (cost: unit)
   stale-beads             open beads untouched past threshold  [scripts/stale_beads.py]  (cost: unit)
   hook-census             which hooks fire, how often, from telemetry  [scripts/hook_census.py]  (cost: unit)
   token-report            Claude Code token spend from local transcripts  [scripts/token_report.py]  (cost: unit)

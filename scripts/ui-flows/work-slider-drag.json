@@ -1,0 +1,5 @@
+[
+  "ResetWork",
+  { "ScrubDrag": { "param": { "EffectParam": { "effect": 1, "param": "amount" } }, "from": 0.1, "to": 0.9, "steps": 120 } },
+  { "AssertWork": { "window": "drag_2s" } }
+]

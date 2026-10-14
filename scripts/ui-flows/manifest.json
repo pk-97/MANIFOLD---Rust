@@ -1,186 +1,249 @@
 {
-  "_comment": "Flow -> headless scene map for the UI-flow gate (UI_FUNNEL_DECOMPOSITION S8). Each flow runs as `cargo xtask ui-snap <scene> --script scripts/ui-flows/<flow>.json`; the scene builds a fixture (crates/manifold-app/src/ui_snapshot/fixtures.rs) whose tree carries the flow's selectors. Scenes derived from selectors vs fixtures.rs + the fixed rules (select-and-inspect=inspector; scene-setup-*=gltfscene except empty-states=timeline; drag-clip=timeline) and VERIFIED by scripts/run_ui_flows.py: every 'flows' entry PASSes; every 'expected_fail' entry is a known-red flow (mapped to its correct authoring scene, red for a tracked/pending reason, NOT a mapping error \u2014 the whole-scene sweep confirmed none pass under any built-in fixture). Validate/regenerate: scripts/run_ui_flows.py. water-family-controls: rename gesture coverage is deferred to BUG-ajyri (share performer text input with ui-snap); CPU water_family_visibility_rename_round_trip covers parent/child rename and save/reload.",
-  "_path_triggers_comment": "Landing flow gate (BUG-313 postmortem): `scripts/run_ui_flows.py --touched <git-range>` diffs the range, matches each touched path against these prefixes, and runs the union of the mapped flow-name filters (same substring semantics as positional filters). A touched scripts/ui-flows/<flow>.json always runs that flow. No prefix match = exit 0, nothing run. Keep prefixes on the UI value-path surfaces flows actually exercise; a new panel/projection file with flow coverage gets a row here in the same commit.",
+  "_comment": "Flow -> headless scene map for the UI-flow gate (UI_FUNNEL_DECOMPOSITION S8). Each flow runs as `cargo xtask ui-snap <scene> --script scripts/ui-flows/<flow>.json`; the scene builds a fixture (crates/manifold-app/src/ui_snapshot/fixtures.rs) whose tree carries the flow's selectors. Scenes derived from selectors vs fixtures.rs + the fixed rules (select-and-inspect=inspector; scene-setup-*=gltfscene except empty-states=timeline; drag-clip=timeline) and VERIFIED by scripts/run_ui_flows.py: every 'flows' entry PASSes; every 'expected_fail' entry is a known-red flow (mapped to its correct authoring scene, red for a tracked/pending reason, NOT a mapping error — the whole-scene sweep confirmed none pass under any built-in fixture). Validate/regenerate: scripts/run_ui_flows.py. water-family-controls: rename gesture coverage is deferred to BUG-ajyri (share performer text input with ui-snap); CPU water_family_visibility_rename_round_trip covers parent/child rename and save/reload.",
+  "_path_triggers_comment": "Landing flow gate (BUG-313 postmortem): `scripts/run_ui_flows.py --touched <git-range>` diffs the range, matches each touched path against these prefixes, and runs the union of the mapped flows. Row entries are EXACT flow names, never families or substrings (a family is expanded to its flows when the row is written); only the positional CLI filter keeps substring matching. Test-only paths (/tests/, tests.rs, test.rs, _tests.rs, _test.rs) select nothing. A touched scripts/ui-flows/<flow>.json always runs that flow. No prefix match = exit 0, nothing run. Keep prefixes on the UI value-path surfaces flows actually exercise; a new panel/projection file with flow coverage gets a row here in the same commit.",
   "path_triggers": {
-    "crates/manifold-app/src/ui_bridge/project/tests/water_family": ["water-family-controls"],
-    "crates/manifold-app/src/input_host": ["water-family-controls"],
-    "crates/manifold-app/src/ui_bridge/dispatch/params.rs": ["trigger-lane-assignment"],
-    "crates/manifold-app/src/ui_root/dropdowns.rs": ["water-family-controls", "trigger-lane-assignment"],
-    "crates/manifold-app/src/ui_bridge/projection/trigger_routing.rs": ["trigger-lane-assignment"],
-    "crates/manifold-editing/src/commands/graph/scene.rs": ["water-family-controls"],
+    "crates/manifold-app/src/ui_bridge/dispatch/params.rs": [
+      "trigger-lane-assignment"
+    ],
+    "crates/manifold-app/src/ui_root/dropdowns.rs": [
+      "trigger-lane-assignment",
+      "water-family-controls"
+    ],
+    "crates/manifold-app/src/ui_bridge/projection/trigger_routing.rs": [
+      "trigger-lane-assignment"
+    ],
+    "crates/manifold-editing/src/commands/graph/scene.rs": [
+      "water-family-controls"
+    ],
     "crates/manifold-ui/src/interaction_overlay.rs": [
-      "automation",
+      "automation-clear-parameter",
+      "automation-clipboard-shapes",
+      "automation-coincident-points",
+      "automation-lane-management",
+      "automation-placeholder-first-click",
+      "automation-resize-lane",
+      "automation-scene-camera-click",
+      "automation-show-parameter",
+      "automation-time-selection",
+      "drag-automation-point",
       "toggle-lanes"
     ],
     "crates/manifold-ui/src/automation_hit_tester.rs": [
-      "automation"
+      "automation-clear-parameter",
+      "automation-clipboard-shapes",
+      "automation-coincident-points",
+      "automation-lane-management",
+      "automation-placeholder-first-click",
+      "automation-resize-lane",
+      "automation-scene-camera-click",
+      "automation-show-parameter",
+      "automation-time-selection",
+      "drag-automation-point"
     ],
     "crates/manifold-ui/src/panels/viewport.rs": [
-      "automation",
+      "automation-clear-parameter",
+      "automation-clipboard-shapes",
+      "automation-coincident-points",
+      "automation-lane-management",
+      "automation-placeholder-first-click",
+      "automation-resize-lane",
+      "automation-scene-camera-click",
+      "automation-show-parameter",
+      "automation-time-selection",
+      "drag-automation-point",
       "toggle-lanes"
     ],
     "crates/manifold-ui-paint/src/automation_lane_draw.rs": [
-      "automation",
+      "automation-clear-parameter",
+      "automation-clipboard-shapes",
+      "automation-coincident-points",
+      "automation-lane-management",
+      "automation-placeholder-first-click",
+      "automation-resize-lane",
+      "automation-scene-camera-click",
+      "automation-show-parameter",
+      "automation-time-selection",
+      "drag-automation-point",
       "toggle-lanes"
     ],
     "crates/manifold-ui/src/panels/scene_setup_panel/": [
-      "scene-setup",
-      "scene-card",
-      "scene-panel",
+      "scene-setup-add-object",
+      "scene-setup-light-intensity-drag",
+      "scene-setup-add-fog-drag",
+      "scene-setup-modifier-stack",
+      "scene-setup-heldout-merge-snapshot",
+      "scene-setup-empty-states",
       "scene-skin",
-      "material-inspector",
-      "scene-fluid-role-assignment",
+      "material-inspector-colour",
       "scene-fluid-role-lifecycle",
-      "scene-fluid-object-lifecycle",
-      "scene-forces-controls",
-      "water-family-preset",
-      "water-family-controls"
+      "scene-forces-controls"
     ],
     "crates/manifold-ui/src/panels/scene_setup_panel.rs": [
-      "scene-setup",
-      "scene-card",
-      "scene-panel",
+      "scene-setup-add-object",
+      "scene-setup-light-intensity-drag",
+      "scene-setup-add-fog-drag",
+      "scene-setup-modifier-stack",
+      "scene-setup-heldout-merge-snapshot",
+      "scene-setup-empty-states",
       "scene-skin",
-      "material-inspector",
-      "scene-fluid-role-assignment",
+      "material-inspector-colour",
       "scene-fluid-role-lifecycle",
-      "scene-fluid-object-lifecycle",
-      "scene-forces-controls",
-      "water-family-preset",
-      "water-family-controls"
+      "scene-forces-controls"
     ],
-    "crates/manifold-editing/src/commands/graph/scene/fluid": ["scene-fluid-authoring", "scene-fluid-template", "water-family-preset"],
-    "crates/manifold-core/src/scene_exposure.rs": ["scene-fluid-dam-break-controls", "water-family-preset"],
-    "crates/manifold-nodes-scene/src/node_graph/scene_exposure": ["scene-fluid-dam-break-controls", "water-family-preset"],
+    "crates/manifold-editing/src/commands/graph/scene/fluid": [
+      "scene-fluid-authoring",
+      "scene-fluid-template",
+      "water-family-preset"
+    ],
+    "crates/manifold-core/src/scene_exposure.rs": [
+      "scene-fluid-dam-break-controls",
+      "water-family-preset"
+    ],
+    "crates/manifold-nodes-scene/src/node_graph/scene_exposure": [
+      "scene-fluid-dam-break-controls",
+      "water-family-preset"
+    ],
     "crates/manifold-nodes-scene/src/node_graph/scene_vm.rs": [
-      "scene-item-ownership",
-      "scene-liquid-recognition",
       "water-family-preset"
     ],
     "crates/manifold-app/src/ui_bridge/projection/scene.rs": [
-      "scene-item-ownership",
-      "scene-liquid-recognition",
-      "scene-fluid-dam-break-controls",
-      "scene-setup",
-      "scene-card",
-      "scene-panel",
-      "scene-fluid-role-assignment",
+      "scene-setup-add-object",
       "scene-fluid-role-lifecycle",
-      "scene-fluid-object-lifecycle",
-      "water-family-preset"
+      "scene-fluid-dam-break-controls",
+      "water-family-controls"
     ],
     "crates/manifold-app/src/ui_bridge/projection/cards.rs": [
-      "scene-setup",
-      "scene-card",
-      "scene-panel",
-      "inspector",
-      "set-param",
-      "envelope-modulation",
-      "calibrated-param",
-      "scene-forces-controls",
-      "water-family-preset",
-      "trigger-lane-assignment"
+      "set-param-layer-opacity",
+      "calibrated-param-card-reads-manifest",
+      "param-step-action",
+      "scene-card-convergence-c-p1d-roughness-scrub-drawer-undo"
     ],
     "crates/manifold-app/src/ui_bridge/projection/inspector.rs": [
-      "scene-item-ownership",
-      "scene-liquid-recognition",
-      "frame-align-lfo",
-      "inspector",
-      "select-and-inspect",
-      "set-param",
-      "calibrated-param",
-      "scene-skin",
-      "scene-fluid-role-assignment",
-      "scene-fluid-role-lifecycle",
-      "scene-fluid-object-lifecycle",
-      "scene-forces-controls",
-      "water-family-preset",
-      "trigger-lane-assignment"
+      "set-param-layer-opacity",
+      "calibrated-param-card-reads-manifest",
+      "param-step-action",
+      "scene-card-convergence-c-p1d-roughness-scrub-drawer-undo"
     ],
-    "crates/manifold-app/src/ui_bridge/project.rs": ["water-family-preset"],
-    "crates/manifold-app/src/edit_selection.rs": ["water-family-preset"],
-    "crates/manifold-app/src/ui_bridge/state_sync.rs": [
-      "scene-setup",
-      "scene-card",
-      "scene-panel",
-      "inspector",
-      "set-param",
-      "scene-forces-controls",
+    "crates/manifold-app/src/edit_selection.rs": [
       "water-family-preset"
+    ],
+    "crates/manifold-app/src/ui_bridge/state_sync.rs": [
+      "set-param-layer-opacity",
+      "calibrated-param-card-reads-manifest",
+      "param-step-action",
+      "scene-card-convergence-c-p1d-roughness-scrub-drawer-undo"
     ],
     "crates/manifold-app/src/ui_translate.rs": [
-      "scene-setup",
-      "scene-card",
-      "scene-panel",
-      "inspector",
-      "set-param",
-      "envelope-modulation",
-      "water-family-preset"
+      "set-param-layer-opacity",
+      "calibrated-param-card-reads-manifest",
+      "param-step-action",
+      "scene-card-convergence-c-p1d-roughness-scrub-drawer-undo"
     ],
     "crates/manifold-ui/src/panels/param_card/": [
-      "inspector",
-      "set-param",
-      "envelope-modulation",
-      "scene-card",
-      "calibrated-param",
-      "param-step",
-      "water-family-preset"
+      "set-param-layer-opacity",
+      "calibrated-param-card-reads-manifest",
+      "param-step-action",
+      "scene-card-convergence-c-p1d-roughness-scrub-drawer-undo"
     ],
     "crates/manifold-ui/src/panels/param_slider_shared/": [
-      "frame-align-lfo",
-      "inspector",
-      "set-param",
-      "envelope-modulation",
-      "t-drawer-step",
-      "scene-setup",
-      "scene-card",
-      "calibrated-param",
-      "param-step",
-      "water-family-preset",
-      "trigger-lane-assignment"
+      "set-param-layer-opacity",
+      "calibrated-param-card-reads-manifest",
+      "param-step-action",
+      "scene-card-convergence-c-p1d-roughness-scrub-drawer-undo"
     ],
     "crates/manifold-ui/src/panels/browser_popup.rs": [
-      "effect-browser"
+      "effect-browser-open"
     ],
     "crates/manifold-app/src/ui_bridge/projection/timeline.rs": [
+      "automation-clear-parameter",
+      "automation-clipboard-shapes",
+      "automation-coincident-points",
+      "automation-lane-management",
+      "automation-placeholder-first-click",
+      "automation-resize-lane",
+      "automation-scene-camera-click",
+      "automation-show-parameter",
+      "automation-time-selection",
+      "drag-automation-point",
       "drag-clip",
-      "trim-clip",
-      "ruler-scrub",
-      "zoom-out",
+      "drag-clip-release-over-inspector",
       "toggle-lanes",
-      "automation"
+      "trim-clip-left"
     ],
     "crates/manifold-ui/src/panels/layer_header.rs": [
-      "led-layer",
+      "led-layer-create",
       "trigger-lane-assignment"
     ],
     "crates/manifold-ui/src/panels/audio_setup_panel.rs": [
-      "audio-setup"
+      "audio-setup-hygiene"
     ],
     "crates/manifold-ui/src/panels/rt_quality_panel.rs": [
-      "rt-quality"
+      "rt-quality-panel-demo"
     ],
     "crates/manifold-app/src/scene_modifier_edit": [
       "scene-modifier-preset"
     ],
     "crates/manifold-app/src/ui_bridge/projection/material.rs": [
-      "material-inspector"
+      "material-inspector-colour",
+      "material-inspector-features",
+      "material-inspector-groups",
+      "material-inspector-looks",
+      "material-inspector-textures"
     ],
     "crates/manifold-app/src/ui_bridge/material_looks.rs": [
-      "material-inspector"
+      "material-inspector-colour",
+      "material-inspector-features",
+      "material-inspector-groups",
+      "material-inspector-looks",
+      "material-inspector-textures"
     ],
     "crates/manifold-app/src/ui_bridge/material_colour.rs": [
-      "material-inspector"
+      "material-inspector-colour",
+      "material-inspector-features",
+      "material-inspector-groups",
+      "material-inspector-looks",
+      "material-inspector-textures"
     ]
   },
   "flows": {
+    "work-idle": "timeline",
+    "work-playback": "timeline",
+    "work-follow-scroll": "timeline",
+    "work-clock-jitter": "inspector",
+    "work-hover": "timeline",
+    "work-automation-hover": "automation",
+    "work-clip-drag": "timeline",
+    "work-clip-trim": "timeline",
+    "work-automation-point-drag": "automation",
+    "work-lane-resize": "automation",
+    "work-marquee": "timeline",
+    "work-split-drag": "timeline",
+    "work-inspector-resize": "inspector",
+    "work-modifier": "timeline",
+    "work-select-click": "timeline",
+    "work-driver-trim": "inspector",
+    "work-envelope-drag": "envmod",
+    "work-audio-mod-range": "inspector",
+    "work-trigger-shape": "inspector",
+    "work-relight-drag": "inspector",
+    "work-layer-gain": "inspector",
+    "work-send-gain": "audiosends",
+    "work-band-split": "audiosends",
+    "work-slider-drag": "inspector",
+    "work-slider-grab": "inspector",
+    "work-values-undo": "inspector",
+    "work-trim-undo": "inspector",
+    "work-cursor-nav": "timeline",
+    "work-paused-cursor": "timeline",
+    "work-zoom": "timeline",
+    "work-dock-scroll": "audiosends",
+    "work-scrollbar-drag": "timeline",
+    "work-layer-reorder": "timeline",
+    "work-drawer-tween": "envmod",
     "water-family-controls": "scene-setup",
     "scene-fluid-authoring": "fluidauthoring",
     "scene-fluid-template": "fluidauthoring",
     "scene-fluid-dam-break-controls": "waterdambreak",
-    "scene-liquid-recognition": "waterdambreakmatter",
-    "scene-item-ownership": "gltfscene",
-    "scene-fluid-role-assignment": "fluidauthoring",
     "scene-physics-duplicate-paused": "physicsscene",
     "scene-physics-controls": "physicsscene",
     "scene-imported-physics": "gltfscene",
@@ -189,6 +252,7 @@
     "automation-time-selection": "automation",
     "automation-lane-management": "automation",
     "automation-show-parameter": "inspector",
+    "automation-scene-camera-click": "gltfscene",
     "automation-clear-parameter": "inspector",
     "automation-coincident-points": "automation",
     "automation-resize-lane": "automation",
@@ -196,11 +260,9 @@
     "frame-align-lfo": "inspector",
     "audio-setup-hygiene": "audiosends",
     "automation-placeholder-first-click": "automationplaceholder",
-    "bug060-inspector-footer-containment": "bug060",
     "drag-automation-point": "automation",
     "drag-clip": "timeline",
     "led-layer-create": "timeline",
-    "led-browser-scoped-open": "dmxcard",
     "led-inspector-preview": "dmxcard",
     "envelope-modulation": "envmod",
     "trigger-lane-assignment": "envmod",
@@ -208,42 +270,28 @@
     "gltf-clip-scrub-retrigger": "gltfanimscene",
     "gltf-import-card-sections": "gltfscene",
     "inspector-card-drag-reorder": "inspector",
-    "inspector-add-mask": "inspector",
     "inspector-blob-mask": "inspector",
     "inspector-modifier-group": "modifiergroup",
     "audio-visualizer-source": "audiovisualizers",
-    "inspector-drawer-filmstrip": "inspector",
-    "inspector-scroll": "inspector",
-    "ruler-scrub": "timeline",
-    "scene-card-convergence-c-p1d-light-scrub-drawer": "gltfscene",
     "scene-setup-add-object": "gltfscene",
-    "scene-setup-close-button": "gltfscene",
     "scene-setup-empty-states": "timeline",
-    "scene-setup-eye-toggle": "gltfscene",
     "scene-setup-heldout-merge-snapshot": "gltfscene",
-    "scene-setup-light-cast-shadows-toggle": "gltfscene",
     "scene-setup-light-intensity-drag": "gltfscene",
     "scene-setup-modifier-stack": "gltfscene",
-    "scene-setup-numeric-typein-box": "gltfscene",
-    "scene-setup-select-updates": "gltfscene",
     "scene-submesh-controls": "gltfscene",
     "scene-setup-modifier": "gltfscene",
     "scene-setup-modifier-trigger": "gltfscene",
     "scene-skin": "gltfscene",
-    "scene-setup-shadow-softness-dropdown": "gltfscene",
     "select-and-inspect": "inspector",
     "set-param-layer-opacity": "inspector",
     "toggle-lanes": "automation",
     "trim-clip-left": "timeline",
-    "zoom-out": "timeline",
     "param-step-action": "inspector",
     "audio-clip-trigger-add": "inspector",
     "audio-dock-toggle": "inspector",
-    "audio-dock-scroll": "audiosends",
     "calibrated-param-card-reads-manifest": "inspector",
     "drag-clip-release-over-inspector": "timeline",
     "effect-browser-open": "inspector",
-    "scene-setup-ux-p2-demo": "gltfscene",
     "scene-card-convergence-c-p1d-roughness-scrub-drawer-undo": "gltfscene",
     "rt-quality-panel-demo": "rtquality",
     "scene-modifier-preset": "mushroomscene",
@@ -256,14 +304,12 @@
     "material-inspector-looks": "gltfscene",
     "material-inspector-textures": "gltfscene",
     "physics-box-count": "physicsboxes",
-    "scene-panel-card-convergence-c-p1b-object-scrub": "gltfscene",
     "scene-setup-add-fog-drag": "gltfscene",
-    "scene-setup-fog-density-card-row": "gltfscene",
-    "scene-setup-fog-undo-removes-fog": "gltfscene",
     "scene-fluid-role-lifecycle": "fluidauthoring",
-    "scene-fluid-object-lifecycle": "fluidauthoring",
     "water-family-preset": "scene-setup",
-    "scene-forces-controls": "physicsscene"
+    "scene-forces-controls": "physicsscene",
+    "scene-surfaces-clickthrough": "gltfscene",
+    "scene-surfaces-clickthrough-physics": "physicsscene"
   },
   "expected_fail": {},
   "unresolved": {}

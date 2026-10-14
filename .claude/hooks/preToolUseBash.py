@@ -3,9 +3,19 @@
 
 0b. Landing-protocol guard. In the main checkout only: `git branch -f main ...`
     and any force-push targeting main ASK unconditionally — both drop commits
-    under the merge-based trunk model. A non-force push or merge landing on main
-    allows, with the landing protocol attached as additionalContext. See
-    `landing_protocol_guard`; protocol is GIT_TREE_DISCIPLINE.md section 2.
+    under the merge-based trunk model. See `landing_protocol_guard`; protocol is
+    GIT_TREE_DISCIPLINE.md section 2.
+
+0b2. Land-pass guard (BUG-3srqb). Any checkout: a merge into main, a push naming
+    main, `update-ref refs/heads/main` or `gh pr merge` is DENIED unless the
+    resulting tree has a gate pass recorded by scripts/land_branch.py in
+    <git-common-dir>/land-passes-v1/<tree>.json, the commits are already on
+    origin/main, or the diff versus origin/main touches only .beads/, docs/ and .claude/hooks/
+    (beads: commits and docs edits land directly; they carry no code to gate).
+    land_branch.py's own git calls are subprocesses the hook never sees, so no
+    allowlist exists. Any Bash command that could write into land-passes-v1
+    is denied too (`land_pass_tamper_guard`; the Edit/Write twin is in
+    worktree-guard.py). Spec: `land_pass_guard`. Peter's terminal is ungoverned.
 
 1.  ALLOW pre-approved commands outright, including compounds the static
     `permissions.allow` matcher cannot express — pipes, `;` chains, for/while
@@ -180,6 +190,7 @@ def sanitize(s: str):
     """
     inners: list[str] = []
     out: list[str] = []
+    heredocs: list[str] = []  # delimiters opened on the current line
     i, n = 0, len(s)
     while i < n:
         c = s[i]
@@ -215,17 +226,34 @@ def sanitize(s: str):
             i = j + 1
             continue
 
-        if c == "<" and i + 1 < n and s[i + 1] == "<":  # heredoc
-            m = re.match(r"<<-?\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\1", s[i:])
-            if m:
-                delim = m.group(2)
-                end = re.compile(r"\n[ \t]*" + re.escape(delim) + r"[ \t]*(?:\n|$)")
-                em = end.search(s, i + m.end())
+        if c == "$" and s.startswith("$'", i):  # ANSI-C quoted: literal
+            span = _ansi_c_span(s, i)
+            if span is not None:
                 out.append(_QUOTED)
-                i = em.end() if em else n
+                i = span[1]
                 continue
+
+        if c == "<" and s.startswith("<<", i):  # heredoc (not a `<<<` herestring)
+            run = len(s[i:]) - len(s[i:].lstrip("<"))
+            delim, j = (None, i + run) if run > 2 else _read_heredoc_word(s, i)
+            if delim is not None:
+                # The body starts on the next line; the rest of this line
+                # (`cat <<EOF > path`) is still shell structure.
+                heredocs.append(delim)
+                out.append(_QUOTED)
+            else:
+                out.append(s[i:j])
+            i = j
+            continue
+
+        if c == "\n" and heredocs:
             out.append(c)
-            i += 1
+            i, _, found = _take_heredoc_bodies(s, i + 1, heredocs)
+            if not found:
+                # No end line: the body stays structure, behind a segment
+                # that is never pre-approved.
+                out.append(_QUOTED + "\n")
+            heredocs = []
             continue
 
         if c == "$" and i + 1 < n and s[i + 1] == "(":  # active subst (unquoted)
@@ -243,6 +271,8 @@ def sanitize(s: str):
         out.append(c)
         i += 1
 
+    if heredocs:  # an opener with no line after it
+        out.append("\n" + _QUOTED)
     return "".join(out), inners
 
 
@@ -611,10 +641,13 @@ def _shlex_segments(cmd):
     "<path>"` argument must survive with its real value, notably because
     the repo path itself contains a space ("MANIFOLD - Rust"). Splits the
     resulting token stream into command-position segments on operator
-    tokens. Malformed quoting (`shlex.split` raising) yields no segments —
-    fail-safe, same as everywhere else in this guard."""
+    tokens and newlines. Heredoc bodies are cut out first (they are data, and
+    an apostrophe in one used to make shlex raise, which blinded every guard
+    built on this); a heredoc fed to a shell is checked as its own command
+    text by `main`. Malformed quoting yields no segments; a guard that must
+    not fail open uses `_exec_commands` instead."""
     try:
-        tokens = shlex.split(cmd, posix=True)
+        tokens = shlex.split(_split_heredocs(cmd, "<<HEREDOC", " ; ")[0], posix=True)
     except ValueError:
         return []
     segments = []
@@ -768,6 +801,207 @@ def landing_protocol_guard(cmd, cwd):
         return None, None
     except Exception:
         return None, None
+
+
+# ---------------------------------------------------------------------------
+# Land-pass guard (BUG-3srqb, hook-enforced landing)
+#
+# Code reaches main only through scripts/land_branch.py. It runs landing_gate
+# and, before it pushes, writes <git-common-dir>/land-passes-v1/<tree>.json for
+# the exact tree it lands. Its own git calls are subprocesses of that script,
+# never Bash tool calls, so this hook cannot see them and needs no allowlist.
+# Every agent Bash call that would put a tree on main is DENIED unless the
+# tree has such a record, the commits are already on origin/main, or the change
+# versus origin/main touches only .beads/, docs/ and .claude/hooks/ (the `beads:` commits and
+# docs edits go straight to main; they carry no code for the gate to prove).
+# Shapes: `git merge` while on main (or after `checkout/switch main`), `git push`
+# naming main (bare push on main, `HEAD:main`, `<br>:main`, --all, globs), any
+# `-C <path>` form, `update-ref refs/heads/main`, and `gh pr merge`. The record
+# is a speed bump against skipping the gate, not a defence against forging it.
+# ---------------------------------------------------------------------------
+
+LAND_PASS_DIR = "land-passes-v1"  # writer: scripts/land_branch.py record_land_pass
+_BEADS_DOCS_PREFIXES = (".beads/", "docs/", ".claude/hooks/")
+_MERGE_VALUE_FLAGS = {"-m", "-F", "-s", "-X", "--message", "--file", "--strategy",
+                      "--strategy-option", "--into-name"}
+_PUSH_VALUE_FLAGS = {"-o", "--push-option", "--repo", "--receive-pack", "--exec"}
+_LAND_HOW = ("Land through scripts/land_branch.py (it gates the merged tree and records "
+             "the pass). Only changes confined to .beads/, docs/ and .claude/hooks/ may go to main directly.")
+
+
+def _git_run(target_dir, *args):
+    out = subprocess.run(["git", "-C", str(target_dir), *args],
+                         capture_output=True, text=True, timeout=30)
+    return out.returncode, out.stdout.strip()
+
+
+def _land_pass_recorded(target_dir, tree):
+    rc, common = _git_run(target_dir, "rev-parse", "--git-common-dir")
+    if rc:
+        return False
+    return (Path(target_dir) / common).resolve().joinpath(LAND_PASS_DIR, f"{tree}.json").is_file()
+
+
+def _tree_may_land(target_dir, tree):
+    """None when `tree` may become main's tree, else the deny reason."""
+    if _land_pass_recorded(target_dir, tree):
+        return None
+    rc, names = _git_run(target_dir, "diff", "--name-only", "--no-renames", "origin/main", tree)
+    if rc:
+        return f"cannot compare tree {tree[:9]} with origin/main (fetch first?). {_LAND_HOW}"
+    files = [n for n in names.splitlines() if n]
+    if all(n.startswith(_BEADS_DOCS_PREFIXES) for n in files):
+        return None
+    return (f"tree {tree[:9]} has no recorded land_branch gate pass and changes code outside "
+            f".beads/, docs/ and .claude/hooks/ versus origin/main (e.g. {files[0]}). {_LAND_HOW}")
+
+
+def _rev_may_land(target_dir, rev):
+    rc, _ = _git_run(target_dir, "merge-base", "--is-ancestor", rev, "origin/main")
+    if rc == 0:
+        return None  # already on main; nothing new lands
+    rc, tree = _git_run(target_dir, "rev-parse", "--verify", f"{rev}^{{tree}}")
+    if rc:
+        return f"cannot resolve '{rev}' to verify it for main. {_LAND_HOW}"
+    return _tree_may_land(target_dir, tree)
+
+
+def _positionals(rest, value_flags):
+    out, skip = [], False
+    for t in rest:
+        if skip:
+            skip = False
+        elif t in value_flags:
+            skip = True
+        elif t == "--":
+            continue
+        elif not t.startswith("-"):
+            out.append(t)
+    return out
+
+
+def _is_main_name(name):
+    return name.lstrip("+") in _MAIN_REF_TOKENS
+
+
+def _check_merge(target_dir, rest, assumed_main):
+    if any(f in rest for f in ("--abort", "--quit")):
+        return None
+    on_main = _current_branch(target_dir) == "main"
+    if not (on_main or assumed_main):
+        return None
+    if "--continue" in rest:
+        rc, tree = _git_run(target_dir, "write-tree")
+        return _tree_may_land(target_dir, tree) if not rc else f"cannot read index tree. {_LAND_HOW}"
+    sources = _positionals(rest, _MERGE_VALUE_FLAGS)
+    if all(_rev_may_land(target_dir, s) is None for s in sources):
+        return None  # includes a bare `git merge` (upstream = origin/main)
+    if len(sources) != 1:
+        return f"cannot verify a merge of {len(sources)} sources into main. {_LAND_HOW}"
+    rc, tree = _git_run(target_dir, "merge-tree", "--write-tree",
+                        "HEAD" if on_main else "main", sources[0])
+    if rc:
+        return f"cannot compute the merge result of {sources[0]} into main (conflict?). {_LAND_HOW}"
+    return _tree_may_land(target_dir, tree.splitlines()[0])
+
+
+def _check_push(target_dir, rest):
+    flags = set(rest)
+    positional = _positionals(rest, _PUSH_VALUE_FLAGS)
+    on_main = _current_branch(target_dir) == "main"
+    srcs = []
+    if flags & {"--all", "--mirror"}:
+        srcs.append("main")
+    refspecs = positional[1:]
+    if not refspecs and not (flags & {"--all", "--mirror", "--tags"}) and on_main:
+        srcs.append("HEAD")
+    for spec in refspecs:
+        src, _, dst = spec.lstrip("+").partition(":")
+        dst = dst or src
+        if not src:
+            continue  # deletion; destructive_outward_guard owns it
+        if _is_main_name(dst) or "*" in dst:
+            srcs.append("main" if "*" in src else src)
+    for src in srcs:
+        reason = _rev_may_land(target_dir, src)
+        if reason:
+            return f"push of '{src}' to main: {reason}"
+    return None
+
+
+def _check_update_ref(target_dir, rest):
+    positional = _positionals(rest, {"-m"})
+    if not positional or positional[0] not in ("refs/heads/main",):
+        return None
+    if "-d" in rest or len(positional) < 2:
+        return f"deleting refs/heads/main is not allowed. {_LAND_HOW}"
+    reason = _rev_may_land(target_dir, positional[1])
+    return f"update-ref refs/heads/main: {reason}" if reason else None
+
+
+_PASS_DIR_READERS = {"ls", "cat", "rg", "fd", "stat", "head", "tail", "wc", "file", "test", "["}
+
+
+def land_pass_tamper_guard(cmd):
+    """Deny reason for a Bash command that could write into land-passes-v1
+    (any redirect, cp, mv, tee, touch, mkdir, interpreter or sed naming the
+    directory); only scripts/land_branch.py writes it. Reads are fine."""
+    if LAND_PASS_DIR not in cmd:
+        return None
+    try:
+        segments = _shlex_segments(cmd)
+    except Exception:
+        segments = []
+    readonly = bool(segments) and ">" not in cmd
+    for toks in segments:
+        toks = _strip_leading_keywords(toks)
+        if any(LAND_PASS_DIR in t for t in toks) and (not toks or toks[0] not in _PASS_DIR_READERS):
+            readonly = False
+    if readonly:
+        return None
+    return (f"{LAND_PASS_DIR} holds the gate-pass records; only scripts/land_branch.py writes "
+            "them (run it by path). Reading them with ls/cat/rg is fine.")
+
+
+def land_pass_guard(cmd, cwd):
+    """Deny reason for a Bash command that would land an unrecorded tree on
+    main (see the block comment above); else None. Never raises."""
+    try:
+        segments = _shlex_segments(cmd)
+    except Exception:
+        return None
+    assumed_main = {}
+    for toks in segments:
+        try:
+            toks = _strip_leading_keywords(toks)
+            if not toks:
+                continue
+            if toks[0] == "gh" and toks[1:3] == ["pr", "merge"]:
+                return "`gh pr merge` lands on origin outside the land_branch gate. " + _LAND_HOW
+            if toks[0] != "git":
+                continue
+            target_dir, sub, rest = _git_checkout_dir(toks, cwd)
+            if target_dir is None:
+                continue
+            key = str(target_dir)
+            if sub in ("checkout", "switch"):
+                pos = _positionals(rest, {"-b", "-B", "-c", "-C"})
+                creating = any(f in rest for f in ("-b", "-B", "-c", "-C"))
+                assumed_main[key] = bool(pos) and pos[-1] == "main" and not creating
+                continue
+            if sub == "merge":
+                reason = _check_merge(target_dir, rest, assumed_main.get(key, False))
+            elif sub == "push":
+                reason = _check_push(target_dir, rest)
+            elif sub == "update-ref":
+                reason = _check_update_ref(target_dir, rest)
+            else:
+                continue
+            if reason:
+                return "Landing on main refused: " + reason
+        except Exception as error:
+            return f"Landing guard could not verify this git command ({error}). " + _LAND_HOW
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -932,30 +1166,586 @@ INLINE_PYTHON_REASON = (
     "scripts run directly as `scripts/x.py`."
 )
 
-INLINE_PYTHON_HEADS = {"python", "python2", "python3"}
+# Exec walk shared by the inline-python deny and the config-write ask. Both
+# must see every command a Bash string runs however it is spelled: an
+# operator glued to a word (`x;python3`), a newline, a subshell or `$()`, a
+# wrapper (`env`, `nice -n 10`, `timeout 30`, `uv run`), `bash -c "..."`,
+# `eval`, a shell fed a heredoc, a `-- cmd` tail, `find -exec`. Heredoc
+# bodies are cut out before lexing, so an apostrophe in one cannot break the
+# parse, and a parse that still fails is reported, never read as "nothing
+# here". BUG-zezjf.21 (python heredoc edited settings.json): a body with an
+# odd quote made shlex raise, `_shlex_segments` returned [], and this guard
+# passed `/usr/bin/python3 - "$S" <<'EOF'` that rewrote .claude/settings.json.
+_SEG_PUNCT = "();|&<>"
+_EXEC_DEPTH = 4
+_EXEC_WRAPPERS = {
+    "env", "nice", "nohup", "timeout", "gtimeout", "time", "exec", "command",
+    "builtin", "sudo", "doas", "xargs", "stdbuf", "caffeinate", "arch",
+    "ionice", "taskpolicy", "chronic", "uv", "uvx", "poetry", "pipenv", "pdm",
+    "rye", "hatch", "conda", "pipx",
+}
+# Wrapper options whose value is a separate word (`nice -n 10`, `xargs -I {}`).
+_WRAPPER_VALUE_FLAGS = {
+    "-n", "-s", "-k", "-u", "-g", "-I", "-P", "-L", "-d", "-E", "-C",
+    "--signal", "--kill-after", "--with", "--python", "--project",
+    "--directory", "--chdir", "--unset", "--adjustment",
+}
+_WRAPPER_SUBVERBS = {"run", "exec", "tool"}
+_SHELL_HEADS = {"bash", "sh", "zsh", "dash", "ksh", "fish"}
+_PYTHON_HEAD_RE = re.compile(r"^(?:python|pypy)\d*(?:\.\d+)*$", re.I)
+_PY_WORD_RE = re.compile(r"(?:^|[^\w.-])(?:python|pypy)\d*(?:\.\d+)*(?![\w.-])", re.I)
+# `$(command -v python3) -c ...` in command position.
+_PY_LOOKUP_HEAD_RE = re.compile(
+    r"(?:^|[;&|(\n])\s*\"?(?:\$\(|`)\s*(?:command\s+-v|which|type\s+-p)\s+(?:python|pypy)", re.I)
+_DURATION_RE = re.compile(r"^\d+(?:\.\d+)?[smhd]?$")
+_ASSIGN_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)=(.*)$", re.S)
+_VAR_RE = re.compile(r"\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?")
+_EMPTY_SEG = {"words": [], "redirects": [], "bodies": [], "herestring": False,
+              "stdin_file": None, "piped": False, "degraded": False, "bg": False}
+
+
+def _expand_vars(tok, assigns):
+    """`$NAME` / `${NAME}` from assignments earlier in the same command."""
+    return _VAR_RE.sub(lambda m: assigns.get(m.group(1), m.group(0)), tok)
+
+
+def _lex_exec(text):
+    lex = shlex.shlex(text, posix=True, punctuation_chars=_SEG_PUNCT)
+    lex.whitespace_split = True
+    lex.commenters = ""
+    return list(lex)
+
+
+def _exec_segments(cmd):
+    """Lex `cmd` into command segments. Each is a dict: `words` (unquoted
+    argv, redirects removed), `redirects` [(op, target)], `bodies` (heredoc
+    bodies it reads), `herestring`, `stdin_file`, `piped`, `bg` (ended by a
+    single `&`), and `degraded` (the quoting could not be followed, so the
+    lex ran on `sanitize`'s quote-collapsed text). None when a heredoc cannot
+    be read or even the degraded lex fails."""
+    text, bodies, ok, _ = _split_heredocs(cmd, "<<HEREDOC", " ; ")
+    if not ok:
+        return None
+    degraded = False
+    try:
+        toks = _lex_exec(text)
+    except ValueError:
+        try:
+            toks = _lex_exec(sanitize(text)[0].replace(_QUOTED, " Q "))
+            degraded = True
+        except ValueError:
+            return None
+
+    def new_seg(piped=False):
+        return {"words": [], "redirects": [], "bodies": [], "herestring": False,
+                "stdin_file": None, "piped": piped, "degraded": degraded,
+                "bg": False}
+
+    segs, cur, op, body_iter = [], new_seg(), None, iter(bodies)
+    for t in toks:
+        if t and set(t) <= set(_SEG_PUNCT):
+            if "(" in t or ")" in t or not set(t) & set("<>"):
+                cur["bg"] = t.strip("()") == "&"
+                if cur["words"] or cur["redirects"] or cur["bodies"]:
+                    segs.append(cur)
+                cur, op = new_seg(piped=t.endswith("|") and not t.endswith("||")), None
+                continue
+            if cur["words"] and len(cur["words"][-1]) == 1 and cur["words"][-1].isdigit():
+                cur["words"].pop()  # the fd of `2>`, not an argument
+            op = t
+            continue
+        if op is not None:
+            o, op = op, None
+            if o == "<<" and t == "HEREDOC":
+                cur["bodies"].append(next(body_iter, ""))
+            elif "<<<" in o:
+                cur["herestring"] = True
+            elif ">" in o:
+                if not (o.endswith("&") and (t.isdigit() or t == "-")):
+                    cur["redirects"].append((o, t))
+            else:
+                cur["stdin_file"] = t
+            continue
+        cur["words"].append(t)
+    if cur["words"] or cur["redirects"] or cur["bodies"]:
+        segs.append(cur)
+    return segs
+
+
+def _resolve_argv(words, assigns, nested):
+    """Strip keywords, assignments and exec wrappers; return the argv that
+    actually runs, with `$VAR`s from earlier assignments expanded. A command
+    string a wrapper runs (`env -S "..."`) is appended to `nested`."""
+    i, n = 0, len(words)
+    while i < n:
+        w = words[i]
+        if w in _DATA_KEYWORDS:
+            return []
+        if w in _STRIP_KEYWORDS and w not in _EXEC_WRAPPERS:
+            i += 1
+            continue
+        m = _ASSIGN_RE.match(w)
+        if m:
+            assigns[m.group(1)] = _expand_vars(m.group(2), assigns)
+            i += 1
+            continue
+        if _expand_vars(w, assigns).rsplit("/", 1)[-1] not in _EXEC_WRAPPERS:
+            break
+        if w == "command" and i + 1 < n and words[i + 1] in ("-v", "-V"):
+            return []  # a lookup, not an execution
+        i += 1
+        while i < n:
+            v = words[i]
+            if v == "--":
+                i += 1
+                break
+            if v in ("-S", "--split-string") and i + 1 < n:
+                nested.append(words[i + 1])
+                i += 2
+                continue
+            if v in _WRAPPER_VALUE_FLAGS:
+                i += 2
+                continue
+            if (v.startswith("-") or v in _WRAPPER_SUBVERBS
+                    or _DURATION_RE.match(v) or _ASSIGN_RE.match(v)):
+                i += 1
+                continue
+            break
+    return [_expand_vars(w, assigns) for w in words[i:]]
+
+
+def _exec_commands(cmd, depth=0, programs=None):
+    """Yield (argv, seg) for every command `cmd` runs (see the block comment
+    above). Yields (None, None) when the command cannot be lexed, so a guard
+    can fail closed. Every heredoc body a shell runs as its program, and
+    every command an expanding heredoc body substitutes, is walked too and
+    appended to `programs` when given."""
+    segs = _exec_segments(cmd)
+    if segs is None:
+        yield None, None
+        return
+    assigns, resolved = {}, []
+    for seg in segs:
+        nested = []
+        argv = _resolve_argv(seg["words"], assigns, nested)
+        resolved.append((argv, nested, dict(assigns)))
+    for k, seg in enumerate(segs):
+        argv, nested, seen = resolved[k]
+        yield from _exec_argv(argv, seg, seen, nested, depth, programs)
+        if depth >= _EXEC_DEPTH or not seg["bodies"]:
+            continue
+        # `cat <<EOF | bash`: the body flows down the pipe into a shell.
+        j = k + 1
+        while j < len(segs) and segs[j]["piped"]:
+            if _shell_stdin_program(resolved[j][0]):
+                for body in seg["bodies"]:
+                    yield from _exec_program(body, depth, programs)
+                break
+            j += 1
+    if depth < _EXEC_DEPTH:
+        for inner in sanitize(cmd)[1]:  # `$()` / backticks inside double quotes
+            yield from _exec_commands(inner, depth + 1, programs)
+        for inner in _split_heredocs(cmd)[3]:
+            yield from _exec_program(inner, depth, programs)
+
+
+def _exec_program(text, depth, programs):
+    if programs is not None:
+        programs.append(text)
+    yield from _exec_commands(text, depth + 1, programs)
+
+
+def _shell_stdin_program(argv):
+    """True when `argv` is a shell that reads its program from stdin: no
+    `-c` and no script operand, or `-s`."""
+    if not argv or argv[0].rsplit("/", 1)[-1] not in _SHELL_HEADS:
+        return False
+    k = 1
+    while k < len(argv):
+        a = argv[k]
+        if a in ("-", "--"):
+            return k + 1 >= len(argv)
+        if a in ("-o", "+o", "-O", "+O", "--rcfile", "--init-file"):
+            k += 2
+            continue
+        if a.startswith("--"):  # --norc, --login
+            k += 1
+            continue
+        if a[:1] not in ("-", "+"):
+            return False  # a script operand
+        if a[0] == "-" and "c" in a[1:]:
+            return False
+        if "s" in a[1:]:
+            return True
+        k += 1
+    return True
+
+
+def _exec_argv(argv, seg, assigns, nested, depth, programs=None):
+    yield argv, seg
+    if depth >= _EXEC_DEPTH:
+        return
+    for s in nested:
+        yield from _exec_commands(s, depth + 1, programs)
+    if not argv:
+        return
+    base = argv[0].rsplit("/", 1)[-1]
+    if base in _SHELL_HEADS:
+        if _shell_stdin_program(argv):
+            for body in seg["bodies"]:
+                yield from _exec_program(body, depth, programs)
+            return
+        for k, a in enumerate(argv[1:], 1):
+            if a.startswith("-") and not a.startswith("--") and "c" in a[1:]:
+                if k + 1 < len(argv):
+                    yield from _exec_commands(argv[k + 1], depth + 1, programs)
+                break
+    elif base == "eval":
+        yield from _exec_commands(" ".join(argv[1:]), depth + 1, programs)
+    elif base == "find":
+        for k, a in enumerate(argv):
+            if a in ("-exec", "-execdir", "-ok", "-okdir"):
+                tail = argv[k + 1:]
+                end = next((j for j, t in enumerate(tail) if t in (";", "+")), len(tail))
+                sub = []
+                yield from _exec_argv(_resolve_argv(tail[:end], assigns, sub),
+                                      _EMPTY_SEG, assigns, sub, depth + 1, programs)
+    elif "/" in argv[0] and "--" in argv[1:]:
+        # `scripts/gpu_queue.py -- <cmd>`: a runner executing its tail.
+        k = argv.index("--", 1)
+        sub = []
+        yield from _exec_argv(_resolve_argv(argv[k + 1:], assigns, sub),
+                              seg, assigns, sub, depth + 1, programs)
+
+
+def _shell_programs(cmd):
+    """Command texts `cmd` hands to a shell through a heredoc (see
+    `_exec_commands`). `main` runs every guard over each one, the same as
+    over `cmd` itself."""
+    programs = []
+    for _ in _exec_commands(cmd, programs=programs):
+        pass
+    return programs
+
+
+def _python_inline(argv, seg):
+    """True when argv runs python on code the command text does not name as
+    a file: a flag first (`-c`, `-`, `-m`, any `-x`), /dev/stdin, a heredoc
+    or herestring, or no script at all (reads a pipe)."""
+    if not argv or not _PYTHON_HEAD_RE.match(argv[0].rsplit("/", 1)[-1]):
+        return False
+    if seg["bodies"] or seg["herestring"]:
+        return True
+    if len(argv) == 1:
+        return seg["stdin_file"] is None
+    return argv[1].startswith("-") or argv[1].startswith("/dev/")
 
 
 def inline_python_guard(cmd):
-    """Return a deny reason for INLINE python payloads: a python/python2/
-    python3 segment head followed by a flag (`-c`, `-`, any `-x` — the
-    script-path form has no flags) or fed by a heredoc. `python3 <path>` is
-    NOT denied here — the path is reviewer-visible and the classifier
-    handles it (CLAUDE.md's "never via python3" is about allow-rule
-    reliability, not this deny class). Never raises."""
+    """Return a deny reason for INLINE python payloads (see `_python_inline`),
+    wherever in the command they run. `python3 <path>` is NOT denied here —
+    the path is reviewer-visible and the classifier handles it (CLAUDE.md's
+    "never via python3" is about allow-rule reliability, not this deny
+    class). A command that cannot be parsed and names python is denied:
+    this guard fails closed. Never raises."""
     try:
-        for toks in _shlex_segments(cmd):
-            toks = _strip_leading_keywords(toks)
-            if not toks:
+        if _PY_LOOKUP_HEAD_RE.search(cmd):
+            return INLINE_PYTHON_REASON
+        for argv, seg in _exec_commands(cmd):
+            if argv is None or seg["degraded"]:
+                if _PY_WORD_RE.search(_strip_heredoc_bodies(cmd)):
+                    return INLINE_PYTHON_REASON
                 continue
-            head = toks[0].rsplit("/", 1)[-1]
-            if head not in INLINE_PYTHON_HEADS:
-                continue
-            inline = (len(toks) > 1 and toks[1].startswith("-")) or "<<" in " ".join(toks)
-            if inline:
+            if _python_inline(argv, seg):
                 return INLINE_PYTHON_REASON
         return None
     except Exception:
+        return INLINE_PYTHON_REASON if _PY_WORD_RE.search(cmd) else None
+
+
+# Wait-loop guard (BUG-zezjf.15 (one status screen)). A foreground poll
+# blocks the session for the whole wait and shows nothing while it runs. The
+# same command with run_in_background passes; `main` checks that flag.
+WAIT_LOOP_REASON = (
+    "Foreground wait ({what}) blocks this session until it ends. Run it with "
+    "run_in_background: true, and follow a landing with scripts/watch_land.py "
+    "or anything else with the Monitor tool."
+)
+# A sleep up to this long is settle time or a timeout window (let a server
+# bind, `cmd & sleep 6; kill $!`). Longer is waiting on work whose end is a
+# guess, which watch_land.py and Monitor end on the event instead. In 23k
+# real calls (2026-10-13) every foreground sleep past 10s was a poll (20s
+# and up) and the only one in 6..19s was a timeout window.
+_SETTLE_SECONDS = 10.0
+_SLEEP_UNITS = {"": 1, "s": 1, "m": 60, "h": 3600, "d": 86400}
+_SLEEP_ARG_RE = re.compile(r"^(\d+(?:\.\d*)?|\.\d+)([smhd]?)$")
+
+
+def _sleep_seconds(args):
+    """Total seconds `sleep args` waits; None when an argument is not a
+    literal duration (`$WAIT`, `infinity`)."""
+    total = 0.0
+    for a in args:
+        m = _SLEEP_ARG_RE.match(a)
+        if not m:
+            return None
+        total += float(m.group(1)) * _SLEEP_UNITS[m.group(2)]
+    return total
+
+
+def _wait_shape(text, depth=0):
+    """The first foreground wait in `text`: a while/until loop that sleeps
+    or runs `kill -0`, or a sleep longer than `_SETTLE_SECONDS` (unknown
+    durations count as long). Walks `sh -c` strings and eval too; heredoc
+    programs reach this through `main`'s `_shell_programs`. None when there
+    is none or the text cannot be lexed: this guard is wall-time hygiene, so
+    it fails open."""
+    segs = _exec_segments(text)
+    if not segs:
         return None
+    loops = []  # open loops, innermost last: "poll" (while/until) or "list"
+    for seg in segs:
+        words, i = seg["words"], 0
+        while i < len(words):
+            w = words[i]
+            if w in ("while", "until"):
+                loops.append("poll")
+            elif w in ("for", "select"):
+                loops.append("list")
+                break
+            elif w == "done":
+                if loops:
+                    loops.pop()
+            elif w not in _STRIP_KEYWORDS:
+                break
+            i += 1
+        argv = _resolve_argv(words[i:], {}, [])
+        if not argv:
+            continue
+        in_poll = "poll" in loops
+        base = argv[0].rsplit("/", 1)[-1]
+        if base == "sleep" and not seg["bg"]:
+            if in_poll:
+                return "a while/until loop that sleeps"
+            secs = _sleep_seconds(argv[1:])
+            if secs is None or secs > _SETTLE_SECONDS:
+                return f"`{' '.join(argv)}`"
+        elif base == "kill" and in_poll and ("-0" in argv[1:] or argv[1:3] == ["-s", "0"]):
+            return "a `kill -0` loop"
+        elif depth < _EXEC_DEPTH and base in _SHELL_HEADS:
+            for k, a in enumerate(argv[1:], 1):
+                if a.startswith("-") and not a.startswith("--") and "c" in a[1:]:
+                    if k + 1 < len(argv):
+                        found = _wait_shape(argv[k + 1], depth + 1)
+                        if found:
+                            return found
+                    break
+        elif depth < _EXEC_DEPTH and base == "eval":
+            found = _wait_shape(" ".join(argv[1:]), depth + 1)
+            if found:
+                return found
+    return None
+
+
+def wait_loop_guard(cmd):
+    """Deny reason for a foreground wait in `cmd` (see `_wait_shape`), or
+    None. Never raises."""
+    try:
+        what = _wait_shape(cmd)
+    except Exception:
+        return None
+    return WAIT_LOOP_REASON.format(what=what) if what else None
+
+
+# Config-write guard (BUG-zezjf.21 (python heredoc edited settings.json)).
+# .claude/settings*.json and .claude/hooks/ decide what runs without review,
+# so a shell write to them asks in every mode, outranking allow rules — the
+# same shape as `sed_write_guard`. Reads stay silent. Scratch copies under
+# /tmp and /var/folders are not live config and pass.
+CONFIG_WRITE_REASON = (
+    "This command can write Claude Code config ({what}). .claude/settings*.json "
+    "and .claude/hooks/ decide what runs without review, so every shell write "
+    "to them asks, in every mode. Approve only if Peter wants this change; "
+    "otherwise make it on a branch with the Edit/Write tools, where the diff "
+    "is visible."
+)
+_CFG_PATH_RE = re.compile(r"(?:^|/)\.claude(?:/?$|/settings[^/]*\.json$|/hooks(?:/|$))")
+_SCRATCH_PREFIXES = ("/tmp/", "/private/tmp/", "/var/folders/", "/private/var/folders/")
+_COPY_HEADS = {"cp", "gcp", "install", "rsync", "ln", "ditto", "scp"}
+_MOVE_HEADS = {"mv", "gmv"}
+_ANY_ARG_WRITERS = {
+    "tee", "rm", "rmdir", "unlink", "touch", "truncate", "chmod", "chown",
+    "chgrp", "chflags", "shred", "mkdir", "patch", "dd", "xattr", "setfacl",
+}
+_INPLACE_HEADS = {"sed", "gsed", "perl", "ruby", "awk", "gawk"}
+_AWK_HEADS = {"awk", "gawk", "mawk", "nawk"}
+_INLINE_INTERPRETERS = {
+    "perl", "ruby", "node", "nodejs", "deno", "bun", "php", "lua", "osascript",
+    "Rscript", "julia", "tclsh",
+} | _SHELL_HEADS | _AWK_HEADS
+# Commands that only read their path arguments, even when run by full path.
+_CFG_READERS = {
+    "cat", "head", "tail", "less", "rg", "grep", "jq", "wc", "diff", "cmp",
+    "stat", "ls", "file", "fd", "find", "bat", "sort", "uniq", "cut", "od",
+    "xxd", "shasum", "md5", "git", "sed", "awk", "test", "[",
+}
+
+
+def _is_cfg_path(p):
+    p = p.strip()
+    if not p or p.startswith(_SCRATCH_PREFIXES):
+        return False
+    return bool(_CFG_PATH_RE.search(p))
+
+
+def _arg_paths(args, base=""):
+    """Words that may name a file: plain arguments, `--opt=value` values,
+    and dd's `of=`/`if=` values."""
+    for a in args:
+        if a == "--":
+            continue
+        if a.startswith("-"):
+            if "=" in a:
+                yield a.split("=", 1)[1]
+            continue
+        if base == "dd" and "=" in a:
+            yield a.split("=", 1)[1]
+            continue
+        yield a
+
+
+def _copy_dest(args):
+    """(destination, sources) of a cp/mv/ln/install argv tail."""
+    pos, target, i, opts = [], None, 0, True
+    while i < len(args):
+        a = args[i]
+        if opts and a == "--":
+            opts = False
+        elif opts and a in ("-t", "--target-directory") and i + 1 < len(args):
+            target = args[i + 1]
+            i += 1
+        elif opts and a.startswith("--target-directory="):
+            target = a.split("=", 1)[1]
+        elif not (opts and a.startswith("-")):
+            pos.append(a)
+        i += 1
+    if target is not None:
+        return target, pos
+    if len(pos) < 2:
+        return None, []
+    return pos[-1], pos[:-1]
+
+
+def _has_inplace_flag(base, args):
+    for a in args:
+        if a == "--":
+            return False
+        if a.startswith(("--in-place", "--inplace")):
+            return True
+        if not a.startswith("-") or a.startswith("--"):
+            continue
+        cluster = a[1:]
+        if base in ("perl", "ruby"):
+            # `-pi`, `-0pi`, `-i.bak`; never inside `-MList::Util` / `-Ilib`.
+            if cluster[:1] in ("M", "I", "m") or "i" not in cluster:
+                continue
+            if "e" in cluster and cluster.index("e") < cluster.index("i"):
+                continue
+            return True
+        if "i" in cluster:
+            return True
+    return False
+
+
+def _cfg_write(argv, seg, cmd_names_cfg):
+    """Describe how this one command writes config, or None."""
+    for op, target in seg["redirects"]:
+        if _is_cfg_path(target):
+            return f"redirect {op} {target}"
+    if not argv:
+        return None
+    base = argv[0].rsplit("/", 1)[-1]
+    args = argv[1:]
+    paths = list(_arg_paths(args, base))
+    if base in _ANY_ARG_WRITERS or base in _MOVE_HEADS:
+        hit = next((p for p in paths if _is_cfg_path(p)), None)
+        if hit:
+            return f"{base} {hit}"
+    if base in _COPY_HEADS or base in _MOVE_HEADS:
+        dest, sources = _copy_dest(args)
+        if dest is not None:
+            cands = [dest] + [dest.rstrip("/") + "/" + s.rstrip("/").rsplit("/", 1)[-1]
+                              for s in sources]
+            hit = next((c for c in cands if _is_cfg_path(c)), None)
+            if hit:
+                return f"{base} into {hit}"
+    if base in _INPLACE_HEADS and _has_inplace_flag(base, args):
+        hit = next((p for p in paths if _is_cfg_path(p)), None)
+        if hit:
+            return f"{base} in-place edit of {hit}"
+    if base == "git":
+        _, sub, rest = _git_checkout_dir(argv, os.getcwd())
+        if sub in ("checkout", "restore", "rm", "mv") and not (
+                sub == "restore" and "--staged" in rest and "--worktree" not in rest):
+            hit = next((p for p in _arg_paths(rest or []) if _is_cfg_path(p)), None)
+            if hit:
+                return f"git {sub} {hit}"
+        return None
+    is_interp = bool(_PYTHON_HEAD_RE.match(base)) or base in _INLINE_INTERPRETERS
+    if is_interp:
+        inline = (base in _AWK_HEADS or bool(seg["bodies"]) or seg["herestring"]
+                  or (len(argv) == 1 and seg["stdin_file"] is None)
+                  or (len(argv) > 1 and argv[1].startswith("-")))
+        if inline:
+            return f"{base} inline code naming .claude config" if cmd_names_cfg else None
+        script_args = args[1:]
+    elif "/" in argv[0] and base not in _CFG_READERS:
+        script_args = args
+    else:
+        return None
+    hit = next((p for p in _arg_paths(script_args) if _is_cfg_path(p)), None)
+    return f"{base} handed {hit}" if hit else None
+
+
+def config_write_guard(cmd):
+    """ASK when a Bash command can write .claude/settings*.json or
+    .claude/hooks/: a redirect, tee, cp/mv/ln/install into them, rm/chmod/
+    touch on them, sed -i/perl -i, git checkout/restore of them, a script
+    handed their path, or inline interpreter code naming them. A command
+    that cannot be parsed and names them asks. Never raises."""
+    if ".claude" not in cmd:
+        return None
+    names_cfg = bool(re.search(r"settings|hooks", cmd))
+    try:
+        for argv, seg in _exec_commands(cmd):
+            if argv is None or seg["degraded"]:
+                if names_cfg:
+                    return CONFIG_WRITE_REASON.format(what="a command too tangled to parse names it")
+                continue
+            what = _cfg_write(argv, seg, names_cfg)
+            if what:
+                return CONFIG_WRITE_REASON.format(what=what)
+        return None
+    except Exception:
+        if names_cfg:
+            return CONFIG_WRITE_REASON.format(what="a command too tangled to parse names it")
+        return None
+
+
+HEREDOC_UNREADABLE_REASON = (
+    "This command has a heredoc the hook cannot read exactly (the delimiter "
+    "word never closes, or no line ends the body), so it cannot tell the "
+    "heredoc's data from commands after it. It asks in every mode. Use a plain "
+    "delimiter such as <<'EOF' with a matching EOF line."
+)
+
+
+def heredoc_unreadable_guard(cmd):
+    """ASK when a heredoc in `cmd` cannot be read (see `_split_heredocs`):
+    every guard above may have read its data wrong, so this fails closed."""
+    if "<<" not in cmd or _split_heredocs(cmd)[2]:
+        return None
+    return HEREDOC_UNREADABLE_REASON
 
 
 # Index-staging guard (CLAUDE.md: commit with a pathspec, never the index).
@@ -1078,27 +1868,257 @@ _SED_W_REASON = (
 )
 
 
-# `<<` not inside a longer run of `<` — a merge marker `<<<<<<< HEAD` inside a
-# perl/sed script is text, not a heredoc opener.
-_HEREDOC_OPEN_RE = re.compile(r"(?<!<)<<(?!<)-?\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\1")
+# Heredoc reading, shared by `sanitize` and `_split_heredocs`. The delimiter
+# is a whole shell word with its quotes removed (`<<EOF.x` ends at `EOF.x`,
+# `<<'EOF'x` at `EOFx`, `<<E\OF` at `EOF`). An end line matches with blanks
+# around the word allowed, or followed by `)` (bash ends `$(cat <<EOF ...
+# EOF)` there): a body may end earlier than the shell ends it, never later,
+# so text the shell runs is never read as data. An opener that cannot be read
+# or a body with no end line leaves the command unparseable (ok = False).
+_WORD_BREAK = " \t\n;&|()<>"
+_ANSI_C_ESCAPES = {"a": "\a", "b": "\b", "e": "\x1b", "E": "\x1b", "f": "\f",
+                   "n": "\n", "r": "\r", "t": "\t", "v": "\v", "\\": "\\",
+                   "'": "'", '"': '"', "?": "?"}
+_ANSI_C_NUM_RE = re.compile(r"[0-7]{1,3}|x[0-9A-Fa-f]{1,2}|u[0-9A-Fa-f]{1,4}|U[0-9A-Fa-f]{1,8}")
 
 
-def _strip_heredoc_bodies(cmd):
-    """Replace every heredoc body with a neutral word so quote-parsing sees
-    only shell structure. Same delimiter rules as `sanitize`."""
-    out, i = [], 0
-    while True:
-        m = _HEREDOC_OPEN_RE.search(cmd, i)
-        if not m:
-            out.append(cmd[i:])
-            return "".join(out)
-        end = re.compile(r"\n[ \t]*" + re.escape(m.group(2)) + r"[ \t]*(?:\n|$)")
-        em = end.search(cmd, m.end())
-        out.append(cmd[i:m.start()] + "HEREDOC")
-        if not em:
-            return "".join(out)
-        out.append("\n")
-        i = em.end()
+def _ansi_c_span(s, i):
+    """`s[i:]` starts `$'`. Return (decoded text, index past the closing
+    quote), or None when the quote never closes."""
+    j, n, out = i + 2, len(s), []
+    while j < n:
+        c = s[j]
+        if c == "'":
+            return "".join(out), j + 1
+        if c == "\\" and j + 1 < n:
+            d = s[j + 1]
+            if d in _ANSI_C_ESCAPES:
+                out.append(_ANSI_C_ESCAPES[d])
+                j += 2
+                continue
+            m = _ANSI_C_NUM_RE.match(s, j + 1)
+            if m:
+                digits = m.group(0)
+                try:
+                    out.append(chr(int(digits, 8) if digits[0] in "01234567"
+                                   else int(digits[1:], 16)))
+                except ValueError:
+                    out.append("\\" + digits)
+                j = m.end()
+                continue
+            out.append(s[j : j + 2])
+            j += 2
+            continue
+        out.append(c)
+        j += 1
+    return None
+
+
+def _arith_end(s, i):
+    """Index past the `))` closing a `$((...))` or command-position `((...))`
+    that starts at `i`, else None. `<<` inside is a shift, not a heredoc."""
+    if s.startswith("$((", i):
+        j = i + 3
+    elif s.startswith("((", i) and (i == 0 or s[i - 1] in " \t\n;&|("):
+        j = i + 2
+    else:
+        return None
+    depth, n = 2, len(s)
+    while j < n:
+        if s[j] == "(":
+            depth += 1
+        elif s[j] == ")":
+            depth -= 1
+            if depth == 0:
+                return j + 1
+        j += 1
+    return None
+
+
+def _read_heredoc_word(s, i):
+    """`s[i:]` starts a `<<` or `<<-` opener. Return (delimiter, index past the
+    opener); the delimiter is None when the word is empty or its quoting never
+    closes."""
+    n, j = len(s), i + 2
+    if j < n and s[j] == "-":
+        j += 1
+    while j < n and s[j] in " \t":
+        j += 1
+    start, word = j, []
+    while j < n and s[j] not in _WORD_BREAK:
+        c = s[j]
+        if c == "\\":
+            if j + 1 >= n:
+                return None, n
+            if s[j + 1] != "\n":
+                word.append(s[j + 1])
+            j += 2
+        elif c == "$" and s.startswith("$'", j):
+            span = _ansi_c_span(s, j)
+            if span is None:
+                return None, n
+            word.append(span[0])
+            j = span[1]
+        elif c == "'":
+            k = s.find("'", j + 1)
+            if k < 0:
+                return None, n
+            word.append(s[j + 1 : k])
+            j = k + 1
+        elif c == '"':
+            k, buf = j + 1, []
+            while k < n and s[k] != '"':
+                if s[k] == "\\" and k + 1 < n and s[k + 1] in '"\\$`\n':
+                    buf.append(s[k + 1] if s[k + 1] != "\n" else "")
+                    k += 2
+                    continue
+                buf.append(s[k])
+                k += 1
+            if k >= n:
+                return None, n
+            word.append("".join(buf))
+            j = k + 1
+        else:
+            word.append(c)
+            j += 1
+    if j == start:
+        return None, j
+    return "".join(word), j
+
+
+def _take_heredoc_bodies(s, i, delims):
+    """`i` starts the line after a line that opened `delims` heredocs. Return
+    (index where shell text resumes, [body per delimiter], ok). When an end
+    line is missing nothing is taken: (i, [], False)."""
+    start, bodies, n = i, [], len(s)
+    for delim in delims:
+        j = i
+        while True:
+            if j >= n:
+                return start, [], False
+            e = s.find("\n", j)
+            e = n if e < 0 else e
+            line = s[j:e].strip(" \t")
+            if line == delim:
+                bodies.append(s[i:j])
+                i = min(e + 1, n)
+                break
+            if line.startswith(delim + ")"):
+                bodies.append(s[i:j])
+                i = s.index(")", j + s[j:e].index(delim) + len(delim))
+                break
+            j = e + 1
+    return i, bodies, True
+
+
+def _split_heredocs(cmd, marker="HEREDOC", newline="\n"):
+    """Return (text, bodies, ok, substs). `text` is `cmd` with each heredoc
+    opener replaced by `marker` and each body cut out, unquoted comments
+    dropped, line continuations joined, unquoted newlines replaced by
+    `newline`, and `$'...'` rewritten as plain single quotes. `bodies` are the
+    cut bodies in order. `substs` are the `$()`/backtick commands inside
+    bodies whose delimiter is unquoted (the shell runs those). The rest of an
+    opener line stays: `cat <<EOF > path` keeps its redirect. When `ok` is
+    False (see the block comment above) no body is cut after the failure, so
+    `text` still holds every command the shell could run."""
+    out, bodies, substs, pending, ok = [], [], [], [], True
+    i, n = 0, len(cmd)
+    while i < n:
+        c = cmd[i]
+        if c == "\\" and i + 1 < n:
+            if cmd[i + 1] != "\n":
+                out.append(cmd[i : i + 2])
+            i += 2
+            continue
+        if c == "$" and cmd.startswith("$'", i):
+            span = _ansi_c_span(cmd, i)
+            if span is not None:
+                out.append("'" + span[0].replace("'", "'\\''") + "'")
+                i = span[1]
+                continue
+        if c in "$(":
+            j = _arith_end(cmd, i)
+            if j is not None:
+                out.append(cmd[i:j])
+                i = j
+                continue
+        if c == "'":
+            j = cmd.find("'", i + 1)
+            j = n if j < 0 else j + 1
+            out.append(cmd[i:j])
+            i = j
+            continue
+        if c == '"':
+            j = i + 1
+            while j < n and cmd[j] != '"':
+                j += 2 if cmd[j] == "\\" else 1
+            j = min(j + 1, n)
+            out.append(cmd[i:j])
+            i = j
+            continue
+        if c == "#" and (i == 0 or cmd[i - 1] in " \t\n;&|()"):
+            j = cmd.find("\n", i)
+            i = n if j < 0 else j
+            continue
+        if c == "<" and cmd.startswith("<<", i):
+            run = len(cmd[i:]) - len(cmd[i:].lstrip("<"))
+            if run > 2:  # `<<<` herestring, or a `<<<<<<<` merge marker
+                out.append(cmd[i : i + run])
+                i += run
+                continue
+            delim, j = _read_heredoc_word(cmd, i)
+            if delim is None:
+                ok = False
+                out.append(cmd[i:j])
+                i = j
+                continue
+            quoted = any(q in cmd[i:j] for q in "'\"\\")
+            pending.append((delim, quoted))
+            out.append(marker)
+            i = j
+            continue
+        if c == "\n":
+            out.append(newline)
+            i += 1
+            if pending and ok:
+                i, taken, ok = _take_heredoc_bodies(cmd, i, [d for d, _ in pending])
+                bodies.extend(taken)
+                for body, (_, quoted) in zip(taken, pending):
+                    if not quoted:
+                        substs.extend(_body_substitutions(body))
+            pending = []
+            continue
+        out.append(c)
+        i += 1
+    if pending:
+        ok = False  # an opener with no line after it
+    return "".join(out), bodies, ok, substs
+
+
+def _body_substitutions(body):
+    """`$()` and backtick commands in a heredoc body the shell expands.
+    Quotes are plain text there; a backslash escapes the next character."""
+    found, i, n = [], 0, len(body)
+    while i < n:
+        if body[i] == "\\":
+            i += 2
+        elif body.startswith("$((", i):
+            i = _arith_end(body, i) or n
+        elif body.startswith("$(", i):
+            inner, i = _read_paren(body, i)
+            found.append(inner)
+        elif body[i] == "`":
+            inner, i = _read_backtick(body, i)
+            found.append(inner)
+        else:
+            i += 1
+    return found
+
+
+def _strip_heredoc_bodies(cmd, marker="HEREDOC"):
+    """Replace every heredoc with `marker` so quote-parsing sees only shell
+    structure (see `_split_heredocs`)."""
+    return _split_heredocs(cmd, marker)[0]
 
 
 def _sed_scripts(seg):
@@ -1744,23 +2764,42 @@ def main() -> int:
 
     cwd = data.get("cwd") or os.getcwd()
 
+    # Every guard below reads the command text and, the same way, each
+    # program it hands a shell through a heredoc (`bash <<EOF`, `cat <<EOF |
+    # sh`): heredoc bodies are cut out as data, so without this a denied
+    # command inside one would pass (BUG-zezjf.21 (python heredoc edited
+    # settings.json) review).
+    texts = [cmd] + _shell_programs(cmd)
+
+    def first(guard, *args):
+        return next((r for r in (guard(t, *args) for t in texts) if r), None)
+
     # 0b. Landing-protocol guard: a force-rewrite of main asks unconditionally;
     # a normal push/merge landing on main gets an allow + reminder below.
     landing_ask, landing_context = landing_protocol_guard(cmd, cwd)
+    landing_ask = landing_ask or first(lambda t: landing_protocol_guard(t, cwd)[0])
     if landing_ask:
         json.dump(build_ask(landing_ask), sys.stdout)
+        return 0
+
+    # 0b2. Land-pass guard: a merge, push, update-ref or `gh pr merge` that
+    # would put an unrecorded tree on main is denied in every mode.
+    land_deny = first(land_pass_tamper_guard) or first(land_pass_guard, cwd)
+    if land_deny:
+        json.dump(build_deny([land_deny]), sys.stdout)
         return 0
 
     # 0d. Worktree-ring guard: `git worktree add` is denied in every mode —
     # the slot ring (scripts/agent-worktree.py) is the only way to get a
     # worktree. Runs before the mode skip and the pre-approved allow.
-    worktree_deny = worktree_add_guard(cmd, cwd)
+    worktree_deny = first(worktree_add_guard, cwd)
     if worktree_deny:
         json.dump(build_deny([worktree_deny]), sys.stdout)
         return 0
 
     # 0g. Persistent-cwd guard: top-level `cd` off a checkout root is denied
-    # in every mode — delayed-failure class, not prompt hygiene.
+    # in every mode — delayed-failure class, not prompt hygiene. Top level
+    # only: a `cd` inside a child shell's program never persists.
     cd_deny = persistent_cd_guard(cmd, cwd)
     if cd_deny:
         json.dump(build_deny([cd_deny]), sys.stdout)
@@ -1769,7 +2808,7 @@ def main() -> int:
     # 0i. Manifold GUI-launch guard: running the app binary without a
     # headless subcommand is denied in every mode — it opens a real window
     # and never returns (Peter 2026-07-29).
-    gui_deny = manifold_gui_guard(cmd)
+    gui_deny = first(manifold_gui_guard)
     if gui_deny:
         json.dump(build_deny([gui_deny]), sys.stdout)
         return 0
@@ -1778,7 +2817,7 @@ def main() -> int:
     # are denied in every mode — interpreter-prefixed inline code can never
     # skip the classifier, so it prompts, and a prompt blocks an unattended
     # wave (Peter 2026-08-01). `python3 <path>` is unaffected.
-    python_deny = inline_python_guard(cmd)
+    python_deny = first(inline_python_guard)
     if python_deny:
         json.dump(build_deny([python_deny]), sys.stdout)
         return 0
@@ -1786,7 +2825,7 @@ def main() -> int:
     # 0k. Shared-checkout commit hygiene, denied in every mode: staging the
     # whole index sweeps another seat's edits into the commit; a double-quoted
     # message with a backtick or `$(` runs or mangles.
-    commit_deny = index_add_guard(cmd) or commit_substitution_guard(cmd)
+    commit_deny = first(index_add_guard) or first(commit_substitution_guard)
     if commit_deny:
         json.dump(build_deny([commit_deny]), sys.stdout)
         return 0
@@ -1795,7 +2834,7 @@ def main() -> int:
     # landing merge with no branch-state re-verification in between. Must
     # run before the pre-approved-allow branch below, or this compound would
     # sail through as a normal pre-approved git workflow.
-    compound_deny_reason = detect_unverified_compound_landing_merge(cmd, cwd)
+    compound_deny_reason = first(detect_unverified_compound_landing_merge, cwd)
     if compound_deny_reason:
         json.dump(build_deny([compound_deny_reason]), sys.stdout)
         return 0
@@ -1804,6 +2843,7 @@ def main() -> int:
     # verdict coverage for every BUG- task on the merged branch. Denies with
     # the missing tasks and fix commands; passes with a note otherwise.
     merge_deny, merge_context = merge_verdict_guard(cmd, cwd)
+    merge_deny = merge_deny or first(lambda t: merge_verdict_guard(t, cwd)[0])
     if merge_deny:
         json.dump(build_deny([merge_deny]), sys.stdout)
         return 0
@@ -1811,24 +2851,43 @@ def main() -> int:
     # 0e2. Pre-land flow-gate guard: a merge into main whose branch touches
     # flow-mapped paths requires a green flow-gate marker at the branch tip.
     flow_deny, flow_context = flow_gate_guard(cmd, cwd)
+    flow_deny = flow_deny or first(lambda t: flow_gate_guard(t, cwd)[0])
     if flow_deny:
         json.dump(build_deny([flow_deny]), sys.stdout)
         return 0
+
+    # 0m. Wait-loop guard (BUG-zezjf.15 (one status screen)): a foreground
+    # poll (while/until + sleep or kill -0, or a sleep past settle time) is
+    # denied in every mode; with run_in_background it passes.
+    if not data.get("tool_input", {}).get("run_in_background"):
+        wait_deny = first(wait_loop_guard)
+        if wait_deny:
+            json.dump(build_deny([wait_deny]), sys.stdout)
+            return 0
 
     # 0f. Destructive outward actions (force-push to any ref, remote branch
     # deletion, `gh pr merge`, `bd delete`) ASK in every mode — settings
     # allow rules would otherwise skip the classifier for them. Must run
     # before the pre-approved allow below.
-    outward_ask = destructive_outward_guard(cmd, cwd)
+    outward_ask = first(destructive_outward_guard, cwd)
     if outward_ask:
         json.dump(build_ask(outward_ask), sys.stdout)
         return 0
 
     # 0h. sed w-command guard (BUG-lu32 audit): a quoted sed script can write
     # files; the allow rule and the collapsed-span classifier both miss it.
-    sed_ask = sed_write_guard(cmd)
+    sed_ask = first(sed_write_guard)
     if sed_ask:
         json.dump(build_ask(sed_ask), sys.stdout)
+        return 0
+
+    # 0l. Config-write guard (BUG-zezjf.21 (python heredoc edited
+    # settings.json)): any shell write to .claude/settings*.json or
+    # .claude/hooks/ asks in every mode, before the allow rules. A heredoc
+    # the hook cannot read asks too: the guards above may have misread it.
+    config_ask = first(config_write_guard) or first(heredoc_unreadable_guard)
+    if config_ask:
+        json.dump(build_ask(config_ask), sys.stdout)
         return 0
 
     # T4/T5/T8: warning-only lints, computed unconditionally so they land as

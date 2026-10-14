@@ -53,7 +53,6 @@
       "check": "Exists"
     }
   },
-  "Snapshot",
   {
     "Pointer": {
       "target": {
@@ -82,15 +81,12 @@
     "Assert": {
       "selector": {
         "Query": {
-          "text": "Mask — Circle"
+          "name": "inspector.effect_group.add_modifier"
         }
       },
       "check": {
-        "RectWithin": {
-          "x": 1291.0,
-          "y": 248.0,
-          "width": 233.0,
-          "height": 28.0
+        "Above": {
+          "text": "Mask — Circle"
         }
       }
     }
@@ -115,7 +111,6 @@
       "check": "Exists"
     }
   },
-  "Snapshot",
   {
     "Pointer": {
       "target": {
@@ -184,8 +179,6 @@
       "check": "Exists"
     }
   },
-  "Snapshot",
-  "Dump",
   {
     "Key": {
       "key": "Z",
@@ -196,7 +189,7 @@
   },
   {
     "Step": {
-      "frames": 30
+      "frames": 20
     }
   },
   {
@@ -328,7 +321,7 @@
   },
   {
     "Step": {
-      "frames": 30
+      "frames": 20
     }
   },
   {
@@ -390,7 +383,7 @@
   },
   {
     "Step": {
-      "frames": 30
+      "frames": 20
     }
   },
   {
@@ -425,7 +418,7 @@
   },
   {
     "Step": {
-      "frames": 30
+      "frames": 20
     }
   },
   {
@@ -449,7 +442,7 @@
   },
   {
     "Step": {
-      "frames": 30
+      "frames": 20
     }
   },
   {

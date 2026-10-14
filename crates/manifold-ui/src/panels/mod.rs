@@ -129,7 +129,7 @@ pub enum GraphParamTarget {
 /// (`ui` depends only on `foundation`) — mirrors
 /// `manifold_editing::commands::effects::RelightField` one-for-one;
 /// translated at the `ui_translate.rs` boundary.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum UiRelightField {
     LightX,
     LightY,
@@ -151,7 +151,7 @@ pub enum UiRelightHeightFrom {
 /// Which scalar of an audio modulation's [`AudioModShape`] a drawer slider drag
 /// is editing. The three share one drag path, snapshot slot, and commit command;
 /// this records which field the live edit and the commit write.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum AudioShapeParam {
     /// `sensitivity` — how hard the feature drives (drawer label "Sensitivity").
     Sensitivity,
@@ -165,7 +165,7 @@ pub enum AudioShapeParam {
 /// two crossovers share one drag path, snapshot slot, and commit command (the
 /// global [`SetAudioCrossoversCommand`]); this records which frequency the live
 /// edit writes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum BandDivider {
     /// The low/mid crossover (`AudioSetup::low_hz`).
     Low,
@@ -184,7 +184,7 @@ pub enum BandDivider {
 /// | `Driver`  | `mod_state.trim_min/max`          | `Driver.trim_min/max`        | `ChangeTrimCommand`        |
 /// | `Ableton` | `param_info[pi].ableton_range`    | mapping `range_min/max`      | `ChangeAbletonTrimCommand` |
 /// | `Audio`   | `mod_state.audio_range_min/max`   | `AudioModShape.range_min/max`| `SetAudioModShapeCommand`  |
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum TrimKind {
     Driver,
     Ableton,

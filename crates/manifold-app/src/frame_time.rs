@@ -854,7 +854,7 @@ pub fn run(args: &[String]) -> ! {
 }
 
 fn probe(args: &Args) -> Result<(), String> {
-    let initial_faults = manifold_gpu::gpu_fault::fault_count();
+    let initial_faults = manifold_gpu::gpu_fault::mark();
     let mut overridden = 0usize;
     let mut sim_rate = manifold_core::settings::SimRate::default();
     let PreparedProject { mut ct, cmd_tx, cmd_rx, state_tx, drain, width, height, frame_rate, .. } =
@@ -934,7 +934,7 @@ fn probe(args: &Args) -> Result<(), String> {
             ct.content_pipeline.wait_for_render_complete();
             // The live waiter may time out or wake early. Reuse the existing
             // checked fence before accepting an equal-progress sample.
-            ct.content_pipeline.wait_for_export_complete(initial_faults)?;
+            ct.content_pipeline.wait_for_export_complete(&initial_faults).map_err(|failure| failure.message)?;
             let fence_ms = fence_start.elapsed().as_secs_f64() * 1e3;
             (start.elapsed().as_secs_f64() * 1e3, fence_ms)
         } else {

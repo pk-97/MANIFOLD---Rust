@@ -28,5 +28,9 @@ manifold-io = { path = "../manifold-io" }
 # linked into this test binary).
 inventory = "0.3"
 
+[features]
+# Test seams that inject inbound OSC and Ableton values headlessly.
+testkit = []
+
 [lints]
 workspace = true

@@ -23,11 +23,50 @@ pub struct SceneData {
     pub selection: UIState,
 }
 
+/// The expensive, immutable half of the imported-glTF fixtures: the graph
+/// assembled from the GLB, keyed by path. A batch keeps one cache so each GLB
+/// is parsed once; every flow still installs the overlay and runs the import
+/// command into a brand-new `Project`, so no flow sees another's edits.
+#[derive(Default)]
+pub struct FixtureCache {
+    imports: ahash::AHashMap<std::path::PathBuf, manifold_core::effect_graph_def::EffectGraphDef>,
+}
+
+impl FixtureCache {
+    /// GLBs assembled so far.
+    #[cfg(test)]
+    pub fn assembled(&self) -> usize {
+        self.imports.len()
+    }
+
+    fn import_graph(&mut self, path: &std::path::Path, scene_name: &str) -> manifold_core::effect_graph_def::EffectGraphDef {
+        self.imports
+            .entry(path.to_path_buf())
+            .or_insert_with(|| {
+                let (def, report) = manifold_nodes_scene::node_graph::gltf_import::assemble_import_graph(path)
+                    .unwrap_or_else(|e| panic!("ui-snap {scene_name}: assemble_import_graph({}) failed: {e}", path.display()));
+                eprintln!("ui-snap {scene_name}: import report: {report:?}");
+                def
+            })
+            .clone()
+    }
+}
+
 /// Resolve a scene name to its fixture. Returns `None` for unknown names.
 /// `project:<path>` is not a fixed name but a syntax — see [`project_scene`].
 pub fn build(scene: &str) -> Option<SceneData> {
+    build_cached(scene, &mut FixtureCache::default())
+}
+
+/// [`build`], reusing `cache`'s assembled GLBs.
+pub fn build_cached(scene: &str, cache: &mut FixtureCache) -> Option<SceneData> {
     if let Some(path) = scene.strip_prefix("project:") {
         return project_scene(path);
+    }
+    match scene {
+        "gltfscene" => return Some(gltf_scene_cached(cache)),
+        "mushroomscene" => return Some(imported_gltf_scene(&mushroom_path(), "mushroomscene", "Mushroom", cache)),
+        _ => {}
     }
     match scene {
         "timeline" => Some(timeline_scene()),
@@ -96,8 +135,6 @@ pub fn build(scene: &str) -> Option<SceneData> {
         // RT Quality panel flows (RT_QUALITY_SETTINGS_DESIGN.md P3) — plain
         // timeline content; the panel itself is pre-opened in script.rs.
         "rtquality" => Some(timeline_scene()),
-        "gltfscene" => Some(gltf_scene()),
-        "mushroomscene" => Some(mushroom_scene()),
         "gltfanimscene" => Some(gltf_anim_scene()),
         "heldoutmerge" => Some(heldout_merge_scene()),
         "empty" => Some(empty_scene()),
@@ -155,9 +192,13 @@ fn project_scene(path: &str) -> Option<SceneData> {
 /// card carries genuine importer-seeded `section`s (D9/D5), not a hand-built
 /// stand-in. Selects the imported layer so its card renders immediately.
 pub(super) fn gltf_scene() -> SceneData {
+    gltf_scene_cached(&mut FixtureCache::default())
+}
+
+fn gltf_scene_cached(cache: &mut FixtureCache) -> SceneData {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/gltf/cc0__oomurasaki_azalea_r._x_pulchrum.glb");
-    imported_gltf_scene(&path, "gltfscene", "Azalea")
+    imported_gltf_scene(&path, "gltfscene", "Azalea", cache)
 }
 
 /// The bundled physics demo through the production preset and scene-panel path.
@@ -176,20 +217,21 @@ fn physics_scene(preset: &'static str, name: &str) -> SceneData {
 /// `mushroomscene`: the compact production photoscan fixture used by the
 /// scene-modifier authoring flow. Keep this separate from `gltfscene`, whose
 /// azalea asset is also used by the broader scene setup flows.
-pub(super) fn mushroom_scene() -> SceneData {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../tests/fixtures/gltf/cc0___mushroom.glb");
-    imported_gltf_scene(&path, "mushroomscene", "Mushroom")
+fn mushroom_path() -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/gltf/cc0___mushroom.glb")
 }
 
-fn imported_gltf_scene(path: &std::path::Path, scene_name: &str, fallback_name: &str) -> SceneData {
+fn imported_gltf_scene(
+    path: &std::path::Path,
+    scene_name: &str,
+    fallback_name: &str,
+    cache: &mut FixtureCache,
+) -> SceneData {
     use manifold_core::project::{EmbeddedOrigin, EmbeddedPreset};
     use manifold_editing::command::Command;
     use manifold_editing::commands::layer::ImportModelLayerCommand;
 
-    let (def, report) = manifold_nodes_scene::node_graph::gltf_import::assemble_import_graph(path)
-        .unwrap_or_else(|e| panic!("ui-snap {scene_name}: assemble_import_graph({}) failed: {e}", path.display()));
-    eprintln!("ui-snap {scene_name}: import report: {report:?}");
+    let def = cache.import_graph(path, scene_name);
 
     let display_name = def
         .preset_metadata
@@ -651,7 +693,7 @@ fn audio_sends_scene() -> SceneData {
     // BUG-199 (dock scroll): 24 extra Send-A consumer layers, each a distinct
     // video layer carrying its own Bloom-audio-mod consumer row in the
     // "Consumers — Kick" list. Pushes the Audio Setup dock's content well
-    // past its viewport height (`audio-dock-scroll.json`'s acceptance flow),
+    // past its viewport height (the deleted audio-dock-scroll flow),
     // without touching the sends themselves (Send A/B stay exactly as
     // above) — `audio-setup-hygiene.json`'s gain-reset assertions only key
     // on the two sends' gain labels and are unaffected by extra consumers.
@@ -1373,6 +1415,21 @@ pub fn generator_editor_fixture(preset: &str) -> Option<(Project, GraphTarget, U
 
 #[cfg(test)]
 mod tests {
+    /// A batch parses the gltfscene GLB once, and each flow gets its own
+    /// project: an edit in flow 1 never reaches flow 2.
+    #[test]
+    fn batch_builds_gltfscene_once_and_flows_never_share_a_project() {
+        let mut cache = super::FixtureCache::default();
+        let mut first = super::build_cached("gltfscene", &mut cache).expect("gltfscene");
+        let untouched = first.project.timeline.layers[0].name.clone();
+        first.project.timeline.layers[0].name = "edited by flow 1".into();
+        first.project.timeline.layers.clear();
+        let second = super::build_cached("gltfscene", &mut cache).expect("gltfscene");
+        assert_eq!(cache.assembled(), 1, "the GLB was assembled more than once");
+        assert_eq!(second.project.timeline.layers.len(), 1);
+        assert_eq!(second.project.timeline.layers[0].name, untouched);
+    }
+
     /// `installs_preset_overlay` must name exactly the flow scenes whose
     /// build replaces the preset registry, or the batched flow runner either
     /// reruns flows solo (slow) or orders them wrongly.

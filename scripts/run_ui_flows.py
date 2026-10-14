@@ -38,6 +38,10 @@ transcript so far.
 
 Filter to a subset with flow-name substrings:
   scripts/run_ui_flows.py scene-setup audio
+Work flows (`work-*`, docs/UI_INVALIDATION_DESIGN.md D10) count UI work between
+`ResetWork` and `AssertWork` steps against scripts/ui-flows/work_ceilings.json;
+re-record those ceilings (the only writer) with:
+  scripts/run_ui_flows.py --record-work work-
 Landing flow gate (BUG-313 postmortem — the drag flow that caught the bug was
 red on main and nothing ran it): derive the filters from a git range via the
 manifest's `path_triggers` (path prefix -> filter list; a touched
@@ -59,11 +63,17 @@ import gpu_queue
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FLOW_DIR = os.path.join(ROOT, "scripts", "ui-flows")
 MANIFEST = os.path.join(FLOW_DIR, "manifest.json")
+# JSON files in the flow dir that are not flows.
+NOT_FLOWS = {"manifest.json", "work_ceilings.json"}
 # Same package, features and binary as the `cargo xtask` alias (.cargo/config.toml).
 BUILD_CMD = ["cargo", "build", "--quiet", "-p", "manifold-app",
              "--features", "ui-snapshot,perf-soak",
              "--message-format=json-render-diagnostics"]
 BIN_NAME = "manifold"
+# `--record-work`: each flow's `AssertWork` steps write the counts they observe
+# into scripts/ui-flows/work_ceilings.json instead of checking them — the only
+# writer of that file (docs/UI_INVALIDATION_DESIGN.md D11). Review the diff.
+RECORD_ARGS = []
 
 say = functools.partial(print, flush=True)
 
@@ -101,7 +111,7 @@ def flow_script(name):
 def run_flow(binary, name, scene):
     """One flow in its own process. Returns (exit code, last stderr line)."""
     r = subprocess.run(
-        [binary, "ui-snap", scene, "--script", flow_script(name)],
+        [binary, "ui-snap", scene, "--script", flow_script(name)] + RECORD_ARGS,
         cwd=ROOT, capture_output=True, text=True,
     )
     tail = (r.stderr.strip().splitlines() or ["(no stderr)"])[-1]
@@ -124,7 +134,7 @@ def run_batch(binary, jobs, report, fell_back=None):
     solo for all that remain, so this always terminates."""
     pending = list(jobs)
     while pending:
-        argv = [binary, "ui-snap", "batch"]
+        argv = [binary, "ui-snap", "batch"] + RECORD_ARGS
         for name, scene in pending:
             argv += [scene, flow_script(name)]
         proc = subprocess.Popen(argv, cwd=ROOT, stdout=subprocess.PIPE,
@@ -234,14 +244,31 @@ def filters_for_touched(range_spec, manifest):
         raise SystemExit(2)
     return filters_for_paths(paths, manifest)
 
+TEST_ONLY_SUFFIXES = ("tests.rs", "test.rs", "_tests.rs", "_test.rs")
+
+
+def is_test_only_path(path):
+    return "/tests/" in path or path.endswith(TEST_ONLY_SUFFIXES)
+
+
+def flow_selected(name, cli_filters, exact_filters):
+    """CLI filters match by substring (manual runs); path-trigger and touched-flow
+    filters match flow names exactly."""
+    if not cli_filters and not exact_filters:
+        return True
+    return name in exact_filters or any(s in name for s in cli_filters)
+
+
 def filters_for_paths(paths, manifest):
     triggers = manifest.get("path_triggers", {})
     filters, hits = set(), {}
     for path in paths:
-        if path.startswith("scripts/ui-flows/") and path.endswith(".json") and os.path.basename(path) != "manifest.json":
+        if path.startswith("scripts/ui-flows/") and path.endswith(".json") and os.path.basename(path) not in NOT_FLOWS:
             name = os.path.splitext(os.path.basename(path))[0]
             filters.add(name)
             hits.setdefault(path, []).append(name)
+        if is_test_only_path(path):
+            continue
         for prefix, flist in triggers.items():
             if path.startswith(prefix):
                 filters.update(flist)
@@ -257,6 +284,9 @@ def main():
     build_only = "--build-only" in args
     if build_only:
         args.remove("--build-only")
+    if "--record-work" in args:
+        args.remove("--record-work")
+        RECORD_ARGS.append("--record-work")
     if "--touched" in args:
         i = args.index("--touched")
         if i + 1 >= len(args):
@@ -266,6 +296,7 @@ def main():
         touched_range = args[i + 1]
         del args[i:i + 2]
     filters = args
+    exact_filters = set()
     with open(MANIFEST) as f:
         manifest = json.load(f)
     if touched_range is not None:
@@ -277,7 +308,7 @@ def main():
             return 0
         say(f"flow gate: {touched_range} → {len(hits)} flow-mapped file(s) "
             f"→ filters {gate_filters}")
-        filters = filters + gate_filters if filters else gate_filters
+        exact_filters = set(gate_filters)
     flows = manifest["flows"]
     xfail = manifest.get("expected_fail", {})
     unresolved = manifest.get("unresolved", {})
@@ -285,14 +316,14 @@ def main():
     on_disk = {
         os.path.splitext(n)[0]
         for n in os.listdir(FLOW_DIR)
-        if n.endswith(".json") and n != "manifest.json"
+        if n.endswith(".json") and n not in NOT_FLOWS
     }
     accounted = set(flows) | set(xfail) | set(unresolved)
     missing = sorted(on_disk - accounted)   # flow files nobody maps
     stale = sorted(accounted - on_disk)     # manifest entries with no file
 
     def keep(n):
-        return not filters or any(s in n for s in filters)
+        return flow_selected(n, filters, exact_filters)
 
     required = [n for n in sorted(flows) if keep(n)]
     known_red = [n for n in sorted(xfail) if keep(n)]
@@ -302,7 +333,7 @@ def main():
         binary = build_binary()
         if binary is None:
             if touched_range is not None and not build_only:
-                write_gate_marker(touched_range, filters, False)
+                write_gate_marker(touched_range, filters + sorted(exact_filters), False)
             return 2
         if build_only:
             say(f"flow gate: built; {len(required) + len(known_red)} flow(s) selected, none run (--build-only)")
@@ -356,7 +387,7 @@ def main():
     if build_only:
         return 0 if not missing and not stale else 1
     if touched_range is not None:
-        write_gate_marker(touched_range, filters, ok)
+        write_gate_marker(touched_range, filters + sorted(exact_filters), ok)
     return 0 if ok else 1
 
 

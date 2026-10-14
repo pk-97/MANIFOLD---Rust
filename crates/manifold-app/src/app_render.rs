@@ -217,6 +217,7 @@ impl Application {
 
 
     pub(crate) fn tick_and_render(&mut self) {
+        self.work_trace.frame("ui");
         let dt = self.frame_timer.consume_tick();
         let realtime = self.frame_timer.realtime_since_start();
         self.time_since_start = realtime as f32;
@@ -284,6 +285,7 @@ impl Application {
                             .as_ref()
                             .is_none_or(|prev| !std::sync::Arc::ptr_eq(prev, &snapshot));
                         if is_new_arc {
+                            manifold_core::work_count::record_work(manifold_core::work_count::WorkKind::ProjectClone);
                             self.local_project = (*snapshot).clone();
                             self.last_snapshot_arc = Some(snapshot);
                         } else {
@@ -1000,7 +1002,7 @@ impl Application {
                             );
                         }
                         UIEvent::PointerUp { .. } => {
-                            self.overlay.on_pointer_up(&mut host);
+                            self.overlay.on_pointer_up(&mut host, &mut self.selection);
                         }
                         UIEvent::Click { pos, modifiers, .. } => {
                             self.overlay.on_pointer_click(

@@ -439,6 +439,8 @@ pub struct Application {
     /// Per-frame UI profiler (main-window breakdown). No-op unless
     /// `MANIFOLD_UI_FRAME_PROFILE=1`. See `ui_frame_profile`.
     pub(crate) ui_profile: crate::ui_frame_profile::UiFrameProfile,
+    /// Per-frame work trace for the UI thread. No-op unless `MANIFOLD_WORK_TRACE=1`.
+    pub(crate) work_trace: manifold_core::work_count::WorkTrace,
     /// Cached transport display strings (avoids per-frame format! allocations).
     pub(crate) transport_cache: crate::ui_bridge::TransportDisplayCache,
 
@@ -701,6 +703,7 @@ impl Application {
             // Content thread has its own timer at project FPS — fully decoupled.
             frame_timer: FrameTimer::new(120.0),
             ui_profile: crate::ui_frame_profile::UiFrameProfile::new(),
+            work_trace: manifold_core::work_count::WorkTrace::new(),
             frame_count: 0,
             transport_cache: crate::ui_bridge::TransportDisplayCache::new(),
             cursor_pos: Vec2::ZERO,

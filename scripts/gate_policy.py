@@ -304,6 +304,14 @@ EXPLICIT_ROWS = [
       "crates/manifold-nodes-scene/src/node_graph/primitives/shaders/render_scene.wgsl",
       PROOFS_DIR + "rt_"),
      (["rt_"], [])),
+    # BUG-k1n2w (RT trace hangs GPU on alpha-masked foliage): the RT trace and
+    # mesh-to-RT paths run the candidate-walk bound and trace-time ceiling proofs.
+    (("crates/manifold-gpu/src/metal/raytrace",
+      "crates/manifold-gpu/src/metal/shadow_rays.msl",
+      "crates/manifold-gpu/src/metal/subsurface.msl",
+      "crates/manifold-gpu/src/trace_planner.rs",
+      "crates/manifold-nodes-scene/src/node_graph/primitives/render_scene"),
+     (["rt_alpha_walk_bound::", "rt_t2a_alpha_mask::"], [])),
     ((ENGINE_SRC + "freeze/",), (["freeze::"], [])),
     # Live Matter (GPU_MPM_SOLVER_DESIGN.md) and the substep regions it runs in.
     ((MPM_SRC + "matter.rs",
@@ -595,6 +603,11 @@ PREFIX_ROWS += [
 ]
 
 PREFIX_ROWS += [('crates/manifold-compositor/src/', ".wgsl", "manifold-nodes", ["wgsl_validation"], [])]
+
+# A command's edit drives content reactions; the count gate's content half
+# measures them against committed ceilings (docs/UI_INVALIDATION_DESIGN.md D10).
+PREFIX_ROWS += [("crates/manifold-editing/src/commands/", ".rs", "manifold-app",
+                 ["content_reaction_budget"], [])]
 
 # P2 extractions retain catalog ownership when their production source changes.
 # (source prefix, catalog module, has default-config CPU tests).

@@ -205,6 +205,20 @@ resource/synchronization cause. Blocking production warmup uses
 `try_commit_and_wait_completed` and propagates GPU failure instead of treating
 a logged error as successful work.
 
+### RT trace bounds
+
+No scene input may run one RT command buffer toward the GPU watchdog; the fix
+for BUG-k1n2w (RT trace hangs GPU on alpha-masked foliage). Every ray-query
+candidate walk tests at most `RT_WALK_MAX_CANDIDATES` (64) candidates; past it
+any-hit and shadow rays read blocked and closest-hit rays keep the nearest hit
+committed so far. Each trace tile commits as its own command buffer, and the
+tracer sizes tiles from those buffers' measured GPU time: 8 ms per buffer,
+0.1 s ceiling, the existing unit and pixel caps as the upper bound. Tiles
+restart at 128x128 after a new trace shape (quality, size or TLAS), a camera
+cut, seek or topology change, any GPU fault, or
+`raytrace::request_conservative_trace_tiles()`, which export calls before a
+retry. The `rt_alpha_walk_bound` proofs pin both bounds.
+
 ### Incident capture
 
 `MANIFOLD_GPU_DIAGNOSTICS=1` enables command-buffer correlation IDs,

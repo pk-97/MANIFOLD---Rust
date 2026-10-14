@@ -10,7 +10,10 @@ use manifold_core::project::Project;
 
 use crate::command::Command;
 
-use super::{dedup_handle, descend_level, with_existing_target_graph_mut, with_target_graph_mut};
+use super::{
+    dedup_handle, descend_level, refuses_second_scene, with_existing_target_graph_mut,
+    with_target_graph_mut,
+};
 
 // ---------------------------------------------------------------------------
 // Paste nodes (copy/paste/duplicate within a graph level)
@@ -36,6 +39,8 @@ pub struct PasteNodesCommand {
     /// any binding later made against it) survives undo/redo: `(src id, new id,
     /// new node_id)`.
     remap: Option<Vec<(u32, u32, NodeId)>>,
+    /// Set when execute refused the edit (one scene per layer).
+    rejection: Option<&'static str>,
 }
 
 impl PasteNodesCommand {
@@ -55,6 +60,7 @@ impl PasteNodesCommand {
             offset,
             catalog_default,
             remap: None,
+            rejection: None,
         }
     }
 }
@@ -64,6 +70,12 @@ impl Command for PasteNodesCommand {
     }
 
     fn execute(&mut self, project: &mut Project) {
+        self.rejection = None;
+        let added = manifold_core::effect_graph_def::render_scene_count(&self.src_nodes);
+        if refuses_second_scene(project, &self.target, &self.catalog_default, added) {
+            self.rejection = Some(manifold_core::effect_graph_def::ONE_SCENE_PER_LAYER);
+            return;
+        }
         let scope = self.scope_path.clone();
         let existing_remap = self.remap.clone();
         let src_nodes = &self.src_nodes;
@@ -142,6 +154,14 @@ impl Command for PasteNodesCommand {
 
     fn description(&self) -> &str {
         "Paste Nodes"
+    }
+
+    fn rejection_reason(&self) -> Option<&str> {
+        self.rejection
+    }
+
+    fn was_applied(&self) -> bool {
+        self.rejection.is_none()
     }
 }
 

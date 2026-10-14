@@ -422,7 +422,7 @@ anywhere · new modulation machinery (D6).
   build, sys decls with per-struct const asserts, safe wrapper, unit tests),
   `PortType::BodySet` plumbing, `node.body_set`, `node.physics_world` (single set,
   `ground_plane` on), bundled **Falling Bricks** preset through `node.render_copies`.
-  Update the CLAUDE.md crate table + docs index in the landing.
+  Update the DEVELOPMENT_REFERENCE.md crate table + docs index in the landing.
   Read-back: this doc; `blob_detect_ffi.rs` end-to-end; `material.rs` M1 port
   plumbing; DECOMPOSING_GENERATORS section 2.5 (audit statement in the phase notes).
   Gate (positive): wrapper unit tests — world create/step/destroy, poses land

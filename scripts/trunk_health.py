@@ -6,6 +6,7 @@ Runs in the main checkout against current main; a red gate files a P1 trunk-heal
 Scheduled by launchd (scripts/com.manifold.trunk-health.plist).
 """
 
+
 import argparse
 import contextlib
 import json
@@ -17,12 +18,57 @@ from datetime import datetime
 from pathlib import Path
 import shutil
 
-import gate_passes
-import gpu_queue
-from storage_budget import apply_cache_cleanup, plan_cache_cleanup
-
 MAIN_CHECKOUT = Path("/Users/peterkiemann/MANIFOLD - Rust")
 LOG_DIR = MAIN_CHECKOUT / ".claude/orchestration/trunk-health"
+TOOL_DIRS = [os.path.expanduser("~/.cargo/bin"), "/opt/homebrew/bin", "/usr/local/bin"]
+MIN_PYTHON = (3, 11)
+
+
+def python_version_of(path):
+    try:
+        out = subprocess.run([path, "-c", "import sys;print(sys.version_info[0],sys.version_info[1])"],
+                             capture_output=True, text=True, timeout=20).stdout.split()
+        return int(out[0]), int(out[1])
+    except (OSError, ValueError, IndexError, subprocess.SubprocessError):
+        return (0, 0)
+
+
+def abort_no_modern_python(message):
+    """launchd starts system Python 3.9; with no 3.11+ on disk the run cannot start, so say so
+    in the dated log, a P1 bead and a notification instead of dying in an import."""
+    line = f"[ABORT] trunk-health {datetime.now().strftime('%Y-%m-%d %H:%M')}: {message}\n"
+    with contextlib.suppress(OSError):
+        LOG_DIR.mkdir(parents=True, exist_ok=True)
+        with open(LOG_DIR / f"{datetime.now().strftime('%Y-%m-%d')}.log", "a") as f:
+            f.write(line)
+    sys.stderr.write(line)
+    bd = shutil.which("bd", path="/opt/homebrew/bin") or "/opt/homebrew/bin/bd"
+    with contextlib.suppress(OSError, subprocess.SubprocessError):
+        subprocess.run([bd, "create", "trunk-health nightly cannot start: no Python 3.11+", "-t", "bug", "-p", "1",
+                        "-l", "trunk-health,open", "-d", message], timeout=60)
+    with contextlib.suppress(OSError, subprocess.SubprocessError):
+        subprocess.run(["osascript", "-e", 'display notification "No Python 3.11+, nightly did not run" with title "MANIFOLD trunk-health"'], timeout=20)
+    raise SystemExit(2)
+
+
+def ensure_modern_python(version=None, tool_dirs=None, argv=None, execv=os.execv, abort=abort_no_modern_python):
+    version = tuple(version if version is not None else sys.version_info[:2])[:2]
+    if version >= MIN_PYTHON:
+        return
+    for d in (tool_dirs if tool_dirs is not None else TOOL_DIRS):
+        cand = os.path.join(d, "python3")
+        if os.path.isfile(cand) and os.access(cand, os.X_OK) and python_version_of(cand) >= MIN_PYTHON:
+            execv(cand, [cand] + list(argv if argv is not None else sys.argv))
+            return
+    abort(f"running Python {version[0]}.{version[1]}; need 3.11+ (tomllib) and none found in {tool_dirs or TOOL_DIRS}")
+
+
+ensure_modern_python()
+
+import gate_passes  # noqa: E402
+import gpu_queue  # noqa: E402
+from storage_budget import apply_cache_cleanup, plan_cache_cleanup  # noqa: E402
+
 BD = shutil.which("bd") or "/opt/homebrew/bin/bd"
 # Cargo never deletes superseded artifacts, so main's target only grows (226G
 # on 2026-09-30). Slots are capped at acquire; main is capped here, right
@@ -33,7 +79,6 @@ MAIN_TARGET_CAP_GB = 100
 # shells out to are invisible to a scheduled run: every gate died with
 # FileNotFoundError and filed a P1 bead blaming the gate, not the PATH. Every
 # child gets this env so nested tools resolve the same toolchain.
-TOOL_DIRS = [os.path.expanduser("~/.cargo/bin"), "/opt/homebrew/bin", "/usr/local/bin"]
 
 
 def gate_env():
@@ -250,6 +295,10 @@ def main():
         ["python3", "scripts/rt_noise_gate.py", "--motion",
          "--project", "tests/fixtures/rt/RtMotionHelmet.manifold",
          "--require-fixture"],
+        # UI work-count gate (docs/UI_INVALIDATION_DESIGN.md D10): every work
+        # flow counts real gestures' UI work against the committed ceilings in
+        # scripts/ui-flows/work_ceilings.json; a count above its ceiling is red.
+        ["python3", "scripts/run_ui_flows.py", "work-"],
         # Presentation-tear class (BUG-xaw4): legacy policy must keep tearing
         # (probe not blind) AND fenced policy must stay clean (the shipped
         # read-fence contract). Independent legs yield to pending landings.
