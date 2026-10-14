@@ -895,7 +895,7 @@ mod tests {
         tx.publish(ContentState {
             project_snapshot: Some(Arc::new(project)),
             data_version: 1,
-            sdr_preview: Some(false),
+            body: true,
             ..ContentState::default()
         });
         app.tick_perform_mode();

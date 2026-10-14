@@ -1300,6 +1300,7 @@ impl ContentThread {
                 .project()
                 .map_or(4, |p| p.settings.time_signature_numerator),
             sdr_preview: Some(self.content_pipeline.sdr_preview()),
+            body: true,
             rt_quality: self
                 .engine
                 .project()

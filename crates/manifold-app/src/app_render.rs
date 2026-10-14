@@ -321,14 +321,20 @@ impl Application {
             self.scrub.restore_dragged(&mut self.local_project);
         }
         // The columns accumulate until the render path draws (clears)
-        // them; `content_state` keeps only the newest state.
-        crate::content_state::append_spectrogram(
-            &mut self.pending_spectrogram_columns,
-            &mut self.pending_spectrogram_scalars,
-            &state.spectrogram_columns,
-            &state.spectrogram_col_scalars,
-            state.spectrogram_num_bins,
-        );
+        // them; `content_state` keeps only the newest state. Perform mode
+        // draws no scope, so it keeps none.
+        if self.perform.active {
+            self.pending_spectrogram_columns.clear();
+            self.pending_spectrogram_scalars.clear();
+        } else {
+            crate::content_state::append_spectrogram(
+                &mut self.pending_spectrogram_columns,
+                &mut self.pending_spectrogram_scalars,
+                &state.spectrogram_columns,
+                &state.spectrogram_col_scalars,
+                state.spectrogram_num_bins,
+            );
+        }
         self.content_state = ContentState {
             project_snapshot: None,      // consumed above
             modulation_snapshot: None,   // consumed above

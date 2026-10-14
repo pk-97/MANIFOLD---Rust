@@ -160,6 +160,10 @@ pub struct ContentState {
     /// Runtime-only SDR presentation preview. Partial event/export snapshots
     /// leave this absent so they cannot reset the displayed viewing preference.
     pub sdr_preview: Option<bool>,
+    /// The state carries engine state the UI takes as its own: the per-tick
+    /// publish and warmup progress. Export notices leave it false and carry
+    /// only their own fields.
+    pub body: bool,
 
     // ── Transport controller state ────────────────────────────────
     pub link_enabled: bool,
@@ -570,6 +574,7 @@ impl Default for ContentState {
             clock_authority: ClockAuthority::Internal,
             time_signature_numerator: 4,
             sdr_preview: None,
+            body: false,
             link_enabled: false,
             link_peers: 0,
             midi_clock_enabled: false,
@@ -683,9 +688,12 @@ impl StateTx {
     pub(crate) fn publish(&self, mut state: ContentState) {
         // Only an empty slot accepts a send, and whatever is taken back is
         // folded, so concurrent publishers and the UI's read lose nothing.
-        // A race can fold a newer state in as the older one; only the content
-        // thread publishes engine state and the encoder publishes bare
-        // notices, which fold the same in either order.
+        // A race can fold a newer state in as the older one (the encoder takes
+        // a tick, the content thread fills the slot, the encoder takes that
+        // back as "older"). The fold keeps the project snapshot with the
+        // higher data_version and the capture with the higher values_seq, so
+        // the race can leave transport values one frame stale but never loses
+        // an edit or a value change.
         loop {
             if let Ok(older) = self.slot.try_recv() {
                 state.absorb_replaced(older);
@@ -706,18 +714,21 @@ impl ContentState {
         self.is_exporting || !self.export_finished.is_empty() || self.export_run_finished
     }
 
-    /// An export notice built from `Default` with no engine state behind it.
-    /// Only the per-tick publish sets `sdr_preview` (see its doc), so a notice
-    /// that later folded into a full state is not bare.
+    /// An export notice with no engine state behind it: the UI shows the
+    /// notice and keeps its own state. Never true while a snapshot rides it.
     pub(crate) fn is_bare_notice(&self) -> bool {
-        self.is_export_notice() && self.sdr_preview.is_none()
+        self.is_export_notice()
+            && !self.body
+            && self.project_snapshot.is_none()
+            && self.modulation_snapshot.is_none()
     }
 
     /// Fold `older`, a state the UI never read, into this newer one so the UI
     /// sees what reading both in order would have shown it: the newest values;
-    /// the older project snapshot, with the stamps and version that describe
-    /// it, and the older modulation capture and undo toast when this state has
-    /// none of its own; every spectrogram column and export file result.
+    /// the project snapshot with the higher data_version, with the stamps
+    /// that describe it; the capture with the higher values_seq; the older
+    /// undo toast when this state has none; every spectrogram column and
+    /// export file result.
     pub(crate) fn absorb_replaced(&mut self, mut older: ContentState) {
         if self.is_bare_notice() && !older.is_bare_notice() {
             // A bare notice carries no engine state: the older state stays the
@@ -730,13 +741,19 @@ impl ContentState {
             self.export_status = notice.export_status;
             return;
         }
-        if self.project_snapshot.is_none() && older.project_snapshot.is_some() {
+        self.body |= older.body;
+        if older.project_snapshot.is_some()
+            && (self.project_snapshot.is_none() || older.data_version > self.data_version)
+        {
             self.project_snapshot = older.project_snapshot.take();
             self.stamps = older.stamps;
             self.data_version = older.data_version;
         }
-        if self.modulation_snapshot.is_none() {
+        if older.modulation_snapshot.is_some()
+            && (self.modulation_snapshot.is_none() || older.values_seq > self.values_seq)
+        {
             self.modulation_snapshot = older.modulation_snapshot.take();
+            self.values_seq = older.values_seq;
         }
         if self.undo_redo_event.is_none() {
             self.undo_redo_event = older.undo_redo_event.take();
@@ -1148,7 +1165,7 @@ mod handoff_tests {
     fn tick(beat: f64) -> ContentState {
         ContentState {
             current_beat: Beats(beat),
-            sdr_preview: Some(false),
+            body: true,
             ..ContentState::default()
         }
     }
@@ -1201,6 +1218,52 @@ mod handoff_tests {
         assert_eq!(state.data_version, 3);
         assert_eq!(state.undo_redo_event.map(|e| e.description).as_deref(), Some("Move Clip"));
         assert_eq!(state.spectrogram_columns, [1.0, 2.0, 3.0, 4.0]);
+    }
+
+    /// A state carrying a snapshot is never a bare notice: a warmup state
+    /// folded over a tick's snapshot and an export notice still hands the
+    /// UI the snapshot.
+    #[test]
+    fn warmup_over_a_notice_keeps_the_snapshot() {
+        let (tx, rx) = state_channel();
+        let snapshot = Arc::new(Project::default());
+        tx.publish(ContentState { project_snapshot: Some(snapshot.clone()), data_version: 4, ..tick(1.0) });
+        tx.publish(finished("Exported"));
+        tx.publish(ContentState { body: true, warmup: None, ..ContentState::default() });
+        let state = rx.try_recv().expect("one state waits");
+        assert!(!state.is_bare_notice());
+        assert!(Arc::ptr_eq(state.project_snapshot.as_ref().expect("snapshot kept"), &snapshot));
+        assert_eq!(state.export_finished.len(), 1);
+
+        let notice_with_snapshot = ContentState {
+            project_snapshot: Some(snapshot),
+            export_run_finished: true,
+            ..ContentState::default()
+        };
+        assert!(!notice_with_snapshot.is_bare_notice());
+    }
+
+    /// A racing publisher can fold the newer state in as the older one; the
+    /// snapshot with the higher data_version stays, with its stamps.
+    #[test]
+    fn higher_version_snapshot_wins_a_race() {
+        let mut newer_stamps = PartStamps::default();
+        newer_stamps.bump(ChangeSet::of(&[Part::Clips]));
+        let newer = Arc::new(Project::default());
+        let mut state = ContentState {
+            project_snapshot: Some(Arc::new(Project::default())),
+            data_version: 1,
+            ..tick(1.0)
+        };
+        state.absorb_replaced(ContentState {
+            project_snapshot: Some(newer.clone()),
+            data_version: 2,
+            stamps: newer_stamps,
+            ..tick(2.0)
+        });
+        assert!(Arc::ptr_eq(state.project_snapshot.as_ref().expect("snapshot kept"), &newer));
+        assert_eq!(state.data_version, 2);
+        assert_eq!(state.stamps, newer_stamps);
     }
 
     /// A newer snapshot replaces an older one with its own stamps.

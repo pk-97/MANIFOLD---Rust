@@ -368,6 +368,7 @@ impl ContentThread {
             let mut layer_completed = true;
             let label = format!("Loading {}...", layer_name.as_str());
             state_tx.publish(ContentState {
+                body: true,
                 warmup: Some(manifold_core::WarmupProgress {
                     done: done as u32,
                     total,
@@ -528,6 +529,7 @@ impl ContentThread {
         // pollute the first live frame's sample_and_hold / clip_trigger_cycle
         // state (WARMUP_DESIGN.md 3.2 step 5).
         state_tx.publish(ContentState {
+            body: true,
             warmup: None,
             ..ContentState::default()
         });
