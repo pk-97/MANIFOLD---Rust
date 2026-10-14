@@ -88,6 +88,40 @@ pub(super) fn scene_card_rows(rows: &mut Vec<ParamRow>, inst: &PresetInstance, d
     true
 }
 
+/// Lighting starts folded past this many light rows (D11 (lights)).
+const LIGHT_ROWS_BEFORE_FOLD: usize = 8;
+
+/// The card's folded section titles, from curated `rows`: the user's saved
+/// fold choices (D7 (user choices)) over the default, which folds Lighting
+/// past eight light rows. `None` when `def` is not a live scene graph.
+pub(super) fn folded_sections(inst: &PresetInstance, def: &EffectGraphDef, rows: &[ParamRow]) -> Option<Vec<String>> {
+    let vm = SceneVm::from_def(def)?;
+    let items = scene_items(def, &vm);
+    let meta = def.preset_metadata.as_ref();
+    let lighting = CardBand::Lighting.title();
+    let light_rows = rows
+        .iter()
+        .filter(|row| row.spec.section.as_deref() == Some(lighting))
+        .filter(|row| {
+            meta.and_then(|meta| owner_of(&items, meta, row.id.as_ref()))
+                .is_some_and(|index| items[index].kind == SceneItemKind::Light)
+        })
+        .count();
+    let mut titles: Vec<&str> = rows.iter().filter_map(|row| row.spec.section.as_deref()).collect();
+    titles.dedup();
+    let saved = |list: &[String], title: &str| list.iter().any(|saved| saved == title);
+    Some(
+        titles
+            .into_iter()
+            .filter(|title| {
+                saved(&inst.folded_sections, title)
+                    || (!saved(&inst.unfolded_sections, title) && *title == lighting && light_rows > LIGHT_ROWS_BEFORE_FOLD)
+            })
+            .map(str::to_string)
+            .collect(),
+    )
+}
+
 /// (band, section rank, card order, item rank, manifest order). A per-item
 /// band ranks its sections by item; a shared band orders by card order
 /// first, so Lighting reads Exposure, Environment, then each light.
@@ -526,6 +560,106 @@ mod tests {
                 assert!(rows.iter().any(|row| row.id == id.as_str()), "{id} with {kind} dropped from the card");
             }
         }
+    }
+
+    fn folds(project: &Project) -> Vec<String> {
+        let inst = project.timeline.layers[0].gen_params().unwrap();
+        let def = inst.graph.clone().unwrap_or_else(|| catalog_def(inst.effect_type().as_str()));
+        folded_sections(inst, &def, &surface(project, SurfaceVisibility::CuratedCard)).expect("a scene card")
+    }
+
+    /// P7 round trip: a Setup row shown on the card, Orbit removed from it
+    /// and Lighting folded all hold across save and reload, and the driver on
+    /// the pinned row still drives it.
+    #[test]
+    fn pins_and_folds_survive_save_and_reload() {
+        use manifold_editing::command::Command;
+        let mut project = project("PhysicsSolids");
+        let target = manifold_core::GraphTarget::Generator(project.timeline.layers[0].layer_id.clone());
+        let card_ids = |project: &Project| -> Vec<String> {
+            surface(project, SurfaceVisibility::CuratedCard).iter().map(|row| row.id.to_string()).collect()
+        };
+        let before = card_ids(&project);
+        let pinned = surface(&project, SurfaceVisibility::All)
+            .into_iter()
+            .find(|row| row.value.exposed && !row.spec.is_toggle && !before.contains(&row.id.to_string()))
+            .expect("a Setup row off the card")
+            .id
+            .to_string();
+        let orbit = surface(&project, SurfaceVisibility::CuratedCard)
+            .into_iter()
+            .find(|row| row.spec.name == "Orbit")
+            .expect("Orbit on the card")
+            .id
+            .to_string();
+        manifold_editing::commands::graph::SetCardPinCommand::new(target.clone(), pinned.clone(), Some(CardPin::Shown))
+            .execute(&mut project);
+        manifold_editing::commands::graph::SetCardPinCommand::new(target, orbit.clone(), Some(CardPin::Removed))
+            .execute(&mut project);
+        let fx = project.timeline.layers[0].gen_params_mut().unwrap();
+        fx.folded_sections = vec!["Lighting".into()];
+        fx.drivers.get_or_insert_with(Vec::new).push(manifold_core::effects::ParameterDriver::new(
+            pinned.clone(),
+            manifold_core::types::BeatDivision::Quarter,
+            manifold_core::types::DriverWaveform::Sine,
+        ));
+
+        let json = serde_json::to_string(&project).expect("save");
+        let reloaded = manifold_io::loader::load_project_from_json(&json).expect("reload");
+        for project in [&project, &reloaded] {
+            let rows = surface(project, SurfaceVisibility::CuratedCard);
+            let pinned_row = rows.iter().find(|row| row.id == pinned.as_str()).expect("the pinned row is on the card");
+            assert!(pinned_row.modulation.driver_active, "the driver still drives the pinned row");
+            assert!(!rows.iter().any(|row| row.id == orbit.as_str()), "Orbit stays off the card");
+            assert_eq!(folds(project), ["Lighting"]);
+        }
+    }
+
+    /// D11: Lighting starts folded past eight light rows; the user's unfold
+    /// then holds.
+    #[test]
+    fn lighting_folds_past_eight_lights_until_unfolded() {
+        use manifold_editing::command::Command;
+        let mut project = project("PhysicsSolids");
+        let target = manifold_core::GraphTarget::Generator(project.timeline.layers[0].layer_id.clone());
+        let lights = |project: &Project| {
+            names_in(&surface(project, SurfaceVisibility::CuratedCard), "Lighting").len() - 2
+        };
+        while lights(&project) <= LIGHT_ROWS_BEFORE_FOLD {
+            assert!(!folds(&project).contains(&"Lighting".to_string()), "{} lights fold Lighting", lights(&project));
+            let def = project.timeline.layers[0]
+                .gen_params()
+                .unwrap()
+                .graph
+                .clone()
+                .unwrap_or_else(|| catalog_def("PhysicsSolids"));
+            let vm = SceneVm::from_def(&def).expect("scene");
+            let light_type = vm
+                .lights
+                .iter()
+                .find_map(|light| match light {
+                    manifold_nodes_scene::node_graph::scene_vm::SceneLightVm::Known(row) => {
+                        def.nodes.iter().find(|node| node.node_id == row.node).map(|node| node.type_id.clone())
+                    }
+                    _ => None,
+                })
+                .expect("a known light");
+            manifold_editing::commands::graph::AddSceneLightCommand::new(
+                target.clone(),
+                Vec::new(),
+                vm.scene_root_node_id,
+                vm.lights.len() as u32,
+                (0.0, 0.0),
+                manifold_nodes_scene::node_graph::scene_exposure::metadata_for_node_type(&light_type),
+                def,
+            )
+            .execute(&mut project);
+            project.reconcile_param_manifests();
+        }
+        assert_eq!(lights(&project), LIGHT_ROWS_BEFORE_FOLD + 1);
+        assert_eq!(folds(&project), ["Lighting"], "nine lights fold Lighting by default");
+        project.timeline.layers[0].gen_params_mut().unwrap().unfolded_sections = vec!["Lighting".into()];
+        assert!(folds(&project).is_empty(), "the user's unfold beats the default");
     }
 
     /// INV-S4: the card and the Scene tab give every owned row the same

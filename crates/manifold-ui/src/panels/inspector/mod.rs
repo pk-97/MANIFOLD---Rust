@@ -303,6 +303,9 @@ pub struct InspectorCompositePanel {
     /// (PRESET_BROWSER_AUDITION D2); the app dispatch layer constructs the
     /// editing crate's EffectTarget from it at pick time.
     inspecting_layer_id: Option<LayerId>,
+    /// A row just put on the scene card from the Scene tab; it flashes the
+    /// next time the card is shown (SCENE_SURFACES_DESIGN.md D10).
+    pending_card_flash: Option<(LayerId, manifold_foundation::ParamId)>,
 
     // Scroll state — two independent columns via ScrollContainer
     master_scroll: ScrollContainer,
@@ -482,6 +485,7 @@ impl InspectorCompositePanel {
             // selected layer's id on every inspector rebuild (video layers
             // included — `config` is what goes None, not the id).
             inspecting_layer_id: None,
+            pending_card_flash: None,
             master_scroll: ScrollContainer::new(),
             layer_scroll: ScrollContainer::new(),
             viewport_rect: Rect::ZERO,
@@ -1278,7 +1282,15 @@ impl Panel for InspectorCompositePanel {
             // every frame, which this loop already does.
             card.tick_value_flash(tree, dt_ms);
         }
+        let card_shown = self.layer_visible();
         if let Some(gp) = self.gen_params.as_mut() {
+            if card_shown
+                && let Some((layer, param)) = self.pending_card_flash.as_ref()
+                && gp.owning_layer_id() == Some(layer)
+                && gp.flash_row(param.as_ref())
+            {
+                self.pending_card_flash = None;
+            }
             any |= gp.tick_drawers(dt_ms);
             gp.tick_value_flash(tree, dt_ms);
         }

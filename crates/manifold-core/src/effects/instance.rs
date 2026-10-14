@@ -153,6 +153,10 @@ pub struct PresetInstance {
     /// Card section titles the user folded (SCENE_SURFACES_DESIGN.md D7 (one
     /// saved choice set)). View state; skipped on the wire when empty.
     pub folded_sections: Vec<String>,
+    /// Card section titles the user unfolded. Only a section that folds by
+    /// default (D11 (lights): Lighting past eight lights) needs this; a title
+    /// in neither list takes its default.
+    pub unfolded_sections: Vec<String>,
 }
 
 
@@ -195,6 +199,9 @@ impl PresetInstance {
             field_count += 1;
         }
         if !self.folded_sections.is_empty() {
+            field_count += 1;
+        }
+        if !self.unfolded_sections.is_empty() {
             field_count += 1;
         }
 
@@ -243,6 +250,9 @@ impl PresetInstance {
         }
         if !self.folded_sections.is_empty() {
             s.serialize_field("foldedSections", &self.folded_sections)?;
+        }
+        if !self.unfolded_sections.is_empty() {
+            s.serialize_field("unfoldedSections", &self.unfolded_sections)?;
         }
         s.end()
     }
@@ -332,6 +342,7 @@ impl PresetInstance {
             relight: false,
             relight_params: RelightParams::default(),
             folded_sections: Vec::new(),
+            unfolded_sections: Vec::new(),
         }
     }
 
@@ -365,6 +376,7 @@ impl PresetInstance {
             relight: false,
             relight_params: RelightParams::default(),
             folded_sections: Vec::new(),
+            unfolded_sections: Vec::new(),
         };
         s.init_defaults();
         s

@@ -1032,6 +1032,8 @@ pub(crate) const ROW_ROLE_DRAWER_CLIP: u64 = 13 << 4;
 
 pub(crate) const ROW_ROLE_TOGGLE_LABEL: u64 = 14 << 4;
 
+/// A scene card section header's clickable title.
+pub(crate) const ROW_ROLE_SECTION_TITLE: u64 = 15 << 4;
 
 /// A row's identity-derived key base (D4): every interactive node the row
 /// builds flat-parented (siblings of every other row's controls, under the

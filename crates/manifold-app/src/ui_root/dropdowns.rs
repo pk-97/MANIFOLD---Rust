@@ -1676,7 +1676,30 @@ impl UIRoot {
                 true
             }
             PanelAction::Params(ParamsAction::ParamLabelRightClick(gpt, param_id)) => {
-                let mut items = Vec::with_capacity(manifold_core::MACRO_COUNT + 3);
+                let mut items = Vec::with_capacity(manifold_core::MACRO_COUNT + 6);
+                // The inspector shows one tab at a time, so the tab says which
+                // surface the row was right-clicked on.
+                let pin_surface = if self.inspector.active_tab() == manifold_ui::InspectorTab::Scene {
+                    match gpt {
+                        GraphParamTarget::GeneratorOf(layer)
+                            if self.scene_setup_panel.scene_layer_with(param_id) == Some(layer) =>
+                        {
+                            let on_card = self.inspector.scene_card_row(layer, param_id.as_ref()).is_some();
+                            Some(super::card_pin::PinSurface::SceneTab { on_card })
+                        }
+                        _ => None,
+                    }
+                } else if matches!(gpt, GraphParamTarget::Generator) {
+                    self.inspector
+                        .scene_card_layer()
+                        .and_then(|layer| self.inspector.scene_card_row(layer, param_id.as_ref()))
+                        .map(super::card_pin::PinSurface::Card)
+                } else {
+                    None
+                };
+                if let Some(surface) = pin_surface {
+                    items.extend(super::card_pin::scene_items(gpt, param_id, surface));
+                }
                 if self.inspector.last_effect_tab().is_layer_scope()
                     || matches!(gpt, GraphParamTarget::GeneratorOf(_))
                 {
@@ -1721,13 +1744,8 @@ impl UIRoot {
                         *fx_idx,
                         param_id.as_ref(),
                     ),
-                    // `is_gen_ableton_mapped` reads the perform inspector's
-                    // OWN generator card state (layer-agnostic — no `LayerId`
-                    // param) — `GeneratorOf` never actually reaches this arm
-                    // in practice (only card-shaped actions like
-                    // `ParamLabelRightClick` land here, and the scene panel's
-                    // `GeneratorOf` rows never emit them), but the same query
-                    // applies if it ever does.
+                    // `is_gen_ableton_mapped` reads the inspector's own
+                    // generator card, which shows the Scene tab's layer too.
                     GraphParamTarget::Generator | GraphParamTarget::GeneratorOf(_) => {
                         self.inspector.is_gen_ableton_mapped(param_id.as_ref())
                     }

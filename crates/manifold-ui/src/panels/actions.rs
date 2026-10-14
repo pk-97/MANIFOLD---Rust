@@ -341,29 +341,6 @@ pub enum ProjectAction {
         source_node_id: Option<u32>,
         target_map: crate::panels::scene_setup_panel::SkinTargetMap,
     },
-    /// UX-P3a (SCENE_PANEL_UX_DESIGN.md D8, sizing amendment): click on a
-    /// scene row's mod button — expose this inner param on the layer's
-    /// generator card via the SAME `ToggleNodeParamExposeCommand` the graph
-    /// editor's expose glyph uses, one undo unit, named `<object_label> ·
-    /// <param_label>`. One-way in P3a: the panel emits this on every click
-    /// of a live (non-driven) mod button regardless of its current lit
-    /// state — the app dispatch handler is the one that no-ops when the
-    /// param is ALREADY exposed, so a second click never un-exposes and
-    /// never mints a duplicate binding. Un-exposing a param that may
-    /// already carry drivers/envelopes is a footgun from this panel (D8's
-    /// own text) — that stays a graph-editor-only affordance.
-    SceneSetupExposeParam {
-        layer_id: LayerId,
-        scope_path: Vec<u32>,
-        node_doc_id: u32,
-        param_id: String,
-        object_label: String,
-        param_label: String,
-        min: f32,
-        max: f32,
-        default_value: f32,
-        is_angle: bool,
-    },
     MidiTriggerModeClicked(LayerId),
     /// "Clear points" context-menu item: empties the lane's points,
     /// keeping the (now-empty) lane — `ClearLaneCommand`.
@@ -536,6 +513,19 @@ pub enum ParamsAction {
     /// unfolded rows repaint; carries no payload and mutates no model (fold
     /// state is workspace-local, never serialized).
     SectionFoldToggled,
+    /// A scene card section header's fold triangle was clicked; the card
+    /// already flipped its own state. The app saves the choice in the
+    /// instance's fold lists (SCENE_SURFACES_DESIGN.md D7 (user choices)).
+    CardSectionFolded { target: GraphParamTarget, section: String, folded: bool },
+    /// Show on Card / Remove from Card; `None` hands the row back to its
+    /// role (D10 (cross-surface gestures)).
+    SetCardPin(GraphParamTarget, ParamId, Option<manifold_foundation::scene_surface::CardPin>),
+    /// Show in Scene tab: switch the inspector to the Scene tab and reveal
+    /// the item that owns this row.
+    RevealInSceneTab(GraphParamTarget, ParamId),
+    /// A scene card section title was clicked; carries the section's rows in
+    /// card order. The Scene tab picks which one to reveal (D10).
+    RevealSectionInSceneTab(GraphParamTarget, Vec<ParamId>),
     /// section 6b — the global "hide mod settings" (compact) toggle was clicked. The
     /// inspector already flipped its own UI-only flag; this routes to a
     /// structural rebuild so every card's drawers hide/show. No model mutation.
