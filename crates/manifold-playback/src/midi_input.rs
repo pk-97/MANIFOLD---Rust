@@ -95,6 +95,9 @@ pub struct MidiInputController {
     event_tx: Sender<MidiNoteEvent>,
     /// Receiver owned by the controller; drained each update().
     event_rx: Receiver<MidiNoteEvent>,
+    /// Events held for a layer the content thread is creating; they run
+    /// first on the next `update`, in the same tick.
+    replay: Vec<MidiNoteEvent>,
 
     // ── Public properties (port of C# public { get; private set; }) ─
     pub last_note_number: i32,
@@ -125,6 +128,7 @@ impl MidiInputController {
             native_event_buffer: Vec::with_capacity(MAX_NATIVE_CLOCK_EVENTS_PER_FRAME),
             event_tx,
             event_rx,
+            replay: Vec::with_capacity(8),
             last_note_number: -1,
             last_velocity: 0.0,
             native_clock_path_active: false,
@@ -366,6 +370,12 @@ impl MidiInputController {
                 }
                 MidiNoteEventType::Unknown => {}
             }
+            // The note needs a layer that does not exist yet: it and every
+            // later event wait for the layer command, then replay this tick.
+            if live_clip_manager.take_dropped_note() {
+                self.replay.extend_from_slice(&self.native_event_buffer[i..]);
+                break;
+            }
         }
 
         // Update telemetry counters.
@@ -558,8 +568,21 @@ impl MidiInputController {
 
     /// Drain pending events from the mpsc channel into native_event_buffer.
     /// Capped at MAX_NATIVE_CLOCK_EVENTS_PER_FRAME to match Unity.
+    /// Queue a note event as a device would, so a headless test drives the
+    /// real MIDI path.
+    #[cfg(any(test, feature = "testkit"))]
+    pub fn inject_note(&self, event: MidiNoteEvent) {
+        let _ = self.event_tx.send(event);
+    }
+
+    /// Notes are waiting for a layer the content thread just created.
+    pub fn has_replay(&self) -> bool {
+        !self.replay.is_empty()
+    }
+
     fn drain_midir_events_to_buffer(&mut self) {
         self.native_event_buffer.clear();
+        self.native_event_buffer.append(&mut self.replay);
         while self.native_event_buffer.len() < MAX_NATIVE_CLOCK_EVENTS_PER_FRAME {
             match self.event_rx.try_recv() {
                 Ok(evt) => self.native_event_buffer.push(evt),
@@ -845,7 +868,6 @@ mod tests {
     use manifold_core::clip::TimelineClip;
     use manifold_core::types::TempoPointSource;
     use manifold_core::{Beats, Seconds};
-    use manifold_editing::command::Command;
 
     fn event(event_type: MidiNoteEventType, tick: i32, sequence: u32) -> MidiNoteEvent {
         MidiNoteEvent {
@@ -923,7 +945,6 @@ mod tests {
         fn mark_compositor_dirty(&mut self) {}
         fn invalidate_lookahead_prewarm(&mut self) {}
         fn register_clip_lookup(&mut self, _clip_id: &str, _clip: &TimelineClip) {}
-        fn record_command(&mut self, _cmd: Box<dyn Command>) {}
         fn beat_to_timeline_time(&self, beat: Beats) -> Seconds {
             Seconds(beat.0 * 0.5)
         }
@@ -991,6 +1012,9 @@ mod tests {
             stopped: Vec::new(),
         };
         let mut controller = mapped_controller(2);
+        // The mapped layer exists; a missing one is covered by
+        // `missing_layer_note_replays_after_the_layer_command`.
+        project.timeline.ensure_layer_count(1);
 
         process_note_on(
             &mut controller,
@@ -1075,5 +1099,52 @@ mod tests {
             &mut host,
         );
         assert!(manager.live_slots().contains_key(&0));
+    }
+
+    /// A mapped note for a layer that does not exist yet creates the layer
+    /// through a command and still plays on the same tick: the content thread
+    /// executes the queued command, then replays the held note.
+    #[test]
+    fn missing_layer_note_replays_after_the_layer_command() {
+        let mut project = Project::default();
+        project.video_library.add_clip(manifold_core::video::VideoClip {
+            id: "clip".into(),
+            file_path: String::new(),
+            relative_file_path: None,
+            file_name: "fixture".into(),
+            duration: 4.0,
+            resolution_width: 1,
+            resolution_height: 1,
+            file_size: 0,
+            last_modified_ticks: 0,
+        });
+        let mut launcher = ClipLauncher::new();
+        let mut manager = LiveClipManager::new();
+        let mut host = TestHost { stopped: Vec::new() };
+        let mut controller = mapped_controller(-1);
+        controller.inject_note(MidiNoteEvent {
+            event_type: MidiNoteEventType::NoteOn,
+            note: 60,
+            velocity: 1.0,
+            channel: 0,
+            source_index: 0,
+            absolute_tick: -1,
+            sequence: 1,
+        });
+
+        // One content tick: the note asks for the layer, the content thread
+        // executes the command, then the note replays.
+        controller.update(ClockAuthority::Internal, &mut project, &mut launcher, &mut manager, &mut host, 1.0);
+        assert!(project.timeline.layers.is_empty(), "no write outside the gateway");
+        assert!(controller.has_replay());
+        let mut editing = manifold_editing::service::EditingService::new();
+        for cmd in manager.take_pending_commands() {
+            editing.execute(cmd, &mut project);
+        }
+        assert_eq!(project.timeline.layers.len(), 1);
+        controller.update(ClockAuthority::Internal, &mut project, &mut launcher, &mut manager, &mut host, 1.0);
+
+        assert!(!controller.has_replay());
+        assert!(manager.live_slots().contains_key(&0), "the note's clip starts on the same tick");
     }
 }

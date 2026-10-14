@@ -1,17 +1,13 @@
 #!/usr/bin/env python3
 """Measure Claude Code token spend from local transcripts.
 
-Source of truth for docs/TOKEN_ECONOMICS.md. Every number in that doc came from
-this script; re-run it rather than quoting the doc, which ages the moment the
-roster or the workflow changes.
-
-  python3 .claude/scripts/token_report.py             # 30-day totals by model
-  python3 .claude/scripts/token_report.py --days 2    # recent window
-  python3 .claude/scripts/token_report.py --daily     # per-day trend
-  python3 .claude/scripts/token_report.py --sessions  # concentration + context growth
-  python3 .claude/scripts/token_report.py --tools     # tool mix by seat type
-  python3 .claude/scripts/token_report.py --turns     # user turns vs model calls
-  python3 .claude/scripts/token_report.py --cost      # price the window at list rates
+  scripts/token_report.py             # 30-day totals by model
+  scripts/token_report.py --days 2    # recent window
+  scripts/token_report.py --daily     # per-day trend
+  scripts/token_report.py --sessions  # concentration + context growth
+  scripts/token_report.py --tools     # tool mix by seat type
+  scripts/token_report.py --turns     # user turns vs model calls
+  scripts/token_report.py --cost      # price the window at list rates
 
 Reads ~/.claude/projects/**/*.jsonl (the per-message `usage` block Claude Code
 writes locally). Deduped by message id, so resumed/copied sessions don't double.
@@ -31,12 +27,6 @@ RATES = {
     "claude-fable-5":            (5.00, 25.00, 0.50, 6.25),  # no published rate; Opus as floor
     "claude-sonnet-5":           (2.00, 10.00, 0.20, 2.50),
     "claude-haiku-4-5-20251001": (1.00,  5.00, 0.10, 1.25),
-    "k3":                        (0.60,  2.50, 0.80, 0.00),
-    "kimi-for-coding":           (0.60,  2.50, 0.80, 0.00),
-    "kimi-for-coding-highspeed": (0.60,  2.50, 0.80, 0.00),
-    # non-Claude tiers, for re-pricing the same volume
-    "deepseek-v4-flash":         (0.14,  0.28, 0.028, 0.00),
-    "glm-5.2":                   (1.40,  4.40, 0.26,  0.00),
 }
 
 

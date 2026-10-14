@@ -29,7 +29,6 @@ Verdict schema v1 (D5):
 """
 
 import argparse
-import importlib.util
 import json
 import os
 import re
@@ -57,15 +56,6 @@ VERDICTS_DIR = Path(
 # Pre-wave checks: the main checkout is the canonical repo root
 # (worktrees are isolated but goldens/wave-base checks need the main checkout).
 MAIN_CHECKOUT = Path("/Users/peterkiemann/MANIFOLD - Rust")
-
-# Slot labels from the launch guard (single source of truth) — the guard
-# derives them from the session env, so gate_runner sees the same map the
-# spawn-time hook will enforce.
-_GUARD_PATH = REPO / ".claude" / "hooks" / "agent-launch-guard.py"
-_guard_spec = importlib.util.spec_from_file_location("_launch_guard", str(_GUARD_PATH))
-_guard_mod = importlib.util.module_from_spec(_guard_spec)
-_guard_spec.loader.exec_module(_guard_mod)
-VALID_SLOTS = sorted({label for _b, label in _guard_mod.slot_map().values()})
 
 SECTION_LABEL = re.compile(r"^\s*-?\s*\*\*[A-Z][A-Za-z/-]+\**\s*:")
 GATE_HEADING = re.compile(r"^\s*-?\s*\*{0,2}Gate\*{0,2}\s*:")
@@ -987,7 +977,6 @@ def cmd_pre_wave(args):
 # ---------------------------------------------------------------------------
 
 ANCHOR_RE = re.compile(r"([\w./-]+\.[a-zA-Z]+):(\d+)")
-SLOT_SCAN_RE = re.compile(r"\b(flash|glm47|glm52|k3|pro)-")
 
 
 def _check_anchors(text, repo_root, brief_dir):
@@ -1065,31 +1054,6 @@ def _check_gates_parse(brief_path):
         return (0, f"{len(gates)} gates parse")
 
 
-def _check_slots(text):
-    """Check c: every named lane slot prefix is a valid slot label.
-
-    Scans for tokens matching slot-prefix pattern, validates each against
-    VALID_SLOTS (from agent-launch-guard.py).
-    Returns (exit_code, detail).
-    """
-    fails = []
-    for m in SLOT_SCAN_RE.finditer(text):
-        slot = m.group(1)
-        if slot not in VALID_SLOTS:
-            fails.append(
-                f"slot {slot!r} (from {m.group(0)!r}) is not in "
-                f"VALID_SLOTS={VALID_SLOTS}"
-            )
-
-    if fails:
-        for f in fails:
-            print(f"  [FAIL] slot: {f}")
-        return (1, "; ".join(fails))
-    else:
-        print("  [PASS] slots — all lane slot names are valid")
-        return (0, "all slots valid")
-
-
 def _check_bead(text):
     """Check d: brief must contain a task id matching BUG-\\w+."""
     m = re.search(r"BUG-\w+", text)
@@ -1145,7 +1109,6 @@ def cmd_pre_dispatch(args):
     checks = [
         ("anchors", *_check_anchors(text, repo_root, brief_dir)),
         ("gates_parse", *_check_gates_parse(brief_path)),
-        ("slots", *_check_slots(text)),
         ("bead", *_check_bead(text)),
         ("predecessors", *_check_predecessors(getattr(args, "requires", None))),
     ]

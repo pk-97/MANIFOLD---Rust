@@ -19,7 +19,7 @@ The hooks this audit and the phase briefs below cite as precedents (`agent-tier-
 | Blocking idle hook (feedback to lane) | `.claude/hooks/lane-report-enforcer.py` | exists — TeammateIdle can block; proves hooks steer lanes mid-flight |
 | Bash interception point | `.claude/hooks/preToolUseBash.py` (+ `test_preToolUseBash.py`) | exists — P4's merge clause is one rule here, not a new hook |
 | Slot truth source + drift flags | `scripts/seat_tool.py` (`show` prints per-slot drift) | retired 2026-10-01 — script deleted with the provider proxy; pre-wave no longer calls it |
-| Quota/liveliness reads | `~/.claude/statusline.sh` (kimi usage API), litellm `/health/liveliness` | exists — lift, don't reinvent |
+| Quota/liveliness reads | litellm `/health/liveliness` | retired — the litellm proxy and usage dashboards were removed |
 | SubagentStop / TaskCompleted hook support | claude binary 2.1.219 (`strings`: `SubagentStop`, `executeTaskCompletedHooks`) | exists — ⚠ VERIFY-AT-IMPL: payload semantics undocumented; probe in P5 |
 | Verdict store | — | **genuinely new** |
 | Gate executor | — | **genuinely new** |
@@ -209,4 +209,3 @@ Every transition into a green state is machine-checked; every transition out of 
 - **Hookified brief lint** (PreToolUse Agent deny) — revive when briefs are files by convention, not paste-into-prompt.
 - **Hook migration list** (retry-cap, one-commit-then-stop) — already queued in R2's pre-flight; build deliberately per docs/archive/SEMANTIC_WORKFLOW_PROGRAMS.md section 9 (Open questions / next steps).
 - **Plan-template library** — post-R2, per docs/archive/SEMANTIC_WORKFLOW_PROGRAMS.md section 7 (Where it lands: strict workflow programs, not general compute).
-- **Lane metrics to Prometheus** (gate pass rates next to spend) — revive if the Grafana stack proves useful for spend; verdicts jsonl is the source.

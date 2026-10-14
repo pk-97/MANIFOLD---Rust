@@ -2,7 +2,7 @@
 
 <!-- index: Reference geometry, vertex and triangle-face targets, progressive assembly, normal/tangent handling and matched-mesh morph contracts. -->
 
-**Status:** IN PROGRESS · 2026-09-15 · Codex lead. Shared precise band/cell cuts are implemented for the existing fragment modifiers (BUG-7ruj), with every current control remaining live. General segmentation and arbitrary morphing remain proposed.
+**Status:** IN PROGRESS · 2026-09-15. Shared precise band/cell cuts are implemented for the existing fragment modifiers (BUG-7ruj), with every current control remaining live. General segmentation and arbitrary morphing remain proposed.
 **Prerequisites:** Existing unified modifier attachment, preparation and modulation infrastructure in the worktree. Foundation validation debt remains in the foundation plan; this bounded slice does not complete the entire contract.
 **Execution contract:** [DESIGN_DOC_STANDARD](DESIGN_DOC_STANDARD.md) sections 5–6 and 8; conformance treatment, with fresh source/schema verification before each phase.
 

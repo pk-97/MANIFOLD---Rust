@@ -353,7 +353,7 @@ readback, cache.
 
 ## 8. Post-RT architecture review — 2026-09-16, Codex
 
-**Verdict: keep the feature, revise the architecture before coding.** This is feedback for the next K3 design pass, not permission to start before the RT work. Follow-up: `BUG-mztz`, blocked on `BUG-e3p6.4`. Static source audit at `ca80539d5`; no meshopt benchmark, GPU proof or visual qualification was run. The quoted 100–500 ms and the promised frame-time improvement are unmeasured estimates in this proposal.
+**Verdict: keep the feature, revise the architecture before coding.** This is feedback for the next design pass, not permission to start before the RT work. Follow-up: `BUG-mztz`, blocked on `BUG-e3p6.4`. Static source audit at `ca80539d5`; no meshopt benchmark, GPU proof or visual qualification was run. The quoted 100–500 ms and the promised frame-time improvement are unmeasured estimates in this proposal.
 
 ### 8.1 Audit corrections
 

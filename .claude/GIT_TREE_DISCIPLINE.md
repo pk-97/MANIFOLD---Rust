@@ -120,7 +120,10 @@ Obsolete when: main stops being a locally-landed shared trunk (PR/CI-gated merge
   before they can count as landing passes.
   A fully reused test set needs no build or GPU lock. Build results alone
   are not reusable after a slot cache is reclaimed. Nightly sweeps never reuse.
-  The gate requires a clean committed tree and refreshes the existing verdict
+  Lanes run `landing_gate.py --cheap` before their commit: it gates the
+  uncommitted working tree against the base, and the landing gate reuses its
+  passes for the same content. The full gate requires a clean committed tree
+  and refreshes the existing verdict
   and flow marker after reuse. `land_branch.py` checks the proposed merge tree
   before committing it. If main changed that tree, it merges main into the
   slot and gates again; only changed inputs need new checks.

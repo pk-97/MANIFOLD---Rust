@@ -15,14 +15,9 @@ a rewrite:
 - task part not descriptive -> deny (the hook will not invent words for you).
 
 Naming rule: name = "<slot>-<descriptive-task>", kebab-case, task part >= 2 plain words
-(opaque labels like T1/D-52 denied: no-opaque-task-labels rule). The slot label is
-derived AT SPAWN TIME from the backend the harness will actually use: the `model` param
-selects a tier slot; the session env (`ANTHROPIC_DEFAULT_<TIER>_MODEL`) says which
-backend that slot resolves to. Unset or claude-* -> Anthropic path, label = tier name;
-any other backend is labelled by its last dash segment.
-
-gate_runner.py imports slot_map() from this file — it is the single source of truth for
-slot labels.
+(opaque labels like T1/D-52 denied: no-opaque-task-labels rule). The slot label is the
+tier the `model` param selects; the session env (`ANTHROPIC_DEFAULT_<TIER>_MODEL`) names
+the Claude model that tier resolves to, shown in the live map.
 
 Fails open on any error: a guard hook must never be able to block a session.
 
@@ -51,15 +46,9 @@ TIER_PLACEHOLDER = "<opus|sonnet|haiku>"
 
 
 def backend_for_slot(model_param: str, env=os.environ) -> tuple[str, str]:
-    """(backend model, slot label) for an Agent-tool `model` param.
-
-    Env var unset or claude-* → Anthropic path: the tier name IS the label.
-    """
+    """(backend model, slot label) for an Agent-tool `model` param; the tier name IS the label."""
     backend = (env.get(SLOT_ENV.get(model_param, ""), "") or "").strip()
-    if not backend or backend.startswith("claude-"):
-        return backend or model_param, model_param
-    label = re.sub(r"[^a-z0-9]", "", backend.split("-")[-1].lower()) or backend
-    return backend, label
+    return backend or model_param, model_param
 
 
 def slot_map(env=os.environ) -> dict:

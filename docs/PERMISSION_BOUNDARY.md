@@ -1,4 +1,4 @@
-# Permission Boundary — auto mode, the classifier, and the allow list
+# Permission Boundary — auto mode, the classifier, and the bar for allow rules
 
 Security boundary. Every rule here gates what an agent can execute on Peter's
 machine without human review. Read whole before adding, widening, or removing a
@@ -40,8 +40,7 @@ demoted pane never recovers — restart it.
 
 With Claude models only, every slot is an Anthropic model, so the sonnet slot
 resolves to Sonnet 5.5 and a demotion lands on Opus (Fable or Opus 5.5 leads) or
-on the main model. The provider-proxy cases (non-Anthropic sonnet slot, classifier
-auth through a proxy key) are retired with the proxy; git history has them.
+on the main model.
 
 Oracle: `claude --debug -p '…' --permission-mode auto`, then grep
 `~/.claude/debug/latest` for `classifier_request_started` (prints the model).
@@ -120,7 +119,7 @@ Specifically un-allowlistable in wildcard form:
 
 - anything taking a path to a file whose contents get executed
 - anything taking a command string, or `--exec`-style passthrough
-- destructive subcommands (delete, release, reset, assign, drop)
+- destructive subcommands (delete, remove, reset, assign, drop)
 - SQL clients, network fetchers, package installers
 
 **Residual risk that cannot be designed away:** a path-based rule trusts what
@@ -129,194 +128,33 @@ script and then runs it gets unreviewed execution — the edit is visible, the
 execution is not. Keep allowlisted scripts small and boring, and treat edits to
 them as security-relevant in review.
 
-## 4b. Full-list audit under the section 4 bar (BUG-lu32 — higher-tier audit of the auto-mode permission boundary)
+The failure mode is a wildcard on a script that takes a path to something
+executable: `gate_runner.py per-lane --brief <path>` runs shell commands it
+pulls from the brief, so a `gate_runner.py *` rule allowlists arbitrary
+execution. Judge the script's arguments, never its name.
 
-Every rule then live (102) was read against the bar. Outcome:
+## 5. Risky rules that are allowed on purpose
 
-- **Fixed:** `Bash(sed -n *)` — sed's `w` script command writes files and was
-  invisible to both the rule and the collapsed-span classifier. Now caught on
-  the raw command by `sed_write_guard` in `preToolUseBash.py` (asks in every
-  mode, outranking allow rules). Three dead one-off rules (fixed-path unzip/cp/
-  mv from finished sessions) pruned.
-- **Accepted, hook-carried:** `git -C *`, `git checkout *`, and the wide git
-  set ride on `preToolUseBash.py`'s destructive-git classification (reset/
-  clean/rebase/force still prompt). These verdicts assume the hook stays
-  registered — the pre-wave `hooks registered`/`hooks fire` checks are the
-  alarm for that assumption.
-- **Accepted, inherent:** cargo build/test/run execute repo code (build
-  scripts, proc macros, tests) by design; the reviewer's unit is the repo
-  diff, not the command. Same class as the section 4 allowlisted-script
-  residual.
-- **Sync:** section 5 drift is machine-checked (`permissions_sync_check.py`);
-  classifier mechanics were re-read at binary 2.1.219 — unchanged since the
-  section 2 (which model runs it) verification, and that section now carries
-  the recheck-on-upgrade rule.
+The live rules are in `~/.claude/settings.json`, `.claude/settings.json` and
+`.claude/settings.local.json` (gitignored). Read them there (`jq
+.permissions.allow <file>`); this doc keeps no copy. These rules fail or
+strain the section 4 bar and are kept for a stated reason:
 
-## 5. Current allow list
-
-Three sources: user-global `~/.claude/settings.json`, committed
-`.claude/settings.json`, and `.claude/settings.local.json` (**gitignored** —
-this section is its only reviewable copy). The fenced block below is
-machine-checked: `.claude/hooks/permissions_sync_check.py` diffs it against
-the live files and exits 1 on drift. Run it after any rule change; the block
-must list every rule, one per line, exactly as written in the JSON.
-
-```permissions
-# --- user-global ~/.claude/settings.json ---
-Read(//**)
-Bash(grep *)
-Bash(rg *)
-Bash(head *)
-Bash(tail *)
-Bash(wc *)
-Bash(ls *)
-Bash(cat *)
-Bash(stat *)
-Bash(which *)
-Bash(echo *)
-Bash(sort *)
-Bash(jq *)
-Bash(fd *)
-Bash(ast-grep *)
-Bash(sg *)
-# --- committed .claude/settings.json ---
-Bash(git commit -m *)
-Bash(cargo metadata *)
-Bash(cargo xtask install *)
-Bash(cargo xtask bundle *)
-Bash(cargo xtask install)
-Bash(cargo xtask bundle)
-Bash(grep *)
-Bash(rg *)
-Bash(head *)
-Bash(tail *)
-Bash(wc *)
-Bash(ls *)
-Bash(cat *)
-Bash(stat *)
-Bash(which *)
-Bash(echo *)
-Bash(sort *)
-Bash(jq *)
-Bash(cargo build)
-Bash(cargo build *)
-Bash(cargo check)
-Bash(cargo check *)
-Bash(cargo clippy)
-Bash(cargo clippy *)
-Bash(cargo test)
-Bash(cargo test *)
-Bash(scripts/gpu_queue.py -- cargo test *)
-Bash(scripts/gpu_queue.py -- scripts/gpu_proofs_gate.py *)
-Bash(scripts/gpu_queue.py -- scripts/landing_gate.py *)
-Bash(cargo run -p manifold-nodes --bin check-presets)
-Bash(cargo run -p manifold-nodes --bin check-presets *)
-Bash(unzip -p *)
-Bash(unzip -l *)
-# --- gitignored .claude/settings.local.json ---
-Bash(cargo check *)
-Bash(cargo build *)
-Bash(cargo clippy *)
-Bash(cargo test *)
-Bash(cargo run *)
-Bash(cargo tree *)
-Bash(cargo search *)
-Bash(cargo update *)
-Bash(cargo fmt *)
-Bash(cargo nextest run *)
-Bash(git add *)
-Bash(git commit *)
-Bash(git push *)
-Bash(git checkout *)
-Bash(git revert *)
-Bash(git rm *)
-Bash(git log *)
-Bash(git diff *)
-Bash(git status *)
-Bash(git show *)
-Bash(git lfs *)
-Bash(git -C *)
-Bash(git check-ignore *)
-Bash(git fetch *)
-Bash(git rev-parse *)
-Bash(git merge-base *)
-Bash(gh pr view *)
-Bash(gh pr list *)
-Bash(gh pr status *)
-Bash(gh pr checks *)
-Bash(gh pr diff *)
-Bash(gh run view *)
-Bash(gh run list *)
-Bash(gh run watch *)
-Bash(bd *)
-Bash(sleep *)
-Bash(sed -n *)
-Bash(pkill -f rust-analyzer)
-Bash(pkill -f "zola.*serve")
-Bash(memory_pressure -Q)
-Bash(./scripts/build-analyzer-vst-plugin.sh)
-Bash(./plugins/scripts/build-analyzer-vst-plugin.sh)
-Bash(bash scripts/build-analyzer-vst-plugin.sh)
-Bash(bash "/Users/peterkiemann/MANIFOLD - Rust/plugins/scripts/build-analyzer-vst-plugin.sh")
-Bash(plugins/scripts/build-analyzer-vst-plugin.sh)
-Bash(zola --root "/Users/peterkiemann/latent-space-site" build)
-Bash(zola --root "/Users/peterkiemann/latent-space-site" serve --interface 127.0.0.1 --port 1111)
-Bash(scripts/agent-worktree.py list)
-Bash(scripts/agent-worktree.py acquire *)
-Bash(scripts/gen_docs_index.py)
-Bash(scripts/gate_runner.py show *)
-Bash(scripts/gate_runner.py report *)
-Bash(scripts/token_report.py *)
-Bash(scripts/run_ui_flows.py *)
-Bash(scripts/gen_glb_conformance_status.py)
-WebSearch
-WebFetch(domain:www.latentspacemusic.com)
-Read(//Users/peterkiemann/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/objc2-app-kit-0.2.2/src/**)
-Read(//Users/peterkiemann/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/objc2-app-kit-0.2.2/**)
-Read(//Users/peterkiemann/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/objc2-0.5.2/src/**)
-Read(//Users/peterkiemann/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/objc2-foundation-0.2.2/src/**)
-# Fails the section 4 bar on purpose: --worktree builds and runs that tree's code,
-# and the script pushes to main. Kept so landings never stop for approval; the
-# lead's review before landing is the check.
-Bash(scripts/land_branch.py *)
-```
-
-Removed in the section 6 audit (see section 3 for why): `Bash(python3 -c ' *)`,
-`Bash(python3 -)`, `Bash(awk *)` (both files), `Bash(find *)` (both files),
-`Bash(git worktree *)` — arbitrary execution or unreviewed destruction.
-
-Rationale for the script rules (unchanged from the original audit):
-
-| Rule | Why it is safe |
+| Rule | Why it stays |
 |---|---|
-| `scripts/agent-worktree.py list` | read-only |
-| `scripts/agent-worktree.py acquire *` | bounded by the slot ring cap |
-| `scripts/gen_docs_index.py` | no arguments |
-| `scripts/gate_runner.py show *` / `report *` | read-only (verdicts trail / subprocess-free report); `pre-wave` is NOT allowlisted |
-| `scripts/token_report.py *` | reads transcripts, flags only |
-| `scripts/run_ui_flows.py *` | bounded by `scripts/ui-flows/manifest.json` — which is agent-editable, so this is a section 4 residual-risk rule |
-| `scripts/gen_glb_conformance_status.py` | no arguments |
+| `scripts/land_branch.py *` | `--worktree` builds and runs that tree's code, and the script pushes to main. Kept so landings never stop for approval; the lead's review before landing is the check. |
+| `git -C *`, `git checkout *`, `git push *` and the wide git set | `preToolUseBash.py` classifies destructive git (reset, clean, rebase, force) and still prompts. The verdict holds only while that hook stays registered. |
+| `cargo run *`, `cargo test *`, `cargo build *` | They run repo code (build scripts, proc macros, tests) by design; the reviewer's unit is the repo diff, not the command. |
+| `sed -n *` | sed's `w` command writes files; `sed_write_guard` in `preToolUseBash.py` catches it on the raw command and asks in every mode. |
+| `scripts/run_ui_flows.py *` | Bounded by `scripts/ui-flows/manifest.json`, which agents can edit, so it carries the section 4 residual risk. |
+| `scripts/agent-worktree.py acquire *` | Bounded by the slot ring cap. |
+| `scripts/agent-worktree.py release slot-N` (one rule per slot) | Release drops the lease and scrubs only an idle slot; it never deletes a worktree with uncommitted work. |
 
-Deliberately NOT allowlisted, keep classified: `psql` in wildcard form (one
-literal read-only query IS allowlisted — see block; the wildcard never),
-`curl` / `wget` (network egress), `rm`, `gate_runner.py per-lane` (executes
-commands extracted from a brief file), `agent-worktree.py release` (deletes a
-worktree and any uncommitted work in it).
+Never allowlisted, keep classified: `psql` in any form, `curl` / `wget`
+(network egress), `rm`, `gate_runner.py per-lane`, any interpreter `-c` form,
+`awk`, `find`, `git worktree`.
 
-## 6. Incident — 2026-07-26
-
-`Bash(scripts/gate_runner.py *)` was added as part of the direct-invocation
-change. `gate_runner.py per-lane --brief <path>` extracts shell commands from
-the brief's Gate section and executes them, so the rule was an
-arbitrary-execution allowlist. Caught by the classifier blocking the landing
-merge under its Auto-Mode Bypass rule — not by review. Two sibling rules
-(`agent-worktree.py *`, `seat_tool.py *`) had the same shape and were cut in the
-same pass.
-
-Lesson: the failure mode is a wildcard on a script that takes a
-path-to-something-executable. Judge the script's *arguments*, never its name.
-
-## 7. Prompt sources and the worker no-prompt rule
+## 6. Prompt sources and the worker no-prompt rule
 
 Obsolete when: the harness lets a subagent be spawned in a never-prompt mode (a per-agent `dontAsk`) — the PermissionRequest guard then has nothing to answer.
 

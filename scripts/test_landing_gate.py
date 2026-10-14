@@ -258,7 +258,8 @@ class LandingTests(unittest.TestCase):
 
     def exercise(self, failed=None, extra=(), stale_docs=False, packages=True, head="head", paths=None,
                  comment=False, gpu_output=None, proof_cached=False, manifest=None,
-                 nextest_output=None, readiness_errors=(), failure_code=1, test_inventory=None, extra_tooling=()):
+                 nextest_output=None, readiness_errors=(), failure_code=1, test_inventory=None, extra_tooling=(),
+                 dirty=False):
         called, commands = [], []
         self.events = events = []
         paths = paths or ["crates/manifold-gpu/src/metal/device.rs"]
@@ -294,6 +295,8 @@ class LandingTests(unittest.TestCase):
                     out = head
                 elif cmd[1] == "rev-parse":
                     out = "codex/test"
+                elif cmd[1] == "status":
+                    out = " M crates/manifold-gpu/src/metal/device.rs" if dirty else ""
                 else:
                     out = ""
                 return 0, out, "", 0.01
@@ -383,8 +386,9 @@ class LandingTests(unittest.TestCase):
             # A tooling self-test must never wait on the machine-wide GPU lock.
             stack.enter_context(patch.object(landing_gate.gpu_queue, "hold",
                                              side_effect=recording_hold))
-            stack.enter_context(patch.object(diff_scope, "effective_paths",
+            self.scope = stack.enter_context(patch.object(diff_scope, "effective_paths",
                                             return_value=([], paths) if comment else (paths, [])))
+            stack.enter_context(patch.object(landing_gate, "working_tree_commit", return_value="snapshot"))
             deps = stack.enter_context(patch.object(landing_gate, "reverse_deps", return_value=[]))
             stack.enter_context(patch("codex_checks.tooling_checks", return_value=[] if comment else [{
                 "name": "tooling", "argv": ["python3", "fake-tool-test.py"],
@@ -487,6 +491,25 @@ class LandingTests(unittest.TestCase):
                 self.assertEqual(called, cheap)
                 self.assertFalse(any(event.startswith('hold-enter:') for event in self.events))
                 self.assertIn('cheap gate: ', output)
+
+    def test_cheap_gates_the_uncommitted_working_tree_before_the_commit(self):
+        # Lanes run --cheap before their one commit, so HEAD is still the base.
+        code, called, timings, commands, _, output, _ = self.exercise(
+            extra=['--cheap'], dirty=True, head='base')
+        self.assertEqual(code, 0, output)
+        self.assertEqual(called, self.checks[:-3])
+        self.assertIn('gating the uncommitted working tree', output)
+        self.assertEqual(self.scope.call_args.kwargs['head'], 'snapshot')
+        self.assertIn(['python3', '.claude/hooks/design_status_check.py', 'base', 'snapshot'], commands)
+        self.assertIsNone(timings)
+
+    def test_clean_cheap_at_base_and_dirty_full_gate_still_refuse(self):
+        code, called, _, _, _, output, _ = self.exercise(extra=['--cheap'], head='base')
+        self.assertEqual((code, called), (1, []))
+        self.assertIn('[FAIL] HEAD == origin/main', output)
+        code, called, _, _, _, output, _ = self.exercise(dirty=True)
+        self.assertEqual((code, called), (1, []))
+        self.assertIn('[FAIL] landing needs a clean committed tree', output)
 
     def test_cheap_red_exits_non_zero(self):
         code, called, *_ = self.exercise('clippy', extra=['--cheap'])
@@ -762,17 +785,17 @@ class LandingTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertTrue(all("--features" not in c for c in commands))
 
-    def test_gate_builds_disable_incremental_and_preserve_jobs(self):
+    def test_gate_builds_disable_incremental_and_leave_jobs_to_cargo(self):
         from storage_budget import BuildCheck
         root = Path.cwd()
-        with patch.dict(os.environ, {"CARGO_INCREMENTAL": "1", "CARGO_BUILD_JOBS": "4"}, clear=True), \
+        with patch.dict(os.environ, {"CARGO_INCREMENTAL": "1"}, clear=True), \
                 patch("storage_budget.check_build", return_value=BuildCheck(True, root / "target", 200 * 2**30)):
             for cmd in (["cargo", "nextest"], ["python3", "scripts/gpu_proofs_gate.py"],
                         ["python3", "scripts/run_ui_flows.py"]):
                 env, refusal = landing_gate.build_environment(cmd, root)
                 self.assertIsNone(refusal)
                 self.assertEqual(env["CARGO_INCREMENTAL"], "0")
-                self.assertEqual(env["CARGO_BUILD_JOBS"], "4")
+                self.assertNotIn("CARGO_BUILD_JOBS", env)
 
     def test_stale_docs_reported_but_stale_thumbnails_ignored(self):
         with tempfile.TemporaryDirectory() as d:

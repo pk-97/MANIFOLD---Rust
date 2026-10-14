@@ -261,7 +261,7 @@ pub struct AbletonTrackSignature {
 
 /// Identifies which Ableton set the project's mappings were created against.
 /// Stored in `ProjectSettings` alongside the macro bank.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AbletonSetContext {
     pub track_signatures: Vec<AbletonTrackSignature>,

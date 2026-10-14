@@ -21,14 +21,37 @@ use std::hash::Hasher;
 pub struct Fingerprint {
     parts: [u64; PART_COUNT],
     graphs: u64,
+    tick: [u64; TICK_SLOT_COUNT],
+}
+
+/// Settings fields the tick may write as audited tick writes (D24). Hashed
+/// apart from the rest of Settings so the tick audit can tell them from a
+/// real settings edit; `changed` still reports them as Settings.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TickSlot {
+    Bpm,
+    ClockAuthority,
+    TempoMap,
+    RecordingProvenance,
+}
+const TICK_SLOT_COUNT: usize = 4;
+impl TickSlot {
+    pub const ALL: [TickSlot; TICK_SLOT_COUNT] =
+        [TickSlot::Bpm, TickSlot::ClockAuthority, TickSlot::TempoMap, TickSlot::RecordingProvenance];
 }
 
 struct Fp {
     parts: [DefaultHasher; PART_COUNT],
     graph: DefaultHasher,
+    tick: [DefaultHasher; TICK_SLOT_COUNT],
 }
 
 impl Fp {
+    fn tick(&mut self, slot: TickSlot, value: &impl Debug) {
+        let text = format!("{value:?}");
+        self.tick[slot as usize].write(text.as_bytes());
+    }
+
     fn put(&mut self, part: Part, value: &impl Debug) {
         let text = format!("{value:?}");
         let h = &mut self.parts[part as usize];
@@ -42,7 +65,11 @@ impl Fp {
 fn unowned<T>(_: &T) {}
 
 pub fn fingerprint(project: &Project) -> Fingerprint {
-    let mut fp = Fp { parts: std::array::from_fn(|_| DefaultHasher::new()), graph: DefaultHasher::new() };
+    let mut fp = Fp {
+        parts: std::array::from_fn(|_| DefaultHasher::new()),
+        graph: DefaultHasher::new(),
+        tick: std::array::from_fn(|_| DefaultHasher::new()),
+    };
     let Project {
         project_name,
         project_version,
@@ -69,8 +96,8 @@ pub fn fingerprint(project: &Project) -> Fingerprint {
     fp.put(Part::Settings, project_version);
     fp.put(Part::Media, video_library);
     fp.put(Part::Midi, midi_config);
-    fp.put(Part::Settings, tempo_map);
-    fp.put(Part::Settings, recording_provenance);
+    fp.tick(TickSlot::TempoMap, tempo_map);
+    fp.tick(TickSlot::RecordingProvenance, recording_provenance);
     unowned(last_saved_path);
     fp.put(Part::ViewPrefs, saved_playhead_time);
     unowned(load_report);
@@ -113,7 +140,11 @@ pub fn fingerprint(project: &Project) -> Fingerprint {
         layer_fp(&mut fp, layer);
     }
 
-    Fingerprint { parts: std::array::from_fn(|i| fp.parts[i].finish()), graphs: fp.graph.finish() }
+    Fingerprint {
+        parts: std::array::from_fn(|i| fp.parts[i].finish()),
+        graphs: fp.graph.finish(),
+        tick: std::array::from_fn(|i| fp.tick[i].finish()),
+    }
 }
 
 fn settings_fp(fp: &mut Fp, settings: &crate::settings::ProjectSettings) {
@@ -188,7 +219,8 @@ fn settings_fp(fp: &mut Fp, settings: &crate::settings::ProjectSettings) {
     fp.put(Part::Settings, physics);
     fp.put(Part::Settings, &(output_width, output_height, frame_rate, vsync_enabled, export_hdr, split_at_markers));
     fp.put(Part::Media, &(video_library_paths, video_player_pool_size));
-    fp.put(Part::Settings, &(max_layers, default_recording_layer, bpm, time_signature_numerator, time_signature_denominator));
+    fp.put(Part::Settings, &(max_layers, default_recording_layer, time_signature_numerator, time_signature_denominator));
+    fp.tick(TickSlot::Bpm, bpm);
     fp.put(Part::Settings, &(quantize_mode, resolution_preset, render_scale, tonemap_curve, tonemap_enabled));
     fp.put(Part::Led, &(stage_layout, led_exit_index, led_enabled));
     fp.put(Part::Values, &(master_opacity, led_brightness, led_gain));
@@ -196,7 +228,8 @@ fn settings_fp(fp: &mut Fp, settings: &crate::settings::ProjectSettings) {
         instance_fp(fp, fx);
     }
     fp.put(Part::Effects, master_effect_groups);
-    fp.put(Part::Settings, &(midi_clock_source_name, clock_authority, osc_send_port, osc_sync_mode, rt_quality));
+    fp.put(Part::Settings, &(midi_clock_source_name, osc_send_port, osc_sync_mode, rt_quality));
+    fp.tick(TickSlot::ClockAuthority, clock_authority);
     for slot in &macro_bank.slots {
         let crate::macro_bank::MacroSlot { value, label, mappings, ableton_mapping, .. } = slot;
         fp.put(Part::Values, value);
@@ -312,7 +345,9 @@ fn instance_fp(fp: &mut Fp, inst: &PresetInstance) {
         structural.max = 0.0;
         structural.curve = Default::default();
         structural.invert = false;
-        fp.put(Part::Effects, &(structural, &p.origin, p.exposed, &p.clip_trigger_source, &p.clip_control_digest));
+        fp.put(Part::Effects, &(structural, &p.origin, p.exposed, &p.clip_trigger_source));
+        // A runtime cache the tick re-derives from Clips and Effects.
+        unowned(&p.clip_control_digest);
         fp.put(Part::Values, &(p.value, p.base, p.touched));
     }
     for d in inst.drivers.iter().flatten() {
@@ -373,6 +408,20 @@ fn instance_fp(fp: &mut Fp, inst: &PresetInstance) {
 /// The parts whose fingerprint differs. A graph structure change counts as
 /// Effects unless an override was materialized or dropped in the same edit.
 pub fn changed(before: &Fingerprint, after: &Fingerprint) -> super::ChangeSet {
+    let outside = changed_outside_tick_slots(before, after);
+    if tick_slots_changed(before, after).next().is_some() {
+        return outside.union(super::ChangeSet::of(&[Part::Settings]));
+    }
+    outside
+}
+
+/// The tick-written Settings fields whose fingerprint differs.
+pub fn tick_slots_changed<'a>(before: &'a Fingerprint, after: &'a Fingerprint) -> impl Iterator<Item = TickSlot> + 'a {
+    TickSlot::ALL.into_iter().filter(move |s| before.tick[*s as usize] != after.tick[*s as usize])
+}
+
+/// The parts that changed, not counting the tick-written Settings fields.
+pub fn changed_outside_tick_slots(before: &Fingerprint, after: &Fingerprint) -> super::ChangeSet {
     let mut parts: Vec<Part> =
         Part::ALL.into_iter().filter(|p| before.parts[*p as usize] != after.parts[*p as usize]).collect();
     let presence_moved = parts.contains(&Part::Overrides);

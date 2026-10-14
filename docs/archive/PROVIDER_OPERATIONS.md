@@ -4,7 +4,7 @@
 
 Operational runbook for changing anything in the fleet's model supply chain.
 Roster doctrine (who sits in which seat and why) lives in
-`docs/AGENT_ROUTING.md`; spend analysis in `docs/TOKEN_ECONOMICS.md`;
+`docs/AGENT_ROUTING.md`;
 classifier mechanics in `docs/PERMISSION_BOUNDARY.md`. This doc owns the
 *how* — config layers, procedures, verification.
 

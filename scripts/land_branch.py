@@ -25,8 +25,8 @@ failures are notes, not landing failures. Unlanded branches are never deleted.
 Before merging it records the gated tree as a land pass in the git common dir
 (land-passes-v1/<tree>.json); the Bash hook denies a manual merge or push to
 main of any tree without one (preToolUseBash.py land_pass_guard).
-Before any fetch it refuses a slot that is not the named branch's tip, is
-dirty, or has a busy Codex job, and
+Before any fetch it refuses a slot that is not the named branch's tip or is
+dirty, and
 exits 0 with no row when the tip is already on origin/main.
 Every attempt past argument parsing, refused and cancelled ones included,
 appends one row to .claude/orchestration/landing-runs.jsonl in the main checkout.
@@ -264,17 +264,8 @@ def probe(args, cwd):
     r = subprocess.run(['git', *args], cwd=str(cwd), capture_output=True, text=True)
     return r.returncode, r.stdout.strip()
 
-def codex_busy(wt):
-    """Why a Codex job may still be writing in this slot (codex_brokers.busy_reason), or None."""
-    import codex_brokers
-    for state_dir in codex_brokers.state_dirs(wt):
-        why = codex_brokers.busy_reason(state_dir)
-        if why:
-            return why
-    return None
-
 def start_checks(branch, wt):
-    """Before any fetch or gate: is this slot really the named branch, clean and free of Codex jobs?
+    """Before any fetch or gate: is this slot really the named branch, and clean?
 
     Returns True when the branch's own commits are already on origin/main,
     checked only after the slot proves clean. Raises Refused
@@ -293,10 +284,6 @@ def start_checks(branch, wt):
     code, dirty = probe(['status', '--porcelain'], wt)
     if code or dirty:
         raise Refused(f'worktree is not clean; commit or remove the changes. Check: {q} status --short')
-    why = codex_busy(wt)
-    if why:
-        raise Refused(f'a Codex job may still be writing in this slot ({why}). '
-                      f'Check: scripts/codex_brokers.py --dry-run "{wt}"')
     if probe(['merge-base', '--is-ancestor', tip, 'origin/main'], wt)[0] != 0:
         return False
     # On main's first-parent line means the branch never had commits of its own;
