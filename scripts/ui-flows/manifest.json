@@ -126,7 +126,8 @@
     "scene-card-dof-switch",
     "scene-naming",
     "scene-pin-roundtrip",
-    "scene-card-to-tab"
+    "scene-card-to-tab",
+    "render-mode-solid"
   ],
   "crates/manifold-app/src/ui_bridge/projection/scene.rs": [
       "scene-setup-add-object",
@@ -333,47 +334,19 @@
     "scene-card-to-tab": "gltfscene",
     "scene-slider-range": "gltfscene",
     "scene-use-this-view": "gltfscene",
-    "scene-light-swatch": "gltfscene"
+    "scene-light-swatch": "gltfscene",
+    "render-mode-solid": "gltfscene",
+    "render-mode-points": "gltfscene",
+    "render-mode-wireframe": "gltfscene",
+    "gltf-import-card-sections": "gltfscene",
+    "physics-box-count": "physicsboxes",
+    "audio-clip-trigger-add": "inspector",
+    "rt-dynamic-modifier": "mushroomscene"
   },
   "expected_fail": {
-    "render-mode-solid": {
-      "scene": "gltfscene",
-      "bug": "BUG-8a7uq",
-      "reason": "red on main: render-mode labels moved, flow not updated"
-    },
-    "render-mode-points": {
-      "scene": "gltfscene",
-      "bug": "BUG-8a7uq",
-      "reason": "red on main: render-mode labels moved, flow not updated"
-    },
-    "render-mode-wireframe": {
-      "scene": "gltfscene",
-      "bug": "BUG-8a7uq",
-      "reason": "red on main: render-mode labels moved, flow not updated"
-    },
-    "gltf-import-card-sections": {
-      "scene": "gltfscene",
-      "bug": "BUG-8a7uq",
-      "reason": "red on main"
-    },
     "scene-imported-physics": {
       "scene": "gltfscene",
       "bug": "BUG-8a7uq",
-      "reason": "red on main"
-    },
-    "physics-box-count": {
-      "scene": "physicsboxes",
-      "bug": "BUG-t4hhr",
-      "reason": "red on main"
-    },
-    "audio-clip-trigger-add": {
-      "scene": "inspector",
-      "bug": "BUG-t4hhr",
-      "reason": "red on main"
-    },
-    "rt-dynamic-modifier": {
-      "scene": "mushroomscene",
-      "bug": "BUG-t4hhr",
       "reason": "red on main"
     },
     "scene-fluid-authoring": {
