@@ -385,7 +385,7 @@
       "select_clip": {
         "ChromeLayout": 3,
         "ClipProjection": 1,
-        "FrameAlloc": 844,
+        "FrameAlloc": 846,
         "GridBitmapRepaint": 7,
         "InspectorSync": 1,
         "LaneProjection": 3,

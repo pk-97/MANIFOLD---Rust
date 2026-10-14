@@ -212,7 +212,7 @@ fn project(strength_id: &str) -> Project {
     let send_id = send.id.clone();
     project.audio_setup.sends.push(send);
     let mut layer = Layer::new_generator("Liquid".into(), PresetTypeId::new("KickForce"), 0);
-    let generator = layer.gen_params_or_init();
+    let generator = layer.gen_params_mut().unwrap();
     let mut strength = Param::bundled(ParamSpecDef {
         id: strength_id.into(),
         name: "Strength".into(),

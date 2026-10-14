@@ -582,7 +582,7 @@ fn delete_group_clears_children_parent_ids() {
 fn change_generator_type_undo_roundtrip() {
     let mut project = make_test_project();
     // Layer 1 is a generator layer
-    let gp = project.timeline.layers[1].gen_params_or_init();
+    let gp = project.timeline.layers[1].gen_params_mut().unwrap();
     gp.restore(PresetTypeId::PLASMA, vec![0.5, 0.8, 1.0], None, None);
 
     let old_params = project.timeline.layers[1].snapshot_gen_params();
@@ -640,7 +640,7 @@ fn change_generator_type_clears_and_restores_graph_override() {
 
     let mut project = make_test_project();
     // Layer 1 is a generator layer in make_test_project.
-    let gp = project.timeline.layers[1].gen_params_or_init();
+    let gp = project.timeline.layers[1].gen_params_mut().unwrap();
     gp.restore(PresetTypeId::PLASMA, vec![0.5, 0.8, 1.0], None, None);
 
     // Plant a non-empty per-layer graph override + version, simulating
@@ -654,8 +654,8 @@ fn change_generator_type_clears_and_restores_graph_override() {
         nodes: Vec::new(),
         wires: Vec::new(),
     };
-    project.timeline.layers[1].gen_params_or_init().graph = Some(stale_graph.clone());
-    project.timeline.layers[1].gen_params_or_init().graph_version = 7;
+    project.timeline.layers[1].gen_params_mut().unwrap().graph = Some(stale_graph.clone());
+    project.timeline.layers[1].gen_params_mut().unwrap().graph_version = 7;
 
     let old_params = project.timeline.layers[1].snapshot_gen_params();
     let old_drivers = project.timeline.layers[1].snapshot_gen_drivers();
@@ -826,9 +826,9 @@ fn change_effect_param_undo_roundtrip() {
     );
 }
 
-/// UI_INVALIDATION D21/D22: a plain value declares Values; a scene feature
-/// switch also decides which rows exist, so it declares Effects too, read from
-/// the project at execute and undo.
+/// UI_INVALIDATION D21/D22: a plain value writes Values; a scene feature
+/// switch also decides which rows exist, so execute and undo report Effects
+/// too, read from the rows they changed.
 #[test]
 fn change_graph_param_switch_declares_effects() {
     use manifold_core::change::{ChangeSet, Part};
@@ -853,13 +853,10 @@ fn change_graph_param_switch_declares_effects() {
     let target = manifold_core::GraphTarget::Effect(project.settings.master_effects[0].id.clone());
 
     let mut plain = ChangeGraphParamCommand::new(target.clone(), "amount", 0.5, 0.9);
-    plain.execute(&mut project);
-    assert_eq!(plain.touches(), ChangeSet::of(&[Part::Values]));
+    assert_eq!(plain.execute(&mut project), ChangeSet::of(&[Part::Values]));
     let mut flip = ChangeGraphParamCommand::new(target, "dof_on", 0.0, 1.0);
-    flip.execute(&mut project);
-    assert_eq!(flip.touches(), ChangeSet::of(&[Part::Values, Part::Effects]));
-    flip.undo(&mut project);
-    assert_eq!(flip.touches(), ChangeSet::of(&[Part::Values, Part::Effects]));
+    assert_eq!(flip.execute(&mut project), ChangeSet::of(&[Part::Values, Part::Effects]));
+    assert_eq!(flip.undo(&mut project), ChangeSet::of(&[Part::Values, Part::Effects]));
 }
 
 #[test]
@@ -2899,4 +2896,29 @@ fn first_add_into_each_optional_list_undoes_to_the_same_saved_bytes() {
     let (project, _) = with_master_bloom();
     assert_undo_restores_saved_bytes("master effect group", project,
         Box::new(GroupEffectsCommand::new(EffectTarget::Master, vec![0], "Group".into())));
+}
+
+/// BUG-8639v and BUG-zeid5 (generator instances made on first edit): a file
+/// whose generator layer has no saved instance gets one at load, so the
+/// first edit writes only what it declares and undo restores the save.
+#[test]
+fn legacy_generator_layer_loads_with_its_instance() {
+    use manifold_core::GraphTarget;
+    let mut project = make_test_project();
+    project.timeline.layers[1] = Layer::new_generator("Plasma".into(), PresetTypeId::PLASMA, 1);
+    let mut json = serde_json::to_value(&project).unwrap();
+    let layer = json
+        .pointer_mut("/timeline/layers/1")
+        .and_then(|layer| layer.as_object_mut())
+        .expect("the generator layer");
+    assert!(layer.remove("genParams").is_some(), "the save carried an instance");
+    layer.insert("generatorType".into(), serde_json::to_value(PresetTypeId::PLASMA).unwrap());
+
+    let loaded = manifold_io::loader::load_project_from_json(&json.to_string()).unwrap();
+    let generator = &loaded.timeline.layers[1];
+    assert_eq!(generator.gen_params().map(|gp| gp.generator_type()), Some(&PresetTypeId::PLASMA));
+
+    let target = GraphTarget::Generator(generator.layer_id.clone());
+    assert_undo_restores_saved_bytes("first edit on a loaded generator", loaded,
+        Box::new(AddEnvelopeCommand::new(target, make_envelope())));
 }

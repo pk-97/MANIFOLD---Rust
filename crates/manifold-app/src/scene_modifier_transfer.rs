@@ -391,8 +391,8 @@ mod tests {
         let graph =
             manifold_nodes::bundled_presets::bundled_preset_def(&PresetTypeId::new("Scene"))
                 .unwrap().as_ref().clone();
-        layer.gen_params_or_init().graph = Some(graph);
-        layer.gen_params_or_init().refresh_manifest_from_graph();
+        layer.gen_params_mut().unwrap().graph = Some(graph);
+        layer.gen_params_mut().unwrap().refresh_manifest_from_graph();
         project.timeline.layers.push(layer);
         let mut command = crate::scene_modifier_edit::build_action(
             &project,
@@ -544,17 +544,17 @@ mod tests {
             0,
         );
         let source = source_layer.layer_id.clone();
-        source_layer.gen_params_or_init().graph = Some(source_graph);
-        source_layer.gen_params_or_init().refresh_manifest_from_graph();
+        source_layer.gen_params_mut().unwrap().graph = Some(source_graph);
+        source_layer.gen_params_mut().unwrap().refresh_manifest_from_graph();
         let mut destination_layer = Layer::new_generator(
             "Destination".into(),
             PresetTypeId::new("PhotoscanBaseline"),
             1,
         );
         let destination = destination_layer.layer_id.clone();
-        destination_layer.gen_params_or_init().graph = Some(imported);
+        destination_layer.gen_params_mut().unwrap().graph = Some(imported);
         destination_layer
-            .gen_params_or_init()
+            .gen_params_mut().unwrap()
             .refresh_manifest_from_graph();
         project.timeline.layers.push(source_layer);
         project.timeline.layers.push(destination_layer);

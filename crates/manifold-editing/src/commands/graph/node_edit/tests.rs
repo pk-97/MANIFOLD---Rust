@@ -1187,7 +1187,7 @@ fn revert_clears_generator_graph_and_undo_restores_it() {
         .find_layer_by_id_mut(&lid)
         .unwrap()
         .1
-        .gen_params_or_init()
+        .gen_params_mut().unwrap()
         .graph = Some(mirror_catalog_default());
 
     let mut revert = RevertEffectGraphCommand::new(GraphTarget::Generator(lid.clone()));
@@ -1278,7 +1278,7 @@ fn generator_layer_with_scenes(scenes: u32) -> (Project, manifold_core::LayerId)
         .find_layer_by_id_mut(&lid)
         .unwrap()
         .1
-        .gen_params_or_init()
+        .gen_params_mut().unwrap()
         .graph = Some(def);
     (project, lid)
 }

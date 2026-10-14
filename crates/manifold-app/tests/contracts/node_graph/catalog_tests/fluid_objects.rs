@@ -37,7 +37,7 @@
         let mut layer = Layer::new_generator("Dam".into(), PresetTypeId::new(preset), 0);
         let layer_id = LayerId::new("loose-obstacle-layer");
         layer.layer_id = layer_id.clone();
-        let host = layer.gen_params_or_init();
+        let host = layer.gen_params_mut().unwrap();
         host.graph = Some(def.clone());
         host.refresh_manifest_from_graph();
         let mut project = manifold_core::project::Project::default();

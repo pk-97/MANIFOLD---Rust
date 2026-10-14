@@ -284,13 +284,13 @@ impl Application {
                         .is_none_or(|prev| !std::sync::Arc::ptr_eq(prev, &snapshot));
                     if is_new_arc {
                         manifold_core::work_count::record_work(manifold_core::work_count::WorkKind::ProjectClone);
-                        self.local_project = (*snapshot).clone();
+                        *self.local_project.intake() = (*snapshot).clone();
                         self.last_snapshot_arc = Some(snapshot);
                         // Re-cover the clone with the gesture in flight.
                         // With no drag live, a leftover preview is stale
                         // and drops with the content's truth.
                         if drag_active {
-                            self.ui_edits.preview.reapply(&mut self.local_project);
+                            self.ui_edits.preview.reapply(self.local_project.intake());
                         } else {
                             drop(self.ui_edits.preview.take_clip_gesture());
                             self.ui_edits.preview.clear_lanes();
@@ -305,7 +305,7 @@ impl Application {
                     // bound-node-param card scrub, BUG-281, whose live writes
                     // land in `local_project` every tick, is now a
                     // `ResolvedScrub::BoundNodeParam` in `active`).
-                    self.scrub.restore_dragged(&mut self.local_project);
+                    self.scrub.restore_dragged(self.local_project.intake());
                     // Clear suppression once we've accepted a post-load snapshot
                     self.suppress_snapshot_until = 0;
 
@@ -349,12 +349,12 @@ impl Application {
                 if !suppressed
                     && let Some(ref mod_snap) = state.modulation_snapshot
                 {
-                    mod_snap.apply(&mut self.local_project);
+                    mod_snap.apply(self.local_project.intake());
                     // Restore the one actively-dragged gesture so modulation
                     // doesn't overwrite the value the user is manipulating —
                     // every family, panel-wired and frame-resident (BUG-281's
                     // bound-node-param card scrub included, now in `active`).
-                    self.scrub.restore_dragged(&mut self.local_project);
+                    self.scrub.restore_dragged(self.local_project.intake());
                 }
                 // Accumulate VQT columns from EVERY drained snapshot — the
                 // assignment below keeps only the latest, so reading columns off
@@ -691,13 +691,12 @@ impl Application {
                 self.overlay.set_modifiers(self.modifiers);
                 let content_tx = self.content_tx.as_ref().unwrap();
                 let mut host = crate::editing_host::AppEditingHost::new(
-                    &mut self.local_project,
+                    self.local_project.edit(&mut self.ui_edits, content_tx),
                     content_tx,
                     &self.content_state,
                     &mut self.cursor_manager,
                     &mut self.active_layer_id,
                     &mut self.ws.offscreen_dirty,
-                    &mut self.ui_edits,
                 );
                 for event in &viewport_events {
                     use manifold_ui::input::UIEvent;
@@ -934,8 +933,8 @@ impl Application {
                     let view = self.graph_editor.as_ref().and_then(|ws| crate::scene_view_copy::live_view(ws, layer_id));
                     if let Some(content_tx) = self.content_tx.as_ref() {
                         crate::scene_view_copy::run(
-                            &mut self.local_project, content_tx, &mut self.ws.ui_root,
-                            &mut self.ui_edits.stamps, layer_id, view.as_ref(),
+                            &mut self.local_project.edit(&mut self.ui_edits, content_tx),
+                            &mut self.ws.ui_root, layer_id, view.as_ref(),
                         );
                     }
                     continue;
@@ -1174,7 +1173,7 @@ impl Application {
             }
             let content_tx = self.content_tx.as_ref().unwrap();
             let mut dctx = crate::ui_bridge::DispatchCtx {
-                project: crate::ui_bridge::ProjectRef::new(&mut self.local_project, &mut self.ui_edits, content_tx),
+                project: self.local_project.edit(&mut self.ui_edits, content_tx),
                 content_tx,
                 content_state: &self.content_state,
                 ui: &mut self.ws.ui_root,
@@ -1230,8 +1229,7 @@ impl Application {
                 (Some(ed), Some(content_tx)) => crate::editor_input::dispatch_card_lane(
                     crate::editor_input::CardLane {
                         ws: ed,
-                        project: &mut self.local_project,
-                        edits: &mut self.ui_edits,
+                        project: self.local_project.edit(&mut self.ui_edits, content_tx),
                         content_tx,
                         content_state: &self.content_state,
                         selection: &mut self.selection,
@@ -1759,9 +1757,8 @@ impl Application {
                                     self.scrub.check_single_active_on_begin("bound-node-param");
                                     let old_value = self
                                         .local_project
-                                        .with_preset_graph_mut(&target, |inst| {
-                                            inst.get_base_param(&outer_id)
-                                        })
+                                        .preset_instance(&target)
+                                        .map(|inst| inst.get_base_param(&outer_id))
                                         .unwrap_or(card_value);
                                     self.scrub.active = Some(
                                         crate::ui_bridge::scrub::ResolvedScrub::BoundNodeParam(
@@ -1790,18 +1787,18 @@ impl Application {
                                 // push a cheap `MutateProject` (Values or Shapes) for
                                 // the render — no undo-stack entry here,
                                 // that's `EndGraphNodeParamScrub`'s job.
-                                self.local_project.with_preset_graph_mut(&target, |inst| {
-                                    inst.set_base_param(&outer_id, card_value);
-                                });
-                                let t = target.clone();
-                                let oid = outer_id.clone();
-                                self.send_content_cmd(ContentCommand::mutate(crate::content_command::touch::VALUES, 
-                                    Box::new(move |p| {
-                                        p.with_preset_graph_mut(&t, |inst| {
-                                            inst.set_base_param(&oid, card_value);
-                                        });
-                                    }),
-                                ));
+                                if let Some(tx) = self.content_tx.as_ref() {
+                                    let t = target.clone();
+                                    let oid = outer_id.clone();
+                                    self.local_project.edit(&mut self.ui_edits, tx).mutate(
+                                        crate::content_command::touch::VALUES,
+                                        move |p| {
+                                            p.with_preset_graph_mut(&t, |inst| {
+                                                inst.set_base_param(&oid, card_value);
+                                            });
+                                        },
+                                    );
+                                }
                             }
                             // else: degenerate scale (D1 section 3) — read-only, no
                             // write; the row keeps showing the bound badge.
@@ -2003,7 +2000,7 @@ impl Application {
                         let content_tx = self.content_tx.as_ref().unwrap();
                         let editor_target = self.watched_graph_target.as_ref();
                         let mut dctx = crate::ui_bridge::DispatchCtx {
-                            project: crate::ui_bridge::ProjectRef::new(&mut self.local_project, &mut self.ui_edits, content_tx),
+                            project: self.local_project.edit(&mut self.ui_edits, content_tx),
                             content_tx,
                             content_state: &self.content_state,
                             ui: &mut self.ws.ui_root,
@@ -2436,14 +2433,14 @@ impl Application {
                     drag_mode,
                     DragMode::Move | DragMode::TrimLeft | DragMode::TrimRight | DragMode::RegionSelect
                 ) {
+                    let tx = content_tx.expect("content thread spawned before a drag");
                     let mut host = crate::editing_host::AppEditingHost::new(
-                        project,
-                        content_tx.expect("content thread spawned before a drag"),
+                        project.edit(ui_edits, tx),
+                        tx,
                         content_state,
                         cursor_manager,
                         active_layer,
                         redraw,
-                        ui_edits,
                     );
                     overlay.poll_drag(cursor_pos, &mut host, selection, &mut ui_root.viewport);
                     let readout = overlay

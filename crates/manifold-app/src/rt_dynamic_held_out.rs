@@ -256,10 +256,10 @@ fn reference_project() -> (Project, LayerId, String, u64) {
         0,
     );
     layer.layer_id = layer_id.clone();
-    layer.gen_params_or_init().graph = Some(graph);
-    layer.gen_params_or_init().refresh_manifest_from_graph();
+    layer.gen_params_mut().unwrap().graph = Some(graph);
+    layer.gen_params_mut().unwrap().refresh_manifest_from_graph();
     layer
-        .gen_params_or_init()
+        .gen_params_mut().unwrap()
         .drivers_mut()
         .push(ParameterDriver::new(
             ParamId::from("phase"),

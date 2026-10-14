@@ -440,7 +440,7 @@ mod tests {
         let mut project = Project::default();
         let mut layer = Layer::new_generator("Generator".into(), PresetTypeId::new("Generator"), 0);
         let layer_id = layer.layer_id.clone();
-        let owner = layer.gen_params_or_init();
+        let owner = layer.gen_params_mut().unwrap();
         owner.graph = Some(owner_graph());
         owner.refresh_manifest_from_graph();
         project.timeline.layers.push(layer);

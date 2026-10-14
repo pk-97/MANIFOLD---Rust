@@ -648,11 +648,6 @@ impl ParamSpecDef {
         }
     }
 
-    /// Whether a write to this param can change which rows exist.
-    pub fn decides_rows(&self) -> bool {
-        self.row_fact(self.default_value).is_some()
-    }
-
     /// The declared-range clamp under `Param::driven_value` when the user has
     /// no slider range (SCENE_SURFACES_DESIGN.md D15 (slider range and hard
     /// limit)). A periodic param wraps over the declared range — `rem_euclid`,

@@ -2064,7 +2064,7 @@ mod fire_meter_roundtrip_tests {
             AudioFeature::new(AudioFeatureKind::Transients, AudioBand::Full),
         );
         gate_on_gen.trigger_mode = Some(TriggerFireMode::Both);
-        layer.gen_params_or_init().audio_mods = Some(vec![gate_on_gen]);
+        layer.gen_params_mut().unwrap().audio_mods = Some(vec![gate_on_gen]);
         let plasma_id = layer.gen_params().unwrap().id.clone();
 
         // (b) EFFECT, plain continuous mod on a non-gate param — the

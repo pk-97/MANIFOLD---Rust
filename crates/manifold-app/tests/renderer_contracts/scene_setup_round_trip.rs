@@ -92,7 +92,7 @@ fn scene_setup_fog_edit_survives_save_reload_and_scene_vm_re_shows_it() {
     let mut project = Project::default();
     // `add_layer`'s own generator_type arg is the "New 3D Scene" assignment
     // step; the panel's Fog density drag then writes the node param — exactly
-    // what `SetGraphNodeParamCommand` does to `layer.gen_params_or_init().graph`.
+    // what `SetGraphNodeParamCommand` does to `layer.gen_params_mut().unwrap().graph`.
     let idx = project.timeline.add_layer(
         "Scene",
         LayerType::Generator,
@@ -100,7 +100,7 @@ fn scene_setup_fog_edit_survives_save_reload_and_scene_vm_re_shows_it() {
     );
     {
         let layer = &mut project.timeline.layers[idx];
-        layer.gen_params_or_init().graph = Some(def_with_fog(0.37));
+        layer.gen_params_mut().unwrap().graph = Some(def_with_fog(0.37));
     }
 
     // Pre-save sanity: the Vm already shows the edited value.
@@ -206,7 +206,7 @@ fn scene_setup_mesh_source_vertex_count_survives_save_reload_and_header_resums_i
     );
     {
         let layer = &mut project.timeline.layers[idx];
-        layer.gen_params_or_init().graph = Some(def_with_mesh_source_object(4321));
+        layer.gen_params_mut().unwrap().graph = Some(def_with_mesh_source_object(4321));
     }
 
     let path = std::env::temp_dir().join(format!(

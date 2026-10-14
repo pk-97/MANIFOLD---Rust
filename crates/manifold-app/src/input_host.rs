@@ -29,7 +29,8 @@ mod scene_item_edit;
 /// Selection (UIState) is available for host methods that need to read/write
 /// selection state (paste, duplicate, navigate_cursor, select_all, etc.).
 pub struct AppInputHost<'a> {
-    pub project: &'a mut manifold_core::project::Project,
+    /// The local project: every write stamps what it touches (UI_INVALIDATION D5).
+    pub project: crate::ui_bridge::ProjectRef<'a>,
     pub content_tx: &'a crossbeam_channel::Sender<crate::content_command::ContentCommand>,
     pub content_state: &'a crate::content_state::ContentState,
     pub ui_root: &'a mut UIRoot,
@@ -37,9 +38,6 @@ pub struct AppInputHost<'a> {
     pub active_layer: &'a mut Option<LayerId>,
     /// The main window repaints next frame (UI_INVALIDATION D8).
     pub redraw: &'a mut bool,
-    /// The UI's stamps and gesture preview: a local write goes through
-    /// [`Self::project_ref`], which stamps what it touches (UI_INVALIDATION D5).
-    pub edits: &'a mut crate::gesture_preview::UiEdits,
     #[cfg_attr(not(feature = "profiling"), allow(dead_code))]
     pub current_project_path: &'a Option<std::path::PathBuf>,
     pub has_output_window: bool,
@@ -198,7 +196,7 @@ impl TimelineInputHost for AppInputHost<'_> {
         {
             let selected = self.ui_root.inspector.selected_modifier_ids();
             match crate::scene_modifier_transfer::ModifierClipboard::capture(
-                self.project,
+                &self.project,
                 &layer,
                 &selected,
             ) {
@@ -220,7 +218,7 @@ impl TimelineInputHost for AppInputHost<'_> {
             let target = self.card_effect_target();
             let selected = self.ui_root.inspector.selected_effect_ids();
             let mut commands: Vec<Box<dyn manifold_editing::command::Command>> = Vec::new();
-            manifold_editing::commands::effect_target::with_effects(self.project, &target, |effects, _| {
+            manifold_editing::commands::effect_target::with_effects(&self.project, &target, |effects, _| {
                 for (index, effect) in effects.iter().enumerate().rev().filter(|(_, effect)| selected.contains(&effect.id)) {
                     commands.push(Box::new(RemoveEffectCommand::new(target.clone(), effect.clone(), index)));
                 }
@@ -244,7 +242,7 @@ impl TimelineInputHost for AppInputHost<'_> {
         {
             let selected = self.ui_root.inspector.selected_modifier_ids();
             match crate::scene_modifier_transfer::ModifierClipboard::capture(
-                self.project,
+                &self.project,
                 &layer,
                 &selected,
             ) {
@@ -334,7 +332,7 @@ impl TimelineInputHost for AppInputHost<'_> {
         let target = self.card_effect_target();
         let selected = self.ui_root.inspector.selected_effect_ids();
         let mut commands: Vec<Box<dyn manifold_editing::command::Command>> = Vec::new();
-        manifold_editing::commands::effect_target::with_effects(self.project, &target, |effects, _| {
+        manifold_editing::commands::effect_target::with_effects(&self.project, &target, |effects, _| {
             for (index, effect) in effects.iter().enumerate().rev().filter(|(_, effect)| selected.contains(&effect.id)) {
                 commands.push(Box::new(RemoveEffectCommand::new(target.clone(), effect.clone(), index)));
             }
@@ -380,7 +378,7 @@ impl TimelineInputHost for AppInputHost<'_> {
         if !self.ui_root.inspector.has_effect_selection() { return false; }
         let target = self.card_effect_target();
         let selected = self.ui_root.inspector.selected_effect_ids();
-        let commands = manifold_editing::commands::effect_target::with_effects(self.project, &target, |effects, groups| {
+        let commands = manifold_editing::commands::effect_target::with_effects(&self.project, &target, |effects, groups| {
             groups.iter().filter(|group| effects.iter().any(|effect| selected.contains(&effect.id) && effect.group_id.as_ref() == Some(&group.id)))
                 .map(|group| Box::new(manifold_editing::commands::effect_groups::UngroupEffectsCommand::new(target.clone(), group.id.clone())) as Box<dyn Command>)
                 .collect::<Vec<_>>()
@@ -553,7 +551,7 @@ impl TimelineInputHost for AppInputHost<'_> {
             },
         );
         // Delete from local project + send commands to content thread
-        let project = &mut *self.project;
+        let project = &*self.project;
         let del_region = if has_region {
             self.selection
                 .current_region()
@@ -590,7 +588,7 @@ impl TimelineInputHost for AppInputHost<'_> {
         // Region mode: use the ACTUAL UI region (preserves gaps/spacing).
         // Individual mode: offset by the clips' own span.
         // After region duplicate, shift the region forward (Ableton-style).
-        if let Some(project) = Some(&mut *self.project) {
+        if let Some(project) = Some(&*self.project) {
             // D1: a region exists only when the selection is a `TimeRange`; a
             // clip selection yields the default (inactive) region → individual
             // (clip-span) duplicate mode, which is the correct D3 behaviour.
@@ -609,7 +607,7 @@ impl TimelineInputHost for AppInputHost<'_> {
                 EditingService::duplicate_clips(project, clip_ids, &region_core);
             if !commands.is_empty() {
                 // Executed locally for read-back (need new clip IDs for selection).
-                self.project_ref().execute_batch(commands, "Duplicate clips".into());
+                self.project.execute_batch(commands, "Duplicate clips".into());
                 let project = &*self.project;
 
                 // Find newly created clips and select them
@@ -652,7 +650,7 @@ impl TimelineInputHost for AppInputHost<'_> {
     }
 
     fn delete_clips(&mut self, clip_ids: &[ClipId], has_region: bool) {
-        if let Some(project) = Some(&mut *self.project) {
+        if let Some(project) = Some(&*self.project) {
             // Step 4i: pass actual region from UIState when active
             let region = if has_region {
                 self.selection
@@ -675,7 +673,7 @@ impl TimelineInputHost for AppInputHost<'_> {
     }
 
     fn delete_layer(&mut self, layer_index: usize) {
-        if let Some(project) = Some(&mut *self.project)
+        if let Some(project) = Some(&*self.project)
             && project.timeline.layers.len() > 1
             && let Some(layer) = project.timeline.layers.get(layer_index)
         {
@@ -690,7 +688,7 @@ impl TimelineInputHost for AppInputHost<'_> {
 
     fn split_clips_at_playhead(&mut self, clip_ids: &[ClipId]) {
         let beat = self.content_state.current_beat.as_f32();
-        if let Some(project) = Some(&mut *self.project) {
+        if let Some(project) = Some(&*self.project) {
             let mut commands: Vec<Box<dyn manifold_editing::command::Command>> = Vec::new();
             for id in clip_ids {
                 if let Some(cmd) = EditingService::split_clip_at_beat(
@@ -719,7 +717,7 @@ impl TimelineInputHost for AppInputHost<'_> {
     }
 
     fn extend_clips(&mut self, clip_ids: &[ClipId], grid_step: f32) {
-        if let Some(project) = Some(&mut *self.project) {
+        if let Some(project) = Some(&*self.project) {
             let commands = EditingService::extend_clips_by_grid(
                 project,
                 clip_ids,
@@ -735,7 +733,7 @@ impl TimelineInputHost for AppInputHost<'_> {
     }
 
     fn shrink_clips(&mut self, clip_ids: &[ClipId], grid_step: f32) {
-        if let Some(project) = Some(&mut *self.project) {
+        if let Some(project) = Some(&*self.project) {
             let commands = EditingService::shrink_clips_by_grid(
                 project,
                 clip_ids,
@@ -751,7 +749,7 @@ impl TimelineInputHost for AppInputHost<'_> {
     }
 
     fn nudge_clips(&mut self, clip_ids: &[ClipId], beat_delta: f32) {
-        if let Some(project) = Some(&mut *self.project) {
+        if let Some(project) = Some(&*self.project) {
             let commands = EditingService::nudge_clips(
                 project,
                 clip_ids,
@@ -767,7 +765,7 @@ impl TimelineInputHost for AppInputHost<'_> {
     }
 
     fn move_selection_across_layers(&mut self, clip_ids: &[ClipId], layer_delta: i32) {
-        if let Some(project) = Some(&mut *self.project) {
+        if let Some(project) = Some(&*self.project) {
             let commands =
                 EditingService::move_clips_across_layers(project, clip_ids, layer_delta);
             if !commands.is_empty() {
@@ -783,7 +781,7 @@ impl TimelineInputHost for AppInputHost<'_> {
         // Unity EditingService.ToggleMuteSelectedClips (line 418-448):
         // Group-mute semantics: if ANY unmuted → mute ALL, else unmute ALL.
         // Records undo via MuteClipCommand. Marks compositor dirty.
-        if let Some(project) = Some(&mut *self.project) {
+        if let Some(project) = Some(&*self.project) {
             // First pass: collect current mute state for each clip
             let mut clip_states: Vec<(ClipId, bool)> = Vec::new();
             for layer in &project.timeline.layers {
@@ -838,7 +836,7 @@ impl TimelineInputHost for AppInputHost<'_> {
         let selected_ids: Vec<LayerId> =
             self.selection.selected_layer_ids().iter().cloned().collect();
 
-        if let Some(project) = Some(&mut *self.project) {
+        if let Some(project) = Some(&*self.project) {
             // Validate: none are nested (have parent) or group layers
             let mut layers_to_group = Vec::new();
             for layer in &project.timeline.layers {
@@ -859,7 +857,7 @@ impl TimelineInputHost for AppInputHost<'_> {
                 layers_to_group,
                 original_order,
             );
-            self.project_ref().execute(Box::new(cmd));
+            self.project.execute(Box::new(cmd));
         }
 
         self.selection.clear_selection();
@@ -876,7 +874,7 @@ impl TimelineInputHost for AppInputHost<'_> {
         }
         let selected_id = self.selection.selected_layer_ids().iter().next().cloned();
         if let Some(id) = selected_id
-            && let Some(project) = Some(&mut *self.project)
+            && let Some(project) = Some(&*self.project)
         {
             let layer = match project.timeline.layers.iter().find(|l| l.layer_id == id) {
                 Some(l) => l,
@@ -900,7 +898,7 @@ impl TimelineInputHost for AppInputHost<'_> {
                 child_ids,
                 original_order,
             );
-            self.project_ref().execute(Box::new(cmd));
+            self.project.execute(Box::new(cmd));
         }
 
         self.selection.clear_selection();
@@ -920,7 +918,7 @@ impl TimelineInputHost for AppInputHost<'_> {
         let selected_ids: Vec<LayerId> =
             self.selection.selected_layer_ids().iter().cloned().collect();
 
-        if let Some(project) = Some(&mut *self.project) {
+        if let Some(project) = Some(&*self.project) {
             // Find indices to delete (in reverse order for safe removal)
             let mut indices: Vec<usize> = Vec::new();
             for (i, layer) in project.timeline.layers.iter().enumerate() {
@@ -973,8 +971,8 @@ impl TimelineInputHost for AppInputHost<'_> {
         }
         let selected_ids: Vec<manifold_core::LayerId> =
             self.selection.selected_layer_ids().iter().cloned().collect();
-        if let Some(cmd) = EditingService::duplicate_layers(self.project, &selected_ids) {
-            self.project_ref().execute_batch(vec![cmd], "Duplicate Layers".to_string());
+        if let Some(cmd) = EditingService::duplicate_layers(&self.project, &selected_ids) {
+            self.project.execute_batch(vec![cmd], "Duplicate Layers".to_string());
         }
     }
 
@@ -992,7 +990,7 @@ impl TimelineInputHost for AppInputHost<'_> {
 
     fn set_export_in_at_playhead(&mut self) {
         let snapped = self.playhead_on_grid();
-        self.project_ref().mutate(crate::content_command::touch::MARKERS, move |p| {
+        self.project.mutate(crate::content_command::touch::MARKERS, move |p| {
             p.timeline.export_in_beat = snapped;
             p.timeline.export_range_enabled = true;
         });
@@ -1001,7 +999,7 @@ impl TimelineInputHost for AppInputHost<'_> {
 
     fn set_export_out_at_playhead(&mut self) {
         let snapped = self.playhead_on_grid();
-        self.project_ref().mutate(crate::content_command::touch::MARKERS, move |p| {
+        self.project.mutate(crate::content_command::touch::MARKERS, move |p| {
             p.timeline.export_out_beat = snapped;
             p.timeline.export_range_enabled = true;
         });
@@ -1011,11 +1009,11 @@ impl TimelineInputHost for AppInputHost<'_> {
     fn clear_export_in(&mut self) {
         let has_out = self.project.timeline.export_out_beat > self.project.timeline.export_in_beat;
         if has_out {
-            self.project_ref().mutate(crate::content_command::touch::MARKERS, |p| {
+            self.project.mutate(crate::content_command::touch::MARKERS, |p| {
                 p.timeline.export_in_beat = manifold_core::Beats::ZERO;
             });
         } else {
-            self.project_ref().mutate(crate::content_command::touch::MARKERS, clear_export_range);
+            self.project.mutate(crate::content_command::touch::MARKERS, clear_export_range);
         }
         self.push_export_range();
     }
@@ -1024,7 +1022,7 @@ impl TimelineInputHost for AppInputHost<'_> {
         if !self.project.timeline.export_range_enabled {
             return;
         }
-        self.project_ref().mutate(crate::content_command::touch::MARKERS, clear_export_range);
+        self.project.mutate(crate::content_command::touch::MARKERS, clear_export_range);
         self.push_export_range();
     }
 
@@ -1151,7 +1149,7 @@ impl TimelineInputHost for AppInputHost<'_> {
     fn get_selected_clip_ids(&self) -> Vec<ClipId> {
         if let Some(r) = self.selection.current_region() {
             let region = crate::ui_translate::selection_region_to_core(r);
-            EditingService::get_clips_in_region(self.project, &region)
+            EditingService::get_clips_in_region(&self.project, &region)
                 .into_iter()
                 .map(|(_, id)| id)
                 .collect()
@@ -1329,7 +1327,7 @@ impl TimelineInputHost for AppInputHost<'_> {
             .iter()
             .map(|id| Box::new(DeleteMarkerCommand::new(id.clone())) as Box<dyn manifold_editing::command::Command>)
             .collect();
-        self.project_ref().execute_batch(commands, "Delete Markers".into());
+        self.project.execute_batch(commands, "Delete Markers".into());
         self.selection.clear_marker_selection();
     }
 
@@ -1372,7 +1370,7 @@ impl TimelineInputHost for AppInputHost<'_> {
             return;
         };
         let cmd = RemoveAutomationPointCommand::new(target, param_id_str, index);
-        self.project_ref().execute(Box::new(cmd));
+        self.project.execute(Box::new(cmd));
     }
 
     // ── Automation lane editing — marquee + draw mode (P4 Unit B) ─────
@@ -1391,23 +1389,22 @@ impl TimelineInputHost for AppInputHost<'_> {
     fn select_all_automation(&mut self) -> bool {
         if !self.selection.automation_mode_visible() { return false; }
         let Some((target, param_id)) = self.selection.automation_paste_context.clone() else { return false; };
-        automation::select_all_in_lane(self.project, self.selection, &target, &param_id);
+        automation::select_all_in_lane(&self.project, self.selection, &target, &param_id);
         // Point selection is drawn at paint time (UI_INVALIDATION D8).
         *self.redraw = true;
         true
     }
 
     fn copy_selected_automation(&mut self) {
-        automation::copy_selected(self.project, self.selection);
+        automation::copy_selected(&self.project, self.selection);
     }
 
     fn cut_selected_automation(&mut self) {
-        self.edits.stamps.bump(crate::content_command::touch::AUTOMATION);
-        automation::cut_selected(
-            self.project,
+        self.project.with_sent(|p| (automation::cut_selected(
+            p,
             self.selection,
             self.content_tx,
-        );
+        ), crate::content_command::touch::AUTOMATION));
     }
 
     fn has_automation_paste_target(&self) -> bool {
@@ -1423,32 +1420,29 @@ impl TimelineInputHost for AppInputHost<'_> {
             .map(|range| range.start)
             .or(self.selection.automation_insert_beat)
             .unwrap_or_else(|| Beats::from_f32(target_beat));
-        self.edits.stamps.bump(crate::content_command::touch::AUTOMATION);
-        automation::paste(
-            self.project,
+        self.project.with_sent(|p| (automation::paste(
+            p,
             self.selection,
             self.content_tx,
             target_beat,
-        );
+        ), crate::content_command::touch::AUTOMATION));
     }
 
     fn duplicate_selected_automation(&mut self) {
-        self.edits.stamps.bump(crate::content_command::touch::AUTOMATION);
-        automation::duplicate_selected(
-            self.project,
+        self.project.with_sent(|p| (automation::duplicate_selected(
+            p,
             self.selection,
             self.content_tx,
             self.ui_root.viewport.grid_step(),
-        );
+        ), crate::content_command::touch::AUTOMATION));
     }
 
     fn delete_selected_automation_points(&mut self) {
-        self.edits.stamps.bump(crate::content_command::touch::AUTOMATION);
-        automation::delete_selected(
-            self.project,
+        self.project.with_sent(|p| (automation::delete_selected(
+            p,
             self.selection,
             self.content_tx,
-        );
+        ), crate::content_command::touch::AUTOMATION));
     }
 
     fn toggle_automation_draw_mode(&mut self) {
@@ -1521,20 +1515,19 @@ impl TimelineInputHost for AppInputHost<'_> {
                 .map(|l| l.layer_id.clone())
         });
         let spb = 60.0 / self.project.settings.bpm.0.max(1.0);
-        let action = self.project_io.process_dropped_files(
-            file_paths,
-            target_beat,
-            drop_layer_index,
-            join_audio_layer,
-            self.project,
-            spb,
-        );
-        // The importer already ran these on the local project; stamp them.
-        let touches = action
-            .record_commands
-            .iter()
-            .fold(manifold_core::change::ChangeSet::NONE, |t, cmd| t.union(cmd.touches()));
-        self.edits.stamps.bump(touches);
+        let project_io = &mut *self.project_io;
+        let action = self.project.with_sent(|project| {
+            let action = project_io.process_dropped_files(
+                file_paths,
+                target_beat,
+                drop_layer_index,
+                join_audio_layer,
+                project,
+                spb,
+            );
+            let touches = crate::gesture_preview::touches_of(&action.record_commands);
+            (action, touches)
+        });
         if !action.record_commands.is_empty() {
             if action.record_commands.len() == 1 {
                 let cmd = action.record_commands.into_iter().next().unwrap();
@@ -1550,11 +1543,6 @@ impl TimelineInputHost for AppInputHost<'_> {
 }
 
 impl AppInputHost<'_> {
-    /// The local project as a stamping writer (UI_INVALIDATION D5).
-    fn project_ref(&mut self) -> crate::ui_bridge::ProjectRef<'_> {
-        crate::ui_bridge::ProjectRef::new(self.project, self.edits, self.content_tx)
-    }
-
     fn playhead_on_grid(&self) -> manifold_core::Beats {
         let bpb = self.project.settings.time_signature_numerator.max(1) as u32;
         self.ui_root
@@ -1592,7 +1580,7 @@ impl AppInputHost<'_> {
         use manifold_editing::commands::marker::AddMarkerCommand;
 
         let marker = TimelineMarker::new(self.playhead_on_grid());
-        self.project_ref().execute(Box::new(AddMarkerCommand::new(marker)));
+        self.project.execute(Box::new(AddMarkerCommand::new(marker)));
     }
 }
 
@@ -1788,11 +1776,10 @@ mod automation_clipboard_host_tests {
 
         fn host(&mut self) -> AppInputHost<'_> {
             AppInputHost {
-                project: &mut self.project, content_tx: &self.tx,
+                project: crate::ui_bridge::ProjectRef::new(&mut self.project, &mut self.edits, &self.tx), content_tx: &self.tx,
                 content_state: &self.content_state, ui_root: &mut self.ui_root,
                 selection: &mut self.selection, active_layer: &mut self.active_layer,
                 redraw: &mut self.redraw,
-                edits: &mut self.edits,
                 current_project_path: &self.current_project_path, has_output_window: false,
                 pending_close_output: &mut self.pending_close_output,
                 pending_export: &mut self.pending_export,
@@ -1834,7 +1821,6 @@ mod automation_clipboard_host_tests {
             PresetTypeId::new("WaterDamBreakGpuFlip"),
         );
         let layer_id = h.project.timeline.layers[index].layer_id.clone();
-        h.project.timeline.layers[index].gen_params_or_init();
         let default = manifold_nodes::bundled_presets::bundled_preset_def(
             &PresetTypeId::new("WaterDamBreakGpuFlip"),
         )
@@ -2050,8 +2036,8 @@ mod automation_clipboard_host_tests {
         layer.layer_id = layer_id.clone();
         let graph = manifold_nodes::bundled_presets::bundled_preset_def(&PresetTypeId::new("Scene"))
             .expect("Scene fixture").as_ref().clone();
-        layer.gen_params_or_init().graph = Some(graph);
-        layer.gen_params_or_init().refresh_manifest_from_graph();
+        layer.gen_params_mut().unwrap().graph = Some(graph);
+        layer.gen_params_mut().unwrap().refresh_manifest_from_graph();
         h.project.timeline.layers.push(layer);
         let mut add = crate::scene_modifier_edit::build_action(
             &h.project,
@@ -2073,8 +2059,8 @@ mod automation_clipboard_host_tests {
             &PresetTypeId::new("Scene"),
         )
         .expect("Scene destination fixture").as_ref().clone();
-        destination.gen_params_or_init().graph = Some(destination_graph);
-        destination.gen_params_or_init().refresh_manifest_from_graph();
+        destination.gen_params_mut().unwrap().graph = Some(destination_graph);
+        destination.gen_params_mut().unwrap().refresh_manifest_from_graph();
         h.project.timeline.layers.push(destination);
         let source_graph = h
             .project
@@ -2143,8 +2129,8 @@ mod automation_clipboard_host_tests {
         layer.layer_id = layer_id.clone();
         let graph = manifold_nodes::bundled_presets::bundled_preset_def(&PresetTypeId::new("Scene"))
             .expect("Scene fixture").as_ref().clone();
-        layer.gen_params_or_init().graph = Some(graph);
-        layer.gen_params_or_init().refresh_manifest_from_graph();
+        layer.gen_params_mut().unwrap().graph = Some(graph);
+        layer.gen_params_mut().unwrap().refresh_manifest_from_graph();
         h.project.timeline.layers.push(layer);
         let mut add = crate::scene_modifier_edit::build_action(
             &h.project,
@@ -2236,8 +2222,8 @@ mod automation_clipboard_host_tests {
         gen_layer.layer_id = gen_layer_id.clone();
         let graph = manifold_nodes::bundled_presets::bundled_preset_def(&PresetTypeId::new("Scene"))
             .expect("Scene fixture").as_ref().clone();
-        gen_layer.gen_params_or_init().graph = Some(graph);
-        gen_layer.gen_params_or_init().refresh_manifest_from_graph();
+        gen_layer.gen_params_mut().unwrap().graph = Some(graph);
+        gen_layer.gen_params_mut().unwrap().refresh_manifest_from_graph();
         h.project.timeline.layers.push(gen_layer);
         let mut add = crate::scene_modifier_edit::build_action(
             &h.project,
@@ -2477,8 +2463,8 @@ mod automation_clipboard_host_tests {
         let mut h = Harness::new();
         let mut layer = Layer::new_generator("Scene".into(), PresetTypeId::new("Scene"), 0);
         let layer_id = layer.layer_id.clone();
-        layer.gen_params_or_init().graph = Some(manifold_nodes::bundled_presets::bundled_preset_def(&PresetTypeId::new("Scene")).unwrap().as_ref().clone());
-        layer.gen_params_or_init().refresh_manifest_from_graph();
+        layer.gen_params_mut().unwrap().graph = Some(manifold_nodes::bundled_presets::bundled_preset_def(&PresetTypeId::new("Scene")).unwrap().as_ref().clone());
+        layer.gen_params_mut().unwrap().refresh_manifest_from_graph();
         h.project.timeline.layers.push(layer);
         h.selection.select_layer(layer_id.clone());
         h.selection.pin_scope(manifold_ui::InspectorTab::Scene);

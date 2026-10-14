@@ -718,7 +718,7 @@ impl Runner {
             }
             RootAction::OpenGraphEditor(ei) => {
                 let tab = ui.inspector.last_effect_tab();
-                match crate::editor_bridge::effect_card_id(tab, &mut data.project, self.active_layer.as_ref(), &data.selection, *ei) {
+                match crate::editor_bridge::effect_card_id(tab, &data.project, self.active_layer.as_ref(), &data.selection, *ei) {
                     Some(eid) => self.watch(data, GraphTarget::Effect(eid)),
                     None => {
                         self.watched = None;
@@ -950,11 +950,10 @@ impl Runner {
                 // of falling through, mirroring the `Text` arm's fail.
                 // Plain unmodified keys keep the existing `key_event` path.
                 if modifiers.is_command_only() && *key == Key::Z {
-                    // As `EditingService::undo`: the undone command's parts.
-                    let touches = self.undo.peek_undo_touches();
+                    // As `EditingService::undo`: what the undo wrote.
                     let undone = self.undo.undo(&mut data.project);
                     if undone {
-                        self.content_stamps.bump(touches);
+                        self.content_stamps.bump(self.undo.last_written());
                     }
                     self.live_frame(ui, data, render, false, true);
                     StepResult {
@@ -965,10 +964,9 @@ impl Runner {
                         artifact: None,
                     }
                 } else if modifiers.is_command_shift() && *key == Key::Z {
-                    let touches = self.undo.peek_redo_touches();
                     let redone = self.undo.redo(&mut data.project);
                     if redone {
-                        self.content_stamps.bump(touches);
+                        self.content_stamps.bump(self.undo.last_written());
                     }
                     self.live_frame(ui, data, render, false, true);
                     StepResult {
@@ -1157,13 +1155,12 @@ impl Runner {
             return;
         }
         let mut host = AppEditingHost::new(
-            &mut data.project,
+            crate::ui_bridge::ProjectRef::new(&mut data.project, &mut self.edits, &self.content_tx),
             &self.content_tx,
             &self.content_state,
             &mut self.cursor_manager,
             &mut self.active_layer,
             &mut self.redraw,
-            &mut self.edits,
         );
         self.overlay.on_pointer_move(pos, &mut host, &mut data.selection, &ui.viewport);
     }
@@ -1600,8 +1597,7 @@ impl Runner {
             let outcome = crate::editor_input::dispatch_card_lane(
                 crate::editor_input::CardLane {
                     ws: &mut ed.ws,
-                    project: &mut data.project,
-                    edits: &mut self.edits,
+                    project: crate::ui_bridge::ProjectRef::new(&mut data.project, &mut self.edits, &self.content_tx),
                     content_tx: &self.content_tx,
                     content_state: &self.content_state,
                     selection: &mut data.selection,
@@ -1619,7 +1615,7 @@ impl Runner {
             }
             let tab = ui.inspector.last_effect_tab();
             if let Some(ei) = outcome.retarget_effect {
-                if let Some(eid) = crate::editor_bridge::effect_card_id(tab, &mut data.project, self.active_layer.as_ref(), &data.selection, ei) {
+                if let Some(eid) = crate::editor_bridge::effect_card_id(tab, &data.project, self.active_layer.as_ref(), &data.selection, ei) {
                     self.watch(data, manifold_core::GraphTarget::Effect(eid));
                 }
             } else if outcome.retarget_generator
@@ -2139,8 +2135,10 @@ impl Runner {
             match cmd {
                 ContentCommand::ExecuteSelecting(command, request) => {
                     let pending = request.capture(&data.project);
-                    self.content_stamps.bump(command.touches());
                     let applied = self.undo.execute(crate::scene_modifier_edit::with_admission(command), &mut data.project);
+                    if applied {
+                        self.content_stamps.bump(self.undo.last_written());
+                    }
                     changed |= applied;
                     if let Some(message) = self.undo.take_rejection() {
                         let sequence = data.content.graph_edit_diagnostic.as_ref().map_or(1, |old| old.sequence.wrapping_add(1));
@@ -2153,8 +2151,11 @@ impl Runner {
                 ContentCommand::SceneModifier(action) => {
                     let error = match crate::scene_modifier_edit::build_action(&data.project, action) {
                         Ok(command) => {
-                            self.content_stamps.bump(command.touches());
-                            changed |= self.undo.execute(crate::scene_modifier_edit::with_admission(command), &mut data.project);
+                            let applied = self.undo.execute(crate::scene_modifier_edit::with_admission(command), &mut data.project);
+                            if applied {
+                                self.content_stamps.bump(self.undo.last_written());
+                            }
+                            changed |= applied;
                             self.undo.take_rejection()
                         }
                         Err(error) => Some(error),
@@ -2181,7 +2182,7 @@ impl Runner {
                     let applied = self.undo.execute(crate::scene_modifier_edit::with_admission(cmd), &mut data.project);
                     if applied {
                         // After execute, as EditingService reads it.
-                        self.content_stamps.bump(self.undo.peek_undo_touches());
+                        self.content_stamps.bump(self.undo.last_written());
                     }
                     changed |= applied;
                     if let Some(message) = self.undo.take_rejection() {
@@ -2589,13 +2590,12 @@ impl Runner {
             crate::ui_bridge::sync_automation_lane_order(&data.project, &mut data.selection);
         }
         let mut host = AppEditingHost::new(
-            &mut data.project,
+            crate::ui_bridge::ProjectRef::new(&mut data.project, &mut self.edits, &self.content_tx),
             &self.content_tx,
             &self.content_state,
             &mut self.cursor_manager,
             &mut self.active_layer,
             &mut self.redraw,
-            &mut self.edits,
         );
         for event in &viewport_events {
             if let UIEvent::PointerDown { modifiers, .. }
@@ -2739,9 +2739,7 @@ impl Runner {
             // hands them to the shared mapping handler before the bridge.
             if let PanelAction::Root(root) = action {
                 let outcome = crate::editor_bridge::MappingHost {
-                    project: &mut data.project,
-                    edits: &mut self.edits,
-                    content_tx: Some(&self.content_tx),
+                    project: crate::ui_bridge::ProjectRef::new(&mut data.project, &mut self.edits, &self.content_tx),
                     scrub: &mut self.scrub,
                 }
                 .dispatch(root);
@@ -2766,7 +2764,7 @@ impl Runner {
                 match action {
                     PanelAction::Params(manifold_ui::ParamsAction::EffectCardClicked(ei)) => {
                         let tab = ui.inspector.last_effect_tab();
-                        if let Some(eid) = crate::editor_bridge::effect_card_id(tab, &mut data.project, self.active_layer.as_ref(), &data.selection, *ei) {
+                        if let Some(eid) = crate::editor_bridge::effect_card_id(tab, &data.project, self.active_layer.as_ref(), &data.selection, *ei) {
                             self.watch(data, manifold_core::GraphTarget::Effect(eid));
                         }
                     }
@@ -2782,7 +2780,7 @@ impl Runner {
             // editor's viewport; here the runner's viewport stands in.
             if let PanelAction::Root(manifold_ui::RootAction::SceneSetupCopyViewportCamera(layer)) = action {
                 let view = self.viewport.as_ref().filter(|(shown, _)| shown == layer).map(|(_, camera)| *camera);
-                crate::scene_view_copy::run(&mut data.project, &self.content_tx, ui, &mut self.edits.stamps, layer, view.as_ref());
+                crate::scene_view_copy::run(&mut crate::ui_bridge::ProjectRef::new(&mut data.project, &mut self.edits, &self.content_tx), ui, layer, view.as_ref());
                 continue;
             }
             if let PanelAction::Params(manifold_ui::ParamsAction::EditCards(edit)) = action {

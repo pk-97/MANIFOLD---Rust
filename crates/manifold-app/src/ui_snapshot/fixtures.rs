@@ -921,7 +921,7 @@ fn inspector_scene() -> SceneData {
         AudioFeature::new(AudioFeatureKind::Transients, AudioBand::Full),
     );
     plasma_trigger.trigger_mode = Some(TriggerFireMode::Both);
-    plasma.gen_params_or_init().audio_mods = Some(vec![plasma_trigger]);
+    plasma.gen_params_mut().unwrap().audio_mods = Some(vec![plasma_trigger]);
 
     let mut project = Project::default();
     project.audio_setup.sends.push(kick_send);
@@ -1218,7 +1218,7 @@ fn param_steps_scene() -> SceneData {
         AudioFeature::new(AudioFeatureKind::Transients, AudioBand::Low),
     );
     pattern_step.action = TriggerAction::Step { amount: 1.0, wrap: WrapMode::Wrap };
-    plasma.gen_params_or_init().audio_mods = Some(vec![pattern_step]);
+    plasma.gen_params_mut().unwrap().audio_mods = Some(vec![pattern_step]);
 
     let mut project = Project::default();
     project.audio_setup.sends.push(kick_send);

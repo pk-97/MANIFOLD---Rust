@@ -262,13 +262,12 @@ mod tests {
 
         fn host(&mut self) -> crate::editing_host::AppEditingHost<'_> {
             crate::editing_host::AppEditingHost::new(
-                &mut self.project,
+                crate::ui_bridge::ProjectRef::new(&mut self.project, &mut self.edits, &self.tx),
                 &self.tx,
                 &self.content_state,
                 &mut self.cursor,
                 &mut self.active_layer,
                 &mut self.redraw,
-                &mut self.edits,
             )
         }
     }

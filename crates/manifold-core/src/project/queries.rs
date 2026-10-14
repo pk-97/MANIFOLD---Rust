@@ -78,8 +78,7 @@ impl Project {
         }
     }
 
-    /// Read twin of [`Self::with_preset_graph_mut`]. A generator whose
-    /// `gen_params` is not built yet reads as `None` (the mut twin builds it).
+    /// Read twin of [`Self::with_preset_graph_mut`].
     pub fn with_preset_graph<R>(
         &self,
         target: &crate::GraphTarget,
@@ -411,9 +410,7 @@ impl Project {
     /// editing commands use to operate on an effect instance or a layer's
     /// generator without forking — both are a `PresetInstance` now that the
     /// generator's graph lives on `gen_params` (graph-home unification), so
-    /// there is no `GraphHost`/`GeneratorHost` abstraction. A generator target
-    /// initializes the layer's `gen_params` if absent (graph editing must work
-    /// before param state exists), inheriting the layer's generator type.
+    /// there is no `GraphHost`/`GeneratorHost` abstraction.
     pub fn with_preset_graph_mut<R>(
         &mut self,
         target: &crate::graph_target::GraphTarget,
@@ -426,7 +423,7 @@ impl Project {
             }
             crate::graph_target::GraphTarget::Generator(lid) => {
                 let (_, layer) = self.timeline.find_layer_by_id_mut(lid.as_str())?;
-                Some(f(layer.gen_params_or_init()))
+                layer.gen_params_mut().map(f)
             }
             crate::graph_target::GraphTarget::SceneModifier { .. } => None,
         }

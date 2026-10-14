@@ -104,7 +104,7 @@ fn fixture() -> Fixture {
     }
 
     let mut main = Layer::new_generator("Main".into(), PresetTypeId::new("TestGen"), 0);
-    let gp = main.gen_params_or_init();
+    let gp = main.gen_params_mut().unwrap();
     bundled_param(gp, "auto", 1.0, false);
     bundled_param(gp, "sync_lfo", 1.0, false);
     bundled_param(gp, "free_lfo", 1.0, false);

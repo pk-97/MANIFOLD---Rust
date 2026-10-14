@@ -398,7 +398,7 @@ impl Command for ToggleNodeParamExposeCommand {
             GraphTarget::Generator(layer_id) => project
                 .timeline
                 .find_layer_by_id_mut(layer_id)
-                .map(|(_, layer)| layer.gen_params_or_init()),
+                .and_then(|(_, layer)| layer.gen_params_mut()),
             GraphTarget::SceneModifier { .. } => unreachable!("handled above"),
         };
         let mirror = match instance {
@@ -454,7 +454,7 @@ impl Command for ToggleNodeParamExposeCommand {
             GraphTarget::Generator(layer_id) => project
                 .timeline
                 .find_layer_by_id_mut(layer_id)
-                .map(|(_, layer)| layer.gen_params_or_init()),
+                .and_then(|(_, layer)| layer.gen_params_mut()),
             GraphTarget::SceneModifier { .. } => unreachable!("handled above"),
         };
         if let Some(inst) = instance {
@@ -1230,9 +1230,9 @@ mod tests {
         let (mut project, lid) = project_with_one_generator_layer();
         {
             let (_, layer) = project.timeline.find_layer_by_id_mut(&lid).unwrap();
-            layer.gen_params_or_init().graph = Some(preset_def());
+            layer.gen_params_mut().unwrap().graph = Some(preset_def());
             // gen_params starts with the two bundled slot values.
-            let gp = layer.gen_params_or_init();
+            let gp = layer.gen_params_mut().unwrap();
             gp.init_defaults_for_type(PresetTypeId::from_string("test.wireframe".to_string()));
             // Override values after init — the registry doesn't know
             // about our synthetic preset, so init may leave the vec
@@ -1513,8 +1513,8 @@ mod tests {
         let (mut project, lid) = project_with_one_generator_layer();
         {
             let (_, layer) = project.timeline.find_layer_by_id_mut(&lid).unwrap();
-            layer.gen_params_or_init().graph = Some(preset_def_with_user_added());
-            let gp = layer.gen_params_or_init();
+            layer.gen_params_mut().unwrap().graph = Some(preset_def_with_user_added());
+            let gp = layer.gen_params_mut().unwrap();
             gp.init_defaults_for_type(PresetTypeId::from_string("test.wireframe".to_string()));
             gp.params = manifold_core::params::ParamManifest::from_params(vec![
                 slot("shape", 0.0, true),
@@ -1943,7 +1943,7 @@ mod tests {
             .find_layer_by_id_mut(&lid)
             .unwrap()
             .1
-            .gen_params_or_init()
+            .gen_params_mut().unwrap()
             .graph = Some(preset_def_with_pattern_binding());
 
         // UNCHECK Pattern.

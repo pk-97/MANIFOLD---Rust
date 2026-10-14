@@ -46,7 +46,7 @@ pub(super) fn modifier_draft_fixture() -> (Project, GraphTarget, EffectGraphDef)
     }
     let mut layer = Layer::new_generator("Scene".into(), PresetTypeId::new("host"), 0);
     layer.layer_id = LayerId::new("layer");
-    let host = layer.gen_params_or_init();
+    let host = layer.gen_params_mut().unwrap();
     host.graph = Some(graph.clone());
     host.refresh_manifest_from_graph();
     let mut project = Project::default();

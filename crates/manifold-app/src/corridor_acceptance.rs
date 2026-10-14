@@ -826,7 +826,7 @@ fn corridor_acceptance_crossing_spike_gate() {
         manifold_core::PresetTypeId::from_string("CorridorSpikeGate".to_string()),
         0,
     );
-    layer.gen_params_or_init().graph = Some(spike_corridor_def());
+    layer.gen_params_mut().unwrap().graph = Some(spike_corridor_def());
     layer
         .clips
         .push(manifold_core::clip::TimelineClip::new_generator(

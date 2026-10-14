@@ -151,7 +151,7 @@ fn armed_trigger_gate_mod_turns_the_analysis_gate_on_and_claims_its_send() {
 
     let mut layer = crate::layer::Layer::new("PLASMA".into(), crate::types::LayerType::Generator, 0);
     layer.layer_id = crate::LayerId::new("plasma-layer");
-    let gp = layer.gen_params_or_init();
+    let gp = layer.gen_params_mut().unwrap();
     gp.params.push(gate_param("clip_trigger"));
     gp.audio_mods_mut().push(armed_trigger_gate_mod(send_a.id.clone()));
     p.timeline.layers.push(layer);
@@ -177,7 +177,7 @@ fn disarmed_trigger_gate_mod_does_not_gate_analysis_but_still_counts_as_send_usa
 
     let mut layer = crate::layer::Layer::new("PLASMA".into(), crate::types::LayerType::Generator, 0);
     layer.layer_id = crate::LayerId::new("plasma-layer");
-    let gp = layer.gen_params_or_init();
+    let gp = layer.gen_params_mut().unwrap();
     gp.params.push(gate_param("clip_trigger"));
     let mut m = armed_trigger_gate_mod(send_a.id.clone());
     m.enabled = false;
@@ -358,7 +358,7 @@ fn scene_modifier_target_reads_and_mutates_only_local_snapshot() {
 }
 
 #[test]
-fn scene_modifier_target_invalid_lookup_does_not_initialize_generator() {
+fn scene_modifier_target_invalid_lookup_does_not_materialize_the_graph() {
     let mut project = Project::default();
     let mut layer = crate::layer::Layer::new(
         "Generator".into(),
@@ -375,7 +375,7 @@ fn scene_modifier_target_invalid_lookup_does_not_initialize_generator() {
     assert!(project
         .with_graph_for_target_mut(&target, Some(&default), true, |_| {})
         .is_none());
-    assert!(project.timeline.layers[0].gen_params().is_none());
+    assert!(project.timeline.layers[0].generator_graph().is_none());
 }
 
 #[test]

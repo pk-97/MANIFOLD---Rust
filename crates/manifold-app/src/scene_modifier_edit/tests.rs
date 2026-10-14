@@ -27,7 +27,7 @@ pub(crate) fn project_with_mushroom() -> (Project, LayerId) {
         Layer::new_generator("Mushroom".into(), PresetTypeId::new("PhotoscanBaseline"), 0);
     let layer_id = LayerId::new("admission-layer");
     layer.layer_id = layer_id.clone();
-    let host = layer.gen_params_or_init();
+    let host = layer.gen_params_mut().unwrap();
     host.graph = Some(graph);
     host.refresh_manifest_from_graph();
 

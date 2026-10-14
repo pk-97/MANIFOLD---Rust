@@ -60,11 +60,12 @@ pub(super) fn dispatch_marker(
         MarkerAction::MarkerDragMoved(marker_id_str, new_beat) => {
             let marker_id = MarkerId::new(marker_id_str.as_str());
             let beat = Beats::from_f32(*new_beat);
-            project.preview_marker(|p| {
+            project.preview(|p, preview| {
                 if let Some(marker) = p.timeline.find_marker_mut(&marker_id) {
                     marker.beat = beat;
                 }
                 p.timeline.sort_markers();
+                preview.record_marker();
             });
             if let Some(ResolvedScrub::Marker { live, .. }) = &mut scrub.active {
                 *live = *new_beat;
@@ -84,11 +85,12 @@ pub(super) fn dispatch_marker(
                 // Only commit if the marker actually moved
                 if (old_beat - *final_beat).abs() > 0.001 {
                     // Undo the live preview mutation first — the command will redo it
-                    project.preview_marker(|p| {
+                    project.preview(|p, preview| {
                         if let Some(marker) = p.timeline.find_marker_mut(&marker_id) {
                             marker.beat = Beats::from_f32(old_beat);
                         }
                         p.timeline.sort_markers();
+                        preview.record_marker();
                     });
 
                     let cmd: Box<dyn manifold_editing::command::Command + Send> =

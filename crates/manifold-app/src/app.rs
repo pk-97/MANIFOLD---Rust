@@ -90,7 +90,7 @@ pub struct Application {
 
     /// Local project snapshot for UI reads. Updated from content thread
     /// when data_version changes. During drag, snapshots are deferred.
-    pub(crate) local_project: Project,
+    pub(crate) local_project: crate::ui_bridge::LocalProject,
 
     /// Last received project snapshot Arc. Used to skip redundant deep clones
     /// when the content thread sends the same Arc for modulation-only frames.
@@ -564,7 +564,7 @@ impl Application {
             state_rx: None,
             content_thread_handle: None,
             content_state: ContentState::default(),
-            local_project: default_project,
+            local_project: crate::ui_bridge::LocalProject::new(default_project),
             last_snapshot_arc: None,
             ui_edits: Default::default(),
             frame_planner: Default::default(),
@@ -811,7 +811,7 @@ impl Application {
     /// project, stamps what the command touches and sends it (UI_INVALIDATION D5).
     pub(crate) fn execute_local(&mut self, cmd: Box<dyn manifold_editing::command::Command>) {
         if let Some(tx) = self.content_tx.as_ref() {
-            crate::ui_bridge::ProjectRef::new(&mut self.local_project, &mut self.ui_edits, tx).execute(cmd);
+            self.local_project.edit(&mut self.ui_edits, tx).execute(cmd);
         }
     }
 
@@ -971,7 +971,7 @@ impl Application {
                 }
             };
             let mut cx = crate::ui_bridge::DispatchCtx {
-                project: crate::ui_bridge::ProjectRef::new(&mut self.local_project, &mut self.ui_edits, content_tx),
+                project: self.local_project.edit(&mut self.ui_edits, content_tx),
                 content_tx,
                 content_state: &self.content_state,
                 ui: &mut self.ws.ui_root,
@@ -1105,7 +1105,7 @@ impl Application {
                                 let content_tx = self.content_tx.as_ref().unwrap();
                                 let editor_target = self.watched_graph_target.as_ref();
                                 let mut dctx = crate::ui_bridge::DispatchCtx {
-                                    project: crate::ui_bridge::ProjectRef::new(&mut self.local_project, &mut self.ui_edits, content_tx),
+                                    project: self.local_project.edit(&mut self.ui_edits, content_tx),
                                     content_tx,
                                     content_state: &self.content_state,
                                     ui: &mut self.ws.ui_root,
@@ -2290,14 +2290,20 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                     let spb = manifold_core::tempo::TempoMapConverter::seconds_per_beat_from_bpm(
                         self.local_project.settings.bpm.0,
                     );
-                    let action = self.project_io.process_dropped_files(
-                        std::slice::from_ref(&path),
-                        drop_beat,
-                        drop_layer,
-                        join_audio_layer,
-                        &mut self.local_project,
-                        spb,
-                    );
+                    let Some(tx) = self.content_tx.as_ref() else { return };
+                    let project_io = &mut self.project_io;
+                    let action = self.local_project.edit(&mut self.ui_edits, tx).with_sent(|project| {
+                        let action = project_io.process_dropped_files(
+                            std::slice::from_ref(&path),
+                            drop_beat,
+                            drop_layer,
+                            join_audio_layer,
+                            project,
+                            spb,
+                        );
+                        let touches = crate::gesture_preview::touches_of(&action.record_commands);
+                        (action, touches)
+                    });
                     self.apply_project_io_action(action);
                 } else if crate::project_io::is_supported_image_extension(&path) {
                     // Still images → an image clip, Video layers only. Resolve

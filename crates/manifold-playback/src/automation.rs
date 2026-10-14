@@ -1015,10 +1015,10 @@ mod tests {
         // `evaluate_all_audio_mods` — not just layer/master effects.
         let mut layer = Layer::new_generator("GenLayer".into(), TEST_FX, 0);
         layer
-            .gen_params_or_init()
+            .gen_params_mut().unwrap()
             .init_defaults_for_type(TEST_FX);
         layer
-            .gen_params_or_init()
+            .gen_params_mut().unwrap()
             .automation_lanes = Some(vec![amount_lane()]);
         let mut project = project_with(layer);
         let mut latches = AutomationLatches::default();

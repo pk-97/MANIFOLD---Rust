@@ -48,8 +48,8 @@ fn trigger_source_project() -> (Project, LayerId, LayerId, LayerId, SceneId) {
     let mut owner = Layer::new_generator("TestGen".into(), PresetTypeId::new("TestGen"), 1);
     owner.parent_layer_id = Some(group_id.clone());
     owner.is_muted = true;
-    add_level_param(owner.gen_params_or_init());
-    owner.gen_params_or_init().envelopes = Some(vec![step_envelope()]);
+    add_level_param(owner.gen_params_mut().unwrap());
+    owner.gen_params_mut().unwrap().envelopes = Some(vec![step_envelope()]);
     let owner_id = owner.layer_id.clone();
 
     let mut source_a = Layer::new_trigger("A".into(), owner_id.clone(), 2);
@@ -85,7 +85,7 @@ fn trigger_source_project() -> (Project, LayerId, LayerId, LayerId, SceneId) {
     });
 
     owner
-        .gen_params_or_init()
+        .gen_params_mut().unwrap()
         .params
         .get_mut("level")
         .unwrap()

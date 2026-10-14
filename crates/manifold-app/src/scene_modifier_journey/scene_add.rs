@@ -32,7 +32,7 @@ fn scene_additions_render_while_paused_and_roundtrip_undo() {
         .clone();
     // Hide the original model so existing geometry cannot satisfy the
     // visibility assertion for the newly added cube or plane.
-    layer.gen_params_or_init().set_param(&binding, 0.0);
+    layer.gen_params_mut().unwrap().set_param(&binding, 0.0);
     let default = layer.generator_graph().unwrap().clone();
     project.timeline.layers.push(layer);
     let mut ct = headless_content_thread(Project::default(), 320, 180);

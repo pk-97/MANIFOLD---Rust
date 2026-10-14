@@ -22,7 +22,7 @@ impl AppInputHost<'_> {
                 SceneItemKind::Object
             };
             match SceneItemClipboard::capture(
-                self.project,
+                &self.project,
                 &item.layer_id,
                 item.scene,
                 kind,

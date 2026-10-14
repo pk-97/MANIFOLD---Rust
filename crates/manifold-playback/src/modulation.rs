@@ -1502,7 +1502,7 @@ mod tests {
     /// registry defaults (populated `params` manifest, kind = Generator).
     fn generator_layer() -> Layer {
         let mut layer = Layer::new_generator("GenLayer".into(), TEST_GEN.clone(), 0);
-        layer.gen_params_or_init().init_defaults_for_type(TEST_GEN.clone());
+        layer.gen_params_mut().unwrap().init_defaults_for_type(TEST_GEN.clone());
         layer
     }
 
@@ -1674,7 +1674,7 @@ mod tests {
     fn generator_envelope_applies_full_offset() {
         let mut layer = generator_layer();
         {
-            let gp = layer.gen_params_or_init();
+            let gp = layer.gen_params_mut().unwrap();
             let mut env = ParamEnvelope::new("speed");
             env.target_normalized = 1.0;
             gp.envelopes = Some(vec![env]);
@@ -1697,7 +1697,7 @@ mod tests {
     fn generator_disabled_envelope_is_noop() {
         let mut layer = generator_layer();
         {
-            let gp = layer.gen_params_or_init();
+            let gp = layer.gen_params_mut().unwrap();
             let mut env = ParamEnvelope::new("speed");
             env.enabled = false;
             gp.envelopes = Some(vec![env]);
@@ -1743,7 +1743,7 @@ mod tests {
             manifold_core::types::LayerType::Dmx,
             0,
         );
-        layer.gen_params_or_init().init_defaults_for_type(TEST_GEN.clone());
+        layer.gen_params_mut().unwrap().init_defaults_for_type(TEST_GEN.clone());
         {
             let gp = layer.gen_params_mut().unwrap();
             gp.envelopes = Some(vec![full_depth_env("speed")]);
@@ -3194,7 +3194,7 @@ mod tests {
     #[test]
     fn trigger_gate_mod_fires_on_generator_and_produces_layer_pulse() {
         let mut layer = generator_layer();
-        add_trigger_gate_param(layer.gen_params_or_init(), "clip_trigger");
+        add_trigger_gate_param(layer.gen_params_mut().unwrap(), "clip_trigger");
         let mut project = project_with(layer);
         let send = AudioSend::new("Kick");
         let send_id = send.id.clone();
@@ -3221,7 +3221,7 @@ mod tests {
     #[test]
     fn trigger_gate_mod_fires_once_then_rearms_below_ratio() {
         let mut layer = generator_layer();
-        add_trigger_gate_param(layer.gen_params_or_init(), "clip_trigger");
+        add_trigger_gate_param(layer.gen_params_mut().unwrap(), "clip_trigger");
         let mut project = project_with(layer);
         let send = AudioSend::new("Kick");
         let send_id = send.id.clone();
@@ -3244,7 +3244,7 @@ mod tests {
     #[test]
     fn trigger_gate_mod_mode_clip_edge_never_pulses() {
         let mut layer = generator_layer();
-        add_trigger_gate_param(layer.gen_params_or_init(), "clip_trigger");
+        add_trigger_gate_param(layer.gen_params_mut().unwrap(), "clip_trigger");
         let mut project = project_with(layer);
         let send = AudioSend::new("Kick");
         let send_id = send.id.clone();
@@ -3285,7 +3285,7 @@ mod tests {
     #[test]
     fn clear_all_trigger_edges_rearms_gate_mod() {
         let mut layer = generator_layer();
-        add_trigger_gate_param(layer.gen_params_or_init(), "clip_trigger");
+        add_trigger_gate_param(layer.gen_params_mut().unwrap(), "clip_trigger");
         let mut project = project_with(layer);
         let send = AudioSend::new("Kick");
         let send_id = send.id.clone();
@@ -4344,7 +4344,7 @@ mod tests {
         };
 
         let mut layer = generator_layer();
-        layer.gen_params_or_init().graph = Some(def.clone());
+        layer.gen_params_mut().unwrap().graph = Some(def.clone());
         let mut project = project_with(layer);
         let layer_id = project.timeline.layers[0].layer_id.clone();
 
@@ -4460,7 +4460,7 @@ mod tests {
         };
 
         let mut layer = generator_layer();
-        layer.gen_params_or_init().graph = Some(def.clone());
+        layer.gen_params_mut().unwrap().graph = Some(def.clone());
         let mut project = project_with(layer);
         let layer_id = project.timeline.layers[0].layer_id.clone();
 

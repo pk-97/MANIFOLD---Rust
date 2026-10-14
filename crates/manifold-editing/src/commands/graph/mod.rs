@@ -335,7 +335,7 @@ pub(super) fn resolve_target_instance<'p>(
         GraphTarget::Generator(layer_id) => project
             .timeline
             .find_layer_by_id_mut(layer_id)
-            .map(|(_, layer)| layer.gen_params_or_init()),
+            .and_then(|(_, layer)| layer.gen_params_mut()),
         GraphTarget::SceneModifier { .. } => None,
     }
 }

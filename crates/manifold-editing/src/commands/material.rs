@@ -471,9 +471,6 @@ pub struct ChangeMaterialParamsCommand {
     old_values: Option<Vec<f32>>,
     rejection: Option<String>,
     applied: bool,
-    /// A changed param turns a scene feature on or off, so it decides which
-    /// rows exist. Read from the project on every execute.
-    sets_rows: bool,
 }
 
 impl ChangeMaterialParamsCommand {
@@ -493,29 +490,21 @@ impl ChangeMaterialParamsCommand {
             old_values: None,
             rejection: None,
             applied: false,
-            sets_rows: false,
         }
     }
 }
 
 impl Command for ChangeMaterialParamsCommand {
-    /// Card param values; a feature switch among them decides rows too
-    /// (UI_INVALIDATION D21, D22).
+    /// Card param values. A feature switch that flips adds Effects at
+    /// execute (`rows_written`).
     fn touches(&self) -> ChangeSet {
-        if self.sets_rows {
-            ChangeSet::of(&[Part::Values, Part::Effects])
-        } else {
-            ChangeSet::of(&[Part::Values])
-        }
+        ChangeSet::of(&[Part::Values])
     }
 
     fn do_execute(&mut self, project: &mut Project) {
         self.rejection = None;
         self.applied = false;
         self.old_values = None;
-        self.sets_rows = self.changes.iter().any(|change| {
-            crate::commands::effects::card_param_sets_rows(project, &self.target, change.param_id.as_ref())
-        });
         if let Err(reason) = validate_material_edit(
             project,
             &self.target,

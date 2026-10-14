@@ -834,7 +834,7 @@ mod placeholder_lane_owner {
         }))
         .unwrap();
         let mut layer = Layer::new_generator(name.into(), PresetTypeId::NONE, order);
-        layer.gen_params_or_init().params = ParamManifest::from_params(vec![Param::bundled(spec)]);
+        layer.gen_params_mut().unwrap().params = ParamManifest::from_params(vec![Param::bundled(spec)]);
         layer
     }
 
@@ -898,7 +898,7 @@ mod lane_label_section {
         }
         let spec = serde_json::from_value(json).unwrap();
         let mut layer = Layer::new_generator("A".into(), PresetTypeId::NONE, 0);
-        layer.gen_params_or_init().params = ParamManifest::from_params(vec![Param::bundled(spec)]);
+        layer.gen_params_mut().unwrap().params = ParamManifest::from_params(vec![Param::bundled(spec)]);
         pinned_label(&layer, "gain")
     }
 

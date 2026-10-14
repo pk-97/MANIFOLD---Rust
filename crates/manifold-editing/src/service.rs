@@ -1,5 +1,5 @@
 use crate::audit;
-use crate::command::{Command, CompositeCommand};
+use crate::command::{rows_written, Command, CompositeCommand};
 use crate::commands::clip::*;
 use crate::commands::layer::DuplicateLayersCommand;
 use crate::edit::ProjectEdit;
@@ -73,14 +73,18 @@ impl EditingService {
     }
 
     /// A non-undoable project write that declares the parts it touches (D3).
-    /// Stamps `touches`; never bumps `data_version` (D23). An empty set is a
-    /// no-op stamp, for writes that found nothing to change.
-    pub fn mutate<'p>(&mut self, touches: ChangeSet, project: impl Into<ProjectEdit<'p>>, f: impl FnOnce(&mut Project)) {
+    /// Stamps and returns what it wrote: `touches`, plus Effects when a value
+    /// write changed which rows exist (`rows_written`). Never bumps
+    /// `data_version` (D23). An empty set is a no-op stamp, for writes that
+    /// found nothing to change.
+    pub fn mutate<'p>(&mut self, touches: ChangeSet, project: impl Into<ProjectEdit<'p>>, f: impl FnOnce(&mut Project)) -> ChangeSet {
         let project = project.into().into_mut();
         let window = audit::open(project);
-        f(project);
-        audit::close(window, project, touches, "mutate");
-        self.stamps.bump(touches);
+        let ((), rows) = rows_written(project, f);
+        let wrote = touches.union(rows);
+        audit::close(window, project, wrote, "mutate");
+        self.stamps.bump(wrote);
+        wrote
     }
 
     /// A write whose later steps read earlier ones, so it cannot be built as
@@ -97,7 +101,8 @@ impl EditingService {
         let project = project.into().into_mut();
         let before = self.stamps;
         let window = audit::open(project);
-        let (out, touches) = f(project, self);
+        let ((out, touches), rows) = rows_written(project, |project| f(project, self));
+        let touches = touches.union(rows);
         let declared = touches.union(self.stamps.moved_since(&before));
         audit::close(window, project, declared, "mutate_with_history");
         self.stamps.bump(touches);

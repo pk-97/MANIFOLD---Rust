@@ -56,7 +56,7 @@ fn physics_imported_flower_shatter_release_preserves_authored_row_and_materials(
         .timeline
         .add_layer("Flower Shatter", LayerType::Generator, preset_id);
     project.timeline.layers[layer_index]
-        .gen_params_or_init()
+        .gen_params_mut().unwrap()
         .graph = Some(imported.clone());
     project.timeline.layers[layer_index].clips.push(
         manifold_core::clip::TimelineClip::new_generator(Beats(0.0), Beats(16.0)),
@@ -503,7 +503,7 @@ fn imported_flower_physics_off_renders_authored_transform() {
             .timeline
             .add_layer("Flower Physics Off", LayerType::Generator, preset_id);
     let layer = &mut project.timeline.layers[layer_index];
-    layer.gen_params_or_init().graph = Some(imported.clone());
+    layer.gen_params_mut().unwrap().graph = Some(imported.clone());
     layer
         .clips
         .push(manifold_core::clip::TimelineClip::new_generator(

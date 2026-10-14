@@ -264,8 +264,11 @@ pub struct Layer {
 }
 
 impl Layer {
+    /// A layer that hosts a generator gets its instance here, so no edit ever
+    /// creates one (an edit that did would write a whole instance its undo
+    /// never removes).
     pub fn new(name: String, layer_type: LayerType, index: i32) -> Self {
-        Self {
+        let mut layer = Self {
             layer_id: LayerId::new(crate::short_id()),
             index,
             name,
@@ -273,6 +276,17 @@ impl Layer {
             layer_color: Self::generate_layer_color(index as usize),
             clips: Vec::new(),
             ..Default::default()
+        };
+        layer.ensure_generator_instance();
+        layer
+    }
+
+    /// Give a generator-hosting layer its instance when it has none, typed
+    /// from the legacy flat field. Runs at creation and at load only.
+    pub(crate) fn ensure_generator_instance(&mut self) {
+        if self.hosts_generator() && self.gen_params.is_none() {
+            let ty = self.generator_type().clone();
+            self.gen_params = Some(PresetInstance::new_generator(ty));
         }
     }
 
@@ -340,10 +354,9 @@ impl Layer {
 
     /// Gen-carrying predicate — the single "this layer hosts a generator"
     /// test every generator-mutation guard reads (LED_STRIPS_DESIGN.md
-    /// section 5b D16). Type membership, NOT `gen_params` presence:
-    /// `change_generator_type`/`restore_generator_state` create gen_params
-    /// on demand to serve Generator layers that have no generator yet, so a
-    /// presence-based guard would turn that path into a silent no-op.
+    /// section 5b D16). A layer that hosts a generator owns its instance from
+    /// creation and load on (`Layer::new`, `Project::on_after_deserialize`),
+    /// so no edit ever creates one.
     #[inline]
     pub fn hosts_generator(&self) -> bool {
         matches!(self.layer_type, LayerType::Generator | LayerType::Dmx)
@@ -378,18 +391,6 @@ impl Layer {
     #[inline]
     pub fn gen_params_mut(&mut self) -> Option<&mut PresetInstance> {
         self.gen_params.as_mut()
-    }
-
-    /// Mutable access to generator params, creating a default if None.
-    #[inline]
-    pub fn gen_params_or_init(&mut self) -> &mut PresetInstance {
-        // Inherit the layer's generator type (from a legacy flat field when
-        // `gen_params` hasn't been built yet) so a freshly-initialized instance
-        // isn't stranded on `PresetTypeId::NONE` — which would lose the type the
-        // moment graph editing forces an init (graph-home unification).
-        let ty = self.generator_type().clone();
-        self.gen_params
-            .get_or_insert_with(|| PresetInstance::new_generator(ty))
     }
 
     /// The generator's per-instance graph override, or `None` when it renders
@@ -883,9 +884,9 @@ impl Layer {
         if !self.hosts_generator() {
             return;
         }
-        let gp = self
-            .gen_params
-            .get_or_insert_with(|| PresetInstance::new_generator(PresetTypeId::NONE));
+        let Some(gp) = self.gen_params.as_mut() else {
+            return;
+        };
         gp.change_type(new_type.clone());
         if gp.graph.take().is_some() {
             // Dropping the override swaps in a different def — structural.
@@ -944,9 +945,9 @@ impl Layer {
         if !self.hosts_generator() {
             return;
         }
-        let gp = self
-            .gen_params
-            .get_or_insert_with(|| PresetInstance::new_generator(PresetTypeId::NONE));
+        let Some(gp) = self.gen_params.as_mut() else {
+            return;
+        };
         gp.restore(old_type.clone(), params, drivers, envelopes);
     }
 

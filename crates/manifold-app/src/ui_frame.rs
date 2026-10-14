@@ -417,11 +417,11 @@ pub(crate) fn gather_frame_inputs(
 /// `redraw` is set when the frame needs the offscreen repainted (D8).
 /// Called by the live App (`tick_and_render`) and the script runner.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn apply_frame_plan(
+pub(crate) fn apply_frame_plan<P: std::borrow::Borrow<manifold_core::project::Project>>(
     ui_root: &mut UIRoot,
     editor_ui_root: Option<&mut UIRoot>,
     cache: Option<&mut UICacheManager>,
-    project: &mut manifold_core::project::Project,
+    project_mut: &mut P,
     selection: &mut manifold_ui::UIState,
     active_layer: &mut Option<manifold_core::LayerId>,
     redraw: &mut bool,
@@ -430,13 +430,14 @@ pub(crate) fn apply_frame_plan(
     push: PushInputs<'_>,
     between: impl FnOnce(
         &mut UIRoot,
-        &mut manifold_core::project::Project,
+        &mut P,
         &mut manifold_ui::UIState,
         &mut Option<manifold_core::LayerId>,
         &mut bool,
     ) -> bool,
 ) {
     use crate::frame_plan::Projection;
+    let project: &manifold_core::project::Project = (*project_mut).borrow();
     let projections = plan.projections;
     let latched = &push.content_state.automation_latched_params;
     let led_preview = push.content_state.led_preview.as_ref();
@@ -494,7 +495,8 @@ pub(crate) fn apply_frame_plan(
         project_editor_inspector(ed, project, idx, selection, latched, led_preview);
     }
 
-    let clip_drag = between(ui_root, project, selection, active_layer, redraw);
+    let clip_drag = between(ui_root, project_mut, selection, active_layer, redraw);
+    let project: &manifold_core::project::Project = (*project_mut).borrow();
 
     // The plan's regions rebuild alone (D7); an inspector projection
     // rewrote the inspector's lists, so its region rebuilds with it.

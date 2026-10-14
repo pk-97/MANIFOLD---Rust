@@ -82,7 +82,7 @@ fn project_with_mushroom_clip() -> (Project, LayerId, ClipId, String) {
         Layer::new_generator("Mushroom".into(), PresetTypeId::new("PhotoscanBaseline"), 0);
     let layer_id = LayerId::new("clip-admission-layer");
     layer.layer_id = layer_id.clone();
-    let host = layer.gen_params_or_init();
+    let host = layer.gen_params_mut().unwrap();
     host.graph = Some(graph);
     host.refresh_manifest_from_graph();
 

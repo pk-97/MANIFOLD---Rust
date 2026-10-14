@@ -13,7 +13,6 @@ fn water_project_with_preset(preset: &'static str) -> (Project, LayerId, u32) {
     let mut project = Project::default();
     let index = project.timeline.add_layer("Water", LayerType::Generator, PresetTypeId::new(preset));
     let layer = &mut project.timeline.layers[index];
-    layer.gen_params_or_init();
     let id = layer.layer_id.clone();
     let def = manifold_nodes::bundled_presets::bundled_preset_def(&PresetTypeId::new(preset)).unwrap();
     let render = def.nodes.iter().find(|node| node.type_id == "node.render_scene").unwrap().id;

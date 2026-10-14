@@ -737,8 +737,8 @@ mod tests {
         let graph = manifold_nodes::bundled_presets::bundled_preset_def(&PresetTypeId::new("Scene"))
             .expect("Scene resolves").as_ref().clone();
         let layer_id = layer.layer_id.clone();
-        layer.gen_params_or_init().graph = Some(graph);
-        layer.gen_params_or_init().refresh_manifest_from_graph();
+        layer.gen_params_mut().unwrap().graph = Some(graph);
+        layer.gen_params_mut().unwrap().refresh_manifest_from_graph();
         project.timeline.layers.push(layer);
         let target = GraphTarget::Generator(layer_id.clone());
         let graph = crate::graph_target::resolve(&project, &target).expect("fixture graph");
@@ -914,12 +914,12 @@ mod tests {
                 .unwrap();
         let mut destination =
             Layer::new_generator("Other layer".into(), PresetTypeId::new("Scene"), 1);
-        destination.gen_params_or_init().graph = Some(
+        destination.gen_params_mut().unwrap().graph = Some(
             manifold_nodes::bundled_presets::bundled_preset_def(&PresetTypeId::new("Scene"))
                 .unwrap().as_ref().clone(),
         );
         destination
-            .gen_params_or_init()
+            .gen_params_mut().unwrap()
             .refresh_manifest_from_graph();
         let destination_layer = destination.layer_id.clone();
         project.timeline.layers.push(destination);

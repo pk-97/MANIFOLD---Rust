@@ -14,26 +14,23 @@ pub trait Command: Debug + Send {
     fn do_execute(&mut self, project: &mut Project);
     /// The inverse edit. Callers use `undo`.
     fn do_undo(&mut self, project: &mut Project);
-    /// Run the edit. Returns the parts it wrote: `touches`, plus whole
-    /// instances when it created a generator layer's instance on first edit
-    /// (`Project::with_preset_graph_mut` does that lazily). Stamp this set,
-    /// not `touches`.
+    /// Run the edit. Returns the parts it wrote: `touches`, plus Effects
+    /// when a value it wrote changed which rows exist ([`rows_written`]).
+    /// Stamp this set, not `touches`.
     fn execute(&mut self, project: &mut Project) -> ChangeSet {
         let window = crate::audit::open(project);
-        let instances = generator_instances(project);
-        self.do_execute(project);
+        let ((), rows) = rows_written(project, |project| self.do_execute(project));
         // Read after execute: a set that depends on the data is recorded there.
-        let wrote = self.touches().union(lifted(instances, project));
+        let wrote = self.touches().union(rows);
         crate::audit::close(window, project, wrote, self.description());
         wrote
     }
     /// Run the inverse edit. Returns the parts it wrote, as `execute` does.
     fn undo(&mut self, project: &mut Project) -> ChangeSet {
         let window = crate::audit::open(project);
-        let instances = generator_instances(project);
         let declared = self.touches();
-        self.do_undo(project);
-        let wrote = declared.union(lifted(instances, project));
+        let ((), rows) = rows_written(project, |project| self.do_undo(project));
+        let wrote = declared.union(rows);
         crate::audit::close(window, project, wrote, self.description());
         wrote
     }
@@ -60,19 +57,21 @@ pub trait Command: Debug + Send {
     fn touches(&self) -> ChangeSet;
 }
 
-/// Generator layers that own an instance. Counted around each edit: a rise
-/// means the edit created one, which writes a whole instance.
-pub fn generator_instances(project: &Project) -> usize {
-    project.timeline.layers.iter().filter(|layer| layer.gen_params().is_some()).count()
-}
-
-/// Whole instances when the generator instance count moved from `before`.
-pub fn lifted(before: usize, project: &Project) -> ChangeSet {
-    if generator_instances(project) == before {
+/// Run a project write and return Effects when it changed which rows exist
+/// (`manifold_core::change::row_facts_key`), else nothing. The row rule
+/// lives here and only here: every stamp site writes through it (commands,
+/// `EditingService::mutate`, the UI's `ProjectRef`), so a value write that
+/// flips a feature switch moves Effects whoever made it: a command, OSC,
+/// Ableton, MIDI or a scrub (UI_INVALIDATION D21).
+pub fn rows_written<R>(project: &mut Project, f: impl FnOnce(&mut Project) -> R) -> (R, ChangeSet) {
+    let before = manifold_core::change::row_facts_key(project);
+    let out = f(project);
+    let rows = if manifold_core::change::row_facts_key(project) == before {
         ChangeSet::NONE
     } else {
-        crate::commands::WHOLE_INSTANCES
-    }
+        ChangeSet::of(&[manifold_core::change::Part::Effects])
+    };
+    (out, rows)
 }
 
 /// Callbacks for layer lifecycle events (add/remove).

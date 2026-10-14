@@ -33,6 +33,12 @@ impl Project {
         self.timeline.rebuild_clip_lookup();
         self.session.rebuild_slot_lookup();
 
+        // A generator layer saved without an instance gets it now, so no
+        // edit ever creates one.
+        for layer in &mut self.timeline.layers {
+            layer.ensure_generator_instance();
+        }
+
         // Fold a legacy pre-UID `deviceName` into a UID-less AudioDeviceRef so
         // older saves resolve their audio input by name. See
         // `docs/AUDIO_INFRASTRUCTURE.md` section 5.

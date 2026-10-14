@@ -117,7 +117,7 @@ fn physics_catalog_host() -> EffectGraphDef {
     let mut project = Project::default();
     let layer = project.timeline.add_layer("Catalog Physics", LayerType::Generator,
         owner.preset_metadata.as_ref().unwrap().id.clone());
-    project.timeline.layers[layer].gen_params_or_init().graph = Some(owner.clone());
+    project.timeline.layers[layer].gen_params_mut().unwrap().graph = Some(owner.clone());
     let target = GraphTarget::Generator(project.timeline.layers[layer].layer_id.clone());
     let mut enable = EnableSceneObjectPhysicsCommand::new(target, scene_id, 0,
         metadata_for_node_type("node.rigid_body"), owner)

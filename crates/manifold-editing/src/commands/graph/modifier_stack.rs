@@ -647,7 +647,7 @@ mod tests {
     fn project_with_graph(graph: Option<EffectGraphDef>) -> (Project, GraphTarget, EffectGraphDef) {
         let mut project = Project::default();
         let mut layer = Layer::new_generator("Stack Test".into(), PresetTypeId::new("stack"), 0);
-        layer.gen_params_or_init().graph = graph;
+        layer.gen_params_mut().unwrap().graph = graph;
         let target = GraphTarget::Generator(layer.layer_id.clone());
         project.timeline.layers.push(layer);
         (project, target, owner_default())
@@ -881,7 +881,7 @@ mod tests {
             modifier("stale"),
         )
         .unwrap();
-        project.timeline.layers[0].gen_params_or_init().graph = Some(owner_default());
+        project.timeline.layers[0].gen_params_mut().unwrap().graph = Some(owner_default());
         command.execute(&mut project);
         assert!(!command.was_applied());
         assert_eq!(command.error(), Some(&SceneModifierStackError::StaleOwner));

@@ -178,7 +178,7 @@ mod tests {
     fn cutoff_rejects_late_history_but_accepts_new_equal_beat_starts() {
         let mut owner = Layer::new_generator("Owner".into(), PresetTypeId::new("Test"), 0);
         owner
-            .gen_params_or_init()
+            .gen_params_mut().unwrap()
             .params
             .push(Param::bundled(ParamSpecDef {
                 id: "value".into(),

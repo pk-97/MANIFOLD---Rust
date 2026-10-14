@@ -102,32 +102,34 @@ fn build_video_import_batch(
 impl Application {
     // ── Project I/O — delegates to ProjectIOService ────────────────────
 
-    /// Persist current viewport scroll + zoom and UI collapse states into project settings.
+    /// Persist current viewport scroll + zoom and UI collapse states into the
+    /// save snapshot's settings.
     fn save_viewport_state(&mut self) {
-        self.local_project.settings.viewport_scroll_x_beats =
+        let settings = &mut self.local_project.intake().settings;
+        settings.viewport_scroll_x_beats =
             self.ws.ui_root.viewport.scroll_x_beats().as_f32();
-        self.local_project.settings.viewport_scroll_y_px = self.ws.ui_root.viewport.scroll_y_px();
-        self.local_project.settings.viewport_pixels_per_beat =
+        settings.viewport_scroll_y_px = self.ws.ui_root.viewport.scroll_y_px();
+        settings.viewport_pixels_per_beat =
             self.ws.ui_root.viewport.pixels_per_beat();
 
         // Persist panel sizing. These read from the live UI layout (which is
         // never clobbered by content-thread snapshots) rather than relying on a
         // drag-end write into local_project.settings — that write gets wiped by
         // the next snapshot clone before save can capture it.
-        self.local_project.settings.inspector_width = self.ws.ui_root.layout.inspector_width;
-        self.local_project.settings.timeline_height_percent =
+        settings.inspector_width = self.ws.ui_root.layout.inspector_width;
+        settings.timeline_height_percent =
             self.ws.ui_root.layout.timeline_split_ratio;
 
         // Persist inspector collapse states
-        self.local_project.settings.macros_collapsed =
+        settings.macros_collapsed =
             self.ws.ui_root.inspector.macros_panel().is_collapsed();
-        self.local_project.settings.master_chrome_collapsed =
+        settings.master_chrome_collapsed =
             self.ws.ui_root.inspector.master_chrome().is_collapsed();
-        self.local_project.settings.layer_chrome_collapsed =
+        settings.layer_chrome_collapsed =
             self.ws.ui_root.inspector.layer_chrome().is_collapsed();
-        self.local_project.settings.clip_chrome_collapsed =
+        settings.clip_chrome_collapsed =
             self.ws.ui_root.inspector.clip_chrome().is_collapsed();
-        self.local_project.settings.audio_triggers_collapsed =
+        settings.audio_triggers_collapsed =
             self.ws.ui_root.inspector.audio_trigger_section().collapsed_setting();
     }
 
@@ -139,7 +141,7 @@ impl Application {
         self.send_content_cmd(ContentCommand::PrepareProjectSave(tx));
         match rx.recv_timeout(std::time::Duration::from_secs(5)) {
             Ok(Some((project, version))) => {
-                self.local_project = project;
+                *self.local_project.intake() = project;
                 self.ui_edits.stamps.project_replaced();
                 Some(version)
             }
@@ -157,11 +159,11 @@ impl Application {
         let current_time = self.content_state.current_time;
         let current_path = self.current_project_path.clone();
         // Stamp UI layout onto the authoritative snapshot.
-        self.local_project.saved_playhead_time = current_time.as_f32();
+        self.local_project.intake().saved_playhead_time = current_time.as_f32();
         self.save_viewport_state();
-        crate::project_io::snapshot_and_prune_embedded_presets(&mut self.local_project);
+        crate::project_io::snapshot_and_prune_embedded_presets(self.local_project.intake());
         if let Some(path) = current_path.as_deref() {
-            match manifold_io::saver::save_project(&mut self.local_project, path, None, false) {
+            match manifold_io::saver::save_project(self.local_project.intake(), path, None, false) {
                 Ok(()) => {
                     self.send_content_cmd(ContentCommand::MarkCleanAt(save_version));
                     log::info!("[ProjectIO] Saved to {}", path.display());
@@ -192,7 +194,7 @@ impl Application {
     pub(crate) fn save_project_as(&mut self) {
         let Some(save_version) = self.prepare_recording_save() else { return; };
         let current_time = self.content_state.current_time;
-        self.local_project.saved_playhead_time = current_time.as_f32();
+        self.local_project.intake().saved_playhead_time = current_time.as_f32();
         self.save_viewport_state();
         let host = crate::file_dialogs::host(
             &self.window_registry,
@@ -201,7 +203,7 @@ impl Application {
             self.current_project_path.as_deref(),
         );
         let mut action = self.project_io.save_project_as(
-            &mut self.local_project,
+            self.local_project.intake(),
             current_time.as_f32(),
             &mut EditingService::new(), // placeholder — mark clean via content thread
             host,
@@ -231,11 +233,11 @@ impl Application {
             return;
         };
 
-        self.local_project.saved_playhead_time = current_time.as_f32();
+        self.local_project.intake().saved_playhead_time = current_time.as_f32();
         self.save_viewport_state();
-        crate::project_io::snapshot_and_prune_embedded_presets(&mut self.local_project);
+        crate::project_io::snapshot_and_prune_embedded_presets(self.local_project.intake());
 
-        match manifold_io::collect::collect_all_and_save(&mut self.local_project, &current_path) {
+        match manifold_io::collect::collect_all_and_save(self.local_project.intake(), &current_path) {
             Ok(report) => {
                 self.send_content_cmd(ContentCommand::MarkCleanAt(save_version));
                 log::info!(
@@ -796,15 +798,19 @@ impl Application {
         // execute (the doc's tentative option) would leave the two threads'
         // `param_values` inconsistent — this ordering is the resolved D9
         // deliverable-3 VERIFY-AT-IMPL.
-        self.local_project.upsert_embedded_preset(embedded.clone());
-        crate::project_io::install_project_preset_overlay(&self.local_project);
+        // The layer command below upserts it again on both threads; this
+        // early copy is what the overlay install reads.
+        let mut local = self.local_project.edit(&mut self.ui_edits, &content_tx);
+        let early = embedded.clone();
+        local.with_sent(|p| (p.upsert_embedded_preset(early), manifold_core::change::ChangeSet::of(&[manifold_core::change::Part::EmbeddedPresets])));
+        crate::project_io::install_project_preset_overlay(&local);
 
         // Insert above the layer under the cursor, or at the top when dropped
         // outside the tracks area. Generators are full-canvas — unlike images
         // they need no specific host layer type.
         let insert_index = layer_under_cursor
             .unwrap_or(0)
-            .min(self.local_project.timeline.layers.len());
+            .min(local.timeline.layers.len());
 
         // GLB_CONFORMANCE_DESIGN.md D4: import is 1:1 — object_count always
         // equals material_count, nothing is ever dropped over a cap
@@ -835,7 +841,6 @@ impl Application {
                 insert_index,
                 None,
             );
-        let mut local = crate::ui_bridge::ProjectRef::new(&mut self.local_project, &mut self.ui_edits, &content_tx);
         let inserted = local.executed_by(|project| {
             layer_cmd.execute(project);
             let layer_id = layer_cmd.inserted_layer_id()?;
@@ -929,7 +934,7 @@ impl Application {
 
             // Update local_project BEFORE sending to content thread so UI
             // can rebuild the timeline in this same frame.
-            self.local_project = project.clone();
+            *self.local_project.intake() = project.clone();
             self.ui_edits.stamps.project_replaced();
             // Sync the global preset overlay to THIS project's embedded
             // presets on every apply — open, snapshot restore, and New
@@ -1004,12 +1009,8 @@ impl Application {
         // Send record_commands to content thread so clips exist on both sides.
         // Without this, clips added directly to local_project (e.g. MIDI import)
         // are invisible to the content thread and vanish on next sync.
-        // They already ran on local_project, so stamp what they touch.
-        let touches = action
-            .record_commands
-            .iter()
-            .fold(manifold_core::change::ChangeSet::NONE, |t, cmd| t.union(cmd.touches()));
-        self.ui_edits.stamps.bump(touches);
+        // They ran on local_project through `ProjectRef::with_sent`, which
+        // stamped them.
         if !action.record_commands.is_empty() {
             if action.record_commands.len() == 1 {
                 let cmd = action.record_commands.into_iter().next().unwrap();

@@ -32,7 +32,7 @@ fn apply_loop(project: &mut Project, def: EffectGraphDef) -> (manifold_core::Lay
         LayerType::Generator,
         PresetTypeId::from_string("LoopGateScene".to_string()),
     );
-    project.timeline.layers[idx].gen_params_or_init().graph = Some(def);
+    project.timeline.layers[idx].gen_params_mut().unwrap().graph = Some(def);
     let layer_id = project.timeline.layers[idx].layer_id.clone();
     let owner = project.timeline.layers[idx].generator_graph().unwrap().clone();
     let instance = prepare_new_scene_modifier(
@@ -143,7 +143,7 @@ fn physics_boundary_transaction_reload() {
     let mut project = Project::default();
     let (layer_id, idx) = apply_loop(&mut project, host());
     let target = GraphTarget::Generator(layer_id);
-    let instance = project.timeline.layers[idx].gen_params_or_init();
+    let instance = project.timeline.layers[idx].gen_params_mut().unwrap();
     let graph = instance.graph.clone().unwrap();
     let modifier_id = NodeId::new("roundtrip-loop");
     let address = graph.preset_metadata.as_ref().unwrap().bindings.iter()
