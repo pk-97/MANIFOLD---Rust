@@ -327,6 +327,7 @@ fn projection_input_matrix() {
             &active_id(&base),
             &base_edits,
             &base.content,
+            crate::frame_plan::ChromeSource { project: &base.project, is_dirty: false, project_path: None, automation_draw_mode: false },
         );
         base_edits.stamps.bump(perturbation.parts);
         let mut pert_sel = data.selection.clone();
@@ -337,6 +338,7 @@ fn projection_input_matrix() {
             &active_id(&data),
             &base_edits,
             &data.content,
+            crate::frame_plan::ChromeSource { project: &data.project, is_dirty: false, project_path: None, automation_draw_mode: false },
         );
         let plan = crate::frame_plan::plan_frame(&last, &next);
 
@@ -372,4 +374,41 @@ fn projection_input_matrix() {
         }
     }
     assert!(failures.is_empty(), "dependencies missing from the plan:\n{}", failures.join("\n"));
+}
+
+/// P4c: renaming an authored control moves Effects (the label is discrete), the
+/// planner rebuilds the inspector for it, and the rebuilt card shows the name.
+#[test]
+fn renaming_an_authored_control_updates_its_label() {
+    use manifold_core::GraphTarget;
+    use manifold_editing::command::Command;
+    use manifold_editing::commands::effects::{BindingMappingEdit, EditParamMappingCommand};
+    const NAME: &str = "Glintness";
+    let base = base();
+    let fx = &base.project.timeline.layers[base.active.unwrap()].effects.as_ref().expect("the active layer has effects")[0];
+    let param = fx.params.iter().next().expect("the card has a control").id().to_string();
+    let seed = manifold_nodes::bundled_presets::bundled_preset_def(fx.effect_type()).map(|d| d.as_ref().clone());
+    let mut cmd = EditParamMappingCommand::new(
+        GraphTarget::Effect(fx.id.clone()),
+        param,
+        BindingMappingEdit { label: Some(NAME.into()), ..Default::default() },
+        seed,
+    );
+    let mut renamed = clone_data(&base);
+    cmd.execute(&mut renamed.project);
+    let touches = cmd.touches();
+    assert!(touches.contains(Part::Effects), "a rename declares Effects: {touches:?}");
+
+    let last = FrameInputs::default();
+    let mut next = last;
+    let mut parts = next.parts;
+    parts.bump(touches);
+    next.parts = parts;
+    assert!(crate::frame_plan::plan_frame(&last, &next).projections.contains(Projection::InspectorSync));
+
+    assert!(!rebuild_output(&base, &base, Projection::InspectorSync).contains(NAME));
+    assert!(
+        rebuild_output(&base, &renamed, Projection::InspectorSync).contains(NAME),
+        "the rebuilt card shows the new label"
+    );
 }

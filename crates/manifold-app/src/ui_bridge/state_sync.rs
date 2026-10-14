@@ -12,8 +12,8 @@ use crate::ui_root::UIRoot;
 
 use crate::ui_bridge::projection::cards::describe_macro_mapping;
 
-pub use crate::ui_bridge::projection::cards::sync_card_values;
-pub use crate::ui_bridge::projection::inspector::sync_inspector_data;
+pub use crate::ui_bridge::projection::cards::{sync_card_values, sync_driver_readouts};
+pub use crate::ui_bridge::projection::inspector::{sync_audio_dock, sync_inspector_data};
 pub use crate::ui_bridge::projection::scene::sync_scene_row_values;
 pub use crate::ui_bridge::projection::timeline::{sync_automation_lane_geometry, sync_clip_positions, sync_project_data};
 pub use crate::ui_bridge::projection::transport::{TransportDisplayCache, check_auto_scroll};
@@ -63,19 +63,16 @@ pub fn push_state(
     drain_events(ui, content_state);
     push_chrome(ui, project, content_state, selection, is_dirty, project_path, transport_cache);
     push_selection(ui, project, active_layer, selection);
+    push_frame(ui, project, content_state, active_layer);
     push_live(ui, project, content_state, active_layer);
 }
 
 /// One-shot events keyed on their own sequences: toasts, content-driven
 /// selections, cached session and device lists. Runs every frame.
 pub fn drain_events(ui: &mut UIRoot, content_state: &crate::content_state::ContentState) {
+    // MIDI device names and the Ableton session, taken by pointer.
+    let session_changed = ui.intake_shared(content_state);
     let tree = &mut ui.tree;
-    // Cache MIDI device names for dropdown
-    if ui.midi_device_names[..] != content_state.midi_device_names[..] {
-        ui.midi_device_names.clear();
-        ui.midi_device_names
-            .extend_from_slice(&content_state.midi_device_names);
-    }
 
     // D11 undo/redo toast (`UI_CRAFT_AND_MOTION_PLAN.md` P2) — real command
     // label instead of the generic "Undo"/"Redo" the M::Undo/M::Redo menu
@@ -139,15 +136,14 @@ pub fn drain_events(ui: &mut UIRoot, content_state: &crate::content_state::Conte
         ui.last_object_modifier_selection_sequence = None;
     }
 
-    // Cache Ableton session for parameter mapping dropdown
-    if let Some(session) = &content_state.ableton_session {
-        ui.ableton_session = Some(std::sync::Arc::clone(session));
-        // If the picker is open, refresh it with the updated session data.
-        if ui.ableton_picker.is_open() {
-            ui.ableton_picker
-                .update_session(crate::ui_root::build_picker_session(session));
-            ui.overlay_dirty = true;
-        }
+    // A new Ableton session refreshes the open picker.
+    if session_changed
+        && ui.ableton_picker.is_open()
+        && let Some(session) = ui.ableton_session.clone()
+    {
+        ui.ableton_picker
+            .update_session(crate::ui_root::build_picker_session(&session));
+        ui.mark_overlay_dirty();
     }
 
     // Runtime-only presentation state rides every ContentState, including
@@ -158,7 +154,7 @@ pub fn drain_events(ui: &mut UIRoot, content_state: &crate::content_state::Conte
         // The runtime preview does not bump the project version. Request the
         // established overlay visual rebuild so its segment active styling
         // reflects the new snapshot even while paused.
-        ui.overlay_dirty = true;
+        ui.mark_overlay_dirty();
     }
 }
 
@@ -644,8 +640,28 @@ pub fn push_selection(
     ui.viewport.set_active_track_index(active_layer);
 }
 
-/// Per-frame values: playhead, macro, opacity and LED values, card and
-/// scene-row values.
+/// Every frame: the playhead and playing state (immediate-pass inputs) and
+/// the LED composite preview band, whose card compares the readback version
+/// itself; the structural presence rides `sync_inspector_data`.
+pub fn push_frame(
+    ui: &mut UIRoot,
+    project: &Project,
+    content_state: &crate::content_state::ContentState,
+    active_layer: Option<usize>,
+) {
+    let playhead_beat = content_state.current_beat.as_f32();
+    ui.viewport.set_playhead(Beats::from_f32(playhead_beat));
+    ui.viewport.set_playing(content_state.is_playing);
+    if let Some(layer) = active_layer.and_then(|i| project.timeline.layers.get(i)) {
+        let is_dmx = layer.layer_type == manifold_core::types::LayerType::Dmx;
+        let band = super::projection::inspector::map_led_preview(content_state.led_preview.as_ref(), is_dmx);
+        ui.inspector.sync_led_preview(&mut ui.tree, band.as_ref());
+    }
+}
+
+/// The live push (D15 piece 1, D22): macro, opacity and LED values, card and
+/// scene-row values. The frame planner runs it when a live value, a live
+/// stamp or the active layer moved, or after a projection or rebuild.
 pub fn push_live(
     ui: &mut UIRoot,
     project: &Project,
@@ -654,10 +670,6 @@ pub fn push_live(
 ) {
     manifold_core::work_count::record_work(manifold_core::work_count::WorkKind::ValuePush);
     let tree = &mut ui.tree;
-    // Playhead + playing state
-    let playhead_beat = content_state.current_beat.as_f32();
-    ui.viewport.set_playhead(Beats::from_f32(playhead_beat));
-    ui.viewport.set_playing(content_state.is_playing);
 
     // Macro slider values + labels/mapping counts for context menus
     let macro_vals: Vec<f32> = project
@@ -763,20 +775,6 @@ pub fn push_live(
             ui.inspector
                 .master_chrome_mut()
                 .sync_led_enabled(tree, content_state.led_enabled);
-
-            // LED composite preview (LED_STRIPS_DESIGN MVP-P4): per-frame
-            // content — Black↔Frame transitions + version bumps land without a
-            // rebuild; the structural presence rides sync_inspector_data.
-            {
-                let is_dmx = active_layer
-                    .and_then(|i| project.timeline.layers.get(i))
-                    .is_some_and(|l| l.layer_type == manifold_core::types::LayerType::Dmx);
-                let band = super::projection::inspector::map_led_preview(
-                    content_state.led_preview.as_ref(),
-                    is_dmx,
-                );
-                ui.inspector.sync_led_preview(tree, band.as_ref());
-            }
 
             // LED exit path label + cached effect names for dropdown
             let exit_label = super::led_exit_path_label(

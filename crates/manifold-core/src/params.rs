@@ -210,6 +210,13 @@ impl Param {
         self.spec.whole_numbers || !self.spec.value_labels.is_empty()
     }
 
+    /// The span the card slider shows: the user's slider choice when one is
+    /// saved, else the spec range. Display only; reshape and wrap read the spec.
+    #[inline]
+    pub fn slider_span(&self) -> (f32, f32) {
+        self.choices.slider.unwrap_or((self.spec.min, self.spec.max))
+    }
+
     /// True when this param is periodic (BUG-039) — modulation constrains
     /// its effective value with [`constrain_to_range`]'s wrap arm instead of
     /// clamping. Reads straight off `spec.wraps` (D1: the spec is the single

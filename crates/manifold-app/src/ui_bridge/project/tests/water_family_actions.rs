@@ -9,7 +9,7 @@ fn add_water(project: &mut Project, layer: &LayerId, render: u32) {
     let (tx, rx) = crossbeam_channel::unbounded();
     dispatch_project(
         &ProjectAction::SceneSetupAddFluid(layer.clone(), render),
-        project,
+        &mut crate::ui_bridge::ProjectRef::new(project, &mut Default::default(), &tx),
         &tx,
         &state,
         &mut ui,

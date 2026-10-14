@@ -392,6 +392,7 @@ pub fn render_graph_editor_to_png(
     // overridden state. Honest empty slice, not a stopgap. No LED preview
     // either — the editor window never uploads the band bitmap.
     crate::ui_bridge::sync_inspector_data(&mut ui_root, project, active_idx, selection, &[], None);
+    crate::ui_bridge::sync_audio_dock(&mut ui_root, project);
     ui_root.build_inspector_in_rect(UiRect::new(
         card_x,
         0.0,

@@ -277,6 +277,10 @@ pub struct InspectorCompositePanel {
     /// section 6b — global compact mode: hide every card's modulation config drawers
     /// (mods stay armed). UI-only, propagated to all cards each build.
     mods_compact: bool,
+    /// Bumped by the view setters only when a UI-only view value changes
+    /// (tab, compact, a card fold or mod tab). The frame planner keys the
+    /// inspector rebuild on it (UI_INVALIDATION_DESIGN.md D17).
+    view_version: u64,
 
     // Section visibility is derived from `active_tab` (the single source of
     // truth) via the master_visible() / layer_visible() / clip_visible()
@@ -472,6 +476,7 @@ impl InspectorCompositePanel {
             collapse_all_btn_id: None,
             compact_toggle_btn_id: None,
             mods_compact: false,
+            view_version: 0,
             add_master_effect_btn: None,
             add_layer_effect_btn: None,
             group_add_modifier_btns: Vec::new(),
@@ -586,9 +591,33 @@ impl InspectorCompositePanel {
         // Single source of truth — visibility is derived on read, not cached.
         if self.active_tab != tab {
             self.selected_modifier_ids.clear();
+            self.view_version += 1;
         }
         self.active_tab = tab;
         self.last_effect_tab = tab;
+    }
+
+    fn set_mods_compact(&mut self, compact: bool) {
+        if self.mods_compact != compact {
+            self.mods_compact = compact;
+            self.view_version += 1;
+        }
+    }
+
+    /// The inspector's UI-only view version (D17). Project-backed state
+    /// (collapse, group fold) rides the project parts instead.
+    pub fn view_version(&self) -> u64 {
+        self.view_version
+    }
+
+    /// A card reports its own UI-only change (section fold, mod-config tab)
+    /// through the action it returns; it has already flipped its state.
+    fn note_card_view_actions(&mut self, actions: &[PanelAction]) {
+        if actions.iter().any(|a| matches!(a,
+            PanelAction::Params(crate::ParamsAction::SectionFoldToggled | crate::ParamsAction::ModConfigTabChanged)))
+        {
+            self.view_version += 1;
+        }
     }
 
     /// Display label for a tab rung.
@@ -1319,7 +1348,9 @@ impl Panel for InspectorCompositePanel {
                 if !self.viewport_rect.contains(*pos) {
                     return Vec::new();
                 }
-                self.route_click(*node_id, *modifiers, tree)
+                let actions = self.route_click(*node_id, *modifiers, tree);
+                self.note_card_view_actions(&actions);
+                actions
             }
             UIEvent::PointerDown {
                 node_id,
@@ -1441,6 +1472,28 @@ mod tests {
     use super::*;
     use crate::panels::param_card::{ParamCardKind, RelightCardConfig, RowMod};
     use crate::tree::UITree;
+
+    /// INV-15: the inspector view version moves only when a view value changes.
+    #[test]
+    fn view_version_moves_only_on_change() {
+        let mut panel = InspectorCompositePanel::new();
+        let tab = panel.active_tab;
+        let v0 = panel.view_version();
+        panel.set_active_tab(tab);
+        panel.set_mods_compact(panel.mods_compact);
+        assert_eq!(panel.view_version(), v0, "re-setting a value is no change");
+        panel.set_active_tab(if tab == InspectorTab::Master { InspectorTab::Layer } else { InspectorTab::Master });
+        let v1 = panel.view_version();
+        assert!(v1 > v0);
+        panel.set_mods_compact(!panel.mods_compact);
+        assert!(panel.view_version() > v1);
+        let v2 = panel.view_version();
+        panel.note_card_view_actions(&[PanelAction::Params(crate::ParamsAction::SectionFoldToggled)]);
+        assert!(panel.view_version() > v2, "a card fold is a view change");
+        let v3 = panel.view_version();
+        panel.note_card_view_actions(&[PanelAction::Params(crate::ParamsAction::MacrosCollapseToggle)]);
+        assert_eq!(panel.view_version(), v3);
+    }
 
     fn inspector_layout() -> ScreenLayout {
         let mut layout = ScreenLayout::new(1920.0, 1080.0);

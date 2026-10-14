@@ -183,11 +183,18 @@ pub struct TimelineViewportPanel {
     overview_clip_pixels: Vec<Color32>,
     overview_tex_w: usize,
     overview_tex_h: usize,
-    overview_dirty: bool,
+    /// An input of the bitmap moved: repaint it.
+    overview_repaint: bool,
+    /// The bitmap changed or the strip was rebuilt: upload it. Only
+    /// `overview_bitmap` clears it; a runner that never uploads must not
+    /// keep the repaint going.
+    overview_upload: bool,
+    /// Content end from the last repaint, for keying the playhead on its pixel.
+    overview_max_beat: f32,
     /// True when clip data changed and clip layer needs full repaint.
     overview_clips_dirty: bool,
     overview_last_clip_fingerprint: u64,
-    overview_last_playhead: f32,
+    overview_last_playhead_px: i32,
     overview_last_scroll_x: f32,
     overview_last_ppb: f32,
     overview_last_track_count: usize,
@@ -380,10 +387,12 @@ impl TimelineViewportPanel {
             overview_clip_pixels: Vec::new(),
             overview_tex_w: 0,
             overview_tex_h: 0,
-            overview_dirty: true,
+            overview_repaint: true,
+            overview_upload: true,
+            overview_max_beat: 0.0,
             overview_clips_dirty: true,
             overview_last_clip_fingerprint: 0,
-            overview_last_playhead: 0.0,
+            overview_last_playhead_px: -1,
             overview_last_scroll_x: 0.0,
             overview_last_ppb: 0.0,
             overview_last_track_count: 0,
@@ -623,7 +632,7 @@ impl TimelineViewportPanel {
             self.overview_clips_dirty = true;
         }
         self.overview_last_clip_fingerprint = clip_fp;
-        self.overview_dirty = true;
+        self.overview_repaint = true;
 
         // Bucket clips by layer — clear inner vecs (preserving capacity)
         // instead of dropping and reallocating them.
@@ -1667,7 +1676,7 @@ impl Panel for TimelineViewportPanel {
 
         // Overview strip bitmap — repainted in repaint_overview() each frame,
         // uploaded and rendered via the layer bitmap GPU path (index 1002).
-        self.overview_dirty = true;
+        self.overview_upload = true;
 
         // Ruler background — INTERACTIVE so clicks register for playhead scrubbing
         self.ruler_bg_id = Some(tree.add_button_keyed(

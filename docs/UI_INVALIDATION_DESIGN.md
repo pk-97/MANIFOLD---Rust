@@ -32,7 +32,7 @@ Companion docs: `UI_HARNESS_UNIFICATION_DESIGN.md` (the `ui_frame.rs` seam and t
 | Content reactions after every command | `content_commands.rs` Execute arm :1244–1252 (OSC routes, Ableton listeners, preset overlay), repeated in the Batch/Undo/Redo arms :1290–1294, :1373–1376, :1451–1454; MutateProject arm :1710–1745 (`on_project_loaded` on every renderer, listeners, overlay) | Rewired to stamps. |
 | Per-command and per-tick content work keyed on nothing or on `data_version` | `handle_command` clones `tempo_map` per Execute/Undo/Redo :791–797, reconciles :2229; clip-control bindings reconciled after every command :2232 and every `tick()` (`engine.rs` :874) because every mutable borrow sets `clip_bindings_dirty` (`engine.rs` :463, :534) and the render path borrows mutably every frame (`content_pipeline.rs` :2365); the reconcile SHA-256s every clip of every layer (`bindings.rs` :54–84, `trigger_sources.rs` :10–35); `GeneratorRenderer::render_all` refreshes on any `data_version` change (`generator_renderer.rs` :724); `trigger_targets.refresh` keyed on `data_version` (`content_pipeline.rs` :2359); `graph_snapshot` cache keyed on the preset fingerprint (`content_thread.rs` :1543, :1571) | Rekeyed on stamps in the reaction table (section 4). |
 | Output-resize validator | `content_commands.rs` :1213–1232 (inside `execute_with_validation`, can reject the edit) | Stays inside execute: it is validation, not a reaction. |
-| Change detection by serializing | `project_io.rs` `embedded_presets_fingerprint` :135 (serde_json of every embedded def); callers `content_commands.rs` :212, `dropdowns.rs` :639 (every UI frame via `app_render.rs` :626) | Deleted. |
+| Change detection by serializing | `project_io.rs` `embedded_presets_fingerprint` :135 (serde_json of every embedded def); callers `content_commands.rs` :212, `dropdowns.rs` :639 (every UI frame via `app_render.rs` :626) | Deleted (P4c); the preset list keys on the EmbeddedPresets stamp. |
 | Audio reconcile keyed on any edit | `audio_mod_runtime.rs` :369 (`data_version != self.last_version`) | Rekeyed on the AudioSetup stamp. Device hot-plug flags `devices_dirty`/`processes_dirty` :213–217 are reused. |
 | Snapshot publish | `content_thread.rs` `send_state` :1187 deep-clones and publishes the project only when `data_version` changed (:1204–1225); UI deep clone `app_render.rs` :287 | Exists. Once the side doors move onto `mutate`, which does not bump `data_version`, a content-side write such as an Ableton status update would never publish. Publish rule in D4. Structural sharing is the committed end state with its own design (section 9). |
 | Live values to the UI | Modulation snapshot captured and its buffer cloned every tick (`content_thread.rs` :1236–1240, `content_state.rs` `capture_into` :411); `push_state` (`ui_bridge/state_sync.rs` :49, about 700 lines, 93 setters) runs every UI frame unconditionally; MIDI device names compared slice-by-slice every frame (:121) | Keyed on a values sequence (D15). |
@@ -252,12 +252,19 @@ pub struct RuntimeSeqs {
 }
 
 // ui_bridge/context.rs — the only ways dispatch code changes the project
-pub project: &'a Project,               // was &'a mut Project
-impl DispatchCtx<'_> {
-    pub fn mutate<F>(&mut self, touches: ChangeSet, f: F)
-    where F: Fn(&mut Project) + Clone + Send + 'static;
-    pub fn execute(&mut self, cmd: Box<dyn Command + Send>);   // local execute, stamp touches(), send Execute
+pub project: ProjectRef<'a>,            // read-only Deref to Project; writes only through:
+impl ProjectRef<'_> {
+    pub fn mutate<F>(&mut self, touches: ChangeSet, f: F)     // apply locally, stamp, send MutateProject
+    where F: FnOnce(&mut Project) + Clone + Send + 'static;
+    pub fn execute(&mut self, cmd: Box<dyn Command>);          // local execute, stamp touches(), send Execute
+    pub fn execute_batch(&mut self, cmds: Vec<Box<dyn Command>>, label: String);
+    pub fn executed_by<R>(&mut self, f: impl FnOnce(&mut Project) -> Option<(Box<dyn Command>, R)>) -> Option<R>;
+    pub fn with_sent<R>(&mut self, touches: ChangeSet, f: impl FnOnce(&mut Project) -> R) -> R;
+                                         // helpers shared with the keyboard path that send their own command
+    pub fn preview<R>(&mut self, f: impl FnOnce(&mut Project) -> R) -> R;
+                                         // local-only gesture preview (marker drag), unstamped, until D12 covers it
 }
+// DispatchCtx::{mutate, execute} delegate to ctx.project.
 
 // ui_frame.rs
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
@@ -281,17 +288,20 @@ pub(crate) struct FrameInputs {
     pub values: u64,                     // D15: ContentState.values_seq
     pub runtime: RuntimeSeqs,            // D16
     pub driver_period_key: u64,          // D20: frame-quantized driver period of the content bpm
+    pub led_enabled: bool,               // the LED controller state the live push shows
 }
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
 pub(crate) struct RegionRects([[i32; 4]; MAIN_REGION_COUNT]);
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
-pub(crate) struct ChromeInputs {         // field list re-derived from push_state's chrome reads in P4c
-    pub playing: bool, pub recording: bool, pub automation_armed: bool,
-    pub sync_state: u8, pub link_state: u8, pub clock_state: u8, pub link_peers: u16,
-    pub bpm_tenths: u32, pub clock_authority: u8,   // from ContentState (D24)
+pub(crate) struct ChromeInputs {         // one field per push_chrome read that no part stamp covers
+    pub playing: bool, pub recording: bool, pub automation_armed: bool, pub automation_draw_mode: bool,
+    pub link_enabled: bool, pub link_peers: i32, pub midi_clock_enabled: bool, pub midi_clock_receiving: bool,
+    pub osc_sync: u8, pub ableton_transport_enabled: bool, pub osc_sender_enabled: bool, pub ableton_sync: u8,
+    pub clock_authority: u8, pub bpm_tenths: i32,   // from ContentState (D24)
     pub time_digits: u64,                // minutes, seconds, tenths, bar, beat, sixteenth, packed
-    pub clock_digits: u64,               // the shown MIDI-clock position, packed digits
-    pub export_range_px: [i32; 2], pub sdr_preview: bool, pub hdr: bool,
+    pub detect_permille: u16, pub detect_show: bool, pub is_dirty: bool,
+    pub text: u64,                       // moves when a shown string changes: clock device and position,
+                                         // detect status (retained Arc<str>, pointer compare), project path
 }
 
 // ui_snapshot — the freshness check's second half (D10)
@@ -386,7 +396,7 @@ pub enum WorkKind {
     EditorProjection, EditorTreeBuild, PerformHudBuild, OverviewRepaint, GridBitmapRepaint,
     ChromeLayout, TextMeasureMiss, DriverScan,
     ProjectClone, ModSnapshotCopy, RendererReload, AbletonListenerRebuild, ListenerRangeRefresh,
-    OscRouteRebuild, PresetOverlayInstall, PresetFingerprint, AudioReconcile, DeviceQuery,
+    OscRouteRebuild, PresetOverlayInstall, AudioReconcile, DeviceQuery,
     ClipBindingReconcile, GeneratorStructureRefresh, TempoReconcile, TriggerTargetRefresh,
     FrameAlloc,
 }
@@ -409,14 +419,14 @@ These are the contract. If the freshness check fails, the missing input is added
 |---|---|
 | `sync_project_data` | Layers, Clips, Automation, Markers, Settings (time signature, `projection/timeline.rs` :345); selection identity; active layer; automation view |
 | `sync_inspector_data` | Layers, Effects, Mappings, Clips, Automation (the lane dot :1505 and `external_attachment`, `projection/material.rs` :294, which keeps mapped rows on the scene card: BUG-pmbd3.7 (Scene card hides mapped rows) under BUG-pmbd3 (3D scene surfaces epic)), Led, AudioSetup, EmbeddedPresets, Settings (bpm and frame rate for driver timing, `projection/inspector.rs` :101); selection identity; active layer; automation view (includes the selected point's lane, :116); runtime latch and LED-presence sequences |
-| Audio Setup device list (inside the inspector projection today) | AudioSetup; audio directory version — the CoreAudio query runs only then |
+| Audio Setup device list (`sync_audio_dock`, only while the dock is open) | AudioSetup, Layers (send rows name their feeding layers), Effects (consumer rows list the audio mods); audio directory version; dock view (opening fills it) — the CoreAudio query runs only then |
 | `sync_clip_positions` | Clips, Layers (all clips); preview (dragged clips and split pieces only, in place) |
 | `sync_automation_lane_geometry`, `sync_automation_lane_order` | Automation, Effects, Layers; automation view; preview (dragged lane only) |
-| Live push (`push_state` piece 1; D22) — every display of a live scalar, both windows, in place | Values displays: values sequence, UI Values stamp. Shapes displays: UI Shapes stamp. Range bands (the Ableton range on cards, `projection/cards.rs` :474, and macro trim ranges): UI MappingRanges stamp |
-| Selection push (`push_state` piece 2) | selection visual; cursor |
-| Event drain (`push_state` piece 3) | every frame, O(1): undo/redo key, diagnostic sequences, modifier-selection sequences, Ableton session `Arc` |
-| Chrome push (`push_state` piece 4) | Settings, Mappings, Layers; `ChromeInputs` (BPM tenths and time digits included) |
-| Editor card live push (`sync_card_values`, `editor_bridge.rs` :1776–1793, widened to every live display, D22) | same per-group keys as the main live push; active layer; card lane rebuilt |
+| Live push (`push_state` piece 1; D22) — every display of a live scalar, both windows, in place | Values displays: values sequence, UI Values stamp, Layers and active layer (the active layer's name and opacity), LED enabled, Ableton session sequence (macro Ableton status). Shapes displays: UI Shapes stamp. Range bands (the Ableton range on cards, `projection/cards.rs` :474, and macro trim ranges): UI MappingRanges stamp |
+| Selection push (`push_state` piece 2) | selection visual; cursor (includes `cursor_beat`); active layer |
+| Event drain (`push_state` piece 3) | every frame, O(1): undo/redo key, diagnostic sequences, modifier-selection sequences, Ableton session and MIDI device names taken as `Arc` (pointer compare, no copy) |
+| Chrome push (`push_state` piece 4) | Settings, Mappings, Layers, Clips (footer and header clip counts), Effects (LED exit path names); `ChromeInputs` (BPM tenths and time digits included); automation view (lanes toggle); selection identity (primary clip chrome); zoom (zoom label) |
+| Editor card live push (`sync_card_values`, `editor_bridge.rs` :1776–1793, widened to every live display, D22) | same per-group keys as the main live push; active layer; card lane rebuilt. Today it runs only inside `rebuild_editor_inspector`, which rebuilds per vsync until P5c, so it keys with that rebuild |
 | Driver period readout (`sync_driver_bpm`) | Effects; driver period key — in place, never a structural sync |
 | Embedded preset list (`dropdowns.rs` `sync_embedded_presets`) | EmbeddedPresets |
 | Editor canvas `set_snapshot` | snapshot version; canvas scope version; preview aspect |
@@ -424,7 +434,7 @@ These are the contract. If the freshness check fails, the missing input is added
 | Editor visible nodes, preview node | snapshot version; canvas scope; canvas selection |
 | Editor mini timeline | Clips, Layers; watched target; preview |
 | Overview strip repaint | Clips, Layers; preview; scroll; zoom; `playhead_px`; rects |
-| Audio waveform requests (`app_render.rs` :458) | Clips |
+| Audio waveform requests (`app_render.rs` :458) | Clips, Layers (the gather walks layers); completions drain every frame, O(1) when none |
 | Detect status (`clip_chrome.rs` :715) | in place, only when status text or progress pixel moves |
 | Perform HUD draw list | `PerformHudInputs` |
 
@@ -634,6 +644,7 @@ Order: P1 → P2 → P3a → P3b → P4a → P4b → P4c → P4d → P4e → P5a
 - **Deliverable — param label:** A param's displayed label (`spec.name`) moves out of Shapes into Effects in the change audit and in every command's `touches`, so a rename of an authored control is a rebuild input of the projections that show it. A label is discrete, not a live scalar (D22). Lookup-control renames already go through `ParamChoices.rename` as Effects (SCENE_SURFACES lead, 2026-10-14).
 - **Gate:** `AssertFresh` in every flow; `work-idle` zero `ValuePush`; `work-clock-jitter` zero `ProjectSync`, `InspectorSync` and `FullBuild`; `work-slider-grab` zero `InspectorSync`; `work-editor-open` zero editor projections after the first frame; ceilings re-recorded; demo L3. **Negative:** `rg 'embedded_presets_fingerprint' crates/` → 0.
 - **Performer gesture:** run the set on Link with the drummer's tempo drifting; touch three sliders with lanes hidden; the UI does no rebuild.
+- **As built (lane/ui-inval-p4c):** `ctx.project` is a read-only `ProjectRef` (section 3); every dispatch write stamps the frame it happens in. Lane heights stay inside `automation_view` as D19 says, compare-before-bump, so a lane resize still runs the project and inspector syncs per move; making it in place needs the region table's in-place column, which is P5b (BUG-veaap (automation-lane-resize-full-rebuild)). Owed: the live push widened to drawers, handles, range bands, mapping curves, gains and crossover (those displays stay correct through the old structural flags until P4d removes them, so the widening must land before P4d batch a); the editor badge and viewport def keys (the canvas `set_snapshot` already compares the snapshot `Arc`).
 - **Forbidden moves:** a setter that bumps without comparing · keying the live push on time · a live scalar as a projection key · deleting old sites in this phase.
 - **Test scope:** `manifold-ui`, `manifold-app` focused; work flows locally.
 

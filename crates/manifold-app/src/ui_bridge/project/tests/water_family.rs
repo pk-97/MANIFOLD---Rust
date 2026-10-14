@@ -24,7 +24,7 @@ fn add_water(project: &mut Project, layer: &LayerId, render: u32, editing: &mut 
     let (_, state, mut ui, mut selection, mut active, mut prefs) = dispatch_harness();
     let before = effective_def(project, layer);
     let (tx, rx) = crossbeam_channel::unbounded();
-    dispatch_project(&ProjectAction::SceneSetupAddFluid(layer.clone(), render), project, &tx, &state,
+    dispatch_project(&ProjectAction::SceneSetupAddFluid(layer.clone(), render), &mut crate::ui_bridge::ProjectRef::new(project, &mut Default::default(), &tx), &tx, &state,
         &mut ui, &mut selection, &mut active, &mut prefs, Default::default());
     assert_eq!(effective_def(project, layer), before, "UI only queues content edits");
     let ContentCommand::ExecuteSelecting(command, selection) = rx.try_recv().unwrap() else { panic!("content insertion") };
@@ -164,7 +164,7 @@ fn water_family_add_through_content_admission_discovers_children() {
     let (_, state, mut ui, mut selection, mut active, mut prefs) = dispatch_harness();
     let (tx, rx) = crossbeam_channel::unbounded();
     dispatch_project(&ProjectAction::SceneSetupAddFluid(layer.clone(), render),
-        &mut project, &tx, &state, &mut ui, &mut selection, &mut active, &mut prefs, Default::default());
+        &mut crate::ui_bridge::ProjectRef::new(&mut project, &mut Default::default(), &tx), &tx, &state, &mut ui, &mut selection, &mut active, &mut prefs, Default::default());
     let ContentCommand::ExecuteSelecting(command, _) = rx.try_recv().unwrap() else {
         panic!("Add Water must execute on content");
     };

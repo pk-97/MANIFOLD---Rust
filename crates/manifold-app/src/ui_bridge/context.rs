@@ -21,12 +21,105 @@ use manifold_editing::command::Command;
 
 use super::scrub::ScrubState;
 
+/// The local project as dispatch sees it: readable through `Deref`, writable
+/// only through [`ProjectRef::mutate`] and [`ProjectRef::execute`], which stamp
+/// the parts they touch and send the same edit to the content thread
+/// (UI_INVALIDATION D5). There is no other way to write it.
+pub struct ProjectRef<'a> {
+    project: &'a mut Project,
+    stamps: &'a mut crate::frame_plan::UiStamps,
+    content_tx: &'a crossbeam_channel::Sender<ContentCommand>,
+}
+
+impl<'a> ProjectRef<'a> {
+    pub fn new(
+        project: &'a mut Project,
+        stamps: &'a mut crate::frame_plan::UiStamps,
+        content_tx: &'a crossbeam_channel::Sender<ContentCommand>,
+    ) -> Self {
+        Self { project, stamps, content_tx }
+    }
+
+    /// A non-undoable write: apply `f` locally, stamp `touches`, and send the
+    /// same closure to the content thread.
+    pub fn mutate<F>(&mut self, touches: ChangeSet, f: F)
+    where
+        F: FnOnce(&mut Project) + Clone + Send + 'static,
+    {
+        (f.clone())(self.project);
+        self.stamps.bump(touches);
+        ContentCommand::send(self.content_tx, ContentCommand::mutate(touches, Box::new(f)));
+    }
+
+    /// An undoable edit: execute `cmd` locally, stamp what it touches (read
+    /// after execute, so a command can learn its parts from the project), and
+    /// send it to the content thread.
+    pub fn execute(&mut self, mut cmd: Box<dyn Command>) {
+        cmd.execute(self.project);
+        self.stamps.bump(cmd.touches());
+        ContentCommand::send(self.content_tx, ContentCommand::Execute(cmd));
+    }
+
+    /// Several undoable edits as one undo step, stamped with their union.
+    pub fn execute_batch(&mut self, mut cmds: Vec<Box<dyn Command>>, label: String) {
+        let mut touches = ChangeSet::NONE;
+        for cmd in &mut cmds {
+            cmd.execute(self.project);
+            touches = touches.union(cmd.touches());
+        }
+        self.stamps.bump(touches);
+        ContentCommand::send(self.content_tx, ContentCommand::ExecuteBatch(cmds, label));
+    }
+
+    /// For factories that build a command and execute it on the project they
+    /// are handed (`EditingService::create_clip_at_position` and kin): stamp
+    /// what the returned command touches and send it.
+    pub fn executed_by<R>(
+        &mut self,
+        f: impl FnOnce(&mut Project) -> Option<(Box<dyn Command>, R)>,
+    ) -> Option<R> {
+        let (cmd, out) = f(self.project)?;
+        self.stamps.bump(cmd.touches());
+        ContentCommand::send(self.content_tx, ContentCommand::Execute(cmd));
+        Some(out)
+    }
+
+    /// For helpers shared with the keyboard path that write the local project
+    /// and send their own content command: stamp `touches` (what that command
+    /// declares) around the call.
+    pub fn with_sent<R>(&mut self, touches: ChangeSet, f: impl FnOnce(&mut Project) -> R) -> R {
+        self.stamps.bump(touches);
+        f(self.project)
+    }
+
+    /// Clip lookup by id. It refreshes the timeline's id cache, which is not
+    /// model state, so it needs no stamp.
+    pub fn find_clip_by_id(&mut self, clip_id: &str) -> Option<&manifold_core::clip::TimelineClip> {
+        self.project.timeline.find_clip_by_id(clip_id)
+    }
+
+    /// A gesture preview: a local-only write the content thread never sees and
+    /// that stamps nothing (D12). The gesture's commit stamps; until P4d moves
+    /// every preview onto `PreviewVersions`, the dispatch result's rebuild flag
+    /// carries the frame.
+    pub fn preview<R>(&mut self, f: impl FnOnce(&mut Project) -> R) -> R {
+        f(self.project)
+    }
+}
+
+impl std::ops::Deref for ProjectRef<'_> {
+    type Target = Project;
+    fn deref(&self) -> &Project {
+        self.project
+    }
+}
+
 /// The context threaded through `dispatch`. Local `project` snapshot for
 /// immediate UI feedback; `content_tx` carries authoritative mutations to the
 /// content thread.
 pub struct DispatchCtx<'a> {
-    /// Local project snapshot mutated for immediate feedback.
-    pub project: &'a mut Project,
+    /// Local project snapshot, read-only; its `mutate`/`execute` write it.
+    pub project: ProjectRef<'a>,
     /// Authoritative-mutation channel to the content thread.
     pub content_tx: &'a crossbeam_channel::Sender<ContentCommand>,
     /// Latest content-thread snapshot (read-only).
@@ -48,28 +141,19 @@ pub struct DispatchCtx<'a> {
     /// Parent window and project path for any file dialog an action opens.
     /// Default (floating, no project) for headless callers.
     pub dialogs: crate::file_dialogs::DialogHost<'a>,
-    /// The UI's part stamps (D5). Only [`DispatchCtx::mutate`] and
-    /// [`DispatchCtx::execute`] move them; a preview never does.
-    pub stamps: &'a mut crate::frame_plan::UiStamps,
 }
 
 impl DispatchCtx<'_> {
-    /// A non-undoable write: apply `f` to the local project, stamp `touches`,
-    /// and send the same closure to the content thread (D5).
+    /// See [`ProjectRef::mutate`].
     pub fn mutate<F>(&mut self, touches: ChangeSet, f: F)
     where
         F: FnOnce(&mut Project) + Clone + Send + 'static,
     {
-        (f.clone())(self.project);
-        self.stamps.bump(touches);
-        ContentCommand::send(self.content_tx, ContentCommand::mutate(touches, Box::new(f)));
+        self.project.mutate(touches, f);
     }
 
-    /// An undoable edit: execute `cmd` on the local project, stamp what it
-    /// touches, and send it to the content thread (D5).
-    pub fn execute(&mut self, mut cmd: Box<dyn Command>) {
-        cmd.execute(self.project);
-        self.stamps.bump(cmd.touches());
-        ContentCommand::send(self.content_tx, ContentCommand::Execute(cmd));
+    /// See [`ProjectRef::execute`].
+    pub fn execute(&mut self, cmd: Box<dyn Command>) {
+        self.project.execute(cmd);
     }
 }

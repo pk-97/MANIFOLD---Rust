@@ -164,8 +164,9 @@ impl UiSide {
 
     /// Dispatch through the real bridge; return what it sent the content thread.
     fn dispatch(&mut self, action: PanelAction) -> Vec<ContentCommand> {
+        let mut stamps = crate::frame_plan::UiStamps::default();
         let mut ctx = crate::ui_bridge::DispatchCtx {
-            project: &mut self.project,
+            project: crate::ui_bridge::ProjectRef::new(&mut self.project, &mut stamps, &self.tx),
             content_tx: &self.tx,
             content_state: &self.state,
             ui: &mut self.ui,
@@ -174,7 +175,6 @@ impl UiSide {
             user_prefs: &mut self.prefs,
             editor_target: None,
             scrub: &mut self.scrub,
-            stamps: &mut Default::default(),
             dialogs: Default::default(),
         };
         crate::ui_bridge::dispatch(&action, &mut ctx);

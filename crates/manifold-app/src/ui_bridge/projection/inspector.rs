@@ -118,132 +118,6 @@ pub fn sync_inspector_data(
         selection.selected_automation_point.as_ref().map(|point| (&point.target, &point.param_id))
             .or_else(|| selection.chosen_automation_params().get(layer_id).map(|(target, param_id)| (target, param_id)))
     };
-    // Audio Setup modal — refresh its current device + send list while it's
-    // open. Resolving the device through the directory once per sync (only while
-    // the modal is up) gives each send row its real channel name, grouped or
-    // not, instead of a bare index.
-    if ui.audio_setup_panel.is_open() {
-        use manifold_core::AudioSourceKind;
-        use manifold_ui::panels::audio_setup_panel::AudioSendRow;
-        manifold_core::work_count::record_work(manifold_core::work_count::WorkKind::DeviceQuery);
-        let dir = manifold_audio::directory::system_directory();
-        // Only a hardware input device resolves to a DeviceInfo. Tap sources
-        // (system / app output) don't live in the input-device list, and "none"
-        // (no capture) has nothing to resolve — a tap's liveness is checked
-        // separately below.
-        let device = match &project.audio_setup.device {
-            Some(d) if d.kind == AudioSourceKind::InputDevice => {
-                dir.resolve(d.uid_opt(), Some(&d.name))
-            }
-            Some(_) => None, // a tap or "none" — no DeviceInfo
-            None => dir.list_input_devices().into_iter().find(|d| d.is_default),
-        };
-        let sends = project
-            .audio_setup
-            .sends
-            .iter()
-            .map(|s| {
-                // Read-only source view: the full routing lines (capture device +
-                // each feeding layer) for the Inputs section. Routing is edited
-                // elsewhere — layers from the layer header; channels are always
-                // stereo now, so there is no per-send channel control to resolve.
-                let cap = s.has_capture();
-                let layer_name = |lid: &manifold_core::LayerId| {
-                    project
-                        .timeline
-                        .layers
-                        .iter()
-                        .find(|l| &l.layer_id == lid)
-                        .map(|l| l.name.clone())
-                        .unwrap_or_else(|| {
-                            manifold_ui::panels::audio_setup_panel::MISSING_LAYER_LABEL.to_string()
-                        })
-                };
-                // Full routing lines for the read-only Inputs section. A
-                // capture-fed send is always stereo, so its line reads
-                // "Capture • Stereo" rather than naming individual channels.
-                let mut routings: Vec<String> = Vec::new();
-                if cap {
-                    routings.push("Capture \u{2022} Stereo".to_string());
-                }
-                for lid in s.layers() {
-                    routings.push(format!("Layer \u{2022} {}", layer_name(lid)));
-                }
-                // Consumers section: named audio mods (param gate/continuous
-                // cards) plus enabled layer-owned `LayerClipTrigger` configs
-                // (P3, D2 — the matrix's per-band route walk is gone; clip
-                // triggers are authored on the layer only). Both are purely
-                // navigational rows (D3): click selects the owning layer.
-                let clip_triggers = project.clip_trigger_consumers(&s.id);
-                let has_clip_triggers = !clip_triggers.is_empty();
-                let consumers: Vec<manifold_ui::panels::audio_setup_panel::SendConsumerRow> =
-                    project
-                        .audio_mod_consumers(&s.id)
-                        .into_iter()
-                        .chain(clip_triggers)
-                        .map(|(layer_id, label)| {
-                            manifold_ui::panels::audio_setup_panel::SendConsumerRow { label, layer_id }
-                        })
-                        .collect();
-                // Inputs section: audio layers feeding this send (id + name).
-                let feeding_layers: Vec<(manifold_core::LayerId, String)> =
-                    s.layers().iter().map(|lid| (lid.clone(), layer_name(lid))).collect();
-
-                AudioSendRow {
-                    id: s.id.clone(),
-                    label: s.label.clone(),
-                    channels: s.channels.clone(),
-                    gain_db: s.gain_db,
-                    floor_db: s.floor_db,
-                    driven_count: project.audio_send_usage_count(&s.id),
-                    routings,
-                    has_clip_triggers,
-                    feeding_layers,
-                    consumers,
-                }
-            })
-            .collect();
-
-        // Surface a reliability warning: a chosen source that can't capture right
-        // now — a device that won't resolve / reads offline, a tap on an OS that
-        // can't tap, an app that isn't running — else a blocked mic permission.
-        let status_warning = match &project.audio_setup.device {
-            Some(d) => match d.kind {
-                AudioSourceKind::InputDevice => match &device {
-                    None => Some(format!("\u{26A0} \"{}\" is offline or unplugged", d.name)),
-                    Some(info) if !info.is_alive => {
-                        Some(format!("\u{26A0} \"{}\" is offline", info.name))
-                    }
-                    _ => None,
-                },
-                // No capture is a deliberate choice, not a warning.
-                AudioSourceKind::None => None,
-                AudioSourceKind::SystemAudio => (!dir.tap_capabilities().system_audio)
-                    .then(|| "\u{26A0} System audio capture needs macOS 14.4+".to_string()),
-                AudioSourceKind::App => dir
-                    .resolve_app(d.uid_opt().unwrap_or(""))
-                    .is_none()
-                    .then(|| format!("\u{26A0} \"{}\" isn't running", d.name)),
-            },
-            None => None,
-        }
-        .or_else(|| {
-            (!manifold_audio::permission::status().is_usable())
-                .then(|| "\u{26A0} Microphone access blocked — check System Settings".to_string())
-        });
-
-        ui.audio_setup_panel.configure(
-            project
-                .audio_setup
-                .device
-                .as_ref()
-                .map(crate::ui_translate::audio_device_ref_to_ui),
-            sends,
-            status_warning,
-        );
-
-    }
-
     // Tabs first: the Scene tab decides whether the scene panel is open.
     configure_inspector_tabs(ui, project, active_layer, selection);
 
@@ -2456,4 +2330,132 @@ mod scene_tab_tests {
         assert_eq!(ui.inspector.active_tab(), InspectorTab::Layer);
         assert!(!ui.scene_setup_panel.is_open());
     }
+}
+
+/// The Audio Setup dock: current device, send rows and the reliability
+/// warning, while it is open. Queries the audio directory, so it runs only
+/// when the planner keys it (AudioSetup, Layers, Effects, the directory
+/// version, or the dock opening).
+pub fn sync_audio_dock(ui: &mut UIRoot, project: &Project) {
+    if !ui.audio_setup_panel.is_open() {
+        return;
+    }
+    use manifold_core::AudioSourceKind;
+    use manifold_ui::panels::audio_setup_panel::AudioSendRow;
+    manifold_core::work_count::record_work(manifold_core::work_count::WorkKind::DeviceQuery);
+    let dir = manifold_audio::directory::system_directory();
+    // Only a hardware input device resolves to a DeviceInfo. Tap sources
+    // (system / app output) don't live in the input-device list, and "none"
+    // (no capture) has nothing to resolve — a tap's liveness is checked
+    // separately below.
+    let device = match &project.audio_setup.device {
+        Some(d) if d.kind == AudioSourceKind::InputDevice => {
+            dir.resolve(d.uid_opt(), Some(&d.name))
+        }
+        Some(_) => None, // a tap or "none" — no DeviceInfo
+        None => dir.list_input_devices().into_iter().find(|d| d.is_default),
+    };
+    let sends = project
+        .audio_setup
+        .sends
+        .iter()
+        .map(|s| {
+            // Read-only source view: the full routing lines (capture device +
+            // each feeding layer) for the Inputs section. Routing is edited
+            // elsewhere — layers from the layer header; channels are always
+            // stereo now, so there is no per-send channel control to resolve.
+            let cap = s.has_capture();
+            let layer_name = |lid: &manifold_core::LayerId| {
+                project
+                    .timeline
+                    .layers
+                    .iter()
+                    .find(|l| &l.layer_id == lid)
+                    .map(|l| l.name.clone())
+                    .unwrap_or_else(|| {
+                        manifold_ui::panels::audio_setup_panel::MISSING_LAYER_LABEL.to_string()
+                    })
+            };
+            // Full routing lines for the read-only Inputs section. A
+            // capture-fed send is always stereo, so its line reads
+            // "Capture • Stereo" rather than naming individual channels.
+            let mut routings: Vec<String> = Vec::new();
+            if cap {
+                routings.push("Capture \u{2022} Stereo".to_string());
+            }
+            for lid in s.layers() {
+                routings.push(format!("Layer \u{2022} {}", layer_name(lid)));
+            }
+            // Consumers section: named audio mods (param gate/continuous
+            // cards) plus enabled layer-owned `LayerClipTrigger` configs
+            // (P3, D2 — the matrix's per-band route walk is gone; clip
+            // triggers are authored on the layer only). Both are purely
+            // navigational rows (D3): click selects the owning layer.
+            let clip_triggers = project.clip_trigger_consumers(&s.id);
+            let has_clip_triggers = !clip_triggers.is_empty();
+            let consumers: Vec<manifold_ui::panels::audio_setup_panel::SendConsumerRow> =
+                project
+                    .audio_mod_consumers(&s.id)
+                    .into_iter()
+                    .chain(clip_triggers)
+                    .map(|(layer_id, label)| {
+                        manifold_ui::panels::audio_setup_panel::SendConsumerRow { label, layer_id }
+                    })
+                    .collect();
+            // Inputs section: audio layers feeding this send (id + name).
+            let feeding_layers: Vec<(manifold_core::LayerId, String)> =
+                s.layers().iter().map(|lid| (lid.clone(), layer_name(lid))).collect();
+
+            AudioSendRow {
+                id: s.id.clone(),
+                label: s.label.clone(),
+                channels: s.channels.clone(),
+                gain_db: s.gain_db,
+                floor_db: s.floor_db,
+                driven_count: project.audio_send_usage_count(&s.id),
+                routings,
+                has_clip_triggers,
+                feeding_layers,
+                consumers,
+            }
+        })
+        .collect();
+
+    // Surface a reliability warning: a chosen source that can't capture right
+    // now — a device that won't resolve / reads offline, a tap on an OS that
+    // can't tap, an app that isn't running — else a blocked mic permission.
+    let status_warning = match &project.audio_setup.device {
+        Some(d) => match d.kind {
+            AudioSourceKind::InputDevice => match &device {
+                None => Some(format!("\u{26A0} \"{}\" is offline or unplugged", d.name)),
+                Some(info) if !info.is_alive => {
+                    Some(format!("\u{26A0} \"{}\" is offline", info.name))
+                }
+                _ => None,
+            },
+            // No capture is a deliberate choice, not a warning.
+            AudioSourceKind::None => None,
+            AudioSourceKind::SystemAudio => (!dir.tap_capabilities().system_audio)
+                .then(|| "\u{26A0} System audio capture needs macOS 14.4+".to_string()),
+            AudioSourceKind::App => dir
+                .resolve_app(d.uid_opt().unwrap_or(""))
+                .is_none()
+                .then(|| format!("\u{26A0} \"{}\" isn't running", d.name)),
+        },
+        None => None,
+    }
+    .or_else(|| {
+        (!manifold_audio::permission::status().is_usable())
+            .then(|| "\u{26A0} Microphone access blocked — check System Settings".to_string())
+    });
+
+    ui.audio_setup_panel.configure(
+        project
+            .audio_setup
+            .device
+            .as_ref()
+            .map(crate::ui_translate::audio_device_ref_to_ui),
+        sends,
+        status_warning,
+    );
 }

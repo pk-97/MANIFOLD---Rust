@@ -122,8 +122,9 @@ mod scene_card_convergence_tests {
         }
 
         fn dispatch(&mut self, action: &PanelAction, project: &mut Project) -> DispatchResult {
+            let mut stamps = crate::frame_plan::UiStamps::default();
             let mut ctx = crate::ui_bridge::DispatchCtx {
-                project,
+                project: crate::ui_bridge::ProjectRef::new(project, &mut stamps, &self.content_tx),
                 content_tx: &self.content_tx,
                 content_state: &self.content_state,
                 ui: &mut self.ui,
@@ -132,7 +133,6 @@ mod scene_card_convergence_tests {
                 user_prefs: &mut self.user_prefs,
                 editor_target: None,
                 scrub: &mut self.scrub,
-                stamps: &mut Default::default(),
                 dialogs: Default::default(),
             };
             crate::ui_bridge::dispatch(action, &mut ctx)
@@ -159,8 +159,9 @@ mod scene_card_convergence_tests {
             project: &mut Project,
             editor_target: Option<&manifold_core::GraphTarget>,
         ) -> DispatchResult {
+            let mut stamps = crate::frame_plan::UiStamps::default();
             let mut ctx = crate::ui_bridge::DispatchCtx {
-                project,
+                project: crate::ui_bridge::ProjectRef::new(project, &mut stamps, &self.content_tx),
                 content_tx: &self.content_tx,
                 content_state: &self.content_state,
                 ui: &mut self.ui,
@@ -169,7 +170,6 @@ mod scene_card_convergence_tests {
                 user_prefs: &mut self.user_prefs,
                 editor_target,
                 scrub: &mut self.scrub,
-                stamps: &mut Default::default(),
                 dialogs: Default::default(),
             };
             crate::ui_bridge::dispatch(action, &mut ctx)
@@ -2744,7 +2744,7 @@ mod scene_card_convergence_tests {
             let mut prefs = crate::user_prefs::UserPrefs::for_test();
             crate::ui_bridge::editing::dispatch_editing(
                 &EditingAction::ContextDeleteClip(clip_id.to_string()),
-                &mut rig.project,
+                &mut crate::ui_bridge::ProjectRef::new(&mut rig.project, &mut Default::default(), &rig.tx),
                 &rig.tx,
                 &rig.content_state,
                 &mut ui,

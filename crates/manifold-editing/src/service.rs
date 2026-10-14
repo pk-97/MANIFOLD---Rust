@@ -173,9 +173,11 @@ impl EditingService {
 
     pub fn execute<'p>(&mut self, command: Box<dyn Command>, project: impl Into<ProjectEdit<'p>>) {
         let project = project.into().into_mut();
-        let touches = command.touches();
         let window = audit::open(project);
         if !self.undo_manager.execute(command, project) { return; }
+        // Read after execute: a command may learn what it touches from the
+        // project it ran on (a scene feature switch).
+        let touches = self.undo_manager.peek_undo_touches();
         audit::close(window, project, touches, "execute");
         self.data_version += 1;
         self.stamps.bump(touches);
@@ -199,7 +201,6 @@ impl EditingService {
         F: FnMut(&Project) -> Result<(), String>,
     {
         let project = project.into().into_mut();
-        let touches = command.touches();
         let window = audit::open(project);
         if !self
             .undo_manager
@@ -207,6 +208,7 @@ impl EditingService {
         {
             return false;
         }
+        let touches = self.undo_manager.peek_undo_touches();
         audit::close(window, project, touches, "execute");
         self.data_version += 1;
         self.stamps.bump(touches);

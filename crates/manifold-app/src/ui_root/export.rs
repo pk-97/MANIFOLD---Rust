@@ -15,11 +15,10 @@ impl UIRoot {
         if !notification {
             return false;
         }
-        if state.is_exporting {
-            self.overlay_dirty |= self
-                .export_progress
-                .update(&state.export_status, state.export_progress);
-        }
+        if state.is_exporting
+            && self.export_progress.update(&state.export_status, state.export_progress) {
+                self.mark_overlay_dirty();
+            }
         if let Some(event) = &state.export_finished {
             if event.success {
                 let filename = std::path::Path::new(&event.output_path)
@@ -34,11 +33,12 @@ impl UIRoot {
                 self.toast
                     .show_with_accent(event.message.clone(), color::RED_BASE);
             }
-            self.overlay_dirty = true;
+            self.mark_overlay_dirty();
         }
-        if state.export_run_finished {
-            self.overlay_dirty |= self.export_progress.finish();
-        }
+        if state.export_run_finished
+            && self.export_progress.finish() {
+                self.mark_overlay_dirty();
+            }
         true
     }
 }

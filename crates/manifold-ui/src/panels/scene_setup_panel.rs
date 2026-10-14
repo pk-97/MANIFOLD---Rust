@@ -1337,6 +1337,25 @@ impl ScenePanel {
     /// outliner selection isn't showing (not in this section's rows) simply
     /// misses the join and is ignored; a built row with no manifest entry is
     /// caught by the INV-6 coverage check.
+    /// Rewrite each frame-aligned driver's period readout on the properties
+    /// card in place (D20).
+    pub fn sync_driver_frame_rates(
+        &mut self,
+        tree: &mut UITree,
+        rate_of: &mut dyn FnMut(&str) -> Option<(u32, f32)>,
+    ) {
+        let card = &mut self.properties_card;
+        for (row, param) in card.rows.iter_mut().enumerate() {
+            if !card.mod_state.driver_frame_aligned.get(row).copied().unwrap_or(false) {
+                continue;
+            }
+            let rate = rate_of(param.id.as_ref());
+            // The row model too, so the next build from these rows agrees.
+            param.modulation.driver_frame_rate = rate;
+            card.row_host.sync_driver_frame_rate(tree, &mut card.mod_state, row, rate);
+        }
+    }
+
     pub fn sync_properties_values(
         &mut self,
         tree: &mut UITree,

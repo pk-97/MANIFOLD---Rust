@@ -2623,7 +2623,7 @@ impl Application {
                 && self.ws.ui_root.export_progress.request_cancel()
             {
                 self.send_content_cmd(crate::content_command::ContentCommand::CancelExport);
-                self.ws.ui_root.overlay_dirty = true;
+                self.ws.ui_root.mark_overlay_dirty();
             }
             return;
         }
@@ -2957,14 +2957,14 @@ mod tests {
             MouseScrollDelta::PixelDelta(PhysicalPosition::new(0.0, -45.0)),
         ] {
             let before = app.ws.ui_root.browser_popup.picker().unwrap().scroll.scroll_offset();
-            app.ws.ui_root.overlay_dirty = false;
+            app.ws.ui_root.take_overlay_dirty();
             app.primary_mouse_wheel(true, delta);
             let events = app.ws.ui_root.input.drain_events();
             assert_eq!(events.len(), 1, "native scrolling must reach the popup");
             let mut actions = Vec::new();
             assert!(app.ws.ui_root.route_overlay_event(&events[0], &mut actions));
             assert!(actions.is_empty());
-            assert!(app.ws.ui_root.overlay_dirty, "scrolling must schedule a repaint");
+            assert!(app.ws.ui_root.overlay_dirty(), "scrolling must schedule a repaint");
             app.ws.ui_root.tree.clear();
             app.ws.ui_root.build_overlays_for_screen(1280.0, 800.0);
             assert!(app.ws.ui_root.browser_popup.picker().unwrap().scroll.scroll_offset() > before);

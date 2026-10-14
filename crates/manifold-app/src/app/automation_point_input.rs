@@ -166,7 +166,7 @@ pub(crate) fn commit(app: &mut Application, field: TextInputField, text: &str) {
         app.selection.selected_automation_points.clear();
     }
     app.needs_structural_sync = true;
-    app.ws.ui_root.overlay_dirty = true;
+    app.ws.ui_root.mark_overlay_dirty();
 }
 
 fn point_and_param<'a>(
@@ -315,7 +315,7 @@ fn invalid(app: &mut Application, message: impl Into<String>) {
         .ui_root
         .toast
         .show_with_accent(message.into(), manifold_ui::color::RED_BASE);
-    app.ws.ui_root.overlay_dirty = true;
+    app.ws.ui_root.mark_overlay_dirty();
 }
 
 fn reject_edit(

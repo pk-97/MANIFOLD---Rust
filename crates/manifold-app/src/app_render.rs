@@ -348,19 +348,6 @@ impl Application {
                         self.needs_rebuild = true;
                     }
                 }
-                // The content clock can change BPM without a project edit. Keep
-                // the driver readout current without writing UI-side project state.
-                if !suppressed && state.bpm.is_finite() && state.bpm > 0.0 {
-                    let bpm = manifold_core::Bpm(state.bpm as f32);
-                    let changed = self.ws.ui_root.sync_driver_bpm(&self.local_project, bpm);
-                    if let Some(ed) = self.graph_editor.as_mut() {
-                        ed.ui_root.sync_driver_bpm(&self.local_project, bpm);
-                    }
-                    if changed {
-                        self.needs_structural_sync = true;
-                        self.needs_rebuild = true;
-                    }
-                }
                 // Apply lightweight modulation snapshot (param_values only)
                 // to local_project — no full Project clone needed.
                 if !suppressed
@@ -462,25 +449,32 @@ impl Application {
         // audio clips and let the cache background-decode any new ones, drain
         // finished peaks, and evict departed clips. The peaks are attached to
         // each ViewportClip on the next sync. See docs/AUDIO_LAYER_DESIGN.md.
-        let audio_clips: Vec<(manifold_core::id::ClipId, String)> = self
-            .local_project
-            .timeline
-            .layers
-            .iter()
-            .filter(|l| l.is_audio())
-            .flat_map(|l| {
-                l.clips
-                    .iter()
-                    .filter(|c| c.is_audio())
-                    .map(|c| (c.id.clone(), c.audio_file_path.clone()))
-            })
-            .collect();
+        // The clip list is walked only when Clips or Layers moved (P4c).
+        let clips_key = self.ui_edits.stamps.parts().key(manifold_core::change::ChangeSet::of(&[
+            manifold_core::change::Part::Clips,
+            manifold_core::change::Part::Layers,
+        ]));
+        let project = &self.local_project;
+        let gather = || -> Vec<(manifold_core::id::ClipId, String)> {
+            project
+                .timeline
+                .layers
+                .iter()
+                .filter(|l| l.is_audio())
+                .flat_map(|l| {
+                    l.clips
+                        .iter()
+                        .filter(|c| c.is_audio())
+                        .map(|c| (c.id.clone(), c.audio_file_path.clone()))
+                })
+                .collect()
+        };
         // A decode that lands this frame must be attached now: the viewport clip
         // snapshot is only rebuilt on drag / structural change, so without this the
         // waveform would stay blank (and look like it "cleared" while scrolling)
         // until the next unrelated edit. Re-sync so the new renderer attaches; the
         // per-layer fingerprint (waveform.is_some()) then repaints the lane once.
-        if self.ws.ui_root.audio_waveforms.poll_and_request(&audio_clips) {
+        if self.ws.ui_root.audio_waveforms.drive(clips_key, gather) {
             crate::ui_bridge::sync_clip_positions(&mut self.ws.ui_root, &self.local_project);
         }
 
@@ -626,11 +620,6 @@ impl Application {
         seg = std::time::Instant::now();
 
         // 2. Process UI events and dispatch actions
-        // Keep the Add-picker's embedded-preset list current (fingerprint-gated;
-        // rebuilds only when a fork/import/remove changed the set).
-        self.ws
-            .ui_root
-            .sync_embedded_presets(&self.local_project);
         let mut actions = self.ws.ui_root.process_events();
 
         // Overlay-hosted text sessions (main window): cancel any session
@@ -766,7 +755,7 @@ impl Application {
                 M::Settings => self.pending_open_settings = true,
                 M::RtQuality => {
                     self.ws.ui_root.rt_quality_panel.open();
-                    self.ws.ui_root.overlay_dirty = true;
+                    self.ws.ui_root.mark_overlay_dirty();
                 }
             }
         }
@@ -775,7 +764,7 @@ impl Application {
         if std::mem::take(&mut self.pending_open_settings) {
             self.ws.ui_root.settings_popup.open();
             // Programmatic open: nudge the overlay driver to rebuild + draw it.
-            self.ws.ui_root.overlay_dirty = true;
+            self.ws.ui_root.mark_overlay_dirty();
         }
 
         // An in-place inspector scroll (wheel in window_input, or a scrollbar
@@ -1200,7 +1189,7 @@ impl Application {
                     // overlay (not a dock): open + dirty nudge, same shape as
                     // the pending_open_settings block below.
                     self.ws.ui_root.rt_quality_panel.open();
-                    self.ws.ui_root.overlay_dirty = true;
+                    self.ws.ui_root.mark_overlay_dirty();
                     continue;
                 }
                 PanelAction::Root(RootAction::PreviewSceneModifierObject(layer, modifier_id, object)) => {
@@ -1796,7 +1785,7 @@ impl Application {
             }
             let content_tx = self.content_tx.as_ref().unwrap();
             let mut dctx = crate::ui_bridge::DispatchCtx {
-                project: &mut self.local_project,
+                project: crate::ui_bridge::ProjectRef::new(&mut self.local_project, &mut self.ui_edits.stamps, content_tx),
                 content_tx,
                 content_state: &self.content_state,
                 ui: &mut self.ws.ui_root,
@@ -1805,7 +1794,6 @@ impl Application {
                 user_prefs: &mut self.user_prefs,
                 editor_target: None,
                 scrub: &mut self.scrub,
-                stamps: &mut self.ui_edits.stamps,
                 dialogs: crate::file_dialogs::host(&self.window_registry, self.dialog_window_id, self.primary_window_id, self.current_project_path.as_deref()),
             };
             let result = crate::ui_bridge::dispatch(action, &mut dctx);
@@ -1866,7 +1854,7 @@ impl Application {
                         _ => {}
                     }
                     let mut dctx = crate::ui_bridge::DispatchCtx {
-                        project: &mut self.local_project,
+                        project: crate::ui_bridge::ProjectRef::new(&mut self.local_project, &mut self.ui_edits.stamps, content_tx),
                         content_tx,
                         content_state: &self.content_state,
                         ui: &mut ed.ui_root,
@@ -1875,7 +1863,6 @@ impl Application {
                         user_prefs: &mut self.user_prefs,
                         editor_target: None,
                         scrub: &mut self.scrub,
-                        stamps: &mut self.ui_edits.stamps,
                         dialogs: crate::file_dialogs::host(&self.window_registry, self.dialog_window_id, self.primary_window_id, self.current_project_path.as_deref()),
                     };
                     let result = crate::ui_bridge::dispatch(action, &mut dctx);
@@ -2646,7 +2633,7 @@ impl Application {
                         let content_tx = self.content_tx.as_ref().unwrap();
                         let editor_target = self.watched_graph_target.as_ref();
                         let mut dctx = crate::ui_bridge::DispatchCtx {
-                            project: &mut self.local_project,
+                            project: crate::ui_bridge::ProjectRef::new(&mut self.local_project, &mut self.ui_edits.stamps, content_tx),
                             content_tx,
                             content_state: &self.content_state,
                             ui: &mut self.ws.ui_root,
@@ -2655,7 +2642,6 @@ impl Application {
                             user_prefs: &mut self.user_prefs,
                             editor_target,
                             scrub: &mut self.scrub,
-                            stamps: &mut self.ui_edits.stamps,
                             dialogs: crate::file_dialogs::host(&self.window_registry, self.dialog_window_id, self.primary_window_id, self.current_project_path.as_deref()),
                         };
                         let _ = crate::ui_bridge::dispatch(&action, &mut dctx);
@@ -3017,6 +3003,7 @@ impl Application {
         // shared with the script runner) beside the old flags: projections,
         // drag polling, auto-scroll, the rebuild, the `push_state` pieces,
         // then the drag-time clip and lane re-projection.
+        let automation_draw_mode = self.selection.automation_draw_mode;
         let inputs = crate::ui_frame::gather_frame_inputs(
             &mut self.frame_planner,
             &self.ws.ui_root,
@@ -3024,6 +3011,12 @@ impl Application {
             &self.active_layer_id,
             &self.ui_edits,
             &self.content_state,
+            crate::frame_plan::ChromeSource {
+                project: &self.local_project,
+                is_dirty: self.content_state.editing_is_dirty,
+                project_path: self.current_project_path.as_deref(),
+                automation_draw_mode,
+            },
         );
         let plan = self.frame_planner.plan(inputs);
         let changes = crate::ui_frame::ProjectionChanges {
@@ -3439,6 +3432,35 @@ impl Application {
 /// each clip a coloured bar via the shared `get_clip_color` (so the strip
 /// matches the main timeline). Shared by the live present pass and the
 /// headless snapshot so both draw the same strip.
+/// The editor mini-timeline, keyed on what it reads: the Clips, Layers and
+/// Settings stamps and the bar and beat the readout shows. A steady frame
+/// rebuilds nothing (P4c).
+#[derive(Default)]
+pub(crate) struct MiniTimelineCache {
+    key: Option<(u64, i64, i64)>,
+    data: (Vec<manifold_ui::MiniClip>, Vec<manifold_ui::MiniLayerLabel>, usize, f32, f32, String),
+}
+
+impl MiniTimelineCache {
+    pub(crate) fn get(
+        &mut self,
+        project: &manifold_core::project::Project,
+        current_beat: f32,
+        parts: &manifold_core::change::PartStamps,
+    ) -> &(Vec<manifold_ui::MiniClip>, Vec<manifold_ui::MiniLayerLabel>, usize, f32, f32, String) {
+        use manifold_core::change::{ChangeSet, Part};
+        let bpb = project.settings.time_signature_numerator.max(1) as f32;
+        let bar = (current_beat / bpb).floor() as i64 + 1;
+        let beat_in_bar = (current_beat - (bar - 1) as f32 * bpb).floor() as i64 + 1;
+        let key = (parts.key(ChangeSet::of(&[Part::Clips, Part::Layers, Part::Settings])), bar, beat_in_bar);
+        if self.key != Some(key) {
+            self.key = Some(key);
+            self.data = mini_timeline_data(project, current_beat);
+        }
+        &self.data
+    }
+}
+
 pub(crate) fn mini_timeline_data(
     project: &manifold_core::project::Project,
     current_beat: f32,

@@ -68,8 +68,6 @@ pub enum WorkKind {
     OscRouteRebuild,
     /// Project preset overlay install.
     PresetOverlayInstall,
-    /// `embedded_presets_fingerprint`, on either thread.
-    PresetFingerprint,
     /// Audio modulation runtime reconcile.
     AudioReconcile,
     /// A CoreAudio device or process query.
@@ -86,7 +84,7 @@ pub enum WorkKind {
     FrameAlloc,
 }
 
-pub const WORK_KIND_COUNT: usize = 34;
+pub const WORK_KIND_COUNT: usize = 33;
 
 impl WorkKind {
     pub const ALL: [WorkKind; WORK_KIND_COUNT] = [
@@ -116,7 +114,6 @@ impl WorkKind {
         WorkKind::ListenerRangeRefresh,
         WorkKind::OscRouteRebuild,
         WorkKind::PresetOverlayInstall,
-        WorkKind::PresetFingerprint,
         WorkKind::AudioReconcile,
         WorkKind::DeviceQuery,
         WorkKind::ClipBindingReconcile,
@@ -159,7 +156,6 @@ impl WorkKind {
             WorkKind::ListenerRangeRefresh => "ListenerRangeRefresh",
             WorkKind::OscRouteRebuild => "OscRouteRebuild",
             WorkKind::PresetOverlayInstall => "PresetOverlayInstall",
-            WorkKind::PresetFingerprint => "PresetFingerprint",
             WorkKind::AudioReconcile => "AudioReconcile",
             WorkKind::DeviceQuery => "DeviceQuery",
             WorkKind::ClipBindingReconcile => "ClipBindingReconcile",

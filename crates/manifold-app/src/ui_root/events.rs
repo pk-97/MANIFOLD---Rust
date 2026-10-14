@@ -362,7 +362,7 @@ impl UIRoot {
 
         // If a popup was just opened, flag for rebuild so nodes appear this frame.
         if !popup_open_before && (self.browser_popup.is_open() || self.ableton_picker.is_open()) {
-            self.overlay_dirty = true;
+            self.mark_overlay_dirty();
         }
 
         filtered

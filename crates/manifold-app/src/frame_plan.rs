@@ -135,26 +135,99 @@ impl RegionRects {
     }
 }
 
-/// What the transport, header and footer show, at display resolution (D15).
-/// The field list is re-derived from `push_state`'s chrome reads in P4c.
+/// What the chrome push shows that no part stamp covers, at display
+/// resolution (D15): one field per `push_chrome` read of `ContentState` and
+/// the app. Project reads key on parts; the zoom label on `zoom_bits`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct ChromeInputs {
     pub playing: bool,
     pub recording: bool,
     pub automation_armed: bool,
-    pub sync_state: u8,
-    pub link_state: u8,
-    pub clock_state: u8,
-    pub link_peers: u16,
-    pub bpm_tenths: u32,
+    pub automation_draw_mode: bool,
+    pub link_enabled: bool,
+    pub link_peers: i32,
+    pub midi_clock_enabled: bool,
+    pub midi_clock_receiving: bool,
+    pub osc_sync: u8,
+    pub ableton_transport_enabled: bool,
+    pub osc_sender_enabled: bool,
+    pub ableton_sync: u8,
     pub clock_authority: u8,
+    /// The shown BPM, in tenths.
+    pub bpm_tenths: i32,
     /// Minutes, seconds, tenths, bar, beat and sixteenth, packed.
     pub time_digits: u64,
-    /// The shown MIDI-clock position text, packed byte by byte.
-    pub clock_digits: u64,
-    pub export_range_px: [i32; 2],
-    pub sdr_preview: bool,
-    pub hdr: bool,
+    /// Detect progress in tenths of a percent, and whether it shows.
+    pub detect_permille: u16,
+    pub detect_show: bool,
+    pub is_dirty: bool,
+    /// Moves when a shown string changed: the clock device and position, the
+    /// detect status, the project path (compared by retained pointer).
+    pub text: u64,
+}
+
+/// The app state the chrome push reads besides `ContentState`.
+pub(crate) struct ChromeSource<'a> {
+    pub project: &'a manifold_core::project::Project,
+    pub is_dirty: bool,
+    pub project_path: Option<&'a std::path::Path>,
+    pub automation_draw_mode: bool,
+}
+
+/// The strings the chrome shows, retained so a change is a pointer compare
+/// (the content thread caches each as an `Arc<str>`), and the version that
+/// moves when one changes.
+#[derive(Default)]
+struct ChromeText {
+    clock_device: Option<std::sync::Arc<str>>,
+    clock_position: Option<std::sync::Arc<str>>,
+    detect_status: Option<std::sync::Arc<str>>,
+    project_path: Option<std::path::PathBuf>,
+    version: u64,
+}
+
+impl ChromeText {
+    fn version(&mut self, content: &crate::content_state::ContentState, path: Option<&std::path::Path>) -> u64 {
+        let mut moved = false;
+        for (held, sent) in [
+            (&mut self.clock_device, &content.midi_clock_device_name),
+            (&mut self.clock_position, &content.midi_clock_position_display),
+            (&mut self.detect_status, &content.percussion_status_message),
+        ] {
+            if !held.as_ref().is_some_and(|h| std::sync::Arc::ptr_eq(h, sent)) {
+                *held = Some(std::sync::Arc::clone(sent));
+                moved = true;
+            }
+        }
+        if self.project_path.as_deref() != path {
+            self.project_path = path.map(std::path::Path::to_path_buf);
+            moved = true;
+        }
+        if moved {
+            self.version += 1;
+        }
+        self.version
+    }
+}
+
+/// Pack the transport time readout exactly as `push_chrome` computes it.
+fn time_digits(content: &crate::content_state::ContentState, beats_per_bar: i32) -> u64 {
+    let beat = content.current_beat.as_f32();
+    let t = content.current_time.0;
+    let mins = (t / 60.0).floor() as i32;
+    let secs = (t % 60.0).floor() as i32;
+    let tenths = ((t * 10.0) % 10.0).floor() as i32;
+    let bpb = beats_per_bar.max(1) as f32;
+    let bar = (beat / bpb).floor() as i32 + 1;
+    let beat_in_bar = (beat % bpb).floor() as i32 + 1;
+    let sixteenth = ((beat % 1.0) * 4.0).floor() as i32 + 1;
+    let field = |v: i32, bits: u32| (v as u32 as u64) & ((1u64 << bits) - 1);
+    field(mins, 16)
+        | field(secs, 6) << 16
+        | field(tenths, 4) << 22
+        | field(bar, 20) << 26
+        | field(beat_in_bar, 8) << 46
+        | field(sixteenth, 4) << 54
 }
 
 /// Everything the main window's UI work depends on, as versions and
@@ -189,6 +262,8 @@ pub(crate) struct FrameInputs {
     pub runtime: RuntimeSeqs,
     /// D20: the frame-quantized driver period of the content bpm.
     pub driver_period_key: u64,
+    /// The LED controller state the master chrome shows (live push).
+    pub led_enabled: bool,
 }
 
 /// Rows of the section 4 projection table, one bit each.
@@ -275,11 +350,15 @@ const INSPECTOR_SYNC_PARTS: ChangeSet = ChangeSet::of(&[
     Part::EmbeddedPresets,
     Part::Settings,
 ]);
-const AUDIO_DEVICE_PARTS: ChangeSet = ChangeSet::of(&[Part::AudioSetup]);
+// Layers: the send rows name their feeding layers. Effects: the consumer rows
+// list the audio mods that read each send.
+const AUDIO_DEVICE_PARTS: ChangeSet = ChangeSet::of(&[Part::AudioSetup, Part::Layers, Part::Effects]);
 const CLIP_POSITION_PARTS: ChangeSet = ChangeSet::of(&[Part::Clips, Part::Layers]);
 const LANE_GEOMETRY_PARTS: ChangeSet = ChangeSet::of(&[Part::Automation, Part::Effects, Part::Layers]);
 // Clips: the footer and layer-header clip counts (projection_input_matrix).
-const CHROME_PARTS: ChangeSet = ChangeSet::of(&[Part::Settings, Part::Mappings, Part::Layers, Part::Clips]);
+// Effects: the master effect names behind the LED exit path list.
+const CHROME_PARTS: ChangeSet =
+    ChangeSet::of(&[Part::Settings, Part::Mappings, Part::Layers, Part::Clips, Part::Effects]);
 const LIVE_VALUE_PARTS: ChangeSet = ChangeSet::of(&[Part::Values, Part::Layers]);
 const DRIVER_READOUT_PARTS: ChangeSet = ChangeSet::of(&[Part::Effects]);
 const PRESET_LIST_PARTS: ChangeSet = ChangeSet::of(&[Part::EmbeddedPresets]);
@@ -315,7 +394,11 @@ pub(crate) fn plan_frame(last: &FrameInputs, next: &FrameInputs) -> FramePlan {
     {
         p.insert(Projection::InspectorSync);
     }
-    if moved.intersects(AUDIO_DEVICE_PARTS) || last.audio_directory != next.audio_directory {
+    // The dock view moves when it opens: the query fills it then.
+    if moved.intersects(AUDIO_DEVICE_PARTS)
+        || last.audio_directory != next.audio_directory
+        || last.dock_view != next.dock_view
+    {
         p.insert(Projection::AudioDevices);
     }
     if moved.intersects(CLIP_POSITION_PARTS) {
@@ -330,8 +413,14 @@ pub(crate) fn plan_frame(last: &FrameInputs, next: &FrameInputs) -> FramePlan {
     if last.preview.lanes != next.preview.lanes {
         p.insert(Projection::LanePreview);
     }
-    // The live push also writes the active layer's name and opacity.
-    if last.values != next.values || moved.intersects(LIVE_VALUE_PARTS) || active_layer {
+    // The live push also writes the active layer's name and opacity and the
+    // LED controller state, and the macro Ableton status follows the session.
+    if last.values != next.values
+        || moved.intersects(LIVE_VALUE_PARTS)
+        || active_layer
+        || last.led_enabled != next.led_enabled
+        || runtime.ableton_session != last.runtime.ableton_session
+    {
         p.insert(Projection::LiveValues);
     }
     if moved.contains(Part::Shapes) {
@@ -344,9 +433,14 @@ pub(crate) fn plan_frame(last: &FrameInputs, next: &FrameInputs) -> FramePlan {
     if selection_visual || cursor || active_layer {
         p.insert(Projection::SelectionPush);
     }
-    // The chrome push also shows the lanes toggle and the primary clip's
-    // chrome values.
-    if moved.intersects(CHROME_PARTS) || last.chrome != next.chrome || automation_view || selection_identity {
+    // The chrome push also shows the lanes toggle, the primary clip's chrome
+    // values and the zoom label.
+    if moved.intersects(CHROME_PARTS)
+        || last.chrome != next.chrome
+        || automation_view
+        || selection_identity
+        || last.zoom_bits != next.zoom_bits
+    {
         p.insert(Projection::ChromePush);
     }
     if moved.intersects(DRIVER_READOUT_PARTS) || last.driver_period_key != next.driver_period_key {
@@ -518,9 +612,46 @@ pub(crate) struct FramePlanner {
     pub last: FrameInputs,
     active_layer_seen: Option<manifold_core::LayerId>,
     active_layer_version: u64,
+    chrome_text: ChromeText,
 }
 
 impl FramePlanner {
+    /// The chrome push's inputs, read the way `push_chrome` reads them.
+    pub(crate) fn chrome_inputs(
+        &mut self,
+        content: &crate::content_state::ContentState,
+        source: &ChromeSource<'_>,
+    ) -> ChromeInputs {
+        use manifold_core::types::ClockAuthority;
+        let bpm = if content.clock_authority == ClockAuthority::Internal {
+            source.project.settings.bpm.0
+        } else {
+            content.bpm as f32
+        };
+        let progress = content.percussion_progress.clamp(0.0, 1.0);
+        ChromeInputs {
+            playing: content.is_playing,
+            recording: content.is_recording,
+            automation_armed: content.automation_armed,
+            automation_draw_mode: source.automation_draw_mode,
+            link_enabled: content.link_enabled,
+            link_peers: content.link_peers,
+            midi_clock_enabled: content.midi_clock_enabled,
+            midi_clock_receiving: content.midi_clock_receiving,
+            osc_sync: content.osc_sync_mode as u8,
+            ableton_transport_enabled: content.ableton_transport_enabled,
+            osc_sender_enabled: content.osc_sender_enabled,
+            ableton_sync: content.ableton_sync_status as u8,
+            clock_authority: content.clock_authority as u8,
+            bpm_tenths: (bpm * 10.0).round() as i32,
+            time_digits: time_digits(content, source.project.settings.time_signature_numerator),
+            detect_permille: (progress * 1000.0).round() as u16,
+            detect_show: content.percussion_show_progress,
+            is_dirty: source.is_dirty,
+            text: self.chrome_text.version(content, source.project_path),
+        }
+    }
+
     pub(crate) fn active_layer_version(&mut self, current: &Option<manifold_core::LayerId>) -> u64 {
         if *current != self.active_layer_seen {
             self.active_layer_seen.clone_from(current);
@@ -628,20 +759,29 @@ mod tests {
     }
 
     #[test]
-    fn row_scene_param_with_switch_or_gate_rebuilds_the_inspector() {
+    fn row_scene_switch_param_rebuilds_the_inspector() {
         // ChangeGraphParamCommand touches Values | Effects for a scene.switch
-        // or gate target (SCENE_SURFACES D12); a plain card param is Values.
+        // param: the dimmed and folded rows gate on that feature (SCENE_SURFACES
+        // D12). A plain card param is Values.
         assert!(runs(&plan(with_parts(&[Part::Values, Part::Effects])), Projection::InspectorSync));
         assert!(!runs(&plan(with_parts(&[Part::Values])), Projection::InspectorSync));
     }
 
     #[test]
     fn row_audio_setup_device_list() {
-        assert!(runs(&plan(with_parts(&[Part::AudioSetup])), Projection::AudioDevices));
+        // Layers name the feeding layers, Effects the consumer rows.
+        for part in [Part::AudioSetup, Part::Layers, Part::Effects] {
+            assert!(runs(&plan(with_parts(&[part])), Projection::AudioDevices), "{part:?}");
+        }
         let mut next = base();
         next.audio_directory = 1;
         assert!(runs(&plan(next), Projection::AudioDevices));
-        assert!(!runs(&plan(with_parts(&[Part::Effects])), Projection::AudioDevices));
+        // Opening the dock fills it.
+        let mut next = base();
+        next.dock_view = 1;
+        assert!(runs(&plan(next), Projection::AudioDevices));
+        assert!(!runs(&plan(with_parts(&[Part::Markers])), Projection::AudioDevices));
+        assert!(!runs(&plan(with_parts(&[Part::Values])), Projection::AudioDevices));
     }
 
     #[test]
@@ -685,6 +825,14 @@ mod tests {
         let mut next = base();
         next.active_layer = 1;
         assert!(runs(&plan(next), Projection::LiveValues));
+        // The master chrome shows the LED controller state and the macro
+        // Ableton status, which follows the session.
+        let mut next = base();
+        next.led_enabled = true;
+        assert!(runs(&plan(next), Projection::LiveValues));
+        let mut next = base();
+        next.runtime.ableton_session = 1;
+        assert!(runs(&plan(next), Projection::LiveValues));
     }
 
     #[test]
@@ -727,8 +875,25 @@ mod tests {
 
     #[test]
     fn row_chrome_push() {
-        for part in [Part::Settings, Part::Mappings, Part::Layers, Part::Clips] {
+        // Effects: the master effect names behind the LED exit path list.
+        for part in [Part::Settings, Part::Mappings, Part::Layers, Part::Clips, Part::Effects] {
             assert!(runs(&plan(with_parts(&[part])), Projection::ChromePush), "{part:?}");
+        }
+        // The zoom label.
+        let mut next = base();
+        next.zoom_bits = 1;
+        assert!(runs(&plan(next), Projection::ChromePush));
+        // Each chrome input on its own.
+        for edit in [
+            |i: &mut FrameInputs| i.chrome.playing = true,
+            |i: &mut FrameInputs| i.chrome.link_peers = 2,
+            |i: &mut FrameInputs| i.chrome.detect_permille = 500,
+            |i: &mut FrameInputs| i.chrome.text = 3,
+            |i: &mut FrameInputs| i.chrome.is_dirty = true,
+        ] {
+            let mut next = base();
+            edit(&mut next);
+            assert!(runs(&plan(next), Projection::ChromePush));
         }
         let mut next = base();
         next.automation_view = 1;

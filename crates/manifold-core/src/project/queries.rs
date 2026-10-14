@@ -78,6 +78,16 @@ impl Project {
         }
     }
 
+    /// Read twin of [`Self::with_preset_graph_mut`]. A generator whose
+    /// `gen_params` is not built yet reads as `None` (the mut twin builds it).
+    pub fn with_preset_graph<R>(
+        &self,
+        target: &crate::GraphTarget,
+        f: impl FnOnce(&crate::effects::PresetInstance) -> R,
+    ) -> Option<R> {
+        self.preset_instance(target).map(f)
+    }
+
     /// Mutable variant of [`Self::preset_instance`]. Resolves the effect or
     /// generator instance behind a [`GraphTarget`] for in-place edits (e.g.
     /// re-seeding `param_values` after a fork/import retarget).
