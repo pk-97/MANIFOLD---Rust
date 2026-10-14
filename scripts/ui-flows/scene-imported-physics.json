@@ -85,7 +85,8 @@
     "Assert": {
       "selector": {
         "Query": {
-          "text": "■ cc0_oomurasaki_azalea_r_x_pulchrum"
+          "name": "scene_tree.item",
+          "text": "cc0_oomurasaki_azalea_r_x_pulchrum"
         }
       },
       "check": {
@@ -326,7 +327,8 @@
     "Assert": {
       "selector": {
         "Query": {
-          "text": "■ cc0_oomurasaki_azalea_r_x_pulchrum"
+          "name": "scene_tree.item",
+          "text": "cc0_oomurasaki_azalea_r_x_pulchrum"
         }
       },
       "check": {
@@ -505,7 +507,8 @@
     "Pointer": {
       "target": {
         "Query": {
-          "text": "🌍 World"
+          "name": "scene_tree.item",
+          "text": "Physics"
         }
       },
       "gesture": {
