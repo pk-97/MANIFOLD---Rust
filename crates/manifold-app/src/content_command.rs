@@ -304,8 +304,6 @@ pub enum ContentCommand {
     /// extra output delay in ms, and the learned offsets in ms for MIDI
     /// clock, AbletonOSC and timecode (NaN where none is stored).
     SetSyncCalibration { extra_delay_ms: f64, offsets_ms: [f64; 3] },
-    /// The output display's own delay, when it reports one; 0 otherwise.
-    SetDisplayDelay(f64),
 
     // ── Editor canvas ─────────────────────────────────────────────
     /// Tell the content thread which effect instance's internal graph

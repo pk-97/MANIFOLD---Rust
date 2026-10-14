@@ -1,7 +1,6 @@
 //! The UI side of the sync calibration (FRAME_EXACT_TRANSPORT_DESIGN D19):
-//! the stored values sent before the content thread's first tick, the
-//! learned offsets kept per rig in `UserPrefs`, and the output display's own
-//! delay.
+//! the stored values sent before the content thread's first tick, and the
+//! learned offsets kept per rig in `UserPrefs`.
 
 use crate::content_command::ContentCommand;
 use crate::user_prefs::UserPrefs;
@@ -10,8 +9,6 @@ use crate::user_prefs::UserPrefs;
 pub const EXTRA_DELAY_KEY: &str = "MANIFOLD_ExtraOutputDelayMs";
 /// Learned offsets against Link, ms: MIDI clock, AbletonOSC, timecode.
 pub const OFFSET_KEYS: [&str; 3] = ["MANIFOLD_SyncOffsetClkMs", "MANIFOLD_SyncOffsetOscMs", "MANIFOLD_SyncOffsetTimecodeMs"];
-/// UI frames between output-display checks.
-const DISPLAY_CHECK_FRAMES: u64 = 60;
 /// s: offsets closer than this to the saved ones are not re-saved.
 const SAVE_EPSILON: f64 = 1e-6;
 
@@ -20,9 +17,6 @@ const SAVE_EPSILON: f64 = 1e-6;
 pub struct SyncPrefs {
     /// The offsets last written, s.
     saved: [f64; 3],
-    /// The output window's display and when it was last checked.
-    display: Option<u32>,
-    next_display_check: u64,
 }
 
 impl SyncPrefs {
@@ -53,59 +47,12 @@ impl SyncPrefs {
         prefs.save();
         self.saved = offsets;
     }
-
-    /// Once a second of UI frames the output window's display is checked.
-    pub fn display_check_due(&mut self, frame: u64) -> bool {
-        if frame < self.next_display_check {
-            return false;
-        }
-        self.next_display_check = frame + DISPLAY_CHECK_FRAMES;
-        true
-    }
-
-    /// On a change of the output window's display, the delay it reports (0
-    /// when it reports none).
-    pub fn display_changed(&mut self, display: Option<u32>) -> Option<ContentCommand> {
-        if display == self.display {
-            return None;
-        }
-        self.display = display;
-        let delay = display.and_then(crate::sync_rig_log::display::output_latency_seconds).unwrap_or(0.0);
-        log::info!("[Transport] output display {display:?}: reported delay {:.1} ms", delay * 1000.0);
-        Some(ContentCommand::SetDisplayDelay(delay))
-    }
 }
 
 impl crate::app::Application {
-    /// Once per UI frame, after the content state drain: save learned
-    /// offsets, and tell the content thread when the output window moved to
-    /// another display.
+    /// Once per UI frame, after the content state drain: save learned offsets.
     pub(crate) fn tick_sync_calibration(&mut self) {
         self.sync_prefs.save_learned(&mut self.user_prefs, self.content_state.sync_offsets);
-        if self.sync_prefs.display_check_due(self.frame_count) {
-            let display = self.output_display_id();
-            if let Some(cmd) = self.sync_prefs.display_changed(display) {
-                self.send_content_cmd(cmd);
-            }
-        }
-    }
-
-    fn output_display_id(&self) -> Option<u32> {
-        let window = self
-            .window_registry
-            .iter()
-            .find(|(_, s)| matches!(s.role, crate::window_registry::WindowRole::Output { .. }))
-            .map(|(_, s)| &s.window)?;
-        #[cfg(target_os = "macos")]
-        {
-            use winit::platform::macos::MonitorHandleExtMacOS;
-            window.current_monitor().map(|m| m.native_id())
-        }
-        #[cfg(not(target_os = "macos"))]
-        {
-            let _ = window;
-            None
-        }
     }
 }
 
@@ -134,16 +81,5 @@ mod tests {
             }
             _ => unreachable!(),
         }
-    }
-
-    #[test]
-    fn display_is_checked_once_a_second_and_only_on_change() {
-        let mut sync = SyncPrefs::default();
-        assert!(sync.display_check_due(0));
-        assert!(!sync.display_check_due(1), "checked within the second");
-        assert!(sync.display_check_due(60));
-        assert!(matches!(sync.display_changed(Some(1)), Some(ContentCommand::SetDisplayDelay(_))));
-        assert!(sync.display_changed(Some(1)).is_none(), "same display");
-        assert!(sync.display_changed(Some(2)).is_some(), "moved to another display");
     }
 }

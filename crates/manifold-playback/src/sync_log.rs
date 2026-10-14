@@ -78,13 +78,12 @@ fn lock_line(source: &str, tick: &SyncTick) -> String {
     let (f, c) = (tick.follower, tick.calibration);
     let ms = |s: f64| s * 1000.0;
     let mut line = format!(
-        "[Transport] {source} lock: phase {:+.1} ms, trim {:+.2}%, base {:.2} BPM, L {:.1} ms (present {:.1}, display {:.1}, extra {:.1})",
+        "[Transport] {source} lock: phase {:+.1} ms, trim {:+.2}%, base {:.2} BPM, L {:.1} ms (present {:.1}, extra {:.1})",
         ms(f.filtered_error()),
         f.trim() * 100.0,
         f.base_bpm().0,
         ms(c.read_delay()),
         ms(c.present_delay()),
-        ms(c.display_delay()),
         ms(c.extra_delay()),
     );
     if let Some(offset) = tick.offset {
@@ -126,7 +125,7 @@ mod tests {
         assert!(lines(&mut log, &tick(4.9, Some("CLK"), FollowEvent::None)).is_empty(), "no lock line before 5 s");
         let lock = lines(&mut log, &tick(5.0, Some("CLK"), FollowEvent::None));
         assert_eq!(lock, [
-            "[Transport] CLK lock: phase +0.0 ms, trim +0.00%, base 128.00 BPM, L 17.0 ms (present 17.0, display 0.0, extra 0.0), CLK offset +6.1 ms"
+            "[Transport] CLK lock: phase +0.0 ms, trim +0.00%, base 128.00 BPM, L 17.0 ms (present 17.0, extra 0.0), CLK offset +6.1 ms"
         ]);
         let seek = FollowEvent::Seek { beat: Beats(12.0), error: -0.312 };
         assert_eq!(lines(&mut log, &tick(6.0, Some("CLK"), seek)), ["[Transport] CLK seek -312 ms"]);

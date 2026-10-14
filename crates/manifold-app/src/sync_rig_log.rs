@@ -271,7 +271,7 @@ impl DisplayWatch {
 
 /// What macOS says about each display's latency (D19). Off the hot path: this
 /// runs on the writer thread, and only when the display set changes.
-pub(crate) mod display {
+mod display {
     #[cfg(target_os = "macos")]
     mod ffi {
         use std::ffi::c_void;
@@ -374,29 +374,6 @@ pub(crate) mod display {
             return vec!["none_in_ioregistry=1".to_string()];
         }
         edids.iter().map(|bytes| super::edid::describe(bytes)).collect()
-    }
-
-    /// The display's own output latency in seconds, when CoreVideo reports a
-    /// valid one (D19's `L_display`); `None` means unknown.
-    #[cfg(target_os = "macos")]
-    pub fn output_latency_seconds(id: u32) -> Option<f64> {
-        const INDEFINITE: i32 = 1;
-        let mut link = std::ptr::null_mut();
-        // SAFETY: `link` receives a retained display link, released below.
-        if unsafe { ffi::CVDisplayLinkCreateWithCGDisplay(id, &mut link) } != 0 || link.is_null() {
-            return None;
-        }
-        // SAFETY: `link` is valid until released.
-        let latency = unsafe { ffi::CVDisplayLinkGetOutputVideoLatency(link) };
-        // SAFETY: balances the create above.
-        unsafe { ffi::CVDisplayLinkRelease(link) };
-        (latency.flags & INDEFINITE == 0 && latency.time_scale > 0 && latency.time_value > 0)
-            .then(|| latency.time_value as f64 / f64::from(latency.time_scale))
-    }
-
-    #[cfg(not(target_os = "macos"))]
-    pub fn output_latency_seconds(_id: u32) -> Option<f64> {
-        None
     }
 
     #[cfg(not(target_os = "macos"))]

@@ -883,7 +883,6 @@ impl ContentThread {
                     self.calibration.restore_offset(source, ms / 1000.0);
                 }
             }
-            ContentCommand::SetDisplayDelay(delay) => self.calibration.set_display_delay(delay),
 
             // ── Transport ──────────────────────────────────────────
             ContentCommand::Play => {

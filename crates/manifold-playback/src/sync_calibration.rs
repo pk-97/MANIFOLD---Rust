@@ -1,6 +1,6 @@
 //! Output latency and per-source offsets, measured rather than set
 //! (FRAME_EXACT_TRANSPORT_DESIGN D19). Every external source is read at
-//! `R = deadline + L`, `L = L_present + L_display + L_extra`, and a non-Link
+//! `R = deadline + L`, `L = L_present + L_extra`, and a non-Link
 //! source at `R` plus the offset it showed against Link.
 //!
 //! Pure: seconds on the caller's monotonic origin, no allocation.
@@ -180,7 +180,6 @@ impl OffsetLearner {
 #[derive(Debug, Clone)]
 pub struct SyncCalibration {
     present: PresentDelay,
-    display: f64,
     extra: f64,
     learners: [OffsetLearner; 3],
 }
@@ -193,12 +192,12 @@ impl Default for SyncCalibration {
 
 impl SyncCalibration {
     pub fn new() -> Self {
-        Self { present: PresentDelay::new(), display: 0.0, extra: 0.0, learners: [OffsetLearner::new(), OffsetLearner::new(), OffsetLearner::new()] }
+        Self { present: PresentDelay::new(), extra: 0.0, learners: [OffsetLearner::new(), OffsetLearner::new(), OffsetLearner::new()] }
     }
 
     /// `L`: from the frame's deadline to the moment it is on screen.
     pub fn read_delay(&self) -> f64 {
-        self.present.current + self.display + self.extra
+        self.present.current + self.extra
     }
 
     pub fn present_delay(&self) -> f64 {
@@ -211,11 +210,6 @@ impl SyncCalibration {
         self.present.presented(delay, now);
     }
 
-    /// The output display's own delay when it reports one, else 0.
-    pub fn set_display_delay(&mut self, delay: f64) {
-        self.display = if delay.is_finite() { delay.clamp(0.0, EXTRA_DELAY_MAX) } else { 0.0 };
-    }
-
     /// `MANIFOLD_ExtraOutputDelayMs`: 0–250 ms; anything else loads as 0
     /// with a warning naming the value.
     pub fn set_extra_delay_ms(&mut self, ms: f64) {
@@ -225,10 +219,6 @@ impl SyncCalibration {
             log::warn!("[Transport] MANIFOLD_ExtraOutputDelayMs {ms} is outside 0-250 ms; using 0");
             0.0
         };
-    }
-
-    pub fn display_delay(&self) -> f64 {
-        self.display
     }
 
     pub fn extra_delay(&self) -> f64 {
