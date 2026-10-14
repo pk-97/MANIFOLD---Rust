@@ -42,7 +42,7 @@ pub(crate) fn dispatch_modulation(action: &ModulationAction, ctx: &mut super::su
                 ctx.ui, &ctx.project, ctx.content_tx, gpt, param_id, ctx.editor_target, effective_tab, active_layer,
                 ctx.selection, true,
             ) else {
-                return DispatchResult::structural();
+                return DispatchResult::handled();
             };
             let param_id = &param_id;
             // Read the driver state off the SAME instance the command targets,
@@ -57,7 +57,7 @@ pub(crate) fn dispatch_modulation(action: &ModulationAction, ctx: &mut super::su
                 let base_value = inst.get_param(param_id.as_ref());
                 (existing, base_value)
             }) else {
-                return DispatchResult::structural();
+                return DispatchResult::handled();
             };
             let driver_target = DriverTarget::from(&target);
             let boxed: Box<dyn manifold_editing::command::Command + Send> =
@@ -82,14 +82,14 @@ pub(crate) fn dispatch_modulation(action: &ModulationAction, ctx: &mut super::su
                     Box::new(AddDriverCommand::new(driver_target, driver))
                 };
             ctx.execute(boxed);
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
         ModulationAction::AudioModToggle(gpt, param_id) => {
             let Some((target, param_id)) = resolve_mod_target(
                 ctx.ui, &ctx.project, ctx.content_tx, gpt, param_id, ctx.editor_target, effective_tab, active_layer,
                 ctx.selection, true,
             ) else {
-                return DispatchResult::structural();
+                return DispatchResult::handled();
             };
             let param_id = &param_id;
             // Existing mod's enabled state, read off the resolved instance.
@@ -127,7 +127,7 @@ pub(crate) fn dispatch_modulation(action: &ModulationAction, ctx: &mut super::su
                     // creating an audio send. The existing empty ID represents
                     // an unassigned source; Audio/Both needs a selected send.
                     if send_id.is_none() && !clip_only {
-                        return DispatchResult::structural();
+                        return DispatchResult::handled();
                     }
                     let mut m = manifold_core::audio_mod::ParameterAudioMod::new(
                         param_id.clone(),
@@ -140,14 +140,14 @@ pub(crate) fn dispatch_modulation(action: &ModulationAction, ctx: &mut super::su
                     Box::new(AddAudioModCommand::new(driver_target, m))
                 };
             ctx.execute(boxed);
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
         ModulationAction::AudioModSetSource(gpt, param_id, send_id, feature) => {
             let Some((target, param_id)) = resolve_mod_target(
                 ctx.ui, &ctx.project, ctx.content_tx, gpt, param_id, ctx.editor_target, effective_tab, active_layer,
                 ctx.selection, true,
             ) else {
-                return DispatchResult::structural();
+                return DispatchResult::handled();
             };
             let param_id = &param_id;
             let old_source = ctx.project
@@ -177,21 +177,21 @@ pub(crate) fn dispatch_modulation(action: &ModulationAction, ctx: &mut super::su
                     Box::new(AddAudioModCommand::new(driver_target, m))
                 };
             ctx.execute(boxed);
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
         ModulationAction::AudioModRemove(gpt, param_id) => {
             let Some((target, param_id)) = resolve_mod_target(
                 ctx.ui, &ctx.project, ctx.content_tx, gpt, param_id, ctx.editor_target, effective_tab, active_layer,
                 ctx.selection, false,
             ) else {
-                return DispatchResult::structural();
+                return DispatchResult::handled();
             };
             let param_id = &param_id;
             let driver_target = DriverTarget::from(&target);
             let boxed: Box<dyn manifold_editing::command::Command + Send> =
                 Box::new(RemoveAudioModCommand::new(driver_target, param_id.clone()));
             ctx.execute(boxed);
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
         ModulationAction::AudioModSetInvert(gpt, param_id) => {
             // Flip the mod's invert flag in one undo step. Reads the current
@@ -293,7 +293,7 @@ pub(crate) fn dispatch_modulation(action: &ModulationAction, ctx: &mut super::su
                     ctx.execute(boxed);
                 }
             }
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
 
         // PARAM_STEP_ACTIONS D8: the Action segmented row. Entering Step from
@@ -348,7 +348,7 @@ pub(crate) fn dispatch_modulation(action: &ModulationAction, ctx: &mut super::su
                     }
                 }
             }
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
 
         // Audio-mod Step-amount scrub trio migrated to the unified
@@ -392,7 +392,7 @@ pub(crate) fn dispatch_modulation(action: &ModulationAction, ctx: &mut super::su
                     }
                 }
             }
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
 
         // PARAM_STEP_ACTIONS D8: the envelope (T) drawer's Action/Amount/Wrap
@@ -418,7 +418,7 @@ pub(crate) fn dispatch_modulation(action: &ModulationAction, ctx: &mut super::su
                         )
                     })
                 else {
-                    return DispatchResult::structural();
+                    return DispatchResult::handled();
                 };
                 if let Some((env_idx, old_action)) = env_info {
                     let new_action = match kind_idx {
@@ -444,7 +444,7 @@ pub(crate) fn dispatch_modulation(action: &ModulationAction, ctx: &mut super::su
                     }
                 }
             }
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
 
         // The envelope drawer's Wrap row — only meaningful while Action=Step.
@@ -483,7 +483,7 @@ pub(crate) fn dispatch_modulation(action: &ModulationAction, ctx: &mut super::su
                     }
                 }
             }
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
 
         ModulationAction::EnvelopeToggle(gpt, param_id) => {
@@ -499,7 +499,7 @@ pub(crate) fn dispatch_modulation(action: &ModulationAction, ctx: &mut super::su
             ) {
                 let param_id = &param_id;
                 let Some(env_target) = target.host_target() else {
-                    return DispatchResult::structural();
+                    return DispatchResult::handled();
                 };
                 let env_allowed = match env_target {
                     manifold_core::GraphTarget::SceneModifier { .. } => false,
@@ -541,14 +541,14 @@ pub(crate) fn dispatch_modulation(action: &ModulationAction, ctx: &mut super::su
                     ctx.execute(boxed);
                 }
             }
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
         ModulationAction::DriverConfig(gpt, param_id, cfg) => {
             let Some((target, param_id)) = resolve_mod_target(
                 ctx.ui, &ctx.project, ctx.content_tx, gpt, param_id, ctx.editor_target, effective_tab, active_layer,
                 ctx.selection, false,
             ) else {
-                return DispatchResult::structural();
+                return DispatchResult::handled();
             };
             let param_id = &param_id;
             let driver_target = DriverTarget::from(&target);
@@ -633,7 +633,7 @@ pub(crate) fn dispatch_modulation(action: &ModulationAction, ctx: &mut super::su
                     ctx.execute(boxed);
                 }
             }
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
         // Trim-range scrub trio (driver / audio / Ableton) migrated to the
         // unified `PanelAction::Scrub` wire (`ValueRef::Trim`, P-I / D4).

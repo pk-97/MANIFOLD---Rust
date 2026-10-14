@@ -315,7 +315,7 @@ pub(crate) fn audio_setup_command(
     cmd: Box<dyn manifold_editing::command::Command + Send>,
 ) -> DispatchResult {
     project.execute(cmd);
-    DispatchResult::structural()
+    DispatchResult::handled()
 }
 
 #[cfg(test)]

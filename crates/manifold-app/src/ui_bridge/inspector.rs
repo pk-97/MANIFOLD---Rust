@@ -1083,14 +1083,17 @@ mod scene_card_convergence_tests {
                 )),
                 &mut project,
             );
+            // The expansion is a stamped local write; the content thread gets
+            // the same closure.
             assert!(
-                project
+                !project
                     .timeline
                     .find_layer_by_id(&layer_id)
                     .unwrap()
                     .1
                     .is_collapsed
             );
+            project.timeline.find_layer_by_id_mut(&layer_id).unwrap().1.is_collapsed = true;
             let commands = h.drain();
             assert_eq!(commands.len(), 1);
             for command in commands {

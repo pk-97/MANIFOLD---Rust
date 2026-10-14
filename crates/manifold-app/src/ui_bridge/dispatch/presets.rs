@@ -35,7 +35,7 @@ pub(crate) fn dispatch_preset(
                     ctx,
                 );
             }
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
         PresetActionKind::Import => {
             if let Some(path) = crate::file_dialogs::pick_file(
@@ -56,7 +56,7 @@ pub(crate) fn dispatch_preset(
                     Err(error) => log::error!("[preset] import failed: {error}"),
                 }
             }
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
         PresetActionKind::Export => {
             if let Some((def, id)) = preset_source_def(&target, &ctx.project)
@@ -126,7 +126,7 @@ pub(crate) fn dispatch_preset(
                 command = command.with_resolved_def(def);
             }
             submit(&target, Box::new(command), ctx);
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
     }
 }

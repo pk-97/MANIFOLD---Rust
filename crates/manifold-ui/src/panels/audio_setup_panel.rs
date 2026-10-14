@@ -1488,6 +1488,21 @@ impl AudioSetupPanel {
         }
     }
 
+    /// Rewrite each send row's gain readout in place (UI_INVALIDATION D22).
+    /// `gains` walks the project's sends in this panel's order as
+    /// `(send id, gain dB)`; a row whose id differs waits for the rebuild.
+    pub fn sync_send_gains(&mut self, tree: &mut UITree, gains: &mut dyn Iterator<Item = (&AudioSendId, f32)>) {
+        for (i, (send, (id, db))) in self.sends.iter_mut().zip(gains).enumerate() {
+            if &send.id != id || send.gain_db == db {
+                continue;
+            }
+            send.gain_db = db;
+            if let Some(ids) = self.send_ids.get(i) {
+                tree.set_text(ids.gain_value, &format_gain_db(db));
+            }
+        }
+    }
+
     /// Send id + current gain (dB) for a gain-value label node, if `id` is
     /// one — arms the D7 gain drag on `PointerDown`.
     fn gain_drag_target(&self, id: NodeId) -> Option<(AudioSendId, f32)> {

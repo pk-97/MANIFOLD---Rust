@@ -318,6 +318,8 @@ pub(crate) fn gather_frame_inputs(
         scroll_x_px: ui_root.viewport.beat_to_pixel(Beats::ZERO).round() as i32,
         scroll_y_px: ui_root.viewport.scroll_y_px().round() as i32,
         zoom_bits: ui_root.viewport.pixels_per_beat().to_bits(),
+        scroll_x_bits: ui_root.viewport.scroll_x_beats().as_f32().to_bits(),
+        scroll_y_bits: ui_root.viewport.scroll_y_px().to_bits(),
         playhead_px: ui_root.viewport.playhead_pixel().map_or(i32::MIN, |px| px.round() as i32),
         inspector_view: ui_root.inspector.view_version(),
         dock_view: ui_root.audio_setup_panel.view_version(),
@@ -433,6 +435,11 @@ pub(crate) fn apply_frame_plan(
         flags.scroll_dirty.visual = true;
     }
     let mut scroll_dirty = std::mem::take(flags.scroll_dirty);
+    // A scroll or zoom from any input path moves the scroll panels, as the
+    // wheel does: dispatch sites that move the view need no structural sync.
+    scroll_dirty.scroll_x |= plan.viewport.scroll_x;
+    scroll_dirty.scroll_y |= plan.viewport.scroll_y;
+    scroll_dirty.zoom |= plan.viewport.zoom;
     // The plan's rebuild mask as the flat-tree suffix it maps to, through
     // the old signals so the drag guards still hold (P5a deletes them). A
     // viewport-only suffix rides the scroll-panel rebuild: the old signals
@@ -474,11 +481,14 @@ pub(crate) fn apply_frame_plan(
         crate::ui_bridge::push_selection(ui_root, project, idx, selection);
     }
     crate::ui_bridge::push_frame(ui_root, project, push.content_state, idx);
-    let live = projections.contains(Projection::LiveValues)
-        || projections.contains(Projection::LiveShapes)
-        || projections.contains(Projection::LiveRanges);
-    if replaced || live {
-        crate::ui_bridge::push_live(ui_root, project, push.content_state, idx);
+    let live = crate::ui_bridge::LiveGroups {
+        values: replaced || projections.contains(Projection::LiveValues),
+        shapes: replaced
+            || projections.contains(Projection::LiveShapes)
+            || projections.contains(Projection::LiveRanges),
+    };
+    if live.any() {
+        crate::ui_bridge::push_live(ui_root, project, push.content_state, idx, live);
     }
     if driver_periods_moved {
         crate::ui_bridge::sync_driver_readouts(ui_root, project, idx);

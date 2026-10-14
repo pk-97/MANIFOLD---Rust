@@ -352,7 +352,6 @@ impl TimelineEditingHost for AppEditingHost<'_> {
             }
             id
         };
-        *self.needs_structural_sync = true;
         Some(clip_id)
     }
 
@@ -458,9 +457,10 @@ impl TimelineEditingHost for AppEditingHost<'_> {
         self.scroll_dirty.visual = true;
     }
 
+    // No projection flag: every caller follows a committing method (which
+    // stamps) or an automation-view change, and the planner keys on both.
     fn mark_dirty(&mut self) {
         *self.needs_rebuild = true;
-        *self.needs_structural_sync = true;
     }
 
     fn request_redraw(&mut self) {
@@ -695,7 +695,6 @@ impl TimelineEditingHost for AppEditingHost<'_> {
                 crate::content_command::ContentCommand::Execute(Box::new(composite)),
             );
         }
-        *self.needs_structural_sync = true;
     }
 
     // ── Live clip mutation ──────────────────────────────────────

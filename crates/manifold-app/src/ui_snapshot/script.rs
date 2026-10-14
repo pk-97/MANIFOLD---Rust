@@ -1821,6 +1821,7 @@ impl Runner {
                     &mut data.selection,
                     &mut self.active_layer,
                     &mut self.flags,
+                    &mut self.edits.stamps,
                     &mut scratch,
                     &mut project_io,
                     #[cfg(target_os = "macos")]

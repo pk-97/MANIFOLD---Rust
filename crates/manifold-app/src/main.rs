@@ -41,6 +41,7 @@ mod app_lifecycle;
 mod app_render;
 mod frame;
 mod editor_bridge;
+mod editor_graph_cache;
 mod audio_mod_runtime;
 mod audio_visualization;
 mod autosave;

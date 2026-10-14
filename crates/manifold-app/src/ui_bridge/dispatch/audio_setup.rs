@@ -80,13 +80,13 @@ pub(crate) fn dispatch_audio_setup(action: &AudioSetupAction, ctx: &mut super::s
                     ctx.ui.inspector.audio_trigger_section_mut().expand_row(index);
                 }
             }
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
         AudioSetupAction::AudioTriggerRemove(layer_id, index) => {
             let boxed: Box<dyn manifold_editing::command::Command + Send> =
                 Box::new(RemoveLayerClipTriggerCommand::new(layer_id.clone(), *index));
             ctx.execute(boxed);
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
         AudioSetupAction::AudioTriggerEnabledToggle(layer_id, index) => {
             let old = ctx.project
@@ -101,7 +101,7 @@ pub(crate) fn dispatch_audio_setup(action: &AudioSetupAction, ctx: &mut super::s
                 );
                 ctx.execute(boxed);
             }
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
         AudioSetupAction::AudioTriggerSetSource(layer_id, index, send_id, feature) => {
             let old = ctx.project
@@ -119,7 +119,7 @@ pub(crate) fn dispatch_audio_setup(action: &AudioSetupAction, ctx: &mut super::s
                 );
                 ctx.execute(boxed);
             }
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
         // Layer clip-trigger shaping-slider scrub trio migrated to the unified
         // `PanelAction::Scrub` wire (`ValueRef::AudioTriggerShape`, P-I / D4):
@@ -141,7 +141,7 @@ pub(crate) fn dispatch_audio_setup(action: &AudioSetupAction, ctx: &mut super::s
                     ctx.execute(boxed);
                 }
             }
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
 
         // ── Audio Setup (project-level send routing) ──────────────
@@ -191,7 +191,7 @@ pub(crate) fn dispatch_audio_setup(action: &AudioSetupAction, ctx: &mut super::s
                 .unwrap_or(0.0);
             let new = (old + delta_db).clamp(AUDIO_SEND_GAIN_MIN_DB, AUDIO_SEND_GAIN_MAX_DB);
             if (new - old).abs() < f32::EPSILON {
-                return DispatchResult::structural();
+                return DispatchResult::handled();
             }
             audio_setup_command(
                 &mut ctx.project,
@@ -211,7 +211,7 @@ pub(crate) fn dispatch_audio_setup(action: &AudioSetupAction, ctx: &mut super::s
         AudioSetupAction::AudioSendGainSetTyped(id, new_db) => {
             let old = ctx.project.audio_setup.find_send(id).map(|s| s.gain_db).unwrap_or(0.0);
             if (new_db - old).abs() < f32::EPSILON {
-                return DispatchResult::structural();
+                return DispatchResult::handled();
             }
             audio_setup_command(
                 &mut ctx.project,
@@ -237,7 +237,7 @@ pub(crate) fn dispatch_audio_setup(action: &AudioSetupAction, ctx: &mut super::s
                 if v < FLOOR_MIN_DB { off } else { v.min(FLOOR_MAX_DB) }
             };
             if (new - old).abs() < f32::EPSILON {
-                return DispatchResult::structural();
+                return DispatchResult::handled();
             }
             audio_setup_command(
                 &mut ctx.project,
