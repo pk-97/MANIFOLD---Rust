@@ -202,6 +202,7 @@ impl Serialize for ManifestSer<'_> {
 /// governed by expose/unexpose (`append_user_binding` /
 /// `remove_user_binding_by_id`), not by this derivation.
 pub(super) struct GraphWithDerivedParams<'a> {
+    pub(super) preset: &'a crate::PresetTypeId,
     pub(super) graph: &'a crate::effect_graph_def::EffectGraphDef,
     pub(super) manifest: &'a crate::params::ParamManifest,
     /// The manifest came from the join (a generator's own graph), so a
@@ -228,12 +229,24 @@ impl Serialize for GraphWithDerivedParams<'_> {
         // Save-time-only cost (not per-frame) — the manifest double-build
         // this mirrors (D1) is priced the same way.
         let mut derived = self.graph.clone();
+        // Only a control whose name the lookup supplies saves without one
+        // (SCENE_SURFACES_DESIGN.md D24 (who owns a control's name)).
+        let join = crate::param_lookup::Join::new(self.preset, self.graph);
+        let lookup_names = |id: &str| {
+            self.joined
+                && self.manifest.get(id).is_some_and(|p| p.source == crate::params::SpecSource::Lookup)
+                && join.lookup_names(id)
+        };
         if let Some(meta) = derived.preset_metadata.as_mut() {
             for spec in meta.params.iter_mut() {
                 if let Some(p) = self.manifest.get(&spec.id) {
                     match p.source {
                         crate::params::SpecSource::Lookup if self.joined => {
-                            *spec = p.spec.lookup_stub()
+                            let mut stub = p.spec.lookup_stub();
+                            if lookup_names(&spec.id) {
+                                stub.name.clear();
+                            }
+                            *spec = stub
                         }
                         crate::params::SpecSource::Lookup => *spec = p.spec.clone(),
                         crate::params::SpecSource::Authored => *spec = p.spec.clone(),
@@ -242,14 +255,11 @@ impl Serialize for GraphWithDerivedParams<'_> {
                     }
                 }
             }
-            if self.joined {
-                for b in meta.bindings.iter_mut() {
-                    if self.manifest.get(&b.id).is_some_and(|p| {
-                        p.source == crate::params::SpecSource::Lookup
-                            && !matches!(b.target, crate::effect_graph_def::BindingTarget::Composite { .. })
-                    }) {
-                        b.label.clear();
-                    }
+            for b in meta.bindings.iter_mut() {
+                if lookup_names(&b.id)
+                    && !matches!(b.target, crate::effect_graph_def::BindingTarget::Composite { .. })
+                {
+                    b.label.clear();
                 }
             }
         }
@@ -664,7 +674,7 @@ impl Serialize for PresetInstance {
         if let Some(graph) = &self.graph {
             s.serialize_field(
                 "graph",
-                &GraphWithDerivedParams { graph, manifest: &self.params, joined: self.is_generator() },
+                &GraphWithDerivedParams { preset: &self.effect_type, graph, manifest: &self.params, joined: self.is_generator() },
             )?;
         }
         if let Some(v) = self.legacy_param0 {

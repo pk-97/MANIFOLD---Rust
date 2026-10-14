@@ -2914,6 +2914,8 @@ pub struct RenameSceneObjectCommand {
     /// scene_object has no group name for a card section to have followed).
     swept: Vec<(String, Option<String>)>,
     swept_metadata: Vec<(String, Option<String>)>,
+    /// `(param_id, prior section choice)` for each swept described control.
+    swept_choices: Vec<(String, Option<Option<String>>)>,
 }
 
 impl RenameSceneObjectCommand {
@@ -2934,6 +2936,7 @@ impl RenameSceneObjectCommand {
             nested_scope: None,
             swept: Vec::new(),
             swept_metadata: Vec::new(),
+            swept_choices: Vec::new(),
         }
     }
 }
@@ -3108,6 +3111,7 @@ impl Command for RenameSceneObjectCommand {
         };
         self.swept.clear();
         self.swept_metadata.clear();
+        self.swept_choices.clear();
         // Shared bindings repeat ids. Preserve both live and authored sections.
         let target_ids: std::collections::HashSet<_> = target_ids.into_iter().collect();
         for param_id in &target_ids {
@@ -3115,7 +3119,9 @@ impl Command for RenameSceneObjectCommand {
                 && let Some(section) = renamed_section(&p.spec.section)
             {
                 self.swept.push((param_id.clone(), p.spec.section.clone()));
-                p.spec.section = Some(section);
+                if let Some(prior) = p.choose_section(Some(section)) {
+                    self.swept_choices.push((param_id.clone(), prior));
+                }
             }
         }
         if let Some(meta) = inst.graph.as_mut().and_then(|graph| graph.preset_metadata.as_mut()) {
@@ -3146,6 +3152,11 @@ impl Command for RenameSceneObjectCommand {
             for (param_id, prev_section) in self.swept.drain(..) {
                 if let Some(p) = inst.params.get_mut(&param_id) {
                     p.spec.section = prev_section;
+                }
+            }
+            for (param_id, prior) in self.swept_choices.drain(..) {
+                if let Some(p) = inst.params.get_mut(&param_id) {
+                    p.choices.section = prior;
                 }
             }
         }

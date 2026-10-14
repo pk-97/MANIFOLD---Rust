@@ -95,7 +95,7 @@ A control resolves by the first key that answers: template first, then its prima
 *How WIDGET_TREE INV-1 changes.* The words "rows are sourced ONLY from the manifest walk — no registry re-reads, no hand tables" stay true. What changes is what the manifest is. Each entry is the saved control (id, value, choices) joined with the live lookup, inside core, when the manifest is built. Projections still read only the manifest and stay pure functions of it, so WIDGET_TREE D8a's registry-free projection tests still work: they build manifests directly. P2 adds that one sentence to WIDGET_TREE INV-1.
 
 *Old projects.*
-- On load, a saved name, range, angle flag, value labels, `card_visible` or section copy on a control the lookup describes is ignored.
+- On load, a saved name, range, angle flag, value labels, `card_visible` or section copy on a control the lookup describes is ignored. Which controls the lookup names: D24.
 - One case is converted instead. A user-added exposure (`user.*`) whose saved label or range differs from the lookup becomes a rename or slider-range choice, once. That is the only place a user rename could live in old files.
 - Auto stamps lose nothing. Pass 4 already overwrites their saved labels and ranges on every load.
 - A drawer rename of a bundled preset's curated control in an old per-instance graph goes back to the template's label. This is rare, and it is the same rule pass 4 already applies to auto stamps.
@@ -234,6 +234,8 @@ Rejected: deleting extra scenes on load (rewrites the past). Rejected: a scene p
 **D21 — Names stay as saved until P5.** Until the naming pass (P5) brings the label rules, the lookup supplies range and flags only; names come from the lookup from P5.
 
 **D22 — A fan-out is described by its first binding.** A control with several bindings under one id takes range, flags and scene scaling from its first binding's target in authored order, as the import range stamp did; everything else stays authored. If that target cannot be described, the control stays authored. Lead ruling, 2026-10-14.
+
+**D24 — Who owns a control's name.** The lookup names a control only when it is a template control or an exact auto-stamp (id `{doc_id}_{param}`, not user-added, targeting that node's param); those save without a name. Every other node-bound control (curated ids, fan-outs, `user.*`) owns its name: authored, saved, never replaced by the node's label. Range, flags and scaling still come from the lookup (D22).
 
 **Consequences, stated honestly:**
 1. Scene projects get smaller on disk: no names or ranges per control. A file saved after P1 shows placeholders in an older build (format version bump, P1).

@@ -156,6 +156,16 @@ pub struct Param {
 }
 
 impl Param {
+    /// A user's section edit. On a control the lookup describes, the saved
+    /// section is ignored on load, so the edit is kept as a section choice
+    /// (SCENE_SURFACES_DESIGN.md D7 (one saved choice set)). Returns the prior
+    /// choice when one was recorded, for undo.
+    pub fn choose_section(&mut self, section: Option<String>) -> Option<Option<Option<String>>> {
+        self.spec.section = section.clone();
+        (self.source == SpecSource::Lookup)
+            .then(|| self.choices.section.replace(section))
+    }
+
     /// A bundled (template-seeded) param, value + base at the spec default,
     /// exposed, untouched, uncalibrated.
     pub fn bundled(spec: ParamSpecDef) -> Self {
