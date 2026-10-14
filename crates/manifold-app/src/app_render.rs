@@ -3025,257 +3025,97 @@ impl Application {
             }
         }
 
-        // Selection version change → sync inspector so it shows the newly selected clip
-        if self.selection.selection_version != prev_sel_version && !needs_structural_sync {
-            let active_idx = self
-                .active_layer_id
-                .as_ref()
-                .and_then(|id| self.local_project.timeline.find_layer_index_by_id(id));
-            crate::ui_bridge::sync_inspector_data(
-                &mut self.ws.ui_root,
-                &self.local_project,
-                active_idx,
-                &self.selection,
-                &self.content_state.automation_latched_params,
-                self.content_state.led_preview.as_ref(),
-            );
-            needs_structural_sync = true;
-        }
+        // 2-4. The projection pass (`ui_frame::run_projection_pass`, shared
+        // with the script runner): selection, structural and active-layer
+        // projection, drag polling, auto-scroll, the rebuild decision,
+        // `push_state`, then the drag-time clip and lane re-projection.
+        let changes = crate::ui_frame::ProjectionChanges {
+            structural: needs_structural_sync,
+            selection_changed: self.selection.selection_version != prev_sel_version,
+            active_layer_changed: self.active_layer_id != prev_active_layer,
+            scrolled_in_place,
+        };
 
-        if needs_structural_sync {
-            let active_idx = self
-                .active_layer_id
-                .as_ref()
-                .and_then(|id| self.local_project.timeline.find_layer_index_by_id(id));
-            crate::ui_bridge::sync_automation_lane_order(&self.local_project, &mut self.selection);
-            crate::ui_bridge::sync_project_data(
-                &mut self.ws.ui_root,
-                &self.local_project,
-                active_idx,
-                &self.selection,
-            );
-            crate::ui_bridge::sync_inspector_data(
-                &mut self.ws.ui_root,
-                &self.local_project,
-                active_idx,
-                &self.selection,
-                &self.content_state.automation_latched_params,
-                self.content_state.led_preview.as_ref(),
-            );
-        } else if self.active_layer_id != prev_active_layer {
-            let active_idx = self
-                .active_layer_id
-                .as_ref()
-                .and_then(|id| self.local_project.timeline.find_layer_index_by_id(id));
-            crate::ui_bridge::sync_automation_lane_order(&self.local_project, &mut self.selection);
-            crate::ui_bridge::sync_project_data(
-                &mut self.ws.ui_root,
-                &self.local_project,
-                active_idx,
-                &self.selection,
-            );
-            crate::ui_bridge::sync_inspector_data(
-                &mut self.ws.ui_root,
-                &self.local_project,
-                active_idx,
-                &self.selection,
-                &self.content_state.automation_latched_params,
-                self.content_state.led_preview.as_ref(),
-            );
-            needs_structural_sync = true; // Inspector content changed — needs rebuild
-        }
-        // Mirror the inspector sync onto the editor window's own inspector
-        // instance so its column stays in lockstep with the main one (same
-        // snapshot, same selection). Gated on `needs_structural_sync`, which is
-        // set by every branch above that re-synced the main inspector — so the
-        // two never drift, and reconfigure (which resets transient card state)
-        // only fires when it does for the main window.
-        if needs_structural_sync && self.graph_editor.is_some() {
-            let active_idx = self
-                .active_layer_id
-                .as_ref()
-                .and_then(|id| self.local_project.timeline.find_layer_index_by_id(id));
-            if let Some(ed) = self.graph_editor.as_mut() {
-                crate::ui_bridge::sync_inspector_data(
-                    &mut ed.ui_root,
-                    &self.local_project,
-                    active_idx,
-                    &self.selection,
-                    &self.content_state.automation_latched_params,
-                    self.content_state.led_preview.as_ref(),
-                );
-            }
-        }
-        // 2a. Per-frame drag polling with auto-scroll (B11: move/trim/rubber-band —
-        // InteractionOverlay.PollMoveDrag, extended). Continues edge autoscroll
-        // when the mouse is stationary; also drives B13's live readout, which
-        // must reflect the post-poll (already-snapped) clip state (D5: preview
-        // == committed result).
-        {
-            use manifold_ui::interaction_overlay::DragMode;
-            let drag_mode = self.overlay.drag_mode();
-            if matches!(
-                drag_mode,
-                DragMode::Move | DragMode::TrimLeft | DragMode::TrimRight | DragMode::RegionSelect
-            ) {
-                let content_tx = self.content_tx.as_ref().unwrap();
-                let mut host = crate::editing_host::AppEditingHost::new(
-                    &mut self.local_project,
-                    content_tx,
-                    &self.content_state,
-                    &mut self.cursor_manager,
-                    &mut self.active_layer_id,
-                    &mut self.needs_rebuild,
-                    &mut self.needs_structural_sync,
-                    &mut self.automation_lanes_dirty,
-                    &mut self.scroll_dirty,
-                    &mut self.invalidate_layers,
-                    &mut self.pre_drag_commands,
-                );
-                self.overlay.poll_drag(
-                    self.cursor_pos,
-                    &mut host,
-                    &mut self.selection,
-                    &mut self.ws.ui_root.viewport,
-                );
-
-                let readout = self
-                    .overlay
-                    .drag_readout_clip_id()
-                    .and_then(|id| host.find_clip_by_id(&id))
-                    .map(|c| (c.start_beat, c.duration_beats, c.layer_index));
-                self.ws.ui_root.viewport.set_drag_readout(readout);
-            } else {
-                self.ws.ui_root.viewport.set_drag_readout(None);
-            }
-        }
-        // Legacy drag polling removed — overlay.poll_drag() handles it above.
-
-        // 2b. Process deferred export (keyboard shortcut sets flag, processed here
+        // Deferred export (keyboard shortcut sets the flag, processed here
         // where Application has full access for the file dialog).
         if self.pending_export {
             self.pending_export = false;
             self.start_export();
         }
 
-        // 2c. Auto-scroll check for playback (BEFORE build so rebuild includes new scroll)
-        let auto_scroll_changed = crate::ui_bridge::check_auto_scroll(
+        let content_tx = self.content_tx.as_ref();
+        let overlay = &mut self.overlay;
+        let cursor_pos = self.cursor_pos;
+        let content_state = &self.content_state;
+        let cursor_manager = &mut self.cursor_manager;
+        let deferred_structural = &mut self.needs_structural_sync;
+        let pre_drag_commands = &mut self.pre_drag_commands;
+        let ui_profile = &mut self.ui_profile;
+        let seg_ref = &mut seg;
+        crate::ui_frame::run_projection_pass(
             &mut self.ws.ui_root,
-            &self.content_state,
-            &self.local_project,
-        );
-        // Auto-scroll during playback is horizontal-only.
-        if auto_scroll_changed {
-            self.scroll_dirty.scroll_x = true;
-        }
-        let overlay_changed = self.ws.ui_root.overlay_dirty;
-        self.ws.ui_root.overlay_dirty = false;
-        if overlay_changed {
-            self.scroll_dirty.visual = true;
-        }
-
-        // Overlays (dropdown, browser/generator picker, Ableton picker, Audio
-        // Setup) build their nodes into the shared tree and are recorded into
-        // `overlay_draw` by `build_overlays`. Opening one already flags
-        // `overlay_dirty`; closing one only flips `is_open`, and the programmatic
-        // `close()` paths (e.g. entering perform mode) don't route through the
-        // event-driven flag — so the closed overlay's nodes and its stale
-        // `overlay_draw` range would survive as ghost text. The driver owns the
-        // invariant instead: it snapshots the open-set at each build and, when the
-        // live set differs (open OR close, by any path), feeds the established
-        // visual-rebuild path — which re-records the overlay region and recomposites
-        // the offscreen. One detection point, every close site covered.
-        if self.ws.ui_root.detect_overlay_open_change() {
-            self.scroll_dirty.visual = true;
-        }
-
-        let scroll_dirty = self.scroll_dirty;
-        self.scroll_dirty.clear();
-
-        self.ui_profile.add("process_events", seg.elapsed());
-        seg = std::time::Instant::now();
-
-        // 3. Rebuild if needed
-        // Full rebuild: structural changes, data mutations, or explicit needs_rebuild.
-        // Partial rebuild: only scroll/zoom changed — rebuild viewport + layer_headers,
-        // preserve transport, header, footer, inspector nodes.
-        // Horizontal-only scroll skips layer header rebuild entirely.
-        //
-        // GUARD: If the inspector has an active drag (slider being dragged), defer
-        // the rebuild to prevent node destruction mid-drag which causes snap-back.
-        //
-        // The decision block itself now lives in
-        // `ui_frame::apply_ui_frame_invalidations` (P1, D3) — the app and the
-        // headless harness call the identical function. `signals` carries the
-        // scroll-in-place flag captured earlier this tick (:960) alongside the
-        // rebuild flags; the residual `needs_rebuild` (kept set when a drag
-        // defers the rebuild) is copied back after the call.
-        let mut signals = crate::ui_frame::UiFrameSignals {
-            needs_rebuild: self.needs_rebuild,
-            needs_structural_sync,
-            scroll_dirty,
-            scrolled_in_place,
-        };
-        crate::ui_frame::apply_ui_frame_invalidations(
-            &mut self.ws.ui_root,
+            self.graph_editor.as_mut().map(|ed| &mut ed.ui_root),
             self.ui_cache_manager.as_mut(),
-            &mut signals,
+            &mut self.local_project,
+            &mut self.selection,
+            &mut self.active_layer_id,
+            crate::ui_frame::FrameFlagsMut {
+                needs_rebuild: &mut self.needs_rebuild,
+                automation_lanes_dirty: &mut self.automation_lanes_dirty,
+                scroll_dirty: &mut self.scroll_dirty,
+                invalidate_layers: &mut self.invalidate_layers,
+            },
+            changes,
+            crate::ui_frame::PushInputs {
+                content_state,
+                is_dirty: content_state.editing_is_dirty,
+                project_path: self.current_project_path.as_deref(),
+                transport_cache: &mut self.transport_cache,
+            },
+            |ui_root, project, selection, active_layer, flags| {
+                // Per-frame drag polling with auto-scroll (move/trim/rubber-band).
+                // Continues edge autoscroll when the mouse is stationary; also
+                // drives the live readout, which must reflect the post-poll
+                // (already-snapped) clip state.
+                use manifold_ui::interaction_overlay::DragMode;
+                let drag_mode = overlay.drag_mode();
+                if matches!(
+                    drag_mode,
+                    DragMode::Move | DragMode::TrimLeft | DragMode::TrimRight | DragMode::RegionSelect
+                ) {
+                    let mut host = crate::editing_host::AppEditingHost::new(
+                        project,
+                        content_tx.expect("content thread spawned before a drag"),
+                        content_state,
+                        cursor_manager,
+                        active_layer,
+                        &mut *flags.needs_rebuild,
+                        deferred_structural,
+                        &mut *flags.automation_lanes_dirty,
+                        &mut *flags.scroll_dirty,
+                        &mut *flags.invalidate_layers,
+                        pre_drag_commands,
+                    );
+                    overlay.poll_drag(cursor_pos, &mut host, selection, &mut ui_root.viewport);
+                    let readout = overlay
+                        .drag_readout_clip_id()
+                        .and_then(|id| host.find_clip_by_id(&id))
+                        .map(|c| (c.start_beat, c.duration_beats, c.layer_index));
+                    ui_root.viewport.set_drag_readout(readout);
+                } else {
+                    ui_root.viewport.set_drag_readout(None);
+                }
+                ui_profile.add("process_events", seg_ref.elapsed());
+                *seg_ref = std::time::Instant::now();
+                matches!(overlay.drag_mode(), DragMode::Move | DragMode::TrimLeft | DragMode::TrimRight)
+            },
         );
-        self.needs_rebuild = signals.needs_rebuild;
 
         #[cfg(target_os = "macos")]
         self.sync_workspace_preview_size();
 
         self.ui_profile.add("rebuild_tree", seg.elapsed());
         seg = std::time::Instant::now();
-
-        // 4. Push engine state to UI panels (AFTER build so new nodes get state)
-        let active_idx = self
-            .active_layer_id
-            .as_ref()
-            .and_then(|id| self.local_project.timeline.find_layer_index_by_id(id));
-        crate::ui_bridge::push_state(
-            &mut self.ws.ui_root,
-            &self.local_project,
-            &self.content_state,
-            active_idx,
-            &self.selection,
-            self.content_state.editing_is_dirty,
-            self.current_project_path.as_deref(),
-            &mut self.transport_cache,
-        );
-
-        // 4b. Re-project clips and automation lanes only when their source
-        // moved: a clip move/trim drag writes clip data into the project each
-        // frame; a point preview or restore asks for a lanes-only resync. A
-        // plain press or hover needs neither — each costs name strings and
-        // waveform breakpoints per clip, or polylines per lane.
-        let clip_drag = matches!(
-            self.overlay.drag_mode(),
-            manifold_ui::interaction_overlay::DragMode::Move
-                | manifold_ui::interaction_overlay::DragMode::TrimLeft
-                | manifold_ui::interaction_overlay::DragMode::TrimRight
-        );
-        if needs_structural_sync || clip_drag {
-            crate::ui_bridge::sync_clip_positions(&mut self.ws.ui_root, &self.local_project);
-        }
-        if needs_structural_sync || self.automation_lanes_dirty {
-            crate::ui_bridge::sync_automation_lane_geometry(
-                &mut self.ws.ui_root,
-                &self.local_project,
-                self.selection.automation_mode_visible,
-                &self.selection.chosen_automation_params,
-                &self.selection.automation_lane_order,
-                &self.selection.hidden_automation_lanes,
-                &self.selection.pinned_automation_lanes,
-            );
-        }
-        self.automation_lanes_dirty = false;
-
-        // 4c. Apply per-layer bitmap invalidation from editing operations.
-        for layer_idx in self.invalidate_layers.drain(..) {
-            self.ws.ui_root.viewport.invalidate_layer_bitmap(layer_idx);
-        }
 
         // 5. Push one per-frame metric snapshot to whichever HUDs are open.
         // The editor and main window must report the same content frame; keep

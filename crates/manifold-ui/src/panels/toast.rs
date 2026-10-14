@@ -110,6 +110,12 @@ impl ToastPanel {
         self.text_ids.clear();
     }
 
+    /// The toast in flight, if any: its message and accent. What the freshness
+    /// check compares, since the tree dump cannot see an unbuilt toast.
+    pub fn pending(&self) -> Option<(&str, Option<Color32>)> {
+        self.transient.progress().map(|_| (self.message.as_str(), self.accent))
+    }
+
     /// Eased 0..1 alpha for the transient's current progress: ramps 0→1 over
     /// `ENTER_MS`, holds at 1.0, ramps 1→0 over the final `FADE_MS`. `None`
     /// (idle) reads as fully transparent.

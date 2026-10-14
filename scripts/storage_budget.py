@@ -6,8 +6,8 @@ directories may also be removed. Unknown files, links and proof captures stay.
 Admission prunes caches older than an hour in idle slots and the admitting
 slot, holding Cargo locks and failing closed on unavailable process inspection.
 MANIFOLD_SLOT_TARGET_CAP_GIB configures the per-slot budget (default 160 GiB).
-Budgets are best effort: protected data can exceed them; the 50 GiB reserve
-still refuses a build when safe reclamation cannot meet it.
+Budgets are best effort: protected data can exceed them; the free-space reserve
+(MAINTENANCE_GOAL_BYTES) still refuses a build when safe reclamation cannot meet it.
 """
 
 from __future__ import annotations
@@ -30,8 +30,9 @@ from typing import Callable, Iterable, Optional
 
 
 GIB = 2 ** 30
-# Two concurrent landing gates (~20 GiB of build cache each) plus headroom.
-MAINTENANCE_GOAL_BYTES = 50 * GIB
+# The one free-space reserve every build, health check and preflight reads.
+# Measured against raw free space, never macOS "available" (see disk_free).
+MAINTENANCE_GOAL_BYTES = 30 * GIB
 DEFAULT_SLOT_CAP_BYTES = 160 * GIB
 STALE_CACHE_SECONDS = 60 * 60
 DEFAULT_TMP_ROOT = Path("/private/tmp")
@@ -341,7 +342,7 @@ def inventory_targets(repo: Path, pool_dir: Optional[Path] = None,
 def disk_free(path: Path) -> int:
     # Raw free on purpose. macOS "available" adds purgeable space, which here is
     # mostly Dropbox's local copies: counting it stops cache reclaim and builds
-    # then push out the lab's Dropbox audio instead (reverted 2026-10-13).
+    # then push out the lab's Dropbox audio instead.
     return shutil.disk_usage(_absolute(path)).free
 
 
