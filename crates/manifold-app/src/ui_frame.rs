@@ -318,6 +318,8 @@ pub(crate) fn gather_frame_inputs(
         scroll_x_px: ui_root.viewport.beat_to_pixel(Beats::ZERO).round() as i32,
         scroll_y_px: ui_root.viewport.scroll_y_px().round() as i32,
         zoom_bits: ui_root.viewport.pixels_per_beat().to_bits(),
+        scroll_x_bits: ui_root.viewport.scroll_x_beats().as_f32().to_bits(),
+        scroll_y_bits: ui_root.viewport.scroll_y_px().to_bits(),
         playhead_px: ui_root.viewport.playhead_pixel().map_or(i32::MIN, |px| px.round() as i32),
         inspector_view: ui_root.inspector.view_version(),
         scene_selection: ui_root.scene_setup_panel.selection_version(),
@@ -434,6 +436,11 @@ pub(crate) fn apply_frame_plan(
         flags.scroll_dirty.visual = true;
     }
     let mut scroll_dirty = std::mem::take(flags.scroll_dirty);
+    // A scroll or zoom from any input path moves the scroll panels, as the
+    // wheel does: dispatch sites that move the view need no structural sync.
+    scroll_dirty.scroll_x |= plan.viewport.scroll_x;
+    scroll_dirty.scroll_y |= plan.viewport.scroll_y;
+    scroll_dirty.zoom |= plan.viewport.zoom;
     // The plan's rebuild mask as the flat-tree suffix it maps to, through
     // the old signals so the drag guards still hold (P5a deletes them). A
     // viewport-only suffix rides the scroll-panel rebuild: the old signals
