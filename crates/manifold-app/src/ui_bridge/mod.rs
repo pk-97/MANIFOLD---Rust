@@ -312,10 +312,11 @@ pub fn dispatch(action: &PanelAction, ctx: &mut DispatchCtx) -> DispatchResult {
             }
             RootAction::SceneSetupSelectionChanged(_) => DispatchResult::structural(),
             // Audio Setup dock toggle (headless-harness path; the live app
-            // toggles in app_render). Structural: geometry changes.
+            // toggles in app_render). The dock's view version moves the
+            // rebuild and its device query.
             RootAction::OpenAudioSetup => {
                 ctx.ui.toggle_audio_dock();
-                DispatchResult::structural()
+                DispatchResult::handled()
             }
             // Menu, header button, the panel's close button and Escape all
             // toggle the inspector's Scene tab (SCENE_SURFACES D16).
@@ -329,11 +330,12 @@ pub fn dispatch(action: &PanelAction, ctx: &mut DispatchCtx) -> DispatchResult {
                 DispatchResult::structural()
             }
             // RT Quality overlay (headless-harness path; the live app opens it
-            // in app_render's PanelAction loop). Structural: overlay geometry.
+            // in app_render's PanelAction loop). The overlay open set is a
+            // planner input.
             RootAction::OpenRtQuality => {
                 ctx.ui.rt_quality_panel.open();
                 ctx.ui.mark_overlay_dirty();
-                DispatchResult::structural()
+                DispatchResult::handled()
             }
             // Dropdown/picker opens intercepted earlier in ui_root/app_render.
             // The pre-decomposition router routed these through the inspector
