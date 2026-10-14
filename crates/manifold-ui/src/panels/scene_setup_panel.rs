@@ -59,7 +59,7 @@ use super::param_slider_shared::{
 };
 use crate::param_surface::{
     MaterialGroup, MaterialLook, MaterialMapFamily, MaterialParamRole, ObjectModifierCardInfo,
-    ModifierObjectRef, ModifierPickerEntry, ParamRow, ParamSurface, RgbChannel, RowMapping,
+    ModifierObjectRef, ModifierPickerEntry, ParamRow, ParamSurface, RowMapping,
     RowRole, RowSpec,
 };
 use crate::slider::GAP;
@@ -84,7 +84,6 @@ const OBJ_OFF_FLUID_ROLE_REMOVE: u64 = 39;
 /// Water-family child Hide button; unlike the outliner eye this is a
 /// one-way local write and is always present, including for hidden rows.
 const OBJ_OFF_HIDE: u64 = 40;
-const MATERIAL_SWATCH_KEY_BASE: u64 = 1;
 const MATERIAL_LOOK_KEY_BASE: u64 = 97_000;
 
 /// Per-object dynamic keys: `OBJ_KEY_BASE + index * OBJ_KEY_STRIDE + offset`.
@@ -1086,10 +1085,6 @@ pub struct ScenePanel {
     /// selected this frame — mirrors `object_name_ids`, backs
     /// `light_name_rect`.
     light_name_ids: Vec<(u32, NodeId, String)>,
-    /// Canonical material colour swatches built over the shared scalar row.
-    /// `(button, row, scalar ids)` is rebuilt with the live tree and never
-    /// used as a second value store.
-    material_swatch_ids: Vec<(NodeId, usize, [manifold_foundation::ParamId; 3], crate::param_surface::MaterialColour)>,
     /// Feature presence is captured on selection, never inferred during a drag.
     material_mode_ids: Vec<(NodeId, usize)>,
     material_feature_context: Option<(LayerId, ModifierObjectRef, ModifierObjectRef)>,
@@ -1179,7 +1174,6 @@ impl Default for ScenePanel {
             skin_target_ids: Vec::new(),
             light_remove_ids: Vec::new(),
             light_name_ids: Vec::new(),
-            material_swatch_ids: Vec::new(),
             material_mode_ids: Vec::new(),
             material_feature_context: None,
             material_visible_features: ahash::AHashSet::new(),
@@ -1352,7 +1346,6 @@ impl ScenePanel {
         self.skin_target_ids.clear();
         self.light_remove_ids.clear();
         self.light_name_ids.clear();
-        self.material_swatch_ids.clear();
         self.material_mode_ids.clear();
         self.material_look_ids.clear();
         self.material_feature_ids.clear();
@@ -1905,13 +1898,6 @@ impl ScenePanel {
                             writes: writes.clone(),
                             description: format!("Add {} feature", Self::material_feature_label(*feature)),
                         }));
-                    } else if let Some((_, _, members, _)) = self.material_swatch_ids.iter().find(|(id, _, _, _)| *id == *node_id) {
-                        return (true, vec![PanelAction::Root(RootAction::BeginMaterialColourTextInput {
-                            target: GraphParamTarget::GeneratorOf(vm.layer_id.clone()),
-                            param_ids: members.clone(),
-                            anchor: tree.get_bounds(*node_id),
-                            value: members.clone().map(|id| self.material_full_value(&id)),
-                        })]);
                     } else if let Some((_, look, object, material)) =
                         self.material_look_ids.iter().find(|(id, _, _, _)| *id == *node_id)
                     {

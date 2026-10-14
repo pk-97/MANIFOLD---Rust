@@ -375,10 +375,8 @@ impl UIRoot {
                     }
                 }
                 DropdownAction::ColorSelected(color_idx) => {
-                    if let Some(ctx) = self.dropdown_context.take()
-                        && let Some(action) = self.dropdown_color_to_action(ctx, color_idx)
-                    {
-                        actions.push(action);
+                    if let Some(ctx) = self.dropdown_context.take() {
+                        actions.extend(self.dropdown_color_to_action(ctx, color_idx));
                     }
                 }
                 DropdownAction::Dismissed => {

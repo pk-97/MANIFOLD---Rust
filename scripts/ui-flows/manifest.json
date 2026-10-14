@@ -323,7 +323,8 @@
     "scene-panel-tree-physics": "physicsscene",
     "scene-pin-roundtrip": "gltfscene",
     "scene-card-to-tab": "gltfscene",
-    "scene-use-this-view": "gltfscene"
+    "scene-use-this-view": "gltfscene",
+    "scene-light-swatch": "gltfscene"
   },
   "expected_fail": {
     "render-mode-solid": {

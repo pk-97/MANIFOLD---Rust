@@ -1045,6 +1045,7 @@
             card_label: CardLabel::Param,
             gate: None,
             switch: None,
+            colour: None,
         });
         row
     }

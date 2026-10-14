@@ -1543,6 +1543,7 @@ impl Application {
         // reopened the window on a different one.
         self.watched_graph_target = None;
         self.watched_catalog_default = None;
+        self.editor_graph.catalog_default_changed();
         // Tell the content thread to stop snapshotting any graph —
         // saves the per-frame walk while no editor is open. Cover
         // both the effect-graph and generator-graph watchers since

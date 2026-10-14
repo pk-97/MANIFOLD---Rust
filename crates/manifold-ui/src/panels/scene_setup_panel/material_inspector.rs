@@ -275,13 +275,6 @@ impl ScenePanel {
         )
     }
 
-    fn material_rgb_colour(row: &ParamRow) -> Option<crate::param_surface::MaterialColour> {
-        match row.spec.material_role {
-            Some(MaterialParamRole::Colour(_, colour, RgbChannel::R)) => Some(colour),
-            _ => None,
-        }
-    }
-
     fn material_rgb_members_for_param(
         &self,
         param_id: &manifold_foundation::ParamId,
@@ -289,6 +282,7 @@ impl ScenePanel {
         self.properties_card.rows.iter().find_map(|row| {
             row.rgb_members
                 .as_ref()
+                .map(|members| &members.ids)
                 .filter(|members| members.contains(param_id))
                 .cloned()
         })
@@ -692,18 +686,6 @@ impl ScenePanel {
             self.material_mode_ids.push((id, slot));
             return cy + ROW_H + ROW_GAP;
         }
-        let mut row_cy = cy;
-        if info.rgb_members.is_some() && Self::material_rgb_colour(&info).is_some() {
-            row_cy = self.build_material_swatch_header(
-                tree,
-                inner_x,
-                cy,
-                slot,
-                label_width,
-                slider_w,
-                &info,
-            );
-        }
 
         // Boolean and trigger parameters use the shared button/dispatch path.
         if info.spec.is_toggle || info.spec.is_trigger {
@@ -718,7 +700,7 @@ impl ScenePanel {
                 tree,
                 Some(self.content_parent),
                 inner_x,
-                row_cy,
+                cy,
                 slider_w,
                 &info,
                 &self.properties_card.mod_state,
@@ -766,7 +748,7 @@ impl ScenePanel {
             tree,
             Some(self.content_parent),
             inner_x,
-            row_cy,
+            cy,
             slider_w,
             &info,
             &self.properties_card.mod_state,
@@ -808,106 +790,6 @@ impl ScenePanel {
             })
             .unwrap_or(0.0)
             .clamp(0.0, 1.0)
-    }
-
-    pub(super) fn sync_material_swatches(&self, tree: &mut UITree) {
-        for (node, _, ids, _) in &self.material_swatch_ids {
-            let rgb: [u8; 3] = std::array::from_fn(|index| {
-                (self.material_full_value(&ids[index]) * 255.0).round() as u8
-            });
-            let colour = Color32::new(rgb[0], rgb[1], rgb[2], 255); // design-token-exempt: displays authored material RGB, not a UI theme colour
-            let Some(current) = tree.get_node(*node) else {
-                continue;
-            };
-            if current.style.bg_color == colour {
-                continue;
-            }
-            let mut style = current.style;
-            style.bg_color = colour;
-            style.text_color = if rgb.iter().map(|v| *v as u32).sum::<u32>() > 421 {
-                Color32::BLACK
-            } else {
-                Color32::WHITE
-            };
-            tree.set_style(*node, style);
-            tree.set_text(
-                *node,
-                &format!("#{:02X}{:02X}{:02X}", rgb[0], rgb[1], rgb[2]),
-            );
-        }
-    }
-
-    fn build_material_swatch_header(
-        &mut self,
-        tree: &mut UITree,
-        inner_x: f32,
-        cy: f32,
-        slot: usize,
-        label_width: f32,
-        slider_w: f32,
-        info: &ParamRow,
-    ) -> f32 {
-        let Some(rgb_members) = info.rgb_members.clone() else {
-            return cy;
-        };
-        let Some(colour) = Self::material_rgb_colour(info) else {
-            return cy;
-        };
-        let rgb = rgb_members.clone().map(|id| self.material_full_value(&id));
-        let to_byte = |value: f32| (value * 255.0).round() as u8;
-        let label = format!(
-            "#{:02X}{:02X}{:02X}",
-            to_byte(rgb[0]),
-            to_byte(rgb[1]),
-            to_byte(rgb[2])
-        );
-        tree.add_label(
-            Some(self.content_parent),
-            inner_x,
-            cy,
-            label_width,
-            ROW_H,
-            match colour {
-                crate::param_surface::MaterialColour::Base => "Base colour",
-                crate::param_surface::MaterialColour::Specular => "Specular tint",
-                crate::param_surface::MaterialColour::Emission => "Emission colour",
-                crate::param_surface::MaterialColour::Sheen => "Sheen colour",
-                crate::param_surface::MaterialColour::Attenuation => "Attenuation colour",
-                crate::param_surface::MaterialColour::VolumeScattering => "Volume scattering colour",
-                crate::param_surface::MaterialColour::Subsurface => "Scattering colour",
-                crate::param_surface::MaterialColour::Translucency => "Translucency colour",
-            },
-            label_style(),
-        );
-        let swatch_id = tree.add_button_keyed(
-            Some(self.content_parent),
-            inner_x + label_width,
-            cy,
-            (slider_w - label_width).max(0.0),
-            ROW_H,
-            UIStyle {
-                bg_color: Color32::new(to_byte(rgb[0]), to_byte(rgb[1]), to_byte(rgb[2]), 255), // design-token-exempt: displays authored material RGB, not a UI theme colour
-                text_color: if rgb.iter().copied().sum::<f32>() > 1.65 {
-                    Color32::BLACK
-                } else {
-                    Color32::WHITE
-                },
-                font_size: color::FONT_LABEL,
-                corner_radius: color::SMALL_RADIUS,
-                ..drag_value_style()
-            },
-            &label,
-            param_row_key_base(info.id.as_ref()) | MATERIAL_SWATCH_KEY_BASE,
-        );
-        tree.set_name(swatch_id, format!("material.swatch.{}", info.id));
-        self.material_swatch_ids
-            .push((swatch_id, slot, rgb_members, colour));
-        self.properties_card.row_host.row_index.insert(
-            tree.widget_of(swatch_id),
-            slot,
-            RowRole::ColourSwatch(colour),
-        );
-        cy + ROW_H + ROW_GAP
     }
 
     /// The selected item's header over its controls (D8).
@@ -1396,6 +1278,15 @@ impl ScenePanel {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::param_surface::RgbChannel;
+
+    fn base_members(ids: [manifold_foundation::ParamId; 3]) -> crate::param_surface::RgbMembers {
+        crate::param_surface::RgbMembers {
+            group: crate::param_surface::ColourGroup::Material(crate::param_surface::MaterialColour::Base),
+            ids,
+            values: [1.0; 3],
+        }
+    }
 
     fn material_test_row(id: &str, role: MaterialParamRole, base: f32, default: f32) -> ParamRow {
         let mut row = placeholder_param_info();
@@ -1637,7 +1528,7 @@ mod tests {
     }
 
     #[test]
-    fn material_inspector_rgb_sliders_preview_before_release_and_sync_hex() {
+    fn material_inspector_rgb_sliders_preview_before_release_and_on_the_swatch() {
         let mut panel = ScenePanel::new();
         panel.properties_card.resize(3);
         let ids =
@@ -1659,7 +1550,7 @@ mod tests {
             row.spec.min = 0.0;
             row.spec.max = 1.0;
             if index == 0 {
-                row.rgb_members = Some(ids.clone());
+                row.rgb_members = Some(base_members(ids.clone()));
             }
             panel
                 .properties_card
@@ -1683,7 +1574,8 @@ mod tests {
                 .iter()
                 .all(Option::is_some)
         );
-        assert_eq!(panel.material_swatch_ids.len(), 1);
+        let swatch = panel.properties_card.row_host.swatch_ids[0].expect("the R row carries the shared swatch").0;
+        assert!(panel.properties_card.row_host.swatch_ids[1..].iter().all(Option::is_none));
         let track = panel.properties_card.row_host.slider_ids[0]
             .as_ref()
             .unwrap()
@@ -1711,15 +1603,9 @@ mod tests {
         assert!(
             matches!(moved.as_slice(), [PanelAction::Scrub(ValueRef::ParamRgb(_, members), ScrubPhase::Move(ScrubValue::Rgb(rgb)))] if members == &ids && rgb[0] < 1.0 && rgb[1..] == [1.0, 1.0])
         );
-        panel.sync_material_swatches(&mut tree);
-        let hex = tree
-            .get_node(panel.material_swatch_ids[0].0)
-            .unwrap()
-            .text
-            .as_deref()
-            .unwrap();
-        assert_ne!(hex, "#FFFFFF");
-        assert!(hex.ends_with("FFFF"));
+        panel.sync_swatch_values(&mut tree);
+        let shown = tree.get_node(swatch).unwrap().style.bg_color;
+        assert!(shown.r < 255 && shown.g == 255 && shown.b == 255, "the swatch previews the drag: {shown:?}");
         let release = panel.properties_card.row_host.handle_drag_end();
         assert!(matches!(
             panel.rewrite_material_rgb_actions(release).as_slice(),
@@ -1867,7 +1753,7 @@ mod tests {
             0.2,
             0.0,
         );
-        red.rgb_members = Some([r.clone(), g.clone(), b.clone()]);
+        red.rgb_members = Some(base_members([r.clone(), g.clone(), b.clone()]));
         let green = material_test_row(
             "51_base_color_g",
             MaterialParamRole::Colour(
@@ -1936,10 +1822,6 @@ mod tests {
             0.0,
         );
         row.value.driven = true;
-        assert_eq!(
-            ScenePanel::material_rgb_colour(&row),
-            Some(crate::param_surface::MaterialColour::Specular)
-        );
         let mut panel = ScenePanel::new();
         panel.properties_card.rows = vec![row.clone()];
         panel.properties_card.current_values = vec![0.5];
@@ -2080,7 +1962,7 @@ mod tests {
             crate::param_surface::MaterialColour::Base,
             RgbChannel::B,
         ));
-        red.rgb_members = Some([red.id.clone(), green.id.clone(), blue.id.clone()]);
+        red.rgb_members = Some(base_members([red.id.clone(), green.id.clone(), blue.id.clone()]));
         surface.rows = vec![red.clone(), green, blue];
         let mut panel = ScenePanel::new();
         panel.full_params = Some(surface);
@@ -2119,7 +2001,7 @@ mod tests {
             0.2,
             0.0,
         );
-        primary.rgb_members = Some([r.clone(), g.clone(), b.clone()]);
+        primary.rgb_members = Some(base_members([r.clone(), g.clone(), b.clone()]));
         let green = material_test_row(
             g.as_ref(),
             MaterialParamRole::Colour(

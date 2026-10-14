@@ -122,7 +122,39 @@ impl ScenePanel {
                 crate::panels::param_slider_shared::warn_join_gap_once(card.rows[i].id.as_ref());
             }
         }
-        self.sync_material_swatches(tree);
+        self.sync_swatch_values(tree);
+    }
+
+    /// Feed each properties swatch its channels' live values (they are rows
+    /// here, so a drag previews on the swatch) and repaint the changed ones.
+    pub(super) fn sync_swatch_values(&mut self, tree: &mut UITree) {
+        for row in 0..self.properties_card.rows.len() {
+            let Some(members) = &self.properties_card.rows[row].rgb_members else { continue };
+            let rgb = members.ids.each_ref().map(|id| self.material_full_value(id));
+            self.properties_card.row_host.set_swatch_rgb(row, rgb);
+        }
+        self.properties_card.row_host.paint_swatches(tree);
+    }
+
+    /// The live-scalar push (UI_INVALIDATION D22) for every row card the panel
+    /// shows: the properties card, the object modifier cards and the force
+    /// cards. `shapes_of` answers for a row's param id on the live layer.
+    pub fn sync_live_shapes(
+        &mut self,
+        tree: &mut UITree,
+        shapes_of: &mut dyn FnMut(&str) -> crate::panels::param_slider_shared::RowShapes,
+    ) {
+        if !self.open {
+            return;
+        }
+        let card = &mut self.properties_card;
+        for (row, param) in card.rows.iter_mut().enumerate() {
+            let shapes = shapes_of(param.id.as_ref());
+            card.row_host.sync_row_shapes(tree, &mut card.mod_state, param, row, &shapes);
+        }
+        for card in self.object_modifier_cards.iter_mut().chain(self.force_cards.iter_mut()) {
+            card.sync_live_shapes(tree, shapes_of);
+        }
     }
 
     pub fn sync_driver_frame_rates(

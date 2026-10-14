@@ -311,6 +311,40 @@ pub struct AudioRowState {
     pub wrap_idx: i32,
 }
 
+/// The live scalars one row's drawers and handles show (UI_INVALIDATION D22):
+/// Shapes and MappingRanges values of modulators that already exist. The live
+/// push writes them in place; a `None` group means the row has no such
+/// modulator, which is membership and reaches the row through a rebuild.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct RowShapes {
+    /// The enabled driver's trim range.
+    pub driver_trim: Option<(f32, f32)>,
+    pub envelope: Option<EnvelopeShape>,
+    pub audio: Option<AudioShape>,
+    /// The Ableton mapping's trim range.
+    pub ableton_range: Option<(f32, f32)>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct EnvelopeShape {
+    pub target_norm: f32,
+    pub decay: f32,
+    /// The Step action's amount; `None` unless the action is Step.
+    pub step_amount: Option<f32>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct AudioShape {
+    pub range_min: f32,
+    pub range_max: f32,
+    pub sensitivity: f32,
+    pub attack_ms: f32,
+    pub release_ms: f32,
+    pub invert: bool,
+    /// The Step action's amount; `None` unless the action is Step.
+    pub step_amount: Option<f32>,
+}
+
 /// One available audio send. Labels and ids travel together so send reorder
 /// cannot route a click to a different id.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -555,6 +589,8 @@ pub(crate) struct ParamRowIds {
     /// when fewer than two configs are active (no strip drawn). The caller stores
     /// these to route tab clicks to the active-tab switch.
     pub(crate) mod_tabs: Vec<(NodeId, ModTab)>,
+    /// The colour swatch in the label lane, when the row has `rgb_members`.
+    pub(crate) swatch: Option<(NodeId, crate::param_surface::ColourGroup)>,
     /// `y` after this row's slider + its modulation config drawer — the caller
     /// continues the next row from here.
     pub(crate) new_cy: f32,

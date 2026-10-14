@@ -459,6 +459,87 @@ mod scene_card_convergence_tests {
         assert_eq!(ids.each_ref().map(|id| inst.get_base_param(id)), newer);
     }
 
+    /// SCENE_SURFACES P9 gate: the card's light row carries its light's
+    /// three colour ids; the swatch opens the colour menu; a picked colour
+    /// reaches the content thread as exactly one undoable RGB write that
+    /// touches only Values, and one undo restores all three channels.
+    #[test]
+    fn light_swatch_pick_is_one_undoable_rgb_write() {
+        use crate::ui_bridge::projection::cards::{SurfaceVisibility, gen_params_to_surface};
+        use manifold_editing::service::EditingService;
+        let mut project = Project::default();
+        project.timeline.add_layer("Lights", LayerType::Generator, PresetTypeId::new("PhysicsSolids"));
+        project.reconcile_param_manifests();
+        let layer = &project.timeline.layers[0];
+        let layer_id = layer.layer_id.clone();
+        let rows = gen_params_to_surface(
+            layer.gen_params().unwrap(),
+            layer_id.as_str(),
+            None,
+            &[],
+            SurfaceVisibility::CuratedCard,
+            (manifold_core::Bpm(120.0), 60.0),
+        )
+        .rows;
+        let light_rows: Vec<_> = rows
+            .iter()
+            .filter(|row| row.rgb_members.as_ref().is_some_and(|m| m.group == manifold_ui::ColourGroup::Light))
+            .collect();
+        assert!(!light_rows.is_empty(), "a light's card row carries its colour swatch");
+        assert!(
+            light_rows.iter().all(|row| row.spec.section.as_deref() == Some("Lighting")),
+            "only light faders carry a light swatch"
+        );
+        let members = light_rows[0].rgb_members.clone().unwrap();
+        let target = manifold_core::GraphTarget::Generator(layer_id.clone());
+        let baseline = members.ids.each_ref().map(|id| project.preset_instance(&target).unwrap().get_base_param(id));
+        assert_eq!(members.values, baseline);
+
+        let mut h = Harness::new(Some(layer_id.clone()));
+        let open = PanelAction::Root(manifold_ui::RootAction::OpenColourMenu {
+            target: manifold_ui::GraphParamTarget::GeneratorOf(layer_id.clone()),
+            param_ids: members.ids.clone(),
+            value: members.values,
+        });
+        assert!(h.ui.try_open_dropdown(&open, None), "the swatch opens the colour menu");
+        assert!(h.ui.dropdown.is_open());
+        let picked = manifold_ui::color::COLOR_GRID[3];
+        let picked = [picked.r, picked.g, picked.b].map(|c| f32::from(c) / 255.0);
+        let actions = h.ui.dropdown_color_to_action(
+            crate::ui_root::DropdownContext::Colour {
+                target: manifold_ui::GraphParamTarget::GeneratorOf(layer_id.clone()),
+                param_ids: members.ids.clone(),
+            },
+            3,
+        );
+        let mut content_project = project.clone();
+        for action in &actions {
+            h.dispatch(action, &mut project);
+        }
+        let mut service = EditingService::new();
+        let mut writes = 0;
+        for command in h.drain() {
+            match command {
+                ContentCommand::MutateProject { f, .. } => f(&mut content_project),
+                ContentCommand::Execute(command) => {
+                    assert_eq!(
+                        command.touches(),
+                        manifold_core::change::ChangeSet::of(&[manifold_core::change::Part::Values])
+                    );
+                    service.execute(command, &mut content_project);
+                    writes += 1;
+                }
+                ContentCommand::GraphEditRejected(reason) => panic!("the pick was refused: {reason}"),
+                _ => {}
+            }
+        }
+        assert_eq!(writes, 1, "one pick is one undoable write");
+        let values = |p: &Project| members.ids.each_ref().map(|id| p.preset_instance(&target).unwrap().get_base_param(id));
+        assert_eq!(values(&content_project), picked);
+        assert!(service.undo(&mut content_project));
+        assert_eq!(values(&content_project), baseline, "one undo restores all three channels");
+    }
+
     /// Undo-race repro (param-feed regression, 2026-07-18): since
     /// `ac96c65c` the content thread ships a `ModulationSnapshot` EVERY
     /// tick and `app_render.rs` applies it to `local_project`

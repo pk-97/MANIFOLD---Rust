@@ -246,7 +246,8 @@ pub fn dispatch(action: &PanelAction, ctx: &mut DispatchCtx) -> DispatchResult {
             // dispatch; these arms only keep the match exhaustive and no-op if
             // reached (e.g. via the headless script harness).
             RootAction::BeginParamTextInput { .. }
-            | RootAction::BeginMaterialColourTextInput { .. }
+            | RootAction::BeginColourTextInput { .. }
+            | RootAction::OpenColourMenu { .. }
             | RootAction::BeginDriverPeriodTextInput { .. }
             | RootAction::SceneSetupBeginNumericTextInput { .. }
             | RootAction::SceneSetupEnumClicked { .. }
@@ -714,7 +715,7 @@ pub(crate) fn led_exit_path_label(
 
 // Re-export public functions from sub-modules
 pub use state_sync::{
-    TransportDisplayCache, check_auto_scroll, drain_events, push_chrome, push_frame, push_live, push_selection,
+    LiveGroups, TransportDisplayCache, check_auto_scroll, drain_events, push_chrome, push_frame, push_live, push_selection,
     sync_automation_lane_geometry,
     sync_card_values, sync_clip_positions, sync_driver_readouts,
     sync_scene_row_values,

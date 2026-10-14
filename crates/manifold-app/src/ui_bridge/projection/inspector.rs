@@ -117,6 +117,9 @@ pub fn sync_inspector_data(
         selection.selected_automation_point.as_ref().map(|point| (&point.target, &point.param_id))
             .or_else(|| selection.chosen_automation_params().get(layer_id).map(|(target, param_id)| (target, param_id)))
     };
+    ui.inspector
+        .macros_panel_mut()
+        .set_ableton_ranges(&super::live_shapes::macro_ableton_ranges(project));
     // Tabs first: the Scene tab decides whether the scene panel is open.
     configure_inspector_tabs(ui, project, active_layer, selection);
 

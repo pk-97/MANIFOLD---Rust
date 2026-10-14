@@ -946,6 +946,35 @@ impl ParamCardPanel {
         }
     }
 
+    /// Rewrite every row's live-scalar handles and drawer readouts in place
+    /// (UI_INVALIDATION D22). `shapes_of` answers for a row's param id.
+    pub fn sync_live_shapes(
+        &mut self,
+        tree: &mut UITree,
+        shapes_of: &mut dyn FnMut(&str) -> crate::panels::param_slider_shared::RowShapes,
+    ) {
+        for (row, param) in self.rows.iter_mut().enumerate() {
+            let shapes = shapes_of(param.id.as_ref());
+            self.row_host.sync_row_shapes(tree, &mut self.state.mod_state, param, row, &shapes);
+        }
+    }
+
+    /// Rewrite the six "3D Shading" knobs in place (UI_INVALIDATION D22).
+    /// The toggle and Height From are discrete and rebuild.
+    pub fn sync_relight_values(&mut self, tree: &mut UITree, relight: &RelightCardConfig) {
+        for (i, spec) in RELIGHT_FIELD_SPECS.iter().enumerate() {
+            let value = relight.value(spec.field);
+            if self.relight.value(spec.field) == value {
+                continue;
+            }
+            self.relight.set_value(spec.field, value);
+            if let Some(ids) = self.relight_slider_ids[i].as_ref() {
+                let norm = crate::slider::BitmapSlider::value_to_normalized(value, spec.min, spec.max);
+                crate::slider::BitmapSlider::update_value(tree, ids, norm, &format!("{value:.2}"));
+            }
+        }
+    }
+
     /// Per-frame content sync (push_state — after build). Black↔Frame
     /// transitions and new readback versions update the band in place; a
     /// `None` payload hides the chrome without waiting for a rebuild (the
@@ -2408,6 +2437,46 @@ pub(super) mod tests {
             Some("0.25"),
             "strength must show its own value — NOT the hidden param's 999 a positional join would have shifted onto it"
         );
+    }
+
+    /// SCENE_SURFACES P9: a light row's swatch lives in the shared row
+    /// builder, opens the colour menu with its three channel ids, and
+    /// follows the channels' live values even though they are not rows.
+    #[test]
+    fn light_row_swatch_opens_the_colour_menu_and_tracks_its_channels() {
+        use crate::param_surface::{ColourGroup, RgbMembers};
+        use crate::view::UiParamSlot as ParamSlot;
+        let ids = ["7_color_r", "7_color_g", "7_color_b"].map(manifold_foundation::ParamId::from);
+        let mut config = gen_config();
+        config.rows[0].rgb_members = Some(RgbMembers { group: ColourGroup::Light, ids: ids.clone(), values: [1.0, 0.5, 0.25] });
+        let mut tree = UITree::new();
+        let mut panel = ParamCardPanel::new();
+        panel.configure(&config);
+        panel.build(&mut tree, Rect::new(0.0, 0.0, 340.0, 400.0));
+
+        let (swatch, group) = panel.row_host.swatch_ids[0].expect("the light row builds a swatch");
+        assert_eq!(group, ColourGroup::Light);
+        assert!(panel.row_host.swatch_ids[1..].iter().all(Option::is_none), "only the swatch row gets one");
+        assert_eq!(tree.get_node(swatch).unwrap().style.bg_color, crate::panels::param_slider_shared::swatch_colour([1.0, 0.5, 0.25]));
+        assert_eq!(panel.row_host.row_index.get(tree.widget_of(swatch)), Some((0, RowRole::ColourSwatch(ColourGroup::Light))));
+        let track_x = |row: usize| tree.get_bounds(panel.row_host.slider_ids[row].as_ref().unwrap().track).x;
+        let plain = (1..panel.rows.len()).find(|&row| panel.row_host.slider_ids[row].is_some()).expect("a plain slider row");
+        assert_eq!(track_x(0), track_x(plain), "the swatch takes label space, never track space");
+
+        let actions = panel.handle_click(swatch, &tree);
+        assert!(
+            matches!(actions.as_slice(), [PanelAction::Root(RootAction::OpenColourMenu { target: GraphParamTarget::Generator, param_ids, value })]
+                if param_ids == &ids && *value == [1.0, 0.5, 0.25]),
+            "{actions:?}"
+        );
+
+        let row_ids: Vec<String> = panel.rows.iter().map(|row| row.id.to_string()).collect();
+        let mut slots: Vec<(&str, ParamSlot)> = row_ids.iter().map(|id| (id.as_str(), ParamSlot::exposed(1.0))).collect();
+        slots.push((ids[1].as_ref(), ParamSlot::exposed(0.0)));
+        panel.sync_values(&mut tree, &mut slots.into_iter());
+        assert_eq!(tree.get_node(swatch).unwrap().style.bg_color, crate::panels::param_slider_shared::swatch_colour([1.0, 0.0, 0.25]));
+        let actions = panel.handle_click(swatch, &tree);
+        assert!(matches!(actions.as_slice(), [PanelAction::Root(RootAction::OpenColourMenu { value, .. })] if *value == [1.0, 0.0, 0.25]));
     }
 
     #[test]

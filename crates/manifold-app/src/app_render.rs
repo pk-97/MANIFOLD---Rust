@@ -509,44 +509,14 @@ impl Application {
             // card slider is seen moving each knob on the node face. Empty (and a
             // no-op) whenever no editor is watching the content side.
             canvas.apply_live_values(&self.content_state.live_node_params);
-            // Tell the canvas whether the watched effect is diverged
-            // from its bundled preset so the "Reset to Default" pill
-            // appears in the header only when there's something to
-            // revert. Polled each frame off `local_project`. Works
-            // for both effect and generator targets.
-            // "MODIFIED" must mean the graph diverges from its bundled preset
-            // in a way that changes what it renders — NOT that a node was
-            // nudged. Moving nodes materialises the per-instance override
-            // (editor_pos has nowhere else to persist), so `graph.is_some()`
-            // goes true after any drag. Compare against the cached catalog
-            // default *ignoring layout* so the badge only lights on a real edit.
-            let has_mod = self.watched_graph_target.as_ref().is_some_and(|target| {
-                let instance_graph = match target {
-                    manifold_core::GraphTarget::Effect(eid) => self
-                        .local_project
-                        .find_effect_by_id(eid)
-                        .and_then(|fx| fx.graph.as_ref()),
-                    manifold_core::GraphTarget::Generator(lid) => self
-                        .local_project
-                        .timeline
-                        .find_layer_by_id(lid)
-                        .and_then(|(_, l)| l.generator_graph()),
-                    manifold_core::GraphTarget::SceneModifier { .. } => self
-                        .local_project
-                        .graph_target_owner(target)
-                        .and_then(|owner| owner.graph.as_ref())
-                        .and_then(|graph| target.graph_in(graph)),
-                };
-                match (instance_graph, self.watched_catalog_default.as_ref().and_then(|base| target.graph_in(base))) {
-                    // Diverged from the bundled preset beyond mere layout.
-                    (Some(g), Some(base)) => g.diverges_ignoring_layout(base),
-                    // Override present but no catalog base to compare against —
-                    // can't prove it's layout-only, so treat as modified.
-                    (Some(_), None) => true,
-                    // Still on the catalog default: nothing to reset.
-                    (None, _) => false,
-                }
-            });
+            // The "Reset to Default" pill shows only when the watched graph
+            // diverges from its bundled preset; keyed on its inputs.
+            let has_mod = self.editor_graph.has_graph_mod(
+                &self.local_project,
+                self.watched_graph_target.as_ref(),
+                self.watched_catalog_default.as_ref(),
+                &self.ui_edits.stamps.parts(),
+            );
             canvas.set_has_graph_mod(has_mod);
             if let Some(ed) = self.graph_editor.as_mut() {
                 ed.offscreen_dirty = true;
@@ -1296,6 +1266,7 @@ impl Application {
                         None => {
                             self.watched_graph_target = None;
                             self.watched_catalog_default = None;
+                            self.editor_graph.catalog_default_changed();
                         }
                     }
                     self.pending_open_graph_editor = true;
@@ -1413,7 +1384,7 @@ impl Application {
                     crate::app::automation_point_input::begin_time(self, target, param_id, *beat, *value_norm);
                     continue;
                 }
-                PanelAction::Root(RootAction::BeginMaterialColourTextInput {
+                PanelAction::Root(RootAction::BeginColourTextInput {
                     target,
                     param_ids,
                     anchor,

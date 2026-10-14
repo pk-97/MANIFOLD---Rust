@@ -543,6 +543,7 @@ mod tests {
             card_label: CardLabel::ItemName,
             gate: None,
             switch: None,
+            colour: None,
         }
     }
 

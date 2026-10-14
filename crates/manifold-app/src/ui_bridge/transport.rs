@@ -140,9 +140,11 @@ pub(super) fn dispatch_transport(
         }
 
         TransportAction::ToggleAutomationDrawMode => {
+            // The chrome push repaints DRAW; showing the lanes moves
+            // automation_view, which plans the lane rebuild.
             selection.automation_draw_mode = !selection.automation_draw_mode;
             selection.set_automation_mode_visible(true);
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
 
         TransportAction::CycleQuantize => {
