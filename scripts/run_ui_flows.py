@@ -36,7 +36,8 @@ lanes' GPU jobs slotted in between flows (BUG-i3hc (flow gate re-queues the
 GPU lock per flow)). Every line is flushed so a caller's timeout keeps the
 transcript so far.
 
-Filter to a subset with flow-name substrings:
+Selection: a bare run behaves as `--touched origin/main...HEAD` (the landing
+gate's set); `--all` runs the whole suite; flow-name substrings pick a subset:
   scripts/run_ui_flows.py scene-setup audio
 Work flows (`work-*`, docs/UI_INVALIDATION_DESIGN.md D10) count UI work between
 `ResetWork` and `AssertWork` steps against scripts/ui-flows/work_ceilings.json;
@@ -48,6 +49,7 @@ manifest's `path_triggers` (path prefix -> filter list; a touched
 scripts/ui-flows/<flow>.json always runs that flow):
   scripts/run_ui_flows.py --touched origin/main...HEAD
 No trigger matches the diff -> exits 0 without building anything.
+`--all` is the only way to run every flow.
 """
 import collections
 import functools
@@ -70,6 +72,8 @@ BUILD_CMD = ["cargo", "build", "--quiet", "-p", "manifold-app",
              "--features", "ui-snapshot,perf-soak",
              "--message-format=json-render-diagnostics"]
 BIN_NAME = "manifold"
+# A bare run selects what the branch touched, never the whole suite by accident.
+DEFAULT_TOUCHED = "origin/main...HEAD"
 # `--record-work`: each flow's `AssertWork` steps write the counts they observe
 # into scripts/ui-flows/work_ceilings.json instead of checking them — the only
 # writer of that file (docs/UI_INVALIDATION_DESIGN.md D11). Review the diff.
@@ -287,15 +291,20 @@ def main():
     if "--record-work" in args:
         args.remove("--record-work")
         RECORD_ARGS.append("--record-work")
+    run_all = "--all" in args
+    if run_all:
+        args.remove("--all")
     if "--touched" in args:
         i = args.index("--touched")
         if i + 1 >= len(args):
-            print("usage: run_ui_flows.py [--touched <git-range>] [filter ...]",
+            print("usage: run_ui_flows.py [--all | --touched <git-range> | filter ...]",
                   file=sys.stderr)
             return 2
         touched_range = args[i + 1]
         del args[i:i + 2]
     filters = args
+    if touched_range is None and not filters and not run_all:
+        touched_range = DEFAULT_TOUCHED
     exact_filters = set()
     with open(MANIFEST) as f:
         manifest = json.load(f)

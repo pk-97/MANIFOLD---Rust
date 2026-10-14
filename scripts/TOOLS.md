@@ -13,7 +13,7 @@ Landing and gates:
   land-wave               land one or a batch of wave branches without the main checkout  [scripts/land_wave.py]  (cost: focused)
   gpu-proofs              GPU proof tests scoped to the branch diff; --filter <test> runs one; --all is nightly  [scripts/gpu_proofs_gate.py]  (cost: focused)
   gpu-scope               dry run: which GPU proofs these paths select (args: paths)  [scripts/gpu_scope.py]  (cost: unit)
-  flows                   UI flow suite; <name> runs one flow, --touched <range> is the gate's selection  [scripts/run_ui_flows.py]  (cost: broad)
+  flows                   UI flow suite; bare = flows the branch touched (the gate set), <name> runs one flow, --all runs everything  [scripts/run_ui_flows.py]  (cost: broad)
   flows-batch-proof       proof that batched flows report what solo runs report  [scripts/ui_flows_batch_proof.py]  (cost: broad)
   trunk-health            nightly workspace sweep on main; files beads on red  [scripts/trunk_health.py]  (cost: broad)
   landing-metrics         the landing loop measured over N days: runs per landing, red share, GPU reuse, queue wait  [scripts/landing_metrics.py]  (cost: unit)

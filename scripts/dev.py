@@ -39,7 +39,7 @@ VERBS = [
      "gpu-scope", "gpu_scope.py", "dry run: which GPU proofs these paths select (args: paths)"),
     ("Landing and gates",
      "flows", "run_ui_flows.py",
-     "UI flow suite; <name> runs one flow, --touched <range> is the gate's selection"),
+     "UI flow suite; bare = flows the branch touched (the gate set), <name> runs one flow, --all runs everything"),
     ("Landing and gates",
      "flows-batch-proof", "ui_flows_batch_proof.py", "proof that batched flows report what solo runs report"),
     ("Landing and gates",
