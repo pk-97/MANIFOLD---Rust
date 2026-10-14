@@ -3654,13 +3654,14 @@ pub(crate) fn render_text_input_overlay(
     ti: &crate::text_input::TextInputState,
     timer: &crate::frame_timer::FrameTimer,
     ui: &mut UIRenderer,
+    tm: &dyn manifold_ui::text::TextMeasure,
 ) {
     use crate::text_input::*;
 
     let fs = ti.font_size;
-    let width = |ui: &mut UIRenderer, s: &str| ui.measure_text_cached(s, fs as u16, FontWeight::Medium).x;
+    let width = |s: &str| tm.measure_text(s, fs as u16, FontWeight::Medium).x;
     let mut lines = Vec::new();
-    let g = ti.overlay_geometry(&mut lines, &mut |s| width(ui, s));
+    let g = ti.overlay_geometry(&mut lines, &mut |s| width(s));
     let line_h = g.line_h;
 
     let text = ti.model.text();
@@ -3688,8 +3689,8 @@ pub(crate) fn render_text_input_overlay(
         if has_selection && sel.start < l.end && sel.end > l.start {
             let hl_start = sel.start.max(l.start) - l.start;
             let hl_end = sel.end.min(l.end) - l.start;
-            let hx = g.text_x + width(ui, &line[..hl_start]);
-            let hw = width(ui, &line[..hl_end]) - width(ui, &line[..hl_start]);
+            let hx = g.text_x + width(&line[..hl_start]);
+            let hw = width(&line[..hl_end]) - width(&line[..hl_start]);
             ui.draw_rect(hx, ly, hw.max(2.0), line_h, TEXT_INPUT_SELECT_BG);
         }
         ui.draw_text(g.text_x, ly, line, fs, TEXT_INPUT_FG);
@@ -3700,7 +3701,7 @@ pub(crate) fn render_text_input_overlay(
         let blink_on = ((elapsed / TEXT_INPUT_BLINK_PERIOD) as u64).is_multiple_of(2);
         if blink_on {
             let i = manifold_ui::text_edit::line_of(&lines, caret);
-            let cursor_x = g.text_x + width(ui, &text[lines[i].start..caret]);
+            let cursor_x = g.text_x + width(&text[lines[i].start..caret]);
             let cursor_y = g.text_y + i as f32 * line_h;
             ui.draw_rect(cursor_x, cursor_y, TEXT_INPUT_CURSOR_W, line_h, TEXT_INPUT_CURSOR);
         }

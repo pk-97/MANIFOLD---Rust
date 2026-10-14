@@ -596,6 +596,7 @@ pub(crate) fn render_main_ui_passes(
     // frame), so this is a no-op cost in the common case.
     manifold_ui_paint::automation_lane_draw::emit_automation_lanes(
         ui_renderer,
+        ui_root.tree.measurer(),
         ui_root.viewport.automation_lane_screens(),
         tracks,
         automation_selection,
