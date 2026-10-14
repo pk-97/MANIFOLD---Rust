@@ -421,14 +421,18 @@ fn is_retained_extra(
     if !param.spec.card_visible || !row.value.exposed {
         return false;
     }
+    let on_stage = param
+        .spec
+        .scene
+        .is_some_and(|scene| scene.role == manifold_core::scene_surface::SurfaceRole::Performance);
     metadata.is_some_and(|metadata| {
         metadata.bindings.iter().any(|binding| {
             binding.id == row.id.as_ref()
                 && match &binding.target {
                     BindingTarget::Composite { .. } => true,
-                    BindingTarget::Node { node_id, param } => node_type(def, node_id).is_some_and(|ty| {
+                    BindingTarget::Node { node_id, .. } => node_type(def, node_id).is_some_and(|ty| {
                         if manifold_core::liquid_domain::is_liquid_domain(ty) {
-                            manifold_core::scene_exposure::card_visible_for(ty, param)
+                            on_stage
                         } else {
                             !manifold_nodes_scene::node_graph::scene_exposure::is_scene_setup_node(ty)
                                 && ty != "node.coc_from_depth"

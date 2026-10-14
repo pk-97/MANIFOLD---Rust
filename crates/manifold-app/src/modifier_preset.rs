@@ -187,6 +187,9 @@ mod tests {
             section: None,
             card_visible: true,
             material_role: None,
+            limit: Default::default(),
+            unit: None,
+            scene: None,
         }
     }
 

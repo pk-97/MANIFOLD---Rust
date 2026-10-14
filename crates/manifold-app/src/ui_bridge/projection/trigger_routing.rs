@@ -363,12 +363,15 @@ pub(crate) mod tests {
         assert_eq!(object_ids.len(), 2, "PhysicsSolids fixture must expose two scene objects");
         let shared_ids: std::collections::HashSet<_> = object_ids.iter()
             .flat_map(|(_, ids)| ids.iter().cloned()).collect();
-        for spec in &mut graph.preset_metadata.as_mut().unwrap().params {
-            if shared_ids.contains(&spec.id) {
-                spec.section = Some("Shared object section".into());
+        generator.graph = Some(graph);
+        generator.refresh_manifest_from_graph();
+        // A section override is the user's choice on the control (D7), laid
+        // over whatever the lookup describes.
+        for param in generator.params.iter_mut() {
+            if shared_ids.contains(param.id()) {
+                param.choices.section = Some(Some("Shared object section".into()));
             }
         }
-        generator.graph = Some(graph);
         generator.refresh_manifest_from_graph();
         let mut project = Project::default();
         let mut layer = Layer::new_generator(

@@ -10,7 +10,7 @@ use manifold_core::effect_graph_def::{
 };
 use manifold_core::liquid_domain::liquid_domains_in;
 use manifold_core::project::Project;
-use manifold_core::scene_exposure::{SceneParamMetadata, stamp_scene_node_exposures_into};
+use manifold_core::scene_exposure::{NodeParamMetadata, stamp_scene_node_exposures_into};
 
 use crate::command::Command;
 
@@ -50,13 +50,13 @@ type GraphSnapshot = EffectGraphDef;
 pub struct AddSceneFluidCommand {
     target: GraphTarget,
     render_scene_node_id: u32,
-    fluid_metadata: Vec<SceneParamMetadata>,
-    source_metadata: Vec<SceneParamMetadata>,
-    role_metadata: Vec<SceneParamMetadata>,
-    world_metadata: Vec<SceneParamMetadata>,
-    material_metadata: Vec<SceneParamMetadata>,
-    object_metadata: Vec<SceneParamMetadata>,
-    whitewater_metadata: Vec<SceneParamMetadata>,
+    fluid_metadata: Vec<NodeParamMetadata>,
+    source_metadata: Vec<NodeParamMetadata>,
+    role_metadata: Vec<NodeParamMetadata>,
+    world_metadata: Vec<NodeParamMetadata>,
+    material_metadata: Vec<NodeParamMetadata>,
+    object_metadata: Vec<NodeParamMetadata>,
+    whitewater_metadata: Vec<NodeParamMetadata>,
     template: LiquidTemplate,
     catalog_default: EffectGraphDef,
     prev: Option<GraphSnapshot>,
@@ -73,10 +73,10 @@ impl AddSceneFluidCommand {
     pub fn new(
         target: GraphTarget,
         render_scene_node_id: u32,
-        fluid_metadata: Vec<SceneParamMetadata>,
-        source_metadata: Vec<SceneParamMetadata>,
-        material_metadata: Vec<SceneParamMetadata>,
-        object_metadata: Vec<SceneParamMetadata>,
+        fluid_metadata: Vec<NodeParamMetadata>,
+        source_metadata: Vec<NodeParamMetadata>,
+        material_metadata: Vec<NodeParamMetadata>,
+        object_metadata: Vec<NodeParamMetadata>,
         template: LiquidTemplate,
         catalog_default: EffectGraphDef,
     ) -> Self {
@@ -102,22 +102,22 @@ impl AddSceneFluidCommand {
         }
     }
 
-    pub fn with_role_metadata(mut self, metadata: Vec<SceneParamMetadata>) -> Self {
+    pub fn with_role_metadata(mut self, metadata: Vec<NodeParamMetadata>) -> Self {
         self.role_metadata = metadata;
         self
     }
 
-    pub fn with_world_metadata(mut self, metadata: Vec<SceneParamMetadata>) -> Self {
+    pub fn with_world_metadata(mut self, metadata: Vec<NodeParamMetadata>) -> Self {
         self.world_metadata = metadata;
         self
     }
 
-    pub fn with_whitewater_metadata(mut self, metadata: Vec<SceneParamMetadata>) -> Self {
+    pub fn with_whitewater_metadata(mut self, metadata: Vec<NodeParamMetadata>) -> Self {
         self.whitewater_metadata = metadata;
         self
     }
 
-    fn source_metadata(&self) -> Vec<SceneParamMetadata> {
+    fn source_metadata(&self) -> Vec<NodeParamMetadata> {
         self.source_metadata
             .iter()
             .filter(|metadata| {
@@ -131,7 +131,7 @@ impl AddSceneFluidCommand {
             .collect()
     }
 
-    fn domain_metadata(&self) -> Vec<SceneParamMetadata> {
+    fn domain_metadata(&self) -> Vec<NodeParamMetadata> {
         self.source_metadata
             .iter()
             .filter_map(|metadata| {
@@ -156,7 +156,7 @@ impl AddSceneFluidCommand {
             .collect()
     }
 
-    fn fluid_metadata(&self) -> Vec<SceneParamMetadata> {
+    fn fluid_metadata(&self) -> Vec<NodeParamMetadata> {
         self.fluid_metadata
             .iter()
             .filter(|metadata| {
@@ -417,7 +417,6 @@ impl Command for AddSceneFluidCommand {
                 exposed.push((
                     id,
                     node.node_id.clone(),
-                    node.type_id.clone(),
                     node.params.clone(),
                     *set,
                     *section,
@@ -457,7 +456,7 @@ impl Command for AddSceneFluidCommand {
                 meta.params.push(spec);
                 meta.bindings.extend(bindings);
             }
-            for (id, node_id, type_id, params, set, section) in &exposed {
+            for (id, node_id, params, set, section) in &exposed {
                 let label = match section {
                     Some(section) => format!("{fluid_handle} - {section}"),
                     None => fluid_handle.clone(),
@@ -467,7 +466,6 @@ impl Command for AddSceneFluidCommand {
                     &mut meta.bindings,
                     *id,
                     node_id,
-                    type_id,
                     &label,
                     &metadata_for(*set),
                     params,

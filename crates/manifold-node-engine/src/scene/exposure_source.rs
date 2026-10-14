@@ -1,9 +1,8 @@
 //! Family curation of scene parameters used while constructing graphs.
-use manifold_core::scene_exposure::SceneParamMetadata;
+use manifold_core::scene_exposure::NodeParamMetadata;
 
 pub struct SceneExposureSource {
-    pub metadata: fn(&str) -> Vec<SceneParamMetadata>,
-    pub look: fn() -> Vec<SceneParamMetadata>,
+    pub metadata: fn(&str) -> Vec<NodeParamMetadata>,
 }
 inventory::collect!(SceneExposureSource);
 
@@ -14,10 +13,6 @@ fn source() -> &'static SceneExposureSource {
     source
 }
 
-pub fn metadata_for_node_type(type_id: &str) -> Vec<SceneParamMetadata> {
+pub fn metadata_for_node_type(type_id: &str) -> Vec<NodeParamMetadata> {
     (source().metadata)(type_id)
-}
-
-pub fn look_metadata() -> Vec<SceneParamMetadata> {
-    (source().look)()
 }

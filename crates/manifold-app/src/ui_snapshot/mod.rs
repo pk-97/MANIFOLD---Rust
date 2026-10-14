@@ -13,6 +13,8 @@ mod fixtures;
 #[cfg(test)]
 mod input_matrix;
 mod interact;
+#[cfg(test)]
+mod lookup_coverage;
 mod readback;
 mod render;
 mod script;
@@ -740,6 +742,7 @@ fn run_gltf_editor_add_scene_gesture(want_dump: bool, add_object: bool) {
         use manifold_node_engine::snapshot::{OuterParamRouting, OuterParamSource};
         let mut handle_by_id: std::collections::HashMap<&str, &str> = std::collections::HashMap::new();
         manifold_node_engine::load::loaded_preset_view::collect_node_handles(&d.nodes, &mut handle_by_id);
+        let mut declared = manifold_core::param_lookup::Declared::new(&d);
         rg_snap_after.outer_routings = meta
             .bindings
             .iter()
@@ -747,7 +750,7 @@ fn run_gltf_editor_add_scene_gesture(want_dump: bool, add_object: bool) {
                 BindingTarget::Node { node_id, param } => {
                     let handle = handle_by_id.get(node_id.as_str())?;
                     Some(OuterParamRouting {
-                        outer_label: b.label.clone(),
+                        outer_label: declared.as_mut().map(|x| x.name(&b.id)).unwrap_or_default(),
                         outer_param_id: b.id.clone(),
                         node_handle: handle.to_string(),
                         inner_param: param.clone(),

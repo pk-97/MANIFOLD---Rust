@@ -11,7 +11,7 @@ use manifold_core::effect_graph_def::{
     PresetMetadata,
 };
 use manifold_core::project::Project;
-use manifold_core::scene_exposure::{SceneParamMetadata, stamp_scene_node_exposures_into};
+use manifold_core::scene_exposure::{NodeParamMetadata, stamp_scene_node_exposures_into};
 
 use crate::command::Command;
 
@@ -332,7 +332,7 @@ pub struct InsertMeshModifierCommand {
     /// node's full param manifest, computed by the app-side caller via
     /// `manifold_nodes::node_graph::scene_exposure::metadata_for_node_type(&type_id)`
     /// (this crate has no renderer dep).
-    modifier_metadata: Vec<SceneParamMetadata>,
+    modifier_metadata: Vec<NodeParamMetadata>,
     catalog_default: EffectGraphDef,
     /// The object group body's `(nodes, wires)` before this edit, plus the
     /// pre-edit whole-def `preset_metadata` (exposures land there, outside
@@ -355,7 +355,7 @@ impl InsertMeshModifierCommand {
         group_node_id: u32,
         type_id: String,
         position: Option<usize>,
-        modifier_metadata: Vec<SceneParamMetadata>,
+        modifier_metadata: Vec<NodeParamMetadata>,
         catalog_default: EffectGraphDef,
     ) -> Self {
         debug_assert!(
@@ -476,7 +476,7 @@ impl Command for InsertMeshModifierCommand {
             string_bindings: Vec::new(), scene_modifier: None, scene_bounds: None,
         });
         stamp_scene_node_exposures_into(
-            &mut meta.params, &mut meta.bindings, new_id, &new_node_id, &self.type_id,
+            &mut meta.params, &mut meta.bindings, new_id, &new_node_id,
             &section, &self.modifier_metadata, &BTreeMap::new(),
         );
         if with_target_graph_mut(project, &self.target, &self.catalog_default, true, |def| {

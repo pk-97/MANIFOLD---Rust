@@ -1,28 +1,7 @@
-//! Scene-scale derivation for BUG-upfq (Scene-param ergonomics), P1+P2.
-//!
-//! Imported 3D models come in any real-world scale, but the card sliders
-//! stamped from a primitive's generic `ParamDef` used to show hardcoded
-//! ranges (-100..100 position, 0..100 focus, 0.01..200 light range) that
-//! only fit scenes around unit size. This module derives one `SceneScale`
-//! from the import's bbox and the import path applies it to the stamped
-//! slider ranges as a display-only override — stored param VALUES are never
-//! touched, so existing projects render identically.
-//!
-//! The scale is the bounding-sphere radius (half the bbox diagonal), the
-//! same quantity `build_import_graph` already computes for camera framing.
-//! It is floored at 0.01 so a degenerate/empty bbox (zero extent, or a
-//! tiny asset at millimeter scale) still gets nonzero slider widths and no
-//! divide-by-zero anywhere downstream.
-//!
-//! SSAO radius is NOT in the range-profile below: `build_import_graph`
-//! scene-scales it as a NODE default (`scene.rs` — `0.5·radius`, clamped
-//! between `0.001·radius` and `2·radius`) and deliberately does not expose
-//! it on the card (Peter 2026-07-15, "the defaults look good"). A future
-//! audit should not re-flag it.
-
-use std::collections::HashMap;
-
-use manifold_core::effect_graph_def::{BindingDef, BindingTarget, ParamSpecDef};
+//! Scene-scale derivation (BUG-upfq scene-param ergonomics): one radius per
+//! imported scene, the half bbox diagonal floored at 0.01. Camera framing
+//! and the cinematic tail read it here; slider ranges are scaled by the
+//! param lookup from the saved `meta.scene_bounds`, never stamped.
 
 use crate::node_graph::primitives::camera_orbit::DEFAULT_FAR as CAMERA_FAR_DEFAULT;
 
@@ -144,77 +123,4 @@ impl Framing {
 
         Self { center, radius, fov_y, distance, near_clip, far_clip }
     }
-}
-
-/// Classify and apply the scene-derived range overrides to every stamped
-/// card param. `nodes_by_id` maps each binding target's inner `NodeId`
-/// string to its primitive type id (the import builds this from its own
-/// node inventory). Only plain numeric sliders still bound directly to a
-/// generic node param — never the hand-curated fan-out rows — get
-/// overridden, and only when their node type + param name are
-/// scene-scaleable:
-///
-/// - `node.transform_3d` / `node.light` `pos_*` / `aim_*` → ±2·radius
-/// - `node.light` `range` → 0.01..4·radius
-/// - `node.camera_lens` `focus_distance` → 0..4·radius
-/// - `node.camera_lens` `f_stop` → 0.5..max(32, 64·radius) (BUG-bdwd — the
-///   scene-derived DoF aperture band; see [`F_STOP_MAX_MULTIPLIER`])
-///
-/// Each override is a range-only edit: `default_value` is never moved (the
-/// `.min`/`.max` widen rule only guarantees the range still CONTAINS the
-/// stamped default, exactly like the stamper's own widen rule).
-pub(super) fn apply_scene_ranges(
-    params: &mut [ParamSpecDef],
-    bindings: &[BindingDef],
-    nodes_by_id: &HashMap<String, String>,
-    scale: SceneScale,
-) {
-    let r = scale.radius;
-    for spec in params.iter_mut() {
-        // Enum/toggle/whole-number sliders are index or label spaces, not
-        // physical quantities — never scale them.
-        if spec.is_toggle || spec.is_trigger || spec.whole_numbers {
-            continue;
-        }
-        let Some(binding) = bindings.iter().find(|b| b.id == spec.id) else {
-            continue;
-        };
-        let BindingTarget::Node { node_id, param } = &binding.target else {
-            continue;
-        };
-        let Some(type_id) = nodes_by_id.get(node_id.as_str()) else {
-            continue;
-        };
-        let Some((new_min, new_max)) =
-            manifold_core::scene_exposure::scene_scaled_range(type_id, param, r)
-        else {
-            continue;
-        };
-        // Range-only edit; keep the stamped default inside the band.
-        spec.min = new_min.min(spec.default_value);
-        spec.max = new_max.max(spec.default_value);
-    }
-}
-
-/// Build the node-id → type-id map the range override needs. Walks every
-/// node in `def.nodes` INCLUDING group interiors, the same recursive walk
-/// `migrate_scene_exposures` uses — bindings target inner node ids which
-/// are unique across the whole def regardless of grouping.
-pub(super) fn node_types_by_id(
-    nodes: &[manifold_core::effect_graph_def::EffectGraphNode],
-) -> HashMap<String, String> {
-    fn walk(
-        nodes: &[manifold_core::effect_graph_def::EffectGraphNode],
-        out: &mut HashMap<String, String>,
-    ) {
-        for node in nodes {
-            out.insert(node.node_id.as_str().to_string(), node.type_id.clone());
-            if let Some(group) = node.group.as_deref() {
-                walk(&group.nodes, out);
-            }
-        }
-    }
-    let mut out = HashMap::new();
-    walk(nodes, &mut out);
-    out
 }

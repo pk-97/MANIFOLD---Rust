@@ -52,6 +52,7 @@ pub mod marker;
 pub mod material_inspector;
 pub mod math;
 pub mod midi;
+pub mod param_lookup;
 pub mod params;
 pub mod percussion_analysis;
 pub mod percussion_binding;
@@ -127,8 +128,9 @@ pub use types::*;
 pub use units::{Beats, Bpm, Seconds};
 pub use warmup::{WarmupBudget, WarmupCap, WarmupOutcome, WarmupPass, WarmupProgress, WarmupRun};
 
-// Re-export the cross-cutting cold-touch detector from `manifold-foundation`
-// so `manifold-app` can reach it through `manifold_core`.
+// Foundation modules manifold-app reaches through `manifold_core`; the
+// layering test forbids a direct app -> foundation dependency.
 pub use manifold_foundation::cold_touch;
 pub use manifold_foundation::device_guard;
 pub use manifold_foundation::work_count;
+pub use manifold_foundation::scene_surface;

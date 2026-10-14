@@ -178,7 +178,6 @@ pub(super) fn build_import_graph(
         &mut card_bindings,
         envmap_id,
         &NodeId::new("envmap"),
-        "node.bake_environment",
         "Environment",
         &metadata_for_node_type("node.bake_environment"),
         &envmap_node_params,
@@ -235,7 +234,6 @@ pub(super) fn build_import_graph(
         &mut card_bindings,
         camera_id,
         &NodeId::new("camera"),
-        "node.orbit_camera",
         "Camera",
         &metadata_for_node_type("node.orbit_camera"),
         &cam_node_params,
@@ -272,7 +270,6 @@ pub(super) fn build_import_graph(
         &mut card_bindings,
         lens_id,
         &NodeId::new("lens"),
-        "node.camera_lens",
         "Camera",
         &metadata_for_node_type("node.camera_lens"),
         &lens_node_params,
@@ -308,7 +305,6 @@ pub(super) fn build_import_graph(
             &mut card_bindings,
             imported_cam_id,
             &NodeId::new(&handle),
-            "node.free_camera",
             &format!("{label} (Imported Camera)"),
             &metadata_for_node_type("node.free_camera"),
             &imported_cam_params,
@@ -368,7 +364,6 @@ pub(super) fn build_import_graph(
         &mut card_bindings,
         sun_id,
         &NodeId::new("sun"),
-        "node.light",
         "Sun",
         &metadata_for_node_type("node.light"),
         &sun_node_params,
@@ -384,7 +379,7 @@ pub(super) fn build_import_graph(
         .params
         .insert("lights".to_string(), int(summary.lights.len().max(1) as i32));
     // RAYTRACING_DESIGN.md D14/section 5.2: stamp the root's curated RT subset
-    // (RENDER_SCENE_STAMPED_PARAMS) like every other vocab node above —
+    // (the scene table hides the rest) like every other vocab node above —
     // without it a fresh import has no "Rendering" rows until a save/reload
     // runs the load-time migration.
     stamp_scene_node_exposures_into(
@@ -392,7 +387,6 @@ pub(super) fn build_import_graph(
         &mut card_bindings,
         render_id,
         &NodeId::new("render"),
-        "node.render_scene",
         "Rendering",
         &metadata_for_node_type("node.render_scene"),
         &render_node.params.clone(),
@@ -407,6 +401,8 @@ pub(super) fn build_import_graph(
         let node_str_id = format!("light_{i}");
         let light_id = fresh_id();
         let mut light_node = plain_node(light_id, &node_str_id, "node.light", &node_str_id);
+        // SCENE_SURFACES D11 (Lights): the readable name is the node title.
+        light_node.title = Some(label.clone());
 
         let (mode, spec_unit, kind_note, cones) = match light.kind {
             gltf_load::GltfLightKind::Directional => (0u32, "lux", String::new(), (0.0, 0.0)),
@@ -457,7 +453,6 @@ pub(super) fn build_import_graph(
             &mut card_bindings,
             light_id,
             &NodeId::new(&node_str_id),
-            "node.light",
             &label,
             &metadata_for_node_type("node.light"),
             &light_node_params,
@@ -835,17 +830,6 @@ pub(super) fn build_import_graph(
     // bucket list (generators carry no category validation; see that
     // module's doc comment — "Text & Media" on `MriVolume`, a generator,
     // already isn't in that list either).
-
-    // BUG-upfq P1+P2: stamp scene-derived slider RANGES (never values) over
-    // the generic primitive defaults for the scene's position / focus /
-    // light-range sliders, so a model at any scale gets usable bands. See
-    // `scene_scale.rs` for the per-param multipliers and their reasoning.
-    super::scene_scale::apply_scene_ranges(
-        &mut card_params,
-        &card_bindings,
-        &super::scene_scale::node_types_by_id(&nodes),
-        scene_scale,
-    );
 
     let metadata = PresetMetadata {
         id: PresetTypeId::from_string(sanitized),
