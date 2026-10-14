@@ -256,6 +256,7 @@
     "work-scrollbar-drag": "timeline",
     "work-layer-reorder": "timeline",
     "work-drawer-tween": "envmod",
+    "work-fold-toggle": "inspector",
     "water-family-controls": "scene-setup",
     "scene-fluid-dam-break-controls": "waterdambreak",
     "automation-clipboard-shapes": "automation",

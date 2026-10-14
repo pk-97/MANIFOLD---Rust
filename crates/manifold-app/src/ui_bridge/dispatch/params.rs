@@ -23,6 +23,7 @@ use manifold_editing::commands::effects::{
 };
 use manifold_editing::commands::settings::{ChangeMacroCommand, PasteGeneratorCommand};
 use manifold_ui::{InspectorTab, PanelAction, ParamsAction};
+use manifold_ui::panels::inspector::InspectorFold;
 
 use super::super::DispatchResult;
 use super::resolve_effects_read;
@@ -187,8 +188,8 @@ pub(crate) fn dispatch_params(action: &ParamsAction, ctx: &mut super::super::Dis
         }
         // ── Macros panel collapse ─────────────────────────────────
         ParamsAction::MacrosCollapseToggle => {
-            ctx.ui.inspector.macros_panel_mut().toggle_collapsed();
-            DispatchResult::structural()
+            ctx.ui.inspector.toggle_fold(InspectorFold::Macros);
+            DispatchResult::handled()
         }
 
         // ── Macro sliders ─────────────────────────────────────────
@@ -212,8 +213,8 @@ pub(crate) fn dispatch_params(action: &ParamsAction, ctx: &mut super::super::Dis
         // Layer audio-gain scrub trio migrated to `PanelAction::Scrub`
         // (`ValueRef::LayerAudioGain`, P-I / D4).
         ParamsAction::MasterCollapseToggle => {
-            ctx.ui.inspector.master_chrome_mut().toggle_collapsed();
-            DispatchResult::structural()
+            ctx.ui.inspector.toggle_fold(InspectorFold::MasterChrome);
+            DispatchResult::handled()
         }
         ParamsAction::MasterExitPathClicked => {
             // Handled by try_open_dropdown in ui_root.rs — opens exit path dropdown.
@@ -254,8 +255,8 @@ pub(crate) fn dispatch_params(action: &ParamsAction, ctx: &mut super::super::Dis
         // Layer-opacity scrub trio migrated to `PanelAction::Scrub`
         // (`ValueRef::LayerOpacity`, P-I / D4).
         ParamsAction::LayerChromeCollapseToggle => {
-            ctx.ui.inspector.layer_chrome_mut().toggle_collapsed();
-            DispatchResult::structural()
+            ctx.ui.inspector.toggle_fold(InspectorFold::LayerChrome);
+            DispatchResult::handled()
         }
 
         // ── Effect operations ──────────────────────────────────────
@@ -365,18 +366,12 @@ pub(crate) fn dispatch_params(action: &ParamsAction, ctx: &mut super::super::Dis
             });
             DispatchResult::structural()
         }
-        ParamsAction::ModConfigTabChanged => {
-            // The card already switched its own active-tab UI state in
-            // handle_click; this just forces a rebuild so the drawer repaints
-            // with the newly-selected config. No model mutation.
-            DispatchResult::structural()
-        }
-        ParamsAction::SectionFoldToggled => {
-            // D5 — the card already flipped its own `section_folded` UI-only
-            // state in handle_click; this just forces a rebuild so the
-            // folded/unfolded rows repaint. No model mutation (fold state is
-            // workspace-local, never serialized).
-            DispatchResult::structural()
+        ParamsAction::ModConfigTabChanged | ParamsAction::SectionFoldToggled => {
+            // The card or Scene tab already flipped its own UI-only state (D5:
+            // fold state is workspace-local, never serialized); the view
+            // version rebuilds the column.
+            ctx.ui.inspector.note_card_view_actions(&[PanelAction::Params(action.clone())]);
+            DispatchResult::handled()
         }
         ParamsAction::CardSectionFolded { target, section, folded } => {
             // A scene card fold is a saved view choice (SCENE_SURFACES_DESIGN.md
@@ -419,10 +414,9 @@ pub(crate) fn dispatch_params(action: &ParamsAction, ctx: &mut super::super::Dis
             reveal_in_scene_tab(gpt, section.clone(), effective_tab, active_layer, ctx)
         }
         ParamsAction::ModsCompactToggled => {
-            // section 6b — the inspector already flipped its own compact flag in
-            // route_click; rebuild so every card hides/shows its mod drawers.
-            // No model mutation.
-            DispatchResult::structural()
+            // section 6b — the inspector flipped its compact flag in route_click
+            // through its view-version setter.
+            DispatchResult::handled()
         }
         ParamsAction::EffectCardClicked(_) | ParamsAction::EffectSelectionChanged => {
             // Deselect generator card when an effect card is clicked
@@ -704,11 +698,8 @@ pub(crate) fn dispatch_params(action: &ParamsAction, ctx: &mut super::super::Dis
             DispatchResult::handled()
         }
         ParamsAction::GenCollapseToggle => {
-            if let Some(gp) = ctx.ui.inspector.gen_params_mut() {
-                let new_val = !gp.is_collapsed();
-                gp.set_collapsed(new_val);
-            }
-            DispatchResult::structural()
+            ctx.ui.inspector.toggle_fold(InspectorFold::Generator);
+            DispatchResult::handled()
         }
         ParamsAction::GenCardClicked => {
             // Select the generator card (blue highlight border), deselect effect cards
@@ -1204,6 +1195,59 @@ mod audio_send_dispatch_tests {
         assert_eq!(waveform_send(&project, &target), None);
         assert!(service.redo(&mut project));
         assert_eq!(waveform_send(&project, &target).as_deref(), Some("send-2"));
+    }
+}
+
+#[cfg(test)]
+mod view_fold_dispatch_tests {
+    use crate::frame_plan::{plan_frame, FrameInputs, MainRegion, Projection};
+    use manifold_ui::{PanelAction, ParamsAction};
+
+    /// A fold moves only the inspector view version: the plan rebuilds the
+    /// inspector and runs no project or inspector sync.
+    #[test]
+    fn fold_toggles_are_view_changes_not_structural_syncs() {
+        let mut project = manifold_core::project::Project::default();
+        let (content_tx, content_rx) = crossbeam_channel::unbounded();
+        let content_state = crate::content_state::ContentState::default();
+        let mut ui = crate::ui_root::UIRoot::new();
+        let mut selection = manifold_ui::UIState::new();
+        let mut active_layer = None;
+        let mut user_prefs = crate::user_prefs::UserPrefs::in_memory();
+        let mut scrub = crate::ui_bridge::ScrubState::default();
+        let mut stamps = crate::frame_plan::UiStamps::default();
+        let mut last = FrameInputs { inspector_view: ui.inspector.view_version(), ..Default::default() };
+
+        for action in [ParamsAction::MacrosCollapseToggle, ParamsAction::MasterCollapseToggle, ParamsAction::SectionFoldToggled] {
+            let was_collapsed = ui.inspector.macros_panel().is_collapsed();
+            let result = {
+                let mut ctx = crate::ui_bridge::DispatchCtx {
+                    project: crate::ui_bridge::ProjectRef::new(&mut project, &mut stamps, &content_tx),
+                    content_tx: &content_tx,
+                    content_state: &content_state,
+                    ui: &mut ui,
+                    selection: &mut selection,
+                    active_layer: &mut active_layer,
+                    user_prefs: &mut user_prefs,
+                    editor_target: None,
+                    scrub: &mut scrub,
+                    dialogs: Default::default(),
+                };
+                crate::ui_bridge::dispatch(&PanelAction::Params(action.clone()), &mut ctx)
+            };
+            assert!(!result.structural_change, "{action:?}");
+            assert!(content_rx.try_recv().is_err(), "{action:?} sends nothing");
+            if matches!(action, ParamsAction::MacrosCollapseToggle) {
+                assert_ne!(ui.inspector.macros_panel().is_collapsed(), was_collapsed);
+            }
+            let next = FrameInputs { inspector_view: ui.inspector.view_version(), ..Default::default() };
+            assert_ne!(next.inspector_view, last.inspector_view, "{action:?} moves the view version");
+            let plan = plan_frame(&last, &next);
+            assert!(plan.rebuild.contains(MainRegion::Inspector), "{action:?}");
+            assert!(!plan.projections.contains(Projection::ProjectSync), "{action:?}");
+            assert!(!plan.projections.contains(Projection::InspectorSync), "{action:?}");
+            last = next;
+        }
     }
 }
 

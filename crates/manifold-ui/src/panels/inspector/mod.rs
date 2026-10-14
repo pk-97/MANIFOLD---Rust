@@ -23,6 +23,19 @@ mod card_drag;
 mod render;
 mod routing;
 
+/// A UI-only fold the inspector owns outside its effect cards. Toggled only
+/// through [`InspectorCompositePanel::toggle_fold`], which moves the view
+/// version, so the frame planner rebuilds the column with no project sync.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InspectorFold {
+    Macros,
+    MasterChrome,
+    LayerChrome,
+    ClipChrome,
+    Generator,
+    AudioTriggers,
+    AudioTriggerRow(usize),
+}
 
 // ── Layout constants ────────────────────────────────────────────
 // section 14.5 E — the container owns the inter-card gap (one owner): the canonical
@@ -614,9 +627,31 @@ impl InspectorCompositePanel {
         self.view_version
     }
 
-    /// A card reports its own UI-only change (section fold, mod-config tab)
-    /// through the action it returns; it has already flipped its state.
-    fn note_card_view_actions(&mut self, actions: &[PanelAction]) {
+    /// Flip one inspector-owned fold; the view version moves only when the
+    /// state did.
+    pub fn toggle_fold(&mut self, fold: InspectorFold) {
+        let changed = match fold {
+            InspectorFold::Macros => { self.macros_panel.toggle_collapsed(); true }
+            InspectorFold::MasterChrome => { self.master_chrome.toggle_collapsed(); true }
+            InspectorFold::LayerChrome => { self.layer_chrome.toggle_collapsed(); true }
+            InspectorFold::ClipChrome => { self.clip_chrome.toggle_collapsed(); true }
+            InspectorFold::Generator => match self.gen_params.as_mut() {
+                Some(card) => { card.set_collapsed(!card.is_collapsed()); true }
+                None => false,
+            },
+            InspectorFold::AudioTriggers => { self.audio_trigger_section.toggle_collapsed(); true }
+            InspectorFold::AudioTriggerRow(index) => self.audio_trigger_section.toggle_row_expanded(index),
+        };
+        if changed {
+            self.view_version += 1;
+        }
+    }
+
+    /// A card or the Scene tab reports its own UI-only change (section fold,
+    /// mod-config tab) through the action it returns; it has already flipped
+    /// its state. The dispatch of that action calls this, whichever surface
+    /// raised it.
+    pub fn note_card_view_actions(&mut self, actions: &[PanelAction]) {
         if actions.iter().any(|a| matches!(a,
             PanelAction::Params(crate::ParamsAction::SectionFoldToggled | crate::ParamsAction::ModConfigTabChanged)))
         {
@@ -1360,9 +1395,7 @@ impl Panel for InspectorCompositePanel {
                 if !self.viewport_rect.contains(*pos) {
                     return Vec::new();
                 }
-                let actions = self.route_click(*node_id, *modifiers, tree);
-                self.note_card_view_actions(&actions);
-                actions
+                self.route_click(*node_id, *modifiers, tree)
             }
             UIEvent::PointerDown {
                 node_id,

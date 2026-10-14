@@ -10,6 +10,7 @@ use manifold_core::audio_clip_detection::DetectionConfig;
 use manifold_editing::commands::clip::{ChangeClipLoopCommand, ChangeClipRecordedBpmCommand};
 use manifold_editing::commands::clip_detection::SetClipDetectionConfigCommand;
 use manifold_ui::ClipAction;
+use manifold_ui::panels::inspector::InspectorFold;
 
 use super::super::DispatchResult;
 use crate::content_command::ContentCommand;
@@ -42,8 +43,8 @@ pub(crate) fn dispatch_clip(action: &ClipAction, ctx: &mut super::super::Dispatc
     match action {
         // ── Clip chrome ────────────────────────────────────────────
         ClipAction::ClipChromeCollapseToggle => {
-            ctx.ui.inspector.clip_chrome_mut().toggle_collapsed();
-            DispatchResult::structural()
+            ctx.ui.inspector.toggle_fold(InspectorFold::ClipChrome);
+            DispatchResult::handled()
         }
         ClipAction::ClipBpmClicked => DispatchResult::handled(),
         ClipAction::ClipWarpToggled => {

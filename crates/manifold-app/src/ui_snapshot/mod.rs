@@ -1382,8 +1382,10 @@ mod cache_path_full_render {
     /// Click through the REAL input path (`pointer_event` -> `process_events`
     /// -> `crate::ui_bridge::dispatch`, the same real bridge call
     /// `script.rs`'s Runner uses) and report whether any dispatched action
-    /// was structural — the ONLY signal this driver reads to decide
-    /// `needs_structural_sync`, never a hand-set flag. Per-gesture drag/undo
+    /// was structural or moved the inspector view version (the planner's
+    /// rebuild input; this driver has no planner) — the ONLY signal this
+    /// driver reads to decide `needs_structural_sync`, never a hand-set
+    /// flag. Per-gesture drag/undo
     /// snapshots are scratch-local: this harness only ever clicks, never
     /// drags, so they never carry state between calls.
     #[allow(clippy::too_many_arguments)]
@@ -1399,6 +1401,7 @@ mod cache_path_full_render {
     ) -> bool {
         ui.pointer_event(pos, PointerAction::Down, clock);
         ui.pointer_event(pos, PointerAction::Up, clock);
+        let view_before = ui.inspector.view_version();
         let actions = ui.process_events();
         let mut structural = false;
         let mut scrub = crate::ui_bridge::ScrubState::default();
@@ -1419,7 +1422,7 @@ mod cache_path_full_render {
             let result = crate::ui_bridge::dispatch(action, &mut dctx);
             structural |= result.structural_change;
         }
-        structural
+        structural || ui.inspector.view_version() != view_before
     }
 
     #[test]
