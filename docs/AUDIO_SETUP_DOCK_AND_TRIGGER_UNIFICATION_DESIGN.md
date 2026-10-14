@@ -272,7 +272,7 @@ carry over unchanged.
 
 ### Phase 1 — The dock (layout column + overlay-path deletion + scroll) — SHIPPED 2026-07-10
 - **Entry state:** `rg -n "audio_setup_width" crates/manifold-ui/src/layout.rs` → zero
-  hits; `rg -n "OverlayId::AudioSetup" crates/manifold-app/src/ui_root.rs` hits `:27`
+  hits; `rg -n "OverlayId::AudioSetup" crates/manifold-app/src/ui_root/mod.rs` hits `:27`
   region; anchors `layout.rs:88/:152`, `audio_setup_panel.rs:745/:2314` re-verified.
 - **Read-back:** this doc D1/D7-scroll/section 3.5; `layout.rs` whole; the overlay driver's
   dispatch for `OverlayId::AudioSetup`; `guide_scroll_and_clipping` memory. Restate:

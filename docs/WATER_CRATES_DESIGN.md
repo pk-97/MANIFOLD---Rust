@@ -60,7 +60,7 @@ A leaf edit now rebuilds its crate in about a second instead of four, and its te
 
 ### 1.2 The coupling census, re-run with the proposed assignment
 
-Script: the lead's `area_coupling.py` refined to the file-to-crate table of section 3, resolving `crate::` and `super::` paths, dropping CPU FLIP files and `#[cfg(test)]` bodies. Committed at stage 1 as `scripts/water_crate_edges.py` (retired at stage 5 when Cargo takes over). Production edges with the files placed as section 3 places them:
+Script: the lead's `area_coupling.py` refined to the file-to-crate table of section 3, resolving `crate::` and `super::` paths, dropping CPU FLIP files and `#[cfg(test)]` bodies. Committed at stage 1 as the edge census (retired at stage 5 when Cargo takes over). Production edges with the files placed as section 3 places them:
 
 | From → to | Count | Verdict |
 |---|---|---|
@@ -76,7 +76,7 @@ Script: the lead's `area_coupling.py` refined to the file-to-crate table of sect
 | **gpu-flip → registration 1**, **liquid → registration 1** | `gpu_flip_preset.rs:1096` → `testkit::liquid_extents::walk` (cfg testkit); `fluid_role_source/geometry.rs:224` → `testkit::fluid_role_source` (cfg test) | Resolved by moving `gpu_flip_preset` up (D4) and `testkit/fluid_role_source.rs` down into the liquid crate's testkit |
 | Test-only cross-area reaches | 125 | Each test moves with the production file it tests; a test that names two leaves is a catalog or registration-crate test (D8) |
 
-Oracle for every row through S4: `scripts/water_crate_edges.py`, retired at S5; Cargo and the `crate_layering.rs` `LAYERS` rows hold the lines now. Atom ownership oracle: `rg -l '<atom>' crates/manifold-nodes-water/src` minus the atom's own files. Re-run before each stage; a count that differs from this table is listed before anything moves.
+Oracle for every row through S4: the edge census script, retired at S5; Cargo and the `crate_layering.rs` `LAYERS` rows hold the lines now. Atom ownership oracle: `rg -l '<atom>' crates/manifold-nodes-water/src` minus the atom's own files. Re-run before each stage; a count that differs from this table is listed before anything moves.
 
 Classification: **exists** — the layering (the seam is already the hub), every registration mechanism, the layering test, gate discovery by feature, the move protocol. **One wire away** — eleven item moves, six Cargo manifests, one layering row per crate, gate rows re-keyed. **Genuinely new** — nothing at runtime. Zero-new-systems test: zero new traits, registries, id schemes or caches. The one thing that goes beyond plain Rust workspace practice is the per-crate word census and feature pin in `crate_layering.rs` (section 8); it is a test over `cargo metadata` and `rg`, nothing else.
 
@@ -182,7 +182,7 @@ Paths relative to `crates/manifold-nodes-water/src/` before the move. Every file
 | 10 | `primitives/gpu_flip_preset.rs` (+ `/testkit.rs`) | gpu-flip area | `presets/gpu_flip.rs` | move; `manifold-app/src/ui_bridge/project.rs:24,51` re-pointed to `manifold_nodes_water::presets::gpu_flip::…` |
 | 11 | `primitives/testkit.rs`, `testkit/{face_grid_scenes,whitewater_scene,whitewater_fingerprints}` | glue | each constructor beside the crate that owns the node; scene builders to the registration testkit | split by node ownership (sections 3.1–3.6) |
 
-Re-derivation at stage 1 entry: `scripts/water_crate_edges.py crates/manifold-nodes-water/src`; a CUT row not in this table is listed in the stage report before any edit.
+Re-derivation at stage 1 entry: the edge census (retired at S5) over `crates/manifold-nodes-water/src`; a CUT row not in this table is listed in the stage report before any edit.
 
 ---
 
@@ -357,16 +357,16 @@ Order against open work: stages 1–5 start after `lane/water-cpu-flip-removal` 
 
 ### S1 — Cuts inside the crate (one lane, one commit)
 
-- **Entry:** 6.6, 6.2, 6.3, 6.4 on main. `scripts/water_crate_edges.py` (copied from the scratchpad path in the bead) prints the section 1.2 table; a differing row is listed before editing.
+- **Entry:** 6.6, 6.2, 6.3, 6.4 on main. the edge census (copied from the scratchpad path in the bead; retired at S5) printed the section 1.2 table; a differing row is listed before editing.
 - **Read-back:** sections 1.2, 2 (D3, D4, D9, D12), 3.9. Restate the eleven cuts and the D4 relocations.
-- **Deliverables:** the eleven cuts of section 3.9 and the D4 relocations (`migration/`, `presets/`, `testkit/conformance.rs`, `testkit/preset_extents.rs`, the `primitives/testkit.rs` split); `TICK` to `manifold_physics::clock::TICK` (D12) if 6.6 has not already done it; `CoupledRigidFrame`/`CoupledRigidLayout` in `src/coupled_frame.rs` if 6.6 left them elsewhere; `scripts/water_crate_edges.py` with a `dev.py` verb (`scripts/test_dev.py` enforces the table); `manifold-app/src/ui_bridge/project.rs` re-pointed to `presets::gpu_flip`.
-- **Gate:** `scripts/water_crate_edges.py` → zero CUT rows; `cargo nextest run -p manifold-nodes-water`; `cargo clippy -p manifold-nodes-water -p manifold-app --tests -- -D warnings`; `scripts/gpu_proofs_gate.py` scoped (cut 2 touches `gpu_flip_step.rs`, so the `gpu_flip_` row runs — accepted once); INV-W4, INV-W5, INV-W9.
+- **Deliverables:** the eleven cuts of section 3.9 and the D4 relocations (`migration/`, `presets/`, `testkit/conformance.rs`, `testkit/preset_extents.rs`, the `primitives/testkit.rs` split); `TICK` to `manifold_physics::clock::TICK` (D12) if 6.6 has not already done it; `CoupledRigidFrame`/`CoupledRigidLayout` in `src/coupled_frame.rs` if 6.6 left them elsewhere; the edge census with a `dev.py` verb (retired at S5); `manifold-app/src/ui_bridge/project.rs` re-pointed to `presets::gpu_flip`.
+- **Gate:** the edge census (retired at S5) → zero CUT rows; `cargo nextest run -p manifold-nodes-water`; `cargo clippy -p manifold-nodes-water -p manifold-app --tests -- -D warnings`; `scripts/gpu_proofs_gate.py` scoped (cut 2 touches `gpu_flip_step.rs`, so the `gpu_flip_` row runs — accepted once); INV-W4, INV-W5, INV-W9.
 - **Demo:** L2 — the two preset stills, pixel-diff 0 (Peter looks; agents diff).
 - **Forbidden:** any new trait or generic to make a cut compile (a function that needs one was cut in the wrong place — stop); moving a file into a new crate; re-exports; "while I'm here" edits.
 
 ### S2 — Carve `manifold-water-rigid` (one lane, one commit)
 
-- **Entry:** S1 landed; 6.8 landed (or the D11 default recorded in the report); `scripts/water_crate_edges.py` → zero CUT rows.
+- **Entry:** S1 landed; 6.8 landed (or the D11 default recorded in the report); the edge census (retired at S5) → zero CUT rows.
 - **Read-back:** D1 rigid row, D2, D5, D6, D7, D11, sections 3.1, 4.1, 5, 6.4, 8.
 - **Deliverables:** `crates/manifold-water-rigid/{Cargo.toml,src/lib.rs}`; `git mv` of the section 3.1 files; path rewrites (`crate::physics::` → `manifold_water_rigid::physics::` in every importer, including `manifold-nodes/tests` and `manifold-app/tests`); wire registrations for `RigidBody` and `FieldValue` moved; workspace members; `manifold-nodes-water` depends on it; `crate_layering.rs` row + INV-W2 word census + INV-W3 feature pin (first landing of both); `gate_policy.py` rows re-keyed for the moved paths; `source_roots.rs` lines; `manifold-nodes/Cargo.toml` dev-dependency with `testkit` where its tests construct rigid types.
 - **Gate:** INV-W1, W2, W3, W4, W5, W7, W8, W9, W10; `cargo clippy -p manifold-water-rigid -p manifold-nodes-water -p manifold-nodes -p manifold-app --tests -- -D warnings`; `scripts/gpu_proofs_gate.py` scoped (expect the CS-rigid GPU members); section 7 timing A/B on both presets.
@@ -394,7 +394,7 @@ Order against open work: stages 1–5 start after `lane/water-cpu-flip-removal` 
 ### S5 — Review, measurement, retirement (lead + one lane)
 
 - **Entry:** S4 landed.
-- **Deliverables:** the widening review (D8) as one commit per crate narrowing what the review rejects; crate `lib.rs` doc headers in the house voice; `scripts/water_crate_edges.py` and its verb deleted (Cargo is the oracle now); `DEVELOPMENT_REFERENCE.md` crate table rows for the six crates; `docs/DEVELOPMENT_REFERENCE.md` module layout; this doc's status line → `SHIPPED` with the supersession sweep (`rg 'manifold-nodes-water/src/(liquid|physics|matter|whitewater|primitives)' docs/ memory` → each hit re-pathed or tombstoned; BUG-hkbdp.6.10 (water map doc) owns the water design-doc lifecycle sweep and cites this doc as the crate contract); the after-measurement: warm edit-rebuild timings for one file per crate, same method as RENDERER_CRATE_SPLIT's post-T1 baseline, written into section 1.1 (The crate today).
+- **Deliverables:** the widening review (D8) as one commit per crate narrowing what the review rejects; crate `lib.rs` doc headers in the house voice; the edge census and its verb deleted (Cargo is the oracle now); `DEVELOPMENT_REFERENCE.md` crate table rows for the six crates; `docs/DEVELOPMENT_REFERENCE.md` module layout; this doc's status line → `SHIPPED` with the supersession sweep (`rg 'manifold-nodes-water/src/(liquid|physics|matter|whitewater|primitives)' docs/ memory` → each hit re-pathed or tombstoned; BUG-hkbdp.6.10 (water map doc) owns the water design-doc lifecycle sweep and cites this doc as the crate contract); the after-measurement: warm edit-rebuild timings for one file per crate, same method as RENDERER_CRATE_SPLIT's post-T1 baseline, written into section 1.1 (The crate today).
 - **Gate:** `cargo clippy --workspace -- -D warnings` once (the only workspace sweep of the campaign — six-crate landing, justified); `scripts/landing_gate.py`; `MANIFOLD_RENDER_TRACE=1` run on both presets (content-thread gate, no frame over 20 ms beyond main's); `design_status.py --lifecycle-check`.
 - **Demo:** none — L1. The measurement and the layering test are the artifact.
 

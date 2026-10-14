@@ -4,7 +4,7 @@
 
 ## Slots and effort
 
-Slot names reach the Claude models directly: `fable` is Fable 5.1, `opus` is Opus 5.5, `sonnet` is Sonnet 5.5, `haiku` is Haiku. The agent-launch guard prints the live map on every deny (`live map: …`); trust that over this page if they disagree.
+Slot names (`fable`, `opus`, `sonnet`, `haiku`) reach Claude models directly. Which model each resolves to is the agent-launch guard's live map (`.claude/hooks/agent-launch-guard.py`, read from the session env and printed on every deny as `live map: …`); this page names no versions.
 
 **Effort:** agents run at medium effort by default and at high for hard judgment work (diagnosis, GPU, design, reviews, audits). Never pin an agent to low.
 
@@ -12,7 +12,7 @@ Slot names reach the Claude models directly: `fable` is Fable 5.1, `opus` is Opu
 
 | Seat | Model | Work |
 |---|---|---|
-| Lead | Opus 5.5, or Fable 5.1 for the hardest design sessions | Design, judgment, briefs, review, landing. Owns every decision and every landed diff. The only orchestrator and the only seat that lands. |
+| Lead | Opus, or Fable for the hardest design sessions | Design, judgment, briefs, review, landing. Owns every decision and every landed diff. The only orchestrator and the only seat that lands. |
 | Opus lane | `opus` | Physics, GPU solvers and shaders, diagnosis, audits, anything that can hard-lock the Mac. |
 | Fable lane | `fable` | Hard whole-system root-cause work. |
 | Sonnet lane | `sonnet` | Fully decided work: app and UI wiring, tooling scripts, doc sweeps, test and flow runs, mechanical code moves. |

@@ -54,7 +54,7 @@ Each phase ships working on its own.
 
 ### Phase A — Layout reshape  ✅ DONE
 
-Pure geometry, no behavior change. All in the `ScreenLayout` single source of truth ([crates/manifold-ui/src/layout.rs](../crates/manifold-ui/src/layout.rs)) plus the resize-handle in [crates/manifold-app/src/ui_root.rs](../crates/manifold-app/src/ui_root.rs):
+Pure geometry, no behavior change. All in the `ScreenLayout` single source of truth ([crates/manifold-ui/src/layout.rs](../crates/manifold-ui/src/layout.rs)) plus the resize-handle in [crates/manifold-app/src/ui_root/mod.rs](../crates/manifold-app/src/ui_root/mod.rs):
 
 - `content_area()` → full width (was offset right of the left-side inspector).
 - New `top_region()` → below transport, above timeline, full width.
@@ -72,7 +72,7 @@ The two-column `InspectorCompositePanel` relocates to the top-right as-is (it re
 1. **One `InspectorScope` as the single source of truth**, derived from selection: clip → `Clip`; else layer → `Layer`; else `Master`. The only new state is a small `master_scope_active: bool` on the existing `UISelectionState` (set when the Master tab is clicked, cleared on any clip/layer selection). The active tab is otherwise pure-derived — this is what makes "always mirror" true with one authority.
 2. **Tab click = navigate the hierarchy** (changes selection, never forks from it): Layer tab → select the clip's layer; Group tab → select the parent `Group` layer; Clip tab → select the clip; Master → set the flag, deselect.
 3. **Contextual tab set** computed from the selected item's `parent_layer_id` ancestry.
-4. **Render a tab strip** in the inspector View tree and build **only the active scope's** content (today both Master and Layer build simultaneously, [crates/manifold-ui/src/panels/inspector.rs](../crates/manifold-ui/src/panels/inspector.rs)). Add `Group` to the `InspectorTab` enum and route it to the selected group layer.
+4. **Render a tab strip** in the inspector View tree and build **only the active scope's** content (today both Master and Layer build simultaneously, [crates/manifold-ui/src/panels/inspector/mod.rs](../crates/manifold-ui/src/panels/inspector/mod.rs)). Add `Group` to the `InspectorTab` enum and route it to the selected group layer.
 5. **Reuse what exists** — the `SelectInspectorTab` action, per-tab effect routing, and the selection→tab derive fn are already built; this phase tightens them into one bidirectional binding and deletes any now-redundant independent tab state.
 
 **Settled decision (revised — tabs are a view, not a selection change):** a tab is a **scope pin** over the live selection, never a selection edit. The pin generalises the original Master-only pin to all rungs: `scope_pin: Option<(InspectorTab, u64)>` on `UIState`, active iff the stored `selection_version` still matches — so any selection change auto-clears it (zero edits to the selection mutators), and the inspector falls back to the selection-derived default scope. Clicking a tab calls `pin_scope(tab)` and repoints only the inspector's layer *focus* (`active_layer`): Clip/Layer focus the selection's own layer, Group focuses its group ancestor, Master needs none. **The timeline selection is never touched**, so the whole `Clip · Layer · Group · Master` chain stays available no matter which rung you're viewing, and the clip you were on stays selected.

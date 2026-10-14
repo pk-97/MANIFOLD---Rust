@@ -637,6 +637,20 @@ class GpuProofsGateTests(unittest.TestCase):
         self.assertIn("new SLOW: m::new_slow", text)
         self.assertEqual(committed.read_text(), before)
 
+    def test_complete_record_drops_keys_the_run_did_not_produce(self):
+        import json, tempfile
+        import gpu_scope
+        d = Path(tempfile.mkdtemp())
+        self.addCleanup(lambda: __import__("shutil").rmtree(d, ignore_errors=True))
+        committed = d / "committed.json"
+        committed.write_text(json.dumps({"tests": {"p/b/m::kept": 90.0, "p/b/m::deleted": 50.0}}))
+        timings = [("p", "b", "m::kept", 10.0, "ok", True)]
+        with patch.object(gpu_scope, "TIMES_PATH", committed):
+            gate.write_times_json(d / "partial.json", timings, merge=True)
+            gate.write_times_json(d / "full.json", timings, merge=True, complete=True)
+        self.assertIn("p/b/m::deleted", json.loads((d / "partial.json").read_text())["tests"])
+        self.assertEqual(json.loads((d / "full.json").read_text())["tests"], {"p/b/m::kept": 10.0})
+
     def test_over_budget_message_says_how_to_fix(self):
         out = io.StringIO()
         with contextlib.redirect_stdout(out):

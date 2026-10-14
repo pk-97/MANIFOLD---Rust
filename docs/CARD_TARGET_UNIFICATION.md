@@ -107,7 +107,7 @@ The foundation is written and compiles as a lib. It is stashed (not committed,
 because it can't build the workspace until Stage B lands). `git stash show -p
 stash@{0}` to restore. It does:
 
-- `crates/manifold-core/src/project.rs` — adds `layer_id_for_effect(&EffectId)
+- `crates/manifold-core/src/project/mod.rs` — adds `layer_id_for_effect(&EffectId)
   -> Option<LayerId>` (the owning layer for layer/clip effects; `None` for
   master). Powers the envelope-cleanup reach.
 - `crates/manifold-editing/src/commands/effects.rs` — `ToggleEffectCommand`,

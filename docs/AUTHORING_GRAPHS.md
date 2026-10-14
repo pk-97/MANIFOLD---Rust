@@ -83,7 +83,7 @@ instead of nine).
 ## 3. presetMetadata — the performance surface
 
 Observed-complete field set (authoritative structs: `PresetMetadata` in
-`crates/manifold-core/src/effects.rs`):
+`crates/manifold-core/src/effects/mod.rs`):
 
 - `id`, `displayName`, `category`, `oscPrefix`, `available: bool`, `isLineBased`.
 - `params: [ParamSpec]` — the cards. Fields: `id`, `name`, `min`, `max`,
@@ -192,4 +192,4 @@ before committing defaults.
 | Why bindings target nodeId | [NODE_ID_TARGETING.md](NODE_ID_TARGETING.md) |
 | Writing a new primitive | [ADDING_PRIMITIVES.md](ADDING_PRIMITIVES.md) (audit-precondition section first) |
 | Array/channel wire types | [CHANNEL_TYPE_SYSTEM.md](CHANNEL_TYPE_SYSTEM.md) |
-| Authoritative metadata structs | `crates/manifold-core/src/effects.rs` |
+| Authoritative metadata structs | `crates/manifold-core/src/effects/mod.rs` |

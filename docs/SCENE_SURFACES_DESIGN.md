@@ -14,7 +14,7 @@ Peter, 2026-10-13, on the split and the order: "Camera first, most useful contro
 
 **Binding constraints** (docs/DESIGN_AUTHORING.md section 1 (the intake)): *hot path* — none; the lookup runs when a manifest is built (load, structural edit), both projections run on the structural sync path, and the per-frame value channel is untouched (id join, WIDGET_TREE INV-6). *Thread residency* — projection on the UI thread from `Arc<Project>` snapshots; every mutation through `EditingService` or `MutateProject`. *Time model* — not involved. *Persistence* — yes, and the largest change here: saved projects stop carrying names, ranges and roles for any control the lookup can describe, and carry the user's choices (rename, slider range, curve, invert, section, pin, fold) per control instead. The canonical fixture (`Liveschool Live Show V6 LEDS.manifold`) is pre-3D, its controls already track their templates, and it must load and save byte-identically. Param ids never change, so mappings, automation lanes, OSC addresses and macros survive every phase. *Performance surface* — the card is the performance surface; MIDI, OSC, Ableton and automation rows are part of every phase that touches it.
 
-Companions: docs/SCENE_PANEL_EXPOSURE_CONVERGENCE_DESIGN.md (the predecessor; its section 5 (Decisions — resolved by Peter) binds here except where D2 and D13 say otherwise). docs/PARAM_STORAGE_DESIGN.md (bundled params already track their template; D2 here finishes that model for graph-local exposures). docs/WIDGET_TREE_DESIGN.md section 5b (agent contract and enforcement) (the row recipe every row change follows). docs/MATERIAL_INSPECTOR_DESIGN.md (its D3 classification table is the shape of the scene table here). docs/SCENE_SETUP_PANEL_DESIGN.md (outliner and structural verbs, still standing).
+Companions: docs/SCENE_PANEL_EXPOSURE_CONVERGENCE_DESIGN.md (the predecessor; its section 5 (Decisions — resolved by Peter) binds here except where D2 and D13 say otherwise). docs/archive/PARAM_STORAGE_DESIGN.md (bundled params already track their template; D2 here finishes that model for graph-local exposures). docs/WIDGET_TREE_DESIGN.md section 5b (agent contract and enforcement) (the row recipe every row change follows). docs/MATERIAL_INSPECTOR_DESIGN.md (its D3 classification table is the shape of the scene table here). docs/SCENE_SETUP_PANEL_DESIGN.md (outliner and structural verbs, still standing).
 
 ---
 
@@ -530,7 +530,7 @@ Common to every phase. **Entry:** the status line reads APPROVED; `git -C "/User
 
 ### P1 — The live lookup and the saved-control format (core, io, registration; no visible change)
 - **Entry:** P0 landed. Anchors: `instance_serde.rs:34`, `:47-63`, `:135-145`, `:155-196`, `:272-300`, `:356`; `params.rs:62-94`, `:167`; core `scene_exposure.rs:22-48`, `:381`; `preset_definition_registry.rs:340`; `effects/instance.rs:375`, `:413`; `manifold-app/src/bin/project_tool.rs`.
-- **Read-back:** D2, D7, D13, sections 3.2, 3.4, 3.8; docs/PARAM_STORAGE_DESIGN.md D6 (calibration). Restate where the join runs, what is saved per control, and the three old-project rules.
+- **Read-back:** D2, D7, D13, sections 3.2, 3.4, 3.8; docs/archive/PARAM_STORAGE_DESIGN.md D6 (calibration). Restate where the join runs, what is saved per control, and the three old-project rules.
 - **Deliverables:**
   - foundation `param_range.rs` and the `CardPin` enum (3.1).
   - core `param_lookup.rs` (3.2): `NodeParamProvider` is the renamed `SceneExposureMetadataProvider`, installed by `manifold-nodes` registration beside the `PRESET_DEFINITIONS` fill.
