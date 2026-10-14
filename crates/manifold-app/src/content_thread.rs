@@ -616,6 +616,17 @@ impl ContentThread {
 
         self.engine
             .tick_midi_input(&mut self.midi_input, &mut self.clip_launcher, realtime);
+        // A NoteOff's recorded take (and a NoteOn's missing layer) commits
+        // here, before the tick syncs clips, as one undo step each (D13).
+        let live_commits = self.engine.take_live_commits();
+        self.execute_engine_commits(live_commits);
+        // Notes held for a layer that now exists play on this same tick.
+        if self.midi_input.has_replay() {
+            self.engine
+                .tick_midi_input(&mut self.midi_input, &mut self.clip_launcher, realtime);
+            let live_commits = self.engine.take_live_commits();
+            self.execute_engine_commits(live_commits);
+        }
 
         #[cfg(feature = "profiling")]
         let _midi_input_ms = _t0.elapsed().as_secs_f64() * 1000.0;
@@ -625,6 +636,12 @@ impl ContentThread {
         // commands via SyncArbiter. Snapshot read-only state before mutable borrows.
         #[cfg(feature = "profiling")]
         let _t0 = std::time::Instant::now();
+
+        // The tick audit (D24, INV-22): from here through `engine.tick`, the
+        // project changes only in Values, the audited tick writes and what
+        // the gateway stamps.
+        let tick_stamps = self.editing_service.stamps();
+        let tick_window = self.engine.project().map(manifold_editing::edit::tick_audit::open);
 
         self.tick_sync_controllers();
 
@@ -662,6 +679,10 @@ impl ContentThread {
             frame_count: self.frame_count,
         };
         let mut tick_result = self.engine.tick(ctx);
+        if let (Some(window), Some(p)) = (tick_window, self.engine.project()) {
+            let gateway = self.editing_service.stamps().moved_since(&tick_stamps);
+            manifold_editing::edit::tick_audit::close(window, p, gateway);
+        }
         // The engine's clock follows the project rate (D10); the tick grid
         // follows the clock, so the two never run at different rates.
         let clock_fps = f64::from(self.engine.frame_rate());
@@ -723,15 +744,7 @@ impl ContentThread {
         }
 
         // 6. Percussion tick
-        let beat = self.engine.current_beat();
-        if let Some(p) = self.engine.project_mut() {
-            self.percussion_orchestrator.tick(
-                self.time_since_start.as_f32(),
-                p,
-                &mut self.editing_service,
-                beat.as_f32(),
-            );
-        }
+        self.tick_percussion();
 
         // 6a2. Commit any automation recording gestures that finished this
         // tick (section 5) — one undo entry per gesture, built by
@@ -739,13 +752,10 @@ impl ContentThread {
         // pass inside `self.engine.tick()` above. Mirrors the percussion
         // tick just above: `&mut Project` + `&mut EditingService` handed to
         // the command synchronously, on the same content-thread frame.
-        if !tick_result.pending_gesture_commits.is_empty()
-            && let Some(p) = self.engine.project_mut()
-        {
-            for cmd in tick_result.pending_gesture_commits.drain(..) {
-                self.editing_service.execute(cmd, p);
-            }
-        }
+        let gesture_commits = std::mem::take(&mut tick_result.pending_gesture_commits);
+        self.execute_engine_commits(gesture_commits);
+        let structural_commits = std::mem::take(&mut tick_result.pending_structural_commits);
+        self.execute_engine_commits(structural_commits);
 
         // 6b. Video prewarm — pass lookahead candidates to VideoRenderer
         //     so decoders are opened before clips become active (prevents
@@ -1774,9 +1784,7 @@ impl ContentThread {
             } else {
                 ClockAuthority::Internal
             };
-            if let Some(project) = self.engine.project_mut() {
-                project.settings.clock_authority = auto;
-            }
+            manifold_playback::transport_controller::write_clock_authority(&mut self.engine, auto);
             auto
         };
 
@@ -1831,8 +1839,11 @@ impl ContentThread {
         self.osc_receiver.update();
 
         // OSC parameter router — apply any pending param writes from OSC messages.
-        if let Some(p) = self.engine.project_mut() {
-            self.osc_param_router.apply(p);
+        if self.osc_param_router.has_pending()
+            && let Some(edit) = self.engine.project_edit()
+        {
+            let router = &self.osc_param_router;
+            self.editing_service.mutate(ChangeSet::of(&[Part::Values]), edit, |p| router.apply(p));
         }
 
         // Ableton bridge — drain AbletonOSC replies and apply macro values.
@@ -1847,17 +1858,23 @@ impl ContentThread {
         if self.ableton_bridge.take_validation_dirty() {
             self.reactions.session_discovered = true;
             if self.engine.project().is_some_and(|p| self.ableton_bridge.validation_would_change(p))
-                && let Some(p) = self.engine.project_mut()
+                && let Some(edit) = self.engine.project_edit()
             {
                 let bridge = &self.ableton_bridge;
-                self.editing_service.mutate(ChangeSet::of(&[Part::Mappings]), p, |p| bridge.validate_mappings(p));
+                self.editing_service.mutate(ChangeSet::of(&[Part::Mappings]), edit, |p| bridge.validate_mappings(p));
                 self.reactions.publish_pending = true;
             }
             self.run_reactions();
         }
 
-        if let Some(p) = self.engine.project_mut() {
-            self.ableton_bridge.apply(p, self.time_since_start.0);
+        if self.ableton_bridge.has_values_to_apply()
+            && let Some(edit) = self.engine.project_edit()
+        {
+            let bridge = &mut self.ableton_bridge;
+            let now = self.time_since_start.0;
+            self.editing_service.mutate(ChangeSet::of(&[Part::Values]), edit, |p| {
+                bridge.apply(p, now);
+            });
         }
 
         // OSC timecode sync — M4L mode only. `enable_osc`/`disable_osc` had
@@ -2040,41 +2057,25 @@ impl ContentThread {
     // ═══════════════════════════════════════════════════════════════
 
     /// Arm/disarm the tempo recording session based on transport state.
+    /// Starting writes nothing; ending is the session-end Settings write.
     /// Port of C# PlaybackController.UpdateRecordingSessionState lines 1098.
     fn update_recording_session_state(&mut self, authority: ClockAuthority) {
         let should_record = self.engine.is_recording()
             && self.engine.current_state() == PlaybackState::Playing
             && authority != ClockAuthority::Osc;
-
-        let default_bpm = self
-            .engine
-            .project()
-            .map_or(120.0_f32, |p| p.settings.bpm.0);
-
-        // Capture live tempo source for the get_source_at_beat callback.
-        let live_tempo = self.engine.try_get_live_external_tempo();
-        let get_source_at_beat = |_beat: f32| -> TempoPointSource {
-            if let Some((_, source)) = live_tempo {
-                source
-            } else {
-                TempoPointSource::Unknown
-            }
-        };
-
-        if let Some(project) = self.engine.project_mut() {
-            self.tempo_recorder.update_session_state(
-                should_record,
-                &mut project.recording_provenance,
-                &mut project.tempo_map,
-                default_bpm,
-                &get_source_at_beat,
-            );
+        let active = self.tempo_recorder.is_session_active();
+        if should_record && !active {
+            self.tempo_recorder.start_session();
+        } else if !should_record && active {
+            self.end_tempo_recording_session();
         }
     }
 
     /// Apply resolved external tempo to tempo map (recording) or global BPM (non-recording).
+    /// Every write here is an audited tick write (D24).
     /// Port of C# PlaybackController.ApplyResolvedTempo lines 1099.
     fn apply_resolved_tempo(&mut self, authority: ClockAuthority) {
+        use manifold_editing::edit::{TickField, tick_write};
         // Guard: no project → clear live tempo state.
         // Port of C# ApplyResolvedTempo lines 260-264.
         if self.engine.project().is_none() {
@@ -2099,56 +2100,51 @@ impl ContentThread {
                 return;
             }
         };
+        if authority == ClockAuthority::Osc {
+            return;
+        }
 
         // A recorded tempo point pairs the frame's time with its exact beat.
-        let current_beat = self.engine.frame_beat();
-        let current_time = self.engine.current_time();
+        let current_beat = self.engine.frame_beat().as_f32();
+        let current_time = self.engine.current_time().as_f32();
 
         let mut tempo_map_changed = false;
-
-        if let Some(project) = self.engine.project_mut()
-            && authority != ClockAuthority::Osc
-        {
-            if should_record {
-                // Studio recording: append tempo automation points over time.
-                // Port of C# ApplyResolvedTempo lines 1117-1122.
-                tempo_map_changed = self.tempo_recorder.try_record_tempo_point(
-                    &mut project.tempo_map,
-                    current_beat.as_f32(),
-                    current_time.as_f32(),
-                    bpm,
-                    source,
-                );
-                if tempo_map_changed {
-                    self.tempo_recorder.append_tempo_change(
-                        &mut project.recording_provenance,
-                        current_time.as_f32(),
-                        current_beat.as_f32(),
-                        bpm,
-                        source,
-                    );
-                }
-            } else if project.tempo_map.point_count() <= 1 && authority == ClockAuthority::Internal
-            {
-                // No automation lane authored and no external position source:
-                // treat tempo as a global master value.
-                // Compare quantized values so raw float jitter doesn't trigger writes.
-                // Port of C# ApplyResolvedTempo lines 1127-1134.
-                //
-                // When MidiClock or Link is active, do NOT write to the tempo map —
-                // the project BPM is updated via sync_project_bpm_from_current_beat()
-                // for display only. Writing the tempo map causes beat re-derivation
-                // from stale time values, which makes the timeline stutter.
-                let map_bpm = project
-                    .tempo_map
-                    .get_bpm_at_beat(Beats::ZERO, project.settings.bpm);
-                let q_resolved_bpm = BeatQuantizer::quantize_bpm(bpm);
-                if (map_bpm.0 - q_resolved_bpm).abs() >= TempoRecorder::BPM_THRESHOLD {
-                    project
-                        .tempo_map
-                        .add_or_replace_point(Beats::ZERO, Bpm(bpm), source, 0.001);
-                    tempo_map_changed = true;
-                }
+        if should_record {
+            // Studio recording: append tempo automation points over time.
+            // Port of C# ApplyResolvedTempo lines 1117-1122.
+            let recorder = &mut self.tempo_recorder;
+            if let Some(edit) = self.engine.project_edit() {
+                tick_write(TickField::SessionTempoPoints, edit, |p| {
+                    tempo_map_changed =
+                        recorder.try_record_tempo_point(&mut p.tempo_map, current_beat, current_time, bpm, source);
+                });
+            }
+            if tempo_map_changed && let Some(edit) = self.engine.project_edit() {
+                let recorder = &mut self.tempo_recorder;
+                tick_write(TickField::RecordingProvenance, edit, |p| {
+                    recorder.append_tempo_change(&mut p.recording_provenance, current_time, current_beat, bpm, source);
+                });
+            }
+        } else if authority == ClockAuthority::Internal {
+            // No automation lane authored and no external position source:
+            // treat tempo as a global master value. Compare quantized values
+            // so raw float jitter doesn't trigger writes.
+            // Port of C# ApplyResolvedTempo lines 1127-1134.
+            //
+            // When MidiClock or Link is active, do NOT write to the tempo map —
+            // the project BPM is updated via sync_project_bpm_from_current_beat()
+            // for display only. Writing the tempo map causes beat re-derivation
+            // from stale time values, which makes the timeline stutter.
+            let differs = self.engine.project().is_some_and(|p| {
+                let map_bpm = p.tempo_map.get_bpm_at_beat_immut(Beats::ZERO, p.settings.bpm);
+                p.tempo_map.point_count() <= 1
+                    && (map_bpm.0 - BeatQuantizer::quantize_bpm(bpm)).abs() >= TempoRecorder::BPM_THRESHOLD
+            });
+            if differs && let Some(edit) = self.engine.project_edit() {
+                tick_write(TickField::BaseTempo, edit, |p| {
+                    p.tempo_map.add_or_replace_point(Beats::ZERO, Bpm(bpm), source, 0.001);
+                });
+                tempo_map_changed = true;
             }
         }
 
@@ -2158,8 +2154,10 @@ impl ContentThread {
         }
     }
 
-    /// End the tempo recording session if active (called from Pause/Stop).
-    /// Port of C# PlaybackController.Pause/Stop → tempoRecorder.EndSessionIfActive.
+    /// End the tempo recording session if active (Pause, Stop, or recording
+    /// switched off while playing). The recorded lane is one Settings write
+    /// (D24): the UI receives it, and the tempo reconcile skips it, since the
+    /// session's points are what the playhead already followed.
     pub(crate) fn end_tempo_recording_session(&mut self) {
         if !self.tempo_recorder.is_session_active() {
             return;
@@ -2175,13 +2173,95 @@ impl ContentThread {
             }
         };
 
-        if let Some(project) = self.engine.project_mut() {
-            self.tempo_recorder.end_session_if_active(
-                &mut project.recording_provenance,
-                &mut project.tempo_map,
-                default_bpm,
-                &get_source_at_beat,
-            );
+        // A tempo edit already waiting in this pass reconciles against its
+        // own retained map first.
+        self.run_reactions();
+        if let Some(edit) = self.engine.project_edit() {
+            let recorder = &mut self.tempo_recorder;
+            self.editing_service.mutate(ChangeSet::of(&[Part::Settings]), edit, |p| {
+                recorder.end_session_if_active(
+                    &mut p.recording_provenance,
+                    &mut p.tempo_map,
+                    default_bpm,
+                    &get_source_at_beat,
+                );
+            });
+            self.reactions.tempo_retained = None;
+            self.reactions.publish_pending = true;
+        } else {
+            self.tempo_recorder.reset();
+        }
+    }
+
+    /// Execute commands the engine handed back (automation gestures, live
+    /// takes, missing layers) through the gateway, one undo step each.
+    fn execute_engine_commits(&mut self, commands: Vec<Box<dyn manifold_editing::command::Command>>) {
+        if commands.is_empty() {
+            return;
+        }
+        if let Some(mut edit) = self.engine.project_edit() {
+            for cmd in commands {
+                self.editing_service.execute(cmd, edit.reborrow());
+            }
+        }
+    }
+
+    /// Drive percussion detection. Only a finished result writes, and it
+    /// writes through the gateway: its commands go to history, and the
+    /// clip's cached analysis and any trimmed or renamed lanes are declared.
+    fn tick_percussion(&mut self) {
+        let now = self.time_since_start.as_f32();
+        if !self.percussion_orchestrator.result_ready() {
+            self.percussion_orchestrator.tick(now, None);
+            return;
+        }
+        let Some(edit) = self.engine.project_edit() else { return };
+        let orchestrator = &mut self.percussion_orchestrator;
+        self.editing_service.mutate_with_history(edit, |p, editing| {
+            let before = DetectionWrite::observe(p);
+            orchestrator.tick(now, Some((p, editing)));
+            ((), before.touches(p))
+        });
+        self.reactions.publish_pending = true;
+    }
+
+    /// Re-place or clear a clip's detected triggers through the gateway.
+    pub(crate) fn rewrite_clip_triggers(&mut self, clip_id: manifold_core::ClipId, clear: bool) {
+        let Some(edit) = self.engine.project_edit() else { return };
+        let orchestrator = &mut self.percussion_orchestrator;
+        self.editing_service.mutate_with_history(edit, |p, editing| {
+            let before = DetectionWrite::observe(p);
+            if clear {
+                orchestrator.clear_clip_triggers(clip_id, p, editing);
+            } else {
+                orchestrator.replan_clip(clip_id, p, editing);
+            }
+            ((), before.touches(p))
+        });
+        self.reactions.publish_pending = true;
+    }
+}
+
+/// What a detection pass changes outside its recorded commands: the clip's
+/// cached analysis and routing, overlap trims and removals (Clips, always),
+/// and lane names (Layers, only when one moved). Name sums are order-free so
+/// observing allocates nothing.
+struct DetectionWrite {
+    names: u64,
+}
+
+impl DetectionWrite {
+    fn observe(p: &manifold_core::project::Project) -> Self {
+        let hasher = ahash::RandomState::with_seeds(5, 6, 7, 8);
+        let names = p.timeline.layers.iter().map(|l| hasher.hash_one(&l.name)).fold(0u64, u64::wrapping_add);
+        Self { names }
+    }
+
+    fn touches(&self, p: &manifold_core::project::Project) -> ChangeSet {
+        if Self::observe(p).names != self.names {
+            ChangeSet::of(&[Part::Clips, Part::Layers])
+        } else {
+            ChangeSet::of(&[Part::Clips])
         }
     }
 }
@@ -2195,6 +2275,79 @@ mod tests {
 
     // The run loop publishes after each command drain, before the paced
     // frame, so the UI confirms edits even while the GPU is behind.
+
+    fn one_layer(layer_type: manifold_core::types::LayerType) -> Project {
+        let mut project = Project::default();
+        let mut layer = manifold_core::layer::Layer::new("Pad".into(), layer_type, 0);
+        layer.midi_note = 60;
+        layer.midi_channel = -1;
+        project.timeline.layers.push(layer);
+        project.timeline.reindex_layers();
+        project
+    }
+
+    fn last_snapshot(rx: &crossbeam_channel::Receiver<crate::content_state::ContentState>) -> Option<std::sync::Arc<Project>> {
+        rx.try_iter().filter_map(|s| s.project_snapshot).last()
+    }
+
+    /// BUG-mmct0.5 (MIDI recording commits bypass EditingService): a recorded
+    /// take commits through the gateway, so the UI receives it and Cmd+Z
+    /// removes it.
+    #[test]
+    fn midi_take_reaches_the_ui_and_undoes() {
+        use manifold_core::change::Part;
+        use manifold_playback::midi_input::{MidiNoteEvent, MidiNoteEventType};
+        let mut thread = headless_content_thread(one_layer(manifold_core::types::LayerType::Trigger), 64, 64);
+        thread.timer.set_frame_clocked(true);
+        let (state_tx, state_rx) = crossbeam_channel::unbounded();
+        thread.handle_command(ContentCommand::SetRecording(true));
+        thread.handle_command(ContentCommand::Play);
+        let note = |event_type, sequence| MidiNoteEvent {
+            event_type, note: 60, velocity: 1.0, channel: 0, source_index: 0, absolute_tick: -1, sequence,
+        };
+        thread.midi_input.inject_note(note(MidiNoteEventType::NoteOn, 1));
+        for _ in 0..30 {
+            thread.tick_frame(&state_tx);
+        }
+        let _ = last_snapshot(&state_rx);
+        let before = thread.editing_service.stamps();
+        thread.midi_input.inject_note(note(MidiNoteEventType::NoteOff, 2));
+        thread.tick_frame(&state_tx);
+        assert!(thread.editing_service.stamps().moved_since(&before).contains(Part::Clips), "the take moves the Clips stamp");
+        let snap = last_snapshot(&state_rx).expect("the take publishes");
+        assert_eq!(snap.timeline.layers[0].clips.len(), 1, "the UI receives the take");
+
+        thread.handle_command(ContentCommand::Undo);
+        thread.tick_frame(&state_tx);
+        let snap = last_snapshot(&state_rx).expect("the undo publishes");
+        assert!(snap.timeline.layers[0].clips.is_empty(), "Cmd+Z removes the take");
+    }
+
+    /// BUG-7f4d (percussion import outside EditingService): clearing a clip's
+    /// detected triggers writes through the gateway, so the UI receives it.
+    #[test]
+    fn clear_detected_triggers_reaches_the_ui() {
+        use manifold_core::change::Part;
+        let mut project = one_layer(manifold_core::types::LayerType::Generator);
+        let source = manifold_core::ClipId::from("audio-source");
+        let mut trigger = manifold_core::clip::TimelineClip::new_trigger(manifold_core::Beats(0.0), manifold_core::Beats(1.0));
+        trigger.detection_source = Some(source.clone());
+        trigger.layer_id = project.timeline.layers[0].layer_id.clone();
+        project.timeline.layers[0].clips.push(trigger);
+        let mut thread = headless_content_thread(project, 64, 64);
+        let (state_tx, state_rx) = crossbeam_channel::unbounded();
+        thread.tick_frame(&state_tx);
+        let _ = last_snapshot(&state_rx);
+        let before = thread.editing_service.stamps();
+        thread.handle_command(ContentCommand::ClearClipTriggers(source));
+        thread.tick_frame(&state_tx);
+        assert!(thread.editing_service.stamps().moved_since(&before).contains(Part::Clips));
+        let snap = last_snapshot(&state_rx).expect("the clear publishes");
+        assert!(snap.timeline.layers[0].clips.is_empty());
+        thread.handle_command(ContentCommand::Undo);
+        thread.tick_frame(&state_tx);
+        assert_eq!(last_snapshot(&state_rx).expect("the undo publishes").timeline.layers[0].clips.len(), 1);
+    }
 
     #[test]
     fn mutation_publishes_snapshot_without_a_tick() {

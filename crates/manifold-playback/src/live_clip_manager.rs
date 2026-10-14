@@ -31,7 +31,6 @@ pub trait LiveClipHost {
     fn mark_compositor_dirty(&mut self);
     fn invalidate_lookahead_prewarm(&mut self);
     fn register_clip_lookup(&mut self, clip_id: &str, clip: &TimelineClip);
-    fn record_command(&mut self, cmd: Box<dyn Command>);
     fn beat_to_timeline_time(&self, beat: Beats) -> Seconds;
 }
 
@@ -117,6 +116,17 @@ pub struct LiveClipManager {
     // Completed live intervals retained until the scheduler samples their
     // control state. Reuses the caller's scratch buffer when drained.
     completed_control_refs: Vec<crate::scheduler::ActiveClipRef>,
+
+    // Structural writes a NoteOn or NoteOff asks for (a recorded take, a
+    // missing layer). The content thread executes them through
+    // EditingService (D13); nothing here writes the timeline.
+    pending_commands: Vec<Box<dyn Command>>,
+    // Layer count the queued layer additions reach, so a burst of notes
+    // before the drain queues each missing layer once.
+    pending_layer_count: usize,
+    // A note was turned away for a missing layer; the MIDI input holds it
+    // and replays it once the layer exists.
+    dropped_note: bool,
 }
 
 impl LiveClipManager {
@@ -131,7 +141,41 @@ impl LiveClipManager {
             clip_starts: HashMap::with_capacity(8),
             oneshot_ends: HashMap::with_capacity(8),
             completed_control_refs: Vec::with_capacity(8),
+            pending_commands: Vec::new(),
+            pending_layer_count: 0,
+            dropped_note: false,
         }
+    }
+
+    /// True when `layer_index` exists. Otherwise queues the missing layers as
+    /// commands and turns the note away: the content thread executes them and
+    /// the MIDI input replays the note in the same tick (D13).
+    fn ensure_layers(&mut self, project: &Project, layer_index: i32) -> bool {
+        let need = (layer_index + 1).max(0) as usize;
+        let have = project.timeline.layers.len();
+        if have >= need {
+            return true;
+        }
+        for idx in have.max(self.pending_layer_count)..need {
+            let layer = manifold_core::layer::Layer::new(format!("Layer {}", idx + 1), LayerType::Video, idx as i32);
+            self.pending_commands
+                .push(Box::new(manifold_editing::commands::layer::AddLayerCommand::from_layer(layer, idx)));
+        }
+        self.pending_layer_count = self.pending_layer_count.max(need);
+        self.dropped_note = true;
+        false
+    }
+
+    /// Whether the last note was turned away for a missing layer (and clear it).
+    pub fn take_dropped_note(&mut self) -> bool {
+        std::mem::take(&mut self.dropped_note)
+    }
+
+    /// The structural commands queued since the last call, for the content
+    /// thread to execute through `EditingService`.
+    pub fn take_pending_commands(&mut self) -> Vec<Box<dyn Command>> {
+        self.pending_layer_count = 0;
+        std::mem::take(&mut self.pending_commands)
     }
 
     // ─── Accessors ───
@@ -417,10 +461,9 @@ impl LiveClipManager {
         realtime_now: f64,
         midi_note: i32,
     ) -> Option<TimelineClip> {
-        // Ensure enough layers exist
-        project
-            .timeline
-            .ensure_layer_count((layer_index + 1) as usize);
+        if !self.ensure_layers(project, layer_index) {
+            return None;
+        }
 
         let spb = 60.0 / host.get_bpm_at_beat(host.current_beat());
 
@@ -489,9 +532,9 @@ impl LiveClipManager {
         realtime_now: f64,
         midi_note: i32,
     ) -> Option<TimelineClip> {
-        project
-            .timeline
-            .ensure_layer_count((layer_index + 1) as usize);
+        if !self.ensure_layers(project, layer_index) {
+            return None;
+        }
 
         let spb = 60.0 / host.get_bpm_at_beat(host.current_beat());
 
@@ -887,12 +930,11 @@ impl LiveClipManager {
 
             // AddClipCommand enforces non-overlap internally (trims/deletes
             // existing clips that collide with the committed clip).
-            let mut add_cmd = AddClipCommand::new(committed.clone(), layer_lid);
-            add_cmd.execute(project);
+            let add_cmd = AddClipCommand::new(committed.clone(), layer_lid);
 
             host.register_clip_lookup(&committed.id, &committed);
             committed_clip = Some(committed);
-            host.record_command(Box::new(add_cmd));
+            self.pending_commands.push(Box::new(add_cmd));
         }
 
         // Recording provenance finalization.
@@ -1083,7 +1125,6 @@ mod tests {
     use super::*;
     use manifold_core::layer::Layer;
     use manifold_core::types::LayerType;
-    use manifold_editing::command::Command;
 
     struct TestHost {
         beat: Beats,
@@ -1111,7 +1152,6 @@ mod tests {
         fn mark_compositor_dirty(&mut self) {}
         fn invalidate_lookahead_prewarm(&mut self) {}
         fn register_clip_lookup(&mut self, _clip_id: &str, _clip: &TimelineClip) {}
-        fn record_command(&mut self, _cmd: Box<dyn Command>) {}
         fn beat_to_timeline_time(&self, beat: Beats) -> Seconds { Seconds(beat.0 * 0.5) }
     }
 

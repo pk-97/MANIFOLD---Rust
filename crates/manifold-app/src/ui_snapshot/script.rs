@@ -586,10 +586,7 @@ impl Runner {
                     // Editing owns the fixture between steps. Temporarily lend
                     // that same project to the engine, preserving runtime state
                     // and avoiding a second scheduler in the UI harness.
-                    std::mem::swap(
-                        &mut data.project,
-                        self.modulation_engine.project_mut().expect("initialized engine"),
-                    );
+                    assert!(self.modulation_engine.swap_project(&mut data.project), "initialized engine");
                     self.modulation_engine.locate(manifold_core::Seconds(self.clock as f64));
                     let result = self.modulation_engine.tick(manifold_playback::engine::TickContext {
                         frames: 1,
@@ -606,10 +603,7 @@ impl Runner {
                     // Consume the frame so Fire controls cannot fill a retained
                     // delivery queue that this harness never renders.
                     self.modulation_engine.with_trigger_pulses(|_, _, _| ());
-                    std::mem::swap(
-                        &mut data.project,
-                        self.modulation_engine.project_mut().expect("initialized engine"),
-                    );
+                    assert!(self.modulation_engine.swap_project(&mut data.project), "initialized engine");
                     // The live App ticks the engine on the content thread.
                     let engine_work = manifold_core::work_count::thread_work_snapshot().since(&engine_work);
                     self.work.excluded = self.work.excluded.plus(&engine_work);

@@ -421,7 +421,7 @@ fn tempo_edit_during_play_keeps_beat() {
     assert_eq!(engine.transport_frame(), 288);
     let before = engine.current_beat_f64();
     let old_map = engine.project().unwrap().tempo_map.clone();
-    engine.project_mut().unwrap().tempo_map.add_or_replace_point(Beats(8.0), Bpm(128.0), TempoPointSource::Manual, 0.001);
+    settings_write(&mut engine, |p| p.tempo_map.add_or_replace_point(Beats(8.0), Bpm(128.0), TempoPointSource::Manual, 0.001));
     engine.reconcile_tempo_edit(&old_map, Bpm(150.0));
     // Beat 12 now sits at 3.2 s + 4 beats at 128 BPM = 5.075 s, frame 304.5.
     assert_eq!(engine.transport_frame(), 305);
@@ -443,7 +443,7 @@ fn fps_change_remaps_forward() {
         tick(&mut engine, 1);
     }
     assert_eq!(engine.transport_frame(), 7);
-    engine.project_mut().unwrap().settings.frame_rate = 24.0;
+    settings_write(&mut engine, |p| p.settings.frame_rate = 24.0);
     tick(&mut engine, 1);
     // 7/60 s is frame 2.8 at 24 fps: remapped forward to 3, then one advance.
     assert_eq!(engine.frame_rate(), 24.0);
@@ -1007,3 +1007,10 @@ fn unquantised_loops_restart_on_whole_frames() {
     }
 }
 
+
+/// A user settings write through the gateway, as the content thread makes it.
+fn settings_write(engine: &mut PlaybackEngine, f: impl FnOnce(&mut manifold_core::project::Project)) {
+    let settings = manifold_core::change::ChangeSet::of(&[manifold_core::change::Part::Settings]);
+    let edit = engine.project_edit().expect("project");
+    manifold_editing::service::EditingService::new().mutate(settings, edit, f);
+}

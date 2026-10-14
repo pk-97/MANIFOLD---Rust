@@ -85,12 +85,16 @@ fn project_with_draggable_clip() -> manifold_core::project::Project {
 /// P3 helper: move layer 0's first clip into layer 1 (a drag across layers),
 /// keeping the clip id. Returns the clip id.
 fn drag_clip_to_layer_1(engine: &mut PlaybackEngine) -> manifold_core::ClipId {
-    let project = engine.project_mut().expect("project");
-    let mut clip = project.timeline.layers[0].clips.remove(0);
-    clip.layer_id = project.timeline.layers[1].layer_id.clone();
-    let id = clip.id.clone();
-    project.timeline.layers[1].clips.push(clip);
-    id
+    let mut id = None;
+    let edit = engine.project_edit().expect("project");
+    let clips = manifold_core::change::ChangeSet::of(&[manifold_core::change::Part::Clips]);
+    manifold_editing::service::EditingService::new().mutate(clips, edit, |project| {
+        let mut clip = project.timeline.layers[0].clips.remove(0);
+        clip.layer_id = project.timeline.layers[1].layer_id.clone();
+        id = Some(clip.id.clone());
+        project.timeline.layers[1].clips.push(clip);
+    });
+    id.expect("moved clip")
 }
 
 fn stub_gen(engine: &PlaybackEngine) -> &StubRenderer {

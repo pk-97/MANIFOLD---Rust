@@ -2543,7 +2543,7 @@ mod scene_card_convergence_tests {
                 match command {
                     ContentCommand::ClearAutomationPreviews => engine.clear_automation_previews(),
                     ContentCommand::Execute(command) => {
-                        service.execute(command, engine.project_mut().unwrap());
+                        service.execute(command, engine.project_edit().unwrap());
                         commits += 1;
                     }
                     _ => panic!("unexpected preview completion command"),
@@ -2564,7 +2564,7 @@ mod scene_card_convergence_tests {
             assert_eq!(committed[0].beat, Beats(4.0));
             assert_eq!(committed[0].value, 0.35);
             assert_eq!(committed[1], original[1]);
-            assert!(service.undo(engine.project_mut().unwrap()));
+            assert!(service.undo(engine.project_edit().unwrap()));
             assert_eq!(
                 engine
                     .project()
@@ -2577,7 +2577,7 @@ mod scene_card_convergence_tests {
                     .points,
                 original
             );
-            assert!(service.redo(engine.project_mut().unwrap()));
+            assert!(service.redo(engine.project_edit().unwrap()));
             assert_eq!(
                 engine
                     .project()

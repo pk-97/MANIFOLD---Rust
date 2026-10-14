@@ -29,7 +29,7 @@ fn add_water(project: &mut Project, layer: &LayerId, render: u32, editing: &mut 
     assert_eq!(effective_def(project, layer), before, "UI only queues content edits");
     let ContentCommand::ExecuteSelecting(command, selection) = rx.try_recv().unwrap() else { panic!("content insertion") };
     let pending = selection.capture(project);
-    editing.execute(command, project);
+    editing.execute(command, &mut *project);
     assert_eq!(editing.take_rejection(), None);
     let Some(crate::edit_selection::EditSelection::Object { object_id, .. }) = pending.resolve(project) else { panic!("water selection") };
     assert!(rows(&effective_def(project, layer)).iter().any(|row| row.object_node_id == object_id && row.is_group && row.liquid_domain.is_some()));
