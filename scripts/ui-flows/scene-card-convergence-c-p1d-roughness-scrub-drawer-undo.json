@@ -324,7 +324,7 @@
     "ScrollTo": {
       "target": {
         "Query": {
-          "text": "💡 sun"
+          "text": "💡 Sun"
         }
       }
     }
@@ -333,7 +333,7 @@
     "Pointer": {
       "target": {
         "Query": {
-          "text": "💡 sun"
+          "text": "💡 Sun"
         }
       },
       "gesture": {
