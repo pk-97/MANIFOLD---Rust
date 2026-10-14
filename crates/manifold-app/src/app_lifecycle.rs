@@ -140,7 +140,7 @@ impl Application {
         match rx.recv_timeout(std::time::Duration::from_secs(5)) {
             Ok(Some((project, version))) => {
                 self.local_project = project;
-                self.needs_structural_sync = true;
+                self.ui_edits.stamps.project_replaced();
                 Some(version)
             }
             result => {
@@ -836,13 +836,16 @@ impl Application {
                 insert_index,
                 None,
             );
-        layer_cmd.execute(&mut self.local_project);
-        let Some(layer_id) = layer_cmd.inserted_layer_id() else {
+        let mut local = crate::ui_bridge::ProjectRef::new(&mut self.local_project, &mut self.ui_edits, &content_tx);
+        let inserted = local.executed_by(|project| {
+            layer_cmd.execute(project);
+            let layer_id = layer_cmd.inserted_layer_id()?;
+            Some((Box::new(layer_cmd) as Box<dyn Command>, layer_id))
+        });
+        let Some(layer_id) = inserted else {
             log::error!("[Import] layer command produced no layer id — aborting clip add");
             return;
         };
-        let layer_boxed: Box<dyn Command + Send> = Box::new(layer_cmd);
-        let _ = content_tx.send(ContentCommand::Execute(layer_boxed));
 
         // 2. A default generator clip on that layer, so the model renders at
         //    once. The clip is a bare time-span; the layer's graph drives the
@@ -853,11 +856,7 @@ impl Application {
             manifold_core::Beats::from_f32(drop_beat.max(0.0)),
             manifold_core::Beats::from_f32(DEFAULT_MODEL_DURATION_BEATS),
         );
-        let mut clip_cmd =
-            manifold_editing::commands::clip::AddClipCommand::new(clip, layer_id);
-        clip_cmd.execute(&mut self.local_project);
-        let clip_boxed: Box<dyn Command + Send> = Box::new(clip_cmd);
-        let _ = content_tx.send(ContentCommand::Execute(clip_boxed));
+        local.execute(Box::new(manifold_editing::commands::clip::AddClipCommand::new(clip, layer_id)));
     }
 
     /// Open. Delegates to ProjectIOService.open_project.
@@ -932,6 +931,7 @@ impl Application {
             // Update local_project BEFORE sending to content thread so UI
             // can rebuild the timeline in this same frame.
             self.local_project = project.clone();
+            self.ui_edits.stamps.project_replaced();
             // Sync the global preset overlay to THIS project's embedded
             // presets on every apply — open, snapshot restore, and New
             // Project all pass here, so a previous project's forks never
@@ -989,11 +989,6 @@ impl Application {
             } else {
                 Some(path)
             };
-        }
-
-        // Structural sync
-        if action.needs_structural_sync {
-            self.needs_structural_sync = true;
         }
 
         // Non-blocking load-repair notice (BUG-063,
@@ -1107,7 +1102,6 @@ impl Application {
                 log::info!("[ProjectIO] Restored history snapshot {hash}");
                 self.apply_project_io_action(ProjectIOAction {
                     apply_project: Some(project),
-                    needs_structural_sync: true,
                     ..Default::default()
                 });
             }
@@ -1140,7 +1134,6 @@ impl Application {
                 log::info!("[ProjectIO] Opened history snapshot {hash} as a copy");
                 self.apply_project_io_action(ProjectIOAction {
                     apply_project: Some(project),
-                    needs_structural_sync: true,
                     // Empty path → apply_project_io_action clears
                     // current_project_path (untitled).
                     set_project_path: Some(std::path::PathBuf::new()),

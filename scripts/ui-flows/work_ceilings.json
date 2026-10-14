@@ -74,7 +74,6 @@
         "InspectorSync": 3,
         "LaneProjection": 64,
         "OverviewRepaint": 3,
-        "PresetListProjection": 2,
         "ProjectSync": 3,
         "RegionRebuild": 59,
         "SlotInvalidate": 139,
@@ -485,30 +484,14 @@
     "work-trim-undo": {
       "undo": {
         "ChromeLayout": 3,
-        "ClipProjection": 1,
-        "FrameAlloc": 2161,
-        "FullBuild": 1,
-        "GridBitmapRepaint": 3,
-        "InspectorSync": 1,
-        "LaneProjection": 2,
-        "OverviewRepaint": 1,
-        "ProjectSync": 1,
-        "SlotInvalidate": 7,
+        "FrameAlloc": 101,
         "ValuePush": 1
       }
     },
     "work-values-undo": {
       "undo": {
         "ChromeLayout": 3,
-        "ClipProjection": 1,
-        "FrameAlloc": 2162,
-        "FullBuild": 1,
-        "GridBitmapRepaint": 3,
-        "InspectorSync": 1,
-        "LaneProjection": 2,
-        "OverviewRepaint": 1,
-        "ProjectSync": 1,
-        "SlotInvalidate": 7,
+        "FrameAlloc": 125,
         "ValuePush": 1
       }
     },

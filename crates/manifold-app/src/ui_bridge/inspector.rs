@@ -122,9 +122,9 @@ mod scene_card_convergence_tests {
         }
 
         fn dispatch(&mut self, action: &PanelAction, project: &mut Project) -> DispatchResult {
-            let mut stamps = crate::frame_plan::UiStamps::default();
+            let mut edits = crate::gesture_preview::UiEdits::default();
             let mut ctx = crate::ui_bridge::DispatchCtx {
-                project: crate::ui_bridge::ProjectRef::new(project, &mut stamps, &self.content_tx),
+                project: crate::ui_bridge::ProjectRef::new(project, &mut edits, &self.content_tx),
                 content_tx: &self.content_tx,
                 content_state: &self.content_state,
                 ui: &mut self.ui,
@@ -159,9 +159,9 @@ mod scene_card_convergence_tests {
             project: &mut Project,
             editor_target: Option<&manifold_core::GraphTarget>,
         ) -> DispatchResult {
-            let mut stamps = crate::frame_plan::UiStamps::default();
+            let mut edits = crate::gesture_preview::UiEdits::default();
             let mut ctx = crate::ui_bridge::DispatchCtx {
-                project: crate::ui_bridge::ProjectRef::new(project, &mut stamps, &self.content_tx),
+                project: crate::ui_bridge::ProjectRef::new(project, &mut edits, &self.content_tx),
                 content_tx: &self.content_tx,
                 content_state: &self.content_state,
                 ui: &mut self.ui,
@@ -2422,7 +2422,6 @@ mod scene_card_convergence_tests {
             cursor: manifold_ui::cursors::CursorManager,
             active_layer: Option<LayerId>,
             needs_rebuild: bool,
-            needs_structural_sync: bool,
             automation_lanes_dirty: bool,
             scroll_dirty: crate::ui_root::ScrollDirty,
             invalidate: Vec<usize>,
@@ -2440,7 +2439,6 @@ mod scene_card_convergence_tests {
                     cursor: manifold_ui::cursors::CursorManager::default(),
                     active_layer: None,
                     needs_rebuild: false,
-                    needs_structural_sync: false,
                     automation_lanes_dirty: false,
                     scroll_dirty: crate::ui_root::ScrollDirty::default(),
                     invalidate: Vec::new(),
@@ -2456,7 +2454,6 @@ mod scene_card_convergence_tests {
                     &mut self.cursor,
                     &mut self.active_layer,
                     &mut self.needs_rebuild,
-                    &mut self.needs_structural_sync,
                     &mut self.automation_lanes_dirty,
                     &mut self.scroll_dirty,
                     &mut self.invalidate,

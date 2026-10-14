@@ -196,7 +196,7 @@ pub(crate) fn apply_update(
             selection.select_layer(id.clone());
             selection.pin_scope(InspectorTab::Layer);
             *active_layer = Some(id.clone());
-            ui.pending_layer_reveal = Some(id.clone());
+            ui.request_layer_reveal(id.clone());
         }
         EditSelection::Light { layer_id, light_id } => {
             if !light_ids(project, layer_id).contains(light_id) {
@@ -316,7 +316,7 @@ mod tests {
         ));
         assert_eq!(active, Some(added_id.clone()));
         assert_eq!(selection.primary_selected_layer_id(), Some(&added_id));
-        assert_eq!(ui.pending_layer_reveal, Some(added_id));
+        assert_eq!(ui.pending_layer_reveal(), Some(&added_id));
         assert!(!apply_update(
             &mut ui,
             &project,
@@ -348,6 +348,6 @@ mod tests {
         assert_eq!(ui.last_edit_selection_sequence, Some(1));
         assert!(active.is_none());
         assert!(selection.primary_selected_layer_id().is_none());
-        assert!(ui.pending_layer_reveal.is_none());
+        assert!(ui.pending_layer_reveal().is_none());
     }
 }
