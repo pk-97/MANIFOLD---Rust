@@ -885,6 +885,13 @@ impl SliderDragState {
         }
     }
 
+    /// [`Self::sync`] with the value text already written, for a caller that
+    /// formats it without allocating.
+    pub fn sync_text(&mut self, tree: &mut UITree, value: f32, text: &str) {
+        let norm = BitmapSlider::value_to_normalized(value, self.min, self.max);
+        self.sync_with_norm(tree, value, norm, text);
+    }
+
     /// Sync with explicit normalized value (for sliders where norm != value,
     /// e.g. slip where value is seconds but norm is value/max_slip).
     pub fn sync_with_norm(&mut self, tree: &mut UITree, value: f32, norm: f32, text: &str) {

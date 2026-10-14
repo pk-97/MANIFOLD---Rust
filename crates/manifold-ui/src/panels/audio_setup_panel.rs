@@ -590,6 +590,23 @@ impl AudioSetupPanel {
         self.scroll.scroll_offset()
     }
 
+    /// The rect the dock was built at, as moved since.
+    pub fn rect(&self) -> Rect {
+        self.panel_rect
+    }
+
+    /// The built dock's nodes moved by `(dx, dy)`: the rects it holds for hit
+    /// tests, the scope blit and the scroll body move with them.
+    pub fn follow_translate(&mut self, dx: f32, dy: f32) {
+        self.panel_rect.x += dx;
+        self.panel_rect.y += dy;
+        if let Some(r) = self.scope_rect.as_mut() {
+            r.x += dx;
+            r.y += dy;
+        }
+        self.scroll.translate(dx, dy);
+    }
+
     /// The modal chrome as a host `View`: the hit-testable background (it must
     /// swallow stray clicks — see below) and the title strip with its close
     /// button. The device / send / scope rows are built imperatively into
@@ -1144,11 +1161,14 @@ impl AudioSetupPanel {
                 self.scope_lane_label_ids.push(id);
             }
 
+            // The meters wait hidden at the scope's corner until a level
+            // places them, so they move with the dock like the rest of it.
+            let (px, py) = self.scope_rect.map_or((0.0, 0.0), |r| (r.x, r.y));
             for (band, slot) in self.band_meter_ids.iter_mut().enumerate() {
                 let label = tree.add_label(
                     Some(self.content_parent),
-                    0.0,
-                    0.0,
+                    px,
+                    py,
                     0.0,
                     0.0,
                     BAND_METER_LABELS[band],
@@ -1161,8 +1181,8 @@ impl AudioSetupPanel {
                 );
                 let track = tree.add_panel(
                     Some(self.content_parent),
-                    0.0,
-                    0.0,
+                    px,
+                    py,
                     0.0,
                     0.0,
                     UIStyle {
@@ -1175,8 +1195,8 @@ impl AudioSetupPanel {
                 );
                 let fill = tree.add_panel(
                     Some(self.content_parent),
-                    0.0,
-                    0.0,
+                    px,
+                    py,
                     0.0,
                     0.0,
                     UIStyle { bg_color: band_color(band), corner_radius: color::HAIRLINE_RADIUS, ..UIStyle::default() },

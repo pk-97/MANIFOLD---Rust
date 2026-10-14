@@ -306,6 +306,11 @@ pub struct UIRoot {
     pub macro_mapping_descs: [Vec<String>; manifold_core::MACRO_COUNT],
     /// Whether each macro slot has an Ableton mapping (for "Remove" menu item).
     pub macro_ableton_mapped: [bool; manifold_core::MACRO_COUNT],
+    /// The macro slider labels with their Ableton suffix, rewritten in place
+    /// by every value push.
+    pub(crate) macro_display_labels: [String; manifold_core::MACRO_COUNT],
+    /// The LED exit path label, rewritten in place by every value push.
+    pub(crate) led_exit_label: String,
 
     /// Node ID for the video/timeline split handle (color feedback on hover/drag).
     /// From Unity PanelResizeHandle.cs — idle/hover/drag color states.
@@ -590,6 +595,8 @@ impl UIRoot {
             macro_labels: std::array::from_fn(|_| String::new()),
             macro_mapping_descs: std::array::from_fn(|_| Vec::new()),
             macro_ableton_mapped: [false; manifold_core::MACRO_COUNT],
+            macro_display_labels: std::array::from_fn(|_| String::new()),
+            led_exit_label: String::new(),
             split_handle_id: None,
             inspector_handle_id: None,
             audio_setup_handle_id: None,
@@ -734,8 +741,12 @@ impl UIRoot {
             MainRegion::SplitHandles => self
                 .split_handle_id
                 .map_or((0.0, 0.0), |id| delta(self.tree.get_bounds(id), self.layout.split_handle())),
+            MainRegion::AudioDock => {
+                let (dx, dy) = delta(self.audio_setup_panel.rect(), self.layout.audio_setup());
+                self.audio_setup_panel.follow_translate(dx, dy);
+                (dx, dy)
+            }
             MainRegion::Inspector
-            | MainRegion::AudioDock
             | MainRegion::LayerHeaders
             | MainRegion::Viewport
             | MainRegion::Overlays
@@ -744,6 +755,41 @@ impl UIRoot {
                 (0.0, 0.0)
             }
         }
+    }
+
+    /// Give a resized region its new rect in place: a chrome bar takes the
+    /// rect and the frame's chrome layout lays it out there (the planner
+    /// marks a resized bar in place; its structure does not depend on its
+    /// size), the split handle takes it. False for a region with no in-place
+    /// path; the caller rebuilds it then. Only regions the planner resizes
+    /// have an arm (`frame_plan::plan_regions`).
+    pub(crate) fn follow_resize(&mut self, region: MainRegion) -> bool {
+        let rect = match region {
+            MainRegion::Transport => {
+                let rect = self.layout.transport_bar();
+                self.transport.follow_rect(rect);
+                rect
+            }
+            MainRegion::Header => {
+                let rect = self.layout.header();
+                self.header.follow_rect(rect);
+                rect
+            }
+            MainRegion::Footer => {
+                let rect = self.layout.footer();
+                self.footer.follow_rect(rect);
+                rect
+            }
+            MainRegion::SplitHandles => {
+                let Some(id) = self.split_handle_id else { return false };
+                let rect = self.layout.split_handle();
+                self.tree.set_bounds(id, rect);
+                rect
+            }
+            _ => return false,
+        };
+        self.tree.set_region_rect(region.id(), rect);
+        true
     }
 
     /// Whether any node of an atlas region is dirty, so the offscreen needs a

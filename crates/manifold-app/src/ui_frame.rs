@@ -154,6 +154,8 @@ pub(crate) struct UiFrameSignals {
     pub rebuild: RegionMask,
     /// The regions the frame plan moves in place, and by how much.
     pub translate: RegionMask,
+    /// The regions whose panel lays out again in place at a new size.
+    pub resize: RegionMask,
     /// The regions whose own view moved without a rebuild. The tree half
     /// moves the audio dock body to its scroll offset here.
     pub in_place: RegionMask,
@@ -236,10 +238,25 @@ pub(crate) fn apply_ui_frame_invalidations(
     }
     // A region rebuilt this frame is built at its new rect already.
     let mut translate = signals.translate;
+    let mut resize = signals.resize;
     for r in regions.iter() {
         translate.remove(r);
+        resize.remove(r);
     }
-    let moved = translate_regions(ui_root, cache.as_deref_mut(), translate);
+    let mut moved = translate_regions(ui_root, cache.as_deref_mut(), translate);
+    for region in resize.iter() {
+        if ui_root.follow_resize(region) {
+            record_work(WorkKind::InPlaceUpdate);
+            moved = true;
+            if let Some(cm) = &mut cache
+                && let Some(slot) = region.panel_slot()
+            {
+                cm.invalidate_slot(slot);
+            }
+        } else {
+            regions.insert(region);
+        }
+    }
     let rebuilt = rebuild_regions(ui_root, cache, regions) || scrolled || moved;
     // Nodes that moved in place slid under a still cursor; no rebuild
     // cleared their hover, so resolve it again where the pointer is.
@@ -506,6 +523,7 @@ pub(crate) fn apply_frame_plan(
         scrolled_in_place: changes.scrolled_in_place,
         rebuild,
         translate: plan.translate,
+        resize: plan.resize,
         in_place: plan.in_place,
         viewport: plan.viewport,
         rects_moved: plan.rects_moved,

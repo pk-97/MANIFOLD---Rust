@@ -10,7 +10,8 @@ use manifold_ui::panels::param_slider_shared::AbletonMappingDisplay;
 use crate::app::SelectionState;
 use crate::ui_root::UIRoot;
 
-use crate::ui_bridge::projection::cards::describe_macro_mapping;
+use crate::ui_bridge::projection::cards::write_macro_mapping;
+use std::fmt::Write as _;
 
 pub use crate::ui_bridge::projection::cards::sync_card_values;
 pub use crate::ui_bridge::projection::driver_readouts::sync_driver_readouts;
@@ -705,6 +706,37 @@ pub fn push_live(
     }
 }
 
+/// Write a macro's Ableton mapping into the display the macros panel builds
+/// from, reusing the held strings; gaining a mapping is the one allocation.
+fn sync_ableton_display(
+    held: &mut Option<AbletonMappingDisplay>,
+    mapping: Option<&manifold_core::ableton_mapping::AbletonParamMapping>,
+) {
+    let Some(m) = mapping else {
+        *held = None;
+        return;
+    };
+    let status = crate::ui_translate::ableton_mapping_status_to_ui(m.status);
+    match held {
+        Some(d) => {
+            d.macro_name.clone_from(&m.address.macro_name);
+            d.track_name.clone_from(&m.address.track_name);
+            d.device_name.clone_from(&m.address.device_name);
+            d.status = status;
+            d.inverted = m.inverted;
+        }
+        None => {
+            *held = Some(AbletonMappingDisplay {
+                macro_name: m.address.macro_name.clone(),
+                track_name: m.address.track_name.clone(),
+                device_name: m.address.device_name.clone(),
+                status,
+                inverted: m.inverted,
+            });
+        }
+    }
+}
+
 /// Values displays: macro, opacity and LED values, card and scene-row values.
 fn push_live_values(
     ui: &mut UIRoot,
@@ -714,76 +746,44 @@ fn push_live_values(
 ) {
     let tree = &mut ui.tree;
 
-    // Macro slider values + labels/mapping counts for context menus
-    let macro_vals: Vec<f32> = project
-        .settings
-        .macro_bank
-        .slots
-        .iter()
-        .map(|s| s.value)
-        .collect();
-    // Display labels include [ABL] suffix — used for slider display only.
-    // Raw slot.label is stored separately in ui.macro_labels for dropdown menus.
-    let macro_display_labels: Vec<String> = project
-        .settings
-        .macro_bank
-        .slots
-        .iter()
-        .enumerate()
-        .map(|(i, slot)| {
-            let base = if slot.label.is_empty() {
-                format!("M{}", i + 1)
-            } else {
-                slot.label.clone()
-            };
-            if let Some(mapping) = &slot.ableton_mapping {
-                use manifold_core::ableton_mapping::AbletonMappingStatus;
-                let suffix = match mapping.status {
-                    AbletonMappingStatus::Active => "[ABL]",
-                    AbletonMappingStatus::Dormant => "[ABL-]",
-                    AbletonMappingStatus::Ambiguous => "[ABL?]",
-                };
-                format!("{base} {suffix}")
-            } else {
-                base
-            }
-        })
-        .collect();
-    // Set Ableton display data before sync so build can use them.
-    let macro_abl_displays: Vec<Option<AbletonMappingDisplay>> = project
-        .settings
-        .macro_bank
-        .slots
-        .iter()
-        .map(|slot| {
-            slot.ableton_mapping
-                .as_ref()
-                .map(|m| AbletonMappingDisplay {
-                    macro_name: m.address.macro_name.clone(),
-                    track_name: m.address.track_name.clone(),
-                    device_name: m.address.device_name.clone(),
-                    status: crate::ui_translate::ableton_mapping_status_to_ui(m.status),
-                    inverted: m.inverted,
-                })
-        })
-        .collect();
-    ui.inspector
-        .macros_panel_mut()
-        .set_ableton_displays(&macro_abl_displays);
-    ui.inspector
-        .macros_panel_mut()
-        .sync_values(tree, &macro_vals, &macro_display_labels);
-    for (i, slot) in project.settings.macro_bank.slots.iter().enumerate() {
-        if i < manifold_core::MACRO_COUNT {
-            ui.macro_labels[i].clone_from(&slot.label);
-            ui.macro_mapping_descs[i] = slot
-                .mappings
-                .iter()
-                .map(|m| describe_macro_mapping(&m.target, project))
-                .collect();
-            ui.macro_ableton_mapped[i] = slot.ableton_mapping.is_some();
+    // Macro slider values and labels, and the labels and mapping
+    // descriptions the context menus read. Every string is rewritten in
+    // place, so a push allocates nothing once each has grown to its text.
+    let slots = &project.settings.macro_bank.slots;
+    let shown = slots.len().min(manifold_core::MACRO_COUNT);
+    let mut macro_vals = [0.0; manifold_core::MACRO_COUNT];
+    let abl_displays = ui.inspector.macros_panel_mut().ableton_displays_mut();
+    for (i, slot) in slots.iter().take(shown).enumerate() {
+        macro_vals[i] = slot.value;
+        // The slider label carries the [ABL] suffix; `macro_labels` keeps
+        // the raw label for the menus.
+        let label = &mut ui.macro_display_labels[i];
+        label.clear();
+        if slot.label.is_empty() {
+            let _ = write!(label, "M{}", i + 1);
+        } else {
+            label.push_str(&slot.label);
         }
+        if let Some(mapping) = &slot.ableton_mapping {
+            use manifold_core::ableton_mapping::AbletonMappingStatus;
+            label.push_str(match mapping.status {
+                AbletonMappingStatus::Active => " [ABL]",
+                AbletonMappingStatus::Dormant => " [ABL-]",
+                AbletonMappingStatus::Ambiguous => " [ABL?]",
+            });
+        }
+        sync_ableton_display(&mut abl_displays[i], slot.ableton_mapping.as_ref());
+        ui.macro_labels[i].clone_from(&slot.label);
+        let descs = &mut ui.macro_mapping_descs[i];
+        descs.resize_with(slot.mappings.len(), String::new);
+        for (desc, mapping) in descs.iter_mut().zip(&slot.mappings) {
+            write_macro_mapping(desc, &mapping.target, project);
+        }
+        ui.macro_ableton_mapped[i] = slot.ableton_mapping.is_some();
     }
+    ui.inspector
+        .macros_panel_mut()
+        .sync_values(tree, &macro_vals[..shown], &ui.macro_display_labels[..shown]);
 
     // Active layer opacity and name in the layer chrome.
     if let Some(layer) = active_layer.and_then(|idx| project.timeline.layers.get(idx)) {
@@ -802,14 +802,14 @@ fn push_live_values(
     ui.inspector
         .master_chrome_mut()
         .sync_led_enabled(tree, content_state.led_enabled);
-    // LED exit path label + cached effect names for dropdown
-    let exit_label = super::led_exit_path_label(
+    super::write_led_exit_path_label(
+        &mut ui.led_exit_label,
         project.settings.led_exit_index,
         &project.settings.master_effects,
     );
     ui.inspector
         .master_chrome_mut()
-        .sync_exit_path(tree, &exit_label);
+        .sync_exit_path(tree, &ui.led_exit_label);
 
     // Sync effect card values (master, layer, clip)
     sync_card_values(ui, project, active_layer);

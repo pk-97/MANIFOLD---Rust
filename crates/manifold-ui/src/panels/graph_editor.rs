@@ -110,6 +110,32 @@ impl GraphEditorPanel {
         }
     }
 
+    /// Move the shown inspector's live port values in place, allocating
+    /// nothing. False when no inspector shows or its ports are not these
+    /// (by name, in order); the host then sets a new inspector.
+    pub fn update_node_inspector_io(&mut self, inputs: &[(String, f32)], outputs: &[(String, f32)]) -> bool {
+        let Some(insp) = self.node_inspector.as_mut() else {
+            return false;
+        };
+        let same_ports = |shown: &[(String, f32)], live: &[(String, f32)]| {
+            shown.len() == live.len() && shown.iter().zip(live).all(|(a, b)| a.0 == b.0)
+        };
+        if !same_ports(&insp.inputs, inputs) || !same_ports(&insp.outputs, outputs) {
+            return false;
+        }
+        let mut moved = false;
+        for (shown, live) in insp.inputs.iter_mut().zip(inputs).chain(insp.outputs.iter_mut().zip(outputs)) {
+            if shown.1 != live.1 {
+                shown.1 = live.1;
+                moved = true;
+            }
+        }
+        if moved {
+            self.view_version += 1;
+        }
+        true
+    }
+
     /// Draw the "Smart preview" auto-gain toggle into `region` (a row beside /
     /// above the node-output monitor). Returns the checkbox button's tree id so
     /// the host can register its `SetNodePreviewNormalize` click intent through

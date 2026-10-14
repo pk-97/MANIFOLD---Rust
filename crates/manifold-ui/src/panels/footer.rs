@@ -48,7 +48,7 @@ pub struct FooterPanel {
 }
 
 impl FooterPanel {
-    /// The bar's region was translated (UI_INVALIDATION D7): the next
+    /// The bar's region was translated or resized (UI_INVALIDATION D7): the next
     /// in-place update lays out at the rect the nodes moved to.
     pub fn follow_rect(&mut self, rect: Rect) {
         self.rect = rect;
