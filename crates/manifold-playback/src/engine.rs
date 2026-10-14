@@ -2560,21 +2560,6 @@ impl PlaybackEngine {
         }
     }
 
-    /// `converter_time_at` for readers holding `&self` (the map must already
-    /// be sorted, as it is after load).
-    fn converter_time_at_immut(&self, beat: Beats) -> Seconds {
-        match &self.tempo {
-            TempoSource::Follow => self.follower.time_at(beat),
-            TempoSource::Map { beat_offset } => {
-                let b = Beats(beat.0 - *beat_offset);
-                match &self.project {
-                    Some(p) => TempoMapConverter::beat_to_seconds_immut(&p.tempo_map, b, p.settings.bpm),
-                    None => Seconds(b.0 * 0.5),
-                }
-            }
-        }
-    }
-
     /// Seconds from `b0` to `b1`, from the beat difference (D8): never two
     /// absolute times through the segment.
     fn converter_duration(&mut self, b0: Beats, b1: Beats) -> Seconds {
@@ -3482,8 +3467,9 @@ impl PlaybackEngine {
                     .live_clip_manager
                     .as_ref()
                     .is_some_and(|mgr| mgr.is_live_slot_clip(&entry.clip_id));
-                let clip_end_time = self.converter_time_at_immut(entry.end_beat());
-                if self.should_exclude_recently_started(&entry.clip_id, clip_end_time, is_live_clip)
+                let end_beat = entry.end_beat();
+                let clip_end_time = self.converter_time_at(end_beat);
+                if self.should_exclude_recently_started(&self.compositor_fallback_clips[i].clip_id, clip_end_time, is_live_clip)
                 {
                     continue;
                 }
