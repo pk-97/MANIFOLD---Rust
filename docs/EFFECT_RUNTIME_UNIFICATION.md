@@ -652,7 +652,7 @@ core-side `UserParamBinding` (per-instance) lived as parallel
 structures. That parallel split survived for months before a user-
 visible bug (an exposed slider that silently no-op'd) made it clear
 the duality was load-bearing in only one direction — the runtime did
-not need it. Phases 1–4 of `docs/BINDINGS_UNIFICATION_PLAN.md`
+not need it. Phases 1–4 of `docs/archive/BINDINGS_UNIFICATION_PLAN.md`
 collapsed every parallel-tier path. The end-state matters for anyone
 extending the binding system later, so it's captured here.
 
@@ -727,7 +727,7 @@ gate.
 
 This is the end-state. The plan documents the rationale, the bugs
 that motivated each phase, and the acceptance criteria in detail:
-`docs/BINDINGS_UNIFICATION_PLAN.md`.
+`docs/archive/BINDINGS_UNIFICATION_PLAN.md`.
 
 ---
 

@@ -12,7 +12,7 @@ Symptoms reported by Peter: the blue drop indicator is often wrong; cards are ha
 
 ### Root cause 1: stale `card_y` after in-place scroll (primary)
 
-`crates/manifold-ui/src/panels/inspector.rs:1692-1708` (`update_card_drag`) hit-tests the cursor against `card.card_y()`, a field snapshot written only during `build()` (`param_card.rs:2213` and `param_card.rs:2977`). Wheel and scrollbar scrolling move the actual tree nodes in place via `ScrollContainer::offset_content` (called at `inspector.rs:1477`) and deliberately skip a rebuild (`scrolled_in_place` path). Nothing updates `card_y` on that path.
+`crates/manifold-ui/src/panels/inspector/mod.rs:1692-1708` (`update_card_drag`) hit-tests the cursor against `card.card_y()`, a field snapshot written only during `build()` (`param_card.rs:2213` and `param_card.rs:2977`). Wheel and scrollbar scrolling move the actual tree nodes in place via `ScrollContainer::offset_content` (called at `inspector.rs:1477`) and deliberately skip a rebuild (`scrolled_in_place` path). Nothing updates `card_y` on that path.
 
 Result: indicator Y and drop-target index are off by exactly the scroll delta accumulated since the last rebuild. Correct right after a rebuild, wrong after any scroll — matches "often wrong, not always."
 

@@ -717,7 +717,7 @@ controller alive.
 
 **P7.1 — `ParamDragState` → `DragController<ParamDragTarget>` (one session).**
 Entry: re-run `rg -n 'dragging_param\b|dragging_trim\b|dragging_target_param\b|dragging_decay_param\b|dragging_audio_shape\b|dragging_step_amount\b'
-crates/manifold-ui/src/panels/param_card.rs crates/manifold-ui/src/panels/param_slider_shared.rs`
+crates/manifold-ui/src/panels/param_card/mod.rs crates/manifold-ui/src/panels/param_slider_shared/mod.rs`
 — 49 hits 2026-07-13; a different count → stop and list before touching anything.
 Read-back: D8/D10, drag.rs whole, `ParamDragState` (param_slider_shared.rs:665–707).
 Committed shape (param_slider_shared.rs, replacing the six slots):

@@ -6,7 +6,7 @@
 
 The wave IR (`docs/archive/SEMANTIC_WORKFLOW_PROGRAMS.md` section 2 (The wave IR — the concrete instance we already run)) already names the missing piece: `GATE : Diff -> exit codes [runtime — zero model]`. Today that opcode doesn't exist as machinery — a lane's "green" is a prose claim, and the lead's only verification is re-running the gate or trusting the claim. This design builds GATE as a runtime: one script that executes gates itself, writes typed verdicts to an append-only trail, and fires at four lifecycle points. It is the first component where **the machine, not an agent, says what happened** — the proof of concept for the semantic instruction set. The six proposals from the 2026-07-25 discussion (gate runner, seat preflight, brief linter, verdict-before-merge, wave report, beads queue) are one mechanism with four packs plus a query, not six tools.
 
-Companion docs: `docs/archive/SEMANTIC_WORKFLOW_PROGRAMS.md` (the IR this implements — GATE, plus the soft→hook migration program of section 3 (The enforcement table — the key analytical tool)/section 9 (Open questions / next steps)) · `docs/AGENT_ROUTING.md` (the running roster this serves) · `.claude/orchestration/rt-reflections-r2-queue.md` (R2's pre-flight already carries two items this design subsumes mechanically: verdict rationale, gate discipline).
+Companion docs: `docs/archive/SEMANTIC_WORKFLOW_PROGRAMS.md` (the IR this implements — GATE) · `docs/AGENT_ROUTING.md` (the running roster this serves) · `.claude/orchestration/rt-reflections-r2-queue.md` (R2's pre-flight already carries two items this design subsumes mechanically: verdict rationale, gate discipline).
 
 ## 1. Audit — what exists (verified 2026-07-25, main @ e692762c)
 
@@ -14,11 +14,11 @@ The hooks this audit and the phase briefs below cite as precedents (`agent-tier-
 
 | Piece | Where | State |
 |---|---|---|
-| Deny-capable hook pattern | `.claude/hooks/agent-launch-guard.py`, `agent-tier-spawn-guard.py`, `worktree-guard.py` | exists — PreToolUse hooks deny with spelled-out fixes |
-| Two-tier gate pattern (deny-once + re-check) | `.claude/hooks/workflow-gate.py` | exists — precedent for P4's merge clause |
-| Blocking idle hook (feedback to lane) | `.claude/hooks/lane-report-enforcer.py` | exists — TeammateIdle can block; proves hooks steer lanes mid-flight |
+| Deny-capable hook pattern | `.claude/hooks/agent-launch-guard.py`, `.claude/hooks/worktree-guard.py` | exists — PreToolUse hooks deny with spelled-out fixes |
+| Two-tier gate pattern (deny-once + re-check) | `workflow-gate.py` | retired 2026-10-03 — was the precedent for P4's merge clause |
+| Blocking idle hook (feedback to lane) | `lane-report-enforcer.py` | retired 2026-10-03 — showed TeammateIdle can block and hooks can steer lanes mid-flight |
 | Bash interception point | `.claude/hooks/preToolUseBash.py` (+ `test_preToolUseBash.py`) | exists — P4's merge clause is one rule here, not a new hook |
-| Slot truth source + drift flags | `scripts/seat_tool.py` (`show` prints per-slot drift) | retired 2026-10-01 — script deleted with the provider proxy; pre-wave no longer calls it |
+| Slot truth source + drift flags | `seat_tool.py` (`show` printed per-slot drift) | retired 2026-10-01 — script deleted with the provider proxy; pre-wave no longer calls it |
 | Quota/liveliness reads | litellm `/health/liveliness` | retired — the litellm proxy and usage dashboards were removed |
 | SubagentStop / TaskCompleted hook support | claude binary 2.1.219 (`strings`: `SubagentStop`, `executeTaskCompletedHooks`) | exists — ⚠ VERIFY-AT-IMPL: payload semantics undocumented; probe in P5 |
 | Verdict store | — | **genuinely new** |
@@ -81,8 +81,8 @@ Each phase is one session, Flash-executable: the seams are decided above; phases
 
 ### P1 — gate_runner core + verdict trail
 
-- **Entry state:** main contains `scripts/seat_tool.py` (e692762c) and `.claude/orchestration/` exists. Verify: `scripts/seat_tool.py show` exits 0.
-- **Read-back:** this doc's D1–D5, I1–I4; the workflow-gate two-tier pattern at `.claude/hooks/workflow-gate.py` (shape precedent).
+- **Entry state:** main contained `seat_tool.py` (e692762c, since retired) and `.claude/orchestration/` existed.
+- **Read-back:** this doc's D1–D5, I1–I4; the workflow-gate two-tier pattern (retired hook, shape precedent).
 - **Deliverables:** `scripts/gate_runner.py` with subcommands `per-lane --task --brief --branch --commit` (runs the brief's declared gates, appends verdict), `no-gate --task --reason`, `show --task`; verdicts dir + I2's Edit|Write guard clause in the guard hook; a `tests/` -style self-check script `scripts/gate_runner_selftest.sh`.
 - **Gate:** selftest runs a known-pass gate (exit 0) and a known-fail gate (exit 1): jsonl validates against schema, `pass` fields correct, exit codes propagate, second appends don't rewrite line 1. `python3 -m json.tool` on each line. Negative gate: direct `Edit` of a verdicts file is denied by the I2 clause (probe with a scratch verdict).
 - **Demo:** none — L1.
@@ -91,8 +91,8 @@ Each phase is one session, Flash-executable: the seams are decided above; phases
 ### P2 — pre-wave pack (seat preflight)
 
 - **Entry state:** P1 landed (verdict on main). Verify: `git merge-base --is-ancestor <p1-sha> origin/main`.
-- **Read-back:** D1, D4; `scripts/seat_tool.py` show output shape; the R2 queue's blocking pre-flight list (these checks subsume its mechanical half).
-- **Deliverables:** `gate_runner pre-wave` checks, each a named PASS/FAIL line + one verdict. As built, the seat drift, litellm liveliness and per-seat quota checks were removed 2026-10-01 with the provider proxy; five checks remain: goldens clean (`git status --porcelain tests/fixtures/gltf/goldens/` empty), wave base merged (`git merge-base --is-ancestor` per the queue's check).
+- **Read-back:** D1, D4; the retired seat tool's show output shape; the R2 queue's blocking pre-flight list (these checks subsume its mechanical half).
+- **Deliverables:** `gate_runner pre-wave` checks, each a named PASS/FAIL line + one verdict. As built, the seat drift, litellm liveliness and per-seat quota checks were removed 2026-10-01 with the provider proxy; four checks remain: goldens clean (`git status --porcelain tests/fixtures/gltf/goldens/` empty), wave base merged (`git merge-base --is-ancestor` per the queue's check), hooks registered in settings.json, and the worktree-guard canary denies.
 - **Gate:** live run against the fleet prints all-PASS and exits 0; induced failure (preflight against `LITELLM_URL=http://127.0.0.1:9`) exits 1 naming the dead check.
 - **Demo:** none — L1.
 - **Forbidden moves:** SessionStart-hook auto-run (D4); hard-failing on quota percentage (warn-only — quota is information, not a gate); re-deriving slot state instead of calling seat_tool.

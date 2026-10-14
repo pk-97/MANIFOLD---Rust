@@ -14,7 +14,7 @@ pipeline rides on top unchanged.
 ## 1. The model (decided — don't reopen)
 
 MANIFOLD already has a two-tier param stack (`ParamSlot { base, value }`,
-`crates/manifold-core/src/effects.rs`):
+`crates/manifold-core/src/effects/mod.rs`):
 
 - **Tier 1 — hands** write `base` (persisted, last-writer-wins): UI slider
   commands, Ableton macros (`ableton_bridge.rs` → `set_base_param`), OSC param

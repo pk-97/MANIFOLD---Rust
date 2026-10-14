@@ -165,10 +165,7 @@ Demo: none — L1 numerical fixtures. Forbidden: tuned widths, GPU execution.
 
 The canonical CPU references are `scripts/narrow_band_reference.py` (particle
 lifecycle) and `scripts/narrow_band_grid_reference.py` (RK4 advection, sharp
-combination, union and brute-force Manhattan distance). The earlier
-`scripts/gpu_flip_narrow_band_reference.py` is redundant and is retained
-untouched for lead review; its global reseed deficit and exact-coordinate
-occupancy differ from the required per-cell deficit and half-cell occupancy.
+combination, union and brute-force Manhattan distance).
 
 GPU value-proof filter: `narrow_band` (mask,
 scalar/face advection, combination, deletion, rectangular/diagonal distance,
