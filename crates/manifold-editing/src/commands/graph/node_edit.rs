@@ -830,7 +830,7 @@ impl SetGraphNodeParamCommand {
     /// (one edit, one command). It is WRONG for a drag-cadence commit built
     /// from a live-preview gesture: by the time the ONE commit command's
     /// `execute()` actually runs (locally, or later on the content thread
-    /// once queued `MutateProjectLive` motion writes have already applied),
+    /// once queued `MutateProject` (Values or Shapes) motion writes have already applied),
     /// the graph already holds the POST-drag value, so self-capture would
     /// record `previous_value == new_value` — an undo that restores
     /// nothing. The caller already holds the true pre-drag value (captured
@@ -921,6 +921,10 @@ impl SetGraphNodeParamCommand {
 }
 
 impl Command for SetGraphNodeParamCommand {
+    fn touches(&self) -> manifold_core::change::ChangeSet {
+        use manifold_core::change::{ChangeSet, Part};
+        ChangeSet::of(&[Part::Overrides, Part::Shapes, Part::Values])
+    }
     fn execute(&mut self, project: &mut Project) {
         self.rejection = None;
         self.applied = false;

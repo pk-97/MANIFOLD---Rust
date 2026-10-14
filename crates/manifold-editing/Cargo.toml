@@ -6,12 +6,15 @@ publish = false
 
 [features]
 gpu-proofs = []
+# Fingerprint every part around each edit and panic on an undeclared change (D10).
+change-audit = ["manifold-core/change-audit"]
 
 [dependencies]
 manifold-core = { path = "../manifold-core" }
 
 [dev-dependencies]
 manifold-io = { path = "../manifold-io" }
+manifold-core = { path = "../manifold-core", features = ["change-audit"] }
 inventory = "0.3"
 serde_json = { workspace = true }
 

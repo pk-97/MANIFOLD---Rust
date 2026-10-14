@@ -253,7 +253,7 @@ mod scene_card_convergence_tests {
             &mut project,
         );
         for command in h.drain() {
-            if let ContentCommand::MutateProjectLive(write) = command {
+            if let ContentCommand::MutateProject { f: write, .. } = command {
                 write(&mut content_project);
             }
         }
@@ -600,7 +600,7 @@ mod scene_card_convergence_tests {
         /// The content-thread side of the loop: a real `EditingService` over
         /// its own project, driven exactly the way content_commands.rs drives
         /// it (`Execute` → `service.execute`, `ExecuteBatch` → `execute_batch`,
-        /// `MutateProject(Live|Preview)` → plain closure application, no undo entry).
+        /// `MutateProject` → plain closure application, no undo entry).
         struct ContentSide {
             project: Project,
             service: EditingService,
@@ -646,9 +646,7 @@ mod scene_card_convergence_tests {
                             self.undo_depth += k.max(1);
                             n += 1;
                         }
-                        ContentCommand::MutateProject(f)
-                        | ContentCommand::MutateProjectLive(f)
-                        | ContentCommand::MutateProjectPreview(f) => {
+                        ContentCommand::MutateProject { f, .. } => {
                             f(&mut self.project);
                         }
                         _ => {}
@@ -1014,7 +1012,7 @@ mod scene_card_convergence_tests {
             assert_eq!(commands.len(), 1);
             for command in commands {
                 match command {
-                    ContentCommand::MutateProject(apply) => apply(&mut project),
+                    ContentCommand::MutateProject { f: apply, .. } => apply(&mut project),
                     _ => panic!("show automation must only send a view-state expansion"),
                 }
             }

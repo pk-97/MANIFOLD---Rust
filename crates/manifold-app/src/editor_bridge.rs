@@ -1073,16 +1073,21 @@ impl Application {
     ) {
         let Some(target) = self.mapping_write_target(target, param_id) else { return; };
         let seed_def = self.seed_def_for(&target);
+        // A reshape is a live scalar (Shapes, no reaction); the first tick may
+        // also materialize the graph override (D21).
+        let graph_absent = self
+            .local_project
+            .preset_instance(&target)
+            .is_some_and(|inst| inst.graph.is_none());
         build_mapping_command(&target, param_id, edit.clone(), seed_def.clone())
             .execute(&mut self.local_project);
         let pid = param_id.to_string();
-        // The lean preview arm: this runs once per mouse-move, and a mapping
-        // reshape never touches the video library or the Ableton mapping
-        // table, so the full `MutateProject` maintenance was project-scale
-        // dead work on every tick. The commit (`Execute`) rebuilds listeners.
-        self.send_content_cmd(ContentCommand::MutateProjectPreview(Box::new(move |p| {
-            build_mapping_command(&target, &pid, edit, seed_def).execute(p);
-        })));
+        self.send_content_cmd(ContentCommand::mutate(
+            crate::content_command::touch::shapes_first_move(graph_absent),
+            Box::new(move |p| {
+                build_mapping_command(&target, &pid, edit, seed_def).execute(p);
+            }),
+        ));
     }
 
     /// Commit / single-shot: send the reshape edit as one undoable command.
@@ -2453,9 +2458,7 @@ mod binding_reroute_tests {
             let mut undo = UndoRedoManager::new();
             for command in rx.try_iter() {
                 match command {
-                    ContentCommand::MutateProjectLive(edit)
-                    | ContentCommand::MutateProjectPreview(edit)
-                    | ContentCommand::MutateProject(edit) => edit(&mut project),
+                    ContentCommand::MutateProject { f: edit, .. } => edit(&mut project),
                     ContentCommand::Execute(command) => { undo.execute(command, &mut project); }
                     _ => panic!("unexpected numeric-entry command"),
                 }
@@ -2572,7 +2575,7 @@ mod binding_reroute_tests {
         let mut undo = UndoRedoManager::new();
         for command in rx.try_iter() {
             match command {
-                ContentCommand::MutateProjectPreview(edit) => edit(&mut content_project),
+                ContentCommand::MutateProject { f: edit, .. } => edit(&mut content_project),
                 ContentCommand::Execute(command) => {
                     undo.execute(command, &mut content_project);
                 }
@@ -2602,7 +2605,7 @@ mod binding_reroute_tests {
         assert!(app.scrub.active.is_none());
         assert_eq!(app.target_full_reshape(&owner, "amount").unwrap().5, 2.0);
         assert_eq!(app.target_full_reshape(&other, "amount").unwrap().5, 2.0);
-        assert!(rx.try_iter().all(|cmd| matches!(cmd, ContentCommand::MutateProjectPreview(_))));
+        assert!(rx.try_iter().all(|cmd| matches!(cmd, ContentCommand::MutateProject { touches, .. } if touches.minus(crate::content_command::touch::OVERRIDES_SHAPES).is_empty())));
     }
 
     #[test]

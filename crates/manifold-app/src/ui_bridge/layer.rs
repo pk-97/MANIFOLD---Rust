@@ -48,7 +48,7 @@ pub(super) fn dispatch_layer(
             }
             ContentCommand::send(
                 content_tx,
-                ContentCommand::MutateProject(Box::new(move |p| {
+                ContentCommand::mutate(crate::content_command::touch::LAYERS, Box::new(move |p| {
                     for lid in &target_ids {
                         if let Some((_, layer)) = p.timeline.find_layer_by_id_mut(lid) {
                             layer.is_muted = new_muted;
@@ -81,7 +81,7 @@ pub(super) fn dispatch_layer(
             }
             ContentCommand::send(
                 content_tx,
-                ContentCommand::MutateProject(Box::new(move |p| {
+                ContentCommand::mutate(crate::content_command::touch::LAYERS, Box::new(move |p| {
                     for lid in &target_ids {
                         if let Some((_, layer)) = p.timeline.find_layer_by_id_mut(lid) {
                             layer.analysis_only = new_analysis;
@@ -111,7 +111,7 @@ pub(super) fn dispatch_layer(
             }
             ContentCommand::send(
                 content_tx,
-                ContentCommand::MutateProject(Box::new(move |p| {
+                ContentCommand::mutate(crate::content_command::touch::LAYERS, Box::new(move |p| {
                     for lid in &target_ids {
                         if let Some((_, layer)) = p.timeline.find_layer_by_id_mut(lid) {
                             layer.is_solo = new_solo;
@@ -153,7 +153,7 @@ pub(super) fn dispatch_layer(
             }
             ContentCommand::send(
                 content_tx,
-                ContentCommand::MutateProject(Box::new(move |p| {
+                ContentCommand::mutate(crate::content_command::touch::LAYERS, Box::new(move |p| {
                     for lid in &target_ids {
                         if let Some((_, layer)) = p.timeline.find_layer_by_id_mut(lid) {
                             layer.blit_to_led = new_led;
@@ -211,7 +211,7 @@ pub(super) fn dispatch_layer(
             }
             ContentCommand::send(
                 content_tx,
-                ContentCommand::MutateProject(Box::new(move |p| {
+                ContentCommand::mutate(crate::content_command::touch::LAYERS, Box::new(move |p| {
                     for lid in &target_ids {
                         if let Some((_, layer)) = p.timeline.find_layer_by_id_mut(lid) {
                             layer.is_collapsed = new_collapsed;
@@ -276,7 +276,7 @@ pub(super) fn dispatch_layer(
             }
             ContentCommand::send(
                 content_tx,
-                ContentCommand::MutateProject(Box::new(move |p| {
+                ContentCommand::mutate(crate::content_command::touch::LAYERS, Box::new(move |p| {
                     for lid in &target_ids {
                         if let Some((_, layer)) = p.timeline.find_layer_by_id_mut(lid) {
                             layer.is_collapsed = false;
@@ -303,7 +303,7 @@ pub(super) fn dispatch_layer(
             }
             ContentCommand::send(
                 content_tx,
-                ContentCommand::MutateProject(Box::new(move |p| {
+                ContentCommand::mutate(crate::content_command::touch::LAYERS, Box::new(move |p| {
                     for lid in &target_ids {
                         if let Some((_, layer)) = p.timeline.find_layer_by_id_mut(lid) {
                             layer.is_collapsed = true;

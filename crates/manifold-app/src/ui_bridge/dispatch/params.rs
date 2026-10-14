@@ -107,7 +107,7 @@ pub(crate) fn dispatch_params(action: &ParamsAction, ctx: &mut super::super::Dis
             ctx.ui.pending_trigger_response_reveal = Some((target.clone(), param_id.clone()));
             // Card/rack folding is presentation state, using the existing
             // content-thread mutation path; the source and response stay intact.
-            ContentCommand::send(ctx.content_tx, ContentCommand::MutateProject(Box::new(move |project| {
+            ContentCommand::send(ctx.content_tx, ContentCommand::mutate(crate::content_command::touch::EFFECTS, Box::new(move |project| {
                 let group = project.graph_target_owner_mut(&address).and_then(|instance| {
                     instance.collapsed = false;
                     instance.group_id.clone()
@@ -230,7 +230,7 @@ pub(crate) fn dispatch_params(action: &ParamsAction, ctx: &mut super::super::Dis
             // Push to content thread so the LED pipeline picks it up
             ContentCommand::send(
                 ctx.content_tx,
-                ContentCommand::MutateProject(Box::new(move |p| {
+                ContentCommand::mutate(crate::content_command::touch::LED, Box::new(move |p| {
                     p.settings.led_exit_index = idx;
                 })),
             );
@@ -244,7 +244,7 @@ pub(crate) fn dispatch_params(action: &ParamsAction, ctx: &mut super::super::Dis
             ctx.project.settings.led_enabled = new_enabled;
             ContentCommand::send(
                 ctx.content_tx,
-                ContentCommand::MutateProject(Box::new(move |p| {
+                ContentCommand::mutate(crate::content_command::touch::LED, Box::new(move |p| {
                     p.settings.led_enabled = new_enabled;
                 })),
             );
@@ -363,7 +363,7 @@ pub(crate) fn dispatch_params(action: &ParamsAction, ctx: &mut super::super::Dis
             let indices_owned = indices;
             ContentCommand::send(
                 ctx.content_tx,
-                ContentCommand::MutateProject(Box::new(move |p| {
+                ContentCommand::mutate(crate::content_command::touch::EFFECTS, Box::new(move |p| {
                     let effects = match &target {
                         EffectTarget::Master => Some(&mut p.settings.master_effects),
                         EffectTarget::Layer { layer_id } => p
@@ -400,7 +400,7 @@ pub(crate) fn dispatch_params(action: &ParamsAction, ctx: &mut super::super::Dis
             let target = super::resolve_effect_target(tab, active_layer, ctx.project);
             ContentCommand::send(
                 ctx.content_tx,
-                ContentCommand::MutateProject(Box::new(move |p| {
+                ContentCommand::mutate(crate::content_command::touch::EFFECTS, Box::new(move |p| {
                     let effects = match &target {
                         EffectTarget::Master => Some(&mut p.settings.master_effects),
                         EffectTarget::Layer { layer_id } => p
@@ -957,7 +957,7 @@ pub(crate) fn dispatch_params(action: &ParamsAction, ctx: &mut super::super::Dis
         // The toggle and `height_from` change template topology, so they stay
         // structural. The D3 float knobs are now live uniforms written per
         // frame, so a drag updates the local project + the content thread via
-        // `MutateProjectLive` and returns `handled()` — no chain rebuild.
+        // `MutateProject` (Values or Shapes) and returns `handled()` — no chain rebuild.
         ParamsAction::RelightToggle(gpt) => {
             if let Some(target) =
                 resolve_graph_target(gpt, ctx.editor_target, effective_tab, active_layer, ctx.selection, ctx.project)
@@ -1119,7 +1119,7 @@ fn expand_layer_ancestors(id: &manifold_core::LayerId, ctx: &mut super::super::D
         next = layer.parent_layer_id.clone();
     }
     if !expand.is_empty() {
-        ContentCommand::send(ctx.content_tx, ContentCommand::MutateProject(Box::new(move |project| {
+        ContentCommand::send(ctx.content_tx, ContentCommand::mutate(crate::content_command::touch::LAYERS, Box::new(move |project| {
             for id in expand {
                 if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(&id) {
                     layer.is_collapsed = false;
@@ -1328,7 +1328,7 @@ mod trigger_dispatch_tests {
         assert_eq!(ui.pending_trigger_response_reveal, Some((ui_target, "amount".into())));
         assert_eq!(serde_json::to_value(&project).unwrap(), before, "UI snapshot is read-only");
         for command in content_rx.try_iter() {
-            let ContentCommand::MutateProject(presentation) = command else {
+            let ContentCommand::MutateProject { f: presentation, .. } = command else {
                 panic!("navigation must not author an assignment or response");
             };
             presentation(&mut project);
@@ -1378,7 +1378,7 @@ mod trigger_dispatch_tests {
         assert!(!result.structural_change, "snapshot projection waits for the content receipt");
         assert_eq!(serde_json::to_value(&project).unwrap(), before);
 
-        let ContentCommand::MutateProject(expand) = content_rx.try_recv().unwrap() else {
+        let ContentCommand::MutateProject { f: expand, .. } = content_rx.try_recv().unwrap() else {
             panic!("expected content-owned parent expansion")
         };
         expand(&mut project);

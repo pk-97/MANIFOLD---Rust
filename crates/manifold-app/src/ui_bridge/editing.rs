@@ -603,7 +603,7 @@ pub(super) fn dispatch_editing(
             let layer_id = layer_id.clone();
             ContentCommand::send(
                 content_tx,
-                ContentCommand::MutateProject(Box::new(move |p| {
+                ContentCommand::mutate(crate::content_command::touch::LAYERS, Box::new(move |p| {
                     if let Some((_, layer)) = p.timeline.find_layer_by_id_mut(layer_id.as_str()) {
                         layer.layer_color = manifold_core::color::Color { r, g, b, a };
                     }

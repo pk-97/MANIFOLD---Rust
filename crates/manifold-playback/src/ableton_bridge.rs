@@ -702,6 +702,13 @@ impl AbletonBridge {
         self.pending_values.lock().insert(key, value);
     }
 
+    /// Flag a finished discovery, as `finish_discovery` does, so a headless
+    /// test drives the real validation write.
+    #[cfg(feature = "testkit")]
+    pub fn request_validation(&mut self) {
+        self.validation_dirty = true;
+    }
+
     pub fn apply(&mut self, project: &mut Project, now: f64) -> bool {
         // 1. Drain inbound raw values into the per-source filter targets.
         {
@@ -1781,6 +1788,29 @@ impl AbletonBridge {
 
     // ── Structural validation ─────────────────────────────────────
 
+    /// Whether [`Self::validate_mappings`] would change any mapping: the
+    /// compare before the write, so a validation that finds nothing new moves
+    /// no stamp and cannot feed the listener rebuild back into itself.
+    pub fn validation_would_change(&self, project: &Project) -> bool {
+        let differs = |m: &AbletonParamMapping| {
+            let mut probe = m.clone();
+            let status = if !self.connected || self.session.tracks.is_empty() {
+                AbletonMappingStatus::Dormant
+            } else {
+                self.validate_single_mapping(&mut probe)
+            };
+            status != m.status || format!("{:?}", probe.address) != format!("{:?}", m.address)
+        };
+        let instance = |fx: &manifold_core::effects::PresetInstance| {
+            fx.ableton_mappings.iter().flatten().any(differs)
+        };
+        project.settings.master_effects.iter().any(instance)
+            || project.timeline.layers.iter().any(|layer| {
+                layer.effects.iter().flatten().any(instance) || layer.gen_params().is_some_and(instance)
+            })
+            || project.settings.macro_bank.slots.iter().any(|s| s.ableton_mapping.as_ref().is_some_and(differs))
+    }
+
     /// Validate all Ableton mappings in the project against the current session.
     /// Auto-updates when unambiguous, flags when ambiguous.
     pub fn validate_mappings(&self, project: &mut Project) {
@@ -2277,6 +2307,36 @@ impl AbletonBridge {
         // Drop filter state for sources that no longer have a write target.
         self.filtered_sources
             .retain(|key, _| self.write_targets.contains_key(key));
+    }
+
+    /// Rewrite the cached trim range of every existing `WriteTarget` from the
+    /// project, in place: no OSC, no allocation, no listener change. The
+    /// MappingRanges reaction (docs/UI_INVALIDATION_DESIGN.md D20); the
+    /// listener set rebuilds only when the mapping set moved.
+    pub fn refresh_ranges(&mut self, project: &Project) {
+        manifold_core::work_count::record_work(manifold_core::work_count::WorkKind::ListenerRangeRefresh);
+        for targets in self.write_targets.values_mut() {
+            for wt in targets.iter_mut() {
+                let mapping = match &wt.target {
+                    AbletonMappingTarget::MacroSlot { slot_index } => project
+                        .settings
+                        .macro_bank
+                        .slots
+                        .get(*slot_index)
+                        .and_then(|s| s.ableton_mapping.as_ref()),
+                    target => target.param_id().and_then(|pid| {
+                        project
+                            .ableton_param_mappings(target)
+                            .and_then(|opt| opt.as_ref())
+                            .and_then(|ms| ms.iter().find(|m| m.param_id == *pid))
+                    }),
+                };
+                if let Some(m) = mapping {
+                    wt.range_min = m.range_min;
+                    wt.range_max = m.range_max;
+                }
+            }
+        }
     }
 
     /// Build an `AbletonSetContext` from the current session for project storage.

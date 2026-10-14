@@ -166,7 +166,7 @@ fn content_thread_keeps_advancing_while_a_large_import_runs_in_the_background() 
                 dt,
                 frame,
                 false,
-                ct.editing_service.data_version(),
+                ct.editing_service.stamps(),
                 None, // no audio-visual registry in this verify harness
             );
             frame += 1;

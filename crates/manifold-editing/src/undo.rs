@@ -160,6 +160,14 @@ impl UndoRedoManager {
     pub fn peek_redo_description(&self) -> Option<&str> {
         self.redo_stack.last().map(|c| c.description())
     }
+    /// Parts the next `undo()` writes. Undo touches what execute touched (D2).
+    pub fn peek_undo_touches(&self) -> manifold_core::change::ChangeSet {
+        self.undo_stack.back().map_or(manifold_core::change::ChangeSet::NONE, |c| c.touches())
+    }
+    /// Parts the next `redo()` writes.
+    pub fn peek_redo_touches(&self) -> manifold_core::change::ChangeSet {
+        self.redo_stack.last().map_or(manifold_core::change::ChangeSet::NONE, |c| c.touches())
+    }
     pub fn undo_count(&self) -> usize {
         self.undo_stack.len()
     }

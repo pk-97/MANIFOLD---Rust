@@ -42,7 +42,7 @@ pub(crate) fn graph_env_dual_edit<F>(
     let t = target.clone();
     ContentCommand::send(
         content_tx,
-        ContentCommand::MutateProjectLive(Box::new(move |p| {
+        ContentCommand::mutate(crate::content_command::touch::SHAPES, Box::new(move |p| {
             p.with_preset_graph_mut(&t, |inst| {
                 if let Some(env) = inst
                     .envelopes
@@ -82,7 +82,7 @@ pub(crate) fn graph_driver_dual_edit<F>(
     let t = target.clone();
     ContentCommand::send(
         content_tx,
-        ContentCommand::MutateProjectLive(Box::new(move |p| {
+        ContentCommand::mutate(crate::content_command::touch::SHAPES, Box::new(move |p| {
             p.with_preset_graph_mut(&t, |inst| {
                 if let Some(driver) = inst
                     .drivers
@@ -99,7 +99,7 @@ pub(crate) fn graph_driver_dual_edit<F>(
 /// Live dual-edit of one audio modulation, mirroring [`graph_driver_dual_edit`]
 /// for the green trim-handle drag: applies `edit` to the matching
 /// `ParameterAudioMod` on both the UI-thread project mirror and (via
-/// `MutateProjectLive`) the content thread, so the handle tracks under the
+/// `MutateProject` (Values or Shapes)) the content thread, so the handle tracks under the
 /// cursor without an undo entry per frame (the undo command lands on commit).
 pub(crate) fn graph_audio_mod_dual_edit<F>(
     project: &mut Project,
@@ -125,7 +125,7 @@ pub(crate) fn graph_audio_mod_dual_edit<F>(
     let t = target.clone();
     ContentCommand::send(
         content_tx,
-        ContentCommand::MutateProjectLive(Box::new(move |p| {
+        ContentCommand::mutate(crate::content_command::touch::SHAPES, Box::new(move |p| {
             p.with_preset_graph_mut(&t, |inst| {
                 if let Some(m) = inst
                     .audio_mods
@@ -142,7 +142,7 @@ pub(crate) fn graph_audio_mod_dual_edit<F>(
 /// Live (non-undo) edit of one `LayerClipTrigger`'s shape, mirroring
 /// `graph_audio_mod_dual_edit` — applies `edit` to the UI-side `project`
 /// snapshot immediately AND queues the same edit onto the content thread's
-/// live project via `MutateProjectLive`, so a drag reads back correctly on
+/// live project via `MutateProject` (Values or Shapes), so a drag reads back correctly on
 /// both sides without an undo entry per frame (the commit, on drag-end,
 /// records the one undo step).
 pub(crate) fn clip_trigger_shape_dual_edit<F>(
@@ -164,7 +164,7 @@ pub(crate) fn clip_trigger_shape_dual_edit<F>(
     let lid = layer_id.clone();
     ContentCommand::send(
         content_tx,
-        ContentCommand::MutateProjectLive(Box::new(move |p| {
+        ContentCommand::mutate(crate::content_command::touch::SHAPES, Box::new(move |p| {
             if let Some((_, layer)) = p.timeline.find_layer_by_id_mut(&lid)
                 && let Some(t) = layer.clip_triggers.get_mut(index)
             {

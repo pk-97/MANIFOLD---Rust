@@ -183,6 +183,10 @@ impl MoveClipCommand {
 }
 
 impl Command for MoveClipCommand {
+    fn touches(&self) -> manifold_core::change::ChangeSet {
+        use manifold_core::change::{ChangeSet, Part};
+        ChangeSet::of(&[Part::Clips])
+    }
     fn execute(&mut self, project: &mut Project) {
         self.applied = false;
         self.rejection = None;
@@ -381,6 +385,10 @@ impl TrimClipCommand {
 }
 
 impl Command for TrimClipCommand {
+    fn touches(&self) -> manifold_core::change::ChangeSet {
+        use manifold_core::change::{ChangeSet, Part};
+        ChangeSet::of(&[Part::Clips])
+    }
     fn execute(&mut self, project: &mut Project) {
         let old_source = if self.retime_dependents && !self.dependent_prepared {
             project.timeline.find_clip_by_id(&self.clip_id).cloned()

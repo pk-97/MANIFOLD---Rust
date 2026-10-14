@@ -460,8 +460,13 @@ impl PlaybackEngine {
         self.project.as_ref()
     }
     pub fn project_mut(&mut self) -> Option<&mut Project> {
-        self.clip_bindings_dirty = true;
         self.project.as_mut()
+    }
+    /// Clip-control bindings are stale: the next reconcile walks once. Called
+    /// by the content reaction pass when Layers, Clips, Effects or Session
+    /// moved (docs/UI_INVALIDATION_DESIGN.md section 4); a borrow never sets it.
+    pub fn mark_clip_bindings_stale(&mut self) {
+        self.clip_bindings_dirty = true;
     }
     pub fn live_clip_manager(&self) -> Option<&LiveClipManager> {
         self.live_clip_manager.as_ref()
@@ -532,7 +537,6 @@ impl PlaybackEngine {
     pub fn split_renderer_project_mut(
         &mut self,
     ) -> (&mut Vec<Box<dyn ClipRenderer>>, Option<&mut Project>) {
-        self.clip_bindings_dirty = true;
         (&mut self.renderers, self.project.as_mut())
     }
 

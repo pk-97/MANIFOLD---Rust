@@ -102,8 +102,8 @@ pub struct GeneratorRenderer {
     uniform_arena: UniformArena,
     #[cfg(any(test, feature = "testkit"))]
     pub uniform_arena: UniformArena,
-    /// Cached data_version — layer_index refresh scan only runs when this changes.
-    last_data_version: u64,
+    /// Last `structure_key` (Layers, Clips, Effects stamps) — layer_index refresh scan only runs when this changes.
+    last_structure_key: u64,
     /// The layer whose generator is currently open in the graph editor (watched),
     /// or `None`. Set each frame by [`Self::set_preview_node`] / cleared by
     /// [`Self::clear_preview`]. A watched generator renders *unfused* so the
@@ -190,7 +190,7 @@ impl GeneratorRenderer {
             render_scratch: Vec::with_capacity(16),
             render_info_scratch: Vec::with_capacity(16),
             uniform_arena,
-            last_data_version: u64::MAX, // force scan on first frame
+            last_structure_key: u64::MAX, // force scan on first frame
             preview_layer: None,
             profiling_enabled: false,
             rt_quality: manifold_node_engine::exec::effect_node::RtQuality::default(),
@@ -705,7 +705,7 @@ impl GeneratorRenderer {
         beat: f64,
         dt: f32,
         layers: &[Layer],
-        data_version: u64,
+        structure_key: u64,
         // Layer indices to skip rendering entirely this frame: hidden behind a
         // full-opacity Opaque layer and safe to not render (content pipeline's
         // `compute_render_skip_indices`). Their generators don't dispatch and
@@ -719,11 +719,11 @@ impl GeneratorRenderer {
         gpu.uniform_arena = Some(&mut self.uniform_arena as *mut UniformArena);
 
         // Refresh positional cache on active clips — only when the project has
-        // structurally changed (layer reorder/add/delete bumps data_version).
+        // structurally changed (the Layers, Clips or Effects stamp moved).
         // layer_id stays stable across reorders so generator state follows.
-        if data_version != self.last_data_version {
+        if structure_key != self.last_structure_key {
             manifold_core::work_count::record_work(manifold_core::work_count::WorkKind::GeneratorStructureRefresh);
-            self.last_data_version = data_version;
+            self.last_structure_key = structure_key;
             for (clip_id, active) in self.active_clips.iter_mut() {
                 if let Some(pos) = layers.iter().position(|l| l.layer_id == active.layer_id) {
                     active.layer_index = pos as i32;
@@ -745,7 +745,7 @@ impl GeneratorRenderer {
             // buffers, fluid-sim density grids, attractor history
             // textures — each can be tens of MB). Mirrors the
             // compositor's `trim_excess_buffers` pattern but runs
-            // only on data_version change (structural edit), not per
+            // only on a structure-key change (structural edit), not per
             // frame.
             let alive: ahash::AHashSet<&manifold_core::LayerId> =
                 layers.iter().map(|l| &l.layer_id).collect();
@@ -1778,7 +1778,7 @@ impl ClipRenderer for GeneratorRenderer {
         // next clip start.
         self.available_rts.clear();
         // Force layer_index rescan on next render after project reload.
-        self.last_data_version = u64::MAX;
+        self.last_structure_key = u64::MAX;
     }
 
     fn is_clip_ready(&self, clip_id: &str) -> bool {

@@ -202,9 +202,16 @@ pub struct AudioModRuntime {
     visuals: manifold_core::audio_visual::AudioVisualRegistry,
     visual_routing: Option<VisualRoutingSignature>,
     capture: Option<AudioModCapture>,
-    /// Last project data-version reconciled against — reconcile only runs when
-    /// the project changed, not every frame.
+    /// Last `RECONCILE_PARTS` key reconciled against — reconcile only runs
+    /// when the audio setup or what consumes it changed, not every frame.
     last_version: u64,
+    /// Bumped when a device or process hot-plug drains; published so the UI
+    /// queries the device list only then.
+    directory_version: u64,
+    /// How often the send-gain reaction row ran; the INV-20 test reads it,
+    /// because a headless runtime has no capture to observe.
+    #[cfg(test)]
+    pub(crate) send_gain_syncs: std::cell::Cell<u32>,
     /// Device directory, used to resolve the stored device ref to an openable
     /// name and to hold the hot-plug subscription.
     directory: Box<dyn manifold_audio::directory::AudioDeviceDirectory>,
@@ -292,6 +299,9 @@ impl Default for AudioModRuntime {
             visual_routing: None,
             capture: None,
             last_version: u64::MAX,
+            directory_version: 0,
+            #[cfg(test)]
+            send_gain_syncs: Default::default(),
             directory,
             devices_dirty,
             processes_dirty,
@@ -328,9 +338,10 @@ impl AudioModRuntime {
     pub fn update(
         &mut self,
         engine: &mut PlaybackEngine,
-        data_version: u64,
+        stamps: manifold_core::change::PartStamps,
         mut layer_playback: Option<&mut AudioLayerPlayback>,
     ) {
+        let data_version = stamps.key(RECONCILE_PARTS);
         let mut discontinuities = std::mem::take(&mut engine.audio_snapshot_mut().input_discontinuities);
         discontinuities.clear();
         self.input_update = self.input_update.wrapping_add(1);
@@ -349,6 +360,9 @@ impl AudioModRuntime {
         let processes_changed = self
             .processes_dirty
             .swap(false, std::sync::atomic::Ordering::Relaxed);
+        if hotplugged || processes_changed {
+            self.directory_version += 1;
+        }
         // The current source's kind decides which hot-plug signals are relevant.
         // `None` (system default input) counts as a hardware-device source.
         let source_kind = engine
@@ -991,6 +1005,31 @@ impl AudioModRuntime {
 /// that finds no structural change, so a gain edit takes effect without a
 /// capture restart. A send count mismatch can't happen here — a send add/remove
 /// changes [`CaptureSignature`] and forces a rebuild before this runs.
+/// What the reconcile reads: the setup itself, plus which sends are consumed,
+/// which audio mods, clip triggers and visualizers on layers and effects decide
+/// (`analysis_consumed_sends`, `visualizer_consumed_sends`, `sends_with_pitch_mods`).
+const RECONCILE_PARTS: manifold_core::change::ChangeSet = manifold_core::change::ChangeSet::of(&[
+    manifold_core::change::Part::AudioSetup,
+    manifold_core::change::Part::Effects,
+    manifold_core::change::Part::Layers,
+]);
+
+impl AudioModRuntime {
+    pub fn directory_version(&self) -> u64 {
+        self.directory_version
+    }
+
+    /// The Shapes reaction row (D25): send gain lives in the capture's
+    /// `GainBank`, so a gain write reaches the analysis worker here, in place.
+    pub fn sync_send_gains(&self, setup: &AudioSetup) {
+        #[cfg(test)]
+        self.send_gain_syncs.set(self.send_gain_syncs.get() + 1);
+        if let Some(cap) = self.capture.as_ref() {
+            sync_gains(&cap.gains, setup);
+        }
+    }
+}
+
 fn sync_gains(gains: &GainBank, setup: &AudioSetup) {
     for (i, send) in setup.sends.iter().enumerate() {
         gains.set_linear(i, send.gain_linear());

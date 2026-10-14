@@ -48,7 +48,7 @@ pub(crate) fn dispatch_mapping(action: &MappingAction, ctx: &mut super::super::D
                 let mi = macro_idx;
                 ContentCommand::send(
                     ctx.content_tx,
-                    ContentCommand::MutateProject(Box::new(move |p| {
+                    ContentCommand::mutate(crate::content_command::touch::EFFECTS_SHAPES, Box::new(move |p| {
                         p.settings.macro_bank.slots[mi].mappings.push(mapping);
                     })),
                 );
@@ -67,7 +67,7 @@ pub(crate) fn dispatch_mapping(action: &MappingAction, ctx: &mut super::super::D
                     slot.mappings.remove(mapping_idx);
                     ContentCommand::send(
                         ctx.content_tx,
-                        ContentCommand::MutateProject(Box::new(move |p| {
+                        ContentCommand::mutate(crate::content_command::touch::EFFECTS_SHAPES, Box::new(move |p| {
                             let slot = &mut p.settings.macro_bank.slots[macro_idx];
                             if mapping_idx < slot.mappings.len() {
                                 slot.mappings.remove(mapping_idx);
@@ -86,7 +86,7 @@ pub(crate) fn dispatch_mapping(action: &MappingAction, ctx: &mut super::super::D
                     .clear();
                 ContentCommand::send(
                     ctx.content_tx,
-                    ContentCommand::MutateProject(Box::new(move |p| {
+                    ContentCommand::mutate(crate::content_command::touch::EFFECTS_SHAPES, Box::new(move |p| {
                         p.settings.macro_bank.slots[macro_idx].mappings.clear();
                     })),
                 );
@@ -185,7 +185,7 @@ pub(crate) fn dispatch_mapping(action: &MappingAction, ctx: &mut super::super::D
                 let pid = param_id.clone();
                 ContentCommand::send(
                     ctx.content_tx,
-                    ContentCommand::MutateProject(Box::new(move |p| {
+                    ContentCommand::mutate(crate::content_command::touch::MAPPINGS, Box::new(move |p| {
                         if let Some(ms) =
                             p.ableton_param_mappings_mut(&mt).and_then(|opt| opt.as_mut())
                             && let Some(m) = ms.iter_mut().find(|m| m.param_id == pid)
@@ -207,7 +207,7 @@ pub(crate) fn dispatch_mapping(action: &MappingAction, ctx: &mut super::super::D
             }
             ContentCommand::send(
                 ctx.content_tx,
-                ContentCommand::MutateProject(Box::new(move |p| {
+                ContentCommand::mutate(crate::content_command::touch::MAPPINGS, Box::new(move |p| {
                     if let Some(slot) = p.settings.macro_bank.slots.get_mut(slot_idx)
                         && let Some(m) = &mut slot.ableton_mapping
                     {

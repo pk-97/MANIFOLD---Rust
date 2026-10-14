@@ -52,6 +52,7 @@ mod clip_filmstrip;
 mod clip_thumb_cache;
 pub(crate) mod content_command;
 mod content_commands;
+mod content_reactions;
 mod content_export;
 mod content_pipeline;
 pub(crate) mod content_state;

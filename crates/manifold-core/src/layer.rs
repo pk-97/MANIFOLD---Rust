@@ -129,7 +129,7 @@ pub struct Layer {
         skip_serializing_if = "Option::is_none",
         deserialize_with = "crate::effects::deserialize_opt_generator_instance"
     )]
-    gen_params: Option<PresetInstance>,
+    pub(crate) gen_params: Option<PresetInstance>,
 
     // The generator's per-instance graph override now lives on the generator
     // `PresetInstance` itself (`gen_params.graph`), exactly like an effect's
@@ -255,12 +255,12 @@ pub struct Layer {
 
     // ── Runtime caches (not serialized) ──
     #[serde(skip)]
-    clips_sorted: bool,
+    pub(crate) clips_sorted: bool,
     /// Indices into `clips`, sorted by end_beat. From Unity Layer.cs clipsByEndBeat.
     #[serde(skip)]
-    clips_by_end_indices: Vec<usize>,
+    pub(crate) clips_by_end_indices: Vec<usize>,
     #[serde(skip)]
-    clips_by_end_sorted: bool,
+    pub(crate) clips_by_end_sorted: bool,
 }
 
 impl Layer {

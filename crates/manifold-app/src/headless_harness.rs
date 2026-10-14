@@ -117,7 +117,7 @@ pub(crate) fn headless_content_thread(project: Project, w: u32, h: u32) -> Conte
         cached_midi_clock_device: Arc::from(""),
         cached_perc_message: Arc::from(""),
         last_sent_midi_device_names: Arc::from([]),
-        embedded_presets_fingerprint: 0,
+        reactions: Default::default(),
         pending_undo_redo_event: None,
         graph_edit_diagnostic: None,
         edit_selection_update: None,

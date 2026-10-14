@@ -273,7 +273,7 @@ fn scene_modifier_periodic_app_control_journey() {
     // Hold the same engine beat, disable only the driver, and set the
     // equivalent wrapped phase by hand. This is the native output reference.
     let disable_driver_param = phase_binding.clone();
-    ct.handle_command(ContentCommand::MutateProject(Box::new({
+    ct.handle_command(ContentCommand::mutate(crate::content_command::touch::SHAPES, Box::new({
         let layer_id = layer_id.clone();
         move |project| {
             project
@@ -366,7 +366,7 @@ fn scene_modifier_periodic_app_control_journey() {
     set_generator_param(&mut ct, &layer_id, &interior_binding, std::f32::consts::PI);
     set_generator_param(&mut ct, &layer_id, &phase_binding, expected_phase);
     let enable_driver_param = phase_binding.clone();
-    ct.handle_command(ContentCommand::MutateProject(Box::new({
+    ct.handle_command(ContentCommand::mutate(crate::content_command::touch::SHAPES, Box::new({
         let layer_id = layer_id.clone();
         move |project| {
             project

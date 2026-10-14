@@ -557,7 +557,7 @@ fn trigger_lane_force_mixed_audio_timing_acceptance() {
             DT,
             frame as u64,
             true,
-            DATA_VERSION,
+            manifold_core::change::PartStamps::default(),
             Some(audio_driver.visuals()),
         );
         let render_ms = render_start.elapsed().as_secs_f64() * 1000.0;

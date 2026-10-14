@@ -512,7 +512,7 @@ pub fn run(args: &[String]) -> ! {
 
     // One-shot --set writes, using resolved layer indices and param IDs.
     for (layer_idx, param, value) in resolved_sets {
-        ct.handle_command(ContentCommand::MutateProject(Box::new(move |project| {
+        ct.handle_command(ContentCommand::mutate(crate::content_command::touch::VALUES, Box::new(move |project| {
             if let Some(g) = project.timeline.layers.get_mut(layer_idx).and_then(|l| l.gen_params_mut()) {
                 let old = g.get_param(&param);
                 g.set_param(&param, value);
@@ -549,7 +549,7 @@ pub fn run(args: &[String]) -> ! {
         for (at, layer_idx, param, value) in &resolved_set_ats {
             if *at == frame {
                 let (layer_idx, param, value) = (*layer_idx, param.clone(), *value);
-                ct.handle_command(ContentCommand::MutateProject(Box::new(move |project| {
+                ct.handle_command(ContentCommand::mutate(crate::content_command::touch::VALUES, Box::new(move |project| {
                     if let Some(g) = project.timeline.layers.get_mut(layer_idx).and_then(|l| l.gen_params_mut()) {
                         let old = g.get_param(&param);
                         g.set_param(&param, value);
@@ -560,7 +560,7 @@ pub fn run(args: &[String]) -> ! {
             }
         }
         if disable_driver_at == Some(frame) {
-            ct.handle_command(ContentCommand::MutateProject(Box::new(move |project| {
+            ct.handle_command(ContentCommand::mutate(crate::content_command::touch::SHAPES, Box::new(move |project| {
                 if let Some(g) = project.timeline.layers[0].gen_params_mut()
                     && let Some(drivers) = g.drivers.as_mut()
                 {
@@ -581,7 +581,7 @@ pub fn run(args: &[String]) -> ! {
                     .unwrap_or(0.0)
             });
             let (param, value) = (param.clone(), base + frame as f32 * delta);
-            ct.handle_command(ContentCommand::MutateProject(Box::new(move |project| {
+            ct.handle_command(ContentCommand::mutate(crate::content_command::touch::VALUES, Box::new(move |project| {
                 if let Some(g) = project.timeline.layers[layer_idx].gen_params_mut() {
                     g.set_param(&param, value);
                 }
@@ -614,7 +614,7 @@ pub fn run(args: &[String]) -> ! {
     if live_flip_param.is_some() {
         let param = resolved_flip_param.clone();
         let layer_idx = resolved_flip_layer;
-        ct.handle_command(ContentCommand::MutateProject(Box::new(move |project| {
+        ct.handle_command(ContentCommand::mutate(crate::content_command::touch::VALUES, Box::new(move |project| {
             if let Some(g) = project.timeline.layers.get_mut(layer_idx).and_then(|l| l.gen_params_mut()) {
                 // Read current value and flip it (for bool params).
                 let current = g.get_param(&param);

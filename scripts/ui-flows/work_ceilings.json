@@ -1,105 +1,37 @@
 {
   "content_reaction_budget": {
     "ableton_bridge_tick": {
-      "ClipBindingReconcile": 2,
       "ModSnapshotCopy": 1
     },
     "ableton_trim_tick": {
-      "ClipBindingReconcile": 3,
-      "ModSnapshotCopy": 1,
-      "PresetFingerprint": 1,
-      "RendererReload": 3
+      "ListenerRangeRefresh": 1
     },
-    "audio_mod_tick": {
-      "ClipBindingReconcile": 3,
-      "ModSnapshotCopy": 1
-    },
-    "band_split_tick": {
-      "ClipBindingReconcile": 3,
-      "ModSnapshotCopy": 1
-    },
+    "audio_mod_tick": {},
+    "band_split_tick": {},
     "clip_move_execute": {
-      "AudioReconcile": 1,
-      "ClipBindingReconcile": 3,
+      "ClipBindingReconcile": 1,
       "GeneratorStructureRefresh": 1,
-      "ModSnapshotCopy": 1,
-      "OscRouteRebuild": 1,
-      "PresetFingerprint": 1,
-      "ProjectClone": 1,
-      "TempoReconcile": 1
+      "ProjectClone": 1
     },
     "driver_trim_tick": {
-      "ClipBindingReconcile": 3,
       "ModSnapshotCopy": 1
     },
-    "envelope_tick": {
-      "ClipBindingReconcile": 3,
-      "ModSnapshotCopy": 1
-    },
-    "idle_ticks_x10": {
-      "ClipBindingReconcile": 20,
-      "ModSnapshotCopy": 10
-    },
-    "layer_gain_tick": {
-      "ClipBindingReconcile": 3,
-      "ModSnapshotCopy": 1
-    },
-    "led_tick": {
-      "ClipBindingReconcile": 3,
-      "ModSnapshotCopy": 1,
-      "PresetFingerprint": 1,
-      "RendererReload": 3
-    },
-    "mapping_drawer_tick": {
-      "ClipBindingReconcile": 3,
-      "ModSnapshotCopy": 1,
-      "PresetFingerprint": 1
-    },
-    "node_param_tick": {
-      "ClipBindingReconcile": 3,
-      "ModSnapshotCopy": 1
-    },
-    "osc_router_tick": {
-      "ClipBindingReconcile": 2,
-      "ModSnapshotCopy": 1
-    },
+    "envelope_tick": {},
+    "idle_ticks_x10": {},
+    "layer_gain_tick": {},
+    "led_tick": {},
+    "mapping_drawer_tick": {},
+    "node_param_tick": {},
+    "osc_router_tick": {},
     "param_execute": {
-      "AbletonListenerRebuild": 1,
-      "AudioReconcile": 1,
-      "ClipBindingReconcile": 3,
-      "GeneratorStructureRefresh": 1,
-      "ModSnapshotCopy": 1,
-      "OscRouteRebuild": 1,
-      "PresetFingerprint": 1,
-      "ProjectClone": 1,
-      "TempoReconcile": 1
+      "ProjectClone": 1
     },
-    "param_slider_tick": {
-      "ClipBindingReconcile": 3,
-      "ModSnapshotCopy": 1
-    },
-    "relight_tick": {
-      "ClipBindingReconcile": 3,
-      "ModSnapshotCopy": 1
-    },
-    "send_gain_tick": {
-      "ClipBindingReconcile": 3,
-      "ModSnapshotCopy": 1
-    },
-    "trigger_shape_tick": {
-      "ClipBindingReconcile": 3,
-      "ModSnapshotCopy": 1
-    },
+    "param_slider_tick": {},
+    "relight_tick": {},
+    "send_gain_tick": {},
+    "trigger_shape_tick": {},
     "undo": {
-      "AbletonListenerRebuild": 1,
-      "AudioReconcile": 1,
-      "ClipBindingReconcile": 3,
-      "GeneratorStructureRefresh": 1,
-      "ModSnapshotCopy": 1,
-      "OscRouteRebuild": 1,
-      "PresetFingerprint": 1,
-      "ProjectClone": 1,
-      "TempoReconcile": 1
+      "ProjectClone": 1
     }
   },
   "flows": {

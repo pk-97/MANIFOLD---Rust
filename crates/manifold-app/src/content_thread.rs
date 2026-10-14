@@ -7,6 +7,7 @@
 use crossbeam_channel::{Receiver, Sender};
 use std::sync::Arc;
 
+use manifold_core::change::{ChangeSet, Part};
 use manifold_core::math::BeatQuantizer;
 use manifold_core::types::{ClockAuthority, OscSyncMode, PlaybackState, TempoPointSource};
 use manifold_core::{Beats, Bpm, Seconds};
@@ -45,7 +46,7 @@ const UI_STATE_BACKLOG: usize = 32;
 ///   (effect/generator type swap via the picker while watched).
 /// - `version` — the instance's `graph_version` bumped (a graph-editor edit
 ///   landed on it).
-/// - `fingerprint` — the embedded-preset catalog overlay was reinstalled
+/// - `fingerprint` — the EmbeddedPresets stamp: the catalog overlay was reinstalled
 ///   (a fork or recalibrate), which can change the compositor-sourced
 ///   routings / default graph even when `version` didn't move.
 pub struct CachedGraphSnapshot {
@@ -193,14 +194,9 @@ pub struct ContentThread {
     /// Last-sent MIDI device names — only reallocated when the list changes.
     pub last_sent_midi_device_names: Arc<[String]>,
 
-    /// Fingerprint of the project's embedded ("forked") presets, so an
-    /// editing command that forks a preset or recalibrates an embedded one
-    /// re-installs the renderer catalog overlay (and re-derives the core
-    /// registry) — without paying that catalog rebuild on every unrelated
-    /// edit. `0` while the project carries no forks (the common case), so the
-    /// guard is a single integer compare on the editing path. See
-    /// [`Self::refresh_preset_overlay_if_changed`].
-    pub embedded_presets_fingerprint: u64,
+    /// Stamps the reaction pass last reacted to, and what it retains between
+    /// passes (docs/UI_INVALIDATION_DESIGN.md D4).
+    pub reactions: crate::content_reactions::ReactionState,
 
     /// D11 undo/redo toast (`UI_CRAFT_AND_MOTION_PLAN.md` P2) — set by
     /// `handle_command`'s `Undo`/`Redo` arms (peeked from
@@ -576,6 +572,9 @@ impl ContentThread {
     /// change to this function itself.
     pub(crate) fn tick_frame(&mut self, state_tx: &Sender<ContentState>) {
         let _frame_start = std::time::Instant::now();
+        // Reactions to commands handled outside a drain loop (tests, the
+        // headless harness); a no-op when the drain already reacted.
+        self.run_reactions();
         let dt = self.timer.consume_tick();
         let realtime = self.timer.realtime_since_start();
         self.time_since_start = Seconds(realtime);
@@ -638,7 +637,7 @@ impl ContentThread {
         // BEFORE engine.tick() (the modulation pipeline reads the snapshot).
         self.audio_mod_runtime.update(
             &mut self.engine,
-            self.editing_service.data_version(),
+            self.editing_service.stamps(),
             self.audio_layer_playback.as_mut(),
         );
 
@@ -798,7 +797,7 @@ impl ContentThread {
             dt,
             self.frame_count,
             false,
-            self.editing_service.data_version(),
+            self.editing_service.stamps(),
             Some(self.audio_mod_runtime.visuals()),
         );
         self.physics_metrics = self.content_pipeline.take_sim_metrics(&mut self.engine);
@@ -1189,7 +1188,9 @@ impl ContentThread {
     /// modulation/transport fields are sent every call.
     fn send_state(&mut self, state_tx: &Sender<ContentState>) {
         let version = self.editing_service.data_version();
-        let version_changed = version != self.last_data_version;
+        // D23: today's rule (every edit, undo, redo, record, load) plus a
+        // content-originated write outside the live scalars.
+        let version_changed = version != self.last_data_version || self.reactions.publish_pending;
         // The UI drains to the latest state every frame. When it stops — a
         // native dialog or alert holds the main thread for as long as the
         // user leaves it open — per-tick states would queue without limit and
@@ -1206,6 +1207,7 @@ impl ContentThread {
         }
         if version_changed {
             self.last_data_version = version;
+            self.reactions.publish_pending = false;
         }
         // Send a project snapshot when data_version changes (editing commands).
         // Value-only writers (LFO/envelope/Ableton/OSC/automation) never bump
@@ -1232,7 +1234,7 @@ impl ContentThread {
 
         // Build the lightweight modulation snapshot EVERY tick, not only when
         // drivers/envelopes/Ableton are active: OSC-router writes, automation
-        // lane sampling, and MutateProjectLive drags all move param_values
+        // lane sampling, and MutateProject (Values) drags all move param_values
         // without flagging `modulation_active`, and gating the send on that
         // flag left the UI showing stale values until the next structural
         // snapshot. The capture is a linear walk over the param manifests into
@@ -1240,13 +1242,24 @@ impl ContentThread {
         // of the flat buffer. Blocks are id-keyed at capture, so a structural
         // edit landing between capture and the UI's apply can't misroute
         // values (see ModulationSnapshot).
-        let modulation_snapshot = if let Some(project) = self.engine.project() {
-            self.mod_scratch.capture_into(project);
+        // D15: the capture compares as it writes; the buffer is cloned and
+        // `values_seq` moves only when a live value changed.
+        let modulation_snapshot = if let Some(project) = self.engine.project()
+            && self.mod_scratch.capture_into(project)
+        {
+            self.reactions.values_seq += 1;
             record_work(WorkKind::ModSnapshotCopy);
             Some(self.mod_scratch.clone())
         } else {
             None
         };
+        let ableton_session = if self.ableton_bridge.session_changed() {
+            self.reactions.runtime.ableton_session += 1;
+            Some(Arc::new(self.ableton_bridge.session().clone()))
+        } else {
+            None
+        };
+        let runtime = self.track_runtime_seqs();
 
         // Update cached Arc<str> only when underlying values change.
         // On unchanged frames, .clone() = refcount bump (zero allocation).
@@ -1347,6 +1360,10 @@ impl ContentThread {
             active_clips: self.engine.active_clip_count(),
             data_version: version,
             editing_is_dirty: self.editing_service.is_dirty(),
+            stamps: self.editing_service.stamps(),
+            values_seq: self.reactions.values_seq,
+            audio_directory_version: self.audio_mod_runtime.directory_version(),
+            runtime,
             bpm: self
                 .engine
                 .project()
@@ -1478,11 +1495,7 @@ impl ContentThread {
             edit_selection_update: self.edit_selection_update.clone(),
             modifier_selection_update: self.modifier_selection_update.clone(),
             object_modifier_selection_update: self.object_modifier_selection_update.clone(),
-            ableton_session: if self.ableton_bridge.session_changed() {
-                Some(Arc::new(self.ableton_bridge.session().clone()))
-            } else {
-                None
-            },
+            ableton_session,
             ableton_connected: self.ableton_bridge.is_connected(),
             ableton_transport_enabled: self.ableton_bridge.is_transport_enabled(),
             ableton_sync_status: self.ableton_bridge.transport_sync_status(),
@@ -1519,7 +1532,11 @@ impl ContentThread {
     /// the last publish. Used outside the render tick so the UI confirms
     /// edits while the GPU is behind. Coalesces: one publish per drain pass.
     fn publish_snapshot_if_dirty(&mut self, state_tx: &Sender<ContentState>) {
-        if self.editing_service.data_version() != self.last_data_version {
+        // The drain pass is over: react once to everything it moved (D4).
+        self.run_reactions();
+        if self.editing_service.data_version() != self.last_data_version
+            || self.reactions.publish_pending
+        {
             self.send_state(state_tx);
         }
     }
@@ -1547,7 +1564,7 @@ impl ContentThread {
         target: &manifold_core::GraphTarget,
     ) -> Option<Arc<manifold_node_engine::snapshot::GraphSnapshot>> {
         use manifold_core::GraphTarget;
-        let fingerprint = self.embedded_presets_fingerprint;
+        let fingerprint = self.editing_service.stamps().get(manifold_core::change::Part::EmbeddedPresets);
         let project = self.engine.project()?;
 
         // Resolve the instance's preset type + graph version for the cache key.
@@ -1809,13 +1826,20 @@ impl ContentThread {
 
         // When discovery just completed, validate mappings and force a full
         // project snapshot so the UI receives updated [ABL]/[ABL-]/[ABL?] statuses.
+        // Validation is a Mappings write: the reaction pass rebuilds the
+        // listeners once, and the write publishes the new statuses (D23).
+        // A fresh session also changes the Live-side param ranges the write
+        // targets cache, so the listeners rebuild even when no status moved.
         if self.ableton_bridge.take_validation_dirty() {
-            if let Some(p) = self.engine.project_mut() {
-                self.ableton_bridge.validate_mappings(p);
-                self.ableton_bridge.rebuild_listeners(p);
+            self.reactions.session_discovered = true;
+            if self.engine.project().is_some_and(|p| self.ableton_bridge.validation_would_change(p))
+                && let Some(p) = self.engine.project_mut()
+            {
+                let bridge = &self.ableton_bridge;
+                self.editing_service.mutate(ChangeSet::of(&[Part::Mappings]), p, |p| bridge.validate_mappings(p));
+                self.reactions.publish_pending = true;
             }
-            // Bump data_version so UI sees updated [ABL] statuses.
-            self.editing_service.notify_external_change();
+            self.run_reactions();
         }
 
         if let Some(p) = self.engine.project_mut() {

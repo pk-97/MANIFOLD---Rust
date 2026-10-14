@@ -172,6 +172,10 @@ impl ChangeEnvelopeDecayCommand {
 }
 
 impl Command for ChangeEnvelopeDecayCommand {
+    fn touches(&self) -> manifold_core::change::ChangeSet {
+        use manifold_core::change::{ChangeSet, Part};
+        ChangeSet::of(&[Part::Shapes])
+    }
     fn execute(&mut self, project: &mut Project) {
         Self::apply(project, &self.target, self.env_index, self.new_decay);
     }
@@ -214,6 +218,10 @@ impl ChangeEnvelopeTargetCommand {
 }
 
 impl Command for ChangeEnvelopeTargetCommand {
+    fn touches(&self) -> manifold_core::change::ChangeSet {
+        use manifold_core::change::{ChangeSet, Part};
+        ChangeSet::of(&[Part::Shapes])
+    }
     fn execute(&mut self, project: &mut Project) {
         Self::apply(project, &self.target, self.env_index, self.new_target);
     }
