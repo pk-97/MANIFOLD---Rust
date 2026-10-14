@@ -155,6 +155,9 @@ VERBS = [
      "detector label review project: build OUT.manifold [--songs] [--fires-dir] [--dry-run] | fires DIR | read ORIGINAL EDITED (Peter's edits as per-family overlays)"),
     ("Render and measure",
      "repair-audio-fixture", "repair_audio_fixture.py", "rebuild a fixture mix from aligned stems, preserving the original; dry-run unless --apply"),
+    ("Render and measure",
+     "sync-rig-report", "sync_rig_report.py",
+     "read a sync rig log (sync-*.log): tick jitter, Link/CLK/AbletonOSC phase, present delay, display latency [LOG...|--latest]"),
 
     ("CPU reference oracles (f64, seconds, no GPU)",
      "mgpcg-ref", "mgpcg_reference.py", "GPU FLIP pressure solve oracle"),
@@ -287,6 +290,7 @@ COST_CLASSES = {
     "stale_beads.py": "unit",
     "status.py": "unit",
     "storage_budget.py": "unit",
+    "sync_rig_report.py": "unit",
     "token_report.py": "unit",
     "trunk_health.py": "broad",
     "ui_flows_batch_proof.py": "broad",

@@ -3359,6 +3359,14 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
                     (fit_x, fit_y, fit_w, fit_h),
                     manifold_gpu::GpuLoadAction::Clear,
                 );
+                if let Some(drawable_id) = drawable.observe_presented() {
+                    use manifold_playback::rig_log;
+                    rig_log::emit(rig_log::RigRecord::PresentIssued {
+                        frame: frame_count,
+                        drawable_id,
+                        at_ns: rig_log::now_ns(),
+                    });
+                }
                 native_enc.present_drawable(&drawable);
             }
 

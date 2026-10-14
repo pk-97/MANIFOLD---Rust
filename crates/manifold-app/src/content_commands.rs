@@ -907,8 +907,10 @@ impl ContentThread {
                     // beat projected to the deadline.
                     let midi_beat = Beats::from_f32(clk.current_clock_beat());
                     let time = self.engine.beat_to_timeline_time(midi_beat);
+                    crate::sync_rig_log::user_transport(manifold_playback::rig_log::TransportKind::LocateToClock, time.0.max(0.0));
                     self.engine.locate(Seconds(time.0.max(0.0)));
                 }
+                crate::sync_rig_log::user_transport(manifold_playback::rig_log::TransportKind::Play, f64::NAN);
                 self.engine.play();
                 self.cache_link_beat_offset();
             }
@@ -922,6 +924,7 @@ impl ContentThread {
                 // End tempo recording session on pause.
                 // Port of C# PlaybackController.Pause → tempoRecorder.EndSessionIfActive.
                 self.end_tempo_recording_session();
+                crate::sync_rig_log::user_transport(manifold_playback::rig_log::TransportKind::Pause, f64::NAN);
                 self.engine.pause();
             }
             ContentCommand::Stop => {
@@ -933,6 +936,7 @@ impl ContentThread {
                 }
                 // End tempo recording session on stop.
                 self.end_tempo_recording_session();
+                crate::sync_rig_log::user_transport(manifold_playback::rig_log::TransportKind::Stop, f64::NAN);
                 self.engine.stop();
                 self.link_beat_offset = f64::NAN;
                 // BUG-104: release generator-side trigger-edge latches
@@ -946,6 +950,7 @@ impl ContentThread {
                 self.clear_generator_trigger_state();
             }
             ContentCommand::SeekTo(t) => {
+                crate::sync_rig_log::user_transport(manifold_playback::rig_log::TransportKind::Seek, t.0);
                 self.sync_arbiter.set_user_seek_time(self.time_since_start);
                 self.engine.seek_to(t);
                 // Seeks to Ableton are commanded explicitly, never inferred
@@ -959,6 +964,7 @@ impl ContentThread {
                 self.cache_link_beat_offset();
             }
             ContentCommand::SeekToBeat(beat) => {
+                crate::sync_rig_log::user_transport(manifold_playback::rig_log::TransportKind::SeekToBeat, beat.0);
                 self.sync_arbiter.set_user_seek_time(self.time_since_start);
                 let time = self.engine.beat_to_timeline_time(beat);
                 self.engine.seek_to(time);
