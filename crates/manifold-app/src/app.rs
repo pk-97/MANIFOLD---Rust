@@ -233,6 +233,7 @@ pub struct Application {
     pub(crate) atlas_visible_scope: Vec<u32>,
     /// The editor mini-timeline, rebuilt only when its key moves.
     pub(crate) mini_timeline: crate::app_render::MiniTimelineCache,
+    pub(crate) editor_graph: crate::editor_graph_cache::EditorGraphCache,
     /// Single shared IOSurface + the UI-side texture imported from it for the
     /// clip-thumbnail atlas (section 24 5c, BUG-119: one surface, no rotation — see
     /// `crate::shared_texture::SharedAtlasSurface`).
@@ -620,6 +621,7 @@ impl Application {
             atlas_visible_snap: None,
             atlas_visible_scope: Vec::new(),
             mini_timeline: Default::default(),
+            editor_graph: Default::default(),
             #[cfg(target_os = "macos")]
             clip_atlas_surface: None,
             #[cfg(target_os = "macos")]

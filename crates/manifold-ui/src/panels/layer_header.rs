@@ -971,6 +971,19 @@ impl LayerHeaderPanel {
         &self.layers
     }
 
+    /// Rewrite each audio row's gain slider in place (UI_INVALIDATION D22).
+    /// `gains` walks the project's layers in this panel's order as
+    /// `(layer id, gain dB)`; a row whose id differs waits for the rebuild.
+    pub fn sync_audio_gains(&mut self, tree: &mut UITree, gains: &mut dyn Iterator<Item = (&str, f32)>) {
+        for ((layer, slider), (id, db)) in self.layers.iter_mut().zip(self.gain_sliders.iter_mut()).zip(gains) {
+            if layer.layer_id != id || layer.audio_gain_db == db {
+                continue;
+            }
+            layer.audio_gain_db = db;
+            slider.sync(tree, db, &gain_db_text);
+        }
+    }
+
     /// Number of layers in the current build.
     pub fn layer_count(&self) -> usize {
         self.rows.len()

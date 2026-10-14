@@ -1599,10 +1599,21 @@ pub(crate) fn build_audio_mod_drawer(
         rows,
         btn_font_size: config_font,
         slider_font_size: FONT_SIZE,
-        theme: Theme::INSPECTOR.with_accent(AUDIO_MOD_ACTIVE_C32).tinted(),
+        theme: audio_drawer_theme(),
     };
     let dids = drawer::build(tree, parent, x, cy, w, &spec, key);
     (dids, send_count)
+}
+
+/// A Step amount's value cell text.
+pub(crate) fn step_amount_text(amount: f32, whole_numbers: bool) -> String {
+    if whole_numbers { format!("{amount:.0}") } else { format!("{amount:.2}") }
+}
+
+/// The audio-mod drawer's theme, shared by the build and the live push that
+/// restyles its Invert toggle in place.
+pub(crate) fn audio_drawer_theme() -> Theme {
+    Theme::INSPECTOR.with_accent(AUDIO_MOD_ACTIVE_C32).tinted()
 }
 
 

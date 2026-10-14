@@ -262,6 +262,143 @@ impl RowHost {
         }
     }
 
+    /// Rewrite one row's live-scalar handles and drawer readouts in place
+    /// (UI_INVALIDATION D22) where they differ from `shapes`: driver trims,
+    /// envelope target, decay and step, audio range, shaping, invert and step,
+    /// and the Ableton range. The row model and display state follow, so a
+    /// later build or gesture starts from the same values. A modulator the row
+    /// does not show is membership and waits for a rebuild.
+    pub(crate) fn sync_row_shapes(
+        &self,
+        tree: &mut UITree,
+        mod_state: &mut ParamModState,
+        model: &mut ParamRow,
+        row: usize,
+        shapes: &RowShapes,
+    ) {
+        let track = self.slider_ids.get(row).and_then(Option::as_ref).map(|s| tree.get_bounds(s.track));
+        let trims = |ids: &[Option<TrimHandleIds>], tree: &mut UITree, (lo, hi): (f32, f32)| {
+            if let (Some(ids), Some(rect)) = (ids.get(row).and_then(Option::as_ref), track) {
+                reposition_trim_bars(tree, rect, ids, lo, hi);
+            }
+        };
+
+        if let Some((lo, hi)) = shapes.driver_trim
+            && mod_state.driver_expanded.get(row) == Some(&true)
+            && (mod_state.trim_min[row], mod_state.trim_max[row]) != (lo, hi)
+        {
+            mod_state.trim_min[row] = lo;
+            mod_state.trim_max[row] = hi;
+            model.modulation.trim_min = lo;
+            model.modulation.trim_max = hi;
+            trims(&self.trim_ids, tree, (lo, hi));
+        }
+
+        if let Some(env) = shapes.envelope
+            && mod_state.envelope_expanded.get(row) == Some(&true)
+        {
+            if mod_state.target_norm[row] != env.target_norm {
+                mod_state.target_norm[row] = env.target_norm;
+                model.modulation.target_norm = env.target_norm;
+                if let (Some(ids), Some(rect)) = (self.target_ids.get(row).and_then(Option::as_ref), track) {
+                    tree.set_bounds(ids.target_bar_id, target_bar_rect(rect, env.target_norm));
+                }
+            }
+            let config = self.envelope_config_ids.get(row).and_then(Option::as_ref);
+            if mod_state.env_decay[row] != env.decay {
+                mod_state.env_decay[row] = env.decay;
+                model.modulation.env_decay = env.decay;
+                if let Some(slider) = config.and_then(|c| c.decay_slider.as_ref()) {
+                    BitmapSlider::update_value(tree, slider, env.decay / ENV_DECAY_MAX, &format!("{:.2}", env.decay));
+                }
+            }
+            if let Some(amount) = env.step_amount
+                && mod_state.envelope_step_amount[row] != amount
+            {
+                mod_state.envelope_step_amount[row] = amount;
+                model.modulation.envelope_step_amount = amount;
+                if let Some(slider) = config.and_then(|c| c.step_slider.as_ref()) {
+                    let norm = step_amount_to_norm(amount, model.spec.min, model.spec.max);
+                    BitmapSlider::update_value(tree, slider, norm, &step_amount_text(amount, model.spec.whole_numbers));
+                }
+            }
+        }
+
+        if let Some(audio) = shapes.audio
+            && let Some(shown) = mod_state.audio_rows.get_mut(row)
+            && shown.active
+        {
+            if (shown.range_min, shown.range_max) != (audio.range_min, audio.range_max) {
+                shown.range_min = audio.range_min;
+                shown.range_max = audio.range_max;
+                trims(&self.audio_trim_ids, tree, (audio.range_min, audio.range_max));
+            }
+            let drawer = self.audio_configs.get(row).and_then(Option::as_ref).map(|(d, _)| d);
+            // Attack and Release exist only where the drawer offers shaping.
+            let shaping = !model.spec.is_trigger_gate;
+            for (which, value) in [
+                (AudioShapeParam::Sensitivity, audio.sensitivity),
+                (AudioShapeParam::Attack, audio.attack_ms),
+                (AudioShapeParam::Release, audio.release_ms),
+            ] {
+                let shown_value = match which {
+                    AudioShapeParam::Sensitivity => &mut shown.sensitivity,
+                    AudioShapeParam::Attack => &mut shown.attack_ms,
+                    AudioShapeParam::Release => &mut shown.release_ms,
+                };
+                if *shown_value == value {
+                    continue;
+                }
+                *shown_value = value;
+                let offered = shaping || which == AudioShapeParam::Sensitivity;
+                if offered && let Some(slider) = drawer.and_then(|d| d.sliders.get(audio_shape_index(which))) {
+                    BitmapSlider::update_value(
+                        tree,
+                        slider,
+                        value / audio_shape_max(which),
+                        &audio_shape_value_text(which, value),
+                    );
+                }
+            }
+            if shown.invert != audio.invert {
+                shown.invert = audio.invert;
+                if let Some(button) = drawer.and_then(|d| {
+                    d.button_ids().iter().copied().find(|&id| {
+                        matches!(
+                            d.resolve_action(id),
+                            Some(PanelAction::Root(RootAction::AudioDrawerClick(_, _, crate::panels::AudioDrawerClick::Invert)))
+                        )
+                    })
+                }) {
+                    let font = tree.get_node(button).map_or(FONT_SIZE, |n| n.style.font_size);
+                    tree.set_style(button, audio_drawer_theme().option_style(audio.invert, font));
+                }
+            }
+            if let Some(amount) = audio.step_amount
+                && shown.action_idx == 1
+                && shown.step_amount != amount
+            {
+                shown.step_amount = amount;
+                if shaping && let Some(slider) = drawer.and_then(|d| d.sliders.get(3)) {
+                    let norm = step_amount_to_norm(amount, model.spec.min, model.spec.max);
+                    BitmapSlider::update_value(tree, slider, norm, &step_amount_text(amount, model.spec.whole_numbers));
+                }
+            }
+            let m = &mut model.audio;
+            (m.range_min, m.range_max) = (shown.range_min, shown.range_max);
+            (m.sensitivity, m.attack_ms, m.release_ms) = (shown.sensitivity, shown.attack_ms, shown.release_ms);
+            (m.invert, m.step_amount) = (shown.invert, shown.step_amount);
+        }
+
+        if let Some(range) = shapes.ableton_range
+            && let Some(shown) = model.mapping.ableton_range
+            && shown != range
+        {
+            model.mapping.ableton_range = Some(range);
+            trims(&self.ableton_trim_ids, tree, range);
+        }
+    }
+
     /// Screen-space bounds of a row's label, shared by every row host. Slider
     /// and toggle/trigger rows use different id bundles, but navigation uses
     /// the same addressable row surface.
