@@ -1312,6 +1312,16 @@ impl LayerHeaderPanel {
             if let Some(accent_id) = row.id(LayerControl::SelectAccent) {
                 tree.set_style(accent_id, sel_accent_style(selected));
             }
+            // The name brightens to white when selected, as the build draws it.
+            if let Some(name_id) = row.id(LayerControl::Name)
+                && let Some(node) = tree.get_node(name_id)
+            {
+                let layer_color = self.cached_colors.get(index).copied().unwrap_or(Color32::TRANSPARENT);
+                let mut style = node.style;
+                style.text_color =
+                    if selected { color::TEXT_WHITE_C32 } else { color::contrast_text_color(layer_color) };
+                tree.set_style(name_id, style);
+            }
         }
     }
 

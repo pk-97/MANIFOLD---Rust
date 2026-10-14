@@ -611,7 +611,7 @@ impl Application {
         // the app's selection (it owns the resolved layer id).
         let insert_layer = self
             .selection
-            .insert_cursor_layer_id
+            .insert_cursor_layer_id()
             .as_ref()
             .and_then(|id| self.local_project.timeline.find_layer_index_by_id(id));
         let timeline_overlays = self.ws.ui_root.viewport.timeline_overlays(

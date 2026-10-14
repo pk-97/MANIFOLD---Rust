@@ -44,8 +44,12 @@ fn trigger_delivery_diagnostic_toast(
     Some(failure.to_string())
 }
 
-/// Push engine state into UI panels (called once per frame, AFTER build).
-/// Syncs all data-model state into tree nodes so the renderer shows current values.
+/// Push engine state into UI panels (called once per frame, AFTER build):
+/// the event drain, the chrome push, the selection push and the live push
+/// in that order (UI_INVALIDATION_DESIGN.md D15). The frame seam calls the
+/// pieces itself so the selection push runs only on its inputs.
+#[cfg(feature = "ui-snapshot")]
+#[allow(clippy::too_many_arguments)]
 pub fn push_state(
     ui: &mut UIRoot,
     project: &Project,
@@ -56,7 +60,119 @@ pub fn push_state(
     project_path: Option<&std::path::Path>,
     transport_cache: &mut TransportDisplayCache,
 ) {
-    manifold_core::work_count::record_work(manifold_core::work_count::WorkKind::ValuePush);
+    drain_events(ui, content_state);
+    push_chrome(ui, project, content_state, selection, is_dirty, project_path, transport_cache);
+    push_selection(ui, project, active_layer, selection);
+    push_live(ui, project, content_state, active_layer);
+}
+
+/// One-shot events keyed on their own sequences: toasts, content-driven
+/// selections, cached session and device lists. Runs every frame.
+pub fn drain_events(ui: &mut UIRoot, content_state: &crate::content_state::ContentState) {
+    let tree = &mut ui.tree;
+    // Cache MIDI device names for dropdown
+    if ui.midi_device_names[..] != content_state.midi_device_names[..] {
+        ui.midi_device_names.clear();
+        ui.midi_device_names
+            .extend_from_slice(&content_state.midi_device_names);
+    }
+
+    // D11 undo/redo toast (`UI_CRAFT_AND_MOTION_PLAN.md` P2) — real command
+    // label instead of the generic "Undo"/"Redo" the M::Undo/M::Redo menu
+    // handlers used to show directly (`app_render.rs`). Keyed on
+    // `data_version` (bumped by every
+    // undo/redo) rather than the description, so undoing the same command
+    // twice in a row (rare, but possible via redo-then-undo) still fires.
+    if let Some(ev) = &content_state.undo_redo_event {
+        let key = content_state.data_version;
+        if ui.last_undo_redo_toast_key != Some(key) {
+            let verb = if ev.is_redo { "Redo" } else { "Undo" };
+            ui.toast.show(format!("{verb}: {}", ev.description));
+            ui.last_undo_redo_toast_key = Some(key);
+        }
+    }
+
+    // Rejected graph edits do not change project data, so they carry an
+    // independent sequence. Keep the diagnostic persistent in the content
+    // snapshot and show each sequence exactly once.
+    if let Some((sequence, message)) = graph_edit_diagnostic_toast(
+        ui.last_graph_edit_diagnostic_sequence,
+        content_state.graph_edit_diagnostic.as_ref(),
+    ) {
+        ui.toast.show_with_accent(message.to_owned(), color::RED_BASE);
+        ui.last_graph_edit_diagnostic_sequence = Some(sequence);
+    }
+
+    if let Some(message) = trigger_delivery_diagnostic_toast(
+        &mut ui.last_trigger_delivery_failure,
+        content_state.trigger_delivery_failure,
+    ) {
+        ui.toast.show_with_accent(message, color::RED_BASE);
+    }
+
+    if let Some(update) = &content_state.modifier_selection_update {
+        if ui.last_modifier_selection_sequence != Some(update.sequence) {
+            if let Some(id) = update.ids.iter().rev().find(|id| {
+                ui.scene_setup_panel.force_card_info(id)
+                    .is_some_and(|info| info.layer_id == update.layer_id)
+            }) {
+                ui.scene_setup_panel.set_selection(update.layer_id.clone(),
+                    manifold_ui::panels::scene_setup_panel::SceneSelection::Force(id.clone()));
+            }
+            ui.inspector.select_modifier_ids(&update.layer_id, &update.ids);
+            ui.inspector.apply_selection_visuals(tree);
+            ui.inspector.reveal_pending_selection(tree);
+            ui.last_modifier_selection_sequence = Some(update.sequence);
+        }
+    } else {
+        ui.last_modifier_selection_sequence = None;
+    }
+
+    if let Some(update) = &content_state.object_modifier_selection_update {
+        if ui.last_object_modifier_selection_sequence != Some(update.sequence) {
+            ui.scene_setup_panel.select_object_modifier_by_address(
+                &update.layer_id, update.owner_id, update.node_doc_id, tree,
+            );
+            ui.last_object_modifier_selection_sequence = Some(update.sequence);
+        }
+    } else {
+        ui.last_object_modifier_selection_sequence = None;
+    }
+
+    // Cache Ableton session for parameter mapping dropdown
+    if let Some(session) = &content_state.ableton_session {
+        ui.ableton_session = Some(std::sync::Arc::clone(session));
+        // If the picker is open, refresh it with the updated session data.
+        if ui.ableton_picker.is_open() {
+            ui.ableton_picker
+                .update_session(crate::ui_root::build_picker_session(session));
+            ui.overlay_dirty = true;
+        }
+    }
+
+    // Runtime-only presentation state rides every ContentState, including
+    // paused command snapshots; it must not wait for a project-version change.
+    if let Some(sdr_preview) = content_state.sdr_preview
+        && ui.settings_popup.set_sdr_preview(sdr_preview)
+    {
+        // The runtime preview does not bump the project version. Request the
+        // established overlay visual rebuild so its segment active styling
+        // reflects the new snapshot even while paused.
+        ui.overlay_dirty = true;
+    }
+}
+
+/// Transport, sync, header, footer, settings and layer-header chrome.
+#[allow(clippy::too_many_arguments)]
+pub fn push_chrome(
+    ui: &mut UIRoot,
+    project: &Project,
+    content_state: &crate::content_state::ContentState,
+    selection: &SelectionState,
+    is_dirty: bool,
+    project_path: Option<&std::path::Path>,
+    transport_cache: &mut TransportDisplayCache,
+) {
     let tree = &mut ui.tree;
 
     // Transport state — three visual states matching Unity TransportPanel
@@ -117,86 +233,6 @@ pub fn push_state(
         };
         ui.transport
             .set_clock_authority(auth.transport_label(), auth_color);
-
-        // Cache MIDI device names for dropdown
-        if ui.midi_device_names[..] != content_state.midi_device_names[..] {
-            ui.midi_device_names.clear();
-            ui.midi_device_names
-                .extend_from_slice(&content_state.midi_device_names);
-        }
-
-        // D11 undo/redo toast (`UI_CRAFT_AND_MOTION_PLAN.md` P2) — real command
-        // label instead of the generic "Undo"/"Redo" the M::Undo/M::Redo menu
-        // handlers used to show directly (`app_render.rs`). Keyed on
-        // `data_version` (bumped by every
-        // undo/redo) rather than the description, so undoing the same command
-        // twice in a row (rare, but possible via redo-then-undo) still fires.
-        if let Some(ev) = &content_state.undo_redo_event {
-            let key = content_state.data_version;
-            if ui.last_undo_redo_toast_key != Some(key) {
-                let verb = if ev.is_redo { "Redo" } else { "Undo" };
-                ui.toast.show(format!("{verb}: {}", ev.description));
-                ui.last_undo_redo_toast_key = Some(key);
-            }
-        }
-
-        // Rejected graph edits do not change project data, so they carry an
-        // independent sequence. Keep the diagnostic persistent in the content
-        // snapshot and show each sequence exactly once.
-        if let Some((sequence, message)) = graph_edit_diagnostic_toast(
-            ui.last_graph_edit_diagnostic_sequence,
-            content_state.graph_edit_diagnostic.as_ref(),
-        ) {
-            ui.toast.show_with_accent(message.to_owned(), color::RED_BASE);
-            ui.last_graph_edit_diagnostic_sequence = Some(sequence);
-        }
-
-        if let Some(message) = trigger_delivery_diagnostic_toast(
-            &mut ui.last_trigger_delivery_failure,
-            content_state.trigger_delivery_failure,
-        ) {
-            ui.toast.show_with_accent(message, color::RED_BASE);
-        }
-
-        if let Some(update) = &content_state.modifier_selection_update {
-            if ui.last_modifier_selection_sequence != Some(update.sequence) {
-                if let Some(id) = update.ids.iter().rev().find(|id| {
-                    ui.scene_setup_panel.force_card_info(id)
-                        .is_some_and(|info| info.layer_id == update.layer_id)
-                }) {
-                    ui.scene_setup_panel.set_selection(update.layer_id.clone(),
-                        manifold_ui::panels::scene_setup_panel::SceneSelection::Force(id.clone()));
-                }
-                ui.inspector.select_modifier_ids(&update.layer_id, &update.ids);
-                ui.inspector.apply_selection_visuals(tree);
-                ui.inspector.reveal_pending_selection(tree);
-                ui.last_modifier_selection_sequence = Some(update.sequence);
-            }
-        } else {
-            ui.last_modifier_selection_sequence = None;
-        }
-
-        if let Some(update) = &content_state.object_modifier_selection_update {
-            if ui.last_object_modifier_selection_sequence != Some(update.sequence) {
-                ui.scene_setup_panel.select_object_modifier_by_address(
-                    &update.layer_id, update.owner_id, update.node_doc_id, tree,
-                );
-                ui.last_object_modifier_selection_sequence = Some(update.sequence);
-            }
-        } else {
-            ui.last_object_modifier_selection_sequence = None;
-        }
-
-        // Cache Ableton session for parameter mapping dropdown
-        if let Some(session) = &content_state.ableton_session {
-            ui.ableton_session = Some(std::sync::Arc::clone(session));
-            // If the picker is open, refresh it with the updated session data.
-            if ui.ableton_picker.is_open() {
-                ui.ableton_picker
-                    .update_session(crate::ui_root::build_picker_session(session));
-                ui.overlay_dirty = true;
-            }
-        }
 
         // Sync source status — driven by content_state from transport controller
         // Link
@@ -340,7 +376,7 @@ pub fn push_state(
         );
         // LANES button (view-only toggle, no content-thread state behind it).
         ui.transport
-            .set_automation_mode_visible(selection.automation_mode_visible);
+            .set_automation_mode_visible(selection.automation_mode_visible());
         ui.transport.set_automation_draw_mode(selection.automation_draw_mode);
 
         // Save dirty state is shown by the "•" in the window/header project name
@@ -413,17 +449,6 @@ pub fn push_state(
         ui.rt_quality_panel.configure(project.settings.rt_quality);
     }
 
-    // Runtime-only presentation state rides every ContentState, including
-    // paused command snapshots; it must not wait for a project-version change.
-    if let Some(sdr_preview) = content_state.sdr_preview
-        && ui.settings_popup.set_sdr_preview(sdr_preview)
-    {
-        // The runtime preview does not bump the project version. Request the
-        // established overlay visual rebuild so its segment active styling
-        // reflects the new snapshot even while paused.
-        ui.overlay_dirty = true;
-    }
-
     // Footer stats
     {
         let layers = project.timeline.layers.len();
@@ -432,59 +457,6 @@ pub fn push_state(
         ui.footer.set_selection_info(&info);
     }
 
-    // Playhead + playing state
-    let playhead_beat = content_state.current_beat.as_f32();
-    ui.viewport.set_playhead(Beats::from_f32(playhead_beat));
-    ui.viewport.set_playing(content_state.is_playing);
-
-    // Selection → viewport (version-gated to avoid per-frame Vec allocation).
-    // The panel's `selected_clip_ids` is a pure render cache fed from the enum
-    // here — never an independent authority.
-    ui.viewport.sync_selection(
-        selection.selection_version,
-        || selection.get_selected_clip_ids(),
-        || selection.selected_marker_ids.iter().cloned().collect(),
-    );
-    if let Some(beat) = selection.insert_cursor_beat {
-        ui.viewport.set_insert_cursor(beat);
-    }
-
-    // Region → viewport (sync from UIState so clearing via set_insert_cursor
-    // propagates). Only a `TimeRange` selection has a region; a `Clips`
-    // selection pushes `None`, so no band draws behind a clip selection (D1).
-    if let Some(r) = selection.current_region() {
-        let ui_layers = crate::ui_translate::layers_to_ui(&project.timeline.layers);
-        let (start_layer, end_layer) = r.layer_index_range(&ui_layers).unwrap_or((0, 0));
-        ui.viewport
-            .set_selection_region(Some(manifold_ui::panels::viewport::SelectionRegion {
-                start_beat: r.start_beat,
-                end_beat: r.end_beat,
-                start_layer,
-                end_layer,
-            }));
-    } else {
-        ui.viewport.set_selection_region(None);
-    }
-
-    // Layer highlighting via UIState.is_layer_active (unified check across 4 paths):
-    // explicit layer selection, clip selection, insert cursor, region.
-    {
-        let active_flags: Vec<bool> = project
-            .timeline
-            .layers
-            .iter()
-            .map(|l| selection.is_layer_active(&l.layer_id))
-            .collect();
-        ui.layer_headers.set_active_layers(&active_flags);
-    }
-    // Also set single active_layer for backward compat (inspector routing)
-    let active_layer_id = active_layer
-        .and_then(|i| project.timeline.layers.get(i))
-        .map(|l| l.layer_id.clone());
-    ui.layer_headers.set_active_layer(active_layer_id);
-    // section 19 timeline echo: the focused lane lifts in the viewport body too (track
-    // index == layer index, the `tracks` vec is built 1:1 from project layers).
-    ui.viewport.set_active_track_index(active_layer);
     {
         for (i, layer) in project.timeline.layers.iter().enumerate() {
             ui.layer_headers.set_mute_state(tree, i, layer.is_muted);
@@ -532,6 +504,160 @@ pub fn push_state(
             ui.layer_headers.set_info_text(tree, i, &info);
         }
     }
+
+    // Cache master effect names for the LED exit path dropdown
+    {
+        use manifold_core::preset_type_registry;
+        let names: Vec<String> = project
+            .settings
+            .master_effects
+            .iter()
+            .map(|fx| preset_type_registry::display_name(fx.effect_type()).to_string())
+            .collect();
+        ui.master_effect_names = names;
+    }
+
+    // Sync clip chrome VALUES from primary selected clip.
+    // Mode (has_clip, is_video, is_gen, is_looping) is set in sync_inspector_data
+    // BEFORE build so the tree layout is correct. Here we only sync text/values
+    // into the already-built nodes.
+    if let Some(clip_id) = selection.primary_selected_clip_id() {
+        let clip = project
+            .timeline
+            .layers
+            .iter()
+            .flat_map(|l| l.clips.iter())
+            .find(|c| c.id == *clip_id);
+        if let Some(clip) = clip {
+            let is_video = !clip.video_clip_id.is_empty();
+            let is_gen = clip.generator_type != PresetTypeId::NONE;
+            let chrome = ui.inspector.clip_chrome_mut();
+            if is_video {
+                let name = clip.video_clip_id.clone();
+                chrome.sync_name(tree, &name);
+                chrome.sync_source_name(tree, &clip.video_clip_id);
+                chrome.sync_loop_enabled(tree, clip.is_looping);
+                chrome.sync_loop_duration(tree, clip.loop_duration_beats);
+                if clip.recorded_bpm > 0.0 {
+                    chrome.sync_bpm(tree, &format!("{:.1}", clip.recorded_bpm));
+                } else {
+                    chrome.sync_bpm(tree, "Auto");
+                }
+                chrome.set_loop_range(clip.duration_beats.max(Beats(1.0)));
+            } else if clip.is_audio() {
+                let file_name = std::path::Path::new(&clip.audio_file_path)
+                    .file_name()
+                    .map(|s| s.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| "Audio".to_string());
+                chrome.sync_name(tree, &file_name);
+                chrome.sync_source_name(tree, &file_name);
+                // Warp state is independent of remembered source tempo.
+                chrome.sync_warp_enabled(tree, clip.is_audio_warp_enabled());
+                // Source BPM remains visible while Warp is off.
+                if clip.recorded_bpm > 0.0 {
+                    chrome.sync_bpm(tree, &format!("{:.1}", clip.recorded_bpm));
+                } else {
+                    chrome.sync_bpm(tree, "Unknown");
+                }
+                // Detection status + progress (what the pipeline is doing).
+                let progress = if content_state.percussion_progress < 0.0 {
+                    0.0
+                } else {
+                    content_state.percussion_progress
+                };
+                chrome.sync_detect_status(
+                    tree,
+                    &content_state.percussion_status_message,
+                    progress,
+                    content_state.percussion_show_progress,
+                );
+            } else if is_gen {
+                chrome.sync_name(
+                    tree,
+                    manifold_core::preset_type_registry::display_name(&clip.generator_type),
+                );
+                chrome.sync_gen_type(
+                    tree,
+                    manifold_core::preset_type_registry::display_name(&clip.generator_type),
+                );
+            }
+        }
+    }
+}
+
+/// Insert cursor, selection band, selected clips and layer highlight. Runs
+/// when the selection, cursor or active layer moved, or after a projection
+/// or rebuild replaced the nodes it writes.
+pub fn push_selection(
+    ui: &mut UIRoot,
+    project: &Project,
+    active_layer: Option<usize>,
+    selection: &SelectionState,
+) {
+    // Selection → viewport (version-gated to avoid per-frame Vec allocation).
+    // The panel's `selected_clip_ids` is a pure render cache fed from the enum
+    // here — never an independent authority.
+    ui.viewport.sync_selection(
+        selection.selection_visual_version(),
+        || selection.get_selected_clip_ids(),
+        || selection.selected_marker_ids().iter().cloned().collect(),
+    );
+    if let Some(beat) = selection.insert_cursor_beat() {
+        ui.viewport.set_insert_cursor(beat);
+    }
+
+    // Region → viewport (sync from UIState so clearing via set_insert_cursor
+    // propagates). Only a `TimeRange` selection has a region; a `Clips`
+    // selection pushes `None`, so no band draws behind a clip selection (D1).
+    if let Some(r) = selection.current_region() {
+        let ui_layers = crate::ui_translate::layers_to_ui(&project.timeline.layers);
+        let (start_layer, end_layer) = r.layer_index_range(&ui_layers).unwrap_or((0, 0));
+        ui.viewport
+            .set_selection_region(Some(manifold_ui::panels::viewport::SelectionRegion {
+                start_beat: r.start_beat,
+                end_beat: r.end_beat,
+                start_layer,
+                end_layer,
+            }));
+    } else {
+        ui.viewport.set_selection_region(None);
+    }
+
+    // Layer highlighting via UIState.is_layer_active (unified check across 4 paths):
+    // explicit layer selection, clip selection, insert cursor, region.
+    {
+        let active_flags: Vec<bool> = project
+            .timeline
+            .layers
+            .iter()
+            .map(|l| selection.is_layer_active(&l.layer_id))
+            .collect();
+        ui.layer_headers.set_active_layers(&active_flags);
+    }
+    // Also set single active_layer for backward compat (inspector routing)
+    let active_layer_id = active_layer
+        .and_then(|i| project.timeline.layers.get(i))
+        .map(|l| l.layer_id.clone());
+    ui.layer_headers.set_active_layer(active_layer_id);
+    // section 19 timeline echo: the focused lane lifts in the viewport body too (track
+    // index == layer index, the `tracks` vec is built 1:1 from project layers).
+    ui.viewport.set_active_track_index(active_layer);
+}
+
+/// Per-frame values: playhead, macro, opacity and LED values, card and
+/// scene-row values.
+pub fn push_live(
+    ui: &mut UIRoot,
+    project: &Project,
+    content_state: &crate::content_state::ContentState,
+    active_layer: Option<usize>,
+) {
+    manifold_core::work_count::record_work(manifold_core::work_count::WorkKind::ValuePush);
+    let tree = &mut ui.tree;
+    // Playhead + playing state
+    let playhead_beat = content_state.current_beat.as_f32();
+    ui.viewport.set_playhead(Beats::from_f32(playhead_beat));
+    ui.viewport.set_playing(content_state.is_playing);
 
     // Macro slider values + labels/mapping counts for context menus
     let macro_vals: Vec<f32> = project
@@ -660,85 +786,6 @@ pub fn push_state(
             ui.inspector
                 .master_chrome_mut()
                 .sync_exit_path(tree, &exit_label);
-        }
-    }
-
-    // Cache master effect names for the LED exit path dropdown
-    {
-        use manifold_core::preset_type_registry;
-        let names: Vec<String> = project
-            .settings
-            .master_effects
-            .iter()
-            .map(|fx| preset_type_registry::display_name(fx.effect_type()).to_string())
-            .collect();
-        ui.master_effect_names = names;
-    }
-
-    // Sync clip chrome VALUES from primary selected clip.
-    // Mode (has_clip, is_video, is_gen, is_looping) is set in sync_inspector_data
-    // BEFORE build so the tree layout is correct. Here we only sync text/values
-    // into the already-built nodes.
-    if let Some(clip_id) = &selection.primary_selected_clip_id {
-        let clip = project
-            .timeline
-            .layers
-            .iter()
-            .flat_map(|l| l.clips.iter())
-            .find(|c| c.id == *clip_id);
-        if let Some(clip) = clip {
-            let is_video = !clip.video_clip_id.is_empty();
-            let is_gen = clip.generator_type != PresetTypeId::NONE;
-            let chrome = ui.inspector.clip_chrome_mut();
-            if is_video {
-                let name = clip.video_clip_id.clone();
-                chrome.sync_name(tree, &name);
-                chrome.sync_source_name(tree, &clip.video_clip_id);
-                chrome.sync_loop_enabled(tree, clip.is_looping);
-                chrome.sync_loop_duration(tree, clip.loop_duration_beats);
-                if clip.recorded_bpm > 0.0 {
-                    chrome.sync_bpm(tree, &format!("{:.1}", clip.recorded_bpm));
-                } else {
-                    chrome.sync_bpm(tree, "Auto");
-                }
-                chrome.set_loop_range(clip.duration_beats.max(Beats(1.0)));
-            } else if clip.is_audio() {
-                let file_name = std::path::Path::new(&clip.audio_file_path)
-                    .file_name()
-                    .map(|s| s.to_string_lossy().into_owned())
-                    .unwrap_or_else(|| "Audio".to_string());
-                chrome.sync_name(tree, &file_name);
-                chrome.sync_source_name(tree, &file_name);
-                // Warp state is independent of remembered source tempo.
-                chrome.sync_warp_enabled(tree, clip.is_audio_warp_enabled());
-                // Source BPM remains visible while Warp is off.
-                if clip.recorded_bpm > 0.0 {
-                    chrome.sync_bpm(tree, &format!("{:.1}", clip.recorded_bpm));
-                } else {
-                    chrome.sync_bpm(tree, "Unknown");
-                }
-                // Detection status + progress (what the pipeline is doing).
-                let progress = if content_state.percussion_progress < 0.0 {
-                    0.0
-                } else {
-                    content_state.percussion_progress
-                };
-                chrome.sync_detect_status(
-                    tree,
-                    &content_state.percussion_status_message,
-                    progress,
-                    content_state.percussion_show_progress,
-                );
-            } else if is_gen {
-                chrome.sync_name(
-                    tree,
-                    manifold_core::preset_type_registry::display_name(&clip.generator_type),
-                );
-                chrome.sync_gen_type(
-                    tree,
-                    manifold_core::preset_type_registry::display_name(&clip.generator_type),
-                );
-            }
         }
     }
 

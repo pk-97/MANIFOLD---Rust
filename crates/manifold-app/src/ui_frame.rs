@@ -175,11 +175,12 @@ pub(crate) struct UiFrameSignals {
 /// call; the harness carries them to its next frame.
 ///
 /// `cache` is `Option<&mut UICacheManager>` — see module doc deviation #1.
+/// Returns whether any part of the tree was rebuilt or scrolled.
 pub(crate) fn apply_ui_frame_invalidations(
     ui_root: &mut UIRoot,
     mut cache: Option<&mut UICacheManager>,
     signals: &mut UiFrameSignals,
-) {
+) -> bool {
     // An in-place inspector scroll (wheel in window_input, or a scrollbar
     // drag handled inside process_events) offset the content nodes without a
     // rebuild — re-render just the inspector's atlas slot. A full rebuild
@@ -211,31 +212,38 @@ pub(crate) fn apply_ui_frame_invalidations(
                 if let Some(cm) = &mut cache {
                     cm.invalidate_scroll_panels();
                 }
+                return true;
             }
+            false
         } else if layer_dragging {
             // Defer — rebuilding scroll panels while a layer drag is active
             // would destroy the node IDs that handle_drag / handle_drag_end
             // depend on.
+            false
         } else {
             signals.needs_rebuild = false;
-            ui_root.build();
+            ui_root.rebuild_from(crate::ui_root::RegionSlot::Full);
             // Re-apply effect card selection visuals after rebuild —
             // structural changes recreate cards with is_selected=false.
             ui_root.inspector.apply_selection_visuals(&mut ui_root.tree);
             if let Some(cm) = &mut cache {
                 cm.invalidate_all();
             }
+            true
         }
     } else if signals.scroll_dirty.any() && !layer_dragging {
         ui_root.rebuild_scroll_panels(signals.scroll_dirty);
         if let Some(cm) = &mut cache {
             cm.invalidate_scroll_panels();
         }
+        true
+    } else {
+        false
     }
 }
 
 /// The per-frame UI flags that outlive one frame: what input handlers and the
-/// editing host set, and what [`run_projection_pass`] consumes. The live App
+/// editing host set, and what [`apply_frame_plan`] consumes. The live App
 /// keeps these as its own fields; the script runner owns one of these.
 #[cfg(feature = "ui-snapshot")]
 #[derive(Default)]
@@ -251,7 +259,7 @@ pub(crate) struct UiFrameFlags {
     pub invalidated_layers: Vec<usize>,
 }
 
-/// Borrowed view of the flags [`run_projection_pass`] reads and writes back.
+/// Borrowed view of the flags [`apply_frame_plan`] reads and writes back.
 pub(crate) struct FrameFlagsMut<'a> {
     pub needs_rebuild: &'a mut bool,
     pub automation_lanes_dirty: &'a mut bool,
@@ -271,13 +279,10 @@ impl UiFrameFlags {
     }
 }
 
-/// What moved since the last frame, decided by the caller exactly as
-/// `tick_and_render` decides it: the structural flag it consumed this frame,
-/// and whether the selection version or the active layer changed.
+/// What the old flags say moved this frame. They stay live beside the plan
+/// and can only add work (UI_INVALIDATION_DESIGN.md P4b).
 pub(crate) struct ProjectionChanges {
     pub structural: bool,
-    pub selection_changed: bool,
-    pub active_layer_changed: bool,
     pub scrolled_in_place: bool,
 }
 
@@ -289,16 +294,45 @@ pub(crate) struct PushInputs<'a> {
     pub transport_cache: &'a mut crate::ui_bridge::TransportDisplayCache,
 }
 
-/// The projection pass, called by the live App (`tick_and_render`) and the
-/// script runner: selection, structural and active-layer projection (mirrored
-/// onto the editor window's inspector when one is open), then `between` (the
-/// caller's per-frame work that sits between projection and rebuild in the
-/// App: drag polling; returns whether a clip move or trim drag is live),
-/// auto-scroll, overlay open/close, the rebuild decision, `push_state`, and the
-/// drag-time clip and lane re-projection. Moved from `tick_and_render`, not
-/// rewritten; no decision changed (UI_INVALIDATION_DESIGN.md P4a).
+/// This frame's planner inputs (D6), read from the UI's own state. Region
+/// rects, panel view versions, overlay and chrome display keys stay at their
+/// defaults until the phases that make them live (P4c, P4e).
+pub(crate) fn gather_frame_inputs(
+    planner: &mut crate::frame_plan::FramePlanner,
+    ui_root: &UIRoot,
+    selection: &mut manifold_ui::UIState,
+    active_layer: &Option<manifold_core::LayerId>,
+    edits: &crate::gesture_preview::UiEdits,
+    content_state: &crate::content_state::ContentState,
+) -> crate::frame_plan::FrameInputs {
+    crate::frame_plan::FrameInputs {
+        parts: edits.stamps.parts(),
+        preview: edits.preview.version(),
+        selection_identity: selection.selection_identity_version(),
+        selection_visual: selection.selection_visual_version(),
+        cursor: selection.cursor_version(),
+        active_layer: planner.active_layer_version(active_layer),
+        automation_view: selection.automation_view(),
+        scroll_x_px: ui_root.viewport.beat_to_pixel(Beats::ZERO).round() as i32,
+        scroll_y_px: ui_root.viewport.scroll_y_px().round() as i32,
+        zoom_bits: ui_root.viewport.pixels_per_beat().to_bits(),
+        playhead_px: ui_root.viewport.playhead_pixel().map_or(i32::MIN, |px| px.round() as i32),
+        audio_directory: content_state.audio_directory_version,
+        values: content_state.values_seq,
+        runtime: content_state.runtime,
+        ..Default::default()
+    }
+}
+
+/// Apply one frame plan beside the old flags (P4b), then the per-frame work
+/// that sits around it in the App's order: the projections the plan or an
+/// old flag asks for (each at most once), the editor window's inspector
+/// mirror, `between` (the caller's drag polling; returns whether a clip move
+/// or trim drag is live), auto-scroll, overlay open/close, the rebuild, the
+/// four `push_state` pieces, and the drag-time clip and lane re-projection.
+/// Called by the live App (`tick_and_render`) and the script runner.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn run_projection_pass(
+pub(crate) fn apply_frame_plan(
     ui_root: &mut UIRoot,
     editor_ui_root: Option<&mut UIRoot>,
     cache: Option<&mut UICacheManager>,
@@ -306,6 +340,7 @@ pub(crate) fn run_projection_pass(
     selection: &mut manifold_ui::UIState,
     active_layer: &mut Option<manifold_core::LayerId>,
     flags: FrameFlagsMut<'_>,
+    plan: &crate::frame_plan::FramePlan,
     changes: ProjectionChanges,
     push: PushInputs<'_>,
     between: impl FnOnce(
@@ -316,33 +351,32 @@ pub(crate) fn run_projection_pass(
         &mut FrameFlagsMut<'_>,
     ) -> bool,
 ) {
+    use crate::frame_plan::Projection;
     let mut flags = flags;
-    let mut needs_structural_sync = changes.structural;
+    let projections = plan.projections;
     let latched = &push.content_state.automation_latched_params;
     let led_preview = push.content_state.led_preview.as_ref();
     let active_idx = |project: &manifold_core::project::Project, id: &Option<manifold_core::LayerId>| {
         id.as_ref().and_then(|id| project.timeline.find_layer_index_by_id(id))
     };
 
-    // Selection version change → sync inspector so it shows the newly selected clip
-    if changes.selection_changed && !needs_structural_sync {
-        let idx = active_idx(project, active_layer);
-        crate::ui_bridge::sync_inspector_data(ui_root, project, idx, selection, latched, led_preview);
-        needs_structural_sync = true;
-    }
-
-    if needs_structural_sync || changes.active_layer_changed {
+    let project_sync = changes.structural || projections.contains(Projection::ProjectSync);
+    let inspector_sync = project_sync || projections.contains(Projection::InspectorSync);
+    if project_sync {
         let idx = active_idx(project, active_layer);
         crate::ui_bridge::sync_automation_lane_order(project, selection);
         crate::ui_bridge::sync_project_data(ui_root, project, idx, selection);
-        crate::ui_bridge::sync_inspector_data(ui_root, project, idx, selection, latched, led_preview);
-        // Inspector content changed — needs rebuild.
-        needs_structural_sync = true;
     }
+    if inspector_sync {
+        let idx = active_idx(project, active_layer);
+        crate::ui_bridge::sync_inspector_data(ui_root, project, idx, selection, latched, led_preview);
+    }
+    // A projection rewrote the inspector or the timeline lists: rebuild.
+    let needs_structural_sync = inspector_sync;
     // Mirror the inspector sync onto the editor window's own inspector so its
     // column stays in lockstep with the main one; reconfigure (which resets
     // transient card state) fires only when it does for the main window.
-    if needs_structural_sync && let Some(ed) = editor_ui_root {
+    if inspector_sync && let Some(ed) = editor_ui_root {
         let idx = active_idx(project, active_layer);
         crate::ui_bridge::sync_inspector_data(ed, project, idx, selection, latched, led_preview);
         // The editor column hosts no scene panel (SCENE_SURFACES D16).
@@ -367,45 +401,68 @@ pub(crate) fn run_projection_pass(
     if ui_root.detect_overlay_open_change() {
         flags.scroll_dirty.visual = true;
     }
-    let scroll_dirty = std::mem::take(flags.scroll_dirty);
+    let mut scroll_dirty = std::mem::take(flags.scroll_dirty);
+    // The plan's rebuild mask as the flat-tree suffix it maps to, through
+    // the old signals so the drag guards still hold (P5a deletes them). A
+    // viewport-only suffix rides the scroll-panel rebuild: the old signals
+    // have no viewport-only rebuild that is not an in-place scroll.
+    let mut needs_rebuild = *flags.needs_rebuild;
+    match plan.rebuild.slot() {
+        Some(crate::ui_root::RegionSlot::Full) => needs_rebuild = true,
+        Some(_) => scroll_dirty.visual = true,
+        None => {}
+    }
 
     let mut signals = UiFrameSignals {
-        needs_rebuild: *flags.needs_rebuild,
+        needs_rebuild,
         needs_structural_sync,
         scroll_dirty,
         scrolled_in_place: changes.scrolled_in_place,
     };
-    apply_ui_frame_invalidations(ui_root, cache, &mut signals);
+    let rebuilt = apply_ui_frame_invalidations(ui_root, cache, &mut signals);
     *flags.needs_rebuild = signals.needs_rebuild;
 
-    // Push engine state AFTER build so new nodes get state.
+    // Push engine state AFTER build so new nodes get state. The selection
+    // push runs on its inputs, or when a projection or rebuild replaced the
+    // nodes and lists it writes.
     let idx = active_idx(project, active_layer);
-    crate::ui_bridge::push_state(
+    crate::ui_bridge::drain_events(ui_root, push.content_state);
+    crate::ui_bridge::push_chrome(
         ui_root,
         project,
         push.content_state,
-        idx,
         selection,
         push.is_dirty,
         push.project_path,
         push.transport_cache,
     );
+    if rebuilt || project_sync || projections.contains(Projection::SelectionPush) {
+        crate::ui_bridge::push_selection(ui_root, project, idx, selection);
+    }
+    crate::ui_bridge::push_live(ui_root, project, push.content_state, idx);
 
     // Re-project clips and automation lanes only when their source moved: a
-    // clip move/trim drag writes clip data into the project each frame; a
-    // point preview or restore asks for a lanes-only resync.
-    if needs_structural_sync || clip_drag {
+    // committed edit, a drag preview, or the old drag flags.
+    if project_sync
+        || clip_drag
+        || projections.contains(Projection::ClipPositions)
+        || projections.contains(Projection::ClipPreview)
+    {
         crate::ui_bridge::sync_clip_positions(ui_root, project);
     }
-    if needs_structural_sync || *flags.automation_lanes_dirty {
+    if project_sync
+        || *flags.automation_lanes_dirty
+        || projections.contains(Projection::LaneGeometry)
+        || projections.contains(Projection::LanePreview)
+    {
         crate::ui_bridge::sync_automation_lane_geometry(
             ui_root,
             project,
-            selection.automation_mode_visible,
-            &selection.chosen_automation_params,
-            &selection.automation_lane_order,
-            &selection.hidden_automation_lanes,
-            &selection.pinned_automation_lanes,
+            selection.automation_mode_visible(),
+            selection.chosen_automation_params(),
+            selection.automation_lane_order(),
+            selection.hidden_automation_lanes(),
+            selection.pinned_automation_lanes(),
         );
     }
     *flags.automation_lanes_dirty = false;

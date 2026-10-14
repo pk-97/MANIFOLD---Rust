@@ -22,7 +22,7 @@ pub(super) fn dispatch_transport(
             if content_state.is_playing {
                 ContentCommand::send(content_tx, ContentCommand::Pause);
             } else {
-                if let Some(cursor_beat) = selection.insert_cursor_beat {
+                if let Some(cursor_beat) = selection.insert_cursor_beat() {
                     ContentCommand::send(content_tx, ContentCommand::SeekToBeat(cursor_beat));
                 }
                 ContentCommand::send(content_tx, ContentCommand::Play);
@@ -31,7 +31,7 @@ pub(super) fn dispatch_transport(
         }
         TransportAction::Stop => {
             ContentCommand::send(content_tx, ContentCommand::Stop);
-            if let Some(cursor_beat) = selection.insert_cursor_beat {
+            if let Some(cursor_beat) = selection.insert_cursor_beat() {
                 ContentCommand::send(content_tx, ContentCommand::SeekToBeat(cursor_beat));
             }
             DispatchResult::handled()
@@ -134,14 +134,14 @@ pub(super) fn dispatch_transport(
         // `handled()`, to force `sync_project_data` to re-derive
         // `automation_lane_count` and the lane list on the next frame.
         TransportAction::ToggleAutomationMode => {
-            selection.automation_mode_visible = !selection.automation_mode_visible;
+            selection.toggle_automation_mode_visible();
             selection.clear_automation_selection();
             DispatchResult::structural()
         }
 
         TransportAction::ToggleAutomationDrawMode => {
             selection.automation_draw_mode = !selection.automation_draw_mode;
-            selection.automation_mode_visible = true;
+            selection.set_automation_mode_visible(true);
             DispatchResult::structural()
         }
 
