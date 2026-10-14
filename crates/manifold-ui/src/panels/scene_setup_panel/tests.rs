@@ -89,6 +89,25 @@
         assert!(panel.add_plane_id.is_some());
     }
 
+    /// SCENE_SURFACES D17: an old project with two scenes in one layer shows
+    /// the first, with a one-line notice in the Scene tab.
+    #[test]
+    fn two_scene_layer_shows_one_line_notice() {
+        let notice = "This layer has more than one scene; showing the first";
+        let build = |multiple_scenes: bool| {
+            let mut vm = azalea_shaped_vm();
+            vm.multiple_scenes = multiple_scenes;
+            let mut panel = ScenePanel::new();
+            panel.open();
+            panel.configure(SceneSetupState::Live(Box::new(vm)));
+            let mut tree = UITree::new();
+            panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
+            tree.nodes().iter().filter(|n| n.text.as_deref() == Some(notice)).count()
+        };
+        assert_eq!(build(true), 1);
+        assert_eq!(build(false), 0);
+    }
+
     /// A synthetic multi-object def (P2 gate): one Known "Azalea" object with
     /// a full transform + pbr material + a Bend modifier, one Custom object,
     /// and header counts — proves the Objects section renders both shapes,

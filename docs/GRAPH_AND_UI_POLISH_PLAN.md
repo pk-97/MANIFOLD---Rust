@@ -92,9 +92,9 @@ Grouping made the structure right but FluidSim3D still opens as a hairball. The 
 ### Architecture map (where polish lives)
 
 - `crates/manifold-ui/src/color.rs` — **the theme.** Every colour, font size, corner radius as a named constant (`ACCENT_BLUE`, `ENVELOPE_ACTIVE`, `DRIVER_ACTIVE`, `TRIM_FILL`, `TEXT_DIMMED`, `FONT_BODY`, `FONT_CAPTION`, `BUTTON_RADIUS`, …). Recolour / resize type here.
-- `crates/manifold-ui/src/panels/param_slider_shared.rs` — **layout constants + builders.** `ROW_HEIGHT=20`, `ROW_SPACING=4`, `PADDING=6`, `GAP=4`, `DE_BUTTON_SIZE=20`, `DE_BUTTON_GAP=2`, the driver/envelope drawer sizes, `BEAT_DIV_COUNT=11`. Also `build_param_row`, the driver/envelope config drawers, button styles (`de_btn_style`, `config_btn_style`, `toggle_btn_style`).
+- `crates/manifold-ui/src/panels/param_slider_shared/mod.rs` — **layout constants + builders.** `ROW_HEIGHT=20`, `ROW_SPACING=4`, `PADDING=6`, `GAP=4`, `DE_BUTTON_SIZE=20`, `DE_BUTTON_GAP=2`, the driver/envelope drawer sizes, `BEAT_DIV_COUNT=11`. Also `build_param_row`, the driver/envelope config drawers, button styles (`de_btn_style`, `config_btn_style`, `toggle_btn_style`).
 - `crates/manifold-ui/src/slider.rs` — **`BitmapSlider`** (track / fill / handle geometry) + `SliderColors` (default / envelope / gen_param sets).
-- `crates/manifold-ui/src/panels/param_card.rs` — the card shell (header, rows).
+- `crates/manifold-ui/src/panels/param_card/mod.rs` — the card shell (header, rows).
 - `crates/manifold-ui/src/bitmap_painter.rs` — timeline **clip** painting only (`fill_rect`, `draw_border`, `draw_clip`, `get_clip_color`). Note: per-layer clip colour already exists here (lightens/darkens the layer colour for state).
 
 The retained tree is `UITree` (`add_panel` / `add_button` / `add_label`, `BitmapSlider::build`). `UIStyle` carries `bg_color` / `hover_bg_color` / `pressed_bg_color` / `text_color` / `font_size` / `corner_radius` / `text_align`. So hover/press states, rounded corners, and SDF icons (PUA `U+E000..E004` waveform glyphs) all exist already.

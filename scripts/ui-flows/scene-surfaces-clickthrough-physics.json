@@ -3,7 +3,7 @@
     "Pointer": {
       "target": {
         "Query": {
-          "text": "Scene"
+          "text": "Scene", "type": "Button", "under_name": "inspector"
         }
       },
       "gesture": {
@@ -383,8 +383,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "name_suffix": ".value",
-          "nth": 0
+          "name_suffix": "_rt_enabled"
         }
       },
       "check": "Exists"

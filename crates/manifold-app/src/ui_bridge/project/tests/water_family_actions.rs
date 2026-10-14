@@ -27,8 +27,8 @@ fn add_water(project: &mut Project, layer: &LayerId, render: u32) {
 
 fn sync_water_ui(project: &Project, layer: &LayerId) -> crate::ui_root::UIRoot {
     let (_, _state, mut ui, mut selection, _active, _prefs) = dispatch_harness();
-    ui.scene_setup_panel.open();
     selection.select_layer(layer.clone());
+    selection.pin_scope(manifold_ui::InspectorTab::Scene);
     crate::ui_bridge::projection::inspector::sync_inspector_data(
         &mut ui, project, Some(0), &selection, &[], None,
     );

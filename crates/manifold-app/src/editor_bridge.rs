@@ -1152,7 +1152,7 @@ impl Application {
                 .master_effects
                 .get(ei)
                 .map(|e| e.id.clone()),
-            manifold_ui::InspectorTab::Layer | manifold_ui::InspectorTab::Group => self
+            manifold_ui::InspectorTab::Layer | manifold_ui::InspectorTab::Group | manifold_ui::InspectorTab::Scene => self
                 .active_layer_id
                 .as_ref()
                 .and_then(|id| self.local_project.timeline.find_layer_by_id(id))

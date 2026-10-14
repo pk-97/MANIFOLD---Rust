@@ -1,34 +1,21 @@
 [
   {
     "Pointer": {
-      "target": { "Query": { "text": "PLASMA" } },
-      "gesture": { "Click": { "modifiers": {} } }
-    }
-  },
-  {
-    "Pointer": {
-      "target": { "Query": { "text": "Scene" } },
+      "target": { "Query": { "text": "Spectrogram", "type": "Button" } },
       "gesture": { "Click": { "modifiers": {} } }
     }
   },
   "Snapshot",
   {
     "Assert": {
-      "selector": { "Query": { "text": "This generator has no 3D scene." } },
+      "selector": { "Query": { "text": "Layer", "type": "Button", "under_name": "inspector" } },
       "check": "Exists"
     }
   },
-  {
-    "Pointer": {
-      "target": { "Query": { "text": "NOISE FIELD" } },
-      "gesture": { "Click": { "modifiers": {} } }
-    }
-  },
-  "Snapshot",
   {
     "Assert": {
-      "selector": { "Query": { "text": "New 3D Scene" } },
-      "check": "Exists"
+      "selector": { "Query": { "text": "Scene", "type": "Button", "under_name": "inspector" } },
+      "check": { "Count": 0 }
     }
   }
 ]

@@ -251,7 +251,7 @@ Phased by **layer**, never by family (DESIGN_AUTHORING section 7): P1 swaps the 
 
 **P1a — collapse the parallel vecs in place (mechanical).** Inside the EXISTING `ParamCardConfig`: the ~15 per-param vecs PLUS `AudioCardState`'s ~14 more (`param_slider_shared.rs:572–600` — the fork-found second cliff) become per-row structs (`RowMod`-shaped), and `ParamModState`'s sync paths (`sync_audio` et al.) are re-pointed at them. No new types cross a crate boundary; no parallel path (the DTO's interior changes, its name and consumers don't).
 
-- **Entry:** `rg -n 'struct ParamCardConfig' crates/manifold-ui/src/panels/param_card.rs` hits; `rg -n 'struct AudioCardState' crates/manifold-ui/src/panels/param_slider_shared.rs` hits; re-derive counts.
+- **Entry:** `rg -n 'struct ParamCardConfig' crates/manifold-ui/src/panels/param_card/mod.rs` hits; `rg -n 'struct AudioCardState' crates/manifold-ui/src/panels/param_slider_shared/mod.rs` hits; re-derive counts.
 - **Gate:** existing card/golden/undo suites green untouched; negative: `rg 'driver_active|trim_min|target_norm|env_decay' crates/manifold-ui` → 0 (the vec names are gone).
 - **Demo:** none — **L1**, honestly (interior refactor pinned by untouched suites).
 

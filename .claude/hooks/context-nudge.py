@@ -2,7 +2,7 @@
 """PreToolUse(Edit|Write|MultiEdit) — path-triggered invariant injection.
 
 The semantic-instruction-set pattern applied to the harness: invariants are
-DATA (.claude/context-nudges/table.json + snippet files), dispatch is
+DATA (.claude/hooks/context-nudges/table.json + snippet files), dispatch is
 deterministic (glob match on the touched path), and each topic fires ONCE per
 session. Rules arrive at the moment of contact instead of living in always-on
 context or relying on model judgment to look them up.

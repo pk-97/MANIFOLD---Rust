@@ -13,7 +13,7 @@ Landing and gates:
   land-wave               land one or a batch of wave branches without the main checkout  [scripts/land_wave.py]  (cost: focused)
   gpu-proofs              GPU proof tests scoped to the branch diff; --filter <test> runs one; --all is nightly  [scripts/gpu_proofs_gate.py]  (cost: focused)
   gpu-scope               dry run: which GPU proofs these paths select (args: paths)  [scripts/gpu_scope.py]  (cost: unit)
-  flows                   UI flow suite; <name> runs one flow, --touched <range> is the gate's selection  [scripts/run_ui_flows.py]  (cost: broad)
+  flows                   UI flow suite; bare = flows the branch touched (the gate set), <name> runs one flow, --all runs everything  [scripts/run_ui_flows.py]  (cost: broad)
   flows-batch-proof       proof that batched flows report what solo runs report  [scripts/ui_flows_batch_proof.py]  (cost: broad)
   trunk-health            nightly workspace sweep on main; files beads on red  [scripts/trunk_health.py]  (cost: broad)
   landing-metrics         the landing loop measured over N days: runs per landing, red share, GPU reuse, queue wait  [scripts/landing_metrics.py]  (cost: unit)
@@ -63,6 +63,7 @@ Render and measure:
   lab-preflight           detector lab: read-only check that an overnight PLAN.json can run (clean tree, MPS, disk, configs, kick verdicts, caches warm, GPU lock)  [tools/audio_analysis/lab/preflight.py]  (cost: focused)
   lab-review              detector label review project: build OUT.manifold [--songs] [--fires-dir] [--dry-run] | fires DIR | read ORIGINAL EDITED (Peter's edits as per-family overlays)  [tools/audio_analysis/lab/review_project.py]  (cost: focused)
   repair-audio-fixture    rebuild a fixture mix from aligned stems, preserving the original; dry-run unless --apply  [scripts/repair_audio_fixture.py]  (cost: focused)
+  sync-rig-report         read a sync rig log (sync-*.log): tick jitter, Link/CLK/AbletonOSC phase, present delay, display latency [LOG...|--latest]  [scripts/sync_rig_report.py]  (cost: unit)
 
 CPU reference oracles (f64, seconds, no GPU):
   mgpcg-ref               GPU FLIP pressure solve oracle  [scripts/mgpcg_reference.py]  (cost: unit)

@@ -3,7 +3,7 @@
     "Pointer": {
       "target": {
         "Query": {
-          "text": "Scene"
+          "text": "Scene", "type": "Button", "under_name": "inspector"
         }
       },
       "gesture": {
@@ -317,9 +317,7 @@
     "Pointer": {
       "target": {
         "Query": {
-          "text": "\u00d7",
-          "under_name": "scene_setup",
-          "type": "Button"
+          "text": "Layer", "type": "Button", "under_name": "inspector"
         }
       },
       "gesture": {
@@ -473,9 +471,9 @@
       },
       "check": {
         "RectWithin": {
-          "x": 624.0,
-          "y": 733.0,
-          "width": 288.0,
+          "x": 1028.0,
+          "y": 791.0,
+          "width": 480.0,
           "height": 22.0
         }
       }
@@ -494,9 +492,9 @@
       },
       "check": {
         "RectWithin": {
-          "x": 624.0,
-          "y": 733.0,
-          "width": 288.0,
+          "x": 1028.0,
+          "y": 791.0,
+          "width": 480.0,
           "height": 22.0
         }
       }

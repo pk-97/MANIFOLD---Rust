@@ -149,8 +149,8 @@ impl UIRoot {
                 continue;
             }
 
-            // Escape closes the Scene Setup dock — same mirrored path
-            // (SCENE_SETUP_PANEL_DESIGN D2).
+            // Escape leaves the Scene tab — the same toggle as the header
+            // button and the panel close button (SCENE_SURFACES D16).
             if self.scene_setup_panel.is_open()
                 && matches!(event, UIEvent::KeyDown { key: Key::Escape, .. })
             {
@@ -176,7 +176,7 @@ impl UIRoot {
                 }
             }
 
-            // Scene Setup dock — mirror of the Audio Setup routing above.
+            // Scene tab panel — mirror of the Audio Setup routing above.
             if self.scene_setup_panel.is_open() {
                 let node = match event {
                     UIEvent::Click { node_id, .. } | UIEvent::DoubleClick { node_id, .. } => Some(*node_id),

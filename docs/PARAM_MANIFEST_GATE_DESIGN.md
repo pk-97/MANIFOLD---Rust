@@ -1,6 +1,6 @@
 # PARAM_MANIFEST_GATE — make a half-built param manifest unobservable at runtime (BUG-080 (Design pass: param-manifest two-phase…))
 
-**Status:** P1 SHIPPED 2026-07-14 (bug-wave lane B) · Sonnet 5 (Peter approved the direction same day: "I want to also ensure these bugs are fixed at the root and fundamental level … remove bug classes where possible and sensible") · `manifest_provisional()` (`crates/manifold-core/src/effects.rs`), the two seam asserts + throttled warns (`crates/manifold-node-engine/src/runtime/mod.rs`'s `assert_manifest_gate`, `crates/manifold-app/src/ui_bridge/state_sync.rs`'s `rows_from_manifest`), the D3 meta-test (`crates/manifold-core/tests/bug080_project_deserialize_single_door.rs`), and the two INV-1 tests all landed; gate green (1721/1721, `-p manifold-core -p manifold-nodes -p manifold-io`).
+**Status:** P1 SHIPPED 2026-07-14 (bug-wave lane B) · Sonnet 5 (Peter approved the direction same day: "I want to also ensure these bugs are fixed at the root and fundamental level … remove bug classes where possible and sensible") · `manifest_provisional()` (`crates/manifold-core/src/effects/mod.rs`), the two seam asserts + throttled warns (`crates/manifold-node-engine/src/runtime/mod.rs`'s `assert_manifest_gate`, `crates/manifold-app/src/ui_bridge/state_sync.rs`'s `rows_from_manifest`), the D3 meta-test (`crates/manifold-core/tests/bug080_project_deserialize_single_door.rs`), and the two INV-1 tests all landed; gate green (1721/1721, `-p manifold-core -p manifold-nodes -p manifold-io`).
 **Prerequisites:** PARAM_STORAGE_BOUNDARIES_DESIGN.md P1 (SHIPPED — the reconcile stage this design hardens)
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting the phase. Executes inside the 2026-07-14 bug-wave **lane B** session.
 
@@ -24,9 +24,9 @@ release before Peter hits it mid-set.
 
 | Piece | Where | State |
 |---|---|---|
-| Deserialize-time build + wire stash | `crates/manifold-core/src/effects.rs:1344` (custom `Deserialize`), stash field `pending_wire` at `effects.rs:618` (private) | Ships (BOUNDARIES D1). Manifest built against whatever registry is visible; wire stashed for retry |
+| Deserialize-time build + wire stash | `crates/manifold-core/src/effects/mod.rs:1344` (custom `Deserialize`), stash field `pending_wire` at `effects.rs:618` (private) | Ships (BOUNDARIES D1). Manifest built against whatever registry is visible; wire stashed for retry |
 | Retryable per-instance reconcile | `PresetInstance::reconcile_manifest`, `effects.rs:1599` | Ships. Keeps the stash while the template is unknown; clears it only on a real resolve — already idempotent and retry-safe |
-| Project-wide pass | `Project::reconcile_param_manifests`, `crates/manifold-core/src/project.rs:1143`, walking `for_each_preset_instance_mut` (`project.rs:1108`) | Ships. Returns unresolved count into `load_report` (BUG-079 (missing-preset-fails-silently-no-onscreen-signal) toast) |
+| Project-wide pass | `Project::reconcile_param_manifests`, `crates/manifold-core/src/project/mod.rs:1143`, walking `for_each_preset_instance_mut` (`project.rs:1108`) | Ships. Returns unresolved count into `load_report` (BUG-079 (missing-preset-fails-silently-no-onscreen-signal) toast) |
 | The one production gate | `crates/manifold-io/src/loader.rs:224` (from_str → register embedded → reconcile → strip → on_after_deserialize) | Ships. **Convention, not structure** — nothing stops a second door |
 | Production deserialize entries outside the loader | rg sweep 2026-07-14 for `from_str::<Project>` / `from_value::<Project>` / `from_str::<PresetInstance>` etc. | **Zero hits outside tests** — the hazard is future paths, not current ones |
 | Runtime seam: chain build | `PresetRuntime::try_build`, `crates/manifold-node-engine/src/runtime/mod.rs:811` (takes `&[PresetInstance]`) | Where a degraded manifest becomes passthrough/wrong-params |
@@ -81,7 +81,7 @@ fix.
 
 ## 4. Phasing — P1 only (one session, runs as part of bug-wave lane B)
 
-**Entry state:** anchors re-verified: `rg -n 'pending_wire' crates/manifold-core/src/effects.rs` (fields at ~618, reconcile at ~1599), `rg -n 'reconcile_param_manifests' crates/manifold-io/src/loader.rs` (one call), `rg -n 'fn try_build' crates/manifold-node-engine/src/runtime/mod.rs`. Counts that differ from the audit table → stop, list, proceed against the fresh inventory.
+**Entry state:** anchors re-verified: `rg -n 'pending_wire' crates/manifold-core/src/effects/mod.rs` (fields at ~618, reconcile at ~1599), `rg -n 'reconcile_param_manifests' crates/manifold-io/src/loader.rs` (one call), `rg -n 'fn try_build' crates/manifold-node-engine/src/runtime/mod.rs`. Counts that differ from the audit table → stop, list, proceed against the fresh inventory.
 
 **Read-back (mandatory first step):** this doc whole; PARAM_STORAGE_BOUNDARIES_DESIGN.md section 2 (Decisions) D1–D3; `effects.rs:1590–1625`. Restate: the two seams, the three rejections, the forbidden moves.
 

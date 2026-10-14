@@ -1201,15 +1201,6 @@ impl Application {
                     needs_structural_sync = true;
                     continue;
                 }
-                PanelAction::Root(RootAction::OpenSceneSetup) => {
-                    // Mirror of `OpenAudioSetup` above (SCENE_SETUP_PANEL_DESIGN
-                    // D2) — same lockstep `open`/`scene_setup_width` toggle,
-                    // same structural rebuild, same dual reachability (live app
-                    // here, headless harness via `ui_bridge::dispatch`).
-                    self.ws.ui_root.toggle_scene_dock();
-                    needs_structural_sync = true;
-                    continue;
-                }
                 PanelAction::Root(RootAction::OpenRtQuality) => {
                     // Settings popup ▸ RT Quality ▸ Configure… — floating
                     // overlay (not a dock): open + dirty nudge, same shape as

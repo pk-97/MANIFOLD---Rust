@@ -299,6 +299,12 @@ impl AbletonTransportSync {
         }
     }
 
+    /// The last song-time report and its drain time (realtime seconds), read by
+    /// the sync rig log.
+    pub fn observed_song_time(&self) -> Option<(f32, f64)> {
+        self.observed.song_time
+    }
+
     pub fn on_osc_song_time(&mut self, beats: f32, now: f64) {
         self.observed.song_time = Some((beats, now));
         match self.state {

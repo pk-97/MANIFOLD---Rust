@@ -4,7 +4,7 @@
 
 ## Slots and effort
 
-Slot names reach the Claude models directly: `fable` is Fable 5.1, `opus` is Opus 5.5, `sonnet` is Sonnet 5.5, `haiku` is Haiku. The agent-launch guard prints the live map on every deny (`live map: …`); trust that over this page if they disagree.
+Slot names (`fable`, `opus`, `sonnet`, `haiku`) reach Claude models directly. Which model each resolves to is the agent-launch guard's live map (`.claude/hooks/agent-launch-guard.py`, read from the session env and printed on every deny as `live map: …`); this page names no versions.
 
 **Effort:** agents run at medium effort by default and at high for hard judgment work (diagnosis, GPU, design, reviews, audits). Never pin an agent to low.
 
@@ -12,7 +12,7 @@ Slot names reach the Claude models directly: `fable` is Fable 5.1, `opus` is Opu
 
 | Seat | Model | Work |
 |---|---|---|
-| Lead | Opus 5.5, or Fable 5.1 for the hardest design sessions | Design, judgment, briefs, review, landing. Owns every decision and every landed diff. The only orchestrator and the only seat that lands. |
+| Lead | Opus, or Fable for the hardest design sessions | Design, judgment, briefs, review, landing. Owns every decision and every landed diff. The only orchestrator and the only seat that lands. |
 | Opus lane | `opus` | Physics, GPU solvers and shaders, diagnosis, audits, anything that can hard-lock the Mac. |
 | Fable lane | `fable` | Hard whole-system root-cause work. |
 | Sonnet lane | `sonnet` | Fully decided work: app and UI wiring, tooling scripts, doc sweeps, test and flow runs, mechanical code moves. |
@@ -83,7 +83,7 @@ Slow flows come from agents re-deriving what the lead already knows. Every lane 
 
 - **Established findings** with file:line anchors. Never send an agent exploring for what the lead already knows.
 - **Exact scope**: the files it may touch; read-only profile for investigations.
-- **The gate commands** it must run and what "done" means. Lanes run each check once to the end, fix every failure it shows, then rerun only those failures by name; still red after that → stop and report verbatim. No repeated full runs; the one `--cheap` gate run is reused at landing.
+- **The gate commands** it must run and what "done" means. Lanes run each check once to the end, fix every failure it shows, then rerun only those failures by name; still red after that → stop and report verbatim. No repeated full runs; the one `--cheap` gate run is reused at landing. UI flows: a lane runs only the flows its change adds or edits, by name, never a family (`scene`) or the full suite; the landing gate runs the mapped set once. A flow red on main sits in the manifest's `expected_fail` with its bead, so it never forces a named-red rerun.
 - **Prescriptive imperatives** ("Run `cargo clippy -p manifold-ui -- -D warnings`", "Read `path:line`"), not "check X". Sonnet skips tool calls on soft phrasing.
 - **The reference to port from**, when one exists, and the instruction to name every deviation.
 - **The source and everything made from it.** Name the file that defines the contract and every file generated from or checked against it: builder, shipped JSON, catalog, UI flows, goldens. Regenerate from the source. A golden is refreshed only for a change the brief names, never because it fails.

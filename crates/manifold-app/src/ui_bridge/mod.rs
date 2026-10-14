@@ -129,9 +129,9 @@ fn inspector_select_tab(
     match tab {
         // Master needs no layer focus; just pin the scope.
         InspectorTab::Master => selection.pin_scope(InspectorTab::Master),
-        // Clip / Layer both focus the selection's own layer (clip chrome + gen
-        // params + that layer's effects).
-        InspectorTab::Clip | InspectorTab::Layer => {
+        // Clip / Layer / Scene focus the selection's own layer (clip chrome +
+        // gen params + that layer's effects, or that layer's scene).
+        InspectorTab::Clip | InspectorTab::Layer | InspectorTab::Scene => {
             if let Some(lid) = sel_layer.or_else(|| active_layer.clone()) {
                 *active_layer = Some(lid);
             }
@@ -309,14 +309,21 @@ pub fn dispatch(action: &PanelAction, ctx: &mut DispatchCtx) -> DispatchResult {
                 DispatchResult::structural()
             }
             RootAction::SceneSetupSelectionChanged(_) => DispatchResult::structural(),
-            // Audio/Scene Setup dock toggles (headless-harness path; the live
-            // app toggles in app_render). Structural: geometry changes.
+            // Audio Setup dock toggle (headless-harness path; the live app
+            // toggles in app_render). Structural: geometry changes.
             RootAction::OpenAudioSetup => {
                 ctx.ui.toggle_audio_dock();
                 DispatchResult::structural()
             }
+            // Menu, header button, the panel's close button and Escape all
+            // toggle the inspector's Scene tab (SCENE_SURFACES D16).
             RootAction::OpenSceneSetup => {
-                ctx.ui.toggle_scene_dock();
+                let tab = if ctx.ui.inspector.active_tab() == InspectorTab::Scene {
+                    InspectorTab::Layer
+                } else {
+                    InspectorTab::Scene
+                };
+                inspector_select_tab(tab, ctx.project, ctx.selection, ctx.active_layer, ctx.ui);
                 DispatchResult::structural()
             }
             // RT Quality overlay (headless-harness path; the live app opens it
@@ -538,7 +545,7 @@ pub(crate) fn resolve_effect_target(
 ) -> EffectTarget {
     match tab {
         InspectorTab::Master => EffectTarget::Master,
-        InspectorTab::Layer | InspectorTab::Group | InspectorTab::Clip => {
+        InspectorTab::Layer | InspectorTab::Group | InspectorTab::Clip | InspectorTab::Scene => {
             let layer_id = active_layer.clone().unwrap_or_else(|| {
                 project
                     .timeline
@@ -561,7 +568,7 @@ pub(crate) fn resolve_effects_read<'a>(
 ) -> (Option<&'a [PresetInstance]>, EffectTarget) {
     match tab {
         InspectorTab::Master => (Some(&project.settings.master_effects), EffectTarget::Master),
-        InspectorTab::Layer | InspectorTab::Group => {
+        InspectorTab::Layer | InspectorTab::Group | InspectorTab::Scene => {
             let target = resolve_effect_target(tab, active_layer, project);
             let effects = resolve_active_layer_index(active_layer, project)
                 .and_then(|idx| project.timeline.layers.get(idx))
@@ -606,7 +613,7 @@ pub(crate) fn resolve_effects_mut<'a>(
             let effects = &mut project.settings.master_effects;
             (Some(effects), EffectTarget::Master)
         }
-        InspectorTab::Layer | InspectorTab::Group => {
+        InspectorTab::Layer | InspectorTab::Group | InspectorTab::Scene => {
             let layer_id = active_layer.clone().unwrap_or_else(|| {
                 project
                     .timeline

@@ -1,6 +1,8 @@
 //! GpuSurface — CAMetalLayer wrapper for presenting rendered content to a window.
 
 use std::ffi::c_void;
+use std::ptr::NonNull;
+use std::sync::OnceLock;
 
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, ProtocolObject};
@@ -48,6 +50,28 @@ pub struct GpuDrawable {
 }
 
 unsafe impl Send for GpuDrawable {}
+
+type PresentedBlock = block2::Block<dyn Fn(NonNull<ProtocolObject<dyn MTLDrawable>>)>;
+
+/// Receives `(drawableID, presentedTime)` on Metal's thread. `presentedTime` is
+/// host time in seconds, 0 when the drawable was never shown. It must not block.
+static PRESENTED_OBSERVER: OnceLock<fn(u64, f64)> = OnceLock::new();
+
+block2::global_block! {
+    static PRESENTED_HANDLER = |drawable: NonNull<ProtocolObject<dyn MTLDrawable>>| {
+        if let Some(observer) = PRESENTED_OBSERVER.get() {
+            // SAFETY: Metal passes the drawable it is reporting, alive for the call.
+            let drawable = unsafe { drawable.as_ref() };
+            observer(drawable.drawableID() as u64, drawable.presentedTime());
+        }
+    };
+}
+
+/// Install the one presented-time observer (the sync rig log). Returns false
+/// if one is already installed.
+pub fn set_presented_observer(observer: fn(u64, f64)) -> bool {
+    PRESENTED_OBSERVER.set(observer).is_ok()
+}
 
 // ─── CGColorSpace FFI ────────────────────────────────────────────────
 
@@ -331,6 +355,22 @@ impl GpuDrawable {
             let drawable_obj: *mut AnyObject = self.drawable_ptr.cast();
             let _: () = msg_send![drawable_obj, present];
         }
+    }
+
+    /// Report when this drawable reaches the screen to the observer installed
+    /// by [`set_presented_observer`], and return its drawable ID; `None` (and
+    /// no handler) when no observer is installed. Call before presenting. The
+    /// handler is one static block, so a frame allocates nothing for it.
+    pub fn observe_presented(&self) -> Option<u64> {
+        PRESENTED_OBSERVER.get()?;
+        let drawable = self.raw_drawable();
+        let handler: &PresentedBlock = &PRESENTED_HANDLER;
+        // SAFETY: the block is static, so it outlives every drawable; Metal
+        // copies it (a no-op for a global block) and calls it once.
+        unsafe {
+            drawable.addPresentedHandler(std::ptr::from_ref(handler).cast_mut());
+        }
+        Some(drawable.drawableID() as u64)
     }
 
     /// Internal accessor for command-buffer present integration.

@@ -345,6 +345,9 @@ pub(crate) fn run_projection_pass(
     if needs_structural_sync && let Some(ed) = editor_ui_root {
         let idx = active_idx(project, active_layer);
         crate::ui_bridge::sync_inspector_data(ed, project, idx, selection, latched, led_preview);
+        // The editor column hosts no scene panel (SCENE_SURFACES D16).
+        ed.inspector.drop_scene_tab();
+        ed.scene_setup_panel.close();
     }
 
     let clip_drag = between(ui_root, project, selection, active_layer, &mut flags);

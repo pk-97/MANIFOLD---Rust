@@ -621,6 +621,28 @@ impl AbletonBridge {
     fn handle_packet_static(packet: rosc::OscPacket, queue: &Arc<Mutex<AbletonMessageQueue>>) {
         match packet {
             rosc::OscPacket::Message(msg) => {
+                // Rig log (C0): transport reports stamped on arrival, before
+                // the per-frame drain loses the timing.
+                let value = || msg.args.first().and_then(osc_arg_float);
+                match msg.addr.as_str() {
+                    "/live/song/get/current_song_time" => {
+                        if let Some(beats) = value() {
+                            crate::rig_log::emit(crate::rig_log::RigRecord::OscSongTime {
+                                at_ns: crate::rig_log::now_ns(),
+                                beats,
+                            });
+                        }
+                    }
+                    "/live/song/get/tempo" => {
+                        if let Some(bpm) = value() {
+                            crate::rig_log::emit(crate::rig_log::RigRecord::OscTempo {
+                                at_ns: crate::rig_log::now_ns(),
+                                bpm,
+                            });
+                        }
+                    }
+                    _ => {}
+                }
                 queue.lock().messages.push(OscMessage {
                     address: msg.addr,
                     args: msg.args,
@@ -2420,6 +2442,11 @@ impl AbletonBridge {
 
     pub fn ableton_is_playing(&self) -> bool {
         self.ableton_is_playing
+    }
+
+    /// The last AbletonOSC song-time report and its drain time, for the sync rig log.
+    pub fn observed_song_time(&self) -> Option<(f32, f64)> {
+        self.transport_sync.observed_song_time()
     }
 
     pub fn ableton_tempo(&self) -> f32 {

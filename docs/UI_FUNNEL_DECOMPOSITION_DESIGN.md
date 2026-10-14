@@ -1,7 +1,7 @@
 # UI Funnel Decomposition — Wave 1 of the god-file campaign
 
 **Status: COMPLETE — all phases shipped: P-P/P-B 2026-07-21, P-D/P-I/P-S 2026-07-22, P-Z closed 2026-07-22. Landing reports in docs/landings/2026-07-2{1,2}-ui-funnel-*. Follow-on design items on the register: CHROME_PARAMS, GESTURE_ENTRY, ROW_MODEL_EDGES, VERIFICATION_INFRA (priority one). · Fable**
-**Prerequisites:** WIDGET_TREE (COMPLETE 2026-07-21), SCENE_PANEL_EXPOSURE_CONVERGENCE (COMPLETE 2026-07-21). Campaign register: `docs/ARCHITECTURE_DEBT.md` (inventory + wave map; status for this wave lives ONLY on this doc's Status line).
+**Prerequisites:** WIDGET_TREE (COMPLETE 2026-07-21), SCENE_PANEL_EXPOSURE_CONVERGENCE (COMPLETE 2026-07-21). Campaign register: `docs/archive/ARCHITECTURE_DEBT.md` (inventory + wave map; status for this wave lives ONLY on this doc's Status line).
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase. Pure-move commits gate on `move_identity_check` (retired; in git history) (built + self-tested 2026-07-21).
 
 **The governing insight: the funnel files are not big because the UI is big — they are big because four concerns (projecting state, describing surfaces, routing gestures, translating to commands) each live a slice in every domain's file instead of each owning a thin layer.** Every UI change funnels through `dispatch` (18 args, 303-variant match), `dispatch_inspector` (one 3,160-line function), `sync_inspector_data`/`push_state`, and `tick_and_render` (one 3,270-line frame function). The end state is the matrix: **layers are the hard boundaries, domains are small files within each layer.** Payoff test, honest form: adding a new panel touches nothing outside its own domain plus one registration line per registry.
@@ -12,7 +12,7 @@ Stage translation: none of this changes pixels. It changes how fast and how safe
 
 **Binding constraints** (DESIGN_AUTHORING section 1): *Hot path* — `push_state`/`sync_card_values` run per-frame; the split must not move structural work onto the per-frame path (INV-W4). *Thread residency* — untouched: UI thread owns everything here; mutations stay `PanelAction` → dispatch → `ContentCommand`. *Time model* — untouched. *Persistence* — none of the moved types serialize; the fixture round-trip gate is a belt-and-braces net. *Performance surface* — every dispatch path IS the live-control path; the flow suite + `undo_baseline` family are the behavior oracle.
 
-Companion docs: `WIDGET_TREE_DESIGN.md` (the layer vocabulary this extends; its section 10 (Deferred — TOMBSTONE (closed 2026-07-22; absorbed by UI_FUNNEL_DECOMPOSITION per Peter's no-deferred-with-triggers directive)) Deferred is absorbed and closed by this doc), `docs/ARCHITECTURE_DEBT.md` (campaign register), `AGENT_ROUTING.md` (orchestration), `.claude/GIT_TREE_DISCIPLINE.md` (landing mechanics).
+Companion docs: `WIDGET_TREE_DESIGN.md` (the layer vocabulary this extends; its section 10 (Deferred — TOMBSTONE (closed 2026-07-22; absorbed by UI_FUNNEL_DECOMPOSITION per Peter's no-deferred-with-triggers directive)) Deferred is absorbed and closed by this doc), `docs/archive/ARCHITECTURE_DEBT.md` (campaign register), `AGENT_ROUTING.md` (orchestration), `.claude/GIT_TREE_DISCIPLINE.md` (landing mechanics).
 
 ---
 

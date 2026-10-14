@@ -313,7 +313,7 @@ PNG — every gate in this design is a computed number or exit code (Peter
   position jump (asserted in test via phase continuity at the rate change).
 - **P2 — Panel section.** `scene_setup_loop.rs` fold section in the three
   states of section 3.3, wrap-debug toggle, ui-snap flow
-  `scripts/ui-flows/scene-setup-loop.json` (enable → bars row visible → edit
+  `scene-setup-loop` (since deleted; enable → bars row visible → edit
   bars → assert write landed on the looped layer). **Flow wiring, both
   mandatory in the same commit** (the manifest's own rule, and the
   green-landing/dead-flow escape class): (1) the flow name MUST match the
