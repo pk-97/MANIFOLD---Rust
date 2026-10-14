@@ -178,7 +178,7 @@
     /// the rename click resolves to the right group node id, and the
     /// "+ Object"/"+ Light" buttons carry the Vm's own counts as
     /// `next_index`.
-    fn azalea_shaped_vm() -> SceneSetupVm {
+    pub(super) fn azalea_shaped_vm() -> SceneSetupVm {
         SceneSetupVm {
             layer_id: LayerId::new("layer-1"),
             multiple_scenes: false,

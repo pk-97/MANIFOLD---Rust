@@ -1349,7 +1349,7 @@ pub(crate) fn scene_binding_id(
 /// frame-selected so a camera frame is one undo unit.
 /// `None` when the layer has no generator default or the bound value is
 /// unchanged (the epsilon no-change guard).
-fn apply_scene_param_write(
+pub(crate) fn apply_scene_param_write(
     project: &Project,
     layer_id: &LayerId,
     scope_path: Vec<u32>,

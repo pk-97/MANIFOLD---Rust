@@ -1220,6 +1220,16 @@ impl Application {
                     self.pending_open_graph_editor = true;
                     continue;
                 }
+                PanelAction::Root(RootAction::SceneSetupCopyViewportCamera(layer_id)) => {
+                    let view = self.graph_editor.as_ref().and_then(|ws| crate::scene_view_copy::live_view(ws, layer_id));
+                    if let Some(content_tx) = self.content_tx.as_ref() {
+                        needs_structural_sync |= crate::scene_view_copy::run(
+                            &mut self.local_project, content_tx, &mut self.ws.ui_root,
+                            &mut self.ui_edits.stamps, layer_id, view.as_ref(),
+                        );
+                    }
+                    continue;
+                }
                 PanelAction::Root(RootAction::SceneSetupOpenGraphEditor(layer_id)) => {
                     // D7 "Open Graph Editor" empty state — same mechanism as
                     // `OpenGeneratorGraphEditor` below, addressed explicitly by
