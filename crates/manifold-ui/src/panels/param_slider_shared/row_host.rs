@@ -455,6 +455,7 @@ impl RowHost {
             audio_config,
             mod_tabs,
             swatch,
+            drawer_clip: _,
             new_cy,
         } = built;
         self.slider_ids[row] = slider;

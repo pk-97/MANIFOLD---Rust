@@ -286,6 +286,8 @@ fn run_flow(
     let mut runner = Runner::new();
     runner.work.record = record_work;
     runner.work.flow = stem.to_string();
+    // The fixture's values are what the content thread captured last.
+    runner.values_capture.capture_into(&data.project);
     // BUG-296: `resolve_effect_target` falls back to `timeline.layers.first()`
     // when `Runner.active_layer` is None, silently mutating the wrong layer's
     // effect chain for structural PanelActions dispatched before any
@@ -511,6 +513,11 @@ struct Runner {
     last_gesture_points: Vec<Vec2>,
     // Persistent headless engine: scripted controls use production clip sync.
     modulation_engine: manifold_playback::engine::PlaybackEngine,
+    /// The content thread's value capture (D15): after each engine tick it
+    /// compares the live values and moves `values_seq` only when one changed,
+    /// so the tick's writes reach the widgets through the live push, as the
+    /// App's value snapshot does.
+    values_capture: crate::content_state::ModulationSnapshot,
     work: WorkWindow,
     /// The headless stand-in for the graph editor's viewport: the layer it
     /// shows and its navigation camera, moved by `ViewportOrbit`.
@@ -589,6 +596,7 @@ impl Runner {
             filmstrip: Vec::new(),
             last_gesture_points: Vec::new(),
             modulation_engine,
+            values_capture: crate::content_state::ModulationSnapshot::empty(),
             work: WorkWindow::default(),
             viewport: None,
             editor: None,
@@ -714,6 +722,9 @@ impl Runner {
                     // delivery queue that this harness never renders.
                     self.modulation_engine.with_trigger_pulses(|_, _, _| ());
                     assert!(self.modulation_engine.swap_project(&mut data.project), "initialized engine");
+                    if self.values_capture.capture_into(&data.project) {
+                        data.content.values_seq += 1;
+                    }
                     // The live App ticks the engine on the content thread.
                     let engine_work = manifold_core::work_count::thread_work_snapshot().since(&engine_work);
                     self.work.excluded = self.work.excluded.plus(&engine_work);
@@ -1038,8 +1049,9 @@ impl Runner {
         // The snapshot echo of what the last frame sent, folded as the App
         // folds an accepted snapshot.
         self.edits.stamps.fold_snapshot(&self.content_stamps);
-        // Settling a tween moves its panel's view version, so this frame's
-        // plan rebuilds the settled layout.
+        // Settled drawers move in place; a settled structural tween (collapse,
+        // spawn, delete) moves its panel's view version, so this frame's plan
+        // rebuilds the settled layout.
         if settle_tweens {
             ui.inspector.skip_to_settled(&mut ui.tree);
             ui.scene_setup_panel.skip_cards_to_settled(&mut ui.tree);

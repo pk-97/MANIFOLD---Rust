@@ -1097,17 +1097,44 @@ impl UIRoot {
             .try_scroll_in_place(delta, cursor_x, &mut self.tree)
     }
 
-    /// Apply a scroll-only move (no zoom) to the layer headers and viewport
-    /// in place: ruler ticks, markers and export markers on a horizontal move,
-    /// track and header rows on a vertical one. Returns false on a zoom or
-    /// when a count no longer matches, and the caller rebuilds
+    /// Apply a scroll, zoom or relayout to the layer headers and viewport in
+    /// place: ruler, markers and export markers on a horizontal move or a
+    /// zoom, track and header rows on a vertical one, everything on a
+    /// relayout (a new rect or new track heights). A panel in `rebuilding`
+    /// is left to its rebuild. Returns false when a count no longer matches,
+    /// and the caller rebuilds
     /// [`scroll_rebuild_regions`](Self::scroll_rebuild_regions).
-    pub fn scroll_in_place(&mut self, dirty: crate::frame_plan::ViewportMoves) -> bool {
-        if !self.built || dirty.zoom || !(dirty.scroll_x || dirty.scroll_y) {
+    pub fn scroll_in_place(
+        &mut self,
+        dirty: crate::frame_plan::ViewportMoves,
+        rebuilding: crate::frame_plan::RegionMask,
+    ) -> bool {
+        if !self.built || !dirty.any() {
             return false;
         }
+        if dirty.relayout {
+            let ok = (rebuilding.contains(MainRegion::Viewport)
+                || self.viewport.try_relayout(&mut self.tree, &self.layout))
+                && (rebuilding.contains(MainRegion::LayerHeaders)
+                    || self.layer_headers.try_relayout(
+                        &mut self.tree,
+                        &self.layout,
+                        self.viewport.mapper(),
+                        self.viewport.scroll_y_px(),
+                    ));
+            if ok {
+                record_work(WorkKind::InPlaceUpdate);
+                if !rebuilding.contains(MainRegion::Viewport) {
+                    self.tree.set_region_rect(MainRegion::Viewport.id(), self.layout.timeline_body());
+                }
+                if !rebuilding.contains(MainRegion::LayerHeaders) {
+                    self.tree.set_region_rect(MainRegion::LayerHeaders.id(), self.layout.layer_controls());
+                }
+            }
+            return ok;
+        }
         let mut ok = true;
-        if dirty.scroll_x {
+        if dirty.scroll_x || dirty.zoom {
             ok = self.viewport.try_update_horizontal_scroll(&mut self.tree);
         }
         if ok && dirty.scroll_y {
@@ -1122,11 +1149,11 @@ impl UIRoot {
     }
 
     /// The regions a scroll or zoom rebuilds when it cannot update in place:
-    /// the layer headers unless only the horizontal scroll moved, and the
+    /// the layer headers when the vertical scroll or the layout moved, and the
     /// viewport. Overlays key on their own version.
     pub(crate) fn scroll_rebuild_regions(dirty: crate::frame_plan::ViewportMoves) -> crate::frame_plan::RegionMask {
         let mut mask = crate::frame_plan::RegionMask::NONE;
-        if dirty.scroll_y || dirty.zoom {
+        if dirty.scroll_y || dirty.relayout {
             mask.insert(MainRegion::LayerHeaders);
         }
         mask.insert(MainRegion::Viewport);
@@ -1439,6 +1466,15 @@ impl UIRoot {
         self.perf_hud.push_values(&mut self.tree);
     }
 
+    /// Lay the three chrome bars out at the values they hold, in place
+    /// (section 4 region table: the bars' in-place column). The frame plan
+    /// runs it only when a shown value moved, never per frame.
+    pub fn lay_out_chrome(&mut self) {
+        self.transport.update(&mut self.tree);
+        self.header.update(&mut self.tree);
+        self.footer.update(&mut self.tree);
+    }
+
     /// Per-frame update — push state changes to panels.
     pub fn update(&mut self) {
         if !self.built {
@@ -1453,9 +1489,6 @@ impl UIRoot {
         let split_dt_ms = (self.layout_tick_last.elapsed().as_secs_f32() * 1000.0).min(100.0);
         self.layout_tick_last = std::time::Instant::now();
         self.layout.tick_splits(split_dt_ms);
-        self.transport.update(&mut self.tree);
-        self.header.update(&mut self.tree);
-        self.footer.update(&mut self.tree);
         self.layer_headers.update(&mut self.tree);
         self.tick_inspector();
         self.scene_setup_panel.tick_object_cards(&mut self.tree, split_dt_ms);
@@ -1633,10 +1666,14 @@ mod region_structural_tests {
             "a stray root survived with an overlay open"
         );
 
-        // A zoom rebuilds the layer headers and viewport alone, not the
-        // scroll-only in-place fast path that rebuilds nothing.
+        // The scroll fallback rebuilds the layer headers and viewport alone.
         let mut signals = crate::ui_frame::UiFrameSignals {
-            viewport: crate::frame_plan::ViewportMoves { scroll_x: false, scroll_y: true, zoom: true },
+            rebuild: UIRoot::scroll_rebuild_regions(crate::frame_plan::ViewportMoves {
+                scroll_x: false,
+                scroll_y: true,
+                zoom: true,
+                relayout: false,
+            }),
             ..Default::default()
         };
         crate::ui_frame::apply_ui_frame_invalidations(&mut ui, None, &mut signals);

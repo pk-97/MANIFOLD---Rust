@@ -34,6 +34,29 @@ pub struct ScrollbarStyle {
     pub corner_radius: f32,
 }
 
+/// One block inside a scroll column whose height changed in place: a param
+/// drawer mid-tween. See [`ScrollContainer::reflow`].
+#[derive(Clone, Copy, Debug)]
+pub struct Reflow {
+    /// The clip the block's content shows through. `None` when the block has
+    /// no content left (a closing drawer): only the card frame shrinks.
+    pub clip: Option<NodeId>,
+    /// The card frame nodes around the block, outer first (border, inner
+    /// background).
+    pub frame: [Option<NodeId>; 2],
+    pub dy: f32,
+}
+
+fn descends_from(tree: &UITree, mut id: NodeId, ancestor: NodeId) -> bool {
+    while let Some(parent) = tree.parent_of(id) {
+        if parent == ancestor {
+            return true;
+        }
+        id = parent;
+    }
+    false
+}
+
 pub struct ScrollContainer {
     /// Current scroll offset (pixels from top, 0 = top of content visible).
     scroll_offset: f32,
@@ -130,6 +153,57 @@ impl ScrollContainer {
             let mut b = tree.get_bounds(id);
             b.y += delta_y;
             tree.set_bounds(id, b);
+        }
+        true
+    }
+
+    /// Apply one block's height change to this column in place
+    /// (UI_INVALIDATION_DESIGN.md decided item 10: a drawer opens by reveal).
+    /// The block's clip and its card frame take the new height, a node that
+    /// encloses the whole card (a section or group frame) grows with it, and
+    /// every node from the block's top down moves by `dy`, except the block's
+    /// own content, which was laid out once at full size and stays under the
+    /// clip. With no clip (a closing drawer whose content is gone) the space
+    /// closes below the card frame. The content height follows, and a scroll
+    /// a shorter column clamps moves the content back into range. Equal to a
+    /// fresh build at the new height. Returns false when nothing is built.
+    pub fn reflow(&mut self, tree: &mut UITree, r: Reflow) -> bool {
+        const EPS: f32 = 0.01;
+        let Some(clip_root) = self.clip_node_id else {
+            return false;
+        };
+        if self.content_end <= self.content_start || r.dy == 0.0 {
+            return false;
+        }
+        let frame = r.frame[0].map(|id| tree.get_bounds(id));
+        let top = match (r.clip, frame) {
+            (Some(clip), _) => tree.get_bounds(clip).y,
+            (None, Some(f)) => f.y + f.height,
+            (None, None) => return false,
+        };
+        let region = clip_root.region();
+        for slot in self.content_start..self.content_end {
+            let id = tree.id_in(region, slot);
+            let mut b = tree.get_bounds(id);
+            if Some(id) == r.clip || r.frame.contains(&Some(id)) {
+                b.height = (b.height + r.dy).max(0.0);
+            } else if r.clip.is_some_and(|clip| descends_from(tree, id, clip)) {
+                continue;
+            } else if b.y >= top - EPS {
+                b.y += r.dy;
+            } else if frame.is_some_and(|f| b.y <= f.y + EPS && b.y + b.height >= f.y + f.height - EPS) {
+                b.height += r.dy;
+            } else {
+                continue;
+            }
+            tree.set_bounds(id, b);
+        }
+        let old = self.scroll_offset;
+        self.content_height += r.dy;
+        self.clamp_scroll();
+        let moved = self.scroll_offset - old;
+        if moved != 0.0 {
+            self.offset_content(tree, -moved);
         }
         true
     }

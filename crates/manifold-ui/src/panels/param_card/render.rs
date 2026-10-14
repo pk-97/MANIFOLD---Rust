@@ -383,6 +383,13 @@ impl ParamCardPanel {
 
     pub fn build(&mut self, tree: &mut UITree, rect: Rect) {
         self.row_host.row_index.clear();
+        let n = self.rows.len();
+        self.drawer_shown.clear();
+        self.drawer_shown.resize(n, f32::NAN);
+        self.drawer_clips.clear();
+        self.drawer_clips.resize(n, None);
+        self.mod_tab_ink_ids.clear();
+        self.mod_tab_ink_ids.resize(n, None);
         match self.kind {
             ParamCardKind::Effect => self.build_effect(tree, rect),
             ParamCardKind::Generator => self.build_generator(tree, rect),
@@ -1364,6 +1371,7 @@ impl ParamCardPanel {
                 // slider rows do, so an `is_trigger` row's lone "A" button
                 // still lands in the same column.
                 let has_osc = self.osc_addresses.get(i).and_then(|a| a.as_ref()).is_some();
+                let reveal = self.reveal_for_build(i);
                 let row = build_toggle_trigger_row(
                     tree,
                     Some(parent),
@@ -1378,13 +1386,9 @@ impl ParamCardPanel {
                     self.supports_envelopes,
                     has_osc,
                     Some(param_row_key_base(&info.id)),
-                    // P1 drawer tween: supply the interpolated height only while in
-                    // flight; settled rows pass None → the natural (unclipped) layout.
-                    self.drawer_height_anim
-                        .get(i)
-                        .filter(|a| a.is_animating())
-                        .map(|a| a.value()),
+                    reveal,
                 );
+                self.drawer_clips[i] = row.drawer_clip;
                 self.row_host.toggle_ids[i] = Some(ToggleParamIds {
                     label_id: row.label_id,
                     button_id: row.button_id,
@@ -1403,6 +1407,7 @@ impl ParamCardPanel {
             // core. Effects nest rows under `parent` (the inner-bg panel), use
             // the default slider palette + caption-size driver-config font, and
             // gate the `E` button on `supports_envelopes`.
+            let reveal = self.reveal_for_build(i);
             let row = build_param_row(
                 tree,
                 Some(parent),
@@ -1420,16 +1425,12 @@ impl ParamCardPanel {
                 self.mod_active_tab.get(i).copied().unwrap_or(ModTab::Driver),
                 !self.compact,
                 Some(param_row_key_base(&info.id)),
-                // P1 drawer tween: supply the interpolated height only while in
-                // flight; settled rows pass None → the natural (unclipped) layout.
-                self.drawer_height_anim
-                    .get(i)
-                    .filter(|a| a.is_animating())
-                    .map(|a| a.value()),
+                reveal,
                 // Persistent card: the sync pushes every change unconditionally,
                 // so rows build showing the default as before.
                 None,
             );
+            self.drawer_clips[i] = row.drawer_clip;
             let new_cy = self.row_host.install_row(tree, i, row);
             self.sync_mod_tab_ink(tree, i);
             // Mapping-drawer chevron at the row's right edge (Author + mappable).
@@ -1837,6 +1838,7 @@ impl ParamCardPanel {
                     // "A" button + drawer (D5b). Click handler dispatches
                     // differently (toggle vs fire) based on the is_trigger flag.
                     let has_osc = self.osc_addresses.get(i).and_then(|a| a.as_ref()).is_some();
+                    let reveal = self.reveal_for_build(i);
                     let row = build_toggle_trigger_row(
                         tree,
                         None,
@@ -1851,13 +1853,9 @@ impl ParamCardPanel {
                         true, // generators always reserve the driver-column gap
                         has_osc,
                         Some(param_row_key_base(&info.id)),
-                        // P1 drawer tween: supply the interpolated height only while in
-                        // flight; settled rows pass None → the natural (unclipped) layout.
-                        self.drawer_height_anim
-                            .get(i)
-                            .filter(|a| a.is_animating())
-                            .map(|a| a.value()),
+                        reveal,
                     );
+                    self.drawer_clips[i] = row.drawer_clip;
                     self.row_host.toggle_ids[i] = Some(ToggleParamIds {
                         label_id: row.label_id,
                         button_id: row.button_id,
@@ -1874,6 +1872,7 @@ impl ParamCardPanel {
                     // the body-size driver-config font, and always show the `E`
                     // button (generators always support envelopes).
                     let row_y = cy;
+                    let reveal = self.reveal_for_build(i);
                     let row = build_param_row(
                         tree,
                         None,
@@ -1891,15 +1890,12 @@ impl ParamCardPanel {
                         self.mod_active_tab.get(i).copied().unwrap_or(ModTab::Driver),
                         !self.compact,
                         Some(param_row_key_base(&info.id)),
-                        // P1 drawer tween: interpolated height while in flight only.
-                        self.drawer_height_anim
-                            .get(i)
-                            .filter(|a| a.is_animating())
-                            .map(|a| a.value()),
+                        reveal,
                         // Persistent card: the sync pushes every change
                         // unconditionally, so rows build showing the default.
                         None,
                     );
+                    self.drawer_clips[i] = row.drawer_clip;
                     let new_cy = self.row_host.install_row(tree, i, row);
                     self.sync_mod_tab_ink(tree, i);
                     // Mapping-drawer chevron at the row's right edge (Author +

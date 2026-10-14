@@ -1126,6 +1126,8 @@ pub struct ScenePanel {
     object_modifier_bounds: Rect,
     object_cards_animating: bool,
     object_cards_were_animating: bool,
+    /// Reused per frame: the drawer reflows the object cards report.
+    reflow_scratch: Vec<crate::scroll_container::Reflow>,
 }
 
 impl Default for ScenePanel {
@@ -1204,6 +1206,7 @@ impl Default for ScenePanel {
             object_modifier_bounds: Rect::new(0.0, 0.0, 0.0, 0.0),
             object_cards_animating: false,
             object_cards_were_animating: false,
+            reflow_scratch: Vec::new(),
         }
     }
 }

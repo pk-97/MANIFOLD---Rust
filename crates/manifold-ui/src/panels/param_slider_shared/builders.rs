@@ -1697,10 +1697,7 @@ pub(crate) fn build_toggle_trigger_row(
     build_env_button: bool,
     has_osc: bool,
     row_key_base: Option<u64>,
-    // P1 drawer tween: supplied only while a height tween is in flight
-    // (mirrors `build_param_row`'s `drawer_reveal`) — the drawer then
-    // builds under a clip region of that height instead of its natural
-    // one, so mid-tween or bottom-straddling paint never escapes it.
+    // The drawer's reveal height, as `build_param_row`'s `drawer_reveal`.
     drawer_reveal: Option<f32>,
 ) -> ToggleTriggerRowIds {
     if mod_state.automation_selected.get(i).copied().unwrap_or(false) {
@@ -1786,6 +1783,7 @@ pub(crate) fn build_toggle_trigger_row(
     let mut cy = cy + ROW_HEIGHT + ROW_SPACING;
     let mut audio_btn = None;
     let mut audio_config = None;
+    let mut drawer_clip = None;
     let mut mode_badge_id = None;
 
     // is_trigger (D5b) and is_trigger_gate (section 9) both reach the standard
@@ -1819,15 +1817,14 @@ pub(crate) fn build_toggle_trigger_row(
             let drawer_x = x + DRAWER_INDENT;
             let row_right = audio_btn_x + DE_BUTTON_SIZE;
             let drawer_w = (row_right - drawer_x).max(1.0);
-            // P1 drawer tween parity with `build_param_row` (:2089-2101): when a
-            // reveal height is supplied, the drawer builds under a clip region of
-            // that height (revealing top-down) instead of `parent` directly.
+            // Drawer reveal, as `build_param_row`: with a reveal height the
+            // drawer builds at full size under a clip of that height.
             let drawer_top = cy;
             let animate_drawer = drawer_reveal.is_some();
             let drawer_parent: Option<NodeId> = if animate_drawer {
                 let reveal = drawer_reveal.unwrap_or(0.0).max(0.0);
                 let rect = Rect::new(x, drawer_top, (row_right - x).max(1.0), reveal);
-                Some(match row_key_base {
+                let clip = match row_key_base {
                     Some(base) => tree.add_node_keyed(
                         parent,
                         rect,
@@ -1845,7 +1842,9 @@ pub(crate) fn build_toggle_trigger_row(
                         None,
                         UIFlags::VISIBLE | UIFlags::CLIPS_CHILDREN,
                     ),
-                })
+                };
+                drawer_clip = Some(clip);
+                Some(clip)
             } else {
                 parent
             };
@@ -1924,6 +1923,7 @@ pub(crate) fn build_toggle_trigger_row(
         audio_btn,
         audio_config,
         mode_badge_id,
+        drawer_clip,
         new_cy: cy,
     }
 }
@@ -1960,13 +1960,11 @@ pub(crate) fn build_param_row(
     // editor card (Author context) passes `Some(param_index << 8)`; the perform
     // inspector passes `None` and is unchanged. See `docs/INPUT_IDENTITY_UNIFICATION.md`.
     row_key_base: Option<u64>,
-    // P1 drawer open/close tween (`UI_CRAFT_AND_MOTION_PLAN.md`): while a reveal
-    // height is supplied, the modulation-drawer block builds under a clip region
-    // sized to that height and the row reserves exactly that height, so the drawer
-    // grows/shrinks and everything below reflows in lockstep. `None` = settled /
-    // no animation → the drawer builds directly under `parent` and reserves its
-    // natural height, byte-identical to the pre-motion layout (so the golden card
-    // tests, which build settled, are unaffected).
+    // The drawer's reveal height. `Some` builds the drawer at full size under
+    // a clip of that height and reserves exactly that height; the param cards
+    // always pass it (the animated height, equal to the natural one once
+    // settled), so their tween moves the clip in place. `None` builds the
+    // drawer directly under `parent` at its natural height.
     drawer_reveal: Option<f32>,
     // Value to DRAW this build (fill + thumb + value text), for cards whose
     // per-frame sync dirty-checks its pushes: the tree is minted fresh every
@@ -2008,6 +2006,7 @@ pub(crate) fn build_param_row(
         audio_config: None,
         mod_tabs: Vec::new(),
         swatch: None,
+        drawer_clip: None,
         new_cy: cy,
     };
     let mut cy = cy;
@@ -2325,21 +2324,18 @@ pub(crate) fn build_param_row(
 
     cy += ROW_HEIGHT + ROW_SPACING;
 
-    // P1 drawer tween: top of the modulation-drawer block. When a reveal height is
-    // supplied AND this row actually has a drawer, the whole block builds under a
-    // clip region of that height (revealing top-down as it grows) and `new_cy`
-    // reserves exactly that height so content below reflows with it. Otherwise the
-    // block builds under `parent` and reserves its natural height as before.
+    // Drawer reveal (UI_INVALIDATION_DESIGN.md decided item 10): with a reveal
+    // height and a drawer to show, the drawer builds once at its full size
+    // under a clip of the reveal height, and `new_cy` reserves exactly that
+    // height. The open/close tween then moves the clip and what sits below it
+    // in place (`ScrollContainer::reflow`). Without a reveal height the
+    // drawer builds under `parent` at its natural height.
     let drawer_top = cy;
-    // A reveal height only matters when this row actually has a drawer (active
-    // config); a row with no active config stays on the natural path.
     let animate_drawer = drawer_reveal.is_some() && !active_tabs.is_empty();
-    // When animating, every drawer node parents to a clip region of the reveal
-    // height (revealing top-down); otherwise they parent to `parent` unchanged.
     let drawer_parent: Option<NodeId> = if animate_drawer {
         let reveal = drawer_reveal.unwrap_or(0.0).max(0.0);
         let rect = Rect::new(x, drawer_top, (row_right - x).max(1.0), reveal);
-        Some(match row_key_base {
+        let clip = match row_key_base {
             Some(base) => tree.add_node_keyed(
                 parent,
                 rect,
@@ -2357,7 +2353,9 @@ pub(crate) fn build_param_row(
                 None,
                 UIFlags::VISIBLE | UIFlags::CLIPS_CHILDREN,
             ),
-        })
+        };
+        ids.drawer_clip = Some(clip);
+        Some(clip)
     } else {
         parent
     };

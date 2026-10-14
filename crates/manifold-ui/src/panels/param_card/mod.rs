@@ -377,6 +377,13 @@ pub struct ParamCardPanel {
     /// positioned yet" — snap instead of ease so a tab strip appearing for the
     /// first time doesn't visibly slide in from x=0.
     mod_tab_ink: Vec<AnimF32>,
+    /// Per row, the drawer height the built tree shows (`NaN` for a row not
+    /// built) and the clip the drawer reveals through, so the tween moves the
+    /// tree in place instead of rebuilding it (`take_motion`).
+    drawer_shown: Vec<f32>,
+    drawer_clips: Vec<Option<NodeId>>,
+    /// Per row, the tab-ink node, moved in place as `mod_tab_ink` slides.
+    mod_tab_ink_ids: Vec<Option<NodeId>>,
     /// section 6b compact mode — when true, every modulation config drawer on this card
     /// is hidden (mods stay armed; arm buttons + slider track overlays still
     /// show). Driven globally by the inspector's "hide mod settings" toggle.
@@ -541,6 +548,9 @@ impl ParamCardPanel {
             mod_active_tab: Vec::new(),
             drawer_height_anim: Vec::new(),
             mod_tab_ink: Vec::new(),
+            drawer_shown: Vec::new(),
+            drawer_clips: Vec::new(),
+            mod_tab_ink_ids: Vec::new(),
             compact: false,
             string_param_btn_ids: Vec::new(),
             osc_addresses: Vec::new(),
@@ -2102,11 +2112,10 @@ pub(super) mod tests {
         );
         let mut tree2 = UITree::new();
         panel.build(&mut tree2, Rect::new(0.0, 0.0, 280.0, 400.0));
-        let clips_settled =
-            tree2.all_nodes().filter(|n| n.node_type == UINodeType::ClipRegion).count();
+        let clip = panel.drawer_clips[gi].expect("the settled trigger-gate drawer keeps its reveal clip");
         assert!(
-            clips_settled < clips_midflight,
-            "settled build drops the trigger-gate drawer clip: settled={clips_settled} midflight={clips_midflight}"
+            (tree2.get_bounds(clip).height - full_target).abs() < 0.1,
+            "the settled clip shows the whole trigger-gate drawer"
         );
     }
 
@@ -3050,7 +3059,8 @@ pub(super) mod tests {
             .count();
         assert!(clips_midflight >= 1, "an animating drawer builds under a clip region");
 
-        // Run the tween to completion → settled at full height, no drawer clip.
+        // Run the tween to completion: settled at full height, the drawer
+        // clip kept at full height for the next tween to move in place.
         for _ in 0..20 {
             panel.tick_drawers(20.0);
         }
@@ -3061,13 +3071,10 @@ pub(super) mod tests {
         );
         let mut tree2 = UITree::new();
         panel.build(&mut tree2, Rect::new(0.0, 0.0, 280.0, 400.0));
-        let clips_settled = tree2
-            .all_nodes()
-            .filter(|n| n.node_type == UINodeType::ClipRegion)
-            .count();
+        let clip = panel.drawer_clips[0].expect("the settled drawer keeps its reveal clip");
         assert!(
-            clips_settled < clips_midflight,
-            "settled build drops the drawer clip: settled={clips_settled} midflight={clips_midflight}"
+            (tree2.get_bounds(clip).height - full_target).abs() < 0.1,
+            "the settled clip shows the whole drawer"
         );
         assert!(panel.row_host.driver_config_ids[0].is_some(), "driver config built (unclipped) when settled");
     }

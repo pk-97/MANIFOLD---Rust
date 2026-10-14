@@ -154,6 +154,9 @@ pub(crate) struct UiFrameSignals {
     pub rebuild: RegionMask,
     /// The regions the frame plan moves in place, and by how much.
     pub translate: RegionMask,
+    /// The regions whose own view moved without a rebuild. The tree half
+    /// moves the audio dock body to its scroll offset here.
+    pub in_place: RegionMask,
     /// Which timeline view axes moved: layer headers and viewport update in
     /// place, or rebuild when a count no longer matches.
     pub viewport: ViewportMoves,
@@ -204,7 +207,7 @@ pub(crate) fn apply_ui_frame_invalidations(
     let moves = signals.viewport;
     let mut scrolled = false;
     if moves.any() {
-        if ui_root.scroll_in_place(moves) {
+        if ui_root.scroll_in_place(moves, regions) {
             scrolled = true;
             if let Some(cm) = &mut cache {
                 for region in [MainRegion::LayerHeaders, MainRegion::Viewport] {
@@ -215,6 +218,19 @@ pub(crate) fn apply_ui_frame_invalidations(
             }
         } else {
             regions = regions.union(UIRoot::scroll_rebuild_regions(moves));
+        }
+    }
+    if signals.in_place.contains(MainRegion::AudioDock) && !regions.contains(MainRegion::AudioDock) {
+        if ui_root.audio_setup_panel.scroll_in_place(&mut ui_root.tree) {
+            scrolled = true;
+            record_work(WorkKind::InPlaceUpdate);
+            if let Some(cm) = &mut cache
+                && let Some(slot) = MainRegion::AudioDock.panel_slot()
+            {
+                cm.invalidate_slot(slot);
+            }
+        } else {
+            regions.insert(MainRegion::AudioDock);
         }
     }
     // A region rebuilt this frame is built at its new rect already.
@@ -333,6 +349,7 @@ pub(crate) fn gather_frame_inputs(
         cursor: selection.cursor_version(),
         active_layer: planner.active_layer_version(active_layer),
         automation_view: selection.automation_view(),
+        lane_heights: selection.lane_heights_view(),
         chrome: planner.chrome_inputs(content_state, &chrome),
         rects: ui_root.region_rects(),
         scroll_x_px: ui_root.viewport.beat_to_pixel(Beats::ZERO).round() as i32,
@@ -420,6 +437,9 @@ pub(crate) fn apply_frame_plan(
         crate::ui_bridge::sync_automation_lane_order(project, selection);
         crate::ui_bridge::sync_project_data(ui_root, project, idx, selection);
     }
+    if projections.contains(Projection::TrackLayout) && !project_sync {
+        crate::ui_bridge::sync_track_layout(ui_root, project, selection);
+    }
     if inspector_sync {
         let idx = active_idx(project, active_layer);
         crate::ui_bridge::sync_inspector_data(ui_root, project, idx, selection, latched, led_preview);
@@ -457,6 +477,7 @@ pub(crate) fn apply_frame_plan(
         scrolled_in_place: changes.scrolled_in_place,
         rebuild,
         translate: plan.translate,
+        in_place: plan.in_place,
         viewport: plan.viewport,
         rects_moved: plan.rects_moved,
     };
@@ -482,6 +503,14 @@ pub(crate) fn apply_frame_plan(
     }
     if replaced || projections.contains(Projection::SelectionPush) {
         crate::ui_bridge::push_selection(ui_root, project, idx, selection);
+    }
+    // The bars show what the two pushes above wrote; they lay out only then.
+    if replaced
+        || [MainRegion::Transport, MainRegion::Header, MainRegion::Footer]
+            .into_iter()
+            .any(|r| plan.in_place.contains(r))
+    {
+        ui_root.lay_out_chrome();
     }
     crate::ui_bridge::push_frame(ui_root, project, push.content_state, idx);
     let live = crate::ui_bridge::LiveGroups {

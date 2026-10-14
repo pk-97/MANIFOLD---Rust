@@ -713,7 +713,7 @@ pub use state_sync::{
     sync_automation_lane_geometry,
     sync_card_values, sync_clip_positions, sync_driver_readouts, sync_markers,
     sync_scene_outliner_eyes, sync_scene_row_values,
-    sync_audio_dock, sync_inspector_data, sync_project_data,
+    sync_audio_dock, sync_inspector_data, sync_project_data, sync_track_layout,
 };
 #[cfg(feature = "ui-snapshot")]
 pub use state_sync::push_state;

@@ -612,7 +612,7 @@ impl ParamCardPanel {
             ink.set_target(rect.x);
         }
         let ink_y = rect.y + rect.height - MOD_TAB_INK_H;
-        tree.add_panel(
+        let ink_id = tree.add_panel(
             Some(id),
             ink.value(),
             ink_y,
@@ -623,5 +623,68 @@ impl ParamCardPanel {
                 ..UIStyle::default()
             },
         );
+        if let Some(slot) = self.mod_tab_ink_ids.get_mut(i) {
+            *slot = Some(ink_id);
+        }
+    }
+
+    /// The reveal height row `i` builds its drawer at: the animated height,
+    /// which is the natural one once settled. Recorded as what the tree shows,
+    /// for rows whose drawer the card height counts (`compute_height`).
+    pub(crate) fn reveal_for_build(&mut self, i: usize) -> Option<f32> {
+        let reveal = self.animated_drawer_height(i);
+        let spec = &self.rows[i].spec;
+        if (!spec.is_toggle || spec.is_trigger_gate)
+            && let Some(shown) = self.drawer_shown.get_mut(i)
+        {
+            *shown = reveal;
+        }
+        Some(reveal)
+    }
+
+    /// Whether a tween that changes what the card builds or where its frame
+    /// sits (collapse, spawn pop, delete fade) is in flight. Those reflow on a
+    /// rebuild; drawer heights and the tab ink move in place (`take_motion`).
+    pub fn structural_motion(&self) -> bool {
+        self.collapse_anim.is_animating()
+            || self.spawn_scale.is_animating()
+            || self.delete_fade.as_ref().is_some_and(|f| f.progress().is_some())
+    }
+
+    /// Move the built tree to where the drawer and tab-ink tweens are now
+    /// (UI_INVALIDATION_DESIGN.md decided item 10: drawers open by reveal).
+    /// Each drawer whose height moved since the tree showed it is pushed as a
+    /// [`Reflow`] for the column to apply; each sliding ink moves to its
+    /// tween's x. Nothing for a card not built.
+    pub fn take_motion(&mut self, tree: &mut UITree, out: &mut Vec<crate::scroll_container::Reflow>) {
+        if !self.is_live() {
+            return;
+        }
+        for i in 0..self.drawer_shown.len() {
+            let shown = self.drawer_shown[i];
+            if shown.is_nan() {
+                continue;
+            }
+            let now = self.animated_drawer_height(i);
+            if now == shown {
+                continue;
+            }
+            self.drawer_shown[i] = now;
+            out.push(crate::scroll_container::Reflow {
+                clip: self.drawer_clips.get(i).copied().flatten(),
+                frame: [self.border_id, self.inner_bg_id],
+                dy: now - shown,
+            });
+        }
+        for (i, ink) in self.mod_tab_ink.iter().enumerate() {
+            let Some(Some(id)) = self.mod_tab_ink_ids.get(i).copied() else {
+                continue;
+            };
+            let mut b = tree.get_bounds(id);
+            if b.x != ink.value() {
+                b.x = ink.value();
+                tree.set_bounds(id, b);
+            }
+        }
     }
 }

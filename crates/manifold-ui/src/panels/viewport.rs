@@ -30,7 +30,8 @@ const RULER_BEAT_TICK_H: f32 = 8.0;
 const RULER_BAR_TICK_H: f32 = 14.0;
 const RULER_LABEL_H: f32 = 14.0;
 const RULER_LABEL_W: f32 = 40.0;
-// Maximum nodes to allocate for ruler ticks (avoid unbounded allocation)
+// The ruler pool size: one fixed size whatever the zoom, so a zoom never
+// outgrows what a build allocated.
 const MAX_RULER_TICKS: usize = 1500;
 
 // ── Submodules (the god-panel split: model / coordinate / render / interaction) ──
@@ -134,6 +135,7 @@ pub struct TimelineViewportPanel {
     // only so the input system routes presses/drags here.
     scrollbar_h_rect: Rect,
     scrollbar_h_btn_id: Option<NodeId>,
+    tracks_overlay_id: Option<NodeId>,
     // insert_cursor_track_id: removed — painted into bitmap
     // selection_region_id: removed — painted into bitmap
 
@@ -147,9 +149,12 @@ pub struct TimelineViewportPanel {
     export_in_marker_id: Option<NodeId>,
     export_out_marker_id: Option<NodeId>,
 
-    // Node IDs — dynamic elements (rebuilt on scroll/zoom)
+    // The ruler pool: MAX_RULER_TICKS tick and label slots, laid out in
+    // place on scroll and zoom. The first `ruler_shown` slots are in use.
     ruler_tick_ids: Vec<NodeId>,
     ruler_label_ids: Vec<NodeId>,
+    ruler_shown: usize,
+    ruler_text: String,
     // grid_line_ids: removed — grid painted into bitmap
     track_bg_ids: Vec<NodeId>,
     track_bg_groups: Vec<TrackBgGroup>,
@@ -361,6 +366,7 @@ impl TimelineViewportPanel {
             insert_cursor_ruler_id: None,
             scrollbar_h_rect: Rect::ZERO,
             scrollbar_h_btn_id: None,
+            tracks_overlay_id: None,
             export_in_beat: Beats::ZERO,
             export_out_beat: Beats::ZERO,
             export_range_enabled: false,
@@ -369,6 +375,8 @@ impl TimelineViewportPanel {
             export_out_marker_id: None,
             ruler_tick_ids: Vec::new(),
             ruler_label_ids: Vec::new(),
+            ruler_shown: 0,
+            ruler_text: String::new(),
             track_bg_ids: Vec::new(),
             track_bg_groups: Vec::new(),
             active_track_index: None,
@@ -526,6 +534,13 @@ impl TimelineViewportPanel {
     /// together.
     pub fn rebuild_mapper_layout(&mut self, layers: &[crate::view::UiLayer]) {
         self.mapper.rebuild_y_layout(layers);
+        // A lane resize moves track heights with no `set_tracks`: the grid
+        // bitmaps take the new heights here.
+        for (i, renderer) in self.bitmap_renderers.iter_mut().enumerate() {
+            if let Some(renderer) = renderer {
+                renderer.set_track_height(self.mapper.get_layer_height(i));
+            }
+        }
         self.set_scroll(self.scroll_x_beats.as_f32(), self.scroll_y_px);
         self.rebuild_automation_lane_screens();
     }
@@ -1625,7 +1640,7 @@ impl Panel for TimelineViewportPanel {
         // panel nodes (track backgrounds, grid lines) won't generate events.
         // Keyed so its widget id survives a rebuild between press and release;
         // otherwise the release misses the pressed widget and no Click fires.
-        tree.add_button_keyed(
+        self.tracks_overlay_id = Some(tree.add_button_keyed(
             None,
             self.tracks_rect.x,
             self.tracks_rect.y,
@@ -1637,7 +1652,7 @@ impl Panel for TimelineViewportPanel {
             },
             "",
             crate::param_surface::stable_key("viewport.tracks"),
-        );
+        ));
 
         // Horizontal scrollbar routing button (section 24 5e). Transparent — the track
         // and thumb are drawn as GPU rects in app.rs from `scrollbar_h_layout`

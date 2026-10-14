@@ -598,6 +598,10 @@ pub(crate) struct ParamRowIds {
     pub(crate) mod_tabs: Vec<(NodeId, ModTab)>,
     /// The colour swatch in the label lane, when the row has `rgb_members`.
     pub(crate) swatch: Option<(NodeId, crate::param_surface::ColourGroup)>,
+    /// The clip the drawer reveals through, when the row was handed a reveal
+    /// height and has a drawer. The card moves it in place as the drawer
+    /// tween runs.
+    pub(crate) drawer_clip: Option<NodeId>,
     /// `y` after this row's slider + its modulation config drawer — the caller
     /// continues the next row from here.
     pub(crate) new_cy: f32,
@@ -650,6 +654,8 @@ pub(crate) struct ToggleTriggerRowIds {
     /// `ClipEdge` mode) by the caller from the live `mod_state` — see
     /// `build_toggle_trigger_row`.
     pub(crate) mode_badge_id: Option<NodeId>,
+    /// The audio drawer's reveal clip, as [`ParamRowIds::drawer_clip`].
+    pub(crate) drawer_clip: Option<NodeId>,
     pub(crate) new_cy: f32,
 }
 

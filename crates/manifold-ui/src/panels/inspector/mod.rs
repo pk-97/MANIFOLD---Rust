@@ -388,17 +388,16 @@ pub struct InspectorCompositePanel {
     cache_first_node: usize,
     cache_node_count: usize,
 
-    // ── P1 drawer motion ──
-    /// True while any card's drawer-height tween is in flight (or settled this
-    /// frame — see `update`). The app polls `drawer_anim_active()` after
-    /// `ui_root.update()` and forces a rebuild while it's true, so the
-    /// interpolated height re-lays-out and content below reflows.
+    // ── Card motion ──
+    /// True while a card's structural tween (collapse, spawn pop, delete
+    /// fade) is in flight, or settled this frame (see `update`); each such
+    /// frame moves the view version so the region rebuilds.
     drawer_anim_active: bool,
-    /// Whether any tween was advancing last frame — keeps `drawer_anim_active`
-    /// true for one extra frame after the last one settles, so the final (target)
-    /// value gets one build to render (the settling tick returns false, but its
-    /// new value still needs a rebuild to reach the screen).
+    /// Whether a structural tween was advancing last frame, so its settled
+    /// value gets one more build.
     drawer_anim_prev: bool,
+    /// Reused per frame: the drawer reflows the cards report.
+    reflow_scratch: Vec<crate::scroll_container::Reflow>,
     /// Wall-clock anchor for this frame's tween `dt_ms` — the inspector has no
     /// frame timer, so it measures its own delta (same pattern as the layer
     /// header's mute-chip motion). `None` until the first `update()` call, so
@@ -544,13 +543,14 @@ impl InspectorCompositePanel {
             cache_node_count: 0,
             drawer_anim_active: false,
             drawer_anim_prev: false,
+            reflow_scratch: Vec::new(),
             motion_last_tick: None,
         }
     }
 
-    /// True while any inspector card's drawer open/close tween is in flight
-    /// (P1 motion). Each such frame moves the view version, so the planner
-    /// rebuilds the region. Reduced motion settles tweens instantly.
+    /// True while a card's structural tween is in flight. Each such frame
+    /// moves the view version, so the planner rebuilds the region. Drawer
+    /// tweens move in place and never set it.
     pub fn drawer_anim_active(&self) -> bool {
         self.drawer_anim_active
     }
@@ -564,21 +564,63 @@ impl InspectorCompositePanel {
     /// needs to force a rebuild (drawer heights only take effect at the next
     /// `build()`) when this is `true`.
     pub fn skip_to_settled(&mut self, tree: &mut UITree) -> bool {
+        let mut structural = false;
         let mut any = false;
-        for card in self.effects.iter_mut().flatten() {
+        for card in self
+            .effects
+            .iter_mut()
+            .flatten()
+            .chain(self.gen_params.as_mut())
+            .chain(self.modifier_cards.iter_mut())
+        {
+            structural |= card.structural_motion();
             any |= card.skip_to_settled(tree);
         }
-        if let Some(gp) = self.gen_params.as_mut() {
-            any |= gp.skip_to_settled(tree);
-        }
-        for card in self.modifier_cards.iter_mut() {
-            any |= card.skip_to_settled(tree);
-        }
-        if any {
-            self.drawer_anim_active = false;
+        // Drawer heights and tab inks settle in place; only a structural
+        // tween needs the region rebuilt.
+        any |= self.apply_card_motion(tree);
+        self.drawer_anim_active = false;
+        self.drawer_anim_prev = false;
+        if structural {
             self.view_version += 1;
         }
         any
+    }
+
+    /// Move each column's built cards to where their drawer and tab-ink
+    /// tweens are now, in place (decided item 10). Returns whether anything
+    /// moved.
+    fn apply_card_motion(&mut self, tree: &mut UITree) -> bool {
+        let mut moved = false;
+        let reflows = &mut self.reflow_scratch;
+        reflows.clear();
+        for card in self.effects[Self::SCOPE_MASTER].iter_mut().chain(self.master_dying.iter_mut()) {
+            card.take_motion(tree, reflows);
+        }
+        if !reflows.is_empty() {
+            for r in reflows.iter() {
+                moved |= self.master_scroll.reflow(tree, *r);
+            }
+            self.master_scroll.update_scrollbar(tree);
+        }
+        reflows.clear();
+        for card in self
+            .gen_params
+            .iter_mut()
+            .chain(self.modifier_cards.iter_mut())
+            .chain(self.effects[Self::SCOPE_LAYER].iter_mut())
+            .chain(self.layer_dying.iter_mut())
+            .chain(self.modifier_dying.iter_mut())
+        {
+            card.take_motion(tree, reflows);
+        }
+        if !reflows.is_empty() {
+            for r in reflows.iter() {
+                moved |= self.layer_scroll.reflow(tree, *r);
+            }
+            self.layer_scroll.update_scrollbar(tree);
+        }
+        moved
     }
 
     // ── Configuration ─────────────────────────────────────────────
@@ -1328,10 +1370,10 @@ impl Panel for InspectorCompositePanel {
         // The app layer calls sync methods like:
         //   inspector.master_chrome_mut().sync_opacity(&mut tree, 0.5);
 
-        // P1 drawer motion: advance every card's drawer-height tween. This only
-        // moves the tween *values*; the reflow they drive happens on the next
-        // build(), which the view version bump below asks the planner for.
-        // No tree mutation here — build reads the advanced values.
+        // Card motion: advance every card's tweens. Drawer heights and tab
+        // inks move the built tree in place below (decided item 10); a
+        // structural tween (collapse, spawn pop, delete fade) moves the view
+        // version so the next plan rebuilds the region.
         let dt_ms = self
             .motion_last_tick
             .map(|t| (t.elapsed().as_secs_f32() * 1000.0).min(100.0))
@@ -1340,12 +1382,9 @@ impl Panel for InspectorCompositePanel {
         self.tick_card_drag_scroll(tree, dt_ms);
         let mut any = false;
         for card in self.effects.iter_mut().flatten() {
-            any |= card.tick_drawers(dt_ms);
-            // P2 value-change flash + D1 tab-ink slide's ink tween both live in
-            // this same per-param vocabulary; the flash needs `tree` (a style
-            // write, not a layout change), so unlike drawer/ink it never sets
-            // `any` — it doesn't need the forced-rebuild poll, only to run
-            // every frame, which this loop already does.
+            card.tick_drawers(dt_ms);
+            any |= card.structural_motion();
+            // The value-change flash is a style write on built nodes.
             card.tick_value_flash(tree, dt_ms);
         }
         let card_shown = self.layer_visible();
@@ -1357,11 +1396,13 @@ impl Panel for InspectorCompositePanel {
             {
                 self.pending_card_flash = None;
             }
-            any |= gp.tick_drawers(dt_ms);
+            gp.tick_drawers(dt_ms);
+            any |= gp.structural_motion();
             gp.tick_value_flash(tree, dt_ms);
         }
         for card in self.modifier_cards.iter_mut() {
-            any |= card.tick_drawers(dt_ms);
+            card.tick_drawers(dt_ms);
+            any |= card.structural_motion();
             card.tick_value_flash(tree, dt_ms);
         }
         // D17 "delete collapse" (exit-state pattern) — dying cards keep
@@ -1380,15 +1421,15 @@ impl Panel for InspectorCompositePanel {
         self.master_dying.retain(|c| !c.is_delete_finished());
         self.layer_dying.retain(|c| !c.is_delete_finished());
         self.modifier_dying.retain(|c| !c.is_delete_finished());
-        // Stay "active" one extra frame after the last tween settles so its final
-        // (target) value gets a build to render — the settling tick returns false
-        // but its new value hasn't reached the screen yet.
+        // Stay "active" one extra frame after the last structural tween
+        // settles so its final value gets a build: the settling tick reports
+        // nothing in flight, but its new value has not reached the tree yet.
         self.drawer_anim_active = any || self.drawer_anim_prev;
         self.drawer_anim_prev = any;
-        // A tween frame moved card heights: the planner rebuilds the region.
         if self.drawer_anim_active {
             self.view_version += 1;
         }
+        self.apply_card_motion(tree);
     }
 
     fn handle_event(&mut self, event: &UIEvent, tree: &UITree) -> Vec<PanelAction> {
