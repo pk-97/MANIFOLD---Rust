@@ -452,7 +452,7 @@ path · `cd` prefixes, `add -A`, unpathspec'd commits (house rules).
   degrees table applied (display, type-in parse, scrub steps);
   `dock_numeric_cells_register_full_contract` invariant test.
 - **Gate.** *Positive:* `-p manifold-ui --lib -p manifold-app --lib`; L3 flow
-  (`scripts/ui-flows/scene-setup-scrub-fine.json`): drag a light-intensity value cell with
+  (`scene-setup-scrub-fine`, since deleted): drag a light-intensity value cell with
   and without shift, assert the fine delta is 0.1× the coarse one and undo restores; L3 flow:
   click `shadow_softness` value cell, assert dropdown opens, click "Contact", assert the
   param write. Type-in gates at **L2 + unit** (BUG-198: headless text injection has no seam —

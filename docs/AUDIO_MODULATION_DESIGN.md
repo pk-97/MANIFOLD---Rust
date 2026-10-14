@@ -51,7 +51,7 @@ The headline use is **pitch as motion**: with a monophonic source (a bassline on
 
 ### 3.1 Input — already solved
 
-`manifold-audio::capture::AudioCaptureDevice` ([crates/manifold-audio/src/capture.rs](../crates/manifold-audio/src/capture.rs)) already:
+`manifold-audio::capture::AudioCaptureDevice` ([crates/manifold-audio/src/capture/mod.rs](../crates/manifold-audio/src/capture/mod.rs)) already:
 - Enumerates CoreAudio input devices (`AudioDeviceInfo`, default flag) — a device picker is free.
 - Opens a device at its **native sample rate and channel count**.
 - Streams **Float32 interleaved** samples into a lock-free SPSC ring buffer (2 s capacity).
@@ -145,7 +145,7 @@ Cost: synchrosqueezing is heavier than a plain FFT (FFT + reassignment), but it 
 
 ## 7. Modulation model — slots beside drivers and envelopes
 
-`PresetInstance` ([crates/manifold-core/src/effects.rs](../crates/manifold-core/src/effects.rs)) already stores per-parameter modulation sources as parallel vectors, **all keyed by `ParamId`**:
+`PresetInstance` ([crates/manifold-core/src/effects/mod.rs](../crates/manifold-core/src/effects/mod.rs)) already stores per-parameter modulation sources as parallel vectors, **all keyed by `ParamId`**:
 
 ```rust
 pub param_values: Vec<ParamSlot>,                              // base + effective per slot
@@ -201,7 +201,7 @@ cpal RT thread ─push→ analysis ring ─drain→ audio worker ─frames→ pl
 
 ## 10. UI — the drawer
 
-The drawer parallels the existing envelope/driver drawers built on `param_slider_shared` ([crates/manifold-ui/src/panels/param_slider_shared.rs](../crates/manifold-ui/src/panels/param_slider_shared.rs)):
+The drawer parallels the existing envelope/driver drawers built on `param_slider_shared` ([crates/manifold-ui/src/panels/param_slider_shared/mod.rs](../crates/manifold-ui/src/panels/param_slider_shared/mod.rs)):
 
 - A third modulation button on the slider opens the Audio drawer downward.
 - Rows (top to bottom), each with a leading label that lines up with the sliders:

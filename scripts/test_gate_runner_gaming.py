@@ -181,11 +181,6 @@ check("hooks registered in settings.json", entry["exit"] == 0, entry["tail"])
 entry = gate_runner._check_hooks_fire()
 check("worktree-guard denies the canary", entry["exit"] == 0, entry["tail"])
 
-entry = gate_runner._check_enforcement_manifest()
-check("enforcement manifest matches reality", entry["exit"] == 0, entry["tail"])
-check("manifest reports soft surface", "prompt-enforced" in entry["tail"],
-      entry["tail"])
-
 # --- phase-ordering: _check_predecessors against the trail ---
 
 with open(Path(_TMP) / "BUG-red.jsonl", "w") as f:

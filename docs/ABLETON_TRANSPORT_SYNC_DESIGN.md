@@ -21,7 +21,7 @@
 4. **P3 L2 demo deferred to VD:** the "no-peer degrade" log trace requires
    driving the windowed app; the same sequence is asserted by
    `f7_slow_scheduler_400ms_still_converges` + T7/T8 at L1. Entry in
-   `docs/VERIFICATION_DEBT.md`; Peter's checklist (section 6 P4) closes it at L4.
+   `docs/archive/VERIFICATION_DEBT.md`; Peter's checklist (section 6 P4) closes it at L4.
 5. **Moving-anchor amendment (2026-07-07, from the first L4 run — BUG-050 (ableton-anchor-yankback)).**
    Peter's checklist step 1 failed on the real rig: Ableton repeatedly
    snapped back to the gesture position, then MANIFOLD got clock-dragged

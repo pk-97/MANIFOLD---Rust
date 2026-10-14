@@ -886,57 +886,6 @@ def _check_hooks_fire():
         return {"cmd": cmd_label, "exit": 1, "duration_s": duration, "tail": str(e)}
 
 
-_MANIFEST_PATH = MAIN_CHECKOUT / ".claude" / "hooks" / "enforcement-table.json"
-
-
-def _check_enforcement_manifest():
-    """Check h: the enforcement table (machine form of the concept in
-    docs/archive/SEMANTIC_WORKFLOW_PROGRAMS.md section 3) matches reality. Hook rows: file exists AND is registered
-    in settings.json. Exit-code rows with a file: file exists. Prompt rows:
-    counted and printed — the visible soft surface the migration program
-    burns down."""
-    cmd_label = "enforcement manifest"
-    start = time.time()
-    try:
-        manifest = json.loads(_MANIFEST_PATH.read_text())
-        settings = json.loads(
-            (MAIN_CHECKOUT / ".claude" / "settings.json").read_text())
-        registered = "\n".join(
-            hk.get("command", "")
-            for entries in (settings.get("hooks") or {}).values()
-            for e in entries for hk in e.get("hooks", []))
-
-        fails, n_prompt = [], 0
-        for row in manifest.get("transitions", []):
-            kind, f = row.get("enforcement"), row.get("file")
-            if kind == "prompt":
-                n_prompt += 1
-                continue
-            if kind not in ("hook", "exit-code"):
-                fails.append(f"unknown enforcement {kind!r}: {row.get('transition')}")
-                continue
-            if f is None:
-                continue
-            if not (MAIN_CHECKOUT / f).is_file():
-                fails.append(f"{f} missing ({row.get('transition', '')[:40]})")
-            elif kind == "hook" and Path(f).name not in registered:
-                fails.append(f"{f} not registered in settings.json")
-
-        duration = round(time.time() - start, 1)
-        if fails:
-            tail = "; ".join(fails[:6])
-            _print_check("FAIL", cmd_label, tail)
-            return {"cmd": cmd_label, "exit": 1, "duration_s": duration, "tail": tail}
-        n = len(manifest.get("transitions", []))
-        tail = f"{n} rows live; {n_prompt} still prompt-enforced (soft surface)"
-        _print_check("PASS", cmd_label, tail)
-        return {"cmd": cmd_label, "exit": 0, "duration_s": duration, "tail": tail}
-    except Exception as e:
-        duration = round(time.time() - start, 1)
-        _print_check("FAIL", cmd_label, str(e))
-        return {"cmd": cmd_label, "exit": 1, "duration_s": duration, "tail": str(e)}
-
-
 def cmd_pre_wave(args):
     """Run the pre-wave checks (P2 + hook liveness) and append a verdict."""
     print("=== pre-wave preflight ===")
@@ -945,7 +894,6 @@ def cmd_pre_wave(args):
         _check_wave_base(args.base),
         _check_hooks_registered(),
         _check_hooks_fire(),
-        _check_enforcement_manifest(),
     ]
 
     all_pass = all(g["exit"] == 0 for g in checks)

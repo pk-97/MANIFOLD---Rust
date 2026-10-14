@@ -24,12 +24,12 @@ This makes the real app and the headless harness share one path. Do NOT add insp
 **Gates:**
 - `scripts/ui-flows/scene-setup-add-fog-drag.json` GREEN against the azalea fixture (it is RED at tip — this is the acceptance test; it needs a `Scroll` step added before the "+ Add Fog" click since the button now sits below the fold).
 - A new minimal flow proving the audio dock scrolls (open dock, Scroll, assert a below-fold widget's y moved).
-- Clear VD-029 in `docs/VERIFICATION_DEBT.md` in the landing.
+- Clear VD-029 in `docs/archive/VERIFICATION_DEBT.md` in the landing.
 - `cargo clippy -p manifold-app -p manifold-ui -- -D warnings`, `cargo nextest run -p manifold-ui -p manifold-app`.
 
 ## Lane 2 — scene/automation removal commands (BUG-193 + BUG-184)
 
-**BUG-193 (verified):** no composite removal command exists; `AddSceneObjectCommand` (`crates/manifold-editing/src/commands/graph.rs:2172`) is the shape to mirror — it snapshots the level's `(nodes, wires)` into `prev` on execute, so undo is a restore.
+**BUG-193 (verified):** no composite removal command exists; `AddSceneObjectCommand` (`crates/manifold-editing/src/commands/graph/mod.rs:2172`) is the shape to mirror — it snapshots the level's `(nodes, wires)` into `prev` on execute, so undo is a restore.
 
 **Fix:** new `RemoveSceneObjectCommand` + `RemoveSceneLightCommand` in `graph.rs`, same snapshot-undo shape, each one undo unit:
 - Object: delete the object's group node + its three root wires (`mesh_k`/`transform_k`/`material_k` → `render_scene`), decrement `objects`, renumber every wire whose object-port index exceeds k (`mesh_{k+1}`→`mesh_k` etc.).

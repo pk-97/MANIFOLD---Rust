@@ -306,7 +306,7 @@ class PathTriggerTests(unittest.TestCase):
         # BUG-vqpbi (flow gate builds for no-app landings): the lane/rule-drift diff.
         paths = (
             ".claude/GIT_TREE_DISCIPLINE.md", ".claude/hooks/preToolUseBash.py",
-            ".claude/hooks/enforcement-table.json", ".claude/hooks/context-nudges/test-scope.md",
+            ".claude/hooks/context-nudges/test-scope.md",
             "CLAUDE.md", "docs/AGENT_ROUTING.md", "scripts/TOOLS.md", "scripts/dev.py",
             "scripts/fleet_health.py", "scripts/land_branch.py", "scripts/run_ui_flows.py",
             "scripts/ui-flows/manifest.json", "scripts/ui-flows/work_ceilings.json",

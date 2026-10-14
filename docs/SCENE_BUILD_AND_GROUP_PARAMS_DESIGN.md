@@ -51,10 +51,10 @@ a moved anchor is an escalation, not a guess.
 | CPU-struct input accessors | `render_scene.rs:552-566` — `ctx.inputs.camera(..)`, `.light(..)`, `.material(..)` at `:614` | The Camera/Light/Material port pattern is proven end-to-end; a Transform port is a fourth instance of it, not new plumbing |
 | No Transform port | `crates/manifold-node-engine/src/ports.rs:17-53` (`PortType`) | Negative claim, search run: variants are Texture2D(+Typed), Texture3D, Scalar, Array, Camera, Light, Material. No Transform/Mat4 |
 | No mesh-TRS atom | `rg -i "transform" primitives/` | `affine_transform` = 2D UV effect; `generate_instance_transforms` + `InstanceTransform` (`generators/mesh_common.rs:93`, GPU Pod `pos_scale`/`rot_pad`) = the *instancing* array path — different semantics (many anonymous copies, GPU data), stays separate |
-| Expose flow label | `crates/manifold-editing/src/commands/graph.rs:1497-1568` (`mirror_effect_side`) | Card slider label = the bare inner `ParamDef` label — exposing `pos_x_2` yields an anonymous "Position X" |
+| Expose flow label | `crates/manifold-editing/src/commands/graph/mod.rs:1497-1568` (`mirror_effect_side`) | Card slider label = the bare inner `ParamDef` label — exposing `pos_x_2` yields an anonymous "Position X" |
 | Expose command scope | `graph.rs:1080-1096` (`ToggleNodeParamExposeCommand`) | Carries `scope_path: Vec<u32>` — the enclosing-group chain is ALREADY known at expose time; the section seed reads the innermost group's name from it |
 | Card spec fields | `crates/manifold-core/src/effect_graph_def.rs:450-491` (`ParamSpecDef`) | `is_angle` (`:489`) is the exact precedent for adding a serde-skipped display field |
-| Card rendering | `crates/manifold-ui/src/panels/param_card.rs:2205` (`build_generator`) + `build_effect` | Flat slider list, manifest order. **No section concept exists anywhere in the card UI** (searched panels/) |
+| Card rendering | `crates/manifold-ui/src/panels/param_card/mod.rs:2205` (`build_generator`) + `build_effect` | Flat slider list, manifest order. **No section concept exists anywhere in the card UI** (searched panels/) |
 | Node-face rows | `GRAPH_EDITOR_REDESIGN.md` on-node phases 1–6 (all ✅ 2026-07-01); `graph_canvas/model.rs` (`NodeRow`, `compute_node_rows`) | Regular nodes render param rows with sliders/checkboxes/editors; the row substrate P4 reuses. Canvas already computes wire-driven/outer-driven state (`apply_driven_state`, `outer_routings`) |
 | Group box rendering | `graph_canvas/model.rs:114-123` (`is_group`, `group_tint`) | Groups draw as tinted boxes with interface ports only — no param rows |
 | Group exposure policy | `NODE_GROUPS_UI_DESIGN.md` status | Phase D (interface editing) **dropped** — Peter 2026-06-13: organisation-only, exposure direct-to-card. This design keeps that; **no live group-param runtime**. *(F14 clarification 2026-07-10: `COMPONENT_LIBRARY_DESIGN.md` section 4 (The interaction set (the actual UX))/section 4a is the sanctioned `GroupParamDef` consumer — but declaration-only: component macros are `GroupParamDef` entries that **lower onto ordinary card `BindingDef`s at expose** (COMPONENT section 4b), so the thing this design kills — a live group-param interface runtime — stays dead. "`GroupParamDef` stays unused" was too strong; "no live group-param runtime" is the real invariant.)* |
@@ -63,7 +63,7 @@ a moved anchor is an escalation, not a guess.
 | Migration chain | `crates/manifold-io/src/migrate.rs:5-84` | Version-gated `Value → Value` steps, top currently `1.11.0`; `migrations/param_storage_v14.rs` is the quarantined-module precedent |
 | Fan-out bindings | `effect_graph_def.rs:404-413` (`BindingDef`, one id → many targets, per-target `scale`/`offset`) | Ableton-style macros are already representable — a load-bearing input to the Phase-D kill |
 | As-built REALTIME_3D deviation | `render_scene.rs:26` header; BASELINE_REVIEW_2026_07 | Object transforms are NOT port-shadowed; P6 gizmos not built. This design supersedes the "additive follow-up" note — see section 8 |
-| `EffectGroup` | `crates/manifold-core/src/effects.rs:2457` | Rack-grouping of whole effect *cards* (BUG-019 (deferred)'s subject) — a different layer; NOT this design's mechanism. Named here so no executor conflates them |
+| `EffectGroup` | `crates/manifold-core/src/effects/mod.rs:2457` | Rack-grouping of whole effect *cards* (BUG-019 (deferred)'s subject) — a different layer; NOT this design's mechanism. Named here so no executor conflates them |
 
 `⚠ VERIFY-AT-IMPL` (all phases): the boundaries wave and other landings will have moved
 lines; re-run the anchors above before editing. Line drift alone is not an escalation —
@@ -267,7 +267,7 @@ impl Default for Transform {
 - `AddSceneObjectCommand` lives in `manifold-editing/src/commands/graph.rs`, shaped
   like the existing group-creation command + `SetGraphNodeParam` composed as one
   undo unit (`⚠ VERIFY-AT-IMPL`: the compound-command precedent —
-  `rg -n "struct GroupNodesCommand|fn undo" crates/manifold-editing/src/commands/graph.rs`).
+  `rg -n "struct GroupNodesCommand|fn undo" crates/manifold-editing/src/commands/graph/mod.rs`).
 
 Freeze/fusion: CPU-struct wires don't participate in pointwise fusion, and
 `render_scene` is a raster node (never fused). `⚠ VERIFY-AT-IMPL`: confirm no
