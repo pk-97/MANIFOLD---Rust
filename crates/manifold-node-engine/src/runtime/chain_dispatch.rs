@@ -131,16 +131,37 @@ pub struct ChainSlot {
 
 /// A remembered failed build: what it was built from and why it failed.
 pub struct ChainBuildFailure {
-    topology: u64,
-    catalog_generation: u64,
+    inputs: u64,
     memory: Option<manifold_gpu::GpuMemorySnapshot>,
     message: std::sync::Arc<str>,
 }
 
+/// Everything a chain build reads apart from device memory: the topology
+/// (graph structure, resolution, preview target), each card's graph version
+/// (value-only node edits size buffers at build), the preset catalog and the
+/// installed fused compiles. Computed only for chains whose build failed.
+fn failed_build_inputs(
+    effects: &[PresetInstance],
+    groups: &[EffectGroup],
+    width: u32,
+    height: u32,
+    preview_effect: Option<&EffectId>,
+) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = ahash::AHasher::default();
+    crate::runtime::chain_topology_hash(effects, groups, width, height, preview_effect).hash(&mut h);
+    for fx in effects {
+        fx.graph_version.hash(&mut h);
+    }
+    crate::load::preset_loader::catalog_generation().hash(&mut h);
+    crate::freeze::install::segment_generation().hash(&mut h);
+    crate::freeze::install::fused_effect_generation().hash(&mut h);
+    h.finish()
+}
+
 impl ChainBuildFailure {
     fn new(
-        topology: u64,
-        catalog_generation: u64,
+        inputs: u64,
         memory: Option<manifold_gpu::GpuMemorySnapshot>,
         errors: &[crate::runtime::ChainError],
     ) -> Self {
@@ -150,17 +171,12 @@ impl ChainBuildFailure {
             .find(|e| matches!(e, crate::runtime::ChainError::PreAllocationFailed { .. }))
             .map(ToString::to_string)
             .unwrap_or_else(|| "The effects could not be built, so they are bypassed. The log names the cause.".into());
-        Self { topology, catalog_generation, memory, message: message.into() }
+        Self { inputs, memory, message: message.into() }
     }
 
     /// The same build would fail the same way: no build input moved and the
     /// device has not freed room since.
-    fn still_holds(
-        &self,
-        topology: u64,
-        catalog_generation: u64,
-        memory: Option<manifold_gpu::GpuMemorySnapshot>,
-    ) -> bool {
+    fn still_holds(&self, inputs: u64, memory: Option<manifold_gpu::GpuMemorySnapshot>) -> bool {
         let room_freed = match (self.memory, memory) {
             (Some(then), Some(now)) => {
                 now.recommended_max_working_set_bytes != then.recommended_max_working_set_bytes
@@ -168,7 +184,7 @@ impl ChainBuildFailure {
             }
             (then, now) => then.is_some() != now.is_some(),
         };
-        self.topology == topology && self.catalog_generation == catalog_generation && !room_freed
+        self.inputs == inputs && !room_freed
     }
 
     /// One line for the performer: why this chain is bypassed.
@@ -298,6 +314,8 @@ pub fn dispatch_chain_with_scene_viewport<'a>(
     project_tempo: Option<&ProjectTempo>,
 ) -> Option<&'a GpuTexture> {
     if !effects.iter().any(|fx| fx.enabled) {
+        // Nothing left to build, so nothing has failed.
+        cache.failure = None;
         return None;
     }
 
@@ -319,16 +337,14 @@ pub fn dispatch_chain_with_scene_viewport<'a>(
     crate::freeze::install::pump_segment_results();
 
     let catalog_generation = crate::load::preset_loader::catalog_generation();
-    let mut failed_topology = None;
     if cache.runtime.is_none()
         && let Some(failure) = &cache.failure
     {
-        let topology = crate::runtime::chain_topology_hash(effects, groups, ctx.width, ctx.height, preview_effect);
-        if failure.still_holds(topology, catalog_generation, gpu.device.modifier_memory_snapshot()) {
+        let inputs = failed_build_inputs(effects, groups, ctx.width, ctx.height, preview_effect);
+        if failure.still_holds(inputs, gpu.device.modifier_memory_snapshot()) {
             CHAIN_DISPATCH_NS.fetch_add(dispatch_t0.elapsed().as_nanos() as u64, Ordering::Relaxed);
             return None;
         }
-        failed_topology = Some(topology);
     }
     let (needs_rebuild, reason) = match cache.runtime.as_ref() {
         None => (true, "cache-miss"),
@@ -383,14 +399,10 @@ pub fn dispatch_chain_with_scene_viewport<'a>(
                 cache.failure = None;
             }
             Err(errors) => {
-                // Captured after the failed build released what it took, so
-                // the next frame compares like with like.
-                let topology = failed_topology.unwrap_or_else(|| {
-                    crate::runtime::chain_topology_hash(effects, groups, ctx.width, ctx.height, preview_effect)
-                });
+                // Inputs and memory are read after the failed build released
+                // what it took, so the next frame compares like with like.
                 cache.failure = Some(ChainBuildFailure::new(
-                    topology,
-                    catalog_generation,
+                    failed_build_inputs(effects, groups, ctx.width, ctx.height, preview_effect),
                     gpu.device.modifier_memory_snapshot(),
                     &errors,
                 ));
@@ -460,7 +472,7 @@ fn primitive_registry() -> &'static PrimitiveRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::runtime::{ChainError, chain_topology_hash};
+    use crate::runtime::ChainError;
     use manifold_gpu::GpuMemorySnapshot;
 
     fn in_use(bytes: u64) -> Option<GpuMemorySnapshot> {
@@ -469,18 +481,21 @@ mod tests {
 
     #[test]
     fn failed_build_holds_until_an_input_moves() {
-        let hd = chain_topology_hash(&[], &[], 1920, 1080, None);
+        let mut effects = vec![PresetInstance::new(manifold_core::PresetTypeId::COLOR_GRADE)];
+        let inputs = |fx: &[PresetInstance], w, h| failed_build_inputs(fx, &[], w, h, None);
         let full = 22 << 30;
         let errors = [ChainError::PreAllocationFailed { reason: "The scene needs 900 MB.".into() }];
-        let failure = ChainBuildFailure::new(hd, 3, in_use(full), &errors);
+        let failure = ChainBuildFailure::new(inputs(&effects, 1920, 1080), in_use(full), &errors);
 
-        assert!(failure.still_holds(hd, 3, in_use(full)), "next frame, nothing moved");
-        assert!(failure.still_holds(hd, 3, in_use(full - (1 << 20))), "allocator jitter");
-
-        let sd = chain_topology_hash(&[], &[], 1280, 720, None);
-        assert!(!failure.still_holds(sd, 3, in_use(full)), "resolution or graph changed");
-        assert!(!failure.still_holds(hd, 4, in_use(full)), "preset catalog changed");
-        assert!(!failure.still_holds(hd, 3, in_use(full - RETRY_FREED_BYTES)), "device freed room");
+        assert!(failure.still_holds(inputs(&effects, 1920, 1080), in_use(full)), "next frame, nothing moved");
+        assert!(failure.still_holds(inputs(&effects, 1920, 1080), in_use(full - (1 << 20))), "allocator jitter");
+        assert!(!failure.still_holds(inputs(&effects, 1280, 720), in_use(full)), "resolution changed");
+        assert!(!failure.still_holds(inputs(&effects, 1920, 1080), in_use(full - RETRY_FREED_BYTES)), "device freed room");
         assert!(failure.message().contains("The scene needs 900 MB."));
+
+        // A value-only node edit (a smaller sim count) sizes buffers at build.
+        effects[0].graph_version += 1;
+        assert_eq!(effects[0].graph_structure_version, 0, "structure unchanged");
+        assert!(!failure.still_holds(inputs(&effects, 1920, 1080), in_use(full)), "graph value edit retries");
     }
 }
