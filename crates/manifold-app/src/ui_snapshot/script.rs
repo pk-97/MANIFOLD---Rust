@@ -765,6 +765,16 @@ impl Runner {
             AutomationAction::SetParam { param, value } => {
                 self.set_param(ui, data, index, action_desc, param, *value, render)
             }
+            AutomationAction::SetSliderRange { param, range } => match flow_value_ref(data, param) {
+                Ok((manifold_ui::panels::ValueRef::Param(target, id), _)) => {
+                    let action = PanelAction::Params(manifold_ui::panels::ParamsAction::SetSliderRange(target, id, *range));
+                    self.apply_panel_actions(ui, data, &[action]);
+                    self.live_frame(ui, data, render, false, true);
+                    StepResult { index, action: action_desc, status: "ok", detail: format!("slider range {range:?} through dispatch"), artifact: None }
+                }
+                Ok(_) => StepResult { index, action: action_desc, status: "fail", detail: "SetSliderRange needs a card param".into(), artifact: None },
+                Err(e) => StepResult { index, action: action_desc, status: "fail", detail: e, artifact: None },
+            },
             AutomationAction::ScrubDrag { param, from, to, steps } => {
                 self.scrub_drag(ui, data, index, action_desc, param, (*from, *to), *steps, out_dir, render)
             }

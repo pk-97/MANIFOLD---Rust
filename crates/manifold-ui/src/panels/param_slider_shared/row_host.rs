@@ -668,8 +668,14 @@ impl RowHost {
             }
         }
 
-        let norm = BitmapSlider::x_to_normalized(TrackSpan::of(track), pos.x);
-        let mut value = BitmapSlider::normalized_to_value(norm, info.spec.min, info.spec.max);
+        // A press jumps the value to the pointer, except when the value sits
+        // past the slider's end: then the drag starts from it, so grabbing
+        // the pinned thumb never snaps the value back under the hand (D15).
+        let current = ctx.values.get(row).copied().filter(|v| super::state::past_slider_end(*v, &info.spec));
+        let mut value = current.unwrap_or_else(|| {
+            let norm = BitmapSlider::x_to_normalized(TrackSpan::of(track), pos.x);
+            BitmapSlider::normalized_to_value(norm, info.spec.min, info.spec.max)
+        });
         if info.spec.whole_numbers {
             value = value.round();
         }
@@ -744,12 +750,14 @@ impl RowHost {
         let rect = tree.get_bounds(track);
         let dx = pos.x - self.gesture.start().map(|p| p.x).unwrap_or(payload.last_pos.x);
         let mut value = match payload.kind {
+            // Relative to the press: past the slider's end it keeps going to
+            // the row's hard limit (D15).
             RowDragKind::Param => fine_scrub_value(
                 payload.start_value,
                 dx,
                 rect.width,
-                payload.range.0,
-                payload.range.1,
+                payload.range,
+                ctx.rows[row].spec.limit,
                 fine,
             ),
             RowDragKind::EnvelopeTarget => {
@@ -1157,6 +1165,7 @@ impl RowHost {
             spec.unit,
         );
         crate::slider::BitmapSlider::update_value(tree, ids, display_norm_override.unwrap_or(norm), &text);
+        crate::slider::BitmapSlider::mark_past_end(tree, ids, super::state::past_slider_end(value, spec));
     }
 
     /// The one param menu (`ParamLabelRightClick`) on every built slider row

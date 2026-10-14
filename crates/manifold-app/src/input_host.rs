@@ -1477,8 +1477,8 @@ impl TimelineInputHost for AppInputHost<'_> {
                     .and_then(|lane| {
                         let param = inst.params.get(param_id_str)?;
                         lane.points.iter().position(|p| {
-                            let range = (param.spec.max - param.spec.min).abs().max(f32::EPSILON);
-                            let norm = ((p.value - param.spec.min) / range).clamp(0.0, 1.0);
+                            let range = (param.slider_span().1 - param.slider_span().0).abs().max(f32::EPSILON);
+                            let norm = ((p.value - param.slider_span().0) / range).clamp(0.0, 1.0);
                             p.beat == point_ref.beat && norm == point_ref.value_norm
                         })
                     })

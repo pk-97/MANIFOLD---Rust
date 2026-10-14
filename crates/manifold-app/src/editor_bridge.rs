@@ -117,7 +117,9 @@ fn full_reshape_from_instance(
     f32,
 )> {
     let meta = def.preset_metadata.as_ref()?;
-    let spec = &instance.params.get(param_id)?.spec;
+    let param = instance.params.get(param_id)?;
+    let spec = &param.spec;
+    let (span_min, span_max) = param.slider_span();
     let (scale, offset) = meta
         .bindings
         .iter()
@@ -126,8 +128,8 @@ fn full_reshape_from_instance(
         .unwrap_or((1.0, 0.0));
     Some((
         spec.name.clone(),
-        spec.min,
-        spec.max,
+        span_min,
+        span_max,
         spec.invert,
         spec.curve,
         scale,
@@ -189,11 +191,13 @@ fn binding_for_node_param(
         }
         BindingTarget::Composite { .. } | BindingTarget::SceneModifier { .. } => false,
     })?;
-    let spec = &params.get(&binding.id)?.spec;
+    let param = params.get(&binding.id)?;
+    let spec = &param.spec;
+    let (span_min, span_max) = param.slider_span();
     Some((
         binding.id.clone(),
-        spec.min,
-        spec.max,
+        span_min,
+        span_max,
         spec.invert,
         spec.curve,
         binding.scale,
@@ -559,9 +563,11 @@ pub(crate) fn resolve_canvas_binding(
             target,
             &outer.id,
             |outer| {
-                let spec = owner.params.get(&outer.id)?.spec.clone();
+                let param = owner.params.get(&outer.id)?;
+                let (span_min, span_max) = param.slider_span();
+                let spec = param.spec.clone();
                 Some((
-                    outer.id.clone(), outer.label.clone(), spec.min, spec.max,
+                    outer.id.clone(), outer.label.clone(), span_min, span_max,
                     spec.invert, spec.curve, outer.scale, outer.offset,
                     range, is_angle, spec.section,
                 ))
@@ -633,9 +639,11 @@ fn modifier_binding_for_node_param(
         .find(|binding| matches!(&binding.target,
             manifold_core::effect_graph_def::BindingTarget::SceneModifier { modifier_id: id, param_id }
                 if id == modifier_id && param_id == &local_binding.id))?;
-    let spec = &owner.params.get(&owner_binding.id)?.spec;
+    let param = owner.params.get(&owner_binding.id)?;
+    let spec = &param.spec;
+    let (span_min, span_max) = param.slider_span();
     Some((
-        owner_binding.id.clone(), spec.min, spec.max, spec.invert, spec.curve,
+        owner_binding.id.clone(), span_min, span_max, spec.invert, spec.curve,
         owner_binding.scale * local_binding.scale,
         owner_binding.offset * local_binding.scale + local_binding.offset,
     ))
@@ -671,6 +679,35 @@ impl Application {
                 self.text_input.inspector_param = Some(InspectorParamCtx {
                     target: target.clone(), param_id: param_id.clone(),
                     whole_numbers: *whole_numbers, degrees: *degrees,
+                });
+                if in_editor && let Some(editor) = self.graph_editor.as_mut() {
+                    editor.offscreen_dirty = true;
+                }
+            }
+            PanelAction::Root(RootAction::BeginSliderRangeInput { target, param_id, anchor }) => {
+                let tab = if in_editor {
+                    self.graph_editor.as_ref().map(|ed| ed.ui_root.inspector.last_effect_tab())
+                } else {
+                    Some(self.ws.ui_root.inspector.last_effect_tab())
+                };
+                let param = tab
+                    .and_then(|tab| crate::ui_bridge::resolve_graph_target(
+                        target, None, tab, &self.active_layer_id, &self.selection, &self.local_project,
+                    ))
+                    .and_then(|owner| self.local_project.graph_target_owner(&owner)?.params.get(param_id.as_ref()).cloned());
+                let Some(param) = param else { return true };
+                let degrees = param.spec.is_angle;
+                let (lo, hi) = param.slider_span();
+                let shown = |v: f32| if degrees { v.to_degrees() } else { v };
+                self.text_input.begin(
+                    if in_editor { TextInputField::EditorSliderRange } else { TextInputField::SliderRange },
+                    &format!("{} to {}", shown(lo), shown(hi)),
+                    AnchorRect::new(anchor.x, anchor.y, anchor.width, anchor.height),
+                    11.0,
+                );
+                self.text_input.inspector_param = Some(InspectorParamCtx {
+                    target: target.clone(), param_id: param_id.clone(),
+                    whole_numbers: false, degrees,
                 });
                 if in_editor && let Some(editor) = self.graph_editor.as_mut() {
                     editor.offscreen_dirty = true;
@@ -893,9 +930,11 @@ impl Application {
                 param_id,
                 |binding| (binding.scale, binding.offset),
             )?;
-            let spec = &owner.params.get(param_id)?.spec;
+            let param = owner.params.get(param_id)?;
+            let spec = &param.spec;
+            let (span_min, span_max) = param.slider_span();
             return Some((
-                spec.name.clone(), spec.min, spec.max, spec.invert, spec.curve,
+                spec.name.clone(), span_min, span_max, spec.invert, spec.curve,
                 binding.0, binding.1,
             ));
         }
@@ -2596,11 +2635,11 @@ mod binding_reroute_tests {
             }
         }
         assert_eq!(undo.undo_count(), 1);
-        assert_eq!(content_project.preset_instance(&owner).unwrap().params.get("amount").unwrap().spec.max, 7.0);
+        assert_eq!(content_project.preset_instance(&owner).unwrap().params.get("amount").unwrap().slider_span().1, 7.0);
         assert!(undo.undo(&mut content_project));
-        assert_eq!(content_project.preset_instance(&owner).unwrap().params.get("amount").unwrap().spec.max, 1.0);
+        assert_eq!(content_project.preset_instance(&owner).unwrap().params.get("amount").unwrap().slider_span().1, 1.0);
         assert!(undo.redo(&mut content_project));
-        assert_eq!(content_project.preset_instance(&owner).unwrap().params.get("amount").unwrap().spec.max, 7.0);
+        assert_eq!(content_project.preset_instance(&owner).unwrap().params.get("amount").unwrap().slider_span().1, 7.0);
     }
 
     #[test]
@@ -2651,10 +2690,10 @@ mod binding_reroute_tests {
             .expect("valid local mapping queues a host command");
         let mut undo = manifold_editing::undo::UndoRedoManager::new();
         undo.execute(command, &mut content_project);
-        assert_eq!(content_project.graph_target_owner(&target).unwrap().params.get("macro").unwrap().spec.max, 7.0);
+        assert_eq!(content_project.graph_target_owner(&target).unwrap().params.get("macro").unwrap().slider_span().1, 7.0);
         assert_eq!(super::modifier_binding_for_node_param(&content_project, &target, &[], 1, "amount").unwrap().5, 8.0);
         assert!(undo.undo(&mut content_project));
-        assert_eq!(content_project.graph_target_owner(&target).unwrap().params.get("macro").unwrap().spec.max, 1.0);
+        assert_eq!(content_project.graph_target_owner(&target).unwrap().params.get("macro").unwrap().slider_span().1, 1.0);
     }
 
     #[test]
@@ -2716,7 +2755,7 @@ mod binding_reroute_tests {
             max: Some(7.0), ..Default::default()
         }, None).execute(&mut project);
         let fx = &project.settings.master_effects[0];
-        assert_eq!(fx.params.get("amount").unwrap().spec.max, 7.0, "production edit landed");
+        assert_eq!(fx.params.get("amount").unwrap().slider_span().1, 7.0, "production edit landed");
         let after = super::full_reshape_from_instance(fx, fx.graph.as_ref().unwrap(), "amount").unwrap();
         eprintln!("AUDIT: before max={}, live manifest max=7, editor reader max={}; range commit detects change={}", before.2, after.2, (before.2-after.2).abs() > f32::EPSILON);
         assert_eq!(after.2, 7.0, "mapping opener and commit reader must see the live edit");

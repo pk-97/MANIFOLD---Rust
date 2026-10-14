@@ -1718,6 +1718,8 @@ impl UIRoot {
                 if let Some(surface) = pin_surface {
                     items.extend(super::card_pin::scene_items(gpt, param_id, surface));
                 }
+                let range_anchor = manifold_ui::Rect::new(right_click_pos.x, right_click_pos.y, 140.0, 20.0);
+                items.extend(super::card_pin::slider_range_items(gpt, param_id, range_anchor));
                 if self.inspector.last_effect_tab().is_layer_scope()
                     || matches!(gpt, GraphParamTarget::GeneratorOf(_))
                 {

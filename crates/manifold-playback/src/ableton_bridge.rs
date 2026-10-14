@@ -2153,7 +2153,7 @@ impl AbletonBridge {
                     let Some(param) = fx.params.get(mapping.param_id.as_ref()) else {
                         continue;
                     };
-                    let (pmin, pmax) = (param.spec.min, param.spec.max);
+                    let (pmin, pmax) = param.slider_span();
                     let (abl_min, abl_max) = self.ableton_param_range(
                         mapping.address.track_id,
                         mapping.address.device_id,
@@ -2203,7 +2203,7 @@ impl AbletonBridge {
                             else {
                                 continue;
                             };
-                            let (pmin, pmax) = (param.spec.min, param.spec.max);
+                            let (pmin, pmax) = param.slider_span();
                             let (abl_min, abl_max) = self.ableton_param_range(
                                 mapping.address.track_id,
                                 mapping.address.device_id,
@@ -2249,7 +2249,7 @@ impl AbletonBridge {
                     let Some(param) = gp.params.get(mapping.param_id.as_ref()) else {
                         continue;
                     };
-                    let (pmin, pmax) = (param.spec.min, param.spec.max);
+                    let (pmin, pmax) = param.slider_span();
                     let (abl_min, abl_max) = self.ableton_param_range(
                         mapping.address.track_id,
                         mapping.address.device_id,

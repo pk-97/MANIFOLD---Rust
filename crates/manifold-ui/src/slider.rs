@@ -498,6 +498,18 @@ impl BitmapSlider {
         Slider { ids, reset }
     }
 
+    /// Mark a value past the slider's end: the thumb, already pinned at the
+    /// end by the clamped position, turns amber. Only for sliders built with
+    /// the default thumb colour (param rows).
+    pub fn mark_past_end(tree: &mut UITree, ids: &SliderNodeIds, past_end: bool) {
+        let Some(node) = tree.get_node(ids.thumb) else { return };
+        let bg_color = if past_end { color::SLIDER_PAST_END_C32 } else { color::SLIDER_THUMB_C32 };
+        if node.style.bg_color != bg_color {
+            let style = UIStyle { bg_color, ..node.style };
+            tree.set_style(ids.thumb, style);
+        }
+    }
+
     /// Update fill width, thumb position, and value text.
     /// Call during drag or when data changes.
     pub fn update_value(

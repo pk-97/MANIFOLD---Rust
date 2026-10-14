@@ -389,7 +389,7 @@ fn push_chosen_placeholder_lane(
     let Some(p) = instance.params.get(param_id.as_ref()) else {
         return;
     };
-    let (pmin, pmax, whole) = (p.spec.min, p.spec.max, p.whole_numbers());
+    let ((pmin, pmax), whole) = (p.slider_span(), p.whole_numbers());
     let range = (pmax - pmin).abs().max(f32::EPSILON);
     let base = instance.get_base_param(param_id.as_ref());
     let norm = ((base - pmin) / range).clamp(0.0, 1.0);
@@ -402,6 +402,7 @@ fn push_chosen_placeholder_lane(
             beat: manifold_core::Beats::ZERO,
             value_norm: norm,
             shape: UiSegmentShape::Linear,
+            past_end: false,
         }],
         param_min: pmin,
         param_max: pmax,
@@ -439,20 +440,23 @@ fn push_instance_automation_lanes(
         if !lane.enabled {
             continue;
         }
-        // Range + integral-ness come straight off the manifest entry (D6:
-        // calibration edits `spec.min`/`spec.max` in place), no resolver.
+        // The lane spans the slider range; a point past it draws at the edge.
         let Some(p) = instance.params.get(lane.param_id.as_ref()) else {
             continue;
         };
-        let (pmin, pmax, whole) = (p.spec.min, p.spec.max, p.whole_numbers());
+        let ((pmin, pmax), whole) = (p.slider_span(), p.whole_numbers());
         let range = (pmax - pmin).abs().max(f32::EPSILON);
         let points = lane
             .points
             .iter()
-            .map(|pt| UiAutomationPoint {
-                beat: pt.beat,
-                value_norm: ((pt.value - pmin) / range).clamp(0.0, 1.0),
-                shape: segment_shape_to_ui(pt.shape),
+            .map(|pt| {
+                let norm = (pt.value - pmin) / range;
+                UiAutomationPoint {
+                    beat: pt.beat,
+                    value_norm: norm.clamp(0.0, 1.0),
+                    shape: segment_shape_to_ui(pt.shape),
+                    past_end: !(0.0..=1.0).contains(&norm),
+                }
             })
             .collect();
         out.push(UiAutomationLane {

@@ -133,4 +133,5 @@ pub use warmup::{WarmupBudget, WarmupCap, WarmupOutcome, WarmupPass, WarmupProgr
 pub use manifold_foundation::cold_touch;
 pub use manifold_foundation::device_guard;
 pub use manifold_foundation::work_count;
+pub use manifold_foundation::param_range;
 pub use manifold_foundation::scene_surface;

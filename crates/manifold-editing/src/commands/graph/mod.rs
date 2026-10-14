@@ -30,6 +30,8 @@ use manifold_core::project::Project;
 mod card_owned_write;
 mod card_pin;
 pub use card_pin::SetCardPinCommand;
+mod slider_range;
+pub use slider_range::SetSliderRangeCommand;
 mod node_edit;
 mod param_sections;
 pub use node_edit::*;

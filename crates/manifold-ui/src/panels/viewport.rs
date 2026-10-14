@@ -1175,6 +1175,7 @@ impl TimelineViewportPanel {
                                 beat: p.beat,
                                 value_norm: p.value_norm,
                                 shape: p.shape,
+                                past_end: p.past_end,
                             }
                         })
                         .collect()
@@ -2490,8 +2491,8 @@ mod tests {
                 target: UiGraphTarget::Effect(EffectId::new("fx")),
                 label: "Fx: amount".into(),
                 points: vec![
-                    UiAutomationPoint { beat: Beats::from_f32(4.0), value_norm: 0.5, shape: UiSegmentShape::Linear },
-                    UiAutomationPoint { beat: Beats::from_f32(8.0), value_norm: 0.8, shape: UiSegmentShape::Linear },
+                    UiAutomationPoint { beat: Beats::from_f32(4.0), value_norm: 0.5, shape: UiSegmentShape::Linear, past_end: false },
+                    UiAutomationPoint { beat: Beats::from_f32(8.0), value_norm: 0.8, shape: UiSegmentShape::Linear, past_end: false },
                 ],
                 param_min: 0.0,
                 param_max: 1.0,

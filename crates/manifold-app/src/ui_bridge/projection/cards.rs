@@ -496,6 +496,7 @@ fn param_surface(
                     material_role: p.spec.material_role.map(super::material::role),
                     inactive_reason: None,
                     scene: p.spec.scene,
+                    limit: p.drag_limit(),
                     disabled: None,
                 },
                 // D7: display-value resolution decided here — base/effective

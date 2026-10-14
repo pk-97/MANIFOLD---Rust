@@ -393,8 +393,8 @@ mod tests {
                     target,
                     label: "Mirror: amount".into(),
                     points: vec![
-                        UiAutomationPoint { beat: Beats(4.0), value_norm: 0.5, shape: UiSegmentShape::Linear },
-                        UiAutomationPoint { beat: Beats(8.0), value_norm: 0.8, shape: UiSegmentShape::Linear },
+                        UiAutomationPoint { beat: Beats(4.0), value_norm: 0.5, shape: UiSegmentShape::Linear, past_end: false },
+                        UiAutomationPoint { beat: Beats(8.0), value_norm: 0.8, shape: UiSegmentShape::Linear, past_end: false },
                     ],
                     param_min: 0.0,
                     param_max: 1.0,
