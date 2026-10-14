@@ -152,19 +152,19 @@ fn source_switch_cuts_old_starts_preserves_phase_and_accepts_new_same_beat_launc
             layer_id: source_b_id.clone(),
         },
     );
-    command.execute(engine.project_mut().unwrap());
+    run(&mut engine, &mut command, false);
     engine.mark_clip_bindings_stale(); // the content reaction pass does this after an edit
     engine.reconcile_clip_control_bindings();
 
     // Undoing the assignment at the same beat must not replay A's queued start.
-    command.undo(engine.project_mut().unwrap());
+    run(&mut engine, &mut command, true);
     engine.mark_clip_bindings_stale(); // the content reaction pass does this after an edit
     engine.reconcile_clip_control_bindings();
     tick(&mut engine);
     assert_eq!(step_value(&engine, &owner_id), None);
 
     // Re-apply B: starts queued before this binding remain cut off.
-    command.execute(engine.project_mut().unwrap());
+    run(&mut engine, &mut command, false);
     engine.mark_clip_bindings_stale(); // the content reaction pass does this after an edit
     engine.reconcile_clip_control_bindings();
     tick(&mut engine);
@@ -188,10 +188,10 @@ fn source_switch_cuts_old_starts_preserves_phase_and_accepts_new_same_beat_launc
 
     // A session launch creates a new B start at the assignment beat and must
     // remain a real edge even though older B starts were cut off.
-    command.undo(engine.project_mut().unwrap());
+    run(&mut engine, &mut command, true);
     engine.mark_clip_bindings_stale(); // the content reaction pass does this after an edit
     engine.reconcile_clip_control_bindings();
-    command.execute(engine.project_mut().unwrap());
+    run(&mut engine, &mut command, false);
     engine.mark_clip_bindings_stale(); // the content reaction pass does this after an edit
     engine.reconcile_clip_control_bindings();
     engine.session_set_quantize(Beats::ZERO);
@@ -278,7 +278,7 @@ fn source_switch_cancels_pending_fire_delivery_and_keeps_future_source_events() 
             layer_id: source_b_id.clone(),
         },
     );
-    command.execute(engine.project_mut().unwrap());
+    run(&mut engine, &mut command, false);
     engine.mark_clip_bindings_stale(); // the content reaction pass does this after an edit
     assert_eq!(
         engine.with_trigger_pulses(|pulses, _, _| pulses.len()),
@@ -377,7 +377,7 @@ fn backward_set_beat_clears_late_source_cutoff_before_earlier_start() {
             layer_id: source_b_id,
         },
     );
-    command.execute(engine.project_mut().unwrap());
+    run(&mut engine, &mut command, false);
     engine.mark_clip_bindings_stale(); // the content reaction pass does this after an edit
     engine.reconcile_clip_control_bindings();
 
@@ -478,7 +478,7 @@ fn numeric_trigger_source_roundtrip_assignment_disconnect_and_undo() {
             layer_id: source_a_id.clone(),
         },
     );
-    assign.execute(engine.project_mut().unwrap());
+    run(&mut engine, &mut assign, false);
     engine.mark_clip_bindings_stale(); // the content reaction pass does this after an edit
     assert!(assign.was_applied());
     assert_eq!(assign.rejection_reason(), None);
@@ -527,7 +527,7 @@ fn numeric_trigger_source_roundtrip_assignment_disconnect_and_undo() {
         PARAM_ID,
         ClipTriggerSource::Disabled,
     );
-    disconnect.execute(engine.project_mut().unwrap());
+    run(&mut engine, &mut disconnect, false);
     engine.mark_clip_bindings_stale(); // the content reaction pass does this after an edit
     assert!(disconnect.was_applied());
     engine.reconcile_clip_control_bindings();
@@ -539,7 +539,7 @@ fn numeric_trigger_source_roundtrip_assignment_disconnect_and_undo() {
     assert_eq!(step_value_for(&engine, &owner_id, PARAM_ID), Some(1.0));
     assert_value(&engine, &owner_id, 1.0);
 
-    disconnect.undo(engine.project_mut().unwrap());
+    run(&mut engine, &mut disconnect, true);
     engine.mark_clip_bindings_stale(); // the content reaction pass does this after an edit
     engine.reconcile_clip_control_bindings();
     engine.follow_external_beat(Beats(8.0));
@@ -653,4 +653,13 @@ fn numeric_trigger_source_roundtrip_assignment_disconnect_and_undo() {
     tick(&mut missing_engine);
     assert_eq!(step_value_for(&missing_engine, &owner_id, PARAM_ID), None);
     assert_value(&missing_engine, &owner_id, 0.0);
+}
+
+/// Apply or revert a command through the gateway, as the content thread would.
+fn run(engine: &mut PlaybackEngine, command: &mut dyn Command, undo: bool) {
+    let touches = command.touches();
+    let edit = engine.project_edit().expect("project");
+    manifold_editing::service::EditingService::new().mutate(touches, edit, |p| {
+        if undo { command.undo(p) } else { command.execute(p) }
+    });
 }

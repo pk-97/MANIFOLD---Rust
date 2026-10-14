@@ -2386,11 +2386,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
         });
 
         // Split borrow: get renderers + project from engine simultaneously.
-        let (renderers, project) = engine.split_renderer_project_mut();
-        let project = project.map(|project| {
-            project.tempo_map.ensure_sorted();
-            &*project
-        });
+        // The tempo map is sorted at write time, so the render reads it shared.
+        let (renderers, project) = engine.split_renderer_project();
         self.sdr_curve = project.and_then(|p| {
             p.settings.tonemap_enabled.then_some(p.settings.tonemap_curve)
         });

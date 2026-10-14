@@ -386,15 +386,10 @@ pub(super) fn set_generator_param(
     let target = manifold_core::GraphTarget::Generator(layer_id.clone());
     let old = ct
         .engine
-        .project_mut()
+        .project()
         .expect("math journey project")
-        .with_preset_graph_mut(&target, |instance| {
-            instance
-                .params
-                .contains(param_id)
-                .then(|| instance.get_base_param(param_id))
-        })
-        .flatten()
+        .preset_instance(&target)
+        .and_then(|instance| instance.params.contains(param_id).then(|| instance.get_base_param(param_id)))
         .unwrap_or_else(|| panic!("missing generator parameter {param_id}"));
     assert!(!ct.handle_command(ContentCommand::Execute(Box::new(
         manifold_editing::commands::effects::ChangeGraphParamCommand::new(

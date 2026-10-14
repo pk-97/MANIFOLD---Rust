@@ -62,7 +62,7 @@ pub(crate) fn apply_stock(
         SceneModifierAction::Add(layer_id.clone(), preset.into()),
     )
     .expect("stock modifier action builds");
-    service.execute(with_admission(command), project);
+    service.execute(with_admission(command), &mut *project);
     assert!(service.take_rejection().is_none());
     modifier_ids(project, layer_id)
         .last()

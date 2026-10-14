@@ -3,7 +3,6 @@ use manifold_core::layer::Layer;
 use manifold_core::project::Project;
 use manifold_core::types::*;
 use manifold_core::{Beats, Seconds};
-use manifold_editing::command::Command;
 use manifold_playback::clip_launcher::ClipLauncher;
 use manifold_playback::live_clip_manager::*;
 use manifold_playback::scheduler::ClipScheduler;
@@ -20,7 +19,6 @@ struct MockHost {
     current_tick: i32,
     stopped_clips: Vec<String>,
     registered_clips: HashMap<String, TimelineClip>,
-    recorded_commands: Vec<Box<dyn Command>>,
     compositor_dirty: bool,
 }
 
@@ -35,7 +33,6 @@ impl MockHost {
             current_tick: 0,
             stopped_clips: Vec::new(),
             registered_clips: HashMap::new(),
-            recorded_commands: Vec::new(),
             compositor_dirty: false,
         }
     }
@@ -85,9 +82,6 @@ impl LiveClipHost for MockHost {
     fn register_clip_lookup(&mut self, clip_id: &str, clip: &TimelineClip) {
         self.registered_clips
             .insert(clip_id.to_string(), clip.clone());
-    }
-    fn record_command(&mut self, cmd: Box<dyn Command>) {
-        self.recorded_commands.push(cmd);
     }
     fn beat_to_timeline_time(&self, beat: Beats) -> Seconds {
         Seconds(beat.0 * 60.0 / self.bpm as f64)
@@ -409,10 +403,18 @@ fn commit_with_recording_adds_to_timeline() {
         -1,
     );
 
-    // Clip should be committed to timeline
-    assert_eq!(project.timeline.layers[0].clips.len(), 1);
+    // The take is a command the content thread executes through the gateway.
+    assert!(project.timeline.layers[0].clips.is_empty());
     assert!(host.compositor_dirty);
-    assert!(host.recorded_commands.len() == 1);
+    let commands = mgr.take_pending_commands();
+    assert_eq!(commands.len(), 1);
+    let mut editing = manifold_editing::service::EditingService::new();
+    for cmd in commands {
+        editing.execute(cmd, &mut project);
+    }
+    assert_eq!(project.timeline.layers[0].clips.len(), 1);
+    assert!(editing.undo(&mut project));
+    assert!(project.timeline.layers[0].clips.is_empty());
 }
 
 #[test]

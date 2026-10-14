@@ -163,11 +163,11 @@ fn reparenting_rechecks_group_source_scope_without_changing_saved_assignment() {
 
     // Mutate only hierarchy here: this isolates playback scope validation
     // from the separately tested editing command and undo machinery.
-    engine.project_mut().unwrap().timeline.layers[owner_index].parent_layer_id = None;
+    layers_write(&mut engine, |p| p.timeline.layers[owner_index].parent_layer_id = None);
     engine.mark_clip_bindings_stale(); // the content reaction pass does this after an edit
     tick_n(&mut engine, 1, 30);
     assert_eq!(envelope_step_value_of(&engine, owner_index), Some(1.0));
-    engine.project_mut().unwrap().timeline.layers[owner_index].parent_layer_id = Some(group_id);
+    layers_write(&mut engine, |p| p.timeline.layers[owner_index].parent_layer_id = Some(group_id));
     engine.mark_clip_bindings_stale(); // the content reaction pass does this after an edit
     tick_n(&mut engine, 1, 30);
     assert_eq!(envelope_step_value_of(&engine, owner_index), Some(2.0));
@@ -287,7 +287,7 @@ fn deleting_a_source_cancels_its_unconsumed_start() {
     engine.initialize(project);
     engine.locate(Seconds(2.25));
     engine.sync_clips_to_time();
-    engine.project_mut().unwrap().timeline.remove_layer(1);
+    layers_write(&mut engine, |p| { p.timeline.remove_layer(1); });
     engine.mark_clip_bindings_stale(); // the content reaction pass does this after an edit
     tick_n(&mut engine, 1, 1);
     assert_eq!(envelope_step_value_of(&engine, 0), None);
@@ -682,4 +682,13 @@ fn step_envelope_resumes_from_committed_base_after_real_save_and_reload() {
         "after a real save+reload, the layer's own clip start still fires the \
          Step envelope and resumes from the committed base (0 + amount 1 = 1)"
     );
+}
+
+/// A layer structure write through the gateway, as the content thread makes it.
+fn layers_write(engine: &mut PlaybackEngine, f: impl FnOnce(&mut manifold_core::project::Project)) {
+    use manifold_core::change::{ChangeSet, Part};
+    // Removing a layer takes its clips, effects, automation and live values with it.
+    let layers = ChangeSet::of(&[Part::Layers, Part::Clips, Part::Effects, Part::Automation, Part::Values, Part::Shapes]);
+    let edit = engine.project_edit().expect("project");
+    manifold_editing::service::EditingService::new().mutate(layers, edit, f);
 }

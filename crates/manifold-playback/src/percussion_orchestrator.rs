@@ -217,9 +217,7 @@ impl PercussionImportOrchestrator {
     pub fn tick(
         &mut self,
         unscaled_time: f32,
-        project: &mut Project,
-        editing_service: &mut manifold_editing::service::EditingService,
-        _current_beat: f32,
+        project: Option<(&mut Project, &mut manifold_editing::service::EditingService)>,
     ) {
         // Auto-clear status timer.
         // When set_percussion_import_status is called it stores -(interval) as a pending value.
@@ -241,9 +239,16 @@ impl PercussionImportOrchestrator {
         match &self.phase {
             OrchestratorPhase::Idle => {}
             OrchestratorPhase::DetectClip(_) => {
-                self.tick_detect_clip(unscaled_time, project, editing_service);
+                self.tick_detect_clip(project);
             }
         }
+    }
+
+    /// A detection result waits to be written: the next `tick` needs the
+    /// project and the editing service.
+    pub fn result_ready(&self) -> bool {
+        matches!(&self.phase, OrchestratorPhase::DetectClip(s)
+            if matches!(s.sub_phase, DetectClipSubPhase::ApplyingResult { .. }))
     }
 
     // ──────────────────────────────────────
@@ -256,7 +261,7 @@ impl PercussionImportOrchestrator {
     /// the legacy wizard but caches the analysis on the clip and writes no
     /// project-global state. The clip must already exist (dropped on an audio
     /// layer); detection is a manual action, not automatic on drop.
-    pub fn detect_clip(&mut self, clip_id: ClipId, project: &mut Project) {
+    pub fn detect_clip(&mut self, clip_id: ClipId, project: &Project) {
         if self.percussion_import_in_progress {
             self.set_percussion_import_status(
                 "Detection already running",
@@ -270,7 +275,7 @@ impl PercussionImportOrchestrator {
         }
 
         // Resolve the clip's audio file (geometry is read at apply time).
-        let audio_path = match project.timeline.find_clip_by_id(&clip_id) {
+        let audio_path = match project.timeline.layers.iter().flat_map(|l| l.clips.iter()).find(|c| c.id == clip_id) {
             Some(c) if c.is_audio() => c.audio_file_path.clone(),
             _ => {
                 self.set_percussion_import_status(
@@ -356,9 +361,7 @@ impl PercussionImportOrchestrator {
 
     fn tick_detect_clip(
         &mut self,
-        _unscaled_time: f32,
-        project: &mut Project,
-        editing_service: &mut manifold_editing::service::EditingService,
+        project: Option<(&mut Project, &mut manifold_editing::service::EditingService)>,
     ) {
         let state = match &mut self.phase {
             OrchestratorPhase::DetectClip(s) => s,
@@ -414,6 +417,7 @@ impl PercussionImportOrchestrator {
             }
 
             DetectClipSubPhase::ApplyingResult { pipeline_ok } => {
+                let Some((project, editing_service)) = project else { return };
                 let pipeline_ok = *pipeline_ok;
                 let (clip_id, temp_json) = if let OrchestratorPhase::DetectClip(s) = &self.phase {
                     (s.clip_id.clone(), s.temp_output_json.clone())
@@ -496,7 +500,7 @@ impl PercussionImportOrchestrator {
         {
             editing_service.execute(
                 Box::new(ChangeClipRecordedBpmCommand::new_detected(clip_id.clone(), detected)),
-                project,
+                &mut *project,
             );
         }
 
