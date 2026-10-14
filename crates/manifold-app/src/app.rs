@@ -1014,7 +1014,7 @@ impl Application {
                     );
                     let content_tx = self.content_tx.as_ref().unwrap().clone();
                     let mut dctx = crate::ui_bridge::DispatchCtx {
-                        project: crate::ui_bridge::ProjectRef::new(&mut self.local_project, &mut self.ui_edits.stamps, &content_tx),
+                        project: crate::ui_bridge::ProjectRef::new(&mut self.local_project, &mut self.ui_edits, &content_tx),
                         content_tx: &content_tx,
                         content_state: &self.content_state,
                         ui: &mut self.ws.ui_root,

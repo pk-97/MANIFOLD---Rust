@@ -416,7 +416,7 @@ pub(crate) fn dispatch_params(action: &ParamsAction, ctx: &mut super::super::Dis
                 param_id.to_string(),
                 *range,
             )));
-            DispatchResult::structural()
+            DispatchResult::handled()
         }
         ParamsAction::RevealInSceneTab(gpt, param_id) => {
             reveal_in_scene_tab(gpt, vec![param_id.clone()], effective_tab, active_layer, ctx)
