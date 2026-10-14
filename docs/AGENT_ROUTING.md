@@ -45,7 +45,7 @@ within five minutes.
 
 - **A judgment-tier model is the only orchestrator.** The lead. Never a lane model over lane models, at any depth.
 - **The lead steers before the lane spawns.** Every brief names the existing system the work rides on (the reuse target) and the conviction test that must fail before the fix. Building a parallel path is a brief violation.
-- **Lanes make exactly ONE commit, then STOP and report.** The lead reviews that commit before the lane continues. Wrong direction always shows in the first diff. A lane kept for a planned follow-up follows the same rule per continuation: one commit, stop, report.
+- **Lanes make exactly ONE commit, then STOP and report.** The lead skims that commit before the lane continues; wrong direction always shows in the first diff. The adversarial agent review runs once per landing, not per commit (section Reviews and the consult seat). A lane kept for a planned follow-up follows the same rule per continuation: one commit, stop, report.
 - **A lane's report is its final text turn, never a SendMessage.** The harness delivers that turn to the lead; a SendMessage copy doubles it. SendMessage is for mid-flight questions and for the lead's continuations.
 - **Lanes have no landing rights.** Lane branches are safe to abandon.
 - **Lanes never spawn agents.** Only the lead spawns.
@@ -75,7 +75,11 @@ The default reviewer is the lead, with `opus` agents for the reading and the adv
 2. **Debug ladder step 2.** A fresh strong read when the lead's seam review stalls.
 3. **Pre-wave sanity check.** Attack the brief set for wrong fix shapes, non-disjoint lanes, over-deletion.
 
-Contract: read-and-discuss only. No Edit/Write, no spawns, no commits. An `opus` agent, or for a very complex review a Fable fork or `model: "fable"` agent, told it is read-only. Every review brief carries a hard budget and a partial-report checkpoint at half budget; output past budget is discarded, not awaited. The lead integrates and owns the call.
+Contract: read-and-discuss only. No Edit/Write, no spawns, no commits. An `opus` agent, or for a very complex review a Fable fork or `model: "fable"` agent, told it is read-only. The lead integrates and owns the call.
+
+**One adversarial review per landing.** A lane builds a phase as small commits the lead skims one by one; one `opus` adversarial review covers the whole batch before it lands. Instrumentation-only changes and changes that never touch playback get no separate agent review.
+
+**Budgets bound wandering, never coverage.** Every review brief carries a hard budget and a partial-report checkpoint at half budget, because an open-ended reviewer can read indefinitely and ignore stop messages. Every report, partial or final, lists what it did not read. Anything it did not read is unreviewed, not passed: it gets its own follow-up review, scoped to just that part, before the branch lands.
 
 ## The brief contract
 
