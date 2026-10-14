@@ -1,5 +1,7 @@
 # Scene Panel UX — the Scene Setup dock becomes an instrument, not a form
 
+> **SUPERSEDED (2026-10-14) → [`docs/SCENE_SURFACES_DESIGN.md`](SCENE_SURFACES_DESIGN.md).** The dock is now the inspector's Scene tab (D16); sections, rows and ranges follow that doc.
+
 > **2026-08-15 batch (k3 lead, `feat/scene-panel-ux`):** foldable sections + per-object param groups, shift-drag fine mode + type-in on the shared param surface, scene-AABB translate ranges (`PresetMetadata::scene_bounds`), frame-selected camera focus, Import Model into the Objects header. Duplicate + visibility eye verified pre-existing. Orbit frame-selected is approximate (origin pivot) by design.
 
 > **SUPERSEDED for the param mechanism (2026-07-21) → [`docs/SCENE_PANEL_EXPOSURE_CONVERGENCE_DESIGN.md`](SCENE_PANEL_EXPOSURE_CONVERGENCE_DESIGN.md) is the current authority.** D2/D3's bespoke-row rendering was already superseded by card convergence; the exposure convergence now replaces the whole param mechanism (rows are exposed manifest params through the card path — P1/P2 LANDED; `scene_vm.rs` slimmed P3 LANDED `7ee0a887`). The D8 exposure mechanism and the D1 selection fix still stand; the D8/D9 "∿" button column removal noted below stands. The row-affordance amendment (T/∿/A/Ableton on ONE unified row component, no per-panel forks) is now Peter's section 5 (Decisions — RESOLVED by Peter 2026-07-19) decision in the convergence design.

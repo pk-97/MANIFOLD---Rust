@@ -1,6 +1,7 @@
 # Scene Surfaces — the scene card and the Scene tab as one system
 
-**Status:** APPROVED · 2026-10-14 · Peter, with D16 (Scene tab) and D17 (one scene per layer). P6a (Scene tab host) shipped; other phases not started. Beads: BUG-pmbd3 (3D scene inspector panel upgrades), children mapped in section 5.
+**Status:** SHIPPED · 2026-10-14 · all phases P0–P10 on main; kept as the contract for the param lookup (D2, D22–D24), the scene table and D15. Owed: BUG-hnucw (Use this view button on the graph editor viewport), BUG-k7ket (New 3D Scene empty state, decision), BUG-tly4a (slider range popover).
+**Lifecycle: contract**
 **Prerequisites:** none.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs) through section 6 (Seam briefs) before starting any phase.
 
