@@ -1,116 +1,22 @@
-//! The scene setup panel's compact add-action row (BUG-hlw8). Lives apart
-//! from `scene_setup_panel.rs` — that file is under the godfile-decomposition
-//! line ceiling, so row builders for its buttons go in sibling modules like
-//! this one, not into the capped file (the `scene_setup_skin.rs` precedent).
+//! The Scene tab's Objects add menu (SCENE_SURFACES D8): one "+" on the
+//! Objects group opens Object, Plane, Water and Import Model…, each the
+//! existing add command.
 
 use crate::ProjectAction;
-use crate::node::NodeId;
-use crate::tree::UITree;
 
 use super::PanelAction;
-use super::scene_setup_panel::{ROW_GAP, ROW_H, SceneSetupVm, btn_style};
+use super::scene_setup_panel::SceneSetupVm;
 
-pub(crate) const KEY_ADD_OBJECT: u64 = 80_014;
-pub(crate) const KEY_ADD_LIGHT: u64 = 80_015;
-/// BUG-hlw8 "+ Plane" button — dispatches `AddSceneLayerPlaneCommand`.
-pub(crate) const KEY_ADD_PLANE: u64 = 80_020;
-pub(crate) const KEY_ADD_FLUID: u64 = 80_021;
-
-/// Button ids retained by the panel for click dispatch.
-pub(crate) struct AddRowIds {
-    pub object: NodeId,
-    pub light: NodeId,
-    pub plane: NodeId,
-    pub fluid: NodeId,
-}
-
-/// Compact scene insertion row. Returns button ids and the y below the row.
-pub(crate) fn build_add_action_row(
-    tree: &mut UITree,
-    parent: Option<NodeId>,
-    inner_x: f32,
-    inner_w: f32,
-    cy: f32,
-) -> (AddRowIds, f32) {
-    let action_w = (inner_w - 3.0 * ROW_GAP) / 4.0;
-    let object = tree.add_button_keyed(
-        parent,
-        inner_x,
-        cy,
-        action_w,
-        ROW_H,
-        btn_style(),
-        "+ Object",
-        KEY_ADD_OBJECT,
-    );
-    let light = tree.add_button_keyed(
-        parent,
-        inner_x + action_w + ROW_GAP,
-        cy,
-        action_w,
-        ROW_H,
-        btn_style(),
-        "+ Light",
-        KEY_ADD_LIGHT,
-    );
-    let plane = tree.add_button_keyed(
-        parent,
-        inner_x + 2.0 * (action_w + ROW_GAP),
-        cy,
-        action_w,
-        ROW_H,
-        btn_style(),
-        "+ Plane",
-        KEY_ADD_PLANE,
-    );
-    let fluid = tree.add_button_keyed(
-        parent,
-        inner_x + 3.0 * (action_w + ROW_GAP),
-        cy,
-        action_w,
-        ROW_H,
-        btn_style(),
-        "+Water",
-        KEY_ADD_FLUID,
-    );
-    tree.set_name(fluid, "scene_setup.add_fluid");
-    (AddRowIds { object, light, plane, fluid }, cy + ROW_H)
-}
-
-/// Click dispatch for the add-action row: Object and Plane index off the
-/// live `vm.object_count`, Light off `vm.light_count`.
-pub(crate) fn add_row_click(
-    object: Option<NodeId>,
-    light: Option<NodeId>,
-    plane: Option<NodeId>,
-    fluid: Option<NodeId>,
-    node_id: NodeId,
-    vm: &SceneSetupVm,
-) -> Option<PanelAction> {
-    if object == Some(node_id) {
-        Some(PanelAction::Project(ProjectAction::SceneSetupAddObject(
-            vm.layer_id.clone(),
-            vm.scene_root_node_id,
-            vm.object_count as u32,
-        )))
-    } else if light == Some(node_id) {
-        Some(PanelAction::Project(ProjectAction::SceneSetupAddLight(
-            vm.layer_id.clone(),
-            vm.scene_root_node_id,
-            vm.light_count as u32,
-        )))
-    } else if plane == Some(node_id) {
-        Some(PanelAction::Project(ProjectAction::SceneSetupAddLayerPlane(
-            vm.layer_id.clone(),
-            vm.scene_root_node_id,
-            vm.object_count as u32,
-        )))
-    } else if fluid == Some(node_id) {
-        Some(PanelAction::Project(ProjectAction::SceneSetupAddFluid(
-            vm.layer_id.clone(),
-            vm.scene_root_node_id,
-        )))
-    } else {
-        None
-    }
+/// The Objects menu for `vm`, in display order. Object and Plane take the
+/// next object slot.
+pub fn add_object_menu(vm: &SceneSetupVm) -> Vec<(&'static str, PanelAction)> {
+    let layer = || vm.layer_id.clone();
+    let root = vm.scene_root_node_id;
+    let next = vm.object_count as u32;
+    vec![
+        ("Object", PanelAction::Project(ProjectAction::SceneSetupAddObject(layer(), root, next))),
+        ("Plane", PanelAction::Project(ProjectAction::SceneSetupAddLayerPlane(layer(), root, next))),
+        ("Water", PanelAction::Project(ProjectAction::SceneSetupAddFluid(layer(), root))),
+        ("Import Model\u{2026}", PanelAction::Project(ProjectAction::SceneSetupImportModelClicked(layer(), root))),
+    ]
 }

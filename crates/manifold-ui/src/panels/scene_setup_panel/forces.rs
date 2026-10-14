@@ -1,9 +1,10 @@
 //! Shared parameter-card hosting for scene forces.
 //!
-//! Forces are ordinary scene modifier surfaces with a dedicated outliner and
-//! selection. Their rows stay on [`ParamCardPanel`], so modulation, drawers,
-//! type-in, mapping, and right-click lifecycle use the same host as every
-//! other modifier card.
+//! Forces are ordinary scene modifier surfaces with their own tree group and
+//! selection. The item header above the card owns the name, copy and delete;
+//! the card header keeps enable, targets and trigger chips. Its rows stay on
+//! [`ParamCardPanel`], so modulation, drawers, type-in, mapping, and
+//! right-click lifecycle use the same host as every other modifier card.
 
 use super::*;
 use crate::param_surface::{ModifierCardInfo, ModifierPickerEntry};
@@ -30,6 +31,7 @@ impl ScenePanel {
                 .unwrap_or_else(ParamCardPanel::new);
             let collapsed = index.is_some() && card.is_collapsed();
             card.configure(config);
+            card.set_item_hosted(true);
             if collapsed {
                 card.set_collapsed(true);
             }
@@ -260,6 +262,7 @@ mod tests {
                     disabled: None,
                     material_role: None,
                     inactive_reason: None,
+                    scene: None,
                 },
                 value: RowValue {
                     base: 0.25,
@@ -319,7 +322,7 @@ mod tests {
         });
         let mut panel = ScenePanel::new();
         panel.open();
-        panel.configure(SceneSetupState::Live(Box::new(force_vm(first.clone()))));
+        panel.configure(super::super::tests::live(force_vm(first.clone())));
         panel.configure_params(Some(first.clone()));
         panel.configure_force_cards(&[first.clone(), second.clone()]);
         panel.configure_force_cards(&[second, first]);
@@ -372,7 +375,7 @@ mod tests {
     fn force_card_routes_target_and_strength_gestures_to_its_own_layer() {
         let mut panel = ScenePanel::new();
         let surface = force_surface("layer-a", "force");
-        panel.configure(SceneSetupState::Live(Box::new(force_vm(surface.clone()))));
+        panel.configure(super::super::tests::live(force_vm(surface.clone())));
         panel.configure_force_cards(&[surface]);
         let mut tree = UITree::new();
         panel.force_cards[0].build(&mut tree, Rect::new(0.0, 0.0, 320.0, 300.0));
@@ -413,11 +416,9 @@ mod tests {
     fn force_vm(surface: ParamSurface) -> SceneSetupVm {
         SceneSetupVm {
             layer_id: LayerId::new("layer-a"),
-            scene_name: "Scene".into(),
             multiple_scenes: false,
             object_count: 0,
             light_count: 0,
-            shadow_caster_count: 0,
             scene_root_node_id: 0,
             environment: EnvironmentRowVm::None,
             atmosphere: AtmosphereRowVm::None,
@@ -435,9 +436,7 @@ mod tests {
             }],
             camera: CameraRowVm::None,
             camera_setup_needed: false,
-            camera_sections: Vec::new(),
-            camera_parameter_ids: None,
-            world_sections: Vec::new(),
+            items: Vec::new(),
             scene_bounds: None,
         }
     }
@@ -448,7 +447,7 @@ mod tests {
         let force_id = manifold_foundation::NodeId::new("force");
         let mut panel = ScenePanel::new();
         panel.open();
-        panel.configure(SceneSetupState::Live(Box::new(force_vm(surface.clone()))));
+        panel.configure(super::super::tests::live(force_vm(surface.clone())));
         panel.configure_force_cards(&[surface]);
         let mut tree = UITree::new();
         panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
@@ -488,10 +487,10 @@ mod tests {
             Some((LayerId::new("layer-a"), force_id))
         );
 
-        panel.configure(SceneSetupState::Live(Box::new(force_vm(force_surface(
+        panel.configure(super::super::tests::live(force_vm(force_surface(
             "layer-a",
             "replacement",
-        )))));
+        ))));
         assert!(panel.selected_force().is_none());
     }
 }

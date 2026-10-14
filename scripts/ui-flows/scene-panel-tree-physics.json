@@ -1,0 +1,16 @@
+[
+  {"Pointer":{"target":{"Query":{"text":"Scene","type":"Button","under_name":"inspector"}},"gesture":{"Click":{"modifiers":{}}}}},
+  {"Assert":{"selector":{"Query":{"name":"scene_tree.item","text":"Camera"}},"check":{"Above":{"name":"scene_tree.group.Lights"}}}},
+  {"Assert":{"selector":{"Query":{"name":"scene_tree.group.Lights"}},"check":{"Above":{"name":"scene_tree.group.Objects"}}}},
+  {"Assert":{"selector":{"Query":{"name":"scene_tree.group.Objects"}},"check":{"Above":{"name":"scene_tree.group.Forces"}}}},
+  {"Assert":{"selector":{"Query":{"name":"scene_tree.group.Forces"}},"check":{"Above":{"name":"scene_tree.group.Physics"}}}},
+  {"Assert":{"selector":{"Query":{"name":"scene_tree.group.Physics"}},"check":{"Above":{"name":"scene_tree.item","text":"World"}}}},
+  "Snapshot",
+  {"Pointer":{"target":{"Query":{"name":"scene_tree.item","text":"Sun"}},"gesture":{"Click":{"modifiers":{}}}}},
+  {"Assert":{"selector":{"Query":{"name":"scene_setup.properties.name_value"}},"check":{"TextEquals":"Sun"}}},
+  {"Assert":{"selector":{"Query":{"name":"scene_setup.properties.kind"}},"check":{"TextEquals":"Light"}}},
+  {"Assert":{"selector":{"Query":{"name":"scene_setup.properties.name_value","text":"Sun"}},"check":{"Count":1}}},
+  "Snapshot",
+  {"Pointer":{"target":{"Query":{"name":"scene_tree.add.Lights"}},"gesture":{"Click":{"modifiers":{}}}}},
+  "Snapshot"
+]

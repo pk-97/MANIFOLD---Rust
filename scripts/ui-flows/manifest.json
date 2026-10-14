@@ -308,7 +308,9 @@
     "water-family-preset": "scene-setup",
     "scene-forces-controls": "physicsscene",
     "scene-surfaces-clickthrough": "gltfscene",
-    "scene-surfaces-clickthrough-physics": "physicsscene"
+    "scene-surfaces-clickthrough-physics": "physicsscene",
+    "scene-panel-tree": "gltfscene",
+    "scene-panel-tree-physics": "physicsscene"
   },
   "expected_fail": {
     "render-mode-solid": {

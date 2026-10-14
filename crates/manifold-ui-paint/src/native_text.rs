@@ -537,8 +537,114 @@ fn generate_atlas_icons() -> [Vec<u8>; ICON_COUNT] {
         x if x == Icon::LayerAudio.id() => generate_level_bars_icon(),
         x if x == Icon::Playhead.id() => generate_playhead_head_icon(),
         x if x == Icon::LayerLed.id() => generate_led_grid_icon(),
+        x if x == Icon::SceneCamera.id() => generate_scene_camera_icon(),
+        x if x == Icon::SceneLight.id() => generate_scene_light_icon(),
+        x if x == Icon::SceneMesh.id() => generate_scene_mesh_icon(),
+        x if x == Icon::ScenePlane.id() => generate_scene_plane_icon(),
+        x if x == Icon::SceneWater.id() => generate_scene_water_icon(),
+        x if x == Icon::SceneModel.id() => generate_scene_model_icon(),
+        x if x == Icon::SceneForce.id() => generate_scene_force_icon(),
+        x if x == Icon::ScenePhysics.id() => generate_scene_physics_icon(),
+        x if x == Icon::SceneWorld.id() => generate_scene_world_icon(),
         // Waveform shapes occupy ids 0..=4 in declaration order.
         _ => generate_single_waveform(i),
+    })
+}
+
+// ─── Scene item marks (SCENE_SURFACES section 3.7) ───────────────────────────
+
+const SCENE_STROKE: f32 = 0.045;
+
+/// Camera — a body with a lens cone on its right.
+fn generate_scene_camera_icon() -> Vec<u8> {
+    supersample_icon(|nx, ny| {
+        let body = (0.16..=0.62).contains(&nx) && (0.32..=0.70).contains(&ny);
+        body || point_in_triangle((nx, ny), (0.60, 0.51), (0.86, 0.32), (0.86, 0.70))
+    })
+}
+
+/// Light — a bulb over its base.
+fn generate_scene_light_icon() -> Vec<u8> {
+    supersample_icon(|nx, ny| {
+        let (dx, dy) = (nx - 0.5, ny - 0.40);
+        let bulb = dx * dx + dy * dy <= 0.21 * 0.21;
+        let base = (0.40..=0.60).contains(&nx) && (0.60..=0.80).contains(&ny);
+        bulb || base
+    })
+}
+
+/// Mesh — a wireframe cube: front and back squares joined at the corners.
+fn generate_scene_mesh_icon() -> Vec<u8> {
+    let front = [(0.18, 0.38), (0.62, 0.38), (0.62, 0.82), (0.18, 0.82)];
+    let back = [(0.38, 0.18), (0.82, 0.18), (0.82, 0.62), (0.38, 0.62)];
+    supersample_icon(move |nx, ny| {
+        (0..4).any(|i| {
+            let j = (i + 1) % 4;
+            dist_to_segment(nx, ny, front[i], front[j]) <= SCENE_STROKE
+                || dist_to_segment(nx, ny, back[i], back[j]) <= SCENE_STROKE
+                || dist_to_segment(nx, ny, front[i], back[i]) <= SCENE_STROKE
+        })
+    })
+}
+
+/// Plane — a flat quad seen in perspective.
+fn generate_scene_plane_icon() -> Vec<u8> {
+    let (a, b, c, d) = ((0.14, 0.70), (0.38, 0.34), (0.86, 0.34), (0.62, 0.70));
+    supersample_icon(move |nx, ny| point_in_triangle((nx, ny), a, b, c) || point_in_triangle((nx, ny), a, c, d))
+}
+
+/// Water — three stacked waves.
+fn generate_scene_water_icon() -> Vec<u8> {
+    supersample_icon(|nx, ny| {
+        (0.16..=0.84).contains(&nx)
+            && [0.32f32, 0.50, 0.68].iter().any(|&row| {
+                let wave = row + 0.06 * (nx * std::f32::consts::TAU * 1.5).sin();
+                (ny - wave).abs() <= SCENE_STROKE
+            })
+    })
+}
+
+/// Imported model — a solid cube silhouette (a filled hexagon).
+fn generate_scene_model_icon() -> Vec<u8> {
+    let centre = (0.5, 0.5);
+    let corners: Vec<(f32, f32)> = (0..6)
+        .map(|k| {
+            let theta = std::f32::consts::FRAC_PI_6 + k as f32 * std::f32::consts::FRAC_PI_3;
+            (0.5 + 0.34 * theta.cos(), 0.5 + 0.34 * theta.sin())
+        })
+        .collect();
+    supersample_icon(move |nx, ny| {
+        (0..6).any(|k| point_in_triangle((nx, ny), centre, corners[k], corners[(k + 1) % 6]))
+    })
+}
+
+/// Force — an arrow pointing right.
+fn generate_scene_force_icon() -> Vec<u8> {
+    supersample_icon(|nx, ny| {
+        let shaft = (0.16..=0.60).contains(&nx) && (0.44..=0.56).contains(&ny);
+        shaft || point_in_triangle((nx, ny), (0.58, 0.28), (0.58, 0.72), (0.86, 0.50))
+    })
+}
+
+/// Physics — a ball resting on the ground.
+fn generate_scene_physics_icon() -> Vec<u8> {
+    supersample_icon(|nx, ny| {
+        let (dx, dy) = (nx - 0.5, ny - 0.46);
+        let ball = dx * dx + dy * dy <= 0.20 * 0.20;
+        let ground = (0.14..=0.86).contains(&nx) && (0.72..=0.80).contains(&ny);
+        ball || ground
+    })
+}
+
+/// World — a globe: outline, equator and one meridian.
+fn generate_scene_world_icon() -> Vec<u8> {
+    supersample_icon(|nx, ny| {
+        let (dx, dy) = (nx - 0.5, ny - 0.5);
+        let r = (dx * dx + dy * dy).sqrt();
+        let outline = (r - 0.32).abs() <= SCENE_STROKE;
+        let equator = dy.abs() <= SCENE_STROKE * 0.8 && r <= 0.32;
+        let meridian = ((dx / 0.13).powi(2) + (dy / 0.32).powi(2)).sqrt();
+        outline || equator || ((meridian - 1.0).abs() <= 0.16 && r <= 0.32)
     })
 }
 

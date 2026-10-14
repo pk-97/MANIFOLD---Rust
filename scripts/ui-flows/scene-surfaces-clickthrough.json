@@ -17,7 +17,7 @@
     "Pointer": {
       "target": {
         "Query": {
-          "text": "📷 Camera"
+          "name": "scene_tree.item", "text": "Camera"
         }
       },
       "gesture": {
@@ -43,7 +43,7 @@
     "Pointer": {
       "target": {
         "Query": {
-          "text": "🌍 World"
+          "name": "scene_tree.item", "text": "World"
         }
       },
       "gesture": {
@@ -69,7 +69,7 @@
     "Pointer": {
       "target": {
         "Query": {
-          "text": "💡 Sun"
+          "name": "scene_tree.item", "text": "Sun"
         }
       },
       "gesture": {
@@ -95,7 +95,7 @@
     "Pointer": {
       "target": {
         "Query": {
-          "text": "■ cc0_oomurasaki_azalea_r_x_pulchrum"
+          "name": "scene_tree.item", "text": "cc0_oomurasaki_azalea_r_x_pulchrum"
         }
       },
       "gesture": {
@@ -129,35 +129,20 @@
   },
   "Snapshot",
   {
-    "Pointer": {
-      "target": {
-        "Query": {
-          "text": "⚙ Physics"
-        }
-      },
-      "gesture": {
-        "Click": {
-          "modifiers": {}
-        }
-      }
-    }
-  },
-  {
     "Assert": {
       "selector": {
         "Query": {
-          "text": "Properties"
+          "name": "scene_tree.physics.empty"
         }
       },
       "check": "Exists"
     }
   },
-  "Snapshot",
   {
     "Pointer": {
       "target": {
         "Query": {
-          "text": "🎞 Rendering"
+          "name": "scene_tree.item", "text": "World"
         }
       },
       "gesture": {

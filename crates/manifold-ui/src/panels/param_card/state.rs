@@ -288,6 +288,11 @@ impl ParamCardPanel {
         self.collapse_anim.is_animating()
     }
 
+    /// Hand the card's name and delete to the Scene tab item header above it.
+    pub fn set_item_hosted(&mut self, hosted: bool) {
+        self.item_hosted = hosted;
+    }
+
     /// Force the collapsed flag directly, snapping `collapse_anim` (no ease).
     /// This is the "test/automation harness drives it directly" setter
     /// (mirrors `chevron_node_id`'s doc comment) — production code toggles

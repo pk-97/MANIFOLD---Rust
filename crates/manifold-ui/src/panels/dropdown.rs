@@ -388,6 +388,9 @@ impl DropdownPanel {
         );
         self.backdrop_id = Some(shell.backdrop);
         self.root_id = Some(shell.container);
+        // Lets automation pick an item by its label even when the same word
+        // shows elsewhere on screen.
+        tree.set_name(shell.container, "dropdown");
 
         // Build items — positions offset by scroll. Items outside the
         // viewport are created but hidden to preserve stable item_ids indices.

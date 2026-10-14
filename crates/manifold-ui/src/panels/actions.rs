@@ -958,6 +958,9 @@ pub enum RootAction {
     /// selected recipe from the panel's `force_picker` snapshot and applies
     /// the existing scene modifier command.
     SceneSetupAddForceClicked(LayerId),
+    /// The Scene tab Objects group's "+": the app opens the Objects menu
+    /// (`scene_setup_actions::add_object_menu`) at the clicked button.
+    SceneSetupAddObjectMenuClicked(LayerId),
     SceneSetupFluidRoleClicked {
         layer_id: LayerId,
         render_scene_node_id: u32,

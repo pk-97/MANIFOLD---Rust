@@ -39,7 +39,7 @@ pub(super) fn scene_card_rows(rows: &mut Vec<ParamRow>, inst: &PresetInstance, d
         let Some(param) = inst.params.get(row.id.as_ref()) else { continue };
         let owner_index = owner(row.id.as_ref());
         let item = owner_index.map(|index| &items[index]);
-        let attached = has_attachment(&row);
+        let attached = row.is_attached();
         let Some(place) = Placement::of(param, item, attached, user_added(param, def, row.id.as_ref())) else {
             continue;
         };
@@ -183,17 +183,6 @@ fn user_added(param: &Param, def: &EffectGraphDef, id: &str) -> bool {
             .preset_metadata
             .as_ref()
             .is_some_and(|meta| meta.bindings.iter().any(|binding| binding.id == id && binding.user_added))
-}
-
-/// A driver, envelope, automation lane, audio mod or Ableton mapping on the
-/// row. Hiding such a row hides a live control from the performer (D6
-/// (attached rows are always shown)).
-fn has_attachment(row: &ParamRow) -> bool {
-    row.modulation.driver_active
-        || row.modulation.envelope_active
-        || row.modulation.automation_active
-        || row.audio.active
-        || row.mapping.ableton_display.is_some()
 }
 
 #[cfg(test)]
