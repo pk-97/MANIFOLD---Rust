@@ -636,10 +636,10 @@ P1 and P2 land together as one batch: P1 does not land until P2 moves the drawer
   - Every scene flow that asserted the old tree, or opened the dock, is rewritten to select the layer and open the Scene tab.
 
   This is BUG-pmbd3.15 (scene panel tree).
-- **Gate:** positive — `scene_setup_panel::tests::tree_groups_in_fixed_order`, `add_buttons_one_per_group`, `header_names_item_once`; `scene_tab_present_only_for_scene_layer`, `scene_tab_falls_back_to_layer`; full scene flow suite green with the P0 count reconciled (every flow on disk accounted for). Negative — `rg -n 'Motion & Physics|Lighting & Environment|SceneSelection::Rendering|\\u\{1F4F7\}|\\u\{25A0\}' crates/manifold-ui/src` → 0; `rg -n 'toggle_scene_dock|scene_setup_width' crates/` → 0.
+- **Gate:** positive — `scene_setup_panel::tests::tree_groups_in_fixed_order`, `add_buttons_one_per_group`, `header_names_item_once`; `scene_tab_present_only_for_scene_layer`, `scene_tab_falls_back_to_layer`; the flows the phase adds or edits, run by name, green. Negative — `rg -n 'Motion & Physics|Lighting & Environment|SceneSelection::Rendering|\\u\{1F4F7\}|\\u\{25A0\}' crates/manifold-ui/src` → 0; `rg -n 'toggle_scene_dock|scene_setup_width' crates/` → 0.
 - **Demo:** L3 — `scene-panel-tree.json` on gltfscene and physicsscene: select the layer, open the Scene tab, assert group order, select a light, assert header text equals its readable name once; select a non-scene layer, assert no Scene tab. Performer gesture: add a light from the Lights "+", rename it, see the new name on its card row.
 - **Forbidden:** a new row or header widget outside the shared builders; keeping the old add row "for now"; keeping the dock beside the tab.
-- **Test scope:** `-p manifold-ui -p manifold-app`; scene flows.
+- **Test scope:** `-p manifold-ui -p manifold-app`; only the flows the phase adds or edits, by name.
 
 ### P7 — Cross-surface gestures and fold persistence
 - **Entry:** P4 and P6 landed.
