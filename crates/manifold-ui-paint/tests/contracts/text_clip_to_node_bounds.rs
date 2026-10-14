@@ -15,6 +15,7 @@ use std::ffi::c_void;
 use std::slice;
 
 use manifold_gpu::{GpuDevice, GpuLoadAction, GpuTexture, GpuTextureFormat};
+use manifold_ui_paint::native_text::CachedTextMeasure;
 use manifold_ui_paint::ui_renderer::UIRenderer;
 use manifold_ui::node::{Color32, TextAlign, UIStyle};
 use manifold_ui::{Rect, UIFlags, UITree, ZTier};
@@ -47,6 +48,7 @@ fn overlong_label_stays_inside_button() {
     };
 
     let mut tree = UITree::new();
+    tree.set_text_measure(Box::new(CachedTextMeasure::new()));
     let region = tree.begin_region(
         Rect::new(0.0, 0.0, W as f32, H as f32),
         ZTier::Chrome,
@@ -163,13 +165,14 @@ fn flush_fit_label_keeps_edge_glyphs() {
     // shape layout produces for every sized-to-text label.
     const LEFT_TEXT: &str = "MIDI"; // 'M': full-height ink at the left edge
     const RIGHT_TEXT: &str = "CHANNEL"; // 'L': ink to the right edge
-    let left_w = ui.measure_text_cached(LEFT_TEXT, 13, base.font_weight).x;
-    let right_w = ui.measure_text_cached(RIGHT_TEXT, 13, base.font_weight).x;
+    let mut tree = UITree::new();
+    tree.set_text_measure(Box::new(CachedTextMeasure::new()));
+    let left_w = tree.text_width(LEFT_TEXT, 13, base.font_weight);
+    let right_w = tree.text_width(RIGHT_TEXT, 13, base.font_weight);
 
     let (lx, ly, lh) = (40.0, 20.0, 20.0);
     let (rx, ry, rh) = (40.0, 70.0, 20.0);
 
-    let mut tree = UITree::new();
     let region = tree.begin_region(
         Rect::new(0.0, 0.0, W as f32, H as f32),
         ZTier::Chrome,

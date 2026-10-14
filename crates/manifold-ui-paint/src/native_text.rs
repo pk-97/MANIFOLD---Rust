@@ -44,8 +44,6 @@ use crate::ui_renderer::Depth;
 const ATLAS_SIZE: u32 = 1024;
 /// Padding between glyphs in the atlas (prevents texel bleed during bilinear sampling).
 const GLYPH_PADDING: u32 = 1;
-/// Max cached measurement entries.
-const MAX_MEASURE_CACHE: usize = 512;
 
 // ─── WGSL Shader ─────────────────────────────────────────────────────────────
 
@@ -929,10 +927,6 @@ pub struct NativeTextRenderer {
     /// owning `UIRenderer` merges this into its render walk.
     depths: Vec<Depth>,
 
-    /// Measurement cache: u64 hash of (text, font_size, weight) → Vec2.
-    /// Uses hash keys to avoid String allocations on cache hits.
-    measure_cache: AHashMap<u64, Vec2>,
-    frame_generation: u64,
     /// Interned installed-font family names for `draw_text_in_family`.
     /// Bounded by the installed font list; never cleared.
     families: Vec<String>,
@@ -1005,8 +999,6 @@ impl NativeTextRenderer {
             text_depth_ranges: Vec::with_capacity(8),
             icon_depth_ranges: Vec::with_capacity(8),
             depths: Vec::with_capacity(8),
-            measure_cache: AHashMap::new(),
-            frame_generation: 0,
             families: Vec::new(),
             family_ids: AHashMap::new(),
         }
@@ -1100,45 +1092,6 @@ impl NativeTextRenderer {
             depth,
             transform,
         });
-    }
-
-    /// Accurate text measurement via CoreText CTLine. Cached.
-    pub fn measure_text_cached(
-        &mut self,
-        text: &str,
-        font_size: u16,
-        font_weight: FontWeight,
-    ) -> Vec2 {
-        // Use a u64 hash key to avoid allocating a String for cache lookups.
-        // Most frames hit the cache (labels don't change), so this eliminates
-        // 200-500 String allocations per frame on cache hits.
-        use std::hash::{Hash, Hasher};
-        let mut hasher = ahash::AHasher::default();
-        text.hash(&mut hasher);
-        font_size.hash(&mut hasher);
-        font_weight.hash(&mut hasher);
-        let hash = hasher.finish();
-
-        if let Some(&size) = self.measure_cache.get(&hash) {
-            return size;
-        }
-
-        let size = measure_text_ct(&mut self.font_manager, text, font_size as f32, font_weight);
-
-        if self.measure_cache.len() >= MAX_MEASURE_CACHE {
-            self.measure_cache.clear();
-        }
-        self.measure_cache.insert(hash, size);
-        size
-    }
-
-    /// Advance the frame counter and cap measurement cache size.
-    pub fn begin_frame(&mut self) {
-        self.frame_generation += 1;
-        // Cap cache size — clear when it gets too large (rare).
-        if self.measure_cache.len() > MAX_MEASURE_CACHE * 2 {
-            self.measure_cache.clear();
-        }
     }
 
     /// Queue an icon draw command.
@@ -1660,58 +1613,82 @@ impl NativeTextRenderer {
     }
 }
 
-// ─── TextMeasure impl ────────────────────────────────────────────────────────
+// ─── CachedTextMeasure ───────────────────────────────────────────────────────
 
-impl TextMeasure for NativeTextRenderer {
-    /// Approximate measurement using a character-count heuristic.
-    ///
-    /// For accurate layout measurement, call `measure_text_cached(&mut self, ...)` directly.
-    fn measure_text(&self, text: &str, font_size: u16, font_weight: FontWeight) -> Vec2 {
-        let em = font_size as f32;
-        let avg_char_width = match font_weight {
-            FontWeight::Bold => em * 0.56,
-            FontWeight::Medium => em * 0.54,
-            FontWeight::Regular => em * 0.52,
-        };
-        Vec2::new(text.chars().count() as f32 * avg_char_width, em)
-    }
+/// Entries before the cache is cleared and refilled. A window's distinct
+/// labels fit with room to spare; the bound only stops unbounded growth from
+/// ever-changing strings (timecodes, readouts).
+const MAX_MEASURE_CACHE: usize = 2048;
+
+/// The one text measurer (UI_INVALIDATION_DESIGN D9, INV-7): CoreText CTLine
+/// widths behind a bounded cache. Each `UITree` owns one; the renderer
+/// measures through the tree it draws, so build-time layout and paint agree.
+/// GPU-free. The `RefCell` makes `&self` measurement possible; it lives on the
+/// UI thread and is never shared between windows.
+pub struct CachedTextMeasure {
+    inner: RefCell<MeasureCache>,
 }
 
-/// Accurate, GPU-free text measurer for the UI build path.
-///
-/// Wraps only the CoreText [`FontManager`] — no atlas, no GPU device — so the
-/// app can construct one and install it on a [`UITree`](manifold_ui::tree::UITree)
-/// via `set_text_measure`, giving panels real glyph-width measurement at build
-/// time instead of the [`HeuristicTextMeasure`](manifold_ui::text::HeuristicTextMeasure)
-/// fallback. Font lookup caches, the only mutation, lives behind a `RefCell` so
-/// measurement satisfies `TextMeasure`'s `&self` contract.
-pub struct CoreTextMeasure {
-    fonts: RefCell<FontManager>,
+struct MeasureCache {
+    fonts: FontManager,
+    /// Hash of (text, size, weight) → the exact key and its width. The key is
+    /// compared on a hit, so a hash collision is a miss, never a wrong width.
+    entries: AHashMap<u64, (Box<str>, u16, FontWeight, Vec2)>,
 }
 
-impl CoreTextMeasure {
+impl CachedTextMeasure {
     pub fn new() -> Self {
         Self {
-            fonts: RefCell::new(FontManager::new()),
+            inner: RefCell::new(MeasureCache {
+                fonts: FontManager::new(),
+                entries: AHashMap::with_capacity(MAX_MEASURE_CACHE),
+            }),
         }
     }
 }
 
-impl Default for CoreTextMeasure {
+impl Default for CachedTextMeasure {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl TextMeasure for CoreTextMeasure {
+impl TextMeasure for CachedTextMeasure {
     fn measure_text(&self, text: &str, font_size: u16, font_weight: FontWeight) -> Vec2 {
-        measure_text_ct(&mut self.fonts.borrow_mut(), text, font_size as f32, font_weight)
+        if text.is_empty() {
+            return Vec2::new(0.0, font_size as f32);
+        }
+        use std::hash::{Hash, Hasher};
+        let mut hasher = ahash::AHasher::default();
+        text.hash(&mut hasher);
+        font_size.hash(&mut hasher);
+        font_weight.hash(&mut hasher);
+        let hash = hasher.finish();
+
+        let mut cache = self.inner.borrow_mut();
+        if let Some((t, s, w, size)) = cache.entries.get(&hash)
+            && *s == font_size
+            && *w == font_weight
+            && &**t == text
+        {
+            return *size;
+        }
+        manifold_foundation::work_count::record_work(
+            manifold_foundation::work_count::WorkKind::TextMeasureMiss,
+        );
+        let size = measure_text_ct(&mut cache.fonts, text, font_size as f32, font_weight);
+        if cache.entries.len() >= MAX_MEASURE_CACHE {
+            cache.entries.clear();
+        }
+        cache.entries.insert(hash, (text.into(), font_size, font_weight, size));
+        size
     }
 }
 
 // ─── CoreText helpers ────────────────────────────────────────────────────────
 
-/// Measure text using CoreText CTLine typographic bounds.
+/// Measure text using CoreText CTLine typographic bounds. Called only from
+/// `CachedTextMeasure`'s miss path (INV-7).
 fn measure_text_ct(
     font_mgr: &mut FontManager,
     text: &str,
@@ -1721,9 +1698,6 @@ fn measure_text_ct(
     if text.is_empty() {
         return Vec2::new(0.0, font_size);
     }
-    manifold_foundation::work_count::record_work(
-        manifold_foundation::work_count::WorkKind::TextMeasureMiss,
-    );
     let ct_font = font_mgr.get_ct_font(font_size, weight);
     let line = make_ct_line(ct_font, text);
     let bounds = line.get_typographic_bounds();
@@ -1939,5 +1913,71 @@ mod tests {
             assert!(f.family_name().starts_with("Inter"), "{name} resolved to {}", f.family_name());
         }
         assert_eq!(fm.get_family_font(9, "Georgia", 24.0).family_name(), "Georgia");
+    }
+
+    /// A cache hit returns exactly what CoreText returned on the miss, for
+    /// every key part (text, size, weight).
+    #[test]
+    fn cached_measure_equals_coretext() {
+        let m = CachedTextMeasure::new();
+        let mut fm = FontManager::new();
+        for text in ["", "MIDI", "CHANNEL", "Layer 1", "日本語", "→ 0.500"] {
+            for size in [9_u16, 11, 13, 24] {
+                for weight in [FontWeight::Regular, FontWeight::Medium, FontWeight::Bold] {
+                    let direct = measure_text_ct(&mut fm, text, size as f32, weight);
+                    assert_eq!(m.measure_text(text, size, weight), direct, "{text:?} {size} {weight:?}");
+                    assert_eq!(m.measure_text(text, size, weight), direct, "hit {text:?} {size} {weight:?}");
+                }
+            }
+        }
+    }
+
+    /// Binary-search truncation equals the old one-measure-per-byte trim on
+    /// real CoreText widths (kerning included), not just a test measurer.
+    #[test]
+    fn truncate_matches_linear_on_coretext() {
+        fn linear(m: &dyn TextMeasure, text: &str, size: u16, w: FontWeight, max: f32) -> String {
+            if text.is_empty() {
+                return String::new();
+            }
+            if max <= 0.0 {
+                return String::new();
+            }
+            if m.measure_text(text, size, w).x <= max {
+                return text.to_string();
+            }
+            let target = max - m.measure_text("...", size, w).x;
+            if target <= 0.0 {
+                return "...".to_string();
+            }
+            for len in (1..text.len()).rev() {
+                if text.is_char_boundary(len) && m.measure_text(&text[..len], size, w).x <= target {
+                    return format!("{}...", &text[..len]);
+                }
+            }
+            "...".to_string()
+        }
+        let m = CachedTextMeasure::new();
+        let cases = [
+            "Very Long Layer Name That Will Not Fit",
+            "AVAVAVAVAVAV Tw To Ty Wa Yo",
+            "naïve café déjà vu",
+            "日本語のレイヤー名",
+            "export_final_master_v12_FINAL(2).mov",
+        ];
+        for text in cases {
+            for size in [11_u16, 13] {
+                for weight in [FontWeight::Regular, FontWeight::Medium, FontWeight::Bold] {
+                    for px in 0..=300 {
+                        let max = px as f32;
+                        assert_eq!(
+                            manifold_ui::text::truncate_with_ellipsis(&m, text, size, weight, max),
+                            linear(&m, text, size, weight, max),
+                            "{text:?} {size} {weight:?} {max}"
+                        );
+                    }
+                }
+            }
+        }
     }
 }
