@@ -35,28 +35,6 @@ use crate::frame_timer::FrameTimer;
 /// at 60 fps). A healthy UI keeps the queue at one or two.
 const UI_STATE_BACKLOG: usize = 32;
 
-/// Cache entry for the watched editor-canvas snapshot (effect OR generator).
-/// Holds the snapshot inside an `Arc` so the per-frame
-/// `ContentState::active_graph_snapshot` field can clone the refcount
-/// (no deep copy). At most one entry — only one canvas is visible at a time.
-///
-/// Invalidated when any of the snapshot's inputs change:
-/// - `target` — the watched instance changed (canvas swap).
-/// - `preset_type` — the instance's preset type changed in place
-///   (effect/generator type swap via the picker while watched).
-/// - `version` — the instance's `graph_version` bumped (a graph-editor edit
-///   landed on it).
-/// - `fingerprint` — the EmbeddedPresets stamp: the catalog overlay was reinstalled
-///   (a fork or recalibrate), which can change the compositor-sourced
-///   routings / default graph even when `version` didn't move.
-pub struct CachedGraphSnapshot {
-    pub target: Arc<manifold_core::GraphTarget>,
-    pub preset_type: manifold_core::PresetTypeId,
-    pub version: u32,
-    pub fingerprint: u64,
-    pub snapshot: Arc<manifold_node_engine::snapshot::GraphSnapshot>,
-}
-
 /// An in-flight "export current frame" request. Captured across two content
 /// ticks so the live render never stalls: tick N submits the GPU readback (and
 /// fills `dims`), tick N+1 reads the pixels back and hands them to an off-thread
@@ -175,12 +153,10 @@ pub struct ContentThread {
     pub node_preview_normalize: bool,
     /// Cached editor-canvas snapshot for the watched effect or generator.
     ///
-    /// Built lazily by [`Self::graph_snapshot`] and invalidated per the
-    /// key documented on [`CachedGraphSnapshot`]. Avoids the per-content-tick
-    /// rebuild (re-parse of the bundled preset JSON / compositor lookup) the
-    /// non-cached paths used to do every state push the editor was open.
+    /// Built lazily by [`crate::graph_snapshot::active_graph`] and invalidated
+    /// per the key documented on [`crate::graph_snapshot::CachedGraphSnapshot`].
     /// Holds at most one entry: only one canvas is visible at a time.
-    pub cached_graph_snapshot: Option<CachedGraphSnapshot>,
+    pub cached_graph_snapshot: Option<crate::graph_snapshot::CachedGraphSnapshot>,
 
     // ── Reusable modulation scratch (flat buffer — zero alloc after first frame) ──
     pub mod_scratch: crate::content_state::ModulationSnapshot,
@@ -226,76 +202,6 @@ pub struct ContentThread {
     /// Active profiling session (only present when feature = "profiling").
     #[cfg(feature = "profiling")]
     pub profiler: Option<manifold_profiler::ProfileSession>,
-}
-
-/// D4 (`docs/PARAM_TWO_WAY_BINDING_DESIGN.md`): overlay the EFFECTIVE
-/// (forward-reshaped) value onto every card-bound node-face row, instead of
-/// the raw `def.nodes[..].params` value `GraphSnapshot::from_def` reads —
-/// which may hold a stale node-face write `apply_bindings` stomps on the
-/// next rebuild (BUG-158's snap-back). Walks `def.preset_metadata.bindings`;
-/// for each `Node` target, reads the outer card's live value off
-/// `instance.params` and pushes it through `apply_card_reshape` before
-/// overwriting the matching row's `current_value`. A no-op for every unbound
-/// param (no metadata, or no binding targets it) and for a binding whose
-/// outer id isn't in the manifest (an authoring-time gap, not a user state).
-fn apply_effective_bound_values(
-    snap: &mut manifold_node_engine::snapshot::GraphSnapshot,
-    def: &manifold_core::effect_graph_def::EffectGraphDef,
-    instance: &manifold_core::effects::PresetInstance,
-) {
-    use manifold_core::effect_graph_def::BindingTarget;
-    let Some(meta) = def.preset_metadata.as_ref() else {
-        return;
-    };
-    for binding in &meta.bindings {
-        let BindingTarget::Node { node_id, param } = &binding.target else {
-            continue;
-        };
-        if node_id.is_empty() {
-            continue;
-        }
-        let Some(spec) = meta.params.iter().find(|p| p.id == binding.id) else {
-            continue;
-        };
-        let Some(card_value) = instance.params.get(&binding.id).map(|p| p.value) else {
-            continue;
-        };
-        let effective = manifold_core::effects::apply_card_reshape(
-            card_value,
-            spec.min,
-            spec.max,
-            spec.invert,
-            spec.curve,
-            binding.scale,
-            binding.offset,
-        );
-        if let Some(row) = find_node_param_row_mut(&mut snap.nodes, node_id, param) {
-            row.current_value = effective;
-        }
-    }
-}
-
-/// Find the `ParamSnapshot` for `(node_id, param)` anywhere in `nodes`,
-/// recursing into group bodies — a bound node can live inside a group
-/// (BUG-103's glTF per-object case).
-fn find_node_param_row_mut<'a>(
-    nodes: &'a mut [manifold_node_engine::snapshot::NodeSnapshot],
-    node_id: &manifold_core::NodeId,
-    param: &str,
-) -> Option<&'a mut manifold_node_engine::snapshot::ParamSnapshot> {
-    for node in nodes.iter_mut() {
-        if &node.node_id == node_id
-            && let Some(row) = node.parameters.iter_mut().find(|p| p.name == param)
-        {
-            return Some(row);
-        }
-        if let Some(group) = node.group.as_mut()
-            && let Some(row) = find_node_param_row_mut(&mut group.nodes, node_id, param)
-        {
-            return Some(row);
-        }
-    }
-    None
 }
 
 impl ContentThread {
@@ -1321,15 +1227,14 @@ impl ContentThread {
         let perc_show = self.percussion_orchestrator.show_progress_bar()
             && !self.cached_perc_message.is_empty();
 
-        // Resolve the editor-canvas graph snapshot once. Effect path
-        // returns a plain `GraphSnapshot` (cheap to construct, no
-        // cache needed); generator path returns a cached `Arc` clone
-        // (avoids re-parsing the bundled JSON every state push when
-        // the canvas is open). One target, one snapshot path (fork #10).
-        let active_graph_snapshot_arc = self
-            .watched_graph_target
-            .clone()
-            .and_then(|t| self.graph_snapshot(&t));
+        // The editor canvas's graph snapshot, rebuilt only when its inputs
+        // move (`graph_snapshot.rs`).
+        let (active_graph_target, active_graph_snapshot_arc) = crate::graph_snapshot::active_graph(
+            &mut self.cached_graph_snapshot,
+            self.engine.project(),
+            self.watched_graph_target.as_ref(),
+            self.editing_service.stamps().get(Part::EmbeddedPresets),
+        );
 
         // Per-send audio levels for the Audio Setup meters — the full-band
         // amplitude (overall loudness, 0..1).
@@ -1535,8 +1440,7 @@ impl ContentThread {
                 .map_or(OscSyncMode::M4L, |p| p.settings.osc_sync_mode),
             project_snapshot: snapshot,
             modulation_snapshot,
-            active_graph_target: active_graph_snapshot_arc.as_ref()
-                .and_then(|_| self.cached_graph_snapshot.as_ref().map(|cache| Arc::clone(&cache.target))),
+            active_graph_target,
             active_graph_snapshot: active_graph_snapshot_arc,
             node_preview_info: self.content_pipeline.node_preview_info(),
             scene_viewport_frames: self.content_pipeline.scene_viewport_frames().clone(),
@@ -1569,184 +1473,6 @@ impl ContentThread {
         {
             self.send_state(state_tx);
         }
-    }
-
-    /// Build (or return cached) the editor canvas's graph snapshot for the
-    /// currently-watched preset instance — effect or generator (fork #10).
-    ///
-    /// Two paths per kind, mirrored:
-    /// - The instance has `graph: Some(def)` → build directly from the
-    ///   per-instance override (renders what the user saved). Effects fill
-    ///   `outer_routings` from the compositor (the outer→inner map is static
-    ///   per type); generators project routings from the override's own
-    ///   (bundle-grafted) `preset_metadata`, which also captures user-added
-    ///   bindings.
-    /// - The instance has `graph: None` → the type-keyed view: effects use the
-    ///   compositor's `graph_snapshot_for`, generators the unified
-    ///   `LoadedPresetView` via `snapshot_for_view` (#4 gave generators views).
-    ///
-    /// Cached behind `cached_graph_snapshot`, keyed by (target, preset_type,
-    /// graph_version, catalog fingerprint) so the rebuild runs once per edit,
-    /// not once per content tick. Returns `None` if the target no longer
-    /// resolves, the generator has no type, or the type has no JSON preset.
-    fn graph_snapshot(
-        &mut self,
-        target: &manifold_core::GraphTarget,
-    ) -> Option<Arc<manifold_node_engine::snapshot::GraphSnapshot>> {
-        use manifold_core::GraphTarget;
-        let fingerprint = self.editing_service.stamps().get(manifold_core::change::Part::EmbeddedPresets);
-        let project = self.engine.project()?;
-
-        // Resolve the instance's preset type + graph version for the cache key.
-        let (preset_type, version) = match target {
-            GraphTarget::Effect(eid) => {
-                let inst = project.find_effect_by_id(eid)?;
-                (inst.effect_type().clone(), inst.graph_version)
-            }
-            GraphTarget::Generator(lid) => {
-                let (_, layer) = project.timeline.find_layer_by_id(lid)?;
-                let gp = layer.gen_params()?;
-                if gp.generator_type().is_none() {
-                    return None;
-                }
-                (gp.generator_type().clone(), gp.graph_version)
-            }
-            GraphTarget::SceneModifier { .. } => {
-                let owner = project.graph_target_owner(target)?;
-                (project.instance_preset_id(target)?, owner.graph_version)
-            }
-        };
-
-        // Cache hit: identical target / type / version / catalog → clone Arc.
-        if let Some(cache) = self.cached_graph_snapshot.as_ref()
-            && cache.target.as_ref() == target
-            && cache.preset_type == preset_type
-            && cache.version == version
-            && cache.fingerprint == fingerprint
-        {
-            return Some(Arc::clone(&cache.snapshot));
-        }
-
-        // Cache miss: rebuild the snapshot for this kind.
-        let snap = match target {
-            GraphTarget::Effect(eid) => {
-                let instance = project.find_effect_by_id(eid)?;
-                if let Some(def) = instance.graph.as_ref() {
-                    // Per-card override: `from_def` has no live effect, so its
-                    // outer_routings come out empty. The compositor's per-type
-                    // routings are authoritative — fill them in here.
-                    let mut snap = manifold_node_engine::snapshot::GraphSnapshot::from_def(def)?;
-                    snap.outer_routings = self
-                        .content_pipeline
-                        .outer_routings_for(instance.effect_type());
-                    apply_effective_bound_values(&mut snap, def, instance);
-                    snap
-                } else {
-                    self.content_pipeline
-                        .graph_snapshot_for(instance.effect_type())?
-                }
-            }
-            GraphTarget::Generator(lid) => {
-                let (_, layer) = project.timeline.find_layer_by_id(lid)?;
-                let gen_type = layer.generator_type();
-                if let Some(override_def) = layer.generator_graph() {
-                    // Per-instance override: exposure state lives on the
-                    // layer's graph, so build from the override (grafting
-                    // bundled metadata back if edits dropped it) and project
-                    // routings from the override def's own metadata — captures
-                    // user-added bindings the compositor's type view wouldn't.
-                    let mut d = override_def.clone();
-                    manifold_nodes::registry::graft_preset_metadata_from_bundle(
-                        &mut d, gen_type,
-                    );
-                    let mut snap = manifold_node_engine::snapshot::GraphSnapshot::from_def(&d)?;
-                    if let Some(meta) = d.preset_metadata.as_ref() {
-                        use manifold_core::effect_graph_def::BindingTarget;
-                        use manifold_node_engine::snapshot::{OuterParamRouting, OuterParamSource};
-                        // Recurse into group bodies (BUG-103): a binding whose
-                        // target lives inside a group — the glTF importer's
-                        // per-object knobs on `mat_k` nodes inside each object's
-                        // box — is dropped by a top-level-only handle map, so a
-                        // diverged imported scene loses its group-face rows the
-                        // same way the pristine path did. Shared helper so both
-                        // arms resolve handles identically.
-                        let mut handle_by_id: std::collections::HashMap<&str, &str> =
-                            std::collections::HashMap::new();
-                        manifold_node_engine::load::loaded_preset_view::collect_node_handles(
-                            &d.nodes,
-                            &mut handle_by_id,
-                        );
-                        let mut declared = manifold_core::param_lookup::Declared::new(&d);
-                        snap.outer_routings = meta
-                            .bindings
-                            .iter()
-                            .filter_map(|b| match &b.target {
-                                BindingTarget::Node { node_id, param } => {
-                                    let handle = handle_by_id.get(node_id.as_str())?;
-                                    Some(OuterParamRouting {
-                                        outer_label: layer
-                                            .gen_params()
-                                            .and_then(|gp| gp.params.get(&b.id))
-                                            .map(|p| p.spec.name.clone())
-                                            .or_else(|| declared.as_mut().map(|x| x.name(&b.id)))
-                                            .unwrap_or_default(),
-                                        outer_param_id: b.id.clone(),
-                                        node_handle: handle.to_string(),
-                                        inner_param: param.clone(),
-                                        source: OuterParamSource::Static,
-                                    })
-                                }
-                                BindingTarget::Composite { .. } | BindingTarget::SceneModifier { .. } => None,
-                            })
-                            .collect();
-                    }
-                    if let Some(gp) = layer.gen_params() {
-                        apply_effective_bound_values(&mut snap, &d, gp);
-                    }
-                    snap
-                } else {
-                    // Pristine layer: the unified LoadedPresetView. Generators
-                    // got views in #4, so this mirrors the effect pristine path
-                    // — `snapshot_for_view` does `from_def(canonical_def)` +
-                    // `outer_routings_from_view`.
-                    let view = manifold_node_engine::load::loaded_preset_view::loaded_preset_view_by_id(gen_type)?;
-                    manifold_node_engine::load::loaded_preset_view::snapshot_for_view(&view)?
-                }
-            }
-            GraphTarget::SceneModifier { .. } => {
-                let local = crate::graph_target::resolve(project, target)?;
-                let owner = project.graph_target_owner(target)?;
-                let mut snap = manifold_node_engine::snapshot::GraphSnapshot::from_def(&local)?;
-                let mut projection = (*local).clone();
-                let metadata = projection.preset_metadata.as_mut()?;
-                metadata.bindings = crate::graph_target::modifier_bindings(project, target)?;
-                metadata.params = owner.params.iter().map(|param|param.spec.clone()).collect();
-                let mut handles = std::collections::HashMap::new();
-                manifold_node_engine::load::loaded_preset_view::collect_node_handles(&local.nodes, &mut handles);
-                snap.outer_routings = metadata.bindings.iter().filter_map(|binding| {
-                    let manifold_core::effect_graph_def::BindingTarget::Node { node_id, param } = &binding.target else { return None; };
-                    Some(manifold_node_engine::snapshot::OuterParamRouting {
-                        outer_label: owner.params.get(&binding.id).map(|p| p.spec.name.clone()).unwrap_or_default(),
-                        outer_param_id: binding.id.clone(),
-                        node_handle: handles.get(node_id.as_str())?.to_string(), inner_param:param.clone(),
-                        source: if binding.user_added { manifold_node_engine::snapshot::OuterParamSource::User }
-                            else { manifold_node_engine::snapshot::OuterParamSource::Static },
-                    })
-                }).collect();
-                apply_effective_bound_values(&mut snap, &projection, owner);
-                snap
-            }
-        };
-
-        let arc = Arc::new(snap);
-        self.cached_graph_snapshot = Some(CachedGraphSnapshot {
-            target: Arc::new(target.clone()),
-            preset_type,
-            version,
-            fingerprint,
-            snapshot: Arc::clone(&arc),
-        });
-        Some(arc)
     }
 
     /// Tick all sync controllers once per frame. Called before engine tick.

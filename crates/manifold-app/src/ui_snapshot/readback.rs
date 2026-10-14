@@ -169,12 +169,13 @@ pub(super) fn normalize_dump(dump: &Value) -> Value {
 }
 
 /// `UIFlags(VISIBLE | HOVERED)` → `VISIBLE`: the flag names minus the volatile ones.
+/// No flags (`UIFlags(0x0)`) and only volatile flags both come out empty.
 fn strip_volatile_flags(flags: &str) -> String {
     let inner = flags.strip_prefix("UIFlags(").and_then(|s| s.strip_suffix(')')).unwrap_or(flags);
     inner
         .split('|')
         .map(str::trim)
-        .filter(|f| !f.is_empty() && !VOLATILE_FLAGS.contains(f))
+        .filter(|f| !f.is_empty() && *f != "0x0" && !VOLATILE_FLAGS.contains(f))
         .collect::<Vec<_>>()
         .join(" | ")
 }
@@ -421,6 +422,16 @@ mod tests {
         assert!(lines.iter().any(|l| l == "node 1 [-]: added"), "lines: {lines:?}");
         let (lines, _) = diff_trees(&b, &a);
         assert!(lines.iter().any(|l| l == "node 1 [-]: removed"), "lines: {lines:?}");
+    }
+
+    /// A hidden node with no flags and one with only a volatile flag left are
+    /// the same hidden node.
+    #[test]
+    fn no_flags_equals_only_volatile_flags() {
+        let a = dump(json!([{ "id": 1, "flags": "UIFlags(0x0)", "rect": [0.0, 0.0, 2.0, 600.0] }]));
+        let b = dump(json!([{ "id": 2, "flags": "UIFlags(DIRTY)", "rect": [0.0, 0.0, 2.0, 600.0] }]));
+        let (lines, differs) = diff_trees(&a, &b);
+        assert!(!differs, "lines: {lines:?}");
     }
 
     #[test]

@@ -489,23 +489,6 @@ impl Application {
             .map(|(w, h)| w as f32 / h as f32);
         let ui_snap = self.editor_ui_snapshot();
         if let (Some(canvas), Some(ui_snap)) = (self.graph_canvas.as_mut(), ui_snap) {
-            if let Some(aspect) = preview_aspect {
-                canvas.set_preview_aspect(aspect);
-            }
-            // P2 motion (`UI_CRAFT_AND_MOTION_PLAN.md` D17): the one per-frame
-            // tick for the canvas's marquee-fade/connect-pop/error-shake
-            // tweens — no seam existed for this before (graph_canvas had no
-            // `tick`/`update` method at all); this is the natural insertion
-            // point, right beside the `set_snapshot`/`apply_live_values`
-            // calls that already run every frame the editor window is open,
-            // using the `dt` this function already computed above.
-            canvas.tick((dt * 1000.0) as f32);
-            canvas.set_snapshot(&ui_snap);
-            // Overlay this frame's live (modulated) node values on top of the
-            // just-pushed structural snapshot, so a driver / Ableton / envelope /
-            // card slider is seen moving each knob on the node face. Empty (and a
-            // no-op) whenever no editor is watching the content side.
-            canvas.apply_live_values(&self.content_state.live_node_params);
             // The "Reset to Default" pill shows only when the watched graph
             // diverges from its bundled preset; keyed on its inputs.
             let has_mod = self.editor_graph.has_graph_mod(
@@ -514,7 +497,14 @@ impl Application {
                 self.watched_catalog_default.as_ref(),
                 &self.ui_edits.stamps.parts(),
             );
-            canvas.set_has_graph_mod(has_mod);
+            crate::editor_frame::feed_canvas(
+                canvas,
+                &ui_snap,
+                preview_aspect,
+                (dt * 1000.0) as f32,
+                &self.content_state.live_node_params,
+                has_mod,
+            );
             if let Some(ed) = self.graph_editor.as_mut() {
                 ed.offscreen_dirty = true;
             }
@@ -682,179 +672,25 @@ impl Application {
         // a signal so it fires in the same relative order as before (ahead of
         // the rebuild/structural decision later this frame).
         let scrolled_in_place = self.ws.ui_root.inspector.take_scrolled_in_place();
-        // Graph-editor edits (canvas + sidebar) accumulate here and dispatch
-        // through their own command vocabulary (`GraphEditCommand`), separately
-        // from the `PanelAction` loop — Phase 4.3.
-        let mut graph_edits: Vec<manifold_ui::GraphEditCommand> = Vec::new();
-
-        // Editor LEFT-LANE CARD actions are collected separately so they can be
-        // dispatched against the editor's watched graph identity: they carry the
-        // same PanelAction variants the inspector emits, but must resolve against
-        // the edited effect/generator, not the main window's active layer.
-        // Appended to `actions` after a recorded boundary so the dispatch loop
-        // can tell which segment they live in.
-        let mut editor_card_actions: Vec<manifold_ui::panels::PanelAction> = Vec::new();
-
-        // 2a. Drain the graph-editor window's UITree events. The editor
-        // doesn't go through `UIRoot::process_events` (its panel set is
-        // a single `GraphEditorPanel`, not the full main-window mix), so
-        // we route raw click events through the panel's own
-        // `handle_click` to translate them into `PanelAction::EffectParamExpose`.
-        // Resulting actions are appended to the main queue and dispatched
-        // through the same `ui_bridge::dispatch` arms as everything else.
-        if let Some(ed) = self.graph_editor.as_mut() {
-            let events = ed.ui_root.input.drain_events();
-            // When the node picker is open it's a modal — it claims every
-            // click in the editor window (the backdrop spans the whole
-            // surface). Route clicks to the popup and skip the palette +
-            // sidebar handlers entirely so a click on a cell doesn't also
-            // toggle a node behind it.
-            if ed.ui_root.browser_popup.is_open() {
-                use manifold_ui::input::UIEvent;
-                use manifold_ui::panels::browser_popup::BrowserPopupAction;
-                for event in events {
-                    if let UIEvent::Click { node_id, .. } = event {
-                        // Search bar → focus the search field (already
-                        // auto-focused on open, but a click re-focuses).
-                        if ed.ui_root.browser_popup.is_search_bar(node_id) {
-                            let r = ed.ui_root.browser_popup.search_bar_rect(&ed.ui_root.tree);
-                            self.text_input.begin_owned(
-                                crate::text_input::TextSessionOwner::EditorOverlay(
-                                    crate::ui_root::OverlayId::BrowserPopup,
-                                ),
-                                crate::text_input::TextInputField::SearchFilter,
-                                ed.ui_root.browser_popup.current_filter(),
-                                crate::text_input::AnchorRect::new(r.x, r.y, r.width, r.height),
-                                11.0,
-                            );
-                            ed.offscreen_dirty = true;
-                        } else {
-                            // This routes straight to `handle_click`, bypassing
-                            // the overlay driver's `route_overlay_event` — so a
-                            // close here (cell pick / backdrop) never reaches
-                            // `route_overlay_event`'s closed-overlay tracking.
-                            // Snapshot before/after and record it ourselves; the
-                            // per-frame pump below drains it and cancels this
-                            // popup's owned text session (no manual `cancel()`
-                            // needed here — that was the distributed-reset
-                            // pattern `OVERLAY_SESSIONS_AND_PICKER_DESIGN.md`
-                            // section 3 replaces).
-                            let was_open = ed.ui_root.browser_popup.is_open();
-                            if let Some(action) = ed.ui_root.browser_popup.handle_click(node_id) {
-                                ed.ui_root.note_overlay_closed_if(
-                                    crate::ui_root::OverlayId::BrowserPopup,
-                                    was_open,
-                                );
-                                // Dismissed, or Effect/Generator/Paste (which never
-                                // arise in Node mode from the editor popup), need
-                                // nothing further here — the text-session cancel
-                                // (if any) is handled by the closed-overlay pump.
-                                if let BrowserPopupAction::NodeSelected { type_id, graph_pos } =
-                                    action
-                                {
-                                    // Hand off to the layer-2 spawn handler.
-                                    // `graph_pos` is the palette-origin canvas
-                                    // position captured at open — pass it
-                                    // straight through, never recompute.
-                                    graph_edits.push(manifold_ui::GraphEditCommand::AddGraphNodeAt {
-                                        type_id,
-                                        graph_pos,
-                                    });
-                                }
-                                ed.offscreen_dirty = true;
-                            } else if ed.ui_root.browser_popup.contains_node(node_id) {
-                                ed.ui_root.note_overlay_closed_if(
-                                    crate::ui_root::OverlayId::BrowserPopup,
-                                    was_open,
-                                );
-                                // Internal click (category chip, background) —
-                                // consume so it doesn't leak to the canvas.
-                                ed.offscreen_dirty = true;
-                            }
-                        }
-                    }
-                }
-            } else {
-                use manifold_ui::input::UIEvent;
-                // Right lane = the full inspector column (this window's own
-                // `ws.ui_root.inspector`). The one non-inspector interaction left
-                // here is the left preview pane's "Smart preview" auto-gain toggle
-                // (a `GraphEditCommand`, not a `PanelAction`) — register its flip
-                // on the button id captured during the last render and resolve it
-                // off the raw events before the inspector router runs.
-                if !events.is_empty() {
-                    self.editor_sidebar_intents.clear();
-                    if let Some(id) = self.editor_smart_preview_toggle_id {
-                        self.editor_sidebar_intents.on(
-                            id,
-                            manifold_ui::intent::Gesture::Click,
-                            manifold_ui::GraphEditCommand::SetNodePreviewNormalize(
-                                !self.node_preview_normalize,
-                            ),
-                        );
-                    }
-                }
-                for event in &events {
-                    if let UIEvent::Click { node_id, .. } = event
-                        && let Some(cmd) = self.editor_sidebar_intents.resolve(
-                            &ed.ui_root.tree,
-                            Some(*node_id),
-                            manifold_ui::intent::Gesture::Click,
-                        )
-                    {
-                        graph_edits.push(cmd);
-                    }
-                }
-                // Route the rest through the shared inspector event path — the
-                // same intents + handle_event + drag/card-reorder + dropdown
-                // routing the main window's `process_events` uses — so tabs,
-                // cards, chrome, macros, sliders and drags all work identically.
-                // These actions dispatch against the EDITOR's UIRoot in the
-                // trailing `editor_card_actions` segment below.
-                editor_card_actions.extend(ed.ui_root.route_inspector_events(&events));
-            }
-            // Re-anchor the Node picker's search session over the popup's
-            // real search bar every frame (same pass as the main window's):
-            // the open-time begin_owned anchored at zero because the tree
-            // didn't exist yet, and render_text_input_overlay paints a
-            // bordered box AT the anchor. The zero-rect guard skips the
-            // frame(s) before the tree exists.
-            if self.text_input.owner
-                == Some(crate::text_input::TextSessionOwner::EditorOverlay(
-                    crate::ui_root::OverlayId::BrowserPopup,
-                ))
-                && self.text_input.field == crate::text_input::TextInputField::SearchFilter
-            {
-                let r = ed.ui_root.browser_popup.search_bar_rect(&ed.ui_root.tree);
-                if r.width > 0.0 && r.height > 0.0 {
-                    self.text_input.update_anchor(crate::text_input::AnchorRect::new(
-                        r.x, r.y, r.width, r.height,
-                    ));
-                }
-            }
-            // Overlay-hosted text sessions (editor window): same pump as the
-            // main window above, draining both the bespoke browser-popup
-            // click path (marked via `note_overlay_closed_if` in the branch
-            // above) and any close `route_inspector_events` observed through
-            // the normal overlay driver (e.g. an inspector dropdown).
-            for id in ed.ui_root.take_closed_overlays() {
-                self.text_input
-                    .cancel_if_owned_by(crate::text_input::TextSessionOwner::EditorOverlay(id));
-            }
-        }
-        // 2b. Drain editor-canvas actions (wire-drag completions,
-        // node-drag releases, delete-key requests). Bypasses the
-        // UITree event path because the canvas owns its own pointer
-        // state — see `GraphCanvas::drain_actions`.
-        if let Some(canvas) = self.graph_canvas.as_mut() {
-            graph_edits.extend(canvas.drain_edits());
-            actions.extend(canvas.drain_popover_actions());
-        }
-
-        // The editor mapping popover (canvas on-node rows) emits the same
-        // `EffectMapping*` actions the canvas popover does (range / scale / offset
-        // / invert / curve), carrying their captured target and binding id.
-        actions.extend(self.editor_mapping_popover.drain_actions());
+        // The editor window's tree, canvas and popovers (`editor_input.rs`).
+        // Canvas and sidebar edits dispatch through their own vocabulary
+        // (`GraphEditCommand`) below; card-lane actions dispatch against the
+        // editor's own tree after the main segment; the popovers' mapping
+        // actions carry their owner and join the main queue.
+        let editor_drain = crate::editor_input::drain(
+            self.graph_editor.as_mut(),
+            self.graph_canvas.as_mut(),
+            &mut self.editor_mapping_popover,
+            &mut self.text_input,
+            crate::editor_input::SmartPreviewToggle {
+                intents: &mut self.editor_sidebar_intents,
+                id: self.editor_smart_preview_toggle_id,
+                normalize: self.node_preview_normalize,
+            },
+        );
+        let graph_edits = editor_drain.graph_edits;
+        let editor_card_actions = editor_drain.card_actions;
+        actions.extend(editor_drain.actions);
 
         // 2a. Route viewport tracks-area events through InteractionOverlay.
         // These events were stashed by process_events() because the overlay
@@ -1377,26 +1213,12 @@ impl Application {
         }
 
         // ── Editor inspector segment ────────────────────────────────────────
-        // The graph-editor window hosts its OWN inspector instance
-        // (`ed.ui_root.inspector`), mirroring the main window's selection /
-        // active-layer. Its actions dispatch against the editor's UIRoot with
-        // `editor_target = None` (mirror) so param edits resolve identically and
-        // only the editor's transient tree visuals (collapse, selection
-        // highlight, card-drag) land on the editor tree. Card clicks additionally
-        // retarget the canvas to that card's graph. Card-click retargets are
-        // collected and applied after the editor-workspace borrow drops (they call
-        // `self.watch_*`). See docs/GRAPH_EDITOR_INSPECTOR_UNIFICATION.md.
+        // The graph-editor window hosts its OWN inspector instance, mirroring
+        // the main window's selection and active layer; its actions dispatch
+        // against the editor's tree (`editor_input::dispatch_card_lane`). Card
+        // clicks also retarget the canvas to that card's graph, once the
+        // editor borrow drops. See docs/GRAPH_EDITOR_INSPECTOR_UNIFICATION.md.
         if !self.ws.ui_root.export_progress.is_open() && actions.len() > editor_card_seg_start {
-            let mut retarget_effect: Option<usize> = None;
-            let mut retarget_generator = false;
-            // Deferred like the retargets above: `self.begin_save_preset_prompt`
-            // needs `&mut self`, which would conflict with `ed`'s live borrow of
-            // `self.graph_editor` for the loop's duration.
-            let mut pending_save_preset: Option<(
-                manifold_core::preset_def::PresetKind,
-                manifold_core::effect_graph_def::EffectGraphDef,
-                crate::text_input::SavePresetDestination,
-            )> = None;
             let (screen_w, screen_h) = self
                 .graph_editor_window_id
                 .and_then(|wid| self.window_registry.get(&wid))
@@ -1406,50 +1228,51 @@ impl Application {
                     (sz.width as f32 / s as f32, sz.height as f32 / s as f32)
                 })
                 .unwrap_or((1280.0, 720.0));
-            for action in &actions[editor_card_seg_start..] {
-                if self.dispatch_inspector_host_action(action, true) { continue; }
-                if let PanelAction::Root(RootAction::OpenCardMapping { target, param_id, anchor_node_id }) = action {
-                    self.open_card_mapping(target, param_id.as_ref(), *anchor_node_id,
-                        manifold_ui::graph_canvas::Rect::new(0.0, 0.0, screen_w, screen_h));
-                }
+            let card_actions = &actions[editor_card_seg_start..];
+            let mappings = match self.graph_editor.as_mut() {
+                Some(ed) => crate::editor_input::card_lane_entries(
+                    &mut self.text_input,
+                    ed,
+                    &self.local_project,
+                    &self.selection,
+                    &self.active_layer_id,
+                    card_actions,
+                ),
+                None => Vec::new(),
+            };
+            for (target, param_id, anchor_node_id) in mappings {
+                self.open_card_mapping(target, param_id, anchor_node_id,
+                    manifold_ui::graph_canvas::Rect::new(0.0, 0.0, screen_w, screen_h));
             }
-            if let Some(ed) = self.graph_editor.as_mut() {
-                let content_tx = self.content_tx.as_ref().unwrap();
-                for action in &actions[editor_card_seg_start..] {
-                    match action {
-                        PanelAction::Params(ParamsAction::EffectCardClicked(ei)) => retarget_effect = Some(*ei),
-                        PanelAction::Params(ParamsAction::GenCardClicked) => retarget_generator = true,
-                        _ => {}
-                    }
-                    let mut dctx = crate::ui_bridge::DispatchCtx {
-                        project: crate::ui_bridge::ProjectRef::new(&mut self.local_project, &mut self.ui_edits, content_tx),
+            let outcome = match (self.graph_editor.as_mut(), self.content_tx.as_ref()) {
+                (Some(ed), Some(content_tx)) => crate::editor_input::dispatch_card_lane(
+                    crate::editor_input::CardLane {
+                        ws: ed,
+                        project: &mut self.local_project,
+                        edits: &mut self.ui_edits,
                         content_tx,
                         content_state: &self.content_state,
-                        ui: &mut ed.ui_root,
                         selection: &mut self.selection,
                         active_layer: &mut self.active_layer_id,
                         user_prefs: &mut self.user_prefs,
-                        editor_target: None,
                         scrub: &mut self.scrub,
                         dialogs: crate::file_dialogs::host(&self.window_registry, self.dialog_window_id, self.primary_window_id, self.current_project_path.as_deref()),
-                    };
-                    let result = crate::ui_bridge::dispatch(action, &mut dctx);
-                    if result.begin_save_preset.is_some() {
-                        pending_save_preset = result.begin_save_preset;
-                    }
-                }
-            }
-            if let Some((kind, def, destination)) = pending_save_preset {
+                    },
+                    card_actions,
+                ),
+                _ => Default::default(),
+            };
+            if let Some((kind, def, destination)) = outcome.save_preset {
                 self.begin_save_preset_prompt(kind, def, destination);
             }
             // Retarget the canvas to the clicked card's graph (opening the window
             // stays a deliberate cog action, so only retarget when it's open).
             if self.graph_editor_window_id.is_some() {
-                if let Some(ei) = retarget_effect {
+                if let Some(ei) = outcome.retarget_effect {
                     if let Some(eid) = self.resolve_effect_card_id(ei) {
                         self.watch_effect_graph(eid);
                     }
-                } else if retarget_generator
+                } else if outcome.retarget_generator
                     && let Some(lid) = self.active_layer_id.clone()
                 {
                     self.watch_generator_graph(lid);

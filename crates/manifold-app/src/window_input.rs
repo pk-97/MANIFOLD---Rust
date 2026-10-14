@@ -45,15 +45,6 @@ use crate::window_registry::WindowRole;
 /// and the editor's cursor-anchored zoom — so a notch means the same everywhere.
 pub(crate) const LINE_DELTA_PX: f32 = 20.0;
 
-/// A graph-editor UI press remains owned by the editor tree after the cursor
-/// crosses into the canvas. The hit region only chooses the owner on press;
-/// once a widget is pressed, the tree must keep receiving the threshold move
-/// and terminal release from anywhere in the window.
-#[inline]
-fn editor_ui_pointer_owned(in_panel: bool, pressed_widget: bool) -> bool {
-    in_panel || pressed_widget
-}
-
 /// Normalize a winit scroll delta to logical pixels `(dx, dy)`.
 ///
 /// `LineDelta` (mouse wheel) is scaled by [`LINE_DELTA_PX`] per notch;
@@ -835,281 +826,48 @@ impl Application {
         }
     }
 
-    /// `CursorMoved` in the editor window: update the canvas cursor + popovers,
-    /// and forward into the editor UITree only when the cursor is in a margin
-    /// (palette / sidebar) or the node picker is open.
+    /// This App's borrow for one editor-window event through the editor-input
+    /// seam (`editor_input.rs`). `None` when the editor is closed.
+    fn editor_pointer(&mut self, window_id: WindowId) -> Option<crate::editor_input::EditorPointer<'_>> {
+        let (w, h) = editor_logical_size(&self.window_registry, window_id);
+        Some(crate::editor_input::EditorPointer {
+            ws: self.graph_editor.as_mut()?,
+            canvas: self.graph_canvas.as_mut(),
+            mapping: &mut self.editor_mapping_popover,
+            area: manifold_ui::Rect::new(0.0, 0.0, w, h),
+            modifiers: self.modifiers,
+            time: self.time_since_start,
+            project: &self.local_project,
+            content_tx: self.content_tx.as_ref(),
+            is_playing: self.content_state.is_playing,
+            watched: self.watched_graph_target.as_ref(),
+            graph: self.content_state.active_graph_snapshot.as_deref(),
+            active_layer: &mut self.active_layer_id,
+            selection: &mut self.selection,
+        })
+    }
+
+    /// `CursorMoved` in the editor window, through the editor-input seam. The
+    /// window takes the dock's cursor; an armed gizmo drag takes the move.
     pub(crate) fn editor_cursor_moved(
         &mut self,
         window_id: WindowId,
         position: PhysicalPosition<f64>,
     ) {
-        let (scale, window_w, window_h) = self
-            .window_registry
-            .get(&window_id)
-            .map(|ws| {
-                let s = ws.window.scale_factor();
-                let sz = ws.window.inner_size();
-                (s, sz.width as f32 / s as f32, sz.height as f32 / s as f32)
-            })
-            .unwrap_or((1.0, 1.0, 1.0));
-        let logical_x = position.x as f32 / scale as f32;
-        let logical_y = position.y as f32 / scale as f32;
-        let area = manifold_ui::Rect::new(0.0, 0.0, window_w, window_h);
-        let pos = Vec2::new(logical_x, logical_y);
-
-        // Column-divider drag / hover takes precedence over the canvas +
-        // panels. A live drag resizes the dock and consumes the move; otherwise
-        // update the hover highlight (repaint only when it changes).
-        let mut dock_dragging = false;
-        let mut dock_cursor = TimelineCursor::Default;
-        if let Some(ed) = self.graph_editor.as_mut() {
-            if ed.dock.is_dragging() {
-                ed.dock.drag(area, pos);
-                ed.offscreen_dirty = true;
-                dock_dragging = true;
-            } else {
-                let before = ed.dock.highlighted();
-                ed.dock.set_hover_from(area, pos);
-                if ed.dock.highlighted() != before {
-                    ed.offscreen_dirty = true;
-                }
-            }
-            dock_cursor = ed.dock.cursor().unwrap_or(TimelineCursor::Default);
-        }
-        self.cursor_manager.set(dock_cursor);
+        let pos = self.logical_cursor(window_id, position);
+        let Some(mut cx) = self.editor_pointer(window_id) else { return };
+        let moved = crate::editor_input::cursor_moved(&mut cx, pos);
+        self.cursor_manager.set(moved.cursor);
         self.apply_pending_cursor(window_id);
-        if dock_dragging {
-            return;
-        }
-
-        // Mini-timeline scrub: a move while scrubbing seeks the playhead and
-        // consumes the move (the canvas + panels don't see it), mirroring the
-        // dock-drag precedence above.
-        if self.graph_editor.as_ref().is_some_and(|ed| ed.timeline_scrubbing) {
-            let bottom = self
-                .graph_editor
-                .as_ref()
-                .map(|ed| ed.dock.rects(area).bottom);
-            if let Some(bottom) = bottom {
-                let total = self.local_project.timeline.duration_beats().as_f32();
-                let beat = manifold_ui::MiniTimeline::beat_at_x(bottom, total, logical_x);
-                self.send_content_cmd(ContentCommand::SeekToBeat(
-                    manifold_core::Beats::from_f32(beat),
-                ));
-                if let Some(ed) = self.graph_editor.as_mut() {
-                    ed.offscreen_dirty = true;
-                }
-            }
-            return;
-        }
-
-        // P6 gizmo axis drag: claims the move outright, same precedence as
-        // the P5c orbit-drag block right below (an armed gizmo drag means
-        // `editor_mouse_input` deliberately did NOT arm `viewport_drag`, so
-        // this and that block are mutually exclusive per gesture).
-        if self.editor_viewport_gizmo_drag_move(logical_x, logical_y) {
-            return;
-        }
-
-        // P5c 3D viewport navigation: an active drag (started by a press
-        // inside `viewport_rect`, see `editor_mouse_input`) claims the move
-        // outright and routes it through `viewport_input` instead of canvas
-        // pan — same precedence tier as the dock-drag/timeline-scrub blocks
-        // above. The drag can leave the rect mid-gesture (fast mouse
-        // movement); it stays claimed until release, matching every other
-        // drag in this file.
-        if let Some(ed) = self.graph_editor.as_mut()
-            && let Some((button, last_x, last_y)) = ed.viewport_drag
-        {
-            let dx = logical_x - last_x;
-            let dy = logical_y - last_y;
-            ed.viewport_drag = Some((button, logical_x, logical_y));
-            let shift = self.modifiers.shift;
-            if let Some(session) = ed.viewport_session.as_mut()
-                && let Some(gesture) =
-                    crate::viewport_input::classify_mouse_drag(button, shift, dx, dy)
-            {
-                crate::viewport_input::apply(
-                    session.camera_mut(),
-                    gesture,
-                    &crate::viewport_input::ViewportInputSensitivity::default(),
-                );
-                ed.offscreen_dirty = true;
-            }
-            return;
-        }
-
-        // Preview sidebar on the left, card lane on the right (matches the main
-        // timeline's inspector docking right). Geometry from the same `Dock` the
-        // present pass reads, so the canvas viewport tracks the dragged columns.
-        let (preview_width, card_x, viewport) = self
-            .graph_editor
-            .as_ref()
-            .map(|ed| {
-                let r = ed.dock.rects(area);
-                (
-                    r.left.width,
-                    r.right.x,
-                    // Canvas viewport matches the render-time slice (offset by
-                    // preview_width); without this the canvas's `to_graph` would
-                    // treat screen x=0 as the canvas left edge and node
-                    // hit-tests would be off by `preview_width` to the left.
-                    crate::graph_canvas::Rect::new(
-                        r.canvas.x,
-                        r.canvas.y,
-                        r.canvas.width,
-                        r.canvas.height,
-                    ),
-                )
-            })
-            .unwrap_or_else(|| {
-                (0.0, window_w, crate::graph_canvas::Rect::new(0.0, 0.0, window_w, window_h))
-            });
-        // Always update canvas cursor — graph-space coords
-        // need it even for clicks that land in the sidebar.
-        if let Some(canvas) = self.graph_canvas.as_mut() {
-            canvas.on_pointer_move(viewport, logical_x, logical_y);
-            // Drive the mapping popover's live range drag /
-            // handle hover. No-op when the popover is closed.
-            canvas.popover_on_move(logical_x, logical_y);
-        }
-        // Same for the editor card's sideways mapping drawer (a
-        // separate popover anchored on the right-lane card row).
-        self.editor_mapping_popover.on_move(logical_x, logical_y);
-        // Forward into the editor's UITree only when the
-        // cursor sits in either margin (preview sidebar on the
-        // left or the card lane on the right). Move events from
-        // the canvas region would just cause spurious hover/exit
-        // on tree nodes — except when the node picker is open,
-        // which overlays the whole window and wants hover
-        // feedback on its cells everywhere.
-        let in_panel = logical_x < preview_width || logical_x >= card_x;
-        let picker_open = self
-            .graph_editor
-            .as_ref()
-            .is_some_and(|ed| ed.ui_root.browser_popup.is_open());
-        let ui_pointer_owned = self
-            .graph_editor
-            .as_ref()
-            .is_some_and(|ed| ed.ui_root.input.pressed_widget().is_some());
-        if (in_panel || picker_open || ui_pointer_owned)
-            && let Some(ed) = self.graph_editor.as_mut()
-        {
-            ed.ui_root.input.process_pointer(
-                &mut ed.ui_root.tree,
-                Vec2::new(logical_x, logical_y),
-                manifold_ui::input::PointerAction::Move,
-                self.time_since_start,
-            );
-        }
-        if let Some(ed) = self.graph_editor.as_mut() {
-            ed.offscreen_dirty = true;
+        if let Some(pos) = moved.gizmo_move {
+            self.editor_viewport_gizmo_drag_move(pos.x, pos.y);
         }
     }
 
-    /// Terminate every editor-owned pointer gesture when the OS withholds the
-    /// matching button release (focus loss) or Escape cancels the gesture.
-    ///
-    /// The editor tree gets a terminal `Up` even when the last cursor position
-    /// is outside its panels. A press that never crossed the drag threshold is
-    /// sent off-screen so cancellation cannot turn into an accidental click;
-    /// an active drag uses the real cursor position so its existing end path
-    /// can commit/finish normally. Canvas, mapping-popover, viewport, dock,
-    /// and pan cleanup then reuse the normal release APIs below.
+    /// Ends every editor-owned pointer gesture on focus loss or Escape
+    /// (`editor_input::cancel_capture`). True when something was cancelled.
     pub(crate) fn cancel_editor_pointer_capture(&mut self, window_id: WindowId) -> bool {
-        let Some(ed) = self.graph_editor.as_ref() else {
-            return false;
-        };
-        let ui_pressed = ed.ui_root.input.pressed_widget().is_some();
-        let ui_dragging = ed.ui_root.input.is_dragging();
-        let cursor = self
-            .graph_canvas
-            .as_ref()
-            .map(|canvas| {
-                let (x, y) = canvas.cursor();
-                Vec2::new(x, y)
-            })
-            .unwrap_or(Vec2::ZERO);
-        let had_mapping = self.editor_mapping_popover.is_open();
-        let had_canvas_popover = self
-            .graph_canvas
-            .as_ref()
-            .is_some_and(|canvas| canvas.popover_open());
-
-        // End the canvas-owned capture before routing synthetic button-up
-        // events through the normal host path. Wire, marquee, and pan are
-        // discarded; live node/value gestures use their existing terminal
-        // commit path. In particular, this prevents a stale cursor over an
-        // input port from turning Escape/focus loss into ConnectPorts.
-        let (window_w, window_h) = self
-            .window_registry
-            .get(&window_id)
-            .map(|ws| {
-                let scale = ws.window.scale_factor();
-                let size = ws.window.inner_size();
-                (size.width as f32 / scale as f32, size.height as f32 / scale as f32)
-            })
-            .unwrap_or((1.0, 1.0));
-        let area = manifold_ui::Rect::new(0.0, 0.0, window_w, window_h);
-        let viewport = self
-            .graph_editor
-            .as_ref()
-            .map(|ed| ed.dock.rects(area).canvas)
-            .unwrap_or(area);
-        let viewport = crate::graph_canvas::Rect::new(viewport.x, viewport.y, viewport.width, viewport.height);
-        let canvas_capture = self
-            .graph_canvas
-            .as_mut()
-            .is_some_and(|canvas| canvas.finish_pointer_capture(viewport));
-
-        // Escape and focus loss cancel open mapping surfaces before the normal
-        // release path, whose `on_release` would otherwise commit a live range
-        // scrub. The popover APIs are idempotent when no drag is active.
-        self.editor_mapping_popover.close();
-        // Domain motion has not touched the project yet: Escape/focus loss
-        // discards the draft instead of turning cancellation into a setup edit.
-        let cancelled_domain = self.graph_editor.as_mut().is_some_and(|ed| {
-            if ed.viewport_gizmo_drag.as_ref().is_some_and(|drag| drag.fluid_domain.is_some()) {
-                ed.viewport_gizmo_drag = None;
-                true
-            } else {
-                false
-            }
-        });
-        if let Some(canvas) = self.graph_canvas.as_mut()
-            && canvas.popover_open()
-        {
-            canvas.close_mapping_popover();
-        }
-
-        if ui_pressed
-            && let Some(ed) = self.graph_editor.as_mut()
-        {
-            let terminal_pos = if ui_dragging {
-                cursor
-            } else {
-                Vec2::new(-1.0, -1.0)
-            };
-            ed.ui_root.input.process_pointer(
-                &mut ed.ui_root.tree,
-                terminal_pos,
-                manifold_ui::input::PointerAction::Up,
-                self.time_since_start,
-            );
-        }
-
-        // These methods are the single existing terminal paths for canvas and
-        // viewport gestures; both are idempotent when no gesture is active.
-        self.editor_mouse_input(window_id, MouseButton::Left, ElementState::Released);
-        self.editor_mouse_input(window_id, MouseButton::Middle, ElementState::Released);
-
-        let capture_cancelled = canvas_capture || ui_pressed || had_mapping || had_canvas_popover || cancelled_domain;
-        if capture_cancelled
-            && let Some(ed) = self.graph_editor.as_mut()
-        {
-            ed.offscreen_dirty = true;
-        }
-        capture_cancelled
+        self.editor_pointer(window_id).is_some_and(|mut cx| crate::editor_input::cancel_capture(&mut cx))
     }
 
     /// P6 (`docs/REALTIME_3D_DESIGN.md` D7 Tier 2): a Left press inside the
@@ -1367,524 +1125,38 @@ impl Application {
         true
     }
 
-    /// `MouseInput` in the editor window: node-picker-modal routing first, then
-    /// the canvas / popovers / palette-vs-sidebar split.
+    /// `MouseInput` in the editor window, through the editor-input seam. A
+    /// left press the seam hands back from the 3D viewport tries a gizmo grab
+    /// or object pick, else orbits.
     pub(crate) fn editor_mouse_input(
         &mut self,
         window_id: WindowId,
         button: MouseButton,
         state: ElementState,
     ) {
-        // Node picker is modal: when open it claims every click in
-        // the editor window. Route the press/release straight into
-        // the editor UITree (which holds the popup's backdrop +
-        // cells) and bypass the canvas / popover / in_panel split.
-        // The resulting Click event is drained + dispatched to the
-        // popup in `present_*` / the editor drain loop.
-        let picker_open = self
-            .graph_editor
-            .as_ref()
-            .is_some_and(|ed| ed.ui_root.browser_popup.is_open());
-        if picker_open {
-            // Cursor in editor-window logical coords. The canvas
-            // tracks it on CursorMoved; read it out before the
-            // mutable editor borrow.
-            let (cx, cy) = self
-                .graph_canvas
-                .as_ref()
-                .map(|c| c.cursor())
-                .unwrap_or((0.0, 0.0));
-            if button == MouseButton::Left
-                && let Some(ed) = self.graph_editor.as_mut()
-            {
-                let action = match state {
-                    ElementState::Pressed => {
-                        manifold_ui::input::PointerAction::Down
-                    }
-                    ElementState::Released => {
-                        manifold_ui::input::PointerAction::Up
-                    }
-                };
-                ed.ui_root.input.process_pointer(
-                    &mut ed.ui_root.tree,
-                    Vec2::new(cx, cy),
-                    action,
-                    self.time_since_start,
-                );
-                ed.offscreen_dirty = true;
-            }
-            return;
+        let Some(mut cx) = self.editor_pointer(window_id) else { return };
+        let out = crate::editor_input::button(&mut cx, button, state);
+        if out.selection_changed {
+            self.needs_rebuild = true;
         }
-        // Column-divider drag takes precedence over the canvas + panels: a
-        // press on a handle begins the drag, a release ends it. Handled on the
-        // `graph_editor` workspace (a field disjoint from `graph_canvas`), so
-        // the canvas never sees these clicks.
+        if let Some(pos) = out.viewport_press
+            && !self.editor_viewport_gizmo_press(pos.x, pos.y)
+            && let Some(ws) = self.graph_editor.as_mut()
         {
-            let (cx, cy) = self
-                .graph_canvas
-                .as_ref()
-                .map(|c| c.cursor())
-                .unwrap_or((0.0, 0.0));
-            let (ww, wh) = self
-                .window_registry
-                .get(&window_id)
-                .map(|ws| {
-                    let s = ws.window.scale_factor();
-                    let sz = ws.window.inner_size();
-                    (sz.width as f32 / s as f32, sz.height as f32 / s as f32)
-                })
-                .unwrap_or((1.0, 1.0));
-            let area = manifold_ui::Rect::new(0.0, 0.0, ww, wh);
-            if button == MouseButton::Left
-                && let Some(ed) = self.graph_editor.as_mut()
-            {
-                match state {
-                    ElementState::Pressed => {
-                        let press = Vec2::new(cx, cy);
-                        if let Some(edge) = ed.dock.hit_test(area, press) {
-                            ed.dock.begin(edge, press);
-                            ed.offscreen_dirty = true;
-                            return;
-                        }
-                    }
-                    ElementState::Released => {
-                        if ed.dock.is_dragging() {
-                            ed.dock.end();
-                            ed.offscreen_dirty = true;
-                            return;
-                        }
-                    }
-                }
-            }
-        }
-        // Bottom mini-timeline: a press in the strip body starts a scrub (and
-        // seeks immediately); a press on the play button toggles transport.
-        // Handled on the disjoint `graph_editor` workspace, before the canvas
-        // sees the click. The `bottom` rect is copied out so no borrow is held
-        // across the content-command sends.
-        if button == MouseButton::Left {
-            let (cx, cy) = self
-                .graph_canvas
-                .as_ref()
-                .map(|c| c.cursor())
-                .unwrap_or((0.0, 0.0));
-            let (ww, wh) = self
-                .window_registry
-                .get(&window_id)
-                .map(|ws| {
-                    let s = ws.window.scale_factor();
-                    let sz = ws.window.inner_size();
-                    (sz.width as f32 / s as f32, sz.height as f32 / s as f32)
-                })
-                .unwrap_or((1.0, 1.0));
-            let area = manifold_ui::Rect::new(0.0, 0.0, ww, wh);
-            let bottom = self
-                .graph_editor
-                .as_ref()
-                .filter(|ed| ed.dock.show_bottom)
-                .map(|ed| ed.dock.rects(area).bottom);
-            if let Some(bottom) = bottom {
-                let pos = Vec2::new(cx, cy);
-                match state {
-                    ElementState::Pressed => {
-                        if manifold_ui::MiniTimeline::hit_play(bottom, pos) {
-                            let cmd = if self.content_state.is_playing {
-                                ContentCommand::Pause
-                            } else {
-                                ContentCommand::Play
-                            };
-                            self.send_content_cmd(cmd);
-                            if let Some(ed) = self.graph_editor.as_mut() {
-                                ed.offscreen_dirty = true;
-                            }
-                            return;
-                        }
-                        // Gutter click: pick that row's layer (identify + choose,
-                        // same effect a main-timeline layer-header click has —
-                        // `active_layer_id` + `selection.select_layer`), so the
-                        // editor's mirrored inspector follows it too. Checked
-                        // before the scrub body since the gutter sits outside it.
-                        if let Some(row) = manifold_ui::MiniTimeline::row_at_y(
-                            bottom,
-                            self.local_project.timeline.layers.len(),
-                            pos,
-                        ) && let Some(layer) = self.local_project.timeline.layers.get(row)
-                        {
-                            let layer_id = layer.layer_id.clone();
-                            self.active_layer_id = Some(layer_id.clone());
-                            self.selection.select_layer(layer_id);
-                            self.needs_rebuild = true;
-                            if let Some(ed) = self.graph_editor.as_mut() {
-                                ed.offscreen_dirty = true;
-                            }
-                            return;
-                        }
-                        if manifold_ui::MiniTimeline::body_rect(bottom).contains(pos) {
-                            let total =
-                                self.local_project.timeline.duration_beats().as_f32();
-                            let beat =
-                                manifold_ui::MiniTimeline::beat_at_x(bottom, total, cx);
-                            self.send_content_cmd(ContentCommand::SeekToBeat(
-                                manifold_core::Beats::from_f32(beat),
-                            ));
-                            if let Some(ed) = self.graph_editor.as_mut() {
-                                ed.timeline_scrubbing = true;
-                                ed.offscreen_dirty = true;
-                            }
-                            return;
-                        }
-                    }
-                    ElementState::Released => {
-                        if let Some(ed) = self.graph_editor.as_mut()
-                            && std::mem::take(&mut ed.timeline_scrubbing)
-                        {
-                            ed.offscreen_dirty = true;
-                            return;
-                        }
-                    }
-                }
-            }
-        }
-        // P5c 3D viewport: a release always clears any in-flight viewport
-        // drag first (so a mouse-up outside the rect — the drag left it, or
-        // the button changed — still ends the gesture cleanly), then a press
-        // inside `viewport_rect` on a bound button (left orbit, middle pan)
-        // starts one. Both consume the event outright, same precedence tier
-        // as the dock-drag/mini-timeline blocks above — the canvas never
-        // sees clicks the viewport claims.
-        // P6: a release also clears any in-flight gizmo axis drag — same
-        // "release always clears first" precedence the orbit/pan drag uses.
-        if state == ElementState::Released
-            && button == MouseButton::Left
-            && let Some(drag) = self.graph_editor.as_mut().and_then(|ed| {
-                let drag = ed.viewport_gizmo_drag.take()?;
-                ed.offscreen_dirty = true;
-                Some(drag)
-            })
-        {
-            if let Some(domain) = drag.fluid_domain
-                && domain.changed()
-                && matches!(self.watched_graph_target.as_ref(), Some(manifold_core::GraphTarget::Generator(layer)) if layer == &domain.layer_id)
-                && self.graph_editor.as_ref().is_some_and(|ed| ed.viewport_selected_object == Some(domain.object_node_id))
-            {
-                self.send_content_cmd(ContentCommand::FluidDomainEdit(Box::new(domain)));
-            }
-            return;
-        }
-        if state == ElementState::Released
-            && let Some(ed) = self.graph_editor.as_mut()
-            && ed.viewport_drag.take().is_some()
-        {
-            ed.offscreen_dirty = true;
-            return;
-        }
-        if state == ElementState::Pressed
-            && matches!(button, MouseButton::Left | MouseButton::Middle)
-        {
-            let (cx, cy) = self
-                .graph_canvas
-                .as_ref()
-                .map(|c| c.cursor())
-                .unwrap_or((0.0, 0.0));
-            let in_viewport = self
-                .graph_editor
-                .as_ref()
-                .is_some_and(|ed| ed.viewport_session.is_some() && ed.viewport_rect.is_some_and(|r| r.contains(Vec2::new(cx, cy))));
-            if in_viewport {
-                // P6: Left tries a gizmo axis grab / object pick first — a
-                // hit consumes the press outright (no orbit-arm). Middle
-                // always pans (D7's binding), never gizmo.
-                if button == MouseButton::Left && self.editor_viewport_gizmo_press(cx, cy) {
-                    return;
-                }
-                if let Some(ed) = self.graph_editor.as_mut() {
-                    ed.viewport_drag = Some((button, cx, cy));
-                    ed.offscreen_dirty = true;
-                    return;
-                }
-            }
-        }
-        if let Some(canvas) = self.graph_canvas.as_mut() {
-            let window_size = self
-                .window_registry
-                .get(&window_id)
-                .map(|ws| {
-                    let s = ws.window.scale_factor();
-                    let sz = ws.window.inner_size();
-                    (sz.width as f32 / s as f32, sz.height as f32 / s as f32)
-                })
-                .unwrap_or((1.0, 1.0));
-            let (cx, cy) = canvas.cursor();
-            // Geometry from the same `Dock` the present pass reads, so column
-            // resizes move the canvas viewport + panel split in lockstep.
-            let area = manifold_ui::Rect::new(0.0, 0.0, window_size.0, window_size.1);
-            let (preview_width, card_x, viewport) = self
-                .graph_editor
-                .as_ref()
-                .map(|ed| {
-                    let r = ed.dock.rects(area);
-                    (
-                        r.left.width,
-                        r.right.x,
-                        // Canvas viewport matches the render-time slice: origin
-                        // at the left column, width is the center column. Passing
-                        // this (not the full window) is what makes `to_graph`
-                        // translate cursor coords correctly.
-                        crate::graph_canvas::Rect::new(
-                            r.canvas.x,
-                            r.canvas.y,
-                            r.canvas.width,
-                            r.canvas.height,
-                        ),
-                    )
-                })
-                .unwrap_or_else(|| {
-                    (
-                        0.0,
-                        window_size.0,
-                        crate::graph_canvas::Rect::new(0.0, 0.0, window_size.0, window_size.1),
-                    )
-                });
-            // The UITree spans the whole editor window — both the left preview
-            // sidebar and the right card lane live in it. Route any click in
-            // either margin to it; the canvas only sees clicks in the center.
-            let in_panel = cx < preview_width || cx >= card_x;
-            match (button, state) {
-                (MouseButton::Left, ElementState::Pressed) => {
-                    // The editor card's mapping drawer floats over
-                    // the canvas (anchored beside the right-lane
-                    // card), so it gets first crack. Consumed → done;
-                    // open-but-missed → close it and fall through.
-                    let mut consumed = false;
-                    if self.editor_mapping_popover.is_open() {
-                        if self.editor_mapping_popover.on_press(cx, cy) {
-                            consumed = true;
-                        } else {
-                            self.editor_mapping_popover.close();
-                        }
-                    }
-                    // The canvas popover (on-node rows) floats over
-                    // the canvas too — next crack. If neither popover
-                    // takes it, fall through to the panel/canvas path.
-                    if consumed {
-                        // handled by the editor mapping drawer
-                    } else if canvas.popover_open()
-                        && canvas.popover_on_left_press(cx, cy)
-                    {
-                        // consumed by the canvas popover
-                    } else if in_panel {
-                        // Right lane = the inspector column (left = preview
-                        // monitors): forward the press into its UITree. A card
-                        // click retargets the canvas via the
-                        // EffectCardClicked/GenCardClicked dispatch pass; sliders,
-                        // tabs, chrome and drags all resolve through the inspector.
-                        if let Some(ed) = self.graph_editor.as_mut() {
-                            ed.ui_root.input.process_pointer(
-                                &mut ed.ui_root.tree,
-                                Vec2::new(cx, cy),
-                                manifold_ui::input::PointerAction::Down,
-                                self.time_since_start,
-                            );
-                        }
-                    } else {
-                        canvas.on_left_button_down(
-                            viewport,
-                            cx,
-                            cy,
-                            self.time_since_start,
-                            self.modifiers.shift,
-                        );
-                    }
-                }
-                (MouseButton::Left, ElementState::Released) => {
-                    // Commit any in-progress drawer/popover drag.
-                    self.editor_mapping_popover.on_release();
-                    canvas.popover_on_left_release();
-                    let ui_pointer_owned = self
-                        .graph_editor
-                        .as_ref()
-                        .is_some_and(|ed| ed.ui_root.input.pressed_widget().is_some());
-                    if editor_ui_pointer_owned(in_panel, ui_pointer_owned)
-                        && let Some(ed) = self.graph_editor.as_mut()
-                    {
-                        ed.ui_root.input.process_pointer(
-                            &mut ed.ui_root.tree,
-                            Vec2::new(cx, cy),
-                            manifold_ui::input::PointerAction::Up,
-                            self.time_since_start,
-                        );
-                    }
-                    // The canvas owns its own captured drag state. Its release
-                    // API is idempotent, so always deliver the terminal event;
-                    // the drag may have crossed into the inspector column.
-                    canvas.on_left_button_up(viewport, cx, cy);
-                }
-                (MouseButton::Right, ElementState::Pressed) => {
-                    // Right-click an expanded param row that's
-                    // exposed as a card binding → open the
-                    // in-place mapping popover anchored on it.
-                    // The canvas resolves the row + anchor; the
-                    // app resolves the binding (needs the
-                    // project + snapshot the canvas can't see).
-                    if !in_panel
-                        && let Some((node_id, pi)) =
-                            canvas.on_right_button_down(viewport, cx, cy)
-                        && let Some(inner_param) = canvas.param_name_at(node_id, pi)
-                        && let Some((
-                            binding_id,
-                            label,
-                            min,
-                            max,
-                            invert,
-                            curve,
-                            scale,
-                            offset,
-                            range,
-                            is_angle,
-                            section,
-                        )) = crate::app_render::resolve_canvas_binding(
-                            self.content_state.active_graph_snapshot.as_deref(),
-                            self.watched_graph_target.as_ref(),
-                            &self.local_project,
-                            node_id,
-                            &inner_param,
-                        )
-                    {
-                        canvas.open_mapping_popover(
-                            crate::editing_host::to_ui_graph_target(self.watched_graph_target.as_ref().expect("resolved binding has a graph target")),
-                            viewport, node_id, pi, binding_id, label, min, max, invert,
-                            crate::ui_translate::macro_curve_to_ui(curve), scale, offset, range,
-                            is_angle, section,
-                        );
-                    }
-                }
-                (MouseButton::Middle, ElementState::Pressed) => {
-                    if !in_panel {
-                        canvas.on_pan_button_down(cx, cy);
-                    }
-                }
-                (MouseButton::Middle, ElementState::Released) => {
-                    // Pan capture survives crossing into a side pane.
-                    canvas.on_pan_button_up();
-                }
-                _ => {}
-            }
-            if let Some(ed) = self.graph_editor.as_mut() {
-                ed.offscreen_dirty = true;
-            }
+            crate::editor_input::arm_viewport_drag(ws, button, pos);
         }
     }
 
-    /// `MouseWheel` in the editor window: cursor-anchored canvas zoom. Returns
-    /// `true` when handled (a canvas is open); `false` falls through to the
-    /// primary path, matching the old `is_graph_editor && let Some(canvas)` gate.
-    pub(crate) fn editor_mouse_wheel(
-        &mut self,
-        window_id: WindowId,
-        delta: MouseScrollDelta,
-    ) -> bool {
-        // Right lane = the inspector column: a wheel over it scrolls the inspector
-        // (same `handle_scroll_at` convention as the main window), not the canvas.
-        // The editor rebuilds its tree every present, so updating the scroll offset
-        // here takes effect on the next build_inspector_in_rect. Cursor is tracked
-        // by the canvas; column geometry from the same `Dock` the present reads.
-        let (cx, cy) = self
-            .graph_canvas
-            .as_ref()
-            .map(|c| c.cursor())
-            .unwrap_or((0.0, 0.0));
-        // P5c 3D viewport dolly: scroll while hovering the viewport pane
-        // dollies the editor camera instead of zooming the canvas. Checked
-        // before the inspector-scroll/canvas-zoom branches below — the two
-        // rects (far-left preview column vs. right card lane vs. the canvas
-        // in between) never overlap, so precedence order is cosmetic, but
-        // this keeps the viewport's own `apply` call site together with its
-        // press/drag/release handling in `editor_mouse_input`/
-        // `editor_cursor_moved`.
-        if let Some(ed) = self.graph_editor.as_mut()
-            && let Some(rect) = ed.viewport_rect
-            && rect.contains(Vec2::new(cx, cy))
-            && let Some(session) = ed.viewport_session.as_mut()
-        {
-            // `LineDelta` is a physical mouse wheel notch → dolly. A trackpad
-            // reports `PixelDelta`: on macOS a pinch-to-zoom gesture arrives
-            // as a Ctrl-modified `PixelDelta` scroll (the OS-level pinch→
-            // scroll translation apps rely on absent a native magnify-gesture
-            // handler — this app has none), so Ctrl+PixelDelta is the pinch
-            // dolly and a bare PixelDelta is the two-finger trackpad pan.
-            let sens = crate::viewport_input::ViewportInputSensitivity::default();
-            let gesture = match delta {
-                MouseScrollDelta::LineDelta(_, y) => {
-                    Some(crate::viewport_input::classify_scroll(y * LINE_DELTA_PX))
-                }
-                MouseScrollDelta::PixelDelta(pos) if self.modifiers.ctrl => Some(
-                    crate::viewport_input::classify_trackpad_pinch_dolly(pos.y as f32),
-                ),
-                MouseScrollDelta::PixelDelta(pos) => Some(
-                    crate::viewport_input::classify_trackpad_pan(pos.x as f32, pos.y as f32),
-                ),
-            };
-            if let Some(gesture) = gesture {
-                crate::viewport_input::apply(session.camera_mut(), gesture, &sens);
-            }
-            ed.offscreen_dirty = true;
-            return true;
-        }
-        if self.editor_cursor_over_card_lane(window_id, cx) {
-            let (_dx, dy) = normalize_scroll_delta(delta);
-            if let Some(ed) = self.graph_editor.as_mut() {
-                ed.ui_root.inspector.handle_scroll_at(dy, cx);
-                ed.offscreen_dirty = true;
-            }
-            return true;
-        }
-        if let Some(canvas) = self.graph_canvas.as_mut() {
-            const LINE_DELTA_PX: f32 = 20.0;
-            let dy = match delta {
-                winit::event::MouseScrollDelta::LineDelta(_, y) => y * LINE_DELTA_PX,
-                winit::event::MouseScrollDelta::PixelDelta(pos) => pos.y as f32,
-            };
-            let (w, h) = editor_logical_size(&self.window_registry, window_id);
-            canvas.on_scroll(crate::graph_canvas::Rect::new(0.0, 0.0, w, h), dy);
-            if let Some(ed) = self.graph_editor.as_mut() {
-                ed.offscreen_dirty = true;
-            }
-            true
-        } else {
-            false
-        }
+    /// `MouseWheel` in the editor window. False when no canvas took it.
+    pub(crate) fn editor_mouse_wheel(&mut self, window_id: WindowId, delta: MouseScrollDelta) -> bool {
+        self.editor_pointer(window_id).is_some_and(|mut cx| crate::editor_input::wheel(&mut cx, delta))
     }
 
     /// Pinch in the editor window zooms the graph canvas around the cursor.
-    /// The 3D viewport pane and the right card lane ignore it.
     fn editor_pinch(&mut self, window_id: WindowId, magnification: f32) {
-        let Some((cx, cy)) = self.graph_canvas.as_ref().map(|c| c.cursor()) else {
-            return;
-        };
-        let over_viewport = self
-            .graph_editor
-            .as_ref()
-            .and_then(|ed| ed.viewport_rect)
-            .is_some_and(|rect| rect.contains(Vec2::new(cx, cy)));
-        if over_viewport || self.editor_cursor_over_card_lane(window_id, cx) {
-            return;
+        if let Some(mut cx) = self.editor_pointer(window_id) {
+            crate::editor_input::pinch(&mut cx, magnification);
         }
-        let (w, h) = editor_logical_size(&self.window_registry, window_id);
-        if let Some(canvas) = self.graph_canvas.as_mut() {
-            canvas.on_pinch(crate::graph_canvas::Rect::new(0.0, 0.0, w, h), magnification);
-        }
-        if let Some(ed) = self.graph_editor.as_mut() {
-            ed.offscreen_dirty = true;
-        }
-    }
-
-    /// Whether logical x `cx` sits in the editor's right card lane (the
-    /// inspector column), read from the same `Dock` the present lays out.
-    fn editor_cursor_over_card_lane(&self, window_id: WindowId, cx: f32) -> bool {
-        let (w, h) = editor_logical_size(&self.window_registry, window_id);
-        self.graph_editor.as_ref().is_some_and(|ed| {
-            cx >= ed.dock.rects(manifold_ui::Rect::new(0.0, 0.0, w, h)).right.x
-        })
     }
 
     /// All editor-window keyboard handling — popover/canvas text-field editing,
@@ -1899,59 +1171,14 @@ impl Application {
         is_graph_editor: bool,
         logical_key: Key,
     ) -> bool {
-        // Mapping drawer numeric entry: when a value field is active,
-        // keystrokes type into it (digits / `.` / `-` / Backspace),
-        // Enter commits, Esc cancels — ahead of any canvas shortcut
-        // (Backspace would otherwise delete the selected node). Plain
-        // chars only (no Cmd/Ctrl) so shortcuts still pass when not
-        // typing a value.
-        {
-            use winit::keyboard::{Key, NamedKey};
-            let typing = !self.modifiers.command && !self.modifiers.ctrl;
-            if self.editor_mapping_popover.is_editing() {
-                match &logical_key {
-                    Key::Named(NamedKey::Enter) => self.editor_mapping_popover.commit_edit(),
-                    Key::Named(NamedKey::Escape) => self.editor_mapping_popover.cancel_edit(),
-                    Key::Named(NamedKey::Backspace) => {
-                        self.editor_mapping_popover.on_backspace()
-                    }
-                    Key::Named(NamedKey::Space) if typing => {
-                        self.editor_mapping_popover.on_text_char(' ')
-                    }
-                    Key::Character(c) if typing => {
-                        for ch in c.chars() {
-                            self.editor_mapping_popover.on_text_char(ch);
-                        }
-                    }
-                    _ => {}
-                }
-                if let Some(ed) = self.graph_editor.as_mut() {
-                    ed.offscreen_dirty = true;
-                }
-                return true;
-            }
-            if let Some(canvas) = self.graph_canvas.as_mut()
-                && canvas.popover_is_editing()
-            {
-                match &logical_key {
-                    Key::Named(NamedKey::Enter) => canvas.popover_commit_edit(),
-                    Key::Named(NamedKey::Escape) => canvas.popover_cancel_edit(),
-                    Key::Named(NamedKey::Backspace) => canvas.popover_on_backspace(),
-                    Key::Named(NamedKey::Space) if typing => {
-                        canvas.popover_on_text_char(' ')
-                    }
-                    Key::Character(c) if typing => {
-                        for ch in c.chars() {
-                            canvas.popover_on_text_char(ch);
-                        }
-                    }
-                    _ => {}
-                }
-                if let Some(ed) = self.graph_editor.as_mut() {
-                    ed.offscreen_dirty = true;
-                }
-                return true;
-            }
+        if crate::editor_input::popover_key(
+            &mut self.editor_mapping_popover,
+            self.graph_canvas.as_mut(),
+            self.graph_editor.as_mut(),
+            crate::text_session::TextKey::from_winit(&logical_key),
+            self.modifiers,
+        ) {
+            return true;
         }
         if is_graph_editor && matches!(logical_key, Key::Named(NamedKey::Escape)) {
             let capture_cancelled = self
@@ -2771,12 +1998,5 @@ mod tests {
             normalize_scroll_delta(MouseScrollDelta::PixelDelta(PhysicalPosition::new(7.5, -4.25)));
         assert_eq!(dx, 7.5);
         assert_eq!(dy, -4.25);
-    }
-
-    #[test]
-    fn editor_ui_capture_survives_crossing_out_of_panel() {
-        assert!(editor_ui_pointer_owned(false, true));
-        assert!(editor_ui_pointer_owned(true, false));
-        assert!(!editor_ui_pointer_owned(false, false));
     }
 }

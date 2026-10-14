@@ -209,19 +209,19 @@
       "idle_2s": {
         "ChromeLayout": 360,
         "EditorTreeBuild": 120,
-        "FrameAlloc": 80048
+        "FrameAlloc": 98288
       }
     },
     "work-editor-open": {
       "after_open_half_second": {
         "ChromeLayout": 90,
         "EditorTreeBuild": 30,
-        "FrameAlloc": 20019
+        "FrameAlloc": 24579
       },
       "open_click": {
-        "ChromeLayout": 3,
-        "EditorTreeBuild": 1,
-        "FrameAlloc": 1461,
+        "ChromeLayout": 6,
+        "EditorTreeBuild": 2,
+        "FrameAlloc": 2979,
         "InspectorSync": 1,
         "ProjectSync": 1,
         "TextMeasureMiss": 7
@@ -341,6 +341,19 @@
         "ValuePush": 2
       }
     },
+    "work-mapping-drawer": {
+      "open_drawer": {
+        "ChromeLayout": 3,
+        "EditorTreeBuild": 1,
+        "FrameAlloc": 993
+      },
+      "type_range_max": {
+        "ChromeLayout": 12,
+        "EditorTreeBuild": 4,
+        "FrameAlloc": 4306,
+        "ValuePush": 2
+      }
+    },
     "work-marquee": {
       "marquee_1s": {
         "ChromeLayout": 189,
@@ -365,6 +378,16 @@
         "FullBuild": 4,
         "SlotInvalidate": 32,
         "ValuePush": 4
+      }
+    },
+    "work-node-param-drag": {
+      "card_lane_drag": {
+        "ChromeLayout": 33,
+        "EditorTreeBuild": 11,
+        "FrameAlloc": 13216,
+        "FullBuild": 3,
+        "SlotInvalidate": 24,
+        "ValuePush": 11
       }
     },
     "work-paused-cursor": {

@@ -42,7 +42,14 @@
 //! View > Perform enters perform mode through `perform_mode::frame::enter`;
 //! every later frame is a perform frame through the same `perform_mode::frame`
 //! functions `tick_perform_mode` calls, drawn into the runner's offscreen, and
-//! `AssertFresh` compares what the perform screen shows.
+//! `AssertFresh` compares what the perform screen shows. After a `Focus` step
+//! for the graph editor, pointer steps go into the editor window through
+//! `editor_input.rs`, the seam `window_input`'s editor handlers call, and its
+//! card lane, canvas edits and mapping drawer drain and dispatch through the
+//! same seam `app_render.rs` calls. The editor's canvas draws the watched
+//! graph: the runner absorbs the watch commands the App sends and publishes
+//! the snapshot into its content state through `graph_snapshot.rs`, as the
+//! content thread does.
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -523,6 +530,20 @@ struct Runner {
     perform: crate::perform_mode::PerformModeState,
     /// The inline text session, as the App holds it (`text_session.rs`).
     text_input: crate::text_input::TextInputState,
+    /// Where pointer and key steps go (`AutomationAction::Focus`).
+    focus: manifold_ui::automation::FlowWindow,
+    /// The graph the editor shows and the catalog default its edits seed
+    /// from, as the App's `watched_graph_target` and `watched_catalog_default`.
+    watched: Option<manifold_core::GraphTarget>,
+    catalog_default: Option<manifold_core::effect_graph_def::EffectGraphDef>,
+    /// The App's `editor_graph`: the reset pill's input cache.
+    editor_graph: crate::editor_graph_cache::EditorGraphCache,
+    /// The card lane's mapping drawer, as the App's `editor_mapping_popover`.
+    editor_mapping: crate::mapping_popover::MappingPopover,
+    /// What the content thread holds for the canvas: the watched target the
+    /// absorbed watch commands set, and its snapshot cache.
+    content_watched: Option<manifold_core::GraphTarget>,
+    graph_snapshot: Option<crate::graph_snapshot::CachedGraphSnapshot>,
 }
 
 /// The graph editor window as the App holds it (`graph_editor`,
@@ -535,12 +556,23 @@ struct RunnerEditor {
     panel: manifold_ui::panels::graph_editor::GraphEditorPanel,
     logical_w: u32,
     logical_h: u32,
+    /// The renderer snapshot's UI translation, as the App's `editor_ui_graph`.
+    ui_graph: crate::editor_bridge::EditorUiGraph,
+    /// The preview column's smart-preview toggle: its intent registry, the
+    /// button the last build drew and the value it holds.
+    intents: manifold_ui::intent::IntentRegistry<manifold_ui::GraphEditCommand>,
+    smart_preview_toggle: Option<manifold_ui::node::NodeId>,
+    node_preview_normalize: bool,
 }
 
 impl RunnerEditor {
-    /// The tree dump `Dump`, `AssertFresh` and a failure write for this window.
-    fn dump(&self) -> serde_json::Value {
-        super::dump::dump_tree_ex(&self.ws.ui_root.tree, &[])
+    /// The tree dump `Dump` and `AssertFresh` read for this window, with the surfaces a
+    /// pointer step resolves against (canvas, mapping drawer).
+    fn dump(&self, mapping: &crate::mapping_popover::MappingPopover) -> serde_json::Value {
+        let layout = crate::editor_frame::EditorLayout::compute(&self.ws.dock, self.logical_w, self.logical_h, None);
+        let canvas = manifold_ui::graph_canvas::GraphCanvasTargets { canvas: &self.canvas, viewport: layout.canvas_rect() };
+        let surfaces: Vec<&dyn HitTargets> = vec![&canvas, mapping];
+        super::dump::dump_tree_ex(&self.ws.ui_root.tree, &surfaces)
     }
 }
 
@@ -596,6 +628,13 @@ impl Runner {
             editor: None,
             perform: crate::perform_mode::PerformModeState::new(),
             text_input: crate::text_input::TextInputState::new(),
+            focus: Default::default(),
+            watched: None,
+            catalog_default: None,
+            editor_graph: Default::default(),
+            editor_mapping: crate::mapping_popover::MappingPopover::new(),
+            content_watched: None,
+            graph_snapshot: None,
         }
     }
 
@@ -622,8 +661,82 @@ impl Runner {
             panel: manifold_ui::panels::graph_editor::GraphEditorPanel::new(),
             logical_w,
             logical_h,
+            ui_graph: None,
+            intents: manifold_ui::intent::IntentRegistry::new(),
+            smart_preview_toggle: None,
+            node_preview_normalize: false,
         });
         true
+    }
+
+    /// The App's `watch_graph_target`: point the editor at `target` through
+    /// the shared watch.
+    fn watch(&mut self, data: &SceneData, target: manifold_core::GraphTarget) {
+        if crate::editor_bridge::watch_editor_graph(
+            &data.project,
+            &target,
+            &mut self.watched,
+            &mut self.catalog_default,
+            &mut self.editor_mapping,
+            self.editor.as_mut().map(|ed| &mut ed.canvas),
+            Some(&self.content_tx),
+        ) {
+            self.editor_graph.catalog_default_changed();
+        }
+    }
+
+    /// The watch each open-editor action makes in the App's action loop.
+    fn watch_for_open(&mut self, ui: &UIRoot, data: &mut SceneData, action: &manifold_ui::RootAction) {
+        use manifold_core::GraphTarget;
+        use manifold_ui::RootAction;
+        match action {
+            RootAction::PreviewSceneModifierObject(layer, modifier_id, _) => self.watch(data, GraphTarget::SceneModifier {
+                owner: Box::new(GraphTarget::Generator(layer.clone())),
+                modifier_id: modifier_id.clone(),
+            }),
+            RootAction::OpenGraphTarget(target) => self.watch(data, crate::editing_host::to_graph_target(target)),
+            RootAction::SceneSetupOpenGraphEditor(layer) => self.watch(data, GraphTarget::Generator(layer.clone())),
+            RootAction::OpenGeneratorGraphEditor => {
+                if let Some(layer) = self.active_layer.clone() {
+                    self.watch(data, GraphTarget::Generator(layer));
+                }
+            }
+            RootAction::OpenGraphEditor(ei) => {
+                let tab = ui.inspector.last_effect_tab();
+                match crate::editor_bridge::effect_card_id(tab, &mut data.project, self.active_layer.as_ref(), &data.selection, *ei) {
+                    Some(eid) => self.watch(data, GraphTarget::Effect(eid)),
+                    None => {
+                        self.watched = None;
+                        self.catalog_default = None;
+                        self.editor_graph.catalog_default_changed();
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// The App's `open_card_mapping`: resolve the drawer the card row asks
+    /// for, watch its graph, open it.
+    fn open_card_mapping(
+        &mut self,
+        data: &SceneData,
+        target: &manifold_ui::GraphParamTarget,
+        param_id: &str,
+        anchor_node_id: manifold_ui::node::NodeId,
+    ) {
+        let Some(ed) = self.editor.as_ref() else { return };
+        let clip = manifold_ui::graph_canvas::Rect::new(0.0, 0.0, ed.logical_w as f32, ed.logical_h as f32);
+        let Some(open) = crate::editor_bridge::resolve_card_mapping(
+            &ed.ws.ui_root, &data.project, &self.active_layer, &data.selection, self.watched.as_ref(),
+            target, param_id, anchor_node_id, clip,
+        ) else {
+            return;
+        };
+        if self.watched.as_ref() != Some(&open.owner) {
+            self.watch(data, open.owner.clone());
+        }
+        open.open(&mut self.editor_mapping);
     }
 
     /// The editor window's frame, after the main window's as in the App
@@ -632,9 +745,21 @@ impl Runner {
     /// node monitor shows no image and the monitors take the default aspect.
     fn editor_frame(&mut self, data: &SceneData) {
         let Some(ed) = self.editor.as_mut() else { return };
+        // The canvas takes the watched graph as the App's tick pushes it; no
+        // pipeline publishes an output aspect.
+        let graph = crate::editor_bridge::editor_ui_graph(&mut ed.ui_graph, &data.content, self.watched.as_ref(), &data.project);
+        if let Some(graph) = graph {
+            let has_mod = self.editor_graph.has_graph_mod(
+                &data.project,
+                self.watched.as_ref(),
+                self.catalog_default.as_ref(),
+                &self.edits.stamps.parts(),
+            );
+            crate::editor_frame::feed_canvas(&mut ed.canvas, &graph, None, DT * 1000.0, &data.content.live_node_params, has_mod);
+        }
         let layout = crate::editor_frame::EditorLayout::compute(&ed.ws.dock, ed.logical_w, ed.logical_h, None);
         let active = self.active_layer.as_ref().and_then(|id| data.project.timeline.find_layer_index_by_id(id));
-        crate::editor_frame::build_editor_tree(
+        ed.smart_preview_toggle = crate::editor_frame::build_editor_tree(
             &mut ed.ws.ui_root,
             &ed.panel,
             Some(&mut ed.canvas),
@@ -690,7 +815,14 @@ impl Runner {
         if self.text_input.active && matches!(action, AutomationAction::Key { .. } | AutomationAction::Text { .. }) {
             return self.type_into_session(ui, data, index, action_desc, action, out_dir, render);
         }
-        let outcome = match action {
+        // After `Focus` on the graph editor, pointer and key steps go into
+        // that window, as the OS routes input to the window under the mouse.
+        let editor_outcome = if self.focus == manifold_ui::automation::FlowWindow::GraphEditor {
+            self.editor_step(ui, data, index, &action_desc, action, out_dir, render)
+        } else {
+            None
+        };
+        let outcome = if let Some(outcome) = editor_outcome { outcome } else { match action {
             AutomationAction::Step { frames } => {
                 // Each stepped frame ticks the engine, then runs one live
                 // frame. Outside a work window tweens run on the wall clock
@@ -962,7 +1094,15 @@ impl Runner {
             }
             AutomationAction::AssertWork { window } => self.assert_work(ui, index, action_desc, window, out_dir),
             AutomationAction::AssertFresh => self.assert_fresh(ui, data, render, index, action_desc, out_dir),
-        };
+            AutomationAction::Focus { window } => {
+                if *window == manifold_ui::automation::FlowWindow::GraphEditor && self.editor.is_none() {
+                    self.fail(index, action_desc, ui, out_dir, "Focus GraphEditor needs the editor open first".into())
+                } else {
+                    self.focus = *window;
+                    StepResult { index, action: action_desc, status: "ok", detail: format!("input goes to {window:?}"), artifact: None }
+                }
+            }
+        } };
         // BUG-198: whatever this step just sent over `content_tx` (via
         // `AppEditingHost`/`ui_bridge::dispatch`) has already been applied
         // directly to `data.project` — record it into the harness's own
@@ -1035,6 +1175,20 @@ impl Runner {
             return;
         }
         crate::text_session::pump_main_window(&mut self.text_input, ui);
+        // The watched graph's snapshot, as the content thread publishes it in
+        // every state push (`graph_snapshot.rs`). Content-thread work, so it
+        // stays out of the UI's counts.
+        let before = manifold_core::work_count::thread_work_snapshot();
+        let (target, snapshot) = crate::graph_snapshot::active_graph(
+            &mut self.graph_snapshot,
+            Some(&data.project),
+            self.content_watched.as_ref(),
+            self.content_stamps.get(manifold_core::change::Part::EmbeddedPresets),
+        );
+        data.content.active_graph_target = target;
+        data.content.active_graph_snapshot = snapshot;
+        let content_work = manifold_core::work_count::thread_work_snapshot().since(&before);
+        self.work.excluded = self.work.excluded.plus(&content_work);
         // The snapshot echo of what the last frame sent, folded as the App
         // folds an accepted snapshot.
         self.edits.stamps.fold_snapshot(&self.content_stamps);
@@ -1198,37 +1352,13 @@ impl Runner {
         out_dir: &std::path::Path,
         render: &mut RenderState,
     ) -> StepResult {
-        use crate::text_session::{Arrow, KeyOutcome, TextKey};
-        let mut keys: Vec<(String, Option<Key>, manifold_ui::input::Modifiers)> = Vec::new();
-        match action {
-            AutomationAction::Text { text } => {
-                keys.extend(text.chars().map(|c| (c.to_string(), None, manifold_ui::input::Modifiers::NONE)));
-            }
-            AutomationAction::Key { key, modifiers } => {
-                // A letter key carries its character, as winit reports it.
-                let name = format!("{key:?}").to_lowercase();
-                keys.push((name, Some(*key), *modifiers));
-            }
-            _ => unreachable!("only Key and Text reach the session"),
-        }
+        use crate::text_session::KeyOutcome;
+        let keys = step_keys(action);
         let mut committed = None;
         for (chars, key, mods) in &keys {
             self.modifiers = *mods;
             ui.input.set_modifiers(*mods);
-            let text_key = match key {
-                None => TextKey::Chars(chars),
-                Some(Key::Escape) => TextKey::Escape,
-                Some(Key::Enter) => TextKey::Enter,
-                Some(Key::Backspace) => TextKey::Backspace,
-                Some(Key::Delete) => TextKey::Delete,
-                Some(Key::Left) => TextKey::Arrow(Arrow::Left),
-                Some(Key::Right) => TextKey::Arrow(Arrow::Right),
-                Some(Key::Up) => TextKey::Arrow(Arrow::Up),
-                Some(Key::Down) => TextKey::Arrow(Arrow::Down),
-                Some(Key::Space) => TextKey::Space,
-                Some(_) if chars.len() == 1 => TextKey::Chars(chars),
-                Some(_) => TextKey::Other,
-            };
+            let text_key = text_key(chars, *key);
             match crate::text_session::main_window_key(&mut self.text_input, ui, text_key, *mods, true) {
                 KeyOutcome::NotTyping => {
                     return self.fail(index, action_desc, ui, out_dir, "the text session ended before every key was typed".into());
@@ -1278,6 +1408,340 @@ impl Runner {
         data.active = self.active_layer.as_ref().and_then(|lid| data.project.timeline.find_layer_index_by_id(lid));
         println!("ui-snap --script: commit {field:?} {text:?} -> {}", if handled { "seam" } else { "not reached" });
         handled
+    }
+
+    /// One step in the graph editor window. `None` hands the step to the
+    /// main window's handling: undo and redo, which reach the content thread
+    /// from either window, and every non-input step.
+    #[allow(clippy::too_many_arguments)]
+    fn editor_step(
+        &mut self,
+        ui: &mut UIRoot,
+        data: &mut SceneData,
+        index: usize,
+        action_desc: &str,
+        action: &AutomationAction,
+        out_dir: &std::path::Path,
+        render: &mut RenderState,
+    ) -> Option<StepResult> {
+        let desc = action_desc.to_string();
+        match action {
+            AutomationAction::Pointer { target, gesture } => {
+                Some(self.editor_pointer(ui, data, index, desc, target, gesture, out_dir, render))
+            }
+            AutomationAction::Key { .. } | AutomationAction::Text { .. } if self.text_input.active => None,
+            AutomationAction::Key { .. } | AutomationAction::Text { .. } => {
+                let typing = self.editor_mapping.is_editing()
+                    || self.editor.as_ref().is_some_and(|ed| ed.canvas.popover_is_editing());
+                if !typing {
+                    if let AutomationAction::Key { key: Key::Z, modifiers } = action
+                        && (modifiers.is_command_only() || modifiers.is_command_shift())
+                    {
+                        return None;
+                    }
+                    return Some(self.fail(index, desc, ui, out_dir,
+                        "this editor-window key stays on Application (editor_keyboard_input); only a mapping field being typed into and undo are reached".into()));
+                }
+                for (chars, key, modifiers) in step_keys(action) {
+                    self.modifiers = modifiers;
+                    let (canvas, ws) = match self.editor.as_mut() {
+                        Some(ed) => (Some(&mut ed.canvas), Some(&mut ed.ws)),
+                        None => (None, None),
+                    };
+                    if !crate::editor_input::popover_key(&mut self.editor_mapping, canvas, ws, text_key(&chars, key), modifiers) {
+                        return Some(self.fail(index, desc, ui, out_dir, "the mapping field closed before every key was typed".into()));
+                    }
+                }
+                if let Err(e) = self.editor_drain_and_dispatch(ui, data) {
+                    return Some(self.fail(index, desc, ui, out_dir, e));
+                }
+                self.live_frame(ui, data, render, false, true);
+                let detail = if self.editor_mapping.is_editing() { "typed into the mapping field" } else { "mapping field closed" };
+                Some(StepResult { index, action: desc, status: "ok", detail: detail.into(), artifact: None })
+            }
+            AutomationAction::ScrollTo { .. } | AutomationAction::TrackWheel { .. } | AutomationAction::ResizeDrag { .. } => {
+                Some(self.fail(index, desc, ui, out_dir, "a main-window input: Focus Main first".into()))
+            }
+            _ => None,
+        }
+    }
+
+    /// The editor-input seam's borrow of this runner for one editor event, as
+    /// the App's `editor_pointer` borrows the App.
+    fn editor_cx<'s>(&'s mut self, data: &'s mut SceneData) -> Option<crate::editor_input::EditorPointer<'s>> {
+        let ed = self.editor.as_mut()?;
+        Some(crate::editor_input::EditorPointer {
+            area: manifold_ui::Rect::new(0.0, 0.0, ed.logical_w as f32, ed.logical_h as f32),
+            ws: &mut ed.ws,
+            canvas: Some(&mut ed.canvas),
+            mapping: &mut self.editor_mapping,
+            modifiers: self.modifiers,
+            time: self.clock,
+            project: &data.project,
+            content_tx: Some(&self.content_tx),
+            is_playing: data.content.is_playing,
+            watched: self.watched.as_ref(),
+            graph: data.content.active_graph_snapshot.as_deref(),
+            active_layer: &mut self.active_layer,
+            selection: &mut data.selection,
+        })
+    }
+
+    /// A cursor move into the editor window: an armed text drag takes it,
+    /// else the seam (`window_input`'s cursor-moved order).
+    fn editor_move(&mut self, ui: &UIRoot, data: &mut SceneData, pos: Vec2) {
+        self.last_gesture_points.push(pos);
+        if crate::text_session::pointer_move(&mut self.text_input, Some(&ui.tree), pos) {
+            return;
+        }
+        if let Some(mut cx) = self.editor_cx(data) {
+            // No viewport session opens here, so no gizmo drag arms.
+            let _ = crate::editor_input::cursor_moved(&mut cx, pos);
+        }
+    }
+
+    /// A button press at the cursor: the text gate first for the left
+    /// button, then the seam.
+    fn editor_press(&mut self, ui: &mut UIRoot, data: &mut SceneData, button: winit::event::MouseButton) -> Result<(), String> {
+        let pos = self.last_gesture_points.last().copied().unwrap_or(Vec2::ZERO);
+        if button == winit::event::MouseButton::Left && self.text_press(ui, data, pos, self.modifiers.shift) {
+            return Ok(());
+        }
+        let Some(mut cx) = self.editor_cx(data) else { return Ok(()) };
+        let out = crate::editor_input::button(&mut cx, button, winit::event::ElementState::Pressed);
+        if out.selection_changed {
+            self.flags.rebuild = true;
+        }
+        if out.viewport_press.is_some() {
+            return Err("a 3D viewport press needs the App's scene projection; the runner's editor has no viewport".into());
+        }
+        Ok(())
+    }
+
+    fn editor_release(&mut self, data: &mut SceneData, button: winit::event::MouseButton) {
+        if button == winit::event::MouseButton::Left {
+            crate::text_session::pointer_up(&mut self.text_input);
+        }
+        if let Some(mut cx) = self.editor_cx(data) {
+            crate::editor_input::button(&mut cx, button, winit::event::ElementState::Released);
+        }
+    }
+
+    /// The editor window's per-frame drain, in the App's order: the
+    /// popovers' mapping actions join the main queue, the card lane
+    /// dispatches against the editor's tree, then the canvas and sidebar
+    /// edits. A graph edit only `app_render`'s loop dispatches fails loudly.
+    fn editor_drain_and_dispatch(&mut self, ui: &mut UIRoot, data: &mut SceneData) -> Result<usize, String> {
+        use manifold_ui::GraphEditCommand;
+        let Some(ed) = self.editor.as_mut() else { return Ok(0) };
+        let drain = crate::editor_input::drain(
+            Some(&mut ed.ws),
+            Some(&mut ed.canvas),
+            &mut self.editor_mapping,
+            &mut self.text_input,
+            crate::editor_input::SmartPreviewToggle {
+                intents: &mut ed.intents,
+                id: ed.smart_preview_toggle,
+                normalize: ed.node_preview_normalize,
+            },
+        );
+        let handled = drain.actions.len() + drain.card_actions.len() + drain.graph_edits.len();
+        self.apply_panel_actions(ui, data, &drain.actions);
+        if !drain.card_actions.is_empty() {
+            let mappings = match self.editor.as_mut() {
+                Some(ed) => crate::editor_input::card_lane_entries(
+                    &mut self.text_input, &mut ed.ws, &data.project, &data.selection, &self.active_layer, &drain.card_actions,
+                ),
+                None => Vec::new(),
+            };
+            for (target, param_id, anchor_node_id) in mappings {
+                self.open_card_mapping(data, target, param_id, anchor_node_id);
+            }
+            let Some(ed) = self.editor.as_mut() else { return Ok(handled) };
+            let outcome = crate::editor_input::dispatch_card_lane(
+                crate::editor_input::CardLane {
+                    ws: &mut ed.ws,
+                    project: &mut data.project,
+                    edits: &mut self.edits,
+                    content_tx: &self.content_tx,
+                    content_state: &self.content_state,
+                    selection: &mut data.selection,
+                    active_layer: &mut self.active_layer,
+                    user_prefs: &mut self.user_prefs,
+                    scrub: &mut self.scrub,
+                    dialogs: Default::default(),
+                },
+                &drain.card_actions,
+            );
+            println!("ui-snap --script: editor card lane dispatched {:?}", drain.card_actions);
+            data.active = self.active_layer.as_ref().and_then(|lid| data.project.timeline.find_layer_index_by_id(lid));
+            if outcome.save_preset.is_some() {
+                return Err("Save preset opens its name prompt on Application, not reached headless".into());
+            }
+            let tab = ui.inspector.last_effect_tab();
+            if let Some(ei) = outcome.retarget_effect {
+                if let Some(eid) = crate::editor_bridge::effect_card_id(tab, &mut data.project, self.active_layer.as_ref(), &data.selection, ei) {
+                    self.watch(data, manifold_core::GraphTarget::Effect(eid));
+                }
+            } else if outcome.retarget_generator
+                && let Some(layer) = self.active_layer.clone()
+            {
+                self.watch(data, manifold_core::GraphTarget::Generator(layer));
+            }
+        }
+        for edit in drain.graph_edits {
+            match edit {
+                // Preview-only display preference: the UI mirror flips; the
+                // content side's node-preview blit has no headless consumer.
+                GraphEditCommand::SetNodePreviewNormalize(on) => {
+                    if let Some(ed) = self.editor.as_mut() {
+                        ed.node_preview_normalize = on;
+                    }
+                }
+                other => {
+                    return Err(format!("{other:?} dispatches in app_render's graph-edit loop on Application, not reached headless"));
+                }
+            }
+        }
+        Ok(handled)
+    }
+
+    /// A pointer step into the editor window. Targets resolve against the
+    /// editor's tree, its canvas and its mapping drawer. Every gesture starts
+    /// with a move, since winit gives button and wheel events no position and
+    /// the editor reads the cursor its canvas tracked.
+    #[allow(clippy::too_many_arguments)]
+    fn editor_pointer(
+        &mut self,
+        ui: &mut UIRoot,
+        data: &mut SceneData,
+        index: usize,
+        action_desc: String,
+        target: &AutomationTarget,
+        gesture: &Gesture,
+        out_dir: &std::path::Path,
+        render: &mut RenderState,
+    ) -> StepResult {
+        use winit::event::MouseButton;
+        let center_of = |r: Rect| Vec2::new(r.x + r.width * 0.5, r.y + r.height * 0.5);
+        let center = match self.resolve_editor(target) {
+            Ok(r) => center_of(r),
+            Err(e) => return self.fail(index, action_desc, ui, out_dir, e),
+        };
+        self.last_gesture_points.clear();
+        let mut pressed = Ok(());
+        match gesture {
+            Gesture::Press { modifiers } => {
+                self.modifiers = *modifiers;
+                self.editor_move(ui, data, center);
+                pressed = self.editor_press(ui, data, MouseButton::Left);
+            }
+            Gesture::Release => {
+                self.editor_move(ui, data, center);
+                self.editor_release(data, MouseButton::Left);
+            }
+            Gesture::Click { modifiers } => {
+                self.modifiers = *modifiers;
+                self.editor_move(ui, data, center);
+                pressed = self.editor_press(ui, data, MouseButton::Left);
+                self.editor_release(data, MouseButton::Left);
+            }
+            Gesture::DoubleClick => {
+                self.editor_move(ui, data, center);
+                for _ in 0..2 {
+                    pressed = pressed.and(self.editor_press(ui, data, MouseButton::Left));
+                    self.editor_release(data, MouseButton::Left);
+                }
+            }
+            Gesture::RightClick => {
+                self.editor_move(ui, data, center);
+                pressed = self.editor_press(ui, data, MouseButton::Right);
+                self.editor_release(data, MouseButton::Right);
+            }
+            Gesture::Hover => self.editor_move(ui, data, center),
+            Gesture::Scroll { delta } => {
+                self.editor_move(ui, data, center);
+                let delta = winit::event::MouseScrollDelta::PixelDelta(winit::dpi::PhysicalPosition::new(
+                    f64::from(delta.x),
+                    f64::from(delta.y),
+                ));
+                if let Some(mut cx) = self.editor_cx(data) {
+                    crate::editor_input::wheel(&mut cx, delta);
+                }
+            }
+            Gesture::Drag { to, steps } => {
+                let to_center = match self.resolve_editor(to) {
+                    Ok(r) => center_of(r),
+                    Err(e) => return self.fail(index, action_desc, ui, out_dir, e),
+                };
+                self.editor_move(ui, data, center);
+                pressed = self.editor_press(ui, data, MouseButton::Left);
+                for pt in automation::interpolate_drag(center, to_center, *steps) {
+                    self.editor_move(ui, data, pt);
+                }
+                self.editor_move(ui, data, to_center);
+                self.editor_release(data, MouseButton::Left);
+            }
+            Gesture::DragFrames { to, steps } | Gesture::Sweep { to, steps } => {
+                let to_center = match self.resolve_editor(to) {
+                    Ok(r) => center_of(r),
+                    Err(e) => return self.fail(index, action_desc, ui, out_dir, e),
+                };
+                let held = matches!(gesture, Gesture::DragFrames { .. });
+                self.editor_move(ui, data, center);
+                if held {
+                    pressed = self.editor_press(ui, data, MouseButton::Left);
+                }
+                let mut frame = |runner: &mut Self, ui: &mut UIRoot, data: &mut SceneData| -> Result<(), String> {
+                    runner.editor_drain_and_dispatch(ui, data)?;
+                    runner.live_frame(ui, data, render, false, true);
+                    Ok(())
+                };
+                let mut moved = frame(self, ui, data);
+                for pt in automation::interpolate_drag(center, to_center, *steps) {
+                    self.clock += DT;
+                    self.editor_move(ui, data, pt);
+                    moved = moved.and(frame(self, ui, data));
+                }
+                self.clock += DT;
+                self.editor_move(ui, data, to_center);
+                if held {
+                    self.editor_release(data, MouseButton::Left);
+                }
+                if let Err(e) = moved {
+                    return self.fail(index, action_desc, ui, out_dir, e);
+                }
+            }
+        }
+        if let Err(e) = pressed.and(self.editor_drain_and_dispatch(ui, data).map(|_| ())) {
+            return self.fail(index, action_desc, ui, out_dir, e);
+        }
+        self.live_frame(ui, data, render, false, true);
+        StepResult {
+            index,
+            action: action_desc,
+            status: "ok",
+            detail: format!("editor window: acted at ({:.1},{:.1})", center.x, center.y),
+            artifact: None,
+        }
+    }
+
+    /// The editor window's hit-test surfaces: its canvas at this frame's
+    /// viewport and its mapping drawer.
+    fn editor_matches(&self, target: &AutomationTarget) -> Option<(Vec<MatchInfo>, String)> {
+        let ed = self.editor.as_ref()?;
+        let layout = crate::editor_frame::EditorLayout::compute(&ed.ws.dock, ed.logical_w, ed.logical_h, None);
+        let canvas = manifold_ui::graph_canvas::GraphCanvasTargets { canvas: &ed.canvas, viewport: layout.canvas_rect() };
+        let surfaces: Vec<&dyn HitTargets> = vec![&canvas, &self.editor_mapping];
+        Some(automation::resolve_all(&ed.ws.ui_root.tree, &surfaces, target))
+    }
+
+    fn resolve_editor(&self, target: &AutomationTarget) -> Result<Rect, String> {
+        let ed = self.editor.as_ref().ok_or("the graph editor is not open")?;
+        let layout = crate::editor_frame::EditorLayout::compute(&ed.ws.dock, ed.logical_w, ed.logical_h, None);
+        let canvas = manifold_ui::graph_canvas::GraphCanvasTargets { canvas: &ed.canvas, viewport: layout.canvas_rect() };
+        let surfaces: Vec<&dyn HitTargets> = vec![&canvas, &self.editor_mapping];
+        automation::resolve(&ed.ws.ui_root.tree, &surfaces, target).map(|r| r.rect).map_err(|e| e.to_string())
     }
 
     /// The App's text gate ahead of a left press (`window_input`'s
@@ -1375,7 +1839,7 @@ impl Runner {
         }
         let tree_before = surfaces_dump(self, ui);
         let immediate_before = self.immediate_inputs(ui, data);
-        let editor_before = self.editor.as_ref().map(RunnerEditor::dump);
+        let editor_before = self.editor.as_ref().map(|ed| ed.dump(&self.editor_mapping));
 
         self.fresh_reference = true;
         self.flags.rebuild = true;
@@ -1383,7 +1847,7 @@ impl Runner {
 
         let tree_after = surfaces_dump(self, ui);
         let immediate_after = self.immediate_inputs(ui, data);
-        let editor_after = self.editor.as_ref().map(RunnerEditor::dump);
+        let editor_after = self.editor.as_ref().map(|ed| ed.dump(&self.editor_mapping));
 
         let (mut tree_lines, mut tree_differs) = super::readback::diff_trees(&tree_before, &tree_after);
         // The editor window's tree must equal its own full build too.
@@ -1587,6 +2051,13 @@ impl Runner {
     fn record_executed_commands(&mut self, data: &mut SceneData) -> bool {
         let mut changed = false;
         while let Ok(cmd) = self._content_rx.try_recv() {
+            // The content thread watches what the editor asks for; its next
+            // state push carries the snapshot.
+            if let Some(target) = crate::graph_snapshot::watch_command_target(&cmd) {
+                self.content_watched = target;
+                changed = true;
+                continue;
+            }
             let cmd = match cmd {
                 ContentCommand::FireParameter { target, param_id } => {
                     ContentCommand::ExecuteOnContent(Box::new(
@@ -1734,14 +2205,19 @@ impl Runner {
         if self.perform.active {
             surfaces.push(&perform_targets);
         }
-        let (matches, query) = automation::resolve_all(&ui.tree, &surfaces, target);
-        // A selector nothing in the main window matches is looked up in the
-        // open editor window, so a flow can assert on what that window shows.
-        match self.editor.as_ref() {
-            Some(ed) if matches.is_empty() => {
-                let (editor_matches, _) = automation::resolve_all(&ed.ws.ui_root.tree, &[], target);
-                (editor_matches, query)
-            }
+        // The focused window answers first; a selector nothing there matches
+        // is looked up in the other open window, so a flow can assert on
+        // what either window shows.
+        let main = || automation::resolve_all(&ui.tree, &surfaces, target);
+        if self.focus == manifold_ui::automation::FlowWindow::GraphEditor
+            && let Some((matches, query)) = self.editor_matches(target)
+            && !matches.is_empty()
+        {
+            return (matches, query);
+        }
+        let (matches, query) = main();
+        match self.editor_matches(target) {
+            Some((editor_matches, _)) if matches.is_empty() => (editor_matches, query),
             _ => (matches, query),
         }
     }
@@ -2190,17 +2666,16 @@ impl Runner {
     fn apply_panel_actions(&mut self, ui: &mut UIRoot, data: &mut SceneData, actions: &[PanelAction]) {
         for action in actions {
             // The live action loop answers these by watching the graph and
-            // opening the editor window (`open_graph_editor`). No content
-            // thread runs here, so nothing snapshots the watched graph and the
-            // canvas stays empty; the window and its card lane are real.
+            // opening the editor window (`open_graph_editor`).
             if let PanelAction::Root(
-                manifold_ui::RootAction::OpenGraphEditor(_)
+                root @ (manifold_ui::RootAction::OpenGraphEditor(_)
                 | manifold_ui::RootAction::OpenGeneratorGraphEditor
                 | manifold_ui::RootAction::OpenGraphTarget(_)
                 | manifold_ui::RootAction::SceneSetupOpenGraphEditor(_)
-                | manifold_ui::RootAction::PreviewSceneModifierObject(..),
+                | manifold_ui::RootAction::PreviewSceneModifierObject(..)),
             ) = action
             {
+                self.watch_for_open(ui, data, root);
                 let opened = self.open_editor(data);
                 println!("ui-snap --script: {action:?} -> graph editor {}", if opened { "opened" } else { "already open" });
                 continue;
@@ -2227,6 +2702,49 @@ impl Runner {
             {
                 println!("ui-snap --script: {action:?} -> text session {:?}", self.text_input.field);
                 continue;
+            }
+            // Mapping-drawer actions carry their owner; the App's action loop
+            // hands them to the shared mapping handler before the bridge.
+            if let PanelAction::Root(root) = action {
+                let outcome = crate::editor_bridge::MappingHost {
+                    project: &mut data.project,
+                    edits: &mut self.edits,
+                    content_tx: Some(&self.content_tx),
+                    scrub: &mut self.scrub,
+                }
+                .dispatch(root);
+                match outcome {
+                    crate::editor_bridge::MappingDispatch::NotMapping => {}
+                    crate::editor_bridge::MappingDispatch::Done => {
+                        println!("ui-snap --script: dispatched mapping {action:?}");
+                        continue;
+                    }
+                    crate::editor_bridge::MappingDispatch::GotoNode(target, binding_id) => {
+                        if let Some(ed) = self.editor.as_mut() {
+                            let graph = crate::editor_bridge::editor_ui_graph(&mut ed.ui_graph, &data.content, self.watched.as_ref(), &data.project);
+                            crate::editor_bridge::goto_mapped_node(self.watched.as_ref(), graph.as_ref(), Some(&mut ed.canvas), &target, &binding_id);
+                        }
+                        continue;
+                    }
+                }
+            }
+            // A main-window card click retargets an open editor to that card's
+            // graph, then still dispatches for the card's own selection.
+            if self.editor.is_some() {
+                match action {
+                    PanelAction::Params(manifold_ui::ParamsAction::EffectCardClicked(ei)) => {
+                        let tab = ui.inspector.last_effect_tab();
+                        if let Some(eid) = crate::editor_bridge::effect_card_id(tab, &mut data.project, self.active_layer.as_ref(), &data.selection, *ei) {
+                            self.watch(data, manifold_core::GraphTarget::Effect(eid));
+                        }
+                    }
+                    PanelAction::Params(manifold_ui::ParamsAction::GenCardClicked) => {
+                        if let Some(layer) = self.active_layer.clone() {
+                            self.watch(data, manifold_core::GraphTarget::Generator(layer));
+                        }
+                    }
+                    _ => {}
+                }
             }
             // The live app resolves this in `app_render.rs` from its graph
             // editor's viewport; here the runner's viewport stands in.
@@ -2530,7 +3048,7 @@ impl Runner {
         if let Some(ed) = self.editor.as_ref() {
             let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("tree.json");
             let editor_path = path.with_file_name(name.replacen("tree.json", "editor.tree.json", 1));
-            std::fs::write(&editor_path, serde_json::to_string_pretty(&ed.dump()).expect("serialize dump"))
+            std::fs::write(&editor_path, serde_json::to_string_pretty(&ed.dump(&self.editor_mapping)).expect("serialize dump"))
                 .expect("write editor dump json");
         }
     }
@@ -2625,6 +3143,38 @@ impl Runner {
 
 /// The real `ValueRef` a flow's scrub address names, and whether its Moves
 /// carry a `(min, max)` range rather than a scalar.
+/// The keys a `Key` or `Text` step types: each character of `Text` as its own
+/// key with no modifiers held, as the live door sends it; a letter key
+/// carries its character, as winit reports it.
+fn step_keys(action: &AutomationAction) -> Vec<(String, Option<Key>, manifold_ui::input::Modifiers)> {
+    match action {
+        AutomationAction::Text { text } => {
+            text.chars().map(|c| (c.to_string(), None, manifold_ui::input::Modifiers::NONE)).collect()
+        }
+        AutomationAction::Key { key, modifiers } => vec![(format!("{key:?}").to_lowercase(), Some(*key), *modifiers)],
+        _ => unreachable!("only Key and Text type"),
+    }
+}
+
+/// One step key as a text field reads it.
+fn text_key(chars: &str, key: Option<Key>) -> crate::text_session::TextKey<'_> {
+    use crate::text_session::{Arrow, TextKey};
+    match key {
+        None => TextKey::Chars(chars),
+        Some(Key::Escape) => TextKey::Escape,
+        Some(Key::Enter) => TextKey::Enter,
+        Some(Key::Backspace) => TextKey::Backspace,
+        Some(Key::Delete) => TextKey::Delete,
+        Some(Key::Left) => TextKey::Arrow(Arrow::Left),
+        Some(Key::Right) => TextKey::Arrow(Arrow::Right),
+        Some(Key::Up) => TextKey::Arrow(Arrow::Up),
+        Some(Key::Down) => TextKey::Arrow(Arrow::Down),
+        Some(Key::Space) => TextKey::Space,
+        Some(_) if chars.len() == 1 => TextKey::Chars(chars),
+        Some(_) => TextKey::Other,
+    }
+}
+
 fn flow_value_ref(
     data: &SceneData,
     param: &manifold_ui::automation::FlowScrubTarget,
