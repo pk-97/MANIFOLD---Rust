@@ -316,8 +316,8 @@ fn layer_fp(fp: &mut Fp, layer: &Layer) {
     fp.put(Part::Layers, &(video_folder_path, relative_video_folder_path));
     fp.put(Part::Layers, &(midi_note, midi_channel, midi_device, midi_trigger_mode, duration_mode, source_clip_ids));
     for trigger in clip_triggers {
-        let crate::audio_trigger::LayerClipTrigger { enabled, source, shape, .. } = trigger;
-        fp.put(Part::Effects, &(enabled, source));
+        let crate::audio_trigger::LayerClipTrigger { enabled, source, shape, one_shot_beats } = trigger;
+        fp.put(Part::Effects, &(enabled, source, one_shot_beats));
         fp.put(Part::Shapes, shape);
     }
     fp.put(Part::Layers, &(legacy_generator_type, legacy_gen_param_values, legacy_gen_drivers, legacy_gen_param_version));
@@ -358,15 +358,15 @@ fn instance_fp(fp: &mut Fp, inst: &PresetInstance) {
         fp.put(Part::Shapes, d);
     }
     for e in inst.envelopes.iter().flatten() {
-        fp.put(Part::Effects, &e.param_id);
+        fp.put(Part::Effects, &(&e.param_id, action_rows(e.action)));
         fp.put(Part::Shapes, e);
     }
     for m in inst.ableton_mappings.iter().flatten() {
         mapping_fp(fp, m);
     }
     for m in inst.audio_mods.iter().flatten() {
-        fp.put(Part::Effects, &(&m.param_id, m.enabled, &m.source));
-        fp.put(Part::Shapes, &m.shape);
+        fp.put(Part::Effects, &(&m.param_id, m.enabled, &m.source, m.trigger_mode, action_rows(m.action)));
+        fp.put(Part::Shapes, &(&m.shape, m.action));
         fp.put(Part::Values, &m.smoothed);
     }
     fp.put(Part::Automation, &inst.automation_lanes);
@@ -406,6 +406,17 @@ fn instance_fp(fp: &mut Fp, inst: &PresetInstance) {
     fp.put(Part::Effects, &(inst.legacy_param0, inst.legacy_param1, inst.legacy_param2, inst.legacy_param3, inst.legacy_param_version));
     fp.put(Part::Effects, &inst.relight);
     fp.put(Part::Shapes, &inst.relight_params);
+}
+
+/// The part of a fire action that decides which drawer rows exist and which
+/// segment is lit: its kind and wrap mode. The step amount is a live scalar.
+fn action_rows(action: crate::audio_mod::TriggerAction) -> (u8, Option<crate::audio_mod::WrapMode>) {
+    use crate::audio_mod::TriggerAction;
+    match action {
+        TriggerAction::Continuous => (0, None),
+        TriggerAction::Step { wrap, .. } => (1, Some(wrap)),
+        TriggerAction::Random => (2, None),
+    }
 }
 
 /// The parts whose fingerprint differs. A graph structure change counts as

@@ -4,6 +4,7 @@
 //! `graph/mod.rs` and is reached here via `super`.
 
 use manifold_core::GraphTarget;
+use manifold_core::change::ChangeSet;
 use manifold_core::NodeId;
 use manifold_core::effect_graph_def::{EffectGraphDef, EffectGraphNode, EffectGraphWire};
 use manifold_core::project::Project;
@@ -65,6 +66,7 @@ impl PasteNodesCommand {
     }
 }
 impl Command for PasteNodesCommand {
+    fn touches(&self) -> ChangeSet { crate::commands::GRAPH_EDIT }
     fn graph_admission_targets(&self, targets: &mut Vec<GraphTarget>) {
         targets.push(self.target.clone());
     }

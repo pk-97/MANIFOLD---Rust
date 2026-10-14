@@ -21,6 +21,7 @@
 //!   clips instead of one.
 
 use crate::command::Command;
+use manifold_core::change::{ChangeSet, Part};
 use crate::service::EditingService;
 use manifold_core::clip::TimelineClip;
 use manifold_core::layer::OverlapAction;
@@ -49,6 +50,7 @@ impl AddSceneCommand {
 }
 
 impl Command for AddSceneCommand {
+    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Session]) }
     fn execute(&mut self, project: &mut Project) {
         let idx = self.insert_index.min(project.session.scenes.len());
         project.session.scenes.insert(idx, self.scene.clone());
@@ -95,6 +97,7 @@ impl RemoveSceneCommand {
 }
 
 impl Command for RemoveSceneCommand {
+    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Session]) }
     fn execute(&mut self, project: &mut Project) {
         self.removed_scene = None;
         self.removed_slots.clear();
@@ -156,6 +159,7 @@ impl RenameSceneCommand {
 }
 
 impl Command for RenameSceneCommand {
+    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Session]) }
     fn execute(&mut self, project: &mut Project) {
         if let Some(scene) = project
             .session
@@ -201,6 +205,7 @@ impl ReorderSceneCommand {
 }
 
 impl Command for ReorderSceneCommand {
+    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Session]) }
     fn execute(&mut self, project: &mut Project) {
         project.session.scenes = self.new_order.clone();
     }
@@ -238,6 +243,7 @@ impl SetSlotCommand {
 }
 
 impl Command for SetSlotCommand {
+    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Session]) }
     fn execute(&mut self, project: &mut Project) {
         let pos = project
             .session
@@ -325,6 +331,7 @@ impl CaptureRangeToSceneCommand {
 }
 
 impl Command for CaptureRangeToSceneCommand {
+    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Session]) }
     fn execute(&mut self, project: &mut Project) {
         self.created_scene_id = None;
         self.touched_slots.clear();
@@ -474,6 +481,7 @@ impl PasteSlotToTimelineCommand {
 }
 
 impl Command for PasteSlotToTimelineCommand {
+    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Clips]) }
     fn execute(&mut self, project: &mut Project) {
         self.pasted.clear();
         let clock = manifold_core::tempo::SourceClock::new(

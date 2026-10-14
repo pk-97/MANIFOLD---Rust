@@ -14,6 +14,7 @@
 //! state these commands need to maintain.
 
 use crate::command::Command;
+use manifold_core::change::{ChangeSet, Part};
 use manifold_core::project::Project;
 use manifold_core::stage::{DisplayIdentity, DisplayPlacement, OutputAdvanced, OutputId, Rotation};
 
@@ -30,6 +31,7 @@ impl AddDisplayPlacementCommand {
 }
 
 impl Command for AddDisplayPlacementCommand {
+    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Led]) }
     fn execute(&mut self, project: &mut Project) {
         project
             .settings
@@ -67,6 +69,7 @@ impl RemoveDisplayPlacementCommand {
 }
 
 impl Command for RemoveDisplayPlacementCommand {
+    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Led]) }
     fn execute(&mut self, project: &mut Project) {
         let placements = &mut project.settings.stage_layout.placements;
         if let Some(pos) = placements.iter().position(|p| p.id == self.id) {
@@ -107,6 +110,7 @@ impl RenameDisplayPlacementCommand {
 }
 
 impl Command for RenameDisplayPlacementCommand {
+    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Led]) }
     fn execute(&mut self, project: &mut Project) {
         if let Some(p) = project.settings.stage_layout.find_mut(self.id) {
             p.name = self.new_name.clone();
@@ -154,6 +158,7 @@ impl SetDisplayPlacementTransformCommand {
 }
 
 impl Command for SetDisplayPlacementTransformCommand {
+    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Led]) }
     fn execute(&mut self, project: &mut Project) {
         if let Some(p) = project.settings.stage_layout.find_mut(self.id) {
             p.position_mm = self.new_position_mm;
@@ -193,6 +198,7 @@ impl SetDisplayPhysicalSizeCommand {
 }
 
 impl Command for SetDisplayPhysicalSizeCommand {
+    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Led]) }
     fn execute(&mut self, project: &mut Project) {
         if let Some(p) = project.settings.stage_layout.find_mut(self.id) {
             p.physical_size_mm = self.new_size_mm;
@@ -229,6 +235,7 @@ impl SetDisplayNativeResolutionCommand {
 }
 
 impl Command for SetDisplayNativeResolutionCommand {
+    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Led]) }
     fn execute(&mut self, project: &mut Project) {
         if let Some(p) = project.settings.stage_layout.find_mut(self.id) {
             p.native_resolution = self.new_resolution;
@@ -266,6 +273,7 @@ impl SetDisplayEnabledCommand {
 }
 
 impl Command for SetDisplayEnabledCommand {
+    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Led]) }
     fn execute(&mut self, project: &mut Project) {
         if let Some(p) = project.settings.stage_layout.find_mut(self.id) {
             p.enabled = self.new_enabled;
@@ -307,6 +315,7 @@ impl SetDisplayIdentityCommand {
 }
 
 impl Command for SetDisplayIdentityCommand {
+    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Led]) }
     fn execute(&mut self, project: &mut Project) {
         if let Some(p) = project.settings.stage_layout.find_mut(self.id) {
             p.identity = self.new_identity.clone();
@@ -341,6 +350,7 @@ impl SetDisplayAdvancedCommand {
 }
 
 impl Command for SetDisplayAdvancedCommand {
+    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Led]) }
     fn execute(&mut self, project: &mut Project) {
         if let Some(p) = project.settings.stage_layout.find_mut(self.id) {
             p.advanced = self.new.clone();

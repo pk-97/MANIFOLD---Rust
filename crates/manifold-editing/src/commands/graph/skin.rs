@@ -8,6 +8,7 @@
 //! mutating and restores it verbatim on undo.
 
 use std::collections::BTreeMap;
+use manifold_core::change::ChangeSet;
 
 use manifold_core::GraphTarget;
 use manifold_core::effect_graph_def::{
@@ -510,6 +511,7 @@ fn apply_skin_source(
 }
 
 impl Command for SetSceneObjectSkinSourceCommand {
+    fn touches(&self) -> ChangeSet { crate::commands::graph_edit_touches(&self.target, crate::commands::GRAPH_AND_MANIFEST) }
     fn execute(&mut self, project: &mut Project) {
         let source = self.source.clone();
         let target_map = self.target_map;
@@ -565,6 +567,7 @@ impl Command for SetSceneObjectSkinSourceCommand {
 }
 
 impl Command for SetSceneObjectSkinTargetMapCommand {
+    fn touches(&self) -> ChangeSet { crate::commands::graph_edit_touches(&self.target, crate::commands::GRAPH_AND_MANIFEST) }
     fn execute(&mut self, project: &mut Project) {
         let target_map = self.target_map;
         let scene_object_id = self.scene_object_id;

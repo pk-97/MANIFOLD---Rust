@@ -22,6 +22,7 @@
 //! the last point in its stable equal-beat order.
 
 use crate::command::Command;
+use manifold_core::change::{ChangeSet, Part};
 use manifold_core::effects::{AutomationLane, AutomationPoint, SegmentShape};
 use manifold_core::project::Project;
 use manifold_core::GraphTarget;
@@ -104,9 +105,9 @@ impl AddAutomationPointCommand {
 }
 
 impl Command for AddAutomationPointCommand {
-    fn touches(&self) -> manifold_core::change::ChangeSet {
-        use manifold_core::change::{ChangeSet, Part};
-        ChangeSet::of(&[Part::Automation])
+    /// A param's first lane clears its slider touch, a Values field.
+    fn touches(&self) -> ChangeSet {
+        ChangeSet::of(&[Part::Automation, Part::Values])
     }
     fn execute(&mut self, project: &mut Project) {
         self.previous_lane = None;
@@ -299,7 +300,6 @@ impl MoveAutomationPointCommand {
 
 impl Command for MoveAutomationPointCommand {
     fn touches(&self) -> manifold_core::change::ChangeSet {
-        use manifold_core::change::{ChangeSet, Part};
         ChangeSet::of(&[Part::Automation])
     }
     fn execute(&mut self, project: &mut Project) {
@@ -381,7 +381,6 @@ impl RemoveAutomationPointCommand {
 
 impl Command for RemoveAutomationPointCommand {
     fn touches(&self) -> manifold_core::change::ChangeSet {
-        use manifold_core::change::{ChangeSet, Part};
         ChangeSet::of(&[Part::Automation])
     }
     fn execute(&mut self, project: &mut Project) {
@@ -448,6 +447,7 @@ impl SetLaneEnabledCommand {
 }
 
 impl Command for SetLaneEnabledCommand {
+    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Automation]) }
     fn execute(&mut self, project: &mut Project) {
         let param_id = self.param_id.clone();
         let val = self.new_enabled;
@@ -501,6 +501,7 @@ impl ClearLaneCommand {
 }
 
 impl Command for ClearLaneCommand {
+    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Automation]) }
     fn execute(&mut self, project: &mut Project) {
         let param_id = self.param_id.clone();
         let taken = project.with_preset_graph_mut(&self.target, |inst| {
@@ -560,6 +561,7 @@ impl RemoveLaneCommand {
 }
 
 impl Command for RemoveLaneCommand {
+    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Automation]) }
     fn execute(&mut self, project: &mut Project) {
         self.removed_lane = None;
         let param_id = self.param_id.clone();
@@ -635,6 +637,7 @@ impl CommitRecordedGestureCommand {
 }
 
 impl Command for CommitRecordedGestureCommand {
+    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Automation, Part::Values]) }
     fn execute(&mut self, project: &mut Project) {
         let param_id = self.param_id.clone();
         let points = self.new_points.clone();

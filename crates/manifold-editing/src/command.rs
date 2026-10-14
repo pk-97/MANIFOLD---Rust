@@ -1,4 +1,5 @@
 use manifold_core::GraphTarget;
+use manifold_core::change::ChangeSet;
 use manifold_core::layer::Layer;
 use manifold_core::project::Project;
 use std::fmt::Debug;
@@ -23,12 +24,11 @@ pub trait Command: Debug + Send {
         true
     }
     /// The project parts this command writes, on execute and on undo
-    /// (docs/UI_INVALIDATION_DESIGN.md D2). Over-declaring only costs work;
-    /// under-declaring is a stale-UI bug the change audit catches. The `ALL`
-    /// default is today's behaviour until P6 removes it.
-    fn touches(&self) -> manifold_core::change::ChangeSet {
-        manifold_core::change::ChangeSet::ALL
-    }
+    /// (docs/UI_INVALIDATION_DESIGN.md D2, INV-1). Declare from what execute
+    /// and undo write, never from the name. Over-declaring only costs work;
+    /// under-declaring is a stale-UI bug the change audit catches. A set that
+    /// depends on the data is read after execute, so execute may record it.
+    fn touches(&self) -> ChangeSet;
 }
 
 /// Callbacks for layer lifecycle events (add/remove).
@@ -116,21 +116,23 @@ impl Command for CompositeCommand {
         self.rejection.is_none() && self.commands.iter().any(|command| command.was_applied())
     }
 
-    fn touches(&self) -> manifold_core::change::ChangeSet {
+    fn touches(&self) -> ChangeSet {
         self.commands
             .iter()
-            .fold(manifold_core::change::ChangeSet::NONE, |set, c| set.union(c.touches()))
+            .fold(ChangeSet::NONE, |set, c| set.union(c.touches()))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use manifold_core::change::Part;
 
     #[derive(Debug)]
     struct TargetCommand(GraphTarget);
 
     impl Command for TargetCommand {
+        fn touches(&self) -> ChangeSet { ChangeSet::NONE }
         fn execute(&mut self, _project: &mut Project) {}
         fn undo(&mut self, _project: &mut Project) {}
         fn description(&self) -> &str {
@@ -145,6 +147,7 @@ mod tests {
     struct ReasonCommand(&'static str);
 
     impl Command for ReasonCommand {
+        fn touches(&self) -> ChangeSet { ChangeSet::NONE }
         fn execute(&mut self, _project: &mut Project) {}
         fn undo(&mut self, _project: &mut Project) {}
         fn description(&self) -> &str {
@@ -166,6 +169,7 @@ mod tests {
     }
 
     impl Command for AppendCommand {
+        fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Media]) }
         fn execute(&mut self, project: &mut Project) {
             project
                 .settings

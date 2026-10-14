@@ -1,4 +1,5 @@
 use crate::command::Command;
+use manifold_core::change::{ChangeSet, Part};
 use manifold_core::audio_clip_detection::{AudioClipDetection, DetectionConfig};
 use manifold_core::project::Project;
 use manifold_core::ClipId;
@@ -31,6 +32,7 @@ impl SetClipDetectionConfigCommand {
 }
 
 impl Command for SetClipDetectionConfigCommand {
+    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Clips]) }
     fn execute(&mut self, project: &mut Project) {
         let Some(clip) = project.timeline.find_clip_by_id_mut(&self.clip_id) else {
             return;

@@ -1,4 +1,5 @@
 use crate::command::Command;
+use manifold_core::change::{ChangeSet, Part};
 use crate::commands::effect_target::DriverTarget;
 use manifold_core::effects::ParameterDriver;
 use manifold_core::project::Project;
@@ -37,6 +38,7 @@ impl AddDriverCommand {
 }
 
 impl Command for AddDriverCommand {
+    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Effects, Part::Shapes]) }
     fn execute(&mut self, project: &mut Project) {
         let driver = self.driver.clone();
         with_drivers_mut(project, &self.target, |drivers| {
@@ -84,6 +86,7 @@ impl ToggleDriverEnabledCommand {
 }
 
 impl Command for ToggleDriverEnabledCommand {
+    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Effects, Part::Shapes]) }
     fn execute(&mut self, project: &mut Project) {
         let idx = self.driver_index;
         let val = self.new_enabled;
@@ -141,6 +144,7 @@ impl ChangeDriverBeatDivCommand {
 }
 
 impl Command for ChangeDriverBeatDivCommand {
+    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Effects, Part::Shapes]) }
     fn execute(&mut self, project: &mut Project) {
         let idx = self.driver_index;
         let val = self.new_div;
@@ -197,6 +201,7 @@ impl SetDriverFreePeriodCommand {
 }
 
 impl Command for SetDriverFreePeriodCommand {
+    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Effects, Part::Shapes]) }
     fn execute(&mut self, project: &mut Project) {
         let idx = self.driver_index;
         let val = self.new_free;
@@ -248,6 +253,7 @@ impl ChangeDriverWaveformCommand {
 }
 
 impl Command for ChangeDriverWaveformCommand {
+    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Effects, Part::Shapes]) }
     fn execute(&mut self, project: &mut Project) {
         let idx = self.driver_index;
         let val = self.new_waveform;
@@ -299,6 +305,7 @@ impl ToggleDriverReversedCommand {
 }
 
 impl Command for ToggleDriverReversedCommand {
+    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Effects, Part::Shapes]) }
     fn execute(&mut self, project: &mut Project) {
         let idx = self.driver_index;
         let val = self.new_reversed;
@@ -357,7 +364,6 @@ impl ChangeTrimCommand {
 
 impl Command for ChangeTrimCommand {
     fn touches(&self) -> manifold_core::change::ChangeSet {
-        use manifold_core::change::{ChangeSet, Part};
         ChangeSet::of(&[Part::Shapes])
     }
     fn execute(&mut self, project: &mut Project) {
@@ -413,6 +419,7 @@ impl ToggleDriverFrameAlignedCommand {
 }
 
 impl Command for ToggleDriverFrameAlignedCommand {
+    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Effects, Part::Shapes]) }
     fn execute(&mut self, project: &mut Project) {
         let idx = self.driver_index;
         let val = self.new_aligned;

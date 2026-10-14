@@ -205,6 +205,9 @@ mod tests {
     }
 
     impl Command for SetBpmCommand {
+        fn touches(&self) -> manifold_core::change::ChangeSet {
+            manifold_core::change::ChangeSet::of(&[manifold_core::change::Part::Settings])
+        }
         fn execute(&mut self, project: &mut Project) {
             self.old_bpm = project.settings.bpm;
             project.settings.bpm = self.new_bpm;

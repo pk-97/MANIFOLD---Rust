@@ -8,6 +8,7 @@
 //! any subsequent preset-param edit ride the normal undo stack.
 
 use manifold_core::GraphTarget;
+use manifold_core::change::{ChangeSet, Part};
 use manifold_core::PresetTypeId;
 use manifold_core::effect_graph_def::EffectGraphDef;
 use manifold_core::preset_def::PresetKind;
@@ -84,6 +85,16 @@ impl ForkPresetCommand {
 }
 
 impl Command for ForkPresetCommand {
+    /// A scene-modifier fork rewrites the owner graph and prunes controls; an
+    /// instance fork renames its preset type and may reseed its card values.
+    fn touches(&self) -> ChangeSet {
+        let embedded = ChangeSet::of(&[Part::EmbeddedPresets]);
+        if matches!(self.target, GraphTarget::SceneModifier { .. }) {
+            crate::commands::WHOLE_INSTANCES.union(embedded)
+        } else {
+            embedded.union(ChangeSet::of(&[Part::Effects, Part::Values, Part::Shapes]))
+        }
+    }
     fn graph_admission_targets(&self, targets: &mut Vec<GraphTarget>) {
         targets.push(self.target.clone());
     }
@@ -198,6 +209,7 @@ impl SaveToProjectCommand {
 }
 
 impl Command for SaveToProjectCommand {
+    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::EmbeddedPresets]) }
     fn execute(&mut self, project: &mut Project) {
         if self.saved.is_none() {
             let base = self
@@ -294,6 +306,10 @@ impl RevertToLibraryCommand {
 }
 
 impl Command for RevertToLibraryCommand {
+    /// An instance revert drops its materialized copy.
+    fn touches(&self) -> ChangeSet {
+        crate::commands::graph_edit_touches(&self.target, crate::commands::GRAPH_EDIT)
+    }
     fn graph_admission_targets(&self, targets: &mut Vec<GraphTarget>) {
         targets.push(self.target.clone());
     }
@@ -373,6 +389,7 @@ impl RenameEmbeddedPresetCommand {
 }
 
 impl Command for RenameEmbeddedPresetCommand {
+    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::EmbeddedPresets]) }
     fn execute(&mut self, project: &mut Project) {
         let Some(mut ep) = project.embedded_preset(&self.id).cloned() else {
             return;
@@ -433,6 +450,7 @@ impl DeleteEmbeddedPresetCommand {
 }
 
 impl Command for DeleteEmbeddedPresetCommand {
+    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::EmbeddedPresets]) }
     fn execute(&mut self, project: &mut Project) {
         let removed = project.remove_embedded_preset(&self.id);
         if self.removed.is_none() {

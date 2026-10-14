@@ -8,6 +8,7 @@
 //! (id minted at construction) so execute/undo are deterministic.
 
 use crate::command::Command;
+use manifold_core::change::{ChangeSet, Part};
 use manifold_core::audio_setup::{AudioDeviceRef, AudioSend, SendAnalysisConfig};
 use manifold_core::id::{AudioSendId, LayerId};
 use manifold_core::project::Project;
@@ -26,6 +27,7 @@ impl SetAudioInputDeviceCommand {
 }
 
 impl Command for SetAudioInputDeviceCommand {
+    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::AudioSetup]) }
     fn execute(&mut self, project: &mut Project) {
         project.audio_setup.device = self.new.clone();
     }
@@ -52,6 +54,7 @@ impl AddAudioSendCommand {
 }
 
 impl Command for AddAudioSendCommand {
+    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::AudioSetup, Part::Shapes]) }
     fn execute(&mut self, project: &mut Project) {
         project.audio_setup.sends.push(self.send.clone());
     }
@@ -85,6 +88,7 @@ impl RemoveAudioSendCommand {
 }
 
 impl Command for RemoveAudioSendCommand {
+    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::AudioSetup, Part::Shapes]) }
     fn execute(&mut self, project: &mut Project) {
         let sends = &mut project.audio_setup.sends;
         if let Some(pos) = sends.iter().position(|s| s.id == self.id) {
@@ -121,6 +125,7 @@ impl RenameAudioSendCommand {
 }
 
 impl Command for RenameAudioSendCommand {
+    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::AudioSetup]) }
     fn execute(&mut self, project: &mut Project) {
         if let Some(s) = project.audio_setup.find_send_mut(&self.id) {
             s.label = self.new_label.clone();
@@ -153,6 +158,7 @@ impl SetAudioSendChannelsCommand {
 }
 
 impl Command for SetAudioSendChannelsCommand {
+    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::AudioSetup]) }
     fn execute(&mut self, project: &mut Project) {
         if let Some(s) = project.audio_setup.find_send_mut(&self.id) {
             s.channels = self.new.clone();
@@ -187,7 +193,6 @@ impl SetAudioSendGainCommand {
 
 impl Command for SetAudioSendGainCommand {
     fn touches(&self) -> manifold_core::change::ChangeSet {
-        use manifold_core::change::{ChangeSet, Part};
         ChangeSet::of(&[Part::Shapes])
     }
     fn execute(&mut self, project: &mut Project) {
@@ -225,6 +230,7 @@ impl SetAudioSendFloorCommand {
 }
 
 impl Command for SetAudioSendFloorCommand {
+    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::AudioSetup]) }
     fn execute(&mut self, project: &mut Project) {
         if let Some(s) = project.audio_setup.find_send_mut(&self.id) {
             s.floor_db = self.new_db;
@@ -261,7 +267,6 @@ impl SetAudioCrossoversCommand {
 
 impl Command for SetAudioCrossoversCommand {
     fn touches(&self) -> manifold_core::change::ChangeSet {
-        use manifold_core::change::{ChangeSet, Part};
         ChangeSet::of(&[Part::Shapes])
     }
     fn execute(&mut self, project: &mut Project) {
@@ -294,6 +299,7 @@ impl SetAudioSendAnalysisCommand {
 }
 
 impl Command for SetAudioSendAnalysisCommand {
+    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::AudioSetup]) }
     fn execute(&mut self, project: &mut Project) {
         if let Some(s) = project.audio_setup.find_send_mut(&self.id) {
             s.analysis = self.new.clone();
@@ -338,6 +344,7 @@ impl SetLayerAudioSendCommand {
 }
 
 impl Command for SetLayerAudioSendCommand {
+    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::AudioSetup]) }
     fn execute(&mut self, project: &mut Project) {
         let setup = &mut project.audio_setup;
         if !self.captured {

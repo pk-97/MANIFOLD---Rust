@@ -1,4 +1,5 @@
 use crate::command::Command;
+use manifold_core::change::{ChangeSet, Part};
 use manifold_core::PresetTypeId;
 use manifold_core::LayerId;
 use manifold_core::LayerClipTrigger;
@@ -106,6 +107,7 @@ impl AddLayerCommand {
 }
 
 impl Command for AddLayerCommand {
+    fn touches(&self) -> ChangeSet { crate::commands::WHOLE_LAYERS }
     fn execute(&mut self, project: &mut Project) {
         self.applied = false;
         self.rejection = None;
@@ -230,6 +232,7 @@ impl ImportModelLayerCommand {
 }
 
 impl Command for ImportModelLayerCommand {
+    fn touches(&self) -> ChangeSet { crate::commands::WHOLE_LAYERS.union(ChangeSet::of(&[Part::EmbeddedPresets])) }
     fn execute(&mut self, project: &mut Project) {
         // Register (idempotent by id) the model's graph as a project-embedded
         // preset, so its id resolves through the catalog overlay just like a
@@ -334,6 +337,7 @@ impl DeleteLayerCommand {
 }
 
 impl Command for DeleteLayerCommand {
+    fn touches(&self) -> ChangeSet { crate::commands::WHOLE_LAYERS.union(ChangeSet::of(&[Part::Session])) }
     fn execute(&mut self, project: &mut Project) {
         if let Some(idx) = project.timeline.find_layer_index_by_id(&self.layer_id) {
             self.deleted_at_index = idx;
@@ -530,6 +534,7 @@ impl ReorderLayerCommand {
 }
 
 impl Command for ReorderLayerCommand {
+    fn touches(&self) -> ChangeSet { crate::commands::WHOLE_LAYERS }
     fn execute(&mut self, project: &mut Project) {
         self.applied = false;
         self.rejection = None;
@@ -609,6 +614,7 @@ impl GroupLayersCommand {
 }
 
 impl Command for GroupLayersCommand {
+    fn touches(&self) -> ChangeSet { crate::commands::WHOLE_LAYERS }
     fn execute(&mut self, project: &mut Project) {
         self.applied = false;
         self.rejection = None;
@@ -729,6 +735,7 @@ impl RenameLayerCommand {
 }
 
 impl Command for RenameLayerCommand {
+    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Layers]) }
     fn execute(&mut self, project: &mut Project) {
         if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(&self.layer_id) {
             layer.name = self.new_name.clone();
@@ -771,6 +778,7 @@ impl UngroupLayersCommand {
 }
 
 impl Command for UngroupLayersCommand {
+    fn touches(&self) -> ChangeSet { crate::commands::WHOLE_LAYERS.union(ChangeSet::of(&[Part::Session])) }
     fn execute(&mut self, project: &mut Project) {
         if let Some(group) = &self.group_layer {
             if self.delete_command.is_none() {
@@ -818,6 +826,7 @@ impl DuplicateLayersCommand {
 }
 
 impl Command for DuplicateLayersCommand {
+    fn touches(&self) -> ChangeSet { crate::commands::WHOLE_LAYERS }
     fn execute(&mut self, project: &mut Project) {
         for (i, layer) in self.new_layers.iter().cloned().enumerate() {
             project
@@ -904,6 +913,7 @@ impl SetLayerAnalysisOnlyCommand {
 }
 
 impl Command for SetLayerAnalysisOnlyCommand {
+    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Layers]) }
     fn execute(&mut self, project: &mut Project) {
         if let Some(layer) = project
             .timeline
@@ -964,6 +974,7 @@ impl AddLayerClipTriggerCommand {
 }
 
 impl Command for AddLayerClipTriggerCommand {
+    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Effects, Part::Shapes]) }
     fn execute(&mut self, project: &mut Project) {
         if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(&self.layer_id) {
             self.len_before = layer.clip_triggers.len();
@@ -998,6 +1009,7 @@ impl RemoveLayerClipTriggerCommand {
 }
 
 impl Command for RemoveLayerClipTriggerCommand {
+    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Effects, Part::Shapes]) }
     fn execute(&mut self, project: &mut Project) {
         if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(&self.layer_id)
             && self.index < layer.clip_triggers.len()
@@ -1038,6 +1050,21 @@ impl SetLayerClipTriggerCommand {
 }
 
 impl Command for SetLayerClipTriggerCommand {
+    /// Sensitivity is the one trigger field the drawer shows in place; every
+    /// other field only the inspector projection redraws.
+    fn touches(&self) -> ChangeSet {
+        let mut shape = self.old.shape;
+        shape.sensitivity = self.new.shape.sensitivity;
+        let only_sensitivity = shape == self.new.shape
+            && self.old.enabled == self.new.enabled
+            && self.old.source == self.new.source
+            && self.old.one_shot_beats == self.new.one_shot_beats;
+        if only_sensitivity {
+            ChangeSet::of(&[Part::Shapes])
+        } else {
+            ChangeSet::of(&[Part::Effects, Part::Shapes])
+        }
+    }
     fn execute(&mut self, project: &mut Project) {
         if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(&self.layer_id)
             && let Some(slot) = layer.clip_triggers.get_mut(self.index)

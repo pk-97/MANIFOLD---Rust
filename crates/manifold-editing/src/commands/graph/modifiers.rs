@@ -4,6 +4,7 @@
 //! stay in `graph/mod.rs` and are reached via `super`.
 
 use std::collections::BTreeMap;
+use manifold_core::change::ChangeSet;
 
 use manifold_core::GraphTarget;
 use manifold_core::effect_graph_def::{
@@ -395,6 +396,7 @@ fn modifier_section_label(type_id: &str) -> String {
 }
 
 impl Command for InsertMeshModifierCommand {
+    fn touches(&self) -> ChangeSet { crate::commands::graph_edit_touches(&self.target, crate::commands::GRAPH_AND_MANIFEST) }
     fn graph_admission_targets(&self, targets: &mut Vec<GraphTarget>) {
         targets.push(self.target.clone());
     }
@@ -560,6 +562,7 @@ impl RemoveMeshModifierCommand {
 }
 
 impl Command for RemoveMeshModifierCommand {
+    fn touches(&self) -> ChangeSet { crate::commands::WHOLE_INSTANCES }
     fn graph_admission_targets(&self, targets: &mut Vec<GraphTarget>) {
         targets.push(self.target.clone());
     }
@@ -690,6 +693,7 @@ impl MoveMeshModifierCommand {
 }
 
 impl Command for MoveMeshModifierCommand {
+    fn touches(&self) -> ChangeSet { crate::commands::GRAPH_EDIT }
     fn graph_admission_targets(&self, targets: &mut Vec<GraphTarget>) {
         targets.push(self.target.clone());
     }

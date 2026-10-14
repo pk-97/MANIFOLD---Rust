@@ -1,4 +1,5 @@
 use crate::command::Command;
+use manifold_core::change::{ChangeSet, Part};
 use manifold_core::id::MarkerId;
 use manifold_core::marker::TimelineMarker;
 use manifold_core::project::Project;
@@ -18,6 +19,7 @@ impl AddMarkerCommand {
 }
 
 impl Command for AddMarkerCommand {
+    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Markers]) }
     fn execute(&mut self, project: &mut Project) {
         project.timeline.add_marker(self.marker.clone());
     }
@@ -49,6 +51,7 @@ impl DeleteMarkerCommand {
 }
 
 impl Command for DeleteMarkerCommand {
+    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Markers]) }
     fn execute(&mut self, project: &mut Project) {
         self.removed = project.timeline.remove_marker(&self.marker_id);
     }
@@ -84,6 +87,7 @@ impl MoveMarkerCommand {
 }
 
 impl Command for MoveMarkerCommand {
+    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Markers]) }
     fn execute(&mut self, project: &mut Project) {
         if let Some(marker) = project.timeline.find_marker_mut(&self.marker_id) {
             marker.beat = self.new_beat;
@@ -123,6 +127,7 @@ impl RenameMarkerCommand {
 }
 
 impl Command for RenameMarkerCommand {
+    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Markers]) }
     fn execute(&mut self, project: &mut Project) {
         if let Some(marker) = project.timeline.find_marker_mut(&self.marker_id) {
             marker.name = self.new_name.clone();

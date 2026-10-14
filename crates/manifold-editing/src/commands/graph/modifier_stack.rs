@@ -5,6 +5,7 @@
 //! parameter state reversible.
 
 use std::fmt;
+use manifold_core::change::ChangeSet;
 
 use manifold_core::effect_graph_def::EffectGraphDef;
 use manifold_core::project::Project;
@@ -141,6 +142,7 @@ impl InsertSceneModifierCommand {
 }
 
 impl Command for InsertSceneModifierCommand {
+    fn touches(&self) -> ChangeSet { self.transaction.touches() }
     fn graph_admission_targets(&self, targets: &mut Vec<GraphTarget>) {
         targets.push(self.transaction.owner.clone());
     }
@@ -195,6 +197,7 @@ impl DeleteSceneModifierCommand {
 }
 
 impl Command for DeleteSceneModifierCommand {
+    fn touches(&self) -> ChangeSet { self.transaction.touches() }
     fn graph_admission_targets(&self, targets: &mut Vec<GraphTarget>) {
         targets.push(self.transaction.owner.clone());
     }
@@ -249,6 +252,7 @@ impl ReorderSceneModifiersCommand {
 }
 
 impl Command for ReorderSceneModifiersCommand {
+    fn touches(&self) -> ChangeSet { self.transaction.touches() }
     fn graph_admission_targets(&self, targets: &mut Vec<GraphTarget>) {
         targets.push(self.transaction.owner.clone());
     }
@@ -303,6 +307,7 @@ impl DuplicateSceneModifiersCommand {
 }
 
 impl Command for DuplicateSceneModifiersCommand {
+    fn touches(&self) -> ChangeSet { self.transaction.touches() }
     fn graph_admission_targets(&self, targets: &mut Vec<GraphTarget>) {
         targets.push(self.transaction.owner.clone());
     }
@@ -356,6 +361,7 @@ impl RemoveSceneModifiersCommand {
 }
 
 impl Command for RemoveSceneModifiersCommand {
+    fn touches(&self) -> ChangeSet { self.transaction.touches() }
     fn graph_admission_targets(&self, targets: &mut Vec<GraphTarget>) {
         targets.push(self.transaction.owner.clone());
     }
@@ -410,6 +416,7 @@ impl MoveSceneModifierCommand {
 }
 
 impl Command for MoveSceneModifierCommand {
+    fn touches(&self) -> ChangeSet { self.transaction.touches() }
     fn graph_admission_targets(&self, targets: &mut Vec<GraphTarget>) {
         targets.push(self.transaction.owner.clone());
     }
@@ -467,6 +474,7 @@ impl RetargetSceneModifierCommand {
 }
 
 impl Command for RetargetSceneModifierCommand {
+    fn touches(&self) -> ChangeSet { self.transaction.touches() }
     fn graph_admission_targets(&self, targets: &mut Vec<GraphTarget>) {
         targets.push(self.transaction.owner.clone());
     }
@@ -526,6 +534,7 @@ impl SetSceneModifierPreparationParamCommand {
 }
 
 impl Command for SetSceneModifierPreparationParamCommand {
+    fn touches(&self) -> ChangeSet { self.transaction.touches() }
     fn graph_admission_targets(&self, targets: &mut Vec<GraphTarget>) {
         targets.push(self.transaction.owner.clone());
     }

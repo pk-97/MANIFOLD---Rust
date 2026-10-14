@@ -312,6 +312,10 @@ fn static_slot_for(def: &EffectGraphDef, node_id: &NodeId, inner_param: &str) ->
 }
 
 impl Command for ToggleNodeParamExposeCommand {
+    /// Exposing adds a card param; unexposing drops it with its controls.
+    fn touches(&self) -> manifold_core::change::ChangeSet {
+        crate::commands::graph_edit_touches(&self.target, crate::commands::GRAPH_AND_CONTROLS)
+    }
     fn graph_admission_targets(&self, targets: &mut Vec<GraphTarget>) {
         targets.push(self.target.clone());
     }

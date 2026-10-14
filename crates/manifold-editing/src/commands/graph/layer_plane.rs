@@ -119,6 +119,9 @@ fn layer_plane_tint(k: u32) -> manifold_core::Color {
 }
 
 impl Command for AddSceneLayerPlaneCommand {
+    fn touches(&self) -> manifold_core::change::ChangeSet {
+        crate::commands::graph_edit_touches(&self.target, crate::commands::GRAPH_AND_MANIFEST)
+    }
     fn graph_admission_targets(&self, targets: &mut Vec<GraphTarget>) {
         targets.push(self.target.clone());
     }

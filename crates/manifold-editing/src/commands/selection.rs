@@ -1,4 +1,5 @@
 use crate::command::Command;
+use manifold_core::change::ChangeSet;
 use manifold_core::project::Project;
 use manifold_core::selection::SelectionRegion;
 
@@ -20,6 +21,7 @@ impl SetSelectionRegionCommand {
 }
 
 impl Command for SetSelectionRegionCommand {
+    fn touches(&self) -> ChangeSet { ChangeSet::NONE }
     fn execute(&mut self, _project: &mut Project) {
         // Selection is UI state — stored externally, not on Project.
         // This command exists for undo/redo tracking of selection changes.

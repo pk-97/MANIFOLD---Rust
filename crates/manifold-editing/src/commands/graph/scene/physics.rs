@@ -1,6 +1,7 @@
 //! Physics scene command helpers extracted from `scene.rs`.
 
 use super::*;
+use manifold_core::change::ChangeSet;
 
 pub(super) fn append_physics_scene_object(
     nodes: &mut Vec<EffectGraphNode>,
@@ -1180,6 +1181,7 @@ impl EnableSceneObjectPhysicsCommand {
 }
 
 impl Command for EnableSceneObjectPhysicsCommand {
+    fn touches(&self) -> ChangeSet { crate::commands::graph_edit_touches(&self.target, crate::commands::GRAPH_AND_MANIFEST) }
     fn graph_admission_targets(&self, targets: &mut Vec<GraphTarget>) {
         targets.push(self.target.clone());
     }
@@ -1426,6 +1428,7 @@ impl DisableSceneObjectPhysicsCommand {
 }
 
 impl Command for DisableSceneObjectPhysicsCommand {
+    fn touches(&self) -> ChangeSet { crate::commands::graph_edit_touches(&self.target, crate::commands::GRAPH_AND_MANIFEST) }
     fn graph_admission_targets(&self, targets: &mut Vec<GraphTarget>) {
         targets.push(self.target.clone());
     }

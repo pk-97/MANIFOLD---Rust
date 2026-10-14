@@ -1,6 +1,7 @@
 //! Physics scene command helpers extracted from `scene.rs`.
 
 use super::*;
+use manifold_core::change::ChangeSet;
 
 pub(super) fn split_capacity_value(value: &SerializedParamValue) -> SerializedParamValue {
     let raw = match value {
@@ -102,6 +103,7 @@ impl SplitSceneObjectCommand {
 }
 
 impl Command for SplitSceneObjectCommand {
+    fn touches(&self) -> ChangeSet { crate::commands::graph_edit_touches(&self.target, crate::commands::GRAPH_AND_MANIFEST) }
     fn graph_admission_targets(&self, targets: &mut Vec<GraphTarget>) {
         targets.push(self.target.clone());
     }

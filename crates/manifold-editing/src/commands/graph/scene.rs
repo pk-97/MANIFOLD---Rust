@@ -7,6 +7,7 @@
 //! `graph/mod.rs` and are reached via `super`.
 
 use std::collections::BTreeMap;
+use manifold_core::change::ChangeSet;
 
 use manifold_core::GraphTarget;
 use manifold_core::NodeId;
@@ -344,6 +345,7 @@ fn scene_object_tint(k: u32) -> manifold_core::Color {
 }
 
 impl Command for AddSceneObjectCommand {
+    fn touches(&self) -> ChangeSet { crate::commands::graph_edit_touches(&self.target, crate::commands::GRAPH_AND_MANIFEST) }
     fn graph_admission_targets(&self, targets: &mut Vec<GraphTarget>) {
         targets.push(self.target.clone());
     }
@@ -769,6 +771,7 @@ impl AddSceneLightCommand {
 }
 
 impl Command for AddSceneLightCommand {
+    fn touches(&self) -> ChangeSet { crate::commands::graph_edit_touches(&self.target, crate::commands::GRAPH_AND_MANIFEST) }
     fn graph_admission_targets(&self, targets: &mut Vec<GraphTarget>) {
         targets.push(self.target.clone());
     }
@@ -1027,6 +1030,7 @@ impl RemoveSceneObjectCommand {
 }
 
 impl Command for RemoveSceneObjectCommand {
+    fn touches(&self) -> ChangeSet { crate::commands::WHOLE_INSTANCES }
     fn graph_admission_targets(&self, targets: &mut Vec<GraphTarget>) {
         targets.push(self.target.clone());
     }
@@ -1557,6 +1561,7 @@ impl RemoveSceneSubmeshCommand {
 }
 
 impl Command for RemoveSceneSubmeshCommand {
+    fn touches(&self) -> ChangeSet { crate::commands::WHOLE_INSTANCES }
     fn graph_admission_targets(&self, targets: &mut Vec<GraphTarget>) { targets.push(self.target.clone()); }
 
     fn execute(&mut self, project: &mut Project) {
@@ -1671,6 +1676,7 @@ impl DuplicateSceneSubmeshCommand {
 }
 
 impl Command for DuplicateSceneSubmeshCommand {
+    fn touches(&self) -> ChangeSet { crate::commands::graph_edit_touches(&self.target, crate::commands::GRAPH_AND_MANIFEST) }
     fn graph_admission_targets(&self, targets: &mut Vec<GraphTarget>) { targets.push(self.target.clone()); }
 
     fn execute(&mut self, project: &mut Project) {
@@ -1865,6 +1871,7 @@ impl RemoveSceneLightCommand {
 }
 
 impl Command for RemoveSceneLightCommand {
+    fn touches(&self) -> ChangeSet { crate::commands::GRAPH_EDIT }
     fn graph_admission_targets(&self, targets: &mut Vec<GraphTarget>) {
         targets.push(self.target.clone());
     }
@@ -2219,6 +2226,7 @@ impl AddSceneEnvironmentCommand {
 }
 
 impl Command for AddSceneEnvironmentCommand {
+    fn touches(&self) -> ChangeSet { crate::commands::graph_edit_touches(&self.target, crate::commands::GRAPH_AND_MANIFEST) }
     fn graph_admission_targets(&self, targets: &mut Vec<GraphTarget>) {
         targets.push(self.target.clone());
     }
@@ -2377,6 +2385,7 @@ impl AddSceneFogCommand {
 }
 
 impl Command for AddSceneFogCommand {
+    fn touches(&self) -> ChangeSet { crate::commands::graph_edit_touches(&self.target, crate::commands::GRAPH_AND_MANIFEST) }
     fn graph_admission_targets(&self, targets: &mut Vec<GraphTarget>) {
         targets.push(self.target.clone());
     }
@@ -2577,6 +2586,7 @@ impl AddObjectTransformCommand {
 }
 
 impl Command for AddObjectTransformCommand {
+    fn touches(&self) -> ChangeSet { crate::commands::GRAPH_EDIT }
     fn graph_admission_targets(&self, targets: &mut Vec<GraphTarget>) {
         targets.push(self.target.clone());
     }
@@ -2715,6 +2725,7 @@ impl ImportModelIntoSceneCommand {
 }
 
 impl Command for ImportModelIntoSceneCommand {
+    fn touches(&self) -> ChangeSet { crate::commands::graph_edit_touches(&self.target, crate::commands::GRAPH_AND_MANIFEST) }
     fn graph_admission_targets(&self, targets: &mut Vec<GraphTarget>) {
         targets.push(self.target.clone());
     }
@@ -2932,6 +2943,7 @@ impl RenameSceneObjectCommand {
 }
 
 impl Command for RenameSceneObjectCommand {
+    fn touches(&self) -> ChangeSet { crate::commands::GRAPH_EDIT }
     fn execute(&mut self, project: &mut Project) {
         let scope = self.scope_path.clone();
         let producer_id = self.object_node_id;
@@ -3224,6 +3236,7 @@ impl SetNodeHandleCommand {
 }
 
 impl Command for SetNodeHandleCommand {
+    fn touches(&self) -> ChangeSet { crate::commands::GRAPH_EDIT }
     fn execute(&mut self, project: &mut Project) {
         let scope = self.scope_path.clone();
         let id = self.node_doc_id;

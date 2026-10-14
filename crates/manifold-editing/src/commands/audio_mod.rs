@@ -7,6 +7,7 @@
 //! commands address a mod by its `param_id`.
 
 use crate::command::Command;
+use manifold_core::change::{ChangeSet, Part};
 use crate::commands::effect_target::DriverTarget;
 use manifold_core::audio_mod::{AudioModShape, AudioModSource, ParameterAudioMod, TriggerAction};
 use manifold_core::audio_trigger::TriggerFireMode;
@@ -33,6 +34,22 @@ where
     }
 }
 
+/// The parts a fire-action edit writes. The step amount is a live scalar the
+/// drawer shows in place (Shapes); the action kind and the wrap mode decide
+/// which drawer rows exist and which segment is lit, which only the inspector
+/// projection redraws (Effects).
+pub(crate) fn action_touches(old: TriggerAction, new: TriggerAction) -> ChangeSet {
+    let same_rows = match (old, new) {
+        (TriggerAction::Step { wrap: a, .. }, TriggerAction::Step { wrap: b, .. }) => a == b,
+        (a, b) => std::mem::discriminant(&a) == std::mem::discriminant(&b),
+    };
+    if same_rows {
+        ChangeSet::of(&[Part::Shapes])
+    } else {
+        ChangeSet::of(&[Part::Effects, Part::Shapes])
+    }
+}
+
 /// Add (assign) an audio modulation to a parameter.
 #[derive(Debug)]
 pub struct AddAudioModCommand {
@@ -47,6 +64,7 @@ impl AddAudioModCommand {
 }
 
 impl Command for AddAudioModCommand {
+    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Effects, Part::Shapes, Part::Values]) }
     fn execute(&mut self, project: &mut Project) {
         let m = self.audio_mod.clone();
         with_audio_mods_mut(project, &self.target, |mods| {
@@ -83,6 +101,7 @@ impl RemoveAudioModCommand {
 }
 
 impl Command for RemoveAudioModCommand {
+    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Effects, Part::Shapes, Part::Values]) }
     fn execute(&mut self, project: &mut Project) {
         let pid = self.param_id.clone();
         let removed = with_audio_mods_mut(project, &self.target, |mods| {
@@ -118,6 +137,7 @@ impl ToggleAudioModEnabledCommand {
 }
 
 impl Command for ToggleAudioModEnabledCommand {
+    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Effects]) }
     fn execute(&mut self, project: &mut Project) {
         set_enabled(project, &self.target, &self.param_id, self.new_enabled);
     }
@@ -155,6 +175,7 @@ impl SetAudioModSourceCommand {
 }
 
 impl Command for SetAudioModSourceCommand {
+    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Effects]) }
     fn execute(&mut self, project: &mut Project) {
         let v = self.new.clone();
         with_audio_mods_mut(project, &self.target, |mods| {
@@ -195,9 +216,14 @@ impl SetAudioModShapeCommand {
 }
 
 impl Command for SetAudioModShapeCommand {
-    fn touches(&self) -> manifold_core::change::ChangeSet {
-        use manifold_core::change::{ChangeSet, Part};
-        ChangeSet::of(&[Part::Shapes])
+    /// The drawer shows every shape scalar in place; the rate-of-change
+    /// toggle only the inspector projection redraws.
+    fn touches(&self) -> ChangeSet {
+        if self.old.rate_of_change == self.new.rate_of_change {
+            ChangeSet::of(&[Part::Shapes])
+        } else {
+            ChangeSet::of(&[Part::Effects, Part::Shapes])
+        }
     }
     fn execute(&mut self, project: &mut Project) {
         let v = self.new;
@@ -248,6 +274,7 @@ impl SetAudioModTriggerModeCommand {
 }
 
 impl Command for SetAudioModTriggerModeCommand {
+    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Effects]) }
     fn execute(&mut self, project: &mut Project) {
         let v = self.new;
         with_audio_mods_mut(project, &self.target, |mods| {
@@ -294,6 +321,9 @@ impl SetAudioModActionCommand {
 }
 
 impl Command for SetAudioModActionCommand {
+    fn touches(&self) -> ChangeSet {
+        action_touches(self.old, self.new)
+    }
     fn execute(&mut self, project: &mut Project) {
         let v = self.new;
         with_audio_mods_mut(project, &self.target, |mods| {

@@ -1,6 +1,7 @@
 //! Undoable parameter clip-trigger source edits.
 
 use crate::command::Command;
+use manifold_core::change::{ChangeSet, Part};
 use crate::commands::audio_mod::{
     AddAudioModCommand, SetAudioModTriggerModeCommand, ToggleAudioModEnabledCommand,
 };
@@ -182,6 +183,7 @@ impl SetParamClipTriggerSourceCommand {
 }
 
 impl Command for SetParamClipTriggerSourceCommand {
+    fn touches(&self) -> ChangeSet { ChangeSet::of(&[Part::Effects]).union(self.response.as_ref().map_or(ChangeSet::NONE, |r| r.touches())) }
     fn execute(&mut self, project: &mut Project) {
         self.applied = false;
         self.rejection = None;
