@@ -123,9 +123,9 @@ fn inspector_select_tab(
     // tab repoints `active_layer` relative to this; the selection itself is
     // never changed.
     let sel_layer = selection
-        .selected_layer_id_for_clip
-        .clone()
-        .or_else(|| selection.primary_selected_layer_id.clone());
+        .selected_layer_id_for_clip()
+        .or(selection.primary_selected_layer_id())
+        .cloned();
     match tab {
         // Master needs no layer focus; just pin the scope.
         InspectorTab::Master => selection.pin_scope(InspectorTab::Master),
@@ -362,13 +362,13 @@ pub(crate) fn select_region_to_with_project(
 
     let anchor: Option<(manifold_core::Beats, usize)> = if selection.has_insert_cursor() {
         let anchor_idx = selection
-            .insert_cursor_layer_id
+            .insert_cursor_layer_id()
             .as_ref()
             .and_then(|id| project.timeline.find_layer_index_by_id(id))
             .unwrap_or(0);
         Some((
             selection
-                .insert_cursor_beat
+                .insert_cursor_beat()
                 .unwrap_or(manifold_core::Beats::ZERO),
             anchor_idx,
         ))
@@ -378,7 +378,7 @@ pub(crate) fn select_region_to_with_project(
             .map(|(lo, _)| lo)
             .unwrap_or(0);
         Some((r.start_beat, start_idx))
-    } else if let Some(ref clip_id) = selection.primary_selected_clip_id.clone() {
+    } else if let Some(ref clip_id) = selection.primary_selected_clip_id().cloned() {
         project
             .timeline
             .layers
@@ -577,7 +577,7 @@ pub(crate) fn resolve_effects_read<'a>(
         }
         InspectorTab::Clip => {
             let target = resolve_effect_target(tab, active_layer, project);
-            let effects = selection.primary_selected_clip_id.as_ref().and_then(|cid| {
+            let effects = selection.primary_selected_clip_id().and_then(|cid| {
                 project
                     .timeline
                     .layers
@@ -638,7 +638,7 @@ pub(crate) fn resolve_effects_mut<'a>(
                     .unwrap_or_default()
             });
             let target = EffectTarget::Layer { layer_id };
-            let clip_id = selection.primary_selected_clip_id.clone();
+            let clip_id = selection.primary_selected_clip_id().cloned();
             let effects = clip_id.and_then(|cid| {
                 project
                     .timeline
@@ -759,11 +759,14 @@ pub(crate) fn led_exit_path_label(
 
 // Re-export public functions from sub-modules
 pub use state_sync::{
-    TransportDisplayCache, check_auto_scroll, push_state, sync_automation_lane_geometry,
+    TransportDisplayCache, check_auto_scroll, drain_events, push_chrome, push_live, push_selection,
+    sync_automation_lane_geometry,
     sync_card_values, sync_clip_positions,
     sync_scene_row_values,
     sync_inspector_data, sync_project_data,
 };
+#[cfg(feature = "ui-snapshot")]
+pub use state_sync::push_state;
 
 #[cfg(test)]
 mod d2_d3_tests {

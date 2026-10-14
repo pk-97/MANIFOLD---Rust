@@ -174,6 +174,7 @@ impl UiSide {
             user_prefs: &mut self.prefs,
             editor_target: None,
             scrub: &mut self.scrub,
+            stamps: &mut Default::default(),
             dialogs: Default::default(),
         };
         crate::ui_bridge::dispatch(&action, &mut ctx);

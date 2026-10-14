@@ -76,7 +76,7 @@ pub(crate) fn set_lane_context(
     let after = selection.selected_automation_points.len()
         + usize::from(selection.selected_automation_point.is_some());
     if before != after {
-        selection.selection_version = selection.selection_version.wrapping_add(1);
+        selection.note_automation_selection_change();
     }
 }
 
@@ -112,7 +112,7 @@ pub(crate) fn select_all_in_lane(
         .collect();
     selection.selected_automation_point = selection.selected_automation_points.first().cloned();
     selection.automation_time_selection = None;
-    selection.selection_version = selection.selection_version.wrapping_add(1);
+    selection.note_automation_selection_change();
 }
 
 fn destination(selection: &UIState) -> Option<(UiGraphTarget, manifold_core::effects::ParamId)> {

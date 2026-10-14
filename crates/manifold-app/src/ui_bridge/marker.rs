@@ -108,7 +108,7 @@ pub(super) fn dispatch_marker(
 
         // ── Delete selected markers ────────────────────────────
         MarkerAction::DeleteSelectedMarkers => {
-            let ids: Vec<MarkerId> = selection.selected_marker_ids.iter().cloned().collect();
+            let ids: Vec<MarkerId> = selection.selected_marker_ids().iter().cloned().collect();
             if ids.is_empty() {
                 return DispatchResult::handled();
             }
@@ -124,7 +124,7 @@ pub(super) fn dispatch_marker(
                 content_tx,
                 ContentCommand::ExecuteBatch(commands, "Delete Markers".into()),
             );
-            selection.selected_marker_ids.clear();
+            selection.clear_marker_selection();
             DispatchResult::structural()
         }
 

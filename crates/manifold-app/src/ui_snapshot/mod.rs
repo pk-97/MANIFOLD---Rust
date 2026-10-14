@@ -10,6 +10,8 @@ mod compare;
 mod composite_resources;
 mod dump;
 pub(crate) mod fixtures;
+#[cfg(test)]
+mod input_matrix;
 mod interact;
 #[cfg(test)]
 mod lookup_coverage;
@@ -1410,6 +1412,7 @@ mod cache_path_full_render {
                 user_prefs: &mut *user_prefs,
                 editor_target: None,
                 scrub: &mut scrub,
+                stamps: &mut Default::default(),
                 dialogs: Default::default(),
             };
             let result = crate::ui_bridge::dispatch(action, &mut dctx);

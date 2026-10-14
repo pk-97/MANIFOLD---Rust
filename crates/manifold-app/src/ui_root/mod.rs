@@ -105,6 +105,16 @@ pub struct ScrollDirty {
     pub visual: bool,
 }
 
+/// Where a suffix rebuild of the flat tree starts, in build order: the whole
+/// tree, the scroll panels (layer headers on), or the viewport panels (the
+/// viewport and the overlays after it).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum RegionSlot {
+    Full,
+    ScrollPanels,
+    ViewportPanels,
+}
+
 impl ScrollDirty {
     pub fn any(&self) -> bool {
         self.scroll_x || self.scroll_y || self.zoom || self.visual
@@ -1046,16 +1056,29 @@ impl UIRoot {
             // Fallback: count mismatch or never-built — do normal rebuild below.
         }
 
-        record_work(WorkKind::RegionRebuild);
         if dirty.needs_layer_headers() {
-            // Full scroll rebuild — includes layer headers
-            self.tree.truncate_from(self.scroll_panels_start);
-            self.input.invalidate_hover();
+            self.rebuild_from(RegionSlot::ScrollPanels);
+        } else {
+            self.rebuild_from(RegionSlot::ViewportPanels);
+        }
+    }
+
+    /// Rebuild the flat tree from `slot` to its end: the suffix rebuild a
+    /// frame plan's rebuild mask maps to until regions own arenas (P4e).
+    pub fn rebuild_from(&mut self, slot: RegionSlot) {
+        if !self.built || slot == RegionSlot::Full {
+            return self.build();
+        }
+        record_work(WorkKind::RegionRebuild);
+        let start = match slot {
+            RegionSlot::ScrollPanels => self.scroll_panels_start,
+            _ => self.viewport_panels_start,
+        };
+        self.tree.truncate_from(start);
+        self.input.invalidate_hover();
+        if slot == RegionSlot::ScrollPanels {
             self.build_scroll_panels();
         } else {
-            // Horizontal-only (fallback) — skip layer headers, rebuild viewport + rest
-            self.tree.truncate_from(self.viewport_panels_start);
-            self.input.invalidate_hover();
             self.build_viewport_panels();
         }
     }

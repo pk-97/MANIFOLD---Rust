@@ -66,7 +66,9 @@ mod editing_host;
 mod edit_selection;
 mod editor_frame;
 mod edr_surface;
+mod frame_plan;
 mod frame_timer;
+mod gesture_preview;
 // The graph canvas + its mapping popover moved into `manifold-ui` (Phase 8 of
 // `docs/UI_ARCHITECTURE_OVERHAUL.md`). Re-export under the historic `crate::`
 // paths so the editor-window glue keeps resolving `crate::graph_canvas::*` and
