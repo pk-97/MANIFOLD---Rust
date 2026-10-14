@@ -121,7 +121,7 @@ mod tests {
         assert!(contacts_wires(&graph).is_empty());
         let before = json!({"projectVersion": "1.19.0", "timeline": {"layers": [{"genParams": {"params": null, "graph": graph}}]}});
         let after = migrate_project(&before);
-        assert_eq!(after["projectVersion"], "1.20.0");
+        assert_eq!(after["projectVersion"], manifold_core::project::CURRENT_PROJECT_VERSION);
         let graph = &after["timeline"]["layers"][0]["genParams"]["graph"];
         assert_eq!(contacts_wires(graph), [&wire(&json!(0), &json!(6))]);
         assert_eq!(graph["nodes"], before["timeline"]["layers"][0]["genParams"]["graph"]["nodes"]);

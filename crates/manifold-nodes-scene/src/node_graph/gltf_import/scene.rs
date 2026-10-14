@@ -407,6 +407,8 @@ pub(super) fn build_import_graph(
         let node_str_id = format!("light_{i}");
         let light_id = fresh_id();
         let mut light_node = plain_node(light_id, &node_str_id, "node.light", &node_str_id);
+        // SCENE_SURFACES D11 (Lights): the readable name is the node title.
+        light_node.title = Some(label.clone());
 
         let (mode, spec_unit, kind_note, cones) = match light.kind {
             gltf_load::GltfLightKind::Directional => (0u32, "lux", String::new(), (0.0, 0.0)),
@@ -835,17 +837,6 @@ pub(super) fn build_import_graph(
     // bucket list (generators carry no category validation; see that
     // module's doc comment — "Text & Media" on `MriVolume`, a generator,
     // already isn't in that list either).
-
-    // BUG-upfq P1+P2: stamp scene-derived slider RANGES (never values) over
-    // the generic primitive defaults for the scene's position / focus /
-    // light-range sliders, so a model at any scale gets usable bands. See
-    // `scene_scale.rs` for the per-param multipliers and their reasoning.
-    super::scene_scale::apply_scene_ranges(
-        &mut card_params,
-        &card_bindings,
-        &super::scene_scale::node_types_by_id(&nodes),
-        scene_scale,
-    );
 
     let metadata = PresetMetadata {
         id: PresetTypeId::from_string(sanitized),

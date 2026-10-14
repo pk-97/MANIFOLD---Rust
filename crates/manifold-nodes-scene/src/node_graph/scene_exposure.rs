@@ -96,17 +96,32 @@ const RENDER_SCENE_STAMPED_PARAMS: &[&str] = &[
 /// converting `ParamDef` metadata into the crate-neutral `SceneParamMetadata`
 /// shape. Empty when the type is unknown.
 pub fn metadata_for_node_type(type_id: &str) -> Vec<SceneParamMetadata> {
-    metadata_for_node_type_with_registry(&SCENE_EXPOSURE_REGISTRY, type_id, None)
+    metadata_for_node_type_with_registry(&SCENE_EXPOSURE_REGISTRY, type_id, None, false)
+}
+
+/// Every param `type_id` declares, without the stamping filters: the node
+/// half of the live param lookup (`manifold_core::param_lookup`). A control
+/// may target a param the stamp skips (an authored exposure), and it still
+/// needs its description.
+pub fn all_params_for_node_type(type_id: &str) -> Vec<SceneParamMetadata> {
+    metadata_for_node_type_with_registry(&SCENE_EXPOSURE_REGISTRY, type_id, None, true)
+}
+
+inventory::submit! {
+    manifold_core::param_lookup::NodeParamSource {
+        params_for_type: all_params_for_node_type,
+    }
 }
 
 manifold_core::testkit_visible! {
 /// Convert one registry node's descriptors to scene metadata. Proofs may pass
 /// an explicit dial list for a retired solver whose product controls are no
-/// longer exposed by `manifold-core`.
+/// longer exposed by `manifold-core`. `all_params` skips the stamping filters.
 pub(crate) fn metadata_for_node_type_with_registry(
     registry: &PrimitiveRegistry,
     type_id: &str,
     dial_whitelist: Option<&[&str]>,
+    all_params: bool,
 ) -> Vec<SceneParamMetadata> {
     let Some(node) = registry.construct(type_id) else {
         return Vec::new();
@@ -114,17 +129,17 @@ pub(crate) fn metadata_for_node_type_with_registry(
     let dials = dial_whitelist.or_else(|| liquid_dial_params(type_id));
     node.parameters()
         .iter()
-        .filter(|pd| {
+        .filter(|pd| all_params || {
             (type_id != "node.render_scene"
                 || RENDER_SCENE_STAMPED_PARAMS.contains(&pd.name.as_ref()))
                 && (type_id != "node.bokeh_gather"
                     || matches!(pd.name.as_ref(), "enabled" | "aperture" | "quality"))
         })
-        .filter(|pd| type_id != "node.rigid_body" || matches!(pd.name.as_ref(), "shape" | "motion" | "density" | "friction" | "bounce" | "collider_parts"))
-        .filter(|pd| type_id != "node.scene_object" || pd.name.as_ref() != "parent_visible")
-        .filter(|pd| dials.is_none_or(|dials| dials.contains(&pd.name.as_ref())))
-        .filter(|pd| type_id != "node.whitewater_step" || matches!(pd.name.as_ref(), "enabled" | "amount" | "wavecrest_emission" | "turbulence_emission" | "min_turbulence" | "max_turbulence" | "inside_emission" | "dust_emission" | "boundary_dust" | "dust_rate" | "spray_speed" | "generation_rate" | "influence_base" | "influence_decay"))
-        .filter(|pd| type_id != "node.fluid_role_source" || matches!(pd.name.as_ref(),
+        .filter(|pd| all_params || type_id != "node.rigid_body" || matches!(pd.name.as_ref(), "shape" | "motion" | "density" | "friction" | "bounce" | "collider_parts"))
+        .filter(|pd| all_params || type_id != "node.scene_object" || pd.name.as_ref() != "parent_visible")
+        .filter(|pd| all_params || dials.is_none_or(|dials| dials.contains(&pd.name.as_ref())))
+        .filter(|pd| all_params || type_id != "node.whitewater_step" || matches!(pd.name.as_ref(), "enabled" | "amount" | "wavecrest_emission" | "turbulence_emission" | "min_turbulence" | "max_turbulence" | "inside_emission" | "dust_emission" | "boundary_dust" | "dust_rate" | "spray_speed" | "generation_rate" | "influence_base" | "influence_decay"))
+        .filter(|pd| all_params || type_id != "node.fluid_role_source" || matches!(pd.name.as_ref(),
             "role" | "enabled" | "geometry" | "shape" | "radius"
                 | "velocity_x" | "velocity_y" | "velocity_z" | "inherit_motion"
                 | "friction" | "collider_parts"))
@@ -207,12 +222,46 @@ pub fn migrate_scene_exposures(def: &mut EffectGraphDef) -> bool {
         &provider,
     );
     let bokeh_source_migrated = migrate_bokeh_source_coc(def);
+    let light_titles = migrate_light_titles(def);
     compound
+        || light_titles
         || fluid_objects
         || material_migrated
         || repaired
         || migrated
         || bokeh_source_migrated
+}
+
+/// SCENE_SURFACES D11 (Lights) load rung: a light imported before the
+/// importer wrote `title` carries its readable GLB name only as the section
+/// string of its intensity stamp. Copy that into `title` when it differs from
+/// the handle. Idempotent: a light with a title is never touched.
+fn migrate_light_titles(def: &mut EffectGraphDef) -> bool {
+    use manifold_core::effect_graph_def::BindingTarget;
+    let Some(meta) = def.preset_metadata.as_ref() else {
+        return false;
+    };
+    let mut changed = false;
+    for node in def.nodes.iter_mut().filter(|n| n.type_id == "node.light" && n.title.is_none()) {
+        let section = meta
+            .bindings
+            .iter()
+            .find(|b| matches!(&b.target, BindingTarget::Node { node_id, param }
+                if *node_id == node.node_id && param == "intensity"))
+            .and_then(|b| meta.params.iter().find(|p| p.id == b.id))
+            .and_then(|p| p.section.as_deref())
+            .filter(|s| !s.is_empty() && Some(*s) != node.handle.as_deref());
+        if let Some(section) = section {
+            node.title = Some(section.to_string());
+            changed = true;
+        }
+    }
+    changed
+}
+
+#[cfg(test)]
+pub(crate) fn migrate_light_titles_for_test(def: &mut EffectGraphDef) -> bool {
+    migrate_light_titles(def)
 }
 
 /// The layered gather consumes the original signed CoC and computes its own

@@ -266,11 +266,11 @@ pub(crate) fn effect_def_content_key(def: &EffectGraphDef) -> u64 {
     clear_cosmetic_fields(&mut normalized.nodes);
     // Normalize binding metadata for effects only
     if let Some(meta) = normalized.preset_metadata.as_mut() {
-        for binding in &mut meta.bindings {
-            binding.label = String::new(); // cosmetic only
-            binding.default_value = 0.0; // not read by codegen
-            binding.scale = 1.0; // affine remap, doesn't affect WGSL
-            binding.offset = 0.0; // affine remap, doesn't affect WGSL
+        for bd in &mut meta.bindings {
+            bd.label = String::new(); // cosmetic only
+            bd.default_value = 0.0; // not read by codegen
+            bd.scale = 1.0; // affine remap, doesn't affect WGSL
+            bd.offset = 0.0; // affine remap, doesn't affect WGSL
             // Keep: id, target, convert, user_added (these affect binding-target classification)
         }
     }

@@ -58,6 +58,7 @@ manifold_core::testkit_visible! {
 #[doc(hidden)]
 pub(crate) mod build;
 }
+mod binding_shape;
 mod device;
 pub use build::chain_topology_hash;
 use build::{assign_texture2d_slots, compute_topology_hash};

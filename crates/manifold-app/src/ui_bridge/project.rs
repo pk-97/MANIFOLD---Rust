@@ -1107,7 +1107,8 @@ pub(super) fn dispatch_project(
                 plan.new_card_bindings,
                 plan.new_string_bindings,
                 default,
-            );
+            )
+            .with_scene_bounds(plan.scene_bounds);
             let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
             boxed.execute(project);
             ContentCommand::send(content_tx, ContentCommand::Execute(boxed));

@@ -1140,6 +1140,9 @@ mod tests {
                         section: None,
                         card_visible: true,
                         material_role: None,
+                        limit: Default::default(),
+                        unit: None,
+                        scene: None,
                     },
                     ParamSpecDef {
                         tooltip: None,
@@ -1162,6 +1165,9 @@ mod tests {
                         section: None,
                         card_visible: true,
                         material_role: None,
+                        limit: Default::default(),
+                        unit: None,
+                        scene: None,
                     },
                 ],
                 bindings: vec![
@@ -1413,6 +1419,9 @@ mod tests {
                         section: None,
                         card_visible: true,
                         material_role: None,
+                        limit: Default::default(),
+                        unit: None,
+                        scene: None,
                     },
                     ParamSpecDef {
                         tooltip: None,
@@ -1435,6 +1444,9 @@ mod tests {
                         section: None,
                         card_visible: true,
                         material_role: None,
+                        limit: Default::default(),
+                        unit: None,
+                        scene: None,
                     },
                 ],
                 bindings: vec![
@@ -1873,6 +1885,9 @@ mod tests {
                     section: None,
                     card_visible: true,
                     material_role: None,
+                    limit: Default::default(),
+                    unit: None,
+                    scene: None,
                 }],
                 bindings: vec![BindingDef {
                     id: "pattern".into(),

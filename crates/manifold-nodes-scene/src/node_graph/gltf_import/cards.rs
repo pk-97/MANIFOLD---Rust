@@ -45,6 +45,9 @@ pub(super) fn card_param(
         section: Some(section.to_string()),
         card_visible: true,
         material_role: None,
+        limit: Default::default(),
+        unit: None,
+        scene: None,
     }
 }
 
@@ -119,6 +122,9 @@ pub(super) fn animation_card_params(
         section: Some(section.to_string()),
         card_visible: true,
         material_role: None,
+        limit: Default::default(),
+        unit: None,
+        scene: None,
     };
 
     card_params.push(ParamSpecDef {

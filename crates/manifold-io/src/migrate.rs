@@ -178,6 +178,12 @@ pub fn migrate_if_needed(json: &str) -> Result<String, serde_json::Error> {
         root["projectVersion"] = Value::String("1.20.0".to_string());
     }
 
+    // Saved bundled controls are stubs the live lookup fills (SCENE_SURFACES_DESIGN.md
+    // D20 (version bump for stubs)); no shape change, the bump makes older builds refuse.
+    if is_version_less_than(&version, "1.21.0") {
+        root["projectVersion"] = Value::String("1.21.0".to_string());
+    }
+
     serde_json::to_string_pretty(&root)
 }
 

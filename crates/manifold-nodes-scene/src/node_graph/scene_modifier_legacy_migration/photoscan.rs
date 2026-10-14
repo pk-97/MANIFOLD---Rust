@@ -767,6 +767,8 @@ fn validate_host_fanout(metadata: &PresetMetadata) -> Result<(), String> {
         if !binding_is_photoscan(binding) {
             continue;
         }
+        // Old-file consistency check across fan-out siblings; the label is
+        // compared, never displayed (SCENE_SURFACES_DESIGN.md section 3.8).
         let entry = (
             binding.label.as_str(),
             binding.default_value,

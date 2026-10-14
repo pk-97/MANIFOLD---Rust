@@ -2409,16 +2409,17 @@ fn scene_import_with_half_extent(half_extent: f32) -> (manifold_core::effect_gra
     build_import_graph(&summary, path).expect("build scene-scale import graph")
 }
 
-/// Find the stamped card param for `node_id`+`param` on an import def.
-fn stamped_card_param<'a>(
-    meta: &'a manifold_core::effect_graph_def::PresetMetadata,
+/// The card param for `node_id`+`param` on an import def, as the live
+/// lookup joins it (ranges scale from the saved `scene_bounds`).
+fn stamped_card_param(
+    def: &manifold_core::effect_graph_def::EffectGraphDef,
     node_id: u32,
     param: &str,
-) -> &'a manifold_core::effect_graph_def::ParamSpecDef {
+) -> manifold_core::effect_graph_def::ParamSpecDef {
     let id = format!("{node_id}_{param}");
-    meta.params.iter().find(|p| p.id == id).unwrap_or_else(|| {
-        panic!("no stamped card param `{id}`; have: {:?}", meta.params.iter().map(|p| &p.id).collect::<Vec<_>>())
-    })
+    manifold_core::param_lookup::Declared::new(def)
+        .and_then(|mut d| d.spec(&id))
+        .unwrap_or_else(|| panic!("no card param `{id}`"))
 }
 
 /// BUG-upfq P1: an import's light / focus / light-range slider ranges must
@@ -2436,8 +2437,8 @@ fn scene_derived_range_ratio_matches_bbox(small_half: f32, large_half: f32) -> b
     let (small_def, _) = scene_import_with_half_extent(small_half);
     let (large_def, _) = scene_import_with_half_extent(large_half);
 
-    let small_meta = small_def.preset_metadata.as_ref().unwrap();
-    let large_meta = large_def.preset_metadata.as_ref().unwrap();
+    let small_meta = &small_def;
+    let large_meta = &large_def;
 
     let small_sun_id = small_def.nodes.iter().find(|n| n.type_id == "node.light").unwrap().id;
     let large_sun_id = large_def.nodes.iter().find(|n| n.type_id == "node.light").unwrap().id;
@@ -2504,7 +2505,7 @@ fn scene_ssao_radius_default_tracks_scene_scale() {
 #[test]
 fn scene_range_override_never_moves_defaults() {
     let (def, _) = scene_import_with_half_extent(5.0);
-    let meta = def.preset_metadata.as_ref().unwrap();
+    let meta = &def;
     let sun_id = def.nodes.iter().find(|n| n.type_id == "node.light").unwrap().id;
     let sun_node = def.nodes.iter().find(|n| n.type_id == "node.light").unwrap();
 
@@ -2523,7 +2524,7 @@ fn scene_range_override_never_moves_defaults() {
 #[test]
 fn scene_light_range_scales_and_keeps_zero_one_floor() {
     let (def, _) = scene_import_with_half_extent(2.0);
-    let meta = def.preset_metadata.as_ref().unwrap();
+    let meta = &def;
     let sun_id = def.nodes.iter().find(|n| n.type_id == "node.light").unwrap().id;
     let range_spec = stamped_card_param(meta, sun_id, "range");
 
@@ -2582,7 +2583,7 @@ fn import_stamps_world_to_mm_and_scene_f_stop_range() {
     // f_stop card range is scene-derived, one-sided top.
     let lens_list: Vec<_> = def.nodes.iter().filter(|n| n.type_id == "node.camera_lens").collect();
     let lens_id = lens_list[0].id;
-    let fstop = stamped_card_param(meta, lens_id, "f_stop");
+    let fstop = stamped_card_param(&def, lens_id, "f_stop");
     assert_eq!(fstop.min, 0.5, "f_stop band keeps the photographic 0.5 floor");
     assert!(
         (fstop.max - (32.0f32).max(64.0 * r)).abs() < 1e-3,
@@ -2592,31 +2593,53 @@ fn import_stamps_world_to_mm_and_scene_f_stop_range() {
     assert!(fstop.default_value >= fstop.min && fstop.default_value <= fstop.max);
 }
 
-/// BUG-upfq P1: merged object transform sliders get the scene-derived range
-/// too (blanket per-object cards) — the merge path stamps them from the
-/// incoming bbox, not the existing scene's.
-#[test]
-fn merge_stamps_scene_ranges_on_transform_cards() {
-    let target = scene_def_with_bbox_half_extent(1.0);
-    // Merge a 10×-larger asset — its transform pos slider must widen 10×.
+/// The merged object's transform pos_x card param.
+fn merged_pos_x(
+    target: &manifold_core::effect_graph_def::EffectGraphDef,
+) -> (MergePlan, manifold_core::effect_graph_def::ParamSpecDef) {
+    // A 10x-larger asset than the half-extent-1 target.
     let summary = merge_summary(vec![full_material(0, "Big", 100)], 10.0);
     let path = std::path::Path::new("/tmp/synthetic_merge_scene_range.glb");
-    let plan = merge_import_into_graph(&target, &summary, path).expect("merge");
-
+    let plan = merge_import_into_graph(target, &summary, path).expect("merge");
     let transformed = plan
         .new_nodes
         .iter()
         .find_map(|n| n.group.as_ref())
         .and_then(|g| g.nodes.iter().find(|n| n.type_id == "node.transform_3d"))
         .expect("merged object has a transform_3d");
-    let r = super::scene_scale::SceneScale::from_bbox([-10.0; 3], [10.0; 3]).radius;
-    let pos = plan
-        .new_card_params
-        .iter()
-        .find(|p| p.id == format!("{}_pos_x", transformed.id))
-        .expect("merged object's transform pos_x card param");
+    let mut merged = target.clone();
+    merged.nodes.extend(plan.new_nodes.iter().cloned());
+    let meta = merged.preset_metadata.as_mut().expect("target has metadata");
+    meta.params.extend(plan.new_card_params.iter().cloned());
+    meta.bindings.extend(plan.new_card_bindings.iter().cloned());
+    meta.scene_bounds = Some(plan.scene_bounds);
+    let pos = stamped_card_param(&merged, transformed.id, "pos_x");
+    (plan, pos)
+}
+
+/// One radius per graph (SCENE_SURFACES ruling L1): merging into a scene
+/// that already has bounds scales the new transform sliders by the scene's
+/// radius, not the incoming asset's, so the live lookup reads the same band.
+#[test]
+fn merge_into_bounded_scene_uses_scene_radius() {
+    let target = scene_def_with_bbox_half_extent(1.0);
+    let (plan, pos) = merged_pos_x(&target);
+    let r = super::scene_scale::SceneScale::from_bbox([-1.0; 3], [1.0; 3]).radius;
     assert_eq!(pos.default_value, 0.0);
-    assert!((pos.max - 2.0 * r).abs() < 1e-3, "merged transform pos slider must be ±2·incoming-radius, got {}", pos.max);
+    assert!((pos.max - 2.0 * r).abs() < 1e-3, "pos slider must be ±2·scene-radius, got {}", pos.max);
+    assert_eq!(plan.scene_bounds, ([-1.0; 3], [1.0; 3]), "the scene keeps its own bounds");
+}
+
+/// A scene with no bounds takes the incoming asset's box as its bounds, and
+/// the merged transform sliders scale by that radius.
+#[test]
+fn merge_into_unbounded_scene_uses_incoming_radius() {
+    let mut target = scene_def_with_bbox_half_extent(1.0);
+    target.preset_metadata.as_mut().expect("meta").scene_bounds = None;
+    let (plan, pos) = merged_pos_x(&target);
+    let r = super::scene_scale::SceneScale::from_bbox([-10.0; 3], [10.0; 3]).radius;
+    assert!((pos.max - 2.0 * r).abs() < 1e-3, "pos slider must be ±2·incoming-radius, got {}", pos.max);
+    assert_eq!(plan.scene_bounds, ([-10.0; 3], [10.0; 3]), "the incoming box becomes the scene's bounds");
 }
 
 /// BUG-upfq follow-up: orbit camera `distance`/`near`/`far` slider ranges
@@ -2628,8 +2651,8 @@ fn orbit_camera_ranges_scale_with_bbox_radius() {
     let (small_def, _) = scene_import_with_half_extent(0.137);
     let (large_def, _) = scene_import_with_half_extent(50.0);
 
-    let small_meta = small_def.preset_metadata.as_ref().unwrap();
-    let large_meta = large_def.preset_metadata.as_ref().unwrap();
+    let small_meta = &small_def;
+    let large_meta = &large_def;
 
     let small_cam_id = small_def.nodes.iter().find(|n| n.type_id == "node.orbit_camera").unwrap().id;
     let large_cam_id = large_def.nodes.iter().find(|n| n.type_id == "node.orbit_camera").unwrap().id;
@@ -2668,7 +2691,7 @@ fn orbit_camera_ranges_scale_with_bbox_radius() {
 #[test]
 fn orbit_camera_range_override_never_moves_defaults() {
     let (def, _) = scene_import_with_half_extent(0.137);
-    let meta = def.preset_metadata.as_ref().unwrap();
+    let meta = &def;
     let cam_id = def.nodes.iter().find(|n| n.type_id == "node.orbit_camera").unwrap();
     let cam_node = &cam_id;
     let cam_id = cam_id.id;
@@ -2748,4 +2771,46 @@ fn authored_spot_light_preserves_raw_intensity_cone_and_physical_range() {
     assert!(report.report_lines.iter().any(|line| {
         line.contains("raw") && line.contains("candela") && line.contains("spot cone")
     }));
+}
+
+#[test]
+fn imported_light_title_is_glb_name_and_rung_restores_it() {
+    use super::gltf_load::{GltfLightKind, GltfPunctualLight};
+    use crate::node_graph::scene_exposure::migrate_light_titles_for_test;
+
+    let summary = GltfImportSummary {
+        materials: vec![full_material(0, "M", 3)],
+        bbox_min: [-1.0, -1.0, -1.0],
+        bbox_max: [1.0, 1.0, 1.0],
+        camera_count: 0,
+        default_material_vertex_count: 0,
+        animations: Vec::new(),
+        animation_report_lines: Vec::new(),
+        extension_report_lines: Vec::new(),
+        lights: vec![GltfPunctualLight {
+            name: Some("Key Spot".to_string()),
+            kind: GltfLightKind::Point,
+            color: [1.0, 1.0, 1.0],
+            intensity: 100.0,
+            range: None,
+            world_pos: [0.0, 1.0, 0.0],
+            world_forward: [0.0, 0.0, -1.0],
+        }],
+        cameras: Vec::new(),
+        camera_report_lines: Vec::new(),
+        texture_dims: Vec::new(),
+    };
+    let (mut def, _) =
+        build_import_graph(&summary, std::path::Path::new("/tmp/synthetic_title.glb")).expect("build");
+    let title = |def: &manifold_core::effect_graph_def::EffectGraphDef| {
+        def.nodes.iter().find(|n| n.node_id == "light_0").and_then(|n| n.title.clone())
+    };
+    assert_eq!(title(&def).as_deref(), Some("Key Spot"), "importer writes the GLB name into title");
+
+    // An import from before the importer wrote titles: the rung recovers the
+    // name from the intensity stamp's section string, once.
+    def.nodes.iter_mut().find(|n| n.node_id == "light_0").unwrap().title = None;
+    assert!(migrate_light_titles_for_test(&mut def));
+    assert_eq!(title(&def).as_deref(), Some("Key Spot"));
+    assert!(!migrate_light_titles_for_test(&mut def), "rung is idempotent");
 }

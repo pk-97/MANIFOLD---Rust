@@ -454,7 +454,10 @@ pub struct PresetMetadata {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub layer_types: Option<Vec<crate::types::LayerType>>,
     /// Outer-card slider definitions. Each entry corresponds to one
-    /// host-visible parameter.
+    /// host-visible parameter. An entry the live lookup describes is saved
+    /// as a stub (SCENE_SURFACES_DESIGN.md D2 (one live lookup)), see
+    /// [`ParamSpecDef::lookup_stub`].
+    #[serde(serialize_with = "serialize_param_specs")]
     pub params: Vec<ParamSpecDef>,
     /// Routing from each outer slider to one or more inner-graph node
     /// parameters. **Not a parallel array to `params`** — bindings
@@ -517,9 +520,13 @@ pub struct ParamSpecDef {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tooltip: Option<String>,
     pub id: String,
+    #[serde(default)]
     pub name: String,
+    #[serde(default)]
     pub min: f32,
+    #[serde(default)]
     pub max: f32,
+    #[serde(default)]
     pub default_value: f32,
     #[serde(default)]
     pub whole_numbers: bool,
@@ -606,6 +613,19 @@ pub struct ParamSpecDef {
     /// and parameter identity remain authoritative elsewhere.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub material_role: Option<crate::material_inspector::MaterialParamRole>,
+    /// What the value may never pass (SCENE_SURFACES_DESIGN.md D15 (slider
+    /// range and hard limit)). Saved only on authored specs.
+    #[serde(
+        default,
+        skip_serializing_if = "manifold_foundation::param_range::HardLimit::is_slider"
+    )]
+    pub limit: manifold_foundation::param_range::HardLimit,
+    /// Saved only on authored specs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unit: Option<manifold_foundation::scene_surface::Unit>,
+    /// Scene surface placement. Saved only on authored specs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scene: Option<manifold_foundation::scene_surface::SceneParamDesc>,
 }
 
 fn default_card_visible() -> bool {
@@ -643,6 +663,9 @@ impl Default for ParamSpecDef {
             section: None,
             card_visible: true,
             material_role: None,
+            limit: Default::default(),
+            unit: None,
+            scene: None,
         }
     }
 }
@@ -654,6 +677,9 @@ impl Default for ParamSpecDef {
 #[serde(rename_all = "camelCase")]
 pub struct BindingDef {
     pub id: String,
+    /// Saved only where the lookup cannot name the control (composite,
+    /// fan-out, user-added, unresolved); a load fills it back in.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub label: String,
     pub default_value: f32,
     pub target: BindingTarget,
@@ -711,6 +737,96 @@ pub struct BindingDef {
 
 fn is_false(b: &bool) -> bool {
     !*b
+}
+
+impl ParamSpecDef {
+    /// The saved form of a control the live lookup describes: the fields the
+    /// lookup owns (range and flags) are cleared, the ones it leaves as saved
+    /// are kept. Joining
+    /// a stub gives back the same spec, so save and reload is a fixed point.
+    pub fn lookup_stub(&self) -> Self {
+        Self {
+            min: 0.0,
+            max: 0.0,
+            whole_numbers: false,
+            is_toggle: false,
+            is_trigger: false,
+            value_labels: Vec::new(),
+            is_angle: false,
+            material_role: None,
+            limit: Default::default(),
+            unit: None,
+            scene: None,
+            ..self.clone()
+        }
+    }
+
+    fn is_lookup_stub(&self) -> bool {
+        self.min == 0.0 && self.max == 0.0 && *self == self.lookup_stub()
+    }
+}
+
+/// A stub writes without range and flags; they parse back to the same empty
+/// defaults, so the entry is lossless either way.
+fn serialize_param_specs<S: serde::Serializer>(
+    specs: &[ParamSpecDef],
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    #[derive(Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Stub<'a> {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        tooltip: &'a Option<String>,
+        id: &'a str,
+        #[serde(skip_serializing_if = "String::is_empty")]
+        name: &'a String,
+        default_value: f32,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        format_string: &'a Option<String>,
+        #[serde(skip_serializing_if = "String::is_empty")]
+        osc_suffix: &'a String,
+        #[serde(skip_serializing_if = "crate::effects::curve_is_linear")]
+        curve: &'a crate::macro_bank::MacroCurve,
+        #[serde(skip_serializing_if = "is_false")]
+        invert: &'a bool,
+        #[serde(skip_serializing_if = "is_false")]
+        is_trigger_gate: &'a bool,
+        #[serde(skip_serializing_if = "is_false")]
+        wraps: &'a bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        section: &'a Option<String>,
+        #[serde(skip_serializing_if = "is_true")]
+        card_visible: &'a bool,
+    }
+    #[derive(Serialize)]
+    #[serde(untagged)]
+    enum Entry<'a> {
+        Stub(Stub<'a>),
+        Full(&'a ParamSpecDef),
+    }
+    use serde::ser::SerializeSeq;
+    let mut seq = serializer.serialize_seq(Some(specs.len()))?;
+    for s in specs {
+        if s.is_lookup_stub() {
+            seq.serialize_element(&Entry::Stub(Stub {
+                tooltip: &s.tooltip,
+                id: &s.id,
+                name: &s.name,
+                default_value: s.default_value,
+                format_string: &s.format_string,
+                osc_suffix: &s.osc_suffix,
+                curve: &s.curve,
+                invert: &s.invert,
+                is_trigger_gate: &s.is_trigger_gate,
+                wraps: &s.wraps,
+                section: &s.section,
+                card_visible: &s.card_visible,
+            }))?;
+        } else {
+            seq.serialize_element(&Entry::Full(s))?;
+        }
+    }
+    seq.end()
 }
 
 fn one_f32() -> f32 {
@@ -886,6 +1002,9 @@ mod tests {
             section: None,
             card_visible: true,
             material_role: None,
+            limit: Default::default(),
+            unit: None,
+            scene: None,
         }
     }
 
@@ -1262,6 +1381,9 @@ mod tests {
                 section: None,
                 card_visible: true,
                 material_role: None,
+                limit: Default::default(),
+                unit: None,
+                scene: None,
             }],
             bindings: vec![BindingDef {
                 id: "amount".to_string(),
