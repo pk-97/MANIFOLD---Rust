@@ -521,6 +521,8 @@ struct Runner {
     editor: Option<RunnerEditor>,
     /// Perform mode, as the App holds it.
     perform: crate::perform_mode::PerformModeState,
+    /// The inline text session, as the App holds it (`text_session.rs`).
+    text_input: crate::text_input::TextInputState,
 }
 
 /// The graph editor window as the App holds it (`graph_editor`,
@@ -593,6 +595,7 @@ impl Runner {
             viewport: None,
             editor: None,
             perform: crate::perform_mode::PerformModeState::new(),
+            text_input: crate::text_input::TextInputState::new(),
         }
     }
 
@@ -657,21 +660,35 @@ impl Runner {
         render: &mut RenderState,
     ) -> StepResult {
         let action_desc = format!("{action:?}");
-        // In perform mode the App routes window input to the exit button
-        // (`perform_mode/input.rs`), still on `Application`; fail rather than
-        // drive the frozen main window.
-        if self.perform.active
-            && matches!(
-                action,
-                AutomationAction::Pointer { .. }
-                    | AutomationAction::Key { .. }
-                    | AutomationAction::ScrollTo { .. }
-                    | AutomationAction::TrackWheel { .. }
-                    | AutomationAction::ResizeDrag { .. }
-                    | AutomationAction::Modifiers { .. }
-            )
-        {
-            return self.fail(index, action_desc, ui, out_dir, "perform-mode window input is not reached headless".into());
+        // In perform mode window input goes to the perform screen
+        // (`perform_mode/input.rs`), never the frozen main window.
+        if self.perform.active {
+            match action {
+                AutomationAction::Pointer { target, gesture } => {
+                    return self.perform_pointer(ui, data, index, action_desc, target, gesture, out_dir, render);
+                }
+                AutomationAction::Key { .. } if crate::perform_mode::frame::takes_keys(&self.perform) => {
+                    self.live_frame(ui, data, render, false, true);
+                    return StepResult {
+                        index,
+                        action: action_desc,
+                        status: "ok",
+                        detail: "dropped: perform mode takes every key".into(),
+                        artifact: None,
+                    };
+                }
+                AutomationAction::ScrollTo { .. }
+                | AutomationAction::TrackWheel { .. }
+                | AutomationAction::ResizeDrag { .. }
+                | AutomationAction::Modifiers { .. } => {
+                    return self.fail(index, action_desc, ui, out_dir, "perform mode drops this input; only the exit button responds".into());
+                }
+                _ => {}
+            }
+        }
+        // An active text session takes every key, as `input_keyboard` gives it them.
+        if self.text_input.active && matches!(action, AutomationAction::Key { .. } | AutomationAction::Text { .. }) {
+            return self.type_into_session(ui, data, index, action_desc, action, out_dir, render);
         }
         let outcome = match action {
             AutomationAction::Step { frames } => {
@@ -850,14 +867,9 @@ impl Runner {
                     }
                 }
             }
+            // An active session took `Text` above; without one nothing types.
             AutomationAction::Text { .. } => {
-                // No headless injection seam exists yet: text editing lives
-                // entirely in `Application::text_input` (manifold-app), which
-                // `UIRoot` can't reach (no `pub fn text_event` on `UIRoot` —
-                // re-derived while building this driver). Fails loudly (D6)
-                // rather than silently no-op-ing; section 7's live door is the
-                // precedent for wiring this once P3 has a live Application.
-                self.fail(index, action_desc, ui, out_dir, "no headless seam for AutomationAction::Text (Application::text_input only; see UI_AUTOMATION_DESIGN.md section 7)".into())
+                self.fail(index, action_desc, ui, out_dir, "no text field is focused: open one first (click a search bar, double-click a value)".into())
             }
             AutomationAction::Pointer { target, gesture } => {
                 self.pointer(ui, data, index, action_desc, target, gesture, out_dir, render)
@@ -1022,6 +1034,7 @@ impl Runner {
             self.perform_frame(ui, data, render);
             return;
         }
+        crate::text_session::pump_main_window(&mut self.text_input, ui);
         // The snapshot echo of what the last frame sent, folded as the App
         // folds an accepted snapshot.
         self.edits.stamps.fold_snapshot(&self.content_stamps);
@@ -1119,6 +1132,187 @@ impl Runner {
             f64::from(super::SCALE),
         );
         encoder.commit();
+    }
+
+    /// Window input in perform mode, as `perform_mode/input.rs` takes it: the
+    /// exit button follows hover and a release over it asks to leave; every
+    /// other press is dropped. Then the exit `about_to_wait` applies, and one
+    /// frame.
+    #[allow(clippy::too_many_arguments)]
+    fn perform_pointer(
+        &mut self,
+        ui: &mut UIRoot,
+        data: &mut SceneData,
+        index: usize,
+        action_desc: String,
+        target: &AutomationTarget,
+        gesture: &Gesture,
+        out_dir: &std::path::Path,
+        render: &mut RenderState,
+    ) -> StepResult {
+        use crate::perform_mode::frame;
+        let rect = match self.resolve(ui, target) {
+            Ok(r) => r,
+            Err(e) => return self.fail(index, action_desc, ui, out_dir, e),
+        };
+        let center = Vec2::new(rect.x + rect.width * 0.5, rect.y + rect.height * 0.5);
+        self.last_gesture_points.clear();
+        self.last_gesture_points.push(center);
+        match gesture {
+            Gesture::Hover | Gesture::Press { .. } => {
+                frame::pointer_moved(&mut self.perform, center);
+            }
+            Gesture::Release => frame::pointer_released(&mut self.perform, center),
+            Gesture::Click { .. } => {
+                frame::pointer_moved(&mut self.perform, center);
+                frame::pointer_released(&mut self.perform, center);
+            }
+            _ => {
+                return self.fail(index, action_desc, ui, out_dir, "perform mode takes hover, press, release and click".into());
+            }
+        }
+        let exited = frame::take_pending_exit(&mut self.perform, ui, Some(&mut render.cache));
+        if exited {
+            self.flags.rebuild = true;
+        }
+        self.live_frame(ui, data, render, false, true);
+        let detail = if exited {
+            "perform mode exited".to_string()
+        } else {
+            format!("perform input at ({:.1},{:.1}), exit hover {}", center.x, center.y, self.perform.exit_button_hover)
+        };
+        StepResult { index, action: action_desc, status: "ok", detail, artifact: None }
+    }
+
+    /// `Key` and `Text` while a session is up, through the main window's text
+    /// key handler. `Text` types each character as its own key with no
+    /// modifiers held, as the live door sends it.
+    #[allow(clippy::too_many_arguments)]
+    fn type_into_session(
+        &mut self,
+        ui: &mut UIRoot,
+        data: &mut SceneData,
+        index: usize,
+        action_desc: String,
+        action: &AutomationAction,
+        out_dir: &std::path::Path,
+        render: &mut RenderState,
+    ) -> StepResult {
+        use crate::text_session::{Arrow, KeyOutcome, TextKey};
+        let mut keys: Vec<(String, Option<Key>, manifold_ui::input::Modifiers)> = Vec::new();
+        match action {
+            AutomationAction::Text { text } => {
+                keys.extend(text.chars().map(|c| (c.to_string(), None, manifold_ui::input::Modifiers::NONE)));
+            }
+            AutomationAction::Key { key, modifiers } => {
+                // A letter key carries its character, as winit reports it.
+                let name = format!("{key:?}").to_lowercase();
+                keys.push((name, Some(*key), *modifiers));
+            }
+            _ => unreachable!("only Key and Text reach the session"),
+        }
+        let mut committed = None;
+        for (chars, key, mods) in &keys {
+            self.modifiers = *mods;
+            ui.input.set_modifiers(*mods);
+            let text_key = match key {
+                None => TextKey::Chars(chars),
+                Some(Key::Escape) => TextKey::Escape,
+                Some(Key::Enter) => TextKey::Enter,
+                Some(Key::Backspace) => TextKey::Backspace,
+                Some(Key::Delete) => TextKey::Delete,
+                Some(Key::Left) => TextKey::Arrow(Arrow::Left),
+                Some(Key::Right) => TextKey::Arrow(Arrow::Right),
+                Some(Key::Up) => TextKey::Arrow(Arrow::Up),
+                Some(Key::Down) => TextKey::Arrow(Arrow::Down),
+                Some(Key::Space) => TextKey::Space,
+                Some(_) if chars.len() == 1 => TextKey::Chars(chars),
+                Some(_) => TextKey::Other,
+            };
+            match crate::text_session::main_window_key(&mut self.text_input, ui, text_key, *mods, true) {
+                KeyOutcome::NotTyping => {
+                    return self.fail(index, action_desc, ui, out_dir, "the text session ended before every key was typed".into());
+                }
+                KeyOutcome::Consumed => {}
+                KeyOutcome::Filtered => self.flags.rebuild = true,
+                KeyOutcome::Committed(field, text) => {
+                    if !self.commit_text(ui, data, field, &text) {
+                        return self.fail(index, action_desc, ui, out_dir, format!(
+                            "{field:?} commits on Application (graph editor, automation point or preset save), not reached headless"
+                        ));
+                    }
+                    committed = Some((field, text));
+                }
+            }
+        }
+        // A keyboard pick from the browser dispatches next frame, through
+        // `process_events`.
+        if !ui.pending_keyboard_actions.is_empty() {
+            self.drain_and_dispatch(ui, data);
+        }
+        self.live_frame(ui, data, render, false, true);
+        let detail = match committed {
+            Some((field, text)) => format!("committed {field:?} {text:?}"),
+            None if self.text_input.active => format!("{:?} reads {:?}", self.text_input.field, self.text_input.text()),
+            None => "text session closed".into(),
+        };
+        StepResult { index, action: action_desc, status: "ok", detail, artifact: None }
+    }
+
+    /// Commits a session through the shared seam with the runner's dispatch
+    /// context. False for a field only `Application` commits.
+    fn commit_text(&mut self, ui: &mut UIRoot, data: &mut SceneData, field: crate::text_input::TextInputField, text: &str) -> bool {
+        let mut dctx = crate::ui_bridge::DispatchCtx {
+            project: crate::ui_bridge::ProjectRef::new(&mut data.project, &mut self.edits, &self.content_tx),
+            content_tx: &self.content_tx,
+            content_state: &self.content_state,
+            ui: &mut *ui,
+            selection: &mut data.selection,
+            active_layer: &mut self.active_layer,
+            user_prefs: &mut self.user_prefs,
+            editor_target: None,
+            scrub: &mut self.scrub,
+            dialogs: Default::default(),
+        };
+        let handled = crate::text_session::commit(&mut self.text_input, field, text, &mut dctx, &mut self.flags.rebuild);
+        data.active = self.active_layer.as_ref().and_then(|lid| data.project.timeline.find_layer_index_by_id(lid));
+        println!("ui-snap --script: commit {field:?} {text:?} -> {}", if handled { "seam" } else { "not reached" });
+        handled
+    }
+
+    /// The App's text gate ahead of a left press (`window_input`'s
+    /// `input_mouse_input`): true when the field took the press. A press
+    /// outside commits first and still reaches its target.
+    fn text_press(&mut self, ui: &mut UIRoot, data: &mut SceneData, pos: Vec2, shift: bool) -> bool {
+        use crate::text_session::PointerDown;
+        match crate::text_session::pointer_down(&mut self.text_input, Some(&ui.tree), pos, self.clock, shift) {
+            PointerDown::Idle => false,
+            PointerDown::Inside => true,
+            PointerDown::Committed(field, text) => {
+                self.commit_text(ui, data, field, &text);
+                false
+            }
+        }
+    }
+
+    /// A left press through the text gate, then the tree, as the App routes it.
+    fn press(&mut self, ui: &mut UIRoot, data: &mut SceneData, pos: Vec2) {
+        if !self.text_press(ui, data, pos, self.modifiers.shift) {
+            ui.pointer_event(pos, PointerAction::Down, self.clock);
+        }
+    }
+
+    /// A left release: it ends a text drag, then reaches the tree.
+    fn release(&mut self, ui: &mut UIRoot, pos: Vec2) {
+        crate::text_session::pointer_up(&mut self.text_input);
+        ui.pointer_event(pos, PointerAction::Up, self.clock);
+    }
+
+    /// Pointer motion: an armed text drag takes it, else the tree.
+    fn move_to(&mut self, ui: &mut UIRoot, pos: Vec2) {
+        if !crate::text_session::pointer_move(&mut self.text_input, Some(&ui.tree), pos) {
+            ui.pointer_event(pos, PointerAction::Move, self.clock);
+        }
     }
 
     /// What a frame shows that the tree dump cannot see: the inputs of the
@@ -1515,7 +1709,12 @@ impl Runner {
         let (clip_rects, automation_lanes) = self.surfaces_owned(ui);
         let clip_targets = ClipHitTargets(&clip_rects);
         let automation_targets = AutomationHitTargets(&automation_lanes);
-        let surfaces: Vec<&dyn HitTargets> = vec![&clip_targets, &automation_targets];
+        // The perform screen's exit button is a surface only while it shows.
+        let perform_targets = crate::perform_mode::frame::PerformHitTargets(self.perform.exit_button_rect);
+        let mut surfaces: Vec<&dyn HitTargets> = vec![&clip_targets, &automation_targets];
+        if self.perform.active {
+            surfaces.push(&perform_targets);
+        }
         automation::resolve(&ui.tree, &surfaces, target)
             .map(|r| r.rect)
             .map_err(|e| e.to_string())
@@ -1529,7 +1728,12 @@ impl Runner {
         let (clip_rects, automation_lanes) = self.surfaces_owned(ui);
         let clip_targets = ClipHitTargets(&clip_rects);
         let automation_targets = AutomationHitTargets(&automation_lanes);
-        let surfaces: Vec<&dyn HitTargets> = vec![&clip_targets, &automation_targets];
+        // The perform screen's exit button is a surface only while it shows.
+        let perform_targets = crate::perform_mode::frame::PerformHitTargets(self.perform.exit_button_rect);
+        let mut surfaces: Vec<&dyn HitTargets> = vec![&clip_targets, &automation_targets];
+        if self.perform.active {
+            surfaces.push(&perform_targets);
+        }
         let (matches, query) = automation::resolve_all(&ui.tree, &surfaces, target);
         // A selector nothing in the main window matches is looked up in the
         // open editor window, so a flow can assert on what that window shows.
@@ -1570,29 +1774,29 @@ impl Runner {
                 self.modifiers = *modifiers;
                 ui.input.set_modifiers(*modifiers);
                 self.last_gesture_points.push(center);
-                ui.pointer_event(center, PointerAction::Down, self.clock);
+                self.press(ui, data, center);
                 self.drain_and_dispatch(ui, data);
             }
             Gesture::Release => {
                 self.last_gesture_points.push(center);
-                ui.pointer_event(center, PointerAction::Up, self.clock);
+                self.release(ui, center);
                 self.drain_and_dispatch(ui, data);
             }
             Gesture::Click { modifiers } => {
                 self.modifiers = *modifiers;
                 ui.input.set_modifiers(*modifiers);
                 self.last_gesture_points.push(center);
-                ui.pointer_event(center, PointerAction::Down, self.clock);
-                ui.pointer_event(center, PointerAction::Up, self.clock);
+                self.press(ui, data, center);
+                self.release(ui, center);
                 self.drain_and_dispatch(ui, data);
             }
             Gesture::DoubleClick => {
                 ui.input.set_modifiers(self.modifiers);
                 self.last_gesture_points.push(center);
-                ui.pointer_event(center, PointerAction::Down, self.clock);
-                ui.pointer_event(center, PointerAction::Up, self.clock);
-                ui.pointer_event(center, PointerAction::Down, self.clock);
-                ui.pointer_event(center, PointerAction::Up, self.clock);
+                self.press(ui, data, center);
+                self.release(ui, center);
+                self.press(ui, data, center);
+                self.release(ui, center);
                 self.drain_and_dispatch(ui, data);
             }
             Gesture::RightClick => {
@@ -1602,7 +1806,7 @@ impl Runner {
             }
             Gesture::Hover => {
                 self.last_gesture_points.push(center);
-                ui.pointer_event(center, PointerAction::Move, self.clock);
+                self.move_to(ui, center);
                 self.drain_and_dispatch(ui, data);
             }
             Gesture::Scroll { delta } => {
@@ -1616,13 +1820,13 @@ impl Runner {
                 let to_center = Vec2::new(to_rect.x + to_rect.width * 0.5, to_rect.y + to_rect.height * 0.5);
                 ui.input.set_modifiers(self.modifiers);
                 self.last_gesture_points.push(center);
-                ui.pointer_event(center, PointerAction::Down, self.clock);
+                self.press(ui, data, center);
                 for pt in automation::interpolate_drag(center, to_center, *steps) {
                     self.last_gesture_points.push(pt);
-                    ui.pointer_event(pt, PointerAction::Move, self.clock);
+                    self.move_to(ui, pt);
                 }
                 self.last_gesture_points.push(to_center);
-                ui.pointer_event(to_center, PointerAction::Up, self.clock);
+                self.release(ui, to_center);
                 self.drain_and_dispatch(ui, data);
             }
             Gesture::DragFrames { to, steps } | Gesture::Sweep { to, steps } => {
@@ -1635,9 +1839,9 @@ impl Runner {
                 ui.input.set_modifiers(self.modifiers);
                 self.last_gesture_points.push(center);
                 if pressed {
-                    ui.pointer_event(center, PointerAction::Down, self.clock);
+                    self.press(ui, data, center);
                 } else {
-                    ui.pointer_event(center, PointerAction::Move, self.clock);
+                    self.move_to(ui, center);
                     self.overlay_hover(ui, data, center);
                 }
                 self.drain_and_dispatch(ui, data);
@@ -1645,7 +1849,7 @@ impl Runner {
                 for pt in automation::interpolate_drag(center, to_center, *steps) {
                     self.clock += DT;
                     self.last_gesture_points.push(pt);
-                    ui.pointer_event(pt, PointerAction::Move, self.clock);
+                    self.move_to(ui, pt);
                     self.overlay_hover(ui, data, pt);
                     self.drain_and_dispatch(ui, data);
                     self.live_frame(ui, data, render, false, true);
@@ -1653,9 +1857,9 @@ impl Runner {
                 self.clock += DT;
                 self.last_gesture_points.push(to_center);
                 if pressed {
-                    ui.pointer_event(to_center, PointerAction::Up, self.clock);
+                    self.release(ui, to_center);
                 } else {
-                    ui.pointer_event(to_center, PointerAction::Move, self.clock);
+                    self.move_to(ui, to_center);
                     self.overlay_hover(ui, data, to_center);
                 }
                 self.drain_and_dispatch(ui, data);
@@ -2006,9 +2210,22 @@ impl Runner {
             // output window to open, so it enters at once.
             if let PanelAction::Project(manifold_ui::panels::ProjectAction::EnterPerformMode) = action {
                 if !self.perform.active {
-                    let mut text_input = crate::text_input::TextInputState::new();
-                    crate::perform_mode::frame::enter(&mut self.perform, ui, &mut text_input, None);
+                    crate::perform_mode::frame::enter(&mut self.perform, ui, &mut self.text_input, None);
                 }
+                continue;
+            }
+            // The App's action loop opens text sessions before the bridge.
+            if crate::text_session::begin_inspector_entry(
+                &mut self.text_input,
+                action,
+                false,
+                ui.inspector.last_effect_tab(),
+                &self.active_layer,
+                &data.selection,
+                &data.project,
+            ) || crate::text_session::begin_for_action(&mut self.text_input, ui, &data.project, &data.selection, action)
+            {
+                println!("ui-snap --script: {action:?} -> text session {:?}", self.text_input.field);
                 continue;
             }
             // The live app resolves this in `app_render.rs` from its graph
@@ -2370,7 +2587,6 @@ impl Runner {
             self.overlay.refresh_automation_feedback(position, ui.viewport.automation_lane_screens(),
                 &mut data.selection, &ui.viewport);
         }
-        let text_input = crate::text_input::TextInputState::new();
         let frame_timer = crate::frame_timer::FrameTimer::new(60.0);
         // LED composite preview band (LED_STRIPS_DESIGN MVP-P4): a real
         // panel-bitmap instance so the band's quad paints in flow snapshots
@@ -2396,7 +2612,7 @@ impl Runner {
                 automation_latched: &data.content.automation_latched_params,
                 automation_selection: Some(&data.selection),
                 cursor_pos: manifold_ui::node::Vec2::ZERO,
-                text_input: &text_input,
+                text_input: &self.text_input,
                 frame_timer: &frame_timer,
                 vqt: None,
                 blit_pipeline: &render.composite.blit_pipeline,

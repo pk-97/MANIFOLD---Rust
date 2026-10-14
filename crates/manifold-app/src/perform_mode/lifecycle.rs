@@ -44,25 +44,10 @@ impl Application {
             }
         }
 
-        // Exit performance mode: restore normal UI. Output window is left
-        // open intentionally — if the user exited by accident mid-show the
-        // audience never goes black.
-        if self.perform.pending_exit {
-            self.perform.pending_exit = false;
-            if self.perform.active {
-                self.perform.active = false;
-                self.perform.exit_button_hover = false;
-                // Rebuild the frozen tree. The planner compares against the
-                // last normal frame's inputs, so whatever moved during the
-                // set re-projects on the first frame back.
-                self.needs_rebuild = true;
-                self.ws.ui_root.tree.mark_all_dirty();
-                if let Some(cm) = &mut self.ui_cache_manager {
-                    cm.invalidate_all();
-                }
-                self.ws.offscreen_dirty = true;
-                log::info!("[Perform] Exited performance mode");
-            }
+        if super::frame::take_pending_exit(&mut self.perform, &mut self.ws.ui_root, self.ui_cache_manager.as_mut()) {
+            self.needs_rebuild = true;
+            self.ws.offscreen_dirty = true;
+            log::info!("[Perform] Exited performance mode");
         }
     }
 }

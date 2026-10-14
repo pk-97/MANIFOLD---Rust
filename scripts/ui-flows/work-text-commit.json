@@ -1,0 +1,13 @@
+[
+  { "Pointer": { "target": { "Query": { "name": "param_row.amount.value", "nth": 0 } }, "gesture": "DoubleClick" } },
+  "ResetWork",
+  { "Text": { "text": "0.42" } },
+  { "Key": { "key": "Enter", "modifiers": {} } },
+  { "AssertWork": { "window": "type_and_commit" } },
+  { "Assert": { "selector": { "Query": { "name": "param_row.amount.value", "nth": 0 } }, "check": { "TextEquals": "0.42" } } },
+  "AssertFresh",
+  "Snapshot",
+  { "Key": { "key": "Z", "modifiers": { "command": true } } },
+  { "Assert": { "selector": { "Query": { "name": "param_row.amount.value", "nth": 0 } }, "check": { "TextEquals": "1.00" } } },
+  "AssertFresh"
+]
