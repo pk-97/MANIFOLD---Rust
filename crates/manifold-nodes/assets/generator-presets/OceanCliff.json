@@ -5655,7 +5655,7 @@
         "defaultMirrorsNodeParam": true,
         "defaultValue": 0.0,
         "id": "solve_level",
-        "label": "Solve Level",
+        "label": "Coarse Solve",
         "target": {
           "kind": "node",
           "nodeId": "domain",
@@ -6018,7 +6018,7 @@
         "isTrigger": false,
         "max": 4.0,
         "min": 0.0,
-        "name": "Solve Level",
+        "name": "Coarse Solve",
         "section": "Fluid",
         "wholeNumbers": true
       },

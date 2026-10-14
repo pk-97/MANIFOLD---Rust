@@ -4511,7 +4511,7 @@
         "defaultMirrorsNodeParam": true,
         "defaultValue": 0.0,
         "id": "solve_level",
-        "label": "Solve Level",
+        "label": "Coarse Solve",
         "target": {
           "kind": "node",
           "nodeId": "domain",
@@ -5003,7 +5003,7 @@
         "isTrigger": false,
         "max": 4.0,
         "min": 0.0,
-        "name": "Solve Level",
+        "name": "Coarse Solve",
         "section": "Fluid",
         "wholeNumbers": true
       },
@@ -5064,6 +5064,15 @@
         "max": 2.0,
         "min": 0.0,
         "name": "Surface Detail",
+        "scene": {
+          "band": null,
+          "cardLabel": "param",
+          "cardOrder": 0,
+          "gate": null,
+          "group": "look",
+          "role": "setup",
+          "switch": null
+        },
         "section": "Fluid",
         "wholeNumbers": true
       },
@@ -5092,6 +5101,15 @@
         "max": 4.0,
         "min": 1.0,
         "name": "Surface Particle Scale",
+        "scene": {
+          "band": null,
+          "cardLabel": "param",
+          "cardOrder": 0,
+          "gate": null,
+          "group": "look",
+          "role": "setup",
+          "switch": null
+        },
         "section": "Water Detail",
         "wholeNumbers": false
       },
@@ -5104,6 +5122,15 @@
         "max": 10.0,
         "min": 0.0,
         "name": "Smoothing Value",
+        "scene": {
+          "band": null,
+          "cardLabel": "param",
+          "cardOrder": 0,
+          "gate": null,
+          "group": "look",
+          "role": "setup",
+          "switch": null
+        },
         "section": "Water Detail",
         "wholeNumbers": false
       },
@@ -5162,6 +5189,15 @@
         "max": 250000.0,
         "min": 1000.0,
         "name": "Whitewater Budget",
+        "scene": {
+          "band": null,
+          "cardLabel": "param",
+          "cardOrder": 0,
+          "gate": null,
+          "group": "whitewater",
+          "role": "setup",
+          "switch": null
+        },
         "section": "Water Detail",
         "wholeNumbers": true
       },
@@ -5174,6 +5210,15 @@
         "max": 10.0,
         "min": 0.0,
         "name": "Smoothing Iterations",
+        "scene": {
+          "band": null,
+          "cardLabel": "param",
+          "cardOrder": 0,
+          "gate": null,
+          "group": "look",
+          "role": "setup",
+          "switch": null
+        },
         "section": "Water Detail",
         "wholeNumbers": true
       },
@@ -5186,6 +5231,15 @@
         "max": 16.0,
         "min": 1.0,
         "name": "Stretch",
+        "scene": {
+          "band": null,
+          "cardLabel": "param",
+          "cardOrder": 0,
+          "gate": null,
+          "group": "look",
+          "role": "setup",
+          "switch": null
+        },
         "section": "Water Detail",
         "tooltip": "Stretch particles along the local flow to join the surface.",
         "wholeNumbers": false
@@ -5199,6 +5253,15 @@
         "max": 1.0,
         "min": 0.0,
         "name": "Centre Smoothing",
+        "scene": {
+          "band": null,
+          "cardLabel": "param",
+          "cardOrder": 0,
+          "gate": null,
+          "group": "look",
+          "role": "setup",
+          "switch": null
+        },
         "section": "Water Detail",
         "tooltip": "Move surface particles toward their neighbours for a smoother sheet.",
         "wholeNumbers": false
@@ -5212,6 +5275,15 @@
         "max": 1.0,
         "min": 0.0,
         "name": "Fill Pits",
+        "scene": {
+          "band": null,
+          "cardLabel": "param",
+          "cardOrder": 0,
+          "gate": null,
+          "group": "look",
+          "role": "setup",
+          "switch": null
+        },
         "section": "Water Detail",
         "tooltip": "Fill surface dips; distance is measured in particle bins.",
         "wholeNumbers": false

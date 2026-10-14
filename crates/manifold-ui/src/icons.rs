@@ -37,11 +37,21 @@ pub enum Icon {
     /// Distinct from the generator starburst: an LED layer drives the strips,
     /// not the screen.
     LayerLed = 11,
+    /// Scene item type marks for the Scene tab tree (SCENE_SURFACES section 3.7).
+    SceneCamera = 12,
+    SceneLight = 13,
+    SceneMesh = 14,
+    ScenePlane = 15,
+    SceneWater = 16,
+    SceneModel = 17,
+    SceneForce = 18,
+    ScenePhysics = 19,
+    SceneWorld = 20,
 }
 
 impl Icon {
     /// Number of distinct atlas icons (the atlas slot count).
-    pub const COUNT: usize = 12;
+    pub const COUNT: usize = 21;
 
     /// The atlas id (== PUA offset).
     #[inline]
@@ -110,6 +120,23 @@ pub fn layer_badge(layer_type: crate::types::LayerType) -> Icon {
     }
 }
 
+/// The Scene tab tree's mark for an item kind.
+#[inline]
+pub fn scene_item_icon(kind: manifold_foundation::scene_surface::SceneItemKind) -> Icon {
+    use manifold_foundation::scene_surface::{ObjectKind, SceneItemKind};
+    match kind {
+        SceneItemKind::Camera => Icon::SceneCamera,
+        SceneItemKind::Light => Icon::SceneLight,
+        SceneItemKind::Object(ObjectKind::Mesh) => Icon::SceneMesh,
+        SceneItemKind::Object(ObjectKind::Plane) => Icon::ScenePlane,
+        SceneItemKind::Object(ObjectKind::Water) => Icon::SceneWater,
+        SceneItemKind::Object(ObjectKind::Model) => Icon::SceneModel,
+        SceneItemKind::Force => Icon::SceneForce,
+        SceneItemKind::Physics => Icon::ScenePhysics,
+        SceneItemKind::World => Icon::SceneWorld,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -129,6 +156,15 @@ mod tests {
             Icon::LayerAudio,
             Icon::Playhead,
             Icon::LayerLed,
+            Icon::SceneCamera,
+            Icon::SceneLight,
+            Icon::SceneMesh,
+            Icon::ScenePlane,
+            Icon::SceneWater,
+            Icon::SceneModel,
+            Icon::SceneForce,
+            Icon::ScenePhysics,
+            Icon::SceneWorld,
         ]
         .into_iter()
         .enumerate()
@@ -141,8 +177,8 @@ mod tests {
 
     #[test]
     fn count_matches_highest_id() {
-        // COUNT must cover every variant — LayerLed is the last id.
-        assert_eq!(Icon::LayerLed.id() as usize, Icon::COUNT - 1);
+        // COUNT must cover every variant — SceneWorld is the last id.
+        assert_eq!(Icon::SceneWorld.id() as usize, Icon::COUNT - 1);
     }
 
     #[test]

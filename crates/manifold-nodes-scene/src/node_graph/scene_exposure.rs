@@ -187,7 +187,9 @@ pub fn migrate_scene_exposures(def: &mut EffectGraphDef) -> bool {
 /// SCENE_SURFACES D11 (Lights) load rung: a light imported before the
 /// importer wrote `title` carries its readable GLB name only as the section
 /// string of its intensity stamp. Copy that into `title` when it differs from
-/// the handle. Idempotent: a light with a title is never touched.
+/// the section the stamp pass would write for the untitled light today (its
+/// handle, else the "Scene" fallback), which is no name at all. Idempotent: a
+/// light with a title is never touched.
 fn migrate_light_titles(def: &mut EffectGraphDef) -> bool {
     use manifold_core::effect_graph_def::BindingTarget;
     let Some(meta) = def.preset_metadata.as_ref() else {
@@ -202,7 +204,7 @@ fn migrate_light_titles(def: &mut EffectGraphDef) -> bool {
                 if *node_id == node.node_id && param == "intensity"))
             .and_then(|b| meta.params.iter().find(|p| p.id == b.id))
             .and_then(|p| p.section.as_deref())
-            .filter(|s| !s.is_empty() && Some(*s) != node.handle.as_deref());
+            .filter(|s| !s.is_empty() && *s != section_name_for_node(node));
         if let Some(section) = section {
             node.title = Some(section.to_string());
             changed = true;

@@ -16,6 +16,7 @@ const SCENE_FIXTURES: &[&str] = &[
     "fluidauthoring",
     "waterdambreak",
     "waterdambreakmatter",
+    "oceanscene",
     "inspector",
     "timeline",
 ];
@@ -446,5 +447,69 @@ fn saved_scene_has_id_only_lookup_entries() {
             }
         }
         assert!(lookup_entries > 0, "{scene} saved no lookup entries: {}", &json[..json.len().min(400)]);
+    }
+}
+
+/// SCENE_SURFACES_DESIGN.md P5 round trip: a gltfscene project saved with
+/// the old labels written into its controls loads with the new labels and
+/// units, with no migration, and every OSC address still resolves to the
+/// same control.
+#[test]
+fn old_labels_load_as_new_names_with_addresses_kept() {
+    use manifold_core::scene_surface::Unit;
+    const RENAMED: [(&str, &str, &str); 3] = [
+        ("_fov_y", "FOV Y", "Field of View"),
+        ("_look_y", "Look Y", "Target Height"),
+        ("_exposure_ev", "Exposure (EV)", "Exposure"),
+    ];
+    let mut cache = super::fixtures::FixtureCache::default();
+    let mut project = super::fixtures::build_cached("gltfscene", &mut cache).expect("fixture").project.clone();
+    for layer in project.timeline.layers.iter_mut() {
+        if let Some(fx) = layer.gen_params_mut() {
+            *fx = with_graph(fx.clone());
+        }
+    }
+    let addresses = |project: &manifold_core::project::Project| {
+        let mut out = Vec::new();
+        for layer in &project.timeline.layers {
+            let Some(fx) = layer.gen_params() else { continue };
+            for (suffix, _, _) in RENAMED {
+                for p in fx.params.iter().filter(|p| p.id().ends_with(suffix)) {
+                    let address = definitions::get_osc_address_for_layer_by_id(fx.effect_type(), layer.layer_id.as_str(), p.id())
+                        .unwrap_or_else(|| panic!("{} has no OSC address", p.id()));
+                    out.push((address, p.spec.name.clone(), p.spec.unit));
+                }
+            }
+        }
+        out
+    };
+    let before = addresses(&project);
+
+    let mut wire: serde_json::Value = serde_json::to_value(&project).expect("save");
+    let mut stale = 0;
+    for layer in wire["timeline"]["layers"].as_array_mut().unwrap() {
+        let meta = &mut layer["genParams"]["graph"]["presetMetadata"];
+        for (list, key) in [("params", "name"), ("bindings", "label")] {
+            for entry in meta[list].as_array_mut().into_iter().flatten() {
+                let id = entry["id"].as_str().unwrap_or_default().to_owned();
+                if let Some((_, old, _)) = RENAMED.iter().find(|(suffix, _, _)| id.ends_with(suffix)) {
+                    entry[key] = serde_json::json!(old);
+                    stale += 1;
+                }
+            }
+        }
+    }
+    assert!(stale >= 6, "the fixture lost a camera or lens control: {stale} stale copies written");
+    let reloaded = manifold_io::loader::load_project_from_json(&wire.to_string()).expect("reload");
+    let after = addresses(&reloaded);
+
+    assert_eq!(after.len(), RENAMED.len(), "one control per renamed param: {after:?}");
+    for (suffix, old, new) in RENAMED {
+        let (address, name, unit) = after.iter().find(|(a, ..)| a.ends_with(suffix)).expect("control kept");
+        assert_eq!(name, new, "{old} reads as {new} after reload");
+        assert!(before.iter().any(|(a, ..)| a == address), "{address} moved");
+        if suffix == "_exposure_ev" {
+            assert_eq!(*unit, Some(Unit::Ev), "Exposure carries its unit");
+        }
     }
 }

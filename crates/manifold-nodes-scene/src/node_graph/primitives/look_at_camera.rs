@@ -37,7 +37,7 @@ manifold_node_engine::primitive! {
     params: [
         ParamDef {
             name: Cow::Borrowed("pos_x"),
-            label: "Pos X",
+            label: "Position X",
             ty: ParamType::Float,
             default: ParamValue::Float(0.0),
             range: Some((-1000.0, 1000.0)),
@@ -45,7 +45,7 @@ manifold_node_engine::primitive! {
         },
         ParamDef {
             name: Cow::Borrowed("pos_y"),
-            label: "Pos Y",
+            label: "Position Y",
             ty: ParamType::Float,
             default: ParamValue::Float(0.0),
             range: Some((-1000.0, 1000.0)),
@@ -53,7 +53,7 @@ manifold_node_engine::primitive! {
         },
         ParamDef {
             name: Cow::Borrowed("pos_z"),
-            label: "Pos Z",
+            label: "Position Z",
             ty: ParamType::Float,
             default: ParamValue::Float(-3.0),
             range: Some((-1000.0, 1000.0)),
@@ -85,7 +85,7 @@ manifold_node_engine::primitive! {
         },
         ParamDef {
             name: Cow::Borrowed("fov_y"),
-            label: "FOV Y",
+            label: "Field of View",
             ty: ParamType::Angle,
             default: ParamValue::Float(0.9),
             range: Some((0.05, 2.5)),
@@ -93,7 +93,7 @@ manifold_node_engine::primitive! {
         },
         ParamDef {
             name: Cow::Borrowed("near"),
-            label: "Near",
+            label: "Near Clip",
             ty: ParamType::Float,
             default: ParamValue::Float(0.05),
             range: Some((0.001, 10.0)),
@@ -101,7 +101,7 @@ manifold_node_engine::primitive! {
         },
         ParamDef {
             name: Cow::Borrowed("far"),
-            label: "Far",
+            label: "Far Clip",
             ty: ParamType::Float,
             default: ParamValue::Float(200.0),
             range: Some((1.0, 10000.0)),

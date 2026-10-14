@@ -1,10 +1,12 @@
 pub mod material_inspector;
 pub mod scene_exposure;
+pub mod scene_items;
 pub mod scene_surface;
 pub mod viewport_gizmo;
 pub mod viewport_overlay;
 pub mod viewport_render;
 pub mod viewport_session;
+pub mod view_copy;
 pub(crate) mod decode_cache;
 mod gltf_anim_cache;
 mod gltf_anim_identity;

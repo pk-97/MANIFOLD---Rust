@@ -99,7 +99,7 @@ manifold_node_engine::primitive! {
     params: [
         ParamDef {
             name: Cow::Borrowed("max_blur_px"),
-            label: "Max Blur (px)",
+            label: "Max Blur",
             ty: ParamType::Float,
             default: ParamValue::Float(32.0),
             range: Some((0.0, 128.0)),

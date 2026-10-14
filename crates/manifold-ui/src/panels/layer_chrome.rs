@@ -22,6 +22,9 @@ const GAP: f32 = 4.0;
 const CHEVRON_W: f32 = 18.0;
 const CHEVRON_H: f32 = 16.0;
 const OPACITY_LABEL_W: f32 = 50.0;
+/// The narrowest the inline opacity slider gets: its label, a short track
+/// and the value.
+const OPACITY_MIN_W: f32 = 140.0;
 const FONT_SIZE: u16 = color::FONT_BODY;
 
 const KEY_CHEVRON: u64 = 1;
@@ -138,12 +141,17 @@ impl LayerChromePanel {
         } else {
             self.cached_header_text.as_str()
         };
+        // A long name ends in an ellipsis before the chevron and the opacity
+        // slider instead of running into them.
+        let opacity_w = if !self.is_collapsed && self.show_opacity { OPACITY_MIN_W + GAP } else { 0.0 };
+        let name_budget = self.chrome_rect.width - 2.0 * PAD_H - CHEVRON_W - GAP - opacity_w;
+        let label_text = crate::draw::elide_to_width(label_text, f32::from(color::FONT_HEADING), name_budget.max(0.0));
         let mut header = View::row(GAP)
             .fill_w()
             .h(Sizing::Fixed(HEADER_ROW_H))
             .cross_align(Align::Center)
             .child(
-                View::label(label_text)
+                View::label(label_text.as_ref())
                     .font(color::FONT_HEADING)
                     .text_color(color::TEXT_PRIMARY_C32)
                     .align_text(TextAlign::Left),
@@ -341,6 +349,30 @@ pub(super) mod tests {
             .filter_map(|i| tree.get_node(tree.id_at(i)))
             .any(|n| n.text.as_deref() == Some("Drums Layer"));
         assert!(found);
+    }
+
+    /// INV-S13 (SCENE_SURFACES_DESIGN.md section 4): a long layer name ends
+    /// in an ellipsis before the chevron and the Opacity slider, never under
+    /// them (BUG-pmbd3.16 (card header name/Opacity collision)).
+    #[test]
+    fn generator_title_clears_header_controls() {
+        let mut tree = UITree::new();
+        let mut panel = LayerChromePanel::new();
+        panel.cached_name = "Physics Solids With A Very Long Layer Name".into();
+        panel.build(&mut tree, Rect::new(0.0, 0.0, 300.0, 200.0));
+        let label = (0..tree.count())
+            .map(|i| tree.id_at(i))
+            .find(|id| tree.get_node(*id).and_then(|n| n.text.as_deref()).is_some_and(|t| t.starts_with("Physics")))
+            .expect("the name label");
+        let text = tree.get_node(label).and_then(|n| n.text.clone()).unwrap();
+        assert!(text.ends_with('…'), "the long name is elided: {text}");
+        let name = tree.get_bounds(label);
+        let chevron = tree.get_bounds(panel.host.node_id_for_key(KEY_CHEVRON).unwrap());
+        let opacity = tree.get_bounds(panel.host.node_id_for_key(KEY_OPACITY_SLOT).unwrap());
+        assert!(name.x + crate::draw::text_width(&text, f32::from(color::FONT_HEADING)) <= chevron.x + 0.01,
+            "name {name:?} runs into the chevron {chevron:?}");
+        assert!(chevron.x + chevron.width <= opacity.x + 0.01);
+        assert!(opacity.width >= OPACITY_MIN_W - 0.01, "the opacity slider keeps its width: {opacity:?}");
     }
 
     pub(crate) fn right_click_resets() -> Vec<crate::panels::contract_tests::ResetCase> {

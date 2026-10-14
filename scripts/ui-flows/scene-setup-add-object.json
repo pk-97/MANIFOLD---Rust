@@ -28,7 +28,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "text": "+ Object"
+          "name": "scene_tree.add.Objects"
         }
       },
       "check": "Exists"
@@ -38,7 +38,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "text": "\u25a0 Object 3"
+          "name": "scene_tree.item", "text": "Object 3"
         }
       },
       "check": {
@@ -50,7 +50,21 @@
     "Pointer": {
       "target": {
         "Query": {
-          "text": "+ Object"
+          "name": "scene_tree.add.Objects"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "text": "Object", "under_name": "dropdown"
         }
       },
       "gesture": {
@@ -65,7 +79,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "text": "\u25a0 Object 3"
+          "name": "scene_tree.item", "text": "Object 3"
         }
       },
       "check": "Exists"
@@ -99,7 +113,7 @@
     "Pointer": {
       "target": {
         "Query": {
-          "text": "\u25a0 Object 3"
+          "name": "scene_tree.item", "text": "Object 3"
         }
       },
       "gesture": "RightClick"
@@ -123,7 +137,7 @@
     "Pointer": {
       "target": {
         "Query": {
-          "text": "\u25a0 Object 3"
+          "name": "scene_tree.item", "text": "Object 3"
         }
       },
       "gesture": "RightClick"
@@ -147,7 +161,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "text": "\u25a0 Object 3_3"
+          "name": "scene_tree.item", "text": "Object 3_3"
         }
       },
       "check": {
@@ -183,7 +197,7 @@
     "Pointer": {
       "target": {
         "Query": {
-          "text": "\u25a0 Object 3_3"
+          "name": "scene_tree.item", "text": "Object 3_3"
         }
       },
       "gesture": "RightClick"
@@ -207,7 +221,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "text": "\u25a0 Object 3_3"
+          "name": "scene_tree.item", "text": "Object 3_3"
         }
       },
       "check": {
@@ -227,7 +241,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "text": "\u25a0 Object 3_3"
+          "name": "scene_tree.item", "text": "Object 3_3"
         }
       },
       "check": {

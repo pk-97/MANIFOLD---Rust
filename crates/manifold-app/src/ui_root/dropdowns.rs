@@ -995,6 +995,16 @@ impl UIRoot {
                 self.open_dropdown_typed(items, trigger);
                 true
             }
+            PanelAction::Root(RootAction::SceneSetupAddObjectMenuClicked(layer_id)) => {
+                if self.scene_setup_panel.live_layer_id() != Some(layer_id) {
+                    return true;
+                }
+                let items = self.scene_setup_panel.add_object_menu().into_iter()
+                    .map(|(label, action)| DropdownItem::new(label).with_action(action))
+                    .collect();
+                self.open_dropdown_typed(items, trigger);
+                true
+            }
             PanelAction::Root(RootAction::SceneSetupAddForceClicked(layer_id)) => {
                 if self.scene_setup_panel.live_layer_id() != Some(layer_id) {
                     return true;
@@ -1984,10 +1994,10 @@ impl UIRoot {
                 true
             }
             // SCENE_OBJECT_AND_PANEL_V2_DESIGN.md P4, D9: click on a 3+-label
-            // enum value cell in the Scene Setup dock opens the shared
+            // enum value cell in the Scene tab opens the shared
             // dropdown — items = the row's label set, checked at the current
             // index, each carrying the SAME `SceneSetupParamChanged` write
-            // the dock's steppers already dispatch (no new mutation path).
+            // the tab's steppers already dispatch (no new mutation path).
             // `cell_node_id` resolves the anchor directly (the panel has no
             // `&UITree` in `handle_event` to compute it itself).
             PanelAction::Root(RootAction::SceneSetupEnumClicked {

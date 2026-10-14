@@ -2,7 +2,7 @@
 //! `&Project` -> view-model modules, split from the former state_sync.rs god
 //! file. Reads only; projection never sends commands (INV-G5).
 pub(crate) mod cards;
-mod scene_performance;
+mod scene_card;
 pub(crate) mod inspector;
 pub(crate) mod material;
 pub(crate) mod scene;

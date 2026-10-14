@@ -12,7 +12,7 @@ pub enum SurfaceRole {
     Hidden,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum CardBand {
     Camera,
@@ -46,6 +46,48 @@ pub enum ControlGroup {
     RayTracing,
 }
 
+impl ControlGroup {
+    /// The group's name, shown as its section title in the Scene tab and as
+    /// the card label of a `CardLabel::GroupName` row.
+    pub fn title(self) -> &'static str {
+        match self {
+            Self::Camera => "Camera",
+            Self::Lens => "Lens",
+            Self::DepthOfField => "Depth of Field",
+            Self::MotionBlur => "Motion Blur",
+            Self::Light => "Light",
+            Self::Shadows => "Shadows",
+            Self::Transform => "Transform",
+            Self::Material => "Material",
+            Self::Body => "Body",
+            Self::Simulation => "Simulation",
+            Self::Whitewater => "Whitewater",
+            Self::Source => "Source",
+            Self::Look => "Look",
+            Self::Modifier => "Modifier",
+            Self::Force => "Force",
+            Self::PhysicsWorld => "Physics",
+            Self::Environment => "Environment",
+            Self::Fog => "Fog",
+            Self::RayTracing => "Ray Tracing",
+        }
+    }
+}
+
+impl CardBand {
+    /// The card section title of a band whose rows share one section.
+    /// `Scene` and `Forces` are titled per item instead.
+    pub fn title(self) -> &'static str {
+        match self {
+            Self::Camera => "Camera",
+            Self::Scene => "Scene",
+            Self::Forces => "Forces",
+            Self::Lighting => "Lighting",
+            Self::Look => "Look",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum CardLabel {
@@ -59,6 +101,16 @@ pub enum CardLabel {
 pub enum Feature {
     DepthOfField,
     MotionBlur,
+}
+
+impl Feature {
+    /// Why a row gated on this feature does nothing right now.
+    pub fn off_reason(self) -> &'static str {
+        match self {
+            Self::DepthOfField => "Depth of field is off",
+            Self::MotionBlur => "Motion blur is off",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -79,6 +131,8 @@ pub enum Unit {
     Pixels,
     MillionCells,
     Seconds,
+    Nanometres,
+    Beats,
 }
 
 impl Unit {
@@ -92,6 +146,8 @@ impl Unit {
             Self::Pixels => " px",
             Self::MillionCells => " M cells",
             Self::Seconds => " s",
+            Self::Nanometres => " nm",
+            Self::Beats => " beats",
         }
     }
 }

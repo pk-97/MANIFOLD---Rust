@@ -240,11 +240,11 @@ fn reference_project() -> (Project, LayerId, String, u64) {
         "oscPrefix": "rt_dynamic_reference",
         "params": [
             {"id": "phase", "name": "Phase", "min": -100.0, "max": 100.0, "defaultValue": 0.0},
-            {"id": "rt_enabled", "name": "RT Enabled", "min": 0.0, "max": 1.0, "defaultValue": 1.0}
+            {"id": "rt_enabled", "name": "Ray Tracing", "min": 0.0, "max": 1.0, "defaultValue": 1.0}
         ],
         "bindings": [
             {"id": "phase", "label": "Phase", "defaultValue": 0.0, "target": {"kind": "node", "nodeId": "wave", "param": "phase"}},
-            {"id": "rt_enabled", "label": "RT Enabled", "defaultValue": 1.0, "target": {"kind": "node", "nodeId": "scene", "param": "rt_enabled"}}
+            {"id": "rt_enabled", "label": "Ray Tracing", "defaultValue": 1.0, "target": {"kind": "node", "nodeId": "scene", "param": "rt_enabled"}}
         ]
     });
     let graph: EffectGraphDef =

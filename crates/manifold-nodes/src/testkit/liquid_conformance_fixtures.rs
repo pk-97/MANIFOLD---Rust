@@ -58,7 +58,7 @@ pub const LIQUID_SOLVERS: &[LiquidSolverRow] = &[
                 names: &["grid_budget_mcells", "resolution"],
             },
             RefusalCase {
-                what: "Points per Cell 27 at Resolution 176 on Still Pool Matter",
+                what: "Particles per Cell 27 at Resolution 176 on Still Pool Matter",
                 fixture: Fixture::StillPool,
                 edit: |def| {
                     set_type_param(def, MATTER_DOMAIN_TYPE_ID, "resolution", SerializedParamValue::Int { value: 176 });

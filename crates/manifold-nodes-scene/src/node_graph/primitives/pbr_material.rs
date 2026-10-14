@@ -229,7 +229,7 @@ manifold_node_engine::primitive! {
         },
         ParamDef {
             name: Cow::Borrowed("normal_scale"),
-            label: "Normal Scale",
+            label: "Normal Strength",
             ty: ParamType::Float,
             default: ParamValue::Float(1.0),
             range: Some((-1.0, 1.0)),
@@ -410,7 +410,7 @@ manifold_node_engine::primitive! {
         },
         ParamDef {
             name: Cow::Borrowed("iridescence_thickness_min"),
-            label: "Iridescence Thickness Min (nm)",
+            label: "Iridescence Thickness Min",
             ty: ParamType::Float,
             default: ParamValue::Float(100.0),
             range: Some((0.0, 1000.0)),
@@ -418,7 +418,7 @@ manifold_node_engine::primitive! {
         },
         ParamDef {
             name: Cow::Borrowed("iridescence_thickness_max"),
-            label: "Iridescence Thickness Max (nm)",
+            label: "Iridescence Thickness Max",
             ty: ParamType::Float,
             default: ParamValue::Float(400.0),
             range: Some((0.0, 1000.0)),

@@ -145,7 +145,7 @@
       },
       {
         "id": "look_y",
-        "name": "Look Y",
+        "name": "Target Height",
         "min": -2.0,
         "max": 2.0,
         "defaultValue": 0.0,
@@ -470,7 +470,7 @@
       },
       {
         "id": "look_y",
-        "label": "Look Y",
+        "label": "Target Height",
         "defaultValue": 0.0,
         "target": {
           "kind": "node",

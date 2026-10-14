@@ -95,7 +95,7 @@ manifold_node_engine::primitive! {
         },
         ParamDef {
             name: Cow::Borrowed("exposure_ev"),
-            label: "Exposure (EV)",
+            label: "Exposure",
             ty: ParamType::Float,
             default: ParamValue::Float(0.0),
             range: Some((-8.0, 8.0)),

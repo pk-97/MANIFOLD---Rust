@@ -285,6 +285,7 @@ impl ParamCardPanel {
                     continue;
                 }
                 h += ROW_HEIGHT + ROW_SPACING;
+                h += self.inactive_reason_height(i);
                 // A plain toggle never gets a drawer (nothing to modulate) — zero
                 // lane, zero height, unconditionally. `is_trigger` and ordinary
                 // sliders both go through the general `active_mod_tabs`-driven
@@ -346,6 +347,7 @@ impl ParamCardPanel {
                 }
                 for i in start..start + len {
                     h += ROW_HEIGHT + ROW_SPACING;
+                    h += self.inactive_reason_height(i);
                     // Same rule as `effect_body_natural_height`: only a plain
                     // toggle forces zero drawer height. `is_trigger` reaches the
                     // audio-mod drawer (D5b), `is_trigger_gate` reaches the
@@ -364,6 +366,12 @@ impl ParamCardPanel {
             h += PADDING;
         }
         h + CARD_BOTTOM_MARGIN
+    }
+
+    /// The dimmed reason line a row draws under itself when it does nothing
+    /// right now (`build_inactive_reason`).
+    fn inactive_reason_height(&self, i: usize) -> f32 {
+        if self.rows[i].spec.inactive_reason.is_some() { ROW_HEIGHT + ROW_SPACING } else { 0.0 }
     }
 
     /// section 6b — set compact mode (hide all modulation config drawers on this card).
@@ -601,7 +609,7 @@ impl ParamCardPanel {
                 .h(Sizing::Fixed(16.0))
                 .key(KEY_NAME_CLIP)
                 .child(
-                    View::label(self.name.as_str())
+                    View::label(if self.item_hosted { "" } else { self.name.as_str() })
                         .fill_w()
                         .fill_h()
                         .font(HEADER_FONT_SIZE)
@@ -640,6 +648,10 @@ impl ParamCardPanel {
                         .inert()
                         .key(KEY_MODIFIER_OBJECTS),
                 );
+        }
+        if self.item_hosted {
+            // The item header above owns delete.
+        } else if self.modifier.is_some() && show_object_targets {
             // Remove × — structural inverse through the generic remove command;
             // the delete-collapse exit animation rides the existing machinery.
             row = row.child(
@@ -1137,24 +1149,23 @@ impl ParamCardPanel {
     /// to the section without a second lookup. Fold state itself lives in
     /// `section_folded` (UI-local workspace state, not serialized — see its
     /// doc comment); this fn only reads `folded`, it does not toggle it.
-    fn build_section_header(
-        &mut self,
+    /// The Scene tab builds its control-group headers with it too.
+    pub(crate) fn build_section_header(
         tree: &mut UITree,
         parent: Option<NodeId>,
-        x: f32,
-        y: f32,
-        w: f32,
+        rect: Rect,
         name: &str,
         folded: bool,
         row_count: usize,
         key_base: u64,
     ) -> NodeId {
+        let Rect { x, y, width: w, height: row_h } = rect;
         let header_id = tree.add_button_keyed(
             parent,
             x,
             y,
             w,
-            ROW_HEIGHT,
+            row_h,
             UIStyle {
                 bg_color: color::INSPECTOR_BG,
                 hover_bg_color: color::HOVER_OVERLAY,
@@ -1172,7 +1183,7 @@ impl ParamCardPanel {
             x + GAP,
             y,
             triangle_w,
-            ROW_HEIGHT,
+            row_h,
             triangle,
             UIStyle {
                 text_color: color::TEXT_DIMMED_C32,
@@ -1187,7 +1198,7 @@ impl ParamCardPanel {
             x + GAP + triangle_w,
             y,
             (w - GAP * 2.0 - triangle_w - count_w).max(0.0),
-            ROW_HEIGHT,
+            row_h,
             name,
             UIStyle {
                 text_color: color::TEXT_WHITE_C32,
@@ -1202,7 +1213,7 @@ impl ParamCardPanel {
                 x + w - GAP - count_w,
                 y,
                 count_w,
-                ROW_HEIGHT,
+                row_h,
                 &format!("({row_count})"),
                 UIStyle {
                     text_color: color::TEXT_DIMMED_C32,
@@ -1268,12 +1279,10 @@ impl ParamCardPanel {
         for (start, len, section) in runs {
             if let Some(name) = &section {
                 let folded = self.section_folded.get(name).copied().unwrap_or(false);
-                let header_id = self.build_section_header(
+                let header_id = Self::build_section_header(
                     tree,
                     Some(parent),
-                    x + PADDING,
-                    cy,
-                    w - PADDING * 2.0,
+                    Rect::new(x + PADDING, cy, w - PADDING * 2.0, ROW_HEIGHT),
                     name,
                     folded,
                     len,
@@ -1748,12 +1757,10 @@ impl ParamCardPanel {
             for (start, len, section) in runs {
                 if let Some(name) = &section {
                     let folded = self.section_folded.get(name).copied().unwrap_or(false);
-                    let header_id = self.build_section_header(
+                    let header_id = Self::build_section_header(
                         tree,
                         None,
-                        cx,
-                        cy,
-                        content_w,
+                        Rect::new(cx, cy, content_w, ROW_HEIGHT),
                         name,
                         folded,
                         len,
@@ -2264,7 +2271,9 @@ impl ParamCardPanel {
 
     pub fn sync_effect_name(&mut self, tree: &mut UITree, name: &str) {
         self.name = name.into();
-        if let Some(name_label_id) = self.name_label_id {
+        if let Some(name_label_id) = self.name_label_id
+            && !self.item_hosted
+        {
             tree.set_text(name_label_id, name);
         }
     }

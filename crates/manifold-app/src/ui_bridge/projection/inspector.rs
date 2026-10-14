@@ -19,7 +19,6 @@ use super::cards::{
     OscScope, SurfaceVisibility, attach_project_sources, audio_send_choices, effects_to_surfaces,
     gen_params_to_surface, modifier_surfaces,
 };
-use super::scene::sections_for_nodes;
 
 fn mark_selected_automation_row(surface: &mut ParamSurface, layer_id: &manifold_core::LayerId, target: &UiGraphTarget, param_id: &manifold_core::effects::ParamId) {
     let surface_target = match (surface.kind, surface.modifier.is_some()) {
@@ -165,6 +164,9 @@ pub fn sync_inspector_data(
                     match def.as_ref().and_then(|d| SceneVm::from_def_with_layers(d, &layer_ids)) {
                         None => SceneSetupState::NoScene { layer_id },
                         Some(vm) => {
+                            let items = def.as_ref().map(|def| {
+                                manifold_nodes_scene::node_graph::scene_items::scene_items(def, &vm)
+                            }).unwrap_or_default();
                             let fluid_domains = super::scene::fluid_domains(&vm);
                             // Ranges transcribed from each primitive's own
                             // `ParamDef::range` (`bake_environment`'s
@@ -434,6 +436,7 @@ pub fn sync_inspector_data(
                                         ObjectMaterialVm::None
                                     }
                                 };
+                            let mut object_ids: Vec<Vec<String>> = Vec::new();
                             let objects: Vec<ObjectRowVm> = vm
                                 .objects
                                 .iter()
@@ -477,8 +480,9 @@ pub fn sync_inspector_data(
                                                     None => (false, None),
                                                 }
                                             };
-                                        let owned = super::scene::object_controls(def.as_ref(), known, &vm.objects);
-                                        let sections = sections_for_nodes(def.as_ref(), &owned);
+                                        let owned = super::scene::owned_nodes(
+                                            &items, &manifold_nodes_scene::node_graph::scene_items::SceneItemId::Object(known.object.clone()),
+                                        ).to_vec();
                                         let mut parameter_ids = super::scene::parameter_ids_for_nodes(
                                             def.as_ref(), &owned,
                                         );
@@ -489,6 +493,7 @@ pub fn sync_inspector_data(
                                         super::scene::filter_inactive_fluid_role_parameter_ids(
                                             def.as_ref(), *group_node_id, &mut parameter_ids,
                                         );
+                                        object_ids.push(parameter_ids);
                                         // P4b: every Known object gets a Skin
                                         // row, even when no `node.layer_source`
                                         // exists yet — `source_node_id: None`
@@ -548,8 +553,6 @@ pub fn sync_inspector_data(
                                                 material_inspector: def.as_ref().and_then(|d| super::material::inspector_info(project, d, known)),
                                                 modifiers: object_modifier_rows(def.as_ref(), modifier_chain, &owned),
                                                 modifiers_addable: known.look_mesh.is_none() && *modifier_chain_parseable,
-                                                sections,
-                                                parameter_ids,
                                                 skin: if known.look_mesh.is_some() { None } else { skin },
                                                 physics_enabled: physics.as_ref().is_some_and(|body| body.enabled),
                                                 physics_available,
@@ -664,10 +667,6 @@ pub fn sync_inspector_data(
                                                     0.0,
                                                     20.0,
                                                 )),
-                                                // P2 slice 2a: see
-                                                // `ObjectKnownRow::sections`'s
-                                                // doc comment.
-                                                sections: sections_for_nodes(def.as_ref(), std::slice::from_ref(&r.node)),
                                             },
                                         ))
                                     }
@@ -773,26 +772,8 @@ pub fn sync_inspector_data(
                             // (moved there C-P1b so `transform_row`/
                             // `material_row` can reuse them too) — reused
                             // here unchanged.
-                            // P2 slice 2a: the real P1 section string(s)
-                            // covering the camera atom (+ lens, if wired)
-                            // and World (environment/atmosphere) — see
-                            // `SceneSetupVm::camera_sections`/
-                            // `world_sections`'s doc comments. Computed from
-                            // `vm.camera`/`vm.environment`/`vm.atmosphere`
-                            // BEFORE the consuming matches below (reads the
-                            // VM's own case analysis, never re-derives graph
-                            // topology).
-                            // Custom and loop cameras share the "Camera"
-                            // section with an atom the panel doesn't drive,
-                            // so they show exactly the lens and tail's own
-                            // controls.
-                            let camera_sections = sections_for_nodes(def.as_ref(), &vm.camera_controls);
-                            let camera_parameter_ids = Some(super::scene::parameter_ids_for_nodes(
-                                def.as_ref(), &vm.camera_controls,
-                            ));
                             let camera_setup_needed = def.as_ref().is_some_and(|graph|
                                 crate::scene_camera_edit::needs_setup(graph, vm.scene_root_node_id));
-                            let world_sections = sections_for_nodes(def.as_ref(), &vm.world_controls);
                             let environment = match vm.environment {
                                 manifold_nodes_scene::node_graph::scene_vm::EnvironmentVm::Importer(e) => {
                                     EnvironmentRowVm::Importer {
@@ -927,13 +908,13 @@ pub fn sync_inspector_data(
                                 if let Some(d) = def.as_ref() { super::material::enrich_surface(&mut surface, gp, d); }
                                 surface
                             });
+                            let tree_items =
+                                super::scene::scene_item_vms(def.as_ref(), &items, &objects, &lights, object_ids);
                             SceneSetupState::Live(Box::new(SceneSetupVm {
                                 layer_id,
-                                scene_name: l.name.clone(),
                                 multiple_scenes: vm.multiple_scenes,
                                 object_count: vm.header.object_count,
                                 light_count: vm.header.light_count,
-                                shadow_caster_count: vm.header.shadow_caster_count,
                                 scene_root_node_id: vm.scene_root_node_id,
                                 environment,
                                 atmosphere,
@@ -943,10 +924,8 @@ pub fn sync_inspector_data(
                                 force_picker,
                                 lights,
                                 camera,
-                                camera_sections,
-                                camera_parameter_ids,
+                                items: tree_items,
                                 camera_setup_needed,
-                                world_sections,
                                 // SCENE_MODIFIER_FRAMEWORK P3 (D4): the Scene
                                 // Loop's panel surface is deleted — the loop
                                 // lives on the inspector's modifier card now.
@@ -1277,7 +1256,7 @@ fn configure_inspector_tabs(
         ui.scene_setup_panel.close();
     }
     let audio = ui.audio_setup_panel.is_open();
-    ui.header.set_dock_toggle_state(audio, scene);
+    ui.header.set_audio_dock_open(audio);
 }
 
 /// The selection's ownership rungs (local→global) and the active one.
@@ -1891,7 +1870,8 @@ fn object_modifier_rows(
 #[cfg(test)]
 mod modifier_card_ownership_tests {
     use super::object_modifier_rows;
-    use crate::ui_bridge::projection::scene::{object_controls, parameter_ids_for_nodes};
+    use crate::ui_bridge::projection::scene::{owned_nodes, parameter_ids_for_nodes};
+    use manifold_nodes_scene::node_graph::scene_items::{SceneItemId, scene_items};
     use manifold_core::effect_graph_def::EffectGraphDef;
     use manifold_nodes_scene::node_graph::scene_vm::{SceneObjectVm, SceneVm};
     use std::collections::BTreeSet;
@@ -1936,11 +1916,12 @@ mod modifier_card_ownership_tests {
 
         let assert_cards = |def: &EffectGraphDef, expected_owner| {
             let vm = SceneVm::from_def(def).unwrap();
+            let items = scene_items(def, &vm);
             let mut before = BTreeSet::new();
             let mut after = BTreeSet::new();
             for object in &vm.objects {
                 let SceneObjectVm::Known(row) = object else { panic!("known object"); };
-                let owned = object_controls(Some(def), row, &vm.objects);
+                let owned = owned_nodes(&items, &SceneItemId::Object(row.object.clone())).to_vec();
                 let cards = object_modifier_rows(Some(def), &row.modifier_chain, &owned);
                 assert_eq!(cards.len(), 1);
                 let card = &cards[0];

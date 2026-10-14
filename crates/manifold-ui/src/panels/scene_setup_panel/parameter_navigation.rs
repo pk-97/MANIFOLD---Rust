@@ -1,4 +1,4 @@
-//! Addressed parameter navigation for the Scene Setup panel.
+//! Addressed parameter navigation for the Scene tab.
 //!
 //! Navigation uses the same projected row identities as rendering and
 //! dispatch. It only changes UI-local selection, fold, and drawer state.
@@ -12,42 +12,23 @@ impl ScenePanel {
         matches!(target, UiGraphTarget::Generator(layer) if self.live_layer_id() == Some(layer))
     }
 
+    /// The item that owns `row`: the item whose controls list it, or the
+    /// object whose material drawer holds it.
     fn property_selection_for_row(vm: &SceneSetupVm, row: &ParamRow) -> Option<SceneSelection> {
         let id = row.id.as_ref();
         if let Some(object) = vm.objects.iter().find_map(|object| {
             let ObjectRowVm::Known(object) = object else { return None; };
-            let owned = object.parameter_ids.iter().any(|owned| owned == id)
-                || object.material_inspector.as_ref().is_some_and(|material| {
-                    material.object_gain.as_ref().is_some_and(|owned| owned.as_ref() == id)
-                        || material.params.iter().any(|(_, owned)| owned.as_ref() == id)
-                });
-            owned.then_some(object.object_node_id)
+            object.material_inspector.as_ref().is_some_and(|material| {
+                material.object_gain.as_ref().is_some_and(|owned| owned.as_ref() == id)
+                    || material.params.iter().any(|(_, owned)| owned.as_ref() == id)
+            }).then_some(object.object_node_id)
         }) {
             return Some(SceneSelection::Object(object));
         }
-        let section = row.spec.section.as_deref();
-        if vm.camera_parameter_ids.as_ref().map_or_else(
-            || section.is_some_and(|section| vm.camera_sections.iter().any(|owned| owned == section)),
-            |ids| ids.iter().any(|owned| owned == id),
-        ) {
-            return Some(SceneSelection::Camera);
-        }
-        if let Some(light) = vm.lights.iter().find_map(|light| match light {
-            LightRowVm::Known(light) => section
-                .is_some_and(|section| light.sections.iter().any(|owned| owned == section))
-                .then_some(light.node_doc_id),
-            LightRowVm::Custom { .. } => None,
-        }) {
-            return Some(SceneSelection::Light(light));
-        }
-        [
-            (&["Environment", "Atmosphere"][..], SceneSelection::World),
-            (&["Physics"][..], SceneSelection::Physics),
-            (&["Rendering"][..], SceneSelection::Rendering),
-        ].into_iter().find_map(|(categories, selection)| {
-            section.is_some_and(|section| world_sections_for(&vm.world_sections, categories)
-                .iter().any(|owned| owned == section)).then_some(selection)
-        })
+        vm.items
+            .iter()
+            .find(|item| item.parameter_ids.iter().any(|owned| owned == id))
+            .map(|item| item.selection.clone())
     }
 
     /// Select and open the response drawer for a projected scene parameter.
@@ -274,15 +255,14 @@ mod tests {
             .expect("fixture object");
         let mut object_a = first.clone();
         object_a.object_node_id = 40;
-        object_a.parameter_ids = vec!["shared_a".into()];
-        object_a.sections = vec!["Shared".into()];
         let mut object_b = object_a.clone();
         object_b.object_node_id = 41;
-        object_b.parameter_ids = vec!["shared_b".into()];
         vm.objects = vec![
             ObjectRowVm::Known(Box::new(object_a)),
             ObjectRowVm::Known(Box::new(object_b)),
         ];
+        super::super::tests::set_item_ids(&mut vm, SceneSelection::Object(40), &["shared_a"]);
+        super::super::tests::set_item_ids(&mut vm, SceneSelection::Object(41), &["shared_b"]);
 
         let mut row_a = surface.rows[0].clone();
         row_a.id = "shared_a".into();
@@ -300,7 +280,7 @@ mod tests {
 
         let mut panel = ScenePanel::new();
         panel.open();
-        panel.configure(SceneSetupState::Live(Box::new(vm)));
+        panel.configure(super::super::tests::live(vm));
         panel.configure_params(Some(surface));
         let param: manifold_foundation::ParamId = "shared_b".into();
         assert!(panel.reveal_clip_response(&target, &param));
@@ -331,11 +311,14 @@ mod tests {
         let (mut vm, template) = world_transform_vm();
         let target = UiGraphTarget::Generator(vm.layer_id.clone());
         vm.objects = vec![ObjectRowVm::Custom { index: 0 }];
-        vm.camera_parameter_ids = Some(vec!["camera_param".into()]);
-        vm.camera_sections = vec!["Camera".into()];
-        vm.world_sections = vec!["Environment".into(), "Physics".into(), "Rendering".into()];
-        if let Some(LightRowVm::Known(light)) = vm.lights.first_mut() {
-            light.sections = vec!["Light".into()];
+        let physics = SceneSelection::Physics(manifold_foundation::NodeId::new("world"));
+        for (selection, ids) in [
+            (SceneSelection::Camera, &["camera_param"][..]),
+            (SceneSelection::Light(60), &["light_param"]),
+            (SceneSelection::World, &["world_param", "render_param"]),
+            (physics.clone(), &["physics_param"]),
+        ] {
+            super::super::tests::set_item_ids(&mut vm, selection, ids);
         }
         let rows = [
             ("camera_param", "Camera"),
@@ -357,14 +340,14 @@ mod tests {
         surface.rows = rows;
 
         let mut panel = ScenePanel::new();
-        panel.configure(SceneSetupState::Live(Box::new(vm)));
+        panel.configure(super::super::tests::live(vm));
         panel.configure_params(Some(surface));
         for (id, expected) in [
             ("camera_param", SceneSelection::Camera),
             ("light_param", SceneSelection::Light(60)),
             ("world_param", SceneSelection::World),
-            ("physics_param", SceneSelection::Physics),
-            ("render_param", SceneSelection::Rendering),
+            ("physics_param", physics.clone()),
+            ("render_param", SceneSelection::World),
         ] {
             let param: manifold_foundation::ParamId = id.into();
             assert!(panel.reveal_clip_response(&target, &param), "{id}");
@@ -379,7 +362,7 @@ mod tests {
     fn missing_navigation_target_keeps_existing_selection() {
         let (vm, surface) = world_transform_vm();
         let mut panel = ScenePanel::new();
-        panel.configure(SceneSetupState::Live(Box::new(vm)));
+        panel.configure(super::super::tests::live(vm));
         panel.configure_params(Some(surface));
         panel.set_selection(LayerId::new("layer-1"), SceneSelection::World);
         let wrong_target = UiGraphTarget::Generator(LayerId::new("other"));

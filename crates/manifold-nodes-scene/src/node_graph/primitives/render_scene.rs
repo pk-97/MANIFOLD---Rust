@@ -6773,7 +6773,7 @@ impl RenderScene {
             // param; W0 only builds the render-pass side of the contract.
             ParamDef {
                 name: std::borrow::Cow::Borrowed("rt_enabled"),
-                label: "RT Enabled",
+                label: "Ray Tracing",
                 ty: ParamType::Bool,
                 default: ParamValue::Bool(false),
                 range: None,
@@ -6803,7 +6803,7 @@ impl RenderScene {
             // rays are dispatched unless the RT pipeline is active.
             ParamDef {
                 name: std::borrow::Cow::Borrowed("rt_reflections"),
-                label: "RT Reflections",
+                label: "Reflections",
                 ty: ParamType::Bool,
                 default: ParamValue::Bool(true),
                 range: None,
@@ -6818,7 +6818,7 @@ impl RenderScene {
             // term doesn't smear — routed through the ONE existing reset path.
             ParamDef {
                 name: std::borrow::Cow::Borrowed("rt_shadows"),
-                label: "RT Shadows",
+                label: "Shadows",
                 ty: ParamType::Bool,
                 default: ParamValue::Bool(true),
                 range: None,
@@ -6826,7 +6826,7 @@ impl RenderScene {
             },
             ParamDef {
                 name: std::borrow::Cow::Borrowed("rt_ao"),
-                label: "RT Ambient Occlusion",
+                label: "Ambient Occlusion",
                 ty: ParamType::Bool,
                 default: ParamValue::Bool(true),
                 range: None,
@@ -6834,7 +6834,7 @@ impl RenderScene {
             },
             ParamDef {
                 name: std::borrow::Cow::Borrowed("rt_gi"),
-                label: "RT Global Illumination",
+                label: "Global Illumination",
                 ty: ParamType::Bool,
                 default: ParamValue::Bool(true),
                 range: None,

@@ -11,7 +11,7 @@ fn fixture() -> (ScenePanel, UITree, ParamSurface) {
 
     let mut panel = ScenePanel::new();
     panel.open();
-    panel.configure(SceneSetupState::Live(Box::new(vm)));
+    panel.configure(tests::live(vm));
     panel.configure_params(Some(surface.clone()));
     panel
         .selection

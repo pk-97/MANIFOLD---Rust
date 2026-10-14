@@ -28,7 +28,7 @@
     "Pointer": {
       "target": {
         "Query": {
-          "text": "🌍 World"
+          "name": "scene_tree.item", "text": "World"
         }
       },
       "gesture": {

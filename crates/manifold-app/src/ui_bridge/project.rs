@@ -1335,7 +1335,7 @@ pub(crate) fn scene_binding_id(
 /// frame-selected so a camera frame is one undo unit.
 /// `None` when the layer has no generator default or the bound value is
 /// unchanged (the epsilon no-change guard).
-fn apply_scene_param_write(
+pub(crate) fn apply_scene_param_write(
     project: &Project,
     layer_id: &LayerId,
     scope_path: Vec<u32>,
@@ -2018,7 +2018,7 @@ mod tests {
             .iter()
             .filter_map(|node| node.text.as_deref())
             .collect();
-        assert!(enabled_texts.contains(&"Density (kg/m³)"));
+        assert!(enabled_texts.contains(&"Density"));
         assert!(!enabled_texts.contains(&"Shape"),
             "source-driven Physics hides the inactive body Shape control");
 
@@ -2194,7 +2194,8 @@ mod tests {
         );
         let metadata = reloaded_def.preset_metadata.as_ref().unwrap();
         let world_sections = crate::ui_bridge::projection::scene::sections_for_nodes(
-            Some(&reloaded_def), &reloaded_vm.world_controls,
+            Some(&reloaded_def), &crate::ui_bridge::projection::scene::world_and_physics_nodes(
+                &manifold_nodes_scene::node_graph::scene_items::scene_items(&reloaded_def, &reloaded_vm)),
         );
         let world = reloaded_def.nodes.iter().find(|node| node.type_id == "node.physics_world").unwrap();
         for (param, label, default) in [
@@ -2314,7 +2315,9 @@ mod tests {
             let sections = crate::ui_bridge::projection::scene::sections_for_nodes(Some(def), &row.fluid_controls);
             assert!(sections.iter().any(|section| section.contains("Simulation")), "{step}: the water panel shows its dials");
             let camera = crate::ui_bridge::projection::scene::sections_for_nodes(
-                Some(def), &SceneVm::from_def(def).unwrap().camera_controls,
+                Some(def), crate::ui_bridge::projection::scene::owned_nodes(
+                    &manifold_nodes_scene::node_graph::scene_items::scene_items(def, &SceneVm::from_def(def).unwrap()),
+                    &manifold_nodes_scene::node_graph::scene_items::SceneItemId::Camera),
             );
             assert!(!camera.is_empty(), "{step}: the camera owns its dials");
             assert!(sections.iter().all(|section| !camera.contains(section)),
@@ -2405,7 +2408,7 @@ mod tests {
         command.execute(&mut project);
         assert!(command.was_applied(), "{:?}", command.rejection_reason());
         let after = effective_def(&project, &layer_id);
-        let role_nodes = super::super::projection::scene::group_fluid_role_nodes(&after, group_id);
+        let role_nodes = manifold_nodes_scene::node_graph::scene_items::group_fluid_role_nodes(&after, group_id);
         assert_eq!(role_nodes.len(), 1);
         let group = after.nodes.iter().find(|node| Some(node.id) == group_id)
             .unwrap().group.as_ref().unwrap();
@@ -2472,7 +2475,7 @@ mod tests {
         remove.execute(&mut project);
         assert!(remove.was_applied(), "{:?}", remove.rejection_reason());
         let removed = effective_def(&project, &layer_id);
-        assert!(super::super::projection::scene::group_fluid_role_nodes(&removed, group_id).is_empty());
+        assert!(manifold_nodes_scene::node_graph::scene_items::group_fluid_role_nodes(&removed, group_id).is_empty());
         remove.undo(&mut project);
         assert_eq!(effective_def(&project, &layer_id), retargeted);
         retarget.undo(&mut project);

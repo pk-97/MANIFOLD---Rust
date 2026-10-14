@@ -101,9 +101,12 @@ pub fn scene_param_facts(type_id: &str, param: &str) -> Option<SceneParamFacts> 
         "node.physics_world" => physics_world(param),
         "node.fluid_role_source" => fluid_role_source(param),
         "node.transform_3d" => transform(param),
-        "node.pbr_material" => {
-            material_param_role(type_id, param).map(|_| setup(ControlGroup::Material))
-        }
+        "node.pbr_material" => material_param_role(type_id, param).map(|_| match param {
+            "iridescence_thickness_min" | "iridescence_thickness_max" => {
+                setup(ControlGroup::Material).unit(Unit::Nanometres)
+            }
+            _ => setup(ControlGroup::Material),
+        }),
         "node.unlit_material" => unlit_material(param),
         "node.cel_material" => cel_material(param),
         "node.light" => light(param),
@@ -123,6 +126,14 @@ pub fn scene_param_facts(type_id: &str, param: &str) -> Option<SceneParamFacts> 
         domain if is_liquid_domain(domain) => liquid_domain(domain, param),
         _ => None,
     }
+}
+
+/// The placement an author gives a control that drives several nodes: the
+/// one its first target would have alone. A fan-out keeps its own scene
+/// facts (SCENE_SURFACES_DESIGN.md D23 (scene facts follow the bound node)),
+/// so the importer writes this into the control when it builds it.
+pub(crate) fn fan_out_scene(type_id: &str, param: &str) -> Option<SceneParamDesc> {
+    scene_param_facts(type_id, param).map(|facts| facts.desc)
 }
 
 fn rigid_body(param: &str) -> Option<SceneParamFacts> {
@@ -210,9 +221,10 @@ fn cel_material(param: &str) -> Option<SceneParamFacts> {
 fn light(param: &str) -> Option<SceneParamFacts> {
     use ControlGroup::{Light, Shadows};
     Some(match param {
-        // One fader per light, named after the light (D4).
+        // One fader per light, named after the light, after Exposure and
+        // Environment (D4).
         "intensity" => {
-            card(Light, CardBand::Lighting, 0).label(CardLabel::ItemName).limit(AT_LEAST_ZERO)
+            card(Light, CardBand::Lighting, 2).label(CardLabel::ItemName).limit(AT_LEAST_ZERO)
         }
         "pos_x" | "pos_y" | "pos_z" | "aim_x" | "aim_y" | "aim_z" => {
             setup(Light).unit(Unit::Metres).limit(HardLimit::Unlimited)
@@ -294,7 +306,11 @@ fn bokeh_gather(param: &str) -> Option<SceneParamFacts> {
     Some(match param {
         "enabled" => card(DepthOfField, CardBand::Look, 0).switch(Feature::DepthOfField),
         "aperture" | "quality" => setup(DepthOfField),
-        "max_radius" => hidden(DepthOfField).unit(Unit::Pixels),
+        // D4's depth of field Max Blur, shown while depth of field is on.
+        "max_radius" => card(DepthOfField, CardBand::Look, 2)
+            .gate(Gate::Fold(Feature::DepthOfField))
+            .unit(Unit::Pixels)
+            .limit(AT_LEAST_ZERO),
         "blur_alpha" => hidden(DepthOfField),
         _ => return None,
     })
@@ -328,11 +344,13 @@ fn bake_environment(param: &str) -> Option<SceneParamFacts> {
         "intensity" => card(Environment, CardBand::Lighting, 1)
             .label(CardLabel::GroupName)
             .limit(AT_LEAST_ZERO),
-        // White Furnace becomes Hidden with the naming pass (P5).
         "width" | "height" | "horizon_strength" | "azimuth_variation" | "mode"
         | "emitter_count" | "emitter_intensity" | "emitter_elevation" | "emitter_width"
-        | "sun_x" | "sun_y" | "sun_z" | "sun_disc_intensity" | "sun_disc_size" | "fill"
-        | "uniform" => setup(Environment),
+        | "sun_x" | "sun_y" | "sun_z" | "sun_disc_intensity" | "sun_disc_size" | "fill" => {
+            setup(Environment)
+        }
+        // White Furnace is a lighting test, not a look.
+        "uniform" => hidden(Environment),
         _ => return None,
     })
 }
@@ -362,10 +380,9 @@ fn mesh_modifier(type_id: &str, param: &str) -> Option<SceneParamFacts> {
 fn render_scene(param: &str) -> Option<SceneParamFacts> {
     use ControlGroup::RayTracing;
     Some(match param {
-        // RT Denoise Feed becomes Hidden with the naming pass (P5).
         "rt_enabled" | "temporal_upscale" | "rt_reflections" | "rt_shadows" | "rt_ao"
-        | "rt_gi" | "rt_denoise_feed" => setup(RayTracing),
-        "objects" | "lights" | "rt_firefly_clamp" => hidden(RayTracing),
+        | "rt_gi" => setup(RayTracing),
+        "objects" | "lights" | "rt_firefly_clamp" | "rt_denoise_feed" => hidden(RayTracing),
         _ => return None,
     })
 }
@@ -388,10 +405,12 @@ fn whitewater(param: &str) -> Option<SceneParamFacts> {
 fn liquid_domain(type_id: &str, param: &str) -> Option<SceneParamFacts> {
     use ControlGroup::Simulation;
     let dial = liquid_dial_params(type_id).is_some_and(|dials| dials.contains(&param));
-    let hidden_param = type_id == GPU_FLIP_DOMAIN_TYPE_ID
+    // The GPU FLIP solver controls the water preset authors on its card are
+    // set up once per scene: they show in the Scene tab, never on the card.
+    let flip_solver = type_id == GPU_FLIP_DOMAIN_TYPE_ID
         && matches!(param, "solve_level" | "max_iterations" | "sheet_fill_rate" | "particle_capacity");
-    if hidden_param {
-        return Some(hidden(Simulation));
+    if flip_solver {
+        return Some(setup(Simulation));
     }
     if !dial {
         return None;
@@ -399,12 +418,14 @@ fn liquid_domain(type_id: &str, param: &str) -> Option<SceneParamFacts> {
     Some(match param {
         "speed" => card(Simulation, CardBand::Scene, 2).limit(AT_LEAST_ZERO),
         "reset" => card(Simulation, CardBand::Scene, 3),
+        "cohesion" => card(Simulation, CardBand::Scene, 4).limit(AT_LEAST_ZERO),
+        "stiffness" => card(Simulation, CardBand::Scene, 5).limit(AT_LEAST_ZERO),
+        "liveliness" => card(Simulation, CardBand::Scene, 6),
         "domain_size" | "fill_height" => setup(Simulation).unit(Unit::Metres).limit(AT_LEAST_ZERO),
         "gravity_x" | "gravity" | "gravity_z" => {
             setup(Simulation).unit(Unit::MetresPerSecondSquared).limit(HardLimit::Unlimited)
         }
         "grid_budget_mcells" => setup(Simulation).unit(Unit::MillionCells),
-        // Matter's stiffness, cohesion and liveliness join the card in P4.
         _ => setup(Simulation),
     })
 }

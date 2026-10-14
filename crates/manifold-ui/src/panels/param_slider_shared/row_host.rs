@@ -1000,6 +1000,7 @@ impl RowHost {
             spec.whole_numbers,
             spec.is_angle,
             spec.value_labels.as_deref(),
+            spec.unit,
         );
         crate::slider::BitmapSlider::update_value(tree, ids, display_norm_override.unwrap_or(norm), &text);
     }

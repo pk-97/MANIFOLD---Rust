@@ -17,7 +17,7 @@
     "Pointer": {
       "target": {
         "Query": {
-          "text": "📷 Camera"
+          "name": "scene_tree.item", "text": "Camera"
         }
       },
       "gesture": {
@@ -43,7 +43,7 @@
     "Pointer": {
       "target": {
         "Query": {
-          "text": "🌍 World"
+          "name": "scene_tree.item", "text": "World"
         }
       },
       "gesture": {
@@ -69,7 +69,7 @@
     "Pointer": {
       "target": {
         "Query": {
-          "text": "💡 Sun"
+          "name": "scene_tree.item", "text": "Sun"
         }
       },
       "gesture": {
@@ -95,7 +95,7 @@
     "Pointer": {
       "target": {
         "Query": {
-          "text": "💡 Fill Light"
+          "name": "scene_tree.item", "text": "Fill Light"
         }
       },
       "gesture": {
@@ -121,7 +121,7 @@
     "Pointer": {
       "target": {
         "Query": {
-          "text": "■ Ground"
+          "name": "scene_tree.item", "text": "Ground"
         }
       },
       "gesture": {
@@ -158,7 +158,7 @@
     "Pointer": {
       "target": {
         "Query": {
-          "text": "■ Tetrahedron"
+          "name": "scene_tree.item", "text": "Tetrahedron"
         }
       },
       "gesture": {
@@ -195,7 +195,7 @@
     "Pointer": {
       "target": {
         "Query": {
-          "text": "■ Cube"
+          "name": "scene_tree.item", "text": "Cube"
         }
       },
       "gesture": {
@@ -232,7 +232,7 @@
     "Pointer": {
       "target": {
         "Query": {
-          "text": "■ Octahedron"
+          "name": "scene_tree.item", "text": "Octahedron"
         }
       },
       "gesture": {
@@ -269,7 +269,7 @@
     "Pointer": {
       "target": {
         "Query": {
-          "text": "■ Icosahedron"
+          "name": "scene_tree.item", "text": "Icosahedron"
         }
       },
       "gesture": {
@@ -306,7 +306,7 @@
     "Pointer": {
       "target": {
         "Query": {
-          "text": "■ Dodecahedron"
+          "name": "scene_tree.item", "text": "Dodecahedron"
         }
       },
       "gesture": {
@@ -343,7 +343,7 @@
     "Pointer": {
       "target": {
         "Query": {
-          "text": "⚙ Physics"
+          "name": "scene_tree.item", "text": "Physics"
         }
       },
       "gesture": {
@@ -369,7 +369,7 @@
     "Pointer": {
       "target": {
         "Query": {
-          "text": "🎞 Rendering"
+          "name": "scene_tree.item", "text": "World"
         }
       },
       "gesture": {

@@ -932,6 +932,10 @@ pub enum RootAction {
     /// D7 "Open Graph Editor" empty-state action for a generator layer with
     /// no `render_scene` — reuses the existing open-editor action.
     SceneSetupOpenGraphEditor(LayerId),
+    /// The Camera header's "Use this view" (SCENE_SURFACES D14): copy the
+    /// editor viewport's view into this layer's scene camera. The app owns
+    /// the viewport camera, so it resolves the pose and builds the command.
+    SceneSetupCopyViewportCamera(LayerId),
     /// P2 object-name click: `(layer_id, group_node_id, current_name)` — opens
     /// the shared inline text-input session (same mechanics as
     /// `AudioSendLabelClicked`); commit dispatches `RenameGroupCommand` (the
@@ -958,6 +962,9 @@ pub enum RootAction {
     /// selected recipe from the panel's `force_picker` snapshot and applies
     /// the existing scene modifier command.
     SceneSetupAddForceClicked(LayerId),
+    /// The Scene tab Objects group's "+": the app opens the Objects menu
+    /// (`scene_setup_actions::add_object_menu`) at the clicked button.
+    SceneSetupAddObjectMenuClicked(LayerId),
     SceneSetupFluidRoleClicked {
         layer_id: LayerId,
         render_scene_node_id: u32,

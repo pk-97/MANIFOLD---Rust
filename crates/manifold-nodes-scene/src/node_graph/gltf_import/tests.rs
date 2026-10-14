@@ -2785,4 +2785,21 @@ fn imported_light_title_is_glb_name_and_rung_restores_it() {
     assert!(migrate_light_titles_for_test(&mut def));
     assert_eq!(title(&def).as_deref(), Some("Key Spot"));
     assert!(!migrate_light_titles_for_test(&mut def), "rung is idempotent");
+
+    // A hand-built light with no title or handle is stamped with the "Scene"
+    // fallback section; that is no name, so the rung leaves it untitled.
+    let light = def.nodes.iter_mut().find(|n| n.node_id == "light_0").unwrap();
+    light.title = None;
+    light.handle = None;
+    let meta = def.preset_metadata.as_mut().unwrap();
+    let stamp = meta
+        .bindings
+        .iter()
+        .find(|b| matches!(&b.target, manifold_core::effect_graph_def::BindingTarget::Node { node_id, param }
+            if node_id == "light_0" && param == "intensity"))
+        .map(|b| b.id.clone())
+        .unwrap();
+    meta.params.iter_mut().find(|p| p.id == stamp).unwrap().section = Some("Scene".to_string());
+    assert!(!migrate_light_titles_for_test(&mut def), "the stamp fallback is not a light name");
+    assert_eq!(title(&def), None);
 }

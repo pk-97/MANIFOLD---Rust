@@ -107,13 +107,13 @@ pub enum TextInputField {
     /// `UserLibrary::rename` (My Library) or executes
     /// `RenameEmbeddedPresetCommand` (Project).
     RenamePreset,
-    /// Scene Setup panel Objects-row rename (SCENE_SETUP_PANEL_DESIGN.md P2).
+    /// Scene tab object rename (SCENE_SETUP_PANEL_DESIGN.md P2).
     /// Carries the object's group node id; the target layer rides on
     /// `TextInputState::scene_object_layer_id` (`LayerId` not `Copy`). Commit
     /// routes to `RenameGroupCommand`, addressed at the layer directly (no
     /// graph editor needs to be open — the panel is a fourth surface).
     SceneObjectRename(u32),
-    /// Scene Setup panel light-row rename (SCENE_OBJECT_AND_PANEL_V2_DESIGN.md
+    /// Scene tab light rename (SCENE_OBJECT_AND_PANEL_V2_DESIGN.md
     /// P5). Carries the light node's own doc id; the target layer rides on
     /// `TextInputState::scene_object_layer_id` (shared with
     /// `SceneObjectRename` — the two sessions are mutually exclusive, only
@@ -121,13 +121,13 @@ pub enum TextInputField {
     /// plain `SetNodeHandleCommand` (no group sweep — a light is never
     /// wrapped in a group).
     SceneLightRename(u32),
-    /// Scene Setup dock numeric value-cell type-in
+    /// Scene tab numeric value-cell type-in
     /// (`SCENE_OBJECT_AND_PANEL_V2_DESIGN.md` P4, D8's `EditValue` target).
     /// Carries the target node's doc id (mirrors `GraphNumericParam`'s
     /// shape); the rest (layer, scope_path, param_id, D10's `degrees` flag)
     /// rides on [`TextInputState::scene_numeric_param`] (not `Copy`). Commit
     /// parses f32 (degrees rows convert to radians), dispatches the SAME
-    /// `PanelAction::SceneSetupParamChanged` write the dock's drag/steppers
+    /// `PanelAction::SceneSetupParamChanged` write the tab's drag/steppers
     /// already use — ONE undo unit, no clamp (PARAM_RANGE_CONTRACT P1).
     SceneNumericParam(u32),
     /// Audio Setup dock gain-stepper value-cell type-in (P4's audio-dock
@@ -226,12 +226,12 @@ pub struct GraphNumericParamCtx {
     pub outer_param_id: Option<String>,
 }
 
-/// Context for an in-flight Scene Setup dock numeric type-in — set when the
+/// Context for an in-flight Scene tab numeric type-in — set when the
 /// box opens ([`TextInputField::SceneNumericParam`]) and read on commit
 /// (`SCENE_OBJECT_AND_PANEL_V2_DESIGN.md` P4, D8). Mirrors `InspectorParamCtx`'s
-/// shape; the write address is the dock's own `(scope_path, node_doc_id,
+/// shape; the write address is the tab's own `(scope_path, node_doc_id,
 /// param_id)` (`PanelAction::SceneSetupParamChanged`'s tuple), not a
-/// `ParamId` — the dock addresses graph nodes directly, not effect/generator
+/// `ParamId` — the tab addresses graph nodes directly, not effect/generator
 /// param slots. No `old_value` here (unlike `InspectorParamCtx`): commit
 /// reads the live project value as the undo baseline directly — nothing else
 /// can write this field while the single-session type-in box is open.

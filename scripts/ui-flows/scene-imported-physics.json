@@ -54,7 +54,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "text": "Density (kg/m³)"
+          "text": "Density"
         }
       },
       "check": "Exists"
@@ -418,7 +418,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "text": "Density (kg/m³)"
+          "text": "Density"
         }
       },
       "check": {
@@ -456,7 +456,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "text": "Density (kg/m³)"
+          "text": "Density"
         }
       },
       "check": "Exists"
@@ -529,7 +529,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "text": "Simulation Speed"
+          "text": "Speed"
         }
       },
       "check": "Exists"

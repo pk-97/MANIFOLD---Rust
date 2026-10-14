@@ -514,12 +514,13 @@ impl ChangeGraphParamCommand {
 }
 
 impl Command for ChangeGraphParamCommand {
-    /// A plain value is Values; a feature switch also decides which rows
-    /// exist, so it is Effects too (UI_INVALIDATION D21, D22). Only valid
+    /// A plain value is Values. A scene-modifier param lives inside the
+    /// owner's graph definition, and a feature switch decides which rows
+    /// exist, so both are Effects too (UI_INVALIDATION D21, D22). Only valid
     /// after `execute`, which reads the switch from the project.
     fn touches(&self) -> manifold_core::change::ChangeSet {
         use manifold_core::change::{ChangeSet, Part};
-        if self.sets_rows {
+        if matches!(self.target, GraphTarget::SceneModifier { .. }) || self.sets_rows {
             ChangeSet::of(&[Part::Values, Part::Effects])
         } else {
             ChangeSet::of(&[Part::Values])
