@@ -1401,8 +1401,7 @@ mod tests {
             band: (role == SurfaceRole::Performance).then_some(CardBand::Scene),
             card_order: 0,
             card_label: CardLabel::Param,
-            gate: None,
-            switch: None,
+            gate: None, switch: None, colour: None,
         });
         meta
     }

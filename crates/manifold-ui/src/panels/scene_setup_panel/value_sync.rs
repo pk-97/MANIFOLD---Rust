@@ -122,7 +122,18 @@ impl ScenePanel {
                 crate::panels::param_slider_shared::warn_join_gap_once(card.rows[i].id.as_ref());
             }
         }
-        self.sync_material_swatches(tree);
+        self.sync_swatch_values(tree);
+    }
+
+    /// Feed each properties swatch its channels' live values (they are rows
+    /// here, so a drag previews on the swatch) and repaint the changed ones.
+    pub(super) fn sync_swatch_values(&mut self, tree: &mut UITree) {
+        for row in 0..self.properties_card.rows.len() {
+            let Some(members) = &self.properties_card.rows[row].rgb_members else { continue };
+            let rgb = members.ids.each_ref().map(|id| self.material_full_value(id));
+            self.properties_card.row_host.set_swatch_rgb(row, rgb);
+        }
+        self.properties_card.row_host.paint_swatches(tree);
     }
 
     /// The live-scalar push (UI_INVALIDATION D22) for every row card the panel

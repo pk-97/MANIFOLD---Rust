@@ -16,7 +16,7 @@ use manifold_core::scene_modifier_preset::SceneTargetSelection;
 use manifold_core::scene_surface::{CardBand, CardLabel, CardPin, Feature, Gate, SceneItemKind, SurfaceRole};
 use manifold_nodes_scene::node_graph::scene_items::{SceneItem, SceneItemId, owner_of, scene_items};
 use manifold_nodes_scene::node_graph::scene_vm::SceneVm;
-use manifold_ui::param_surface::ParamRow;
+use manifold_ui::param_surface::{ColourGroup, ParamRow, RgbMembers};
 
 const NO_PHYSICS_TARGETS: &str = "No physics objects in this force's targets";
 
@@ -33,6 +33,7 @@ pub(super) fn scene_card_rows(rows: &mut Vec<ParamRow>, inst: &PresetInstance, d
     let owner = |id: &str| meta.and_then(|meta| owner_of(&items, meta, id));
     let switches = FeatureSwitches::read(rows, inst, &owner);
     let idle_forces = idle_forces(def, &items);
+    let colours = item_colours(rows, inst, def, &items, &owner);
 
     let mut placed: Vec<(SortKey, ParamRow)> = Vec::with_capacity(rows.len());
     for (manifest_index, mut row) in std::mem::take(rows).into_iter().enumerate() {
@@ -55,6 +56,11 @@ pub(super) fn scene_card_rows(rows: &mut Vec<ParamRow>, inst: &PresetInstance, d
         }
         if item.is_some_and(|item| matches!(&item.id, SceneItemId::Force(id) if idle_forces.contains(id))) {
             row.spec.inactive_reason = Some(NO_PHYSICS_TARGETS.into());
+        }
+        if place.label == CardLabel::ItemName
+            && let Some(index) = owner_index
+        {
+            row.rgb_members = colours.iter().find(|(item, _)| *item == index).map(|(_, members)| members.clone());
         }
         if param.choices.rename.is_none() {
             match (place.label, item) {
@@ -189,6 +195,48 @@ impl FeatureSwitches {
     fn is_on(&self, feature: Feature) -> bool {
         self.on.contains(&feature)
     }
+}
+
+/// Each light's colour swatch, from the rows its item owns whose scene
+/// description marks one colour channel. The row the card names after the
+/// item carries it, so recolouring a light is one gesture on its fader. An
+/// item with more than one colour, or channels a single RGB write cannot
+/// own, gets no swatch.
+fn item_colours(
+    rows: &[ParamRow],
+    inst: &PresetInstance,
+    def: &EffectGraphDef,
+    items: &[SceneItem],
+    owner: &dyn Fn(&str) -> Option<usize>,
+) -> Vec<(usize, RgbMembers)> {
+    let mut channels: Vec<(usize, [Option<&ParamRow>; 3], bool)> = Vec::new();
+    for row in rows {
+        let Some(channel) = inst.params.get(row.id.as_ref()).and_then(|p| p.spec.scene).and_then(|s| s.colour) else {
+            continue;
+        };
+        let Some(item) = owner(row.id.as_ref()).filter(|&i| items[i].kind == SceneItemKind::Light) else {
+            continue;
+        };
+        let index = match channels.iter().position(|(i, _, _)| *i == item) {
+            Some(index) => index,
+            None => {
+                channels.push((item, [None; 3], true));
+                channels.len() - 1
+            }
+        };
+        let (_, members, single) = &mut channels[index];
+        *single &= members[channel.index()].is_none();
+        members[channel.index()] = Some(row);
+    }
+    channels
+        .into_iter()
+        .filter_map(|(item, members, single)| match members {
+            [Some(r), Some(g), Some(b)] if single => {
+                super::material::rgb_members(inst, def, ColourGroup::Light, [r, g, b]).map(|m| (item, m))
+            }
+            _ => None,
+        })
+        .collect()
 }
 
 /// Forces whose targets hold no physics object.

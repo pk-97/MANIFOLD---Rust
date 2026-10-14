@@ -213,6 +213,15 @@
         "ValuePush": 61
       }
     },
+    "work-fold-toggle": {
+      "chrome_fold": {
+        "ChromeLayout": 3,
+        "FrameAlloc": 855,
+        "FullBuild": 1,
+        "SlotInvalidate": 7,
+        "ValuePush": 1
+      }
+    },
     "work-follow-scroll": {
       "follow_2s": {
         "ChromeLayout": 360,

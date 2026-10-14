@@ -16,7 +16,7 @@ use manifold_core::liquid_domain::{
 };
 use manifold_foundation::param_range::HardLimit;
 use manifold_foundation::scene_surface::{
-    CardBand, CardLabel, ControlGroup, Feature, Gate, SceneParamDesc, SurfaceRole, Unit,
+    CardBand, CardLabel, ControlGroup, Feature, Gate, RgbChannel, SceneParamDesc, SurfaceRole, Unit,
 };
 
 use crate::node_graph::material_inspector::material_param_role;
@@ -39,6 +39,7 @@ const fn role(role: SurfaceRole, group: ControlGroup) -> SceneParamFacts {
             card_label: CardLabel::Param,
             gate: None,
             switch: None,
+            colour: None,
         },
         unit: None,
         limit: HardLimit::Slider,
@@ -84,6 +85,11 @@ impl SceneParamFacts {
 
     const fn switch(mut self, feature: Feature) -> Self {
         self.desc.switch = Some(feature);
+        self
+    }
+
+    const fn colour(mut self, channel: RgbChannel) -> Self {
+        self.desc.colour = Some(channel);
         self
     }
 }
@@ -230,8 +236,10 @@ fn light(param: &str) -> Option<SceneParamFacts> {
             setup(Light).unit(Unit::Metres).limit(HardLimit::Unlimited)
         }
         "range" | "light_size" => setup(Light).unit(Unit::Metres).limit(AT_LEAST_ZERO),
-        "mode" | "color_r" | "color_g" | "color_b" | "falloff" | "inner_cone_angle"
-        | "outer_cone_angle" => setup(Light),
+        "color_r" => setup(Light).colour(RgbChannel::R),
+        "color_g" => setup(Light).colour(RgbChannel::G),
+        "color_b" => setup(Light).colour(RgbChannel::B),
+        "mode" | "falloff" | "inner_cone_angle" | "outer_cone_angle" => setup(Light),
         "cast_shadows" | "shadow_softness" | "shadow_bias" | "shadow_resolution" => {
             setup(Shadows)
         }

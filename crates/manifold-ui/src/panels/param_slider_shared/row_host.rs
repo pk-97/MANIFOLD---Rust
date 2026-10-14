@@ -18,7 +18,7 @@
 
 use super::*;
 use crate::panels::copy_to_clipboard_label::CopyToClipboardLabelState;
-use crate::param_surface::{RowIndex, RowRole, RowSpec};
+use crate::param_surface::{ColourGroup, ParamRow, RowIndex, RowRole, RowSpec};
 use crate::panels::scrub::ScrubGesture;
 use crate::slider::TrackSpan;
 use crate::{ModulationAction, ParamsAction};
@@ -179,6 +179,13 @@ pub(crate) struct RowHost {
     /// section-header row drawn this frame, so a header click resolves back to
     /// its section without a second id → name map.
     pub(crate) section_header_ids: Vec<(NodeId, String)>,
+    /// Per-row colour swatch (rows with `rgb_members`), its colour group, and
+    /// the colour it shows. The card's channels are usually not rows of
+    /// their own, so the value sync feeds them by id through
+    /// `swatch_members`.
+    pub(crate) swatch_ids: Vec<Option<(NodeId, ColourGroup)>>,
+    swatch_rgb: Vec<[f32; 3]>,
+    swatch_members: ahash::AHashMap<String, (usize, usize)>,
     /// WidgetId → (row, role) reverse map, rebuilt every `build()` from the
     /// same rows being rendered (D5, `docs/WIDGET_TREE_DESIGN.md` P2) — the
     /// ONLY sanctioned way `handle_click`/`handle_pointer_down`/`handle_drag`
@@ -210,6 +217,9 @@ impl RowHost {
             toggle_ids: Vec::new(),
             mapping_chevron_ids: Vec::new(),
             section_header_ids: Vec::new(),
+            swatch_ids: Vec::new(),
+            swatch_rgb: Vec::new(),
+            swatch_members: ahash::AHashMap::new(),
             row_index: RowIndex::default(),
             gesture: ScrubGesture::new(),
         }
@@ -237,6 +247,8 @@ impl RowHost {
         self.mod_tab_ids.resize_with(n, Vec::new);
         self.toggle_ids.resize_with(n, || None);
         self.mapping_chevron_ids.resize_with(n, || None);
+        self.swatch_ids.resize_with(n, || None);
+        self.swatch_rgb.resize(n, [0.0; 3]);
 
     }
 
@@ -442,6 +454,7 @@ impl RowHost {
             ableton_config,
             audio_config,
             mod_tabs,
+            swatch,
             new_cy,
         } = built;
         self.slider_ids[row] = slider;
@@ -459,6 +472,7 @@ impl RowHost {
         self.audio_btn_ids[row] = Some(audio_btn);
         self.audio_configs[row] = audio_config;
         self.mod_tab_ids[row] = mod_tabs;
+        self.swatch_ids[row] = swatch;
         self.reindex_row(tree, row);
         new_cy
     }
@@ -985,6 +999,9 @@ impl RowHost {
         }
         if let Some(rc) = self.row_catcher_ids[i] {
             self.row_index.insert(tree.widget_of(rc), i, RowRole::RowCatcher);
+        }
+        if let Some((swatch, group)) = self.swatch_ids[i] {
+            self.row_index.insert(tree.widget_of(swatch), i, RowRole::ColourSwatch(group));
         }
         if let Some(b) = self.driver_btn_ids[i] {
             self.row_index.insert(tree.widget_of(b), i, RowRole::DriverBtn);
@@ -1565,9 +1582,64 @@ impl RowHost {
                 // match exhaustiveness.
                 Vec::new()
             }
-            RowRole::ColourSwatch(_)
-            | RowRole::MaterialFeatureToggle(_)
-            | RowRole::MaterialPlacement(_) => Vec::new(),
+            RowRole::ColourSwatch(_) => rows
+                .get(row)
+                .and_then(|r| r.rgb_members.as_ref())
+                .map(|members| {
+                    vec![PanelAction::Root(RootAction::OpenColourMenu {
+                        target,
+                        param_ids: members.ids.clone(),
+                        value: self.swatch_rgb.get(row).copied().unwrap_or(members.values),
+                    })]
+                })
+                .unwrap_or_default(),
+            RowRole::MaterialFeatureToggle(_) | RowRole::MaterialPlacement(_) => Vec::new(),
+        }
+    }
+
+    /// Index the swatch channels of `rows` by id and seed each swatch with
+    /// its projected colour. Call whenever the rows are reconfigured.
+    pub(crate) fn index_swatches(&mut self, rows: &[ParamRow]) {
+        self.swatch_members.clear();
+        self.swatch_rgb.resize(rows.len(), [0.0; 3]);
+        for (row, info) in rows.iter().enumerate() {
+            let Some(members) = &info.rgb_members else { continue };
+            self.swatch_rgb[row] = members.values;
+            for (channel, id) in members.ids.iter().enumerate() {
+                self.swatch_members.insert(id.to_string(), (row, channel));
+            }
+        }
+    }
+
+    /// Take one live value from the value sync; ignored unless `id` is a
+    /// swatch channel.
+    pub(crate) fn feed_swatch_channel(&mut self, id: &str, value: f32) {
+        if let Some(&(row, channel)) = self.swatch_members.get(id)
+            && let Some(rgb) = self.swatch_rgb.get_mut(row)
+        {
+            rgb[channel] = value;
+        }
+    }
+
+    /// Set a swatch row's live colour directly (hosts whose channels are
+    /// rows of their own).
+    pub(crate) fn set_swatch_rgb(&mut self, row: usize, rgb: [f32; 3]) {
+        if let Some(slot) = self.swatch_rgb.get_mut(row) {
+            *slot = rgb;
+        }
+    }
+
+    /// Repaint every built swatch whose shown colour differs from its live
+    /// channels. Only changed nodes are touched.
+    pub(crate) fn paint_swatches(&self, tree: &mut UITree) {
+        for (swatch, rgb) in self.swatch_ids.iter().zip(&self.swatch_rgb) {
+            let Some((node, _)) = swatch else { continue };
+            let colour = swatch_colour(*rgb);
+            if tree.get_node(*node).is_some_and(|n| n.style.bg_color != colour) {
+                let mut style = tree.get_node(*node).map(|n| n.style).unwrap_or_default();
+                style.bg_color = colour;
+                tree.set_style(*node, style);
+            }
         }
     }
 }

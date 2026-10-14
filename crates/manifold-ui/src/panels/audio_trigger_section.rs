@@ -158,10 +158,11 @@ impl AudioTriggerSection {
         self.collapsed = Some(!self.is_collapsed());
     }
 
-    pub fn toggle_row_expanded(&mut self, index: usize) {
-        if let Some(e) = self.expanded.get_mut(index) {
-            *e = !*e;
-        }
+    /// Returns whether a row was there to toggle.
+    pub fn toggle_row_expanded(&mut self, index: usize) -> bool {
+        let Some(e) = self.expanded.get_mut(index) else { return false };
+        *e = !*e;
+        true
     }
 
     /// Open one row's drawer without toggling — the Add flow uses this so a

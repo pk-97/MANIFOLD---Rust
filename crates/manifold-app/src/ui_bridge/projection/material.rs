@@ -53,14 +53,6 @@ fn colour(value: core::MaterialColour) -> ui::MaterialColour {
     }
 }
 
-fn channel(value: core::RgbChannel) -> ui::RgbChannel {
-    match value {
-        core::RgbChannel::R => ui::RgbChannel::R,
-        core::RgbChannel::G => ui::RgbChannel::G,
-        core::RgbChannel::B => ui::RgbChannel::B,
-    }
-}
-
 fn family(value: core::MaterialMapFamily) -> ui::MaterialMapFamily {
     match value {
         core::MaterialMapFamily::Base => ui::MaterialMapFamily::Base,
@@ -103,7 +95,7 @@ pub(super) fn role(value: core::MaterialParamRole) -> ui::MaterialParamRole {
     match value {
         core::MaterialParamRole::Scalar(g) => ui::MaterialParamRole::Scalar(group(g)),
         core::MaterialParamRole::Colour(g, c, r) => {
-            ui::MaterialParamRole::Colour(group(g), colour(c), channel(r))
+            ui::MaterialParamRole::Colour(group(g), colour(c), r)
         }
         core::MaterialParamRole::FeatureMode(f) => ui::MaterialParamRole::FeatureMode(feature(f)),
         core::MaterialParamRole::Placement(f, c) => {
@@ -406,35 +398,96 @@ pub(super) fn enrich_surface(
         let Some((node, _)) = direct_binding(inst, def, &surface.rows[index].id) else {
             continue;
         };
-        let mut members: [Option<manifold_core::effects::ParamId>; 3] = [None, None, None];
-        let mut valid = unique_node(def, node).is_some();
+        let mut members: [Option<&ui::ParamRow>; 3] = [None, None, None];
+        let mut valid = true;
         for row in &surface.rows {
             let Some(Role::Colour(_, c, channel)) = row.spec.material_role else {
                 continue;
             };
-            if c != colour {
+            if c != colour || !direct_binding(inst, def, &row.id).is_some_and(|(n, _)| n == node) {
                 continue;
             }
-            if !direct_binding(inst, def, &row.id).is_some_and(|(n, _)| n == node) {
-                continue;
-            }
-            let slot = match channel {
-                RgbChannel::R => 0,
-                RgbChannel::G => 1,
-                RgbChannel::B => 2,
-            };
-            if members[slot].is_some() || row.value.driven || external_attachment(inst, &row.id) {
-                valid = false;
-            }
-            members[slot] = Some(row.id.clone());
+            valid &= members[channel.index()].is_none() && !row.value.driven;
+            members[channel.index()] = Some(row);
         }
-        if valid && let [Some(r), Some(g), Some(b)] = members {
-            surface.rows[index].rgb_members = Some([r, g, b]);
+        let group = match members {
+            [Some(r), Some(g), Some(b)] if valid => rgb_members(inst, def, ui::ColourGroup::Material(colour), [r, g, b]),
+            _ => None,
+        };
+        if group.is_some() {
+            surface.rows[index].rgb_members = group;
         } else if surface.rows[index].spec.inactive_reason.is_none() {
             surface.rows[index].spec.inactive_reason =
                 Some("Colour channels have separate control — edit them individually".into());
         }
     }
+}
+
+/// One swatch over three channel rows, or `None` when the channels cannot
+/// take a single RGB write ([`rgb_ids_editable`]).
+pub(super) fn rgb_members(
+    inst: &PresetInstance,
+    def: &EffectGraphDef,
+    group: ui::ColourGroup,
+    rows: [&ui::ParamRow; 3],
+) -> Option<ui::RgbMembers> {
+    let ids = rows.map(|row| row.id.clone());
+    rgb_ids_editable(inst, def, &ids).then(|| ui::RgbMembers {
+        group,
+        ids,
+        values: rows.map(|row| row.value.base),
+    })
+}
+
+/// Which colour and channel a param is: a material colour channel, or a
+/// scene item's colour channel (`None` colour). `None` for any other param.
+fn rgb_channel(
+    spec: &manifold_core::effect_graph_def::ParamSpecDef,
+) -> Option<(Option<core::MaterialColour>, core::RgbChannel)> {
+    match (spec.material_role, spec.scene.and_then(|scene| scene.colour)) {
+        (Some(core::MaterialParamRole::Colour(_, colour, channel)), _) => Some((Some(colour), channel)),
+        (None, Some(channel)) => Some((None, channel)),
+        _ => None,
+    }
+}
+
+/// The three ids are one colour's R, G and B, each bound straight to one
+/// node param with no wire into it and no driver, envelope, audio mod,
+/// automation or mapping on it — so one RGB write owns all three.
+fn rgb_ids_editable(
+    inst: &PresetInstance,
+    def: &EffectGraphDef,
+    ids: &[manifold_core::effects::ParamId; 3],
+) -> bool {
+    let mut owner: Option<&NodeId> = None;
+    let mut colour = None;
+    for (index, id) in ids.iter().enumerate() {
+        if ids[..index].contains(id) || external_attachment(inst, id) {
+            return false;
+        }
+        let Some((c, channel)) = inst.params.get(id).and_then(|p| rgb_channel(&p.spec)) else {
+            return false;
+        };
+        if channel.index() != index || colour.is_some_and(|previous| previous != c) {
+            return false;
+        }
+        colour = Some(c);
+        let Some((node, param)) = direct_binding(inst, def, id) else {
+            return false;
+        };
+        if owner.is_some_and(|n| n != node) {
+            return false;
+        }
+        owner = Some(node);
+        let Some((n, wires)) = unique_node(def, node) else {
+            return false;
+        };
+        let wrong_material = c.is_some() && n.type_id != "node.pbr_material";
+        if wrong_material || wires.iter().any(|w| w.to_node == n.id && w.to_port == param) {
+            return false;
+        }
+    }
+    true
 }
 
 /// Shared structural/gesture preflight. IDs must still refer to one editable RGB group.
@@ -452,50 +505,10 @@ pub(crate) fn rgb_editable(
     }) else {
         return false;
     };
-    let mut owner: Option<&NodeId> = None;
-    let mut colour = None;
-    for (index, id) in ids.iter().enumerate() {
-        if ids[..index].contains(id) || external_attachment(inst, id) {
-            return false;
-        }
-        let Some(core::MaterialParamRole::Colour(_, c, channel)) =
-            inst.params.get(id).and_then(|p| p.spec.material_role)
-        else {
-            return false;
-        };
-        if channel
-            != [
-                core::RgbChannel::R,
-                core::RgbChannel::G,
-                core::RgbChannel::B,
-            ][index]
-            || colour.is_some_and(|previous| previous != c)
-        {
-            return false;
-        }
-        colour = Some(c);
-        let Some((node, param)) = direct_binding(inst, def, id) else {
-            return false;
-        };
-        if owner.is_some_and(|n| n != node) {
-            return false;
-        }
-        owner = Some(node);
-        let Some((n, wires)) = unique_node(def, node) else {
-            return false;
-        };
-        if n.type_id != "node.pbr_material"
-            || wires
-                .iter()
-                .any(|w| w.to_node == n.id && w.to_port == param)
-        {
-            return false;
-        }
-        if crate::scene_modifier_edit::macro_parameter_lock_reason(project, target, id).is_some() {
-            return false;
-        }
-    }
-    true
+    rgb_ids_editable(inst, def, ids)
+        && ids.iter().all(|id| {
+            crate::scene_modifier_edit::macro_parameter_lock_reason(project, target, id).is_none()
+        })
 }
 
 /// Resolve authored/embedded topology before falling back to the catalog.

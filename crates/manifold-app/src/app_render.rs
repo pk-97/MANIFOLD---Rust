@@ -1144,14 +1144,12 @@ impl Application {
                     // two halves of "docked": `open` gates build/update/draw,
                     // the width is the geometry `content_area()` subtracts. Keep
                     // them in lockstep — set the width from the NEW open state so
-                    // this is a true toggle regardless of entry state. A
-                    // structural sync then rebuilds the whole tree at the new
-                    // geometry (preview + timeline shrink) and populates the
-                    // panel's device/send list via sync_inspector_data. The
-                    // toggle itself lives on UIRoot so the headless script
-                    // harness reaches the same one via ui_bridge::dispatch.
+                    // this is a true toggle regardless of entry state. The
+                    // dock's view version rebuilds the tree at the new
+                    // geometry and runs its device query. The toggle lives on
+                    // UIRoot so the headless script harness reaches the same
+                    // one via ui_bridge::dispatch.
                     self.ws.ui_root.toggle_audio_dock();
-                    needs_structural_sync = true;
                     continue;
                 }
                 PanelAction::Root(RootAction::OpenRtQuality) => {
@@ -1386,7 +1384,7 @@ impl Application {
                     crate::app::automation_point_input::begin_time(self, target, param_id, *beat, *value_norm);
                     continue;
                 }
-                PanelAction::Root(RootAction::BeginMaterialColourTextInput {
+                PanelAction::Root(RootAction::BeginColourTextInput {
                     target,
                     param_ids,
                     anchor,
