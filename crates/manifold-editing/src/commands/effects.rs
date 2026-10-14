@@ -1186,6 +1186,32 @@ impl BindingMappingEdit {
         prev
     }
 
+    /// Write the touched fields as user choices, read off the edited `spec`.
+    /// Same rule as the calibration wire: only a non-default curve or invert
+    /// is a choice, so save and reload is a fixed point.
+    fn apply_to_choices(
+        &self,
+        spec: &manifold_core::effect_graph_def::ParamSpecDef,
+        choices: &mut manifold_core::params::ParamChoices,
+    ) {
+        if let Some(label) = &self.label {
+            choices.rename = Some(label.clone());
+        }
+        if let Some(section) = &self.section {
+            choices.section = Some(section.clone());
+        }
+        if self.min.is_some() || self.max.is_some() {
+            choices.slider = Some((spec.min, spec.max));
+        }
+        if self.curve.is_some() {
+            choices.curve =
+                (!manifold_core::effects::curve_is_linear(&spec.curve)).then_some(spec.curve);
+        }
+        if self.invert.is_some() {
+            choices.invert = spec.invert.then_some(true);
+        }
+    }
+
     /// Apply the scale/offset fields onto the graph's live `BindingDef` — the
     /// ONLY home for them (no manifest field: scale/offset live on the
     /// binding recipe, which synth reads directly, per PARAM_STORAGE_DESIGN
@@ -1277,6 +1303,8 @@ pub struct EditParamMappingCommand {
     /// Pre-edit snapshot, captured on first execute for the single-shot path
     /// (when `explicit_reverse` is `None`).
     reverse: Option<MappingReverse>,
+    /// A lookup control's choices before the edit; undo puts them back.
+    prev_choices: Option<manifold_core::params::ParamChoices>,
 }
 
 impl EditParamMappingCommand {
@@ -1293,6 +1321,7 @@ impl EditParamMappingCommand {
             seed_def,
             explicit_reverse: None,
             reverse: None,
+            prev_choices: None,
         }
     }
 
@@ -1314,7 +1343,18 @@ impl EditParamMappingCommand {
             seed_def,
             explicit_reverse: Some(reverse),
             reverse: None,
+            prev_choices: None,
         }
+    }
+
+    fn restore_choices(&self, project: &mut Project) {
+        let Some(prev) = self.prev_choices.clone() else { return };
+        let binding_id = &self.binding_id;
+        project.with_preset_graph_mut(&self.target, |host| {
+            if let Some(p) = host.params.get_mut(binding_id) {
+                p.choices = prev;
+            }
+        });
     }
 }
 
@@ -1395,16 +1435,28 @@ impl Command for EditParamMappingCommand {
                 // the exact dual-write P2 deletes, so this is the SOLE spec
                 // write.
                 let p = host.params.get_mut(&binding_id)?;
+                // A lookup control saves only its choices (D7), so the edit
+                // is written there; the spec is the in-memory join and moves
+                // with it. An authored control saves its spec.
                 let spec_snap = new.apply_to_manifest_spec(&mut p.spec);
-                p.calibrate_from_spec();
+                let prev_choices = (p.source == manifold_core::params::SpecSource::Lookup).then(|| {
+                    let prev = p.choices.clone();
+                    new.apply_to_choices(&p.spec, &mut p.choices);
+                    prev
+                });
 
-                Some(MappingReverse {
-                    spec: spec_snap,
-                    scale: prev_binding.map(|(s, _)| s),
-                    offset: prev_binding.map(|(_, o)| o),
-                })
+                Some((
+                    MappingReverse {
+                        spec: spec_snap,
+                        scale: prev_binding.map(|(s, _)| s),
+                        offset: prev_binding.map(|(_, o)| o),
+                    },
+                    prev_choices,
+                ))
             })
             .flatten();
+        let (snap, prev_choices) = snap.unzip();
+        self.prev_choices = prev_choices.flatten();
         if keep_snapshot {
             self.reverse = snap;
         }
@@ -1419,11 +1471,9 @@ impl Command for EditParamMappingCommand {
                 apply_scale_offset_on_graph(host, &binding_id, &reverse_edit);
                 if let Some(p) = host.params.get_mut(&binding_id) {
                     reverse_edit.apply_to_manifest_spec(&mut p.spec);
-                    if p.choices.calibrated() {
-                        p.calibrate_from_spec();
-                    }
                 }
             });
+            self.restore_choices(project);
             return;
         }
         // Single-shot: restore the self-captured pre-edit snapshot.
@@ -1445,11 +1495,9 @@ impl Command for EditParamMappingCommand {
             // Restore the manifest spec (see execute) — the sole live authority.
             if let Some(p) = host.params.get_mut(&binding_id) {
                 reverse.spec.restore(&mut p.spec);
-                if p.choices.calibrated() {
-                    p.calibrate_from_spec();
-                }
             }
         });
+        self.restore_choices(project);
     }
 
     fn description(&self) -> &str {

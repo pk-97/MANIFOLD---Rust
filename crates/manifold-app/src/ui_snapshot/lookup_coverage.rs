@@ -309,6 +309,63 @@ fn with_graph(mut fx: PresetInstance) -> PresetInstance {
     fx
 }
 
+/// D7: the drawer's rename and slider range on a lookup control are user
+/// choices, so they survive save and reload, and undo and redo move them.
+#[test]
+fn drawer_rename_is_a_choice_and_survives_reload() {
+    use manifold_core::GraphTarget;
+    use manifold_editing::commands::effects::{BindingMappingEdit, EditParamMappingCommand};
+    let mut cache = super::fixtures::FixtureCache::default();
+    let mut project = super::fixtures::build_cached("physicsscene", &mut cache).expect("fixture").project.clone();
+    let (index, id, name, range) = project
+        .timeline
+        .layers
+        .iter()
+        .enumerate()
+        .find_map(|(i, l)| {
+            let p = l.gen_params()?.params.iter().find(|p| p.source == SpecSource::Lookup)?;
+            Some((i, p.id().to_string(), p.spec.name.clone(), (p.spec.min, p.spec.max)))
+        })
+        .expect("physicsscene has a lookup control");
+    let layer = project.timeline.layers[index].layer_id.clone();
+    let mut editing = manifold_editing::service::EditingService::new();
+    let edit = BindingMappingEdit {
+        label: Some("Lamp Power".into()),
+        min: Some(range.0 + 0.5),
+        max: Some(range.1 + 2.0),
+        ..Default::default()
+    };
+    editing.execute(
+        Box::new(EditParamMappingCommand::new(GraphTarget::Generator(layer), id.clone(), edit, None)),
+        &mut project,
+    );
+    let control = |project: &manifold_core::project::Project| {
+        let p = project.timeline.layers[index].gen_params().unwrap().params.get(&id).unwrap().clone();
+        (p.spec.name.clone(), (p.spec.min, p.spec.max), p.choices.clone())
+    };
+    let reload = |project: &manifold_core::project::Project| {
+        let json = serde_json::to_string(project).expect("save");
+        manifold_io::loader::load_project_from_json(&json).expect("reload")
+    };
+    let edited = (String::from("Lamp Power"), (range.0 + 0.5, range.1 + 2.0));
+    let after = control(&project);
+    assert_eq!((after.0.clone(), after.1), edited);
+    assert_eq!(after.2.rename.as_deref(), Some("Lamp Power"), "the rename is a choice");
+    assert_eq!(after.2.slider, Some(edited.1), "the range is a choice");
+    let reloaded = control(&reload(&project));
+    assert_eq!((reloaded.0, reloaded.1), edited, "rename and range survive reload");
+
+    assert!(editing.undo(&mut project));
+    let undone = control(&project);
+    assert_eq!((undone.0, undone.1), (name.clone(), range));
+    let undone = control(&reload(&project));
+    assert_eq!((undone.0, undone.1), (name, range), "undo leaves no choice behind");
+
+    assert!(editing.redo(&mut project));
+    let redone = control(&reload(&project));
+    assert_eq!((redone.0, redone.1), edited, "redo survives reload");
+}
+
 /// INV-S14 at save level: a scene saves its described controls as id stubs
 /// with unlabelled bindings, and a reload gives back the same manifest,
 /// the user's choices included.
@@ -327,7 +384,7 @@ fn saved_scene_has_id_only_lookup_entries() {
             if let Some(p) = fx.params.iter_mut().find(|p| p.source == SpecSource::Lookup) {
                 p.choices.rename = Some("Chosen".into());
                 p.spec.max += 1.0;
-                p.calibrate_from_spec();
+                p.choices.slider = Some((p.spec.min, p.spec.max));
                 p.choices.clone().apply(&mut p.spec);
                 chosen += 1;
             }

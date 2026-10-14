@@ -186,18 +186,6 @@ impl Param {
         }
     }
 
-    /// Record the spec's current range, curve and invert as the user's
-    /// slider choice. The mapping drawer writes `spec` directly until P2 moves
-    /// it onto choices.
-    pub fn calibrate_from_spec(&mut self) {
-        self.choices.slider = Some((self.spec.min, self.spec.max));
-        // Same rule as the calibration wire: only a non-default curve or
-        // invert is a choice, so save and reload is a fixed point.
-        self.choices.curve =
-            (!crate::effects::curve_is_linear(&self.spec.curve)).then_some(self.spec.curve);
-        self.choices.invert = self.spec.invert.then_some(true);
-    }
-
     #[inline]
     pub fn id(&self) -> &str {
         &self.spec.id

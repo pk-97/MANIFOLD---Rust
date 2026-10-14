@@ -3013,7 +3013,7 @@ mod tests {
         let p = inst.params.get_mut(param_id).expect("param must exist on the manifest");
         p.spec.min = min;
         p.spec.max = max;
-        p.calibrate_from_spec();
+        p.choices.slider = Some((min, max));
     }
 
     #[test]

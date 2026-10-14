@@ -1759,7 +1759,7 @@ mod tests {
             p.spec.min = 10.0;
             p.spec.max = 20.0;
             p.spec.name = "Recalibrated Amount".to_string();
-            p.calibrate_from_spec();
+            p.choices.slider = Some((10.0, 20.0));
         }
         // The graph's own shadow copy — STALE template range (0..1, "Amount").
         // Nothing after this construction ever writes to it directly; only
