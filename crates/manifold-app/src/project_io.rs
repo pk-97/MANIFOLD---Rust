@@ -31,6 +31,7 @@ use crate::user_prefs::UserPrefs;
 /// content thread whenever an editing command forks a preset or recalibrates an
 /// embedded one (see `ContentThread::refresh_preset_overlay_if_changed`).
 pub(crate) fn install_project_preset_overlay(project: &Project) {
+    manifold_core::work_count::record_work(manifold_core::work_count::WorkKind::PresetOverlayInstall);
     install_embedded_presets(&project.embedded_presets);
 }
 
@@ -133,6 +134,7 @@ pub(crate) fn snapshot_and_prune_embedded_presets(project: &mut Project) {
 /// present it hashes each preset's id + serialized def, which catches both a
 /// new fork and an in-place recalibration of an existing one.
 pub(crate) fn embedded_presets_fingerprint(project: &Project) -> u64 {
+    manifold_core::work_count::record_work(manifold_core::work_count::WorkKind::PresetFingerprint);
     use std::hash::{Hash, Hasher};
     if project.embedded_presets.is_empty() {
         return 0;

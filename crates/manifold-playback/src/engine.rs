@@ -496,6 +496,7 @@ impl PlaybackEngine {
             return;
         }
         if let Some(project) = &mut self.project {
+            manifold_core::work_count::record_work(manifold_core::work_count::WorkKind::ClipBindingReconcile);
             let delivery = &mut self.trigger_delivery;
             self.clip_controls.reconcile_bindings(project, Beats(self.current_beat), |owner, param| {
                 delivery.cancel_clip_parameter(owner,
@@ -591,6 +592,7 @@ impl PlaybackEngine {
         // Port of C# PlaybackController.LoadProject → renderer.OnProjectLoaded().
         if let Some(ref project) = self.project {
             for renderer in &mut self.renderers {
+                manifold_core::work_count::record_work(manifold_core::work_count::WorkKind::RendererReload);
                 renderer.on_project_loaded(project);
             }
         }
@@ -719,6 +721,7 @@ impl PlaybackEngine {
     /// Editing the tempo changes the time of the current musical position,
     /// not the position itself. External transport remains authoritative.
     pub fn reconcile_tempo_edit(&mut self, old_map: &manifold_core::tempo::TempoMap, old_bpm: Bpm) {
+        manifold_core::work_count::record_work(manifold_core::work_count::WorkKind::TempoReconcile);
         if self.external_time_sync {
             return;
         }

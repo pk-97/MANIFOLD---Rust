@@ -53,6 +53,9 @@ impl TimelineViewportPanel {
         {
             return;
         }
+        manifold_foundation::work_count::record_work(
+            manifold_foundation::work_count::WorkKind::OverviewRepaint,
+        );
 
         // Check if clip layer needs repaint (expensive) vs overlay-only (cheap).
         let size_changed = tex_w != self.overview_tex_w || tex_h != self.overview_tex_h;

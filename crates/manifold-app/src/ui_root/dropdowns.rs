@@ -641,6 +641,7 @@ impl UIRoot {
             return;
         }
         self.embedded_presets_fingerprint = fp;
+        manifold_core::work_count::record_work(manifold_core::work_count::WorkKind::PresetListProjection);
         self.embedded_presets = project
             .embedded_presets
             .iter()
@@ -1278,6 +1279,7 @@ impl UIRoot {
                 // hardware/virtual input devices, and the output taps (system +
                 // running apps). A parallel choice map records what each row is so
                 // selection doesn't depend on position.
+                manifold_core::work_count::record_work(manifold_core::work_count::WorkKind::DeviceQuery);
                 let dir = manifold_audio::directory::system_directory();
                 self.audio_setup_devices = dir.list_input_devices();
                 let caps = dir.tap_capabilities();

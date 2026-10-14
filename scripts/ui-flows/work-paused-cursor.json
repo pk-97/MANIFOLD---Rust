@@ -1,0 +1,15 @@
+[
+  "ResetWork",
+  { "Pointer": { "target": { "Point": { "x": 1400.0, "y": 700.0 } }, "gesture": { "Click": { "modifiers": {} } } } },
+  { "Step": { "frames": 10 } },
+  {
+    "Pointer": {
+      "target": { "Surface": { "surface": "timeline_clips", "kind": "clip", "label": "Plasma 1" } },
+      "gesture": { "Click": { "modifiers": {} } }
+    }
+  },
+  { "Step": { "frames": 10 } },
+  { "Pointer": { "target": { "Point": { "x": 1440.0, "y": 700.0 } }, "gesture": { "Click": { "modifiers": {} } } } },
+  { "Step": { "frames": 10 } },
+  { "AssertWork": { "window": "cursor_select_cursor_paused" } }
+]

@@ -33,6 +33,7 @@ impl TriggerTargets {
         if self.version == Some((version, epoch)) {
             return;
         }
+        manifold_core::work_count::record_work(manifold_core::work_count::WorkKind::TriggerTargetRefresh);
         for owner in self.owners.values_mut() {
             owner.seen = false;
             owner.ambiguous = false;

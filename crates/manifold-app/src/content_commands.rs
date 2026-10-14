@@ -1724,6 +1724,7 @@ impl ContentThread {
                 let (renderers, project) = self.engine.split_renderer_project();
                 if let Some(p) = project {
                     for renderer in renderers.iter_mut() {
+                        manifold_core::work_count::record_work(manifold_core::work_count::WorkKind::RendererReload);
                         renderer.on_project_loaded(p);
                     }
                 }

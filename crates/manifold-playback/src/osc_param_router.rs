@@ -89,6 +89,7 @@ impl OscParamRouter {
     /// Unsubscribes old addresses, subscribes new ones on the receiver.
     /// Call on project load and after structural changes (layer/effect add/remove).
     pub fn rebuild(&mut self, project: &Project, receiver: &mut OscReceiver) {
+        manifold_core::work_count::record_work(manifold_core::work_count::WorkKind::OscRouteRebuild);
         // Unsubscribe old
         for addr in &self.registered_addresses {
             receiver.unsubscribe_all(addr);
