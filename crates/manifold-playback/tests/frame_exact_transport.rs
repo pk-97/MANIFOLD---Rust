@@ -783,8 +783,7 @@ fn export_under_external_sync_advances() {
 
 /// A sample handed over before a placement in the same tick (AbletonOSC
 /// drains a report and then a seek in one loop) never reaches the follower:
-/// every placement drops it. Undropped, the seeded sample would put the beat
-/// at 1000, or its error would reach the pre-filter.
+/// every placement drops it. Undropped, its error would reach the pre-filter.
 #[test]
 fn placement_after_an_external_target_wins_the_tick() {
     type Place = fn(&mut PlaybackEngine);
@@ -800,7 +799,6 @@ fn placement_after_an_external_target_wins_the_tick() {
         for _ in 0..60 {
             tick(&mut engine, 1);
         }
-        engine.reseed_follower();
         engine.set_external_sample(ExternalSample { beat: 1000.0, bpm: 120.0, fresh: true, exact: false });
         place(&mut engine);
         tick(&mut engine, 1);

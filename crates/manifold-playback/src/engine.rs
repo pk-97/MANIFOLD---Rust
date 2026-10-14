@@ -882,14 +882,6 @@ impl PlaybackEngine {
         self.external_sample = Some(sample);
     }
 
-    /// A seed point the caller decides (D22): the next fresh sample sets the
-    /// segment, so the beat moves to the source's with no seek.
-    pub fn reseed_follower(&mut self) {
-        if self.tempo == TempoSource::Follow {
-            self.follower.reseed();
-        }
-    }
-
     /// An authority change swaps the converter (D6, D8). From Internal the
     /// segment starts at the frame's own beat, hand-back offset included;
     /// between sources it hands over bumplessly; back to Internal the time
